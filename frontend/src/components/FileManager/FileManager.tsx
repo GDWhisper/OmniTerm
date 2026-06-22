@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, type KeyboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type DragEvent } from 'react'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome } from './icons'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -14,6 +14,8 @@ interface FileEntry {
 }
 
 type SortKey = 'name' | 'mtime' | 'size'
+
+const POLL_MS = 3000
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
@@ -52,11 +54,22 @@ function FileIcon({ entry }: { entry: FileEntry }) {
 export function FileManager() {
   const addToast = useToastStore((s) => s.addToast)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
   const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
   const toggleFileManagerCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
+  const fmSessionStates = useAppStore((s) => s.fmSessionStates)
+  const setFmSessionMode = useAppStore((s) => s.setFmSessionMode)
+  const setFmManualPath = useAppStore((s) => s.setFmManualPath)
+  const resetFmToFollowing = useAppStore((s) => s.resetFmToFollowing)
+
+  // Current session's FM state (defaults to following)
+  const fmState = activeSessionId
+    ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null })
+    : { mode: 'following' as const, manualPath: null }
 
   const [files, setFiles] = useState<FileEntry[]>([])
-  const [currentPath, setCurrentPath] = useState('')
+  const [cwd, setCwd] = useState('')  // absolute path from server
+  const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
   const [loading, setLoading] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDesc, setSortDesc] = useState(false)
@@ -67,20 +80,15 @@ export function FileManager() {
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
-  useEffect(() => {
-    const hash = window.location.hash
-    if (hash.startsWith('#/fm')) {
-      const raw = hash.slice(4).replace(/^\//, '')
-      setCurrentPath(decodeURIComponent(raw))
-    }
-  }, [])
-
-  const fetchFiles = async (path: string, sort?: string, desc?: boolean) => {
-    if (!activeWorkspaceId) { setFiles([]); return }
+  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean) => {
+    if (!activeSessionId) { setFiles([]); return }
     setLoading(true)
     try {
-      const data = await api.listFiles(activeWorkspaceId, path, sort ?? sortKey, desc ?? sortDesc)
-      setFiles(data)
+      const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
+      const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc)
+      setFiles(data.files ?? [])
+      if (data.cwd) setCwd(data.cwd)
+      setIsOutsideWorkspace(data.is_outside_workspace ?? false)
       setSelected(new Set())
     } catch (err: any) {
       addToast('error', err.message || '加载文件列表失败')
@@ -88,11 +96,31 @@ export function FileManager() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
+  // Polling: following mode — auto-sync with terminal CWD
   useEffect(() => {
-    fetchFiles(currentPath)
-  }, [currentPath, activeWorkspaceId])
+    if (!activeSessionId || fmState.mode !== 'following') return
+    // Initial fetch
+    fetchFiles('.')
+    const id = setInterval(() => fetchFiles('.'), POLL_MS)
+    return () => clearInterval(id)
+  }, [activeSessionId, fmState.mode, fetchFiles])
+
+  // Manual mode: fetch once when manualPath changes
+  useEffect(() => {
+    if (!activeSessionId || fmState.mode !== 'manual' || !fmState.manualPath) return
+    fetchFiles(fmState.manualPath)
+  }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
+
+  // Session switch: restore state
+  useEffect(() => {
+    if (!activeSessionId) return
+    // If manual mode with a path, fetch it; otherwise following will handle via polling
+    if (fmState.mode === 'manual' && fmState.manualPath) {
+      fetchFiles(fmState.manualPath)
+    }
+  }, [activeSessionId])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
@@ -119,18 +147,27 @@ export function FileManager() {
     resizingRef.current = { col, startX: e.clientX, startW: colWidths[col as keyof typeof colWidths] }
   }
 
-  const navigateTo = (path: string) => {
-    setCurrentPath(path)
-    window.location.hash = path ? `/fm/${path}` : '/fm'
+  const navigateTo = (absolutePath: string) => {
+    if (!activeSessionId) return
+    // Switch to manual mode with absolute path
+    setFmSessionMode(activeSessionId, 'manual')
+    setFmManualPath(activeSessionId, absolutePath)
+  }
+
+  const handleHome = () => {
+    if (!activeSessionId) return
+    resetFmToFollowing(activeSessionId)
+    // Next poll will sync to terminal CWD
   }
 
   const handleRowClick = (entry: FileEntry, e: React.MouseEvent) => {
     if (editingName) return
     if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
-      navigateTo(currentPath ? `${currentPath}/${entry.name}` : entry.name)
+      const newPath = cwd ? `${cwd}/${entry.name}` : entry.name
+      navigateTo(newPath)
       return
     }
-    const fullPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
+    const fullPath = cwd ? `${cwd}/${entry.name}` : entry.name
     if (e.metaKey || e.ctrlKey) {
       setSelected((prev) => {
         const next = new Set(prev)
@@ -151,7 +188,7 @@ export function FileManager() {
     }
     setSortKey(key)
     setSortDesc(newDesc)
-    fetchFiles(currentPath, key, newDesc)
+    fetchFiles(undefined, key, newDesc)
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -169,7 +206,7 @@ export function FileManager() {
       }
     } else if (e.key === 'a' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      setSelected(new Set(files.map((f) => currentPath ? `${currentPath}/${f.name}` : f.name)))
+      setSelected(new Set(files.map((f) => cwd ? `${cwd}/${f.name}` : f.name)))
     }
   }
 
@@ -181,17 +218,17 @@ export function FileManager() {
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
-    if (!droppedFiles?.length) return
+    if (!droppedFiles?.length || !activeSessionId) return
     for (let i = 0; i < droppedFiles.length; i++) {
       const file = droppedFiles[i]
       try {
-        await api.uploadFile(activeWorkspaceId!, currentPath, file)
+        await api.uploadFileBySession(activeSessionId, cwd, file)
       } catch (err: any) {
         addToast('error', `上传 ${file.name} 失败: ${err.message}`)
       }
     }
     addToast('success', '上传完成')
-    fetchFiles(currentPath)
+    fetchFiles()
   }
 
   const startRename = () => {
@@ -203,11 +240,11 @@ export function FileManager() {
   }
 
   const commitRename = async () => {
-    if (!editingName || !editValue.trim()) { setEditingName(null); return }
+    if (!editingName || !editValue.trim() || !activeSessionId) { setEditingName(null); return }
     try {
-      await api.rename(activeWorkspaceId!, editingName, editValue.trim())
+      await api.renameBySession(activeSessionId, editingName, editValue.trim())
       addToast('success', '重命名成功')
-      fetchFiles(currentPath)
+      fetchFiles()
     } catch (err: any) {
       addToast('error', err.message || '重命名失败')
     }
@@ -215,20 +252,21 @@ export function FileManager() {
   }
 
   const handleDelete = async () => {
-    if (selected.size === 0) return
+    if (selected.size === 0 || !activeSessionId) return
     if (!confirm(`确定删除 ${selected.size} 个项目？`)) return
     try {
       for (const path of selected) {
-        await api.deleteFile(activeWorkspaceId!, path)
+        await api.deleteFileBySession(activeSessionId, path)
       }
       addToast('success', `已删除 ${selected.size} 个项目`)
-      fetchFiles(currentPath)
+      fetchFiles()
     } catch (err: any) {
       addToast('error', err.message || '删除失败')
     }
   }
 
   const handleUpload = () => {
+    if (!activeSessionId) return
     const input = document.createElement('input')
     input.type = 'file'
     input.multiple = true
@@ -236,22 +274,22 @@ export function FileManager() {
       if (!input.files?.length) return
       for (let i = 0; i < input.files.length; i++) {
         try {
-          await api.uploadFile(activeWorkspaceId!, currentPath, input.files[i])
+          await api.uploadFileBySession(activeSessionId, cwd, input.files[i])
         } catch (err: any) {
           addToast('error', `上传失败: ${err.message}`)
         }
       }
       addToast('success', '上传完成')
-      fetchFiles(currentPath)
+      fetchFiles()
     }
     input.click()
   }
 
   const handleSearch = async () => {
-    if (!searchQuery.trim()) { fetchFiles(currentPath); return }
+    if (!searchQuery.trim() || !activeSessionId) { fetchFiles(); return }
     setLoading(true)
     try {
-      const results = await api.searchFiles(activeWorkspaceId!, currentPath, searchQuery)
+      const results = await api.searchFilesBySession(activeSessionId, searchQuery, cwd)
       setFiles(results)
     } catch (err: any) {
       addToast('error', err.message || '搜索失败')
@@ -330,15 +368,23 @@ export function FileManager() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
           />
+          {fmState.mode === 'manual' && (
+            <button className="fm-btn" onClick={handleHome} title="回到终端目录">
+              <IconHome />
+            </button>
+          )}
           <button
             className="fm-btn"
-            onClick={() => navigateTo(getParentPath(currentPath))}
-            disabled={!currentPath}
+            onClick={() => {
+              const parentPath = getParentPath(cwd)
+              if (parentPath) navigateTo(parentPath)
+            }}
+            disabled={!cwd}
             title="返回上级"
           >
             <IconArrowUp />
           </button>
-          <button className="fm-btn" onClick={() => fetchFiles(currentPath)} title="刷新">
+          <button className="fm-btn" onClick={() => fetchFiles()} title="刷新">
             <IconRefresh />
           </button>
           <button className="fm-btn" onClick={handleUpload} title="上传文件">
@@ -347,11 +393,15 @@ export function FileManager() {
         </div>
       </div>
 
-      {currentPath && (
+      {cwd && (
         <div className="fm-breadcrumb">
-          <span className="fm-bc-seg" onClick={() => navigateTo('')}>~</span>
-          {currentPath.split('/').filter(Boolean).map((seg, i, arr) => {
-            const segPath = arr.slice(0, i + 1).join('/')
+          <span
+            className="fm-bc-seg"
+            onClick={() => { if (activeSessionId) { resetFmToFollowing(activeSessionId) } }}
+            title="回到终端当前目录"
+          >/</span>
+          {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
+            const segPath = '/' + arr.slice(0, i + 1).join('/')
             return (
               <span key={segPath}>
                 <span className="fm-bc-sep">/</span>
@@ -359,6 +409,15 @@ export function FileManager() {
               </span>
             )
           })}
+          {isOutsideWorkspace && (
+            <span
+              className="fm-warning-icon"
+              title="当前目录超出 workspace 边界"
+              style={{ marginLeft: 6, color: '#f59e0b', cursor: 'help' }}
+            >
+              <IconWarning width={14} height={14} />
+            </span>
+          )}
         </div>
       )}
 
@@ -368,10 +427,10 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {!activeWorkspaceId ? (
+        {!activeSessionId ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: '#a78bfa', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
-            <span>请先在侧栏创建或选择一个工作区</span>
+            <span>请先在侧栏选择一个终端会话</span>
           </div>
         ) : loading ? (
           <div className="fm-empty">加载中...</div>
@@ -415,7 +474,7 @@ export function FileManager() {
               </thead>
               <tbody>
                 {files.map((f) => {
-                  const fullPath = currentPath ? `${currentPath}/${f.name}` : f.name
+                  const fullPath = cwd ? `${cwd}/${f.name}` : f.name
                   const isDir = f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
