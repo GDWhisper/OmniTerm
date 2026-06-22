@@ -11,3 +11,6 @@
   ➜  Network: http://172.18.0.1:9778/
 23:14:33 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
 23:17:04 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+23:41:08 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:41:11 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:41:16 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx

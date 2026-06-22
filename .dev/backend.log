@@ -95,3 +95,7 @@ warning: `omniterm-server` (bin "omniterm-server") generated 11 warnings
 [2m2026-06-22T15:35:39.305960Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=19a72dda-caf3-41d9-b628-1d43bfb79dd4
 [2m2026-06-22T15:35:39.313222Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
 [2m2026-06-22T15:35:39.321326Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=e66d9971-07c0-41f5-897b-714bf2274722 tmux=lt_e66d9971
+[2m2026-06-22T15:39:13.816059Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-22T15:39:13.816059Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-22T15:39:13.816132Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=e66d9971-07c0-41f5-897b-714bf2274722
+[2m2026-06-22T15:39:13.844352Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited

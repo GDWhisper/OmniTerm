@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
+import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
@@ -226,12 +227,6 @@ export function Sidebar() {
           >
             OmniTerm
           </span>
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
-            style={{ color: '#475569', border: '1px solid #1e293b' }}
-          >
-            v1
-          </span>
         </div>
         <button
           onClick={toggleSidebarCollapsed}
@@ -418,6 +413,7 @@ export function Sidebar() {
             style={{ width: 6, height: 6, background: '#4ade80' }}
           />
           <span style={{ fontSize: 12, color: '#64748b' }}>Connected</span>
+          <span style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>v{APP_VERSION}</span>
         </div>
         <button
           className="flex items-center justify-center rounded transition-all"
