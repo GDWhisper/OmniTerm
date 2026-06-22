@@ -103,3 +103,22 @@ export function IconFolderOpen(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function IconWarning(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 2L1.5 13h13L8 2z" />
+      <line x1="8" y1="6" x2="8" y2="9" />
+      <circle cx="8" cy="11" r="0.5" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+export function IconHome(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3 8.5L8 3.5l5 5" />
+      <path d="M5 7.5V13h2.5v-3h1v3H11V7.5" />
+    </svg>
+  )
+}
