@@ -39,6 +39,14 @@ function getParentPath(path: string): string {
   return idx <= 0 ? '' : trimmed.slice(0, idx)
 }
 
+function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].name !== b[i].name || a[i].mtime !== b[i].mtime || a[i].size !== b[i].size || a[i].path_type !== b[i].path_type) return false
+  }
+  return true
+}
+
 function FileIcon({ entry }: { entry: FileEntry }) {
   switch (entry.path_type) {
     case 'Dir':
@@ -80,46 +88,32 @@ export function FileManager() {
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
-  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean): Promise<string | undefined> => {
+  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
     if (!activeSessionId) { setFiles([]); return undefined }
-    setLoading(true)
+    if (!silent) setLoading(true)
     try {
       const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
       const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc)
-      setFiles(data.files ?? [])
+      const newFiles = data.files ?? []
+      setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
-      setSelected(new Set())
+      if (!silent) setSelected(new Set())
       return data.cwd
     } catch (err: any) {
-      addToast('error', err.message || '加载文件列表失败')
-      setFiles([])
+      if (!silent) addToast('error', err.message || '加载文件列表失败')
+      if (!silent) setFiles([])
       return undefined
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
-  // Polling: following mode — lightweight CWD check, only fetch files when directory changes
-  const lastPolledCwdRef = useRef('')
+  // Polling: following mode — silent refresh every 3s, only updates state when files actually change
   useEffect(() => {
     if (!activeSessionId || fmState.mode !== 'following') return
-    lastPolledCwdRef.current = ''
-    // Initial fetch
-    fetchFiles('.').then((fetchedCwd) => {
-      if (fetchedCwd) lastPolledCwdRef.current = fetchedCwd
-    })
-    const id = setInterval(async () => {
-      try {
-        const { cwd: latestCwd } = await api.getSessionCwd(activeSessionId)
-        if (latestCwd && latestCwd !== lastPolledCwdRef.current) {
-          lastPolledCwdRef.current = latestCwd
-          fetchFiles('.')
-        }
-      } catch {
-        // session gone or tmux unavailable — silently ignore
-      }
-    }, POLL_MS)
+    fetchFiles('.')
+    const id = setInterval(() => fetchFiles('.', undefined, undefined, true), POLL_MS)
     return () => clearInterval(id)
   }, [activeSessionId, fmState.mode, fetchFiles])
 
