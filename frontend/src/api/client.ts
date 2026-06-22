@@ -54,6 +54,10 @@ export const api = {
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),
 
+  // Session CWD
+  getSessionCwd: (sessionId: string) =>
+    request<{ cwd: string }>(`/sessions/${sessionId}/cwd`),
+
   // Hooks
   hookStatus: (sessionId: string) =>
     request<any>(`/sessions/${sessionId}/hook-status`),
@@ -103,4 +107,33 @@ export const api = {
     request('/files/copy', { method: 'POST', body: JSON.stringify({ paths, destination, workspace }) }),
   searchFiles: (workspace: string, query: string, path?: string) =>
     request<any[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+
+  // Files by session (follows terminal CWD)
+  listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean) => {
+    let url = `/files?session=${sessionId}&path=${path || ''}`
+    if (sort) url += `&sort=${sort}`
+    if (desc) url += `&order=desc`
+    return request<{ files: any[]; cwd: string; is_outside_workspace: boolean }>(url)
+  },
+  uploadFileBySession: (sessionId: string, path: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return fetch(`/api/v1/files?session=${sessionId}&path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      body: form,
+    }).then((r) => {
+      if (!r.ok) throw new Error(`Upload failed: ${r.status}`)
+      return r.json()
+    })
+  },
+  deleteFileBySession: (sessionId: string, path: string) =>
+    request(`/files?session=${sessionId}&path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }),
+  mkdirBySession: (sessionId: string, path: string, name: string) =>
+    request('/files/mkdir', { method: 'POST', body: JSON.stringify({ path, name, session: sessionId }) }),
+  renameBySession: (sessionId: string, path: string, newName: string) =>
+    request('/files/rename', { method: 'POST', body: JSON.stringify({ path, newName, session: sessionId }) }),
+  searchFilesBySession: (sessionId: string, query: string, path?: string) =>
+    request<any[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
 }
