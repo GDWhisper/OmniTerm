@@ -83,6 +83,9 @@ OmniTerm 采用 **深色科技感 (Dark Tech)** 视觉语言：
 | `danger-glow` | `0 0 6px rgba(239, 68, 68, 0.3)` | 危险状态辉光 |
 | `success` | `#4ade80` | 成功状态、运行中的 agent |
 | `success-glow` | `0 0 6px #4ade80` | 成功状态辉光 |
+| `warning` | `#f59e0b` | 警告状态、超出 workspace 边界 |
+| `warning-12` | `rgba(245, 158, 11, 0.12)` | 警告背景 |
+| `warning-glow` | `0 0 6px rgba(245, 158, 11, 0.3)` | 警告状态辉光 |
 
 ### 2.6 滚动条
 
