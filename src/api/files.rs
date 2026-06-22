@@ -11,6 +11,7 @@ use serde_json::json;
 use tracing::error;
 
 use crate::fs;
+use crate::tmux;
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -30,6 +31,7 @@ pub fn routes() -> Router<AppState> {
 struct FileQuery {
     path: Option<String>,
     workspace: Option<String>,
+    session: Option<String>,
     sort: Option<String>,
     order: Option<String>,
 }
@@ -89,35 +91,121 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
     (key, desc)
 }
 
+/// Resolve base path from session ID (via tmux pane CWD).
+/// Returns (base_path, tmux_session_name).
+async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
+    let tmux_name: (String,) =
+        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
+            .bind(session_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()?;
+
+    let tmux_name = tmux_name.0;
+    let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
+    Some((cwd, tmux_name))
+}
+
+/// Get workspace root_path for a session (used for is_outside_workspace check).
+async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> Option<String> {
+    sqlx::query_as::<_, (String,)>(
+        "SELECT w.root_path FROM workspaces w JOIN sessions s ON s.workspace_id = w.id WHERE s.id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .map(|(p,)| p)
+}
+
 async fn list_files(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
-    let rel_path = q.path.as_deref().unwrap_or("");
     let (sort, desc) = parse_sort(q.sort.as_deref(), q.order.as_deref());
 
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
-        );
-    };
+    // Session-based mode: resolve CWD from tmux
+    if let Some(session_id) = q.session.as_deref() {
+        let Some((cwd, _tmux_name)) = resolve_session_base(&state, session_id).await else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "session not found or tmux unavailable" })),
+            );
+        };
 
-    let base = std::path::Path::new(&root);
+        let rel_path = q.path.as_deref().unwrap_or("");
+        let base = std::path::Path::new(&cwd);
 
-    if !base.exists() {
-        return (StatusCode::OK, Json(json!([])));
-    }
+        if !base.exists() {
+            return (StatusCode::OK, Json(json!({ "files": [], "cwd": cwd, "is_outside_workspace": true })));
+        }
 
-    match fs::list_dir(base, rel_path, sort, desc).await {
-        Ok(entries) => (StatusCode::OK, Json(json!(entries))),
-        Err(e) => {
-            error!("list_files failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
+        // Determine if CWD is outside workspace
+        let is_outside = if let Some(ws_root) = resolve_session_workspace_root(&state, session_id).await {
+            !cwd.starts_with(&ws_root)
+        } else {
+            false
+        };
+
+        // Resolve the actual directory to list
+        let list_base = if rel_path.is_empty() || rel_path == "." {
+            base.to_path_buf()
+        } else if std::path::Path::new(rel_path).is_absolute() {
+            std::path::Path::new(rel_path).to_path_buf()
+        } else {
+            base.join(rel_path)
+        };
+
+        // Basic security: ensure path doesn't escape /
+        let Ok(canonical) = list_base.canonicalize() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "path not found" })),
+            );
+        };
+
+        match fs::list_dir(&canonical, "", sort, desc).await {
+            Ok(entries) => (
+                StatusCode::OK,
+                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside })),
+            ),
+            Err(e) => {
+                error!("list_files (session) failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+            }
+        }
+    } else {
+        // Original workspace-based mode
+        let workspace_id = q.workspace.as_deref().unwrap_or("default");
+        let rel_path = q.path.as_deref().unwrap_or("");
+
+        let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "workspace not found" })),
+            );
+        };
+
+        let base = std::path::Path::new(&root);
+
+        if !base.exists() {
+            return (StatusCode::OK, Json(json!([])));
+        }
+
+        match fs::list_dir(base, rel_path, sort, desc).await {
+            Ok(entries) => (StatusCode::OK, Json(json!(entries))),
+            Err(e) => {
+                error!("list_files failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+            }
         }
     }
 }
