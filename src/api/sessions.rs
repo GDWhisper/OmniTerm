@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
             "/sessions/{id}",
             patch(update_session).delete(delete_session),
         )
+        .route("/sessions/{id}/cwd", get(get_session_cwd))
 }
 
 async fn list_sessions(
@@ -165,6 +166,38 @@ async fn delete_session(
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+async fn get_session_cwd(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    // Look up tmux session name
+    let tmux_name: Option<(String,)> =
+        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    let Some((tmux_name,)) = tmux_name else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "session not found" })),
+        );
+    };
+
+    match tmux::pane_cwd(&tmux_name).await {
+        Ok(cwd) => (StatusCode::OK, Json(json!({ "cwd": cwd }))),
+        Err(e) => {
+            error!("pane_cwd failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        }
+    }
 }
 
 fn dirs() -> Option<String> {
