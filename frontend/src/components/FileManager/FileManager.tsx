@@ -80,8 +80,8 @@ export function FileManager() {
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
-  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean) => {
-    if (!activeSessionId) { setFiles([]); return }
+  const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean): Promise<string | undefined> => {
+    if (!activeSessionId) { setFiles([]); return undefined }
     setLoading(true)
     try {
       const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
@@ -90,20 +90,36 @@ export function FileManager() {
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
       setSelected(new Set())
+      return data.cwd
     } catch (err: any) {
       addToast('error', err.message || '加载文件列表失败')
       setFiles([])
+      return undefined
     } finally {
       setLoading(false)
     }
   }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
-  // Polling: following mode — auto-sync with terminal CWD
+  // Polling: following mode — lightweight CWD check, only fetch files when directory changes
+  const lastPolledCwdRef = useRef('')
   useEffect(() => {
     if (!activeSessionId || fmState.mode !== 'following') return
+    lastPolledCwdRef.current = ''
     // Initial fetch
-    fetchFiles('.')
-    const id = setInterval(() => fetchFiles('.'), POLL_MS)
+    fetchFiles('.').then((fetchedCwd) => {
+      if (fetchedCwd) lastPolledCwdRef.current = fetchedCwd
+    })
+    const id = setInterval(async () => {
+      try {
+        const { cwd: latestCwd } = await api.getSessionCwd(activeSessionId)
+        if (latestCwd && latestCwd !== lastPolledCwdRef.current) {
+          lastPolledCwdRef.current = latestCwd
+          fetchFiles('.')
+        }
+      } catch {
+        // session gone or tmux unavailable — silently ignore
+      }
+    }, POLL_MS)
     return () => clearInterval(id)
   }, [activeSessionId, fmState.mode, fetchFiles])
 
