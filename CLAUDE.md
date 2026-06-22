@@ -38,6 +38,20 @@ cd frontend && pnpm dev      # 前端 :9778, proxies /api → :9777
 docker compose up --build    # 后端 :9777
 ```
 
+## Git Worktree
+
+项目使用 git worktree 管理开发分支：
+
+| 目录 | 分支 | 用途 |
+|------|------|------|
+| `/home/pax/coding/OmniTerm` | `main` | 稳定版本 |
+| `/home/pax/coding/OmniTerm-dev` | `dev` | 开发分支 |
+
+- 两个 worktree 共享 `.git` 对象，各自独立工作
+- 在 `OmniTerm-dev` 目录启动独立的 Claude Code 会话进行开发
+- 开发完成后将 `dev` 合并回 `main`
+- 修改版本号时只需编辑 `frontend/src/version.ts`
+
 ## CodeGraph
 
 本项目已索引（`.codegraph/` 存在），必须优先使用 CodeGraph 工具查询和理解代码：
