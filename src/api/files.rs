@@ -41,6 +41,7 @@ struct SearchQuery {
     q: String,
     path: Option<String>,
     workspace: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +50,7 @@ struct RenameRequest {
     #[serde(rename = "newName")]
     new_name: String,
     workspace: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -56,6 +58,7 @@ struct MoveRequest {
     paths: Vec<String>,
     destination: String,
     workspace: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +66,7 @@ struct CopyRequest {
     paths: Vec<String>,
     destination: String,
     workspace: Option<String>,
+    session: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +122,23 @@ async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> O
     .ok()
     .flatten()
     .map(|(p,)| p)
+}
+
+/// Resolve base path from query: prefer session over workspace.
+/// Returns (base_path, is_session_mode).
+async fn resolve_base_from_query(
+    state: &AppState,
+    session: Option<&str>,
+    workspace: Option<&str>,
+) -> Option<(std::path::PathBuf, bool)> {
+    if let Some(sid) = session {
+        let (cwd, _) = resolve_session_base(state, sid).await?;
+        Some((std::path::PathBuf::from(cwd), true))
+    } else {
+        let wid = workspace.unwrap_or("default");
+        let root = resolve_workspace_root(state, wid).await?;
+        Some((std::path::PathBuf::from(root), false))
+    }
 }
 
 async fn list_files(
@@ -215,17 +236,15 @@ async fn upload_file(
     Query(q): Query<FileQuery>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
     let rel_path = q.path.as_deref().unwrap_or("");
 
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
     let mut uploaded = Vec::new();
 
     while let Some(field) = multipart.next_field().await.unwrap_or(None) {
@@ -242,13 +261,16 @@ async fn upload_file(
             }
         };
 
-        let target_path = if rel_path.is_empty() {
+        // For session mode with absolute rel_path, use it as-is
+        let target_path = if rel_path.is_empty() || rel_path == "." {
             file_name.clone()
+        } else if std::path::Path::new(rel_path).is_absolute() {
+            format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         } else {
             format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         };
 
-        if let Err(e) = fs::write_file(base, &target_path, &data).await {
+        if let Err(e) = fs::write_file(&base, &target_path, &data).await {
             error!("upload write failed: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -277,17 +299,14 @@ async fn delete_file(
         );
     };
 
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    match fs::delete_path(base, path_str).await {
+    match fs::delete_path(&base, path_str).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("delete failed: {}", e);
@@ -308,18 +327,22 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
             .into_response();
     };
 
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         )
             .into_response();
     };
 
-    let base = std::path::Path::new(&root);
-    let Ok(full_path) = fs::sanitize_path(base, path_str) else {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid path" }))).into_response();
+    // For session mode, paths may be absolute
+    let full_path = if std::path::Path::new(path_str).is_absolute() {
+        std::path::PathBuf::from(path_str)
+    } else {
+        match fs::sanitize_path(&base, path_str) {
+            Ok(p) => p,
+            Err(_) => return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid path" }))).into_response(),
+        }
     };
 
     let Ok(content) = tokio::fs::read(&full_path).await else {
@@ -353,17 +376,14 @@ async fn read_file(
         );
     };
 
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    match fs::read_file(base, path_str).await {
+    match fs::read_file(&base, path_str).await {
         Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
         Err(e) => {
             error!("read_file failed: {}", e);
@@ -387,17 +407,14 @@ async fn write_file(
         );
     };
 
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    match fs::write_file(base, path_str, req.content.as_bytes()).await {
+    match fs::write_file(&base, path_str, req.content.as_bytes()).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("write_file failed: {}", e);
@@ -413,28 +430,25 @@ async fn mkdir(
     State(state): State<AppState>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let workspace_id = req
-        .get("workspace")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default");
+    let session_id = req.get("session").and_then(|v| v.as_str());
+    let workspace_id = req.get("workspace").and_then(|v| v.as_str());
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, session_id, workspace_id).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-    let dir_path = if path.is_empty() {
+    let dir_path = if path.is_empty() || path == "." {
         name.to_string()
     } else {
         format!("{}/{}", path.trim_end_matches('/'), name)
     };
 
-    match fs::create_dir(base, &dir_path).await {
+    match fs::create_dir(&base, &dir_path).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("mkdir failed: {}", e);
@@ -450,15 +464,12 @@ async fn rename(
     State(state): State<AppState>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    let workspace_id = req.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
-
-    let base = std::path::Path::new(&root);
 
     // Compute new path: replace the file/dir name in the original path
     let old_path = std::path::Path::new(&req.path);
@@ -473,7 +484,7 @@ async fn rename(
         _ => req.new_name.clone(),
     };
 
-    match fs::move_path(base, &req.path, &new_rel).await {
+    match fs::move_path(&base, &req.path, &new_rel).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("rename failed: {}", e);
@@ -489,17 +500,13 @@ async fn move_files(
     State(state): State<AppState>,
     Json(req): Json<MoveRequest>,
 ) -> impl IntoResponse {
-    let workspace_id = req.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    // Move each path to destination directory
     for p in &req.paths {
         let file_name = std::path::Path::new(p)
             .file_name()
@@ -510,7 +517,7 @@ async fn move_files(
             req.destination.trim_end_matches('/'),
             file_name
         );
-        if let Err(e) = fs::move_path(base, p, &dest).await {
+        if let Err(e) = fs::move_path(&base, p, &dest).await {
             error!("move failed: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -526,17 +533,14 @@ async fn copy_files(
     State(state): State<AppState>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
-    let workspace_id = req.workspace.as_deref().unwrap_or("default");
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    match fs::copy_paths(base, &req.paths, &req.destination).await {
+    match fs::copy_paths(&base, &req.paths, &req.destination).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("copy failed: {}", e);
@@ -552,19 +556,16 @@ async fn search_files(
     State(state): State<AppState>,
     Query(q): Query<SearchQuery>,
 ) -> impl IntoResponse {
-    let workspace_id = q.workspace.as_deref().unwrap_or("default");
     let rel_path = q.path.as_deref().unwrap_or("");
 
-    let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace not found" })),
+            Json(json!({ "error": "workspace or session not found" })),
         );
     };
 
-    let base = std::path::Path::new(&root);
-
-    match fs::search_files(base, rel_path, &q.q).await {
+    match fs::search_files(&base, rel_path, &q.q).await {
         Ok(entries) => (StatusCode::OK, Json(json!(entries))),
         Err(e) => {
             error!("search failed: {}", e);
