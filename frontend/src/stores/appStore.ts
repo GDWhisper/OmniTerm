@@ -18,6 +18,11 @@ interface Session {
   created_at: string
 }
 
+interface FmSessionState {
+  mode: 'following' | 'manual'
+  manualPath: string | null // absolute path when in manual mode
+}
+
 interface AppState {
   // Layout
   sidebarOpen: boolean
@@ -35,6 +40,9 @@ interface AppState {
   sessions: Session[]
   activeWorkspaceId: string | null
   activeSessionId: string | null
+
+  // FM session states
+  fmSessionStates: Record<string, FmSessionState>
 
   // Mobile
   isMobile: boolean
@@ -54,6 +62,11 @@ interface AppState {
   setActiveSession: (id: string | null) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
+
+  // FM session actions
+  setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
+  setFmManualPath: (sessionId: string, path: string | null) => void
+  resetFmToFollowing: (sessionId: string) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -69,6 +82,8 @@ export const useAppStore = create<AppState>((set) => ({
   sessions: [],
   activeWorkspaceId: null,
   activeSessionId: null,
+
+  fmSessionStates: {},
 
   isMobile: false,
   activeTab: 'terminal',
@@ -100,4 +115,32 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveSession: (id) => set({ activeSessionId: id }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  setFmSessionMode: (sessionId, mode) =>
+    set((s) => ({
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: {
+          ...s.fmSessionStates[sessionId],
+          mode,
+          ...(mode === 'following' ? { manualPath: null } : {}),
+        },
+      },
+    })),
+
+  setFmManualPath: (sessionId, path) =>
+    set((s) => ({
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: { ...s.fmSessionStates[sessionId], mode: 'manual', manualPath: path },
+      },
+    })),
+
+  resetFmToFollowing: (sessionId) =>
+    set((s) => ({
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: { mode: 'following', manualPath: null },
+      },
+    })),
 }))
