@@ -1,0 +1,16 @@
+services:
+  omniterm:
+    build: .
+    ports:
+      - "9777:9777"
+    volumes:
+      - omniterm-data:/app/data
+      - /home:/home:ro
+    environment:
+      - DATABASE_URL=sqlite:/app/data/omniterm.db?mode=rwc
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - BIND_ADDR=0.0.0.0:9777
+    restart: unless-stopped
+
+volumes:
+  omniterm-data:

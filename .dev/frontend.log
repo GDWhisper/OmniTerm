@@ -1,0 +1,13 @@
+
+> frontend@0.0.0 dev /home/pax/coding/OmniTerm/frontend
+> vite
+
+23:10:30 [vite] (client) Re-optimizing dependencies because vite config has changed
+
+  VITE v8.0.16  ready in 157 ms
+
+  ➜  Local:   http://localhost:9778/
+  ➜  Network: http://192.168.5.216:9778/
+  ➜  Network: http://172.18.0.1:9778/
+23:14:33 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+23:17:04 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx

@@ -1,0 +1,103 @@
+import { create } from 'zustand'
+
+interface Workspace {
+  id: string
+  name: string
+  root_path: string
+  target_id?: string
+  created_at: string
+}
+
+interface Session {
+  id: string
+  workspace_id: string
+  name?: string
+  tmux_session_name?: string
+  hook_enabled: boolean
+  hook_status?: string
+  created_at: string
+}
+
+interface AppState {
+  // Layout
+  sidebarOpen: boolean
+  sidebarCollapsed: boolean
+  fileManagerOpen: boolean
+  fileManagerCollapsed: boolean
+  sidebarWidth: number
+  fileManagerWidth: number
+
+  // Terminal
+  fontSize: number
+
+  // Data
+  workspaces: Workspace[]
+  sessions: Session[]
+  activeWorkspaceId: string | null
+  activeSessionId: string | null
+
+  // Mobile
+  isMobile: boolean
+  activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
+
+  // Actions
+  toggleSidebar: () => void
+  toggleSidebarCollapsed: () => void
+  toggleFileManager: () => void
+  toggleFileManagerCollapsed: () => void
+  setSidebarWidth: (w: number) => void
+  setFileManagerWidth: (w: number) => void
+  setFontSize: (s: number) => void
+  setWorkspaces: (ws: Workspace[]) => void
+  setSessions: (s: Session[]) => void
+  setActiveWorkspace: (id: string | null) => void
+  setActiveSession: (id: string | null) => void
+  setIsMobile: (v: boolean) => void
+  setActiveTab: (tab: AppState['activeTab']) => void
+}
+
+export const useAppStore = create<AppState>((set) => ({
+  sidebarOpen: true,
+  sidebarCollapsed: false,
+  fileManagerOpen: true,
+  fileManagerCollapsed: false,
+  sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
+  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || '300'),
+  fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
+
+  workspaces: [],
+  sessions: [],
+  activeWorkspaceId: null,
+  activeSessionId: null,
+
+  isMobile: false,
+  activeTab: 'terminal',
+
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
+  toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
+
+  setSidebarWidth: (w) => {
+    localStorage.setItem('omniterm_sidebar_width', String(w))
+    set({ sidebarWidth: w })
+  },
+
+  setFileManagerWidth: (w) => {
+    localStorage.setItem('omniterm_fm_width', String(w))
+    set({ fileManagerWidth: w })
+  },
+
+  setFontSize: (s) => {
+    const clamped = Math.max(10, Math.min(24, s))
+    localStorage.setItem('omniterm_font_size', String(clamped))
+    set({ fontSize: clamped })
+  },
+
+  setWorkspaces: (workspaces) => set({ workspaces }),
+  setSessions: (sessions) => set({ sessions }),
+  setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
+  setActiveSession: (id) => set({ activeSessionId: id }),
+  setIsMobile: (v) => set({ isMobile: v }),
+  setActiveTab: (tab) => set({ activeTab: tab }),
+}))

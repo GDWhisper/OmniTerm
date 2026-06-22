@@ -1,0 +1,535 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@import "@xterm/xterm/css/xterm.css";
+
+:root {
+  --sidebar-width: 200px;
+  --filemanager-width: 300px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Keep native browser UI (scrollbars, inputs) matching the theme */
+.dark {
+  color-scheme: dark;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Shared drag bar styling — vertical (between sidebar/terminal/filemanager).
+   Palette from docs/ui-style-guide.md §5.1.
+   ──────────────────────────────────────────────────────────────────── */
+.omniterm-drag-bar {
+  background: #0a0a0f;
+  position: relative;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+
+.omniterm-drag-bar::after {
+  content: '';
+  position: absolute;
+  background: #64748b;
+  border-radius: 1px;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.omniterm-drag-bar:hover {
+  background: #111827;
+}
+
+.omniterm-drag-bar:hover::after {
+  background: #a78bfa;
+  box-shadow: 0 0 6px rgba(167, 139, 250, 0.5);
+}
+
+/* Vertical drag bar — 4px wide, indicator is 4px × 48px centered pill. */
+.omniterm-drag-bar-v {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.omniterm-drag-bar-v::after {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 2px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   OmniTerm FileManager — dufs-inspired single-page file table.
+   Scoped under .omnifm-root. Follows docs/ui-style-guide.md palette.
+   ──────────────────────────────────────────────────────────────────── */
+
+.omnifm-root {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #0a0a0f;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Toolbar ── */
+.fm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #0a0a0f;
+  border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+}
+
+.fm-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fm-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Breadcrumb ── */
+.fm-breadcrumb {
+  font-size: 14px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.fm-breadcrumb a {
+  color: #a78bfa;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.fm-breadcrumb a:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+.fm-bc-seg {
+  color: #a78bfa;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.fm-bc-seg:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
+}
+
+.fm-bc-sep {
+  color: #475569;
+  margin: 0 1px;
+}
+
+.fm-breadcrumb b {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.fm-sep {
+  color: #64748b;
+  padding: 0 0.15em;
+}
+
+/* ── Toolbar actions ── */
+.fm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.fm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.fm-btn:hover {
+  background: rgba(167, 139, 250, 0.10);
+  color: #a78bfa;
+}
+
+/* ── Search ── */
+.fm-search {
+  width: 180px;
+  height: 26px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 8px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.fm-search:focus {
+  border-color: #a78bfa;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+.fm-search::placeholder {
+  color: #64748b;
+}
+
+/* ── Drag over state ── */
+.fm-drag-over {
+  outline: 2px dashed #a78bfa;
+  outline-offset: -2px;
+  background: rgba(167, 139, 250, 0.04);
+}
+
+/* ── Drag overlay ── */
+.fm-drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(167, 139, 250, 0.06);
+  border: 2px dashed #a78bfa;
+  border-radius: 6px;
+  color: #a78bfa;
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* ── Table wrapper — horizontal + vertical scroll ── */
+.fm-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fm-table-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.fm-table-wrap::-webkit-scrollbar-track {
+  background: #0a0a0f;
+}
+.fm-table-wrap::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 2px;
+}
+.fm-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: #a78bfa;
+}
+.fm-table-wrap {
+  scrollbar-color: #334155 #0a0a0f;
+  scrollbar-width: thin;
+}
+
+/* ── File table — min-width forces horizontal scroll ── */
+.fm-table {
+  min-width: 540px;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.fm-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #0a0a0f;
+}
+
+.fm-table thead tr {
+  background: #0a0a0f;
+}
+
+.fm-table th {
+  text-align: left;
+  font-weight: unset;
+  color: #94a3b8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  padding: 8px 8px;
+  border-bottom: 1px solid #1e293b;
+  cursor: default;
+  user-select: none;
+  position: relative;
+}
+
+/* Sortable label — only this area triggers sort on click */
+.fm-th-sort {
+  cursor: pointer;
+  transition: color 0.15s ease;
+  display: inline;
+}
+
+.fm-th-sort:hover {
+  color: #a78bfa;
+}
+
+.fm-th-name {
+  min-width: 180px;
+  position: relative;
+}
+.fm-th-mtime {
+  width: 140px;
+  min-width: 80px;
+  position: relative;
+}
+.fm-th-size {
+  width: 100px;
+  min-width: 60px;
+  text-align: right !important;
+  position: relative;
+}
+/* Column resize handle — right edge of each th (except actions) */
+.fm-th-resize {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  width: 5px;
+  bottom: 2px;
+  cursor: col-resize;
+  z-index: 5;
+  user-select: none;
+  border-radius: 1px;
+  transition: background 0.15s ease;
+}
+
+.fm-th-resize:hover,
+.fm-th-resize.fm-resizing {
+  background: #64748b;
+}
+
+/* ── Table rows ── */
+.fm-row {
+  transition: background 0.15s ease;
+}
+
+.fm-row:hover {
+  background: rgba(167, 139, 250, 0.06);
+}
+
+.fm-table tr:hover td {
+  background: rgba(167, 139, 250, 0.06);
+}
+
+.fm-tr-selected td {
+  background: rgba(167, 139, 250, 0.10) !important;
+}
+
+.fm-row td {
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-bottom: 1px solid #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Actions cell */
+.fm-td-actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+}
+
+/* ── Name cell ── */
+.fm-td-name a {
+  display: flex;
+  align-items: center;
+  color: #e2e8f0;
+  text-decoration: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.fm-td-name a:hover {
+  color: #a78bfa;
+}
+
+.fm-td-name span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Time cell ── */
+.fm-td-mtime {
+  color: #64748b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-td-time {
+  color: #64748b;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Action icon buttons ── */
+.fm-act-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: #64748b;
+}
+
+.fm-act-icon:hover {
+  background: rgba(167, 139, 250, 0.12);
+  color: #a78bfa;
+}
+
+.fm-act-icon-danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+/* ── Inline edit input ── */
+.fm-edit-input {
+  width: 100%;
+  max-width: 260px;
+  height: 24px;
+  background: #1e293b;
+  border: 1px solid #a78bfa;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+}
+
+/* ── Size cell ── */
+.fm-td-size {
+  color: #64748b;
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Empty state ── */
+.fm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 120px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.fm-empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+.fm-empty-hint {
+  font-size: 11px;
+  color: #334155;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Animations — shared across UI
+   ──────────────────────────────────────────────────────────────────── */
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.25s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.15s ease-out;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Sidebar glow effects
+   ──────────────────────────────────────────────────────────────────── */
+
+.sidebar-glow-violet {
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.3);
+}
+
+.sidebar-glow-violet-hover:hover {
+  box-shadow: 0 0 16px rgba(167, 139, 250, 0.4);
+}
+
+.sidebar-glow-green {
+  box-shadow: 0 0 6px #4ade80;
+}
+
+.sidebar-glow-red-hover:hover {
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+}
