@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
+import { useThemeStore } from '../../stores/themeStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
 import { APP_VERSION } from '../../version'
@@ -26,6 +27,8 @@ export function Sidebar() {
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
+  const settingsOpen = useAppStore((s) => s.settingsOpen)
+  const { theme, setTheme } = useThemeStore()
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
@@ -199,7 +202,7 @@ export function Sidebar() {
         </div>
 
         <button
-          onClick={toggleSettings}
+          onClick={() => { toggleSidebarCollapsed(); toggleSettings() }}
           className="flex items-center justify-center rounded transition-all mb-3"
           style={{ width: 28, height: 28, border: '1px solid #334155', color: '#64748b', fontSize: 14 }}
           title={t('settings.title')}
@@ -420,6 +423,77 @@ export function Sidebar() {
           })
         )}
       </div>
+
+      {/* Settings panel — appears above status bar */}
+      {settingsOpen && (
+        <div
+          className="absolute bottom-12 left-0 right-0 px-3 py-2.5 space-y-2.5"
+          style={{ borderTop: '1px solid #1e293b', background: '#0a0a0f', zIndex: 10 }}
+        >
+          {/* Theme */}
+          <div className="flex gap-1">
+            {[
+              { v: 'light', icon: '☀️', label: t('settings.light') },
+              { v: 'dark', icon: '🌙', label: t('settings.dark') },
+              { v: 'system', icon: '💻', label: t('settings.system') },
+            ].map((th) => (
+              <button
+                key={th.v}
+                onClick={() => setTheme(th.v as 'light' | 'dark' | 'system')}
+                className="flex-1 flex items-center justify-center gap-1 py-1.5 rounded text-xs transition-colors"
+                style={{
+                  background: theme === th.v ? 'rgba(167,139,250,0.15)' : '#1e293b',
+                  color: theme === th.v ? '#a78bfa' : '#64748b',
+                  border: `1px solid ${theme === th.v ? 'rgba(167,139,250,0.3)' : '#334155'}`,
+                }}
+              >
+                <span>{th.icon}</span>
+                <span>{th.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Language */}
+          <div className="flex gap-1">
+            {[{ v: 'zh', label: '中文' }, { v: 'en', label: 'English' }].map((l) => (
+              <button
+                key={l.v}
+                onClick={() => i18n.changeLanguage(l.v)}
+                className="flex-1 py-1.5 rounded text-xs transition-colors"
+                style={{
+                  background: i18n.language === l.v || i18n.language.startsWith(l.v) ? 'rgba(167,139,250,0.15)' : '#1e293b',
+                  color: i18n.language === l.v || i18n.language.startsWith(l.v) ? '#a78bfa' : '#64748b',
+                  border: `1px solid ${i18n.language === l.v || i18n.language.startsWith(l.v) ? 'rgba(167,139,250,0.3)' : '#334155'}`,
+                }}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Font size */}
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 11, color: '#64748b' }}>{t('settings.fontSize')}</span>
+            <button
+              onClick={() => setFontSize(fontSize - 1)}
+              disabled={fontSize <= 10}
+              className="w-6 h-6 flex items-center justify-center rounded text-xs transition-colors"
+              style={{ background: '#1e293b', border: '1px solid #334155', color: '#94a3b8' }}
+            >
+              −
+            </button>
+            <span className="font-mono" style={{ fontSize: 12, color: '#a78bfa', minWidth: 28, textAlign: 'center' }}>{fontSize}px</span>
+            <button
+              onClick={() => setFontSize(fontSize + 1)}
+              disabled={fontSize >= 24}
+              className="w-6 h-6 flex items-center justify-center rounded text-xs transition-colors"
+              style={{ background: '#1e293b', border: '1px solid #334155', color: '#94a3b8' }}
+            >
+              +
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Bottom status bar */}
       <div
