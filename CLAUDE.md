@@ -19,6 +19,11 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 | 8. Frontend UI unification | ✅ | Dark violet-on-black palette across Sidebar/Terminal/FileManager, vertical file-manager layout with drag bar, shared drag-bar styling, localized empty states |
 | 8b. Drag-bar architecture upgrade | ✅ | MutationObserver relocates cubone's `.sidebar-resize` out of nav-pane into a flex sibling (real pane boundary, scroll-immune); unified dark-tech scrollbar (`#334155` thumb / `#0a0a0f` track) |
 
+## Development Conventions
+
+1. **开发/debug 后必须提交 git** — 每完成一个功能点或修复一个 bug 后，立即 `git commit`，提交信息说明修改内容。
+2. **CHANGELOG 只写用户确认的内容** — 只有经过用户确认的新功能和修复才写入 `CHANGELOG.md`，不要自行添加未确认的条目。
+
 ## Quick Start
 
 ```bash
