@@ -61,7 +61,6 @@ function FileIcon({ entry }: { entry: FileEntry }) {
 
 export function FileManager() {
   const addToast = useToastStore((s) => s.addToast)
-  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
   const toggleFileManagerCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
@@ -110,9 +109,9 @@ export function FileManager() {
   }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
   // Polling: following mode — silent refresh every 3s, only updates state when files actually change
+  // (immediate fetch on session switch is handled by the session-switch effect below)
   useEffect(() => {
     if (!activeSessionId || fmState.mode !== 'following') return
-    fetchFiles('.')
     const id = setInterval(() => fetchFiles('.', undefined, undefined, true), POLL_MS)
     return () => clearInterval(id)
   }, [activeSessionId, fmState.mode, fetchFiles])
@@ -123,14 +122,15 @@ export function FileManager() {
     fetchFiles(fmState.manualPath)
   }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
 
-  // Session switch: restore state
+  // Session switch: immediate fetch (don't wait for next poll cycle)
   useEffect(() => {
     if (!activeSessionId) return
-    // If manual mode with a path, fetch it; otherwise following will handle via polling
     if (fmState.mode === 'manual' && fmState.manualPath) {
       fetchFiles(fmState.manualPath)
+    } else {
+      fetchFiles('.')
     }
-  }, [activeSessionId])
+  }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
