@@ -5,8 +5,13 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_PORT=9777
-FRONTEND_PORT=9778
+
+# 本地端口覆盖（.env.local 已在 .gitignore，不会被 merge 覆盖）
+[[ -f "$PROJECT_DIR/.env.local" ]] && source "$PROJECT_DIR/.env.local"
+
+BACKEND_PORT=${BACKEND_PORT:-9777}
+FRONTEND_PORT=${FRONTEND_PORT:-9778}
+export BACKEND_PORT FRONTEND_PORT
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"

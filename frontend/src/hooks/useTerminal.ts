@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { useAppStore } from '../stores/appStore'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -39,6 +40,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     wsRef.current = ws
 
     ws.onopen = () => {
+      useAppStore.getState().setConnected(true)
       termRef.current?.writeln('\x1b[32m[connected]\x1b[0m')
       // Send current terminal size so backend PTY matches our viewport
       // (critical: backend creates PTY at a default size, resize must follow immediately)
@@ -65,6 +67,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     }
 
     ws.onclose = () => {
+      useAppStore.getState().setConnected(false)
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
         termRef.current?.writeln('\x1b[31m[disconnected]\x1b[0m')
@@ -72,6 +75,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     }
 
     ws.onerror = () => {
+      useAppStore.getState().setConnected(false)
       if (wsRef.current === ws) {
         termRef.current?.writeln('\x1b[31m[connection error]\x1b[0m')
       }

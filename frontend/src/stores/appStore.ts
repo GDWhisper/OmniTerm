@@ -44,6 +44,9 @@ interface AppState {
   // FM session states
   fmSessionStates: Record<string, FmSessionState>
 
+  // Connection
+  connected: boolean
+
   // Mobile
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
@@ -60,6 +63,7 @@ interface AppState {
   setSessions: (s: Session[]) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
+  setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
 
@@ -85,6 +89,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   fmSessionStates: {},
 
+  connected: false,
   isMobile: false,
   activeTab: 'terminal',
 
@@ -107,6 +112,7 @@ export const useAppStore = create<AppState>((set) => ({
   setSessions: (sessions) => set({ sessions }),
   setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
   setActiveSession: (id) => set({ activeSessionId: id }),
+  setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => set({ activeTab: tab }),
 

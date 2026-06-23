@@ -15,10 +15,12 @@ export function Sidebar() {
     activeWorkspaceId,
     activeSessionId,
     sidebarCollapsed,
+    connected,
     setWorkspaces,
     setSessions,
     setActiveWorkspace,
     setActiveSession,
+    setConnected,
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
@@ -69,6 +71,14 @@ export function Sidebar() {
       // fallback: leave wsPath empty, user fills it in
     })
   }, [])
+
+  // Health polling
+  useEffect(() => {
+    const check = () => api.health().then(() => setConnected(true)).catch(() => setConnected(false))
+    check()
+    const id = setInterval(check, 5000)
+    return () => clearInterval(id)
+  }, [setConnected])
 
   const handleCreateWorkspace = async () => {
     if (!wsName.trim()) return
@@ -409,10 +419,15 @@ export function Sidebar() {
       >
         <div className="flex items-center gap-2">
           <div
-            className="rounded-full sidebar-glow-green"
-            style={{ width: 6, height: 6, background: '#4ade80' }}
+            className="rounded-full"
+            style={{
+              width: 6,
+              height: 6,
+              background: connected ? '#4ade80' : '#ef4444',
+              boxShadow: connected ? '0 0 6px #4ade80' : '0 0 6px #ef4444',
+            }}
           />
-          <span style={{ fontSize: 12, color: '#64748b' }}>Connected</span>
+          <span style={{ fontSize: 12, color: '#64748b' }}>{connected ? 'Connected' : 'Disconnected'}</span>
           <span style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>v{APP_VERSION}</span>
         </div>
         <button
