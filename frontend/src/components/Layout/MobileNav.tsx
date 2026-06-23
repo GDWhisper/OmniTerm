@@ -1,13 +1,15 @@
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 
 const tabs = [
-  { id: 'terminal' as const, label: '终端', icon: '⌨️' },
-  { id: 'files' as const, label: '文件', icon: '📁' },
-  { id: 'sessions' as const, label: '会话', icon: '📋' },
-  { id: 'settings' as const, label: '设置', icon: '⚙️' },
+  { id: 'terminal' as const, labelKey: 'mobile.terminal', icon: '⌨️' },
+  { id: 'files' as const, labelKey: 'mobile.files', icon: '📁' },
+  { id: 'sessions' as const, labelKey: 'mobile.sessions', icon: '📋' },
+  { id: 'settings' as const, labelKey: 'mobile.settings', icon: '⚙️' },
 ]
 
 export function MobileNav() {
+  const { t } = useTranslation()
   const { activeTab, setActiveTab } = useAppStore()
 
   return (
@@ -23,7 +25,7 @@ export function MobileNav() {
           }`}
         >
           <span className="block text-lg">{tab.icon}</span>
-          <span className="block mt-1">{tab.label}</span>
+          <span className="block mt-1">{t(tab.labelKey)}</span>
         </button>
       ))}
     </nav>
