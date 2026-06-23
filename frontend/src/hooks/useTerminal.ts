@@ -34,19 +34,18 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       wsRef.current = null
     }
 
+    // Pass current terminal size as URL params so backend creates PTY at the
+    // correct viewport size from the start (like tmuxes does).
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${window.location.host}/api/v1/ws/terminal/${sessionId}`)
+    const ws = new WebSocket(
+      `${protocol}//${window.location.host}/api/v1/ws/terminal/${sessionId}?cols=${term.cols}&rows=${term.rows}`
+    )
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
 
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
       termRef.current?.writeln('\x1b[32m[connected]\x1b[0m')
-      // Send current terminal size so backend PTY matches our viewport
-      // (critical: backend creates PTY at a default size, resize must follow immediately)
-      if (termRef.current && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols: termRef.current.cols, rows: termRef.current.rows }))
-      }
     }
 
     ws.onmessage = (e) => {
