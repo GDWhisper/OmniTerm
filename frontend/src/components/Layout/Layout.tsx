@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { FileManager } from '../FileManager/FileManager'
+import { Settings } from '../Settings/Settings'
 import { MobileNav } from './MobileNav'
 
 export function Layout() {

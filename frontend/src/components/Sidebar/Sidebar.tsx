@@ -18,11 +18,13 @@ export function Sidebar() {
     activeSessionId,
     sidebarCollapsed,
     connected,
+    fontSize,
     setWorkspaces,
     setSessions,
     setActiveWorkspace,
     setActiveSession,
     setConnected,
+    setFontSize,
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
