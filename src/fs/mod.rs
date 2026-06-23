@@ -326,31 +326,41 @@ pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Ve
     // Absolute paths (from session mode) use the path directly; relative paths join against base.
     let dir = if Path::new(rel_path).is_absolute() {
         PathBuf::from(rel_path)
+    } else if rel_path.is_empty() || rel_path == "." {
+        base.to_path_buf()
     } else {
         sanitize_path(base, rel_path)?
     };
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    search_recursive(&dir, base, &query_lower, &mut results, 100).await?;
+    search_recursive(&dir, &query_lower, &mut results, 100, 8).await?;
 
     Ok(results)
 }
 
-/// Recursive search with depth limit.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules", ".git", "target", "__pycache__", ".venv", "venv",
+    ".next", ".nuxt", "dist", "build", ".cache", "vendor",
+];
+
+/// Recursive search with result and depth limits.
 fn search_recursive<'a>(
     dir: &'a Path,
-    base: &'a Path,
     query: &'a str,
     results: &'a mut Vec<FileEntry>,
     max_results: usize,
+    max_depth: usize,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
     Box::pin(async move {
-        if results.len() >= max_results {
+        if results.len() >= max_results || max_depth == 0 {
             return Ok(());
         }
 
-        let mut read_dir = fs::read_dir(dir).await?;
+        let mut read_dir = match fs::read_dir(dir).await {
+            Ok(rd) => rd,
+            Err(_) => return Ok(()),  // skip unreadable directories
+        };
 
         while let Some(entry) = read_dir.next_entry().await? {
             if results.len() >= max_results {
@@ -358,9 +368,18 @@ fn search_recursive<'a>(
             }
 
             let name = entry.file_name().to_string_lossy().to_string();
-            let meta = fs::metadata(entry.path()).await?;
-            let meta2 = fs::symlink_metadata(entry.path()).await?;
-            let is_symlink = meta2.is_symlink();
+
+            // Skip hidden dirs and common heavy directories
+            if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+
+            let meta = match fs::metadata(entry.path()).await {
+                Ok(m) => m,
+                Err(_) => continue,  // skip inaccessible entries
+            };
+            let meta2 = fs::symlink_metadata(entry.path()).await;
+            let is_symlink = meta2.map(|m| m.is_symlink()).unwrap_or(false);
             let is_dir = meta.is_dir();
 
             if name.to_lowercase().contains(query) {
@@ -385,8 +404,8 @@ fn search_recursive<'a>(
                 });
             }
 
-            if is_dir {
-                search_recursive(&entry.path(), base, query, results, max_results).await?;
+            if is_dir && !is_symlink {
+                search_recursive(&entry.path(), query, results, max_results, max_depth - 1).await?;
             }
         }
 

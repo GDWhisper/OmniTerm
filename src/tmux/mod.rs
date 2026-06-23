@@ -141,6 +141,9 @@ pub async fn pane_cwd(session: &str) -> Result<String> {
     }
 
     let cwd = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if cwd.is_empty() {
+        return Err(anyhow!("tmux session '{}' not found or has no pane", session));
+    }
     Ok(cwd)
 }
 
