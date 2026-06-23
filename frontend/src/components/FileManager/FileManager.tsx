@@ -3,7 +3,7 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome, IconSearch, IconWorkbench } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -207,12 +207,6 @@ export function FileManager() {
     // Switch to manual mode with absolute path
     setFmSessionMode(activeSessionId, 'manual')
     setFmManualPath(activeSessionId, absolutePath)
-  }
-
-  const handleHome = () => {
-    if (!activeSessionId) return
-    resetFmToFollowing(activeSessionId)
-    // Next poll will sync to terminal CWD
   }
 
   const handleRowClick = (entry: FileEntry, e: React.MouseEvent) => {
@@ -457,11 +451,7 @@ export function FileManager() {
               />
             )}
           </div>
-          {fmState.mode === 'manual' && (
-            <button className="fm-btn" onClick={handleHome} title="回到终端目录">
-              <IconHome />
-            </button>
-          )}
+
           <button
             className="fm-btn"
             onClick={() => {
