@@ -153,6 +153,12 @@ export function FileManager() {
     fetchFiles(fmState.manualPath)
   }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
 
+  // Following mode: fetch terminal CWD when switching back to following
+  useEffect(() => {
+    if (!activeSessionId || fmState.mode !== 'following') return
+    fetchFiles('.')
+  }, [activeSessionId, fmState.mode, fetchFiles])
+
   // Session switch: show cached files immediately, then fetch fresh data
   useEffect(() => {
     if (!activeSessionId) return
