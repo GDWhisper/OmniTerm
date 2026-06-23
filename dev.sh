@@ -5,8 +5,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_PORT=9777
-FRONTEND_PORT=9778
+BACKEND_PORT=19777
+FRONTEND_PORT=19778
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
