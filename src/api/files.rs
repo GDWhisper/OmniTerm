@@ -75,7 +75,7 @@ struct WriteRequest {
 }
 
 /// Resolve workspace root path from workspace ID.
-async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Option<String> {
+pub async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Option<String> {
     sqlx::query_as::<_, (String,)>("SELECT root_path FROM workspaces WHERE id = ?")
         .bind(workspace_id)
         .fetch_optional(&state.db)
@@ -99,7 +99,7 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 /// Returns (base_path, tmux_session_name).
 /// If the tmux session is missing (e.g. tmux server restarted), re-creates it
 /// using the workspace root_path as fallback CWD.
-async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
+pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
     let tmux_name: (String,) =
         sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -147,7 +147,7 @@ async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> O
 
 /// Resolve base path from query: prefer session over workspace.
 /// Returns (base_path, is_session_mode).
-async fn resolve_base_from_query(
+pub async fn resolve_base_from_query(
     state: &AppState,
     session: Option<&str>,
     workspace: Option<&str>,

@@ -21,6 +21,8 @@ interface Session {
 interface FmSessionState {
   mode: 'following' | 'manual'
   manualPath: string | null // absolute path when in manual mode
+  drawerPath: string | null // file path open in drawer (null = closed)
+  drawerMode: 'view' | 'edit' // drawer view/edit mode
 }
 
 interface AppState {
@@ -71,6 +73,8 @@ interface AppState {
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
   setFmManualPath: (sessionId: string, path: string | null) => void
   resetFmToFollowing: (sessionId: string) => void
+  setFmDrawerPath: (sessionId: string, path: string | null, mode?: 'view' | 'edit') => void
+  closeFmDrawer: (sessionId: string) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -140,7 +144,34 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({
       fmSessionStates: {
         ...s.fmSessionStates,
-        [sessionId]: { mode: 'following', manualPath: null },
+        [sessionId]: {
+          ...s.fmSessionStates[sessionId],
+          mode: 'following',
+          manualPath: null,
+        },
+      },
+    })),
+
+  setFmDrawerPath: (sessionId, path, mode = 'view') =>
+    set((s) => ({
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: {
+          ...s.fmSessionStates[sessionId],
+          drawerPath: path,
+          drawerMode: mode,
+        },
+      },
+    })),
+
+  closeFmDrawer: (sessionId) =>
+    set((s) => ({
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: {
+          ...s.fmSessionStates[sessionId],
+          drawerPath: null,
+        },
       },
     })),
 }))
