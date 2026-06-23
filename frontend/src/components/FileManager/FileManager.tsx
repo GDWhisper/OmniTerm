@@ -78,7 +78,6 @@ export function FileManager() {
 
   // Drawer state from store (persists across session switches)
   const drawerFilePath = fmState.drawerPath
-  const drawerMode = fmState.drawerMode ?? 'view'
 
   // Drawer height (sessionStorage, shared across sessions)
   const [drawerHeight, setDrawerHeight] = useState(() => {
@@ -87,7 +86,7 @@ export function FileManager() {
   })
 
   // SSE file watcher (replaces 3s polling)
-  const { lastEvent: fileChangeEvent, connected: watcherConnected } = useFileWatcher({
+  const { lastEvent: fileChangeEvent } = useFileWatcher({
     sessionId: activeSessionId,
     enabled: !!activeSessionId,
   })
@@ -209,7 +208,7 @@ export function FileManager() {
     setFmManualPath(activeSessionId, absolutePath)
   }
 
-  const handleRowClick = (entry: FileEntry, e: React.MouseEvent) => {
+  const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
     if (editingName) return
     if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
       const newPath = cwd ? `${cwd}/${entry.name}` : entry.name

@@ -8,10 +8,6 @@ import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 /** Supported image extensions for preview mode */
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
 
-/** Max file sizes */
-const MAX_TEXT_SIZE = 4 * 1024 * 1024   // 4MB
-const MAX_IMAGE_SIZE = 20 * 1024 * 1024 // 20MB
-
 /** Known text file extensions */
 const TEXT_EXTS = new Set([
   // Code
