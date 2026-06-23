@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface FilePreviewProps {
   /** Absolute file path (used to construct download URL) */
@@ -14,6 +15,7 @@ interface FilePreviewProps {
  * Displays images fetched via the download API endpoint.
  */
 export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps) {
+  const { t } = useTranslation()
   const [error, setError] = useState(false)
 
   // Build the image URL using the existing download endpoint
@@ -39,7 +41,7 @@ export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps)
           <circle cx="6" cy="6" r="1.5" />
           <path d="M14 10l-3-3-5 5" />
         </svg>
-        <span>图片加载失败</span>
+        <span>{t('preview.loadFailed')}</span>
         <span style={{ color: '#94a3b8', fontSize: 12 }}>{fileName}</span>
         <a
           href={imageUrl}
@@ -63,7 +65,7 @@ export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps)
             e.currentTarget.style.background = 'transparent'
           }}
         >
-          下载文件
+          {t('preview.download')}
         </a>
       </div>
     )

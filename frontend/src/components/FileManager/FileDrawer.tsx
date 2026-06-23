@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { FileEditor } from './FileEditor'
@@ -63,6 +64,7 @@ export function FileDrawer({
   onHeightChange,
   fileChangeEvent,
 }: FileDrawerProps) {
+  const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const fileName = filePath.split('/').pop() || filePath
 
@@ -96,7 +98,7 @@ export function FileDrawer({
       setExternalChange(false)
       loadedRef.current = true
     } catch (err: any) {
-      setError(err.message || '读取文件失败')
+      setError(err.message || t('drawer.loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -121,7 +123,7 @@ export function FileDrawer({
     if (eventFileName !== fileName) return
 
     if (fileChangeEvent.kind === 'delete') {
-      setError('文件已被外部删除')
+      setError(t('drawer.fileDeletedExternally'))
       return
     }
 
@@ -143,10 +145,10 @@ export function FileDrawer({
       setContent(editedContent)
       setModified(false)
       setExternalChange(false)
-      setSaveMessage('✓ 已保存')
+      setSaveMessage(t('drawer.saved'))
       setTimeout(() => setSaveMessage(null), 2000)
     } catch (err: any) {
-      addToast('error', err.message || '保存失败')
+      addToast('error', err.message || t('drawer.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -155,13 +157,13 @@ export function FileDrawer({
   // Reload from server (discard edits)
   const handleReload = async () => {
     await fetchContent()
-    addToast('success', '已重新加载')
+    addToast('success', t('drawer.reloaded'))
   }
 
   // Close handler with unsaved changes check
   const handleClose = () => {
     if (modified) {
-      const result = confirm('文件已修改，是否保存？')
+      const result = confirm(t('drawer.unsavedChanges'))
       if (result) {
         handleSave().then(onClose)
         return
@@ -289,7 +291,7 @@ export function FileDrawer({
           {externalChange && (
             <span style={{ color: '#f59e0b', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
               <IconWarning width={12} height={12} />
-              已被外部修改
+              {t('drawer.externallyModified')}
             </span>
           )}
         </div>
@@ -328,7 +330,7 @@ export function FileDrawer({
                 }}
               >
                 <IconEye width={12} height={12} />
-                预览
+                {t('drawer.preview')}
               </button>
               <button
                 onClick={() => setMode('edit')}
@@ -361,7 +363,7 @@ export function FileDrawer({
                 }}
               >
                 <IconEdit width={12} height={12} />
-                编辑
+                {t('drawer.edit')}
               </button>
             </>
           )}
@@ -388,7 +390,7 @@ export function FileDrawer({
               e.currentTarget.style.color = '#64748b'
               e.currentTarget.style.background = 'transparent'
             }}
-            title="关闭"
+            title={t('drawer.close')}
           >
             <IconX width={14} height={14} />
           </button>
@@ -411,7 +413,7 @@ export function FileDrawer({
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             }}
           >
-            <span>不支持预览此文件类型</span>
+            <span>{t('drawer.unsupportedPreview')}</span>
             <span style={{ color: '#94a3b8', fontSize: 12 }}>{fileName}</span>
           </div>
         ) : loading ? (
@@ -426,7 +428,7 @@ export function FileDrawer({
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             }}
           >
-            加载中...
+            {t('drawer.loading')}
           </div>
         ) : error ? (
           <div
@@ -465,7 +467,7 @@ export function FileDrawer({
                 e.currentTarget.style.background = 'transparent'
               }}
             >
-              重试
+              {t('drawer.retry')}
             </button>
           </div>
         ) : isImage ? (
@@ -519,15 +521,15 @@ export function FileDrawer({
                   e.currentTarget.style.background = 'transparent'
                 }}
               >
-                重新加载
+                {t('drawer.reload')}
               </button>
             )}
             {saving ? (
-              <span style={{ color: '#94a3b8' }}>保存中...</span>
+              <span style={{ color: '#94a3b8' }}>{t('drawer.saving')}</span>
             ) : saveMessage ? (
               <span style={{ color: '#4ade80' }}>{saveMessage}</span>
             ) : modified ? (
-              <span style={{ color: '#a78bfa' }}>● 已修改</span>
+              <span style={{ color: '#a78bfa' }}>{t('drawer.modified')}</span>
             ) : null}
           </span>
         </div>
