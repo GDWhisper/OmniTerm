@@ -31,7 +31,8 @@ export function Layout() {
 
       const onMove = (e: MouseEvent) => {
         const delta = e.clientX - startX
-        const newWidth = Math.max(140, Math.min(280, startWidth + delta))
+        const maxSidebar = Math.floor(window.innerWidth / 3)
+        const newWidth = Math.max(140, Math.min(maxSidebar, startWidth + delta))
         setSidebarWidth(newWidth)
       }
 
@@ -58,7 +59,8 @@ export function Layout() {
 
       const onMove = (e: MouseEvent) => {
         const delta = startX - e.clientX
-        const newWidth = Math.max(240, Math.min(400, startWidth + delta))
+        const maxFileManager = Math.floor(window.innerWidth / 2)
+        const newWidth = Math.max(240, Math.min(maxFileManager, startWidth + delta))
         setFileManagerWidth(newWidth)
       }
 
