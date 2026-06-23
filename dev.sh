@@ -125,6 +125,7 @@ cmd_start() {
     info "启动前端 (端口 $FRONTEND_PORT) ..."
     (
         cd "$PROJECT_DIR/frontend"
+        export NODE_ENV=development
         export http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}"
         pnpm dev
     ) > "$FRONTEND_LOG" 2>&1 &
