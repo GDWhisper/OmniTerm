@@ -53,11 +53,15 @@ interface AppState {
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
 
+  // Settings panel (desktop)
+  settingsOpen: boolean
+
   // Actions
   toggleSidebar: () => void
   toggleSidebarCollapsed: () => void
   toggleFileManager: () => void
   toggleFileManagerCollapsed: () => void
+  toggleSettings: () => void
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
@@ -96,11 +100,13 @@ export const useAppStore = create<AppState>((set) => ({
   connected: false,
   isMobile: false,
   activeTab: 'terminal',
+  settingsOpen: false,
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
   toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
 
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
 
