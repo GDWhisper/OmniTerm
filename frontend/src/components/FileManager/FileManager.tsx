@@ -203,7 +203,10 @@ export function FileManager() {
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (editingName) return
-    if (e.key === 'Backspace' || e.key === 'Delete') {
+    // Don't intercept keys when an input/textarea has focus (search box, rename box, etc.)
+    const tag = (e.target as HTMLElement).tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    if (e.key === 'Delete') {
       e.preventDefault()
       handleDelete()
     } else if (e.key === 'r' && !e.metaKey && !e.ctrlKey) {
