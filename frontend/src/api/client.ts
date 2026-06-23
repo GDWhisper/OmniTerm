@@ -136,4 +136,11 @@ export const api = {
     request('/files/rename', { method: 'POST', body: JSON.stringify({ path, newName, session: sessionId }) }),
   searchFilesBySession: (sessionId: string, query: string, path?: string) =>
     request<any[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+  readFileBySession: (sessionId: string, path: string) =>
+    request<{ content: string }>(`/files/read?session=${sessionId}&path=${encodeURIComponent(path)}`),
+  writeFileBySession: (sessionId: string, path: string, content: string) =>
+    request(`/files/write?session=${sessionId}&path=${encodeURIComponent(path)}`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
 }

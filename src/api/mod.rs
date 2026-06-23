@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod files;
+pub mod files_watch;
 pub mod health;
 pub mod hooks;
 pub mod sessions;
@@ -21,6 +22,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(sessions::routes())
         .merge(hooks::routes())
         .merge(files::routes())
+        .merge(files_watch::routes())
         .route("/ws/terminal/{session_id}", axum::routing::get(ws::ws_terminal_handler));
 
     Router::new()

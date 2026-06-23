@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type Drag
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
+import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome, IconSearch, IconWorkbench } from './icons'
+import { FileDrawer } from './FileDrawer'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -14,8 +16,6 @@ interface FileEntry {
 }
 
 type SortKey = 'name' | 'mtime' | 'size'
-
-const POLL_MS = 3000
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
@@ -68,11 +68,29 @@ export function FileManager() {
   const setFmSessionMode = useAppStore((s) => s.setFmSessionMode)
   const setFmManualPath = useAppStore((s) => s.setFmManualPath)
   const resetFmToFollowing = useAppStore((s) => s.resetFmToFollowing)
+  const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
+  const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
 
   // Current session's FM state (defaults to following)
   const fmState = activeSessionId
-    ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null })
-    : { mode: 'following' as const, manualPath: null }
+    ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const })
+    : { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }
+
+  // Drawer state from store (persists across session switches)
+  const drawerFilePath = fmState.drawerPath
+  const drawerMode = fmState.drawerMode ?? 'view'
+
+  // Drawer height (sessionStorage, shared across sessions)
+  const [drawerHeight, setDrawerHeight] = useState(() => {
+    const stored = sessionStorage.getItem('omniterm_drawer_height')
+    return stored ? parseInt(stored) : 256
+  })
+
+  // SSE file watcher (replaces 3s polling)
+  const { lastEvent: fileChangeEvent, connected: watcherConnected } = useFileWatcher({
+    sessionId: activeSessionId,
+    enabled: !!activeSessionId,
+  })
 
   const [files, setFiles] = useState<FileEntry[]>([])
   const [cwd, setCwd] = useState('')  // absolute path from server
@@ -118,13 +136,16 @@ export function FileManager() {
     }
   }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
-  // Polling: following mode — silent refresh every 3s, only updates state when files actually change
-  // (immediate fetch on session switch is handled by the session-switch effect)
+  // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
-    if (!activeSessionId || fmState.mode !== 'following') return
-    const id = setInterval(() => fetchFiles('.', undefined, undefined, true), POLL_MS)
-    return () => clearInterval(id)
-  }, [activeSessionId, fmState.mode, fetchFiles])
+    if (!fileChangeEvent || !activeSessionId) return
+    fetchFiles(undefined, undefined, undefined, true)
+  }, [fileChangeEvent, activeSessionId])
+
+  // Save drawer height to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem('omniterm_drawer_height', String(drawerHeight))
+  }, [drawerHeight])
 
   // Manual mode: fetch once when manualPath changes
   useEffect(() => {
@@ -196,15 +217,11 @@ export function FileManager() {
       return
     }
     const fullPath = cwd ? `${cwd}/${entry.name}` : entry.name
-    if (e.metaKey || e.ctrlKey) {
-      setSelected((prev) => {
-        const next = new Set(prev)
-        next.has(fullPath) ? next.delete(fullPath) : next.add(fullPath)
-        return next
-      })
-    } else {
-      setSelected(new Set([fullPath]))
+    // Open file in drawer (single click)
+    if (activeSessionId) {
+      setFmDrawerPath(activeSessionId, fullPath, 'view')
     }
+    setSelected(new Set([fullPath]))
   }
 
   const handleSort = (key: SortKey) => {
@@ -600,6 +617,18 @@ export function FileManager() {
           </div>
         )}
       </div>
+
+      {/* File Drawer — slides up from bottom when a file is opened */}
+      {drawerFilePath && activeSessionId && (
+        <FileDrawer
+          filePath={drawerFilePath}
+          sessionId={activeSessionId}
+          onClose={() => closeFmDrawer(activeSessionId)}
+          height={drawerHeight}
+          onHeightChange={setDrawerHeight}
+          fileChangeEvent={fileChangeEvent}
+        />
+      )}
     </div>
   )
 }

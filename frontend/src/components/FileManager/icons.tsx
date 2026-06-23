@@ -140,3 +140,30 @@ export function IconWorkbench(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function IconEye(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z" />
+      <circle cx="8" cy="8" r="2" />
+    </svg>
+  )
+}
+
+export function IconEdit(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M11.5 2.5a1.77 1.77 0 012.5 2.5L5.5 13.5 2 14l.5-3.5L11.5 2.5z" />
+      <line x1="10" y1="4" x2="12" y2="6" />
+    </svg>
+  )
+}
+
+export function IconX(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="4" y1="4" x2="12" y2="12" />
+      <line x1="12" y1="4" x2="4" y2="12" />
+    </svg>
+  )
+}

@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use anyhow::anyhow;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::error;
@@ -75,7 +76,7 @@ struct WriteRequest {
 }
 
 /// Resolve workspace root path from workspace ID.
-async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Option<String> {
+pub async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Option<String> {
     sqlx::query_as::<_, (String,)>("SELECT root_path FROM workspaces WHERE id = ?")
         .bind(workspace_id)
         .fetch_optional(&state.db)
@@ -99,7 +100,7 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 /// Returns (base_path, tmux_session_name).
 /// If the tmux session is missing (e.g. tmux server restarted), re-creates it
 /// using the workspace root_path as fallback CWD.
-async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
+pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
     let tmux_name: (String,) =
         sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
             .bind(session_id)
@@ -147,7 +148,7 @@ async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> O
 
 /// Resolve base path from query: prefer session over workspace.
 /// Returns (base_path, is_session_mode).
-async fn resolve_base_from_query(
+pub async fn resolve_base_from_query(
     state: &AppState,
     session: Option<&str>,
     workspace: Option<&str>,
@@ -404,7 +405,14 @@ async fn read_file(
         );
     };
 
-    match fs::read_file(&base, path_str).await {
+    // For session mode, paths may be absolute
+    let content = if std::path::Path::new(path_str).is_absolute() {
+        tokio::fs::read_to_string(path_str).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::read_file(&base, path_str).await
+    };
+
+    match content {
         Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
         Err(e) => {
             error!("read_file failed: {}", e);
@@ -435,7 +443,18 @@ async fn write_file(
         );
     };
 
-    match fs::write_file(&base, path_str, req.content.as_bytes()).await {
+    // For session mode, paths may be absolute
+    let result: Result<(), anyhow::Error> = if std::path::Path::new(path_str).is_absolute() {
+        // Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(path_str).parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        tokio::fs::write(path_str, req.content.as_bytes()).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::write_file(&base, path_str, req.content.as_bytes()).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("write_file failed: {}", e);
