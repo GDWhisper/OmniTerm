@@ -28,10 +28,10 @@ export function Layout() {
       e.preventDefault()
       const startX = e.clientX
       const startWidth = sidebarWidth
+      const maxSidebar = Math.floor(window.innerWidth / 3)
 
       const onMove = (e: MouseEvent) => {
         const delta = e.clientX - startX
-        const maxSidebar = Math.floor(window.innerWidth / 3)
         const newWidth = Math.max(140, Math.min(maxSidebar, startWidth + delta))
         setSidebarWidth(newWidth)
       }
@@ -41,6 +41,8 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        // ponytail: persist on release, not every frame
+        localStorage.setItem('omniterm_sidebar_width', String(useAppStore.getState().sidebarWidth))
       }
 
       document.addEventListener('mousemove', onMove)
@@ -56,10 +58,10 @@ export function Layout() {
       e.preventDefault()
       const startX = e.clientX
       const startWidth = fileManagerWidth
+      const maxFileManager = Math.floor(window.innerWidth / 2)
 
       const onMove = (e: MouseEvent) => {
         const delta = startX - e.clientX
-        const maxFileManager = Math.floor(window.innerWidth / 2)
         const newWidth = Math.max(240, Math.min(maxFileManager, startWidth + delta))
         setFileManagerWidth(newWidth)
       }
@@ -69,6 +71,8 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
+        // ponytail: persist on release, not every frame
+        localStorage.setItem('omniterm_fm_width', String(useAppStore.getState().fileManagerWidth))
       }
 
       document.addEventListener('mousemove', onMove)

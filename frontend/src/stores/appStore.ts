@@ -93,15 +93,9 @@ export const useAppStore = create<AppState>((set) => ({
   toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
   toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
 
-  setSidebarWidth: (w) => {
-    localStorage.setItem('omniterm_sidebar_width', String(w))
-    set({ sidebarWidth: w })
-  },
+  setSidebarWidth: (w) => set({ sidebarWidth: w }),
 
-  setFileManagerWidth: (w) => {
-    localStorage.setItem('omniterm_fm_width', String(w))
-    set({ fileManagerWidth: w })
-  },
+  setFileManagerWidth: (w) => set({ fileManagerWidth: w }),
 
   setFontSize: (s) => {
     const clamped = Math.max(10, Math.min(24, s))
