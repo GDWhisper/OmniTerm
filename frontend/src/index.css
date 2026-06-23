@@ -150,12 +150,23 @@ html, body, #root {
 .fm-bc-root {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   vertical-align: middle;
-  margin-right: 2px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #a78bfa;
+  border-radius: 4px;
+  color: #a78bfa;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none !important;
 }
 
 .fm-bc-root:hover {
-  text-decoration: none;
+  background: rgba(167, 139, 250, 0.15);
+  box-shadow: 0 0 8px rgba(167, 139, 250, 0.2);
+  color: #c4b5fd;
+  text-decoration: none !important;
 }
 
 .fm-bc-sep {

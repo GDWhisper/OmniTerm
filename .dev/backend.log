@@ -73,3 +73,13 @@ warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
      Running `target/debug/omniterm-server`
 [2m2026-06-23T03:59:21.961839Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:9777
 [2m2026-06-23T04:00:45.753496Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
+[2m2026-06-23T04:11:21.178870Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-23T04:11:21.178884Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-23T04:11:21.179395Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=763411b5-d43a-4837-ad1d-8df029cbce18
+[2m2026-06-23T04:11:21.184535Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+[2m2026-06-23T04:11:23.970242Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
+[2m2026-06-23T04:11:24.665879Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-23T04:11:24.665883Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-23T04:11:24.665957Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=763411b5-d43a-4837-ad1d-8df029cbce18
+[2m2026-06-23T04:11:24.666651Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+[2m2026-06-23T04:11:24.682698Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5 tmux=lt_94cb1f59
