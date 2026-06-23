@@ -51,9 +51,11 @@ docker compose up --build    # 后端 :9777
 |------|------|------|
 | `/home/pax/coding/OmniTerm` | `main` | 稳定版本 |
 | `/home/pax/coding/OmniTerm-dev` | `dev` | 开发分支 |
+| `/home/pax/coding/OmniTerm-debug` | `debug` | 调试分支（基于 dev） |
 
-- 两个 worktree 共享 `.git` 对象，各自独立工作
+- 三个 worktree 共享 `.git` 对象，各自独立工作
 - 在 `OmniTerm-dev` 目录启动独立的 Claude Code 会话进行开发
+- debug 分支用于独立调试，不影响 dev 主开发流程
 - 开发完成后将 `dev` 合并回 `main`
 - 修改版本号时只需编辑 `frontend/src/version.ts`
 
