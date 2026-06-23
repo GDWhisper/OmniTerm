@@ -131,3 +131,12 @@ export function IconSearch(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function IconWorkbench(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M3.5 11l3-3-3-3" />
+      <line x1="7.5" y1="11" x2="12.5" y2="11" />
+    </svg>
+  )
+}

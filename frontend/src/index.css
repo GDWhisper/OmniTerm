@@ -147,6 +147,17 @@ html, body, #root {
   text-decoration: underline;
 }
 
+.fm-bc-root {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-right: 2px;
+}
+
+.fm-bc-root:hover {
+  text-decoration: none;
+}
+
 .fm-bc-sep {
   color: #475569;
   margin: 0 1px;
@@ -200,15 +211,17 @@ html, body, #root {
 
 .fm-search-wrap .fm-search {
   position: absolute;
-  right: 100%;
-  margin-right: 6px;
-  width: 200px;
-  animation: fm-search-slide-in 0.15s ease-out;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 220px;
+  z-index: 50;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(167, 139, 250, 0.15);
+  animation: fm-search-drop 0.15s ease-out;
 }
 
-@keyframes fm-search-slide-in {
-  from { opacity: 0; transform: translateX(8px); }
-  to { opacity: 1; transform: translateX(0); }
+@keyframes fm-search-drop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .fm-search {

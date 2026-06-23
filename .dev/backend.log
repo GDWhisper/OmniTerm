@@ -69,37 +69,7 @@ warning: variants `Pong` and `Exit` are never constructed
    = note: `ServerControl` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
 warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
      Running `target/debug/omniterm-server`
-[2m2026-06-23T03:47:48.316418Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:9777
-[2m2026-06-23T03:47:52.107655Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
-[2m2026-06-23T03:47:52.822101Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:47:52.822101Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:47:52.822174Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=763411b5-d43a-4837-ad1d-8df029cbce18
-[2m2026-06-23T03:47:52.822558Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:47:52.839140Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5 tmux=lt_94cb1f59
-[2m2026-06-23T03:54:17.299021Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:54:17.299021Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:54:17.299122Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5
-[2m2026-06-23T03:54:17.299522Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:54:17.320069Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
-[2m2026-06-23T03:54:19.502126Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:54:19.502132Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:54:19.502189Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=763411b5-d43a-4837-ad1d-8df029cbce18
-[2m2026-06-23T03:54:19.502693Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:54:19.519600Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5 tmux=lt_94cb1f59
-[2m2026-06-23T03:54:27.085055Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:54:27.085165Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5
-[2m2026-06-23T03:54:27.085066Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:54:27.091233Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:54:27.104748Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
-[2m2026-06-23T03:54:31.755149Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:54:31.755163Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:54:31.755261Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=763411b5-d43a-4837-ad1d-8df029cbce18
-[2m2026-06-23T03:54:31.760749Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:54:31.774359Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5 tmux=lt_94cb1f59
-[2m2026-06-23T03:54:36.873528Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-23T03:54:36.873527Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-23T03:54:36.873706Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5
-[2m2026-06-23T03:54:36.874521Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-23T03:54:36.891537Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5
+[2m2026-06-23T03:59:21.961839Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:9777
+[2m2026-06-23T04:00:45.753496Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=763411b5-d43a-4837-ad1d-8df029cbce18 tmux=lt_763411b5

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type Drag
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome, IconSearch } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome, IconSearch, IconWorkbench } from './icons'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -462,10 +462,10 @@ export function FileManager() {
       {cwd && (
         <div className="fm-breadcrumb">
           <span
-            className="fm-bc-seg"
+            className="fm-bc-seg fm-bc-root"
             onClick={() => { if (activeSessionId) { resetFmToFollowing(activeSessionId) } }}
             title="回到终端当前目录"
-          >/</span>
+          ><IconWorkbench width={13} height={13} /></span>
           {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
             const segPath = '/' + arr.slice(0, i + 1).join('/')
             return (
