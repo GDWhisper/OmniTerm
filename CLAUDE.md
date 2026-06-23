@@ -24,6 +24,13 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 1. **开发/debug 后必须提交 git** — 每完成一个功能点或修复一个 bug 后，立即 `git commit`，提交信息说明修改内容。
 2. **CHANGELOG 只写用户确认的内容** — 只有经过用户确认的新功能和修复才写入 `CHANGELOG.md`，不要自行添加未确认的条目。
 
+## Debug 分支规则
+
+1. **修复前先拉取 dev 分支代码** — `git pull origin dev` 确保基于最新代码修复。
+2. **只做修复，不加功能** — debug 分支仅用于 bugfix，禁止在此开发新功能。
+3. **提交原子化** — 修复和本地定制配置必须分开 commit。
+4. **定制配置 commit 以 `chore:` 开头** — 禁止合入 dev/main。
+
 ## Quick Start
 
 ```bash
