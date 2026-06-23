@@ -1,7 +1,7 @@
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
 };
@@ -36,16 +36,24 @@ enum ServerControl<'a> {
     Exit { code: Option<i32> },
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TerminalQuery {
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
+}
+
 /// WebSocket upgrade handler for terminal connections.
+/// Accepts optional `cols` and `rows` query params for initial PTY size.
 pub async fn ws_terminal_handler(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
+    Query(query): Query<TerminalQuery>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_terminal(socket, session_id, state))
+    ws.on_upgrade(move |socket| handle_terminal(socket, session_id, query, state))
 }
 
-async fn handle_terminal(ws: WebSocket, session_id: String, state: AppState) {
+async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery, state: AppState) {
     // Look up the session
     let tmux_name: Option<(String,)> =
         sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
@@ -84,17 +92,24 @@ async fn handle_terminal(ws: WebSocket, session_id: String, state: AppState) {
         .map(|(p,)| p)
         .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
-    // Open PTY and spawn tmux new-session -A (create-or-attach)
-    // The -A flag atomically creates the session if it doesn't exist, or attaches
-    // if it does. The PTY itself is the terminal — no -d flag needed.
-    let pty_system = native_pty_system();
+    // Determine initial PTY size from query params (like tmuxes does),
+    // falling back to 80x24 if not provided.
+    let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
+    let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
     let pty_size = PtySize {
-        rows: 50,
-        cols: 120,
+        rows,
+        cols,
         pixel_width: 0,
         pixel_height: 0,
     };
 
+    info!(
+        "terminal PTY initial size: {}x{} for session={}",
+        cols, rows, session_id
+    );
+
+    // Open PTY at the correct viewport size and spawn tmux
+    let pty_system = native_pty_system();
     let pty_pair = match pty_system.openpty(pty_size) {
         Ok(pair) => pair,
         Err(e) => {
@@ -234,6 +249,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, state: AppState) {
     });
 
     // === Child exit watcher ===
+    // Save PID before moving child into the exit watcher thread.
+    let child_pid = child.process_id();
     let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<Option<i32>>(1);
     tokio::task::spawn_blocking(move || {
         let status = child.wait();
@@ -254,8 +271,18 @@ async fn handle_terminal(ws: WebSocket, session_id: String, state: AppState) {
         }
     }
 
-    // Explicitly drop the PTY master to close it, which sends SIGHUP to tmux,
-    // causing it to detach. The session persists for future reconnection.
+    // Explicitly send SIGHUP to the tmux client process BEFORE dropping the PTY
+    // master. This mirrors tmuxes' ptyProc.kill() approach and ensures clean
+    // detachment without the extra \n+EOF that portable-pty's MasterWriter::drop
+    // writes to the PTY (which can leak into the running TUI app).
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGHUP);
+        }
+        debug!("sent SIGHUP to tmux client pid={}", pid);
+    }
+
+    // Drop the PTY master to close file descriptors.
     if let Ok(mut guard) = master_pty.lock() {
         guard.take();
     }

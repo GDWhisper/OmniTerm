@@ -23,6 +23,7 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 time = "0.3"
 portable-pty = "0.9"
 futures-util = "0.3"
+libc = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

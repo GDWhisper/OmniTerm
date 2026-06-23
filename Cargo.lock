@@ -1323,6 +1323,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "jsonwebtoken",
+ "libc",
  "portable-pty",
  "reqwest",
  "serde",
