@@ -26,10 +26,29 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 ## Debug 分支规则
 
-1. **修复前先拉取 dev 分支代码** — `git pull origin dev` 确保基于最新代码修复。
+1. **任何操作前先拉取 dev 分支代码** — 查看、调试、修复之前，必须先执行 `git pull origin dev`，确保基于最新代码工作。禁止先看代码再拉取。
 2. **只做修复，不加功能** — debug 分支仅用于 bugfix，禁止在此开发新功能。
 3. **提交原子化** — 修复和本地定制配置必须分开 commit。
 4. **定制配置 commit 以 `chore:` 开头** — 禁止合入 dev/main。
+5. **修复后由 dev 目录合并 debug** — 禁止从 debug 目录直接 push 到 dev。正确做法：
+   ```bash
+   cd ~/coding/OmniTerm-dev   # dev worktree
+   git merge debug
+   git push origin dev
+   ```
+   永远在更稳定的分支所在目录执行拉取合并，避免覆盖远程 dev 的其他提交。
+
+### 端口隔离
+
+debug 分支使用独立端口（19777/19778），避免与 dev 分支（9777/9778）冲突。端口配置在 `.env.local`（已 gitignore），merge dev 不会覆盖。
+
+```bash
+# .env.local（debug 分支独有，不入库）
+BACKEND_PORT=19777
+FRONTEND_PORT=19778
+```
+
+dev.sh 和 vite.config.ts 均读取环境变量，fallback 为 9777/9778。
 
 ## Quick Start
 
