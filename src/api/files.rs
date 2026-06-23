@@ -97,6 +97,8 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 
 /// Resolve base path from session ID (via tmux pane CWD).
 /// Returns (base_path, tmux_session_name).
+/// If the tmux session is missing (e.g. tmux server restarted), re-creates it
+/// using the workspace root_path as fallback CWD.
 async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
     let tmux_name: (String,) =
         sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
@@ -107,8 +109,27 @@ async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(Str
             .flatten()?;
 
     let tmux_name = tmux_name.0;
-    let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
-    Some((cwd, tmux_name))
+
+    // Try to get pane CWD; if it fails, the tmux session may have been lost
+    match tmux::pane_cwd(&tmux_name).await {
+        Ok(cwd) => Some((cwd, tmux_name)),
+        Err(e) => {
+            tracing::warn!(
+                "tmux session '{}' unavailable ({}), attempting re-create",
+                tmux_name, e
+            );
+            // Resolve workspace root as fallback CWD
+            let root = resolve_session_workspace_root(state, session_id)
+                .await
+                .unwrap_or_else(|| {
+                    std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+                });
+            tmux::new_session(&tmux_name, &root).await.ok()?;
+            let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
+            tracing::info!("re-created tmux session '{}' at {}", tmux_name, cwd);
+            Some((cwd, tmux_name))
+        }
+    }
 }
 
 /// Get workspace root_path for a session (used for is_outside_workspace check).
