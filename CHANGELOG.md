@@ -47,6 +47,8 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-06-23 19:30) `[frontend]` FileManager 搜索框改为图标触发式弹出 — 点击搜索图标后输入框浮现在图标下方，支持 Escape 和点击外部关闭（`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-06-23 19:35) `[frontend]` FileManager 面包屑根路径从 `/` 改为工作台图标 — 带紫色边框方框，风格与 WRKSPACES `+` 号一致（`frontend/src/components/FileManager/icons.tsx`）
 - (未记录时间) `[frontend]` FileManager: replaced all emoji icons (📁🔗📄⬆⟳📂✏️🗑️) with stroke-based inline SVG icons (`frontend/src/components/FileManager/icons.tsx`) — unified with the dark-tech visual language defined in `docs/ui-style-guide.md`
 - (未记录时间) `[frontend]` FileManager: merged dual-table architecture (main table + absolute-positioned actions overlay) into a single 4-column table — Actions header now aligns perfectly with Name/Last Modified/Size; removed ~80 lines of JS row-height/scroll sync code
 - (未记录时间) `[frontend]` FileManager action icons: pencil hover → violet (`#a78bfa`), trash hover → red (`#ef4444`) via `.fm-act-icon` / `.fm-act-icon-danger` CSS classes
@@ -68,6 +70,7 @@ Prefix each entry with the area it affects:
 - (2026-06-23 00:48) `[frontend]` appStore 新增 `fmSessionStates` 状态及 `setFmSessionMode`、`setFmManualPath`、`resetFmToFollowing` actions（`frontend/src/stores/appStore.ts`）
 - (2026-06-23 00:48) `[frontend]` API client 新增 7 个 session-based 文件操作方法（`frontend/src/api/client.ts`）
 - (2026-06-23 00:48) `[docs]` UI 风格规范新增 `warning` 语义色（`#f59e0b`）（`docs/ui-style-guide.md`）
+- (2026-06-23 19:30) `[frontend]` 新增 IconSearch、IconWorkbench 图标组件（`frontend/src/components/FileManager/icons.tsx`）
 - (未记录时间) `[infra]` `react-refresh` dev dependency — fixes pre-existing `$RefreshSig$ is not defined` error caused by missing peer dependency of `@vitejs/plugin-react` 6.x
 
 ### Fixed

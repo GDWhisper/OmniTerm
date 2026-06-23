@@ -1,3 +1,4 @@
+   Compiling omniterm-server v0.0.1 (/home/pax/coding/OmniTerm-dev)
 warning: function `verify_token` is never used
   --> src/auth/mod.rs:28:8
    |
@@ -42,16 +43,10 @@ warning: function `send_keys` is never used
 112 | pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
     |              ^^^^^^^^^
 
-warning: function `pane_cwd` is never used
-   --> src/tmux/mod.rs:127:14
-    |
-127 | pub async fn pane_cwd(session: &str) -> Result<String> {
-    |              ^^^^^^^^
-
 warning: struct `TmuxSessionInfo` is never constructed
-   --> src/tmux/mod.rs:168:12
+   --> src/tmux/mod.rs:171:12
     |
-168 | pub struct TmuxSessionInfo {
+171 | pub struct TmuxSessionInfo {
     |            ^^^^^^^^^^^^^^^
 
 warning: function `sanitize_path` is never used
@@ -74,28 +69,7 @@ warning: variants `Pong` and `Exit` are never constructed
    |
    = note: `ServerControl` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
-warning: `omniterm-server` (bin "omniterm-server") generated 11 warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.37s
      Running `target/debug/omniterm-server`
-[2m2026-06-22T15:10:30.093832Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:9777
-[2m2026-06-22T15:34:11.924402Z[0m [31mERROR[0m [2momniterm_server::api::files[0m[2m:[0m list_files failed: path does not exist: /home/coding
-[2m2026-06-22T15:34:11.924667Z[0m [31mERROR[0m [2mtower_http::trace::on_failure[0m[2m:[0m response failed [3mclassification[0m[2m=[0mStatus code: 500 Internal Server Error [3mlatency[0m[2m=[0m2 ms
-[2m2026-06-22T15:34:12.929019Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=6cddc1c8-0d7f-4f65-b3dd-8bd489efc08e tmux=lt_6cddc1c8
-[2m2026-06-22T15:34:20.549255Z[0m [31mERROR[0m [2momniterm_server::api::files[0m[2m:[0m list_files failed: path does not exist: /home/coding
-[2m2026-06-22T15:34:20.549430Z[0m [31mERROR[0m [2mtower_http::trace::on_failure[0m[2m:[0m response failed [3mclassification[0m[2m=[0mStatus code: 500 Internal Server Error [3mlatency[0m[2m=[0m0 ms
-[2m2026-06-22T15:35:04.437233Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-22T15:35:04.437256Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-22T15:35:04.437306Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=6cddc1c8-0d7f-4f65-b3dd-8bd489efc08e
-[2m2026-06-22T15:35:04.444640Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-22T15:35:04.452938Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=19a72dda-caf3-41d9-b628-1d43bfb79dd4 tmux=lt_19a72dda
-[2m2026-06-22T15:35:38.273441Z[0m [34mDEBUG[0m [2momniterm_server::tmux[0m[2m:[0m created tmux session: lt_e66d9971 (cwd: /home/pax)
-[2m2026-06-22T15:35:38.273497Z[0m [32m INFO[0m [2momniterm_server::api::sessions[0m[2m:[0m created tmux session: lt_e66d9971 (cwd: /home/pax)
-[2m2026-06-22T15:35:39.305852Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-22T15:35:39.305891Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-22T15:35:39.305960Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=19a72dda-caf3-41d9-b628-1d43bfb79dd4
-[2m2026-06-22T15:35:39.313222Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
-[2m2026-06-22T15:35:39.321326Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=e66d9971-07c0-41f5-897b-714bf2274722 tmux=lt_e66d9971
-[2m2026-06-22T15:39:13.816059Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
-[2m2026-06-22T15:39:13.816059Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
-[2m2026-06-22T15:39:13.816132Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=e66d9971-07c0-41f5-897b-714bf2274722
-[2m2026-06-22T15:39:13.844352Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+[2m2026-06-23T05:51:37.530486Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:19777
