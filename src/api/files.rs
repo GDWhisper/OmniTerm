@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use anyhow::anyhow;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::error;
@@ -404,7 +405,14 @@ async fn read_file(
         );
     };
 
-    match fs::read_file(&base, path_str).await {
+    // For session mode, paths may be absolute
+    let content = if std::path::Path::new(path_str).is_absolute() {
+        tokio::fs::read_to_string(path_str).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::read_file(&base, path_str).await
+    };
+
+    match content {
         Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
         Err(e) => {
             error!("read_file failed: {}", e);
@@ -435,7 +443,18 @@ async fn write_file(
         );
     };
 
-    match fs::write_file(&base, path_str, req.content.as_bytes()).await {
+    // For session mode, paths may be absolute
+    let result: Result<(), anyhow::Error> = if std::path::Path::new(path_str).is_absolute() {
+        // Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(path_str).parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        tokio::fs::write(path_str, req.content.as_bytes()).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::write_file(&base, path_str, req.content.as_bytes()).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("write_file failed: {}", e);
