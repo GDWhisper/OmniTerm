@@ -63,6 +63,10 @@ const omnitermTheme = EditorView.theme({
     color: '#e2e8f0',
     fontSize: '13px',
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+    height: '100%',
+  },
+  '.cm-scroller': {
+    overflow: 'auto',
   },
   '.cm-content': {
     caretColor: '#a78bfa',
@@ -101,7 +105,7 @@ const omnitermTheme = EditorView.theme({
   '.cm-searchMatch.cm-searchMatch-selected': {
     backgroundColor: 'rgba(245, 158, 11, 0.4)',
   },
-  // Scrollbar styling (matches FileManager scrollbar)
+  // Scrollbar styling (matches FileManager scrollbar exactly)
   '& .cm-scroller::-webkit-scrollbar': {
     width: '8px',
     height: '8px',
@@ -111,10 +115,14 @@ const omnitermTheme = EditorView.theme({
   },
   '& .cm-scroller::-webkit-scrollbar-thumb': {
     background: '#334155',
-    borderRadius: '4px',
+    borderRadius: '2px',
   },
   '& .cm-scroller::-webkit-scrollbar-thumb:hover': {
     background: '#a78bfa',
+  },
+  '& .cm-scroller': {
+    scrollbarColor: '#334155 #0a0a0f',
+    scrollbarWidth: 'thin',
   },
 })
 
