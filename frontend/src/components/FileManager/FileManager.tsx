@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type Drag
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconHome, IconSearch } from './icons'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -87,6 +87,9 @@ export function FileManager() {
   const [editingName, setEditingName] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const searchWrapRef = useRef<HTMLDivElement>(null)
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
@@ -214,6 +217,29 @@ export function FileManager() {
     setSortKey(key)
     setSortDesc(newDesc)
     fetchFiles(undefined, key, newDesc)
+  }
+
+  // Close search on click outside
+  useEffect(() => {
+    if (!searchOpen) return
+    const onClick = (e: MouseEvent) => {
+      if (searchWrapRef.current && !searchWrapRef.current.contains(e.target as Node)) {
+        setSearchOpen(false)
+        setSearchQuery('')
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [searchOpen])
+
+  const toggleSearch = () => {
+    if (searchOpen) {
+      setSearchOpen(false)
+      setSearchQuery('')
+    } else {
+      setSearchOpen(true)
+      setTimeout(() => searchRef.current?.focus(), 0)
+    }
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -389,13 +415,25 @@ export function FileManager() {
           </button>
         </div>
         <div className="fm-toolbar-right">
-          <input
-            className="fm-search"
-            placeholder="搜索文件名..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
-          />
+          <div className="fm-search-wrap" ref={searchWrapRef}>
+            <button className="fm-btn" onClick={toggleSearch} title="搜索文件">
+              <IconSearch />
+            </button>
+            {searchOpen && (
+              <input
+                className="fm-search"
+                placeholder="搜索文件名..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSearch()
+                  if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery('') }
+                }}
+                ref={searchRef}
+                autoFocus
+              />
+            )}
+          </div>
           {fmState.mode === 'manual' && (
             <button className="fm-btn" onClick={handleHome} title="回到终端目录">
               <IconHome />

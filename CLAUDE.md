@@ -199,6 +199,7 @@ src/
 | `docs/ui-style-guide.md` | **UI 风格规范** — 色板、字体、圆角、动效、drag bar 语言、组件规范、新增组件自检清单 | 任何涉及 UI 的修改（前端新增组件、改样式、调 cubone 覆盖规则）都**必须先读**此文档，确保视觉语言一致 |
 | `docs/user-testing.md` | 用户测试文档 — 10 个章节、27 个测试用例（P0/P1/P2 三级）、6 个已知限制 | 改完功能后手动回归、或新增测试覆盖时 |
 | `docs/2026-06-20-sidebar-redesign-design.md` | Sidebar 重设计的设计决策与方案记录 | 修改 Sidebar 相关组件时了解历史背景 |
+| `docs/debug-log.md` | **踩坑记录** — 开发过程中遇到的问题、根因分析和解决方案 | 遇到类似问题时查阅；新踩坑后追加 |
 | `CHANGELOG.md` | **变更日志** — 按 Keep a Changelog 格式记录每次变更，含 scope 标签和写入规范 | 每次有意义的代码变更后**必须添加条目**；提交前检查是否遗漏 |
 
 ## Reference Repos (local paths)

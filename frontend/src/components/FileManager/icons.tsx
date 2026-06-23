@@ -122,3 +122,12 @@ export function IconHome(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function IconSearch(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="6.5" cy="6.5" r="4" />
+      <line x1="9.5" y1="9.5" x2="13" y2="13" />
+    </svg>
+  )
+}
