@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
@@ -7,6 +7,7 @@ import { Settings } from '../Settings/Settings'
 import { MobileNav } from './MobileNav'
 
 export function Layout() {
+  const [isDragging, setIsDragging] = useState(false)
   const {
     isMobile,
     sidebarOpen,
@@ -29,6 +30,7 @@ export function Layout() {
       const startX = e.clientX
       const startWidth = sidebarWidth
       const maxSidebar = Math.floor(window.innerWidth / 3)
+      setIsDragging(true)
 
       const onMove = (e: MouseEvent) => {
         const delta = e.clientX - startX
@@ -41,7 +43,7 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        // ponytail: persist on release, not every frame
+        setIsDragging(false)
         localStorage.setItem('omniterm_sidebar_width', String(useAppStore.getState().sidebarWidth))
       }
 
@@ -59,6 +61,7 @@ export function Layout() {
       const startX = e.clientX
       const startWidth = fileManagerWidth
       const maxFileManager = Math.floor(window.innerWidth / 2)
+      setIsDragging(true)
 
       const onMove = (e: MouseEvent) => {
         const delta = startX - e.clientX
@@ -71,7 +74,7 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        // ponytail: persist on release, not every frame
+        setIsDragging(false)
         localStorage.setItem('omniterm_fm_width', String(useAppStore.getState().fileManagerWidth))
       }
 
@@ -110,7 +113,7 @@ export function Layout() {
             width: sidebarCollapsed ? 40 : sidebarWidth,
             background: '#0a0a0f',
             borderRight: '1px solid #1e293b',
-            transition: 'width 0.2s ease',
+            transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
           <Sidebar />
@@ -146,7 +149,7 @@ export function Layout() {
             width: fileManagerCollapsed ? 40 : fileManagerWidth,
             background: '#0a0a0f',
             borderLeft: '1px solid #1e293b',
-            transition: 'width 0.2s ease',
+            transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
           <FileManager />
