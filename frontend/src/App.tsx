@@ -1,16 +1,17 @@
 import { Layout } from './components/Layout/Layout'
 import { ToastContainer } from './components/Toast/Toast'
 import { useMobileDetection } from './hooks/useMediaQuery'
-import SmartMouse from 'react-smart-mouse'
+import ReactCursorPosition from 'react-cursor-position'
 
 function App() {
   useMobileDetection()
 
   return (
     <>
-      <Layout />
+      <ReactCursorPosition>
+        <Layout />
+      </ReactCursorPosition>
       <ToastContainer />
-      <SmartMouse debug={true} />
     </>
   )
 }
