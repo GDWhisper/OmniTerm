@@ -323,7 +323,12 @@ async fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 
 /// Search for files matching a query string.
 pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Vec<FileEntry>> {
-    let dir = sanitize_path(base, rel_path)?;
+    // Absolute paths (from session mode) use the path directly; relative paths join against base.
+    let dir = if Path::new(rel_path).is_absolute() {
+        PathBuf::from(rel_path)
+    } else {
+        sanitize_path(base, rel_path)?
+    };
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
