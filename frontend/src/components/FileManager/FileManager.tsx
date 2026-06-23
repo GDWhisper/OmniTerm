@@ -77,6 +77,9 @@ export function FileManager() {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [cwd, setCwd] = useState('')  // absolute path from server
   const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
+
+  // Per-session file list cache for instant display on session switch
+  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean }>>(new Map())
   const [loading, setLoading] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDesc, setSortDesc] = useState(false)
@@ -97,6 +100,10 @@ export function FileManager() {
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
+      // Update per-session cache on successful fetch
+      if (data.cwd && activeSessionId) {
+        fileCache.current.set(activeSessionId, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
+      }
       if (!silent) setSelected(new Set())
       return data.cwd
     } catch (err: any) {
@@ -109,7 +116,7 @@ export function FileManager() {
   }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
 
   // Polling: following mode — silent refresh every 3s, only updates state when files actually change
-  // (immediate fetch on session switch is handled by the session-switch effect below)
+  // (immediate fetch on session switch is handled by the session-switch effect)
   useEffect(() => {
     if (!activeSessionId || fmState.mode !== 'following') return
     const id = setInterval(() => fetchFiles('.', undefined, undefined, true), POLL_MS)
@@ -122,15 +129,23 @@ export function FileManager() {
     fetchFiles(fmState.manualPath)
   }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
 
-  // Session switch: immediate fetch (don't wait for next poll cycle)
+  // Session switch: show cached files immediately, then fetch fresh data
   useEffect(() => {
     if (!activeSessionId) return
+    // Show cached files instantly while fresh data loads
+    const cached = fileCache.current.get(activeSessionId)
+    if (cached) {
+      setFiles(cached.files)
+      setCwd(cached.cwd)
+      setIsOutsideWorkspace(cached.isOutsideWorkspace)
+    }
+    // Always fetch fresh data (manual mode uses its own path, following uses '.')
     if (fmState.mode === 'manual' && fmState.manualPath) {
       fetchFiles(fmState.manualPath)
     } else {
       fetchFiles('.')
     }
-  }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
+  }, [activeSessionId])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
