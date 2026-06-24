@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
 
-const STATUS_BAR_H = 50 // px — matches Sidebar bottom status bar height
+// Status bar height: py-3 (24px) + content (~26px). Update if Sidebar status bar layout changes.
+const STATUS_BAR_H = 50
 
 export function SettingsPopup() {
   const ref = useRef<HTMLDivElement>(null)

@@ -12,6 +12,7 @@ export function Layout() {
     isMobile,
     sidebarOpen,
     sidebarCollapsed,
+    settingsOpen,
     fileManagerOpen,
     fileManagerCollapsed,
     sidebarWidth,
@@ -108,9 +109,10 @@ export function Layout() {
       {/* Sidebar */}
       {sidebarOpen && (
         <div
-          className="flex-shrink-0 overflow-hidden"
+          className="flex-shrink-0"
           style={{
             width: sidebarCollapsed ? 40 : sidebarWidth,
+            overflow: (sidebarCollapsed && settingsOpen) ? 'visible' : 'hidden',
             background: '#0a0a0f',
             borderRight: '1px solid #1e293b',
             transition: isDragging ? 'none' : 'width 0.2s ease',
