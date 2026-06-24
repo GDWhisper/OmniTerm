@@ -104,7 +104,7 @@ export function Layout() {
     <div
       ref={layoutRef}
       className="flex h-screen"
-      style={{ background: '#0a0a0f', color: '#e2e8f0' }}
+      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       {/* Sidebar */}
       {sidebarOpen && (
@@ -113,8 +113,8 @@ export function Layout() {
           style={{
             width: sidebarCollapsed ? 40 : sidebarWidth,
             overflow: (sidebarCollapsed && settingsOpen) ? 'visible' : 'hidden',
-            background: '#0a0a0f',
-            borderRight: '1px solid #1e293b',
+            background: 'var(--bg-base)',
+            borderRight: '1px solid var(--border-subtle)',
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
@@ -149,8 +149,8 @@ export function Layout() {
           className="flex-shrink-0 overflow-hidden"
           style={{
             width: fileManagerCollapsed ? 40 : fileManagerWidth,
-            background: '#0a0a0f',
-            borderLeft: '1px solid #1e293b',
+            background: 'var(--bg-base)',
+            borderLeft: '1px solid var(--border-subtle)',
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
