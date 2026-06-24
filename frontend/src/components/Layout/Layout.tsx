@@ -17,7 +17,6 @@ export function Layout() {
     sidebarWidth,
     fileManagerWidth,
     activeSessionId,
-    settingsOpen,
     setSidebarWidth,
     setFileManagerWidth,
   } = useAppStore()
@@ -129,9 +128,9 @@ export function Layout() {
         />
       )}
 
-      {/* Terminal or Settings — key forces full remount on session switch for clean WebSocket lifecycle */}
+      {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
       <div className="flex-1 min-w-0">
-        {settingsOpen ? <Settings /> : <Terminal key={activeSessionId ?? 'empty'} />}
+        <Terminal key={activeSessionId ?? 'empty'} />
       </div>
 
       {/* FileManager drag handle — hidden when collapsed */}
