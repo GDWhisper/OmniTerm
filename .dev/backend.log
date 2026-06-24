@@ -722,3 +722,22 @@ warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
 [2m2026-06-24T12:23:20.418635Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
 [2m2026-06-24T12:23:20.434345Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=4a9a7e46-a9e7-445d-9fc7-045ee108f369 tmux=lt_4a9a7e46
 [2m2026-06-24T12:23:20.434816Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal PTY initial size: 182x63 for session=4a9a7e46-a9e7-445d-9fc7-045ee108f369
+[2m2026-06-24T12:32:42.926653Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-24T12:32:42.926652Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-24T12:32:42.926750Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m sent SIGHUP to tmux client pid=3764804
+[2m2026-06-24T12:32:42.926767Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=4a9a7e46-a9e7-445d-9fc7-045ee108f369
+[2m2026-06-24T12:32:42.927451Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+[2m2026-06-24T12:32:42.945827Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5 tmux=lt_94cb1f59
+[2m2026-06-24T12:32:42.946008Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal PTY initial size: 182x63 for session=94cb1f59-e7f0-4e35-8d88-72165344a0a5
+[2m2026-06-24T12:59:28.990028Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-24T12:59:28.990046Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-24T12:59:28.990138Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m sent SIGHUP to tmux client pid=3776940
+[2m2026-06-24T12:59:28.990254Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=94cb1f59-e7f0-4e35-8d88-72165344a0a5
+[2m2026-06-24T12:59:28.990848Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+[2m2026-06-24T14:49:33.936987Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=61826758-fe7b-42c1-9e26-dbe292ca0fe4 tmux=lt_61826758
+[2m2026-06-24T14:49:33.937225Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal PTY initial size: 163x63 for session=61826758-fe7b-42c1-9e26-dbe292ca0fe4
+[2m2026-06-24T16:03:14.920316Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m WS→PTY read ended
+[2m2026-06-24T16:03:14.920313Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY writer exited
+[2m2026-06-24T16:03:14.920388Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m sent SIGHUP to tmux client pid=3894879
+[2m2026-06-24T16:03:14.920449Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=61826758-fe7b-42c1-9e26-dbe292ca0fe4
+[2m2026-06-24T16:03:14.920981Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited

@@ -109,10 +109,11 @@ export const api = {
     request<any[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
 
   // Files by session (follows terminal CWD)
-  listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean) => {
+  listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean, hidden?: boolean) => {
     let url = `/files?session=${sessionId}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
+    if (hidden) url += `&hidden=true`
     return request<{ files: any[]; cwd: string; is_outside_workspace: boolean }>(url)
   },
   uploadFileBySession: (sessionId: string, path: string, file: File) => {

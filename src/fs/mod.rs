@@ -145,6 +145,7 @@ pub async fn list_dir(
     rel_path: &str,
     sort: SortKey,
     desc: bool,
+    include_hidden: bool,
 ) -> Result<Vec<FileEntry>> {
     let dir = sanitize_path(base, rel_path)?;
 
@@ -154,8 +155,8 @@ pub async fn list_dir(
     while let Some(entry) = read_dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip hidden files
-        if name.starts_with('.') {
+        // Skip hidden files unless requested
+        if !include_hidden && name.starts_with('.') {
             continue;
         }
 
@@ -185,7 +186,7 @@ pub async fn list_dir(
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
                 while let Some(sub_entry) = sub.next_entry().await? {
                     let sub_name = sub_entry.file_name().to_string_lossy().to_string();
-                    if sub_name.starts_with('.') {
+                    if !include_hidden && sub_name.starts_with('.') {
                         continue;
                     }
                     count += 1;

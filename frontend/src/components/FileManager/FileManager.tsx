@@ -4,7 +4,7 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench, IconEye } from './icons'
 import { FileDrawer } from './FileDrawer'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -107,6 +107,7 @@ export function FileManager() {
   const [editValue, setEditValue] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
+  const [showHidden, setShowHidden] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchWrapRef = useRef<HTMLDivElement>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -117,7 +118,7 @@ export function FileManager() {
     if (!silent) setLoading(true)
     try {
       const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
-      const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc)
+      const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc, showHidden)
       const newFiles = data.files ?? []
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
@@ -135,7 +136,7 @@ export function FileManager() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
+  }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
 
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
@@ -159,6 +160,12 @@ export function FileManager() {
     if (!activeSessionId || fmState.mode !== 'following') return
     fetchFiles('.')
   }, [activeSessionId, fmState.mode, fetchFiles])
+
+  // Re-fetch when showHidden toggles
+  useEffect(() => {
+    if (!activeSessionId) return
+    fetchFiles()
+  }, [showHidden])
 
   // Session switch: show cached files immediately, then fetch fresh data
   useEffect(() => {
@@ -442,6 +449,14 @@ export function FileManager() {
           )}
         </div>
         <div className="fm-toolbar-right">
+          <button
+            className="fm-btn"
+            onClick={() => setShowHidden((v) => !v)}
+            title={t('fm.toggleHidden')}
+            style={showHidden ? { color: 'var(--accent)' } : undefined}
+          >
+            <IconEye />
+          </button>
           <div className="fm-search-wrap" ref={searchWrapRef}>
             <button className="fm-btn" onClick={toggleSearch} title={t('fm.search')}>
               <IconSearch />

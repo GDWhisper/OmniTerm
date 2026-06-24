@@ -1016,3 +1016,34 @@ Visit https://react.dev/link/error-boundaries to learn more about error boundari
 18:34:20 [vite] (client) hmr update /src/index.css, /src/components/Terminal/Terminal.tsx
 18:34:27 [vite] (client) hmr update /src/index.css, /src/components/Terminal/Terminal.tsx
 19:13:07 [vite] (client) [console.error] Removing a style property during rerender (borderColor) when a conflicting property is set (border) can lead to styling bugs. To avoid this, don't mix shorthand and non-shorthand properties for the same value; instead, replace the shorthand with separate values.
+20:59:28 [vite] ws proxy error:
+Error: read ETIMEDOUT
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+20:59:28 [vite] ws proxy socket error:
+Error: read ETIMEDOUT
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+23:44:38 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+23:44:56 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:46:41 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:48:25 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:50:00 [vite] (client) hmr update /src/components/Layout/Layout.tsx, /src/index.css
+23:50:20 [vite] (client) hmr update /src/components/Layout/Layout.tsx, /src/index.css
+23:50:25 [vite] (client) hmr update /src/components/Layout/Layout.tsx, /src/index.css
+23:52:28 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+23:59:04 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+23:59:15 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+00:00:48 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+00:01:11 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+00:01:26 [vite] (client) hmr update /src/index.css, /src/components/Settings/SettingsPopup.tsx
+00:03:14 [vite] (client) [console.error] Removing a style property during rerender (borderColor) when a conflicting property is set (border) can lead to styling bugs. To avoid this, don't mix shorthand and non-shorthand properties for the same value; instead, replace the shorthand with separate values.
+00:03:16 [vite] (client) [console.error] Removing a style property during rerender (borderColor) when a conflicting property is set (border) can lead to styling bugs. To avoid this, don't mix shorthand and non-shorthand properties for the same value; instead, replace the shorthand with separate values.
+00:03:19 [vite] (client) [console.error] Removing a style property during rerender (borderColor) when a conflicting property is set (border) can lead to styling bugs. To avoid this, don't mix shorthand and non-shorthand properties for the same value; instead, replace the shorthand with separate values.
+00:03:19 [vite] (client) [console.error] Removing a style property during rerender (borderColor) when a conflicting property is set (border) can lead to styling bugs. To avoid this, don't mix shorthand and non-shorthand properties for the same value; instead, replace the shorthand with separate values.
+00:12:57 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx, /src/components/Sidebar/Sidebar.tsx, /src/components/FileManager/FileDrawer.tsx
+00:13:03 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:13:07 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:13:21 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:13:27 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:13:33 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:13:42 [vite] (client) page reload src/locales/zh/translation.json
+00:13:44 [vite] (client) page reload src/locales/en/translation.json
