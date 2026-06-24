@@ -36,24 +36,24 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
       <div
         className={`${maxWidth} w-full mx-4 rounded-xl shadow-2xl border animate-scale-in`}
         style={{
-          background: '#111827',
-          borderColor: '#1e293b',
+          background: 'var(--bg-elevated)',
+          borderColor: 'var(--border-strong)',
           fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
         }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid #1e293b' }}>
-          <h3 className="text-base font-semibold" style={{ color: '#e2e8f0' }}>{title}</h3>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-strong)' }}>
+          <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
           <button
             onClick={onClose}
             className="p-1 rounded transition-all"
-            style={{ color: '#64748b' }}
+            style={{ color: 'var(--text-faint)' }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.color = '#e2e8f0'
-              e.currentTarget.style.background = 'rgba(167,139,250,0.1)'
+              e.currentTarget.style.color = 'var(--text-primary)'
+              e.currentTarget.style.background = 'var(--accent-10)'
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.color = '#64748b'
+              e.currentTarget.style.color = 'var(--text-faint)'
               e.currentTarget.style.background = 'transparent'
             }}
           >
