@@ -19,7 +19,7 @@ export function Settings() {
   const { fontSize, setFontSize } = useAppStore()
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <div className="overflow-y-auto text-gray-900 dark:text-gray-100" style={{ background: '#0f1729' }}>
       <div className="max-w-lg mx-auto p-4 space-y-6">
         <h2 className="text-lg font-semibold">{t('settings.title')}</h2>
 
