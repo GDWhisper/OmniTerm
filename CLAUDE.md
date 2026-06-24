@@ -120,6 +120,8 @@ docker compose up --build    # 后端 :9777
 
 ## Git Worktree
 
+**文件约定**：`AGENTS.md` 是 `CLAUDE.md` 的 symlink（`AGENTS.md -> CLAUDE.md`），两个名称指向同一份规范文件。
+
 项目使用 git worktree 管理开发分支：
 
 | 目录 | 分支 | 用途 | 端口 |
