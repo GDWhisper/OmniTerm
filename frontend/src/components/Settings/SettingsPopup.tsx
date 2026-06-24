@@ -10,10 +10,11 @@ export function SettingsPopup() {
   const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
 
-  // Click outside to close
+  // Click outside to close (ignore clicks on the gear toggle button)
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement
+      if (ref.current && !ref.current.contains(target) && !target.closest('[data-settings-toggle]')) {
         toggleSettings()
       }
     }

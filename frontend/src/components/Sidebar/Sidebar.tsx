@@ -203,6 +203,7 @@ export function Sidebar() {
         {settingsOpen && <SettingsPopup />}
 
         <button
+          data-settings-toggle
           onClick={() => { toggleSettings() }}
           className="flex items-center justify-center rounded transition-all mb-3"
           style={{ width: 28, height: 28, border: '1px solid #334155', color: '#64748b', fontSize: 14 }}
@@ -447,6 +448,7 @@ export function Sidebar() {
           <span style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>v{APP_VERSION}</span>
         </div>
         <button
+          data-settings-toggle
           onClick={toggleSettings}
           className="flex items-center justify-center rounded transition-all"
           style={{ width: 26, height: 26, border: '1px solid #334155', color: '#64748b', fontSize: 14 }}
