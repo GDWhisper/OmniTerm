@@ -2,6 +2,78 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ────────────────────────────────────────────────────────────────────
+   Theme tokens — :root = light, .dark = dark.
+   Components use var(--token) instead of hardcoded hex.
+   ──────────────────────────────────────────────────────────────────── */
+:root {
+  /* backgrounds */
+  --bg-base: #f8fafc;
+  --bg-elevated: #f1f5f9;
+  --bg-surface: #ffffff;
+  /* borders */
+  --border-subtle: #e2e8f0;
+  --border-strong: #cbd5e1;
+  /* text */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+  --text-dim: #cbd5e1;
+  /* accent */
+  --accent: #7c3aed;
+  --accent-bright: #6d28d9;
+  --accent-10: rgba(124, 58, 237, 0.10);
+  --accent-14: rgba(124, 58, 237, 0.14);
+  --accent-glow-sm: 0 0 6px rgba(124, 58, 237, 0.4);
+  --accent-glow-md: 0 0 10px rgba(124, 58, 237, 0.5);
+  /* danger */
+  --danger: #dc2626;
+  --danger-12: rgba(220, 38, 38, 0.12);
+  --danger-glow: 0 0 6px rgba(220, 38, 38, 0.3);
+  /* success */
+  --success: #16a34a;
+  --success-glow: 0 0 6px #16a34a;
+  /* scrollbar */
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-track: #f1f5f9;
+  color-scheme: light;
+}
+
+.dark {
+  /* backgrounds */
+  --bg-base: #0a0a0f;
+  --bg-elevated: #111827;
+  --bg-surface: #1e293b;
+  /* borders */
+  --border-subtle: #1e293b;
+  --border-strong: #334155;
+  /* text */
+  --text-primary: #e2e8f0;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-faint: #64748b;
+  --text-dim: #475569;
+  /* accent */
+  --accent: #a78bfa;
+  --accent-bright: #c4b5fd;
+  --accent-10: rgba(167, 139, 250, 0.10);
+  --accent-14: rgba(167, 139, 250, 0.14);
+  --accent-glow-sm: 0 0 6px rgba(167, 139, 250, 0.5);
+  --accent-glow-md: 0 0 10px rgba(167, 139, 250, 0.7);
+  /* danger */
+  --danger: #ef4444;
+  --danger-12: rgba(239, 68, 68, 0.12);
+  --danger-glow: 0 0 6px rgba(239, 68, 68, 0.3);
+  /* success */
+  --success: #4ade80;
+  --success-glow: 0 0 6px #4ade80;
+  /* scrollbar */
+  --scrollbar-thumb: #334155;
+  --scrollbar-track: #0a0a0f;
+  color-scheme: dark;
+}
+
 @import "@xterm/xterm/css/xterm.css";
 
 :root {
@@ -21,9 +93,6 @@ html, body, #root {
 }
 
 /* Keep native browser UI (scrollbars, inputs) matching the theme */
-.dark {
-  color-scheme: dark;
-}
 
 /* ────────────────────────────────────────────────────────────────────
    Shared drag bar styling — vertical (between sidebar/terminal/filemanager).
