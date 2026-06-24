@@ -17,6 +17,14 @@
 - [ ] **收起 Sidebar 后显示快捷便条** — 当 Sidebar 收起时，为每个项目、工作区、会话生成小便条（图标/缩略图），方便用户一键展开对应内容。
   - ⚠️ 待打磨：交互形式、视觉样式、信息密度需要进一步设计
 
+## Multiplexer 引擎
+
+- [ ] **rmux 双引擎支持** — 新增 rmux 作为 tmux 的替代 multiplexer 引擎，逐步过渡为主引擎，tmux 降级为 fallback。
+  - 项目地址：https://github.com/Helvesec/rmux
+  - 需要抽象出统一的引擎接口（trait），tmux 和 rmux 各自实现
+  - 配置项切换引擎选择
+  - 后续计划：rmux → 主引擎，tmux → fallback
+
 ## 通知功能
 
 - [ ] **任务状态通知** — 当终端任务发生以下情况时，向用户发送通知：
