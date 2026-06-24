@@ -19,7 +19,7 @@ export function Terminal() {
       const cleanup = initTerminal(containerRef.current)
       return cleanup
     }
-  }, [initTerminal])
+  }, [initTerminal, resolved])
 
   if (!activeSessionId) {
     return (
