@@ -35,3 +35,11 @@
   - 任务死循环（长时间无输出或 CPU 占用异常）
   - ⚠️ 待定：具体检测方式（轮询 tmux pane 状态 / hook / 资源监控）
 - [ ] **Sidebar 会话异常标记** — 与通知联动，当会话中的任务出现异常（中断、死循环等）时，在 Sidebar 对应会话项上显示醒目的视觉标记（如警告图标 / 颜色变化），方便用户快速定位问题会话。
+
+## Multiplexer 引擎 ⚪
+
+- [ ] **rmux 双引擎支持** — 新增 rmux 作为 tmux 的替代 multiplexer 引擎，逐步过渡为主引擎，tmux 降级为 fallback。
+  - 项目地址：https://github.com/Helvesec/rmux
+  - 需要抽象出统一的引擎接口（trait），tmux 和 rmux 各自实现
+  - 配置项切换引擎选择
+  - 后续计划：rmux → 主引擎，tmux → fallback
