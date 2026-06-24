@@ -484,7 +484,6 @@ export function FileManager() {
 
       {cwd && (
         <div className="fm-breadcrumb">
-<
           {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
             const segPath = '/' + arr.slice(0, i + 1).join('/')
             return (
