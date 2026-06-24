@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
+import { useThemeStore } from '../stores/themeStore'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -11,8 +12,40 @@ interface UseTerminalOptions {
   onTitleChange?: (title: string) => void
 }
 
+const DARK_TERMINAL_THEME = {
+  background: '#1a1b26',
+  foreground: '#c0caf5',
+  cursor: '#c0caf5',
+  selectionBackground: '#33467c',
+}
+
+const LIGHT_TERMINAL_THEME = {
+  background: '#f8fafc',
+  foreground: '#0f172a',
+  cursor: '#7c3aed',
+  cursorAccent: '#f8fafc',
+  selectionBackground: 'rgba(124,58,237,0.2)',
+  black: '#0f172a',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#ca8a04',
+  blue: '#2563eb',
+  magenta: '#7c3aed',
+  cyan: '#0891b2',
+  white: '#334155',
+  brightBlack: '#64748b',
+  brightRed: '#ef4444',
+  brightGreen: '#22c55e',
+  brightYellow: '#eab308',
+  brightBlue: '#3b82f6',
+  brightMagenta: '#8b5cf6',
+  brightCyan: '#06b6d4',
+  brightWhite: '#0f172a',
+}
+
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
+  const resolved = useThemeStore((s) => s.resolved)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -20,9 +53,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const composingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
+  const observerRef = useRef<ResizeObserver | null>(null)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
-  // Without this, on a fresh mount (key change) all WS effects run BEFORE initTerminal,
-  // find termRef.current=null, skip, and never re-run.
   const [terminalReady, setTerminalReady] = useState(false)
 
   const connectWs = useCallback(() => {
@@ -108,22 +140,33 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     sessionIdRef.current = sessionId
   }, [sessionId])
 
-  // Initialize terminal once (when container becomes available)
-  const initTerminal = useCallback((container: HTMLDivElement) => {
-    if (termRef.current) return
+  /** Dispose the current terminal and all associated resources */
+  const disposeTerminal = useCallback(() => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    listenerDisposablesRef.current.forEach((d) => d.dispose())
+    listenerDisposablesRef.current = []
+    if (wsRef.current) {
+      wsRef.current.onclose = null
+      wsRef.current.close()
+      wsRef.current = null
+    }
+    if (termRef.current) {
+      termRef.current.dispose()
+      termRef.current = null
+    }
+    fitRef.current = null
+    sessionIdRef.current = null
+    setTerminalReady(false)
+  }, [])
 
-    containerRef.current = container
-
+  /** Create a terminal on the given container and return a cleanup function */
+  const createTerminal = useCallback((container: HTMLDivElement) => {
     const term = new Terminal({
       cursorBlink: true,
       fontSize,
       fontFamily: 'ui-monospace, Consolas, monospace',
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-      },
+      theme: resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME,
     })
 
     const fit = new FitAddon()
@@ -136,6 +179,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     termRef.current = term
     fitRef.current = fit
+    containerRef.current = container
 
     if (onTitleChange) {
       term.onTitleChange(onTitleChange)
@@ -162,26 +206,48 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       }
     })
     observer.observe(container)
+    observerRef.current = observer
 
-    // Signal terminal is ready — triggers WS effects that ran before initTerminal
+    // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
+  }, [fontSize, onTitleChange, resolved])
+
+  // Initialize terminal once (when container becomes available)
+  const initTerminal = useCallback((container: HTMLDivElement) => {
+    if (termRef.current) return
+
+    createTerminal(container)
 
     return () => {
-      observer.disconnect()
-      listenerDisposablesRef.current.forEach((d) => d.dispose())
-      listenerDisposablesRef.current = []
-      if (wsRef.current) {
-        wsRef.current.onclose = null
-        wsRef.current.close()
-        wsRef.current = null
-      }
-      term.dispose()
-      termRef.current = null
-      fitRef.current = null
-      sessionIdRef.current = null
-      setTerminalReady(false)
+      disposeTerminal()
     }
-  }, [fontSize, onTitleChange])
+  }, [createTerminal, disposeTerminal])
+
+  // Recreate terminal when theme changes (if terminal already exists)
+  useEffect(() => {
+    // Only act if terminal is already initialized
+    if (!termRef.current || !containerRef.current) return
+
+    const container = containerRef.current
+
+    // Dispose old terminal — WS will reconnect via terminalReady effect
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    listenerDisposablesRef.current.forEach((d) => d.dispose())
+    listenerDisposablesRef.current = []
+    if (wsRef.current) {
+      wsRef.current.onclose = null
+      wsRef.current.close()
+    }
+    wsRef.current = null
+    termRef.current.dispose()
+    termRef.current = null
+    fitRef.current = null
+    setTerminalReady(false)
+
+    // Create new terminal with updated theme
+    createTerminal(container)
+  }, [resolved, createTerminal])
 
   // Connect WS when terminal is ready and session changes
   useEffect(() => {
@@ -191,9 +257,6 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   }, [sessionId, connectWs])
 
   // Auto-connect after init (first session)
-  // terminalReady triggers re-render after initTerminal, causing this effect to re-run
-  // with termRef.current now set. Without it, on key-change remount the effect runs
-  // before initTerminal, finds termRef.current=null, and never re-runs.
   useEffect(() => {
     if (termRef.current && sessionId && !wsRef.current) {
       connectWs()

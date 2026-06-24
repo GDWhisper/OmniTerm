@@ -4,7 +4,6 @@ import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
-import { oneDark } from '@codemirror/theme-one-dark'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
 import { rust } from '@codemirror/lang-rust'
@@ -32,35 +31,35 @@ interface FileEditorProps {
   onSave?: () => void
 }
 
-/** OmniTerm-themed syntax highlighting that complements one-dark */
+/** OmniTerm-themed syntax highlighting — uses CSS vars for theme support */
 const omnitermHighlight = HighlightStyle.define([
-  { tag: tags.keyword, color: '#a78bfa' },
-  { tag: tags.string, color: '#4ade80' },
-  { tag: tags.comment, color: '#64748b', fontStyle: 'italic' },
-  { tag: tags.function(tags.variableName), color: '#c4b5fd' },
+  { tag: tags.keyword, color: 'var(--accent)' },
+  { tag: tags.string, color: 'var(--success)' },
+  { tag: tags.comment, color: 'var(--text-faint)', fontStyle: 'italic' },
+  { tag: tags.function(tags.variableName), color: 'var(--accent-bright)' },
   { tag: tags.number, color: '#f59e0b' },
   { tag: tags.bool, color: '#f59e0b' },
   { tag: tags.null, color: '#f59e0b' },
-  { tag: tags.operator, color: '#94a3b8' },
-  { tag: tags.className, color: '#c4b5fd' },
-  { tag: tags.typeName, color: '#c4b5fd' },
-  { tag: tags.propertyName, color: '#e2e8f0' },
-  { tag: tags.definition(tags.variableName), color: '#c4b5fd' },
-  { tag: tags.variableName, color: '#e2e8f0' },
-  { tag: tags.punctuation, color: '#94a3b8' },
-  { tag: tags.bracket, color: '#94a3b8' },
-  { tag: tags.tagName, color: '#a78bfa' },
-  { tag: tags.attributeName, color: '#c4b5fd' },
-  { tag: tags.attributeValue, color: '#4ade80' },
-  { tag: tags.heading, color: '#a78bfa', fontWeight: 'bold' },
-  { tag: tags.meta, color: '#64748b' },
+  { tag: tags.operator, color: 'var(--text-muted)' },
+  { tag: tags.className, color: 'var(--accent-bright)' },
+  { tag: tags.typeName, color: 'var(--accent-bright)' },
+  { tag: tags.propertyName, color: 'var(--text-primary)' },
+  { tag: tags.definition(tags.variableName), color: 'var(--accent-bright)' },
+  { tag: tags.variableName, color: 'var(--text-primary)' },
+  { tag: tags.punctuation, color: 'var(--text-muted)' },
+  { tag: tags.bracket, color: 'var(--text-muted)' },
+  { tag: tags.tagName, color: 'var(--accent)' },
+  { tag: tags.attributeName, color: 'var(--accent-bright)' },
+  { tag: tags.attributeValue, color: 'var(--success)' },
+  { tag: tags.heading, color: 'var(--accent)', fontWeight: 'bold' },
+  { tag: tags.meta, color: 'var(--text-faint)' },
 ])
 
-/** OmniTerm editor theme (colors from UI style guide) */
+/** OmniTerm editor theme — uses CSS vars for theme support */
 const omnitermTheme = EditorView.theme({
   '&': {
-    backgroundColor: '#0a0a0f',
-    color: '#e2e8f0',
+    backgroundColor: 'var(--bg-base)',
+    color: 'var(--text-primary)',
     fontSize: '13px',
     fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
     height: '100%',
@@ -69,35 +68,35 @@ const omnitermTheme = EditorView.theme({
     overflow: 'auto',
   },
   '.cm-content': {
-    caretColor: '#a78bfa',
+    caretColor: 'var(--accent)',
   },
   '.cm-cursor, .cm-dropCursor': {
-    borderLeftColor: '#a78bfa',
+    borderLeftColor: 'var(--accent)',
   },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-    backgroundColor: 'rgba(167, 139, 250, 0.2)',
+    backgroundColor: 'var(--accent-14)',
   },
   '.cm-activeLine': {
-    backgroundColor: '#111827',
+    backgroundColor: 'var(--bg-elevated)',
   },
   '.cm-gutters': {
-    backgroundColor: '#0a0a0f',
-    color: '#475569',
+    backgroundColor: 'var(--bg-base)',
+    color: 'var(--text-dim)',
     border: 'none',
-    borderRight: '1px solid #1e293b',
+    borderRight: '1px solid var(--border-subtle)',
   },
   '.cm-activeLineGutter': {
-    backgroundColor: '#111827',
-    color: '#94a3b8',
+    backgroundColor: 'var(--bg-elevated)',
+    color: 'var(--text-muted)',
   },
   '.cm-foldPlaceholder': {
-    backgroundColor: '#1e293b',
-    color: '#94a3b8',
-    border: '1px solid #334155',
+    backgroundColor: 'var(--bg-surface)',
+    color: 'var(--text-muted)',
+    border: '1px solid var(--border-strong)',
   },
   '.cm-matchingBracket': {
-    backgroundColor: 'rgba(167, 139, 250, 0.15)',
-    outline: '1px solid rgba(167, 139, 250, 0.3)',
+    backgroundColor: 'var(--accent-14)',
+    outline: '1px solid var(--accent-10)',
   },
   '.cm-searchMatch': {
     backgroundColor: 'rgba(245, 158, 11, 0.2)',
@@ -111,17 +110,17 @@ const omnitermTheme = EditorView.theme({
     height: '8px',
   },
   '& .cm-scroller::-webkit-scrollbar-track': {
-    background: '#0a0a0f',
+    background: 'var(--scrollbar-track)',
   },
   '& .cm-scroller::-webkit-scrollbar-thumb': {
-    background: '#334155',
+    background: 'var(--scrollbar-thumb)',
     borderRadius: '2px',
   },
   '& .cm-scroller::-webkit-scrollbar-thumb:hover': {
-    background: '#a78bfa',
+    background: 'var(--accent)',
   },
   '& .cm-scroller': {
-    scrollbarColor: '#334155 #0a0a0f',
+    scrollbarColor: 'var(--scrollbar-thumb) var(--scrollbar-track)',
     scrollbarWidth: 'thin',
   },
 })
@@ -203,7 +202,6 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         indentOnInput(),
         bracketMatching(),
         foldGutter(),
-        oneDark,
         omnitermTheme,
         syntaxHighlighting(omnitermHighlight),
         keymap.of([...defaultKeymap, ...historyKeymap]),

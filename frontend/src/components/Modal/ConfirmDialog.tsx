@@ -29,22 +29,22 @@ export function ConfirmDialog({
   const resolvedConfirmText = confirmText ?? t('modal.confirm')
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-sm">
-      <p className="text-sm mb-5" style={{ color: '#94a3b8' }}>{message}</p>
+      <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>{message}</p>
       <div className="flex justify-end gap-2">
         <button
           onClick={onClose}
           disabled={loading}
           className="px-4 py-2 text-sm rounded-lg transition-all disabled:opacity-50"
-          style={{ border: '1px solid #334155', color: '#94a3b8' }}
+          style={{ border: '1px solid var(--border-strong)', color: 'var(--text-muted)' }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(167,139,250,0.1)'
-            e.currentTarget.style.borderColor = '#a78bfa'
-            e.currentTarget.style.color = '#e2e8f0'
+            e.currentTarget.style.background = 'var(--accent-10)'
+            e.currentTarget.style.borderColor = 'var(--accent)'
+            e.currentTarget.style.color = 'var(--text-primary)'
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = 'transparent'
-            e.currentTarget.style.borderColor = '#334155'
-            e.currentTarget.style.color = '#94a3b8'
+            e.currentTarget.style.borderColor = 'var(--border-strong)'
+            e.currentTarget.style.color = 'var(--text-muted)'
           }}
         >
           {t('modal.cancel')}
@@ -54,13 +54,13 @@ export function ConfirmDialog({
           disabled={loading}
           className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
           style={{
-            background: destructive ? '#ef4444' : '#a78bfa',
+            background: destructive ? 'var(--danger)' : 'var(--accent)',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = destructive ? '#dc2626' : '#8b5cf6'
+            e.currentTarget.style.background = destructive ? 'var(--danger)' : 'var(--accent-bright)'
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.background = destructive ? '#ef4444' : '#a78bfa'
+            e.currentTarget.style.background = destructive ? 'var(--danger)' : 'var(--accent)'
           }}
         >
           {loading ? t('modal.processing') : resolvedConfirmText}

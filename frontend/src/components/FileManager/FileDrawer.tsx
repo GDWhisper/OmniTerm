@@ -225,8 +225,8 @@ export function FileDrawer({
         minHeight: 120,
         display: 'flex',
         flexDirection: 'column',
-        background: '#111827',
-        borderTop: '1px solid #334155',
+        background: 'var(--bg-elevated)',
+        borderTop: '1px solid var(--border-strong)',
         flexShrink: 0,
       }}
     >
@@ -236,17 +236,17 @@ export function FileDrawer({
         style={{
           height: 6,
           cursor: 'ns-resize',
-          background: '#1e293b',
+          background: 'var(--border-subtle)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
           transition: 'background 0.15s ease',
         }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = '#a78bfa' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = '#1e293b' }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border-subtle)' }}
       >
-        <div style={{ width: 32, height: 2, borderRadius: 1, background: '#475569' }} />
+        <div style={{ width: 32, height: 2, borderRadius: 1, background: 'var(--text-dim)' }} />
       </div>
 
       {/* Top bar */}
@@ -257,12 +257,12 @@ export function FileDrawer({
           justifyContent: 'space-between',
           padding: '0 12px',
           height: 36,
-          borderBottom: '1px solid #1e293b',
+          borderBottom: '1px solid var(--border-subtle)',
           flexShrink: 0,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          <span style={{ color: '#64748b', flexShrink: 0 }}>
+          <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>
             {isImage ? (
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="2" width="12" height="12" rx="1" />
@@ -278,7 +278,7 @@ export function FileDrawer({
           </span>
           <span
             style={{
-              color: '#e2e8f0',
+              color: 'var(--text-primary)',
               fontSize: 13,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
               overflow: 'hidden',
@@ -307,10 +307,10 @@ export function FileDrawer({
                   gap: 4,
                   padding: '3px 8px',
                   border: '1px solid',
-                  borderColor: mode === 'view' ? '#a78bfa' : '#334155',
+                  borderColor: mode === 'view' ? 'var(--accent)' : 'var(--border-strong)',
                   borderRadius: 5,
-                  background: mode === 'view' ? 'rgba(167,139,250,0.15)' : 'transparent',
-                  color: mode === 'view' ? '#a78bfa' : '#94a3b8',
+                  background: mode === 'view' ? 'var(--accent-14)' : 'transparent',
+                  color: mode === 'view' ? 'var(--accent)' : 'var(--text-muted)',
                   fontSize: 11,
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
@@ -318,14 +318,14 @@ export function FileDrawer({
                 }}
                 onMouseEnter={(e) => {
                   if (mode !== 'view') {
-                    e.currentTarget.style.borderColor = '#a78bfa'
-                    e.currentTarget.style.color = '#c4b5fd'
+                    e.currentTarget.style.borderColor = 'var(--accent)'
+                    e.currentTarget.style.color = 'var(--accent-bright)'
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (mode !== 'view') {
-                    e.currentTarget.style.borderColor = '#334155'
-                    e.currentTarget.style.color = '#94a3b8'
+                    e.currentTarget.style.borderColor = 'var(--border-strong)'
+                    e.currentTarget.style.color = 'var(--text-muted)'
                   }
                 }}
               >
@@ -340,10 +340,10 @@ export function FileDrawer({
                   gap: 4,
                   padding: '3px 8px',
                   border: '1px solid',
-                  borderColor: mode === 'edit' ? '#a78bfa' : '#334155',
+                  borderColor: mode === 'edit' ? 'var(--accent)' : 'var(--border-strong)',
                   borderRadius: 5,
-                  background: mode === 'edit' ? 'rgba(167,139,250,0.15)' : 'transparent',
-                  color: mode === 'edit' ? '#a78bfa' : '#94a3b8',
+                  background: mode === 'edit' ? 'var(--accent-14)' : 'transparent',
+                  color: mode === 'edit' ? 'var(--accent)' : 'var(--text-muted)',
                   fontSize: 11,
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
@@ -351,14 +351,14 @@ export function FileDrawer({
                 }}
                 onMouseEnter={(e) => {
                   if (mode !== 'edit') {
-                    e.currentTarget.style.borderColor = '#a78bfa'
-                    e.currentTarget.style.color = '#c4b5fd'
+                    e.currentTarget.style.borderColor = 'var(--accent)'
+                    e.currentTarget.style.color = 'var(--accent-bright)'
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (mode !== 'edit') {
-                    e.currentTarget.style.borderColor = '#334155'
-                    e.currentTarget.style.color = '#94a3b8'
+                    e.currentTarget.style.borderColor = 'var(--border-strong)'
+                    e.currentTarget.style.color = 'var(--text-muted)'
                   }
                 }}
               >
@@ -378,16 +378,16 @@ export function FileDrawer({
               border: 'none',
               borderRadius: 5,
               background: 'transparent',
-              color: '#64748b',
+              color: 'var(--text-faint)',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.color = '#ef4444'
-              e.currentTarget.style.background = 'rgba(239,68,68,0.1)'
+              e.currentTarget.style.color = 'var(--danger)'
+              e.currentTarget.style.background = 'var(--danger-12)'
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.color = '#64748b'
+              e.currentTarget.style.color = 'var(--text-faint)'
               e.currentTarget.style.background = 'transparent'
             }}
             title={t('drawer.close')}
@@ -408,13 +408,13 @@ export function FileDrawer({
               justifyContent: 'center',
               height: '100%',
               gap: 12,
-              color: '#64748b',
+              color: 'var(--text-faint)',
               fontSize: 13,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             }}
           >
             <span>{t('drawer.unsupportedPreview')}</span>
-            <span style={{ color: '#94a3b8', fontSize: 12 }}>{fileName}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fileName}</span>
           </div>
         ) : loading ? (
           <div
@@ -423,7 +423,7 @@ export function FileDrawer({
               alignItems: 'center',
               justifyContent: 'center',
               height: '100%',
-              color: '#64748b',
+              color: 'var(--text-faint)',
               fontSize: 13,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             }}
@@ -439,7 +439,7 @@ export function FileDrawer({
               justifyContent: 'center',
               height: '100%',
               gap: 12,
-              color: '#ef4444',
+              color: 'var(--danger)',
               fontSize: 13,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             }}
@@ -449,21 +449,21 @@ export function FileDrawer({
               onClick={fetchContent}
               style={{
                 padding: '4px 12px',
-                border: '1px solid #334155',
+                border: '1px solid var(--border-strong)',
                 borderRadius: 5,
                 background: 'transparent',
-                color: '#a78bfa',
+                color: 'var(--accent)',
                 fontSize: 12,
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
                 fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = '#a78bfa'
-                e.currentTarget.style.background = 'rgba(167,139,250,0.1)'
+                e.currentTarget.style.borderColor = 'var(--accent)'
+                e.currentTarget.style.background = 'var(--accent-10)'
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = '#334155'
+                e.currentTarget.style.borderColor = 'var(--border-strong)'
                 e.currentTarget.style.background = 'transparent'
               }}
             >
@@ -492,9 +492,9 @@ export function FileDrawer({
             justifyContent: 'space-between',
             padding: '0 12px',
             height: 28,
-            borderTop: '1px solid #1e293b',
+            borderTop: '1px solid var(--border-subtle)',
             fontSize: 11,
-            color: '#64748b',
+            color: 'var(--text-faint)',
             fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
             flexShrink: 0,
           }}
@@ -525,11 +525,11 @@ export function FileDrawer({
               </button>
             )}
             {saving ? (
-              <span style={{ color: '#94a3b8' }}>{t('drawer.saving')}</span>
+              <span style={{ color: 'var(--text-muted)' }}>{t('drawer.saving')}</span>
             ) : saveMessage ? (
-              <span style={{ color: '#4ade80' }}>{saveMessage}</span>
+              <span style={{ color: 'var(--success)' }}>{saveMessage}</span>
             ) : modified ? (
-              <span style={{ color: '#a78bfa' }}>{t('drawer.modified')}</span>
+              <span style={{ color: 'var(--accent)' }}>{t('drawer.modified')}</span>
             ) : null}
           </span>
         </div>

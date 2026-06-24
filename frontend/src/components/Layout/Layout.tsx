@@ -12,12 +12,12 @@ export function Layout() {
     isMobile,
     sidebarOpen,
     sidebarCollapsed,
+    settingsOpen,
     fileManagerOpen,
     fileManagerCollapsed,
     sidebarWidth,
     fileManagerWidth,
     activeSessionId,
-    settingsOpen,
     setSidebarWidth,
     setFileManagerWidth,
   } = useAppStore()
@@ -104,16 +104,17 @@ export function Layout() {
     <div
       ref={layoutRef}
       className="flex h-screen"
-      style={{ background: '#0a0a0f', color: '#e2e8f0' }}
+      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       {/* Sidebar */}
       {sidebarOpen && (
         <div
-          className="flex-shrink-0 overflow-hidden"
+          className="flex-shrink-0"
           style={{
             width: sidebarCollapsed ? 40 : sidebarWidth,
-            background: '#0a0a0f',
-            borderRight: '1px solid #1e293b',
+            overflow: (sidebarCollapsed && settingsOpen) ? 'visible' : 'hidden',
+            background: 'var(--bg-base)',
+            borderRight: '1px solid var(--border-subtle)',
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
@@ -129,9 +130,9 @@ export function Layout() {
         />
       )}
 
-      {/* Terminal or Settings — key forces full remount on session switch for clean WebSocket lifecycle */}
+      {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
       <div className="flex-1 min-w-0">
-        {settingsOpen ? <Settings /> : <Terminal key={activeSessionId ?? 'empty'} />}
+        <Terminal key={activeSessionId ?? 'empty'} />
       </div>
 
       {/* FileManager drag handle — hidden when collapsed */}
@@ -148,8 +149,8 @@ export function Layout() {
           className="flex-shrink-0 overflow-hidden"
           style={{
             width: fileManagerCollapsed ? 40 : fileManagerWidth,
-            background: '#0a0a0f',
-            borderLeft: '1px solid #1e293b',
+            background: 'var(--bg-base)',
+            borderLeft: '1px solid var(--border-subtle)',
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
