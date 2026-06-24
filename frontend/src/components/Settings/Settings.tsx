@@ -64,22 +64,24 @@ const btnActive: React.CSSProperties = {
 }
 
 function btnHover(e: React.MouseEvent) {
-  e.currentTarget.style.borderColor = 'var(--accent)'
-  e.currentTarget.style.color = 'var(--accent)'
-  e.currentTarget.style.background = 'var(--accent-10)'
+  const el = e.currentTarget as HTMLElement
+  el.style.borderColor = 'var(--accent)'
+  el.style.color = 'var(--accent)'
+  el.style.background = 'var(--accent-10)'
 }
 
 function btnLeave(e: React.MouseEvent, isActive: boolean) {
+  const el = e.currentTarget as HTMLElement
   if (isActive) {
-    e.currentTarget.style.borderColor = 'var(--accent)'
-    e.currentTarget.style.color = 'var(--accent)'
-    e.currentTarget.style.background = 'var(--accent-10)'
-    e.currentTarget.style.boxShadow = 'var(--accent-glow-sm)'
+    el.style.borderColor = 'var(--accent)'
+    el.style.color = 'var(--accent)'
+    el.style.background = 'var(--accent-10)'
+    el.style.boxShadow = 'var(--accent-glow-sm)'
   } else {
-    e.currentTarget.style.borderColor = 'var(--border-strong)'
-    e.currentTarget.style.color = 'var(--text-muted)'
-    e.currentTarget.style.background = 'transparent'
-    e.currentTarget.style.boxShadow = 'none'
+    el.style.borderColor = 'var(--border-strong)'
+    el.style.color = 'var(--text-muted)'
+    el.style.background = 'transparent'
+    el.style.boxShadow = 'none'
   }
 }
 
