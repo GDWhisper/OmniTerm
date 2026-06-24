@@ -6,7 +6,7 @@ import { api } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-import { SettingsPopup } from '../Settings/SettingsPopup'
+
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -18,7 +18,6 @@ export function Sidebar() {
     activeSessionId,
     sidebarCollapsed,
     connected,
-    settingsOpen,
     setWorkspaces,
     setSessions,
     setActiveWorkspace,
@@ -199,8 +198,6 @@ export function Sidebar() {
             style={{ width: 6, height: 6, background: 'var(--accent)', boxShadow: 'var(--accent-glow-sm)' }}
           />
         </div>
-
-        {settingsOpen && <SettingsPopup />}
 
         <button
           data-settings-toggle
@@ -425,9 +422,6 @@ export function Sidebar() {
           })
         )}
       </div>
-
-      {/* Settings Popup */}
-      {settingsOpen && <SettingsPopup />}
 
       {/* Bottom status bar */}
       <div

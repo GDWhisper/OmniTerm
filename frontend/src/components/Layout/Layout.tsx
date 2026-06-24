@@ -4,6 +4,7 @@ import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { FileManager } from '../FileManager/FileManager'
 import { Settings } from '../Settings/Settings'
+import { SettingsPopup } from '../Settings/SettingsPopup'
 import { MobileNav } from './MobileNav'
 
 export function Layout() {
@@ -112,7 +113,7 @@ export function Layout() {
           className="flex-shrink-0"
           style={{
             width: sidebarCollapsed ? 40 : sidebarWidth,
-            overflow: (sidebarCollapsed && settingsOpen) ? 'visible' : 'hidden',
+            overflow: 'hidden',
             background: 'var(--bg-base)',
             borderRight: '1px solid var(--border-subtle)',
             transition: isDragging ? 'none' : 'width 0.2s ease',
@@ -157,6 +158,9 @@ export function Layout() {
           <FileManager />
         </div>
       )}
+
+      {/* Settings popup — fixed positioning, independent of all panels */}
+      {settingsOpen && <SettingsPopup />}
     </div>
   )
 }

@@ -23,33 +23,81 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 1. **开发/debug 后必须提交 git** — 每完成一个功能点或修复一个 bug 后，立即 `git commit`，提交信息说明修改内容。
 2. **CHANGELOG 只写用户确认的内容** — 只有经过用户确认的新功能和修复才写入 `CHANGELOG.md`，不要自行添加未确认的条目。
-3. **开发文档/配置用 `docs:` 或 `chore:` 前缀提交** — 合入 main 时自动跳过（通过 merge 过滤或 rebase 策略）。
+3. **提交前缀规范**：
+   - 功能/修复：`feat:` / `fix:`
+   - 开发文档/配置：`docs:` / `chore:` — 合入 main 时会被过滤
 
-## Debug 分支规则
+## 分支合并铁律
 
-1. **任何操作前先拉取 dev 分支代码** — 查看、调试、修复之前，必须先执行 `git pull origin dev`，确保基于最新代码工作。禁止先看代码再拉取。
-2. **只做修复，不加功能** — debug 分支仅用于 bugfix，禁止在此开发新功能。
-3. **提交原子化** — 修复和本地定制配置必须分开 commit。
-4. **定制配置 commit 以 `chore:` 开头** — 禁止合入 dev/main。
-5. **修复后由 dev 目录合并 debug** — 禁止从 debug 目录直接 push 到 dev。正确做法：
-   ```bash
-   cd ~/coding/OmniTerm-dev   # dev worktree
-   git merge debug
-   git push origin dev
-   ```
-   永远在更稳定的分支所在目录执行拉取合并，避免覆盖远程 dev 的其他提交。
+- **代码永远从「不稳定」流向「稳定」：`debug → dev → main`**
+- 合并必须在**接收方的工作树**里执行，严禁反向推送
+
+| 合并动作 | 执行位置 | 命令 |
+|----------|----------|------|
+| 吸收 debug 修复 | `~/coding/OmniTerm-dev` | `git merge debug` |
+| 吸收 dev 开发成果 | `~/coding/OmniTerm` | `git merge dev`（需用户要求，过滤文档） |
+| 同步 dev 到 debug | `~/coding/OmniTerm-debug` | `git merge dev`（仅拉取参考代码） |
+
+## Debug 分支工作流
+
+1. **拉取最新 dev**：`cd ~/coding/OmniTerm-debug && git merge dev`
+2. **原子化提交**：
+   - 核心修复 → `fix: 描述`
+   - 本地定制配置（端口、AGENTS.md 等）→ `chore: 本地调试配置` 单独提交
+3. **只做修复，不加功能** — debug 分支仅用于 bugfix
+4. **独立验证**：在 debug 专属端口（19777/19778）启动服务测试
+5. **合入 dev**：切换到 `~/coding/OmniTerm-dev` 执行 `git merge debug`
+
+```bash
+cd ~/coding/OmniTerm-dev   # dev worktree
+git merge debug
+git push origin dev
+```
 
 ### 端口隔离
 
-debug 分支使用独立端口（19777/19778），避免与 dev 分支（9777/9778）冲突。端口配置在 `.env.local`（已 gitignore），merge debug 不会带入。
+| 分支 | 后端 | 前端 |
+|------|------|------|
+| dev | 9777 | 9778 |
+| debug | 19777 | 19778 |
+
+端口配置在 `.env.local`（已 gitignore），merge debug 不会带入。dev.sh 和 vite.config.ts 均读取环境变量，fallback 为 9777/9778。
+
+## Dev 分支工作流
+
+- 直接在 `~/coding/OmniTerm-dev` 中开发、提交
+- **开发文档/配置**用 `docs:` 或 `chore:` 前缀，合入 main 时会被过滤
+- 定期合并 `debug` 的修复，过滤 debug 专用的 AGENTS.md、特殊配置
+
+## Main 分支发布
+
+- **禁止主动合并 dev 到 main** — 只有用户明确要求时才允许执行
+- 合并时排除：`openspec/`、`docs/`、`AGENTS.md`、`chore:` 前缀提交
+- 推荐方式：cherry-pick 功能/修复提交，跳过文档提交
 
 ```bash
-# .env.local（debug 分支独有，不入库）
-BACKEND_PORT=19777
-FRONTEND_PORT=19778
+cd ~/coding/OmniTerm   # main worktree
+# 方式1：合并后排除
+git merge dev --no-commit
+git reset HEAD openspec/ docs/ AGENTS.md
+git checkout -- openspec/ docs/ AGENTS.md
+git commit
+
+# 方式2：cherry-pick 只摘取功能/修复提交
+git cherry-pick <commit-hash>
 ```
 
-dev.sh 和 vite.config.ts 均读取环境变量，fallback 为 9777/9778。
+发布推送：
+```bash
+git push origin main      # 私有仓
+git push public main      # 公开仓（只含干净代码）
+```
+
+## 多 Agent 协作安全守则
+
+- **撤销已推送提交**：必须用 `git revert`，严禁 `git reset --hard` 或 `--force`
+- **禁止**从 debug/dev 直接 `git push origin debug:dev` 覆盖其他分支
+- **冲突处理**：发生在哪个工作树，就在哪个工作树解决
 
 ## Quick Start
 
@@ -72,19 +120,31 @@ docker compose up --build    # 后端 :9777
 
 ## Git Worktree
 
+**文件约定**：`AGENTS.md` 是 `CLAUDE.md` 的 symlink（`AGENTS.md -> CLAUDE.md`），两个名称指向同一份规范文件。
+
 项目使用 git worktree 管理开发分支：
 
-| 目录 | 分支 | 用途 |
-|------|------|------|
-| `/home/pax/coding/OmniTerm` | `main` | 稳定版本 |
-| `/home/pax/coding/OmniTerm-dev` | `dev` | 开发分支 |
-| `/home/pax/coding/OmniTerm-debug` | `debug` | 调试分支（基于 dev） |
+| 目录 | 分支 | 用途 | 端口 |
+|------|------|------|------|
+| `~/coding/OmniTerm` | `main` | 最终发布 | 无需常驻服务 |
+| `~/coding/OmniTerm-dev` | `dev` | 日常开发 | 9777/9778 |
+| `~/coding/OmniTerm-debug` | `debug` | 紧急修复 | 19777/19778 |
 
 - 三个 worktree 共享 `.git` 对象，各自独立工作
 - 在 `OmniTerm-dev` 目录启动独立的 Claude Code 会话进行开发
 - debug 分支用于独立调试，不影响 dev 主开发流程
-- 开发完成后将 `dev` 合并回 `main`
+- **禁止主动合并 dev 到 main** — 只有用户明确要求时才允许执行合并操作
 - 修改版本号时只需编辑 `frontend/src/version.ts`
+
+### 远程仓库策略
+
+- **私有仓**（`origin`）：存放所有分支，日常 push/pull
+- **公开仓**（`public`）：只推送 `main` 分支，用于对外发布
+
+```bash
+git remote add origin git@github.com:yourname/OmniTerm-private.git
+git remote add public git@github.com:yourname/OmniTerm.git
+```
 
 ## CodeGraph
 
