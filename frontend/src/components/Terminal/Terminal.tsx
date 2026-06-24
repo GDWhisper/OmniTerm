@@ -1,7 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useThemeStore } from '../../stores/themeStore'
 import { useTerminal } from '../../hooks/useTerminal'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
@@ -11,7 +10,6 @@ export function Terminal() {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const fontSize = useAppStore((s) => s.fontSize)
-  const resolved = useThemeStore((s) => s.resolved)
   const { initTerminal } = useTerminal({ sessionId: activeSessionId, fontSize })
 
   useEffect(() => {
@@ -19,7 +17,7 @@ export function Terminal() {
       const cleanup = initTerminal(containerRef.current)
       return cleanup
     }
-  }, [initTerminal, resolved])
+  }, [initTerminal])
 
   if (!activeSessionId) {
     return (
@@ -48,7 +46,7 @@ export function Terminal() {
 
   return (
     <div style={{ height: '100%', background: 'var(--bg-base)' }}>
-      <div key={resolved} ref={containerRef} className="h-full w-full p-1" />
+      <div ref={containerRef} className="h-full w-full p-1" />
     </div>
   )
 }
