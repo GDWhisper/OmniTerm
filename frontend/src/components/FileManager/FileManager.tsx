@@ -432,14 +432,11 @@ export function FileManager() {
           </button>
           {activeSessionId && (
             <button
-              className="flex items-center justify-center rounded-md transition-all"
-              style={{ width: 24, height: 24, color: '#64748b' }}
+              className="fm-bc-root"
               onClick={() => resetFmToFollowing(activeSessionId)}
               title="回到终端当前目录"
-              onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
             >
-              <IconWorkbench width={15} height={15} />
+              <IconWorkbench width={13} height={13} />
             </button>
           )}
         </div>
