@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
+import { useThemeStore } from '../stores/themeStore'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -11,8 +12,40 @@ interface UseTerminalOptions {
   onTitleChange?: (title: string) => void
 }
 
+const DARK_TERMINAL_THEME = {
+  background: '#1a1b26',
+  foreground: '#c0caf5',
+  cursor: '#c0caf5',
+  selectionBackground: '#33467c',
+}
+
+const LIGHT_TERMINAL_THEME = {
+  background: '#f8fafc',
+  foreground: '#0f172a',
+  cursor: '#7c3aed',
+  cursorAccent: '#f8fafc',
+  selectionBackground: 'rgba(124,58,237,0.2)',
+  black: '#0f172a',
+  red: '#dc2626',
+  green: '#16a34a',
+  yellow: '#ca8a04',
+  blue: '#2563eb',
+  magenta: '#7c3aed',
+  cyan: '#0891b2',
+  white: '#334155',
+  brightBlack: '#64748b',
+  brightRed: '#ef4444',
+  brightGreen: '#22c55e',
+  brightYellow: '#eab308',
+  brightBlue: '#3b82f6',
+  brightMagenta: '#8b5cf6',
+  brightCyan: '#06b6d4',
+  brightWhite: '#0f172a',
+}
+
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
+  const resolved = useThemeStore((s) => s.resolved)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -118,12 +151,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       cursorBlink: true,
       fontSize,
       fontFamily: 'ui-monospace, Consolas, monospace',
-      theme: {
-        background: '#1a1b26',
-        foreground: '#c0caf5',
-        cursor: '#c0caf5',
-        selectionBackground: '#33467c',
-      },
+      theme: resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME,
     })
 
     const fit = new FitAddon()
