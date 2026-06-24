@@ -35,7 +35,6 @@ struct FileQuery {
     session: Option<String>,
     sort: Option<String>,
     order: Option<String>,
-    hidden: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -169,7 +168,6 @@ async fn list_files(
     Query(q): Query<FileQuery>,
 ) -> impl IntoResponse {
     let (sort, desc) = parse_sort(q.sort.as_deref(), q.order.as_deref());
-    let include_hidden = q.hidden.unwrap_or(false);
 
     // Session-based mode: resolve CWD from tmux
     if let Some(session_id) = q.session.as_deref() {
@@ -211,7 +209,7 @@ async fn list_files(
             );
         };
 
-        match fs::list_dir(&canonical, "", sort, desc, include_hidden).await {
+        match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
                 Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside })),
@@ -242,7 +240,7 @@ async fn list_files(
             return (StatusCode::OK, Json(json!([])));
         }
 
-        match fs::list_dir(base, rel_path, sort, desc, include_hidden).await {
+        match fs::list_dir(base, rel_path, sort, desc).await {
             Ok(entries) => (StatusCode::OK, Json(json!(entries))),
             Err(e) => {
                 error!("list_files failed: {}", e);

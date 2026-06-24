@@ -145,7 +145,6 @@ pub async fn list_dir(
     rel_path: &str,
     sort: SortKey,
     desc: bool,
-    include_hidden: bool,
 ) -> Result<Vec<FileEntry>> {
     let dir = sanitize_path(base, rel_path)?;
 
@@ -154,11 +153,6 @@ pub async fn list_dir(
 
     while let Some(entry) = read_dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
-
-        // Skip hidden files unless requested
-        if !include_hidden && name.starts_with('.') {
-            continue;
-        }
 
         let meta = fs::metadata(entry.path()).await?;
         let meta2 = fs::symlink_metadata(entry.path()).await?;
@@ -180,15 +174,11 @@ pub async fn list_dir(
             .map(|t| to_timestamp(&t))
             .unwrap_or(0);
 
-        // For directories, count visible entries (like dufs)
+        // For directories, count entries (like dufs)
         let size = if is_dir {
             let mut count: u64 = 0;
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
-                while let Some(sub_entry) = sub.next_entry().await? {
-                    let sub_name = sub_entry.file_name().to_string_lossy().to_string();
-                    if !include_hidden && sub_name.starts_with('.') {
-                        continue;
-                    }
+                while let Some(_sub_entry) = sub.next_entry().await? {
                     count += 1;
                     if count >= MAX_SUBPATHS_COUNT {
                         break;

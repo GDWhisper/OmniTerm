@@ -67,7 +67,6 @@
   "fm.delete": "删除",
   "fm.items": "项",
   "fm.backToTerminalDir": "回到终端当前目录",
-  "fm.toggleHidden": "显示/隐藏隐藏文件",
   "fm.outOfWorkspace": "当前目录超出 workspace 边界",
   "fm.name": "名称",
   "fm.lastModified": "修改时间",

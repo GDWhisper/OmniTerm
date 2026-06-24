@@ -1047,3 +1047,587 @@ Error: read ETIMEDOUT
 00:13:33 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
 00:13:42 [vite] (client) page reload src/locales/zh/translation.json
 00:13:44 [vite] (client) page reload src/locales/en/translation.json
+00:17:02 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:02 [vite] (client) [Unhandled error] ReferenceError: IconEye is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:458:13
+    456 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+    457 |            >
+    458 |              <IconEye />
+        |               ^
+    459 |            </button>
+    460 |            <div className="fm-search-wrap" ref={searchWrapRef}>
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:02 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:02 [vite] (client) [Unhandled error] ReferenceError: IconEye is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:458:13
+    456 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+    457 |            >
+    458 |              <IconEye />
+        |               ^
+    459 |            </button>
+    460 |            <div className="fm-search-wrap" ref={searchWrapRef}>
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:02 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:02 [vite] (client) [Unhandled error] ReferenceError: IconEye is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:458:13
+    456 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+    457 |            >
+    458 |              <IconEye />
+        |               ^
+    459 |            </button>
+    460 |            <div className="fm-search-wrap" ref={searchWrapRef}>
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:02 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:02 [vite] (client) [Unhandled error] ReferenceError: IconEye is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:458:13
+    456 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+    457 |            >
+    458 |              <IconEye />
+        |               ^
+    459 |            </button>
+    460 |            <div className="fm-search-wrap" ref={searchWrapRef}>
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:02 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:02 [vite] (client) [Unhandled error] ReferenceError: IconEye is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:458:13
+    456 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+    457 |            >
+    458 |              <IconEye />
+        |               ^
+    459 |            </button>
+    460 |            <div className="fm-search-wrap" ref={searchWrapRef}>
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:02 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:05 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:05 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:05 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:05 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:05 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:05 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:05 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:06 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:06 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:06 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:06 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:09 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:09 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:09 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:09 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:09 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:09 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:09 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:09 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:09 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:09 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:138:76
+    136 |        if (!silent) setLoading(false)
+    137 |      }
+    138 |    }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc, showHidden])
+        |                                                                              ^
+    139 |  
+    140 |    // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:09 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:12 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:12 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:167:6
+    165 |      if (!activeSessionId) return
+    166 |      fetchFiles()
+    167 |    }, [showHidden])
+        |        ^
+    168 |  
+    169 |    // Session switch: show cached files immediately, then fetch fresh data
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:12 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:12 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:167:6
+    165 |      if (!activeSessionId) return
+    166 |      fetchFiles()
+    167 |    }, [showHidden])
+        |        ^
+    168 |  
+    169 |    // Session switch: show cached files immediately, then fetch fresh data
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:12 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:12 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:167:6
+    165 |      if (!activeSessionId) return
+    166 |      fetchFiles()
+    167 |    }, [showHidden])
+        |        ^
+    168 |  
+    169 |    // Session switch: show cached files immediately, then fetch fresh data
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:12 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:12 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:167:6
+    165 |      if (!activeSessionId) return
+    166 |      fetchFiles()
+    167 |    }, [showHidden])
+        |        ^
+    168 |  
+    169 |    // Session switch: show cached files immediately, then fetch fresh data
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:12 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:12 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:167:6
+    165 |      if (!activeSessionId) return
+    166 |      fetchFiles()
+    167 |    }, [showHidden])
+        |        ^
+    168 |  
+    169 |    // Session switch: show cached files immediately, then fetch fresh data
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:12 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:16 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:16 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:449:19
+    447 |              onClick={() => setShowHidden((v) => !v)}
+    448 |              title={t('fm.toggleHidden')}
+    449 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+        |                     ^
+    450 |            >
+    451 |              <IconEye />
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:16 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:16 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:449:19
+    447 |              onClick={() => setShowHidden((v) => !v)}
+    448 |              title={t('fm.toggleHidden')}
+    449 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+        |                     ^
+    450 |            >
+    451 |              <IconEye />
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:16 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:16 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:449:19
+    447 |              onClick={() => setShowHidden((v) => !v)}
+    448 |              title={t('fm.toggleHidden')}
+    449 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+        |                     ^
+    450 |            >
+    451 |              <IconEye />
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:16 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:17 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:449:19
+    447 |              onClick={() => setShowHidden((v) => !v)}
+    448 |              title={t('fm.toggleHidden')}
+    449 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+        |                     ^
+    450 |            >
+    451 |              <IconEye />
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:17 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:17 [vite] (client) [Unhandled error] ReferenceError: showHidden is not defined
+ > FileManager src/components/FileManager/FileManager.tsx:449:19
+    447 |              onClick={() => setShowHidden((v) => !v)}
+    448 |              title={t('fm.toggleHidden')}
+    449 |              style={showHidden ? { color: 'var(--accent)' } : undefined}
+        |                     ^
+    450 |            >
+    451 |              <IconEye />
+ > Object.react_stack_bottom_frame node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:25904:19
+ > renderWithHooks node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:7662:21
+ > updateFunctionComponent node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:10166:18
+ > beginWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:11778:17
+ > runWithFiberInDEV node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:871:29
+ > performUnitOfWork node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17641:21
+ > workLoopSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17469:40
+ > renderRootSync node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:17450:10
+ > performWorkOnRoot node_modules/.pnpm/react-dom@19.2.7_react@19.2.7/node_modules/react-dom/cjs/react-dom-client.development.js:16583:34
+
+00:17:17 [vite] (client) [console.warn] An error occurred in the <FileManager> component.
+
+Consider adding an error boundary to your tree to customize error handling behavior.
+Visit https://react.dev/link/error-boundaries to learn more about error boundaries.
+
+00:17:23 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx
+00:17:30 [vite] (client) hmr update /src/index.css, /src/components/FileManager/FileManager.tsx, /src/components/Sidebar/Sidebar.tsx, /src/components/FileManager/FileDrawer.tsx
+00:17:34 [vite] (client) page reload src/locales/zh/translation.json
+00:17:37 [vite] (client) page reload src/locales/en/translation.json

@@ -67,7 +67,6 @@
   "fm.delete": "Delete",
   "fm.items": "items",
   "fm.backToTerminalDir": "Go to terminal working directory",
-  "fm.toggleHidden": "Show/hide hidden files",
   "fm.outOfWorkspace": "Current directory is outside workspace boundary",
   "fm.name": "Name",
   "fm.lastModified": "Last Modified",
