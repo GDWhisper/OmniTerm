@@ -23,7 +23,7 @@ export function Terminal() {
     return (
       <div
         className="h-full flex items-center justify-center"
-        style={{ background: '#0a0a0f', color: '#64748b', fontFamily: FONT }}
+        style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: FONT }}
       >
         <div style={{ textAlign: 'center' }}>
           <div
@@ -35,8 +35,8 @@ export function Terminal() {
           >
             ⌨️
           </div>
-          <div style={{ fontSize: 14, color: '#94a3b8' }}>{t('terminal.noSession')}</div>
-          <div style={{ fontSize: 12, marginTop: 8, color: '#475569' }}>
+          <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
+          <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
             {t('terminal.hint')}
           </div>
         </div>
@@ -45,7 +45,7 @@ export function Terminal() {
   }
 
   return (
-    <div style={{ height: '100%', background: '#0a0a0f' }}>
+    <div style={{ height: '100%', background: 'var(--bg-base)' }}>
       <div ref={containerRef} className="h-full w-full p-1" />
     </div>
   )
