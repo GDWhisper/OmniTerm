@@ -431,6 +431,15 @@ export function FileManager() {
           >
             ▶
           </button>
+          {activeSessionId && (
+            <button
+              className="fm-bc-root"
+              onClick={() => resetFmToFollowing(activeSessionId)}
+              title={t('fm.backToTerminalDir')}
+            >
+              <IconWorkbench width={13} height={13} />
+            </button>
+          )}
         </div>
         <div className="fm-toolbar-right">
           <div className="fm-search-wrap" ref={searchWrapRef}>
@@ -475,11 +484,7 @@ export function FileManager() {
 
       {cwd && (
         <div className="fm-breadcrumb">
-          <span
-            className="fm-bc-seg fm-bc-root"
-            onClick={() => { if (activeSessionId) { resetFmToFollowing(activeSessionId) } }}
-            title={t('fm.backToTerminalDir')}
-          ><IconWorkbench width={13} height={13} /></span>
+<
           {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
             const segPath = '/' + arr.slice(0, i + 1).join('/')
             return (
