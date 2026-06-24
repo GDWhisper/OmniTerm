@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
@@ -24,8 +25,10 @@ export function Sidebar() {
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
+  const toggleSettings = useAppStore((s) => s.toggleSettings)
 
   const addToast = useToastStore((s) => s.addToast)
+  const { t } = useTranslation()
 
   const [createWsOpen, setCreateWsOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
@@ -86,7 +89,7 @@ export function Sidebar() {
     try {
       await api.createWorkspace({ name: wsName.trim(), root_path: wsPath.trim() })
       await loadWorkspaces()
-      addToast('success', `工作区「${wsName.trim()}」创建成功`)
+      addToast('success', t('sidebar.workspaceCreated', { name: wsName.trim() }))
       setCreateWsOpen(false)
       setWsName('')
       setWsPath(homeDir)
@@ -103,7 +106,7 @@ export function Sidebar() {
     try {
       await api.createSession(activeWorkspaceId, sessName.trim() || undefined)
       await loadSessions()
-      addToast('success', '会话创建成功')
+      addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }))
       setCreateSessOpen(false)
       setSessName('')
     } catch {
@@ -123,7 +126,7 @@ export function Sidebar() {
         setActiveWorkspace(null)
         setSessions([])
       }
-      addToast('success', `工作区「${confirmDelete.name}」已删除`)
+      addToast('success', t('sidebar.workspaceDeleted', { name: confirmDelete.name }))
     } catch {
       // api client already shows error toast
     } finally {
@@ -141,7 +144,7 @@ export function Sidebar() {
       if (activeSessionId === confirmDelete.id) {
         setActiveSession(null)
       }
-      addToast('success', `会话「${confirmDelete.name}」已删除`)
+      addToast('success', t('sidebar.sessionDeleted', { name: confirmDelete.name }))
     } catch {
       // api client already shows error toast
     } finally {
@@ -181,7 +184,7 @@ export function Sidebar() {
           onClick={toggleSidebarCollapsed}
           className="flex items-center justify-center rounded-md transition-all mt-3"
           style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
-          title="展开侧边栏"
+          title={t('sidebar.expand')}
           onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
           onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
         >
@@ -196,9 +199,10 @@ export function Sidebar() {
         </div>
 
         <button
+          onClick={() => { toggleSidebarCollapsed(); toggleSettings() }}
           className="flex items-center justify-center rounded transition-all mb-3"
           style={{ width: 28, height: 28, border: '1px solid #334155', color: '#64748b', fontSize: 14 }}
-          title="Settings"
+          title={t('settings.title')}
           onMouseEnter={(e) => {
             e.currentTarget.style.borderColor = '#a78bfa'
             e.currentTarget.style.color = '#a78bfa'
@@ -242,7 +246,7 @@ export function Sidebar() {
           onClick={toggleSidebarCollapsed}
           className="flex items-center justify-center rounded-md transition-all"
           style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
-          title="收起侧边栏"
+          title={t('sidebar.collapse')}
           onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
           onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
         >
@@ -256,7 +260,7 @@ export function Sidebar() {
         <div className="flex items-center justify-between px-1 mb-2.5">
           <div className="flex items-center gap-1.5">
             <span style={{ fontSize: 11, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>
-              Workspaces
+              {t('sidebar.workspaces')}
             </span>
             <span style={{ fontSize: 11, color: '#475569' }}>{workspaces.length}</span>
           </div>
@@ -264,7 +268,7 @@ export function Sidebar() {
             onClick={() => setCreateWsOpen(true)}
             className="flex items-center justify-center rounded transition-all"
             style={{ width: 22, height: 22, border: '1px solid #a78bfa', color: '#a78bfa', fontSize: 15, fontWeight: 500 }}
-            title="New Workspace"
+            title={t('sidebar.createWorkspace')}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'rgba(167,139,250,0.15)'
               e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
@@ -280,7 +284,7 @@ export function Sidebar() {
 
         {workspaces.length === 0 ? (
           <div className="px-2 py-3" style={{ fontSize: 12, color: '#64748b' }}>
-            No workspaces. Click + to create one.
+            {t('sidebar.noWorkspaces')}
           </div>
         ) : (
           workspaces.map((ws) => {
@@ -312,14 +316,19 @@ export function Sidebar() {
                   }}
                   onClick={() => setActiveWorkspace(ws.id === activeWorkspaceId ? null : ws.id)}
                 >
-                  <div className="flex items-center gap-2">
-                    <span style={{ color: isActive ? '#a78bfa' : '#475569', fontSize: 12 }}>▸</span>
-                    <span style={{ color: isActive ? '#e2e8f0' : '#94a3b8', fontWeight: isActive ? 500 : 400, fontSize: 13 }}>
-                      {ws.name}
-                    </span>
+                  <div className="flex-1 min-w-0 mr-2">
+                    <div className="flex items-center gap-2">
+                      <span style={{ color: isActive ? '#a78bfa' : '#475569', fontSize: 12 }}>▸</span>
+                      <span style={{ color: isActive ? '#e2e8f0' : '#94a3b8', fontWeight: isActive ? 500 : 400, fontSize: 13 }}>
+                        {ws.name}
+                      </span>
+                    </div>
+                    <div className="pl-4 mt-0.5 group/path">
+                      <span className="block truncate group-hover/path:hidden" style={{ fontSize: 11, color: '#64748b' }}>{ws.root_path}</span>
+                      <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: '#94a3b8' }}>{ws.root_path}</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span style={{ fontSize: 11, color: '#64748b' }}>{ws.root_path}</span>
+                  <div className="flex items-center">
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -334,13 +343,13 @@ export function Sidebar() {
                   <div className="pl-6 pr-1 pt-2 pb-1" style={{ marginLeft: 8 }}>
                     <div className="flex items-center justify-between px-0.5 mb-2">
                       <span style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: 1.5 }}>
-                        Sessions
+                        {t('sidebar.sessions')}
                       </span>
                       <button
                         onClick={() => setCreateSessOpen(true)}
                         className="flex items-center justify-center rounded transition-all"
                         style={{ width: 22, height: 22, border: '1px solid #a78bfa', color: '#a78bfa', fontSize: 15, fontWeight: 500 }}
-                        title="New Session"
+                        title={t('sidebar.createSession')}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = 'rgba(167,139,250,0.15)'
                           e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
@@ -391,7 +400,7 @@ export function Sidebar() {
                               setConfirmDelete({
                                 type: 'session',
                                 id: s.id,
-                                name: s.name || s.tmux_session_name || '未命名',
+                                name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
                               })
                             }}
                           />
@@ -401,7 +410,7 @@ export function Sidebar() {
 
                     {sessions.length === 0 && (
                       <div className="px-2 py-1.5" style={{ fontSize: 12, color: '#64748b' }}>
-                        No sessions
+                        {t('sidebar.noSessions')}
                       </div>
                     )}
                   </div>
@@ -427,13 +436,14 @@ export function Sidebar() {
               boxShadow: connected ? '0 0 6px #4ade80' : '0 0 6px #ef4444',
             }}
           />
-          <span style={{ fontSize: 12, color: '#64748b' }}>{connected ? 'Connected' : 'Disconnected'}</span>
+          <span style={{ fontSize: 12, color: '#64748b' }}>{connected ? t('sidebar.connected') : t('sidebar.disconnected')}</span>
           <span style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>v{APP_VERSION}</span>
         </div>
         <button
+          onClick={toggleSettings}
           className="flex items-center justify-center rounded transition-all"
           style={{ width: 26, height: 26, border: '1px solid #334155', color: '#64748b', fontSize: 14 }}
-          title="Settings"
+          title={t('settings.title')}
           onMouseEnter={(e) => {
             e.currentTarget.style.borderColor = '#a78bfa'
             e.currentTarget.style.color = '#a78bfa'
@@ -450,11 +460,11 @@ export function Sidebar() {
       </div>
 
       {/* ── Create Workspace Modal ── */}
-      <Modal open={createWsOpen} onClose={() => { setCreateWsOpen(false); setWsName(''); setWsPath(homeDir) }} title="创建工作区">
+      <Modal open={createWsOpen} onClose={() => { setCreateWsOpen(false); setWsName(''); setWsPath(homeDir) }} title={t('sidebar.createWorkspace')}>
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: '#94a3b8' }}>
-              名称
+              {t('sidebar.workspaceName')}
             </label>
             <input
               type="text"
@@ -471,7 +481,7 @@ export function Sidebar() {
           </div>
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: '#94a3b8' }}>
-              根路径
+              {t('sidebar.rootPath')}
             </label>
             <input
               type="text"
@@ -487,21 +497,21 @@ export function Sidebar() {
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <ModalCancel onClick={() => { setCreateWsOpen(false); setWsName(''); setWsPath(homeDir) }}>
-              取消
+              {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateWorkspace} disabled={!wsName.trim() || submitting}>
-              {submitting ? '创建中...' : '创建'}
+              {submitting ? t('sidebar.creating') : t('sidebar.create')}
             </ModalPrimary>
           </div>
         </div>
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName('') }} title="创建会话" maxWidth="max-w-sm">
+      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName('') }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: '#94a3b8' }}>
-              会话名称 <span style={{ color: '#475569' }}>(可选)</span>
+              {t('sidebar.sessionName')} <span style={{ color: '#475569' }}>{t('sidebar.optional')}</span>
             </label>
             <input
               type="text"
@@ -518,10 +528,10 @@ export function Sidebar() {
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName('') }}>
-              取消
+              {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
-              {submitting ? '创建中...' : '创建'}
+              {submitting ? t('sidebar.creating') : t('sidebar.create')}
             </ModalPrimary>
           </div>
         </div>
@@ -532,13 +542,13 @@ export function Sidebar() {
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
         onConfirm={confirmDelete?.type === 'workspace' ? handleDeleteWorkspace : handleDeleteSession}
-        title={confirmDelete?.type === 'workspace' ? '删除工作区' : '删除会话'}
+        title={confirmDelete?.type === 'workspace' ? t('sidebar.deleteWorkspace') : t('sidebar.deleteSession')}
         message={
           confirmDelete?.type === 'workspace'
-            ? `确定要删除工作区「${confirmDelete?.name}」吗？该操作不可恢复。`
-            : `确定要删除会话「${confirmDelete?.name}」吗？对应的 tmux 会话也将被终止。`
+            ? t('sidebar.confirmDeleteWorkspace', { name: confirmDelete?.name })
+            : t('sidebar.confirmDeleteSession', { name: confirmDelete?.name })
         }
-        confirmText="删除"
+        confirmText={t('sidebar.delete')}
         destructive
         loading={submitting}
       />
@@ -547,12 +557,13 @@ export function Sidebar() {
 }
 
 function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
+  const { t } = useTranslation()
   return (
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all sidebar-glow-red-hover"
       style={{ width: 20, height: 20, border: '1px solid #334155', color: '#64748b', fontSize: 11 }}
-      title="删除"
+      title={t('sidebar.delete')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = '#ef4444'
         e.currentTarget.style.color = '#ef4444'

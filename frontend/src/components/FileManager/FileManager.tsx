@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
@@ -60,6 +61,7 @@ function FileIcon({ entry }: { entry: FileEntry }) {
 }
 
 export function FileManager() {
+  const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
@@ -78,7 +80,6 @@ export function FileManager() {
 
   // Drawer state from store (persists across session switches)
   const drawerFilePath = fmState.drawerPath
-  const drawerMode = fmState.drawerMode ?? 'view'
 
   // Drawer height (sessionStorage, shared across sessions)
   const [drawerHeight, setDrawerHeight] = useState(() => {
@@ -87,7 +88,7 @@ export function FileManager() {
   })
 
   // SSE file watcher (replaces 3s polling)
-  const { lastEvent: fileChangeEvent, connected: watcherConnected } = useFileWatcher({
+  const { lastEvent: fileChangeEvent } = useFileWatcher({
     sessionId: activeSessionId,
     enabled: !!activeSessionId,
   })
@@ -128,7 +129,7 @@ export function FileManager() {
       if (!silent) setSelected(new Set())
       return data.cwd
     } catch (err: any) {
-      if (!silent) addToast('error', err.message || '加载文件列表失败')
+      if (!silent) addToast('error', err.message || t('fm.loadFailed'))
       if (!silent) setFiles([])
       return undefined
     } finally {
@@ -209,7 +210,7 @@ export function FileManager() {
     setFmManualPath(activeSessionId, absolutePath)
   }
 
-  const handleRowClick = (entry: FileEntry, e: React.MouseEvent) => {
+  const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
     if (editingName) return
     if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
       const newPath = cwd ? `${cwd}/${entry.name}` : entry.name
@@ -295,10 +296,10 @@ export function FileManager() {
       try {
         await api.uploadFileBySession(activeSessionId, cwd, file)
       } catch (err: any) {
-        addToast('error', `上传 ${file.name} 失败: ${err.message}`)
+        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err.message }))
       }
     }
-    addToast('success', '上传完成')
+    addToast('success', t('fm.uploadComplete'))
     fetchFiles()
   }
 
@@ -314,25 +315,25 @@ export function FileManager() {
     if (!editingName || !editValue.trim() || !activeSessionId) { setEditingName(null); return }
     try {
       await api.renameBySession(activeSessionId, editingName, editValue.trim())
-      addToast('success', '重命名成功')
+      addToast('success', t('fm.renameSuccess'))
       fetchFiles()
     } catch (err: any) {
-      addToast('error', err.message || '重命名失败')
+      addToast('error', err.message || t('fm.renameFailed'))
     }
     setEditingName(null)
   }
 
   const handleDelete = async () => {
     if (selected.size === 0 || !activeSessionId) return
-    if (!confirm(`确定删除 ${selected.size} 个项目？`)) return
+    if (!confirm(t('fm.confirmDelete', { count: selected.size }))) return
     try {
       for (const path of selected) {
         await api.deleteFileBySession(activeSessionId, path)
       }
-      addToast('success', `已删除 ${selected.size} 个项目`)
+      addToast('success', t('fm.deleted', { count: selected.size }))
       fetchFiles()
     } catch (err: any) {
-      addToast('error', err.message || '删除失败')
+      addToast('error', err.message || t('fm.deleteFailed'))
     }
   }
 
@@ -347,10 +348,10 @@ export function FileManager() {
         try {
           await api.uploadFileBySession(activeSessionId, cwd, input.files[i])
         } catch (err: any) {
-          addToast('error', `上传失败: ${err.message}`)
+          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err.message }))
         }
       }
-      addToast('success', '上传完成')
+      addToast('success', t('fm.uploadComplete'))
       fetchFiles()
     }
     input.click()
@@ -363,7 +364,7 @@ export function FileManager() {
       const results = await api.searchFilesBySession(activeSessionId, searchQuery, cwd)
       setFiles(results)
     } catch (err: any) {
-      addToast('error', err.message || '搜索失败')
+      addToast('error', err.message || t('fm.searchFailed'))
     } finally {
       setLoading(false)
     }
@@ -386,7 +387,7 @@ export function FileManager() {
           onClick={toggleFileManagerCollapsed}
           className="flex items-center justify-center rounded-md transition-all mt-3"
           style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
-          title="展开文件管理器"
+          title={t('fm.expand')}
           onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
           onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
         >
@@ -401,7 +402,7 @@ export function FileManager() {
           onClick={toggleFileManagerCollapsed}
           className="flex items-center justify-center rounded-md transition-all mb-3"
           style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
-          title="展开文件管理器"
+          title={t('fm.expand')}
           onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
           onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
         >
@@ -424,7 +425,7 @@ export function FileManager() {
             onClick={toggleFileManagerCollapsed}
             className="flex items-center justify-center rounded-md transition-all"
             style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
-            title="收起文件管理器"
+            title={t('fm.collapse')}
             onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
             onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
           >
@@ -434,7 +435,7 @@ export function FileManager() {
             <button
               className="fm-bc-root"
               onClick={() => resetFmToFollowing(activeSessionId)}
-              title="回到终端当前目录"
+              title={t('fm.backToTerminalDir')}
             >
               <IconWorkbench width={13} height={13} />
             </button>
@@ -442,13 +443,13 @@ export function FileManager() {
         </div>
         <div className="fm-toolbar-right">
           <div className="fm-search-wrap" ref={searchWrapRef}>
-            <button className="fm-btn" onClick={toggleSearch} title="搜索文件">
+            <button className="fm-btn" onClick={toggleSearch} title={t('fm.search')}>
               <IconSearch />
             </button>
             {searchOpen && (
               <input
                 className="fm-search"
-                placeholder="搜索文件名..."
+                placeholder={t('fm.searchPlaceholder')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -468,14 +469,14 @@ export function FileManager() {
               if (parentPath) navigateTo(parentPath)
             }}
             disabled={!cwd}
-            title="返回上级"
+            title={t('fm.backToParent')}
           >
             <IconArrowUp />
           </button>
-          <button className="fm-btn" onClick={() => fetchFiles()} title="刷新">
+          <button className="fm-btn" onClick={() => fetchFiles()} title={t('fm.refresh')}>
             <IconRefresh />
           </button>
-          <button className="fm-btn" onClick={handleUpload} title="上传文件">
+          <button className="fm-btn" onClick={handleUpload} title={t('fm.upload')}>
             <IconUpload />
           </button>
         </div>
@@ -483,6 +484,7 @@ export function FileManager() {
 
       {cwd && (
         <div className="fm-breadcrumb">
+<
           {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
             const segPath = '/' + arr.slice(0, i + 1).join('/')
             return (
@@ -495,7 +497,7 @@ export function FileManager() {
           {isOutsideWorkspace && (
             <span
               className="fm-warning-icon"
-              title="当前目录超出 workspace 边界"
+              title={t('fm.outOfWorkspace')}
               style={{ marginLeft: 6, color: '#f59e0b', cursor: 'help' }}
             >
               <IconWarning width={14} height={14} />
@@ -513,15 +515,15 @@ export function FileManager() {
         {!activeSessionId ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: '#a78bfa', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
-            <span>请先在侧栏选择一个终端会话</span>
+            <span>{t('fm.selectSessionFirst')}</span>
           </div>
         ) : loading ? (
-          <div className="fm-empty">加载中...</div>
+          <div className="fm-empty">{t('fm.loading')}</div>
         ) : files.length === 0 ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: '#a78bfa', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
-            <span>此目录为空</span>
-            <span className="fm-empty-hint">拖放文件到此处上传</span>
+            <span>{t('fm.emptyDir')}</span>
+            <span className="fm-empty-hint">{t('fm.dragHint')}</span>
           </div>
         ) : (
           <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
@@ -536,23 +538,23 @@ export function FileManager() {
                 <tr>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
-                      Name <SI col="name" />
+                      {t('fm.name')} <SI col="name" />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('name', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('mtime')}>
-                      Last Modified <SI col="mtime" />
+                      {t('fm.lastModified')} <SI col="mtime" />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('mtime', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('size')}>
-                      Size <SI col="size" />
+                      {t('fm.size')} <SI col="size" />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} />
                   </th>
-                  <th>Actions</th>
+                  <th>{t('fm.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -592,18 +594,18 @@ export function FileManager() {
                         </div>
                       </td>
                       <td className="fm-td-time">{formatTime(f.mtime)}</td>
-                      <td className="fm-td-size">{isDir ? `${f.size} 项` : formatSize(f.size)}</td>
+                      <td className="fm-td-size">{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span
                           className="fm-act-icon"
-                          title="重命名"
+                          title={t('fm.rename')}
                           onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); startRename() }}
                         >
                           <IconPencil />
                         </span>
                         <span
                           className="fm-act-icon fm-act-icon-danger"
-                          title="删除"
+                          title={t('fm.delete')}
                           onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); handleDelete() }}
                         >
                           <IconTrash />

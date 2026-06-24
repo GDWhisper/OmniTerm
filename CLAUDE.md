@@ -23,6 +23,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 1. **开发/debug 后必须提交 git** — 每完成一个功能点或修复一个 bug 后，立即 `git commit`，提交信息说明修改内容。
 2. **CHANGELOG 只写用户确认的内容** — 只有经过用户确认的新功能和修复才写入 `CHANGELOG.md`，不要自行添加未确认的条目。
+3. **开发文档/配置用 `docs:` 或 `chore:` 前缀提交** — 合入 main 时自动跳过（通过 merge 过滤或 rebase 策略）。
 
 ## Debug 分支规则
 
@@ -40,7 +41,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 ### 端口隔离
 
-debug 分支使用独立端口（19777/19778），避免与 dev 分支（9777/9778）冲突。端口配置在 `.env.local`（已 gitignore），merge dev 不会覆盖。
+debug 分支使用独立端口（19777/19778），避免与 dev 分支（9777/9778）冲突。端口配置在 `.env.local`（已 gitignore），merge debug 不会带入。
 
 ```bash
 # .env.local（debug 分支独有，不入库）
@@ -225,7 +226,7 @@ src/
 | `docs/ui-style-guide.md` | **UI 风格规范** — 色板、字体、圆角、动效、drag bar 语言、组件规范、新增组件自检清单 | 任何涉及 UI 的修改（前端新增组件、改样式、调 cubone 覆盖规则）都**必须先读**此文档，确保视觉语言一致 |
 | `docs/user-testing.md` | 用户测试文档 — 10 个章节、27 个测试用例（P0/P1/P2 三级）、6 个已知限制 | 改完功能后手动回归、或新增测试覆盖时 |
 | `docs/2026-06-20-sidebar-redesign-design.md` | Sidebar 重设计的设计决策与方案记录 | 修改 Sidebar 相关组件时了解历史背景 |
-| `docs/debug-log.md` | **踩坑记录** — 开发过程中遇到的问题、根因分析和解决方案 | 遇到类似问题时查阅；新踩坑后追加 |
+| `docs/debug-log.md` | **bug修复踩坑记录** — 开发过程中遇到的问题、根因分析和解决方案 | 遇到类似问题时查阅；新踩坑后追加 |
 | `CHANGELOG.md` | **变更日志** — 按 Keep a Changelog 格式记录每次变更，含 scope 标签和写入规范 | 每次有意义的代码变更后**必须添加条目**；提交前检查是否遗漏 |
 
 ## Reference Repos (local paths)

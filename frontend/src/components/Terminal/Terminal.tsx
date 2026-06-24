@@ -1,10 +1,12 @@
 import { useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
 export function Terminal() {
+  const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const fontSize = useAppStore((s) => s.fontSize)
@@ -33,9 +35,9 @@ export function Terminal() {
           >
             ⌨️
           </div>
-          <div style={{ fontSize: 14, color: '#94a3b8' }}>选择或创建一个会话</div>
+          <div style={{ fontSize: 14, color: '#94a3b8' }}>{t('terminal.noSession')}</div>
           <div style={{ fontSize: 12, marginTop: 8, color: '#475569' }}>
-            使用左侧边栏开始
+            {t('terminal.hint')}
           </div>
         </div>
       </div>

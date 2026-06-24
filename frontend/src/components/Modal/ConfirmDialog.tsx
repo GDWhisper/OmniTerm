@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { Modal } from './Modal'
 
 interface ConfirmDialogProps {
@@ -20,10 +21,12 @@ export function ConfirmDialog({
   onConfirm,
   title,
   message,
-  confirmText = '确认',
+  confirmText,
   destructive = false,
   loading = false,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation()
+  const resolvedConfirmText = confirmText ?? t('modal.confirm')
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-sm">
       <p className="text-sm mb-5" style={{ color: '#94a3b8' }}>{message}</p>
@@ -44,7 +47,7 @@ export function ConfirmDialog({
             e.currentTarget.style.color = '#94a3b8'
           }}
         >
-          取消
+          {t('modal.cancel')}
         </button>
         <button
           onClick={onConfirm}
@@ -60,7 +63,7 @@ export function ConfirmDialog({
             e.currentTarget.style.background = destructive ? '#ef4444' : '#a78bfa'
           }}
         >
-          {loading ? '处理中...' : confirmText}
+          {loading ? t('modal.processing') : resolvedConfirmText}
         </button>
       </div>
     </Modal>

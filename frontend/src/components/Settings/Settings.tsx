@@ -1,37 +1,64 @@
+import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore } from '../../stores/appStore'
 
-const themes: { value: Theme; label: string; icon: string }[] = [
-  { value: 'light', label: '亮色', icon: '☀️' },
-  { value: 'dark', label: '暗色', icon: '🌙' },
-  { value: 'system', label: '跟随系统', icon: '💻' },
+const themes: { value: Theme; labelKey: string; icon: string }[] = [
+  { value: 'light', labelKey: 'settings.light', icon: '☀️' },
+  { value: 'dark', labelKey: 'settings.dark', icon: '🌙' },
+  { value: 'system', labelKey: 'settings.system', icon: '💻' },
+]
+
+const languages = [
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: 'English' },
 ]
 
 export function Settings() {
+  const { t, i18n } = useTranslation()
   const { theme, setTheme } = useThemeStore()
   const { fontSize, setFontSize } = useAppStore()
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       <div className="max-w-lg mx-auto p-4 space-y-6">
-        <h2 className="text-lg font-semibold">设置</h2>
+        <h2 className="text-lg font-semibold">{t('settings.title')}</h2>
 
         {/* Theme */}
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">主题</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('settings.theme')}</h3>
           <div className="flex gap-2">
-            {themes.map((t) => (
+            {themes.map((th) => (
               <button
-                key={t.value}
-                onClick={() => setTheme(t.value)}
+                key={th.value}
+                onClick={() => setTheme(th.value)}
                 className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                  theme === t.value
+                  theme === th.value
                     ? 'bg-blue-500 text-white shadow-sm'
                     : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
                 }`}
               >
-                <span>{t.icon}</span>
-                <span>{t.label}</span>
+                <span>{th.icon}</span>
+                <span>{t(th.labelKey)}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Language */}
+        <section className="space-y-3">
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('settings.language')}</h3>
+          <div className="flex gap-2">
+            {languages.map((lang) => (
+              <button
+                key={lang.value}
+                onClick={() => i18n.changeLanguage(lang.value)}
+                className={`flex-1 flex items-center justify-center px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                  i18n.language === lang.value || i18n.language.startsWith(lang.value)
+                    ? 'bg-blue-500 text-white shadow-sm'
+                    : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
+                }`}
+              >
+                <span>{lang.label}</span>
               </button>
             ))}
           </div>
@@ -40,7 +67,7 @@ export function Settings() {
         {/* Font size */}
         <section className="space-y-3">
           <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">
-            终端字体大小
+            {t('settings.fontSize')}
           </h3>
           <div className="flex items-center gap-3">
             <button
@@ -74,7 +101,7 @@ export function Settings() {
 
         {/* Info */}
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">关于</h3>
+          <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('settings.about')}</h3>
           <div className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
             <p>OmniTerm — Web-based tmux terminal manager</p>
             <p className="text-xs">Phase 7 · MIT License</p>

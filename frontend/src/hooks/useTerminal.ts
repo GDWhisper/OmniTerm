@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 
 interface UseTerminalOptions {
@@ -11,6 +12,7 @@ interface UseTerminalOptions {
 }
 
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
+  const { i18n } = useTranslation()
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -45,7 +47,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
-      termRef.current?.writeln('\x1b[32m[connected]\x1b[0m')
+      termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
     ws.onmessage = (e) => {
@@ -55,11 +57,11 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         try {
           const msg = JSON.parse(e.data)
           if (msg.type === 'attached') {
-            termRef.current?.writeln(`\x1b[36m[attached to ${msg.session}]\x1b[0m`)
+            termRef.current?.writeln(`\x1b[36m[${i18n.t('terminal.status.attached', { session: msg.session })}]\x1b[0m`)
           } else if (msg.type === 'error') {
-            termRef.current?.writeln(`\x1b[31m[error: ${msg.message}]\x1b[0m`)
+            termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.error', { msg: msg.message })}]\x1b[0m`)
           } else if (msg.type === 'exit') {
-            termRef.current?.writeln(`\x1b[31m[process exited: ${msg.code}]\x1b[0m`)
+            termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.exited', { code: msg.code })}]\x1b[0m`)
           }
         } catch {}
       }
@@ -69,14 +71,14 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       useAppStore.getState().setConnected(false)
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
-        termRef.current?.writeln('\x1b[31m[disconnected]\x1b[0m')
+        termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
       }
     }
 
     ws.onerror = () => {
       useAppStore.getState().setConnected(false)
       if (wsRef.current === ws) {
-        termRef.current?.writeln('\x1b[31m[connection error]\x1b[0m')
+        termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.connectionError')}]\x1b[0m`)
       }
     }
 

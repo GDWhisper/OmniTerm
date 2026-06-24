@@ -161,6 +161,8 @@ cmd_stop() {
 cmd_restart() {
     cmd_stop
     sleep 1
+    # Clear Vite dependency cache to prevent React hook resolution issues
+    rm -rf "$PROJECT_DIR/frontend/node_modules/.vite" 2>/dev/null || true
     cmd_start
 }
 
