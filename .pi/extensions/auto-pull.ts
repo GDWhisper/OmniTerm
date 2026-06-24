@@ -13,15 +13,24 @@ export default function (pi: ExtensionAPI) {
     const { code: branchCode } = await pi.exec("git", ["rev-parse", "--is-inside-work-tree"]);
     if (branchCode !== 0) return;
 
+    // Stash dirty working tree before pull
+    const { stdout: statusOut } = await pi.exec("git", ["status", "--porcelain"]);
+    const hasChanges = statusOut.trim().length > 0;
+    if (hasChanges) {
+      await pi.exec("git", ["stash", "push", "-m", "auto-pull: stash before merge dev"]);
+    }
+
     // Fetch and merge latest dev into current branch
-    const { stdout, code } = await pi.exec("git", ["pull", "origin", "dev"], {
+    const { stdout, stderr, code } = await pi.exec("git", ["pull", "origin", "dev"], {
       timeout: 15000,
     });
 
     if (code !== 0) {
-      // Conflict: abort merge to leave repo in clean state
-      if (stdout.includes("CONFLICT") || stdout.includes("Automatic merge failed")) {
-        await pi.exec("git", ["merge", "--abort"]);
+      // Abort any in-progress merge to leave repo clean
+      await pi.exec("git", ["merge", "--abort"]);
+
+      const output = `${stdout}${stderr}`.trim();
+      if (output.includes("CONFLICT") || output.includes("Automatic merge failed")) {
         ctx.ui.notify("merge dev conflicted — aborted. Manual merge needed.", "warning");
         pi.sendMessage({
           customType: "auto-pull",
@@ -29,9 +38,19 @@ export default function (pi: ExtensionAPI) {
           display: true,
         });
       } else {
-        ctx.ui.notify(`git pull origin dev failed: ${stdout.trim()}`, "warning");
+        ctx.ui.notify(`git pull failed: ${output.slice(0, 200)}`, "warning");
+      }
+
+      // Restore stashed changes even on failure
+      if (hasChanges) {
+        await pi.exec("git", ["stash", "pop"]);
       }
       return;
+    }
+
+    // Restore stashed changes
+    if (hasChanges) {
+      await pi.exec("git", ["stash", "pop"]);
     }
 
     if (stdout.includes("Already up to date") || stdout.trim() === "") {
