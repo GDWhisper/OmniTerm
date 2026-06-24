@@ -31,37 +31,37 @@ export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps)
           justifyContent: 'center',
           height: '100%',
           gap: 12,
-          color: '#64748b',
+          color: 'var(--text-faint)',
           fontSize: 13,
           fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
         }}
       >
-        <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="#475569" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="2" width="12" height="12" rx="1" />
           <circle cx="6" cy="6" r="1.5" />
           <path d="M14 10l-3-3-5 5" />
         </svg>
         <span>{t('preview.loadFailed')}</span>
-        <span style={{ color: '#94a3b8', fontSize: 12 }}>{fileName}</span>
+        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>{fileName}</span>
         <a
           href={imageUrl}
           download={fileName}
           style={{
             marginTop: 4,
             padding: '4px 12px',
-            border: '1px solid #334155',
+            border: '1px solid var(--border-strong)',
             borderRadius: 5,
-            color: '#a78bfa',
+            color: 'var(--accent)',
             fontSize: 12,
             textDecoration: 'none',
             transition: 'all 0.15s ease',
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = '#a78bfa'
-            e.currentTarget.style.background = 'rgba(167,139,250,0.1)'
+            e.currentTarget.style.borderColor = 'var(--accent)'
+            e.currentTarget.style.background = 'var(--accent-10)'
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = '#334155'
+            e.currentTarget.style.borderColor = 'var(--border-strong)'
             e.currentTarget.style.background = 'transparent'
           }}
         >

@@ -52,11 +52,11 @@ function FileIcon({ entry }: { entry: FileEntry }) {
   switch (entry.path_type) {
     case 'Dir':
     case 'SymlinkDir':
-      return <IconFolder style={{ color: '#94a3b8', flexShrink: 0 }} />
+      return <IconFolder style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
     case 'SymlinkFile':
-      return <IconLink style={{ color: '#94a3b8', flexShrink: 0 }} />
+      return <IconLink style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
     case 'File':
-      return <IconFile style={{ color: '#64748b', flexShrink: 0 }} />
+      return <IconFile style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
   }
 }
 
@@ -372,7 +372,7 @@ export function FileManager() {
 
   const SI = ({ col }: { col: SortKey }) =>
     sortKey === col ? (
-      <span style={{ marginLeft: 4, fontSize: 10, color: '#a78bfa', userSelect: 'none' }}>
+      <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--accent)', userSelect: 'none' }}>
         {sortDesc ? '▼' : '▲'}
       </span>
     ) : null
@@ -381,30 +381,30 @@ export function FileManager() {
     return (
       <div
         className="h-full flex flex-col items-center relative"
-        style={{ background: '#0a0a0f', fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace", width: 40 }}
+        style={{ background: 'var(--bg-base)', fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace", width: 40 }}
       >
         <button
           onClick={toggleFileManagerCollapsed}
           className="flex items-center justify-center rounded-md transition-all mt-3"
-          style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
+          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
           title={t('fm.expand')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
         >
           ◀
         </button>
 
         <div className="flex-1 flex items-center justify-center">
-          <IconFolderOpen width={18} height={18} style={{ color: '#475569' }} />
+          <IconFolderOpen width={18} height={18} style={{ color: 'var(--text-dim)' }} />
         </div>
 
         <button
           onClick={toggleFileManagerCollapsed}
           className="flex items-center justify-center rounded-md transition-all mb-3"
-          style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
+          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
           title={t('fm.expand')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
         >
           ◀
         </button>
@@ -424,10 +424,10 @@ export function FileManager() {
           <button
             onClick={toggleFileManagerCollapsed}
             className="flex items-center justify-center rounded-md transition-all"
-            style={{ width: 24, height: 24, color: '#64748b', fontSize: 14 }}
+            style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
             title={t('fm.collapse')}
-            onMouseEnter={(e) => { e.currentTarget.style.color = '#a78bfa'; e.currentTarget.style.background = 'rgba(167,139,250,0.1)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = '#64748b'; e.currentTarget.style.background = 'transparent' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
           >
             ▶
           </button>
@@ -513,14 +513,14 @@ export function FileManager() {
       >
         {!activeSessionId ? (
           <div className="fm-empty">
-            <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: '#a78bfa', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
+            <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
             <span>{t('fm.selectSessionFirst')}</span>
           </div>
         ) : loading ? (
           <div className="fm-empty">{t('fm.loading')}</div>
         ) : files.length === 0 ? (
           <div className="fm-empty">
-            <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: '#a78bfa', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
+            <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
             <span>{t('fm.emptyDir')}</span>
             <span className="fm-empty-hint">{t('fm.dragHint')}</span>
           </div>
