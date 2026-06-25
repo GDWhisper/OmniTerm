@@ -198,8 +198,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const disposeTerminal = useCallback(() => {
     observerRef.current?.disconnect()
     observerRef.current = null
-    if (mouseUpHandlerRef.current && containerRef.current) {
-      containerRef.current.removeEventListener('mouseup', mouseUpHandlerRef.current)
+    if (mouseUpHandlerRef.current) {
+      mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
     }
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
@@ -267,16 +267,37 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     observerRef.current = observer
 
     // Auto-copy selected text to clipboard on mouse select
+    // Use onSelectionChange + mouseup combo: track latest selection during drag,
+    // copy on mouseup. This handles cases where xterm.js clears selection
+    // before our mouseup handler fires.
+    let latestSelection = ''
+    let mouseDown = false
+
+    const selDisposable = term.onSelectionChange(() => {
+      if (mouseDown) {
+        latestSelection = term.getSelection() || ''
+      }
+    })
+
+    const handleMouseDown = () => { mouseDown = true }
     const handleMouseUp = () => {
-      const selection = term.getSelection()
-      if (selection) {
-        navigator.clipboard.writeText(selection).catch(() => {
-          // Clipboard API may fail without user gesture or in insecure contexts
+      mouseDown = false
+      const sel = latestSelection || term.getSelection()
+      if (sel) {
+        navigator.clipboard.writeText(sel).catch(() => {
+          // Clipboard API may fail without user gesture or insecure contexts
         })
       }
+      latestSelection = ''
     }
+
+    container.addEventListener('mousedown', handleMouseDown)
     container.addEventListener('mouseup', handleMouseUp)
-    mouseUpHandlerRef.current = handleMouseUp
+    mouseUpHandlerRef.current = () => {
+      selDisposable.dispose()
+      container.removeEventListener('mousedown', handleMouseDown)
+      container.removeEventListener('mouseup', handleMouseUp)
+    }
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
@@ -303,8 +324,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     // Dispose old terminal — WS will reconnect via terminalReady effect
     observerRef.current?.disconnect()
     observerRef.current = null
-    if (mouseUpHandlerRef.current && containerRef.current) {
-      containerRef.current.removeEventListener('mouseup', mouseUpHandlerRef.current)
+    if (mouseUpHandlerRef.current) {
+      mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
     }
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
