@@ -44,6 +44,11 @@ const languages = [
   { value: 'en', label: 'En' },
 ]
 
+const keybindingModes = [
+  { value: 'tmux' as const, labelKey: 'settings.keybindingTmux' },
+  { value: 'modern' as const, labelKey: 'settings.keybindingModern' },
+]
+
 /* ── Neon border button style helpers ── */
 
 const btnBase: React.CSSProperties = {
@@ -88,7 +93,7 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 export function Settings() {
   const { t, i18n } = useTranslation()
   const { theme, setTheme } = useThemeStore()
-  const { fontSize, setFontSize } = useAppStore()
+  const { fontSize, setFontSize, keybindingMode, setKeybindingMode } = useAppStore()
 
   return (
     <div style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontFamily: FONT }}>
@@ -188,6 +193,33 @@ export function Settings() {
             className="w-full"
             style={{ accentColor: 'var(--accent)' }}
           />
+        </section>
+
+        {/* Keybinding Mode */}
+        <section className="space-y-3">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.keybinding')}</h3>
+          <div className="flex gap-2">
+            {keybindingModes.map((kb) => {
+              const isActive = keybindingMode === kb.value
+              return (
+                <button
+                  key={kb.value}
+                  onClick={() => setKeybindingMode(kb.value)}
+                  className="flex-1 flex items-center justify-center px-3 py-2.5 text-sm"
+                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12 }}
+                  onMouseEnter={btnHover}
+                  onMouseLeave={(e) => btnLeave(e, isActive)}
+                >
+                  {t(kb.labelKey)}
+                </button>
+              )
+            })}
+          </div>
+          {keybindingMode === 'modern' && (
+            <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              {t('settings.keybindingHint')}
+            </p>
+          )}
         </section>
 
         {/* Info */}
