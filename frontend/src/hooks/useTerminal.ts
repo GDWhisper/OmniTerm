@@ -304,6 +304,10 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     // Dispose old terminal — WS will reconnect via terminalReady effect
     observerRef.current?.disconnect()
     observerRef.current = null
+    if (mouseUpHandlerRef.current && containerRef.current) {
+      containerRef.current.removeEventListener('mouseup', mouseUpHandlerRef.current)
+      mouseUpHandlerRef.current = null
+    }
     listenerDisposablesRef.current.forEach((d) => d.dispose())
     listenerDisposablesRef.current = []
     if (wsRef.current) {
