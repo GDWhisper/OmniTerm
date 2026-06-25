@@ -55,6 +55,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const sessionIdRef = useRef<string | null>(null)
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
+  const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
 
@@ -198,6 +199,10 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const disposeTerminal = useCallback(() => {
     observerRef.current?.disconnect()
     observerRef.current = null
+    if (mouseUpHandlerRef.current && containerRef.current) {
+      containerRef.current.removeEventListener('mouseup', mouseUpHandlerRef.current)
+      mouseUpHandlerRef.current = null
+    }
     listenerDisposablesRef.current.forEach((d) => d.dispose())
     listenerDisposablesRef.current = []
     if (wsRef.current) {
@@ -261,6 +266,18 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     })
     observer.observe(container)
     observerRef.current = observer
+
+    // Auto-copy selected text to clipboard on mouse select
+    const handleMouseUp = () => {
+      const selection = term.getSelection()
+      if (selection) {
+        navigator.clipboard.writeText(selection).catch(() => {
+          // Clipboard API may fail without user gesture or in insecure contexts
+        })
+      }
+    }
+    container.addEventListener('mouseup', handleMouseUp)
+    mouseUpHandlerRef.current = handleMouseUp
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
