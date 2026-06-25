@@ -151,13 +151,13 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         const alt = ev.altKey
         const key = ev.key
 
-        // Ctrl+Shift+D → horizontal split
-        if (ctrl && shift && !alt && key === 'D') {
+        // Ctrl+Shift+Right → horizontal split
+        if (ctrl && shift && !alt && key === 'ArrowRight') {
           ws.send(new TextEncoder().encode('\x02%'))
           return false
         }
-        // Ctrl+Shift+S → vertical split
-        if (ctrl && shift && !alt && key === 'S') {
+        // Ctrl+Shift+Down → vertical split
+        if (ctrl && shift && !alt && key === 'ArrowDown') {
           ws.send(new TextEncoder().encode('\x02"'))
           return false
         }
@@ -166,9 +166,15 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
           ws.send(new TextEncoder().encode('\x02c'))
           return false
         }
-        // Ctrl+Shift+X → close pane
-        if (ctrl && shift && !alt && key === 'X') {
+        // Ctrl+Shift+W → close pane (send kill-pane + auto-confirm 'y')
+        if (ctrl && shift && !alt && key === 'W') {
           ws.send(new TextEncoder().encode('\x02x'))
+          // Auto-confirm the tmux kill-pane prompt
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(new TextEncoder().encode('y\n'))
+            }
+          }, 50)
           return false
         }
         // Ctrl+Shift+1-9 → switch window
@@ -267,35 +273,32 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     observerRef.current = observer
 
     // Auto-copy selected text to clipboard on mouse select
-    // Use onSelectionChange + mouseup combo: track latest selection during drag,
-    // copy on mouseup. This handles cases where xterm.js clears selection
-    // before our mouseup handler fires.
-    let latestSelection = ''
-    let mouseDown = false
-
-    const selDisposable = term.onSelectionChange(() => {
-      if (mouseDown) {
-        latestSelection = term.getSelection() || ''
-      }
-    })
-
-    const handleMouseDown = () => { mouseDown = true }
+    // xterm.js creates native selections when Shift is held (bypasses tmux mouse mode).
+    // We listen for mouseup and read the selection after xterm.js finishes processing.
     const handleMouseUp = () => {
-      mouseDown = false
-      const sel = latestSelection || term.getSelection()
-      if (sel) {
-        navigator.clipboard.writeText(sel).catch(() => {
-          // Clipboard API may fail without user gesture or insecure contexts
-        })
-      }
-      latestSelection = ''
+      // Defer to let xterm.js finish its internal mouseup handling
+      requestAnimationFrame(() => {
+        const sel = term.getSelection()
+        if (sel) {
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(sel).catch(() => {})
+          } else {
+            // Fallback for insecure contexts (non-HTTPS)
+            const ta = document.createElement('textarea')
+            ta.value = sel
+            ta.style.position = 'fixed'
+            ta.style.opacity = '0'
+            document.body.appendChild(ta)
+            ta.select()
+            document.execCommand('copy')
+            document.body.removeChild(ta)
+          }
+        }
+      })
     }
 
-    container.addEventListener('mousedown', handleMouseDown)
     container.addEventListener('mouseup', handleMouseUp)
     mouseUpHandlerRef.current = () => {
-      selDisposable.dispose()
-      container.removeEventListener('mousedown', handleMouseDown)
       container.removeEventListener('mouseup', handleMouseUp)
     }
 
