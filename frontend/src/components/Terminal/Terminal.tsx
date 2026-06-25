@@ -29,6 +29,8 @@ export function Terminal() {
         <div style={{ textAlign: 'center' }}>
           <div
             style={{
+              display: 'flex',
+              justifyContent: 'center',
               marginBottom: 16,
               color: 'var(--accent)',
               filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
