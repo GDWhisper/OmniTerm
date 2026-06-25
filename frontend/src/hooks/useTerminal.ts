@@ -300,7 +300,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
-  }, [fontSize, onTitleChange, resolved])
+  }, [fontSize, onTitleChange])
 
   // Initialize terminal once (when container becomes available)
   const initTerminal = useCallback((container: HTMLDivElement) => {
@@ -313,35 +313,12 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     }
   }, [createTerminal, disposeTerminal])
 
-  // Recreate terminal when theme changes (if terminal already exists)
+  // Update terminal theme in-place when user switches theme (no destroy/recreate)
   useEffect(() => {
-    // Only act if terminal is already initialized
-    if (!termRef.current || !containerRef.current) return
-
-    const container = containerRef.current
-
-    // Dispose old terminal — WS will reconnect via terminalReady effect
-    observerRef.current?.disconnect()
-    observerRef.current = null
-    if (mouseUpHandlerRef.current) {
-      mouseUpHandlerRef.current()
-      mouseUpHandlerRef.current = null
-    }
-    listenerDisposablesRef.current.forEach((d) => d?.dispose())
-    listenerDisposablesRef.current = []
-    if (wsRef.current) {
-      wsRef.current.onclose = null
-      wsRef.current.close()
-    }
-    wsRef.current = null
-    termRef.current.dispose()
-    termRef.current = null
-    fitRef.current = null
-    setTerminalReady(false)
-
-    // Create new terminal with updated theme
-    createTerminal(container)
-  }, [resolved, createTerminal])
+    if (!termRef.current) return
+    const theme = resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME
+    termRef.current.options.theme = theme
+  }, [resolved])
 
   // Connect WS when terminal is ready and session changes
   useEffect(() => {
