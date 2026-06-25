@@ -213,6 +213,11 @@ export function Sidebar() {
     color: 'var(--text-primary)',
   }
 
+  // Filter sessions for a specific project (collapsed view)
+  const sessionsForProject = (projId: string): Session[] => {
+    return sessions.filter(s => s.project_id === projId)
+  }
+
   // Filter sessions for a specific worktree
   const sessionsForWorktree = (wtPath: string): Session[] => {
     return sessions.filter(s => s.workspace_path === wtPath)
@@ -369,7 +374,10 @@ export function Sidebar() {
                       <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{proj.path}</span>
                     </div>
                   </div>
-                  <div className="flex items-center">
+                  <div className="flex items-center gap-1.5">
+                    <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
+                      ({sessionsForProject(proj.id).length})
+                    </span>
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -423,11 +431,9 @@ export function Sidebar() {
                                 >
                                   {wt.label}
                                 </span>
-                                {wt.branch && (
-                                  <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
-                                    ({wtSessions.length})
-                                  </span>
-                                )}
+                                <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
+                                  ({wtSessions.length})
+                                </span>
                               </div>
                             </div>
 
