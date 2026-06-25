@@ -423,11 +423,6 @@ export function Sidebar() {
                                 >
                                   {wt.label}
                                 </span>
-                                {wt.branch && (
-                                  <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
-                                    ({wtSessions.length})
-                                  </span>
-                                )}
                               </div>
                             </div>
 
