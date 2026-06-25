@@ -23,6 +23,9 @@ interface AppState {
   // Terminal
   fontSize: number
 
+  // Keybinding
+  keybindingMode: 'tmux' | 'modern'
+
   // Data
   projects: Project[]
   worktrees: Record<string, Workspace[]> // keyed by project_id
@@ -53,6 +56,7 @@ interface AppState {
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
+  setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (s: Session[]) => void
@@ -79,6 +83,7 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || '300'),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
+  keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
 
   projects: [],
   worktrees: {},
@@ -108,6 +113,11 @@ export const useAppStore = create<AppState>((set) => ({
     const clamped = Math.max(10, Math.min(24, s))
     localStorage.setItem('omniterm_font_size', String(clamped))
     set({ fontSize: clamped })
+  },
+
+  setKeybindingMode: (mode) => {
+    localStorage.setItem('omniterm_keybinding_mode', mode)
+    set({ keybindingMode: mode })
   },
 
   setProjects: (projects) => set({ projects }),
