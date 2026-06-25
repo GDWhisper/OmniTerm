@@ -186,22 +186,6 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
           }, 50)
           return false
         }
-        // Ctrl+Shift+1-9 → switch window
-        if (ctrl && shift && !alt && key >= '1' && key <= '9') {
-          ws.send(new TextEncoder().encode('\x02' + key))
-          return false
-        }
-        // Ctrl+Alt+Arrow → switch pane
-        if (ctrl && !shift && alt && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
-          const arrowMap: Record<string, string> = {
-            ArrowUp: '\x02\x1b[A',
-            ArrowDown: '\x02\x1b[B',
-            ArrowRight: '\x02\x1b[C',
-            ArrowLeft: '\x02\x1b[D',
-          }
-          ws.send(new TextEncoder().encode(arrowMap[key]))
-          return false
-        }
 
         return true // not intercepted — let xterm handle normally
       })
