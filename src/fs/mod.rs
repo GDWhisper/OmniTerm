@@ -79,11 +79,9 @@ fn join_and_validate(base: &Path, requested: &str) -> Result<PathBuf> {
     }
 
     let requested_path = Path::new(requested);
+    // ponytail: absolute paths under base are used directly (canonicalize + starts_with still guards traversal)
     let joined = if requested_path.is_absolute() {
-        let stripped = requested_path
-            .strip_prefix("/")
-            .unwrap_or(requested_path);
-        base.join(stripped)
+        requested_path.to_path_buf()
     } else {
         base.join(requested_path)
     };
