@@ -3,21 +3,7 @@
 Web-based tmux terminal manager. Three-panel layout: Sidebar | Terminal | FileManager.
 Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
-## Current Progress
-
-**Phase 1-8b complete (2026-06-22). ~3500 lines total.**
-
-| Phase | Status | Notes |
-|-------|--------|-------|
-| 1. Backend skeleton | ✅ | Axum, SQLite, auth, CRUD APIs |
-| 2. Terminal persistence | ✅ | tmux management, PTY (portable-pty), WebSocket bridge |
-| 3. Agent Hook monitoring | ✅ | Pane scanning, heuristic state detection |
-| 4. File management API | ✅ | List/upload/download/read/write/mkdir/delete/rename/move/copy/search |
-| 5. Frontend skeleton | ✅ | Vite + React + Tailwind + xterm.js, three-panel layout |
-| 6. File manager integration | ✅ | Custom dufs-inspired file table (replaced cubone), upload, dark theme |
-| 7. Polish | ✅ | Themes, mobile IME, font sizing, toast errors, Dockerfile |
-| 8. Frontend UI unification | ✅ | Dark violet-on-black palette across Sidebar/Terminal/FileManager, vertical file-manager layout with drag bar, shared drag-bar styling, localized empty states |
-| 8b. Drag-bar architecture upgrade | ✅ | MutationObserver relocates cubone's `.sidebar-resize` out of nav-pane into a flex sibling (real pane boundary, scroll-immune); unified dark-tech scrollbar (`#334155` thumb / `#0a0a0f` track) |
+> 进度里程碑见 `PROGRESS.md`
 
 ## Development Conventions
 
