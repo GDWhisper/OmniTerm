@@ -8,7 +8,7 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::models::project::{CreateProject, Project, ProjectWithCount, UpdateProject};
+use crate::models::project::{CreateProject, Project, UpdateProject};
 use crate::workspaces;
 use crate::AppState;
 
@@ -23,13 +23,11 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
-    let projects: Vec<ProjectWithCount> =
-        sqlx::query_as(
-            "SELECT p.*, COUNT(s.id) as session_count FROM projects p LEFT JOIN sessions s ON s.project_id = p.id GROUP BY p.id ORDER BY p.created_at DESC",
-        )
-        .fetch_all(&state.db)
-        .await
-        .unwrap();
+    let projects: Vec<Project> =
+        sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
 
     Json(json!(projects))
 }

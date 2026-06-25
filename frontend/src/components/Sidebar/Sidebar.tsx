@@ -369,10 +369,7 @@ export function Sidebar() {
                       <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{proj.path}</span>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
-                      ({proj.session_count})
-                    </span>
+                  <div className="flex items-center">
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -426,9 +423,11 @@ export function Sidebar() {
                                 >
                                   {wt.label}
                                 </span>
-                                <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
-                                  ({wtSessions.length})
-                                </span>
+                                {wt.branch && (
+                                  <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
+                                    ({wtSessions.length})
+                                  </span>
+                                )}
                               </div>
                             </div>
 
