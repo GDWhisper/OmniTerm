@@ -166,8 +166,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
           ws.send(new TextEncoder().encode('\x02c'))
           return false
         }
-        // Ctrl+Shift+W → close pane (send kill-pane + auto-confirm 'y')
-        if (ctrl && shift && !alt && key === 'W') {
+        // Ctrl+Shift+X → close pane (send kill-pane + auto-confirm 'y')
+        if (ctrl && shift && !alt && key === 'X') {
           ws.send(new TextEncoder().encode('\x02x'))
           // Auto-confirm the tmux kill-pane prompt
           setTimeout(() => {

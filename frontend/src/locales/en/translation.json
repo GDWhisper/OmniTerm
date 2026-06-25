@@ -39,7 +39,7 @@
   "settings.keybinding": "Keyboard Shortcuts",
   "settings.keybindingTmux": "tmux Native",
   "settings.keybindingModern": "Modern",
-  "settings.keybindingHint": "Modern mode: Ctrl+Shift+→/↓ split, Ctrl+Shift+Q new window, Ctrl+Shift+W close, Ctrl+Alt+Arrow switch pane, Ctrl+Shift+1-9 switch window",
+  "settings.keybindingHint": "Modern mode: Ctrl+Shift+→/↓ split, Ctrl+Shift+Q new window, Ctrl+Shift+X close, Ctrl+Alt+Arrow switch pane, Ctrl+Shift+1-9 switch window",
   "terminal.noSession": "Select or create a session",
   "terminal.hint": "Use the sidebar to get started",
   "terminal.status.connected": "Connected",

@@ -39,7 +39,7 @@
   "settings.keybinding": "快捷键模式",
   "settings.keybindingTmux": "tmux 原生",
   "settings.keybindingModern": "现代化",
-  "settings.keybindingHint": "现代化模式：Ctrl+Shift+→/↓ 分屏，Ctrl+Shift+Q 新建窗口，Ctrl+Shift+W 关闭，Ctrl+Alt+方向键 切换窗格，Ctrl+Shift+1-9 切换窗口",
+  "settings.keybindingHint": "现代化模式：Ctrl+Shift+→/↓ 分屏，Ctrl+Shift+Q 新建窗口，Ctrl+Shift+X 关闭，Ctrl+Alt+方向键 切换窗格，Ctrl+Shift+1-9 切换窗口",
   "terminal.noSession": "选择或创建一个会话",
   "terminal.hint": "使用左侧边栏开始",
   "terminal.status.connected": "已连接",
