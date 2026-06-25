@@ -161,3 +161,5 @@
       at async loadAndTransform (file:///home/pax/coding/OmniTerm-dev/frontend/node_modules/.pnpm/vite@8.0.16_@types+node@24.13.2_jiti@2.7.0/node_modules/vite/dist/node/chunks/node.js:24646:26)
       at async viteTransformMiddleware (file:///home/pax/coding/OmniTerm-dev/frontend/node_modules/.pnpm/vite@8.0.16_@types+node@24.13.2_jiti@2.7.0/node_modules/vite/dist/node/chunks/node.js:24440:20)
 17:58:50 [vite] (client) hmr update /src/index.css, /src/components/Terminal/Terminal.tsx
+17:59:07 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+17:59:15 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx

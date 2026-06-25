@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
@@ -11,6 +11,35 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+
+function ProjectPath({ path }: { path: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [overflow, setOverflow] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setOverflow(el.scrollWidth > el.clientWidth)
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    check()
+    return () => ro.disconnect()
+  }, [path])
+
+  return (
+    <span
+      ref={ref}
+      className="block truncate"
+      style={{
+        fontSize: 11,
+        color: 'var(--text-faint)',
+        direction: overflow ? 'rtl' : 'ltr',
+      }}
+    >
+      {path}
+    </span>
+  )
+}
 
 export function Sidebar() {
   const {
@@ -365,7 +394,7 @@ export function Sidebar() {
                       </span>
                     </div>
                     <div className="pl-5 mt-0.5">
-                      <span className="block truncate" style={{ fontSize: 11, color: 'var(--text-faint)', direction: 'rtl' }}>{proj.path}</span>
+                      <ProjectPath path={proj.path} />
                     </div>
                   </div>
                   <div className="flex items-center">
