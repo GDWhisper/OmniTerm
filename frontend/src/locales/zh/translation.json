@@ -38,7 +38,7 @@
   "settings.about": "关于",
   "settings.keybinding": "快捷键模式",
   "settings.keybindingTmux": "tmux 原生",
-  "settings.keybindingModern": "现代化",
+  "settings.keybindingModern": "现代化（实验性）",
   "settings.keybindingHint": "现代化模式：Ctrl+Shift+→/↓ 分屏，Ctrl+Shift+Q 新建窗口，Ctrl+Shift+X 关闭",
   "terminal.noSession": "选择或创建一个会话",
   "terminal.hint": "使用左侧边栏开始",
