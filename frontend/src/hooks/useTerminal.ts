@@ -149,6 +149,9 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         const mode = useAppStore.getState().keybindingMode
         if (mode !== 'modern') return true
 
+        // Only handle keydown, ignore keyup to prevent double-trigger
+        if (ev.type !== 'keydown') return true
+
         // Debounce: ignore key repeat events
         if (ev.repeat) return true
 
