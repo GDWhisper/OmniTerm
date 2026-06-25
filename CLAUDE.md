@@ -124,12 +124,24 @@ docker compose up --build    # 后端 :9777
 
 ### 远程仓库策略
 
-- **私有仓**（`origin`）：存放所有分支，日常 push/pull
-- **公开仓**（`public`）：只推送 `main` 分支，用于对外发布
+- **私有仓**（`origin`）：存放所有分支（main/dev/debug），完整开发历史
+- **公开仓**（`public`）：只推送 `release` 分支（干净代码），用于对外发布
 
 ```bash
 git remote add origin git@github.com:yourname/OmniTerm-private.git
 git remote add public git@github.com:yourname/OmniTerm.git
+```
+
+### Release 分支发布流程
+
+```bash
+cd ~/coding/OmniTerm          # main worktree
+git checkout release
+git merge main --no-commit     # 合并 main 最新代码
+git reset HEAD openspec/ docs/ AGENTS.md  # 排除开发文档
+git checkout -- openspec/ docs/ AGENTS.md
+git commit -m "release: v1.x.x"
+git push public release:main   # 推送到公开仓
 ```
 
 ## CodeGraph
