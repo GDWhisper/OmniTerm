@@ -1,22 +1,8 @@
 import { create } from 'zustand'
+import type { Project, Workspace, Session } from '../api/client'
 
-interface Workspace {
-  id: string
-  name: string
-  root_path: string
-  target_id?: string
-  created_at: string
-}
-
-interface Session {
-  id: string
-  workspace_id: string
-  name?: string
-  tmux_session_name?: string
-  hook_enabled: boolean
-  hook_status?: string
-  created_at: string
-}
+// Re-export for convenience
+export type { Project, Workspace, Session }
 
 interface FmSessionState {
   mode: 'following' | 'manual'
@@ -37,10 +23,15 @@ interface AppState {
   // Terminal
   fontSize: number
 
+  // Keybinding
+  keybindingMode: 'tmux' | 'modern'
+
   // Data
-  workspaces: Workspace[]
+  projects: Project[]
+  worktrees: Record<string, Workspace[]> // keyed by project_id
   sessions: Session[]
-  activeWorkspaceId: string | null
+  activeProjectId: string | null
+  activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
 
   // FM session states
@@ -65,8 +56,11 @@ interface AppState {
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
-  setWorkspaces: (ws: Workspace[]) => void
+  setKeybindingMode: (mode: 'tmux' | 'modern') => void
+  setProjects: (p: Project[]) => void
+  setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (s: Session[]) => void
+  setActiveProject: (id: string | null) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
   setConnected: (v: boolean) => void
@@ -89,9 +83,12 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || '300'),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
+  keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
 
-  workspaces: [],
+  projects: [],
+  worktrees: {},
   sessions: [],
+  activeProjectId: null,
   activeWorkspaceId: null,
   activeSessionId: null,
 
@@ -118,8 +115,16 @@ export const useAppStore = create<AppState>((set) => ({
     set({ fontSize: clamped })
   },
 
-  setWorkspaces: (workspaces) => set({ workspaces }),
+  setKeybindingMode: (mode) => {
+    localStorage.setItem('omniterm_keybinding_mode', mode)
+    set({ keybindingMode: mode })
+  },
+
+  setProjects: (projects) => set({ projects }),
+  setWorktrees: (projectId, ws) =>
+    set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (sessions) => set({ sessions }),
+  setActiveProject: (id) => set({ activeProjectId: id }),
   setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
   setActiveSession: (id) => set({ activeSessionId: id }),
   setConnected: (v) => set({ connected: v }),

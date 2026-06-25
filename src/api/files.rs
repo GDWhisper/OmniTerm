@@ -75,10 +75,10 @@ struct WriteRequest {
     content: String,
 }
 
-/// Resolve workspace root path from workspace ID.
-pub async fn resolve_workspace_root(state: &AppState, workspace_id: &str) -> Option<String> {
-    sqlx::query_as::<_, (String,)>("SELECT root_path FROM workspaces WHERE id = ?")
-        .bind(workspace_id)
+/// Resolve project root path from project ID.
+pub async fn resolve_project_root(state: &AppState, project_id: &str) -> Option<String> {
+    sqlx::query_as::<_, (String,)>("SELECT path FROM projects WHERE id = ?")
+        .bind(project_id)
         .fetch_optional(&state.db)
         .await
         .ok()
@@ -99,7 +99,7 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 /// Resolve base path from session ID (via tmux pane CWD).
 /// Returns (base_path, tmux_session_name).
 /// If the tmux session is missing (e.g. tmux server restarted), re-creates it
-/// using the workspace root_path as fallback CWD.
+/// using the workspace_path as fallback CWD.
 pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
     let tmux_name: (String,) =
         sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
@@ -133,10 +133,10 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
     }
 }
 
-/// Get workspace root_path for a session (used for is_outside_workspace check).
+/// Get workspace_path for a session (used for is_outside_workspace check).
 async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> Option<String> {
     sqlx::query_as::<_, (String,)>(
-        "SELECT w.root_path FROM workspaces w JOIN sessions s ON s.workspace_id = w.id WHERE s.id = ?",
+        "SELECT workspace_path FROM sessions WHERE id = ?",
     )
     .bind(session_id)
     .fetch_optional(&state.db)
@@ -146,19 +146,19 @@ async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> O
     .map(|(p,)| p)
 }
 
-/// Resolve base path from query: prefer session over workspace.
+/// Resolve base path from query: prefer session over project.
 /// Returns (base_path, is_session_mode).
 pub async fn resolve_base_from_query(
     state: &AppState,
     session: Option<&str>,
-    workspace: Option<&str>,
+    project: Option<&str>,
 ) -> Option<(std::path::PathBuf, bool)> {
     if let Some(sid) = session {
         let (cwd, _) = resolve_session_base(state, sid).await?;
         Some((std::path::PathBuf::from(cwd), true))
     } else {
-        let wid = workspace.unwrap_or("default");
-        let root = resolve_workspace_root(state, wid).await?;
+        let pid = project.unwrap_or("default");
+        let root = resolve_project_root(state, pid).await?;
         Some((std::path::PathBuf::from(root), false))
     }
 }
@@ -223,14 +223,14 @@ async fn list_files(
             }
         }
     } else {
-        // Original workspace-based mode
-        let workspace_id = q.workspace.as_deref().unwrap_or("default");
+        // Project-based mode
+        let project_id = q.workspace.as_deref().unwrap_or("default");
         let rel_path = q.path.as_deref().unwrap_or("");
 
-        let Some(root) = resolve_workspace_root(&state, workspace_id).await else {
+        let Some(root) = resolve_project_root(&state, project_id).await else {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "workspace not found" })),
+                Json(json!({ "error": "project not found" })),
             );
         };
 

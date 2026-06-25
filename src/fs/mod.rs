@@ -154,11 +154,6 @@ pub async fn list_dir(
     while let Some(entry) = read_dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        // Skip hidden files
-        if name.starts_with('.') {
-            continue;
-        }
-
         let meta = fs::metadata(entry.path()).await?;
         let meta2 = fs::symlink_metadata(entry.path()).await?;
         let is_symlink = meta2.is_symlink();
@@ -179,15 +174,11 @@ pub async fn list_dir(
             .map(|t| to_timestamp(&t))
             .unwrap_or(0);
 
-        // For directories, count visible entries (like dufs)
+        // For directories, count entries (like dufs)
         let size = if is_dir {
             let mut count: u64 = 0;
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
-                while let Some(sub_entry) = sub.next_entry().await? {
-                    let sub_name = sub_entry.file_name().to_string_lossy().to_string();
-                    if sub_name.starts_with('.') {
-                        continue;
-                    }
+                while let Some(_sub_entry) = sub.next_entry().await? {
                     count += 1;
                     if count >= MAX_SUBPATHS_COUNT {
                         break;

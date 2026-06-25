@@ -45,7 +45,30 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-06-25 11:00) `[backend]` Git worktree 发现模块 — `git worktree list --porcelain` 解析，实时查询 project 下所有分支/工作树（`src/git/mod.rs`）
+- (2026-06-25 11:00) `[backend]` Project 模型替代 Workspace — 语义明确为 git 仓库，持久化到 DB（`src/models/project.rs`）
+- (2026-06-25 11:00) `[backend]` `GET /api/v1/projects/{pid}/worktrees` 端点 — 实时返回项目的所有 git worktree，确定性 ID（SHA1 前 12 位）（`src/api/projects.rs`）
+- (2026-06-25 11:00) `[backend]` Workspace 运行时模块 — 非 git 仓库退化为单 workspace，git 仓库自动发现 worktree（`src/workspaces.rs`）
+- (2026-06-25 11:00) `[backend]` 数据库迁移脚本 — `workspaces` → `projects` 改名，`sessions` 新增 `project_id` + `workspace_path` 列（`migrations/20260625_workspace_to_project.sql`）
+- (2026-06-25 11:00) `[frontend]` GitBranchIcon 组件 — SVG 分支图标，模仿 git logo 节点分叉形状（`frontend/src/components/Icons/GitBranchIcon.tsx`）
+
 ### Changed
+
+- (2026-06-25 11:00) `[frontend]` Sidebar 从两级（Workspace → Session）重构为三级树（Project → Workspace/Worktree → Session）— 展开 project 自动显示 git 分支，选中分支后显示关联 session（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-06-25 11:00) `[backend]` Session 绑定从 workspace 改为 worktree 路径 — `pane_cwd` 自动等于 `workspace_path`，文件管理器跟随切换（`src/api/sessions.rs`）
+- (2026-06-25 11:00) `[api]` 端点从 `/workspaces/*` 迁移到 `/projects/*` — `POST /projects/{pid}/sessions` 新增 `workspace_path` 参数（`src/api/projects.rs`）
+- (2026-06-25 11:00) `[frontend]` appStore 状态重构 — `workspaces` → `projects` + `worktrees`（Record 按 project 分组），新增 `activeProjectId`（`frontend/src/stores/appStore.ts`）
+- (2026-06-25 11:00) `[frontend]` 移除 Sidebar 中的 emoji — 项目名去除 📁 前缀，worktree 使用 GitBranchIcon 替代 🌿（`frontend/src/components/Sidebar/Sidebar.tsx`）
+
+### Removed
+
+- (2026-06-25 11:00) `[backend]` Workspace 模型和 API — 被 Project 替代（`src/models/workspace.rs`、`src/api/workspaces.rs`）
+
+### Fixed
+
+- (2026-06-25 11:00) `[backend]` 迁移 SQL 中 `w.path` 修正为 `w.root_path` — 旧表列名错误导致迁移失败（`migrations/20260625_workspace_to_project.sql`）
 
 - (2026-06-23 19:30) `[frontend]` FileManager 搜索框改为图标触发式弹出 — 点击搜索图标后输入框浮现在图标下方，支持 Escape 和点击外部关闭（`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-06-23 19:35) `[frontend]` FileManager 面包屑根路径从 `/` 改为工作台图标 — 带紫色边框方框，风格与 WRKSPACES `+` 号一致（`frontend/src/components/FileManager/icons.tsx`）

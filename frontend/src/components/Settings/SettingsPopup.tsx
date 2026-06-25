@@ -1,14 +1,57 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
 
-// Status bar height: py-3 (24px) + content (~26px). Update if Sidebar status bar layout changes.
-const STATUS_BAR_H = 50
+const POPUP_WIDTH = 340
+const GAP = 8
 
 export function SettingsPopup() {
   const ref = useRef<HTMLDivElement>(null)
-  const sidebarCollapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 })
+
+  // Calculate position based on gear button's bounding rect
+  const calcPos = useCallback(() => {
+    const btn = document.querySelector('[data-settings-toggle]') as HTMLElement | null
+    if (!btn) return
+    const rect = btn.getBoundingClientRect()
+    const vw = window.innerWidth
+    const bottom = window.innerHeight - rect.top + GAP
+
+    // Prefer left-align to button; if popup overflows right edge, right-align instead
+    let left = rect.left
+    if (left + POPUP_WIDTH + GAP > vw) {
+      left = vw - POPUP_WIDTH - GAP
+    }
+    // Clamp left edge
+    left = Math.max(GAP, left)
+
+    setPos({ bottom, left })
+  }, [])
+
+  // Recalculate on open
+  useEffect(() => {
+    calcPos()
+  }, [calcPos])
+
+  // Viewport boundary protection: if popup would overflow top, flip to below
+  useEffect(() => {
+    if (!ref.current) return
+    const el = ref.current
+    const popupRect = el.getBoundingClientRect()
+    if (popupRect.top < 0) {
+      // Flip: show below the button instead
+      const btn = document.querySelector('[data-settings-toggle]') as HTMLElement | null
+      if (btn) {
+        const rect = btn.getBoundingClientRect()
+        const vw = window.innerWidth
+        let left = rect.left
+        if (left + POPUP_WIDTH + GAP > vw) left = vw - POPUP_WIDTH - GAP
+        left = Math.max(GAP, left)
+        setPos({ top: rect.bottom + GAP, left })
+      }
+    }
+  }, [pos])
 
   // Click outside to close (ignore clicks on the gear toggle button)
   useEffect(() => {
@@ -31,28 +74,16 @@ export function SettingsPopup() {
     return () => document.removeEventListener('keydown', onKey)
   }, [toggleSettings])
 
-  const expanded = !sidebarCollapsed
-
   return (
     <div
       ref={ref}
       onMouseDown={(e) => e.stopPropagation()}
       className="settings-popup"
       style={{
-        position: 'absolute',
-        ...(expanded
-          ? {
-              bottom: STATUS_BAR_H,
-              left: 0,
-              width: '100%',
-              maxHeight: `calc(100% - ${STATUS_BAR_H}px - 8px)`,
-            }
-          : {
-              bottom: 0,
-              left: '100%',
-              width: 280,
-              maxHeight: 400,
-            }),
+        position: 'fixed',
+        ...pos,
+        width: POPUP_WIDTH,
+        maxHeight: 'calc(100vh - 16px)',
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',

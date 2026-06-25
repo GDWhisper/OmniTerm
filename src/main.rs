@@ -1,9 +1,11 @@
 mod api;
 mod auth;
 mod fs;
+mod git;
 mod models;
 mod tmux;
 mod utils;
+mod workspaces;
 mod ws;
 
 use axum::Router;

@@ -78,9 +78,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
 
     info!("terminal WS connected: session={} tmux={}", session_id, tmux_name);
 
-    // Look up workspace root_path for the tmux session CWD
+    // Look up workspace_path for the tmux session CWD
     let cwd: Option<(String,)> = sqlx::query_as(
-        "SELECT w.root_path FROM workspaces w JOIN sessions s ON s.workspace_id = w.id WHERE s.id = ?",
+        "SELECT workspace_path FROM sessions WHERE id = ?",
     )
     .bind(&session_id)
     .fetch_optional(&state.db)

@@ -15,7 +15,7 @@ use tokio::sync::broadcast;
 
 use crate::AppState;
 
-use super::files::{resolve_session_base, resolve_workspace_root};
+use super::files::{resolve_session_base, resolve_project_root};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/files/watch", get(watch_files))
@@ -40,7 +40,7 @@ async fn watch_files(
             .map(|(cwd, _)| PathBuf::from(cwd))
     } else {
         let wid = q.workspace.as_deref().unwrap_or("default");
-        resolve_workspace_root(&state, wid)
+        resolve_project_root(&state, wid)
             .await
             .map(PathBuf::from)
     };

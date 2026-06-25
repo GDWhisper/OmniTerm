@@ -3,10 +3,10 @@ pub mod files;
 pub mod files_watch;
 pub mod health;
 pub mod hooks;
+pub mod projects;
 pub mod sessions;
 pub mod system;
 pub mod targets;
-pub mod workspaces;
 
 use axum::Router;
 use crate::AppState;
@@ -18,7 +18,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(system::routes())
         .merge(targets::routes())
-        .merge(workspaces::routes())
+        .merge(projects::routes())
         .merge(sessions::routes())
         .merge(hooks::routes())
         .merge(files::routes())

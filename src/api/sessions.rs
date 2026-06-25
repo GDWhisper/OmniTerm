@@ -16,7 +16,7 @@ use crate::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
-            "/workspaces/{wid}/sessions",
+            "/projects/{pid}/sessions",
             get(list_sessions).post(create_session),
         )
         .route(
@@ -28,11 +28,11 @@ pub fn routes() -> Router<AppState> {
 
 async fn list_sessions(
     State(state): State<AppState>,
-    Path(wid): Path<String>,
+    Path(pid): Path<String>,
 ) -> impl IntoResponse {
     let sessions: Vec<Session> =
-        sqlx::query_as("SELECT * FROM sessions WHERE workspace_id = ? ORDER BY created_at DESC")
-            .bind(&wid)
+        sqlx::query_as("SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
+            .bind(&pid)
             .fetch_all(&state.db)
             .await
             .unwrap();
@@ -42,33 +42,35 @@ async fn list_sessions(
 
 async fn create_session(
     State(state): State<AppState>,
-    Path(wid): Path<String>,
+    Path(pid): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> impl IntoResponse {
-    // Look up workspace root_path for tmux cwd
-    let workspace: Option<(String,)> =
-        sqlx::query_as("SELECT root_path FROM workspaces WHERE id = ?")
-            .bind(&wid)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
-
-    let root_path = workspace
-        .map(|(p,)| p)
-        .unwrap_or_else(|| {
-            dirs().unwrap_or_else(|| "/tmp".to_string())
-        });
-
-    // Expand ~ and validate root_path exists
-    let root_path = if root_path == "~" || root_path.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-        root_path.replacen('~', &home, 1)
+    // Resolve workspace_path: use provided path, fallback to project path
+    let workspace_path = if req.workspace_path.is_empty() {
+        // Fallback: get project path
+        let project_path: Option<(String,)> =
+            sqlx::query_as("SELECT path FROM projects WHERE id = ?")
+                .bind(&pid)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+        project_path
+            .map(|(p,)| p)
+            .unwrap_or_else(|| dirs().unwrap_or_else(|| "/tmp".to_string()))
     } else {
-        root_path
+        req.workspace_path.clone()
     };
-    let root_path = if std::path::Path::new(&root_path).exists() {
-        root_path
+
+    // Expand ~ and validate workspace_path exists
+    let workspace_path = if workspace_path == "~" || workspace_path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        workspace_path.replacen('~', &home, 1)
+    } else {
+        workspace_path
+    };
+    let workspace_path = if std::path::Path::new(&workspace_path).exists() {
+        workspace_path
     } else {
         std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
     };
@@ -77,19 +79,19 @@ async fn create_session(
     let tmux_name = format!("lt_{}", &id[..8]);
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Create the tmux session
-    if let Err(e) = tmux::new_session(&tmux_name, &root_path).await {
+    // Create the tmux session with workspace_path as cwd
+    if let Err(e) = tmux::new_session(&tmux_name, &workspace_path).await {
         error!("failed to create tmux session: {}", e);
-        // Continue anyway - the session record is still useful
     } else {
-        info!("created tmux session: {} (cwd: {})", tmux_name, root_path);
+        info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
     }
 
     sqlx::query(
-        "INSERT INTO sessions (id, workspace_id, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, 0, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
     )
     .bind(&id)
-    .bind(&wid)
+    .bind(&pid)
+    .bind(&workspace_path)
     .bind(&req.name)
     .bind(&tmux_name)
     .bind(&now)
@@ -99,7 +101,8 @@ async fn create_session(
 
     let session = Session {
         id,
-        workspace_id: wid,
+        project_id: pid,
+        workspace_path,
         name: req.name,
         tmux_session_name: Some(tmux_name),
         hook_enabled: false,
