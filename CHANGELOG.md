@@ -47,6 +47,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-06-25 14:30) `[frontend]` 鼠标拖选自动复制 — Shift+拖拽绕过 tmux 鼠标模式，松手自动写入剪贴板，支持 navigator.clipboard 降级方案（`frontend/src/hooks/useTerminal.ts`）
 - (2026-06-25 11:00) `[backend]` Git worktree 发现模块 — `git worktree list --porcelain` 解析，实时查询 project 下所有分支/工作树（`src/git/mod.rs`）
 - (2026-06-25 11:00) `[backend]` Project 模型替代 Workspace — 语义明确为 git 仓库，持久化到 DB（`src/models/project.rs`）
 - (2026-06-25 11:00) `[backend]` `GET /api/v1/projects/{pid}/worktrees` 端点 — 实时返回项目的所有 git worktree，确定性 ID（SHA1 前 12 位）（`src/api/projects.rs`）
@@ -56,6 +57,11 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-06-25 14:30) `[frontend]` 亮色主题改为暖灰底色 — 背景 `#f0ece6`、文字 `#1c1917`，对比度 AAA 级，消除纯白刺眼（`frontend/src/index.css`）
+- (2026-06-25 14:30) `[frontend]` 亮色终端主题同步改为暖灰 — 底色 `#ece8e1`、前景 `#1c1917`、ANSI 16 色暖调适配（`frontend/src/hooks/useTerminal.ts`）
+- (2026-06-25 14:30) `[frontend]` Settings 面板 UI 比例优化 — 节标题 11px uppercase、按钮缩小、字号显示 18px、间距收紧（`frontend/src/components/Settings/Settings.tsx`）
+- (2026-06-25 14:30) `[frontend]` 终端空状态 emoji ⌨️ 替换为 SVG KeyboardIcon — stroke-based、currentColor，符合 UI 规范（`frontend/src/components/Icons/KeyboardIcon.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
+- (2026-06-25 14:30) `[frontend]` Slogan 更新为「万千智能体汇于一端」/ "All agents in one term"，移除 Phase 7 标签（`frontend/src/locales/*/translation.json`）
 - (2026-06-25 11:00) `[frontend]` Sidebar 从两级（Workspace → Session）重构为三级树（Project → Workspace/Worktree → Session）— 展开 project 自动显示 git 分支，选中分支后显示关联 session（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-06-25 11:00) `[backend]` Session 绑定从 workspace 改为 worktree 路径 — `pane_cwd` 自动等于 `workspace_path`，文件管理器跟随切换（`src/api/sessions.rs`）
 - (2026-06-25 11:00) `[api]` 端点从 `/workspaces/*` 迁移到 `/projects/*` — `POST /projects/{pid}/sessions` 新增 `workspace_path` 参数（`src/api/projects.rs`）
