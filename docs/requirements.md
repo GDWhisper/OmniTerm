@@ -14,9 +14,9 @@
 
 - [ ] **Sidebar 新增使用指南入口** — 在 Sidebar 设置齿轮旁边新增一个书本样式的图标按钮，点击后弹出 tmux 常用命令速查面板，帮助未接触过 tmux 的用户快速上手。
 
-## 快捷键设置 ⚪
+## 快捷键设置 🟡
 
-- [ ] **设置界面增加快捷键模式切换** — 在设置页面（Settings）中加入一个开关，允许用户在 `tmux 原生快捷键` 和 `现代化快捷键` 之间切换。
+- [ ] **插件化快捷键模式** — 通过 tmux 插件生态（如 tmux-sensible, tmux-pain-control 等）实现快捷键定制，OmniTerm 提供 UI 开关和插件管理，不重复造轮子。底层拦截代码已就绪（appStore.keybindingMode + useTerminal handler），等插件系统就绪后激活。
 
 ## 改动记录 ⚪
 
