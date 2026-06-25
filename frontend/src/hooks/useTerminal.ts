@@ -46,7 +46,6 @@ const LIGHT_TERMINAL_THEME = {
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const resolved = useThemeStore((s) => s.resolved)
-  const keybindingMode = useAppStore((s) => s.keybindingMode)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
