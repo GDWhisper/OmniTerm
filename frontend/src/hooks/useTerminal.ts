@@ -46,6 +46,7 @@ const LIGHT_TERMINAL_THEME = {
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const resolved = useThemeStore((s) => s.resolved)
+  const keybindingMode = useAppStore((s) => s.keybindingMode)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -134,6 +135,59 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'resize', cols, rows }))
         }
+      })
+    )
+
+    // Modern keybinding interception
+    listenerDisposablesRef.current.push(
+      term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+        // Only intercept in modern mode
+        const mode = useAppStore.getState().keybindingMode
+        if (mode !== 'modern') return true
+
+        const ctrl = ev.ctrlKey
+        const shift = ev.shiftKey
+        const alt = ev.altKey
+        const key = ev.key
+
+        // Ctrl+Shift+D → horizontal split
+        if (ctrl && shift && !alt && key === 'D') {
+          ws.send(new TextEncoder().encode('\x02%'))
+          return false
+        }
+        // Ctrl+Shift+S → vertical split
+        if (ctrl && shift && !alt && key === 'S') {
+          ws.send(new TextEncoder().encode('\x02"'))
+          return false
+        }
+        // Ctrl+Shift+Q → new window
+        if (ctrl && shift && !alt && key === 'Q') {
+          ws.send(new TextEncoder().encode('\x02c'))
+          return false
+        }
+        // Ctrl+Shift+X → close pane
+        if (ctrl && shift && !alt && key === 'X') {
+          ws.send(new TextEncoder().encode('\x02x'))
+          return false
+        }
+        // Ctrl+Shift+1-9 → switch window
+        if (ctrl && shift && !alt && key >= '1' && key <= '9') {
+          ws.send(new TextEncoder().encode('\x02' + key))
+          return false
+        }
+        // Ctrl+Alt+Arrow → switch pane
+        if (ctrl && !shift && alt && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)) {
+          const arrowMap: Record<string, string> = {
+            ArrowUp: '\x02\x1b[A',
+            ArrowDown: '\x02\x1b[B',
+            ArrowRight: '\x02\x1b[C',
+            ArrowLeft: '\x02\x1b[D',
+          }
+          ws.send(new TextEncoder().encode(arrowMap[key]))
+          return false
+        }
+
+        return true // not intercepted — let xterm handle normally
       })
     )
 
