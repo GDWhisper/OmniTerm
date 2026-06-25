@@ -149,6 +149,9 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         const mode = useAppStore.getState().keybindingMode
         if (mode !== 'modern') return true
 
+        // Debounce: ignore key repeat events
+        if (ev.repeat) return true
+
         const ctrl = ev.ctrlKey
         const shift = ev.shiftKey
         const alt = ev.altKey
