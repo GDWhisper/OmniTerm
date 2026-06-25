@@ -204,7 +204,7 @@ export function Settings() {
         <section className="space-y-3">
           <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.about')}</h3>
           <div style={{ fontSize: 12, color: 'var(--text-muted)' }} className="space-y-1">
-            <p>OmniTerm — Web-based tmux terminal manager</p>
+            <p>{t('settings.slogan')}</p>
             <p style={{ fontSize: 11, color: 'var(--text-faint)' }}>Phase 7 · MIT License</p>
           </div>
         </section>
