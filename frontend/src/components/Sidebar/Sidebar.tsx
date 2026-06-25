@@ -364,9 +364,8 @@ export function Sidebar() {
                         {proj.name}
                       </span>
                     </div>
-                    <div className="pl-5 mt-0.5 group/path">
-                      <span className="block truncate group-hover/path:hidden" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{proj.path}</span>
-                      <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{proj.path}</span>
+                    <div className="pl-5 mt-0.5">
+                      <span className="block truncate" style={{ fontSize: 11, color: 'var(--text-faint)', direction: 'rtl' }}>{proj.path}</span>
                     </div>
                   </div>
                   <div className="flex items-center">
