@@ -26,6 +26,9 @@ interface AppState {
   // Keybinding
   keybindingMode: 'tmux' | 'modern'
 
+  // Terminal behavior
+  autoCopySelect: boolean
+
   // Data
   projects: Project[]
   worktrees: Record<string, Workspace[]> // keyed by project_id
@@ -57,6 +60,7 @@ interface AppState {
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
+  setAutoCopySelect: (v: boolean) => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (s: Session[]) => void
@@ -84,6 +88,7 @@ export const useAppStore = create<AppState>((set) => ({
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || '300'),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
+  autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
 
   projects: [],
   worktrees: {},
@@ -118,6 +123,11 @@ export const useAppStore = create<AppState>((set) => ({
   setKeybindingMode: (mode) => {
     localStorage.setItem('omniterm_keybinding_mode', mode)
     set({ keybindingMode: mode })
+  },
+
+  setAutoCopySelect: (v) => {
+    localStorage.setItem('omniterm_auto_copy_select', String(v))
+    set({ autoCopySelect: v })
   },
 
   setProjects: (projects) => set({ projects }),

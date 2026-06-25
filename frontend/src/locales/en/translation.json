@@ -41,6 +41,8 @@
   "settings.keybindingTmux": "tmux Native",
   "settings.keybindingModern": "Modern (Experimental)",
   "settings.keybindingHint": "Modern mode: Ctrl+Shift+→/↓ split, Ctrl+Shift+Q new window, Ctrl+Shift+X close",
+  "settings.autoCopySelect": "Auto-copy on select",
+  "settings.autoCopySelectHint": "Hold Shift and drag to select text, auto-copies to clipboard on release",
   "terminal.noSession": "Select or create a session",
   "terminal.hint": "Use the sidebar to get started",
   "terminal.status.connected": "Connected",

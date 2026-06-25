@@ -273,6 +273,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     const handleMouseUp = () => {
       // Defer to let xterm.js finish its internal mouseup handling
       requestAnimationFrame(() => {
+        if (!useAppStore.getState().autoCopySelect) return
         const sel = term.getSelection()
         if (sel) {
           if (navigator.clipboard) {
