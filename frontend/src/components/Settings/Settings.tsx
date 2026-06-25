@@ -44,11 +44,6 @@ const languages = [
   { value: 'en', label: 'En' },
 ]
 
-const keybindingModes = [
-  { value: 'tmux' as const, labelKey: 'settings.keybindingTmux' },
-  { value: 'modern' as const, labelKey: 'settings.keybindingModern' },
-]
-
 /* ── Neon border button style helpers ── */
 
 const btnBase: React.CSSProperties = {
@@ -93,7 +88,7 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 export function Settings() {
   const { t, i18n } = useTranslation()
   const { theme, setTheme } = useThemeStore()
-  const { fontSize, setFontSize, keybindingMode, setKeybindingMode } = useAppStore()
+  const { fontSize, setFontSize } = useAppStore()
 
   return (
     <div style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontFamily: FONT }}>
@@ -195,32 +190,15 @@ export function Settings() {
           />
         </section>
 
-        {/* Keybinding Mode */}
-        <section className="space-y-3">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.keybinding')}</h3>
-          <div className="flex gap-2">
-            {keybindingModes.map((kb) => {
-              const isActive = keybindingMode === kb.value
-              return (
-                <button
-                  key={kb.value}
-                  onClick={() => setKeybindingMode(kb.value)}
-                  className="flex-1 flex items-center justify-center px-3 py-2.5 text-sm"
-                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12 }}
-                  onMouseEnter={btnHover}
-                  onMouseLeave={(e) => btnLeave(e, isActive)}
-                >
-                  {t(kb.labelKey)}
-                </button>
-              )
-            })}
-          </div>
-          {keybindingMode === 'modern' && (
-            <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
-              {t('settings.keybindingHint')}
-            </p>
-          )}
-        </section>
+        {/* ── Keybinding Mode (HIDDEN) ─────────────────────────────────
+          * 现代快捷键映射方案已验证可行，但独立实现维护成本高。
+          * 未来方向：改造为「插件激活模式」，利用 tmux 成熟的插件生态
+          * （如 tmux-sensible, tmux-pain-control 等）实现快捷键定制，
+          * OmniTerm 只负责 UI 开关和插件管理，不重复造轮子。
+          *
+          * 底层代码保留（appStore.keybindingMode + useTerminal handler），
+          * 等插件系统就绪后重新激活此 UI。
+          */}
 
         {/* Info */}
         <section className="space-y-3">
