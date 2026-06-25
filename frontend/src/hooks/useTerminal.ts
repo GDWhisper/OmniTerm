@@ -116,7 +116,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     }
 
     // Dispose previous listeners to avoid accumulation on session switch
-    listenerDisposablesRef.current.forEach((d) => d.dispose())
+    listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
 
     // Send terminal input to WS (skip during IME composition)
@@ -139,8 +139,9 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     )
 
     // Modern keybinding interception
-    listenerDisposablesRef.current.push(
-      term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+    // ponytail: attachCustomKeyEventHandler returns void, not IDisposable —
+    // don't push to disposables; handler dies with terminal on dispose().
+    term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
         // Only intercept in modern mode
         const mode = useAppStore.getState().keybindingMode
         if (mode !== 'modern') return true
@@ -189,7 +190,6 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
         return true // not intercepted — let xterm handle normally
       })
-    )
 
     sessionIdRef.current = sessionId
   }, [sessionId])
@@ -198,7 +198,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const disposeTerminal = useCallback(() => {
     observerRef.current?.disconnect()
     observerRef.current = null
-    listenerDisposablesRef.current.forEach((d) => d.dispose())
+    listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
     if (wsRef.current) {
       wsRef.current.onclose = null
@@ -287,7 +287,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     // Dispose old terminal — WS will reconnect via terminalReady effect
     observerRef.current?.disconnect()
     observerRef.current = null
-    listenerDisposablesRef.current.forEach((d) => d.dispose())
+    listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
     if (wsRef.current) {
       wsRef.current.onclose = null
