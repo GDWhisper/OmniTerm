@@ -7,19 +7,19 @@
    Components use var(--token) instead of hardcoded hex.
    ──────────────────────────────────────────────────────────────────── */
 :root {
-  /* backgrounds */
-  --bg-base: #f8fafc;
-  --bg-elevated: #f1f5f9;
-  --bg-surface: #ffffff;
+  /* backgrounds — warm muted tones, easier on eyes than pure white */
+  --bg-base: #f0ece6;
+  --bg-elevated: #e8e3db;
+  --bg-surface: #f7f4ef;
   /* borders */
-  --border-subtle: #e2e8f0;
-  --border-strong: #cbd5e1;
-  /* text */
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
-  --text-faint: #94a3b8;
-  --text-dim: #cbd5e1;
+  --border-subtle: #d9d3c8;
+  --border-strong: #c4bdb0;
+  /* text — deep warm gray for high contrast */
+  --text-primary: #1c1917;
+  --text-secondary: #3a3530;
+  --text-muted: #6b6560;
+  --text-faint: #9c9590;
+  --text-dim: #c4bdb0;
   /* accent */
   --accent: #7c3aed;
   --accent-bright: #6d28d9;
@@ -35,8 +35,8 @@
   --success: #16a34a;
   --success-glow: 0 0 6px #16a34a;
   /* scrollbar */
-  --scrollbar-thumb: #cbd5e1;
-  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #c4bdb0;
+  --scrollbar-track: #e8e3db;
   color-scheme: light;
 }
 

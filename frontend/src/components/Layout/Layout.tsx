@@ -91,7 +91,7 @@ export function Layout() {
   // Mobile layout
   if (isMobile) {
     return (
-      <div className="flex flex-col h-screen bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-200">
+      <div className="flex flex-col h-screen" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
         <MobileNav />
         <div className="flex-1 overflow-hidden">
           <MobileContent />
