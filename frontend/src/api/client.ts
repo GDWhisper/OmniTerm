@@ -21,6 +21,36 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export interface Project {
+  id: string
+  target_id?: string
+  name: string
+  path: string
+  created_at: string
+}
+
+export interface Workspace {
+  id: string
+  project_id: string
+  path: string
+  label: string
+  branch?: string
+  is_main: boolean
+  is_git_repo: boolean
+  is_git_worktree: boolean
+}
+
+export interface Session {
+  id: string
+  project_id: string
+  workspace_path: string
+  name?: string
+  tmux_session_name?: string
+  hook_enabled: boolean
+  hook_status?: string
+  created_at: string
+}
+
 export const api = {
   // Health
   health: () => request<{ status: string }>('/health'),
@@ -36,20 +66,26 @@ export const api = {
   logout: () => request('/auth/logout', { method: 'POST' }),
   check: () => request<{ authenticated: boolean }>('/auth/check'),
 
-  // Workspaces
-  listWorkspaces: () => request<any[]>('/workspaces'),
-  createWorkspace: (data: { name: string; root_path: string }) =>
-    request('/workspaces', { method: 'POST', body: JSON.stringify(data) }),
-  deleteWorkspace: (id: string) =>
-    request(`/workspaces/${id}`, { method: 'DELETE' }),
+  // Projects (formerly workspaces)
+  listProjects: () => request<Project[]>('/projects'),
+  createProject: (data: { name: string; path: string; target_id?: string }) =>
+    request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+  updateProject: (id: string, data: { name?: string }) =>
+    request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteProject: (id: string) =>
+    request(`/projects/${id}`, { method: 'DELETE' }),
+
+  // Worktrees (real-time git worktree discovery)
+  listWorktrees: (projectId: string) =>
+    request<Workspace[]>(`/projects/${projectId}/worktrees`),
 
   // Sessions
-  listSessions: (workspaceId: string) =>
-    request<any[]>(`/workspaces/${workspaceId}/sessions`),
-  createSession: (workspaceId: string, name?: string) =>
-    request(`/workspaces/${workspaceId}/sessions`, {
+  listSessions: (projectId: string) =>
+    request<Session[]>(`/projects/${projectId}/sessions`),
+  createSession: (projectId: string, workspacePath: string, name?: string) =>
+    request<Session>(`/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, workspace_path: workspacePath }),
     }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),

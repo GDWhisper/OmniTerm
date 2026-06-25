@@ -1,22 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Workspace {
+pub struct Project {
     pub id: String,
     pub target_id: Option<String>,
     pub name: String,
-    pub root_path: String,
+    pub path: String,
     pub created_at: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateWorkspace {
+pub struct CreateProject {
     pub name: String,
-    pub root_path: String,
+    pub path: String,
     pub target_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateWorkspace {
+pub struct UpdateProject {
     pub name: Option<String>,
 }

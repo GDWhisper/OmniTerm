@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
+import { GitBranchIcon } from '../Icons/GitBranchIcon'
+import type { Project, Workspace, Session } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -12,14 +14,18 @@ const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, mono
 
 export function Sidebar() {
   const {
-    workspaces,
+    projects,
+    worktrees,
     sessions,
+    activeProjectId,
     activeWorkspaceId,
     activeSessionId,
     sidebarCollapsed,
     connected,
-    setWorkspaces,
+    setProjects,
+    setWorktrees,
     setSessions,
+    setActiveProject,
     setActiveWorkspace,
     setActiveSession,
     setConnected,
@@ -31,48 +37,61 @@ export function Sidebar() {
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
 
-  const [createWsOpen, setCreateWsOpen] = useState(false)
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
+  const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<{
-    type: 'workspace' | 'session'
+    type: 'project' | 'session'
     id: string
     name: string
   } | null>(null)
 
-  const [wsName, setWsName] = useState('')
-  const [wsPath, setWsPath] = useState('')
+  const [projName, setProjName] = useState('')
+  const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  const loadWorkspaces = useCallback(async () => {
+  // Load projects
+  const loadProjects = useCallback(async () => {
     try {
-      const ws = await api.listWorkspaces()
-      setWorkspaces(ws)
+      const p = await api.listProjects()
+      setProjects(p)
     } catch {
       // api client already shows error toast
     }
-  }, [setWorkspaces])
+  }, [setProjects])
 
-  const loadSessions = useCallback(async () => {
-    if (!activeWorkspaceId) return
+  // Load worktrees for a project
+  const loadWorktrees = useCallback(async (projectId: string) => {
     try {
-      const s = await api.listSessions(activeWorkspaceId)
+      const wt = await api.listWorktrees(projectId)
+      setWorktrees(projectId, wt)
+    } catch {
+      // api client already shows error toast
+    }
+  }, [setWorktrees])
+
+  // Load sessions for active worktree
+  const loadSessions = useCallback(async () => {
+    if (!activeProjectId) return
+    try {
+      const s = await api.listSessions(activeProjectId)
       setSessions(s)
     } catch {
       // api client already shows error toast
     }
-  }, [activeWorkspaceId, setSessions])
+  }, [activeProjectId, setSessions])
 
-  useEffect(() => { loadWorkspaces() }, [loadWorkspaces])
+  useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
 
   useEffect(() => {
     api.systemInfo().then((info) => {
       setHomeDir(info.home_dir)
-      setWsPath(info.home_dir)
+      setProjPath(info.home_dir)
     }).catch(() => {
-      // fallback: leave wsPath empty, user fills it in
+      // fallback: leave projPath empty, user fills it in
     })
   }, [])
 
@@ -84,16 +103,29 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
-  const handleCreateWorkspace = async () => {
-    if (!wsName.trim()) return
+  // Toggle project expansion
+  const toggleProject = async (projectId: string) => {
+    const newSet = new Set(expandedProjects)
+    if (newSet.has(projectId)) {
+      newSet.delete(projectId)
+    } else {
+      newSet.add(projectId)
+      // Load worktrees when expanding
+      await loadWorktrees(projectId)
+    }
+    setExpandedProjects(newSet)
+  }
+
+  const handleCreateProject = async () => {
+    if (!projName.trim()) return
     setSubmitting(true)
     try {
-      await api.createWorkspace({ name: wsName.trim(), root_path: wsPath.trim() })
-      await loadWorkspaces()
-      addToast('success', t('sidebar.workspaceCreated', { name: wsName.trim() }))
-      setCreateWsOpen(false)
-      setWsName('')
-      setWsPath(homeDir)
+      await api.createProject({ name: projName.trim(), path: projPath.trim() })
+      await loadProjects()
+      addToast('success', t('sidebar.projectCreated', { name: projName.trim() }) ?? `Project "${projName.trim()}" created`)
+      setCreateProjOpen(false)
+      setProjName('')
+      setProjPath(homeDir)
     } catch {
       // api client already shows error toast
     } finally {
@@ -102,12 +134,17 @@ export function Sidebar() {
   }
 
   const handleCreateSession = async () => {
-    if (!activeWorkspaceId) return
+    if (!activeProjectId || !activeWorkspaceId) return
+    // Find the active worktree path
+    const wtList = worktrees[activeProjectId] || []
+    const activeWt = wtList.find(w => w.id === activeWorkspaceId)
+    if (!activeWt) return
+
     setSubmitting(true)
     try {
-      await api.createSession(activeWorkspaceId, sessName.trim() || undefined)
+      await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
       await loadSessions()
-      addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }))
+      addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
     } catch {
@@ -117,17 +154,18 @@ export function Sidebar() {
     }
   }
 
-  const handleDeleteWorkspace = async () => {
-    if (!confirmDelete || confirmDelete.type !== 'workspace') return
+  const handleDeleteProject = async () => {
+    if (!confirmDelete || confirmDelete.type !== 'project') return
     setSubmitting(true)
     try {
-      await api.deleteWorkspace(confirmDelete.id)
-      await loadWorkspaces()
-      if (activeWorkspaceId === confirmDelete.id) {
+      await api.deleteProject(confirmDelete.id)
+      await loadProjects()
+      if (activeProjectId === confirmDelete.id) {
+        setActiveProject(null)
         setActiveWorkspace(null)
         setSessions([])
       }
-      addToast('success', t('sidebar.workspaceDeleted', { name: confirmDelete.name }))
+      addToast('success', t('sidebar.projectDeleted', { name: confirmDelete.name }) ?? `Project "${confirmDelete.name}" deleted`)
     } catch {
       // api client already shows error toast
     } finally {
@@ -145,7 +183,7 @@ export function Sidebar() {
       if (activeSessionId === confirmDelete.id) {
         setActiveSession(null)
       }
-      addToast('success', t('sidebar.sessionDeleted', { name: confirmDelete.name }))
+      addToast('success', t('sidebar.sessionDeleted', { name: confirmDelete.name }) ?? `Session deleted`)
     } catch {
       // api client already shows error toast
     } finally {
@@ -154,10 +192,10 @@ export function Sidebar() {
     }
   }
 
-  const handleWsKeyDown = (e: React.KeyboardEvent) => {
+  const handleProjKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleCreateWorkspace()
+      handleCreateProject()
     }
   }
 
@@ -173,6 +211,11 @@ export function Sidebar() {
     background: 'var(--bg-surface)',
     border: '1px solid var(--border-strong)',
     color: 'var(--text-primary)',
+  }
+
+  // Filter sessions for a specific worktree
+  const sessionsForWorktree = (wtPath: string): Session[] => {
+    return sessions.filter(s => s.workspace_path === wtPath)
   }
 
   if (sidebarCollapsed) {
@@ -262,15 +305,15 @@ export function Sidebar() {
         <div className="flex items-center justify-between px-1 mb-2.5">
           <div className="flex items-center gap-1.5">
             <span style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>
-              {t('sidebar.workspaces')}
+              {t('sidebar.projects') ?? 'Projects'}
             </span>
-            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{workspaces.length}</span>
+            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{projects.length}</span>
           </div>
           <button
-            onClick={() => setCreateWsOpen(true)}
+            onClick={() => setCreateProjOpen(true)}
             className="flex items-center justify-center rounded transition-all"
             style={{ width: 22, height: 22, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 15, fontWeight: 500 }}
-            title={t('sidebar.createWorkspace')}
+            title={t('sidebar.createProject') ?? 'Create Project'}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'var(--accent-14)'
               e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
@@ -284,136 +327,193 @@ export function Sidebar() {
           </button>
         </div>
 
-        {workspaces.length === 0 ? (
+        {projects.length === 0 ? (
           <div className="px-2 py-3" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-            {t('sidebar.noWorkspaces')}
+            {t('sidebar.noProjects') ?? 'No projects yet'}
           </div>
         ) : (
-          workspaces.map((ws) => {
-            const isActive = activeWorkspaceId === ws.id
-            return (
-              <div key={ws.id} className="relative mb-2">
-                {/* Left glow bar for active workspace */}
-                {isActive && (
-                  <div
-                    className="absolute left-0 top-0 bottom-0 rounded-full"
-                    style={{
-                      width: 2,
-                      background: 'var(--accent)',
-                      boxShadow: 'var(--accent-glow-sm)',
-                    }}
-                  />
-                )}
+          projects.map((proj) => {
+            const isExpanded = expandedProjects.has(proj.id)
+            const wtList = worktrees[proj.id] || []
+            const hasWorktrees = wtList.length > 0
 
-                {/* Workspace item */}
+            return (
+              <div key={proj.id} className="relative mb-2">
+                {/* Project item */}
                 <div
                   className="flex items-center justify-between cursor-pointer rounded-lg transition-all"
                   style={{
-                    marginLeft: 8,
                     padding: '10px 14px',
-                    background: isActive
-                      ? 'linear-gradient(90deg, rgba(167,139,250,0.12), transparent)'
+                    background: isExpanded
+                      ? 'linear-gradient(90deg, rgba(167,139,250,0.08), transparent)'
                       : 'transparent',
-                    border: `1px solid ${isActive ? 'rgba(167,139,250,0.15)' : 'var(--border-subtle)'}`,
+                    border: `1px solid ${isExpanded ? 'rgba(167,139,250,0.12)' : 'var(--border-subtle)'}`,
                   }}
-                  onClick={() => setActiveWorkspace(ws.id === activeWorkspaceId ? null : ws.id)}
+                  onClick={() => toggleProject(proj.id)}
                 >
                   <div className="flex-1 min-w-0 mr-2">
                     <div className="flex items-center gap-2">
-                      <span style={{ color: isActive ? 'var(--accent)' : 'var(--text-dim)', fontSize: 12 }}>▸</span>
-                      <span style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isActive ? 500 : 400, fontSize: 13 }}>
-                        {ws.name}
+                      <span style={{
+                        color: isExpanded ? 'var(--accent)' : 'var(--text-dim)',
+                        fontSize: 12,
+                        transition: 'transform 0.15s',
+                        display: 'inline-block',
+                        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                      }}>▸</span>
+                      <span style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isExpanded ? 500 : 400, fontSize: 13 }}>
+                        {proj.name}
                       </span>
                     </div>
-                    <div className="pl-4 mt-0.5 group/path">
-                      <span className="block truncate group-hover/path:hidden" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{ws.root_path}</span>
-                      <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{ws.root_path}</span>
+                    <div className="pl-5 mt-0.5 group/path">
+                      <span className="block truncate group-hover/path:hidden" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{proj.path}</span>
+                      <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{proj.path}</span>
                     </div>
                   </div>
                   <div className="flex items-center">
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
-                        setConfirmDelete({ type: 'workspace', id: ws.id, name: ws.name })
+                        setConfirmDelete({ type: 'project', id: proj.id, name: proj.name })
                       }}
                     />
                   </div>
                 </div>
 
-                {/* Sessions under active workspace */}
-                {isActive && (
-                  <div className="pl-6 pr-1 pt-2 pb-1" style={{ marginLeft: 8 }}>
-                    <div className="flex items-center justify-between px-0.5 mb-2">
-                      <span style={{ fontSize: 11, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 1.5 }}>
-                        {t('sidebar.sessions')}
-                      </span>
-                      <button
-                        onClick={() => setCreateSessOpen(true)}
-                        className="flex items-center justify-center rounded transition-all"
-                        style={{ width: 22, height: 22, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 15, fontWeight: 500 }}
-                        title={t('sidebar.createSession')}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.background = 'var(--accent-14)'
-                          e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.background = 'transparent'
-                          e.currentTarget.style.boxShadow = 'none'
-                        }}
-                      >
-                        +
-                      </button>
-                    </div>
-
-                    {sessions.map((s) => {
-                      const isSessionActive = activeSessionId === s.id
-                      const statusLabel = s.hook_status || 'Running'
-                      const isRunning = statusLabel === 'Running' || statusLabel === 'Decision'
-                      return (
-                        <div
-                          key={s.id}
-                          className="flex items-center gap-2.5 rounded-md cursor-pointer transition-all"
-                          style={{
-                            padding: '7px 10px',
-                            marginBottom: 3,
-                            background: isSessionActive ? 'rgba(167,139,250,0.08)' : 'transparent',
-                            border: isSessionActive ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
-                          }}
-                          onClick={() => setActiveSession(s.id)}
-                        >
-                          <div
-                            className="rounded-full flex-shrink-0"
-                            style={{
-                              width: 6,
-                              height: 6,
-                              background: isRunning ? 'var(--success)' : 'var(--text-dim)',
-                              boxShadow: isRunning ? 'var(--success-glow)' : 'none',
-                            }}
-                          />
-                          <span
-                            className="truncate flex-1"
-                            style={{ fontSize: 13, color: isSessionActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                          >
-                            {s.name || s.tmux_session_name}
-                          </span>
-                          <DeleteButton
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setConfirmDelete({
-                                type: 'session',
-                                id: s.id,
-                                name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
-                              })
-                            }}
-                          />
-                        </div>
-                      )
-                    })}
-
-                    {sessions.length === 0 && (
+                {/* Worktrees under expanded project */}
+                {isExpanded && (
+                  <div className="pl-4 pr-1 pt-1 pb-1">
+                    {wtList.length === 0 ? (
                       <div className="px-2 py-1.5" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                        {t('sidebar.noSessions')}
+                        {t('sidebar.noWorktrees') ?? 'No worktrees found'}
                       </div>
+                    ) : (
+                      wtList.map((wt) => {
+                        const isWtActive = activeWorkspaceId === wt.id
+                        const wtSessions = sessionsForWorktree(wt.path)
+                        const isWtExpanded = isWtActive
+
+                        return (
+                          <div key={wt.id} className="mb-1">
+                            {/* Worktree item */}
+                            <div
+                              className="flex items-center justify-between cursor-pointer rounded-md transition-all"
+                              style={{
+                                padding: '6px 10px',
+                                background: isWtActive ? 'rgba(167,139,250,0.1)' : 'transparent',
+                                border: `1px solid ${isWtActive ? 'rgba(167,139,250,0.15)' : 'transparent'}`,
+                              }}
+                              onClick={() => {
+                                setActiveProject(proj.id)
+                                setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
+                              }}
+                            >
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <GitBranchIcon
+                                  size={14}
+                                  color={isWtActive ? 'var(--accent)' : 'var(--text-dim)'}
+                                />
+                                <span
+                                  className="truncate"
+                                  style={{
+                                    fontSize: 12,
+                                    color: isWtActive ? 'var(--accent)' : 'var(--text-muted)',
+                                    fontWeight: isWtActive ? 500 : 400,
+                                    fontFamily: FONT,
+                                  }}
+                                >
+                                  {wt.label}
+                                </span>
+                                {wt.branch && (
+                                  <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
+                                    ({wtSessions.length})
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Sessions under active worktree */}
+                            {isWtExpanded && (
+                              <div className="pl-5 pr-1 pt-1 pb-1">
+                                <div className="flex items-center justify-between px-0.5 mb-1">
+                                  <span style={{ fontSize: 10, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 1.5 }}>
+                                    {t('sidebar.sessions')}
+                                  </span>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setCreateSessOpen(true)
+                                    }}
+                                    className="flex items-center justify-center rounded transition-all"
+                                    style={{ width: 18, height: 18, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 13, fontWeight: 500 }}
+                                    title={t('sidebar.createSession')}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = 'var(--accent-14)'
+                                      e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = 'transparent'
+                                      e.currentTarget.style.boxShadow = 'none'
+                                    }}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+
+                                {wtSessions.map((s) => {
+                                  const isSessionActive = activeSessionId === s.id
+                                  const statusLabel = s.hook_status || 'Running'
+                                  const isRunning = statusLabel === 'Running' || statusLabel === 'Decision'
+                                  return (
+                                    <div
+                                      key={s.id}
+                                      className="flex items-center gap-2 rounded-md cursor-pointer transition-all"
+                                      style={{
+                                        padding: '5px 8px',
+                                        marginBottom: 2,
+                                        background: isSessionActive ? 'rgba(167,139,250,0.08)' : 'transparent',
+                                        border: isSessionActive ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
+                                      }}
+                                      onClick={() => setActiveSession(s.id)}
+                                    >
+                                      <div
+                                        className="rounded-full flex-shrink-0"
+                                        style={{
+                                          width: 5,
+                                          height: 5,
+                                          background: isRunning ? 'var(--success)' : 'var(--text-dim)',
+                                          boxShadow: isRunning ? 'var(--success-glow)' : 'none',
+                                        }}
+                                      />
+                                      <span
+                                        className="truncate flex-1"
+                                        style={{ fontSize: 12, color: isSessionActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                                      >
+                                        {s.name || s.tmux_session_name}
+                                      </span>
+                                      <DeleteButton
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setConfirmDelete({
+                                            type: 'session',
+                                            id: s.id,
+                                            name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
+                                          })
+                                        }}
+                                      />
+                                    </div>
+                                  )
+                                })}
+
+                                {wtSessions.length === 0 && (
+                                  <div className="px-1 py-1" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                                    {t('sidebar.noSessions')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })
                     )}
                   </div>
                 )}
@@ -462,18 +562,18 @@ export function Sidebar() {
         </button>
       </div>
 
-      {/* ── Create Workspace Modal ── */}
-      <Modal open={createWsOpen} onClose={() => { setCreateWsOpen(false); setWsName(''); setWsPath(homeDir) }} title={t('sidebar.createWorkspace')}>
+      {/* ── Create Project Modal ── */}
+      <Modal open={createProjOpen} onClose={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }} title={t('sidebar.createProject') ?? 'Create Project'}>
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.workspaceName')}
+              {t('sidebar.projectName') ?? 'Project Name'}
             </label>
             <input
               type="text"
-              value={wsName}
-              onChange={(e) => setWsName(e.target.value)}
-              onKeyDown={handleWsKeyDown}
+              value={projName}
+              onChange={(e) => setProjName(e.target.value)}
+              onKeyDown={handleProjKeyDown}
               placeholder="my-project"
               autoFocus
               className={inputClass}
@@ -484,13 +584,13 @@ export function Sidebar() {
           </div>
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.rootPath')}
+              {t('sidebar.repoPath') ?? 'Git Repository Path'}
             </label>
             <input
               type="text"
-              value={wsPath}
-              onChange={(e) => setWsPath(e.target.value)}
-              onKeyDown={handleWsKeyDown}
+              value={projPath}
+              onChange={(e) => setProjPath(e.target.value)}
+              onKeyDown={handleProjKeyDown}
               placeholder={homeDir}
               className={inputClass}
               style={inputStyle}
@@ -499,10 +599,10 @@ export function Sidebar() {
             />
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateWsOpen(false); setWsName(''); setWsPath(homeDir) }}>
+            <ModalCancel onClick={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }}>
               {t('sidebar.cancel')}
             </ModalCancel>
-            <ModalPrimary onClick={handleCreateWorkspace} disabled={!wsName.trim() || submitting}>
+            <ModalPrimary onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
             </ModalPrimary>
           </div>
@@ -544,11 +644,11 @@ export function Sidebar() {
       <ConfirmDialog
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
-        onConfirm={confirmDelete?.type === 'workspace' ? handleDeleteWorkspace : handleDeleteSession}
-        title={confirmDelete?.type === 'workspace' ? t('sidebar.deleteWorkspace') : t('sidebar.deleteSession')}
+        onConfirm={confirmDelete?.type === 'project' ? handleDeleteProject : handleDeleteSession}
+        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Delete Project') : t('sidebar.deleteSession')}
         message={
-          confirmDelete?.type === 'workspace'
-            ? t('sidebar.confirmDeleteWorkspace', { name: confirmDelete?.name })
+          confirmDelete?.type === 'project'
+            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Delete project "${confirmDelete?.name}"? All sessions will be removed.`)
             : t('sidebar.confirmDeleteSession', { name: confirmDelete?.name })
         }
         confirmText={t('sidebar.delete')}
