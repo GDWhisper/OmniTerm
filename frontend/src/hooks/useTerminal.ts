@@ -55,6 +55,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
+  const keyHandlerAttachedRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
 
@@ -139,8 +140,10 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     )
 
     // Modern keybinding interception
-    // ponytail: attachCustomKeyEventHandler returns void, not IDisposable —
-    // don't push to disposables; handler dies with terminal on dispose().
+    // Guard against duplicate registration (React StrictMode double-invokes effects).
+    // attachCustomKeyEventHandler returns void, so we track via ref.
+    if (!keyHandlerAttachedRef.current) {
+      keyHandlerAttachedRef.current = true
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
         // Only intercept in modern mode
         const mode = useAppStore.getState().keybindingMode
@@ -196,6 +199,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
         return true // not intercepted — let xterm handle normally
       })
+    } // end keyHandlerAttachedRef guard
 
     sessionIdRef.current = sessionId
   }, [sessionId])
@@ -208,6 +212,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
     }
+    keyHandlerAttachedRef.current = false
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
     if (wsRef.current) {
