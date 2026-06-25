@@ -20,27 +20,27 @@ const DARK_TERMINAL_THEME = {
 }
 
 const LIGHT_TERMINAL_THEME = {
-  background: '#f8fafc',
-  foreground: '#0f172a',
+  background: '#ece8e1',
+  foreground: '#1c1917',
   cursor: '#7c3aed',
-  cursorAccent: '#f8fafc',
+  cursorAccent: '#ece8e1',
   selectionBackground: 'rgba(124,58,237,0.2)',
-  black: '#0f172a',
+  black: '#1c1917',
   red: '#dc2626',
   green: '#16a34a',
   yellow: '#ca8a04',
   blue: '#2563eb',
   magenta: '#7c3aed',
   cyan: '#0891b2',
-  white: '#334155',
-  brightBlack: '#64748b',
+  white: '#3a3530',
+  brightBlack: '#6b6560',
   brightRed: '#ef4444',
   brightGreen: '#22c55e',
   brightYellow: '#eab308',
   brightBlue: '#3b82f6',
   brightMagenta: '#8b5cf6',
   brightCyan: '#06b6d4',
-  brightWhite: '#0f172a',
+  brightWhite: '#1c1917',
 }
 
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
