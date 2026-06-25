@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
+import { KeyboardIcon } from '../Icons/KeyboardIcon'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -28,12 +29,12 @@ export function Terminal() {
         <div style={{ textAlign: 'center' }}>
           <div
             style={{
-              fontSize: 40,
               marginBottom: 16,
+              color: 'var(--accent)',
               filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
             }}
           >
-            ⌨️
+            <KeyboardIcon size={40} />
           </div>
           <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
           <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
