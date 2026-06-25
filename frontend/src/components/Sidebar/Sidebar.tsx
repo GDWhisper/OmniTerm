@@ -213,11 +213,6 @@ export function Sidebar() {
     color: 'var(--text-primary)',
   }
 
-  // Filter sessions for a specific project (collapsed view)
-  const sessionsForProject = (projId: string): Session[] => {
-    return sessions.filter(s => s.project_id === projId)
-  }
-
   // Filter sessions for a specific worktree
   const sessionsForWorktree = (wtPath: string): Session[] => {
     return sessions.filter(s => s.workspace_path === wtPath)
@@ -376,7 +371,7 @@ export function Sidebar() {
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span style={{ fontSize: 10, color: 'var(--text-dim)', flexShrink: 0 }}>
-                      ({sessionsForProject(proj.id).length})
+                      ({proj.session_count})
                     </span>
                     <DeleteButton
                       onClick={(e) => {

@@ -20,3 +20,14 @@ pub struct CreateProject {
 pub struct UpdateProject {
     pub name: Option<String>,
 }
+
+/// Project with session count (for list endpoint)
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ProjectWithCount {
+    pub id: String,
+    pub target_id: Option<String>,
+    pub name: String,
+    pub path: String,
+    pub created_at: String,
+    pub session_count: i64,
+}

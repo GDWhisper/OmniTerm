@@ -27,6 +27,7 @@ export interface Project {
   name: string
   path: string
   created_at: string
+  session_count: number
 }
 
 export interface Workspace {
