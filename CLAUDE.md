@@ -281,13 +281,13 @@ src/
 
 ## Documentation (`docs/`)
 
-| File | Purpose | When to consult |
-|---|---|---|
-| `docs/ui-style-guide.md` | **UI 风格规范** — 色板、字体、圆角、动效、drag bar 语言、组件规范、新增组件自检清单 | 任何涉及 UI 的修改（前端新增组件、改样式、调 cubone 覆盖规则）都**必须先读**此文档，确保视觉语言一致 |
-| `docs/user-testing.md` | 用户测试文档 — 10 个章节、27 个测试用例（P0/P1/P2 三级）、6 个已知限制 | 改完功能后手动回归、或新增测试覆盖时 |
-| `docs/2026-06-20-sidebar-redesign-design.md` | Sidebar 重设计的设计决策与方案记录 | 修改 Sidebar 相关组件时了解历史背景 |
-| `docs/debug-log.md` | **bug修复踩坑记录** — 开发过程中遇到的问题、根因分析和解决方案 | 遇到类似问题时查阅；新踩坑后追加 |
-| `CHANGELOG.md` | **变更日志** — 按 Keep a Changelog 格式记录每次变更，含 scope 标签和写入规范 | 每次有意义的代码变更后**必须添加条目**；提交前检查是否遗漏 |
+| File | Purpose | When to consult | When to maintain |
+|---|---|---|---|
+| `docs/ui-style-guide.md` | **UI 风格规范** — 色板、字体、圆角、动效、drag bar 语言、组件规范、新增组件自检清单 | 任何涉及 UI 的修改都**必须先读** | 新增组件规范、调整设计语言时 |
+| `docs/user-testing.md` | 用户测试文档 — 27 个测试用例（P0/P1/P2 三级） | 改完功能后手动回归 | 新增测试用例、更新已知限制时 |
+| `docs/debug-log.md` | **bug修复踩坑记录** — 问题、根因分析和解决方案 | 遇到类似问题时查阅 | 新踩坑后追加 |
+| `CHANGELOG.md` | **变更日志** — Keep a Changelog 格式，面向用户 | 发布时查阅历史变更 | 每次有意义的代码变更后**必须添加条目**（需用户确认） |
+| `PROGRESS.md` | **开发里程碑** — 已完成阶段、架构决策、技术选型 | 了解项目整体进展、向新人介绍项目 | 完成一个完整阶段（如 Phase 8b）后更新 |
 
 ## Reference Repos (local paths)
 
