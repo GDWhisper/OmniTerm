@@ -39,7 +39,7 @@ impl ControlModeClient {
             .args(["-C", "attach-session", "-t", &session_name])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
                 anyhow!(
@@ -57,6 +57,13 @@ impl ControlModeClient {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("tmux control mode stdout not available"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("tmux control mode stderr not available"))?;
+
+        // Capture stderr so we can diagnose unexpected child exits.
+        tokio::spawn(stderr_reader(session_name.clone(), stderr));
 
         debug!("started tmux control mode client for session {}", session_name);
 
@@ -86,7 +93,8 @@ impl ControlModeClient {
 
         let (tx, rx) = oneshot::channel();
         let last_output_at = Arc::clone(&self.last_output_at);
-        let handle = tokio::spawn(reader_loop(reader, last_output_at, rx));
+        let session_name = self.session_name.clone();
+        let handle = tokio::spawn(reader_loop(session_name, reader, last_output_at, rx));
 
         let mut handle_guard = self.reader_handle.lock().await;
         *handle_guard = Some(handle);
@@ -95,6 +103,12 @@ impl ControlModeClient {
         *shutdown_guard = Some(tx);
 
         Ok(())
+    }
+
+    /// Return `true` if the reader task is still running.
+    pub async fn is_alive(&self) -> bool {
+        let guard = self.reader_handle.lock().await;
+        guard.as_ref().map_or(false, |handle| !handle.is_finished())
     }
 
     /// Return `true` if the session has produced output within `timeout`.
@@ -135,7 +149,22 @@ impl ControlModeClient {
                     self.session_name, e
                 );
             }
-            let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+                Ok(Ok(status)) => debug!(
+                    "tmux control mode process for session {} exited with {}",
+                    self.session_name,
+                    status
+                ),
+                Ok(Err(e)) => debug!(
+                    "tmux control mode process for session {} wait error: {}",
+                    self.session_name,
+                    e
+                ),
+                Err(_) => debug!(
+                    "tmux control mode process for session {} did not exit in time",
+                    self.session_name
+                ),
+            }
         }
 
         let handle_opt = {
@@ -170,6 +199,7 @@ impl Drop for ControlModeClient {
 }
 
 async fn reader_loop(
+    session_name: String,
     mut reader: BufReader<ChildStdout>,
     last_output_at: Arc<Mutex<Option<Instant>>>,
     mut shutdown: oneshot::Receiver<()>,
@@ -184,16 +214,25 @@ async fn reader_loop(
             _ = &mut shutdown => break,
             result = reader.read_until(b'\n', &mut line) => {
                 match result {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        debug!("tmux control mode stdout closed for session {}", session_name);
+                        break;
+                    }
                     Ok(_) => {
                         if line.starts_with(b"%output") {
                             let mut guard = last_output_at.lock().await;
                             *guard = Some(Instant::now());
-                            debug!("tmux control mode %output event received");
+                            debug!(
+                                "tmux control mode %output event received for session {}",
+                                session_name
+                            );
                         }
                     }
                     Err(e) => {
-                        debug!("tmux control mode read error: {}", e);
+                        debug!(
+                            "tmux control mode read error for session {}: {}",
+                            session_name, e
+                        );
                         break;
                     }
                 }
@@ -201,7 +240,30 @@ async fn reader_loop(
         }
     }
 
-    debug!("tmux control mode reader loop exited");
+    debug!("tmux control mode reader loop exited for session {}", session_name);
+}
+
+async fn stderr_reader(session_name: String, stderr: tokio::process::ChildStderr) {
+    let mut reader = BufReader::new(stderr);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line).await {
+            Ok(0) => break,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&line);
+                debug!(
+                    "tmux control mode stderr for session {}: {}",
+                    session_name,
+                    text.trim()
+                );
+            }
+            Err(e) => {
+                debug!("tmux control mode stderr error for session {}: {}", session_name, e);
+                break;
+            }
+        }
+    }
 }
 
 /// Manages control-mode connections for multiple sessions and exposes a simple
@@ -222,16 +284,34 @@ impl SessionActivityMonitor {
     }
 
     /// Ensure a control-mode connection exists for `session_name`.
+    ///
+    /// If an existing connection has died, it is removed and recreated.
     pub async fn ensure_session(&self, session_name: &str) -> Result<()> {
-        let exists = { self.clients.read().await.contains_key(session_name) };
-        if exists {
+        let needs_recreate = {
+            let clients = self.clients.read().await;
+            match clients.get(session_name) {
+                Some(client) => !client.is_alive().await,
+                None => true,
+            }
+        };
+
+        if !needs_recreate {
             return Ok(());
+        }
+
+        let mut clients = self.clients.write().await;
+        // Recheck under the write lock to avoid duplicate creation races.
+        if let Some(client) = clients.get(session_name) {
+            if client.is_alive().await {
+                return Ok(());
+            }
+            // Remove the dead client before replacing it.
+            let client = clients.remove(session_name).expect("client existed a moment ago");
+            client.stop().await;
         }
 
         let client = ControlModeClient::new(session_name).await?;
         client.listen().await?;
-
-        let mut clients = self.clients.write().await;
         clients.insert(session_name.to_string(), client);
         Ok(())
     }
