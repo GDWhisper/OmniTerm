@@ -82,6 +82,9 @@ export function Sidebar() {
   const [sessName, setSessName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
+  const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
+  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -208,6 +211,15 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
+  // Cleanup tooltip timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current)
+      }
+    }
+  }, [])
+
   // Toggle project expansion
   const toggleProject = async (projectId: string) => {
     const newSet = new Set(expandedProjects)
@@ -258,6 +270,19 @@ export function Sidebar() {
       setSubmitting(false)
     }
   }
+
+  const handleHookEnable = useCallback(async (sessionId: string) => {
+    setEnablingSessionId(sessionId)
+    try {
+      await api.hookEnable(sessionId)
+      addToast('success', 'Agent 监控已启用')
+      await loadSessions()
+    } catch {
+      addToast('error', '启用 Agent 监控失败')
+    } finally {
+      setEnablingSessionId(null)
+    }
+  }, [loadSessions, addToast])
 
   const handleDeleteProject = async () => {
     if (!confirmDelete || confirmDelete.type !== 'project') return
@@ -406,6 +431,9 @@ export function Sidebar() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+        {/* Agent onboarding banner */}
+        <AgentOnboardingBanner sessions={sessions} />
+
         {/* Section label */}
         <div className="flex items-center justify-between px-1 mb-2.5">
           <div className="flex items-center gap-1.5">
@@ -625,6 +653,64 @@ export function Sidebar() {
                                         >
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
+                                      )}
+                                      {/* Agent enable button */}
+                                      {s.agent_detected && !s.hook_enabled && (
+                                        <div className="relative flex-shrink-0">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              handleHookEnable(s.id)
+                                            }}
+                                            disabled={enablingSessionId === s.id}
+                                            className="flex items-center justify-center rounded transition-all"
+                                            style={{
+                                              width: 20,
+                                              height: 20,
+                                              border: '1px solid var(--accent)',
+                                              color: 'var(--accent)',
+                                              fontSize: 10,
+                                              opacity: enablingSessionId === s.id ? 0.5 : 1,
+                                              background: enablingSessionId === s.id ? 'var(--accent-14)' : 'transparent',
+                                            }}
+                                            onMouseEnter={() => {
+                                              tooltipTimeoutRef.current = setTimeout(() => {
+                                                setTooltipSessionId(s.id)
+                                              }, 500)
+                                            }}
+                                            onMouseLeave={() => {
+                                              if (tooltipTimeoutRef.current) {
+                                                clearTimeout(tooltipTimeoutRef.current)
+                                                tooltipTimeoutRef.current = null
+                                              }
+                                              setTooltipSessionId(null)
+                                            }}
+                                          >
+                                            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                              <circle cx="7" cy="7" r="5" />
+                                              <line x1="11" y1="11" x2="14" y2="14" />
+                                            </svg>
+                                          </button>
+                                          {tooltipSessionId === s.id && (
+                                            <div
+                                              className="absolute z-50 whitespace-nowrap pointer-events-none"
+                                              style={{
+                                                bottom: '100%',
+                                                left: '50%',
+                                                transform: 'translateX(-50%)',
+                                                marginBottom: 6,
+                                                padding: '4px 8px',
+                                                fontSize: 10,
+                                                background: '#111827',
+                                                border: '1px solid #334155',
+                                                borderRadius: 4,
+                                                color: '#cbd5e1',
+                                              }}
+                                            >
+                                              开启后可获得实时状态通知、决策提醒音、侧边栏标记
+                                            </div>
+                                          )}
+                                        </div>
                                       )}
                                       <DeleteButton
                                         onClick={(e) => {
@@ -853,5 +939,68 @@ function ModalPrimary({ onClick, disabled, children }: { onClick: () => void; di
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * AgentOnboardingBanner — shown at the top of the sidebar when
+ * an agent (Claude Code / Codex) is detected in any session.
+ * Disappears when user clicks ✕ (persisted in localStorage).
+ */
+function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
+  const [dismissed, setDismissed] = useState(() => {
+    return localStorage.getItem('omniterm_onboarding_agent_done') === 'true'
+  })
+
+  const hasAgentSession = sessions.some(s => s.agent_detected != null)
+
+  if (dismissed || !hasAgentSession) return null
+
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2 mx-1 mb-2 rounded-md"
+      style={{
+        background: 'rgba(167, 139, 250, 0.1)',
+        border: '1px solid rgba(167, 139, 250, 0.2)',
+        fontSize: 11,
+        color: 'var(--text-secondary)',
+      }}
+    >
+      <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontSize: 13, display: 'flex', alignItems: 'center' }}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7" cy="7" r="5" />
+          <line x1="11" y1="11" x2="14" y2="14" />
+        </svg>
+      </span>
+      <span className="flex-1">
+        检测到 AI Agent — 开启 Agent 监控，实时掌握运行状态、接收决策提醒
+      </span>
+      <button
+        onClick={() => {
+          localStorage.setItem('omniterm_onboarding_agent_done', 'true')
+          setDismissed(true)
+        }}
+        className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+        style={{
+          width: 18,
+          height: 18,
+          border: '1px solid var(--border-strong)',
+          color: 'var(--text-faint)',
+          fontSize: 10,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = 'var(--accent)'
+          e.currentTarget.style.color = 'var(--accent)'
+          e.currentTarget.style.background = 'var(--accent-10)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = 'var(--border-strong)'
+          e.currentTarget.style.color = 'var(--text-faint)'
+          e.currentTarget.style.background = 'transparent'
+        }}
+      >
+        ✕
+      </button>
+    </div>
   )
 }

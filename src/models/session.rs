@@ -26,6 +26,10 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub agent_nonce: Option<String>,
+    // Agent process detection (runtime, not persisted)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub agent_detected: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

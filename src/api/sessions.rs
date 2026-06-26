@@ -41,11 +41,17 @@ async fn list_sessions(
     for session in &mut sessions {
         if let Some(ref tmux_name) = session.tmux_session_name {
             if let Ok(Some(snapshot)) = tmux::get_session_agent_option(tmux_name).await {
+                // Hook-injected session: use option data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
                 session.agent_state = Some(snapshot.agent_state.as_str().to_string());
                 session.attention_reason = snapshot.attention_reason.map(|r| r.as_str().to_string());
                 session.agent_event = snapshot.agent_event;
                 session.agent_nonce = snapshot.agent_nonce;
+            } else if !session.hook_enabled {
+                // No hook injected — scan process tree for agent detection
+                if let Some(kind) = tmux::detect_agent_in_session(tmux_name).await {
+                    session.agent_detected = Some(kind.as_str().to_string());
+                }
             }
         }
     }
@@ -132,6 +138,7 @@ async fn create_session(
         attention_reason: None,
         agent_event: None,
         agent_nonce: None,
+        agent_detected: None,
     };
 
     (StatusCode::CREATED, Json(json!(session)))

@@ -55,6 +55,8 @@ export interface Session {
   attention_reason?: string
   agent_event?: string
   agent_nonce?: string
+  // Agent process detection (runtime scan, not hook-based)
+  agent_detected?: string
 }
 
 export const api = {
