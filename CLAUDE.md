@@ -138,8 +138,23 @@ git remote add public git@github.com:yourname/OmniTerm.git
 cd ~/coding/OmniTerm          # main worktree
 git checkout release
 git merge main --no-commit     # 合并 main 最新代码
-git reset HEAD openspec/ docs/ AGENTS.md  # 排除开发文档
-git checkout -- openspec/ docs/ AGENTS.md
+
+# 排除开发相关文件
+git reset HEAD \
+  CLAUDE.md AGENTS.md Agent \
+  .pi/ .qoder/ .codegraph/ \
+  openspec/ \
+  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  .dev/ omniterm.db.bak \
+  dev.sh PROGRESS.md CHANGELOG.md
+git checkout -- \
+  CLAUDE.md AGENTS.md Agent \
+  .pi/ .qoder/ .codegraph/ \
+  openspec/ \
+  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  .dev/ omniterm.db.bak \
+  dev.sh PROGRESS.md CHANGELOG.md
+
 git commit -m "release: v1.x.x"
 git push public release:main   # 推送到公开仓
 ```
