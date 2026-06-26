@@ -473,6 +473,9 @@ export function Sidebar() {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
             const hasWorktrees = wtList.length > 0
+            const projHasActiveSession = wtList.some((wt) =>
+              sessionsForWorktree(wt.path).some((s) => s.is_active)
+            )
 
             return (
               <div key={proj.id} className="relative mb-2">
@@ -490,13 +493,16 @@ export function Sidebar() {
                 >
                   <div className="flex-1 min-w-0 mr-2">
                     <div className="flex items-center gap-2">
-                      <span style={{
-                        color: isExpanded ? 'var(--accent)' : 'var(--text-dim)',
-                        fontSize: 12,
-                        transition: 'transform 0.15s',
-                        display: 'inline-block',
-                        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                      }}>▸</span>
+                      <span
+                        className={projHasActiveSession ? 'activity-pulse' : ''}
+                        style={{
+                          color: isExpanded || projHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
+                          fontSize: 12,
+                          transition: 'transform 0.15s',
+                          display: 'inline-block',
+                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                        }}
+                      >▸</span>
                       <span style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isExpanded ? 500 : 400, fontSize: 13 }}>
                         {proj.name}
                       </span>
@@ -526,6 +532,7 @@ export function Sidebar() {
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
                         const wtSessions = sessionsForWorktree(wt.path)
+                        const wtHasActiveSession = wtSessions.some((s) => s.is_active)
                         const isWtExpanded = isWtActive
 
                         return (
@@ -544,10 +551,19 @@ export function Sidebar() {
                               }}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <GitBranchIcon
-                                  size={14}
-                                  color={isWtActive ? 'var(--accent)' : 'var(--text-dim)'}
-                                />
+                                <span
+                                  className={`rounded-full flex items-center justify-center ${wtHasActiveSession ? 'activity-pulse' : ''}`}
+                                  style={{
+                                    width: 16,
+                                    height: 16,
+                                    color: isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
+                                  }}
+                                >
+                                  <GitBranchIcon
+                                    size={14}
+                                    color={isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)'}
+                                  />
+                                </span>
                                 <span
                                   className="truncate"
                                   style={{
