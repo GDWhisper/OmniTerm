@@ -28,6 +28,17 @@ export function IconFile(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconFilePlus(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M9 2H5a1 1 0 00-1 1v10a1 1 0 001 1h6a1 1 0 001-1V5L9 2z" />
+      <polyline points="9,2 9,5 12,5" />
+      <line x1="8" y1="9" x2="8" y2="12" />
+      <line x1="6.5" y1="10.5" x2="9.5" y2="10.5" />
+    </svg>
+  )
+}
+
 export function IconLink(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
@@ -60,6 +71,16 @@ export function IconUpload(props: SVGProps<SVGSVGElement>) {
     <svg {...base} {...props}>
       <path d="M8 10V2" />
       <polyline points="5,5 8,2 11,5" />
+      <path d="M2.5 10v2.5a1 1 0 001 1h9a1 1 0 001-1V10" />
+    </svg>
+  )
+}
+
+export function IconDownload(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M8 2v8" />
+      <polyline points="5,7 8,10 11,7" />
       <path d="M2.5 10v2.5a1 1 0 001 1h9a1 1 0 001-1V10" />
     </svg>
   )

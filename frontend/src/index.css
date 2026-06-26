@@ -327,6 +327,50 @@ html, body, #root {
   color: var(--text-faint);
 }
 
+/* ── Download mode (active button pulse) ── */
+@keyframes fm-download-pulse {
+  0%, 100% {
+    background: rgba(167, 139, 250, 0.14);
+    box-shadow: 0 0 4px rgba(167, 139, 250, 0.3);
+  }
+  50% {
+    background: rgba(167, 139, 250, 0.24);
+    box-shadow: 0 0 10px rgba(167, 139, 250, 0.7);
+  }
+}
+.fm-btn-download-active {
+  animation: fm-download-pulse 1.4s ease-in-out infinite;
+  color: var(--accent);
+}
+.fm-btn-download-active:hover {
+  background: rgba(167, 139, 250, 0.28);
+  color: var(--accent);
+}
+
+/* ── Checkbox column ── */
+.fm-checkbox-cell {
+  width: 32px;
+  padding: 0 6px 0 10px;
+  transition: opacity 0.2s ease;
+}
+.fm-checkbox-cell--dim {
+  opacity: 0.35;
+}
+.fm-checkbox-cell--dim .fm-checkbox {
+  pointer-events: none;
+}
+.fm-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  vertical-align: middle;
+  transition: opacity 0.2s ease;
+}
+.fm-checkbox:hover {
+  filter: drop-shadow(0 0 4px rgba(167, 139, 250, 0.5));
+}
+
 /* ── Drag over state ── */
 .fm-drag-over {
   outline: 2px dashed var(--accent);

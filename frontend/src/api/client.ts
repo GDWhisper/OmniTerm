@@ -136,6 +136,8 @@ export const api = {
   },
   downloadUrl: (workspace: string, path: string) =>
     `/api/v1/files/download?workspace=${workspace}&path=${encodeURIComponent(path)}`,
+  downloadUrlBySession: (sessionId: string, path: string) =>
+    `/api/v1/files/download?session=${sessionId}&path=${encodeURIComponent(path)}`,
   readFile: (workspace: string, path: string) =>
     request<{ content: string }>(`/files/read?workspace=${workspace}&path=${encodeURIComponent(path)}`),
   writeFile: (workspace: string, path: string, content: string) =>
