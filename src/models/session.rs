@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Session {
     pub id: String,
@@ -10,6 +14,10 @@ pub struct Session {
     pub hook_enabled: bool,
     pub hook_status: Option<String>,
     pub created_at: String,
+    // Runtime activity indicator (tmux control mode, not persisted)
+    #[serde(skip_serializing_if = "is_false")]
+    #[sqlx(default)]
+    pub is_active: bool,
     // Agent state fields (read-only, derived from tmux option at query time, not persisted)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]

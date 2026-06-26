@@ -49,6 +49,8 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
+  // Runtime activity indicator (tmux control mode)
+  is_active?: boolean
   // Agent state fields (from tmux @omniterm_agent option)
   agent_kind?: string
   agent_state?: string

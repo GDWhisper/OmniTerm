@@ -8,6 +8,8 @@ mod utils;
 mod workspaces;
 mod ws;
 
+use std::time::Duration;
+
 use axum::Router;
 use sqlx::sqlite::SqlitePoolOptions;
 use tower_http::cors::CorsLayer;
@@ -19,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
 }
 
 #[tokio::main]
@@ -38,7 +41,14 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "omniterm-default-secret-change-me".into());
 
-    let state = AppState { db, jwt_secret };
+    let activity_monitor =
+        tmux::control_mode::SessionActivityMonitor::new(tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT);
+
+    let state = AppState {
+        db,
+        jwt_secret,
+        activity_monitor,
+    };
 
     // Serve frontend static files; fall back to index.html for SPA routing
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());

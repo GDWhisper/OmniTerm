@@ -1,5 +1,6 @@
 pub mod agent_hooks;
 pub mod agent_state;
+pub mod control_mode;
 pub mod hooks;
 
 use anyhow::{anyhow, Result};

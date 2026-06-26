@@ -37,9 +37,14 @@ async fn list_sessions(
             .await
             .unwrap();
 
-    // Enrich sessions with agent state from tmux
+    // Enrich sessions with activity state and agent state from tmux
     for session in &mut sessions {
         if let Some(ref tmux_name) = session.tmux_session_name {
+            if let Err(e) = state.activity_monitor.ensure_session(tmux_name).await {
+                error!("failed to ensure control mode for session {}: {}", tmux_name, e);
+            }
+            session.is_active = state.activity_monitor.is_active(tmux_name).await;
+
             if let Ok(Some(snapshot)) = tmux::get_session_agent_option(tmux_name).await {
                 // Hook-injected session: use option data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
@@ -127,15 +132,20 @@ async fn create_session(
     .await
     .unwrap();
 
+    if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
+        error!("failed to ensure control mode for new session {}: {}", tmux_name, e);
+    }
+
     let session = Session {
         id,
         project_id: pid,
         workspace_path,
         name: req.name,
-        tmux_session_name: Some(tmux_name),
+        tmux_session_name: Some(tmux_name.clone()),
         hook_enabled,
         hook_status: None,
         created_at: now,
+        is_active: false,
         agent_kind: None,
         agent_state: None,
         attention_reason: None,
@@ -195,8 +205,9 @@ async fn delete_session(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    // Kill the tmux session
+    // Remove the control-mode connection and kill the tmux session
     if let Some((tmux_name,)) = tmux_name {
+        state.activity_monitor.remove_session(&tmux_name).await;
         if let Err(e) = tmux::kill_session(&tmux_name).await {
             error!("failed to kill tmux session {}: {}", tmux_name, e);
         }
