@@ -611,7 +611,7 @@ export function Sidebar() {
                                     >
                                       {/* Running indicator dot */}
                                       <div
-                                        className={`rounded-full flex-shrink-0 ${s.is_active && !attnReason ? 'animate-pulse' : ''}`}
+                                        className={`rounded-full flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
                                         style={{
                                           width: 5,
                                           height: 5,
@@ -624,7 +624,7 @@ export function Sidebar() {
                                             : s.is_active
                                               ? 'var(--accent)'
                                               : 'var(--text-dim)',
-                                          boxShadow: attnReason || s.is_active ? 'var(--accent-glow-sm)' : 'none',
+                                          boxShadow: attnReason ? 'var(--accent-glow-sm)' : 'none',
                                         }}
                                       />
                                       <span
