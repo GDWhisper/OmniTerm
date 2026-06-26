@@ -4,7 +4,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
-import type { Project, Workspace, Session } from '../../api/client'
+import type { Session } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -364,7 +364,6 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
-            const hasWorktrees = wtList.length > 0
 
             return (
               <div key={proj.id} className="relative mb-2">

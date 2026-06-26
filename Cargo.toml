@@ -28,6 +28,7 @@ notify = "7"
 async-stream = "0.3"
 sha1 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
+rust-embed = "8"
 
 [dev-dependencies]
 tokio-test = "0.4"

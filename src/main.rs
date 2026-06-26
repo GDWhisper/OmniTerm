@@ -1,5 +1,6 @@
 mod api;
 mod auth;
+mod embedded;
 mod fs;
 mod git;
 mod models;
@@ -9,8 +10,12 @@ mod workspaces;
 mod ws;
 
 use axum::Router;
+use axum::body::Body;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use clap::Parser;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::path::Path;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -38,6 +43,29 @@ pub struct AppState {
     pub jwt_secret: String,
 }
 
+/// Fallback handler that serves static files from embedded assets.
+/// First tries exact file match, then SPA fallback (index.html).
+async fn embedded_static_handler(
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
+    let path = uri.path();
+    if let Some((data, mime)) = embedded::serve_embedded(path) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", mime)
+            .body(Body::from(data))
+            .unwrap();
+    }
+    if let Some((data, mime)) = embedded::serve_spa_fallback(path) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", mime)
+            .body(Body::from(data))
+            .unwrap();
+    }
+    (StatusCode::NOT_FOUND, "Not Found").into_response()
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -58,14 +86,23 @@ async fn main() -> anyhow::Result<()> {
         jwt_secret: args.jwt_secret,
     };
 
-    // Serve frontend static files; fall back to index.html for SPA routing
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
-    let static_service = ServeDir::new(&frontend_dir)
-        .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
 
     let app = Router::new()
-        .merge(api::routes(state.clone()))
-        .fallback_service(static_service)
+        .merge(api::routes(state.clone()));
+
+    // Serve frontend: filesystem in dev mode, embedded in release mode
+    let app = if Path::new(&frontend_dir).is_dir() {
+        let static_service = ServeDir::new(&frontend_dir)
+            .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
+        tracing::info!("Serving frontend from {}", frontend_dir);
+        app.fallback_service(static_service)
+    } else {
+        tracing::info!("Frontend directory '{}' not found, serving from embedded assets", frontend_dir);
+        app.fallback(embedded_static_handler)
+    };
+
+    let app = app
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
