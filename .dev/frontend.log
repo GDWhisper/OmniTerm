@@ -1,8 +1,9 @@
 
-> frontend@0.0.1 dev /home/pax/coding/OmniTerm-dev/frontend
+> frontend@0.0.1 dev /home/pax/coding/OmniTerm-debug/frontend
 > vite
 
 
+<<<<<<< Updated upstream
   VITE v8.0.16  ready in 233 ms
 
   ➜  Local:   http://localhost:9778/
@@ -163,3 +164,10 @@
 17:58:50 [vite] (client) hmr update /src/index.css, /src/components/Terminal/Terminal.tsx
 17:59:07 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
 17:59:15 [vite] (client) hmr update /src/index.css, /src/components/Sidebar/Sidebar.tsx
+=======
+  VITE v8.0.16  ready in 228 ms
+
+  ➜  Local:   http://localhost:19778/
+  ➜  Network: http://192.168.5.216:19778/
+  ➜  Network: http://172.18.0.1:19778/
+>>>>>>> Stashed changes

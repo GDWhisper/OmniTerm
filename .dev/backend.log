@@ -14,9 +14,9 @@ warning: struct `RequireAuth` is never constructed
    |            ^^^^^^^^^^^
 
 warning: function `normalize_path` is never used
-   --> src/fs/mod.rs:130:4
+   --> src/fs/mod.rs:128:4
     |
-130 | fn normalize_path(path: &Path) -> String {
+128 | fn normalize_path(path: &Path) -> String {
     |    ^^^^^^^^^^^^^^
 
 warning: struct `User` is never constructed
@@ -70,6 +70,7 @@ warning: variants `Pong` and `Exit` are never constructed
    = note: `ServerControl` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
 
 warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
+<<<<<<< Updated upstream
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.11s
      Running `target/debug/omniterm-server`
 [2m2026-06-25T09:43:16.477987Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:9777
@@ -89,3 +90,10 @@ warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
 [2m2026-06-25T09:58:12.898199Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m sent SIGHUP to tmux client pid=1000697
 [2m2026-06-25T09:58:12.898239Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS disconnected: session=bb14f7d3-ed3e-40e9-9b31-e76dec790adb
 [2m2026-06-25T09:58:12.899278Z[0m [34mDEBUG[0m [2momniterm_server::ws::terminal[0m[2m:[0m PTY reader exited
+=======
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running `target/debug/omniterm-server`
+[2m2026-06-25T10:14:54.045567Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:19777
+[2m2026-06-25T10:15:27.767449Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=beb07c65-5e26-4799-8d83-b00186c51176 tmux=lt_beb07c65
+[2m2026-06-25T10:15:27.767703Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal PTY initial size: 207x65 for session=beb07c65-5e26-4799-8d83-b00186c51176
+>>>>>>> Stashed changes
