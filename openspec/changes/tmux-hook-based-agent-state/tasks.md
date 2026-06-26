@@ -35,7 +35,7 @@
 - [x] 5.3 Wrap each `tmux show-options` call in `tokio::time::timeout(Duration::from_secs(2), ...)`; on timeout, log warning; on 3 consecutive timeouts, stop polling and push `state: "unknown"`
 - [x] 5.4 In `handle_terminal`, after the main `tokio::select!` returns, send shutdown signal via oneshot and `await` the agent handle to ensure clean task exit (no leak)
 - [x] 5.5 Add `agent_state` message type handling in the frontend `useTerminal` hook — fire the Attention API on state transitions
-- [ ] 5.6 Write unit/integration test: drop WS connection, wait 2s, verify no more `tmux show-options` subprocesses are spawned
+- [x] 5.6 Write unit/integration test: drop WS connection, wait 2s, verify no more `tmux show-options` subprocesses are spawned
 
 ## 6. Hook status API refactor
 
@@ -49,7 +49,7 @@
 - [x] 7.1 Create `frontend/src/components/Attention/AttentionProvider.tsx` — React Context providing `fire(targetId, session, reason)`, `clearAlert(...)`, `setActive(...)`, `reasonFor(...)`. Alert state: `Map<sessionKey, AttentionReason>`. Tab title flash logic when `document.hidden`.
 - [x] 7.2 Add `useAttention` hook in `frontend/src/hooks/useAttention.ts`
 - [x] 7.3 Implement sound notification using Web Audio API — short sine wave ping (880Hz, 300ms decay), with `resume()` for autoplay policy
-- [ ] 7.4 Write unit tests for AttentionProvider — verify alerts fire, clear, active session suppression
+- [x] 7.4 Write unit tests for AttentionProvider — verify alerts fire, clear, active session suppression
 
 ## 8. Frontend: Smart diff and decision debounce
 
@@ -69,11 +69,11 @@
 ## 10. Testing and validation
 
 - [x] 10.1 Unit tests: agent state parser, hook config generation, command detection, AttentionProvider
-- [ ] 10.2 Integration test: create session with mock Claude Code command, verify `@omniterm_agent` initialized, hook-status returns correct state
-- [ ] 10.3 Integration test: create session without agent, verify `hook_enabled=false`, hook-status falls back to heuristic
-- [ ] 10.4 Manual end-to-end: debug branch (port 19777/19778), create real Claude Code session, trigger hooks via real agent usage, verify badge + sound + tab flash
-- [ ] 10.5 Resource safety tests: (a) WS disconnect → agent poll task exits within 2s, (b) tmux timeout → 3 consecutive failures → polling stops, (c) shell-escaped agent values with special chars don't break hook config
-- [ ] 10.6 Frontend compatibility: existing UI works unchanged, new attention features degrade gracefully when agent state is absent
+- [x] 10.2 Integration test: create session with mock Claude Code command, verify `@omniterm_agent` initialized, hook-status returns correct state
+- [x] 10.3 Integration test: create session without agent, verify `hook_enabled=false`, hook-status falls back to heuristic
+- [x] 10.4 Manual end-to-end: debug branch (port 19777/19778), create real Claude Code session, trigger hooks via real agent usage, verify badge + sound + tab flash
+- [x] 10.5 Resource safety tests: (a) WS disconnect → agent poll task exits within 2s, (b) tmux timeout → 3 consecutive failures → polling stops, (c) shell-escaped agent values with special chars don't break hook config
+- [x] 10.6 Frontend compatibility: existing UI works unchanged, new attention features degrade gracefully when agent state is absent (verified via TypeScript compilation + no existing test regressions)
 
 ## 11. Documentation and cleanup
 
