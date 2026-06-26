@@ -174,18 +174,19 @@ async fn reader_loop(
     last_output_at: Arc<Mutex<Option<Instant>>>,
     mut shutdown: oneshot::Receiver<()>,
 ) {
-    let mut line = String::new();
+    // Use a byte buffer because pane output may contain invalid UTF-8.
+    let mut line = Vec::new();
 
     loop {
         line.clear();
 
         tokio::select! {
             _ = &mut shutdown => break,
-            result = reader.read_line(&mut line) => {
+            result = reader.read_until(b'\n', &mut line) => {
                 match result {
                     Ok(0) => break,
                     Ok(_) => {
-                        if line.starts_with("%output") {
+                        if line.starts_with(b"%output") {
                             let mut guard = last_output_at.lock().await;
                             *guard = Some(Instant::now());
                             debug!("tmux control mode %output event received");
