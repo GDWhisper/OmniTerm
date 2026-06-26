@@ -82,9 +82,11 @@ export function Sidebar() {
   const [sessName, setSessName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
-  const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
-  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Agent enable button state — commented out pending notification scheme decision.
+  // See docs/requirements.md "Agent 状态监控与通知".
+  // const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
+  // const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
+  // const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -211,14 +213,14 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
-  // Cleanup tooltip timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (tooltipTimeoutRef.current) {
-        clearTimeout(tooltipTimeoutRef.current)
-      }
-    }
-  }, [])
+  // Cleanup tooltip timeout on unmount — commented out pending notification scheme decision.
+  // useEffect(() => {
+  //   return () => {
+  //     if (tooltipTimeoutRef.current) {
+  //       clearTimeout(tooltipTimeoutRef.current)
+  //     }
+  //   }
+  // }, [])
 
   // Toggle project expansion
   const toggleProject = async (projectId: string) => {
@@ -271,18 +273,19 @@ export function Sidebar() {
     }
   }
 
-  const handleHookEnable = useCallback(async (sessionId: string) => {
-    setEnablingSessionId(sessionId)
-    try {
-      await api.hookEnable(sessionId)
-      addToast('success', 'Agent 监控已启用')
-      await loadSessions()
-    } catch {
-      addToast('error', '启用 Agent 监控失败')
-    } finally {
-      setEnablingSessionId(null)
-    }
-  }, [loadSessions, addToast])
+  // Agent enable handler — commented out pending notification scheme decision.
+  // const handleHookEnable = useCallback(async (sessionId: string) => {
+  //   setEnablingSessionId(sessionId)
+  //   try {
+  //     await api.hookEnable(sessionId)
+  //     addToast('success', 'Agent 监控已启用')
+  //     await loadSessions()
+  //   } catch {
+  //     addToast('error', '启用 Agent 监控失败')
+  //   } finally {
+  //     setEnablingSessionId(null)
+  //   }
+  // }, [loadSessions, addToast])
 
   const handleDeleteProject = async () => {
     if (!confirmDelete || confirmDelete.type !== 'project') return
@@ -431,8 +434,9 @@ export function Sidebar() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
-        {/* Agent onboarding banner */}
+        {/* Agent onboarding banner — commented out pending notification scheme decision.
         <AgentOnboardingBanner sessions={sessions} />
+        */}
 
         {/* Section label */}
         <div className="flex items-center justify-between px-1 mb-2.5">
@@ -654,64 +658,14 @@ export function Sidebar() {
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
                                       )}
-                                      {/* Agent enable button */}
+                                      {/* Agent enable button — commented out pending notification scheme decision.
+                                          See docs/requirements.md "Agent 状态监控与通知".
                                       {s.agent_detected && !s.hook_enabled && (
                                         <div className="relative flex-shrink-0">
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation()
-                                              handleHookEnable(s.id)
-                                            }}
-                                            disabled={enablingSessionId === s.id}
-                                            className="flex items-center justify-center rounded transition-all"
-                                            style={{
-                                              width: 20,
-                                              height: 20,
-                                              border: '1px solid var(--accent)',
-                                              color: 'var(--accent)',
-                                              fontSize: 10,
-                                              opacity: enablingSessionId === s.id ? 0.5 : 1,
-                                              background: enablingSessionId === s.id ? 'var(--accent-14)' : 'transparent',
-                                            }}
-                                            onMouseEnter={() => {
-                                              tooltipTimeoutRef.current = setTimeout(() => {
-                                                setTooltipSessionId(s.id)
-                                              }, 500)
-                                            }}
-                                            onMouseLeave={() => {
-                                              if (tooltipTimeoutRef.current) {
-                                                clearTimeout(tooltipTimeoutRef.current)
-                                                tooltipTimeoutRef.current = null
-                                              }
-                                              setTooltipSessionId(null)
-                                            }}
-                                          >
-                                            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                              <circle cx="7" cy="7" r="5" />
-                                              <line x1="11" y1="11" x2="14" y2="14" />
-                                            </svg>
-                                          </button>
-                                          {tooltipSessionId === s.id && (
-                                            <div
-                                              className="absolute z-50 whitespace-nowrap pointer-events-none"
-                                              style={{
-                                                bottom: '100%',
-                                                left: '50%',
-                                                transform: 'translateX(-50%)',
-                                                marginBottom: 6,
-                                                padding: '4px 8px',
-                                                fontSize: 10,
-                                                background: '#111827',
-                                                border: '1px solid #334155',
-                                                borderRadius: 4,
-                                                color: '#cbd5e1',
-                                              }}
-                                            >
-                                              开启后可获得实时状态通知、决策提醒音、侧边栏标记
-                                            </div>
-                                          )}
+                                          ...
                                         </div>
                                       )}
+                                      */}
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -946,7 +900,11 @@ function ModalPrimary({ onClick, disabled, children }: { onClick: () => void; di
  * AgentOnboardingBanner — shown at the top of the sidebar when
  * an agent (Claude Code / Codex) is detected in any session.
  * Disappears when user clicks ✕ (persisted in localStorage).
+ *
+ * COMMENTED OUT pending notification scheme decision.
+ * See docs/requirements.md "Agent 状态监控与通知".
  */
+/*
 function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
   const [dismissed, setDismissed] = useState(() => {
     return localStorage.getItem('omniterm_onboarding_agent_done') === 'true'
@@ -1004,3 +962,4 @@ function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
     </div>
   )
 }
+*/

@@ -47,12 +47,15 @@ async fn list_sessions(
                 session.attention_reason = snapshot.attention_reason.map(|r| r.as_str().to_string());
                 session.agent_event = snapshot.agent_event;
                 session.agent_nonce = snapshot.agent_nonce;
-            } else if !session.hook_enabled {
-                // No hook injected — scan process tree for agent detection
-                if let Some(kind) = tmux::detect_agent_in_session(tmux_name).await {
-                    session.agent_detected = Some(kind.as_str().to_string());
-                }
             }
+            // Agent process detection is commented out pending notification scheme decision.
+            // See docs/requirements.md "Agent 状态监控与通知".
+            // else if !session.hook_enabled {
+            //     // No hook injected — scan process tree for agent detection
+            //     if let Some(kind) = tmux::detect_agent_in_session(tmux_name).await {
+            //         session.agent_detected = Some(kind.as_str().to_string());
+            //     }
+            // }
         }
     }
 

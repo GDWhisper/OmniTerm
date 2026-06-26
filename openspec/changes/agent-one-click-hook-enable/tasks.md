@@ -1,3 +1,5 @@
+> **2026-06-26 备注**：Agent 状态监控/通知方案尚未最终确定，当前实现已注释下线。详见 `docs/requirements.md` 中「Agent 状态监控与通知」章节。相关代码保留，待方案明确后重启。
+
 ## 1. 后端：进程树扫描
 
 - [x] 1.1 在 `src/tmux/mod.rs` 新增 `detect_agent_in_session(session_name: &str) -> Option<AgentKind>` — 通过 `tmux list-panes -t <name> -F '#{pane_pid}'` 获取 PID 列表，读取 `/proc/<pid>/cmdline` 或 `ps -p <pid> -o comm=`，用 `agent_hooks::detect_agent_kind` 匹配（复用已有检测逻辑）
