@@ -1,0 +1,127 @@
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 26891, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Caught up 41 file(s) changed since last run
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 66972, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Auto-synced 1 file(s) in 76ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 24ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 30ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 30ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 24ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 20ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 23ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 19ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 42ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 28ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 1365807, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Caught up 7 file(s) changed since last run
+[CodeGraph MCP] Auto-synced 1 file(s) in 22ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 22ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 1555908, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Auto-synced 1 file(s) in 75ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 37ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 23ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 21ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 23ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 28ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 28ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 2231786, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Auto-synced 1 file(s) in 74ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 37ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 35ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 36ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 28ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 30ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 34ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 24ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 22ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 25ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 30ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=2).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 2429366, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Caught up 3 file(s) changed since last run
+[CodeGraph MCP] Auto-synced 1 file(s) in 45ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 35ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 39ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 32ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 24ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 2507556, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Caught up 1 file(s) changed since last run
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 33ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 3780069, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Caught up 4 file(s) changed since last run
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=1).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 4021118, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Auto-synced 1 file(s) in 68ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 23ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 27ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 25ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 43ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 34ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 31ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 22ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 25ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 26ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 29ms
+[CodeGraph daemon] Shutting down (inactivity backstop; clients=2).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 96120, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph MCP] Auto-synced 1 file(s) in 67ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 47ms
+[CodeGraph MCP] Auto-synced 1 file(s) in 38ms
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).
+[CodeGraph daemon] Listening on /home/pax/coding/OmniTerm/.codegraph/daemon.sock (pid 904538, v1.0.1). Idle timeout 300000ms.
+[CodeGraph MCP] File watcher active — graph will auto-sync on changes
+[CodeGraph daemon] Shutting down (idle timeout; clients=0).

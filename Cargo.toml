@@ -1,6 +1,6 @@
 [package]
-name = "omniterm-server"
-version = "0.0.1"
+name = "omniterm"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
@@ -27,6 +27,7 @@ libc = "0.2"
 notify = "7"
 async-stream = "0.3"
 sha1 = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

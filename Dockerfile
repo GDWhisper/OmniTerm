@@ -24,8 +24,8 @@ COPY --from=backend /app/target/release/omniterm-server ./
 COPY --from=frontend /app/dist ./frontend/dist
 COPY migrations/ ./migrations/
 
-ENV BIND_ADDR=0.0.0.0:3000
+ENV BIND_ADDR=0.0.0.0:9077
 ENV FRONTEND_DIR=frontend/dist
-EXPOSE 3000
+EXPOSE 9077
 
-CMD ["./omniterm-server"]
+CMD ["./omniterm"]
