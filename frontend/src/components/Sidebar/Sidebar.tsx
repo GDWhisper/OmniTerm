@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
+import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import type { Project, Workspace, Session } from '../../api/client'
@@ -11,6 +12,35 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+
+function ProjectPath({ path }: { path: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [overflow, setOverflow] = useState(false)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setOverflow(el.scrollWidth > el.clientWidth)
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    check()
+    return () => ro.disconnect()
+  }, [path])
+
+  return (
+    <span
+      ref={ref}
+      className="block truncate"
+      style={{
+        fontSize: 11,
+        color: 'var(--text-faint)',
+        direction: overflow ? 'rtl' : 'ltr',
+      }}
+    >
+      {path}
+    </span>
+  )
+}
 
 export function Sidebar() {
   const {
@@ -36,6 +66,7 @@ export function Sidebar() {
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
+  const attention = useAttention()
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
@@ -51,6 +82,9 @@ export function Sidebar() {
   const [sessName, setSessName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
+  const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
+  const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -86,6 +120,80 @@ export function Sidebar() {
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
 
+  // ── Smart diff: session polling + attention detection ──
+  const lastAgentEventRef = useRef<Map<string, string>>(new Map())
+  const decisionCandidatesRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    // Poll sessions every 3 seconds for agent state changes
+    const interval = setInterval(async () => {
+      if (!activeProjectId) return
+      try {
+        const freshSessions = await api.listSessions(activeProjectId)
+        const currentSessionKeys = new Set<string>()
+
+        for (const s of freshSessions) {
+          const sessionKey = s.id
+          currentSessionKeys.add(sessionKey)
+
+          // Build event key from agent state fields
+          const eventKey = [
+            s.agent_kind ?? '',
+            s.agent_state ?? '',
+            s.attention_reason ?? '',
+            s.agent_event ?? '',
+            s.agent_nonce ?? '',
+          ].join(':')
+
+          const lastKey = lastAgentEventRef.current.get(sessionKey)
+          if (eventKey && eventKey !== lastKey) {
+            lastAgentEventRef.current.set(sessionKey, eventKey)
+
+            const state = s.agent_state
+            const reason = s.attention_reason as AttentionReason | undefined
+
+            if (state === 'idle' && reason === 'done') {
+              // Done — fire immediately
+              attention.fire(s.id, sessionKey, 'done')
+              decisionCandidatesRef.current.delete(sessionKey)
+            } else if (state === 'idle' && reason === 'error') {
+              // Error — fire immediately
+              attention.fire(s.id, sessionKey, 'error')
+              decisionCandidatesRef.current.delete(sessionKey)
+            } else if (state === 'waiting' && reason === 'decision') {
+              // Decision — debounce: wait one more cycle
+              if (decisionCandidatesRef.current.has(sessionKey)) {
+                attention.fire(s.id, sessionKey, 'decision')
+                decisionCandidatesRef.current.delete(sessionKey)
+              } else {
+                decisionCandidatesRef.current.add(sessionKey)
+              }
+            } else if (state === 'running') {
+              // Running — clear any alert
+              attention.clearAlert(sessionKey)
+              decisionCandidatesRef.current.delete(sessionKey)
+            }
+          }
+        }
+
+        // Clear alerts for sessions that disappeared
+        for (const key of lastAgentEventRef.current.keys()) {
+          if (!currentSessionKeys.has(key)) {
+            attention.clearAlert(key)
+            lastAgentEventRef.current.delete(key)
+            decisionCandidatesRef.current.delete(key)
+          }
+        }
+
+        setSessions(freshSessions)
+      } catch {
+        // Quietly ignore poll errors
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [activeProjectId, setSessions, attention])
+
   useEffect(() => {
     api.systemInfo().then((info) => {
       setHomeDir(info.home_dir)
@@ -102,6 +210,15 @@ export function Sidebar() {
     const id = setInterval(check, 5000)
     return () => clearInterval(id)
   }, [setConnected])
+
+  // Cleanup tooltip timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current)
+      }
+    }
+  }, [])
 
   // Toggle project expansion
   const toggleProject = async (projectId: string) => {
@@ -153,6 +270,19 @@ export function Sidebar() {
       setSubmitting(false)
     }
   }
+
+  const handleHookEnable = useCallback(async (sessionId: string) => {
+    setEnablingSessionId(sessionId)
+    try {
+      await api.hookEnable(sessionId)
+      addToast('success', 'Agent 监控已启用')
+      await loadSessions()
+    } catch {
+      addToast('error', '启用 Agent 监控失败')
+    } finally {
+      setEnablingSessionId(null)
+    }
+  }, [loadSessions, addToast])
 
   const handleDeleteProject = async () => {
     if (!confirmDelete || confirmDelete.type !== 'project') return
@@ -301,6 +431,9 @@ export function Sidebar() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+        {/* Agent onboarding banner */}
+        <AgentOnboardingBanner sessions={sessions} />
+
         {/* Section label */}
         <div className="flex items-center justify-between px-1 mb-2.5">
           <div className="flex items-center gap-1.5">
@@ -364,9 +497,8 @@ export function Sidebar() {
                         {proj.name}
                       </span>
                     </div>
-                    <div className="pl-5 mt-0.5 group/path">
-                      <span className="block truncate group-hover/path:hidden" style={{ fontSize: 11, color: 'var(--text-faint)' }}>{proj.path}</span>
-                      <span className="hidden group-hover/path:block break-all" style={{ fontSize: 11, color: 'var(--text-muted)' }}>{proj.path}</span>
+                    <div className="pl-5 mt-0.5">
+                      <ProjectPath path={proj.path} />
                     </div>
                   </div>
                   <div className="flex items-center">
@@ -456,8 +588,8 @@ export function Sidebar() {
 
                                 {wtSessions.map((s) => {
                                   const isSessionActive = activeSessionId === s.id
-                                  const statusLabel = s.hook_status || 'Running'
-                                  const isRunning = statusLabel === 'Running' || statusLabel === 'Decision'
+                                  const sessionKey = s.id
+                                  const attnReason = attention.reasonFor(sessionKey)
                                   return (
                                     <div
                                       key={s.id}
@@ -468,15 +600,25 @@ export function Sidebar() {
                                         background: isSessionActive ? 'rgba(167,139,250,0.08)' : 'transparent',
                                         border: isSessionActive ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
                                       }}
-                                      onClick={() => setActiveSession(s.id)}
+                                      onClick={() => {
+                                        setActiveSession(s.id)
+                                        attention.setActive(sessionKey)
+                                      }}
                                     >
+                                      {/* Running indicator dot */}
                                       <div
                                         className="rounded-full flex-shrink-0"
                                         style={{
                                           width: 5,
                                           height: 5,
-                                          background: isRunning ? 'var(--success)' : 'var(--text-dim)',
-                                          boxShadow: isRunning ? 'var(--success-glow)' : 'none',
+                                          background: attnReason
+                                            ? attnReason === 'decision'
+                                              ? '#f59e0b'
+                                              : attnReason === 'error'
+                                                ? 'var(--danger)'
+                                                : 'var(--success)'
+                                            : 'var(--text-dim)',
+                                          boxShadow: attnReason ? 'var(--accent-glow-sm)' : 'none',
                                         }}
                                       />
                                       <span
@@ -485,6 +627,91 @@ export function Sidebar() {
                                       >
                                         {s.name || s.tmux_session_name}
                                       </span>
+                                      {/* Attention badge */}
+                                      {attnReason && (
+                                        <span
+                                          className="flex-shrink-0 rounded-full flex items-center justify-center animate-pulse"
+                                          style={{
+                                            width: 16,
+                                            height: 16,
+                                            fontSize: 10,
+                                            background: attnReason === 'decision'
+                                              ? 'rgba(245,158,11,0.2)'
+                                              : attnReason === 'error'
+                                                ? 'rgba(239,68,68,0.2)'
+                                                : 'rgba(34,197,94,0.2)',
+                                            color: attnReason === 'decision'
+                                              ? '#f59e0b'
+                                              : attnReason === 'error'
+                                                ? 'var(--danger)'
+                                                : 'var(--success)',
+                                          }}
+                                          title={
+                                            attnReason === 'decision' ? 'Needs decision' :
+                                            attnReason === 'error' ? 'Error' : 'Done'
+                                          }
+                                        >
+                                          {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
+                                        </span>
+                                      )}
+                                      {/* Agent enable button */}
+                                      {s.agent_detected && !s.hook_enabled && (
+                                        <div className="relative flex-shrink-0">
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation()
+                                              handleHookEnable(s.id)
+                                            }}
+                                            disabled={enablingSessionId === s.id}
+                                            className="flex items-center justify-center rounded transition-all"
+                                            style={{
+                                              width: 20,
+                                              height: 20,
+                                              border: '1px solid var(--accent)',
+                                              color: 'var(--accent)',
+                                              fontSize: 10,
+                                              opacity: enablingSessionId === s.id ? 0.5 : 1,
+                                              background: enablingSessionId === s.id ? 'var(--accent-14)' : 'transparent',
+                                            }}
+                                            onMouseEnter={() => {
+                                              tooltipTimeoutRef.current = setTimeout(() => {
+                                                setTooltipSessionId(s.id)
+                                              }, 500)
+                                            }}
+                                            onMouseLeave={() => {
+                                              if (tooltipTimeoutRef.current) {
+                                                clearTimeout(tooltipTimeoutRef.current)
+                                                tooltipTimeoutRef.current = null
+                                              }
+                                              setTooltipSessionId(null)
+                                            }}
+                                          >
+                                            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                              <circle cx="7" cy="7" r="5" />
+                                              <line x1="11" y1="11" x2="14" y2="14" />
+                                            </svg>
+                                          </button>
+                                          {tooltipSessionId === s.id && (
+                                            <div
+                                              className="absolute z-50 whitespace-nowrap pointer-events-none"
+                                              style={{
+                                                bottom: '100%',
+                                                left: '50%',
+                                                transform: 'translateX(-50%)',
+                                                marginBottom: 6,
+                                                padding: '4px 8px',
+                                                fontSize: 10,
+                                                background: '#111827',
+                                                border: '1px solid #334155',
+                                                borderRadius: 4,
+                                                color: '#cbd5e1',
+                                              }}
+                                            >
+                                              开启后可获得实时状态通知、决策提醒音、侧边栏标记
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -712,5 +939,68 @@ function ModalPrimary({ onClick, disabled, children }: { onClick: () => void; di
     >
       {children}
     </button>
+  )
+}
+
+/**
+ * AgentOnboardingBanner — shown at the top of the sidebar when
+ * an agent (Claude Code / Codex) is detected in any session.
+ * Disappears when user clicks ✕ (persisted in localStorage).
+ */
+function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
+  const [dismissed, setDismissed] = useState(() => {
+    return localStorage.getItem('omniterm_onboarding_agent_done') === 'true'
+  })
+
+  const hasAgentSession = sessions.some(s => s.agent_detected != null)
+
+  if (dismissed || !hasAgentSession) return null
+
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-2 mx-1 mb-2 rounded-md"
+      style={{
+        background: 'rgba(167, 139, 250, 0.1)',
+        border: '1px solid rgba(167, 139, 250, 0.2)',
+        fontSize: 11,
+        color: 'var(--text-secondary)',
+      }}
+    >
+      <span className="flex-shrink-0" style={{ color: 'var(--accent)', fontSize: 13, display: 'flex', alignItems: 'center' }}>
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7" cy="7" r="5" />
+          <line x1="11" y1="11" x2="14" y2="14" />
+        </svg>
+      </span>
+      <span className="flex-1">
+        检测到 AI Agent — 开启 Agent 监控，实时掌握运行状态、接收决策提醒
+      </span>
+      <button
+        onClick={() => {
+          localStorage.setItem('omniterm_onboarding_agent_done', 'true')
+          setDismissed(true)
+        }}
+        className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+        style={{
+          width: 18,
+          height: 18,
+          border: '1px solid var(--border-strong)',
+          color: 'var(--text-faint)',
+          fontSize: 10,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = 'var(--accent)'
+          e.currentTarget.style.color = 'var(--accent)'
+          e.currentTarget.style.background = 'var(--accent-10)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = 'var(--border-strong)'
+          e.currentTarget.style.color = 'var(--text-faint)'
+          e.currentTarget.style.background = 'transparent'
+        }}
+      >
+        ✕
+      </button>
+    </div>
   )
 }

@@ -125,7 +125,7 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
                 .unwrap_or_else(|| {
                     std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
                 });
-            tmux::new_session(&tmux_name, &root).await.ok()?;
+            tmux::new_session(&tmux_name, &root, None).await.ok()?;
             let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
             tracing::info!("re-created tmux session '{}' at {}", tmux_name, cwd);
             Some((cwd, tmux_name))

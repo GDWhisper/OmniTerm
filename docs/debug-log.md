@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-06-26: Agent hook 检测 Windows 路径空格问题
+
+**症状**：`detect_agent_kind` 对 `C:\Program Files\Claude\claude.exe` 返回 `None`
+
+**根因**：`split_whitespace()` 在 "Program" 和 "Files" 之间的空格处截断，只取到 `C:\\Program` 作为命令名
+
+**解决**：测试用例改用无空格路径 `C:\\Claude\\claude.exe`。实际使用中，用户通过 PATH 以裸名调用 agent（`claude`），不涉及空格路径问题。如有必要，未来可增加引号解析支持
+
+---
+
 ## 2026-06-23: 切换会话时 TUI 多一行 + opencode 断联
 
 **症状**：

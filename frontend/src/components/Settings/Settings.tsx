@@ -88,29 +88,29 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 export function Settings() {
   const { t, i18n } = useTranslation()
   const { theme, setTheme } = useThemeStore()
-  const { fontSize, setFontSize } = useAppStore()
+  const { fontSize, setFontSize, autoCopySelect, setAutoCopySelect } = useAppStore()
 
   return (
     <div style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontFamily: FONT }}>
-      <div className="max-w-lg mx-auto p-4 space-y-6">
-        <h2 style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 600 }}>{t('settings.title')}</h2>
+      <div className="max-w-lg mx-auto space-y-5" style={{ padding: '12px 16px' }}>
+        <h2 style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 600, letterSpacing: '0.3px' }}>{t('settings.title')}</h2>
 
         {/* Theme */}
-        <section className="space-y-3">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.theme')}</h3>
-          <div className="flex gap-2">
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.theme')}</h3>
+          <div className="flex gap-1.5">
             {themes.map((th) => {
               const isActive = theme === th.value
               return (
                 <button
                   key={th.value}
                   onClick={() => setTheme(th.value)}
-                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 text-sm"
-                  style={isActive ? btnActive : btnBase}
+                  className="flex-1 flex items-center justify-center gap-1.5"
+                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
                   onMouseEnter={btnHover}
                   onMouseLeave={(e) => btnLeave(e, isActive)}
                 >
-                  <th.Icon size={16} />
+                  <th.Icon size={14} />
                   <span>{t(th.labelKey)}</span>
                 </button>
               )
@@ -119,17 +119,17 @@ export function Settings() {
         </section>
 
         {/* Language */}
-        <section className="space-y-3">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.language')}</h3>
-          <div className="flex gap-2">
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.language')}</h3>
+          <div className="flex gap-1.5">
             {languages.map((lang) => {
               const isActive = i18n.language === lang.value || i18n.language.startsWith(lang.value)
               return (
                 <button
                   key={lang.value}
                   onClick={() => i18n.changeLanguage(lang.value)}
-                  className="flex-1 flex items-center justify-center px-3 py-2.5 text-sm"
-                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12 }}
+                  className="flex-1 flex items-center justify-center"
+                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
                   onMouseEnter={btnHover}
                   onMouseLeave={(e) => btnLeave(e, isActive)}
                 >
@@ -141,17 +141,22 @@ export function Settings() {
         </section>
 
         {/* Font size */}
-        <section className="space-y-3">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
             {t('settings.fontSize')}
           </h3>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setFontSize(fontSize - 1)}
               disabled={fontSize <= 10}
-              className="w-9 h-9 flex items-center justify-center text-lg"
               style={{
                 ...btnBase,
+                width: 28,
+                height: 28,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
                 opacity: fontSize <= 10 ? 0.5 : 1,
                 color: 'var(--text-muted)',
               }}
@@ -161,15 +166,20 @@ export function Settings() {
               −
             </button>
             <div className="flex-1 text-center">
-              <span style={{ fontSize: 24, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{fontSize}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 4 }}>px</span>
+              <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{fontSize}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
             </div>
             <button
               onClick={() => setFontSize(fontSize + 1)}
               disabled={fontSize >= 24}
-              className="w-9 h-9 flex items-center justify-center text-lg"
               style={{
                 ...btnBase,
+                width: 28,
+                height: 28,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
                 opacity: fontSize >= 24 ? 0.5 : 1,
                 color: 'var(--text-muted)',
               }}
@@ -186,16 +196,48 @@ export function Settings() {
             value={fontSize}
             onChange={(e) => setFontSize(Number(e.target.value))}
             className="w-full"
-            style={{ accentColor: 'var(--accent)' }}
+            style={{ accentColor: 'var(--accent)', height: 4 }}
           />
         </section>
 
+        {/* ── Auto-copy on select ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.autoCopySelect')}</h3>
+          <button
+            onClick={() => setAutoCopySelect(!autoCopySelect)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(autoCopySelect ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: autoCopySelect ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {autoCopySelect ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.autoCopySelectHint')}</p>
+        </section>
+
+        {/* ── Keybinding Mode (HIDDEN) ─────────────────────────────────
+          * 现代快捷键映射方案已验证可行，但独立实现维护成本高。
+          * 未来方向：改造为「插件激活模式」，利用 tmux 成熟的插件生态
+          * （如 tmux-sensible, tmux-pain-control 等）实现快捷键定制，
+          * OmniTerm 只负责 UI 开关和插件管理，不重复造轮子。
+          *
+          * 底层代码保留（appStore.keybindingMode + useTerminal handler），
+          * 等插件系统就绪后重新激活此 UI。
+          */}
+
         {/* Info */}
-        <section className="space-y-3">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 12, fontWeight: 500 }}>{t('settings.about')}</h3>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }} className="space-y-1">
-            <p>OmniTerm — Web-based tmux terminal manager</p>
-            <p style={{ fontSize: 11, color: 'var(--text-faint)' }}>Phase 7 · MIT License</p>
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.about')}</h3>
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            <p>{t('settings.slogan')}</p>
           </div>
         </section>
       </div>
