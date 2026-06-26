@@ -1,11 +1,24 @@
+pub mod agent_hooks;
+pub mod agent_state;
 pub mod hooks;
 
 use anyhow::{anyhow, Result};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-/// Create a new detached tmux session.
-pub async fn new_session(name: &str, cwd: &str) -> Result<()> {
+use crate::tmux::agent_state::AgentSnapshot;
+
+/// Create a new detached tmux session with an optional startup command.
+///
+/// If `command` is provided and detected as a supported agent CLI, the command
+/// is augmented with hook configuration flags, the `@omniterm_agent` option is
+/// initialized, and the augmented command is sent via `send-keys`.
+///
+/// Returns whether hooks were injected.
+pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
+    use crate::tmux::agent_hooks;
+
+    // 1. Create the tmux session (plain shell)
     let output = Command::new("tmux")
         .args([
             "new-session",
@@ -23,8 +36,7 @@ pub async fn new_session(name: &str, cwd: &str) -> Result<()> {
         return Err(anyhow!("tmux new-session failed: {}", stderr));
     }
 
-    // Enable mouse support so scroll wheel events are forwarded to tmux
-    // (without this, the wheel only scrolls xterm.js's own scrollback buffer)
+    // 2. Enable mouse support
     let mouse_out = Command::new("tmux")
         .args(["set-option", "-t", name, "mouse", "on"])
         .output()
@@ -37,8 +49,42 @@ pub async fn new_session(name: &str, cwd: &str) -> Result<()> {
         );
     }
 
-    debug!("created tmux session: {} (cwd: {})", name, cwd);
-    Ok(())
+    // 3. If an agent command is provided, detect agent, inject hooks, and send command
+    let mut hook_injected = false;
+    if let Some(cmd) = command {
+        if let Some(kind) = agent_hooks::detect_agent_kind(cmd) {
+            // Initialize agent option before launching agent
+            let initial_value = agent_hooks::initial_agent_option_value(kind);
+            let opt_out = Command::new("tmux")
+                .args(["set-option", "-t", name, "@omniterm_agent", &initial_value])
+                .output()
+                .await?;
+            if !opt_out.status.success() {
+                warn!(
+                    "failed to set @omniterm_agent for session {}: {}",
+                    name,
+                    String::from_utf8_lossy(&opt_out.stderr)
+                );
+            } else {
+                debug!("initialized @omniterm_agent for session {}: {}", name, initial_value);
+            }
+
+            // Augment the command with hook configuration
+            let augmented = agent_hooks::augment_agent_command(cmd)
+                .unwrap_or_else(|| cmd.to_string());
+
+            // Send the augmented command via send-keys
+            send_keys(name, &augmented).await?;
+            hook_injected = true;
+            debug!("sent agent command to session {}: {}", name, augmented);
+        } else {
+            // Non-agent command — just send it as-is
+            send_keys(name, cmd).await?;
+        }
+    }
+
+    debug!("created tmux session: {} (cwd: {}, hook_injected: {})", name, cwd, hook_injected);
+    Ok(hook_injected)
 }
 
 /// Kill a tmux session.
@@ -57,13 +103,17 @@ pub async fn kill_session(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// List all tmux sessions (name, attached status, window count).
+/// List all tmux sessions (name, attached status, window count, created, agent state).
+///
+/// Uses `|` as the format separator (unified). The session name is the last field
+/// and re-joined from remaining parts after the fixed fields — this handles names
+/// that contain `|` characters.
 pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
     let output = Command::new("tmux")
         .args([
             "list-sessions",
             "-F",
-            "#{session_name}\t#{session_attached}\t#{session_windows}\t#{session_created}",
+            "#{session_attached}|#{session_windows}|#{session_created}|#{@omniterm_agent}|#{session_name}",
         ])
         .output()
         .await?;
@@ -81,13 +131,42 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
     let sessions = stdout
         .lines()
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 4 {
+            let parts: Vec<&str> = line.split('|').collect();
+            // Minimum: attached, windows, created, agent_value, name = 5 fields
+            if parts.len() >= 5 {
+                let attached = parts[0] != "0";
+                let windows: u32 = parts[1].parse().unwrap_or(1);
+                let created = parts[2].to_string();
+
+                // Parse agent option value
+                let agent_val = parts[3];
+                let agent_snapshot = agent_state::parse_agent_value(agent_val);
+                let (agent_kind, agent_state, attention_reason, agent_event, agent_nonce) =
+                    if let Some(snap) = agent_snapshot {
+                        (
+                            Some(snap.agent_kind.as_str().to_string()),
+                            Some(snap.agent_state.as_str().to_string()),
+                            snap.attention_reason.map(|r| r.as_str().to_string()),
+                            snap.agent_event,
+                            snap.agent_nonce,
+                        )
+                    } else {
+                        (None, None, None, None, None)
+                    };
+
+                // Session name: rejoin remaining parts with |
+                let name = parts[4..].join("|");
+
                 Some(TmuxSessionInfo {
-                    name: parts[0].to_string(),
-                    attached: parts[1] != "0",
-                    windows: parts[2].parse().unwrap_or(1),
-                    created: parts[3].to_string(),
+                    name,
+                    attached,
+                    windows,
+                    created,
+                    agent_kind,
+                    agent_state,
+                    attention_reason,
+                    agent_event,
+                    agent_nonce,
                 })
             } else {
                 None
@@ -167,10 +246,43 @@ pub async fn capture_pane(session: &str, lines: usize) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Query the `@omniterm_agent` tmux session option for a single session.
+///
+/// Returns `None` if the option is not set or empty.
+pub async fn get_session_agent_option(session_name: &str) -> Result<Option<AgentSnapshot>> {
+    let output = Command::new("tmux")
+        .args(["show-options", "-t", session_name, "@omniterm_agent"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Option not set is not an error
+        if stderr.contains("unknown option") || stderr.contains("no such option") {
+            return Ok(None);
+        }
+        return Err(anyhow!("tmux show-options failed: {}", stderr));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output format: "@omniterm_agent <value>"
+    let value = stdout
+        .strip_prefix("@omniterm_agent ")
+        .map(|v| v.trim())
+        .unwrap_or("");
+
+    Ok(agent_state::parse_agent_value(value))
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TmuxSessionInfo {
     pub name: String,
     pub attached: bool,
     pub windows: u32,
     pub created: String,
+    pub agent_kind: Option<String>,
+    pub agent_state: Option<String>,
+    pub attention_reason: Option<String>,
+    pub agent_event: Option<String>,
+    pub agent_nonce: Option<String>,
 }

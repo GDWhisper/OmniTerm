@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useThemeStore } from '../stores/themeStore'
@@ -46,6 +47,7 @@ const LIGHT_TERMINAL_THEME = {
 export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const resolved = useThemeStore((s) => s.resolved)
+  const attention = useAttention()  // Agent attention context
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -96,6 +98,18 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.error', { msg: msg.message })}]\x1b[0m`)
           } else if (msg.type === 'exit') {
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.exited', { code: msg.code })}]\x1b[0m`)
+          } else if (msg.type === 'agent_state') {
+            // Fire attention notification on state transitions
+            const attnReason = msg.attention_reason
+            if (attnReason === 'decision' || attnReason === 'done' || attnReason === 'error') {
+              attention.fire(
+                sessionId,
+                sessionId,
+                attnReason
+              )
+            } else if (msg.state === 'running') {
+              attention.clearAlert(sessionId)
+            }
           }
         } catch {}
       }

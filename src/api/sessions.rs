@@ -30,12 +30,25 @@ async fn list_sessions(
     State(state): State<AppState>,
     Path(pid): Path<String>,
 ) -> impl IntoResponse {
-    let sessions: Vec<Session> =
+    let mut sessions: Vec<Session> =
         sqlx::query_as("SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
             .bind(&pid)
             .fetch_all(&state.db)
             .await
             .unwrap();
+
+    // Enrich sessions with agent state from tmux
+    for session in &mut sessions {
+        if let Some(ref tmux_name) = session.tmux_session_name {
+            if let Ok(Some(snapshot)) = tmux::get_session_agent_option(tmux_name).await {
+                session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
+                session.agent_state = Some(snapshot.agent_state.as_str().to_string());
+                session.attention_reason = snapshot.attention_reason.map(|r| r.as_str().to_string());
+                session.agent_event = snapshot.agent_event;
+                session.agent_nonce = snapshot.agent_nonce;
+            }
+        }
+    }
 
     Json(json!(sessions))
 }
@@ -79,21 +92,27 @@ async fn create_session(
     let tmux_name = format!("lt_{}", &id[..8]);
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Create the tmux session with workspace_path as cwd
-    if let Err(e) = tmux::new_session(&tmux_name, &workspace_path).await {
-        error!("failed to create tmux session: {}", e);
-    } else {
-        info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
-    }
+    // Create the tmux session; detect agent and inject hooks if applicable
+    let hook_enabled = match tmux::new_session(&tmux_name, &workspace_path, req.command.as_deref()).await {
+        Ok(injected) => {
+            info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
+            injected && req.command.is_some()
+        }
+        Err(e) => {
+            error!("failed to create tmux session: {}", e);
+            false
+        }
+    };
 
     sqlx::query(
-        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
     )
     .bind(&id)
     .bind(&pid)
     .bind(&workspace_path)
     .bind(&req.name)
     .bind(&tmux_name)
+    .bind(hook_enabled as i32)
     .bind(&now)
     .execute(&state.db)
     .await
@@ -105,9 +124,14 @@ async fn create_session(
         workspace_path,
         name: req.name,
         tmux_session_name: Some(tmux_name),
-        hook_enabled: false,
+        hook_enabled,
         hook_status: None,
         created_at: now,
+        agent_kind: None,
+        agent_state: None,
+        attention_reason: None,
+        agent_event: None,
+        agent_nonce: None,
     };
 
     (StatusCode::CREATED, Json(json!(session)))

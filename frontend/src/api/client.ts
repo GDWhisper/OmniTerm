@@ -49,6 +49,12 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
+  // Agent state fields (from tmux @omniterm_agent option)
+  agent_kind?: string
+  agent_state?: string
+  attention_reason?: string
+  agent_event?: string
+  agent_nonce?: string
 }
 
 export const api = {
@@ -82,10 +88,10 @@ export const api = {
   // Sessions
   listSessions: (projectId: string) =>
     request<Session[]>(`/projects/${projectId}/sessions`),
-  createSession: (projectId: string, workspacePath: string, name?: string) =>
+  createSession: (projectId: string, workspacePath: string, name?: string, command?: string) =>
     request<Session>(`/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name, workspace_path: workspacePath }),
+      body: JSON.stringify({ name, workspace_path: workspacePath, command }),
     }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),

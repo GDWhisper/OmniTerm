@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
+import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import type { Project, Workspace, Session } from '../../api/client'
@@ -65,6 +66,7 @@ export function Sidebar() {
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
+  const attention = useAttention()
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
@@ -114,6 +116,80 @@ export function Sidebar() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
+
+  // ── Smart diff: session polling + attention detection ──
+  const lastAgentEventRef = useRef<Map<string, string>>(new Map())
+  const decisionCandidatesRef = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    // Poll sessions every 3 seconds for agent state changes
+    const interval = setInterval(async () => {
+      if (!activeProjectId) return
+      try {
+        const freshSessions = await api.listSessions(activeProjectId)
+        const currentSessionKeys = new Set<string>()
+
+        for (const s of freshSessions) {
+          const sessionKey = s.id
+          currentSessionKeys.add(sessionKey)
+
+          // Build event key from agent state fields
+          const eventKey = [
+            s.agent_kind ?? '',
+            s.agent_state ?? '',
+            s.attention_reason ?? '',
+            s.agent_event ?? '',
+            s.agent_nonce ?? '',
+          ].join(':')
+
+          const lastKey = lastAgentEventRef.current.get(sessionKey)
+          if (eventKey && eventKey !== lastKey) {
+            lastAgentEventRef.current.set(sessionKey, eventKey)
+
+            const state = s.agent_state
+            const reason = s.attention_reason as AttentionReason | undefined
+
+            if (state === 'idle' && reason === 'done') {
+              // Done — fire immediately
+              attention.fire(s.id, sessionKey, 'done')
+              decisionCandidatesRef.current.delete(sessionKey)
+            } else if (state === 'idle' && reason === 'error') {
+              // Error — fire immediately
+              attention.fire(s.id, sessionKey, 'error')
+              decisionCandidatesRef.current.delete(sessionKey)
+            } else if (state === 'waiting' && reason === 'decision') {
+              // Decision — debounce: wait one more cycle
+              if (decisionCandidatesRef.current.has(sessionKey)) {
+                attention.fire(s.id, sessionKey, 'decision')
+                decisionCandidatesRef.current.delete(sessionKey)
+              } else {
+                decisionCandidatesRef.current.add(sessionKey)
+              }
+            } else if (state === 'running') {
+              // Running — clear any alert
+              attention.clearAlert(sessionKey)
+              decisionCandidatesRef.current.delete(sessionKey)
+            }
+          }
+        }
+
+        // Clear alerts for sessions that disappeared
+        for (const key of lastAgentEventRef.current.keys()) {
+          if (!currentSessionKeys.has(key)) {
+            attention.clearAlert(key)
+            lastAgentEventRef.current.delete(key)
+            decisionCandidatesRef.current.delete(key)
+          }
+        }
+
+        setSessions(freshSessions)
+      } catch {
+        // Quietly ignore poll errors
+      }
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [activeProjectId, setSessions, attention])
 
   useEffect(() => {
     api.systemInfo().then((info) => {
@@ -484,8 +560,8 @@ export function Sidebar() {
 
                                 {wtSessions.map((s) => {
                                   const isSessionActive = activeSessionId === s.id
-                                  const statusLabel = s.hook_status || 'Running'
-                                  const isRunning = statusLabel === 'Running' || statusLabel === 'Decision'
+                                  const sessionKey = s.id
+                                  const attnReason = attention.reasonFor(sessionKey)
                                   return (
                                     <div
                                       key={s.id}
@@ -496,15 +572,25 @@ export function Sidebar() {
                                         background: isSessionActive ? 'rgba(167,139,250,0.08)' : 'transparent',
                                         border: isSessionActive ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
                                       }}
-                                      onClick={() => setActiveSession(s.id)}
+                                      onClick={() => {
+                                        setActiveSession(s.id)
+                                        attention.setActive(sessionKey)
+                                      }}
                                     >
+                                      {/* Running indicator dot */}
                                       <div
                                         className="rounded-full flex-shrink-0"
                                         style={{
                                           width: 5,
                                           height: 5,
-                                          background: isRunning ? 'var(--success)' : 'var(--text-dim)',
-                                          boxShadow: isRunning ? 'var(--success-glow)' : 'none',
+                                          background: attnReason
+                                            ? attnReason === 'decision'
+                                              ? '#f59e0b'
+                                              : attnReason === 'error'
+                                                ? 'var(--danger)'
+                                                : 'var(--success)'
+                                            : 'var(--text-dim)',
+                                          boxShadow: attnReason ? 'var(--accent-glow-sm)' : 'none',
                                         }}
                                       />
                                       <span
@@ -513,6 +599,33 @@ export function Sidebar() {
                                       >
                                         {s.name || s.tmux_session_name}
                                       </span>
+                                      {/* Attention badge */}
+                                      {attnReason && (
+                                        <span
+                                          className="flex-shrink-0 rounded-full flex items-center justify-center animate-pulse"
+                                          style={{
+                                            width: 16,
+                                            height: 16,
+                                            fontSize: 10,
+                                            background: attnReason === 'decision'
+                                              ? 'rgba(245,158,11,0.2)'
+                                              : attnReason === 'error'
+                                                ? 'rgba(239,68,68,0.2)'
+                                                : 'rgba(34,197,94,0.2)',
+                                            color: attnReason === 'decision'
+                                              ? '#f59e0b'
+                                              : attnReason === 'error'
+                                                ? 'var(--danger)'
+                                                : 'var(--success)',
+                                          }}
+                                          title={
+                                            attnReason === 'decision' ? 'Needs decision' :
+                                            attnReason === 'error' ? 'Error' : 'Done'
+                                          }
+                                        >
+                                          {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
+                                        </span>
+                                      )}
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()

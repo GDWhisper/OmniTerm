@@ -44,6 +44,31 @@ async fn hook_status(
         );
     }
 
+    // First, try to read agent state from the tmux session option
+    match tmux::get_session_agent_option(&tmux_name).await {
+        Ok(Some(snapshot)) => {
+            return (
+                StatusCode::OK,
+                Json(json!({
+                    "enabled": true,
+                    "state": snapshot.agent_state.as_str(),
+                    "agent_kind": snapshot.agent_kind.as_str(),
+                    "attention_reason": snapshot.attention_reason.map(|r| r.as_str()),
+                    "agent_event": snapshot.agent_event,
+                    "agent_nonce": snapshot.agent_nonce,
+                })),
+            );
+        }
+        Ok(None) => {
+            // Option not set — fall through to heuristic fallback
+        }
+        Err(e) => {
+            tracing::warn!("failed to read agent option for {}: {}", tmux_name, e);
+            // Fall through to heuristic fallback
+        }
+    }
+
+    // Fallback: use capture-pane + heuristic scanner
     match tmux::capture_pane(&tmux_name, 50).await {
         Ok(content) => {
             let status = tmux::hooks::scan_agent_state(&content);
@@ -82,6 +107,9 @@ async fn hook_enable(
 
     match result {
         Ok(r) if r.rows_affected() > 0 => {
+            // Try to detect agent CLI and inject hooks if possible
+            // (Best effort — the session might not have a running agent process,
+            // in which case hook-status will fall back to heuristic scanning.)
             (StatusCode::OK, Json(json!({ "ok": true, "hook_enabled": true })))
         }
         Ok(_) => {
