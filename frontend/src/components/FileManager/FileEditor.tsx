@@ -234,7 +234,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
     [fileName],
   )
 
-  // Create the editor instance
+  // Create the editor instance (mount once; editable/extensions trigger full recreation)
   useEffect(() => {
     if (!containerRef.current) return
 
@@ -254,7 +254,20 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
       view.destroy()
       viewRef.current = null
     }
-  }, [content, editable, createExtensions])
+  }, [editable, createExtensions]) // NOTE: content intentionally omitted — editor manages its own state
+
+  // Sync external content changes into the editor (e.g. file reload, mode toggle, save).
+  // Internal edits (typing) are no-ops because the editor's doc already matches the prop.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const currentDoc = view.state.doc.toString()
+    if (content !== currentDoc) {
+      view.dispatch({
+        changes: { from: 0, to: currentDoc.length, insert: content },
+      })
+    }
+  }, [content])
 
   return (
     <div
