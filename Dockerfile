@@ -12,6 +12,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY migrations/ migrations/
+COPY --from=frontend /app/dist ./frontend/dist
 RUN cargo build --release
 
 # -- Runtime --
@@ -22,7 +23,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY --from=backend /app/target/release/omniterm ./
 COPY --from=frontend /app/dist ./frontend/dist
-COPY migrations/ ./migrations/
 
 ENV BIND_ADDR=0.0.0.0:9077
 ENV FRONTEND_DIR=frontend/dist
