@@ -85,7 +85,7 @@ export const useAppStore = create<AppState>((set) => ({
   fileManagerOpen: true,
   fileManagerCollapsed: false,
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
-  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || '300'),
+  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 4)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
