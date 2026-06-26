@@ -746,7 +746,7 @@ export function FileManager() {
           <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
             <table className="fm-table">
               <colgroup>
-                <col style={{ width: 32 }} />
+                <col style={{ width: downloadMode ? 32 : 0 }} />
                 <col style={{ width: colWidths.name }} />
                 <col style={{ width: colWidths.mtime }} />
                 <col style={{ width: colWidths.size }} />
@@ -754,7 +754,8 @@ export function FileManager() {
               </colgroup>
               <thead>
                 <tr>
-                  <th className={`fm-checkbox-cell ${downloadMode ? '' : 'fm-checkbox-cell--dim'}`}>
+                  {downloadMode && (
+                  <th className="fm-checkbox-cell">
                     <input
                       type="checkbox"
                       className="fm-checkbox"
@@ -765,6 +766,7 @@ export function FileManager() {
                       onChange={handleSelectAllToggle}
                     />
                   </th>
+                  )}
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
                       {t('fm.name')} <SI col="name" />
@@ -802,7 +804,8 @@ export function FileManager() {
                         if (isDir) navigateTo(fullPath)
                       }}
                     >
-                      <td className={`fm-checkbox-cell ${downloadMode ? '' : 'fm-checkbox-cell--dim'}`}>
+                      {downloadMode && (
+                      <td className="fm-checkbox-cell">
                         <input
                           type="checkbox"
                           className="fm-checkbox"
@@ -811,6 +814,7 @@ export function FileManager() {
                           onChange={() => handleCheckboxToggle(fullPath)}
                         />
                       </td>
+                      )}
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <FileIcon entry={f} />
