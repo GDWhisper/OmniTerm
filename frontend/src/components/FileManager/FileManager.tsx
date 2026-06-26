@@ -390,6 +390,14 @@ export function FileManager() {
       </span>
     ) : null
 
+  // Breadcrumb segments — reversed when RTL to compensate for direction-based flow reversal
+  const bcSegments = cwd.split('/').filter(Boolean)
+  const bcItems = bcSegments.map((s, i) => ({
+    name: s,
+    path: '/' + bcSegments.slice(0, i + 1).join('/')
+  }))
+  const orderedBcItems = bcOverflow ? [...bcItems].reverse() : bcItems
+
   if (fileManagerCollapsed) {
     return (
       <div
@@ -502,12 +510,22 @@ export function FileManager() {
             className="fm-breadcrumb"
             style={{ direction: bcOverflow ? 'rtl' : 'ltr', flex: 1, minWidth: 0 }}
             title={cwd}
-            onClick={() => {
-              const parent = getParentPath(cwd)
-              if (parent) navigateTo(parent)
-            }}
           >
-            {cwd}
+            {bcOverflow
+              ? orderedBcItems.flatMap((item, i) => {
+                  const elems = [
+                    <span key={item.path} className="fm-bc-seg" onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
+                  ]
+                  if (i < orderedBcItems.length - 1) {
+                    elems.push(<span key={`sep-${i}`} className="fm-bc-sep">/</span>)
+                  }
+                  return elems
+                })
+              : orderedBcItems.flatMap((item) => [
+                  <span key={`sep-${item.path}`} className="fm-bc-sep">/</span>,
+                  <span key={item.path} className="fm-bc-seg" onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
+                ])
+            }
           </div>
           {isOutsideWorkspace && (
             <span
