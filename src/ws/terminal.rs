@@ -12,7 +12,10 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
+use tokio::sync::oneshot;
+use std::time::Duration;
 use crate::AppState;
+use crate::tmux;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -34,6 +37,14 @@ enum ServerControl<'a> {
     Error { message: &'a str },
     #[serde(rename = "exit")]
     Exit { code: Option<i32> },
+    #[serde(rename = "agent_state")]
+    AgentState {
+        agent_kind: Option<&'a str>,
+        state: &'a str,
+        attention_reason: Option<&'a str>,
+        agent_event: Option<&'a str>,
+        agent_nonce: Option<&'a str>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +88,18 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     };
 
     info!("terminal WS connected: session={} tmux={}", session_id, tmux_name);
+
+    // Check if hooks are enabled for this session
+    let hook_enabled: bool = sqlx::query_as(
+        "SELECT hook_enabled FROM sessions WHERE id = ?",
+    )
+    .bind(&session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .map(|(enabled,): (bool,)| enabled)
+    .unwrap_or(false);
 
     // Look up workspace_path for the tmux session CWD
     let cwd: Option<(String,)> = sqlx::query_as(
@@ -161,6 +184,11 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         return;
     }
 
+    // === Agent state poll channel (for hook-enabled sessions) ===
+    // Agent state text frames are sent to this channel and merged into the
+    // PTY→WS forward loop, so they share the same ws_tx.
+    let (agent_tx, mut agent_rx) = tokio::sync::mpsc::channel::<String>(16);
+
     // === PTY stdout → WS binary frames ===
     let (pty_out_tx, mut pty_out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
@@ -181,10 +209,22 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         debug!("PTY reader exited");
     });
 
+    // Forward loop: merge PTY output + agent state messages → WS
+    let mut ws_tx2 = ws_tx;  // ws_tx moved here
     let forward_handle = tokio::spawn(async move {
-        while let Some(data) = pty_out_rx.recv().await {
-            if ws_tx.send(Message::Binary(data.into())).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                Some(data) = pty_out_rx.recv() => {
+                    if ws_tx2.send(Message::Binary(data.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Some(json_text) = agent_rx.recv() => {
+                    if ws_tx2.send(Message::Text(json_text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                else => break,
             }
         }
     });
@@ -202,6 +242,86 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         }
         debug!("PTY writer exited");
     });
+
+    // === Agent state poll task (only for hook-enabled sessions) ===
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let agent_tx_clone = agent_tx.clone();
+    let tmux_name_clone = tmux_name.clone();
+    let agent_handle: Option<tokio::task::JoinHandle<()>> = if hook_enabled {
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_nonce: Option<String> = None;
+            let mut consecutive_timeouts: u32 = 0;
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Poll the agent option with a 2s timeout
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(2),
+                            tmux::get_session_agent_option(&tmux_name_clone),
+                        )
+                        .await;
+
+                        match result {
+                            Ok(Ok(Some(snapshot))) => {
+                                consecutive_timeouts = 0;
+                                let current_nonce = snapshot.agent_nonce.clone();
+                                if current_nonce != last_nonce {
+                                    last_nonce = current_nonce;
+                                    let msg = serde_json::json!({
+                                        "type": "agent_state",
+                                        "agent_kind": snapshot.agent_kind.as_str(),
+                                        "state": snapshot.agent_state.as_str(),
+                                        "attention_reason": snapshot.attention_reason.map(|r| r.as_str()),
+                                        "agent_event": snapshot.agent_event,
+                                        "agent_nonce": snapshot.agent_nonce,
+                                    });
+                                    if let Ok(text) = serde_json::to_string(&msg) {
+                                        let _ = agent_tx_clone.send(text).await;
+                                    }
+                                }
+                            }
+                            Ok(Ok(None)) => {
+                                consecutive_timeouts = 0;
+                            }
+                            Ok(Err(e)) => {
+                                warn!("agent poll error for {}: {}", tmux_name_clone, e);
+                                consecutive_timeouts += 1;
+                            }
+                            Err(_elapsed) => {
+                                warn!("agent poll timeout for {}", tmux_name_clone);
+                                consecutive_timeouts += 1;
+                            }
+                        }
+
+                        if consecutive_timeouts >= 3 {
+                            warn!(
+                                "agent poll stopping after {} consecutive failures for {}",
+                                consecutive_timeouts, tmux_name_clone
+                            );
+                            let msg = serde_json::json!({
+                                "type": "agent_state",
+                                "state": "unknown",
+                            });
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = agent_tx_clone.send(text).await;
+                            }
+                            break;
+                        }
+                    }
+                    _ = &mut shutdown_rx => {
+                        debug!("agent poll task received shutdown signal");
+                        break;
+                    }
+                }
+            }
+            debug!("agent poll task exited cleanly");
+        }))
+    } else {
+        None
+    };
 
     // === WS message read loop (handles input + resize + ping) ===
     let resize_pty = Arc::clone(&master_pty);
@@ -269,6 +389,13 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         code = exit_rx.recv() => {
             info!("tmux process exited: {:?}", code);
         }
+    }
+
+    // Send shutdown signal to agent poll task and await its exit
+    let _ = shutdown_tx.send(());
+    if let Some(handle) = agent_handle {
+        let _ = handle.await;
+        debug!("agent poll task joined");
     }
 
     // Explicitly send SIGHUP to the tmux client process BEFORE dropping the PTY

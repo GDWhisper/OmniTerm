@@ -5,47 +5,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 > 进度里程碑见 `PROGRESS.md`
 
----
-
-## 四分支体系（铁律）
-
-代码永远从「不稳定」流向「稳定」，合并必须在**接收方的工作树**里执行：
-
-```
-debug ──→ dev ──→ main ──→ release ──→ tag v*.*.* (published)
-```
-
-| 分支 | 工作树 | 角色 | 后端端口 | 前端端口 | 受众 |
-|------|--------|------|----------|----------|------|
-| `debug` | `~/coding/OmniTerm-debug` | 紧急 bugfix | 19777 | 19778 | 开发者 |
-| `dev` | `~/coding/OmniTerm-dev` | 日常开发、新功能 | 9777 | 9778 | 开发者 |
-| `main` | `~/coding/OmniTerm` | **发布前哨站** — 冻结测试 | 9075 | 9076 | 开发者+用户测试 |
-| `release` | `~/coding/OmniTerm` (checkout) | 干净公开代码 | 9077 | — (单端口) | 最终用户 |
-
-### 合入规则
-
-```
-debug → dev:     git merge debug   （于 ~/coding/OmniTerm-dev）
-dev   → main:    git merge dev     （于 ~/coding/OmniTerm，用户确认后）
-main  → release: git merge main    （于 ~/coding/OmniTerm checkout release，剔除开发文件）
-release → tag:   git tag v0.1.0 → CI 全自动发布
-```
-
-**严禁反向推送**，代码只流向更稳定的分支。
-
-### 端口全景
-
-```
-19777/19778  debug（隔离调试）
- 9075/ 9076  main（发布前哨站）
- 9077        release（公开默认端口）
- 9777/ 9778  dev（日常开发）
-```
-
-所有工作树可同时运行，互不冲突。端口配置在各自 `.env.local`（gitignored）中覆盖。
-
----
-
 ## Development Conventions
 
 1. **开发/debug 后必须提交 git** — 每完成一个功能点或修复一个 bug 后，立即 `git commit`
@@ -144,7 +103,42 @@ cd frontend && pnpm dev  # 前端（开发模式）
 - **私有仓**（`origin`）：存放所有分支（main/dev/debug/release）
 - **公开仓**（`public`）：只推送 `release` 分支，用于对外发布
 
----
+### 远程仓库策略
+
+- **私有仓**（`origin`）：存放所有分支（main/dev/debug），完整开发历史
+- **公开仓**（`public`）：只推送 `release` 分支（干净代码），用于对外发布
+
+```bash
+git remote add origin git@github.com:yourname/OmniTerm-private.git
+git remote add public git@github.com:yourname/OmniTerm.git
+```
+
+### Release 分支发布流程
+
+```bash
+cd ~/coding/OmniTerm          # main worktree
+git checkout release
+git merge main --no-commit     # 合并 main 最新代码
+
+# 排除开发相关文件
+git reset HEAD \
+  CLAUDE.md AGENTS.md Agent \
+  .pi/ .qoder/ .codegraph/ \
+  openspec/ \
+  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  .dev/ omniterm.db.bak \
+  dev.sh PROGRESS.md CHANGELOG.md
+git checkout -- \
+  CLAUDE.md AGENTS.md Agent \
+  .pi/ .qoder/ .codegraph/ \
+  openspec/ \
+  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  .dev/ omniterm.db.bak \
+  dev.sh PROGRESS.md CHANGELOG.md
+
+git commit -m "release: v1.x.x"
+git push public release:main   # 推送到公开仓
+```
 
 ## CodeGraph
 
@@ -281,17 +275,13 @@ src/
 
 ## Documentation (`docs/`)
 
-| File | Purpose | When to consult |
-|---|---|---|
-| `docs/ui-style-guide.md` | UI 风格规范 — 色板、字体、圆角、动效、组件自检清单 | 任何 UI 修改必先读 |
-| `docs/user-testing.md` | 用户测试文档 — 27 个测试用例（P0/P1/P2） | 改完功能后手动回归 |
-| `docs/debug-log.md` | bug 修复踩坑记录 | 遇到类似问题时查阅；新踩坑后追加 |
-| `docs/requirements.md` | 产品功能需求和待办事项 | 规划新功能时查阅 |
-| `docs/release-plan.md` | **正式发布计划**（dev 分支） | 准备发布操作时查阅 |
-
----
-
-## Reference Repos (local paths)
+| File | Purpose | When to consult | When to maintain |
+|---|---|---|---|
+| `docs/ui-style-guide.md` | **UI 风格规范** — 色板、字体、圆角、动效、drag bar 语言、组件规范、新增组件自检清单 | 任何涉及 UI 的修改都**必须先读** | 新增组件规范、调整设计语言时 |
+| `docs/user-testing.md` | 用户测试文档 — 27 个测试用例（P0/P1/P2 三级） | 改完功能后手动回归 | 新增测试用例、更新已知限制时 |
+| `docs/debug-log.md` | **bug修复踩坑记录** — 问题、根因分析和解决方案 | 遇到类似问题时查阅 | 新踩坑后追加 |
+| `CHANGELOG.md` | **变更日志** — Keep a Changelog 格式，面向用户 | 发布时查阅历史变更 | 每次有意义的代码变更后**必须添加条目**（需用户确认） |
+| `PROGRESS.md` | **开发里程碑** — 已完成阶段、架构决策、技术选型 | 了解项目整体进展、向新人介绍项目 | 完成一个完整阶段（如 Phase 8b）后更新 |
 
 All under `/home/pax/coding/research/`:
 

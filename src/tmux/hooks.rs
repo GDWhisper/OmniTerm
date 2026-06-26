@@ -28,6 +28,12 @@ pub struct AgentStatus {
 ///
 /// This is a heuristic-based scanner that looks for common patterns
 /// in Claude Code / Codex terminal output.
+///
+/// #[deprecated] Use `agent_state::parse_agent_value()` with the `@omniterm_agent`
+/// tmux session option instead. This heuristic scanner is retained as a fallback
+/// for sessions where hooks have not been injected. It will be removed after
+/// 1-2 weeks of stable hook-driven operation.
+#[deprecated(since = "0.5.0", note = "use agent_state::parse_agent_value() with @omniterm_agent session option instead")]
 pub fn scan_agent_state(pane_content: &str) -> AgentStatus {
     let lines: Vec<&str> = pane_content.lines().collect();
     let tail: String = lines.iter().rev().take(30).copied().collect::<Vec<_>>().join("\n");

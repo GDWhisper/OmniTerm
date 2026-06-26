@@ -1,20 +1,14 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  语言：中文（简体）
+  与用户交互时以及产出所有文档（proposal、specs、design、tasks等）必须使用简体中文撰写。
+  技术术语可保留英文。
+  代码示例和文件路径保持英文。
 
 # Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  specs:
+    - 规范描述用简体中文撰写，不要使用 SHALL/MUST/WHEN/THEN 等英文关键词
+    - 场景格式保持 Gherkin 结构，但使用中文表述："**当** 条件 **则** 预期结果"
+    - 英文技术术语（如 API、session、hook）可保留原文

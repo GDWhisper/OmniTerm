@@ -9,6 +9,8 @@ mod utils;
 mod workspaces;
 mod ws;
 
+use std::time::Duration;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
@@ -41,6 +43,7 @@ struct Args {
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -81,11 +84,14 @@ async fn main() -> anyhow::Result<()> {
 
     sqlx::migrate!("./migrations").run(&db).await?;
 
+    let activity_monitor =
+        tmux::control_mode::SessionActivityMonitor::new(tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT);
+
     let state = AppState {
         db,
-        jwt_secret: args.jwt_secret,
+        jwt_secret,
+        activity_monitor,
     };
-
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
 
     let app = Router::new()

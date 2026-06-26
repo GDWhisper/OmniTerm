@@ -54,6 +54,14 @@ Prefix each entry with the area it affects:
 - (2026-06-25 11:00) `[backend]` Workspace 运行时模块 — 非 git 仓库退化为单 workspace，git 仓库自动发现 worktree（`src/workspaces.rs`）
 - (2026-06-25 11:00) `[backend]` 数据库迁移脚本 — `workspaces` → `projects` 改名，`sessions` 新增 `project_id` + `workspace_path` 列（`migrations/20260625_workspace_to_project.sql`）
 - (2026-06-25 11:00) `[frontend]` GitBranchIcon 组件 — SVG 分支图标，模仿 git logo 节点分叉形状（`frontend/src/components/Icons/GitBranchIcon.tsx`）
+- (2026-06-26 08:00) `[backend]` Agent 状态数据模型 — `AgentKind`/`AgentState`/`AttentionReason` 枚举、`AgentSnapshot` 结构体、`@omniterm_agent` session option 解析器（`src/tmux/agent_state.rs`）
+- (2026-06-26 08:00) `[backend]` Agent hook 配置生成 — Claude Code `--settings` JSON + Codex `-c` 命令行参数自动注入，detect_agent_kind + augment_agent_command（`src/tmux/agent_hooks.rs`）
+- (2026-06-26 08:00) `[backend]` Session 列表集成 agent 状态 — `list_sessions` 格式串改用 `|` 分隔，新增 `#{@omniterm_agent}` 字段，API 响应自动填充 agent 字段（`src/tmux/mod.rs`、`src/api/sessions.rs`）
+- (2026-06-26 08:00) `[backend]` Session 创建时自动检测 agent CLI 并注入 hook — `CreateSession.command` 可选字段，`new_session` 返回是否注入（`src/tmux/mod.rs`、`src/api/sessions.rs`）
+- (2026-06-26 08:00) `[backend]` WebSocket 实时 agent 状态推送 — 终端 WS 连接内嵌 1s 轮询 task，nonce 变化时 JSON push，2s timeout + 3 次连续失败自动停止，oneshot 显式关闭（`src/ws/terminal.rs`）
+- (2026-06-26 08:00) `[backend]` hook-status API 重构 — 优先读 session option，fallback 到 capture-pane 启发式扫描（`src/api/hooks.rs`）
+- (2026-06-26 08:00) `[frontend]` Attention 通知系统 — AttentionProvider Context、useAttention hook、Web Audio ping 声音、标签页闪烁、智能 diff 去抖（decision 2 周期确认）（`frontend/src/components/Attention/`、`frontend/src/hooks/useAttention.ts`）
+- (2026-06-26 08:00) `[frontend]` Sidebar session 行 badge — ⏳/⚠️/✓ 图标 + 脉冲动画，点击清除，轮询间隔 3s（`frontend/src/components/Sidebar/Sidebar.tsx`）
 
 ### Changed
 
