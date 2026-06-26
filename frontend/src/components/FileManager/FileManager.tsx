@@ -109,6 +109,8 @@ export function FileManager() {
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchWrapRef = useRef<HTMLDivElement>(null)
+  const bcRef = useRef<HTMLDivElement>(null)
+  const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
@@ -238,6 +240,17 @@ export function FileManager() {
   }
 
   // Close search on click outside
+  // Breadcrumb overflow detection — toggle RTL direction for left-side truncation
+  useEffect(() => {
+    const el = bcRef.current
+    if (!el) return
+    const check = () => setBcOverflow(el.scrollWidth > el.clientWidth)
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    check()
+    return () => ro.disconnect()
+  }, [cwd])
+
   useEffect(() => {
     if (!searchOpen) return
     const onClick = (e: MouseEvent) => {
@@ -483,21 +496,24 @@ export function FileManager() {
       </div>
 
       {cwd && (
-        <div className="fm-breadcrumb">
-          {cwd.split('/').filter(Boolean).map((seg, i, arr) => {
-            const segPath = '/' + arr.slice(0, i + 1).join('/')
-            return (
-              <span key={segPath}>
-                <span className="fm-bc-sep">/</span>
-                <span className="fm-bc-seg" onClick={() => navigateTo(segPath)}>{seg}</span>
-              </span>
-            )
-          })}
+        <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+          <div
+            ref={bcRef}
+            className="fm-breadcrumb"
+            style={{ direction: bcOverflow ? 'rtl' : 'ltr', flex: 1, minWidth: 0 }}
+            title={cwd}
+            onClick={() => {
+              const parent = getParentPath(cwd)
+              if (parent) navigateTo(parent)
+            }}
+          >
+            {cwd}
+          </div>
           {isOutsideWorkspace && (
             <span
               className="fm-warning-icon"
               title={t('fm.outOfWorkspace')}
-              style={{ marginLeft: 6, color: '#f59e0b', cursor: 'help' }}
+              style={{ marginLeft: 6, color: '#f59e0b', cursor: 'help', flexShrink: 0 }}
             >
               <IconWarning width={14} height={14} />
             </span>

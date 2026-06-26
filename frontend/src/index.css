@@ -182,15 +182,15 @@ html, body, #root {
 
 /* ── Breadcrumb ── */
 .fm-breadcrumb {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 2px;
   flex-shrink: 1;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 3px 10px;
+  line-height: 22px;
 }
 
 .fm-breadcrumb a {
