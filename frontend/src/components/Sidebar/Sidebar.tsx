@@ -118,11 +118,15 @@ export function Sidebar() {
     }
   }, [setWorktrees])
 
-  // Load sessions for active worktree
-  const loadSessions = useCallback(async () => {
-    if (!activeProjectId) return
+  // Load sessions for a project. Defaults to activeProjectId so existing
+  // callers (create/rename/delete, polling) work unchanged. Pass an explicit
+  // projectId to load on demand (e.g. when expanding a project to show
+  // per-worktree session counts before any worktree is activated).
+  const loadSessions = useCallback(async (projectId?: string) => {
+    const pid = projectId ?? activeProjectId
+    if (!pid) return
     try {
-      const s = await api.listSessions(activeProjectId)
+      const s = await api.listSessions(pid)
       setSessions(s)
     } catch {
       // api client already shows error toast
@@ -239,8 +243,9 @@ export function Sidebar() {
       newSet.delete(projectId)
     } else {
       newSet.add(projectId)
-      // Load worktrees when expanding
-      await loadWorktrees(projectId)
+      // Load worktrees + sessions in parallel so per-worktree session counts
+      // are correct at expand time, not only after a worktree is activated.
+      await Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
     setExpandedProjects(newSet)
   }
