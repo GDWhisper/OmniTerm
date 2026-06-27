@@ -385,6 +385,31 @@ html, body, #root {
   box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
 }
 
+/* ── Terminal button pulse (back-to-terminal outside CWD) ── */
+@keyframes fm-terminal-pulse {
+  0%, 100% {
+    background: rgba(196, 181, 253, 0.30);
+    box-shadow:
+      0 0 8px rgba(196, 181, 253, 0.55),
+      inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+  }
+  50% {
+    background: rgba(196, 181, 253, 0.58);
+    box-shadow:
+      0 0 22px rgba(196, 181, 253, 0.95),
+      inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+  }
+}
+.fm-btn-terminal-active {
+  animation: fm-terminal-pulse 1.0s ease-in-out infinite;
+  color: #c4b5fd;
+}
+.fm-btn-terminal-active:hover {
+  background: rgba(196, 181, 253, 0.55);
+  color: #ddd6fe;
+  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+}
+
 /* ── Checkbox column (only visible in download mode) ── */
 .fm-checkbox-cell {
   width: 32px;

@@ -64,6 +64,8 @@ export function FileManager() {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
   const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
   const toggleFileManagerCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
   const fmSessionStates = useAppStore((s) => s.fmSessionStates)
@@ -122,19 +124,36 @@ export function FileManager() {
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
+  // Data source: session > workspace > null
+  type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
+  const fmSource: FmSource | null = activeSessionId
+    ? { type: 'session', id: activeSessionId }
+    : activeWorkspaceId
+      ? { type: 'workspace', id: activeWorkspaceId }
+      : null
+  const sourceKey = fmSource ? `${fmSource.type}:${fmSource.id}` : null
+
   const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
-    if (!activeSessionId) { setFiles([]); return undefined }
+    if (!fmSource) { setFiles([]); return undefined }
     if (!silent) setLoading(true)
     try {
-      const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
-      const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc)
+      // In workspace mode, always manual (no terminal to follow)
+      const effectiveMode = fmSource.type === 'workspace' ? 'manual' : fmState.mode
+      const effectivePath = path ?? (effectiveMode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
+      const data = await api.listFiles2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        path: effectivePath,
+        sort: sort ?? sortKey,
+        desc: desc ?? sortDesc,
+      })
       const newFiles = data.files ?? []
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
-      // Update per-session cache on successful fetch
-      if (data.cwd && activeSessionId) {
-        fileCache.current.set(activeSessionId, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
+      if (data.cwd) {
+        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
       }
       if (!silent) setSelected(new Set())
       return data.cwd
@@ -145,7 +164,7 @@ export function FileManager() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
+  }, [fmSource, sourceKey, fmState.mode, fmState.manualPath, activeProjectId, sortKey, sortDesc])
 
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
@@ -158,35 +177,38 @@ export function FileManager() {
     sessionStorage.setItem('omniterm_drawer_height', String(drawerHeight))
   }, [drawerHeight])
 
-  // Manual mode: fetch once when manualPath changes
+  // Manual mode fetch
   useEffect(() => {
-    if (!activeSessionId || fmState.mode !== 'manual' || !fmState.manualPath) return
+    if (!fmSource || fmSource.type === 'workspace') return  // workspace mode: handled below
+    if (fmState.mode !== 'manual' || !fmState.manualPath) return
     fetchFiles(fmState.manualPath)
-  }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
+  }, [sourceKey, fmState.mode, fmState.manualPath, fetchFiles])
 
-  // Following mode: fetch terminal CWD when switching back to following
+  // Following mode fetch
   useEffect(() => {
-    if (!activeSessionId || fmState.mode !== 'following') return
+    if (!fmSource || fmSource.type === 'workspace') return  // no following in workspace mode
+    if (fmState.mode !== 'following') return
     fetchFiles('.')
-  }, [activeSessionId, fmState.mode, fetchFiles])
+  }, [sourceKey, fmState.mode, fetchFiles])
 
-  // Session switch: show cached files immediately, then fetch fresh data
+  // Source switch (formerly session switch)
   useEffect(() => {
-    if (!activeSessionId) return
-    // Show cached files instantly while fresh data loads
-    const cached = fileCache.current.get(activeSessionId)
+    if (!fmSource) { setFiles([]); setCwd(''); return }
+    const cached = fileCache.current.get(sourceKey!)
     if (cached) {
       setFiles(cached.files)
       setCwd(cached.cwd)
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
     }
-    // Always fetch fresh data (manual mode uses its own path, following uses '.')
-    if (fmState.mode === 'manual' && fmState.manualPath) {
+    if (fmSource.type === 'workspace') {
+      // Always start from workspace root
+      fetchFiles('.')
+    } else if (fmState.mode === 'manual' && fmState.manualPath) {
       fetchFiles(fmState.manualPath)
     } else {
       fetchFiles('.')
     }
-  }, [activeSessionId])
+  }, [sourceKey])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
@@ -214,13 +236,21 @@ export function FileManager() {
   }
 
   const navigateTo = (absolutePath: string) => {
-    if (!activeSessionId) return
+    if (!fmSource) return
     // Directory change exits download selection mode (stale paths)
     setDownloadMode(false)
     setChecked(new Set())
-    // Switch to manual mode with absolute path
-    setFmSessionMode(activeSessionId, 'manual')
-    setFmManualPath(activeSessionId, absolutePath)
+    if (fmSource.type === 'session') {
+      // Switch to manual mode with absolute path
+      setFmSessionMode(fmSource.id, 'manual')
+      setFmManualPath(fmSource.id, absolutePath)
+    } else {
+      // Workspace mode: directly set path, no session mode to track
+      // Use a pseudo-session approach: we need to store the manual path somewhere
+      // The fetchFiles logic already treats workspace as always-manual
+      // Just fetch the target path directly
+      fetchFiles(absolutePath)
+    }
   }
 
   const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
@@ -286,7 +316,7 @@ export function FileManager() {
     return () => document.removeEventListener('mousedown', onClick)
   }, [createOpen])
 
-  // Reset transient UI state when active session changes
+  // Reset transient UI state when source changes
   useEffect(() => {
     setDownloadMode(false)
     setChecked(new Set())
@@ -294,7 +324,7 @@ export function FileManager() {
     setCreateName('')
     setSearchOpen(false)
     setSearchQuery('')
-  }, [activeSessionId])
+  }, [sourceKey])
 
   const toggleSearch = () => {
     if (searchOpen) {
@@ -340,11 +370,17 @@ export function FileManager() {
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
-    if (!droppedFiles?.length || !activeSessionId) return
+    if (!droppedFiles?.length || !fmSource) return
     for (let i = 0; i < droppedFiles.length; i++) {
       const file = droppedFiles[i]
       try {
-        await api.uploadFileBySession(activeSessionId, cwd, file)
+        await api.uploadFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          file,
+        })
       } catch (err: any) {
         addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err.message }))
       }
@@ -362,9 +398,15 @@ export function FileManager() {
   }
 
   const commitRename = async () => {
-    if (!editingName || !editValue.trim() || !activeSessionId) { setEditingName(null); return }
+    if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
     try {
-      await api.renameBySession(activeSessionId, editingName, editValue.trim())
+      await api.rename2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        path: editingName,
+        newName: editValue.trim(),
+      })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
     } catch (err: any) {
@@ -374,11 +416,16 @@ export function FileManager() {
   }
 
   const handleDelete = async () => {
-    if (selected.size === 0 || !activeSessionId) return
+    if (selected.size === 0 || !fmSource) return
     if (!confirm(t('fm.confirmDelete', { count: selected.size }))) return
     try {
-      for (const path of selected) {
-        await api.deleteFileBySession(activeSessionId, path)
+      for (const p of selected) {
+        await api.deleteFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: p,
+        })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
       fetchFiles()
@@ -388,7 +435,7 @@ export function FileManager() {
   }
 
   const handleUpload = () => {
-    if (!activeSessionId) return
+    if (!fmSource) return
     const input = document.createElement('input')
     input.type = 'file'
     input.multiple = true
@@ -396,7 +443,13 @@ export function FileManager() {
       if (!input.files?.length) return
       for (let i = 0; i < input.files.length; i++) {
         try {
-          await api.uploadFileBySession(activeSessionId, cwd, input.files[i])
+          await api.uploadFile2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: cwd,
+            file: input.files[i],
+          })
         } catch (err: any) {
           addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err.message }))
         }
@@ -408,10 +461,16 @@ export function FileManager() {
   }
 
   const handleSearch = async () => {
-    if (!searchQuery.trim() || !activeSessionId) { fetchFiles(); return }
+    if (!searchQuery.trim() || !fmSource) { fetchFiles(); return }
     setLoading(true)
     try {
-      const results = await api.searchFilesBySession(activeSessionId, searchQuery, cwd)
+      const results = await api.searchFiles2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        query: searchQuery,
+        path: cwd,
+      })
       setFiles(results)
     } catch (err: any) {
       addToast('error', err.message || t('fm.searchFailed'))
@@ -427,7 +486,7 @@ export function FileManager() {
   }
 
   const handleDownloadClick = () => {
-    if (!activeSessionId) return
+    if (!fmSource) return
     if (downloadMode) {
       if (checked.size > 0) {
         // Trigger downloads (skip directories)
@@ -438,7 +497,12 @@ export function FileManager() {
         })
         filePaths.forEach((p) => {
           const a = document.createElement('a')
-          a.href = api.downloadUrlBySession(activeSessionId, p)
+          a.href = api.downloadUrl2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: p,
+          })
           a.download = p.split('/').pop() || 'download'
           document.body.appendChild(a)
           a.click()
@@ -500,17 +564,29 @@ export function FileManager() {
   }
 
   const submitCreate = async () => {
-    if (!activeSessionId || !createOpen) return
+    if (!fmSource || !createOpen) return
     const name = createName.trim()
     if (!name) { addToast('error', t('fm.nameRequired')); return }
     if (name.includes('/')) { addToast('error', t('fm.nameInvalid')); return }
     const mode = createOpen
     try {
       if (mode === 'folder') {
-        await api.mkdirBySession(activeSessionId, cwd, name)
+        await api.mkdir2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          name,
+        })
       } else {
         const fullPath = cwd ? `${cwd}/${name}` : name
-        await api.writeFileBySession(activeSessionId, fullPath, '')
+        await api.writeFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: fullPath,
+          content: '',
+        })
       }
       addToast('success', t('fm.createSuccess', { name }))
       closeCreate()
@@ -589,11 +665,15 @@ export function FileManager() {
           >
             ▶
           </button>
+          {/* "回到终端目录" 按钮 — 脱离终端时脉冲 */}
           {activeSessionId && (
             <button
-              className="fm-bc-root"
-              onClick={() => resetFmToFollowing(activeSessionId)}
+              className={`fm-bc-root ${(fmSource?.type === 'workspace' || (fmSource?.type === 'session' && fmState.mode === 'manual')) ? 'fm-btn-terminal-active' : ''}`}
+              onClick={() => {
+                if (activeSessionId) resetFmToFollowing(activeSessionId)
+              }}
               title={t('fm.backToTerminalDir')}
+              disabled={!activeSessionId}
             >
               <IconWorkbench width={13} height={13} />
             </button>
@@ -729,7 +809,7 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {!activeSessionId ? (
+        {!fmSource ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
             <span>{t('fm.selectSessionFirst')}</span>
