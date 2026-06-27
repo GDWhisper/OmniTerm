@@ -141,5 +141,11 @@
   "sidebar.dupSessionCount": "{{n}} 个会话",
   "sidebar.dupMerge": "合并",
   "sidebar.dupMergeFailed": "合并「{{name}}」失败：",
-  "sidebar.merging": "合并中..."
+  "sidebar.merging": "合并中...",
+  "sidebar.pathHint": "回车或失焦以应用路径",
+  "sidebar.browse": "浏览",
+  "sidebar.refresh": "刷新",
+  "sidebar.loading": "加载中...",
+  "sidebar.retry": "重试",
+  "sidebar.emptyDir": "空目录"
 }

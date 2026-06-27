@@ -141,5 +141,11 @@
   "sidebar.dupSessionCount": "{{n}} session(s)",
   "sidebar.dupMerge": "Merge",
   "sidebar.dupMergeFailed": "Failed to merge \"{{name}}\":",
-  "sidebar.merging": "Merging…"
+  "sidebar.merging": "Merging…",
+  "sidebar.pathHint": "Press Enter or blur to apply path",
+  "sidebar.browse": "Browse",
+  "sidebar.refresh": "Refresh",
+  "sidebar.loading": "Loading...",
+  "sidebar.retry": "Retry",
+  "sidebar.emptyDir": "Empty directory"
 }
