@@ -1,3 +1,4 @@
+import { getParentPath } from '../../utils/path'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
@@ -33,12 +34,6 @@ function formatTime(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function getParentPath(path: string): string {
-  if (!path || path === '/') return ''
-  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
-  const idx = trimmed.lastIndexOf('/')
-  return idx <= 0 ? '' : trimmed.slice(0, idx)
-}
 
 function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
   if (a.length !== b.length) return false
