@@ -69,3 +69,24 @@
 **教训**：布局限制应该用相对值（屏幕比例），不要用绝对像素。
 
 ---
+
+## 2026-06-27: React 对象字面量在依赖数组中导致死循环刷新
+
+**症状**：点击会话后，`/api/v1/files?session=...&workspace=...` 接口被疯狂重复请求。
+
+**根因**：`fmSource = { type: 'session', id: activeSessionId }` 是每次渲染都创建的新对象字面量。它被放入 `useCallback(fetchFiles, [fmSource, ...])` 的依赖数组。由于对象引用每次渲染都不同（`===` 永远 false），`fetchFiles` 每次都重新创建，依赖 `fetchFiles` 的 `useEffect` 每次都触发，调用 API 后 `setState` 又引发渲染，形成死循环。
+
+**修复**：用 `useMemo` 包裹 `fmSource`，只在 `activeSessionId` / `activeWorkspaceId` 实际变化时创建新对象：
+
+```ts
+const fmSource = useMemo(() => {
+  if (activeSessionId) return { type: 'session', id: activeSessionId }
+  if (activeWorkspaceId) return { type: 'workspace', id: activeWorkspaceId }
+  return null
+}, [activeSessionId, activeWorkspaceId])
+```
+
+**教训**：
+- React render 中创建的对象字面量（`{}`、`[]`）绝不能直接放进 `useCallback` / `useEffect` / `useMemo` 的依赖数组，必须用 `useMemo` 稳定引用
+- TypeScript 无法检测此 bug —— 对象内容相同但引用不同，运行时才能暴露
+- `useCallback` 依赖数组中有对象引用时，向上追溯该对象来源：render 中每次新建 → 需要 `useMemo`

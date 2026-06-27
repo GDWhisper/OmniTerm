@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -64,6 +64,8 @@ export function FileManager() {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
   const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
   const toggleFileManagerCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
   const fmSessionStates = useAppStore((s) => s.fmSessionStates)
@@ -109,24 +111,49 @@ export function FileManager() {
   const [searchOpen, setSearchOpen] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchWrapRef = useRef<HTMLDivElement>(null)
+  // Download mode: button toggles a selection mode; checkboxes are inactive until activated
+  const [downloadMode, setDownloadMode] = useState(false)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  // Create (folder/file) inline input
+  const [createOpen, setCreateOpen] = useState<null | 'folder' | 'file'>(null)
+  const [createName, setCreateName] = useState('')
+  const createInputRef = useRef<HTMLInputElement>(null)
+  const createAreaRef = useRef<HTMLDivElement>(null)
   const bcRef = useRef<HTMLDivElement>(null)
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
 
+  // Data source: session > workspace > null
+  type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
+  const fmSource: FmSource | null = useMemo(() => {
+    if (activeSessionId) return { type: 'session', id: activeSessionId }
+    if (activeWorkspaceId) return { type: 'workspace', id: activeWorkspaceId }
+    return null
+  }, [activeSessionId, activeWorkspaceId])
+  const sourceKey = useMemo(() => fmSource ? `${fmSource.type}:${fmSource.id}` : null, [fmSource])
+
   const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
-    if (!activeSessionId) { setFiles([]); return undefined }
+    if (!fmSource) { setFiles([]); return undefined }
     if (!silent) setLoading(true)
     try {
-      const effectivePath = path ?? (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
-      const data = await api.listFilesBySession(activeSessionId, effectivePath, sort ?? sortKey, desc ?? sortDesc)
+      // In workspace mode, always manual (no terminal to follow)
+      const effectiveMode = fmSource.type === 'workspace' ? 'manual' : fmState.mode
+      const effectivePath = path ?? (effectiveMode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
+      const data = await api.listFiles2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        path: effectivePath,
+        sort: sort ?? sortKey,
+        desc: desc ?? sortDesc,
+      })
       const newFiles = data.files ?? []
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
-      // Update per-session cache on successful fetch
-      if (data.cwd && activeSessionId) {
-        fileCache.current.set(activeSessionId, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
+      if (data.cwd) {
+        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
       }
       if (!silent) setSelected(new Set())
       return data.cwd
@@ -137,7 +164,7 @@ export function FileManager() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [activeSessionId, fmState.mode, fmState.manualPath, sortKey, sortDesc])
+  }, [fmSource, sourceKey, fmState.mode, fmState.manualPath, activeProjectId, sortKey, sortDesc])
 
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
@@ -150,35 +177,38 @@ export function FileManager() {
     sessionStorage.setItem('omniterm_drawer_height', String(drawerHeight))
   }, [drawerHeight])
 
-  // Manual mode: fetch once when manualPath changes
+  // Manual mode fetch
   useEffect(() => {
-    if (!activeSessionId || fmState.mode !== 'manual' || !fmState.manualPath) return
+    if (!fmSource || fmSource.type === 'workspace') return  // workspace mode: handled below
+    if (fmState.mode !== 'manual' || !fmState.manualPath) return
     fetchFiles(fmState.manualPath)
-  }, [activeSessionId, fmState.mode, fmState.manualPath, fetchFiles])
+  }, [sourceKey, fmState.mode, fmState.manualPath, fetchFiles])
 
-  // Following mode: fetch terminal CWD when switching back to following
+  // Following mode fetch
   useEffect(() => {
-    if (!activeSessionId || fmState.mode !== 'following') return
+    if (!fmSource || fmSource.type === 'workspace') return  // no following in workspace mode
+    if (fmState.mode !== 'following') return
     fetchFiles('.')
-  }, [activeSessionId, fmState.mode, fetchFiles])
+  }, [sourceKey, fmState.mode, fetchFiles])
 
-  // Session switch: show cached files immediately, then fetch fresh data
+  // Source switch (formerly session switch)
   useEffect(() => {
-    if (!activeSessionId) return
-    // Show cached files instantly while fresh data loads
-    const cached = fileCache.current.get(activeSessionId)
+    if (!fmSource) { setFiles([]); setCwd(''); return }
+    const cached = fileCache.current.get(sourceKey!)
     if (cached) {
       setFiles(cached.files)
       setCwd(cached.cwd)
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
     }
-    // Always fetch fresh data (manual mode uses its own path, following uses '.')
-    if (fmState.mode === 'manual' && fmState.manualPath) {
+    if (fmSource.type === 'workspace') {
+      // Always start from workspace root
+      fetchFiles('.')
+    } else if (fmState.mode === 'manual' && fmState.manualPath) {
       fetchFiles(fmState.manualPath)
     } else {
       fetchFiles('.')
     }
-  }, [activeSessionId])
+  }, [sourceKey])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
@@ -206,10 +236,21 @@ export function FileManager() {
   }
 
   const navigateTo = (absolutePath: string) => {
-    if (!activeSessionId) return
-    // Switch to manual mode with absolute path
-    setFmSessionMode(activeSessionId, 'manual')
-    setFmManualPath(activeSessionId, absolutePath)
+    if (!fmSource) return
+    // Directory change exits download selection mode (stale paths)
+    setDownloadMode(false)
+    setChecked(new Set())
+    if (fmSource.type === 'session') {
+      // Switch to manual mode with absolute path
+      setFmSessionMode(fmSource.id, 'manual')
+      setFmManualPath(fmSource.id, absolutePath)
+    } else {
+      // Workspace mode: directly set path, no session mode to track
+      // Use a pseudo-session approach: we need to store the manual path somewhere
+      // The fetchFiles logic already treats workspace as always-manual
+      // Just fetch the target path directly
+      fetchFiles(absolutePath)
+    }
   }
 
   const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
@@ -263,6 +304,28 @@ export function FileManager() {
     return () => document.removeEventListener('mousedown', onClick)
   }, [searchOpen])
 
+  // Close create input on click outside (both folder & file buttons share a single area)
+  useEffect(() => {
+    if (!createOpen) return
+    const onClick = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (createAreaRef.current && createAreaRef.current.contains(target)) return
+      closeCreate()
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [createOpen])
+
+  // Reset transient UI state when source changes
+  useEffect(() => {
+    setDownloadMode(false)
+    setChecked(new Set())
+    setCreateOpen(null)
+    setCreateName('')
+    setSearchOpen(false)
+    setSearchQuery('')
+  }, [sourceKey])
+
   const toggleSearch = () => {
     if (searchOpen) {
       setSearchOpen(false)
@@ -278,7 +341,11 @@ export function FileManager() {
     // Don't intercept keys when an input/textarea has focus (search box, rename box, etc.)
     const tag = (e.target as HTMLElement).tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
-    if (e.key === 'Delete') {
+    if (e.key === 'Escape') {
+      if (searchOpen) { setSearchOpen(false); setSearchQuery(''); return }
+      if (createOpen) { closeCreate(); return }
+      if (downloadMode) { exitDownloadMode(); return }
+    } else if (e.key === 'Delete') {
       e.preventDefault()
       handleDelete()
     } else if (e.key === 'r' && !e.metaKey && !e.ctrlKey) {
@@ -303,11 +370,17 @@ export function FileManager() {
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
-    if (!droppedFiles?.length || !activeSessionId) return
+    if (!droppedFiles?.length || !fmSource) return
     for (let i = 0; i < droppedFiles.length; i++) {
       const file = droppedFiles[i]
       try {
-        await api.uploadFileBySession(activeSessionId, cwd, file)
+        await api.uploadFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          file,
+        })
       } catch (err: any) {
         addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err.message }))
       }
@@ -325,9 +398,15 @@ export function FileManager() {
   }
 
   const commitRename = async () => {
-    if (!editingName || !editValue.trim() || !activeSessionId) { setEditingName(null); return }
+    if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
     try {
-      await api.renameBySession(activeSessionId, editingName, editValue.trim())
+      await api.rename2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        path: editingName,
+        newName: editValue.trim(),
+      })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
     } catch (err: any) {
@@ -337,11 +416,16 @@ export function FileManager() {
   }
 
   const handleDelete = async () => {
-    if (selected.size === 0 || !activeSessionId) return
+    if (selected.size === 0 || !fmSource) return
     if (!confirm(t('fm.confirmDelete', { count: selected.size }))) return
     try {
-      for (const path of selected) {
-        await api.deleteFileBySession(activeSessionId, path)
+      for (const p of selected) {
+        await api.deleteFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: p,
+        })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
       fetchFiles()
@@ -351,7 +435,7 @@ export function FileManager() {
   }
 
   const handleUpload = () => {
-    if (!activeSessionId) return
+    if (!fmSource) return
     const input = document.createElement('input')
     input.type = 'file'
     input.multiple = true
@@ -359,7 +443,13 @@ export function FileManager() {
       if (!input.files?.length) return
       for (let i = 0; i < input.files.length; i++) {
         try {
-          await api.uploadFileBySession(activeSessionId, cwd, input.files[i])
+          await api.uploadFile2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: cwd,
+            file: input.files[i],
+          })
         } catch (err: any) {
           addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err.message }))
         }
@@ -371,15 +461,138 @@ export function FileManager() {
   }
 
   const handleSearch = async () => {
-    if (!searchQuery.trim() || !activeSessionId) { fetchFiles(); return }
+    if (!searchQuery.trim() || !fmSource) { fetchFiles(); return }
     setLoading(true)
     try {
-      const results = await api.searchFilesBySession(activeSessionId, searchQuery, cwd)
+      const results = await api.searchFiles2({
+        session: fmSource.type === 'session' ? fmSource.id : undefined,
+        workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+        projectId: activeProjectId ?? undefined,
+        query: searchQuery,
+        path: cwd,
+      })
       setFiles(results)
     } catch (err: any) {
       addToast('error', err.message || t('fm.searchFailed'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  // ── Download mode handlers ──
+  const exitDownloadMode = () => {
+    setDownloadMode(false)
+    setChecked(new Set())
+  }
+
+  const handleDownloadClick = () => {
+    if (!fmSource) return
+    if (downloadMode) {
+      if (checked.size > 0) {
+        // Trigger downloads (skip directories)
+        const filePaths = Array.from(checked).filter((p) => {
+          const name = p.split('/').pop() || ''
+          const entry = files.find((f) => f.name === name)
+          return entry && entry.path_type !== 'Dir' && entry.path_type !== 'SymlinkDir'
+        })
+        filePaths.forEach((p) => {
+          const a = document.createElement('a')
+          a.href = api.downloadUrl2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: p,
+          })
+          a.download = p.split('/').pop() || 'download'
+          document.body.appendChild(a)
+          a.click()
+          document.body.removeChild(a)
+        })
+        if (filePaths.length === 1) {
+          addToast('success', t('fm.downloadStarted', { name: filePaths[0].split('/').pop() || '' }))
+        } else {
+          addToast('success', t('fm.downloadStartedMulti', { count: filePaths.length }))
+        }
+        exitDownloadMode()
+      } else {
+        // 0 selected → cancel mode
+        exitDownloadMode()
+      }
+    } else {
+      // Enter download mode; close search/create overlays
+      if (searchOpen) { setSearchOpen(false); setSearchQuery('') }
+      if (createOpen) { setCreateOpen(null); setCreateName('') }
+      setDownloadMode(true)
+    }
+  }
+
+  const handleCheckboxToggle = (fullPath: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(fullPath)) next.delete(fullPath)
+      else next.add(fullPath)
+      return next
+    })
+  }
+
+  const handleSelectAllToggle = () => {
+    if (checked.size === files.length) {
+      setChecked(new Set())
+    } else {
+      setChecked(new Set(files.map((f) => (cwd ? `${cwd}/${f.name}` : f.name))))
+    }
+  }
+
+  // ── Create (folder/file) handlers ──
+  const openCreate = (mode: 'folder' | 'file') => {
+    if (createOpen === mode) {
+      setCreateOpen(null)
+      setCreateName('')
+      return
+    }
+    // Mutual exclusion
+    if (searchOpen) { setSearchOpen(false); setSearchQuery('') }
+    if (downloadMode) exitDownloadMode()
+    setCreateOpen(mode)
+    setCreateName('')
+    setTimeout(() => createInputRef.current?.focus(), 0)
+  }
+
+  const closeCreate = () => {
+    setCreateOpen(null)
+    setCreateName('')
+  }
+
+  const submitCreate = async () => {
+    if (!fmSource || !createOpen) return
+    const name = createName.trim()
+    if (!name) { addToast('error', t('fm.nameRequired')); return }
+    if (name.includes('/')) { addToast('error', t('fm.nameInvalid')); return }
+    const mode = createOpen
+    try {
+      if (mode === 'folder') {
+        await api.mkdir2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          name,
+        })
+      } else {
+        const fullPath = cwd ? `${cwd}/${name}` : name
+        await api.writeFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: fullPath,
+          content: '',
+        })
+      }
+      addToast('success', t('fm.createSuccess', { name }))
+      closeCreate()
+      fetchFiles()
+    } catch (err: any) {
+      addToast('error', err.message || t('fm.createFailed', { msg: err.message || '' }))
     }
   }
 
@@ -452,10 +665,13 @@ export function FileManager() {
           >
             ▶
           </button>
-          {activeSessionId && (
+          {/* "回到终端目录" 按钮 — 脱离终端时脉冲 */}
+          {fmSource && (
             <button
-              className="fm-bc-root"
-              onClick={() => resetFmToFollowing(activeSessionId)}
+              className={`fm-bc-root ${(fmSource?.type === 'session' && fmState.mode === 'manual') ? 'fm-btn-terminal-active' : ''}`}
+              onClick={() => {
+                if (activeSessionId) resetFmToFollowing(activeSessionId)
+              }}
               title={t('fm.backToTerminalDir')}
             >
               <IconWorkbench width={13} height={13} />
@@ -463,6 +679,7 @@ export function FileManager() {
           )}
         </div>
         <div className="fm-toolbar-right">
+          {/* 1. Search */}
           <div className="fm-search-wrap" ref={searchWrapRef}>
             <button className="fm-btn" onClick={toggleSearch} title={t('fm.search')}>
               <IconSearch />
@@ -483,6 +700,7 @@ export function FileManager() {
             )}
           </div>
 
+          {/* 2. Back to parent */}
           <button
             className="fm-btn"
             onClick={() => {
@@ -494,11 +712,67 @@ export function FileManager() {
           >
             <IconArrowUp />
           </button>
-          <button className="fm-btn" onClick={() => fetchFiles()} title={t('fm.refresh')}>
-            <IconRefresh />
+
+          {/* 3. Download (mode toggle) */}
+          <button
+            className={`fm-btn ${downloadMode ? 'fm-btn-download-active' : ''}`}
+            onClick={handleDownloadClick}
+            disabled={!cwd}
+            title={t('fm.download')}
+          >
+            <IconDownload />
           </button>
+
+          {/* 4. Upload */}
           <button className="fm-btn" onClick={handleUpload} title={t('fm.upload')}>
             <IconUpload />
+          </button>
+
+          {/* 5+6. New folder / New file (shared click-outside area) */}
+          <div ref={createAreaRef} className="flex items-center" style={{ gap: 'inherit' }}>
+            <div className="fm-search-wrap">
+              <button className="fm-btn" onClick={() => openCreate('folder')} disabled={!cwd} title={t('fm.newFolder')}>
+                <IconFolderPlus />
+              </button>
+              {createOpen === 'folder' && (
+                <input
+                  ref={createInputRef}
+                  className="fm-search"
+                  placeholder={t('fm.createNamePlaceholder')}
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitCreate()
+                    if (e.key === 'Escape') closeCreate()
+                  }}
+                  autoFocus
+                />
+              )}
+            </div>
+            <div className="fm-search-wrap">
+              <button className="fm-btn" onClick={() => openCreate('file')} disabled={!cwd} title={t('fm.newFile')}>
+                <IconFilePlus />
+              </button>
+              {createOpen === 'file' && (
+                <input
+                  ref={createInputRef}
+                  className="fm-search"
+                  placeholder={t('fm.createNamePlaceholder')}
+                  value={createName}
+                  onChange={(e) => setCreateName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitCreate()
+                    if (e.key === 'Escape') closeCreate()
+                  }}
+                  autoFocus
+                />
+              )}
+            </div>
+          </div>
+
+          {/* 7. Refresh (moved to the end) */}
+          <button className="fm-btn" onClick={() => fetchFiles()} title={t('fm.refresh')}>
+            <IconRefresh />
           </button>
         </div>
       </div>
@@ -534,7 +808,7 @@ export function FileManager() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {!activeSessionId ? (
+        {!fmSource ? (
           <div className="fm-empty">
             <span className="fm-empty-icon"><IconFolderOpen width={32} height={32} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))' }} /></span>
             <span>{t('fm.selectSessionFirst')}</span>
@@ -551,6 +825,7 @@ export function FileManager() {
           <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
             <table className="fm-table">
               <colgroup>
+                <col style={{ width: downloadMode ? 32 : 0 }} />
                 <col style={{ width: colWidths.name }} />
                 <col style={{ width: colWidths.mtime }} />
                 <col style={{ width: colWidths.size }} />
@@ -558,6 +833,19 @@ export function FileManager() {
               </colgroup>
               <thead>
                 <tr>
+                  {downloadMode && (
+                  <th className="fm-checkbox-cell">
+                    <input
+                      type="checkbox"
+                      className="fm-checkbox"
+                      checked={files.length > 0 && checked.size === files.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = checked.size > 0 && checked.size < files.length
+                      }}
+                      onChange={handleSelectAllToggle}
+                    />
+                  </th>
+                  )}
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
                       {t('fm.name')} <SI col="name" />
@@ -585,6 +873,7 @@ export function FileManager() {
                   const isDir = f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
+                  const isChecked = checked.has(fullPath)
                   return (
                     <tr
                       key={fullPath}
@@ -594,6 +883,17 @@ export function FileManager() {
                         if (isDir) navigateTo(fullPath)
                       }}
                     >
+                      {downloadMode && (
+                      <td className="fm-checkbox-cell">
+                        <input
+                          type="checkbox"
+                          className="fm-checkbox"
+                          checked={isChecked}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={() => handleCheckboxToggle(fullPath)}
+                        />
+                      </td>
+                      )}
                       <td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <FileIcon entry={f} />

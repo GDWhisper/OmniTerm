@@ -122,6 +122,43 @@ html, body, #root {
   box-shadow: var(--accent-glow-sm);
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   Session activity indicator — stronger pulse than Tailwind animate-pulse.
+   Follows docs/ui-style-guide.md §2.4 accent violet glow tokens.
+   ──────────────────────────────────────────────────────────────────── */
+.session-activity-pulse {
+  animation: session-activity-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-activity-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1.15);
+    box-shadow: var(--accent-glow-md);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1);
+    box-shadow: var(--accent-glow-sm);
+  }
+}
+
+/* Icon/text activity pulse — no scale, avoids layout jitter on larger elements */
+.activity-pulse {
+  animation: activity-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes activity-pulse {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: var(--accent-glow-md);
+  }
+  50% {
+    opacity: 0.5;
+    box-shadow: var(--accent-glow-sm);
+  }
+}
+
 /* Vertical drag bar — 4px wide, indicator is 4px × 48px centered pill. */
 .omniterm-drag-bar-v {
   width: 4px;
@@ -325,6 +362,73 @@ html, body, #root {
 
 .fm-search::placeholder {
   color: var(--text-faint);
+}
+
+/* ── Download mode (active button pulse) ── */
+@keyframes fm-download-pulse {
+  0%, 100% {
+    background: rgba(196, 181, 253, 0.30);
+    box-shadow: 0 0 8px rgba(196, 181, 253, 0.55), inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+  }
+  50% {
+    background: rgba(196, 181, 253, 0.58);
+    box-shadow: 0 0 22px rgba(196, 181, 253, 0.95), inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+  }
+}
+.fm-btn-download-active {
+  animation: fm-download-pulse 1.0s ease-in-out infinite;
+  color: #c4b5fd;
+}
+.fm-btn-download-active:hover {
+  background: rgba(196, 181, 253, 0.55);
+  color: #ddd6fe;
+  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+}
+
+/* ── Terminal button pulse (back-to-terminal outside CWD) ── */
+@keyframes fm-terminal-pulse {
+  0%, 100% {
+    background: rgba(196, 181, 253, 0.30);
+    box-shadow:
+      0 0 8px rgba(196, 181, 253, 0.55),
+      inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+  }
+  50% {
+    background: rgba(196, 181, 253, 0.58);
+    box-shadow:
+      0 0 22px rgba(196, 181, 253, 0.95),
+      inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+  }
+}
+.fm-btn-terminal-active {
+  animation: fm-terminal-pulse 1.0s ease-in-out infinite;
+  color: #c4b5fd;
+}
+.fm-btn-terminal-active:hover {
+  background: rgba(196, 181, 253, 0.55);
+  color: #ddd6fe;
+  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+}
+
+/* ── Checkbox column (only visible in download mode) ── */
+.fm-checkbox-cell {
+  width: 32px;
+  padding: 0 6px 0 10px;
+  animation: fm-checkbox-appear 0.18s ease-out;
+}
+@keyframes fm-checkbox-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fm-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+.fm-checkbox:hover {
+  filter: drop-shadow(0 0 4px rgba(196, 181, 253, 0.7));
 }
 
 /* ── Drag over state ── */

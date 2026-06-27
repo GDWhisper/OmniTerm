@@ -97,6 +97,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, workspace_path: workspacePath, command }),
     }),
+  updateSession: (id: string, data: { name?: string }) =>
+    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),
 
@@ -136,6 +138,8 @@ export const api = {
   },
   downloadUrl: (workspace: string, path: string) =>
     `/api/v1/files/download?workspace=${workspace}&path=${encodeURIComponent(path)}`,
+  downloadUrlBySession: (sessionId: string, path: string) =>
+    `/api/v1/files/download?session=${sessionId}&path=${encodeURIComponent(path)}`,
   readFile: (workspace: string, path: string) =>
     request<{ content: string }>(`/files/read?workspace=${workspace}&path=${encodeURIComponent(path)}`),
   writeFile: (workspace: string, path: string, content: string) =>
@@ -189,4 +193,76 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
+
+  // Generic file methods — support session or workspaceId (choose one)
+  listFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; path?: string; sort?: string; desc?: boolean }) => {
+    let url = `/files?path=${params.path || ''}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    if (params.sort) url += `&sort=${params.sort}`
+    if (params.desc) url += `&order=desc`
+    return request<{ files: any[]; cwd: string; is_outside_workspace: boolean }>(url)
+  },
+  deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string }) => {
+    let url = `/files?path=${encodeURIComponent(params.path)}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return request(url, { method: 'DELETE' })
+  },
+  uploadFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; file: File }) => {
+    const form = new FormData()
+    form.append('file', params.file)
+    let url = `/api/v1/files?path=${encodeURIComponent(params.path)}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return fetch(url, { method: 'POST', body: form }).then((r) => {
+      if (!r.ok) throw new Error(`Upload failed: ${r.status}`)
+      return r.json()
+    })
+  },
+  downloadUrl2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string }) => {
+    let url = `/api/v1/files/download?path=${encodeURIComponent(params.path)}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return url
+  },
+  readFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string }) => {
+    let url = `/files/read?path=${encodeURIComponent(params.path)}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return request<{ content: string }>(url)
+  },
+  writeFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; content: string }) => {
+    let url = `/files/write?path=${encodeURIComponent(params.path)}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return request(url, { method: 'POST', body: JSON.stringify({ content: params.content }) })
+  },
+  mkdir2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; name: string }) => {
+    const body: any = { path: params.path, name: params.name }
+    if (params.session) body.session = params.session
+    if (params.workspaceId) body.workspace_id = params.workspaceId
+    if (params.projectId) body.workspace = params.projectId
+    return request('/files/mkdir', { method: 'POST', body: JSON.stringify(body) })
+  },
+  rename2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; newName: string }) => {
+    const body: any = { path: params.path, newName: params.newName }
+    if (params.session) body.session = params.session
+    if (params.workspaceId) body.workspace_id = params.workspaceId
+    if (params.projectId) body.workspace = params.projectId
+    return request('/files/rename', { method: 'POST', body: JSON.stringify(body) })
+  },
+  searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
+    let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`
+    if (params.session) url += `&session=${params.session}`
+    if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
+    if (params.projectId) url += `&workspace=${params.projectId}`
+    return request<any[]>(url)
+  },
 }

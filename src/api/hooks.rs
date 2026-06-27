@@ -60,40 +60,22 @@ async fn hook_status(
             );
         }
         Ok(None) => {
-            // Option not set — fall through to heuristic fallback
+            // Option not set — hooks may not have been injected yet
         }
         Err(e) => {
             tracing::warn!("failed to read agent option for {}: {}", tmux_name, e);
-            // Fall through to heuristic fallback
         }
     }
 
-    // Fallback: use capture-pane + heuristic scanner
-    match tmux::capture_pane(&tmux_name, 50).await {
-        Ok(content) => {
-            let status = tmux::hooks::scan_agent_state(&content);
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "enabled": true,
-                    "state": status.state,
-                    "agent_kind": status.agent_kind,
-                    "detail": status.detail,
-                })),
-            )
-        }
-        Err(e) => {
-            error!("failed to capture pane: {}", e);
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "enabled": true,
-                    "state": "unknown",
-                    "detail": format!("capture failed: {}", e),
-                })),
-            )
-        }
-    }
+    // No structured agent state available — hooks not yet injected or session is bare shell
+    (
+        StatusCode::OK,
+        Json(json!({
+            "enabled": true,
+            "state": "unknown",
+            "detail": "agent hooks not injected yet",
+        })),
+    )
 }
 
 async fn hook_enable(

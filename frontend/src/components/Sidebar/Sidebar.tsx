@@ -5,7 +5,8 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
-import type { Session } from '../../api/client'
+import { IconWorkbench } from '../FileManager/icons'
+import type { Project, Workspace, Session } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -59,6 +60,8 @@ export function Sidebar() {
     setActiveWorkspace,
     setActiveSession,
     setConnected,
+    fmSessionStates,
+    resetFmToFollowing,
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
@@ -68,9 +71,15 @@ export function Sidebar() {
   const { t } = useTranslation()
   const attention = useAttention()
 
+  // Terminal button pulse: only when session exists and browsing outside its CWD
+  const fmState = activeSessionId ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }) : null
+  const isOutsideTerminalCwd = !!activeSessionId && fmState?.mode === 'manual'
+
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'project' | 'session'
     id: string
@@ -80,6 +89,7 @@ export function Sidebar() {
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
+  const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
   // Agent enable button state — commented out pending notification scheme decision.
@@ -273,6 +283,28 @@ export function Sidebar() {
     }
   }
 
+  const handleRenameSession = async () => {
+    if (!renameTarget) return
+    const newName = renameName.trim()
+    if (!newName || newName === renameTarget.name) {
+      setRenameOpen(false)
+      return
+    }
+    setSubmitting(true)
+    try {
+      await api.updateSession(renameTarget.id, { name: newName })
+      await loadSessions()
+      addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      setRenameOpen(false)
+      setRenameTarget(null)
+      setRenameName('')
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -339,6 +371,13 @@ export function Sidebar() {
     }
   }
 
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleRenameSession()
+    }
+  }
+
   const inputClass = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-all"
   const inputStyle: React.CSSProperties = {
     background: 'var(--bg-surface)',
@@ -369,10 +408,17 @@ export function Sidebar() {
         </button>
 
         <div className="flex-1 flex items-center justify-center">
-          <div
-            className="rounded-full"
-            style={{ width: 6, height: 6, background: 'var(--accent)', boxShadow: 'var(--accent-glow-sm)' }}
-          />
+          <button
+            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
+            onClick={() => {
+              if (activeSessionId) resetFmToFollowing(activeSessionId)
+            }}
+            title={t('fm.backToTerminalDir')}
+            disabled={!activeSessionId}
+          >
+            <IconWorkbench width={14} height={14} />
+          </button>
         </div>
 
         <button
@@ -420,16 +466,30 @@ export function Sidebar() {
             OmniTerm
           </span>
         </div>
-        <button
-          onClick={toggleSidebarCollapsed}
-          className="flex items-center justify-center rounded-md transition-all"
-          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
-          title={t('sidebar.collapse')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
-        >
-          ◀
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Terminal CWD button — pulses when outside terminal CWD */}
+          <button
+            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
+            onClick={() => {
+              if (activeSessionId) resetFmToFollowing(activeSessionId)
+            }}
+            title={t('fm.backToTerminalDir')}
+            disabled={!activeSessionId}
+          >
+            <IconWorkbench width={13} height={13} />
+          </button>
+          <button
+            onClick={toggleSidebarCollapsed}
+            className="flex items-center justify-center rounded-md transition-all"
+            style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
+            title={t('sidebar.collapse')}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
+          >
+            ◀
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -472,6 +532,10 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
+            const hasWorktrees = wtList.length > 0
+            const projHasActiveSession = wtList.some((wt) =>
+              sessionsForWorktree(wt.path).some((s) => s.is_active)
+            )
 
             return (
               <div key={proj.id} className="relative mb-2">
@@ -489,13 +553,16 @@ export function Sidebar() {
                 >
                   <div className="flex-1 min-w-0 mr-2">
                     <div className="flex items-center gap-2">
-                      <span style={{
-                        color: isExpanded ? 'var(--accent)' : 'var(--text-dim)',
-                        fontSize: 12,
-                        transition: 'transform 0.15s',
-                        display: 'inline-block',
-                        transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                      }}>▸</span>
+                      <span
+                        className={projHasActiveSession ? 'activity-pulse' : ''}
+                        style={{
+                          color: isExpanded || projHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
+                          fontSize: 12,
+                          transition: 'transform 0.15s',
+                          display: 'inline-block',
+                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                        }}
+                      >▸</span>
                       <span style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isExpanded ? 500 : 400, fontSize: 13 }}>
                         {proj.name}
                       </span>
@@ -525,6 +592,7 @@ export function Sidebar() {
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
                         const wtSessions = sessionsForWorktree(wt.path)
+                        const wtHasActiveSession = wtSessions.some((s) => s.is_active)
                         const isWtExpanded = isWtActive
 
                         return (
@@ -543,10 +611,19 @@ export function Sidebar() {
                               }}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <GitBranchIcon
-                                  size={14}
-                                  color={isWtActive ? 'var(--accent)' : 'var(--text-dim)'}
-                                />
+                                <span
+                                  className={`rounded-full flex items-center justify-center ${wtHasActiveSession ? 'activity-pulse' : ''}`}
+                                  style={{
+                                    width: 16,
+                                    height: 16,
+                                    color: isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
+                                  }}
+                                >
+                                  <GitBranchIcon
+                                    size={14}
+                                    color={isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)'}
+                                  />
+                                </span>
                                 <span
                                   className="truncate"
                                   style={{
@@ -557,6 +634,16 @@ export function Sidebar() {
                                   }}
                                 >
                                   {wt.label}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    color: 'var(--text-dim)',
+                                    marginLeft: 4,
+                                    fontFamily: FONT,
+                                  }}
+                                >
+                                  {wtSessions.length}
                                 </span>
                               </div>
                             </div>
@@ -610,7 +697,7 @@ export function Sidebar() {
                                     >
                                       {/* Running indicator dot */}
                                       <div
-                                        className={`rounded-full flex-shrink-0 ${s.is_active && !attnReason ? 'animate-pulse' : ''}`}
+                                        className={`rounded-full flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
                                         style={{
                                           width: 5,
                                           height: 5,
@@ -623,7 +710,7 @@ export function Sidebar() {
                                             : s.is_active
                                               ? 'var(--accent)'
                                               : 'var(--text-dim)',
-                                          boxShadow: attnReason || s.is_active ? 'var(--accent-glow-sm)' : 'none',
+                                          boxShadow: attnReason ? 'var(--accent-glow-sm)' : 'none',
                                         }}
                                       />
                                       <span
@@ -667,6 +754,14 @@ export function Sidebar() {
                                         </div>
                                       )}
                                       */}
+                                      <EditButton
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setRenameTarget({ id: s.id, name: s.name || '' })
+                                          setRenameName(s.name || '')
+                                          setRenameOpen(true)
+                                        }}
+                                      />
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -817,22 +912,85 @@ export function Sidebar() {
         </div>
       </Modal>
 
+      {/* ── Rename Session Modal ── */}
+      <Modal
+        open={renameOpen}
+        onClose={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}
+        title={t('sidebar.renameSession') ?? 'Rename Session'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.sessionName')}
+            </label>
+            <input
+              type="text"
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+              onKeyDown={handleRenameKeyDown}
+              placeholder={t('sidebar.sessionName') ?? 'dev-server'}
+              autoFocus
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <ModalPrimary
+              onClick={handleRenameSession}
+              disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
+            >
+              {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
+            </ModalPrimary>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Delete Confirmation Dialog ── */}
       <ConfirmDialog
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
         onConfirm={confirmDelete?.type === 'project' ? handleDeleteProject : handleDeleteSession}
-        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Delete Project') : t('sidebar.deleteSession')}
+        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
         message={
           confirmDelete?.type === 'project'
-            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Delete project "${confirmDelete?.name}"? All sessions will be removed.`)
+            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Remove project "${confirmDelete?.name}" from the list? Files on disk are not affected.`)
             : t('sidebar.confirmDeleteSession', { name: confirmDelete?.name })
         }
-        confirmText={t('sidebar.delete')}
-        destructive
+        confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
+        destructive={confirmDelete?.type === 'session'}
         loading={submitting}
       />
     </div>
+  )
+}
+
+function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      title={t('sidebar.rename')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--accent)'
+        e.currentTarget.style.color = 'var(--accent)'
+        e.currentTarget.style.background = 'var(--accent-10)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+        e.currentTarget.style.color = 'var(--text-faint)'
+        e.currentTarget.style.background = 'transparent'
+      }}
+    >
+      ✎
+    </button>
   )
 }
 

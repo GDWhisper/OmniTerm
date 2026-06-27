@@ -6,6 +6,7 @@ import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useThemeStore } from '../stores/themeStore'
+import { useToastStore } from '../stores/toastStore'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -290,8 +291,12 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
         if (!useAppStore.getState().autoCopySelect) return
         const sel = term.getSelection()
         if (sel) {
+          const copied = i18n.t('terminal.copySuccess')
           if (navigator.clipboard) {
-            navigator.clipboard.writeText(sel).catch(() => {})
+            navigator.clipboard.writeText(sel).then(
+              () => useToastStore.getState().addToast('success', copied),
+              () => {},
+            )
           } else {
             // Fallback for insecure contexts (non-HTTPS)
             const ta = document.createElement('textarea')
@@ -302,6 +307,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
             ta.select()
             document.execCommand('copy')
             document.body.removeChild(ta)
+            useToastStore.getState().addToast('success', copied)
           }
         }
       })
