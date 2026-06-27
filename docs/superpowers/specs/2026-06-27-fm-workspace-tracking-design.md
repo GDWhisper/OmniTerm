@@ -1,40 +1,40 @@
-# File Manager Workspace Tracking
+# 文件管理器工作区跟踪
 
-**Date:** 2026-06-27
-**Status:** design
+**日期:** 2026-06-27
+**状态:** 设计中
 
-## Overview
+## 概述
 
-When a user clicks a workspace in the sidebar and no session is focused, FileManager should display the workspace root directory with full file operations. When a session is focused, show terminal's CWD as before. A pulsing "back to terminal CWD" button signals the user is outside the terminal's current directory.
+用户点击 Sidebar 中的工作区（无聚焦会话）时，FileManager 应展示工作区根目录，支持完整文件操作。有聚焦会话时，行为与现有一致（跟随终端 CWD）。"回到终端目录"按钮脉冲闪烁，提醒用户当前目录不在终端所在位置。
 
-## Data Source Priority
+## 数据源优先级
 
 ```
-activeSessionId → show terminal CWD (existing behavior)
-    ↓ null
-activeWorkspaceId → show workspace root directory
-    ↓ null
-empty state
+activeSessionId → 跟随终端 CWD（现有行为）
+    ↓ 为空
+activeWorkspaceId → 展示工作区根目录
+    ↓ 为空
+空状态（无文件显示）
 ```
 
-## Backend Changes
+## 后端改动
 
-### `GET /api/v1/files` — add `workspace_id` parameter
+### `GET /api/v1/files` — 新增 `workspace_id` 参数
 
-**`src/api/files.rs`** — `list_files` handler:
+**`src/api/files.rs`** — `list_files` 处理函数：
 
-- Query param `workspace_id` is mutually exclusive with `session`
-- When `workspace_id` is provided:
-  - Look up workspace from DB by id to get its `path`
-  - Use workspace `path` as the base directory (instead of tmux pane CWD)
-  - `is_outside_workspace` is always `false` (you can't be outside the workspace root)
-- When neither `session` nor `workspace_id` is provided → 400 Bad Request
+- `workspace_id` 与 `session` 互斥，只能传一个
+- 传 `workspace_id` 时：
+  - 从数据库按 id 查 workspace，获取其 `path`
+  - 以 workspace `path` 为根目录（不走 tmux pane CWD）
+  - `is_outside_workspace` 始终为 `false`（工作区根目录不会"在外面"）
+- 两个都不传 → 返回 400
 
-## Frontend Changes
+## 前端改动
 
 ### API Client (`frontend/src/api/client.ts`)
 
-Rename `listFilesBySession` → `listFiles`, accept `{ session?: string, workspaceId?: string }`:
+重命名 `listFilesBySession` → `listFiles`，参数改为 `{ session?, workspaceId? }`：
 
 ```ts
 listFiles(params: { session?: string, workspaceId?: string, path?: string, sort?: string, desc?: boolean })
@@ -52,24 +52,24 @@ const source = activeSessionId
     : null
 ```
 
-- `useFmSource()` replaces all direct `activeSessionId` reads in FileManager
-- When `source` changes (session switch, workspace switch, collapse), re-fetch
+- `useFmSource()` 替代 FileManager 中所有直接读取 `activeSessionId` 的地方
+- `source` 变化时（切换会话、切换工作区、折叠）自动重新获取文件列表
 
-**fetchFiles adaptation:**
+**fetchFiles 适配:**
 
-- `source.type === 'session'` → pass `session: id` (existing logic)
-- `source.type === 'workspace'` → pass `workspaceId: id`, use `fmState.manualPath` or root
-- `source === null` → clear files, show empty state
+- `source.type === 'session'` → 传 `session: id`（现有逻辑）
+- `source.type === 'workspace'` → 传 `workspaceId: id`，路径用 `fmState.manualPath` 或根目录
+- `source === null` → 清空文件列表，显示空状态
 
-**Following mode:** only active when `source.type === 'session'`. In workspace mode, there is no terminal to follow — user is always in manual navigation.
+**跟随模式:** 仅在 `source.type === 'session'` 时生效。工作区模式下没有终端可跟随，用户始终处于手动导航模式。
 
-**File operations:** All operations (upload, download, create, delete, rename, etc.) work identically in workspace mode. The only API parameter difference is `session` vs `workspace_id`.
+**文件操作:** 所有操作（上传、下载、新建、删除、重命名等）在工作区模式下完全一致，唯一差别是 API 参数传 `session` 还是 `workspace_id`。
 
-**File watcher (SSE):** Not enabled in workspace mode. Manual refresh only.
+**文件监听（SSE）:** 工作区模式下不启用。仅支持手动刷新。
 
-### Pulse Logic
+### 脉冲逻辑
 
-The "back to terminal CWD" button in FileManager toolbar pulses when the displayed directory does not belong to the focused terminal's workspace directory:
+FileManager 顶部的"回到终端目录"按钮，当显示目录不属于聚焦终端的 workspace 目录时脉冲闪烁：
 
 ```ts
 const isOutsideTerminalCwd =
@@ -77,37 +77,37 @@ const isOutsideTerminalCwd =
   (source?.type === 'session' && fmState.mode === 'manual')
 ```
 
-- When pulsing: the button uses a CSS pulse/glow animation
-- Click with active session: `resetFmToFollowing(sessionId)` — returns to terminal CWD, pulse stops
-- Click without active session: no-op
+- 脉冲时：按钮使用 CSS pulse/glow 动画
+- 有活跃会话时点击：`resetFmToFollowing(sessionId)` → 回到终端 CWD，脉冲停止
+- 无活跃会话时点击：无效果
 
-### Sidebar Terminal Button (`frontend/src/components/Sidebar/Sidebar.tsx`)
+### Sidebar 终端按钮 (`frontend/src/components/Sidebar/Sidebar.tsx`)
 
-Add a terminal icon button next to the collapse/sidebar-toggle button. Same behavior as the FileManager terminal button: pulses when outside terminal CWD, click returns FileManager to following mode (if a session is active).
+在折叠/侧边栏切换按钮旁新增一个终端图标按钮。行为与 FileManager 的终端按钮一致：脱离终端目录时脉冲，点击后回到跟随模式（需有活跃会话）。
 
-## Interaction Matrix
+## 交互矩阵
 
-| Action | FileManager Behavior | Button State |
-|--------|---------------------|--------------|
-| Click workspace (session focused) | Show workspace root | Pulse |
-| Click workspace (no session) | Show workspace root | Pulse |
-| Click same workspace again (collapse) | Clear (empty state) | — |
-| Navigate within workspace dir | Stay, manual mode | Pulse |
-| Click a session | Switch to session's previous FM state or terminal CWD | Depends on mode |
-| Click pulse button (session active) | Back to terminal CWD | Pulse stops |
-| Click pulse button (no session) | No-op | Pulse continues |
+| 操作 | 文件管理器行为 | 按钮状态 |
+|------|---------------|----------|
+| 点工作区（有聚焦会话） | 展示工作区根目录 | 脉冲 |
+| 点工作区（无聚焦会话） | 展示工作区根目录 | 脉冲 |
+| 再点同一工作区（折叠） | 清空 | — |
+| 工作区内手动导航 | 保持手动模式 | 脉冲 |
+| 点会话 | 切换到该会话的上次状态或终端 CWD | 取决于模式 |
+| 点脉冲按钮（有活跃会话） | 回到终端 CWD | 脉冲停止 |
+| 点脉冲按钮（无活跃会话） | 无效果 | 继续脉冲 |
 
-## Files Affected
+## 涉及文件
 
-| File | Change |
-|------|--------|
-| `src/api/files.rs` | Add `workspace_id` query param to `list_files` |
-| `frontend/src/api/client.ts` | Refactor `listFilesBySession` → `listFiles` |
-| `frontend/src/stores/appStore.ts` | No changes needed |
-| `frontend/src/components/FileManager/FileManager.tsx` | `useFmSource()` hook, API adaptation, pulse logic |
-| `frontend/src/components/Sidebar/Sidebar.tsx` | Terminal icon button next to collapse toggle |
+| 文件 | 改动 |
+|------|------|
+| `src/api/files.rs` | `list_files` 增加 `workspace_id` 查询参数 |
+| `frontend/src/api/client.ts` | `listFilesBySession` 重构为 `listFiles` |
+| `frontend/src/stores/appStore.ts` | 无需改动 |
+| `frontend/src/components/FileManager/FileManager.tsx` | `useFmSource()` hook、API 适配、脉冲逻辑 |
+| `frontend/src/components/Sidebar/Sidebar.tsx` | 折叠按钮旁新增终端图标按钮 |
 
-## Non-Goals
+## 不做
 
-- Persisting workspace browse position (every workspace click starts fresh at root)
-- SSE file watching in workspace mode
+- 工作区浏览位置持久化（每次点工作区都从根目录重新开始）
+- 工作区模式下的 SSE 文件监听
