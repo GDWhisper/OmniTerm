@@ -5,8 +5,9 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
-import { IconWorkbench } from '../FileManager/icons'
-import type { Project, Workspace, Session, DuplicateGroup } from '../../api/client'
+import { IconFolder, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import type { Project, Workspace, Session, DuplicateGroup, FileEntry } from '../../api/client'
+import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -93,6 +94,12 @@ export function Sidebar() {
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  // Browse state for the create-project modal's embedded directory list
+  const [browsePath, setBrowsePath] = useState('')
+  const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState<string | null>(null)
   // 409 Conflict response data when creating a project whose path is
   // already covered by an existing project.
   const [coverConflict, setCoverConflict] = useState<{
@@ -159,6 +166,30 @@ export function Sidebar() {
     }
   }, [])
   useEffect(() => { loadDuplicates() }, [loadDuplicates])
+
+  // Fetch directory entries for the new-project modal's browse list.
+  const fetchDirs = useCallback(async (path: string) => {
+    setBrowseLoading(true)
+    setBrowseError(null)
+    try {
+      const data = await api.listDirs(path)
+      setBrowseEntries(
+        data.files.filter(
+          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
+        ),
+      )
+    } catch (e: any) {
+      setBrowseError(e.message || '无法访问该目录')
+    } finally {
+      setBrowseLoading(false)
+    }
+  }, [])
+
+  // Auto-fetch when browsePath changes (covers click-dir, go-up, and type-apply)
+  useEffect(() => {
+    if (!browsePath) return
+    fetchDirs(browsePath)
+  }, [browsePath, fetchDirs])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
@@ -243,6 +274,25 @@ export function Sidebar() {
     })
   }, [])
 
+  // Reset browse state when the create-project modal opens
+  useEffect(() => {
+    if (createProjOpen && homeDir) {
+      setBrowsePath(homeDir)
+      setProjPath(homeDir)
+      setBrowseError(null)
+    }
+  }, [createProjOpen, homeDir])
+
+  // Unified close: clear form + browse state
+  const closeCreateProj = () => {
+    setCreateProjOpen(false)
+    setProjName('')
+    setProjPath(homeDir)
+    setBrowsePath('')
+    setBrowseEntries([])
+    setBrowseError(null)
+  }
+
   // Health polling
   useEffect(() => {
     const check = () => api.health().then(() => setConnected(true)).catch(() => setConnected(false))
@@ -272,6 +322,32 @@ export function Sidebar() {
       await Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
     setExpandedProjects(newSet)
+  }
+
+  // Browse handlers for the new-project modal
+  const handleEnterDir = (entry: FileEntry) => {
+    const newPath = browsePath.endsWith('/')
+      ? `${browsePath}${entry.name}`
+      : `${browsePath}/${entry.name}`
+    setProjPath(newPath)
+    setBrowsePath(newPath)
+  }
+
+  const handleGoUp = () => {
+    const parent = getParentPath(browsePath)
+    if (!parent) return
+    setProjPath(parent)
+    setBrowsePath(parent)
+  }
+
+  const handlePathApply = () => {
+    const trimmed = projPath.trim()
+    if (!trimmed || trimmed === browsePath) return
+    setBrowsePath(trimmed)
+  }
+
+  const handleRefresh = () => {
+    if (browsePath) fetchDirs(browsePath)
   }
 
   const handleCreateProject = async () => {
@@ -399,6 +475,22 @@ export function Sidebar() {
     } finally {
       setSubmitting(false)
       setConfirmDelete(null)
+    }
+  }
+
+  // Enter in name field = create project
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleCreateProject()
+    }
+  }
+
+  // Enter in path field = apply path (don't create)
+  const handlePathKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handlePathApply()
     }
   }
 
