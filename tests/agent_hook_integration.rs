@@ -371,3 +371,161 @@ async fn test_session_name_with_pipe_character() {
     cleanup(&name);
     eprintln!("✓ pipe-in-name test passed");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Regression: WS close must NOT leak \n + VEOF (0x04) into the
+// tmux session's pane. This protects agent tasks from being
+// interrupted by Ctrl+D whenever the user switches sessions or
+// otherwise disconnects the WebSocket.
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn test_ws_close_does_not_inject_eof_into_pane() {
+    use std::io::Write;
+
+    let name = unique_session("no_eof_leak");
+    let cwd = std::env::current_dir()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+
+    // 1. Create the session via tmux directly (skipping our HTTP layer for
+    //    isolation — we only need a real tmux server + session to exercise
+    //    the SIGHUP / PTY cleanup path).
+    let (ok, _, stderr) = tmux(&[
+        "new-session", "-d", "-s", &name, "-c", &cwd,
+        "-x", "80", "-y", "24",
+    ]);
+    if !ok {
+        eprintln!("SKIP: cannot create tmux session: {}", stderr.trim());
+        return;
+    }
+
+    // 2. Persist a session row so the WS handler accepts the id.
+    let db_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:omniterm.db?mode=rwc".into());
+    let pool = sqlx::SqlitePool::connect(&db_url).await.ok();
+    if pool.is_none() {
+        eprintln!("SKIP: cannot connect to db");
+        cleanup(&name);
+        return;
+    }
+    let pool = pool.unwrap();
+    // Find or create an omniterm-dev project (matches the dev server's DB)
+    let project_id: String = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM projects WHERE path LIKE '%OmniTerm%' LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .unwrap_or_else(|| {
+        // Use a random uuid if none found
+        format!("test_proj_{}", std::process::id())
+    });
+    let session_id = format!("test_sess_{}", std::process::id());
+    let _ = sqlx::query(
+        "INSERT OR REPLACE INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)"
+    )
+    .bind(&session_id)
+    .bind(&project_id)
+    .bind(&cwd)
+    .bind("no-eof-leak")
+    .bind(&name)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await;
+
+    // 3. Start a process inside the session that records every byte it
+    //    receives on stdin, hex-encoded, one per line.
+    let log_path = format!("/tmp/ot_test_bytes_{}.log", std::process::id());
+    let _ = std::fs::remove_file(&log_path);
+    // Write the reader script to a file in /tmp so the test shell can run
+    // it directly without nested quoting.
+    let reader_path = format!("/tmp/ot_test_reader_{}.py", std::process::id());
+    let reader_body = format!(
+        "import sys\n\
+         f=open(r\"{log}\", \"wb\")\n\
+         f.write(b\"START\\n\"); f.flush()\n\
+         for c in iter(lambda: sys.stdin.buffer.read(1), b\"\"):\n\
+         \x20\x20\x20\x20f.write(b\"GOT 0x\"+c.hex().encode()+b\"\\n\"); f.flush()\n\
+         f.write(b\"EOF_RECEIVED\\n\"); f.flush()\n",
+        log = log_path
+    );
+    std::fs::write(&reader_path, &reader_body).unwrap();
+    let _ = tmux(&["send-keys", "-t", &name, &format!("python3 {}", reader_path), "Enter"]);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    // 4. Connect to the running dev server's WS endpoint and disconnect.
+    let port = std::env::var("OMNITERM_TEST_PORT").unwrap_or_else(|_| "9777".into());
+    let url = format!(
+        "ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24",
+        port, session_id
+    );
+    // We need the websockets crate; if unavailable, skip the network half
+    // and rely on the structural test below.
+    let connected = (|| -> bool {
+        std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
+            .map(|_| true)
+            .unwrap_or(false)
+    })();
+    if !connected {
+        eprintln!("SKIP: dev server not reachable on :{}", port);
+        cleanup(&name);
+        let _ = sqlx::query("DELETE FROM sessions WHERE id = ?")
+            .bind(&session_id)
+            .execute(&pool)
+            .await;
+        return;
+    }
+
+    // Use a tiny raw WS handshake so we don't add a new dep just for tests.
+    // The dev server's WS endpoint doesn't require auth, so the bare upgrade
+    // request is enough to trigger our handler.
+    use std::io::Read;
+    let mut stream = std::net::TcpStream::connect(("localhost", port.parse().unwrap())).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    let req = format!(
+        "GET /api/v1/ws/terminal/{}?cols=80&rows=24 HTTP/1.1\r\n\
+         Host: localhost:{}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n",
+        session_id, port
+    );
+    stream.write_all(req.as_bytes()).unwrap();
+    // Drain the upgrade response, then close. We don't need to send a
+    // real frame — the bug we care about is the leak on close, not on
+    // data forwarding (that's covered by other integration tests).
+    let mut buf = [0u8; 4096];
+    let _ = stream.read(&mut buf);
+    // Build a masked close frame: FIN+close(0x88), masked(0x80), len=0
+    let close_frame = vec![0x88, 0x80];
+    let _ = stream.write_all(&close_frame);
+    drop(stream);
+
+    // Give the cleanup a moment, then read what the agent recorded.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    eprintln!("agent log:\n{}", log);
+
+    // The fix: the agent must NOT have seen 0x04 as a result of WS close.
+    // It MAY see EOF (because the PTY closes normally on detach), but
+    // 0x04 (Ctrl+D / VEOF) must not appear as a stray byte.
+    let saw_04 = log.lines().any(|l| l.contains("0x04"));
+    assert!(
+        !saw_04,
+        "WS close leaked \\n + VEOF (0x04) into the tmux pane — \
+         this is the agent-interruption bug. Agent log:\n{}",
+        log
+    );
+
+    cleanup(&name);
+    let _ = sqlx::query("DELETE FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .execute(&pool)
+        .await;
+    let _ = std::fs::remove_file(&log_path);
+    let _ = std::fs::remove_file(&reader_path);
+    eprintln!("✓ no EOF/Ctrl+D leak test passed");
+}
