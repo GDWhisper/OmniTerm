@@ -5,6 +5,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
+import { IconWorkbench } from '../FileManager/icons'
 import type { Project, Workspace, Session } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
@@ -59,6 +60,8 @@ export function Sidebar() {
     setActiveWorkspace,
     setActiveSession,
     setConnected,
+    fmSessionStates,
+    resetFmToFollowing,
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
@@ -67,6 +70,12 @@ export function Sidebar() {
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
   const attention = useAttention()
+
+  // Terminal button pulse: when outside terminal CWD
+  const fmState = activeSessionId ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }) : null
+  const isOutsideTerminalCwd = !activeSessionId
+    ? !!activeWorkspaceId  // workspace mode, no session
+    : fmState?.mode === 'manual'  // session in manual mode
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
@@ -369,10 +378,17 @@ export function Sidebar() {
         </button>
 
         <div className="flex-1 flex items-center justify-center">
-          <div
-            className="rounded-full"
-            style={{ width: 6, height: 6, background: 'var(--accent)', boxShadow: 'var(--accent-glow-sm)' }}
-          />
+          <button
+            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
+            onClick={() => {
+              if (activeSessionId) resetFmToFollowing(activeSessionId)
+            }}
+            title={t('fm.backToTerminalDir')}
+            disabled={!activeSessionId}
+          >
+            <IconWorkbench width={14} height={14} />
+          </button>
         </div>
 
         <button
@@ -420,16 +436,30 @@ export function Sidebar() {
             OmniTerm
           </span>
         </div>
-        <button
-          onClick={toggleSidebarCollapsed}
-          className="flex items-center justify-center rounded-md transition-all"
-          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
-          title={t('sidebar.collapse')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
-        >
-          ◀
-        </button>
+        <div className="flex items-center gap-1.5">
+          {/* Terminal CWD button — pulses when outside terminal CWD */}
+          <button
+            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
+            onClick={() => {
+              if (activeSessionId) resetFmToFollowing(activeSessionId)
+            }}
+            title={t('fm.backToTerminalDir')}
+            disabled={!activeSessionId}
+          >
+            <IconWorkbench width={13} height={13} />
+          </button>
+          <button
+            onClick={toggleSidebarCollapsed}
+            className="flex items-center justify-center rounded-md transition-all"
+            style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
+            title={t('sidebar.collapse')}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
+          >
+            ◀
+          </button>
+        </div>
       </div>
 
       {/* Content */}
