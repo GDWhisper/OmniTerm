@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type KeyboardEvent, type DragEvent } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
@@ -126,12 +126,12 @@ export function FileManager() {
 
   // Data source: session > workspace > null
   type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
-  const fmSource: FmSource | null = activeSessionId
-    ? { type: 'session', id: activeSessionId }
-    : activeWorkspaceId
-      ? { type: 'workspace', id: activeWorkspaceId }
-      : null
-  const sourceKey = fmSource ? `${fmSource.type}:${fmSource.id}` : null
+  const fmSource: FmSource | null = useMemo(() => {
+    if (activeSessionId) return { type: 'session', id: activeSessionId }
+    if (activeWorkspaceId) return { type: 'workspace', id: activeWorkspaceId }
+    return null
+  }, [activeSessionId, activeWorkspaceId])
+  const sourceKey = useMemo(() => fmSource ? `${fmSource.type}:${fmSource.id}` : null, [fmSource])
 
   const fetchFiles = useCallback(async (path?: string, sort?: string, desc?: boolean, silent = false): Promise<string | undefined> => {
     if (!fmSource) { setFiles([]); return undefined }
