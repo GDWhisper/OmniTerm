@@ -958,14 +958,14 @@ export function Sidebar() {
         open={!!confirmDelete}
         onClose={() => setConfirmDelete(null)}
         onConfirm={confirmDelete?.type === 'project' ? handleDeleteProject : handleDeleteSession}
-        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Delete Project') : t('sidebar.deleteSession')}
+        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
         message={
           confirmDelete?.type === 'project'
-            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Delete project "${confirmDelete?.name}"? All sessions will be removed.`)
+            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Remove project "${confirmDelete?.name}" from the list? Files on disk are not affected.`)
             : t('sidebar.confirmDeleteSession', { name: confirmDelete?.name })
         }
-        confirmText={t('sidebar.delete')}
-        destructive
+        confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
+        destructive={confirmDelete?.type === 'session'}
         loading={submitting}
       />
     </div>
