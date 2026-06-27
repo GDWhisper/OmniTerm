@@ -80,6 +80,8 @@ export function Sidebar() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'project' | 'session'
     id: string
@@ -89,6 +91,7 @@ export function Sidebar() {
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
+  const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
   // Agent enable button state — commented out pending notification scheme decision.
@@ -282,6 +285,28 @@ export function Sidebar() {
     }
   }
 
+  const handleRenameSession = async () => {
+    if (!renameTarget) return
+    const newName = renameName.trim()
+    if (!newName || newName === renameTarget.name) {
+      setRenameOpen(false)
+      return
+    }
+    setSubmitting(true)
+    try {
+      await api.updateSession(renameTarget.id, { name: newName })
+      await loadSessions()
+      addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      setRenameOpen(false)
+      setRenameTarget(null)
+      setRenameName('')
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -345,6 +370,13 @@ export function Sidebar() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleCreateSession()
+    }
+  }
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleRenameSession()
     }
   }
 
@@ -724,6 +756,14 @@ export function Sidebar() {
                                         </div>
                                       )}
                                       */}
+                                      <EditButton
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setRenameTarget({ id: s.id, name: s.name || '' })
+                                          setRenameName(s.name || '')
+                                          setRenameOpen(true)
+                                        }}
+                                      />
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -874,6 +914,45 @@ export function Sidebar() {
         </div>
       </Modal>
 
+      {/* ── Rename Session Modal ── */}
+      <Modal
+        open={renameOpen}
+        onClose={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}
+        title={t('sidebar.renameSession') ?? 'Rename Session'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.sessionName')}
+            </label>
+            <input
+              type="text"
+              value={renameName}
+              onChange={(e) => setRenameName(e.target.value)}
+              onKeyDown={handleRenameKeyDown}
+              placeholder={t('sidebar.sessionName') ?? 'dev-server'}
+              autoFocus
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <ModalPrimary
+              onClick={handleRenameSession}
+              disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
+            >
+              {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
+            </ModalPrimary>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Delete Confirmation Dialog ── */}
       <ConfirmDialog
         open={!!confirmDelete}
@@ -890,6 +969,30 @@ export function Sidebar() {
         loading={submitting}
       />
     </div>
+  )
+}
+
+function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      title={t('sidebar.rename')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--accent)'
+        e.currentTarget.style.color = 'var(--accent)'
+        e.currentTarget.style.background = 'var(--accent-10)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+        e.currentTarget.style.color = 'var(--text-faint)'
+        e.currentTarget.style.background = 'transparent'
+      }}
+    >
+      ✎
+    </button>
   )
 }
 

@@ -97,6 +97,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, workspace_path: workspacePath, command }),
     }),
+  updateSession: (id: string, data: { name?: string }) =>
+    request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),
 
