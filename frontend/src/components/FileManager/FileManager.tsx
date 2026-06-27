@@ -666,14 +666,13 @@ export function FileManager() {
             ▶
           </button>
           {/* "回到终端目录" 按钮 — 脱离终端时脉冲 */}
-          {activeSessionId && (
+          {fmSource && (
             <button
               className={`fm-bc-root ${(fmSource?.type === 'workspace' || (fmSource?.type === 'session' && fmState.mode === 'manual')) ? 'fm-btn-terminal-active' : ''}`}
               onClick={() => {
                 if (activeSessionId) resetFmToFollowing(activeSessionId)
               }}
               title={t('fm.backToTerminalDir')}
-              disabled={!activeSessionId}
             >
               <IconWorkbench width={13} height={13} />
             </button>
