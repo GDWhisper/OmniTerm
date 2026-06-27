@@ -575,6 +575,16 @@ export function Sidebar() {
                                 >
                                   {wt.label}
                                 </span>
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    color: 'var(--text-dim)',
+                                    marginLeft: 4,
+                                    fontFamily: FONT,
+                                  }}
+                                >
+                                  {wtSessions.length}
+                                </span>
                               </div>
                             </div>
 
