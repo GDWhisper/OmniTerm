@@ -77,7 +77,7 @@ const isOutsideTerminalCwd =
   (source?.type === 'session' && fmState.mode === 'manual')
 ```
 
-- 脉冲时：按钮使用 CSS pulse/glow 动画
+- 脉冲动画：复用 UI 规范 §6.4 的呼吸动画模式（与下载按钮 `fm-download-pulse` 一致）—— `accent-bright` 双层 box-shadow + 0.9–1.0s `ease-in-out` 呼吸，类名 `.fm-btn-terminal-active`
 - 有活跃会话时点击：`resetFmToFollowing(sessionId)` → 回到终端 CWD，脉冲停止
 - 无活跃会话时点击：无效果
 
