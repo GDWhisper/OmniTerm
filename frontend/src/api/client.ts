@@ -2,6 +2,22 @@ import { useToastStore } from '../stores/toastStore'
 
 const BASE = '/api/v1'
 
+/**
+ * Error thrown by `request` for non-2xx responses. Carries the HTTP status
+ * and the parsed JSON body so callers can react to specific codes
+ * (e.g. 409 Conflict on `/projects`).
+ */
+export class ApiError extends Error {
+  status: number
+  body: any
+  constructor(status: number, body: any, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
 async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
@@ -15,7 +31,7 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
     const body = await res.json().catch(() => ({}))
     const msg = body.error || `HTTP ${res.status}`
     useToastStore.getState().addToast('error', msg)
-    throw new Error(msg)
+    throw new ApiError(res.status, body, msg)
   }
 
   return res.json()
@@ -27,6 +43,23 @@ export interface Project {
   name: string
   path: string
   created_at: string
+}
+
+/** One project inside a duplicate group. */
+export interface DuplicateProject {
+  id: string
+  name: string
+  path: string
+  created_at: string
+  session_count: number
+}
+
+/** Group of projects that share coverage of the same git repo (or exact path). */
+export interface DuplicateGroup {
+  group_id: string
+  /** "shared_toplevel" or "exact_path" */
+  reason: string
+  projects: DuplicateProject[]
 }
 
 export interface Workspace {
@@ -84,6 +117,16 @@ export const api = {
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteProject: (id: string) =>
     request(`/projects/${id}`, { method: 'DELETE' }),
+
+  /** Find groups of projects that share a git toplevel (or exact path). */
+  listDuplicates: () =>
+    request<DuplicateGroup[]>('/projects/duplicates'),
+  /** Merge source project `id` into `target_id` (moves sessions, deletes source). */
+  mergeProject: (id: string, targetId: string) =>
+    request<{ ok: true; merged_into: string }>(
+      `/projects/${id}/merge-into/${targetId}`,
+      { method: 'POST' },
+    ),
 
   // Worktrees (real-time git worktree discovery)
   listWorktrees: (projectId: string) =>

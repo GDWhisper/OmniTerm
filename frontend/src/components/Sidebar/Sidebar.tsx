@@ -3,13 +3,14 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import { IconWorkbench } from '../FileManager/icons'
-import type { Project, Workspace, Session } from '../../api/client'
+import type { Project, Workspace, Session, DuplicateGroup } from '../../api/client'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
@@ -92,6 +93,17 @@ export function Sidebar() {
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // 409 Conflict response data when creating a project whose path is
+  // already covered by an existing project.
+  const [coverConflict, setCoverConflict] = useState<{
+    coveringProject: { id: string; name: string; path: string }
+    reason: 'exact_path' | 'worktree_child'
+  } | null>(null)
+  // Groups of legacy duplicate projects (e.g. before the coverage check
+  // existed, the user may have added the same repo twice).
+  const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
+  const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false)
+  const [duplicatesDismissed, setDuplicatesDismissed] = useState(false)
   // Agent enable button state — commented out pending notification scheme decision.
   // See docs/requirements.md "Agent 状态监控与通知".
   // const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
@@ -135,6 +147,18 @@ export function Sidebar() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Check for legacy duplicate projects (created before the coverage check).
+  // Surface a banner; the user can open the merge dialog to consolidate.
+  const loadDuplicates = useCallback(async () => {
+    try {
+      const groups = await api.listDuplicates()
+      setDuplicates(groups)
+    } catch {
+      // Quietly ignore — duplicate detection is non-critical
+    }
+  }, [])
+  useEffect(() => { loadDuplicates() }, [loadDuplicates])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
@@ -260,8 +284,18 @@ export function Sidebar() {
       setCreateProjOpen(false)
       setProjName('')
       setProjPath(homeDir)
-    } catch {
-      // api client already shows error toast
+    } catch (e) {
+      // 409 Conflict: the new path is already covered by an existing
+      // project. Surface a switch-to-existing dialog instead of letting
+      // the generic toast dismiss.
+      if (e instanceof ApiError && e.status === 409 && e.body?.error === 'already_covered') {
+        setCoverConflict({
+          coveringProject: e.body.covering_project,
+          reason: e.body.reason,
+        })
+        return
+      }
+      // api client already shows error toast for other failures
     } finally {
       setSubmitting(false)
     }
@@ -499,6 +533,48 @@ export function Sidebar() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+        {/* Duplicate projects banner — surfaces legacy data that should
+            be consolidated. Click to open the merge dialog. */}
+        {duplicates.length > 0 && !duplicatesDismissed && (
+          <div
+            data-testid="dup-banner"
+            onClick={(e) => {
+              // Dismiss if the user clicked the ✕ (or its icon descendant);
+              // otherwise open the merge dialog.
+              if ((e.target as HTMLElement).closest('[data-dup-dismiss]')) {
+                setDuplicatesDismissed(true)
+              } else {
+                setDuplicateDialogOpen(true)
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setDuplicateDialogOpen(true) }}
+            className="w-full mb-3 px-3 py-2 rounded-lg text-left transition-all flex items-center gap-2 cursor-pointer"
+            style={{
+              background: 'rgba(251, 191, 36, 0.08)',
+              border: '1px solid rgba(251, 191, 36, 0.3)',
+              color: 'var(--text-primary)',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(251, 191, 36, 0.14)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(251, 191, 36, 0.08)' }}
+            title={t('sidebar.dupBannerTitle') ?? 'Click to reconcile duplicate projects'}
+          >
+            <span style={{ fontSize: 14, color: '#fbbf24' }}>⚠</span>
+            <span style={{ fontSize: 12, flex: 1 }}>
+              {t('sidebar.dupBanner', { n: duplicates.length }) ??
+                `Detected ${duplicates.length} group${duplicates.length === 1 ? '' : 's'} of duplicate projects. Click to merge.`}
+            </span>
+            <button
+              data-dup-dismiss
+              style={{ fontSize: 14, color: 'var(--text-dim)', padding: '0 4px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+              title={t('sidebar.dupDismiss') ?? 'Dismiss'}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Agent onboarding banner — commented out pending notification scheme decision.
         <AgentOnboardingBanner sessions={sessions} />
         */}
@@ -970,6 +1046,82 @@ export function Sidebar() {
         confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
+      />
+
+      {/* ── Cover-Conflict Modal: shown when POST /projects returns 409.
+          Offers to switch to the existing project that already covers the
+          requested path (instead of creating a duplicate). */}
+      <Modal
+        open={!!coverConflict}
+        onClose={() => setCoverConflict(null)}
+        title={t('sidebar.coverConflictTitle') ?? 'Project Already Exists'}
+        maxWidth="max-w-md"
+      >
+        {coverConflict && (
+          <div className="space-y-4">
+            <p style={{ fontSize: 13, color: 'var(--text-primary)' }}>
+              {coverConflict.reason === 'exact_path'
+                ? (t('sidebar.coverConflictExact', { name: coverConflict.coveringProject.name }) ??
+                  `A project named "${coverConflict.coveringProject.name}" already uses this exact path.`)
+                : (t('sidebar.coverConflictWorktree', { name: coverConflict.coveringProject.name }) ??
+                  `A project named "${coverConflict.coveringProject.name}" already covers this path — they belong to the same git repository.`)}
+            </p>
+            <div
+              className="rounded-md px-3 py-2 truncate"
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-strong)',
+                fontSize: 11,
+                color: 'var(--text-muted)',
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              }}
+              title={coverConflict.coveringProject.path}
+            >
+              {coverConflict.coveringProject.path}
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+              {t('sidebar.coverConflictHint') ??
+                'Switch to the existing project instead, or choose a different path.'}
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <ModalCancel onClick={() => setCoverConflict(null)}>
+                {t('sidebar.cancel') ?? 'Cancel'}
+              </ModalCancel>
+              <ModalPrimary
+                onClick={() => {
+                  const coverId = coverConflict.coveringProject.id
+                  setActiveProject(coverId)
+                  setActiveWorkspace(null)
+                  setCoverConflict(null)
+                  setCreateProjOpen(false)
+                  setProjName('')
+                  setProjPath(homeDir)
+                  addToast(
+                    'success',
+                    t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??
+                      `Switched to project "${coverConflict.coveringProject.name}"`,
+                  )
+                }}
+              >
+                {t('sidebar.coverConflictSwitch') ?? 'Switch to existing'}
+              </ModalPrimary>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Legacy Duplicate Projects Reconciliation Dialog ── */}
+      <DuplicateProjectsDialog
+        open={duplicateDialogOpen}
+        groups={duplicates}
+        onClose={() => setDuplicateDialogOpen(false)}
+        onResolved={() => {
+          setDuplicateDialogOpen(false)
+          setDuplicates([])
+          setDuplicatesDismissed(false)
+          loadProjects()
+          loadSessions()
+        }}
       />
     </div>
   )
