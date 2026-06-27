@@ -1022,7 +1022,12 @@ export function Sidebar() {
       </div>
 
       {/* ── Create Project Modal ── */}
-      <Modal open={createProjOpen} onClose={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }} title={t('sidebar.createProject') ?? 'Create Project'}>
+      <Modal
+        open={createProjOpen}
+        onClose={closeCreateProj}
+        title={t('sidebar.createProject') ?? 'Create Project'}
+        maxWidth="max-w-lg"
+      >
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -1032,7 +1037,7 @@ export function Sidebar() {
               type="text"
               value={projName}
               onChange={(e) => setProjName(e.target.value)}
-              onKeyDown={handleProjKeyDown}
+              onKeyDown={handleNameKeyDown}
               placeholder="my-project"
               autoFocus
               className={inputClass}
@@ -1049,16 +1054,139 @@ export function Sidebar() {
               type="text"
               value={projPath}
               onChange={(e) => setProjPath(e.target.value)}
-              onKeyDown={handleProjKeyDown}
+              onKeyDown={handlePathKeyDown}
+              onBlur={(e) => {
+                handlePathApply()
+                e.currentTarget.style.borderColor = 'var(--border-strong)'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
               placeholder={homeDir}
               className={inputClass}
               style={inputStyle}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
+            <div className="text-[10px] mt-1" style={{ color: 'var(--text-faint)' }}>
+              {t('sidebar.pathHint') ?? '回车或失焦以应用路径'}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                {t('sidebar.browse') ?? '浏览'}
+              </label>
+              <button
+                onClick={handleRefresh}
+                title={t('sidebar.refresh') ?? '刷新'}
+                className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                style={{
+                  border: '1px solid var(--border-strong)',
+                  color: 'var(--text-secondary)',
+                  fontSize: 11,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--accent)'
+                  e.currentTarget.style.color = 'var(--accent)'
+                  e.currentTarget.style.background = 'var(--accent-10)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-strong)'
+                  e.currentTarget.style.color = 'var(--text-secondary)'
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <IconRefresh width={10} height={10} />
+                {t('sidebar.refresh') ?? '刷新'}
+              </button>
+            </div>
+            <div
+              className="overflow-y-auto"
+              style={{
+                height: 200,
+                background: 'var(--bg-base)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 5,
+                padding: 4,
+              }}
+            >
+              {/* ".." parent entry */}
+              <div
+                onClick={handleGoUp}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                style={{
+                  borderRadius: 4,
+                  color: 'var(--text-faint)',
+                  cursor: getParentPath(browsePath) ? 'pointer' : 'not-allowed',
+                  opacity: getParentPath(browsePath) ? 1 : 0.5,
+                }}
+                onMouseEnter={(e) => {
+                  if (!getParentPath(browsePath)) return
+                  e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <IconArrowUp width={14} height={14} />
+                <span>..</span>
+              </div>
+
+              {/* Loading state */}
+              {browseLoading && (
+                <div className="flex items-center justify-center py-6 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {t('sidebar.loading') ?? '加载中…'}
+                </div>
+              )}
+
+              {/* Error state */}
+              {!browseLoading && browseError && (
+                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
+                  <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{browseError}</div>
+                  <button
+                    onClick={handleRefresh}
+                    className="px-2 py-0.5 rounded transition-all"
+                    style={{ border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: 11 }}
+                  >
+                    {t('sidebar.retry') ?? '重试'}
+                  </button>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {!browseLoading && !browseError && browseEntries.length === 0 && (
+                <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
+                  <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? '空目录'}</div>
+                </div>
+              )}
+
+              {/* Directory entries */}
+              {!browseLoading && !browseError && browseEntries.map((entry) => (
+                <div
+                  key={entry.name}
+                  onClick={() => handleEnterDir(entry)}
+                  className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                  style={{
+                    borderRadius: 4,
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <IconFolder width={14} height={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                  <span className="truncate">{entry.name}</span>
+                  <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }}>
+            <ModalCancel onClick={closeCreateProj}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
