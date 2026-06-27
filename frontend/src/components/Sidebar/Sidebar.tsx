@@ -80,7 +80,7 @@ export function Sidebar() {
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
-  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ type: 'project' | 'session'; id: string; name: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'project' | 'session'
     id: string
@@ -322,7 +322,7 @@ export function Sidebar() {
     }
   }
 
-  const handleRenameSession = async () => {
+  const handleRename = async () => {
     if (!renameTarget) return
     const newName = renameName.trim()
     if (!newName || newName === renameTarget.name) {
@@ -331,9 +331,15 @@ export function Sidebar() {
     }
     setSubmitting(true)
     try {
-      await api.updateSession(renameTarget.id, { name: newName })
-      await loadSessions()
-      addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      if (renameTarget.type === 'project') {
+        await api.updateProject(renameTarget.id, { name: newName })
+        await loadProjects()
+        addToast('success', t('sidebar.projectRenamed', { name: newName }) ?? `Project renamed to "${newName}"`)
+      } else {
+        await api.updateSession(renameTarget.id, { name: newName })
+        await loadSessions()
+        addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      }
       setRenameOpen(false)
       setRenameTarget(null)
       setRenameName('')
@@ -413,7 +419,7 @@ export function Sidebar() {
   const handleRenameKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleRenameSession()
+      handleRename()
     }
   }
 
@@ -652,7 +658,15 @@ export function Sidebar() {
                       <ProjectPath path={proj.path} />
                     </div>
                   </div>
-                  <div className="flex items-center">
+                  <div className="flex items-center gap-1">
+                    <EditButton
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setRenameTarget({ type: 'project', id: proj.id, name: proj.name })
+                        setRenameName(proj.name)
+                        setRenameOpen(true)
+                      }}
+                    />
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -838,7 +852,7 @@ export function Sidebar() {
                                       <EditButton
                                         onClick={(e) => {
                                           e.stopPropagation()
-                                          setRenameTarget({ id: s.id, name: s.name || '' })
+                                          setRenameTarget({ type: 'session', id: s.id, name: s.name || '' })
                                           setRenameName(s.name || '')
                                           setRenameOpen(true)
                                         }}
@@ -993,24 +1007,34 @@ export function Sidebar() {
         </div>
       </Modal>
 
-      {/* ── Rename Session Modal ── */}
+      {/* ── Rename Modal (Project or Session, reused) ── */}
       <Modal
         open={renameOpen}
         onClose={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}
-        title={t('sidebar.renameSession') ?? 'Rename Session'}
+        title={
+          renameTarget?.type === 'project'
+            ? (t('sidebar.renameProject') ?? 'Rename Project')
+            : (t('sidebar.renameSession') ?? 'Rename Session')
+        }
         maxWidth="max-w-sm"
       >
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.sessionName')}
+              {renameTarget?.type === 'project'
+                ? (t('sidebar.projectName') ?? 'Project Name')
+                : t('sidebar.sessionName')}
             </label>
             <input
               type="text"
               value={renameName}
               onChange={(e) => setRenameName(e.target.value)}
               onKeyDown={handleRenameKeyDown}
-              placeholder={t('sidebar.sessionName') ?? 'dev-server'}
+              placeholder={
+                renameTarget?.type === 'project'
+                  ? (t('sidebar.projectName') ?? 'my-project')
+                  : (t('sidebar.sessionName') ?? 'dev-server')
+              }
               autoFocus
               className={inputClass}
               style={inputStyle}
@@ -1023,7 +1047,7 @@ export function Sidebar() {
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary
-              onClick={handleRenameSession}
+              onClick={handleRename}
               disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
             >
               {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
