@@ -31,8 +31,9 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct FileQuery {
     path: Option<String>,
-    workspace: Option<String>,
+    workspace: Option<String>,      // project_id (existing, misnamed)
     session: Option<String>,
+    workspace_id: Option<String>,   // NEW: actual workspace id
     sort: Option<String>,
     order: Option<String>,
 }
@@ -163,6 +164,30 @@ pub async fn resolve_base_from_query(
     }
 }
 
+/// Resolve workspace root path from workspace_id + project_id.
+/// Workspaces are discovered dynamically from git worktrees.
+async fn resolve_workspace_root(
+    state: &AppState,
+    workspace_id: &str,
+    project_id: &str,
+) -> Option<String> {
+    use crate::workspaces;
+    let Some(project_root) = resolve_project_root(state, project_id).await else {
+        return None;
+    };
+    let project = crate::models::project::Project {
+        id: project_id.to_string(),
+        name: String::new(),
+        path: project_root,
+        target_id: None,
+        created_at: String::new(),
+    };
+    let wts = workspaces::list_workspaces(&project).await;
+    wts.into_iter()
+        .find(|w| w.id == workspace_id)
+        .map(|w| w.path)
+}
+
 async fn list_files(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
@@ -222,9 +247,53 @@ async fn list_files(
                 )
             }
         }
-    } else {
-        // Project-based mode
+    } else if let Some(workspace_id) = q.workspace_id.as_deref() {
+        // Workspace-based mode: resolve workspace path from workspace_id
         let project_id = q.workspace.as_deref().unwrap_or("default");
+
+        let Some(root) = resolve_workspace_root(&state, workspace_id, project_id).await else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "workspace not found" })),
+            );
+        };
+
+        let base = std::path::Path::new(&root);
+        if !base.exists() {
+            return (StatusCode::OK, Json(json!({ "files": [], "cwd": root, "is_outside_workspace": false })));
+        }
+
+        let rel_path = q.path.as_deref().unwrap_or("");
+        let list_base = if rel_path.is_empty() || rel_path == "." {
+            base.to_path_buf()
+        } else if std::path::Path::new(rel_path).is_absolute() {
+            std::path::Path::new(rel_path).to_path_buf()
+        } else {
+            base.join(rel_path)
+        };
+
+        let Ok(canonical) = list_base.canonicalize() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "path not found" })),
+            );
+        };
+
+        match fs::list_dir(&canonical, "", sort, desc).await {
+            Ok(entries) => (
+                StatusCode::OK,
+                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": false })),
+            ),
+            Err(e) => {
+                error!("list_files (workspace) failed: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+            }
+        }
+    } else if let Some(project_id) = q.workspace.as_deref() {
+        // Project-based mode (existing fallback, unchanged)
         let rel_path = q.path.as_deref().unwrap_or("");
 
         let Some(root) = resolve_project_root(&state, project_id).await else {
@@ -250,6 +319,11 @@ async fn list_files(
                 )
             }
         }
+    } else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "session, workspace_id, or workspace parameter required" })),
+        );
     }
 }
 
