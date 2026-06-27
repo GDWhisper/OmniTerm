@@ -333,8 +333,12 @@ export function FileManager() {
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (editingName) return
-    // Don't intercept keys when an input/textarea has focus (search box, rename box, etc.)
-    const tag = (e.target as HTMLElement).tagName
+    // Don't intercept keys when focus is in an input/textarea or any contenteditable
+    // subtree (CodeMirror editor .cm-content, etc.). Otherwise Ctrl+A / r / Delete
+    // would leak from the editor into the file list shortcuts below.
+    const target = e.target as HTMLElement
+    if (target.isContentEditable) return
+    const tag = target.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     if (e.key === 'Escape') {
       if (searchOpen) { setSearchOpen(false); setSearchQuery(''); return }
