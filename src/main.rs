@@ -89,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         db,
-        jwt_secret,
+        jwt_secret: args.jwt_secret,
         activity_monitor,
     };
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
