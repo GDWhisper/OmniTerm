@@ -51,6 +51,7 @@
   "terminal.status.attached": "Attached to {{session}}",
   "terminal.status.error": "Error: {{msg}}",
   "terminal.status.exited": "Process exited: {{code}}",
+  "terminal.copySuccess": "Text copied",
   "fm.loadFailed": "Failed to load file list",
   "fm.uploadComplete": "Upload complete",
   "fm.uploadFailed": "Upload failed",

@@ -51,6 +51,7 @@
   "terminal.status.attached": "已附加到 {{session}}",
   "terminal.status.error": "错误: {{msg}}",
   "terminal.status.exited": "进程退出: {{code}}",
+  "terminal.copySuccess": "文本已复制",
   "fm.loadFailed": "加载文件列表失败",
   "fm.uploadComplete": "上传完成",
   "fm.uploadFailed": "上传失败",
