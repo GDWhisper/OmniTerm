@@ -62,6 +62,16 @@ export interface DuplicateGroup {
   projects: DuplicateProject[]
 }
 
+// Minimal file entry shape returned by /files and /system/dirs.
+// Kept here (not in a component file) so both FileManager and
+// the new-project modal can use the same type without coupling.
+export interface FileEntry {
+  path_type: 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
+  name: string
+  mtime: number
+  size: number | null
+}
+
 export interface Workspace {
   id: string
   project_id: string
@@ -100,6 +110,8 @@ export const api = {
 
   // System
   systemInfo: () => request<{ home_dir: string }>('/system/info'),
+  listDirs: (path: string) =>
+    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`),
 
   // Auth
   setup: (password: string) =>
