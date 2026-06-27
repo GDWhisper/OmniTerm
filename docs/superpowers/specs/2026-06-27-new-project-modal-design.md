@@ -12,10 +12,12 @@
 
 | 决策点 | 选择 | 理由 |
 |---|---|---|
-| 目录列表形式 | 嵌入式目录树 | 保留手输灵活 + 加视觉浏览能力 |
+| 目录列表形式 | 嵌入式目录列表（单层） | 保留手输灵活 + 加视觉浏览能力；不展开子目录树 |
 | 布局 | 垂直叠加（path 在上、列表在下） | 简单、modal 高度可控、不挤窄屏 |
 | 点击行为 | 点击即进入（当前路径实时同步到输入框） | 与 macOS Finder / VS Code 打开文件夹一致 |
-| 起始位置 | home 目录（来自 `/api/v1/system/info`） | 与现有行为一致，零惊喜 |
+| 起始位置 | home 目录（来自 `/api/v1/system/info`，已挂载逻辑） | 与现有行为一致，零惊喜 |
+| Enter 键行为 | name 字段 Enter = 创建；path 字段 Enter = 应用路径（不创建） | 区分两个输入的语义，避免「按 Enter 误创建」 |
+| Modal 宽度 | `max-w-lg` (512px) | 比现有 `max-w-md` (448px) 略宽，给目录列表足够空间，又不会太宽 |
 
 ## 后端改动
 
@@ -78,27 +80,57 @@ listDirs: (path: string) =>
   request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`)
 ```
 
-复用现有的 `FileEntry` 类型（从 FileManager 共享或重新定义同构类型）。
+`FileEntry` 类型在 `client.ts` 中重新定义为最小子集（与 FileManager 内部同名类型同构）：
+
+```ts
+export interface FileEntry {
+  path_type: 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
+  name: string
+  mtime: number
+  size: number | null
+}
+```
+
+> 不从 FileManager 导出它的 `FileEntry`，因为那是组件内部的本地类型；本 spec 在 client.ts 重新声明以避免组件耦合。
 
 ### 2. 改造 createProjOpen 模态框 (`frontend/src/components/Sidebar/Sidebar.tsx`)
+
+**Modal 容器改动:**
+
+```tsx
+<Modal
+  open={createProjOpen}
+  onClose={closeCreateProj}
+  title={t('sidebar.createProject') ?? 'Create Project'}
+  maxWidth="max-w-lg"  // 512px，比默认 448px 略宽以容纳目录列表
+>
+```
 
 **新增 state:**
 
 ```ts
-const [browsePath, setBrowsePath] = useState('')      // 当前浏览到的目录
+const [browsePath, setBrowsePath] = useState('')         // 当前浏览到的目录
 const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
 const [browseLoading, setBrowseLoading] = useState(false)
 const [browseError, setBrowseError] = useState<string | null>(null)
 ```
 
-**生命周期:**
+**新增导入:**
 
-- 打开模态框时（`setCreateProjOpen(true)` 副作用）：
-  - 调 `api.systemInfo()` 拿 home_dir（已有逻辑，扩展一下）
-  - `setBrowsePath(home_dir)`
-  - `fetchDirs(home_dir)` 拉取初始列表
-- `browsePath` 变化时（点击目录、点 ..、输入框应用）：重新 `fetchDirs(browsePath)`
-- 关闭模态框时：state 重置（依赖 React 自然卸载，或者显式 reset）
+```ts
+import { IconFolder, IconArrowUp, IconRefresh, IconWarning } from '../FileManager/icons'
+```
+
+**本地辅助函数**（`getParentPath` 在 FileManager.tsx 是模块内私有函数，本 spec 不修改 FileManager；改为在 Sidebar.tsx 内复制一份）：
+
+```ts
+function getParentPath(path: string): string {
+  if (!path || path === '/') return ''
+  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+  const idx = trimmed.lastIndexOf('/')
+  return idx <= 0 ? '' : trimmed.slice(0, idx)
+}
+```
 
 **核心函数 `fetchDirs(path)`:**
 
@@ -108,7 +140,9 @@ const fetchDirs = useCallback(async (path: string) => {
   setBrowseError(null)
   try {
     const data = await api.listDirs(path)
-    setBrowseEntries(data.files.filter(f => f.path_type === 'Dir' || f.path_type === 'SymlinkDir'))
+    setBrowseEntries(data.files.filter(f =>
+      f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
+    ))
   } catch (e: any) {
     setBrowseError(e.message || '无法访问该目录')
   } finally {
@@ -117,13 +151,49 @@ const fetchDirs = useCallback(async (path: string) => {
 }, [])
 ```
 
+**`browsePath` 变化时自动拉取:**
+
+```ts
+useEffect(() => {
+  if (!browsePath) return
+  fetchDirs(browsePath)
+}, [browsePath, fetchDirs])
+```
+
+**打开 modal 副作用:** 沿用现有 `useEffect`（`Sidebar.tsx:237`）已在挂载时拉过 `systemInfo` 拿到 `homeDir`，不需新增。改写为：当 `createProjOpen` 从 false→true 时，把 `browsePath` 重置为 `homeDir`：
+
+```ts
+useEffect(() => {
+  if (createProjOpen && homeDir) {
+    setBrowsePath(homeDir)
+    setProjPath(homeDir)
+    setBrowseError(null)
+  }
+}, [createProjOpen, homeDir])
+```
+
+**关闭 modal 统一处理:**
+
+```ts
+const closeCreateProj = () => {
+  setCreateProjOpen(false)
+  setProjName('')
+  setProjPath(homeDir)
+  setBrowsePath('')
+  setBrowseEntries([])
+  setBrowseError(null)
+}
+```
+
+> 沿用现有「关闭时重置 projName/projPath」的模式（`Sidebar.tsx:933`），扩展为同时清理 browse 状态。
+
 **点击目录项处理:**
 
 ```ts
 const handleEnterDir = (entry: FileEntry) => {
   const newPath = browsePath.endsWith('/') ? `${browsePath}${entry.name}` : `${browsePath}/${entry.name}`
   setProjPath(newPath)        // 同步到 path 输入框
-  setBrowsePath(newPath)       // 触发 fetchDirs
+  setBrowsePath(newPath)      // 触发 fetchDirs
 }
 ```
 
@@ -131,54 +201,78 @@ const handleEnterDir = (entry: FileEntry) => {
 
 ```ts
 const handleGoUp = () => {
-  const parent = getParentPath(browsePath)  // 复用 FileManager 的 getParentPath
-  if (!parent || parent === browsePath) return  // 根目录，禁用
+  const parent = getParentPath(browsePath)
+  if (!parent) return  // 根目录（parent 为空），按钮本身也会禁用
   setProjPath(parent)
   setBrowsePath(parent)
 }
 ```
 
-**输入框应用路径（回车或失焦）:**
+**输入框应用路径（仅 path 字段回车或失焦）:**
 
 ```ts
 const handlePathApply = () => {
   const trimmed = projPath.trim()
   if (!trimmed || trimmed === browsePath) return
-  setBrowsePath(trimmed)   // 触发 fetchDirs；失败时 browseError 提示
+  setBrowsePath(trimmed)   // 触发 fetchDirs；失败时 browseError 提示，保留旧 browseEntries
 }
 ```
 
-**`handleCreateProject` 改动:** 几乎不变，仍然用 `projPath` 调 `api.createProject`。只需把初始 `projPath` 改为 `homeDir`（已经是这样了）。
+**关键改动 —— 区分两个输入的 Enter 行为:** 现有 `handleProjKeyDown` 在任何输入框按 Enter 都触发 `handleCreateProject`（`Sidebar.tsx:405-410`）。需要拆为两个：
+
+```ts
+const handleNameKeyDown = (e: React.KeyboardEvent) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handleCreateProject()
+  }
+}
+
+const handlePathKeyDown = (e: React.KeyboardEvent) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    handlePathApply()  // 应用路径，不创建
+  }
+}
+```
+
+name 字段 `onKeyDown={handleNameKeyDown}`；path 字段 `onKeyDown={handlePathKeyDown}` + `onBlur={handlePathApply}`。
+
+**`handleCreateProject` 改动:** 几乎不变，仍然用 `projPath` 调 `api.createProject`。`projPath` 已经从 `browsePath` 同步过来。
 
 ### 3. 视觉结构（垂直叠加）
 
 ```
-┌────────────────────────────────────┐
-│ 名称                                │
-│ [_____________________________]    │
-│                                    │
-│ 路径                                │
-│ [/home/pax/projects/          ]    │
-│ 回车或失焦以应用                    │
-│                                    │
-│ 浏览            [↻ 刷新]            │
-│ ┌──────────────────────────────┐   │
-│ │ ..  (根目录禁用)               │   │
-│ │ 📁 dotfiles                   │   │  ← hover bg 0.08
-│ │ 📁 notes                      │   │
-│ │ 📁 projects            12    │   │  ← selected bg 0.14
-│ │ 📁 scratch                    │   │
-│ │ 📁 work                       │   │
-│ └──────────────────────────────┘   │
-│                                    │
-│           [取消]    [创建]          │
-└────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│ 名称                                  │
+│ [_____________________________]      │
+│                                      │
+│ 路径                                  │
+│ [/home/pax/projects/            ]    │
+│ 回车或失焦以应用                      │
+│                                      │
+│ 浏览                       [↻ 刷新]   │   ← 刷新按钮含 IconRefresh SVG
+│ ┌────────────────────────────────┐   │
+│ │  [IconArrowUp] ..  (根目录禁用) │   │   ← 灰显，cursor: not-allowed
+│ │  [IconFolder] dotfiles         │   │   ← hover bg rgba(167,139,250,0.08)
+│ │  [IconFolder] notes            │   │
+│ │  [IconFolder] projects    12   │   │   ← selected bg rgba(167,139,250,0.14)
+│ │  [IconFolder] scratch          │   │
+│ │  [IconFolder] work             │   │
+│ └────────────────────────────────┘   │
+│                                      │
+│              [取消]    [创建]         │
+└──────────────────────────────────────┘
 ```
 
-- 模态框 max-width: 520px
-- 目录列表 height: 200px，内部 scroll-y
-- 目录项 padding: 5px 10px，border-radius: 4px
+> 上图中的 `↻` 和 `📁` 是 ASCII 字符占位，实际渲染使用 `IconRefresh` / `IconFolder` / `IconArrowUp` SVG 组件（`frontend/src/components/FileManager/icons.tsx`）。
+
+- 模态框 `max-w-lg` (512px)，沿用 `<Modal>` 组件
+- 目录列表 height: 200px，内部 `overflow-y: auto`，背景 `var(--bg-base)` (#0a0a0f)
+- 列表容器 `border: 1px solid var(--border-subtle)`, `r-md 5px`
+- 目录项 padding: 5px 10px，border-radius: 4px（r-sm）
 - 目录项右侧显示 `size`（即子项数，与 FileManager 风格一致）
+- 选中目录图标用 `color: var(--accent)` (#a78bfa)
 
 ### 4. UI 规范对照（§1-§9）
 
@@ -198,23 +292,25 @@ const handlePathApply = () => {
 
 ```
 [closed]
-  │ open modal
+  │ open modal (useEffect on createProjOpen + homeDir)
   ▼
-[opening] → fetch systemInfo → fetchDirs(home)
+[opening] → setBrowsePath(homeDir) → useEffect on browsePath → fetchDirs
   │
   ▼
 [ready]  ←──┐
-  │ click dir │ type+enter │ click ".."
-  ├──────────┴────────────┴──► [loading] → [ready]
-  │                              │
-  │                              └─► [error] ──retry──► [ready]
+  │ click dir │ type+enter │ type+blur │ click ".."
+  ├──────────┴────────────┴────────────┴──► [loading] → [ready]
+  │                                            │
+  │                                            └─► [error] ──retry──► [ready]
   │
-  │ click "Create"
+  │ click "Create" (or Enter in name field)
   ▼
 [submitting] → success → close + toast
             → 409 (already_covered) → coverConflict dialog（现有逻辑）
             → other error → toast（现有逻辑）
 ```
+
+> `systemInfo` 在 Sidebar 挂载时已加载（`Sidebar.tsx:237`），不需要在打开 modal 时重复请求。
 
 ## 错误处理
 
@@ -265,8 +361,7 @@ const handlePathApply = () => {
 
 | 文件 | 改动 |
 |---|---|
-| `src/api/system.rs` | 新增 `list_dirs` 端点处理函数 + 注册路由 `/system/dirs` |
-| `src/api/mod.rs` | 把新路由挂上 |
+| `src/api/system.rs` | 新增 `list_dirs` 端点处理函数 + 注册路由 `/system/dirs`（route 加在 `pub fn routes()` 现有链上） |
 | `frontend/src/api/client.ts` | 新增 `api.listDirs(path)` 方法 |
 | `frontend/src/components/Sidebar/Sidebar.tsx` | 改造 createProjOpen 模态框：加 browsePath/Entries/Loading/Error state，加 fetchDirs/handleEnterDir/handleGoUp/handlePathApply，渲染目录列表区域 |
 
