@@ -668,7 +668,7 @@ export function FileManager() {
           {/* "回到终端目录" 按钮 — 脱离终端时脉冲 */}
           {fmSource && (
             <button
-              className={`fm-bc-root ${(fmSource?.type === 'workspace' || (fmSource?.type === 'session' && fmState.mode === 'manual')) ? 'fm-btn-terminal-active' : ''}`}
+              className={`fm-bc-root ${(fmSource?.type === 'session' && fmState.mode === 'manual') ? 'fm-btn-terminal-active' : ''}`}
               onClick={() => {
                 if (activeSessionId) resetFmToFollowing(activeSessionId)
               }}

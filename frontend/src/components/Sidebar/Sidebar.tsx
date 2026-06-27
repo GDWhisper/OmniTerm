@@ -71,11 +71,9 @@ export function Sidebar() {
   const { t } = useTranslation()
   const attention = useAttention()
 
-  // Terminal button pulse: when outside terminal CWD
+  // Terminal button pulse: only when session exists and browsing outside its CWD
   const fmState = activeSessionId ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }) : null
-  const isOutsideTerminalCwd = !activeSessionId
-    ? !!activeWorkspaceId  // workspace mode, no session
-    : fmState?.mode === 'manual'  // session in manual mode
+  const isOutsideTerminalCwd = !!activeSessionId && fmState?.mode === 'manual'
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
