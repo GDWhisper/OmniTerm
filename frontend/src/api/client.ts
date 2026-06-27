@@ -18,7 +18,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, opts?: RequestInit): Promise<T> {
+async function request<T>(path: string, opts?: RequestInit & { silent?: boolean }): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers: {
@@ -30,7 +30,9 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     const msg = body.error || `HTTP ${res.status}`
-    useToastStore.getState().addToast('error', msg)
+    if (!opts?.silent) {
+      useToastStore.getState().addToast('error', msg)
+    }
     throw new ApiError(res.status, body, msg)
   }
 
@@ -111,7 +113,7 @@ export const api = {
   // System
   systemInfo: () => request<{ home_dir: string }>('/system/info'),
   listDirs: (path: string) =>
-    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`),
+    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
 
   // Auth
   setup: (password: string) =>

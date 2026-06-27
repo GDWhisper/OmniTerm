@@ -6,7 +6,7 @@
   "sidebar.sessions": "Sessions",
   "sidebar.createProject": "New Project",
   "sidebar.projectName": "Project Name",
-  "sidebar.repoPath": "Git Repository Path",
+  "sidebar.repoPath": "Project Path",
   "sidebar.cancel": "Cancel",
   "sidebar.create": "Create",
   "sidebar.creating": "Creating...",
@@ -147,5 +147,6 @@
   "sidebar.refresh": "Refresh",
   "sidebar.loading": "Loading...",
   "sidebar.retry": "Retry",
-  "sidebar.emptyDir": "Empty directory"
+  "sidebar.emptyDir": "Empty directory",
+  "sidebar.pathWillBeCreated": "This path doesn't exist — it will be created when you create the project"
 }

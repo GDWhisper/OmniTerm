@@ -5,7 +5,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
-import { IconFolder, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
 import type { Project, Workspace, Session, DuplicateGroup, FileEntry } from '../../api/client'
 import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
@@ -100,6 +100,10 @@ export function Sidebar() {
   const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
   const [browseLoading, setBrowseLoading] = useState(false)
   const [browseError, setBrowseError] = useState<string | null>(null)
+  // True when the fetched path doesn't exist (404). The backend's
+  // create_project auto-creates non-existent paths, so this is friendly
+  // info rather than a hard error — the UI shows a "will be created" hint.
+  const [browseNotFound, setBrowseNotFound] = useState(false)
   // 409 Conflict response data when creating a project whose path is
   // already covered by an existing project.
   const [coverConflict, setCoverConflict] = useState<{
@@ -171,6 +175,7 @@ export function Sidebar() {
   const fetchDirs = useCallback(async (path: string) => {
     setBrowseLoading(true)
     setBrowseError(null)
+    setBrowseNotFound(false)
     try {
       const data = await api.listDirs(path)
       setBrowseEntries(
@@ -179,7 +184,12 @@ export function Sidebar() {
         ),
       )
     } catch (e: any) {
-      setBrowseError(e.message || '无法访问该目录')
+      if (e instanceof ApiError && e.status === 404) {
+        setBrowseNotFound(true)
+        setBrowseEntries([])
+      } else {
+        setBrowseError(e.message || '无法访问该目录')
+      }
     } finally {
       setBrowseLoading(false)
     }
@@ -280,6 +290,7 @@ export function Sidebar() {
       setBrowsePath(homeDir)
       setProjPath(homeDir)
       setBrowseError(null)
+      setBrowseNotFound(false)
     }
   }, [createProjOpen, homeDir])
 
@@ -291,6 +302,7 @@ export function Sidebar() {
     setBrowsePath('')
     setBrowseEntries([])
     setBrowseError(null)
+    setBrowseNotFound(false)
   }
 
   // Health polling
@@ -1138,7 +1150,7 @@ export function Sidebar() {
               )}
 
               {/* Error state */}
-              {!browseLoading && browseError && (
+              {!browseLoading && !browseNotFound && browseError && (
                 <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
                   <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
                   <div style={{ color: 'var(--text-muted)' }}>{browseError}</div>
@@ -1152,8 +1164,16 @@ export function Sidebar() {
                 </div>
               )}
 
+              {/* Path doesn't exist — will be auto-created on submit */}
+              {!browseLoading && browseNotFound && (
+                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
+                  <IconFolderPlus width={20} height={20} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.pathWillBeCreated') ?? '该路径不存在，创建项目时将自动创建'}</div>
+                </div>
+              )}
+
               {/* Empty state */}
-              {!browseLoading && !browseError && browseEntries.length === 0 && (
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.length === 0 && (
                 <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
                   <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
                   <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? '空目录'}</div>
@@ -1161,7 +1181,7 @@ export function Sidebar() {
               )}
 
               {/* Directory entries */}
-              {!browseLoading && !browseError && browseEntries.map((entry) => (
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry) => (
                 <div
                   key={entry.name}
                   onClick={() => handleEnterDir(entry)}
