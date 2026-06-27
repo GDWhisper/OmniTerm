@@ -121,16 +121,21 @@ const [browseError, setBrowseError] = useState<string | null>(null)
 import { IconFolder, IconArrowUp, IconRefresh, IconWarning } from '../FileManager/icons'
 ```
 
-**本地辅助函数**（`getParentPath` 在 FileManager.tsx 是模块内私有函数，本 spec 不修改 FileManager；改为在 Sidebar.tsx 内复制一份）：
+**本地辅助函数 `getParentPath`:**
+
+为避免代码重复（FileManager 内部有同名 5 行函数），把 `getParentPath` 提取到 `frontend/src/utils/path.ts`：
 
 ```ts
-function getParentPath(path: string): string {
+// frontend/src/utils/path.ts
+export function getParentPath(path: string): string {
   if (!path || path === '/') return ''
   const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
   const idx = trimmed.lastIndexOf('/')
   return idx <= 0 ? '' : trimmed.slice(0, idx)
 }
 ```
+
+Sidebar 和 FileManager 都从 `utils/path.ts` 导入。FileManager 内部原有的本地 `getParentPath` 函数删除（[来源](frontend/src/components/FileManager/FileManager.tsx:36-41)）。
 
 **核心函数 `fetchDirs(path)`:**
 
@@ -362,8 +367,10 @@ name 字段 `onKeyDown={handleNameKeyDown}`；path 字段 `onKeyDown={handlePath
 | 文件 | 改动 |
 |---|---|
 | `src/api/system.rs` | 新增 `list_dirs` 端点处理函数 + 注册路由 `/system/dirs`（route 加在 `pub fn routes()` 现有链上） |
-| `frontend/src/api/client.ts` | 新增 `api.listDirs(path)` 方法 |
-| `frontend/src/components/Sidebar/Sidebar.tsx` | 改造 createProjOpen 模态框：加 browsePath/Entries/Loading/Error state，加 fetchDirs/handleEnterDir/handleGoUp/handlePathApply，渲染目录列表区域 |
+| `frontend/src/api/client.ts` | 新增 `api.listDirs(path)` 方法 + 导出 `FileEntry` 类型 |
+| `frontend/src/utils/path.ts` | 新增文件，导出 `getParentPath` 工具函数 |
+| `frontend/src/components/FileManager/FileManager.tsx` | 删除模块内本地 `getParentPath`，改为从 `utils/path` 导入（顺手清理） |
+| `frontend/src/components/Sidebar/Sidebar.tsx` | 改造 createProjOpen 模态框：加 browsePath/Entries/Loading/Error state，加 fetchDirs/handleEnterDir/handleGoUp/handlePathApply，渲染目录列表区域，从 `utils/path` 导入 `getParentPath` |
 
 ## 验收标准
 
