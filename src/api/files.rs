@@ -279,6 +279,21 @@ async fn list_files(
             );
         };
 
+        // Security: ensure resolved path stays within workspace root
+        let canonical_root = match base.canonicalize() {
+            Ok(r) => r,
+            Err(_) => return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "workspace root not found" })),
+            ),
+        };
+        if !canonical.starts_with(&canonical_root) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "path outside workspace" })),
+            );
+        }
+
         match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
