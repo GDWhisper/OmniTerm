@@ -2,7 +2,23 @@ import { useToastStore } from '../stores/toastStore'
 
 const BASE = '/api/v1'
 
-async function request<T>(path: string, opts?: RequestInit): Promise<T> {
+/**
+ * Error thrown by `request` for non-2xx responses. Carries the HTTP status
+ * and the parsed JSON body so callers can react to specific codes
+ * (e.g. 409 Conflict on `/projects`).
+ */
+export class ApiError extends Error {
+  status: number
+  body: any
+  constructor(status: number, body: any, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
+async function request<T>(path: string, opts?: RequestInit & { silent?: boolean }): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers: {
@@ -14,8 +30,10 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     const msg = body.error || `HTTP ${res.status}`
-    useToastStore.getState().addToast('error', msg)
-    throw new Error(msg)
+    if (!opts?.silent) {
+      useToastStore.getState().addToast('error', msg)
+    }
+    throw new ApiError(res.status, body, msg)
   }
 
   return res.json()
@@ -27,6 +45,33 @@ export interface Project {
   name: string
   path: string
   created_at: string
+}
+
+/** One project inside a duplicate group. */
+export interface DuplicateProject {
+  id: string
+  name: string
+  path: string
+  created_at: string
+  session_count: number
+}
+
+/** Group of projects that share coverage of the same git repo (or exact path). */
+export interface DuplicateGroup {
+  group_id: string
+  /** "shared_toplevel" or "exact_path" */
+  reason: string
+  projects: DuplicateProject[]
+}
+
+// Minimal file entry shape returned by /files and /system/dirs.
+// Kept here (not in a component file) so both FileManager and
+// the new-project modal can use the same type without coupling.
+export interface FileEntry {
+  path_type: 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
+  name: string
+  mtime: number
+  size: number | null
 }
 
 export interface Workspace {
@@ -67,6 +112,8 @@ export const api = {
 
   // System
   systemInfo: () => request<{ home_dir: string }>('/system/info'),
+  listDirs: (path: string) =>
+    request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
 
   // Auth
   setup: (password: string) =>
@@ -84,6 +131,16 @@ export const api = {
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteProject: (id: string) =>
     request(`/projects/${id}`, { method: 'DELETE' }),
+
+  /** Find groups of projects that share a git toplevel (or exact path). */
+  listDuplicates: () =>
+    request<DuplicateGroup[]>('/projects/duplicates'),
+  /** Merge source project `id` into `target_id` (moves sessions, deletes source). */
+  mergeProject: (id: string, targetId: string) =>
+    request<{ ok: true; merged_into: string }>(
+      `/projects/${id}/merge-into/${targetId}`,
+      { method: 'POST' },
+    ),
 
   // Worktrees (real-time git worktree discovery)
   listWorktrees: (projectId: string) =>

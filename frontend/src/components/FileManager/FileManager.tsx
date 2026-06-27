@@ -1,3 +1,4 @@
+import { getParentPath } from '../../utils/path'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
@@ -33,12 +34,6 @@ function formatTime(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function getParentPath(path: string): string {
-  if (!path || path === '/') return ''
-  const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
-  const idx = trimmed.lastIndexOf('/')
-  return idx <= 0 ? '' : trimmed.slice(0, idx)
-}
 
 function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
   if (a.length !== b.length) return false
@@ -338,8 +333,12 @@ export function FileManager() {
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (editingName) return
-    // Don't intercept keys when an input/textarea has focus (search box, rename box, etc.)
-    const tag = (e.target as HTMLElement).tagName
+    // Don't intercept keys when focus is in an input/textarea or any contenteditable
+    // subtree (CodeMirror editor .cm-content, etc.). Otherwise Ctrl+A / r / Delete
+    // would leak from the editor into the file list shortcuts below.
+    const target = e.target as HTMLElement
+    if (target.isContentEditable) return
+    const tag = target.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA') return
     if (e.key === 'Escape') {
       if (searchOpen) { setSearchOpen(false); setSearchQuery(''); return }

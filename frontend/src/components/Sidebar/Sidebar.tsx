@@ -3,13 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
-import { IconWorkbench } from '../FileManager/icons'
-import type { Project, Workspace, Session } from '../../api/client'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import type { Project, Workspace, Session, DuplicateGroup, FileEntry } from '../../api/client'
+import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
@@ -79,7 +81,7 @@ export function Sidebar() {
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
-  const [renameTarget, setRenameTarget] = useState<{ id: string; name: string } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<{ type: 'project' | 'session'; id: string; name: string } | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'project' | 'session'
     id: string
@@ -92,6 +94,27 @@ export function Sidebar() {
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  // Browse state for the create-project modal's embedded directory list
+  const [browsePath, setBrowsePath] = useState('')
+  const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
+  const [browseLoading, setBrowseLoading] = useState(false)
+  const [browseError, setBrowseError] = useState<string | null>(null)
+  // True when the fetched path doesn't exist (404). The backend's
+  // create_project auto-creates non-existent paths, so this is friendly
+  // info rather than a hard error — the UI shows a "will be created" hint.
+  const [browseNotFound, setBrowseNotFound] = useState(false)
+  // 409 Conflict response data when creating a project whose path is
+  // already covered by an existing project.
+  const [coverConflict, setCoverConflict] = useState<{
+    coveringProject: { id: string; name: string; path: string }
+    reason: 'exact_path' | 'worktree_child'
+  } | null>(null)
+  // Groups of legacy duplicate projects (e.g. before the coverage check
+  // existed, the user may have added the same repo twice).
+  const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
+  const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false)
+  const [duplicatesDismissed, setDuplicatesDismissed] = useState(false)
   // Agent enable button state — commented out pending notification scheme decision.
   // See docs/requirements.md "Agent 状态监控与通知".
   // const [enablingSessionId, setEnablingSessionId] = useState<string | null>(null)
@@ -118,11 +141,15 @@ export function Sidebar() {
     }
   }, [setWorktrees])
 
-  // Load sessions for active worktree
-  const loadSessions = useCallback(async () => {
-    if (!activeProjectId) return
+  // Load sessions for a project. Defaults to activeProjectId so existing
+  // callers (create/rename/delete, polling) work unchanged. Pass an explicit
+  // projectId to load on demand (e.g. when expanding a project to show
+  // per-worktree session counts before any worktree is activated).
+  const loadSessions = useCallback(async (projectId?: string) => {
+    const pid = projectId ?? activeProjectId
+    if (!pid) return
     try {
-      const s = await api.listSessions(activeProjectId)
+      const s = await api.listSessions(pid)
       setSessions(s)
     } catch {
       // api client already shows error toast
@@ -131,6 +158,48 @@ export function Sidebar() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Check for legacy duplicate projects (created before the coverage check).
+  // Surface a banner; the user can open the merge dialog to consolidate.
+  const loadDuplicates = useCallback(async () => {
+    try {
+      const groups = await api.listDuplicates()
+      setDuplicates(groups)
+    } catch {
+      // Quietly ignore — duplicate detection is non-critical
+    }
+  }, [])
+  useEffect(() => { loadDuplicates() }, [loadDuplicates])
+
+  // Fetch directory entries for the new-project modal's browse list.
+  const fetchDirs = useCallback(async (path: string) => {
+    setBrowseLoading(true)
+    setBrowseError(null)
+    setBrowseNotFound(false)
+    try {
+      const data = await api.listDirs(path)
+      setBrowseEntries(
+        data.files.filter(
+          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
+        ),
+      )
+    } catch (e: any) {
+      if (e instanceof ApiError && e.status === 404) {
+        setBrowseNotFound(true)
+        setBrowseEntries([])
+      } else {
+        setBrowseError(e.message || '无法访问该目录')
+      }
+    } finally {
+      setBrowseLoading(false)
+    }
+  }, [])
+
+  // Auto-fetch when browsePath changes (covers click-dir, go-up, and type-apply)
+  useEffect(() => {
+    if (!browsePath) return
+    fetchDirs(browsePath)
+  }, [browsePath, fetchDirs])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
@@ -215,6 +284,27 @@ export function Sidebar() {
     })
   }, [])
 
+  // Reset browse state when the create-project modal opens
+  useEffect(() => {
+    if (createProjOpen && homeDir) {
+      setBrowsePath(homeDir)
+      setProjPath(homeDir)
+      setBrowseError(null)
+      setBrowseNotFound(false)
+    }
+  }, [createProjOpen, homeDir])
+
+  // Unified close: clear form + browse state
+  const closeCreateProj = () => {
+    setCreateProjOpen(false)
+    setProjName('')
+    setProjPath(homeDir)
+    setBrowsePath('')
+    setBrowseEntries([])
+    setBrowseError(null)
+    setBrowseNotFound(false)
+  }
+
   // Health polling
   useEffect(() => {
     const check = () => api.health().then(() => setConnected(true)).catch(() => setConnected(false))
@@ -239,10 +329,37 @@ export function Sidebar() {
       newSet.delete(projectId)
     } else {
       newSet.add(projectId)
-      // Load worktrees when expanding
-      await loadWorktrees(projectId)
+      // Load worktrees + sessions in parallel so per-worktree session counts
+      // are correct at expand time, not only after a worktree is activated.
+      await Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
     setExpandedProjects(newSet)
+  }
+
+  // Browse handlers for the new-project modal
+  const handleEnterDir = (entry: FileEntry) => {
+    const newPath = browsePath.endsWith('/')
+      ? `${browsePath}${entry.name}`
+      : `${browsePath}/${entry.name}`
+    setProjPath(newPath)
+    setBrowsePath(newPath)
+  }
+
+  const handleGoUp = () => {
+    const parent = getParentPath(browsePath)
+    if (!parent) return
+    setProjPath(parent)
+    setBrowsePath(parent)
+  }
+
+  const handlePathApply = () => {
+    const trimmed = projPath.trim()
+    if (!trimmed || trimmed === browsePath) return
+    setBrowsePath(trimmed)
+  }
+
+  const handleRefresh = () => {
+    if (browsePath) fetchDirs(browsePath)
   }
 
   const handleCreateProject = async () => {
@@ -255,8 +372,18 @@ export function Sidebar() {
       setCreateProjOpen(false)
       setProjName('')
       setProjPath(homeDir)
-    } catch {
-      // api client already shows error toast
+    } catch (e) {
+      // 409 Conflict: the new path is already covered by an existing
+      // project. Surface a switch-to-existing dialog instead of letting
+      // the generic toast dismiss.
+      if (e instanceof ApiError && e.status === 409 && e.body?.error === 'already_covered') {
+        setCoverConflict({
+          coveringProject: e.body.covering_project,
+          reason: e.body.reason,
+        })
+        return
+      }
+      // api client already shows error toast for other failures
     } finally {
       setSubmitting(false)
     }
@@ -283,7 +410,7 @@ export function Sidebar() {
     }
   }
 
-  const handleRenameSession = async () => {
+  const handleRename = async () => {
     if (!renameTarget) return
     const newName = renameName.trim()
     if (!newName || newName === renameTarget.name) {
@@ -292,9 +419,15 @@ export function Sidebar() {
     }
     setSubmitting(true)
     try {
-      await api.updateSession(renameTarget.id, { name: newName })
-      await loadSessions()
-      addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      if (renameTarget.type === 'project') {
+        await api.updateProject(renameTarget.id, { name: newName })
+        await loadProjects()
+        addToast('success', t('sidebar.projectRenamed', { name: newName }) ?? `Project renamed to "${newName}"`)
+      } else {
+        await api.updateSession(renameTarget.id, { name: newName })
+        await loadSessions()
+        addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
+      }
       setRenameOpen(false)
       setRenameTarget(null)
       setRenameName('')
@@ -357,6 +490,22 @@ export function Sidebar() {
     }
   }
 
+  // Enter in name field = create project
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleCreateProject()
+    }
+  }
+
+  // Enter in path field = apply path (don't create)
+  const handlePathKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handlePathApply()
+    }
+  }
+
   const handleProjKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -374,7 +523,7 @@ export function Sidebar() {
   const handleRenameKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleRenameSession()
+      handleRename()
     }
   }
 
@@ -494,6 +643,48 @@ export function Sidebar() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+        {/* Duplicate projects banner — surfaces legacy data that should
+            be consolidated. Click to open the merge dialog. */}
+        {duplicates.length > 0 && !duplicatesDismissed && (
+          <div
+            data-testid="dup-banner"
+            onClick={(e) => {
+              // Dismiss if the user clicked the ✕ (or its icon descendant);
+              // otherwise open the merge dialog.
+              if ((e.target as HTMLElement).closest('[data-dup-dismiss]')) {
+                setDuplicatesDismissed(true)
+              } else {
+                setDuplicateDialogOpen(true)
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setDuplicateDialogOpen(true) }}
+            className="w-full mb-3 px-3 py-2 rounded-lg text-left transition-all flex items-center gap-2 cursor-pointer"
+            style={{
+              background: 'rgba(251, 191, 36, 0.08)',
+              border: '1px solid rgba(251, 191, 36, 0.3)',
+              color: 'var(--text-primary)',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(251, 191, 36, 0.14)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(251, 191, 36, 0.08)' }}
+            title={t('sidebar.dupBannerTitle') ?? 'Click to reconcile duplicate projects'}
+          >
+            <span style={{ fontSize: 14, color: '#fbbf24' }}>⚠</span>
+            <span style={{ fontSize: 12, flex: 1 }}>
+              {t('sidebar.dupBanner', { n: duplicates.length }) ??
+                `Detected ${duplicates.length} group${duplicates.length === 1 ? '' : 's'} of duplicate projects. Click to merge.`}
+            </span>
+            <button
+              data-dup-dismiss
+              style={{ fontSize: 14, color: 'var(--text-dim)', padding: '0 4px', background: 'transparent', border: 'none', cursor: 'pointer' }}
+              title={t('sidebar.dupDismiss') ?? 'Dismiss'}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Agent onboarding banner — commented out pending notification scheme decision.
         <AgentOnboardingBanner sessions={sessions} />
         */}
@@ -571,7 +762,15 @@ export function Sidebar() {
                       <ProjectPath path={proj.path} />
                     </div>
                   </div>
-                  <div className="flex items-center">
+                  <div className="flex items-center gap-1">
+                    <EditButton
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setRenameTarget({ type: 'project', id: proj.id, name: proj.name })
+                        setRenameName(proj.name)
+                        setRenameOpen(true)
+                      }}
+                    />
                     <DeleteButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -757,7 +956,7 @@ export function Sidebar() {
                                       <EditButton
                                         onClick={(e) => {
                                           e.stopPropagation()
-                                          setRenameTarget({ id: s.id, name: s.name || '' })
+                                          setRenameTarget({ type: 'session', id: s.id, name: s.name || '' })
                                           setRenameName(s.name || '')
                                           setRenameOpen(true)
                                         }}
@@ -835,7 +1034,12 @@ export function Sidebar() {
       </div>
 
       {/* ── Create Project Modal ── */}
-      <Modal open={createProjOpen} onClose={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }} title={t('sidebar.createProject') ?? 'Create Project'}>
+      <Modal
+        open={createProjOpen}
+        onClose={closeCreateProj}
+        title={t('sidebar.createProject') ?? 'Create Project'}
+        maxWidth="max-w-lg"
+      >
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -845,7 +1049,7 @@ export function Sidebar() {
               type="text"
               value={projName}
               onChange={(e) => setProjName(e.target.value)}
-              onKeyDown={handleProjKeyDown}
+              onKeyDown={handleNameKeyDown}
               placeholder="my-project"
               autoFocus
               className={inputClass}
@@ -862,16 +1066,147 @@ export function Sidebar() {
               type="text"
               value={projPath}
               onChange={(e) => setProjPath(e.target.value)}
-              onKeyDown={handleProjKeyDown}
+              onKeyDown={handlePathKeyDown}
+              onBlur={(e) => {
+                handlePathApply()
+                e.currentTarget.style.borderColor = 'var(--border-strong)'
+                e.currentTarget.style.boxShadow = 'none'
+              }}
               placeholder={homeDir}
               className={inputClass}
               style={inputStyle}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
+            <div className="text-[10px] mt-1" style={{ color: 'var(--text-faint)' }}>
+              {t('sidebar.pathHint') ?? '回车或失焦以应用路径'}
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                {t('sidebar.browse') ?? '浏览'}
+              </label>
+              <button
+                onClick={handleRefresh}
+                title={t('sidebar.refresh') ?? '刷新'}
+                className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                style={{
+                  border: '1px solid var(--border-strong)',
+                  color: 'var(--text-secondary)',
+                  fontSize: 11,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--accent)'
+                  e.currentTarget.style.color = 'var(--accent)'
+                  e.currentTarget.style.background = 'var(--accent-10)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-strong)'
+                  e.currentTarget.style.color = 'var(--text-secondary)'
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <IconRefresh width={10} height={10} />
+                {t('sidebar.refresh') ?? '刷新'}
+              </button>
+            </div>
+            <div
+              className="overflow-y-auto"
+              style={{
+                height: 200,
+                background: 'var(--bg-base)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 5,
+                padding: 4,
+              }}
+            >
+              {/* ".." parent entry */}
+              <div
+                onClick={handleGoUp}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                style={{
+                  borderRadius: 4,
+                  color: 'var(--text-faint)',
+                  cursor: getParentPath(browsePath) ? 'pointer' : 'not-allowed',
+                  opacity: getParentPath(browsePath) ? 1 : 0.5,
+                }}
+                onMouseEnter={(e) => {
+                  if (!getParentPath(browsePath)) return
+                  e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <IconArrowUp width={14} height={14} />
+                <span>..</span>
+              </div>
+
+              {/* Loading state */}
+              {browseLoading && (
+                <div className="flex items-center justify-center py-6 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {t('sidebar.loading') ?? '加载中…'}
+                </div>
+              )}
+
+              {/* Error state */}
+              {!browseLoading && !browseNotFound && browseError && (
+                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
+                  <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{browseError}</div>
+                  <button
+                    onClick={handleRefresh}
+                    className="px-2 py-0.5 rounded transition-all"
+                    style={{ border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: 11 }}
+                  >
+                    {t('sidebar.retry') ?? '重试'}
+                  </button>
+                </div>
+              )}
+
+              {/* Path doesn't exist — will be auto-created on submit */}
+              {!browseLoading && browseNotFound && (
+                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
+                  <IconFolderPlus width={20} height={20} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.pathWillBeCreated') ?? '该路径不存在，创建项目时将自动创建'}</div>
+                </div>
+              )}
+
+              {/* Empty state */}
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.length === 0 && (
+                <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
+                  <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? '空目录'}</div>
+                </div>
+              )}
+
+              {/* Directory entries */}
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry) => (
+                <div
+                  key={entry.name}
+                  onClick={() => handleEnterDir(entry)}
+                  className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                  style={{
+                    borderRadius: 4,
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <IconFolder width={14} height={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                  <span className="truncate">{entry.name}</span>
+                  <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
+                </div>
+              ))}
+            </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateProjOpen(false); setProjName(''); setProjPath(homeDir) }}>
+            <ModalCancel onClick={closeCreateProj}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
@@ -912,24 +1247,34 @@ export function Sidebar() {
         </div>
       </Modal>
 
-      {/* ── Rename Session Modal ── */}
+      {/* ── Rename Modal (Project or Session, reused) ── */}
       <Modal
         open={renameOpen}
         onClose={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}
-        title={t('sidebar.renameSession') ?? 'Rename Session'}
+        title={
+          renameTarget?.type === 'project'
+            ? (t('sidebar.renameProject') ?? 'Rename Project')
+            : (t('sidebar.renameSession') ?? 'Rename Session')
+        }
         maxWidth="max-w-sm"
       >
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.sessionName')}
+              {renameTarget?.type === 'project'
+                ? (t('sidebar.projectName') ?? 'Project Name')
+                : t('sidebar.sessionName')}
             </label>
             <input
               type="text"
               value={renameName}
               onChange={(e) => setRenameName(e.target.value)}
               onKeyDown={handleRenameKeyDown}
-              placeholder={t('sidebar.sessionName') ?? 'dev-server'}
+              placeholder={
+                renameTarget?.type === 'project'
+                  ? (t('sidebar.projectName') ?? 'my-project')
+                  : (t('sidebar.sessionName') ?? 'dev-server')
+              }
               autoFocus
               className={inputClass}
               style={inputStyle}
@@ -942,7 +1287,7 @@ export function Sidebar() {
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary
-              onClick={handleRenameSession}
+              onClick={handleRename}
               disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
             >
               {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
@@ -965,6 +1310,82 @@ export function Sidebar() {
         confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
+      />
+
+      {/* ── Cover-Conflict Modal: shown when POST /projects returns 409.
+          Offers to switch to the existing project that already covers the
+          requested path (instead of creating a duplicate). */}
+      <Modal
+        open={!!coverConflict}
+        onClose={() => setCoverConflict(null)}
+        title={t('sidebar.coverConflictTitle') ?? 'Project Already Exists'}
+        maxWidth="max-w-md"
+      >
+        {coverConflict && (
+          <div className="space-y-4">
+            <p style={{ fontSize: 13, color: 'var(--text-primary)' }}>
+              {coverConflict.reason === 'exact_path'
+                ? (t('sidebar.coverConflictExact', { name: coverConflict.coveringProject.name }) ??
+                  `A project named "${coverConflict.coveringProject.name}" already uses this exact path.`)
+                : (t('sidebar.coverConflictWorktree', { name: coverConflict.coveringProject.name }) ??
+                  `A project named "${coverConflict.coveringProject.name}" already covers this path — they belong to the same git repository.`)}
+            </p>
+            <div
+              className="rounded-md px-3 py-2 truncate"
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--border-strong)',
+                fontSize: 11,
+                color: 'var(--text-muted)',
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              }}
+              title={coverConflict.coveringProject.path}
+            >
+              {coverConflict.coveringProject.path}
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+              {t('sidebar.coverConflictHint') ??
+                'Switch to the existing project instead, or choose a different path.'}
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <ModalCancel onClick={() => setCoverConflict(null)}>
+                {t('sidebar.cancel') ?? 'Cancel'}
+              </ModalCancel>
+              <ModalPrimary
+                onClick={() => {
+                  const coverId = coverConflict.coveringProject.id
+                  setActiveProject(coverId)
+                  setActiveWorkspace(null)
+                  setCoverConflict(null)
+                  setCreateProjOpen(false)
+                  setProjName('')
+                  setProjPath(homeDir)
+                  addToast(
+                    'success',
+                    t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??
+                      `Switched to project "${coverConflict.coveringProject.name}"`,
+                  )
+                }}
+              >
+                {t('sidebar.coverConflictSwitch') ?? 'Switch to existing'}
+              </ModalPrimary>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Legacy Duplicate Projects Reconciliation Dialog ── */}
+      <DuplicateProjectsDialog
+        open={duplicateDialogOpen}
+        groups={duplicates}
+        onClose={() => setDuplicateDialogOpen(false)}
+        onResolved={() => {
+          setDuplicateDialogOpen(false)
+          setDuplicates([])
+          setDuplicatesDismissed(false)
+          loadProjects()
+          loadSessions()
+        }}
       />
     </div>
   )

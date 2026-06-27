@@ -47,6 +47,13 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-06-27 16:20) `[backend]` Project 覆盖检测函数 `find_covering_project` — 基于 `git worktree list` 双向检测（精确路径 / worktree 归属 / toplevel 归属），含 9 个单元测试（`src/workspaces.rs`）
+- (2026-06-27 16:20) `[api]` `POST /api/v1/projects` 覆盖检查 — 命中已有 Project 时返回 409 + `covering_project` 详情，阻止创建重复项目（`src/api/projects.rs`）
+- (2026-06-27 16:20) `[api]` `GET /api/v1/projects/duplicates` — 返回老数据中重复项目组（按精确路径或 git toplevel 分组），供侧边栏 banner 提示用户合并（`src/api/projects.rs`）
+- (2026-06-27 16:20) `[api]` `POST /api/v1/projects/{id}/merge-into/{target_id}` — 迁移 sessions 并删除源 project，`tmux_session_name` 冲突时返回 409（`src/api/projects.rs`）
+- (2026-06-27 16:20) `[frontend]` ApiError 类型 — `request` 抛出带 `status` + `body` 的结构化错误，方便区分 409 冲突（`frontend/src/api/client.ts`）
+- (2026-06-27 16:20) `[frontend]` 新建项目 409 弹窗 — 识别 already_covered 后展示「项目已存在」对话框，提供「切换到现有项目」按钮（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-06-27 16:20) `[frontend]` 重复项目警告 banner + 合并 dialog — 启动时调用 `/projects/duplicates`，黄色 banner 提示用户逐组选择保留项后串行合并，DuplicateProjectsDialog 显示路径与会话数（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Sidebar/DuplicateProjectsDialog.tsx`）
 - (2026-06-25 14:30) `[frontend]` 鼠标拖选自动复制 — Shift+拖拽绕过 tmux 鼠标模式，松手自动写入剪贴板，支持 navigator.clipboard 降级方案（`frontend/src/hooks/useTerminal.ts`）
 - (2026-06-25 11:00) `[backend]` Git worktree 发现模块 — `git worktree list --porcelain` 解析，实时查询 project 下所有分支/工作树（`src/git/mod.rs`）
 - (2026-06-25 11:00) `[backend]` Project 模型替代 Workspace — 语义明确为 git 仓库，持久化到 DB（`src/models/project.rs`）

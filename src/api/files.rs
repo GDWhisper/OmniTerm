@@ -288,25 +288,16 @@ async fn list_files(
             );
         };
 
-        // Security: ensure resolved path stays within workspace root
-        let canonical_root = match base.canonicalize() {
-            Ok(r) => r,
-            Err(_) => return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "workspace root not found" })),
-            ),
+        // Detect if browsing outside workspace root (same as session mode behavior)
+        let is_outside = match base.canonicalize() {
+            Ok(canonical_root) => !canonical.starts_with(&canonical_root),
+            Err(_) => false,
         };
-        if !canonical.starts_with(&canonical_root) {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({ "error": "path outside workspace" })),
-            );
-        }
 
         match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
-                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": false })),
+                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside })),
             ),
             Err(e) => {
                 error!("list_files (workspace) failed: {}", e);
