@@ -44,6 +44,7 @@ struct SearchQuery {
     path: Option<String>,
     workspace: Option<String>,
     session: Option<String>,
+    workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +54,7 @@ struct RenameRequest {
     new_name: String,
     workspace: Option<String>,
     session: Option<String>,
+    workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +63,7 @@ struct MoveRequest {
     destination: String,
     workspace: Option<String>,
     session: Option<String>,
+    workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +72,7 @@ struct CopyRequest {
     destination: String,
     workspace: Option<String>,
     session: Option<String>,
+    workspace_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -147,16 +151,21 @@ async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> O
     .map(|(p,)| p)
 }
 
-/// Resolve base path from query: prefer session over project.
+/// Resolve base path from query: session > workspace_id > project.
 /// Returns (base_path, is_session_mode).
 pub async fn resolve_base_from_query(
     state: &AppState,
     session: Option<&str>,
+    workspace_id: Option<&str>,
     project: Option<&str>,
 ) -> Option<(std::path::PathBuf, bool)> {
     if let Some(sid) = session {
         let (cwd, _) = resolve_session_base(state, sid).await?;
         Some((std::path::PathBuf::from(cwd), true))
+    } else if let Some(wid) = workspace_id {
+        let pid = project.unwrap_or("default");
+        let root = resolve_workspace_root(state, wid, pid).await?;
+        Some((std::path::PathBuf::from(root), false))
     } else {
         let pid = project.unwrap_or("default");
         let root = resolve_project_root(state, pid).await?;
@@ -349,7 +358,7 @@ async fn upload_file(
 ) -> impl IntoResponse {
     let rel_path = q.path.as_deref().unwrap_or("");
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -410,7 +419,7 @@ async fn delete_file(
         );
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -438,7 +447,7 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
             .into_response();
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -487,7 +496,7 @@ async fn read_file(
         );
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -525,7 +534,7 @@ async fn write_file(
         );
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -560,11 +569,12 @@ async fn mkdir(
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let session_id = req.get("session").and_then(|v| v.as_str());
-    let workspace_id = req.get("workspace").and_then(|v| v.as_str());
+    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str());
+    let project_id = req.get("workspace").and_then(|v| v.as_str());
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
-    let Some((base, _)) = resolve_base_from_query(&state, session_id, workspace_id).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, session_id, workspace_id, project_id).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -593,7 +603,7 @@ async fn rename(
     State(state): State<AppState>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -629,7 +639,7 @@ async fn move_files(
     State(state): State<AppState>,
     Json(req): Json<MoveRequest>,
 ) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -662,7 +672,7 @@ async fn copy_files(
     State(state): State<AppState>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -687,7 +697,7 @@ async fn search_files(
 ) -> impl IntoResponse {
     let rel_path = q.path.as_deref().unwrap_or("");
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
