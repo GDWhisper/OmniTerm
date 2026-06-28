@@ -207,6 +207,39 @@ Dockerfile 调整：
 
 编译自带前端嵌入 + migrations 嵌入，`cargo install omniterm` 即可。
 
+### 2.5 环境检测：tmux（所有本地安装方式）
+
+npm（2.1）、shell 脚本（2.2）、crates.io（2.4）三种安装方式，用户本地都需要 tmux。
+
+**原则**：安装阶段检测 → 帮用户装上 → 安装脚本不阻塞退出，留给首次启动报错兜底。
+
+#### 检测位置
+
+| 方式 | 检测时机 | 执行者 |
+|------|----------|--------|
+| npm | `install.js`（postinstall） | Node.js（`which` / `where`） |
+| shell | `install.sh` | bash（`command -v tmux`） |
+| crates.io | `build.rs` 或 binary 首次启动 | Rust 或 shell |
+
+#### 处理策略（按优先级顺序）
+
+1. **检测 `command -v tmux`** → 存在则跳过，正常完成安装
+2. **不存在** → 提示用户「tmux is required, installing...」
+3. **自动安装**（按平台）：
+   - Linux：检测包管理器（apt/pacman/yum/apk），`sudo apt install -y tmux` 等
+   - macOS：检测 `brew` → `brew install tmux`；无 brew 则提示手动装
+4. **安装失败/平台不识别** → WARN 但 **不阻止安装完成**，提示用户手动安装后重新启动
+
+#### 边界情况
+
+- **Docker 镜像**（2.3）：无需检测，tmux 已在 Dockerfile 中 `apt-get install` 内建
+- **Windows**：暂不支持，各脚本检测到 `$OSTYPE` / `process.platform` 为 Windows 时提示不支持并退出
+- **用户主动选择不装**：安装脚本只给建议不拦截，留给 omniterm 首次启动报错
+
+#### 决策说明
+
+ponytail: 安装脚本帮装 tmux 覆盖了绝大多数用户场景（Linux/macOS 主流发行版），省去「装了 omniterm 发现跑不了」的多余步骤。brew-less macOS、apt-less Linux 等边界情况不阻塞，fallback 到提示，保持安装脚本鲁棒。
+
 ---
 
 ## Phase 3: CI/CD（GitHub Actions）
