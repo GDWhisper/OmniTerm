@@ -90,6 +90,8 @@ cd frontend && pnpm dev  # 前端（开发模式）
 
 ## Git Worktree
 
+**文件约定**：`CLAUDE.md` 是 `AGENTS.md` 的符号链接（`CLAUDE.md → AGENTS.md`），两个名称指向同一份规范文件，实文件为 `AGENTS.md`。
+
 三个 worktree 共享 `.git` 对象，各自独立工作：
 
 | 目录 | 默认分支 | 用途 |
@@ -215,7 +217,7 @@ GET  /api/v1/files/watch (SSE)
 omniterm [OPTIONS]
 
 Options:
-  -p, --port <PORT>              监听端口 (默认: 9075 [main], 9077 [release])
+  -p, --port <PORT>              监听端口 (默认: 9075 [main], 9777 [dev], 9077 [release])
       --db <DB>                  数据库连接 [env: DATABASE_URL]
       --jwt-secret <KEY>         JWT 签名密钥 [env: JWT_SECRET]
   -V, --version                  版本号
