@@ -24,6 +24,9 @@ Thumbs.db
 *.db-shm
 *.db-wal
 
+# Dev runtime
+.dev/
+
 # Claude
 .claude/
 
