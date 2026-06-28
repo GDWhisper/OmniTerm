@@ -189,6 +189,16 @@ function MobileLayout() {
       className="flex flex-col"
       style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
+      <style>{`
+        @keyframes mobileSlideInLeft {
+          from { transform: translateX(-100%); }
+          to { transform: translateX(0); }
+        }
+        @keyframes mobileSlideInRight {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+      `}</style>
       <MobileStatusBar
         connected={connected}
         sessionName={activeSessionName}
@@ -232,9 +242,17 @@ function MobileContent() {
     case 'terminal':
       return <Terminal key={activeSessionId ?? 'empty'} />
     case 'files':
-      return <FileManager />
+      return (
+        <div style={{ height: '100%', animation: 'mobileSlideInRight 0.25s ease-out' }}>
+          <FileManager />
+        </div>
+      )
     case 'sessions':
-      return <Sidebar />
+      return (
+        <div style={{ height: '100%', animation: 'mobileSlideInLeft 0.25s ease-out' }}>
+          <Sidebar />
+        </div>
+      )
     default:
       return <Terminal key={activeSessionId ?? 'empty'} />
   }

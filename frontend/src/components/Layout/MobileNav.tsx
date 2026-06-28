@@ -1,25 +1,31 @@
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { IconSessions, IconTerminal, IconFiles } from '../Icons/MobileIcons'
 
 const tabs = [
-  { id: 'sessions' as const, Icon: IconSessions, slide: 'left' },
+  { id: 'sessions' as const, Icon: IconSessions },
   { id: 'terminal' as const, Icon: IconTerminal },
-  { id: 'files' as const, Icon: IconFiles, slide: 'right' },
+  { id: 'files' as const, Icon: IconFiles },
 ]
 
 export function MobileNav() {
   const { activeTab, setActiveTab } = useAppStore()
+  const [shakeTab, setShakeTab] = useState<string | null>(null)
+
+  useEffect(() => {
+    setShakeTab(activeTab)
+    const timer = setTimeout(() => setShakeTab(null), 400)
+    return () => clearTimeout(timer)
+  }, [activeTab])
 
   return (
     <>
       <style>{`
-        @keyframes slideInLeft {
-          from { transform: translateX(-20px); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-        @keyframes slideInRight {
-          from { transform: translateX(20px); opacity: 0; }
-          to { transform: translateX(0); opacity: 1; }
+        @keyframes shake {
+          0%, 100% { transform: rotate(0deg); }
+          25% { transform: rotate(-12deg); }
+          50% { transform: rotate(12deg); }
+          75% { transform: rotate(-6deg); }
         }
       `}</style>
     <div
@@ -45,11 +51,7 @@ export function MobileNav() {
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id
-          const iconStyle = tab.slide === 'left' 
-            ? { animation: 'slideInLeft 0.3s ease-out' }
-            : tab.slide === 'right'
-            ? { animation: 'slideInRight 0.3s ease-out' }
-            : {}
+          const isShaking = shakeTab === tab.id
           return (
             <button
               key={tab.id}
@@ -68,7 +70,7 @@ export function MobileNav() {
               }}
               aria-label={tab.id}
             >
-              <tab.Icon width={18} height={18} style={iconStyle} />
+              <tab.Icon width={18} height={18} style={isShaking ? { animation: 'shake 0.4s ease-in-out' } : {}} />
             </button>
           )
         })}
