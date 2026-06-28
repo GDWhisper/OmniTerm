@@ -264,11 +264,17 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     setTerminalReady(false)
   }, [])
 
+  // Ref to supply the current font size to createTerminal without making
+  // it a reactive dependency (avoids destroying the terminal on every
+  // font-size change — the live-update effect handles that in-place).
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
+
   /** Create a terminal on the given container and return a cleanup function */
   const createTerminal = useCallback((container: HTMLDivElement) => {
     const term = new Terminal({
       cursorBlink: true,
-      fontSize,
+      fontSize: fontSizeRef.current,
       fontFamily: 'ui-monospace, Consolas, monospace',
       theme: resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME,
     })
@@ -350,7 +356,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
-  }, [fontSize, onTitleChange])
+  }, [onTitleChange])
 
   // Initialize terminal once (when container becomes available)
   const initTerminal = useCallback((container: HTMLDivElement) => {
@@ -386,9 +392,20 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
   // Live-update font size when store changes
   useEffect(() => {
-    if (termRef.current && termRef.current.options.fontSize !== fontSize) {
-      termRef.current.options.fontSize = fontSize
+    const term = termRef.current
+    if (term && term.options.fontSize !== fontSize) {
+      term.options.fontSize = fontSize
       fitRef.current?.fit()
+      // Notify backend of new terminal dimensions.
+      // The ResizeObserver only fires when the container's pixel
+      // size changes, not when the character grid changes from a
+      // font-size adjustment alone — so we explicitly send the
+      // new cols/rows so tmux can redraw correctly.
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
+        )
+      }
     }
   }, [fontSize])
 

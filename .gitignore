@@ -34,3 +34,4 @@ Thumbs.db
 # Added by cargo
 
 /target
+.superpowers/
