@@ -1,0 +1,76 @@
+warning: function `verify_token` is never used
+  --> src/auth/mod.rs:28:8
+   |
+28 | pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
+   |        ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: struct `RequireAuth` is never constructed
+  --> src/auth/mod.rs:38:12
+   |
+38 | pub struct RequireAuth;
+   |            ^^^^^^^^^^^
+
+warning: function `normalize_path` is never used
+   --> src/fs/mod.rs:128:4
+    |
+128 | fn normalize_path(path: &Path) -> String {
+    |    ^^^^^^^^^^^^^^
+
+warning: struct `User` is never constructed
+ --> src/models/user.rs:4:12
+  |
+4 | pub struct User {
+  |            ^^^^
+
+warning: function `list_sessions` is never used
+  --> src/tmux/mod.rs:61:14
+   |
+61 | pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
+   |              ^^^^^^^^^^^^^
+
+warning: function `session_exists` is never used
+   --> src/tmux/mod.rs:102:14
+    |
+102 | pub async fn session_exists(name: &str) -> bool {
+    |              ^^^^^^^^^^^^^^
+
+warning: function `send_keys` is never used
+   --> src/tmux/mod.rs:112:14
+    |
+112 | pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
+    |              ^^^^^^^^^
+
+warning: struct `TmuxSessionInfo` is never constructed
+   --> src/tmux/mod.rs:171:12
+    |
+171 | pub struct TmuxSessionInfo {
+    |            ^^^^^^^^^^^^^^^
+
+warning: function `sanitize_path` is never used
+ --> src/utils/path.rs:7:8
+  |
+7 | pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
+  |        ^^^^^^^^^^^^^
+
+warning: variants `Pong` and `Exit` are never constructed
+  --> src/ws/terminal.rs:32:5
+   |
+28 | enum ServerControl<'a> {
+   |      ------------- variants in this enum
+...
+32 |     Pong,
+   |     ^^^^
+...
+36 |     Exit { code: Option<i32> },
+   |     ^^^^
+   |
+   = note: `ServerControl` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `omniterm-server` (bin "omniterm-server") generated 10 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running `target/debug/omniterm-server`
+[2m2026-06-25T10:14:54.045567Z[0m [32m INFO[0m [2momniterm_server[0m[2m:[0m OmniTerm server listening on 127.0.0.1:19777
+[2m2026-06-25T10:15:27.767449Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal WS connected: session=beb07c65-5e26-4799-8d83-b00186c51176 tmux=lt_beb07c65
+[2m2026-06-25T10:15:27.767703Z[0m [32m INFO[0m [2momniterm_server::ws::terminal[0m[2m:[0m terminal PTY initial size: 207x65 for session=beb07c65-5e26-4799-8d83-b00186c51176

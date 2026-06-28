@@ -14,10 +14,10 @@ const base: SVGProps<SVGSVGElement> = {
 export function IconSessions(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
-      {/* 垂直镜像翻转后的阶梯横杠：从长到短自上而下 */}
+      {/* 左边对齐，右边阶梯递减 */}
       <line x1="3" y1="4" x2="13" y2="4" />
-      <line x1="5" y1="8" x2="13" y2="8" />
-      <line x1="7" y1="12" x2="13" y2="12" />
+      <line x1="3" y1="8" x2="11" y2="8" />
+      <line x1="3" y1="12" x2="9" y2="12" />
     </svg>
   )
 }
