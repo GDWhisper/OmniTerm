@@ -83,7 +83,7 @@ export function SettingsPopup() {
         position: 'fixed',
         ...pos,
         width: POPUP_WIDTH,
-        maxHeight: 'calc(100vh - 16px)',
+        maxHeight: 'calc(100dvh - 16px)',
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',

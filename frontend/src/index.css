@@ -589,31 +589,24 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
-/* Actions cell */
+/* Actions cell — keep table-cell display; icons (inline-flex) center naturally */
 .fm-td-actions-cell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  justify-content: center;
+  width: 80px;
+  min-width: 80px;
+  text-align: center;
+  vertical-align: middle;
 }
 
 /* ── Name cell ── */
-.fm-td-name a {
-  display: flex;
-  align-items: center;
-  color: var(--text-primary);
-  text-decoration: none;
-  cursor: pointer;
+.fm-td-name {
   overflow: hidden;
 }
 
-.fm-td-name a:hover {
-  color: var(--accent);
-}
-
-.fm-td-name span {
+.fm-name-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 /* ── Time cell ── */

@@ -6,7 +6,7 @@ import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
-import type { Project, Workspace, Session, DuplicateGroup, FileEntry } from '../../api/client'
+import type { Session, DuplicateGroup, FileEntry } from '../../api/client'
 import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
@@ -170,6 +170,66 @@ export function Sidebar() {
     }
   }, [])
   useEffect(() => { loadDuplicates() }, [loadDuplicates])
+
+  // ── Restore active state from localStorage on page load ──
+  // Use refs so each step fires exactly once when its data first arrives,
+  // regardless of whether appStore already read the saved IDs on init.
+  const restoredProjectRef = useRef(false)
+  const restoredWorkspaceRef = useRef(false)
+  const restoredSessionRef = useRef(false)
+
+  // After projects load, expand the saved project and load its data.
+  useEffect(() => {
+    if (restoredProjectRef.current || projects.length === 0) return
+    const savedProjectId = localStorage.getItem('omniterm_active_project')
+    if (savedProjectId && projects.some(p => p.id === savedProjectId)) {
+      setExpandedProjects(prev => {
+        const next = new Set(prev)
+        next.add(savedProjectId)
+        return next
+      })
+      setActiveProject(savedProjectId)
+      loadWorktrees(savedProjectId)
+      // loadSessions fires via its own useEffect when activeProjectId changes
+    }
+    restoredProjectRef.current = true
+  }, [projects, setActiveProject, loadWorktrees])
+
+  // After worktrees load, restore the active workspace (or clean up stale saved ID).
+  useEffect(() => {
+    if (!activeProjectId) return
+    const wtList = worktrees[activeProjectId]
+    if (!wtList || wtList.length === 0) return
+    const savedWorkspaceId = localStorage.getItem('omniterm_active_workspace')
+    if (!savedWorkspaceId) {
+      restoredWorkspaceRef.current = true
+      return
+    }
+    if (restoredWorkspaceRef.current) return
+    if (wtList.some(w => w.id === savedWorkspaceId)) {
+      if (activeWorkspaceId !== savedWorkspaceId) setActiveWorkspace(savedWorkspaceId)
+    } else {
+      localStorage.removeItem('omniterm_active_workspace')
+    }
+    restoredWorkspaceRef.current = true
+  }, [worktrees, activeProjectId, activeWorkspaceId, setActiveWorkspace])
+
+  // After sessions load, restore the active session (or clean up stale saved ID).
+  useEffect(() => {
+    if (sessions.length === 0) return
+    const savedSessionId = localStorage.getItem('omniterm_active_session')
+    if (!savedSessionId) {
+      restoredSessionRef.current = true
+      return
+    }
+    if (restoredSessionRef.current) return
+    if (sessions.some(s => s.id === savedSessionId)) {
+      if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
+    } else {
+      localStorage.removeItem('omniterm_active_session')
+    }
+    restoredSessionRef.current = true
+  }, [sessions, activeSessionId, setActiveSession])
 
   // Fetch directory entries for the new-project modal's browse list.
   const fetchDirs = useCallback(async (path: string) => {
@@ -506,13 +566,6 @@ export function Sidebar() {
     }
   }
 
-  const handleProjKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleCreateProject()
-    }
-  }
-
   const handleSessKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -723,7 +776,6 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
-            const hasWorktrees = wtList.length > 0
             const projHasActiveSession = wtList.some((wt) =>
               sessionsForWorktree(wt.path).some((s) => s.is_active)
             )

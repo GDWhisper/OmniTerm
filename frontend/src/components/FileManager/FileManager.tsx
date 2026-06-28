@@ -893,8 +893,8 @@ export function FileManager() {
                         />
                       </td>
                       )}
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <td className="fm-td-name">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
                           <FileIcon entry={f} />
                           {isEditing ? (
                             <input
@@ -910,7 +910,7 @@ export function FileManager() {
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span>{f.name}</span>
+                            <span className="fm-name-text">{f.name}</span>
                           )}
                         </div>
                       </td>

@@ -11,7 +11,7 @@ interface FmSessionState {
   drawerMode: 'view' | 'edit' // drawer view/edit mode
 }
 
-interface AppState {
+export interface AppState {
   // Layout
   sidebarOpen: boolean
   sidebarCollapsed: boolean
@@ -45,7 +45,10 @@ interface AppState {
 
   // Mobile
   isMobile: boolean
-  activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
+  activeTab: 'terminal' | 'files' | 'sessions'
+  mobileGestureEnabled: boolean
+  mobileFontSize: number
+  mobileLastTab: string
 
   // Settings panel
   settingsOpen: boolean
@@ -70,6 +73,8 @@ interface AppState {
   setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
+  setMobileGestureEnabled: (v: boolean) => void
+  setMobileFontSize: (s: number) => void
 
   // FM session actions
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
@@ -93,15 +98,18 @@ export const useAppStore = create<AppState>((set) => ({
   projects: [],
   worktrees: {},
   sessions: [],
-  activeProjectId: null,
-  activeWorkspaceId: null,
-  activeSessionId: null,
+  activeProjectId: localStorage.getItem('omniterm_active_project') || null,
+  activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
+  activeSessionId: localStorage.getItem('omniterm_active_session') || null,
 
   fmSessionStates: {},
 
   connected: false,
   isMobile: false,
-  activeTab: 'terminal',
+  activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
+  mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
+  mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '13'),
+  mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -134,12 +142,36 @@ export const useAppStore = create<AppState>((set) => ({
   setWorktrees: (projectId, ws) =>
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (sessions) => set({ sessions }),
-  setActiveProject: (id) => set({ activeProjectId: id }),
-  setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
-  setActiveSession: (id) => set({ activeSessionId: id }),
+  setActiveProject: (id) => {
+    if (id) localStorage.setItem('omniterm_active_project', id)
+    else localStorage.removeItem('omniterm_active_project')
+    set({ activeProjectId: id })
+  },
+  setActiveWorkspace: (id) => {
+    if (id) localStorage.setItem('omniterm_active_workspace', id)
+    else localStorage.removeItem('omniterm_active_workspace')
+    set({ activeWorkspaceId: id })
+  },
+  setActiveSession: (id) => {
+    if (id) localStorage.setItem('omniterm_active_session', id)
+    else localStorage.removeItem('omniterm_active_session')
+    set({ activeSessionId: id })
+  },
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => {
+    localStorage.setItem('omniterm_mobile_last_tab', tab)
+    set({ activeTab: tab, mobileLastTab: tab })
+  },
+  setMobileGestureEnabled: (v) => {
+    localStorage.setItem('omniterm_mobile_gesture_enabled', String(v))
+    set({ mobileGestureEnabled: v })
+  },
+  setMobileFontSize: (s) => {
+    const clamped = Math.max(12, Math.min(20, s))
+    localStorage.setItem('omniterm_mobile_font_size', String(clamped))
+    set({ mobileFontSize: clamped })
+  },
 
   setFmSessionMode: (sessionId, mode) =>
     set((s) => ({

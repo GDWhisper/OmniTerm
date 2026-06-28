@@ -95,7 +95,7 @@ kill_by_pid() {
 # 解析监听指定端口的进程 PID（用于修正 pid 文件）
 pid_by_port() {
     local port=$1
-    ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1
+    ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1 || true
 }
 
 # 防御性清理：杀掉本项目所有未受 pid 文件 / 端口监听 管理的 vite/cargo 孤儿

@@ -61,6 +61,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const keyHandlerAttachedRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
+  // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
+  const [scrollMode, setScrollMode] = useState(false)
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -209,6 +211,34 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     sessionIdRef.current = sessionId
   }, [sessionId])
 
+  /** Send raw data to the terminal's WebSocket if connected */
+  const sendData = useCallback((data: string) => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(new TextEncoder().encode(data))
+    }
+  }, [])
+
+  /** Enter tmux copy mode and scroll one page in the given direction */
+  const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!scrollMode) {
+      // tmux prefix is Ctrl+B (0x02), then [ enters copy mode
+      ws.send(new TextEncoder().encode('\x02['))
+      setScrollMode(true)
+    }
+    const key = direction === 'up' ? '\x1b[5~' : '\x1b[6~' // PageUp / PageDown
+    ws.send(new TextEncoder().encode(key))
+  }, [scrollMode])
+
+  /** Exit tmux copy mode by sending 'q' */
+  const exitScrollMode = useCallback(() => {
+    if (!scrollMode) return
+    sendData('q')
+    setScrollMode(false)
+  }, [scrollMode, sendData])
+
   /** Dispose the current terminal and all associated resources */
   const disposeTerminal = useCallback(() => {
     observerRef.current?.disconnect()
@@ -234,11 +264,17 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     setTerminalReady(false)
   }, [])
 
+  // Ref to supply the current font size to createTerminal without making
+  // it a reactive dependency (avoids destroying the terminal on every
+  // font-size change — the live-update effect handles that in-place).
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
+
   /** Create a terminal on the given container and return a cleanup function */
   const createTerminal = useCallback((container: HTMLDivElement) => {
     const term = new Terminal({
       cursorBlink: true,
-      fontSize,
+      fontSize: fontSizeRef.current,
       fontFamily: 'ui-monospace, Consolas, monospace',
       theme: resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME,
     })
@@ -320,7 +356,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
-  }, [fontSize, onTitleChange])
+  }, [onTitleChange])
 
   // Initialize terminal once (when container becomes available)
   const initTerminal = useCallback((container: HTMLDivElement) => {
@@ -356,11 +392,30 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
   // Live-update font size when store changes
   useEffect(() => {
-    if (termRef.current && termRef.current.options.fontSize !== fontSize) {
-      termRef.current.options.fontSize = fontSize
+    const term = termRef.current
+    if (term && term.options.fontSize !== fontSize) {
+      term.options.fontSize = fontSize
       fitRef.current?.fit()
+      // Notify backend of new terminal dimensions.
+      // The ResizeObserver only fires when the container's pixel
+      // size changes, not when the character grid changes from a
+      // font-size adjustment alone — so we explicitly send the
+      // new cols/rows so tmux can redraw correctly.
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
+        )
+      }
     }
   }, [fontSize])
 
-  return { initTerminal, terminal: termRef.current }
+  return {
+    initTerminal,
+    terminal: termRef.current,
+    sendData,
+    scrollMode,
+    setScrollMode,
+    sendScrollKeys,
+    exitScrollMode,
+  }
 }
