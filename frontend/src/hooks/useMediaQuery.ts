@@ -5,7 +5,7 @@ export function useMobileDetection() {
   const setIsMobile = useAppStore((s) => s.setIsMobile)
 
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)')
+    const mq = window.matchMedia('(max-width: 1023px)')
     const handler = (e: MediaQueryListEvent | MediaQueryList) => {
       setIsMobile(e.matches)
     }
