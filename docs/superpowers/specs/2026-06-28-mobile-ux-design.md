@@ -103,12 +103,27 @@ OmniTerm 目前仅在 `Layout.tsx` 中做了最基础的移动端适配：屏幕
 - 软键盘弹起时，自动滚动到底部，确保光标不被遮挡
 - 预留输入区域高度，避免最后一行被键盘盖住
 
-### 5.2 文本选择
+### 5.2 触摸滚动与 tmux 回滚
+
+**现状**：后端创建 tmux 会话时已执行 `tmux set-option -t <session> mouse on`，桌面端鼠标滚轮可触发 tmux 复制模式滚动。但手机触屏滑动不会自动转换成 xterm.js 的 wheel 事件，导致终端内容滑不动。
+
+**方案**：
+
+1. **优先依赖 xterm.js 原生触摸滚动**：开启 xterm.js 的触摸支持，让 xterm.js 把触摸 swipe 转成 wheel 事件发送给 pty；tmux 的 `mouse on` 会接管 wheel 事件进入复制模式滚动。
+2. **备用「滚动模式」**：如果原生触摸滚动在 tmux 下仍无效，在特殊键工具栏增加一个「滚动」开关。开启后：
+   - 触摸上下滑动不再输入字符，而是向 tmux 发送复制模式滚动指令
+   - 第一次向上滑时自动发送 `Ctrl+B [` 进入 tmux copy 模式
+   - 后续滑动发送 `↑` / `↓` / `PageUp` / `PageDown`
+   - 点击终端任意位置或按 `Esc` / `q` 退出滚动模式
+3. **底线**：至少保证用户能看历史输出，不依赖鼠标滚轮。
+
+### 5.3 文本选择
 
 - 启用 xterm.js 的触摸选择支持（`allowProposedApi` + selection 相关 API）
 - 长按触发选择模式，出现复制/粘贴/全选浮层
+- 注意：在 tmux mouse on 模式下，xterm.js 的触摸选择可能与 tmux 的鼠标选择冲突，需测试并优先保证复制/粘贴可用
 
-### 5.3 特殊键快捷栏
+### 5.4 特殊键快捷栏
 
 在终端页底部提供一个可折叠的特殊键工具栏，最小高度 36px，包含：
 
@@ -187,8 +202,8 @@ setMobileFontSize: (s: number) => void
 | `frontend/src/components/Layout/MobileNav.tsx` | 改为三入口药丸导航，移除 emoji，使用 SVG 图标 |
 | `frontend/src/components/Layout/MobileStatusBar.tsx` | 新增顶部状态栏组件 |
 | `frontend/src/stores/appStore.ts` | 新增 `mobileGestureEnabled`、`mobileFontSize`，tab 枚举移除 `settings` |
-| `frontend/src/components/Terminal/Terminal.tsx` | 移动端：软键盘适配、特殊键工具栏、触摸选择 |
-| `frontend/src/components/Terminal/MobileKeyBar.tsx` | 新增特殊键工具栏组件 |
+| `frontend/src/components/Terminal/Terminal.tsx` | 移动端：软键盘适配、特殊键工具栏、触摸选择、滚动模式 |
+| `frontend/src/components/Terminal/MobileKeyBar.tsx` | 新增特殊键工具栏组件（含滚动模式开关） |
 | `frontend/src/components/FileManager/FileManager.tsx` | 移动端：工具栏放大、行高增加、长按菜单 |
 | `frontend/src/components/FileManager/FileDrawer.tsx` | 移动端改为底部 sheet |
 | `frontend/src/components/Settings/Settings.tsx` | 新增「启用手势切换」和移动端字体大小设置 |
@@ -208,6 +223,7 @@ setMobileFontSize: (s: number) => void
 - 底部导航点击切换
 - 手势开关开启/关闭后的切换行为
 - 终端特殊键工具栏发送 Ctrl+C / Esc / Tab
+- 终端触摸滚动可看历史输出（或滚动模式生效）
 - 文件管理器长按菜单、上传、新建文件夹
 - 桌面端三栏布局无回归
 
