@@ -2,15 +2,26 @@ import { useAppStore } from '../../stores/appStore'
 import { IconSessions, IconTerminal, IconFiles } from '../Icons/MobileIcons'
 
 const tabs = [
-  { id: 'sessions' as const, Icon: IconSessions },
+  { id: 'sessions' as const, Icon: IconSessions, slide: 'left' },
   { id: 'terminal' as const, Icon: IconTerminal },
-  { id: 'files' as const, Icon: IconFiles },
+  { id: 'files' as const, Icon: IconFiles, slide: 'right' },
 ]
 
 export function MobileNav() {
   const { activeTab, setActiveTab } = useAppStore()
 
   return (
+    <>
+      <style>{`
+        @keyframes slideInLeft {
+          from { transform: translateX(-20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes slideInRight {
+          from { transform: translateX(20px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `}</style>
     <div
       style={{
         display: 'flex',
@@ -34,6 +45,11 @@ export function MobileNav() {
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id
+          const iconStyle = tab.slide === 'left' 
+            ? { animation: 'slideInLeft 0.3s ease-out' }
+            : tab.slide === 'right'
+            ? { animation: 'slideInRight 0.3s ease-out' }
+            : {}
           return (
             <button
               key={tab.id}
@@ -52,11 +68,12 @@ export function MobileNav() {
               }}
               aria-label={tab.id}
             >
-              <tab.Icon width={18} height={18} />
+              <tab.Icon width={18} height={18} style={iconStyle} />
             </button>
           )
         })}
       </nav>
     </div>
+    </>
   )
 }
