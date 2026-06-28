@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run `cargo check` when .rs files are staged.
+# Catches compile errors (e.g. missing `args.` prefix in field shorthand)
+# before they reach the branch.
+#
+# Install (per worktree):
+#   git config core.hooksPath scripts/hooks
+#   chmod +x scripts/hooks/pre-commit
+# Disable per-commit: git commit --no-verify
+
+set -e
+
+# Only run if .rs files are staged
+STAGED_RS=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$' || true)
+if [ -z "$STAGED_RS" ]; then
+  exit 0
+fi
+
+# Make sure cargo is on PATH
+. "$HOME/.cargo/env" 2>/dev/null || true
+
+echo "[pre-commit] cargo check on $(echo "$STAGED_RS" | wc -l) staged .rs file(s)..."
+
+cargo check --quiet
