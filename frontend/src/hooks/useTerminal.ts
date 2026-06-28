@@ -354,6 +354,49 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       container.removeEventListener('mouseup', handleMouseUp)
     }
 
+    // Mobile touch-scroll: translate vertical drag into xterm scrollback scrolling.
+    // xterm.js only handles wheel events natively; touch events don't generate them.
+    let lastTouchY: number | null = null
+    const fontSizeForScroll = () => (termRef.current?.options.fontSize ?? fontSizeRef.current)
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY
+      }
+    }
+    const handleTouchMove = (e: TouchEvent) => {
+      if (lastTouchY === null || e.touches.length !== 1) return
+      const y = e.touches[0].clientY
+      const deltaY = lastTouchY - y // positive = finger up (want older lines)
+      const lineH = Math.max(1, fontSizeForScroll())
+      const lines = Math.round(deltaY / lineH)
+      if (lines !== 0 && termRef.current) {
+        termRef.current.scrollLines(-lines)
+      }
+      lastTouchY = y
+    }
+    const handleTouchEnd = () => {
+      lastTouchY = null
+    }
+
+    container.addEventListener('touchstart', handleTouchStart, { passive: true })
+    container.addEventListener('touchmove', handleTouchMove, { passive: true })
+    container.addEventListener('touchend', handleTouchEnd)
+
+    // Store cleanup refs for disposeTerminal
+    const touchCleanup = () => {
+      container.removeEventListener('touchstart', handleTouchStart)
+      container.removeEventListener('touchmove', handleTouchMove)
+      container.removeEventListener('touchend', handleTouchEnd)
+    }
+
+    // Extend mouseUpHandlerRef cleanup to also clean touch handlers
+    const origMouseUpCleanup = mouseUpHandlerRef.current
+    mouseUpHandlerRef.current = () => {
+      origMouseUpCleanup?.()
+      touchCleanup()
+    }
+
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
   }, [onTitleChange])
