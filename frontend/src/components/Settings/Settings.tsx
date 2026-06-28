@@ -88,7 +88,18 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 export function Settings() {
   const { t, i18n } = useTranslation()
   const { theme, setTheme } = useThemeStore()
-  const { fontSize, setFontSize, autoCopySelect, setAutoCopySelect } = useAppStore()
+  const {
+    fontSize,
+    mobileFontSize,
+    isMobile,
+    setFontSize,
+    setMobileFontSize,
+    autoCopySelect,
+    setAutoCopySelect,
+  } = useAppStore()
+
+  const effectiveFontSize = isMobile ? mobileFontSize : fontSize
+  const setEffectiveFontSize = isMobile ? setMobileFontSize : setFontSize
 
   return (
     <div style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontFamily: FONT }}>
@@ -147,8 +158,8 @@ export function Settings() {
           </h3>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setFontSize(fontSize - 1)}
-              disabled={fontSize <= 10}
+              onClick={() => setEffectiveFontSize(effectiveFontSize - 1)}
+              disabled={effectiveFontSize <= 10}
               style={{
                 ...btnBase,
                 width: 28,
@@ -157,7 +168,7 @@ export function Settings() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: 14,
-                opacity: fontSize <= 10 ? 0.5 : 1,
+                opacity: effectiveFontSize <= 10 ? 0.5 : 1,
                 color: 'var(--text-muted)',
               }}
               onMouseEnter={btnHover}
@@ -166,12 +177,12 @@ export function Settings() {
               −
             </button>
             <div className="flex-1 text-center">
-              <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{fontSize}</span>
+              <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{effectiveFontSize}</span>
               <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
             </div>
             <button
-              onClick={() => setFontSize(fontSize + 1)}
-              disabled={fontSize >= 24}
+              onClick={() => setEffectiveFontSize(effectiveFontSize + 1)}
+              disabled={effectiveFontSize >= 24}
               style={{
                 ...btnBase,
                 width: 28,
@@ -180,7 +191,7 @@ export function Settings() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 fontSize: 14,
-                opacity: fontSize >= 24 ? 0.5 : 1,
+                opacity: effectiveFontSize >= 24 ? 0.5 : 1,
                 color: 'var(--text-muted)',
               }}
               onMouseEnter={btnHover}
@@ -193,8 +204,8 @@ export function Settings() {
             type="range"
             min={10}
             max={24}
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
+            value={effectiveFontSize}
+            onChange={(e) => setEffectiveFontSize(Number(e.target.value))}
             className="w-full"
             style={{ accentColor: 'var(--accent)', height: 4 }}
           />
