@@ -46,6 +46,9 @@ interface AppState {
   // Mobile
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
+  mobileGestureEnabled: boolean
+  mobileFontSize: number
+  mobileLastTab: string
 
   // Settings panel
   settingsOpen: boolean
@@ -70,6 +73,8 @@ interface AppState {
   setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
+  setMobileGestureEnabled: (v: boolean) => void
+  setMobileFontSize: (s: number) => void
 
   // FM session actions
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
@@ -101,7 +106,10 @@ export const useAppStore = create<AppState>((set) => ({
 
   connected: false,
   isMobile: false,
-  activeTab: 'terminal',
+  activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
+  mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
+  mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '16'),
+  mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -151,7 +159,19 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => {
+    localStorage.setItem('omniterm_mobile_last_tab', tab)
+    set({ activeTab: tab, mobileLastTab: tab })
+  },
+  setMobileGestureEnabled: (v) => {
+    localStorage.setItem('omniterm_mobile_gesture_enabled', String(v))
+    set({ mobileGestureEnabled: v })
+  },
+  setMobileFontSize: (s) => {
+    const clamped = Math.max(12, Math.min(20, s))
+    localStorage.setItem('omniterm_mobile_font_size', String(clamped))
+    set({ mobileFontSize: clamped })
+  },
 
   setFmSessionMode: (sessionId, mode) =>
     set((s) => ({
