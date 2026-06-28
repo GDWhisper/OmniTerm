@@ -94,9 +94,67 @@ kill_by_pid() {
     fi
 }
 
+# 解析监听指定端口的进程 PID（用于修正 pid 文件）
+pid_by_port() {
+    local port=$1
+    ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1
+}
+
+# 防御性清理：杀掉本项目所有未受 pid 文件 / 端口监听 管理的 vite/cargo 孤儿
+# 场景：终端关闭后子 shell 退出、pnpm 进程被 init 收养但 pid 文件失效，
+#       下次 start 会再起一个 vite 与旧的累积
+cleanup_project_processes() {
+    local protected_pids=()
+    local p
+    for p in $(cat "$BACKEND_PID" 2>/dev/null) $(cat "$FRONTEND_PID" 2>/dev/null); do
+        [[ -n "$p" ]] && protected_pids+=("$p")
+    done
+    for port in $BACKEND_PORT $FRONTEND_PORT; do
+        p=$(pid_by_port "$port")
+        [[ -n "$p" ]] && protected_pids+=("$p")
+    done
+
+    local orphans=()
+    for cmdline_file in /proc/[0-9]*/cmdline; do
+        [[ -f "$cmdline_file" ]] || continue
+        local p
+        p=$(basename "$(dirname "$cmdline_file")")
+        local cmdline
+        cmdline=$(cat "/proc/$p/cmdline" 2>/dev/null | tr '\0' ' ')
+        if [[ "$cmdline" != *vite/bin/vite.js* && "$cmdline" != *target/debug/omniterm* ]]; then
+            continue
+        fi
+        local cwd
+        cwd=$(readlink "/proc/$p/cwd" 2>/dev/null)
+        case "$cwd" in
+            "$PROJECT_DIR"|"$PROJECT_DIR"/frontend) ;;
+            *) continue ;;
+        esac
+        local is_protected=false
+        for prot in "${protected_pids[@]}"; do
+            [[ "$p" == "$prot" ]] && is_protected=true && break
+        done
+        $is_protected || orphans+=("$p")
+    done
+
+    if [[ ${#orphans[@]} -gt 0 ]]; then
+        warn "清理孤儿进程: ${orphans[*]}"
+        for p in "${orphans[@]}"; do
+            kill -- -"$p" 2>/dev/null || kill "$p" 2>/dev/null || true
+        done
+        sleep 0.5
+        for p in "${orphans[@]}"; do
+            kill -9 -- -"$p" 2>/dev/null || kill -9 "$p" 2>/dev/null || true
+        done
+    fi
+}
+
 # ── 命令: start ──
 cmd_start() {
     mkdir -p "$PID_DIR"
+
+    # 先清理本项目残留（端口空闲但 vite/pnpm 僵尸还在的情况）
+    cleanup_project_processes
 
     # 检查端口占用
     for port in $BACKEND_PORT $FRONTEND_PORT; do
@@ -119,6 +177,8 @@ cmd_start() {
 
     # 等待后端就绪
     if wait_port "$BACKEND_PORT" 30; then
+        # 用真实监听端口的进程 PID 覆盖子 shell PID（子 shell 退出后 pid 文件会失效）
+        pid_by_port "$BACKEND_PORT" > "$BACKEND_PID"
         ok "后端已启动 → http://localhost:$BACKEND_PORT"
     else
         err "后端启动超时，查看日志: $BACKEND_LOG"
@@ -137,6 +197,7 @@ cmd_start() {
     echo $! > "$FRONTEND_PID"
 
     if wait_port "$FRONTEND_PORT" 15; then
+        pid_by_port "$FRONTEND_PORT" > "$FRONTEND_PID"
         ok "前端已启动 → http://localhost:$FRONTEND_PORT"
     else
         err "前端启动超时，查看日志: $FRONTEND_LOG"
