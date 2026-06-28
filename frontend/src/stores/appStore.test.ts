@@ -7,13 +7,13 @@ describe('appStore mobile state', () => {
       isMobile: false,
       activeTab: 'terminal',
       mobileGestureEnabled: true,
-      mobileFontSize: 16,
+      mobileFontSize: 13,
       mobileLastTab: 'terminal',
     })
   })
 
-  it('defaults mobile font size to 16', () => {
-    expect(useAppStore.getState().mobileFontSize).toBe(16)
+  it('defaults mobile font size to 13', () => {
+    expect(useAppStore.getState().mobileFontSize).toBe(13)
   })
 
   it('toggles mobile gesture enabled', () => {
