@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { MobileNav } from './MobileNav'
 import { useAppStore } from '../../stores/appStore'
