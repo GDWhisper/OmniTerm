@@ -8,7 +8,8 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
@@ -166,9 +167,23 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         }
     };
 
-    // Take PTY reader/writer, keep master alive for resize
+    // Take PTY reader, keep master alive for both resize and writing.
+    //
+    // We intentionally do NOT call `master.take_writer()` here. The
+    // `portable_pty::MasterWriter` it returns has a `Drop` impl that writes
+    // `\n + VEOF (0x04)` to the PTY fd. If that ever runs against a still-
+    // alive tmux client (PTY slave), the bytes are forwarded to the pane
+    // and the agent interprets `\x04` (Ctrl+D / EOF) as end-of-input,
+    // aborting its current task — the user-visible bug. Drop ordering
+    // (SIGHUP before master drop) is not enough: the writer holds an
+    // independently-dup'd fd, so closing the master does not prevent the
+    // writer's Drop from writing to its own fd.
+    //
+    // Instead, we keep the master for its full lifetime and use its raw
+    // fd directly for input. When the master is dropped, the fd is closed
+    // and the writer thread's writes start failing with EBADF, so it exits
+    // cleanly without ever invoking the problematic `MasterWriter::drop`.
     let mut pty_reader = pty_pair.master.try_clone_reader().expect("clone reader");
-    let pty_writer = pty_pair.master.take_writer().expect("take writer");
     let master_pty: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty>>>> =
         Arc::new(Mutex::new(Some(pty_pair.master)));
 
@@ -229,15 +244,49 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         }
     });
 
-    // === WS binary → PTY stdin ===
+    // === WS binary → PTY stdin (via raw fd, see comment above) ===
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
-    let pty_writer = std::sync::Mutex::new(pty_writer);
+    // Get the master's raw fd. We capture it here (before the master is
+    // moved into `master_pty`) and use it for all input writes. The fd is
+    // owned by the master; when the master is dropped, the fd is closed and
+    // any further writes fail with EBADF, which the writer thread handles
+    // by exiting.
+    let pty_fd: RawFd = master_pty
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.as_raw_fd())
+        .expect("master PTY has a raw fd on unix");
     std::thread::spawn(move || {
         while let Some(data) = pty_in_rx.blocking_recv() {
-            let mut writer = pty_writer.lock().unwrap();
-            if writer.write_all(&data).is_err() {
-                break;
+            // Write directly to the fd, looping on partial writes. We
+            // deliberately do NOT use any `Write`-implementing wrapper here
+            // — the portable_pty `MasterWriter` writes `\n + VEOF` on drop
+            // and there is no way to suppress that without leaking the fd.
+            let mut written = 0;
+            while written < data.len() {
+                let n = unsafe {
+                    libc::write(
+                        pty_fd,
+                        data[written..].as_ptr() as *const libc::c_void,
+                        data.len() - written,
+                    )
+                };
+                if n <= 0 {
+                    // EBADF (fd closed) or error — stop the thread; the
+                    // master is going away.
+                    if n < 0 {
+                        let errno = std::io::Error::last_os_error().raw_os_error();
+                        if errno == Some(libc::EBADF) {
+                            debug!("PTY fd closed, writer thread exiting");
+                        } else {
+                            warn!("PTY write failed: errno={:?}", errno);
+                        }
+                    }
+                    return;
+                }
+                written += n as usize;
             }
         }
         debug!("PTY writer exited");
@@ -398,10 +447,20 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         debug!("agent poll task joined");
     }
 
-    // Explicitly send SIGHUP to the tmux client process BEFORE dropping the PTY
-    // master. This mirrors tmuxes' ptyProc.kill() approach and ensures clean
-    // detachment without the extra \n+EOF that portable-pty's MasterWriter::drop
-    // writes to the PTY (which can leak into the running TUI app).
+    // === Cleanup order is critical to prevent agent interruption ===
+    //
+    // We avoid the `MasterWriter::drop` entirely by writing via the raw
+    // fd, so there is no `\n + VEOF` leak. The only thing we need to do
+    // here is:
+    //   1. SIGHUP the tmux client so it detaches cleanly from the session.
+    //   2. Drop the PTY master. Its Drop closes the underlying fd, which
+    //      causes the writer thread's blocking writes to start failing
+    //      with EBADF and exit on their own.
+    //
+    // No writer wrapper is ever constructed, so the previous race
+    // condition between SIGHUP and the writer's `\n+\x04` leak cannot
+    // occur.
+
     if let Some(pid) = child_pid {
         unsafe {
             libc::kill(pid as i32, libc::SIGHUP);
@@ -409,7 +468,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         debug!("sent SIGHUP to tmux client pid={}", pid);
     }
 
-    // Drop the PTY master to close file descriptors.
+    // Drop the PTY master to close the fd. The writer thread will exit
+    // on its next write attempt.
     if let Ok(mut guard) = master_pty.lock() {
         guard.take();
     }
