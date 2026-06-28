@@ -25,7 +25,7 @@ function applyTheme(resolved: 'light' | 'dark') {
 }
 
 export const useThemeStore = create<ThemeState>((set) => {
-  const saved = (localStorage.getItem('omniterm_theme') as Theme) || 'system'
+  const saved = (localStorage.getItem('omniterm_theme') as Theme) || 'dark'
   const resolved = resolveTheme(saved)
   applyTheme(resolved)
 
