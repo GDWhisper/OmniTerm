@@ -171,6 +171,53 @@ export function Sidebar() {
   }, [])
   useEffect(() => { loadDuplicates() }, [loadDuplicates])
 
+  // ── Restore active state from localStorage on page load ──
+  // After projects load, expand the saved project and load its data.
+  useEffect(() => {
+    if (projects.length === 0) return
+    const savedProjectId = localStorage.getItem('omniterm_active_project')
+    if (!savedProjectId || !projects.some(p => p.id === savedProjectId)) return
+    // Avoid re-running when polling updates sessions (setSessions triggers
+    // projects re-render wouldn't change projects array)
+    if (activeProjectId === savedProjectId) return
+    setExpandedProjects(prev => {
+      const next = new Set(prev)
+      next.add(savedProjectId)
+      return next
+    })
+    setActiveProject(savedProjectId)
+    loadWorktrees(savedProjectId)
+    // loadSessions will fire via its own useEffect when activeProjectId changes
+  }, [projects, activeProjectId, setActiveProject, loadWorktrees])
+
+  // After worktrees load, restore the active workspace.
+  useEffect(() => {
+    if (!activeProjectId) return
+    const wtList = worktrees[activeProjectId]
+    if (!wtList || wtList.length === 0) return
+    const savedWorkspaceId = localStorage.getItem('omniterm_active_workspace')
+    if (!savedWorkspaceId) return
+    if (activeWorkspaceId === savedWorkspaceId) return
+    if (wtList.some(w => w.id === savedWorkspaceId)) {
+      setActiveWorkspace(savedWorkspaceId)
+    } else {
+      localStorage.removeItem('omniterm_active_workspace')
+    }
+  }, [worktrees, activeProjectId, activeWorkspaceId, setActiveWorkspace])
+
+  // After sessions load, restore the active session.
+  useEffect(() => {
+    if (sessions.length === 0) return
+    const savedSessionId = localStorage.getItem('omniterm_active_session')
+    if (!savedSessionId) return
+    if (activeSessionId === savedSessionId) return
+    if (sessions.some(s => s.id === savedSessionId)) {
+      setActiveSession(savedSessionId)
+    } else {
+      localStorage.removeItem('omniterm_active_session')
+    }
+  }, [sessions, activeSessionId, setActiveSession])
+
   // Fetch directory entries for the new-project modal's browse list.
   const fetchDirs = useCallback(async (path: string) => {
     setBrowseLoading(true)

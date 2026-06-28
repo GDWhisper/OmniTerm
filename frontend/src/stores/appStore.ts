@@ -93,9 +93,9 @@ export const useAppStore = create<AppState>((set) => ({
   projects: [],
   worktrees: {},
   sessions: [],
-  activeProjectId: null,
-  activeWorkspaceId: null,
-  activeSessionId: null,
+  activeProjectId: localStorage.getItem('omniterm_active_project') || null,
+  activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
+  activeSessionId: localStorage.getItem('omniterm_active_session') || null,
 
   fmSessionStates: {},
 
@@ -134,9 +134,21 @@ export const useAppStore = create<AppState>((set) => ({
   setWorktrees: (projectId, ws) =>
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (sessions) => set({ sessions }),
-  setActiveProject: (id) => set({ activeProjectId: id }),
-  setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
-  setActiveSession: (id) => set({ activeSessionId: id }),
+  setActiveProject: (id) => {
+    if (id) localStorage.setItem('omniterm_active_project', id)
+    else localStorage.removeItem('omniterm_active_project')
+    set({ activeProjectId: id })
+  },
+  setActiveWorkspace: (id) => {
+    if (id) localStorage.setItem('omniterm_active_workspace', id)
+    else localStorage.removeItem('omniterm_active_workspace')
+    set({ activeWorkspaceId: id })
+  },
+  setActiveSession: (id) => {
+    if (id) localStorage.setItem('omniterm_active_session', id)
+    else localStorage.removeItem('omniterm_active_session')
+    set({ activeSessionId: id })
+  },
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => set({ activeTab: tab }),
