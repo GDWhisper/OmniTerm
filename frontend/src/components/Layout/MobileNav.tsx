@@ -1,33 +1,62 @@
-import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
+import { IconSessions, IconTerminal, IconFiles } from '../Icons/MobileIcons'
 
 const tabs = [
-  { id: 'terminal' as const, labelKey: 'mobile.terminal', icon: '⌨️' },
-  { id: 'files' as const, labelKey: 'mobile.files', icon: '📁' },
-  { id: 'sessions' as const, labelKey: 'mobile.sessions', icon: '📋' },
-  { id: 'settings' as const, labelKey: 'mobile.settings', icon: '⚙️' },
+  { id: 'sessions' as const, Icon: IconSessions },
+  { id: 'terminal' as const, Icon: IconTerminal },
+  { id: 'files' as const, Icon: IconFiles },
 ]
 
 export function MobileNav() {
-  const { t } = useTranslation()
   const { activeTab, setActiveTab } = useAppStore()
 
   return (
-    <nav className="flex border-b" style={{ borderColor: 'var(--border-subtle)', background: 'var(--bg-elevated)' }}>
-      {tabs.map((tab) => (
-        <button
-          key={tab.id}
-          onClick={() => setActiveTab(tab.id)}
-          className="flex-1 py-3 px-2 text-center text-sm transition-colors"
-          style={activeTab === tab.id
-            ? { color: 'var(--accent)', borderBottom: '2px solid var(--accent)', background: 'var(--accent-10)' }
-            : { color: 'var(--text-muted)' }
-          }
-        >
-          <span className="block text-lg">{tab.icon}</span>
-          <span className="block mt-1">{t(tab.labelKey)}</span>
-        </button>
-      ))}
-    </nav>
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'center',
+        padding: '6px 0',
+        background: 'var(--bg-elevated)',
+        borderTop: '1px solid var(--border-subtle)',
+        flexShrink: 0,
+      }}
+    >
+      <nav
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 40,
+          padding: '5px 32px',
+          borderRadius: 20,
+          background: 'var(--bg-base)',
+          border: '1px solid var(--border-subtle)',
+        }}
+      >
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 32,
+                height: 32,
+                color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+                background: isActive ? 'rgba(167,139,250,0.10)' : 'transparent',
+                border: 'none',
+                borderRadius: 6,
+                transition: 'all 0.15s ease',
+              }}
+              aria-label={tab.id}
+            >
+              <tab.Icon width={18} height={18} />
+            </button>
+          )
+        })}
+      </nav>
+    </div>
   )
 }
