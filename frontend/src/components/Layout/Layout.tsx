@@ -98,8 +98,8 @@ export function Layout() {
   return (
     <div
       ref={layoutRef}
-      className="flex h-screen"
-      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}
+      className="flex"
+      style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
       {/* Sidebar */}
       {sidebarOpen && (
@@ -185,8 +185,8 @@ function MobileLayout() {
 
   return (
     <div
-      className="flex flex-col h-screen"
-      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      className="flex flex-col"
+      style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <MobileStatusBar
         connected={connected}
