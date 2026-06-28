@@ -1,11 +1,12 @@
 import { useRef, useState, useCallback } from 'react'
-import { useAppStore } from '../../stores/appStore'
+import { useTranslation } from 'react-i18next'
+import { useAppStore, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { FileManager } from '../FileManager/FileManager'
-import { Settings } from '../Settings/Settings'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { MobileNav } from './MobileNav'
+import { MobileStatusBar } from './MobileStatusBar'
 
 export function Layout() {
   const [isDragging, setIsDragging] = useState(false)
@@ -90,14 +91,7 @@ export function Layout() {
 
   // Mobile layout
   if (isMobile) {
-    return (
-      <div className="flex flex-col h-screen" style={{ background: 'var(--bg-base)', color: 'var(--text-primary)' }}>
-        <MobileNav />
-        <div className="flex-1 overflow-hidden">
-          <MobileContent />
-        </div>
-      </div>
-    )
+    return <MobileLayout />
   }
 
   // Desktop layout: Sidebar | Terminal | FileManager
@@ -165,6 +159,69 @@ export function Layout() {
   )
 }
 
+function MobileLayout() {
+  const { t } = useTranslation()
+  const {
+    activeTab,
+    activeSessionId,
+    sessions,
+    connected,
+    mobileGestureEnabled,
+    setActiveTab,
+  } = useAppStore()
+
+  const handleSwipe = useCallback((direction: 'left' | 'right') => {
+    const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
+    const idx = order.indexOf(activeTab)
+    if (idx === -1) return
+    const next = direction === 'left' ? idx + 1 : idx - 1
+    if (next >= 0 && next < order.length) {
+      setActiveTab(order[next])
+    }
+  }, [activeTab, setActiveTab])
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId)
+  const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
+
+  return (
+    <div
+      className="flex flex-col h-screen"
+      style={{ background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+    >
+      <MobileStatusBar
+        connected={connected}
+        sessionName={activeSessionName}
+        onSessionClick={() => setActiveTab('sessions')}
+        onNewSession={() => setActiveTab('sessions')}
+      />
+      <div
+        className="flex-1 overflow-hidden"
+        onTouchStart={mobileGestureEnabled ? (e) => {
+          const touch = e.touches[0]
+          ;(e.currentTarget as HTMLDivElement).dataset.startX = String(touch.clientX)
+          ;(e.currentTarget as HTMLDivElement).dataset.startY = String(touch.clientY)
+        } : undefined}
+        onTouchEnd={mobileGestureEnabled ? (e) => {
+          const div = e.currentTarget as HTMLDivElement
+          const startX = parseFloat(div.dataset.startX ?? '0')
+          const startY = parseFloat(div.dataset.startY ?? '0')
+          const touch = e.changedTouches[0]
+          const dx = touch.clientX - startX
+          const dy = touch.clientY - startY
+          const edgeMargin = 24
+          if (Math.abs(dx) < Math.abs(dy)) return
+          if (Math.abs(dx) < 40) return
+          if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
+          handleSwipe(dx < 0 ? 'left' : 'right')
+        } : undefined}
+      >
+        <MobileContent />
+      </div>
+      <MobileNav />
+    </div>
+  )
+}
+
 function MobileContent() {
   const activeTab = useAppStore((s) => s.activeTab)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
@@ -176,8 +233,6 @@ function MobileContent() {
       return <FileManager />
     case 'sessions':
       return <Sidebar />
-    case 'settings':
-      return <Settings />
     default:
       return <Terminal key={activeSessionId ?? 'empty'} />
   }

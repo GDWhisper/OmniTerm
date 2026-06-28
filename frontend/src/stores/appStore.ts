@@ -11,7 +11,7 @@ interface FmSessionState {
   drawerMode: 'view' | 'edit' // drawer view/edit mode
 }
 
-interface AppState {
+export interface AppState {
   // Layout
   sidebarOpen: boolean
   sidebarCollapsed: boolean
@@ -45,7 +45,7 @@ interface AppState {
 
   // Mobile
   isMobile: boolean
-  activeTab: 'terminal' | 'files' | 'sessions' | 'settings'
+  activeTab: 'terminal' | 'files' | 'sessions'
   mobileGestureEnabled: boolean
   mobileFontSize: number
   mobileLastTab: string

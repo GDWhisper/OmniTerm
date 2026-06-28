@@ -6,7 +6,7 @@ import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
-import type { Project, Workspace, Session, DuplicateGroup, FileEntry } from '../../api/client'
+import type { Session, DuplicateGroup, FileEntry } from '../../api/client'
 import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
@@ -566,13 +566,6 @@ export function Sidebar() {
     }
   }
 
-  const handleProjKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleCreateProject()
-    }
-  }
-
   const handleSessKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -783,7 +776,6 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
-            const hasWorktrees = wtList.length > 0
             const projHasActiveSession = wtList.some((wt) =>
               sessionsForWorktree(wt.path).some((s) => s.is_active)
             )

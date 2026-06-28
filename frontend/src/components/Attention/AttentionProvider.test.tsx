@@ -112,7 +112,7 @@ function renderConsumer(
     return null
   }
 
-  root.render(React.createElement(TestProvider, { onAlert }, React.createElement(Consumer)))
+  root.render(React.createElement(TestProvider, { onAlert, children: React.createElement(Consumer) }))
   return { root, container }
 }
 
