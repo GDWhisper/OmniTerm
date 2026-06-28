@@ -105,7 +105,7 @@ export const useAppStore = create<AppState>((set) => ({
   fmSessionStates: {},
 
   connected: false,
-  isMobile: false,
+  isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
   mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '13'),
