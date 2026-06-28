@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
+import { MobileKeyBar } from './MobileKeyBar'
+import { useToastStore } from '../../stores/toastStore'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -10,8 +12,21 @@ export function Terminal() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const isMobile = useAppStore((s) => s.isMobile)
   const fontSize = useAppStore((s) => s.fontSize)
-  const { initTerminal } = useTerminal({ sessionId: activeSessionId, fontSize })
+  const mobileFontSize = useAppStore((s) => s.mobileFontSize)
+  const effectiveFontSize = isMobile ? mobileFontSize : fontSize
+  const addToast = useToastStore((s) => s.addToast)
+
+  const {
+    initTerminal,
+    terminal,
+    sendData,
+    scrollMode,
+    setScrollMode,
+    sendScrollKeys,
+    exitScrollMode,
+  } = useTerminal({ sessionId: activeSessionId, fontSize: effectiveFontSize })
 
   useEffect(() => {
     if (containerRef.current) {
@@ -19,6 +34,58 @@ export function Terminal() {
       return cleanup
     }
   }, [initTerminal])
+
+  const handleKey = (name: string) => {
+    if (!sendData) return
+    switch (name) {
+      case 'Ctrl':
+        // Mobile keybar doesn't have a persistent combo mode; instead we send
+        // the most common Ctrl sequence directly. A future iteration can add
+        // a combo latch if needed.
+        sendData('\x00')
+        break
+      case 'Esc':
+        sendData('\x1b')
+        if (scrollMode) exitScrollMode?.()
+        break
+      case 'Tab':
+        sendData('\t')
+        break
+      case '←':
+        sendData('\x1b[D')
+        break
+      case '→':
+        sendData('\x1b[C')
+        break
+      case '↑':
+        if (isMobile && scrollMode && sendScrollKeys) {
+          sendScrollKeys('up')
+        } else {
+          sendData('\x1b[A')
+        }
+        break
+      case '↓':
+        if (isMobile && scrollMode && sendScrollKeys) {
+          sendScrollKeys('down')
+        } else {
+          sendData('\x1b[B')
+        }
+        break
+      case '复制': {
+        const selection = terminal?.getSelection() || ''
+        if (selection) {
+          navigator.clipboard.writeText(selection).then(
+            () => addToast('success', t('terminal.copySuccess')),
+            () => {},
+          )
+        }
+        break
+      }
+      case '粘贴':
+        navigator.clipboard.readText().then((text) => sendData(text)).catch(() => {})
+        break
+    }
+  }
 
   if (!activeSessionId) {
     return (
@@ -48,8 +115,21 @@ export function Terminal() {
   }
 
   return (
-    <div style={{ height: '100%', background: 'var(--bg-base)' }}>
-      <div ref={containerRef} className="h-full w-full p-1" />
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}>
+      <div ref={containerRef} className="h-full w-full p-1" style={{ flex: 1, minHeight: 0 }} />
+      {isMobile && (
+        <MobileKeyBar
+          onKey={handleKey}
+          scrollMode={scrollMode ?? false}
+          onToggleScrollMode={() => {
+            if (scrollMode) {
+              exitScrollMode?.()
+            } else {
+              setScrollMode?.(true)
+            }
+          }}
+        />
+      )}
     </div>
   )
 }
