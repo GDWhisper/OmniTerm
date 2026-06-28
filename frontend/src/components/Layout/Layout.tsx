@@ -167,6 +167,7 @@ function MobileLayout() {
     sessions,
     connected,
     mobileGestureEnabled,
+    settingsOpen,
     setActiveTab,
   } = useAppStore()
 
@@ -218,6 +219,7 @@ function MobileLayout() {
         <MobileContent />
       </div>
       <MobileNav />
+      {settingsOpen && <SettingsPopup />}
     </div>
   )
 }
