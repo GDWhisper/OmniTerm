@@ -198,6 +198,14 @@ function MobileLayout() {
           from { transform: translateX(100%); }
           to { transform: translateX(0); }
         }
+        @keyframes mobileSlideOutLeft {
+          from { transform: translateX(0); }
+          to { transform: translateX(-100%); }
+        }
+        @keyframes mobileSlideOutRight {
+          from { transform: translateX(0); }
+          to { transform: translateX(100%); }
+        }
       `}</style>
       <MobileStatusBar
         connected={connected}
@@ -237,22 +245,47 @@ function MobileLayout() {
 function MobileContent() {
   const activeTab = useAppStore((s) => s.activeTab)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const [displayedTab, setDisplayedTab] = useState(activeTab)
+  const [animState, setAnimState] = useState<'idle' | 'exiting'>('idle')
 
-  switch (activeTab) {
+  useEffect(() => {
+    if (activeTab === displayedTab) return
+    
+    // Determine if current content needs exit animation
+    const needsExit = displayedTab === 'sessions' || displayedTab === 'files'
+    
+    if (needsExit) {
+      setAnimState('exiting')
+      const timer = setTimeout(() => {
+        setDisplayedTab(activeTab)
+        setAnimState('idle')
+      }, 200)
+      return () => clearTimeout(timer)
+    } else {
+      setDisplayedTab(activeTab)
+    }
+  }, [activeTab, displayedTab])
+
+  const getAnimation = () => {
+    if (animState === 'exiting') {
+      if (displayedTab === 'sessions') return 'mobileSlideOutLeft 0.2s ease-in forwards'
+      if (displayedTab === 'files') return 'mobileSlideOutRight 0.2s ease-in forwards'
+    }
+    // Enter animations
+    if (displayedTab === 'sessions') return 'mobileSlideInLeft 0.25s ease-out'
+    if (displayedTab === 'files') return 'mobileSlideInRight 0.25s ease-out'
+    return ''
+  }
+
+  const wrapperStyle = { height: '100%', animation: getAnimation() || undefined }
+
+  switch (displayedTab) {
     case 'terminal':
       return <Terminal key={activeSessionId ?? 'empty'} />
     case 'files':
-      return (
-        <div style={{ height: '100%', animation: 'mobileSlideInRight 0.25s ease-out' }}>
-          <FileManager />
-        </div>
-      )
+      return <div style={wrapperStyle}><FileManager /></div>
     case 'sessions':
-      return (
-        <div style={{ height: '100%', animation: 'mobileSlideInLeft 0.25s ease-out' }}>
-          <Sidebar />
-        </div>
-      )
+      return <div style={wrapperStyle}><Sidebar /></div>
     default:
       return <Terminal key={activeSessionId ?? 'empty'} />
   }
