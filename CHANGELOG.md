@@ -89,6 +89,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-06-29 12:00) `[frontend]` 点击 Sidebar 工作区时文件管理器未切换到目标目录 — 修复：worktree 点击时清除 activeSession，使 fmSource 回退到 workspace 模式（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-06-25 11:00) `[backend]` 迁移 SQL 中 `w.path` 修正为 `w.root_path` — 旧表列名错误导致迁移失败（`migrations/20260625_workspace_to_project.sql`）
 
 - (2026-06-23 19:30) `[frontend]` FileManager 搜索框改为图标触发式弹出 — 点击搜索图标后输入框浮现在图标下方，支持 Escape 和点击外部关闭（`frontend/src/components/FileManager/FileManager.tsx`）
