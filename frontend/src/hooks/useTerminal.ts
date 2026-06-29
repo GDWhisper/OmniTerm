@@ -59,6 +59,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const observerRef = useRef<ResizeObserver | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
+  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
+  const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
@@ -120,6 +122,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     ws.onclose = () => {
       useAppStore.getState().setConnected(false)
+      tmuxScrollModeRef.current = false
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
         termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
@@ -232,10 +235,13 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     ws.send(new TextEncoder().encode(key))
   }, [scrollMode])
 
-  /** Exit tmux copy mode by sending 'q' */
+  /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
   const exitScrollMode = useCallback(() => {
     if (!scrollMode) return
-    sendData('q')
+    if (tmuxScrollModeRef.current) {
+      sendData('q')
+      tmuxScrollModeRef.current = false
+    }
     setScrollMode(false)
   }, [scrollMode, sendData])
 
@@ -250,6 +256,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     keyHandlerAttachedRef.current = false
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
+    tmuxScrollModeRef.current = false
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.close()
@@ -352,6 +359,72 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     container.addEventListener('mouseup', handleMouseUp)
     mouseUpHandlerRef.current = () => {
       container.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    // Mobile touch-scroll: translate vertical drag into xterm scrollback scrolling.
+    // xterm.js only handles wheel events natively; touch events don't generate them.
+    // When xterm scrollback is exhausted, forward scroll to tmux via PageUp/PageDown
+    // key sequences so the user can browse tmux's own scrollback history.
+    let lastTouchY: number | null = null
+    const fontSizeForScroll = () => (termRef.current?.options.fontSize ?? fontSizeRef.current)
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        lastTouchY = e.touches[0].clientY
+      }
+    }
+    const handleTouchMove = (e: TouchEvent) => {
+      if (lastTouchY === null || e.touches.length !== 1) return
+      const y = e.touches[0].clientY
+      const deltaY = lastTouchY - y // positive = finger up (want older lines)
+      const lineH = Math.max(1, fontSizeForScroll())
+      const lines = Math.round(deltaY / lineH)
+      if (lines !== 0 && termRef.current) {
+        const term = termRef.current
+        const wantOlder = lines > 0  // scrolling up → older content
+        const viewportY = term.buffer.active.viewportY
+        const atScrollTop = viewportY <= 0
+
+        if (wantOlder && atScrollTop) {
+          // xterm scrollback exhausted upward — forward to tmux
+          const ws = wsRef.current
+          if (ws?.readyState === WebSocket.OPEN) {
+            if (!tmuxScrollModeRef.current) {
+              // First time: enter tmux copy mode (Ctrl+B then [)
+              ws.send(new TextEncoder().encode('\x02['))
+              tmuxScrollModeRef.current = true
+            }
+            // tmux redraws via cursor repositioning (no new xterm scrollback),
+            // so atScrollTop stays true on subsequent swipes — just send PageUp
+            ws.send(new TextEncoder().encode('\x1b[5~'))
+          }
+        } else {
+          // Normal xterm scrollback scrolling
+          term.scrollLines(-lines)
+        }
+      }
+      lastTouchY = y
+    }
+    const handleTouchEnd = () => {
+      lastTouchY = null
+    }
+
+    container.addEventListener('touchstart', handleTouchStart, { passive: true })
+    container.addEventListener('touchmove', handleTouchMove, { passive: true })
+    container.addEventListener('touchend', handleTouchEnd)
+
+    // Store cleanup refs for disposeTerminal
+    const touchCleanup = () => {
+      container.removeEventListener('touchstart', handleTouchStart)
+      container.removeEventListener('touchmove', handleTouchMove)
+      container.removeEventListener('touchend', handleTouchEnd)
+    }
+
+    // Extend mouseUpHandlerRef cleanup to also clean touch handlers
+    const origMouseUpCleanup = mouseUpHandlerRef.current
+    mouseUpHandlerRef.current = () => {
+      origMouseUpCleanup?.()
+      touchCleanup()
     }
 
     // Signal terminal is ready — triggers WS effects

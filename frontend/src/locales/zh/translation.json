@@ -50,6 +50,8 @@
   "settings.keybindingHint": "现代化模式：Ctrl+Shift+→/↓ 分屏，Ctrl+Shift+Q 新建窗口，Ctrl+Shift+X 关闭",
   "settings.autoCopySelect": "拖选自动复制",
   "settings.autoCopySelectHint": "按住 Shift 拖拽选中文本，松手自动复制到剪贴板",
+  "settings.mobileGesture": "边缘滑动手势",
+  "settings.mobileGestureHint": "左右滑动切换标签页（终端 ↔ 文件 ↔ 会话）",
   "terminal.noSession": "选择或创建一个会话",
   "terminal.hint": "使用左侧边栏开始",
   "terminal.status.connected": "已连接",

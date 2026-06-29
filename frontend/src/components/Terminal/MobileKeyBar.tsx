@@ -6,11 +6,7 @@ interface MobileKeyBarProps {
   onToggleScrollMode: () => void
 }
 
-const keys = [
-  ['Ctrl', 'Esc', 'Tab'],
-  ['←', '→', '↑', '↓'],
-  ['复制', '粘贴'],
-]
+const funcKeys = ['Ctrl', 'Esc', 'Tab', '复制', '粘贴']
 
 export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
   return (
@@ -27,36 +23,30 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
         flexShrink: 0,
       }}
     >
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        {keys[0].map((k) => (
+      {/* Row 1: function keys + ↑ + 滚动 */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {funcKeys.map((k) => (
+          <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
+        ))}
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+          <button onClick={() => onKey('↑')} style={keyButtonStyle}>↑</button>
           <button
-            key={k}
-            onClick={() => onKey(k)}
-            style={keyButtonStyle}
+            onClick={onToggleScrollMode}
+            style={{
+              ...keyButtonStyle,
+              color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
+              background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
+            }}
           >
-            {k}
+            滚动
           </button>
-        ))}
-        <button
-          onClick={onToggleScrollMode}
-          style={{
-            ...keyButtonStyle,
-            color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
-            background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
-          }}
-        >
-          滚动
-        </button>
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        {keys[1].map((k) => (
-          <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        {keys[2].map((k) => (
-          <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
-        ))}
+      {/* Row 2: ← ↓ → (right-aligned, T-shape with ↑ above) */}
+      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+        <button onClick={() => onKey('←')} style={keyButtonStyle}>←</button>
+        <button onClick={() => onKey('↓')} style={keyButtonStyle}>↓</button>
+        <button onClick={() => onKey('→')} style={keyButtonStyle}>→</button>
       </div>
     </div>
   )

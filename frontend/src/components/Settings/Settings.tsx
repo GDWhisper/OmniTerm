@@ -96,6 +96,8 @@ export function Settings() {
     setMobileFontSize,
     autoCopySelect,
     setAutoCopySelect,
+    mobileGestureEnabled,
+    setMobileGestureEnabled,
   } = useAppStore()
 
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
@@ -233,6 +235,31 @@ export function Settings() {
           </button>
           <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.autoCopySelectHint')}</p>
         </section>
+
+        {/* ── Mobile gesture toggle (mobile only) ── */}
+        {isMobile && (
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.mobileGesture')}</h3>
+          <button
+            onClick={() => setMobileGestureEnabled(!mobileGestureEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(mobileGestureEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: mobileGestureEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {mobileGestureEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.mobileGestureHint')}</p>
+        </section>
+        )}
 
         {/* ── Keybinding Mode (HIDDEN) ─────────────────────────────────
           * 现代快捷键映射方案已验证可行，但独立实现维护成本高。

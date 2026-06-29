@@ -7,6 +7,7 @@ import { FileManager } from '../FileManager/FileManager'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
+import { useVisualViewportHeight } from '../../hooks/useMediaQuery'
 
 export function Layout() {
   const [isDragging, setIsDragging] = useState(false)
@@ -170,6 +171,7 @@ function MobileLayout() {
     settingsOpen,
     setActiveTab,
   } = useAppStore()
+  const vvHeight = useVisualViewportHeight()
 
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
@@ -187,7 +189,7 @@ function MobileLayout() {
   return (
     <div
       className="flex flex-col"
-      style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      style={{ height: `${vvHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <style>{`
         @keyframes mobileSlideInLeft {
