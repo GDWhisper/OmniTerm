@@ -7,9 +7,8 @@ interface MobileKeyBarProps {
 }
 
 const keys = [
-  ['Ctrl', 'Esc', 'Tab'],
+  ['Ctrl', 'Esc', 'Tab', '滚动', '复制', '粘贴'],
   ['←', '→', '↑', '↓'],
-  ['复制', '粘贴'],
 ]
 
 export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
@@ -28,33 +27,27 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       }}
     >
       <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        {keys[0].map((k) => (
-          <button
-            key={k}
-            onClick={() => onKey(k)}
-            style={keyButtonStyle}
-          >
-            {k}
-          </button>
-        ))}
-        <button
-          onClick={onToggleScrollMode}
-          style={{
-            ...keyButtonStyle,
-            color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
-            background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
-          }}
-        >
-          滚动
-        </button>
+        {keys[0].map((k) => {
+          const isScroll = k === '滚动'
+          return (
+            <button
+              key={k}
+              onClick={isScroll ? onToggleScrollMode : () => onKey(k)}
+              style={{
+                ...keyButtonStyle,
+                ...(isScroll ? {
+                  color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
+                  background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
+                } : {}),
+              }}
+            >
+              {k}
+            </button>
+          )
+        })}
       </div>
       <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
         {keys[1].map((k) => (
-          <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-        {keys[2].map((k) => (
           <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
         ))}
       </div>
