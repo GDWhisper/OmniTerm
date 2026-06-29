@@ -37,6 +37,8 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 |------|---------------------|---------------------|
 | `docs/architecture-backend.md` | 修改 Rust 后端（API 路由、中间件、数据库模型、tmux/fs 模块） | 新增 API 端点、模块拆分/合并、变更 CLI 参数或环境变量 |
 | `docs/architecture-frontend.md` | 修改 React 前端（组件、store、hook、路由、依赖升级） | 新增组件/store/hook、目录结构变化、关键依赖版本变更 |
+| `docs/frontend-patterns.md` | 决定组件是否要拆出 data.ts、复用已有前端模式时 | 新增前端模式 entry、记录已有约定 |
+| `docs/agent-edit-manual.md` | 接具体修改任务（加命令/改配置/修 bug/加翻译）时，搜目标组件列文件 | 新增「有特殊维护约定的组件」entry、记录修改路径 |
 | `docs/branch-workflows.md` | 执行 git 分支操作（merge、rebase、cherry-pick）、操作多 worktree | 分支策略变更、新增分支类型、安全守则调整 |
 | `docs/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote、执行 release 排除脚本 | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
 | `docs/release-plan.md` | 发布正式版本（打 tag、推送 CI、多平台构建） | 发布流程变更、CI 配置调整 |
