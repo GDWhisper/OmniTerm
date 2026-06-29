@@ -17,18 +17,37 @@ export function useMobileDetection() {
 }
 
 export function useVisualViewportHeight() {
-  const [height, setHeight] = useState(() => window.visualViewport?.height ?? window.innerHeight)
+  const [height, setHeight] = useState(() => {
+    const vv = window.visualViewport
+    if (!vv) return window.innerHeight
+    // 使用 offsetTop 来计算键盘上方可见区域高度
+    // 在 iOS 上，键盘弹出时 offsetTop 会增加
+    return vv.height
+  })
 
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
 
-    const handler = () => setHeight(vv.height)
-    vv.addEventListener('resize', handler)
-    vv.addEventListener('scroll', handler)
+    const update = () => {
+      // 直接使用 visualViewport.height - 这是键盘上方可见区域的高度
+      // 同时用 window.innerHeight 作为上限，防止某些浏览器行为异常
+      const newHeight = Math.min(vv.height, window.innerHeight)
+      console.log('[Viewport] vv.height:', vv.height, 'innerHeight:', window.innerHeight, 'offsetTop:', vv.offsetTop, '-> using:', newHeight)
+      setHeight(newHeight)
+    }
+    
+    // 同时监听 visualViewport 和 window 的 resize 事件
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    window.addEventListener('resize', update)
+    
+    update() // 初始化
+    
     return () => {
-      vv.removeEventListener('resize', handler)
-      vv.removeEventListener('scroll', handler)
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
     }
   }, [])
 
