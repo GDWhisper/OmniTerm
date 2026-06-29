@@ -16,34 +16,25 @@ export function useMobileDetection() {
   }, [setIsMobile])
 }
 
-export function useVisualViewportHeight() {
-  const [height, setHeight] = useState(() => {
-    const vv = window.visualViewport
-    if (!vv) return window.innerHeight
-    // 使用 offsetTop 来计算键盘上方可见区域高度
-    // 在 iOS 上，键盘弹出时 offsetTop 会增加
-    return vv.height
-  })
+export function useKeyboardHeight() {
+  const [kbHeight, setKbHeight] = useState(0)
 
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
 
     const update = () => {
-      // 直接使用 visualViewport.height - 这是键盘上方可见区域的高度
-      // 同时用 window.innerHeight 作为上限，防止某些浏览器行为异常
-      const newHeight = Math.min(vv.height, window.innerHeight)
-      console.log('[Viewport] vv.height:', vv.height, 'innerHeight:', window.innerHeight, 'offsetTop:', vv.offsetTop, '-> using:', newHeight)
-      setHeight(newHeight)
+      // 键盘高度 = 布局视口 - 可见视口
+      const kb = Math.max(0, window.innerHeight - vv.height)
+      console.log('[Keyboard]', { innerHeight: window.innerHeight, vvHeight: vv.height, kbHeight: kb })
+      setKbHeight(kb)
     }
-    
-    // 同时监听 visualViewport 和 window 的 resize 事件
+
     vv.addEventListener('resize', update)
     vv.addEventListener('scroll', update)
     window.addEventListener('resize', update)
-    
-    update() // 初始化
-    
+    update()
+
     return () => {
       vv.removeEventListener('resize', update)
       vv.removeEventListener('scroll', update)
@@ -51,5 +42,5 @@ export function useVisualViewportHeight() {
     }
   }, [])
 
-  return height
+  return kbHeight
 }

@@ -16,7 +16,7 @@ git merge main --no-commit
 
 # 排除开发文件（按 AGENTS.md 规则）
 git reset HEAD \
-  CLAUDE.md AGENTS.md Agent \
+  CLAUDE.md AGENTS.md \
   .pi/ .qoder/ .codegraph/ \
   openspec/ docs/superpowers/ \
   docs/proposal-* docs/requirements.md docs/debug-log.md \
