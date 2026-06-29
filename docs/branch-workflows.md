@@ -20,11 +20,14 @@
 4. **独立验证**：在 debug 专属端口（19777/19778）启动服务测试
 5. **合入 dev**：切换到 `~/coding/OmniTerm-dev` 执行 `git merge debug`
 
-### dev 分支
+### dev 分支（主开发分支，最活跃）
 
-- 在 `~/coding/OmniTerm-dev` 中开发、提交
-- 开发文档/配置用 `docs:` 或 `chore:` 前缀
-- 定期合并 `debug` 的修复
+- **作用**：日常功能开发 + bug 修复的主战场，所有代码改动先在此完成
+- **工作目录**：`~/coding/OmniTerm-dev`
+- **启动**：`./dev.sh start`（后端 9777 + 前端 9778）
+- **提交规范**：功能/修复用 `feat:` / `fix:`，开发文档/配置用 `docs:` / `chore:`
+- **合入来源**：定期从 `debug` 合并修复（`git merge debug`）
+- **合出目标**：功能稳定后合并到 `main` 进入发布前哨
 
 ### main 分支（发布前哨站）
 
