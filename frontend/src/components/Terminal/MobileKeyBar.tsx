@@ -26,12 +26,13 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       {/* Row 1: function keys + ↑ + 滚动 */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {funcKeys.map((k) => (
-          <button key={k} onClick={() => onKey(k)} style={keyButtonStyle}>{k}</button>
+          <button key={k} onClick={() => onKey(k)} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>{k}</button>
         ))}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button onClick={() => onKey('↑')} style={keyButtonStyle}>↑</button>
+          <button onClick={() => onKey('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
           <button
             onClick={onToggleScrollMode}
+            onPointerDown={(e) => e.preventDefault()}
             style={{
               ...keyButtonStyle,
               color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
@@ -44,9 +45,9 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       </div>
       {/* Row 2: ← ↓ → (right-aligned, T-shape with ↑ above) */}
       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-        <button onClick={() => onKey('←')} style={keyButtonStyle}>←</button>
-        <button onClick={() => onKey('↓')} style={keyButtonStyle}>↓</button>
-        <button onClick={() => onKey('→')} style={keyButtonStyle}>→</button>
+        <button onClick={() => onKey('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
+        <button onClick={() => onKey('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
+        <button onClick={() => onKey('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
       </div>
     </div>
   )
