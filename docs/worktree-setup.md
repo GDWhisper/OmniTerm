@@ -33,14 +33,14 @@ git merge main --no-commit     # 合并 main 最新代码
 
 # 排除开发相关文件
 git reset HEAD \
-  CLAUDE.md AGENTS.md Agent \
+  CLAUDE.md AGENTS.md \
   .pi/ .qoder/ .codegraph/ \
   openspec/ \
   docs/superpowers/ docs/proposal-* docs/requirements.md \
   .dev/ omniterm.db.bak \
   dev.sh PROGRESS.md CHANGELOG.md
 git checkout -- \
-  CLAUDE.md AGENTS.md Agent \
+  CLAUDE.md AGENTS.md \
   .pi/ .qoder/ .codegraph/ \
   openspec/ \
   docs/superpowers/ docs/proposal-* docs/requirements.md \
