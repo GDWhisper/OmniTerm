@@ -15,7 +15,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
 2. **CHANGELOG 只写用户确认过的内容**
-3. **用 CodeGraph 查源码**（`codegraph_explore` / `codegraph_node`），配置文件/文档才用 Read/Grep
+3. **用 CodeGraph 查源码**：先 `codegraph sync` 确认索引最新，再用 `codegraph_explore` / `codegraph_node`。配置文件、文档、非索引文件才用 Read/Grep
 
 ## 工程准则
 
