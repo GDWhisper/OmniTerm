@@ -59,6 +59,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const observerRef = useRef<ResizeObserver | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
+  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
+  const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
@@ -120,6 +122,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     ws.onclose = () => {
       useAppStore.getState().setConnected(false)
+      tmuxScrollModeRef.current = false
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
         termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
@@ -250,6 +253,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     keyHandlerAttachedRef.current = false
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
+    tmuxScrollModeRef.current = false
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.close()
@@ -356,6 +360,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
     // Mobile touch-scroll: translate vertical drag into xterm scrollback scrolling.
     // xterm.js only handles wheel events natively; touch events don't generate them.
+    // When xterm scrollback is exhausted, forward scroll to tmux via PageUp/PageDown
+    // key sequences so the user can browse tmux's own scrollback history.
     let lastTouchY: number | null = null
     const fontSizeForScroll = () => (termRef.current?.options.fontSize ?? fontSizeRef.current)
 
@@ -371,7 +377,37 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       const lineH = Math.max(1, fontSizeForScroll())
       const lines = Math.round(deltaY / lineH)
       if (lines !== 0 && termRef.current) {
-        termRef.current.scrollLines(-lines)
+        const term = termRef.current
+        const wantOlder = lines > 0  // scrolling up → older content
+        const wantNewer = lines < 0  // scrolling down → newer content
+        const viewportY = term.buffer.active.viewportY
+        const baseY = term.buffer.active.baseY
+        const atScrollTop = viewportY <= 0
+        const atScrollBottom = viewportY >= baseY
+
+        if (wantOlder && atScrollTop) {
+          // xterm scrollback exhausted upward — forward to tmux
+          const ws = wsRef.current
+          if (ws?.readyState === WebSocket.OPEN) {
+            if (!tmuxScrollModeRef.current) {
+              // Enter tmux copy mode: Ctrl+B then [
+              ws.send(new TextEncoder().encode('\x02['))
+              tmuxScrollModeRef.current = true
+            }
+            // Send PageUp
+            ws.send(new TextEncoder().encode('\x1b[5~'))
+          }
+        } else if (wantNewer && atScrollBottom && tmuxScrollModeRef.current) {
+          // Scrolling back to live view — exit tmux copy mode
+          const ws = wsRef.current
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode('q'))
+          }
+          tmuxScrollModeRef.current = false
+        } else {
+          // Normal xterm scrollback scrolling
+          term.scrollLines(-lines)
+        }
       }
       lastTouchY = y
     }
