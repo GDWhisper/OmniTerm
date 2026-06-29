@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore } from '../../stores/appStore'
+import { canFullscreen } from '../../hooks/useImmersive'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -98,6 +99,8 @@ export function Settings() {
     setAutoCopySelect,
     mobileGestureEnabled,
     setMobileGestureEnabled,
+    immersiveMode,
+    setImmersiveMode,
   } = useAppStore()
 
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
@@ -258,6 +261,31 @@ export function Settings() {
             {mobileGestureEnabled ? 'ON' : 'OFF'}
           </button>
           <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.mobileGestureHint')}</p>
+        </section>
+        )}
+
+        {/* ── Immersive mode (mobile only, requires Fullscreen API support) ── */}
+        {isMobile && canFullscreen() && (
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.immersiveMode')}</h3>
+          <button
+            onClick={() => setImmersiveMode(!immersiveMode)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(immersiveMode ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: immersiveMode ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {immersiveMode ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.immersiveModeHint')}</p>
         </section>
         )}
 

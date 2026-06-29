@@ -52,6 +52,8 @@ export interface AppState {
 
   // Settings panel
   settingsOpen: boolean
+  tmuxCheatsheetOpen: boolean
+  immersiveMode: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -59,6 +61,7 @@ export interface AppState {
   toggleFileManager: () => void
   toggleFileManagerCollapsed: () => void
   toggleSettings: () => void
+  toggleTmuxCheatsheet: () => void
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
@@ -75,6 +78,7 @@ export interface AppState {
   setActiveTab: (tab: AppState['activeTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
+  setImmersiveMode: (v: boolean) => void
 
   // FM session actions
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
@@ -111,12 +115,15 @@ export const useAppStore = create<AppState>((set) => ({
   mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '13'),
   mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
+  tmuxCheatsheetOpen: false,
+  immersiveMode: localStorage.getItem('omniterm_immersive_mode') === 'true',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
   toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen })),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, tmuxCheatsheetOpen: false })),
+  toggleTmuxCheatsheet: () => set((s) => ({ tmuxCheatsheetOpen: !s.tmuxCheatsheetOpen, settingsOpen: false })),
 
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
 
@@ -171,6 +178,10 @@ export const useAppStore = create<AppState>((set) => ({
     const clamped = Math.max(12, Math.min(20, s))
     localStorage.setItem('omniterm_mobile_font_size', String(clamped))
     set({ mobileFontSize: clamped })
+  },
+  setImmersiveMode: (v) => {
+    localStorage.setItem('omniterm_immersive_mode', String(v))
+    set({ immersiveMode: v })
   },
 
   setFmSessionMode: (sessionId, mode) =>

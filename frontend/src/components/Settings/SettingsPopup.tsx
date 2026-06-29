@@ -8,11 +8,12 @@ const GAP = 8
 export function SettingsPopup() {
   const ref = useRef<HTMLDivElement>(null)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
+  const isMobile = useAppStore((s) => s.isMobile)
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 })
 
   // Calculate position based on gear button's bounding rect
   const calcPos = useCallback(() => {
-    const btn = document.querySelector('[data-settings-toggle]') as HTMLElement | null
+    const btn = document.querySelector('[data-toggle="settings"]') as HTMLElement | null
     if (!btn) return
     const rect = btn.getBoundingClientRect()
     const vw = window.innerWidth
@@ -41,7 +42,7 @@ export function SettingsPopup() {
     const popupRect = el.getBoundingClientRect()
     if (popupRect.top < 0) {
       // Flip: show below the button instead
-      const btn = document.querySelector('[data-settings-toggle]') as HTMLElement | null
+      const btn = document.querySelector('[data-toggle="settings"]') as HTMLElement | null
       if (btn) {
         const rect = btn.getBoundingClientRect()
         const vw = window.innerWidth
@@ -57,7 +58,7 @@ export function SettingsPopup() {
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      if (ref.current && !ref.current.contains(target) && !target.closest('[data-settings-toggle]')) {
+      if (ref.current && !ref.current.contains(target) && !target.closest('[data-toggle="settings"]')) {
         toggleSettings()
       }
     }
@@ -81,15 +82,29 @@ export function SettingsPopup() {
       className="settings-popup"
       style={{
         position: 'fixed',
-        ...pos,
-        width: POPUP_WIDTH,
-        maxHeight: 'calc(100dvh - 16px)',
+        // Mobile: full width bottom sheet; Desktop: positioned popup
+        ...(isMobile
+          ? {
+              left: 0,
+              right: 0,
+              bottom: 0,
+              maxHeight: '85dvh',
+              borderRadius: '16px 16px 0 0',
+            }
+          : {
+              ...pos,
+              maxHeight: 'calc(100dvh - 16px)',
+              borderRadius: 10,
+            }),
+        width: isMobile ? '100%' : POPUP_WIDTH,
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',
-        borderRadius: 10,
+        borderTopWidth: isMobile ? '2px' : '1px',
+        borderTopColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
         boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
         overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
