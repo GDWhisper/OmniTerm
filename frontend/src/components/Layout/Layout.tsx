@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
