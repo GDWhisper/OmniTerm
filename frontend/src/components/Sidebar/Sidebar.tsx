@@ -858,6 +858,7 @@ export function Sidebar() {
                               }}
                               onClick={() => {
                                 setActiveProject(proj.id)
+                                setActiveSession(null)
                                 setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
                               }}
                             >
