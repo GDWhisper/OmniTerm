@@ -42,13 +42,11 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
           </button>
         </div>
       </div>
-      {/* Row 2: ← ↓ → (keyboard T-shape, ↓ centered under ↑) */}
+      {/* Row 2: ← ↓ → (right-aligned, T-shape with ↑ above) */}
       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-        <div style={{ display: 'flex', gap: 6, marginRight: 46 }}>
-          <button onClick={() => onKey('←')} style={keyButtonStyle}>←</button>
-          <button onClick={() => onKey('↓')} style={keyButtonStyle}>↓</button>
-          <button onClick={() => onKey('→')} style={keyButtonStyle}>→</button>
-        </div>
+        <button onClick={() => onKey('←')} style={keyButtonStyle}>←</button>
+        <button onClick={() => onKey('↓')} style={keyButtonStyle}>↓</button>
+        <button onClick={() => onKey('→')} style={keyButtonStyle}>→</button>
       </div>
     </div>
   )
