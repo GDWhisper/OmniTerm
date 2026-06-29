@@ -235,10 +235,13 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     ws.send(new TextEncoder().encode(key))
   }, [scrollMode])
 
-  /** Exit tmux copy mode by sending 'q' */
+  /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
   const exitScrollMode = useCallback(() => {
     if (!scrollMode) return
-    sendData('q')
+    if (tmuxScrollModeRef.current) {
+      sendData('q')
+      tmuxScrollModeRef.current = false
+    }
     setScrollMode(false)
   }, [scrollMode, sendData])
 
@@ -379,31 +382,22 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
       if (lines !== 0 && termRef.current) {
         const term = termRef.current
         const wantOlder = lines > 0  // scrolling up → older content
-        const wantNewer = lines < 0  // scrolling down → newer content
         const viewportY = term.buffer.active.viewportY
-        const baseY = term.buffer.active.baseY
         const atScrollTop = viewportY <= 0
-        const atScrollBottom = viewportY >= baseY
 
         if (wantOlder && atScrollTop) {
           // xterm scrollback exhausted upward — forward to tmux
           const ws = wsRef.current
           if (ws?.readyState === WebSocket.OPEN) {
             if (!tmuxScrollModeRef.current) {
-              // Enter tmux copy mode: Ctrl+B then [
+              // First time: enter tmux copy mode (Ctrl+B then [)
               ws.send(new TextEncoder().encode('\x02['))
               tmuxScrollModeRef.current = true
             }
-            // Send PageUp
+            // tmux redraws via cursor repositioning (no new xterm scrollback),
+            // so atScrollTop stays true on subsequent swipes — just send PageUp
             ws.send(new TextEncoder().encode('\x1b[5~'))
           }
-        } else if (wantNewer && atScrollBottom && tmuxScrollModeRef.current) {
-          // Scrolling back to live view — exit tmux copy mode
-          const ws = wsRef.current
-          if (ws?.readyState === WebSocket.OPEN) {
-            ws.send(new TextEncoder().encode('q'))
-          }
-          tmuxScrollModeRef.current = false
         } else {
           // Normal xterm scrollback scrolling
           term.scrollLines(-lines)
