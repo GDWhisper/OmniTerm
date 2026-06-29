@@ -20,9 +20,10 @@ export function useVisualViewportHeight() {
   const [height, setHeight] = useState(() => {
     const vv = window.visualViewport
     if (!vv) return window.innerHeight
-    // 使用 offsetTop 来计算键盘上方可见区域高度
-    // 在 iOS 上，键盘弹出时 offsetTop 会增加
-    return vv.height
+    // 处理两种情况：
+    // 1. 页面未滚动（键盘未打开或不支持）：使用 visualViewport.height
+    // 2. 页面滚动（键盘打开后页面自动滚动）：使用 window.innerHeight - offsetTop
+    return vv.offsetTop > 0 ? window.innerHeight - vv.offsetTop : vv.height
   })
 
   useEffect(() => {
@@ -30,14 +31,16 @@ export function useVisualViewportHeight() {
     if (!vv) return
 
     const update = () => {
-      // 直接使用 visualViewport.height - 这是键盘上方可见区域的高度
-      // 同时用 window.innerHeight 作为上限，防止某些浏览器行为异常
-      const newHeight = Math.min(vv.height, window.innerHeight)
-      console.log('[Viewport] vv.height:', vv.height, 'innerHeight:', window.innerHeight, 'offsetTop:', vv.offsetTop, '-> using:', newHeight)
+      // 当页面滚动时（offsetTop > 0），可见区域 = window.innerHeight - offsetTop
+      // 当页面未滚动时（offsetTop = 0），可见区域 = visualViewport.height
+      const newHeight = vv.offsetTop > 0 
+        ? window.innerHeight - vv.offsetTop 
+        : vv.height
+      console.log('[Viewport] offsetTop:', vv.offsetTop, 'vv.height:', vv.height, 'innerHeight:', window.innerHeight, '-> using:', newHeight)
       setHeight(newHeight)
     }
     
-    // 同时监听 visualViewport 和 window 的 resize 事件
+    // 同时监听 visualViewport 和 window 的 resize/scroll 事件
     vv.addEventListener('resize', update)
     vv.addEventListener('scroll', update)
     window.addEventListener('resize', update)
