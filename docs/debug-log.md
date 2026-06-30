@@ -176,3 +176,29 @@ const fmSource = useMemo(() => {
 - React render 中创建的对象字面量（`{}`、`[]`）绝不能直接放进 `useCallback` / `useEffect` / `useMemo` 的依赖数组，必须用 `useMemo` 稳定引用
 - TypeScript 无法检测此 bug —— 对象内容相同但引用不同，运行时才能暴露
 - `useCallback` 依赖数组中有对象引用时，向上追溯该对象来源：render 中每次新建 → 需要 `useMemo`
+
+---
+
+## 2026-06-30: FileManager 列宽拖动不跟手
+
+**症状**：FileManager 表头列（name / mtime / size）拖动调整宽度时明显延迟、不跟手；文件数量越多越卡。
+
+**根因**：`onMouseMove` 每次触发都调用 `setColWidths`，导致整个 `FileManager` 组件（958 行巨组件，含大量 hooks、state、子组件、`<tbody>{files.map(...)}` 整张文件列表）在 60fps 频率下完整重渲染。文件多时是 O(N) 开销，主线程被占满，UI 卡顿，拖拽条跟不上鼠标。
+
+**调试过程**：
+1. 读 `frontend/src/components/FileManager/FileManager.tsx:208-225` 的 resize useEffect，确认 `setColWidths` 在 mousemove 中调用
+2. 查 `docs/debug-log.md` 2026-06-23「拖拽条不跟手」条 —— 但那条修的是侧边栏宽度（`setSidebarWidth` + CSS transition），与列宽是不同的拖动，根因不同
+3. 查 `frontend/src/index.css:488-580` 的 `fm-table` / `fm-th-resize` 样式，**无 CSS transition 涉及列宽**，排除 transition 因素
+4. 排除 localStorage 写入（列宽 state 本来就不持久化）
+5. 锁定根因：React 重渲染而非 CSS / I/O
+
+**修复**：
+- 三个 `<col>` 元素加 ref（`colRefs.current.name / mtime / size`）
+- `onMouseMove` 只做 DOM 直接写入（`colEl.style.width = \`${newW}px\``），**不调** `setColWidths`
+- `onMouseUp` 时读 col 元素的当前 width，调一次 `setColWidths` 同步最终值 —— 保证 sort、文件切换、目录导航等 React 流程不丢状态
+- 验证：`pnpm tsc --noEmit` 通过；`pnpm test` 21/21 通过
+
+**教训**：
+- 大组件中 `mousemove`/`scroll` 触发 `setState` 等于 O(component size) 重渲染；应只更新 DOM，松手时再 sync state 一次
+- 同一份 debug-log 之前记录的「拖拽条不跟手」（侧边栏宽）虽然症状相似，但**根因不同**（localStorage + transition vs. React re-render）。表面相似 ≠ 同一 bug，逐案例分析
+- `<col>` 元素的 inline `style.width` 是 60fps 拖动列宽的标准抓手 —— 不依赖 React、不依赖 CSS variables、改动最小
