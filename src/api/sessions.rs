@@ -40,9 +40,6 @@ async fn list_sessions(
     // Enrich sessions with activity state and agent state from tmux
     for session in &mut sessions {
         if let Some(ref tmux_name) = session.tmux_session_name {
-            if let Err(e) = state.activity_monitor.ensure_session(tmux_name).await {
-                error!("failed to ensure control mode for session {}: {}", tmux_name, e);
-            }
             session.is_active = state.activity_monitor.is_active(tmux_name).await;
 
             if let Ok(Some(snapshot)) = tmux::get_session_agent_option(tmux_name).await {

@@ -90,6 +90,12 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
 
     info!("terminal WS connected: session={} tmux={}", session_id, tmux_name);
 
+    // Establish control mode connection to track session activity.
+    // Failure is non-fatal: terminal I/O goes through a separate PTY channel.
+    if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
+        warn!("failed to ensure control mode for session {}: {}", tmux_name, e);
+    }
+
     // Check if hooks are enabled for this session
     let hook_enabled: bool = sqlx::query_as(
         "SELECT hook_enabled FROM sessions WHERE id = ?",

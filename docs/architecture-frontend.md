@@ -27,6 +27,7 @@ src/
     ├── Terminal/ — Terminal.tsx
     ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx
     ├── Settings/ — Settings.tsx, SettingsPopup.tsx
+    ├── TmuxCheatsheet/ — TmuxCheatsheet.tsx (render), TmuxCheatsheetPopup.tsx (popup), data.ts (command list, single source of truth — 增/删/改命令改本文件 + 两个 translation.json；维护指引见 data.ts 顶部 JSDoc)
     ├── Icons/ — GitBranchIcon.tsx, KeyboardIcon.tsx
     ├── Modal/ — Modal.tsx, ConfirmDialog.tsx
     └── Toast/ — Toast.tsx

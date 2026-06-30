@@ -5,6 +5,7 @@ import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { FileManager } from '../FileManager/FileManager'
 import { SettingsPopup } from '../Settings/SettingsPopup'
+import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
@@ -16,6 +17,7 @@ export function Layout() {
     sidebarOpen,
     sidebarCollapsed,
     settingsOpen,
+    tmuxCheatsheetOpen,
     fileManagerOpen,
     fileManagerCollapsed,
     sidebarWidth,
@@ -156,6 +158,7 @@ export function Layout() {
 
       {/* Settings popup — fixed positioning, independent of all panels */}
       {settingsOpen && <SettingsPopup />}
+      {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
     </div>
   )
 }
@@ -189,7 +192,7 @@ function MobileLayout() {
   return (
     <div
       className="flex flex-col"
-      style={{ height: '100dvh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      style={{ height: '100vh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <style>{`
         @keyframes mobileSlideInLeft {

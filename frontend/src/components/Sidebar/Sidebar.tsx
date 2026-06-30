@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
+import { BookIcon } from '../Icons/BookIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
 import type { Session, DuplicateGroup, FileEntry } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -13,8 +14,51 @@ import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 
-
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+
+function SidebarBottomButton({
+  toggle,
+  icon,
+  title,
+  onClick,
+  size = 26,
+  className = '',
+}: {
+  toggle: string
+  icon: ReactNode
+  title: string
+  onClick: () => void
+  size?: number
+  className?: string
+}) {
+  return (
+    <button
+      data-toggle={toggle}
+      onClick={onClick}
+      className={`flex items-center justify-center rounded transition-all ${className}`}
+      style={{
+        width: size,
+        height: size,
+        border: '1px solid var(--border-strong)',
+        color: 'var(--text-faint)',
+        fontSize: 14,
+      }}
+      title={title}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--accent)'
+        e.currentTarget.style.color = 'var(--accent)'
+        e.currentTarget.style.background = 'var(--accent-10)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+        e.currentTarget.style.color = 'var(--text-faint)'
+        e.currentTarget.style.background = 'transparent'
+      }}
+    >
+      {icon}
+    </button>
+  )
+}
 
 function ProjectPath({ path }: { path: string }) {
   const ref = useRef<HTMLSpanElement>(null)
@@ -68,6 +112,7 @@ export function Sidebar() {
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
+  const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
@@ -623,25 +668,22 @@ export function Sidebar() {
           </button>
         </div>
 
-        <button
-          data-settings-toggle
-          onClick={() => { toggleSettings() }}
-          className="flex items-center justify-center rounded transition-all mb-3"
-          style={{ width: 28, height: 28, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 14 }}
+        <SidebarBottomButton
+          toggle="tmux-cheatsheet"
+          icon={<BookIcon width={16} height={16} />}
+          title={t('tmuxCheatsheet.title')}
+          onClick={toggleTmuxCheatsheet}
+          size={28}
+          className="mb-2"
+        />
+        <SidebarBottomButton
+          toggle="settings"
+          icon="⚙"
           title={t('settings.title')}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = 'var(--accent)'
-            e.currentTarget.style.color = 'var(--accent)'
-            e.currentTarget.style.background = 'var(--accent-10)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = 'var(--border-strong)'
-            e.currentTarget.style.color = 'var(--text-faint)'
-            e.currentTarget.style.background = 'transparent'
-          }}
-        >
-          ⚙
-        </button>
+          onClick={toggleSettings}
+          size={28}
+          className="mb-3"
+        />
       </div>
     )
   }
@@ -1065,25 +1107,22 @@ export function Sidebar() {
           <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{connected ? t('sidebar.connected') : t('sidebar.disconnected')}</span>
           <span style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 4 }}>v{APP_VERSION}</span>
         </div>
-        <button
-          data-settings-toggle
-          onClick={toggleSettings}
-          className="flex items-center justify-center rounded transition-all"
-          style={{ width: 26, height: 26, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 14 }}
-          title={t('settings.title')}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = 'var(--accent)'
-            e.currentTarget.style.color = 'var(--accent)'
-            e.currentTarget.style.background = 'var(--accent-10)'
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = 'var(--border-strong)'
-            e.currentTarget.style.color = 'var(--text-faint)'
-            e.currentTarget.style.background = 'transparent'
-          }}
-        >
-          ⚙
-        </button>
+        <div className="flex items-center gap-2">
+          <SidebarBottomButton
+            toggle="tmux-cheatsheet"
+            icon={<BookIcon width={16} height={16} />}
+            title={t('tmuxCheatsheet.title')}
+            onClick={toggleTmuxCheatsheet}
+            size={26}
+          />
+          <SidebarBottomButton
+            toggle="settings"
+            icon="⚙"
+            title={t('settings.title')}
+            onClick={toggleSettings}
+            size={26}
+          />
+        </div>
       </div>
 
       {/* ── Create Project Modal ── */}
