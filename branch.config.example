@@ -1,0 +1,28 @@
+# === OmniTerm 分支配置模板（tracked，新 worktree 参考用）===
+# 复制为 .env.local 后修改实际值
+#   cp branch.config.example .env.local
+#   vim .env.local
+# .env.local 已在 .gitignore，不会被 git 追踪
+
+# === 端口 ===
+# BACKEND_PORT / FRONTEND_PORT: dev.sh 启动的开发端口
+# DOCKER_PORT: Docker 部署时容器内监听端口
+# DOCKER_PORT_MAPPING: host:container 端口映射
+# 各分支推荐值（参考 docs/branch-workflows.md 表）：
+#   main:  BACKEND_PORT=9075  FRONTEND_PORT=9076  DOCKER_PORT=9077  DOCKER_PORT_MAPPING=9077:9077
+#   dev:   BACKEND_PORT=9777  FRONTEND_PORT=9778  DOCKER_PORT=9777  DOCKER_PORT_MAPPING=9777:9777
+#   debug: BACKEND_PORT=19777 FRONTEND_PORT=19778 DOCKER_PORT=19777 DOCKER_PORT_MAPPING=19777:19777
+BACKEND_PORT=
+FRONTEND_PORT=
+DOCKER_PORT=
+DOCKER_PORT_MAPPING=
+
+# === 分支身份 ===
+# BRANCH_BINARY_NAME 通常为 omniterm-<branch>，release 例外为干净 omniterm
+# ⚠️ 改 BRANCH_BINARY_NAME 时必须同步改 Cargo.toml 的 [package] name（cargo 不读 env）
+BRANCH_NAME=
+BRANCH_BINARY_NAME=
+BRANCH_VERSION=
+
+# === 部署 ===
+DOMAIN=
