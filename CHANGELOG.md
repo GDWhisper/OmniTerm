@@ -94,8 +94,11 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-06-30 11:50) `[frontend]` FileManager 列宽拖动位置错位（拖 A 列 handle 改 B 列宽）+ 列宽不跟手 — 三处修复：① `.fm-table` `table-layout: auto` → `fixed` 让 `<col>` width 严格生效；② colgroup 中 downloadMode checkbox `<col>` 改为条件渲染，让 col 顺序与 thead 顺序对齐；③ `handleResizeStart`/`onMouseUp` 中宽度改为读 `colEl.getBoundingClientRect().width` 而非 React state，保证 handle 与鼠标 1:1 对齐（`frontend/src/index.css`、`frontend/src/components/FileManager/FileManager.tsx`）
-- (2026-06-30 11:07) `[frontend]` FileManager 列宽拖动不跟手 — 修复：`onMouseMove` 改为直接写入 `<col>` 元素的 `style.width` 绕开 React 重渲染，`onMouseUp` 时再同步一次 `setColWidths`，文件多时拖动延迟消失（`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-06-30 14:30) `[dev.sh]` 分支名不再硬编码 — `cmd_start`/`cmd_status` 使用 `$BRANCH_NAME` 替代写死的 `main（发布前哨站）`（`dev.sh`）
+- (2026-06-30 14:30) `[dev.sh]` `kill_port_orphans` / `pid_by_port` 用 `sed` 替代 `grep -oP`，去除 PCRE 依赖（`dev.sh`）
+- (2026-06-30 14:30) `[dev.sh]` `cargo run` / `pnpm dev` 前加 `stdbuf -oL -eL`，强制行缓冲确保崩溃日志实时输出（`dev.sh`）
+- (2026-06-30 14:00) `[dev.sh]` 修复 `cargo run` + `vite` 启动后被 SIGHUP 杀死 — subshell 加 `trap '' HUP`（`dev.sh`）
+
 - (2026-06-29 12:00) `[frontend]` 点击 Sidebar 工作区时文件管理器未切换到目标目录 — 修复：worktree 点击时清除 activeSession，使 fmSource 回退到 workspace 模式（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-06-25 11:00) `[backend]` 迁移 SQL 中 `w.path` 修正为 `w.root_path` — 旧表列名错误导致迁移失败（`migrations/20260625_workspace_to_project.sql`）
 
