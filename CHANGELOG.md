@@ -47,6 +47,11 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-06-29 12:30) `[frontend]` Sidebar 底部新增 tmux 常用命令速查书本图标按钮，点击弹出固定定位速查面板（`frontend/src/components/TmuxCheatsheet/*`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/BookIcon.tsx`）
+- (2026-06-29 20:20) `[frontend]` tmux 速查命令表拆分为 `data.ts` — 组件只负责渲染，命令结构 (sections/items/cmd) 与文案 (i18n key) 分离，TS 类型校验；新增/修改命令只需改 data.ts + 两个 translation.json（`frontend/src/components/TmuxCheatsheet/data.ts`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheet.tsx`）
+- (2026-06-29 20:25) `[docs]` 新增 `docs/frontend-patterns.md` — 收录前端设计模式与约定，首个 entry 为「数据/渲染分离 (data.ts convention)」，并在 `AGENTS.md` 文档索引添加读取/维护触发条件（`docs/frontend-patterns.md`、`AGENTS.md`）
+- (2026-06-29 20:40) `[docs]` 新增 `docs/agent-edit-manual.md` — 收录「有特殊维护约定的组件」的文件级索引，首个 entry 为 TmuxCheatsheet（数据/视图分离），agent 接具体修改任务时可索引到「涉及哪些文件 / 改哪个会触达什么」（`docs/agent-edit-manual.md`、`AGENTS.md`）
+
 - (2026-06-27 16:20) `[backend]` Project 覆盖检测函数 `find_covering_project` — 基于 `git worktree list` 双向检测（精确路径 / worktree 归属 / toplevel 归属），含 9 个单元测试（`src/workspaces.rs`）
 - (2026-06-27 16:20) `[api]` `POST /api/v1/projects` 覆盖检查 — 命中已有 Project 时返回 409 + `covering_project` 详情，阻止创建重复项目（`src/api/projects.rs`）
 - (2026-06-27 16:20) `[api]` `GET /api/v1/projects/duplicates` — 返回老数据中重复项目组（按精确路径或 git toplevel 分组），供侧边栏 banner 提示用户合并（`src/api/projects.rs`）
