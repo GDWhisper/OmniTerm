@@ -192,7 +192,7 @@ function MobileLayout() {
   return (
     <div
       className="flex flex-col"
-      style={{ height: '100vh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      style={{ height: '100dvh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <style>{`
         @keyframes mobileSlideInLeft {

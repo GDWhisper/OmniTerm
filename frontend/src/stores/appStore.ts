@@ -116,7 +116,7 @@ export const useAppStore = create<AppState>((set) => ({
   mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
   tmuxCheatsheetOpen: false,
-  immersiveMode: localStorage.getItem('omniterm_immersive_mode') === 'true',
+  immersiveMode: false,  // Disabled by default - feature not yet verified
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

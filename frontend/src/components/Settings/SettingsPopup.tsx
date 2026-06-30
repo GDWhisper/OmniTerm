@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
 
 const POPUP_WIDTH = 340
+const MOBILE_NAV_HEIGHT = 54  // MobileNav: padding(6×2) + nav(5×2) + button(32)
 const GAP = 8
 
 export function SettingsPopup() {
@@ -82,13 +83,13 @@ export function SettingsPopup() {
       className="settings-popup"
       style={{
         position: 'fixed',
-        // Mobile: full width bottom sheet; Desktop: positioned popup
+        // Mobile: bottom sheet above MobileNav; Desktop: positioned popup
         ...(isMobile
           ? {
               left: 0,
               right: 0,
-              bottom: 0,
-              maxHeight: '85dvh',
+              bottom: MOBILE_NAV_HEIGHT,
+              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + 30}px)`,  // subtract MobileStatusBar(30)
               borderRadius: '16px 16px 0 0',
             }
           : {

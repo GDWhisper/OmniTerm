@@ -176,3 +176,62 @@ const fmSource = useMemo(() => {
 - React render 中创建的对象字面量（`{}`、`[]`）绝不能直接放进 `useCallback` / `useEffect` / `useMemo` 的依赖数组，必须用 `useMemo` 稳定引用
 - TypeScript 无法检测此 bug —— 对象内容相同但引用不同，运行时才能暴露
 - `useCallback` 依赖数组中有对象引用时，向上追溯该对象来源：render 中每次新建 → 需要 `useMemo`
+
+---
+
+## 2026-06-30: FileManager 列宽拖动不跟手
+
+**症状**：FileManager 表头列（name / mtime / size）拖动调整宽度时明显延迟、不跟手；文件数量越多越卡。
+
+**根因**：`onMouseMove` 每次触发都调用 `setColWidths`，导致整个 `FileManager` 组件（958 行巨组件，含大量 hooks、state、子组件、`<tbody>{files.map(...)}` 整张文件列表）在 60fps 频率下完整重渲染。文件多时是 O(N) 开销，主线程被占满，UI 卡顿，拖拽条跟不上鼠标。
+
+**调试过程**：
+1. 读 `frontend/src/components/FileManager/FileManager.tsx:208-225` 的 resize useEffect，确认 `setColWidths` 在 mousemove 中调用
+2. 查 `docs/debug-log.md` 2026-06-23「拖拽条不跟手」条 —— 但那条修的是侧边栏宽度（`setSidebarWidth` + CSS transition），与列宽是不同的拖动，根因不同
+3. 查 `frontend/src/index.css:488-580` 的 `fm-table` / `fm-th-resize` 样式，**无 CSS transition 涉及列宽**，排除 transition 因素
+4. 排除 localStorage 写入（列宽 state 本来就不持久化）
+5. 锁定根因：React 重渲染而非 CSS / I/O
+
+**修复**：
+- 三个 `<col>` 元素加 ref（`colRefs.current.name / mtime / size`）
+- `onMouseMove` 只做 DOM 直接写入（`colEl.style.width = \`${newW}px\``），**不调** `setColWidths`
+- `onMouseUp` 时读 col 元素的当前 width，调一次 `setColWidths` 同步最终值 —— 保证 sort、文件切换、目录导航等 React 流程不丢状态
+- 验证：`pnpm tsc --noEmit` 通过；`pnpm test` 21/21 通过
+
+**教训**：
+- 大组件中 `mousemove`/`scroll` 触发 `setState` 等于 O(component size) 重渲染；应只更新 DOM，松手时再 sync state 一次
+- 同一份 debug-log 之前记录的「拖拽条不跟手」（侧边栏宽）虽然症状相似，但**根因不同**（localStorage + transition vs. React re-render）。表面相似 ≠ 同一 bug，逐案例分析
+- `<col>` 元素的 inline `style.width` 是 60fps 拖动列宽的标准抓手 —— 不依赖 React、不依赖 CSS variables、改动最小
+
+---
+
+## 2026-06-30: FileManager 列宽拖动"位置不对"（拖 A 列 handle 改 B 列）
+
+**症状**：上一条「列宽拖动不跟手」修复后，拖 A 列 resize handle，B 列宽在动；拖 +100px 鼠标位置和列宽变化错位 70+px。
+
+**根因**（两个独立 bug 叠加）：
+
+1. **col 元素位置 ≠ 视觉列位置** —— `colgroup` 始终有 5 个 `<col>`（checkbox + name + mtime + size + actions），但 `thead` 在 `downloadMode=false` 时只有 4 个 `<th>`（少 checkbox th）。`table-layout: auto` 下，col 0 (width=0) **不消失**，浏览器按内容给 col 0 实际宽度 162.89px，**视觉上 col 0 对应"名称"列**（th 0 位置），col 1 (name) 视觉上对应"修改时间"列。`colRefs.current.name` 指向 col 1，**但 col 1 视觉上是"修改时间"列** —— 拖"名称"handle 改的是"修改时间"列宽。
+   - Playwright 实测：th 0 (名称) width = 162.89 = col 0 bbox；th 1 (修改时间) width = 168.31 = col 1 bbox
+
+2. **列宽按比例分配** —— `table-layout: auto` 下，col width 是「最小宽度提示」，实际列宽 = max(col width, 单元格内容最小宽度)，且**总表格宽度受 `min-width: 540px` 限制按比例分配到各 col**。拖 name col width 300→400 (state)，实际 th 0 只 +27px (264→291)，其他列缩小。**用户拖 +100px，handle 视觉上跑在鼠标前面 70+px**。
+
+**调试过程**：
+1. 加 console.log 临时调试 `r.col` 和 `colEl` —— ref 与 col 元素对应正确（无错位）
+2. Playwright 读 DOM bbox —— 发现 col 0 (state=0) bbox=162.89 = th 0 (名称) width；col 1 (state=300) bbox=168.31 = th 1 (修改时间) width
+3. 试 `visibility: collapse` on col 0 —— 让 th 0 也变成 width=0（不可用）
+4. 试 `table-layout: fixed` —— col width 严格生效，bbox = state width，th width = col width
+
+**修复**：
+1. `frontend/src/index.css`：`.fm-table` `table-layout: auto` → `table-layout: fixed`
+2. `frontend/src/components/FileManager/FileManager.tsx`：colgroup 第一个 `<col>` 改成条件渲染 `{downloadMode && <col style={{ width: 32 }} />}` —— 让 downloadMode=false 时 col 数量 = th 数量 = 4，col/th 顺序对应
+3. `handleResizeStart` 中 `startW` 从 `colWidths` state 改为 `colEl.getBoundingClientRect().width`（实际宽度）
+4. `onMouseUp` 中 `finalW` 从 `parseInt(colEl.style.width)` 改为 `colEl.getBoundingClientRect().width`（实际宽度，fixed 下与 state 一致，但更稳健）
+5. 验证：Playwright 实测拖 name handle +100px → th 0 300→400，th 1/2/3 完全不变；拖 mtime handle -50px → th 1 140→90，th 0/2/3 完全不变；21/21 vitest 通过
+
+**教训**：
+- `table-layout: auto` 对列宽拖动是**反模式**——col width 几乎被忽略，列宽按内容/比例分配，拖动时 handle 跑在鼠标前面/后面。列宽拖动**必须**用 `table-layout: fixed`
+- `colgroup` 列数必须与 `thead` 列数一致——多出来的 col 会"按内容"占视觉空间，**与预期 col width 无关**。如果需要"额外"的 col（如 downloadMode 临时多出 checkbox 列），要么**条件渲染**对齐数量，要么**用 colspan/separate th** 避免 col 数量变化
+- `getBoundingClientRect().width` 是拖动时**唯一可信**的"当前宽度"——state 永远滞后于实际布局（特别在 auto layout 下）。startW/finalW 都应该读 bbox，不读 state
+- 修了一个 bug 发现**更深层**的 bug（"列宽不跟手"的延迟修完 → 用户开始能拖了 → 才暴露"列错位"）—— 这是正常的递进调试，不要在第一层修完就当 done，要等用户实际使用后才知道下一层问题
+
