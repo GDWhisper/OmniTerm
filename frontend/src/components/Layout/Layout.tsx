@@ -186,7 +186,7 @@ function MobileLayout() {
     }
   }, [activeTab, setActiveTab])
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId)
+  const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
 
   return (

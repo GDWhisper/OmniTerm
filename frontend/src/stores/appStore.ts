@@ -32,7 +32,7 @@ export interface AppState {
   // Data
   projects: Project[]
   worktrees: Record<string, Workspace[]> // keyed by project_id
-  sessions: Session[]
+  sessions: Record<string, Session[]> // keyed by project_id
   activeProjectId: string | null
   activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
@@ -69,7 +69,7 @@ export interface AppState {
   setAutoCopySelect: (v: boolean) => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
-  setSessions: (s: Session[]) => void
+  setSessions: (projectId: string, sessions: Session[]) => void
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
@@ -101,7 +101,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   projects: [],
   worktrees: {},
-  sessions: [],
+  sessions: {},
   activeProjectId: localStorage.getItem('omniterm_active_project') || null,
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
@@ -148,7 +148,8 @@ export const useAppStore = create<AppState>((set) => ({
   setProjects: (projects) => set({ projects }),
   setWorktrees: (projectId, ws) =>
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
-  setSessions: (sessions) => set({ sessions }),
+  setSessions: (projectId, sessions) =>
+    set((s) => ({ sessions: { ...s.sessions, [projectId]: sessions } })),
   setActiveProject: (id) => {
     if (id) localStorage.setItem('omniterm_active_project', id)
     else localStorage.removeItem('omniterm_active_project')

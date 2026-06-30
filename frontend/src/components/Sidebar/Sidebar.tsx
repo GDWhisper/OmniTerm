@@ -195,7 +195,7 @@ export function Sidebar() {
     if (!pid) return
     try {
       const s = await api.listSessions(pid)
-      setSessions(s)
+      setSessions(pid, s)
     } catch {
       // api client already shows error toast
     }
@@ -261,14 +261,15 @@ export function Sidebar() {
 
   // After sessions load, restore the active session (or clean up stale saved ID).
   useEffect(() => {
-    if (sessions.length === 0) return
+    const allSessions = Object.values(sessions).flat()
+    if (allSessions.length === 0) return
     const savedSessionId = localStorage.getItem('omniterm_active_session')
     if (!savedSessionId) {
       restoredSessionRef.current = true
       return
     }
     if (restoredSessionRef.current) return
-    if (sessions.some(s => s.id === savedSessionId)) {
+    if (allSessions.some(s => s.id === savedSessionId)) {
       if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
     } else {
       localStorage.removeItem('omniterm_active_session')
@@ -371,7 +372,7 @@ export function Sidebar() {
           }
         }
 
-        setSessions(freshSessions)
+        setSessions(activeProjectId, freshSessions)
       } catch {
         // Quietly ignore poll errors
       }
@@ -566,7 +567,7 @@ export function Sidebar() {
       if (activeProjectId === confirmDelete.id) {
         setActiveProject(null)
         setActiveWorkspace(null)
-        setSessions([])
+        setSessions(confirmDelete.id, [])
       }
       addToast('success', t('sidebar.projectDeleted', { name: confirmDelete.name }) ?? `Project "${confirmDelete.name}" deleted`)
     } catch {
@@ -633,8 +634,8 @@ export function Sidebar() {
   }
 
   // Filter sessions for a specific worktree
-  const sessionsForWorktree = (wtPath: string): Session[] => {
-    return sessions.filter(s => s.workspace_path === wtPath)
+  const sessionsForWorktree = (projectId: string, wtPath: string): Session[] => {
+    return (sessions[projectId] || []).filter(s => s.workspace_path === wtPath)
   }
 
   if (sidebarCollapsed) {
@@ -819,7 +820,7 @@ export function Sidebar() {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
             const projHasActiveSession = wtList.some((wt) =>
-              sessionsForWorktree(wt.path).some((s) => s.is_active)
+              sessionsForWorktree(proj.id, wt.path).some((s) => s.is_active)
             )
 
             return (
@@ -884,7 +885,7 @@ export function Sidebar() {
                     ) : (
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
-                        const wtSessions = sessionsForWorktree(wt.path)
+                        const wtSessions = sessionsForWorktree(proj.id, wt.path)
                         const wtHasActiveSession = wtSessions.some((s) => s.is_active)
                         const isWtExpanded = isWtActive
 
