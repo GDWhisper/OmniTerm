@@ -118,6 +118,14 @@ export function FileManager() {
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
+  // Per-column <col> DOM refs — updated directly on mousemove for 60fps drag,
+  // bypassing React re-render (FileManager is a large component; re-rendering
+  // the whole file list on every mousemove is the cause of drag lag).
+  const colRefs = useRef<Record<'name' | 'mtime' | 'size', HTMLTableColElement | null>>({
+    name: null,
+    mtime: null,
+    size: null,
+  })
 
   // Data source: session > workspace > null
   type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
@@ -213,9 +221,22 @@ export function FileManager() {
       if (!r) return
       const delta = e.clientX - r.startX
       const newW = Math.max(80, r.startW + delta)
-      setColWidths((prev) => ({ ...prev, [r.col]: newW }))
+      // Direct DOM write — avoid React re-render on every mousemove
+      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
+      if (colEl) colEl.style.width = `${newW}px`
     }
-    const onMouseUp = () => { resizingRef.current = null }
+    const onMouseUp = () => {
+      const r = resizingRef.current
+      if (!r) return
+      // Sync final width to React state — one re-render after drag ends,
+      // so sort/file-switch/dir-nav etc. reflect the user's final width.
+      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
+      const finalW = colEl ? parseInt(colEl.style.width, 10) : NaN
+      if (!isNaN(finalW)) {
+        setColWidths((prev) => ({ ...prev, [r.col]: finalW }))
+      }
+      resizingRef.current = null
+    }
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
     return () => {
@@ -825,9 +846,9 @@ export function FileManager() {
             <table className="fm-table">
               <colgroup>
                 <col style={{ width: downloadMode ? 32 : 0 }} />
-                <col style={{ width: colWidths.name }} />
-                <col style={{ width: colWidths.mtime }} />
-                <col style={{ width: colWidths.size }} />
+                <col ref={(el) => { colRefs.current.name = el }} style={{ width: colWidths.name }} />
+                <col ref={(el) => { colRefs.current.mtime = el }} style={{ width: colWidths.mtime }} />
+                <col ref={(el) => { colRefs.current.size = el }} style={{ width: colWidths.size }} />
                 <col style={{ width: 80 }} />
               </colgroup>
               <thead>

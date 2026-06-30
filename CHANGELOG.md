@@ -94,6 +94,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-06-30 11:07) `[frontend]` FileManager 列宽拖动不跟手 — 修复：`onMouseMove` 改为直接写入 `<col>` 元素的 `style.width` 绕开 React 重渲染，`onMouseUp` 时再同步一次 `setColWidths`，文件多时拖动延迟消失（`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-06-29 12:00) `[frontend]` 点击 Sidebar 工作区时文件管理器未切换到目标目录 — 修复：worktree 点击时清除 activeSession，使 fmSource 回退到 workspace 模式（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-06-25 11:00) `[backend]` 迁移 SQL 中 `w.path` 修正为 `w.root_path` — 旧表列名错误导致迁移失败（`migrations/20260625_workspace_to_project.sql`）
 
