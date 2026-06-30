@@ -94,8 +94,6 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-06-30 17:10) `[frontend]` 切换到其他项目的工作区后，原项目展开面板中的工作区会话数（session count）归零 — 根因：`appStore` 的 `sessions` 为全局平面数组，`loadSessions(pid)` 调用时整体替换为新项目的 sessions，导致非活跃项目的 sessionsForWorktree 返回空数组；修复：`sessions` 改为 `Record<string, Session[]>` 按 project_id 分桶存储（与 `worktrees` 一致），每个项目的 sessions 独立保留不受活跃 project 切换影响（`frontend/src/stores/appStore.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Layout/Layout.tsx`）
-
 - (2026-06-30 16:00) `[frontend]` 移动端键盘弹出时窗口不跟随上移 — 根因：`useKeyboardHeight()` 返回对象但 `MobileLayout` 未解构（`const kbHeight = useKeyboardHeight()` → `const { vvHeight } = useKeyboardHeight()`），导致 `paddingBottom: "[object Object]px"` 无效 CSS 被静默忽略；修复方案：改用 `window.visualViewport.height` 直接作为容器高度，移除不可靠的 `100dvh` + `paddingBottom` 组合（`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Layout/Layout.tsx`）
 - (2026-06-30 14:30) `[dev.sh]` 分支名不再硬编码 — `cmd_start`/`cmd_status` 使用 `$BRANCH_NAME` 替代写死的 `main（发布前哨站）`（`dev.sh`）
 - (2026-06-30 14:30) `[dev.sh]` `kill_port_orphans` / `pid_by_port` 用 `sed` 替代 `grep -oP`，去除 PCRE 依赖（`dev.sh`）
