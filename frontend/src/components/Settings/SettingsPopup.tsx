@@ -105,12 +105,15 @@ export function SettingsPopup() {
         borderWidth: isMobile ? '2px' : '1px',
         borderColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
         boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-        overflow: 'hidden',
-        WebkitOverflowScrolling: 'touch',
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
-      <div style={{ height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
+      }}>
         <Settings />
       </div>
     </div>
