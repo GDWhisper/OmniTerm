@@ -174,7 +174,7 @@ function MobileLayout() {
     settingsOpen,
     setActiveTab,
   } = useAppStore()
-  const kbHeight = useKeyboardHeight()
+  const { kbHeight, viewportHeight } = useKeyboardHeight()
 
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
@@ -192,7 +192,7 @@ function MobileLayout() {
   return (
     <div
       className="flex flex-col"
-      style={{ height: '100vh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      style={{ height: `${viewportHeight}px`, paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <style>{`
         @keyframes mobileSlideInLeft {
