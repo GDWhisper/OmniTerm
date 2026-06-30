@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=backend /app/target/release/omniterm-server ./
+COPY --from=backend /app/target/release/omniterm-dev ./
 COPY --from=frontend /app/dist ./frontend/dist
 COPY migrations/ ./migrations/
 
@@ -28,4 +28,4 @@ ENV BIND_ADDR=0.0.0.0:9777
 ENV FRONTEND_DIR=frontend/dist
 EXPOSE 9777
 
-CMD ["./omniterm-server"]
+CMD ["./omniterm-dev"]
