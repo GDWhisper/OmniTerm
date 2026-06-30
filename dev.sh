@@ -250,10 +250,13 @@ cmd_start() {
     info "编译并启动 (端口 $BACKEND_PORT) ..."
     (
         cd "$PROJECT_DIR"
+        # 忽略 SIGHUP：dev.sh 主流程退出时不会通过 shell 杀 cargo run
+        trap '' HUP
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
         # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
-        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_server=info}"
+        # 用通配符 omniterm_* 匹配所有分支 binary（omniterm-main / omniterm-dev 等）
+        export RUST_LOG="${RUST_LOG:-omniterm_*,omniterm_server=info}"
         cargo run
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
@@ -277,6 +280,9 @@ cmd_start() {
     info "安装依赖并启动 Vite (端口 $FRONTEND_PORT) ..."
     (
         cd "$PROJECT_DIR/frontend"
+        # 忽略 SIGHUP：dev.sh 主流程退出时不会通过 shell 杀 pnpm/vite
+        # 这是修复前端"一拉起就挂"的关键：之前 pnpm fork 的 vite 收到 SIGHUP 死亡
+        trap '' HUP
         export NODE_ENV=development
         export http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}"
         # 首次启动或依赖缺失时自动安装
