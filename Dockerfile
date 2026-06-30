@@ -12,6 +12,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY migrations/ migrations/
+COPY --from=frontend /app/dist ./frontend/dist
 RUN cargo build --release
 
 # -- Runtime --
@@ -20,12 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=backend /app/target/release/omniterm-server ./
+COPY --from=backend /app/target/release/omniterm ./
 COPY --from=frontend /app/dist ./frontend/dist
-COPY migrations/ ./migrations/
 
-ENV BIND_ADDR=0.0.0.0:3000
+ENV BIND_ADDR=0.0.0.0:9077
 ENV FRONTEND_DIR=frontend/dist
-EXPOSE 3000
+EXPOSE 9077
 
-CMD ["./omniterm-server"]
+CMD ["./omniterm"]

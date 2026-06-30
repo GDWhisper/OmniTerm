@@ -4,49 +4,6 @@
 
 ---
 
-## 2026-06-28: WS 断开时 portable_pty::MasterWriter 泄漏 VEOF，agent 任务被中断
-
-**症状**：切换会话 / 删除其他会话 / 其他断开 WebSocket 的操作时，正在运行的 agent（Claude Code 等）任务被中断，pane 画面回到裸 tmux 提示符，用户感知为 “agent 像被 Ctrl+C 关闭了”。
-
-**根因**：`portable_pty::MasterWriter::Drop` 会在 drop 时往 PTY fd 写入 `\n + VEOF (0x04)`（`VEOF` 是 termios 中的 EOF 字符，Linux 上为 `\x04` = Ctrl+D）：
-
-```rust
-impl Drop for UnixMasterWriter {
-    fn drop(&mut self) {
-        // ...tcgetattr...
-        if eot != 0 {
-            let _ = self.fd.0.write_all(&[b'\n', eot]);
-        }
-    }
-}
-```
-
-之前的 `7a1bb25` 修复在 drop PTY master 之前显式 SIGHUP tmux client，但**不充分**：
-- PTY writer 是在独立线程里，WS 关闭时 `pty_in_tx` 立刻被 drop，线程的 `blocking_recv()` 返回 `None` 后**立即**退出并 drop writer
-- writer 的 fd 是从 master fd `dup` 出来的独立 fd，drop master 不会让 writer 的 fd 失效
-- strace 验证：原始代码会在清理时执行 `write(fd, "\n\4", 2)`
-- 这两个字节会被 tmux client 转发到 tmux server，注入到 pane
-- agent（使用 raw mode 的 TUI）看到 `\x04` 解释为 EOF，中断当前任务
-
-**调试过程**：
-1. 写 strace 独立程序，直接观察 `portable_pty::MasterWriter::drop` 确实写了 `\n\x04`
-2. 写 `cat -v > log` 在 raw mode 下抓取 tmux pane 实际收到的字节，10 次中 ~4 次出现 `X\n^D`（^D 是 cat -v 对 0x04 的显示）
-3. 试图加 slot/wrapper 绕开 Drop（v1 修复），但 writer fd 独立，仍然泄漏，测试仍 4/10
-4. 最终决定**根本不创建 `MasterWriter`**：用 `master.as_raw_fd()` 拿到 fd，writer 线程直接 `libc::write`。master drop 时 fd 关闭，writer 线程的 `write` 返回 `EBADF` 自然退出
-
-**修复**：
-- `src/ws/terminal.rs`: 不再调用 `pty_pair.master.take_writer()`；保留 master 完整生命周期，writer 线程用 `master.as_raw_fd()` 拿到的 fd 直接 `libc::write`
-- 清理路径简化为：SIGHUP tmux client → drop master（fd 关闭）→ writer 线程 EBADF 自动退出
-- 验证：10/10 顺序测试、20/20 并发测试全部 clean
-- 加回归测试 `test_ws_close_does_not_inject_eof_into_pane`
-
-**教训**：
-- 第三方库的 `Drop` 行为如果会做 “外部副作用”（如写 IO），就构成了隐性外部依赖；要么不用、要么显式控制其 drop 时机
-- “SIGHUP 再 drop” 不一定够：dup 出来的 fd 是独立的，需要从源头避免副作用（不创建会 drop 时写 fd 的对象）
-- 这种 bug 容易复现率不一致（取决于线程调度），回归测试不能只跑一次
-
----
-
 ## 2026-06-26: Agent hook 检测 Windows 路径空格问题
 
 **症状**：`detect_agent_kind` 对 `C:\Program Files\Claude\claude.exe` 返回 `None`

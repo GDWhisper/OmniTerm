@@ -33,6 +33,7 @@
 
 - **作用**：以用户视角体验即将发布的新版本，冻结后不再加功能
 - **启动**：`cd ~/coding/OmniTerm && ./dev.sh start`（后端 9075 + 前端 9076）
+- **合并 dev 后验证**：合并 dev 最新代码后，必须主动执行 `./dev.sh restart` 确认服务启动正常
 - **文档**：保留 AGENTS.md、dev.sh、docs/ 等开发文件
 - **排除**：main 不含 npm/、install.sh、.github/workflows/release.yml（这些是 release 专属）
 

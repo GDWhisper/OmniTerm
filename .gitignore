@@ -30,8 +30,16 @@ Thumbs.db
 # Claude
 .claude/
 
+# Playwright CLI temporary output (local debugging)
+.playwright-cli/
+
+# Local-only skill symlinks (mirror of .agents/skills/)
+.pi/skills/playwright-cli
+.pi/skills/skill-manager
+
 
 # Added by cargo
 
 /target
+.codegraph/
 .superpowers/
