@@ -94,6 +94,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-06-30 16:00) `[frontend]` 移动端键盘弹出时窗口不跟随上移 — 根因：`useKeyboardHeight()` 返回对象但 `MobileLayout` 未解构（`const kbHeight = useKeyboardHeight()` → `const { vvHeight } = useKeyboardHeight()`），导致 `paddingBottom: "[object Object]px"` 无效 CSS 被静默忽略；修复方案：改用 `window.visualViewport.height` 直接作为容器高度，移除不可靠的 `100dvh` + `paddingBottom` 组合（`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Layout/Layout.tsx`）
 - (2026-06-30 14:30) `[dev.sh]` 分支名不再硬编码 — `cmd_start`/`cmd_status` 使用 `$BRANCH_NAME` 替代写死的 `main（发布前哨站）`（`dev.sh`）
 - (2026-06-30 14:30) `[dev.sh]` `kill_port_orphans` / `pid_by_port` 用 `sed` 替代 `grep -oP`，去除 PCRE 依赖（`dev.sh`）
 - (2026-06-30 14:30) `[dev.sh]` `cargo run` / `pnpm dev` 前加 `stdbuf -oL -eL`，强制行缓冲确保崩溃日志实时输出（`dev.sh`）
