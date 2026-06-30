@@ -94,6 +94,11 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-06-30 14:30) `[dev.sh]` 分支名不再硬编码 — `cmd_start`/`cmd_status` 使用 `$BRANCH_NAME` 替代写死的 `main（发布前哨站）`（`dev.sh`）
+- (2026-06-30 14:30) `[dev.sh]` `kill_port_orphans` / `pid_by_port` 用 `sed` 替代 `grep -oP`，去除 PCRE 依赖（`dev.sh`）
+- (2026-06-30 14:30) `[dev.sh]` `cargo run` / `pnpm dev` 前加 `stdbuf -oL -eL`，强制行缓冲确保崩溃日志实时输出（`dev.sh`）
+- (2026-06-30 14:00) `[dev.sh]` 修复 `cargo run` + `vite` 启动后被 SIGHUP 杀死 — subshell 加 `trap '' HUP`（`dev.sh`）
+
 - (2026-06-29 12:00) `[frontend]` 点击 Sidebar 工作区时文件管理器未切换到目标目录 — 修复：worktree 点击时清除 activeSession，使 fmSource 回退到 workspace 模式（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-06-25 11:00) `[backend]` 迁移 SQL 中 `w.path` 修正为 `w.root_path` — 旧表列名错误导致迁移失败（`migrations/20260625_workspace_to_project.sql`）
 
