@@ -1,15 +1,25 @@
 services:
   omniterm:
-    build: .
+    build:
+      context: .
+      # 传分支专属变量给 Dockerfile（默认值适配 main worktree，dev/build 时覆盖）
+      # 详见 AGENTS.md "配置统一管理" 规则
+      args:
+        BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}
+        DOCKER_PORT: ${DOCKER_PORT:-9077}
+    # 端口映射从 .env.local 读（env_file 引入），缺省回落 9077:9077
     ports:
-      - "9077:9077"
+      - "${DOCKER_PORT_MAPPING:-9077:9077}"
     volumes:
       - omniterm-data:/app/data
       - /home:/home:ro
+    # 从 .env.local 引入所有分支变量（gitignored，各 worktree 独立）
+    env_file:
+      - .env.local
     environment:
       - DATABASE_URL=sqlite:/app/data/omniterm.db?mode=rwc
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
-      - BIND_ADDR=0.0.0.0:9077
+      - BIND_ADDR=0.0.0.0:${DOCKER_PORT:-9077}
     restart: unless-stopped
 
 volumes:
