@@ -89,7 +89,7 @@ export function SettingsPopup() {
               left: 0,
               right: 0,
               bottom: MOBILE_NAV_HEIGHT,
-              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + 30}px - ${MOBILE_NAV_HEIGHT}px)`,  // between StatusBar(30) and Nav(54)
+              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + 30}px)`,  // 100dvh - 84px: leave space for StatusBar(30) at top
               borderRadius: '16px 16px 0 0',
             }
           : {
