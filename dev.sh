@@ -6,12 +6,21 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 本地端口覆盖（.env.local 已在 .gitignore，不会被 merge 覆盖）
+# 本地分支配置（.env.local 已在 .gitignore，不会被 merge 覆盖）
+# 这是分支专属变量的唯一来源（端口/域名/版本/binary 名等）
 [[ -f "$PROJECT_DIR/.env.local" ]] && source "$PROJECT_DIR/.env.local"
 
+# 端口 fallback（仅在 .env.local 缺失时生效，正常 worktree 不会有此情况）
 BACKEND_PORT=${BACKEND_PORT:-9075}
 FRONTEND_PORT=${FRONTEND_PORT:-9076}
-export BACKEND_PORT FRONTEND_PORT
+DOCKER_PORT=${DOCKER_PORT:-$BACKEND_PORT}
+DOCKER_PORT_MAPPING=${DOCKER_PORT_MAPPING:-${DOCKER_PORT}:${DOCKER_PORT}}
+BRANCH_NAME=${BRANCH_NAME:-main}
+BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm-main}
+BRANCH_VERSION=${BRANCH_VERSION:-0.0.0}
+DOMAIN=${DOMAIN:-localhost}
+export BACKEND_PORT FRONTEND_PORT DOCKER_PORT DOCKER_PORT_MAPPING
+export BRANCH_NAME BRANCH_BINARY_NAME BRANCH_VERSION DOMAIN
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
@@ -243,6 +252,8 @@ cmd_start() {
         cd "$PROJECT_DIR"
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
+        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
+        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_server=info}"
         cargo run
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"

@@ -21,13 +21,14 @@ use std::path::Path;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "omniterm", version, about = "Web-based tmux terminal manager")]
 struct Args {
-    /// 监听端口
-    #[arg(short = 'p', long, env = "OMNITERM_PORT", default_value = "9777")]
+    /// 监听端口（优先级：CLI > 环境变量 > fallback）
+    #[arg(short = 'p', long, env = "BACKEND_PORT", default_value = "9075")]
     port: u16,
 
     /// 数据库连接字符串
@@ -116,6 +117,11 @@ async fn main() -> anyhow::Result<()> {
     let host = std::env::var("OMNITERM_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let bind = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| format!("{}:{}", host, args.port));
+
+    // 启动时打印分支身份（仅日志/调试用，不影响逻辑）
+    let branch = std::env::var("BRANCH_NAME").unwrap_or_else(|_| "main".into());
+    let version = std::env::var("BRANCH_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+    info!("starting omniterm branch={} version={}", branch, version);
     tracing::info!("OmniTerm server listening on {}", bind);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
