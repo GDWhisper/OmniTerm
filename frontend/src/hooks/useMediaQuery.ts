@@ -24,9 +24,24 @@ export function useKeyboardHeight() {
     if (!vv) return
 
     const update = () => {
-      // 键盘高度 = 布局视口 - 可见视口
-      const kb = Math.max(0, window.innerHeight - vv.height)
-      console.log('[Keyboard]', { innerHeight: window.innerHeight, vvHeight: vv.height, kbHeight: kb })
+      const rawKb = window.innerHeight - vv.height
+      
+      // 如果没有输入框聚焦，键盘一定已关闭
+      const activeEl = document.activeElement
+      const isInputFocused = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl as HTMLElement).isContentEditable
+      )
+      
+      const kb = isInputFocused && rawKb > 50 ? rawKb : 0
+      console.log('[Keyboard]', { 
+        innerHeight: window.innerHeight, 
+        vvHeight: vv.height, 
+        rawKb, 
+        kbHeight: kb,
+        isInputFocused 
+      })
       setKbHeight(kb)
     }
 
