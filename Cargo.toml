@@ -1,6 +1,6 @@
 [package]
-name = "omniterm"
-version = "0.1.0"
+name = "omniterm-server"
+version = "0.0.1"
 edition = "2024"
 license = "MIT"
 

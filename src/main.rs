@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
 #[command(name = "omniterm", version, about = "Web-based tmux terminal manager")]
 struct Args {
     /// 监听端口
-    #[arg(short = 'p', long, env = "OMNITERM_PORT", default_value = "9075")]
+    #[arg(short = 'p', long, env = "OMNITERM_PORT", default_value = "9777")]
     port: u16,
 
     /// 数据库连接字符串

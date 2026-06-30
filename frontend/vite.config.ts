@@ -10,7 +10,7 @@ export default defineConfig({
   server: {
     port: Number(frontendPort),
     host: '0.0.0.0',
-    allowedHosts: ['term-main.tokitoken.com'],
+    allowedHosts: ['term-dev.tokitoken.com'],
     proxy: {
       '/api': {
         target: `http://localhost:${backendPort}`,
