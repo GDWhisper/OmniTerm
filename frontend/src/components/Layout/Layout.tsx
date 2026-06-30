@@ -174,7 +174,7 @@ function MobileLayout() {
     settingsOpen,
     setActiveTab,
   } = useAppStore()
-  const kbHeight = useKeyboardHeight()
+  const { vvHeight } = useKeyboardHeight()
 
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
@@ -186,13 +186,13 @@ function MobileLayout() {
     }
   }, [activeTab, setActiveTab])
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId)
+  const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
 
   return (
     <div
       className="flex flex-col"
-      style={{ height: '100dvh', paddingBottom: `${kbHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
+      style={{ height: `${vvHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
     >
       <style>{`
         @keyframes mobileSlideInLeft {

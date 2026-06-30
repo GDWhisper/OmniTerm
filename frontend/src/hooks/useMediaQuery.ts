@@ -19,6 +19,7 @@ export function useMobileDetection() {
 export function useKeyboardHeight() {
   const [kbHeight, setKbHeight] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight)
+  const [vvHeight, setVvHeight] = useState(window.visualViewport?.height ?? window.innerHeight)
 
   useEffect(() => {
     const vv = window.visualViewport
@@ -26,6 +27,7 @@ export function useKeyboardHeight() {
 
     const update = () => {
       setViewportHeight(window.innerHeight)
+      setVvHeight(vv.height)
       const rawKb = window.innerHeight - vv.height
       
       // 如果没有输入框聚焦，键盘一定已关闭
@@ -59,5 +61,5 @@ export function useKeyboardHeight() {
     }
   }, [])
 
-  return { kbHeight, viewportHeight }
+  return { kbHeight, viewportHeight, vvHeight }
 }
