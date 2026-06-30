@@ -114,7 +114,7 @@ kill_by_pid() {
 kill_port_orphans() {
     local port=$1 name="$2"
     local orphans
-    orphans=$(ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | sort -u || true)
+    orphans=$(ss -tlnp 2>/dev/null | grep ":${port} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u || true)
     if [[ -n "$orphans" ]]; then
         warn "$name 端口 :$port 仍有残留进程: $orphans"
         for opid in $orphans; do
@@ -128,7 +128,7 @@ kill_port_orphans() {
 
 pid_by_port() {
     local port=$1
-    ss -tlnp 2>/dev/null | grep ":${port} " | grep -oP 'pid=\K[0-9]+' | head -1 || true
+    ss -tlnp 2>/dev/null | grep ":${port} " | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1 || true
 }
 
 cleanup_orphans() {
@@ -257,7 +257,7 @@ cmd_start() {
         # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
         # 显式列 main/dev/debug 三个 binary 的 target（通配符 omniterm* 也行但更精确）
         export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_dev=info,omniterm_debug=info,omniterm_server=info}"
-        cargo run
+        stdbuf -oL -eL cargo run
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
 
@@ -290,7 +290,7 @@ cmd_start() {
             echo "[dev.sh] node_modules 不存在，执行 pnpm install ..."
             pnpm install
         fi
-        pnpm dev
+        stdbuf -oL -eL pnpm dev
     ) > "$FRONTEND_LOG" 2>&1 &
     echo $! > "$FRONTEND_PID"
 
@@ -313,7 +313,7 @@ cmd_start() {
     divider
     echo -e "  ${GREEN}● 后端 API${NC}  http://localhost:$BACKEND_PORT"
     echo -e "  ${GREEN}● 前端 UI${NC}   http://localhost:$FRONTEND_PORT"
-    echo -e "  ${YELLOW}● 分支${NC}      main（发布前哨站）"
+    echo -e "  ${YELLOW}● 分支${NC}      ${BRANCH_NAME}"
     divider
     echo ""
 }
@@ -383,7 +383,7 @@ cmd_restart() {
 # ── 命令: status ──
 cmd_status() {
     echo ""
-    echo -e "${BOLD}OmniTerm 服务状态${NC}  ${CYAN}(main 发布前哨站)${NC}"
+    echo -e "${BOLD}OmniTerm 服务状态${NC}  ${CYAN}(${BRANCH_NAME})${NC}"
     divider
 
     # 后端
