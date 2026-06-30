@@ -26,7 +26,6 @@ export function useKeyboardHeight() {
 
     const update = () => {
       setViewportHeight(window.innerHeight)
-      
       const rawKb = window.innerHeight - vv.height
       
       // 如果没有输入框聚焦，键盘一定已关闭
