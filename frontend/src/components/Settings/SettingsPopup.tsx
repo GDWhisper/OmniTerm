@@ -90,8 +90,8 @@ export function SettingsPopup() {
               left: 0,
               right: 0,
               bottom: MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT,
-              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT + 30}px)`,  // leave space for StatusBar(30) at top
-              borderRadius: '16px 16px 0 0',
+              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT + 30}px)`,
+              borderRadius: 16,
             }
           : {
               ...pos,
@@ -102,15 +102,17 @@ export function SettingsPopup() {
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',
-        borderTopWidth: isMobile ? '2px' : '1px',
-        borderTopColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
+        borderWidth: isMobile ? '2px' : '1px',
+        borderColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
         boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-        overflowY: 'auto',
+        overflow: 'hidden',
         WebkitOverflowScrolling: 'touch',
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
-      <Settings />
+      <div style={{ height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        <Settings />
+      </div>
     </div>
   )
 }
