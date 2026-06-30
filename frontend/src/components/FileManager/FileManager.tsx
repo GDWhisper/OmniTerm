@@ -230,8 +230,10 @@ export function FileManager() {
       if (!r) return
       // Sync final width to React state — one re-render after drag ends,
       // so sort/file-switch/dir-nav etc. reflect the user's final width.
+      // Use the column's *actual* rendered width to stay consistent with the
+      // handle positioning.
       const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
-      const finalW = colEl ? parseInt(colEl.style.width, 10) : NaN
+      const finalW = colEl ? colEl.getBoundingClientRect().width : NaN
       if (!isNaN(finalW)) {
         setColWidths((prev) => ({ ...prev, [r.col]: finalW }))
       }
@@ -248,7 +250,11 @@ export function FileManager() {
   const handleResizeStart = (col: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    resizingRef.current = { col, startX: e.clientX, startW: colWidths[col as keyof typeof colWidths] }
+    // Read the column's *actual* rendered width, not React state — keeps the
+    // handle 1:1 with the cursor when the user starts dragging.
+    const colEl = colRefs.current[col as 'name' | 'mtime' | 'size']
+    const actualW = colEl ? colEl.getBoundingClientRect().width : 0
+    resizingRef.current = { col, startX: e.clientX, startW: actualW }
   }
 
   const navigateTo = (absolutePath: string) => {
@@ -845,7 +851,7 @@ export function FileManager() {
           <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
             <table className="fm-table">
               <colgroup>
-                <col style={{ width: downloadMode ? 32 : 0 }} />
+                {downloadMode && <col style={{ width: 32 }} />}
                 <col ref={(el) => { colRefs.current.name = el }} style={{ width: colWidths.name }} />
                 <col ref={(el) => { colRefs.current.mtime = el }} style={{ width: colWidths.mtime }} />
                 <col ref={(el) => { colRefs.current.size = el }} style={{ width: colWidths.size }} />
