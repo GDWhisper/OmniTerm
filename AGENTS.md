@@ -11,6 +11,14 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 ./dev.sh start|stop|status|logs
 ```
 
+## 优先级链
+
+冲突时按此优先级执行：
+1. 用户当前明确的覆盖指令
+2. 安全硬性约束（本文件 <safety> 段）
+3. 具体操作规则
+4. 一般性描述
+
 ## 核心规则
 
 1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
@@ -19,15 +27,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 ## 工程准则
 
-1. **长期主义** — 代码将长期留存并被他人接手。禁止为快速完成当前任务而牺牲可维护性或制造新技术债。
-2. **严守分层** — 遵循项目分层架构（Controller/Service/Repository），严禁越权调用。不盲从历史遗留代码（超长函数、硬编码、全局状态），新代码必须高内聚低耦合。
-3. **局部改善** — 修改某文件时，顺手清理当前修改区域内的重复代码或硬编码。禁止扩大到不相关范围。
-4. **缺陷修复** — 追溯根因而非掩盖症状（禁止仅用 try-catch 吞异常或 if-else 绕过）。修复后评估对依赖模块的副作用，确保方案普适。
-5. **技术债红线**（严禁）：
-   - 禁 Copy-Paste 代码（须提取公共函数）
-   - 禁魔法数字/硬编码（须提取至常量/配置）
-   - 禁留存无用死代码
-6. **自主执行与沟通边界**
+1. **自主执行与沟通边界**
    - **先规划后编码**：接收任务后，须先理清实现思路（可简述方案），确认无架构冲突后再编写代码。
    - **常规任务自主推进**：对于**明确**的 Bug 修复、局部重构、遵循现有模式的常规开发，无需反复人类请示确认，直接实施。
    - **仅在以下高风险或方向模糊情况停止编码并请示**：
@@ -35,6 +35,14 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
      2. 需引入新的外部依赖或重大框架升级。
      3. 存在多种实现方案，且各方案在性能/可维护性上有明显取舍，你无法确定最优解。
    - **请示时汇报**：1. 结构阻碍/方案分歧；2. 你的倾向性建议；3. 影响范围。
+2. **长期主义** — 代码将长期留存并被他人接手。禁止为快速完成当前任务而牺牲可维护性或制造新技术债。
+3. **严守分层** — 遵循项目分层架构（Controller/Service/Repository），严禁越权调用。不盲从历史遗留代码（超长函数、硬编码、全局状态），新代码必须高内聚低耦合。
+4. **局部改善** — 修改某文件时，顺手清理当前修改区域内的重复代码或硬编码。禁止扩大到不相关范围。
+5. **缺陷修复** — 追溯根因而非掩盖症状（禁止仅用 try-catch 吞异常或 if-else 绕过）。修复后评估对依赖模块的副作用，确保方案普适。
+6. **技术债红线**（严禁）：
+   - 禁 Copy-Paste 代码（须提取公共函数）
+   - 禁魔法数字/硬编码（须提取至常量/配置）
+   - 禁留存无用死代码
 
 ## 配置统一管理
 
@@ -60,16 +68,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 - ✅ dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
 - ⚠️ **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
 
-### 首次初始化新 worktree
-
-```bash
-# 1. cp 模板（保留注释）
-cp branch.config.example .env.local  # 如果有模板文件
-# 2. 改值（参考其他 worktree）
-# 3. ./dev.sh start 验证
-```
-
-`branch.config.example` 缺失时直接编辑 `.env.local`（参考 `docs/branch-workflows.md` 表）。
+新 worktree 初始化步骤见 `docs/worktree-setup.md`，各分支端口/域名/二进制名对照表见 `docs/branch-workflows.md「分支身份约定」`。
 
 ## 文档索引
 

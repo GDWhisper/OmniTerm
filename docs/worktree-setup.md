@@ -14,6 +14,24 @@
 | `~/coding/OmniTerm-dev` | `dev` | 日常开发 |
 | `~/coding/OmniTerm-debug` | `debug` | 紧急修复 |
 
+## 新 Worktree 初始化
+
+```bash
+# 1. 添加 worktree
+git worktree add ~/coding/OmniTerm-<branch> <branch>
+
+# 2. 复制分支配置模板
+cp branch.config.example .env.local
+
+# 3. 编辑 .env.local，填入该分支的端口/域名/版本/二进制名
+#    参考 docs/branch-workflows.md「分支身份约定」表
+
+# 4. 启动验证
+./dev.sh start
+```
+
+`branch.config.example` 缺失时直接创建 `.env.local`（参考其他 worktree 的 `.env.local` 和 `docs/branch-workflows.md` 表）。
+
 ## Remote Repos
 
 - **私有仓**（`origin`）：存放所有分支（main/dev/debug/release），完整开发历史
