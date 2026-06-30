@@ -6,12 +6,21 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 本地端口覆盖（.env.local 已在 .gitignore，不会被 merge 覆盖）
+# 本地分支配置（.env.local 已在 .gitignore，不会被 merge 覆盖）
+# 这是分支专属变量的唯一来源（端口/域名/版本/binary 名等）
 [[ -f "$PROJECT_DIR/.env.local" ]] && source "$PROJECT_DIR/.env.local"
 
+# 端口 fallback（仅在 .env.local 缺失时生效，正常 worktree 不会有此情况）
 BACKEND_PORT=${BACKEND_PORT:-9075}
 FRONTEND_PORT=${FRONTEND_PORT:-9076}
-export BACKEND_PORT FRONTEND_PORT
+DOCKER_PORT=${DOCKER_PORT:-$BACKEND_PORT}
+DOCKER_PORT_MAPPING=${DOCKER_PORT_MAPPING:-${DOCKER_PORT}:${DOCKER_PORT}}
+BRANCH_NAME=${BRANCH_NAME:-main}
+BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm-main}
+BRANCH_VERSION=${BRANCH_VERSION:-0.0.0}
+DOMAIN=${DOMAIN:-localhost}
+export BACKEND_PORT FRONTEND_PORT DOCKER_PORT DOCKER_PORT_MAPPING
+export BRANCH_NAME BRANCH_BINARY_NAME BRANCH_VERSION DOMAIN
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
@@ -241,8 +250,13 @@ cmd_start() {
     info "编译并启动 (端口 $BACKEND_PORT) ..."
     (
         cd "$PROJECT_DIR"
+        # 忽略 SIGHUP：dev.sh 主流程退出时不会通过 shell 杀 cargo run
+        trap '' HUP
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
+        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
+        # 显式列 main/dev/debug 三个 binary 的 target（通配符 omniterm* 也行但更精确）
+        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_dev=info,omniterm_debug=info,omniterm_server=info}"
         cargo run
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
@@ -266,6 +280,9 @@ cmd_start() {
     info "安装依赖并启动 Vite (端口 $FRONTEND_PORT) ..."
     (
         cd "$PROJECT_DIR/frontend"
+        # 忽略 SIGHUP：dev.sh 主流程退出时不会通过 shell 杀 pnpm/vite
+        # 这是修复前端"一拉起就挂"的关键：之前 pnpm fork 的 vite 收到 SIGHUP 死亡
+        trap '' HUP
         export NODE_ENV=development
         export http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}"
         # 首次启动或依赖缺失时自动安装
