@@ -4,6 +4,7 @@ import { Settings } from './Settings'
 
 const POPUP_WIDTH = 340
 const MOBILE_NAV_HEIGHT = 54  // MobileNav: padding(6×2) + nav(5×2) + button(32)
+const SIDEBAR_BOTTOM_BAR_HEIGHT = 50  // Sidebar bottom status bar: padding(12×2) + button(26)
 const GAP = 8
 
 export function SettingsPopup() {
@@ -88,8 +89,8 @@ export function SettingsPopup() {
           ? {
               left: 0,
               right: 0,
-              bottom: MOBILE_NAV_HEIGHT,
-              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + 30}px)`,  // 100dvh - 84px: leave space for StatusBar(30) at top
+              bottom: MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT,
+              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT + 30}px)`,  // leave space for StatusBar(30) at top
               borderRadius: '16px 16px 0 0',
             }
           : {
