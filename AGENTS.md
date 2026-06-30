@@ -15,7 +15,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 冲突时按此优先级执行：
 1. 用户当前明确的覆盖指令
-2. 安全硬性约束（本文件 <safety> 段）
+2. 安全硬性约束
 3. 具体操作规则
 4. 一般性描述
 
