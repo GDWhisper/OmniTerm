@@ -212,7 +212,20 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         // use the user's language mode and auto-commit punctuation.
         // Without this the editor inherits <html lang="en"> and IMEs fall
         // back to English mode, requiring manual confirmation for CJK punctuation.
-        EditorView.contentAttributes.of({ lang: navigator.language }),
+        // `.cm-content` 属性需要随 editable 状态动态变化：
+        //  - `lang=navigator.language` 让 IME 进入用户语言模式
+        //  - 编辑模式用 `contenteditable=plaintext-only`（而非默认 `true`），
+        //    让浏览器把此元素视为 `<textarea>`，走与 `<input>` / `<textarea>`
+        //    一致的 IME 输入路径，规避 Edge + 搜狗在 `<div contenteditable>`
+        //    上的「标点二次触发」行为。
+        //  - 预览模式必须恢复 `contenteditable=false`，否则用户可以在预览
+        //    状态下打字（虽然无法保存，但行为不合规）。
+        //  - 用函数形式让 CM6 在每次 view 更新时重新计算（mode 切换会触发
+        //    view 更新，所以能正确响应 `editable` facet 变化）。
+        EditorView.contentAttributes.of((view: EditorView) => ({
+          lang: navigator.language,
+          contenteditable: view.state.facet(EditorView.editable) !== false ? 'plaintext-only' : 'false',
+        })),
       ]
 
       if (isEditable) {
