@@ -107,6 +107,9 @@ export function Sidebar() {
     setActiveSession,
     setActiveExternalSession,
     setConnected,
+    workspaceSessionMemory,
+    setWorkspaceSession,
+    clearWorkspaceSession,
     fmSessionStates,
     resetFmToFollowing,
   } = useAppStore()
@@ -606,7 +609,19 @@ export function Sidebar() {
     }
     // Path exists — activate normally
     setActiveProject(proj.id)
-    setActiveSession(null)
+    setActiveExternalSession(null)
+    // Restore last-used session for this workspace, if remembered
+    if (wt.id !== activeWorkspaceId) {
+      const rememberedId = workspaceSessionMemory[wt.id]
+      const wtSessions = (sessions[proj.id] || []).filter(
+        (s) => s.workspace_path === wt.path
+      )
+      if (rememberedId && wtSessions.some((s) => s.id === rememberedId)) {
+        setActiveSession(rememberedId)
+      } else {
+        setActiveSession(null)
+      }
+    }
     setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
   }
 
@@ -728,6 +743,12 @@ export function Sidebar() {
       await loadSessions()
       if (activeSessionId === confirmDelete.id) {
         setActiveSession(null)
+      }
+      // Clean workspace session memory for the deleted session
+      for (const wsId of Object.keys(workspaceSessionMemory)) {
+        if (workspaceSessionMemory[wsId] === confirmDelete.id) {
+          clearWorkspaceSession(wsId)
+        }
       }
       addToast('success', t('sidebar.sessionDeleted', { name: confirmDelete.name }) ?? `Session deleted`)
     } catch {
@@ -1146,6 +1167,9 @@ export function Sidebar() {
                                       onClick={() => {
                                         setActiveSession(s.id)
                                         setActiveExternalSession(null)
+                                        if (activeWorkspaceId) {
+                                          setWorkspaceSession(activeWorkspaceId, s.id)
+                                        }
                                         attention.setActive(sessionKey)
                                       }}
                                     >

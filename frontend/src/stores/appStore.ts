@@ -38,6 +38,9 @@ export interface AppState {
   activeSessionId: string | null
   activeExternalSession: string | null // tmux session name (not in DB yet)
 
+  // Per-workspace terminal memory: workspaceId → last active sessionId
+  workspaceSessionMemory: Record<string, string>
+
   // FM session states
   fmSessionStates: Record<string, FmSessionState>
 
@@ -82,6 +85,10 @@ export interface AppState {
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
 
+  // Workspace session memory
+  setWorkspaceSession: (workspaceId: string, sessionId: string) => void
+  clearWorkspaceSession: (workspaceId: string) => void
+
   // FM session actions
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
   setFmManualPath: (sessionId: string, path: string | null) => void
@@ -108,6 +115,14 @@ export const useAppStore = create<AppState>((set) => ({
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
   activeExternalSession: null,
+
+  workspaceSessionMemory: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('omniterm_ws_session_memory') || '{}')
+    } catch {
+      return {}
+    }
+  })(),
 
   fmSessionStates: {},
 
@@ -188,6 +203,21 @@ export const useAppStore = create<AppState>((set) => ({
     localStorage.setItem('omniterm_immersive_mode', String(v))
     set({ immersiveMode: v })
   },
+
+  setWorkspaceSession: (workspaceId, sessionId) =>
+    set((s) => {
+      const next = { ...s.workspaceSessionMemory, [workspaceId]: sessionId }
+      localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(next))
+      return { workspaceSessionMemory: next }
+    }),
+
+  clearWorkspaceSession: (workspaceId) =>
+    set((s) => {
+      const next = { ...s.workspaceSessionMemory }
+      delete next[workspaceId]
+      localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(next))
+      return { workspaceSessionMemory: next }
+    }),
 
   setFmSessionMode: (sessionId, mode) =>
     set((s) => ({
