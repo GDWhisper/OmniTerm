@@ -800,3 +800,59 @@ html, body, #root {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel gamified animations — Phase 2
+   All use steps() for discrete 8-bit feel.
+   Y-axis only — no horizontal shake.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Block Bump — button press squash & stretch */
+@keyframes mario-jump {
+  0%   { transform: translateY(0) scale(1, 1); }
+  20%  { transform: translateY(2px) scale(1.1, 0.9); }
+  50%  { transform: translateY(-8px) scale(0.95, 1.05); }
+  80%  { transform: translateY(0) scale(1.05, 0.95); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+.pixel-bump {
+  animation: mario-jump 0.4s steps(6, end) forwards;
+}
+
+/* Coin Pop — score text flies up and fades */
+@keyframes coin-pop {
+  0%   { transform: translateX(-50%) translateY(0) scale(0.5); opacity: 1; }
+  50%  { transform: translateX(-50%) translateY(-20px) scale(1.2); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-30px) scale(1); opacity: 0; }
+}
+.pixel-coin-pop {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  color: var(--success);
+  text-shadow: 2px 2px 0px var(--pixel-shadow);
+  pointer-events: none;
+  animation: coin-pop 0.6s steps(5, end) forwards;
+  z-index: 100;
+}
+
+/* Stomp Vanish — element squashes flat and disappears */
+@keyframes stomp-vanish {
+  0%   { transform: scaleY(1); opacity: 1; }
+  30%  { transform: scaleY(0.1); opacity: 1; }
+  100% { transform: scaleY(0.1) translateY(10px); opacity: 0; }
+}
+.pixel-stomp {
+  animation: stomp-vanish 0.3s steps(4, end) forwards;
+}
+
+/* Starman Flash — border color high-frequency blink */
+@keyframes starman-flash {
+  0%, 100% { border-color: var(--accent); box-shadow: 4px 4px 0px 0px var(--pixel-shadow); }
+  50%      { border-color: var(--accent-pink); box-shadow: 4px 4px 0px 0px var(--accent-pink); }
+}
+.pixel-starman {
+  animation: starman-flash 0.4s steps(1, end) infinite;
+}
