@@ -1,4 +1,4 @@
-use axum::{extract::{Query, State}, routing::get, Json, Router};
+use axum::{extract::{Query, State}, http::StatusCode, routing::get, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -9,6 +9,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/system/info", get(system_info))
         .route("/system/dirs", get(list_dirs))
+        .route("/system/exists", get(check_exists))
 }
 
 #[derive(Deserialize)]
@@ -65,4 +66,18 @@ async fn list_dirs(
             Json(json!({ "error": e.to_string() })),
         ),
     }
+}
+
+#[derive(Deserialize)]
+struct ExistsQuery {
+    path: String,
+}
+
+/// Check if a path exists on disk.
+/// Used by the frontend to detect stale project paths.
+async fn check_exists(
+    Query(q): Query<ExistsQuery>,
+) -> (StatusCode, Json<Value>) {
+    let exists = std::path::Path::new(&q.path).exists();
+    (StatusCode::OK, Json(json!({ "exists": exists })))
 }
