@@ -148,8 +148,8 @@ export function FileManager() {
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
         projectId: activeProjectId ?? undefined,
         path: effectivePath,
-        sort: sort ?? sortKey,
-        desc: desc ?? sortDesc,
+        sort: sort ?? sortKeyRef.current,
+        desc: desc ?? sortDescRef.current,
       })
       const newFiles = data.files ?? []
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
@@ -167,7 +167,16 @@ export function FileManager() {
     } finally {
       if (!silent) setLoading(false)
     }
-  }, [fmSource, sourceKey, fmState.mode, fmState.manualPath, activeProjectId, sortKey, sortDesc])
+  }, [fmSource, fmState.mode, fmState.manualPath, activeProjectId])
+
+  // Stable refs to decouple sort state from fetchFiles identity,
+  // preventing effect re-trigger on every sort change.
+  const sortKeyRef = useRef(sortKey)
+  sortKeyRef.current = sortKey
+  const sortDescRef = useRef(sortDesc)
+  sortDescRef.current = sortDesc
+  const fetchFilesRef = useRef(fetchFiles)
+  fetchFilesRef.current = fetchFiles
 
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
@@ -180,21 +189,9 @@ export function FileManager() {
     sessionStorage.setItem('omniterm_drawer_height', String(drawerHeight))
   }, [drawerHeight])
 
-  // Manual mode fetch
-  useEffect(() => {
-    if (!fmSource || fmSource.type === 'workspace') return  // workspace mode: handled below
-    if (fmState.mode !== 'manual' || !fmState.manualPath) return
-    fetchFiles(fmState.manualPath)
-  }, [sourceKey, fmState.mode, fmState.manualPath, fetchFiles])
-
-  // Following mode fetch
-  useEffect(() => {
-    if (!fmSource || fmSource.type === 'workspace') return  // no following in workspace mode
-    if (fmState.mode !== 'following') return
-    fetchFiles('.')
-  }, [sourceKey, fmState.mode, fetchFiles])
-
-  // Source switch (formerly session switch)
+  // ── Primary fetch effect: triggers on source/mode/path change ──
+  // Replaces 3 previously-separate effects (manual mode, following mode, source switch)
+  // that redundantly overlapped on session switch, causing duplicate requests.
   useEffect(() => {
     if (!fmSource) { setFiles([]); setCwd(''); return }
     const cached = fileCache.current.get(sourceKey!)
@@ -204,14 +201,13 @@ export function FileManager() {
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
     }
     if (fmSource.type === 'workspace') {
-      // Always start from workspace root
-      fetchFiles('.')
+      fetchFilesRef.current('.')
     } else if (fmState.mode === 'manual' && fmState.manualPath) {
-      fetchFiles(fmState.manualPath)
+      fetchFilesRef.current(fmState.manualPath)
     } else {
-      fetchFiles('.')
+      fetchFilesRef.current('.')
     }
-  }, [sourceKey])
+  }, [sourceKey, fmState.mode, fmState.manualPath])
 
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
@@ -890,7 +886,7 @@ export function FileManager() {
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} />
                   </th>
-                  <th>{t('fm.actions')}</th>
+                  <th className="fm-th-actions">{t('fm.actions')}</th>
                 </tr>
               </thead>
               <tbody>
