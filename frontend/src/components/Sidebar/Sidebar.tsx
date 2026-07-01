@@ -738,12 +738,14 @@ export function Sidebar() {
   const handleDeleteSession = async () => {
     if (!confirmDelete || confirmDelete.type !== 'session') return
     setSubmitting(true)
+    // Clear active session immediately so FileManager stops requesting
+    // files for a session whose tmux process is about to be killed.
+    if (activeSessionId === confirmDelete.id) {
+      setActiveSession(null)
+    }
     try {
       await api.deleteSession(confirmDelete.id)
       await loadSessions()
-      if (activeSessionId === confirmDelete.id) {
-        setActiveSession(null)
-      }
       // Clean workspace session memory for the deleted session
       for (const wsId of Object.keys(workspaceSessionMemory)) {
         if (workspaceSessionMemory[wsId] === confirmDelete.id) {
