@@ -1250,7 +1250,10 @@ export function Sidebar() {
 
             {externalExpanded && (
               <div className="pl-4 pr-1">
-                {externalSessions.map((s) => (
+                {externalSessions.map((s) => {
+                  const targetPid = activeProjectId || projects[0]?.id
+                  const canAutoAdopt = !!targetPid && adoptTarget?.tmux_name !== s.name
+                  return (
                   <div
                     key={s.name}
                     className="flex items-center gap-2 rounded-md transition-all mb-1"
@@ -1258,6 +1261,27 @@ export function Sidebar() {
                       padding: '5px 8px',
                       background: 'transparent',
                       border: '1px solid transparent',
+                      cursor: canAutoAdopt ? 'pointer' : 'default',
+                    }}
+                    onClick={() => {
+                      if (!canAutoAdopt || !targetPid) return
+                      const name = s.name
+                      api.adoptSession(name, targetPid).then((adopted) => {
+                        setExternalSessions(prev => prev.filter(es => es.name !== name))
+                        loadSessions(targetPid)
+                        setActiveProject(targetPid)
+                        setActiveSession(adopted.id)
+                        addToast('success', t('sidebar.adoptSuccess', { name }) ?? `Session "${name}" adopted`)
+                      }).catch((e: any) => {
+                        addToast('error', t('sidebar.adoptFailed', { msg: e.message }) ?? `Failed to adopt session: ${e.message}`)
+                      })
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!canAutoAdopt) return
+                      e.currentTarget.style.background = 'rgba(167,139,250,0.06)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
                     }}
                   >
                     {/* Activity dot */}
@@ -1377,7 +1401,7 @@ export function Sidebar() {
                       </button>
                     )}
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>
