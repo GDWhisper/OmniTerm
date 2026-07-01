@@ -208,6 +208,11 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         getLanguageExtension(fileName),
         editableCompartment.current.of(EditorView.editable.of(isEditable)),
         EditorView.lineWrapping,
+        // Set lang on the contenteditable so IMEs (Chinese/Japanese/Korean)
+        // use the user's language mode and auto-commit punctuation.
+        // Without this the editor inherits <html lang="en"> and IMEs fall
+        // back to English mode, requiring manual confirmation for CJK punctuation.
+        EditorView.contentAttributes.of({ lang: navigator.language }),
       ]
 
       if (isEditable) {

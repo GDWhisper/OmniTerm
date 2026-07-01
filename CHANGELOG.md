@@ -47,6 +47,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-01) `[frontend]` 修复：文件编辑器输入中文标点需多按一次确认 — `.cm-content` 未设 `lang` 属性，IME 继承 `<html lang="en">` 判定为英文上下文，标点走「候选→确认」流程。改为通过 `EditorView.contentAttributes` 显式设 `lang={navigator.language}`，让 IME 按用户语言模式提交标点（`frontend/src/components/FileManager/FileEditor.tsx`）
 - (2026-07-01) `[frontend]` 修复：删除会话时大量弹出 "session not found or tmux unavailable" 错误通知 — `handleDeleteSession` 异步删除 session 后才清 `activeSessionId`，期间 FileManager 多个 effect 请求已删除 session 导致后端 404。现改为先清 session 再删（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：接管外部会话后在目标项目中不可见 — `sessionsForWorktree()` 严格按 `workspace_path === wtPath` 过滤，接管 session 的 CWD 不匹配任何 worktree 路径，被静默隐藏。现改为将「孤儿」session 纳入主 worktree 下显示（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：点击外部会话后终端空白 — `Terminal.tsx` 中 `initTerminal` useEffect 仅依赖稳定的回调引用，空状态→活跃会话过渡时容器 div 出现但 effect 不触发，终端从未创建（`frontend/src/components/Terminal/Terminal.tsx`）
