@@ -45,6 +45,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-07-01) `[frontend]` 修复：点击外部会话后终端空白 — `Terminal.tsx` 中 `initTerminal` useEffect 仅依赖稳定的回调引用，空状态→活跃会话过渡时容器 div 出现但 effect 不触发，终端从未创建（`frontend/src/components/Terminal/Terminal.tsx`）
+
 ### Added
 
 - (2026-07-01) `[backend]` `GET /sessions/external` + `POST /sessions/adopt` — 外部 tmux 会话发现与接管 API（`src/api/sessions.rs`、`src/models/session.rs`）
