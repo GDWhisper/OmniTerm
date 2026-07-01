@@ -25,6 +25,7 @@ export function Layout() {
     activeSessionId,
     setSidebarWidth,
     setFileManagerWidth,
+    crtScanlines,
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -179,7 +180,7 @@ export function Layout() {
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
       {/* CRT scanline overlay — controlled by settings, default off */}
-      {false && <div className="crt-overlay" />}
+      {crtScanlines && <div className="crt-overlay" />}
     </div>
   )
 }
@@ -195,6 +196,7 @@ function MobileLayout() {
     settingsOpen,
     tmuxCheatsheetOpen,
     setActiveTab,
+    crtScanlines,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
 
@@ -267,7 +269,7 @@ function MobileLayout() {
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
       {/* CRT scanline overlay — controlled by settings, default off */}
-      {false && <div className="crt-overlay" />}
+      {crtScanlines && <div className="crt-overlay" />}
     </div>
   )
 }

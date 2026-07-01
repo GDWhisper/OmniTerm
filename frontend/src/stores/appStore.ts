@@ -58,6 +58,9 @@ export interface AppState {
   settingsOpen: boolean
   tmuxCheatsheetOpen: boolean
   immersiveMode: boolean
+  pixelAnimationsEnabled: boolean
+  soundEnabled: boolean
+  crtScanlines: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -84,6 +87,9 @@ export interface AppState {
   setMobileGestureEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
+  setPixelAnimationsEnabled: (v: boolean) => void
+  setSoundEnabled: (v: boolean) => void
+  setCrtScanlines: (v: boolean) => void
 
   // Workspace session memory
   setWorkspaceSession: (workspaceId: string, sessionId: string) => void
@@ -135,6 +141,9 @@ export const useAppStore = create<AppState>((set) => ({
   settingsOpen: false,
   tmuxCheatsheetOpen: false,
   immersiveMode: false,  // Disabled by default - feature not yet verified
+  pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
+  soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
+  crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -202,6 +211,18 @@ export const useAppStore = create<AppState>((set) => ({
   setImmersiveMode: (v) => {
     localStorage.setItem('omniterm_immersive_mode', String(v))
     set({ immersiveMode: v })
+  },
+  setPixelAnimationsEnabled: (v) => {
+    localStorage.setItem('omniterm_pixel_animations', String(v))
+    set({ pixelAnimationsEnabled: v })
+  },
+  setSoundEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_enabled', String(v))
+    set({ soundEnabled: v })
+  },
+  setCrtScanlines: (v) => {
+    localStorage.setItem('omniterm_crt_scanlines', String(v))
+    set({ crtScanlines: v })
   },
 
   setWorkspaceSession: (workspaceId, sessionId) =>
