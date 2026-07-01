@@ -65,6 +65,17 @@ pub async fn ws_terminal_handler(
     ws.on_upgrade(move |socket| handle_terminal(socket, session_id, query, state))
 }
 
+/// WebSocket upgrade handler for external (not-yet-adopted) tmux sessions.
+/// Connects directly to the tmux session by name, without requiring a DB record.
+pub async fn ws_external_terminal_handler(
+    ws: WebSocketUpgrade,
+    Path(tmux_name): Path<String>,
+    Query(query): Query<TerminalQuery>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_external_terminal(socket, tmux_name, query, state))
+}
+
 async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery, state: AppState) {
     // Look up the session
     let tmux_name: Option<(String,)> =
@@ -481,4 +492,256 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     }
 
     info!("terminal WS disconnected: session={}", session_id);
+}
+
+/// Handle terminal connection for an external tmux session (no DB record).
+/// Identical to `handle_terminal` except it skips all DB lookups — the tmux
+/// session name is used directly, hooks are disabled, and CWD is resolved
+/// from the live tmux pane.
+async fn handle_external_terminal(
+    ws: WebSocket,
+    tmux_name: String,
+    query: TerminalQuery,
+    state: AppState,
+) {
+    info!("terminal WS connected (external): tmux={}", tmux_name);
+
+    // Establish control mode connection to track session activity.
+    if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
+        warn!(
+            "failed to ensure control mode for external session {}: {}",
+            tmux_name, e
+        );
+    }
+
+    let _hook_enabled = false;
+
+    // Resolve CWD from the live tmux pane (fall back to HOME)
+    let cwd = tmux::pane_cwd(&tmux_name)
+        .await
+        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+
+    // Determine initial PTY size from query params
+    let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
+    let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
+    let pty_size = PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+
+    info!(
+        "terminal PTY initial size: {}x{} for tmux={}",
+        cols, rows, tmux_name
+    );
+
+    // Open PTY at the correct viewport size and spawn tmux
+    let pty_system = native_pty_system();
+    let pty_pair = match pty_system.openpty(pty_size) {
+        Ok(pair) => pair,
+        Err(e) => {
+            error!("failed to open PTY: {}", e);
+            let (mut sender, _) = ws.split();
+            let msg = serde_json::to_string(&ServerControl::Error {
+                message: "failed to open PTY",
+            })
+            .unwrap();
+            let _ = sender.send(Message::Text(msg.into())).await;
+            return;
+        }
+    };
+
+    let mut cmd = CommandBuilder::new("tmux");
+    cmd.args(["new-session", "-A", "-s", &tmux_name]);
+    cmd.cwd(&cwd);
+    cmd.env("TERM", "xterm-256color");
+
+    let mut child = match pty_pair.slave.spawn_command(cmd) {
+        Ok(child) => child,
+        Err(e) => {
+            error!("failed to spawn tmux: {}", e);
+            let (mut sender, _) = ws.split();
+            let msg = serde_json::to_string(&ServerControl::Error {
+                message: "failed to start terminal",
+            })
+            .unwrap();
+            let _ = sender.send(Message::Text(msg.into())).await;
+            return;
+        }
+    };
+
+    let mut pty_reader = pty_pair.master.try_clone_reader().expect("clone reader");
+    let master_pty: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty>>>> =
+        Arc::new(Mutex::new(Some(pty_pair.master)));
+
+    let (mut ws_tx, mut ws_rx) = ws.split();
+
+    let attached_msg = serde_json::to_string(&ServerControl::Attached {
+        session: &tmux_name,
+    })
+    .unwrap();
+    if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
+        return;
+    }
+
+    let (_agent_tx, mut agent_rx) = tokio::sync::mpsc::channel::<String>(16);
+    let (pty_out_tx, mut pty_out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 8192];
+        loop {
+            match pty_reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if pty_out_tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        debug!("PTY reader exited");
+    });
+
+    let mut ws_tx2 = ws_tx;
+    let forward_handle = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Some(data) = pty_out_rx.recv() => {
+                    if ws_tx2.send(Message::Binary(data.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Some(json_text) = agent_rx.recv() => {
+                    if ws_tx2.send(Message::Text(json_text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                else => break,
+            }
+        }
+    });
+
+    let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+
+    let pty_fd: RawFd = master_pty
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.as_raw_fd())
+        .expect("master PTY has a raw fd on unix");
+    std::thread::spawn(move || {
+        while let Some(data) = pty_in_rx.blocking_recv() {
+            let mut written = 0;
+            while written < data.len() {
+                let n = unsafe {
+                    libc::write(
+                        pty_fd,
+                        data[written..].as_ptr() as *const libc::c_void,
+                        data.len() - written,
+                    )
+                };
+                if n <= 0 {
+                    if n < 0 {
+                        let errno = std::io::Error::last_os_error().raw_os_error();
+                        if errno == Some(libc::EBADF) {
+                            debug!("PTY fd closed, writer thread exiting");
+                        } else {
+                            warn!("PTY write failed: errno={:?}", errno);
+                        }
+                    }
+                    return;
+                }
+                written += n as usize;
+            }
+        }
+        debug!("PTY writer exited");
+    });
+
+    // Agent poll task: external sessions never have hooks, so this is never started.
+    // We keep the shutdown channel for symmetry but never spawn a poll task.
+    let (_shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
+    let agent_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    let resize_pty = Arc::clone(&master_pty);
+    let read_handle = tokio::spawn(async move {
+        while let Some(msg) = ws_rx.next().await {
+            match msg {
+                Ok(Message::Binary(data)) => {
+                    if pty_in_tx.send(data.to_vec()).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Text(text)) => {
+                    if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
+                        match ctrl {
+                            ClientControl::Resize { cols, rows } => {
+                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
+                                    if let Ok(guard) = resize_pty.lock() {
+                                        if let Some(master) = guard.as_ref() {
+                                            let new_size = PtySize {
+                                                rows,
+                                                cols,
+                                                pixel_width: 0,
+                                                pixel_height: 0,
+                                            };
+                                            if let Err(e) = master.resize(new_size) {
+                                                warn!("PTY resize failed: {}", e);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            ClientControl::Ping => {
+                                debug!("ping received");
+                            }
+                        }
+                    }
+                }
+                Ok(Message::Close(_)) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    let child_pid = child.process_id();
+    let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<Option<i32>>(1);
+    tokio::task::spawn_blocking(move || {
+        let status = child.wait();
+        let code = status.ok().map(|s| s.exit_code() as i32);
+        let _ = exit_tx.blocking_send(code);
+    });
+
+    tokio::select! {
+        _ = forward_handle => {
+            debug!("PTY→WS forward ended");
+        }
+        _ = read_handle => {
+            debug!("WS→PTY read ended");
+        }
+        code = exit_rx.recv() => {
+            info!("tmux process exited: {:?}", code);
+        }
+    }
+
+    if let Some(handle) = agent_handle {
+        let _ = handle.await;
+        debug!("agent poll task joined");
+    }
+
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGHUP);
+        }
+        debug!("sent SIGHUP to tmux client pid={}", pid);
+    }
+
+    if let Ok(mut guard) = master_pty.lock() {
+        guard.take();
+    }
+
+    info!("terminal WS disconnected (external): tmux={}", tmux_name);
 }

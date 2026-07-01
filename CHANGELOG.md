@@ -47,6 +47,19 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-01) `[frontend]` FileManager 操作列新增「复制绝对路径」按钮 — 点击后 `navigator.clipboard` 写入完整绝对路径（含 cwd），按钮 title 悬停预览路径；列宽 80→104px 容纳三个图标，操作列改为 flex 居中（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
+
+### Fixed
+
+- (2026-07-01) `[frontend]` 修复：删除会话时大量弹出 "session not found or tmux unavailable" 错误通知 — `handleDeleteSession` 异步删除 session 后才清 `activeSessionId`，期间 FileManager 多个 effect 请求已删除 session 导致后端 404。现改为先清 session 再删（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-01) `[frontend]` 修复：接管外部会话后在目标项目中不可见 — `sessionsForWorktree()` 严格按 `workspace_path === wtPath` 过滤，接管 session 的 CWD 不匹配任何 worktree 路径，被静默隐藏。现改为将「孤儿」session 纳入主 worktree 下显示（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-01) `[frontend]` 修复：点击外部会话后终端空白 — `Terminal.tsx` 中 `initTerminal` useEffect 仅依赖稳定的回调引用，空状态→活跃会话过渡时容器 div 出现但 effect 不触发，终端从未创建（`frontend/src/components/Terminal/Terminal.tsx`）
+
+### Added
+
+- (2026-07-01) `[frontend]` 工作区终端聚焦记忆 — 切换工作区时自动恢复上次使用的会话，无需手动重选；映射持久化到 localStorage，会话删除时自动清理（`frontend/src/stores/appStore.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-01) `[backend]` `GET /sessions/external` + `POST /sessions/adopt` — 外部 tmux 会话发现与接管 API（`src/api/sessions.rs`、`src/models/session.rs`）
+- (2026-07-01) `[frontend]` Sidebar 底部外部会话折叠区 — 自动发现未被数据库记录的 tmux 会话，一键接管到指定项目（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-06-29 12:30) `[frontend]` Sidebar 底部新增 tmux 常用命令速查书本图标按钮，点击弹出固定定位速查面板（`frontend/src/components/TmuxCheatsheet/*`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/BookIcon.tsx`）
 - (2026-06-29 20:20) `[frontend]` tmux 速查命令表拆分为 `data.ts` — 组件只负责渲染，命令结构 (sections/items/cmd) 与文案 (i18n key) 分离，TS 类型校验；新增/修改命令只需改 data.ts + 两个 translation.json（`frontend/src/components/TmuxCheatsheet/data.ts`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheet.tsx`）
 - (2026-06-29 20:25) `[docs]` 新增 `docs/frontend-patterns.md` — 收录前端设计模式与约定，首个 entry 为「数据/渲染分离 (data.ts convention)」，并在 `AGENTS.md` 文档索引添加读取/维护触发条件（`docs/frontend-patterns.md`、`AGENTS.md`）

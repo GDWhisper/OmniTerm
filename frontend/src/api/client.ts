@@ -106,6 +106,19 @@ export interface Session {
   agent_detected?: string
 }
 
+export interface ExternalSession {
+  name: string
+  attached: boolean
+  windows: number
+  created: string
+  cwd?: string
+  agent_kind?: string
+  agent_state?: string
+  attention_reason?: string
+  agent_event?: string
+  agent_nonce?: string
+}
+
 export const api = {
   // Health
   health: () => request<{ status: string }>('/health'),
@@ -114,6 +127,8 @@ export const api = {
   systemInfo: () => request<{ home_dir: string }>('/system/info'),
   listDirs: (path: string) =>
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
+  pathExists: (path: string) =>
+    request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
 
   // Auth
   setup: (password: string) =>
@@ -162,6 +177,15 @@ export const api = {
   // Session CWD
   getSessionCwd: (sessionId: string) =>
     request<{ cwd: string }>(`/sessions/${sessionId}/cwd`),
+
+  // External sessions (not yet adopted into any project)
+  listExternalSessions: () =>
+    request<{ sessions: ExternalSession[] }>('/sessions/external', { silent: true }),
+  adoptSession: (tmuxName: string, projectId: string) =>
+    request<Session>('/sessions/adopt', {
+      method: 'POST',
+      body: JSON.stringify({ tmux_name: tmuxName, project_id: projectId }),
+    }),
 
   // Hooks
   hookStatus: (sessionId: string) =>

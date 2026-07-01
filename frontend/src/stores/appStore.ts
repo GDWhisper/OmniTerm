@@ -36,6 +36,10 @@ export interface AppState {
   activeProjectId: string | null
   activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
+  activeExternalSession: string | null // tmux session name (not in DB yet)
+
+  // Per-workspace terminal memory: workspaceId → last active sessionId
+  workspaceSessionMemory: Record<string, string>
 
   // FM session states
   fmSessionStates: Record<string, FmSessionState>
@@ -73,12 +77,17 @@ export interface AppState {
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
+  setActiveExternalSession: (name: string | null) => void
   setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
+
+  // Workspace session memory
+  setWorkspaceSession: (workspaceId: string, sessionId: string) => void
+  clearWorkspaceSession: (workspaceId: string) => void
 
   // FM session actions
   setFmSessionMode: (sessionId: string, mode: 'following' | 'manual') => void
@@ -94,7 +103,7 @@ export const useAppStore = create<AppState>((set) => ({
   fileManagerOpen: true,
   fileManagerCollapsed: false,
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
-  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 4)))),
+  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 3)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
@@ -105,6 +114,15 @@ export const useAppStore = create<AppState>((set) => ({
   activeProjectId: localStorage.getItem('omniterm_active_project') || null,
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
+  activeExternalSession: null,
+
+  workspaceSessionMemory: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('omniterm_ws_session_memory') || '{}')
+    } catch {
+      return {}
+    }
+  })(),
 
   fmSessionStates: {},
 
@@ -165,6 +183,7 @@ export const useAppStore = create<AppState>((set) => ({
     else localStorage.removeItem('omniterm_active_session')
     set({ activeSessionId: id })
   },
+  setActiveExternalSession: (name) => set({ activeExternalSession: name }),
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
@@ -184,6 +203,21 @@ export const useAppStore = create<AppState>((set) => ({
     localStorage.setItem('omniterm_immersive_mode', String(v))
     set({ immersiveMode: v })
   },
+
+  setWorkspaceSession: (workspaceId, sessionId) =>
+    set((s) => {
+      const next = { ...s.workspaceSessionMemory, [workspaceId]: sessionId }
+      localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(next))
+      return { workspaceSessionMemory: next }
+    }),
+
+  clearWorkspaceSession: (workspaceId) =>
+    set((s) => {
+      const next = { ...s.workspaceSessionMemory }
+      delete next[workspaceId]
+      localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(next))
+      return { workspaceSessionMemory: next }
+    }),
 
   setFmSessionMode: (sessionId, mode) =>
     set((s) => ({

@@ -177,5 +177,17 @@
   "sidebar.loading": "Loading...",
   "sidebar.retry": "Retry",
   "sidebar.emptyDir": "Empty directory",
-  "sidebar.pathWillBeCreated": "This path doesn't exist — it will be created when you create the project"
+  "sidebar.pathWillBeCreated": "This path doesn't exist — it will be created when you create the project",
+  "sidebar.repairTitle": "Project Path Not Found",
+  "sidebar.repairOldPathLabel": "Original path (no longer exists)",
+  "sidebar.repairNewPathLabel": "New Path",
+  "sidebar.repairBrowse": "Browse",
+  "sidebar.repairHint": "The project directory may have been moved or renamed. Browse to its new location below.",
+  "sidebar.repairUpdate": "Update Path",
+  "sidebar.repairUpdating": "Updating…",
+  "sidebar.repairUpdated": "Project path updated to \"{{path}}\"",
+  "sidebar.externalSessions": "External Sessions",
+  "sidebar.adopt": "Adopt",
+  "sidebar.adoptSuccess": "Session \"{{name}}\" adopted",
+  "sidebar.adoptFailed": "Failed to adopt session: {{msg}}"
 }
