@@ -25,15 +25,13 @@
   --accent-bright: #6d28d9;
   --accent-10: rgba(124, 58, 237, 0.10);
   --accent-14: rgba(124, 58, 237, 0.14);
-  --accent-glow-sm: 0 0 6px rgba(124, 58, 237, 0.4);
-  --accent-glow-md: 0 0 10px rgba(124, 58, 237, 0.5);
   /* danger */
   --danger: #dc2626;
   --danger-12: rgba(220, 38, 38, 0.12);
-  --danger-glow: 0 0 6px rgba(220, 38, 38, 0.3);
   /* success */
   --success: #16a34a;
-  --success-glow: 0 0 6px #16a34a;
+  --warning: #ca8a04;
+  --pixel-shadow: #c4bdb0;
   /* scrollbar */
   --scrollbar-thumb: #c4bdb0;
   --scrollbar-track: #e8e3db;
@@ -41,36 +39,35 @@
 }
 
 .dark {
-  /* backgrounds */
-  --bg-base: #0a0a0f;
-  --bg-elevated: #111827;
-  --bg-surface: #1e293b;
+  /* backgrounds — deep space gray with subtle blue-purple tint */
+  --bg-base: #12141A;
+  --bg-elevated: #1B1E26;
+  --bg-surface: #242832;
   /* borders */
-  --border-subtle: #1e293b;
-  --border-strong: #334155;
-  /* text */
-  --text-primary: #e2e8f0;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
-  --text-faint: #64748b;
-  --text-dim: #475569;
-  /* accent */
-  --accent: #a78bfa;
-  --accent-bright: #c4b5fd;
-  --accent-10: rgba(167, 139, 250, 0.10);
-  --accent-14: rgba(167, 139, 250, 0.14);
-  --accent-glow-sm: 0 0 6px rgba(167, 139, 250, 0.5);
-  --accent-glow-md: 0 0 10px rgba(167, 139, 250, 0.7);
-  /* danger */
-  --danger: #ef4444;
-  --danger-12: rgba(239, 68, 68, 0.12);
-  --danger-glow: 0 0 6px rgba(239, 68, 68, 0.3);
-  /* success */
-  --success: #4ade80;
-  --success-glow: 0 0 6px #4ade80;
+  --border-subtle: #30363D;
+  --border-strong: #484F58;
+  /* text — soft gray, no pure white */
+  --text-primary: #D1D5DB;
+  --text-secondary: #8B949E;
+  --text-muted: #8B949E;
+  --text-faint: #484F58;
+  --text-dim: #30363D;
+  /* accent — pastel neon cyan */
+  --accent: #58A6FF;
+  --accent-bright: #79C0FF;
+  --accent-pink: #F778BA;
+  /* danger — soft coral red */
+  --danger: #FF7B72;
+  --danger-12: rgba(255, 123, 114, 0.12);
+  /* success — soft neon green */
+  --success: #7EE787;
+  /* warning — soft amber orange */
+  --warning: #FFA657;
+  /* pixel hard shadow */
+  --pixel-shadow: #090A0D;
   /* scrollbar */
-  --scrollbar-thumb: #334155;
-  --scrollbar-track: #0a0a0f;
+  --scrollbar-thumb: #484F58;
+  --scrollbar-track: #12141A;
   color-scheme: dark;
 }
 
@@ -484,10 +481,11 @@ html, body, #root {
   scrollbar-width: thin;
 }
 
-/* ── File table — min-width forces horizontal scroll ── */
+/* ── File table ──
+   No explicit width (default: auto) — table is exactly as wide as its columns.
+   No proportional distribution of extra space, so resizing one column doesn't
+   shift other columns. Horizontal scroll on parent div if table overflows. */
 .fm-table {
-  min-width: 540px;
-  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -514,9 +512,14 @@ html, body, #root {
   white-space: nowrap;
   padding: 8px 8px;
   border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
   cursor: default;
   user-select: none;
   position: relative;
+}
+
+.fm-table th:last-child {
+  border-right: none;
 }
 
 /* Sortable label — only this area triggers sort on click */
@@ -561,7 +564,8 @@ html, body, #root {
 
 .fm-th-resize:hover,
 .fm-th-resize.fm-resizing {
-  background: var(--text-faint);
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(167, 139, 250, 0.5);
 }
 
 /* ── Table rows ── */
@@ -589,12 +593,29 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
-/* Actions cell — keep table-cell display; icons (inline-flex) center naturally */
+/* Actions cell — flex centers the 3 action icons (copy / rename / delete) */
 .fm-td-actions-cell {
-  width: 80px;
-  min-width: 80px;
-  text-align: center;
+  width: 104px;
+  min-width: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   vertical-align: middle;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--bg-base);
+  box-shadow: -3px 0 4px -2px rgba(0,0,0,0.18);
+}
+
+/* Actions column header — sticky both top (via thead) and right */
+.fm-table .fm-th-actions {
+  position: sticky;
+  right: 0;
+  z-index: 6;
+  background: var(--bg-base);
+  text-align: center;
 }
 
 /* ── Name cell ── */
@@ -665,7 +686,6 @@ html, body, #root {
 .fm-td-size {
   color: var(--text-faint);
   font-size: 11px;
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
