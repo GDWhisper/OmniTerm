@@ -12,6 +12,7 @@ export function Terminal() {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const activeExternalSession = useAppStore((s) => s.activeExternalSession)
   const isMobile = useAppStore((s) => s.isMobile)
   const fontSize = useAppStore((s) => s.fontSize)
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
@@ -26,7 +27,11 @@ export function Terminal() {
     setScrollMode,
     sendScrollKeys,
     exitScrollMode,
-  } = useTerminal({ sessionId: activeSessionId, fontSize: effectiveFontSize })
+  } = useTerminal({
+    sessionId: activeSessionId,
+    externalSessionName: activeExternalSession,
+    fontSize: effectiveFontSize,
+  })
 
   useEffect(() => {
     if (containerRef.current) {
@@ -87,7 +92,7 @@ export function Terminal() {
     }
   }
 
-  if (!activeSessionId) {
+  if (!activeSessionId && !activeExternalSession) {
     return (
       <div
         className="h-full flex items-center justify-center"

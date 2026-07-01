@@ -105,10 +105,13 @@ export function Sidebar() {
     setActiveProject,
     setActiveWorkspace,
     setActiveSession,
+    setActiveExternalSession,
     setConnected,
     fmSessionStates,
     resetFmToFollowing,
   } = useAppStore()
+
+  const activeExternalSession = useAppStore((s) => s.activeExternalSession)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
@@ -1251,36 +1254,26 @@ export function Sidebar() {
             {externalExpanded && (
               <div className="pl-4 pr-1">
                 {externalSessions.map((s) => {
-                  const targetPid = activeProjectId || projects[0]?.id
-                  const canAutoAdopt = !!targetPid && adoptTarget?.tmux_name !== s.name
+                  const isSelected = activeExternalSession === s.name
                   return (
                   <div
                     key={s.name}
-                    className="flex items-center gap-2 rounded-md transition-all mb-1"
+                    className="flex items-center gap-2 rounded-md transition-all mb-1 cursor-pointer"
                     style={{
                       padding: '5px 8px',
-                      background: 'transparent',
-                      border: '1px solid transparent',
-                      cursor: canAutoAdopt ? 'pointer' : 'default',
+                      background: isSelected ? 'rgba(167,139,250,0.08)' : 'transparent',
+                      border: isSelected ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
                     }}
                     onClick={() => {
-                      if (!canAutoAdopt || !targetPid) return
-                      const name = s.name
-                      api.adoptSession(name, targetPid).then((adopted) => {
-                        setExternalSessions(prev => prev.filter(es => es.name !== name))
-                        loadSessions(targetPid)
-                        setActiveProject(targetPid)
-                        setActiveSession(adopted.id)
-                        addToast('success', t('sidebar.adoptSuccess', { name }) ?? `Session "${name}" adopted`)
-                      }).catch((e: any) => {
-                        addToast('error', t('sidebar.adoptFailed', { msg: e.message }) ?? `Failed to adopt session: ${e.message}`)
-                      })
+                      setActiveSession(null)
+                      setActiveExternalSession(isSelected ? null : s.name)
                     }}
                     onMouseEnter={(e) => {
-                      if (!canAutoAdopt) return
+                      if (isSelected) return
                       e.currentTarget.style.background = 'rgba(167,139,250,0.06)'
                     }}
                     onMouseLeave={(e) => {
+                      if (isSelected) return
                       e.currentTarget.style.background = 'transparent'
                     }}
                   >

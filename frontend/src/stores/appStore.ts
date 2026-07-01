@@ -36,6 +36,7 @@ export interface AppState {
   activeProjectId: string | null
   activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
+  activeExternalSession: string | null // tmux session name (not in DB yet)
 
   // FM session states
   fmSessionStates: Record<string, FmSessionState>
@@ -73,6 +74,7 @@ export interface AppState {
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
+  setActiveExternalSession: (name: string | null) => void
   setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
@@ -94,7 +96,7 @@ export const useAppStore = create<AppState>((set) => ({
   fileManagerOpen: true,
   fileManagerCollapsed: false,
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || '200'),
-  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 4)))),
+  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 3)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
@@ -105,6 +107,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeProjectId: localStorage.getItem('omniterm_active_project') || null,
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
+  activeExternalSession: null,
 
   fmSessionStates: {},
 
@@ -165,6 +168,7 @@ export const useAppStore = create<AppState>((set) => ({
     else localStorage.removeItem('omniterm_active_session')
     set({ activeSessionId: id })
   },
+  setActiveExternalSession: (name) => set({ activeExternalSession: name }),
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {

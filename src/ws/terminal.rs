@@ -514,7 +514,7 @@ async fn handle_external_terminal(
         );
     }
 
-    let hook_enabled = false;
+    let _hook_enabled = false;
 
     // Resolve CWD from the live tmux pane (fall back to HOME)
     let cwd = tmux::pane_cwd(&tmux_name)

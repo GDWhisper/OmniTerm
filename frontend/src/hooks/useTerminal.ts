@@ -10,6 +10,7 @@ import { useToastStore } from '../stores/toastStore'
 
 interface UseTerminalOptions {
   sessionId: string | null
+  externalSessionName?: string | null
   fontSize?: number
   onTitleChange?: (title: string) => void
 }
@@ -45,7 +46,7 @@ const LIGHT_TERMINAL_THEME = {
   brightWhite: '#1c1917',
 }
 
-export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerminalOptions) {
+export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const resolved = useThemeStore((s) => s.resolved)
   const attention = useAttention()  // Agent attention context
@@ -55,6 +56,7 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   const containerRef = useRef<HTMLDivElement | null>(null)
   const composingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
+  const externalSessionRef = useRef<string | null>(null)
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
@@ -68,20 +70,22 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
 
   const connectWs = useCallback(() => {
     const term = termRef.current
-    if (!sessionId || !term) return
+    const id = externalSessionName ?? sessionId
+    if (!id || !term) return
 
     // Close existing connection
     if (wsRef.current) {
-      wsRef.current.onclose = null // prevent stale handler from writing to new terminal
+      wsRef.current.onclose = null
       wsRef.current.close()
       wsRef.current = null
     }
 
-    // Pass current terminal size as URL params so backend creates PTY at the
-    // correct viewport size from the start (like tmuxes does).
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const path = externalSessionName
+      ? `/api/v1/ws/terminal/external/${encodeURIComponent(externalSessionName)}`
+      : `/api/v1/ws/terminal/${sessionId}`
     const ws = new WebSocket(
-      `${protocol}//${window.location.host}/api/v1/ws/terminal/${sessionId}?cols=${term.cols}&rows=${term.rows}`
+      `${protocol}//${window.location.host}${path}?cols=${term.cols}&rows=${term.rows}`
     )
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
@@ -212,7 +216,8 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
     } // end keyHandlerAttachedRef guard
 
     sessionIdRef.current = sessionId
-  }, [sessionId])
+    externalSessionRef.current = externalSessionName ?? null
+  }, [sessionId, externalSessionName])
 
   /** Send raw data to the terminal's WebSocket if connected */
   const sendData = useCallback((data: string) => {
@@ -387,15 +392,20 @@ export function useTerminal({ sessionId, fontSize = 14, onTitleChange }: UseTerm
   useEffect(() => {
     if (termRef.current && sessionId && sessionId !== sessionIdRef.current) {
       connectWs()
+      return
     }
-  }, [sessionId, connectWs])
+    if (termRef.current && externalSessionName && externalSessionName !== externalSessionRef.current) {
+      connectWs()
+    }
+  }, [sessionId, externalSessionName, connectWs])
 
   // Auto-connect after init (first session)
   useEffect(() => {
-    if (termRef.current && sessionId && !wsRef.current) {
+    const hasId = !!(sessionId || externalSessionName)
+    if (termRef.current && hasId && !wsRef.current) {
       connectWs()
     }
-  }, [terminalReady, sessionId, connectWs])
+  }, [terminalReady, sessionId, externalSessionName, connectWs])
 
   // Live-update font size when store changes
   useEffect(() => {
