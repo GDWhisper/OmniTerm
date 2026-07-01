@@ -44,8 +44,12 @@ function isTextFile(fileName: string): boolean {
 interface FileDrawerProps {
   /** Absolute path of the file to display */
   filePath: string
-  /** Session ID for API calls */
-  sessionId: string
+  /** Session ID for API calls (session mode) */
+  sessionId?: string
+  /** Workspace ID for API calls (workspace mode) */
+  workspaceId?: string
+  /** Project ID — required with workspaceId */
+  projectId?: string | null
   /** Called when the drawer should close */
   onClose: () => void
   /** Current drawer height in px */
@@ -59,6 +63,8 @@ interface FileDrawerProps {
 export function FileDrawer({
   filePath,
   sessionId,
+  workspaceId,
+  projectId,
   onClose,
   height,
   onHeightChange,
@@ -91,7 +97,7 @@ export function FileDrawer({
     setLoading(true)
     setError(null)
     try {
-      const data = await api.readFileBySession(sessionId, filePath)
+      const data = await api.readFile2({ session: sessionId, workspaceId, projectId: projectId ?? undefined, path: filePath })
       setContent(data.content)
       setEditedContent(data.content)
       setModified(false)
@@ -102,7 +108,7 @@ export function FileDrawer({
     } finally {
       setLoading(false)
     }
-  }, [sessionId, filePath, isText])
+  }, [sessionId, workspaceId, projectId, filePath, isText])
 
   // Initial load
   useEffect(() => {
@@ -111,7 +117,7 @@ export function FileDrawer({
     setModified(false)
     setExternalChange(false)
     loadedRef.current = false
-  }, [filePath, sessionId])
+  }, [filePath, sessionId, workspaceId, projectId])
 
   // Handle SSE change events for the current file
   useEffect(() => {
@@ -141,7 +147,7 @@ export function FileDrawer({
     if (!modified || saving) return
     setSaving(true)
     try {
-      await api.writeFileBySession(sessionId, filePath, editedContent)
+      await api.writeFile2({ session: sessionId, workspaceId, projectId: projectId ?? undefined, path: filePath, content: editedContent })
       setContent(editedContent)
       setModified(false)
       setExternalChange(false)
@@ -289,7 +295,7 @@ export function FileDrawer({
             {fileName}
           </span>
           {externalChange && (
-            <span style={{ color: '#f59e0b', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span style={{ color: 'var(--warning)', fontSize: 11, display: 'flex', alignItems: 'center', gap: 3 }}>
               <IconWarning width={12} height={12} />
               {t('drawer.externallyModified')}
             </span>
@@ -471,7 +477,7 @@ export function FileDrawer({
             </button>
           </div>
         ) : isImage ? (
-          <FilePreview filePath={filePath} sessionId={sessionId} fileName={fileName} />
+          <FilePreview filePath={filePath} sessionId={sessionId} workspaceId={workspaceId} projectId={projectId} fileName={fileName} fileChangeEvent={fileChangeEvent} />
         ) : (
           <FileEditor
             content={mode === 'edit' ? editedContent : content}
@@ -506,10 +512,10 @@ export function FileDrawer({
                 onClick={handleReload}
                 style={{
                   padding: '1px 6px',
-                  border: '1px solid #f59e0b',
+                  border: '2px solid var(--warning)',
                   borderRadius: 3,
                   background: 'transparent',
-                  color: '#f59e0b',
+                  color: 'var(--warning)',
                   fontSize: 10,
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
