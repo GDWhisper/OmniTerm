@@ -1253,27 +1253,25 @@ export function Sidebar() {
 
             {externalExpanded && (
               <div className="pl-4 pr-1">
-                {externalSessions.map((s) => {
-                  const isSelected = activeExternalSession === s.name
-                  return (
+                {externalSessions.map((s) => (
                   <div
                     key={s.name}
                     className="flex items-center gap-2 rounded-md transition-all mb-1 cursor-pointer"
                     style={{
                       padding: '5px 8px',
-                      background: isSelected ? 'rgba(167,139,250,0.08)' : 'transparent',
-                      border: isSelected ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
+                      background: activeExternalSession === s.name ? 'rgba(167,139,250,0.08)' : 'transparent',
+                      border: activeExternalSession === s.name ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
                     }}
                     onClick={() => {
                       setActiveSession(null)
-                      setActiveExternalSession(isSelected ? null : s.name)
+                      setActiveExternalSession(activeExternalSession === s.name ? null : s.name)
                     }}
                     onMouseEnter={(e) => {
-                      if (isSelected) return
+                      if (activeExternalSession === s.name) return
                       e.currentTarget.style.background = 'rgba(167,139,250,0.06)'
                     }}
                     onMouseLeave={(e) => {
-                      if (isSelected) return
+                      if (activeExternalSession === s.name) return
                       e.currentTarget.style.background = 'transparent'
                     }}
                   >
@@ -1394,9 +1392,7 @@ export function Sidebar() {
                       </button>
                     )}
                   </div>
-                )
-                }
-                )
+                ))}
               </div>
             )}
           </div>
