@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
+import { GAP, MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
 
 const POPUP_WIDTH = 340
-const MOBILE_NAV_HEIGHT = 54  // MobileNav: padding(6×2) + nav(5×2) + button(32)
-const SIDEBAR_BOTTOM_BAR_HEIGHT = 50  // Sidebar bottom status bar: padding(12×2) + button(26)
-const GAP = 8
 
 export function SettingsPopup() {
   const ref = useRef<HTMLDivElement>(null)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const isMobile = useAppStore((s) => s.isMobile)
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 })
+
+  // Mobile height constants — computed once so outer & inner stay in sync
+  const mobileBottom = MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT
+  const mobileTotal = mobileBottom + MOBILE_STATUS_BAR_RESERVE
 
   // Calculate position based on gear button's bounding rect
   const calcPos = useCallback(() => {
@@ -89,14 +91,19 @@ export function SettingsPopup() {
           ? {
               left: 0,
               right: 0,
-              bottom: MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT,
-              maxHeight: `calc(100dvh - ${MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT + 30}px)`,
+              bottom: mobileBottom,
+              height: `calc(100dvh - ${mobileTotal}px)`,
+              maxHeight: `calc(100dvh - ${mobileTotal}px)`,
               borderRadius: 16,
+              overflow: 'hidden',
             }
           : {
               ...pos,
               maxHeight: 'calc(100dvh - 16px)',
               borderRadius: 10,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: 4,
             }),
         width: isMobile ? '100%' : POPUP_WIDTH,
         zIndex: 50,
@@ -105,14 +112,17 @@ export function SettingsPopup() {
         borderWidth: isMobile ? '2px' : '1px',
         borderColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
         boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-        overflow: 'hidden',
         WebkitOverflowScrolling: 'touch',
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
-      <div style={{ height: '100%', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      {isMobile ? (
+        <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
+          <Settings />
+        </div>
+      ) : (
         <Settings />
-      </div>
+      )}
     </div>
   )
 }

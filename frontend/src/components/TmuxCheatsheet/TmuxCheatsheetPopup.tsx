@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { TmuxCheatsheet } from './TmuxCheatsheet'
+import { GAP, MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
 
 const POPUP_WIDTH = 360
-const GAP = 8
 
 export function TmuxCheatsheetPopup() {
   const ref = useRef<HTMLDivElement>(null)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
+  const isMobile = useAppStore((s) => s.isMobile)
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 })
+
+  const mobileBottom = MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT
+  const mobileTotal = mobileBottom + MOBILE_STATUS_BAR_RESERVE
 
   const calcPos = useCallback(() => {
     const btn = document.querySelector('[data-toggle="tmux-cheatsheet"]') as HTMLElement | null
@@ -76,19 +80,42 @@ export function TmuxCheatsheetPopup() {
       className="tmux-cheatsheet-popup"
       style={{
         position: 'fixed',
-        ...pos,
-        width: POPUP_WIDTH,
-        maxHeight: 'calc(100dvh - 16px)',
+        // Mobile: bottom sheet above MobileNav + MobileStatusBar; Desktop: positioned popup
+        ...(isMobile
+          ? {
+              left: 0,
+              right: 0,
+              bottom: mobileBottom,
+              height: `calc(100dvh - ${mobileTotal}px)`,
+              maxHeight: `calc(100dvh - ${mobileTotal}px)`,
+              borderRadius: 16,
+              overflow: 'hidden',
+            }
+          : {
+              ...pos,
+              maxHeight: 'calc(100dvh - 16px)',
+              borderRadius: 10,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              padding: 4,
+            }),
+        width: isMobile ? '100%' : POPUP_WIDTH,
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',
-        borderRadius: 10,
+        borderWidth: isMobile ? '2px' : '1px',
+        borderColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
         boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
-        overflowY: 'auto',
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
-      <TmuxCheatsheet />
+      {isMobile ? (
+        <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
+          <TmuxCheatsheet />
+        </div>
+      ) : (
+        <TmuxCheatsheet />
+      )}
     </div>
   )
 }

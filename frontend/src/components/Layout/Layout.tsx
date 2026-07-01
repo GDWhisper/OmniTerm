@@ -172,6 +172,7 @@ function MobileLayout() {
     connected,
     mobileGestureEnabled,
     settingsOpen,
+    tmuxCheatsheetOpen,
     setActiveTab,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
@@ -243,6 +244,7 @@ function MobileLayout() {
       </div>
       <MobileNav />
       {settingsOpen && <SettingsPopup />}
+      {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
     </div>
   )
 }

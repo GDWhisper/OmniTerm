@@ -13,6 +13,7 @@
 
 | 组件 | 收录原因 |
 |------|---------|
+| [Settings](#settings) | Sidebar 弹出面板模板，移动/桌面双布局，i18n 多 section |
 | [TmuxCheatsheet](#tmuxcheatsheet) | 数据/视图分离 (data.ts + 两个 translation.json) |
 
 > 看到没有收录的组件？如果它符合下方「收录标准」，按其格式追加 entry。
@@ -27,6 +28,23 @@
 - 维护指引只在某个文件顶部 JSDoc 里，不进表 agent 会漏
 
 不符合的不要进——保持本表「**有约定才收录**」的纯粹性。
+
+---
+
+## Settings
+
+Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修复已落地：外层 `overflow:hidden` + 显式 `height` 裁切 `borderRadius` 圆弧，内层 `overflowY:auto` 滚动。**
+
+- `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关。改这里动设置项
+- `frontend/src/components/Settings/SettingsPopup.tsx` — **弹出层骨架**：定位、滚动、关闭逻辑。一般不改；改这里意味着动弹出行为。从 `../constants/popup` import 定位常量
+- `frontend/src/components/constants/popup.ts` — 移动端定位常量（`MOBILE_NAV_HEIGHT`、`SIDEBAR_BOTTOM_BAR_HEIGHT`、`MOBILE_STATUS_BAR_RESERVE`、`GAP`），SettingsPopup 与 TmuxCheatsheetPopup 共享
+- `frontend/src/stores/appStore.ts` — `settingsOpen` + `toggleSettings()`（与 `tmuxCheatsheetOpen` 互斥）
+- `frontend/src/components/Layout/Layout.tsx` — 触发按钮 `data-toggle="settings"` + Desktop/Mobile 双路径条件渲染 `<SettingsPopup />`
+- `frontend/src/locales/{en,zh}/translation.json` — 改这里：增/删/改 `settings.*` i18n key
+
+**加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。
+
+**复制为新弹窗**：见 `docs/frontend-patterns.md`「Sidebar 底部按钮弹出面板」契约。
 
 ---
 
