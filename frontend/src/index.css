@@ -73,6 +73,45 @@
 
 @import "@xterm/xterm/css/xterm.css";
 
+/* ────────────────────────────────────────────────────────────────────
+   Pixel style — global SVG pixelation and font classes.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* SVG pixelation — disable anti-aliasing for crisp pixel edges */
+svg, svg * {
+  shape-rendering: crispEdges;
+}
+
+svg path, svg rect, svg circle, svg line {
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+/* Pixel display font — titles, buttons, status labels only */
+.font-pixel {
+  font-family: 'VT323', 'Press Start 2P', monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* CRT scanline overlay — 2% opacity, controlled by settings */
+.crt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.02) 0px,
+    rgba(0, 0, 0, 0.02) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+}
+
 :root {
   --sidebar-width: 200px;
   --filemanager-width: 300px;
@@ -106,8 +145,8 @@ html, body, #root {
   content: '';
   position: absolute;
   background: var(--text-faint);
-  border-radius: 1px;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 0;
+  transition: background 0.1s steps(3), box-shadow 0.1s steps(3);
 }
 
 .omniterm-drag-bar:hover {
@@ -116,7 +155,8 @@ html, body, #root {
 
 .omniterm-drag-bar:hover::after {
   background: var(--accent);
-  box-shadow: var(--accent-glow-sm);
+  box-shadow: none;
+  border: 1px solid var(--accent);
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -131,12 +171,10 @@ html, body, #root {
   0%, 100% {
     opacity: 1;
     transform: scale(1.15);
-    box-shadow: var(--accent-glow-md);
   }
   50% {
     opacity: 0.5;
     transform: scale(1);
-    box-shadow: var(--accent-glow-sm);
   }
 }
 
@@ -148,11 +186,9 @@ html, body, #root {
 @keyframes activity-pulse {
   0%, 100% {
     opacity: 1;
-    box-shadow: var(--accent-glow-md);
   }
   50% {
     opacity: 0.5;
-    box-shadow: var(--accent-glow-sm);
   }
 }
 
@@ -168,7 +204,7 @@ html, body, #root {
   transform: translate(-50%, -50%);
   width: 4px;
   height: 48px;
-  border-radius: 2px;
+  border-radius: 0;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -266,8 +302,8 @@ html, body, #root {
 }
 
 .fm-bc-root:hover {
-  background: var(--accent-14);
-  box-shadow: 0 0 8px rgba(167, 139, 250, 0.2);
+  background: rgba(88, 166, 255, 0.14);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
   color: var(--accent-bright);
   text-decoration: none !important;
 }
@@ -304,7 +340,7 @@ html, body, #root {
   height: 28px;
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: 0;
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -329,7 +365,7 @@ html, body, #root {
   right: 0;
   width: 220px;
   z-index: 50;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(167, 139, 250, 0.15);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
   animation: fm-search-drop 0.15s ease-out;
 }
 
@@ -342,8 +378,8 @@ html, body, #root {
   width: 180px;
   height: 26px;
   background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
@@ -354,7 +390,7 @@ html, body, #root {
 
 .fm-search:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .fm-search::placeholder {
@@ -364,47 +400,43 @@ html, body, #root {
 /* ── Download mode (active button pulse) ── */
 @keyframes fm-download-pulse {
   0%, 100% {
-    background: rgba(196, 181, 253, 0.30);
-    box-shadow: 0 0 8px rgba(196, 181, 253, 0.55), inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
   }
   50% {
-    background: rgba(196, 181, 253, 0.58);
-    box-shadow: 0 0 22px rgba(196, 181, 253, 0.95), inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
   }
 }
 .fm-btn-download-active {
   animation: fm-download-pulse 1.0s ease-in-out infinite;
-  color: #c4b5fd;
+  color: var(--accent);
 }
 .fm-btn-download-active:hover {
-  background: rgba(196, 181, 253, 0.55);
-  color: #ddd6fe;
-  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 /* ── Terminal button pulse (back-to-terminal outside CWD) ── */
 @keyframes fm-terminal-pulse {
   0%, 100% {
-    background: rgba(196, 181, 253, 0.30);
-    box-shadow:
-      0 0 8px rgba(196, 181, 253, 0.55),
-      inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
   }
   50% {
-    background: rgba(196, 181, 253, 0.58);
-    box-shadow:
-      0 0 22px rgba(196, 181, 253, 0.95),
-      inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
   }
 }
 .fm-btn-terminal-active {
   animation: fm-terminal-pulse 1.0s ease-in-out infinite;
-  color: #c4b5fd;
+  color: var(--accent);
 }
 .fm-btn-terminal-active:hover {
-  background: rgba(196, 181, 253, 0.55);
-  color: #ddd6fe;
-  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 /* ── Checkbox column (only visible in download mode) ── */
@@ -425,14 +457,14 @@ html, body, #root {
   vertical-align: middle;
 }
 .fm-checkbox:hover {
-  filter: drop-shadow(0 0 4px rgba(196, 181, 253, 0.7));
+  filter: drop-shadow(0 0 0 var(--accent));
 }
 
 /* ── Drag over state ── */
 .fm-drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
-  background: rgba(167, 139, 250, 0.04);
+  background: rgba(88, 166, 255, 0.04);
 }
 
 /* ── Drag overlay ── */
@@ -443,9 +475,9 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(167, 139, 250, 0.06);
+  background: rgba(88, 166, 255, 0.06);
   border: 2px dashed var(--accent);
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--accent);
   font-size: 14px;
   font-weight: 600;
@@ -471,7 +503,7 @@ html, body, #root {
 }
 .fm-table-wrap::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 2px;
+  border-radius: 0;
 }
 .fm-table-wrap::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
@@ -558,14 +590,14 @@ html, body, #root {
   cursor: col-resize;
   z-index: 5;
   user-select: none;
-  border-radius: 1px;
+  border-radius: 0;
   transition: background 0.15s ease;
 }
 
 .fm-th-resize:hover,
 .fm-th-resize.fm-resizing {
   background: var(--accent);
-  box-shadow: 0 0 6px rgba(167, 139, 250, 0.5);
+  box-shadow: none;
 }
 
 /* ── Table rows ── */
@@ -650,7 +682,7 @@ html, body, #root {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   transition: all 0.15s ease;
   color: var(--text-faint);
@@ -672,14 +704,14 @@ html, body, #root {
   max-width: 260px;
   height: 24px;
   background: var(--bg-surface);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
+  border: 2px solid var(--accent);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
   padding: 0 6px;
   outline: none;
-  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* ── Size cell ── */
@@ -748,19 +780,19 @@ html, body, #root {
    ──────────────────────────────────────────────────────────────────── */
 
 .sidebar-glow-violet {
-  box-shadow: var(--accent-glow-md);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 .sidebar-glow-violet-hover:hover {
-  box-shadow: 0 0 16px rgba(167, 139, 250, 0.4);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 .sidebar-glow-green {
-  box-shadow: var(--success-glow);
+  box-shadow: none;
 }
 
 .sidebar-glow-red-hover:hover {
-  box-shadow: var(--danger-glow);
+  box-shadow: none;
 }
 
 /* ── Settings popup slide-in ── */
