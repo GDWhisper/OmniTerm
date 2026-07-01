@@ -33,12 +33,17 @@ export function Terminal() {
     fontSize: effectiveFontSize,
   })
 
+  const hasSession = !!(activeSessionId || activeExternalSession)
+
+  // Initialize terminal on mount or when transitioning from empty state → active session.
+  // Session switches (A→B) keep hasSession === true so the effect does not fire —
+  // useTerminal handles WS reconnection internally.
   useEffect(() => {
-    if (containerRef.current) {
+    if (hasSession && containerRef.current) {
       const cleanup = initTerminal(containerRef.current)
       return cleanup
     }
-  }, [initTerminal])
+  }, [hasSession, initTerminal])
 
   const handleKey = (name: string) => {
     if (!sendData) return
