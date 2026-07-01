@@ -177,5 +177,17 @@
   "sidebar.loading": "加载中...",
   "sidebar.retry": "重试",
   "sidebar.emptyDir": "空目录",
-  "sidebar.pathWillBeCreated": "该路径不存在，创建项目时将自动创建"
+  "sidebar.pathWillBeCreated": "该路径不存在，创建项目时将自动创建",
+  "sidebar.repairTitle": "项目路径失效",
+  "sidebar.repairOldPathLabel": "原项目路径（已不存在）",
+  "sidebar.repairNewPathLabel": "新路径",
+  "sidebar.repairBrowse": "浏览",
+  "sidebar.repairHint": "项目目录可能已被移动或重命名。请浏览选择新位置。",
+  "sidebar.repairUpdate": "更新路径",
+  "sidebar.repairUpdating": "更新中…",
+  "sidebar.repairUpdated": "项目路径已更新至「{{path}}」",
+  "sidebar.externalSessions": "外部会话",
+  "sidebar.adopt": "接管",
+  "sidebar.adoptSuccess": "会话「{{name}}」已接管",
+  "sidebar.adoptFailed": "接管会话失败：{{msg}}"
 }

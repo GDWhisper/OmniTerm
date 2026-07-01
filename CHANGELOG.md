@@ -47,6 +47,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-01) `[backend]` `GET /sessions/external` + `POST /sessions/adopt` — 外部 tmux 会话发现与接管 API（`src/api/sessions.rs`、`src/models/session.rs`）
+- (2026-07-01) `[frontend]` Sidebar 底部外部会话折叠区 — 自动发现未被数据库记录的 tmux 会话，一键接管到指定项目（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-06-29 12:30) `[frontend]` Sidebar 底部新增 tmux 常用命令速查书本图标按钮，点击弹出固定定位速查面板（`frontend/src/components/TmuxCheatsheet/*`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/BookIcon.tsx`）
 - (2026-06-29 20:20) `[frontend]` tmux 速查命令表拆分为 `data.ts` — 组件只负责渲染，命令结构 (sections/items/cmd) 与文案 (i18n key) 分离，TS 类型校验；新增/修改命令只需改 data.ts + 两个 translation.json（`frontend/src/components/TmuxCheatsheet/data.ts`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheet.tsx`）
 - (2026-06-29 20:25) `[docs]` 新增 `docs/frontend-patterns.md` — 收录前端设计模式与约定，首个 entry 为「数据/渲染分离 (data.ts convention)」，并在 `AGENTS.md` 文档索引添加读取/维护触发条件（`docs/frontend-patterns.md`、`AGENTS.md`）

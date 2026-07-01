@@ -7,7 +7,7 @@ import { api, ApiError } from '../../api/client'
 import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
-import type { Session, DuplicateGroup, FileEntry } from '../../api/client'
+import type { Session, DuplicateGroup, FileEntry, ExternalSession } from '../../api/client'
 import { getParentPath } from '../../utils/path'
 import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
@@ -155,6 +155,23 @@ export function Sidebar() {
     coveringProject: { id: string; name: string; path: string }
     reason: 'exact_path' | 'worktree_child'
   } | null>(null)
+  // Repair project path dialog — shown when user clicks a workspace whose
+  // path no longer exists on disk. Lets them browse to the new location.
+  const [repairDialogOpen, setRepairDialogOpen] = useState(false)
+  const [repairProject, setRepairProject] = useState<{ project: Project; workspace: Workspace; oldPath: string } | null>(null)
+  const [repairPath, setRepairPath] = useState('')
+  const [repairBrowsePath, setRepairBrowsePath] = useState('')
+  const [repairBrowseEntries, setRepairBrowseEntries] = useState<FileEntry[]>([])
+  const [repairBrowseLoading, setRepairBrowseLoading] = useState(false)
+  const [repairBrowseError, setRepairBrowseError] = useState<string | null>(null)
+  const [repairSubmitting, setRepairSubmitting] = useState(false)
+
+  // External tmux sessions (not yet adopted into any project)
+  const [externalSessions, setExternalSessions] = useState<ExternalSession[]>([])
+  const [externalExpanded, setExternalExpanded] = useState(false)
+  const [adoptTarget, setAdoptTarget] = useState<{ tmux_name: string } | null>(null)
+  const [adoptProjectId, setAdoptProjectId] = useState('')
+
   // Groups of legacy duplicate projects (e.g. before the coverage check
   // existed, the user may have added the same repo twice).
   const [duplicates, setDuplicates] = useState<DuplicateGroup[]>([])
@@ -215,6 +232,18 @@ export function Sidebar() {
     }
   }, [])
   useEffect(() => { loadDuplicates() }, [loadDuplicates])
+
+  // ── External sessions polling (every 10s) ──
+  useEffect(() => {
+    const fetchExternal = () => {
+      api.listExternalSessions()
+        .then(data => setExternalSessions(data.sessions))
+        .catch(() => {})
+    }
+    fetchExternal()
+    const interval = setInterval(fetchExternal, 10_000)
+    return () => clearInterval(interval)
+  }, [])
 
   // ── Restore active state from localStorage on page load ──
   // Use refs so each step fires exactly once when its data first arrives,
@@ -300,6 +329,34 @@ export function Sidebar() {
       setBrowseLoading(false)
     }
   }, [])
+
+  // Fetch directory entries for the repair-project-path dialog's browse list.
+  const fetchRepairDirs = useCallback(async (path: string) => {
+    setRepairBrowseLoading(true)
+    setRepairBrowseError(null)
+    try {
+      const data = await api.listDirs(path)
+      setRepairBrowseEntries(
+        data.files.filter(
+          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
+        ),
+      )
+    } catch (e: any) {
+      if (e instanceof ApiError && e.status === 404) {
+        setRepairBrowseEntries([])
+      } else {
+        setRepairBrowseError(e.message || '无法访问该目录')
+      }
+    } finally {
+      setRepairBrowseLoading(false)
+    }
+  }, [])
+
+  // Auto-fetch when repairBrowsePath changes
+  useEffect(() => {
+    if (!repairBrowsePath) return
+    fetchRepairDirs(repairBrowsePath)
+  }, [repairBrowsePath, fetchRepairDirs])
 
   // Auto-fetch when browsePath changes (covers click-dir, go-up, and type-apply)
   useEffect(() => {
@@ -466,6 +523,88 @@ export function Sidebar() {
 
   const handleRefresh = () => {
     if (browsePath) fetchDirs(browsePath)
+  }
+
+  // Repair dialog browse handlers
+  const handleRepairEnterDir = (entry: FileEntry) => {
+    const newPath = repairBrowsePath.endsWith('/')
+      ? `${repairBrowsePath}${entry.name}`
+      : `${repairBrowsePath}/${entry.name}`
+    setRepairPath(newPath)
+    setRepairBrowsePath(newPath)
+  }
+
+  const handleRepairGoUp = () => {
+    const parent = getParentPath(repairBrowsePath)
+    if (!parent) return
+    setRepairPath(parent)
+    setRepairBrowsePath(parent)
+  }
+
+  const handleRepairPathApply = () => {
+    const trimmed = repairPath.trim()
+    if (!trimmed || trimmed === repairBrowsePath) return
+    setRepairBrowsePath(trimmed)
+  }
+
+  const handleRepairRefresh = () => {
+    if (repairBrowsePath) fetchRepairDirs(repairBrowsePath)
+  }
+
+  const handleRepairUpdate = async () => {
+    if (!repairProject || !repairPath.trim()) return
+    setRepairSubmitting(true)
+    try {
+      await api.updateProject(repairProject.project.id, { path: repairPath.trim() })
+      addToast('success', t('sidebar.repairUpdated') ?? `Project path updated to "${repairPath.trim()}"`)
+      // Refresh projects + worktrees + sessions so the UI reflects the new path
+      await Promise.all([loadProjects(), loadWorktrees(repairProject.project.id), loadSessions(repairProject.project.id)])
+      // Activate the workspace after successful update
+      setActiveProject(repairProject.project.id)
+      setActiveSession(null)
+      setActiveWorkspace(repairProject.workspace.id)
+      setRepairDialogOpen(false)
+      setRepairProject(null)
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setRepairSubmitting(false)
+    }
+  }
+
+  const openRepairDialog = (project: Project, workspace: Workspace, oldPath: string) => {
+    setRepairProject({ project, workspace, oldPath })
+    setRepairPath('')
+    setRepairBrowsePath(oldPath ? getParentPath(oldPath) : '')
+    setRepairBrowseEntries([])
+    setRepairBrowseError(null)
+    setRepairDialogOpen(true)
+  }
+
+  const closeRepairDialog = () => {
+    setRepairDialogOpen(false)
+    setRepairProject(null)
+    setRepairPath('')
+    setRepairBrowsePath('')
+    setRepairBrowseEntries([])
+    setRepairBrowseError(null)
+  }
+
+  const handleWorkspaceClick = async (proj: Project, wt: Workspace) => {
+    // Check if the workspace path exists on disk
+    try {
+      const { exists } = await api.pathExists(wt.path)
+      if (!exists) {
+        openRepairDialog(proj, wt, proj.path)
+        return
+      }
+    } catch {
+      // If the API call fails, proceed normally (don't block the user)
+    }
+    // Path exists — activate normally
+    setActiveProject(proj.id)
+    setActiveSession(null)
+    setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
   }
 
   const handleCreateProject = async () => {
@@ -899,11 +1038,7 @@ export function Sidebar() {
                                 background: isWtActive ? 'rgba(167,139,250,0.1)' : 'transparent',
                                 border: `1px solid ${isWtActive ? 'rgba(167,139,250,0.15)' : 'transparent'}`,
                               }}
-                              onClick={() => {
-                                setActiveProject(proj.id)
-                                setActiveSession(null)
-                                setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
-                              }}
+                              onClick={() => handleWorkspaceClick(proj, wt)}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                 <span
@@ -1087,6 +1222,165 @@ export function Sidebar() {
               </div>
             )
           })
+        )}
+
+        {/* External Sessions — tmux sessions not yet adopted into any project */}
+        {externalSessions.length > 0 && (
+          <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>
+            <div
+              className="flex items-center justify-between px-1 mb-1.5 cursor-pointer rounded transition-all"
+              onClick={() => setExternalExpanded(!externalExpanded)}
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: externalExpanded ? 'var(--accent)' : 'var(--text-dim)',
+                    transition: 'transform 0.15s',
+                    display: 'inline-block',
+                    transform: externalExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+                  }}
+                >▸</span>
+                <span style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>
+                  {t('sidebar.externalSessions') ?? 'External Sessions'}
+                </span>
+                <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{externalSessions.length}</span>
+              </div>
+            </div>
+
+            {externalExpanded && (
+              <div className="pl-4 pr-1">
+                {externalSessions.map((s) => (
+                  <div
+                    key={s.name}
+                    className="flex items-center gap-2 rounded-md transition-all mb-1"
+                    style={{
+                      padding: '5px 8px',
+                      background: 'transparent',
+                      border: '1px solid transparent',
+                    }}
+                  >
+                    {/* Activity dot */}
+                    <div
+                      className="rounded-full flex-shrink-0"
+                      style={{
+                        width: 5,
+                        height: 5,
+                        background: s.attached ? 'var(--success)' : 'var(--text-dim)',
+                        boxShadow: s.attached ? 'var(--success-glow)' : 'none',
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <span className="block truncate" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {s.name}
+                      </span>
+                      {s.cwd && (
+                        <span className="block truncate" style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 1 }}>
+                          {s.cwd}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+                        {s.windows} {s.windows === 1 ? 'window' : 'windows'}
+                      </span>
+                    </div>
+
+                    {adoptTarget?.tmux_name === s.name ? (
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <select
+                          value={adoptProjectId}
+                          onChange={(e) => setAdoptProjectId(e.target.value)}
+                          style={{
+                            background: 'var(--bg-surface)',
+                            border: '1px solid var(--border-strong)',
+                            color: 'var(--text-primary)',
+                            fontSize: 11,
+                            borderRadius: 4,
+                            padding: '2px 4px',
+                            maxWidth: 100,
+                            fontFamily: FONT,
+                          }}
+                        >
+                          {projects.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => {
+                            if (!adoptTarget || !adoptProjectId) return
+                            const name = adoptTarget.tmux_name
+                            api.adoptSession(name, adoptProjectId).then(() => {
+                              setExternalSessions(prev => prev.filter(s => s.name !== name))
+                              loadSessions(adoptProjectId)
+                              addToast('success', t('sidebar.adoptSuccess', { name }) ?? `Session "${name}" adopted`)
+                            }).catch((e: any) => {
+                              addToast('error', t('sidebar.adoptFailed', { msg: e.message }) ?? `Failed to adopt session: ${e.message}`)
+                            }).finally(() => {
+                              setAdoptTarget(null)
+                              setAdoptProjectId('')
+                            })
+                          }}
+                          disabled={!adoptProjectId}
+                          className="flex items-center justify-center rounded transition-all"
+                          style={{
+                            padding: '2px 6px',
+                            border: '1px solid var(--accent)',
+                            color: 'var(--accent)',
+                            fontSize: 11,
+                            fontWeight: 500,
+                            opacity: adoptProjectId ? 1 : 0.5,
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!adoptProjectId) return
+                            e.currentTarget.style.background = 'var(--accent-14)'
+                            e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = 'transparent'
+                            e.currentTarget.style.boxShadow = 'none'
+                          }}
+                        >
+                          ✓
+                        </button>
+                        <button
+                          onClick={() => { setAdoptTarget(null); setAdoptProjectId('') }}
+                          className="flex items-center justify-center rounded transition-all"
+                          style={{ width: 18, height: 18, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 10 }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setAdoptTarget({ tmux_name: s.name })
+                          setAdoptProjectId(activeProjectId || projects[0]?.id || '')
+                        }}
+                        className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                        style={{
+                          padding: '2px 8px',
+                          border: '1px solid var(--accent)',
+                          color: 'var(--accent)',
+                          fontSize: 11,
+                          fontWeight: 500,
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = 'var(--accent-14)'
+                          e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'transparent'
+                          e.currentTarget.style.boxShadow = 'none'
+                        }}
+                      >
+                        {t('sidebar.adopt') ?? 'Adopt'}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -1404,6 +1698,198 @@ export function Sidebar() {
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
       />
+
+      {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}
+      <Modal
+        open={repairDialogOpen}
+        onClose={closeRepairDialog}
+        title={t('sidebar.repairTitle') ?? 'Project Path Not Found'}
+        maxWidth="max-w-lg"
+      >
+        {repairProject && (
+          <div className="space-y-4">
+            <div
+              className="rounded-md px-3 py-2"
+              style={{
+                background: 'var(--bg-surface)',
+                border: '1px solid var(--danger-30)',
+                fontSize: 12,
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 4 }}>
+                {t('sidebar.repairOldPathLabel') ?? 'Original path (no longer exists)'}
+              </div>
+              <div
+                className="truncate"
+                style={{
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                  fontSize: 11,
+                  color: 'var(--danger)',
+                }}
+              >
+                {repairProject.project.path}
+              </div>
+            </div>
+
+            <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+              {t('sidebar.repairHint') ??
+                'The project directory may have been moved or renamed. Browse to its new location below.'}
+            </p>
+
+            <div>
+              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                {t('sidebar.repairNewPathLabel') ?? 'New Path'}
+              </label>
+              <input
+                type="text"
+                value={repairPath}
+                onChange={(e) => setRepairPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleRepairPathApply()
+                  }
+                }}
+                onBlur={(e) => {
+                  handleRepairPathApply()
+                  e.currentTarget.style.borderColor = 'var(--border-strong)'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
+                placeholder="/home/user/project"
+                className={inputClass}
+                style={inputStyle}
+                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              />
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                  {t('sidebar.repairBrowse') ?? 'Browse'}
+                </label>
+                <button
+                  onClick={handleRepairRefresh}
+                  title={t('sidebar.refresh') ?? 'Refresh'}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
+                  style={{
+                    border: '1px solid var(--border-strong)',
+                    color: 'var(--text-secondary)',
+                    fontSize: 11,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--accent)'
+                    e.currentTarget.style.color = 'var(--accent)'
+                    e.currentTarget.style.background = 'var(--accent-10)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--border-strong)'
+                    e.currentTarget.style.color = 'var(--text-secondary)'
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <IconRefresh width={10} height={10} />
+                  {t('sidebar.refresh') ?? 'Refresh'}
+                </button>
+              </div>
+              <div
+                className="overflow-y-auto"
+                style={{
+                  height: 200,
+                  background: 'var(--bg-base)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 5,
+                  padding: 4,
+                }}
+              >
+                {/* ".." parent entry */}
+                <div
+                  onClick={handleRepairGoUp}
+                  className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                  style={{
+                    borderRadius: 4,
+                    color: 'var(--text-faint)',
+                    cursor: getParentPath(repairBrowsePath) ? 'pointer' : 'not-allowed',
+                    opacity: getParentPath(repairBrowsePath) ? 1 : 0.5,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!getParentPath(repairBrowsePath)) return
+                    e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <IconArrowUp width={14} height={14} />
+                  <span>..</span>
+                </div>
+
+                {/* Loading state */}
+                {repairBrowseLoading && (
+                  <div className="flex items-center justify-center py-6 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    {t('sidebar.loading') ?? 'Loading…'}
+                  </div>
+                )}
+
+                {/* Error state */}
+                {!repairBrowseLoading && repairBrowseError && (
+                  <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
+                    <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
+                    <div style={{ color: 'var(--text-muted)' }}>{repairBrowseError}</div>
+                    <button
+                      onClick={handleRepairRefresh}
+                      className="px-2 py-0.5 rounded transition-all"
+                      style={{ border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: 11 }}
+                    >
+                      {t('sidebar.retry') ?? 'Retry'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {!repairBrowseLoading && !repairBrowseError && repairBrowseEntries.length === 0 && (
+                  <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
+                    <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                    <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? 'Empty directory'}</div>
+                  </div>
+                )}
+
+                {/* Directory entries */}
+                {!repairBrowseLoading && !repairBrowseError && repairBrowseEntries.map((entry) => (
+                  <div
+                    key={entry.name}
+                    onClick={() => handleRepairEnterDir(entry)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
+                    style={{
+                      borderRadius: 4,
+                      color: 'var(--text-secondary)',
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'transparent'
+                    }}
+                  >
+                    <IconFolder width={14} height={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                    <span className="truncate">{entry.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <ModalCancel onClick={closeRepairDialog}>
+                {t('sidebar.cancel') ?? 'Cancel'}
+              </ModalCancel>
+              <ModalPrimary onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
+                {repairSubmitting ? t('sidebar.repairUpdating') ?? 'Updating…' : t('sidebar.repairUpdate') ?? 'Update Path'}
+              </ModalPrimary>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ── Cover-Conflict Modal: shown when POST /projects returns 409.
           Offers to switch to the existing project that already covers the

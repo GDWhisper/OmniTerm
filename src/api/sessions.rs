@@ -1,15 +1,17 @@
+use std::collections::HashSet;
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, patch},
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde_json::json;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::models::session::{CreateSession, Session, UpdateSession};
+use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, Session, UpdateSession};
 use crate::tmux;
 use crate::AppState;
 
@@ -24,6 +26,8 @@ pub fn routes() -> Router<AppState> {
             patch(update_session).delete(delete_session),
         )
         .route("/sessions/{id}/cwd", get(get_session_cwd))
+        .route("/sessions/external", get(list_external_sessions))
+        .route("/sessions/adopt", post(adopt_session))
 }
 
 async fn list_sessions(
@@ -247,4 +251,153 @@ async fn get_session_cwd(
 
 fn dirs() -> Option<String> {
     std::env::var("HOME").ok()
+}
+
+/// GET /sessions/external — list tmux sessions not yet recorded in the DB.
+async fn list_external_sessions(
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    // Get all tmux sessions (returns empty vec if no server running)
+    let tmux_sessions = match tmux::list_sessions().await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("list_external_sessions: tmux error: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            );
+        }
+    };
+
+    // Get all recorded tmux session names from DB
+    let recorded: Vec<(String,)> =
+        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE tmux_session_name IS NOT NULL")
+            .fetch_all(&state.db)
+            .await
+            .unwrap_or_default();
+
+    let recorded_names: HashSet<String> = recorded.into_iter().map(|(n,)| n).collect();
+
+    // Filter to external (unadopted) sessions only
+    let external: Vec<_> = tmux_sessions
+        .into_iter()
+        .filter(|s| !recorded_names.contains(&s.name))
+        .collect();
+
+    // Enrich each external session with CWD (best-effort)
+    let mut result = Vec::with_capacity(external.len());
+    for s in external {
+        let cwd = tmux::pane_cwd(&s.name).await.ok();
+        result.push(ExternalSessionResponse {
+            name: s.name,
+            attached: s.attached,
+            windows: s.windows,
+            created: s.created,
+            cwd,
+            agent_kind: s.agent_kind,
+            agent_state: s.agent_state,
+            attention_reason: s.attention_reason,
+            agent_event: s.agent_event,
+            agent_nonce: s.agent_nonce,
+        });
+    }
+
+    (StatusCode::OK, Json(json!({ "sessions": result })))
+}
+
+/// POST /sessions/adopt — adopt an external tmux session into a project.
+async fn adopt_session(
+    State(state): State<AppState>,
+    Json(req): Json<AdoptSession>,
+) -> impl IntoResponse {
+    // Verify the tmux session still exists
+    if !tmux::session_exists(&req.tmux_name).await {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "tmux session not found" })),
+        );
+    }
+
+    // Verify the project exists
+    let project_exists: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM projects WHERE id = ?")
+            .bind(&req.project_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+
+    if !project_exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "project not found" })),
+        );
+    }
+
+    // Check for race: session may have been adopted between the GET and this POST
+    let already_adopted: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sessions WHERE tmux_session_name = ?")
+            .bind(&req.tmux_name)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+
+    if already_adopted {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "session already adopted" })),
+        );
+    }
+
+    // Resolve CWD; fall back to HOME if pane_cwd fails
+    let tmux_name = req.tmux_name.clone();
+    let workspace_path = tmux::pane_cwd(&tmux_name)
+        .await
+        .unwrap_or_else(|_| {
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+        });
+
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    sqlx::query(
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+    )
+    .bind(&id)
+    .bind(&req.project_id)
+    .bind(&workspace_path)
+    .bind(&tmux_name)
+    .bind(&tmux_name)
+    .bind(false as i32)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .unwrap();
+
+    // Start the activity monitor for the adopted session
+    if let Err(e) = state.activity_monitor.ensure_session(&req.tmux_name).await {
+        error!(
+            "failed to ensure control mode for adopted session {}: {}",
+            req.tmux_name, e
+        );
+    }
+
+    let session = Session {
+        id,
+        project_id: req.project_id,
+        workspace_path,
+        name: Some(tmux_name.clone()),
+        tmux_session_name: Some(tmux_name),
+        hook_enabled: false,
+        hook_status: None,
+        created_at: now,
+        is_active: false,
+        agent_kind: None,
+        agent_state: None,
+        attention_reason: None,
+        agent_event: None,
+        agent_nonce: None,
+        agent_detected: None,
+    };
+
+    (StatusCode::CREATED, Json(json!(session)))
 }
