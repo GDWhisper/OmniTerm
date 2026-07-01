@@ -13,6 +13,7 @@ import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { triggerBump } from '../../utils/pixelAnimations'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -982,7 +983,10 @@ export function Sidebar() {
             <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{projects.length}</span>
           </div>
           <button
-            onClick={() => setCreateProjOpen(true)}
+            onClick={(e) => {
+              triggerBump(e.currentTarget)
+              setCreateProjOpen(true)
+            }}
             className="flex items-center justify-center rounded transition-all"
             style={{ width: 22, height: 22, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 15, fontWeight: 500 }}
             title={t('sidebar.createProject') ?? 'Create Project'}
@@ -1137,6 +1141,7 @@ export function Sidebar() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation()
+                                      triggerBump(e.currentTarget)
                                       setCreateSessOpen(true)
                                     }}
                                     className="flex items-center justify-center rounded transition-all"

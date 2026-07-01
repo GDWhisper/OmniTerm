@@ -7,6 +7,8 @@ import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
+import { triggerBump, triggerScorePop, triggerStomp } from '../../utils/pixelAnimations'
+import { play8BitSound } from '../../utils/audioFeedback'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -420,6 +422,7 @@ export function FileManager() {
       }
     }
     addToast('success', t('fm.uploadComplete'))
+    play8BitSound('coin')
     fetchFiles()
   }
 
@@ -462,6 +465,7 @@ export function FileManager() {
         })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
+      play8BitSound('stomp')
       fetchFiles()
     } catch (err: any) {
       addToast('error', err.message || t('fm.deleteFailed'))
@@ -510,6 +514,7 @@ export function FileManager() {
         }
       }
       addToast('success', t('fm.uploadComplete'))
+      play8BitSound('coin')
       fetchFiles()
     }
     input.click()
@@ -999,7 +1004,7 @@ export function FileManager() {
                         <span
                           className="fm-act-icon fm-act-icon-danger"
                           title={t('fm.delete')}
-                          onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); handleDelete() }}
+                          onClick={(e) => { e.stopPropagation(); triggerBump(e.currentTarget); setSelected(new Set([fullPath])); handleDelete() }}
                         >
                           <IconTrash />
                         </span>
