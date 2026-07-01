@@ -52,6 +52,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-01) `[frontend]` 工作区终端聚焦记忆 — 切换工作区时自动恢复上次使用的会话，无需手动重选；映射持久化到 localStorage，会话删除时自动清理（`frontend/src/stores/appStore.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[backend]` `GET /sessions/external` + `POST /sessions/adopt` — 外部 tmux 会话发现与接管 API（`src/api/sessions.rs`、`src/models/session.rs`）
 - (2026-07-01) `[frontend]` Sidebar 底部外部会话折叠区 — 自动发现未被数据库记录的 tmux 会话，一键接管到指定项目（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-06-29 12:30) `[frontend]` Sidebar 底部新增 tmux 常用命令速查书本图标按钮，点击弹出固定定位速查面板（`frontend/src/components/TmuxCheatsheet/*`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/BookIcon.tsx`）
