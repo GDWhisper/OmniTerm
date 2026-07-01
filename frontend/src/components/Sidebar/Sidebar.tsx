@@ -1145,6 +1145,7 @@ export function Sidebar() {
                                       }}
                                       onClick={() => {
                                         setActiveSession(s.id)
+                                        setActiveExternalSession(null)
                                         attention.setActive(sessionKey)
                                       }}
                                     >
