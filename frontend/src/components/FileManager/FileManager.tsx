@@ -5,8 +5,10 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
+import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
+import { triggerBump, triggerScorePop, triggerStomp } from '../../utils/pixelAnimations'
+import { play8BitSound } from '../../utils/audioFeedback'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -69,6 +71,9 @@ export function FileManager() {
   const resetFmToFollowing = useAppStore((s) => s.resetFmToFollowing)
   const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
   const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
+
+  // Workspace drawer state (local since fmSessionStates is session-keyed)
+  const [workspaceDrawerPath, setWorkspaceDrawerPath] = useState<string | null>(null)
 
   // Current session's FM state (defaults to following)
   const fmState = activeSessionId
@@ -212,16 +217,18 @@ export function FileManager() {
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
   useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
       const r = resizingRef.current
       if (!r) return
-      const delta = e.clientX - r.startX
+      e.preventDefault()
+      const mvX = 'touches' in e ? e.touches[0].clientX : e.clientX
+      const delta = mvX - r.startX
       const newW = Math.max(80, r.startW + delta)
       // Direct DOM write — avoid React re-render on every mousemove
       const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
       if (colEl) colEl.style.width = `${newW}px`
     }
-    const onMouseUp = () => {
+    const onUp = () => {
       const r = resizingRef.current
       if (!r) return
       // Sync final width to React state — one re-render after drag ends,
@@ -235,22 +242,27 @@ export function FileManager() {
       }
       resizingRef.current = null
     }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
     return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
     }
   }, [])
 
-  const handleResizeStart = (col: string, e: React.MouseEvent) => {
+  const handleResizeStart = (col: string, e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
     // Read the column's *actual* rendered width, not React state — keeps the
     // handle 1:1 with the cursor when the user starts dragging.
     const colEl = colRefs.current[col as 'name' | 'mtime' | 'size']
     const actualW = colEl ? colEl.getBoundingClientRect().width : 0
-    resizingRef.current = { col, startX: e.clientX, startW: actualW }
+    resizingRef.current = { col, startX: clientX, startW: actualW }
   }
 
   const navigateTo = (absolutePath: string) => {
@@ -282,6 +294,8 @@ export function FileManager() {
     // Open file in drawer (single click)
     if (activeSessionId) {
       setFmDrawerPath(activeSessionId, fullPath, 'view')
+    } else if (activeWorkspaceId) {
+      setWorkspaceDrawerPath(fullPath)
     }
     setSelected(new Set([fullPath]))
   }
@@ -408,6 +422,7 @@ export function FileManager() {
       }
     }
     addToast('success', t('fm.uploadComplete'))
+    play8BitSound('coin')
     fetchFiles()
   }
 
@@ -450,9 +465,31 @@ export function FileManager() {
         })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
+      play8BitSound('stomp')
       fetchFiles()
     } catch (err: any) {
       addToast('error', err.message || t('fm.deleteFailed'))
+    }
+  }
+
+  const handleCopyPath = async (fullPath: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(fullPath)
+      } else {
+        // Fallback for non-secure contexts / older browsers
+        const ta = document.createElement('textarea')
+        ta.value = fullPath
+        ta.style.position = 'fixed'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
+      }
+      addToast('success', t('fm.copyPathSuccess'))
+    } catch {
+      addToast('error', t('fm.copyPathFailed'))
     }
   }
 
@@ -477,6 +514,7 @@ export function FileManager() {
         }
       }
       addToast('success', t('fm.uploadComplete'))
+      play8BitSound('coin')
       fetchFiles()
     }
     input.click()
@@ -651,7 +689,16 @@ export function FileManager() {
         </button>
 
         <div className="flex-1 flex items-center justify-center">
-          <IconFolderOpen width={18} height={18} style={{ color: 'var(--text-dim)' }} />
+          <button
+            onClick={toggleFileManagerCollapsed}
+            className="flex items-center justify-center rounded-md transition-all"
+            style={{ width: 28, height: 28, color: 'var(--text-dim)', fontSize: 14 }}
+            title={t('fm.expand')}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' }}
+          >
+            <IconFolderOpen width={18} height={18} />
+          </button>
         </div>
 
         <button
@@ -816,7 +863,7 @@ export function FileManager() {
             <span
               className="fm-warning-icon"
               title={t('fm.outOfWorkspace')}
-              style={{ marginLeft: 6, color: '#f59e0b', cursor: 'help', flexShrink: 0 }}
+              style={{ marginLeft: 6, color: 'var(--warning)', cursor: 'help', flexShrink: 0 }}
             >
               <IconWarning width={14} height={14} />
             </span>
@@ -851,7 +898,7 @@ export function FileManager() {
                 <col ref={(el) => { colRefs.current.name = el }} style={{ width: colWidths.name }} />
                 <col ref={(el) => { colRefs.current.mtime = el }} style={{ width: colWidths.mtime }} />
                 <col ref={(el) => { colRefs.current.size = el }} style={{ width: colWidths.size }} />
-                <col style={{ width: 80 }} />
+                <col style={{ width: 104 }} />
               </colgroup>
               <thead>
                 <tr>
@@ -872,19 +919,19 @@ export function FileManager() {
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
                       {t('fm.name')} <SI col="name" />
                     </span>
-                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('name', e)} />
+                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('name', e)} onTouchStart={(e) => handleResizeStart('name', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('mtime')}>
                       {t('fm.lastModified')} <SI col="mtime" />
                     </span>
-                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('mtime', e)} />
+                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('mtime', e)} onTouchStart={(e) => handleResizeStart('mtime', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('size')}>
                       {t('fm.size')} <SI col="size" />
                     </span>
-                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} />
+                    <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} onTouchStart={(e) => handleResizeStart('size', e)} />
                   </th>
                   <th className="fm-th-actions">{t('fm.actions')}</th>
                 </tr>
@@ -942,6 +989,13 @@ export function FileManager() {
                       <td className="fm-td-actions-cell">
                         <span
                           className="fm-act-icon"
+                          title={fullPath}
+                          onClick={(e) => { e.stopPropagation(); handleCopyPath(fullPath) }}
+                        >
+                          <IconCopy />
+                        </span>
+                        <span
+                          className="fm-act-icon"
                           title={t('fm.rename')}
                           onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); startRename() }}
                         >
@@ -950,7 +1004,7 @@ export function FileManager() {
                         <span
                           className="fm-act-icon fm-act-icon-danger"
                           title={t('fm.delete')}
-                          onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); handleDelete() }}
+                          onClick={(e) => { e.stopPropagation(); triggerBump(e.currentTarget); setSelected(new Set([fullPath])); handleDelete() }}
                         >
                           <IconTrash />
                         </span>
@@ -965,11 +1019,16 @@ export function FileManager() {
       </div>
 
       {/* File Drawer — slides up from bottom when a file is opened */}
-      {drawerFilePath && activeSessionId && (
+      {(drawerFilePath || workspaceDrawerPath) && (
         <FileDrawer
-          filePath={drawerFilePath}
+          filePath={drawerFilePath ?? workspaceDrawerPath!}
           sessionId={activeSessionId}
-          onClose={() => closeFmDrawer(activeSessionId)}
+          workspaceId={activeWorkspaceId}
+          projectId={activeProjectId}
+          onClose={() => {
+            if (activeSessionId) closeFmDrawer(activeSessionId)
+            else setWorkspaceDrawerPath(null)
+          }}
           height={drawerHeight}
           onHeightChange={setDrawerHeight}
           fileChangeEvent={fileChangeEvent}

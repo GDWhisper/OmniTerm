@@ -25,15 +25,13 @@
   --accent-bright: #6d28d9;
   --accent-10: rgba(124, 58, 237, 0.10);
   --accent-14: rgba(124, 58, 237, 0.14);
-  --accent-glow-sm: 0 0 6px rgba(124, 58, 237, 0.4);
-  --accent-glow-md: 0 0 10px rgba(124, 58, 237, 0.5);
   /* danger */
   --danger: #dc2626;
   --danger-12: rgba(220, 38, 38, 0.12);
-  --danger-glow: 0 0 6px rgba(220, 38, 38, 0.3);
   /* success */
   --success: #16a34a;
-  --success-glow: 0 0 6px #16a34a;
+  --warning: #ca8a04;
+  --pixel-shadow: #c4bdb0;
   /* scrollbar */
   --scrollbar-thumb: #c4bdb0;
   --scrollbar-track: #e8e3db;
@@ -41,40 +39,78 @@
 }
 
 .dark {
-  /* backgrounds */
-  --bg-base: #0a0a0f;
-  --bg-elevated: #111827;
-  --bg-surface: #1e293b;
+  /* backgrounds — deep space gray with subtle blue-purple tint */
+  --bg-base: #12141A;
+  --bg-elevated: #1B1E26;
+  --bg-surface: #242832;
   /* borders */
-  --border-subtle: #1e293b;
-  --border-strong: #334155;
-  /* text */
-  --text-primary: #e2e8f0;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
-  --text-faint: #64748b;
-  --text-dim: #475569;
-  /* accent */
-  --accent: #a78bfa;
-  --accent-bright: #c4b5fd;
-  --accent-10: rgba(167, 139, 250, 0.10);
-  --accent-14: rgba(167, 139, 250, 0.14);
-  --accent-glow-sm: 0 0 6px rgba(167, 139, 250, 0.5);
-  --accent-glow-md: 0 0 10px rgba(167, 139, 250, 0.7);
-  /* danger */
-  --danger: #ef4444;
-  --danger-12: rgba(239, 68, 68, 0.12);
-  --danger-glow: 0 0 6px rgba(239, 68, 68, 0.3);
-  /* success */
-  --success: #4ade80;
-  --success-glow: 0 0 6px #4ade80;
+  --border-subtle: #30363D;
+  --border-strong: #484F58;
+  /* text — soft gray, no pure white */
+  --text-primary: #D1D5DB;
+  --text-secondary: #8B949E;
+  --text-muted: #8B949E;
+  --text-faint: #484F58;
+  --text-dim: #30363D;
+  /* accent — pastel neon cyan */
+  --accent: #58A6FF;
+  --accent-bright: #79C0FF;
+  --accent-pink: #F778BA;
+  /* danger — soft coral red */
+  --danger: #FF7B72;
+  --danger-12: rgba(255, 123, 114, 0.12);
+  /* success — soft neon green */
+  --success: #7EE787;
+  /* warning — soft amber orange */
+  --warning: #FFA657;
+  /* pixel hard shadow */
+  --pixel-shadow: #090A0D;
   /* scrollbar */
-  --scrollbar-thumb: #334155;
-  --scrollbar-track: #0a0a0f;
+  --scrollbar-thumb: #484F58;
+  --scrollbar-track: #12141A;
   color-scheme: dark;
 }
 
 @import "@xterm/xterm/css/xterm.css";
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel style — global SVG pixelation and font classes.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* SVG pixelation — disable anti-aliasing for crisp pixel edges */
+svg, svg * {
+  shape-rendering: crispEdges;
+}
+
+svg path, svg rect, svg circle, svg line {
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+/* Pixel display font — titles, buttons, status labels only */
+.font-pixel {
+  font-family: 'VT323', 'Press Start 2P', monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* CRT scanline overlay — 2% opacity, controlled by settings */
+.crt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.02) 0px,
+    rgba(0, 0, 0, 0.02) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+}
 
 :root {
   --sidebar-width: 200px;
@@ -109,8 +145,8 @@ html, body, #root {
   content: '';
   position: absolute;
   background: var(--text-faint);
-  border-radius: 1px;
-  transition: background 0.15s ease, box-shadow 0.15s ease;
+  border-radius: 0;
+  transition: background 0.1s steps(3), box-shadow 0.1s steps(3);
 }
 
 .omniterm-drag-bar:hover {
@@ -119,7 +155,8 @@ html, body, #root {
 
 .omniterm-drag-bar:hover::after {
   background: var(--accent);
-  box-shadow: var(--accent-glow-sm);
+  box-shadow: none;
+  border: 1px solid var(--accent);
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -134,12 +171,10 @@ html, body, #root {
   0%, 100% {
     opacity: 1;
     transform: scale(1.15);
-    box-shadow: var(--accent-glow-md);
   }
   50% {
     opacity: 0.5;
     transform: scale(1);
-    box-shadow: var(--accent-glow-sm);
   }
 }
 
@@ -151,11 +186,9 @@ html, body, #root {
 @keyframes activity-pulse {
   0%, 100% {
     opacity: 1;
-    box-shadow: var(--accent-glow-md);
   }
   50% {
     opacity: 0.5;
-    box-shadow: var(--accent-glow-sm);
   }
 }
 
@@ -171,7 +204,7 @@ html, body, #root {
   transform: translate(-50%, -50%);
   width: 4px;
   height: 48px;
-  border-radius: 2px;
+  border-radius: 0;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -260,8 +293,8 @@ html, body, #root {
   vertical-align: middle;
   width: 22px;
   height: 22px;
-  border: 1px solid var(--accent);
-  border-radius: 4px;
+  border: 2px solid var(--accent);
+  border-radius: 0;
   color: var(--accent);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -269,8 +302,8 @@ html, body, #root {
 }
 
 .fm-bc-root:hover {
-  background: var(--accent-14);
-  box-shadow: 0 0 8px rgba(167, 139, 250, 0.2);
+  background: rgba(88, 166, 255, 0.14);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
   color: var(--accent-bright);
   text-decoration: none !important;
 }
@@ -307,7 +340,7 @@ html, body, #root {
   height: 28px;
   background: transparent;
   border: none;
-  border-radius: 5px;
+  border-radius: 0;
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s ease;
@@ -332,7 +365,7 @@ html, body, #root {
   right: 0;
   width: 220px;
   z-index: 50;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(167, 139, 250, 0.15);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
   animation: fm-search-drop 0.15s ease-out;
 }
 
@@ -345,8 +378,8 @@ html, body, #root {
   width: 180px;
   height: 26px;
   background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
@@ -357,7 +390,7 @@ html, body, #root {
 
 .fm-search:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .fm-search::placeholder {
@@ -367,47 +400,43 @@ html, body, #root {
 /* ── Download mode (active button pulse) ── */
 @keyframes fm-download-pulse {
   0%, 100% {
-    background: rgba(196, 181, 253, 0.30);
-    box-shadow: 0 0 8px rgba(196, 181, 253, 0.55), inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
   }
   50% {
-    background: rgba(196, 181, 253, 0.58);
-    box-shadow: 0 0 22px rgba(196, 181, 253, 0.95), inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
   }
 }
 .fm-btn-download-active {
   animation: fm-download-pulse 1.0s ease-in-out infinite;
-  color: #c4b5fd;
+  color: var(--accent);
 }
 .fm-btn-download-active:hover {
-  background: rgba(196, 181, 253, 0.55);
-  color: #ddd6fe;
-  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 /* ── Terminal button pulse (back-to-terminal outside CWD) ── */
 @keyframes fm-terminal-pulse {
   0%, 100% {
-    background: rgba(196, 181, 253, 0.30);
-    box-shadow:
-      0 0 8px rgba(196, 181, 253, 0.55),
-      inset 0 0 0 1px rgba(196, 181, 253, 0.55);
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
   }
   50% {
-    background: rgba(196, 181, 253, 0.58);
-    box-shadow:
-      0 0 22px rgba(196, 181, 253, 0.95),
-      inset 0 0 0 1px rgba(221, 214, 254, 0.85);
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
   }
 }
 .fm-btn-terminal-active {
   animation: fm-terminal-pulse 1.0s ease-in-out infinite;
-  color: #c4b5fd;
+  color: var(--accent);
 }
 .fm-btn-terminal-active:hover {
-  background: rgba(196, 181, 253, 0.55);
-  color: #ddd6fe;
-  box-shadow: 0 0 22px rgba(196, 181, 253, 0.9);
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 /* ── Checkbox column (only visible in download mode) ── */
@@ -428,14 +457,14 @@ html, body, #root {
   vertical-align: middle;
 }
 .fm-checkbox:hover {
-  filter: drop-shadow(0 0 4px rgba(196, 181, 253, 0.7));
+  filter: drop-shadow(0 0 0 var(--accent));
 }
 
 /* ── Drag over state ── */
 .fm-drag-over {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
-  background: rgba(167, 139, 250, 0.04);
+  background: rgba(88, 166, 255, 0.04);
 }
 
 /* ── Drag overlay ── */
@@ -446,9 +475,9 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(167, 139, 250, 0.06);
+  background: rgba(88, 166, 255, 0.06);
   border: 2px dashed var(--accent);
-  border-radius: 6px;
+  border-radius: 0;
   color: var(--accent);
   font-size: 14px;
   font-weight: 600;
@@ -474,7 +503,7 @@ html, body, #root {
 }
 .fm-table-wrap::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  border-radius: 2px;
+  border-radius: 0;
 }
 .fm-table-wrap::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
@@ -484,10 +513,11 @@ html, body, #root {
   scrollbar-width: thin;
 }
 
-/* ── File table — min-width forces horizontal scroll ── */
+/* ── File table ──
+   No explicit width (default: auto) — table is exactly as wide as its columns.
+   No proportional distribution of extra space, so resizing one column doesn't
+   shift other columns. Horizontal scroll on parent div if table overflows. */
 .fm-table {
-  min-width: 540px;
-  width: 100%;
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -514,9 +544,14 @@ html, body, #root {
   white-space: nowrap;
   padding: 8px 8px;
   border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
   cursor: default;
   user-select: none;
   position: relative;
+}
+
+.fm-table th:last-child {
+  border-right: none;
 }
 
 /* Sortable label — only this area triggers sort on click */
@@ -555,13 +590,14 @@ html, body, #root {
   cursor: col-resize;
   z-index: 5;
   user-select: none;
-  border-radius: 1px;
+  border-radius: 0;
   transition: background 0.15s ease;
 }
 
 .fm-th-resize:hover,
 .fm-th-resize.fm-resizing {
-  background: var(--text-faint);
+  background: var(--accent);
+  box-shadow: none;
 }
 
 /* ── Table rows ── */
@@ -589,12 +625,29 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
-/* Actions cell — keep table-cell display; icons (inline-flex) center naturally */
+/* Actions cell — flex centers the 3 action icons (copy / rename / delete) */
 .fm-td-actions-cell {
-  width: 80px;
-  min-width: 80px;
-  text-align: center;
+  width: 104px;
+  min-width: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   vertical-align: middle;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--bg-base);
+  box-shadow: -3px 0 4px -2px rgba(0,0,0,0.18);
+}
+
+/* Actions column header — sticky both top (via thead) and right */
+.fm-table .fm-th-actions {
+  position: sticky;
+  right: 0;
+  z-index: 6;
+  background: var(--bg-base);
+  text-align: center;
 }
 
 /* ── Name cell ── */
@@ -629,7 +682,7 @@ html, body, #root {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   transition: all 0.15s ease;
   color: var(--text-faint);
@@ -651,21 +704,20 @@ html, body, #root {
   max-width: 260px;
   height: 24px;
   background: var(--bg-surface);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
+  border: 2px solid var(--accent);
+  border-radius: 0;
   color: var(--text-primary);
   font-size: 12px;
   font-family: inherit;
   padding: 0 6px;
   outline: none;
-  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.2);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* ── Size cell ── */
 .fm-td-size {
   color: var(--text-faint);
   font-size: 11px;
-  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
@@ -728,23 +780,79 @@ html, body, #root {
    ──────────────────────────────────────────────────────────────────── */
 
 .sidebar-glow-violet {
-  box-shadow: var(--accent-glow-md);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 .sidebar-glow-violet-hover:hover {
-  box-shadow: 0 0 16px rgba(167, 139, 250, 0.4);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
 }
 
 .sidebar-glow-green {
-  box-shadow: var(--success-glow);
+  box-shadow: none;
 }
 
 .sidebar-glow-red-hover:hover {
-  box-shadow: var(--danger-glow);
+  box-shadow: none;
 }
 
 /* ── Settings popup slide-in ── */
 @keyframes settings-slide-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel gamified animations — Phase 2
+   All use steps() for discrete 8-bit feel.
+   Y-axis only — no horizontal shake.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Block Bump — button press squash & stretch */
+@keyframes mario-jump {
+  0%   { transform: translateY(0) scale(1, 1); }
+  20%  { transform: translateY(2px) scale(1.1, 0.9); }
+  50%  { transform: translateY(-8px) scale(0.95, 1.05); }
+  80%  { transform: translateY(0) scale(1.05, 0.95); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+.pixel-bump {
+  animation: mario-jump 0.4s steps(6, end) forwards;
+}
+
+/* Coin Pop — score text flies up and fades */
+@keyframes coin-pop {
+  0%   { transform: translateX(-50%) translateY(0) scale(0.5); opacity: 1; }
+  50%  { transform: translateX(-50%) translateY(-20px) scale(1.2); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-30px) scale(1); opacity: 0; }
+}
+.pixel-coin-pop {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  color: var(--success);
+  text-shadow: 2px 2px 0px var(--pixel-shadow);
+  pointer-events: none;
+  animation: coin-pop 0.6s steps(5, end) forwards;
+  z-index: 100;
+}
+
+/* Stomp Vanish — element squashes flat and disappears */
+@keyframes stomp-vanish {
+  0%   { transform: scaleY(1); opacity: 1; }
+  30%  { transform: scaleY(0.1); opacity: 1; }
+  100% { transform: scaleY(0.1) translateY(10px); opacity: 0; }
+}
+.pixel-stomp {
+  animation: stomp-vanish 0.3s steps(4, end) forwards;
+}
+
+/* Starman Flash — border color high-frequency blink */
+@keyframes starman-flash {
+  0%, 100% { border-color: var(--accent); box-shadow: 4px 4px 0px 0px var(--pixel-shadow); }
+  50%      { border-color: var(--accent-pink); box-shadow: 4px 4px 0px 0px var(--accent-pink); }
+}
+.pixel-starman {
+  animation: starman-flash 0.4s steps(1, end) infinite;
 }

@@ -13,6 +13,7 @@ import { APP_VERSION } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { triggerBump } from '../../utils/pixelAnimations'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -842,15 +843,18 @@ export function Sidebar() {
 
         <div className="flex-1 flex items-center justify-center">
           <button
-            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
-            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
-            onClick={() => {
-              if (activeSessionId) resetFmToFollowing(activeSessionId)
-            }}
-            title={t('fm.backToTerminalDir')}
-            disabled={!activeSessionId}
+            onClick={toggleSidebarCollapsed}
+            className="flex items-center justify-center rounded-md transition-all"
+            style={{ width: 28, height: 28, color: 'var(--text-faint)', fontSize: 14 }}
+            title={t('sidebar.expand')}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
           >
-            <IconWorkbench width={14} height={14} />
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <rect x="1" y="2" width="6" height="12" rx="1" />
+              <rect x="9" y="2" width="6" height="12" rx="1" />
+              <line x1="4" y1="5" x2="4" y2="5" strokeWidth="2" />
+            </svg>
           </button>
         </div>
 
@@ -891,7 +895,7 @@ export function Sidebar() {
           />
           <span
             className="font-bold text-base"
-            style={{ background: 'linear-gradient(90deg, var(--accent), #818cf8)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
+            style={{ background: 'linear-gradient(90deg, var(--accent), var(--accent-bright))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
           >
             OmniTerm
           </span>
@@ -900,7 +904,7 @@ export function Sidebar() {
           {/* Terminal CWD button — pulses when outside terminal CWD */}
           <button
             className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
-            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? '#c4b5fd' : 'var(--text-faint)', fontSize: 14 }}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? 'var(--accent-bright)' : 'var(--text-faint)', fontSize: 14 }}
             onClick={() => {
               if (activeSessionId) resetFmToFollowing(activeSessionId)
             }}
@@ -951,7 +955,7 @@ export function Sidebar() {
             onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(251, 191, 36, 0.08)' }}
             title={t('sidebar.dupBannerTitle') ?? 'Click to reconcile duplicate projects'}
           >
-            <span style={{ fontSize: 14, color: '#fbbf24' }}>⚠</span>
+            <span style={{ fontSize: 14, color: 'var(--warning)' }}>⚠</span>
             <span style={{ fontSize: 12, flex: 1 }}>
               {t('sidebar.dupBanner', { n: duplicates.length }) ??
                 `Detected ${duplicates.length} group${duplicates.length === 1 ? '' : 's'} of duplicate projects. Click to merge.`}
@@ -979,7 +983,10 @@ export function Sidebar() {
             <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{projects.length}</span>
           </div>
           <button
-            onClick={() => setCreateProjOpen(true)}
+            onClick={(e) => {
+              triggerBump(e.currentTarget)
+              setCreateProjOpen(true)
+            }}
             className="flex items-center justify-center rounded transition-all"
             style={{ width: 22, height: 22, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 15, fontWeight: 500 }}
             title={t('sidebar.createProject') ?? 'Create Project'}
@@ -1134,6 +1141,7 @@ export function Sidebar() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation()
+                                      triggerBump(e.currentTarget)
                                       setCreateSessOpen(true)
                                     }}
                                     className="flex items-center justify-center rounded transition-all"
@@ -1183,7 +1191,7 @@ export function Sidebar() {
                                           height: 5,
                                           background: attnReason
                                             ? attnReason === 'decision'
-                                              ? '#f59e0b'
+                                              ? 'var(--warning)'
                                               : attnReason === 'error'
                                                 ? 'var(--danger)'
                                                 : 'var(--success)'
@@ -1208,12 +1216,12 @@ export function Sidebar() {
                                             height: 16,
                                             fontSize: 10,
                                             background: attnReason === 'decision'
-                                              ? 'rgba(245,158,11,0.2)'
+                                              ? 'rgba(255, 166, 87, 0.2)'
                                               : attnReason === 'error'
                                                 ? 'rgba(239,68,68,0.2)'
                                                 : 'rgba(34,197,94,0.2)',
                                             color: attnReason === 'decision'
-                                              ? '#f59e0b'
+                                              ? 'var(--warning)'
                                               : attnReason === 'error'
                                                 ? 'var(--danger)'
                                                 : 'var(--success)',

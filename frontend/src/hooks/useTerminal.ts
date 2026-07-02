@@ -16,10 +16,26 @@ interface UseTerminalOptions {
 }
 
 const DARK_TERMINAL_THEME = {
-  background: '#1a1b26',
-  foreground: '#c0caf5',
-  cursor: '#c0caf5',
-  selectionBackground: '#33467c',
+  background: '#12141A',
+  foreground: '#D1D5DB',
+  cursor: '#58A6FF',
+  selectionBackground: 'rgba(88, 166, 255, 0.25)',
+  black: '#12141A',
+  red: '#FF7B72',
+  green: '#7EE787',
+  yellow: '#FFA657',
+  blue: '#58A6FF',
+  magenta: '#F778BA',
+  cyan: '#79C0FF',
+  white: '#D1D5DB',
+  brightBlack: '#484F58',
+  brightRed: '#FFA198',
+  brightGreen: '#A5D6A7',
+  brightYellow: '#FFCB6B',
+  brightBlue: '#79C0FF',
+  brightMagenta: '#FF9BCE',
+  brightCyan: '#A5D8FF',
+  brightWhite: '#E6EDF3',
 }
 
 const LIGHT_TERMINAL_THEME = {

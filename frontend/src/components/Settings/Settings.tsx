@@ -101,6 +101,9 @@ export function Settings() {
     setMobileGestureEnabled,
     immersiveMode,
     setImmersiveMode,
+    pixelAnimationsEnabled, setPixelAnimationsEnabled,
+    soundEnabled, setSoundEnabled,
+    crtScanlines, setCrtScanlines,
   } = useAppStore()
 
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
@@ -237,6 +240,75 @@ export function Settings() {
             {autoCopySelect ? 'ON' : 'OFF'}
           </button>
           <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.autoCopySelectHint')}</p>
+        </section>
+
+        {/* ── Pixel animations ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelAnimations')}</h3>
+          <button
+            onClick={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(pixelAnimationsEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: pixelAnimationsEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {pixelAnimationsEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelAnimationsHint')}</p>
+        </section>
+
+        {/* ── 8-bit Sound ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.sound')}</h3>
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(soundEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: soundEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {soundEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.soundHint')}</p>
+        </section>
+
+        {/* ── CRT Scanlines ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.crtScanlines')}</h3>
+          <button
+            onClick={() => setCrtScanlines(!crtScanlines)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(crtScanlines ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: crtScanlines ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {crtScanlines ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.crtScanlinesHint')}</p>
         </section>
 
         {/* ── Mobile gesture toggle (mobile only) ── */}

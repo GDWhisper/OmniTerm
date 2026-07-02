@@ -37,9 +37,9 @@ const omnitermHighlight = HighlightStyle.define([
   { tag: tags.string, color: 'var(--success)' },
   { tag: tags.comment, color: 'var(--text-faint)', fontStyle: 'italic' },
   { tag: tags.function(tags.variableName), color: 'var(--accent-bright)' },
-  { tag: tags.number, color: '#f59e0b' },
-  { tag: tags.bool, color: '#f59e0b' },
-  { tag: tags.null, color: '#f59e0b' },
+  { tag: tags.number, color: 'var(--warning)' },
+  { tag: tags.bool, color: 'var(--warning)' },
+  { tag: tags.null, color: 'var(--warning)' },
   { tag: tags.operator, color: 'var(--text-muted)' },
   { tag: tags.className, color: 'var(--accent-bright)' },
   { tag: tags.typeName, color: 'var(--accent-bright)' },
@@ -99,10 +99,10 @@ const omnitermTheme = EditorView.theme({
     outline: '1px solid var(--accent-10)',
   },
   '.cm-searchMatch': {
-    backgroundColor: 'rgba(245, 158, 11, 0.2)',
+    backgroundColor: 'rgba(255, 166, 87, 0.2)',
   },
   '.cm-searchMatch.cm-searchMatch-selected': {
-    backgroundColor: 'rgba(245, 158, 11, 0.4)',
+    backgroundColor: 'rgba(255, 166, 87, 0.4)',
   },
   // Scrollbar styling (matches FileManager scrollbar exactly)
   '& .cm-scroller::-webkit-scrollbar': {

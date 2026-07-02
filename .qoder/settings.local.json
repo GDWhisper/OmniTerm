@@ -8,7 +8,11 @@
       "Bash(wc -l src/**/*.rs src/*.rs frontend/src/**/*.{ts,tsx} 2>/dev/null | tail -5)",
       "Bash(find /home/pax/.agents/skills/pua/references -maxdepth 2 -name \"display-protocol*\" -o -name \"methodology-router*\" -o -name \"methodology-huawei*\" 2>/dev/null | head -10)",
       "mcp__codegraph__codegraph_node",
-      "mcp__codegraph__*"
+      "mcp__codegraph__*",
+      "Bash(ls -la /home/pax/coding/OmniTerm-dev/plans/ 2>/dev/null || find /home/pax/coding/OmniTerm-dev -maxdepth 3 -type d -name \"plans\" 2>/dev/null)",
+      "Bash(ls -la /home/pax/coding/OmniTerm-dev/docs/superpowers/plans/ /home/pax/coding/OmniTerm-dev/docs/micropowers/plans/ | head -100)",
+      "Bash(ls /home/pax/coding/OmniTerm-dev/docs/superpowers/specs/ 2 *)",
+      "Bash(ls /home/pax/coding/OmniTerm-dev/docs/micropowers/ 2 *)"
     ]
   }
 }

@@ -47,6 +47,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-02) `[frontend]` 移动端组合键 + 新布局 — MobileKeyBar 重新设计为两行：上行 `[Esc][Shift][Tab][PgUp][PgDn]` + ↑/滚动，下行 `[Ctrl][Alt][Del][Home][End]` + ←↓→；Shift/Ctrl/Alt 为粘滞修饰键（点按激活→点目标键发送组合→自动释放），去掉原不合 tmux 语义的复制/粘贴按钮；新增 PgUp/PgDn/Del/Home/End 五个终端标准键及其全部修饰组合键序列（`frontend/src/components/Terminal/MobileKeyBar.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-07-01) `[frontend]` FileManager 操作列新增「复制绝对路径」按钮 — 点击后 `navigator.clipboard` 写入完整绝对路径（含 cwd），按钮 title 悬停预览路径；列宽 80→104px 容纳三个图标，操作列改为 flex 居中（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
 
 ### Fixed

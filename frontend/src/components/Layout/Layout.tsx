@@ -25,21 +25,32 @@ export function Layout() {
     activeSessionId,
     setSidebarWidth,
     setFileManagerWidth,
+    crtScanlines,
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
 
-  // Drag resize handlers
+  // Shared drag-teardown: remove all mouse+touch listeners and reset body styles
+  const cleanUpDrag = useCallback(() => {
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    setIsDragging(false)
+  }, [])
+
+  // Drag resize handlers (mouse + touch)
   const handleSidebarDrag = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault()
-      const startX = e.clientX
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+      const startX = clientX
       const startWidth = sidebarWidth
       const maxSidebar = Math.floor(window.innerWidth / 3)
       setIsDragging(true)
 
-      const onMove = (e: MouseEvent) => {
-        const delta = e.clientX - startX
+      const onMove = (ev: MouseEvent | TouchEvent) => {
+        ev.preventDefault()
+        const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
+        const delta = mvX - startX
         const newWidth = Math.max(140, Math.min(maxSidebar, startWidth + delta))
         setSidebarWidth(newWidth)
       }
@@ -47,30 +58,35 @@ export function Layout() {
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setIsDragging(false)
+        document.removeEventListener('touchmove', onMove)
+        document.removeEventListener('touchend', onUp)
+        cleanUpDrag()
         localStorage.setItem('omniterm_sidebar_width', String(useAppStore.getState().sidebarWidth))
       }
 
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
+      document.addEventListener('touchmove', onMove, { passive: false })
+      document.addEventListener('touchend', onUp)
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidth, setSidebarWidth]
+    [sidebarWidth, setSidebarWidth, cleanUpDrag]
   )
 
   const handleFileManagerDrag = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault()
-      const startX = e.clientX
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+      const startX = clientX
       const startWidth = fileManagerWidth
       const maxFileManager = Math.floor(window.innerWidth / 2)
       setIsDragging(true)
 
-      const onMove = (e: MouseEvent) => {
-        const delta = startX - e.clientX
+      const onMove = (ev: MouseEvent | TouchEvent) => {
+        ev.preventDefault()
+        const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
+        const delta = startX - mvX
         const newWidth = Math.max(240, Math.min(maxFileManager, startWidth + delta))
         setFileManagerWidth(newWidth)
       }
@@ -78,18 +94,20 @@ export function Layout() {
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        setIsDragging(false)
+        document.removeEventListener('touchmove', onMove)
+        document.removeEventListener('touchend', onUp)
+        cleanUpDrag()
         localStorage.setItem('omniterm_fm_width', String(useAppStore.getState().fileManagerWidth))
       }
 
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
+      document.addEventListener('touchmove', onMove, { passive: false })
+      document.addEventListener('touchend', onUp)
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [fileManagerWidth, setFileManagerWidth]
+    [fileManagerWidth, setFileManagerWidth, cleanUpDrag]
   )
 
   // Mobile layout
@@ -125,6 +143,7 @@ export function Layout() {
         <div
           className="omniterm-drag-bar omniterm-drag-bar-v"
           onMouseDown={handleSidebarDrag}
+          onTouchStart={handleSidebarDrag}
         />
       )}
 
@@ -138,6 +157,7 @@ export function Layout() {
         <div
           className="omniterm-drag-bar omniterm-drag-bar-v"
           onMouseDown={handleFileManagerDrag}
+          onTouchStart={handleFileManagerDrag}
         />
       )}
 
@@ -148,7 +168,7 @@ export function Layout() {
           style={{
             width: fileManagerCollapsed ? 40 : fileManagerWidth,
             background: 'var(--bg-base)',
-            borderLeft: '1px solid var(--border-subtle)',
+            borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
             transition: isDragging ? 'none' : 'width 0.2s ease',
           }}
         >
@@ -159,6 +179,8 @@ export function Layout() {
       {/* Settings popup — fixed positioning, independent of all panels */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
+      {/* CRT scanline overlay — controlled by settings, default off */}
+      {crtScanlines && <div className="crt-overlay" />}
     </div>
   )
 }
@@ -174,6 +196,7 @@ function MobileLayout() {
     settingsOpen,
     tmuxCheatsheetOpen,
     setActiveTab,
+    crtScanlines,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
 
@@ -245,6 +268,8 @@ function MobileLayout() {
       <MobileNav />
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
+      {/* CRT scanline overlay — controlled by settings, default off */}
+      {crtScanlines && <div className="crt-overlay" />}
     </div>
   )
 }
