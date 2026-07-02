@@ -903,3 +903,61 @@ html, body, #root {
   margin-top: 5px;
   line-height: 1;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Game-style buttons — Primary / Secondary / Accent / Danger
+   All have hard shadow + active displacement.
+   ──────────────────────────────────────────────────────────────────── */
+.btn-pixel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.1s steps(3);
+  white-space: nowrap;
+}
+.btn-pixel:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: none !important;
+}
+.btn-pixel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-pixel-primary {
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  border: 2px solid var(--wood-shadow, #3A2E1F);
+  box-shadow: 3px 3px 0 var(--pixel-shadow-light, #8B7755);
+}
+.btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
+
+.btn-pixel-secondary {
+  background: var(--bg-elevated-light, #EBE0C4);
+  color: var(--wood-dark, #8B5A2B);
+  border: 2px solid var(--wood-dark, #8B5A2B);
+  box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
+}
+
+.btn-pixel-accent {
+  background: var(--accent-light, #58A6FF);
+  color: var(--wood-shadow, #3A2E1F);
+  border: none;
+  box-shadow: 0 3px 0 var(--wood-shadow, #3A2E1F);
+}
+.btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
+
+.btn-pixel-danger {
+  background: var(--bg-elevated-light, #EBE0C4);
+  color: var(--danger-light, #C85A3A);
+  border: 2px solid var(--danger-light, #C85A3A);
+  box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
+}
