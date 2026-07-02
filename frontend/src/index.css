@@ -99,15 +99,23 @@ svg path, svg rect, svg circle, svg line {
    ──────────────────────────────────────────────────────────────────── */
 
 .font-logo {
-  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-family: monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
 }
 
+body.pixel-font-on .font-logo {
+  font-family: 'Press Start 2P', 'VT323', monospace;
+}
+
 .font-pixel {
-  font-family: 'VT323', 'Press Start 2P', monospace;
+  font-family: monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+
+body.pixel-font-on .font-pixel {
+  font-family: 'VT323', 'Press Start 2P', monospace;
 }
 
 .font-reader {
@@ -912,7 +920,7 @@ html, body, #root {
    Game-style buttons — Primary / Secondary / Accent / Danger
    All have hard shadow + active displacement.
    ──────────────────────────────────────────────────────────────────── */
-.btn-pixel {
+body.pixel-ui-on .btn-pixel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -928,43 +936,43 @@ html, body, #root {
   white-space: nowrap;
 }
 /* !important required: overrides box-shadow from all 4 variant classes at :active */
-.btn-pixel:active:not(:disabled) {
+body.pixel-ui-on .btn-pixel:active:not(:disabled) {
   transform: translate(3px, 3px);
   box-shadow: none !important;
 }
-.btn-pixel:disabled {
+body.pixel-ui-on .btn-pixel:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.btn-pixel:focus-visible {
+body.pixel-ui-on .btn-pixel:focus-visible {
   outline: 2px solid var(--accent, #58A6FF);
   outline-offset: 2px;
 }
 
-.btn-pixel-primary {
+body.pixel-ui-on .btn-pixel-primary {
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
   border: 2px solid var(--wood-shadow, #3A2E1F);
   box-shadow: 3px 3px 0 var(--pixel-shadow-light, #8B7755);
 }
-.btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
+body.pixel-ui-on .btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
 
-.btn-pixel-secondary {
+body.pixel-ui-on .btn-pixel-secondary {
   background: var(--bg-elevated-light, #EBE0C4);
   color: var(--wood-dark, #8B5A2B);
   border: 2px solid var(--wood-dark, #8B5A2B);
   box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
 }
 
-.btn-pixel-accent {
+body.pixel-ui-on .btn-pixel-accent {
   background: var(--accent-light, #58A6FF);
   color: var(--wood-shadow, #3A2E1F);
   border: none;
   box-shadow: 0 3px 0 var(--wood-shadow, #3A2E1F);
 }
-.btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
+body.pixel-ui-on .btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
 
-.btn-pixel-danger {
+body.pixel-ui-on .btn-pixel-danger {
   background: var(--bg-elevated-light, #EBE0C4);
   color: var(--danger-light, #C85A3A);
   border: 2px solid var(--danger-light, #C85A3A);
@@ -990,7 +998,7 @@ body.parchment-texture {
    Used on top of every panel (sidebar sections, terminal, file manager,
    settings, modal).
    ──────────────────────────────────────────────────────────────────── */
-.panel-title-bar {
+body.pixel-ui-on .panel-title-bar {
   padding: 5px 10px;
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
@@ -1003,14 +1011,14 @@ body.parchment-texture {
   align-items: center;
   gap: 6px;
 }
-.panel-title-bar .title-bar-spacer { margin-left: auto; }
-.panel-title-bar .title-bar-badge {
+body.pixel-ui-on .panel-title-bar .title-bar-spacer { margin-left: auto; }
+body.pixel-ui-on .panel-title-bar .title-bar-badge {
   font-size: 11px;
   background: var(--wood-shadow, #3A2E1F);
   color: #7EE787;
   padding: 1px 6px;
 }
-.panel-title-bar .title-bar-path {
+body.pixel-ui-on .panel-title-bar .title-bar-path {
   font-size: 11px;
   color: #FFCB6B;
 }
