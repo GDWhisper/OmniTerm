@@ -19,24 +19,6 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
   // so `document.activeElement` still reflects the pre-tap state.
   const textareaWasFocusedRef = useRef(false)
 
-  const handleClick = useCallback(
-    (name: string) => {
-      // Modifier keys toggle the latch
-      if (MOD_KEYS.includes(name as any)) {
-        const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
-        setLatchMod((prev) => (prev === mod ? null : mod))
-      } else if (latchMod) {
-        const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
-        onKey(`${mod}+${name}`)
-        setLatchMod(null)
-      } else {
-        onKey(name)
-      }
-      maybeBlurAfterTap()
-    },
-    [latchMod, onKey, maybeBlurAfterTap],
-  )
-
   // Record pre-tap focus state. touchstart fires before the browser shifts
   // focus, so document.activeElement reflects the state before this tap.
   const handleTouchStart = useCallback(() => {
@@ -54,6 +36,24 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       }, 0)
     }
   }, [])
+
+  const handleClick = useCallback(
+    (name: string) => {
+      // Modifier keys toggle the latch
+      if (MOD_KEYS.includes(name as any)) {
+        const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
+        setLatchMod((prev) => (prev === mod ? null : mod))
+      } else if (latchMod) {
+        const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
+        onKey(`${mod}+${name}`)
+        setLatchMod(null)
+      } else {
+        onKey(name)
+      }
+      maybeBlurAfterTap()
+    },
+    [latchMod, onKey, maybeBlurAfterTap],
+  )
 
   const modBtnStyle = (mod: string): React.CSSProperties => {
     const active = latchMod === mod.toLowerCase()
