@@ -14,6 +14,7 @@ import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
+import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -883,28 +884,18 @@ export function Sidebar() {
       className="h-full flex flex-col text-base relative"
       style={{ background: 'var(--bg-base)', fontFamily: FONT, color: 'var(--text-primary)' }}
     >
-      {/* Header */}
-      <div
-        className="px-3.5 py-3 flex items-center justify-between"
-        style={{ borderBottom: '1px solid var(--border-subtle)' }}
-      >
-        <div className="flex items-center gap-2.5">
-          <div
-            className="rounded-full"
-            style={{ width: 8, height: 8, background: 'var(--accent)', boxShadow: 'var(--accent-glow-md)' }}
-          />
-          <span
-            className="font-bold text-base"
-            style={{ background: 'linear-gradient(90deg, var(--accent), var(--accent-bright))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}
-          >
-            OmniTerm
-          </span>
+      {/* Header — logo title bar */}
+      <div className="logo-title-bar">
+        <OmniTermLogo size={48} />
+        <div style={{ flex: 1, lineHeight: 1.1 }}>
+          <div className="logo-wordmark">OmniTerm</div>
+          <div className="logo-version">v{APP_VERSION} · LV.07</div>
         </div>
         <div className="flex items-center gap-1.5">
           {/* Terminal CWD button — pulses when outside terminal CWD */}
           <button
             className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
-            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? 'var(--accent-bright)' : 'var(--text-faint)', fontSize: 14 }}
+            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? 'var(--accent-bright)' : '#FAF2DE', fontSize: 14 }}
             onClick={() => {
               if (activeSessionId) resetFmToFollowing(activeSessionId)
             }}
@@ -916,10 +907,10 @@ export function Sidebar() {
           <button
             onClick={toggleSidebarCollapsed}
             className="flex items-center justify-center rounded-md transition-all"
-            style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
+            style={{ width: 24, height: 24, color: '#FAF2DE', fontSize: 14 }}
             title={t('sidebar.collapse')}
             onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = '#FAF2DE'; e.currentTarget.style.background = 'transparent' }}
           >
             ◀
           </button>

@@ -872,3 +872,34 @@ html, body, #root {
 .pixel-starman {
   animation: starman-flash 0.4s steps(1, end) infinite;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Logo title bar — sidebar top, wood background, pixel icon + wordmark
+   ──────────────────────────────────────────────────────────────────── */
+.logo-title-bar {
+  padding: 14px 10px;
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
+}
+
+.logo-wordmark {
+  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-size: 17px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #FAF2DE;
+  line-height: 1.1;
+}
+
+.logo-version {
+  font-family: 'VT323', monospace;
+  font-size: 11px;
+  color: #FFCB6B;
+  letter-spacing: 1px;
+  margin-top: 5px;
+  line-height: 1;
+}
