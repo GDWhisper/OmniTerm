@@ -1,3 +1,21 @@
+//! Filesystem operations: path sanitization, directory listing, file I/O, search.
+//!
+//! ## Attribution
+//!
+//! This module's API shape and key algorithms were modeled after
+//! [sigoden/dufs](https://github.com/sigoden/dufs) (MIT OR Apache-2.0).
+//! Patterns adapted:
+//!
+//! - `PathType` / `FileEntry` field names and JSON shape (mirrors dufs's
+//!   `PathType` / `PathItem`).
+//! - mtime resolution with fallback to created time.
+//! - Directory `size` = child entry count, capped by `MAX_SUBPATHS_COUNT`.
+//! - Sort order: directories first, then by chosen key.
+//! - Path normalization to forward slashes.
+//!
+//! No code is copied verbatim. Rust idioms, async I/O style, and the
+//! public API surface were rewritten for OmniTerm's needs.
+
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -89,7 +107,7 @@ fn join_and_validate(base: &Path, requested: &str) -> Result<PathBuf> {
     Ok(joined)
 }
 
-/// Path type — mirrors dufs PathType.
+/// Path type of a filesystem entry.
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub enum PathType {
     #[serde(rename = "Dir")]
@@ -102,7 +120,7 @@ pub enum PathType {
     SymlinkFile,
 }
 
-/// File/directory entry — mirrors dufs PathItem.
+/// A file or directory entry returned by [`list_dir`].
 #[derive(Debug, Serialize)]
 pub struct FileEntry {
     pub path_type: PathType,
@@ -117,14 +135,14 @@ impl FileEntry {
     }
 }
 
-/// Convert SystemTime to unix millis (like dufs to_timestamp).
+/// Convert `SystemTime` to unix milliseconds.
 fn to_timestamp(time: &SystemTime) -> u64 {
     time.duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
 
-/// Normalize path separators to forward slashes (like dufs normalize_path).
+/// Normalize path separators to forward slashes.
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -137,7 +155,7 @@ pub enum SortKey {
     Size,
 }
 
-/// List directory contents — modeled after dufs list_dir + to_pathitem.
+/// List directory contents.
 pub async fn list_dir(
     base: &Path,
     rel_path: &str,
@@ -164,7 +182,7 @@ pub async fn list_dir(
             (false, false) => PathType::File,
         };
 
-        // mtime: prefer modified, fallback to created (like dufs)
+        // mtime: prefer modified, fallback to created
         let mtime = meta
             .modified()
             .ok()
@@ -172,7 +190,7 @@ pub async fn list_dir(
             .map(|t| to_timestamp(&t))
             .unwrap_or(0);
 
-        // For directories, count entries (like dufs)
+        // For directories, count entries (capped by MAX_SUBPATHS_COUNT)
         let size = if is_dir {
             let mut count: u64 = 0;
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
@@ -196,7 +214,7 @@ pub async fn list_dir(
         });
     }
 
-    // Sort: directories first, then by chosen key (like dufs)
+    // Sort: directories first, then by chosen key
     entries.sort_by(|a, b| {
         let dir_cmp = b.is_dir().cmp(&a.is_dir());
         if dir_cmp != std::cmp::Ordering::Equal {
@@ -253,7 +271,7 @@ pub async fn delete_path(base: &Path, rel_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rename/move a file or directory to a new path (like dufs MOVE).
+/// Rename/move a file or directory to a new path.
 /// `new_rel_path` is the full new relative path, not just a name.
 pub async fn move_path(base: &Path, old_rel: &str, new_rel: &str) -> Result<()> {
     let old = sanitize_path(base, old_rel)?;

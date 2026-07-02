@@ -237,6 +237,8 @@ html, body, #root {
 
 /* ────────────────────────────────────────────────────────────────────
    OmniTerm FileManager — dufs-inspired single-page file table.
+   UI/UX layout pattern adapted from sigoden/dufs
+   (https://github.com/sigoden/dufs, MIT OR Apache-2.0).
    Scoped under .omnifm-root. Follows docs/ui-style-guide.md palette.
    ──────────────────────────────────────────────────────────────────── */
 
