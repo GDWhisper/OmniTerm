@@ -255,9 +255,8 @@ cmd_start() {
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
         # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
-        # 显式列 main/dev/debug 三个 binary 的 target（通配符 omniterm* 也行但更精确）
-        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_dev=info,omniterm_debug=info,omniterm_server=info}"
-        stdbuf -oL -eL cargo run
+        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_server=info}"
+        cargo run
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
 

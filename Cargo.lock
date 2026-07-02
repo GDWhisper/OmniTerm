@@ -1534,7 +1534,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "omniterm-dev"
+name = "omniterm-main"
 version = "0.0.1"
 dependencies = [
  "anyhow",

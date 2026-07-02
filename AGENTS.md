@@ -70,6 +70,41 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 
 新 worktree 初始化步骤见 `docs/worktree-setup.md`，各分支端口/域名/二进制名对照表见 `docs/branch-workflows.md「分支身份约定」`。
 
+## 配置统一管理
+
+**分支专属变量（端口/域名/版本/binary 名等）必须通过 `.env.local` 统一管理，不得硬编码到代码里。**
+
+### `.env.local` 可用变量
+
+| 变量 | 含义 | 消费者 |
+|------|------|--------|
+| `BACKEND_PORT` | dev.sh 启动的后端 HTTP 端口 | Rust `Args.port` (clap env) / Vite proxy |
+| `FRONTEND_PORT` | dev.sh 启动的前端 HTTP 端口 | Vite `server.port` |
+| `DOCKER_PORT` | Docker 容器内监听端口 | Dockerfile `ARG` / docker-compose `BIND_ADDR` |
+| `DOCKER_PORT_MAPPING` | Docker 端口映射 `host:container` | docker-compose `ports` |
+| `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
+| `BRANCH_BINARY_NAME` | 二进制名（`omniterm-main` / `omniterm-dev`） | Dockerfile `CMD` / 日志 |
+| `BRANCH_VERSION` | 版本号 | Vite `define` → `import.meta.env.VITE_APP_VERSION` / Rust 启动日志 |
+| `DOMAIN` | 部署域名 | Vite `allowedHosts` |
+
+### 硬性规则
+
+- ❌ **禁止在代码里硬编码**端口/域名/版本/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
+- ✅ 改这些值时**只改 `.env.local`**（各 worktree 独立）
+- ✅ dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
+- ⚠️ **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
+
+### 首次初始化新 worktree
+
+```bash
+# 1. cp 模板（保留注释）
+cp branch.config.example .env.local  # 如果有模板文件
+# 2. 改值（参考其他 worktree）
+# 3. ./dev.sh start 验证
+```
+
+`branch.config.example` 缺失时直接编辑 `.env.local`（参考 `docs/branch-workflows.md` 表）。
+
 ## 文档索引
 
 > **强制执行**：接收任务后、编码前，必须先扫描此表，将任务与「触发条件」列逐一比对，**命中即读**。读完全部命中文档后再动手。跳过此步骤导致遗漏架构约束、工作流规则或已有踩坑记录，属违规。
