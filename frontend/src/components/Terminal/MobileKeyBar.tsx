@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -14,6 +14,10 @@ const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 
 export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
   const [latchMod, setLatchMod] = useState<'shift' | 'ctrl' | 'alt' | null>(null)
+  // Track whether xterm.js textarea was focused before the touch started.
+  // On mobile, touchstart fires before the browser shifts focus to the button,
+  // so `document.activeElement` still reflects the pre-tap state.
+  const textareaWasFocusedRef = useRef(false)
 
   const handleClick = useCallback(
     (name: string) => {
@@ -21,20 +25,35 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       if (MOD_KEYS.includes(name as any)) {
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
         setLatchMod((prev) => (prev === mod ? null : mod))
-        return
-      }
-
-      // Non-modifier key: send combo if a modifier is latched
-      if (latchMod) {
+      } else if (latchMod) {
         const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
         onKey(`${mod}+${name}`)
-        setLatchMod(null) // release latch after combo
+        setLatchMod(null)
       } else {
         onKey(name)
       }
+      maybeBlurAfterTap()
     },
-    [latchMod, onKey],
+    [latchMod, onKey, maybeBlurAfterTap],
   )
+
+  // Record pre-tap focus state. touchstart fires before the browser shifts
+  // focus, so document.activeElement reflects the state before this tap.
+  const handleTouchStart = useCallback(() => {
+    textareaWasFocusedRef.current = document.activeElement instanceof HTMLTextAreaElement
+  }, [])
+
+  // After any button action, blur the textarea if it wasn't focused before
+  // the tap (prevents IME keyboard from opening). If it was focused (user
+  // was typing), leave it alone.
+  const maybeBlurAfterTap = useCallback(() => {
+    if (!textareaWasFocusedRef.current) {
+      setTimeout(() => {
+        const ae = document.activeElement
+        if (ae instanceof HTMLTextAreaElement) ae.blur()
+      }, 0)
+    }
+  }, [])
 
   const modBtnStyle = (mod: string): React.CSSProperties => {
     const active = latchMod === mod.toLowerCase()
@@ -47,6 +66,19 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
   }
 
   const isModKey = (name: string) => MOD_KEYS.includes(name as any)
+
+  const renderBtn = (k: string) => (
+    <button
+      key={k}
+      tabIndex={-1}
+      onTouchStart={handleTouchStart}
+      onClick={() => handleClick(k)}
+      onPointerDown={(e) => e.preventDefault()}
+      style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
+    >
+      {k}
+    </button>
+  )
 
   return (
     <div
@@ -64,20 +96,13 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
     >
       {/* Row 1: Esc Shift Tab PgUp PgDn  ·  ↑ 滚动 */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW1_ITEMS.map((k) => (
-          <button
-            key={k}
-            onClick={() => handleClick(k)}
-            onPointerDown={(e) => e.preventDefault()}
-            style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
-          >
-            {k}
-          </button>
-        ))}
+        {ROW1_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
+          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
           <button
-            onClick={onToggleScrollMode}
+            tabIndex={-1}
+            onTouchStart={handleTouchStart}
+            onClick={() => { onToggleScrollMode(); maybeBlurAfterTap() }}
             onPointerDown={(e) => e.preventDefault()}
             style={{
               ...keyButtonStyle,
@@ -91,20 +116,11 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
       </div>
       {/* Row 2: Ctrl Alt Del Home End  ·  ← ↓ → */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW2_ITEMS.map((k) => (
-          <button
-            key={k}
-            onClick={() => handleClick(k)}
-            onPointerDown={(e) => e.preventDefault()}
-            style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
-          >
-            {k}
-          </button>
-        ))}
+        {ROW2_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
-          <button onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
-          <button onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
+          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
+          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
+          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
         </div>
       </div>
     </div>

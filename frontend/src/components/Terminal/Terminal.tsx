@@ -46,13 +46,6 @@ export function Terminal() {
   const handleKey = (name: string) => {
     if (!sendData) return
 
-    // Prevent IME keyboard from opening on mobile after tapping a function key.
-    // On mobile browsers, the touch-focus sequence can refocus the xterm.js
-    // hidden textarea after the button interaction completes, which triggers
-    // the virtual keyboard. Defer-blur to land after the browser's focus
-    // restoration.
-    setTimeout(() => terminal?.blur(), 0)
-
     // Combo keys: modifier latch from MobileKeyBar (e.g. 'Shift+Tab', 'Ctrl+↑')
     const comboMatch = name.match(/^(Shift|Ctrl|Alt)\+(\S+)$/)
     if (comboMatch) {
