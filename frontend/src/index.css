@@ -1024,3 +1024,28 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
   font-size: 11px;
   color: #FFCB6B;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Segmented progress — HP/XP style bar of discrete blocks.
+   ──────────────────────────────────────────────────────────────────── */
+.progress-segmented { margin-top: 2px; }
+.progress-segmented-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'VT323', monospace;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--wood-dark, #8B5A2B);
+  margin-bottom: 3px;
+}
+.progress-segmented-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+.progress-segmented-segment {
+  flex: 1;
+  background: #D4C4A0;
+}
+.progress-segmented-segment.filled { background: #5A8F3A; }
