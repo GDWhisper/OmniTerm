@@ -12,13 +12,14 @@ function App() {
   useImmersive()
 
   const resolved = useThemeStore((s) => s.resolved)
-  const { pixelUiEnabled, pixelFontEnabled, parchmentTextureEnabled } = useAppStore()
+  const { pixelUiEnabled, pixelFontEnabled, parchmentTextureEnabled, transitionsEnabled } = useAppStore()
 
   useEffect(() => {
     document.body.classList.toggle('parchment-texture', resolved === 'light' && parchmentTextureEnabled)
     document.body.classList.toggle('pixel-font-on', pixelFontEnabled)
     document.body.classList.toggle('pixel-ui-on', pixelUiEnabled)
-  }, [resolved, pixelUiEnabled, pixelFontEnabled, parchmentTextureEnabled])
+    document.body.classList.toggle('transitions-on', transitionsEnabled)
+  }, [resolved, pixelUiEnabled, pixelFontEnabled, parchmentTextureEnabled, transitionsEnabled])
 
   return (
     <AttentionProvider>
