@@ -61,6 +61,10 @@ export interface AppState {
   pixelAnimationsEnabled: boolean
   soundEnabled: boolean
   crtScanlines: boolean
+  pixelUiEnabled: boolean
+  pixelFontEnabled: boolean
+  parchmentTextureEnabled: boolean
+  transitionsEnabled: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -90,6 +94,10 @@ export interface AppState {
   setPixelAnimationsEnabled: (v: boolean) => void
   setSoundEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
+  setPixelUiEnabled: (v: boolean) => void
+  setPixelFontEnabled: (v: boolean) => void
+  setParchmentTextureEnabled: (v: boolean) => void
+  setTransitionsEnabled: (v: boolean) => void
 
   // Workspace session memory
   setWorkspaceSession: (workspaceId: string, sessionId: string) => void
@@ -144,6 +152,10 @@ export const useAppStore = create<AppState>((set) => ({
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
+  pixelUiEnabled: localStorage.getItem('omniterm_pixel_ui') !== 'false',
+  pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') !== 'false',
+  parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
+  transitionsEnabled: localStorage.getItem('omniterm_transitions') !== 'false',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -223,6 +235,22 @@ export const useAppStore = create<AppState>((set) => ({
   setCrtScanlines: (v) => {
     localStorage.setItem('omniterm_crt_scanlines', String(v))
     set({ crtScanlines: v })
+  },
+  setPixelUiEnabled: (v) => {
+    localStorage.setItem('omniterm_pixel_ui', String(v))
+    set({ pixelUiEnabled: v })
+  },
+  setPixelFontEnabled: (v) => {
+    localStorage.setItem('omniterm_pixel_font', String(v))
+    set({ pixelFontEnabled: v })
+  },
+  setParchmentTextureEnabled: (v) => {
+    localStorage.setItem('omniterm_parchment_texture', String(v))
+    set({ parchmentTextureEnabled: v })
+  },
+  setTransitionsEnabled: (v) => {
+    localStorage.setItem('omniterm_transitions', String(v))
+    set({ transitionsEnabled: v })
   },
 
   setWorkspaceSession: (workspaceId, sessionId) =>

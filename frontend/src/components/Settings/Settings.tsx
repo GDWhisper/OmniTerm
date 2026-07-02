@@ -104,6 +104,10 @@ export function Settings() {
     pixelAnimationsEnabled, setPixelAnimationsEnabled,
     soundEnabled, setSoundEnabled,
     crtScanlines, setCrtScanlines,
+    pixelUiEnabled, setPixelUiEnabled,
+    pixelFontEnabled, setPixelFontEnabled,
+    parchmentTextureEnabled, setParchmentTextureEnabled,
+    transitionsEnabled, setTransitionsEnabled,
   } = useAppStore()
 
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
@@ -309,6 +313,98 @@ export function Settings() {
             {crtScanlines ? 'ON' : 'OFF'}
           </button>
           <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.crtScanlinesHint')}</p>
+        </section>
+
+        {/* ── Pixel UI ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelUi')}</h3>
+          <button
+            onClick={() => setPixelUiEnabled(!pixelUiEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(pixelUiEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: pixelUiEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {pixelUiEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelUiHint')}</p>
+        </section>
+
+        {/* ── Pixel Font ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelFont')}</h3>
+          <button
+            onClick={() => setPixelFontEnabled(!pixelFontEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(pixelFontEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: pixelFontEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {pixelFontEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelFontHint')}</p>
+        </section>
+
+        {/* ── Parchment Texture ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.parchmentTexture')}</h3>
+          <button
+            onClick={() => setParchmentTextureEnabled(!parchmentTextureEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(parchmentTextureEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: parchmentTextureEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {parchmentTextureEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.parchmentTextureHint')}</p>
+        </section>
+
+        {/* ── Transitions ── */}
+        <section className="space-y-2">
+          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.transitions')}</h3>
+          <button
+            onClick={() => setTransitionsEnabled(!transitionsEnabled)}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              ...(transitionsEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: transitionsEnabled ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {transitionsEnabled ? 'ON' : 'OFF'}
+          </button>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.transitionsHint')}</p>
         </section>
 
         {/* ── Mobile gesture toggle (mobile only) ── */}
