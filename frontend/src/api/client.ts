@@ -142,7 +142,7 @@ export const api = {
   listProjects: () => request<Project[]>('/projects'),
   createProject: (data: { name: string; path: string; target_id?: string }) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
-  updateProject: (id: string, data: { name?: string }) =>
+  updateProject: (id: string, data: { name?: string; path?: string }) =>
     request<Project>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteProject: (id: string) =>
     request(`/projects/${id}`, { method: 'DELETE' }),

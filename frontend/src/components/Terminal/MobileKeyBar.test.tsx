@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createRoot, Root } from 'react-dom/client'
+import { useState } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { MobileKeyBar } from './MobileKeyBar'
 
 function setup(props: Partial<Parameters<typeof MobileKeyBar>[0]> = {}) {
@@ -8,14 +10,22 @@ function setup(props: Partial<Parameters<typeof MobileKeyBar>[0]> = {}) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  root.render(
-    <MobileKeyBar
-      onKey={onKey}
-      scrollMode={false}
-      onToggleScrollMode={onToggleScrollMode}
-      {...props}
-    />,
-  )
+
+  function Wrapper() {
+    const [latchMod, setLatchMod] = useState<string | null>(null)
+    return (
+      <MobileKeyBar
+        latchMod={latchMod}
+        onSetLatchMod={setLatchMod}
+        onKey={onKey}
+        scrollMode={false}
+        onToggleScrollMode={onToggleScrollMode}
+        {...props}
+      />
+    )
+  }
+
+  root.render(<Wrapper />)
   return { container, root, onKey, onToggleScrollMode }
 }
 
@@ -57,8 +67,8 @@ describe('MobileKeyBar', () => {
   it('releases modifier latch on second click', async () => {
     const { container, root, onKey } = setup()
     const shift = await findBtn(container, 'Shift')
-    shift.click() // latch
-    shift.click() // release
+    flushSync(() => { shift.click() }) // latch
+    flushSync(() => { shift.click() }) // release
     const tab = await findBtn(container, 'Tab')
     tab.click()
     // Latch was released → plain key

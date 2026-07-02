@@ -1,23 +1,9 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-import { EditorState, Compartment } from '@codemirror/state'
+import { EditorState, Compartment, type Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
-import { javascript } from '@codemirror/lang-javascript'
-import { python } from '@codemirror/lang-python'
-import { rust } from '@codemirror/lang-rust'
-import { json } from '@codemirror/lang-json'
-import { html } from '@codemirror/lang-html'
-import { css } from '@codemirror/lang-css'
-import { markdown } from '@codemirror/lang-markdown'
-import { yaml } from '@codemirror/lang-yaml'
-import { sql } from '@codemirror/lang-sql'
-import { go } from '@codemirror/lang-go'
-import { java } from '@codemirror/lang-java'
-import { cpp } from '@codemirror/lang-cpp'
-import { php } from '@codemirror/lang-php'
-
 interface FileEditorProps {
   /** File content */
   content: string
@@ -125,59 +111,53 @@ const omnitermTheme = EditorView.theme({
   },
 })
 
-/** Detect language from file extension */
-function getLanguageExtension(fileName: string) {
+type LangLoader = () => Promise<Extension>
+
+const langLoaders: Record<string, LangLoader> = {
+  js: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
+  jsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
+  mjs: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
+  cjs: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true })),
+  ts: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true, typescript: true })),
+  tsx: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true, typescript: true })),
+  mts: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true, typescript: true })),
+  cts: () => import('@codemirror/lang-javascript').then((m) => m.javascript({ jsx: true, typescript: true })),
+  py: () => import('@codemirror/lang-python').then((m) => m.python()),
+  pyw: () => import('@codemirror/lang-python').then((m) => m.python()),
+  rs: () => import('@codemirror/lang-rust').then((m) => m.rust()),
+  json: () => import('@codemirror/lang-json').then((m) => m.json()),
+  jsonl: () => import('@codemirror/lang-json').then((m) => m.json()),
+  html: () => import('@codemirror/lang-html').then((m) => m.html()),
+  htm: () => import('@codemirror/lang-html').then((m) => m.html()),
+  css: () => import('@codemirror/lang-css').then((m) => m.css()),
+  scss: () => import('@codemirror/lang-css').then((m) => m.css()),
+  less: () => import('@codemirror/lang-css').then((m) => m.css()),
+  md: () => import('@codemirror/lang-markdown').then((m) => m.markdown()),
+  markdown: () => import('@codemirror/lang-markdown').then((m) => m.markdown()),
+  yaml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
+  yml: () => import('@codemirror/lang-yaml').then((m) => m.yaml()),
+  sql: () => import('@codemirror/lang-sql').then((m) => m.sql()),
+  go: () => import('@codemirror/lang-go').then((m) => m.go()),
+  java: () => import('@codemirror/lang-java').then((m) => m.java()),
+  c: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  cpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  cc: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  cxx: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  h: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  hpp: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  hxx: () => import('@codemirror/lang-cpp').then((m) => m.cpp()),
+  php: () => import('@codemirror/lang-php').then((m) => m.php()),
+}
+
+/** Detect language from file extension and load it on demand */
+async function getLanguageExtension(fileName: string): Promise<Extension> {
   const ext = fileName.split('.').pop()?.toLowerCase() || ''
-  switch (ext) {
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return javascript({ jsx: true })
-    case 'ts':
-    case 'tsx':
-    case 'mts':
-    case 'cts':
-      return javascript({ jsx: true, typescript: true })
-    case 'py':
-    case 'pyw':
-      return python()
-    case 'rs':
-      return rust()
-    case 'json':
-    case 'jsonl':
-      return json()
-    case 'html':
-    case 'htm':
-      return html()
-    case 'css':
-    case 'scss':
-    case 'less':
-      return css()
-    case 'md':
-    case 'markdown':
-      return markdown()
-    case 'yaml':
-    case 'yml':
-      return yaml()
-    case 'sql':
-      return sql()
-    case 'go':
-      return go()
-    case 'java':
-      return java()
-    case 'c':
-    case 'cpp':
-    case 'cc':
-    case 'cxx':
-    case 'h':
-    case 'hpp':
-    case 'hxx':
-      return cpp()
-    case 'php':
-      return php()
-    default:
-      return [] // no language support — plain text
+  const loader = langLoaders[ext]
+  if (!loader) return []
+  try {
+    return await loader()
+  } catch {
+    return []
   }
 }
 
@@ -205,7 +185,6 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         omnitermTheme,
         syntaxHighlighting(omnitermHighlight),
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        getLanguageExtension(fileName),
         editableCompartment.current.of(EditorView.editable.of(isEditable)),
         EditorView.lineWrapping,
       ]
@@ -238,23 +217,34 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
   useEffect(() => {
     if (!containerRef.current) return
 
-    const state = EditorState.create({
-      doc: content,
-      extensions: createExtensions(editable),
-    })
+    let view: EditorView | null = null
+    let cancelled = false
 
-    const view = new EditorView({
-      state,
-      parent: containerRef.current,
-    })
+    const init = async () => {
+      const langExt = await getLanguageExtension(fileName)
+      if (cancelled || !containerRef.current) return
 
-    viewRef.current = view
+      const state = EditorState.create({
+        doc: content,
+        extensions: [...createExtensions(editable), langExt],
+      })
+
+      view = new EditorView({
+        state,
+        parent: containerRef.current,
+      })
+
+      viewRef.current = view
+    }
+
+    init()
 
     return () => {
-      view.destroy()
+      cancelled = true
+      view?.destroy()
       viewRef.current = null
     }
-  }, [editable, createExtensions]) // NOTE: content intentionally omitted — editor manages its own state
+  }, [editable, createExtensions, fileName]) // NOTE: content intentionally omitted — editor manages its own state
 
   // Sync external content changes into the editor (e.g. file reload, mode toggle, save).
   // Internal edits (typing) are no-ops because the editor's doc already matches the prop.

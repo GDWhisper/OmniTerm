@@ -7,7 +7,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
-import { triggerBump, triggerScorePop, triggerStomp } from '../../utils/pixelAnimations'
+import { triggerBump } from '../../utils/pixelAnimations'
 import { play8BitSound } from '../../utils/audioFeedback'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -1022,8 +1022,8 @@ export function FileManager() {
       {(drawerFilePath || workspaceDrawerPath) && (
         <FileDrawer
           filePath={drawerFilePath ?? workspaceDrawerPath!}
-          sessionId={activeSessionId}
-          workspaceId={activeWorkspaceId}
+          sessionId={activeSessionId ?? undefined}
+          workspaceId={activeWorkspaceId ?? undefined}
           projectId={activeProjectId}
           onClose={() => {
             if (activeSessionId) closeFmDrawer(activeSessionId)

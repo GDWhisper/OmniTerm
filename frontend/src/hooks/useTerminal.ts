@@ -147,13 +147,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.exited', { code: msg.code })}]\x1b[0m`)
           } else if (msg.type === 'agent_state') {
             // Fire attention notification on state transitions
+            if (!sessionId) return
             const attnReason = msg.attention_reason
             if (attnReason === 'decision' || attnReason === 'done' || attnReason === 'error') {
-              attention.fire(
-                sessionId,
-                sessionId,
-                attnReason
-              )
+              attention.fire(sessionId, sessionId, attnReason)
             } else if (msg.state === 'running') {
               attention.clearAlert(sessionId)
             }

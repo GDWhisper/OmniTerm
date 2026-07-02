@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
-import { FileEditor } from './FileEditor'
+const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.FileEditor })))
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 
@@ -479,13 +479,31 @@ export function FileDrawer({
         ) : isImage ? (
           <FilePreview filePath={filePath} sessionId={sessionId} workspaceId={workspaceId} projectId={projectId} fileName={fileName} fileChangeEvent={fileChangeEvent} />
         ) : (
-          <FileEditor
-            content={mode === 'edit' ? editedContent : content}
-            editable={mode === 'edit'}
-            fileName={fileName}
-            onChange={handleContentChange}
-            onSave={handleSave}
-          />
+          <Suspense
+            fallback={(
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  color: 'var(--text-faint)',
+                  fontSize: 13,
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                }}
+              >
+                {t('drawer.loading')}
+              </div>
+            )}
+          >
+            <FileEditor
+              content={mode === 'edit' ? editedContent : content}
+              editable={mode === 'edit'}
+              fileName={fileName}
+              onChange={handleContentChange}
+              onSave={handleSave}
+            />
+          </Suspense>
         )}
       </div>
 
