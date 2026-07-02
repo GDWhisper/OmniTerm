@@ -722,6 +722,12 @@ export function FileManager() {
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>files</span>
+        <span className="title-bar-spacer" />
+        {activeWorkspaceId && <span className="title-bar-path">~/{activeWorkspaceId}</span>}
+      </div>
       <div className="fm-toolbar">
         <div className="fm-toolbar-left">
           <button

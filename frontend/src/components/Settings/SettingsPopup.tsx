@@ -116,6 +116,10 @@ export function SettingsPopup() {
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>settings</span>
+      </div>
       {isMobile ? (
         <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
           <Settings />

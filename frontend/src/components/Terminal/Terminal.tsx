@@ -213,6 +213,10 @@ export function Terminal() {
         className="h-full flex items-center justify-center"
         style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: FONT }}
       >
+        <div className="panel-title-bar">
+          <span>◆</span>
+          <span>terminal</span>
+        </div>
         <div style={{ textAlign: 'center' }}>
           <div
             style={{
@@ -236,6 +240,12 @@ export function Terminal() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}>
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>terminal</span>
+        <span className="title-bar-spacer" />
+        {hasSession && <span className="title-bar-badge">● LIVE</span>}
+      </div>
       <div ref={containerRef} className="h-full w-full p-1" style={{ flex: 1, minHeight: 0 }} />
       {isMobile && (
         <MobileKeyBar

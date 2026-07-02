@@ -63,6 +63,10 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
           fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
         }}
       >
+        <div className="panel-title-bar">
+          <span>◆</span>
+          <span>preview</span>
+        </div>
         <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="2" width="12" height="12" rx="1" />
           <circle cx="6" cy="6" r="1.5" />
@@ -109,6 +113,10 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
         overflow: 'auto',
       }}
     >
+      <div className="panel-title-bar" style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+        <span>◆</span>
+        <span>preview</span>
+      </div>
       <img
         key={`${fileName}-${version}`}
         src={imageUrl}

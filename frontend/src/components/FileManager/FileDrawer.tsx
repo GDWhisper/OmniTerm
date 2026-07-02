@@ -236,6 +236,11 @@ export function FileDrawer({
         flexShrink: 0,
       }}
     >
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>drawer</span>
+      </div>
+
       {/* Drag bar */}
       <div
         onMouseDown={handleDragStart}
