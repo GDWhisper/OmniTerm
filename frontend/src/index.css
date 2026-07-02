@@ -1049,3 +1049,19 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
   background: #D4C4A0;
 }
 .progress-segmented-segment.filled { background: #5A8F3A; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Selected-item blinking cursor — pink ▶ that blinks in discrete steps.
+   Apply to the indicator element inside a selected list row.
+   ──────────────────────────────────────────────────────────────────── */
+.selected-cursor {
+  color: #F778BA;
+  font-size: 16px;
+  line-height: 1;
+  animation: blink-cursor 1s steps(1) infinite;
+}
+.selected-cursor.inactive { color: transparent; animation: none; }
+
+@keyframes blink-cursor {
+  50% { opacity: 0; }
+}
