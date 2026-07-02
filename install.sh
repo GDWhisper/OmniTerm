@@ -4,7 +4,7 @@ set -euo pipefail
 # ── OmniTerm install script ──────────────────────────────────────
 # curl -fsSL https://raw.githubusercontent.com/pax/OmniTerm/release/install.sh | bash
 
-REPO="pax/OmniTerm"
+REPO="GDWhisper/OmniTerm-dev"
 BIN_NAME="omniterm"
 INSTALL_DIR="${OMNITERM_INSTALL_DIR:-/usr/local/bin}"
 VERSION="${OMNITERM_VERSION:-latest}"
