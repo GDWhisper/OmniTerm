@@ -2,7 +2,7 @@
 
 > *所有 AI 编码智能体，一个面板全掌握。*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ![screenshot](docs/screenshots/overview.png)
 
@@ -69,4 +69,4 @@ omniterm -p 8080         # 自定义端口
 
 ## 许可证
 
-MIT © [GDWhisper](https://github.com/GDWhisper)
+Apache-2.0 © [GDWhisper](https://github.com/GDWhisper)

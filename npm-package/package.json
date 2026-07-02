@@ -2,7 +2,7 @@
   "name": "omniterm",
   "version": "0.1.0",
   "description": "Web-based tmux terminal manager",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": "github:GDWhisper/OmniTerm",
   "bin": {
     "omniterm": "shim.js"

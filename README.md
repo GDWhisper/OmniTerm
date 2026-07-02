@@ -2,7 +2,7 @@
 
 > *One dashboard for all your AI coding agents.*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 ![screenshot](docs/screenshots/overview.png)
 
@@ -69,4 +69,4 @@ Open the URL in a browser, set an initial password, add a project directory, and
 
 ## License
 
-MIT © [GDWhisper](https://github.com/GDWhisper)
+Apache-2.0 © [GDWhisper](https://github.com/GDWhisper)
