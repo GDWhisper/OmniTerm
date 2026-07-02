@@ -21,7 +21,6 @@ function platformMap() {
   const map = {
     'linux-x64': 'linux-x86_64',
     'linux-arm64': 'linux-aarch64',
-    'darwin-x64': 'macos-x86_64',
     'darwin-arm64': 'macos-aarch64',
   };
 
