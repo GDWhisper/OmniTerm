@@ -980,3 +980,7 @@ body.parchment-texture {
     radial-gradient(circle at 1px 1px, rgba(139, 90, 43, 0.04) 1px, transparent 0) 0 0 / 8px 8px,
     var(--bg-base);
 }
+
+.dark body.parchment-texture {
+  background: var(--bg-base);
+}

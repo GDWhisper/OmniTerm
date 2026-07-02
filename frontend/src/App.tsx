@@ -10,12 +10,11 @@ function App() {
   useMobileDetection()
   useImmersive()
 
-  const theme = useThemeStore((s) => s.theme)
+  const resolved = useThemeStore((s) => s.resolved)
 
   useEffect(() => {
-    document.body.classList.toggle('dark', theme === 'dark')
-    document.body.classList.toggle('parchment-texture', theme === 'light')
-  }, [theme])
+    document.body.classList.toggle('parchment-texture', resolved === 'light')
+  }, [resolved])
 
   return (
     <AttentionProvider>
