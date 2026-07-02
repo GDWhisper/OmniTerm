@@ -1065,3 +1065,19 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
 @keyframes blink-cursor {
   50% { opacity: 0; }
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Terminal pixel border — wood-brown thick frame around xterm.
+   Keeps the deep #12141A screen for code readability.
+   ──────────────────────────────────────────────────────────────────── */
+body.pixel-ui-on .terminal-panel-pixel {
+  background: var(--bg-elevated, #EBE0C4);
+  border: 2px solid var(--wood-shadow, #3A2E1F);
+  box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
+  display: flex;
+  flex-direction: column;
+}
+body.pixel-ui-on .terminal-panel-pixel .xterm-viewport,
+body.pixel-ui-on .terminal-panel-pixel .xterm {
+  background: #12141A !important;
+}

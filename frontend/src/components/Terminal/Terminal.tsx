@@ -246,7 +246,9 @@ export function Terminal() {
         <span className="title-bar-spacer" />
         {hasSession && <span className="title-bar-badge">● LIVE</span>}
       </div>
-      <div ref={containerRef} className="h-full w-full p-1" style={{ flex: 1, minHeight: 0 }} />
+      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0 }}>
+        <div ref={containerRef} className="h-full w-full p-1" />
+      </div>
       {isMobile && (
         <MobileKeyBar
           latchMod={latchMod}
