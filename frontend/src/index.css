@@ -1,0 +1,858 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ────────────────────────────────────────────────────────────────────
+   Theme tokens — :root = light, .dark = dark.
+   Components use var(--token) instead of hardcoded hex.
+   ──────────────────────────────────────────────────────────────────── */
+:root {
+  /* backgrounds — warm muted tones, easier on eyes than pure white */
+  --bg-base: #f0ece6;
+  --bg-elevated: #e8e3db;
+  --bg-surface: #f7f4ef;
+  /* borders */
+  --border-subtle: #d9d3c8;
+  --border-strong: #c4bdb0;
+  /* text — deep warm gray for high contrast */
+  --text-primary: #1c1917;
+  --text-secondary: #3a3530;
+  --text-muted: #6b6560;
+  --text-faint: #9c9590;
+  --text-dim: #c4bdb0;
+  /* accent */
+  --accent: #7c3aed;
+  --accent-bright: #6d28d9;
+  --accent-10: rgba(124, 58, 237, 0.10);
+  --accent-14: rgba(124, 58, 237, 0.14);
+  /* danger */
+  --danger: #dc2626;
+  --danger-12: rgba(220, 38, 38, 0.12);
+  /* success */
+  --success: #16a34a;
+  --warning: #ca8a04;
+  --pixel-shadow: #c4bdb0;
+  /* scrollbar */
+  --scrollbar-thumb: #c4bdb0;
+  --scrollbar-track: #e8e3db;
+  color-scheme: light;
+}
+
+.dark {
+  /* backgrounds — deep space gray with subtle blue-purple tint */
+  --bg-base: #12141A;
+  --bg-elevated: #1B1E26;
+  --bg-surface: #242832;
+  /* borders */
+  --border-subtle: #30363D;
+  --border-strong: #484F58;
+  /* text — soft gray, no pure white */
+  --text-primary: #D1D5DB;
+  --text-secondary: #8B949E;
+  --text-muted: #8B949E;
+  --text-faint: #484F58;
+  --text-dim: #30363D;
+  /* accent — pastel neon cyan */
+  --accent: #58A6FF;
+  --accent-bright: #79C0FF;
+  --accent-pink: #F778BA;
+  /* danger — soft coral red */
+  --danger: #FF7B72;
+  --danger-12: rgba(255, 123, 114, 0.12);
+  /* success — soft neon green */
+  --success: #7EE787;
+  /* warning — soft amber orange */
+  --warning: #FFA657;
+  /* pixel hard shadow */
+  --pixel-shadow: #090A0D;
+  /* scrollbar */
+  --scrollbar-thumb: #484F58;
+  --scrollbar-track: #12141A;
+  color-scheme: dark;
+}
+
+@import "@xterm/xterm/css/xterm.css";
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel style — global SVG pixelation and font classes.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* SVG pixelation — disable anti-aliasing for crisp pixel edges */
+svg, svg * {
+  shape-rendering: crispEdges;
+}
+
+svg path, svg rect, svg circle, svg line {
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+/* Pixel display font — titles, buttons, status labels only */
+.font-pixel {
+  font-family: 'VT323', 'Press Start 2P', monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* CRT scanline overlay — 2% opacity, controlled by settings */
+.crt-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.02) 0px,
+    rgba(0, 0, 0, 0.02) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+}
+
+:root {
+  --sidebar-width: 200px;
+  --filemanager-width: 300px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Keep native browser UI (scrollbars, inputs) matching the theme */
+
+/* ────────────────────────────────────────────────────────────────────
+   Shared drag bar styling — vertical (between sidebar/terminal/filemanager).
+   Palette from docs/ui-style-guide.md §5.1.
+   ──────────────────────────────────────────────────────────────────── */
+.omniterm-drag-bar {
+  background: var(--bg-base);
+  position: relative;
+  transition: background 0.15s ease;
+  z-index: 1;
+}
+
+.omniterm-drag-bar::after {
+  content: '';
+  position: absolute;
+  background: var(--text-faint);
+  border-radius: 0;
+  transition: background 0.1s steps(3), box-shadow 0.1s steps(3);
+}
+
+.omniterm-drag-bar:hover {
+  background: var(--bg-elevated);
+}
+
+.omniterm-drag-bar:hover::after {
+  background: var(--accent);
+  box-shadow: none;
+  border: 1px solid var(--accent);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Session activity indicator — stronger pulse than Tailwind animate-pulse.
+   Follows docs/ui-style-guide.md §2.4 accent violet glow tokens.
+   ──────────────────────────────────────────────────────────────────── */
+.session-activity-pulse {
+  animation: session-activity-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes session-activity-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+}
+
+/* Icon/text activity pulse — no scale, avoids layout jitter on larger elements */
+.activity-pulse {
+  animation: activity-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes activity-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Vertical drag bar — 4px wide, indicator is 4px × 48px centered pill. */
+.omniterm-drag-bar-v {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.omniterm-drag-bar-v::after {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 4px;
+  height: 48px;
+  border-radius: 0;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   OmniTerm FileManager — dufs-inspired single-page file table.
+   Scoped under .omnifm-root. Follows docs/ui-style-guide.md palette.
+   ──────────────────────────────────────────────────────────────────── */
+
+.omnifm-root {
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Toolbar ── */
+.fm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.fm-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fm-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Breadcrumb ── */
+.fm-breadcrumb {
+  font-size: 13px;
+  color: var(--text-muted);
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  line-height: 22px;
+}
+
+.fm-breadcrumb a {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.fm-breadcrumb a:hover {
+  color: var(--accent-bright);
+  text-decoration: underline;
+}
+
+.fm-bc-seg {
+  color: var(--accent);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.fm-bc-seg:hover {
+  color: var(--accent-bright);
+  text-decoration: underline;
+}
+
+.fm-bc-root {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-decoration: none !important;
+}
+
+.fm-bc-root:hover {
+  background: rgba(88, 166, 255, 0.14);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+  color: var(--accent-bright);
+  text-decoration: none !important;
+}
+
+.fm-bc-sep {
+  color: var(--text-dim);
+  margin: 0 1px;
+}
+
+.fm-breadcrumb b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.fm-sep {
+  color: var(--text-faint);
+  padding: 0 0.15em;
+}
+
+/* ── Toolbar actions ── */
+.fm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.fm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.fm-btn:hover {
+  background: var(--accent-10);
+  color: var(--accent);
+}
+
+/* ── Search ── */
+.fm-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.fm-search-wrap .fm-search {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 220px;
+  z-index: 50;
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+  animation: fm-search-drop 0.15s ease-out;
+}
+
+@keyframes fm-search-drop {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fm-search {
+  width: 180px;
+  height: 26px;
+  background: var(--bg-surface);
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 8px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.fm-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.fm-search::placeholder {
+  color: var(--text-faint);
+}
+
+/* ── Download mode (active button pulse) ── */
+@keyframes fm-download-pulse {
+  0%, 100% {
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
+  }
+  50% {
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
+  }
+}
+.fm-btn-download-active {
+  animation: fm-download-pulse 1.0s ease-in-out infinite;
+  color: var(--accent);
+}
+.fm-btn-download-active:hover {
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+
+/* ── Terminal button pulse (back-to-terminal outside CWD) ── */
+@keyframes fm-terminal-pulse {
+  0%, 100% {
+    background: rgba(88, 166, 255, 0.30);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(88, 166, 255, 0.55);
+  }
+  50% {
+    background: rgba(88, 166, 255, 0.58);
+    box-shadow: 4px 4px 0px 0px var(--pixel-shadow), inset 0 0 0 1px rgba(121, 192, 255, 0.85);
+  }
+}
+.fm-btn-terminal-active {
+  animation: fm-terminal-pulse 1.0s ease-in-out infinite;
+  color: var(--accent);
+}
+.fm-btn-terminal-active:hover {
+  background: rgba(88, 166, 255, 0.55);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+
+/* ── Checkbox column (only visible in download mode) ── */
+.fm-checkbox-cell {
+  width: 32px;
+  padding: 0 6px 0 10px;
+  animation: fm-checkbox-appear 0.18s ease-out;
+}
+@keyframes fm-checkbox-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.fm-checkbox {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  vertical-align: middle;
+}
+.fm-checkbox:hover {
+  filter: drop-shadow(0 0 0 var(--accent));
+}
+
+/* ── Drag over state ── */
+.fm-drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  background: rgba(88, 166, 255, 0.04);
+}
+
+/* ── Drag overlay ── */
+.fm-drag-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(88, 166, 255, 0.06);
+  border: 2px dashed var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* ── Table wrapper — horizontal + vertical scroll ── */
+.fm-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fm-table-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.fm-table-wrap::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.fm-table-wrap::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+}
+.fm-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+.fm-table-wrap {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+/* ── File table ──
+   No explicit width (default: auto) — table is exactly as wide as its columns.
+   No proportional distribution of extra space, so resizing one column doesn't
+   shift other columns. Horizontal scroll on parent div if table overflows. */
+.fm-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.fm-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg-base);
+}
+
+.fm-table thead tr {
+  background: var(--bg-base);
+}
+
+.fm-table th {
+  text-align: left;
+  font-weight: unset;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  padding: 8px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  cursor: default;
+  user-select: none;
+  position: relative;
+}
+
+.fm-table th:last-child {
+  border-right: none;
+}
+
+/* Sortable label — only this area triggers sort on click */
+.fm-th-sort {
+  cursor: pointer;
+  transition: color 0.15s ease;
+  display: inline;
+}
+
+.fm-th-sort:hover {
+  color: var(--accent);
+}
+
+.fm-th-name {
+  min-width: 180px;
+  position: relative;
+}
+.fm-th-mtime {
+  width: 140px;
+  min-width: 80px;
+  position: relative;
+}
+.fm-th-size {
+  width: 100px;
+  min-width: 60px;
+  text-align: right !important;
+  position: relative;
+}
+/* Column resize handle — right edge of each th (except actions) */
+.fm-th-resize {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  width: 5px;
+  bottom: 2px;
+  cursor: col-resize;
+  z-index: 5;
+  user-select: none;
+  border-radius: 0;
+  transition: background 0.15s ease;
+}
+
+.fm-th-resize:hover,
+.fm-th-resize.fm-resizing {
+  background: var(--accent);
+  box-shadow: none;
+}
+
+/* ── Table rows ── */
+.fm-row {
+  transition: background 0.15s ease;
+}
+
+.fm-row:hover {
+  background: var(--accent-10);
+}
+
+.fm-table tr:hover td {
+  background: var(--accent-10);
+}
+
+.fm-tr-selected td {
+  background: var(--accent-14) !important;
+}
+
+.fm-row td {
+  white-space: nowrap;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--bg-elevated);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Actions cell — flex centers the 3 action icons (copy / rename / delete) */
+.fm-td-actions-cell {
+  width: 104px;
+  min-width: 104px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  vertical-align: middle;
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  background: var(--bg-base);
+  box-shadow: -3px 0 4px -2px rgba(0,0,0,0.18);
+}
+
+/* Actions column header — sticky both top (via thead) and right */
+.fm-table .fm-th-actions {
+  position: sticky;
+  right: 0;
+  z-index: 6;
+  background: var(--bg-base);
+  text-align: center;
+}
+
+/* ── Name cell ── */
+.fm-td-name {
+  overflow: hidden;
+}
+
+.fm-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* ── Time cell ── */
+.fm-td-mtime {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-td-time {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Action icon buttons ── */
+.fm-act-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  color: var(--text-faint);
+}
+
+.fm-act-icon:hover {
+  background: var(--accent-10);
+  color: var(--accent);
+}
+
+.fm-act-icon-danger:hover {
+  background: var(--danger-12);
+  color: var(--danger);
+}
+
+/* ── Inline edit input ── */
+.fm-edit-input {
+  width: 100%;
+  max-width: 260px;
+  height: 24px;
+  background: var(--bg-surface);
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+  outline: none;
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* ── Size cell ── */
+.fm-td-size {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Empty state ── */
+.fm-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 120px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.fm-empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+.fm-empty-hint {
+  font-size: 11px;
+  color: var(--border-strong);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Animations — shared across UI
+   ──────────────────────────────────────────────────────────────────── */
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.25s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.15s ease-out;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Sidebar glow effects
+   ──────────────────────────────────────────────────────────────────── */
+
+.sidebar-glow-violet {
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+
+.sidebar-glow-violet-hover:hover {
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+
+.sidebar-glow-green {
+  box-shadow: none;
+}
+
+.sidebar-glow-red-hover:hover {
+  box-shadow: none;
+}
+
+/* ── Settings popup slide-in ── */
+@keyframes settings-slide-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel gamified animations — Phase 2
+   All use steps() for discrete 8-bit feel.
+   Y-axis only — no horizontal shake.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Block Bump — button press squash & stretch */
+@keyframes mario-jump {
+  0%   { transform: translateY(0) scale(1, 1); }
+  20%  { transform: translateY(2px) scale(1.1, 0.9); }
+  50%  { transform: translateY(-8px) scale(0.95, 1.05); }
+  80%  { transform: translateY(0) scale(1.05, 0.95); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+.pixel-bump {
+  animation: mario-jump 0.4s steps(6, end) forwards;
+}
+
+/* Coin Pop — score text flies up and fades */
+@keyframes coin-pop {
+  0%   { transform: translateX(-50%) translateY(0) scale(0.5); opacity: 1; }
+  50%  { transform: translateX(-50%) translateY(-20px) scale(1.2); opacity: 1; }
+  100% { transform: translateX(-50%) translateY(-30px) scale(1); opacity: 0; }
+}
+.pixel-coin-pop {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  color: var(--success);
+  text-shadow: 2px 2px 0px var(--pixel-shadow);
+  pointer-events: none;
+  animation: coin-pop 0.6s steps(5, end) forwards;
+  z-index: 100;
+}
+
+/* Stomp Vanish — element squashes flat and disappears */
+@keyframes stomp-vanish {
+  0%   { transform: scaleY(1); opacity: 1; }
+  30%  { transform: scaleY(0.1); opacity: 1; }
+  100% { transform: scaleY(0.1) translateY(10px); opacity: 0; }
+}
+.pixel-stomp {
+  animation: stomp-vanish 0.3s steps(4, end) forwards;
+}
+
+/* Starman Flash — border color high-frequency blink */
+@keyframes starman-flash {
+  0%, 100% { border-color: var(--accent); box-shadow: 4px 4px 0px 0px var(--pixel-shadow); }
+  50%      { border-color: var(--accent-pink); box-shadow: 4px 4px 0px 0px var(--accent-pink); }
+}
+.pixel-starman {
+  animation: starman-flash 0.4s steps(1, end) infinite;
+}

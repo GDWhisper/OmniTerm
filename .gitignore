@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+build/
+target/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+*.db
+*.db-shm
+*.db-wal
+
+# Dev runtime
+.dev/
+
+# Claude
+.claude/
+
+# Playwright CLI temporary output (local debugging)
+.playwright-cli/
+
+# Local-only skill symlinks (mirror of .agents/skills/)
+.pi/skills/playwright-cli
+.pi/skills/skill-manager
+
+
+# Added by cargo
+
+/target
+.codegraph/
+.superpowers/

@@ -1,0 +1,35 @@
+[package]
+name = "omniterm-main"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tokio = { version = "1.43", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+bcrypt = "0.17"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.16", features = ["v4", "serde"] }
+jsonwebtoken = "9"
+axum-extra = { version = "0.10", features = ["cookie"] }
+time = "0.3"
+portable-pty = "0.9"
+futures-util = "0.3"
+libc = "0.2"
+notify = "7"
+async-stream = "0.3"
+sha1 = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
+rust-embed = "8"
+
+[dev-dependencies]
+tokio-test = "0.4"
+reqwest = { version = "0.12", features = ["json"] }
