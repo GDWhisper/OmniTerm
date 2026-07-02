@@ -970,3 +970,13 @@ html, body, #root {
   border: 2px solid var(--danger-light, #C85A3A);
   box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Parchment texture — very subtle dot-matrix on base background.
+   Toggled via .parchment-texture on <body>.
+   ──────────────────────────────────────────────────────────────────── */
+body.parchment-texture {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(139, 90, 43, 0.04) 1px, transparent 0) 0 0 / 8px 8px,
+    var(--bg-base);
+}
