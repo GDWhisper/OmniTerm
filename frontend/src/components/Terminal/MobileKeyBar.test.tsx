@@ -67,10 +67,8 @@ describe('MobileKeyBar', () => {
   it('releases modifier latch on second click', async () => {
     const { container, root, onKey } = setup()
     const shift = await findBtn(container, 'Shift')
-    shift.click() // latch
-    flushSync()
-    shift.click() // release
-    flushSync()
+    flushSync(() => { shift.click() }) // latch
+    flushSync(() => { shift.click() }) // release
     const tab = await findBtn(container, 'Tab')
     tab.click()
     // Latch was released → plain key
