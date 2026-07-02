@@ -1192,3 +1192,24 @@ body.pixel-ui-on .toast-pixel {
 body.pixel-ui-on .toast-pixel.toast-error { border-color: var(--danger, #C85A3A); color: #FF7B72; }
 body.pixel-ui-on .toast-pixel.toast-warning { border-color: var(--warning, #D4A05A); color: #FFCB6B; }
 body.pixel-ui-on .toast-pixel.toast-info { border-color: var(--accent, #58A6FF); color: #79C0FF; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Dark theme (night mode) adaptation of game UI elements.
+   The parchment wood tones become dark graphite + muted gold.
+   ──────────────────────────────────────────────────────────────────── */
+.dark .logo-title-bar { background: #2A2520; border-bottom-color: #090A0D; }
+.dark .panel-title-bar { background: #2A2520; border-bottom-color: #090A0D; }
+.dark .btn-pixel-primary { background: #2A2520; color: #E6DFD0; border-color: #090A0D; box-shadow: 3px 3px 0 #090A0D; }
+.dark .btn-pixel-secondary { background: #1B1E26; color: #D1D5DB; border-color: #484F58; box-shadow: 2px 2px 0 #090A0D; }
+.dark .progress-segmented-segment { background: #30363D; }
+.dark .progress-segmented-segment.filled { background: #7EE787; }
+.dark .progress-segmented-label { color: #8B949E; }
+.dark .corner-nails::before,
+.dark .corner-nails::after,
+.dark .corner-nails > .nail-bl,
+.dark .corner-nails > .nail-br,
+.dark .dialogue-toast::before,
+.dark .dialogue-toast::after,
+.dark .dialogue-toast > .nail-bl,
+.dark .dialogue-toast > .nail-br { background: #8B7755; }
+.dark .logo-version { color: #8B7755; }
