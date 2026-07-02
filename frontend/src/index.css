@@ -984,3 +984,33 @@ body.parchment-texture {
 .dark body.parchment-texture {
   background: var(--bg-base);
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Panel title bar — wood background, pixel font, 3px letter-spacing.
+   Used on top of every panel (sidebar sections, terminal, file manager,
+   settings, modal).
+   ──────────────────────────────────────────────────────────────────── */
+.panel-title-bar {
+  padding: 5px 10px;
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-title-bar .title-bar-spacer { margin-left: auto; }
+.panel-title-bar .title-bar-badge {
+  font-size: 11px;
+  background: var(--wood-shadow, #3A2E1F);
+  color: #7EE787;
+  padding: 1px 6px;
+}
+.panel-title-bar .title-bar-path {
+  font-size: 11px;
+  color: #FFCB6B;
+}
