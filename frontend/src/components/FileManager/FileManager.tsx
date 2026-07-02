@@ -5,10 +5,11 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { IconFolder, IconFile, IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
+import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { play8BitSound } from '../../utils/audioFeedback'
+import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -45,15 +46,25 @@ function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
   return true
 }
 
+const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.js', '.py', '.go', '.c', '.h'])
+
+function isCodeFile(name: string): boolean {
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return false
+  return CODE_EXTENSIONS.has(name.slice(dot).toLowerCase())
+}
+
 function FileIcon({ entry }: { entry: FileEntry }) {
   switch (entry.path_type) {
     case 'Dir':
     case 'SymlinkDir':
-      return <IconFolder style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+      return <FolderSprite size={14} />
     case 'SymlinkFile':
       return <IconLink style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
     case 'File':
-      return <IconFile style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
+      return isCodeFile(entry.name)
+        ? <FileCodeSprite size={14} />
+        : <FileSprite size={14} />
   }
 }
 
