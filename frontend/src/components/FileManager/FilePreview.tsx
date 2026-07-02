@@ -103,32 +103,25 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        padding: 16,
-        overflow: 'auto',
-      }}
-    >
-      <div className="panel-title-bar" style={{ position: 'absolute', top: 0, left: 0, right: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div className="panel-title-bar">
         <span>◆</span>
         <span>preview</span>
       </div>
-      <img
-        key={`${fileName}-${version}`}
-        src={imageUrl}
-        alt={fileName}
-        onError={() => setError(true)}
-        style={{
-          maxWidth: '100%',
-          maxHeight: '100%',
-          objectFit: 'contain',
-          borderRadius: 4,
-        }}
-      />
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, overflow: 'auto', minHeight: 0 }}>
+        <img
+          key={`${fileName}-${version}`}
+          src={imageUrl}
+          alt={fileName}
+          onError={() => setError(true)}
+          style={{
+            maxWidth: '100%',
+            maxHeight: '100%',
+            objectFit: 'contain',
+            borderRadius: 4,
+          }}
+        />
+      </div>
     </div>
   )
 }
