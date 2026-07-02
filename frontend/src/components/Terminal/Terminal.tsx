@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
@@ -17,6 +17,18 @@ export function Terminal() {
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
 
+  // MobileKeyBar modifier latch: tracks which modifier (Ctrl/Shift/Alt) is
+  // currently active. Lifted here so useTerminal can intercept keyboard input
+  // when a modifier is latched.
+  const [latchMod, setLatchMod] = useState<string | null>(null)
+  const latchModRef = useRef<string | null>(null)
+  // Keep ref in sync with state so useTerminal's term.onData closure can read
+  // the current latch without stale closures.
+  useEffect(() => { latchModRef.current = latchMod }, [latchMod])
+
+  // Called by useTerminal when a latched modifier is consumed by keyboard input
+  const consumeLatch = useCallback(() => setLatchMod(null), [])
+
   const {
     initTerminal,
     terminal,
@@ -29,6 +41,8 @@ export function Terminal() {
     sessionId: activeSessionId,
     externalSessionName: activeExternalSession,
     fontSize: effectiveFontSize,
+    latchModRef,
+    onConsumeLatch: consumeLatch,
   })
 
   const hasSession = !!(activeSessionId || activeExternalSession)
@@ -226,6 +240,8 @@ export function Terminal() {
       <div ref={containerRef} className="h-full w-full p-1" style={{ flex: 1, minHeight: 0 }} />
       {isMobile && (
         <MobileKeyBar
+          latchMod={latchMod}
+          onSetLatchMod={setLatchMod}
           onKey={handleKey}
           scrollMode={scrollMode ?? false}
           onToggleScrollMode={() => {

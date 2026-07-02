@@ -1,8 +1,10 @@
-import { useState, useCallback, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
 interface MobileKeyBarProps {
+  latchMod: string | null
+  onSetLatchMod: (mod: string | null) => void
   onKey: (name: string) => void
   scrollMode: boolean
   onToggleScrollMode: () => void
@@ -12,8 +14,7 @@ const MOD_KEYS = ['Shift', 'Ctrl', 'Alt'] as const
 const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
 const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 
-export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
-  const [latchMod, setLatchMod] = useState<'shift' | 'ctrl' | 'alt' | null>(null)
+export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
   // Track whether xterm.js textarea was focused before the touch started.
   // On mobile, touchstart fires before the browser shifts focus to the button,
   // so `document.activeElement` still reflects the pre-tap state.
@@ -27,32 +28,32 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
 
   // After any button action, blur the textarea if it wasn't focused before
   // the tap (prevents IME keyboard from opening). If it was focused (user
-  // was typing), leave it alone.
+  // was typing), leave it alone. Also skip blur when a modifier is latched
+  // (user tapped Ctrl/Shift/Alt to use with keyboard input next).
   const maybeBlurAfterTap = useCallback(() => {
-    if (!textareaWasFocusedRef.current) {
-      setTimeout(() => {
-        const ae = document.activeElement
-        if (ae instanceof HTMLTextAreaElement) ae.blur()
-      }, 0)
-    }
-  }, [])
+    if (textareaWasFocusedRef.current || latchMod) return
+    setTimeout(() => {
+      const ae = document.activeElement
+      if (ae instanceof HTMLTextAreaElement) ae.blur()
+    }, 0)
+  }, [latchMod])
 
   const handleClick = useCallback(
     (name: string) => {
       // Modifier keys toggle the latch
       if (MOD_KEYS.includes(name as any)) {
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
-        setLatchMod((prev) => (prev === mod ? null : mod))
+        onSetLatchMod(latchMod === mod ? null : mod)
       } else if (latchMod) {
         const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
         onKey(`${mod}+${name}`)
-        setLatchMod(null)
+        onSetLatchMod(null)
       } else {
         onKey(name)
       }
       maybeBlurAfterTap()
     },
-    [latchMod, onKey, maybeBlurAfterTap],
+    [latchMod, onKey, maybeBlurAfterTap, onSetLatchMod],
   )
 
   const modBtnStyle = (mod: string): React.CSSProperties => {
