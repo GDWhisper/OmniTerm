@@ -7,6 +7,13 @@ const iconMap: Record<ToastType, string> = {
   warning: '⚠️',
 }
 
+const prefixMap: Record<ToastType, string> = {
+  info: '★',
+  success: '★',
+  error: '✕',
+  warning: '★',
+}
+
 const colorMap: Record<ToastType, string> = {
   info: 'bg-blue-50 dark:bg-blue-900/80 border-blue-200 dark:border-blue-700 text-blue-800 dark:text-blue-200',
   success: 'bg-green-50 dark:bg-green-900/80 border-green-200 dark:border-green-700 text-green-800 dark:text-green-200',
@@ -24,11 +31,11 @@ export function ToastContainer() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`flex items-start gap-2 px-4 py-3 rounded-lg border shadow-lg text-sm animate-slide-in ${colorMap[t.type]}`}
+          className={`flex items-start gap-2 px-4 py-3 rounded-lg border shadow-lg text-sm animate-slide-in toast-pixel toast-${t.type} ${colorMap[t.type]}`}
           onClick={() => removeToast(t.id)}
         >
           <span className="flex-shrink-0">{iconMap[t.type]}</span>
-          <span className="flex-1">{t.message}</span>
+          <span className="flex-1">{prefixMap[t.type]} {t.message}</span>
           <button className="flex-shrink-0 opacity-60 hover:opacity-100">✕</button>
         </div>
       ))}

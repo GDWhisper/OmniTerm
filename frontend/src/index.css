@@ -1109,3 +1109,33 @@ body.pixel-ui-on .terminal-panel-pixel .xterm-viewport,
 body.pixel-ui-on .terminal-panel-pixel .xterm {
   background: #12141A !important;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Workspace transition — fade + slight Y shift, stepped for pixel feel.
+   ──────────────────────────────────────────────────────────────────── */
+body.transitions-on .workspace-transition {
+  animation: workspace-fade 0.3s steps(3) forwards;
+}
+@keyframes workspace-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel-style toast — replaces the existing toast styling when
+   body.pixel-ui-on is active. Adds a ★ prefix and pixel border.
+   ──────────────────────────────────────────────────────────────────── */
+body.pixel-ui-on .toast-pixel {
+  background: #12141A;
+  border: 2px solid var(--success, #5A8F3A);
+  color: #7EE787;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
+  border-radius: 0;
+  padding: 8px 14px;
+}
+body.pixel-ui-on .toast-pixel.toast-error { border-color: var(--danger, #C85A3A); color: #FF7B72; }
+body.pixel-ui-on .toast-pixel.toast-warning { border-color: var(--warning, #D4A05A); color: #FFCB6B; }
+body.pixel-ui-on .toast-pixel.toast-info { border-color: var(--accent, #58A6FF); color: #79C0FF; }
