@@ -31,7 +31,6 @@ export function Terminal() {
 
   const {
     initTerminal,
-    terminal,
     sendData,
     scrollMode,
     setScrollMode,

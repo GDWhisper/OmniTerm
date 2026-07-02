@@ -1,18 +1,21 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createRoot, Root } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import { MobileKeyBar } from './MobileKeyBar'
 
 function setup(props: Partial<Parameters<typeof MobileKeyBar>[0]> = {}) {
   const onKey = vi.fn()
   const onToggleScrollMode = vi.fn()
+  const onSetLatchMod = vi.fn()
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
   root.render(
     <MobileKeyBar
+      latchMod={null}
       onKey={onKey}
       scrollMode={false}
       onToggleScrollMode={onToggleScrollMode}
+      onSetLatchMod={onSetLatchMod}
       {...props}
     />,
   )
