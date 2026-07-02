@@ -117,7 +117,7 @@ cp branch.config.example .env.local  # 如果有模板文件
 | `docs/agent-edit-manual.md` | 接具体修改任务（加命令/改配置/修 bug/加翻译）时，搜目标组件列文件 | 新增「有特殊维护约定的组件」entry、记录修改路径 |
 | `docs/branch-workflows.md` | 执行 git 分支操作（merge、rebase、cherry-pick）、操作多 worktree | 分支策略变更、新增分支类型、安全守则调整 |
 | `docs/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote、执行 release 排除脚本 | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
-| `docs/release-plan.md` | 发布正式版本（打 tag、推送 CI、多平台构建） | 发布流程变更、CI 配置调整 |
+| `docs/release-guide.md` | 执行正式发布（构建 release 分支、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整 |
 | `docs/ui-style-guide.md` | 任何涉及 UI 的修改（组件样式、布局、色板、字体、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距） |
 | `docs/user-testing.md` | 功能开发完成后的手动回归测试 | 新增测试用例、发现并记录已知限制 |
 | `docs/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（问题 → 根因 → 解决方案） |
