@@ -7,34 +7,36 @@
    Components use var(--token) instead of hardcoded hex.
    ──────────────────────────────────────────────────────────────────── */
 :root {
-  /* backgrounds — warm muted tones, easier on eyes than pure white */
-  --bg-base: #f0ece6;
-  --bg-elevated: #e8e3db;
-  --bg-surface: #f7f4ef;
-  /* borders */
-  --border-subtle: #d9d3c8;
-  --border-strong: #c4bdb0;
-  /* text — deep warm gray for high contrast */
-  --text-primary: #1c1917;
-  --text-secondary: #3a3530;
-  --text-muted: #6b6560;
-  --text-faint: #9c9590;
-  --text-dim: #c4bdb0;
-  /* accent */
-  --accent: #7c3aed;
-  --accent-bright: #6d28d9;
-  --accent-10: rgba(124, 58, 237, 0.10);
-  --accent-14: rgba(124, 58, 237, 0.14);
-  /* danger */
-  --danger: #dc2626;
-  --danger-12: rgba(220, 38, 38, 0.12);
-  /* success */
-  --success: #16a34a;
-  --warning: #ca8a04;
-  --pixel-shadow: #c4bdb0;
-  /* scrollbar */
-  --scrollbar-thumb: #c4bdb0;
-  --scrollbar-track: #e8e3db;
+  /* ── Parchment A2 light theme (primary) ── */
+  --bg-base: #F5ECD8;
+  --bg-elevated: #EBE0C4;
+  --bg-surface: #FDF8EA;
+  --border-subtle: #D4C4A0;
+  --border-strong: #3A2E1F;
+  --text-primary: #3A2E1F;
+  --text-secondary: #6B5D45;
+  --text-muted: #6B5D45;
+  --text-faint: #A89474;
+  --text-dim: #C9B88A;
+  --accent: #58A6FF;
+  --accent-bright: #79C0FF;
+  --accent-pink: #F778BA;
+  --accent-10: rgba(88, 166, 255, 0.10);
+  --accent-14: rgba(88, 166, 255, 0.14);
+  --danger: #C85A3A;
+  --danger-12: rgba(200, 90, 58, 0.12);
+  --success: #5A8F3A;
+  --warning: #D4A05A;
+  --wood-dark: #8B5A2B;
+  --wood-shadow: #3A2E1F;
+  --gold-light: #FFCB6B;
+  --accent-light: #58A6FF;
+  --danger-light: #C85A3A;
+  --pixel-shadow: #8B7755;
+  --bg-elevated-light: #EBE0C4;
+  --pixel-shadow-light: #8B7755;
+  --scrollbar-thumb: #8B7755;
+  --scrollbar-track: #EBE0C4;
   color-scheme: light;
 }
 
