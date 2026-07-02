@@ -22,7 +22,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 ## 核心规则
 
 1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
-2. **CHANGELOG 只写用户确认过的内容**
+2. **CHANGELOG 只写实质性的改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
 3. **用 CodeGraph 查源码**：先 `codegraph sync` 确认索引最新，再用 `codegraph_explore` / `codegraph_node`。配置文件、文档、非索引文件才用 Read/Grep
 
 ## 工程准则
@@ -89,6 +89,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. MIT licensed.
 | `docs/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |
 | `docs/references.md` | 需要查看外部参考实现或 License 合规规则 | 新增参考仓库、License 规则变更 |
 | `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |
-| `CHANGELOG.md` | 查看面向用户的版本变更历史 | 每次用户确认的新功能/修复后**必须添加条目** |
+| `CHANGELOG.md` | 查看面向用户的版本变更历史 | 有实质性的新功能/修复/重构/破坏性变更后**必须添加条目**（反复修改未解决的 bug 不写） |
 | `dev.sh` | 启动/停止开发环境（`./dev.sh start\|stop\|status\|logs`） | 端口配置变更、启动逻辑调整 |
 | `scripts/bump-version.sh` | 准备发布时同步版本号：`./scripts/bump-version.sh 0.2.0` | 版本号文件路径变更 |

@@ -69,4 +69,4 @@ git commit -m "release: v1.x.x"
 git push public release:main   # 推送到公开仓
 ```
 
-详见 `docs/release-plan.md`（dev 分支）获取完整发布计划。
+详见 `docs/release-plan.md`。

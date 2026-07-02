@@ -13,6 +13,10 @@ interface UseTerminalOptions {
   externalSessionName?: string | null
   fontSize?: number
   onTitleChange?: (title: string) => void
+  /** Ref tracking the currently-latched modifier key (Ctrl/Shift/Alt) from MobileKeyBar */
+  latchModRef?: React.MutableRefObject<string | null>
+  /** Called when a latched modifier has been consumed by keyboard input */
+  onConsumeLatch?: () => void
 }
 
 const DARK_TERMINAL_THEME = {
@@ -62,7 +66,22 @@ const LIGHT_TERMINAL_THEME = {
   brightWhite: '#1c1917',
 }
 
-export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange }: UseTerminalOptions) {
+/** Translate a typed character through a latched modifier from MobileKeyBar. */
+function translateLatch(latch: string, data: string): string {
+  switch (latch) {
+    case 'ctrl':
+      // Standard Ctrl mapping: ASCII charCode & 0x1f gives the control character
+      return String.fromCharCode(data.charCodeAt(0) & 0x1f)
+    case 'shift':
+      return data.toUpperCase()
+    case 'alt':
+      return '\x1b' + data
+    default:
+      return data
+  }
+}
+
+export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const resolved = useThemeStore((s) => s.resolved)
   const attention = useAttention()  // Agent attention context
@@ -83,6 +102,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const [terminalReady, setTerminalReady] = useState(false)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
   const [scrollMode, setScrollMode] = useState(false)
+  // Stable ref for the consume-latch callback so connectWs closure is current
+  const consumeLatchRef = useRef(onConsumeLatch)
+  consumeLatchRef.current = onConsumeLatch
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -160,11 +182,20 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
 
-    // Send terminal input to WS (skip during IME composition)
+    // Send terminal input to WS (skip during IME composition).
+    // When a modifier key is latched via MobileKeyBar (Ctrl/Shift/Alt),
+    // translate the typed character into the corresponding escape sequence
+    // before sending.
     listenerDisposablesRef.current.push(
       term.onData((data) => {
         if (composingRef.current) return
-        if (ws.readyState === WebSocket.OPEN) {
+        if (ws.readyState !== WebSocket.OPEN) return
+        const latch = latchModRef?.current
+        if (latch) {
+          const translated = translateLatch(latch, data)
+          ws.send(new TextEncoder().encode(translated))
+          consumeLatchRef.current?.()
+        } else {
           ws.send(new TextEncoder().encode(data))
         }
       })
