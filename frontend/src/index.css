@@ -1111,6 +1111,59 @@ body.pixel-ui-on .terminal-panel-pixel .xterm {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   DialogueToast — Undertale-style RPG dialogue box for key notifications.
+   Dark background + wood-shadow outer frame + corner nails.
+   ──────────────────────────────────────────────────────────────────── */
+.dialogue-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 520px;
+  padding: 12px 18px;
+  background: #12141A;
+  border: 3px solid var(--wood-shadow, #3A2E1F);
+  color: #FAF2DE;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  letter-spacing: 1px;
+  line-height: 1.4;
+  box-shadow: 4px 4px 0 var(--pixel-shadow, #8B7755);
+  z-index: 10000;
+  animation: dialogue-toast-in 0.3s steps(3) forwards;
+}
+.dialogue-toast::before,
+.dialogue-toast::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--gold-light, #FFCB6B);
+}
+.dialogue-toast::before { top: -3px; left: -3px; }
+.dialogue-toast::after  { top: -3px; right: -3px; }
+.dialogue-toast > .nail-bl { position: absolute; width: 8px; height: 8px; background: var(--gold-light, #FFCB6B); bottom: -3px; left: -3px; }
+.dialogue-toast > .nail-br { position: absolute; width: 8px; height: 8px; background: var(--gold-light, #FFCB6B); bottom: -3px; right: -3px; }
+.dialogue-toast .dialogue-caret {
+  text-align: right;
+  color: #F778BA;
+  font-size: 14px;
+  animation: blink-cursor 1s steps(1) infinite;
+  margin-top: 4px;
+}
+.dialogue-toast .highlight-name { color: #FFCB6B; }
+.dialogue-toast .highlight-emotion { color: #F778BA; }
+
+@keyframes dialogue-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes dialogue-toast-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, 8px); }
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Workspace transition — fade + slight Y shift, stepped for pixel feel.
    ──────────────────────────────────────────────────────────────────── */
 body.transitions-on .workspace-transition {

@@ -11,3 +11,5 @@ export {
 } from './PixelSprites'
 export type { BaseSpriteProps, SpriteProps } from './PixelSprites'
 export { SegmentedProgress } from './SegmentedProgress'
+export { DialogueToast } from './DialogueToast'
+export type { DialogueToastProps } from './DialogueToast'
