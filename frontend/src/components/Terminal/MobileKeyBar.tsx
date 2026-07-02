@@ -71,6 +71,7 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
   const renderBtn = (k: string) => (
     <button
       key={k}
+      className="mobikey-btn"
       tabIndex={-1}
       onTouchStart={handleTouchStart}
       onClick={() => handleClick(k)}
@@ -82,6 +83,18 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
   )
 
   return (
+    <>
+      <style>{`
+        .mobikey-btn {
+          -webkit-tap-highlight-color: transparent;
+          user-select: none;
+          touch-action: manipulation;
+        }
+        .mobikey-btn:active {
+          transform: scale(0.93);
+          filter: brightness(1.35);
+        }
+      `}</style>
     <div
       style={{
         display: 'flex',
@@ -99,8 +112,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {ROW1_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
+          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
           <button
+            className="mobikey-btn"
             tabIndex={-1}
             onTouchStart={handleTouchStart}
             onClick={() => { onToggleScrollMode(); maybeBlurAfterTap() }}
@@ -119,12 +133,13 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {ROW2_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
-          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
-          <button tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
+          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
+          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
+          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
         </div>
       </div>
     </div>
+    </>
   )
 }
 
@@ -141,4 +156,5 @@ const keyButtonStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  transition: 'transform 0.08s ease, filter 0.08s ease',
 }
