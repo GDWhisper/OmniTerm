@@ -15,6 +15,7 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
+import { FolderSprite, PixelButton, SegmentedProgress } from '../PixelUI'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -965,33 +966,23 @@ export function Sidebar() {
         <AgentOnboardingBanner sessions={sessions} />
         */}
 
-        {/* Section label */}
-        <div className="flex items-center justify-between px-1 mb-2.5">
-          <div className="flex items-center gap-1.5">
-            <span style={{ fontSize: 11, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>
-              {t('sidebar.projects') ?? 'Projects'}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>{projects.length}</span>
-          </div>
-          <button
+        {/* Section label — Projects */}
+        <div className="panel-title-bar mb-2.5">
+          <span>◆</span>
+          <span>{t('sidebar.projects') ?? 'Projects'}</span>
+          <span className="title-bar-badge">{projects.length}</span>
+          <span className="title-bar-spacer" />
+          <PixelButton
+            variant="accent"
             onClick={(e) => {
               triggerBump(e.currentTarget)
               setCreateProjOpen(true)
             }}
-            className="flex items-center justify-center rounded transition-all"
-            style={{ width: 22, height: 22, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 15, fontWeight: 500 }}
             title={t('sidebar.createProject') ?? 'Create Project'}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--accent-14)'
-              e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-              e.currentTarget.style.boxShadow = 'none'
-            }}
+            style={{ padding: '1px 6px', fontSize: 13 }}
           >
             +
-          </button>
+          </PixelButton>
         </div>
 
         {projects.length === 0 ? (
@@ -1085,6 +1076,7 @@ export function Sidebar() {
                               onClick={() => handleWorkspaceClick(proj, wt)}
                             >
                               <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
                                 <span
                                   className={`rounded-full flex items-center justify-center ${wtHasActiveSession ? 'activity-pulse' : ''}`}
                                   style={{
@@ -1125,30 +1117,23 @@ export function Sidebar() {
                             {/* Sessions under active worktree */}
                             {isWtExpanded && (
                               <div className="pl-5 pr-1 pt-1 pb-1">
-                                <div className="flex items-center justify-between px-0.5 mb-1">
-                                  <span style={{ fontSize: 10, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 1.5 }}>
-                                    {t('sidebar.sessions')}
-                                  </span>
-                                  <button
+                                <div className="panel-title-bar mb-1" style={{ padding: '3px 8px', fontSize: 11 }}>
+                                  <span>◆</span>
+                                  <span>{t('sidebar.sessions')}</span>
+                                  <span className="title-bar-badge">{wtSessions.length}</span>
+                                  <span className="title-bar-spacer" />
+                                  <PixelButton
+                                    variant="accent"
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       triggerBump(e.currentTarget)
                                       setCreateSessOpen(true)
                                     }}
-                                    className="flex items-center justify-center rounded transition-all"
-                                    style={{ width: 18, height: 18, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 13, fontWeight: 500 }}
                                     title={t('sidebar.createSession')}
-                                    onMouseEnter={(e) => {
-                                      e.currentTarget.style.background = 'var(--accent-14)'
-                                      e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
-                                    }}
-                                    onMouseLeave={(e) => {
-                                      e.currentTarget.style.background = 'transparent'
-                                      e.currentTarget.style.boxShadow = 'none'
-                                    }}
+                                    style={{ padding: '0 5px', fontSize: 12 }}
                                   >
                                     +
-                                  </button>
+                                  </PixelButton>
                                 </div>
 
                                 {wtSessions.map((s) => {
@@ -1260,6 +1245,11 @@ export function Sidebar() {
                                     {t('sidebar.noSessions')}
                                   </div>
                                 )}
+                                <SegmentedProgress
+                                  label={t('sidebar.sessions')}
+                                  value={wtSessions.filter(s => s.is_active).length}
+                                  max={Math.max(wtSessions.length, 1)}
+                                />
                               </div>
                             )}
                           </div>
@@ -1646,7 +1636,7 @@ export function Sidebar() {
                     e.currentTarget.style.background = 'transparent'
                   }}
                 >
-                  <IconFolder width={14} height={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                  <FolderSprite size={14} />
                   <span className="truncate">{entry.name}</span>
                   <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
                 </div>
@@ -1933,7 +1923,7 @@ export function Sidebar() {
                       e.currentTarget.style.background = 'transparent'
                     }}
                   >
-                    <IconFolder width={14} height={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                    <FolderSprite size={14} />
                     <span className="truncate">{entry.name}</span>
                   </div>
                 ))}
