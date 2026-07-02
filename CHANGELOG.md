@@ -23,11 +23,15 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 - Deleted code, removed endpoint, dropped dependency → `Removed`
 - Code reorganization without behavior change → `Refactored`
 
+**只写实质性的改动**：对用户或下游开发者可见的行为变化。反复提交→修复→再出问题的循环 bug，在彻底解决前不写条目。
+
 ### When NOT to add an entry
 
 - Typo fixes in comments, whitespace cleanup, lint fixes
 - Changes to `AGENTS.md`, `PROGRESS.md`, or other internal docs
 - Dev-only tooling tweaks (`.gitignore`, editor config)
+- 提交后又回退的改动
+- 同一 bug 的多次未遂修复（只写最终修复那次）
 
 ### Scope tags
 
