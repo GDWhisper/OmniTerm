@@ -923,6 +923,7 @@ html, body, #root {
   transition: all 0.1s steps(3);
   white-space: nowrap;
 }
+/* !important required: overrides box-shadow from all 4 variant classes at :active */
 .btn-pixel:active:not(:disabled) {
   transform: translate(3px, 3px);
   box-shadow: none !important;
@@ -930,6 +931,10 @@ html, body, #root {
 .btn-pixel:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.btn-pixel:focus-visible {
+  outline: 2px solid var(--accent, #58A6FF);
+  outline-offset: 2px;
 }
 
 .btn-pixel-primary {
