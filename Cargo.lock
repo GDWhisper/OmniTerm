@@ -1534,8 +1534,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "omniterm-dev"
-version = "0.0.1"
+name = "omniterm-main"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",

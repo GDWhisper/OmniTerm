@@ -1,0 +1,25 @@
+{
+  "name": "@gdwhisper/omniterm",
+  "version": "0.1.0",
+  "description": "Web-based tmux terminal manager",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": "github:GDWhisper/OmniTerm",
+  "bin": {
+    "omniterm": "shim.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "shim.js",
+    "install.js"
+  ],
+  "keywords": ["tmux", "terminal", "web", "manager"],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["linux", "darwin"]
+}

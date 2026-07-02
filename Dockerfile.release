@@ -1,0 +1,14 @@
+# -- Runtime only (CI pre-builds binary + frontend) --
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tmux && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY omniterm-linux-x86_64 ./omniterm
+COPY frontend-dist ./frontend/dist
+
+ENV BIND_ADDR=0.0.0.0:9077
+ENV FRONTEND_DIR=frontend/dist
+EXPOSE 9077
+
+CMD ["./omniterm"]

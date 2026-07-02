@@ -1,87 +1,72 @@
 # OmniTerm
 
-**Web-based tmux terminal manager.** Manage tmux sessions, browse files, and edit code — all from a browser.
+> *One dashboard for all your AI coding agents.*
 
-Three-panel layout: Sidebar | Terminal | File Manager. Built with Rust (Axum) + React.
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
+![screenshot](capture.png)
+
+> [中文](README_zh.md)
+
+## What is it?
+
+In the AI era, an IDE's main body shouldn't be a giant text editor—it should be a place to watch and steer your agents. OmniTerm is that place.
+
+Open one browser tab and see every running AI coding agent—Claude Code, Codex, and others—with live status: running, waiting for input, or finished. No more SSH-ing into tmux panes one by one. A built-in terminal and file browser are there when you need to jump in, but most of the time you're just watching your agents work.
+
+It connects to tmux under the hood. You don't need to think about that.
 
 ## Features
 
--   **Terminal** — Full PTY-backed terminal via WebSocket, supports resize, IME composition, copy-on-select
--   **File Manager** — dufs-inspired browser with upload, download, preview, create, rename, delete, search
--   **Git Worktree Discovery** — Auto-discovers worktrees in your projects, manage sessions per worktree
--   **Dark / Light Themes** — System-following or manual toggle, warm & cool tones
--   **Mobile Responsive** — Tab-based layout with bottom navigation for phones & tablets
+- **AI agent monitoring** — recognizes Claude Code, Codex, and similar CLI agents. Each pane gets a live badge: running, waiting for input, or finished. When an agent needs your attention, the browser tab flashes and a notification sounds.
+- **File browser** — browse, upload, download, and preview files. Syntax highlighting for 13 languages. Follows the terminal's current working directory. Built-in terminal with xterm.js, full keyboard and mobile soft keyboard.
+- **Git worktree awareness** — auto-discovers all git worktrees under a project and groups sessions by branch. Terminal and file browser follow the selected branch.
+- **Single binary** — Rust backend with embedded frontend and SQLite. Install via npm, shell script, or Docker. One command to start.
 
-## Install
+## Quick start
 
-### npm (recommended)
+### Prerequisites
+
+tmux must be installed. The install script attempts to install it automatically (apt, brew, pacman, yum). Docker images bundle it.
+
+### Install
 
 ```bash
-npm install -g omniterm
+# npm (recommended)
+npm install -g @gdwhisper/omniterm
 omniterm
-# Open http://localhost:9077
-```
 
-### Shell script (no Node.js required)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/pax/OmniTerm/release/install.sh | bash
+# Shell script
+curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
 omniterm
-```
 
-### Docker
+# Docker
+docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
+```
 
 ```bash
-docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/pax/omniterm
-# Open http://localhost:9077
+omniterm                 # default: http://localhost:9077
+omniterm -p 8080         # custom port
 ```
 
-### Cargo (Rust users)
+Open the URL in a browser, set an initial password, add a project directory, and your agents appear in the sidebar with live status badges.
 
-```bash
-cargo install omniterm
-omniterm
-```
+## Tech stack
 
-## Quick Start
+| Layer | Technology |
+|-------|-----------|
+| Backend | Rust + Axum + SQLite |
+| Frontend | React 19 + Tailwind CSS 4 + xterm.js |
+| Terminal bridge | portable-pty + WebSocket |
+| Agent detection | tmux control mode + content hooks |
+| Distribution | npm, shell script, Docker |
 
-```bash
-omniterm                          # Start on default port 9077
-omniterm -p 8080                  # Custom port
-omniterm --port 8080
-```
+## Contributing
 
-Open your browser to the printed address, create a password on first visit, then add your first project.
-
-## CLI Reference
-
-```
-omniterm [OPTIONS]
-
-Options:
-  -p, --port <PORT>              监听端口 (default: 9077) [env: OMNITERM_PORT]
-      --db <DB>                  数据库连接 [env: DATABASE_URL]
-      --jwt-secret <KEY>         JWT 签名密钥 [env: JWT_SECRET]
-  -V, --version                  版本号
-  -h, --help                     帮助
-```
-
-## Prerequisites
-
--   **tmux** — Required. Install via your package manager:
-    -   Ubuntu/Debian: `sudo apt install tmux`
-    -   macOS: `brew install tmux`
-    -   Docker image includes tmux automatically.
-
-## Update
-
-| Install method | Update command |
-|---|---|
-| npm | `npm update -g omniterm` |
-| Shell script | Re-run `curl ... \| bash` |
-| Docker | `docker pull ghcr.io/pax/omniterm` |
-| Cargo | `cargo install --force omniterm` |
+- ⭐ Star the repo
+- 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
+- 📖 [中文说明](README_zh.md)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Apache-2.0 © [GDWhisper](https://github.com/GDWhisper)
