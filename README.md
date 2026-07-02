@@ -33,7 +33,7 @@ tmux must be installed. The install script attempts to install it automatically 
 
 ```bash
 # npm (recommended)
-npm install -g omniterm
+npm install -g @gdwhisper/omniterm
 omniterm
 
 # Shell script
