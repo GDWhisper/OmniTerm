@@ -1,4 +1,4 @@
-import React from 'react'
+import type { FC } from 'react'
 
 interface OmniTermLogoProps {
   /** Rendered size in px (default 48, must be multiple of 16 for crisp pixels) */
@@ -14,7 +14,7 @@ interface OmniTermLogoProps {
  *   #58A6FF _ input cursor (blue)
  * Renders with image-rendering: pixelated for chunky retro blocks.
  */
-export const OmniTermLogo: React.FC<OmniTermLogoProps> = ({ size = 48, className }) => (
+export const OmniTermLogo: FC<OmniTermLogoProps> = ({ size = 48, className }) => (
   <svg
     width={size}
     height={size}
@@ -23,6 +23,7 @@ export const OmniTermLogo: React.FC<OmniTermLogoProps> = ({ size = 48, className
     className={className}
     style={{ imageRendering: 'pixelated', flexShrink: 0 }}
     aria-label="OmniTerm logo"
+    role="img"
   >
     {/* thick outer frame */}
     <rect x="1" y="1" width="14" height="2" fill="#3A2E1F" />
