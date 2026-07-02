@@ -107,7 +107,7 @@ jobs:
 
   # ── Docker Publish ──────────────────────────────────────────────
   docker:
-    needs: frontend
+    needs: [frontend, backend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +115,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: frontend-dist
-          path: frontend/dist/
+          path: frontend-dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: omniterm-linux-x86_64
+          path: .
+
+      - run: chmod +x omniterm-linux-x86_64
 
       - uses: docker/login-action@v3
         with:
@@ -135,8 +142,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.release
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BRANCH_BINARY_NAME=omniterm-main
