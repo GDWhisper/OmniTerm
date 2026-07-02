@@ -51,8 +51,18 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-02) `[docs]` 添加 v0.1.0 性能基线文档，记录 release 构建产物大小与 idle RSS（`docs/performance-baseline-v0.1.0.md`）
+- (2026-07-02) `[frontend]` 新增 `FileEditor` 动态语言加载回归测试，覆盖 `.js`、`.ts`、`.py`、`.json`、`.html`、`.css`、`.md`、`.yaml`、`.sql`、`.go`、`.java`、`.cpp`、`.php` 共 13 种扩展名（`frontend/src/components/FileManager/FileEditor.dynamic.test.tsx`）
 - (2026-07-02) `[frontend]` 移动端组合键 + 新布局 — MobileKeyBar 重新设计为两行：上行 `[Esc][Shift][Tab][PgUp][PgDn]` + ↑/滚动，下行 `[Ctrl][Alt][Del][Home][End]` + ←↓→；Shift/Ctrl/Alt 为粘滞修饰键（点按激活→点目标键发送组合→自动释放），去掉原不合 tmux 语义的复制/粘贴按钮；新增 PgUp/PgDn/Del/Home/End 五个终端标准键及其全部修饰组合键序列（`frontend/src/components/Terminal/MobileKeyBar.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-07-01) `[frontend]` FileManager 操作列新增「复制绝对路径」按钮 — 点击后 `navigator.clipboard` 写入完整绝对路径（含 cwd），按钮 title 悬停预览路径；列宽 80→104px 容纳三个图标，操作列改为 flex 居中（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
+
+### Changed
+
+- (2026-07-02) `[frontend]` 优化发布包体积与启动内存 — `FileEditor` 改为 `React.lazy` 懒加载，CodeMirror 语言包按文件扩展名动态 `import()`，主 chunk 从约 1.68 MB 降至 754 kB；未打开文件编辑器时不加载 editor 相关代码（`frontend/src/components/FileManager/FileEditor.tsx`、`frontend/src/components/FileManager/FileDrawer.tsx`）
+
+### Removed
+
+- (2026-07-02) `[frontend]` 移除未使用的前端依赖 — `@cubone/react-file-manager`、`xterm`（与 `@xterm/xterm` 重复）、`@codemirror/autocomplete`、`@codemirror/lint`，并删除占位类型文件（`frontend/package.json`、`frontend/src/cubone-file-manager.d.ts`）
 
 ### Fixed
 
