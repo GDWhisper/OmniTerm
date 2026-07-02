@@ -1,25 +1,52 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+
+const REFRESH_DEBOUNCE_MS = 500
 
 interface FilePreviewProps {
   /** Absolute file path (used to construct download URL) */
   filePath: string
-  /** Session ID for API calls */
-  sessionId: string
+  /** Session ID for API calls (session mode) */
+  sessionId?: string
+  /** Workspace ID for API calls (workspace mode) */
+  workspaceId?: string
+  /** Project ID — required with workspaceId */
+  projectId?: string | null
   /** File name for display */
   fileName: string
+  /** SSE file change event for auto-refresh */
+  fileChangeEvent: { kind: string; path: string } | null
 }
 
 /**
  * Image preview component for the file drawer.
  * Displays images fetched via the download API endpoint.
  */
-export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps) {
+export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileName, fileChangeEvent }: FilePreviewProps) {
   const { t } = useTranslation()
   const [error, setError] = useState(false)
+  // Cache-bust version: incremented on external file change → browser bypasses cache
+  const [version, setVersion] = useState(0)
+
+  // Auto-refresh on SSE file change events (debounced)
+  useEffect(() => {
+    if (!fileChangeEvent) return
+    if (fileChangeEvent.kind === 'delete') return
+    // Match by basename (SSE event path is relative, filePath is absolute)
+    const eventName = fileChangeEvent.path.split('/').pop()
+    if (eventName !== fileName) return
+
+    const timer = setTimeout(() => {
+      setVersion((v) => v + 1)
+      setError(false)
+    }, REFRESH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [fileChangeEvent, fileName])
 
   // Build the image URL using the existing download endpoint
-  const imageUrl = `/api/v1/files/download?session=${sessionId}&path=${encodeURIComponent(filePath)}`
+  const imageUrl = sessionId
+    ? `/api/v1/files/download?session=${sessionId}&path=${encodeURIComponent(filePath)}&v=${version}`
+    : `/api/v1/files/download?workspace_id=${workspaceId}&workspace=${projectId}&path=${encodeURIComponent(filePath)}&v=${version}`
 
   if (error) {
     return (
@@ -83,6 +110,7 @@ export function FilePreview({ filePath, sessionId, fileName }: FilePreviewProps)
       }}
     >
       <img
+        key={`${fileName}-${version}`}
         src={imageUrl}
         alt={fileName}
         onError={() => setError(true)}

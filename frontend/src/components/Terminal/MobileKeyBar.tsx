@@ -1,3 +1,5 @@
+import { useState, useCallback } from 'react'
+
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
 interface MobileKeyBarProps {
@@ -6,9 +8,46 @@ interface MobileKeyBarProps {
   onToggleScrollMode: () => void
 }
 
-const funcKeys = ['Ctrl', 'Esc', 'Tab', '复制', '粘贴']
+const MOD_KEYS = ['Shift', 'Ctrl', 'Alt'] as const
+const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
+const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 
 export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
+  const [latchMod, setLatchMod] = useState<'shift' | 'ctrl' | 'alt' | null>(null)
+
+  const handleClick = useCallback(
+    (name: string) => {
+      // Modifier keys toggle the latch
+      if (MOD_KEYS.includes(name as any)) {
+        const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
+        setLatchMod((prev) => (prev === mod ? null : mod))
+        return
+      }
+
+      // Non-modifier key: send combo if a modifier is latched
+      if (latchMod) {
+        const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
+        onKey(`${mod}+${name}`)
+        setLatchMod(null) // release latch after combo
+      } else {
+        onKey(name)
+      }
+    },
+    [latchMod, onKey],
+  )
+
+  const modBtnStyle = (mod: string): React.CSSProperties => {
+    const active = latchMod === mod.toLowerCase()
+    return {
+      ...keyButtonStyle,
+      color: active ? 'var(--accent)' : 'var(--text-secondary)',
+      background: active ? 'rgba(167,139,250,0.12)' : 'var(--bg-surface)',
+      borderColor: active ? 'var(--accent)' : 'var(--border-strong)',
+    }
+  }
+
+  const isModKey = (name: string) => MOD_KEYS.includes(name as any)
+
   return (
     <div
       style={{
@@ -23,13 +62,20 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
         flexShrink: 0,
       }}
     >
-      {/* Row 1: function keys + ↑ + 滚动 */}
+      {/* Row 1: Esc Shift Tab PgUp PgDn  ·  ↑ 滚动 */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {funcKeys.map((k) => (
-          <button key={k} onClick={() => onKey(k)} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>{k}</button>
+        {ROW1_ITEMS.map((k) => (
+          <button
+            key={k}
+            onClick={() => handleClick(k)}
+            onPointerDown={(e) => e.preventDefault()}
+            style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
+          >
+            {k}
+          </button>
         ))}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button onClick={() => onKey('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
+          <button onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
           <button
             onClick={onToggleScrollMode}
             onPointerDown={(e) => e.preventDefault()}
@@ -43,11 +89,23 @@ export function MobileKeyBar({ onKey, scrollMode, onToggleScrollMode }: MobileKe
           </button>
         </div>
       </div>
-      {/* Row 2: ← ↓ → (right-aligned, T-shape with ↑ above) */}
-      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-        <button onClick={() => onKey('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
-        <button onClick={() => onKey('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
-        <button onClick={() => onKey('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
+      {/* Row 2: Ctrl Alt Del Home End  ·  ← ↓ → */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {ROW2_ITEMS.map((k) => (
+          <button
+            key={k}
+            onClick={() => handleClick(k)}
+            onPointerDown={(e) => e.preventDefault()}
+            style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
+          >
+            {k}
+          </button>
+        ))}
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+          <button onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
+          <button onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
+          <button onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
+        </div>
       </div>
     </div>
   )

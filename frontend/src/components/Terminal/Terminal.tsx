@@ -4,7 +4,6 @@ import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
-import { useToastStore } from '../../stores/toastStore'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -17,7 +16,6 @@ export function Terminal() {
   const fontSize = useAppStore((s) => s.fontSize)
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
-  const addToast = useToastStore((s) => s.addToast)
 
   const {
     initTerminal,
@@ -47,19 +45,131 @@ export function Terminal() {
 
   const handleKey = (name: string) => {
     if (!sendData) return
+
+    // Combo keys: modifier latch from MobileKeyBar (e.g. 'Shift+Tab', 'Ctrl+↑')
+    const comboMatch = name.match(/^(Shift|Ctrl|Alt)\+(\S+)$/)
+    if (comboMatch) {
+      const [, mod, key] = comboMatch
+      switch (`${mod}+${key}`) {
+        case 'Shift+Tab':
+          sendData('\x1b[Z')
+          break
+        case 'Shift+↑':
+          sendData('\x1b[1;2A')
+          break
+        case 'Shift+↓':
+          sendData('\x1b[1;2B')
+          break
+        case 'Shift+→':
+          sendData('\x1b[1;2C')
+          break
+        case 'Shift+←':
+          sendData('\x1b[1;2D')
+          break
+        case 'Shift+PgUp':
+          sendData('\x1b[5;2~')
+          break
+        case 'Shift+PgDn':
+          sendData('\x1b[6;2~')
+          break
+        case 'Shift+Del':
+          sendData('\x1b[3;2~')
+          break
+        case 'Shift+Home':
+          sendData('\x1b[1;2H')
+          break
+        case 'Shift+End':
+          sendData('\x1b[1;2F')
+          break
+        case 'Ctrl+↑':
+          sendData('\x1b[1;5A')
+          break
+        case 'Ctrl+↓':
+          sendData('\x1b[1;5B')
+          break
+        case 'Ctrl+→':
+          sendData('\x1b[1;5C')
+          break
+        case 'Ctrl+←':
+          sendData('\x1b[1;5D')
+          break
+        case 'Ctrl+Tab':
+          sendData('\t')
+          break
+        case 'Ctrl+PgUp':
+          sendData('\x1b[5;5~')
+          break
+        case 'Ctrl+PgDn':
+          sendData('\x1b[6;5~')
+          break
+        case 'Ctrl+Del':
+          sendData('\x1b[3;5~')
+          break
+        case 'Ctrl+Home':
+          sendData('\x1b[1;5H')
+          break
+        case 'Ctrl+End':
+          sendData('\x1b[1;5F')
+          break
+        case 'Alt+Tab':
+          sendData('\x1b\t')
+          break
+        case 'Alt+↑':
+          sendData('\x1b[1;3A')
+          break
+        case 'Alt+↓':
+          sendData('\x1b[1;3B')
+          break
+        case 'Alt+→':
+          sendData('\x1b[1;3C')
+          break
+        case 'Alt+←':
+          sendData('\x1b[1;3D')
+          break
+        case 'Alt+Esc':
+          sendData('\x1b\x1b')
+          break
+        case 'Alt+PgUp':
+          sendData('\x1b[5;3~')
+          break
+        case 'Alt+PgDn':
+          sendData('\x1b[6;3~')
+          break
+        case 'Alt+Del':
+          sendData('\x1b[3;3~')
+          break
+        case 'Alt+Home':
+          sendData('\x1b[1;3H')
+          break
+        case 'Alt+End':
+          sendData('\x1b[1;3F')
+          break
+      }
+      return
+    }
+
     switch (name) {
-      case 'Ctrl':
-        // Mobile keybar doesn't have a persistent combo mode; instead we send
-        // the most common Ctrl sequence directly. A future iteration can add
-        // a combo latch if needed.
-        sendData('\x00')
-        break
       case 'Esc':
         sendData('\x1b')
         if (scrollMode) exitScrollMode?.()
         break
       case 'Tab':
         sendData('\t')
+        break
+      case 'PgUp':
+        sendData('\x1b[5~')
+        break
+      case 'PgDn':
+        sendData('\x1b[6~')
+        break
+      case 'Del':
+        sendData('\x1b[3~')
+        break
+      case 'Home':
+        sendData('\x1b[H')
+        break
+      case 'End':
+        sendData('\x1b[F')
         break
       case '←':
         sendData('\x1b[D')
@@ -80,19 +190,6 @@ export function Terminal() {
         } else {
           sendData('\x1b[B')
         }
-        break
-      case '复制': {
-        const selection = terminal?.getSelection() || ''
-        if (selection) {
-          navigator.clipboard.writeText(selection).then(
-            () => addToast('success', t('terminal.copySuccess')),
-            () => {},
-          )
-        }
-        break
-      }
-      case '粘贴':
-        navigator.clipboard.readText().then((text) => sendData(text)).catch(() => {})
         break
     }
   }

@@ -96,6 +96,15 @@ export function IconFolderPlus(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconCopy(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="5" y="5" width="8.5" height="8.5" rx="1" />
+      <path d="M2.5 11V3.5A.5.5 0 013 3h7.5" />
+    </svg>
+  )
+}
+
 export function IconPencil(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

@@ -19,4 +19,5 @@ pub struct CreateProject {
 #[derive(Debug, Deserialize)]
 pub struct UpdateProject {
     pub name: Option<String>,
+    pub path: Option<String>,
 }

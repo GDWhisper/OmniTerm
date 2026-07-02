@@ -122,12 +122,83 @@ async fn update_project(
     Path(id): Path<String>,
     Json(req): Json<UpdateProject>,
 ) -> impl IntoResponse {
-    let result = sqlx::query("UPDATE projects SET name = COALESCE(?, name) WHERE id = ?")
-        .bind(req.name)
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .unwrap();
+    // If path is being updated, validate it exists
+    if let Some(ref new_path) = req.path {
+        if !std::path::Path::new(new_path).exists() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "path does not exist" })),
+            );
+        }
+
+        // Cascade: update session workspace_path for sessions that used the old path.
+        // Read the old project path first.
+        let old_path: Option<(String,)> =
+            sqlx::query_as("SELECT path FROM projects WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+
+        if let Some((ref old_path_str,)) = old_path {
+            // For each session whose workspace_path starts with the old project
+            // path, replace the prefix with the new path.
+            let old_prefix = old_path_str.trim_end_matches('/');
+            let new_prefix = new_path.trim_end_matches('/');
+
+            // Exact match: workspace_path == old path
+            let exact = sqlx::query(
+                "UPDATE sessions SET workspace_path = ? WHERE project_id = ? AND workspace_path = ?",
+            )
+            .bind(new_prefix)
+            .bind(&id)
+            .bind(old_prefix)
+            .execute(&state.db)
+            .await;
+
+            // Prefix match: workspace_path starts with 'old_prefix/'
+            let prefix_like = format!("{}/%", old_prefix);
+            let prefix_affected = sqlx::query(
+                "UPDATE sessions SET workspace_path = ? || SUBSTR(workspace_path, ?) \
+                 WHERE project_id = ? AND workspace_path LIKE ?",
+            )
+            .bind(new_prefix)
+            .bind((old_prefix.len() + 1) as i32)
+            .bind(&id)
+            .bind(&prefix_like)
+            .execute(&state.db)
+            .await;
+
+            let exact_count = exact.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
+            let prefix_count = prefix_affected.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
+            let total = exact_count + prefix_count;
+
+            if let Err(e) = prefix_affected.as_ref().or(exact.as_ref()) {
+                tracing::warn!(
+                    "failed to cascade-update session workspace_path: {}",
+                    e
+                );
+            } else if total > 0 {
+                tracing::info!(
+                    "updated workspace_path for {} session(s) after project path change: {} -> {}",
+                    total,
+                    old_path_str,
+                    new_path
+                );
+            }
+        }
+    }
+
+    let result = sqlx::query(
+        "UPDATE projects SET name = COALESCE(?, name), path = COALESCE(?, path) WHERE id = ?",
+    )
+    .bind(req.name)
+    .bind(&req.path)
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .unwrap();
 
     if result.rows_affected() == 0 {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
