@@ -13,5 +13,5 @@ All under `/home/pax/coding/research/`:
 ## License Compliance
 
 - Mansio (GPL-3.0): read only at `research/mansio`, NEVER copy code into this project
-- All new code files: MIT license header
-- Root LICENSE: MIT
+- All new code files: Apache-2.0 license header
+- Root LICENSE: Apache-2.0
