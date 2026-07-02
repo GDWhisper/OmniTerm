@@ -1,0 +1,22 @@
+{
+  "name": "omniterm",
+  "version": "0.1.0",
+  "description": "Web-based tmux terminal manager",
+  "license": "MIT",
+  "repository": "github:pax/OmniTerm",
+  "bin": {
+    "omniterm": "shim.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "shim.js",
+    "install.js"
+  ],
+  "keywords": ["tmux", "terminal", "web", "manager"],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["linux", "darwin"]
+}

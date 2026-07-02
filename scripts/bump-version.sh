@@ -21,13 +21,17 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 1. Cargo.toml
 sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" "$ROOT/Cargo.toml"
 
-# 2. frontend/src/version.ts
-sed -i "s/APP_VERSION = '.*'/APP_VERSION = '$NEW_VERSION'/" "$ROOT/frontend/src/version.ts"
+# 2. .env.local（frontend 从 import.meta.env.VITE_APP_VERSION 读取）
+if grep -q '^BRANCH_VERSION=' "$ROOT/.env.local" 2>/dev/null; then
+    sed -i "s/^BRANCH_VERSION=.*/BRANCH_VERSION=$NEW_VERSION/" "$ROOT/.env.local"
+else
+    echo "BRANCH_VERSION=$NEW_VERSION" >> "$ROOT/.env.local"
+fi
 
 echo "版本号已更新为 $NEW_VERSION:"
-echo "  Cargo.toml              → version = \"$NEW_VERSION\""
-echo "  frontend/src/version.ts → APP_VERSION = '$NEW_VERSION'"
+echo "  Cargo.toml   → version = \"$NEW_VERSION\""
+echo "  .env.local   → BRANCH_VERSION=$NEW_VERSION"
 echo ""
 echo "核实:"
 grep '^version' "$ROOT/Cargo.toml"
-grep 'APP_VERSION' "$ROOT/frontend/src/version.ts"
+grep '^BRANCH_VERSION' "$ROOT/.env.local" 2>/dev/null || echo "  (BRANCH_VERSION not found in .env.local)"

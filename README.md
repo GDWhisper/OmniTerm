@@ -59,7 +59,7 @@ Open your browser to the printed address, create a password on first visit, then
 omniterm [OPTIONS]
 
 Options:
-  -p, --port <PORT>              监听端口 (default: 9077) [env: OMNITERM_PORT]
+  -p, --port <PORT>              监听端口 (default: 9077) [env: BACKEND_PORT]
       --db <DB>                  数据库连接 [env: DATABASE_URL]
       --jwt-secret <KEY>         JWT 签名密钥 [env: JWT_SECRET]
   -V, --version                  版本号

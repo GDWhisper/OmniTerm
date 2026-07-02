@@ -51,6 +51,9 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-02) `[infra]` v0.1.0 发布准备 — GitHub Actions CI/CD 发布流水线（tag `v*` 触发，4 平台后端构建矩阵、GitHub Release 自动上传、npm publish、ghcr.io Docker 推送）（`.github/workflows/release.yml`）
+- (2026-07-02) `[infra]` v0.1.0 发布准备 — npm 包分发（shim.js + postinstall 自动下载 native binary）（`npm-package/`）
+- (2026-07-02) `[infra]` v0.1.0 发布准备 — Shell 一键安装脚本，自动检测 OS/架构、下载 binary、安装 tmux（`install.sh`）
 - (2026-07-02) `[docs]` 添加 v0.1.0 性能基线文档，记录 release 构建产物大小与 idle RSS（`docs/performance-baseline-v0.1.0.md`）
 - (2026-07-02) `[frontend]` 新增 `FileEditor` 动态语言加载回归测试，覆盖 `.js`、`.ts`、`.py`、`.json`、`.html`、`.css`、`.md`、`.yaml`、`.sql`、`.go`、`.java`、`.cpp`、`.php` 共 13 种扩展名（`frontend/src/components/FileManager/FileEditor.dynamic.test.tsx`）
 - (2026-07-02) `[frontend]` 移动端组合键 + 新布局 — MobileKeyBar 重新设计为两行：上行 `[Esc][Shift][Tab][PgUp][PgDn]` + ↑/滚动，下行 `[Ctrl][Alt][Del][Home][End]` + ←↓→；Shift/Ctrl/Alt 为粘滞修饰键（点按激活→点目标键发送组合→自动释放），去掉原不合 tmux 语义的复制/粘贴按钮；新增 PgUp/PgDn/Del/Home/End 五个终端标准键及其全部修饰组合键序列（`frontend/src/components/Terminal/MobileKeyBar.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
@@ -58,6 +61,9 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-07-02) `[backend]` v0.1.0 发布准备 — clap `--port` 默认值 9075→9077，版本号 0.0.1→0.1.0（`src/main.rs`、`Cargo.toml`）
+- (2026-07-02) `[infra]` v0.1.0 发布准备 — `bump-version.sh` 适配 version.ts 已改为读 env var（改为更新 `.env.local` 的 `BRANCH_VERSION`）（`scripts/bump-version.sh`）
+- (2026-07-02) `[docs]` README CLI 参考环境变量名修正 `OMNITERM_PORT`→`BACKEND_PORT`（`README.md`）
 - (2026-07-02) `[frontend]` 优化发布包体积与启动内存 — `FileEditor` 改为 `React.lazy` 懒加载，CodeMirror 语言包按文件扩展名动态 `import()`，主 chunk 从约 1.68 MB 降至 754 kB；未打开文件编辑器时不加载 editor 相关代码（`frontend/src/components/FileManager/FileEditor.tsx`、`frontend/src/components/FileManager/FileDrawer.tsx`）
 
 ### Removed
