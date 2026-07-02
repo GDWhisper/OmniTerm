@@ -87,11 +87,27 @@ svg path, svg rect, svg circle, svg line {
   stroke-linejoin: miter;
 }
 
-/* Pixel display font — titles, buttons, status labels only */
+/* ────────────────────────────────────────────────────────────────────
+   Font layers — three distinct stacks.
+   .font-logo    → logo wordmark only (Press Start 2P)
+   .font-pixel   → display text: titles, buttons, status labels
+   .font-reader  → code, body, inputs (JetBrains Mono)
+   ──────────────────────────────────────────────────────────────────── */
+
+.font-logo {
+  font-family: 'Press Start 2P', 'VT323', monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
 .font-pixel {
   font-family: 'VT323', 'Press Start 2P', monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+
+.font-reader {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 }
 
 /* CRT scanline overlay — 2% opacity, controlled by settings */
