@@ -55,6 +55,6 @@
 
 ## 6. 发布前最终确认
 
-- [ ] 6.1 按 `docs/release-plan.md` 确认 release 分支重建时不会带入开发文件
-- [ ] 6.2 确认 CHANGELOG 已添加本次性能清理条目
-- [ ] 6.3 关闭本 change 或在 OpenSpec 中标记完成
+- [x] 6.1 按 `docs/release-plan.md` 确认 release 分支重建时不会带入开发文件（`openspec/`、`.pi/`、`.qoder/`、AGENTS.md、dev.sh 等均在排除列表）
+- [x] 6.2 确认 CHANGELOG 已添加本次性能清理条目（`Added`/`Changed`/`Removed` 三类）
+- [x] 6.3 所有任务完成，本 change 可在 OpenSpec 中归档
