@@ -1,8 +1,11 @@
 import type { FC } from 'react'
 
-interface SpriteProps {
+export interface BaseSpriteProps {
   size?: number
   className?: string
+}
+
+export interface SpriteProps extends BaseSpriteProps {
   /** Override primary fill color (used for dark/light theme adaptation) */
   primaryColor?: string
 }
@@ -10,7 +13,7 @@ interface SpriteProps {
 const baseStyle = { imageRendering: 'pixelated' as const, flexShrink: 0 }
 
 export const FolderSprite: FC<SpriteProps> = ({ size = 16, className, primaryColor = '#8B5A2B' }) => (
-  <svg width={size} height={size * 0.875} viewBox="0 0 16 14" shapeRendering="crispEdges" style={baseStyle} className={className}>
+  <svg role="img" aria-label="folder icon" width={size} height={size * 0.875} viewBox="0 0 16 14" shapeRendering="crispEdges" style={baseStyle} className={className}>
     <rect x="0" y="2" width="16" height="12" fill={primaryColor} />
     <rect x="0" y="0" width="6" height="4" fill={primaryColor} />
     <rect x="0" y="4" width="16" height="2" fill="#A06A3B" />
@@ -18,7 +21,7 @@ export const FolderSprite: FC<SpriteProps> = ({ size = 16, className, primaryCol
 )
 
 export const FileSprite: FC<SpriteProps> = ({ size = 16, className, primaryColor = '#A89474' }) => (
-  <svg width={size * 0.875} height={size} viewBox="0 0 14 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
+  <svg role="img" aria-label="file icon" width={size * 0.875} height={size} viewBox="0 0 14 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
     <rect x="2" y="0" width="10" height="14" fill={primaryColor} />
     <rect x="4" y="2" width="6" height="2" fill="#FAF2DE" />
     <rect x="4" y="6" width="6" height="1" fill="#FAF2DE" />
@@ -27,8 +30,8 @@ export const FileSprite: FC<SpriteProps> = ({ size = 16, className, primaryColor
   </svg>
 )
 
-export const FileCodeSprite: FC<SpriteProps> = ({ size = 16, className }) => (
-  <svg width={size * 0.875} height={size} viewBox="0 0 14 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
+export const FileCodeSprite: FC<BaseSpriteProps> = ({ size = 16, className }) => (
+  <svg role="img" aria-label="code file icon" width={size * 0.875} height={size} viewBox="0 0 14 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
     <rect x="2" y="0" width="10" height="14" fill="#58A6FF" />
     <rect x="4" y="3" width="2" height="1" fill="#12141A" />
     <rect x="3" y="4" width="1" height="2" fill="#12141A" />
@@ -39,24 +42,30 @@ export const FileCodeSprite: FC<SpriteProps> = ({ size = 16, className }) => (
   </svg>
 )
 
-export const StatusRunningSprite: FC<SpriteProps> = ({ size = 16, className }) => (
-  <svg width={size} height={size * 0.5} viewBox="0 0 16 8" shapeRendering="crispEdges" style={baseStyle} className={className}>
+/** Shared internal component for status bar sprites — differs only in fill color. */
+const StatusBarSprite: FC<BaseSpriteProps & { color: string; ariaLabel: string }> = ({
+  size = 16,
+  className,
+  color,
+  ariaLabel,
+}) => (
+  <svg role="img" aria-label={ariaLabel} width={size} height={size * 0.5} viewBox="0 0 16 8" shapeRendering="crispEdges" style={baseStyle} className={className}>
     {[0, 3, 6, 9, 12].map((x) => (
-      <rect key={x} x={x} y="0" width="2" height="8" fill="#7EE787" />
+      <rect key={x} x={x} y="0" width="2" height="8" fill={color} />
     ))}
   </svg>
 )
 
-export const StatusStoppedSprite: FC<SpriteProps> = ({ size = 16, className }) => (
-  <svg width={size} height={size * 0.5} viewBox="0 0 16 8" shapeRendering="crispEdges" style={baseStyle} className={className}>
-    {[0, 3, 6, 9, 12].map((x) => (
-      <rect key={x} x={x} y="0" width="2" height="8" fill="#A89474" />
-    ))}
-  </svg>
+export const StatusRunningSprite: FC<BaseSpriteProps> = (props) => (
+  <StatusBarSprite {...props} color="#7EE787" ariaLabel="running status" />
 )
 
-export const GitBranchSprite: FC<SpriteProps> = ({ size = 16, className }) => (
-  <svg width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
+export const StatusStoppedSprite: FC<BaseSpriteProps> = (props) => (
+  <StatusBarSprite {...props} color="#A89474" ariaLabel="stopped status" />
+)
+
+export const GitBranchSprite: FC<BaseSpriteProps> = ({ size = 16, className }) => (
+  <svg role="img" aria-label="git branch" width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
     <rect x="4" y="2" width="2" height="12" fill="#F778BA" />
     <rect x="10" y="2" width="2" height="6" fill="#F778BA" />
     <rect x="6" y="6" width="4" height="2" fill="#F778BA" />

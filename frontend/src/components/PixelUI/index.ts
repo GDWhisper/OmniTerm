@@ -9,3 +9,4 @@ export {
   StatusStoppedSprite,
   GitBranchSprite,
 } from './PixelSprites'
+export type { BaseSpriteProps, SpriteProps } from './PixelSprites'
