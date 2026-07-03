@@ -1,7 +1,11 @@
 # OmniTerm UI Style Guide
 
 > Single source of truth for OmniTerm's Phase 3 pixel game UI system.
-> Last updated: 2026-07-02
+> Last updated: 2026-07-03
+
+> **相关文档**：[`docs/frontend-patterns.md`](frontend-patterns.md) 记录了
+> 状态栏面板的文件结构、hook 用法、子组件拆分、复制清单等**代码架构**约定。
+> 本文档只管**视觉规格**（token、尺寸、颜色、态）。两边互不重复。
 
 ## 1. Theme System
 
@@ -341,7 +345,60 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 
 ---
 
-## 12. SVG & Rendering Rules
+## 12. Status Bar Popup — 尺寸与视觉规格
+
+适用于状态栏按钮弹出的**复杂面板**（参考实现：Settings 面板）。
+简单单 section 弹出面板不在此范。
+
+### 尺寸
+
+| 元素 | 桌面端 | 移动端 |
+|------|--------|--------|
+| Popup 高度 | 固定 `33vh`（切 tab 高度不变） | bottom sheet，`calc(100dvh - mobileTotal)` |
+| Popup 宽度 | 视口 1/4（`25vw`） | `100%` |
+| `maxHeight` 安全上限 | `useAnchorPopup` 算出 logo 底→按钮顶距离 | 同桌面 |
+| Tab 列宽 | 92px（固定） | 隐去 tab，全宽 |
+| 内容区 padding | 12px 14px | 12px 16px |
+| Border radius | 10px | 16px |
+
+### Tab 菜单视觉
+
+| 元素 | 规格 |
+|------|------|
+| Tab 字体 | `.font-pixel` (VT323) 14px，letter-spacing 1.5px，**UPPERCASE** |
+| Tab padding | `9px 8px 9px 10px` |
+| Tab 左边框 | 3px（transparent 预留位，active 时变色） |
+| Inactive tab | `var(--text-muted)` 文字，透明背景 |
+| Inactive tab :hover | `var(--bg-elevated)` 背景，`var(--text-primary)` 文字 |
+| **Active tab** | `var(--wood-dark)` 背景，`#FAF2DE` 文字，`var(--accent)` 3px 左边界 |
+| Tab rail 背景 | `var(--bg-surface)` |
+| Tab rail 右边框 | 2px `var(--wood-shadow)`（light `#3A2E1F` / dark `#090A0D`） |
+| Transition | `background 0.1s steps(2), color 0.1s steps(2)`（pixel 离散过渡） |
+
+### 暗色主题适配
+
+| 元素 | 亮色 | 暗色 |
+|------|------|------|
+| Active tab 背景 | `var(--wood-dark)` = `#8B5A2B` | `#2A2520` |
+| Active tab 文字 | `#FAF2DE` | `#E6DFD0` |
+| Tab rail 右边框 | `var(--wood-shadow)` = `#3A2E1F` | `#090A0D` |
+
+### 滚动条（与全局一致）
+
+复用全局 scrollbar 规范：8px 宽、`border-radius: 0`、主题感知
+（`var(--scrollbar-thumb)` / `var(--scrollbar-track)`），hover 变 `var(--accent)`。
+Popup 自身 `overflow: hidden`，滚动交给有 `overflow-y: auto` 的内容容器
+（`.settings-content` / `.tmux-cheatsheet-content`）。
+
+### i18n 视觉约定
+
+- **Tab 文字**：英文 UPPERCASE（VT323 不支持中文，pixel 风统一）
+  en/zh 两个 locale **写同样的英文值**（如 `settings.category.appearance: "APPEARANCE"`）
+- **选项标签 / 标题 / hint**：正常翻译
+
+---
+
+## 13. SVG & Rendering Rules
 
 ```css
 svg, svg * { shape-rendering: crispEdges; }
@@ -358,7 +415,7 @@ svg path, svg rect, svg circle, svg line {
 
 ---
 
-## 13. New Component Checklist
+## 14. New Component Checklist
 
 Before adding any new UI element, verify:
 

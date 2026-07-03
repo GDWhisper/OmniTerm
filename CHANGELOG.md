@@ -73,6 +73,7 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[frontend]` Settings 面板 i18n 补齐 — 顶部标题、ToggleRow 的 ON/OFF 状态走 i18n，en/zh 各加 `settings.on` / `settings.off` 2 个 key（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/locales/*/translation.json`）
 - (2026-07-03) `[frontend]` Tmux 速查面板结构与 Settings 对齐 — popup 改为 `display: flex; flexDirection: column; overflow: hidden`，顶部 `.panel-title-bar` 不再被 4px padding 隔开，滚动交给新加的 `.tmux-cheatsheet-content` 容器（`frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx`、`frontend/src/index.css`）
 - (2026-07-03) `[docs]` 「状态栏游戏风格面板模板」写进 `docs/frontend-patterns.md` — 以 Settings 为 reference implementation，记录布局/尺寸/Tab/section 拆分/i18n/复制清单/验证清单，供后续状态栏新增按钮参考；`agent-edit-manual.md` 的 Settings 入口同步指向新模板（`docs/frontend-patterns.md`、`docs/agent-edit-manual.md`）
+- (2026-07-03) `[docs]` 面板规范拆分：视觉规格搬到 `docs/ui-style-guide.md` §12 — `frontend-patterns.md` 只保留代码架构，尺寸/颜色/态等 token 集中在 `ui-style-guide`；两份文档顶部互链避免重复；`AGENTS.md` 索引触发条件补上「规范撰写」与「状态栏面板/弹窗前必读」（`docs/ui-style-guide.md`、`docs/frontend-patterns.md`、`AGENTS.md`）
 
 ### Removed
 

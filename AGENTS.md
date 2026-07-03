@@ -11,14 +11,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 ./dev.sh start|stop|status|logs
 ```
 
-## 优先级链
-
-冲突时按此优先级执行：
-1. 用户当前明确指令
-2. 安全硬性约束，若与用户指令冲突，立刻暂停报告。
-3. 具体操作规则，若与用户指令冲突，立刻暂停报告。
-4. 一般性描述
-
 ## 核心规则
 
 1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
@@ -63,36 +55,13 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 
 ### 硬性规则
 
-- ❌ **禁止在代码里硬编码**端口/域名/版本/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
-- ✅ 改这些值时**只改 `.env.local`**（各 worktree 独立）
-- ✅ dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
-- ⚠️ **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
+- **禁止在代码里硬编码**端口/域名/版本/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
+- 改这些值时**只改 `.env.local`**（各 worktree 独立）
+- dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
+- **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
 
 新 worktree 初始化步骤见 `docs/worktree-setup.md`，各分支端口/域名/二进制名对照表见 `docs/branch-workflows.md「分支身份约定」`。
 
-## 配置统一管理
-
-**分支专属变量（端口/域名/版本/binary 名等）必须通过 `.env.local` 统一管理，不得硬编码到代码里。**
-
-### `.env.local` 可用变量
-
-| 变量 | 含义 | 消费者 |
-|------|------|--------|
-| `BACKEND_PORT` | dev.sh 启动的后端 HTTP 端口 | Rust `Args.port` (clap env) / Vite proxy |
-| `FRONTEND_PORT` | dev.sh 启动的前端 HTTP 端口 | Vite `server.port` |
-| `DOCKER_PORT` | Docker 容器内监听端口 | Dockerfile `ARG` / docker-compose `BIND_ADDR` |
-| `DOCKER_PORT_MAPPING` | Docker 端口映射 `host:container` | docker-compose `ports` |
-| `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
-| `BRANCH_BINARY_NAME` | 二进制名（`omniterm-main` / `omniterm-dev`） | Dockerfile `CMD` / 日志 |
-| `BRANCH_VERSION` | 版本号 | Vite `define` → `import.meta.env.VITE_APP_VERSION` / Rust 启动日志 |
-| `DOMAIN` | 部署域名 | Vite `allowedHosts` |
-
-### 硬性规则
-
-- ❌ **禁止在代码里硬编码**端口/域名/版本/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
-- ✅ 改这些值时**只改 `.env.local`**（各 worktree 独立）
-- ✅ dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
-- ⚠️ **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
 
 ### 首次初始化新 worktree
 
@@ -113,12 +82,12 @@ cp branch.config.example .env.local  # 如果有模板文件
 |------|---------------------|---------------------|
 | `docs/architecture-backend.md` | 修改 Rust 后端（API 路由、中间件、数据库模型、tmux/fs 模块） | 新增 API 端点、模块拆分/合并、变更 CLI 参数或环境变量 |
 | `docs/architecture-frontend.md` | 修改 React 前端（组件、store、hook、路由、依赖升级） | 新增组件/store/hook、目录结构变化、关键依赖版本变更 |
-| `docs/frontend-patterns.md` | 决定组件是否要拆出 data.ts、复用已有前端模式时 | 新增前端模式 entry、记录已有约定 |
+| `docs/frontend-patterns.md` | 决定组件结构、复用已有前端架构模式时；**新加状态栏按钮 / sidebar 弹出面板前必读**（含文件结构、hook 用法、子组件拆分、复制清单） | 新增前端架构模式 entry、记录已有约定 |
 | `docs/agent-edit-manual.md` | 接具体修改任务（加命令/改配置/修 bug/加翻译）时，搜目标组件列文件 | 新增「有特殊维护约定的组件」entry、记录修改路径 |
 | `docs/branch-workflows.md` | 执行 git 分支操作（merge、rebase、cherry-pick）、操作多 worktree | 分支策略变更、新增分支类型、安全守则调整 |
 | `docs/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote、执行 release 排除脚本 | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
 | `docs/release-guide.md` | 执行正式发布（构建 release 分支、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整 |
-| `docs/ui-style-guide.md` | 任何涉及 UI 的修改（组件样式、布局、色板、字体、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距） |
+| `docs/ui-style-guide.md` | 任何涉及 UI 的**修改或规范撰写**（组件样式、布局、色板、字体、尺寸 token、面板/弹窗视觉态、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距）、补充面板/弹窗尺寸规格 |
 | `docs/user-testing.md` | 功能开发完成后的手动回归测试 | 新增测试用例、发现并记录已知限制 |
 | `docs/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（问题 → 根因 → 解决方案） |
 | `docs/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |

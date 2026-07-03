@@ -5,6 +5,10 @@
 
 新增组件或拆分数据前先扫一眼本文档，避免重复发明。
 
+> **相关文档**：[`docs/ui-style-guide.md`](ui-style-guide.md) 记录了
+> 面板/弹窗的**视觉规格**（尺寸 token、颜色、态）。本文档只管**代码架构**
+> （文件结构、hook、子组件拆分、复制清单）。两边互不重复。
+
 ## 数据/渲染分离 (data.ts convention)
 
 **适用场景**：组件需要渲染一份**纯静态或低频变更**的展示数据
@@ -94,42 +98,44 @@
 **参考实现**：`frontend/src/components/Settings/`（项目内目前最完整的游戏风格面板）
 新加面板**以这个为模板复制**。简化版（无 tab）可参考 `TmuxCheatsheet`。
 
+> **视觉规格不在这里**——尺寸 token、颜色、active 态等都见
+> [`docs/ui-style-guide.md` §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)。
+> 本节只管代码结构。
+
 ### 布局标准
 
 ```
-┌─[ ◆ <TITLE> ]─────────────────┐ ← .panel-title-bar，木纹背景，粉
-│┌────────┬──────────────────┐  │ 色顶部边缘闪击点
-││ TAB 1  │ <section>        │  │ ← 90px 固定 tab 列
-││▌ TAB 2 │ <section>        │  │  active 态：木纹底 + accent 3px 左边界
+┌─[ ◆ <TITLE> ]─────────────────┐
+│┌────────┬──────────────────┐  │
+││ TAB 1  │ <section>        │  │ ← 92px 固定 tab 列
+││▌ TAB 2 │ <section>        │  │
 ││ TAB 3  │ <section>        │  │ ← flex:1 滚动内容区
 ││        │ ...              │  │
 │└────────┴──────────────────┘  │
 └────────────────────────────────┘
 ```
 
-- **顶部标题栏**：`.panel-title-bar`（必填），文案 i18n。HTML 结构：
+**完整尺寸与 token 见 ui-style-guide §12**，本节仅列出与代码结构直接相关的部分：
+
+- 顶部标题栏：`.panel-title-bar`（必填），文案 i18n。HTML 结构：
   ```tsx
   <div className="panel-title-bar">
     <span>◆</span>
     <span>{t('<feature>.title')}</span>
   </div>
   ```
-- **桌面尺寸**：
-  - **高度** `33vh`（切 tab 高度不变，`useAnchorPopup` 的 `maxHeight` 作
-    极短视口下的硬上限）
-  - **宽度** `25vw`（屏 1/4）+ `useState` 跟踪 `window.innerWidth * 0.25`
-    传给 `useAnchorPopup` 的 `width` 参数做水平 clamp，resize 同步更新
-- **移动尺寸**：bottom sheet 全宽，高度 `calc(100dvh - mobileTotal)`，`borderRadius: 16`
-- **结构**：popup 统一 `display: flex; flexDirection: column; overflow: hidden`，
-  滚动交给有 `overflow-y: auto` 的内容容器（`.settings-content` /
-  `.tmux-cheatsheet-content` 风格）
+- 桌面宽度（`25vw`）需要在 `useAnchorPopup` 同步传像素值给 `width` 参数
+  做水平 clamp（不能只改 CSS——见“注意事项”）
+- 移动尺寸：bottom sheet 全宽，高度 `calc(100dvh - mobileTotal)`
+- 结构：popup 统一 `display: flex; flexDirection: column; overflow: hidden`，
+  滚动交给有 `overflow-y: auto` 的内容容器
 
-### Tab 菜单规范（以 Settings 为例）
+### Tab 菜单结构（以 Settings 为例）
 
-- 左 90–92px 固定列用 `.settings-tabs`（深色背景 + wood-shadow 右边框）
-- 每个 tab 是 `<button>` 加 `.settings-tab` 类，active 态加 `.active` 修饰
-- Active tab：木纹底 + accent 3px 左边界 + 奶白字；hover 背景变亮
-- 字体：VT323 14px，`letter-spacing: 1.5px`，**文字 UPPERCASE**
+视觉见 ui-style-guide §12。本节只管**结构**与**逻辑**：
+
+- 左固定列用 `.settings-tabs`，每个 tab 是 `<button>` 加 `.settings-tab` 类，
+  active 态加 `.active` 修饰
 - mobile-only tab 标 `mobileOnly: true` 在分类配置中，桌面自动过滤
 
 ```tsx
@@ -153,6 +159,21 @@ function <Feature>() {
   )
 }
 ```
+
+### 注意事项
+
+- **CSS 宽度与 hook 宽度必须同步**：如果 popup 用 `width: 25vw`，则
+  `useAnchorPopup` 的 `width` 参数也必须传 `Math.round(window.innerWidth * 0.25)`
+  并加 `resize` 监听同步更新，否则按钮靠右时 popup 会溢出右边界。模板代码：
+  ```tsx
+  const [w, setW] = useState(() => Math.round(window.innerWidth * 0.25))
+  useEffect(() => {
+    const onResize = () => setW(Math.round(window.innerWidth * 0.25))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  useAnchorPopup({ ..., width: w })
+  ```
 
 ### Section 拆分原则
 
@@ -180,7 +201,7 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 
 | 元素 | 风格 | 原因 |
 |------|------|------|
-| Tab 标签 | 英文 UPPERCASE（en/zh 一致） | VT323 不支持中文，pixel 风统一 |
+| Tab 标签 | 英文 UPPERCASE（en/zh 一致） | 像素字体在中文下退化，详见 [ui-style-guide §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格) |
 | 选项标签 | 正常翻译 | `settings.theme: "Theme" / "主题"` |
 | 开关状态 | `settings.on` / `settings.off` | 复用 key，避免每处写死 "ON" |
 | Hint 文本 | 正常翻译，key 后缀 `Hint` | 与选项 key 配对 |
@@ -201,11 +222,9 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 
 - [ ] `pnpm build` 无 type error
 - [ ] `pnpm lint` 无新增问题
-- [ ] 桌面宽度 = 25vw、高度 = 33vh，且切 tab 不抖高度
-- [ ] 极短视口下高度被 `maxHeight` 裁，**不溢出 logo 顶部**
+- [ ] 视觉规格匹配 [ui-style-guide §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)（尺寸、Tab 态、滚动条、标题栏铺顶）
 - [ ] 桌面端水平 clamp 正确（按钮靠右时 popup 右边不出视口）
+- [ ] 极短视口下高度被 `maxHeight` 裁，**不溢出 logo 顶部**
 - [ ] 移动端 bottom sheet 全宽，MobileKeyBar 之上
-- [ ] 滚动条硬角 8px、主题感知
-- [ ] 顶部标题栏木纹背景**铺满 popup 整个顶部**（无 padding 让标题离边）
 - [ ] i18n 完整：标题 / tab / section / hint / on-off 全部走 t()
 - [ ] 没引入新依赖、没硬编码颜色（用 CSS 变量）
