@@ -13,11 +13,14 @@ Two themes controlled by `.dark` on `<html>`:
 
 ### 1.1 Parchment A2 Light (primary / default)
 
+**背景三阶段**：base → elevated → surface，逐渐变饱和、略变深。
+所有 `bg-*` 都是**暖色羊皮纸**，不允许纯白或接近纯白（见 §1.3 规则）。
+
 | Token | Value | Usage |
 |---|---|---|
-| `--bg-base` | `#F5ECD8` | Page & panel base |
+| `--bg-base` | `#F5ECD8` | Page & panel base (最柔和的底) |
 | `--bg-elevated` | `#EBE0C4` | Cards, panels, secondary buttons |
-| `--bg-surface` | `#FDF8EA` | Inputs, highlights |
+| `--bg-surface` | `#F0E1B0` | Inputs, recessed rails, highlights (饱和度最高，习惯「recessed 凹下去」） |
 | `--text-primary` | `#3A2E1F` | Main text (~11:1 contrast) |
 | `--text-secondary` | `#6B5D45` | Secondary text |
 | `--text-faint` | `#A89474` | Placeholder, disabled |
@@ -34,7 +37,39 @@ Two themes controlled by `.dark` on `<html>`:
 | `--warning` | `#D4A05A` | Warnings |
 | `--danger` | `#C85A3A` | Destructive actions |
 
-### 1.2 Deep-space Dark (night mode, `.dark`)
+### 1.2 底色规则：禁止纯白（No Pure White Backgrounds）
+
+**适用于亮色主题**（暗色主题本就是深色，不适用本规则）。
+
+**所有亮色背景必须是羊皮纸色或类羊皮纸色**。不允许出现：
+
+- 纯白 `#FFFFFF` / `#FFF`
+- 接近纯白：如 `#FDF8EA`（RGB 253/248/234，三个通道差距 < 21，人眼几乎看不出是“颜色”）
+- 其他任何 R≈G≈B 且都 > 240 的色调
+
+**判断口诀**：
+- 暖色羊皮纸：R > G > B，且 R-B 差距 ≥ 25 （明显黄调）
+- 接受范围举例：`#F5ECD8`（base）、`#EBE0C4`（elevated）、`#F0E1B0`（surface）
+- 不接受举例：`#FFFFFF`、`#FAFAFA`、`#FDF8EA`（现 surface 变体）、`#F8F4E8`（黄调不够）
+
+**为何如此**：
+- 羊皮纸调能避免 “刺白”，为长时间使用的开发者 UI 提供眼眼高负荷场景下的舒适度
+- 羊皮纸色能更好地与木纹标题栏（`var(--wood-dark)`）、金色装饰（`var(--gold-light)`）融合
+- 暗色主题本就是 `#12-#24` 几度低饱和 灰蓝，亮色主题不能反向套用「黑」补「白」二象性，要从羊皮纸调中选
+
+**例外**（可使用较亮色调）：
+- **文字颜色**本身可以亮（如 `var(--text-faint)` `#A89474`、木底奶白 `#FAF2DE`），不適用本规则
+- 黑色屏幕深色背景（`#12141A` 终端）不受限制
+- SVG 插画内部色用项目预定义 token，不允许引入新的色
+
+**检测**：`git grep -nE '#[Ff][8-F][8-F][8-F][8-F][8-F][8-F]' frontend/src` 应只命中：
+- `#FAF2DE`（文字·水黄奶）
+- `#FFCB6B`（金色装饰，--gold-light）
+- 其他高亮加饱和的金色暖调
+
+如未命中以上三项中的值，是 bug，需修正或加进 token。
+
+### 1.3 Deep-space Dark (night mode, `.dark`)
 
 | Token | Value |
 |---|---|
@@ -420,6 +455,7 @@ svg path, svg rect, svg circle, svg line {
 Before adding any new UI element, verify:
 
 - [ ] Uses CSS variables (`var(--token)`) not hardcoded hex
+- [ ] **背景色遵守 §1.2 「禁止纯白」规则** — R > G > B 且 R-B ≥ 25，明显黄调羊皮纸
 - [ ] Hard shadow uses `3px 3px 0` (not `4px` blur, not glow)
 - [ ] `border-radius: 0` everywhere (modals: `2px` max)
 - [ ] Pixel font (`.font-pixel`) only for display text, not body/code

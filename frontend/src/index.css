@@ -8,9 +8,13 @@
    ──────────────────────────────────────────────────────────────────── */
 :root {
   /* ── Parchment A2 light theme (primary) ── */
+  /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
+     All three are warm parchment tones — NO near-white (#FFF, #FDF, etc.).
+     Surface is more saturated yellow + slightly darker than base, matching
+     the dark-theme convention (recessed input/rail look). */
   --bg-base: #F5ECD8;
   --bg-elevated: #EBE0C4;
-  --bg-surface: #FDF8EA;
+  --bg-surface: #F0E1B0;
   --border-subtle: #D4C4A0;
   --border-strong: #3A2E1F;
   --text-primary: #3A2E1F;
