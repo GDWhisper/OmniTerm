@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore } from '../../stores/appStore'
@@ -86,394 +87,325 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
   }
 }
 
-export function Settings() {
-  const { t, i18n } = useTranslation()
-  const { theme, setTheme } = useThemeStore()
-  const {
-    fontSize,
-    mobileFontSize,
-    isMobile,
-    setFontSize,
-    setMobileFontSize,
-    autoCopySelect,
-    setAutoCopySelect,
-    mobileGestureEnabled,
-    setMobileGestureEnabled,
-    immersiveMode,
-    setImmersiveMode,
-    pixelAnimationsEnabled, setPixelAnimationsEnabled,
-    soundEnabled, setSoundEnabled,
-    crtScanlines, setCrtScanlines,
-    pixelUiEnabled, setPixelUiEnabled,
-    pixelFontEnabled, setPixelFontEnabled,
-    parchmentTextureEnabled, setParchmentTextureEnabled,
-    transitionsEnabled, setTransitionsEnabled,
-  } = useAppStore()
+/* ── Section heading (used by every section) ── */
 
+const sectionTitleStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: 11,
+  fontWeight: 500,
+  textTransform: 'uppercase',
+  letterSpacing: '0.5px',
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation()
+  void t
+  return <h3 style={sectionTitleStyle}>{children}</h3>
+}
+
+/* ── Reusable toggle row (label + ON/OFF button + hint) ── */
+
+interface ToggleRowProps {
+  labelKey: string
+  hintKey: string
+  value: boolean
+  onToggle: () => void
+}
+
+function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
+  const { t } = useTranslation()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t(labelKey)}</SectionTitle>
+      <button
+        onClick={onToggle}
+        style={{
+          ...btnBase,
+          fontSize: 12,
+          padding: '5px 8px',
+          display: 'flex', alignItems: 'center', gap: 6,
+          ...(value ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+        }}
+      >
+        <span style={{
+          width: 8, height: 8, borderRadius: '50%',
+          background: value ? 'var(--success)' : 'var(--text-dim)',
+          transition: 'background 0.15s ease',
+        }} />
+        {value ? 'ON' : 'OFF'}
+      </button>
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
+    </section>
+  )
+}
+
+/* ── Individual section components ── */
+
+function ThemeSection() {
+  const { t } = useTranslation()
+  const { theme, setTheme } = useThemeStore()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.theme')}</SectionTitle>
+      <div className="flex gap-1.5">
+        {themes.map((th) => {
+          const isActive = theme === th.value
+          return (
+            <button
+              key={th.value}
+              onClick={() => setTheme(th.value)}
+              className="flex-1 flex items-center justify-center gap-1.5"
+              style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
+              onMouseEnter={btnHover}
+              onMouseLeave={(e) => btnLeave(e, isActive)}
+            >
+              <th.Icon size={14} />
+              <span>{t(th.labelKey)}</span>
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function FontSizeSection() {
+  const { t } = useTranslation()
+  const { fontSize, mobileFontSize, isMobile, setFontSize, setMobileFontSize } = useAppStore()
   const effectiveFontSize = isMobile ? mobileFontSize : fontSize
   const setEffectiveFontSize = isMobile ? setMobileFontSize : setFontSize
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.fontSize')}</SectionTitle>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setEffectiveFontSize(effectiveFontSize - 1)}
+          disabled={effectiveFontSize <= 10}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: effectiveFontSize <= 10 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          −
+        </button>
+        <div className="flex-1 text-center">
+          <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{effectiveFontSize}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
+        </div>
+        <button
+          onClick={() => setEffectiveFontSize(effectiveFontSize + 1)}
+          disabled={effectiveFontSize >= 24}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: effectiveFontSize >= 24 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          +
+        </button>
+      </div>
+      <input
+        type="range"
+        min={10}
+        max={24}
+        value={effectiveFontSize}
+        onChange={(e) => setEffectiveFontSize(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: 'var(--accent)', height: 4 }}
+      />
+    </section>
+  )
+}
+
+function LanguageSection() {
+  const { t, i18n } = useTranslation()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.language')}</SectionTitle>
+      <div className="flex gap-1.5">
+        {languages.map((lang) => {
+          const isActive = i18n.language === lang.value || i18n.language.startsWith(lang.value)
+          return (
+            <button
+              key={lang.value}
+              onClick={() => i18n.changeLanguage(lang.value)}
+              className="flex-1 flex items-center justify-center"
+              style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
+              onMouseEnter={btnHover}
+              onMouseLeave={(e) => btnLeave(e, isActive)}
+            >
+              {lang.label}
+            </button>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function AutoCopySection() {
+  const autoCopySelect = useAppStore((s) => s.autoCopySelect)
+  const setAutoCopySelect = useAppStore((s) => s.setAutoCopySelect)
+  return <ToggleRow labelKey="settings.autoCopySelect" hintKey="settings.autoCopySelectHint" value={autoCopySelect} onToggle={() => setAutoCopySelect(!autoCopySelect)} />
+}
+
+function AnimationsSection() {
+  const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
+  const setPixelAnimationsEnabled = useAppStore((s) => s.setPixelAnimationsEnabled)
+  return <ToggleRow labelKey="settings.pixelAnimations" hintKey="settings.pixelAnimationsHint" value={pixelAnimationsEnabled} onToggle={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)} />
+}
+
+function SoundSection() {
+  const soundEnabled = useAppStore((s) => s.soundEnabled)
+  const setSoundEnabled = useAppStore((s) => s.setSoundEnabled)
+  return <ToggleRow labelKey="settings.sound" hintKey="settings.soundHint" value={soundEnabled} onToggle={() => setSoundEnabled(!soundEnabled)} />
+}
+
+function CrtSection() {
+  const crtScanlines = useAppStore((s) => s.crtScanlines)
+  const setCrtScanlines = useAppStore((s) => s.setCrtScanlines)
+  return <ToggleRow labelKey="settings.crtScanlines" hintKey="settings.crtScanlinesHint" value={crtScanlines} onToggle={() => setCrtScanlines(!crtScanlines)} />
+}
+
+function PixelUiSection() {
+  const pixelUiEnabled = useAppStore((s) => s.pixelUiEnabled)
+  const setPixelUiEnabled = useAppStore((s) => s.setPixelUiEnabled)
+  return <ToggleRow labelKey="settings.pixelUi" hintKey="settings.pixelUiHint" value={pixelUiEnabled} onToggle={() => setPixelUiEnabled(!pixelUiEnabled)} />
+}
+
+function PixelFontSection() {
+  const pixelFontEnabled = useAppStore((s) => s.pixelFontEnabled)
+  const setPixelFontEnabled = useAppStore((s) => s.setPixelFontEnabled)
+  return <ToggleRow labelKey="settings.pixelFont" hintKey="settings.pixelFontHint" value={pixelFontEnabled} onToggle={() => setPixelFontEnabled(!pixelFontEnabled)} />
+}
+
+function ParchmentSection() {
+  const parchmentTextureEnabled = useAppStore((s) => s.parchmentTextureEnabled)
+  const setParchmentTextureEnabled = useAppStore((s) => s.setParchmentTextureEnabled)
+  return <ToggleRow labelKey="settings.parchmentTexture" hintKey="settings.parchmentTextureHint" value={parchmentTextureEnabled} onToggle={() => setParchmentTextureEnabled(!parchmentTextureEnabled)} />
+}
+
+function TransitionsSection() {
+  const transitionsEnabled = useAppStore((s) => s.transitionsEnabled)
+  const setTransitionsEnabled = useAppStore((s) => s.setTransitionsEnabled)
+  return <ToggleRow labelKey="settings.transitions" hintKey="settings.transitionsHint" value={transitionsEnabled} onToggle={() => setTransitionsEnabled(!transitionsEnabled)} />
+}
+
+function MobileGestureSection() {
+  const mobileGestureEnabled = useAppStore((s) => s.mobileGestureEnabled)
+  const setMobileGestureEnabled = useAppStore((s) => s.setMobileGestureEnabled)
+  return <ToggleRow labelKey="settings.mobileGesture" hintKey="settings.mobileGestureHint" value={mobileGestureEnabled} onToggle={() => setMobileGestureEnabled(!mobileGestureEnabled)} />
+}
+
+function ImmersiveSection() {
+  const immersiveMode = useAppStore((s) => s.immersiveMode)
+  const setImmersiveMode = useAppStore((s) => s.setImmersiveMode)
+  // Only render if Fullscreen API is supported (mirrors the original guard).
+  if (!canFullscreen()) return null
+  return <ToggleRow labelKey="settings.immersiveMode" hintKey="settings.immersiveModeHint" value={immersiveMode} onToggle={() => setImmersiveMode(!immersiveMode)} />
+}
+
+function AboutSection() {
+  const { t } = useTranslation()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.about')}</SectionTitle>
+      <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+        <p>{t('settings.slogan')}</p>
+      </div>
+    </section>
+  )
+}
+
+/* ── Category config: which sections appear in which tab ── */
+
+type SectionComponent = React.FC
+type CategoryId = 'appearance' | 'audio' | 'edit' | 'language' | 'mobile'
+
+interface Category {
+  id: CategoryId
+  labelKey: string
+  sections: SectionComponent[]
+  /** When true, the tab is only shown on mobile viewports. */
+  mobileOnly?: boolean
+}
+
+const CATEGORIES: Category[] = [
+  {
+    id: 'appearance',
+    labelKey: 'settings.category.appearance',
+    sections: [ThemeSection, FontSizeSection, CrtSection, AnimationsSection, PixelUiSection, PixelFontSection, ParchmentSection, AboutSection],
+  },
+  {
+    id: 'audio',
+    labelKey: 'settings.category.audio',
+    sections: [SoundSection],
+  },
+  {
+    id: 'edit',
+    labelKey: 'settings.category.edit',
+    sections: [AutoCopySection, TransitionsSection],
+  },
+  {
+    id: 'language',
+    labelKey: 'settings.category.language',
+    sections: [LanguageSection],
+  },
+  {
+    id: 'mobile',
+    labelKey: 'settings.category.mobile',
+    sections: [MobileGestureSection, ImmersiveSection],
+    mobileOnly: true,
+  },
+]
+
+/* ── Main component: game-style tabbed settings panel ── */
+
+export function Settings() {
+  const { t } = useTranslation()
+  const isMobile = useAppStore((s) => s.isMobile)
+  const [activeId, setActiveId] = useState<CategoryId>('appearance')
+
+  const visibleCategories = CATEGORIES.filter((c) => !c.mobileOnly || isMobile)
+  // Defensive: if the previously active tab is hidden (e.g. switched to desktop), fall back to first.
+  const activeCategory = visibleCategories.find((c) => c.id === activeId) ?? visibleCategories[0]
 
   return (
-    <div style={{ background: 'var(--bg-elevated)', color: 'var(--text-primary)', fontFamily: FONT }}>
-      <div className="max-w-lg mx-auto space-y-5" style={{ padding: '12px 16px' }}>
-        <h2 style={{ color: 'var(--text-primary)', fontSize: 14, fontWeight: 600, letterSpacing: '0.3px' }}>{t('settings.title')}</h2>
-
-        {/* Theme */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.theme')}</h3>
-          <div className="flex gap-1.5">
-            {themes.map((th) => {
-              const isActive = theme === th.value
-              return (
-                <button
-                  key={th.value}
-                  onClick={() => setTheme(th.value)}
-                  className="flex-1 flex items-center justify-center gap-1.5"
-                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
-                  onMouseEnter={btnHover}
-                  onMouseLeave={(e) => btnLeave(e, isActive)}
-                >
-                  <th.Icon size={14} />
-                  <span>{t(th.labelKey)}</span>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-
-        {/* Language */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.language')}</h3>
-          <div className="flex gap-1.5">
-            {languages.map((lang) => {
-              const isActive = i18n.language === lang.value || i18n.language.startsWith(lang.value)
-              return (
-                <button
-                  key={lang.value}
-                  onClick={() => i18n.changeLanguage(lang.value)}
-                  className="flex-1 flex items-center justify-center"
-                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
-                  onMouseEnter={btnHover}
-                  onMouseLeave={(e) => btnLeave(e, isActive)}
-                >
-                  {lang.label}
-                </button>
-              )
-            })}
-          </div>
-        </section>
-
-        {/* Font size */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            {t('settings.fontSize')}
-          </h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setEffectiveFontSize(effectiveFontSize - 1)}
-              disabled={effectiveFontSize <= 10}
-              style={{
-                ...btnBase,
-                width: 28,
-                height: 28,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 14,
-                opacity: effectiveFontSize <= 10 ? 0.5 : 1,
-                color: 'var(--text-muted)',
-              }}
-              onMouseEnter={btnHover}
-              onMouseLeave={(e) => btnLeave(e, false)}
-            >
-              −
-            </button>
-            <div className="flex-1 text-center">
-              <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{effectiveFontSize}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
-            </div>
-            <button
-              onClick={() => setEffectiveFontSize(effectiveFontSize + 1)}
-              disabled={effectiveFontSize >= 24}
-              style={{
-                ...btnBase,
-                width: 28,
-                height: 28,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 14,
-                opacity: effectiveFontSize >= 24 ? 0.5 : 1,
-                color: 'var(--text-muted)',
-              }}
-              onMouseEnter={btnHover}
-              onMouseLeave={(e) => btnLeave(e, false)}
-            >
-              +
-            </button>
-          </div>
-          <input
-            type="range"
-            min={10}
-            max={24}
-            value={effectiveFontSize}
-            onChange={(e) => setEffectiveFontSize(Number(e.target.value))}
-            className="w-full"
-            style={{ accentColor: 'var(--accent)', height: 4 }}
-          />
-        </section>
-
-        {/* ── Auto-copy on select ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.autoCopySelect')}</h3>
+    <div className="settings-layout">
+      <nav className="settings-tabs" aria-label={t('settings.title')}>
+        {visibleCategories.map((cat) => (
           <button
-            onClick={() => setAutoCopySelect(!autoCopySelect)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(autoCopySelect ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
+            key={cat.id}
+            type="button"
+            className={`settings-tab${activeCategory.id === cat.id ? ' active' : ''}`}
+            onClick={() => setActiveId(cat.id)}
+            aria-current={activeCategory.id === cat.id ? 'page' : undefined}
           >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: autoCopySelect ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {autoCopySelect ? 'ON' : 'OFF'}
+            {t(cat.labelKey)}
           </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.autoCopySelectHint')}</p>
-        </section>
-
-        {/* ── Pixel animations ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelAnimations')}</h3>
-          <button
-            onClick={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(pixelAnimationsEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: pixelAnimationsEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {pixelAnimationsEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelAnimationsHint')}</p>
-        </section>
-
-        {/* ── 8-bit Sound ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.sound')}</h3>
-          <button
-            onClick={() => setSoundEnabled(!soundEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(soundEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: soundEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {soundEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.soundHint')}</p>
-        </section>
-
-        {/* ── CRT Scanlines ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.crtScanlines')}</h3>
-          <button
-            onClick={() => setCrtScanlines(!crtScanlines)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(crtScanlines ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: crtScanlines ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {crtScanlines ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.crtScanlinesHint')}</p>
-        </section>
-
-        {/* ── Pixel UI ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelUi')}</h3>
-          <button
-            onClick={() => setPixelUiEnabled(!pixelUiEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(pixelUiEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: pixelUiEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {pixelUiEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelUiHint')}</p>
-        </section>
-
-        {/* ── Pixel Font ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.pixelFont')}</h3>
-          <button
-            onClick={() => setPixelFontEnabled(!pixelFontEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(pixelFontEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: pixelFontEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {pixelFontEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.pixelFontHint')}</p>
-        </section>
-
-        {/* ── Parchment Texture ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.parchmentTexture')}</h3>
-          <button
-            onClick={() => setParchmentTextureEnabled(!parchmentTextureEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(parchmentTextureEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: parchmentTextureEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {parchmentTextureEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.parchmentTextureHint')}</p>
-        </section>
-
-        {/* ── Transitions ── */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.transitions')}</h3>
-          <button
-            onClick={() => setTransitionsEnabled(!transitionsEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(transitionsEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: transitionsEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {transitionsEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.transitionsHint')}</p>
-        </section>
-
-        {/* ── Mobile gesture toggle (mobile only) ── */}
-        {isMobile && (
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.mobileGesture')}</h3>
-          <button
-            onClick={() => setMobileGestureEnabled(!mobileGestureEnabled)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(mobileGestureEnabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: mobileGestureEnabled ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {mobileGestureEnabled ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.mobileGestureHint')}</p>
-        </section>
-        )}
-
-        {/* ── Immersive mode (mobile only, requires Fullscreen API support) ── */}
-        {isMobile && canFullscreen() && (
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.immersiveMode')}</h3>
-          <button
-            onClick={() => setImmersiveMode(!immersiveMode)}
-            style={{
-              ...btnBase,
-              fontSize: 12,
-              padding: '5px 8px',
-              display: 'flex', alignItems: 'center', gap: 6,
-              ...(immersiveMode ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-            }}
-          >
-            <span style={{
-              width: 8, height: 8, borderRadius: '50%',
-              background: immersiveMode ? 'var(--success)' : 'var(--text-dim)',
-              transition: 'background 0.15s ease',
-            }} />
-            {immersiveMode ? 'ON' : 'OFF'}
-          </button>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.immersiveModeHint')}</p>
-        </section>
-        )}
-
-        {/* ── Keybinding Mode (HIDDEN) ─────────────────────────────────
-          * 现代快捷键映射方案已验证可行，但独立实现维护成本高。
-          * 未来方向：改造为「插件激活模式」，利用 tmux 成熟的插件生态
-          * （如 tmux-sensible, tmux-pain-control 等）实现快捷键定制，
-          * OmniTerm 只负责 UI 开关和插件管理，不重复造轮子。
-          *
-          * 底层代码保留（appStore.keybindingMode + useTerminal handler），
-          * 等插件系统就绪后重新激活此 UI。
-          */}
-
-        {/* Info */}
-        <section className="space-y-2">
-          <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('settings.about')}</h3>
-          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-            <p>{t('settings.slogan')}</p>
-          </div>
-        </section>
+        ))}
+      </nav>
+      <div className="settings-content">
+        {activeCategory.sections.map((Section, i) => (
+          <Section key={i} />
+        ))}
       </div>
     </div>
   )

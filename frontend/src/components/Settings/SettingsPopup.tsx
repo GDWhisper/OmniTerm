@@ -24,6 +24,8 @@ export function SettingsPopup() {
       className="settings-popup"
       style={{
         position: 'fixed',
+        display: 'flex',
+        flexDirection: 'column',
         // Mobile: bottom sheet above MobileNav; Desktop: positioned popup
         ...(isMobile
           ? {
@@ -41,9 +43,7 @@ export function SettingsPopup() {
               top: pos.top,
               bottom: pos.bottom,
               borderRadius: 10,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              padding: 4,
+              overflow: 'hidden',
             }),
         width: isMobile ? '100%' : POPUP_WIDTH,
         zIndex: 50,
@@ -60,13 +60,7 @@ export function SettingsPopup() {
         <span>◆</span>
         <span>settings</span>
       </div>
-      {isMobile ? (
-        <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
-          <Settings />
-        </div>
-      ) : (
-        <Settings />
-      )}
+      <Settings />
     </div>
   )
 }

@@ -1057,6 +1057,77 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Settings panel — game-style tabbed layout.
+   Left rail (categories) + right pane (sections of active category).
+   Mirrors RPG menu aesthetics: wood-dark active tab, accent left border,
+   VT323 pixel font, hard 0px corners.
+   ──────────────────────────────────────────────────────────────────── */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+.settings-tabs {
+  width: 92px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  background: var(--bg-surface);
+  border-right: 2px solid var(--wood-shadow, #3A2E1F);
+  overflow-y: auto;
+}
+.settings-tab {
+  background: transparent;
+  border: none;
+  /* Reserve 3px on the left so active state doesn't shift tab width. */
+  border-left: 3px solid transparent;
+  padding: 9px 8px 9px 10px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s steps(2), color 0.1s steps(2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.settings-tab.active {
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  border-left-color: var(--accent, #58A6FF);
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent, #58A6FF);
+  outline-offset: -2px;
+}
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-content > section { margin: 0; }
+
+/* Dark theme: the wood tone becomes dark graphite, but the active-tab
+   treatment still reads as "selected" thanks to the accent left border. */
+.dark .settings-tabs { border-right-color: #090A0D; }
+.dark .settings-tab.active { background: #2A2520; color: #E6DFD0; }
+
+/* ────────────────────────────────────────────────────────────────────
    Segmented progress — HP/XP style bar of discrete blocks.
    ──────────────────────────────────────────────────────────────────── */
 .progress-segmented { margin-top: 2px; }

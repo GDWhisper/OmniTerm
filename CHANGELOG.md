@@ -65,6 +65,9 @@ Prefix each entry with the area it affects:
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — `bump-version.sh` 适配 version.ts 已改为读 env var（改为更新 `.env.local` 的 `BRANCH_VERSION`）（`scripts/bump-version.sh`）
 - (2026-07-02) `[docs]` README CLI 参考环境变量名修正 `OMNITERM_PORT`→`BACKEND_PORT`（`README.md`）
 - (2026-07-02) `[frontend]` 优化发布包体积与启动内存 — `FileEditor` 改为 `React.lazy` 懒加载，CodeMirror 语言包按文件扩展名动态 `import()`，主 chunk 从约 1.68 MB 降至 754 kB；未打开文件编辑器时不加载 editor 相关代码（`frontend/src/components/FileManager/FileEditor.tsx`、`frontend/src/components/FileManager/FileDrawer.tsx`）
+- (2026-07-03) `[frontend]` Sidebar 底部 WebSocket 状态指示器改像素风 — 5 格信号条 sprite + `LINK/LOST` 像素字标签，1px 硬边 + 2px 硬阴影，CSS 变量填充以适配明暗主题（`frontend/src/components/PixelUI/PixelSprites.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/*/translation.json`）
+- (2026-07-03) `[frontend]` Settings + TmuxCheatsheet 弹出面板 UI 打磨 — 提取 `useAnchorPopup` hook 统一定位（底部贴按钮 + maxHeight 贴合 logo 顶），Tmux 速查面板加 `.panel-title-bar` 统一标题风格，popup 滚动条 8px 硬角主题感知（`frontend/src/hooks/useAnchorPopup.ts`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx`、`frontend/src/index.css`）
+- (2026-07-03) `[frontend]` Settings 面板改游戏风格标签菜单 — 左侧 92px tab 列（APPEARANCE / AUDIO / EDIT / LANGUAGE / MOBILE），右侧滚动内容区；11 个 section 拆为 sub-component，复用 `ToggleRow` 消除复制代码；mobile-only 分类自动隐藏（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
 
 ### Removed
 
