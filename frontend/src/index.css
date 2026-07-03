@@ -1074,6 +1074,39 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Force-dark theme for tmux cheatsheet popup.
+   The popup always renders with the dark theme palette regardless of
+   the app's resolved theme, because tmux content is terminal-related
+   and looks more natural on a dark background (matches the terminal
+   pane color, avoids the visual clash of dark "reference card" content
+   on bright parchment chrome).
+   Mechanism: override theme CSS variables at the popup scope. All
+   children (.panel-title-bar, .tmux-cheatsheet-content, inline-styled
+   text in TmuxCheatsheet.tsx) inherit the dark values via var().
+   ──────────────────────────────────────────────────────────────────── */
+.tmux-popup-dark {
+  --bg-base: #12141A;
+  --bg-elevated: #1B1E26;
+  --bg-surface: #242832;
+  --text-primary: #D1D5DB;
+  --text-secondary: #8B949E;
+  --text-muted: #8B949E;
+  --text-faint: #6B7280;       /* slightly brighter than dark-theme #484F58
+                                  so prefix hint stays readable on dark */
+  --text-dim: #4B5563;         /* slightly brighter than dark-theme #30363D
+                                  so section hints stay readable on dark */
+  --border-subtle: #30363D;
+  --border-strong: #484F58;
+  --wood-dark: #2A2520;
+  --wood-shadow: #090A0D;
+  --accent: #58A6FF;
+  --accent-pink: #F778BA;
+  --success: #7EE787;
+  --danger: #FF7B72;
+  --warning: #FFA657;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Settings panel — game-style tabbed layout.
    Left rail (categories) + right pane (sections of active category).
    Mirrors RPG menu aesthetics: wood-dark active tab, accent left border,

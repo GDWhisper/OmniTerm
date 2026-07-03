@@ -22,7 +22,7 @@ export function TmuxCheatsheetPopup() {
     <div
       ref={ref}
       onMouseDown={(e) => e.stopPropagation()}
-      className="tmux-cheatsheet-popup"
+      className="tmux-cheatsheet-popup tmux-popup-dark"
       style={{
         position: 'fixed',
         display: 'flex',
