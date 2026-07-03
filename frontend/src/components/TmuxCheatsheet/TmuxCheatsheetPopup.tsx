@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { TmuxCheatsheet } from './TmuxCheatsheet'
 import { MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
@@ -6,6 +7,7 @@ import { useAnchorPopup } from '../../hooks/useAnchorPopup'
 const POPUP_WIDTH = 360
 
 export function TmuxCheatsheetPopup() {
+  const { t } = useTranslation()
   const { ref, pos, isMobile } = useAnchorPopup({
     toggleSelector: '[data-toggle="tmux-cheatsheet"]',
     topAnchorSelector: '.logo-title-bar',
@@ -54,6 +56,10 @@ export function TmuxCheatsheetPopup() {
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>{t('tmuxCheatsheet.title')}</span>
+      </div>
       {isMobile ? (
         <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
           <TmuxCheatsheet />

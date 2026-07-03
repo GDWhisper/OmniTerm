@@ -8,17 +8,6 @@ export function TmuxCheatsheet() {
 
   return (
     <div style={{ fontFamily: FONT, padding: '12px 16px' }}>
-      <h2
-        style={{
-          color: 'var(--text-primary)',
-          fontSize: 14,
-          fontWeight: 600,
-          letterSpacing: '0.3px',
-          marginBottom: 8,
-        }}
-      >
-        {t('tmuxCheatsheet.title')}
-      </h2>
       <p
         style={{
           fontSize: 11,

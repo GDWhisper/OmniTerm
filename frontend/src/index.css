@@ -1026,6 +1026,37 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Popup scrollbar — 8px wide, hard 0px corners, theme-aware.
+   Used on .settings-popup and .tmux-cheatsheet-popup (both scroll when
+   content overflows maxHeight). Keeps the pixel-game aesthetic instead of
+   falling back to the browser default.
+   ──────────────────────────────────────────────────────────────────── */
+.settings-popup::-webkit-scrollbar,
+.tmux-cheatsheet-popup::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.settings-popup::-webkit-scrollbar-track,
+.tmux-cheatsheet-popup::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.settings-popup::-webkit-scrollbar-thumb,
+.tmux-cheatsheet-popup::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+  border: 1px solid var(--scrollbar-track);
+}
+.settings-popup::-webkit-scrollbar-thumb:hover,
+.tmux-cheatsheet-popup::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+.settings-popup,
+.tmux-cheatsheet-popup {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Segmented progress — HP/XP style bar of discrete blocks.
    ──────────────────────────────────────────────────────────────────── */
 .progress-segmented { margin-top: 2px; }
