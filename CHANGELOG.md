@@ -76,6 +76,7 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[docs]` 面板规范拆分：视觉规格搬到 `docs/ui-style-guide.md` §12 — `frontend-patterns.md` 只保留代码架构，尺寸/颜色/态等 token 集中在 `ui-style-guide`；两份文档顶部互链避免重复；`AGENTS.md` 索引触发条件补上「规范撰写」与「状态栏面板/弹窗前必读」（`docs/ui-style-guide.md`、`docs/frontend-patterns.md`、`AGENTS.md`）
 - (2026-07-03) `[frontend]` 禁止纯白底色规则落地 — `--bg-surface` 从 `#FDF8EA` (RGB 253/248/234，接近纯白) 改为 `#F0E1B0` (明显黄调羊皮纸)，解决设置面板左侧栏发白问题；`ui-style-guide` §1.2 新增「底色规则：禁止纯白」条款（检测口诀 + 接受/不接受示例 + `git grep` 检测命令），§14 检查清单同步补上（`frontend/src/index.css`、`docs/ui-style-guide.md`）
 - (2026-07-03) `[frontend]` 底部连接状态改为黑底黑框 badge，避免 button 误解 — 参照 Terminal 顶部 `.title-bar-badge`（`● LIVE`）的「木底阴影 + 亮色文字」pattern，移除 `border` + `boxShadow` + `var(--bg-surface)` 亮底，背景改 `var(--wood-shadow)`；`SignalBarsSprite` 同时改为固定亮色（`#7EE787` / `#FF7B72`）不随主题变化（需在深棕底上可读）；`ui-style-guide` 新增 §4.1「Status Badge — 木底黑框（不可按状态指示器）」完整规范 + §14 检查项加上一条（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/PixelUI/PixelSprites.tsx`、`docs/ui-style-guide.md`）
+- (2026-07-03) `[frontend]` SignalBarsSprite 改粗：5 根 2px 细条 → 3 根 4px 粗条 — 深棕底上 2px 细条视觉太轻几乎看不到，换成 3 根 4px 宽 / 2px 间距的粗条（`x={0, 6, 12}`，依然 16x8 viewBox，无 sub-pixel），原有「全亮 / 全暗」二值语义保持（`frontend/src/components/PixelUI/PixelSprites.tsx`）
 
 ### Removed
 

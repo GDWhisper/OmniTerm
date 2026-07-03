@@ -64,11 +64,13 @@ export const StatusStoppedSprite: FC<BaseSpriteProps> = (props) => (
   <StatusBarSprite {...props} color="#A89474" ariaLabel="stopped status" />
 )
 
-/** WebSocket/HTTP link status — 5 vertical bars, all lit or all dim (binary).
+/** WebSocket/HTTP link status — 3 thick vertical bars (4px wide, 2px gap),
+ *  all lit or all dim (binary). Chunky weight chosen over the original 5 thin
+ *  bars (2px) — thin bars got visually lost on the dark badge background.
  *  Uses fixed terminal-style colors (bright green / red) because the sprite
- *  is designed to live on a dark "badge" background (see .title-bar-badge
- *  + bottom connection status in Sidebar). Don't theme-adapt — the
- *  "connection is alive" signal is intentionally consistent across themes. */
+ *  lives on a dark "badge" background (see .title-bar-badge + bottom
+ *  connection status in Sidebar). Don't theme-adapt — the "connection is
+ *  alive" signal is intentionally consistent across themes. */
 export const SignalBarsSprite: FC<BaseSpriteProps & { connected: boolean }> = ({
   size = 16,
   className,
@@ -86,8 +88,8 @@ export const SignalBarsSprite: FC<BaseSpriteProps & { connected: boolean }> = ({
       style={{ ...baseStyle, fill: color }}
       className={className}
     >
-      {[0, 3, 6, 9, 12].map((x) => (
-        <rect key={x} x={x} y="0" width="2" height="8" />
+      {[0, 6, 12].map((x) => (
+        <rect key={x} x={x} y="0" width="4" height="8" />
       ))}
     </svg>
   )
