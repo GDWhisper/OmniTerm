@@ -4,7 +4,6 @@ import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
-import { GitBranchIcon } from '../Icons/GitBranchIcon'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
@@ -15,7 +14,7 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
-import { FolderSprite, PixelButton, SegmentedProgress, SignalBarsSprite } from '../PixelUI'
+import { FolderSprite, GitBranchSprite, PixelButton, SignalBarsSprite } from '../PixelUI'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -60,35 +59,6 @@ function SidebarBottomButton({
     >
       {icon}
     </button>
-  )
-}
-
-function ProjectPath({ path }: { path: string }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const [overflow, setOverflow] = useState(false)
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const check = () => setOverflow(el.scrollWidth > el.clientWidth)
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    check()
-    return () => ro.disconnect()
-  }, [path])
-
-  return (
-    <span
-      ref={ref}
-      className="block truncate"
-      style={{
-        fontSize: 11,
-        color: 'var(--text-faint)',
-        direction: overflow ? 'rtl' : 'ltr',
-      }}
-    >
-      {path}
-    </span>
   )
 }
 
@@ -998,38 +968,25 @@ export function Sidebar() {
             )
 
             return (
-              <div key={proj.id} className="relative mb-2">
-                {/* Project item */}
+              <div key={proj.id} className="sidebar-project-card">
+                {/* Project header — stacked name + path */}
                 <div
-                  className="flex items-center justify-between cursor-pointer rounded-lg transition-all"
-                  style={{
-                    padding: '10px 14px',
-                    background: isExpanded
-                      ? 'linear-gradient(90deg, rgba(167,139,250,0.08), transparent)'
-                      : 'transparent',
-                    border: `1px solid ${isExpanded ? 'rgba(167,139,250,0.12)' : 'var(--border-subtle)'}`,
-                  }}
+                  className="sidebar-project-header"
                   onClick={() => toggleProject(proj.id)}
                 >
-                  <div className="flex-1 min-w-0 mr-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={projHasActiveSession ? 'activity-pulse' : ''}
-                        style={{
-                          color: isExpanded || projHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
-                          fontSize: 12,
-                          transition: 'transform 0.15s',
-                          display: 'inline-block',
-                          transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                        }}
-                      >▸</span>
-                      <span style={{ color: isExpanded ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: isExpanded ? 500 : 400, fontSize: 13 }}>
-                        {proj.name}
-                      </span>
-                    </div>
-                    <div className="pl-5 mt-0.5">
-                      <ProjectPath path={proj.path} />
-                    </div>
+                  <span
+                    className={projHasActiveSession ? 'activity-pulse' : ''}
+                    style={{
+                      fontSize: 10,
+                      color: isExpanded || projHasActiveSession ? 'var(--text-secondary)' : 'var(--text-faint)',
+                      marginTop: 2,
+                    }}
+                  >
+                    {isExpanded ? '▼' : '▶'}
+                  </span>
+                  <div className="proj-info">
+                    <span className="proj-name">{proj.name}</span>
+                    <span className="proj-path">{proj.path}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <EditButton
@@ -1051,7 +1008,7 @@ export function Sidebar() {
 
                 {/* Worktrees under expanded project */}
                 {isExpanded && (
-                  <div className="pl-4 pr-1 pt-1 pb-1">
+                  <div className="sidebar-project-body">
                     {wtList.length === 0 ? (
                       <div className="px-2 py-1.5" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
                         {t('sidebar.noWorktrees') ?? 'No worktrees found'}
@@ -1064,78 +1021,36 @@ export function Sidebar() {
                         const isWtExpanded = isWtActive
 
                         return (
-                          <div key={wt.id} className="mb-1">
-                            {/* Worktree item */}
+                          <div key={wt.id} className={`sidebar-wt-slot ${isWtActive ? 'active' : ''}`}>
+                            {/* Worktree row */}
                             <div
-                              className="flex items-center justify-between cursor-pointer rounded-md transition-all"
-                              style={{
-                                padding: '6px 10px',
-                                background: isWtActive ? 'rgba(167,139,250,0.1)' : 'transparent',
-                                border: `1px solid ${isWtActive ? 'rgba(167,139,250,0.15)' : 'transparent'}`,
-                              }}
+                              className="sidebar-wt-row"
                               onClick={() => handleWorkspaceClick(proj, wt)}
                             >
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
-                                <span
-                                  className={`rounded-full flex items-center justify-center ${wtHasActiveSession ? 'activity-pulse' : ''}`}
-                                  style={{
-                                    width: 16,
-                                    height: 16,
-                                    color: isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)',
-                                  }}
-                                >
-                                  <GitBranchIcon
-                                    size={14}
-                                    color={isWtActive || wtHasActiveSession ? 'var(--accent)' : 'var(--text-dim)'}
-                                  />
-                                </span>
-                                <span
-                                  className="truncate"
-                                  style={{
-                                    fontSize: 12,
-                                    color: isWtActive ? 'var(--accent)' : 'var(--text-muted)',
-                                    fontWeight: isWtActive ? 500 : 400,
-                                    fontFamily: FONT,
-                                  }}
-                                >
-                                  {wt.label}
-                                </span>
-                                <span
-                                  style={{
-                                    fontSize: 11,
-                                    color: 'var(--text-dim)',
-                                    marginLeft: 4,
-                                    fontFamily: FONT,
-                                  }}
-                                >
-                                  {wtSessions.length}
-                                </span>
-                              </div>
+                              <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
+                              <GitBranchSprite
+                                size={14}
+                                color={isWtActive || wtHasActiveSession ? '#58A6FF' : '#A89474'}
+                                className={wtHasActiveSession ? 'activity-pulse' : ''}
+                              />
+                              <span className="branch-name">{wt.label}</span>
+                              <span className="session-count">{wtSessions.length}</span>
+                              <button
+                                className="sidebar-wt-add-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  triggerBump(e.currentTarget)
+                                  setCreateSessOpen(true)
+                                }}
+                                title={t('sidebar.createSession')}
+                              >
+                                +
+                              </button>
                             </div>
 
-                            {/* Sessions under active worktree */}
+                            {/* Sessions inline under active worktree */}
                             {isWtExpanded && (
-                              <div className="pl-5 pr-1 pt-1 pb-1">
-                                <div className="panel-title-bar mb-1" style={{ padding: '3px 8px', fontSize: 11 }}>
-                                  <span>◆</span>
-                                  <span>{t('sidebar.sessions')}</span>
-                                  <span className="title-bar-badge">{wtSessions.length}</span>
-                                  <span className="title-bar-spacer" />
-                                  <PixelButton
-                                    variant="accent"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      triggerBump(e.currentTarget)
-                                      setCreateSessOpen(true)
-                                    }}
-                                    title={t('sidebar.createSession')}
-                                    style={{ padding: '0 5px', fontSize: 12 }}
-                                  >
-                                    +
-                                  </PixelButton>
-                                </div>
-
+                              <div className="sidebar-session-list">
                                 {wtSessions.map((s) => {
                                   const isSessionActive = activeSessionId === s.id
                                   const sessionKey = s.id
@@ -1143,13 +1058,7 @@ export function Sidebar() {
                                   return (
                                     <div
                                       key={s.id}
-                                      className="flex items-center gap-2 rounded-md cursor-pointer transition-all"
-                                      style={{
-                                        padding: '5px 8px',
-                                        marginBottom: 2,
-                                        background: isSessionActive ? 'rgba(167,139,250,0.08)' : 'transparent',
-                                        border: isSessionActive ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
-                                      }}
+                                      className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
                                       onClick={() => {
                                         setActiveSession(s.id)
                                         setActiveExternalSession(null)
@@ -1161,10 +1070,10 @@ export function Sidebar() {
                                     >
                                       {/* Running indicator dot */}
                                       <div
-                                        className={`rounded-full flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
+                                        className={`flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
                                         style={{
-                                          width: 5,
-                                          height: 5,
+                                          width: 6,
+                                          height: 6,
                                           background: attnReason
                                             ? attnReason === 'decision'
                                               ? 'var(--warning)'
@@ -1173,29 +1082,18 @@ export function Sidebar() {
                                                 : 'var(--success)'
                                             : s.is_active
                                               ? 'var(--accent)'
-                                              : 'var(--text-dim)',
-                                          boxShadow: attnReason ? 'var(--accent-glow-sm)' : 'none',
+                                              : 'var(--text-faint)',
+                                          boxShadow: s.is_active && !attnReason ? '0 0 4px var(--accent)' : 'none',
                                         }}
                                       />
-                                      <span
-                                        className="truncate flex-1"
-                                        style={{ fontSize: 12, color: isSessionActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
-                                      >
+                                      <span className="session-name">
                                         {s.name || s.tmux_session_name}
                                       </span>
                                       {/* Attention badge */}
                                       {attnReason && (
                                         <span
-                                          className="flex-shrink-0 rounded-full flex items-center justify-center animate-pulse"
+                                          className="session-attn animate-pulse"
                                           style={{
-                                            width: 16,
-                                            height: 16,
-                                            fontSize: 10,
-                                            background: attnReason === 'decision'
-                                              ? 'rgba(255, 166, 87, 0.2)'
-                                              : attnReason === 'error'
-                                                ? 'rgba(239,68,68,0.2)'
-                                                : 'rgba(34,197,94,0.2)',
                                             color: attnReason === 'decision'
                                               ? 'var(--warning)'
                                               : attnReason === 'error'
@@ -1210,14 +1108,6 @@ export function Sidebar() {
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
                                       )}
-                                      {/* Agent enable button — commented out pending notification scheme decision.
-                                          See docs/requirements.md "Agent 状态监控与通知".
-                                      {s.agent_detected && !s.hook_enabled && (
-                                        <div className="relative flex-shrink-0">
-                                          ...
-                                        </div>
-                                      )}
-                                      */}
                                       <EditButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -1245,11 +1135,6 @@ export function Sidebar() {
                                     {t('sidebar.noSessions')}
                                   </div>
                                 )}
-                                <SegmentedProgress
-                                  label={t('sidebar.sessions')}
-                                  value={wtSessions.filter(s => s.is_active).length}
-                                  max={Math.max(wtSessions.length, 1)}
-                                />
                               </div>
                             )}
                           </div>
@@ -1295,8 +1180,8 @@ export function Sidebar() {
                     className="flex items-center gap-2 rounded-md transition-all mb-1 cursor-pointer"
                     style={{
                       padding: '5px 8px',
-                      background: activeExternalSession === s.name ? 'rgba(167,139,250,0.08)' : 'transparent',
-                      border: activeExternalSession === s.name ? '1px solid rgba(167,139,250,0.1)' : '1px solid transparent',
+                      background: activeExternalSession === s.name ? 'var(--accent-10)' : 'transparent',
+                      border: activeExternalSession === s.name ? '1px solid var(--accent-14)' : '1px solid transparent',
                     }}
                     onClick={() => {
                       setActiveSession(null)
@@ -1304,7 +1189,7 @@ export function Sidebar() {
                     }}
                     onMouseEnter={(e) => {
                       if (activeExternalSession === s.name) return
-                      e.currentTarget.style.background = 'rgba(167,139,250,0.06)'
+                      e.currentTarget.style.background = 'var(--accent-10)'
                     }}
                     onMouseLeave={(e) => {
                       if (activeExternalSession === s.name) return
@@ -1383,7 +1268,7 @@ export function Sidebar() {
                           onMouseEnter={(e) => {
                             if (!adoptProjectId) return
                             e.currentTarget.style.background = 'var(--accent-14)'
-                            e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
+                            e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.background = 'transparent'
@@ -1417,7 +1302,7 @@ export function Sidebar() {
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = 'var(--accent-14)'
-                          e.currentTarget.style.boxShadow = '0 0 8px rgba(167,139,250,0.2)'
+                          e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                         }}
                         onMouseLeave={(e) => {
                           e.currentTarget.style.background = 'transparent'
@@ -1500,7 +1385,7 @@ export function Sidebar() {
               autoFocus
               className={inputClass}
               style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
           </div>
@@ -1521,7 +1406,7 @@ export function Sidebar() {
               placeholder={homeDir}
               className={inputClass}
               style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
             />
             <div className="text-[10px] mt-1" style={{ color: 'var(--text-faint)' }}>
               {t('sidebar.pathHint') ?? '回车或失焦以应用路径'}
@@ -1578,7 +1463,7 @@ export function Sidebar() {
                 }}
                 onMouseEnter={(e) => {
                   if (!getParentPath(browsePath)) return
-                  e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                  e.currentTarget.style.background = 'var(--accent-10)'
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = 'transparent'
@@ -1613,7 +1498,7 @@ export function Sidebar() {
               {/* Path doesn't exist — will be auto-created on submit */}
               {!browseLoading && browseNotFound && (
                 <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
-                  <IconFolderPlus width={20} height={20} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <IconFolderPlus width={20} height={20} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
                   <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.pathWillBeCreated') ?? '该路径不存在，创建项目时将自动创建'}</div>
                 </div>
               )}
@@ -1621,7 +1506,7 @@ export function Sidebar() {
               {/* Empty state */}
               {!browseLoading && !browseNotFound && !browseError && browseEntries.length === 0 && (
                 <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
-                  <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                  <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
                   <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? '空目录'}</div>
                 </div>
               )}
@@ -1638,7 +1523,7 @@ export function Sidebar() {
                     cursor: 'pointer',
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                    e.currentTarget.style.background = 'var(--accent-10)'
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = 'transparent'
@@ -1678,7 +1563,7 @@ export function Sidebar() {
               autoFocus
               className={inputClass}
               style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
           </div>
@@ -1724,7 +1609,7 @@ export function Sidebar() {
               autoFocus
               className={inputClass}
               style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
           </div>
@@ -1818,7 +1703,7 @@ export function Sidebar() {
                 placeholder="/home/user/project"
                 className={inputClass}
                 style={inputStyle}
-                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px rgba(167,139,250,0.2)' }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               />
             </div>
 
@@ -1873,7 +1758,7 @@ export function Sidebar() {
                   }}
                   onMouseEnter={(e) => {
                     if (!getParentPath(repairBrowsePath)) return
-                    e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                    e.currentTarget.style.background = 'var(--accent-10)'
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = 'transparent'
@@ -1908,7 +1793,7 @@ export function Sidebar() {
                 {/* Empty state */}
                 {!repairBrowseLoading && !repairBrowseError && repairBrowseEntries.length === 0 && (
                   <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
-                    <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.4))' }} />
+                    <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
                     <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? 'Empty directory'}</div>
                   </div>
                 )}
@@ -1925,7 +1810,7 @@ export function Sidebar() {
                       cursor: 'pointer',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'rgba(167,139,250,0.08)'
+                      e.currentTarget.style.background = 'var(--accent-10)'
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.background = 'transparent'

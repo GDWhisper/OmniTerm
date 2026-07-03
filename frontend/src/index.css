@@ -834,6 +834,177 @@ html, body, #root {
   box-shadow: none;
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   Sidebar project card — bordered card with light header row.
+   Follows docs/ui-style-guide.md: border-radius 0, hard shadow,
+   --bg-surface header differentiated from section title bar.
+   ──────────────────────────────────────────────────────────────────── */
+.sidebar-project-card {
+  border: 2px solid var(--border-strong);
+  margin-bottom: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+}
+
+.sidebar-project-header {
+  background: var(--bg-surface);
+  padding: 5px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-project-header .proj-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-project-header .proj-name {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.sidebar-project-header .proj-path {
+  display: block;
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+  direction: rtl;
+  text-align: left;
+}
+
+.sidebar-project-body {
+  padding: 6px;
+}
+
+/* ── Worktree slot — game-style equipment slot inside project card ── */
+.sidebar-wt-slot {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-base);
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.sidebar-wt-slot:hover {
+  background: var(--bg-surface);
+}
+
+.sidebar-wt-slot.active {
+  border: 2px solid var(--border-strong);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+  background: var(--bg-surface);
+}
+
+.sidebar-wt-row {
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-wt-row .branch-name {
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-wt-slot.active .sidebar-wt-row .branch-name {
+  color: var(--accent);
+}
+
+.sidebar-wt-row .session-count {
+  font-family: 'VT323', monospace;
+  font-size: 12px;
+  background: var(--wood-shadow, #3A2E1F);
+  color: #7EE787;
+  padding: 0 4px;
+  box-shadow:
+    inset 1px 1px 0 var(--wood-inset-dark, #1a1208),
+    inset -1px -1px 0 var(--wood-inset-light, #5a4a30);
+}
+
+.sidebar-wt-add-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: 'VT323', monospace;
+  font-size: 12px;
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sidebar-wt-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Session list — inline below active worktree, no container chrome ── */
+.sidebar-session-list {
+  padding: 2px 4px 4px 28px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.sidebar-session-item {
+  padding: 3px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  margin-bottom: 1px;
+  color: var(--text-secondary);
+}
+
+.sidebar-session-item:hover {
+  background: var(--bg-elevated);
+}
+
+.sidebar-session-item.active {
+  background: var(--bg-surface);
+  border-left: 2px solid var(--accent);
+  padding-left: 4px;
+  color: var(--text-primary);
+}
+
+.sidebar-session-item .session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+}
+
+.sidebar-session-item .session-attn {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: var(--wood-shadow, #3A2E1F);
+  box-shadow:
+    inset 1px 1px 0 var(--wood-inset-dark, #1a1208),
+    inset -1px -1px 0 var(--wood-inset-light, #5a4a30);
+  flex-shrink: 0;
+}
+
 /* ── Settings popup slide-in ── */
 @keyframes settings-slide-in {
   from { opacity: 0; transform: translateY(8px); }

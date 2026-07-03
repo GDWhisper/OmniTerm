@@ -95,13 +95,13 @@ export const SignalBarsSprite: FC<BaseSpriteProps & { connected: boolean }> = ({
   )
 }
 
-export const GitBranchSprite: FC<BaseSpriteProps> = ({ size = 16, className }) => (
+export const GitBranchSprite: FC<BaseSpriteProps & { color?: string }> = ({ size = 16, className, color = '#F778BA' }) => (
   <svg role="img" aria-label="git branch" width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
-    <rect x="4" y="2" width="2" height="12" fill="#F778BA" />
-    <rect x="10" y="2" width="2" height="6" fill="#F778BA" />
-    <rect x="6" y="6" width="4" height="2" fill="#F778BA" />
-    <rect x="3" y="1" width="4" height="2" fill="#F778BA" />
-    <rect x="9" y="1" width="4" height="2" fill="#F778BA" />
-    <rect x="3" y="13" width="4" height="2" fill="#F778BA" />
+    <rect x="4" y="2" width="2" height="12" fill={color} />
+    <rect x="10" y="2" width="2" height="6" fill={color} />
+    <rect x="6" y="6" width="4" height="2" fill={color} />
+    <rect x="3" y="1" width="4" height="2" fill={color} />
+    <rect x="9" y="1" width="4" height="2" fill={color} />
+    <rect x="3" y="13" width="4" height="2" fill={color} />
   </svg>
 )
