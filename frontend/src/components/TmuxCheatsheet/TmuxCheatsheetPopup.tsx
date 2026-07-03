@@ -25,6 +25,8 @@ export function TmuxCheatsheetPopup() {
       className="tmux-cheatsheet-popup"
       style={{
         position: 'fixed',
+        display: 'flex',
+        flexDirection: 'column',
         // Mobile: bottom sheet above MobileNav + MobileStatusBar; Desktop: positioned popup
         ...(isMobile
           ? {
@@ -42,9 +44,7 @@ export function TmuxCheatsheetPopup() {
               top: pos.top,
               bottom: pos.bottom,
               borderRadius: 10,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              padding: 4,
+              overflow: 'hidden',
             }),
         width: isMobile ? '100%' : POPUP_WIDTH,
         zIndex: 50,
@@ -60,13 +60,12 @@ export function TmuxCheatsheetPopup() {
         <span>◆</span>
         <span>{t('tmuxCheatsheet.title')}</span>
       </div>
-      {isMobile ? (
-        <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
-          <TmuxCheatsheet />
-        </div>
-      ) : (
+      <div
+        className="tmux-cheatsheet-content"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}
+      >
         <TmuxCheatsheet />
-      )}
+      </div>
     </div>
   )
 }

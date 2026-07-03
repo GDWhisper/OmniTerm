@@ -132,7 +132,7 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
           background: value ? 'var(--success)' : 'var(--text-dim)',
           transition: 'background 0.15s ease',
         }} />
-        {value ? 'ON' : 'OFF'}
+        {value ? t('settings.on') : t('settings.off')}
       </button>
       <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
     </section>

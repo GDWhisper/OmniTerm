@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
 import { MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
@@ -8,6 +9,7 @@ import { useAnchorPopup } from '../../hooks/useAnchorPopup'
 const POPUP_WIDTH_RATIO = 0.25
 
 export function SettingsPopup() {
+  const { t } = useTranslation()
   // Track viewport width so useAnchorPopup can clamp horizontally to match the
   // popup's actual rendered width (which is 25vw in CSS).
   const [popupWidthPx, setPopupWidthPx] = useState(() =>
@@ -77,7 +79,7 @@ export function SettingsPopup() {
     >
       <div className="panel-title-bar">
         <span>◆</span>
-        <span>settings</span>
+        <span>{t('settings.title')}</span>
       </div>
       <Settings />
     </div>

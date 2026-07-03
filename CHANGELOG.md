@@ -70,6 +70,9 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[frontend]` Settings 面板改游戏风格标签菜单 — 左侧 92px tab 列（APPEARANCE / AUDIO / EDIT / LANGUAGE / MOBILE），右侧滚动内容区；11 个 section 拆为 sub-component，复用 `ToggleRow` 消除复制代码；mobile-only 分类自动隐藏（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
 - (2026-07-03) `[frontend]` Settings 面板固定高度为视口 1/3 — 切 tab 时 popup 高度不变，右侧 `.settings-content` 负责滚动以处理超出内容；maxHeight 保留为 logo 到按钮的硬上限以防极短视口溢出（`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/index.css`）
 - (2026-07-03) `[frontend]` Settings 面板宽度从固定 340px 改为视口 1/4 — `width: 25vw` + hook 的 `width` 参数同步随 `resize` 更新，以保证水平 clamp 不会让 popup 溢出右侧（`frontend/src/components/Settings/SettingsPopup.tsx`）
+- (2026-07-03) `[frontend]` Settings 面板 i18n 补齐 — 顶部标题、ToggleRow 的 ON/OFF 状态走 i18n，en/zh 各加 `settings.on` / `settings.off` 2 个 key（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/locales/*/translation.json`）
+- (2026-07-03) `[frontend]` Tmux 速查面板结构与 Settings 对齐 — popup 改为 `display: flex; flexDirection: column; overflow: hidden`，顶部 `.panel-title-bar` 不再被 4px padding 隔开，滚动交给新加的 `.tmux-cheatsheet-content` 容器（`frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx`、`frontend/src/index.css`）
+- (2026-07-03) `[docs]` 「状态栏游戏风格面板模板」写进 `docs/frontend-patterns.md` — 以 Settings 为 reference implementation，记录布局/尺寸/Tab/section 拆分/i18n/复制清单/验证清单，供后续状态栏新增按钮参考；`agent-edit-manual.md` 的 Settings 入口同步指向新模板（`docs/frontend-patterns.md`、`docs/agent-edit-manual.md`）
 
 ### Removed
 

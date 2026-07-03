@@ -38,6 +38,8 @@
   "sidebar.noWorktrees": "No worktrees found",
   "sidebar.noSessions": "No sessions",
   "settings.title": "Settings",
+  "settings.on": "ON",
+  "settings.off": "OFF",
   "settings.theme": "Theme",
   "settings.light": "Light",
   "settings.dark": "Dark",

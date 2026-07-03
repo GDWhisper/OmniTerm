@@ -38,6 +38,8 @@
   "sidebar.noWorktrees": "暂无 worktree",
   "sidebar.noSessions": "暂无会话",
   "settings.title": "设置",
+  "settings.on": "开",
+  "settings.off": "关",
   "settings.theme": "主题",
   "settings.light": "亮色",
   "settings.dark": "暗色",
