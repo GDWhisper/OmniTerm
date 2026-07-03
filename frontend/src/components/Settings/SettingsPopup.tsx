@@ -8,6 +8,7 @@ const POPUP_WIDTH = 340
 export function SettingsPopup() {
   const { ref, pos, isMobile } = useAnchorPopup({
     toggleSelector: '[data-toggle="settings"]',
+    topAnchorSelector: '.logo-title-bar',
     width: POPUP_WIDTH,
     onClose: useAppStore((s) => s.toggleSettings),
   })

@@ -8,6 +8,7 @@ const POPUP_WIDTH = 360
 export function TmuxCheatsheetPopup() {
   const { ref, pos, isMobile } = useAnchorPopup({
     toggleSelector: '[data-toggle="tmux-cheatsheet"]',
+    topAnchorSelector: '.logo-title-bar',
     width: POPUP_WIDTH,
     onClose: useAppStore((s) => s.toggleTmuxCheatsheet),
   })
