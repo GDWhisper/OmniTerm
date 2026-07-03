@@ -15,7 +15,7 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
-import { FolderSprite, PixelButton, SegmentedProgress } from '../PixelUI'
+import { FolderSprite, PixelButton, SegmentedProgress, SignalBarsSprite } from '../PixelUI'
 
 const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
@@ -890,7 +890,7 @@ export function Sidebar() {
         <OmniTermLogo size={48} />
         <div style={{ flex: 1, lineHeight: 1.1 }}>
           <div className="logo-wordmark">OmniTerm</div>
-          <div className="logo-version">v{APP_VERSION} · LV.07</div>
+          <div className="logo-version">v{APP_VERSION}</div>
         </div>
         <div className="flex items-center gap-1.5">
           {/* Terminal CWD button — pulses when outside terminal CWD */}
@@ -1440,18 +1440,26 @@ export function Sidebar() {
         className="absolute bottom-0 left-0 right-0 px-3.5 py-3 flex items-center justify-between"
         style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-base)' }}
       >
-        <div className="flex items-center gap-2">
-          <div
-            className="rounded-full"
+        <div
+          className="flex items-center gap-1.5"
+          style={{
+            padding: '2px 6px 2px 4px',
+            border: '1px solid var(--border-strong)',
+            background: 'var(--bg-surface)',
+            boxShadow: '2px 2px 0 var(--pixel-shadow)',
+          }}
+        >
+          <SignalBarsSprite size={14} connected={connected} />
+          <span
+            className="font-pixel"
             style={{
-              width: 6,
-              height: 6,
-              background: connected ? 'var(--success)' : 'var(--danger)',
-              boxShadow: connected ? 'var(--success-glow)' : 'var(--danger-glow)',
+              fontSize: 13,
+              letterSpacing: 2,
+              color: connected ? 'var(--success)' : 'var(--danger)',
             }}
-          />
-          <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{connected ? t('sidebar.connected') : t('sidebar.disconnected')}</span>
-          <span style={{ fontSize: 10, color: 'var(--text-dim)', marginLeft: 4 }}>v{APP_VERSION}</span>
+          >
+            {connected ? t('sidebar.link') : t('sidebar.lost')}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <SidebarBottomButton

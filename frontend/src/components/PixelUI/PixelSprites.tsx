@@ -64,6 +64,32 @@ export const StatusStoppedSprite: FC<BaseSpriteProps> = (props) => (
   <StatusBarSprite {...props} color="#A89474" ariaLabel="stopped status" />
 )
 
+/** WebSocket/HTTP link status — 5 vertical bars, all lit or all dim (binary).
+ *  Color comes from CSS vars via `style.fill` so it auto-adapts light/dark theme. */
+export const SignalBarsSprite: FC<BaseSpriteProps & { connected: boolean }> = ({
+  size = 16,
+  className,
+  connected,
+}) => {
+  const color = connected ? 'var(--success)' : 'var(--danger)'
+  return (
+    <svg
+      role="img"
+      aria-label={connected ? 'link ok' : 'link lost'}
+      width={size}
+      height={size * 0.5}
+      viewBox="0 0 16 8"
+      shapeRendering="crispEdges"
+      style={{ ...baseStyle, fill: color }}
+      className={className}
+    >
+      {[0, 3, 6, 9, 12].map((x) => (
+        <rect key={x} x={x} y="0" width="2" height="8" />
+      ))}
+    </svg>
+  )
+}
+
 export const GitBranchSprite: FC<BaseSpriteProps> = ({ size = 16, className }) => (
   <svg role="img" aria-label="git branch" width={size} height={size} viewBox="0 0 16 16" shapeRendering="crispEdges" style={baseStyle} className={className}>
     <rect x="4" y="2" width="2" height="12" fill="#F778BA" />

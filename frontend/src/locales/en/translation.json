@@ -32,6 +32,8 @@
   "sidebar.unnamed": "Unnamed",
   "sidebar.connected": "Connected",
   "sidebar.disconnected": "Disconnected",
+  "sidebar.link": "LINK",
+  "sidebar.lost": "LOST",
   "sidebar.noProjects": "No projects yet",
   "sidebar.noWorktrees": "No worktrees found",
   "sidebar.noSessions": "No sessions",

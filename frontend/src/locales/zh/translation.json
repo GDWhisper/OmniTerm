@@ -32,6 +32,8 @@
   "sidebar.unnamed": "未命名",
   "sidebar.connected": "已连接",
   "sidebar.disconnected": "未连接",
+  "sidebar.link": "已连接",
+  "sidebar.lost": "已断开",
   "sidebar.noProjects": "暂无项目",
   "sidebar.noWorktrees": "暂无 worktree",
   "sidebar.noSessions": "暂无会话",

@@ -8,6 +8,7 @@ export {
   StatusRunningSprite,
   StatusStoppedSprite,
   GitBranchSprite,
+  SignalBarsSprite,
 } from './PixelSprites'
 export type { BaseSpriteProps, SpriteProps } from './PixelSprites'
 export { SegmentedProgress } from './SegmentedProgress'
