@@ -3,11 +3,17 @@ import { useAppStore } from '../stores/appStore'
 import { GAP } from '../components/constants/popup'
 
 export interface AnchorPopupPos {
-  /** Distance from viewport top to popup top edge (px). */
-  top: number
+  /** Distance from viewport top to popup top edge (px). Set when popup sits below the button. */
+  top?: number
+  /** Distance from viewport bottom to popup bottom edge (px). Set when popup sits above the button. */
+  bottom?: number
   /** Distance from viewport left to popup left edge (px). */
   left: number
-  /** Max height the popup is allowed to render (px), so it never overflows the viewport. */
+  /**
+   * Max height in pixels. The popup renders at content height by default and only
+   * grows to this value if its content is taller. Use this to bound the popup
+   * within the available space (e.g. between a top anchor and the trigger button).
+   */
   maxHeight: number
 }
 
@@ -16,9 +22,12 @@ export interface UseAnchorPopupOptions {
   toggleSelector: string
   /**
    * Optional CSS selector for a top anchor element (e.g. sidebar logo title bar).
-   * When provided, the popup's top edge sits just below this element instead of GAP
-   * from the viewport top, so the popup fills the space between the top anchor and
-   * the trigger button. When omitted, the popup anchors to the viewport top.
+   * When provided:
+   *   - The popup's BOTTOM edge sits just above the trigger button (visually near it).
+   *   - The popup grows upward to fit its content; maxHeight is bounded so the
+   *     popup's top can never go above this element + GAP.
+   * When omitted, the popup prefers to appear above the button; if the space above
+   * is less than `minSpaceAbove`, it flips below.
    */
   topAnchorSelector?: string
   /** Popup width in pixels. Used for horizontal clamping. */
@@ -26,8 +35,9 @@ export interface UseAnchorPopupOptions {
   /** Callback to close the popup. */
   onClose: () => void
   /**
-   * Minimum vertical space required above the button to prefer "above" placement.
-   * Only used in the no-anchor (viewport-anchored) mode. Default 240px.
+   * Free-mode only: minimum vertical space required above the button to prefer
+   * "above" placement. If the space above is less than this, the popup flips below.
+   * Default 240px.
    */
   minSpaceAbove?: number
 }
@@ -43,12 +53,14 @@ const DEFAULT_MIN_SPACE_ABOVE = 240
 /**
  * Positions a popup relative to a trigger button and keeps it inside the viewport.
  *
- * Computes space above and below the button in a single pass, picks the better side,
- * and clamps the max-height so the popup never overflows the viewport top or bottom.
- * Re-runs on window resize and on mount.
+ * The popup's bottom edge is anchored just above the trigger button (visually
+ * attached to it). The popup grows upward to fit its content; if the content
+ * exceeds the available space, maxHeight caps it and the popup scrolls. With
+ * `topAnchorSelector`, the available space is bounded above by that element so
+ * the popup never overflows the top boundary (e.g. into the sidebar logo).
  *
- * Also wires up outside-click and Escape-to-close handlers. The consumer just needs
- * to attach the returned `ref` to the popup root and render it.
+ * Re-positions on window resize, and wires up outside-click and Escape-to-close
+ * handlers automatically.
  */
 export function useAnchorPopup({
   toggleSelector,
@@ -59,7 +71,9 @@ export function useAnchorPopup({
 }: UseAnchorPopupOptions): UseAnchorPopupResult {
   const ref = useRef<HTMLDivElement>(null)
   const isMobile = useAppStore((s) => s.isMobile)
-  const [pos, setPos] = useState<AnchorPopupPos>({ top: GAP, left: GAP, maxHeight: 0 })
+  // Default: popup anchored near the viewport bottom (where sidebar buttons live),
+  // so the first render before calcPos doesn't flash at the wrong place.
+  const [pos, setPos] = useState<AnchorPopupPos>({ bottom: GAP, left: GAP, maxHeight: 0 })
 
   const calcPos = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -69,34 +83,37 @@ export function useAnchorPopup({
     const vw = window.innerWidth
     const vh = window.innerHeight
 
-    // Top boundary: just below the top anchor element if provided, else GAP from viewport top.
-    const topAnchorEl = topAnchorSelector
-      ? (document.querySelector(topAnchorSelector) as HTMLElement | null)
-      : null
-
-    let top: number
-    let maxHeight: number
-
-    if (topAnchorEl) {
-      // Anchored mode: popup fills the space between the top anchor and the button.
-      // Always sits above the button (below would overlap the status bar / trigger).
-      top = topAnchorEl.getBoundingClientRect().bottom + GAP
-      maxHeight = Math.max(0, rect.top - GAP - top)
-    } else {
-      // Free mode: prefer above the button, flip below if above-space is too small.
-      const spaceAbove = Math.max(0, rect.top - GAP)
-      const spaceBelow = Math.max(0, vh - rect.bottom - GAP)
-      const useBelow = spaceAbove < minSpaceAbove
-      top = useBelow ? rect.bottom + GAP : GAP
-      maxHeight = useBelow ? spaceBelow : spaceAbove
-    }
-
     // Horizontal: align left to button, clamp to viewport edges.
     let left = rect.left
     if (left + width + GAP > vw) left = vw - width - GAP
     left = Math.max(GAP, left)
 
-    setPos({ top, left, maxHeight })
+    const topAnchorEl = topAnchorSelector
+      ? (document.querySelector(topAnchorSelector) as HTMLElement | null)
+      : null
+
+    if (topAnchorEl) {
+      // Anchored mode: popup bottom sits just above the button (visually near it).
+      // Grows upward to fit content; maxHeight is bounded so the popup top can
+      // never go above the top anchor.
+      const topBoundary = topAnchorEl.getBoundingClientRect().bottom + GAP
+      const popupBottomY = rect.top - GAP
+      setPos({
+        bottom: vh - popupBottomY,
+        left,
+        maxHeight: Math.max(0, popupBottomY - topBoundary),
+      })
+      return
+    }
+
+    // Free mode: prefer above the button (bottom-anchored), flip below if too small.
+    const spaceAbove = Math.max(0, rect.top - GAP)
+    const spaceBelow = Math.max(0, vh - rect.bottom - GAP)
+    if (spaceAbove < minSpaceAbove) {
+      setPos({ top: rect.bottom + GAP, left, maxHeight: spaceBelow })
+    } else {
+      setPos({ bottom: vh - rect.top + GAP, left, maxHeight: spaceAbove })
+    }
   }, [toggleSelector, topAnchorSelector, width, minSpaceAbove])
 
   useEffect(() => {

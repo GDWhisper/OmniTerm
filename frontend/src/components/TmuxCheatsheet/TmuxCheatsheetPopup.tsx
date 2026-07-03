@@ -35,9 +35,10 @@ export function TmuxCheatsheetPopup() {
               overflow: 'hidden',
             }
           : {
-              top: pos.top,
               left: pos.left,
               maxHeight: pos.maxHeight,
+              top: pos.top,
+              bottom: pos.bottom,
               borderRadius: 10,
               overflowY: 'auto',
               overflowX: 'hidden',
