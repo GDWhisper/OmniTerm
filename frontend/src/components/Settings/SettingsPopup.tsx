@@ -1,15 +1,28 @@
+import { useEffect, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
 import { MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
 import { useAnchorPopup } from '../../hooks/useAnchorPopup'
 
-const POPUP_WIDTH = 340
+/** Desktop popup width = 1/4 of viewport (rendered as 25vw in CSS). */
+const POPUP_WIDTH_RATIO = 0.25
 
 export function SettingsPopup() {
+  // Track viewport width so useAnchorPopup can clamp horizontally to match the
+  // popup's actual rendered width (which is 25vw in CSS).
+  const [popupWidthPx, setPopupWidthPx] = useState(() =>
+    Math.round(window.innerWidth * POPUP_WIDTH_RATIO),
+  )
+  useEffect(() => {
+    const onResize = () => setPopupWidthPx(Math.round(window.innerWidth * POPUP_WIDTH_RATIO))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   const { ref, pos, isMobile } = useAnchorPopup({
     toggleSelector: '[data-toggle="settings"]',
     topAnchorSelector: '.logo-title-bar',
-    width: POPUP_WIDTH,
+    width: popupWidthPx,
     onClose: useAppStore((s) => s.toggleSettings),
   })
 
@@ -51,7 +64,7 @@ export function SettingsPopup() {
               borderRadius: 10,
               overflow: 'hidden',
             }),
-        width: isMobile ? '100%' : POPUP_WIDTH,
+        width: isMobile ? '100%' : `${POPUP_WIDTH_RATIO * 100}vw`,
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',
