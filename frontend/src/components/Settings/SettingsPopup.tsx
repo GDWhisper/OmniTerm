@@ -39,6 +39,12 @@ export function SettingsPopup() {
             }
           : {
               left: pos.left,
+              // Fixed-height desktop popup (1/3 of viewport). Right pane
+              // (.settings-content) scrolls if its sections don't fit, so the
+              // popup itself stays a stable size across tab switches.
+              // maxHeight from useAnchorPopup is a safety cap when viewport is
+              // too short for 33vh.
+              height: '33vh',
               maxHeight: pos.maxHeight,
               top: pos.top,
               bottom: pos.bottom,

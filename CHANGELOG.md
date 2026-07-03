@@ -68,6 +68,7 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[frontend]` Sidebar 底部 WebSocket 状态指示器改像素风 — 5 格信号条 sprite + `LINK/LOST` 像素字标签，1px 硬边 + 2px 硬阴影，CSS 变量填充以适配明暗主题（`frontend/src/components/PixelUI/PixelSprites.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/*/translation.json`）
 - (2026-07-03) `[frontend]` Settings + TmuxCheatsheet 弹出面板 UI 打磨 — 提取 `useAnchorPopup` hook 统一定位（底部贴按钮 + maxHeight 贴合 logo 顶），Tmux 速查面板加 `.panel-title-bar` 统一标题风格，popup 滚动条 8px 硬角主题感知（`frontend/src/hooks/useAnchorPopup.ts`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx`、`frontend/src/index.css`）
 - (2026-07-03) `[frontend]` Settings 面板改游戏风格标签菜单 — 左侧 92px tab 列（APPEARANCE / AUDIO / EDIT / LANGUAGE / MOBILE），右侧滚动内容区；11 个 section 拆为 sub-component，复用 `ToggleRow` 消除复制代码；mobile-only 分类自动隐藏（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
+- (2026-07-03) `[frontend]` Settings 面板固定高度为视口 1/3 — 切 tab 时 popup 高度不变，右侧 `.settings-content` 负责滚动以处理超出内容；maxHeight 保留为 logo 到按钮的硬上限以防极短视口溢出（`frontend/src/components/Settings/SettingsPopup.tsx`、`frontend/src/index.css`）
 
 ### Removed
 

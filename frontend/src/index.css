@@ -1027,31 +1027,31 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
 
 /* ────────────────────────────────────────────────────────────────────
    Popup scrollbar — 8px wide, hard 0px corners, theme-aware.
-   Used on .settings-popup and .tmux-cheatsheet-popup (both scroll when
-   content overflows maxHeight). Keeps the pixel-game aesthetic instead of
-   falling back to the browser default.
+   Kept on the pixel-game aesthetic instead of the browser default.
+     - .tmux-cheatsheet-popup: scrolls on the popup itself (desktop only)
+     - .settings-content: scrolls inside the fixed-height settings popup
    ──────────────────────────────────────────────────────────────────── */
-.settings-popup::-webkit-scrollbar,
-.tmux-cheatsheet-popup::-webkit-scrollbar {
+.tmux-cheatsheet-popup::-webkit-scrollbar,
+.settings-content::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-.settings-popup::-webkit-scrollbar-track,
-.tmux-cheatsheet-popup::-webkit-scrollbar-track {
+.tmux-cheatsheet-popup::-webkit-scrollbar-track,
+.settings-content::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
 }
-.settings-popup::-webkit-scrollbar-thumb,
-.tmux-cheatsheet-popup::-webkit-scrollbar-thumb {
+.tmux-cheatsheet-popup::-webkit-scrollbar-thumb,
+.settings-content::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 0;
   border: 1px solid var(--scrollbar-track);
 }
-.settings-popup::-webkit-scrollbar-thumb:hover,
-.tmux-cheatsheet-popup::-webkit-scrollbar-thumb:hover {
+.tmux-cheatsheet-popup::-webkit-scrollbar-thumb:hover,
+.settings-content::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
 }
-.settings-popup,
-.tmux-cheatsheet-popup {
+.tmux-cheatsheet-popup,
+.settings-content {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-width: thin;
 }
