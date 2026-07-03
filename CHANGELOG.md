@@ -79,7 +79,6 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[frontend]` SignalBarsSprite 改粗：5 根 2px 细条 → 3 根 4px 粗条 — 深棕底上 2px 细条视觉太轻几乎看不到，换成 3 根 4px 宽 / 2px 间距的粗条（`x={0, 6, 12}`，依然 16x8 viewBox，无 sub-pixel），原有「全亮 / 全暗」二值语义保持（`frontend/src/components/PixelUI/PixelSprites.tsx`）
 - (2026-07-03) `[frontend]` 黑底 status badge 加 inset 3D 立体感 — Terminal 顶部 `.title-bar-badge`（`● LIVE`）与 Sidebar 底部连接状态同时加上 1px inset box-shadow（顶/左 `--wood-inset-dark: #1F1812` 凹边阴影，底/右 `--wood-inset-light: #5A4530` 凹边高光），从「纸片」变「木板上鐵入的铁环」质感；token 化不引入新色相；`ui-style-guide` §4.1 补充「Inset 3D 立体感（必须）」子节并明记适用与例外（`frontend/src/index.css`、`frontend/src/components/Sidebar/Sidebar.tsx`、`docs/ui-style-guide.md`）
 - (2026-07-03) `[frontend]` Terminal 无 session 状态 title bar 改为常驻顶部 — 修 `Terminal.tsx` no-session 分支的 layout bug（`flex items-center justify-center` 默认 row 会把 title bar 推到面板**左侧中央**，与有 session 状态顶部对齐不一致），改为 `flex flex-col` + title bar 置顶 + 内容在剩余空间 `flex-1` 居中，与有 session 状态完全一致（`frontend/src/components/Terminal/Terminal.tsx`）
-- (2026-07-03) `[frontend]` Tmux 速查面板 强制暗色（不受主题影响） — 新增 `.tmux-popup-dark` 类在 popup 作用域内覆盖主题 CSS vars 为暗色值（`--bg-elevated: #1B1E26` / `--text-primary: #D1D5DB` / `--wood-dark: #2A2520` 等），子元素（title bar + cheatsheet content）通过 `var()` 继承自动暗色；`text-faint` / `text-dim` 略调亮（`#6B7280` / `#4B5563`）避免 hint 文本太暗；效果：app 亮色模式下 tmux 速查面板也是「终端黑底」，与终端 pane 配色一致（`frontend/src/index.css`、`frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx`）
 
 ### Removed
 
