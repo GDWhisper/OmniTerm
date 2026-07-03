@@ -33,9 +33,6 @@
   --warning: #D4A05A;
   --wood-dark: #8B5A2B;
   --wood-shadow: #3A2E1F;
-  /* pixel sprite frame — matches logo-title-bar border-bottom in each theme
-     (light: wood-shadow dark line; dark: deep graphite bottom edge) */
-  --logo-frame: #3A2E1F;
   /* Inset 3D rim shades for dark wood-shadow status badges — top/left dark
      (sunken-rim shadow), bottom/right light (rim catches light). Pair
      with `box-shadow: inset ...` on the badge element. See §4.1. */
@@ -81,7 +78,6 @@
   --warning: #FFA657;
   /* pixel hard shadow */
   --pixel-shadow: #090A0D;
-  --logo-frame: #090A0D;
   /* scrollbar */
   --scrollbar-thumb: #484F58;
   --scrollbar-track: #12141A;
@@ -1320,7 +1316,6 @@ body.pixel-ui-on .toast-pixel.toast-info { border-color: var(--accent, #58A6FF);
    Dark theme (night mode) adaptation of game UI elements.
    The parchment wood tones become dark graphite + muted gold.
    ──────────────────────────────────────────────────────────────────── */
-.dark .logo-title-bar { background: #2A2520; border-bottom-color: #090A0D; }
 .dark .panel-title-bar { background: #2A2520; border-bottom-color: #090A0D; }
 .dark .btn-pixel-primary { background: #2A2520; color: #E6DFD0; border-color: #090A0D; box-shadow: 3px 3px 0 #090A0D; }
 .dark .btn-pixel-secondary { background: #1B1E26; color: #D1D5DB; border-color: #484F58; box-shadow: 2px 2px 0 #090A0D; }
