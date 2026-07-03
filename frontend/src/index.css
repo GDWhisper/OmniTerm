@@ -33,6 +33,11 @@
   --warning: #D4A05A;
   --wood-dark: #8B5A2B;
   --wood-shadow: #3A2E1F;
+  /* Inset 3D rim shades for dark wood-shadow status badges — top/left dark
+     (sunken-rim shadow), bottom/right light (rim catches light). Pair
+     with `box-shadow: inset ...` on the badge element. See §4.1. */
+  --wood-inset-dark: #1F1812;
+  --wood-inset-light: #5A4530;
   --gold-light: #FFCB6B;
   --accent-light: #58A6FF;
   --danger-light: #C85A3A;
@@ -1023,6 +1028,12 @@ body.pixel-ui-on .panel-title-bar .title-bar-badge {
   background: var(--wood-shadow, #3A2E1F);
   color: #7EE787;
   padding: 1px 6px;
+  /* Inset 3D — see §4.1 */
+  box-shadow:
+    inset 0 1px 0 var(--wood-inset-dark),
+    inset 1px 0 0 var(--wood-inset-dark),
+    inset 0 -1px 0 var(--wood-inset-light),
+    inset -1px 0 0 var(--wood-inset-light);
 }
 body.pixel-ui-on .panel-title-bar .title-bar-path {
   font-size: 11px;

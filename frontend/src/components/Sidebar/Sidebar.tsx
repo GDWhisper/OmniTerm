@@ -1445,6 +1445,8 @@ export function Sidebar() {
           style={{
             padding: '2px 6px',
             background: 'var(--wood-shadow, #3A2E1F)',
+            boxShadow:
+              'inset 0 1px 0 var(--wood-inset-dark), inset 1px 0 0 var(--wood-inset-dark), inset 0 -1px 0 var(--wood-inset-light), inset -1px 0 0 var(--wood-inset-light)',
           }}
         >
           <SignalBarsSprite size={14} connected={connected} />

@@ -229,8 +229,35 @@ The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10
 | 文字色 | 固定值：`#7EE787` (绿) / `#FF7B72` (红) | 不走主题变体——「连接活着」是**一致信号**，亮黄背景下的 `#5A8F3A` 绿看不清 |
 | Padding | `2px 6px`（桌面）/ `1px 6px`（徽章尺寸） | 按内容高度压缩 |
 | Border | 无 | 边框=button 错觉，已是反例 |
-| Box-shadow | 无 | 阴影=button 错觉，已是反例 |
+| Box-shadow | **inset 4 边**（见下） | 严防 border / outer shadow 误读为可点 |
 | Border-radius | `0` | 全局硬角 |
+
+#### Inset 3D 立体感（必须）
+
+单纯的纯色黑底是「纸片」，加 inset 后变成「木板中鐵入的铁环」质感。
+像素游戏中这是标准 3D 表现于段。
+
+**使用条件**：仅适用 `var(--wood-shadow)` 深色背景的不可按 badge。
+亮黄背景或带 outer shadow 的面板**不要使用**（inset 会出现「外凸里凹」矛盾视觉）。
+
+**实现**：使用 4 条 1px inset box-shadow，**顶/左为深色凹边阴影**、**底/右为亮色凹边高光**：
+
+```css
+box-shadow:
+  inset 0 1px 0 var(--wood-inset-dark),    /* 顶 1px 深色 */
+  inset 1px 0 0 var(--wood-inset-dark),    /* 左 1px 深色 */
+  inset 0 -1px 0 var(--wood-inset-light),  /* 底 1px 亮色 */
+  inset -1px 0 0 var(--wood-inset-light);  /* 右 1px 亮色 */
+```
+
+**颜色 token**（在 `:root` 中定义）：
+
+| Token | Value | 用途 |
+|-------|-------|------|
+| `--wood-inset-dark` | `#1F1812` | 顶/左 凹边阴影（< `--wood-shadow`） |
+| `--wood-inset-light` | `#5A4530` | 底/右 凹边高光（> `--wood-shadow`） |
+
+颜色均调在 wood 色系内，不引入新色相，不和 `#7EE787` / `#FF7B72` 状态色冲突。
 
 **实现参考**（Sidebar 底部连接状态，`Sidebar.tsx` 1439–1463）：
 
@@ -240,6 +267,11 @@ The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10
   style={{
     padding: '2px 6px',
     background: 'var(--wood-shadow, #3A2E1F)',
+    boxShadow:
+      'inset 0 1px 0 var(--wood-inset-dark),' +
+      'inset 1px 0 0 var(--wood-inset-dark),' +
+      'inset 0 -1px 0 var(--wood-inset-light),' +
+      'inset -1px 0 0 var(--wood-inset-light)',
   }}
 >
   <SignalBarsSprite size={14} connected={connected} />
