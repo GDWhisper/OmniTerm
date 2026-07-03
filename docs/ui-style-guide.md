@@ -210,6 +210,55 @@ body.pixel-ui-on .panel-title-bar {
 
 The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10px`) and the `.font-logo` wordmark.
 
+### 4.1 Status Badge — 木底黑框（不可按状态指示器）
+
+任何**不可点击的状态指示器**（连接状态、session 状态、运行状态等）复用
+以下视觉：**深色背景 + 亮色文字**，**不加 border、不加 box-shadow**。
+
+**设计动机**：上一个版本中，底部连接状态带 border + surface 底色 + 硬阴影，
+看起来像一个未被点击的 button，造成误解——状态指示器「不可点」不应该是 button 形状。
+
+**参考实现**：`.title-bar-badge`（`● LIVE`），在 §4 定义。状态 badge
+不限于 title bar 内部使用，是独立 pattern。
+
+**视觉规范**：
+
+| 属性 | 值 | 原因 |
+|------|----|------|
+| 背景 | `var(--wood-shadow, #3A2E1F)` | 主题统一的深棕黑，明亮黄背景不适用 |
+| 文字色 | 固定值：`#7EE787` (绿) / `#FF7B72` (红) | 不走主题变体——「连接活着」是**一致信号**，亮黄背景下的 `#5A8F3A` 绿看不清 |
+| Padding | `2px 6px`（桌面）/ `1px 6px`（徽章尺寸） | 按内容高度压缩 |
+| Border | 无 | 边框=button 错觉，已是反例 |
+| Box-shadow | 无 | 阴影=button 错觉，已是反例 |
+| Border-radius | `0` | 全局硬角 |
+
+**实现参考**（Sidebar 底部连接状态，`Sidebar.tsx` 1439–1463）：
+
+```tsx
+<div
+  className="flex items-center gap-1.5"
+  style={{
+    padding: '2px 6px',
+    background: 'var(--wood-shadow, #3A2E1F)',
+  }}
+>
+  <SignalBarsSprite size={14} connected={connected} />
+  <span
+    className="font-pixel"
+    style={{
+      fontSize: 13,
+      letterSpacing: 2,
+      color: connected ? '#7EE787' : '#FF7B72',
+    }}
+  >
+    {connected ? t('sidebar.link') : t('sidebar.lost')}
+  </span>
+</div>
+```
+
+**例外**（可使用亮背景 + 主题色）：移动端顶部状态栏（`MobileStatusBar`）、
+任何贴在浅背景上的状态点。**例外的情况也不要加 border / shadow**。
+
 ---
 
 ## 5. Corner Nails
@@ -456,6 +505,7 @@ Before adding any new UI element, verify:
 
 - [ ] Uses CSS variables (`var(--token)`) not hardcoded hex
 - [ ] **背景色遵守 §1.2 「禁止纯白」规则** — R > G > B 且 R-B ≥ 25，明显黄调羊皮纸
+- [ ] **不可按的状态指示器遵守 §4.1 Status Badge 规范** — 深棕黑底 + 亮色文字，**无 border / 无 box-shadow**（避免看起来像 button）
 - [ ] Hard shadow uses `3px 3px 0` (not `4px` blur, not glow)
 - [ ] `border-radius: 0` everywhere (modals: `2px` max)
 - [ ] Pixel font (`.font-pixel`) only for display text, not body/code

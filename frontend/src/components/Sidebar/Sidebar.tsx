@@ -1443,10 +1443,8 @@ export function Sidebar() {
         <div
           className="flex items-center gap-1.5"
           style={{
-            padding: '2px 6px 2px 4px',
-            border: '1px solid var(--border-strong)',
-            background: 'var(--bg-surface)',
-            boxShadow: '2px 2px 0 var(--pixel-shadow)',
+            padding: '2px 6px',
+            background: 'var(--wood-shadow, #3A2E1F)',
           }}
         >
           <SignalBarsSprite size={14} connected={connected} />
@@ -1455,7 +1453,7 @@ export function Sidebar() {
             style={{
               fontSize: 13,
               letterSpacing: 2,
-              color: connected ? 'var(--success)' : 'var(--danger)',
+              color: connected ? '#7EE787' : '#FF7B72',
             }}
           >
             {connected ? t('sidebar.link') : t('sidebar.lost')}

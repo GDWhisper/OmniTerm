@@ -65,13 +65,16 @@ export const StatusStoppedSprite: FC<BaseSpriteProps> = (props) => (
 )
 
 /** WebSocket/HTTP link status — 5 vertical bars, all lit or all dim (binary).
- *  Color comes from CSS vars via `style.fill` so it auto-adapts light/dark theme. */
+ *  Uses fixed terminal-style colors (bright green / red) because the sprite
+ *  is designed to live on a dark "badge" background (see .title-bar-badge
+ *  + bottom connection status in Sidebar). Don't theme-adapt — the
+ *  "connection is alive" signal is intentionally consistent across themes. */
 export const SignalBarsSprite: FC<BaseSpriteProps & { connected: boolean }> = ({
   size = 16,
   className,
   connected,
 }) => {
-  const color = connected ? 'var(--success)' : 'var(--danger)'
+  const color = connected ? '#7EE787' : '#FF7B72'
   return (
     <svg
       role="img"
