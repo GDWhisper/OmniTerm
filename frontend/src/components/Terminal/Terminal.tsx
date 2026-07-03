@@ -210,28 +210,30 @@ export function Terminal() {
   if (!activeSessionId && !activeExternalSession) {
     return (
       <div
-        className="h-full flex items-center justify-center"
+        className="h-full flex flex-col"
         style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: FONT }}
       >
         <div className="panel-title-bar">
           <span>◆</span>
           <span>terminal</span>
         </div>
-        <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              marginBottom: 16,
-              color: 'var(--accent)',
-              filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
-            }}
-          >
-            <KeyboardIcon size={40} />
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
-          <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
-            {t('terminal.hint')}
+        <div className="flex-1 flex items-center justify-center">
+          <div style={{ textAlign: 'center' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                marginBottom: 16,
+                color: 'var(--accent)',
+                filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
+              }}
+            >
+              <KeyboardIcon size={40} />
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
+            <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
+              {t('terminal.hint')}
+            </div>
           </div>
         </div>
       </div>
