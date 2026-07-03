@@ -122,9 +122,11 @@ All `.font-pixel` text is `text-transform: uppercase`.
 
 ### 3.1 OmniTermLogo (`OmniTermLogo` component)
 
-16x16 pixel sprite rendered at integer multiples (48px sidebar, 96px splash, 16px favicon). Composition: dark-brown CRT frame, `#12141A` screen, green `>` prompt, blue `_` cursor. Render with `image-rendering: pixelated`.
+16x16 pixel sprite rendered at integer multiples (48px sidebar, 96px splash, 16px favicon). Composition: dark-brown CRT frame (`var(--logo-frame)` — theme-aware, light `#3A2E1F` / dark `#090A0D`, matches the logo-title-bar's bottom border so the CRT looks "embedded"), `#12141A` screen, green `>` prompt, blue `_` cursor. Render with `image-rendering: pixelated`.
 
-Location: `frontend/src/components/Icons/OmniTermLogo.tsx`
+Location: `frontend/src/components/PixelUI/OmniTermLogo.tsx`
+
+**`--logo-frame` rationale**: in light theme the CRT frame = wood-shadow (`#3A2E1F`) which blends with the title bar's bottom border line. In dark theme the title bar's bottom edge is `#090A0D` (deep graphite) — the frame MUST match that, otherwise the sprite looks like a brown sticker floating on a dark panel. SVG `<rect>` uses `style={{ fill: 'var(--logo-frame)' }}` since SVG attributes don't accept `var()`.
 
 ### 3.2 PixelButton (4 variants)
 
