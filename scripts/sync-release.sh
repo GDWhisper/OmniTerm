@@ -101,9 +101,13 @@ echo "  开发仓 binary 名: $DEV_BIN_NAME"
 echo "[3/7] 复制 main 文件到 release ..."
 git checkout main --quiet -- .
 
-# ── 步骤 4: 生成 RELEASE_NOTES.md（在清理前，需要 CHANGELOG）───
-echo "[4/7] 生成 RELEASE_NOTES.md ..."
-bash "$ROOT/scripts/extract-release-notes.sh" "$VERSION" > "$ROOT/RELEASE_NOTES.md"
+# ── 步骤 4: 复制 RELEASE_NOTES.md ──────────────────────────────
+echo "[4/7] 复制 RELEASE_NOTES.md ..."
+if [[ ! -f "$ROOT/RELEASE_NOTES.md" ]]; then
+    echo "错误: RELEASE_NOTES.md 不存在，请先手写用户视角的 Release Notes"
+    echo "提示: 从 CHANGELOG 提取详情作为参考：bash scripts/extract-release-notes.sh $VERSION"
+    exit 1
+fi
 git add -f RELEASE_NOTES.md
 
 # ── 步骤 5: 应用黑名单 ─────────────────────────────────────────

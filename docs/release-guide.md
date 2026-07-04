@@ -26,11 +26,14 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 ./scripts/bump-version.sh 0.2.0
 
 # 更新 CHANGELOG（将 [Unreleased] 改为 [0.2.0]）
+
+# 撰写 RELEASE_NOTES.md（用户视角，简洁，不写文件路径/时间戳）
+# 可参考: bash scripts/extract-release-notes.sh 0.2.0 | less
 ```
 
 ### Step 2：构建 Release 分支
 
-新版本发布使用 `scripts/sync-release.sh`（黑名单制，自动排除 dev 文件、修正 binary 名、生成 Release Notes）。
+新版本发布使用 `scripts/sync-release.sh`（黑名单制，自动排除 dev 文件、修正 binary 名、复制 RELEASE_NOTES.md）。
 
 ```bash
 ./scripts/sync-release.sh 0.2.0
@@ -157,7 +160,7 @@ git remote -v
 | `Dockerfile.release` | CI 用轻量 Docker（复用预构建 binary） |
 | `docker-compose.yml` | Docker Compose 部署 |
 | `README.md`, `README_zh.md`, `LICENSE` | 文档 |
-| `RELEASE_NOTES.md` | Release Notes（CI 自动读取） |
+| `RELEASE_NOTES.md` | 用户视角 Release Notes（手写，CI 读取） |
 | `pic/` | 预览截图 |
 | `install.sh` | Shell 安装脚本 |
 | `npm-package/` | npm 包文件 |
