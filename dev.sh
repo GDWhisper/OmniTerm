@@ -288,6 +288,13 @@ cmd_start() {
         if [[ ! -d node_modules ]]; then
             echo "[dev.sh] node_modules 不存在，执行 pnpm install ..."
             pnpm install
+            # 防御：pnpm 可能因误认父目录 workspace root 而静默失败
+            if [[ ! -x node_modules/.bin/vite ]]; then
+                echo "[dev.sh] ERROR: pnpm install 完成但 vite 未安装"
+                echo "[dev.sh] 可能原因: 父目录有 package.json 被误认为 workspace root"
+                echo "[dev.sh] 请检查 pnpm-workspace.yaml 是否存在"
+                exit 1
+            fi
         fi
         stdbuf -oL -eL pnpm dev
     ) > "$FRONTEND_LOG" 2>&1 &
