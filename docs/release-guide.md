@@ -41,7 +41,7 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 > 补丁（加截图/修 README）：直接在 `release` 分支上改，追加 commit。
 
-### Step 3：打 Tag 并推送
+### Step 3：打 Tag 并推送（CI 自动完成全部发布）
 
 ```bash
 git tag -f v0.2.0 release
@@ -50,6 +50,12 @@ git push public v0.2.0
 git checkout main
 git push origin main
 ```
+
+CI 自动执行：**编译 3 平台 binary + GitHub Release + crates.io 发布 + Docker 推送**。
+
+> **禁止手动 `cargo publish`**。crates.io 发布由 CI 的 `cargo-publish` job 统一处理，
+> 确保与 GitHub Release binary 来自完全相同的一次构建。
+> 幂等设计：已发布则跳过，可安全重跑。
 
 ### Step 4：验证
 
