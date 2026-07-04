@@ -11,7 +11,7 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 ```
 
 - **私有仓**：完整开发历史，包含所有 dev 文件
-- **公共仓**：单 commit，干净发布，`main` 即最新 release
+- **公共仓**：线性历史，每次 release 增量提交，`main` 即最新 release
 - **CI**：在公共仓运行（tag 触发）
 
 ---
@@ -24,8 +24,6 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 # 更新版本号
 ./scripts/bump-version.sh 0.2.0
 
-# 更新 npm-package/install.js 中的 VERSION 常量
-# 检查 README 是否需要更新
 # 更新 CHANGELOG（将 [Unreleased] 改为 [0.2.0]）
 ```
 
@@ -87,22 +85,16 @@ git commit -m "v0.2.0"
 
 ```bash
 git tag -f v0.2.0 release
-
-# 先取消旧版本 tag（如果存在）
-git push public :v0.2.0 2>/dev/null
-
-# 推送 release → public/main（增量，无需 -f），tag → CI 触发
 git push public release:main
 git push public v0.2.0
-
-# 切回 main，推私有仓
 git checkout -f main
 git push origin main
+rm -f RELEASE_NOTES.md
 ```
 
 ### Step 4：验证
 
-CI 自动完成：Release 创建（Release Notes 从 CHANGELOG 提取）、binary 上传、npm publish、Docker 推送。
+CI 自动完成：Release 创建（从 `RELEASE_NOTES.md` 读取）、binary 上传、npm publish（幂等，已发布则跳过）、Docker 推送。
 
 | 方式 | 验证命令 |
 |------|---------|
