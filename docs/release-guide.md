@@ -84,17 +84,9 @@ git checkout -f main
 git push origin main
 ```
 
-### Step 4：npm 发布
+### Step 4：验证
 
-CI 不自动发 npm。手动执行：
-
-```bash
-npm login --registry https://registry.npmjs.org/
-cd npm-package
-npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
-```
-
-### Step 5：验证
+CI 自动完成：Release 创建（Release Notes 从 CHANGELOG 提取）、binary 上传、npm publish、Docker 推送。
 
 | 方式 | 验证命令 |
 |------|---------|
