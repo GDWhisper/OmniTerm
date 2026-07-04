@@ -46,7 +46,32 @@
 
 - **作用**：干净的公开代码，剔除所有开发文件
 - **发布**：tag push → CI 自动构建多平台 binary + GitHub Release + npm + Docker
-- 详见 `docs/release-plan.md`
+- 详见 `docs/release-guide.md`
+
+#### 日常更新推送（非发布）
+
+不做完整发布时，将开发分支的局部改动同步到公共仓库以保持项目活跃：
+
+1. **切到 release** → `git checkout release`
+2. **cherry-pick 目标 commit** → `git cherry-pick <hash>`
+3. **推送到公开仓库** → `git push public release:main`
+4. **切回开发分支** → `git checkout main` / `dev`
+
+> **规则**：只 cherry-pick main/dev 已有的 commit，切勿在 release 上直接做修改。
+> 目的是让公共仓库的 main 有可见更新，不触发 CI 发布。
+> 无需执行 `sync-release.sh`、打 tag 等完整发布步骤。
+>
+> **放心，日常推送的提交不会丢**：
+>
+> - 日常推送 `git push public release:main` 会把 cherry-pick commit
+>   永久写入 GitHub 的 `main` 分支历史。
+> - 正式发布时 `sync-release.sh` 基于 `public/main`（含这些 commit）
+>   重建 release，新版本 commit 以它们为 parent——日常提交成为历史一环。
+> - **会丢的只是本地 release 指针**（被 `checkout -fB` 覆盖），
+>   而本地 release 是 disposable 的工作分支，丢了无妨。
+>
+> **⚠️ 唯一禁忌**：日常推送后，正式发布前，**禁止** force push
+> 覆盖远程历史（`git push public release:main -f`）。
 
 ---
 
