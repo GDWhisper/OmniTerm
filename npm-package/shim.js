@@ -18,7 +18,7 @@ if (result.error && result.error.code === 'ENOENT') {
   console.error(
     'omniterm: native binary not found.\n' +
     'Run "npm install -g omniterm" to download it, or install via:\n' +
-    '  curl -fsSL https://raw.githubusercontent.com/pax/OmniTerm/release/install.sh | bash\n' +
+    '  curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash\n' +
     '  cargo install omniterm'
   );
   process.exit(1);
