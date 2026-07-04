@@ -21,7 +21,7 @@ It connects to tmux under the hood. You don't need to think about that.
 - **AI agent monitoring** — recognizes Claude Code, Codex, and similar CLI agents. Each pane gets a live badge: running, waiting for input, or finished. When an agent needs your attention, the browser tab flashes and a notification sounds.
 - **File browser** — browse, upload, download, and preview files. Syntax highlighting for 13 languages. Follows the terminal's current working directory. Built-in terminal with xterm.js, full keyboard and mobile soft keyboard.
 - **Git worktree awareness** — auto-discovers all git worktrees under a project and groups sessions by branch. Terminal and file browser follow the selected branch.
-- **Single binary** — Rust backend with embedded frontend and SQLite. Install via shell script, Cargo, or Docker. One command to start.
+- **Single binary** — Rust backend with embedded frontend and SQLite. Install via shell script, Cargo (git), or Docker. One command to start.
 
 ## Quick start
 
@@ -39,8 +39,8 @@ omniterm
 # Docker
 docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 
-# Cargo
-cargo install omniterm
+# Cargo (build from source)
+cargo install --git https://github.com/GDWhisper/OmniTerm
 ```
 
 ```bash
@@ -58,7 +58,7 @@ Open the URL in a browser, set an initial password, add a project directory, and
 | Frontend | React 19 + Tailwind CSS 4 + xterm.js |
 | Terminal bridge | portable-pty + WebSocket |
 | Agent detection | tmux control mode + content hooks |
-| Distribution | shell script, Cargo, Docker |
+| Distribution | shell script, Cargo (git), Docker |
 
 ## Contributing
 
