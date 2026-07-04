@@ -81,11 +81,11 @@ if ! git remote get-url public &>/dev/null; then
 fi
 
 # ── 步骤 2: 拉取公共仓最新 ─────────────────────────────────────
-echo "[1/7] 拉取公共仓最新 main ..."
+echo "[1/6] 拉取公共仓最新 main ..."
 git fetch public main --quiet
 
 # ── 步骤 3: 构建 release 分支 ──────────────────────────────────
-echo "[2/7] 构建 release 分支（基于 public/main）..."
+echo "[2/6] 构建 release 分支（基于 public/main）..."
 
 # 获取 Cargo.toml 的 package name（dev 与 release 统一用 omniterm）
 PKG_NAME=$(grep '^name' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
@@ -95,20 +95,11 @@ git checkout -fB release public/main --quiet
 git rm -rf --cached --quiet . 2>/dev/null || true
 
 # ── 步骤 4: 全量复制 main → release ────────────────────────────
-echo "[3/7] 复制 main 文件到 release ..."
+echo "[3/6] 复制 main 文件到 release ..."
 git checkout main --quiet -- .
 
-# ── 步骤 4: 复制 RELEASE_NOTES.md ──────────────────────────────
-echo "[4/7] 复制 RELEASE_NOTES.md ..."
-if [[ ! -f "$ROOT/RELEASE_NOTES.md" ]]; then
-    echo "错误: RELEASE_NOTES.md 不存在，请先手写用户视角的 Release Notes"
-    echo "提示: 从 CHANGELOG 提取详情作为参考：bash scripts/extract-release-notes.sh $VERSION"
-    exit 1
-fi
-git add -f RELEASE_NOTES.md
-
-# ── 步骤 5: 应用黑名单 ─────────────────────────────────────────
-echo "[5/6] 应用黑名单（排除 ${#EXCLUDE[@]} 项）..."
+# ── 步骤 4: 应用黑名单 ─────────────────────────────────────────
+echo "[4/6] 应用黑名单（排除 ${#EXCLUDE[@]} 项）..."
 for item in "${EXCLUDE[@]}"; do
     # 移除末尾 / 以兼容 git ls-files 的目录匹配
     clean_item="${item%/}"
@@ -125,7 +116,7 @@ for item in "${KEEP[@]}"; do
 done
 
 # ── 步骤 6: 安全检查 ───────────────────────────────────────────
-echo "[6/7] 安全检查..."
+echo "[5/6] 安全检查..."
 
 # 检查是否有 dev 文件残留
 LEAKED=$(git diff --cached --name-only | grep -E '^(AGENTS|CHANGELOG|CLAUDE|dev\.sh|\.pi/|\.qoder/|\.codegraph/|docs/|openspec/|branch\.config|\.env\.local)' || true)
