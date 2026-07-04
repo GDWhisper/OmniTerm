@@ -47,6 +47,22 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.1.2] - 2026-07-04
+
+### Changed
+
+- (2026-07-04) `[infra]` npm install.js 下载进度条 + 超时处理，版本号从 package.json 自动读取（`npm-package/install.js`）
+- (2026-07-04) `[infra]` 发布流程重构为黑名单制 `sync-release.sh`，Release Notes 改为手写面向用户（`scripts/sync-release.sh`、`RELEASE_NOTES.md`）
+- (2026-07-04) `[infra]` CI Release Notes 从 `RELEASE_NOTES.md` 读取，npm-publish 改为幂等（`.github/workflows/release.yml`）
+- (2026-07-04) `[docs]` 发布指南更新（`docs/release-guide.md`）
+
+### Fixed
+
+- (2026-07-04) `[infra]` npm shim.js fallback URL 修正 pax→GDWhisper, release→main（`npm-package/shim.js`）
+- (2026-07-04) `[infra]` pnpm workspace 根目录误判导致依赖安装失败（`frontend/pnpm-workspace.yaml`）
+
+---
+
 ## [0.1.1] - 2026-07-04
 
 ### Added
