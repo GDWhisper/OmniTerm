@@ -9,8 +9,6 @@ mod utils;
 mod workspaces;
 mod ws;
 
-use std::time::Duration;
-
 use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
@@ -21,7 +19,6 @@ use std::path::Path;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -118,13 +115,10 @@ async fn main() -> anyhow::Result<()> {
     let bind = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| format!("{}:{}", host, args.port));
 
-    // 启动时打印分支身份（仅日志/调试用，不影响逻辑）
-    let branch = std::env::var("BRANCH_NAME").unwrap_or_else(|_| "main".into());
-    let version = std::env::var("BRANCH_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
-    info!("starting omniterm branch={} version={}", branch, version);
-    tracing::info!("OmniTerm server listening on {}", bind);
-
+    // ── 绑定 ─────────────────────────────────────────────────
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+
+    // ── 启动提示 ──────────────────────────────────────────────
     eprintln!("OmniTerm v{} — http://{}", env!("CARGO_PKG_VERSION"), bind);
     axum::serve(listener, app).await?;
 
