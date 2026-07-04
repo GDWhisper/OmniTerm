@@ -5,7 +5,7 @@ services:
       # 传分支专属变量给 Dockerfile（默认值适配 main worktree，dev/build 时覆盖）
       # 详见 AGENTS.md "配置统一管理" 规则
       args:
-        BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}
+        BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm}
         DOCKER_PORT: ${DOCKER_PORT:-9077}
     # 端口映射从 .env.local 读（env_file 引入），缺省回落 9077:9077
     ports:

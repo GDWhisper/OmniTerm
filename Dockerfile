@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # - BRANCH_BINARY_NAME: 二进制文件名（如 omniterm-main / omniterm-dev）
 # - DOCKER_PORT: 容器内监听端口（与 host 端口映射 host:container）
 # 都有合理默认值（main worktree 默认值）
-ARG BRANCH_BINARY_NAME=omniterm-main
+ARG BRANCH_BINARY_NAME=omniterm
 ARG DOCKER_PORT=9077
 
 WORKDIR /app
