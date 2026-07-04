@@ -2,6 +2,16 @@
 
 All notable changes to OmniTerm are documented in this file.
 
+## [0.1.6] - 2026-07-04
+
+### Fixed
+
+- (2026-07-04) `[infra]` `cargo install` 后 UI 仍显示旧版本号（`scripts/bump-version.sh`）
+
+> 根因：`bump-version.sh` 改 `.env.local` 后未重建 frontend，发布出去的前端 bundle 仍是上一次 build 的状态。修复：`bump-version.sh` 末尾自动 `pnpm run build`，让 UI 版本号与后端同步。
+
+---
+
 ## Conventions
 
 This file follows [Keep a Changelog](https://keepachangelog.com/) with project-specific adaptations:
