@@ -391,15 +391,12 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
 
 | Toggle | localStorage key | Default | Controls |
 |---|---|---|---|
-| Pixel UI | `omniterm_pixel_ui` | `true` | Title bars, buttons, progress, corner nails, selected cursor |
-| Pixel Font | `omniterm_pixel_font` | `true` | Press Start 2P + VT323 font activation |
 | Parchment Texture | `omniterm_parchment_texture` | `true` | Background dot-matrix texture |
-| Transitions | `omniterm_transitions` | `true` | Workspace switch fade-in |
-| Pixel Animations | `pixelAnimationsEnabled` | `true` | Mario-style bump/stomp/coin/starman animations (Phase 2) |
-| Sound | `soundEnabled` | `true` | 8-bit sound effects (Phase 2) |
-| CRT Scanlines | `crtScanlines` | `true` | CRT scanline overlay (Phase 2) |
+| Pixel Animations | `pixelAnimationsEnabled` | `false` | Mario-style bump/stomp/coin/starman animations (Phase 2) |
+| Sound | `soundEnabled` | `false` | 8-bit sound effects (Phase 2) |
+| CRT Scanlines | `crtScanlines` | `false` | CRT scanline overlay (Phase 2) |
 
-When "Pixel UI" is off, all panels revert to Phase 1 flat style (no title bars, no corner nails, no progress bars).
+Pixel UI and pixel fonts are always active (no toggle).
 
 ---
 
@@ -409,12 +406,9 @@ Feature flags are applied as classes on `<body>`:
 
 | Body class | Added when | What it enables |
 |---|---|---|
-| `body.pixel-ui-on` | `pixelUiEnabled === true` | `.btn-pixel-*`, `.panel-title-bar`, `.terminal-panel-pixel`, `.toast-pixel` styles |
-| `body.pixel-font-on` | `pixelFontEnabled === true` | `.font-logo` and `.font-pixel` switch from monospace to pixel fonts |
-| `body.parchment-texture` | `parchmentTextureEnabled === true` | Background dot-matrix overlay on body |
-| `body.transitions-on` | `transitionsEnabled === true` | `.workspace-transition` fade animation |
-
-Without the corresponding body class, the scoped CSS rules are inert — components render with plain fallback styles. This lets users disable individual game elements without touching the DOM.
+| `body.pixel-ui-on` | always | `.btn-pixel-*`, `.panel-title-bar`, `.terminal-panel-pixel`, `.toast-pixel` styles |
+| `body.pixel-font-on` | always | `.font-logo` and `.font-pixel` use Press Start 2P / VT323 |
+| `body.parchment-texture` | `parchmentTextureEnabled === true` | Background dot-matrix overlay on body (light theme only) |
 
 ---
 
@@ -456,7 +450,6 @@ Game UI elements adapt when `.dark` is present:
 
 | Class | Effect | Duration |
 |---|---|---|
-| `.workspace-transition` | Fade + 4px Y shift | 0.3s steps(3) |
 | `.dialogue-toast` entrance | Fade + 8px Y shift | 0.3s steps(3) |
 
 All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard UI still use `ease-out`.

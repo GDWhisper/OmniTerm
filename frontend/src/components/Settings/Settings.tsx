@@ -274,7 +274,27 @@ function AnimationsSection() {
 function SoundSection() {
   const soundEnabled = useAppStore((s) => s.soundEnabled)
   const setSoundEnabled = useAppStore((s) => s.setSoundEnabled)
-  return <ToggleRow labelKey="settings.sound" hintKey="settings.soundHint" value={soundEnabled} onToggle={() => setSoundEnabled(!soundEnabled)} />
+  const handlePreview = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    import('../../utils/audioFeedback').then(({ play8BitSound }) => {
+      play8BitSound('coin')
+    })
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ flex: 1 }}>
+        <ToggleRow labelKey="settings.sound" hintKey="settings.soundHint" value={soundEnabled} onToggle={() => setSoundEnabled(!soundEnabled)} />
+      </div>
+      <button
+        type="button"
+        className="btn-pixel btn-pixel-accent"
+        style={{ padding: '3px 10px', fontSize: 12, letterSpacing: 1 }}
+        onClick={handlePreview}
+      >
+        ▶
+      </button>
+    </div>
+  )
 }
 
 function CrtSection() {
@@ -287,12 +307,6 @@ function ParchmentSection() {
   const parchmentTextureEnabled = useAppStore((s) => s.parchmentTextureEnabled)
   const setParchmentTextureEnabled = useAppStore((s) => s.setParchmentTextureEnabled)
   return <ToggleRow labelKey="settings.parchmentTexture" hintKey="settings.parchmentTextureHint" value={parchmentTextureEnabled} onToggle={() => setParchmentTextureEnabled(!parchmentTextureEnabled)} />
-}
-
-function TransitionsSection() {
-  const transitionsEnabled = useAppStore((s) => s.transitionsEnabled)
-  const setTransitionsEnabled = useAppStore((s) => s.setTransitionsEnabled)
-  return <ToggleRow labelKey="settings.transitions" hintKey="settings.transitionsHint" value={transitionsEnabled} onToggle={() => setTransitionsEnabled(!transitionsEnabled)} />
 }
 
 function MobileGestureSection() {
@@ -348,7 +362,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'edit',
     labelKey: 'settings.category.edit',
-    sections: [AutoCopySection, TransitionsSection],
+    sections: [AutoCopySection],
   },
   {
     id: 'language',

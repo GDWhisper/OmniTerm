@@ -62,7 +62,6 @@ export interface AppState {
   soundEnabled: boolean
   crtScanlines: boolean
   parchmentTextureEnabled: boolean
-  transitionsEnabled: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -93,7 +92,6 @@ export interface AppState {
   setSoundEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
-  setTransitionsEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
   switchWorkspace: (project: Project, workspace: Workspace) => void
@@ -152,7 +150,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
-  transitionsEnabled: localStorage.getItem('omniterm_transitions') !== 'false',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -236,10 +233,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setParchmentTextureEnabled: (v) => {
     localStorage.setItem('omniterm_parchment_texture', String(v))
     set({ parchmentTextureEnabled: v })
-  },
-  setTransitionsEnabled: (v) => {
-    localStorage.setItem('omniterm_transitions', String(v))
-    set({ transitionsEnabled: v })
   },
 
   /** Batch all workspace-switch state into one set() to avoid cascading re-renders. */

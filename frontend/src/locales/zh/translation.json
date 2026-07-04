@@ -66,8 +66,6 @@
   "settings.crtScanlinesHint": "微弱的扫描线覆盖层，营造复古终端氛围",
   "settings.parchmentTexture": "羊皮纸纹理",
   "settings.parchmentTextureHint": "羊皮纸背景上的微弱点阵图案",
-  "settings.transitions": "过场动效",
-  "settings.transitionsHint": "切换 workspace 时的淡入动画",
   "settings.category.appearance": "APPEARANCE",
   "settings.category.audio": "AUDIO",
   "settings.category.edit": "EDIT",

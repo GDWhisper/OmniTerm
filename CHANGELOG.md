@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-04) `[frontend]` Settings 音效开关旁新增 ▶ 试听按钮 — 点击播放 coin 音效供用户判断是否开启（`frontend/src/components/Settings/Settings.tsx`）
+
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — GitHub Actions CI/CD 发布流水线（tag `v*` 触发，4 平台后端构建矩阵、GitHub Release 自动上传、npm publish、ghcr.io Docker 推送）（`.github/workflows/release.yml`）
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — npm 包分发（shim.js + postinstall 自动下载 native binary）（`npm-package/`）
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — Shell 一键安装脚本，自动检测 OS/架构、下载 binary、安装 tmux（`install.sh`）
@@ -60,6 +62,8 @@ Prefix each entry with the area it affects:
 - (2026-07-01) `[frontend]` FileManager 操作列新增「复制绝对路径」按钮 — 点击后 `navigator.clipboard` 写入完整绝对路径（含 cwd），按钮 title 悬停预览路径；列宽 80→104px 容纳三个图标，操作列改为 flex 居中（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/*/translation.json`）
 
 ### Changed
+
+- (2026-07-04) `[docs]` 修正 `ui-style-guide.md` 文档 — CRT Scanlines / Pixel Animations / Sound 默认值从 `true` 更正为 `false`（代码早就默认为关），Pixel UI / Pixel Font / Transitions 行一并清理（`docs/ui-style-guide.md`）
 
 - (2026-07-02) `[backend]` v0.1.0 发布准备 — clap `--port` 默认值 9075→9077，版本号 0.0.1→0.1.0（`src/main.rs`、`Cargo.toml`）
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — `bump-version.sh` 适配 version.ts 已改为读 env var（改为更新 `.env.local` 的 `BRANCH_VERSION`）（`scripts/bump-version.sh`）
@@ -86,6 +90,8 @@ Prefix each entry with the area it affects:
 - (2026-07-04) `[frontend]` 像素 UI / 像素字体风格固化 — 移除 Settings 的 Pixel UI 和 Pixel Font 开关，`body.pixel-ui-on` / `body.pixel-font-on` 始终生效；CSS 选择器 gate 清除、appStore 状态删除、i18n key 清理；Sidebar 分支名/会话名硬编码 `font-family: 'VT323'` 清除，继承 reader 字体栈与项目名一致（`frontend/src/App.tsx`、`frontend/src/index.css`、`frontend/src/stores/appStore.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/locales/*/translation.json`）
 
 ### Removed
+
+- (2026-07-04) `[frontend]` 删除「过场动效」(Transitions) 开关 — `body.transitions-on` CSS 规则和 `@keyframes workspace-fade` 已在早期清理中删除，开关只剩空壳（只往 body 加 class 但无 CSS 消费）；移除 Settings 的 `TransitionsSection`、appStore 的 `transitionsEnabled` 状态及 localStorage 读写、App.tsx 的 body class 切换、2×2 i18n key，docs/ui-style-guide.md §8/§9/§11 同步清理（`frontend/src/components/Settings/Settings.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/locales/*/translation.json`、`docs/ui-style-guide.md`）
 
 - (2026-07-02) `[frontend]` 移除未使用的前端依赖 — `@cubone/react-file-manager`、`xterm`（与 `@xterm/xterm` 重复）、`@codemirror/autocomplete`、`@codemirror/lint`，并删除占位类型文件（`frontend/package.json`、`frontend/src/cubone-file-manager.d.ts`）
 
