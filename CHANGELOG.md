@@ -47,6 +47,16 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.1.3] - 2026-07-04
+
+### Fixed
+
+- (2026-07-04) `[backend]` 启动时打印访问地址（`eprintln!`），tracing filter 修正为 `omniterm=info`（`src/main.rs`）
+
+> 0.1.2 已 yank（crash on startup due to wrong tracing filter target）
+
+---
+
 ## [0.1.2] - 2026-07-04
 
 ### Changed

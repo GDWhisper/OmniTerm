@@ -73,7 +73,7 @@ async fn embedded_static_handler(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_server=debug".parse()?))
+        .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm=info".parse()?))
         .init();
 
     let args = Args::parse();
@@ -125,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("OmniTerm server listening on {}", bind);
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+    eprintln!("OmniTerm v{} — http://{}", env!("CARGO_PKG_VERSION"), bind);
     axum::serve(listener, app).await?;
 
     Ok(())
