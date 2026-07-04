@@ -5,7 +5,8 @@ const { execSync } = require('child_process');
 
 const OWNER = 'GDWhisper';
 const REPO = 'OmniTerm';
-const VERSION = require('./package.json').version;
+const VERSION = require('./package.json').version;  // npm 包版本（可能高于 binary）
+const BINARY_VERSION = '0.1.2';                      // GitHub Release tag（binary 实际版本）
 const BIN_DIR = __dirname;
 const BIN_NAME = process.platform === 'win32' ? 'omniterm.exe' : 'omniterm';
 
@@ -139,7 +140,7 @@ function download(url, dest, redirects = 0) {
 
 async function main() {
   const suffix = platformMap();
-  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/omniterm-${suffix}`;
+  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${BINARY_VERSION}/omniterm-${suffix}`;
   const dest = path.join(BIN_DIR, BIN_NAME);
 
   if (fs.existsSync(dest)) {
