@@ -116,8 +116,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish to crates.io (idempotent)
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if cargo search omniterm --limit 1 2>/dev/null | grep -q "omniterm = \"$VERSION\""; then
+            echo "v$VERSION already published on crates.io, skipping"
+          else
+            cargo publish --allow-dirty --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          fi
 
   # ── Docker Publish ──────────────────────────────────────────────
   docker:
