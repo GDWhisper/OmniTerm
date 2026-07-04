@@ -5,7 +5,7 @@ const { execSync } = require('child_process');
 
 const OWNER = 'GDWhisper';
 const REPO = 'OmniTerm';
-const VERSION = '0.1.0'; // Updated by CI/release script
+const VERSION = require('./package.json').version;
 const BIN_DIR = __dirname;
 const BIN_NAME = process.platform === 'win32' ? 'omniterm.exe' : 'omniterm';
 
