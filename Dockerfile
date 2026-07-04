@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
 # 分支专属变量（build 时由 --build-arg 传入；详见 AGENTS.md "配置统一管理"）
-# - BRANCH_BINARY_NAME: 二进制文件名（如 omniterm-main / omniterm-dev）
+# - BRANCH_BINARY_NAME: 二进制文件名（如 omniterm）
 # - DOCKER_PORT: 容器内监听端口（与 host 端口映射 host:container）
 # 都有合理默认值（main worktree 默认值）
 ARG BRANCH_BINARY_NAME=omniterm

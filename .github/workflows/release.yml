@@ -102,6 +102,23 @@ jobs:
             omniterm-*/omniterm-*
             install.sh
 
+  # ── Cargo Publish ───────────────────────────────────────────────
+  cargo-publish:
+    needs: [frontend, backend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
   # ── Docker Publish ──────────────────────────────────────────────
   docker:
     needs: [frontend, backend]
