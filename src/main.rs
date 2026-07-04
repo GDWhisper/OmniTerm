@@ -99,10 +99,10 @@ async fn main() -> anyhow::Result<()> {
     let app = if Path::new(&frontend_dir).is_dir() {
         let static_service = ServeDir::new(&frontend_dir)
             .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
-        tracing::info!("Serving frontend from {}", frontend_dir);
+        tracing::debug!("Serving frontend from {}", frontend_dir);
         app.fallback_service(static_service)
     } else {
-        tracing::info!("Frontend directory '{}' not found, serving from embedded assets", frontend_dir);
+        tracing::debug!("Frontend directory '{}' not found, serving from embedded assets", frontend_dir);
         app.fallback(embedded_static_handler)
     };
 
