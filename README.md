@@ -62,9 +62,8 @@ Open the URL in a browser, set an initial password, add a project directory, and
 
 ## Contributing
 
-- ⭐ Star the repo
-- 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
-- 📖 [中文说明](README_zh.md)
+- Star the repo
+- [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
 
 ## License
 
