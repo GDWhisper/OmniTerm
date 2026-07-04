@@ -283,18 +283,6 @@ function CrtSection() {
   return <ToggleRow labelKey="settings.crtScanlines" hintKey="settings.crtScanlinesHint" value={crtScanlines} onToggle={() => setCrtScanlines(!crtScanlines)} />
 }
 
-function PixelUiSection() {
-  const pixelUiEnabled = useAppStore((s) => s.pixelUiEnabled)
-  const setPixelUiEnabled = useAppStore((s) => s.setPixelUiEnabled)
-  return <ToggleRow labelKey="settings.pixelUi" hintKey="settings.pixelUiHint" value={pixelUiEnabled} onToggle={() => setPixelUiEnabled(!pixelUiEnabled)} />
-}
-
-function PixelFontSection() {
-  const pixelFontEnabled = useAppStore((s) => s.pixelFontEnabled)
-  const setPixelFontEnabled = useAppStore((s) => s.setPixelFontEnabled)
-  return <ToggleRow labelKey="settings.pixelFont" hintKey="settings.pixelFontHint" value={pixelFontEnabled} onToggle={() => setPixelFontEnabled(!pixelFontEnabled)} />
-}
-
 function ParchmentSection() {
   const parchmentTextureEnabled = useAppStore((s) => s.parchmentTextureEnabled)
   const setParchmentTextureEnabled = useAppStore((s) => s.setParchmentTextureEnabled)
@@ -350,7 +338,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'appearance',
     labelKey: 'settings.category.appearance',
-    sections: [ThemeSection, FontSizeSection, CrtSection, AnimationsSection, PixelUiSection, PixelFontSection, ParchmentSection, AboutSection],
+    sections: [ThemeSection, FontSizeSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
   },
   {
     id: 'audio',

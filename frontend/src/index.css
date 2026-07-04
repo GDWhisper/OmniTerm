@@ -182,23 +182,15 @@ svg path, svg rect, svg circle, svg line {
    ──────────────────────────────────────────────────────────────────── */
 
 .font-logo {
-  font-family: monospace;
+  font-family: 'Press Start 2P', 'VT323', monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
-}
-
-body.pixel-font-on .font-logo {
-  font-family: 'Press Start 2P', 'VT323', monospace;
 }
 
 .font-pixel {
-  font-family: monospace;
+  font-family: 'VT323', 'Press Start 2P', monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
-}
-
-body.pixel-font-on .font-pixel {
-  font-family: 'VT323', 'Press Start 2P', monospace;
 }
 
 .font-reader {
@@ -987,7 +979,6 @@ html, body, #root {
 }
 
 .sidebar-wt-row .branch-name {
-  font-family: 'VT323', monospace;
   font-size: 14px;
   color: var(--text-primary);
   flex: 1;
@@ -1061,7 +1052,6 @@ html, body, #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: 'VT323', monospace;
   font-size: 14px;
 }
 
@@ -1176,7 +1166,7 @@ html, body, #root {
    Game-style buttons — Primary / Secondary / Accent / Danger
    All have hard shadow + active displacement.
    ──────────────────────────────────────────────────────────────────── */
-body.pixel-ui-on .btn-pixel {
+.btn-pixel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1192,43 +1182,43 @@ body.pixel-ui-on .btn-pixel {
   white-space: nowrap;
 }
 /* !important required: overrides box-shadow from all 4 variant classes at :active */
-body.pixel-ui-on .btn-pixel:active:not(:disabled) {
+.btn-pixel:active:not(:disabled) {
   transform: translate(3px, 3px);
   box-shadow: none !important;
 }
-body.pixel-ui-on .btn-pixel:disabled {
+.btn-pixel:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-body.pixel-ui-on .btn-pixel:focus-visible {
+.btn-pixel:focus-visible {
   outline: 2px solid var(--accent, #58A6FF);
   outline-offset: 2px;
 }
 
-body.pixel-ui-on .btn-pixel-primary {
+.btn-pixel-primary {
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
   border: 2px solid var(--wood-shadow, #3A2E1F);
   box-shadow: 3px 3px 0 var(--pixel-shadow-light, #8B7755);
 }
-body.pixel-ui-on .btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
+.btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
 
-body.pixel-ui-on .btn-pixel-secondary {
+.btn-pixel-secondary {
   background: var(--bg-elevated-light, #EBE0C4);
   color: var(--wood-dark, #8B5A2B);
   border: 2px solid var(--wood-dark, #8B5A2B);
   box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
 }
 
-body.pixel-ui-on .btn-pixel-accent {
+.btn-pixel-accent {
   background: var(--accent-light, #58A6FF);
   color: var(--wood-shadow, #3A2E1F);
   border: none;
   box-shadow: 0 3px 0 var(--wood-shadow, #3A2E1F);
 }
-body.pixel-ui-on .btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
+.btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
 
-body.pixel-ui-on .btn-pixel-danger {
+.btn-pixel-danger {
   background: var(--bg-elevated-light, #EBE0C4);
   color: var(--danger-light, #C85A3A);
   border: 2px solid var(--danger-light, #C85A3A);
@@ -1254,7 +1244,7 @@ body.parchment-texture {
    Used on top of every panel (sidebar sections, terminal, file manager,
    settings, modal).
    ──────────────────────────────────────────────────────────────────── */
-body.pixel-ui-on .panel-title-bar {
+.panel-title-bar {
   padding: 5px 10px;
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
@@ -1267,8 +1257,8 @@ body.pixel-ui-on .panel-title-bar {
   align-items: center;
   gap: 6px;
 }
-body.pixel-ui-on .panel-title-bar .title-bar-spacer { margin-left: auto; }
-body.pixel-ui-on .panel-title-bar .title-bar-badge {
+.panel-title-bar .title-bar-spacer { margin-left: auto; }
+.panel-title-bar .title-bar-badge {
   font-size: 11px;
   background: var(--wood-shadow, #3A2E1F);
   color: #7EE787;
@@ -1280,7 +1270,7 @@ body.pixel-ui-on .panel-title-bar .title-bar-badge {
     inset 0 -1px 0 var(--wood-inset-light),
     inset -1px 0 0 var(--wood-inset-light);
 }
-body.pixel-ui-on .panel-title-bar .title-bar-path {
+.panel-title-bar .title-bar-path {
   font-size: 11px;
   color: var(--gold-light, #FFCB6B);
 }
@@ -1462,15 +1452,15 @@ body.pixel-ui-on .panel-title-bar .title-bar-path {
    Terminal pixel border — wood-brown thick frame around xterm.
    Keeps the deep #12141A screen for code readability.
    ──────────────────────────────────────────────────────────────────── */
-body.pixel-ui-on .terminal-panel-pixel {
+.terminal-panel-pixel {
   background: var(--bg-elevated, #EBE0C4);
   border: 2px solid var(--wood-shadow, #3A2E1F);
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   display: flex;
   flex-direction: column;
 }
-body.pixel-ui-on .terminal-panel-pixel .xterm-viewport,
-body.pixel-ui-on .terminal-panel-pixel .xterm {
+.terminal-panel-pixel .xterm-viewport,
+.terminal-panel-pixel .xterm {
   background: #12141A !important;
 }
 
@@ -1528,21 +1518,10 @@ body.pixel-ui-on .terminal-panel-pixel .xterm {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Workspace transition — fade + slight Y shift, stepped for pixel feel.
-   ──────────────────────────────────────────────────────────────────── */
-body.transitions-on .workspace-transition {
-  animation: workspace-fade 0.3s steps(3) forwards;
-}
-@keyframes workspace-fade {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
-   body.pixel-ui-on is active. Adds a ★ prefix and pixel border.
+   is active. Adds a ★ prefix and pixel border.
    ──────────────────────────────────────────────────────────────────── */
-body.pixel-ui-on .toast-pixel {
+.toast-pixel {
   background: #12141A;
   border: 2px solid var(--success, #5A8F3A);
   color: #7EE787;
@@ -1553,9 +1532,9 @@ body.pixel-ui-on .toast-pixel {
   border-radius: 0;
   padding: 8px 14px;
 }
-body.pixel-ui-on .toast-pixel.toast-error { border-color: var(--danger, #C85A3A); color: #FF7B72; }
-body.pixel-ui-on .toast-pixel.toast-warning { border-color: var(--warning, #D4A05A); color: #FFCB6B; }
-body.pixel-ui-on .toast-pixel.toast-info { border-color: var(--accent, #58A6FF); color: #79C0FF; }
+.toast-pixel.toast-error { border-color: var(--danger, #C85A3A); color: #FF7B72; }
+.toast-pixel.toast-warning { border-color: var(--warning, #D4A05A); color: #FFCB6B; }
+.toast-pixel.toast-info { border-color: var(--accent, #58A6FF); color: #79C0FF; }
 
 /* ────────────────────────────────────────────────────────────────────
    Dark theme (night mode) adaptation of game UI elements.

@@ -23,7 +23,6 @@ export function Layout() {
     sidebarWidth,
     fileManagerWidth,
     activeSessionId,
-    activeWorkspaceId,
     setSidebarWidth,
     setFileManagerWidth,
     crtScanlines,
@@ -123,10 +122,9 @@ export function Layout() {
       className="flex"
       style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
-      {/* Workspace-transition wrapper — key forces re-mount + fade animation on workspace switch */}
+      {/* Panels wrapper */}
       <div
-        key={activeWorkspaceId ?? 'none'}
-        className="workspace-transition flex"
+        className="flex"
         style={{ width: '100%', height: '100%', minWidth: 0 }}
       >
         {/* Sidebar */}

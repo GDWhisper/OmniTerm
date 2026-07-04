@@ -7,8 +7,7 @@
  *
  *   - READER_FONT → body / code / inputs / terminal (always readable)
  *   - LOGO_FONT   → logo wordmark only
- *   - PIXEL_FONT  → titles, buttons, status labels (gated by body.pixel-font-on
- *                   in CSS; falls back to monospace when the toggle is off)
+ *   - PIXEL_FONT  → titles, buttons, status labels (always on)
  */
 
 /** Reader / body / code / inputs / terminal. JetBrains Mono must be installed
