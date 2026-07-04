@@ -22,7 +22,9 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 ### Step 1：版本号 + 变更
 
 ```bash
-# 更新版本号（Cargo.toml + .env.local）
+# 更新版本号（Cargo.toml + .env.local）并自动重建 frontend
+# 关键：脚本末尾会 source .env.local 并跑 pnpm run build，
+# 确保 UI bundle 嵌入的 VITE_APP_VERSION 与后端版本一致
 ./scripts/bump-version.sh 0.2.0
 
 # 更新 CHANGELOG（[Unreleased] → [0.2.0]）
@@ -30,6 +32,9 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 # 撰写 RELEASE_NOTES.md（用户视角，简洁，无文件路径/时间戳）
 # 参考: bash scripts/extract-release-notes.sh 0.2.0 | less
 ```
+
+> **重要**：`bump-version.sh` 已包含 frontend 重建步骤。手动改 `.env.local` 但不
+> 重建会导致 `cargo install` 装出来的 UI 版本号与后端脱节（之前的 bug 根因）。
 
 ### Step 2：构建 Release 分支
 
@@ -65,8 +70,15 @@ CI 自动完成：binary 编译上传、GitHub Release（从 `RELEASE_NOTES.md` 
 |------|---------|
 | GitHub Release | 打开 https://github.com/GDWhisper/OmniTerm/releases |
 | Shell | `curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh \| bash` |
-| Cargo | `cargo install omniterm` |
+| Cargo | `cargo install omniterm --force` |
 | Docker | `docker run -p 9077:9077 ghcr.io/GDWhisper/omniterm:v0.2.0` |
+
+**关键端到端检查**：`cargo install omniterm --force` 后：
+1. `omniterm --version` → 后端版本号
+2. `omniterm` 启动输出 → `OmniTerm vX.Y.Z — http://...`
+3. 浏览器打开 9077 → 侧边/状态栏的 UI 版本号必须与后端一致
+
+第 3 点是 `bump-version.sh` 自动重建 frontend 的意义所在——避免 UI 嵌入旧版本号。
 
 ---
 
@@ -106,6 +118,15 @@ git remote -v
 # public → https://github.com/GDWhisper/OmniTerm.git
 # origin → https://github.com/GDWhisper/OmniTerm-dev.git
 ```
+
+### `cargo install` 后 UI 仍显示旧版本号
+
+原因：`.env.local` 改了但 `frontend/dist` 未重建，发布出去的 crate 前端 bundle
+还是上次 build 的状态。**以后不会再出现**——`bump-version.sh` 末尾自动 `pnpm run build`。
+如果遇到，检查步骤：
+1. 确认 `frontend/dist/assets/*.js` 里 grep 到的新版本号（`grep -hoE '0\.[0-9]+\.[0-9]+' frontend/dist/assets/*.js | sort -u`）
+2. 确认 release 分支 `frontend/dist` 是最新的（不是上版的）
+3. 重新 `cargo publish`（需要跳号版本）
 
 ---
 
