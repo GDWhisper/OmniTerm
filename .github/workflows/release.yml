@@ -112,7 +112,13 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org/
-      - run: npm publish
+      - run: |
+          VERSION=$(node -e "console.log(require('./package.json').version)")
+          if npm view "@gdwhisper/omniterm@$VERSION" version &>/dev/null; then
+            echo "v$VERSION already published, skipping"
+          else
+            npm publish
+          fi
         working-directory: npm-package
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
