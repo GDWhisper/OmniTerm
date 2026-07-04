@@ -62,9 +62,8 @@ omniterm -p 8080         # 自定义端口
 
 ## 参与贡献
 
-- ⭐ 加个 Star
-- 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) — 提交 Bug 或想法
-- 📖 [English](README.md)
+- 加个 Star
+- [Issues](https://github.com/GDWhisper/OmniTerm/issues) — 提交 Bug 或想法
 
 ## 许可证
 
