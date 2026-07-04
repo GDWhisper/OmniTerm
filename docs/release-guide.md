@@ -12,6 +12,7 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 - **私有仓**：完整开发历史，包含所有 dev 文件
 - **公共仓**：线性历史，每次 release 增量提交，`main` 即最新 release
+- **提交风格**：公共仓 commit message 简洁为上（`v0.1.1`），内部细节留在私有仓
 - **CI**：在公共仓运行（tag 触发）
 
 ---
