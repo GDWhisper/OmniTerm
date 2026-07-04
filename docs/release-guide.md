@@ -31,13 +31,17 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ### Step 2：构建 Release 分支
 
-Release 分支 = orphan 分支，只含发布文件，单 commit，无历史。
+Release 分支基于上一版本的 release commit **增量提交**，维持线性历史，无需 force push。
 
 ```bash
-git checkout --orphan release-v1
+# 拉取公共仓最新 main
+git fetch public main
+
+# 重置 release 到公共仓 main（上一版本 release commit）
+git checkout -fB release public/main
 git rm -rf --cached .
 
-# 仅复制发布需要的文件
+# 复制当前 main 的发布文件
 git checkout main -- \
   src/ frontend/ tests/ migrations/ \
   Cargo.toml Cargo.lock \
@@ -61,8 +65,6 @@ git diff --cached --name-only | grep -E '^(\.pi/|\.qoder/|\.codegraph/|AGENTS|CH
 # 输出应为 0
 
 git commit -m "v0.2.0"
-git branch -D release
-git branch -m release-v1 release
 ```
 
 ### Step 3：打 Tag 并推送
@@ -73,8 +75,8 @@ git tag -f v0.2.0 release
 # 先取消旧版本 tag（如果存在）
 git push public :v0.2.0 2>/dev/null
 
-# 推送 release → public/main，tag → CI 触发
-git push -f public release:main
+# 推送 release → public/main（增量，无需 -f），tag → CI 触发
+git push public release:main
 git push public v0.2.0
 
 # 切回 main，推私有仓
