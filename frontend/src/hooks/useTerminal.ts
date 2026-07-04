@@ -5,8 +5,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
-import { useThemeStore } from '../stores/themeStore'
 import { useToastStore } from '../stores/toastStore'
+import { READER_FONT } from '../utils/fonts'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -42,30 +42,6 @@ const DARK_TERMINAL_THEME = {
   brightWhite: '#E6EDF3',
 }
 
-const LIGHT_TERMINAL_THEME = {
-  background: '#ece8e1',
-  foreground: '#1c1917',
-  cursor: '#7c3aed',
-  cursorAccent: '#ece8e1',
-  selectionBackground: 'rgba(124,58,237,0.2)',
-  black: '#1c1917',
-  red: '#dc2626',
-  green: '#16a34a',
-  yellow: '#ca8a04',
-  blue: '#2563eb',
-  magenta: '#7c3aed',
-  cyan: '#0891b2',
-  white: '#3a3530',
-  brightBlack: '#6b6560',
-  brightRed: '#ef4444',
-  brightGreen: '#22c55e',
-  brightYellow: '#eab308',
-  brightBlue: '#3b82f6',
-  brightMagenta: '#8b5cf6',
-  brightCyan: '#06b6d4',
-  brightWhite: '#1c1917',
-}
-
 /** Translate a typed character through a latched modifier from MobileKeyBar. */
 function translateLatch(latch: string, data: string): string {
   switch (latch) {
@@ -83,7 +59,6 @@ function translateLatch(latch: string, data: string): string {
 
 export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
   const { i18n } = useTranslation()
-  const resolved = useThemeStore((s) => s.resolved)
   const attention = useAttention()  // Agent attention context
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -331,8 +306,8 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
-      fontFamily: 'ui-monospace, Consolas, monospace',
-      theme: resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME,
+      fontFamily: READER_FONT,
+      theme: DARK_TERMINAL_THEME,
     })
 
     const fit = new FitAddon()
@@ -424,13 +399,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       disposeTerminal()
     }
   }, [createTerminal, disposeTerminal])
-
-  // Update terminal theme in-place when user switches theme (no destroy/recreate)
-  useEffect(() => {
-    if (!termRef.current) return
-    const theme = resolved === 'light' ? LIGHT_TERMINAL_THEME : DARK_TERMINAL_THEME
-    termRef.current.options.theme = theme
-  }, [resolved])
 
   // Connect WS when terminal is ready and session changes
   useEffect(() => {

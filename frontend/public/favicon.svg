@@ -1,16 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
-  <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#863bFF"/>
-      <stop offset="100%" stop-color="#47bFFF"/>
-    </linearGradient>
-  </defs>
-  <!-- Terminal window - fills entire canvas -->
-  <rect x="1" y="1" width="46" height="46" rx="8" fill="url(#g)"/>
-  <!-- Title bar dot - top right -->
-  <circle cx="38" cy="10" r="3" fill="#fff" opacity="0.85"/>
-  <!-- Prompt arrow > - bigger and bolder -->
-  <path d="M11 20 L21 27 L11 34" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <!-- Cursor block _ -->
-  <rect x="25" y="30" width="12" height="4.5" rx="1.2" fill="#fff" opacity="0.9"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+  <rect x="1" y="1" width="14" height="2" fill="#3A2E1F"/>
+  <rect x="1" y="11" width="14" height="2" fill="#3A2E1F"/>
+  <rect x="1" y="1" width="2" height="12" fill="#3A2E1F"/>
+  <rect x="13" y="1" width="2" height="12" fill="#3A2E1F"/>
+  <rect x="3" y="3" width="10" height="8" fill="#12141A"/>
+  <rect x="4" y="5" width="2" height="1" fill="#7EE787"/>
+  <rect x="5" y="6" width="1" height="1" fill="#7EE787"/>
+  <rect x="4" y="7" width="2" height="1" fill="#7EE787"/>
+  <rect x="7" y="8" width="4" height="1" fill="#58A6FF"/>
+  <rect x="7" y="13" width="2" height="1" fill="#3A2E1F"/>
+  <rect x="5" y="14" width="6" height="1" fill="#3A2E1F"/>
 </svg>

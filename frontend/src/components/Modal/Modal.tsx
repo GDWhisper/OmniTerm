@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { READER_FONT } from '../../utils/fonts'
 
 interface ModalProps {
   open: boolean
@@ -34,13 +35,15 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
     >
       <div
-        className={`${maxWidth} w-full mx-4 rounded-xl shadow-2xl border animate-scale-in`}
+        className={`corner-nails ${maxWidth} w-full mx-4 rounded-xl shadow-2xl border animate-scale-in`}
         style={{
           background: 'var(--bg-elevated)',
           borderColor: 'var(--border-strong)',
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+          fontFamily: READER_FONT,
         }}
       >
+        <span className="nail-bl" />
+        <span className="nail-br" />
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-strong)' }}>
           <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>

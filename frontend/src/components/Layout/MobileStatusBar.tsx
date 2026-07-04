@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { READER_FONT } from '../../utils/fonts'
 
 interface MobileStatusBarProps {
   connected: boolean
@@ -6,8 +7,6 @@ interface MobileStatusBarProps {
   onSessionClick: () => void
   onNewSession: () => void
 }
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
 export function MobileStatusBar({ connected, sessionName, onSessionClick, onNewSession }: MobileStatusBarProps) {
   const { t } = useTranslation()
@@ -22,7 +21,7 @@ export function MobileStatusBar({ connected, sessionName, onSessionClick, onNewS
         padding: '0 12px',
         background: 'var(--bg-base)',
         borderBottom: '1px solid var(--border-subtle)',
-        fontFamily: FONT,
+        fontFamily: READER_FONT,
         fontSize: 11,
         flexShrink: 0,
       }}

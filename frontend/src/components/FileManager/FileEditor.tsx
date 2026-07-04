@@ -4,6 +4,7 @@ import { EditorState, Compartment, type Extension } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter } from '@codemirror/language'
 import { tags } from '@lezer/highlight'
+import { READER_FONT } from '../../utils/fonts'
 interface FileEditorProps {
   /** File content */
   content: string
@@ -47,7 +48,7 @@ const omnitermTheme = EditorView.theme({
     backgroundColor: 'var(--bg-base)',
     color: 'var(--text-primary)',
     fontSize: '13px',
-    fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+    fontFamily: READER_FONT,
     height: '100%',
   },
   '.cm-scroller': {

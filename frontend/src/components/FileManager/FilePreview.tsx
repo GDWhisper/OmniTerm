@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { READER_FONT } from '../../utils/fonts'
 
 const REFRESH_DEBOUNCE_MS = 500
 
@@ -60,9 +61,13 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
           gap: 12,
           color: 'var(--text-faint)',
           fontSize: 13,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+          fontFamily: READER_FONT,
         }}
       >
+        <div className="panel-title-bar">
+          <span>◆</span>
+          <span>preview</span>
+        </div>
         <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="var(--text-dim)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="2" width="12" height="12" rx="1" />
           <circle cx="6" cy="6" r="1.5" />
@@ -99,28 +104,25 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        padding: 16,
-        overflow: 'auto',
-      }}
-    >
-      <img
-        key={`${fileName}-${version}`}
-        src={imageUrl}
-        alt={fileName}
-        onError={() => setError(true)}
-        style={{
-          maxWidth: '100%',
-          maxHeight: '100%',
-          objectFit: 'contain',
-          borderRadius: 4,
-        }}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>preview</span>
+      </div>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, overflow: 'auto', minHeight: 0 }}>
+        <img
+          key={`${fileName}-${version}`}
+          src={imageUrl}
+          alt={fileName}
+          onError={() => setError(true)}
+          style={{
+            maxWidth: '100%',
+            maxHeight: '100%',
+            objectFit: 'contain',
+            borderRadius: 4,
+          }}
+        />
+      </div>
     </div>
   )
 }

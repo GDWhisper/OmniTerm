@@ -1,6 +1,5 @@
 import { useCallback, useRef } from 'react'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 interface MobileKeyBarProps {
   latchMod: string | null
@@ -103,7 +102,7 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         padding: '6px 8px',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
-        fontFamily: FONT,
+        fontFamily: READER_FONT,
         fontSize: 11,
         flexShrink: 0,
       }}
@@ -151,7 +150,7 @@ const keyButtonStyle: React.CSSProperties = {
   border: '1px solid var(--border-strong)',
   background: 'var(--bg-surface)',
   color: 'var(--text-secondary)',
-  fontFamily: FONT,
+  fontFamily: READER_FONT,
   fontSize: 11,
   display: 'flex',
   alignItems: 'center',

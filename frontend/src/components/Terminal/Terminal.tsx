@@ -4,8 +4,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 export function Terminal() {
   const { t } = useTranslation()
@@ -210,24 +209,30 @@ export function Terminal() {
   if (!activeSessionId && !activeExternalSession) {
     return (
       <div
-        className="h-full flex items-center justify-center"
-        style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: FONT }}
+        className="h-full flex flex-col"
+        style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: READER_FONT }}
       >
-        <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'center',
-              marginBottom: 16,
-              color: 'var(--accent)',
-              filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
-            }}
-          >
-            <KeyboardIcon size={40} />
-          </div>
-          <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
-          <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
-            {t('terminal.hint')}
+        <div className="panel-title-bar">
+          <span>◆</span>
+          <span>terminal</span>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div style={{ textAlign: 'center' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'center',
+                marginBottom: 16,
+                color: 'var(--accent)',
+                filter: 'drop-shadow(0 0 10px rgba(167,139,250,0.4))',
+              }}
+            >
+              <KeyboardIcon size={40} />
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--text-muted)' }}>{t('terminal.noSession')}</div>
+            <div style={{ fontSize: 12, marginTop: 8, color: 'var(--text-dim)' }}>
+              {t('terminal.hint')}
+            </div>
           </div>
         </div>
       </div>
@@ -236,7 +241,15 @@ export function Terminal() {
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}>
-      <div ref={containerRef} className="h-full w-full p-1" style={{ flex: 1, minHeight: 0 }} />
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>terminal</span>
+        <span className="title-bar-spacer" />
+        {hasSession && <span className="title-bar-badge">● LIVE</span>}
+      </div>
+      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0 }}>
+        <div ref={containerRef} className="h-full w-full p-1" />
+      </div>
       {isMobile && (
         <MobileKeyBar
           latchMod={latchMod}

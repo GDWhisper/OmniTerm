@@ -1,3 +1,77 @@
+/* ────────────────────────────────────────────────────────────────────
+   Font face — self-hosted pixel fonts (no remote dependency).
+   font-display: block — brief invisible period is better than FOUT
+   on UI chrome that is designed around these faces.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Press Start 2P — logo wordmark */
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/press-start-2p-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/press-start-2p-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/press-start-2p-greek.woff2') format('woff2');
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/press-start-2p-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/press-start-2p-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* VT323 — titles, buttons, status labels */
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/vt323-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/vt323-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'VT323';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/vt323-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -7,34 +81,45 @@
    Components use var(--token) instead of hardcoded hex.
    ──────────────────────────────────────────────────────────────────── */
 :root {
-  /* backgrounds — warm muted tones, easier on eyes than pure white */
-  --bg-base: #f0ece6;
-  --bg-elevated: #e8e3db;
-  --bg-surface: #f7f4ef;
-  /* borders */
-  --border-subtle: #d9d3c8;
-  --border-strong: #c4bdb0;
-  /* text — deep warm gray for high contrast */
-  --text-primary: #1c1917;
-  --text-secondary: #3a3530;
-  --text-muted: #6b6560;
-  --text-faint: #9c9590;
-  --text-dim: #c4bdb0;
-  /* accent */
-  --accent: #7c3aed;
-  --accent-bright: #6d28d9;
-  --accent-10: rgba(124, 58, 237, 0.10);
-  --accent-14: rgba(124, 58, 237, 0.14);
-  /* danger */
-  --danger: #dc2626;
-  --danger-12: rgba(220, 38, 38, 0.12);
-  /* success */
-  --success: #16a34a;
-  --warning: #ca8a04;
-  --pixel-shadow: #c4bdb0;
-  /* scrollbar */
-  --scrollbar-thumb: #c4bdb0;
-  --scrollbar-track: #e8e3db;
+  /* ── Parchment A2 light theme (primary) ── */
+  /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
+     All three are warm parchment tones — NO near-white (#FFF, #FDF, etc.).
+     Surface is more saturated yellow + slightly darker than base, matching
+     the dark-theme convention (recessed input/rail look). */
+  --bg-base: #F5ECD8;
+  --bg-elevated: #EBE0C4;
+  --bg-surface: #F0E1B0;
+  --border-subtle: #D4C4A0;
+  --border-strong: #3A2E1F;
+  --text-primary: #3A2E1F;
+  --text-secondary: #6B5D45;
+  --text-muted: #6B5D45;
+  --text-faint: #A89474;
+  --text-dim: #C9B88A;
+  --accent: #58A6FF;
+  --accent-bright: #79C0FF;
+  --accent-pink: #F778BA;
+  --accent-10: rgba(88, 166, 255, 0.10);
+  --accent-14: rgba(88, 166, 255, 0.14);
+  --danger: #C85A3A;
+  --danger-12: rgba(200, 90, 58, 0.12);
+  --success: #5A8F3A;
+  --warning: #D4A05A;
+  --wood-dark: #8B5A2B;
+  --wood-shadow: #3A2E1F;
+  /* Inset 3D rim shades for dark wood-shadow status badges — top/left dark
+     (sunken-rim shadow), bottom/right light (rim catches light). Pair
+     with `box-shadow: inset ...` on the badge element. See §4.1. */
+  --wood-inset-dark: #1F1812;
+  --wood-inset-light: #5A4530;
+  --gold-light: #FFCB6B;
+  --accent-light: #58A6FF;
+  --danger-light: #C85A3A;
+  --pixel-shadow: #8B7755;
+  --bg-elevated-light: #EBE0C4;
+  --pixel-shadow-light: #8B7755;
+  --scrollbar-thumb: #8B7755;
+  --scrollbar-track: #EBE0C4;
   color-scheme: light;
 }
 
@@ -55,6 +140,8 @@
   /* accent — pastel neon cyan */
   --accent: #58A6FF;
   --accent-bright: #79C0FF;
+  --accent-10: rgba(88, 166, 255, 0.10);
+  --accent-14: rgba(88, 166, 255, 0.14);
   --accent-pink: #F778BA;
   /* danger — soft coral red */
   --danger: #FF7B72;
@@ -87,11 +174,27 @@ svg path, svg rect, svg circle, svg line {
   stroke-linejoin: miter;
 }
 
-/* Pixel display font — titles, buttons, status labels only */
+/* ────────────────────────────────────────────────────────────────────
+   Font layers — three distinct stacks.
+   .font-logo    → logo wordmark only (Press Start 2P)
+   .font-pixel   → display text: titles, buttons, status labels
+   .font-reader  → code, body, inputs (JetBrains Mono)
+   ──────────────────────────────────────────────────────────────────── */
+
+.font-logo {
+  font-family: 'Press Start 2P', 'VT323', monospace;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
 .font-pixel {
   font-family: 'VT323', 'Press Start 2P', monospace;
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+
+.font-reader {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 }
 
 /* CRT scanline overlay — 2% opacity, controlled by settings */
@@ -209,6 +312,8 @@ html, body, #root {
 
 /* ────────────────────────────────────────────────────────────────────
    OmniTerm FileManager — dufs-inspired single-page file table.
+   UI/UX layout pattern adapted from sigoden/dufs
+   (https://github.com/sigoden/dufs, MIT OR Apache-2.0).
    Scoped under .omnifm-root. Follows docs/ui-style-guide.md palette.
    ──────────────────────────────────────────────────────────────────── */
 
@@ -795,6 +900,175 @@ html, body, #root {
   box-shadow: none;
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   Sidebar project card — bordered card with light header row.
+   Follows docs/ui-style-guide.md: border-radius 0, hard shadow,
+   --bg-surface header differentiated from section title bar.
+   ──────────────────────────────────────────────────────────────────── */
+.sidebar-project-card {
+  border: 2px solid var(--border-strong);
+  margin-bottom: 10px;
+  background: var(--bg-elevated);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+}
+
+.sidebar-project-header {
+  background: var(--bg-surface);
+  padding: 5px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sidebar-project-header .proj-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-project-header .proj-name {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.sidebar-project-header .proj-path {
+  display: block;
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+  direction: rtl;
+  text-align: left;
+}
+
+.sidebar-project-body {
+  padding: 6px;
+}
+
+/* ── Worktree slot — game-style equipment slot inside project card ── */
+.sidebar-wt-slot {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-base);
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.sidebar-wt-slot:hover {
+  background: var(--bg-surface);
+}
+
+.sidebar-wt-slot.active {
+  border: 2px solid var(--border-strong);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+  background: var(--bg-surface);
+}
+
+.sidebar-wt-row {
+  padding: 5px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-wt-row .branch-name {
+  font-size: 14px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-wt-slot.active .sidebar-wt-row .branch-name {
+  color: var(--accent);
+}
+
+.sidebar-wt-row .session-count {
+  font-family: 'VT323', monospace;
+  font-size: 12px;
+  background: var(--wood-shadow, #3A2E1F);
+  color: #7EE787;
+  padding: 0 4px;
+  box-shadow:
+    inset 1px 1px 0 var(--wood-inset-dark, #1a1208),
+    inset -1px -1px 0 var(--wood-inset-light, #5a4a30);
+}
+
+.sidebar-wt-add-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-family: 'VT323', monospace;
+  font-size: 12px;
+  padding: 0 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.sidebar-wt-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Session list — inline below active worktree, no container chrome ── */
+.sidebar-session-list {
+  padding: 2px 4px 4px 28px;
+  border-top: 1px dashed var(--border-subtle);
+}
+
+.sidebar-session-item {
+  padding: 3px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  margin-bottom: 1px;
+  color: var(--text-secondary);
+}
+
+.sidebar-session-item:hover {
+  background: var(--bg-elevated);
+}
+
+.sidebar-session-item.active {
+  background: var(--bg-surface);
+  border-left: 2px solid var(--accent);
+  padding-left: 4px;
+  color: var(--text-primary);
+}
+
+.sidebar-session-item .session-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.sidebar-session-item .session-attn {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  background: var(--wood-shadow, #3A2E1F);
+  box-shadow:
+    inset 1px 1px 0 var(--wood-inset-dark, #1a1208),
+    inset -1px -1px 0 var(--wood-inset-light, #5a4a30);
+  flex-shrink: 0;
+}
+
 /* ── Settings popup slide-in ── */
 @keyframes settings-slide-in {
   from { opacity: 0; transform: translateY(8px); }
@@ -856,3 +1130,428 @@ html, body, #root {
 .pixel-starman {
   animation: starman-flash 0.4s steps(1, end) infinite;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Logo title bar — sidebar top, wood background, pixel icon + wordmark
+   ──────────────────────────────────────────────────────────────────── */
+.logo-title-bar {
+  padding: 14px 10px;
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
+}
+
+.logo-wordmark {
+  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-size: 17px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #FAF2DE;
+  line-height: 1.1;
+}
+
+.logo-version {
+  font-family: 'VT323', monospace;
+  font-size: 11px;
+  color: var(--gold-light, #FFCB6B);
+  letter-spacing: 1px;
+  margin-top: 5px;
+  line-height: 1;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Game-style buttons — Primary / Secondary / Accent / Danger
+   All have hard shadow + active displacement.
+   ──────────────────────────────────────────────────────────────────── */
+.btn-pixel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.1s steps(3);
+  white-space: nowrap;
+}
+/* !important required: overrides box-shadow from all 4 variant classes at :active */
+.btn-pixel:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: none !important;
+}
+.btn-pixel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-pixel:focus-visible {
+  outline: 2px solid var(--accent, #58A6FF);
+  outline-offset: 2px;
+}
+
+.btn-pixel-primary {
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  border: 2px solid var(--wood-shadow, #3A2E1F);
+  box-shadow: 3px 3px 0 var(--pixel-shadow-light, #8B7755);
+}
+.btn-pixel-primary:hover:not(:disabled) { background: #A06A3B; }
+
+.btn-pixel-secondary {
+  background: var(--bg-elevated-light, #EBE0C4);
+  color: var(--wood-dark, #8B5A2B);
+  border: 2px solid var(--wood-dark, #8B5A2B);
+  box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
+}
+
+.btn-pixel-accent {
+  background: var(--accent-light, #58A6FF);
+  color: var(--wood-shadow, #3A2E1F);
+  border: none;
+  box-shadow: 0 3px 0 var(--wood-shadow, #3A2E1F);
+}
+.btn-pixel-accent:hover:not(:disabled) { background: #79C0FF; }
+
+.btn-pixel-danger {
+  background: var(--bg-elevated-light, #EBE0C4);
+  color: var(--danger-light, #C85A3A);
+  border: 2px solid var(--danger-light, #C85A3A);
+  box-shadow: 2px 2px 0 var(--pixel-shadow-light, #8B7755);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Parchment texture — very subtle dot-matrix on base background.
+   Toggled via .parchment-texture on <body>.
+   ──────────────────────────────────────────────────────────────────── */
+body.parchment-texture {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(139, 90, 43, 0.04) 1px, transparent 0) 0 0 / 8px 8px,
+    var(--bg-base);
+}
+
+.dark body.parchment-texture {
+  background: var(--bg-base);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Panel title bar — wood background, pixel font, 3px letter-spacing.
+   Used on top of every panel (sidebar sections, terminal, file manager,
+   settings, modal).
+   ──────────────────────────────────────────────────────────────────── */
+.panel-title-bar {
+  padding: 5px 10px;
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.panel-title-bar .title-bar-spacer { margin-left: auto; }
+.panel-title-bar .title-bar-badge {
+  font-size: 11px;
+  background: var(--wood-shadow, #3A2E1F);
+  color: #7EE787;
+  padding: 1px 6px;
+  /* Inset 3D — see §4.1 */
+  box-shadow:
+    inset 0 1px 0 var(--wood-inset-dark),
+    inset 1px 0 0 var(--wood-inset-dark),
+    inset 0 -1px 0 var(--wood-inset-light),
+    inset -1px 0 0 var(--wood-inset-light);
+}
+.panel-title-bar .title-bar-path {
+  font-size: 11px;
+  color: var(--gold-light, #FFCB6B);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Popup scrollbar — 8px wide, hard 0px corners, theme-aware.
+   Kept on the pixel-game aesthetic instead of the browser default.
+   The popups themselves are overflow: hidden (don't scroll); scrolling is
+   delegated to inner panes so the .panel-title-bar stays pinned at top.
+     - .settings-content: right pane of the tabbed settings popup
+     - .tmux-cheatsheet-content: scrollable body of the cheatsheet popup
+   ──────────────────────────────────────────────────────────────────── */
+.settings-content::-webkit-scrollbar,
+.tmux-cheatsheet-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.settings-content::-webkit-scrollbar-track,
+.tmux-cheatsheet-content::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.settings-content::-webkit-scrollbar-thumb,
+.tmux-cheatsheet-content::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+  border: 1px solid var(--scrollbar-track);
+}
+.settings-content::-webkit-scrollbar-thumb:hover,
+.tmux-cheatsheet-content::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+.settings-content,
+.tmux-cheatsheet-content {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Settings panel — game-style tabbed layout.
+   Left rail (categories) + right pane (sections of active category).
+   Mirrors RPG menu aesthetics: wood-dark active tab, accent left border,
+   VT323 pixel font, hard 0px corners.
+   ──────────────────────────────────────────────────────────────────── */
+.settings-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+.settings-tabs {
+  width: 92px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  background: var(--bg-surface);
+  border-right: 2px solid var(--wood-shadow, #3A2E1F);
+  overflow-y: auto;
+}
+.settings-tab {
+  background: transparent;
+  border: none;
+  /* Reserve 3px on the left so active state doesn't shift tab width. */
+  border-left: 3px solid transparent;
+  padding: 9px 8px 9px 10px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s steps(2), color 0.1s steps(2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.settings-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.settings-tab.active {
+  background: var(--wood-dark, #8B5A2B);
+  color: #FAF2DE;
+  border-left-color: var(--accent, #58A6FF);
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--accent, #58A6FF);
+  outline-offset: -2px;
+}
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.settings-content > section { margin: 0; }
+
+/* Dark theme: the wood tone becomes dark graphite, but the active-tab
+   treatment still reads as "selected" thanks to the accent left border. */
+.dark .settings-tabs { border-right-color: #090A0D; }
+.dark .settings-tab.active { background: #2A2520; color: #E6DFD0; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Segmented progress — HP/XP style bar of discrete blocks.
+   ──────────────────────────────────────────────────────────────────── */
+.progress-segmented { margin-top: 2px; }
+.progress-segmented-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'VT323', monospace;
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--wood-dark, #8B5A2B);
+  margin-bottom: 3px;
+}
+.progress-segmented-bar {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+.progress-segmented-segment {
+  flex: 1;
+  background: #D4C4A0;
+}
+.progress-segmented-segment.filled { background: #5A8F3A; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Selected-item blinking cursor — pink ▶ that blinks in discrete steps.
+   Apply to the indicator element inside a selected list row.
+   ──────────────────────────────────────────────────────────────────── */
+.selected-cursor {
+  color: #F778BA;
+  font-size: 16px;
+  line-height: 1;
+  animation: blink-cursor 1s steps(1) infinite;
+}
+.selected-cursor.inactive { color: transparent; animation: none; }
+
+@keyframes blink-cursor {
+  50% { opacity: 0; }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Corner nails — gold squares at the 4 corners of floating panels.
+   Uses 4 absolutely-positioned ::before/::after + 2 <span> children
+   (since CSS only gives us 2 pseudo-elements).
+   ──────────────────────────────────────────────────────────────────── */
+.corner-nails { position: relative; }
+.corner-nails::before,
+.corner-nails::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--gold-light, #FFCB6B);
+  z-index: 1;
+}
+.corner-nails::before { top: -3px; left: -3px; }
+.corner-nails::after  { top: -3px; right: -3px; }
+.corner-nails > .nail-bl,
+.corner-nails > .nail-br {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--gold-light, #FFCB6B);
+  z-index: 1;
+}
+.corner-nails > .nail-bl { bottom: -3px; left: -3px; }
+.corner-nails > .nail-br { bottom: -3px; right: -3px; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Terminal pixel border — wood-brown thick frame around xterm.
+   Keeps the deep #12141A screen for code readability.
+   ──────────────────────────────────────────────────────────────────── */
+.terminal-panel-pixel {
+  background: var(--bg-elevated, #EBE0C4);
+  border: 2px solid var(--wood-shadow, #3A2E1F);
+  box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
+  display: flex;
+  flex-direction: column;
+}
+.terminal-panel-pixel .xterm-viewport,
+.terminal-panel-pixel .xterm {
+  background: #12141A !important;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   DialogueToast — Undertale-style RPG dialogue box for key notifications.
+   Dark background + wood-shadow outer frame + corner nails.
+   ──────────────────────────────────────────────────────────────────── */
+.dialogue-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 520px;
+  padding: 12px 18px;
+  background: #12141A;
+  border: 3px solid var(--wood-shadow, #3A2E1F);
+  color: #FAF2DE;
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  letter-spacing: 1px;
+  line-height: 1.4;
+  box-shadow: 4px 4px 0 var(--pixel-shadow, #8B7755);
+  z-index: 10000;
+  animation: dialogue-toast-in 0.3s steps(3) forwards;
+}
+.dialogue-toast::before,
+.dialogue-toast::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--gold-light, #FFCB6B);
+}
+.dialogue-toast::before { top: -3px; left: -3px; }
+.dialogue-toast::after  { top: -3px; right: -3px; }
+.dialogue-toast > .nail-bl { position: absolute; width: 8px; height: 8px; background: var(--gold-light, #FFCB6B); bottom: -3px; left: -3px; }
+.dialogue-toast > .nail-br { position: absolute; width: 8px; height: 8px; background: var(--gold-light, #FFCB6B); bottom: -3px; right: -3px; }
+.dialogue-toast .dialogue-caret {
+  text-align: right;
+  color: #F778BA;
+  font-size: 14px;
+  animation: blink-cursor 1s steps(1) infinite;
+  margin-top: 4px;
+}
+.dialogue-toast .highlight-name { color: #FFCB6B; }
+.dialogue-toast .highlight-emotion { color: #F778BA; }
+
+@keyframes dialogue-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes dialogue-toast-out {
+  from { opacity: 1; transform: translate(-50%, 0); }
+  to   { opacity: 0; transform: translate(-50%, 8px); }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Pixel-style toast — replaces the existing toast styling when
+   is active. Adds a ★ prefix and pixel border.
+   ──────────────────────────────────────────────────────────────────── */
+.toast-pixel {
+  background: #12141A;
+  border: 2px solid var(--success, #5A8F3A);
+  color: #7EE787;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
+  border-radius: 0;
+  padding: 8px 14px;
+}
+.toast-pixel.toast-error { border-color: var(--danger, #C85A3A); color: #FF7B72; }
+.toast-pixel.toast-warning { border-color: var(--warning, #D4A05A); color: #FFCB6B; }
+.toast-pixel.toast-info { border-color: var(--accent, #58A6FF); color: #79C0FF; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Dark theme (night mode) adaptation of game UI elements.
+   The parchment wood tones become dark graphite + muted gold.
+   ──────────────────────────────────────────────────────────────────── */
+.dark .panel-title-bar { background: #2A2520; border-bottom-color: #090A0D; }
+.dark .btn-pixel-primary { background: #2A2520; color: #E6DFD0; border-color: #090A0D; box-shadow: 3px 3px 0 #090A0D; }
+.dark .btn-pixel-secondary { background: #1B1E26; color: #D1D5DB; border-color: #484F58; box-shadow: 2px 2px 0 #090A0D; }
+.dark .progress-segmented-segment { background: #30363D; }
+.dark .progress-segmented-segment.filled { background: #7EE787; }
+.dark .progress-segmented-label { color: #8B949E; }
+.dark .corner-nails::before,
+.dark .corner-nails::after,
+.dark .corner-nails > .nail-bl,
+.dark .corner-nails > .nail-br,
+.dark .dialogue-toast::before,
+.dark .dialogue-toast::after,
+.dark .dialogue-toast > .nail-bl,
+.dark .dialogue-toast > .nail-br { background: #8B7755; }
+/* logo-version uses --accent-gold (same as title-bar-path) — see ui-style-guide §1.3 */

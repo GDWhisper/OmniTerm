@@ -1,83 +1,36 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { Settings } from './Settings'
-import { GAP, MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
+import { MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
+import { useAnchorPopup } from '../../hooks/useAnchorPopup'
 
-const POPUP_WIDTH = 340
+/** Desktop popup width = 1/4 of viewport (rendered as 25vw in CSS). */
+const POPUP_WIDTH_RATIO = 0.25
 
 export function SettingsPopup() {
-  const ref = useRef<HTMLDivElement>(null)
-  const toggleSettings = useAppStore((s) => s.toggleSettings)
-  const isMobile = useAppStore((s) => s.isMobile)
-  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ left: 0 })
+  const { t } = useTranslation()
+  // Track viewport width so useAnchorPopup can clamp horizontally to match the
+  // popup's actual rendered width (which is 25vw in CSS).
+  const [popupWidthPx, setPopupWidthPx] = useState(() =>
+    Math.round(window.innerWidth * POPUP_WIDTH_RATIO),
+  )
+  useEffect(() => {
+    const onResize = () => setPopupWidthPx(Math.round(window.innerWidth * POPUP_WIDTH_RATIO))
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  const { ref, pos, isMobile } = useAnchorPopup({
+    toggleSelector: '[data-toggle="settings"]',
+    topAnchorSelector: '.logo-title-bar',
+    width: popupWidthPx,
+    onClose: useAppStore((s) => s.toggleSettings),
+  })
 
   // Mobile height constants — computed once so outer & inner stay in sync
   const mobileBottom = MOBILE_NAV_HEIGHT + SIDEBAR_BOTTOM_BAR_HEIGHT
   const mobileTotal = mobileBottom + MOBILE_STATUS_BAR_RESERVE
-
-  // Calculate position based on gear button's bounding rect
-  const calcPos = useCallback(() => {
-    const btn = document.querySelector('[data-toggle="settings"]') as HTMLElement | null
-    if (!btn) return
-    const rect = btn.getBoundingClientRect()
-    const vw = window.innerWidth
-    const bottom = window.innerHeight - rect.top + GAP
-
-    // Prefer left-align to button; if popup overflows right edge, right-align instead
-    let left = rect.left
-    if (left + POPUP_WIDTH + GAP > vw) {
-      left = vw - POPUP_WIDTH - GAP
-    }
-    // Clamp left edge
-    left = Math.max(GAP, left)
-
-    setPos({ bottom, left })
-  }, [])
-
-  // Recalculate on open
-  useEffect(() => {
-    calcPos()
-  }, [calcPos])
-
-  // Viewport boundary protection: if popup would overflow top, flip to below
-  useEffect(() => {
-    if (!ref.current) return
-    const el = ref.current
-    const popupRect = el.getBoundingClientRect()
-    if (popupRect.top < 0) {
-      // Flip: show below the button instead
-      const btn = document.querySelector('[data-toggle="settings"]') as HTMLElement | null
-      if (btn) {
-        const rect = btn.getBoundingClientRect()
-        const vw = window.innerWidth
-        let left = rect.left
-        if (left + POPUP_WIDTH + GAP > vw) left = vw - POPUP_WIDTH - GAP
-        left = Math.max(GAP, left)
-        setPos({ top: rect.bottom + GAP, left })
-      }
-    }
-  }, [pos])
-
-  // Click outside to close (ignore clicks on the gear toggle button)
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as HTMLElement
-      if (ref.current && !ref.current.contains(target) && !target.closest('[data-toggle="settings"]')) {
-        toggleSettings()
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [toggleSettings])
-
-  // Escape to close
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') toggleSettings()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [toggleSettings])
 
   return (
     <div
@@ -86,6 +39,8 @@ export function SettingsPopup() {
       className="settings-popup"
       style={{
         position: 'fixed',
+        display: 'flex',
+        flexDirection: 'column',
         // Mobile: bottom sheet above MobileNav; Desktop: positioned popup
         ...(isMobile
           ? {
@@ -98,14 +53,20 @@ export function SettingsPopup() {
               overflow: 'hidden',
             }
           : {
-              ...pos,
-              maxHeight: 'calc(100dvh - 16px)',
+              left: pos.left,
+              // Fixed-height desktop popup (1/3 of viewport). Right pane
+              // (.settings-content) scrolls if its sections don't fit, so the
+              // popup itself stays a stable size across tab switches.
+              // maxHeight from useAnchorPopup is a safety cap when viewport is
+              // too short for 33vh.
+              height: '33vh',
+              maxHeight: pos.maxHeight,
+              top: pos.top,
+              bottom: pos.bottom,
               borderRadius: 10,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              padding: 4,
+              overflow: 'hidden',
             }),
-        width: isMobile ? '100%' : POPUP_WIDTH,
+        width: isMobile ? '100%' : `${POPUP_WIDTH_RATIO * 100}vw`,
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',
@@ -116,13 +77,11 @@ export function SettingsPopup() {
         animation: 'settings-slide-in 150ms ease-out',
       }}
     >
-      {isMobile ? (
-        <div style={{ height: '100%', overflowY: 'auto', padding: 4, WebkitOverflowScrolling: 'touch' }}>
-          <Settings />
-        </div>
-      ) : (
-        <Settings />
-      )}
+      <div className="panel-title-bar">
+        <span>◆</span>
+        <span>{t('settings.title')}</span>
+      </div>
+      <Settings />
     </div>
   )
 }

@@ -61,6 +61,7 @@ export interface AppState {
   pixelAnimationsEnabled: boolean
   soundEnabled: boolean
   crtScanlines: boolean
+  parchmentTextureEnabled: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -90,6 +91,10 @@ export interface AppState {
   setPixelAnimationsEnabled: (v: boolean) => void
   setSoundEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
+  setParchmentTextureEnabled: (v: boolean) => void
+
+  // Workspace switching (batched update, replaces 3-4 separate set* calls)
+  switchWorkspace: (project: Project, workspace: Workspace) => void
 
   // Workspace session memory
   setWorkspaceSession: (workspaceId: string, sessionId: string) => void
@@ -103,7 +108,7 @@ export interface AppState {
   closeFmDrawer: (sessionId: string) => void
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   sidebarOpen: true,
   sidebarCollapsed: false,
   fileManagerOpen: true,
@@ -144,6 +149,7 @@ export const useAppStore = create<AppState>((set) => ({
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
+  parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -223,6 +229,48 @@ export const useAppStore = create<AppState>((set) => ({
   setCrtScanlines: (v) => {
     localStorage.setItem('omniterm_crt_scanlines', String(v))
     set({ crtScanlines: v })
+  },
+  setParchmentTextureEnabled: (v) => {
+    localStorage.setItem('omniterm_parchment_texture', String(v))
+    set({ parchmentTextureEnabled: v })
+  },
+
+  /** Batch all workspace-switch state into one set() to avoid cascading re-renders. */
+  switchWorkspace: (project, workspace) => {
+    const state = get()
+    const isSameWorkspace = workspace.id === state.activeWorkspaceId
+    const newWorkspaceId = isSameWorkspace ? null : workspace.id
+
+    let newSessionId: string | null = null
+    if (!isSameWorkspace) {
+      const rememberedId = state.workspaceSessionMemory[workspace.id]
+      const wtSessions = (state.sessions[project.id] || []).filter(
+        (s) => s.workspace_path === workspace.path,
+      )
+      if (rememberedId && wtSessions.some((s) => s.id === rememberedId)) {
+        newSessionId = rememberedId
+      }
+    }
+
+    // localStorage — mirrors the individual set*() helpers but all at once
+    localStorage.setItem('omniterm_active_project', project.id)
+    if (newWorkspaceId) {
+      localStorage.setItem('omniterm_active_workspace', newWorkspaceId)
+    } else {
+      localStorage.removeItem('omniterm_active_workspace')
+    }
+    if (newSessionId) {
+      localStorage.setItem('omniterm_active_session', newSessionId)
+    } else {
+      localStorage.removeItem('omniterm_active_session')
+    }
+
+    set({
+      activeProjectId: project.id,
+      activeWorkspaceId: newWorkspaceId,
+      activeSessionId: newSessionId,
+      activeExternalSession: null,
+    })
   },
 
   setWorkspaceSession: (workspaceId, sessionId) =>

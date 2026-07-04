@@ -122,59 +122,65 @@ export function Layout() {
       className="flex"
       style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)' }}
     >
-      {/* Sidebar */}
-      {sidebarOpen && (
-        <div
-          className="flex-shrink-0"
-          style={{
-            width: sidebarCollapsed ? 40 : sidebarWidth,
-            overflow: 'hidden',
-            background: 'var(--bg-base)',
-            borderRight: '1px solid var(--border-subtle)',
-            transition: isDragging ? 'none' : 'width 0.2s ease',
-          }}
-        >
-          <Sidebar />
+      {/* Panels wrapper */}
+      <div
+        className="flex"
+        style={{ width: '100%', height: '100%', minWidth: 0 }}
+      >
+        {/* Sidebar */}
+        {sidebarOpen && (
+          <div
+            className="flex-shrink-0"
+            style={{
+              width: sidebarCollapsed ? 40 : sidebarWidth,
+              overflow: 'hidden',
+              background: 'var(--bg-base)',
+              borderRight: '1px solid var(--border-subtle)',
+              transition: isDragging ? 'none' : 'width 0.2s ease',
+            }}
+          >
+            <Sidebar />
+          </div>
+        )}
+
+        {/* Sidebar drag handle — hidden when collapsed */}
+        {sidebarOpen && !sidebarCollapsed && (
+          <div
+            className="omniterm-drag-bar omniterm-drag-bar-v"
+            onMouseDown={handleSidebarDrag}
+            onTouchStart={handleSidebarDrag}
+          />
+        )}
+
+        {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
+        <div className="flex-1 min-w-0">
+          <Terminal key={activeSessionId ?? 'empty'} />
         </div>
-      )}
 
-      {/* Sidebar drag handle — hidden when collapsed */}
-      {sidebarOpen && !sidebarCollapsed && (
-        <div
-          className="omniterm-drag-bar omniterm-drag-bar-v"
-          onMouseDown={handleSidebarDrag}
-          onTouchStart={handleSidebarDrag}
-        />
-      )}
+        {/* FileManager drag handle — hidden when collapsed */}
+        {fileManagerOpen && !fileManagerCollapsed && (
+          <div
+            className="omniterm-drag-bar omniterm-drag-bar-v"
+            onMouseDown={handleFileManagerDrag}
+            onTouchStart={handleFileManagerDrag}
+          />
+        )}
 
-      {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
-      <div className="flex-1 min-w-0">
-        <Terminal key={activeSessionId ?? 'empty'} />
+        {/* FileManager */}
+        {fileManagerOpen && (
+          <div
+            className="flex-shrink-0 overflow-hidden"
+            style={{
+              width: fileManagerCollapsed ? 40 : fileManagerWidth,
+              background: 'var(--bg-base)',
+              borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
+              transition: isDragging ? 'none' : 'width 0.2s ease',
+            }}
+          >
+            <FileManager />
+          </div>
+        )}
       </div>
-
-      {/* FileManager drag handle — hidden when collapsed */}
-      {fileManagerOpen && !fileManagerCollapsed && (
-        <div
-          className="omniterm-drag-bar omniterm-drag-bar-v"
-          onMouseDown={handleFileManagerDrag}
-          onTouchStart={handleFileManagerDrag}
-        />
-      )}
-
-      {/* FileManager */}
-      {fileManagerOpen && (
-        <div
-          className="flex-shrink-0 overflow-hidden"
-          style={{
-            width: fileManagerCollapsed ? 40 : fileManagerWidth,
-            background: 'var(--bg-base)',
-            borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
-            transition: isDragging ? 'none' : 'width 0.2s ease',
-          }}
-        >
-          <FileManager />
-        </div>
-      )}
 
       {/* Settings popup — fixed positioning, independent of all panels */}
       {settingsOpen && <SettingsPopup />}

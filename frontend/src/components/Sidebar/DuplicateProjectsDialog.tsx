@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Modal } from '../Modal/Modal'
 import { api, type DuplicateGroup, type DuplicateProject } from '../../api/client'
+import { READER_FONT } from '../../utils/fonts'
 
 /**
  * Modal that lets the user reconcile legacy duplicate projects.
@@ -171,7 +172,7 @@ function DuplicateGroupCard({
           style={{
             fontSize: 10,
             color: 'var(--text-dim)',
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+            fontFamily: READER_FONT,
           }}
           className="truncate ml-2"
           title={group.group_id}
@@ -230,7 +231,7 @@ function DuplicateProjectRow({
         </div>
         <div
           className="truncate"
-          style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: "'JetBrains Mono', ui-monospace, monospace" }}
+          style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: READER_FONT }}
           title={p.path}
         >
           {p.path}
