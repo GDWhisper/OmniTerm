@@ -1,4 +1,3 @@
 ## 修复
 
-- `cargo install` 版本号显示错误
-- 启动时不再静默，打印访问地址
+- `cargo install` 后 UI 仍显示旧版本号
