@@ -15,8 +15,7 @@ import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, PixelButton, SignalBarsSprite } from '../PixelUI'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 function SidebarBottomButton({
   toggle,
@@ -800,7 +799,7 @@ export function Sidebar() {
     return (
       <div
         className="h-full flex flex-col items-center relative"
-        style={{ background: 'var(--bg-base)', fontFamily: FONT, color: 'var(--text-primary)', width: 40 }}
+        style={{ background: 'var(--bg-base)', fontFamily: READER_FONT, color: 'var(--text-primary)', width: 40 }}
       >
         <button
           onClick={toggleSidebarCollapsed}
@@ -853,7 +852,7 @@ export function Sidebar() {
   return (
     <div
       className="h-full flex flex-col text-base relative"
-      style={{ background: 'var(--bg-base)', fontFamily: FONT, color: 'var(--text-primary)' }}
+      style={{ background: 'var(--bg-base)', fontFamily: READER_FONT, color: 'var(--text-primary)' }}
     >
       {/* Header — logo title bar */}
       <div className="logo-title-bar">
@@ -1233,7 +1232,7 @@ export function Sidebar() {
                             borderRadius: 4,
                             padding: '2px 4px',
                             maxWidth: 100,
-                            fontFamily: FONT,
+                            fontFamily: READER_FONT,
                           }}
                         >
                           {projects.map(p => (
@@ -1667,7 +1666,7 @@ export function Sidebar() {
               <div
                 className="truncate"
                 style={{
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                  fontFamily: READER_FONT,
                   fontSize: 11,
                   color: 'var(--danger)',
                 }}
@@ -1860,7 +1859,7 @@ export function Sidebar() {
                 border: '1px solid var(--border-strong)',
                 fontSize: 11,
                 color: 'var(--text-muted)',
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                fontFamily: READER_FONT,
               }}
               title={coverConflict.coveringProject.path}
             >

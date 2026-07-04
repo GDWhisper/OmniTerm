@@ -3,8 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -53,7 +52,7 @@ const btnBase: React.CSSProperties = {
   border: '1px solid var(--border-strong)',
   borderRadius: 6,
   transition: 'all 0.15s ease',
-  fontFamily: FONT,
+  fontFamily: READER_FONT,
   cursor: 'pointer',
 }
 
@@ -198,7 +197,7 @@ function FontSizeSection() {
           −
         </button>
         <div className="flex-1 text-center">
-          <span style={{ fontSize: 18, fontFamily: FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{effectiveFontSize}</span>
+          <span style={{ fontSize: 18, fontFamily: READER_FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{effectiveFontSize}</span>
           <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
         </div>
         <button

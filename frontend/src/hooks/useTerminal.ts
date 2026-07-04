@@ -6,6 +6,7 @@ import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
+import { READER_FONT } from '../utils/fonts'
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -305,7 +306,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
-      fontFamily: 'ui-monospace, Consolas, monospace',
+      fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
     })
 

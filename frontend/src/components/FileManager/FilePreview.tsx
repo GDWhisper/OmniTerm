@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { READER_FONT } from '../../utils/fonts'
 
 const REFRESH_DEBOUNCE_MS = 500
 
@@ -60,7 +61,7 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
           gap: 12,
           color: 'var(--text-faint)',
           fontSize: 13,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+          fontFamily: READER_FONT,
         }}
       >
         <div className="panel-title-bar">

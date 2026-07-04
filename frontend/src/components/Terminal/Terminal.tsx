@@ -4,8 +4,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 export function Terminal() {
   const { t } = useTranslation()
@@ -211,7 +210,7 @@ export function Terminal() {
     return (
       <div
         className="h-full flex flex-col"
-        style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: FONT }}
+        style={{ background: 'var(--bg-base)', color: 'var(--text-faint)', fontFamily: READER_FONT }}
       >
         <div className="panel-title-bar">
           <span>◆</span>

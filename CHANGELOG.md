@@ -81,6 +81,7 @@ Prefix each entry with the area it affects:
 - (2026-07-03) `[frontend]` Terminal 无 session 状态 title bar 改为常驻顶部 — 修 `Terminal.tsx` no-session 分支的 layout bug（`flex items-center justify-center` 默认 row 会把 title bar 推到面板**左侧中央**，与有 session 状态顶部对齐不一致），改为 `flex flex-col` + title bar 置顶 + 内容在剩余空间 `flex-1` 居中，与有 session 状态完全一致（`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-07-03) `[frontend]` **终端 pane 始终深色（修复 实现 vs 规范 不一致）** — `useTerminal.ts` 一直有 `LIGHT_TERMINAL_THEME` 在 app 亮色主题下用 `#ece8e1` 亮羊皮纸背景，但 `ui-style-guide` §1.2 明记「**Terminal always stays dark**: even in light theme, xterm viewport uses `#12141A` background」。删除 `LIGHT_TERMINAL_THEME` 常量与依赖主题的 `useEffect` 动态切换逻辑，`createTerminal` 直接用 `DARK_TERMINAL_THEME`；清理不再使用的 `useThemeStore` import 与 `const resolved`（`frontend/src/hooks/useTerminal.ts`）
 - (2026-07-03) `[frontend]` **Sidebar 顶部 logo-title-bar 固定木色（不随主题变色）** — 重新调整上一条「暗色模式色值一致化」的设计方向：用户明确要求 logo-title-bar 作为品牌识别区，在亮/暗主题下都保持木色（`--wood-dark` 底 + `--wood-shadow` 底边），不随主题切到深石墨色。回退：删 `.dark .logo-title-bar` 覆盖；删 `--logo-frame` token；`OmniTermLogo` 外框回退为硬编码 `#3A2E1F`（永远与木色底边匹配，CRT 「嵌入」错觉在两个主题下都能成立）。**保留**上一条的次要修复：`logo-version` 与 `title-bar-path` 统一使用 `var(--gold-light, #FFCB6B)`（与「title bar 是否变色」无关，是另一个一致性问题）。`ui-style-guide.md` §3.1 新增「Fixed-color branding elements」小节记录这个设计规则（`frontend/src/index.css`、`frontend/src/components/PixelUI/OmniTermLogo.tsx`、`docs/ui-style-guide.md`）
+- (2026-07-04) `[frontend]` 终端字体栈与 UI 对齐 — `useTerminal.ts` xterm 的 `fontFamily` 从孤立的 `'ui-monospace, Consolas, monospace'` 改为 `READER_FONT`，与 FileManager / Sidebar / Settings / Modal 等所有 UI 面板保持同一回退链，视觉一致；装了 JetBrains Mono 的系统现在终端也会用上它（`frontend/src/hooks/useTerminal.ts`）
 
 ### Removed
 
@@ -183,6 +184,10 @@ Prefix each entry with the area it affects:
 
 - (2026-06-23 01:01) `[frontend]` FileManager 轮询改为只检查 CWD 变化，CWD 不变时不刷新文件列表 — 消除终端未 cd 时的闪烁
 - (2026-06-23 01:07) `[frontend]` FileManager 静默轮询 + 浅比较：后台刷新不显示 loading 状态，文件列表无变化时跳过 setFiles() — 消除 agent 频繁增删文件时的闪烁
+
+### Refactored
+
+- (2026-07-04) `[frontend]` 抽离 reader 字体栈为单一来源 — 新建 `frontend/src/utils/fonts.ts` 导出 `READER_FONT`（`'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace`），干掉 6 处 `const FONT =` 顶层声明 + 14 处 inline `fontFamily: "..."` 字符串。后续调整 reader 字体只需改 `utils/fonts.ts` 一处。顺带修 `DuplicateProjectsDialog.tsx` 之前漏写的 `'Fira Code', 'Cascadia Code'` 截断 stack（`frontend/src/utils/fonts.ts` + 12 个消费方）
 
 ---
 

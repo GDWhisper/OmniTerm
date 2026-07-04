@@ -8,6 +8,7 @@ import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
+import { READER_FONT } from '../../utils/fonts'
 import { play8BitSound } from '../../utils/audioFeedback'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 
@@ -686,7 +687,7 @@ export function FileManager() {
     return (
       <div
         className="h-full flex flex-col items-center relative"
-        style={{ background: 'var(--bg-base)', fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace", width: 40 }}
+        style={{ background: 'var(--bg-base)', fontFamily: READER_FONT, width: 40 }}
       >
         <button
           onClick={toggleFileManagerCollapsed}

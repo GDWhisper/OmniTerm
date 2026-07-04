@@ -1,13 +1,12 @@
 import { useTranslation } from 'react-i18next'
 import { SECTIONS } from './data'
-
-const FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
+import { READER_FONT } from '../../utils/fonts'
 
 export function TmuxCheatsheet() {
   const { t } = useTranslation()
 
   return (
-    <div style={{ fontFamily: FONT, padding: '12px 16px' }}>
+    <div style={{ fontFamily: READER_FONT, padding: '12px 16px' }}>
       <p
         style={{
           fontSize: 11,
@@ -51,7 +50,7 @@ export function TmuxCheatsheet() {
                   style={{
                     fontSize: 11,
                     color: 'var(--accent)',
-                    fontFamily: FONT,
+                    fontFamily: READER_FONT,
                     whiteSpace: 'nowrap',
                   }}
                 >

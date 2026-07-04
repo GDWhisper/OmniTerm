@@ -5,6 +5,7 @@ import { useToastStore } from '../../stores/toastStore'
 const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.FileEditor })))
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
+import { READER_FONT } from '../../utils/fonts'
 
 /** Supported image extensions for preview mode */
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
@@ -291,7 +292,7 @@ export function FileDrawer({
             style={{
               color: 'var(--text-primary)',
               fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              fontFamily: READER_FONT,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -325,7 +326,7 @@ export function FileDrawer({
                   fontSize: 11,
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                  fontFamily: READER_FONT,
                 }}
                 onMouseEnter={(e) => {
                   if (mode !== 'view') {
@@ -358,7 +359,7 @@ export function FileDrawer({
                   fontSize: 11,
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                  fontFamily: READER_FONT,
                 }}
                 onMouseEnter={(e) => {
                   if (mode !== 'edit') {
@@ -421,7 +422,7 @@ export function FileDrawer({
               gap: 12,
               color: 'var(--text-faint)',
               fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              fontFamily: READER_FONT,
             }}
           >
             <span>{t('drawer.unsupportedPreview')}</span>
@@ -436,7 +437,7 @@ export function FileDrawer({
               height: '100%',
               color: 'var(--text-faint)',
               fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              fontFamily: READER_FONT,
             }}
           >
             {t('drawer.loading')}
@@ -452,7 +453,7 @@ export function FileDrawer({
               gap: 12,
               color: 'var(--danger)',
               fontSize: 13,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+              fontFamily: READER_FONT,
             }}
           >
             <span>{error}</span>
@@ -467,7 +468,7 @@ export function FileDrawer({
                 fontSize: 12,
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                fontFamily: READER_FONT,
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = 'var(--accent)'
@@ -494,7 +495,7 @@ export function FileDrawer({
                   height: '100%',
                   color: 'var(--text-faint)',
                   fontSize: 13,
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+                  fontFamily: READER_FONT,
                 }}
               >
                 {t('drawer.loading')}
@@ -524,7 +525,7 @@ export function FileDrawer({
             borderTop: '1px solid var(--border-subtle)',
             fontSize: 11,
             color: 'var(--text-faint)',
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+            fontFamily: READER_FONT,
             flexShrink: 0,
           }}
         >

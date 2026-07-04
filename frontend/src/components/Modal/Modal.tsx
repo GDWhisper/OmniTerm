@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { READER_FONT } from '../../utils/fonts'
 
 interface ModalProps {
   open: boolean
@@ -38,7 +39,7 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
         style={{
           background: 'var(--bg-elevated)',
           borderColor: 'var(--border-strong)',
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace",
+          fontFamily: READER_FONT,
         }}
       >
         <span className="nail-bl" />
