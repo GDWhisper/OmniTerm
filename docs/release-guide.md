@@ -33,6 +33,12 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 Release 分支基于上一版本的 release commit **增量提交**，维持线性历史，无需 force push。
 
+> **两种场景：**
+> - **新版本**（v0.1.0→v0.1.1）：执行下方全量重建流程
+> - **当前版本补丁**（加截图/修 README 等小改动）：直接在 `release` 分支上改，追加 commit，无需重建
+
+全量重建流程：
+
 ```bash
 # 拉取公共仓最新 main
 git fetch public main
