@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-![screenshot](capture.png)
+![screenshot](pic/overview.png)
 
 > [中文](README_zh.md)
 

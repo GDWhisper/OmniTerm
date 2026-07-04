@@ -44,6 +44,7 @@ git rm -rf --cached .
 # 复制当前 main 的发布文件
 git checkout main -- \
   src/ frontend/ tests/ migrations/ \
+  pic/ \
   Cargo.toml Cargo.lock \
   Dockerfile Dockerfile.release docker-compose.yml \
   README.md README_zh.md LICENSE \
@@ -148,13 +149,14 @@ git remote -v
 | `Dockerfile.release` | CI 用轻量 Docker（复用预构建 binary） |
 | `docker-compose.yml` | Docker Compose 部署 |
 | `README.md`, `README_zh.md`, `LICENSE` | 文档 |
+| `pic/` | 预览截图 |
 | `install.sh` | Shell 安装脚本 |
 | `npm-package/` | npm 包文件 |
 | `scripts/bump-version.sh` | 版本号脚本 |
 | `.github/workflows/release.yml` | CI 流水线 |
 | `.gitignore` | Git 忽略规则 |
 
-**明确排除**：`AGENTS.md`、`CHANGELOG.md`、`CLAUDE.md`、`dev.sh`、`.pi/`、`.qoder/`、`.codegraph/`、`openspec/`、`docs/`（内部文档）、`branch.config.example`、`scripts/hooks/`、`scripts/check-doc-index.sh`
+**明确排除**：`AGENTS.md`、`CHANGELOG.md`、`CLAUDE.md`、`dev.sh`、`.pi/`、`.qoder/`、`.codegraph/`、`openspec/`、`docs/`（内部文档）、`capture.png`（旧截图）、`branch.config.example`、`scripts/hooks/`、`scripts/check-doc-index.sh`
 
 ---
 
