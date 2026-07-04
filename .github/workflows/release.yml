@@ -93,14 +93,11 @@ jobs:
           pattern: omniterm-*
           merge-multiple: false
 
-      - name: Extract release notes from CHANGELOG
-        run: bash scripts/extract-release-notes.sh > /tmp/release-notes.md
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          body_path: /tmp/release-notes.md
+          body_path: RELEASE_NOTES.md
           files: |
             omniterm-*/omniterm-*
             install.sh

@@ -71,6 +71,10 @@ sed -i 's/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}/BRANCH_BINARY
 git diff --cached --name-only | grep -E '^(\.pi/|\.qoder/|\.codegraph/|AGENTS|CHANGELOG|CLAUDE|dev\.sh|docs/|openspec/|branch\.config)' | wc -l
 # 输出应为 0
 
+# 生成 Release Notes（从 CHANGELOG 提取）
+bash scripts/extract-release-notes.sh "$NEW_VERSION" > RELEASE_NOTES.md
+git add RELEASE_NOTES.md
+
 git commit -m "v0.2.0"
 ```
 
@@ -155,6 +159,7 @@ git remote -v
 | `Dockerfile.release` | CI 用轻量 Docker（复用预构建 binary） |
 | `docker-compose.yml` | Docker Compose 部署 |
 | `README.md`, `README_zh.md`, `LICENSE` | 文档 |
+| `RELEASE_NOTES.md` | Release Notes（CI 自动读取） |
 | `pic/` | 预览截图 |
 | `install.sh` | Shell 安装脚本 |
 | `npm-package/` | npm 包文件 |
