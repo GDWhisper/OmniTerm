@@ -87,15 +87,12 @@ git fetch public main --quiet
 # ── 步骤 3: 构建 release 分支 ──────────────────────────────────
 echo "[2/7] 构建 release 分支（基于 public/main）..."
 
-# 获取当前 Cargo.toml 的 package name（开发仓用 omniterm-main）
-DEV_BIN_NAME=$(cargo metadata --format-version=1 --no-deps 2>/dev/null | \
-    jq -r '.packages[0].targets[] | select(.kind[0]=="bin") | .name' 2>/dev/null || \
-    grep '^name' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+# 获取 Cargo.toml 的 package name（dev 与 release 统一用 omniterm）
+PKG_NAME=$(grep '^name' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+echo "  包名: $PKG_NAME"
 
 git checkout -fB release public/main --quiet
 git rm -rf --cached --quiet . 2>/dev/null || true
-
-echo "  开发仓 binary 名: $DEV_BIN_NAME"
 
 # ── 步骤 4: 全量复制 main → release ────────────────────────────
 echo "[3/7] 复制 main 文件到 release ..."
@@ -111,7 +108,7 @@ fi
 git add -f RELEASE_NOTES.md
 
 # ── 步骤 5: 应用黑名单 ─────────────────────────────────────────
-echo "[5/7] 应用黑名单（排除 ${#EXCLUDE[@]} 项）..."
+echo "[5/6] 应用黑名单（排除 ${#EXCLUDE[@]} 项）..."
 for item in "${EXCLUDE[@]}"; do
     # 移除末尾 / 以兼容 git ls-files 的目录匹配
     clean_item="${item%/}"
@@ -127,17 +124,8 @@ for item in "${KEEP[@]}"; do
     git checkout main --quiet -- "$item" 2>/dev/null || true
 done
 
-# ── 步骤 6: 修正 binary 名 ─────────────────────────────────────
-echo "[6/7] 修正 binary 名（$DEV_BIN_NAME → omniterm）..."
-if [[ "$DEV_BIN_NAME" != "omniterm" ]]; then
-    sed -i "s/name = \"$DEV_BIN_NAME\"/name = \"omniterm\"/" Cargo.toml
-    sed -i "s/ARG BRANCH_BINARY_NAME=$DEV_BIN_NAME/ARG BRANCH_BINARY_NAME=omniterm/" Dockerfile 2>/dev/null || true
-    sed -i "s/BRANCH_BINARY_NAME: \${BRANCH_BINARY_NAME:-$DEV_BIN_NAME}/BRANCH_BINARY_NAME: \${BRANCH_BINARY_NAME:-omniterm}/" docker-compose.yml 2>/dev/null || true
-    git add Cargo.toml Dockerfile docker-compose.yml 2>/dev/null || true
-fi
-
-# ── 步骤 7: 安全检查 ───────────────────────────────────────────
-echo "[7/7] 安全检查..."
+# ── 步骤 6: 安全检查 ───────────────────────────────────────────
+echo "[6/7] 安全检查..."
 
 # 检查是否有 dev 文件残留
 LEAKED=$(git diff --cached --name-only | grep -E '^(AGENTS|CHANGELOG|CLAUDE|dev\.sh|\.pi/|\.qoder/|\.codegraph/|docs/|openspec/|branch\.config|\.env\.local)' || true)

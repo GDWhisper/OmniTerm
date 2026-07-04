@@ -1,8 +1,13 @@
 [package]
-name = "omniterm-main"
+name = "omniterm"
 version = "0.1.2"
 edition = "2024"
 license = "Apache-2.0"
+description = "Web-based tmux terminal manager with AI agent monitoring"
+repository = "https://github.com/GDWhisper/OmniTerm"
+keywords = ["tmux", "terminal", "ai", "agent", "web"]
+categories = ["command-line-utilities", "development-tools"]
+include = ["/src/", "/build.rs", "/Cargo.toml", "/Cargo.lock", "/migrations/", "/frontend/dist/"]
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }
