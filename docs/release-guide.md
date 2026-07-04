@@ -31,13 +31,16 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ### Step 2：构建 Release 分支
 
-Release 分支基于上一版本的 release commit **增量提交**，维持线性历史，无需 force push。
+新版本发布使用 `scripts/sync-release.sh`（黑名单制，自动排除 dev 文件、修正 binary 名、生成 Release Notes）。
 
-> **两种场景：**
-> - **新版本**（v0.1.0→v0.1.1）：执行下方全量重建流程
-> - **当前版本补丁**（加截图/修 README 等小改动）：直接在 `release` 分支上改，追加 commit，无需重建
+```bash
+./scripts/sync-release.sh 0.2.0
+```
 
-全量重建流程：
+> **补丁场景**（加截图/修 README 等小改动）：直接在 `release` 分支上改，追加 commit，无需重建。
+
+<details>
+<summary>手动流程（sync-release.sh 内部做的事）</summary>
 
 ```bash
 # 拉取公共仓最新 main
@@ -73,10 +76,12 @@ git diff --cached --name-only | grep -E '^(\.pi/|\.qoder/|\.codegraph/|AGENTS|CH
 
 # 生成 Release Notes（从 CHANGELOG 提取）
 bash scripts/extract-release-notes.sh "$NEW_VERSION" > RELEASE_NOTES.md
-git add RELEASE_NOTES.md
+git add -f RELEASE_NOTES.md
 
 git commit -m "v0.2.0"
 ```
+
+</details>
 
 ### Step 3：打 Tag 并推送
 
