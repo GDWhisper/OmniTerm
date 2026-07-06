@@ -1385,7 +1385,7 @@ export function Sidebar() {
               e.currentTarget.style.background = 'transparent'
             }}
           >
-            <GitHubIcon width={16} height={16} />
+            <GitHubIcon size={16} />
           </a>
         </div>
       </div>
