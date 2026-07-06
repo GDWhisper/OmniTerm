@@ -43,7 +43,7 @@
 - `frontend/src/components/Modal/ConfirmDialog.tsx` — `.corner-nails`
 - `frontend/src/components/Toast/Toast.tsx` — pixel style + `★` prefix
 - `frontend/src/components/Layout/Layout.tsx` — workspace transition animation
-- `docs/ui-style-guide.md` — rewrite to Phase 3 spec (final task)
+- `docs/visual-design/ui-style-guide.md` — rewrite to Phase 3 spec (final task)
 
 ---
 
@@ -1752,15 +1752,15 @@ git commit -m "fix(phase3): 像素风阶段 3 视觉回归修复"
 
 ---
 
-### Task 24: Rewrite `docs/ui-style-guide.md` to Phase 3 spec
+### Task 24: Rewrite `docs/visual-design/ui-style-guide.md` to Phase 3 spec
 
 **Files:**
-- Rewrite: `docs/ui-style-guide.md`
+- Rewrite: `docs/visual-design/ui-style-guide.md`
 
 - [ ] **Step 1: Read the current guide**
 
 ```bash
-cat docs/ui-style-guide.md | head -100
+cat docs/visual-design/ui-style-guide.md | head -100
 ```
 
 Note the section structure (§1 总览, §2 色板, §3 像素化, §4 字体, §5 间距, §6 组件, §7 动效, §8 布局, §9 第三方, §10 自检, §11 示例, §12 版本).
@@ -1814,6 +1814,6 @@ Replace the entire file with content that mirrors `docs/superpowers/specs/2026-0
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/ui-style-guide.md
+git add docs/visual-design/ui-style-guide.md
 git commit -m "docs: 重写 UI 风格规范为 Phase 3 全游戏 UI 规范 (Stardew × Celeste × Undertale 混搭)"
 ```

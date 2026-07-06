@@ -106,7 +106,7 @@ export interface ExternalSession {
 - `useEffect` 每 10 秒 `api.listExternalSessions()` 轮询（独立于已有 3 秒 session 轮询）
 - 接管成功后立即刷新
 
-**样式：** 遵循 `docs/ui-style-guide.md` 的色板/间距/圆角约定（与现有 session 条目风格一致）。
+**样式：** 遵循 `docs/visual-design/ui-style-guide.md` 的色板/间距/圆角约定（与现有 session 条目风格一致）。
 
 **CWD 显示：** 在 session name 下方以小号灰色字显示 CWD 路径（截断）。
 

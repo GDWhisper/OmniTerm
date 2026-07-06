@@ -12,7 +12,8 @@
       "Bash(ls -la /home/pax/coding/OmniTerm-dev/plans/ 2>/dev/null || find /home/pax/coding/OmniTerm-dev -maxdepth 3 -type d -name \"plans\" 2>/dev/null)",
       "Bash(ls -la /home/pax/coding/OmniTerm-dev/docs/superpowers/plans/ /home/pax/coding/OmniTerm-dev/docs/micropowers/plans/ | head -100)",
       "Bash(ls /home/pax/coding/OmniTerm-dev/docs/superpowers/specs/ 2 *)",
-      "Bash(ls /home/pax/coding/OmniTerm-dev/docs/micropowers/ 2 *)"
+      "Bash(ls /home/pax/coding/OmniTerm-dev/docs/micropowers/ 2 *)",
+      "Bash(ls openspec/changes/ 2>/dev/null && echo \"---\" && ls openspec/ 2>/dev/null)"
     ]
   }
 }

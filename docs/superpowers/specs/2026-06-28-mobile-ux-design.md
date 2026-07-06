@@ -2,14 +2,14 @@
 
 > 状态：待实现  
 > 创建日期：2026-06-28  
-> 关联规范：`docs/ui-style-guide.md`
+> 关联规范：`docs/visual-design/ui-style-guide.md`
 
 ## 1. 背景与目标
 
 OmniTerm 目前仅在 `Layout.tsx` 中做了最基础的移动端适配：屏幕宽度小于 768px 时切换为底部 tab 导航（终端/文件/会话/设置），但存在以下问题：
 
 - 底部 tab 实际渲染在顶部，未做信息展示与手势支持
-- 导航使用 emoji，违反 `docs/ui-style-guide.md` §5.0 的 emoji 禁止令
+- 导航使用 emoji，违反 `docs/visual-design/ui-style-guide.md` §5.0 的 emoji 禁止令
 - 终端在纯触屏设备上几乎不可用：选中文本困难、缺少特殊键（Ctrl/Esc/Tab）、软键盘遮挡输出
 - 文件管理器工具栏按钮过小，触屏点不中
 - 无状态信息显示（当前会话、连接状态）
@@ -249,7 +249,7 @@ setMobileFontSize: (s: number) => void
 
 ## 13. 参考资料
 
-- `docs/ui-style-guide.md`
+- `docs/visual-design/ui-style-guide.md`
 - `frontend/src/components/FileManager/icons.tsx`
 - `frontend/src/components/Layout/Layout.tsx`
 - `frontend/src/components/Layout/MobileNav.tsx`

@@ -267,7 +267,7 @@ useEffect(() => {
 
 ## 10. UI 风格规范补充
 
-需在 `docs/ui-style-guide.md` 中新增：
+需在 `docs/visual-design/ui-style-guide.md` 中新增：
 
 ### Warning 语义色
 
@@ -296,7 +296,7 @@ warning-glow: 0 0 6px rgba(245, 158, 11, 0.3)  /* 警告辉光 */
 - `frontend/src/components/FileManager/FileManager.tsx` — 重构为双模式 + 轮询
 - `frontend/src/api/client.ts` — 新增 `getSessionCwd()` 和 `listFilesBySession()` 方法
 - `frontend/src/components/FileManager/icons.tsx` — 新增 WarningIcon、HomeIcon
-- `docs/ui-style-guide.md` — 新增 warning 语义色
+- `docs/visual-design/ui-style-guide.md` — 新增 warning 语义色
 
 ## 12. 参考实现
 

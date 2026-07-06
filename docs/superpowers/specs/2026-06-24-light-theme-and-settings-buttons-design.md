@@ -185,7 +185,7 @@ In `useTerminal.ts`, read `useThemeStore().resolved` and pass a matching termina
 
 ### 3.5 Style Guide Update
 
-Update `docs/ui-style-guide.md`:
+Update `docs/visual-design/ui-style-guide.md`:
 
 1. **§1 总览**: Remove "没有 '浅色模式'" statement. Add: "OmniTerm 支持亮/暗双主题，通过 CSS 变量切换。"
 2. **§2 色板**: Each token gets a `Light` and `Dark` column
@@ -201,7 +201,7 @@ Update `docs/ui-style-guide.md`:
 3. **Component refactor** — Update inline styles in all components (Sidebar → Terminal → Modal → Toast → MobileNav → Layout)
 4. **Settings buttons** — Rewrite Settings.tsx with neon border style + SVG icons
 5. **xterm theme** — Add light theme to useTerminal.ts, handle theme switch with terminal re-creation
-6. **Style guide** — Update docs/ui-style-guide.md
+6. **Style guide** — Update docs/visual-design/ui-style-guide.md
 7. **Test** — Verify both themes work, no visual regressions in dark mode
 
 ---

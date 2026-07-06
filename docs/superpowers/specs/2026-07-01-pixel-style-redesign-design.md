@@ -10,7 +10,7 @@
 
 将 OmniTerm 当前的 **深色科技感 (Dark Tech)** 视觉语言改造为 **护眼科幻像素风 (Cyber-Pixel)**，包含：
 
-- **阶段 1**：色板重构、SVG 像素化、硬阴影、像素字体引入、CRT 扫描线、同步更新 `docs/ui-style-guide.md`
+- **阶段 1**：色板重构、SVG 像素化、硬阴影、像素字体引入、CRT 扫描线、同步更新 `docs/visual-design/ui-style-guide.md`
 - **阶段 2**：四种马里奥式游戏化正反馈动效、8-bit 音效合成、设置面板开关
 
 ### 1.1 设计目标
@@ -276,7 +276,7 @@ box-shadow: 8px 8px 0px 0px var(--pixel-shadow);
 
 ### 2.14 UI 风格规范文档更新
 
-阶段 1 视觉改造完成后，同步重写 `docs/ui-style-guide.md`：
+阶段 1 视觉改造完成后，同步重写 `docs/visual-design/ui-style-guide.md`：
 
 - 全文色板值替换为 §2.1 定义的新值
 - 新增「SVG 像素化规则」章节（§2.5 内容）
@@ -425,7 +425,7 @@ box-shadow: 8px 8px 0px 0px var(--pixel-shadow);
 | `components/FileManager/FileEditor.tsx` | 修改 | CodeMirror 语法高亮色 → 像素风色值 |
 | `hooks/useTerminal.ts` | 修改 | xterm 终端色板 → 像素风色值 |
 | `components/Layout/Layout.tsx` | 修改 | 添加 CRT 扫描线 overlay div |
-| `docs/ui-style-guide.md` | 重写 | 全文更新为像素风规范（§2.14） |
+| `docs/visual-design/ui-style-guide.md` | 重写 | 全文更新为像素风规范（§2.14） |
 
 ### 阶段 2
 

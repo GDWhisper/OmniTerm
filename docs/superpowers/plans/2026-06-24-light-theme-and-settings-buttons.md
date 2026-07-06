@@ -28,7 +28,7 @@
 | `frontend/src/components/Settings/Settings.tsx` | **Modify** | Full rewrite: neon-border buttons + SVG icons, replace all hardcoded colors |
 | `frontend/src/hooks/useTerminal.ts` | **Modify** | Add light terminal theme, destroy/recreate on theme switch |
 | `frontend/src/stores/themeStore.ts` | **No change** | Already correct — toggles `.dark` class |
-| `docs/ui-style-guide.md` | **Modify** | Add light theme column to palette, update self-check list |
+| `docs/visual-design/ui-style-guide.md` | **Modify** | Add light theme column to palette, update self-check list |
 
 ---
 
@@ -783,10 +783,10 @@ git commit -m "feat: xterm.js adapts to light/dark theme with terminal recreatio
 
 ---
 
-### Task 10: Update docs/ui-style-guide.md
+### Task 10: Update docs/visual-design/ui-style-guide.md
 
 **Files:**
-- Modify: `docs/ui-style-guide.md`
+- Modify: `docs/visual-design/ui-style-guide.md`
 
 - [ ] **Step 1: Update §1 总览**
 
@@ -862,7 +862,7 @@ Add item:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/ui-style-guide.md
+git add docs/visual-design/ui-style-guide.md
 git commit -m "docs: update style guide with light theme palette and checklist"
 ```
 

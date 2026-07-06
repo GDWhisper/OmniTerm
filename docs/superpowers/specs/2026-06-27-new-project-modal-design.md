@@ -381,6 +381,6 @@ name 字段 `onKeyDown={handleNameKeyDown}`；path 字段 `onKeyDown={handlePath
 5. 「刷新」按钮能强制刷新当前列表
 6. 路径无效时显示「无法访问」+ 不破坏现有 modal 状态
 7. 创建项目流程与现状完全一致（409 覆盖检测、自动建目录）
-8. 视觉完全符合 `docs/ui-style-guide.md` §1-§9
+8. 视觉完全符合 `docs/visual-design/ui-style-guide.md` §1-§9
 9. 亮/暗双主题下视觉一致
 10. 不引入 emoji 字符

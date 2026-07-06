@@ -485,7 +485,7 @@ workspace 切换时：
 
 ### 12.3 文档更新
 
-- `docs/ui-style-guide.md`（追加 Phase 3 游戏 UI 规则）
+- `docs/visual-design/ui-style-guide.md`（追加 Phase 3 游戏 UI 规则）
 - `CHANGELOG.md`（用户确认的新功能）
 
 ---

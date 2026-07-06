@@ -14,7 +14,7 @@
 
 - 后端端点不接受未认证请求（沿用 `RequireAuth` middleware）
 - 不修改 `create_project` 自动建目录行为（避免 breaking change）
-- 视觉严格遵循 `docs/ui-style-guide.md` §1-§9（不引入 emoji、4px 列表项圆角、focus ring、hover 0.08、selected 0.14）
+- 视觉严格遵循 `docs/visual-design/ui-style-guide.md` §1-§9（不引入 emoji、4px 列表项圆角、focus ring、hover 0.08、selected 0.14）
 - name 字段 Enter = 创建；path 字段 Enter = 应用路径
 - API 参数名：后端 snake_case，前端 camelCase
 - 端点响应 JSON 字段：`files: FileEntry[]`（与 `/files` 一致）

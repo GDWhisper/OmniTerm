@@ -46,7 +46,7 @@
 
 - **作用**：干净的公开代码，剔除所有开发文件
 - **发布**：tag push → CI 自动构建多平台 binary + GitHub Release + npm + Docker
-- 详见 `docs/release-plan.md`
+- 详见 `docs/workflows/release-guide.md`
 
 ---
 

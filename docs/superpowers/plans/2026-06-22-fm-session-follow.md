@@ -978,14 +978,14 @@ git commit -m "feat(icons): add WarningIcon and HomeIcon components"
 ### Task 7: 文档 — UI 风格规范新增 warning 语义色
 
 **Files:**
-- Modify: `docs/ui-style-guide.md:76-84` (§2.5 功能色)
+- Modify: `docs/visual-design/ui-style-guide.md:76-84` (§2.5 功能色)
 
 **Interfaces:**
 - Produces: `warning`, `warning-12`, `warning-glow` color tokens
 
 - [ ] **Step 1: 在 UI 风格规范中添加 warning 语义色**
 
-在 `docs/ui-style-guide.md` 的 §2.5 功能色表格中，在 `success-glow` 之后添加新行：
+在 `docs/visual-design/ui-style-guide.md` 的 §2.5 功能色表格中，在 `success-glow` 之后添加新行：
 
 ```markdown
 | `warning` | `#f59e0b` | 警告状态、超出 workspace 边界 |
@@ -996,7 +996,7 @@ git commit -m "feat(icons): add WarningIcon and HomeIcon components"
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/ui-style-guide.md
+git add docs/visual-design/ui-style-guide.md
 git commit -m "docs(style): add warning semantic color tokens"
 ```
 

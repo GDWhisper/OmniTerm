@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Path, State},
@@ -12,7 +12,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, Session, UpdateSession};
-use crate::tmux;
+use crate::tmux::{self, agent_state::AgentSnapshot};
 use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -41,18 +41,49 @@ async fn list_sessions(
             .await
             .unwrap();
 
+    // Batch-fetch agent state from all tmux sessions in a single call.
+    // We build a map keyed by tmux session name so the per-session loop
+    // below can look up agent state without spawning additional processes.
+    let agent_map: HashMap<String, AgentSnapshot> = tmux::list_sessions()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|info| {
+            let kind = tmux::agent_state::AgentKind::from_str(
+                info.agent_kind.as_deref().unwrap_or(""),
+            )?;
+            let state = tmux::agent_state::AgentState::from_str(
+                info.agent_state.as_deref().unwrap_or(""),
+            )?;
+            let reason = info
+                .attention_reason
+                .as_deref()
+                .and_then(tmux::agent_state::AttentionReason::from_str);
+            Some((
+                info.name,
+                AgentSnapshot {
+                    agent_kind: kind,
+                    agent_state: state,
+                    attention_reason: reason,
+                    agent_event: info.agent_event,
+                    agent_nonce: info.agent_nonce,
+                },
+            ))
+        })
+        .collect();
+
     // Enrich sessions with activity state and agent state from tmux
     for session in &mut sessions {
         if let Some(ref tmux_name) = session.tmux_session_name {
             session.is_active = state.activity_monitor.is_active(tmux_name).await;
 
-            if let Ok(Some(snapshot)) = tmux::get_session_agent_option(tmux_name).await {
+            if let Some(snapshot) = agent_map.get(tmux_name) {
                 // Hook-injected session: use option data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
                 session.agent_state = Some(snapshot.agent_state.as_str().to_string());
                 session.attention_reason = snapshot.attention_reason.map(|r| r.as_str().to_string());
-                session.agent_event = snapshot.agent_event;
-                session.agent_nonce = snapshot.agent_nonce;
+                session.agent_event = snapshot.agent_event.clone();
+                session.agent_nonce = snapshot.agent_nonce.clone();
             }
             // Agent process detection is commented out pending notification scheme decision.
             // See docs/requirements.md "Agent 状态监控与通知".
@@ -284,16 +315,16 @@ async fn list_external_sessions(
         .filter(|s| !recorded_names.contains(&s.name))
         .collect();
 
-    // Enrich each external session with CWD (best-effort)
+    // Build result from external sessions. CWD is already available from the
+    // batch `tmux::list_sessions()` call above — no per-session `pane_cwd` needed.
     let mut result = Vec::with_capacity(external.len());
     for s in external {
-        let cwd = tmux::pane_cwd(&s.name).await.ok();
         result.push(ExternalSessionResponse {
             name: s.name,
             attached: s.attached,
             windows: s.windows,
             created: s.created,
-            cwd,
+            cwd: s.cwd,
             agent_kind: s.agent_kind,
             agent_state: s.agent_state,
             attention_reason: s.attention_reason,

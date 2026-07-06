@@ -201,7 +201,7 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 
 | 元素 | 风格 | 原因 |
 |------|------|------|
-| Tab 标签 | 英文 UPPERCASE（en/zh 一致） | 像素字体在中文下退化，详见 [ui-style-guide §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格) |
+| Tab 标签 | 英文 UPPERCASE（en/zh 一致） | 像素字体在中文下退化，详见 [ui-style-guide §12](../visual-design/ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格) |
 | 选项标签 | 正常翻译 | `settings.theme: "Theme" / "主题"` |
 | 开关状态 | `settings.on` / `settings.off` | 复用 key，避免每处写死 "ON" |
 | Hint 文本 | 正常翻译，key 后缀 `Hint` | 与选项 key 配对 |
@@ -222,7 +222,7 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 
 - [ ] `pnpm build` 无 type error
 - [ ] `pnpm lint` 无新增问题
-- [ ] 视觉规格匹配 [ui-style-guide §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)（尺寸、Tab 态、滚动条、标题栏铺顶）
+- [ ] 视觉规格匹配 [ui-style-guide §12](../visual-design/ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)（尺寸、Tab 态、滚动条、标题栏铺顶）
 - [ ] 桌面端水平 clamp 正确（按钮靠右时 popup 右边不出视口）
 - [ ] 极短视口下高度被 `maxHeight` 裁，**不溢出 logo 顶部**
 - [ ] 移动端 bottom sheet 全宽，MobileKeyBar 之上

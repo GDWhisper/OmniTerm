@@ -590,9 +590,9 @@ git commit -m "feat: 添加 CRT 扫描线 overlay（默认关闭）"
 ### Task 6: 重写 UI 风格规范文档
 
 **Files:**
-- Rewrite: `docs/ui-style-guide.md`
+- Rewrite: `docs/visual-design/ui-style-guide.md`
 
-- [ ] **Step 1: 重写 `docs/ui-style-guide.md`**
+- [ ] **Step 1: 重写 `docs/visual-design/ui-style-guide.md`**
 
 按照设计文档 §2.14 的要求，重写全文。核心变更点：
 
@@ -612,7 +612,7 @@ git commit -m "feat: 添加 CRT 扫描线 overlay（默认关闭）"
 - [ ] **Step 2: 提交**
 
 ```bash
-git add docs/ui-style-guide.md
+git add docs/visual-design/ui-style-guide.md
 git commit -m "docs: 重写 UI 风格规范为像素风 (Cyber-Pixel)"
 ```
 
