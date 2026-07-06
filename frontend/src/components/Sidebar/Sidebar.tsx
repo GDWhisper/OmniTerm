@@ -634,8 +634,17 @@ export function Sidebar() {
 
     setSubmitting(true)
     try {
-      await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
+      const newSession = await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
       await loadSessions()
+      // Auto-activate the newly created session so the terminal pane
+      // switches to it immediately (matches clicking a session in the
+      // sidebar). Use newSession.id from the API response rather than
+      // relying on loadSessions to repopulate the list first.
+      setActiveExternalSession(null)
+      setActiveSession(newSession.id)
+      if (activeWorkspaceId) {
+        setWorkspaceSession(activeWorkspaceId, newSession.id)
+      }
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
