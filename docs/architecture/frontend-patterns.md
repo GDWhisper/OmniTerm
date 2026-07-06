@@ -5,7 +5,7 @@
 
 新增组件或拆分数据前先扫一眼本文档，避免重复发明。
 
-> **相关文档**：[`docs/ui-style-guide.md`](ui-style-guide.md) 记录了
+> **相关文档**：[`docs/visual-design/ui-style-guide.md`](../visual-design/ui-style-guide.md) 记录了
 > 面板/弹窗的**视觉规格**（尺寸 token、颜色、态）。本文档只管**代码架构**
 > （文件结构、hook、子组件拆分、复制清单）。两边互不重复。
 
@@ -99,7 +99,7 @@
 新加面板**以这个为模板复制**。简化版（无 tab）可参考 `TmuxCheatsheet`。
 
 > **视觉规格不在这里**——尺寸 token、颜色、active 态等都见
-> [`docs/ui-style-guide.md` §12](ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)。
+> [`docs/visual-design/ui-style-guide.md`](../visual-design/ui-style-guide.md) §12。
 > 本节只管代码结构。
 
 ### 布局标准

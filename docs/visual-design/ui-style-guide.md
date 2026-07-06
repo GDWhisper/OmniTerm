@@ -3,7 +3,7 @@
 > Single source of truth for OmniTerm's Phase 3 pixel game UI system.
 > Last updated: 2026-07-03
 
-> **相关文档**：[`docs/frontend-patterns.md`](frontend-patterns.md) 记录了
+> **相关文档**：[`docs/architecture/frontend-patterns.md`](../architecture/frontend-patterns.md) 记录了
 > 状态栏面板的文件结构、hook 用法、子组件拆分、复制清单等**代码架构**约定。
 > 本文档只管**视觉规格**（token、尺寸、颜色、态）。两边互不重复。
 

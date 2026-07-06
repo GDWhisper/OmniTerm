@@ -187,7 +187,7 @@ const fmSource = useMemo(() => {
 
 **调试过程**：
 1. 读 `frontend/src/components/FileManager/FileManager.tsx:208-225` 的 resize useEffect，确认 `setColWidths` 在 mousemove 中调用
-2. 查 `docs/debug-log.md` 2026-06-23「拖拽条不跟手」条 —— 但那条修的是侧边栏宽度（`setSidebarWidth` + CSS transition），与列宽是不同的拖动，根因不同
+2. 查 `debug-log.md` 2026-06-23「拖拽条不跟手」条 —— 但那条修的是侧边栏宽度（`setSidebarWidth` + CSS transition），与列宽是不同的拖动，根因不同
 3. 查 `frontend/src/index.css:488-580` 的 `fm-table` / `fm-th-resize` 样式，**无 CSS transition 涉及列宽**，排除 transition 因素
 4. 排除 localStorage 写入（列宽 state 本来就不持久化）
 5. 锁定根因：React 重渲染而非 CSS / I/O

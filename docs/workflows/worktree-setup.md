@@ -24,13 +24,13 @@ git worktree add ~/coding/OmniTerm-<branch> <branch>
 cp branch.config.example .env.local
 
 # 3. 编辑 .env.local，填入该分支的端口/域名/版本/二进制名
-#    参考 docs/branch-workflows.md「分支身份约定」表
+#    参考 docs/workflows/branch-workflows.md「分支身份约定」表
 
 # 4. 启动验证
 ./dev.sh start
 ```
 
-`branch.config.example` 缺失时直接创建 `.env.local`（参考其他 worktree 的 `.env.local` 和 `docs/branch-workflows.md` 表）。
+`branch.config.example` 缺失时直接创建 `.env.local`（参考其他 worktree 的 `.env.local` 和 `docs/workflows/branch-workflows.md` 表）。
 
 ## Remote Repos
 
@@ -54,14 +54,14 @@ git reset HEAD \
   CLAUDE.md AGENTS.md \
   .pi/ .qoder/ .codegraph/ \
   openspec/ \
-  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  docs/superpowers/ docs/dev/plans/ docs/reference/requirements.md \
   .dev/ omniterm.db.bak \
   dev.sh PROGRESS.md CHANGELOG.md
 git checkout -- \
   CLAUDE.md AGENTS.md \
   .pi/ .qoder/ .codegraph/ \
   openspec/ \
-  docs/superpowers/ docs/proposal-* docs/requirements.md \
+  docs/superpowers/ docs/dev/plans/ docs/reference/requirements.md \
   .dev/ omniterm.db.bak \
   dev.sh PROGRESS.md CHANGELOG.md
 
@@ -69,4 +69,4 @@ git commit -m "release: v1.x.x"
 git push public release:main   # 推送到公开仓
 ```
 
-详见 `docs/release-plan.md`。
+详见 `docs/workflows/release-guide.md`。

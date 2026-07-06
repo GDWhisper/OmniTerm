@@ -309,4 +309,4 @@ grep "^import.*@codemirror" frontend/src/components/FileManager/FileEditor.tsx
 - **创建原因**：调查 vite 资源占用时顺带分析
 - **关联 commit**：`7d530a2 fix(dev.sh): start 防御性清理 vite/cargo 孤儿进程`（即本文诞生的契机）
 - **下次审视**：项目功能完成度 ≥80% 时（或触发 §7 任意条件时）
-- **本文件 release 状态**：被 `docs/release-plan.md` 排除规则 `docs/proposal-*` 自动过滤，不入 release branch
+- **本文件 release 状态**：因位于 `docs/dev/plans/` 被 release 排除规则自动过滤，不入 release branch
