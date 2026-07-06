@@ -82,6 +82,15 @@ export interface AppState {
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
   setActiveExternalSession: (name: string | null) => void
+  /**
+   * Activate a session in one atomic update: clears any active external
+   * session, sets the active session, and (if a workspace is active)
+   * remembers the session for that workspace. Use this whenever a user
+   * picks a session (clicking the sidebar, just-created session, etc.)
+   * — sites that need side-effects (e.g. attention notifications) can
+   * call those *after* this returns.
+   */
+  activateSession: (sessionId: string) => void
   setConnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
@@ -199,6 +208,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ activeSessionId: id })
   },
   setActiveExternalSession: (name) => set({ activeExternalSession: name }),
+
+  /**
+   * Atomic session activation — see interface for contract. Batches all
+   * related state + localStorage writes into one set() so subscribers
+   * re-render at most once. Mirrors the pattern used by switchWorkspace.
+   */
+  activateSession: (sessionId) => {
+    const { activeWorkspaceId, workspaceSessionMemory } = get()
+    localStorage.setItem('omniterm_active_session', sessionId)
+    const newMemory = activeWorkspaceId
+      ? { ...workspaceSessionMemory, [activeWorkspaceId]: sessionId }
+      : workspaceSessionMemory
+    if (activeWorkspaceId) {
+      localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(newMemory))
+    }
+    set({
+      activeExternalSession: null,
+      activeSessionId: sessionId,
+      workspaceSessionMemory: newMemory,
+    })
+  },
   setConnected: (v) => set({ connected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {

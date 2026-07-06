@@ -79,9 +79,9 @@ export function Sidebar() {
     setActiveWorkspace,
     setActiveSession,
     setActiveExternalSession,
+    activateSession,
     setConnected,
     workspaceSessionMemory,
-    setWorkspaceSession,
     clearWorkspaceSession,
     fmSessionStates,
     resetFmToFollowing,
@@ -637,14 +637,9 @@ export function Sidebar() {
       const newSession = await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
       await loadSessions()
       // Auto-activate the newly created session so the terminal pane
-      // switches to it immediately (matches clicking a session in the
-      // sidebar). Use newSession.id from the API response rather than
-      // relying on loadSessions to repopulate the list first.
-      setActiveExternalSession(null)
-      setActiveSession(newSession.id)
-      if (activeWorkspaceId) {
-        setWorkspaceSession(activeWorkspaceId, newSession.id)
-      }
+      // switches to it immediately. Atomic (clears external + sets
+      // activeSession + updates workspace memory in one set()).
+      activateSession(newSession.id)
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
@@ -1069,11 +1064,7 @@ export function Sidebar() {
                                       key={s.id}
                                       className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
                                       onClick={() => {
-                                        setActiveSession(s.id)
-                                        setActiveExternalSession(null)
-                                        if (activeWorkspaceId) {
-                                          setWorkspaceSession(activeWorkspaceId, s.id)
-                                        }
+                                        activateSession(s.id)
                                         attention.setActive(sessionKey)
                                       }}
                                     >
