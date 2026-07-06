@@ -2,12 +2,47 @@ pub mod agent_hooks;
 pub mod agent_state;
 pub mod control_mode;
 pub mod process_info;
+pub mod pty_io;
 
 use anyhow::{anyhow, Result};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
 use crate::tmux::agent_state::{AgentKind, AgentSnapshot};
+
+/// Platform-specific install commands for the terminal multiplexer.
+#[cfg(unix)]
+pub const MULTIPLEXER_INSTALL_HINTS: &[&str] = &[
+    "apt install tmux",
+    "brew install tmux",
+    "pacman -S tmux",
+];
+
+#[cfg(windows)]
+pub const MULTIPLEXER_INSTALL_HINTS: &[&str] = &[
+    "winget install psmux",
+    "scoop install psmux",
+    "cargo install psmux",
+];
+
+/// Check whether a terminal multiplexer (tmux/psmux) is available in PATH.
+///
+/// Returns `Ok(())` if found, or an error with platform-specific install hints.
+pub fn check_multiplexer() -> Result<()> {
+    match which::which("tmux") {
+        Ok(_) => {
+            debug!("multiplexer (tmux) found in PATH");
+            Ok(())
+        }
+        Err(_) => {
+            let hints = MULTIPLEXER_INSTALL_HINTS.join("\n  ");
+            Err(anyhow!(
+                "terminal multiplexer not found in PATH.\nInstall one of:\n  {}",
+                hints
+            ))
+        }
+    }
+}
 
 /// Create a new detached tmux session with an optional startup command.
 ///

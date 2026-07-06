@@ -9,8 +9,6 @@ mod utils;
 mod workspaces;
 mod ws;
 
-use std::time::Duration;
-
 use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
@@ -77,6 +75,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+
+    if let Err(e) = tmux::check_multiplexer() {
+        tracing::error!("{}", e);
+        std::process::exit(1);
+    }
 
     let db = SqlitePoolOptions::new()
         .max_connections(5)

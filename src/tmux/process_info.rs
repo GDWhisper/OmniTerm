@@ -1,29 +1,12 @@
 use crate::tmux::agent_hooks;
 use crate::tmux::agent_state::AgentKind;
 
-/// Read a process's command line and match against known agent CLIs.
-///
-/// Returns `None` if the process doesn't exist, can't be read, or doesn't match.
-pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
-    read_cmdline_impl(pid).and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
-}
-
-/// Walk the process tree from `pid` looking for agent processes.
-///
-/// Checks the process itself and its descendants up to a platform-appropriate depth.
-pub fn walk_process_tree(pid: u32) -> Option<AgentKind> {
-    if let Some(kind) = read_process_cmdline(pid) {
-        return Some(kind);
-    }
-    walk_children(pid, 1)
-}
-
 #[cfg(unix)]
 mod platform {
     use super::*;
     use std::fs;
 
-    pub(super) fn read_cmdline_impl(pid: u32) -> Option<String> {
+    pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let cmdline_path = format!("/proc/{}/cmdline", pid);
         let content = fs::read_to_string(cmdline_path).ok()?;
         if content.is_empty() {
@@ -32,7 +15,7 @@ mod platform {
         Some(content.replace('\0', " "))
     }
 
-    pub(super) fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
+    pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
         }
@@ -59,7 +42,7 @@ mod platform {
     use super::*;
     use sysinfo::{Pid, System};
 
-    pub(super) fn read_cmdline_impl(pid: u32) -> Option<String> {
+    pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         let process = sys.process(Pid::from_u32(pid))?;
@@ -71,7 +54,7 @@ mod platform {
         }
     }
 
-    pub(super) fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
+    pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
         }
@@ -104,7 +87,23 @@ mod platform {
     }
 }
 
-use platform::{read_cmdline_impl, walk_children};
+/// Read a process's command line and match against known agent CLIs.
+///
+/// Returns `None` if the process doesn't exist, can't be read, or doesn't match.
+pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
+    platform::read_cmdline_impl(pid)
+        .and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
+}
+
+/// Walk the process tree from `pid` looking for agent processes.
+///
+/// Checks the process itself and its descendants up to a platform-appropriate depth.
+pub fn walk_process_tree(pid: u32) -> Option<AgentKind> {
+    if let Some(kind) = read_process_cmdline(pid) {
+        return Some(kind);
+    }
+    platform::walk_children(pid, 1)
+}
 
 #[cfg(test)]
 mod tests {

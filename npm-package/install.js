@@ -13,35 +13,50 @@ function platformMap() {
   const p = process.platform;
   const a = process.arch;
 
-  if (p === 'win32') {
-    console.error('omniterm: Windows is not supported (requires tmux).');
-    process.exit(1);
-  }
-
   const map = {
-    'linux-x64': 'linux-x86_64',
-    'linux-arm64': 'linux-aarch64',
-    'darwin-arm64': 'macos-aarch64',
+    'linux-x64': { suffix: 'linux-x86_64', ext: '' },
+    'linux-arm64': { suffix: 'linux-aarch64', ext: '' },
+    'darwin-arm64': { suffix: 'macos-aarch64', ext: '' },
+    'win32-x64': { suffix: 'windows-x86_64', ext: '.zip' },
+    'win32-arm64': { suffix: 'windows-aarch64', ext: '.zip' },
   };
 
   const key = `${p}-${a}`;
-  const suffix = map[key];
-  if (!suffix) {
+  const entry = map[key];
+  if (!entry) {
     console.error(`omniterm: Unsupported platform: ${p}-${a}`);
     process.exit(1);
   }
-  return suffix;
+  return entry;
 }
 
-function checkTmux() {
-  try {
-    execSync('which tmux', { stdio: 'ignore' });
-  } catch {
-    console.warn(
-      '⚠️  tmux is not installed. omniterm requires tmux to function.\n' +
-      '    Install it:  sudo apt install tmux  (Linux) /  brew install tmux  (macOS)\n' +
-      '    Then restart omniterm.'
-    );
+function checkMultiplexer() {
+  if (process.platform === 'win32') {
+    try {
+      execSync('where tmux', { stdio: 'ignore' });
+    } catch {
+      try {
+        execSync('where psmux', { stdio: 'ignore' });
+      } catch {
+        console.warn(
+          '⚠️  psmux (tmux) is not installed. omniterm requires a terminal multiplexer.\n' +
+          '    Install it:  winget install psmux   (recommended)\n' +
+          '                 scoop install psmux\n' +
+          '                 cargo install psmux\n' +
+          '    Then restart omniterm.'
+        );
+      }
+    }
+  } else {
+    try {
+      execSync('which tmux', { stdio: 'ignore' });
+    } catch {
+      console.warn(
+        '⚠️  tmux is not installed. omniterm requires tmux to function.\n' +
+        '    Install it:  sudo apt install tmux  (Linux) /  brew install tmux  (macOS)\n' +
+        '    Then restart omniterm.'
+      );
+    }
   }
 }
 
@@ -76,21 +91,39 @@ function download(url, dest) {
   });
 }
 
+function extractZip(zipPath, destDir) {
+  if (process.platform === 'win32') {
+    execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, {
+      stdio: 'ignore',
+    });
+  } else {
+    execSync(`unzip -o "${zipPath}" -d "${destDir}"`, { stdio: 'ignore' });
+  }
+}
+
 async function main() {
-  const suffix = platformMap();
-  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/omniterm-${suffix}`;
+  const { suffix, ext } = platformMap();
+  const assetName = `omniterm-${suffix}${ext}`;
+  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${assetName}`;
   const dest = path.join(BIN_DIR, BIN_NAME);
 
   if (fs.existsSync(dest)) {
     console.log(`omniterm: binary already installed at ${dest}`);
     fs.chmodSync(dest, 0o755);
-    checkTmux();
+    checkMultiplexer();
     return;
   }
 
   console.log(`omniterm: downloading native binary for ${suffix}...`);
   try {
-    await download(url, dest);
+    if (ext === '.zip') {
+      const tmpZip = path.join(BIN_DIR, assetName);
+      await download(url, tmpZip);
+      extractZip(tmpZip, BIN_DIR);
+      fs.unlinkSync(tmpZip);
+    } else {
+      await download(url, dest);
+    }
     fs.chmodSync(dest, 0o755);
     console.log(`omniterm: installed to ${dest}`);
   } catch (err) {
@@ -100,7 +133,7 @@ async function main() {
     process.exit(1);
   }
 
-  checkTmux();
+  checkMultiplexer();
 }
 
 main();

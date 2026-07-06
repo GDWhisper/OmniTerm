@@ -29,6 +29,13 @@ It connects to tmux under the hood. You don't need to think about that.
 
 tmux must be installed. The install script attempts to install it automatically (apt, brew, pacman, yum). Docker images bundle it.
 
+**Windows**: Install [psmux](https://github.com/psmux/psmux) — a native Windows tmux replacement built on ConPTY:
+```powershell
+winget install psmux    # recommended
+# or: scoop install psmux
+# or: cargo install psmux
+```
+
 ### Install
 
 ```bash
@@ -36,8 +43,12 @@ tmux must be installed. The install script attempts to install it automatically 
 npm install -g @gdwhisper/omniterm
 omniterm
 
-# Shell script
+# Shell script (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
+omniterm
+
+# PowerShell (Windows)
+irm https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.ps1 | iex
 omniterm
 
 # Docker

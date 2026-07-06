@@ -21,8 +21,12 @@ src/
 ├── auth/mod.rs           # JWT token creation/verification, RequireAuth extractor
 ├── models/               # SQLx-derived structs: User, Project, Session
 ├── tmux/
-│   ├── mod.rs            # tmux command wrappers: new_session, kill_session, capture_pane, pane_cwd
-│   └── hooks.rs          # Agent state scanner: scan_agent_state()
+│   ├── mod.rs            # tmux command wrappers, multiplexer detection: new_session, kill_session, check_multiplexer
+│   ├── agent_hooks.rs    # Agent CLI detection + hook config generation (Claude, Codex, Qoder)
+│   ├── agent_state.rs    # Agent state data model: AgentKind, AgentState, AgentSnapshot
+│   ├── control_mode.rs   # tmux -C control mode session activity monitor
+│   ├── process_info.rs   # [platform] Process enumeration: read_process_cmdline, walk_process_tree
+│   └── pty_io.rs         # [platform] PTY writes + process cleanup: write_pty, kill_session_process
 ├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
 ├── git/mod.rs            # Git worktree discovery
 ├── ws/

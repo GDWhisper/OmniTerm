@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-
+- (2026-07-06) `[backend]` Native Windows support via psmux — 新增 `process_info.rs`（`cfg(unix)`/`cfg(windows)` 平台化进程枚举）和 `pty_io.rs`（平台化 PTY 写入与进程清理），PID 类型从 `i32` 改为 `u32`；`detect_agent_kind` 扩展 Node.js wrapper 识别与 `Qoder` agent；启动时 multiplexer 检测（`/api/v1/system/multiplexer` 端点 + 启动退出）；PowerShell 安装脚本 `install.ps1`；npm `install.js` 解除 `win32` 拒绝逻辑；release workflow 新增 `windows-latest` 构建矩阵（`src/tmux/process_info.rs`、`src/tmux/pty_io.rs`、`src/tmux/agent_hooks.rs`、`src/tmux/agent_state.rs`、`src/main.rs`、`src/api/system.rs`、`install.ps1`、`npm-package/install.js`、`.github/workflows/release.yml`）
 - (2026-07-06) `[infra]` Pre-commit hook 扩展为同时拦截 frontend lint 错误 — 原 hook 只跑 `cargo check`，dev 分支累积 73 个 pre-existing lint 错误无拦截。现改为 staged 包含 `.ts`/`.tsx` 时跑 `pnpm lint`、包含 `.rs` 时跑 `cargo check`，互不干扰。`set -e` 保证 lint 失败时中断提交（`scripts/hooks/pre-commit`）
 - (2026-07-06) `[frontend]` Sidebar 底部状态栏新增 GitHub 仓库链接按钮 — 点击在在新标签页打开 `https://github.com/GDWhisper/OmniTerm`，按钮悬停效果与现有底部按钮一致（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/GitHubIcon.tsx`、`frontend/src/version.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-07-04) `[frontend]` Settings 音效开关旁新增 ▶ 试听按钮 — 点击播放 coin 音效供用户判断是否开启（`frontend/src/components/Settings/Settings.tsx`）

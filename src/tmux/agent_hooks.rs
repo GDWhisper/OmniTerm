@@ -10,23 +10,18 @@ use crate::tmux::agent_state::AgentKind;
 /// Extracts the basename (strips path, extensions like `.exe`/`.cmd`/`.bat`, and lowercases),
 /// then matches against known agent CLIs.
 pub fn detect_agent_kind(command: &str) -> Option<AgentKind> {
-    // Trim and extract the base executable name
     let cmd = command.trim();
     if cmd.is_empty() {
         return None;
     }
 
-    // Split by whitespace to get the first token (the command)
     let first_token = cmd.split_whitespace().next()?;
 
-    // Extract filename component from the path.
-    // Handle both Unix (/) and Windows (\) separators.
     let basename = first_token
         .rsplit(&['/', '\\'][..])
         .next()
         .unwrap_or(first_token);
 
-    // Strip known executable extensions (case-insensitive)
     let stripped = if let Some(s) = strip_ext(basename, ".exe")
         .or_else(|| strip_ext(basename, ".cmd"))
         .or_else(|| strip_ext(basename, ".bat"))
@@ -36,12 +31,35 @@ pub fn detect_agent_kind(command: &str) -> Option<AgentKind> {
         basename
     };
 
-    // Case-insensitive match
     match stripped.to_lowercase().as_str() {
         "claude" | "claude-code" => Some(AgentKind::Claude),
         "codex" => Some(AgentKind::Codex),
+        "qoder" => Some(AgentKind::Qoder),
+        "node" | "nodejs" => {
+            let args = &cmd[first_token.len()..];
+            detect_agent_in_node_args(args)
+        }
         _ => None,
     }
+}
+
+/// Scan the arguments after `node`/`node.exe` for agent script path segments.
+///
+/// Matches paths like `C:\...\claude\bin\cli.js` or `/usr/lib/codex/index.js`
+/// by checking if any path segment is a known agent name.
+fn detect_agent_in_node_args(args: &str) -> Option<AgentKind> {
+    for token in args.split_whitespace() {
+        for segment in token.split(&['/', '\\'][..]) {
+            let seg_lower = segment.to_lowercase();
+            match seg_lower.as_str() {
+                "claude" | "claude-code" => return Some(AgentKind::Claude),
+                "codex" => return Some(AgentKind::Codex),
+                "qoder" => return Some(AgentKind::Qoder),
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /// Case-insensitive extension stripping.
@@ -141,7 +159,7 @@ pub fn augment_agent_command(command: &str) -> Option<String> {
     let kind = detect_agent_kind(command)?;
 
     let augmented = match kind {
-        AgentKind::Claude => {
+        AgentKind::Claude | AgentKind::Qoder => {
             let settings_json = claude_hook_settings();
             format!("{} --settings '{}'", command.trim(), settings_json)
         }
@@ -233,6 +251,47 @@ mod tests {
         assert_eq!(detect_agent_kind("vim"), None);
         assert_eq!(detect_agent_kind(""), None);
         assert_eq!(detect_agent_kind("  "), None);
+    }
+
+    #[test]
+    fn test_detect_qoder() {
+        assert_eq!(detect_agent_kind("qoder"), Some(AgentKind::Qoder));
+        assert_eq!(detect_agent_kind("qoder.exe"), Some(AgentKind::Qoder));
+        assert_eq!(detect_agent_kind("C:\\Users\\x\\qoder.exe"), Some(AgentKind::Qoder));
+    }
+
+    #[test]
+    fn test_detect_windows_negative_samples() {
+        assert_eq!(detect_agent_kind("claudette.exe"), None);
+        assert_eq!(detect_agent_kind("codextool.exe"), None);
+        assert_eq!(detect_agent_kind("qodercli.exe"), None);
+        assert_eq!(detect_agent_kind("C:\\Program Files\\claudette.exe"), None);
+    }
+
+    #[test]
+    fn test_detect_node_wrapper_claude() {
+        assert_eq!(
+            detect_agent_kind("node C:\\Users\\x\\claude\\bin\\cli.js"),
+            Some(AgentKind::Claude)
+        );
+        assert_eq!(
+            detect_agent_kind("node.exe /usr/local/lib/claude/index.js"),
+            Some(AgentKind::Claude)
+        );
+    }
+
+    #[test]
+    fn test_detect_node_wrapper_codex() {
+        assert_eq!(
+            detect_agent_kind("node C:\\tools\\codex\\bin\\main.js"),
+            Some(AgentKind::Codex)
+        );
+    }
+
+    #[test]
+    fn test_detect_node_wrapper_non_agent() {
+        assert_eq!(detect_agent_kind("node server.js"), None);
+        assert_eq!(detect_agent_kind("node.exe app/index.js"), None);
     }
 
     // === claude_hook_settings tests ===
