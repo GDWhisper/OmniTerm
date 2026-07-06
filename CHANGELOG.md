@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+
+- (2026-07-06) `[frontend]` Sidebar 底部状态栏新增 GitHub 仓库链接按钮 — 点击在在新标签页打开 `https://github.com/GDWhisper/OmniTerm`，按钮悬停效果与现有底部按钮一致（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/GitHubIcon.tsx`、`frontend/src/version.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-07-04) `[frontend]` Settings 音效开关旁新增 ▶ 试听按钮 — 点击播放 coin 音效供用户判断是否开启（`frontend/src/components/Settings/Settings.tsx`）
 
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — GitHub Actions CI/CD 发布流水线（tag `v*` 触发，4 平台后端构建矩阵、GitHub Release 自动上传、npm publish、ghcr.io Docker 推送）（`.github/workflows/release.yml`）

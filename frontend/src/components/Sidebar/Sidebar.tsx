@@ -6,9 +6,10 @@ import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
-import { APP_VERSION } from '../../version'
+import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
@@ -1360,6 +1361,32 @@ export function Sidebar() {
             onClick={toggleSettings}
             size={26}
           />
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center rounded transition-all"
+            style={{
+              width: 26,
+              height: 26,
+              border: '1px solid var(--border-strong)',
+              color: 'var(--text-faint)',
+              fontSize: 14,
+            }}
+            title={t('sidebar.githubRepo')}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--accent)'
+              e.currentTarget.style.color = 'var(--accent)'
+              e.currentTarget.style.background = 'var(--accent-10)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border-strong)'
+              e.currentTarget.style.color = 'var(--text-faint)'
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <GitHubIcon width={16} height={16} />
+          </a>
         </div>
       </div>
 
