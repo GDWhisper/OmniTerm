@@ -9,7 +9,6 @@ import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolde
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { READER_FONT } from '../../utils/fonts'
-import { play8BitSound } from '../../utils/audioFeedback'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -441,7 +440,7 @@ export function FileManager() {
       }
     }
     addToast('success', t('fm.uploadComplete'))
-    play8BitSound('coin')
+    import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
     fetchFiles()
   }
 
@@ -484,7 +483,7 @@ export function FileManager() {
         })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
-      play8BitSound('stomp')
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp'))
       fetchFiles()
     } catch (err: unknown) {
       addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.deleteFailed'))
@@ -533,7 +532,7 @@ export function FileManager() {
         }
       }
       addToast('success', t('fm.uploadComplete'))
-      play8BitSound('coin')
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
       fetchFiles()
     }
     input.click()
