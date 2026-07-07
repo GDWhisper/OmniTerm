@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { WebLinksAddon } from '@xterm/addon-web-links'
+import type { FitAddon } from '@xterm/addon-fit'
 import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
@@ -309,13 +308,19 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   fontSizeRef.current = fontSize
 
   /** Create a terminal on the given container and return a cleanup function */
-  const createTerminal = useCallback((container: HTMLDivElement) => {
+  const createTerminal = useCallback(async (container: HTMLDivElement) => {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
     })
+
+    // Load addons dynamically to keep them out of the main chunk
+    const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([
+      import('@xterm/addon-fit'),
+      import('@xterm/addon-web-links'),
+    ])
 
     const fit = new FitAddon()
     const webLinks = new WebLinksAddon()
@@ -400,6 +405,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const initTerminal = useCallback((container: HTMLDivElement) => {
     if (termRef.current) return
 
+    // createTerminal is async (loads addons dynamically), but we return
+    // a synchronous cleanup function immediately. The cleanup will be
+    // called if the component unmounts before init completes.
     createTerminal(container)
 
     return () => {
