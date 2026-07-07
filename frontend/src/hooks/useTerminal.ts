@@ -447,7 +447,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   return {
     initTerminal,
-    terminal: termRef.current,
     sendData,
     scrollMode,
     sendScrollKeys,

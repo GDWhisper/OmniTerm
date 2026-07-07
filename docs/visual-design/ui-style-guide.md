@@ -242,38 +242,38 @@ The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10
 **使用条件**：仅适用 `var(--wood-shadow)` 深色背景的不可按 badge。
 亮黄背景或带 outer shadow 的面板**不要使用**（inset 会出现「外凸里凹」矛盾视觉）。
 
-**实现**：使用 4 条 1px inset box-shadow，**顶/左为深色凹边阴影**、**底/右为亮色凹边高光**：
+**实现**：使用 4 条 **2px** inset box-shadow，**顶/左为深色凹边阴影**、**底/右为亮色凹边高光**。
+1px 在普通 DPI 下会被抗锯齿吃掉，呈现「纸片」感；2px 才能稳定呈现凹入木板。
+所有不可按 badge（连接状态、计数窗口、LIVE、session-attn）统一复用
+`.status-badge-3d` class（见 `index.css`），禁止在组件里各写一份 inline inset。
 
 ```css
-box-shadow:
-  inset 0 1px 0 var(--wood-inset-dark),    /* 顶 1px 深色 */
-  inset 1px 0 0 var(--wood-inset-dark),    /* 左 1px 深色 */
-  inset 0 -1px 0 var(--wood-inset-light),  /* 底 1px 亮色 */
-  inset -1px 0 0 var(--wood-inset-light);  /* 右 1px 亮色 */
+.status-badge-3d {
+  box-shadow:
+    inset 0 2px 0 var(--wood-inset-dark),    /* 顶 2px 深色 */
+    inset 2px 0 0 var(--wood-inset-dark),    /* 左 2px 深色 */
+    inset 0 -2px 0 var(--wood-inset-light),  /* 底 2px 亮色 */
+    inset -2px 0 0 var(--wood-inset-light);  /* 右 2px 亮色 */
+}
 ```
 
 **颜色 token**（在 `:root` 中定义）：
 
 | Token | Value | 用途 |
 |-------|-------|------|
-| `--wood-inset-dark` | `#1F1812` | 顶/左 凹边阴影（< `--wood-shadow`） |
-| `--wood-inset-light` | `#5A4530` | 底/右 凹边高光（> `--wood-shadow`） |
+| `--wood-inset-dark` | `#140F0A` | 顶/左 凹边阴影（< `--wood-shadow`，深棕黑） |
+| `--wood-inset-light` | `#6E543A` | 底/右 凹边高光（> `--wood-shadow`，亮木棕） |
 
-颜色均调在 wood 色系内，不引入新色相，不和 `#7EE787` / `#FF7B72` 状态色冲突。
+颜色均调在 wood 色系内（仅拉明度，不引入新色相），不和 `#7EE787` / `#FF7B72` 状态色冲突。
 
-**实现参考**（Sidebar 底部连接状态，`Sidebar.tsx` 1439–1463）：
+**实现参考**（Sidebar 底部连接状态，`Sidebar.tsx` 1328–1348）：
 
 ```tsx
 <div
-  className="flex items-center gap-1.5"
+  className="flex items-center gap-1.5 status-badge-3d"
   style={{
     padding: '2px 6px',
     background: 'var(--wood-shadow, #3A2E1F)',
-    boxShadow:
-      'inset 0 1px 0 var(--wood-inset-dark),' +
-      'inset 1px 0 0 var(--wood-inset-dark),' +
-      'inset 0 -1px 0 var(--wood-inset-light),' +
-      'inset -1px 0 0 var(--wood-inset-light)',
   }}
 >
   <SignalBarsSprite size={14} connected={connected} />

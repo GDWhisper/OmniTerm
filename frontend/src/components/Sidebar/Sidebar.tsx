@@ -297,12 +297,12 @@ export function Sidebar() {
           (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
         ),
       )
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 404) {
         setBrowseNotFound(true)
         setBrowseEntries([])
       } else {
-        setBrowseError(e.message || '无法访问该目录')
+        setBrowseError((e instanceof Error ? e.message : String(e)) || '无法访问该目录')
       }
     } finally {
       setBrowseLoading(false)
@@ -320,11 +320,11 @@ export function Sidebar() {
           (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
         ),
       )
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 404) {
         setRepairBrowseEntries([])
       } else {
-        setRepairBrowseError(e.message || '无法访问该目录')
+        setRepairBrowseError((e instanceof Error ? e.message : String(e)) || '无法访问该目录')
       }
     } finally {
       setRepairBrowseLoading(false)
@@ -1248,8 +1248,9 @@ export function Sidebar() {
                               setExternalSessions(prev => prev.filter(s => s.name !== name))
                               loadSessions(adoptProjectId)
                               addToast('success', t('sidebar.adoptSuccess', { name }) ?? `Session "${name}" adopted`)
-                            }).catch((e: any) => {
-                              addToast('error', t('sidebar.adoptFailed', { msg: e.message }) ?? `Failed to adopt session: ${e.message}`)
+                            }).catch((e: unknown) => {
+                              const msg = e instanceof Error ? e.message : String(e)
+                              addToast('error', t('sidebar.adoptFailed', { msg }) ?? `Failed to adopt session: ${msg}`)
                             }).finally(() => {
                               setAdoptTarget(null)
                               setAdoptProjectId('')
@@ -1326,12 +1327,10 @@ export function Sidebar() {
         style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-base)' }}
       >
         <div
-          className="flex items-center gap-1.5"
+          className="flex items-center gap-1.5 status-badge-3d"
           style={{
             padding: '2px 6px',
             background: 'var(--wood-shadow, #3A2E1F)',
-            boxShadow:
-              'inset 0 1px 0 var(--wood-inset-dark), inset 1px 0 0 var(--wood-inset-dark), inset 0 -1px 0 var(--wood-inset-light), inset -1px 0 0 var(--wood-inset-light)',
           }}
         >
           <SignalBarsSprite size={14} connected={connected} />

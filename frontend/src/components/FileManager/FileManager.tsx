@@ -184,8 +184,8 @@ export function FileManager() {
       }
       if (!silent) setSelected(new Set())
       return data.cwd
-    } catch (err: any) {
-      if (!silent) addToast('error', err.message || t('fm.loadFailed'))
+    } catch (err: unknown) {
+      if (!silent) addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.loadFailed'))
       if (!silent) setFiles([])
       return undefined
     } finally {
@@ -365,7 +365,7 @@ export function FileManager() {
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [createOpen])
+  }, [createOpen, closeCreate])
 
   // Reset transient UI state when source changes
   useEffect(() => {
@@ -436,8 +436,8 @@ export function FileManager() {
           path: cwd,
           file,
         })
-      } catch (err: any) {
-        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err.message }))
+      } catch (err: unknown) {
+        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
       }
     }
     addToast('success', t('fm.uploadComplete'))
@@ -465,8 +465,8 @@ export function FileManager() {
       })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.renameFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.renameFailed'))
     }
     setEditingName(null)
   }
@@ -486,8 +486,8 @@ export function FileManager() {
       addToast('success', t('fm.deleted', { count: selected.size }))
       play8BitSound('stomp')
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.deleteFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.deleteFailed'))
     }
   }
 
@@ -528,8 +528,8 @@ export function FileManager() {
             path: cwd,
             file: input.files[i],
           })
-        } catch (err: any) {
-          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err.message }))
+        } catch (err: unknown) {
+          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err instanceof Error ? err.message : String(err) }))
         }
       }
       addToast('success', t('fm.uploadComplete'))
@@ -551,8 +551,8 @@ export function FileManager() {
         path: cwd,
       })
       setFiles(results)
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.searchFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.searchFailed'))
     } finally {
       setLoading(false)
     }
@@ -637,10 +637,10 @@ export function FileManager() {
     setTimeout(() => createInputRef.current?.focus(), 0)
   }
 
-  const closeCreate = () => {
+  const closeCreate = useCallback(() => {
     setCreateOpen(null)
     setCreateName('')
-  }
+  }, [])
 
   const submitCreate = async () => {
     if (!fmSource || !createOpen) return
@@ -670,8 +670,9 @@ export function FileManager() {
       addToast('success', t('fm.createSuccess', { name }))
       closeCreate()
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.createFailed', { msg: err.message || '' }))
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      addToast('error', msg || t('fm.createFailed', { msg: msg || '' }))
     }
   }
 

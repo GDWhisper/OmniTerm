@@ -40,7 +40,7 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
   const handleClick = useCallback(
     (name: string) => {
       // Modifier keys toggle the latch
-      if (MOD_KEYS.includes(name as any)) {
+      if ((MOD_KEYS as readonly string[]).includes(name)) {
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
         onSetLatchMod(latchMod === mod ? null : mod)
       } else if (latchMod) {
@@ -65,7 +65,7 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
     }
   }
 
-  const isModKey = (name: string) => MOD_KEYS.includes(name as any)
+  const isModKey = (name: string) => (MOD_KEYS as readonly string[]).includes(name)
 
   const renderBtn = (k: string) => (
     <button
