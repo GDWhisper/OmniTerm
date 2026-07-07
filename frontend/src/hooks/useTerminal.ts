@@ -130,7 +130,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
               attention.clearAlert(sessionId)
             }
           }
-        } catch {}
+        } catch {
+          // Non-JSON websocket frames (e.g. binary echo) are not terminal messages — ignore.
+        }
       }
     }
 

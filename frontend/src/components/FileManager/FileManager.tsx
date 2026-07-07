@@ -23,6 +23,13 @@ interface FileEntry {
 
 type SortKey = 'name' | 'mtime' | 'size'
 
+const SortIndicator = ({ col, sortKey, sortDesc }: { col: SortKey; sortKey: SortKey; sortDesc: boolean }) =>
+  sortKey === col ? (
+    <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--accent)', userSelect: 'none' }}>
+      {sortDesc ? '▼' : '▲'}
+    </span>
+  ) : null
+
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
   if (bytes === 0) return '0 B'
@@ -295,7 +302,7 @@ export function FileManager() {
     }
   }
 
-  const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
+  const handleRowClick = (entry: FileEntry) => {
     if (editingName) return
     if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
       const newPath = cwd ? `${cwd}/${entry.name}` : entry.name
@@ -668,13 +675,6 @@ export function FileManager() {
     }
   }
 
-  const SI = ({ col }: { col: SortKey }) =>
-    sortKey === col ? (
-      <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--accent)', userSelect: 'none' }}>
-        {sortDesc ? '▼' : '▲'}
-      </span>
-    ) : null
-
   // Breadcrumb segments — always in original order; RTL direction only changes
   // alignment (right) and clip side (left), never reverses LTR character flow.
   const bcSegments = cwd.split('/').filter(Boolean)
@@ -935,19 +935,19 @@ export function FileManager() {
                   )}
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
-                      {t('fm.name')} <SI col="name" />
+                      {t('fm.name')} <SortIndicator col="name" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('name', e)} onTouchStart={(e) => handleResizeStart('name', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('mtime')}>
-                      {t('fm.lastModified')} <SI col="mtime" />
+                      {t('fm.lastModified')} <SortIndicator col="mtime" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('mtime', e)} onTouchStart={(e) => handleResizeStart('mtime', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('size')}>
-                      {t('fm.size')} <SI col="size" />
+                      {t('fm.size')} <SortIndicator col="size" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} onTouchStart={(e) => handleResizeStart('size', e)} />
                   </th>
@@ -965,7 +965,7 @@ export function FileManager() {
                     <tr
                       key={fullPath}
                       className={isSel ? 'fm-tr-selected' : ''}
-                      onClick={(e) => handleRowClick(f, e)}
+                      onClick={() => handleRowClick(f)}
                       onDoubleClick={() => {
                         if (isDir) navigateTo(fullPath)
                       }}

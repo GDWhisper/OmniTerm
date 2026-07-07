@@ -133,4 +133,33 @@ chmod +x scripts/hooks/pre-commit
 ---
 
 **记录人**：执行 commit `6ab8e46` 时同步记录
-**最后更新**：2026-07-06
+**最后更新**：2026-07-06（2026-07-07 补充简单层清理进展）
+
+---
+
+## 2026-07-07 补充 — 简单层已清（9/64 → 53 剩余）
+
+按计划 1.1「第一刀机械修复」范畴，先清掉零风险/零行为影响的 🟢 机械层
+（共 9 个），不碰 react-hooks 结构性部分（refs / set-state-in-effect /
+immutability）与 `client.ts` 的 `any`（涉及外部 API 契约，留待排期）。
+
+**已消错误（9 个）**：
+
+| 文件 | 行 | 规则 | 改法 |
+|------|----|----|----|
+| `AttentionProvider.test.tsx` | 238/260/283 | `prefer-const` | `ctxRef` `let`→`const`（闭包只读） |
+| `FileManager.tsx` | 298 | `no-unused-vars` | 删未用参数 `_e`，调用点 `onClick={() => handleRowClick(f)}` |
+| `useTerminal.ts` | 133 | `no-empty` | 空 `catch {}` 补注释说明吞非 JSON 帧的原因 |
+| `FileManager.tsx` | 938/944/950 | `react-hooks/static-components` | `<SI>` 提到模块级 `SortIndicator`（传 `sortKey`/`sortDesc` prop） |
+| `AttentionProvider.tsx` + `hooks/useAttention.ts` | 193 | `react-refresh/only-export-components` | `useAttention` 移到 `hooks/useAttention.ts`，`AttentionContext` 一并迁过去创建；provider 文件只导出组件 |
+
+**验证**：`npx eslint .` 64 → 53 errors；`npx tsc --noEmit` 0 errors。
+
+**剩余 53 个（结构性，待排期）**：
+
+- `no-explicit-any` ×27（含 `client.ts` ×11，需注意外部 API 契约）
+- `react-hooks/set-state-in-effect` ×13
+- `react-hooks/refs` ×9
+- `react-hooks/immutability` ×4
+
+均属 1.1 第二刀/第三刀范畴，按原计划下个 sprint 处理。
