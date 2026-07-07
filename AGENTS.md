@@ -14,8 +14,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 ## 核心规则
 
 1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
-   - `fix:` 涵盖**所有代码缺陷修复**，包括修 lint 错误（如 `no-explicit-any`、`react-hooks/*`、`prefer-const`、空 `catch`、未用变量、重构以消除 react-refresh 失效等）——修 lint 是修 bug，不是清理。
-   - `chore:` 仅限**非代码的工程杂务**：删文档、移动/重命名文档、改构建脚本/配置、依赖升级等**不触碰源码逻辑**的打扫工作。不要把修代码的改动归到 `chore:`。
 2. **CHANGELOG 只写实质性的改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
 3. **用 CodeGraph 查源码**：先 `codegraph sync` 确认索引最新，再用 `codegraph_explore` / `codegraph_node`。配置文件、文档、非索引文件才用 Read/Grep
 
