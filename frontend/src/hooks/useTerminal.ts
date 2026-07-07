@@ -246,28 +246,33 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [])
 
-  /** Enter tmux copy mode and scroll one page in the given direction */
+  /** Enter tmux copy mode (if not already) and scroll one page in the given direction.
+   *  Uses the real tmux copy-mode state (tmuxScrollModeRef) as the source of
+   *  truth, not the React `scrollMode` flag, so pagging always works after the
+   *  user has toggled scroll on via the UI button. */
   const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
-    if (!scrollMode) {
+    if (!tmuxScrollModeRef.current) {
       // tmux prefix is Ctrl+B (0x02), then [ enters copy mode
       ws.send(new TextEncoder().encode('\x02['))
+      tmuxScrollModeRef.current = true
       setScrollMode(true)
     }
     const key = direction === 'up' ? '\x1b[5~' : '\x1b[6~' // PageUp / PageDown
     ws.send(new TextEncoder().encode(key))
-  }, [scrollMode])
+  }, [])
 
   /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
   const exitScrollMode = useCallback(() => {
-    if (!scrollMode) return
-    if (tmuxScrollModeRef.current) {
-      sendData('q')
-      tmuxScrollModeRef.current = false
+    if (!tmuxScrollModeRef.current) {
+      setScrollMode(false)
+      return
     }
+    sendData('q')
+    tmuxScrollModeRef.current = false
     setScrollMode(false)
-  }, [scrollMode, sendData])
+  }, [sendData])
 
   /** Dispose the current terminal and all associated resources */
   const disposeTerminal = useCallback(() => {
@@ -443,7 +448,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     terminal: termRef.current,
     sendData,
     scrollMode,
-    setScrollMode,
     sendScrollKeys,
     exitScrollMode,
   }
