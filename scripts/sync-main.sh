@@ -4,9 +4,9 @@
 #
 # 流程:
 # 1. 切换到 main
-# 2. 合并 dev（不提交）
-# 3. 删除黑名单文件
-# 4. 提交
+# 2. 合并 dev（保留个体 commit 历史，显示活跃度）
+# 3. 删除黑名单文件（单独 commit）
+# 4. 完成
 
 set -euo pipefail
 
@@ -41,9 +41,9 @@ fi
 echo "📥 拉取 dev 最新..."
 git fetch origin dev
 
-# 合并 dev（squash 压缩成单个提交，避免 main 历史中出现 docs 改动记录）
-echo "🔀 合并 dev (squash)..."
-if ! git merge --squash origin/dev; then
+# 合并 dev（保留个体 commit 历史）
+echo "🔀 合并 dev..."
+if ! git merge origin/dev --no-edit; then
   echo "❌ 合并冲突，请手动解决后重试"
   git merge --abort 2>/dev/null || true
   exit 1
@@ -51,24 +51,23 @@ fi
 
 # 删除黑名单文件
 echo "🗑️  删除黑名单文件..."
+HAS_CHANGES=false
 for item in "${BLACKLIST[@]}"; do
   if [ -e "$item" ]; then
     git rm -rf "$item" 2>/dev/null || true
     echo "   删除: $item"
+    HAS_CHANGES=true
   fi
 done
 
-# 检查是否有变更
-if git diff --cached --quiet; then
-  echo "✅ 无变更，跳过提交"
-  git merge --abort 2>/dev/null || true
-  exit 0
+# 如果有黑名单文件被删除，单独提交
+if [ "$HAS_CHANGES" = true ]; then
+  git commit -m "chore: 清理开发文档（黑名单排除）"
+  echo "✅ 已清理黑名单文件"
 fi
 
-# 提交
-MSG="${1:-chore: sync main from dev}"
-git commit -m "$MSG"
-echo "✅ main 已同步: $MSG"
+echo ""
+echo "✅ main 已同步"
 echo ""
 echo "下一步:"
 echo "  git push origin main"
