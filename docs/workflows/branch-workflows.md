@@ -43,7 +43,8 @@ dev (开发) ──┤
 ### main 分支（发布分支）
 
 - **作用**：干净的发布代码，sync 到 public 仓
-- **同步方式**：使用 `scripts/sync-main.sh` 脚本，自动排除黑名单文件
+- **同步方式**：**必须使用** `./scripts/sync-main.sh` 脚本
+- **禁止**：直接 `git merge dev`（会带入黑名单文件）
 - **黑名单**：docs/、openspec/、.superpowers/、.pi/、.qoder/、AGENTS.md、CLAUDE.md、PROGRESS.md
 - **发布流程**：tag push → CI 自动构建多平台 binary + GitHub Release + npm + Docker
 
@@ -66,7 +67,8 @@ dev (开发) ──┤
 ## 同步规则
 
 - **dev → preview**：全量合并，无排除
-- **dev → main**：通过 `scripts/sync-main.sh`，黑名单排除开发文档
+- **dev → main**：**必须使用** `./scripts/sync-main.sh`（黑名单排除开发文档）
+  - 禁止直接 `git merge dev`（会带入黑名单文件）
 - **debug → dev**：正常合并
 - **禁止反向同步**：main 和 preview 不回写到 dev
 
