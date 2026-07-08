@@ -2,16 +2,6 @@
 
 All notable changes to OmniTerm are documented in this file.
 
-## [0.1.6] - 2026-07-04
-
-### Fixed
-
-- (2026-07-04) `[infra]` `cargo install` 后 UI 仍显示旧版本号（`scripts/bump-version.sh`）
-
-> 根因：`bump-version.sh` 改 `.env.local` 后未重建 frontend，发布出去的前端 bundle 仍是上一次 build 的状态。修复：`bump-version.sh` 末尾自动 `pnpm run build`，让 UI 版本号与后端同步。
-
----
-
 ## Conventions
 
 This file follows [Keep a Changelog](https://keepachangelog.com/) with project-specific adaptations:
@@ -57,33 +47,19 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [0.1.3] - 2026-07-04
+## [0.1.7] - 2026-07-08
 
-### Fixed
+### Added
 
-- (2026-07-04) `[backend]` 启动时打印访问地址（`eprintln!`），tracing filter 修正为 `omniterm=info`（`src/main.rs`）
-
-> 0.1.2 已 yank（crash on startup due to wrong tracing filter target）
-
----
-
-## [0.1.2] - 2026-07-04
+- (2026-07-08) `[backend]` 智能启动日志 — 检测运行模式自动切换：dev 模式（前端目录存在）输出详细分支/版本/端口信息，生产模式（内嵌前端）输出简洁一行 `OmniTerm v0.1.7 — http://host:port`（`src/main.rs`）
+- (2026-07-08) `[infra]` 新增 `scripts/sync-main.sh` 分支同步脚本 — 自动处理黑名单文件删除、Cargo.toml/Dockerfile/docker-compose 分支专属配置修复、Cargo.lock 重新生成，支持 dev → main 单向同步（`scripts/sync-main.sh`）
 
 ### Changed
 
-- (2026-07-04) `[infra]` npm install.js 下载进度条 + 超时处理，版本号从 package.json 自动读取（`npm-package/install.js`）
-- (2026-07-04) `[infra]` 发布流程重构为黑名单制 `sync-release.sh`，Release Notes 改为手写面向用户（`scripts/sync-release.sh`、`RELEASE_NOTES.md`）
-- (2026-07-04) `[infra]` CI Release Notes 从 `RELEASE_NOTES.md` 读取，npm-publish 改为幂等（`.github/workflows/release.yml`）
-- (2026-07-04) `[docs]` 发布指南更新（`docs/release-guide.md`）
+- (2026-07-08) `[docs]` 分支模型重构 — dev/preview/main 三层结构，废弃 release 分支，main 作为发布分支直接同步到 public 仓（`docs/workflows/branch-workflows.md`、`docs/workflows/release-guide.md`、`docs/workflows/worktree-setup.md`）
+- (2026-07-08) `[docs]` README 预览图改为 `pic/overview.png`，移除 Contributing 中重复的中英文链接（`README.md`、`README_zh.md`）
 
-### Fixed
-
-- (2026-07-04) `[infra]` npm shim.js fallback URL 修正 pax→GDWhisper, release→main（`npm-package/shim.js`）
-- (2026-07-04) `[infra]` pnpm workspace 根目录误判导致依赖安装失败（`frontend/pnpm-workspace.yaml`）
-
----
-
-## [0.1.1] - 2026-07-04
+## [Unreleased]
 
 ### Added
 
