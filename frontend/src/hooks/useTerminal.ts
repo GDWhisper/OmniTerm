@@ -72,6 +72,13 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const keyHandlerAttachedRef = useRef(false)
   // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
   const tmuxScrollModeRef = useRef(false)
+  // `isCreatingRef` guards against concurrent createTerminal calls
+  // (React StrictMode runs effects twice; createTerminal is async so the
+  // termRef.current check at the top of initTerminal isn't enough).
+  const isCreatingRef = useRef(false)
+  // `isCancelledRef` lets an in-flight createTerminal bail out if dispose
+  // is called before it finishes (e.g., session switch while addons load).
+  const isCancelledRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
@@ -277,6 +284,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   /** Dispose the current terminal and all associated resources */
   const disposeTerminal = useCallback(() => {
+    // Signal any in-flight createTerminal to bail out (e.g., when a
+    // session switch kicks off dispose before addons have loaded).
+    isCancelledRef.current = true
+    isCreatingRef.current = false
     observerRef.current?.disconnect()
     observerRef.current = null
     if (mouseUpHandlerRef.current) {
@@ -309,30 +320,75 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   /** Create a terminal on the given container and return a cleanup function */
   const createTerminal = useCallback(async (container: HTMLDivElement) => {
+    // Reset the cancellation flag in case a previous dispose set it.
+    // (We don't touch isCreatingRef here — initTerminal owns that gate.)
+    isCancelledRef.current = false
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
     })
-
     // Load addons dynamically to keep them out of the main chunk
     const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([
       import('@xterm/addon-fit'),
       import('@xterm/addon-web-links'),
     ])
 
+    // If dispose was called during the await (e.g., session switch before
+    // addons finished loading), abandon this term. Without this guard we
+    // would leak a Term whose DOM is never attached to the container.
+    if (isCancelledRef.current) {
+      term.dispose()
+      return
+    }
+
     const fit = new FitAddon()
     const webLinks = new WebLinksAddon()
 
     term.loadAddon(fit)
     term.loadAddon(webLinks)
-    term.open(container)
-    fit.fit()
 
+    // Install the ResizeObserver BEFORE term.open so it captures every
+    // size change from this point on. Setting it up after term.open +
+    // fit.fit() (the previous order) missed any resize that happened in
+    // the await window above, leaving xterm fitted to a stale size —
+    // manifested as "input line at the bottom, big black area above,
+    // cursor at the top, can't type" on slow devices / network-throttled
+    // production builds. The first observation is redundant with the
+    // rAF-triggered fit below, so we skip it.
+    let isFirstFire = true
+    const observer = new ResizeObserver(() => {
+      if (isFirstFire) {
+        isFirstFire = false
+        return
+      }
+      fit.fit()
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(
+          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
+        )
+      }
+    })
+    observer.observe(container)
+    observerRef.current = observer
+
+    term.open(container)
     termRef.current = term
     fitRef.current = fit
     containerRef.current = container
+
+    // Defer the initial fit to the next animation frame. The async addon
+    // import above yields, during which the browser may have started a
+    // layout (CSS transition opening the sidebar, font swap completing,
+    // late style recalc). Calling fit here would read a transitional
+    // container size. rAF runs after the next style/layout flush, so
+    // the container's final, stable size is what we measure.
+    requestAnimationFrame(() => {
+      if (isCancelledRef.current) return
+      fit.fit()
+    })
 
     if (onTitleChange) {
       term.onTitleChange(onTitleChange)
@@ -348,18 +404,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         composingRef.current = false
       })
     }
-
-    // Handle resize
-    const observer = new ResizeObserver(() => {
-      fit.fit()
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
-        )
-      }
-    })
-    observer.observe(container)
-    observerRef.current = observer
 
     // Auto-copy selected text to clipboard on mouse select
     // xterm.js creates native selections when Shift is held (bypasses tmux mouse mode).
@@ -403,12 +447,16 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   // Initialize terminal once (when container becomes available)
   const initTerminal = useCallback((container: HTMLDivElement) => {
-    if (termRef.current) return
-
-    // createTerminal is async (loads addons dynamically), but we return
-    // a synchronous cleanup function immediately. The cleanup will be
-    // called if the component unmounts before init completes.
-    createTerminal(container)
+    // termRef.current alone isn't sufficient: createTerminal is async
+    // (dynamic addon import), so the ref stays null for several ticks
+    // after this call. Without isCreatingRef, a second effect run
+    // (React StrictMode, or a rapid session toggle) would slip past the
+    // guard and start a parallel createTerminal that races the first.
+    if (termRef.current || isCreatingRef.current) return
+    isCreatingRef.current = true
+    createTerminal(container).finally(() => {
+      isCreatingRef.current = false
+    })
 
     return () => {
       disposeTerminal()
@@ -416,6 +464,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   }, [createTerminal, disposeTerminal])
 
   // Connect WS when terminal is ready and session changes
+
   useEffect(() => {
     if (termRef.current && sessionId && sessionId !== sessionIdRef.current) {
       connectWs()
