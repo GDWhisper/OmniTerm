@@ -3,6 +3,7 @@ name = "omniterm"
 version = "0.1.7"
 edition = "2024"
 license = "Apache-2.0"
+description = "Web-based tmux terminal manager with AI agent monitoring"
 include = ["src/**", "migrations/**", "frontend/dist/**", "build.rs", "README.md", "LICENSE", "!frontend/node_modules/**"]
 
 [dependencies]
