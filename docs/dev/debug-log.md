@@ -1,34 +1,6 @@
-## 2026-07-08: 点开会话时终端输入行/光标错位、屏幕大片黑屏、无法输入
+# Debug Log
 
-**症状**：点开会话时（empty → 选 session，或 session A → B 切换），终端输入行（prompt）显示在底部，屏幕上方大片黑屏，xterm 光标渲染在顶部，无法输入任何命令。偶发，强依赖设备/网络。
-
-**根因**：`a06eb48 perf: xterm addons 按需加载` 把 `createTerminal` 改为 `async`，先 `await Promise.all([import FitAddon, import WebLinksAddon])` 才 `term.open(container)` + `fit.fit()`。在 await 期间，浏览器可以做别的事：
-- CSS 过渡（侧边栏 `transition: width 0.2s ease` 展开）
-- 字体 swap（READER_FONT 是 web font，刚加载完 metric 变化）
-- 任何 invalidate 触发的 reflow
-
-挂载顺序是 `term.open` → `fit.fit()` → **再** `new ResizeObserver(...).observe(container)`。等 `ResizeObserver` 挂上时，await 期间发生的尺寸变化已经过去了。`ResizeObserver` 只在「observe 之后」的尺寸变化触发，不补历史快照。结果：xterm 永远 fit 到 await 期间某个中间尺寸（例如 1 行），用户看到的就是「光标在顶部 + 大片黑屏 + 无法输入」。
-
-**调试过程**：
-1. 浏览器观察 50/150/300/600/1200/2500ms 各时间点的 panel/container/xterm 尺寸 → 复现时 panel=737、container=733 但 xterm 只 1 行
-2. git log 查最近 useTerminal.ts 改动 → `a06eb48` 是唯一动过 init 流程的
-3. codegraph 读 `createTerminal` 全文 → 定位到 `ResizeObserver` 挂在 `term.open/fit.fit()` 之后
-4. xterm.js 官方推荐顺序是 `loadAddon → term.open → fit → ResizeObserver`，但本项目把顺序倒过来，且 await 给了浏览器一个空窗
-
-**修复**：
-1. 把 `ResizeObserver` 提前到 `term.open` 之前挂上（首帧用 `isFirstFire` 跳过 — 它和 rAF 触发的初次 fit 重复），后续尺寸变化都通过 observer 走 `fit.fit() + resize WS msg`
-2. 初次 `fit.fit()` 改用 `requestAnimationFrame` 触发，等下一帧 layout flush 后再读容器尺寸，避开 await 期间的 transient 尺寸
-3. 加 `isCreatingRef` 防止 React StrictMode 下 `createTerminal` 两次并发（异步导致 `termRef.current` 检查失效）
-4. 加 `isCancelledRef` 让 dispose 期间能中断 in-flight 创建（await addons 时切 session 不会再泄漏 term 对象）
-
-**验证**：50/150/300/600/1200/2500ms 全程 panel=737 / container=733 / xterm=720，xterm 90 行，51/51 vitest 通过（含新增「renders terminal panel when an active session is present」回归 + setup.ts polyfill ResizeObserver + matchMedia.addListener 给 xterm v6 旧 API 用）
-
-**教训**：
-- 异步初始化（dynamic import / 任何 await）+ 布局耦合（CSS 过渡 / 字体 / ResizeObserver 顺序）= 隐藏的时序坑。await 之后做的「读尺寸」操作必须等下一帧
-- 「ResizeObserver 在 open 之后挂」在同步初始化里是 idiomatic 的（open 同步、observer 同步挂上、中间没空窗），但 await 把同步切开，把 idiomatic 顺序变成 bug
-- React 异步副作用（async useEffect / async useCallback）下，ref 不能再当"已经在做"的判据 — 需要单独的 in-flight 标记
-
----
+踩坑记录，简要记录开发过程中遇到的问题和解决方案。
 
 ---
 
