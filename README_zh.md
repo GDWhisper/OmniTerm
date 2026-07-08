@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-![screenshot](capture.png)
+![screenshot](pic/overview.png)
 
 > [English](README.md)
 
@@ -65,7 +65,6 @@ omniterm -p 8080         # 自定义端口
 
 - ⭐ 加个 Star
 - 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) — 提交 Bug 或想法
-- 📖 [English](README.md)
 
 ## 许可证
 
