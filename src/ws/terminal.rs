@@ -269,32 +269,61 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     // owned by the master; when the master is dropped, the fd is closed and
     // any further writes fail with EBADF, which the writer thread handles
     // by exiting.
-    let pty_fd: RawFd = master_pty
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.as_raw_fd())
-        .expect("master PTY has a raw fd on unix");
-    std::thread::spawn(move || {
-        while let Some(data) = pty_in_rx.blocking_recv() {
-            let mut written = 0;
-            while written < data.len() {
-                match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
-                    Ok(0) => return,
-                    Ok(n) => written += n,
-                    Err(e) => {
-                        if e.raw_os_error() == Some(libc::EBADF) {
-                            debug!("PTY fd closed, writer thread exiting");
-                        } else {
-                            warn!("PTY write failed: {}", e);
+    #[cfg(unix)]
+    {
+        let pty_fd: RawFd = master_pty
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.as_raw_fd())
+            .expect("master PTY has a raw fd on unix");
+        std::thread::spawn(move || {
+            while let Some(data) = pty_in_rx.blocking_recv() {
+                let mut written = 0;
+                while written < data.len() {
+                    match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                        Ok(0) => return,
+                        Ok(n) => written += n,
+                        Err(e) => {
+                            if e.raw_os_error() == Some(libc::EBADF) {
+                                debug!("PTY fd closed, writer thread exiting");
+                            } else {
+                                warn!("PTY write failed: {}", e);
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
             }
-        }
-        debug!("PTY writer exited");
-    });
+            debug!("PTY writer exited");
+        });
+    }
+    #[cfg(windows)]
+    {
+        let writer = master_pty
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.take_writer())
+            .expect("master PTY has a writer on windows");
+        std::thread::spawn(move || {
+            let mut writer = writer;
+            while let Some(data) = pty_in_rx.blocking_recv() {
+                let mut written = 0;
+                while written < data.len() {
+                    match tmux::pty_io::write_pty(writer.as_mut(), &data[written..]) {
+                        Ok(0) => return,
+                        Ok(n) => written += n,
+                        Err(e) => {
+                            warn!("PTY write failed: {}", e);
+                            return;
+                        }
+                    }
+                }
+            }
+            debug!("PTY writer exited");
+        });
+    }
 
     // === Agent state poll task (only for hook-enabled sessions) ===
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
@@ -611,32 +640,61 @@ async fn handle_external_terminal(
 
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
-    let pty_fd: RawFd = master_pty
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|m| m.as_raw_fd())
-        .expect("master PTY has a raw fd on unix");
-    std::thread::spawn(move || {
-        while let Some(data) = pty_in_rx.blocking_recv() {
-            let mut written = 0;
-            while written < data.len() {
-                match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
-                    Ok(0) => return,
-                    Ok(n) => written += n,
-                    Err(e) => {
-                        if e.raw_os_error() == Some(libc::EBADF) {
-                            debug!("PTY fd closed, writer thread exiting");
-                        } else {
-                            warn!("PTY write failed: {}", e);
+    #[cfg(unix)]
+    {
+        let pty_fd: RawFd = master_pty
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.as_raw_fd())
+            .expect("master PTY has a raw fd on unix");
+        std::thread::spawn(move || {
+            while let Some(data) = pty_in_rx.blocking_recv() {
+                let mut written = 0;
+                while written < data.len() {
+                    match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                        Ok(0) => return,
+                        Ok(n) => written += n,
+                        Err(e) => {
+                            if e.raw_os_error() == Some(libc::EBADF) {
+                                debug!("PTY fd closed, writer thread exiting");
+                            } else {
+                                warn!("PTY write failed: {}", e);
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
             }
-        }
-        debug!("PTY writer exited");
-    });
+            debug!("PTY writer exited");
+        });
+    }
+    #[cfg(windows)]
+    {
+        let writer = master_pty
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.take_writer())
+            .expect("master PTY has a writer on windows");
+        std::thread::spawn(move || {
+            let mut writer = writer;
+            while let Some(data) = pty_in_rx.blocking_recv() {
+                let mut written = 0;
+                while written < data.len() {
+                    match tmux::pty_io::write_pty(writer.as_mut(), &data[written..]) {
+                        Ok(0) => return,
+                        Ok(n) => written += n,
+                        Err(e) => {
+                            warn!("PTY write failed: {}", e);
+                            return;
+                        }
+                    }
+                }
+            }
+            debug!("PTY writer exited");
+        });
+    }
 
     // Agent poll task: external sessions never have hooks, so this is never started.
     // We keep the shutdown channel for symmetry but never spawn a poll task.
