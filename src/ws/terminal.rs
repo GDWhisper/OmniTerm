@@ -304,7 +304,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
             .lock()
             .unwrap()
             .as_ref()
-            .and_then(|m| m.take_writer())
+            .and_then(|m| m.take_writer().ok())
             .expect("master PTY has a writer on windows");
         std::thread::spawn(move || {
             let mut writer = writer;
@@ -675,7 +675,7 @@ async fn handle_external_terminal(
             .lock()
             .unwrap()
             .as_ref()
-            .and_then(|m| m.take_writer())
+            .and_then(|m| m.take_writer().ok())
             .expect("master PTY has a writer on windows");
         std::thread::spawn(move || {
             let mut writer = writer;
