@@ -1,17 +1,16 @@
 # OmniTerm 发布指南
 
-> 基于 v0.1.0 实际发布流程总结。以后每次发布照此执行。
-
 ## 架构速览
 
 ```
 GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
-├── main (开发)                            └── main ← release 分支内容
-└── release (本地临时，不推送)                  └── vX.Y.Z tag → CI 触发
+├── dev (开发前沿)                          └── main ← sync from dev
+├── preview (私人稳定分支)                       └── vX.Y.Z tag → CI 触发
+└── main (发布分支，sync 到 public)
 ```
 
 - **私有仓**：完整开发历史，包含所有 dev 文件
-- **公共仓**：单 commit，干净发布，`main` 即最新 release
+- **公共仓**：干净发布代码（排除开发文档），`main` 即最新 release
 - **CI**：在公共仓运行（tag 触发）
 
 ---
@@ -21,64 +20,47 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 ### Step 1：版本号 + 变更
 
 ```bash
+# 在 dev worktree 执行
+cd /home/pax/coding/OmniTerm-dev
+
 # 更新版本号
 ./scripts/bump-version.sh 0.2.0
 
-# 更新 npm-package/install.js 中的 VERSION 常量
-# 检查 README 是否需要更新
 # 更新 CHANGELOG（将 [Unreleased] 改为 [0.2.0]）
+# 提交版本号变更
+git add -A && git commit -m "chore: bump to 0.2.0"
 ```
 
-### Step 2：构建 Release 分支
+### Step 2：同步 dev → main
 
-Release 分支 = orphan 分支，只含发布文件，单 commit，无历史。
+使用 sync 脚本自动排除开发文档：
 
 ```bash
-git checkout --orphan release-v1
-git rm -rf --cached .
-
-# 仅复制发布需要的文件
-git checkout main -- \
-  src/ frontend/ tests/ migrations/ \
-  Cargo.toml Cargo.lock \
-  Dockerfile Dockerfile.release docker-compose.yml \
-  README.md README_zh.md LICENSE \
-  install.sh npm-package/ \
-  scripts/bump-version.sh \
-  .github/ .gitignore
-
-# 修正 Cargo.toml：开发仓用 omniterm-main，发布仓用 omniterm
-sed -i 's/name = "omniterm-main"/name = "omniterm"/' Cargo.toml
-
-# 修正 Dockerfile：默认 binary 名
-sed -i 's/ARG BRANCH_BINARY_NAME=omniterm-main/ARG BRANCH_BINARY_NAME=omniterm/' Dockerfile
-
-# 修正 docker-compose
-sed -i 's/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm}/' docker-compose.yml
-
-# 确认无 dev 文件残留
-git diff --cached --name-only | grep -E '^(\.pi/|\.qoder/|\.codegraph/|AGENTS|CHANGELOG|CLAUDE|dev\.sh|docs/|openspec/|branch\.config)' | wc -l
-# 输出应为 0
-
-git commit -m "v0.2.0"
-git branch -D release
-git branch -m release-v1 release
+# 在 dev worktree 执行
+./scripts/sync-main.sh "release: v0.2.0"
 ```
+
+脚本会：
+1. 切换到 main 分支
+2. 合并 dev（不提交）
+3. 删除黑名单文件（docs/、openspec/、.superpowers/、.pi/、.qoder/、AGENTS.md、CLAUDE.md、PROGRESS.md）
+4. 提交
 
 ### Step 3：打 Tag 并推送
 
 ```bash
-git tag -f v0.2.0 release
+cd /home/pax/coding/OmniTerm
 
-# 先取消旧版本 tag（如果存在）
-git push public :v0.2.0 2>/dev/null
+# 打 tag
+git tag v0.2.0
 
-# 推送 release → public/main，tag → CI 触发
-git push -f public release:main
+# 推送 main 到 public 仓
+git push public main:main
+
+# 推送 tag 触发 CI
 git push public v0.2.0
 
-# 切回 main，推私有仓
-git checkout -f main
+# 推送 main 到私有仓（保持同步）
 git push origin main
 ```
 
@@ -99,7 +81,26 @@ npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 | GitHub Release | 打开 `https://github.com/GDWhisper/OmniTerm/releases` 确认 binary 已上传 |
 | npm | `npm install -g @gdwhisper/omniterm && omniterm --version` |
 | Shell | `curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh \| bash` |
-| Docker | `docker run -p 9077:9077 ghcr.io/GDWhisper/omniterm:v0.2.0` |
+| Docker | `docker run -p 9075:9075 ghcr.io/GDWhisper/OmniTerm:v0.2.0` |
+
+---
+
+## 黑名单说明
+
+sync 脚本自动排除以下文件（开发文档不进入公开仓）：
+
+```
+docs/
+openspec/
+.superpowers/
+.pi/
+.qoder/
+AGENTS.md
+CLAUDE.md
+PROGRESS.md
+```
+
+如需维护公开版 AGENTS.md，创建 `scripts/public-agents.md` 并修改 sync 脚本添加替换逻辑。
 
 ---
 
@@ -126,10 +127,6 @@ Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binar
 
 包名已被占用。当前使用 scoped 包 `@gdwhisper/omniterm`。
 
-### macOS x86_64 构建太慢
-
-已从 CI 矩阵移除。当前构建平台：`linux-x86_64`、`linux-aarch64`、`macos-aarch64`。
-
 ### 公共仓 tag 误推送到私有仓
 
 每次推 tag 前先确认 remote：
@@ -139,28 +136,12 @@ git remote -v
 # origin → https://github.com/GDWhisper/OmniTerm-dev.git
 ```
 
----
+### sync 脚本冲突
 
-## 文件清单（发布仓包含）
-
-| 目录/文件 | 说明 |
-|-----------|------|
-| `src/` | Rust 后端源码 |
-| `frontend/` | React 前端源码 |
-| `tests/` | 集成测试 |
-| `migrations/` | SQLite 迁移 |
-| `Cargo.toml`, `Cargo.lock` | Rust 项目配置（name=`omniterm`） |
-| `Dockerfile` | 开发用多阶段构建 |
-| `Dockerfile.release` | CI 用轻量 Docker（复用预构建 binary） |
-| `docker-compose.yml` | Docker Compose 部署 |
-| `README.md`, `README_zh.md`, `LICENSE` | 文档 |
-| `install.sh` | Shell 安装脚本 |
-| `npm-package/` | npm 包文件 |
-| `scripts/bump-version.sh` | 版本号脚本 |
-| `.github/workflows/release.yml` | CI 流水线 |
-| `.gitignore` | Git 忽略规则 |
-
-**明确排除**：`AGENTS.md`、`CHANGELOG.md`、`CLAUDE.md`、`dev.sh`、`.pi/`、`.qoder/`、`.codegraph/`、`openspec/`、`docs/`（内部文档）、`branch.config.example`、`scripts/hooks/`、`scripts/check-doc-index.sh`
+如果 sync 脚本遇到合并冲突：
+1. 脚本会自动 abort 并报错
+2. 手动解决冲突后重新执行
+3. 或者检查 dev 是否有未提交的变更
 
 ---
 
