@@ -13,9 +13,10 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 
 ## 核心规则
 
-1. **每次改动后提交**：功能/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
-2. **CHANGELOG 只写实质性的改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
-3. **用 CodeGraph 查源码**：先 `codegraph sync` 确认索引最新，再用 `codegraph_explore` / `codegraph_node`。配置文件、文档、非索引文件才用 Read/Grep
+1. **严格遵守AGENTS.md所有条例**
+2. **每次改动后提交**：功能的开发/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
+3. **CHANGELOG 只写实质性的功能改动，排除开发文档改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
+4. **用 CodeGraph 查源码**：先 `codegraph sync` 确认索引最新，再用 `codegraph_explore` / `codegraph_node`。配置文件、文档、非索引文件才用 Read/Grep
 
 ## 工程准则
 
@@ -60,23 +61,9 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 - dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
 - **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
 
-新 worktree 初始化步骤见 `docs/workflows/worktree-setup.md`，各分支端口/域名/二进制名对照表见 `docs/workflows/branch-workflows.md「分支身份约定」`。
-
-
-### 首次初始化新 worktree
-
-```bash
-# 1. cp 模板（保留注释）
-cp branch.config.example .env.local  # 如果有模板文件
-# 2. 改值（参考其他 worktree）
-# 3. ./dev.sh start 验证
-```
-
-`branch.config.example` 缺失时直接编辑 `.env.local`（参考 `docs/workflows/branch-workflows.md` 表）。
-
 ## 文档索引
 
-> **强制执行**：接收任务后、编码前，必须先扫描此表，将任务与「触发条件」列逐一比对，**命中即读**。读完全部命中文档后再动手。跳过此步骤导致遗漏架构约束、工作流规则或已有踩坑记录，属违规。
+> **强制执行**：接收用户指令或编码前，必须先扫描此表，将任务与「触发条件」列逐一比对，**命中即读**。读完全部命中文档后再动手。跳过此步骤导致遗漏架构约束、工作流规则或已有踩坑记录，属违规。
 
 > 写新文档时**必须**按分类放入对应子目录，`docs/` 根目录下原则上不放文档，除非有明确理由。
 

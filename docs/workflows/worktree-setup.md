@@ -10,9 +10,10 @@
 
 | 目录 | 默认分支 | 用途 |
 |------|----------|------|
-| `~/coding/OmniTerm` | `main` | 发布前哨站（可 checkout release 进行发布操作） |
-| `~/coding/OmniTerm-dev` | `dev` | 日常开发 |
+| `~/coding/OmniTerm-dev` | `dev` | 开发前沿 |
+| `~/coding/OmniTerm-preview` | `preview` | 私人稳定分支（日常工具） |
 | `~/coding/OmniTerm-debug` | `debug` | 紧急修复 |
+| `~/coding/OmniTerm` | `main` | 发布分支（非 worktree，仅用于 sync 发布） |
 
 ## 新 Worktree 初始化
 
@@ -26,7 +27,10 @@ cp branch.config.example .env.local
 # 3. 编辑 .env.local，填入该分支的端口/域名/版本/二进制名
 #    参考 docs/workflows/branch-workflows.md「分支身份约定」表
 
-# 4. 启动验证
+# 4. 更新 Cargo.toml 的 package name
+#    与 .env.local 中 BRANCH_BINARY_NAME 保持一致
+
+# 5. 启动验证
 ./dev.sh start
 ```
 
@@ -34,39 +38,17 @@ cp branch.config.example .env.local
 
 ## Remote Repos
 
-- **私有仓**（`origin`）：存放所有分支（main/dev/debug/release），完整开发历史
-- **公开仓**（`public`）：只推送 `release` 分支（干净代码），用于对外发布
+- **私有仓**（`origin`）：存放所有分支（main/dev/preview/debug），完整开发历史
+- **公开仓**（`public`）：只推送 `main` 分支（干净代码），用于对外发布
 
 ```bash
 git remote add origin git@github.com:yourname/OmniTerm-private.git
 git remote add public git@github.com:yourname/OmniTerm.git
 ```
 
-## Release Branch Publish Flow
+## 分支同步
 
-```bash
-cd ~/coding/OmniTerm          # main worktree
-git checkout release
-git merge main --no-commit     # 合并 main 最新代码
+- **dev → preview**：全量合并
+- **dev → main**：使用 `./scripts/sync-main.sh`（自动排除黑名单 + 修复分支配置）
 
-# 排除开发相关文件
-git reset HEAD \
-  CLAUDE.md AGENTS.md \
-  .pi/ .qoder/ .codegraph/ \
-  openspec/ \
-  docs/superpowers/ docs/dev/plans/ docs/reference/requirements.md \
-  .dev/ omniterm.db.bak \
-  dev.sh PROGRESS.md CHANGELOG.md
-git checkout -- \
-  CLAUDE.md AGENTS.md \
-  .pi/ .qoder/ .codegraph/ \
-  openspec/ \
-  docs/superpowers/ docs/dev/plans/ docs/reference/requirements.md \
-  .dev/ omniterm.db.bak \
-  dev.sh PROGRESS.md CHANGELOG.md
-
-git commit -m "release: v1.x.x"
-git push public release:main   # 推送到公开仓
-```
-
-详见 `docs/workflows/release-guide.md`。
+详见 `docs/workflows/branch-workflows.md` 和 `docs/workflows/release-guide.md`。
