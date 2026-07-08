@@ -33,8 +33,8 @@ describe('Terminal mobile', () => {
     i18n.changeLanguage('en')
     useAppStore.setState({ isMobile: true, activeSessionId: 'sess-1' })
     const container = document.createElement('div')
-    // Give the panel a non-zero size so the async createTerminal doesn't
-    // crash immediately (xterm measures clientWidth/Height on open).
+    // Give the panel a non-zero size so the xterm terminal (initialized
+    // inside useTerminal) doesn't crash on open (xterm measures clientWidth/Height).
     Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true })
     Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true })
     document.body.appendChild(container)

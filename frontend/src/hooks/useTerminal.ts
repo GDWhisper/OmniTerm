@@ -7,6 +7,20 @@ import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
 
+// Eagerly preload xterm addons at module level. The dynamic imports start
+// fetching immediately when this module is evaluated, so by the time
+// createTerminal runs the addons are already resolved — no async gap.
+// This keeps the code-splitting benefit (addons in separate chunks)
+// while keeping createTerminal synchronous (no yield window for CSS
+// transitions / font swaps to change the container size mid-init).
+const FitAddonPromise = import('@xterm/addon-fit')
+const WebLinksAddonPromise = import('@xterm/addon-web-links')
+
+async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
+  const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([FitAddonPromise, WebLinksAddonPromise])
+  return [FitAddon, WebLinksAddon]
+}
+
 interface UseTerminalOptions {
   sessionId: string | null
   externalSessionName?: string | null
@@ -74,6 +88,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
+  // AbortController for createTerminal — abort on cleanup to cancel in-flight
+  // creation (e.g., React StrictMode double-mount or rapid session switch).
+  // A fresh controller is created for each initTerminal call.
+  const abortRef = useRef<AbortController | null>(null)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
   const [scrollMode, setScrollMode] = useState(false)
   // Stable ref for the consume-latch callback so connectWs closure is current
@@ -277,6 +295,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   /** Dispose the current terminal and all associated resources */
   const disposeTerminal = useCallback(() => {
+    // Abort any in-flight createTerminal (e.g., StrictMode double-mount).
+    // If createTerminal already completed, this is a no-op (signal was never
+    // checked after the await). If it's still in-flight, createTerminal will
+    // check the signal after loadAddons() and bail out before term.open().
+    abortRef.current?.abort()
+    abortRef.current = null
     observerRef.current?.disconnect()
     observerRef.current = null
     if (mouseUpHandlerRef.current) {
@@ -307,20 +331,31 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const fontSizeRef = useRef(fontSize)
   fontSizeRef.current = fontSize
 
-  /** Create a terminal on the given container and return a cleanup function */
-  const createTerminal = useCallback(async (container: HTMLDivElement) => {
+  /** Create a terminal on the given container and return a cleanup function.
+   *
+   * The addon imports are preloaded at module level, so `await loadAddons()`
+   * resolves immediately — no yield window for CSS transitions or font swaps
+   * to change the container size between `new Terminal` and `term.open`.
+   *
+   * The AbortController signal guards against React StrictMode double-mount:
+   * cleanup aborts the signal, and createTerminal checks it after loadAddons()
+   * before doing any DOM/ref work. Without this, StrictMode calls term.open()
+   * twice on the same container, corrupting xterm internal state. */
+  const createTerminal = useCallback(async (container: HTMLDivElement, signal: AbortSignal) => {
+    const [FitAddon, WebLinksAddon] = await loadAddons()
+
+    // StrictMode guard: if cleanup aborted the signal while we were awaiting
+    // addons, bail out before touching the DOM or refs.
+    if (signal.aborted) {
+      return
+    }
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
     })
-
-    // Load addons dynamically to keep them out of the main chunk
-    const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([
-      import('@xterm/addon-fit'),
-      import('@xterm/addon-web-links'),
-    ])
 
     const fit = new FitAddon()
     const webLinks = new WebLinksAddon()
@@ -405,10 +440,11 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const initTerminal = useCallback((container: HTMLDivElement) => {
     if (termRef.current) return
 
-    // createTerminal is async (loads addons dynamically), but we return
-    // a synchronous cleanup function immediately. The cleanup will be
-    // called if the component unmounts before init completes.
-    createTerminal(container)
+    // Create a fresh AbortController for this init cycle. disposeTerminal
+    // aborts the previous one (if any) before we get here.
+    const ac = new AbortController()
+    abortRef.current = ac
+    createTerminal(container, ac.signal)
 
     return () => {
       disposeTerminal()

@@ -4,6 +4,34 @@
 
 ---
 
+## 2026-07-08: 终端点开会话后输入行/光标错位、大片黑屏、无法操作
+
+**症状**：用户点开会话时，终端输入行显示在底部，上方一大片黑屏，光标在顶部，无法操作。
+
+**根因（两层）**：
+
+1. **`a06eb48` 将 `createTerminal` 改为 async**：动态 import 开了 yield 窗口，理论上 CSS 动画可在此期间改变容器尺寸（实际日志显示尺寸正确，说明这不是主要根因）
+2. **React StrictMode 双重 `term.open()`**（真正根因）：StrictMode mount-unmount-remount。旧同步版本中，`term.open()` 在 cleanup 之前完成（`termRef.current` 非 null，cleanup 有效 dispose）。改为 async 后，`term.open()` 在 cleanup 之后才执行（`termRef.current` 仍 null，cleanup 为空操作），导致两次 `createTerminal` 各自独立执行 `term.open()`，第二次覆盖第一次的 DOM，xterm 内部状态损坏
+
+**日志证据**（用户浏览器）：
+```
+loadAddons() called    ← Promise {<pending>}  (第一次)
+loadAddons() called    ← Promise {<pending>}  (第二次，并发!)
+loadAddons() resolved  ×2
+term.open + fit.fit    ×2  ← 同一容器 open 两次! cols:182 rows:42 (尺寸正确)
+WS connecting          ← 182x42
+```
+
+**修复**：
+- 模块顶层预加载 addons（消除 CSS 动画 yield 窗口）
+- AbortController 防 StrictMode 双重创建：`disposeTerminal` abort 信号，`createTerminal` 在 `await loadAddons()` 之后检查 `signal.aborted`，已 abort 则 bail out 不碰 DOM
+
+**教训**：
+- 异步初始化 + React StrictMode = 必须有显式竞态防护（AbortController / isCreatingRef）
+- 同步代码天然原子（cleanup 在两次 effect 之间执行，termRef.current 已设置），async 打破了这个不变量
+- 动态 import 放在函数体内 = 在函数执行路径上开 yield 窗口；放在模块顶层 = 在模块评估时开 yield 窗口（更早，对调用者无感）
+- 浏览器 DevTools 日志是唯一可靠的一手证据（headless 测试无法复现 StrictMode + 网络延迟的组合场景）
+
 ## 2026-06-28: WS 断开时 portable_pty::MasterWriter 泄漏 VEOF，agent 任务被中断
 
 **症状**：切换会话 / 删除其他会话 / 其他断开 WebSocket 的操作时，正在运行的 agent（Claude Code 等）任务被中断，pane 画面回到裸 tmux 提示符，用户感知为 “agent 像被 Ctrl+C 关闭了”。
