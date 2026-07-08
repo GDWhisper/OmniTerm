@@ -108,6 +108,27 @@ sed -i 's/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}/BRANCH_BINARY
 echo "📦 重新生成 Cargo.lock..."
 cargo generate-lockfile 2>/dev/null || true
 
+# 编译验证
+echo "🔍 编译验证..."
+if ! cargo check 2>&1 | tail -5; then
+  echo "❌ 后端编译失败，请修复后重试"
+  git merge --abort 2>/dev/null || true
+  exit 1
+fi
+
+# 前端编译验证（如果 frontend 目录存在）
+if [ -d "frontend" ] && command -v pnpm &> /dev/null; then
+  echo "🔍 前端编译验证..."
+  cd frontend
+  if ! pnpm build 2>&1 | tail -10; then
+    echo "❌ 前端编译失败，请修复后重试"
+    cd ..
+    git merge --abort 2>/dev/null || true
+    exit 1
+  fi
+  cd ..
+fi
+
 # 检查是否有变更
 if git diff --quiet && git diff --cached --quiet; then
   echo "✅ 无变更，跳过提交"

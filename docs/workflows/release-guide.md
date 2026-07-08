@@ -64,9 +64,32 @@ git add -A && git commit -m "chore: bump to 0.2.0"
 2. 合并 dev（保留个体 commit）
 3. 删除黑名单文件（docs/、openspec/、.superpowers/、.pi/、.qoder/、AGENTS.md、CLAUDE.md、PROGRESS.md）
 4. 修复分支专属配置（Cargo.toml, Dockerfile 等）
-5. 提交
+5. **运行编译验证**（cargo check + pnpm build）
+6. 提交
 
-### Step 3：用户确认
+### Step 3：编译验证
+
+**在打 tag 之前，必须验证代码能编译通过：**
+
+```bash
+cd /home/pax/coding/OmniTerm
+
+# 后端编译检查
+cargo check 2>&1 | grep -E "error|warning" | head -20
+
+# 前端编译检查
+cd frontend && pnpm build 2>&1 | tail -20
+```
+
+**如果编译失败：**
+1. 修复错误
+2. 在 dev 分支提交修复
+3. 重新执行 Step 2（sync-main.sh）
+4. 再次验证编译
+
+**⚠️ 禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
+
+### Step 4：用户确认
 
 **在执行任何发布操作前，必须向用户确认：**
 
@@ -81,7 +104,7 @@ git add -A && git commit -m "chore: bump to 0.2.0"
 
 **等待用户明确确认后才能继续。**
 
-### Step 4：打 Tag 并推送
+### Step 5：打 Tag 并推送
 
 ```bash
 cd /home/pax/coding/OmniTerm
@@ -99,7 +122,7 @@ git push public v0.2.0
 git push origin main
 ```
 
-### Step 5：Cargo 发布（crates.io）
+### Step 6：Cargo 发布（crates.io）
 
 ```bash
 cd /home/pax/coding/OmniTerm
@@ -116,7 +139,7 @@ cargo publish
 - 如果发现问题，只能通过发布新版本修复
 - 确保版本号正确、代码无误后再发布
 
-### Step 6：npm 发布
+### Step 7：npm 发布
 
 CI 不自动发 npm。手动执行：
 
@@ -126,7 +149,7 @@ cd npm-package
 npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 ```
 
-### Step 7：验证
+### Step 8：验证
 
 | 方式 | 验证命令 |
 |------|---------|
