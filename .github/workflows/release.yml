@@ -69,6 +69,7 @@ jobs:
 
       - name: Get binary name
         id: bin
+        shell: bash
         run: |
           BIN=$(cargo metadata --format-version=1 --no-deps | \
                 jq -r '.packages[0].targets[] | select(.kind[0]=="bin") | .name')
