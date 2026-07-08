@@ -102,13 +102,17 @@ async fn main() -> anyhow::Result<()> {
         .merge(api::routes(state.clone()));
 
     // Serve frontend: filesystem in dev mode, embedded in release mode
-    let app = if Path::new(&frontend_dir).is_dir() {
+    // ── 前端服务 ─────────────────────────────────────────────
+    // 检测运行模式：前端目录存在 = dev 模式（前后端分离），否则 = 生产模式（内嵌前端）
+    let dev_mode = Path::new(&frontend_dir).is_dir();
+
+    let app = if dev_mode {
         let static_service = ServeDir::new(&frontend_dir)
             .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
         tracing::info!("Serving frontend from {}", frontend_dir);
         app.fallback_service(static_service)
     } else {
-        tracing::info!("Frontend directory '{}' not found, serving from embedded assets", frontend_dir);
+        tracing::debug!("Serving from embedded assets");
         app.fallback(embedded_static_handler)
     };
 
@@ -116,18 +120,25 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
-    // BIND_ADDR env var still supported for backward compat; CLI --port takes priority
+    // ── 绑定 ─────────────────────────────────────────────────
     let host = std::env::var("OMNITERM_HOST").unwrap_or_else(|_| "127.0.0.1".into());
     let bind = std::env::var("BIND_ADDR")
         .unwrap_or_else(|_| format!("{}:{}", host, args.port));
 
-    // 启动时打印分支身份（仅日志/调试用，不影响逻辑）
-    let branch = std::env::var("BRANCH_NAME").unwrap_or_else(|_| "main".into());
-    let version = std::env::var("BRANCH_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
-    info!("starting omniterm branch={} version={}", branch, version);
-    tracing::info!("OmniTerm server listening on {}", bind);
-
     let listener = tokio::net::TcpListener::bind(&bind).await?;
+
+    // ── 启动提示 ──────────────────────────────────────────────
+    // dev 模式：详细日志（分支、版本、端口）
+    // 生产模式：简洁一行（OmniTerm vX.Y.Z — http://host:port）
+    if dev_mode {
+        let branch = std::env::var("BRANCH_NAME").unwrap_or_else(|_| "dev".into());
+        let version = std::env::var("BRANCH_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+        info!("starting omniterm branch={} version={}", branch, version);
+        tracing::info!("OmniTerm server listening on {}", bind);
+    } else {
+        eprintln!("OmniTerm v{} — http://{}", env!("CARGO_PKG_VERSION"), bind);
+    }
+
     axum::serve(listener, app).await?;
 
     Ok(())
