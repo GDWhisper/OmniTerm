@@ -6,9 +6,10 @@ import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
-import { APP_VERSION } from '../../version'
+import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
@@ -78,9 +79,9 @@ export function Sidebar() {
     setActiveWorkspace,
     setActiveSession,
     setActiveExternalSession,
+    activateSession,
     setConnected,
     workspaceSessionMemory,
-    setWorkspaceSession,
     clearWorkspaceSession,
     fmSessionStates,
     resetFmToFollowing,
@@ -633,8 +634,12 @@ export function Sidebar() {
 
     setSubmitting(true)
     try {
-      await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
+      const newSession = await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
       await loadSessions()
+      // Auto-activate the newly created session so the terminal pane
+      // switches to it immediately. Atomic (clears external + sets
+      // activeSession + updates workspace memory in one set()).
+      activateSession(newSession.id)
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
@@ -1059,11 +1064,7 @@ export function Sidebar() {
                                       key={s.id}
                                       className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
                                       onClick={() => {
-                                        setActiveSession(s.id)
-                                        setActiveExternalSession(null)
-                                        if (activeWorkspaceId) {
-                                          setWorkspaceSession(activeWorkspaceId, s.id)
-                                        }
+                                        activateSession(s.id)
                                         attention.setActive(sessionKey)
                                       }}
                                     >
@@ -1360,6 +1361,32 @@ export function Sidebar() {
             onClick={toggleSettings}
             size={26}
           />
+          <a
+            href={GITHUB_REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center justify-center rounded transition-all"
+            style={{
+              width: 26,
+              height: 26,
+              border: '1px solid var(--border-strong)',
+              color: 'var(--text-faint)',
+              fontSize: 14,
+            }}
+            title={t('sidebar.githubRepo')}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = 'var(--accent)'
+              e.currentTarget.style.color = 'var(--accent)'
+              e.currentTarget.style.background = 'var(--accent-10)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = 'var(--border-strong)'
+              e.currentTarget.style.color = 'var(--text-faint)'
+              e.currentTarget.style.background = 'transparent'
+            }}
+          >
+            <GitHubIcon size={16} />
+          </a>
         </div>
       </div>
 

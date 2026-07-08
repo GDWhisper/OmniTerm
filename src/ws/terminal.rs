@@ -277,33 +277,20 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         .expect("master PTY has a raw fd on unix");
     std::thread::spawn(move || {
         while let Some(data) = pty_in_rx.blocking_recv() {
-            // Write directly to the fd, looping on partial writes. We
-            // deliberately do NOT use any `Write`-implementing wrapper here
-            // — the portable_pty `MasterWriter` writes `\n + VEOF` on drop
-            // and there is no way to suppress that without leaking the fd.
             let mut written = 0;
             while written < data.len() {
-                let n = unsafe {
-                    libc::write(
-                        pty_fd,
-                        data[written..].as_ptr() as *const libc::c_void,
-                        data.len() - written,
-                    )
-                };
-                if n <= 0 {
-                    // EBADF (fd closed) or error — stop the thread; the
-                    // master is going away.
-                    if n < 0 {
-                        let errno = std::io::Error::last_os_error().raw_os_error();
-                        if errno == Some(libc::EBADF) {
+                match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                    Ok(0) => return,
+                    Ok(n) => written += n,
+                    Err(e) => {
+                        if e.raw_os_error() == Some(libc::EBADF) {
                             debug!("PTY fd closed, writer thread exiting");
                         } else {
-                            warn!("PTY write failed: errno={:?}", errno);
+                            warn!("PTY write failed: {}", e);
                         }
+                        return;
                     }
-                    return;
                 }
-                written += n as usize;
             }
         }
         debug!("PTY writer exited");
@@ -479,9 +466,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     // occur.
 
     if let Some(pid) = child_pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGHUP);
-        }
+        tmux::pty_io::kill_session_process(pid);
         debug!("sent SIGHUP to tmux client pid={}", pid);
     }
 
@@ -636,25 +621,18 @@ async fn handle_external_terminal(
         while let Some(data) = pty_in_rx.blocking_recv() {
             let mut written = 0;
             while written < data.len() {
-                let n = unsafe {
-                    libc::write(
-                        pty_fd,
-                        data[written..].as_ptr() as *const libc::c_void,
-                        data.len() - written,
-                    )
-                };
-                if n <= 0 {
-                    if n < 0 {
-                        let errno = std::io::Error::last_os_error().raw_os_error();
-                        if errno == Some(libc::EBADF) {
+                match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                    Ok(0) => return,
+                    Ok(n) => written += n,
+                    Err(e) => {
+                        if e.raw_os_error() == Some(libc::EBADF) {
                             debug!("PTY fd closed, writer thread exiting");
                         } else {
-                            warn!("PTY write failed: errno={:?}", errno);
+                            warn!("PTY write failed: {}", e);
                         }
+                        return;
                     }
-                    return;
                 }
-                written += n as usize;
             }
         }
         debug!("PTY writer exited");
@@ -733,9 +711,7 @@ async fn handle_external_terminal(
     }
 
     if let Some(pid) = child_pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGHUP);
-        }
+        tmux::pty_io::kill_session_process(pid);
         debug!("sent SIGHUP to tmux client pid={}", pid);
     }
 

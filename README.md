@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-![screenshot](pic/overview.png)
+![screenshot](capture.png)
 
 > [中文](README_zh.md)
 
@@ -21,7 +21,7 @@ It connects to tmux under the hood. You don't need to think about that.
 - **AI agent monitoring** — recognizes Claude Code, Codex, and similar CLI agents. Each pane gets a live badge: running, waiting for input, or finished. When an agent needs your attention, the browser tab flashes and a notification sounds.
 - **File browser** — browse, upload, download, and preview files. Syntax highlighting for 13 languages. Follows the terminal's current working directory. Built-in terminal with xterm.js, full keyboard and mobile soft keyboard.
 - **Git worktree awareness** — auto-discovers all git worktrees under a project and groups sessions by branch. Terminal and file browser follow the selected branch.
-- **Single binary** — Rust backend with embedded frontend and SQLite. Install via shell script, Cargo, or Docker. One command to start.
+- **Single binary** — Rust backend with embedded frontend and SQLite. Install via npm, shell script, or Docker. One command to start.
 
 ## Quick start
 
@@ -29,18 +29,30 @@ It connects to tmux under the hood. You don't need to think about that.
 
 tmux must be installed. The install script attempts to install it automatically (apt, brew, pacman, yum). Docker images bundle it.
 
+**Windows**: Install [psmux](https://github.com/psmux/psmux) — a native Windows tmux replacement built on ConPTY:
+```powershell
+winget install psmux    # recommended
+# or: scoop install psmux
+# or: cargo install psmux
+```
+
 ### Install
 
 ```bash
-# Shell script
+# npm (recommended)
+npm install -g @gdwhisper/omniterm
+omniterm
+
+# Shell script (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
+omniterm
+
+# PowerShell (Windows)
+irm https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.ps1 | iex
 omniterm
 
 # Docker
 docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
-
-# Cargo
-cargo install omniterm
 ```
 
 ```bash
@@ -58,12 +70,13 @@ Open the URL in a browser, set an initial password, add a project directory, and
 | Frontend | React 19 + Tailwind CSS 4 + xterm.js |
 | Terminal bridge | portable-pty + WebSocket |
 | Agent detection | tmux control mode + content hooks |
-| Distribution | shell script, Cargo, Docker |
+| Distribution | npm, shell script, Docker |
 
 ## Contributing
 
-- Star the repo
-- [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
+- ⭐ Star the repo
+- 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
+- 📖 [中文说明](README_zh.md)
 
 ## License
 

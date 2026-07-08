@@ -34,6 +34,7 @@
   "sidebar.disconnected": "未连接",
   "sidebar.link": "已连接",
   "sidebar.lost": "已断开",
+  "sidebar.githubRepo": "GitHub 仓库",
   "sidebar.noProjects": "暂无项目",
   "sidebar.noWorktrees": "暂无 worktree",
   "sidebar.noSessions": "暂无会话",

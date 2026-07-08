@@ -75,6 +75,11 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    if let Err(e) = tmux::check_multiplexer() {
+        tracing::error!("{}", e);
+        std::process::exit(1);
+    }
+
     let db = SqlitePoolOptions::new()
         .max_connections(5)
         .connect(&args.db)

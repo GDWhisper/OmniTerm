@@ -28,12 +28,19 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 time = "0.3"
 portable-pty = "0.9"
 futures-util = "0.3"
-libc = "0.2"
 notify = "7"
 async-stream = "0.3"
 sha1 = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 rust-embed = "8"
+which = "7"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+sysinfo = "0.35"
+windows-sys = { version = "0.60", features = ["Win32_System_Console", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

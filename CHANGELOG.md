@@ -87,6 +87,9 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-06) `[backend]` Native Windows support via psmux — 新增 `process_info.rs`（`cfg(unix)`/`cfg(windows)` 平台化进程枚举）和 `pty_io.rs`（平台化 PTY 写入与进程清理），PID 类型从 `i32` 改为 `u32`；`detect_agent_kind` 扩展 Node.js wrapper 识别与 `Qoder` agent；启动时 multiplexer 检测（`/api/v1/system/multiplexer` 端点 + 启动退出）；PowerShell 安装脚本 `install.ps1`；npm `install.js` 解除 `win32` 拒绝逻辑；release workflow 新增 `windows-latest` 构建矩阵（`src/tmux/process_info.rs`、`src/tmux/pty_io.rs`、`src/tmux/agent_hooks.rs`、`src/tmux/agent_state.rs`、`src/main.rs`、`src/api/system.rs`、`install.ps1`、`npm-package/install.js`、`.github/workflows/release.yml`）
+- (2026-07-06) `[infra]` Pre-commit hook 扩展为同时拦截 frontend lint 错误 — 原 hook 只跑 `cargo check`，dev 分支累积 73 个 pre-existing lint 错误无拦截。现改为 staged 包含 `.ts`/`.tsx` 时跑 `pnpm lint`、包含 `.rs` 时跑 `cargo check`，互不干扰。`set -e` 保证 lint 失败时中断提交（`scripts/hooks/pre-commit`）
+- (2026-07-06) `[frontend]` Sidebar 底部状态栏新增 GitHub 仓库链接按钮 — 点击在在新标签页打开 `https://github.com/GDWhisper/OmniTerm`，按钮悬停效果与现有底部按钮一致（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/GitHubIcon.tsx`、`frontend/src/version.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-07-04) `[frontend]` Settings 音效开关旁新增 ▶ 试听按钮 — 点击播放 coin 音效供用户判断是否开启（`frontend/src/components/Settings/Settings.tsx`）
 
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — GitHub Actions CI/CD 发布流水线（tag `v*` 触发，4 平台后端构建矩阵、GitHub Release 自动上传、npm publish、ghcr.io Docker 推送）（`.github/workflows/release.yml`）
@@ -133,6 +136,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-06) `[frontend]` 抽取 `activateSession(sessionId)` store action 并复用于「创建会话」+「点击 sidebar session」两处调用序列 — 消除了 3 行重复的 `setActiveExternalSession / setActiveSession / setWorkspaceSession` 调用；合并为 1 次 `set()` 减 2 次 re-render；提供 7 个 store 单元测试覆盖 atomic 写 activeSession、localStorage 持久化、workspace memory 更新与「同 workspace 覆盖」语义。`handleWorkspaceClick` 保留原实现（语义不同，不能强行抽）。`attention.setActive` 未并入（属于创建/点击独有的 side-effect，不属于「激活」核心）。同时为「创建会话后自动激活」bug 补充 store 层回归覆盖（`frontend/src/stores/appStore.ts`、`frontend/src/stores/appStore.test.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-06) `[frontend]` 修复：创建会话后终端面板没有立即切换到新会话 — `handleCreateSession` 只刷新列表就关弹窗，新会话未被设为活跃，Terminal 区继续显示旧会话（或空状态），需手动点击列表项。改为捕获 `api.createSession` 返回的 `Session` 对象并调用 `setActiveSession` / `setWorkspaceSession`，与点击 sidebar session 项行为一致（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：删除会话时大量弹出 "session not found or tmux unavailable" 错误通知 — `handleDeleteSession` 异步删除 session 后才清 `activeSessionId`，期间 FileManager 多个 effect 请求已删除 session 导致后端 404。现改为先清 session 再删（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：接管外部会话后在目标项目中不可见 — `sessionsForWorktree()` 严格按 `workspace_path === wtPath` 过滤，接管 session 的 CWD 不匹配任何 worktree 路径，被静默隐藏。现改为将「孤儿」session 纳入主 worktree 下显示（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：点击外部会话后终端空白 — `Terminal.tsx` 中 `initTerminal` useEffect 仅依赖稳定的回调引用，空状态→活跃会话过渡时容器 div 出现但 effect 不触发，终端从未创建（`frontend/src/components/Terminal/Terminal.tsx`）

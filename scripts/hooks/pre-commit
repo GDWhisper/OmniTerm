@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Pre-commit hook: run `cargo check` when .rs files are staged.
-# Catches compile errors (e.g. missing `args.` prefix in field shorthand)
-# before they reach the branch.
+# Pre-commit hook: run frontend lint and cargo check on staged files.
+# Catches the most common "missed before push" issues:
+#   - TypeScript / ESLint errors (pnpm lint)
+#   - Rust compile errors (cargo check)
 #
 # Install (per worktree):
 #   git config core.hooksPath scripts/hooks
@@ -10,15 +11,22 @@
 
 set -e
 
-# Only run if .rs files are staged
-STAGED_RS=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$' || true)
-if [ -z "$STAGED_RS" ]; then
-  exit 0
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# ── Frontend: pnpm lint on staged .ts / .tsx files ──
+STAGED_FE=$(echo "$STAGED" | grep -E '\.(ts|tsx)$' || true)
+if [ -n "$STAGED_FE" ]; then
+  if [ -f frontend/package.json ]; then
+    echo "[pre-commit] pnpm lint on $(echo "$STAGED_FE" | wc -l) staged frontend file(s)..."
+    (cd frontend && pnpm lint)
+  fi
 fi
 
-# Make sure cargo is on PATH
-. "$HOME/.cargo/env" 2>/dev/null || true
-
-echo "[pre-commit] cargo check on $(echo "$STAGED_RS" | wc -l) staged .rs file(s)..."
-
-cargo check --quiet
+# ── Backend: cargo check on staged .rs files ──
+STAGED_RS=$(echo "$STAGED" | grep -E '\.rs$' || true)
+if [ -n "$STAGED_RS" ]; then
+  # Make sure cargo is on PATH
+  . "$HOME/.cargo/env" 2>/dev/null || true
+  echo "[pre-commit] cargo check on $(echo "$STAGED_RS" | wc -l) staged .rs file(s)..."
+  cargo check --quiet
+fi

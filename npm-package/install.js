@@ -5,166 +5,135 @@ const { execSync } = require('child_process');
 
 const OWNER = 'GDWhisper';
 const REPO = 'OmniTerm';
-const VERSION = require('./package.json').version;  // npm 包版本（可能高于 binary）
-const BINARY_VERSION = '0.1.2';                      // GitHub Release tag（binary 实际版本）
+const VERSION = '0.1.0'; // Updated by CI/release script
 const BIN_DIR = __dirname;
 const BIN_NAME = process.platform === 'win32' ? 'omniterm.exe' : 'omniterm';
-
-const CONNECT_TIMEOUT = 30_000; // 连接超时 30s
-const DOWNLOAD_TIMEOUT = 300_000; // 下载超时 5min
-const MAX_REDIRECTS = 5;
 
 function platformMap() {
   const p = process.platform;
   const a = process.arch;
 
-  if (p === 'win32') {
-    console.error('omniterm: Windows is not supported (requires tmux).');
-    process.exit(1);
-  }
-
   const map = {
-    'linux-x64': 'linux-x86_64',
-    'linux-arm64': 'linux-aarch64',
-    'darwin-arm64': 'macos-aarch64',
+    'linux-x64': { suffix: 'linux-x86_64', ext: '' },
+    'linux-arm64': { suffix: 'linux-aarch64', ext: '' },
+    'darwin-arm64': { suffix: 'macos-aarch64', ext: '' },
+    'win32-x64': { suffix: 'windows-x86_64', ext: '.zip' },
+    'win32-arm64': { suffix: 'windows-aarch64', ext: '.zip' },
   };
 
   const key = `${p}-${a}`;
-  const suffix = map[key];
-  if (!suffix) {
+  const entry = map[key];
+  if (!entry) {
     console.error(`omniterm: Unsupported platform: ${p}-${a}`);
     process.exit(1);
   }
-  return suffix;
+  return entry;
 }
 
-function checkTmux() {
-  try {
-    execSync('which tmux', { stdio: 'ignore' });
-  } catch {
-    console.warn(
-      '\x1b[33m⚠  tmux is not installed. omniterm requires tmux.\n' +
-      '    Install:  sudo apt install tmux  /  brew install tmux\x1b[0m'
-    );
+function checkMultiplexer() {
+  if (process.platform === 'win32') {
+    try {
+      execSync('where tmux', { stdio: 'ignore' });
+    } catch {
+      try {
+        execSync('where psmux', { stdio: 'ignore' });
+      } catch {
+        console.warn(
+          '⚠️  psmux (tmux) is not installed. omniterm requires a terminal multiplexer.\n' +
+          '    Install it:  winget install psmux   (recommended)\n' +
+          '                 scoop install psmux\n' +
+          '                 cargo install psmux\n' +
+          '    Then restart omniterm.'
+        );
+      }
+    }
+  } else {
+    try {
+      execSync('which tmux', { stdio: 'ignore' });
+    } catch {
+      console.warn(
+        '⚠️  tmux is not installed. omniterm requires tmux to function.\n' +
+        '    Install it:  sudo apt install tmux  (Linux) /  brew install tmux  (macOS)\n' +
+        '    Then restart omniterm.'
+      );
+    }
   }
 }
 
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-function download(url, dest, redirects = 0) {
+function download(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
-    let downloaded = 0;
-    let total = 0;
-    let lastLog = 0;
-    let dlTimeout;
-
-    const req = https.get(url, { timeout: CONNECT_TIMEOUT }, (res) => {
-      // Handle redirect
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        file.close();
-        fs.unlinkSync(dest);
-        if (redirects >= MAX_REDIRECTS) {
-          clearTimeout(dlTimeout);
-          reject(new Error('Too many redirects'));
+    https
+      .get(url, (res) => {
+        if (res.statusCode === 302 || res.statusCode === 301) {
+          file.close();
+          fs.unlinkSync(dest);
+          download(res.headers.location, dest).then(resolve).catch(reject);
           return;
         }
-        download(res.headers.location, dest, redirects + 1).then(resolve).catch(reject);
-        return;
-      }
-
-      if (res.statusCode !== 200) {
-        clearTimeout(dlTimeout);
-        file.close();
-        try { fs.unlinkSync(dest); } catch {}
-        reject(new Error(`HTTP ${res.statusCode}`));
-        return;
-      }
-
-      total = parseInt(res.headers['content-length'], 10) || 0;
-
-      res.on('data', (chunk) => {
-        downloaded += chunk.length;
-        const now = Date.now();
-        // 每秒最多输出一次进度
-        if (now - lastLog > 1000 || downloaded === total) {
-          lastLog = now;
-          if (total > 0) {
-            const pct = ((downloaded / total) * 100).toFixed(1);
-            process.stdout.write(
-              `\r  omniterm: ${formatBytes(downloaded)} / ${formatBytes(total)} (${pct}%)`
-            );
-          } else {
-            process.stdout.write(`\r  omniterm: ${formatBytes(downloaded)} downloaded...`);
-          }
+        if (res.statusCode !== 200) {
+          file.close();
+          fs.unlinkSync(dest);
+          reject(new Error(`HTTP ${res.statusCode}`));
+          return;
         }
-      });
-
-      res.pipe(file);
-
-      file.on('finish', () => {
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          resolve();
+        });
+      })
+      .on('error', (err) => {
         file.close();
-        clearTimeout(dlTimeout);
-        process.stdout.write('\n');
-        resolve();
+        fs.unlinkSync(dest);
+        reject(err);
       });
-    });
-
-    req.on('error', (err) => {
-      clearTimeout(dlTimeout);
-      file.close();
-      try { fs.unlinkSync(dest); } catch {}
-      reject(err);
-    });
-
-    req.on('timeout', () => {
-      clearTimeout(dlTimeout);
-      req.destroy();
-      file.close();
-      try { fs.unlinkSync(dest); } catch {}
-      reject(new Error('Connection timed out'));
-    });
-
-    dlTimeout = setTimeout(() => {
-      req.destroy();
-      file.close();
-      try { fs.unlinkSync(dest); } catch {}
-      reject(new Error('Download timed out'));
-    }, DOWNLOAD_TIMEOUT);
   });
 }
 
+function extractZip(zipPath, destDir) {
+  if (process.platform === 'win32') {
+    execSync(`powershell -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`, {
+      stdio: 'ignore',
+    });
+  } else {
+    execSync(`unzip -o "${zipPath}" -d "${destDir}"`, { stdio: 'ignore' });
+  }
+}
+
 async function main() {
-  const suffix = platformMap();
-  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${BINARY_VERSION}/omniterm-${suffix}`;
+  const { suffix, ext } = platformMap();
+  const assetName = `omniterm-${suffix}${ext}`;
+  const url = `https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/${assetName}`;
   const dest = path.join(BIN_DIR, BIN_NAME);
 
   if (fs.existsSync(dest)) {
-    console.log(`omniterm: binary already installed`);
+    console.log(`omniterm: binary already installed at ${dest}`);
     fs.chmodSync(dest, 0o755);
-    checkTmux();
+    checkMultiplexer();
     return;
   }
 
   console.log(`omniterm: downloading native binary for ${suffix}...`);
-  console.log(`  from: ${url}`);
-
   try {
-    await download(url, dest);
+    if (ext === '.zip') {
+      const tmpZip = path.join(BIN_DIR, assetName);
+      await download(url, tmpZip);
+      extractZip(tmpZip, BIN_DIR);
+      fs.unlinkSync(tmpZip);
+    } else {
+      await download(url, dest);
+    }
     fs.chmodSync(dest, 0o755);
-    console.log(`omniterm: installed successfully`);
+    console.log(`omniterm: installed to ${dest}`);
   } catch (err) {
-    console.error(`\nomniterm: failed to download: ${err.message}`);
-    console.error('  Try alternative install methods:');
-    console.error('    curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash');
+    console.error(`omniterm: failed to download binary: ${err.message}`);
+    console.error(`    URL: ${url}`);
+    console.error('    Try installing via: cargo install omniterm');
     process.exit(1);
   }
 
-  checkTmux();
+  checkMultiplexer();
 }
 
 main();

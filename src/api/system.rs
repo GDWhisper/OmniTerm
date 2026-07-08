@@ -10,6 +10,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/info", get(system_info))
         .route("/system/dirs", get(list_dirs))
         .route("/system/exists", get(check_exists))
+        .route("/system/multiplexer", get(multiplexer_status))
 }
 
 #[derive(Deserialize)]
@@ -80,4 +81,18 @@ async fn check_exists(
 ) -> (StatusCode, Json<Value>) {
     let exists = std::path::Path::new(&q.path).exists();
     (StatusCode::OK, Json(json!({ "exists": exists })))
+}
+
+async fn multiplexer_status() -> (StatusCode, Json<Value>) {
+    match crate::tmux::check_multiplexer() {
+        Ok(()) => (StatusCode::OK, Json(json!({ "available": true }))),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "available": false,
+                "error": e.to_string(),
+                "install_hints": crate::tmux::MULTIPLEXER_INSTALL_HINTS,
+            })),
+        ),
+    }
 }
