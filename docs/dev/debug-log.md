@@ -4,33 +4,61 @@
 
 ---
 
-## 2026-07-08: 终端点开会话后输入行/光标错位、大片黑屏、无法操作
+## 2026-07-08: 同步→异步重构破坏框架隐式不变量（终端 StrictMode 双重初始化）
 
-**症状**：用户点开会话时，终端输入行显示在底部，上方一大片黑屏，光标在顶部，无法操作。
+**症状**：终端点开会话后输入行/光标错位、大片黑屏、无法操作。
 
-**根因（两层）**：
+**表层根因**：commit `a06eb48` 将 `createTerminal` 从同步改为 async（动态加载 xterm addons）。
 
-1. **`a06eb48` 将 `createTerminal` 改为 async**：动态 import 开了 yield 窗口，理论上 CSS 动画可在此期间改变容器尺寸（实际日志显示尺寸正确，说明这不是主要根因）
-2. **React StrictMode 双重 `term.open()`**（真正根因）：StrictMode mount-unmount-remount。旧同步版本中，`term.open()` 在 cleanup 之前完成（`termRef.current` 非 null，cleanup 有效 dispose）。改为 async 后，`term.open()` 在 cleanup 之后才执行（`termRef.current` 仍 null，cleanup 为空操作），导致两次 `createTerminal` 各自独立执行 `term.open()`，第二次覆盖第一次的 DOM，xterm 内部状态损坏
+**深层根因 — 同步→异步重构破坏 React effect cleanup 不变量**：
 
-**日志证据**（用户浏览器）：
+同步版本中，`createTerminal` 内部的 `term.open()` 在 effect 返回前执行完毕，`termRef.current` 已被赋值。StrictMode 的 cleanup 在两次 effect 之间同步执行，看到非 null 的 `termRef.current`，调用 `disposeTerminal()` 有效清理。第二次 effect 重新创建，一切正常。
+
+改为 async 后，`term.open()` 在 `await loadAddons()` 之后才执行。StrictMode cleanup 在 await 期间执行，此时 `termRef.current` 仍为 null → cleanup 为空操作。两个并发的 `createTerminal` 各自独立完成 `term.open()`，第二次覆盖第一次的 DOM，xterm 内部状态损坏。
+
+**诊断过程中犯的错误**：
+
+1. **假设先行，验证滞后**：第一个根因分析假设「await 期间 CSS 动画改变容器尺寸」，headless 测试无法复现，于是推断「测试环境差异」。实际上加了 console.log 后立刻发现 cols:182 rows:42 完全正确——尺寸从来不是问题，真正的信号（term.open 被调用两次）在第一轮诊断时就能通过日志发现。
+2. **第一个修复无效后没有换方向**：第一次修复把 import 提到模块顶层（解决 yield 窗口），用户报告没修好。此时应该立即加诊断日志，而不是继续在同一假设上叠加代码。
+3. **没有在用户环境加诊断就动手修**：headless 测试看不到 StrictMode + 网络延迟 + 真实浏览器的组合行为，唯一的可靠证据是用户 DevTools console。
+
+**日志证据**（用户浏览器 DevTools）：
 ```
-loadAddons() called    ← Promise {<pending>}  (第一次)
-loadAddons() called    ← Promise {<pending>}  (第二次，并发!)
+loadAddons() called    ← Promise {<pending>}  (第一次，yield)
+loadAddons() called    ← Promise {<pending>}  (第二次，yield — 两个并发!)
 loadAddons() resolved  ×2
 term.open + fit.fit    ×2  ← 同一容器 open 两次! cols:182 rows:42 (尺寸正确)
 WS connecting          ← 182x42
 ```
 
-**修复**：
-- 模块顶层预加载 addons（消除 CSS 动画 yield 窗口）
-- AbortController 防 StrictMode 双重创建：`disposeTerminal` abort 信号，`createTerminal` 在 `await loadAddons()` 之后检查 `signal.aborted`，已 abort 则 bail out 不碰 DOM
+**修复**：AbortController 模式 — `disposeTerminal` abort 信号，`createTerminal` 在 `await` 后检查 `signal.aborted`，已 abort 则 bail out 不碰 DOM。
 
-**教训**：
-- 异步初始化 + React StrictMode = 必须有显式竞态防护（AbortController / isCreatingRef）
-- 同步代码天然原子（cleanup 在两次 effect 之间执行，termRef.current 已设置），async 打破了这个不变量
-- 动态 import 放在函数体内 = 在函数执行路径上开 yield 窗口；放在模块顶层 = 在模块评估时开 yield 窗口（更早，对调用者无感）
-- 浏览器 DevTools 日志是唯一可靠的一手证据（headless 测试无法复现 StrictMode + 网络延迟的组合场景）
+### 可复用的调试理论
+
+**1. 同步→异步重构会破坏框架的隐式原子性保证**
+
+React effect cleanup 依赖「effect 返回前完成所有副作用设置」这一隐式前提。改为 async 后这个前提被打破：cleanup 跑时副作用还没开始，ref 为 null，cleanup 变空操作。**凡是把同步初始化逻辑改为 async 的重构，都必须同步审视 cleanup 路径是否仍然有效**——检查 ref/null guard、AbortController、或 isCreating 标志。
+
+**2. async 函数的每个 await 都是一个竞态窗口**
+
+await 之后的代码与 cleanup / 其他并发调用交错执行。关键问题：
+- await 期间 cleanup 能否正确中断？
+- 多个并发调用能否互相感知？
+- await 之后的状态检查是否还有效？
+
+**模式**：对每个 await 后的「状态修改 + DOM 操作」序列，加 `if (signal.aborted) return` 或等价的 guard。
+
+**3. console.log 是第一优先级的诊断手段，不是最后手段**
+
+当用户报告 bug 且 headless 测试无法复现时，**先在用户环境加日志再分析代码**。日志回答两个关键问题：
+- 代码是否执行到了预期位置？（执行流确认）
+- 执行时的状态值是什么？（状态确认）
+
+这次调试中，3 行 console.log 揭露的真相（并发调用 + 双重 term.open + 尺寸正确）比几百行代码分析加 headless 测试都多。
+
+**4. Headless 测试无法复现 StrictMode + 网络延迟的组合场景**
+
+Vite dev mode 的动态 import 是 microtask 级（已 prebundle），生产构建的网络 fetch 可达 100-500ms。StrictMode 的 cleanup 时序在这两种场景下完全不同。不要因为 headless 测试通过就认为修复有效。
 
 ## 2026-06-28: WS 断开时 portable_pty::MasterWriter 泄漏 VEOF，agent 任务被中断
 
