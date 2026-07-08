@@ -63,6 +63,8 @@ const fakeWorkspace = {
   path: '/home/user/test-project',
   is_main: true,
   git_branch: 'main',
+  is_git_repo: true,
+  is_git_worktree: false,
   created_at: '2026-01-01T00:00:00Z',
 }
 
@@ -73,6 +75,7 @@ const fakeNewSession = {
   tmux_session_name: 'test-session',
   name: 'test-session',
   is_active: true,
+  hook_enabled: false,
   created_at: '2026-01-01T00:00:00Z',
 }
 
@@ -132,7 +135,7 @@ describe('Sidebar handleCreateSession', () => {
     })
 
     // Expand the project to show worktrees
-    const projectHeader = container.querySelector('.sidebar-project-header')
+    const projectHeader = container.querySelector('.sidebar-project-header') as HTMLElement
     expect(projectHeader).toBeTruthy()
     projectHeader!.click()
 
@@ -142,7 +145,7 @@ describe('Sidebar handleCreateSession', () => {
     })
 
     // Click the "+" button to open create session modal
-    const addButton = container.querySelector('.sidebar-wt-add-btn')
+    const addButton = container.querySelector('.sidebar-wt-add-btn') as HTMLElement
     expect(addButton).toBeTruthy()
     addButton!.click()
 
@@ -166,11 +169,11 @@ describe('Sidebar handleCreateSession', () => {
 
     // Find and click the create/submit button (the primary button in modal)
     const buttons = container.querySelectorAll('button')
-    const submitButton = Array.from(buttons).find(btn =>
+    const submitButton = (Array.from(buttons).find(btn =>
       btn.textContent?.toLowerCase().includes('create') ||
       btn.textContent?.toLowerCase().includes('提交') ||
       btn.classList.contains('primary')
-    ) || buttons[buttons.length - 1]
+    ) || buttons[buttons.length - 1]) as HTMLElement
     submitButton.click()
 
     // Wait for api.createSession to be called
@@ -205,7 +208,7 @@ describe('Sidebar handleCreateSession', () => {
     })
 
     // Expand project
-    const projectHeader = container.querySelector('.sidebar-project-header')
+    const projectHeader = container.querySelector('.sidebar-project-header') as HTMLElement
     projectHeader!.click()
 
     await vi.waitFor(() => {
@@ -213,7 +216,7 @@ describe('Sidebar handleCreateSession', () => {
     })
 
     // Click "+" button
-    const addButton = container.querySelector('.sidebar-wt-add-btn')
+    const addButton = container.querySelector('.sidebar-wt-add-btn') as HTMLElement
     addButton!.click()
 
     // Wait for modal (Modal uses fixed inset-0 backdrop)
@@ -224,11 +227,11 @@ describe('Sidebar handleCreateSession', () => {
 
     // Click submit without entering a name
     const buttons = container.querySelectorAll('button')
-    const submitButton = Array.from(buttons).find(btn =>
+    const submitButton = (Array.from(buttons).find(btn =>
       btn.textContent?.toLowerCase().includes('create') ||
       btn.textContent?.toLowerCase().includes('提交') ||
       btn.classList.contains('primary')
-    ) || buttons[buttons.length - 1]
+    ) || buttons[buttons.length - 1]) as HTMLElement
     submitButton.click()
 
     // Verify createSession was called with undefined name

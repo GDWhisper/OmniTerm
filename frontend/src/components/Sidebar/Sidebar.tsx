@@ -612,12 +612,15 @@ export function Sidebar() {
       // 409 Conflict: the new path is already covered by an existing
       // project. Surface a switch-to-existing dialog instead of letting
       // the generic toast dismiss.
-      if (e instanceof ApiError && e.status === 409 && e.body?.error === 'already_covered') {
-        setCoverConflict({
-          coveringProject: e.body.covering_project,
-          reason: e.body.reason,
-        })
-        return
+      if (e instanceof ApiError && e.status === 409) {
+        const body = e.body as Record<string, unknown> | undefined
+        if (body?.error === 'already_covered') {
+          setCoverConflict({
+            coveringProject: body.covering_project as string,
+            reason: body.reason as string,
+          })
+          return
+        }
       }
       // api client already shows error toast for other failures
     } finally {
