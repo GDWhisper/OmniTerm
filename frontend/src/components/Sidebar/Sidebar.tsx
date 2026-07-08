@@ -615,9 +615,11 @@ export function Sidebar() {
       if (e instanceof ApiError && e.status === 409) {
         const body = e.body as Record<string, unknown> | undefined
         if (body?.error === 'already_covered') {
+          const coveringProject = body.covering_project as { id: string; name: string; path: string }
+          const reason = body.reason as 'exact_path' | 'worktree_child'
           setCoverConflict({
-            coveringProject: body.covering_project as string,
-            reason: body.reason as string,
+            coveringProject,
+            reason,
           })
           return
         }
