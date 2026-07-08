@@ -342,6 +342,13 @@ export function FileManager() {
     return () => ro.disconnect()
   }, [cwd])
 
+  // Defined before the create-close effect below to avoid a TDZ ReferenceError
+  // (the effect references it during the first render before a later const init).
+  const closeCreate = useCallback(() => {
+    setCreateOpen(null)
+    setCreateName('')
+  }, [])
+
   useEffect(() => {
     if (!searchOpen) return
     const onClick = (e: MouseEvent) => {
@@ -635,11 +642,6 @@ export function FileManager() {
     setCreateName('')
     setTimeout(() => createInputRef.current?.focus(), 0)
   }
-
-  const closeCreate = useCallback(() => {
-    setCreateOpen(null)
-    setCreateName('')
-  }, [])
 
   const submitCreate = async () => {
     if (!fmSource || !createOpen) return
