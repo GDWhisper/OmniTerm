@@ -26,4 +26,33 @@ describe('Terminal mobile', () => {
     root.unmount()
     document.body.removeChild(container)
   })
+
+  // Basic invariant: the terminal panel container mounts when an active
+  // session is present, even though useTerminal loads addons asynchronously.
+  it('renders terminal panel div when an active session is present', async () => {
+    i18n.changeLanguage('en')
+    useAppStore.setState({ isMobile: true, activeSessionId: 'sess-1' })
+    const container = document.createElement('div')
+    // Give the panel a non-zero size so the xterm terminal (initialized
+    // inside useTerminal) doesn't crash on open (xterm measures clientWidth/Height).
+    Object.defineProperty(container, 'clientWidth', { value: 800, configurable: true })
+    Object.defineProperty(container, 'clientHeight', { value: 600, configurable: true })
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <AttentionProvider>
+          <Terminal />
+        </AttentionProvider>
+      </I18nextProvider>
+    )
+    // Panel mounts synchronously; just confirm the pixel-bordered shell
+    // appears in the DOM.  xterm itself won't render (no canvas in jsdom)
+    // but the container div should be there.
+    await vi.waitFor(() => {
+      expect(container.querySelector('.terminal-panel-pixel')).toBeTruthy()
+    })
+    root.unmount()
+    document.body.removeChild(container)
+  })
 })

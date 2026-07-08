@@ -35,6 +35,7 @@ export function useFileWatcher({ sessionId, enabled = true }: UseFileWatcherOpti
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+  const connectRef = useRef<(() => void) | null>(null)
 
   const cleanup = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -77,10 +78,12 @@ export function useFileWatcher({ sessionId, enabled = true }: UseFileWatcherOpti
       eventSourceRef.current = null
       // Auto-reconnect after delay
       reconnectTimerRef.current = setTimeout(() => {
-        if (mountedRef.current) connect()
+        if (mountedRef.current) connectRef.current?.()
       }, RECONNECT_DELAY)
     }
   }, [sessionId, enabled, cleanup])
+
+  connectRef.current = connect
 
   // Connect on mount / session change
   useEffect(() => {

@@ -56,8 +56,8 @@ export function DuplicateProjectsDialog({
           if (p.id === keepId) continue
           try {
             await api.mergeProject(p.id, keepId)
-          } catch (e: any) {
-            const msg = e?.message ?? 'merge failed'
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : (typeof e === 'string' ? e : 'merge failed')
             setError(`${t('sidebar.dupMergeFailed', { name: p.name }) ?? `Failed to merge "${p.name}":`} ${msg}`)
             setSubmitting(false)
             return
@@ -66,8 +66,8 @@ export function DuplicateProjectsDialog({
       }
       reset()
       onResolved()
-    } catch (e: any) {
-      setError(e?.message ?? 'merge failed')
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : (typeof e === 'string' ? e : 'merge failed'))
     } finally {
       setSubmitting(false)
     }

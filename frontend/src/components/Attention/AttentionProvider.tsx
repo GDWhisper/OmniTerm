@@ -1,6 +1,4 @@
 import {
-  createContext,
-  useContext,
   useState,
   useCallback,
   useEffect,
@@ -31,7 +29,7 @@ export interface AttentionContextValue {
   reasonFor: (sessionKey: string) => AttentionReason | undefined
 }
 
-const AttentionContext = createContext<AttentionContextValue | null>(null)
+import { AttentionContext } from '../../hooks/useAttention'
 
 // ── Sound playback ─────────────────────────────────────
 
@@ -189,11 +187,5 @@ export function AttentionProvider({ children }: { children: ReactNode }) {
 }
 
 // ── Hook ───────────────────────────────────────────────
-
-export function useAttention(): AttentionContextValue {
-  const ctx = useContext(AttentionContext)
-  if (!ctx) {
-    throw new Error('useAttention must be used within an AttentionProvider')
-  }
-  return ctx
-}
+// useAttention is defined in src/hooks/useAttention.ts (kept out of this
+// component file so react-refresh fast-refresh works on the provider).

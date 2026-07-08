@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-![screenshot](capture.png)
+![screenshot](pic/overview.png)
 
 > [中文](README_zh.md)
 
@@ -76,7 +76,6 @@ Open the URL in a browser, set an initial password, add a project directory, and
 
 - ⭐ Star the repo
 - 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas
-- 📖 [中文说明](README_zh.md)
 
 ## License
 

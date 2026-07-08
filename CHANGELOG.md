@@ -136,6 +136,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-08) `[frontend]` 修复：终端点开会话后输入行/光标错位、大片黑屏、无法操作 — `a06eb48` 将 `createTerminal` 改为 async（动态加载 xterm addons），React StrictMode 双 mount 导致 `term.open()` 在同一容器上执行两次，第二次覆盖第一次的 DOM，xterm 内部状态损坏。修复：模块顶层预加载 addons（保持 code-splitting）+ AbortController 防 StrictMode 双重创建（`frontend/src/hooks/useTerminal.ts`）
+
 - (2026-07-06) `[frontend]` 抽取 `activateSession(sessionId)` store action 并复用于「创建会话」+「点击 sidebar session」两处调用序列 — 消除了 3 行重复的 `setActiveExternalSession / setActiveSession / setWorkspaceSession` 调用；合并为 1 次 `set()` 减 2 次 re-render；提供 7 个 store 单元测试覆盖 atomic 写 activeSession、localStorage 持久化、workspace memory 更新与「同 workspace 覆盖」语义。`handleWorkspaceClick` 保留原实现（语义不同，不能强行抽）。`attention.setActive` 未并入（属于创建/点击独有的 side-effect，不属于「激活」核心）。同时为「创建会话后自动激活」bug 补充 store 层回归覆盖（`frontend/src/stores/appStore.ts`、`frontend/src/stores/appStore.test.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-06) `[frontend]` 修复：创建会话后终端面板没有立即切换到新会话 — `handleCreateSession` 只刷新列表就关弹窗，新会话未被设为活跃，Terminal 区继续显示旧会话（或空状态），需手动点击列表项。改为捕获 `api.createSession` 返回的 `Session` 对象并调用 `setActiveSession` / `setWorkspaceSession`，与点击 sidebar session 项行为一致（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-01) `[frontend]` 修复：删除会话时大量弹出 "session not found or tmux unavailable" 错误通知 — `handleDeleteSession` 异步删除 session 后才清 `activeSessionId`，期间 FileManager 多个 effect 请求已删除 session 导致后端 404。现改为先清 session 再删（`frontend/src/components/Sidebar/Sidebar.tsx`）

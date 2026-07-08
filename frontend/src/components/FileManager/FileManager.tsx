@@ -9,7 +9,6 @@ import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolde
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { READER_FONT } from '../../utils/fonts'
-import { play8BitSound } from '../../utils/audioFeedback'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -22,6 +21,13 @@ interface FileEntry {
 }
 
 type SortKey = 'name' | 'mtime' | 'size'
+
+const SortIndicator = ({ col, sortKey, sortDesc }: { col: SortKey; sortKey: SortKey; sortDesc: boolean }) =>
+  sortKey === col ? (
+    <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--accent)', userSelect: 'none' }}>
+      {sortDesc ? '▼' : '▲'}
+    </span>
+  ) : null
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
@@ -177,8 +183,8 @@ export function FileManager() {
       }
       if (!silent) setSelected(new Set())
       return data.cwd
-    } catch (err: any) {
-      if (!silent) addToast('error', err.message || t('fm.loadFailed'))
+    } catch (err: unknown) {
+      if (!silent) addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.loadFailed'))
       if (!silent) setFiles([])
       return undefined
     } finally {
@@ -295,7 +301,7 @@ export function FileManager() {
     }
   }
 
-  const handleRowClick = (entry: FileEntry, _e: React.MouseEvent) => {
+  const handleRowClick = (entry: FileEntry) => {
     if (editingName) return
     if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
       const newPath = cwd ? `${cwd}/${entry.name}` : entry.name
@@ -336,6 +342,13 @@ export function FileManager() {
     return () => ro.disconnect()
   }, [cwd])
 
+  // Defined before the create-close effect below to avoid a TDZ ReferenceError
+  // (the effect references it during the first render before a later const init).
+  const closeCreate = useCallback(() => {
+    setCreateOpen(null)
+    setCreateName('')
+  }, [])
+
   useEffect(() => {
     if (!searchOpen) return
     const onClick = (e: MouseEvent) => {
@@ -358,7 +371,7 @@ export function FileManager() {
     }
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
-  }, [createOpen])
+  }, [createOpen, closeCreate])
 
   // Reset transient UI state when source changes
   useEffect(() => {
@@ -429,12 +442,12 @@ export function FileManager() {
           path: cwd,
           file,
         })
-      } catch (err: any) {
-        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err.message }))
+      } catch (err: unknown) {
+        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
       }
     }
     addToast('success', t('fm.uploadComplete'))
-    play8BitSound('coin')
+    import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
     fetchFiles()
   }
 
@@ -458,8 +471,8 @@ export function FileManager() {
       })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.renameFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.renameFailed'))
     }
     setEditingName(null)
   }
@@ -477,10 +490,10 @@ export function FileManager() {
         })
       }
       addToast('success', t('fm.deleted', { count: selected.size }))
-      play8BitSound('stomp')
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp'))
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.deleteFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.deleteFailed'))
     }
   }
 
@@ -521,12 +534,12 @@ export function FileManager() {
             path: cwd,
             file: input.files[i],
           })
-        } catch (err: any) {
-          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err.message }))
+        } catch (err: unknown) {
+          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err instanceof Error ? err.message : String(err) }))
         }
       }
       addToast('success', t('fm.uploadComplete'))
-      play8BitSound('coin')
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
       fetchFiles()
     }
     input.click()
@@ -544,8 +557,8 @@ export function FileManager() {
         path: cwd,
       })
       setFiles(results)
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.searchFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.searchFailed'))
     } finally {
       setLoading(false)
     }
@@ -630,11 +643,6 @@ export function FileManager() {
     setTimeout(() => createInputRef.current?.focus(), 0)
   }
 
-  const closeCreate = () => {
-    setCreateOpen(null)
-    setCreateName('')
-  }
-
   const submitCreate = async () => {
     if (!fmSource || !createOpen) return
     const name = createName.trim()
@@ -663,17 +671,11 @@ export function FileManager() {
       addToast('success', t('fm.createSuccess', { name }))
       closeCreate()
       fetchFiles()
-    } catch (err: any) {
-      addToast('error', err.message || t('fm.createFailed', { msg: err.message || '' }))
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      addToast('error', msg || t('fm.createFailed', { msg: msg || '' }))
     }
   }
-
-  const SI = ({ col }: { col: SortKey }) =>
-    sortKey === col ? (
-      <span style={{ marginLeft: 4, fontSize: 10, color: 'var(--accent)', userSelect: 'none' }}>
-        {sortDesc ? '▼' : '▲'}
-      </span>
-    ) : null
 
   // Breadcrumb segments — always in original order; RTL direction only changes
   // alignment (right) and clip side (left), never reverses LTR character flow.
@@ -935,19 +937,19 @@ export function FileManager() {
                   )}
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('name')}>
-                      {t('fm.name')} <SI col="name" />
+                      {t('fm.name')} <SortIndicator col="name" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('name', e)} onTouchStart={(e) => handleResizeStart('name', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('mtime')}>
-                      {t('fm.lastModified')} <SI col="mtime" />
+                      {t('fm.lastModified')} <SortIndicator col="mtime" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('mtime', e)} onTouchStart={(e) => handleResizeStart('mtime', e)} />
                   </th>
                   <th>
                     <span className="fm-th-sort" onClick={() => handleSort('size')}>
-                      {t('fm.size')} <SI col="size" />
+                      {t('fm.size')} <SortIndicator col="size" sortKey={sortKey} sortDesc={sortDesc} />
                     </span>
                     <span className="fm-th-resize" onMouseDown={(e) => handleResizeStart('size', e)} onTouchStart={(e) => handleResizeStart('size', e)} />
                   </th>
@@ -965,7 +967,7 @@ export function FileManager() {
                     <tr
                       key={fullPath}
                       className={isSel ? 'fm-tr-selected' : ''}
-                      onClick={(e) => handleRowClick(f, e)}
+                      onClick={() => handleRowClick(f)}
                       onDoubleClick={() => {
                         if (isDir) navigateTo(fullPath)
                       }}

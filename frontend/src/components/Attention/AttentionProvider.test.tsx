@@ -235,7 +235,7 @@ describe('playPing (sound)', () => {
       destination: {},
     }
 
-    let ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
+    const ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
     const playPing = createPingFunction(() => ctxRef)
 
     playPing()
@@ -257,7 +257,7 @@ describe('playPing (sound)', () => {
       destination: {},
     }
 
-    let ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
+    const ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
     const playPing = createPingFunction(() => ctxRef)
 
     playPing()
@@ -280,7 +280,7 @@ describe('playPing (sound)', () => {
       destination: {},
     }
 
-    let ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
+    const ctxRef: AudioContext | null = mockCtx as unknown as AudioContext
     const playPing = createPingFunction(() => ctxRef)
 
     expect(() => playPing()).not.toThrow()

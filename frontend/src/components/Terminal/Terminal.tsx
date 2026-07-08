@@ -32,7 +32,6 @@ export function Terminal() {
     initTerminal,
     sendData,
     scrollMode,
-    setScrollMode,
     sendScrollKeys,
     exitScrollMode,
   } = useTerminal({
@@ -163,7 +162,9 @@ export function Terminal() {
     switch (name) {
       case 'Esc':
         sendData('\x1b')
-        if (scrollMode) exitScrollMode?.()
+        // Exit tmux copy mode if active; exitScrollMode guards on the real
+        // tmux state so this is a no-op when not scrolling.
+        exitScrollMode?.()
         break
       case 'Tab':
         sendData('\t')
@@ -260,7 +261,8 @@ export function Terminal() {
             if (scrollMode) {
               exitScrollMode?.()
             } else {
-              setScrollMode?.(true)
+              // Actually enter tmux copy mode so the first arrow press pages.
+              sendScrollKeys?.('up')
             }
           }}
         />

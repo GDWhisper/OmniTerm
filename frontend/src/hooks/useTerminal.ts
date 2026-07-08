@@ -1,12 +1,25 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { WebLinksAddon } from '@xterm/addon-web-links'
+import type { FitAddon } from '@xterm/addon-fit'
 import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
+
+// Eagerly preload xterm addons at module level. The dynamic imports start
+// fetching immediately when this module is evaluated, so by the time
+// createTerminal runs the addons are already resolved — no async gap.
+// This keeps the code-splitting benefit (addons in separate chunks)
+// while keeping createTerminal synchronous (no yield window for CSS
+// transitions / font swaps to change the container size mid-init).
+const FitAddonPromise = import('@xterm/addon-fit')
+const WebLinksAddonPromise = import('@xterm/addon-web-links')
+
+async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
+  const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([FitAddonPromise, WebLinksAddonPromise])
+  return [FitAddon, WebLinksAddon]
+}
 
 interface UseTerminalOptions {
   sessionId: string | null
@@ -75,6 +88,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
+  // AbortController for createTerminal — abort on cleanup to cancel in-flight
+  // creation (e.g., React StrictMode double-mount or rapid session switch).
+  // A fresh controller is created for each initTerminal call.
+  const abortRef = useRef<AbortController | null>(null)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
   const [scrollMode, setScrollMode] = useState(false)
   // Stable ref for the consume-latch callback so connectWs closure is current
@@ -130,7 +147,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
               attention.clearAlert(sessionId)
             }
           }
-        } catch {}
+        } catch {
+          // Non-JSON websocket frames (e.g. binary echo) are not terminal messages — ignore.
+        }
       }
     }
 
@@ -246,31 +265,42 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [])
 
-  /** Enter tmux copy mode and scroll one page in the given direction */
+  /** Enter tmux copy mode (if not already) and scroll one page in the given direction.
+   *  Uses the real tmux copy-mode state (tmuxScrollModeRef) as the source of
+   *  truth, not the React `scrollMode` flag, so pagging always works after the
+   *  user has toggled scroll on via the UI button. */
   const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
-    if (!scrollMode) {
+    if (!tmuxScrollModeRef.current) {
       // tmux prefix is Ctrl+B (0x02), then [ enters copy mode
       ws.send(new TextEncoder().encode('\x02['))
+      tmuxScrollModeRef.current = true
       setScrollMode(true)
     }
     const key = direction === 'up' ? '\x1b[5~' : '\x1b[6~' // PageUp / PageDown
     ws.send(new TextEncoder().encode(key))
-  }, [scrollMode])
+  }, [])
 
   /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
   const exitScrollMode = useCallback(() => {
-    if (!scrollMode) return
-    if (tmuxScrollModeRef.current) {
-      sendData('q')
-      tmuxScrollModeRef.current = false
+    if (!tmuxScrollModeRef.current) {
+      setScrollMode(false)
+      return
     }
+    sendData('q')
+    tmuxScrollModeRef.current = false
     setScrollMode(false)
-  }, [scrollMode, sendData])
+  }, [sendData])
 
   /** Dispose the current terminal and all associated resources */
   const disposeTerminal = useCallback(() => {
+    // Abort any in-flight createTerminal (e.g., StrictMode double-mount).
+    // If createTerminal already completed, this is a no-op (signal was never
+    // checked after the await). If it's still in-flight, createTerminal will
+    // check the signal after loadAddons() and bail out before term.open().
+    abortRef.current?.abort()
+    abortRef.current = null
     observerRef.current?.disconnect()
     observerRef.current = null
     if (mouseUpHandlerRef.current) {
@@ -301,8 +331,25 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const fontSizeRef = useRef(fontSize)
   fontSizeRef.current = fontSize
 
-  /** Create a terminal on the given container and return a cleanup function */
-  const createTerminal = useCallback((container: HTMLDivElement) => {
+  /** Create a terminal on the given container and return a cleanup function.
+   *
+   * The addon imports are preloaded at module level, so `await loadAddons()`
+   * resolves immediately — no yield window for CSS transitions or font swaps
+   * to change the container size between `new Terminal` and `term.open`.
+   *
+   * The AbortController signal guards against React StrictMode double-mount:
+   * cleanup aborts the signal, and createTerminal checks it after loadAddons()
+   * before doing any DOM/ref work. Without this, StrictMode calls term.open()
+   * twice on the same container, corrupting xterm internal state. */
+  const createTerminal = useCallback(async (container: HTMLDivElement, signal: AbortSignal) => {
+    const [FitAddon, WebLinksAddon] = await loadAddons()
+
+    // StrictMode guard: if cleanup aborted the signal while we were awaiting
+    // addons, bail out before touching the DOM or refs.
+    if (signal.aborted) {
+      return
+    }
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: fontSizeRef.current,
@@ -393,7 +440,11 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const initTerminal = useCallback((container: HTMLDivElement) => {
     if (termRef.current) return
 
-    createTerminal(container)
+    // Create a fresh AbortController for this init cycle. disposeTerminal
+    // aborts the previous one (if any) before we get here.
+    const ac = new AbortController()
+    abortRef.current = ac
+    createTerminal(container, ac.signal)
 
     return () => {
       disposeTerminal()
@@ -440,10 +491,8 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   return {
     initTerminal,
-    terminal: termRef.current,
     sendData,
     scrollMode,
-    setScrollMode,
     sendScrollKeys,
     exitScrollMode,
   }

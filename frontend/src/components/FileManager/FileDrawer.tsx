@@ -104,8 +104,8 @@ export function FileDrawer({
       setModified(false)
       setExternalChange(false)
       loadedRef.current = true
-    } catch (err: any) {
-      setError(err.message || t('drawer.loadFailed'))
+    } catch (err: unknown) {
+      setError((err instanceof Error ? err.message : String(err)) || t('drawer.loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -154,8 +154,8 @@ export function FileDrawer({
       setExternalChange(false)
       setSaveMessage(t('drawer.saved'))
       setTimeout(() => setSaveMessage(null), 2000)
-    } catch (err: any) {
-      addToast('error', err.message || t('drawer.saveFailed'))
+    } catch (err: unknown) {
+      addToast('error', (err instanceof Error ? err.message : String(err)) || t('drawer.saveFailed'))
     } finally {
       setSaving(false)
     }

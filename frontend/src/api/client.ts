@@ -9,8 +9,8 @@ const BASE = '/api/v1'
  */
 export class ApiError extends Error {
   status: number
-  body: any
-  constructor(status: number, body: any, message: string) {
+  body: unknown
+  constructor(status: number, body: unknown, message: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
@@ -189,7 +189,7 @@ export const api = {
 
   // Hooks
   hookStatus: (sessionId: string) =>
-    request<any>(`/sessions/${sessionId}/hook-status`),
+    request<unknown>(`/sessions/${sessionId}/hook-status`),
   hookEnable: (sessionId: string) =>
     request(`/sessions/${sessionId}/hook-enable`, { method: 'POST' }),
   hookDisable: (sessionId: string) =>
@@ -200,7 +200,7 @@ export const api = {
     let url = `/files?workspace=${workspace}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<any[]>(url)
+    return request<FileEntry[]>(url)
   },
   deleteFile: (workspace: string, path: string) =>
     request(`/files?workspace=${workspace}&path=${encodeURIComponent(path)}`, {
@@ -237,14 +237,14 @@ export const api = {
   copyFiles: (workspace: string, paths: string[], destination: string) =>
     request('/files/copy', { method: 'POST', body: JSON.stringify({ paths, destination, workspace }) }),
   searchFiles: (workspace: string, query: string, path?: string) =>
-    request<any[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<FileEntry[]>(`/files/search?workspace=${workspace}&q=${encodeURIComponent(query)}&path=${path || ''}`),
 
   // Files by session (follows terminal CWD)
   listFilesBySession: (sessionId: string, path?: string, sort?: string, desc?: boolean) => {
     let url = `/files?session=${sessionId}&path=${path || ''}`
     if (sort) url += `&sort=${sort}`
     if (desc) url += `&order=desc`
-    return request<{ files: any[]; cwd: string; is_outside_workspace: boolean }>(url)
+    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean }>(url)
   },
   uploadFileBySession: (sessionId: string, path: string, file: File) => {
     const form = new FormData()
@@ -266,7 +266,7 @@ export const api = {
   renameBySession: (sessionId: string, path: string, newName: string) =>
     request('/files/rename', { method: 'POST', body: JSON.stringify({ path, newName, session: sessionId }) }),
   searchFilesBySession: (sessionId: string, query: string, path?: string) =>
-    request<any[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
+    request<FileEntry[]>(`/files/search?session=${sessionId}&q=${encodeURIComponent(query)}&path=${path || ''}`),
   readFileBySession: (sessionId: string, path: string) =>
     request<{ content: string }>(`/files/read?session=${sessionId}&path=${encodeURIComponent(path)}`),
   writeFileBySession: (sessionId: string, path: string, content: string) =>
@@ -283,7 +283,7 @@ export const api = {
     if (params.projectId) url += `&workspace=${params.projectId}`
     if (params.sort) url += `&sort=${params.sort}`
     if (params.desc) url += `&order=desc`
-    return request<{ files: any[]; cwd: string; is_outside_workspace: boolean }>(url)
+    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean }>(url)
   },
   deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string }) => {
     let url = `/files?path=${encodeURIComponent(params.path)}`
@@ -326,14 +326,20 @@ export const api = {
     return request(url, { method: 'POST', body: JSON.stringify({ content: params.content }) })
   },
   mkdir2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; name: string }) => {
-    const body: any = { path: params.path, name: params.name }
+    const body: { path: string; name: string; session?: string; workspace_id?: string; workspace?: string } = {
+      path: params.path,
+      name: params.name,
+    }
     if (params.session) body.session = params.session
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
     return request('/files/mkdir', { method: 'POST', body: JSON.stringify(body) })
   },
   rename2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; newName: string }) => {
-    const body: any = { path: params.path, newName: params.newName }
+    const body: { path: string; newName: string; session?: string; workspace_id?: string; workspace?: string } = {
+      path: params.path,
+      newName: params.newName,
+    }
     if (params.session) body.session = params.session
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
@@ -344,6 +350,6 @@ export const api = {
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
-    return request<any[]>(url)
+    return request<FileEntry[]>(url)
   },
 }
