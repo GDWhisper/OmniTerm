@@ -66,7 +66,7 @@ GET  /api/v1/files/watch (SSE)
 omniterm [OPTIONS]
 
 Options:
-  -p, --port <PORT>              监听端口 (默认: 9075 [main], 9777 [dev], 9077 [release])
+  -p, --port <PORT>              监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker])
       --db <DB>                  数据库连接 [env: DATABASE_URL]
       --jwt-secret <KEY>         JWT 签名密钥 [env: JWT_SECRET]
   -V, --version                  版本号
@@ -80,5 +80,5 @@ Options:
 | `DATABASE_URL` | `sqlite:omniterm.db?mode=rwc` | SQLite connection string |
 | `JWT_SECRET` | `omniterm-default-secret-change-me` | JWT signing secret |
 | `BIND_ADDR` | `127.0.0.1:<port>` | Listen address (legacy, prefer --port) |
-| `OMNITERM_PORT` | 9075 (main) / 9077 (release) | CLI --port override via env |
+| `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |

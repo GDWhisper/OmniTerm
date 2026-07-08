@@ -1,7 +1,7 @@
 # OmniTerm v0.1.0 性能基线
 
 > 测量日期：2026-07-02
-> 分支：dev（后续合并到 main 进入 release 流程）
+> 分支：dev（后续通过 sync-main.sh 同步到 main 发布）
 > 测量环境：Linux x86_64，本地 release 构建
 
 ## 前端产物
@@ -75,5 +75,5 @@ kill $PID
 
 ## 备注
 
-- 本基线基于 dev 分支 `.env.local` 的端口/身份变量测量，与 main/release 分支仅有端口/二进制名差异，不影响内存/体积量级。
+- 本基线基于 dev 分支 `.env.local` 的端口/身份变量测量，与 preview/main 分支仅有端口/二进制名差异，不影响内存/体积量级。
 - 用户实际运行时的内存会根据打开的 session、文件编辑器、监听数量合理上浮。
