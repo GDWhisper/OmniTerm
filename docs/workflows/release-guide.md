@@ -99,6 +99,32 @@ cargo check
 
 **⚠️ 禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
 
+### Step 4：发布前检查清单
+
+**编译通过不等于发布就绪。** 逐项确认：
+
+#### 验证完整性
+- [ ] **目标平台编译** — 不只是本地平台，CI 会构建的所有平台都要验证（Linux/macOS/Windows）
+- [ ] **测试通过** — `cargo test` + `pnpm test`（CI 会跑测试，失败会阻塞发布）
+- [ ] **前端构建** — `cd frontend && pnpm build`（TypeScript 类型检查 + 打包）
+
+#### 元数据完整性
+- [ ] **Cargo.toml** — `name`、`version`、`description`、`license`、`include` 是否完整
+- [ ] **README 中英文同步** — 改了英文必须改中文，反之亦然
+- [ ] **CHANGELOG** — 版本号、日期、内容是否准确
+
+#### 变更影响分析
+- [ ] **新增字段/类型** — 检查所有引用点：测试 mock、序列化/反序列化、前端类型定义
+- [ ] **API 变更** — 后端改了接口，前端是否同步更新
+- [ ] **平台特定代码** — 新增 `#[cfg(unix)]` 代码，是否有对应的 `#[cfg(windows)]` 实现
+
+#### 环境差异意识
+- [ ] **Shell 行为** — CI 的 Windows runner 默认用 PowerShell，bash 语法需要 `shell: bash`
+- [ ] **编译环境** — 本地 Linux 无法验证 Windows 编译，需要用户在 Windows 上验证
+- [ ] **依赖版本** — CI 环境可能与本地不同，锁定版本或使用 `--no-frozen-lockfile`
+
+**核心原则：本地能验证的尽量本地验证，本地无法验证的明确标记并交给用户验证。**
+
 ### Step 4：用户确认
 
 **在执行任何发布操作前，必须向用户确认：**
@@ -243,8 +269,50 @@ git remote -v
 常见原因：
 - 版本号未更新（Cargo.toml 中 version 与已发布版本重复）
 - 依赖问题（运行 `cargo publish --dry-run` 检查）
+- 元数据缺失（Cargo.toml 缺少 `description`、`license`、`include` 等字段）
+- 前端资源未包含（检查 `include` 是否包含 `frontend/dist/**`）
 
 如果版本号错误，只能发布新版本修复（无法删除已发布版本）。
+
+---
+
+## 踩坑方法论
+
+### 1. 验证范围 = 发布范围
+
+**本地能验证的 ≠ CI 会验证的。** CI 会构建多个平台、运行测试、检查 lint。本地验证只是子集。
+
+**做法：**
+- 发布前查看 CI workflow，列出所有验证步骤
+- 本地能跑的全部跑一遍
+- 本地跑不了的（如 Windows 编译），明确交给用户验证
+
+### 2. 变更影响 = 所有引用点
+
+**改了类型/接口，不只是改定义处。** 测试 mock、序列化、前端类型定义都是引用点。
+
+**做法：**
+- 改了 struct/interface，搜索所有使用点
+- 特别关注：测试文件、mock 数据、序列化/反序列化
+- 新增字段要有默认值或可选，避免破坏现有代码
+
+### 3. 发布产物 = 代码 + 元数据 + 文档
+
+**代码编译通过不等于发布就绪。** Cargo.toml、README、CHANGELOG 都是发布产物的一部分。
+
+**做法：**
+- Cargo.toml 检查：name、version、description、license、include
+- README 检查：中英文同步、安装方式准确
+- CHANGELOG 检查：版本号、日期、内容完整
+
+### 4. 环境差异 = 提前识别
+
+**本地环境 ≠ CI 环境。** Shell 行为、平台 API、依赖版本都可能不同。
+
+**做法：**
+- CI 用什么 shell，本地就用什么 shell 测试
+- 平台特定代码用 `#[cfg]` 保护，并提供替代实现
+- 依赖版本锁定或明确使用 `--no-frozen-lockfile`
 
 ---
 
