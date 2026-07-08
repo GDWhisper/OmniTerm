@@ -46,11 +46,13 @@ mod platform {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         let process = sys.process(Pid::from_u32(pid))?;
-        let cmdline = process.cmd().to_string_lossy().into_owned();
+        let cmdline: Vec<String> = process.cmd().iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
         if cmdline.is_empty() {
             None
         } else {
-            Some(cmdline)
+            Some(cmdline.join(" "))
         }
     }
 
