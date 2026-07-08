@@ -46,7 +46,13 @@ dev (开发) ──┤
 - **同步方式**：**必须使用** `./scripts/sync-main.sh` 脚本
 - **禁止**：直接 `git merge dev`（会带入黑名单文件）
 - **黑名单**：docs/、openspec/、.superpowers/、.pi/、.qoder/、AGENTS.md、CLAUDE.md、PROGRESS.md
-- **发布流程**：tag push → CI 自动构建多平台 binary + GitHub Release + npm + Docker
+
+**同步 vs 发布（两个独立操作）**：
+
+| 操作 | 命令 | 说明 |
+|------|------|------|
+| 同步 main | `./scripts/sync-main.sh` | 把 dev 最新代码更新到 main（日常操作，不打 tag） |
+| 发布新版本 | `./scripts/sync-main.sh` + `git tag` + `git push public` | 同步 + 打 tag + 推送到公开仓（正式发布） |
 
 ## 分支身份约定
 
@@ -69,6 +75,7 @@ dev (开发) ──┤
 - **dev → preview**：全量合并，无排除
 - **dev → main**：**必须使用** `./scripts/sync-main.sh`（黑名单排除开发文档）
   - 禁止直接 `git merge dev`（会带入黑名单文件）
+  - 注意：同步 ≠ 发布，同步只是更新 main 代码，不打 tag 不推送
 - **debug → dev**：正常合并
 - **禁止反向同步**：main 和 preview 不回写到 dev
 
