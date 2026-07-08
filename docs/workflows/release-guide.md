@@ -81,7 +81,7 @@ npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 | GitHub Release | 打开 `https://github.com/GDWhisper/OmniTerm/releases` 确认 binary 已上传 |
 | npm | `npm install -g @gdwhisper/omniterm && omniterm --version` |
 | Shell | `curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh \| bash` |
-| Docker | `docker run -p 9075:9075 ghcr.io/GDWhisper/OmniTerm:v0.2.0` |
+| Docker | `docker run -p 9077:9077 ghcr.io/GDWhisper/OmniTerm:v0.2.0` |
 
 ---
 
