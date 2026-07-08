@@ -49,7 +49,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 | `DOCKER_PORT` | Docker 容器内监听端口 | Dockerfile `ARG` / docker-compose `BIND_ADDR` |
 | `DOCKER_PORT_MAPPING` | Docker 端口映射 `host:container` | docker-compose `ports` |
 | `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
-| `BRANCH_BINARY_NAME` | 二进制名（`omniterm-main` / `omniterm-dev`） | Dockerfile `CMD` / 日志 |
+| `BRANCH_BINARY_NAME` | 二进制名（`omniterm-dev` / `omniterm-preview`） | Dockerfile `CMD` / 日志 |
 | `BRANCH_VERSION` | 版本号 | Vite `define` → `import.meta.env.VITE_APP_VERSION` / Rust 启动日志 |
 | `DOMAIN` | 部署域名 | Vite `allowedHosts` |
 
