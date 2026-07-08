@@ -3,7 +3,7 @@ name = "omniterm"
 version = "0.1.7"
 edition = "2024"
 license = "Apache-2.0"
-include = ["src/**", "migrations/**", "frontend/dist/**", "build.rs", "README.md", "LICENSE"]
+include = ["src/**", "migrations/**", "frontend/dist/**", "build.rs", "README.md", "LICENSE", "!frontend/node_modules/**"]
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }
