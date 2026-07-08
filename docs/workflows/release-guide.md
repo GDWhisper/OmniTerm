@@ -71,21 +71,31 @@ git add -A && git commit -m "chore: bump to 0.2.0"
 
 **在打 tag 之前，必须验证代码能编译通过：**
 
-```bash
-cd /home/pax/coding/OmniTerm
+#### Linux 验证（自动）
 
-# 后端编译检查
-cargo check 2>&1 | grep -E "error|warning" | head -20
+sync-main.sh 会自动运行：
+- 后端：`cargo check`
+- 前端：`pnpm build`
 
-# 前端编译检查
-cd frontend && pnpm build 2>&1 | tail -20
+#### Windows 验证（手动）
+
+**Linux 无法交叉编译 Windows MSVC 目标**，需要在 Windows 上验证：
+
+```powershell
+# 在 Windows 上 clone 公开仓
+git clone https://github.com/GDWhisper/OmniTerm.git
+cd OmniTerm
+git checkout main
+
+# 验证编译
+cargo check
 ```
 
-**如果编译失败：**
-1. 修复错误
-2. 在 dev 分支提交修复
-3. 重新执行 Step 2（sync-main.sh）
-4. 再次验证编译
+**验证流程：**
+1. 用户在 Windows 上执行 `cargo check`
+2. 用户将结果告知 agent（成功/失败 + 错误信息）
+3. 如果失败，agent 修复后重新 sync + 推送
+4. 用户再次验证，直到通过
 
 **⚠️ 禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
 
