@@ -41,9 +41,9 @@ fi
 echo "📥 拉取 dev 最新..."
 git fetch origin dev
 
-# 合并 dev（不提交）
-echo "🔀 合并 dev..."
-if ! git merge --no-commit origin/dev; then
+# 合并 dev（squash 压缩成单个提交，避免 main 历史中出现 docs 改动记录）
+echo "🔀 合并 dev (squash)..."
+if ! git merge --squash origin/dev; then
   echo "❌ 合并冲突，请手动解决后重试"
   git merge --abort 2>/dev/null || true
   exit 1
