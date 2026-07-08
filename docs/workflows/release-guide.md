@@ -15,6 +15,25 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ---
 
+## ⚠️ 发布前必须确认
+
+**发布是不可逆操作**，特别是：
+- **Cargo (crates.io)**：一旦发布，**无法删除**，只能发布新版本覆盖
+- **npm**：发布后 72 小时内可删除，之后无法删除
+- **GitHub Release**：可删除但会影响用户
+- **Docker**：可删除但会影响用户
+
+**发布前必须与用户确认以下信息：**
+
+1. 版本号是否正确？（检查 CHANGELOG）
+2. CHANGELOG 是否已更新？
+3. 是否有未完成的 TODO/已知问题？
+4. 发布时间是否合适？
+
+**禁止未经用户确认就执行发布操作。**
+
+---
+
 ## 发布步骤
 
 ### Step 1：版本号 + 变更
@@ -42,11 +61,27 @@ git add -A && git commit -m "chore: bump to 0.2.0"
 
 脚本会：
 1. 切换到 main 分支
-2. 合并 dev（不提交）
+2. 合并 dev（保留个体 commit）
 3. 删除黑名单文件（docs/、openspec/、.superpowers/、.pi/、.qoder/、AGENTS.md、CLAUDE.md、PROGRESS.md）
-4. 提交
+4. 修复分支专属配置（Cargo.toml, Dockerfile 等）
+5. 提交
 
-### Step 3：打 Tag 并推送
+### Step 3：用户确认
+
+**在执行任何发布操作前，必须向用户确认：**
+
+```
+即将发布 v0.2.0：
+- 版本号：0.2.0
+- CHANGELOG：已更新
+- 主要变更：[列出主要功能/修复]
+
+确认发布？
+```
+
+**等待用户明确确认后才能继续。**
+
+### Step 4：打 Tag 并推送
 
 ```bash
 cd /home/pax/coding/OmniTerm
@@ -64,7 +99,24 @@ git push public v0.2.0
 git push origin main
 ```
 
-### Step 4：npm 发布
+### Step 5：Cargo 发布（crates.io）
+
+```bash
+cd /home/pax/coding/OmniTerm
+
+# 登录 crates.io（如果未登录）
+cargo login <your-crate-token>
+
+# 发布
+cargo publish
+```
+
+**⚠️ Cargo 发布不可逆：**
+- 发布后无法删除，只能发布新版本
+- 如果发现问题，只能通过发布新版本修复
+- 确保版本号正确、代码无误后再发布
+
+### Step 6：npm 发布
 
 CI 不自动发 npm。手动执行：
 
@@ -74,14 +126,24 @@ cd npm-package
 npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 ```
 
-### Step 5：验证
+### Step 7：验证
 
 | 方式 | 验证命令 |
 |------|---------|
 | GitHub Release | 打开 `https://github.com/GDWhisper/OmniTerm/releases` 确认 binary 已上传 |
+| crates.io | `cargo install omniterm && omniterm --version` |
 | npm | `npm install -g @gdwhisper/omniterm && omniterm --version` |
 | Shell | `curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh \| bash` |
 | Docker | `docker run -p 9077:9077 ghcr.io/GDWhisper/OmniTerm:v0.2.0` |
+
+---
+
+## 同步 vs 发布（两个独立操作）
+
+| 操作 | 命令 | 说明 |
+|------|------|------|
+| 同步 main | `./scripts/sync-main.sh` | 日常操作，只更新 main 代码，不打 tag |
+| 发布新版本 | `./scripts/sync-main.sh` + `git tag` + `git push public` + `cargo publish` + `npm publish` | 正式发布，需要用户确认 |
 
 ---
 
@@ -142,6 +204,14 @@ git remote -v
 1. 脚本会自动 abort 并报错
 2. 手动解决冲突后重新执行
 3. 或者检查 dev 是否有未提交的变更
+
+### Cargo publish 失败
+
+常见原因：
+- 版本号未更新（Cargo.toml 中 version 与已发布版本重复）
+- 依赖问题（运行 `cargo publish --dry-run` 检查）
+
+如果版本号错误，只能发布新版本修复（无法删除已发布版本）。
 
 ---
 
