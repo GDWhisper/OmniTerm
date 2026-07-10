@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
+import { syncTextareaInputMode } from '../utils/terminalInputMode'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -97,6 +98,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   // Stable ref for the consume-latch callback so connectWs closure is current
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
+  // Mirror scrollMode into a ref so the createTerminal closure (and any
+  // other long-lived callback) can read the current value without being
+  // rebuilt on every state change.  createTerminal has [] deps to keep its
+  // identity stable across renders — we can't add scrollMode there.
+  const scrollModeRef = useRef(false)
+  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -392,6 +399,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       textarea.addEventListener('compositionend', () => {
         composingRef.current = false
       })
+      // Initial inputmode reflects the scroll state at mount time.  The
+      // [scrollMode] effect below keeps it in sync for later toggles.
+      syncTextareaInputMode(container, scrollModeRef.current)
     }
 
     // Handle resize
@@ -498,6 +508,15 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       }
     }
   }, [fontSize])
+
+  // Keep the xterm textarea's `inputmode` in sync with scroll mode so the
+  // soft keyboard doesn't pop up when the user pages through history with
+  // ↑/↓ taps in tmux copy mode.  See utils/terminalInputMode.ts for the
+  // full rationale.  `terminalReady` is a dep so the effect re-runs once
+  // xterm has finished creating the textarea asynchronously.
+  useEffect(() => {
+    syncTextareaInputMode(containerRef.current, scrollMode)
+  }, [scrollMode, terminalReady])
 
   return {
     initTerminal,

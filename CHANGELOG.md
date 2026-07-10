@@ -67,6 +67,7 @@ Prefix each entry with the area it affects:
 - (2026-07-06) `[infra]` Pre-commit hook 扩展为同时拦截 frontend lint 错误 — 原 hook 只跑 `cargo check`，dev 分支累积 73 个 pre-existing lint 错误无拦截。现改为 staged 包含 `.ts`/`.tsx` 时跑 `pnpm lint`、包含 `.rs` 时跑 `cargo check`，互不干扰。`set -e` 保证 lint 失败时中断提交（`scripts/hooks/pre-commit`）
 - (2026-07-06) `[frontend]` Sidebar 底部状态栏新增 GitHub 仓库链接按钮 — 点击在在新标签页打开 `https://github.com/GDWhisper/OmniTerm`，按钮悬停效果与现有底部按钮一致（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Icons/GitHubIcon.tsx`、`frontend/src/version.ts`、`frontend/src/locales/*/translation.json`）
 - (2026-07-04) `[frontend]` Settings 音效开关旁新增 ▶ 试听按钮 — 点击播放 coin 音效供用户判断是否开启（`frontend/src/components/Settings/Settings.tsx`）
+- (2026-07-10) `[frontend]` 移动端滚动激活模式临时禁用输入法 — 进入 tmux copy mode 后将 xterm 内部 `<textarea>` 的 `inputmode` 同步为 `"none"`，退出后恢复 `"text"`；避免点按 ↑/↓ 滚动时软键盘弹起遮挡终端上下文。`MobileKeyBar` 的 `maybeBlurAfterTap` 仍作为失焦兜底（`frontend/src/hooks/useTerminal.ts`、`frontend/src/utils/terminalInputMode.ts`）
 
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — GitHub Actions CI/CD 发布流水线（tag `v*` 触发，4 平台后端构建矩阵、GitHub Release 自动上传、npm publish、ghcr.io Docker 推送）（`.github/workflows/release.yml`）
 - (2026-07-02) `[infra]` v0.1.0 发布准备 — npm 包分发（shim.js + postinstall 自动下载 native binary）（`npm-package/`）
