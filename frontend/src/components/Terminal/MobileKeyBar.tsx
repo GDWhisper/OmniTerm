@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { READER_FONT } from '../../utils/fonts'
 
 interface MobileKeyBarProps {
@@ -14,26 +14,21 @@ const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
 const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 
 export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
-  // Track whether xterm.js textarea was focused before the touch started.
-  // On mobile, touchstart fires before the browser shifts focus to the button,
-  // so `document.activeElement` still reflects the pre-tap state.
-  const textareaWasFocusedRef = useRef(false)
-
-  // Record pre-tap focus state. touchstart fires before the browser shifts
-  // focus, so document.activeElement reflects the state before this tap.
-  const handleTouchStart = useCallback(() => {
-    textareaWasFocusedRef.current = document.activeElement instanceof HTMLTextAreaElement
-  }, [])
-
-  // After any button action, blur the textarea if it wasn't focused before
-  // the tap (prevents IME keyboard from opening). If it was focused (user
-  // was typing), leave it alone. Also skip blur when a modifier is latched
-  // (user tapped Ctrl/Shift/Alt to use with keyboard input next).
+  // After any button tap, drop focus from whatever element is now active so
+  // the soft keyboard doesn't pop. On mobile, tapping a <button> moves focus
+  // to the button itself (activeElement === button, NOT the textarea), so we
+  // must blur the *button* — otherwise when it later loses focus, focus falls
+  // back to xterm's textarea and the IME keyboard opens.
+  // Skip blur when a modifier is latched (user tapped Ctrl/Shift/Alt to keep
+  // the keyboard up for typing the next key).
   const maybeBlurAfterTap = useCallback(() => {
-    if (textareaWasFocusedRef.current || latchMod) return
+    if (latchMod) return
     setTimeout(() => {
       const ae = document.activeElement
-      if (ae instanceof HTMLTextAreaElement) ae.blur()
+      if (ae instanceof HTMLElement &&
+          (ae.tagName === 'TEXTAREA' || ae.classList.contains('mobikey-btn'))) {
+        ae.blur()
+      }
     }, 0)
   }, [latchMod])
 
@@ -67,14 +62,23 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
 
   const isModKey = (name: string) => (MOD_KEYS as readonly string[]).includes(name)
 
+  // Common props so every key button behaves the same: never focusable
+  // (tabIndex -1), and swallow the default focus/selection that mobile
+  // browsers trigger on press — this is what keeps the soft keyboard closed
+  // when tapping arrows / function keys.
+  const mobiBtnProps = {
+    type: 'button' as const,
+    tabIndex: -1,
+    className: 'mobikey-btn',
+    onPointerDown: (e: React.PointerEvent) => e.preventDefault(),
+    onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
+  }
+
   const renderBtn = (k: string) => (
     <button
       key={k}
-      className="mobikey-btn"
-      tabIndex={-1}
-      onTouchStart={handleTouchStart}
+      {...mobiBtnProps}
       onClick={() => handleClick(k)}
-      onPointerDown={(e) => e.preventDefault()}
       style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
     >
       {k}
@@ -111,13 +115,11 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {ROW1_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↑')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↑</button>
+          <button {...mobiBtnProps} key="arrow-up" onClick={() => handleClick('↑')} style={keyButtonStyle}>↑</button>
           <button
-            className="mobikey-btn"
-            tabIndex={-1}
-            onTouchStart={handleTouchStart}
+            {...mobiBtnProps}
+            key="scroll"
             onClick={() => { onToggleScrollMode(); maybeBlurAfterTap() }}
-            onPointerDown={(e) => e.preventDefault()}
             style={{
               ...keyButtonStyle,
               color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
@@ -132,9 +134,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
         {ROW2_ITEMS.map(renderBtn)}
         <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('←')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>←</button>
-          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('↓')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>↓</button>
-          <button className="mobikey-btn" tabIndex={-1} onTouchStart={handleTouchStart} onClick={() => handleClick('→')} onPointerDown={(e) => e.preventDefault()} style={keyButtonStyle}>→</button>
+          <button {...mobiBtnProps} key="arrow-left" onClick={() => handleClick('←')} style={keyButtonStyle}>←</button>
+          <button {...mobiBtnProps} key="arrow-down" onClick={() => handleClick('↓')} style={keyButtonStyle}>↓</button>
+          <button {...mobiBtnProps} key="arrow-right" onClick={() => handleClick('→')} style={keyButtonStyle}>→</button>
         </div>
       </div>
     </div>
