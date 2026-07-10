@@ -179,10 +179,20 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // before sending.
     listenerDisposablesRef.current.push(
       term.onData((data) => {
-        if (composingRef.current) return
         if (ws.readyState !== WebSocket.OPEN) return
+        // During IME composition, xterm emits intermediate (half-finished)
+        // text. Always drop it — whether or not a modifier is latched. The
+        // final committed text is re-emitted by xterm via onData AFTER
+        // compositionend (with composingRef already false), so the latched
+        // combo is sent then, not lost.
+        if (composingRef.current) return
         const latch = latchModRef?.current
         if (latch) {
+          // A modifier is latched (Ctrl/Alt/Shift from MobileKeyBar). Translate
+          // the typed character into the corresponding control sequence and
+          // send it. On mobile, soft-keyboard typing of a letter (e.g. after
+          // locking Ctrl) reaches here once composition ends, so Ctrl+C etc.
+          // now reach the terminal instead of being silently dropped.
           const translated = translateLatch(latch, data)
           ws.send(new TextEncoder().encode(translated))
           consumeLatchRef.current?.()
