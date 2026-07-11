@@ -15,8 +15,38 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
-import { FolderSprite, GitBranchSprite, PixelButton, SignalBarsSprite } from '../PixelUI'
+import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
+
+const PlusIcon = ({ size = 24 }: { size?: number }) => (
+  <img
+    src="/buttons/add.png"
+    width={size}
+    height={size}
+    alt=""
+    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
+  />
+)
+
+const EditIcon = ({ size = 20 }: { size?: number }) => (
+  <img
+    src="/buttons/edit.png"
+    width={size}
+    height={size}
+    alt=""
+    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
+  />
+)
+
+const DeleteIcon = ({ size = 20 }: { size?: number }) => (
+  <img
+    src="/buttons/delete.png"
+    width={size}
+    height={size}
+    alt=""
+    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
+  />
+)
 
 function SidebarBottomButton({
   toggle,
@@ -951,17 +981,16 @@ export function Sidebar() {
           <span>{t('sidebar.projects') ?? 'Projects'}</span>
           <span className="title-bar-badge">{projects.length}</span>
           <span className="title-bar-spacer" />
-          <PixelButton
-            variant="accent"
+          <button
             onClick={(e) => {
               triggerBump(e.currentTarget)
               setCreateProjOpen(true)
             }}
+            className="sidebar-wt-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
-            style={{ padding: '1px 6px', fontSize: 13 }}
           >
-            +
-          </PixelButton>
+            <PlusIcon size={24} />
+          </button>
         </div>
 
         {projects.length === 0 ? (
@@ -1053,7 +1082,7 @@ export function Sidebar() {
                                 }}
                                 title={t('sidebar.createSession')}
                               >
-                                +
+                                <PlusIcon size={24} />
                               </button>
                             </div>
 
@@ -1963,7 +1992,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      ✎
+      <EditIcon size={20} />
     </button>
   )
 }
@@ -1987,7 +2016,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      ✕
+      <DeleteIcon size={20} />
     </button>
   )
 }
