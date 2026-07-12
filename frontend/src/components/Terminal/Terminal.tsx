@@ -11,6 +11,7 @@ export function Terminal() {
   const containerRef = useRef<HTMLDivElement>(null)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
+  const terminalDisconnected = useAppStore((s) => s.terminalDisconnected)
   const isMobile = useAppStore((s) => s.isMobile)
   const fontSize = useAppStore((s) => s.fontSize)
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
@@ -34,6 +35,7 @@ export function Terminal() {
     scrollMode,
     sendScrollKeys,
     exitScrollMode,
+    reconnect,
   } = useTerminal({
     sessionId: activeSessionId,
     externalSessionName: activeExternalSession,
@@ -47,12 +49,16 @@ export function Terminal() {
   // Initialize terminal on mount or when transitioning from empty state → active session.
   // Session switches (A→B) keep hasSession === true so the effect does not fire —
   // useTerminal handles WS reconnection internally.
+  // When terminalDisconnected is true the terminal was torn down (blur/idle
+  // disconnect or ws drop) — we must NOT auto-recreate it here, otherwise the
+  // reconnect overlay would be immediately replaced. The user reconnects via
+  // the overlay button, which calls initTerminal/connectWs explicitly.
   useEffect(() => {
-    if (hasSession && containerRef.current) {
+    if (hasSession && containerRef.current && !terminalDisconnected) {
       const cleanup = initTerminal(containerRef.current)
       return cleanup
     }
-  }, [hasSession, initTerminal])
+  }, [hasSession, terminalDisconnected, initTerminal])
 
   const handleKey = (name: string) => {
     if (!sendData) return
@@ -248,8 +254,35 @@ export function Terminal() {
         <span className="title-bar-spacer" />
         {hasSession && <span className="title-bar-badge">● LIVE</span>}
       </div>
-      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0 }}>
+      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div ref={containerRef} className="h-full w-full p-1" />
+        {hasSession && terminalDisconnected && (
+          <div style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(18, 20, 26, 0.85)',
+            zIndex: 100,
+          }}>
+            <button
+              onClick={reconnect}
+              style={{
+                padding: '8px 16px',
+                background: 'var(--accent)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '14px',
+                fontWeight: 500,
+              }}
+            >
+              重连
+            </button>
+          </div>
+        )}
       </div>
       {isMobile && (
         <MobileKeyBar

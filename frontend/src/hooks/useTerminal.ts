@@ -147,6 +147,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
+      useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
@@ -179,7 +180,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
 
     ws.onclose = () => {
-      useAppStore.getState().setConnected(false)
+      useAppStore.getState().setTerminalDisconnected(true)
       tmuxScrollModeRef.current = false
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
@@ -188,7 +189,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
 
     ws.onerror = () => {
-      useAppStore.getState().setConnected(false)
+      useAppStore.getState().setTerminalDisconnected(true)
       if (wsRef.current === ws) {
         termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.connectionError')}]\x1b[0m`)
       }
@@ -567,7 +568,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         // Only disconnect if the tab is currently focused and we have an
         // active session.  If the tab is hidden, the blur timer handles it.
         if (isFocusedRef.current && document.hasFocus() && (sessionId || externalSessionName)) {
-          useAppStore.getState().setConnected(false)
+          useAppStore.getState().setTerminalDisconnected(true)
           disposeTerminal()
         }
       }, IDLE_DISCONNECT_DELAY_MS)
@@ -579,7 +580,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         clearBlurTimer()
         blurTimerRef.current = setTimeout(() => {
           if (sessionId || externalSessionName) {
-            useAppStore.getState().setConnected(false)
+            useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
         }, BLUR_DISCONNECT_DELAY_MS)
@@ -610,7 +611,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         clearBlurTimer()
         blurTimerRef.current = setTimeout(() => {
           if (sessionId || externalSessionName) {
-            useAppStore.getState().setConnected(false)
+            useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
         }, BLUR_DISCONNECT_DELAY_MS)
@@ -661,7 +662,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         clearTimeout(idleTimerRef.current)
         idleTimerRef.current = setTimeout(() => {
           if (sessionId || externalSessionName) {
-            useAppStore.getState().setConnected(false)
+            useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
         }, IDLE_DISCONNECT_DELAY_MS)
@@ -679,11 +680,25 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [sessionId, externalSessionName, disposeTerminal])
 
+  const reconnect = useCallback(() => {
+    const term = termRef.current
+    const id = externalSessionName ?? sessionId
+    if (!id) return
+
+    if (term) {
+      connectWs()
+    } else if (containerRef.current) {
+      initTerminal(containerRef.current)
+    }
+  }, [sessionId, externalSessionName, connectWs, initTerminal])
+
   return {
+    connectWs,
     initTerminal,
     sendData,
     scrollMode,
     sendScrollKeys,
     exitScrollMode,
+    reconnect,
   }
 }

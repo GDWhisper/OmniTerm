@@ -46,6 +46,16 @@ export interface AppState {
 
   // Connection
   connected: boolean
+  /**
+   * Per-terminal disconnect flag, decoupled from the global `connected`
+   * (which is driven by the Sidebar health poll and only reflects whether
+   * the backend is reachable). This is set true only when the *terminal's
+   * own* WebSocket/xterm instance is torn down (blur/idle disconnect,
+   * ws onclose/onerror), and cleared on a successful terminal WS open.
+   * The reconnect overlay keys off this so the Sidebar health poll can't
+   * silently hide it.
+   */
+  terminalDisconnected: boolean
 
   // Mobile
   isMobile: boolean
@@ -92,6 +102,7 @@ export interface AppState {
    */
   activateSession: (sessionId: string) => void
   setConnected: (v: boolean) => void
+  setTerminalDisconnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
@@ -147,6 +158,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   fmSessionStates: {},
 
   connected: false,
+  terminalDisconnected: false,
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
@@ -230,6 +242,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
   setConnected: (v) => set({ connected: v }),
+  setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
     localStorage.setItem('omniterm_mobile_last_tab', tab)
