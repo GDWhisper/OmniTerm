@@ -112,6 +112,7 @@ cargo check
 - [ ] **Cargo.toml** — `name`、`version`、`description`、`license`、`include` 是否完整
 - [ ] **README 中英文同步** — 改了英文必须改中文，反之亦然
 - [ ] **CHANGELOG** — 版本号、日期、内容是否准确
+- [ ] **Release Notes** — `.github/release-notes.md` 已基于模板生成并填好亮点（见下方「准备 Release Notes」步骤），否则 CI 发布会因 `body_path` 缺失文件失败
 
 #### 变更影响分析
 - [ ] **新增字段/类型** — 检查所有引用点：测试 mock、序列化/反序列化、前端类型定义
@@ -139,6 +140,31 @@ cargo check
 ```
 
 **等待用户明确确认后才能继续。**
+
+### Step 4.5：准备 Release Notes（必做，否则 CI 失败）
+
+`release.yml` 使用 `body_path: .github/release-notes.md` 发布说明，不再自动生成。打 tag **之前**必须先在 main worktree 生成该文件，否则 CI 会因文件缺失报错。
+
+**做法：**
+
+1. 在 main worktree 复制模板：
+   ```bash
+   cd /home/pax/coding/OmniTerm   # main worktree
+   cp .github/release-notes-template.md .github/release-notes.md
+   ```
+2. 填亮点（agent 基于 CHANGELOG 手动总结，不照搬原文）：
+   - `{{VERSION}}` → 本次版本号（如 `0.1.9`）
+   - `{{PREV}}` → 上一版本号（如 `0.1.8`，用于 Full Changelog 对比链接）
+   - `## ✨ 新功能` / `## 🐛 重要修复` / `## 🔧 工程改进` 三段各填 1~4 条一句话亮点，聚焦用户可见价值；无内容的可删段
+3. 提交并推送到 public main（CI 拉取的就是 public main）：
+   ```bash
+   git add .github/release-notes.md
+   git commit -m "docs: release notes for vX.Y.Z"
+   git push public main:main
+   ```
+4. 再执行 Step 5 打 tag（tag 触发 CI，CI 读取已推送的 `release-notes.md`）
+
+> 模板结构见 `.github/release-notes-template.md`，仅定骨架，内容由发布 agent 总结。
 
 ### Step 5：打 Tag 并推送
 
