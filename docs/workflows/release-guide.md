@@ -274,6 +274,52 @@ git remote -v
 
 如果版本号错误，只能发布新版本修复（无法删除已发布版本）。
 
+### main worktree 残留未完成合并（MERGE_HEAD）
+
+`sync-main.sh` 若曾被中断（如编译失败 / 手动 Ctrl-C），main worktree 会留下 `MERGE_HEAD`，导致后续 `git merge --ff-only` 报「尚未结束您的合并」。
+
+**做法：**
+- sync 前先检查：`git -C <main-worktree> status` 看是否有 `MERGE_HEAD` 或 `You have unmerged paths`
+- 有残留则先 `git merge --abort`，再用 `git reset --hard origin/main` 把本地 main 对齐远端
+- 不要带着半截合并直接跑 sync，否则会污染 main
+
+### public/main 落后于本地 main（non-fast-forward）
+
+`main` 本应由 `sync-main.sh` 从 dev 单向同步，但历史上若有人在 public 仓 main 手动提交过，public/main 会领先本地 main 一个旧提交，push 被拒 `non-fast-forward`。
+
+**根因：** public 仓 main 与同步源（dev）出现分叉；旧提交（如旧版 README 重写）的内容已被 0.1.8 完全覆盖，属历史遗留。
+
+**做法：**
+- 先 `git fetch public main`，用 `git log --oneline public/main --not HEAD` 确认 public 独有提交是什么
+- 确认本地 main 已包含等价/更新内容后，用 `git push --force-with-lease public main:main` 安全覆盖（`--force-with-lease` 仅在 public/main 未被他人意外改动时才成功，比 `--force` 安全）
+- **禁止**在 public 独有提交含有效改动时用强推——务必先 diff 确认其内容已被覆盖
+
+### CHANGELOG 顶部堆积的 `[Unreleased]` 区块
+
+若日常开发把改动随手写进顶部 `[Unreleased]` 而不随版本归档，多个版本后会混成一段时间线矛盾、跨版本的大块（如 06-23 ~ 07-13 混在一起），直接发布会污染新版本条目。
+
+**做法：**
+- 发布前用 `git log v<上一版本>..dev --oneline` 取得**权威的本次改动清单**，不依赖 CHANGELOG 里的 `[Unreleased]`
+- 以该清单重写顶部 `[X.Y.Z] - YYYY-MM-DD` 条目，删除陈旧的 `[Unreleased]` 堆积块
+- 落实「每次发版即时归档」习惯：发版时把 `[Unreleased]` 的内容移到对应版本号下，避免再次堆积
+
+### crates.io 前端资源未入库（`--allow-dirty`）
+
+`frontend/dist` 在 `.gitignore` 中，但 `Cargo.toml` 的 `include` 显式含 `frontend/dist/**`。`cargo publish` 默认拒绝 dirty tree（未提交文件），直接 publish 会失败。
+
+**做法：**
+- publish 前确认 `cargo publish --dry-run` 已把 `frontend/dist/**` 打进包
+- 用 `cargo publish --allow-dirty` 放行（dist 是构建产物，本就不入库，属既定方案）
+- `include` 必须含 `frontend/dist/**`、`migrations/**`、`src/**`，否则 `cargo install` 后前端 / 迁移缺失
+
+### GitHub Release notes 缺少用户友好总结
+
+CI 用 `generate_release_notes: true` 自动生成说明，每次发布只会留下一行 `Full Changelog` 链接，无中文亮点总结。
+
+**做法：**
+- 发布后用 `gh release edit vX.Y.Z --notes-file notes.md` 补一段总结性内容（新功能 / 重要修复 / 工程改进 / 安装升级指引）
+- 若希望以后自动带上，可在仓库沉淀 `docs/release-notes-template.md` 并改 `release.yml` 引用 `body_path`（需另立任务，避免每次手动补）
+
 ---
 
 ## 踩坑方法论
@@ -313,6 +359,15 @@ git remote -v
 - CI 用什么 shell，本地就用什么 shell 测试
 - 平台特定代码用 `#[cfg]` 保护，并提供替代实现
 - 依赖版本锁定或明确使用 `--no-frozen-lockfile`
+
+### 5. 发布前清理 = 发布产物的一部分
+
+**CHANGELOG 与 git 历史是发布产物的真相源，不是草稿纸。** 顶部 `[Unreleased]` 堆积、main worktree 残留合并、public/main 分叉，都会在发布时突然爆雷。
+
+**做法：**
+- 发布前固定三查：`git status`（无残留合并 / 干净树）→ `git fetch` 对比 main 与 public/main（无意外分叉）→ `git log v<上一版本>..dev`（本次改动权威清单）
+- CHANGELOG 以 git log 为准重写，不信任历史 `[Unreleased]` 区块
+- 把「清理」当作发布步骤而非事后补救，写进发布检查清单
 
 ---
 
