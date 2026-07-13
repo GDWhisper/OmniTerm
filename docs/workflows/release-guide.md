@@ -15,7 +15,7 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ---
 
-## ⚠️ 发布前必须确认
+## 发布前必须确认
 
 **发布是不可逆操作**，特别是：
 - **Cargo (crates.io)**：一旦发布，**无法删除**，只能发布新版本覆盖
@@ -97,7 +97,7 @@ cargo check
 3. 如果失败，agent 修复后重新 sync + 推送
 4. 用户再次验证，直到通过
 
-**⚠️ 禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
+**注意：禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
 
 ### Step 4：发布前检查清单
 
@@ -155,7 +155,7 @@ cargo check
 2. 填亮点（agent 基于 CHANGELOG 手动总结，不照搬原文）：
    - `{{VERSION}}` → 本次版本号（如 `0.1.9`）
    - `{{PREV}}` → 上一版本号（如 `0.1.8`，用于 Full Changelog 对比链接）
-   - `## ✨ 新功能` / `## 🐛 重要修复` / `## 🔧 工程改进` 三段各填 1~4 条一句话亮点，聚焦用户可见价值；无内容的可删段
+   - `## 新功能` / `## 重要修复` / `## 工程改进` 三段各填 1~4 条一句话亮点，聚焦用户可见价值；无内容的可删段
 3. 提交并推送到 public main（CI 拉取的就是 public main）：
    ```bash
    git add .github/release-notes.md
@@ -196,7 +196,7 @@ cargo login <your-crate-token>
 cargo publish
 ```
 
-**⚠️ Cargo 发布不可逆：**
+**注意：Cargo 发布不可逆：**
 - 发布后无法删除，只能发布新版本
 - 如果发现问题，只能通过发布新版本修复
 - 确保版本号正确、代码无误后再发布
@@ -406,5 +406,5 @@ install.sh 和 install.js 中 OS/架构 → binary 文件名映射：
 | Linux x86_64 | `omniterm-linux-x86_64` |
 | Linux aarch64 | `omniterm-linux-aarch64` |
 | macOS Apple Silicon | `omniterm-macos-aarch64` |
-| macOS Intel | ❌ 不支持（提示用户换 Apple Silicon） |
-| Windows | ❌ 不支持（依赖 tmux） |
+| macOS Intel | 不支持（提示用户换 Apple Silicon） |
+| Windows | 不支持（依赖 tmux） |
