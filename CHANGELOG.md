@@ -114,6 +114,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-13) `[backend]` `[frontend]` 文件管理器下载文件夹失败 — 下载模式下勾选目录会被忽略（skip directories），单选文件夹时 `filePaths` 为空导致提示「正在下载0个文件」且无法下载。修复：后端 `/files/download` 检测目标为目录时递归打包为 zip 流式返回（`application/zip`，文件名 `<目录名>.zip`），前端不再过滤目录；新增 `fm.downloadStartedDir` 提示区分文件夹下载（`src/api/files.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/locales/*/translation.json`，新增 `zip` 依赖）
 - (2026-07-12) `[backend]` Windows 启动后 `/sessions/external` 返回 500 — psmux 在无 session 时 `list-sessions` 可能以非零退出码返回空输出，`list_sessions()` 只识别 `no server running` 导致 `Err`，`list_external_sessions` 直接透传为 500。修复：空 stdout 也视为无 session；`list_external_sessions` 改为返回空列表而非 500（`src/tmux/mod.rs`、`src/api/sessions.rs`）
 - (2026-07-12) `[backend]` `check_multiplexer()` 在 Windows 上仅查找 `tmux`，与 install.ps1 / install.js 同时接受 `psmux` 的行为不一致。修复：Windows 上额外 fallback 到 `psmux`（`src/tmux/mod.rs`）
 - (2026-07-08) `[frontend]` 修复：终端点开会话后输入行/光标错位、大片黑屏、无法操作 — `a06eb48` 将 `createTerminal` 改为 async（动态加载 xterm addons），React StrictMode 双 mount 导致 `term.open()` 在同一容器上执行两次，第二次覆盖第一次的 DOM，xterm 内部状态损坏。修复：模块顶层预加载 addons（保持 code-splitting）+ AbortController 防 StrictMode 双重创建（`frontend/src/hooks/useTerminal.ts`）
