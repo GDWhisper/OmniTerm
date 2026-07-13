@@ -19,7 +19,6 @@ $DOCKER_PORT       = $BACKEND_PORT
 $DOCKER_PORT_MAPPING = "$BACKEND_PORT`:$BACKEND_PORT"
 $BRANCH_NAME       = 'main'
 $BRANCH_BINARY_NAME = 'omniterm-main'
-$BRANCH_VERSION    = '0.0.0'
 $DOMAIN            = 'localhost'
 
 if (Test-Path $ENV_FILE) {
@@ -36,7 +35,6 @@ if (Test-Path $ENV_FILE) {
                 'DOCKER_PORT_MAPPING' { $DOCKER_PORT_MAPPING = $val }
                 'BRANCH_NAME'         { $BRANCH_NAME = $val }
                 'BRANCH_BINARY_NAME'  { $BRANCH_BINARY_NAME = $val }
-                'BRANCH_VERSION'      { $BRANCH_VERSION = $val }
                 'DOMAIN'              { $DOMAIN = $val }
             }
         }

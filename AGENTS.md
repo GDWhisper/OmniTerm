@@ -52,13 +52,17 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
 | `DOCKER_PORT_MAPPING` | Docker 端口映射 `host:container` | docker-compose `ports` |
 | `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
 | `BRANCH_BINARY_NAME` | 二进制名（`omniterm-dev` / `omniterm-preview`） | Dockerfile `CMD` / 日志 |
-| `BRANCH_VERSION` | 版本号 | Vite `define` → `import.meta.env.VITE_APP_VERSION` / Rust 启动日志 |
 | `DOMAIN` | 部署域名 | Vite `allowedHosts` |
+
+> **版本号不在此配置**：版本号由 `Cargo.toml` 的 `version` 字段作为唯一真相源（git 跟踪，随分支 merge 自动同步）。
+> 前端经 `vite.config.ts` 在构建时读取 `Cargo.toml` 注入 `import.meta.env.VITE_APP_VERSION`；Rust 用 `env!("CARGO_PKG_VERSION")`。
+> 改版本号统一用 `./scripts/bump-version.sh <X.Y.Z>`（同步 `Cargo.toml` + `frontend/package.json`）。
 
 ### 硬性规则
 
-- **禁止在代码里硬编码**端口/域名/版本/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
-- 改这些值时**只改 `.env.local`**（各 worktree 独立）
+- **禁止在代码里硬编码**端口/域名/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
+- 版本号**禁止硬编码**，统一由 `Cargo.toml` 的 `version` 管理；改版本号用 `./scripts/bump-version.sh`
+- 改端口/域名/binary 名时**只改 `.env.local`**（各 worktree 独立）
 - dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
 - **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
 

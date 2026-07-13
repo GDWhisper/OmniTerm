@@ -20,9 +20,9 @@ DOCKER_PORT_MAPPING=
 # === 分支身份 ===
 # BRANCH_BINARY_NAME 通常为 omniterm-<branch>，release 例外为干净 omniterm
 # ⚠️ 改 BRANCH_BINARY_NAME 时必须同步改 Cargo.toml 的 [package] name（cargo 不读 env）
+# 版本号由 Cargo.toml 的 version 字段统一管理（git 跟踪，随分支 merge 同步），不在此配置
 BRANCH_NAME=
 BRANCH_BINARY_NAME=
-BRANCH_VERSION=
 
 # === 部署 ===
 DOMAIN=
