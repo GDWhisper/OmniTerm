@@ -7,37 +7,26 @@ interface MobileKeyBarProps {
   onKey: (name: string) => void
   scrollMode: boolean
   onToggleScrollMode: () => void
+  /** Refocus the xterm textarea so the soft keyboard stays open.
+   *  Called after toggling a modifier latch (Ctrl/Shift/Alt) so the
+   *  user can immediately type a combo key via the soft keyboard/IME. */
+  refocusTextarea?: () => void
 }
 
 const MOD_KEYS = ['Shift', 'Ctrl', 'Alt'] as const
 const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
 const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 
-export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode }: MobileKeyBarProps) {
-  // After any button tap, drop focus from whatever element is now active so
-  // the soft keyboard doesn't pop. On mobile, tapping a <button> moves focus
-  // to the button itself (activeElement === button, NOT the textarea), so we
-  // must blur the *button* — otherwise when it later loses focus, focus falls
-  // back to xterm's textarea and the IME keyboard opens.
-  // Skip blur when a modifier is latched (user tapped Ctrl/Shift/Alt to keep
-  // the keyboard up for typing the next key).
-  const maybeBlurAfterTap = useCallback(() => {
-    if (latchMod) return
-    setTimeout(() => {
-      const ae = document.activeElement
-      if (ae instanceof HTMLElement &&
-          (ae.tagName === 'TEXTAREA' || ae.classList.contains('mobikey-btn'))) {
-        ae.blur()
-      }
-    }, 0)
-  }, [latchMod])
-
+export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode, refocusTextarea }: MobileKeyBarProps) {
   const handleClick = useCallback(
     (name: string) => {
-      // Modifier keys toggle the latch
+      // Modifier keys toggle the latch and refocus the xterm textarea so
+      // the soft keyboard stays open for the subsequent character (e.g.
+      // Ctrl+C typed via IME).
       if ((MOD_KEYS as readonly string[]).includes(name)) {
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
         onSetLatchMod(latchMod === mod ? null : mod)
+        refocusTextarea?.()
       } else if (latchMod) {
         const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
         onKey(`${mod}+${name}`)
@@ -45,9 +34,8 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       } else {
         onKey(name)
       }
-      maybeBlurAfterTap()
     },
-    [latchMod, onKey, maybeBlurAfterTap, onSetLatchMod],
+    [latchMod, onKey, onSetLatchMod, refocusTextarea],
   )
 
   const modBtnStyle = (mod: string): React.CSSProperties => {
@@ -62,16 +50,14 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
 
   const isModKey = (name: string) => (MOD_KEYS as readonly string[]).includes(name)
 
-  // Common props so every key button behaves the same: never focusable
-  // (tabIndex -1), and swallow the default focus/selection that mobile
-  // browsers trigger on press — this is what keeps the soft keyboard closed
-  // when tapping arrows / function keys.
+  // Common props for all key buttons: type='button' prevents accidental
+  // form submission; className enables the active-scale animation.
+  // Tab-able by default so tapping a non-modifier key naturally moves
+  // focus away from the xterm textarea — the browser hides the soft
+  // keyboard without any programmatic fighting.
   const mobiBtnProps = {
     type: 'button' as const,
-    tabIndex: -1,
     className: 'mobikey-btn',
-    onPointerDown: (e: React.PointerEvent) => e.preventDefault(),
-    onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
   }
 
   const renderBtn = (k: string) => (
@@ -119,7 +105,7 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
           <button
             {...mobiBtnProps}
             key="scroll"
-            onClick={() => { onToggleScrollMode(); maybeBlurAfterTap() }}
+            onClick={() => { onToggleScrollMode() }}
             style={{
               ...keyButtonStyle,
               color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',

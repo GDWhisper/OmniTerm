@@ -692,6 +692,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [sessionId, externalSessionName, connectWs, initTerminal])
 
+  /** Refocus the xterm textarea so the soft keyboard stays open.
+   *  Used after a modifier latch in MobileKeyBar — the user tapped Ctrl/Shift/Alt
+   *  and then needs the keyboard to remain active for the next character (e.g.
+   *  Ctrl+C via IME). The setTimeout defers past the button's default focus
+   *  acquisition so the programmatic focus takes effect. */
+  const refocusTextarea = useCallback(() => {
+    setTimeout(() => {
+      containerRef.current?.querySelector('textarea')?.focus()
+    }, 0)
+  }, [])
+
   return {
     connectWs,
     initTerminal,
@@ -700,5 +711,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     sendScrollKeys,
     exitScrollMode,
     reconnect,
+    refocusTextarea,
   }
 }

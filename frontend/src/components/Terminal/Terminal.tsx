@@ -36,6 +36,7 @@ export function Terminal() {
     sendScrollKeys,
     exitScrollMode,
     reconnect,
+    refocusTextarea,
   } = useTerminal({
     sessionId: activeSessionId,
     externalSessionName: activeExternalSession,
@@ -290,6 +291,7 @@ export function Terminal() {
           onSetLatchMod={setLatchMod}
           onKey={handleKey}
           scrollMode={scrollMode ?? false}
+          refocusTextarea={refocusTextarea}
           onToggleScrollMode={() => {
             if (scrollMode) {
               exitScrollMode?.()
