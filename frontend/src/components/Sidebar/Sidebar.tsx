@@ -986,7 +986,7 @@ export function Sidebar() {
               triggerBump(e.currentTarget)
               setCreateProjOpen(true)
             }}
-            className="sidebar-wt-add-btn"
+            className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
             <PlusIcon size={24} />

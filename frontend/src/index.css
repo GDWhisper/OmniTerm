@@ -1005,7 +1005,8 @@ html, body, #root {
     inset -2px 0 0 var(--wood-inset-light, #6E543A);
 }
 
-.sidebar-wt-add-btn {
+.sidebar-wt-add-btn,
+.sidebar-proj-add-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1018,7 +1019,8 @@ html, body, #root {
   cursor: pointer;
 }
 
-.sidebar-wt-add-btn:hover {
+.sidebar-wt-add-btn:hover,
+.sidebar-proj-add-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
