@@ -41,24 +41,35 @@ winget install psmux    # recommended
 ```bash
 # cargo (recommended)
 cargo install omniterm
-omniterm
+```
+<small>Requires Rust toolchain; compiles from source (~30s–3min depending on machine). tmux must be installed separately.</small>
 
+```bash
 # Shell script (Linux/macOS)
 curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
-omniterm
+```
+<small>Downloads pre-built binary. Installs tmux automatically if missing.</small>
 
+```bash
 # PowerShell (Windows)
 irm https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.ps1 | iex
-omniterm
+```
+<small>Downloads pre-built binary. Requires psmux or tmux (not bundled).</small>
 
+```bash
 # Docker
 docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 ```
+<small>Pre-built image; tmux bundled. Requires Docker engine.</small>
 
 ```bash
 omniterm                 # default: http://localhost:9077
 omniterm -p 8080         # custom port
 ```
+
+<small>
+All methods require a terminal multiplexer: tmux on Linux and macOS, psmux or tmux on Windows.
+</small>
 
 Open the URL in a browser, set an initial password, add a project directory, and your agents appear in the sidebar with live status badges.
 

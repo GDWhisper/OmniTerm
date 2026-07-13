@@ -132,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
     // 生产模式：简洁一行（OmniTerm vX.Y.Z — http://host:port）
     if dev_mode {
         let branch = std::env::var("BRANCH_NAME").unwrap_or_else(|_| "dev".into());
-        let version = std::env::var("BRANCH_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").into());
+        let version = env!("CARGO_PKG_VERSION");
         info!("starting omniterm branch={} version={}", branch, version);
         tracing::info!("OmniTerm server listening on {}", bind);
     } else {

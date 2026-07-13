@@ -41,24 +41,36 @@ winget install psmux    # 推荐
 ```bash
 # cargo（推荐）
 cargo install omniterm
-omniterm
+```
+<small>需要 Rust 工具链；从源码编译（约 30 秒至 3 分钟，视机器性能而定）。tmux 需单独安装。</small>
 
+```bash
 # Shell 脚本（Linux/macOS）
 curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
-omniterm
+```
+<small>下载预编译二进制。若缺失 tmux 会自动安装。</small>
 
+```bash
 # PowerShell（Windows）
 irm https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.ps1 | iex
-omniterm
-
-# Docker
-docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/OmniTerm
 ```
+<small>下载预编译二进制。需要 psmux 或 tmux（不包含在包内）。</small>
+
+```bash
+# Docker
+docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
+```
+<small>预构建镜像，已包含 tmux。需要 Docker 运行时。</small>
 
 ```bash
 omniterm                 # 默认端口: http://localhost:9077
 omniterm -p 8080         # 自定义端口
 ```
+
+<small>
+所有方式均需要终端多路复用器：Linux 和 macOS 上为 tmux，Windows 上为 psmux 或 tmux。
+</small>
+
 
 浏览器打开后，设置初始密码，添加项目目录，AI 助手会自动出现在侧边栏，附带实时状态标记。
 
