@@ -2,7 +2,7 @@
 
 > *一个面板，掌控所有 AI 编码助手。*
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE)
 
 ![screenshot](pic/overview.png)
 
@@ -91,4 +91,4 @@ omniterm -p 8080         # 自定义端口
 
 ## 许可证
 
-Apache-2.0 © [GDWhisper](https://github.com/GDWhisper)
+FSL-1.1-MIT © [GDWhisper](https://github.com/GDWhisper)

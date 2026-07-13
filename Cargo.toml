@@ -2,7 +2,8 @@
 name = "omniterm"
 version = "0.1.8"
 edition = "2024"
-license = "Apache-2.0"
+license = "FSL-1.1-MIT"
+authors = ["GDWhisper"]
 description = "Web-based tmux terminal manager with AI agent monitoring"
 repository = "https://github.com/GDWhisper/OmniTerm"
 readme = "README.md"
