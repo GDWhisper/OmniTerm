@@ -456,6 +456,51 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
         }
     };
 
+    // Directories are packed into a zip archive on the fly.
+    let is_dir = tokio::fs::metadata(&full_path)
+        .await
+        .map(|m| m.is_dir())
+        .unwrap_or(false);
+
+    if is_dir {
+        let dir_name = full_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+
+        // Zip packing is CPU/IO bound; run it off the async runtime.
+        let packed = match tokio::task::spawn_blocking(move || zip_directory(&full_path)).await {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => {
+                error!("zip directory failed: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                error!("zip task panicked: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "zip packing failed" })),
+                )
+                    .into_response();
+            }
+        };
+
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/zip")
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}.zip\"", dir_name),
+            )
+            .body(Body::from(packed))
+            .unwrap();
+    }
+
     let Ok(content) = tokio::fs::read(&full_path).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "file not found" }))).into_response();
     };
@@ -474,6 +519,98 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
         )
         .body(Body::from(content))
         .unwrap()
+}
+
+/// Recursively pack `dir` into an in-memory zip archive.
+/// Entry paths are relative to `dir`'s parent so the top-level folder
+/// name is preserved when extracted.
+fn zip_directory(dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
+    use std::io::{Read, Write};
+    use zip::write::SimpleFileOptions;
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+
+        let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            let mut entries = std::fs::read_dir(&current)
+                .map_err(|e| anyhow!("read dir failed: {}", e))?;
+            while let Some(entry) = entries.next().transpose()? {
+                let path = entry.path();
+                // Zip entry path preserves the top-level folder name.
+                let rel = path
+                    .strip_prefix(dir.parent().unwrap_or(dir))
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+
+                let meta = std::fs::symlink_metadata(&path)?;
+                if meta.is_dir() {
+                    zw.add_directory(format!("{}/", rel), options)?;
+                    stack.push(path);
+                } else if meta.is_file() {
+                    zw.start_file(rel, options)?;
+                    let mut f = std::fs::File::open(&path)?;
+                    let mut chunk = Vec::new();
+                    f.read_to_end(&mut chunk)?;
+                    zw.write_all(&chunk)?;
+                }
+                // Skip symlinks/other types to keep the archive portable.
+            }
+        }
+        zw.finish()?;
+    }
+    Ok(buf)
+}
+
+#[cfg(test)]
+mod zip_tests {
+    use super::zip_directory;
+    use std::io::Read;
+    use std::path::Path;
+
+    #[test]
+    fn packs_directory_into_valid_zip() {
+        let dir = std::env::temp_dir().join("ot_ziptest_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), b"world").unwrap();
+
+        let bytes = zip_directory(&dir).expect("zip should succeed");
+        assert!(!bytes.is_empty());
+
+        // Verify it's a valid zip by reading entries back.
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(&mut cursor).expect("valid zip archive");
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let mut f = archive.by_index(i).unwrap();
+            let name = f.name().to_string();
+            names.push(name.clone());
+            if name.ends_with("a.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "hello");
+            }
+            if name.ends_with("b.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "world");
+            }
+        }
+        assert!(names.iter().any(|n| n.ends_with("a.txt")), "a.txt present: {:?}", names);
+        assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "sub/b.txt present: {:?}", names);
+        assert!(names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")), "top folder preserved: {:?}", names);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[allow(dead_code)]
+    fn _assert_path(_: &Path) {}
 }
 
 async fn read_file(
@@ -705,4 +842,50 @@ async fn search_files(
             )
         }
     }
+}
+
+#[cfg(test)]
+mod zip_tests {
+    use super::zip_directory;
+    use std::io::Read;
+    use std::path::Path;
+
+    #[test]
+    fn packs_directory_into_valid_zip() {
+        let dir = std::env::temp_dir().join("ot_ziptest_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), b"world").unwrap();
+
+        let bytes = zip_directory(&dir).expect("zip should succeed");
+        assert!(!bytes.is_empty());
+
+        // Verify it's a valid zip by reading entries back.
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(&mut cursor).expect("valid zip archive");
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let mut f = archive.by_index(i).unwrap();
+            let name = f.name().to_string();
+            names.push(name.clone());
+            if name.ends_with("a.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "hello");
+            }
+            if name.ends_with("b.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "world");
+            }
+        }
+        assert!(names.iter().any(|n| n.ends_with("a.txt")), "a.txt present: {:?}", names);
+        assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "sub/b.txt present: {:?}", names);
+        assert!(names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")), "top folder preserved: {:?}", names);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[allow(dead_code)]
+    fn _assert_path(_: &Path) {}
 }
