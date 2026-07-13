@@ -120,7 +120,7 @@ jobs:
             omniterm-*/omniterm-*
             install.sh
             install.ps1
-          generate_release_notes: true
+          body_path: .github/release-notes.md
 
   # ── Docker Publish ──────────────────────────────────────────────
   docker:
