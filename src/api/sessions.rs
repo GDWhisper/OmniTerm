@@ -288,14 +288,14 @@ fn dirs() -> Option<String> {
 async fn list_external_sessions(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    // Get all tmux sessions (returns empty vec if no server running)
+    // Get all tmux sessions (returns empty vec if no server running or error)
     let tmux_sessions = match tmux::list_sessions().await {
         Ok(s) => s,
         Err(e) => {
             error!("list_external_sessions: tmux error: {}", e);
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
+                StatusCode::OK,
+                Json(json!({ "sessions": [] })),
             );
         }
     };

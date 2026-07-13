@@ -7,7 +7,8 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 本地分支配置（.env.local 已在 .gitignore，不会被 merge 覆盖）
-# 这是分支专属变量的唯一来源（端口/域名/版本/binary 名等）
+# 这是分支专属变量的唯一来源（端口/域名/binary 名等）
+# 版本号改由 git 跟踪的 Cargo.toml 单一真相源管理，不在此注入
 [[ -f "$PROJECT_DIR/.env.local" ]] && source "$PROJECT_DIR/.env.local"
 
 # 端口 fallback（仅在 .env.local 缺失时生效，正常 worktree 不会有此情况）
@@ -16,11 +17,10 @@ FRONTEND_PORT=${FRONTEND_PORT:-9076}
 DOCKER_PORT=${DOCKER_PORT:-$BACKEND_PORT}
 DOCKER_PORT_MAPPING=${DOCKER_PORT_MAPPING:-${DOCKER_PORT}:${DOCKER_PORT}}
 BRANCH_NAME=${BRANCH_NAME:-main}
-BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm}
-BRANCH_VERSION=${BRANCH_VERSION:-0.0.0}
+BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm-main}
 DOMAIN=${DOMAIN:-localhost}
 export BACKEND_PORT FRONTEND_PORT DOCKER_PORT DOCKER_PORT_MAPPING
-export BRANCH_NAME BRANCH_BINARY_NAME BRANCH_VERSION DOMAIN
+export BRANCH_NAME BRANCH_BINARY_NAME DOMAIN
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
@@ -288,13 +288,6 @@ cmd_start() {
         if [[ ! -d node_modules ]]; then
             echo "[dev.sh] node_modules 不存在，执行 pnpm install ..."
             pnpm install
-            # 防御：pnpm 可能因误认父目录 workspace root 而静默失败
-            if [[ ! -x node_modules/.bin/vite ]]; then
-                echo "[dev.sh] ERROR: pnpm install 完成但 vite 未安装"
-                echo "[dev.sh] 可能原因: 父目录有 package.json 被误认为 workspace root"
-                echo "[dev.sh] 请检查 pnpm-workspace.yaml 是否存在"
-                exit 1
-            fi
         fi
         stdbuf -oL -eL pnpm dev
     ) > "$FRONTEND_LOG" 2>&1 &

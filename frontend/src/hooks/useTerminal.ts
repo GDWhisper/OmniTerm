@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
+import { syncTextareaInputMode } from '../utils/terminalInputMode'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -55,6 +56,14 @@ const DARK_TERMINAL_THEME = {
   brightWhite: '#E6EDF3',
 }
 
+// Timeout before disconnecting when the tab loses focus / becomes hidden.
+// 10 minutes gives a grace window for brief tab switches or notifications.
+const BLUR_DISCONNECT_DELAY_MS = 10 * 60 * 1000
+// Timeout before disconnecting when the tab is focused but idle (no user
+// activity). 15 minutes covers long reads or pauses without killing the
+// session too aggressively.
+const IDLE_DISCONNECT_DELAY_MS = 15 * 60 * 1000
+
 /** Translate a typed character through a latched modifier from MobileKeyBar. */
 function translateLatch(latch: string, data: string): string {
   switch (latch) {
@@ -88,6 +97,16 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
+  // Timers for delayed disconnect on blur / idle.
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isFocusedRef = useRef(true)
+  // lastActivityRef must be initialized lazily (not during render) to satisfy
+  // React compiler purity rules. We seed it on mount via a no-op effect.
+  const lastActivityRef = useRef<number>(0)
+  useEffect(() => {
+    lastActivityRef.current = Date.now()
+  }, [])
   // AbortController for createTerminal — abort on cleanup to cancel in-flight
   // creation (e.g., React StrictMode double-mount or rapid session switch).
   // A fresh controller is created for each initTerminal call.
@@ -97,6 +116,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   // Stable ref for the consume-latch callback so connectWs closure is current
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
+  // Mirror scrollMode into a ref so the createTerminal closure (and any
+  // other long-lived callback) can read the current value without being
+  // rebuilt on every state change.  createTerminal has [] deps to keep its
+  // identity stable across renders — we can't add scrollMode there.
+  const scrollModeRef = useRef(false)
+  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -122,6 +147,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
+      useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
@@ -154,7 +180,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
 
     ws.onclose = () => {
-      useAppStore.getState().setConnected(false)
+      useAppStore.getState().setTerminalDisconnected(true)
       tmuxScrollModeRef.current = false
       // Only write if this WS is still the active one
       if (wsRef.current === ws) {
@@ -163,7 +189,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
 
     ws.onerror = () => {
-      useAppStore.getState().setConnected(false)
+      useAppStore.getState().setTerminalDisconnected(true)
       if (wsRef.current === ws) {
         termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.connectionError')}]\x1b[0m`)
       }
@@ -179,10 +205,20 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // before sending.
     listenerDisposablesRef.current.push(
       term.onData((data) => {
-        if (composingRef.current) return
         if (ws.readyState !== WebSocket.OPEN) return
+        // During IME composition, xterm emits intermediate (half-finished)
+        // text. Always drop it — whether or not a modifier is latched. The
+        // final committed text is re-emitted by xterm via onData AFTER
+        // compositionend (with composingRef already false), so the latched
+        // combo is sent then, not lost.
+        if (composingRef.current) return
         const latch = latchModRef?.current
         if (latch) {
+          // A modifier is latched (Ctrl/Alt/Shift from MobileKeyBar). Translate
+          // the typed character into the corresponding control sequence and
+          // send it. On mobile, soft-keyboard typing of a letter (e.g. after
+          // locking Ctrl) reaches here once composition ends, so Ctrl+C etc.
+          // now reach the terminal instead of being silently dropped.
           const translated = translateLatch(latch, data)
           ws.send(new TextEncoder().encode(translated))
           consumeLatchRef.current?.()
@@ -311,6 +347,15 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
     tmuxScrollModeRef.current = false
+    // Clear any pending disconnect timers so we don't race against cleanup.
+    if (blurTimerRef.current) {
+      clearTimeout(blurTimerRef.current)
+      blurTimerRef.current = null
+    }
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = null
+    }
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.close()
@@ -382,6 +427,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       textarea.addEventListener('compositionend', () => {
         composingRef.current = false
       })
+      // Initial inputmode reflects the scroll state at mount time.  The
+      // [scrollMode] effect below keeps it in sync for later toggles.
+      syncTextareaInputMode(container, scrollModeRef.current)
     }
 
     // Handle resize
@@ -489,11 +537,180 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [fontSize])
 
+  // Keep the xterm textarea's `inputmode` in sync with scroll mode so the
+  // soft keyboard doesn't pop up when the user pages through history with
+  // ↑/↓ taps in tmux copy mode.  See utils/terminalInputMode.ts for the
+  // full rationale.  `terminalReady` is a dep so the effect re-runs once
+  // xterm has finished creating the textarea asynchronously.
+  useEffect(() => {
+    syncTextareaInputMode(containerRef.current, scrollMode)
+  }, [scrollMode, terminalReady])
+
+  // Track tab visibility and window focus to disconnect after a grace period
+  // when the user leaves the tab.  We listen to both `visibilitychange` and
+  // `focus`/`blur` so we catch:
+  //   - switching browser tabs (`visibilitychange`)
+  //   - switching to another app/window (`window.blur`)
+  //   - returning to the tab (`visibilitychange` / `window.focus`)
+  useEffect(() => {
+    const clearBlurTimer = () => {
+      if (blurTimerRef.current) {
+        clearTimeout(blurTimerRef.current)
+        blurTimerRef.current = null
+      }
+    }
+
+    const resetIdleTimer = () => {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current)
+      }
+      idleTimerRef.current = setTimeout(() => {
+        // Only disconnect if the tab is currently focused and we have an
+        // active session.  If the tab is hidden, the blur timer handles it.
+        if (isFocusedRef.current && document.hasFocus() && (sessionId || externalSessionName)) {
+          useAppStore.getState().setTerminalDisconnected(true)
+          disposeTerminal()
+        }
+      }, IDLE_DISCONNECT_DELAY_MS)
+    }
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        // Tab became hidden — start the blur timer.
+        clearBlurTimer()
+        blurTimerRef.current = setTimeout(() => {
+          if (sessionId || externalSessionName) {
+            useAppStore.getState().setTerminalDisconnected(true)
+            disposeTerminal()
+          }
+        }, BLUR_DISCONNECT_DELAY_MS)
+        // Stop the idle timer while hidden; it will be restarted on focus.
+        if (idleTimerRef.current) {
+          clearTimeout(idleTimerRef.current)
+          idleTimerRef.current = null
+        }
+      } else {
+        // Tab became visible again — cancel the blur timer and restart idle.
+        clearBlurTimer()
+        isFocusedRef.current = true
+        resetIdleTimer()
+      }
+    }
+
+    const handleFocus = () => {
+      if (document.hasFocus()) {
+        clearBlurTimer()
+        isFocusedRef.current = true
+        resetIdleTimer()
+      }
+    }
+
+    const handleBlur = () => {
+      if (!document.hidden) {
+        // Window lost focus but tab is still visible — start blur timer.
+        clearBlurTimer()
+        blurTimerRef.current = setTimeout(() => {
+          if (sessionId || externalSessionName) {
+            useAppStore.getState().setTerminalDisconnected(true)
+            disposeTerminal()
+          }
+        }, BLUR_DISCONNECT_DELAY_MS)
+        if (idleTimerRef.current) {
+          clearTimeout(idleTimerRef.current)
+          idleTimerRef.current = null
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('blur', handleBlur)
+
+    // Initialize state based on current visibility/focus.
+    if (document.hidden || !document.hasFocus()) {
+      isFocusedRef.current = false
+    } else {
+      resetIdleTimer()
+    }
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('blur', handleBlur)
+      clearBlurTimer()
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = null
+      }
+    }
+  }, [sessionId, externalSessionName, disposeTerminal])
+
+  // Track user activity to reset the idle disconnect timer.  Any meaningful
+  // interaction (mouse move, key press, scroll, touch, click) resets the
+  // 15-minute idle countdown, so long-running sessions aren't killed while
+  // the tab is focused.
+  useEffect(() => {
+    const ACTIVITY_EVENTS: (keyof DocumentEventMap)[] = [
+      'mousemove', 'keydown', 'scroll', 'touchstart', 'click',
+    ]
+
+    const onActivity = () => {
+      lastActivityRef.current = Date.now()
+      // If the tab is focused and we have an idle timer, reset it so the
+      // 15-minute countdown starts from now.
+      if (isFocusedRef.current && document.hasFocus() && idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current)
+        idleTimerRef.current = setTimeout(() => {
+          if (sessionId || externalSessionName) {
+            useAppStore.getState().setTerminalDisconnected(true)
+            disposeTerminal()
+          }
+        }, IDLE_DISCONNECT_DELAY_MS)
+      }
+    }
+
+    ACTIVITY_EVENTS.forEach((event) => {
+      document.addEventListener(event, onActivity, { passive: true })
+    })
+
+    return () => {
+      ACTIVITY_EVENTS.forEach((event) => {
+        document.removeEventListener(event, onActivity)
+      })
+    }
+  }, [sessionId, externalSessionName, disposeTerminal])
+
+  const reconnect = useCallback(() => {
+    const term = termRef.current
+    const id = externalSessionName ?? sessionId
+    if (!id) return
+
+    if (term) {
+      connectWs()
+    } else if (containerRef.current) {
+      initTerminal(containerRef.current)
+    }
+  }, [sessionId, externalSessionName, connectWs, initTerminal])
+
+  /** Refocus the xterm textarea so the soft keyboard stays open.
+   *  Used after a modifier latch in MobileKeyBar — the user tapped Ctrl/Shift/Alt
+   *  and then needs the keyboard to remain active for the next character (e.g.
+   *  Ctrl+C via IME). The setTimeout defers past the button's default focus
+   *  acquisition so the programmatic focus takes effect. */
+  const refocusTextarea = useCallback(() => {
+    setTimeout(() => {
+      containerRef.current?.querySelector('textarea')?.focus()
+    }, 0)
+  }, [])
+
   return {
+    connectWs,
     initTerminal,
     sendData,
     scrollMode,
     sendScrollKeys,
     exitScrollMode,
+    reconnect,
+    refocusTextarea,
   }
 }

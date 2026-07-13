@@ -134,6 +134,7 @@
   "fm.createSuccess": "{{name}} created",
   "fm.createFailed": "Create failed: {{msg}}",
   "fm.downloadStarted": "Downloading {{name}}",
+  "fm.downloadStartedDir": "Downloading folder {{name}} (zip)",
   "fm.downloadStartedMulti": "Downloading {{count}} files",
   "fm.collapse": "Collapse file manager",
   "fm.expand": "Expand file manager",

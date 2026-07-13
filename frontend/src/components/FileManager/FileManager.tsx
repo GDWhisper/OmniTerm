@@ -574,12 +574,9 @@ export function FileManager() {
     if (!fmSource) return
     if (downloadMode) {
       if (checked.size > 0) {
-        // Trigger downloads (skip directories)
-        const filePaths = Array.from(checked).filter((p) => {
-          const name = p.split('/').pop() || ''
-          const entry = files.find((f) => f.name === name)
-          return entry && entry.path_type !== 'Dir' && entry.path_type !== 'SymlinkDir'
-        })
+        // Trigger downloads. Directories are zipped server-side, so they are
+        // included explicitly (no longer skipped).
+        const filePaths = Array.from(checked)
         filePaths.forEach((p) => {
           const a = document.createElement('a')
           a.href = api.downloadUrl2({
@@ -594,7 +591,12 @@ export function FileManager() {
           document.body.removeChild(a)
         })
         if (filePaths.length === 1) {
-          addToast('success', t('fm.downloadStarted', { name: filePaths[0].split('/').pop() || '' }))
+          const name = filePaths[0].split('/').pop() || ''
+          const entry = files.find((f) => f.name === name)
+          const isDir = entry && (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir')
+          addToast('success', isDir
+            ? t('fm.downloadStartedDir', { name })
+            : t('fm.downloadStarted', { name }))
         } else {
           addToast('success', t('fm.downloadStartedMulti', { count: filePaths.length }))
         }

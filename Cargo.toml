@@ -1,10 +1,8 @@
 [package]
 name = "omniterm"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "Apache-2.0"
-description = "Web-based tmux terminal manager with AI agent monitoring"
-include = ["src/**", "migrations/**", "frontend/dist/**", "build.rs", "README.md", "LICENSE", "!frontend/node_modules/**"]
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }
@@ -28,6 +26,7 @@ futures-util = "0.3"
 notify = "7"
 async-stream = "0.3"
 sha1 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 clap = { version = "4", features = ["derive", "env"] }
 rust-embed = "8"
 which = "7"

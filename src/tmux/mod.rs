@@ -35,6 +35,13 @@ pub fn check_multiplexer() -> Result<()> {
             Ok(())
         }
         Err(_) => {
+            #[cfg(windows)]
+            {
+                if let Ok(_) = which::which("psmux") {
+                    debug!("multiplexer (psmux) found in PATH");
+                    return Ok(());
+                }
+            }
             let hints = MULTIPLEXER_INSTALL_HINTS.join("\n  ");
             Err(anyhow!(
                 "terminal multiplexer not found in PATH.\nInstall one of:\n  {}",
@@ -156,8 +163,10 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // "no server running" is not an error — just means no sessions
-        if stderr.contains("no server running") {
+        let stdout_str = String::from_utf8_lossy(&output.stdout);
+        // "no server running" or empty output means no sessions — not an error.
+        // psmux on Windows may exit non-zero with empty stdout when no sessions exist.
+        if stderr.contains("no server running") || stdout_str.trim().is_empty() {
             return Ok(vec![]);
         }
         return Err(anyhow!("tmux list-sessions failed: {}", stderr));
