@@ -4,6 +4,27 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
+/// Which runtime backs a session.
+///
+/// - `Tmux`: session driven by a tmux pane; identified by `tmux_session_name`.
+/// - `Acp`: session driven by an ACP adapter subprocess; identified by `acp_session_id`.
+///
+/// Phase 2 default is `Tmux` to preserve existing behavior. Phase 4 will flip
+/// the default to `Acp` once the frontend Chat view lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
+#[sqlx(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeKind {
+    Tmux,
+    Acp,
+}
+
+impl Default for RuntimeKind {
+    fn default() -> Self {
+        RuntimeKind::Tmux
+    }
+}
+
 /// Request DTO for adopting an external tmux session into a project.
 #[derive(Debug, Deserialize)]
 pub struct AdoptSession {
@@ -43,6 +64,13 @@ pub struct Session {
     pub hook_enabled: bool,
     pub hook_status: Option<String>,
     pub created_at: String,
+    /// Which runtime drives this session. Persisted, defaults to `tmux` in DB.
+    #[sqlx(default)]
+    pub runtime_kind: RuntimeKind,
+    /// ACP adapter session id when `runtime_kind = 'acp'`. NULL for tmux sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub acp_session_id: Option<String>,
     // Runtime activity indicator (tmux control mode, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]
@@ -77,6 +105,9 @@ pub struct CreateSession {
     /// If absent, a plain shell is started.
     #[serde(default)]
     pub command: Option<String>,
+    /// Which runtime to use. Absent/null → server default (`RuntimeKind::default()`).
+    #[serde(default)]
+    pub runtime_kind: Option<RuntimeKind>,
 }
 
 #[derive(Debug, Deserialize)]

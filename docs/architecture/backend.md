@@ -14,7 +14,7 @@ src/
 │   ├── auth.rs           # POST /api/v1/auth/setup|login|logout, GET /auth/check
 │   ├── targets.rs        # CRUD /api/v1/targets
 │   ├── projects.rs       # CRUD /api/v1/projects
-│   ├── sessions.rs       # CRUD /api/v1/sessions (auto-creates tmux session)
+│   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (auto-creates tmux session) | 'acp' (Phase 3, currently 501)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   └── files_watch.rs    # File watcher: SSE endpoint for live directory updates
@@ -82,3 +82,22 @@ Options:
 | `BIND_ADDR` | `127.0.0.1:<port>` | Listen address (legacy, prefer --port) |
 | `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
+
+## Sessions Table
+
+定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql`。
+
+| 列 | 类型 | 说明 |
+|----|------|------|
+| `id` | TEXT PK | UUID |
+| `project_id` | TEXT FK | 所属项目 |
+| `workspace_path` | TEXT | 工作目录 |
+| `name` | TEXT? | 用户可见名 |
+| `tmux_session_name` | TEXT? | tmux runtime 的会话名（`lt_xxxxxxxx`）；ACP session 为 NULL |
+| `hook_enabled` | BOOLEAN | 是否注入了 tmux agent hook |
+| `hook_status` | TEXT? | hook 运行状态 |
+| `created_at` | TEXT | RFC3339 |
+| `runtime_kind` | TEXT NOT NULL | `tmux` \| `acp`。DEFAULT `tmux`。ACP runtime Phase 3 实装 |
+| `acp_session_id` | TEXT? | ACP adapter 分配的 session id；tmux session 为 NULL |
+
+创建 session 时 `runtime_kind` 默认 `tmux`（Phase 2）。Phase 4 前端 Chat 视图上线后会翻转为 `acp`。

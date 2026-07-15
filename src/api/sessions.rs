@@ -11,7 +11,7 @@ use serde_json::json;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, Session, UpdateSession};
+use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession};
 use crate::tmux::{self, agent_state::AgentSnapshot};
 use crate::AppState;
 
@@ -72,8 +72,13 @@ async fn list_sessions(
         })
         .collect();
 
-    // Enrich sessions with activity state and agent state from tmux
+    // Enrich sessions with activity state and agent state from tmux.
+    // Only tmux-backed sessions have a pane to poll; ACP sessions get their
+    // state via the ACP event stream (Phase 3) and are skipped here.
     for session in &mut sessions {
+        if session.runtime_kind != RuntimeKind::Tmux {
+            continue;
+        }
         if let Some(ref tmux_name) = session.tmux_session_name {
             session.is_active = state.activity_monitor.is_active(tmux_name).await;
 
@@ -104,6 +109,17 @@ async fn create_session(
     Path(pid): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> impl IntoResponse {
+    let runtime_kind = req.runtime_kind.unwrap_or_default();
+
+    // ACP runtime is scaffolded (schema + DTO) but not yet wired to an adapter.
+    // Phase 3 will replace this with real ACP session provisioning.
+    if runtime_kind == RuntimeKind::Acp {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({ "error": "ACP runtime not implemented yet (Phase 3)" })),
+        );
+    }
+
     // Resolve workspace_path: use provided path, fallback to project path
     let workspace_path = if req.workspace_path.is_empty() {
         // Fallback: get project path
@@ -151,7 +167,7 @@ async fn create_session(
     };
 
     sqlx::query(
-        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
     )
     .bind(&id)
     .bind(&pid)
@@ -177,6 +193,8 @@ async fn create_session(
         hook_enabled,
         hook_status: None,
         created_at: now,
+        runtime_kind: RuntimeKind::Tmux,
+        acp_session_id: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -391,7 +409,7 @@ async fn adopt_session(
     let now = chrono::Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
     )
     .bind(&id)
     .bind(&req.project_id)
@@ -421,6 +439,8 @@ async fn adopt_session(
         hook_enabled: false,
         hook_status: None,
         created_at: now,
+        runtime_kind: RuntimeKind::Tmux,
+        acp_session_id: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,

@@ -76,9 +76,13 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
+    // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
+    // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
     if let Err(e) = tmux::check_multiplexer() {
-        tracing::error!("{}", e);
-        std::process::exit(1);
+        tracing::warn!(
+            "{} — tmux-backed sessions will fail until installed; ACP sessions unaffected.",
+            e
+        );
     }
 
     let db = SqlitePoolOptions::new()

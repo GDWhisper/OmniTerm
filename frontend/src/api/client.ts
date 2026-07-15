@@ -94,6 +94,10 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
+  // Runtime discriminator: 'tmux' = tmux-backed pane, 'acp' = ACP adapter subprocess
+  runtime_kind: 'tmux' | 'acp'
+  // ACP adapter session id; present only when runtime_kind='acp'
+  acp_session_id?: string
   // Runtime activity indicator (tmux control mode)
   is_active?: boolean
   // Agent state fields (from tmux @omniterm_agent option)
