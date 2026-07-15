@@ -1,3 +1,4 @@
+mod acp;
 mod api;
 mod auth;
 mod embedded;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
+    pub acp_supervisor: acp::AcpSupervisor,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -99,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         jwt_secret: args.jwt_secret,
         activity_monitor,
+        acp_supervisor: acp::AcpSupervisor::default(),
     };
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
 

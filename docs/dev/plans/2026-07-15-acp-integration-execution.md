@@ -1,7 +1,7 @@
 # ACP 接入执行计划
 
 > **作用**：把 `2026-07-12-acp-integration-plan.md` 的方向性方案落到可执行的代码任务。新会话 LLM 从本文一份即可接手。
-> **状态**：Phase 1 + 2 **已实施并提交**（commit `2757a57`）。Phase 3 已细化，待动手。Phase 4-5 已出方向。
+> **状态**：Phase 1 + 2 **已实施并提交**（commit `2757a57`）。Phase 3 基础（P3-01~P3-04）已提交（commit `bdfe8b1`）。Phase 3 模块骨架（P3-05~P3-10）已实施，待提交。Phase 4-5 已出方向。
 > **上次更新**：2026-07-15
 
 ---
@@ -182,7 +182,7 @@ Phase 1+2 全部任务已实施并通过 6 项验证矩阵（cargo build、migra
 
 ---
 
-## 6. Phase 3：ACP Runtime 接入（已细化，待动手）
+## 6. Phase 3：ACP Runtime 接入（P3-01~P3-10 已完成，P3-11~P3-20 待动手）
 
 **目标**：`runtime_kind='acp'` 分支从 HTTP 501 变为可用 —— 用户能从 UI 挑一个 agent、创建 ACP session、收 streaming 响应、发 prompt、看 tool call。
 
@@ -325,11 +325,25 @@ ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
 ### 6.8 Commit 拆分建议
 
 按依赖顺序，可拆 3-5 个 commit：
-1. `feat(backend): agents 表 + AgentConfig model + CRUD API`（P3-02..04）
-2. `feat(backend): ACP client 骨架（spawn + protocol + handler + supervisor）`（P3-01, P3-05..10）
+1. `feat(backend): agents 表 + AgentConfig model + CRUD API`（P3-02..04）— **已完成**（`bdfe8b1`）
+2. `feat(backend): ACP client 骨架（spawn + protocol + handler + supervisor）`（P3-01, P3-05..10）— **已实施，待提交**
 3. `feat(backend): ACP session HTTP + WS 路由`（P3-11..14, P3-19）
 4. `feat(frontend): AgentPicker + agents 设置`（P3-15..18）
 5. `docs: ACP Phase 3 文档更新`（P3-20）
+
+#### 6.8.1 P3-05~P3-10 实施记录（2026-07-15）
+
+**文件**：`src/acp/{mod,client,handler,permission,terminal,supervisor}.rs` + `src/main.rs` 改动
+**关键设计决策**：
+- `AcpAgent` transport（非 `Stdio`）用于 spawn agent 子进程
+- `ConnectionTo<Agent>` 是 `Clone`，通过 oneshot channel 从 `connect_with` 闭包传出
+- 权限：Phase 3 全量 auto-allow（`PermissionManager`）
+- Terminal：`tokio::process::Command`（非 portable-pty），用 mpsc 命令通道解决 child 所有权
+- fs/* handler：stub（返回空）
+- Session update 通过 `broadcast::channel` 广播，WS handler 订阅后转发前端
+- `AcpSupervisor` 用 `Arc<Mutex<HashMap<String, Arc<AcpClient>>>>` 管理多 session
+
+**验证**：`cargo check` 通过、`cargo test --test agent_hook_integration` 8/8 通过、`npx tsc -b` 通过。
 
 ---
 
@@ -388,3 +402,4 @@ ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
 |------|------|------|
 | 2026-07-15 | 初版：合并 Phase 1+2，锁定决策 A/B/C，Phase 3-5 出方向 | Qoder |
 | 2026-07-15 | Phase 1+2 实施完成（`2757a57`）；Phase 3 细化：锁定 stdio-direct + 官方 `agent-client-protocol` crate，明确 OmniTerm 通用 ACP hub 定位，加 `agents` 表 schema、`src/acp/` 模块结构、20 项任务列表；修正 §1 参考项目路径（obsidian-agent-client Apache-2.0 + adhdev AGPL） | Qoder |
+| 2026-07-15 | P3-05~P3-10 实施：`src/acp/` 模块骨架（client、handler、permission、terminal、supervisor）；AcpClient 通过 `AcpAgent` transport spawn agent 子进程 + `connect_with` + oneshot 传出 `ConnectionTo`；`AcpSupervisor` 加入 `AppState`；auto-allow 权限；tokio::process terminal manager + mpsc kill channel | Qoder |
