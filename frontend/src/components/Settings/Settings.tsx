@@ -4,6 +4,7 @@ import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
+import { AgentSettings } from './AgentSettings'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -338,7 +339,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'edit' | 'language' | 'mobile'
+type CategoryId = 'appearance' | 'audio' | 'edit' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -368,6 +369,11 @@ const CATEGORIES: Category[] = [
     id: 'language',
     labelKey: 'settings.category.language',
     sections: [LanguageSection],
+  },
+  {
+    id: 'agents',
+    labelKey: 'settings.category.agents',
+    sections: [AgentSettings],
   },
   {
     id: 'mobile',

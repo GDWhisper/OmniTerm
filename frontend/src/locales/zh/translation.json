@@ -71,6 +71,7 @@
   "settings.category.audio": "AUDIO",
   "settings.category.edit": "EDIT",
   "settings.category.language": "LANGUAGE",
+  "settings.category.agents": "AGENTS",
   "settings.category.mobile": "MOBILE",
   "tmuxCheatsheet.title": "tmux 常用命令速查",
   "tmuxCheatsheet.prefix": "前缀键",
@@ -211,5 +212,23 @@
   "sidebar.externalSessions": "外部会话",
   "sidebar.adopt": "接管",
   "sidebar.adoptSuccess": "会话「{{name}}」已接管",
-  "sidebar.adoptFailed": "接管会话失败：{{msg}}"
+  "sidebar.adoptFailed": "接管会话失败：{{msg}}",
+
+  "agentPicker.label": "智能体",
+  "agentPicker.none": "无（tmux 普通 shell）",
+  "agentPicker.hint": "留空则创建普通 tmux shell；选择智能体则创建 ACP 驱动的 AI 会话。",
+
+  "settings.agents.title": "智能体",
+  "settings.agents.new": "新建",
+  "settings.agents.displayName": "显示名",
+  "settings.agents.command": "命令",
+  "settings.agents.args": "参数（空格分隔）",
+  "settings.agents.env": "环境变量",
+  "settings.agents.addEnv": "添加",
+  "settings.agents.apiKeyEnvVar": "API Key 环境变量名",
+  "settings.agents.apiKeyValue": "API Key 值",
+  "settings.agents.apiKeyUnchanged": "（留空表示不修改）",
+  "settings.agents.delete": "删除",
+  "settings.agents.save": "保存",
+  "settings.agents.saving": "保存中…"
 }

@@ -13,6 +13,7 @@ import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
@@ -145,6 +146,7 @@ export function Sidebar() {
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
+  const [sessAgentId, setSessAgentId] = useState<string | null>(null)
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -669,7 +671,14 @@ export function Sidebar() {
 
     setSubmitting(true)
     try {
-      const newSession = await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
+      const newSession = await api.createSession(
+        activeProjectId,
+        activeWt.path,
+        sessName.trim() || undefined,
+        undefined,
+        sessAgentId ? 'acp' : undefined,
+        sessAgentId ?? undefined,
+      )
       await loadSessions()
       // Auto-activate the newly created session so the terminal pane
       // switches to it immediately. Atomic (clears external + sets
@@ -678,6 +687,7 @@ export function Sidebar() {
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
+      setSessAgentId(null)
     } catch {
       // api client already shows error toast
     } finally {
@@ -1607,7 +1617,7 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName('') }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
+      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -1626,8 +1636,23 @@ export function Sidebar() {
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('agentPicker.label')}
+            </label>
+            <AgentPicker
+              value={sessAgentId}
+              onChange={setSessAgentId}
+              noneLabel={t('agentPicker.none')}
+              className={inputClass}
+              style={inputStyle}
+            />
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-dim)' }}>
+              {t('agentPicker.hint')}
+            </p>
+          </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName('') }}>
+            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateSession} disabled={submitting}>

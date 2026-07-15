@@ -71,6 +71,7 @@
   "settings.category.audio": "AUDIO",
   "settings.category.edit": "EDIT",
   "settings.category.language": "LANGUAGE",
+  "settings.category.agents": "AGENTS",
   "settings.category.mobile": "MOBILE",
   "tmuxCheatsheet.title": "tmux Quick Reference",
   "tmuxCheatsheet.prefix": "Prefix",
@@ -211,5 +212,23 @@
   "sidebar.externalSessions": "External Sessions",
   "sidebar.adopt": "Adopt",
   "sidebar.adoptSuccess": "Session \"{{name}}\" adopted",
-  "sidebar.adoptFailed": "Failed to adopt session: {{msg}}"
+  "sidebar.adoptFailed": "Failed to adopt session: {{msg}}",
+
+  "agentPicker.label": "Agent",
+  "agentPicker.none": "None (tmux shell)",
+  "agentPicker.hint": "Leave empty for a plain tmux shell. Pick an agent to spawn an ACP-backed AI session.",
+
+  "settings.agents.title": "Agents",
+  "settings.agents.new": "New",
+  "settings.agents.displayName": "Display name",
+  "settings.agents.command": "Command",
+  "settings.agents.args": "Arguments (space-separated)",
+  "settings.agents.env": "Environment variables",
+  "settings.agents.addEnv": "Add",
+  "settings.agents.apiKeyEnvVar": "API key env var name",
+  "settings.agents.apiKeyValue": "API key value",
+  "settings.agents.apiKeyUnchanged": "(leave blank to keep unchanged)",
+  "settings.agents.delete": "Delete",
+  "settings.agents.save": "Save",
+  "settings.agents.saving": "Saving…"
 }
