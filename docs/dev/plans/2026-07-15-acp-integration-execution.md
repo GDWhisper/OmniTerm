@@ -1,7 +1,7 @@
-# ACP 接入执行计划（Phase 1 + Phase 2 合并 change）
+# ACP 接入执行计划
 
 > **作用**：把 `2026-07-12-acp-integration-plan.md` 的方向性方案落到可执行的代码任务。新会话 LLM 从本文一份即可接手。
-> **状态**：Phase 1 + 2 已细化并合并为一个 change，尚未实施。Phase 3-5 已出方向，未细化。
+> **状态**：Phase 1 + 2 **已实施并提交**（commit `2757a57`）。Phase 3 已细化，待动手。Phase 4-5 已出方向。
 > **上次更新**：2026-07-15
 
 ---
@@ -14,13 +14,18 @@
 | 2 | `AGENTS.md` | 工程准则：先规划后编码、严守分层、奥卡姆剃刀、`.env.local` 配置统一、文档索引触发规则。 |
 | 3 | `docs/architecture/backend.md` | Rust 后端分层：`api/` / `tmux/` / `ws/` / `models/` 边界。 |
 | 4 | `docs/architecture/frontend.md` | 前端结构、store 组织。 |
-| 5 | `docs/reference/references.md` | ACP 参考项目位置（`/home/pax/coding/research/obsidian-agent-client`、`typescript-sdk`），license 注意事项。 |
+| 5 | `docs/reference/references.md` | ACP 参考项目位置（`obsidian-agent-client`、`adhdev`），license 注意事项。 |
 | 6 | `PROGRESS.md` / `CHANGELOG.md` | 项目里程碑与用户可见变更。 |
 
-**参考项目**（License 只读、不复用代码）：
-- `/home/pax/coding/research/obsidian-agent-client`（AGPL，ACP client 参考实现）
-- `/home/pax/coding/research/obsidian-agent-client/documentation/app-server-schemas/typescript/v2/`（ACP 协议 schema）
-- `/home/pax/coding/research/typescript-sdk`（ACP TypeScript SDK）
+**参考项目**（License 注意）：
+- `/home/pax/coding/research/obsidian-agent-client`（**Apache-2.0**，Obsidian ACP 插件，架构 + 命名参考，代码可借鉴但需重写为 Rust）
+- `/home/pax/coding/research/adhdev`（**AGPL-3.0**，自托管多 agent hub，**仅架构参考，禁止拷代码**）
+- 官方 Rust crate：[`agent-client-protocol` v1.2.0](https://docs.rs/agent-client-protocol/)（Apache-2.0，`Stdio` transport + `Client` builder，直接依赖）
+- 官方协议规范：https://agentclientprotocol.com
+
+**已弃用/失效的参考**：
+- ~~`obsidian-agent-client/documentation/app-server-schemas/`~~ —— 本地没有该子目录，官方 schema 走 `docs.rs/agent-client-protocol/latest/agent_client_protocol/schema/` 或 crate 源码
+- ~~`typescript-sdk`~~ —— 本地无该 clone，且 Rust 侧不需要
 
 ---
 
@@ -105,11 +110,12 @@ pub struct AppState {
 
 ---
 
-## 5. Phase 1 + 2 合并 change 实施任务
+## 5. Phase 1 + 2 合并 change 实施任务（**已完成**）
 
-**Change 命名建议**：`acp-runtime-scaffolding`（OpenSpec proposal 名）
+**Change**：`acp-runtime-scaffolding`，commit `2757a57`（2026-07-15）
+**范围**：12 files changed, +429/-9
 
-### 5.1 任务列表
+### 5.1 完成情况
 
 | ID | 任务 | 文件 | 大小 |
 |----|------|------|------|
@@ -166,57 +172,189 @@ impl Default for RuntimeKind {
 - `create_session` 若 tmux 失败仍写入 DB（`sessions.rs:142-165`）——Phase 3 加 ACP 实现后自然消失（ACP 分支不走 tmux）
 - ACP session 的 CWD 同步、agent state 展示——Phase 3/5 处理
 
-### 5.6 Commit 计划（顺序）
+### 5.6 实际 Commit
 
-1. `feat(backend): tmux 缺失时降级为 warning`（T1）
-2. `feat(backend): sessions 表加 runtime_kind/acp_session_id，为 ACP 预留`（T2-T9, T11）
-3. `feat(frontend): Session 类型加 runtime_kind`（T10）
-4. `docs: 更新 backend schema 与 CHANGELOG`（T12）
+最终合并为单个 commit `2757a57 feat(backend): ACP runtime scaffolding (Phase 1+2)`，12 files changed, +429/-9。
 
-或合并为一个 commit——按项目 CHANGELOG 只写实质性改动的原则，2+3+4 合并更清晰。
+### 5.7 完成度
 
-### 5.7 预估工作量
-
-**3-4 天**（对比上游方案 Phase 1+2 累计 2-4 周）。
+Phase 1+2 全部任务已实施并通过 6 项验证矩阵（cargo build、migration、tmux 集成测试、migration 测试、501 分支、前端 typecheck）。
 
 ---
 
-## 6. Phase 3-5 展望（供本 change 完成后新会话接手）
+## 6. Phase 3：ACP Runtime 接入（已细化，待动手）
 
-### 6.1 Phase 3：ACP Runtime 接入（次序：紧接 Phase 1+2 完成后启动）
+**目标**：`runtime_kind='acp'` 分支从 HTTP 501 变为可用 —— 用户能从 UI 挑一个 agent、创建 ACP session、收 streaming 响应、发 prompt、看 tool call。
 
-**目标**：`runtime_kind='acp'` 分支从 501 变为可用。
+**定位约束**：OmniTerm 是 **通用 ACP hub**，不做 agent 独立适配。所有 ACP 兼容 agent（Claude Code、Gemini CLI、Codex CLI、自定义）走同一条代码路径，靠用户配置的 `AgentConfig { command, args, env, api_key }` 区分。
 
-**待细化的关键决策**（尚未拍板，接手前必须先讨论）：
-1. **ACP adapter 部署形态**（上游方案表格建议"独立 Node 进程 + HTTP/WS"，但 ACP 协议原生是 stdio ndJSON）
-   - 候选 a：Rust 直接 spawn adapter 二进制，管 stdin/stdout —— 贴协议原生
-   - 候选 b：单独 sidecar Node 服务，Rust 走 HTTP —— 多一层
-   - **建议先看 `research/obsidian-agent-client` 的做法再决定**
-2. **权限请求前端交互**：ACP 的 `request_permission` 语义映射到前端弹窗
-3. **进程生命周期**：per-session spawn / 池化 / 空闲回收（原方案挪到 Phase 5，本方案建议 Phase 3 先 per-session 简单实现）
+### 6.1 决策日志（已拍板，实施前无待议项）
 
-**需要新增的模块（草案）**：
-- `src/acp/` 新模块：`adapter.rs`（进程管理）、`protocol.rs`（ndJSON 编解码）、`permission.rs`（权限队列）
-- `src/ws/agent.rs` 新增 `/ws/agent/{session_id}` handler
-- `src/api/mod.rs` 挂载新路由
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| Adapter 部署形态 | **Rust 直接 spawn agent 子进程 + 官方 crate** | ACP 协议原生 stdio ndJSON；官方 Rust crate 已提供 `Stdio` transport；两个参考项目（obsidian-agent-client、adhdev）均走此路；引入 Node sidecar 违反奥卡姆剃刀（额外进程/端口/依赖） |
+| ACP client 库 | **`agent-client-protocol` v1.2.x**（crates.io，Apache-2.0） | 官方维护，跟协议演进；免 hand-roll JSON-RPC codec；license 与 FSL-1.1-MIT 兼容 |
+| Agent 进程生命周期 | **per-session spawn** | 两参考项目均如此；简单直接；池化留给 Phase 5 |
+| Agent 配置存储 | **DB `agents` 表**（不用 `.env.local`） | 多 agent、UI 可管理；user 可切换；`.env.local` 只放分支专属基础设施变量 |
+| API key 存储 | **Phase 3：DB 明文列**；Phase 5：系统 keychain | 简单起步；文档明确风险；不落到 `.env.local`（会被 gitignored 但仍不适合密钥） |
+| 权限请求 UX | **Phase 3：后端 auto-allow + WS 广播事件到前端记录** | 协议链路先跑通；弹窗留给 Phase 4 |
+| `fs/*` handler | **stub（返回空）** | obsidian-agent-client 也是 stub；OmniTerm 有 FileManager 但初期不接 |
+| `terminal/*` handler | **portable-pty 直接 spawn，不入 tmux** | tmux 是用户可见 session，agent 私人 terminal 无需入 tmux；已有 `portable-pty` 依赖 |
+| Session ID 归属 | **DB `sessions.acp_session_id` = ACP `sessionId`**（Phase 2 已加列） | 免加表，双 id 语义清楚 |
 
-**Phase 3 完成信号**：
-- ACP session 能从 UI 创建、收到 `session/update`、收到 tool call、能发 prompt
-- 权限请求触达前端（Phase 4 才做弹窗，Phase 3 只做协议链路 + console 输出）
+### 6.2 参考项目证据（实施时对照读）
 
-### 6.2 Phase 4：前端 Chat 视图
+| 关注点 | obsidian-agent-client（TS） | adhdev（TS） |
+|--------|---------------------------|--------------|
+| Spawn + stdio | `src/acp/acp-client.ts:253-259` | `packages/daemon-core/src/providers/acp-provider-instance.ts:21-48` |
+| ndJson stream 装配 | `acp-client.ts:381-414` | 同上文件（`ClientSideConnection + ndJsonStream`） |
+| Client handler 注册（method name） | `acp-client.ts:385-413`（`onNotification("session/update").onRequest("session/request_permission")...`） | 同 |
+| 事件分派（session/update kind 枚举） | `src/acp/acp-handler.ts:76-160` | 同 acp-provider-instance.ts |
+| 权限队列 | `src/acp/permission-handler.ts`（280 行） | `packages/daemon-core/src/providers/status-monitor.ts` 关联 |
+| Terminal handler | `src/acp/terminal-handler.ts`（281 行） | `packages/daemon-core/src/cli-adapters/pty-transport.ts` |
+| AgentConfig 通用模型 | `src/types/agent.ts:39-98`（`BaseAgentSettings` + 每 agent 变体） | `packages/daemon-core/src/providers/contracts.ts` |
 
-**Phase 4 才把 `RuntimeKind::default()` 从 `Tmux` 改成 `Acp`**——新用户默认 Chat 视图。
+Rust 官方 crate 关键类型（`docs.rs/agent-client-protocol/latest/`）：
+- `Stdio` transport
+- `Client::builder().name(...).connect_with(transport, handler_closure)` 
+- `InitializeRequest`, `SessionNotification`, `RequestPermissionRequest/Response`, `SessionUpdate` 枚举
+- 具体 API 面待 crate 源码验证；实施时如与 doc 描述不符，以 crate 源码为准
 
-关键点：Chat mode / Tmux mode 是**按 session 的 `runtime_kind` 二选一**渲染，不做同 session 双视图切换。切换 session 时切换视图。
+### 6.3 目标模块结构
 
-### 6.3 Phase 5：统一与打磨
+```
+src/acp/
+  mod.rs
+  client.rs         // AcpClient：spawn 子进程 + connect + initialize + new_session + send_prompt + cancel + disconnect
+  handler.rs        // 处理入站：session/update、request_permission、fs/*、terminal/*
+  permission.rs     // 权限请求队列 + auto-allow 开关
+  terminal.rs       // 用 portable-pty 服务 agent 的 terminal/* 请求
+  agent_config.rs   // AgentConfig 结构（对应 DB `agents` 表）
+  supervisor.rs     // 全局 SessionId -> AcpClient 表（per-session 生命周期管理）
+
+src/api/
+  agents.rs         // 新增：GET/POST/PUT/DELETE /api/v1/agents 管理 agent 注册表
+  sessions.rs       // 修改：runtime_kind='acp' 分支实际拉起 AcpClient 而非 501
+
+src/ws/
+  acp.rs            // 新增：/ws/acp/{session_id} 转发 session/update 与权限请求到前端
+
+migrations/
+  20260716_add_agents_table.sql   // agents 表 + sessions.agent_id FK
+
+frontend/src/
+  api/client.ts     // 新增 Agent 类型 + agents API 调用
+  stores/agentStore.ts   // 新增：agents 列表
+  components/AgentPicker/   // 新增（Phase 3 最小版）：创建 session 时选 agent
+```
+
+**分层守则**（AGENTS.md §"严守分层"）：
+- `src/acp/` 只做协议 + 进程；不 import `axum`/`sqlx`
+- `src/api/` 组装 HTTP 层，调 `src/acp/` + 读写 DB
+- `src/ws/acp.rs` 桥接 `AcpClient` 事件到 WS 帧
+
+### 6.4 DB Schema 变更
+
+```sql
+-- migrations/20260716_add_agents_table.sql
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    args TEXT NOT NULL DEFAULT '[]',       -- JSON array
+    env TEXT NOT NULL DEFAULT '[]',        -- JSON array of {key,value}
+    api_key_env_var TEXT,                  -- e.g. "ANTHROPIC_API_KEY"
+    api_key_value TEXT,                    -- Phase 3 明文；Phase 5 迁移到 keychain
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
+-- 约束：runtime_kind='acp' 时 agent_id 必须非空（应用层校验，不加 CHECK）
+
+-- 内置 agent 种子（可选，或让 UI 引导添加）
+-- 不写入 seed，让用户主动添加，避免 "存在但未配置 API key" 的僵尸行
+```
+
+### 6.5 任务列表
+
+| ID | 任务 | 文件 |
+|----|------|------|
+| P3-01 | 加 `agent-client-protocol` 到 `Cargo.toml` 并 `cargo check` | `Cargo.toml` |
+| P3-02 | Migration：`agents` 表 + `sessions.agent_id` FK | `migrations/20260716_add_agents_table.sql`（新） |
+| P3-03 | `AgentConfig` model + sqlx `FromRow` | `src/models/agent.rs`（新） |
+| P3-04 | Agent CRUD API：list/create/update/delete | `src/api/agents.rs`（新） + `src/api/mod.rs` 挂载 |
+| P3-05 | `src/acp/mod.rs` 模块骨架 + 声明子模块 | `src/acp/mod.rs`（新） |
+| P3-06 | `AcpClient::spawn_and_connect(config, cwd)` | `src/acp/client.rs`（新） |
+| P3-07 | `AcpHandler`：处理 `session/update` 各 kind + `request_permission` + `fs/*` stub + `terminal/*` | `src/acp/handler.rs`（新） |
+| P3-08 | `PermissionQueue`：auto-allow + 事件广播 | `src/acp/permission.rs`（新） |
+| P3-09 | `AcpTerminalManager`：用 `portable-pty` 服务 `terminal/*` | `src/acp/terminal.rs`（新） |
+| P3-10 | `AcpSupervisor`：`Arc<Mutex<HashMap<SessionId, AcpClient>>>` + `AppState.acp_supervisor` | `src/acp/supervisor.rs`（新）+ `src/main.rs` |
+| P3-11 | `create_session` ACP 分支从 501 改为：查 agent → spawn → init → new_session → 存 `acp_session_id` | `src/api/sessions.rs` |
+| P3-12 | `/ws/acp/{session_id}` handler：转发 session_update 与权限事件到前端 | `src/ws/acp.rs`（新） + `src/ws/mod.rs` |
+| P3-13 | `send_prompt` HTTP endpoint：POST `/api/v1/sessions/{id}/prompt` | `src/api/sessions.rs` |
+| P3-14 | Session `DELETE` handler 加 ACP 分支：`supervisor.dispose(session_id)` | `src/api/sessions.rs` |
+| P3-15 | 前端 `Agent` 类型 + agents API client | `frontend/src/api/client.ts` |
+| P3-16 | 前端 `agentStore`（Zustand） | `frontend/src/stores/agentStore.ts`（新） |
+| P3-17 | 前端 `AgentPicker` 最小版（创建 session 前选 agent） | `frontend/src/components/AgentPicker/`（新） |
+| P3-18 | 前端设置面板：agent CRUD UI | `frontend/src/components/Settings/AgentSettings.tsx`（新） |
+| P3-19 | 后端集成测试：spawn `echo` 作为 fake agent，验证协议链路 | `tests/acp_integration.rs`（新） |
+| P3-20 | 文档：`docs/architecture/backend.md` 加 `acp/` 模块段；`docs/reference/user-testing.md` 加 ACP 测试用例；`CHANGELOG.md` Unreleased 追加 | 三个文档 |
+
+### 6.6 验证矩阵
+
+| 类别 | 验证项 | 命令 | 期望 |
+|------|--------|------|------|
+| 依赖 | crate 引入编译过 | `cargo check` | 无错 |
+| Migration | 新表建立 | 启动 → `sqlite3 omniterm.db ".schema agents"` | 表存在 |
+| Agent CRUD | 创建 agent | `curl -X POST /api/v1/agents -d '{"display_name":"Claude","command":"claude-agent-acp",...}'` | 200 + id |
+| ACP session 创建 | 用 fake agent（echo/stub 二进制）| POST session with runtime_kind='acp' + agent_id | 200 + session 记录 + acp_session_id 非空 |
+| Streaming | 发 prompt 收 session/update | WS `/ws/acp/{id}` | 收到 `agent_message_chunk` 帧 |
+| 权限流转 | agent 触发 request_permission | fake agent 主动发 | WS 收到权限事件、后端 auto-allow 应答 |
+| 生命周期 | DELETE session | `curl -X DELETE /api/v1/sessions/{id}` | 子进程被 kill、DB 行删 |
+| 集成回归 | 现有 tmux session | tmux 分支 curl | 全绿 |
+
+### 6.7 已知遗留（Phase 3 不处理）
+
+- Agent API key **明文存储在 DB** —— Phase 5 迁移到系统 keychain（`keyring` crate 候选）
+- `fs/*` handler 是 stub —— Phase 5 接入 FileManager
+- 单 agent 进程池化 —— Phase 5
+- 前端权限弹窗 —— Phase 4
+- Session 恢复：`session/load` / `session/resume` —— Phase 5
+
+### 6.8 Commit 拆分建议
+
+按依赖顺序，可拆 3-5 个 commit：
+1. `feat(backend): agents 表 + AgentConfig model + CRUD API`（P3-02..04）
+2. `feat(backend): ACP client 骨架（spawn + protocol + handler + supervisor）`（P3-01, P3-05..10）
+3. `feat(backend): ACP session HTTP + WS 路由`（P3-11..14, P3-19）
+4. `feat(frontend): AgentPicker + agents 设置`（P3-15..18）
+5. `docs: ACP Phase 3 文档更新`（P3-20）
+
+---
+
+### 6.9 Phase 4-5 展望
+
+#### Phase 4：前端 Chat 视图 + 默认切 ACP
+
+**Phase 4 才把 `RuntimeKind::default()` 从 `Tmux` 改成 `Acp`** —— 新用户默认 Chat 视图。
+
+关键点：
+- Chat mode / Tmux mode 是**按 session 的 `runtime_kind` 二选一**渲染，不做同 session 双视图切换
+- 权限请求弹窗（对应 Phase 3 的 auto-allow）
+- Tool call / plan / mode 等 session/update 全量渲染
+- Chat 输入框、消息历史、cancel 按钮
+
+#### Phase 5：统一与打磨
 
 - ACP 与 tmux 的 agent_state 前端 badge 归一
-- adapter 进程池化
+- Agent 进程池化 / 空闲回收
+- API key 存储升级到系统 keychain
+- `fs/*` handler 接入 FileManager
+- Session `load` / `resume` / `fork` 支持
 - 老 tmux 用户迁移到 ACP 的引导文档
 
-### 6.4 Phase 3-5 之后
+#### Phase 5 之后
 
 上游方案 §"后续可选增强"列出的会话导入/导出、远程 agent 等——一律**先不排期**，等 Phase 5 稳定 1 个版本后重新评估。
 
@@ -230,14 +368,17 @@ impl Default for RuntimeKind {
 2. **读上游方案**（`docs/dev/plans/2026-07-12-acp-integration-plan.md`）——理解方向
 3. **读 AGENTS.md** §"工程准则" 和 §"文档索引"
 4. 检查当前进度：
-   - 查 `PROGRESS.md` 与 `CHANGELOG.md` 最近条目
-   - 查 `migrations/` 是否已有 `20260715_add_runtime_kind.sql` → 判断 Phase 1+2 是否已实施
-   - 查 `src/api/sessions.rs` 是否已有 `RuntimeKind` 分支
+   - 查 `CHANGELOG.md` 最近条目
+   - 查 `migrations/` 是否已有 `20260715_add_runtime_kind.sql` → Phase 1+2 已实施（`2757a57`）
+   - 查 `migrations/` 是否已有 `20260716_add_agents_table.sql` → Phase 3 已开始/完成
+   - 查 `src/acp/` 目录是否存在 → 判断 Phase 3 骨架进展
 5. 根据进度决定入口：
-   - Phase 1+2 未做 → 按本文 §5 实施
-   - Phase 1+2 已做 → 按本文 §6.1 先做 Phase 3 决策讨论，再细化
-6. **不要跳过决策讨论**：Phase 3 的 adapter 形态是全局架构决策，不可默认选择
+   - Phase 1+2 未做 → 按本文 §5 实施（历史保留，不应发生）
+   - Phase 3 未做 → 按本文 §6 实施
+   - Phase 3 已做部分 → 按 §6.5 任务列表继续
+6. **不要跳过决策日志**：§4.1 + §6.1 已锁定的选择，除非有强证据反证，直接执行；若要覆盖需在文档追加一行显式声明
 7. **不要触碰上游方案 §"明确不做的事"**——尤其是会话桥接
+8. **禁 codex-mobile 拷贝**：曾扫过 codex-mobile 作 stdio bridge 模式参考，但 OmniTerm 是通用 hub 不做 agent 独立适配，其代码不适用
 
 ---
 
@@ -246,3 +387,4 @@ impl Default for RuntimeKind {
 | 日期 | 修改 | 作者 |
 |------|------|------|
 | 2026-07-15 | 初版：合并 Phase 1+2，锁定决策 A/B/C，Phase 3-5 出方向 | Qoder |
+| 2026-07-15 | Phase 1+2 实施完成（`2757a57`）；Phase 3 细化：锁定 stdio-direct + 官方 `agent-client-protocol` crate，明确 OmniTerm 通用 ACP hub 定位，加 `agents` 表 schema、`src/acp/` 模块结构、20 项任务列表；修正 §1 参考项目路径（obsidian-agent-client Apache-2.0 + adhdev AGPL） | Qoder |
