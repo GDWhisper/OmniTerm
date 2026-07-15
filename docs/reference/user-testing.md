@@ -495,6 +495,39 @@ FRONTEND_DIR=frontend/dist
 
 ---
 
+## 11. ACP 智能体会话（Phase 3）
+
+> 前置：后端 `cargo check` 通过、前端 `npx tsc -b` 通过。Phase 3 后端 + 前端 UI 就绪；完整 ACP 协议联调需要配置一个能跑起来的 agent 可执行文件（如本地编译的 `agent-client-protocol` 示例）。
+
+### 11.1 Agent 配置 CRUD（设置 → AGENTS）
+
+| 步骤 | 预期 |
+|------|------|
+| 打开 Settings → AGENTS tab | 显示「+ New」按钮，空表单 |
+| 填写 display_name / command / args / env 后点 Save | 列表里出现新 agent chip，选中后回显刚才的值 |
+| 修改 display_name → Save | chip 文字同步更新 |
+| 添加一行 env（KEY=ANTHROPIC_API_KEY, VALUE=xxx），保存后刷新页面 | env 行保留 |
+| 填 api_key_env_var + api_key_value，保存后清空 api_key_value 字段，再次 Save | 不报错（服务端保留原值） |
+| 选中一个 agent → Delete | chip 消失，表单回到新建态 |
+
+### 11.2 创建 ACP Session（Sidebar → 新建会话）
+
+| 步骤 | 预期 |
+|------|------|
+| 打开「新建会话」modal，Agent 下拉显示「无（tmux 普通 shell）」+ 上一步创建过的 agent | 选项齐全 |
+| 选 agent 后点「创建」 | DB 中新增一行 `runtime_kind='acp'`、`agent_id` 非空；前端 session 卡片渲染（具体终端视图 Phase 4 实装） |
+| Agent 下拉留空 + 创建 | `runtime_kind='tmux'`、`agent_id` 为 NULL，跟 Phase 2 行为一致 |
+| 删除一个 ACP session | supervisor 释放 AcpClient，agent 子进程退出（`ps` 可见 PID 消失） |
+
+### 11.3 异常场景
+
+| 步骤 | 预期 |
+|------|------|
+| 填一个不存在的 command（如 `nonexistent-agent-binary`）+ 创建 | 后端返回 500，前端 toast 错误信息 |
+| 删除一个被 ACP session 引用的 agent | 当前不做级联保护（Phase 3 简化）；创建新 session 时若 `load_agent` 返回 None 应报 400 |
+
+---
+
 ## 反馈模板
 
 测试完成后请填写：
