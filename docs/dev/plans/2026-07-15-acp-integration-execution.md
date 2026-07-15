@@ -1,7 +1,7 @@
 # ACP 接入执行计划
 
 > **作用**：把 `2026-07-12-acp-integration-plan.md` 的方向性方案落到可执行的代码任务。新会话 LLM 从本文一份即可接手。
-> **状态**：Phase 1 + 2 **已实施并提交**（commit `2757a57`）。Phase 3 后端（P3-01~P3-14）全部完成：基础 `bdfe8b1`、模块骨架 `a577b85`、HTTP/WS 路由 `71f73d5`。P3-15~P3-20（前端 + 测试 + 文档）待做。Phase 4-5 已出方向。
+> **状态**：Phase 1 + 2 **已实施并提交**（commit `2757a57`）。Phase 3 后端（P3-01~P3-14）全部完成：基础 `bdfe8b1`、模块骨架 `a577b85`、HTTP/WS 路由 `71f73d5`。Phase 3 前端（P3-15~P3-18）+ 文档（P3-20）已完成：前端 UI `b5b9a58`、文档 `0382800`。P3-19（fake-agent 集成测试）延期到 Phase 4 与 Chat 视图联调一起做。Phase 4-5 已出方向。
 > **上次更新**：2026-07-15
 
 ---
@@ -278,28 +278,28 @@ ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
 
 ### 6.5 任务列表
 
-| ID | 任务 | 文件 |
-|----|------|------|
-| P3-01 | 加 `agent-client-protocol` 到 `Cargo.toml` 并 `cargo check` | `Cargo.toml` |
-| P3-02 | Migration：`agents` 表 + `sessions.agent_id` FK | `migrations/20260716_add_agents_table.sql`（新） |
-| P3-03 | `AgentConfig` model + sqlx `FromRow` | `src/models/agent.rs`（新） |
-| P3-04 | Agent CRUD API：list/create/update/delete | `src/api/agents.rs`（新） + `src/api/mod.rs` 挂载 |
-| P3-05 | `src/acp/mod.rs` 模块骨架 + 声明子模块 | `src/acp/mod.rs`（新） |
-| P3-06 | `AcpClient::spawn_and_connect(config, cwd)` | `src/acp/client.rs`（新） |
-| P3-07 | `AcpHandler`：处理 `session/update` 各 kind + `request_permission` + `fs/*` stub + `terminal/*` | `src/acp/handler.rs`（新） |
-| P3-08 | `PermissionQueue`：auto-allow + 事件广播 | `src/acp/permission.rs`（新） |
-| P3-09 | `AcpTerminalManager`：用 `portable-pty` 服务 `terminal/*` | `src/acp/terminal.rs`（新） |
-| P3-10 | `AcpSupervisor`：`Arc<Mutex<HashMap<SessionId, AcpClient>>>` + `AppState.acp_supervisor` | `src/acp/supervisor.rs`（新）+ `src/main.rs` |
-| P3-11 | `create_session` ACP 分支从 501 改为：查 agent → spawn → init → new_session → 存 `acp_session_id` | `src/api/sessions.rs` |
-| P3-12 | `/ws/acp/{session_id}` handler：转发 session_update 与权限事件到前端 | `src/ws/acp.rs`（新） + `src/ws/mod.rs` |
-| P3-13 | `send_prompt` HTTP endpoint：POST `/api/v1/sessions/{id}/prompt` | `src/api/sessions.rs` |
-| P3-14 | Session `DELETE` handler 加 ACP 分支：`supervisor.dispose(session_id)` | `src/api/sessions.rs` |
-| P3-15 | 前端 `Agent` 类型 + agents API client | `frontend/src/api/client.ts` |
-| P3-16 | 前端 `agentStore`（Zustand） | `frontend/src/stores/agentStore.ts`（新） |
-| P3-17 | 前端 `AgentPicker` 最小版（创建 session 前选 agent） | `frontend/src/components/AgentPicker/`（新） |
-| P3-18 | 前端设置面板：agent CRUD UI | `frontend/src/components/Settings/AgentSettings.tsx`（新） |
-| P3-19 | 后端集成测试：spawn `echo` 作为 fake agent，验证协议链路 | `tests/acp_integration.rs`（新） |
-| P3-20 | 文档：`docs/architecture/backend.md` 加 `acp/` 模块段；`docs/reference/user-testing.md` 加 ACP 测试用例；`CHANGELOG.md` Unreleased 追加 | 三个文档 |
+| ID | 任务 | 文件 | 状态 |
+|----|------|------|------|
+| P3-01 | 加 `agent-client-protocol` 到 `Cargo.toml` 并 `cargo check` | `Cargo.toml` | **已完成**（`bdfe8b1`） |
+| P3-02 | Migration：`agents` 表 + `sessions.agent_id` FK | `migrations/20260716_add_agents_table.sql`（新） | **已完成**（`bdfe8b1`） |
+| P3-03 | `AgentConfig` model + sqlx `FromRow` | `src/models/agent.rs`（新） | **已完成**（`bdfe8b1`） |
+| P3-04 | Agent CRUD API：list/create/update/delete | `src/api/agents.rs`（新） + `src/api/mod.rs` 挂载 | **已完成**（`bdfe8b1`） |
+| P3-05 | `src/acp/mod.rs` 模块骨架 + 声明子模块 | `src/acp/mod.rs`（新） | **已完成**（`a577b85`） |
+| P3-06 | `AcpClient::spawn_and_connect(config, cwd)` | `src/acp/client.rs`（新） | **已完成**（`a577b85`） |
+| P3-07 | `AcpHandler`：处理 `session/update` 各 kind + `request_permission` + `fs/*` stub + `terminal/*` | `src/acp/handler.rs`（新） | **已完成**（`a577b85`） |
+| P3-08 | `PermissionQueue`：auto-allow + 事件广播 | `src/acp/permission.rs`（新） | **已完成**（`a577b85`） |
+| P3-09 | `AcpTerminalManager`：用 `portable-pty` 服务 `terminal/*` | `src/acp/terminal.rs`（新） | **已完成**（`a577b85`，改为 `tokio::process` + mpsc kill channel） |
+| P3-10 | `AcpSupervisor`：`Arc<Mutex<HashMap<SessionId, AcpClient>>>` + `AppState.acp_supervisor` | `src/acp/supervisor.rs`（新）+ `src/main.rs` | **已完成**（`a577b85`） |
+| P3-11 | `create_session` ACP 分支从 501 改为：查 agent → spawn → init → new_session → 存 `acp_session_id` | `src/api/sessions.rs` | **已完成**（`71f73d5`） |
+| P3-12 | `/ws/acp/{session_id}` handler：转发 session_update 与权限事件到前端 | `src/ws/acp.rs`（新） + `src/ws/mod.rs` | **已完成**（`71f73d5`） |
+| P3-13 | `send_prompt` HTTP endpoint：POST `/api/v1/sessions/{id}/prompt` | `src/api/sessions.rs` | **已完成**（`71f73d5`） |
+| P3-14 | Session `DELETE` handler 加 ACP 分支：`supervisor.dispose(session_id)` | `src/api/sessions.rs` | **已完成**（`71f73d5`） |
+| P3-15 | 前端 `Agent` 类型 + agents API client | `frontend/src/api/client.ts` | **已完成**（`b5b9a58`） |
+| P3-16 | 前端 `agentStore`（Zustand） | `frontend/src/stores/agentStore.ts`（新） | **已完成**（`b5b9a58`） |
+| P3-17 | 前端 `AgentPicker` 最小版（创建 session 前选 agent） | `frontend/src/components/AgentPicker/`（新） | **已完成**（`b5b9a58`） |
+| P3-18 | 前端设置面板：agent CRUD UI | `frontend/src/components/Settings/AgentSettings.tsx`（新） | **已完成**（`b5b9a58`） |
+| P3-19 | 后端集成测试：spawn `echo` 作为 fake agent，验证协议链路 | `tests/acp_integration.rs`（新） | **延期**到 Phase 4（与 Chat 视图联调一起做，fake-agent 二进制需要同步设计） |
+| P3-20 | 文档：`docs/architecture/backend.md` 加 `acp/` 模块段；`docs/reference/user-testing.md` 加 ACP 测试用例；`CHANGELOG.md` Unreleased 追加 | 三个文档 | **已完成**（`0382800`） |
 
 ### 6.6 验证矩阵
 
@@ -356,6 +356,26 @@ ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
 - 提取 `resolve_workspace_path` 公共函数，tmux/ACP 共用
 
 **验证**：`cargo check` 通过、集成测试 8/8、前端 tsc 通过。
+
+#### 6.8.3 P3-15~P3-18 + P3-20 实施记录（2026-07-15）
+
+**文件**：
+- 前端类型 + API：`frontend/src/api/client.ts`（`Agent`/`CreateAgent`/`UpdateAgent`、agents CRUD + sendPrompt、createSession 加 runtimeKind/agentId）
+- 前端状态：`frontend/src/stores/agentStore.ts`（新）
+- 前端 UI：`frontend/src/components/AgentPicker/AgentPicker.tsx`（新）、`frontend/src/components/Settings/AgentSettings.tsx`（新）、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`
+- i18n：`frontend/src/locales/{en,zh}/translation.json`（`agentPicker.*`、`settings.agents.*`、`settings.category.agents`）
+- 文档：`docs/architecture/backend.md`（新增「ACP Module (Phase 3)」章节 + src 树 + API 端点 + Sessions 表 agent_id 列）、`docs/reference/user-testing.md`（§11 ACP 智能体会话用例）、`CHANGELOG.md`
+
+**关键变更**：
+- `AgentPicker` 最小版 —— `<select>` + noneLabel prop（caller 翻译）；useEffect 首次挂载加载 agents
+- Sidebar 「新建会话」 modal：新增 Agent 下拉 + hint；选中 agent → `runtime_kind='acp'`、留空 → tmux；`sessAgentId` 状态与 `sessName` 同步重置
+- `AgentSettings`：chip 选择器 + 内联编辑表单；env 行（KEY/value）动态增删；`api_key_value` 「留空保持原值」语义用 `api_key_dirty` flag 区分 create（总是发）vs update（只在 dirty 时发）
+- Settings 新增 AGENTS tab：CategoryId union + CATEGORIES 数组同步
+- 文档 `backend.md`：描述 ACP 生命周期 5 步、`terminal/*` 用 `tokio::process` + mpsc kill channel 的架构选择
+
+**P3-19 延期**：fake-agent 集成测试（spawn echo 走 ACP 协议）留到 Phase 4 与 Chat 视图联调一起做 —— 需要设计一个最小 ACP-speaking 二进制，与前端 Chat 的 session/update 渲染一起验证才有意义。
+
+**验证**：`cargo check` 通过、`npx tsc -b` 全绿、pnpm lint 0 error（11 warning 全是 pre-existing 的 `react-hooks/exhaustive-deps`，不涉及本次改动）。
 
 ---
 
@@ -416,3 +436,4 @@ ALTER TABLE sessions ADD COLUMN agent_id TEXT REFERENCES agents(id);
 | 2026-07-15 | Phase 1+2 实施完成（`2757a57`）；Phase 3 细化：锁定 stdio-direct + 官方 `agent-client-protocol` crate，明确 OmniTerm 通用 ACP hub 定位，加 `agents` 表 schema、`src/acp/` 模块结构、20 项任务列表；修正 §1 参考项目路径（obsidian-agent-client Apache-2.0 + adhdev AGPL） | Qoder |
 | 2026-07-15 | P3-05~P3-10 实施：`src/acp/` 模块骨架（client、handler、permission、terminal、supervisor）；AcpClient 通过 `AcpAgent` transport spawn agent 子进程 + `connect_with` + oneshot 传出 `ConnectionTo`；`AcpSupervisor` 加入 `AppState`；auto-allow 权限；tokio::process terminal manager + mpsc kill channel | Qoder |
 | 2026-07-15 | P3-11~P3-14 实施：`create_session` ACP 分支实际 spawn agent + 写 DB；`/ws/acp/{session_id}` WS handler 转发 session/update；`POST /sessions/{id}/prompt` 端点；`delete_session` ACP 分支 dispose + disconnect；提取 `resolve_workspace_path` 公共函数 | Qoder |
+| 2026-07-15 | P3-15~P3-18 + P3-20 实施：前端 `Agent` 类型 + `agentStore` (Zustand) + `AgentPicker` (Sidebar 新建会话 modal 集成) + Settings `AgentSettings` tab (CRUD + env 行 + api_key_value 留空保持原值)；`docs/architecture/backend.md` 新增「ACP Module (Phase 3)」章节；`docs/reference/user-testing.md` §11 ACP 用例；`CHANGELOG.md` Unreleased 条目；P3-19 fake-agent 集成测试延到 Phase 4 | Qoder |
