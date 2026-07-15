@@ -71,6 +71,11 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub acp_session_id: Option<String>,
+    /// Which agent registry row this session was spawned from. Required for
+    /// `runtime_kind = 'acp'`, NULL for tmux sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub agent_id: Option<String>,
     // Runtime activity indicator (tmux control mode, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]
@@ -108,6 +113,9 @@ pub struct CreateSession {
     /// Which runtime to use. Absent/null → server default (`RuntimeKind::default()`).
     #[serde(default)]
     pub runtime_kind: Option<RuntimeKind>,
+    /// Which agent to use when `runtime_kind = 'acp'`. Required in that branch.
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
