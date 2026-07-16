@@ -304,32 +304,42 @@ const fmSource = useMemo(() => {
 
 ---
 
-## 2026-07-16: 长运行后端 inotify fd 单调增长（疑似文件监听 / session 注册泄漏） — 待排查
+## 2026-07-16 → 07-17: 长运行后端 inotify fd 单调增长 — 已修复
 
 **症状**：前端 Vite 启动报 `ENOSPC: System limit for number of file watchers reached`。`lsof | grep inotify` 统计发现：跑 5 天的 `omniterm-dev` 实例独占 1320 个 inotify fd；同 worktree 新启动的实例只有 78 fd。差 17 倍。
 
 **临时缓解**（已做）：`echo 'fs.inotify.max_user_watches = 524288' > /etc/sysctl.d/60-inotify.conf`。不治本 — 泄漏持续，1-2 周后仍会撑满。
 
-**可复用理论 / 模式**（**假设 — 待验证**）：
+**可复用理论 / 模式**：
 
-- **长期资源注册必须有对称的释放路径**：每个 `Watcher::new()` / `inotify_add_watch()` / `tokio::spawn` 都应该对应一个 drop / `unwatch()` / `abort()`。任何"只增不减"的注册表（特别是 `HashMap<_, Arc<X>>`、长期 tokio task、`notify::Watcher` 实例）都是泄漏嫌疑。
-- **资源泄漏与运行时长的相关性是最强信号**：同二进制、不同运行时长、fd 数差 N 倍 → 几乎 100% 是泄漏。比看代码快得多。`lsof` + 时间序列数据点是定位这类问题的第一手段。
-- **调高系统上限是诊断辅助，不是修复**：把 inotify 上限从 65536 调到 524288 让症状消失，但泄漏仍在；正确的"修复"是让释放路径闭合。
+- **长期资源注册必须有对称的释放路径**：每个 `Watcher::new()` / `inotify_add_watch()` / `tokio::spawn` 都应对应 drop / `unwatch()` / `abort()`。任何"只增不减"的注册表（`HashMap<_, Arc<X>>`、长期 tokio task、`notify::Watcher`）都是泄漏嫌疑。
+- **资源泄漏与运行时长的相关性是最强信号**：同二进制、不同运行时长、fd 数差 N 倍 → 几乎 100% 是泄漏。`lsof` + 时间序列数据点是定位这类问题的第一手段，比看代码快。
+- **调高系统上限是诊断辅助，不是修复**：把 inotify 上限从 65536 调到 524288 让症状消失，但泄漏仍在。
+- **`spawn_blocking` + 长生命周期资源 = 高危组合**：普通 async task 在 future drop 时自然结束；`spawn_blocking` 跑的是普通线程，future drop **不会** abort 它。如果线程里持有 inotify fd、数据库连接、文件锁，必须**显式**给它一条能退出的路径（`watch::channel` / `AtomicBool` / `CancellationToken`），并在上层 drop 时触发。把返回的 `JoinHandle` 直接 `_` 丢弃是最常见的写法，也是最容易泄漏的写法。
+- **async 流（Axum SSE / gRPC streaming）的"客户端断开"靠的是 future drop**：stream generator 持有的资源会在客户端断开时被 Rust drop 机制释放；可以把"shutdown sender"也绑到 generator 的 capture 里，利用 drop 触发对端 worker 退出 — 比另起 Drop guard 类型简洁得多。
+- **`lsof | grep inotify` 在非 sudo 下不可靠**：没有 sudo 时 `lsof` 对别的进程的 inotify 条目常常返回空（permission denied 被吞掉），看起来像"没有泄漏"。改用 `readlink /proc/<pid>/fd/*` 直接扫，看到 `anon_inode:inotify` 就是 watch，权限无关。
 
-**诊断过程中犯的错误**（**初步**）：
+**诊断过程中犯的错误**：
 
-1. **第一时间怀疑 Vite 配置**：ENOSPC 报错的 stack trace 指向 `vite.config.ts` 那一行，但 `vite.config.ts` 本身没变过、新 worktree 也正常。真正的问题是系统全局 inotify 上限被别的进程吃光 — 报错栈只是最后一个申请 fd 的倒霉蛋。
-2. **没第一时间跑 `lsof`**：应该第一反应是「谁吃了 inotify」，而不是「Vite 是不是出问题了」。ENOSPC 是资源耗尽类错误，第一诊断动作永远是 `lsof` / `df` / `ulimit` 类的资源快照。
+1. **第一时间怀疑 Vite 配置**：ENOSPC 的 stack trace 指向 `vite.config.ts`，但那只是最后一个申请 fd 的倒霉蛋。ENOSPC 是资源耗尽类错误，第一诊断动作永远是 `lsof` / `df` / `ulimit` 类的资源快照，而不是看报错栈。
+2. **验证脚本初版用 `lsof | grep -c inotify` 计数**：没 sudo 时输出永远是 0，结果"看起来 PASS"但其实测的是空气。换成 `readlink /proc/<pid>/fd/*` 后才看到真实数据。验证脚本的**测量工具必须先验证自身可信**。
+3. **验证脚本用错了 workspace 标识**：`/files/watch?workspace=omniterm-dev` 传的是 project name 而非 id，endpoint 走到 fallback 返回空 stream，所以"watcher 根本没创建" — 又一次假 PASS。脚本必须**先确认被测资源真的被分配**了，再测释放。
 
-**具体根因与修复**：**待排查**（详见独立方案 `docs/dev/plans/2026-07-16-inotify-leak-investigation.md`）。
+**具体根因与修复**：
 
-**嫌疑模块**（按概率排序）：
-1. `src/api/files_watch.rs` — `notify` crate 文件目录 SSE 监听，前端 FileManager 切换/关闭时可能没 unwatch
-2. `src/tmux/control_mode.rs` — `SessionActivityMonitor` 的 session 集合 + tokio task 注册
-3. `src/acp/terminal.rs` / `src/acp/client.rs` — Phase 3 新加的 terminal manager + AcpClient 注册
+`src/api/files_watch.rs` 的 SSE handler 每个连接都 `tokio::task::spawn_blocking` 一个线程，线程里 `RecommendedWatcher::new()` 后进入 `loop { thread::sleep(3600) }` 永不退出；返回的 `JoinHandle` 被 `let _watcher_handle = ...` 直接丢弃（变量名带 `_` 前缀 → Rust 立刻 drop JoinHandle，但**不会 abort**底层线程）。结果：
 
-**排查路径**：
-1. 写复现脚本（N 次 session 创建/删除），同时采集 `lsof | grep -c inotify` 时间序列 → 确认泄漏
-2. 单独测 `files_watch` SSE（开 N 次关 N 次）→ 隔离 §1 嫌疑
-3. 代码审计 §2 三个模块的 watch/spawn/注册生命周期
-4. 必要时 `strace -p <pid> -e inotify_add_watch,inotify_rm_watch` 实时观察增删
+- 每打开一个 SSE 连接 → 多一份 inotify watches（递归目录 = 几百个 watch）
+- 客户端断开 → async stream future drop，但 blocking 线程**完全感知不到**，继续 sleep
+- Watcher 永不 drop → `inotify_rm_watch` 永远不调用 → fd 单调增长
+
+`control_mode.rs` 的 `SessionActivityMonitor` 审计通过：`remove_session()` 正确调 `client.stop().await`、`Child` handle 被 reap、reader task 通过 oneshot 信号退出；且它根本不创建 inotify fd（`tmux -C` 走 pipe，不 watch 文件）。ACP 模块同理，无直接 inotify 使用。
+
+修复：加一个 `tokio::sync::watch::channel(())`，sender 由 `async_stream::stream!` generator 持有（`let _shutdown_guard = shutdown_tx;`），blocking task 拿 receiver 在 park loop 里 `while shutdown_rx.has_changed().is_ok() { sleep(250ms) }`。客户端断开 → stream generator drop → sender drop → `has_changed()` 返回 `Err` → loop 退出 → Watcher drop → inotify fds 全部释放。
+
+**验证**：`scripts/verify-inotify-fix.sh` — 打开 12 个并发 SSE 连接，`/proc/<pid>/fd` 扫到 inotify 从 0 涨到 12；全部 kill 后 3 秒内回到 0。回归基线 ±0。
+
+**产出物**：
+- `src/api/files_watch.rs` — 加 shutdown watch channel、去掉死 `if kind_str == "delete"` 分支、清理重复注释
+- `scripts/verify-inotify-fix.sh` — 自动化验证脚本（可重复跑）
+- `docs/dev/plans/2026-07-16-inotify-leak-investigation.md` — 排查方案（保留作为下次类似问题的模板）

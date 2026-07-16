@@ -5,6 +5,7 @@ use axum::{
     Router,
 };
 use futures_util::stream::{self, Stream};
+use futures_util::FutureExt;
 use notify::{Event as NotifyEvent, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::convert::Infallible;
@@ -55,22 +56,24 @@ async fn watch_files(
         }
     };
 
-    let (tx, _rx) = broadcast::channel::<String>(64);
-    let tx_clone = tx.clone();
+    let (tx, mut rx) = broadcast::channel::<String>(64);
 
-    // Create watcher in a blocking task (notify watcher is sync)
+    // Shutdown channel: the `watch::Sender` is held by the stream generator
+    // below. When the SSE body is dropped (client disconnect, tab close,
+    // network drop), the sender goes out of scope and the blocking task's
+    // `shutdown_rx.has_changed()` returns `Err`, breaking its park loop and
+    // letting the `Watcher` drop → `inotify_rm_watch` on every registered path.
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+
     let watch_dir = watch_path.clone();
     let watch_dir_for_cb = watch_dir.clone();
-    let _watcher_handle = tokio::task::spawn_blocking(move || {
-        let tx = tx_clone;
+    tokio::task::spawn_blocking(move || {
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<NotifyEvent, notify::Error>| {
                 let event = match res {
                     Ok(e) => e,
                     Err(_) => return,
                 };
-
-                // Convert notify event to our format
                 let changes = notify_event_to_changes(&event, &watch_dir_for_cb);
                 for change in changes {
                     let _ = tx.send(change);
@@ -82,32 +85,39 @@ async fn watch_files(
             Err(_) => return,
         };
 
-        // Watch the directory recursively
         if watcher.watch(&watch_dir, RecursiveMode::Recursive).is_err() {
             return;
         }
 
-        // Keep the watcher alive until the task is cancelled
+        // Park until the SSE stream releases its `shutdown_tx`.
+        // `watch::Receiver::changed()` is async; `now_or_never()` lets us
+        // poll it from a sync thread without spinning up a runtime. 250 ms
+        // wake cadence is a compromise between shutdown latency and wake cost.
+        let mut rx = shutdown_rx;
         loop {
-            std::thread::sleep(Duration::from_secs(3600));
+            if let Some(result) = rx.changed().now_or_never() {
+                // `Ok(())` = value flipped (unused here); `Err` = sender dropped.
+                // Either way, it's our cue to exit.
+                let _ = result;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
         }
+        // `watcher` drops here → `inotify_rm_watch` for every registered path.
     });
 
-    // Create a receiver for this SSE connection
-    let mut rx = tx.subscribe();
-
     let sse_stream = async_stream::stream! {
+        // `_shutdown_guard` lives as long as the generator; dropping the SSE
+        // body drops the generator, which drops the guard, which drops the
+        // watch sender and wakes the blocking task out of its poll loop.
+        let _shutdown_guard = shutdown_tx;
         loop {
             match rx.recv().await {
                 Ok(data) => {
                     yield Ok(Event::default().event("change").data(data));
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    break;
-                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     };
@@ -146,12 +156,11 @@ fn notify_event_to_changes(event: &NotifyEvent, base_dir: &std::path::Path) -> V
             _ => continue, // ignore access, metadata, etc.
         };
 
-        let json = if kind_str == "delete" {
-            format!(r#"{{"kind":"{}","path":"{}"}}"#, kind_str, escape_json(&rel_path))
-        } else {
-            format!(r#"{{"kind":"{}","path":"{}"}}"#, kind_str, escape_json(&rel_path))
-        };
-
+        let json = format!(
+            r#"{{"kind":"{}","path":"{}"}}"#,
+            kind_str,
+            escape_json(&rel_path)
+        );
         changes.push(json);
     }
 
