@@ -13,11 +13,14 @@ src/
 ├── stores/
 │   ├── appStore.ts      # Zustand: layout, projects, sessions, font size, mobile detection
 │   ├── themeStore.ts    # Zustand: light/dark/system theme + .dark class on <html>
-│   └── toastStore.ts    # Zustand: toast notifications (auto-dismiss)
+│   ├── toastStore.ts    # Zustand: toast notifications (auto-dismiss)
+│   ├── agentStore.ts    # Zustand: agent registry (Phase 3 — static catalog, no live state)
+│   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
 │   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size
 │   ├── useMediaQuery.ts # Mobile breakpoint detection
-│   └── useFileWatcher.ts # SSE file watcher for live directory updates
+│   ├── useFileWatcher.ts # SSE file watcher for live directory updates
+│   └── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
@@ -25,8 +28,10 @@ src/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx
     ├── Terminal/ — Terminal.tsx
+    ├── Chat/ — ChatView.tsx, ChatMessage.tsx, ChatInput.tsx (Phase 4a: ACP session rendering)
+    ├── AgentPicker/ — AgentPicker.tsx (Phase 3: <select> for create-session modal)
     ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx
-    ├── Settings/ — Settings.tsx, SettingsPopup.tsx
+    ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx
     ├── TmuxCheatsheet/ — TmuxCheatsheet.tsx (render), TmuxCheatsheetPopup.tsx (popup), data.ts (command list, single source of truth — 增/删/改命令改本文件 + 两个 translation.json；维护指引见 data.ts 顶部 JSDoc)
     ├── Icons/ — GitBranchIcon.tsx, KeyboardIcon.tsx
     ├── Modal/ — Modal.tsx, ConfirmDialog.tsx
@@ -59,4 +64,49 @@ src/
 5. **effect 只用于同步外部系统**（订阅、浏览器 API、第三方库），不用于派生状态、
    数据转换、通知父组件（应在事件处理中调用）。
 6. 每个订阅 / 定时器 / 事件监听 / 在途请求都必须在 cleanup 中释放，避免内存泄漏与竞态。
+
+## ACP Chat View (Phase 4a)
+
+Session pane splits on `Session.runtime_kind`:
+
+| runtime_kind | Component | Transport |
+|--------------|-----------|-----------|
+| `tmux` | `components/Terminal/Terminal.tsx` | xterm.js + `/api/v1/ws/terminal/{id}` |
+| `acp` | `components/Chat/ChatView.tsx` | React DOM + `/api/v1/ws/acp/{id}` |
+
+The dispatcher lives in `components/Layout/Layout.tsx::SessionView` — it
+reads `activeSession.runtime_kind` and renders the matching view. Both
+desktop and `MobileContent` use it, so the same session opens the same
+view regardless of viewport. The wrapper `key={activeSessionId}` forces
+a full remount on session switch, giving each view a clean WebSocket
+lifecycle without any explicit teardown logic.
+
+### State / connection split
+
+`chatStore.ts` is **state-only**: a `Record<sessionId, ChatSessionState>`
+holding messages, `sending`, `error`, and `mode`. It has no WebSocket or
+HTTP dependencies — actions (`appendChunk`, `pushSystemEvent`, `beginPrompt`,
+`markDone`, `markError`) are called by `useAcpChat.ts`, which owns the
+socket lifecycle and translates `ServerFrame` into store actions.
+
+This split serves three purposes:
+1. Testability — the store is trivially unit-testable in isolation.
+2. Multiple views (desktop + mobile) can share one slice without
+   duplicating sockets.
+3. Phase 4b's `PermissionModal` can plug into the same store without
+   rewriting connection code.
+
+### Session update parsing
+
+The ACP crate's `SessionNotification` wire format isn't pinned in
+Phase 4 — `useAcpChat.extractTextChunk` handles two plausible serde
+shapes for `AgentMessageChunk`:
+```
+{ "AgentMessageChunk": { "content": { "Text": { "text": "..." } } } }
+{ "AgentMessageChunk": { "text": "..." } }
+```
+Other variants are pushed as generic `system` messages labelled by the
+top-level key (`ToolCall`, `Plan`, `CurrentModeUpdate`, …). Phase 5
+will tighten the types once fixture captures from a real agent exist,
+and render rich cards instead of the current text-only fallback.
 

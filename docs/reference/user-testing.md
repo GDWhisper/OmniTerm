@@ -528,6 +528,44 @@ FRONTEND_DIR=frontend/dist
 
 ---
 
+## 12. ACP Chat 视图（Phase 4a）
+
+> 前置：§11 至少创建过一个可用 agent；agent 的 `command` 指向一个可执行且能走通 ACP 协议的二进制（或 §11 异常场景里用于 500 测试的 placeholder）。
+
+### 12.1 Layout 分发
+
+| 步骤 | 预期 |
+|------|------|
+| 选中一个 `runtime_kind='tmux'` 的 session | 主面板渲染 xterm 终端，title bar 显示「terminal」 |
+| 选中一个 `runtime_kind='acp'` 的 session | 主面板渲染 ChatView，title bar 显示「chat」+ 状态 chip（connecting / LIVE / disconnected / error） |
+| 没有选中 session | ChatView 显示「请选择或创建一个 ACP 会话」占位 |
+| 在 tmux 和 ACP session 间切换 | 每次都完整 remount（WS 生命周期重置，无残留连接） |
+| 移动端（< 768px）在 terminal tab 选中 ACP session | MobileContent 也渲染 ChatView，与桌面一致 |
+
+### 12.2 Prompt 与流式渲染
+
+| 步骤 | 预期 |
+|------|------|
+| 输入文字 + Enter | WS 发送 `{"type":"prompt","text":"..."}`；消息列表追加一条 user bubble |
+| Shift+Enter | textarea 换行，不发送 |
+| 发送中（`sending=true`） | textarea 禁用；Send 按钮变成红色 Cancel 按钮 |
+| 收到 `session_update`（AgentMessageChunk） | assistant 气泡追加文本，末尾有闪烁 caret |
+| 收到 `prompt_done` | caret 消失；textarea 恢复可用；Send 按钮复位 |
+| 收到 `prompt_error` | error banner 显示在 title bar 下方，红色背景 |
+| 滚动到历史后收到新 chunk | 不强制滚到底（auto-stick 关闭）；手动滚到底后恢复 auto-stick |
+| 自己发送时 | 自动 stick 到底部以看到自己的消息 |
+
+### 12.3 异常场景
+
+| 步骤 | 预期 |
+|------|------|
+| ACP session WS 连接失败（如后端未启动） | title bar chip 显示 error/disconnected；error banner 提示 |
+| 发送 prompt 时未连接 | Send 按钮 disabled（`connectionState !== 'connected'`） |
+| 发送中点 Cancel | WS 发送 `{"type":"cancel"}`；agent 应中断当前任务 |
+| 切走 ACP session 再切回 | 消息历史保留（chatStore 按 session_id 索引，不在 unmount 时清空） |
+
+---
+
 ## 反馈模板
 
 测试完成后请填写：
