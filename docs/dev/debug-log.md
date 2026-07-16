@@ -301,3 +301,35 @@ const fmSource = useMemo(() => {
 - `getBoundingClientRect().width` 是拖动时**唯一可信**的"当前宽度"——state 永远滞后于实际布局（特别在 auto layout 下）。startW/finalW 都应该读 bbox，不读 state
 - 修了一个 bug 发现**更深层**的 bug（"列宽不跟手"的延迟修完 → 用户开始能拖了 → 才暴露"列错位"）—— 这是正常的递进调试，不要在第一层修完就当 done，要等用户实际使用后才知道下一层问题
 
+
+---
+
+## 2026-07-16: 长运行后端 inotify fd 单调增长（疑似文件监听 / session 注册泄漏） — 待排查
+
+**症状**：前端 Vite 启动报 `ENOSPC: System limit for number of file watchers reached`。`lsof | grep inotify` 统计发现：跑 5 天的 `omniterm-dev` 实例独占 1320 个 inotify fd；同 worktree 新启动的实例只有 78 fd。差 17 倍。
+
+**临时缓解**（已做）：`echo 'fs.inotify.max_user_watches = 524288' > /etc/sysctl.d/60-inotify.conf`。不治本 — 泄漏持续，1-2 周后仍会撑满。
+
+**可复用理论 / 模式**（**假设 — 待验证**）：
+
+- **长期资源注册必须有对称的释放路径**：每个 `Watcher::new()` / `inotify_add_watch()` / `tokio::spawn` 都应该对应一个 drop / `unwatch()` / `abort()`。任何"只增不减"的注册表（特别是 `HashMap<_, Arc<X>>`、长期 tokio task、`notify::Watcher` 实例）都是泄漏嫌疑。
+- **资源泄漏与运行时长的相关性是最强信号**：同二进制、不同运行时长、fd 数差 N 倍 → 几乎 100% 是泄漏。比看代码快得多。`lsof` + 时间序列数据点是定位这类问题的第一手段。
+- **调高系统上限是诊断辅助，不是修复**：把 inotify 上限从 65536 调到 524288 让症状消失，但泄漏仍在；正确的"修复"是让释放路径闭合。
+
+**诊断过程中犯的错误**（**初步**）：
+
+1. **第一时间怀疑 Vite 配置**：ENOSPC 报错的 stack trace 指向 `vite.config.ts` 那一行，但 `vite.config.ts` 本身没变过、新 worktree 也正常。真正的问题是系统全局 inotify 上限被别的进程吃光 — 报错栈只是最后一个申请 fd 的倒霉蛋。
+2. **没第一时间跑 `lsof`**：应该第一反应是「谁吃了 inotify」，而不是「Vite 是不是出问题了」。ENOSPC 是资源耗尽类错误，第一诊断动作永远是 `lsof` / `df` / `ulimit` 类的资源快照。
+
+**具体根因与修复**：**待排查**（详见独立方案 `docs/dev/plans/2026-07-16-inotify-leak-investigation.md`）。
+
+**嫌疑模块**（按概率排序）：
+1. `src/api/files_watch.rs` — `notify` crate 文件目录 SSE 监听，前端 FileManager 切换/关闭时可能没 unwatch
+2. `src/tmux/control_mode.rs` — `SessionActivityMonitor` 的 session 集合 + tokio task 注册
+3. `src/acp/terminal.rs` / `src/acp/client.rs` — Phase 3 新加的 terminal manager + AcpClient 注册
+
+**排查路径**：
+1. 写复现脚本（N 次 session 创建/删除），同时采集 `lsof | grep -c inotify` 时间序列 → 确认泄漏
+2. 单独测 `files_watch` SSE（开 N 次关 N 次）→ 隔离 §1 嫌疑
+3. 代码审计 §2 三个模块的 watch/spawn/注册生命周期
+4. 必要时 `strace -p <pid> -e inotify_add_watch,inotify_rm_watch` 实时观察增删
