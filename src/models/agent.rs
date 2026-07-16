@@ -11,7 +11,11 @@ pub struct AgentEnvVar {
 ///
 /// Stored one row per agent in the `agents` table. `args` and `env` are
 /// serialized as JSON strings in DB (SQLite has no native array type).
-/// `api_key_value` is Phase 3 plaintext; Phase 5 will migrate to keychain.
+///
+/// Credential management is the agent's own responsibility — OmniTerm only
+/// spawns the process and speaks ACP over its stdio. Users who want to
+/// inject env vars (e.g. `ANTHROPIC_API_KEY`) can do so via `env`, but
+/// there is no first-class api-key field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
@@ -19,12 +23,6 @@ pub struct Agent {
     pub command: String,
     pub args: Vec<String>,
     pub env: Vec<AgentEnvVar>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key_env_var: Option<String>,
-    /// Never serialize the plaintext key value back to clients — API layer
-    /// masks it. The field stays here so we can build spawn env internally.
-    #[serde(skip_serializing)]
-    pub api_key_value: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -38,8 +36,6 @@ pub struct CreateAgent {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: Vec<AgentEnvVar>,
-    pub api_key_env_var: Option<String>,
-    pub api_key_value: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +44,4 @@ pub struct UpdateAgent {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<Vec<AgentEnvVar>>,
-    pub api_key_env_var: Option<String>,
-    pub api_key_value: Option<String>,
 }

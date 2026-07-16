@@ -27,8 +27,6 @@ struct AgentRow {
     command: String,
     args: String,
     env: String,
-    api_key_env_var: Option<String>,
-    api_key_value: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -43,8 +41,6 @@ impl AgentRow {
             command: self.command,
             args,
             env,
-            api_key_env_var: self.api_key_env_var,
-            api_key_value: self.api_key_value,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }
@@ -87,16 +83,14 @@ async fn create_agent(
     let env_json = serde_json::to_string(&req.env).unwrap_or_else(|_| "[]".into());
 
     let result = sqlx::query(
-        "INSERT INTO agents (id, display_name, command, args, env, api_key_env_var, api_key_value, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO agents (id, display_name, command, args, env, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&req.display_name)
     .bind(&req.command)
     .bind(&args_json)
     .bind(&env_json)
-    .bind(&req.api_key_env_var)
-    .bind(&req.api_key_value)
     .bind(&now)
     .bind(&now)
     .execute(&state.db)
@@ -115,8 +109,6 @@ async fn create_agent(
         command: req.command,
         args: req.args,
         env: req.env,
-        api_key_env_var: req.api_key_env_var,
-        api_key_value: req.api_key_value,
         created_at: now.clone(),
         updated_at: now,
     };
@@ -155,26 +147,18 @@ async fn update_agent(
     if let Some(v) = req.env {
         current.env = v;
     }
-    if let Some(v) = req.api_key_env_var {
-        current.api_key_env_var = Some(v);
-    }
-    if let Some(v) = req.api_key_value {
-        current.api_key_value = Some(v);
-    }
     current.updated_at = chrono::Utc::now().to_rfc3339();
 
     let args_json = serde_json::to_string(&current.args).unwrap_or_else(|_| "[]".into());
     let env_json = serde_json::to_string(&current.env).unwrap_or_else(|_| "[]".into());
 
     sqlx::query(
-        "UPDATE agents SET display_name = ?, command = ?, args = ?, env = ?, api_key_env_var = ?, api_key_value = ?, updated_at = ? WHERE id = ?",
+        "UPDATE agents SET display_name = ?, command = ?, args = ?, env = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&current.display_name)
     .bind(&current.command)
     .bind(&args_json)
     .bind(&env_json)
-    .bind(&current.api_key_env_var)
-    .bind(&current.api_key_value)
     .bind(&current.updated_at)
     .bind(&id)
     .execute(&state.db)
@@ -197,7 +181,7 @@ async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> 
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
-/// Load an agent for internal use (spawn env includes plaintext api key).
+/// Load an agent for internal use (e.g. spawning).
 pub async fn load_agent(db: &sqlx::SqlitePool, id: &str) -> Option<Agent> {
     let row: Option<AgentRow> = sqlx::query_as("SELECT * FROM agents WHERE id = ?")
         .bind(id)

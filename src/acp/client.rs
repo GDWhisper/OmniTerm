@@ -34,11 +34,6 @@ impl AcpClient {
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
         }
-        if let (Some(env_name), Some(key_value)) =
-            (&agent.api_key_env_var, &agent.api_key_value)
-        {
-            all_args.push(format!("{}={}", env_name, key_value));
-        }
         all_args.push(agent.command.clone());
         all_args.extend(agent.args.clone());
 

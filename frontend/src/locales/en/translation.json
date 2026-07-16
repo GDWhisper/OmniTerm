@@ -233,9 +233,6 @@
   "settings.agents.args": "Arguments (space-separated)",
   "settings.agents.env": "Environment variables",
   "settings.agents.addEnv": "Add",
-  "settings.agents.apiKeyEnvVar": "API key env var name",
-  "settings.agents.apiKeyValue": "API key value",
-  "settings.agents.apiKeyUnchanged": "(leave blank to keep unchanged)",
   "settings.agents.delete": "Delete",
   "settings.agents.save": "Save",
   "settings.agents.saving": "Saving…"

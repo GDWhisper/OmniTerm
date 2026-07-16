@@ -507,7 +507,6 @@ FRONTEND_DIR=frontend/dist
 | 填写 display_name / command / args / env 后点 Save | 列表里出现新 agent chip，选中后回显刚才的值 |
 | 修改 display_name → Save | chip 文字同步更新 |
 | 添加一行 env（KEY=ANTHROPIC_API_KEY, VALUE=xxx），保存后刷新页面 | env 行保留 |
-| 填 api_key_env_var + api_key_value，保存后清空 api_key_value 字段，再次 Save | 不报错（服务端保留原值） |
 | 选中一个 agent → Delete | chip 消失，表单回到新建态 |
 
 ### 11.2 创建 ACP Session（Sidebar → 新建会话）

@@ -119,9 +119,9 @@ export interface AgentEnvVar {
 
 /**
  * Agent configuration (row in `agents` table). Describes how to spawn an
- * ACP-compatible agent subprocess: the executable, its argv, env vars, and
- * (optionally) an API key injected as an env var at spawn time.
- * `api_key_value` is never returned by list/get endpoints (server masks it).
+ * ACP-compatible agent subprocess: the executable, its argv, and env vars.
+ * Credential management is the agent's own responsibility — OmniTerm only
+ * spawns the process and speaks ACP over its stdio.
  */
 export interface Agent {
   id: string
@@ -129,7 +129,6 @@ export interface Agent {
   command: string
   args: string[]
   env: AgentEnvVar[]
-  api_key_env_var?: string
   created_at: string
   updated_at: string
 }
@@ -140,8 +139,6 @@ export interface CreateAgent {
   command: string
   args?: string[]
   env?: AgentEnvVar[]
-  api_key_env_var?: string
-  api_key_value?: string
 }
 
 export interface UpdateAgent {
@@ -149,8 +146,6 @@ export interface UpdateAgent {
   command?: string
   args?: string[]
   env?: AgentEnvVar[]
-  api_key_env_var?: string
-  api_key_value?: string
 }
 
 export interface ExternalSession {

@@ -40,12 +40,6 @@ type FormState = {
   command: string
   args_text: string
   env: AgentEnvVar[]
-  api_key_env_var: string
-  api_key_value: string
-  // When true, the user has typed into the api_key_value field. We only
-  // send api_key_value on save if this flag is set — otherwise we leave
-  // the existing server-side secret untouched.
-  api_key_dirty: boolean
   isNew: boolean
 }
 
@@ -56,9 +50,6 @@ function emptyForm(): FormState {
     command: '',
     args_text: '',
     env: [],
-    api_key_env_var: '',
-    api_key_value: '',
-    api_key_dirty: false,
     isNew: true,
   }
 }
@@ -70,9 +61,6 @@ function formFromAgent(a: Agent): FormState {
     command: a.command,
     args_text: a.args.join(' '),
     env: a.env.map((e) => ({ ...e })),
-    api_key_env_var: a.api_key_env_var ?? '',
-    api_key_value: '',
-    api_key_dirty: false,
     isNew: false,
   }
 }
@@ -135,18 +123,12 @@ export function AgentSettings() {
           command: form.command.trim(),
           args,
           env,
-          api_key_env_var: form.api_key_env_var.trim() || undefined,
-          api_key_value: form.api_key_value || undefined,
         } satisfies CreateAgent)
       : ({
           display_name: form.display_name.trim() || undefined,
           command: form.command.trim() || undefined,
           args,
           env,
-          api_key_env_var: form.api_key_env_var.trim() || undefined,
-          ...(form.api_key_dirty && form.api_key_value
-            ? { api_key_value: form.api_key_value }
-            : {}),
         } satisfies UpdateAgent)
 
     if (!payload.display_name || !payload.command) return
@@ -285,27 +267,6 @@ export function AgentSettings() {
             </div>
           ))}
         </div>
-
-        <Field label={t('settings.agents.apiKeyEnvVar')}>
-          <input
-            className={inputClass}
-            style={inputStyle}
-            value={form.api_key_env_var}
-            onChange={(e) => setForm((f) => ({ ...f, api_key_env_var: e.target.value }))}
-            placeholder="ANTHROPIC_API_KEY"
-          />
-        </Field>
-        <Field label={t('settings.agents.apiKeyValue')}>
-          <input
-            type="password"
-            autoComplete="new-password"
-            className={inputClass}
-            style={inputStyle}
-            value={form.api_key_value}
-            placeholder={form.isNew ? '' : t('settings.agents.apiKeyUnchanged')}
-            onChange={(e) => setForm((f) => ({ ...f, api_key_value: e.target.value, api_key_dirty: true }))}
-          />
-        </Field>
 
         <div className="flex justify-end gap-2 pt-1">
           {!form.isNew && (

@@ -186,7 +186,7 @@ Phase 1+2 全部任务已实施并通过 6 项验证矩阵（cargo build、migra
 
 **目标**：`runtime_kind='acp'` 分支从 HTTP 501 变为可用 —— 用户能从 UI 挑一个 agent、创建 ACP session、收 streaming 响应、发 prompt、看 tool call。
 
-**定位约束**：OmniTerm 是 **通用 ACP hub**，不做 agent 独立适配。所有 ACP 兼容 agent（Claude Code、Gemini CLI、Codex CLI、自定义）走同一条代码路径，靠用户配置的 `AgentConfig { command, args, env, api_key }` 区分。
+**定位约束**：OmniTerm 是 **通用 ACP hub**，不做 agent 独立适配。所有 ACP 兼容 agent（Claude Code、Gemini CLI、Codex CLI、自定义）走同一条代码路径，靠用户配置的 `AgentConfig { command, args, env }` 区分。
 
 ### 6.1 决策日志（已拍板，实施前无待议项）
 
@@ -263,8 +263,6 @@ CREATE TABLE agents (
     command TEXT NOT NULL,
     args TEXT NOT NULL DEFAULT '[]',       -- JSON array
     env TEXT NOT NULL DEFAULT '[]',        -- JSON array of {key,value}
-    api_key_env_var TEXT,                  -- e.g. "ANTHROPIC_API_KEY"
-    api_key_value TEXT,                    -- Phase 3 明文；Phase 5 迁移到 keychain
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
