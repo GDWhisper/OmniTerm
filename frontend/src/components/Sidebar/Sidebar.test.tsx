@@ -182,7 +182,10 @@ describe('Sidebar handleCreateSession', () => {
       expect(vi.mocked(api.createSession)).toHaveBeenCalledWith(
         fakeProject.id,
         fakeWorkspace.path,
-        'my-test-session'
+        'my-test-session',
+        undefined,
+        'tmux',
+        undefined,
       )
     })
 
@@ -240,7 +243,10 @@ describe('Sidebar handleCreateSession', () => {
       expect(vi.mocked(api.createSession)).toHaveBeenCalledWith(
         fakeProject.id,
         fakeWorkspace.path,
-        undefined
+        undefined,
+        undefined,
+        'tmux',
+        undefined,
       )
     })
 

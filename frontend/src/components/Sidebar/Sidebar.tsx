@@ -676,7 +676,7 @@ export function Sidebar() {
         activeWt.path,
         sessName.trim() || undefined,
         undefined,
-        sessAgentId ? 'acp' : undefined,
+        sessAgentId ? 'acp' : 'tmux',
         sessAgentId ?? undefined,
       )
       await loadSessions()

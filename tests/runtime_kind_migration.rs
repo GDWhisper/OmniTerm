@@ -3,6 +3,16 @@
 //! These tests are DB-only (no tmux, no HTTP). They ensure the migration
 //! applies cleanly on a fresh DB and that the RuntimeKind enum round-trips
 //! through both JSON and SQLite TEXT.
+//!
+//! Phase 4 addendum: the Rust-side `RuntimeKind::default()` flips from
+//! `Tmux` to `Acp` once the frontend Chat view lands. The DB schema DEFAULT
+//! stays `'tmux'` so legacy INSERTs (which omit `runtime_kind`) keep the
+//! original behavior. The application layer always passes the value
+//! explicitly (`runtime_kind = ?` in the INSERT), so the two defaults are
+//! independent. The end-to-end AcpClient spawn + prompt flow is exercised
+//! by the Chat view integration tests once Phase 5 lands a fake-agent
+//! binary (see docs/dev/plans/2026-07-15-acp-integration-execution.md §6.5
+//! P3-19 / §6.9 Phase 4 P4-03).
 
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;

@@ -9,8 +9,9 @@ fn is_false(v: &bool) -> bool {
 /// - `Tmux`: session driven by a tmux pane; identified by `tmux_session_name`.
 /// - `Acp`: session driven by an ACP adapter subprocess; identified by `acp_session_id`.
 ///
-/// Phase 2 default is `Tmux` to preserve existing behavior. Phase 4 will flip
-/// the default to `Acp` once the frontend Chat view lands.
+/// Default flipped from `Tmux` (Phase 2) to `Acp` in Phase 4 once the frontend
+/// Chat view landed. Callers that still want a tmux session must pass
+/// `runtime_kind = 'tmux'` explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -21,7 +22,7 @@ pub enum RuntimeKind {
 
 impl Default for RuntimeKind {
     fn default() -> Self {
-        RuntimeKind::Tmux
+        RuntimeKind::Acp
     }
 }
 
