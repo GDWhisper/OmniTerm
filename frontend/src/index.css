@@ -1438,6 +1438,22 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Chat — streaming caret for in-flight assistant messages.
+   Blinking inline block appended to the last line of text while chunks
+   are still arriving; disappears when the message's `streaming` flag
+   clears on `prompt_done`.
+   ──────────────────────────────────────────────────────────────────── */
+.chat-streaming-caret {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: blink-cursor 1s steps(1) infinite;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Corner nails — gold squares at the 4 corners of floating panels.
    Uses 4 absolutely-positioned ::before/::after + 2 <span> children
    (since CSS only gives us 2 pseudo-elements).

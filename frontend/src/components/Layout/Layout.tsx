@@ -3,12 +3,29 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
+import { ChatView } from '../Chat/ChatView'
 import { FileManager } from '../FileManager/FileManager'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
+
+/**
+ * Pick the right pane for the active session: ChatView for ACP-backed
+ * sessions, Terminal for tmux (and the null-session empty state). The
+ * wrapper key in the callers forces a full remount when the active
+ * session changes, so each view's WebSocket lifecycle resets cleanly.
+ */
+function SessionView() {
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const sessions = useAppStore((s) => s.sessions)
+  const activeSession = activeSessionId
+    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+    : null
+  if (activeSession?.runtime_kind === 'acp') return <ChatView />
+  return <Terminal />
+}
 
 export function Layout() {
   const [isDragging, setIsDragging] = useState(false)
@@ -152,9 +169,9 @@ export function Layout() {
           />
         )}
 
-        {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
+        {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
         <div className="flex-1 min-w-0">
-          <Terminal key={activeSessionId ?? 'empty'} />
+          <SessionView key={activeSessionId ?? 'empty'} />
         </div>
 
         {/* FileManager drag handle — hidden when collapsed */}
@@ -319,12 +336,12 @@ function MobileContent() {
 
   switch (displayedTab) {
     case 'terminal':
-      return <Terminal key={activeSessionId ?? 'empty'} />
+      return <SessionView key={activeSessionId ?? 'empty'} />
     case 'files':
       return <div style={wrapperStyle}><FileManager /></div>
     case 'sessions':
       return <div style={wrapperStyle}><Sidebar /></div>
     default:
-      return <Terminal key={activeSessionId ?? 'empty'} />
+      return <SessionView key={activeSessionId ?? 'empty'} />
   }
 }
