@@ -343,3 +343,113 @@ const fmSource = useMemo(() => {
 - `src/api/files_watch.rs` — 加 shutdown watch channel、去掉死 `if kind_str == "delete"` 分支、清理重复注释
 - `scripts/verify-inotify-fix.sh` — 自动化验证脚本（可重复跑）
 - `docs/dev/plans/2026-07-16-inotify-leak-investigation.md` — 排查方案（保留作为下次类似问题的模板）
+
+---
+
+## 2026-07-19: ACP chat 联调 — 七条可复用的调试方法论
+
+**症状**（一组叠加问题）：ChatView 一直显示 "WebSocket error" 横幅；LIVE 绿点但 Enter 无响应；agent 回复被渲染成一堆 `[update]` 芯片而不是文本；`[ToolCall]` / `[ToolCallUpdate]` 刷屏。
+
+**表层根因**：第一次真 agent（codebuddy `--acp`）联调，暴露了 Phase 4a 纯静态验证没覆盖的 6 类问题。
+
+**深层根因 — 7 个独立的可复用模式**：
+
+### 可复用的调试理论
+
+**1. tracing EnvFilter 的 crate 名用 `_` 不是 `-`**
+
+`tracing_subscriber::EnvFilter` 用 Rust module path 当 target，module path 里连字符不合法，所以 `env!("CARGO_PKG_NAME")` 拿到的 `omniterm-dev` 会被静默拒绝（不报错），directive 退化成"全部过滤"——看起来像代码没打 log，其实 log 打了但被 directive 挡了。
+
+**诊断信号**：改了 directive 之后整组 log 一起消失（不是某一两行），且换回 `info` 全局 level 又回来。
+**正确做法**：硬编码下划线形式（`omniterm_dev=debug`），别信 `CARGO_PKG_NAME`。
+
+**2. React 19 StrictMode 让 WebSocket 异步回调与 `useRef` 错位**
+
+StrictMode 在 dev 模式会跑 mount → cleanup → remount。cleanup 关 `ws1`，但 `ws1.onclose` / `ws1.onerror` 是异步事件，触发时 `ws2` 已经接管 `useRef.current`。结果：
+- 旧 `onclose` 把 ref 置 null → 新 socket 的 `sendPrompt` 看到 `ws=null` 直接 bail
+- 旧 `onerror` 把 error state 写上 → 新 socket 即使成功连接也显示横幅
+
+Chrome DevTools 里看到 "WebSocket is closed before the connection is established" 不是后端拒绝，是**客户端自己关的** — StrictMode cleanup 在 `CONNECTING` 状态调用 `close()` 时 Chrome 就这么报。一开始我以为是后端问题，浪费了半小时看后端日志。
+
+**模式**：所有异步回调（`onclose` / `onerror` / `onmessage`）入口处加 identity guard：
+
+```ts
+ws.onclose = () => {
+  if (wsRef.current === ws) { /* 是当前 socket 才处理 */ }
+}
+```
+
+**Chrome 那条 "closed before established" 不是错**，是 StrictMode 的正常行为。生产 build 不双挂载，不会出现。
+
+**3. 内存 supervisor + 持久化 DB 行的生命周期不匹配**
+
+`AcpSupervisor` 是 `HashMap`，进程重启就清空；但 `sessions` 表里 `runtime_kind='acp'` 的行跨重启存活。重启后前端打开这些 session 永远收到 "ACP session not found"。
+
+**泛化**：凡是「运行时对象 map + 持久化指针」的组合，要么**持久化与运行时同寿**（写入/重启时同步清理 DB），要么**持久化只记元数据，运行时对象按需重建**。后者实现复杂，前者通常更省事。
+
+**模式**：启动期 `DELETE FROM x WHERE runtime_kind = 'acp'` 类的清理语句，一行代码解决一类问题。tmux session 不受影响（tmux daemon 跨重启存活，supervisor 也是 daemon 本身）。
+
+**4. UI dispatch 依赖两个异步加载状态时的 render 竞态**
+
+`activeSessionId` 从 localStorage **同步**恢复；`sessions` map 从 API **异步**加载。第一帧 `sessions` 空 → `find` 返回 undefined → 分发到默认 `<Terminal>` → 误开 tmux WS（如果那个 session 其实是 ACP）。
+
+**模式**：当 `id 存在 && 数据未到` 时，渲染 `<div>loading…</div>` 占位而不是 fallback view。区分三种状态：
+- `id == null` → 真正的空态（渲染空页/默认 view）
+- `id != null && data == null` → 加载中（渲染 loading 占位）
+- `id != null && data != null` → 数据就绪（渲染主 view）
+
+**5. wire-format 不匹配时 fallback 路径会"无声吞掉"真实数据**
+
+`agent-client-protocol` crate 默认外部标签枚举（`{ "AgentMessageChunk": { ... } }`），codebuddy 用扁平判别字段（`{ sessionUpdate: "agent_message_chunk", content: {...} }`）。旧 `extractTextChunk` 只认前者，匹配不上就返回 null → 落到 `classifyUpdate` → 渲染成 `[update]` 芯片。**帧确实在来，但被无声归到 fallback 了**。
+
+**诊断顺序**（三步走，不要跳步）：
+1. **抓原始帧**：`console.info('[ACP RX]', ev.data)` dump 真实 payload，确认数据真的到了前端
+2. **对比 wire format**：把抓到的 JSON 跟解析代码期望的形状对拍，找差异点（这次是 `sessionUpdate` vs 外部标签）
+3. **再写适配层**：先在边缘把 vendor 特有形状 normalize 成 canonical，下游解析器只处理 canonical
+
+跳第 1 步直接看代码会原地打转——因为代码本身是"对的"（符合 crate 默认），问题在协议另一端。
+
+**模式**：把厂商差异放在模块顶层的 adapter 表（`SESSION_UPDATE_ADAPTERS: [{ match, rewrite }]`），加第二个 agent 是表追加不是 `onmessage` 分支丛林。
+
+**6. 高频事件必须聚合，不能 fan-out 也不能 drop**
+
+`ToolCall` × N + `ToolCallUpdate` × M 在一个 prompt 内会产出 N+M 条独立消息（fan-out），直接 drop 又违反"agent 行为要用户可感知"。用户原则：**可感知 + 不刷屏**。
+
+**模式**：store 维护"聚合消息 id"（按 prompt 周期重置）+ 按主键（tool name / id）覆盖更新，同一 prompt 内所有相关事件只占一条消息。聚合契约（每 prompt 一块、每主键一行、状态覆盖）一旦锁定，未来升级成 rich card 只换渲染不换数据流。
+
+**反模式**：
+- 直接 drop → 用户失去 agent 行为的可见性
+- 每条事件独立 `messages.push()` → 刷屏
+- 按数量阈值丢弃旧条目 → 状态不连贯
+
+**7. 诊断分三阶段，每阶段有独立的错误特征**
+
+| 阶段 | 目标 | 典型信号 |
+|------|------|---------|
+| **A. 链路通不通** | 确认 socket 能建立、帧能收发 | `[ACP RX]` 开始打真实 payload |
+| **B. 协议对不对** | 确认帧结构符合期望 | 解析函数不再无声落到 fallback |
+| **C. 渲染对不对** | 确认 store 状态正确反映到 UI | 文本流追加、模式芯片更新、工具块聚合 |
+
+**跳阶段是常见错误**：A 没确认就去改渲染（B 的 payload 没看到，渲染代码是蒙眼写）；B 没确认就去调 UI（解析函数落 fallback，UI 怎么调都不对）。**每一阶段的第一步都是加一行 console 抓真实数据**。
+
+### 诊断过程中犯的错误
+
+1. **把 Chrome "WebSocket is closed before the connection is established" 当后端问题查**：这是 StrictMode cleanup 关 `CONNECTING` socket 的正常日志，不是拒绝。浪费了半小时看 Axum WS handler。
+2. **第一反应是 `tracing` 没配好**：`omniterm_server=debug` 看起来没报错，就以为 log 会出来，结果整组日志消失。应该**先验证 directive 是否真的生效**（用一条 info 级别的全局 log 确认），再怀疑代码路径。
+3. **假设 crate 默认 wire format 就是 agent 实际发的**：没抓帧就先写了解析器，被 fallback 无声吞掉后才回头抓。应该**先抓帧后写代码**（见理论 #7）。
+4. **ToolCall 一开始走 `pushSystemEvent` 没做聚合**：把"所有变体 fan-out"当默认行为，没区分频率维度。直到用户报告刷屏才意识到高频状态流和低频事件要两套处理。
+
+### 具体根因与修复
+
+- `src/main.rs`：tracing directive 硬编码 `omniterm_dev=debug`；启动期 purge `sessions WHERE runtime_kind='acp'`
+- `frontend/src/hooks/useAcpChat.ts`：所有异步回调加 `wsRef.current === ws` 守卫；`SESSION_UPDATE_ADAPTERS` 表做 wire format normalization；`classifySessionUpdate` 返回动作标签（`appendText` / `setMode` / `upsertTool` / `pushSystem` / `drop`）
+- `frontend/src/stores/chatStore.ts`：新增 `upsertToolActivity` 聚合 ToolCall 事件；`beginPrompt` 重置聚合状态
+- `frontend/src/components/Layout/Layout.tsx`：`SessionView` 在 `id && !data` 时渲染 loading 占位
+
+**产出物**：4 commits（`d1b61a5` / `f868d66` / `0181d29` / `11fa81e`），Phase 4 plan 文件 Path A 章节追加联调记录。
+
+**教训**：
+- 联调一个新协议（ACP、MCP、LSP、…）时**先建诊断日志再写业务代码**，不要反过来
+- Chrome DevTools 的 WS 错误文案不可靠，"closed before established" 多数时候是本地 cleanup 行为
+- React 19 StrictMode 是 dev-only 行为但**必须**在 dev 下测过才能宣称修复有效，因为 cleanup 时序和 production 完全不同
+- wire format 永远是协议联调的第一个未知量 — 文档里的形状和 agent 实际发的形状常常不一致，**抓帧是唯一真相源**
