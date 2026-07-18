@@ -55,82 +55,128 @@ interface ServerFrame {
 }
 
 /**
- * Extract the text delta from a SessionUpdate when it's an
- * `AgentMessageChunk` variant. Returns null for other variants. The
- * crate's serde emits externally-tagged enums by default:
- * `{ "AgentMessageChunk": { "content": { "Text": { "text": "..." } } } }`
- * — we try both the nested shape and a flat `text` field so Phase 4
- * doesn't block on pinning the exact wire format.
+ * Vendor-specific meta keys that carry agent-phase info. Kept at module
+ * scope so adding a second vendor (claude-agent-acp, etc.) is a local
+ * change instead of branches scattered through `onmessage`.
+ */
+const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ['codebuddy.ai/agentPhase', 'phase'],
+]
+
+/**
+ * Vendor wire-format → canonical shape adapters. Each entry matches one
+ * flat-discriminator pattern and rewrites it to the externally-tagged
+ * `{ VariantName: { ...fields } }` shape that `extractTextChunk` / the
+ * classifier expect. New ACP-speaking agents add one entry here.
+ */
+const SESSION_UPDATE_ADAPTERS: ReadonlyArray<{
+  match: (obj: Record<string, unknown>) => boolean
+  rewrite: (obj: Record<string, unknown>) => Record<string, unknown>
+}> = [
+  {
+    // Codebuddy: `{ sessionUpdate: "agent_message_chunk", content, messageId }`
+    match: (obj) => typeof obj['sessionUpdate'] === 'string',
+    rewrite: (obj) => {
+      const variant = String(obj['sessionUpdate'])
+      const canonicalKey = snakeToPascal(variant)
+      const fields: Record<string, unknown> = {}
+      for (const k of Object.keys(obj)) if (k !== 'sessionUpdate') fields[k] = obj[k]
+      return { [canonicalKey]: fields }
+    },
+  },
+]
+
+function snakeToPascal(s: string): string {
+  return s
+    .split('_')
+    .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p))
+    .join('')
+}
+
+function normalizeSessionUpdate(update: unknown): unknown {
+  if (!update || typeof update !== 'object') return update
+  const obj = update as Record<string, unknown>
+  for (const { match, rewrite } of SESSION_UPDATE_ADAPTERS) {
+    if (match(obj)) return rewrite(obj)
+  }
+  return update
+}
+
+/**
+ * Extract text delta from a canonical SessionUpdate when it's an
+ * `AgentMessageChunk` variant, or null for other variants. Assumes the
+ * input has already been routed through `normalizeSessionUpdate`.
  */
 function extractTextChunk(update: unknown): string | null {
   if (!update || typeof update !== 'object') return null
   const obj = update as Record<string, unknown>
-
-  // Flat discriminator (codebuddy): { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "..." } }
-  if (obj['sessionUpdate'] === 'agent_message_chunk') {
-    const content = obj['content']
-    if (content && typeof content === 'object') {
-      const c = content as Record<string, unknown>
-      if (c['type'] === 'text' && typeof c['text'] === 'string') return c['text']
-      // Looser fallback: any string `text` regardless of `type`
-      if (typeof c['text'] === 'string') return c['text']
+  const chunk = obj['AgentMessageChunk']
+  if (!chunk || typeof chunk !== 'object') return null
+  const content = (chunk as Record<string, unknown>)['content']
+  if (content && typeof content === 'object') {
+    const textObj =
+      (content as Record<string, unknown>)['Text'] ??
+      (content as Record<string, unknown>)['text']
+    if (textObj && typeof textObj === 'object') {
+      const text = (textObj as Record<string, unknown>)['text']
+      if (typeof text === 'string') return text
     }
+    const text = (content as Record<string, unknown>)['text']
+    if (typeof text === 'string') return text
   }
-
-  // Externally-tagged: { "AgentMessageChunk": { ... } }
-  const chunk = obj['AgentMessageChunk'] ?? obj['agent_message_chunk']
-  if (chunk && typeof chunk === 'object') {
-    const content = (chunk as Record<string, unknown>)['content']
-    if (content && typeof content === 'object') {
-      const textObj = (content as Record<string, unknown>)['Text']
-        ?? (content as Record<string, unknown>)['text']
-      if (textObj && typeof textObj === 'object') {
-        const text = (textObj as Record<string, unknown>)['text']
-        if (typeof text === 'string') return text
-      }
-    }
-    const flatText = (chunk as Record<string, unknown>)['text']
-    if (typeof flatText === 'string') return flatText
-  }
-
-  // Flat shape fallback
-  const flatText = obj['text']
+  const flatText = (chunk as Record<string, unknown>)['text']
   return typeof flatText === 'string' ? flatText : null
 }
 
-/**
- * Pull a coarse discriminator out of a SessionUpdate for the system-
- * event fallback path. Used so the chat log can at least label a
- * ToolCall / Plan / CurrentModeUpdate even before Phase 5 renders
- * them as rich cards.
- */
-function classifyUpdate(update: unknown): string {
-  if (!update || typeof update !== 'object') return 'unknown'
-  const obj = update as Record<string, unknown>
-  // Flat discriminator (codebuddy): `sessionUpdate` names the variant
-  if (typeof obj['sessionUpdate'] === 'string') return obj['sessionUpdate']
-  const keys = Object.keys(obj)
-  if (keys.length === 0) return 'unknown'
-  // Externally-tagged enum: single key whose name is the variant
-  if (keys.length === 1) return keys[0]
-  return 'update'
-}
+type SessionUpdateAction =
+  | { kind: 'appendText'; text: string }
+  | { kind: 'setMode'; mode: string }
+  | { kind: 'pushSystem'; label: string }
+  | { kind: 'drop' }
+
+const DROP_VARIANTS: ReadonlySet<string> = new Set([
+  'SessionInfoUpdate', 'session_info_update',
+  'UsageUpdate', 'usage_update',
+])
 
 /**
- * Pull the codebuddy agent-phase string out of a `session_info_update`
- * (`_meta["codebuddy.ai/agentPhase"].phase`), or null if absent. Used to
- * drive the mode chip without flooding the chat with system events.
+ * Decide what the chat store should do with a canonical SessionUpdate.
+ *
+ * - `appendText` — AgentMessageChunk text delta
+ * - `setMode` — agent-phase / CurrentModeUpdate → mode chip
+ * - `pushSystem` — render as `[label]` system event (ToolCall, Plan, …)
+ * - `drop` — low-signal noise (usage counters, title bumps); the hook
+ *   still emits a `console.debug` in dev so nothing is silently lost
  */
-function extractAgentPhase(update: unknown): string | null {
-  if (!update || typeof update !== 'object') return null
+function classifySessionUpdate(update: unknown): SessionUpdateAction {
+  if (!update || typeof update !== 'object') return { kind: 'drop' }
   const obj = update as Record<string, unknown>
-  if (obj['sessionUpdate'] !== 'session_info_update') return null
+
+  const text = extractTextChunk(update)
+  if (text !== null) return { kind: 'appendText', text }
+
   const meta = obj['_meta']
-  if (!meta || typeof meta !== 'object') return null
-  const phaseBlock = (meta as Record<string, unknown>)['codebuddy.ai/agentPhase']
-  if (!phaseBlock || typeof phaseBlock !== 'object') return null
-  const phase = (phaseBlock as Record<string, unknown>)['phase']
-  return typeof phase === 'string' ? phase : null
+  if (meta && typeof meta === 'object') {
+    for (const [metaKey, phaseField] of VENDOR_AGENT_PHASE_KEYS) {
+      const block = (meta as Record<string, unknown>)[metaKey]
+      if (block && typeof block === 'object') {
+        const phase = (block as Record<string, unknown>)[phaseField]
+        if (typeof phase === 'string') return { kind: 'setMode', mode: phase }
+      }
+    }
+  }
+
+  const keys = Object.keys(obj)
+  const variant = keys.length === 1 ? keys[0] : 'update'
+  if (variant === 'CurrentModeUpdate' || variant === 'current_mode_update') {
+    const inner = obj[variant]
+    const mode = inner && typeof inner === 'object' ? (inner as Record<string, unknown>)['mode'] : undefined
+    if (typeof mode === 'string') return { kind: 'setMode', mode }
+  }
+
+  if (DROP_VARIANTS.has(variant)) return { kind: 'drop' }
+
+  return { kind: 'pushSystem', label: variant }
 }
 
 export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
@@ -156,13 +202,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${window.location.host}/api/v1/ws/acp/${encodeURIComponent(sessionId)}`
 
-    console.info('[ACP effect] START sessionId=', sessionId, 'url=', url)
     setConnectionState('connecting')
     setError(sessionId, null)
 
     const ws = new WebSocket(url)
     wsRef.current = ws
-    console.info('[ACP effect] wsRef assigned readyState=', ws.readyState)
 
     ws.onopen = () => {
       setConnectionState('connected')
@@ -176,46 +220,37 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     ws.onmessage = (ev) => {
       const sid = sessionIdRef.current
       if (!sid) return
-      console.info('[ACP RX] frame=', typeof ev.data === 'string' ? ev.data.slice(0, 240) : ev.data)
       let frame: ServerFrame
       try {
-        frame = typeof ev.data === 'string' ? JSON.parse(ev.data) : { type: 'error', message: 'non-text frame' }
+        frame =
+          typeof ev.data === 'string'
+            ? JSON.parse(ev.data)
+            : { type: 'error', message: 'non-text frame' }
       } catch {
         setError(sid, 'malformed frame')
         return
       }
+      if (import.meta.env.DEV) {
+        console.debug('[ACP RX]', frame.type, ev.data)
+      }
       switch (frame.type) {
         case 'session_update': {
-          const update = frame.data?.update
-          const text = extractTextChunk(update)
-          if (text) {
-            appendChunk(sid, text, update)
-          } else {
-            const kind = classifyUpdate(update)
-            const phase = extractAgentPhase(update)
-            if (phase) {
-              // Codebuddy emits frequent `session_info_update` frames with
-              // `_meta.codebuddy.ai/agentPhase.phase` (idle / preparing /
-              // model_requesting / model_streaming / model_done). Routing
-              // them to the mode chip keeps the chat stream readable.
-              useChatStore.getState().setMode(sid, phase)
-            } else if (kind === 'CurrentModeUpdate' || kind === 'current_mode_update') {
-              // Phase 4 coarse: pull mode name if present
-              const inner = update && typeof update === 'object'
-                ? (update as Record<string, unknown>)[Object.keys(update as Record<string, unknown>)[0]]
-                : null
-              const modeName = inner && typeof inner === 'object'
-                ? ((inner as Record<string, unknown>)['mode'] as string | undefined)
-                : undefined
-              if (modeName) {
-                useChatStore.getState().setMode(sid, modeName)
-              }
-              pushSystemEvent(sid, kind, update)
-            } else if (kind !== 'session_info_update' && kind !== 'usage_update') {
-              // Skip noisy-but-low-signal frames (title bumps, usage
-              // counters). Richer variants (tool_call, plan) still render.
-              pushSystemEvent(sid, kind, update)
-            }
+          const raw = frame.data?.update
+          const canonical = normalizeSessionUpdate(raw)
+          const action = classifySessionUpdate(canonical)
+          switch (action.kind) {
+            case 'appendText':
+              appendChunk(sid, action.text, raw)
+              break
+            case 'setMode':
+              useChatStore.getState().setMode(sid, action.mode)
+              break
+            case 'pushSystem':
+              pushSystemEvent(sid, action.label, raw)
+              break
+            case 'drop':
+              if (import.meta.env.DEV) console.debug('[ACP drop]', raw)
+              break
           }
           break
         }
@@ -249,13 +284,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       if (wsRef.current === ws) {
         setConnectionState('disconnected')
         wsRef.current = null
-      } else {
-        console.info('[ACP onclose] stale socket ignored (wsRef points at newer socket)')
       }
     }
 
     return () => {
-      console.info('[ACP effect] CLEANUP ws.readyState=', ws.readyState, 'wsRef.current===ws?', wsRef.current === ws)
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close()
       }
@@ -265,29 +297,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     }
   }, [sessionId, appendChunk, pushSystemEvent, markDone, markError, setError])
 
-  const sendPrompt = useCallback(
-    (text: string) => {
-      const ws = wsRef.current
-      const sid = sessionIdRef.current
-      const trimmed = text.trim()
-      console.info(
-        '[ACP TX] sendPrompt called text=', trimmed.slice(0, 80),
-        'sid=', sid,
-        'ws=', ws ? 'present' : 'null',
-        'readyState=', ws?.readyState,
-      )
-      if (!ws || ws.readyState !== WebSocket.OPEN || !sid) {
-        console.warn('[ACP TX] bail: ws missing / not OPEN / no sid')
-        return
-      }
-      if (!trimmed) return
-      useChatStore.getState().beginPrompt(sid)
-      useChatStore.getState().addUserMessage(sid, trimmed)
-      ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
-      console.info('[ACP TX] sent')
-    },
-    [],
-  )
+  const sendPrompt = useCallback((text: string) => {
+    const ws = wsRef.current
+    const sid = sessionIdRef.current
+    const trimmed = text.trim()
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || !trimmed) return
+    useChatStore.getState().beginPrompt(sid)
+    useChatStore.getState().addUserMessage(sid, trimmed)
+    ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+  }, [])
 
   const cancel = useCallback(() => {
     const ws = wsRef.current

@@ -24,20 +24,6 @@ function SessionView() {
     ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
     : null
 
-  // Diagnostic: trace dispatch decisions so we can catch races where
-  // activeSessionId is set before sessions has been populated.
-  useEffect(() => {
-    const projectKeys = Object.keys(sessions)
-    const totalSessions = projectKeys.reduce((n, k) => n + sessions[k].length, 0)
-    console.info(
-      '[SessionView] id=', activeSessionId,
-      'found=', !!activeSession,
-      'runtime_kind=', activeSession?.runtime_kind ?? null,
-      'sessionsLoaded=', totalSessions,
-      'projectKeys=', projectKeys,
-    )
-  }, [activeSessionId, activeSession, sessions])
-
   if (activeSession?.runtime_kind === 'acp') return <ChatView />
 
   // If we know a session is active but haven't received its row yet, don't
