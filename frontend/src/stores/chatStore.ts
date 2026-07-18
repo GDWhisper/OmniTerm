@@ -47,13 +47,30 @@ interface ChatSessionState {
   error: string | null
   /** Current ACP `mode` if the agent ever reports one (e.g. "plan" / "act"). */
   mode: string | null
+  /**
+   * Id of the in-flight "tool activity" system message that aggregates
+   * ToolCall / ToolCallUpdate events for the current prompt cycle. Reset
+   * on `beginPrompt`. Null when no tool events have been observed yet.
+   */
+  toolActivityMessageId: string | null
+  /**
+   * Latest known status per tool name for the current prompt cycle. Used
+   * to rebuild the aggregated block's text on each upsert without fan-out.
+   */
+  toolActivity: Record<string, string>
 }
 
 interface ChatActions {
   /** Append a streamed text delta to the in-flight assistant message (or open a new one). */
   appendChunk: (sessionId: string, chunk: string, rawUpdate: unknown) => void
-  /** Push a non-text update (tool call / plan / mode change) as a system message. */
+  /** Push a non-text update (plan / mode change / misc) as a system message. */
   pushSystemEvent: (sessionId: string, kind: string, rawUpdate: unknown) => void
+  /**
+   * Record a tool-call lifecycle event in the per-prompt tool-activity
+   * block. Creates the block on first call; same-name updates overwrite
+   * the existing line rather than appending a new one.
+   */
+  upsertToolActivity: (sessionId: string, name: string, status: string) => void
   /** Record a user-sent prompt in the history. */
   addUserMessage: (sessionId: string, text: string) => void
   /** Mark the in-flight assistant message as complete (prompt_done). */
@@ -75,6 +92,8 @@ const EMPTY: ChatSessionState = {
   sending: false,
   error: null,
   mode: null,
+  toolActivityMessageId: null,
+  toolActivity: {},
 }
 
 interface ChatStoreState {
@@ -148,6 +167,36 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages })
     }),
 
+  upsertToolActivity: (sessionId, name, status) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const activity = { ...current.toolActivity, [name]: status }
+      const header = '🛠 工具活动'
+      const body = Object.entries(activity)
+        .map(([n, s]) => `· ${n}  ${s}`)
+        .join('\n')
+      const text = `${header}\n${body}`
+      const messages = [...current.messages]
+      const existingIdx = current.toolActivityMessageId
+        ? messages.findIndex((m) => m.id === current.toolActivityMessageId)
+        : -1
+      let toolActivityMessageId = current.toolActivityMessageId
+      if (existingIdx >= 0) {
+        messages[existingIdx] = { ...messages[existingIdx], text }
+      } else {
+        const id = genId()
+        messages.push({
+          id,
+          role: 'system' as const,
+          text,
+          createdAt: Date.now(),
+          updates: [],
+        })
+        toolActivityMessageId = id
+      }
+      return patch(state, sessionId, { messages, toolActivityMessageId, toolActivity: activity })
+    }),
+
   addUserMessage: (sessionId, text) =>
     set((state) => {
       const current = get(state, sessionId)
@@ -184,7 +233,14 @@ export const useChatStore = create<ChatStore>((set) => ({
     }),
 
   beginPrompt: (sessionId) =>
-    set((state) => patch(state, sessionId, { sending: true, error: null })),
+    set((state) =>
+      patch(state, sessionId, {
+        sending: true,
+        error: null,
+        toolActivityMessageId: null,
+        toolActivity: {},
+      }),
+    ),
 
   setMode: (sessionId, mode) =>
     set((state) => patch(state, sessionId, { mode })),

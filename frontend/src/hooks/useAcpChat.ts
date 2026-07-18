@@ -131,6 +131,7 @@ function extractTextChunk(update: unknown): string | null {
 type SessionUpdateAction =
   | { kind: 'appendText'; text: string }
   | { kind: 'setMode'; mode: string }
+  | { kind: 'upsertTool'; name: string; status: string }
   | { kind: 'pushSystem'; label: string }
   | { kind: 'drop' }
 
@@ -139,12 +140,32 @@ const DROP_VARIANTS: ReadonlySet<string> = new Set([
   'UsageUpdate', 'usage_update',
 ])
 
+const TOOL_VARIANTS: ReadonlySet<string> = new Set([
+  'ToolCall', 'tool_call',
+  'ToolCallUpdate', 'tool_call_update',
+])
+
+function extractToolInfo(update: unknown, variant: string): { name: string; status: string } | null {
+  if (!update || typeof update !== 'object') return null
+  const obj = update as Record<string, unknown>
+  const inner = obj[variant]
+  const source = inner && typeof inner === 'object' ? (inner as Record<string, unknown>) : obj
+  const name = source['title'] ?? source['name'] ?? source['toolName']
+  if (typeof name !== 'string' || !name) return null
+  const statusRaw = source['status']
+  const status = typeof statusRaw === 'string' ? statusRaw
+    : variant === 'ToolCallUpdate' || variant === 'tool_call_update' ? 'updating'
+    : 'running'
+  return { name, status }
+}
+
 /**
  * Decide what the chat store should do with a canonical SessionUpdate.
  *
  * - `appendText` — AgentMessageChunk text delta
  * - `setMode` — agent-phase / CurrentModeUpdate → mode chip
- * - `pushSystem` — render as `[label]` system event (ToolCall, Plan, …)
+ * - `upsertTool` — ToolCall / ToolCallUpdate → aggregated "tool activity" block
+ * - `pushSystem` — render as `[label]` system event (Plan, …)
  * - `drop` — low-signal noise (usage counters, title bumps); the hook
  *   still emits a `console.debug` in dev so nothing is silently lost
  */
@@ -174,6 +195,11 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     if (typeof mode === 'string') return { kind: 'setMode', mode }
   }
 
+  if (TOOL_VARIANTS.has(variant)) {
+    const info = extractToolInfo(update, variant)
+    if (info) return { kind: 'upsertTool', name: info.name, status: info.status }
+  }
+
   if (DROP_VARIANTS.has(variant)) return { kind: 'drop' }
 
   return { kind: 'pushSystem', label: variant }
@@ -189,6 +215,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
   const appendChunk = useChatStore((s) => s.appendChunk)
   const pushSystemEvent = useChatStore((s) => s.pushSystemEvent)
+  const upsertToolActivity = useChatStore((s) => s.upsertToolActivity)
   const markDone = useChatStore((s) => s.markDone)
   const markError = useChatStore((s) => s.markError)
   const setError = useChatStore((s) => s.setError)
@@ -245,6 +272,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             case 'setMode':
               useChatStore.getState().setMode(sid, action.mode)
               break
+            case 'upsertTool':
+              upsertToolActivity(sid, action.name, action.status)
+              break
             case 'pushSystem':
               pushSystemEvent(sid, action.label, raw)
               break
@@ -295,7 +325,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         wsRef.current = null
       }
     }
-  }, [sessionId, appendChunk, pushSystemEvent, markDone, markError, setError])
+  }, [sessionId, appendChunk, pushSystemEvent, upsertToolActivity, markDone, markError, setError])
 
   const sendPrompt = useCallback((text: string) => {
     const ws = wsRef.current
