@@ -23,7 +23,44 @@ function SessionView() {
   const activeSession = activeSessionId
     ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
     : null
+
+  // Diagnostic: trace dispatch decisions so we can catch races where
+  // activeSessionId is set before sessions has been populated.
+  useEffect(() => {
+    const projectKeys = Object.keys(sessions)
+    const totalSessions = projectKeys.reduce((n, k) => n + sessions[k].length, 0)
+    console.info(
+      '[SessionView] id=', activeSessionId,
+      'found=', !!activeSession,
+      'runtime_kind=', activeSession?.runtime_kind ?? null,
+      'sessionsLoaded=', totalSessions,
+      'projectKeys=', projectKeys,
+    )
+  }, [activeSessionId, activeSession, sessions])
+
   if (activeSession?.runtime_kind === 'acp') return <ChatView />
+
+  // If we know a session is active but haven't received its row yet, don't
+  // render Terminal — doing so would open a tmux WS to a session that may
+  // actually be ACP-backed. Wait one render cycle for loadSessions().
+  if (activeSessionId && !activeSession) {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-faint)',
+          fontFamily: 'var(--reader-font, ui-monospace, monospace)',
+          fontSize: 13,
+        }}
+      >
+        loading session…
+      </div>
+    )
+  }
+
   return <Terminal />
 }
 

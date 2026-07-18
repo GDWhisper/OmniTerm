@@ -7,7 +7,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::AppState;
 
@@ -16,6 +16,7 @@ pub async fn ws_acp_handler(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
+    info!("ACP WS upgrade request: session_id={}", session_id);
     ws.on_upgrade(move |socket| handle_acp_ws(socket, session_id, state))
 }
 
@@ -43,8 +44,12 @@ enum AcpServerMessage<'a> {
 
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let client = match state.acp_supervisor.get(&session_id).await {
-        Some(c) => c,
+        Some(c) => {
+            info!("ACP WS connected: session_id={} (supervisor hit)", session_id);
+            c
+        }
         None => {
+            info!("ACP WS rejected: session_id={} not in supervisor", session_id);
             let (mut ws_tx, _) = socket.split();
             let msg = serde_json::to_string(&AcpServerMessage::Error {
                 message: "ACP session not found",
