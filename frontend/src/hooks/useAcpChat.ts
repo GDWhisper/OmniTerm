@@ -66,6 +66,17 @@ function extractTextChunk(update: unknown): string | null {
   if (!update || typeof update !== 'object') return null
   const obj = update as Record<string, unknown>
 
+  // Flat discriminator (codebuddy): { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "..." } }
+  if (obj['sessionUpdate'] === 'agent_message_chunk') {
+    const content = obj['content']
+    if (content && typeof content === 'object') {
+      const c = content as Record<string, unknown>
+      if (c['type'] === 'text' && typeof c['text'] === 'string') return c['text']
+      // Looser fallback: any string `text` regardless of `type`
+      if (typeof c['text'] === 'string') return c['text']
+    }
+  }
+
   // Externally-tagged: { "AgentMessageChunk": { ... } }
   const chunk = obj['AgentMessageChunk'] ?? obj['agent_message_chunk']
   if (chunk && typeof chunk === 'object') {
@@ -95,11 +106,31 @@ function extractTextChunk(update: unknown): string | null {
  */
 function classifyUpdate(update: unknown): string {
   if (!update || typeof update !== 'object') return 'unknown'
-  const keys = Object.keys(update)
+  const obj = update as Record<string, unknown>
+  // Flat discriminator (codebuddy): `sessionUpdate` names the variant
+  if (typeof obj['sessionUpdate'] === 'string') return obj['sessionUpdate']
+  const keys = Object.keys(obj)
   if (keys.length === 0) return 'unknown'
   // Externally-tagged enum: single key whose name is the variant
   if (keys.length === 1) return keys[0]
   return 'update'
+}
+
+/**
+ * Pull the codebuddy agent-phase string out of a `session_info_update`
+ * (`_meta["codebuddy.ai/agentPhase"].phase`), or null if absent. Used to
+ * drive the mode chip without flooding the chat with system events.
+ */
+function extractAgentPhase(update: unknown): string | null {
+  if (!update || typeof update !== 'object') return null
+  const obj = update as Record<string, unknown>
+  if (obj['sessionUpdate'] !== 'session_info_update') return null
+  const meta = obj['_meta']
+  if (!meta || typeof meta !== 'object') return null
+  const phaseBlock = (meta as Record<string, unknown>)['codebuddy.ai/agentPhase']
+  if (!phaseBlock || typeof phaseBlock !== 'object') return null
+  const phase = (phaseBlock as Record<string, unknown>)['phase']
+  return typeof phase === 'string' ? phase : null
 }
 
 export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
@@ -125,17 +156,27 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${window.location.host}/api/v1/ws/acp/${encodeURIComponent(sessionId)}`
 
+    console.info('[ACP effect] START sessionId=', sessionId, 'url=', url)
     setConnectionState('connecting')
     setError(sessionId, null)
 
     const ws = new WebSocket(url)
     wsRef.current = ws
+    console.info('[ACP effect] wsRef assigned readyState=', ws.readyState)
 
-    ws.onopen = () => setConnectionState('connected')
+    ws.onopen = () => {
+      setConnectionState('connected')
+      // Clear any error state accumulated from a prior (StrictMode-killed)
+      // mount's `onerror`. Successful open is the authoritative signal that
+      // the connection is healthy.
+      const sid = sessionIdRef.current
+      if (sid) setError(sid, null)
+    }
 
     ws.onmessage = (ev) => {
       const sid = sessionIdRef.current
       if (!sid) return
+      console.info('[ACP RX] frame=', typeof ev.data === 'string' ? ev.data.slice(0, 240) : ev.data)
       let frame: ServerFrame
       try {
         frame = typeof ev.data === 'string' ? JSON.parse(ev.data) : { type: 'error', message: 'non-text frame' }
@@ -151,7 +192,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             appendChunk(sid, text, update)
           } else {
             const kind = classifyUpdate(update)
-            if (kind === 'CurrentModeUpdate' || kind === 'current_mode_update') {
+            const phase = extractAgentPhase(update)
+            if (phase) {
+              // Codebuddy emits frequent `session_info_update` frames with
+              // `_meta.codebuddy.ai/agentPhase.phase` (idle / preparing /
+              // model_requesting / model_streaming / model_done). Routing
+              // them to the mode chip keeps the chat stream readable.
+              useChatStore.getState().setMode(sid, phase)
+            } else if (kind === 'CurrentModeUpdate' || kind === 'current_mode_update') {
               // Phase 4 coarse: pull mode name if present
               const inner = update && typeof update === 'object'
                 ? (update as Record<string, unknown>)[Object.keys(update as Record<string, unknown>)[0]]
@@ -162,8 +210,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               if (modeName) {
                 useChatStore.getState().setMode(sid, modeName)
               }
+              pushSystemEvent(sid, kind, update)
+            } else if (kind !== 'session_info_update' && kind !== 'usage_update') {
+              // Skip noisy-but-low-signal frames (title bumps, usage
+              // counters). Richer variants (tool_call, plan) still render.
+              pushSystemEvent(sid, kind, update)
             }
-            pushSystemEvent(sid, kind, update)
           }
           break
         }
@@ -180,21 +232,36 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     }
 
     ws.onerror = () => {
+      // Only attribute errors to the current socket. StrictMode's killed
+      // first-mount socket fires onerror asynchronously AFTER the second
+      // mount has replaced wsRef.current — we must not poison the new
+      // socket's error state.
+      if (wsRef.current !== ws) return
       const sid = sessionIdRef.current
       if (sid) setError(sid, 'WebSocket error')
       setConnectionState('error')
     }
 
     ws.onclose = () => {
-      setConnectionState('disconnected')
-      wsRef.current = null
+      // Same StrictMode guard as onerror: only the socket that currently
+      // owns wsRef may clear it. A late onclose from the killed first-
+      // mount socket must not clobber the live second-mount socket.
+      if (wsRef.current === ws) {
+        setConnectionState('disconnected')
+        wsRef.current = null
+      } else {
+        console.info('[ACP onclose] stale socket ignored (wsRef points at newer socket)')
+      }
     }
 
     return () => {
+      console.info('[ACP effect] CLEANUP ws.readyState=', ws.readyState, 'wsRef.current===ws?', wsRef.current === ws)
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close()
       }
-      wsRef.current = null
+      if (wsRef.current === ws) {
+        wsRef.current = null
+      }
     }
   }, [sessionId, appendChunk, pushSystemEvent, markDone, markError, setError])
 
@@ -202,12 +269,22 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     (text: string) => {
       const ws = wsRef.current
       const sid = sessionIdRef.current
-      if (!ws || ws.readyState !== WebSocket.OPEN || !sid) return
       const trimmed = text.trim()
+      console.info(
+        '[ACP TX] sendPrompt called text=', trimmed.slice(0, 80),
+        'sid=', sid,
+        'ws=', ws ? 'present' : 'null',
+        'readyState=', ws?.readyState,
+      )
+      if (!ws || ws.readyState !== WebSocket.OPEN || !sid) {
+        console.warn('[ACP TX] bail: ws missing / not OPEN / no sid')
+        return
+      }
       if (!trimmed) return
       useChatStore.getState().beginPrompt(sid)
       useChatStore.getState().addUserMessage(sid, trimmed)
       ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+      console.info('[ACP TX] sent')
     },
     [],
   )
