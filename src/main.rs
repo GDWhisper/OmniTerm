@@ -105,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         .execute(&db)
         .await?;
     if stale_acp.rows_affected() > 0 {
-        tracing::warn!(
+        tracing::info!(
             "purged {} stale ACP session(s) on startup (supervisor does not survive restarts)",
             stale_acp.rows_affected()
         );

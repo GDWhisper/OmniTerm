@@ -33,7 +33,11 @@ enum AcpClientMessage {
 #[serde(tag = "type")]
 enum AcpServerMessage<'a> {
     #[serde(rename = "error")]
-    Error { message: &'a str },
+    Error {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<&'a str>,
+        message: &'a str,
+    },
     #[serde(rename = "session_update")]
     SessionUpdate { data: serde_json::Value },
     #[serde(rename = "prompt_done")]
@@ -52,10 +56,17 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             info!("ACP WS rejected: session_id={} not in supervisor", session_id);
             let (mut ws_tx, _) = socket.split();
             let msg = serde_json::to_string(&AcpServerMessage::Error {
+                code: Some("session_not_found"),
                 message: "ACP session not found",
             })
             .unwrap();
             let _ = ws_tx.send(Message::Text(msg.into())).await;
+            let _ = ws_tx
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: 1008,
+                    reason: "session not found".into(),
+                })))
+                .await;
             return;
         }
     };
@@ -132,6 +143,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             Err(e) => {
                                 let err_msg = format!("invalid message: {}", e);
                                 let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                    code: None,
                                     message: &err_msg,
                                 })
                                 .unwrap_or_default();

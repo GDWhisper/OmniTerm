@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useChatStore } from '../stores/chatStore'
+import { useAppStore } from '../stores/appStore'
 
 /**
  * Hook owning the ACP chat WebSocket lifecycle for a single session.
@@ -49,6 +50,7 @@ interface SessionUpdateFrame {
 
 interface ServerFrame {
   type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error'
+  code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
   message?: string
@@ -291,7 +293,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           markError(sessionIdRef.current ?? '', frame.message ?? 'prompt failed')
           break
         case 'error':
-          setError(sid, frame.message ?? 'server error')
+          if (frame.code === 'session_not_found') {
+            useChatStore.getState().reset(sid)
+            useAppStore.getState().setActiveSession(null)
+          } else {
+            setError(sid, frame.message ?? 'server error')
+          }
           break
       }
     }
