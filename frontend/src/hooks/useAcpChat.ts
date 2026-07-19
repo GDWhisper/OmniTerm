@@ -32,6 +32,7 @@ interface UseAcpChatResult {
   connectionState: AcpConnectionState
   sendPrompt: (text: string) => void
   cancel: () => void
+  restore: () => void
 }
 
 /**
@@ -48,7 +49,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -213,6 +214,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // with the same id.
   const sessionIdRef = useRef<string | null>(null)
   sessionIdRef.current = sessionId
+  const isReplaying = useRef(false)
+  const suppressReplay = useRef(false)
 
   const appendChunk = useChatStore((s) => s.appendChunk)
   const pushSystemEvent = useChatStore((s) => s.pushSystemEvent)
@@ -263,6 +266,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       }
       switch (frame.type) {
         case 'session_update': {
+          if (isReplaying.current && suppressReplay.current) break
           const raw = frame.data?.update
           const canonical = normalizeSessionUpdate(raw)
           const action = classifySessionUpdate(canonical)
@@ -297,6 +301,17 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           } else {
             setError(sid, frame.message ?? 'server error')
           }
+          break
+        case 'replay_start': {
+          isReplaying.current = true
+          const msgs = useChatStore.getState().states[sid]?.messages
+          suppressReplay.current = !!(msgs && msgs.length > 0)
+          break
+        }
+        case 'replay_end':
+          isReplaying.current = false
+          suppressReplay.current = false
+          useChatStore.getState().clearEnded(sid)
           break
       }
     }
@@ -348,5 +363,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     ws.send(JSON.stringify({ type: 'cancel' }))
   }, [])
 
-  return { connectionState, sendPrompt, cancel }
+  const restore = useCallback(() => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'load_session' }))
+  }, [])
+
+  return { connectionState, sendPrompt, cancel, restore }
 }

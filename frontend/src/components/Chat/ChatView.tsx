@@ -30,7 +30,7 @@ export function ChatView() {
       ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
       : null
 
-  const { connectionState, sendPrompt, cancel } = useAcpChat({
+  const { connectionState, sendPrompt, cancel, restore } = useAcpChat({
     sessionId: activeSessionId,
   })
   const chatState = useChatStore(selectChatState(activeSessionId))
@@ -166,9 +166,29 @@ export function ChatView() {
             color: 'var(--text-muted)',
             fontSize: 12,
             borderBottom: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
           }}
         >
-          {t('chat.session.ended')}
+          <span>{t('chat.session.ended')}</span>
+          <button
+            onClick={restore}
+            disabled={connectionState !== 'connected'}
+            style={{
+              marginLeft: 'auto',
+              padding: '2px 10px',
+              fontSize: 11,
+              borderRadius: 4,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--accent-14)',
+              color: 'var(--accent)',
+              cursor: connectionState === 'connected' ? 'pointer' : 'not-allowed',
+              opacity: connectionState === 'connected' ? 1 : 0.5,
+            }}
+          >
+            {t('chat.session.restore')}
+          </button>
         </div>
       )}
 

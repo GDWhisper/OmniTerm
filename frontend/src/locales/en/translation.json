@@ -117,6 +117,7 @@
   "chat.status.error": "connection error",
   "chat.status.ended": "ended",
   "chat.session.ended": "This session has ended. History is read-only.",
+  "chat.session.restore": "Restore",
   "fm.loadFailed": "Failed to load file list",
   "fm.uploadComplete": "Upload complete",
   "fm.uploadFailed": "Upload failed",

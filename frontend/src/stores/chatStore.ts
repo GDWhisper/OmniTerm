@@ -89,6 +89,8 @@ interface ChatActions {
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
   /** Mark session as ended (agent no longer running) — input becomes read-only. */
   markEnded: (sessionId: string) => void
+  /** Clear the ended flag after a successful session restore. */
+  clearEnded: (sessionId: string) => void
   /** Drop all state for a session (called on session delete / unmount). */
   reset: (sessionId: string) => void
 }
@@ -264,6 +266,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   markEnded: (sessionId) =>
     set((state) => patch(state, sessionId, { sessionEnded: true, sending: false })),
+
+  clearEnded: (sessionId) =>
+    set((state) => patch(state, sessionId, { sessionEnded: false })),
 
   reset: (sessionId) =>
     set((state) => {
