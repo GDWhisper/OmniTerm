@@ -54,8 +54,8 @@ export function ChatView() {
             id: m.id,
             role: m.role as 'user' | 'assistant',
             text: m.text,
+            blocks: [{ type: 'text' as const, text: m.text }],
             createdAt: new Date(m.createdAt).getTime(),
-            updates: [],
           }),
         )
         useChatStore.getState().hydrate(activeSessionId, msgs)

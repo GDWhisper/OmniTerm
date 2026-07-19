@@ -1,16 +1,168 @@
-import type { ChatMessage } from '../../stores/chatStore'
+import { useState } from 'react'
+import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
+import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 
-/**
- * Single chat message bubble. Phase 4 keeps rendering minimal: plain
- * `<pre>` for text (preserves whitespace, no markdown yet), a small
- * kind label for user vs assistant vs system, and a streaming caret
- * while chunks are still arriving.
- *
- * Phase 5 will introduce markdown rendering, tool-call cards, and
- * plan-step checklists — the `updates` array on `ChatMessage` already
- * carries the raw SessionUpdate objects those renderers will consume.
- */
+const TOOL_KIND_ICONS: Record<string, string> = {
+  read: '📖',
+  edit: '✏️',
+  execute: '⬛',
+  search: '🔍',
+  delete: '🗑️',
+  write: '📝',
+  browser: '🌐',
+}
+
+function ThoughtBlockView({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div style={{ margin: '4px 0' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--text-faint)',
+          fontSize: 11,
+          padding: '2px 0',
+          fontFamily: READER_FONT,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+      >
+        💭 {open ? '▾' : '▸'} thinking
+      </button>
+      {open && (
+        <div
+          style={{
+            marginTop: 4,
+            padding: '6px 10px',
+            background: 'var(--bg-elevated)',
+            borderRadius: 6,
+            borderLeft: '2px solid var(--text-faint)',
+            fontSize: 12,
+            color: 'var(--text-muted)',
+            whiteSpace: 'pre-wrap',
+            maxHeight: 300,
+            overflowY: 'auto',
+          }}
+        >
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
+  const [open, setOpen] = useState(false)
+  const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '🔧'
+  const statusIcon = block.status === 'completed' ? '✓'
+    : block.status === 'failed' ? '✗'
+    : block.status === 'running' ? '…'
+    : '↻'
+  const statusColor = block.status === 'completed' ? 'var(--success)'
+    : block.status === 'failed' ? 'var(--danger, #FF7B72)'
+    : 'var(--text-faint)'
+
+  return (
+    <div style={{ margin: '4px 0', fontSize: 12 }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: 'var(--text-secondary)',
+          fontSize: 12,
+          padding: '2px 0',
+          fontFamily: READER_FONT,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          textAlign: 'left',
+        }}
+      >
+        <span>{icon}</span>
+        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {block.title}
+        </span>
+        <span style={{ color: statusColor, fontWeight: 600 }}>{statusIcon}</span>
+        {(block.content || (block.locations && block.locations.length > 0)) && (
+          <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{open ? '▾' : '▸'}</span>
+        )}
+      </button>
+      {open && (
+        <div style={{ marginTop: 4, paddingLeft: 20 }}>
+          {block.locations && block.locations.length > 0 && (
+            <div style={{ color: 'var(--text-faint)', fontSize: 11, marginBottom: 4 }}>
+              {block.locations.map((l) => <div key={l}>📄 {l}</div>)}
+            </div>
+          )}
+          {block.content && (
+            <pre
+              style={{
+                margin: 0,
+                padding: '6px 8px',
+                background: 'var(--bg-elevated)',
+                borderRadius: 4,
+                fontSize: 11,
+                overflow: 'auto',
+                maxHeight: 200,
+                whiteSpace: 'pre-wrap',
+                color: 'var(--text-muted)',
+              }}
+            >
+              {block.content}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlanBlockView({ block }: { block: PlanBlock }) {
+  return (
+    <div style={{ margin: '4px 0', fontSize: 12 }}>
+      {block.entries.map((entry, i) => {
+        const icon = entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '⏳' : '○'
+        const color = entry.status === 'completed' ? 'var(--success)'
+          : entry.status === 'in_progress' ? 'var(--accent)'
+          : 'var(--text-faint)'
+        return (
+          <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'baseline', padding: '1px 0' }}>
+            <span style={{ color, fontSize: 11 }}>{icon}</span>
+            <span style={{ color: 'var(--text-secondary)' }}>{entry.content}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function renderBlock(block: ContentBlock, idx: number) {
+  switch (block.type) {
+    case 'text':
+      return <Markdown key={idx} text={block.text} />
+    case 'thought':
+      return <ThoughtBlockView key={idx} text={block.text} />
+    case 'tool_call':
+      return <ToolCallBlockView key={idx} block={block} />
+    case 'plan':
+      return <PlanBlockView key={idx} block={block} />
+    case 'system':
+      return (
+        <span key={idx} style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+          [{block.label}]
+        </span>
+      )
+  }
+}
+
 export function ChatMessageView({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -50,30 +202,24 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
         {isUser ? 'you' : isSystem ? 'system' : 'agent'}
       </div>
       <div style={bubbleStyle}>
-        <pre
-          style={{
-            margin: 0,
-            whiteSpace: 'pre-wrap',
-            fontFamily: 'inherit',
-            fontSize: 'inherit',
-            lineHeight: 'inherit',
-            color: 'inherit',
-          }}
-        >
-          {message.text}
-          {message.streaming && <span className="chat-streaming-caret" />}
-        </pre>
-        {!isUser && !isSystem && message.updates.length > 1 && (
-          <div
+        {isUser ? (
+          <pre
             style={{
-              marginTop: 6,
-              fontSize: 10,
-              color: 'var(--text-faint)',
-              fontFamily: READER_FONT,
+              margin: 0,
+              whiteSpace: 'pre-wrap',
+              fontFamily: 'inherit',
+              fontSize: 'inherit',
+              lineHeight: 'inherit',
+              color: 'inherit',
             }}
           >
-            {message.updates.length} updates
-          </div>
+            {message.text}
+          </pre>
+        ) : (
+          <>
+            {message.blocks.map((b, i) => renderBlock(b, i))}
+            {message.streaming && <span className="chat-streaming-caret" />}
+          </>
         )}
       </div>
     </div>
