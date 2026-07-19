@@ -7,28 +7,19 @@ interface ChatInputProps {
   onSend: (text: string) => void
   onCancel: () => void
   sending: boolean
+  commands?: string[]
 }
 
-/**
- * Chat input row: textarea + send/cancel controls.
- *
- * - Enter submits; Shift+Enter inserts a newline.
- * - Auto-grows up to 6 lines, then scrolls internally.
- * - Disabled while `sending` is true (waiting for prompt_done) — Phase 4
- *   enforces one in-flight prompt at a time. Phase 5 may allow queueing.
- */
-export function ChatInput({ disabled, onSend, onCancel, sending }: ChatInputProps) {
+export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
+  const [showCommands, setShowCommands] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  // Autofocus the textarea when the component mounts so the user can
-  // start typing immediately after creating an ACP session.
   useEffect(() => {
     textareaRef.current?.focus()
   }, [])
 
-  // Auto-grow the textarea to fit its content (up to 6 lines).
   useEffect(() => {
     const el = textareaRef.current
     if (!el) return
@@ -39,22 +30,42 @@ export function ChatInput({ disabled, onSend, onCancel, sending }: ChatInputProp
     el.style.height = `${next}px`
   }, [text])
 
+  const filteredCommands = text.startsWith('/')
+    ? commands.filter((c) => c.toLowerCase().startsWith(text.toLowerCase()))
+    : []
+
+  useEffect(() => {
+    setShowCommands(filteredCommands.length > 0 && text.startsWith('/') && !text.includes(' '))
+  }, [text, commands])
+
   const canSend = !disabled && !sending && text.trim().length > 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Escape' && showCommands) {
+      setShowCommands(false)
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (canSend) {
         onSend(text)
         setText('')
+        setShowCommands(false)
       }
     }
+  }
+
+  const selectCommand = (cmd: string) => {
+    setText(cmd + ' ')
+    setShowCommands(false)
+    textareaRef.current?.focus()
   }
 
   const handleClickSend = () => {
     if (!canSend) return
     onSend(text)
     setText('')
+    setShowCommands(false)
     textareaRef.current?.focus()
   }
 
@@ -94,8 +105,49 @@ export function ChatInput({ disabled, onSend, onCancel, sending }: ChatInputProp
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
         alignItems: 'flex-end',
+        position: 'relative',
       }}
     >
+      {showCommands && (
+        <div
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: 12,
+            right: 12,
+            maxHeight: 160,
+            overflowY: 'auto',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 8,
+            boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
+            zIndex: 10,
+          }}
+        >
+          {filteredCommands.map((cmd) => (
+            <button
+              key={cmd}
+              onClick={() => selectCommand(cmd)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '6px 12px',
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontFamily: READER_FONT,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
+            >
+              {cmd}
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
         ref={textareaRef}
         value={text}

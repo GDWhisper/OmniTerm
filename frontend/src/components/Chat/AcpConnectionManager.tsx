@@ -12,7 +12,7 @@ import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
  */
 
 function AcpSlot({ sessionId }: { sessionId: string }) {
-  const { connectionState, sendPrompt, cancel, restore } = useAcpChat({ sessionId })
+  const { connectionState, sendPrompt, cancel, restore, respondPermission } = useAcpChat({ sessionId })
   const register = useAcpConnectionStore((s) => s.register)
   const unregister = useAcpConnectionStore((s) => s.unregister)
   const updateState = useAcpConnectionStore((s) => s.updateState)
@@ -23,6 +23,8 @@ function AcpSlot({ sessionId }: { sessionId: string }) {
   cancelRef.current = cancel
   const restoreRef = useRef(restore)
   restoreRef.current = restore
+  const permRef = useRef(respondPermission)
+  permRef.current = respondPermission
 
   useEffect(() => {
     register(sessionId, {
@@ -30,6 +32,7 @@ function AcpSlot({ sessionId }: { sessionId: string }) {
       sendPrompt: (t) => sendRef.current(t),
       cancel: () => cancelRef.current(),
       restore: () => restoreRef.current(),
+      respondPermission: (id, optionId) => permRef.current(id, optionId),
     })
     return () => unregister(sessionId)
   }, [sessionId, register, unregister])

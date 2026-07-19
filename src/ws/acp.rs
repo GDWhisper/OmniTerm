@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info};
 
 use crate::acp::chat_persistence;
+use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::AcpClient;
 use crate::api::agents::load_agent;
 use crate::AppState;
@@ -35,6 +36,8 @@ enum AcpClientMessage {
     Cancel,
     #[serde(rename = "load_session")]
     LoadSession,
+    #[serde(rename = "permission_response")]
+    PermissionResponse { id: String, option_id: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -56,6 +59,11 @@ enum AcpServerMessage<'a> {
     ReplayStart,
     #[serde(rename = "replay_end")]
     ReplayEnd,
+    #[serde(rename = "permission_request")]
+    PermissionRequest {
+        id: &'a str,
+        request: &'a serde_json::Value,
+    },
 }
 
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
@@ -115,6 +123,30 @@ async fn spawn_notify_task(
     });
 }
 
+async fn spawn_permission_task(
+    mut rx: tokio::sync::broadcast::Receiver<PermissionRequestEvent>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let msg = serde_json::to_string(&AcpServerMessage::PermissionRequest {
+                        id: &event.id,
+                        request: &event.request,
+                    })
+                    .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            }
+        }
+    });
+}
+
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
@@ -125,6 +157,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             info!("ACP WS connected: session_id={} (supervisor hit)", session_id);
             let rx = c.session_update_subscribe();
             spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
+            let perm_rx = c.permission_subscribe();
+            spawn_permission_task(perm_rx, notify_tx.clone()).await;
             Some(c)
         }
         None => {
@@ -249,6 +283,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
                                         let rx = new_client.session_update_subscribe();
                                         spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
+                                        let perm_rx = new_client.permission_subscribe();
+                                        spawn_permission_task(perm_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());
 
                                         let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
@@ -275,6 +311,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }).unwrap_or_default();
                                         let _ = ws_tx.send(Message::Text(msg.into())).await;
                                     }
+                                }
+                            }
+                            Ok(AcpClientMessage::PermissionResponse { id, option_id }) => {
+                                if let Some(ref c) = client {
+                                    c.resolve_permission(&id, &option_id).await;
                                 }
                             }
                             Err(e) => {

@@ -1,38 +1,83 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
 use agent_client_protocol::schema::v1::{
-    PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
+    PermissionOptionId, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
 use agent_client_protocol::Responder;
+use serde::Serialize;
+use tokio::sync::{broadcast, Mutex};
+use uuid::Uuid;
 
-/// Phase 3: all permission requests are auto-allowed.
-/// Phase 4 will add a manual queue with oneshot channels for frontend approval.
-pub struct PermissionManager;
+const PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PermissionRequestEvent {
+    pub id: String,
+    pub request: serde_json::Value,
+}
+
+pub struct PermissionManager {
+    pending: Arc<Mutex<HashMap<String, Responder<RequestPermissionResponse>>>>,
+    request_tx: broadcast::Sender<PermissionRequestEvent>,
+}
 
 impl PermissionManager {
-    pub fn resolve(
+    pub fn new() -> Self {
+        let (request_tx, _) = broadcast::channel(16);
+        Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            request_tx,
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
+        self.request_tx.subscribe()
+    }
+
+    pub async fn handle_request(
+        &self,
         request: RequestPermissionRequest,
         responder: Responder<RequestPermissionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        let allow_option = request
-            .options
-            .iter()
-            .find(|opt| {
-                matches!(
-                    opt.kind,
-                    PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
-                )
-            })
-            .or(request.options.first());
+        let id = Uuid::new_v4().to_string();
 
-        match allow_option {
-            Some(opt) => responder.respond(RequestPermissionResponse::new(
+        let event = PermissionRequestEvent {
+            id: id.clone(),
+            request: serde_json::to_value(&request).unwrap_or_default(),
+        };
+
+        self.pending.lock().await.insert(id.clone(), responder);
+        let _ = self.request_tx.send(event);
+
+        let pending = self.pending.clone();
+        let timeout_id = id;
+        tokio::spawn(async move {
+            tokio::time::sleep(PERMISSION_TIMEOUT).await;
+            let mut map = pending.lock().await;
+            if let Some(responder) = map.remove(&timeout_id) {
+                let _ = responder.respond(RequestPermissionResponse::new(
+                    RequestPermissionOutcome::Cancelled,
+                ));
+            }
+        });
+
+        Ok(())
+    }
+
+    pub async fn resolve(&self, id: &str, option_id: &str) -> bool {
+        let mut map = self.pending.lock().await;
+        if let Some(responder) = map.remove(id) {
+            let _ = responder.respond(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    opt.option_id.clone(),
+                    PermissionOptionId::new(option_id),
                 )),
-            )),
-            None => responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Cancelled,
-            )),
+            ));
+            true
+        } else {
+            false
         }
     }
 }

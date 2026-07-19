@@ -12,6 +12,7 @@ interface UseAcpChatResult {
   sendPrompt: (text: string) => void
   cancel: () => void
   restore: () => void
+  respondPermission: (id: string, optionId: string) => void
 }
 
 interface SessionUpdateFrame {
@@ -20,11 +21,13 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
   message?: string
+  id?: string
+  request?: Record<string, unknown>
 }
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
@@ -89,13 +92,13 @@ type SessionUpdateAction =
   | { kind: 'setMode'; mode: string }
   | { kind: 'upsertTool'; toolCallId: string; title: string; status: string; toolKind?: string; content?: string; locations?: string[] }
   | { kind: 'setPlan'; entries: PlanEntry[] }
+  | { kind: 'setUsage'; usage: Record<string, unknown> }
+  | { kind: 'setCommands'; commands: string[] }
   | { kind: 'pushSystem'; label: string }
   | { kind: 'drop' }
 
 const DROP_VARIANTS: ReadonlySet<string> = new Set([
   'SessionInfoUpdate', 'session_info_update',
-  'UsageUpdate', 'usage_update',
-  'AvailableCommandsUpdate', 'available_commands_update',
   'ConfigOptionUpdate', 'config_option_update',
 ])
 
@@ -183,6 +186,25 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     }
   }
 
+  // UsageUpdate
+  if (variant === 'UsageUpdate' || variant === 'usage_update') {
+    const inner = getVariantInner(obj, variant) ?? obj
+    return { kind: 'setUsage', usage: inner }
+  }
+
+  // AvailableCommandsUpdate
+  if (variant === 'AvailableCommandsUpdate' || variant === 'available_commands_update') {
+    const inner = getVariantInner(obj, variant) ?? obj
+    const rawCmds = inner['commands'] ?? inner['availableCommands']
+    if (Array.isArray(rawCmds)) {
+      const commands = rawCmds
+        .map((c) => typeof c === 'string' ? c : (c && typeof c === 'object' ? String((c as Record<string, unknown>)['name'] ?? '') : ''))
+        .filter(Boolean)
+      return { kind: 'setCommands', commands }
+    }
+    return { kind: 'drop' }
+  }
+
   if (DROP_VARIANTS.has(variant)) return { kind: 'drop' }
 
   return { kind: 'pushSystem', label: variant }
@@ -265,6 +287,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             case 'setPlan':
               s.setPlan(sid, action.entries)
               break
+            case 'setUsage':
+              s.setUsage(sid, action.usage)
+              break
+            case 'setCommands':
+              s.setCommands(sid, action.commands)
+              break
             case 'pushSystem':
               s.pushSystemEvent(sid, action.label)
               break
@@ -298,6 +326,24 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           suppressReplay.current = false
           s.clearEnded(sid)
           break
+        case 'permission_request': {
+          const req = frame.request ?? {}
+          const rawOptions = Array.isArray(req['options']) ? req['options'] : []
+          const options = rawOptions
+            .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+            .map((o) => ({
+              option_id: String(o['option_id'] ?? ''),
+              kind: String(o['kind'] ?? ''),
+              name: typeof o['name'] === 'string' ? o['name'] : undefined,
+            }))
+          const toolName = typeof req['tool_name'] === 'string' ? req['tool_name']
+            : typeof req['toolName'] === 'string' ? req['toolName']
+            : undefined
+          if (frame.id) {
+            s.setPermission(sid, { id: frame.id, options, toolName })
+          }
+          break
+        }
       }
     }
 
@@ -345,5 +391,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     ws.send(JSON.stringify({ type: 'load_session' }))
   }, [])
 
-  return { connectionState, sendPrompt, cancel, restore }
+  const respondPermission = useCallback((id: string, optionId: string) => {
+    const ws = wsRef.current
+    const sid = sessionIdRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sid) return
+    ws.send(JSON.stringify({ type: 'permission_response', id, option_id: optionId }))
+    useChatStore.getState().clearPermission(sid)
+  }, [])
+
+  return { connectionState, sendPrompt, cancel, restore, respondPermission }
 }

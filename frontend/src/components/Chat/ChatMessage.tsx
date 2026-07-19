@@ -56,6 +56,56 @@ function ThoughtBlockView({ text }: { text: string }) {
   )
 }
 
+function looksLikeDiff(text: string): boolean {
+  const lines = text.split('\n')
+  if (lines.length < 3) return false
+  let diffLines = 0
+  for (const l of lines.slice(0, 20)) {
+    if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@') || l.startsWith('+') || l.startsWith('-')) {
+      diffLines++
+    }
+  }
+  return diffLines >= 3
+}
+
+function DiffView({ text }: { text: string }) {
+  const lines = text.split('\n')
+  return (
+    <pre
+      style={{
+        margin: 0,
+        padding: '6px 8px',
+        background: '#1a1e24',
+        borderRadius: 4,
+        fontSize: 11,
+        overflow: 'auto',
+        maxHeight: 300,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        lineHeight: 1.5,
+      }}
+    >
+      {lines.map((line, i) => {
+        let color = '#d1d5db'
+        let bg = 'transparent'
+        if (line.startsWith('+++') || line.startsWith('---')) {
+          color = '#8b949e'
+        } else if (line.startsWith('@@')) {
+          color = '#79c0ff'
+        } else if (line.startsWith('+')) {
+          color = '#aff5b4'
+          bg = 'rgba(46, 160, 67, 0.15)'
+        } else if (line.startsWith('-')) {
+          color = '#ffa198'
+          bg = 'rgba(248, 81, 73, 0.15)'
+        }
+        return (
+          <div key={i} style={{ color, background: bg, minHeight: '1em' }}>{line || ' '}</div>
+        )
+      })}
+    </pre>
+  )
+}
+
 function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
   const [open, setOpen] = useState(false)
   const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '🔧'
@@ -66,6 +116,10 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
   const statusColor = block.status === 'completed' ? 'var(--success)'
     : block.status === 'failed' ? 'var(--danger, #FF7B72)'
     : 'var(--text-faint)'
+
+  const isTerminal = block.kind === 'execute'
+  const isDiff = block.content ? looksLikeDiff(block.content) : false
+  const hasContent = block.content || (block.locations && block.locations.length > 0)
 
   return (
     <div style={{ margin: '4px 0', fontSize: 12 }}>
@@ -91,7 +145,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
           {block.title}
         </span>
         <span style={{ color: statusColor, fontWeight: 600 }}>{statusIcon}</span>
-        {(block.content || (block.locations && block.locations.length > 0)) && (
+        {hasContent && (
           <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{open ? '▾' : '▸'}</span>
         )}
       </button>
@@ -102,18 +156,20 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
               {block.locations.map((l) => <div key={l}>📄 {l}</div>)}
             </div>
           )}
-          {block.content && (
+          {block.content && isDiff && <DiffView text={block.content} />}
+          {block.content && !isDiff && (
             <pre
               style={{
                 margin: 0,
                 padding: '6px 8px',
-                background: 'var(--bg-elevated)',
+                background: isTerminal ? '#1a1e24' : 'var(--bg-elevated)',
                 borderRadius: 4,
                 fontSize: 11,
                 overflow: 'auto',
                 maxHeight: 200,
                 whiteSpace: 'pre-wrap',
-                color: 'var(--text-muted)',
+                color: isTerminal ? '#d1d5db' : 'var(--text-muted)',
+                fontFamily: isTerminal ? 'ui-monospace, SFMono-Regular, Menlo, monospace' : 'inherit',
               }}
             >
               {block.content}

@@ -6,6 +6,7 @@ interface AcpConnectionEntry {
   sendPrompt: (text: string) => void
   cancel: () => void
   restore: () => void
+  respondPermission: (id: string, optionId: string) => void
 }
 
 interface AcpConnectionStore {

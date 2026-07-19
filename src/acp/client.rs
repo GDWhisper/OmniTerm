@@ -14,7 +14,7 @@ use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::acp::handler;
-use crate::acp::permission::PermissionManager;
+use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::AcpTerminalManager;
 use crate::models::agent::Agent;
 
@@ -25,6 +25,7 @@ pub struct AcpClient {
     _shutdown_tx: oneshot::Sender<()>,
     connection_task: JoinHandle<Result<(), AcpError>>,
     terminal_manager: Arc<AcpTerminalManager>,
+    permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
 }
 
@@ -48,6 +49,8 @@ impl AcpClient {
         let notif_tx = session_update_tx.clone();
         let terminal_manager = Arc::new(AcpTerminalManager::new());
         let tm = terminal_manager.clone();
+        let permission_manager = Arc::new(PermissionManager::new());
+        let pm = permission_manager.clone();
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -62,8 +65,11 @@ impl AcpClient {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _cx| {
-                    PermissionManager::resolve(request, responder)
+                {
+                    let pm = pm.clone();
+                    async move |request: RequestPermissionRequest, responder, _cx| {
+                        pm.handle_request(request, responder).await
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -162,12 +168,21 @@ impl AcpClient {
             _shutdown_tx: shutdown_tx,
             connection_task,
             terminal_manager,
+            permission_manager,
             supports_load_session,
         })
     }
 
     pub fn session_update_subscribe(&self) -> broadcast::Receiver<SessionNotification> {
         self.session_update_tx.subscribe()
+    }
+
+    pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
+        self.permission_manager.subscribe()
+    }
+
+    pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
+        self.permission_manager.resolve(id, option_id).await
     }
 
     pub fn session_id(&self) -> &SessionId {
@@ -209,7 +224,7 @@ impl AcpClient {
 
     pub async fn spawn_and_load(
         agent: Agent,
-        cwd: PathBuf,
+        _cwd: PathBuf,
         acp_session_id: String,
     ) -> Result<Self, AcpError> {
         let mut all_args: Vec<String> = Vec::new();
@@ -229,6 +244,8 @@ impl AcpClient {
         let notif_tx = session_update_tx.clone();
         let terminal_manager = Arc::new(AcpTerminalManager::new());
         let tm = terminal_manager.clone();
+        let permission_manager = Arc::new(PermissionManager::new());
+        let pm = permission_manager.clone();
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -243,8 +260,11 @@ impl AcpClient {
                 agent_client_protocol::on_receive_notification!(),
             )
             .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _cx| {
-                    PermissionManager::resolve(request, responder)
+                {
+                    let pm = pm.clone();
+                    async move |request: RequestPermissionRequest, responder, _cx| {
+                        pm.handle_request(request, responder).await
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -306,7 +326,6 @@ impl AcpClient {
                 agent_client_protocol::on_receive_request!(),
             );
 
-        let load_cwd = cwd.clone();
         let connection_task = tokio::spawn(async move {
             builder
                 .connect_with(
@@ -339,6 +358,7 @@ impl AcpClient {
             _shutdown_tx: shutdown_tx,
             connection_task,
             terminal_manager,
+            permission_manager,
             supports_load_session,
         })
     }

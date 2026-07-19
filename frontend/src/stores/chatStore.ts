@@ -39,6 +39,20 @@ export interface SystemBlock {
 
 export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | SystemBlock
 
+// --- Permission request (ephemeral, not persisted as a message block) ---
+
+export interface PermissionOption {
+  option_id: string
+  kind: string
+  name?: string
+}
+
+export interface PendingPermission {
+  id: string
+  options: PermissionOption[]
+  toolName?: string
+}
+
 // --- Message model ---
 
 export interface ChatMessage {
@@ -58,6 +72,9 @@ interface ChatSessionState {
   error: string | null
   mode: string | null
   sessionEnded: boolean
+  pendingPermission: PendingPermission | null
+  usage: Record<string, unknown> | null
+  commands: string[]
 }
 
 interface ChatActions {
@@ -75,6 +92,10 @@ interface ChatActions {
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
+  setPermission: (sessionId: string, permission: PendingPermission) => void
+  clearPermission: (sessionId: string) => void
+  setUsage: (sessionId: string, usage: Record<string, unknown>) => void
+  setCommands: (sessionId: string, commands: string[]) => void
   reset: (sessionId: string) => void
 }
 
@@ -84,6 +105,9 @@ const EMPTY: ChatSessionState = {
   error: null,
   mode: null,
   sessionEnded: false,
+  pendingPermission: null,
+  usage: null,
+  commands: [],
 }
 
 interface ChatStoreState {
@@ -296,6 +320,18 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   clearEnded: (sessionId) =>
     set((state) => patch(state, sessionId, { sessionEnded: false })),
+
+  setPermission: (sessionId, permission) =>
+    set((state) => patch(state, sessionId, { pendingPermission: permission })),
+
+  clearPermission: (sessionId) =>
+    set((state) => patch(state, sessionId, { pendingPermission: null })),
+
+  setUsage: (sessionId, usage) =>
+    set((state) => patch(state, sessionId, { usage })),
+
+  setCommands: (sessionId, commands) =>
+    set((state) => patch(state, sessionId, { commands })),
 
   reset: (sessionId) =>
     set((state) => {

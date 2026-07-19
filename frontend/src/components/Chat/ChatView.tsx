@@ -5,6 +5,7 @@ import { useChatStore, selectChatState, type ChatMessage } from '../../stores/ch
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
+import { PermissionBanner } from './PermissionBanner'
 import { READER_FONT } from '../../utils/fonts'
 
 /**
@@ -37,6 +38,7 @@ export function ChatView() {
   const sendPrompt = conn?.sendPrompt ?? (() => {})
   const cancel = conn?.cancel ?? (() => {})
   const restore = conn?.restore ?? (() => {})
+  const respondPermission = conn?.respondPermission ?? (() => {})
   const chatState = useChatStore(selectChatState(activeSessionId))
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -158,6 +160,27 @@ export function ChatView() {
             {chatState.mode.toUpperCase()}
           </span>
         )}
+        {chatState.usage && (() => {
+          const u = chatState.usage
+          const tokens = u['totalTokens'] ?? u['total_tokens'] ?? u['tokens']
+          const cost = u['cost'] ?? u['totalCost']
+          if (!tokens && !cost) return null
+          return (
+            <span
+              style={{
+                marginLeft: 8,
+                padding: '1px 8px',
+                fontSize: 10,
+                color: 'var(--text-faint)',
+                borderRadius: 4,
+              }}
+            >
+              {tokens ? `${Number(tokens).toLocaleString()} tok` : ''}
+              {tokens && cost ? ' · ' : ''}
+              {cost ? `$${Number(cost).toFixed(4)}` : ''}
+            </span>
+          )
+        })()}
         <span className="title-bar-spacer" />
         {titleChip}
       </div>
@@ -242,11 +265,19 @@ export function ChatView() {
         ))}
       </div>
 
+      {chatState.pendingPermission && (
+        <PermissionBanner
+          permission={chatState.pendingPermission}
+          onRespond={respondPermission}
+        />
+      )}
+
       <ChatInput
         disabled={inputDisabled}
         sending={chatState.sending}
         onSend={handleSend}
         onCancel={cancel}
+        commands={chatState.commands}
       />
     </div>
   )
