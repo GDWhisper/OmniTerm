@@ -238,12 +238,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
     const ws = new WebSocket(url)
     wsRef.current = ws
+    let disposed = false
 
     ws.onopen = () => {
+      if (disposed) {
+        ws.close()
+        return
+      }
       setConnectionState('connected')
-      // Clear any error state accumulated from a prior (StrictMode-killed)
-      // mount's `onerror`. Successful open is the authoritative signal that
-      // the connection is healthy.
       const sid = sessionIdRef.current
       if (sid) setError(sid, null)
     }
@@ -338,7 +340,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     }
 
     return () => {
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      disposed = true
+      if (ws.readyState === WebSocket.OPEN) {
         ws.close()
       }
       if (wsRef.current === ws) {
