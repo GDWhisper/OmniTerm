@@ -61,7 +61,17 @@ enum AcpServerMessage<'a> {
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
     let update = data.get("update")?;
     let obj = update.as_object()?;
-    let chunk = obj.get("AgentMessageChunk")?;
+
+    let chunk = if let Some(c) = obj.get("AgentMessageChunk") {
+        c
+    } else if obj.get("sessionUpdate").and_then(|v| v.as_str())
+        == Some("agent_message_chunk")
+    {
+        update
+    } else {
+        return None;
+    };
+
     let content = chunk.get("content")?;
     if let Some(text_obj) = content.get("Text").or_else(|| content.get("text")) {
         if let Some(t) = text_obj.get("text").and_then(|v| v.as_str()) {
