@@ -673,7 +673,13 @@ export function Sidebar() {
     setSubmitting(true)
     try {
       const name = sessName.trim() || (sessAgentId
-        ? useAgentStore.getState().agents.find((a) => a.id === sessAgentId)?.display_name
+        ? (() => {
+            const agent = useAgentStore.getState().agents.find((a) => a.id === sessAgentId)
+            if (!agent) return undefined
+            const now = new Date()
+            const ts = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+            return `${agent.display_name}_${ts}`
+          })()
         : undefined)
       const newSession = await api.createSession(
         activeProjectId,
