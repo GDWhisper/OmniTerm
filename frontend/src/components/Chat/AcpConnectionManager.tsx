@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { useAppStore } from '../stores/appStore'
-import { useAcpChat } from '../hooks/useAcpChat'
-import { useAcpConnectionStore } from '../stores/acpConnectionStore'
+import { useAppStore } from '../../stores/appStore'
+import { useAcpChat } from '../../hooks/useAcpChat'
+import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 
 /**
  * Persistent connection layer for ACP sessions. Rendered once at the
