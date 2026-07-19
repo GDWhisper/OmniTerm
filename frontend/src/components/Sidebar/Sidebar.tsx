@@ -14,6 +14,7 @@ import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
+import { useAgentStore } from '../../stores/agentStore'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
@@ -671,10 +672,13 @@ export function Sidebar() {
 
     setSubmitting(true)
     try {
+      const name = sessName.trim() || (sessAgentId
+        ? useAgentStore.getState().agents.find((a) => a.id === sessAgentId)?.display_name
+        : undefined)
       const newSession = await api.createSession(
         activeProjectId,
         activeWt.path,
-        sessName.trim() || undefined,
+        name || undefined,
         undefined,
         sessAgentId ? 'acp' : 'tmux',
         sessAgentId ?? undefined,
