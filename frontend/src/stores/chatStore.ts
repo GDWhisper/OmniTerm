@@ -47,6 +47,8 @@ interface ChatSessionState {
   error: string | null
   /** Current ACP `mode` if the agent ever reports one (e.g. "plan" / "act"). */
   mode: string | null
+  /** True when the agent is no longer running — history is read-only. */
+  sessionEnded: boolean
   /**
    * Id of the in-flight "tool activity" system message that aggregates
    * ToolCall / ToolCallUpdate events for the current prompt cycle. Reset
@@ -83,6 +85,10 @@ interface ChatActions {
   setMode: (sessionId: string, mode: string) => void
   /** Set the connection / protocol error banner. */
   setError: (sessionId: string, message: string | null) => void
+  /** Load persisted message history (called on mount / reconnect). */
+  hydrate: (sessionId: string, messages: ChatMessage[]) => void
+  /** Mark session as ended (agent no longer running) — input becomes read-only. */
+  markEnded: (sessionId: string) => void
   /** Drop all state for a session (called on session delete / unmount). */
   reset: (sessionId: string) => void
 }
@@ -92,6 +98,7 @@ const EMPTY: ChatSessionState = {
   sending: false,
   error: null,
   mode: null,
+  sessionEnded: false,
   toolActivityMessageId: null,
   toolActivity: {},
 }
@@ -247,6 +254,16 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setError: (sessionId, message) =>
     set((state) => patch(state, sessionId, { error: message })),
+
+  hydrate: (sessionId, messages) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      if (current.messages.length > 0) return state
+      return patch(state, sessionId, { messages })
+    }),
+
+  markEnded: (sessionId) =>
+    set((state) => patch(state, sessionId, { sessionEnded: true, sending: false })),
 
   reset: (sessionId) =>
     set((state) => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState } from '../../stores/chatStore'
+import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpChat } from '../../hooks/useAcpChat'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
@@ -37,6 +37,28 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    let cancelled = false
+    fetch(`/api/v1/sessions/${encodeURIComponent(activeSessionId)}/messages`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.messages?.length) return
+        const msgs: ChatMessage[] = data.messages.map(
+          (m: { id: string; role: string; text: string; createdAt: string }) => ({
+            id: m.id,
+            role: m.role as 'user' | 'assistant',
+            text: m.text,
+            createdAt: new Date(m.createdAt).getTime(),
+            updates: [],
+          }),
+        )
+        useChatStore.getState().hydrate(activeSessionId, msgs)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [activeSessionId])
 
   // Re-stick whenever a new chunk/message lands while autoStick is on.
   useEffect(() => {
@@ -86,6 +108,9 @@ export function ChatView() {
   }
 
   const titleChip = (() => {
+    if (chatState.sessionEnded) {
+      return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.ended')}</span>
+    }
     switch (connectionState) {
       case 'connecting':
         return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.connecting')}</span>
@@ -98,6 +123,8 @@ export function ChatView() {
         return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.disconnected')}</span>
     }
   })()
+
+  const inputDisabled = chatState.sessionEnded || connectionState !== 'connected'
 
   return (
     <div
@@ -130,6 +157,20 @@ export function ChatView() {
         <span className="title-bar-spacer" />
         {titleChip}
       </div>
+
+      {chatState.sessionEnded && (
+        <div
+          style={{
+            padding: '6px 12px',
+            background: 'rgba(255, 255, 255, 0.04)',
+            color: 'var(--text-muted)',
+            fontSize: 12,
+            borderBottom: '1px solid var(--border-subtle)',
+          }}
+        >
+          {t('chat.session.ended')}
+        </div>
+      )}
 
       {chatState.error && (
         <div
@@ -178,7 +219,7 @@ export function ChatView() {
       </div>
 
       <ChatInput
-        disabled={connectionState !== 'connected'}
+        disabled={inputDisabled}
         sending={chatState.sending}
         onSend={handleSend}
         onCancel={cancel}

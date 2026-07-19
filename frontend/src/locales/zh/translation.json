@@ -115,6 +115,8 @@
   "chat.status.connecting": "连接中…",
   "chat.status.disconnected": "已断开",
   "chat.status.error": "连接错误",
+  "chat.status.ended": "已结束",
+  "chat.session.ended": "此会话已结束，历史记录仅供查阅。",
   "fm.loadFailed": "加载文件列表失败",
   "fm.uploadComplete": "上传完成",
   "fm.uploadFailed": "上传失败",

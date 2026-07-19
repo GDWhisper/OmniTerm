@@ -96,21 +96,6 @@ async fn main() -> anyhow::Result<()> {
 
     sqlx::migrate!("./migrations").run(&db).await?;
 
-    // ACP 会话跨重启无法恢复：supervisor 是内存 HashMap，重启后旧 ACP
-    // session 的 AcpClient 已不存在，前端若试图连这些 session 会收到
-    // "ACP session not found" 并一直显示错误横幅。启动时把孤儿 ACP 行删
-    // 掉，让用户从干净状态重新开始。tmux session 不受影响（tmux daemon
-    // 跨重启存活，可通过 adopt 流程重新接入）。
-    let stale_acp = sqlx::query("DELETE FROM sessions WHERE runtime_kind = 'acp'")
-        .execute(&db)
-        .await?;
-    if stale_acp.rows_affected() > 0 {
-        tracing::info!(
-            "purged {} stale ACP session(s) on startup (supervisor does not survive restarts)",
-            stale_acp.rows_affected()
-        );
-    }
-
     let activity_monitor =
         tmux::control_mode::SessionActivityMonitor::new(tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT);
 

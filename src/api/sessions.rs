@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/sessions/{id}/cwd", get(get_session_cwd))
         .route("/sessions/{id}/prompt", post(send_prompt))
+        .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/external", get(list_external_sessions))
         .route("/sessions/adopt", post(adopt_session))
 }
@@ -382,6 +383,27 @@ async fn send_prompt(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("{}", e) })),
+        ),
+    }
+}
+
+async fn list_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match crate::acp::chat_persistence::list_messages(&state.db, &id).await {
+        Ok(rows) => {
+            let messages: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(role, text, created_at, msg_id)| {
+                    json!({ "id": msg_id, "role": role, "text": text, "createdAt": created_at })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "messages": messages })))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
         ),
     }
 }

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useChatStore } from '../stores/chatStore'
-import { useAppStore } from '../stores/appStore'
 
 /**
  * Hook owning the ACP chat WebSocket lifecycle for a single session.
@@ -294,8 +293,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         case 'error':
           if (frame.code === 'session_not_found') {
-            useChatStore.getState().reset(sid)
-            useAppStore.getState().setActiveSession(null)
+            useChatStore.getState().markEnded(sid)
           } else {
             setError(sid, frame.message ?? 'server error')
           }

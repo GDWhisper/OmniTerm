@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -7,8 +9,10 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::{error, info};
 
+use crate::acp::chat_persistence;
 use crate::AppState;
 
 pub async fn ws_acp_handler(
@@ -46,6 +50,25 @@ enum AcpServerMessage<'a> {
     PromptError { message: &'a str },
 }
 
+fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
+    let update = data.get("update")?;
+    let obj = update.as_object()?;
+    let chunk = obj.get("AgentMessageChunk")?;
+    let content = chunk.get("content")?;
+    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text")) {
+        if let Some(t) = text_obj.get("text").and_then(|v| v.as_str()) {
+            return Some(t.to_string());
+        }
+    }
+    if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
+        return Some(t.to_string());
+    }
+    if let Some(t) = chunk.get("text").and_then(|v| v.as_str()) {
+        return Some(t.to_string());
+    }
+    None
+}
+
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let client = match state.acp_supervisor.get(&session_id).await {
         Some(c) => {
@@ -77,12 +100,18 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let client_for_recv = client.clone();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
 
+    let assistant_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let buf_for_notify = assistant_buf.clone();
+
     let notify_tx_spawn = notify_tx.clone();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(notification) => {
                     let data = serde_json::to_value(&notification).unwrap_or_default();
+                    if let Some(text) = extract_text_from_notification(&data) {
+                        buf_for_notify.lock().await.push_str(&text);
+                    }
                     let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
                         .unwrap_or_default();
                     if notify_tx_spawn
@@ -101,6 +130,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
         }
     });
 
+    let db = state.db.clone();
+    let sid_for_prompt = session_id.clone();
+
     loop {
         tokio::select! {
             msg = ws_rx.next() => {
@@ -108,11 +140,25 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<AcpClientMessage>(&text) {
                             Ok(AcpClientMessage::Prompt { text: prompt_text }) => {
+                                let _ = chat_persistence::insert_message(
+                                    &db, &sid_for_prompt, "user", &prompt_text,
+                                ).await;
+
                                 let client = client_for_recv.clone();
                                 let tx = notify_tx.clone();
+                                let db2 = db.clone();
+                                let sid2 = sid_for_prompt.clone();
+                                let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
                                     match client.send_prompt(&prompt_text).await {
                                         Ok(resp) => {
+                                            tokio::task::yield_now().await;
+                                            let assistant_text = buf2.lock().await.drain(..).collect::<String>();
+                                            if !assistant_text.is_empty() {
+                                                let _ = chat_persistence::insert_message(
+                                                    &db2, &sid2, "assistant", &assistant_text,
+                                                ).await;
+                                            }
                                             let reason = format!("{:?}", resp.stop_reason);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptDone {
@@ -123,6 +169,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             let _ = tx.send(Message::Text(msg.into())).await;
                                         }
                                         Err(e) => {
+                                            buf2.lock().await.clear();
                                             let err_msg = format!("{}", e);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptError {

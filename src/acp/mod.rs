@@ -1,3 +1,4 @@
+pub mod chat_persistence;
 pub mod client;
 pub mod handler;
 pub mod permission;
