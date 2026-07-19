@@ -4,6 +4,7 @@ import { useAppStore, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
+import { AcpConnectionManager } from '../Chat/AcpConnectionManager'
 import { FileManager } from '../FileManager/FileManager'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
@@ -192,6 +193,9 @@ export function Layout() {
           />
         )}
 
+        {/* Persistent ACP connections — survives session switches */}
+        <AcpConnectionManager />
+
         {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
         <div className="flex-1 min-w-0">
           <SessionView key={activeSessionId ?? 'empty'} />
@@ -288,6 +292,7 @@ function MobileLayout() {
         onSessionClick={() => setActiveTab('sessions')}
         onNewSession={() => setActiveTab('sessions')}
       />
+      <AcpConnectionManager />
       <div
         className="flex-1 overflow-hidden"
         onTouchStart={mobileGestureEnabled ? (e) => {

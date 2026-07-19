@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
-import { useAcpChat } from '../../hooks/useAcpChat'
+import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { READER_FONT } from '../../utils/fonts'
@@ -30,9 +30,13 @@ export function ChatView() {
       ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
       : null
 
-  const { connectionState, sendPrompt, cancel, restore } = useAcpChat({
-    sessionId: activeSessionId,
-  })
+  const conn = useAcpConnectionStore((s) =>
+    activeSessionId ? s.connections[activeSessionId] : undefined,
+  )
+  const connectionState = conn?.connectionState ?? 'disconnected'
+  const sendPrompt = conn?.sendPrompt ?? (() => {})
+  const cancel = conn?.cancel ?? (() => {})
+  const restore = conn?.restore ?? (() => {})
   const chatState = useChatStore(selectChatState(activeSessionId))
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
