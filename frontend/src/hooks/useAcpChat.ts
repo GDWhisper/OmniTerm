@@ -140,6 +140,7 @@ type SessionUpdateAction =
 const DROP_VARIANTS: ReadonlySet<string> = new Set([
   'SessionInfoUpdate', 'session_info_update',
   'UsageUpdate', 'usage_update',
+  'AvailableCommandsUpdate', 'available_commands_update',
 ])
 
 const TOOL_VARIANTS: ReadonlySet<string> = new Set([
