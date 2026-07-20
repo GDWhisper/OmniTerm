@@ -214,12 +214,6 @@ export function ChatView() {
         </div>
       )}
 
-      <ConfigToolbar
-        configOptions={chatState.configOptions}
-        usage={chatState.usage}
-        onSetConfigOption={setConfigOption}
-      />
-
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -265,6 +259,12 @@ export function ChatView() {
         onSend={handleSend}
         onCancel={cancel}
         commands={chatState.commands}
+      />
+
+      <ConfigToolbar
+        configOptions={chatState.configOptions}
+        usage={chatState.usage}
+        onSetConfigOption={setConfigOption}
       />
     </div>
   )

@@ -56,15 +56,15 @@ function ConfigDropdown({
         <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
           {current?.name ?? option.currentValue}
         </span>
-        <span style={{ fontSize: 9, color: 'var(--text-faint)' }}>{open ? '▴' : '▾'}</span>
+        <span style={{ fontSize: 9, color: 'var(--text-faint)' }}>{open ? '▾' : '▴'}</span>
       </button>
       {open && (
         <div
           style={{
             position: 'absolute',
-            top: '100%',
+            bottom: '100%',
             left: 0,
-            marginTop: 2,
+            marginBottom: 2,
             minWidth: 140,
             maxHeight: 200,
             overflowY: 'auto',
@@ -182,7 +182,7 @@ export function ConfigToolbar({
         alignItems: 'center',
         gap: 6,
         padding: '4px 12px',
-        borderBottom: '1px solid var(--border-subtle)',
+        borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
         flexWrap: 'wrap',
       }}
