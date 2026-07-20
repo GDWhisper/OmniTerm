@@ -217,6 +217,7 @@ export function ChatView() {
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        className="themed-scrollbar"
         style={{
           flex: 1,
           overflowY: 'auto',

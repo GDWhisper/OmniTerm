@@ -61,7 +61,7 @@ export function TmuxCheatsheetPopup() {
         <span>{t('tmuxCheatsheet.title')}</span>
       </div>
       <div
-        className="tmux-cheatsheet-content"
+        className="tmux-cheatsheet-content themed-scrollbar"
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}
       >
         <TmuxCheatsheet />

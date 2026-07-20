@@ -409,7 +409,7 @@ export function Settings() {
           </button>
         ))}
       </nav>
-      <div className="settings-content">
+      <div className="settings-content themed-scrollbar">
         {activeCategory.sections.map((Section, i) => (
           <Section key={i} />
         ))}

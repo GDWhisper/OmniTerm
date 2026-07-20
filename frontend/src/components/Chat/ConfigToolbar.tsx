@@ -60,6 +60,7 @@ function ConfigDropdown({
       </button>
       {open && (
         <div
+          className="themed-scrollbar"
           style={{
             position: 'absolute',
             bottom: '100%',
