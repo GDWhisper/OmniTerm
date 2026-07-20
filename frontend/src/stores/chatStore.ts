@@ -15,8 +15,18 @@ export interface ThoughtBlock {
 export interface ToolCallBlock {
   type: 'tool_call'
   toolCallId: string
-  title: string
+  title?: string
   status: 'running' | 'completed' | 'failed' | 'updating'
+  kind?: string
+  content?: string
+  locations?: string[]
+}
+
+/** Partial tool-call event; undefined fields preserve the existing card's values. */
+export interface ToolCallUpdate {
+  toolCallId: string
+  title?: string
+  status?: ToolCallBlock['status']
   kind?: string
   content?: string
   locations?: string[]
@@ -96,7 +106,7 @@ interface ChatSessionState {
 interface ChatActions {
   appendChunk: (sessionId: string, chunk: string) => void
   appendThought: (sessionId: string, chunk: string) => void
-  upsertToolCall: (sessionId: string, entry: Omit<ToolCallBlock, 'type'>) => void
+  upsertToolCall: (sessionId: string, entry: ToolCallUpdate) => void
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
   addUserMessage: (sessionId: string, text: string) => void
@@ -222,15 +232,24 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = get(state, sessionId)
       const messages = [...current.messages]
       const last = messages[messages.length - 1]
+      const toBlock = (prev?: ToolCallBlock): ToolCallBlock => ({
+        type: 'tool_call',
+        toolCallId: entry.toolCallId,
+        title: entry.title ?? prev?.title,
+        status: entry.status ?? prev?.status ?? 'running',
+        kind: entry.kind ?? prev?.kind,
+        content: entry.content ?? prev?.content,
+        locations: entry.locations ?? prev?.locations,
+      })
       if (last && last.role === 'assistant' && last.streaming) {
         const blocks = [...last.blocks]
         const idx = blocks.findIndex(
           (b) => b.type === 'tool_call' && b.toolCallId === entry.toolCallId,
         )
         if (idx >= 0) {
-          blocks[idx] = { type: 'tool_call', ...entry }
+          blocks[idx] = toBlock(blocks[idx] as ToolCallBlock)
         } else {
-          blocks.push({ type: 'tool_call', ...entry })
+          blocks.push(toBlock())
         }
         messages[messages.length - 1] = { ...last, blocks }
       } else {
@@ -238,7 +257,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           id: genId(),
           role: 'assistant',
           text: '',
-          blocks: [{ type: 'tool_call', ...entry }],
+          blocks: [toBlock()],
           createdAt: Date.now(),
           streaming: true,
         })

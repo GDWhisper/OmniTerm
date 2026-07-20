@@ -142,7 +142,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
       >
         <span>{icon}</span>
         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {block.title}
+          {block.title ?? block.kind ?? 'tool call'}
         </span>
         <span style={{ color: statusColor, fontWeight: 600 }}>{statusIcon}</span>
         {hasContent && (

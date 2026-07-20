@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, type PlanEntry, type ConfigOption } from '../stores/chatStore'
+import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate } from '../stores/chatStore'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -91,7 +91,7 @@ type SessionUpdateAction =
   | { kind: 'appendText'; text: string }
   | { kind: 'appendThought'; text: string }
   | { kind: 'setMode'; mode: string }
-  | { kind: 'upsertTool'; toolCallId: string; title: string; status: string; toolKind?: string; content?: string; locations?: string[] }
+  | { kind: 'upsertTool'; toolCallId: string; title?: string; status?: string; toolKind?: string; content?: string; locations?: string[] }
   | { kind: 'setPlan'; entries: PlanEntry[] }
   | { kind: 'setUsage'; usage: Record<string, unknown> }
   | { kind: 'setCommands'; commands: string[] }
@@ -151,16 +151,19 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     if (typeof mode === 'string') return { kind: 'setMode', mode }
   }
 
-  // ToolCall / ToolCallUpdate
+  // ToolCall / ToolCallUpdate — both upsert by toolCallId. ToolCallUpdate is a
+  // partial event: title/status are usually absent, so emit them as undefined and
+  // let the store merge into the existing card rather than fan out into
+  // [ToolCallUpdate] system chips.
   if (TOOL_VARIANTS.has(variant)) {
     const inner = getVariantInner(obj, variant) ?? obj
-    const title = inner['title'] ?? inner['name'] ?? inner['toolName']
-    if (typeof title === 'string' && title) {
-      const toolCallId = typeof inner['toolCallId'] === 'string' ? inner['toolCallId'] : title
+    const titleRaw = inner['title'] ?? inner['name'] ?? inner['toolName']
+    const title = typeof titleRaw === 'string' && titleRaw ? titleRaw : undefined
+    const idRaw = inner['toolCallId']
+    const toolCallId = typeof idRaw === 'string' && idRaw ? idRaw : title
+    if (toolCallId) {
       const statusRaw = inner['status']
-      const status = typeof statusRaw === 'string' ? statusRaw
-        : variant === 'ToolCallUpdate' || variant === 'tool_call_update' ? 'updating'
-        : 'running'
+      const status = typeof statusRaw === 'string' ? statusRaw : undefined
       const toolKind = typeof inner['kind'] === 'string' ? inner['kind'] : undefined
       const content = typeof inner['content'] === 'string' ? inner['content'] : undefined
       const locations = Array.isArray(inner['locations'])
@@ -321,7 +324,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               s.upsertToolCall(sid, {
                 toolCallId: action.toolCallId,
                 title: action.title,
-                status: action.status as 'running' | 'completed' | 'failed' | 'updating',
+                status: action.status as ToolCallUpdate['status'],
                 kind: action.toolKind,
                 content: action.content,
                 locations: action.locations,
