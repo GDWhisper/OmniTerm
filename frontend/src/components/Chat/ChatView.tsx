@@ -124,7 +124,7 @@ export function ChatView() {
       case 'connecting':
         return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.connecting')}</span>
       case 'connected':
-        return <span style={{ color: 'var(--success)' }}>● LIVE</span>
+        return <span className="title-bar-badge">● LIVE</span>
       case 'error':
         return <span style={{ color: 'var(--danger, #FF7B72)' }}>{t('chat.status.error')}</span>
       case 'disconnected':
