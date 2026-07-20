@@ -38,6 +38,8 @@ enum AcpClientMessage {
     LoadSession,
     #[serde(rename = "permission_response")]
     PermissionResponse { id: String, option_id: String },
+    #[serde(rename = "set_config_option")]
+    SetConfigOption { config_id: String, value: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -159,6 +161,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            if let Some(notif) = c.initial_config_notification() {
+                let data = serde_json::to_value(&notif).unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                        .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(msg.into())).await;
+            }
             Some(c)
         }
         None => {
@@ -316,6 +325,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             Ok(AcpClientMessage::PermissionResponse { id, option_id }) => {
                                 if let Some(ref c) = client {
                                     c.resolve_permission(&id, &option_id).await;
+                                }
+                            }
+                            Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
+                                if let Some(ref c) = client {
+                                    if let Err(e) = c.set_config_option(&config_id, &value).await {
+                                        error!("set_config_option failed: {}", e);
+                                    }
                                 }
                             }
                             Err(e) => {

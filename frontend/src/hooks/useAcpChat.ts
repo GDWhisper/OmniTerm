@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, type PlanEntry } from '../stores/chatStore'
+import { useChatStore, type PlanEntry, type ConfigOption } from '../stores/chatStore'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -13,6 +13,7 @@ interface UseAcpChatResult {
   cancel: () => void
   restore: () => void
   respondPermission: (id: string, optionId: string) => void
+  setConfigOption: (configId: string, value: string) => void
 }
 
 interface SessionUpdateFrame {
@@ -94,12 +95,12 @@ type SessionUpdateAction =
   | { kind: 'setPlan'; entries: PlanEntry[] }
   | { kind: 'setUsage'; usage: Record<string, unknown> }
   | { kind: 'setCommands'; commands: string[] }
+  | { kind: 'setConfigOptions'; options: ConfigOption[] }
   | { kind: 'pushSystem'; label: string }
   | { kind: 'drop' }
 
 const DROP_VARIANTS: ReadonlySet<string> = new Set([
   'SessionInfoUpdate', 'session_info_update',
-  'ConfigOptionUpdate', 'config_option_update',
 ])
 
 const TOOL_VARIANTS: ReadonlySet<string> = new Set([
@@ -205,6 +206,48 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     return { kind: 'drop' }
   }
 
+  // ConfigOptionUpdate — ACP flattens `kind` (tag="type") into the option object,
+  // so a select reads { id, name, category, type:"select", currentValue, options }.
+  if (variant === 'ConfigOptionUpdate' || variant === 'config_option_update') {
+    const inner = getVariantInner(obj, variant) ?? obj
+    const rawOptions = inner['config_options'] ?? inner['configOptions']
+    if (Array.isArray(rawOptions)) {
+      const options: ConfigOption[] = rawOptions
+        .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+        .map((o) => {
+          const type = o['type']
+          const isBoolean = type === 'boolean' || type === 'Boolean'
+          const currentValue = String(o['current_value'] ?? o['currentValue'] ?? '')
+          let opts: { value: string; name: string }[]
+          if (isBoolean) {
+            opts = [
+              { value: 'true', name: 'On' },
+              { value: 'false', name: 'Off' },
+            ]
+          } else {
+            const rawOpts = o['options']
+            opts = Array.isArray(rawOpts)
+              ? rawOpts
+                  .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
+                  .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
+              : []
+          }
+          const category = typeof o['category'] === 'string' ? o['category'] : 'other'
+          const normalizedValue = isBoolean ? String(currentValue === 'true') : currentValue
+          return {
+            id: String(o['id'] ?? ''),
+            name: String(o['name'] ?? ''),
+            category,
+            currentValue: normalizedValue,
+            options: opts,
+          }
+        })
+        .filter((o) => o.id && o.options.length > 0)
+      return { kind: 'setConfigOptions', options }
+    }
+    return { kind: 'drop' }
+  }
+
   if (DROP_VARIANTS.has(variant)) return { kind: 'drop' }
 
   return { kind: 'pushSystem', label: variant }
@@ -292,6 +335,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               break
             case 'setCommands':
               s.setCommands(sid, action.commands)
+              break
+            case 'setConfigOptions':
+              s.setConfigOptions(sid, action.options)
               break
             case 'pushSystem':
               s.pushSystemEvent(sid, action.label)
@@ -399,5 +445,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     useChatStore.getState().clearPermission(sid)
   }, [])
 
-  return { connectionState, sendPrompt, cancel, restore, respondPermission }
+  const setConfigOption = useCallback((configId: string, value: string) => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(JSON.stringify({ type: 'set_config_option', config_id: configId, value }))
+  }, [])
+
+  return { connectionState, sendPrompt, cancel, restore, respondPermission, setConfigOption }
 }

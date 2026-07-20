@@ -53,6 +53,21 @@ export interface PendingPermission {
   toolName?: string
 }
 
+// --- Config options (mode / model / thinking level selectors) ---
+
+export interface ConfigSelectOption {
+  value: string
+  name: string
+}
+
+export interface ConfigOption {
+  id: string
+  name: string
+  category: string
+  currentValue: string
+  options: ConfigSelectOption[]
+}
+
 // --- Message model ---
 
 export interface ChatMessage {
@@ -75,6 +90,7 @@ interface ChatSessionState {
   pendingPermission: PendingPermission | null
   usage: Record<string, unknown> | null
   commands: string[]
+  configOptions: ConfigOption[]
 }
 
 interface ChatActions {
@@ -96,6 +112,7 @@ interface ChatActions {
   clearPermission: (sessionId: string) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: string[]) => void
+  setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   reset: (sessionId: string) => void
 }
 
@@ -108,6 +125,7 @@ const EMPTY: ChatSessionState = {
   pendingPermission: null,
   usage: null,
   commands: [],
+  configOptions: [],
 }
 
 interface ChatStoreState {
@@ -332,6 +350,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setCommands: (sessionId, commands) =>
     set((state) => patch(state, sessionId, { commands })),
+
+  setConfigOptions: (sessionId, options) =>
+    set((state) => patch(state, sessionId, { configOptions: options })),
 
   reset: (sessionId) =>
     set((state) => {

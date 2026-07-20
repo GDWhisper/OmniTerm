@@ -7,6 +7,7 @@ interface AcpConnectionEntry {
   cancel: () => void
   restore: () => void
   respondPermission: (id: string, optionId: string) => void
+  setConfigOption: (configId: string, value: string) => void
 }
 
 interface AcpConnectionStore {

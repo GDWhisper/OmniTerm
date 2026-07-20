@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, CreateTerminalRequest, InitializeRequest,
-    KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest, PromptResponse,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionRequest,
-    SessionId, SessionNotification, TextContent, WaitForTerminalExitRequest,
-    WriteTextFileRequest, WriteTextFileResponse,
+    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest,
+    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+    RequestPermissionRequest, SessionConfigId, SessionConfigOption, SessionConfigOptionValue,
+    SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use tokio::sync::{broadcast, oneshot};
@@ -27,6 +28,7 @@ pub struct AcpClient {
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
+    initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
 }
 
 impl AcpClient {
@@ -43,8 +45,12 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(256);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let (conn_tx, conn_rx) =
-            oneshot::channel::<(ConnectionTo<AcpAgentRole>, SessionId, bool)>();
+        let (conn_tx, conn_rx) = oneshot::channel::<(
+            ConnectionTo<AcpAgentRole>,
+            SessionId,
+            bool,
+            Vec<SessionConfigOption>,
+        )>();
 
         let notif_tx = session_update_tx.clone();
         let terminal_manager = Arc::new(AcpTerminalManager::new());
@@ -147,8 +153,11 @@ impl AcpClient {
                             .block_task()
                             .await?;
 
+                        let config_options =
+                            session_resp.config_options.clone().unwrap_or_default();
+
                         let session_id = session_resp.session_id;
-                        let _ = conn_tx.send((cx.clone(), session_id, supports_load));
+                        let _ = conn_tx.send((cx.clone(), session_id, supports_load, config_options));
 
                         let _ = shutdown_rx.await;
                         Ok(())
@@ -157,7 +166,7 @@ impl AcpClient {
                 .await
         });
 
-        let (connection, session_id, supports_load_session) = conn_rx
+        let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
             .await
             .map_err(|_| AcpError::internal_error())?;
 
@@ -170,6 +179,7 @@ impl AcpClient {
             terminal_manager,
             permission_manager,
             supports_load_session,
+            initial_config_options: Arc::new(Mutex::new(initial_config_options)),
         })
     }
 
@@ -183,6 +193,20 @@ impl AcpClient {
 
     pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
         self.permission_manager.resolve(id, option_id).await
+    }
+
+    pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
+        let config_id: Arc<str> = config_id.into();
+        let value: Arc<str> = value.into();
+        self.connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                self.session_id.clone(),
+                SessionConfigId::new(config_id),
+                SessionConfigOptionValue::from(value.as_ref()),
+            ))
+            .block_task()
+            .await?;
+        Ok(())
     }
 
     pub fn session_id(&self) -> &SessionId {
@@ -212,14 +236,42 @@ impl AcpClient {
     }
 
     pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
-        self.connection
+        let resp = self
+            .connection
             .send_request(LoadSessionRequest::new(
                 SessionId::new(acp_session_id),
                 cwd,
             ))
             .block_task()
             .await?;
+
+        if let Some(opts) = resp.config_options {
+            if !opts.is_empty() {
+                if let Ok(mut guard) = self.initial_config_options.lock() {
+                    *guard = opts.clone();
+                }
+                let notification = SessionNotification::new(
+                    self.session_id.clone(),
+                    SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
+                );
+                let _ = self.session_update_tx.send(notification);
+            }
+        }
         Ok(())
+    }
+
+    /// Builds a `ConfigOptionUpdate` notification from the config options the
+    /// agent returned at session creation, if any. Sent to the WS on connect so
+    /// the toolbar has data before the first prompt turn.
+    pub fn initial_config_notification(&self) -> Option<SessionNotification> {
+        let opts = self.initial_config_options.lock().ok()?.clone();
+        if opts.is_empty() {
+            return None;
+        }
+        Some(SessionNotification::new(
+            self.session_id.clone(),
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
+        ))
     }
 
     pub async fn spawn_and_load(
@@ -238,8 +290,12 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(256);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let (conn_tx, conn_rx) =
-            oneshot::channel::<(ConnectionTo<AcpAgentRole>, SessionId, bool)>();
+        let (conn_tx, conn_rx) = oneshot::channel::<(
+            ConnectionTo<AcpAgentRole>,
+            SessionId,
+            bool,
+            Vec<SessionConfigOption>,
+        )>();
 
         let notif_tx = session_update_tx.clone();
         let terminal_manager = Arc::new(AcpTerminalManager::new());
@@ -338,7 +394,7 @@ impl AcpClient {
                         let supports_load = init_resp.agent_capabilities.load_session;
 
                         let session_id = SessionId::new(acp_session_id.as_str());
-                        let _ = conn_tx.send((cx.clone(), session_id, supports_load));
+                        let _ = conn_tx.send((cx.clone(), session_id, supports_load, Vec::new()));
 
                         let _ = shutdown_rx.await;
                         Ok(())
@@ -347,7 +403,7 @@ impl AcpClient {
                 .await
         });
 
-        let (connection, session_id, supports_load_session) = conn_rx
+        let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
             .await
             .map_err(|_| AcpError::internal_error())?;
 
@@ -360,6 +416,7 @@ impl AcpClient {
             terminal_manager,
             permission_manager,
             supports_load_session,
+            initial_config_options: Arc::new(Mutex::new(initial_config_options)),
         })
     }
 
