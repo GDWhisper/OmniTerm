@@ -39,9 +39,9 @@ export function PermissionBanner({ permission, onRespond }: Props) {
           : 'Agent requests permission'}
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {permission.options.map((opt) => (
+        {permission.options.map((opt, i) => (
           <button
-            key={opt.option_id}
+            key={opt.option_id || `opt-${i}`}
             onClick={() => onRespond(permission.id, opt.option_id)}
             style={{
               padding: '4px 12px',

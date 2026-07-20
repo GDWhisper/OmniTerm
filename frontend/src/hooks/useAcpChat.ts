@@ -381,7 +381,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           const options = rawOptions
             .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
             .map((o) => ({
-              option_id: String(o['option_id'] ?? ''),
+              option_id: String(o['optionId'] ?? o['option_id'] ?? ''),
               kind: String(o['kind'] ?? ''),
               name: typeof o['name'] === 'string' ? o['name'] : undefined,
             }))
