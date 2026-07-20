@@ -1293,30 +1293,36 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Themed scrollbar — shared utility class. 8px wide, hard 0px corners,
-   theme-aware. Add `.themed-scrollbar` to any scrollable element to keep
-   native scrollbars on the pixel-game aesthetic instead of the browser
-   default. Used by the settings/cheatsheet popup panes, the chat message
-   list, and the config-toolbar dropdown menus.
+   Themed scrollbar — shared utility class. Hidden by default via zero
+   width (reserves no layout gutter, unlike a permanent placeholder); a
+   restrained, theme-aware bar reveals on hover. Add `.themed-scrollbar`
+   to any scrollable element. Used by the settings/cheatsheet popup panes,
+   the chat message list, and the config-toolbar dropdown menus.
    ──────────────────────────────────────────────────────────────────── */
+.themed-scrollbar {
+  scrollbar-width: none;                  /* Firefox: hidden (zero-width) */
+}
 .themed-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 0;                               /* WebKit: hidden (zero-width) */
+  height: 0;
 }
-.themed-scrollbar::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
+.themed-scrollbar:hover {
+  scrollbar-width: thin;                  /* Firefox: reveal on hover */
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
-.themed-scrollbar::-webkit-scrollbar-thumb {
+.themed-scrollbar:hover::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.themed-scrollbar:hover::-webkit-scrollbar-track {
+  background: transparent;
+}
+.themed-scrollbar:hover::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 0;
-  border: 1px solid var(--scrollbar-track);
 }
-.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+.themed-scrollbar:hover::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
-}
-.themed-scrollbar {
-  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-  scrollbar-width: thin;
 }
 
 /* ────────────────────────────────────────────────────────────────────
