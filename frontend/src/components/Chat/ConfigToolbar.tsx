@@ -108,6 +108,16 @@ function ConfigDropdown({
 const RING_SIZE = 15
 const RING_STROKE = 2.5
 
+function formatTokens(n: number): string {
+  const fmt = (v: number) => {
+    const rounded = Math.round(v * 10) / 10
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
+  }
+  if (n >= 1e6) return `${fmt(n / 1e6)}M`
+  if (n >= 1e3) return `${fmt(n / 1e3)}k`
+  return String(n)
+}
+
 function UsageRing({ pct }: { pct: number }) {
   const r = (RING_SIZE - RING_STROKE) / 2
   const c = 2 * Math.PI * r
@@ -145,6 +155,7 @@ function UsageRing({ pct }: { pct: number }) {
 }
 
 function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
+  const [hover, setHover] = useState(false)
   const used = typeof usage['used'] === 'number' ? usage['used'] : null
   const size = typeof usage['size'] === 'number' ? usage['size'] : null
   const pct = used !== null && size !== null && size > 0 ? (used / size) * 100 : null
@@ -168,7 +179,40 @@ function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
     >
       {pct !== null && (
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <UsageRing pct={pct} />
+          <span
+            style={{ position: 'relative', display: 'inline-flex', padding: 2 }}
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+          >
+            <UsageRing pct={pct} />
+            {used !== null && size !== null && (
+              <span
+                style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  left: '50%',
+                  marginBottom: 6,
+                  padding: '3px 8px',
+                  fontSize: 11,
+                  whiteSpace: 'nowrap',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                  color: 'var(--text-primary)',
+                  opacity: hover ? 1 : 0,
+                  transform: hover
+                    ? 'translateX(-50%) translateY(0)'
+                    : 'translateX(-50%) translateY(3px)',
+                  transition: 'opacity 0.15s ease, transform 0.15s ease',
+                  pointerEvents: 'none',
+                  zIndex: 100,
+                }}
+              >
+                {formatTokens(used)} / {formatTokens(size)}
+              </span>
+            )}
+          </span>
           {Math.round(pct)}%
         </span>
       )}
