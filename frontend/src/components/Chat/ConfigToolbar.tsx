@@ -105,6 +105,45 @@ function ConfigDropdown({
   )
 }
 
+const RING_SIZE = 15
+const RING_STROKE = 2.5
+
+function UsageRing({ pct }: { pct: number }) {
+  const r = (RING_SIZE - RING_STROKE) / 2
+  const c = 2 * Math.PI * r
+  const clamped = Math.min(100, Math.max(0, pct))
+  return (
+    <svg
+      width={RING_SIZE}
+      height={RING_SIZE}
+      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+      style={{ transform: 'rotate(-90deg)', display: 'block' }}
+      aria-hidden="true"
+    >
+      <circle
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={r}
+        fill="none"
+        stroke="var(--bg-surface)"
+        strokeWidth={RING_STROKE}
+      />
+      <circle
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={r}
+        fill="none"
+        stroke={pct > 80 ? 'var(--danger, #FF7B72)' : 'var(--accent)'}
+        strokeWidth={RING_STROKE}
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - clamped / 100)}
+        style={{ transition: 'stroke-dashoffset 0.4s ease, stroke 0.4s ease' }}
+      />
+    </svg>
+  )
+}
+
 function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
   const used = typeof usage['used'] === 'number' ? usage['used'] : null
   const size = typeof usage['size'] === 'number' ? usage['size'] : null
@@ -128,27 +167,8 @@ function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
       }}
     >
       {pct !== null && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-          <span
-            style={{
-              width: 32,
-              height: 4,
-              borderRadius: 2,
-              background: 'var(--bg-surface)',
-              overflow: 'hidden',
-              display: 'inline-block',
-            }}
-          >
-            <span
-              style={{
-                display: 'block',
-                height: '100%',
-                width: `${Math.min(100, pct)}%`,
-                borderRadius: 2,
-                background: pct > 80 ? 'var(--danger, #FF7B72)' : 'var(--accent)',
-              }}
-            />
-          </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <UsageRing pct={pct} />
           {Math.round(pct)}%
         </span>
       )}
