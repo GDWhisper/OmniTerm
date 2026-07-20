@@ -5,6 +5,7 @@ import { useAppStore } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
+import { OverlayScroll } from '../Common/OverlayScroll'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -409,11 +410,11 @@ export function Settings() {
           </button>
         ))}
       </nav>
-      <div className="settings-content themed-scrollbar">
+      <OverlayScroll style={{ flex: 1, minWidth: 0 }} contentClassName="settings-content">
         {activeCategory.sections.map((Section, i) => (
           <Section key={i} />
         ))}
-      </div>
+      </OverlayScroll>
     </div>
   )
 }

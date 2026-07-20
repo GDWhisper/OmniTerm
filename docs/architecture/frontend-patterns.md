@@ -63,14 +63,15 @@
   - Mobile: 全宽 bottom sheet，`bottom` 锚定在 `MobileNav + SidebarBottomBar` 之上，
     `height: calc(100dvh - mobileTotal)` 限制高度
 - **滚动**：外层 popup 统一 `overflow: hidden`（让 `.panel-title-bar` 钉在顶部），
-  滚动交给内层有 `overflow-y: auto` 的容器（`.settings-content` / `.tmux-cheatsheet-content`）
+  滚动交给内层 `<OverlayScroll>`（`components/Common/OverlayScroll.tsx`）
 - 移动端定位常量统一在 `frontend/src/components/constants/popup.ts`：`MOBILE_NAV_HEIGHT`、`SIDEBAR_BOTTOM_BAR_HEIGHT`、`MOBILE_STATUS_BAR_RESERVE`、`GAP`
 - **关闭**：`mousedown` 外部点击 + `Escape` 键（hook 自动处理），`onMouseDown` `stopPropagation` 阻止冒泡到关闭逻辑
 - 边框效果（`borderRadius` / `boxShadow` / `animation`）都在外层 div inline style
 - **顶部标题**：用 `.panel-title-bar` 类（自动获得木纹背景 + VT323 字 +
   3px letter-spacing），文案走 i18n（`t('<feature>.title')`）
-- **滚动条**：项目已为 `.settings-content` / `.tmux-cheatsheet-content` 提供
-  8px 硬角主题感知 scrollbar 样式，新加面板复用同款类名即可获得一致外观
+- **滚动条**：统一用 `<OverlayScroll>` 组件——隐藏原生滚动条，右侧叠加一条
+  主题色拇指，滚动时淡入、静止后淡出，不占布局（不挤压内容）。新加可滚动
+  面板直接包一层即可，勿再手写 `overflow-y: auto` + 原生滚动条样式
 
 **已有案例**：
 
@@ -82,8 +83,8 @@
 | 文件 | 做什么 |
 |------|--------|
 | `frontend/src/components/<Feature>/<Feature>.tsx` | 纯内容组件，用 `useTranslation()` 渲染 |
-| `frontend/src/components/<Feature>/<Feature>Popup.tsx` | 照搬 `TmuxCheatsheetPopup` 骨架：调 `useAnchorPopup`（含 `topAnchorSelector: '.logo-title-bar'`）、`display: flex; flexDirection: column; overflow: hidden`、内层包 `<Feature />` 的容器加 `flex: 1; minHeight: 0; overflowY: auto`、顶部加 `.panel-title-bar` |
-| `frontend/src/index.css` | scrollbar 复用：给新内容容器加同 `.settings-content` / `.tmux-cheatsheet-content` 风格类名即可（可选） |
+| `frontend/src/components/<Feature>/<Feature>Popup.tsx` | 照搬 `TmuxCheatsheetPopup` 骨架：调 `useAnchorPopup`（含 `topAnchorSelector: '.logo-title-bar'`）、`display: flex; flexDirection: column; overflow: hidden`、内层用 `<OverlayScroll style={{ flex: 1, minHeight: 0 }}>` 包 `<Feature />`、顶部加 `.panel-title-bar` |
+| `frontend/src/index.css` | 一般无需改动——滚动条由 `<OverlayScroll>` 统一提供（可选：给内容容器加布局类名如 `.settings-content`） |
 | `frontend/src/stores/appStore.ts` | 加 `xxxOpen: false` + `toggleXxx()`（互斥逻辑照抄 `toggleSettings`） |
 | `frontend/src/components/Layout/Layout.tsx` | 按钮加 `data-toggle="xxx"`，Desktop + Mobile 双路径条件渲染 `<XxxPopup />` |
 | `frontend/src/locales/{en,zh}/translation.json` | 加 `<feature>.title` 等 i18n key |
@@ -212,8 +213,8 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 | 文件 | 做什么 |
 |------|--------|
 | `frontend/src/components/<Feature>/<Feature>.tsx` | 主组件 + sub-components；用 `.settings-layout` flex 容器、tab + content 布局；引入 `CATEGORIES` 配置；用 `ToggleRow` 等公共组件复用开关 UI |
-| `frontend/src/components/<Feature>/<Feature>Popup.tsx` | 照搬 `SettingsPopup`：`useAnchorPopup`（`topAnchorSelector: '.logo-title-bar'`、动态 `width`）；固定 33vh × 25vw 桌面 + mobile bottom sheet；`display: flex; flexDirection: column; overflow: hidden`；顶部 `.panel-title-bar`；内层内容容器加 `flex: 1; minHeight: 0; overflowY: auto` |
-| `frontend/src/index.css` | 复用 `.settings-layout` / `.settings-tabs` / `.settings-tab` / `.settings-content` 等已有类（仅 Tab 文本颜色差异可加 modifier）；新内容容器复用同款 scrollbar 样式 |
+| `frontend/src/components/<Feature>/<Feature>Popup.tsx` | 照搬 `SettingsPopup`：`useAnchorPopup`（`topAnchorSelector: '.logo-title-bar'`、动态 `width`）；固定 33vh × 25vw 桌面 + mobile bottom sheet；`display: flex; flexDirection: column; overflow: hidden`；顶部 `.panel-title-bar`；内层用 `<OverlayScroll style={{ flex: 1, minHeight: 0 }}>` |
+| `frontend/src/index.css` | 复用 `.settings-layout` / `.settings-tabs` / `.settings-tab` / `.settings-content` 等已有类（仅 Tab 文本颜色差异可加 modifier）；滚动条由 `<OverlayScroll>` 统一提供 |
 | `frontend/src/stores/appStore.ts` | 加 `xxxOpen: false` + `toggleXxx()`，与现有 toggle 互斥 |
 | `frontend/src/components/Layout/Layout.tsx` | 按钮加 `data-toggle="xxx"`，Desktop + Mobile 双路径条件渲染 `<XxxPopup />` |
 | `frontend/src/locales/{en,zh}/translation.json` | i18n key：标题 + tab 标签（英文 UPPERCASE） + section title + hint + `settings.on`/`settings.off`（复用） |

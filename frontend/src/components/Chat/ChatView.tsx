@@ -7,6 +7,7 @@ import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
+import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 
 /**
@@ -214,18 +215,11 @@ export function ChatView() {
         </div>
       )}
 
-      <div
+      <OverlayScroll
         ref={scrollRef}
         onScroll={handleScroll}
-        className="themed-scrollbar"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          padding: '8px 0',
-        }}
+        style={{ flex: 1, minHeight: 0 }}
+        contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0' }}
       >
         {chatState.messages.length === 0 && (
           <div
@@ -245,7 +239,7 @@ export function ChatView() {
         {chatState.messages.map((m) => (
           <ChatMessageView key={m.id} message={m} />
         ))}
-      </div>
+      </OverlayScroll>
 
       {chatState.pendingPermission && (
         <PermissionBanner

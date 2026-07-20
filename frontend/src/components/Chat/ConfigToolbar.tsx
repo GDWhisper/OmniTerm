@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import type { ConfigOption } from '../../stores/chatStore'
+import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -59,23 +60,20 @@ function ConfigDropdown({
         <span style={{ fontSize: 9, color: 'var(--text-faint)' }}>{open ? '▾' : '▴'}</span>
       </button>
       {open && (
-        <div
-          className="themed-scrollbar"
+        <OverlayScroll
           style={{
             position: 'absolute',
             bottom: '100%',
             left: 0,
             marginBottom: 2,
             minWidth: 140,
-            maxHeight: 200,
-            overflowY: 'auto',
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-subtle)',
             borderRadius: 6,
             boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
             zIndex: 100,
-            padding: '4px 0',
           }}
+          contentStyle={{ flex: '0 0 auto', maxHeight: 200, padding: '4px 0' }}
         >
           {option.options.map((opt) => (
             <button
@@ -101,7 +99,7 @@ function ConfigDropdown({
               {opt.name}
             </button>
           ))}
-        </div>
+        </OverlayScroll>
       )}
     </div>
   )

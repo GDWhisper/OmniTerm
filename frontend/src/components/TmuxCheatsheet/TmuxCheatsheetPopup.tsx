@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/appStore'
 import { TmuxCheatsheet } from './TmuxCheatsheet'
 import { MOBILE_NAV_HEIGHT, SIDEBAR_BOTTOM_BAR_HEIGHT, MOBILE_STATUS_BAR_RESERVE } from '../constants/popup'
 import { useAnchorPopup } from '../../hooks/useAnchorPopup'
+import { OverlayScroll } from '../Common/OverlayScroll'
 
 const POPUP_WIDTH = 360
 
@@ -60,12 +61,12 @@ export function TmuxCheatsheetPopup() {
         <span>◆</span>
         <span>{t('tmuxCheatsheet.title')}</span>
       </div>
-      <div
-        className="tmux-cheatsheet-content themed-scrollbar"
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}
+      <OverlayScroll
+        style={{ flex: 1, minHeight: 0 }}
+        contentStyle={{ WebkitOverflowScrolling: 'touch' }}
       >
         <TmuxCheatsheet />
-      </div>
+      </OverlayScroll>
     </div>
   )
 }
