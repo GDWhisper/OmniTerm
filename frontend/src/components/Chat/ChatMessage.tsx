@@ -16,7 +16,7 @@ const TOOL_KIND_ICONS: Record<string, string> = {
 function ThoughtBlockView({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   return (
-    <div style={{ margin: '4px 0' }}>
+    <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: 12 }}>
       <button
         onClick={() => setOpen(!open)}
         style={{
@@ -25,25 +25,28 @@ function ThoughtBlockView({ text }: { text: string }) {
           cursor: 'pointer',
           color: 'var(--text-faint)',
           fontSize: 11,
-          padding: '2px 0',
+          padding: 0,
           fontFamily: READER_FONT,
-          display: 'flex',
+          display: 'inline-flex',
           alignItems: 'center',
-          gap: 4,
+          gap: 5,
+          fontStyle: 'italic',
+          opacity: 0.9,
         }}
       >
-        💭 {open ? '▾' : '▸'} thinking
+        <span style={{ fontStyle: 'normal' }}>💭</span>
+        {open ? '▾' : '▸'} thinking
       </button>
       {open && (
         <div
           style={{
             marginTop: 4,
-            padding: '6px 10px',
-            background: 'var(--bg-elevated)',
-            borderRadius: 6,
-            borderLeft: '2px solid var(--text-faint)',
+            padding: '2px 10px',
+            borderLeft: '2px solid var(--border-subtle)',
             fontSize: 12,
+            lineHeight: 1.5,
             color: 'var(--text-muted)',
+            fontStyle: 'italic',
             whiteSpace: 'pre-wrap',
             maxHeight: 300,
             overflowY: 'auto',
@@ -115,14 +118,25 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
     : '↻'
   const statusColor = block.status === 'completed' ? 'var(--success)'
     : block.status === 'failed' ? 'var(--danger, #FF7B72)'
-    : 'var(--text-faint)'
+    : 'var(--accent)'
 
   const isTerminal = block.kind === 'execute'
   const isDiff = block.content ? looksLikeDiff(block.content) : false
   const hasContent = block.content || (block.locations && block.locations.length > 0)
 
   return (
-    <div style={{ margin: '4px 0', fontSize: 12 }}>
+    <div
+      style={{
+        alignSelf: 'stretch',
+        maxWidth: '85%',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-subtle)',
+        borderLeft: `2px solid ${statusColor}`,
+        borderRadius: 6,
+        fontSize: 12,
+        transition: 'border-color 0.3s ease',
+      }}
+    >
       <button
         onClick={() => setOpen(!open)}
         style={{
@@ -131,26 +145,35 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
           cursor: 'pointer',
           color: 'var(--text-secondary)',
           fontSize: 12,
-          padding: '2px 0',
+          padding: '6px 10px',
           fontFamily: READER_FONT,
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
+          gap: 7,
           width: '100%',
           textAlign: 'left',
         }}
       >
         <span>{icon}</span>
-        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontSize: 11,
+          }}
+        >
           {block.title ?? block.kind ?? 'tool call'}
         </span>
-        <span style={{ color: statusColor, fontWeight: 600 }}>{statusIcon}</span>
+        <span style={{ color: statusColor, fontWeight: 700, transition: 'color 0.3s ease' }}>{statusIcon}</span>
         {hasContent && (
           <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{open ? '▾' : '▸'}</span>
         )}
       </button>
       {open && (
-        <div style={{ marginTop: 4, paddingLeft: 20 }}>
+        <div style={{ padding: '0 10px 8px 32px' }}>
           {block.locations && block.locations.length > 0 && (
             <div style={{ color: 'var(--text-faint)', fontSize: 11, marginBottom: 4 }}>
               {block.locations.map((l) => <div key={l}>📄 {l}</div>)}
@@ -162,7 +185,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
               style={{
                 margin: 0,
                 padding: '6px 8px',
-                background: isTerminal ? '#1a1e24' : 'var(--bg-elevated)',
+                background: isTerminal ? '#1a1e24' : 'var(--bg-base)',
                 borderRadius: 4,
                 fontSize: 11,
                 overflow: 'auto',
@@ -183,7 +206,17 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
 
 function PlanBlockView({ block }: { block: PlanBlock }) {
   return (
-    <div style={{ margin: '4px 0', fontSize: 12 }}>
+    <div
+      style={{
+        alignSelf: 'flex-start',
+        maxWidth: '85%',
+        padding: '6px 10px',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 6,
+        fontSize: 12,
+      }}
+    >
       {block.entries.map((entry, i) => {
         const icon = entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '⏳' : '○'
         const color = entry.status === 'completed' ? 'var(--success)'
@@ -200,10 +233,33 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
   )
 }
 
-function renderBlock(block: ContentBlock, idx: number) {
+function TextBlockView({ text, caret }: { text: string; caret?: boolean }) {
+  return (
+    <div
+      style={{
+        alignSelf: 'flex-start',
+        maxWidth: '85%',
+        padding: '8px 12px',
+        borderRadius: 8,
+        background: 'var(--bg-surface)',
+        color: 'var(--text-primary)',
+        border: '1px solid var(--border-subtle)',
+        fontFamily: READER_FONT,
+        fontSize: 13,
+        lineHeight: 1.5,
+        wordBreak: 'break-word',
+      }}
+    >
+      <Markdown text={text} />
+      {caret && <span className="chat-streaming-caret" />}
+    </div>
+  )
+}
+
+function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
   switch (block.type) {
     case 'text':
-      return <Markdown key={idx} text={block.text} />
+      return <TextBlockView key={idx} text={block.text} caret={isLast && streaming} />
     case 'thought':
       return <ThoughtBlockView key={idx} text={block.text} />
     case 'tool_call':
@@ -212,7 +268,7 @@ function renderBlock(block: ContentBlock, idx: number) {
       return <PlanBlockView key={idx} block={block} />
     case 'system':
       return (
-        <span key={idx} style={{ color: 'var(--text-faint)', fontSize: 11 }}>
+        <span key={idx} style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: 11 }}>
           [{block.label}]
         </span>
       )
@@ -223,42 +279,38 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
-  const bubbleStyle: React.CSSProperties = {
-    padding: '8px 12px',
-    borderRadius: 8,
-    maxWidth: '85%',
-    background: isUser ? 'var(--accent-14)' : isSystem ? 'var(--bg-elevated)' : 'var(--bg-surface)',
-    color: isSystem ? 'var(--text-muted)' : 'var(--text-primary)',
-    border: isUser ? '1px solid var(--accent-14)' : '1px solid var(--border-subtle)',
-    fontFamily: READER_FONT,
-    fontSize: 13,
-    lineHeight: 1.5,
-    alignSelf: isUser ? 'flex-end' : 'flex-start',
-    wordBreak: 'break-word',
-  }
-
-  return (
+  const label = (
     <div
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: isUser ? 'flex-end' : 'flex-start',
-        padding: '4px 12px',
+        fontSize: 10,
+        color: 'var(--text-faint)',
+        marginBottom: 2,
+        fontFamily: READER_FONT,
+        letterSpacing: '0.05em',
       }}
     >
-      <div
-        style={{
-          fontSize: 10,
-          color: 'var(--text-faint)',
-          marginBottom: 2,
-          fontFamily: READER_FONT,
-          letterSpacing: '0.05em',
-        }}
-      >
-        {isUser ? 'you' : isSystem ? 'system' : 'agent'}
-      </div>
-      <div style={bubbleStyle}>
-        {isUser ? (
+      {isUser ? 'you' : isSystem ? 'system' : 'agent'}
+    </div>
+  )
+
+  if (isUser) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}>
+        {label}
+        <div
+          style={{
+            padding: '8px 12px',
+            borderRadius: 8,
+            maxWidth: '85%',
+            background: 'var(--accent-14)',
+            color: 'var(--text-primary)',
+            border: '1px solid var(--accent-14)',
+            fontFamily: READER_FONT,
+            fontSize: 13,
+            lineHeight: 1.5,
+            wordBreak: 'break-word',
+          }}
+        >
           <pre
             style={{
               margin: 0,
@@ -271,13 +323,28 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
           >
             {message.text}
           </pre>
-        ) : (
-          <>
-            {message.blocks.map((b, i) => renderBlock(b, i))}
-            {message.streaming && <span className="chat-streaming-caret" />}
-          </>
-        )}
+        </div>
       </div>
+    )
+  }
+
+  // Assistant/system: stack distinct blocks (thought / tool card / text bubble)
+  // rather than collapsing everything into a single bubble.
+  const lastIdx = message.blocks.length - 1
+  const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        padding: '4px 12px',
+        gap: 6,
+      }}
+    >
+      {label}
+      {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming))}
+      {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
     </div>
   )
 }
