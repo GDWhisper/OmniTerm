@@ -5,7 +5,6 @@ use axum::{
     Router,
 };
 use futures_util::stream::{self, Stream};
-use futures_util::FutureExt;
 use notify::{Event as NotifyEvent, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Deserialize;
 use std::convert::Infallible;
@@ -58,12 +57,12 @@ async fn watch_files(
 
     let (tx, mut rx) = broadcast::channel::<String>(64);
 
-    // Shutdown channel: the `watch::Sender` is held by the stream generator
-    // below. When the SSE body is dropped (client disconnect, tab close,
-    // network drop), the sender goes out of scope and the blocking task's
-    // `shutdown_rx.has_changed()` returns `Err`, breaking its park loop and
-    // letting the `Watcher` drop → `inotify_rm_watch` on every registered path.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    // Shutdown channel: uses std::sync::mpsc (not tokio::sync::watch) so the
+    // blocking thread can detect sender-drop without depending on a tokio
+    // runtime context.  `now_or_never()` inside `spawn_blocking` was unreliable
+    // and leaked inotify instances (each watcher = 1 inotify fd, system limit
+    // is 128; leaked watchers consumed ~50% → new Vite could not start).
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
 
     let watch_dir = watch_path.clone();
     let watch_dir_for_cb = watch_dir.clone();
@@ -89,19 +88,14 @@ async fn watch_files(
             return;
         }
 
-        // Park until the SSE stream releases its `shutdown_tx`.
-        // `watch::Receiver::changed()` is async; `now_or_never()` lets us
-        // poll it from a sync thread without spinning up a runtime. 250 ms
-        // wake cadence is a compromise between shutdown latency and wake cost.
-        let mut rx = shutdown_rx;
+        // Park until the SSE stream drops `shutdown_tx` (client disconnect).
+        // `recv_timeout` returns `Disconnected` when the sender is dropped —
+        // a pure sync mechanism that works reliably from any thread.
         loop {
-            if let Some(result) = rx.changed().now_or_never() {
-                // `Ok(())` = value flipped (unused here); `Err` = sender dropped.
-                // Either way, it's our cue to exit.
-                let _ = result;
-                break;
+            match shutdown_rx.recv_timeout(Duration::from_millis(250)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                _ => {} // Timeout or Ok — keep waiting
             }
-            std::thread::sleep(Duration::from_millis(250));
         }
         // `watcher` drops here → `inotify_rm_watch` for every registered path.
     });
@@ -109,7 +103,7 @@ async fn watch_files(
     let sse_stream = async_stream::stream! {
         // `_shutdown_guard` lives as long as the generator; dropping the SSE
         // body drops the generator, which drops the guard, which drops the
-        // watch sender and wakes the blocking task out of its poll loop.
+        // channel sender, which wakes the blocking task via `Disconnected`.
         let _shutdown_guard = shutdown_tx;
         loop {
             match rx.recv().await {

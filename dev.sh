@@ -230,6 +230,9 @@ cmd_start() {
     mkdir -p "$PID_DIR"
     cleanup_orphans
 
+    # 检查 inotify 资源（EMFILE 常见根因：max_user_instances 耗尽）
+    _check_inotify_limits
+
     # 检查端口占用
     local port_conflict=false
     for port in $BACKEND_PORT $FRONTEND_PORT; do
@@ -454,6 +457,56 @@ cmd_logs() {
             fi
             ;;
     esac
+}
+
+# ── inotify 资源检查 ──
+_check_inotify_limits() {
+    local instances_file="/proc/sys/fs/inotify/max_user_instances"
+    local watches_file="/proc/sys/fs/inotify/max_user_watches"
+
+    [[ -r "$instances_file" ]] || return 0
+    [[ -r "$watches_file" ]] || return 0
+
+    local max_instances max_watches
+    max_instances=$(cat "$instances_file" 2>/dev/null)
+    max_watches=$(cat "$watches_file" 2>/dev/null)
+
+    # 统计当前使用量
+    local used_instances=0
+    for pid_dir in /proc/[0-9]*/fd; do
+        local count=0
+        count=$(find "$pid_dir" -lname 'anon_inode:inotify' 2>/dev/null | wc -l) || true
+        used_instances=$((used_instances + count))
+    done
+
+    local pct_instances=$((used_instances * 100 / max_instances))
+
+    if [[ $pct_instances -ge 80 ]]; then
+        warn "inotify 实例使用率 ${pct_instances}% (${used_instances}/${max_instances})"
+        warn "  若 Vite 启动失败 (EMFILE)，请先释放或调高 fs.inotify.max_user_instances"
+        info "  当前实例数: ${used_instances} 上限: ${max_instances}"
+
+        # 找出主要消费者
+        local top_consumer=""
+        local top_count=0
+        for pid_dir in /proc/[0-9]*/fd; do
+            local pid
+            pid=$(basename "$(dirname "$pid_dir")")
+            local count=0
+            count=$(find "$pid_dir" -lname 'anon_inode:inotify' 2>/dev/null | wc -l) || true
+            if [[ $count -gt $top_count ]]; then
+                top_count=$count
+                local cmd
+                cmd=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ' | cut -c1-80) || true
+                top_consumer="PID $pid ($cmd) — $count 实例"
+            fi
+        done
+        if [[ -n "$top_consumer" ]]; then
+            info "  最大消费者: $top_consumer"
+        fi
+    elif [[ $pct_instances -ge 60 ]]; then
+        info "inotify 实例: ${used_instances}/${max_instances}"
+    fi
 }
 
 # ── 主入口 ──
