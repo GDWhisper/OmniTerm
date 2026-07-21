@@ -1002,7 +1002,7 @@ export function Sidebar() {
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
-            <IconPlus />
+            <IconPlus strokeWidth={2.25} />
           </button>
         </div>
 
