@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
+import { OverlayScroll } from '../Common/OverlayScroll'
 import type { SlashCommand } from '../../stores/chatStore'
 
 interface ChatInputProps {
@@ -110,20 +111,19 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
       }}
     >
       {showCommands && (
-        <div
+        <OverlayScroll
           style={{
             position: 'absolute',
             bottom: '100%',
             left: 12,
             right: 12,
-            maxHeight: 160,
-            overflowY: 'auto',
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-subtle)',
             borderRadius: 8,
             boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
             zIndex: 10,
           }}
+          contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
         >
           {filteredCommands.map((cmd) => (
             <button
@@ -161,7 +161,7 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
               )}
             </button>
           ))}
-        </div>
+        </OverlayScroll>
       )}
       <textarea
         ref={textareaRef}
