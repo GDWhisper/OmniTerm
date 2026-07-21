@@ -50,6 +50,25 @@ const DeleteIcon = ({ size = 20 }: { size?: number }) => (
   />
 )
 
+// 释放（断开 agent 子进程）图标：拔插头/电源符号，内联 SVG 避免新增二进制资源
+const ReleaseIcon = ({ size = 20 }: { size?: number }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ flexShrink: 0, display: 'block' }}
+    aria-hidden="true"
+  >
+    <path d="M12 3v8" />
+    <path d="M7.5 7a6 6 0 1 0 9 0" />
+  </svg>
+)
+
 function SidebarBottomButton({
   toggle,
   icon,
@@ -793,6 +812,19 @@ export function Sidebar() {
     }
   }
 
+  // 手动释放 ACP agent 子进程（保留会话记录，进程可后续恢复）。
+  // 区别于删除：不删 DB 记录，仅 kill supervisor 中驻留的 codebuddy --acp 等进程。
+  const handleReleaseSession = async (id: string) => {
+    try {
+      await api.releaseSession(id)
+      await loadSessions()
+      addToast('success', t('sidebar.sessionReleased') ?? `Session process released`)
+    } catch {
+      // api client already shows error toast
+    }
+  }
+
+
   // Enter in name field = create project
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -1124,7 +1156,7 @@ export function Sidebar() {
                                     >
                                       {/* Running indicator dot */}
                                       <div
-                                        className={`flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
+                                        className="flex-shrink-0"
                                         style={{
                                           width: 6,
                                           height: 6,
@@ -1134,11 +1166,31 @@ export function Sidebar() {
                                               : attnReason === 'error'
                                                 ? 'var(--danger)'
                                                 : 'var(--success)'
-                                            : s.is_active
-                                              ? 'var(--accent)'
-                                              : 'var(--text-faint)',
-                                          boxShadow: s.is_active && !attnReason ? '0 0 4px var(--accent)' : 'none',
+                                            : s.runtime_kind === 'acp'
+                                              ? s.acp_process_alive
+                                                ? 'var(--accent)'
+                                                : 'var(--text-faint)'
+                                              : s.is_active
+                                                ? 'var(--accent)'
+                                                : 'var(--text-faint)',
+                                          // 运行中 ACP 常亮绿（轻微 glow），已释放灰；attnReason 仍脉冲提示
+                                          boxShadow: attnReason
+                                            ? attnReason === 'decision'
+                                              ? '0 0 4px var(--warning)'
+                                              : attnReason === 'error'
+                                                ? '0 0 4px var(--danger)'
+                                                : '0 0 4px var(--success)'
+                                            : (s.runtime_kind === 'acp' ? s.acp_process_alive : s.is_active)
+                                              ? '0 0 4px var(--accent)'
+                                              : 'none',
                                         }}
+                                        title={
+                                          s.runtime_kind === 'acp'
+                                            ? s.acp_process_alive
+                                              ? t('sidebar.acpRunning')
+                                              : t('sidebar.acpReleased')
+                                            : undefined
+                                        }
                                       />
                                       <span className="session-name">
                                         {s.name || s.tmux_session_name}
@@ -1170,6 +1222,14 @@ export function Sidebar() {
                                           setRenameOpen(true)
                                         }}
                                       />
+                                      {s.runtime_kind === 'acp' && (
+                                        <ReleaseButton
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            handleReleaseSession(s.id)
+                                          }}
+                                        />
+                                      )}
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
@@ -2052,6 +2112,30 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
       }}
     >
       <DeleteIcon size={20} />
+    </button>
+  )
+}
+
+function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      title={t('sidebar.releaseAcp')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--warning)'
+        e.currentTarget.style.color = 'var(--warning)'
+        e.currentTarget.style.background = 'var(--warning-12)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+        e.currentTarget.style.color = 'var(--text-faint)'
+        e.currentTarget.style.background = 'transparent'
+      }}
+    >
+      <ReleaseIcon size={20} />
     </button>
   )
 }

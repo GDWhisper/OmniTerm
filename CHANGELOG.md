@@ -86,6 +86,9 @@ Prefix each entry with the area it affects:
 - (2026-07-21) `[backend]` 新增 `POST /sessions/{id}/release`：仅 `supervisor.dispose` + `disconnect` 释放 ACP agent 子进程（`codebuddy --acp` 等），**不删除会话记录**，与 reaper 自动回收语义一致，之后可"恢复会话"重新 spawn；非 acp 会话返回 400（`src/api/sessions.rs`）
 - (2026-07-21) `[backend]` `[frontend]` 修复输入 `/` 不弹出斜杠命令列表：agent 在会话创建时即推送 `AvailableCommandsUpdate`，早于 WS 订阅导致通知丢失（与 config options 同类时序问题）——后端现缓存该通知并在 WS 连接时重放（`initial_commands_notification`，同 `initial_config_notification` 模式）；前端 `ChatInput` 过滤逻辑未剥离 `/` 前缀导致永远匹配不到命令、选中后也丢失 `/` 前缀致 agent 无法识别，一并修复（`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/components/Chat/ChatInput.tsx`）
 - (2026-07-21) `[frontend]` Sidebar ACP 会话条新增「释放」图标按钮（仅 `runtime_kind='acp'` 渲染，hover 用 `--warning` 黄色区别于删除的 `--danger` 红），调用 `releaseSession` 手动 kill 进程但保留会话；新增 `sidebar.releaseAcp` / `sidebar.sessionReleased` i18n 中英词条（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-21) `[backend]` `list_sessions` 用 `supervisor.snapshot()` 一次性标记每个 ACP 会话的 `acp_process_alive`（进程是否在后端驻留），`Session` 模型新增该运行期字段（`src/api/sessions.rs`、`src/models/session.rs`)
+- (2026-07-21) `[backend]` 修复后端正常停止/重启时 ACP agent 子进程（codebuddy --acp 等）变孤儿持续占内存：新增 SIGTERM/SIGINT 优雅退出钩子，退出前 `AcpSupervisor::shutdown_all()` 显式 kill 所有 supervisor 中驻留的子进程（实测 22 个孤儿→0）。注：SIGKILL / panic / 崩溃来不及运行，此类场景产生的孤儿仍需下次启动时手动清理或"恢复会话"（`src/main.rs`）
+- (2026-07-21) `[frontend]` Sidebar 区分「未释放/已释放」ACP 会话：运行中显示绿点 + tooltip「Agent process running」，已释放显示灰点 + 「已释放」小标签 + tooltip「点击会话可恢复」；ACP 会话不再误用 tmux 的 `is_active` 假状态（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/{en,zh}/translation.json`）
 
 ---
 

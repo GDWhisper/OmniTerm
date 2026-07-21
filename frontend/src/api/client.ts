@@ -102,6 +102,9 @@ export interface Session {
   agent_id?: string
   // Runtime activity indicator (tmux control mode)
   is_active?: boolean
+  // ACP agent subprocess currently resident in the backend supervisor.
+  // true = process alive (can chat directly); false = released/reaped (restore to resume).
+  acp_process_alive?: boolean
   // Agent state fields (from tmux @omniterm_agent option)
   agent_kind?: string
   agent_state?: string
@@ -228,6 +231,9 @@ export const api = {
     request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),
+  /** Release a running ACP agent subprocess without deleting the session record. */
+  releaseSession: (id: string) =>
+    request(`/sessions/${id}/release`, { method: 'POST' }),
   /** Send a user prompt to an ACP session. Returns the model's stop reason. */
   sendPrompt: (sessionId: string, text: string) =>
     request<{ stop_reason?: string }>(`/sessions/${sessionId}/prompt`, {
@@ -244,6 +250,8 @@ export const api = {
     request<Agent>(`/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteAgent: (id: string) =>
     request(`/agents/${id}`, { method: 'DELETE' }),
+  testAgent: (id: string) =>
+    request<{ ok: boolean }>(`/agents/${id}/test`, { method: 'POST' }),
 
   // Session CWD
   getSessionCwd: (sessionId: string) =>

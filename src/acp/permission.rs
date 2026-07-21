@@ -37,6 +37,12 @@ impl PermissionManager {
         self.request_tx.subscribe()
     }
 
+    /// 当前未决（等待用户响应）的权限请求数量。用于活跃度守卫判断 agent
+    /// 是否处于 requires_action 状态。
+    pub async fn pending_count(&self) -> usize {
+        self.pending.lock().await.len()
+    }
+
     pub async fn handle_request(
         &self,
         request: RequestPermissionRequest,

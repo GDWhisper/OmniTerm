@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/sessions/{id}/cwd", get(get_session_cwd))
         .route("/sessions/{id}/prompt", post(send_prompt))
+        .route("/sessions/{id}/release", post(release_session))
         .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/external", get(list_external_sessions))
         .route("/sessions/adopt", post(adopt_session))
@@ -77,10 +78,26 @@ async fn list_sessions(
         })
         .collect();
 
+    // 一次性取出 supervisor 中所有存活的 ACP session id（O(1) 查询用）。
+    // 用于标记 acp_process_alive：进程是否仍在后端驻留（未释放/未被回收）。
+    let alive_acp: std::collections::HashSet<String> = state
+        .acp_supervisor
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+
     // Enrich sessions with activity state and agent state from tmux.
     // Only tmux-backed sessions have a pane to poll; ACP sessions get their
     // state via the ACP event stream (Phase 3) and are skipped here.
     for session in &mut sessions {
+        // ACP 会话：标记 agent 子进程是否在后端驻留（未释放/未被回收）。
+        // 这与 tmux 的 is_active 不同，是 supervisor 中真实存在的进程状态。
+        if session.runtime_kind == RuntimeKind::Acp {
+            session.acp_process_alive = alive_acp.contains(&session.id);
+            continue;
+        }
         if session.runtime_kind != RuntimeKind::Tmux {
             continue;
         }
@@ -191,6 +208,7 @@ async fn create_session(
             agent_event: None,
             agent_nonce: None,
             agent_detected: None,
+            acp_process_alive: false,
         };
 
         return (StatusCode::CREATED, Json(json!(session)));
@@ -252,6 +270,7 @@ async fn create_session(
         agent_event: None,
         agent_nonce: None,
         agent_detected: None,
+        acp_process_alive: false,
     };
 
     (StatusCode::CREATED, Json(json!(session)))
@@ -321,6 +340,44 @@ async fn delete_session(
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+/// 手动释放 ACP 会话的后端子进程（codebuddy --acp 等），**不删除会话记录**。
+///
+/// 与 `delete_session`（杀进程 + 删库）不同，release 仅 `supervisor.dispose` +
+/// `disconnect` 杀掉 supervisor 中驻留的 agent 子进程，保留 DB 会话行。
+/// 之后用户仍可通过"恢复会话"重新 spawn 进程，与空闲自动回收（reaper）
+/// 的语义一致。对非 acp 会话返回 400（无 supervisor 子进程可释放）。
+async fn release_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let runtime_kind: Option<String> =
+        sqlx::query_scalar("SELECT runtime_kind FROM sessions WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    match runtime_kind.as_deref() {
+        Some("acp") => {
+            if let Some(client) = state.acp_supervisor.dispose(&id).await {
+                if let Some(c) = Arc::try_unwrap(client).ok() {
+                    c.disconnect().await;
+                }
+            }
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Some(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "only acp sessions can be released" })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not found" })),
+        ),
+    }
 }
 
 async fn get_session_cwd(
@@ -591,6 +648,7 @@ async fn adopt_session(
         agent_event: None,
         agent_nonce: None,
         agent_detected: None,
+        acp_process_alive: false,
     };
 
     (StatusCode::CREATED, Json(json!(session)))

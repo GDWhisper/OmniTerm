@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate } from '../stores/chatStore'
+import { useAttention } from '../hooks/useAttention'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -265,6 +266,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   sessionIdRef.current = sessionId
   const isReplaying = useRef(false)
   const suppressReplay = useRef(false)
+  const attention = useAttention()
 
   useEffect(() => {
     if (!sessionId) {
@@ -390,6 +392,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             : undefined
           if (frame.id) {
             s.setPermission(sid, { id: frame.id, options, toolName })
+            // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
+            attention.fire(sid, sid, 'decision')
           }
           break
         }
@@ -446,7 +450,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     if (!ws || ws.readyState !== WebSocket.OPEN || !sid) return
     ws.send(JSON.stringify({ type: 'permission_response', id, option_id: optionId }))
     useChatStore.getState().clearPermission(sid)
-  }, [])
+    attention.clearAlert(sid)
+  }, [attention])
 
   const setConfigOption = useCallback((configId: string, value: string) => {
     const ws = wsRef.current

@@ -101,6 +101,11 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub agent_detected: Option<String>,
+    // ACP agent subprocess currently resident in the supervisor (runtime, not persisted).
+    // `true` = process alive and reachable; `false` = released/reaped, session can be restored.
+    #[serde(skip_serializing_if = "is_false")]
+    #[sqlx(default)]
+    pub acp_process_alive: bool,
 }
 
 #[derive(Debug, Deserialize)]
