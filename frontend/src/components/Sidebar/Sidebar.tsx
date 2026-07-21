@@ -6,7 +6,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -892,7 +892,7 @@ export function Sidebar() {
         />
         <SidebarBottomButton
           toggle="settings"
-          icon="⚙"
+          icon={<IconSettings width={16} height={16} />}
           title={t('settings.title')}
           onClick={toggleSettings}
           size={28}
@@ -1430,7 +1430,7 @@ export function Sidebar() {
           />
           <SidebarBottomButton
             toggle="settings"
-            icon="⚙"
+            icon={<IconSettings width={16} height={16} />}
             title={t('settings.title')}
             onClick={toggleSettings}
             size={26}
