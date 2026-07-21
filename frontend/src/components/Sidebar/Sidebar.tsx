@@ -21,57 +21,110 @@ import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
-// Sidebar 操作按钮图标 —— 16×16 像素网格 + crispEdges，与 PixelSprites 同一像素风基调。
-// 单色 fill="currentColor"：按钮 hover 时由父级 color 驱动变色（旧的固定色 PNG 会吃掉 hover）。
-const PixelIcon = ({ size, children }: { size: number; children: ReactNode }) => (
-  <svg
-    width={size}
-    height={size}
-    viewBox="0 0 16 16"
-    fill="currentColor"
-    shapeRendering="crispEdges"
-    aria-hidden="true"
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  >
-    {children}
-  </svg>
-)
+// Sidebar 操作按钮图标 —— 16×16 像素图，设计稿见 docs/dev/pixel-icons.md。
+// 'X' = 1×1 像素，逐格渲染为 rect；crispEdges + currentColor：随按钮 hover 变色、缩放保持像素锐利。
+const ICON_PIXELS = {
+  add: [
+    '................',
+    '................',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '..XXXXXXXXXXXX..',
+    '..XXXXXXXXXXXX..',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '................',
+    '................',
+  ],
+  edit: [
+    '................',
+    '................',
+    '............X...',
+    '...........X.X..',
+    '..........X.X.X.',
+    '.........X.X.X..',
+    '........X.X.X...',
+    '.......X.X.X....',
+    '......X.X.X.....',
+    '.....X.X.X......',
+    '....X.X.X.......',
+    '...X.X.X........',
+    '..X.X.X.........',
+    '.XXX.X..........',
+    '.XXXX...........',
+    '.XXX............',
+  ],
+  delete: [
+    '................',
+    '................',
+    '....XXXXXXXX....',
+    '...X........X...',
+    '...XXXXXXXXXX...',
+    '....X......X....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '....XXXXXXXX....',
+    '.....XXXXXX.....',
+    '................',
+    '................',
+  ],
+  power: [
+    '................',
+    '................',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '.......XX.......',
+    '....XXX..XXX....',
+    '...XX......XX...',
+    '...X........X...',
+    '...X........X...',
+    '...X........X...',
+    '....X......X....',
+    '.....XXXXXX.....',
+    '......XXXX......',
+    '................',
+    '................',
+  ],
+} as const
 
-const PlusIcon = ({ size = 24 }: { size?: number }) => (
-  <PixelIcon size={size}>
-    <rect x="6" y="2" width="4" height="12" />
-    <rect x="2" y="6" width="12" height="4" />
-  </PixelIcon>
-)
+type PixelIconName = keyof typeof ICON_PIXELS
 
-const EditIcon = ({ size = 20 }: { size?: number }) => (
-  <PixelIcon size={size}>
-    <path d="M11 1 L15 5 L6 14 L1 15 L2 10 Z" />
-  </PixelIcon>
-)
+function PixelIcon({ name, size }: { name: PixelIconName; size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      shapeRendering="crispEdges"
+      aria-hidden="true"
+      style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
+    >
+      {ICON_PIXELS[name].flatMap((row, y) =>
+        [...row].map((px, x) =>
+          px === 'X' ? <rect key={`${x}:${y}`} x={x} y={y} width={1} height={1} /> : null,
+        ),
+      )}
+    </svg>
+  )
+}
 
-const DeleteIcon = ({ size = 20 }: { size?: number }) => (
-  <PixelIcon size={size}>
-    <rect x="6" y="1" width="4" height="2" />
-    <rect x="3" y="3" width="10" height="2" />
-    <rect x="4" y="5" width="2" height="7" />
-    <rect x="7" y="5" width="2" height="7" />
-    <rect x="10" y="5" width="2" height="7" />
-    <rect x="4" y="12" width="8" height="2" />
-  </PixelIcon>
-)
-
+const PlusIcon = ({ size = 24 }: { size?: number }) => <PixelIcon name="add" size={size} />
+const EditIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="edit" size={size} />
+const DeleteIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="delete" size={size} />
 // 释放（断开 agent 子进程）：电源符号
-const ReleaseIcon = ({ size = 20 }: { size?: number }) => (
-  <PixelIcon size={size}>
-    <rect x="7" y="1" width="2" height="6" />
-    <rect x="3" y="3" width="3" height="2" />
-    <rect x="10" y="3" width="3" height="2" />
-    <rect x="3" y="5" width="2" height="6" />
-    <rect x="11" y="5" width="2" height="6" />
-    <rect x="3" y="11" width="10" height="3" />
-  </PixelIcon>
-)
+const ReleaseIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="power" size={size} />
 
 function SidebarBottomButton({
   toggle,
