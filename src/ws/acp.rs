@@ -168,6 +168,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                         .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            if let Some(notif) = c.initial_commands_notification() {
+                let data = serde_json::to_value(&notif).unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                        .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(msg.into())).await;
+            }
             Some(c)
         }
         None => {
@@ -206,6 +213,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 ).await;
 
                                 let c = c.clone();
+                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
+                                c.mark_prompt_active();
                                 let tx = notify_tx.clone();
                                 let db2 = db.clone();
                                 let sid2 = sid.clone();
@@ -213,6 +222,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 tokio::spawn(async move {
                                     match c.send_prompt(&prompt_text).await {
                                         Ok(resp) => {
+                                            c.mark_prompt_idle();
                                             tokio::task::yield_now().await;
                                             let assistant_text = buf2.lock().await.drain(..).collect::<String>();
                                             if !assistant_text.is_empty() {
@@ -227,6 +237,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             let _ = tx.send(Message::Text(msg.into())).await;
                                         }
                                         Err(e) => {
+                                            c.mark_prompt_idle();
                                             buf2.lock().await.clear();
                                             let err_msg = format!("{}", e);
                                             let msg = serde_json::to_string(
@@ -239,6 +250,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
+                                    // 取消也视为 prompt 结束
+                                    c.mark_prompt_idle();
                                     if let Err(e) = c.cancel() {
                                         error!("ACP cancel failed: {}", e);
                                     }
@@ -288,6 +301,12 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             continue;
                                         }
 
+                                        // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏
+                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await {
+                                            if let Some(c) = Arc::try_unwrap(old).ok() {
+                                                c.disconnect().await;
+                                            }
+                                        }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
 
                                         let rx = new_client.session_update_subscribe();

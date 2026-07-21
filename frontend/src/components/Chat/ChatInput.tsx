@@ -31,7 +31,7 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
   }, [text])
 
   const filteredCommands = text.startsWith('/')
-    ? commands.filter((c) => c.toLowerCase().startsWith(text.toLowerCase()))
+    ? commands.filter((c) => c.toLowerCase().startsWith(text.slice(1).toLowerCase()))
     : []
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
   }
 
   const selectCommand = (cmd: string) => {
-    setText(cmd + ' ')
+    setText('/' + cmd + ' ')
     setShowCommands(false)
     textareaRef.current?.focus()
   }
@@ -143,7 +143,7 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)' }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
             >
-              {cmd}
+              /{cmd}
             </button>
           ))}
         </div>

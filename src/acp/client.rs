@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -20,6 +21,29 @@ use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::AcpTerminalManager;
 use crate::models::agent::Agent;
 
+/// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
+///
+/// ACP v1 协议（所有当前对接的 agent 均协商 protocolVersion:1）没有官方
+/// `state_update`（`running`/`idle`/`requires_action`）状态机，agent 也不会
+/// 发送 v2 状态帧。因此只能用后端可观测信号推断 agent 是否"在干活"：
+/// - `active_prompt`：有进行中的 prompt（由 WS handler 在 Prompt/PromptDone/Err 时标记）
+/// - `last_activity`：最近一次收到 agent 任意 `session/update` 通知的时间（任意 v1 agent 干活时都会持续发送）
+/// - 未决权限数见 [`PermissionManager::pending_count`]（任意 agent 的 `request_permission` 均走此处）
+/// 三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
+struct ActivityState {
+    active_prompt: bool,
+    last_activity: Instant,
+}
+
+impl ActivityState {
+    fn new() -> Self {
+        Self {
+            active_prompt: false,
+            last_activity: Instant::now(),
+        }
+    }
+}
+
 pub struct AcpClient {
     connection: ConnectionTo<AcpAgentRole>,
     session_id: SessionId,
@@ -30,6 +54,9 @@ pub struct AcpClient {
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
+    available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
+    /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
+    activity: Arc<Mutex<ActivityState>>,
 }
 
 impl AcpClient {
@@ -58,6 +85,8 @@ impl AcpClient {
         let tm = terminal_manager.clone();
         let permission_manager = Arc::new(PermissionManager::new());
         let pm = permission_manager.clone();
+        let activity = Arc::new(Mutex::new(ActivityState::new()));
+        let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -65,7 +94,21 @@ impl AcpClient {
             .on_receive_notification(
                 {
                     let tx = notif_tx.clone();
+                    let activity = activity.clone();
+                    let commands_notif = commands_notif.clone();
                     async move |notification: SessionNotification, _cx| {
+                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
+                        if let Ok(mut st) = activity.lock() {
+                            st.last_activity = Instant::now();
+                        }
+                        if matches!(
+                            notification.update,
+                            SessionUpdate::AvailableCommandsUpdate(_)
+                        ) {
+                            if let Ok(mut guard) = commands_notif.lock() {
+                                *guard = Some(notification.clone());
+                            }
+                        }
                         handler::handle_session_update(&tx, notification)
                     }
                 },
@@ -181,6 +224,8 @@ impl AcpClient {
             permission_manager,
             supports_load_session,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
+            available_commands_notif: commands_notif,
+            activity,
         })
     }
 
@@ -269,6 +314,55 @@ impl AcpClient {
         self.supports_load_session
     }
 
+    // ---- 活跃度跟踪（供空闲回收看护任务 reaper 使用）----
+
+    /// 收到任意 agent 通知时刷新最后活动时间。
+    pub fn mark_activity(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.last_activity = Instant::now();
+        }
+    }
+
+    /// 标记有进行中的 prompt（由 WS handler 在收到用户 prompt 时调用）。
+    pub fn mark_prompt_active(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.active_prompt = true;
+            st.last_activity = Instant::now();
+        }
+    }
+
+    /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
+    pub fn mark_prompt_idle(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.active_prompt = false;
+        }
+    }
+
+    /// 当前未决权限请求数（requires_action 语义）。
+    pub async fn pending_permissions(&self) -> usize {
+        self.permission_manager.pending_count().await
+    }
+
+    /// 是否静默待命超时：无进行中 prompt、无未决权限、且距最后活动已满 idle_secs。
+    pub async fn is_idle_stale(&self, idle_secs: u64) -> bool {
+        let (active_prompt, last_activity) = {
+            let st = self.activity.lock().unwrap();
+            (st.active_prompt, st.last_activity)
+        };
+        let pending = self.permission_manager.pending_count().await;
+        !active_prompt && pending == 0 && last_activity.elapsed().as_secs() >= idle_secs
+    }
+
+    /// 是否权限请求超时无响应：有未决权限但久无活动（agent 等用户却无人应答）。
+    pub async fn is_permission_stale(&self, perm_secs: u64) -> bool {
+        let last_activity = {
+            let st = self.activity.lock().unwrap();
+            st.last_activity
+        };
+        let pending = self.permission_manager.pending_count().await;
+        pending > 0 && last_activity.elapsed().as_secs() >= perm_secs
+    }
+
     pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
         let resp = self
             .connection
@@ -308,6 +402,13 @@ impl AcpClient {
         ))
     }
 
+    /// Returns the cached `AvailableCommandsUpdate` notification, if the agent
+    /// already pushed one. Sent to the WS on connect so the slash-command
+    /// autocomplete has data even though the notification predates the WS.
+    pub fn initial_commands_notification(&self) -> Option<SessionNotification> {
+        self.available_commands_notif.lock().ok()?.clone()
+    }
+
     pub async fn spawn_and_load(
         agent: Agent,
         _cwd: PathBuf,
@@ -336,6 +437,8 @@ impl AcpClient {
         let tm = terminal_manager.clone();
         let permission_manager = Arc::new(PermissionManager::new());
         let pm = permission_manager.clone();
+        let activity = Arc::new(Mutex::new(ActivityState::new()));
+        let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -343,7 +446,21 @@ impl AcpClient {
             .on_receive_notification(
                 {
                     let tx = notif_tx.clone();
+                    let activity = activity.clone();
+                    let commands_notif = commands_notif.clone();
                     async move |notification: SessionNotification, _cx| {
+                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
+                        if let Ok(mut st) = activity.lock() {
+                            st.last_activity = Instant::now();
+                        }
+                        if matches!(
+                            notification.update,
+                            SessionUpdate::AvailableCommandsUpdate(_)
+                        ) {
+                            if let Ok(mut guard) = commands_notif.lock() {
+                                *guard = Some(notification.clone());
+                            }
+                        }
                         handler::handle_session_update(&tx, notification)
                     }
                 },
@@ -451,6 +568,8 @@ impl AcpClient {
             permission_manager,
             supports_load_session,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
+            available_commands_notif: commands_notif,
+            activity,
         })
     }
 
