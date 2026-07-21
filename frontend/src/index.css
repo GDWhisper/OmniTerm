@@ -1295,6 +1295,9 @@ body.parchment-texture {
     inset 0 -2px 0 var(--wood-inset-light),
     inset -2px 0 0 var(--wood-inset-light);
 }
+.panel-title-bar .title-bar-badge.badge-danger {
+  color: var(--danger, #FF7B72);
+}
 .panel-title-bar .title-bar-path {
   font-size: 11px;
   color: var(--gold-light, #FFCB6B);

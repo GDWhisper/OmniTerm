@@ -125,21 +125,21 @@ export function ChatView() {
 
   const titleChip = (() => {
     if (chatState.sessionEnded) {
-      return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.ended')}</span>
+      return <span className="title-bar-badge badge-danger">● DEAD</span>
     }
     if (released) {
-      return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.released')}</span>
+      return <span className="title-bar-badge badge-danger">● DEAD</span>
     }
     switch (connectionState) {
       case 'connecting':
-        return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.connecting')}</span>
+        return <span className="title-bar-badge">● LINK</span>
       case 'connected':
         return <span className="title-bar-badge">● LIVE</span>
       case 'error':
-        return <span style={{ color: 'var(--danger, #FF7B72)' }}>{t('chat.status.error')}</span>
+        return <span className="title-bar-badge">● FAIL</span>
       case 'disconnected':
       default:
-        return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.disconnected')}</span>
+        return <span className="title-bar-badge">● OFF</span>
     }
   })()
 
@@ -176,40 +176,6 @@ export function ChatView() {
         <span className="title-bar-spacer" />
         {titleChip}
       </div>
-
-      {showRestore && (
-        <div
-          style={{
-            padding: '6px 12px',
-            background: 'rgba(255, 255, 255, 0.04)',
-            color: 'var(--text-muted)',
-            fontSize: 12,
-            borderBottom: '1px solid var(--border-subtle)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-          }}
-        >
-          <span>{t('chat.session.ended')}</span>
-          <button
-            onClick={restore}
-            disabled={connectionState !== 'connected'}
-            style={{
-              marginLeft: 'auto',
-              padding: '2px 10px',
-              fontSize: 11,
-              borderRadius: 4,
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--accent-14)',
-              color: 'var(--accent)',
-              cursor: connectionState === 'connected' ? 'pointer' : 'not-allowed',
-              opacity: connectionState === 'connected' ? 1 : 0.5,
-            }}
-          >
-            {t('chat.session.restore')}
-          </button>
-        </div>
-      )}
 
       {chatState.error && (
         <div
@@ -256,6 +222,40 @@ export function ChatView() {
           permission={chatState.pendingPermission}
           onRespond={respondPermission}
         />
+      )}
+
+      {showRestore && (
+        <div
+          style={{
+            padding: '6px 12px',
+            background: 'rgba(255, 255, 255, 0.04)',
+            color: 'var(--text-muted)',
+            fontSize: 12,
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>{t('chat.session.ended')}</span>
+          <button
+            onClick={restore}
+            disabled={connectionState !== 'connected'}
+            style={{
+              marginLeft: 'auto',
+              padding: '2px 10px',
+              fontSize: 11,
+              borderRadius: 4,
+              border: '1px solid var(--border-subtle)',
+              background: 'var(--accent-14)',
+              color: 'var(--accent)',
+              cursor: connectionState === 'connected' ? 'pointer' : 'not-allowed',
+              opacity: connectionState === 'connected' ? 1 : 0.5,
+            }}
+          >
+            {t('chat.session.restore')}
+          </button>
+        </div>
       )}
 
       <ChatInput
