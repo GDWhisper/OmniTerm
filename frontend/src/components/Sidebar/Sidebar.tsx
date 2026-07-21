@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
+import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
@@ -818,6 +819,11 @@ export function Sidebar() {
     try {
       await api.releaseSession(id)
       await loadSessions()
+      // 若释放的正是当前聚焦的会话，立即标记结束，使 ChatView 即时显示
+      // 「恢复会话」按钮，无需等待列表轮询或刷新页面。
+      if (id === activeSessionId) {
+        useChatStore.getState().markEnded(id)
+      }
       addToast('success', t('sidebar.sessionReleased') ?? `Session process released`)
     } catch {
       // api client already shows error toast
