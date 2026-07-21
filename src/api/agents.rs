@@ -2,12 +2,13 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::acp::AcpClient;
 use crate::models::agent::{Agent, AgentEnvVar, CreateAgent, UpdateAgent};
 use crate::AppState;
 
@@ -18,6 +19,7 @@ pub fn routes() -> Router<AppState> {
             "/agents/{id}",
             get(get_agent).put(update_agent).delete(delete_agent),
         )
+        .route("/agents/{id}/test", post(test_agent))
 }
 
 #[derive(sqlx::FromRow)]
@@ -190,4 +192,28 @@ pub async fn load_agent(db: &sqlx::SqlitePool, id: &str) -> Option<Agent> {
         .ok()
         .flatten();
     row.map(AgentRow::into_agent)
+}
+
+async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let agent = match load_agent(&state.db, &id).await {
+        Some(a) => a,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "agent not found" })),
+            );
+        }
+    };
+
+    let cwd = std::env::temp_dir();
+    match AcpClient::spawn_and_connect(agent, cwd).await {
+        Ok(client) => {
+            client.disconnect().await;
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("connection failed: {}", e) })),
+        ),
+    }
 }
