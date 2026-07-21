@@ -17,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use clap::Parser;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::path::Path;
+#[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -163,11 +164,21 @@ async fn main() -> anyhow::Result<()> {
     // 这类场景产生的孤儿仍需下次启动时由用户手动清理或恢复。
     let shutdown_supervisor = state.acp_supervisor.clone();
     let shutdown_signal = async move {
-        let mut term = unix::signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        let mut int = unix::signal(SignalKind::interrupt()).expect("install SIGINT handler");
-        tokio::select! {
-            _ = term.recv() => {}
-            _ = int.recv() => {}
+        #[cfg(unix)]
+        {
+            let mut term =
+                unix::signal(SignalKind::terminate()).expect("install SIGTERM handler");
+            let mut int =
+                unix::signal(SignalKind::interrupt()).expect("install SIGINT handler");
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = int.recv() => {}
+            }
+        }
+        #[cfg(windows)]
+        {
+            // Windows 无 POSIX 信号，使用控制台 Ctrl-C 事件触发优雅关闭。
+            let _ = tokio::signal::ctrl_c().await;
         }
         info!("shutdown signal received, recycling ACP agent subprocesses");
         shutdown_supervisor.shutdown_all().await;
