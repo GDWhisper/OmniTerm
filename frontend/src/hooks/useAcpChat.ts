@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
+import { useAppStore } from '../stores/appStore'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -23,13 +24,14 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
   message?: string
   id?: string
   request?: Record<string, unknown>
+  alive?: boolean
 }
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
@@ -405,6 +407,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           break
         }
+        case 'process_alive':
+          // 后端进程存活状态事件驱动更新（替代轮询）：即时刷新指示灯。
+          if (typeof frame.alive === 'boolean') {
+            useAppStore.getState().setAcpProcessAlive(sid, frame.alive)
+          }
+          break
       }
     }
 

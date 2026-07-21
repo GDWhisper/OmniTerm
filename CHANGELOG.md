@@ -91,6 +91,7 @@ Prefix each entry with the area it affects:
 - (2026-07-21) `[backend]` 修复后端正常停止/重启时 ACP agent 子进程（codebuddy --acp 等）变孤儿持续占内存：新增 SIGTERM/SIGINT 优雅退出钩子，退出前 `AcpSupervisor::shutdown_all()` 显式 kill 所有 supervisor 中驻留的子进程（实测 22 个孤儿→0）。注：SIGKILL / panic / 崩溃来不及运行，此类场景产生的孤儿仍需下次启动时手动清理或"恢复会话"（`src/main.rs`）
 - (2026-07-21) `[frontend]` Sidebar 区分「未释放/已释放」ACP 会话：运行中显示绿点 + tooltip「Agent process running」，已释放显示灰点 + 「已释放」小标签 + tooltip「点击会话可恢复」；ACP 会话不再误用 tmux 的 `is_active` 假状态（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-21) `[frontend]` 修复 ACP 会话「断开/释放后不显示恢复按钮、需刷新页面才出现」：ChatView 恢复按钮显示条件从仅 `sessionEnded` 扩展为 `sessionEnded || (acp_process_alive===false)`，进程被手动释放/reaper 回收/后端重启后即时显示「恢复会话」；Sidebar `handleReleaseSession` 释放当前聚焦会话后立刻 `markEnded` 实现零延迟；新增 `chat.status.released` 中英文案（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-21) `[backend]` `[frontend]` ACP 进程存活状态由 3 秒轮询改为 **WS 事件驱动**：`AcpSupervisor` 内置 `broadcast::Sender<AcpProcessEvent>`，在 `insert`/`dispose` 时自动广播；`ws/acp.rs` 订阅后按 `session_id` 过滤转发 `process_alive` 帧（含连接建立时的初始同步帧）；前端 `useAcpChat` 收到后即时 `setAcpProcessAlive` 更新指示灯。恢复会话后绿点从「最多 ~4-5s（spawn+轮询）」降为「进程注册即亮」（约 spawn 耗时 ~1.6s，无需等轮询）。保留 Sidebar 轮询仅服务 tmux 会话（`src/acp/supervisor.rs`、`src/ws/acp.rs`、`frontend/src/stores/appStore.ts`、`frontend/src/hooks/useAcpChat.ts`）
 
 ---
 

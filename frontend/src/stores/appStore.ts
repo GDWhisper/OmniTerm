@@ -88,6 +88,8 @@ export interface AppState {
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
+  // ACP 进程存活状态由后端 WS 事件驱动即时更新（替代 3 秒轮询）。
+  setAcpProcessAlive: (sessionId: string, alive: boolean) => void
   setActiveProject: (id: string | null) => void
   setActiveWorkspace: (id: string | null) => void
   setActiveSession: (id: string | null) => void
@@ -204,6 +206,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (projectId, sessions) =>
     set((s) => ({ sessions: { ...s.sessions, [projectId]: sessions } })),
+  setAcpProcessAlive: (sessionId, alive) =>
+    set((s) => {
+      const next: Record<string, Session[]> = {}
+      for (const [pid, list] of Object.entries(s.sessions)) {
+        next[pid] = list.map((x) =>
+          x.id === sessionId ? { ...x, acp_process_alive: alive } : x,
+        )
+      }
+      return { sessions: next }
+    }),
   setActiveProject: (id) => {
     if (id) localStorage.setItem('omniterm_active_project', id)
     else localStorage.removeItem('omniterm_active_project')

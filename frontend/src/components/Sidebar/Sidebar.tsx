@@ -401,7 +401,10 @@ export function Sidebar() {
   const decisionCandidatesRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    // Poll sessions every 3 seconds for agent state changes
+    // 每 3 秒轮询：服务 **tmux** 会话的 agent_state / attention_reason 检测
+    // （tmux 无 WS 推送，仍需轮询）。注意：ACP 会话的 `acp_process_alive`
+    // 已由后端 WS 的 `process_alive` 事件驱动即时更新（见 useAcpChat），
+    // 不再依赖本轮询回流；轮询整体覆盖时 ACP 的 alive 值与推送最终一致，无副作用。
     const interval = setInterval(async () => {
       if (!activeProjectId) return
       try {

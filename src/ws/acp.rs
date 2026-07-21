@@ -61,6 +61,8 @@ enum AcpServerMessage<'a> {
     ReplayStart,
     #[serde(rename = "replay_end")]
     ReplayEnd,
+    #[serde(rename = "process_alive")]
+    ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
     PermissionRequest {
         id: &'a str,
@@ -188,6 +190,20 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             None
         }
     };
+
+    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动，
+    // 替代前端对 acp_process_alive 的轮询）。
+    let mut proc_rx = state.acp_supervisor.process_event_subscribe();
+    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）。
+    let _ = notify_tx
+        .send(
+            Message::Text(
+                serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
+                    .unwrap_or_default()
+                    .into(),
+            ),
+        )
+        .await;
 
     let db = state.db.clone();
     let sid = session_id.clone();
@@ -378,6 +394,23 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                         }
                     }
                     None => break,
+                }
+            }
+            msg = proc_rx.recv() => {
+                match msg {
+                    Ok(evt) => {
+                        if evt.session_id == session_id {
+                            let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
+                                alive: evt.alive,
+                            })
+                            .unwrap_or_default();
+                            if notify_tx.send(Message::Text(frame.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格）
+                    Err(_) => {}
                 }
             }
         }
