@@ -78,6 +78,14 @@ export interface ConfigOption {
   options: ConfigSelectOption[]
 }
 
+// --- Slash commands (agent-advertised via AvailableCommandsUpdate) ---
+
+export interface SlashCommand {
+  name: string
+  description: string
+  hint?: string
+}
+
 // --- Message model ---
 
 export interface ChatMessage {
@@ -99,7 +107,7 @@ interface ChatSessionState {
   sessionEnded: boolean
   pendingPermission: PendingPermission | null
   usage: Record<string, unknown> | null
-  commands: string[]
+  commands: SlashCommand[]
   configOptions: ConfigOption[]
 }
 
@@ -121,7 +129,7 @@ interface ChatActions {
   setPermission: (sessionId: string, permission: PendingPermission) => void
   clearPermission: (sessionId: string) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
-  setCommands: (sessionId: string, commands: string[]) => void
+  setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
   reset: (sessionId: string) => void

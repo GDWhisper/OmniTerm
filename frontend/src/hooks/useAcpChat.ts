@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate } from '../stores/chatStore'
+import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
@@ -95,7 +95,7 @@ type SessionUpdateAction =
   | { kind: 'upsertTool'; toolCallId: string; title?: string; status?: string; toolKind?: string; content?: string; locations?: string[] }
   | { kind: 'setPlan'; entries: PlanEntry[] }
   | { kind: 'setUsage'; usage: Record<string, unknown> }
-  | { kind: 'setCommands'; commands: string[] }
+  | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
   | { kind: 'pushSystem'; label: string }
   | { kind: 'drop' }
@@ -202,9 +202,17 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     const inner = getVariantInner(obj, variant) ?? obj
     const rawCmds = inner['commands'] ?? inner['availableCommands']
     if (Array.isArray(rawCmds)) {
-      const commands = rawCmds
-        .map((c) => typeof c === 'string' ? c : (c && typeof c === 'object' ? String((c as Record<string, unknown>)['name'] ?? '') : ''))
-        .filter(Boolean)
+      const commands: SlashCommand[] = rawCmds
+        .filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+        .map((c) => {
+          const input = c['input'] as Record<string, unknown> | undefined
+          return {
+            name: String(c['name'] ?? ''),
+            description: String(c['description'] ?? ''),
+            hint: input && typeof input['hint'] === 'string' ? (input['hint'] as string) : undefined,
+          }
+        })
+        .filter((c) => c.name)
       return { kind: 'setCommands', commands }
     }
     return { kind: 'drop' }

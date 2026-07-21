@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
+import type { SlashCommand } from '../../stores/chatStore'
 
 interface ChatInputProps {
   disabled: boolean
   onSend: (text: string) => void
   onCancel: () => void
   sending: boolean
-  commands?: string[]
+  commands?: SlashCommand[]
 }
 
 export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
@@ -31,7 +32,7 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
   }, [text])
 
   const filteredCommands = text.startsWith('/')
-    ? commands.filter((c) => c.toLowerCase().startsWith(text.slice(1).toLowerCase()))
+    ? commands.filter((c) => c.name.toLowerCase().startsWith(text.slice(1).toLowerCase()))
     : []
 
   useEffect(() => {
@@ -55,8 +56,8 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
     }
   }
 
-  const selectCommand = (cmd: string) => {
-    setText('/' + cmd + ' ')
+  const selectCommand = (cmd: SlashCommand) => {
+    setText('/' + cmd.name + ' ')
     setShowCommands(false)
     textareaRef.current?.focus()
   }
@@ -126,10 +127,12 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
         >
           {filteredCommands.map((cmd) => (
             <button
-              key={cmd}
+              key={cmd.name}
               onClick={() => selectCommand(cmd)}
               style={{
-                display: 'block',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
                 width: '100%',
                 textAlign: 'left',
                 padding: '6px 12px',
@@ -143,7 +146,19 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
               onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)' }}
               onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
             >
-              /{cmd}
+              <span style={{ flexShrink: 0 }}>/{cmd.name}</span>
+              {cmd.description && (
+                <span
+                  style={{
+                    color: 'var(--text-faint)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {cmd.description}
+                </span>
+              )}
             </button>
           ))}
         </div>
