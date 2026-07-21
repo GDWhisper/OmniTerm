@@ -123,6 +123,7 @@ interface ChatActions {
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: string[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
+  patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
   reset: (sessionId: string) => void
 }
 
@@ -372,6 +373,15 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setConfigOptions: (sessionId, options) =>
     set((state) => patch(state, sessionId, { configOptions: options })),
+
+  patchConfigOptionValue: (sessionId, configId, value) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const configOptions = current.configOptions.map((o) =>
+        o.id === configId ? { ...o, currentValue: value } : o,
+      )
+      return patch(state, sessionId, { configOptions })
+    }),
 
   reset: (sessionId) =>
     set((state) => {

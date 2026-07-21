@@ -450,7 +450,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
   const setConfigOption = useCallback((configId: string, value: string) => {
     const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    const sid = sessionIdRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sid) return
+    useChatStore.getState().patchConfigOptionValue(sid, configId, value)
     ws.send(JSON.stringify({ type: 'set_config_option', config_id: configId, value }))
   }, [])
 
