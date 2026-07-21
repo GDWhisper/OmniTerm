@@ -574,6 +574,9 @@ impl AcpClient {
     }
 
     pub async fn disconnect(self) {
+        // 回收本会话可能创建的终端子进程（kill_on_drop 依赖 TerminalProcess 被 drop，
+        // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
+        self.terminal_manager.kill_all().await;
         drop(self._shutdown_tx);
         let _ = self.connection_task.await;
     }
