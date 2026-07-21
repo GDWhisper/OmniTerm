@@ -197,3 +197,21 @@ export function IconX(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function IconPlus(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="8" y1="3.5" x2="8" y2="12.5" />
+      <line x1="3.5" y1="8" x2="12.5" y2="8" />
+    </svg>
+  )
+}
+
+export function IconPower(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="8" y1="2.5" x2="8" y2="7.5" />
+      <path d="M5.75 5.1a4.5 4.5 0 1 0 4.5 0" />
+    </svg>
+  )
+}

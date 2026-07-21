@@ -69,7 +69,7 @@ Prefix each entry with the area it affects:
 - (2026-07-15) `[docs]` `docs/architecture/backend.md` 源树 + API 端点 + Sessions 表段同步到 Phase 3 状态，新增「ACP Module (Phase 3)」章节；`docs/reference/user-testing.md` 追加 §11 ACP 智能体会话手工测试用例
 - (2026-07-16) `[docs]` `docs/architecture/frontend.md` 源树补 `agentStore`/`chatStore`/`useAcpChat`/`Chat/`/`AgentPicker/`；新增「ACP Chat View (Phase 4a)」章节（state/connection split + SessionUpdate 解析策略）；`docs/reference/user-testing.md` 追加 §12 ACP Chat 视图手工测试用例
 - (2026-07-20) `[frontend]` ACP 助手回合由「单一气泡」拆分为分块堆叠：文本输出 → 气泡、工具调用 → 带状态色左边框的卡片（运行中 accent / 完成绿 / 失败红，等宽字体标题）、思考 → 低调斜体可折叠（无填充背景）、计划 → 细边框容器；流式光标跟随末尾文本块，工具执行期间独立显示（`frontend/src/components/Chat/ChatMessage.tsx`）
-- (2026-07-21) `[frontend]` Sidebar 操作按钮图标（新建/重命名/删除/释放）由固定色 PNG 换成像素风 `currentColor` 内联 SVG（16×16 crispEdges，与 PixelSprites 同一基调）：图标随按钮 hover 变色（accent/danger/warning）恢复正常，重命名图标由误用的金币修正为铅笔；删除 4 个 PNG 资源（含无引用的 `hero.png`）（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-21) `[frontend]` Sidebar 操作按钮图标（新建/重命名/删除/释放）由固定色 PNG 换成线性描边 SVG（复用 FileManager `icons.tsx` 风格：16×16 / stroke 1.5 / round caps / `currentColor`）：图标随按钮 hover 变色（accent/danger/warning）恢复正常，重命名图标由误用的金币修正为铅笔；删除 4 个 PNG 资源（含无引用的 `hero.png`）；`icons.tsx` 新增通用 `IconPlus` / `IconPower`（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/FileManager/icons.tsx`）
 
 ### Removed
 

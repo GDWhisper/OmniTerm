@@ -6,7 +6,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -21,110 +21,6 @@ import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
-// Sidebar 操作按钮图标 —— 16×16 像素图，设计稿见 docs/dev/pixel-icons.md。
-// 'X' = 1×1 像素，逐格渲染为 rect；crispEdges + currentColor：随按钮 hover 变色、缩放保持像素锐利。
-const ICON_PIXELS = {
-  add: [
-    '................',
-    '................',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '..XXXXXXXXXXXX..',
-    '..XXXXXXXXXXXX..',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '................',
-    '................',
-  ],
-  edit: [
-    '................',
-    '................',
-    '............X...',
-    '...........X.X..',
-    '..........X.X.X.',
-    '.........X.X.X..',
-    '........X.X.X...',
-    '.......X.X.X....',
-    '......X.X.X.....',
-    '.....X.X.X......',
-    '....X.X.X.......',
-    '...X.X.X........',
-    '..X.X.X.........',
-    '.XXX.X..........',
-    '.XXXX...........',
-    '.XXX............',
-  ],
-  delete: [
-    '................',
-    '................',
-    '....XXXXXXXX....',
-    '...X........X...',
-    '...XXXXXXXXXX...',
-    '....X......X....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '....XXXXXXXX....',
-    '.....XXXXXX.....',
-    '................',
-    '................',
-  ],
-  power: [
-    '................',
-    '................',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '.......XX.......',
-    '....XXX..XXX....',
-    '...XX......XX...',
-    '...X........X...',
-    '...X........X...',
-    '...X........X...',
-    '....X......X....',
-    '.....XXXXXX.....',
-    '......XXXX......',
-    '................',
-    '................',
-  ],
-} as const
-
-type PixelIconName = keyof typeof ICON_PIXELS
-
-function PixelIcon({ name, size }: { name: PixelIconName; size: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      shapeRendering="crispEdges"
-      aria-hidden="true"
-      style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-    >
-      {ICON_PIXELS[name].flatMap((row, y) =>
-        [...row].map((px, x) =>
-          px === 'X' ? <rect key={`${x}:${y}`} x={x} y={y} width={1} height={1} /> : null,
-        ),
-      )}
-    </svg>
-  )
-}
-
-const PlusIcon = ({ size = 24 }: { size?: number }) => <PixelIcon name="add" size={size} />
-const EditIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="edit" size={size} />
-const DeleteIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="delete" size={size} />
-// 释放（断开 agent 子进程）：电源符号
-const ReleaseIcon = ({ size = 20 }: { size?: number }) => <PixelIcon name="power" size={size} />
 
 function SidebarBottomButton({
   toggle,
@@ -1106,7 +1002,7 @@ export function Sidebar() {
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
-            <PlusIcon size={24} />
+            <IconPlus />
           </button>
         </div>
 
@@ -1199,7 +1095,7 @@ export function Sidebar() {
                                 }}
                                 title={t('sidebar.createSession')}
                               >
-                                <PlusIcon size={24} />
+                                <IconPlus />
                               </button>
                             </div>
 
@@ -2152,7 +2048,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      <EditIcon size={20} />
+      <IconPencil width={14} height={14} />
     </button>
   )
 }
@@ -2176,7 +2072,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      <DeleteIcon size={20} />
+      <IconTrash width={14} height={14} />
     </button>
   )
 }
@@ -2200,7 +2096,7 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      <ReleaseIcon size={20} />
+      <IconPower width={14} height={14} />
     </button>
   )
 }
