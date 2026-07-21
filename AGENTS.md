@@ -1,7 +1,7 @@
 # OmniTerm
 
 Web-based tmux terminal manager. Three-panel layout: Sidebar | Terminal | FileManager.
-Rust (Axum) backend + React (Vite + TypeScript) frontend. Apache-2.0 licensed.
+Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 
 > 进度里程碑见 `PROGRESS.md`
 
