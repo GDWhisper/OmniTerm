@@ -1,5 +1,15 @@
 # Windows Support
 
+> **⚠️ 实验性特性 — 未经充分验证**
+>
+> Windows 支持所需的底层代码（平台分支、进程枚举、进程清理、agent 检测）**已在代码层面实现**，
+> 但 `openspec/changes/windows-psmux-support` 的 **Phase 0 兼容性 spike 尚未完成**（未在任何真实
+> Windows 环境 / `windows-latest` runner 上验证 psmux 多 session、`@user_option` 展开、`pane_pid`
+> ConPTY 语义、控制模式、`pane_current_path` 等关键场景）。
+>
+> 因此本文档描述的能力**目前视为实验性**：代码可编译，但未在真实 Windows 上跑通端到端验证。
+> 请谨慎使用，并优先在 Linux/macOS 或 WSL2 下运行 OmniTerm。相关问题欢迎反馈。
+
 OmniTerm supports Windows natively via [psmux](https://github.com/psmux/psmux), a Rust-based tmux replacement built on the Windows ConPTY API.
 
 ## Prerequisites

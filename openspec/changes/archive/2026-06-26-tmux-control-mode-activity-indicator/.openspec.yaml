@@ -1,2 +1,9 @@
 schema: spec-driven
 created: 2026-06-26
+archived: 2026-07-21
+status: completed
+reason: >
+  所有 tasks 已勾选并完成：新增 src/tmux/control_mode.rs（ControlModeClient + SessionActivityMonitor，
+  基于 tmux -C attach-session 监听 %output 事件），后端 list_sessions 响应增加 is_active 字段，
+  AppState 注入监控器，前端 Session 接口与 Sidebar 呼吸动画圆点已落地，单元/集成测试齐备。代码已
+  通读核实实现与 tasks 一致。无遗留项，归档。

@@ -1,2 +1,9 @@
 schema: spec-driven
 created: 2026-06-24
+archived: 2026-07-21
+status: completed
+reason: >
+  所有 tasks 已勾选并完成：SettingsPopup 从 Sidebar 内部 absolute 改为 Layout 级别的 fixed 浮动层，
+  锚定 ⚙ 按钮、宽度自适应 340px、视口边界保护、click-outside/Escape 关闭均验证通过，移动端
+  MobileContent 独立渲染不受影响。代码抽查（SettingsPopup.tsx position:fixed、Sidebar 不再渲染、
+  Layout 在 230/320 行渲染）与 tasks 描述一致。无遗留项，归档。
