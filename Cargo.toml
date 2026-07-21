@@ -1,6 +1,6 @@
 [package]
 name = "omniterm-dev"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 license = "FSL-1.1-MIT"
 authors = ["GDWhisper"]
