@@ -21,53 +21,56 @@ import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
-const PlusIcon = ({ size = 24 }: { size?: number }) => (
-  <img
-    src="/buttons/add.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
-
-const EditIcon = ({ size = 20 }: { size?: number }) => (
-  <img
-    src="/buttons/edit.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
-
-const DeleteIcon = ({ size = 20 }: { size?: number }) => (
-  <img
-    src="/buttons/delete.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
-
-// 释放（断开 agent 子进程）图标：拔插头/电源符号，内联 SVG 避免新增二进制资源
-const ReleaseIcon = ({ size = 20 }: { size?: number }) => (
+// Sidebar 操作按钮图标 —— 16×16 像素网格 + crispEdges，与 PixelSprites 同一像素风基调。
+// 单色 fill="currentColor"：按钮 hover 时由父级 color 驱动变色（旧的固定色 PNG 会吃掉 hover）。
+const PixelIcon = ({ size, children }: { size: number; children: ReactNode }) => (
   <svg
     width={size}
     height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={2}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    style={{ flexShrink: 0, display: 'block' }}
+    viewBox="0 0 16 16"
+    fill="currentColor"
+    shapeRendering="crispEdges"
     aria-hidden="true"
+    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
   >
-    <path d="M12 3v8" />
-    <path d="M7.5 7a6 6 0 1 0 9 0" />
+    {children}
   </svg>
+)
+
+const PlusIcon = ({ size = 24 }: { size?: number }) => (
+  <PixelIcon size={size}>
+    <rect x="6" y="2" width="4" height="12" />
+    <rect x="2" y="6" width="12" height="4" />
+  </PixelIcon>
+)
+
+const EditIcon = ({ size = 20 }: { size?: number }) => (
+  <PixelIcon size={size}>
+    <path d="M11 1 L15 5 L6 14 L1 15 L2 10 Z" />
+  </PixelIcon>
+)
+
+const DeleteIcon = ({ size = 20 }: { size?: number }) => (
+  <PixelIcon size={size}>
+    <rect x="6" y="1" width="4" height="2" />
+    <rect x="3" y="3" width="10" height="2" />
+    <rect x="4" y="5" width="2" height="7" />
+    <rect x="7" y="5" width="2" height="7" />
+    <rect x="10" y="5" width="2" height="7" />
+    <rect x="4" y="12" width="8" height="2" />
+  </PixelIcon>
+)
+
+// 释放（断开 agent 子进程）：电源符号
+const ReleaseIcon = ({ size = 20 }: { size?: number }) => (
+  <PixelIcon size={size}>
+    <rect x="7" y="1" width="2" height="6" />
+    <rect x="3" y="3" width="3" height="2" />
+    <rect x="10" y="3" width="3" height="2" />
+    <rect x="3" y="5" width="2" height="6" />
+    <rect x="11" y="5" width="2" height="6" />
+    <rect x="3" y="11" width="10" height="3" />
+  </PixelIcon>
 )
 
 function SidebarBottomButton({
