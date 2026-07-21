@@ -116,6 +116,13 @@ export function ChatView() {
     setAutoStick(true)
   }
 
+  // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
+  // 也应展示「恢复会话」按钮。acp_process_alive 由 Sidebar 的会话列表轮询刷新，
+  // 因而释放后能即时（最多一个轮询周期）反映到 UI，无需刷新页面。
+  const released =
+    activeSession?.runtime_kind === 'acp' && activeSession?.acp_process_alive === false
+  const showRestore = chatState.sessionEnded || released
+
   const titleChip = (() => {
     if (chatState.sessionEnded) {
       return <span style={{ color: 'var(--text-faint)' }}>{t('chat.status.ended')}</span>
@@ -137,13 +144,6 @@ export function ChatView() {
   })()
 
   const inputDisabled = chatState.sessionEnded || connectionState !== 'connected'
-
-  // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
-  // 也应展示「恢复会话」按钮。acp_process_alive 由 Sidebar 的会话列表轮询刷新，
-  // 因而释放后能即时（最多一个轮询周期）反映到 UI，无需刷新页面。
-  const released =
-    activeSession?.runtime_kind === 'acp' && activeSession?.acp_process_alive === false
-  const showRestore = chatState.sessionEnded || released
 
   return (
     <div
