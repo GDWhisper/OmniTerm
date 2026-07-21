@@ -9,6 +9,30 @@
 > 面板/弹窗的**视觉规格**（尺寸 token、颜色、态）。本文档只管**代码架构**
 > （文件结构、hook、子组件拆分、复制清单）。两边互不重复。
 
+## 可滚动区域统一 OverlayScroll (scrollable-area convention)
+
+**适用场景**：任何会出现**纵向滚动**的区域——sidebar 弹出面板、游戏风格
+面板的内容区、下拉 / 自动补全菜单（如 `ChatInput` 斜杠命令框、
+`ConfigToolbar` 选项菜单）等。**不分面板还是小菜单，一律走此约定**。
+
+**约定**：
+
+- 一律包一层 `<OverlayScroll>`（`frontend/src/components/Common/OverlayScroll.tsx`）：
+  隐藏原生滚动条，右侧叠加一条主题色拇指，滚动时淡入、静止后淡出，
+  不占布局（不挤压内容）
+- **禁止**手写 `overflow-y: auto` + 原生滚动条样式
+- 尺寸由外层 `style` 给定，两种模式：
+  - **填满型**（面板内容区）：flex 父容器里 `style={{ flex: 1, minHeight: 0 }}`
+  - **shrink-to-fit 菜单**（下拉 / 补全框）：`contentStyle={{ flex: '0 0 auto', maxHeight: … }}`，
+    内容少时自适应高度、超出 maxHeight 才滚动（详见组件 docstring）
+- **唯一例外**：需要**横向**滚动的容器（如 FileManager 表格 `.fm-table-wrap`）
+  ——OverlayScroll 只支持纵向，这类保留主题化原生滚动条
+
+**已有案例**：
+
+- `Settings.tsx` / `TmuxCheatsheetPopup.tsx` — 面板内容区（填满型 `flex: 1`）
+- `ConfigToolbar.tsx` / `ChatInput.tsx` — 下拉菜单（shrink-to-fit `maxHeight`）
+
 ## 数据/渲染分离 (data.ts convention)
 
 **适用场景**：组件需要渲染一份**纯静态或低频变更**的展示数据
@@ -69,9 +93,7 @@
 - 边框效果（`borderRadius` / `boxShadow` / `animation`）都在外层 div inline style
 - **顶部标题**：用 `.panel-title-bar` 类（自动获得木纹背景 + VT323 字 +
   3px letter-spacing），文案走 i18n（`t('<feature>.title')`）
-- **滚动条**：统一用 `<OverlayScroll>` 组件——隐藏原生滚动条，右侧叠加一条
-  主题色拇指，滚动时淡入、静止后淡出，不占布局（不挤压内容）。新加可滚动
-  面板直接包一层即可，勿再手写 `overflow-y: auto` + 原生滚动条样式
+- **滚动条**：见上方「可滚动区域统一 OverlayScroll」全局约定（面板内容区用填满型 `flex: 1` 模式）
 
 **已有案例**：
 

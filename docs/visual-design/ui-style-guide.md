@@ -494,12 +494,22 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | Active tab 文字 | `#FAF2DE` | `#E6DFD0` |
 | Tab rail 右边框 | `var(--wood-shadow)` = `#3A2E1F` | `#090A0D` |
 
-### 滚动条（与全局一致）
+### 滚动条（OverlayScroll 覆盖式）
 
-复用全局 scrollbar 规范：8px 宽、`border-radius: 0`、主题感知
-（`var(--scrollbar-thumb)` / `var(--scrollbar-track)`），hover 变 `var(--accent)`。
-Popup 自身 `overflow: hidden`，滚动交给有 `overflow-y: auto` 的内容容器
-（`.settings-content` / `.tmux-cheatsheet-content`）。
+所有纵向滚动区域统一用 `<OverlayScroll>` 组件：**隐藏原生滚动条**，
+在内容右边缘叠加一条主题色拇指，滚动时淡入、静止后淡出，不占布局
+（不挤压内容）。视觉 token：
+
+| 元素 | 值 |
+|------|-----|
+| 拇指宽度 | 6px（`right: 2px`） |
+| 拇指圆角 | `border-radius: 0`（pixel 直角） |
+| 拇指颜色 | `var(--scrollbar-thumb)` |
+| 显隐 | `opacity` 0 → 1，`transition: opacity 0.25s ease`，静止 ~900ms 后淡出 |
+
+Popup 自身 `overflow: hidden`，滚动交给内层 `.overlay-scroll-content`。
+代码约定（填满型 vs shrink-to-fit 菜单、横向滚动例外）见
+[`frontend-patterns.md` 「可滚动区域统一 OverlayScroll」](../architecture/frontend-patterns.md#可滚动区域统一-overlayscroll-scrollable-area-convention)。
 
 ### i18n 视觉约定
 
