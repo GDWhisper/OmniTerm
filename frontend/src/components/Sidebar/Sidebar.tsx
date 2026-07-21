@@ -1175,14 +1175,6 @@ export function Sidebar() {
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
                                       )}
-                                      <EditButton
-                                        onClick={(e) => {
-                                          e.stopPropagation()
-                                          setRenameTarget({ type: 'session', id: s.id, name: s.name || '' })
-                                          setRenameName(s.name || '')
-                                          setRenameOpen(true)
-                                        }}
-                                      />
                                       {s.runtime_kind === 'acp' && (
                                         <ReleaseButton
                                           onClick={(e) => {
@@ -1191,6 +1183,14 @@ export function Sidebar() {
                                           }}
                                         />
                                       )}
+                                      <EditButton
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setRenameTarget({ type: 'session', id: s.id, name: s.name || '' })
+                                          setRenameName(s.name || '')
+                                          setRenameOpen(true)
+                                        }}
+                                      />
                                       <DeleteButton
                                         onClick={(e) => {
                                           e.stopPropagation()
