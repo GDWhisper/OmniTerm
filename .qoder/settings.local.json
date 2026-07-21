@@ -13,7 +13,13 @@
       "Bash(ls -la /home/pax/coding/OmniTerm-dev/docs/superpowers/plans/ /home/pax/coding/OmniTerm-dev/docs/micropowers/plans/ | head -100)",
       "Bash(ls /home/pax/coding/OmniTerm-dev/docs/superpowers/specs/ 2 *)",
       "Bash(ls /home/pax/coding/OmniTerm-dev/docs/micropowers/ 2 *)",
-      "Bash(ls openspec/changes/ 2>/dev/null && echo \"---\" && ls openspec/ 2>/dev/null)"
+      "Bash(ls openspec/changes/ 2>/dev/null && echo \"---\" && ls openspec/ 2>/dev/null)",
+      "Bash(ls /home/pax/coding/OmniTerm-dev/src/models/agent.rs 2>/dev/null && echo \"EXISTS\" || echo \"NOT FOUND\")",
+      "Bash(grep -n 'inotify' docs/dev/debug-log.md 2>/dev/null; echo \"---\"; cat /proc/sys/fs/inotify/max_user_watches; echo \"---\"; pgrep -a omniterm)",
+      "Bash(ls /home/pax/coding/ | grep -i omni)",
+      "Read(//home/pax/coding/**)",
+      "Bash(echo \".githooks/\" *)",
+      "Bash(cd /home/pax/coding/OmniTerm-dev && cargo check 2>&1 | tail -15)"
     ]
   }
 }
