@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use axum::{
     extract::{Path, State},
@@ -11,7 +12,9 @@ use serde_json::json;
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, Session, UpdateSession};
+use crate::acp::AcpClient;
+use crate::api::agents::load_agent;
+use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession};
 use crate::tmux::{self, agent_state::AgentSnapshot};
 use crate::AppState;
 
@@ -26,6 +29,9 @@ pub fn routes() -> Router<AppState> {
             patch(update_session).delete(delete_session),
         )
         .route("/sessions/{id}/cwd", get(get_session_cwd))
+        .route("/sessions/{id}/prompt", post(send_prompt))
+        .route("/sessions/{id}/release", post(release_session))
+        .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/external", get(list_external_sessions))
         .route("/sessions/adopt", post(adopt_session))
 }
@@ -72,8 +78,29 @@ async fn list_sessions(
         })
         .collect();
 
-    // Enrich sessions with activity state and agent state from tmux
+    // 一次性取出 supervisor 中所有存活的 ACP session id（O(1) 查询用）。
+    // 用于标记 acp_process_alive：进程是否仍在后端驻留（未释放/未被回收）。
+    let alive_acp: std::collections::HashSet<String> = state
+        .acp_supervisor
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+
+    // Enrich sessions with activity state and agent state from tmux.
+    // Only tmux-backed sessions have a pane to poll; ACP sessions get their
+    // state via the ACP event stream (Phase 3) and are skipped here.
     for session in &mut sessions {
+        // ACP 会话：标记 agent 子进程是否在后端驻留（未释放/未被回收）。
+        // 这与 tmux 的 is_active 不同，是 supervisor 中真实存在的进程状态。
+        if session.runtime_kind == RuntimeKind::Acp {
+            session.acp_process_alive = alive_acp.contains(&session.id);
+            continue;
+        }
+        if session.runtime_kind != RuntimeKind::Tmux {
+            continue;
+        }
         if let Some(ref tmux_name) = session.tmux_session_name {
             session.is_active = state.activity_monitor.is_active(tmux_name).await;
 
@@ -104,35 +131,91 @@ async fn create_session(
     Path(pid): Path<String>,
     Json(req): Json<CreateSession>,
 ) -> impl IntoResponse {
-    // Resolve workspace_path: use provided path, fallback to project path
-    let workspace_path = if req.workspace_path.is_empty() {
-        // Fallback: get project path
-        let project_path: Option<(String,)> =
-            sqlx::query_as("SELECT path FROM projects WHERE id = ?")
-                .bind(&pid)
-                .fetch_optional(&state.db)
-                .await
-                .ok()
-                .flatten();
-        project_path
-            .map(|(p,)| p)
-            .unwrap_or_else(|| dirs().unwrap_or_else(|| "/tmp".to_string()))
-    } else {
-        req.workspace_path.clone()
-    };
+    let runtime_kind = req.runtime_kind.unwrap_or_default();
 
-    // Expand ~ and validate workspace_path exists
-    let workspace_path = if workspace_path == "~" || workspace_path.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-        workspace_path.replacen('~', &home, 1)
-    } else {
-        workspace_path
-    };
-    let workspace_path = if std::path::Path::new(&workspace_path).exists() {
-        workspace_path
-    } else {
-        std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-    };
+    if runtime_kind == RuntimeKind::Acp {
+        let agent_id = match &req.agent_id {
+            Some(id) if !id.is_empty() => id.clone(),
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "agent_id is required for ACP sessions" })),
+                );
+            }
+        };
+
+        let agent = match load_agent(&state.db, &agent_id).await {
+            Some(a) => a,
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "agent not found" })),
+                );
+            }
+        };
+
+        let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
+
+        let cwd = std::path::PathBuf::from(&workspace_path);
+        let acp_client = match AcpClient::spawn_and_connect(agent, cwd).await {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                error!("ACP spawn failed: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("failed to spawn agent: {}", e) })),
+                );
+            }
+        };
+
+        let acp_session_id = acp_client.session_id().0.to_string();
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id, agent_id) VALUES (?, ?, ?, ?, NULL, 0, NULL, ?, 'acp', ?, ?)",
+        )
+        .bind(&id)
+        .bind(&pid)
+        .bind(&workspace_path)
+        .bind(&req.name)
+        .bind(&now)
+        .bind(&acp_session_id)
+        .bind(&agent_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        state.acp_supervisor.insert(id.clone(), acp_client).await;
+        info!("created ACP session: {} (agent: {}, acp_session_id: {})", id, agent_id, acp_session_id);
+
+        let session = Session {
+            id,
+            project_id: pid,
+            workspace_path,
+            name: req.name,
+            tmux_session_name: None,
+            hook_enabled: false,
+            hook_status: None,
+            created_at: now,
+            runtime_kind: RuntimeKind::Acp,
+            acp_session_id: Some(acp_session_id),
+            agent_id: Some(agent_id),
+            is_active: true,
+            agent_kind: None,
+            agent_state: None,
+            attention_reason: None,
+            agent_event: None,
+            agent_nonce: None,
+            agent_detected: None,
+            acp_process_alive: false,
+        };
+
+        return (StatusCode::CREATED, Json(json!(session)));
+    }
+
+    // Resolve workspace_path: use provided path, fallback to project path
+    let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
 
     let id = Uuid::new_v4().to_string();
     let tmux_name = format!("lt_{}", &id[..8]);
@@ -151,7 +234,7 @@ async fn create_session(
     };
 
     sqlx::query(
-        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
     )
     .bind(&id)
     .bind(&pid)
@@ -177,6 +260,9 @@ async fn create_session(
         hook_enabled,
         hook_status: None,
         created_at: now,
+        runtime_kind: RuntimeKind::Tmux,
+        acp_session_id: None,
+        agent_id: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -184,6 +270,7 @@ async fn create_session(
         agent_event: None,
         agent_nonce: None,
         agent_detected: None,
+        acp_process_alive: false,
     };
 
     (StatusCode::CREATED, Json(json!(session)))
@@ -218,9 +305,8 @@ async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    // Look up tmux session name before deleting
-    let tmux_name: Option<(String,)> =
-        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
+    let row: Option<(Option<String>, String)> =
+        sqlx::query_as("SELECT tmux_session_name, runtime_kind FROM sessions WHERE id = ?")
             .bind(&id)
             .fetch_optional(&state.db)
             .await
@@ -237,15 +323,61 @@ async fn delete_session(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    // Remove the control-mode connection and kill the tmux session
-    if let Some((tmux_name,)) = tmux_name {
-        state.activity_monitor.remove_session(&tmux_name).await;
-        if let Err(e) = tmux::kill_session(&tmux_name).await {
-            error!("failed to kill tmux session {}: {}", tmux_name, e);
+    if let Some((tmux_name, runtime_kind)) = row {
+        if runtime_kind == "acp" {
+            if let Some(client) = state.acp_supervisor.dispose(&id).await {
+                let c = Arc::try_unwrap(client).ok();
+                if let Some(c) = c {
+                    c.disconnect().await;
+                }
+            }
+        } else if let Some(tmux_name) = tmux_name {
+            state.activity_monitor.remove_session(&tmux_name).await;
+            if let Err(e) = tmux::kill_session(&tmux_name).await {
+                error!("failed to kill tmux session {}: {}", tmux_name, e);
+            }
         }
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+/// 手动释放 ACP 会话的后端子进程（codebuddy --acp 等），**不删除会话记录**。
+///
+/// 与 `delete_session`（杀进程 + 删库）不同，release 仅 `supervisor.dispose` +
+/// `disconnect` 杀掉 supervisor 中驻留的 agent 子进程，保留 DB 会话行。
+/// 之后用户仍可通过"恢复会话"重新 spawn 进程，与空闲自动回收（reaper）
+/// 的语义一致。对非 acp 会话返回 400（无 supervisor 子进程可释放）。
+async fn release_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let runtime_kind: Option<String> =
+        sqlx::query_scalar("SELECT runtime_kind FROM sessions WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    match runtime_kind.as_deref() {
+        Some("acp") => {
+            if let Some(client) = state.acp_supervisor.dispose(&id).await {
+                if let Some(c) = Arc::try_unwrap(client).ok() {
+                    c.disconnect().await;
+                }
+            }
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Some(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "only acp sessions can be released" })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "not found" })),
+        ),
+    }
 }
 
 async fn get_session_cwd(
@@ -280,8 +412,93 @@ async fn get_session_cwd(
     }
 }
 
-fn dirs() -> Option<String> {
-    std::env::var("HOME").ok()
+#[derive(Debug, serde::Deserialize)]
+struct PromptRequest {
+    text: String,
+}
+
+async fn send_prompt(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<PromptRequest>,
+) -> impl IntoResponse {
+    let client = match state.acp_supervisor.get(&id).await {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "ACP session not found" })),
+            );
+        }
+    };
+
+    match client.send_prompt(&req.text).await {
+        Ok(resp) => (
+            StatusCode::OK,
+            Json(json!({ "stop_reason": format!("{:?}", resp.stop_reason) })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("{}", e) })),
+        ),
+    }
+}
+
+async fn list_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match crate::acp::chat_persistence::list_messages(&state.db, &id).await {
+        Ok(rows) => {
+            let messages: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(role, text, created_at, msg_id)| {
+                    json!({ "id": msg_id, "role": role, "text": text, "createdAt": created_at })
+                })
+                .collect();
+            (StatusCode::OK, Json(json!({ "messages": messages })))
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+async fn resolve_workspace_path(
+    req_path: &str,
+    project_id: &str,
+    state: &AppState,
+) -> String {
+    let raw = if req_path.is_empty() {
+        let project_path: Option<(String,)> =
+            sqlx::query_as("SELECT path FROM projects WHERE id = ?")
+                .bind(project_id)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+        project_path
+            .map(|(p,)| p)
+            .unwrap_or_else(|| {
+                std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+            })
+    } else {
+        req_path.to_string()
+    };
+
+    let expanded = if raw == "~" || raw.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        raw.replacen('~', &home, 1)
+    } else {
+        raw
+    };
+
+    if std::path::Path::new(&expanded).exists() {
+        expanded
+    } else {
+        std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+    }
 }
 
 /// GET /sessions/external — list tmux sessions not yet recorded in the DB.
@@ -391,7 +608,7 @@ async fn adopt_session(
     let now = chrono::Utc::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+        "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
     )
     .bind(&id)
     .bind(&req.project_id)
@@ -421,6 +638,9 @@ async fn adopt_session(
         hook_enabled: false,
         hook_status: None,
         created_at: now,
+        runtime_kind: RuntimeKind::Tmux,
+        acp_session_id: None,
+        agent_id: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -428,6 +648,7 @@ async fn adopt_session(
         agent_event: None,
         agent_nonce: None,
         agent_detected: None,
+        acp_process_alive: false,
     };
 
     (StatusCode::CREATED, Json(json!(session)))

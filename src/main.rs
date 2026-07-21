@@ -1,3 +1,4 @@
+mod acp;
 mod api;
 mod auth;
 mod embedded;
@@ -16,6 +17,7 @@ use axum::response::{IntoResponse, Response};
 use clap::Parser;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::path::Path;
+use tokio::signal::unix::{self, SignalKind};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
@@ -43,6 +45,7 @@ pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
+    pub acp_supervisor: acp::AcpSupervisor,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -71,14 +74,20 @@ async fn embedded_static_handler(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_server=debug".parse()?))
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?),
+        )
         .init();
 
     let args = Args::parse();
 
+    // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
+    // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
     if let Err(e) = tmux::check_multiplexer() {
-        tracing::error!("{}", e);
-        std::process::exit(1);
+        tracing::warn!(
+            "{} — tmux-backed sessions will fail until installed; ACP sessions unaffected.",
+            e
+        );
     }
 
     let db = SqlitePoolOptions::new()
@@ -95,7 +104,15 @@ async fn main() -> anyhow::Result<()> {
         db,
         jwt_secret: args.jwt_secret,
         activity_monitor,
+        acp_supervisor: acp::AcpSupervisor::default(),
     };
+
+    // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
+    // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。
+    let reaper_supervisor = state.acp_supervisor.clone();
+    tokio::spawn(async move {
+        acp::reaper::run_reaper(reaper_supervisor).await;
+    });
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
 
     let app = Router::new()
@@ -139,7 +156,26 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("OmniTerm v{} — http://{}", env!("CARGO_PKG_VERSION"), bind);
     }
 
-    axum::serve(listener, app).await?;
+    // ── 优雅退出 ─────────────────────────────────────────────
+    // 收到 SIGTERM/SIGINT 时，先显式回收所有 ACP agent 子进程
+    // （codebuddy --acp 等），避免它们被 init 收养成孤儿持续占用内存；
+    // 随后 axum 进入优雅关闭。注意：SIGKILL / panic / 崩溃来不及运行，
+    // 这类场景产生的孤儿仍需下次启动时由用户手动清理或恢复。
+    let shutdown_supervisor = state.acp_supervisor.clone();
+    let shutdown_signal = async move {
+        let mut term = unix::signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut int = unix::signal(SignalKind::interrupt()).expect("install SIGINT handler");
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+        info!("shutdown signal received, recycling ACP agent subprocesses");
+        shutdown_supervisor.shutdown_all().await;
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
 
     Ok(())
 }

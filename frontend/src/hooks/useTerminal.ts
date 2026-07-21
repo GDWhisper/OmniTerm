@@ -113,6 +113,13 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const abortRef = useRef<AbortController | null>(null)
   // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
   const [scrollMode, setScrollMode] = useState(false)
+  // Guards against concurrent terminal (re)creation. After a blur/idle
+  // disconnect the term ref is nulled, so `initTerminal`'s `termRef.current`
+  // guard can't stop a second (rapid) click from also entering
+  // createTerminal — that would call term.open() twice on the same container
+  // and corrupt the instance (reconnect appears to do nothing). This flag
+  // serializes (re)creation regardless of term ref state.
+  const initializingRef = useRef(false)
   // Stable ref for the consume-latch callback so connectWs closure is current
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
@@ -368,6 +375,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     fitRef.current = null
     sessionIdRef.current = null
     setTerminalReady(false)
+    initializingRef.current = false
   }, [])
 
   // Ref to supply the current font size to createTerminal without making
@@ -487,12 +495,19 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   // Initialize terminal once (when container becomes available)
   const initTerminal = useCallback((container: HTMLDivElement) => {
     if (termRef.current) return
+    // Already (re)creating — a second concurrent call (rapid click, StrictMode
+    // double-invoke, re-render) must not start another createTerminal, or it
+    // would open() on the same container twice and corrupt the instance.
+    if (initializingRef.current) return
+    initializingRef.current = true
 
     // Create a fresh AbortController for this init cycle. disposeTerminal
     // aborts the previous one (if any) before we get here.
     const ac = new AbortController()
     abortRef.current = ac
-    createTerminal(container, ac.signal)
+    createTerminal(container, ac.signal).finally(() => {
+      initializingRef.current = false
+    })
 
     return () => {
       disposeTerminal()

@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
+import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -13,40 +14,13 @@ import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { AgentPicker } from '../AgentPicker/AgentPicker'
+import { useAgentStore } from '../../stores/agentStore'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
-const PlusIcon = ({ size = 24 }: { size?: number }) => (
-  <img
-    src="/buttons/add.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
-
-const EditIcon = ({ size = 20 }: { size?: number }) => (
-  <img
-    src="/buttons/edit.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
-
-const DeleteIcon = ({ size = 20 }: { size?: number }) => (
-  <img
-    src="/buttons/delete.png"
-    width={size}
-    height={size}
-    alt=""
-    style={{ imageRendering: 'pixelated', flexShrink: 0, display: 'block' }}
-  />
-)
 
 function SidebarBottomButton({
   toggle,
@@ -145,6 +119,7 @@ export function Sidebar() {
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
+  const [sessAgentId, setSessAgentId] = useState<string | null>(null)
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -378,7 +353,10 @@ export function Sidebar() {
   const decisionCandidatesRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
-    // Poll sessions every 3 seconds for agent state changes
+    // 每 3 秒轮询：服务 **tmux** 会话的 agent_state / attention_reason 检测
+    // （tmux 无 WS 推送，仍需轮询）。注意：ACP 会话的 `acp_process_alive`
+    // 已由后端 WS 的 `process_alive` 事件驱动即时更新（见 useAcpChat），
+    // 不再依赖本轮询回流；轮询整体覆盖时 ACP 的 alive 值与推送最终一致，无副作用。
     const interval = setInterval(async () => {
       if (!activeProjectId) return
       try {
@@ -669,7 +647,23 @@ export function Sidebar() {
 
     setSubmitting(true)
     try {
-      const newSession = await api.createSession(activeProjectId, activeWt.path, sessName.trim() || undefined)
+      const name = sessName.trim() || (sessAgentId
+        ? (() => {
+            const agent = useAgentStore.getState().agents.find((a) => a.id === sessAgentId)
+            if (!agent) return undefined
+            const now = new Date()
+            const ts = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
+            return `${agent.display_name}_${ts}`
+          })()
+        : undefined)
+      const newSession = await api.createSession(
+        activeProjectId,
+        activeWt.path,
+        name || undefined,
+        undefined,
+        sessAgentId ? 'acp' : 'tmux',
+        sessAgentId ?? undefined,
+      )
       await loadSessions()
       // Auto-activate the newly created session so the terminal pane
       // switches to it immediately. Atomic (clears external + sets
@@ -678,6 +672,7 @@ export function Sidebar() {
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
       setCreateSessOpen(false)
       setSessName('')
+      setSessAgentId(null)
     } catch {
       // api client already shows error toast
     } finally {
@@ -772,6 +767,24 @@ export function Sidebar() {
       setConfirmDelete(null)
     }
   }
+
+  // 手动释放 ACP agent 子进程（保留会话记录，进程可后续恢复）。
+  // 区别于删除：不删 DB 记录，仅 kill supervisor 中驻留的 codebuddy --acp 等进程。
+  const handleReleaseSession = async (id: string) => {
+    try {
+      await api.releaseSession(id)
+      await loadSessions()
+      // 若释放的正是当前聚焦的会话，立即标记结束，使 ChatView 即时显示
+      // 「恢复会话」按钮，无需等待列表轮询或刷新页面。
+      if (id === activeSessionId) {
+        useChatStore.getState().markEnded(id)
+      }
+      addToast('success', t('sidebar.sessionReleased') ?? `Session process released`)
+    } catch {
+      // api client already shows error toast
+    }
+  }
+
 
   // Enter in name field = create project
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
@@ -879,7 +892,7 @@ export function Sidebar() {
         />
         <SidebarBottomButton
           toggle="settings"
-          icon="⚙"
+          icon={<IconSettings width={16} height={16} />}
           title={t('settings.title')}
           onClick={toggleSettings}
           size={28}
@@ -989,7 +1002,7 @@ export function Sidebar() {
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
-            <PlusIcon size={24} />
+            <IconPlus strokeWidth={2.25} />
           </button>
         </div>
 
@@ -1082,7 +1095,7 @@ export function Sidebar() {
                                 }}
                                 title={t('sidebar.createSession')}
                               >
-                                <PlusIcon size={24} />
+                                <IconPlus />
                               </button>
                             </div>
 
@@ -1104,7 +1117,7 @@ export function Sidebar() {
                                     >
                                       {/* Running indicator dot */}
                                       <div
-                                        className={`flex-shrink-0 ${s.is_active && !attnReason ? 'session-activity-pulse' : ''}`}
+                                        className="flex-shrink-0"
                                         style={{
                                           width: 6,
                                           height: 6,
@@ -1114,11 +1127,31 @@ export function Sidebar() {
                                               : attnReason === 'error'
                                                 ? 'var(--danger)'
                                                 : 'var(--success)'
-                                            : s.is_active
-                                              ? 'var(--accent)'
-                                              : 'var(--text-faint)',
-                                          boxShadow: s.is_active && !attnReason ? '0 0 4px var(--accent)' : 'none',
+                                            : s.runtime_kind === 'acp'
+                                              ? s.acp_process_alive
+                                                ? 'var(--accent)'
+                                                : 'var(--text-faint)'
+                                              : s.is_active
+                                                ? 'var(--accent)'
+                                                : 'var(--text-faint)',
+                                          // 运行中 ACP 常亮绿（轻微 glow），已释放灰；attnReason 仍脉冲提示
+                                          boxShadow: attnReason
+                                            ? attnReason === 'decision'
+                                              ? '0 0 4px var(--warning)'
+                                              : attnReason === 'error'
+                                                ? '0 0 4px var(--danger)'
+                                                : '0 0 4px var(--success)'
+                                            : (s.runtime_kind === 'acp' ? s.acp_process_alive : s.is_active)
+                                              ? '0 0 4px var(--accent)'
+                                              : 'none',
                                         }}
+                                        title={
+                                          s.runtime_kind === 'acp'
+                                            ? s.acp_process_alive
+                                              ? t('sidebar.acpRunning')
+                                              : t('sidebar.acpReleased')
+                                            : undefined
+                                        }
                                       />
                                       <span className="session-name">
                                         {s.name || s.tmux_session_name}
@@ -1141,6 +1174,14 @@ export function Sidebar() {
                                         >
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
+                                      )}
+                                      {s.runtime_kind === 'acp' && (
+                                        <ReleaseButton
+                                          onClick={(e) => {
+                                            e.stopPropagation()
+                                            handleReleaseSession(s.id)
+                                          }}
+                                        />
                                       )}
                                       <EditButton
                                         onClick={(e) => {
@@ -1389,7 +1430,7 @@ export function Sidebar() {
           />
           <SidebarBottomButton
             toggle="settings"
-            icon="⚙"
+            icon={<IconSettings width={16} height={16} />}
             title={t('settings.title')}
             onClick={toggleSettings}
             size={26}
@@ -1607,7 +1648,7 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName('') }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
+      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -1626,8 +1667,23 @@ export function Sidebar() {
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
           </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('agentPicker.label')}
+            </label>
+            <AgentPicker
+              value={sessAgentId}
+              onChange={setSessAgentId}
+              noneLabel={t('agentPicker.none')}
+              className={inputClass}
+              style={inputStyle}
+            />
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-dim)' }}>
+              {t('agentPicker.hint')}
+            </p>
+          </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName('') }}>
+            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
@@ -1992,7 +2048,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      <EditIcon size={20} />
+      <IconPencil width={14} height={14} />
     </button>
   )
 }
@@ -2016,7 +2072,31 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
         e.currentTarget.style.background = 'transparent'
       }}
     >
-      <DeleteIcon size={20} />
+      <IconTrash width={14} height={14} />
+    </button>
+  )
+}
+
+function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
+  const { t } = useTranslation()
+  return (
+    <button
+      onClick={onClick}
+      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      title={t('sidebar.releaseAcp')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'var(--warning)'
+        e.currentTarget.style.color = 'var(--warning)'
+        e.currentTarget.style.background = 'var(--warning-12)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+        e.currentTarget.style.color = 'var(--text-faint)'
+        e.currentTarget.style.background = 'transparent'
+      }}
+    >
+      <IconPower width={14} height={14} />
     </button>
   )
 }

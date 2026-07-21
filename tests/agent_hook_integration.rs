@@ -424,7 +424,7 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     });
     let session_id = format!("test_sess_{}", std::process::id());
     let _ = sqlx::query(
-        "INSERT OR REPLACE INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)"
+        "INSERT OR REPLACE INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, created_at, runtime_kind) VALUES (?, ?, ?, ?, ?, 0, ?, 'tmux')"
     )
     .bind(&session_id)
     .bind(&project_id)

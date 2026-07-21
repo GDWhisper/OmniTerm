@@ -94,8 +94,17 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
+  // Runtime discriminator: 'tmux' = tmux-backed pane, 'acp' = ACP adapter subprocess
+  runtime_kind: 'tmux' | 'acp'
+  // ACP adapter session id; present only when runtime_kind='acp'
+  acp_session_id?: string
+  // Agent config id (from `agents` table); present when runtime_kind='acp'
+  agent_id?: string
   // Runtime activity indicator (tmux control mode)
   is_active?: boolean
+  // ACP agent subprocess currently resident in the backend supervisor.
+  // true = process alive (can chat directly); false = released/reaped (restore to resume).
+  acp_process_alive?: boolean
   // Agent state fields (from tmux @omniterm_agent option)
   agent_kind?: string
   agent_state?: string
@@ -104,6 +113,42 @@ export interface Session {
   agent_nonce?: string
   // Agent process detection (runtime scan, not hook-based)
   agent_detected?: string
+}
+
+export interface AgentEnvVar {
+  key: string
+  value: string
+}
+
+/**
+ * Agent configuration (row in `agents` table). Describes how to spawn an
+ * ACP-compatible agent subprocess: the executable, its argv, and env vars.
+ * Credential management is the agent's own responsibility — OmniTerm only
+ * spawns the process and speaks ACP over its stdio.
+ */
+export interface Agent {
+  id: string
+  display_name: string
+  command: string
+  args: string[]
+  env: AgentEnvVar[]
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateAgent {
+  id?: string
+  display_name: string
+  command: string
+  args?: string[]
+  env?: AgentEnvVar[]
+}
+
+export interface UpdateAgent {
+  display_name?: string
+  command?: string
+  args?: string[]
+  env?: AgentEnvVar[]
 }
 
 export interface ExternalSession {
@@ -164,15 +209,49 @@ export const api = {
   // Sessions
   listSessions: (projectId: string) =>
     request<Session[]>(`/projects/${projectId}/sessions`),
-  createSession: (projectId: string, workspacePath: string, name?: string, command?: string) =>
+  createSession: (
+    projectId: string,
+    workspacePath: string,
+    name?: string,
+    command?: string,
+    runtimeKind?: 'tmux' | 'acp',
+    agentId?: string,
+  ) =>
     request<Session>(`/projects/${projectId}/sessions`, {
       method: 'POST',
-      body: JSON.stringify({ name, workspace_path: workspacePath, command }),
+      body: JSON.stringify({
+        name,
+        workspace_path: workspacePath,
+        command,
+        runtime_kind: runtimeKind,
+        agent_id: agentId,
+      }),
     }),
   updateSession: (id: string, data: { name?: string }) =>
     request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteSession: (id: string) =>
     request(`/sessions/${id}`, { method: 'DELETE' }),
+  /** Release a running ACP agent subprocess without deleting the session record. */
+  releaseSession: (id: string) =>
+    request(`/sessions/${id}/release`, { method: 'POST' }),
+  /** Send a user prompt to an ACP session. Returns the model's stop reason. */
+  sendPrompt: (sessionId: string, text: string) =>
+    request<{ stop_reason?: string }>(`/sessions/${sessionId}/prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
+
+  // Agents (ACP-compatible agent process configurations)
+  listAgents: () => request<Agent[]>('/agents'),
+  getAgent: (id: string) => request<Agent>(`/agents/${id}`),
+  createAgent: (data: CreateAgent) =>
+    request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }),
+  updateAgent: (id: string, data: UpdateAgent) =>
+    request<Agent>(`/agents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteAgent: (id: string) =>
+    request(`/agents/${id}`, { method: 'DELETE' }),
+  testAgent: (id: string) =>
+    request<{ ok: boolean }>(`/agents/${id}/test`, { method: 'POST' }),
 
   // Session CWD
   getSessionCwd: (sessionId: string) =>

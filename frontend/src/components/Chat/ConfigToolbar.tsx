@@ -1,0 +1,263 @@
+import { useState, useRef, useEffect } from 'react'
+import type { ConfigOption } from '../../stores/chatStore'
+import { OverlayScroll } from '../Common/OverlayScroll'
+import { READER_FONT } from '../../utils/fonts'
+
+const CATEGORY_LABELS: Record<string, string> = {
+  mode: 'Mode',
+  model: 'Model',
+  model_config: 'Config',
+  thought_level: 'Thinking',
+}
+
+const CATEGORY_ORDER = ['mode', 'model', 'thought_level', 'model_config']
+
+function ConfigDropdown({
+  option,
+  onSelect,
+}: {
+  option: ConfigOption
+  onSelect: (configId: string, value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const current = option.options.find((o) => o.value === option.currentValue)
+  const label = CATEGORY_LABELS[option.category] ?? option.name
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 8px',
+          fontSize: 11,
+          fontFamily: READER_FONT,
+          background: open ? 'var(--bg-surface)' : 'var(--bg-elevated)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 4,
+          color: 'var(--text-secondary)',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{label}:</span>
+        <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+          {current?.name ?? option.currentValue}
+        </span>
+        <span style={{ fontSize: 9, color: 'var(--text-faint)' }}>{open ? '▾' : '▴'}</span>
+      </button>
+      {open && (
+        <OverlayScroll
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            left: 0,
+            marginBottom: 2,
+            minWidth: 140,
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 6,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+            zIndex: 100,
+          }}
+          contentStyle={{ flex: '0 0 auto', maxHeight: 200, padding: '4px 0' }}
+        >
+          {option.options.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => {
+                onSelect(option.id, opt.value)
+                setOpen(false)
+              }}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '5px 10px',
+                fontSize: 11,
+                fontFamily: READER_FONT,
+                border: 'none',
+                background: opt.value === option.currentValue ? 'var(--accent-14)' : 'transparent',
+                color: opt.value === option.currentValue ? 'var(--accent)' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: opt.value === option.currentValue ? 600 : 400,
+              }}
+            >
+              {opt.name}
+            </button>
+          ))}
+        </OverlayScroll>
+      )}
+    </div>
+  )
+}
+
+const RING_SIZE = 15
+const RING_STROKE = 2.5
+
+function formatTokens(n: number): string {
+  const fmt = (v: number) => {
+    const rounded = Math.round(v * 10) / 10
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
+  }
+  if (n >= 1e6) return `${fmt(n / 1e6)}M`
+  if (n >= 1e3) return `${fmt(n / 1e3)}k`
+  return String(n)
+}
+
+function UsageRing({ pct }: { pct: number }) {
+  const r = (RING_SIZE - RING_STROKE) / 2
+  const c = 2 * Math.PI * r
+  const clamped = Math.min(100, Math.max(0, pct))
+  return (
+    <svg
+      width={RING_SIZE}
+      height={RING_SIZE}
+      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+      style={{ transform: 'rotate(-90deg)', display: 'block' }}
+      aria-hidden="true"
+    >
+      <circle
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={r}
+        fill="none"
+        stroke="var(--bg-surface)"
+        strokeWidth={RING_STROKE}
+      />
+      <circle
+        cx={RING_SIZE / 2}
+        cy={RING_SIZE / 2}
+        r={r}
+        fill="none"
+        stroke={pct > 80 ? 'var(--danger, #FF7B72)' : 'var(--accent)'}
+        strokeWidth={RING_STROKE}
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={c * (1 - clamped / 100)}
+        style={{ transition: 'stroke-dashoffset 0.4s ease, stroke 0.4s ease' }}
+      />
+    </svg>
+  )
+}
+
+function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
+  const [hover, setHover] = useState(false)
+  const used = typeof usage['used'] === 'number' ? usage['used'] : null
+  const size = typeof usage['size'] === 'number' ? usage['size'] : null
+  const pct = used !== null && size !== null && size > 0 ? (used / size) * 100 : null
+  const costObj = usage['cost']
+  const cost = costObj && typeof costObj === 'object' && typeof (costObj as Record<string, unknown>)['amount'] === 'number'
+    ? (costObj as Record<string, unknown>)['amount'] as number
+    : null
+
+  if (pct === null && cost === null) return null
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 10,
+        color: 'var(--text-faint)',
+        fontFamily: READER_FONT,
+      }}
+    >
+      {pct !== null && (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span
+            style={{ position: 'relative', display: 'inline-flex', padding: 2 }}
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+          >
+            <UsageRing pct={pct} />
+            {used !== null && size !== null && (
+              <span
+                style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  left: '50%',
+                  marginBottom: 6,
+                  padding: '3px 8px',
+                  fontSize: 11,
+                  whiteSpace: 'nowrap',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 6,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                  color: 'var(--text-primary)',
+                  opacity: hover ? 1 : 0,
+                  transform: hover
+                    ? 'translateX(-50%) translateY(0)'
+                    : 'translateX(-50%) translateY(3px)',
+                  transition: 'opacity 0.15s ease, transform 0.15s ease',
+                  pointerEvents: 'none',
+                  zIndex: 100,
+                }}
+              >
+                {formatTokens(used)} / {formatTokens(size)}
+              </span>
+            )}
+          </span>
+          {Math.round(pct)}%
+        </span>
+      )}
+      {cost !== null && <span>${cost.toFixed(4)}</span>}
+    </div>
+  )
+}
+
+export function ConfigToolbar({
+  configOptions,
+  usage,
+  onSetConfigOption,
+}: {
+  configOptions: ConfigOption[]
+  usage: Record<string, unknown> | null
+  onSetConfigOption: (configId: string, value: string) => void
+}) {
+  if (configOptions.length === 0 && !usage) return null
+
+  const sorted = [...configOptions].sort((a, b) => {
+    const ai = CATEGORY_ORDER.indexOf(a.category)
+    const bi = CATEGORY_ORDER.indexOf(b.category)
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+  })
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 12px',
+        borderTop: '1px solid var(--border-subtle)',
+        background: 'var(--bg-base)',
+        flexWrap: 'wrap',
+      }}
+    >
+      {sorted.map((opt) => (
+        <ConfigDropdown key={opt.id} option={opt} onSelect={onSetConfigOption} />
+      ))}
+      {usage && (
+        <div style={{ marginLeft: 'auto' }}>
+          <UsageIndicator usage={usage} />
+        </div>
+      )}
+    </div>
+  )
+}

@@ -3,12 +3,53 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
+import { ChatView } from '../Chat/ChatView'
+import { AcpConnectionManager } from '../Chat/AcpConnectionManager'
 import { FileManager } from '../FileManager/FileManager'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
+
+/**
+ * Pick the right pane for the active session: ChatView for ACP-backed
+ * sessions, Terminal for tmux (and the null-session empty state). The
+ * wrapper key in the callers forces a full remount when the active
+ * session changes, so each view's WebSocket lifecycle resets cleanly.
+ */
+function SessionView() {
+  const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const sessions = useAppStore((s) => s.sessions)
+  const activeSession = activeSessionId
+    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+    : null
+
+  if (activeSession?.runtime_kind === 'acp') return <ChatView />
+
+  // If we know a session is active but haven't received its row yet, don't
+  // render Terminal — doing so would open a tmux WS to a session that may
+  // actually be ACP-backed. Wait one render cycle for loadSessions().
+  if (activeSessionId && !activeSession) {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'var(--text-faint)',
+          fontFamily: 'var(--reader-font, ui-monospace, monospace)',
+          fontSize: 13,
+        }}
+      >
+        loading session…
+      </div>
+    )
+  }
+
+  return <Terminal />
+}
 
 export function Layout() {
   const [isDragging, setIsDragging] = useState(false)
@@ -152,9 +193,12 @@ export function Layout() {
           />
         )}
 
-        {/* Terminal — key forces full remount on session switch for clean WebSocket lifecycle */}
+        {/* Persistent ACP connections — survives session switches */}
+        <AcpConnectionManager />
+
+        {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
         <div className="flex-1 min-w-0">
-          <Terminal key={activeSessionId ?? 'empty'} />
+          <SessionView key={activeSessionId ?? 'empty'} />
         </div>
 
         {/* FileManager drag handle — hidden when collapsed */}
@@ -248,6 +292,7 @@ function MobileLayout() {
         onSessionClick={() => setActiveTab('sessions')}
         onNewSession={() => setActiveTab('sessions')}
       />
+      <AcpConnectionManager />
       <div
         className="flex-1 overflow-hidden"
         onTouchStart={mobileGestureEnabled ? (e) => {
@@ -319,12 +364,12 @@ function MobileContent() {
 
   switch (displayedTab) {
     case 'terminal':
-      return <Terminal key={activeSessionId ?? 'empty'} />
+      return <SessionView key={activeSessionId ?? 'empty'} />
     case 'files':
       return <div style={wrapperStyle}><FileManager /></div>
     case 'sessions':
       return <div style={wrapperStyle}><Sidebar /></div>
     default:
-      return <Terminal key={activeSessionId ?? 'empty'} />
+      return <SessionView key={activeSessionId ?? 'empty'} />
   }
 }

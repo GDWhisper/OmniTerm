@@ -77,6 +77,7 @@ const fakeNewSession = {
   is_active: true,
   hook_enabled: false,
   created_at: '2026-01-01T00:00:00Z',
+  runtime_kind: 'tmux' as const,
 }
 
 describe('Sidebar handleCreateSession', () => {
@@ -181,7 +182,10 @@ describe('Sidebar handleCreateSession', () => {
       expect(vi.mocked(api.createSession)).toHaveBeenCalledWith(
         fakeProject.id,
         fakeWorkspace.path,
-        'my-test-session'
+        'my-test-session',
+        undefined,
+        'tmux',
+        undefined,
       )
     })
 
@@ -239,7 +243,10 @@ describe('Sidebar handleCreateSession', () => {
       expect(vi.mocked(api.createSession)).toHaveBeenCalledWith(
         fakeProject.id,
         fakeWorkspace.path,
-        undefined
+        undefined,
+        undefined,
+        'tmux',
+        undefined,
       )
     })
 

@@ -55,22 +55,24 @@ async fn watch_files(
         }
     };
 
-    let (tx, _rx) = broadcast::channel::<String>(64);
-    let tx_clone = tx.clone();
+    let (tx, mut rx) = broadcast::channel::<String>(64);
 
-    // Create watcher in a blocking task (notify watcher is sync)
+    // Shutdown channel: uses std::sync::mpsc (not tokio::sync::watch) so the
+    // blocking thread can detect sender-drop without depending on a tokio
+    // runtime context.  `now_or_never()` inside `spawn_blocking` was unreliable
+    // and leaked inotify instances (each watcher = 1 inotify fd, system limit
+    // is 128; leaked watchers consumed ~50% → new Vite could not start).
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
+
     let watch_dir = watch_path.clone();
     let watch_dir_for_cb = watch_dir.clone();
-    let _watcher_handle = tokio::task::spawn_blocking(move || {
-        let tx = tx_clone;
+    tokio::task::spawn_blocking(move || {
         let mut watcher = match RecommendedWatcher::new(
             move |res: Result<NotifyEvent, notify::Error>| {
                 let event = match res {
                     Ok(e) => e,
                     Err(_) => return,
                 };
-
-                // Convert notify event to our format
                 let changes = notify_event_to_changes(&event, &watch_dir_for_cb);
                 for change in changes {
                     let _ = tx.send(change);
@@ -82,32 +84,34 @@ async fn watch_files(
             Err(_) => return,
         };
 
-        // Watch the directory recursively
         if watcher.watch(&watch_dir, RecursiveMode::Recursive).is_err() {
             return;
         }
 
-        // Keep the watcher alive until the task is cancelled
+        // Park until the SSE stream drops `shutdown_tx` (client disconnect).
+        // `recv_timeout` returns `Disconnected` when the sender is dropped —
+        // a pure sync mechanism that works reliably from any thread.
         loop {
-            std::thread::sleep(Duration::from_secs(3600));
+            match shutdown_rx.recv_timeout(Duration::from_millis(250)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                _ => {} // Timeout or Ok — keep waiting
+            }
         }
+        // `watcher` drops here → `inotify_rm_watch` for every registered path.
     });
 
-    // Create a receiver for this SSE connection
-    let mut rx = tx.subscribe();
-
     let sse_stream = async_stream::stream! {
+        // `_shutdown_guard` lives as long as the generator; dropping the SSE
+        // body drops the generator, which drops the guard, which drops the
+        // channel sender, which wakes the blocking task via `Disconnected`.
+        let _shutdown_guard = shutdown_tx;
         loop {
             match rx.recv().await {
                 Ok(data) => {
                     yield Ok(Event::default().event("change").data(data));
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {
-                    continue;
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    break;
-                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     };
@@ -146,12 +150,11 @@ fn notify_event_to_changes(event: &NotifyEvent, base_dir: &std::path::Path) -> V
             _ => continue, // ignore access, metadata, etc.
         };
 
-        let json = if kind_str == "delete" {
-            format!(r#"{{"kind":"{}","path":"{}"}}"#, kind_str, escape_json(&rel_path))
-        } else {
-            format!(r#"{{"kind":"{}","path":"{}"}}"#, kind_str, escape_json(&rel_path))
-        };
-
+        let json = format!(
+            r#"{{"kind":"{}","path":"{}"}}"#,
+            kind_str,
+            escape_json(&rel_path)
+        );
         changes.push(json);
     }
 
