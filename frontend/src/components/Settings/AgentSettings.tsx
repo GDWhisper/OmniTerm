@@ -110,8 +110,8 @@ export function AgentSettings() {
       id: '',
       display_name: preset.display_name,
       command: preset.command,
-      args_text: preset.args.join(' '),
-      env: preset.env.map((e) => ({ ...e })),
+      args_text: (preset.args ?? []).join(' '),
+      env: (preset.env ?? []).map((e) => ({ ...e })),
       isNew: true,
     })
   }

@@ -343,7 +343,7 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
       }}
     >
       {label}
-      {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming))}
+      {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
     </div>
   )
