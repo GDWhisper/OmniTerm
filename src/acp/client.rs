@@ -6,9 +6,10 @@ use agent_client_protocol::schema::v1::{
     CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest,
     InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
     PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    RequestPermissionRequest, SessionConfigId, SessionConfigOption, SessionConfigOptionValue,
-    SessionId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
-    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
+    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent, WaitForTerminalExitRequest, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use tokio::sync::{broadcast, oneshot};
@@ -198,14 +199,47 @@ impl AcpClient {
     pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
         let config_id: Arc<str> = config_id.into();
         let value: Arc<str> = value.into();
-        self.connection
+
+        let is_boolean = self
+            .initial_config_options
+            .lock()
+            .ok()
+            .map(|opts| {
+                opts.iter().any(|o| {
+                    o.id.0 == config_id && matches!(o.kind, SessionConfigKind::Boolean(_))
+                })
+            })
+            .unwrap_or(false);
+
+        let option_value = if is_boolean {
+            SessionConfigOptionValue::boolean(value.as_ref() == "true")
+        } else {
+            SessionConfigOptionValue::from(value.as_ref())
+        };
+
+        let resp = self
+            .connection
             .send_request(SetSessionConfigOptionRequest::new(
                 self.session_id.clone(),
                 SessionConfigId::new(config_id),
-                SessionConfigOptionValue::from(value.as_ref()),
+                option_value,
             ))
             .block_task()
             .await?;
+
+        // Agents return the updated option set in the response; not all of
+        // them also push a ConfigOptionUpdate notification (codebuddy does,
+        // ccb/opencode don't), so synthesize one to keep the UI in sync.
+        if !resp.config_options.is_empty() {
+            if let Ok(mut guard) = self.initial_config_options.lock() {
+                *guard = resp.config_options.clone();
+            }
+            let notification = SessionNotification::new(
+                self.session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(resp.config_options)),
+            );
+            let _ = self.session_update_tx.send(notification);
+        }
         Ok(())
     }
 
