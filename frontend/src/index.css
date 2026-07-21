@@ -1019,10 +1019,18 @@ html, body, #root {
   cursor: pointer;
 }
 
-.sidebar-wt-add-btn:hover,
-.sidebar-proj-add-btn:hover {
+.sidebar-proj-add-btn {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.sidebar-wt-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sidebar-proj-add-btn:hover {
+  background: var(--accent-10);
 }
 
 /* ── Session list — inline below active worktree, no container chrome ── */
