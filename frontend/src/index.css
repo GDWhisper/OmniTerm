@@ -161,24 +161,14 @@
 @import "@xterm/xterm/css/xterm.css";
 
 /* ────────────────────────────────────────────────────────────────────
-   Pixel style — global SVG pixelation and font classes.
-   ──────────────────────────────────────────────────────────────────── */
-
-/* SVG pixelation — disable anti-aliasing for crisp pixel edges */
-svg, svg * {
-  shape-rendering: crispEdges;
-}
-
-svg path, svg rect, svg circle, svg line {
-  stroke-linecap: square;
-  stroke-linejoin: miter;
-}
-
-/* ────────────────────────────────────────────────────────────────────
    Font layers — three distinct stacks.
    .font-logo    → logo wordmark only (Press Start 2P)
    .font-pixel   → display text: titles, buttons, status labels
    .font-reader  → code, body, inputs (JetBrains Mono)
+
+   注意：不要在这里加全局 `svg { shape-rendering: crispEdges }` ——
+   线性描边图标（icons.tsx 等）需要平滑抗锯齿 + round 端帽；
+   crispEdges 只能由各像素精灵组件（PixelSprites / OmniTermLogo）自行声明。
    ──────────────────────────────────────────────────────────────────── */
 
 .font-logo {
