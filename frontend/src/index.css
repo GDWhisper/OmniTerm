@@ -1556,6 +1556,32 @@ body.parchment-texture {
   to   { opacity: 0; transform: translate(-50%, 8px); }
 }
 
+@keyframes replay-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ACP 重放（恢复历史记录）时的轻量指示器 */
+.chat-replay-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+.chat-replay-indicator .replay-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--border-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: replay-spin 0.7s linear infinite;
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.

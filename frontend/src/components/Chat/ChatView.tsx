@@ -44,6 +44,7 @@ export function ChatView() {
   const setConfigOption = conn?.setConfigOption ?? (() => {})
   const chatState = useChatStore(selectChatState(activeSessionId))
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
+  const isReplaying = chatState.replaying
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
@@ -231,6 +232,12 @@ export function ChatView() {
         ))}
         {chatState.sending && (
           <ThinkingIndicator animate={pixelAnimationsEnabled} label={t('chat.thinking')} />
+        )}
+        {isReplaying && (
+          <div className="chat-replay-indicator">
+            <span className="replay-spinner" />
+            <span>{t('chat.replaying')}</span>
+          </div>
         )}
       </OverlayScroll>
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand } from '../stores/chatStore'
+import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 
@@ -90,17 +90,7 @@ function getVariantInner(obj: Record<string, unknown>, variant: string): Record<
 
 // --- Classifier ---
 
-type SessionUpdateAction =
-  | { kind: 'appendText'; text: string }
-  | { kind: 'appendThought'; text: string }
-  | { kind: 'setMode'; mode: string }
-  | { kind: 'upsertTool'; toolCallId: string; title?: string; status?: string; toolKind?: string; content?: string; locations?: string[] }
-  | { kind: 'setPlan'; entries: PlanEntry[] }
-  | { kind: 'setUsage'; usage: Record<string, unknown> }
-  | { kind: 'setCommands'; commands: SlashCommand[] }
-  | { kind: 'setConfigOptions'; options: ConfigOption[] }
-  | { kind: 'pushSystem'; label: string }
-  | { kind: 'drop' }
+// `SessionUpdateAction` 类型已移至 chatStore（供 applyReplayBatch 复用）。
 
 const DROP_VARIANTS: ReadonlySet<string> = new Set([
   'SessionInfoUpdate', 'session_info_update',
@@ -276,7 +266,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   sessionIdRef.current = sessionId
   const isReplaying = useRef(false)
   const suppressReplay = useRef(false)
+  // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
+  const replayBuffer = useRef<SessionUpdateAction[]>([])
+  const replayRaf = useRef<number | null>(null)
   const attention = useAttention()
+
+  const flushReplayBuffer = useCallback(() => {
+    replayRaf.current = null
+    const sid = sessionIdRef.current
+    if (!sid) return
+    const batch = replayBuffer.current
+    if (batch.length === 0) return
+    replayBuffer.current = []
+    useChatStore.getState().applyReplayBatch(sid, batch)
+  }, [])
 
   useEffect(() => {
     if (!sessionId) {
@@ -322,6 +325,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           if (isReplaying.current && suppressReplay.current) break
           const canonical = normalizeSessionUpdate(frame.data?.update)
           const action = classifySessionUpdate(canonical)
+          // 重放期间：攒进 buffer，按动画帧批量 flush（一次重渲染处理多条帧）。
+          if (isReplaying.current && !suppressReplay.current) {
+            replayBuffer.current.push(action)
+            if (replayRaf.current === null) {
+              replayRaf.current = requestAnimationFrame(flushReplayBuffer)
+            }
+            break
+          }
           switch (action.kind) {
             case 'appendText':
               s.appendChunk(sid, action.text)
@@ -378,13 +389,26 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         case 'replay_start': {
           isReplaying.current = true
+          replayBuffer.current = []
           const msgs = s.states[sid]?.messages
           suppressReplay.current = !!(msgs && msgs.length > 0)
+          // 仅当确有历史要重放时才显示恢复指示器
+          if (!suppressReplay.current) {
+            useChatStore.getState().setReplaying(sid, true)
+          }
           break
         }
         case 'replay_end':
           isReplaying.current = false
           suppressReplay.current = false
+          // 把重放余量一次性 flush，并把残留 streaming 消息标为已完成
+          if (replayRaf.current !== null) {
+            cancelAnimationFrame(replayRaf.current)
+            replayRaf.current = null
+          }
+          flushReplayBuffer()
+          useChatStore.getState().finalizeReplay(sid)
+          useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
           break
         case 'permission_request': {
@@ -448,6 +472,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
     return () => {
       disposed = true
+      if (replayRaf.current !== null) {
+        cancelAnimationFrame(replayRaf.current)
+        replayRaf.current = null
+      }
       if (ws.readyState === WebSocket.OPEN) ws.close()
       if (wsRef.current === ws) wsRef.current = null
     }
