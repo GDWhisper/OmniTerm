@@ -273,12 +273,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
   const replayRaf = useRef<number | null>(null)
-  // 重放结束后延迟落库：agent 的重放 session_update 可能在 replay_end 之后才
-  // 异步到达（协议顺序不保证），若 replay_end 立即 sync 会写入不完整历史。
-  // 用"稳定窗口"策略：replay_end 后启动定时器，期间每收到新 session_update 就
-  // 重置定时器，直到连续 SETTLE_MS 无新帧再 sync。
-  const pendingSync = useRef(false)
-  const syncTimer = useRef<number | null>(null)
   const attention = useAttention()
 
   const flushReplayBuffer = useCallback(() => {
@@ -326,17 +320,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       body: JSON.stringify({ messages: payload }),
     }).catch(() => {})
   }, [])
-
-  // 安排一次延迟 sync：重置稳定窗口定时器。
-  const scheduleSync = useCallback(() => {
-    pendingSync.current = true
-    if (syncTimer.current !== null) window.clearTimeout(syncTimer.current)
-    syncTimer.current = window.setTimeout(() => {
-      syncTimer.current = null
-      pendingSync.current = false
-      syncToDb()
-    }, 1000)
-  }, [syncToDb])
 
   useEffect(() => {
     if (!sessionId) {
@@ -389,19 +372,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               replayRaf.current = requestAnimationFrame(flushReplayBuffer)
             }
             break
-          }
-          // 重放已结束但稳定窗口未到（settle 期间乱序/异步帧仍在到达）：重置
-          // 定时器，等消息真正停稳再 sync，避免写入不完整历史。
-          if (pendingSync.current && syncTimer.current !== null) {
-            if (action.kind === 'appendText' || action.kind === 'appendThought' ||
-                action.kind === 'upsertTool' || action.kind === 'setPlan') {
-              window.clearTimeout(syncTimer.current)
-              syncTimer.current = window.setTimeout(() => {
-                syncTimer.current = null
-                pendingSync.current = false
-                syncToDb()
-              }, 1000)
-            }
           }
           switch (action.kind) {
             case 'appendText':
@@ -489,11 +459,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
-          // 重放历史只活在内存 store，刷新即丢 —— 延迟写回 DB。agent 的重放
-          // session_update 可能在 replay_end 之后才异步到达（协议顺序不保证），
-          // 立即 sync 会写入不完整历史；用稳定窗口（scheduleSync）等消息停稳再落库。
+          // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。后端保证 replay_end
+          // 严格在最后一条重放帧之后发出（drain 排空 broadcast 再发结束标志），
+          // 故此处 store 已完整，可即时 sync，无需计时器兜底。
           if (!suppressReplay.current) {
-            scheduleSync()
+            syncToDb()
           }
           break
         case 'permission_request': {
@@ -560,11 +530,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       if (replayRaf.current !== null) {
         cancelAnimationFrame(replayRaf.current)
         replayRaf.current = null
-      }
-      if (syncTimer.current !== null) {
-        window.clearTimeout(syncTimer.current)
-        syncTimer.current = null
-        pendingSync.current = false
       }
       if (ws.readyState === WebSocket.OPEN) ws.close()
       if (wsRef.current === ws) wsRef.current = null

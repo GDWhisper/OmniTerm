@@ -404,8 +404,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
 
-                                        let rx = new_client.session_update_subscribe();
-                                        spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
                                         let crash_rx = new_client.crash_subscribe();
@@ -418,8 +416,36 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
 
                                         let tx = notify_tx.clone();
+                                        let buf2 = assistant_buf.clone();
                                         tokio::spawn(async move {
+                                            // 在 load_session 之前订阅，确保重放期间 agent 推来的
+                                            // 历史 session_update 全部进入本 receiver（broadcast 缓冲）。
+                                            let mut replay_rx = new_client.session_update_subscribe();
                                             let result = new_client.load_session(&acp_sid, cwd).await;
+                                            // load_session 返回即 agent 已推完全部历史。排空 replay_rx
+                                            // 后逐帧经 notify_tx 转发——notify_tx 为 FIFO，故 replay_end
+                                            // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
+                                            // 注意：重放帧不累积进 assistant_buf（避免与后续实时落库重复）。
+                                            loop {
+                                                match replay_rx.try_recv() {
+                                                    Ok(notif) => {
+                                                        let data = serde_json::to_value(&notif).unwrap_or_default();
+                                                        let frame = serde_json::to_string(
+                                                            &AcpServerMessage::SessionUpdate { data },
+                                                        )
+                                                        .unwrap_or_default();
+                                                        if tx.send(Message::Text(frame.into())).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                                                        tracing::warn!("ACP replay subscriber lagged by {} messages", n);
+                                                        break;
+                                                    }
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                                                }
+                                            }
                                             let msg = match result {
                                                 Ok(()) => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
                                                 Err(e) => serde_json::to_string(&AcpServerMessage::Error {
@@ -428,6 +454,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 }).unwrap_or_default(),
                                             };
                                             let _ = tx.send(Message::Text(msg.into())).await;
+                                            // replay_end 之后才接管实时帧：避免与上面 drain 重复订阅，
+                                            // 且保证恢复完成前的帧已全部按序送达。
+                                            spawn_notify_task(new_client.session_update_subscribe(), tx.clone(), buf2).await;
                                         });
                                     }
                                     Err(e) => {
