@@ -419,7 +419,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     ws.onerror = () => {
       if (wsRef.current !== ws) return
       const sid = sessionIdRef.current
-      if (sid) useChatStore.getState().setError(sid, 'WebSocket error')
+      if (sid) {
+        const st = useChatStore.getState().states[sid]
+        // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
+        if (st?.sending && !st.sessionEnded) {
+          useChatStore.getState().markError(sid, 'WebSocket error')
+        } else {
+          useChatStore.getState().setError(sid, 'WebSocket error')
+        }
+      }
       setConnectionState('error')
     }
 
@@ -427,6 +435,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       if (wsRef.current === ws) {
         setConnectionState('disconnected')
         wsRef.current = null
+        const sid = sessionIdRef.current
+        if (sid && !disposed) {
+          const st = useChatStore.getState().states[sid]
+          // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
+          if (st?.sending && !st.sessionEnded) {
+            useChatStore.getState().markError(sid, 'Connection lost — message may not have been delivered')
+          }
+        }
       }
     }
 
@@ -443,9 +459,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const trimmed = text.trim()
     if (!ws || ws.readyState !== WebSocket.OPEN || !sid || !trimmed) return
     const s = useChatStore.getState()
-    s.beginPrompt(sid)
     s.addUserMessage(sid, trimmed)
-    ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+    try {
+      ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+      s.beginPrompt(sid)
+    } catch {
+      // send 失败（底层缓冲满 / 连接已坏）：不乐观置 sending，直接报错
+      s.markError(sid, 'Failed to send message — connection unavailable')
+    }
   }, [])
 
   const cancel = useCallback(() => {
