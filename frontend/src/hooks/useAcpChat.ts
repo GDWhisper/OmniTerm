@@ -423,14 +423,31 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
-          // 重放历史只活在内存 store，刷新即丢 —— 整轮写回 DB，刷新后可从
-          // list_messages 还原。后端先删后插（幂等重建），与实时 prompt 增量
-          // 写入互不冲突。
+          // 重放历史只活在内存 store，刷新即丢 —— 写回 DB，刷新后可从
+          // list_messages 还原。后端按内容去重插入、不删除已有记录（保留实时
+          // prompt 已落库的 user 消息，ACP 重放流本身不含 user）。
           if (!suppressReplay.current) {
             const msgs = useChatStore.getState().states[sid]?.messages ?? []
-            const payload = msgs
-              .filter((m) => m.role === 'user' || m.role === 'assistant')
-              .map((m) => ({ role: m.role, text: m.text }))
+            // 合并连续 assistant 为整轮（文本 + 结构化 blocks 一并拼接），与实时
+            // 落库的「整轮一条」风格一致，避免重放按 chunk 碎片化成大量短气泡。
+            const payload: { role: string; text: string; blocks?: string }[] = []
+            for (const m of msgs) {
+              if (m.role !== 'user' && m.role !== 'assistant') continue
+              const last = payload[payload.length - 1]
+              if (m.role === 'assistant' && last && last.role === 'assistant') {
+                last.text += m.text
+                if (m.blocks.length) {
+                  const prev = last.blocks ? (JSON.parse(last.blocks) as unknown[]) : []
+                  last.blocks = JSON.stringify([...prev, ...m.blocks])
+                }
+              } else {
+                payload.push({
+                  role: m.role,
+                  text: m.text,
+                  blocks: m.blocks.length ? JSON.stringify(m.blocks) : undefined,
+                })
+              }
+            }
             if (payload.length > 0) {
               fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages/sync`, {
                 method: 'POST',

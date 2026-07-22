@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, type ChatMessage, type ContentBlock } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
@@ -25,6 +25,17 @@ import { READER_FONT } from '../../utils/fonts'
  * while the user is at the bottom; stop if they scroll up to read
  * history. Re-stick on next explicit send.
  */
+// hydrate 时从 DB 还原结构化 blocks；解析失败则回退纯文本，避免单条坏数据
+// 让整个会话历史加载失败。
+function safeParseBlocks(raw: string): ContentBlock[] | null {
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as ContentBlock[]) : null
+  } catch {
+    return null
+  }
+}
+
 export function ChatView() {
   const { t } = useTranslation()
   const activeSessionId = useAppStore((s) => s.activeSessionId)
@@ -58,13 +69,19 @@ export function ChatView() {
       .then((data) => {
         if (cancelled || !data?.messages?.length) return
         const msgs: ChatMessage[] = data.messages.map(
-          (m: { id: string; role: string; text: string; createdAt: string }) => ({
-            id: m.id,
-            role: m.role as 'user' | 'assistant',
-            text: m.text,
-            blocks: [{ type: 'text' as const, text: m.text }],
-            createdAt: new Date(m.createdAt).getTime(),
-          }),
+          (m: { id: string; role: string; text: string; createdAt: string; blocks?: string | null }) => {
+            let blocks = m.blocks ? safeParseBlocks(m.blocks) : null
+            if (!blocks || blocks.length === 0) {
+              blocks = [{ type: 'text' as const, text: m.text }]
+            }
+            return {
+              id: m.id,
+              role: m.role as 'user' | 'assistant',
+              text: m.text,
+              blocks,
+              createdAt: new Date(m.createdAt).getTime(),
+            }
+          },
         )
         useChatStore.getState().hydrate(activeSessionId, msgs)
       })

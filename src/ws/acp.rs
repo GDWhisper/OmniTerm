@@ -298,7 +298,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 };
 
                                 let _ = chat_persistence::insert_message(
-                                    &db, &sid, "user", &prompt_text,
+                                    &db, &sid, "user", &prompt_text, None,
                                 ).await;
 
                                 let c = c.clone();
@@ -316,7 +316,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             let assistant_text = buf2.lock().await.drain(..).collect::<String>();
                                             if !assistant_text.is_empty() {
                                                 let _ = chat_persistence::insert_message(
-                                                    &db2, &sid2, "assistant", &assistant_text,
+                                                    &db2, &sid2, "assistant", &assistant_text, None,
                                                 ).await;
                                             }
                                             let reason = format!("{:?}", resp.stop_reason);

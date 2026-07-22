@@ -453,8 +453,14 @@ async fn list_messages(
         Ok(rows) => {
             let messages: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|(role, text, created_at, msg_id)| {
-                    json!({ "id": msg_id, "role": role, "text": text, "createdAt": created_at })
+                .map(|(role, text, created_at, msg_id, blocks)| {
+                    json!({
+                        "id": msg_id,
+                        "role": role,
+                        "text": text,
+                        "createdAt": created_at,
+                        "blocks": blocks,
+                    })
                 })
                 .collect();
             (StatusCode::OK, Json(json!({ "messages": messages })))
@@ -466,18 +472,19 @@ async fn list_messages(
     }
 }
 
-/// 恢复会话重放完成后，前端把重建出的完整消息列表整轮写回 DB（先删后插），
-/// 使刷新浏览器后仍可从 `list_messages` 还原历史。
+/// 恢复会话重放完成后，前端把重建出的完整消息（含结构化 blocks）写回 DB。
+/// 后端按内容去重、不删除已有记录，使刷新浏览器后仍可从 `list_messages` 还原
+/// 完整历史（含工具卡片 / 思考 / 计划），且保留实时 prompt 已落库的 user 消息。
 async fn sync_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<SyncMessagesRequest>,
 ) -> impl IntoResponse {
-    let rows: Vec<(String, String)> = body
+    let rows: Vec<(String, String, Option<String>)> = body
         .messages
         .into_iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
-        .map(|m| (m.role, m.text))
+        .map(|m| (m.role, m.text, m.blocks))
         .collect();
     match crate::acp::chat_persistence::sync_messages(&state.db, &id, &rows).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
@@ -497,6 +504,8 @@ struct SyncMessagesRequest {
 struct SyncMessage {
     role: String,
     text: String,
+    #[serde(default)]
+    blocks: Option<String>,
 }
 
 async fn resolve_workspace_path(
