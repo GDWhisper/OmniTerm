@@ -115,6 +115,7 @@ export function Sidebar() {
     id: string
     name: string
   } | null>(null)
+  const [confirmRelease, setConfirmRelease] = useState<{ id: string; name: string | null } | null>(null)
 
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
@@ -785,6 +786,11 @@ export function Sidebar() {
     }
   }
 
+  const handleConfirmRelease = () => {
+    if (!confirmRelease) return
+    handleReleaseSession(confirmRelease.id)
+    setConfirmRelease(null)
+  }
 
   // Enter in name field = create project
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
@@ -1179,7 +1185,12 @@ export function Sidebar() {
                                         <ReleaseButton
                                           onClick={(e) => {
                                             e.stopPropagation()
-                                            handleReleaseSession(s.id)
+                                            const chatState = useChatStore.getState().states[s.id]
+                                            if (chatState?.sending) {
+                                              setConfirmRelease({ id: s.id, name: s.name })
+                                            } else {
+                                              handleReleaseSession(s.id)
+                                            }
                                           }}
                                         />
                                       )}
@@ -1756,6 +1767,16 @@ export function Sidebar() {
         confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
+      />
+
+      {/* ── Release Confirmation Dialog ── */}
+      <ConfirmDialog
+        open={!!confirmRelease}
+        onClose={() => setConfirmRelease(null)}
+        onConfirm={handleConfirmRelease}
+        title={t('sidebar.releaseAgentTitle')}
+        message={t('sidebar.confirmReleaseAgent', { name: confirmRelease?.name ?? '' })}
+        confirmText={t('sidebar.release')}
       />
 
       {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}

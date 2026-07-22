@@ -320,8 +320,9 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
   useEffect(() => {
     if (!animate) return
     const id = window.setInterval(() => {
-      setSlots((prev) =>
-        prev.map((_, i) => (i % 3 === 0 ? SCRAMBLE_HEX[(Math.random() * 16) | 0] : prev[i])),
+      // 全量翻滚：每个 tick 所有槽位都换新字符，避免部分字母长时间静止
+      setSlots(() =>
+        Array.from({ length: SCRAMBLE_LEN }, () => SCRAMBLE_HEX[(Math.random() * 16) | 0]),
       )
     }, 60)
     return () => window.clearInterval(id)
