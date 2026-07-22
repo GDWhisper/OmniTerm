@@ -229,10 +229,9 @@ export function ChatView() {
         {chatState.messages.map((m) => (
           <ChatMessageView key={m.id} message={m} />
         ))}
-        {chatState.sending &&
-          !chatState.messages.some((m) => m.role === 'assistant' && m.streaming) && (
-            <ThinkingIndicator animate={pixelAnimationsEnabled} label={t('chat.thinking')} />
-          )}
+        {chatState.sending && (
+          <ThinkingIndicator animate={pixelAnimationsEnabled} label={t('chat.thinking')} />
+        )}
       </OverlayScroll>
 
       {chatState.pendingPermission && (
@@ -294,12 +293,13 @@ export function ChatView() {
 }
 
 /**
- * Shown in the message stream between a sent prompt and the first assistant
- * token, so the chat never sits silent/empty while the agent is processing.
+ * Terminal-style status line shown at the bottom of the message stream for the
+ * whole duration the agent is busy (`sending` === true, i.e. from prompt send
+ * until `prompt_done`). Mimics a terminal's live last line so long-running
+ * agent tasks (tool calls, waiting, thinking) never leave the view silent.
  * Renders a continuously scrambling hex stream ("decoding" noise, matching the
- * FileManager path-bar look) until the agent emits its first real token —
- * purely decorative feedback, never locks into readable text. Falls back to a
- * static label when animations are off.
+ * FileManager path-bar look) that never locks into readable text. Falls back to
+ * a static label when animations are off.
  */
 const SCRAMBLE_HEX = '0123456789abcdef'
 const SCRAMBLE_LEN = 16
@@ -324,33 +324,19 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-start',
-        padding: '4px 12px',
+        alignItems: 'center',
         gap: 6,
+        padding: '2px 12px 6px',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 12,
+        lineHeight: '20px',
+        color: 'var(--text-faint)',
+        letterSpacing: '0.08em',
+        userSelect: 'none',
       }}
     >
-      <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: READER_FONT, letterSpacing: '0.05em' }}>
-        agent
-      </div>
-      <div
-        style={{
-          alignSelf: 'flex-start',
-          maxWidth: '85%',
-          padding: '6px 12px',
-          borderRadius: 8,
-          background: 'var(--bg-surface)',
-          border: '1px solid var(--border-subtle)',
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          fontSize: 13,
-          lineHeight: '22px',
-          color: 'var(--text-muted)',
-          letterSpacing: '0.08em',
-          userSelect: 'none',
-        }}
-      >
-        {animate ? slots.join('') : label}
-      </div>
+      <span style={{ color: 'var(--accent)', fontWeight: 700 }}>▌</span>
+      <span>{animate ? slots.join('') : label}</span>
     </div>
   )
 }
