@@ -32,6 +32,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{id}/prompt", post(send_prompt))
         .route("/sessions/{id}/release", post(release_session))
         .route("/sessions/{id}/messages", get(list_messages))
+        .route("/sessions/{id}/messages/sync", post(sync_messages))
         .route("/sessions/external", get(list_external_sessions))
         .route("/sessions/adopt", post(adopt_session))
 }
@@ -463,6 +464,39 @@ async fn list_messages(
             Json(json!({ "error": e.to_string() })),
         ),
     }
+}
+
+/// 恢复会话重放完成后，前端把重建出的完整消息列表整轮写回 DB（先删后插），
+/// 使刷新浏览器后仍可从 `list_messages` 还原历史。
+async fn sync_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SyncMessagesRequest>,
+) -> impl IntoResponse {
+    let rows: Vec<(String, String)> = body
+        .messages
+        .into_iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| (m.role, m.text))
+        .collect();
+    match crate::acp::chat_persistence::sync_messages(&state.db, &id, &rows).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SyncMessagesRequest {
+    messages: Vec<SyncMessage>,
+}
+
+#[derive(serde::Deserialize)]
+struct SyncMessage {
+    role: String,
+    text: String,
 }
 
 async fn resolve_workspace_path(

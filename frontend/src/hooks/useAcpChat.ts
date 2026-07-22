@@ -410,6 +410,22 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
+          // 重放历史只活在内存 store，刷新即丢 —— 整轮写回 DB，刷新后可从
+          // list_messages 还原。后端先删后插（幂等重建），与实时 prompt 增量
+          // 写入互不冲突。
+          if (!suppressReplay.current) {
+            const msgs = useChatStore.getState().states[sid]?.messages ?? []
+            const payload = msgs
+              .filter((m) => m.role === 'user' || m.role === 'assistant')
+              .map((m) => ({ role: m.role, text: m.text }))
+            if (payload.length > 0) {
+              fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: payload }),
+              }).catch(() => {})
+            }
+          }
           break
         case 'permission_request': {
           const req = frame.request ?? {}
