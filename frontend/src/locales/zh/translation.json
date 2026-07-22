@@ -123,6 +123,7 @@
   "chat.status.released": "已释放",
   "chat.session.ended": "此会话已结束，历史记录仅供查阅。",
   "chat.session.restore": "恢复会话",
+  "chat.thinking": "思考中…",
   "fm.loadFailed": "加载文件列表失败",
   "fm.uploadComplete": "上传完成",
   "fm.uploadFailed": "上传失败",

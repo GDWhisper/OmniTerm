@@ -123,6 +123,7 @@
   "chat.status.released": "released",
   "chat.session.ended": "This session has ended. History is read-only.",
   "chat.session.restore": "Restore",
+  "chat.thinking": "Thinking…",
   "fm.loadFailed": "Failed to load file list",
   "fm.uploadComplete": "Upload complete",
   "fm.uploadFailed": "Upload failed",

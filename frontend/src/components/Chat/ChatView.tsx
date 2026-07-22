@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
+import { useTranslation } from 'react-i18next'
+import { useAppStore } from '../../stores/appStore'
+import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
@@ -43,6 +46,7 @@ export function ChatView() {
   const respondPermission = conn?.respondPermission ?? (() => {})
   const setConfigOption = conn?.setConfigOption ?? (() => {})
   const chatState = useChatStore(selectChatState(activeSessionId))
+  const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
@@ -215,6 +219,10 @@ export function ChatView() {
         {chatState.messages.map((m) => (
           <ChatMessageView key={m.id} message={m} />
         ))}
+        {chatState.sending &&
+          !chatState.messages.some((m) => m.role === 'assistant' && m.streaming) && (
+            <ThinkingIndicator animate={pixelAnimationsEnabled} label={t('chat.thinking')} />
+          )}
       </OverlayScroll>
 
       {chatState.pendingPermission && (
@@ -271,6 +279,64 @@ export function ChatView() {
         usage={chatState.usage}
         onSetConfigOption={setConfigOption}
       />
+    </div>
+  )
+}
+
+/**
+ * Shown in the message stream between a sent prompt and the first assistant
+ * token, so the chat never sits silent/empty while the agent is processing.
+ * Mirrors the assistant bubble alignment and the existing pixel-animation flag.
+ */
+function ThinkingIndicator({ animate, label }: { animate: boolean; label: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        padding: '4px 12px',
+        gap: 6,
+      }}
+    >
+      <div style={{ fontSize: 10, color: 'var(--text-faint)', fontFamily: READER_FONT, letterSpacing: '0.05em' }}>
+        agent
+      </div>
+      <div
+        style={{
+          alignSelf: 'flex-start',
+          maxWidth: '85%',
+          padding: '8px 12px',
+          borderRadius: 8,
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-subtle)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontFamily: READER_FONT,
+          fontSize: 13,
+          color: 'var(--text-muted)',
+        }}
+      >
+        <span style={{ display: 'inline-flex', gap: 4 }}>
+          {[0, 1, 2].map((i) => (
+            <span
+              key={i}
+              className={animate ? 'chat-thinking-dot' : undefined}
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: 'var(--text-muted)',
+                display: 'inline-block',
+                opacity: animate ? undefined : 0.4 + i * 0.3,
+                animationDelay: animate ? `${i * 0.15}s` : undefined,
+              }}
+            />
+          ))}
+        </span>
+        <span>{label}</span>
+      </div>
     </div>
   )
 }
