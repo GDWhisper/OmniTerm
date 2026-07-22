@@ -1459,16 +1459,6 @@ body.parchment-texture {
   animation: blink-cursor 1s steps(1) infinite;
 }
 
-/* Pulsing dots for the "thinking" placeholder shown between a sent prompt
-   and the first assistant token (see ChatView ThinkingIndicator). */
-.chat-thinking-dot {
-  animation: chat-thinking-pulse 1.2s ease-in-out infinite;
-}
-@keyframes chat-thinking-pulse {
-  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
-}
-
 /* ────────────────────────────────────────────────────────────────────
    Corner nails — gold squares at the 4 corners of floating panels.
    Uses 4 absolutely-positioned ::before/::after + 2 <span> children

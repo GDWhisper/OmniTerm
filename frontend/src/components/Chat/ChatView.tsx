@@ -286,9 +286,30 @@ export function ChatView() {
 /**
  * Shown in the message stream between a sent prompt and the first assistant
  * token, so the chat never sits silent/empty while the agent is processing.
- * Mirrors the assistant bubble alignment and the existing pixel-animation flag.
+ * Renders a continuously scrambling glyph stream ("decoding" noise) until the
+ * agent emits its first real token — purely decorative feedback, never locks
+ * into readable text. Falls back to a static label when animations are off.
  */
+const SCRAMBLE_CHARS = '!<>-_\\/[]{}—=+*^?#________░▒▓<>¥@%&ABCDEF0123456789ｱｲｳｴｵｶｷｸ'
+
 function ThinkingIndicator({ animate, label }: { animate: boolean; label: string }) {
+  const [noise, setNoise] = useState('')
+
+  useEffect(() => {
+    if (!animate) return
+    const LEN = 14
+    const tick = () => {
+      let s = ''
+      for (let i = 0; i < LEN; i++) {
+        s += SCRAMBLE_CHARS[(Math.random() * SCRAMBLE_CHARS.length) | 0]
+      }
+      setNoise(s)
+    }
+    tick()
+    const id = window.setInterval(tick, 70)
+    return () => window.clearInterval(id)
+  }, [animate])
+
   return (
     <div
       style={{
@@ -310,32 +331,14 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
           borderRadius: 8,
           background: 'var(--bg-surface)',
           border: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontFamily: READER_FONT,
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           fontSize: 13,
+          letterSpacing: '0.12em',
           color: 'var(--text-muted)',
+          minWidth: 120,
         }}
       >
-        <span style={{ display: 'inline-flex', gap: 4 }}>
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              className={animate ? 'chat-thinking-dot' : undefined}
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                background: 'var(--text-muted)',
-                display: 'inline-block',
-                opacity: animate ? undefined : 0.4 + i * 0.3,
-                animationDelay: animate ? `${i * 0.15}s` : undefined,
-              }}
-            />
-          ))}
-        </span>
-        <span>{label}</span>
+        {animate ? noise : label}
       </div>
     </div>
   )
