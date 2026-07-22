@@ -494,18 +494,20 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | Active tab 文字 | `#FAF2DE` | `#E6DFD0` |
 | Tab rail 右边框 | `var(--wood-shadow)` = `#3A2E1F` | `#090A0D` |
 
-### 滚动条（OverlayScroll 覆盖式）
+### 滚动条（OverlayScroll 原生主题化）
 
-所有纵向滚动区域统一用 `<OverlayScroll>` 组件：**隐藏原生滚动条**，
-在内容右边缘叠加一条主题色拇指，滚动时淡入、静止后淡出，不占布局
-（不挤压内容）。视觉 token：
+所有纵向滚动区域统一用 `<OverlayScroll>` 组件：保留**原生滚动条**并做主题化
+（窄、pixel 直角、可拖动）。gutter 在首次渲染即预留 6px，thumb/track 平时透明、
+**鼠标 hover / focus 进容器才显现**，因此显隐不会挤压或 reflow 其他内容。视觉 token：
 
 | 元素 | 值 |
 |------|-----|
-| 拇指宽度 | 6px（`right: 2px`） |
+| 拇指宽度 | 6px |
 | 拇指圆角 | `border-radius: 0`（pixel 直角） |
 | 拇指颜色 | `var(--scrollbar-thumb)` |
-| 显隐 | `opacity` 0 → 1，`transition: opacity 0.25s ease`，静止 ~900ms 后淡出 |
+| 拇指 hover | `var(--scrollbar-thumb-hover)` |
+| 轨道颜色 | `var(--scrollbar-track)` |
+| 显隐 | 平时透明，hover/focus-within 才上色（原生能力，可拖动，零跳动） |
 
 Popup 自身 `overflow: hidden`，滚动交给内层 `.overlay-scroll-content`。
 代码约定（填满型 vs shrink-to-fit 菜单、横向滚动例外）见

@@ -119,6 +119,7 @@
   --bg-elevated-light: #EBE0C4;
   --pixel-shadow-light: #8B7755;
   --scrollbar-thumb: #8B7755;
+  --scrollbar-thumb-hover: #6B5A3E;
   --scrollbar-track: #EBE0C4;
   color-scheme: light;
 }
@@ -154,6 +155,7 @@
   --pixel-shadow: #090A0D;
   /* scrollbar */
   --scrollbar-thumb: #484F58;
+  --scrollbar-thumb-hover: #58A6FF;
   --scrollbar-track: #12141A;
   color-scheme: dark;
 }
@@ -1295,30 +1297,41 @@ body.parchment-texture {
 
 /* ────────────────────────────────────────────────────────────────────
    Overlay scrollbar — backs the <OverlayScroll> component. The native
-   scrollbar is hidden entirely; a thin theme-aware thumb floats over the
-   content's right edge, fading in on scroll and out when idle. Because it
-   overlays rather than reserves a gutter, revealing it never reflows the
-   layout. Used by the chat message list, the config-toolbar dropdown, and
-   the settings/cheatsheet popup panes.
+   scrollbar reserves a 6px gutter from first paint (no reflow on show/hide)
+   but stays visually hidden until the pointer enters / focus lands in the
+   container, then themes in. Because it is the real native bar it stays
+   fully draggable. Used by the chat message list, the config-toolbar
+   dropdown, and the settings/cheatsheet popup panes.
    ──────────────────────────────────────────────────────────────────── */
 .overlay-scroll-content {
-  scrollbar-width: none;                  /* Firefox: hide native bar */
+  scrollbar-width: thin;                  /* Firefox: thin native bar */
+  scrollbar-color: transparent transparent;   /* hidden until hovered/focused */
+}
+.overlay-scroll-content:hover,
+.overlay-scroll-content:focus-within {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 .overlay-scroll-content::-webkit-scrollbar {
-  width: 0;                               /* WebKit: hide native bar */
-  height: 0;
+  width: 6px;                             /* WebKit: gutter reserved from first paint */
+  height: 6px;
 }
-.overlay-scroll-thumb {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  width: 6px;
+.overlay-scroll-content::-webkit-scrollbar-track {
+  background: transparent;                /* hidden until hovered/focused */
+}
+.overlay-scroll-content::-webkit-scrollbar-thumb {
+  background: transparent;                /* hidden until hovered/focused */
   border-radius: 0;
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-track,
+.overlay-scroll-content:focus-within::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-thumb,
+.overlay-scroll-content:focus-within::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  pointer-events: none;
-  z-index: 20;
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, var(--scrollbar-thumb));
 }
 
 /* ────────────────────────────────────────────────────────────────────

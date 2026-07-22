@@ -18,8 +18,8 @@
 **约定**：
 
 - 一律包一层 `<OverlayScroll>`（`frontend/src/components/Common/OverlayScroll.tsx`）：
-  隐藏原生滚动条，右侧叠加一条主题色拇指，滚动时淡入、静止后淡出，
-  不占布局（不挤压内容）
+  保留原生滚动条并主题化（窄、pixel 直角、可拖动），gutter 在首次渲染即预留
+  6px、thumb/track 平时透明、hover/focus 进容器才显现，不挤压/reflow 其他内容
 - **禁止**手写 `overflow-y: auto` + 原生滚动条样式
 - 尺寸由外层 `style` 给定，两种模式：
   - **填满型**（面板内容区）：flex 父容器里 `style={{ flex: 1, minHeight: 0 }}`
