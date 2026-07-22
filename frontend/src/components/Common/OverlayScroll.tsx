@@ -8,8 +8,6 @@ import {
   type UIEvent,
 } from 'react'
 
-const THUMB_MIN_HEIGHT = 24
-
 interface OverlayScrollProps {
   children: ReactNode
   /** Ref to the inner scrollable element (for imperative scrolling). */

@@ -1187,7 +1187,7 @@ export function Sidebar() {
                                             e.stopPropagation()
                                             const chatState = useChatStore.getState().states[s.id]
                                             if (chatState?.sending) {
-                                              setConfirmRelease({ id: s.id, name: s.name })
+                                              setConfirmRelease({ id: s.id, name: s.name ?? null })
                                             } else {
                                               handleReleaseSession(s.id)
                                             }

@@ -165,6 +165,7 @@ interface ChatActions {
   setPermission: (sessionId: string, permission: PendingPermission) => void
   clearPermission: (sessionId: string) => void
   setReplaying: (sessionId: string, replaying: boolean) => void
+  finalizeReplay: (sessionId: string) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
