@@ -101,20 +101,55 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
     (key, desc)
 }
 
-/// Resolve base path from session ID (via tmux pane CWD).
-/// Returns (base_path, tmux_session_name).
-/// If the tmux session is missing (e.g. tmux server restarted), re-creates it
-/// using the workspace_path as fallback CWD.
+/// Resolve base path from session ID.
+///
+/// Returns `(base_path, tmux_session_name_or_empty)`. The second value is the
+/// tmux session name for `runtime_kind='tmux'` sessions, and `""` (empty) for
+/// `runtime_kind='acp'` sessions — which **do not have a tmux session**, so
+/// FileManager must read the session's `workspace_path` directly (the agent
+/// process cwd was fixed in commit 27d815f to actually be that path).
+///
+/// For tmux sessions, falls back to re-creating the tmux session at
+/// `workspace_path` if `pane_cwd` fails (e.g. tmux server restart).
+///
+/// **历史 bug**：此前 ACP session 的 `tmux_session_name` 是 NULL，
+/// `SELECT tmux_session_name` 返回 None  → 整个函数返 None  →
+/// `/files?session=…` 返回 404 "session not found or tmux unavailable"，
+/// FileManager 加载 ACP session 的文件列表永远报错。修复后识别
+/// runtime_kind=acp 走 workspace_path 分支。
 pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
-    let tmux_name: (String,) =
-        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
-            .bind(session_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()?;
+    // 一次性取 session 关键字段，避免多次往返
+    let row: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT runtime_kind, tmux_session_name, workspace_path FROM sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()?;
 
-    let tmux_name = tmux_name.0;
+    let (runtime_kind, tmux_name_opt, workspace_path) = row;
+
+    // ACP session：没有 tmux 会话，直接用 session 的 workspace_path 作为
+    // FileManager 起点。这与 agent 子进程 OS cwd 修复（commit 27d815f）
+    // 保持一致——agent 看到的是 workspace_path，FileManager 也展示
+    // workspace_path，UI 与 agent 实际文件上下文统一。
+    //
+    // 未来若引入非 tmux/非 acp 的新 runtime_kind，未设置 tmux_name 但
+    // 仍要求跟随会话工作区：也走此分支（`tmux_name_opt.is_none()`）。
+    if runtime_kind == "acp" || tmux_name_opt.is_none() {
+        tracing::debug!(
+            "session {} is non-tmux (runtime_kind={}), using workspace_path={} as FileManager cwd",
+            session_id,
+            runtime_kind,
+            workspace_path
+        );
+        return Some((workspace_path, String::new()));
+    }
+
+    // 走到这里说明是 tmux 会话。tmux_name_opt 一定是 Some
+    // （上面已 early-return None 分支）。
+    let tmux_name = tmux_name_opt.expect("checked above");
 
     // Try to get pane CWD; if it fails, the tmux session may have been lost
     match tmux::pane_cwd(&tmux_name).await {
