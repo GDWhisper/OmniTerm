@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
-import { useTranslation } from 'react-i18next'
-import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
@@ -286,27 +283,27 @@ export function ChatView() {
 /**
  * Shown in the message stream between a sent prompt and the first assistant
  * token, so the chat never sits silent/empty while the agent is processing.
- * Renders a continuously scrambling glyph stream ("decoding" noise) until the
- * agent emits its first real token — purely decorative feedback, never locks
- * into readable text. Falls back to a static label when animations are off.
+ * Renders a continuously scrambling hex stream ("decoding" noise, matching the
+ * FileManager path-bar look) until the agent emits its first real token —
+ * purely decorative feedback, never locks into readable text. Falls back to a
+ * static label when animations are off.
  */
-const SCRAMBLE_CHARS = '!<>-_\\/[]{}—=+*^?#________░▒▓<>¥@%&ABCDEF0123456789ｱｲｳｴｵｶｷｸ'
+const SCRAMBLE_HEX = '0123456789abcdef'
+const SCRAMBLE_LEN = 16
 
 function ThinkingIndicator({ animate, label }: { animate: boolean; label: string }) {
-  const [noise, setNoise] = useState('')
+  // per-slot glyph array → fixed width, no layout jitter from differing glyphs
+  const [slots, setSlots] = useState<string[]>(() =>
+    Array.from({ length: SCRAMBLE_LEN }, () => SCRAMBLE_HEX[(Math.random() * 16) | 0]),
+  )
 
   useEffect(() => {
     if (!animate) return
-    const LEN = 14
-    const tick = () => {
-      let s = ''
-      for (let i = 0; i < LEN; i++) {
-        s += SCRAMBLE_CHARS[(Math.random() * SCRAMBLE_CHARS.length) | 0]
-      }
-      setNoise(s)
-    }
-    tick()
-    const id = window.setInterval(tick, 70)
+    const id = window.setInterval(() => {
+      setSlots((prev) =>
+        prev.map((_, i) => (i % 3 === 0 ? SCRAMBLE_HEX[(Math.random() * 16) | 0] : prev[i])),
+      )
+    }, 60)
     return () => window.clearInterval(id)
   }, [animate])
 
@@ -327,18 +324,19 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
         style={{
           alignSelf: 'flex-start',
           maxWidth: '85%',
-          padding: '8px 12px',
+          padding: '6px 12px',
           borderRadius: 8,
           background: 'var(--bg-surface)',
           border: '1px solid var(--border-subtle)',
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           fontSize: 13,
-          letterSpacing: '0.12em',
+          lineHeight: '22px',
           color: 'var(--text-muted)',
-          minWidth: 120,
+          letterSpacing: '0.08em',
+          userSelect: 'none',
         }}
       >
-        {animate ? noise : label}
+        {animate ? slots.join('') : label}
       </div>
     </div>
   )

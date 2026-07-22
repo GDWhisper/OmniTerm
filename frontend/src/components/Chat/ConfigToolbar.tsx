@@ -20,19 +20,33 @@ function ConfigDropdown({
   onSelect: (configId: string, value: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        setSearch('')
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
+  useEffect(() => {
+    if (open) inputRef.current?.focus()
+  }, [open])
+
   const current = option.options.find((o) => o.value === option.currentValue)
   const label = CATEGORY_LABELS[option.category] ?? option.name
+
+  const filtered = option.options.filter((o) =>
+    o.name.toLowerCase().includes(search.toLowerCase()),
+  )
+  const showSearch = option.options.length > 8
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -66,21 +80,53 @@ function ConfigDropdown({
             bottom: '100%',
             left: 0,
             marginBottom: 2,
-            minWidth: 140,
+            minWidth: 160,
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-subtle)',
             borderRadius: 6,
             boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
             zIndex: 100,
           }}
-          contentStyle={{ flex: '0 0 auto', maxHeight: 200, padding: '4px 0' }}
+          contentStyle={{ flex: '0 0 auto', maxHeight: 240, padding: '4px 0' }}
         >
-          {option.options.map((opt) => (
+          {showSearch && (
+            <div style={{ padding: '4px 6px 2px' }}>
+              <input
+                ref={inputRef}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    if (search) {
+                      setSearch('')
+                    } else {
+                      setOpen(false)
+                    }
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '4px 6px',
+                  fontSize: 11,
+                  fontFamily: READER_FONT,
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 4,
+                  background: 'var(--bg-surface)',
+                  color: 'var(--text-primary)',
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </div>
+          )}
+          {filtered.map((opt) => (
             <button
               key={opt.value}
               onClick={() => {
                 onSelect(option.id, opt.value)
                 setOpen(false)
+                setSearch('')
               }}
               style={{
                 display: 'block',
@@ -99,6 +145,18 @@ function ConfigDropdown({
               {opt.name}
             </button>
           ))}
+          {search && filtered.length === 0 && (
+            <div
+              style={{
+                padding: '12px 10px',
+                fontSize: 11,
+                color: 'var(--text-faint)',
+                textAlign: 'center',
+              }}
+            >
+              No matches
+            </div>
+          )}
         </OverlayScroll>
       )}
     </div>

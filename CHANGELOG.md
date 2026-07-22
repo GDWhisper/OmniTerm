@@ -60,7 +60,7 @@ Prefix each entry with the area it affects:
 - (2026-07-15) `[frontend]` 新增 `AgentPicker` 下拉组件并接入 Sidebar 「新建会话」 modal：选中 agent 时 `runtime_kind='acp'`、留空时维持原 tmux 行为；新增 `agentPicker.*` 与 `settings.agents.*` 中英文翻译（`frontend/src/components/AgentPicker/AgentPicker.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-15) `[frontend]` Settings 面板新增 AGENTS tab（`AgentSettings` 组件）：支持新建/编辑/删除 agent，含 env 行编辑（`frontend/src/components/Settings/AgentSettings.tsx`、`Settings.tsx`）
 - (2026-07-16) `[frontend]` ACP Chat 视图（Phase 4a）：新增 `chatStore`（按 `session_id` 索引的纯状态 Zustand store）、`useAcpChat` hook（管理 `/ws/acp/{id}` 生命周期并把协议帧翻译成 store 动作）、`ChatView` + `ChatMessage` + `ChatInput` 三件套渲染 ACP 会话的 title bar / 滚动消息列表 / 输入行；新增 `.chat-streaming-caret` CSS 动画复用 `blink-cursor` keyframe（`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/*`、`frontend/src/index.css`）
-- (2026-07-22) `[frontend]` ACP 聊天流在「发送 prompt → LLM 首 token」之间新增持续翻滚的乱码占位（scramble 解码噪声，尊重 `pixelAnimationsEnabled` 开关，关闭时回退为静态「思考中…」），消除用户消息上屏后到 agent 首次输出前的静默空白（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-22) `[frontend]` ACP 聊天流在「发送 prompt → LLM 首 token」之间新增持续翻滚的乱码占位（hex 解码噪声，风格对齐 FileManager 路径栏 `b7b08acf56c1`，纯等宽字母数字逐槽滚动、长度恒定无抖动，尊重 `pixelAnimationsEnabled` 开关，关闭时回退静态「思考中…」），消除用户消息上屏后到 agent 首次输出前的静默空白（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 
 ### Changed
 
