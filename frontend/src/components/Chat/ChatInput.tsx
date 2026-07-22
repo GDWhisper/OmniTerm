@@ -16,7 +16,9 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
   const { t } = useTranslation()
   const [text, setText] = useState('')
   const [showCommands, setShowCommands] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   useEffect(() => {
     textareaRef.current?.focus()
@@ -40,14 +42,45 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
     setShowCommands(filteredCommands.length > 0 && text.startsWith('/') && !text.includes(' '))
   }, [text, commands])
 
+  // 命令列表长度变化时，钳制高亮索引避免越界；关闭弹窗时复位。
+  useEffect(() => {
+    setActiveIndex((i) => Math.min(i, Math.max(0, filteredCommands.length - 1)))
+  }, [filteredCommands.length])
+  useEffect(() => {
+    if (!showCommands) setActiveIndex(0)
+  }, [showCommands])
+
+  // 高亮项移出可视区时，滚动到最近可见位置。
+  useEffect(() => {
+    if (showCommands) itemRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, showCommands])
+
   const canSend = !disabled && !sending && text.trim().length > 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape' && showCommands) {
-      setShowCommands(false)
-      return
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (showCommands && filteredCommands.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setActiveIndex((i) => (i + 1) % filteredCommands.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setActiveIndex((i) => (i - 1 + filteredCommands.length) % filteredCommands.length)
+        return
+      }
+      // Enter / Tab 选中当前高亮命令（Tab 默认会跳走焦点，这里拦截）。
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const cmd = filteredCommands[activeIndex]
+        if (cmd) selectCommand(cmd)
+        return
+      }
+      if (e.key === 'Escape') {
+        setShowCommands(false)
+        return
+      }
+    } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (canSend) {
         onSend(text)
@@ -125,42 +158,50 @@ export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }
           }}
           contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
         >
-          {filteredCommands.map((cmd) => (
-            <button
-              key={cmd.name}
-              onClick={() => selectCommand(cmd)}
-              style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: 8,
-                width: '100%',
-                textAlign: 'left',
-                padding: '6px 12px',
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-primary)',
-                fontFamily: READER_FONT,
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-surface)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}
-            >
-              <span style={{ flexShrink: 0 }}>/{cmd.name}</span>
-              {cmd.description && (
-                <span
-                  style={{
-                    color: 'var(--text-faint)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {cmd.description}
-                </span>
-              )}
-            </button>
-          ))}
+          {filteredCommands.map((cmd, index) => {
+            const isActive = index === activeIndex
+            return (
+              <button
+                key={cmd.name}
+                ref={(el) => { itemRefs.current[index] = el }}
+                onClick={() => selectCommand(cmd)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 8,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '6px 12px',
+                  background: isActive ? 'var(--accent-14)' : 'none',
+                  border: 'none',
+                  color: isActive ? 'var(--accent)' : 'var(--text-primary)',
+                  fontFamily: READER_FONT,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.background = 'var(--bg-surface)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = isActive ? 'var(--accent-14)' : 'none'
+                }}
+              >
+                <span style={{ flexShrink: 0 }}>/{cmd.name}</span>
+                {cmd.description && (
+                  <span
+                    style={{
+                      color: isActive ? 'var(--accent)' : 'var(--text-faint)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {cmd.description}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </OverlayScroll>
       )}
       <textarea
