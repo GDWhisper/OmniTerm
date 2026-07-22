@@ -1097,6 +1097,8 @@ export function Sidebar() {
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   triggerBump(e.currentTarget)
+                                  setActiveProject(proj.id)
+                                  setActiveWorkspace(wt.id)
                                   setCreateSessOpen(true)
                                 }}
                                 title={t('sidebar.createSession')}
