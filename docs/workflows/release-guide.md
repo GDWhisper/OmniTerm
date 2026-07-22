@@ -109,8 +109,13 @@ cargo check
 - [ ] **前端构建** — `cd frontend && pnpm build`（TypeScript 类型检查 + 打包）
 
 #### 元数据完整性
-- [ ] **Cargo.toml** — `name`、`version`、`description`、`license`、`include` 是否完整
-- [ ] **README 中英文同步** — 改了英文必须改中文，反之亦然
+- [ ] **Cargo.toml** — `name`、`version`、`description`、`license`、`include` 是否完整。这些字段曾在 FSL 改许可的提交里被整体覆盖丢失（`913f2b8` 加过又掉），**每次发布前必须逐项核对**，`include` 的 canonical 值：
+  ```toml
+  include = ["src/**", "frontend/dist/**", "migrations/**", "/build.rs", "/README.md", "/LICENSE.md"]
+  ```
+  ⚠️ 根级文件（`build.rs`/`README.md`/`LICENSE.md`）**必须加 `/` 前缀锚定到包根**——裸写会按 gitignore 语法在任意层级匹配，把 `frontend/node_modules` 下约 1080 个同名文件打进 crate（实测 2.6M/1168 文件 → 锚定后 988K/88 文件）。
+- [ ] **crate 包内容验证** — `cargo package --allow-dirty` 后检查 `tar tzf target/package/omniterm-<ver>.crate`：`grep -c node_modules` 必须为 0，且含 `frontend/dist/`、`migrations/`、根级 `build.rs`/`README.md`/`LICENSE.md`。**不可逆发布前必做**。
+- [ ] **README 中英文同步** — `README.md`（中文，默认）与 `README_En.md`（英文）内容对应，改了一边必须改另一边
 - [ ] **CHANGELOG** — 版本号、日期、内容是否准确
 - [ ] **Release Notes** — `.github/release-notes.md` 已基于模板生成并填好亮点（见下方「准备 Release Notes」步骤），否则 CI 发布会因 `body_path` 缺失文件失败
 
@@ -126,7 +131,7 @@ cargo check
 
 **核心原则：本地能验证的尽量本地验证，本地无法验证的明确标记并交给用户验证。**
 
-### Step 4：用户确认
+### Step 5：用户确认
 
 **在执行任何发布操作前，必须向用户确认：**
 
@@ -141,7 +146,7 @@ cargo check
 
 **等待用户明确确认后才能继续。**
 
-### Step 4.5：准备 Release Notes（必做，否则 CI 失败）
+### Step 6：准备 Release Notes（必做，否则 CI 失败）
 
 `release.yml` 使用 `body_path: .github/release-notes.md` 发布说明，不再自动生成。打 tag **之前**必须先在 main worktree 生成该文件，否则 CI 会因文件缺失报错。
 
@@ -162,11 +167,11 @@ cargo check
    git commit -m "docs: release notes for vX.Y.Z"
    git push public main:main
    ```
-4. 再执行 Step 5 打 tag（tag 触发 CI，CI 读取已推送的 `release-notes.md`）
+4. 再执行 Step 7 打 tag（tag 触发 CI，CI 读取已推送的 `release-notes.md`）
 
 > 模板结构见 `.github/release-notes-template.md`，仅定骨架，内容由发布 agent 总结。
 
-### Step 5：打 Tag 并推送
+### Step 7：打 Tag 并推送
 
 ```bash
 cd /home/pax/coding/OmniTerm
@@ -184,24 +189,33 @@ git push public v0.2.0
 git push origin main
 ```
 
-### Step 6：Cargo 发布（crates.io）
+### Step 8：Cargo 发布（crates.io）
+
+**发布前先验证包内容（不可逆，必做）：**
 
 ```bash
 cd /home/pax/coding/OmniTerm
 
+# 打包并检查内容：node_modules 必须为 0，且含 frontend/dist、根级文件
+cargo package --allow-dirty
+tar tzf target/package/omniterm-<ver>.crate | grep -c node_modules   # 期望输出 0
+tar tzf target/package/omniterm-<ver>.crate | grep -E "frontend/dist|migrations/|build.rs|README.md|LICENSE.md" | head
+```
+
+```bash
 # 登录 crates.io（如果未登录）
 cargo login <your-crate-token>
 
-# 发布
-cargo publish
+# 发布（frontend/dist 在 .gitignore 中，必须 --allow-dirty）
+cargo publish --allow-dirty
 ```
 
 **注意：Cargo 发布不可逆：**
 - 发布后无法删除，只能发布新版本
 - 如果发现问题，只能通过发布新版本修复
-- 确保版本号正确、代码无误后再发布
+- 确保版本号正确、代码无误、包内容验证通过后再发布
 
-### Step 7：npm 发布
+### Step 9：npm 发布
 
 CI 不自动发 npm。手动执行：
 
@@ -211,7 +225,7 @@ cd npm-package
 npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 ```
 
-### Step 8：验证
+### Step 10：验证
 
 | 方式 | 验证命令 |
 |------|---------|
@@ -336,15 +350,21 @@ git remote -v
 **做法：**
 - publish 前确认 `cargo publish --dry-run` 已把 `frontend/dist/**` 打进包
 - 用 `cargo publish --allow-dirty` 放行（dist 是构建产物，本就不入库，属既定方案）
-- `include` 必须含 `frontend/dist/**`、`migrations/**`、`src/**`，否则 `cargo install` 后前端 / 迁移缺失
+- `include` 的 canonical 值（含根级文件，`/` 前缀锚定到包根）：
+  ```toml
+  include = ["src/**", "frontend/dist/**", "migrations/**", "/build.rs", "/README.md", "/LICENSE.md"]
+  ```
+  缺 `frontend/dist/**`、`migrations/**`、`src/**` 会导致 `cargo install` 后前端 / 迁移缺失。
+
+**⚠️ node_modules 误打包陷阱（0.1.9 实测）：** `include` 里裸写 `README.md` / `LICENSE.md`（无 `/` 前缀）会按 gitignore 语法在**任意层级**匹配，把 `frontend/node_modules` 下约 1080 个同名文件打进 crate（2.6M/1168 文件）。根级文件**必须加 `/` 前缀**锚定。发布前用 `tar tzf target/package/omniterm-<ver>.crate | grep -c node_modules` 验证为 0。
 
 ### GitHub Release notes 缺少用户友好总结
 
-CI 用 `generate_release_notes: true` 自动生成说明，每次发布只会留下一行 `Full Changelog` 链接，无中文亮点总结。
+`release.yml` 用 `body_path: .github/release-notes.md` 读取发布说明。若打 tag 前没生成该文件（见 Step 6），CI 会失败；若只是内容敷衍，Release 页就只剩骨架无亮点。
 
 **做法：**
-- 发布后用 `gh release edit vX.Y.Z --notes-file notes.md` 补一段总结性内容（新功能 / 重要修复 / 工程改进 / 安装升级指引）
-- 若希望以后自动带上，可在仓库沉淀 `docs/release-notes-template.md` 并改 `release.yml` 引用 `body_path`（需另立任务，避免每次手动补）
+- 打 tag **前**先按 Step 6 用 `.github/release-notes-template.md` 生成并填好亮点，推送到 public main
+- 已发布但内容不理想，用 `gh release edit vX.Y.Z --notes-file notes.md` 补救（新功能 / 重要修复 / 工程改进 / 安装升级指引）
 
 ---
 
@@ -373,8 +393,9 @@ CI 用 `generate_release_notes: true` 自动生成说明，每次发布只会留
 **代码编译通过不等于发布就绪。** Cargo.toml、README、CHANGELOG 都是发布产物的一部分。
 
 **做法：**
-- Cargo.toml 检查：name、version、description、license、include
-- README 检查：中英文同步、安装方式准确
+- Cargo.toml 检查：name、version、description、license、repository、readme、include（含 `/LICENSE.md`）
+- README 检查：README.md（中文，默认）与 README_En.md（英文）内容同步、安装方式准确
+- LICENSE.md 检查：与 Cargo.toml `license` 字段一致（当前 FSL-1.1-MIT）
 - CHANGELOG 检查：版本号、日期、内容完整
 
 ### 4. 环境差异 = 提前识别
