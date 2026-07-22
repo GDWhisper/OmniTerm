@@ -517,3 +517,10 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 
 `/proc/<pid>/cwd` 5 秒看到的事实，比读 1000 行 `acp-agent` 源码判断“「这里没设 cwd」」”更有说服力。`readlink /proc/<pid>/cwd` 是第一道武器——可以看多个 agent 进程交叉验证（“一个项目应该看到该项目的 cwd」”——同时存在后端目录的就是 stale spawn）。**调试「「创建出来的东西不对」」 时，能看实际创建的产物（/proc、/sys、container metadata、`/var/log`、sock 文件）先看，再上代码搜索。**
 
+**6. 修一个层别忘了跨层不变量**（补遗）
+
+第一段修复 agent OS cwd 之后，用户上报「修了一半」：FileManager 还是 404。原因：后端 `resolve_session_base` 只查 `tmux_session_name`，ACP session 该列为 NULL，返 None → FileManager 错误。修 agent 但没同步修后端「跟会话走」的文件接口。
+
+**教训**：「「session 的文件上下文」」这个语义贯穿三个进程层（agent OS / 后端 resolve / 前端 FileManager），修一层后必须从入口到 UI 走一遍完整请求流，确认每层都看到一致的 workspace。
+
+
