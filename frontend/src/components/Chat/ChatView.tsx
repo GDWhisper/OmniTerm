@@ -117,6 +117,18 @@ export function ChatView() {
     setAutoStick(true)
   }
 
+  // Shift+Tab 在 ACP 会话窗口内循环切换 mode（category === 'mode' 的 config option）。
+  // 仅当焦点落在 ChatView 子树内才触发（React 合成事件冒泡），满足「聚焦在会话窗口」的要求。
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!e.shiftKey || e.key !== 'Tab') return
+    const modeOption = chatState.configOptions.find((o) => o.category === 'mode')
+    if (!modeOption || modeOption.options.length < 2) return
+    e.preventDefault()
+    const idx = modeOption.options.findIndex((o) => o.value === modeOption.currentValue)
+    const next = modeOption.options[(idx + 1) % modeOption.options.length]
+    setConfigOption(modeOption.id, next.value)
+  }
+
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
   // 也应展示「恢复会话」按钮。acp_process_alive 由 Sidebar 的会话列表轮询刷新，
   // 因而释放后能即时（最多一个轮询周期）反映到 UI，无需刷新页面。
@@ -148,6 +160,7 @@ export function ChatView() {
 
   return (
     <div
+      onKeyDown={handleKeyDown}
       style={{
         height: '100%',
         display: 'flex',
