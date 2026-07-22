@@ -4,6 +4,10 @@ version = "0.1.9"
 edition = "2024"
 license = "FSL-1.1-MIT"
 authors = ["GDWhisper"]
+description = "Web-based tmux terminal manager — one browser tab to watch and drive your AI coding agents"
+repository = "https://github.com/GDWhisper/OmniTerm"
+readme = "README.md"
+include = ["src/**", "frontend/dist/**", "migrations/**", "build.rs", "README.md", "LICENSE.md"]
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }
