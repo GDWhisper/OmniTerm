@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -18,7 +18,7 @@ use tokio::task::JoinHandle;
 
 use crate::acp::handler;
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
-use crate::acp::terminal::AcpTerminalManager;
+use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
 use crate::models::agent::Agent;
 
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
@@ -52,6 +52,8 @@ pub struct AcpClient {
     /// agent 连接任务崩溃时广播错误原因，供 WS 层即时透传给前端。
     /// 取代原先 `disconnect` 中 `let _ = connection_task.await` 被静默丢弃的错误。
     crash_tx: broadcast::Sender<String>,
+    /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
+    terminal_event_tx: broadcast::Sender<TerminalActivity>,
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
@@ -75,6 +77,39 @@ fn spawn_crash_watcher(
     });
 }
 
+/// 将 agent 请求的文件路径解析为 workspace 内的安全绝对路径，防止越界读写。
+/// 越界或解析失败返回 Err(消息)，由调用方转成内部错误回报 agent。
+fn resolve_fs_path(base: &Path, requested: &Path) -> Result<PathBuf, String> {
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        base.join(requested)
+    };
+
+    let canon_base = base
+        .canonicalize()
+        .map_err(|e| format!("workspace root unresolvable: {}", e))?;
+
+    // 目标存在则直接 canonicalize；不存在（写入新文件）则 canonicalize 父目录后拼接文件名。
+    let canon = if candidate.exists() {
+        candidate
+            .canonicalize()
+            .map_err(|e| format!("path resolution failed: {}", e))?
+    } else if let Some(parent) = candidate.parent() {
+        let canon_parent = parent
+            .canonicalize()
+            .map_err(|e| format!("parent dir unresolvable: {}", e))?;
+        canon_parent.join(candidate.file_name().unwrap_or_default())
+    } else {
+        candidate
+    };
+
+    if !canon.starts_with(&canon_base) {
+        return Err("access denied: path escapes workspace root".to_string());
+    }
+    Ok(canon)
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(agent: Agent, cwd: PathBuf) -> Result<Self, AcpError> {
         let mut all_args: Vec<String> = Vec::new();
@@ -89,6 +124,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(256);
         let (crash_tx, _) = broadcast::channel::<String>(16);
+        let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -98,7 +134,7 @@ impl AcpClient {
         )>();
 
         let notif_tx = session_update_tx.clone();
-        let terminal_manager = Arc::new(AcpTerminalManager::new());
+        let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
         let tm = terminal_manager.clone();
         let permission_manager = Arc::new(PermissionManager::new());
         let pm = permission_manager.clone();
@@ -141,14 +177,55 @@ impl AcpClient {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |_request: ReadTextFileRequest, responder, _cx| {
-                    responder.respond(ReadTextFileResponse::new(""))
+                {
+                    let read_cwd = cwd.clone();
+                    async move |request: ReadTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&read_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        match tokio::fs::read_to_string(&path).await {
+                            Ok(content) => {
+                                let _ = responder.respond(ReadTextFileResponse::new(content));
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("read failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |_request: WriteTextFileRequest, responder, _cx| {
-                    responder.respond(WriteTextFileResponse::new())
+                {
+                    let write_cwd = cwd.clone();
+                    async move |request: WriteTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&write_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        match tokio::fs::write(&path, &request.content).await {
+                            Ok(()) => {
+                                let _ = responder.respond(WriteTextFileResponse::new());
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("write failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -239,6 +316,7 @@ impl AcpClient {
             session_update_tx,
             _shutdown_tx: shutdown_tx,
             crash_tx,
+            terminal_event_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -255,6 +333,11 @@ impl AcpClient {
     /// 订阅 agent 进程崩溃错误（仅在连接任务非正常退出时收到）。
     pub fn crash_subscribe(&self) -> broadcast::Receiver<String> {
         self.crash_tx.subscribe()
+    }
+
+    /// 订阅 agent 终端命令生命周期事件（创建/退出）。
+    pub fn terminal_event_subscribe(&self) -> broadcast::Receiver<TerminalActivity> {
+        self.terminal_event_tx.subscribe()
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -435,7 +518,7 @@ impl AcpClient {
 
     pub async fn spawn_and_load(
         agent: Agent,
-        _cwd: PathBuf,
+        cwd: PathBuf,
         acp_session_id: String,
     ) -> Result<Self, AcpError> {
         let mut all_args: Vec<String> = Vec::new();
@@ -449,6 +532,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(256);
         let (crash_tx, _) = broadcast::channel::<String>(16);
+        let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -458,7 +542,7 @@ impl AcpClient {
         )>();
 
         let notif_tx = session_update_tx.clone();
-        let terminal_manager = Arc::new(AcpTerminalManager::new());
+        let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
         let tm = terminal_manager.clone();
         let permission_manager = Arc::new(PermissionManager::new());
         let pm = permission_manager.clone();
@@ -501,14 +585,55 @@ impl AcpClient {
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |_request: ReadTextFileRequest, responder, _cx| {
-                    responder.respond(ReadTextFileResponse::new(""))
+                {
+                    let read_cwd = cwd.clone();
+                    async move |request: ReadTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&read_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        match tokio::fs::read_to_string(&path).await {
+                            Ok(content) => {
+                                let _ = responder.respond(ReadTextFileResponse::new(content));
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("read failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
             .on_receive_request(
-                async move |_request: WriteTextFileRequest, responder, _cx| {
-                    responder.respond(WriteTextFileResponse::new())
+                {
+                    let write_cwd = cwd.clone();
+                    async move |request: WriteTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&write_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        match tokio::fs::write(&path, &request.content).await {
+                            Ok(()) => {
+                                let _ = responder.respond(WriteTextFileResponse::new());
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("write failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
@@ -591,6 +716,7 @@ impl AcpClient {
             session_update_tx,
             _shutdown_tx: shutdown_tx,
             crash_tx,
+            terminal_event_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,

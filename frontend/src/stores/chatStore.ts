@@ -49,6 +49,17 @@ export interface SystemBlock {
 
 export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | SystemBlock
 
+// --- Agent terminal activity (from ACP `terminal/create`) ---
+// Surfaces commands the agent runs in background terminals so they aren't silent.
+
+export interface TerminalActivity {
+  id: string
+  command: string
+  args: string[]
+  status: 'created' | 'exited'
+  exit_code: number | null
+}
+
 // --- Permission request (ephemeral, not persisted as a message block) ---
 
 export interface PermissionOption {
@@ -131,6 +142,7 @@ interface ChatSessionState {
   usage: Record<string, unknown> | null
   commands: SlashCommand[]
   configOptions: ConfigOption[]
+  terminalEvents: TerminalActivity[]
 }
 
 interface ChatActions {
@@ -157,6 +169,7 @@ interface ChatActions {
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
+  upsertTerminalActivity: (sessionId: string, event: TerminalActivity) => void
   reset: (sessionId: string) => void
 }
 
@@ -171,6 +184,7 @@ const EMPTY: ChatSessionState = {
   usage: null,
   commands: [],
   configOptions: [],
+  terminalEvents: [],
 }
 
 interface ChatStoreState {
@@ -572,6 +586,18 @@ export const useChatStore = create<ChatStore>((set) => ({
         o.id === configId ? { ...o, currentValue: value } : o,
       )
       return patch(state, sessionId, { configOptions })
+    }),
+
+  upsertTerminalActivity: (sessionId, event) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const terminalEvents = current.terminalEvents.map((e) =>
+        e.id === event.id ? { ...e, ...event } : e,
+      )
+      if (!terminalEvents.some((e) => e.id === event.id)) {
+        terminalEvents.push(event)
+      }
+      return patch(state, sessionId, { terminalEvents })
     }),
 
   reset: (sessionId) =>

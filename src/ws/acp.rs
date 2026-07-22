@@ -14,6 +14,7 @@ use tracing::info;
 
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
+use crate::acp::terminal::TerminalActivity;
 use crate::acp::AcpClient;
 use crate::api::agents::load_agent;
 use crate::AppState;
@@ -57,6 +58,14 @@ enum AcpServerMessage<'a> {
     PromptDone { stop_reason: &'a str },
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
+    #[serde(rename = "terminal_activity")]
+    TerminalActivity {
+        id: String,
+        command: String,
+        args: Vec<String>,
+        status: String,
+        exit_code: Option<u32>,
+    },
     #[serde(rename = "replay_start")]
     ReplayStart,
     #[serde(rename = "replay_end")]
@@ -128,7 +137,7 @@ async fn spawn_notify_task(
 }
 
 /// 转发 agent 进程崩溃错误：收到即作为 `prompt_error` 帧推给前端，
-/// 使用户能看到崩溃原因而非仅连接断开。
+/// 使用户能看到崩溃原因而非仅连接断开�?
 async fn spawn_crash_task(
     mut rx: tokio::sync::broadcast::Receiver<String>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
@@ -139,6 +148,43 @@ async fn spawn_crash_task(
                 Ok(reason) => {
                     let msg = serde_json::to_string(&AcpServerMessage::PromptError { message: &reason })
                         .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            }
+        }
+    });
+}
+
+/// 转发 agent 终端命令生命周期事件：创建/退出转为 `terminal_activity` 帧，
+/// 使前端能感知 agent 在后台执行的命令（否则完全不可见）。
+async fn spawn_terminal_task(
+    mut rx: tokio::sync::broadcast::Receiver<TerminalActivity>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let (id, command, args, status, exit_code) = match ev {
+                        TerminalActivity::Created { id, command, args } => {
+                            (id, command, args, "created".to_string(), None)
+                        }
+                        TerminalActivity::Exited { id, exit_code } => {
+                            (id, String::new(), Vec::new(), "exited".to_string(), exit_code)
+                        }
+                    };
+                    let msg = serde_json::to_string(&AcpServerMessage::TerminalActivity {
+                        id,
+                        command,
+                        args,
+                        status,
+                        exit_code,
+                    })
+                    .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
@@ -188,6 +234,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            let term_rx = c.terminal_event_subscribe();
+            spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
                 let msg =
@@ -216,10 +264,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
         }
     };
 
-    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动，
-    // 替代前端对 acp_process_alive 的轮询）。
+    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动�?
+    // 替代前端�? acp_process_alive 的轮询）�?
     let mut proc_rx = state.acp_supervisor.process_event_subscribe();
-    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）。
+    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）�?
     let _ = notify_tx
         .send(
             Message::Text(
@@ -254,7 +302,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 ).await;
 
                                 let c = c.clone();
-                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
+                                // 标记 prompt 进行中（活跃度守卫据此判�? agent 在工作中�?
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
                                 let db2 = db.clone();
@@ -291,7 +339,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
-                                    // 取消也视为 prompt 结束
+                                    // 取消也视�? prompt 结束
                                     c.mark_prompt_idle();
                                     if let Err(e) = c.cancel() {
                                         let err_msg = format!("取消 agent 失败: {}", e);
@@ -362,6 +410,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
                                         let crash_rx = new_client.crash_subscribe();
                                         spawn_crash_task(crash_rx, notify_tx.clone()).await;
+                                        let term_rx = new_client.terminal_event_subscribe();
+                                        spawn_terminal_task(term_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());
 
                                         let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
@@ -398,7 +448,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
                                 if let Some(ref c) = client {
                                     if let Err(e) = c.set_config_option(&config_id, &value).await {
-                                        let err_msg = format!("配置项 {} 设置失败: {}", config_id, e);
+                                        let err_msg = format!("配置�? {} 设置失败: {}", config_id, e);
                                         let msg = serde_json::to_string(&AcpServerMessage::Error {
                                             code: Some("config_option_failed"),
                                             message: &err_msg,
@@ -448,7 +498,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             }
                         }
                     }
-                    // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格）
+                    // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格�?
                     Err(_) => {}
                 }
             }

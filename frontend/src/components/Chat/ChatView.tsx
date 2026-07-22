@@ -235,6 +235,45 @@ export function ChatView() {
             <span>{t('chat.replaying')}</span>
           </div>
         )}
+        {chatState.terminalEvents.map((ev) => (
+          <div
+            key={ev.id}
+            style={{
+              margin: '2px 12px',
+              padding: '4px 10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 12,
+              fontFamily: 'var(--mono, monospace)',
+              background: 'rgba(255, 255, 255, 0.03)',
+              border: '1px solid var(--border-subtle)',
+              borderLeft: '2px solid var(--accent)',
+              borderRadius: 4,
+              color: 'var(--text-muted)',
+            }}
+          >
+            <span style={{ color: 'var(--accent)' }}>▸</span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {ev.command} {ev.args.join(' ')}
+            </span>
+            <span
+              style={{
+                flexShrink: 0,
+                color:
+                  ev.status === 'exited'
+                    ? ev.exit_code === 0
+                      ? 'var(--success, #3fb950)'
+                      : 'var(--danger, #FF7B72)'
+                    : 'var(--text-faint)',
+              }}
+            >
+              {ev.status === 'exited'
+                ? `exit ${ev.exit_code ?? '?'}`
+                : 'running…'}
+            </span>
+          </div>
+        ))}
       </OverlayScroll>
 
       {chatState.pendingPermission && (

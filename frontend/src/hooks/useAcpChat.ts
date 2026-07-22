@@ -24,7 +24,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -32,6 +32,10 @@ interface ServerFrame {
   id?: string
   request?: Record<string, unknown>
   alive?: boolean
+  command?: string
+  args?: string[]
+  status?: string
+  exit_code?: number | null
 }
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
@@ -386,6 +390,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           } else {
             s.setError(sid, frame.message ?? 'server error')
           }
+          break
+        case 'terminal_activity':
+          s.upsertTerminalActivity(sid, {
+            id: frame.id ?? '',
+            command: frame.command ?? '',
+            args: frame.args ?? [],
+            status: frame.status === 'exited' ? 'exited' : 'created',
+            exit_code: frame.exit_code ?? null,
+          })
           break
         case 'replay_start': {
           isReplaying.current = true

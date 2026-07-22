@@ -9,8 +9,16 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::Responder;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{broadcast, Mutex, mpsc, oneshot};
 use uuid::Uuid;
+
+/// agent 通过 `terminal/create` 执行的命令生命周期事件，用于让前端感知
+/// agent 在后台跑了什么命令（否则对用户完全不可见）。
+#[derive(Clone, Debug)]
+pub enum TerminalActivity {
+    Created { id: String, command: String, args: Vec<String> },
+    Exited { id: String, exit_code: Option<u32> },
+}
 
 struct TerminalProcess {
     kill_tx: mpsc::Sender<()>,
@@ -22,12 +30,14 @@ struct TerminalProcess {
 
 pub struct AcpTerminalManager {
     terminals: Arc<Mutex<HashMap<String, TerminalProcess>>>,
+    event_tx: broadcast::Sender<TerminalActivity>,
 }
 
 impl AcpTerminalManager {
-    pub fn new() -> Self {
+    pub fn new(event_tx: broadcast::Sender<TerminalActivity>) -> Self {
         Self {
             terminals: Arc::new(Mutex::new(HashMap::new())),
+            event_tx,
         }
     }
 
@@ -92,6 +102,7 @@ impl AcpTerminalManager {
 
         let terminals = self.terminals.clone();
         let tid = terminal_id.clone();
+        let event_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let exit_status = tokio::select! {
                 status = child.wait() => {
@@ -115,6 +126,11 @@ impl AcpTerminalManager {
                     let _ = waiter.send(exit_status.clone());
                 }
             }
+
+            let _ = event_tx.send(TerminalActivity::Exited {
+                id: tid,
+                exit_code: exit_status.exit_code,
+            });
         });
 
         let proc = TerminalProcess {
@@ -126,6 +142,12 @@ impl AcpTerminalManager {
         };
 
         self.terminals.lock().await.insert(terminal_id.clone(), proc);
+
+        let _ = self.event_tx.send(TerminalActivity::Created {
+            id: terminal_id.clone(),
+            command: request.command.clone(),
+            args: request.args.clone(),
+        });
 
         responder.respond(CreateTerminalResponse::new(TerminalId::new(terminal_id)))
     }
