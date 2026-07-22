@@ -453,3 +453,67 @@ ws.onclose = () => {
 - Chrome DevTools 的 WS 错误文案不可靠，"closed before established" 多数时候是本地 cleanup 行为
 - React 19 StrictMode 是 dev-only 行为但**必须**在 dev 下测过才能宣称修复有效，因为 cleanup 时序和 production 完全不同
 - wire format 永远是协议联调的第一个未知量 — 文档里的形状和 agent 实际发的形状常常不一致，**抓帧是唯一真相源**
+
+## 2026-07-23: ACP agent 子进程 OS cwd 继承后端而非 session workspace（shell wrapper 兏底）
+
+**症状**：用户报告「acp 会话创建不检测 branch、连 WORKSPACES 都不检测。我在 `/home/pax/home` 创建的 acp 会话 `codebuddy_0723-0003`，显示他的工作区在 OmniTerm-dev。也就是无论我在哪里创建 acp 会话，他都把我们这个项目的目录作为他的工作区。」」——同时三个症状指向同一根因。
+
+**表层现象**：
+- 创建 ACP session 后，DB 里的 `workspace_path` 正确（如 `/home/pax/home`）。
+- 但 agent 进程（`codebuddy --acp`）的 `readlink /proc/<pid>/cwd` 返回的是后端启动时的目录（如 `/home/pax/coding/OmniTerm-dev`），与 session 记录的 workspace 无关。
+- agent 实际运行时（git status / ls / 文件读写）都以错误目录为基准——表现为「读不到 git / 看不到 worktrees / workspace 总是后端目录」。
+
+**根因**：`agent-client-protocol` crate 的 `AcpAgent::spawn_process` 不接受 `current_dir` 参数也不调 `Command::current_dir()`（`spawn_process` 代码 100 多行只做 `std::process::Command::new(command).args(args).env(env)` + `process_group(0)`）。结果：agent 子进程 OS cwd 继承父进程（后端）——这是案发现场的唯一物证。
+
+**诊断过程中犯的错误**：
+
+1. **第一时间怀疑「DB 记录错了 / 前端渲染错了」**：看到 DB 里 `workspace_path=/home/pax/home` 正确，第一反应是「后端是不是读错了参数 / 前端是不是拿别的 session」。查了一轮后端 `resolve_workspace_path`、前端 `handleCreateSession`、project 列表渲染——都是对的。**漏看了 agent 进程 OS 这一层**。
+2. **以为 `NewSessionRequest::new(cwd)` 会设置 agent 的工作目录**：这是 ACP 协议层的「提示性」cwd，告诉 agent「这个 session 期望的工作区是这个」，但 agent 的 OS 调用还是基于进程 cwd。两者不同语义——后者在文献里写「workspace_path」，前者是 ACP `mcp.cwd`。**选型时必须区分这两个，不混为一起**。
+3. **亲自看 `acp-agent` crate 源码之前，凭直觉以为「所有 spawn API 都接受 cwd」**：开箱、FFI 封装、CLI 工具封装、cgroup 管理库、container runtime 调用——很多“”漂亮的 spawn 抽象”默认从父进程继承 cwd，没有显式 `current_dir` 参数。从这个 bug 得出结论：**任何 spawn 抽象都必须验证 cwd 是「」显式设置」还是「」隐式继承」**。
+4. **验证修复时差点用 strace / ltrace / ftrace**：要观察 100 多个 fork 跳边。最终用 `readlink /proc/<pid>/cwd` 一句就拿到所有子进程 cwd——作为最准的 single source of truth。「“”验证子进程实际状态」」、「「先看 lsof / /proc 再上 strace」」是万古不易的顺序。
+
+**具体根因与修复**：
+
+`src/acp/client.rs::spawn_and_connect`（以及 `spawn_and_load`）原本：
+```rust
+all_args.push(agent.command.clone());
+all_args.extend(agent.args.clone());
+let transport = AcpAgent::from_args(all_args)?;
+```
+构造后交给 `AcpAgent` spawn，spawn 不设 cwd。修复为：
+```rust
+// 包装 agent 命令为 sh -c "cd <workspace> && exec <cmd> <args>"
+// 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
+let sh_args = wrap_agent_with_cwd(&agent.command, &agent.args, &cwd);
+all_args.push("/bin/sh".to_string());
+all_args.extend(sh_args);
+```
+`sh -c` 中的 `exec` 替换 shell 进程，保留信号透传、进程组清理、PID 不变。`wrap_agent_with_cwd` 使用 `sh_quote` (POSIX 单引号转义) 安全嵌入任意 workspace / cmd / args。
+
+**验证**：
+- 单元测试：`sh_quote` 6 例（含空串、纯路径、单引号、shell 注入字符）+ `wrap_agent_with_cwd` 3 例（标准形式、空 args、workspace 含空格+单引号）。
+- 端到端测试：spawn `pwd` 走 sh 包装，验证 stdout 等于目标 workspace；含空格路径额外 regression case。
+- 运行时验证：重启后端，POST 新建 session (`project=123test, workspace_path=/home/pax/home`) → agent PID 1860676 的 `/proc/1860676/cwd` → `/home/pax/home` ✓（修复前会是 `/home/pax/coding/OmniTerm-dev`）。
+
+### 可复用的调试理论
+
+**1. 协议层提示与进程层状态是两件事**
+
+ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区是哪个」」的提示性参数，与 agent 子进程 OS cwd 是独立两层。验证修复时必须看 `readlink /proc/<pid>/cwd` 或 `lsof -p <pid>` 或 cgroup 的 `cgroup.procs`，**不能依赖“传了 cwd 参数 = 子进程在那个目录”**。同类型抽象还有：Docker `--workdir` vs 镜像 `WORKDIR`、systemd `WorkingDirectory=` vs `ExecStart=` 、gVisor sandbox root vs container image root——名字、参数名甚至默认值都需逐个看源码确认。
+
+**2. 任何“漂亮的 spawn 抽象”都必须验证 cwd 是显式设置还是隐式继承**
+
+`agent-client-protocol::AcpAgent::spawn_process`、`std::process::Command::new(...).spawn()`、`tokio::process::Command::new(...).spawn()`、`async_process::Command::new(...).spawn()`、FFI 封装的 `subprocess.Popen`、cgroup `clone` 后 exec……默认值都是「继承父进程 cwd」。**默认值不同 → 表现不同**——这在 macOS fork exec 、Linux clone3、FreeBSD rfork、WSL 1/2、容器内 PID 1 都有差异。验证顺序：看源码 `.current_dir()` / `WORKDIR` / `CWD` 设置调用是否存在——比看参数表可靠（参数表可能接受但不使用）。
+
+**3. 验证子进程实际状态是“能动手就别只看代码”**
+
+`/proc/<pid>/cwd`（Linux）、`lsof -p <pid> -d cwd`（macOS）、`/proc/<pid>/environ` 看 `PWD=`、cgroup `cgroup.events` 看容器 root、`ps -o pid,ppid,command,cwd`（Linux）——这些是验证子进程实际状态的最快路径，比单步调试、外部 mock、启动 tracer 快一个数量级。**`/proc/<pid>/cwd` 本质是个 magic：读 symlink 返回的是「子进程认为它在哪里」**，不受其他进程改 cwd 、容器挂载、`chroot` 、`pivot_root` 影响。
+
+**4. shell wrapper 是「无法修改依赖」时的兏底方案**
+
+遇到 `AcpAgent::spawn_process` 这样的 `pub` API 不可改、参数表不接受 cwd、PR 周期漫长——用 `sh -c "cd <dir> && exec <cmd> <args>"` 包装。`exec` 替换 shell 进程保持 PID 不变、信号透传、cgroup 归属、process group 领导不改变。**唯一代价是需要安全转义参数**（POSIX 单引号是黄金标准：'...'\''...'\''...'），加一个 10 行的 `sh_quote` 助手函数成本远低于“”fork 整个依赖 + 改 PR + 等待升级”。该 pattern 也适用于：CLI 包装脚本、Node 子进程传 cwd、Java JNI `Runtime.exec`、Windows `CreateProcess` 缺 `lpCurrentDirectory` 的边缘 case。
+
+**5. 实物检查 > 文档 + 源码推测**
+
+`/proc/<pid>/cwd` 5 秒看到的事实，比读 1000 行 `acp-agent` 源码判断“「这里没设 cwd」」”更有说服力。`readlink /proc/<pid>/cwd` 是第一道武器——可以看多个 agent 进程交叉验证（“一个项目应该看到该项目的 cwd」”——同时存在后端目录的就是 stale spawn）。**调试「「创建出来的东西不对」」 时，能看实际创建的产物（/proc、/sys、container metadata、`/var/log`、sock 文件）先看，再上代码搜索。**
+

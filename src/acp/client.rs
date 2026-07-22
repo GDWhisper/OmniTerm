@@ -110,6 +110,89 @@ fn resolve_fs_path(base: &Path, requested: &Path) -> Result<PathBuf, String> {
     Ok(canon)
 }
 
+// ---------------------------------------------------------------------------
+// POSIX cwd 修复：ACP spawn_process 不设 current_dir
+//
+// agent-client-protocol 的 AcpAgent::spawn_process 不提供 current_dir 参数，
+// 也不调用 Command::current_dir()，导致 agent 子进程 OS cwd = 后端进程 cwd。
+// 实测 PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
+// 但 session workspace 应是 /home/pax/home。
+//
+// 这两个函数构建一个 shell wrapper 来显式 cd 到 workspace 再 exec agent 进程，
+// 使得 agent 进程看到正确的 workspace cwd。
+// ---------------------------------------------------------------------------
+
+/// POSIX shell 单引号转义。
+///
+/// 将字符串安全嵌入 `sh -c '...'` 的单引号片段中：
+/// - 空串 → `''`
+/// - 不含单引号 → 原样包裹在单引号内
+/// - 含单引号 → 按 POSIX 模式 `'...'\''...'` 分段转义
+///
+/// 实测 PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
+/// session workspace 应是 /home/pax/home —— 根因是 agent 进程缺少 workspace cwd。
+#[cfg(unix)]
+fn sh_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if !s.contains('\'') {
+        return format!("'{s}'");
+    }
+    // 含单引号：分段拼接  '...'\''...'
+    let mut quoted = String::new();
+    quoted.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            // 结束当前单引号段、插入转义单引号、重新开始单引号段
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+/// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd。
+///
+/// POSIX-only; ACP 暂不支持 Windows。
+///
+/// 返回 `["-c", "cd <workspace> && exec <agent_cmd> <arg1> <arg2> ..."]`，
+/// 调用方应将其附加到 `/bin/sh`（或 `sh`）之后：
+///
+/// ```ignore
+/// let mut cmd = std::process::Command::new("/bin/sh");
+/// cmd.args(wrap_agent_with_cwd(&cmd_path, &args, &workspace));
+/// ```
+///
+/// 使用 `exec` 替换 shell 进程，确保：
+/// - agent 进程直接接收信号（不会因 shell 而屏蔽/延迟）
+/// - 进程组清理工作正常
+/// - 额外 shell 进程不会残留
+///
+/// 所有动态值均通过 [`sh_quote`] 安全转义，防止 shell 注入。
+///
+/// # 实测证据
+///
+/// PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
+/// 但 session workspace 应是 /home/pax/home。根因是 ACP 的
+/// AcpAgent::spawn_process 不设 current_dir，此 wrapper 在
+/// agent 进程启动前先 cd 到 workspace_path。
+#[cfg(unix)]
+fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path) -> Vec<String> {
+    let cd_cmd = format!(
+        "cd {} && exec {}",
+        sh_quote(&workspace.to_string_lossy()),
+        sh_quote(agent_cmd)
+    );
+    // 用 fold 避免预分配：每个 arg 单独 sh_quote，空格分隔拼入 shell 脚本
+    let shell_script = agent_args.iter().fold(cd_cmd, |acc, arg| {
+        acc + " " + &sh_quote(arg)
+    });
+    vec!["-c".to_string(), shell_script]
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(agent: Agent, cwd: PathBuf) -> Result<Self, AcpError> {
         let mut all_args: Vec<String> = Vec::new();
@@ -117,8 +200,19 @@ impl AcpClient {
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
         }
-        all_args.push(agent.command.clone());
-        all_args.extend(agent.args.clone());
+        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
+        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
+        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
+        #[cfg(unix)]
+        let (cmd, args) = (
+            "/bin/sh".to_string(),
+            wrap_agent_with_cwd(&agent.command, &agent.args, &cwd),
+        );
+        #[cfg(not(unix))]
+        let (cmd, args) = (agent.command.clone(), agent.args.clone());
+
+        all_args.push(cmd);
+        all_args.extend(args);
 
         let transport = AcpAgent::from_args(all_args)?;
 
@@ -525,8 +619,19 @@ impl AcpClient {
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
         }
-        all_args.push(agent.command.clone());
-        all_args.extend(agent.args.clone());
+        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
+        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
+        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
+        #[cfg(unix)]
+        let (cmd, args) = (
+            "/bin/sh".to_string(),
+            wrap_agent_with_cwd(&agent.command, &agent.args, &cwd),
+        );
+        #[cfg(not(unix))]
+        let (cmd, args) = (agent.command.clone(), agent.args.clone());
+
+        all_args.push(cmd);
+        all_args.extend(args);
 
         let transport = AcpAgent::from_args(all_args)?;
 
@@ -733,5 +838,182 @@ impl AcpClient {
         drop(self._shutdown_tx);
         // 注意：agent 连接任务句柄已移交给 `spawn_crash_watcher`，由其负责在
         // 连接异常退出时广播错误；此处不再 `await`，仅触发优雅关闭。
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::process::Stdio;
+
+    // ── sh_quote：POSIX shell 单引号转义 ────────────────────────────────
+
+    #[test]
+    fn sh_quote_empty_string() {
+        assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn sh_quote_plain_path() {
+        assert_eq!(sh_quote("/home/user/project"), "'/home/user/project'");
+    }
+
+    #[test]
+    fn sh_quote_no_special_chars_passes_through() {
+        // 不含单引号 → 直接单引号包裹
+        assert_eq!(sh_quote("hello world"), "'hello world'");
+        assert_eq!(sh_quote("--acp"), "'--acp'");
+    }
+
+    #[test]
+    fn sh_quote_with_single_quote_splits_segments() {
+        // POSIX 转义规则：'foo'bar' → 'foo'\''bar'
+        assert_eq!(sh_quote("foo'bar"), "'foo'\\''bar'");
+    }
+
+    #[test]
+    fn sh_quote_only_single_quote() {
+        // 极端情况：只有单引号
+        // 实现逻辑：开单引号 → 对 `'` 字符插入 '然后转义'再开单引号 → 关单引号
+        // 输入 `'` → `' '' \' '' '` 收敛为 `''\'''`
+        // shell 解析：`''`(空) + `\'` (literal `'`) + `''`(空) = `'` ✓
+        assert_eq!(sh_quote("'"), "''\\'''");
+    }
+
+    #[test]
+    fn sh_quote_does_not_inject_shell_metacharacters() {
+        // 含 `;` `&&` `$()` 都不应让 sh 误解析：单引号包裹下全部字面化
+        let dangerous = "a; rm -rf /; $(echo bad); `id`";
+        let quoted = sh_quote(dangerous);
+        assert_eq!(quoted, format!("'{dangerous}'"));
+    }
+
+    // ── wrap_agent_with_cwd：shell wrapper 构造 ────────────────────────
+
+    #[test]
+    fn wrap_returns_cd_then_exec_form() {
+        let args = wrap_agent_with_cwd("codebuddy", &["--acp".into()], Path::new("/home/user/project"));
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-c");
+        // cd 必须是 cd '/home/user/project' && exec 'codebuddy' '--acp'
+        assert_eq!(
+            args[1],
+            "cd '/home/user/project' && exec 'codebuddy' '--acp'"
+        );
+    }
+
+    #[test]
+    fn wrap_escapes_workspace_with_spaces_and_quotes() {
+        let workspace = Path::new("/home/user/it's a 'project'");
+        let args = wrap_agent_with_cwd("agent", &[], workspace);
+        // workspace 路径里同时含空格和单引号，单引号必须被 '\\'' 分段转义
+        assert!(args[1].contains("'/home/user/it'\\''s a '\\''project'\\'''"));
+    }
+
+    #[test]
+    fn wrap_with_no_args_emits_cd_exec_only() {
+        let args = wrap_agent_with_cwd("/usr/bin/myagent", &[], Path::new("/tmp"));
+        assert_eq!(args[1], "cd '/tmp' && exec '/usr/bin/myagent'");
+    }
+
+    // ── 端到端：spawn 出来的子进程 cwd 必须等于 session workspace ────────
+
+    /// 模拟 AcpClient::spawn_and_connect 的 all_args 构造路径，spawn
+    /// `pwd` 进程并断言 stdout 等于 session workspace。这是
+    /// `/proc/<pid>/cwd` 行为的端到端回归——单测 `wrap_agent_with_cwd`
+    /// 只验证字符串拼接，不验证执行时 cwd 真的切到目标。
+    #[tokio::test]
+    async fn wrapped_subprocess_has_session_workspace_as_cwd() {
+        // 用 tmp 子目录作为目标 workspace，避免依赖具体路径
+        let workspace = std::env::temp_dir().join(format!(
+            "omniterm-cwd-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace");
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        // 模拟 spawn_and_connect 中的 wrapper 构造：
+        // AcpAgent::from_args 接受 ["-c", <script>]，前面是 sh 路径
+        // 实际行为：从 all_args[0] 解析命令（/bin/sh），all_args[1..] 作为参数
+        let wrapped = wrap_agent_with_cwd("pwd", &[], &workspace);
+
+        // 直接 spawn sh，验证子进程 cwd。捕获 stdout，期望 pwd 输出 workspace_str
+        let output = std::process::Command::new("/bin/sh")
+            .args(&wrapped)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn sh");
+        assert!(
+            output.status.success(),
+            "sh exited with {}: stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(
+            stdout, workspace_str,
+            "subprocess cwd was {stdout:?}, expected {workspace_str:?} — wrap_agent_with_cwd \
+             is not actually changing the OS cwd. This is the regression \
+             the fix targets: agent-client-protocol's AcpAgent::spawn_process \
+             does NOT call Command::current_dir, so the spawned agent runs \
+             in the backend's cwd rather than the session's workspace_path."
+        );
+
+        // cleanup
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// 验证 wrap + sh 的 path-with-spaces 端到端：workspace 路径含空格时，
+    /// `cd` 仍能正确切换、pwd 输出仍等于 workspace。
+    #[tokio::test]
+    async fn wrapped_subprocess_workspaces_with_spaces() {
+        let parent = std::env::temp_dir();
+        let workspace = parent.join(format!(
+            "omniterm cwd test {}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&workspace).expect("create temp workspace with space");
+        let workspace_str = workspace.to_string_lossy().to_string();
+        assert!(
+            workspace_str.contains(' '),
+            "test setup must use a workspace with spaces; got {workspace_str}"
+        );
+
+        let wrapped = wrap_agent_with_cwd("pwd", &[], &workspace);
+        let output = std::process::Command::new("/bin/sh")
+            .args(&wrapped)
+            .stdout(Stdio::piped())
+            .output()
+            .expect("spawn sh");
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(
+            stdout, workspace_str,
+            "subprocess cwd with spaces-in-path didn't survive sh -c wrap"
+        );
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// 验证 exec 替换 shell：子进程 PID 不同于 wrapper 自身。
+    /// 若 shell 没被 exec 替换，会出现一个常驻 shell 子进程被 OOM-killer 抓到。
+    /// （这是间接证据——若 build 输出 `exit_signal` 不是 0，则说明进程异常。）
+    #[tokio::test]
+    async fn wrapped_subprocess_exits_normally() {
+        let workspace = std::env::temp_dir().join("omniterm-exec-test");
+        let _ = std::fs::create_dir_all(&workspace);
+
+        let wrapped = wrap_agent_with_cwd("true", &[], &workspace);
+        let output = std::process::Command::new("/bin/sh")
+            .args(&wrapped)
+            .output()
+            .expect("spawn sh");
+        assert!(output.status.success(), "wrapped exit != 0");
+        // exec 替换后无残留 shell 进程——这里只断言正常退出，不强求 PID 不同
+        // （exec 替换行为由 shell 保证，不应在测试中过度约束）
+
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }
