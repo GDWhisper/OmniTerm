@@ -78,6 +78,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/architecture/frontend.md` | 修改 React 前端（组件、store、hook、路由、依赖升级） | 新增组件/store/hook、目录结构变化、关键依赖版本变更 |
 | `docs/architecture/frontend-patterns.md` | 决定组件结构、复用已有前端架构模式时；**新加状态栏按钮 / sidebar 弹出面板前必读**（含文件结构、hook 用法、子组件拆分、复制清单） | 新增前端架构模式 entry、记录已有约定 |
 | `docs/workflows/agent-edit-manual.md` | 接具体修改任务（加命令/改配置/修 bug/加翻译）时，搜目标组件列文件 | 新增「有特殊维护约定的组件」entry、记录修改路径 |
+| `docs/workflows/integration-checklist.md` | 集成新的 spawn 抽象（subprocess / container / FFI）**或**给已有枚举新增变体（`runtime_kind` / `agent_kind` / `project_type`）前**必读** | 新增踩坑案例 / 补检查项 |
 | `docs/workflows/branch-workflows.md` | 执行 git 分支操作（merge、rebase、cherry-pick）、操作多 worktree、执行 sync-main.sh 同步 | 分支策略变更、新增分支类型、安全守则调整 |
 | `docs/workflows/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
 | `docs/workflows/release-guide.md` | 执行正式发布（同步 main、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整、sync-main.sh 黑名单调整 |
