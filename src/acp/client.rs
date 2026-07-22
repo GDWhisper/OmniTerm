@@ -49,7 +49,9 @@ pub struct AcpClient {
     session_id: SessionId,
     session_update_tx: broadcast::Sender<SessionNotification>,
     _shutdown_tx: oneshot::Sender<()>,
-    connection_task: JoinHandle<Result<(), AcpError>>,
+    /// agent 连接任务崩溃时广播错误原因，供 WS 层即时透传给前端。
+    /// 取代原先 `disconnect` 中 `let _ = connection_task.await` 被静默丢弃的错误。
+    crash_tx: broadcast::Sender<String>,
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
@@ -57,6 +59,20 @@ pub struct AcpClient {
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+}
+
+/// 看护 agent 连接任务：若其因 agent 进程崩溃/异常退出而返回 `Err`，
+/// 通过 `crash_tx` 广播错误原因，供 WS 层即时透传给前端（否则该错误仅被
+/// `disconnect` 中的 `let _ =` 丢弃，用户看不到崩溃原因）。
+fn spawn_crash_watcher(
+    connection_task: JoinHandle<Result<(), AcpError>>,
+    crash_tx: broadcast::Sender<String>,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = connection_task.await {
+            let _ = crash_tx.send(format!("{}", e));
+        }
+    });
 }
 
 impl AcpClient {
@@ -72,6 +88,7 @@ impl AcpClient {
         let transport = AcpAgent::from_args(all_args)?;
 
         let (session_update_tx, _) = broadcast::channel(256);
+        let (crash_tx, _) = broadcast::channel::<String>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -210,6 +227,8 @@ impl AcpClient {
                 .await
         });
 
+        spawn_crash_watcher(connection_task, crash_tx.clone());
+
         let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
             .await
             .map_err(|_| AcpError::internal_error())?;
@@ -219,7 +238,7 @@ impl AcpClient {
             session_id,
             session_update_tx,
             _shutdown_tx: shutdown_tx,
-            connection_task,
+            crash_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -231,6 +250,11 @@ impl AcpClient {
 
     pub fn session_update_subscribe(&self) -> broadcast::Receiver<SessionNotification> {
         self.session_update_tx.subscribe()
+    }
+
+    /// 订阅 agent 进程崩溃错误（仅在连接任务非正常退出时收到）。
+    pub fn crash_subscribe(&self) -> broadcast::Receiver<String> {
+        self.crash_tx.subscribe()
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -424,6 +448,7 @@ impl AcpClient {
         let transport = AcpAgent::from_args(all_args)?;
 
         let (session_update_tx, _) = broadcast::channel(256);
+        let (crash_tx, _) = broadcast::channel::<String>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -554,6 +579,8 @@ impl AcpClient {
                 .await
         });
 
+        spawn_crash_watcher(connection_task, crash_tx.clone());
+
         let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
             .await
             .map_err(|_| AcpError::internal_error())?;
@@ -563,7 +590,7 @@ impl AcpClient {
             session_id,
             session_update_tx,
             _shutdown_tx: shutdown_tx,
-            connection_task,
+            crash_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -578,6 +605,7 @@ impl AcpClient {
         // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
         self.terminal_manager.kill_all().await;
         drop(self._shutdown_tx);
-        let _ = self.connection_task.await;
+        // 注意：agent 连接任务句柄已移交给 `spawn_crash_watcher`，由其负责在
+        // 连接异常退出时广播错误；此处不再 `await`，仅触发优雅关闭。
     }
 }

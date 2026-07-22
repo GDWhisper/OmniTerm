@@ -10,7 +10,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
@@ -127,6 +127,29 @@ async fn spawn_notify_task(
     });
 }
 
+/// 转发 agent 进程崩溃错误：收到即作为 `prompt_error` 帧推给前端，
+/// 使用户能看到崩溃原因而非仅连接断开。
+async fn spawn_crash_task(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(reason) => {
+                    let msg = serde_json::to_string(&AcpServerMessage::PromptError { message: &reason })
+                        .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+            }
+        }
+    });
+}
+
 async fn spawn_permission_task(
     mut rx: tokio::sync::broadcast::Receiver<PermissionRequestEvent>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
@@ -163,6 +186,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            let crash_rx = c.crash_subscribe();
+            spawn_crash_task(crash_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
                 let msg =
@@ -269,7 +294,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     // 取消也视为 prompt 结束
                                     c.mark_prompt_idle();
                                     if let Err(e) = c.cancel() {
-                                        error!("ACP cancel failed: {}", e);
+                                        let err_msg = format!("取消 agent 失败: {}", e);
+                                        let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                            code: Some("cancel_failed"),
+                                            message: &err_msg,
+                                        })
+                                        .unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
                                 }
                             }
@@ -329,6 +360,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
+                                        let crash_rx = new_client.crash_subscribe();
+                                        spawn_crash_task(crash_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());
 
                                         let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
@@ -365,7 +398,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
                                 if let Some(ref c) = client {
                                     if let Err(e) = c.set_config_option(&config_id, &value).await {
-                                        error!("set_config_option failed: {}", e);
+                                        let err_msg = format!("配置项 {} 设置失败: {}", config_id, e);
+                                        let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                            code: Some("config_option_failed"),
+                                            message: &err_msg,
+                                        })
+                                        .unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
                                 }
                             }
