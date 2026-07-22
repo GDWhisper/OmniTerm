@@ -121,6 +121,7 @@ export function Sidebar() {
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
   const [sessAgentId, setSessAgentId] = useState<string | null>(null)
+  const [sessWorkspaceId, setSessWorkspaceId] = useState<string | null>(null)
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -640,11 +641,11 @@ export function Sidebar() {
   }
 
   const handleCreateSession = async () => {
-    if (!activeProjectId || !activeWorkspaceId) return
-    // Find the active worktree path
+    if (!activeProjectId || !sessWorkspaceId) return
+    // Find the target worktree path (captured when "+" was clicked)
     const wtList = worktrees[activeProjectId] || []
-    const activeWt = wtList.find(w => w.id === activeWorkspaceId)
-    if (!activeWt) return
+    const targetWt = wtList.find(w => w.id === sessWorkspaceId)
+    if (!targetWt) return
 
     setSubmitting(true)
     try {
@@ -659,7 +660,7 @@ export function Sidebar() {
         : undefined)
       const newSession = await api.createSession(
         activeProjectId,
-        activeWt.path,
+        targetWt.path,
         name || undefined,
         undefined,
         sessAgentId ? 'acp' : 'tmux',
@@ -674,6 +675,7 @@ export function Sidebar() {
       setCreateSessOpen(false)
       setSessName('')
       setSessAgentId(null)
+      setSessWorkspaceId(null)
     } catch {
       // api client already shows error toast
     } finally {
@@ -1099,6 +1101,7 @@ export function Sidebar() {
                                   triggerBump(e.currentTarget)
                                   setActiveProject(proj.id)
                                   setActiveWorkspace(wt.id)
+                                  setSessWorkspaceId(wt.id)
                                   setCreateSessOpen(true)
                                 }}
                                 title={t('sidebar.createSession')}
@@ -1661,7 +1664,7 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
+      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -1696,7 +1699,7 @@ export function Sidebar() {
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }}>
+            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
