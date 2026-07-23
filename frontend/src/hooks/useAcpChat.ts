@@ -362,9 +362,22 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       const s = useChatStore.getState()
       switch (frame.type) {
         case 'session_update': {
-          if (isReplaying.current && suppressReplay.current) break
           const canonical = normalizeSessionUpdate(frame.data?.update)
           const action = classifySessionUpdate(canonical)
+          if (isReplaying.current && suppressReplay.current) {
+            // 已有历史：丢弃重放的内容帧，但放行配置/命令/模式等状态同步帧，
+            // 否则恢复后配置栏（mode/model/thinking）不显示（opencode/ccb 的
+            // ConfigOptionUpdate 只在重放/连接时推送，从不落库）。
+            if (
+              action.kind === 'setConfigOptions' ||
+              action.kind === 'setCommands' ||
+              action.kind === 'setMode' ||
+              action.kind === 'setUsage'
+            ) {
+              useChatStore.getState().applyReplayBatch(sid, [action])
+            }
+            break
+          }
           // 重放期间：攒进 buffer，按动画帧批量 flush（一次重渲染处理多条帧）。
           if (isReplaying.current && !suppressReplay.current) {
             replayBuffer.current.push(action)
