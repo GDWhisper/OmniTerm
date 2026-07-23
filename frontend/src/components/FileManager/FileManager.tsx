@@ -238,19 +238,19 @@ export function FileManager() {
       if (!r) return
       e.preventDefault()
       const mvX = 'touches' in e ? e.touches[0].clientX : e.clientX
-      const delta = mvX - r.startX
-      const newW = Math.max(80, r.startW + delta)
+      const newW = Math.max(80, r.startW + (mvX - r.startX))
       const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
       if (colEl) {
         colEl.style.width = `${newW}px`
-        r.startW = newW
       }
     }
     const onUp = () => {
       const r = resizingRef.current
       if (!r) return
-      colWidthsRef.current = { ...colWidthsRef.current, [r.col]: r.startW }
-      setColWidths((prev) => ({ ...prev, [r.col]: r.startW }))
+      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
+      const finalW = colEl ? parseInt(colEl.style.width) || r.startW : r.startW
+      colWidthsRef.current = { ...colWidthsRef.current, [r.col]: finalW }
+      setColWidths((prev) => ({ ...prev, [r.col]: finalW }))
       resizingRef.current = null
     }
     window.addEventListener('mousemove', onMove)
