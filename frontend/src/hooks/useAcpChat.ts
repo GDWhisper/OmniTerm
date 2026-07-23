@@ -92,6 +92,75 @@ function getVariantInner(obj: Record<string, unknown>, variant: string): Record<
   return null
 }
 
+// 工具调用详情严格按 ACP v1 `ToolCall` 协议结构解析（见 agent-client-protocol
+// schema v1::tool_call）：`content` 是 ToolCallContent 数组（content / diff /
+// terminal），另有 `raw_input` / `raw_output` 原始 JSON。OpenCode 等客户端把
+// 文件改动放在 content[].diff（path/oldText/newText），把命令参数放在
+// raw_input——这些都不是「content 字符串」，此前漏读导致卡片只剩标题。
+// 按 §8 多实现兼容性：依据协议真实字段解析，不臆测上游结构。
+function extractToolContent(inner: Record<string, unknown>): string | undefined {
+  const parts: string[] = []
+
+  const content = inner['content']
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      if (!item || typeof item !== 'object') continue
+      const c = item as Record<string, unknown>
+      if (c['type'] === 'diff') {
+        parts.push(synthUnifiedDiff(c))
+      } else if (c['type'] === 'content') {
+        const text = extractContentText(c['content'])
+        if (text) parts.push(text)
+      } else {
+        // 未知 content 变体，兜底序列化其有效载荷
+        const payload = c['content'] ?? c['text']
+        if (payload && typeof payload === 'object') {
+          parts.push(JSON.stringify(payload, null, 2))
+        }
+      }
+    }
+  } else if (typeof content === 'string' && content) {
+    // 非标准但兼容：个别实现直接给字符串 content
+    parts.push(content)
+  }
+
+  // diff 优先展示；无 diff 时兜底显示 raw_input / raw_output（工具入参/结果）
+  if (parts.length === 0) {
+    for (const key of ['raw_input', 'raw_output', 'input', 'arguments', 'params']) {
+      const v = inner[key]
+      if (v && typeof v === 'object') {
+        try {
+          parts.push(JSON.stringify(v, null, 2))
+        } catch {
+          parts.push(String(v))
+        }
+      }
+    }
+  }
+
+  return parts.length > 0 ? parts.join('\n\n') : undefined
+}
+
+// 把 ACP Diff（path / oldText / newText）合成标准 unified diff 文本，
+// 交给已有的 DiffView 彩色渲染。oldText 缺省视为新建文件。
+function synthUnifiedDiff(d: Record<string, unknown>): string {
+  const path = typeof d['path'] === 'string' ? d['path'] : 'file'
+  const oldText = typeof d['oldText'] === 'string' ? d['oldText'] : ''
+  const newText = typeof d['newText'] === 'string' ? d['newText'] : ''
+  const oldLines = oldText.length ? oldText.split('\n') : []
+  const newLines = newText.length ? newText.split('\n') : []
+  const oldName = oldLines.length ? path : '/dev/null'
+  const newName = newLines.length ? path : '/dev/null'
+  const header = `--- ${oldName}\n+++ ${newName}`
+  // 极简 unified diff：逐行 +/-，无 hunk 行号（DiffView 仅靠 +/- 着色，
+  // 不依赖 @@ 即可识别，见 looksLikeDiff）。
+  const body = [
+    ...oldLines.map((l) => `-${l}`),
+    ...newLines.map((l) => `+${l}`),
+  ].join('\n')
+  return `${header}\n${body}`
+}
+
 // --- Classifier ---
 
 // `SessionUpdateAction` 类型已移至 chatStore（供 applyReplayBatch 复用）。
@@ -162,7 +231,7 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
       const statusRaw = inner['status']
       const status = typeof statusRaw === 'string' ? statusRaw : undefined
       const toolKind = typeof inner['kind'] === 'string' ? inner['kind'] : undefined
-      const content = typeof inner['content'] === 'string' ? inner['content'] : undefined
+      const content = extractToolContent(inner)
       const locations = Array.isArray(inner['locations'])
         ? (inner['locations'] as unknown[]).filter((l): l is string => typeof l === 'string')
         : undefined
@@ -269,7 +338,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const sessionIdRef = useRef<string | null>(null)
   sessionIdRef.current = sessionId
   const isReplaying = useRef(false)
-  const suppressReplay = useRef(false)
   // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
   const replayRaf = useRef<number | null>(null)
@@ -285,30 +353,21 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     useChatStore.getState().applyReplayBatch(sid, batch)
   }, [])
 
-  // 把当前 store 重建的完整消息（含结构化 blocks）写回 DB，刷新后可还原。
+  // 把当前 store 的完整消息（含结构化 blocks）写回 DB，刷新后可还原。
+  // 不再合并相邻 assistant——每条消息独立对应一行，与实时 insert_message 粒度一致，
+  // 确保 sync_messages 的 (session, role, text) 去重能精确命中并 UPDATE blocks。
   const syncToDb = useCallback(() => {
     const sid = sessionIdRef.current
     if (!sid) return
     const msgs = useChatStore.getState().states[sid]?.messages ?? []
-    // 合并连续 assistant 为整轮（文本 + 结构化 blocks 一并拼接），与实时落库的
-    // 「整轮一条」风格一致，避免重放按 chunk 碎片化成大量短气泡。
     const payload: { role: string; text: string; blocks?: string }[] = []
     for (const m of msgs) {
       if (m.role !== 'user' && m.role !== 'assistant') continue
-      const last = payload[payload.length - 1]
-      if (m.role === 'assistant' && last && last.role === 'assistant') {
-        last.text += m.text
-        if (m.blocks.length) {
-          const prev = last.blocks ? (JSON.parse(last.blocks) as unknown[]) : []
-          last.blocks = JSON.stringify([...prev, ...m.blocks])
-        }
-      } else {
-        payload.push({
-          role: m.role,
-          text: m.text,
-          blocks: m.blocks.length ? JSON.stringify(m.blocks) : undefined,
-        })
-      }
+      payload.push({
+        role: m.role,
+        text: m.text,
+        blocks: m.blocks.length ? JSON.stringify(m.blocks) : undefined,
+      })
     }
     if (payload.length === 0) return
     if (import.meta.env.DEV) {
@@ -364,22 +423,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'session_update': {
           const canonical = normalizeSessionUpdate(frame.data?.update)
           const action = classifySessionUpdate(canonical)
-          if (isReplaying.current && suppressReplay.current) {
-            // 已有历史：丢弃重放的内容帧，但放行配置/命令/模式等状态同步帧，
-            // 否则恢复后配置栏（mode/model/thinking）不显示（opencode/ccb 的
-            // ConfigOptionUpdate 只在重放/连接时推送，从不落库）。
-            if (
-              action.kind === 'setConfigOptions' ||
-              action.kind === 'setCommands' ||
-              action.kind === 'setMode' ||
-              action.kind === 'setUsage'
-            ) {
-              useChatStore.getState().applyReplayBatch(sid, [action])
-            }
-            break
-          }
           // 重放期间：攒进 buffer，按动画帧批量 flush（一次重渲染处理多条帧）。
-          if (isReplaying.current && !suppressReplay.current) {
+          if (isReplaying.current) {
             replayBuffer.current.push(action)
             if (replayRaf.current === null) {
               replayRaf.current = requestAnimationFrame(flushReplayBuffer)
@@ -429,6 +474,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         }
         case 'prompt_done':
           s.markDone(sid)
+          // 实时 prompt 结束后立即将结构化 blocks 写回 DB（此前只落库了纯文本）。
+          syncToDb()
           break
         case 'prompt_error':
           s.markError(sid, frame.message ?? 'prompt failed')
@@ -452,17 +499,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'replay_start': {
           isReplaying.current = true
           replayBuffer.current = []
-          const msgs = s.states[sid]?.messages
-          suppressReplay.current = !!(msgs && msgs.length > 0)
-          // 仅当确有历史要重放时才显示恢复指示器
-          if (!suppressReplay.current) {
-            useChatStore.getState().setReplaying(sid, true)
+          // 清除已有 assistant 消息（可能来自 hydration 的纯文本气泡），让重放流
+          // 用结构化 blocks 完整重建，避免与新内容拼接产生重复/乱序。
+          const cur = useChatStore.getState().states[sid]
+          if (cur) {
+            const nonAssistant = cur.messages.filter(m => m.role !== 'assistant')
+            if (nonAssistant.length < cur.messages.length) {
+              useChatStore.getState().replaceMessages(sid, nonAssistant)
+            }
           }
+          useChatStore.getState().setReplaying(sid, true)
           break
         }
         case 'replay_end':
           isReplaying.current = false
-          suppressReplay.current = false
           // 把重放余量一次性 flush，并把残留 streaming 消息标为已完成
           if (replayRaf.current !== null) {
             cancelAnimationFrame(replayRaf.current)
@@ -472,12 +522,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
-          // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。后端保证 replay_end
-          // 严格在最后一条重放帧之后发出（drain 排空 broadcast 再发结束标志），
-          // 故此处 store 已完整，可即时 sync，无需计时器兜底。
-          if (!suppressReplay.current) {
-            syncToDb()
-          }
+          // 重放结束：store 中 assistant 消息已由重放流完整重建（含结构化 blocks），
+          // 写回 DB 使刷新后仍可还原。
+          syncToDb()
           break
         case 'permission_request': {
           const req = frame.request ?? {}

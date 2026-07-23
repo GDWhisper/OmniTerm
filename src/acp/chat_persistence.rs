@@ -65,6 +65,19 @@ pub async fn sync_messages(
         .fetch_one(db)
         .await?;
         if exists > 0 {
+            // 已有行存在但 blocks 可能为 NULL（实时 insert_message 落库时未带
+            // blocks）。UPDATE 而非 skip，否则刷新后丢失工具调用/思考/计划。
+            if let Some(blocks) = blocks {
+                sqlx::query(
+                    "UPDATE chat_messages SET blocks = ? WHERE session_id = ? AND role = ? AND text = ?",
+                )
+                .bind(blocks)
+                .bind(session_id)
+                .bind(role)
+                .bind(text)
+                .execute(db)
+                .await?;
+            }
             continue;
         }
         let id = Uuid::new_v4().to_string();

@@ -160,6 +160,8 @@ interface ChatActions {
   setMode: (sessionId: string, mode: string) => void
   setError: (sessionId: string, message: string | null) => void
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
+  /** 无条件替换消息列表（用于重放前清除已有 assistant，避免与重放内容重复）。 */
+  replaceMessages: (sessionId: string, messages: ChatMessage[]) => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   setPermission: (sessionId: string, permission: PendingPermission) => void
@@ -555,6 +557,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (current.messages.length > 0) return state
       return patch(state, sessionId, { messages })
     }),
+
+  replaceMessages: (sessionId, messages) =>
+    set((state) => patch(state, sessionId, { messages })),
 
   markEnded: (sessionId) =>
     set((state) => patch(state, sessionId, { sessionEnded: true, sending: false })),
