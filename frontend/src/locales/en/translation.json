@@ -269,5 +269,10 @@
   "settings.agents.preset.qwen.label": "Qwen Code",
   "settings.agents.preset.qwen.hint": "Spawns Qwen Code in ACP mode (--experimental-acp).",
   "settings.agents.preset.kiro.label": "Kiro",
-  "settings.agents.preset.kiro.hint": "Spawns the Kiro CLI in ACP mode (acp)."
+  "settings.agents.preset.kiro.hint": "Spawns the Kiro CLI in ACP mode (acp).",
+
+  "todo.header": "{{count}} TODOS",
+  "todo.status.pending": "PENDING",
+  "todo.status.active": "ACTIVE",
+  "todo.status.done": "DONE"
 }

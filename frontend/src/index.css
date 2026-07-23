@@ -1562,7 +1562,7 @@ body.parchment-texture {
   gap: 8px;
   padding: 2px 12px 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 0.923em;
   line-height: 20px;
   color: var(--text-faint);
   letter-spacing: 0.06em;
@@ -1615,3 +1615,119 @@ body.parchment-texture {
 .dark .dialogue-toast > .nail-bl,
 .dark .dialogue-toast > .nail-br { background: #8B7755; }
 /* logo-version uses --accent-gold (same as title-bar-path) — see ui-style-guide §1.3 */
+
+/* ────────────────────────────────────────────────────────────────────
+   Todo Board — kanban-style task list fixed above ChatInput.
+   Three columns (PENDING / ACTIVE / DONE) with pixel-aesthetic cards.
+   ──────────────────────────────────────────────────────────────────── */
+.todo-board {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+.todo-board-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.todo-board-header:hover {
+  background: var(--bg-surface);
+}
+.todo-board-header .todo-toggle {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+  color: var(--text-faint);
+}
+.todo-board-header .todo-toggle.collapsed {
+  transform: rotate(-90deg);
+}
+.todo-board-header .todo-count {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-faint);
+}
+.todo-board-columns {
+  display: flex;
+  gap: 1px;
+  padding: 0 8px 8px;
+  background: var(--bg-elevated);
+}
+.todo-column {
+  flex: 1;
+  min-width: 0;
+}
+.todo-column-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  margin-bottom: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.todo-column-header .todo-col-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.todo-column-header .todo-col-count {
+  margin-left: auto;
+  opacity: 0.6;
+}
+.todo-card {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  border-radius: 2px;
+}
+.todo-card:hover {
+  background: var(--bg-surface);
+}
+.todo-card .todo-card-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.todo-card .todo-card-priority {
+  flex-shrink: 0;
+  font-size: 9px;
+  opacity: 0.5;
+}
+.todo-card .todo-card-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.todo-card.status-completed .todo-card-text {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+.todo-column-empty {
+  padding: 4px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}

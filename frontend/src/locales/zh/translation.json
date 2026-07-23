@@ -269,5 +269,10 @@
   "settings.agents.preset.qwen.label": "Qwen Code",
   "settings.agents.preset.qwen.hint": "以 ACP 模式（--experimental-acp）启动 Qwen Code。",
   "settings.agents.preset.kiro.label": "Kiro",
-  "settings.agents.preset.kiro.hint": "以 ACP 模式（acp）启动 Kiro CLI。"
+  "settings.agents.preset.kiro.hint": "以 ACP 模式（acp）启动 Kiro CLI。",
+
+  "todo.header": "{{count}} 个待办",
+  "todo.status.pending": "待办",
+  "todo.status.active": "进行中",
+  "todo.status.done": "已完成"
 }
