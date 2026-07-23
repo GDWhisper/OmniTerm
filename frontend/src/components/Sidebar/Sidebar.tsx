@@ -18,6 +18,7 @@ import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
+import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
@@ -1000,7 +1001,7 @@ export function Sidebar() {
         <div className="panel-title-bar mb-2.5">
           <span>◆</span>
           <span>{t('sidebar.projects') ?? 'Projects'}</span>
-          <span className="title-bar-badge">{projects.length}</span>
+          <CountBadge count={projects.length} />
           <span className="title-bar-spacer" />
           <button
             onClick={(e) => {
@@ -1093,7 +1094,7 @@ export function Sidebar() {
                                 className={wtHasActiveSession ? 'activity-pulse' : ''}
                               />
                               <span className="branch-name">{wt.label}</span>
-                              <span className="session-count">{wtSessions.length}</span>
+                              <CountBadge count={wtSessions.length} />
                               <button
                                 className="sidebar-wt-add-btn"
                                 onClick={(e) => {
