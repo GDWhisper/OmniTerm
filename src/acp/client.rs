@@ -574,17 +574,28 @@ impl AcpClient {
             .block_task()
             .await?;
 
-        if let Some(opts) = resp.config_options {
-            if !opts.is_empty() {
-                if let Ok(mut guard) = self.initial_config_options.lock() {
-                    *guard = opts.clone();
-                }
-                let notification = SessionNotification::new(
-                    self.session_id.clone(),
-                    SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
-                );
-                let _ = self.session_update_tx.send(notification);
+        // 优先用 load 响应里的 config；opencode 等 agent 不在 session/load 响应里
+        // 返回 config_options，回退到创建会话时缓存的 initial_config_options（与
+        // set_config_option 的兜底逻辑一致），保证恢复后配置栏仍有数据可显示。
+        let opts: Option<Vec<SessionConfigOption>> = resp
+            .config_options
+            .filter(|o| !o.is_empty())
+            .or_else(|| {
+                self.initial_config_options
+                    .lock()
+                    .ok()
+                    .map(|g| g.clone())
+                    .filter(|g| !g.is_empty())
+            });
+        if let Some(opts) = opts {
+            if let Ok(mut guard) = self.initial_config_options.lock() {
+                *guard = opts.clone();
             }
+            let notification = SessionNotification::new(
+                self.session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
+            );
+            let _ = self.session_update_tx.send(notification);
         }
         Ok(())
     }
