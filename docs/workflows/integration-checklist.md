@@ -5,6 +5,8 @@
 > 2. 给已有枚举新增一个变体（如 `runtime_kind: tmux → acp → ???`、新增 `agent_kind`、新增 `project_type`、新增任何 enum / sealed trait 的新分支）
 >
 > **核心规则**：跨层不变量必须由至少一个**真进程 / 真 OS 状态**的 e2e 测试覆盖。仅 mock 协议层是不够的——这次踩的两个 bug 都是协议层 mock 全过、OS 层是错的。
+>
+> **按需 vs 日常**：本文档的检查项是**“主动验证 / bug 难指诊时” 才用**的——不要套到日常开发流程里。日常 `cargo test` 应保持轻快。具体怎么做见文末“验证工具”章节。
 
 ## 背景：2026-07-23 连续两个 bug
 
@@ -195,3 +197,49 @@ DB → 后端 API → 后端 handler → spawn → 子进程 OS → 子进程应
 - [`docs/architecture/backend.md`](../architecture/backend.md) — 后端架构（含 ACP runtime 章节）
 - 关联 commit：`27d815f` (spawn cwd)、`dde6298` (FileManager 404)、`cb49ab3` (debug-log 补遗)
 - 关联 issue 字段：`sessions` 表 `runtime_kind` / `tmux_session_name` / `workspace_path` 三列的耦合关系
+
+---
+
+## 验证工具
+
+**原则**：本文档是“按需验证”工具，**不套到日常开发流程**。日常 `cargo test` 应保持轻快（~3.5s/次 71 个单测），不要让“深度验证”拖慢反馈循环。
+
+### 可用工具
+
+| 工具 | 位置 | 覆盖 | 何时跑 |
+|------|------|------|--------|
+| 跨 runtime 文件端点 e2e | [`tests/runtime_kind_matrix.rs`](../../tests/runtime_kind_matrix.rs) | 清单 B「穷举每种 runtime_kind 走主流程」+ 非法值拒绝检查 | ① 加新 runtime_kind 前 / ② 调查跨 runtime bug / ③ 重构后审计 |
+| spawn 抽象 e2e reality check | §A.1 的 5-10 行模板 | 清单 A「`/proc/<pid>/cwd` 验证」 | ① 集成新 spawn 抽象时 / ② 调查“参数传了但实际状态不对” bug |
+
+### 运行方式
+
+```bash
+# 1) 启动 dev server（如未运行）
+./dev.sh start
+
+# 2) 跑跨 runtime 测试（仅 [ignore] 标记的，不是日常）
+cargo test --test runtime_kind_matrix -- --ignored
+
+# 3) 也可以起所有（默认跳过 [ignore]）
+cargo test -- --include-ignored
+```
+
+### 为什么不进 CI / 日常
+
+- `runtime_kind_matrix` 依赖**运行中的 dev server** + 真实 sqlite3 / curl，CI 跑要额外起服务 / 装工具
+- 创建真实 session（有 [ignore] 保护 + 清理逻辑，但中断仍可能残留）
+- 慢（~1.5s/case，3 个 case + preflight HTTP 探活）
+- 需运行中 agent binary（ACP 测试需 codebuddy/ccb/opencode）
+
+CI 仅跑默认 `cargo test`（单测，不依赖外部服务）。本文档测试是“**人手动按需调**”——不是 CI gate。
+
+### 加新 runtime_kind 时怎么扩展
+
+```bash
+# 1. 复制现有 case 改名，改 runtime_kind 参数
+# 2. 如新 runtime 需要新 agent：在 agents 表插入一行
+# 3. 跑 --ignored 验证
+cargo test --test runtime_kind_matrix -- --ignored
+```
+
+不要为加个 runtime_kind 重写测试结构——复制 case 改 5 行足够。
