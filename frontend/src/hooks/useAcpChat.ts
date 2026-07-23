@@ -338,6 +338,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const sessionIdRef = useRef<string | null>(null)
   sessionIdRef.current = sessionId
   const isReplaying = useRef(false)
+  const suppressReplay = useRef(false)
   // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
   const replayRaf = useRef<number | null>(null)
@@ -423,8 +424,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'session_update': {
           const canonical = normalizeSessionUpdate(frame.data?.update)
           const action = classifySessionUpdate(canonical)
+          if (isReplaying.current && suppressReplay.current) {
+            // 已有历史：丢弃重放的内容帧，但放行配置/命令/模式等状态同步帧。
+            if (
+              action.kind === 'setConfigOptions' ||
+              action.kind === 'setCommands' ||
+              action.kind === 'setMode' ||
+              action.kind === 'setUsage'
+            ) {
+              useChatStore.getState().applyReplayBatch(sid, [action])
+            }
+            break
+          }
           // 重放期间：攒进 buffer，按动画帧批量 flush（一次重渲染处理多条帧）。
-          if (isReplaying.current) {
+          if (isReplaying.current && !suppressReplay.current) {
             replayBuffer.current.push(action)
             if (replayRaf.current === null) {
               replayRaf.current = requestAnimationFrame(flushReplayBuffer)
@@ -499,20 +512,17 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'replay_start': {
           isReplaying.current = true
           replayBuffer.current = []
-          // 清除已有 assistant 消息（可能来自 hydration 的纯文本气泡），让重放流
-          // 用结构化 blocks 完整重建，避免与新内容拼接产生重复/乱序。
-          const cur = useChatStore.getState().states[sid]
-          if (cur) {
-            const nonAssistant = cur.messages.filter(m => m.role !== 'assistant')
-            if (nonAssistant.length < cur.messages.length) {
-              useChatStore.getState().replaceMessages(sid, nonAssistant)
-            }
+          const msgs = s.states[sid]?.messages
+          suppressReplay.current = !!(msgs && msgs.length > 0)
+          // 仅当无历史时才显示恢复指示器（已有消息说明刚从 DB hydrate，无需重放）
+          if (!suppressReplay.current) {
+            useChatStore.getState().setReplaying(sid, true)
           }
-          useChatStore.getState().setReplaying(sid, true)
           break
         }
         case 'replay_end':
           isReplaying.current = false
+          suppressReplay.current = false
           // 把重放余量一次性 flush，并把残留 streaming 消息标为已完成
           if (replayRaf.current !== null) {
             cancelAnimationFrame(replayRaf.current)
@@ -522,9 +532,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
-          // 重放结束：store 中 assistant 消息已由重放流完整重建（含结构化 blocks），
-          // 写回 DB 使刷新后仍可还原。
-          syncToDb()
+          // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
+          // 仅当重放内容实际进入了 store（!suppressReplay）才同步，否则 DB 已有
+          // 由 prompt_done → syncToDb 写回的完整数据。
+          if (!suppressReplay.current) {
+            syncToDb()
+          }
           break
         case 'permission_request': {
           const req = frame.request ?? {}
