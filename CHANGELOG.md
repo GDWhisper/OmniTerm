@@ -8,7 +8,11 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 
 ### Format
 
-- Each release uses `## [version] - YYYY-MM-DD` or `## [Unreleased]` for in-progress work.
+- Each release uses `## [version] - YYYY-MM-DD` or `## [Unreleased]
+
+### Fixed
+
+- 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题 (2025-07-17 23:00)` for in-progress work.
 - Changes grouped by category: `Added`, `Changed`, `Fixed`, `Removed`, `Refactored`.
 - One line per change — concise, describes **what** and **why**, not how.
 - Each entry ends with a timestamp in `(YYYY-MM-DD HH:MM)` format.
