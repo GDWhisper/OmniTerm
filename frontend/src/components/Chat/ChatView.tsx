@@ -55,7 +55,6 @@ export function ChatView() {
   const respondPermission = conn?.respondPermission ?? (() => {})
   const setConfigOption = conn?.setConfigOption ?? (() => {})
   const chatState = useChatStore(selectChatState(activeSessionId))
-  const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const isReplaying = chatState.replaying
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -243,9 +242,7 @@ export function ChatView() {
         {chatState.messages.map((m) => (
           <ChatMessageView key={m.id} message={m} />
         ))}
-        {chatState.sending && (
-          <ThinkingIndicator animate={pixelAnimationsEnabled} label={t('chat.thinking')} />
-        )}
+        {chatState.sending && <ThinkingIndicator />}
         {isReplaying && (
           <div className="chat-replay-indicator">
             <span className="replay-spinner" />
@@ -357,20 +354,21 @@ export function ChatView() {
  * until `prompt_done`). Mimics a terminal's live last line so long-running
  * agent tasks (tool calls, waiting, thinking) never leave the view silent.
  * Renders a continuously scrambling hex stream ("decoding" noise, matching the
- * FileManager path-bar look) that never locks into readable text. Falls back to
- * a static label when animations are off.
+ * FileManager path-bar look) that never locks into readable text.
+ *
+ * 该动画属于状态指示器本身，与「像素动效」（马里奥弹跳/金币等游戏化特效）
+ * 无关——不应被那个默认关闭的开关抑制，故恒为动画。
  */
 const SCRAMBLE_HEX = '0123456789abcdef'
 const SCRAMBLE_LEN = 16
 
-function ThinkingIndicator({ animate, label }: { animate: boolean; label: string }) {
+function ThinkingIndicator() {
   // per-slot glyph array → fixed width, no layout jitter from differing glyphs
   const [slots, setSlots] = useState<string[]>(() =>
     Array.from({ length: SCRAMBLE_LEN }, () => SCRAMBLE_HEX[(Math.random() * 16) | 0]),
   )
 
   useEffect(() => {
-    if (!animate) return
     const id = window.setInterval(() => {
       // 全量翻滚：每个 tick 所有槽位都换新字符，避免部分字母长时间静止
       setSlots(() =>
@@ -378,7 +376,7 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
       )
     }, 60)
     return () => window.clearInterval(id)
-  }, [animate])
+  }, [])
 
   return (
     <div
@@ -396,7 +394,7 @@ function ThinkingIndicator({ animate, label }: { animate: boolean; label: string
       }}
     >
       <span style={{ color: 'var(--accent)', fontWeight: 700 }}>▌</span>
-      <span>{animate ? slots.join('') : label}</span>
+      <span>{slots.join('')}</span>
     </div>
   )
 }
