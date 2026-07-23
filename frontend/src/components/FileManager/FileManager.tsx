@@ -147,6 +147,8 @@ export function FileManager() {
     size: null,
   })
   const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
+  const colWidthsRef = useRef(colWidths)
+  colWidthsRef.current = colWidths
 
   // Data source: session > workspace > null
   type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
@@ -247,6 +249,7 @@ export function FileManager() {
     const onUp = () => {
       const r = resizingRef.current
       if (!r) return
+      colWidthsRef.current = { ...colWidthsRef.current, [r.col]: r.startW }
       setColWidths((prev) => ({ ...prev, [r.col]: r.startW }))
       resizingRef.current = null
     }
@@ -266,7 +269,7 @@ export function FileManager() {
     e.preventDefault()
     e.stopPropagation()
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
-    const startW = colWidths[col as 'name' | 'mtime' | 'size']
+    const startW = colWidthsRef.current[col as 'name' | 'mtime' | 'size']
     resizingRef.current = { col, startX: clientX, startW }
   }
 
