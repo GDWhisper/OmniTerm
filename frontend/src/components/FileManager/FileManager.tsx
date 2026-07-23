@@ -5,7 +5,6 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
-import { useColumnResize } from '../../hooks/useColumnResize'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -141,9 +140,13 @@ export function FileManager() {
   const bcRef = useRef<HTMLDivElement>(null)
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const { colRefs, colWidths, handleResizeStart } = useColumnResize({
-    initial: { name: 300, mtime: 140, size: 100 },
+  const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
+  const colRefs = useRef<Record<'name' | 'mtime' | 'size', HTMLTableColElement | null>>({
+    name: null,
+    mtime: null,
+    size: null,
   })
+  const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
 
   // Data source: session > workspace > null
   type FmSource = { type: 'session'; id: string } | { type: 'workspace'; id: string }
@@ -226,6 +229,46 @@ export function FileManager() {
       fetchFilesRef.current('.')
     }
   }, [sourceKey, fmState.mode, fmState.manualPath])
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent | TouchEvent) => {
+      const r = resizingRef.current
+      if (!r) return
+      e.preventDefault()
+      const mvX = 'touches' in e ? e.touches[0].clientX : e.clientX
+      const delta = mvX - r.startX
+      const newW = Math.max(80, r.startW + delta)
+      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
+      if (colEl) {
+        colEl.style.width = `${newW}px`
+        r.startW = newW
+      }
+    }
+    const onUp = () => {
+      const r = resizingRef.current
+      if (!r) return
+      setColWidths((prev) => ({ ...prev, [r.col]: r.startW }))
+      resizingRef.current = null
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onUp)
+    }
+  }, [])
+
+  const handleResizeStart = (col: string, e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+    const startW = colWidths[col as 'name' | 'mtime' | 'size']
+    resizingRef.current = { col, startX: clientX, startW }
+  }
 
   const navigateTo = (absolutePath: string) => {
     if (!fmSource) return
