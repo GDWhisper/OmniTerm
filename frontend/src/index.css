@@ -770,6 +770,12 @@ html, body, #root {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
 }
 
 /* ── Action icon buttons ── */

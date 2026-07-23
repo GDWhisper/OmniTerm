@@ -5,6 +5,7 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
+import { useColumnResize } from '../../hooks/useColumnResize'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -140,14 +141,8 @@ export function FileManager() {
   const bcRef = useRef<HTMLDivElement>(null)
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
-  // Per-column <col> DOM refs — updated directly on mousemove for 60fps drag,
-  // bypassing React re-render (FileManager is a large component; re-rendering
-  // the whole file list on every mousemove is the cause of drag lag).
-  const colRefs = useRef<Record<'name' | 'mtime' | 'size', HTMLTableColElement | null>>({
-    name: null,
-    mtime: null,
-    size: null,
+  const { colRefs, colWidths, handleResizeStart } = useColumnResize({
+    initial: { name: 300, mtime: 140, size: 100 },
   })
 
   // Data source: session > workspace > null
@@ -231,57 +226,6 @@ export function FileManager() {
       fetchFilesRef.current('.')
     }
   }, [sourceKey, fmState.mode, fmState.manualPath])
-
-  const resizingRef = useRef<{ col: string; startX: number; startW: number } | null>(null)
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent | TouchEvent) => {
-      const r = resizingRef.current
-      if (!r) return
-      e.preventDefault()
-      const mvX = 'touches' in e ? e.touches[0].clientX : e.clientX
-      const delta = mvX - r.startX
-      const newW = Math.max(80, r.startW + delta)
-      // Direct DOM write — avoid React re-render on every mousemove
-      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
-      if (colEl) colEl.style.width = `${newW}px`
-    }
-    const onUp = () => {
-      const r = resizingRef.current
-      if (!r) return
-      // Sync final width to React state — one re-render after drag ends,
-      // so sort/file-switch/dir-nav etc. reflect the user's final width.
-      // Use the column's *actual* rendered width to stay consistent with the
-      // handle positioning.
-      const colEl = colRefs.current[r.col as 'name' | 'mtime' | 'size']
-      const finalW = colEl ? colEl.getBoundingClientRect().width : NaN
-      if (!isNaN(finalW)) {
-        setColWidths((prev) => ({ ...prev, [r.col]: finalW }))
-      }
-      resizingRef.current = null
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    window.addEventListener('touchmove', onMove, { passive: false })
-    window.addEventListener('touchend', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      window.removeEventListener('touchmove', onMove)
-      window.removeEventListener('touchend', onUp)
-    }
-  }, [])
-
-  const handleResizeStart = (col: string, e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
-    // Read the column's *actual* rendered width, not React state — keeps the
-    // handle 1:1 with the cursor when the user starts dragging.
-    const colEl = colRefs.current[col as 'name' | 'mtime' | 'size']
-    const actualW = colEl ? colEl.getBoundingClientRect().width : 0
-    resizingRef.current = { col, startX: clientX, startW: actualW }
-  }
 
   const navigateTo = (absolutePath: string) => {
     if (!fmSource) return
