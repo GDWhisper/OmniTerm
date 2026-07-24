@@ -1620,76 +1620,111 @@ body.parchment-texture {
    Todo Board — kanban-style task list fixed above ChatInput.
    Three columns (PENDING / ACTIVE / DONE) with pixel-aesthetic cards.
    ──────────────────────────────────────────────────────────────────── */
+/* ── Todo Kanban Board ── */
 .todo-board {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 2px solid var(--wood-shadow);
   background: var(--bg-elevated);
 }
+
+/* Title bar — pixel panel-title-bar style (wood-dark bg, VT323, uppercase) */
 .todo-board-header {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 5px 12px;
   cursor: pointer;
   user-select: none;
-  color: var(--text-secondary);
+  background: var(--wood-dark);
+  color: #FAF2DE;
   font-family: 'VT323', monospace;
   font-size: 13px;
-  letter-spacing: 2px;
+  letter-spacing: 3px;
   text-transform: uppercase;
+  border-bottom: 2px solid var(--wood-shadow);
 }
+
+.dark .todo-board-header {
+  background: #2A2520;
+  color: #E6DFD0;
+}
+
 .todo-board-header:hover {
-  background: var(--bg-surface);
+  filter: brightness(1.08);
 }
+
 .todo-board-header .todo-toggle {
-  font-size: 10px;
-  transition: transform 0.15s ease;
-  color: var(--text-faint);
+  font-size: 11px;
+  transition: transform 0.15s steps(2);
+  opacity: 0.7;
 }
+
 .todo-board-header .todo-toggle.collapsed {
   transform: rotate(-90deg);
 }
+
 .todo-board-header .todo-count {
   margin-left: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--text-faint);
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  letter-spacing: 2px;
+  opacity: 0.7;
 }
+
+/* Three-column kanban grid */
 .todo-board-columns {
   display: flex;
-  gap: 1px;
-  padding: 0 8px 8px;
+  max-height: 180px;
   background: var(--bg-elevated);
 }
+
 .todo-column {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 8px;
 }
+
+.todo-column + .todo-column {
+  border-left: 2px solid var(--wood-shadow);
+}
+
+/* Column header */
 .todo-column-header {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
+  gap: 5px;
+  padding: 2px 0 6px;
   margin-bottom: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-family: 'VT323', monospace;
+  font-size: 12px;
+  letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--text-faint);
+  color: var(--text-secondary);
   border-bottom: 1px solid var(--border-subtle);
-}
-.todo-column-header .todo-col-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
   flex-shrink: 0;
 }
+
+.todo-column-header .todo-col-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+
 .todo-column-header .todo-col-count {
   margin-left: auto;
-  opacity: 0.6;
+  font-size: 11px;
+  opacity: 0.5;
 }
+
+/* Column body — scrollable when items overflow */
+.todo-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Kanban card row */
 .todo-card {
   display: flex;
   align-items: baseline;
@@ -1699,31 +1734,45 @@ body.parchment-texture {
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
-  border-radius: 2px;
 }
+
 .todo-card:hover {
   background: var(--bg-surface);
 }
-.todo-card .todo-card-icon {
+
+.todo-card-icon {
   flex-shrink: 0;
   font-size: 11px;
 }
-.todo-card .todo-card-priority {
+
+/* Status colors via CSS class (no inline styles) */
+.todo-card-icon.status-pending     { color: var(--text-faint); }
+.todo-card-icon.status-in_progress { color: var(--accent); }
+.todo-card-icon.status-completed   { color: var(--success); }
+
+.todo-card-priority {
   flex-shrink: 0;
   font-size: 9px;
-  opacity: 0.5;
+  opacity: 0.6;
 }
-.todo-card .todo-card-text {
+
+.todo-card-priority.priority-high   { color: var(--danger); }
+.todo-card-priority.priority-medium { color: var(--text-secondary); }
+.todo-card-priority.priority-low    { color: var(--text-faint); }
+
+.todo-card-text {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .todo-card.status-completed .todo-card-text {
   text-decoration: line-through;
   opacity: 0.5;
 }
+
 .todo-column-empty {
   padding: 4px 6px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

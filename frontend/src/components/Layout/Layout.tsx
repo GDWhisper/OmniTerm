@@ -67,6 +67,7 @@ export function Layout() {
     setSidebarWidth,
     setFileManagerWidth,
     crtScanlines,
+    uiZoom,
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
@@ -158,80 +159,81 @@ export function Layout() {
 
   // Desktop layout: Sidebar | Terminal | FileManager
   return (
-    <div
-      ref={layoutRef}
-      className="flex"
-      style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)' }}
-    >
-      {/* Panels wrapper */}
+    <>
       <div
+        ref={layoutRef}
         className="flex"
-        style={{ width: '100%', height: '100%', minWidth: 0 }}
+        style={{ zoom: uiZoom / 100, height: `calc(100dvh / ${uiZoom / 100})`, background: 'var(--bg-base)', color: 'var(--text-primary)' } as React.CSSProperties}
       >
-        {/* Sidebar */}
-        {sidebarOpen && (
-          <div
-            className="flex-shrink-0"
-            style={{
-              width: sidebarCollapsed ? 40 : sidebarWidth,
-              overflow: 'hidden',
-              background: 'var(--bg-base)',
-              borderRight: '1px solid var(--border-subtle)',
-              transition: isDragging ? 'none' : 'width 0.2s ease',
-            }}
-          >
-            <Sidebar />
+        {/* Panels wrapper */}
+        <div
+          className="flex"
+          style={{ width: '100%', height: '100%', minWidth: 0 }}
+        >
+          {/* Sidebar */}
+          {sidebarOpen && (
+            <div
+              className="flex-shrink-0"
+              style={{
+                width: sidebarCollapsed ? 40 : sidebarWidth,
+                overflow: 'hidden',
+                background: 'var(--bg-base)',
+                borderRight: '1px solid var(--border-subtle)',
+                transition: isDragging ? 'none' : 'width 0.2s ease',
+              }}
+            >
+              <Sidebar />
+            </div>
+          )}
+
+          {/* Sidebar drag handle — hidden when collapsed */}
+          {sidebarOpen && !sidebarCollapsed && (
+            <div
+              className="omniterm-drag-bar omniterm-drag-bar-v"
+              onMouseDown={handleSidebarDrag}
+              onTouchStart={handleSidebarDrag}
+            />
+          )}
+
+          {/* Persistent ACP connections — survives session switches */}
+          <AcpConnectionManager />
+
+          {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
+          <div className="flex-1 min-w-0">
+            <SessionView key={activeSessionId ?? 'empty'} />
           </div>
-        )}
 
-        {/* Sidebar drag handle — hidden when collapsed */}
-        {sidebarOpen && !sidebarCollapsed && (
-          <div
-            className="omniterm-drag-bar omniterm-drag-bar-v"
-            onMouseDown={handleSidebarDrag}
-            onTouchStart={handleSidebarDrag}
-          />
-        )}
+          {/* FileManager drag handle — hidden when collapsed */}
+          {fileManagerOpen && !fileManagerCollapsed && (
+            <div
+              className="omniterm-drag-bar omniterm-drag-bar-v"
+              onMouseDown={handleFileManagerDrag}
+              onTouchStart={handleFileManagerDrag}
+            />
+          )}
 
-        {/* Persistent ACP connections — survives session switches */}
-        <AcpConnectionManager />
-
-        {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
-        <div className="flex-1 min-w-0">
-          <SessionView key={activeSessionId ?? 'empty'} />
+          {/* FileManager */}
+          {fileManagerOpen && (
+            <div
+              className="flex-shrink-0 overflow-hidden"
+              style={{
+                width: fileManagerCollapsed ? 40 : fileManagerWidth,
+                background: 'var(--bg-base)',
+                borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
+                transition: isDragging ? 'none' : 'width 0.2s ease',
+              }}
+            >
+              <FileManager />
+            </div>
+          )}
         </div>
-
-        {/* FileManager drag handle — hidden when collapsed */}
-        {fileManagerOpen && !fileManagerCollapsed && (
-          <div
-            className="omniterm-drag-bar omniterm-drag-bar-v"
-            onMouseDown={handleFileManagerDrag}
-            onTouchStart={handleFileManagerDrag}
-          />
-        )}
-
-        {/* FileManager */}
-        {fileManagerOpen && (
-          <div
-            className="flex-shrink-0 overflow-hidden"
-            style={{
-              width: fileManagerCollapsed ? 40 : fileManagerWidth,
-              background: 'var(--bg-base)',
-              borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
-              transition: isDragging ? 'none' : 'width 0.2s ease',
-            }}
-          >
-            <FileManager />
-          </div>
-        )}
       </div>
 
-      {/* Settings popup — fixed positioning, independent of all panels */}
+      {/* Overlays — outside zoom container so popups stay stable during zoom changes */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
-      {/* CRT scanline overlay — controlled by settings, default off */}
       {crtScanlines && <div className="crt-overlay" />}
-    </div>
+    </>
   )
 }
 
@@ -247,6 +249,7 @@ function MobileLayout() {
     tmuxCheatsheetOpen,
     setActiveTab,
     crtScanlines,
+    uiZoom,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
 
@@ -264,64 +267,67 @@ function MobileLayout() {
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
 
   return (
-    <div
-      className="flex flex-col"
-      style={{ height: `${vvHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
-    >
-      <style>{`
-        @keyframes mobileSlideInLeft {
-          from { transform: translateX(-100%); }
-          to { transform: translateX(0); }
-        }
-        @keyframes mobileSlideInRight {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-        @keyframes mobileSlideOutLeft {
-          from { transform: translateX(0); }
-          to { transform: translateX(-100%); }
-        }
-        @keyframes mobileSlideOutRight {
-          from { transform: translateX(0); }
-          to { transform: translateX(100%); }
-        }
-      `}</style>
-      <MobileStatusBar
-        connected={connected}
-        sessionName={activeSessionName}
-        onSessionClick={() => setActiveTab('sessions')}
-        onNewSession={() => setActiveTab('sessions')}
-      />
-      <AcpConnectionManager />
+    <>
       <div
-        className="flex-1 overflow-hidden"
-        onTouchStart={mobileGestureEnabled ? (e) => {
-          const touch = e.touches[0]
-          ;(e.currentTarget as HTMLDivElement).dataset.startX = String(touch.clientX)
-          ;(e.currentTarget as HTMLDivElement).dataset.startY = String(touch.clientY)
-        } : undefined}
-        onTouchEnd={mobileGestureEnabled ? (e) => {
-          const div = e.currentTarget as HTMLDivElement
-          const startX = parseFloat(div.dataset.startX ?? '0')
-          const startY = parseFloat(div.dataset.startY ?? '0')
-          const touch = e.changedTouches[0]
-          const dx = touch.clientX - startX
-          const dy = touch.clientY - startY
-          const edgeMargin = 24
-          if (Math.abs(dx) < Math.abs(dy)) return
-          if (Math.abs(dx) < 40) return
-          if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
-          handleSwipe(dx < 0 ? 'left' : 'right')
-        } : undefined}
+        className="flex flex-col"
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' } as React.CSSProperties}
       >
-        <MobileContent />
+        <style>{`
+          @keyframes mobileSlideInLeft {
+            from { transform: translateX(-100%); }
+            to { transform: translateX(0); }
+          }
+          @keyframes mobileSlideInRight {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+          }
+          @keyframes mobileSlideOutLeft {
+            from { transform: translateX(0); }
+            to { transform: translateX(-100%); }
+          }
+          @keyframes mobileSlideOutRight {
+            from { transform: translateX(0); }
+            to { transform: translateX(100%); }
+          }
+        `}</style>
+        <MobileStatusBar
+          connected={connected}
+          sessionName={activeSessionName}
+          onSessionClick={() => setActiveTab('sessions')}
+          onNewSession={() => setActiveTab('sessions')}
+        />
+        <AcpConnectionManager />
+        <div
+          className="flex-1 overflow-hidden"
+          onTouchStart={mobileGestureEnabled ? (e) => {
+            const touch = e.touches[0]
+            ;(e.currentTarget as HTMLDivElement).dataset.startX = String(touch.clientX)
+            ;(e.currentTarget as HTMLDivElement).dataset.startY = String(touch.clientY)
+          } : undefined}
+          onTouchEnd={mobileGestureEnabled ? (e) => {
+            const div = e.currentTarget as HTMLDivElement
+            const startX = parseFloat(div.dataset.startX ?? '0')
+            const startY = parseFloat(div.dataset.startY ?? '0')
+            const touch = e.changedTouches[0]
+            const dx = touch.clientX - startX
+            const dy = touch.clientY - startY
+            const edgeMargin = 24
+            if (Math.abs(dx) < Math.abs(dy)) return
+            if (Math.abs(dx) < 40) return
+            if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
+            handleSwipe(dx < 0 ? 'left' : 'right')
+          } : undefined}
+        >
+          <MobileContent />
+        </div>
+        <MobileNav />
       </div>
-      <MobileNav />
+
+      {/* Overlays — outside zoom container so popups stay stable during zoom changes */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
-      {/* CRT scanline overlay — controlled by settings, default off */}
       {crtScanlines && <div className="crt-overlay" />}
-    </div>
+    </>
   )
 }
 

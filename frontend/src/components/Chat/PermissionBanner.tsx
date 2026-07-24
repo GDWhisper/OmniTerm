@@ -33,7 +33,7 @@ export function PermissionBanner({ permission, onRespond }: Props) {
       }}
     >
       <div style={{ color: 'var(--text-secondary)', marginBottom: 6 }}>
-        <span style={{ color: 'var(--warning)', marginRight: 6 }}>⚠</span>
+        <span style={{ color: 'var(--warning)', marginRight: 6 }}>▲</span>
         {permission.toolName
           ? `Agent requests permission: ${permission.toolName}`
           : 'Agent requests permission'}

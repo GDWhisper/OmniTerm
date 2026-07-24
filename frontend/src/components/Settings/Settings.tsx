@@ -235,6 +235,143 @@ function FontSizeSection() {
   )
 }
 
+function UiZoomSection() {
+  const { t } = useTranslation()
+  const { uiZoom, setUiZoom } = useAppStore()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.uiZoom')}</SectionTitle>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setUiZoom(uiZoom - 10)}
+          disabled={uiZoom <= 50}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: uiZoom <= 50 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          −
+        </button>
+        <div className="flex-1 text-center">
+          <span style={{ fontSize: 18, fontFamily: READER_FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{uiZoom}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>%</span>
+        </div>
+        <button
+          onClick={() => setUiZoom(uiZoom + 10)}
+          disabled={uiZoom >= 200}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: uiZoom >= 200 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          +
+        </button>
+      </div>
+      <input
+        type="range"
+        min={50}
+        max={200}
+        step={10}
+        value={uiZoom}
+        onChange={(e) => setUiZoom(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: 'var(--accent)', height: 4 }}
+      />
+      {uiZoom !== 100 && (
+        <button
+          onClick={() => setUiZoom(100)}
+          style={{ ...btnBase, fontSize: 11, padding: '3px 10px', color: 'var(--text-muted)' }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          {t('settings.uiZoomReset')}
+        </button>
+      )}
+    </section>
+  )
+}
+
+function ChatFontSizeSection() {
+  const { t } = useTranslation()
+  const { chatFontSize, setChatFontSize } = useAppStore()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.chatFontSize')}</SectionTitle>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setChatFontSize(chatFontSize - 1)}
+          disabled={chatFontSize <= 10}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: chatFontSize <= 10 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          −
+        </button>
+        <div className="flex-1 text-center">
+          <span style={{ fontSize: 18, fontFamily: READER_FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{chatFontSize}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
+        </div>
+        <button
+          onClick={() => setChatFontSize(chatFontSize + 1)}
+          disabled={chatFontSize >= 20}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: chatFontSize >= 20 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          +
+        </button>
+      </div>
+      <input
+        type="range"
+        min={10}
+        max={20}
+        value={chatFontSize}
+        onChange={(e) => setChatFontSize(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: 'var(--accent)', height: 4 }}
+      />
+    </section>
+  )
+}
+
 function LanguageSection() {
   const { t, i18n } = useTranslation()
   return (
@@ -354,7 +491,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'appearance',
     labelKey: 'settings.category.appearance',
-    sections: [ThemeSection, FontSizeSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
+    sections: [ThemeSection, UiZoomSection, FontSizeSection, ChatFontSizeSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
   },
   {
     id: 'audio',

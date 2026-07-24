@@ -8,6 +8,7 @@ import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
+import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 
@@ -39,6 +40,7 @@ function safeParseBlocks(raw: string): ContentBlock[] | null {
 export function ChatView() {
   const { t } = useTranslation()
   const activeSessionId = useAppStore((s) => s.activeSessionId)
+  const chatFontSize = useAppStore((s) => s.chatFontSize)
   const sessions = useAppStore((s) => s.sessions)
   const activeSession =
     activeSessionId
@@ -222,7 +224,7 @@ export function ChatView() {
         ref={scrollRef}
         onScroll={handleScroll}
         style={{ flex: 1, minHeight: 0 }}
-        contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0' }}
+        contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
       >
         {chatState.messages.length === 0 && (
           <div
@@ -232,7 +234,7 @@ export function ChatView() {
               alignItems: 'center',
               justifyContent: 'center',
               color: 'var(--text-faint)',
-              fontSize: 13,
+              fontSize: '1em',
               padding: 16,
             }}
           >
@@ -258,7 +260,7 @@ export function ChatView() {
               display: 'flex',
               alignItems: 'center',
               gap: 8,
-              fontSize: 12,
+              fontSize: '0.923em',
               fontFamily: 'var(--mono, monospace)',
               background: 'rgba(255, 255, 255, 0.03)',
               border: '1px solid var(--border-subtle)',
@@ -331,6 +333,8 @@ export function ChatView() {
         </div>
       )}
 
+      <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
+
       <ChatInput
         disabled={inputDisabled}
         sending={chatState.sending}
@@ -363,19 +367,23 @@ const SCRAMBLE_HEX = '0123456789abcdef'
 const SCRAMBLE_LEN = 16
 
 function ThinkingIndicator() {
-  // per-slot glyph array → fixed width, no layout jitter from differing glyphs
-  const [slots, setSlots] = useState<string[]>(() =>
-    Array.from({ length: SCRAMBLE_LEN }, () => SCRAMBLE_HEX[(Math.random() * 16) | 0]),
-  )
+  const textRef = useRef<HTMLSpanElement | null>(null)
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      // 全量翻滚：每个 tick 所有槽位都换新字符，避免部分字母长时间静止
-      setSlots(() =>
-        Array.from({ length: SCRAMBLE_LEN }, () => SCRAMBLE_HEX[(Math.random() * 16) | 0]),
-      )
-    }, 60)
-    return () => window.clearInterval(id)
+    let raf = 0
+    const tick = () => {
+      // 直接写 DOM，不进 React state：避免 thinking 阶段高频 appendThought
+      // 重渲染挤占本动画的帧（setInterval 宏任务会被密集渲染推迟）。rAF 与
+      // 渲染同调度，且本函数零 React 开销，主线程再忙也只占一帧极小成本。
+      if (textRef.current) {
+        let s = ''
+        for (let i = 0; i < SCRAMBLE_LEN; i++) s += SCRAMBLE_HEX[(Math.random() * 16) | 0]
+        textRef.current.textContent = s
+      }
+      raf = window.requestAnimationFrame(tick)
+    }
+    raf = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(raf)
   }, [])
 
   return (
@@ -386,7 +394,7 @@ function ThinkingIndicator() {
         gap: 6,
         padding: '2px 12px 6px',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: 12,
+        fontSize: '0.923em',
         lineHeight: '20px',
         color: 'var(--text-faint)',
         letterSpacing: '0.08em',
@@ -394,7 +402,7 @@ function ThinkingIndicator() {
       }}
     >
       <span style={{ color: 'var(--accent)', fontWeight: 700 }}>▌</span>
-      <span>{slots.join('')}</span>
+      <span ref={textRef} />
     </div>
   )
 }

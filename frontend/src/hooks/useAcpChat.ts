@@ -161,6 +161,91 @@ function synthUnifiedDiff(d: Record<string, unknown>): string {
   return `${header}\n${body}`
 }
 
+// --- Todo / task-list detection (非 ACP 标准，各 agent 私有约定) ---
+//
+// 按 §8 多实现兼容性：不绑定某个 agent 的字段名，而是按「内容形态」识别，
+// 并对 status / priority 做显式回退，以兼容不同上游的差异：
+//   - OpenCode 把 todos 当作工具调用，payload 为 JSON 数组，元素含
+//     { content, status: in_progress|pending, priority: high|medium }；
+//   - 其它 agent 可能把数组放在 todos / tasks / items / raw_input / raw_output，
+//     或用不同的 status 文案（doing / done）。均在此统一归一。
+import type { TodoEntry, TodoStatus, TodoPriority } from '../stores/chatStore'
+
+const TODO_ARRAY_FIELDS = ['todos', 'tasks', 'items', 'todo_list', 'task_list', 'content', 'raw_input', 'raw_output']
+
+function normalizeTodoStatus(raw: unknown): TodoStatus {
+  if (typeof raw !== 'string') return 'pending'
+  const s = raw.toLowerCase().trim()
+  if (s === 'in_progress' || s === 'in progress' || s === 'active' || s === 'doing' || s === 'started') return 'in_progress'
+  if (s === 'completed' || s === 'done' || s === 'finished' || s === 'complete') return 'completed'
+  return 'pending'
+}
+
+function normalizeTodoPriority(raw: unknown): TodoPriority {
+  if (typeof raw !== 'string') return 'medium'
+  const p = raw.toLowerCase().trim()
+  if (p === 'high' || p === 'urgent' || p === 'critical') return 'high'
+  if (p === 'low' || p === 'minor') return 'low'
+  return 'medium'
+}
+
+// 从任意值里尝试解析出 todo 数组；识别不出返回 null（调用方回落为普通工具卡片）。
+function parseTodoEntries(value: unknown): TodoEntry[] | null {
+  if (Array.isArray(value)) {
+    // value is already an array, proceed below
+  } else if (typeof value === 'string') {
+    const trimmed = value.trim()
+    // 形如 "3 todos" 的计数描述不是清单，跳过；只解析 JSON 数组。
+    if (!trimmed.startsWith('[')) return null
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (!Array.isArray(parsed)) return null
+      value = parsed
+    } catch {
+      return null
+    }
+  } else {
+    return null
+  }
+  const arr = value as unknown[]
+  if (arr.length === 0) return null
+  // 必须至少有一个元素具备 todo 形态（content 字符串 + status 字段），否则不算 todo。
+  const looksLikeTodo = (arr as unknown[]).some(
+    (e) => !!e && typeof e === 'object' && typeof (e as Record<string, unknown>)['content'] === 'string' && 'status' in (e as Record<string, unknown>),
+  )
+  if (!looksLikeTodo) return null
+  return (arr as unknown[])
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+    .map((e) => ({
+      content: typeof e['content'] === 'string' ? e['content'] : String(e['content'] ?? ''),
+      status: normalizeTodoStatus(e['status']),
+      priority: normalizeTodoPriority(e['priority'] ?? e['importance']),
+    }))
+}
+
+function extractTodoList(inner: Record<string, unknown>): TodoEntry[] | null {
+  // 先把所有候选字段(含 content/raw_input/raw_output)尝试直接解析。
+  for (const field of TODO_ARRAY_FIELDS) {
+    const v = inner[field]
+    if (v === undefined || v === null) continue
+    const entries = parseTodoEntries(v)
+    if (entries) return entries
+  }
+  // 候选字段若本身是对象（如 raw_input: { todos: [...] }），递归一层找数组值，
+  // 以兼容把 todo 数组包在入参对象里的上游（不绑定字段名）。
+  for (const field of ['raw_input', 'raw_output', 'input', 'arguments', 'params', 'content']) {
+    const v = inner[field]
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const val of Object.values(v as Record<string, unknown>)) {
+        const entries = parseTodoEntries(val)
+        if (entries) return entries
+      }
+    }
+  }
+  // 兜底：直接是数组（不带外层字段名）。
+  return parseTodoEntries(inner)
+}
+
 // --- Classifier ---
 
 // `SessionUpdateAction` 类型已移至 chatStore（供 applyReplayBatch 复用）。
@@ -235,6 +320,16 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
       const locations = Array.isArray(inner['locations'])
         ? (inner['locations'] as unknown[]).filter((l): l is string => typeof l === 'string')
         : undefined
+      // 工具调用内容若形如任务清单（todos / tasks），语义化为 TodoBlock，
+      // 而非把 JSON 数组塞进普通工具卡片。识别失败则回落为普通工具调用。
+      const todos = extractTodoList(inner)
+      if (todos) {
+        return { kind: 'setTodos', title, entries: todos }
+      }
+      // DEV 诊断：标题疑似 todo（"N todos"）却未识别，打印原始结构定位字段。
+      if (import.meta.env.DEV && title && /\btodos?\b/i.test(title)) {
+        console.debug('[ACP todo?] raw inner keys:', Object.keys(inner), '| sample:', JSON.stringify(inner).slice(0, 600))
+      }
       return { kind: 'upsertTool', toolCallId, title, status, toolKind, content, locations }
     }
   }
@@ -342,7 +437,22 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
   const replayRaf = useRef<number | null>(null)
+  // 实时流式缓冲：文本/thinking chunk 高频到达时，攒进同一动画帧一次性提交，
+  // 把「每 chunk 一次重渲染」降为「每帧最多一次」——IDE 文本流应有的朴素节流，
+  // 非特效：输出速度不变，只是合并提交。工具/plan/权限等结构性 action 仍即时生效。
+  const liveBuffer = useRef<SessionUpdateAction[]>([])
+  const liveRaf = useRef<number | null>(null)
   const attention = useAttention()
+
+  const flushLiveBuffer = useCallback(() => {
+    liveRaf.current = null
+    const sid = sessionIdRef.current
+    if (!sid) return
+    const batch = liveBuffer.current
+    if (batch.length === 0) return
+    liveBuffer.current = []
+    useChatStore.getState().applyReplayBatch(sid, batch)
+  }, [])
 
   const flushReplayBuffer = useCallback(() => {
     replayRaf.current = null
@@ -446,10 +556,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           switch (action.kind) {
             case 'appendText':
-              s.appendChunk(sid, action.text)
-              break
             case 'appendThought':
-              s.appendThought(sid, action.text)
+              // 高频流式 chunk：攒进 live buffer，按动画帧批量提交，避免逐帧重渲染。
+              liveBuffer.current.push(action)
+              if (liveRaf.current === null) {
+                liveRaf.current = requestAnimationFrame(flushLiveBuffer)
+              }
               break
             case 'setMode':
               s.setMode(sid, action.mode)
@@ -466,6 +578,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               break
             case 'setPlan':
               s.setPlan(sid, action.entries)
+              break
+            case 'setTodos':
+              s.setTodos(sid, action.title, action.entries)
               break
             case 'setUsage':
               s.setUsage(sid, action.usage)
@@ -486,6 +601,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         }
         case 'prompt_done':
+          // 先 flush 残留流式 chunk，避免结尾丢字，再标记完成。
+          if (liveRaf.current !== null) {
+            cancelAnimationFrame(liveRaf.current)
+            liveRaf.current = null
+          }
+          flushLiveBuffer()
           s.markDone(sid)
           // 实时 prompt 结束后立即将结构化 blocks 写回 DB（此前只落库了纯文本）。
           syncToDb()
@@ -604,6 +725,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         cancelAnimationFrame(replayRaf.current)
         replayRaf.current = null
       }
+      if (liveRaf.current !== null) {
+        cancelAnimationFrame(liveRaf.current)
+        liveRaf.current = null
+      }
+      flushLiveBuffer()
       if (ws.readyState === WebSocket.OPEN) ws.close()
       if (wsRef.current === ws) wsRef.current = null
     }

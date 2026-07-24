@@ -21,6 +21,11 @@ export function SettingsPopup() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  // Capture current uiZoom on mount so the popup keeps a stable size during
+  // slider drag (content behind it previews the change in real time).
+  const [localZoom] = useState(() => useAppStore.getState().uiZoom)
+  const zoomRatio = localZoom / 100
+
   const { ref, pos, isMobile } = useAnchorPopup({
     toggleSelector: '[data-toggle="settings"]',
     topAnchorSelector: '.logo-title-bar',
@@ -41,14 +46,15 @@ export function SettingsPopup() {
         position: 'fixed',
         display: 'flex',
         flexDirection: 'column',
+        zoom: zoomRatio,
         // Mobile: bottom sheet above MobileNav; Desktop: positioned popup
         ...(isMobile
           ? {
               left: 0,
-              right: 0,
+              width: `calc(100vw / ${zoomRatio})`,
               bottom: mobileBottom,
-              height: `calc(100dvh - ${mobileTotal}px)`,
-              maxHeight: `calc(100dvh - ${mobileTotal}px)`,
+              height: `calc((100dvh - ${mobileTotal}px) / ${zoomRatio})`,
+              maxHeight: `calc((100dvh - ${mobileTotal}px) / ${zoomRatio})`,
               borderRadius: 16,
               overflow: 'hidden',
             }
@@ -58,15 +64,16 @@ export function SettingsPopup() {
               // (.settings-content) scrolls if its sections don't fit, so the
               // popup itself stays a stable size across tab switches.
               // maxHeight from useAnchorPopup is a safety cap when viewport is
-              // too short for 33vh.
-              height: '33vh',
-              maxHeight: pos.maxHeight,
+              // too short for 33vh. Dimensions are divided by zoomRatio so the
+              // visual (post-zoom) size matches the original intent.
+              height: `calc(33vh / ${zoomRatio})`,
+              maxHeight: pos.maxHeight / zoomRatio,
               top: pos.top,
               bottom: pos.bottom,
               borderRadius: 10,
               overflow: 'hidden',
             }),
-        width: isMobile ? '100%' : `${POPUP_WIDTH_RATIO * 100}vw`,
+        width: isMobile ? undefined : `${POPUP_WIDTH_RATIO * 100 / zoomRatio}vw`,
         zIndex: 50,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-strong)',

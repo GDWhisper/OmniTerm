@@ -23,6 +23,12 @@ export interface AppState {
   // Terminal
   fontSize: number
 
+  // UI zoom (browser-level page zoom via CSS zoom)
+  uiZoom: number
+
+  // ACP chat font size (base px for ChatView content)
+  chatFontSize: number
+
   // Keybinding
   keybindingMode: 'tmux' | 'modern'
 
@@ -83,6 +89,8 @@ export interface AppState {
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
+  setUiZoom: (z: number) => void
+  setChatFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
   setProjects: (p: Project[]) => void
@@ -138,6 +146,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || String(Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8)))),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
+  uiZoom: parseInt(localStorage.getItem('omniterm_ui_zoom') || '100'),
+  chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
 
@@ -189,6 +199,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const clamped = Math.max(10, Math.min(24, s))
     localStorage.setItem('omniterm_font_size', String(clamped))
     set({ fontSize: clamped })
+  },
+
+  setUiZoom: (z) => {
+    const clamped = Math.max(50, Math.min(200, z))
+    localStorage.setItem('omniterm_ui_zoom', String(clamped))
+    set({ uiZoom: clamped })
+  },
+
+  setChatFontSize: (s) => {
+    const clamped = Math.max(10, Math.min(20, s))
+    localStorage.setItem('omniterm_chat_font_size', String(clamped))
+    set({ chatFontSize: clamped })
   },
 
   setKeybindingMode: (mode) => {

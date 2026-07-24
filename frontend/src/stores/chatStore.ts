@@ -42,12 +42,31 @@ export interface PlanBlock {
   entries: PlanEntry[]
 }
 
+// �����嵥��todos / task list������ ACP ��׼���塪���� agent ˽��Լ��
+// ��OpenCode �ù��ߵ��� + JSON ������أ����� agent ������Ƕ�ı����Զ���֪ͨ����
+// �ʰ� ��8 ��ʵ�ּ����ԣ���������̬ʶ�𣬶� status/priority ����ʽ���ˣ����󶨵�һʵ�֡�
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export type TodoPriority = 'low' | 'medium' | 'high'
+
+export interface TodoEntry {
+  content: string
+  status: TodoStatus
+  priority: TodoPriority
+}
+
+export interface TodoBlock {
+  type: 'todo'
+  /** ��ѡ���⣨�� agent �����嵥������ȱʧʱ UI �ü������ס� */
+  title?: string
+  entries: TodoEntry[]
+}
+
 export interface SystemBlock {
   type: 'system'
   label: string
 }
 
-export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | SystemBlock
+export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock
 
 // --- Agent terminal activity (from ACP `terminal/create`) ---
 // Surfaces commands the agent runs in background terminals so they aren't silent.
@@ -76,11 +95,11 @@ export interface PendingPermission {
 
 // --- Replay batching ---
 //
-// 重放（replay）期间后端会把历史记录逐帧以大批量 `session_update` 推回。若前端对
-// 每一帧各调一次 store action，数百条消息 = 数百次整列表重渲染，导致重放极慢。
+// 重放（replay）期间后端会把历史记录逐帧以大批量 `session_update` 推回。若前端�?
+// 每一帧各调一�? store action，数百条消息 = 数百次整列表重渲染，导致重放极慢�?
 // 因此提供 `applyReplayBatch`：前端把一帧内（或一动画帧内攒下的）多条重放帧先
-// 分类成 `SessionUpdateAction`，再一次性提交，store 内部只做一次 state 变换 +
-// 一次重渲染，把重放成本从 O(N 次渲染) 降到 O(渲染帧数)。
+// 分类�? `SessionUpdateAction`，再一次性提交，store 内部只做一�? state 变换 +
+// 一次重渲染，把重放成本�? O(N 次渲�?) 降到 O(渲染帧数)�?
 
 export type SessionUpdateAction =
   | { kind: 'appendText'; text: string }
@@ -88,6 +107,7 @@ export type SessionUpdateAction =
   | { kind: 'setMode'; mode: string }
   | { kind: 'upsertTool'; toolCallId: string; title?: string; status?: string; toolKind?: string; content?: string; locations?: string[] }
   | { kind: 'setPlan'; entries: PlanEntry[] }
+  | { kind: 'setTodos'; title?: string; entries: TodoEntry[] }
   | { kind: 'setUsage'; usage: Record<string, unknown> }
   | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
@@ -122,7 +142,7 @@ export interface SlashCommand {
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
-  /** Plain-text accumulator — kept for persistence hydration compatibility. */
+  /** Plain-text accumulator �? kept for persistence hydration compatibility. */
   text: string
   /** Structured content blocks for rich rendering. */
   blocks: ContentBlock[]
@@ -136,22 +156,26 @@ interface ChatSessionState {
   error: string | null
   mode: string | null
   sessionEnded: boolean
-  /** 正在从后端重放历史记录（replay_start … replay_end 之间），供 UI 显示恢复指示。 */
+  /** 正在从后端重放历史记录（replay_start �? replay_end 之间），�? UI 显示恢复指示�? */
   replaying: boolean
   pendingPermission: PendingPermission | null
   usage: Record<string, unknown> | null
   commands: SlashCommand[]
   configOptions: ConfigOption[]
   terminalEvents: TerminalActivity[]
+  /** 当前待办列表看板数据（独立于 messages，固定在输入框上方展示）。 */
+  todos: TodoEntry[]
+  todosTitle: string | undefined
 }
 
 interface ChatActions {
   appendChunk: (sessionId: string, chunk: string) => void
-  /** 重放批量提交：一次性把多条重放帧合并进 state，只触发一次重渲染。 */
+  /** 重放批量提交：一次性把多条重放帧合并进 state，只触发一次重渲染�? */
   applyReplayBatch: (sessionId: string, actions: SessionUpdateAction[]) => void
   appendThought: (sessionId: string, chunk: string) => void
   upsertToolCall: (sessionId: string, entry: ToolCallUpdate) => void
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
+  setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
   addUserMessage: (sessionId: string, text: string) => void
   markDone: (sessionId: string) => void
@@ -186,6 +210,8 @@ const EMPTY: ChatSessionState = {
   commands: [],
   configOptions: [],
   terminalEvents: [],
+  todos: [],
+  todosTitle: undefined,
 }
 
 interface ChatStoreState {
@@ -217,10 +243,10 @@ const genId = () =>
     : `msg-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
 
 /**
- * 纯函数：把多条重放帧合并进现有 messages（追加文本 / 合并 tool / plan / thought
- * 等），返回新的 messages 数组。语义与 `appendChunk` 等单条 action 一致，但只做
+ * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
+ * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
  * 一次全量浅拷贝。重放的历史回合视为已完成，新追加的 assistant 消息 `streaming`
- * 保持 true（由 `finalizeReplay` 在 `replay_end` 时统一置 false）。
+ * 保持 true（由 `finalizeReplay` �? `replay_end` 时统一�? false）�?
  */
 const applyActionsToMessages = (
   messages: ChatMessage[],
@@ -324,6 +350,18 @@ const applyActionsToMessages = (
         }
         next[next.length - 1] = { ...last, blocks }
       }
+    } else if (action.kind === 'setTodos') {
+      const last = next[next.length - 1]
+      if (last && last.role === 'assistant') {
+        const blocks = [...last.blocks]
+        const idx = blocks.findIndex((b) => b.type === 'todo')
+        if (idx >= 0) {
+          blocks[idx] = { type: 'todo', title: action.title, entries: action.entries }
+        } else {
+          blocks.push({ type: 'todo', title: action.title, entries: action.entries })
+        }
+        next[next.length - 1] = { ...last, blocks }
+      }
     } else if (action.kind === 'pushSystem') {
       next.push({
         id: genId(),
@@ -333,8 +371,8 @@ const applyActionsToMessages = (
         createdAt: Date.now(),
       })
     }
-    // drop / setMode / setUsage / setCommands / setConfigOptions 不进 messages，
-    // 由下方 applyReplayBatch 在顶层字段处理。
+    // drop / setMode / setUsage / setCommands / setConfigOptions 不进 messages�?
+    // 由下�? applyReplayBatch 在顶层字段处理�?
   }
   return next
 }
@@ -456,6 +494,24 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages })
     }),
 
+  setTodos: (sessionId, title, entries) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const messages = [...current.messages]
+      const last = messages[messages.length - 1]
+      if (last && last.role === 'assistant' && last.streaming) {
+        const blocks = [...last.blocks]
+        const idx = blocks.findIndex((b) => b.type === 'todo')
+        if (idx >= 0) {
+          blocks[idx] = { type: 'todo', title, entries }
+        } else {
+          blocks.push({ type: 'todo', title, entries })
+        }
+        messages[messages.length - 1] = { ...last, blocks }
+      }
+      return patch(state, sessionId, { messages, todos: entries, todosTitle: title })
+    }),
+
   pushSystemEvent: (sessionId, label) =>
     set((state) => {
       const current = get(state, sessionId)
@@ -494,7 +550,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (actions.length === 0) return state
       const current = get(state, sessionId)
       const messages = applyActionsToMessages(current.messages, actions)
-      // 顶层字段（mode/usage/commands/configOptions）一次性合并
+      // 顶层字段（mode/usage/commands/configOptions/todos）一次性合并
       let next = patch(state, sessionId, { messages })
       for (const action of actions) {
         if (action.kind === 'setMode') {
@@ -505,12 +561,14 @@ export const useChatStore = create<ChatStore>((set) => ({
           next = patch(next, sessionId, { commands: action.commands })
         } else if (action.kind === 'setConfigOptions') {
           next = patch(next, sessionId, { configOptions: action.options })
+        } else if (action.kind === 'setTodos') {
+          next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
         }
       }
       return next
     }),
 
-  // 重放结束：把残留的 streaming assistant 消息标记为已完成，清掉光标态。
+  // 重放结束：把残留�? streaming assistant 消息标记为已完成，清掉光标态�?
   finalizeReplay: (sessionId) =>
     set((state) => {
       const current = get(state, sessionId)
@@ -553,7 +611,24 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const current = get(state, sessionId)
       if (current.messages.length > 0) return state
-      return patch(state, sessionId, { messages })
+      // 扫描最后一条消息，提取最后一个 TodoBlock 作为看板数据
+      let todos: TodoEntry[] = []
+      let todosTitle: string | undefined
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (m.role === 'assistant' && m.blocks) {
+          for (let j = m.blocks.length - 1; j >= 0; j--) {
+            const b = m.blocks[j]
+            if (b.type === 'todo') {
+              todos = b.entries
+              todosTitle = b.title
+              break
+            }
+          }
+          if (todos.length > 0) break
+        }
+      }
+      return patch(state, sessionId, { messages, todos, todosTitle })
     }),
 
   markEnded: (sessionId) =>

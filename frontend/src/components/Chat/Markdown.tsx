@@ -6,7 +6,7 @@ import { READER_FONT } from '../../utils/fonts'
 
 export function Markdown({ text }: { text: string }) {
   return (
-    <div className="chat-markdown" style={{ fontFamily: READER_FONT, fontSize: 13, lineHeight: 1.6 }}>
+    <div className="chat-markdown" style={{ fontFamily: READER_FONT, fontSize: '1em', lineHeight: 1.6 }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -19,7 +19,7 @@ export function Markdown({ text }: { text: string }) {
                   style={oneDark}
                   language={match[1]}
                   PreTag="div"
-                  customStyle={{ margin: '8px 0', borderRadius: 6, fontSize: 12 }}
+                  customStyle={{ margin: '8px 0', borderRadius: 6, fontSize: '0.923em' }}
                 >
                   {codeStr}
                 </SyntaxHighlighter>
@@ -29,10 +29,11 @@ export function Markdown({ text }: { text: string }) {
               <code
                 className={className}
                 style={{
-                  background: 'var(--bg-elevated)',
+                  background: 'var(--bg-code-inline)',
                   padding: '1px 5px',
                   borderRadius: 3,
-                  fontSize: 12,
+                  fontSize: '0.923em',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                 }}
                 {...props}
               >
@@ -53,7 +54,7 @@ export function Markdown({ text }: { text: string }) {
           table({ children }) {
             return (
               <div style={{ overflowX: 'auto', margin: '8px 0' }}>
-                <table style={{ borderCollapse: 'collapse', fontSize: 12, width: '100%' }}>
+                <table style={{ borderCollapse: 'collapse', fontSize: '0.923em', width: '100%' }}>
                   {children}
                 </table>
               </div>
