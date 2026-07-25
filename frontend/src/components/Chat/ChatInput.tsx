@@ -58,6 +58,15 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
       prevSessionIdRef.current = sessionId
       setText(getDraft(sessionId))
       textareaRef.current?.focus()
+      return
+    }
+
+    // While staying in the same session, persist current draft so it survives
+    // abrupt unmounts (e.g. layout key changes) or navigation.
+    if (text.trim() !== '') {
+      saveDraft(sessionId, text)
+    } else {
+      deleteDraft(sessionId)
     }
   }, [sessionId, text])
 
