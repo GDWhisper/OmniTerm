@@ -230,6 +230,10 @@ cmd_start() {
     mkdir -p "$PID_DIR"
     cleanup_orphans
 
+    # 确保 pre-commit hook 生效：core.hooksPath 指向 scripts/hooks
+    # （历史上被设为不存在的 .githooks 导致 hook 失效，见 docs/dev/plans/2026-07-24-quality-gates.md）
+    _ensure_hooks
+
     # 检查 inotify 资源（EMFILE 常见根因：max_user_instances 耗尽）
     _check_inotify_limits
 
@@ -506,6 +510,19 @@ _check_inotify_limits() {
         fi
     elif [[ $pct_instances -ge 60 ]]; then
         info "inotify 实例: ${used_instances}/${max_instances}"
+    fi
+}
+
+# 确保 git pre-commit hook 指向 scripts/hooks（修复历史上 core.hooksPath=.githooks 失效问题）
+_ensure_hooks() {
+    local hooks_dir="$PROJECT_DIR/scripts/hooks"
+    [[ -d "$hooks_dir" ]] || return 0
+    local cur
+    cur=$(git -C "$PROJECT_DIR" config core.hooksPath 2>/dev/null || true)
+    if [[ "$cur" != "scripts/hooks" ]]; then
+        git -C "$PROJECT_DIR" config core.hooksPath scripts/hooks
+        chmod +x "$hooks_dir"/* 2>/dev/null || true
+        info "pre-commit hook 已生效: core.hooksPath=scripts/hooks"
     fi
 }
 

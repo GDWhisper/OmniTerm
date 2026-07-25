@@ -1,0 +1,54 @@
+name: CI
+
+# 质量门禁：push 到 dev/main/preview/debug 时触发。
+# 项目为单人本地 merge 模型无 PR 流程，pull_request 触发仅防御性保留。
+# 设计与分阶段启用见 docs/dev/plans/2026-07-24-quality-gates.md
+
+on:
+  push:
+    branches: [dev, main, preview, debug]
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  # ── Rust（Phase 1 基线：check + test；clippy/fmt 在 Phase 2 清理后启用）──
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # tmux control-mode 测试需要 tmux 二进制（ubuntu-latest 不预装）
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - run: cargo check --workspace
+      - run: cargo test --workspace
+
+  # ── Frontend ──────────────────────────────────────────────────
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: pnpm install --no-frozen-lockfile
+        working-directory: frontend
+      - run: pnpm lint
+        working-directory: frontend
+      - run: pnpm test --run
+        working-directory: frontend
+      - run: pnpm build
+        working-directory: frontend
