@@ -54,7 +54,7 @@
   "settings.system": "跟随系统",
   "settings.fontSize": "终端字体大小",
   "settings.uiZoom": "界面缩放",
-  "settings.uiZoomReset": "重置为 100%",
+  "settings.uiZoomReset": "重置为默认",
   "settings.chatFontSize": "对话字体大小",
   "settings.language": "语言",
   "settings.about": "关于",

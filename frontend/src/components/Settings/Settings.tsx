@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
-import { useAppStore } from '../../stores/appStore'
+import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
@@ -238,7 +238,6 @@ function FontSizeSection() {
 function UiZoomSection() {
   const { t } = useTranslation()
   const { uiZoom, setUiZoom } = useAppStore()
-  const { DEFAULT_UI_ZOOM } = useAppStore
   return (
     <section className="space-y-2">
       <SectionTitle>{t('settings.uiZoom')}</SectionTitle>
