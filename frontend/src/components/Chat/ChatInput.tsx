@@ -99,6 +99,7 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
       if (canSend) {
         onSend(text)
         setText('')
+        chatDrafts.delete(sessionId)
         setShowCommands(false)
       }
     }
@@ -114,6 +115,7 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
     if (!canSend) return
     onSend(text)
     setText('')
+    chatDrafts.delete(sessionId)
     setShowCommands(false)
     textareaRef.current?.focus()
   }
