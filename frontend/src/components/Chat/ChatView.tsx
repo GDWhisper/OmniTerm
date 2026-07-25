@@ -261,7 +261,7 @@ export function ChatView() {
               alignItems: 'center',
               gap: 8,
               fontSize: '0.923em',
-              fontFamily: 'var(--mono, monospace)',
+              fontFamily: 'var(--reader-font, monospace)',
               background: 'rgba(255, 255, 255, 0.03)',
               border: '1px solid var(--border-subtle)',
               borderLeft: '2px solid var(--accent)',
