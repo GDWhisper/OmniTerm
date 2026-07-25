@@ -189,26 +189,21 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editableCompartment.current.of(EditorView.editable.of(isEditable)),
         EditorView.lineWrapping,
-      ]
-
-      if (isEditable) {
-        extensions.push(
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              onChangeRef.current?.(update.state.doc.toString())
-            }
-          }),
-          keymap.of([
-            {
-              key: 'Mod-s',
-              run: () => {
-                onSaveRef.current?.()
-                return true
-              },
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            onChangeRef.current?.(update.state.doc.toString())
+          }
+        }),
+        keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => {
+              onSaveRef.current?.()
+              return true
             },
-          ]),
-        )
-      }
+          },
+        ]),
+      ]
 
       return extensions
     },
@@ -264,17 +259,16 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
   }, [editable, createExtensions, fileName]) // NOTE: content intentionally omitted — editor manages its own state
 
   // Reconfigure extensions in-place when switching edit/view mode on the same file.
-  // Runs BEFORE the init effect's cleanup, setting reconfigureModeRef so cleanup
-  // preserves the view instead of destroying it. This keeps scroll position intact.
+  // Only updates the editable compartment — NOT the entire extension tree.
+  // This preserves scroll position and cursor without destroying the EditorView.
   useEffect(() => {
     const view = viewRef.current
     if (view) {
-      // Same file, mode toggle — update extensions compartment without recreating
       view.dispatch({
-        effects: editableCompartment.current.reconfigure(createExtensions(editable)),
+        effects: editableCompartment.current.reconfigure(EditorView.editable.of(editable)),
       })
     }
-  }, [editable, createExtensions])
+  }, [editable])
 
   // Sync external content changes into the editor (e.g. file reload, mode toggle, save).
   // Internal edits (typing) are no-ops because the editor's doc already matches the prop.
