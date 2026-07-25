@@ -168,6 +168,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
   const editableCompartment = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onSaveRef = useRef(onSave)
+  const currentFilePathRef = useRef(fileName)
 
   // Keep refs up to date without causing re-renders
   onChangeRef.current = onChange
@@ -218,6 +219,21 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
   useEffect(() => {
     if (!containerRef.current) return
 
+    // Only destroy the view when the file actually changed, not on mode toggle.
+    // On mode toggle (same file), the reconfigure effect updates the view in-place,
+    // preserving scroll position and cursor.
+    const fileChanged = currentFilePathRef.current !== fileName
+    if (fileChanged) {
+      viewRef.current?.destroy()
+      viewRef.current = null
+    }
+    currentFilePathRef.current = fileName
+
+    if (viewRef.current) {
+      // View already exists (mode toggle on same file) — reconfigure effect handled it
+      return
+    }
+
     let view: EditorView | null = null
     let cancelled = false
 
@@ -246,6 +262,19 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
       viewRef.current = null
     }
   }, [editable, createExtensions, fileName]) // NOTE: content intentionally omitted — editor manages its own state
+
+  // Reconfigure extensions in-place when switching edit/view mode on the same file.
+  // Runs BEFORE the init effect's cleanup, setting reconfigureModeRef so cleanup
+  // preserves the view instead of destroying it. This keeps scroll position intact.
+  useEffect(() => {
+    const view = viewRef.current
+    if (view) {
+      // Same file, mode toggle — update extensions compartment without recreating
+      view.dispatch({
+        effects: editableCompartment.current.reconfigure(createExtensions(editable)),
+      })
+    }
+  }, [editable, createExtensions])
 
   // Sync external content changes into the editor (e.g. file reload, mode toggle, save).
   // Internal edits (typing) are no-ops because the editor's doc already matches the prop.
