@@ -2,14 +2,18 @@ import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import type { SlashCommand } from '../../stores/chatStore'
+import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
 
 interface ChatInputProps {
   sessionId: string
   disabled: boolean
   onSend: (text: string) => void
   onCancel: () => void
+  /** Clicked when the user taps ✕ on the queued-message chip above the input. */
+  onCancelQueued: () => void
   sending: boolean
+  /** N=1 single-slot queued message buffer; rendered as a chip above the textarea. */
+  queuedMessage: string | null
   commands?: SlashCommand[]
 }
 
@@ -39,7 +43,18 @@ function deleteDraft(sessionId: string) {
   }
 }
 
-export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
+const QUEUE_PREVIEW_CHARS = 40
+
+export function ChatInput({
+  sessionId,
+  disabled,
+  onSend,
+  onCancel,
+  onCancelQueued,
+  sending,
+  queuedMessage,
+  commands = [],
+}: ChatInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState(() => getDraft(sessionId) || '')
   const [showCommands, setShowCommands] = useState(false)
@@ -69,6 +84,17 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
       deleteDraft(sessionId)
     }
   }, [sessionId, text])
+
+  // Hydrate queued message from sessionStorage on session switch / F5. The
+  // sessionStorage cache survives page refreshes within the same tab (per Q6);
+  // `hydrateQueuedMessage` is a no-op if the slot is already populated, so a
+  // fresh `enqueueMessage` always wins over stale cache.
+  useEffect(() => {
+    const cached = readQueuedFromStorageForSession(sessionId)
+    if (cached) {
+      useChatStore.getState().hydrateQueuedMessage(sessionId, cached)
+    }
+  }, [sessionId])
 
   useEffect(() => {
     const el = textareaRef.current
@@ -102,6 +128,13 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
   }, [activeIndex, showCommands])
 
   const canSend = !disabled && !sending && text.trim().length > 0
+  // N=1 约束：队列满时 Queue 按钮 disabled，强制用户先 ✕
+  const canQueue = !disabled && sending && !queuedMessage && text.trim().length > 0
+  const previewText = queuedMessage
+    ? queuedMessage.length > QUEUE_PREVIEW_CHARS
+      ? queuedMessage.slice(0, QUEUE_PREVIEW_CHARS) + '…'
+      : queuedMessage
+    : ''
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showCommands && filteredCommands.length > 0) {
@@ -128,7 +161,9 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
       }
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      if (canSend) {
+      // busy + 队列满：Enter 静默 noop（Queue 按钮也 disabled，UI 一致）
+      if (sending && queuedMessage) return
+      if (canSend || canQueue) {
         onSend(text)
         setText('')
         deleteDraft(sessionId)
@@ -145,6 +180,15 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
 
   const handleClickSend = () => {
     if (!canSend) return
+    onSend(text)
+    setText('')
+    deleteDraft(sessionId)
+    setShowCommands(false)
+    textareaRef.current?.focus()
+  }
+
+  const handleClickQueue = () => {
+    if (!canQueue) return
     onSend(text)
     setText('')
     deleteDraft(sessionId)
@@ -182,114 +226,203 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
   return (
     <div
       style={{
-        display: 'flex',
-        gap: 8,
-        padding: '8px 12px',
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
-        alignItems: 'flex-end',
-        position: 'relative',
+        padding: '8px 12px',
       }}
     >
-      {showCommands && (
-        <OverlayScroll
+      {queuedMessage && (
+        <div
+          className="chat-queue-chip"
           style={{
-            position: 'absolute',
-            bottom: '100%',
-            left: 12,
-            right: 12,
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 8,
-            boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
-            zIndex: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginBottom: 6,
+            padding: '4px 8px',
+            background: 'var(--accent-14)',
+            border: '1px solid var(--accent)',
+            borderLeft: '2px solid var(--accent)',
+            borderRadius: 4,
+            fontFamily: READER_FONT,
+            fontSize: 12,
+            color: 'var(--text-primary)',
           }}
-          contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
         >
-          {filteredCommands.map((cmd, index) => {
-            const isActive = index === activeIndex
-            return (
-              <button
-                key={cmd.name}
-                ref={(el) => { itemRefs.current[index] = el }}
-                onClick={() => selectCommand(cmd)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 8,
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '6px 12px',
-                  background: isActive ? 'var(--accent-14)' : 'none',
-                  border: 'none',
-                  color: isActive ? 'var(--accent)' : 'var(--text-primary)',
-                  fontFamily: READER_FONT,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) e.currentTarget.style.background = 'var(--bg-surface)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = isActive ? 'var(--accent-14)' : 'none'
-                }}
-              >
-                <span style={{ flexShrink: 0 }}>/{cmd.name}</span>
-                {cmd.description && (
-                  <span
-                    style={{
-                      color: isActive ? 'var(--accent)' : 'var(--text-faint)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {cmd.description}
-                  </span>
-                )}
-              </button>
-            )
-          })}
-        </OverlayScroll>
+          <span
+            style={{
+              color: 'var(--accent)',
+              fontWeight: 700,
+              fontSize: 10,
+              letterSpacing: '0.08em',
+              flexShrink: 0,
+            }}
+          >
+            {t('chat.input.queueNext')}
+          </span>
+          <span
+            title={queuedMessage}
+            style={{
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {previewText}
+          </span>
+          <button
+            onClick={onCancelQueued}
+            title={t('chat.input.queueWithdraw')}
+            aria-label={t('chat.input.queueWithdraw')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-faint)',
+              cursor: 'pointer',
+              padding: '0 4px',
+              fontSize: 14,
+              lineHeight: 1,
+              fontFamily: 'inherit',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger, #FF7B72)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)' }}
+          >
+            ✕
+          </button>
+        </div>
       )}
-      <textarea
-        ref={textareaRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder={t('chat.input.placeholder')}
-        disabled={disabled || sending}
-        rows={1}
+      <div
         style={{
-          ...inputStyle,
-          opacity: disabled || sending ? 0.6 : 1,
+          display: 'flex',
+          gap: 8,
+          alignItems: 'flex-end',
+          position: 'relative',
         }}
-      />
-      {sending ? (
-        <button
-          onClick={onCancel}
+      >
+        {showCommands && (
+          <OverlayScroll
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: 0,
+              right: 0,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 8,
+              boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
+              zIndex: 10,
+            }}
+            contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
+          >
+            {filteredCommands.map((cmd, index) => {
+              const isActive = index === activeIndex
+              return (
+                <button
+                  key={cmd.name}
+                  ref={(el) => { itemRefs.current[index] = el }}
+                  onClick={() => selectCommand(cmd)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    gap: 8,
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '6px 12px',
+                    background: isActive ? 'var(--accent-14)' : 'none',
+                    border: 'none',
+                    color: isActive ? 'var(--accent)' : 'var(--text-primary)',
+                    fontFamily: READER_FONT,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) e.currentTarget.style.background = 'var(--bg-surface)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = isActive ? 'var(--accent-14)' : 'none'
+                  }}
+                >
+                  <span style={{ flexShrink: 0 }}>/{cmd.name}</span>
+                  {cmd.description && (
+                    <span
+                      style={{
+                        color: isActive ? 'var(--accent)' : 'var(--text-faint)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {cmd.description}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </OverlayScroll>
+        )}
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={t('chat.input.placeholder')}
+          disabled={disabled}
+          rows={1}
           style={{
-            ...buttonBase,
-            background: 'var(--danger, #FF7B72)',
-            color: '#fff',
+            ...inputStyle,
+            opacity: disabled ? 0.6 : 1,
           }}
-        >
-          {t('chat.input.cancel')}
-        </button>
-      ) : (
-        <button
-          onClick={handleClickSend}
-          disabled={!canSend}
-          style={{
-            ...buttonBase,
-            background: canSend ? 'var(--accent)' : 'var(--bg-elevated)',
-            color: canSend ? '#fff' : 'var(--text-faint)',
-            cursor: canSend ? 'pointer' : 'not-allowed',
-          }}
-        >
-          {t('chat.input.send')}
-        </button>
-      )}
+        />
+        {sending ? (
+          <>
+            <button
+              onClick={onCancel}
+              style={{
+                ...buttonBase,
+                background: 'var(--danger, #FF7B72)',
+                color: '#fff',
+              }}
+            >
+              {t('chat.input.cancel')}
+            </button>
+            <button
+              onClick={handleClickQueue}
+              disabled={!canQueue}
+              title={
+                queuedMessage
+                  ? t('chat.input.queueFullTitle')
+                  : !text.trim()
+                    ? t('chat.input.queueEmptyTitle')
+                    : t('chat.input.queueTitle')
+              }
+              style={{
+                ...buttonBase,
+                background: canQueue ? 'var(--accent)' : 'var(--bg-elevated)',
+                color: canQueue ? '#fff' : 'var(--text-faint)',
+                cursor: canQueue ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {t('chat.input.queue')}
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={handleClickSend}
+            disabled={!canSend}
+            style={{
+              ...buttonBase,
+              background: canSend ? 'var(--accent)' : 'var(--bg-elevated)',
+              color: canSend ? '#fff' : 'var(--text-faint)',
+              cursor: canSend ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {t('chat.input.send')}
+          </button>
+        )}
+      </div>
     </div>
   )
 }

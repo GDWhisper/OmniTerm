@@ -139,9 +139,22 @@ export function ChatView() {
   }
 
   const handleSend = (text: string) => {
+    // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
+    // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
+    // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
+    // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
+    if (chatState.sending) {
+      useChatStore.getState().enqueueMessage(activeSessionId!, text)
+      return
+    }
     sendPrompt(text)
     // Re-stick so the user's own message is visible + next chunk scrolls in.
     setAutoStick(true)
+  }
+
+  const handleCancelQueued = () => {
+    if (!activeSessionId) return
+    useChatStore.getState().clearQueuedMessage(activeSessionId)
   }
 
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
@@ -340,8 +353,10 @@ export function ChatView() {
         sessionId={activeSessionId!}
         disabled={inputDisabled}
         sending={chatState.sending}
+        queuedMessage={chatState.queuedMessage}
         onSend={handleSend}
         onCancel={cancel}
+        onCancelQueued={handleCancelQueued}
         commands={chatState.commands}
       />
 

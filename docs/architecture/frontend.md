@@ -108,9 +108,11 @@ lifecycle without any explicit teardown logic.
 ### State / connection split
 
 `chatStore.ts` is **state-only**: a `Record<sessionId, ChatSessionState>`
-holding messages, `sending`, `error`, and `mode`. It has no WebSocket or
-HTTP dependencies — actions (`appendChunk`, `pushSystemEvent`, `beginPrompt`,
-`markDone`, `markError`) are called by `useAcpChat.ts`, which owns the
+holding messages, `sending`, `error`, `mode`, and the queued follow-up
+slot (`queuedMessage`). It has no WebSocket or HTTP dependencies —
+actions (`appendChunk`, `pushSystemEvent`, `beginPrompt`, `markDone`,
+`markError`, `enqueueMessage`, `clearQueuedMessage`,
+`addUndeliveredMessage`) are called by `useAcpChat.ts`, which owns the
 socket lifecycle and translates `ServerFrame` into store actions.
 
 This split serves three purposes:
@@ -119,6 +121,45 @@ This split serves three purposes:
    duplicating sockets.
 3. Phase 4b's `PermissionModal` can plug into the same store without
    rewriting connection code.
+
+### Queued follow-up (N=1 single slot)
+
+While the agent is busy (`sending: true`), the input box stays editable.
+The user can type a follow-up message and press Enter; instead of
+interrupting the current prompt, the message is held in
+`chatStore.states[sid].queuedMessage` (a single-slot buffer). When the
+in-flight prompt completes (`prompt_done` from the WS), `useAcpChat`
+drains the queue in the same microtask:
+
+```text
+prompt_done → markDone (sending: false) → syncToDb →
+  if (queuedMessage) {
+    clearQueuedMessage → addUserMessage → ws.send('prompt') → beginPrompt
+  }
+```
+
+User affordances (N=1 + auto-drain semantics):
+
+- **Chip above input** — `Next: <preview 40 chars> ✕`. Always visible
+  while the queue is non-empty. ✕ calls `clearQueuedMessage`.
+- **Dual buttons during busy** — `Cancel` (red, kills in-flight) +
+  `Queue` (accent, submits to queue). Queue is disabled when the slot is
+  full (N=1) or when the textarea is empty.
+- **Auto-drain on `prompt_done`** — no grace window, no edit-in-queue.
+  Once queued, the message is committed to the next slot.
+- **F5-friendly** — the queue is mirrored to `sessionStorage` under
+  `omniterm_chat_queue:{sid}` and rehydrated on `ChatInput` mount. Per
+  Q6, sessionStorage is per-tab; multi-tab same-session views each
+  maintain their own queue.
+- **Disconnect leaves a trail** — if the WebSocket closes while the queue
+  is non-empty, `useAcpChat` writes an `undelivered: true` user message
+  to the in-memory message list (not persisted to DB) and clears the
+  queue. The user sees a dashed-border "not delivered — connection lost"
+  card in the stream and can decide whether to retype.
+
+The drain location rationale is recorded in
+`docs/adr/0001-acp-queue-drain-location.md`. Domain glossary lives in
+`CONTEXT.md`.
 
 ### Session update parsing
 

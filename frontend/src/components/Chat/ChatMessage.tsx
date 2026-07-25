@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
@@ -300,6 +301,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
 }
 
 export function ChatMessageView({ message }: { message: ChatMessage }) {
+  const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
@@ -326,15 +328,31 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
             padding: '8px 12px',
             borderRadius: 8,
             maxWidth: '85%',
-            background: 'var(--accent-14)',
-            color: 'var(--text-primary)',
-            border: '1px solid var(--accent-14)',
+            background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
+            color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
+            border: message.undelivered
+              ? '1px dashed var(--danger, #FF7B72)'
+              : '1px solid var(--accent-14)',
             fontFamily: READER_FONT,
             fontSize: '1em',
             lineHeight: 1.5,
             wordBreak: 'break-word',
+            opacity: message.undelivered ? 0.85 : 1,
           }}
         >
+          {message.undelivered && (
+            <div
+              style={{
+                fontSize: '0.769em',
+                color: 'var(--danger, #FF7B72)',
+                letterSpacing: '0.05em',
+                marginBottom: 4,
+                fontWeight: 600,
+              }}
+            >
+              ⚠ {t('chat.input.message.undelivered')}
+            </div>
+          )}
           <pre
             style={{
               margin: 0,

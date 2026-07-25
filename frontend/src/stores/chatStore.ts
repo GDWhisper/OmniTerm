@@ -148,6 +148,14 @@ export interface ChatMessage {
   blocks: ContentBlock[]
   createdAt: number
   streaming?: boolean
+  /**
+   * True for queued follow-up messages that were lost on disconnect (see
+   * `addUndeliveredMessage`). Renders with a visual marker so the user knows
+   * the text is recorded but was never delivered to the agent. Never persisted
+   * to DB (filtered out in `useAcpChat.syncToDb`); lives only in the
+   * in-memory chatStore until the session unmounts.
+   */
+  undelivered?: boolean
 }
 
 interface ChatSessionState {
@@ -166,6 +174,15 @@ interface ChatSessionState {
   /** 当前待办列表看板数据（独立于 messages，固定在输入框上方展示）。 */
   todos: TodoEntry[]
   todosTitle: string | undefined
+  /**
+   * Queued follow-up message — N=1 single-slot buffer for the next user prompt
+   * to send after the current in-flight prompt finishes. Drained automatically
+   * by `useAcpChat` on `prompt_done`; never crosses the WS on its own. Cleared
+   * by `clearQueuedMessage` (chip ✕ click) or overwritten by the next
+   * `enqueueMessage`. Mirrored to `sessionStorage` so F5 in the same tab does
+   * not drop the user's next message.
+   */
+  queuedMessage: string | null
 }
 
 interface ChatActions {
@@ -178,9 +195,22 @@ interface ChatActions {
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
   addUserMessage: (sessionId: string, text: string) => void
+  /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
+   *  Renders as a normal user message with `undelivered: true` so the user can see what
+   *  they tried to send. Not persisted to DB; cleared on session remount. */
+  addUndeliveredMessage: (sessionId: string, text: string) => void
   markDone: (sessionId: string) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
+  /** Store the next user message in the N=1 queue slot. Trimmed; empty text is a no-op.
+   *  Mirrored to sessionStorage. */
+  enqueueMessage: (sessionId: string, text: string) => void
+  /** Clear the queue slot (called on chip ✕ click or after successful drain). Removes
+   *  the sessionStorage mirror as well. */
+  clearQueuedMessage: (sessionId: string) => void
+  /** Hydrate the queue slot from sessionStorage on ChatInput mount. No-op if the slot
+   *  is already populated (a fresh `enqueueMessage` should win over a stale cache). */
+  hydrateQueuedMessage: (sessionId: string, text: string) => void
   setMode: (sessionId: string, mode: string) => void
   setError: (sessionId: string, message: string | null) => void
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
@@ -212,6 +242,37 @@ const EMPTY: ChatSessionState = {
   terminalEvents: [],
   todos: [],
   todosTitle: undefined,
+  queuedMessage: null,
+}
+
+const QUEUE_STORAGE_PREFIX = 'omniterm_chat_queue:'
+const queueStorageKey = (sessionId: string) => `${QUEUE_STORAGE_PREFIX}${sessionId}`
+
+/** Best-effort sessionStorage read — swallows quota / private-mode errors. */
+function readQueuedFromStorage(sessionId: string): string | null {
+  try {
+    return sessionStorage.getItem(queueStorageKey(sessionId))
+  } catch {
+    return null
+  }
+}
+
+/** Best-effort sessionStorage write — swallows quota / private-mode errors. */
+function writeQueuedToStorage(sessionId: string, text: string): void {
+  try {
+    sessionStorage.setItem(queueStorageKey(sessionId), text)
+  } catch {
+    // Ignore storage errors (quota, private mode, etc.)
+  }
+}
+
+/** Best-effort sessionStorage clear. */
+function removeQueuedFromStorage(sessionId: string): void {
+  try {
+    sessionStorage.removeItem(queueStorageKey(sessionId))
+  } catch {
+    // Ignore storage errors
+  }
 }
 
 interface ChatStoreState {
@@ -545,6 +606,50 @@ export const useChatStore = create<ChatStore>((set) => ({
       })
     }),
 
+  addUndeliveredMessage: (sessionId, text) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      return patch(state, sessionId, {
+        messages: [
+          ...current.messages,
+          {
+            id: genId(),
+            role: 'user',
+            text,
+            blocks: [{ type: 'text' as const, text }],
+            createdAt: Date.now(),
+            undelivered: true,
+          },
+        ],
+      })
+    }),
+
+  enqueueMessage: (sessionId, text) =>
+    set((state) => {
+      const trimmed = text.trim()
+      if (!trimmed) return state
+      writeQueuedToStorage(sessionId, trimmed)
+      return patch(state, sessionId, { queuedMessage: trimmed })
+    }),
+
+  clearQueuedMessage: (sessionId) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      if (current.queuedMessage === null) return state
+      removeQueuedFromStorage(sessionId)
+      return patch(state, sessionId, { queuedMessage: null })
+    }),
+
+  hydrateQueuedMessage: (sessionId, text) =>
+    set((state) => {
+      const trimmed = text.trim()
+      if (!trimmed) return state
+      // 不覆盖已存在的值：活跃的 enqueueMessage 永远比 sessionStorage 缓存新
+      const current = get(state, sessionId)
+      if (current.queuedMessage !== null) return state
+      return patch(state, sessionId, { queuedMessage: trimmed })
+    }),
+
   applyReplayBatch: (sessionId, actions) =>
     set((state) => {
       if (actions.length === 0) return state
@@ -681,9 +786,20 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (!(sessionId in state.states)) return state
       const next = { ...state.states }
       delete next[sessionId]
+      // 同步清掉 sessionStorage 里残留的 queue 缓存（防止 F5 后 stale 数据复活）
+      removeQueuedFromStorage(sessionId)
       return { states: next }
     }),
 }))
 
 export const selectChatState = (sessionId: string | null) => (s: ChatStore) =>
   sessionId ? s.states[sessionId] ?? EMPTY : EMPTY
+
+/**
+ * Read the queued message from sessionStorage for the given session. Used by
+ * `ChatInput` on mount to restore the queue after a page refresh. Returns
+ * `null` if no cached value or if sessionStorage is unavailable.
+ */
+export function readQueuedFromStorageForSession(sessionId: string): string | null {
+  return readQueuedFromStorage(sessionId)
+}

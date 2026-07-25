@@ -474,6 +474,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const payload: { role: string; text: string; blocks?: string }[] = []
     for (const m of msgs) {
       if (m.role !== 'user' && m.role !== 'assistant') continue
+      // undelivered 留痕不入库：仅作为本会话内存中的「未送达」标记，刷新即丢
+      if (m.undelivered) continue
       payload.push({
         role: m.role,
         text: m.text,
@@ -610,6 +612,25 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           s.markDone(sid)
           // 实时 prompt 结束后立即将结构化 blocks 写回 DB（此前只落库了纯文本）。
           syncToDb()
+          // Drain queued follow-up: 用户在 agent 忙碌期按回车存到 chatStore.queuedMessage
+          // 的下一条消息在 agent 跑完这一轮后自动发出。N=1 语义：只有一条可排队，发完即清空。
+          // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
+          // （避免 TDZ + 闭包陈旧值）。见 docs/adr/0001-acp-queue-drain-location.md。
+          {
+            const fresh = useChatStore.getState()
+            const queued = fresh.states[sid]?.queuedMessage
+            if (queued && queued.trim()) {
+              const trimmed = queued.trim()
+              fresh.clearQueuedMessage(sid)
+              fresh.addUserMessage(sid, trimmed)
+              try {
+                ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+                fresh.beginPrompt(sid)
+              } catch {
+                fresh.markError(sid, 'Failed to send queued message — connection unavailable')
+              }
+            }
+          }
           break
         case 'prompt_error':
           s.markError(sid, frame.message ?? 'prompt failed')
@@ -714,6 +735,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {
             useChatStore.getState().markError(sid, 'Connection lost — message may not have been delivered')
+          }
+          // 5.3=C 路径：连接断时如果队列里有未发的消息，把它写入 chat history 作为
+          // 「undelivered」留痕（仅在内存，不入 DB），并清空队列槽位。连接恢复后
+          // 用户可基于这条留痕手动决定是否重打。
+          const queued = st?.queuedMessage
+          if (queued && queued.trim()) {
+            useChatStore.getState().addUndeliveredMessage(sid, queued.trim())
+            useChatStore.getState().clearQueuedMessage(sid)
           }
         }
       }
