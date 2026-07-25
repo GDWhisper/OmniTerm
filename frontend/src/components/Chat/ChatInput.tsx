@@ -17,7 +17,7 @@ const draftKey = (sessionId: string) => `omniterm_chat_draft:${sessionId}`
 
 function getDraft(sessionId: string): string {
   try {
-    return localStorage.getItem(draftKey(sessionId)) ?? ''
+    return sessionStorage.getItem(draftKey(sessionId)) ?? ''
   } catch {
     return ''
   }
@@ -25,7 +25,7 @@ function getDraft(sessionId: string): string {
 
 function saveDraft(sessionId: string, text: string) {
   try {
-    localStorage.setItem(draftKey(sessionId), text)
+    sessionStorage.setItem(draftKey(sessionId), text)
   } catch {
     // Ignore storage errors (quota, private mode, etc.)
   }
@@ -33,7 +33,7 @@ function saveDraft(sessionId: string, text: string) {
 
 function deleteDraft(sessionId: string) {
   try {
-    localStorage.removeItem(draftKey(sessionId))
+    sessionStorage.removeItem(draftKey(sessionId))
   } catch {
     // Ignore storage errors
   }
