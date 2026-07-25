@@ -150,7 +150,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || String(Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8)))),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
-  uiZoom: parseInt(localStorage.getItem('omniterm_ui_zoom') || String(DEFAULT_UI_ZOOM)),
+  // Read persisted zoom; fall back to default if missing OR corrupted (e.g. a
+  // previously-written 'NaN' is truthy and parses to NaN, so the `||` above
+  // would not catch it). Non-finite values self-heal instead of breaking layout.
+  uiZoom: (() => {
+    const raw = parseInt(localStorage.getItem('omniterm_ui_zoom') ?? String(DEFAULT_UI_ZOOM))
+    return Number.isFinite(raw) ? raw : DEFAULT_UI_ZOOM
+  })(),
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
@@ -206,6 +212,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setUiZoom: (z) => {
+    // Guard against non-finite input (e.g. undefined/NaN) so we never persist a
+    // 'NaN' string that would later poison the layout. Clamp only valid numbers.
+    if (!Number.isFinite(z)) return
     const clamped = Math.max(50, Math.min(200, z))
     localStorage.setItem('omniterm_ui_zoom', String(clamped))
     set({ uiZoom: clamped })
