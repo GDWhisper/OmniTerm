@@ -21,6 +21,7 @@ pub fn create_token(secret: &str) -> Result<String, jsonwebtoken::errors::Error>
     encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
 }
 
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let token_data = decode::<Claims>(
         token,
@@ -31,6 +32,7 @@ pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::e
 }
 
 /// Extractor that requires a valid auth token
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub struct RequireAuth;
 
 impl<S> FromRequestParts<S> for RequireAuth

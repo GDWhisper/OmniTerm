@@ -354,10 +354,10 @@ async fn release_session(
 
     match runtime_kind.as_deref() {
         Some("acp") => {
-            if let Some(client) = state.acp_supervisor.dispose(&id).await {
-                if let Some(c) = Arc::try_unwrap(client).ok() {
-                    c.disconnect().await;
-                }
+            if let Some(client) = state.acp_supervisor.dispose(&id).await
+                && let Ok(c) = Arc::try_unwrap(client)
+            {
+                c.disconnect().await;
             }
             (StatusCode::OK, Json(json!({ "ok": true })))
         }

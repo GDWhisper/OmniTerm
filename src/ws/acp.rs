@@ -89,10 +89,10 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
     };
 
     let content = chunk.get("content")?;
-    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text")) {
-        if let Some(t) = text_obj.get("text").and_then(|v| v.as_str()) {
-            return Some(t.to_string());
-        }
+    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text"))
+        && let Some(t) = text_obj.get("text").and_then(|v| v.as_str())
+    {
+        return Some(t.to_string());
     }
     if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
         return Some(t.to_string());
@@ -391,11 +391,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
 
                                         // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏
-                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await {
-                                            if let Some(c) = Arc::try_unwrap(old).ok() {
+                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await
+                                            && let Ok(c) = Arc::try_unwrap(old) {
                                                 c.disconnect().await;
                                             }
-                                        }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
 
                                         let perm_rx = new_client.permission_subscribe();
@@ -469,8 +468,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 }
                             }
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
-                                if let Some(ref c) = client {
-                                    if let Err(e) = c.set_config_option(&config_id, &value).await {
+                                if let Some(ref c) = client
+                                    && let Err(e) = c.set_config_option(&config_id, &value).await {
                                         let err_msg = format!("配置�? {} 设置失败: {}", config_id, e);
                                         let msg = serde_json::to_string(&AcpServerMessage::Error {
                                             code: Some("config_option_failed"),
@@ -479,7 +478,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         .unwrap_or_default();
                                         let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
-                                }
                             }
                             Err(e) => {
                                 let err_msg = format!("invalid message: {}", e);
@@ -509,21 +507,17 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 }
             }
             msg = proc_rx.recv() => {
-                match msg {
-                    Ok(evt) => {
-                        if evt.session_id == session_id {
-                            let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
-                                alive: evt.alive,
-                            })
-                            .unwrap_or_default();
-                            if notify_tx.send(Message::Text(frame.into())).await.is_err() {
-                                break;
-                            }
+                // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格）
+                if let Ok(evt) = msg
+                    && evt.session_id == session_id {
+                        let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
+                            alive: evt.alive,
+                        })
+                        .unwrap_or_default();
+                        if notify_tx.send(Message::Text(frame.into())).await.is_err() {
+                            break;
                         }
                     }
-                    // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格�?
-                    Err(_) => {}
-                }
             }
         }
     }

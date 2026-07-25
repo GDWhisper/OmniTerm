@@ -99,7 +99,7 @@ fn ensure_test_project(name: &str, workspace: &str) -> Option<String> {
     let sql = format!(
         "INSERT INTO projects (id, name, path, created_at) VALUES ('{new_id}', '{name}', '{workspace}', datetime('now'))"
     );
-    let out = Command::new("sqlite3").args(&[&db, &sql]).output().ok()?;
+    let out = Command::new("sqlite3").args([&db, &sql]).output().ok()?;
     if !out.status.success() {
         return None;
     }

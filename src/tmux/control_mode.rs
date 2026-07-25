@@ -69,6 +69,7 @@ impl ControlModeClient {
     }
 
     /// Return the underlying OS process id, if available.
+    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub async fn pid(&self) -> Option<u32> {
         let guard = self.child.lock().await;
         guard.as_ref()?.id()
@@ -97,7 +98,7 @@ impl ControlModeClient {
     /// Return `true` if the reader task is still running.
     pub async fn is_alive(&self) -> bool {
         let guard = self.reader_handle.lock().await;
-        guard.as_ref().map_or(false, |handle| !handle.is_finished())
+        guard.as_ref().is_some_and(|handle| !handle.is_finished())
     }
 
     /// Return `true` if the session has produced output within `timeout`.
@@ -167,20 +168,20 @@ impl ControlModeClient {
 
 impl Drop for ControlModeClient {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.shutdown_tx.try_lock() {
-            if let Some(tx) = guard.take() {
-                let _ = tx.send(());
-            }
+        if let Ok(mut guard) = self.shutdown_tx.try_lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(());
         }
 
         if let Ok(mut guard) = self.stdin.try_lock() {
             let _ = guard.take();
         }
 
-        if let Ok(mut guard) = self.child.try_lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.start_kill();
-            }
+        if let Ok(mut guard) = self.child.try_lock()
+            && let Some(mut child) = guard.take()
+        {
+            let _ = child.start_kill();
         }
     }
 }

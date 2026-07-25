@@ -88,11 +88,11 @@ impl AcpTerminalManager {
             let text = String::from_utf8_lossy(&buf).into_owned();
             let mut out = output_clone.lock().await;
             out.push_str(&text);
-            if let Some(limit) = limit {
-                if out.len() > limit as usize {
-                    let start = out.len() - limit as usize;
-                    *out = out[start..].to_string();
-                }
+            if let Some(limit) = limit
+                && out.len() > limit as usize
+            {
+                let start = out.len() - limit as usize;
+                *out = out[start..].to_string();
             }
         });
 

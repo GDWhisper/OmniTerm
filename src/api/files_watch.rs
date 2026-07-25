@@ -91,9 +91,11 @@ async fn watch_files(
         // `recv_timeout` returns `Disconnected` when the sender is dropped —
         // a pure sync mechanism that works reliably from any thread.
         loop {
-            match shutdown_rx.recv_timeout(Duration::from_millis(250)) {
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {} // Timeout or Ok — keep waiting
+            if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) =
+                shutdown_rx.recv_timeout(Duration::from_millis(250))
+            {
+                break;
+                // Timeout 或 Ok：继续等待
             }
         }
         // `watcher` drops here → `inotify_rm_watch` for every registered path.
@@ -145,27 +147,27 @@ fn notify_event_to_changes(event: &NotifyEvent, base_dir: &std::path::Path) -> V
     }
 
     // Handle renames specially
-    if let EventKind::Modify(notify::event::ModifyKind::Name(_)) = event.kind {
-        if event.paths.len() == 2 {
-            let from = event.paths[0]
-                .strip_prefix(base_dir)
-                .unwrap_or(&event.paths[0])
-                .to_string_lossy()
-                .to_string();
-            let to = event.paths[1]
-                .strip_prefix(base_dir)
-                .unwrap_or(&event.paths[1])
-                .to_string_lossy()
-                .to_string();
+    if let EventKind::Modify(notify::event::ModifyKind::Name(_)) = event.kind
+        && event.paths.len() == 2
+    {
+        let from = event.paths[0]
+            .strip_prefix(base_dir)
+            .unwrap_or(&event.paths[0])
+            .to_string_lossy()
+            .to_string();
+        let to = event.paths[1]
+            .strip_prefix(base_dir)
+            .unwrap_or(&event.paths[1])
+            .to_string_lossy()
+            .to_string();
 
-            if !should_ignore(&from) && !should_ignore(&to) {
-                changes.clear(); // remove the generic modify events
-                changes.push(format!(
-                    r#"{{"kind":"rename","path":"{}","newPath":"{}"}}"#,
-                    escape_json(&from),
-                    escape_json(&to)
-                ));
-            }
+        if !should_ignore(&from) && !should_ignore(&to) {
+            changes.clear(); // remove the generic modify events
+            changes.push(format!(
+                r#"{{"kind":"rename","path":"{}","newPath":"{}"}}"#,
+                escape_json(&from),
+                escape_json(&to)
+            ));
         }
     }
 

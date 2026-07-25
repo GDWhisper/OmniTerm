@@ -448,14 +448,12 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
 
     // 4. Connect to the running dev server's WS endpoint and disconnect.
     let port = std::env::var("OMNITERM_TEST_PORT").unwrap_or_else(|_| "9777".into());
-    let url = format!("ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24", port, session_id);
+    let _url = format!("ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24", port, session_id);
     // We need the websockets crate; if unavailable, skip the network half
     // and rely on the structural test below.
-    let connected = (|| -> bool {
-        std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
-            .map(|_| true)
-            .unwrap_or(false)
-    })();
+    let connected = std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
+        .map(|_| true)
+        .unwrap_or(false);
     if !connected {
         eprintln!("SKIP: dev server not reachable on :{}", port);
         cleanup(&name);

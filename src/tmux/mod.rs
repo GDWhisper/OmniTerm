@@ -249,6 +249,7 @@ pub async fn pane_cwd(session: &str) -> Result<String> {
 }
 
 /// Capture the last N lines of a tmux pane's content.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub async fn capture_pane(session: &str, lines: usize) -> Result<String> {
     let output = Command::new("tmux")
         .args(["capture-pane", "-t", session, "-p", "-S", &format!("-{}", lines)])
@@ -292,6 +293,7 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
 ///
 /// Gets pane PIDs via `tmux list-panes`, then walks the process tree from each
 /// pane PID checking against known agent CLIs.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub async fn detect_agent_in_session(session_name: &str) -> Option<AgentKind> {
     let output = Command::new("tmux")
         .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])

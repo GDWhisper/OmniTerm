@@ -28,7 +28,7 @@ use crate::models::agent::Agent;
 /// - `active_prompt`：有进行中的 prompt（由 WS handler 在 Prompt/PromptDone/Err 时标记）
 /// - `last_activity`：最近一次收到 agent 任意 `session/update` 通知的时间（任意 v1 agent 干活时都会持续发送）
 /// - 未决权限数见 [`PermissionManager::pending_count`]（任意 agent 的 `request_permission` 均走此处）
-/// 三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
+///   三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
 struct ActivityState {
     active_prompt: bool,
     last_activity: Instant,
@@ -233,11 +233,10 @@ impl AcpClient {
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
-                        ) {
-                            if let Ok(mut guard) = commands_notif.lock() {
+                        )
+                            && let Ok(mut guard) = commands_notif.lock() {
                                 *guard = Some(notification.clone());
                             }
-                        }
                         handler::handle_session_update(&tx, notification)
                     }
                 },
@@ -643,11 +642,10 @@ impl AcpClient {
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
-                        ) {
-                            if let Ok(mut guard) = commands_notif.lock() {
+                        )
+                            && let Ok(mut guard) = commands_notif.lock() {
                                 *guard = Some(notification.clone());
                             }
-                        }
                         handler::handle_session_update(&tx, notification)
                     }
                 },

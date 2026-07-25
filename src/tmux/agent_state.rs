@@ -117,6 +117,7 @@ pub struct AgentSnapshot {
 }
 
 /// The tmux session option name used to store agent state.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub const AGENT_OPTION: &str = "@omniterm_agent";
 
 /// Parse a `@omniterm_agent` value string into an `AgentSnapshot`.
@@ -159,6 +160,7 @@ pub fn parse_agent_value(value: &str) -> Option<AgentSnapshot> {
 /// Format an `AgentSnapshot` into the `@omniterm_agent` value string.
 ///
 /// All fields are sanitized via `clean_token()` to prevent shell injection.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn agent_value(snapshot: &AgentSnapshot) -> String {
     format!(
         "{}:{}:{}:{}:{}",
@@ -174,6 +176,7 @@ pub fn agent_value(snapshot: &AgentSnapshot) -> String {
 ///
 /// Whitespace and characters outside `[A-Za-z0-9_.-]` are replaced with `_`.
 /// This prevents shell injection and ensures the value is safe for `tmux set-option`.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn clean_token(s: &str) -> String {
     s.chars()
         .map(

@@ -92,12 +92,12 @@ pub async fn resolve_project_root(state: &AppState, project_id: &str) -> Option<
 }
 
 fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
-    let key = match sort.as_deref() {
+    let key = match sort {
         Some("mtime") => fs::SortKey::Mtime,
         Some("size") => fs::SortKey::Size,
         _ => fs::SortKey::Name,
     };
-    let desc = order.as_deref() == Some("desc");
+    let desc = order == Some("desc");
     (key, desc)
 }
 
@@ -213,9 +213,7 @@ async fn resolve_workspace_root(
     project_id: &str,
 ) -> Option<String> {
     use crate::workspaces;
-    let Some(project_root) = resolve_project_root(state, project_id).await else {
-        return None;
-    };
+    let project_root = resolve_project_root(state, project_id).await?;
     let project = crate::models::project::Project {
         id: project_id.to_string(),
         name: String::new(),
@@ -355,10 +353,10 @@ async fn list_files(
             }
         }
     } else {
-        return (
+        (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "session, workspace_id, or workspace parameter required" })),
-        );
+        )
     }
 }
 
@@ -399,9 +397,8 @@ async fn upload_file(
         // For session mode with absolute rel_path, use it as-is
         let target_path = if rel_path.is_empty() || rel_path == "." {
             file_name.clone()
-        } else if std::path::Path::new(rel_path).is_absolute() {
-            format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         } else {
+            // 绝对路径与相对路径的拼接形式一致，clippy 复核后合并分支
             format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         };
 
@@ -581,56 +578,6 @@ fn zip_directory(dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
         zw.finish()?;
     }
     Ok(buf)
-}
-
-#[cfg(test)]
-mod zip_tests {
-    use super::zip_directory;
-    use std::io::Read;
-    use std::path::Path;
-
-    #[test]
-    fn packs_directory_into_valid_zip() {
-        let dir = std::env::temp_dir().join("ot_ziptest_mod");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
-        std::fs::write(dir.join("sub").join("b.txt"), b"world").unwrap();
-
-        let bytes = zip_directory(&dir).expect("zip should succeed");
-        assert!(!bytes.is_empty());
-
-        // Verify it's a valid zip by reading entries back.
-        let mut cursor = std::io::Cursor::new(bytes);
-        let mut archive = zip::ZipArchive::new(&mut cursor).expect("valid zip archive");
-        let mut names = Vec::new();
-        for i in 0..archive.len() {
-            let mut f = archive.by_index(i).unwrap();
-            let name = f.name().to_string();
-            names.push(name.clone());
-            if name.ends_with("a.txt") {
-                let mut buf = String::new();
-                f.read_to_string(&mut buf).unwrap();
-                assert_eq!(buf, "hello");
-            }
-            if name.ends_with("b.txt") {
-                let mut buf = String::new();
-                f.read_to_string(&mut buf).unwrap();
-                assert_eq!(buf, "world");
-            }
-        }
-        assert!(names.iter().any(|n| n.ends_with("a.txt")), "a.txt present: {:?}", names);
-        assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "sub/b.txt present: {:?}", names);
-        assert!(
-            names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")),
-            "top folder preserved: {:?}",
-            names
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[allow(dead_code)]
-    fn _assert_path(_: &Path) {}
 }
 
 async fn read_file(State(state): State<AppState>, Query(q): Query<FileQuery>) -> impl IntoResponse {
@@ -868,4 +815,54 @@ async fn search_files(
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
     }
+}
+
+#[cfg(test)]
+mod zip_tests {
+    use super::zip_directory;
+    use std::io::Read;
+    use std::path::Path;
+
+    #[test]
+    fn packs_directory_into_valid_zip() {
+        let dir = std::env::temp_dir().join("ot_ziptest_mod");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("a.txt"), b"hello").unwrap();
+        std::fs::write(dir.join("sub").join("b.txt"), b"world").unwrap();
+
+        let bytes = zip_directory(&dir).expect("zip should succeed");
+        assert!(!bytes.is_empty());
+
+        // Verify it's a valid zip by reading entries back.
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut archive = zip::ZipArchive::new(&mut cursor).expect("valid zip archive");
+        let mut names = Vec::new();
+        for i in 0..archive.len() {
+            let mut f = archive.by_index(i).unwrap();
+            let name = f.name().to_string();
+            names.push(name.clone());
+            if name.ends_with("a.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "hello");
+            }
+            if name.ends_with("b.txt") {
+                let mut buf = String::new();
+                f.read_to_string(&mut buf).unwrap();
+                assert_eq!(buf, "world");
+            }
+        }
+        assert!(names.iter().any(|n| n.ends_with("a.txt")), "a.txt present: {:?}", names);
+        assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "sub/b.txt present: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")),
+            "top folder preserved: {:?}",
+            names
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[allow(dead_code)]
+    fn _assert_path(_: &Path) {}
 }

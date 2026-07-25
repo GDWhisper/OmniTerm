@@ -46,7 +46,7 @@ pub async fn run_reaper(supervisor: AcpSupervisor) {
                     let _ = client.cancel();
                 }
                 // Arc 引用归零后 drop → connection_task 结束 → 子进程被 kill
-                if let Some(c) = Arc::try_unwrap(client).ok() {
+                if let Ok(c) = Arc::try_unwrap(client) {
                     c.disconnect().await;
                 }
             }

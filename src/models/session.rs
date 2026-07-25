@@ -15,15 +15,11 @@ fn is_false(v: &bool) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[sqlx(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RuntimeKind {
     Tmux,
+    #[default]
     Acp,
-}
-
-impl Default for RuntimeKind {
-    fn default() -> Self {
-        RuntimeKind::Acp
-    }
 }
 
 /// Request DTO for adopting an external tmux session into a project.

@@ -6,6 +6,7 @@ mod platform {
     use super::*;
     use std::fs;
 
+    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let cmdline_path = format!("/proc/{}/cmdline", pid);
         let content = fs::read_to_string(cmdline_path).ok()?;
@@ -15,6 +16,7 @@ mod platform {
         Some(content.replace('\0', " "))
     }
 
+    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
@@ -42,6 +44,7 @@ mod platform {
     use super::*;
     use sysinfo::{Pid, System};
 
+    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
@@ -51,6 +54,7 @@ mod platform {
         if cmdline.is_empty() { None } else { Some(cmdline.join(" ")) }
     }
 
+    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
@@ -87,6 +91,7 @@ mod platform {
 /// Read a process's command line and match against known agent CLIs.
 ///
 /// Returns `None` if the process doesn't exist, can't be read, or doesn't match.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
     platform::read_cmdline_impl(pid)
         .and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
@@ -95,6 +100,7 @@ pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
 /// Walk the process tree from `pid` looking for agent processes.
 ///
 /// Checks the process itself and its descendants up to a platform-appropriate depth.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn walk_process_tree(pid: u32) -> Option<AgentKind> {
     if let Some(kind) = read_process_cmdline(pid) {
         return Some(kind);

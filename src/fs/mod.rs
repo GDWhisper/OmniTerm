@@ -136,6 +136,7 @@ fn to_timestamp(time: &SystemTime) -> u64 {
 }
 
 /// Normalize path separators to forward slashes.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }

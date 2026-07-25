@@ -272,7 +272,9 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
 
     // Map: canonical key -> (group_id, reason, [(project, session_count)])
     use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, (String, String, Vec<(Project, i64)>)> = BTreeMap::new();
+    // (group_id, reason, members[(project, session_count)]) — 提取别名避免 clippy type_complexity
+    type ProjectGroup = (String, String, Vec<(Project, i64)>);
+    let mut groups: BTreeMap<String, ProjectGroup> = BTreeMap::new();
 
     for project in &projects {
         let session_count: i64 =

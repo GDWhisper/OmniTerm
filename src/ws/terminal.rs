@@ -29,6 +29,7 @@ enum ClientControl {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 enum ServerControl<'a> {
     #[serde(rename = "attached")]
     Attached { session: &'a str },
@@ -402,19 +403,17 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
-                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
-                                    if let Ok(guard) = resize_pty.lock() {
-                                        if let Some(master) = guard.as_ref() {
-                                            let new_size = PtySize {
-                                                rows,
-                                                cols,
-                                                pixel_width: 0,
-                                                pixel_height: 0,
-                                            };
-                                            if let Err(e) = master.resize(new_size) {
-                                                warn!("PTY resize failed: {}", e);
-                                            }
-                                        }
+                                if cols > 0
+                                    && cols <= 1000
+                                    && rows > 0
+                                    && rows <= 1000
+                                    && let Ok(guard) = resize_pty.lock()
+                                    && let Some(master) = guard.as_ref()
+                                {
+                                    let new_size =
+                                        PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+                                    if let Err(e) = master.resize(new_size) {
+                                        warn!("PTY resize failed: {}", e);
                                     }
                                 }
                             }
@@ -683,19 +682,17 @@ async fn handle_external_terminal(
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
-                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
-                                    if let Ok(guard) = resize_pty.lock() {
-                                        if let Some(master) = guard.as_ref() {
-                                            let new_size = PtySize {
-                                                rows,
-                                                cols,
-                                                pixel_width: 0,
-                                                pixel_height: 0,
-                                            };
-                                            if let Err(e) = master.resize(new_size) {
-                                                warn!("PTY resize failed: {}", e);
-                                            }
-                                        }
+                                if cols > 0
+                                    && cols <= 1000
+                                    && rows > 0
+                                    && rows <= 1000
+                                    && let Ok(guard) = resize_pty.lock()
+                                    && let Some(master) = guard.as_ref()
+                                {
+                                    let new_size =
+                                        PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+                                    if let Err(e) = master.resize(new_size) {
+                                        warn!("PTY resize failed: {}", e);
                                     }
                                 }
                             }
