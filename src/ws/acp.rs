@@ -126,7 +126,10 @@ async fn spawn_notify_task(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("ACP WS subscriber lagged by {} messages", n);
+                    tracing::warn!(
+                        "ACP WS subscriber lagged by {} messages; dropped stale updates",
+                        n
+                    );
                 }
             }
         }
@@ -151,7 +154,12 @@ async fn spawn_crash_task(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP crash-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
             }
         }
     });
@@ -188,7 +196,12 @@ async fn spawn_terminal_task(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP terminal-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
             }
         }
     });
@@ -212,7 +225,12 @@ async fn spawn_permission_task(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP permission-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
             }
         }
     });
@@ -493,7 +511,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
+                    // 非文本、非 Close 的帧（如二进制帧）：当前协议不支持，记录以便发现
+                    // 客户端/代理私自扩展或版本漂移，但不阻断连接。
+                    other => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            ?other,
+                            "received unsupported websocket frame (non-text/non-close); ignoring"
+                        );
+                    }
                 }
             }
             msg = notify_rx.recv() => {
@@ -507,9 +533,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 }
             }
             msg = proc_rx.recv() => {
-                // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格）
-                if let Ok(evt) = msg
-                    && evt.session_id == session_id {
+                match msg {
+                    Ok(evt) if evt.session_id == session_id => {
                         let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
                             alive: evt.alive,
                         })
@@ -518,6 +543,20 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             break;
                         }
                     }
+                    // Lagged / Closed：订阅落后于发布端或通道已关闭，记录（但不阻断连接）。
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            skipped = n,
+                            "process-alive channel lagged; process events may be stale"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::debug!(session_id = %session_id, "process-alive channel closed");
+                    }
+                    // 其他 Ok 事件（非本会话）直接忽略。
+                    Ok(_) => {}
+                }
             }
         }
     }

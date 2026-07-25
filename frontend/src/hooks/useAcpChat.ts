@@ -707,6 +707,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             useAppStore.getState().setAcpProcessAlive(sid, frame.alive)
           }
           break
+        default:
+          // 未识别的帧类型：不静默吞掉，记录以便发现协议/版本漂移或 agent 私有扩展。
+          console.warn('[ACP RX] unknown frame type:', (frame as { type?: unknown }).type, ev.data)
+          break
       }
     }
 
