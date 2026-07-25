@@ -27,6 +27,11 @@ jobs:
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install -y tmux
 
+      # src/embedded.rs 的 #[derive(RustEmbed)] 要求 frontend/dist/ 在编译期存在；
+      # rust job 不构建前端，故创建空目录占位
+      - name: Create empty frontend/dist for RustEmbed
+        run: mkdir -p frontend/dist
+
       - run: cargo check --workspace
       - run: cargo fmt --check --all
       - run: cargo clippy --quiet --workspace --all-targets -- -D warnings

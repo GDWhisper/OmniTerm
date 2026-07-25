@@ -8,6 +8,7 @@
 [licenses]
 # 允许的宽松/常见许可证（含项目自身 FSL-1.1-MIT 与递归依赖的常见许可证）
 allow = [
+    "FSL-1.1-MIT",
     "MIT",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
