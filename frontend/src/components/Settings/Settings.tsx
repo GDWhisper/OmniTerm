@@ -238,6 +238,7 @@ function FontSizeSection() {
 function UiZoomSection() {
   const { t } = useTranslation()
   const { uiZoom, setUiZoom } = useAppStore()
+  const { DEFAULT_UI_ZOOM } = useAppStore
   return (
     <section className="space-y-2">
       <SectionTitle>{t('settings.uiZoom')}</SectionTitle>
@@ -295,9 +296,9 @@ function UiZoomSection() {
         className="w-full"
         style={{ accentColor: 'var(--accent)', height: 4 }}
       />
-      {uiZoom !== 100 && (
+      {uiZoom !== DEFAULT_UI_ZOOM && (
         <button
-          onClick={() => setUiZoom(100)}
+          onClick={() => setUiZoom(DEFAULT_UI_ZOOM)}
           style={{ ...btnBase, fontSize: 11, padding: '3px 10px', color: 'var(--text-muted)' }}
           onMouseEnter={btnHover}
           onMouseLeave={(e) => btnLeave(e, false)}
