@@ -803,3 +803,40 @@ export const selectChatState = (sessionId: string | null) => (s: ChatStore) =>
 export function readQueuedFromStorageForSession(sessionId: string): string | null {
   return readQueuedFromStorage(sessionId)
 }
+
+/** Shape of each message entry in the `/sessions/{id}/messages/sync` POST body. */
+export interface SyncMessagePayload {
+  role: string
+  text: string
+  blocks?: string
+}
+
+/**
+ * Convert a chat message list to the sync payload the backend
+ * `/sessions/{id}/messages/sync` endpoint expects. Pure function so it can be
+ * unit-tested without mocking `fetch` or rendering the WS hook.
+ *
+ * Rules:
+ * - Only `user` and `assistant` roles sync (system events are UI-only).
+ * - `undelivered: true` messages are skipped — they are in-memory only,
+ *   representing messages the user tried to send but the WS lost before
+ *   `prompt_done`. Persisting them would pollute DB history with text the
+ *   agent never received.
+ * - `blocks` is stringified when non-empty; omitted when empty so the
+ *   backend's `(session, role, text)` dedup has stable rows.
+ */
+export function messagesToSyncPayload(
+  messages: readonly ChatMessage[],
+): SyncMessagePayload[] {
+  const payload: SyncMessagePayload[] = []
+  for (const m of messages) {
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    if (m.undelivered) continue
+    const entry: SyncMessagePayload = { role: m.role, text: m.text }
+    if (m.blocks.length) {
+      entry.blocks = JSON.stringify(m.blocks)
+    }
+    payload.push(entry)
+  }
+  return payload
+}

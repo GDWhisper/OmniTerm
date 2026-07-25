@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 
@@ -467,21 +467,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 把当前 store 的完整消息（含结构化 blocks）写回 DB，刷新后可还原。
   // 不再合并相邻 assistant——每条消息独立对应一行，与实时 insert_message 粒度一致，
   // 确保 sync_messages 的 (session, role, text) 去重能精确命中并 UPDATE blocks。
+  // 过滤规则（undelivered 跳过、只 user/assistant 入库）抽到 chatStore.messagesToSyncPayload
+  // 纯函数里，便于单测。
   const syncToDb = useCallback(() => {
     const sid = sessionIdRef.current
     if (!sid) return
     const msgs = useChatStore.getState().states[sid]?.messages ?? []
-    const payload: { role: string; text: string; blocks?: string }[] = []
-    for (const m of msgs) {
-      if (m.role !== 'user' && m.role !== 'assistant') continue
-      // undelivered 留痕不入库：仅作为本会话内存中的「未送达」标记，刷新即丢
-      if (m.undelivered) continue
-      payload.push({
-        role: m.role,
-        text: m.text,
-        blocks: m.blocks.length ? JSON.stringify(m.blocks) : undefined,
-      })
-    }
+    const payload = messagesToSyncPayload(msgs)
     if (payload.length === 0) return
     if (import.meta.env.DEV) {
       console.debug('[ACP sync]', payload.length, 'msgs,', payload.reduce((n, p) => n + p.text.length, 0), 'chars')
