@@ -93,3 +93,8 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `dev.sh` | 启动/停止开发环境（`./dev.sh start\|stop\|status\|logs`） | 端口配置变更、启动逻辑调整 |
 | `scripts/bump-version.sh` | 准备发布时同步版本号：`./scripts/bump-version.sh 0.2.0` | 版本号文件路径变更 |
 | `scripts/sync-main.sh` | 同步 dev → main（黑名单排除开发文档 + 修复分支配置） | 黑名单调整、分支配置修复逻辑变更 |
+| `docs/dev/plans/2026-07-24-quality-gates.md` | 修改质量门禁（CI、pre-commit、clippy、rustfmt、cargo-deny、tsc strict、check-doc-index）任一配置前 | 新增门禁检查、调整分阶段策略、跟进 backlog（§2.3 P2） |
+| `.github/workflows/ci.yml` | 修改 CI 门禁（触发分支、检查项、audit job）前 | 调整 CI 检查项、分阶段启用 clippy/fmt/deny、拆分 job |
+| `scripts/hooks/pre-commit` | 修改提交前检查前 | 调整 pre-commit 纳入的检查（lint/fmt/clippy/test） |
+| `deny.toml` / `rustfmt.toml` | 修改依赖审计或格式化基线前 | 调整许可证白名单、格式化选项 |
+| `docs/dev/plans/backlog/qa-quality-gates-followups.md` | 推进质量门禁 P2 项（warn→deny、CI 耗时、`dev.sh check`）时 | P2 项状态变更、dead-code allow 清理 |

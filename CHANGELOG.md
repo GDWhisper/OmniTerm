@@ -51,6 +51,23 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-07-24) `[qa]` 新增 push CI 工作流 `.github/workflows/ci.yml`：push 到 `dev/main/preview/debug` 触发，rust job（`cargo check`/`fmt --check`/`clippy -- -D warnings`/`test`）+ frontend job（`pnpm lint`/`test`/`build`）+ audit job（`cargo-deny`/`pnpm audit`/`check-doc-index`，continue-on-error 不阻塞）；详见 `docs/dev/plans/2026-07-24-quality-gates.md`
+- (2026-07-24) `[qa]` 修复并升级 pre-commit hook：`dev.sh start` 自动设置 `core.hooksPath=scripts/hooks`（原指向不存在的 `.githooks` 致 hook 失效）；hook 纳入 `cargo fmt --check`、`cargo clippy -- -D warnings`、前端 `pnpm test --run`
+- (2026-07-24) `[qa]` 新增 `rustfmt.toml`（基线）、`deny.toml`（许可证 + 安全公告白名单含 FSL-1.1-MIT）、`Cargo.toml [lints.clippy]`（correctness/suspicious/style/complexity/perf=warn）
+
+### Changed
+
+- (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
+
+### Fixed
+
+- (2026-07-24) `[backend]` 修复 `fs::sanitize_path` 读取路径测试预期与实现契约不符（测试未创建被校验路径导致预先失败，阻塞 CI `cargo test`）（`src/fs/mod.rs`）
+- (2026-07-24) `[frontend]` 消除 `Markdown.tsx` 触发 `no-explicit-any` 的 ESLint error（pnpm lint 此前预先失败）；记录 react-markdown 类型双实例根因为 TECH-DEBT（`frontend/src/components/Chat/Markdown.tsx`）
+
 ## [0.1.9] - 2026-07-22
 
 ### Added
