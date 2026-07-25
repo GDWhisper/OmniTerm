@@ -402,6 +402,12 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
         return;
     }
     let pool = pool.unwrap();
+    // Ensure schema exists (CI connects to a fresh db; locally this is a no-op)
+    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+        eprintln!("SKIP: cannot run migrations: {e}");
+        cleanup(&name);
+        return;
+    }
     // Find or create an omniterm-dev project (matches the dev server's DB)
     let project_id: String = sqlx::query_scalar::<_, String>(
         "SELECT id FROM projects WHERE path LIKE '%OmniTerm%' LIMIT 1",
