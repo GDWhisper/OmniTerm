@@ -13,13 +13,35 @@ interface ChatInputProps {
   commands?: SlashCommand[]
 }
 
-/** In-memory per-session draft cache. Survives session switches within the
- *  same browser tab; intentionally not persisted to localStorage. */
-const chatDrafts = new Map<string, string>()
+const draftKey = (sessionId: string) => `omniterm_chat_draft:${sessionId}`
+
+function getDraft(sessionId: string): string {
+  try {
+    return localStorage.getItem(draftKey(sessionId)) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function saveDraft(sessionId: string, text: string) {
+  try {
+    localStorage.setItem(draftKey(sessionId), text)
+  } catch {
+    // Ignore storage errors (quota, private mode, etc.)
+  }
+}
+
+function deleteDraft(sessionId: string) {
+  try {
+    localStorage.removeItem(draftKey(sessionId))
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
   const { t } = useTranslation()
-  const [text, setText] = useState(() => chatDrafts.get(sessionId) ?? '')
+  const [text, setText] = useState(() => getDraft(sessionId) || '')
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -31,21 +53,14 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
     const prevId = prevSessionIdRef.current
     // Save the draft for the outgoing session before applying the new one.
     if (text.trim() !== '') {
-      chatDrafts.set(prevId, text)
+      saveDraft(prevId, text)
     }
     prevSessionIdRef.current = sessionId
-    setText(chatDrafts.get(sessionId) ?? '')
+    setText(getDraft(sessionId))
   }
 
   useEffect(() => {
     textareaRef.current?.focus()
-    return () => {
-      // On unmount, save the current session draft.
-      const current = textareaRef.current
-      if (current && current.value.trim() !== '') {
-        chatDrafts.set(sessionId, current.value)
-      }
-    }
   }, [sessionId])
 
   useEffect(() => {
@@ -109,7 +124,7 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
       if (canSend) {
         onSend(text)
         setText('')
-        chatDrafts.delete(sessionId)
+        deleteDraft(sessionId)
         setShowCommands(false)
       }
     }
@@ -125,7 +140,7 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
     if (!canSend) return
     onSend(text)
     setText('')
-    chatDrafts.delete(sessionId)
+    deleteDraft(sessionId)
     setShowCommands(false)
     textareaRef.current?.focus()
   }
