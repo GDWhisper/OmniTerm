@@ -393,7 +393,7 @@ function ThinkingIndicator() {
         alignItems: 'center',
         gap: 6,
         padding: '2px 12px 6px',
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: READER_FONT,
         fontSize: '0.923em',
         lineHeight: '20px',
         color: 'var(--text-faint)',

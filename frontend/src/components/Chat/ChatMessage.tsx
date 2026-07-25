@@ -93,7 +93,7 @@ function DiffView({ text }: { text: string }) {
         fontSize: '0.846em',
         overflow: 'auto',
         maxHeight: 300,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontFamily: READER_FONT,
         lineHeight: 1.5,
       }}
     >
@@ -177,7 +177,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            fontFamily: READER_FONT,
             fontSize: '0.846em',
             display: 'flex',
             alignItems: 'center',
@@ -213,7 +213,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
                 maxHeight: 200,
                 whiteSpace: 'pre-wrap',
                 color: 'var(--text-muted)',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                fontFamily: READER_FONT,
               }}
             >
               {block.content}

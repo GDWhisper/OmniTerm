@@ -163,7 +163,7 @@ export function Layout() {
       <div
         ref={layoutRef}
         className="flex"
-        style={{ zoom: uiZoom / 100, height: `calc(100dvh / ${uiZoom / 100})`, background: 'var(--bg-base)', color: 'var(--text-primary)' } as React.CSSProperties}
+        style={{ zoom: uiZoom / 100 * 1.1, height: `calc(100dvh / ${uiZoom / 100 * 1.1})`, background: 'var(--bg-base)', color: 'var(--text-primary)' } as React.CSSProperties}
       >
         {/* Panels wrapper */}
         <div
@@ -270,7 +270,7 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' } as React.CSSProperties}
+        style={{ zoom: uiZoom / 100 * 1.1, height: `${vvHeight / (uiZoom / 100 * 1.1)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' } as React.CSSProperties}
       >
         <style>{`
           @keyframes mobileSlideInLeft {

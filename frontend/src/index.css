@@ -81,6 +81,12 @@
    Components use var(--token) instead of hardcoded hex.
    ──────────────────────────────────────────────────────────────────── */
 :root {
+  /* ── Font stacks (single source of truth, mirrors READER_FONT in utils/fonts.ts) ──
+     Defined here so both CSS and JS (var(--reader-font) / var(--mono)) resolve to the
+     same stack. Keep in sync with frontend/src/utils/fonts.ts. */
+  --reader-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
      All three are warm parchment tones — NO near-white (#FFF, #FDF, etc.).
@@ -1561,7 +1567,7 @@ body.parchment-texture {
   align-items: center;
   gap: 8px;
   padding: 2px 12px 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--reader-font, monospace);
   font-size: 0.923em;
   line-height: 20px;
   color: var(--text-faint);
@@ -1730,7 +1736,7 @@ body.parchment-texture {
   align-items: baseline;
   gap: 5px;
   padding: 2px 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--reader-font, monospace);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-secondary);
@@ -1775,7 +1781,7 @@ body.parchment-texture {
 
 .todo-column-empty {
   padding: 4px 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--reader-font, monospace);
   font-size: 10px;
   color: var(--text-dim);
   font-style: italic;

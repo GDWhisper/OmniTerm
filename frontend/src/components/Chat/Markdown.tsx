@@ -33,7 +33,7 @@ export function Markdown({ text }: { text: string }) {
                   padding: '1px 5px',
                   borderRadius: 3,
                   fontSize: '0.923em',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontFamily: READER_FONT,
                 }}
                 {...props}
               >
