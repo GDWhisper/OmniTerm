@@ -76,12 +76,7 @@ fn cmd_output(program: &str, args: &[&str]) -> Option<String> {
 fn db_path() -> String {
     if let Ok(url) = std::env::var("DATABASE_URL") {
         // strip "sqlite:" prefix and "?mode=rwc" suffix
-        let p = url
-            .strip_prefix("sqlite:")
-            .unwrap_or(&url)
-            .split('?')
-            .next()
-            .unwrap_or(&url);
+        let p = url.strip_prefix("sqlite:").unwrap_or(&url).split('?').next().unwrap_or(&url);
         return p.to_string();
     }
     "omniterm.db".into()
@@ -93,10 +88,8 @@ fn ensure_test_project(name: &str, workspace: &str) -> Option<String> {
     let db = db_path();
 
     // 查已存在
-    let existing = cmd_output(
-        "sqlite3",
-        &[&db, &format!("SELECT id FROM projects WHERE name='{name}'")],
-    )?;
+    let existing =
+        cmd_output("sqlite3", &[&db, &format!("SELECT id FROM projects WHERE name='{name}'")])?;
     if !existing.is_empty() {
         return Some(existing);
     }
@@ -115,10 +108,7 @@ fn ensure_test_project(name: &str, workspace: &str) -> Option<String> {
 
 fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("test-{nanos:x}")
 }
 
@@ -128,29 +118,15 @@ fn first_acp_agent_id() -> Option<String> {
     let db = db_path();
     let stdout = cmd_output(
         "sqlite3",
-        &[
-            &db,
-            "SELECT id FROM agents WHERE args LIKE '%acp%' OR args LIKE '%--acp%' LIMIT 1",
-        ],
+        &[&db, "SELECT id FROM agents WHERE args LIKE '%acp%' OR args LIKE '%--acp%' LIMIT 1"],
     )?;
-    if stdout.is_empty() {
-        None
-    } else {
-        Some(stdout)
-    }
+    if stdout.is_empty() { None } else { Some(stdout) }
 }
 
 /// 调后端 API，返回 (http_code, body)。auth 用现成 session。
 fn http_get(path: &str) -> Option<(u16, String)> {
     let output = Command::new("curl")
-        .args([
-            "-s",
-            "-w",
-            "\n__HTTP_STATUS__:%{http_code}",
-            "-o",
-            "-",
-            &api_url(path),
-        ])
+        .args(["-s", "-w", "\n__HTTP_STATUS__:%{http_code}", "-o", "-", &api_url(path)])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -190,9 +166,7 @@ fn http_post(path: &str, body: &str) -> Option<(u16, String)> {
 }
 
 fn http_delete(path: &str) {
-    let _ = Command::new("curl")
-        .args(["-s", "-X", "DELETE", &api_url(path)])
-        .output();
+    let _ = Command::new("curl").args(["-s", "-X", "DELETE", &api_url(path)]).output();
 }
 
 fn auth_check() -> bool {
@@ -262,10 +236,7 @@ async fn acp_session_file_endpoint_returns_workspace_path() {
     let body = format!(
         r#"{{"name":"matrix_test","workspace_path":"{workspace}","runtime_kind":"acp","agent_id":"{agent_id}"}}"#
     );
-    let (code, body) = match http_post(
-        &format!("/projects/{project_id}/sessions"),
-        &body,
-    ) {
+    let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
         Some(r) => r,
         None => {
             eprintln!("SKIP: POST /sessions failed (server down?)");
@@ -280,10 +251,9 @@ async fn acp_session_file_endpoint_returns_workspace_path() {
     let session_id = v["id"].as_str().expect("session id").to_string();
 
     // 核心断言：调文件列表，必须 200 + cwd = workspace
-    let (code, body) = http_get(&format!(
-        "/files?path=.&session={session_id}&workspace={project_id}&sort=name"
-    ))
-    .expect("curl /files");
+    let (code, body) =
+        http_get(&format!("/files?path=.&session={session_id}&workspace={project_id}&sort=name"))
+            .expect("curl /files");
     assert_eq!(
         code, 200,
         "BUG REGRESSION: /files for ACP session returned {code} (expected 200).\n\
@@ -334,10 +304,7 @@ async fn acp_session_file_endpoint_nested_path() {
     let body = format!(
         r#"{{"name":"matrix_nested","workspace_path":"{workspace}","runtime_kind":"acp","agent_id":"{agent_id}"}}"#
     );
-    let (code, body) = match http_post(
-        &format!("/projects/{project_id}/sessions"),
-        &body,
-    ) {
+    let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
         Some(r) => r,
         None => return,
     };
@@ -348,10 +315,9 @@ async fn acp_session_file_endpoint_nested_path() {
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let session_id = v["id"].as_str().unwrap().to_string();
 
-    let (code, body) = http_get(&format!(
-        "/files?path=subdir&session={session_id}&workspace={project_id}"
-    ))
-    .expect("curl /files");
+    let (code, body) =
+        http_get(&format!("/files?path=subdir&session={session_id}&workspace={project_id}"))
+            .expect("curl /files");
     assert_eq!(code, 200, "nested /files returned {code}: {body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(
@@ -394,11 +360,8 @@ async fn invalid_runtime_kind_is_rejected_not_silently_accepted() {
     let body = format!(
         r#"{{"name":"matrix_invalid","workspace_path":"{workspace}","runtime_kind":"docker","agent_id":"{agent_id}"}}"#
     );
-    let (code, _) = http_post(
-        &format!("/projects/{project_id}/sessions"),
-        &body,
-    )
-    .expect("curl POST");
+    let (code, _) =
+        http_post(&format!("/projects/{project_id}/sessions"), &body).expect("curl POST");
 
     // 后端应该拒绝（400）而不是静默接受为 default（201/200）
     assert!(

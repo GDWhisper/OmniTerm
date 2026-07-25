@@ -14,8 +14,8 @@
 //! binary (see docs/dev/plans/2026-07-15-acp-integration-execution.md §6.5
 //! P3-19 / §6.9 Phase 4 P4-03).
 
-use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
+use sqlx::sqlite::SqlitePoolOptions;
 
 async fn fresh_pool() -> sqlx::SqlitePool {
     let pool = SqlitePoolOptions::new()
@@ -23,10 +23,7 @@ async fn fresh_pool() -> sqlx::SqlitePool {
         .connect("sqlite::memory:")
         .await
         .expect("connect in-memory sqlite");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("run migrations");
+    sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
     pool
 }
 
@@ -72,10 +69,12 @@ async fn runtime_kind_acp_row_survives_round_trip() {
     )
     .execute(&pool).await.unwrap();
 
-    let row = sqlx::query("SELECT runtime_kind, acp_session_id, tmux_session_name FROM sessions WHERE id = 's2'")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let row = sqlx::query(
+        "SELECT runtime_kind, acp_session_id, tmux_session_name FROM sessions WHERE id = 's2'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
 
     let kind: String = row.get(0);
     let acp_id: Option<String> = row.get(1);

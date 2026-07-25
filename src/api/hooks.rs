@@ -1,15 +1,15 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
 use tracing::error;
 
-use crate::tmux;
 use crate::AppState;
+use crate::tmux;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -18,10 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{id}/hook-disable", post(hook_disable))
 }
 
-async fn hook_status(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     let session: Option<(String, bool)> =
         sqlx::query_as("SELECT tmux_session_name, hook_enabled FROM sessions WHERE id = ?")
             .bind(&id)
@@ -94,9 +91,7 @@ async fn hook_enable(
             // in which case hook-status will fall back to heuristic scanning.)
             (StatusCode::OK, Json(json!({ "ok": true, "hook_enabled": true })))
         }
-        Ok(_) => {
-            (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })))
-        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" }))),
         Err(e) => {
             error!("failed to enable hook: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db error" })))
@@ -108,18 +103,17 @@ async fn hook_disable(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    let result = sqlx::query("UPDATE sessions SET hook_enabled = 0, hook_status = NULL WHERE id = ?")
-        .bind(&id)
-        .execute(&state.db)
-        .await;
+    let result =
+        sqlx::query("UPDATE sessions SET hook_enabled = 0, hook_status = NULL WHERE id = ?")
+            .bind(&id)
+            .execute(&state.db)
+            .await;
 
     match result {
         Ok(r) if r.rows_affected() > 0 => {
             (StatusCode::OK, Json(json!({ "ok": true, "hook_enabled": false })))
         }
-        Ok(_) => {
-            (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })))
-        }
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" }))),
         Err(e) => {
             error!("failed to disable hook: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "db error" })))

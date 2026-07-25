@@ -46,14 +46,9 @@ mod platform {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         let process = sys.process(Pid::from_u32(pid))?;
-        let cmdline: Vec<String> = process.cmd().iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        if cmdline.is_empty() {
-            None
-        } else {
-            Some(cmdline.join(" "))
-        }
+        let cmdline: Vec<String> =
+            process.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect();
+        if cmdline.is_empty() { None } else { Some(cmdline.join(" ")) }
     }
 
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
@@ -141,10 +136,7 @@ mod tests {
             agent_hooks::detect_agent_kind("claude --dangerously-skip-permissions"),
             Some(AgentKind::Claude)
         );
-        assert_eq!(
-            agent_hooks::detect_agent_kind("codex"),
-            Some(AgentKind::Codex)
-        );
+        assert_eq!(agent_hooks::detect_agent_kind("codex"), Some(AgentKind::Codex));
     }
 
     #[test]
@@ -161,9 +153,6 @@ mod tests {
     fn test_read_process_cmdline_handles_null_bytes() {
         let simulated_cmdline = "claude\0--dangerously-skip-permissions\0";
         let cmdline = simulated_cmdline.replace('\0', " ");
-        assert_eq!(
-            agent_hooks::detect_agent_kind(cmdline.trim()),
-            Some(AgentKind::Claude)
-        );
+        assert_eq!(agent_hooks::detect_agent_kind(cmdline.trim()), Some(AgentKind::Claude));
     }
 }

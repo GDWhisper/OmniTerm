@@ -1,10 +1,10 @@
 use axum::{
-    extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
     RequestPartsExt,
+    extract::FromRequestParts,
+    http::{StatusCode, request::Parts},
 };
 use axum_extra::extract::CookieJar;
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,11 +18,7 @@ pub fn create_token(secret: &str) -> Result<String, jsonwebtoken::errors::Error>
         sub: "admin".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp() as usize,
     };
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
 }
 
 pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
@@ -46,17 +42,14 @@ where
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let jar = parts.extract::<CookieJar>().await.unwrap_or_default();
 
-        let token = jar
-            .get("omniterm_token")
-            .map(|c| c.value().to_string())
-            .or_else(|| {
-                parts
-                    .headers
-                    .get("authorization")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.strip_prefix("Bearer "))
-                    .map(|v| v.to_string())
-            });
+        let token = jar.get("omniterm_token").map(|c| c.value().to_string()).or_else(|| {
+            parts
+                .headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|v| v.to_string())
+        });
 
         let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
 

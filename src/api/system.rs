@@ -1,9 +1,14 @@
-use axum::{extract::{Query, State}, http::StatusCode, routing::get, Json, Router};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::StatusCode,
+    routing::get,
+};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::fs::{self, SortKey};
 use crate::AppState;
+use crate::fs::{self, SortKey};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -43,29 +48,19 @@ async fn list_dirs(
     let canonical = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
-            return (
-                axum::http::StatusCode::NOT_FOUND,
-                Json(json!({ "error": "path not found" })),
-            );
+            return (axum::http::StatusCode::NOT_FOUND, Json(json!({ "error": "path not found" })));
         }
     };
 
     if !canonical.is_dir() {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "not a directory" })),
-        );
+        return (axum::http::StatusCode::BAD_REQUEST, Json(json!({ "error": "not a directory" })));
     }
 
     match fs::list_dir(&canonical, "", SortKey::Name, false).await {
-        Ok(entries) => (
-            axum::http::StatusCode::OK,
-            Json(json!({ "files": entries })),
-        ),
-        Err(e) => (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(entries) => (axum::http::StatusCode::OK, Json(json!({ "files": entries }))),
+        Err(e) => {
+            (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
     }
 }
 
@@ -76,9 +71,7 @@ struct ExistsQuery {
 
 /// Check if a path exists on disk.
 /// Used by the frontend to detect stale project paths.
-async fn check_exists(
-    Query(q): Query<ExistsQuery>,
-) -> (StatusCode, Json<Value>) {
+async fn check_exists(Query(q): Query<ExistsQuery>) -> (StatusCode, Json<Value>) {
     let exists = std::path::Path::new(&q.path).exists();
     (StatusCode::OK, Json(json!({ "exists": exists })))
 }

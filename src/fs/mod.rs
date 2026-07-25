@@ -16,7 +16,7 @@
 //! No code is copied verbatim. Rust idioms, async I/O style, and the
 //! public API surface were rewritten for OmniTerm's needs.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -33,13 +33,10 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
         return Err(anyhow!("path does not exist: {}", joined.display()));
     }
 
-    let canonical = joined
-        .canonicalize()
-        .map_err(|e| anyhow!("path resolution failed: {}", e))?;
+    let canonical = joined.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
 
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| anyhow!("base path resolution failed: {}", e))?;
+    let canonical_base =
+        base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
 
     if !canonical.starts_with(&canonical_base) {
         return Err(anyhow!("access denied: path escapes workspace root"));
@@ -53,18 +50,16 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
 pub fn sanitize_path_new(base: &Path, requested: &str) -> Result<PathBuf> {
     let joined = join_and_validate(base, requested)?;
 
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| anyhow!("base path resolution failed: {}", e))?;
+    let canonical_base =
+        base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
 
     // Walk up until we find an existing ancestor
     let mut check = joined.as_path();
     let mut tail = Vec::new();
     loop {
         if check.exists() {
-            let canonical = check
-                .canonicalize()
-                .map_err(|e| anyhow!("path resolution failed: {}", e))?;
+            let canonical =
+                check.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
             if !canonical.starts_with(&canonical_base) {
                 return Err(anyhow!("access denied: path escapes workspace root"));
             }
@@ -137,9 +132,7 @@ impl FileEntry {
 
 /// Convert `SystemTime` to unix milliseconds.
 fn to_timestamp(time: &SystemTime) -> u64 {
-    time.duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
 /// Normalize path separators to forward slashes.
@@ -206,12 +199,7 @@ pub async fn list_dir(
             meta.len()
         };
 
-        entries.push(FileEntry {
-            path_type,
-            name,
-            mtime,
-            size,
-        });
+        entries.push(FileEntry { path_type, name, mtime, size });
     }
 
     // Sort: directories first, then by chosen key
@@ -293,9 +281,7 @@ pub async fn copy_paths(base: &Path, paths: &[String], dest: &str) -> Result<()>
 
     for p in paths {
         let src = sanitize_path(base, p)?;
-        let file_name = src
-            .file_name()
-            .ok_or_else(|| anyhow!("invalid path"))?;
+        let file_name = src.file_name().ok_or_else(|| anyhow!("invalid path"))?;
         let target = dest_dir.join(file_name);
 
         let metadata = fs::metadata(&src).await?;
@@ -347,8 +333,18 @@ pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Ve
 }
 
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", ".git", "target", "__pycache__", ".venv", "venv",
-    ".next", ".nuxt", "dist", "build", ".cache", "vendor",
+    "node_modules",
+    ".git",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    ".cache",
+    "vendor",
 ];
 
 /// Recursive search with result and depth limits.
@@ -366,7 +362,7 @@ fn search_recursive<'a>(
 
         let mut read_dir = match fs::read_dir(dir).await {
             Ok(rd) => rd,
-            Err(_) => return Ok(()),  // skip unreadable directories
+            Err(_) => return Ok(()), // skip unreadable directories
         };
 
         while let Some(entry) = read_dir.next_entry().await? {
@@ -383,7 +379,7 @@ fn search_recursive<'a>(
 
             let meta = match fs::metadata(entry.path()).await {
                 Ok(m) => m,
-                Err(_) => continue,  // skip inaccessible entries
+                Err(_) => continue, // skip inaccessible entries
             };
             let meta2 = fs::symlink_metadata(entry.path()).await;
             let is_symlink = meta2.map(|m| m.is_symlink()).unwrap_or(false);

@@ -1,16 +1,16 @@
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{AppendHeaders, IntoResponse},
     routing::{get, post},
-    Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde_json::json;
 
+use crate::AppState;
 use crate::auth;
 use crate::models::user::{LoginRequest, SetupRequest};
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -60,14 +60,11 @@ async fn setup(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let token = auth::create_token(&state.jwt_secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let token =
+        auth::create_token(&state.jwt_secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let cookie = token_cookie(&token);
 
-    Ok((
-        StatusCode::OK,
-        AppendHeaders([("set-cookie", cookie)]),
-        Json(json!({ "ok": true })),
-    ))
+    Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
 
 async fn login(
@@ -87,22 +84,16 @@ async fn login(
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let token = auth::create_token(&state.jwt_secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let token =
+        auth::create_token(&state.jwt_secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let cookie = token_cookie(&token);
 
-    Ok((
-        StatusCode::OK,
-        AppendHeaders([("set-cookie", cookie)]),
-        Json(json!({ "ok": true })),
-    ))
+    Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
 
 async fn logout() -> impl IntoResponse {
     let cookie = clear_cookie();
-    (
-        AppendHeaders([("set-cookie", cookie)]),
-        Json(json!({ "ok": true })),
-    )
+    (AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true })))
 }
 
 async fn check() -> impl IntoResponse {

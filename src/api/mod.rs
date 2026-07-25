@@ -9,9 +9,9 @@ pub mod sessions;
 pub mod system;
 pub mod targets;
 
-use axum::Router;
 use crate::AppState;
 use crate::ws;
+use axum::Router;
 
 pub fn routes(state: AppState) -> Router {
     let api = Router::new()
@@ -26,10 +26,11 @@ pub fn routes(state: AppState) -> Router {
         .merge(files_watch::routes())
         .merge(agents::routes())
         .route("/ws/terminal/{session_id}", axum::routing::get(ws::ws_terminal_handler))
-        .route("/ws/terminal/external/{tmux_name}", axum::routing::get(ws::ws_external_terminal_handler))
+        .route(
+            "/ws/terminal/external/{tmux_name}",
+            axum::routing::get(ws::ws_external_terminal_handler),
+        )
         .route("/ws/acp/{session_id}", axum::routing::get(ws::ws_acp_handler));
 
-    Router::new()
-        .nest("/api/v1", api)
-        .with_state(state)
+    Router::new().nest("/api/v1", api).with_state(state)
 }

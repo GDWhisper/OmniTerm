@@ -17,10 +17,7 @@ pub fn detect_agent_kind(command: &str) -> Option<AgentKind> {
 
     let first_token = cmd.split_whitespace().next()?;
 
-    let basename = first_token
-        .rsplit(&['/', '\\'][..])
-        .next()
-        .unwrap_or(first_token);
+    let basename = first_token.rsplit(&['/', '\\'][..]).next().unwrap_or(first_token);
 
     let stripped = if let Some(s) = strip_ext(basename, ".exe")
         .or_else(|| strip_ext(basename, ".cmd"))
@@ -165,11 +162,7 @@ pub fn augment_agent_command(command: &str) -> Option<String> {
         }
         AgentKind::Codex => {
             let args = codex_hook_args();
-            let args_str = args
-                .iter()
-                .map(|a| shell_quote(a))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let args_str = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
             format!("{} {}", command.trim(), args_str)
         }
     };
@@ -185,10 +178,7 @@ pub fn initial_agent_option_value(_kind: AgentKind) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    format!(
-        "omniterm:running::launch:{}",
-        ts
-    )
+    format!("omniterm:running::launch:{}", ts)
 }
 
 /// Simple shell quoting — wraps the argument in single quotes and escapes
@@ -207,7 +197,10 @@ mod tests {
     #[test]
     fn test_detect_claude() {
         assert_eq!(detect_agent_kind("claude"), Some(AgentKind::Claude));
-        assert_eq!(detect_agent_kind("claude --dangerously-skip-permissions"), Some(AgentKind::Claude));
+        assert_eq!(
+            detect_agent_kind("claude --dangerously-skip-permissions"),
+            Some(AgentKind::Claude)
+        );
     }
 
     #[test]
@@ -299,7 +292,8 @@ mod tests {
     #[test]
     fn test_claude_hook_settings_valid_json() {
         let settings = claude_hook_settings();
-        let parsed: serde_json::Value = serde_json::from_str(&settings).expect("should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&settings).expect("should be valid JSON");
         let hooks = &parsed["hooks"];
 
         // Verify all required hook events are present
@@ -320,7 +314,9 @@ mod tests {
 
         // Verify command format
         let cmd = hooks["PermissionRequest"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains("tmux set-option -q @omniterm_agent claude:waiting:decision:PermissionRequest"));
+        assert!(cmd.contains(
+            "tmux set-option -q @omniterm_agent claude:waiting:decision:PermissionRequest"
+        ));
         assert!(cmd.contains("$(date +%s).$$"));
     }
 
@@ -334,7 +330,8 @@ mod tests {
 
         // Verify -c flags
         let mut i = 0;
-        let expected_events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"];
+        let expected_events =
+            ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop"];
         for event in &expected_events {
             assert_eq!(args[i], "-c");
             assert!(args[i + 1].starts_with(&format!("hooks.{}.command=", event)));

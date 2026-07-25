@@ -94,4 +94,3 @@ pub async fn sync_messages(
     }
     Ok(())
 }
-

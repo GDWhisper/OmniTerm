@@ -25,9 +25,7 @@ pub fn serve_spa_fallback(path: &str) -> Option<(Vec<u8>, &'static str)> {
     if path.contains('.') {
         return None; // Likely a missing asset, not an SPA route
     }
-    FrontendAssets::get("index.html").map(|file| {
-        (file.data.to_vec(), "text/html; charset=utf-8")
-    })
+    FrontendAssets::get("index.html").map(|file| (file.data.to_vec(), "text/html; charset=utf-8"))
 }
 
 fn mime_type(path: &str) -> &'static str {

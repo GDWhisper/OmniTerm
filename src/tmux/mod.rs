@@ -4,7 +4,7 @@ pub mod control_mode;
 pub mod process_info;
 pub mod pty_io;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
@@ -12,18 +12,12 @@ use crate::tmux::agent_state::{AgentKind, AgentSnapshot};
 
 /// Platform-specific install commands for the terminal multiplexer.
 #[cfg(unix)]
-pub const MULTIPLEXER_INSTALL_HINTS: &[&str] = &[
-    "apt install tmux",
-    "brew install tmux",
-    "pacman -S tmux",
-];
+pub const MULTIPLEXER_INSTALL_HINTS: &[&str] =
+    &["apt install tmux", "brew install tmux", "pacman -S tmux"];
 
 #[cfg(windows)]
-pub const MULTIPLEXER_INSTALL_HINTS: &[&str] = &[
-    "winget install psmux",
-    "scoop install psmux",
-    "cargo install psmux",
-];
+pub const MULTIPLEXER_INSTALL_HINTS: &[&str] =
+    &["winget install psmux", "scoop install psmux", "cargo install psmux"];
 
 /// Check whether a terminal multiplexer (tmux/psmux) is available in PATH.
 ///
@@ -43,10 +37,7 @@ pub fn check_multiplexer() -> Result<()> {
                 }
             }
             let hints = MULTIPLEXER_INSTALL_HINTS.join("\n  ");
-            Err(anyhow!(
-                "terminal multiplexer not found in PATH.\nInstall one of:\n  {}",
-                hints
-            ))
+            Err(anyhow!("terminal multiplexer not found in PATH.\nInstall one of:\n  {}", hints))
         }
     }
 }
@@ -63,14 +54,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
 
     // 1. Create the tmux session (plain shell)
     let output = Command::new("tmux")
-        .args([
-            "new-session",
-            "-d",
-            "-s", name,
-            "-c", cwd,
-            "-x", "200",
-            "-y", "50",
-        ])
+        .args(["new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50"])
         .output()
         .await?;
 
@@ -80,10 +64,8 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
     }
 
     // 2. Enable mouse support
-    let mouse_out = Command::new("tmux")
-        .args(["set-option", "-t", name, "mouse", "on"])
-        .output()
-        .await?;
+    let mouse_out =
+        Command::new("tmux").args(["set-option", "-t", name, "mouse", "on"]).output().await?;
     if !mouse_out.status.success() {
         warn!(
             "failed to enable mouse for session {}: {}",
@@ -113,8 +95,8 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
             }
 
             // Augment the command with hook configuration
-            let augmented = agent_hooks::augment_agent_command(cmd)
-                .unwrap_or_else(|| cmd.to_string());
+            let augmented =
+                agent_hooks::augment_agent_command(cmd).unwrap_or_else(|| cmd.to_string());
 
             // Send the augmented command via send-keys
             send_keys(name, &augmented).await?;
@@ -132,10 +114,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
 
 /// Kill a tmux session.
 pub async fn kill_session(name: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["kill-session", "-t", name])
-        .output()
-        .await?;
+    let output = Command::new("tmux").args(["kill-session", "-t", name]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -239,10 +218,8 @@ pub async fn session_exists(name: &str) -> bool {
 
 /// Send keys to a tmux session (useful for automation).
 pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["send-keys", "-t", session, keys, "Enter"])
-        .output()
-        .await?;
+    let output =
+        Command::new("tmux").args(["send-keys", "-t", session, keys, "Enter"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -255,12 +232,7 @@ pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
 /// Get the current working directory of a tmux pane.
 pub async fn pane_cwd(session: &str) -> Result<String> {
     let output = Command::new("tmux")
-        .args([
-            "display-message",
-            "-t", session,
-            "-p",
-            "#{pane_current_path}",
-        ])
+        .args(["display-message", "-t", session, "-p", "#{pane_current_path}"])
         .output()
         .await?;
 
@@ -279,12 +251,7 @@ pub async fn pane_cwd(session: &str) -> Result<String> {
 /// Capture the last N lines of a tmux pane's content.
 pub async fn capture_pane(session: &str, lines: usize) -> Result<String> {
     let output = Command::new("tmux")
-        .args([
-            "capture-pane",
-            "-t", session,
-            "-p",
-            "-S", &format!("-{}", lines),
-        ])
+        .args(["capture-pane", "-t", session, "-p", "-S", &format!("-{}", lines)])
         .output()
         .await?;
 
@@ -316,10 +283,7 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Output format: "@omniterm_agent <value>"
-    let value = stdout
-        .strip_prefix("@omniterm_agent ")
-        .map(|v| v.trim())
-        .unwrap_or("");
+    let value = stdout.strip_prefix("@omniterm_agent ").map(|v| v.trim()).unwrap_or("");
 
     Ok(agent_state::parse_agent_value(value))
 }

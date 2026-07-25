@@ -4,13 +4,12 @@ use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest,
-    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, TextContent, WaitForTerminalExitRequest, WriteTextFileRequest,
-    WriteTextFileResponse,
+    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, InitializeRequest,
+    KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest, PromptResponse,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionRequest,
+    SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use tokio::sync::{broadcast, oneshot};
@@ -37,10 +36,7 @@ struct ActivityState {
 
 impl ActivityState {
     fn new() -> Self {
-        Self {
-            active_prompt: false,
-            last_activity: Instant::now(),
-        }
+        Self { active_prompt: false, last_activity: Instant::now() }
     }
 }
 
@@ -80,25 +76,18 @@ fn spawn_crash_watcher(
 /// 将 agent 请求的文件路径解析为 workspace 内的安全绝对路径，防止越界读写。
 /// 越界或解析失败返回 Err(消息)，由调用方转成内部错误回报 agent。
 fn resolve_fs_path(base: &Path, requested: &Path) -> Result<PathBuf, String> {
-    let candidate = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        base.join(requested)
-    };
+    let candidate =
+        if requested.is_absolute() { requested.to_path_buf() } else { base.join(requested) };
 
-    let canon_base = base
-        .canonicalize()
-        .map_err(|e| format!("workspace root unresolvable: {}", e))?;
+    let canon_base =
+        base.canonicalize().map_err(|e| format!("workspace root unresolvable: {}", e))?;
 
     // 目标存在则直接 canonicalize；不存在（写入新文件）则 canonicalize 父目录后拼接文件名。
     let canon = if candidate.exists() {
-        candidate
-            .canonicalize()
-            .map_err(|e| format!("path resolution failed: {}", e))?
+        candidate.canonicalize().map_err(|e| format!("path resolution failed: {}", e))?
     } else if let Some(parent) = candidate.parent() {
-        let canon_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("parent dir unresolvable: {}", e))?;
+        let canon_parent =
+            parent.canonicalize().map_err(|e| format!("parent dir unresolvable: {}", e))?;
         canon_parent.join(candidate.file_name().unwrap_or_default())
     } else {
         candidate
@@ -181,15 +170,10 @@ fn sh_quote(s: &str) -> String {
 /// agent 进程启动前先 cd 到 workspace_path。
 #[cfg(unix)]
 fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path) -> Vec<String> {
-    let cd_cmd = format!(
-        "cd {} && exec {}",
-        sh_quote(&workspace.to_string_lossy()),
-        sh_quote(agent_cmd)
-    );
+    let cd_cmd =
+        format!("cd {} && exec {}", sh_quote(&workspace.to_string_lossy()), sh_quote(agent_cmd));
     // 用 fold 避免预分配：每个 arg 单独 sh_quote，空格分隔拼入 shell 脚本
-    let shell_script = agent_args.iter().fold(cd_cmd, |acc, arg| {
-        acc + " " + &sh_quote(arg)
-    });
+    let shell_script = agent_args.iter().fold(cd_cmd, |acc, arg| acc + " " + &sh_quote(arg));
     vec!["-c".to_string(), shell_script]
 }
 
@@ -204,10 +188,8 @@ impl AcpClient {
         // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
         // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
         #[cfg(unix)]
-        let (cmd, args) = (
-            "/bin/sh".to_string(),
-            wrap_agent_with_cwd(&agent.command, &agent.args, &cwd),
-        );
+        let (cmd, args) =
+            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
         #[cfg(not(unix))]
         let (cmd, args) = (agent.command.clone(), agent.args.clone());
 
@@ -371,38 +353,31 @@ impl AcpClient {
 
         let connection_task = tokio::spawn(async move {
             builder
-                .connect_with(
-                    transport,
-                    move |cx: ConnectionTo<AcpAgentRole>| async move {
-                        let init_resp = cx
-                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                            .block_task()
-                            .await?;
-                        let supports_load = init_resp.agent_capabilities.load_session;
+                .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
+                    let init_resp = cx
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task()
+                        .await?;
+                    let supports_load = init_resp.agent_capabilities.load_session;
 
-                        let session_resp = cx
-                            .send_request(NewSessionRequest::new(cwd))
-                            .block_task()
-                            .await?;
+                    let session_resp =
+                        cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
 
-                        let config_options =
-                            session_resp.config_options.clone().unwrap_or_default();
+                    let config_options = session_resp.config_options.clone().unwrap_or_default();
 
-                        let session_id = session_resp.session_id;
-                        let _ = conn_tx.send((cx.clone(), session_id, supports_load, config_options));
+                    let session_id = session_resp.session_id;
+                    let _ = conn_tx.send((cx.clone(), session_id, supports_load, config_options));
 
-                        let _ = shutdown_rx.await;
-                        Ok(())
-                    },
-                )
+                    let _ = shutdown_rx.await;
+                    Ok(())
+                })
                 .await
         });
 
         spawn_crash_watcher(connection_task, crash_tx.clone());
 
-        let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
-            .await
-            .map_err(|_| AcpError::internal_error())?;
+        let (connection, session_id, supports_load_session, initial_config_options) =
+            conn_rx.await.map_err(|_| AcpError::internal_error())?;
 
         Ok(AcpClient {
             connection,
@@ -451,9 +426,8 @@ impl AcpClient {
             .lock()
             .ok()
             .map(|opts| {
-                opts.iter().any(|o| {
-                    o.id.0 == config_id && matches!(o.kind, SessionConfigKind::Boolean(_))
-                })
+                opts.iter()
+                    .any(|o| o.id.0 == config_id && matches!(o.kind, SessionConfigKind::Boolean(_)))
             })
             .unwrap_or(false);
 
@@ -504,8 +478,7 @@ impl AcpClient {
     }
 
     pub fn cancel(&self) -> Result<(), AcpError> {
-        self.connection
-            .send_notification(CancelNotification::new(self.session_id.clone()))?;
+        self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
         let tm = self.terminal_manager.clone();
         tokio::spawn(async move { tm.kill_all().await });
         Ok(())
@@ -567,25 +540,16 @@ impl AcpClient {
     pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
         let resp = self
             .connection
-            .send_request(LoadSessionRequest::new(
-                SessionId::new(acp_session_id),
-                cwd,
-            ))
+            .send_request(LoadSessionRequest::new(SessionId::new(acp_session_id), cwd))
             .block_task()
             .await?;
 
         // 优先用 load 响应里的 config；opencode 等 agent 不在 session/load 响应里
         // 返回 config_options，回退到创建会话时缓存的 initial_config_options（与
         // set_config_option 的兜底逻辑一致），保证恢复后配置栏仍有数据可显示。
-        let opts: Option<Vec<SessionConfigOption>> = resp
-            .config_options
-            .filter(|o| !o.is_empty())
-            .or_else(|| {
-                self.initial_config_options
-                    .lock()
-                    .ok()
-                    .map(|g| g.clone())
-                    .filter(|g| !g.is_empty())
+        let opts: Option<Vec<SessionConfigOption>> =
+            resp.config_options.filter(|o| !o.is_empty()).or_else(|| {
+                self.initial_config_options.lock().ok().map(|g| g.clone()).filter(|g| !g.is_empty())
             });
         if let Some(opts) = opts {
             if let Ok(mut guard) = self.initial_config_options.lock() {
@@ -634,10 +598,8 @@ impl AcpClient {
         // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
         // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
         #[cfg(unix)]
-        let (cmd, args) = (
-            "/bin/sh".to_string(),
-            wrap_agent_with_cwd(&agent.command, &agent.args, &cwd),
-        );
+        let (cmd, args) =
+            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
         #[cfg(not(unix))]
         let (cmd, args) = (agent.command.clone(), agent.args.clone());
 
@@ -801,30 +763,26 @@ impl AcpClient {
 
         let connection_task = tokio::spawn(async move {
             builder
-                .connect_with(
-                    transport,
-                    move |cx: ConnectionTo<AcpAgentRole>| async move {
-                        let init_resp = cx
-                            .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                            .block_task()
-                            .await?;
-                        let supports_load = init_resp.agent_capabilities.load_session;
+                .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
+                    let init_resp = cx
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task()
+                        .await?;
+                    let supports_load = init_resp.agent_capabilities.load_session;
 
-                        let session_id = SessionId::new(acp_session_id.as_str());
-                        let _ = conn_tx.send((cx.clone(), session_id, supports_load, Vec::new()));
+                    let session_id = SessionId::new(acp_session_id.as_str());
+                    let _ = conn_tx.send((cx.clone(), session_id, supports_load, Vec::new()));
 
-                        let _ = shutdown_rx.await;
-                        Ok(())
-                    },
-                )
+                    let _ = shutdown_rx.await;
+                    Ok(())
+                })
                 .await
         });
 
         spawn_crash_watcher(connection_task, crash_tx.clone());
 
-        let (connection, session_id, supports_load_session, initial_config_options) = conn_rx
-            .await
-            .map_err(|_| AcpError::internal_error())?;
+        let (connection, session_id, supports_load_session, initial_config_options) =
+            conn_rx.await.map_err(|_| AcpError::internal_error())?;
 
         Ok(AcpClient {
             connection,
@@ -903,14 +861,12 @@ mod tests {
 
     #[test]
     fn wrap_returns_cd_then_exec_form() {
-        let args = wrap_agent_with_cwd("codebuddy", &["--acp".into()], Path::new("/home/user/project"));
+        let args =
+            wrap_agent_with_cwd("codebuddy", &["--acp".into()], Path::new("/home/user/project"));
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-c");
         // cd 必须是 cd '/home/user/project' && exec 'codebuddy' '--acp'
-        assert_eq!(
-            args[1],
-            "cd '/home/user/project' && exec 'codebuddy' '--acp'"
-        );
+        assert_eq!(args[1], "cd '/home/user/project' && exec 'codebuddy' '--acp'");
     }
 
     #[test]
@@ -1017,10 +973,8 @@ mod tests {
         let _ = std::fs::create_dir_all(&workspace);
 
         let wrapped = wrap_agent_with_cwd("true", &[], &workspace);
-        let output = std::process::Command::new("/bin/sh")
-            .args(&wrapped)
-            .output()
-            .expect("spawn sh");
+        let output =
+            std::process::Command::new("/bin/sh").args(&wrapped).output().expect("spawn sh");
         assert!(output.status.success(), "wrapped exit != 0");
         // exec 替换后无残留 shell 进程——这里只断言正常退出，不强求 PID 不同
         // （exec 替换行为由 shell 保证，不应在测试中过度约束）

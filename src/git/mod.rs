@@ -11,10 +11,8 @@ pub struct WorktreeInfo {
 
 /// Check if the given path is inside a git work tree.
 pub async fn is_git_repo(path: &str) -> bool {
-    let Ok(output) = Command::new("git")
-        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
-        .output()
-        .await
+    let Ok(output) =
+        Command::new("git").args(["-C", path, "rev-parse", "--is-inside-work-tree"]).output().await
     else {
         return false;
     };
@@ -24,10 +22,8 @@ pub async fn is_git_repo(path: &str) -> bool {
 /// Discover all git worktrees for the repository at the given path.
 /// Runs `git worktree list --porcelain` and parses the output.
 pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>> {
-    let output = Command::new("git")
-        .args(["-C", path, "worktree", "list", "--porcelain"])
-        .output()
-        .await?;
+    let output =
+        Command::new("git").args(["-C", path, "worktree", "list", "--porcelain"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -43,12 +39,8 @@ fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
         .split("\n\n")
         .filter(|chunk| !chunk.is_empty())
         .filter_map(|chunk| {
-            let mut info = WorktreeInfo {
-                path: String::new(),
-                branch: None,
-                bare: false,
-                detached: false,
-            };
+            let mut info =
+                WorktreeInfo { path: String::new(), branch: None, bare: false, detached: false };
             for line in chunk.lines() {
                 let mut parts = line.splitn(2, ' ');
                 let key = parts.next().unwrap_or("");
@@ -56,18 +48,15 @@ fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
                 match key {
                     "worktree" => info.path = value.to_string(),
                     "branch" => {
-                        info.branch = Some(value.strip_prefix("refs/heads/").unwrap_or(value).to_string());
+                        info.branch =
+                            Some(value.strip_prefix("refs/heads/").unwrap_or(value).to_string());
                     }
                     "bare" => info.bare = true,
                     "detached" => info.detached = true,
                     _ => {}
                 }
             }
-            if info.path.is_empty() {
-                None
-            } else {
-                Some(info)
-            }
+            if info.path.is_empty() { None } else { Some(info) }
         })
         .collect()
 }

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         Path, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::info;
 
+use crate::AppState;
+use crate::acp::AcpClient;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
-use crate::acp::AcpClient;
 use crate::api::agents::load_agent;
-use crate::AppState;
 
 pub async fn ws_acp_handler(
     ws: WebSocketUpgrade,
@@ -73,10 +73,7 @@ enum AcpServerMessage<'a> {
     #[serde(rename = "process_alive")]
     ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
-    PermissionRequest {
-        id: &'a str,
-        request: &'a serde_json::Value,
-    },
+    PermissionRequest { id: &'a str, request: &'a serde_json::Value },
 }
 
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
@@ -85,9 +82,7 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
 
     let chunk = if let Some(c) = obj.get("AgentMessageChunk") {
         c
-    } else if obj.get("sessionUpdate").and_then(|v| v.as_str())
-        == Some("agent_message_chunk")
-    {
+    } else if obj.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
         update
     } else {
         return None;
@@ -109,7 +104,9 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
 }
 
 async fn spawn_notify_task(
-    mut rx: tokio::sync::broadcast::Receiver<agent_client_protocol::schema::v1::SessionNotification>,
+    mut rx: tokio::sync::broadcast::Receiver<
+        agent_client_protocol::schema::v1::SessionNotification,
+    >,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
     buf: Arc<Mutex<String>>,
 ) {
@@ -146,8 +143,9 @@ async fn spawn_crash_task(
         loop {
             match rx.recv().await {
                 Ok(reason) => {
-                    let msg = serde_json::to_string(&AcpServerMessage::PromptError { message: &reason })
-                        .unwrap_or_default();
+                    let msg =
+                        serde_json::to_string(&AcpServerMessage::PromptError { message: &reason })
+                            .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
@@ -238,16 +236,14 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg =
-                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                    .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             if let Some(notif) = c.initial_commands_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg =
-                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                    .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             Some(c)
@@ -269,13 +265,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let mut proc_rx = state.acp_supervisor.process_event_subscribe();
     // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）�?
     let _ = notify_tx
-        .send(
-            Message::Text(
-                serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
-                    .unwrap_or_default()
-                    .into(),
-            ),
-        )
+        .send(Message::Text(
+            serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
+                .unwrap_or_default()
+                .into(),
+        ))
         .await;
 
     let db = state.db.clone();

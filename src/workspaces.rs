@@ -131,13 +131,7 @@ pub async fn list_workspaces(project: &Project) -> Vec<Workspace> {
             let label = w
                 .branch
                 .clone()
-                .unwrap_or_else(|| {
-                    if w.detached {
-                        "detached".to_string()
-                    } else {
-                        leaf_name
-                    }
-                });
+                .unwrap_or_else(|| if w.detached { "detached".to_string() } else { leaf_name });
 
             Workspace {
                 id: workspace_id(&project.id, &w.path),
@@ -267,10 +261,7 @@ mod tests {
         let projects = vec![dummy_project("p1", &repo_str)];
 
         let result = find_covering_project(&repo, &projects).await.unwrap();
-        assert!(matches!(
-            result,
-            Some((_, CoverKind::ExactPath))
-        ));
+        assert!(matches!(result, Some((_, CoverKind::ExactPath))));
         cleanup(&repo);
     }
 

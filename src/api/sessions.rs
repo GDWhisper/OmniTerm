@@ -2,32 +2,28 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch, post},
-    Json, Router,
 };
 use serde_json::json;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::acp::AcpClient;
 use crate::api::agents::load_agent;
-use crate::models::session::{AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession};
+use crate::models::session::{
+    AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
+};
 use crate::tmux::{self, agent_state::AgentSnapshot};
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route(
-            "/projects/{pid}/sessions",
-            get(list_sessions).post(create_session),
-        )
-        .route(
-            "/sessions/{id}",
-            patch(update_session).delete(delete_session),
-        )
+        .route("/projects/{pid}/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/{id}", patch(update_session).delete(delete_session))
         .route("/sessions/{id}/cwd", get(get_session_cwd))
         .route("/sessions/{id}/prompt", post(send_prompt))
         .route("/sessions/{id}/release", post(release_session))
@@ -56,12 +52,10 @@ async fn list_sessions(
         .unwrap_or_default()
         .into_iter()
         .filter_map(|info| {
-            let kind = tmux::agent_state::AgentKind::from_str(
-                info.agent_kind.as_deref().unwrap_or(""),
-            )?;
-            let state = tmux::agent_state::AgentState::from_str(
-                info.agent_state.as_deref().unwrap_or(""),
-            )?;
+            let kind =
+                tmux::agent_state::AgentKind::from_str(info.agent_kind.as_deref().unwrap_or(""))?;
+            let state =
+                tmux::agent_state::AgentState::from_str(info.agent_state.as_deref().unwrap_or(""))?;
             let reason = info
                 .attention_reason
                 .as_deref()
@@ -81,13 +75,8 @@ async fn list_sessions(
 
     // 一次性取出 supervisor 中所有存活的 ACP session id（O(1) 查询用）。
     // 用于标记 acp_process_alive：进程是否仍在后端驻留（未释放/未被回收）。
-    let alive_acp: std::collections::HashSet<String> = state
-        .acp_supervisor
-        .snapshot()
-        .await
-        .into_iter()
-        .map(|(id, _)| id)
-        .collect();
+    let alive_acp: std::collections::HashSet<String> =
+        state.acp_supervisor.snapshot().await.into_iter().map(|(id, _)| id).collect();
 
     // Enrich sessions with activity state and agent state from tmux.
     // Only tmux-backed sessions have a pane to poll; ACP sessions get their
@@ -109,7 +98,8 @@ async fn list_sessions(
                 // Hook-injected session: use option data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
                 session.agent_state = Some(snapshot.agent_state.as_str().to_string());
-                session.attention_reason = snapshot.attention_reason.map(|r| r.as_str().to_string());
+                session.attention_reason =
+                    snapshot.attention_reason.map(|r| r.as_str().to_string());
                 session.agent_event = snapshot.agent_event.clone();
                 session.agent_nonce = snapshot.agent_nonce.clone();
             }
@@ -148,10 +138,7 @@ async fn create_session(
         let agent = match load_agent(&state.db, &agent_id).await {
             Some(a) => a,
             None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({ "error": "agent not found" })),
-                );
+                return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
             }
         };
 
@@ -188,7 +175,10 @@ async fn create_session(
         .unwrap();
 
         state.acp_supervisor.insert(id.clone(), acp_client).await;
-        info!("created ACP session: {} (agent: {}, acp_session_id: {})", id, agent_id, acp_session_id);
+        info!(
+            "created ACP session: {} (agent: {}, acp_session_id: {})",
+            id, agent_id, acp_session_id
+        );
 
         let session = Session {
             id,
@@ -223,16 +213,17 @@ async fn create_session(
     let now = chrono::Utc::now().to_rfc3339();
 
     // Create the tmux session; detect agent and inject hooks if applicable
-    let hook_enabled = match tmux::new_session(&tmux_name, &workspace_path, req.command.as_deref()).await {
-        Ok(injected) => {
-            info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
-            injected && req.command.is_some()
-        }
-        Err(e) => {
-            error!("failed to create tmux session: {}", e);
-            false
-        }
-    };
+    let hook_enabled =
+        match tmux::new_session(&tmux_name, &workspace_path, req.command.as_deref()).await {
+            Ok(injected) => {
+                info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
+                injected && req.command.is_some()
+            }
+            Err(e) => {
+                error!("failed to create tmux session: {}", e);
+                false
+            }
+        };
 
     sqlx::query(
         "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
@@ -370,14 +361,10 @@ async fn release_session(
             }
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
-        Some(_) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "only acp sessions can be released" })),
-        ),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "not found" })),
-        ),
+        Some(_) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": "only acp sessions can be released" })))
+        }
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
     }
 }
 
@@ -395,20 +382,14 @@ async fn get_session_cwd(
             .flatten();
 
     let Some((tmux_name,)) = tmux_name else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "session not found" })),
-        );
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })));
     };
 
     match tmux::pane_cwd(&tmux_name).await {
         Ok(cwd) => (StatusCode::OK, Json(json!({ "cwd": cwd }))),
         Err(e) => {
             error!("pane_cwd failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
     }
 }
@@ -426,29 +407,19 @@ async fn send_prompt(
     let client = match state.acp_supervisor.get(&id).await {
         Some(c) => c,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "ACP session not found" })),
-            );
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "ACP session not found" })));
         }
     };
 
     match client.send_prompt(&req.text).await {
-        Ok(resp) => (
-            StatusCode::OK,
-            Json(json!({ "stop_reason": format!("{:?}", resp.stop_reason) })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("{}", e) })),
-        ),
+        Ok(resp) => {
+            (StatusCode::OK, Json(json!({ "stop_reason": format!("{:?}", resp.stop_reason) })))
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{}", e) }))),
     }
 }
 
-async fn list_messages(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match crate::acp::chat_persistence::list_messages(&state.db, &id).await {
         Ok(rows) => {
             let messages: Vec<serde_json::Value> = rows
@@ -465,10 +436,7 @@ async fn list_messages(
                 .collect();
             (StatusCode::OK, Json(json!({ "messages": messages })))
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }
 }
 
@@ -488,10 +456,7 @@ async fn sync_messages(
         .collect();
     match crate::acp::chat_persistence::sync_messages(&state.db, &id, &rows).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }
 }
 
@@ -508,11 +473,7 @@ struct SyncMessage {
     blocks: Option<String>,
 }
 
-async fn resolve_workspace_path(
-    req_path: &str,
-    project_id: &str,
-    state: &AppState,
-) -> String {
+async fn resolve_workspace_path(req_path: &str, project_id: &str, state: &AppState) -> String {
     let raw = if req_path.is_empty() {
         let project_path: Option<(String,)> =
             sqlx::query_as("SELECT path FROM projects WHERE id = ?")
@@ -523,9 +484,7 @@ async fn resolve_workspace_path(
                 .flatten();
         project_path
             .map(|(p,)| p)
-            .unwrap_or_else(|| {
-                std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-            })
+            .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     } else {
         req_path.to_string()
     };
@@ -545,35 +504,29 @@ async fn resolve_workspace_path(
 }
 
 /// GET /sessions/external — list tmux sessions not yet recorded in the DB.
-async fn list_external_sessions(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn list_external_sessions(State(state): State<AppState>) -> impl IntoResponse {
     // Get all tmux sessions (returns empty vec if no server running or error)
     let tmux_sessions = match tmux::list_sessions().await {
         Ok(s) => s,
         Err(e) => {
             error!("list_external_sessions: tmux error: {}", e);
-            return (
-                StatusCode::OK,
-                Json(json!({ "sessions": [] })),
-            );
+            return (StatusCode::OK, Json(json!({ "sessions": [] })));
         }
     };
 
     // Get all recorded tmux session names from DB
-    let recorded: Vec<(String,)> =
-        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE tmux_session_name IS NOT NULL")
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
+    let recorded: Vec<(String,)> = sqlx::query_as(
+        "SELECT tmux_session_name FROM sessions WHERE tmux_session_name IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
 
     let recorded_names: HashSet<String> = recorded.into_iter().map(|(n,)| n).collect();
 
     // Filter to external (unadopted) sessions only
-    let external: Vec<_> = tmux_sessions
-        .into_iter()
-        .filter(|s| !recorded_names.contains(&s.name))
-        .collect();
+    let external: Vec<_> =
+        tmux_sessions.into_iter().filter(|s| !recorded_names.contains(&s.name)).collect();
 
     // Build result from external sessions. CWD is already available from the
     // batch `tmux::list_sessions()` call above — no per-session `pane_cwd` needed.
@@ -603,25 +556,18 @@ async fn adopt_session(
 ) -> impl IntoResponse {
     // Verify the tmux session still exists
     if !tmux::session_exists(&req.tmux_name).await {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "tmux session not found" })),
-        );
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "tmux session not found" })));
     }
 
     // Verify the project exists
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM projects WHERE id = ?")
-            .bind(&req.project_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
+    let project_exists: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM projects WHERE id = ?")
+        .bind(&req.project_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
 
     if !project_exists {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "project not found" })),
-        );
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
     }
 
     // Check for race: session may have been adopted between the GET and this POST
@@ -633,19 +579,14 @@ async fn adopt_session(
             .unwrap_or(false);
 
     if already_adopted {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "session already adopted" })),
-        );
+        return (StatusCode::CONFLICT, Json(json!({ "error": "session already adopted" })));
     }
 
     // Resolve CWD; fall back to HOME if pane_cwd fails
     let tmux_name = req.tmux_name.clone();
     let workspace_path = tmux::pane_cwd(&tmux_name)
         .await
-        .unwrap_or_else(|_| {
-            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-        });
+        .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
@@ -666,10 +607,7 @@ async fn adopt_session(
 
     // Start the activity monitor for the adopted session
     if let Err(e) = state.activity_monitor.ensure_session(&req.tmux_name).await {
-        error!(
-            "failed to ensure control mode for adopted session {}: {}",
-            req.tmux_name, e
-        );
+        error!("failed to ensure control mode for adopted session {}: {}", req.tmux_name, e);
     }
 
     let session = Session {

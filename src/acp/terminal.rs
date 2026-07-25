@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
     CreateTerminalRequest, CreateTerminalResponse, KillTerminalRequest, KillTerminalResponse,
     ReleaseTerminalRequest, ReleaseTerminalResponse, TerminalExitStatus, TerminalId,
     TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse,
 };
-use agent_client_protocol::Responder;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{broadcast, Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
 /// agent 通过 `terminal/create` 执行的命令生命周期事件，用于让前端感知
@@ -35,10 +35,7 @@ pub struct AcpTerminalManager {
 
 impl AcpTerminalManager {
     pub fn new(event_tx: broadcast::Sender<TerminalActivity>) -> Self {
-        Self {
-            terminals: Arc::new(Mutex::new(HashMap::new())),
-            event_tx,
-        }
+        Self { terminals: Arc::new(Mutex::new(HashMap::new())), event_tx }
     }
 
     pub async fn handle_create(
@@ -67,7 +64,8 @@ impl AcpTerminalManager {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("terminal/create: failed to spawn '{}': {}", request.command, e);
-                return responder.respond_with_error(agent_client_protocol::Error::internal_error());
+                return responder
+                    .respond_with_error(agent_client_protocol::Error::internal_error());
             }
         };
 
@@ -127,10 +125,8 @@ impl AcpTerminalManager {
                 }
             }
 
-            let _ = event_tx.send(TerminalActivity::Exited {
-                id: tid,
-                exit_code: exit_status.exit_code,
-            });
+            let _ = event_tx
+                .send(TerminalActivity::Exited { id: tid, exit_code: exit_status.exit_code });
         });
 
         let proc = TerminalProcess {
@@ -163,9 +159,8 @@ impl AcpTerminalManager {
         match map.get(&tid) {
             Some(proc) => {
                 let output = proc.output.lock().await.clone();
-                let truncated = proc
-                    .output_byte_limit
-                    .is_some_and(|limit| output.len() >= limit as usize);
+                let truncated =
+                    proc.output_byte_limit.is_some_and(|limit| output.len() >= limit as usize);
                 responder.respond(
                     TerminalOutputResponse::new(output, truncated)
                         .exit_status(proc.exit_status.clone()),
@@ -224,16 +219,11 @@ impl AcpTerminalManager {
 
                 match rx.await {
                     Ok(status) => responder.respond(WaitForTerminalExitResponse::new(status)),
-                    Err(_) => {
-                        responder.respond(WaitForTerminalExitResponse::new(
-                            TerminalExitStatus::new(),
-                        ))
-                    }
+                    Err(_) => responder
+                        .respond(WaitForTerminalExitResponse::new(TerminalExitStatus::new())),
                 }
             }
-            None => responder.respond(WaitForTerminalExitResponse::new(
-                TerminalExitStatus::new(),
-            )),
+            None => responder.respond(WaitForTerminalExitResponse::new(TerminalExitStatus::new())),
         }
     }
 

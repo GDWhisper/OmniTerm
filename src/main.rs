@@ -51,9 +51,7 @@ pub struct AppState {
 
 /// Fallback handler that serves static files from embedded assets.
 /// First tries exact file match, then SPA fallback (index.html).
-async fn embedded_static_handler(
-    uri: axum::http::Uri,
-) -> impl IntoResponse {
+async fn embedded_static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path();
     if let Some((data, mime)) = embedded::serve_embedded(path) {
         return Response::builder()
@@ -75,9 +73,7 @@ async fn embedded_static_handler(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?),
-        )
+        .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?))
         .init();
 
     let args = Args::parse();
@@ -91,15 +87,13 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let db = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(&args.db)
-        .await?;
+    let db = SqlitePoolOptions::new().max_connections(5).connect(&args.db).await?;
 
     sqlx::migrate!("./migrations").run(&db).await?;
 
-    let activity_monitor =
-        tmux::control_mode::SessionActivityMonitor::new(tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT);
+    let activity_monitor = tmux::control_mode::SessionActivityMonitor::new(
+        tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT,
+    );
 
     let state = AppState {
         db,
@@ -116,8 +110,7 @@ async fn main() -> anyhow::Result<()> {
     });
     let frontend_dir = std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
 
-    let app = Router::new()
-        .merge(api::routes(state.clone()));
+    let app = Router::new().merge(api::routes(state.clone()));
 
     // Serve frontend: filesystem in dev mode, embedded in release mode
     // ── 前端服务 ─────────────────────────────────────────────
@@ -134,14 +127,11 @@ async fn main() -> anyhow::Result<()> {
         app.fallback(embedded_static_handler)
     };
 
-    let app = app
-        .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+    let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
 
     // ── 绑定 ─────────────────────────────────────────────────
     let host = std::env::var("OMNITERM_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-    let bind = std::env::var("BIND_ADDR")
-        .unwrap_or_else(|_| format!("{}:{}", host, args.port));
+    let bind = std::env::var("BIND_ADDR").unwrap_or_else(|_| format!("{}:{}", host, args.port));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
 
@@ -166,10 +156,8 @@ async fn main() -> anyhow::Result<()> {
     let shutdown_signal = async move {
         #[cfg(unix)]
         {
-            let mut term =
-                unix::signal(SignalKind::terminate()).expect("install SIGTERM handler");
-            let mut int =
-                unix::signal(SignalKind::interrupt()).expect("install SIGINT handler");
+            let mut term = unix::signal(SignalKind::terminate()).expect("install SIGTERM handler");
+            let mut int = unix::signal(SignalKind::interrupt()).expect("install SIGINT handler");
             tokio::select! {
                 _ = term.recv() => {}
                 _ = int.recv() => {}
@@ -184,9 +172,7 @@ async fn main() -> anyhow::Result<()> {
         shutdown_supervisor.shutdown_all().await;
     };
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal).await?;
 
     Ok(())
 }

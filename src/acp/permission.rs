@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
     PermissionOptionId, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
 };
-use agent_client_protocol::Responder;
 use serde::Serialize;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
 const PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
@@ -27,10 +27,7 @@ pub struct PermissionManager {
 impl PermissionManager {
     pub fn new() -> Self {
         let (request_tx, _) = broadcast::channel(16);
-        Self {
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            request_tx,
-        }
+        Self { pending: Arc::new(Mutex::new(HashMap::new())), request_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -64,9 +61,8 @@ impl PermissionManager {
             tokio::time::sleep(PERMISSION_TIMEOUT).await;
             let mut map = pending.lock().await;
             if let Some(responder) = map.remove(&timeout_id) {
-                let _ = responder.respond(RequestPermissionResponse::new(
-                    RequestPermissionOutcome::Cancelled,
-                ));
+                let _ = responder
+                    .respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
             }
         });
 

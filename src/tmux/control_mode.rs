@@ -3,10 +3,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
@@ -42,25 +42,15 @@ impl ControlModeClient {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| {
-                anyhow!(
-                    "failed to spawn tmux control mode for session {}: {}",
-                    session_name,
-                    e
-                )
+                anyhow!("failed to spawn tmux control mode for session {}: {}", session_name, e)
             })?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("tmux control mode stdin not available"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("tmux control mode stdout not available"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow!("tmux control mode stderr not available"))?;
+        let stdin =
+            child.stdin.take().ok_or_else(|| anyhow!("tmux control mode stdin not available"))?;
+        let stdout =
+            child.stdout.take().ok_or_else(|| anyhow!("tmux control mode stdout not available"))?;
+        let stderr =
+            child.stderr.take().ok_or_else(|| anyhow!("tmux control mode stderr not available"))?;
 
         // Capture stderr so we can diagnose unexpected child exits.
         tokio::spawn(stderr_reader(session_name.clone(), stderr));
@@ -87,9 +77,8 @@ impl ControlModeClient {
     /// Start the async reader task that watches for `%output` events.
     pub async fn listen(&self) -> Result<()> {
         let mut stdout_guard = self.stdout.lock().await;
-        let reader = stdout_guard
-            .take()
-            .ok_or_else(|| anyhow!("control mode reader already started"))?;
+        let reader =
+            stdout_guard.take().ok_or_else(|| anyhow!("control mode reader already started"))?;
 
         let (tx, rx) = oneshot::channel();
         let last_output_at = Arc::clone(&self.last_output_at);
@@ -152,13 +141,11 @@ impl ControlModeClient {
             match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
                 Ok(Ok(status)) => debug!(
                     "tmux control mode process for session {} exited with {}",
-                    self.session_name,
-                    status
+                    self.session_name, status
                 ),
                 Ok(Err(e)) => debug!(
                     "tmux control mode process for session {} wait error: {}",
-                    self.session_name,
-                    e
+                    self.session_name, e
                 ),
                 Err(_) => debug!(
                     "tmux control mode process for session {} did not exit in time",
@@ -252,11 +239,7 @@ async fn stderr_reader(session_name: String, stderr: tokio::process::ChildStderr
             Ok(0) => break,
             Ok(_) => {
                 let text = String::from_utf8_lossy(&line);
-                debug!(
-                    "tmux control mode stderr for session {}: {}",
-                    session_name,
-                    text.trim()
-                );
+                debug!("tmux control mode stderr for session {}: {}", session_name, text.trim());
             }
             Err(e) => {
                 debug!("tmux control mode stderr error for session {}: {}", session_name, e);
@@ -277,10 +260,7 @@ pub struct SessionActivityMonitor {
 impl SessionActivityMonitor {
     /// Create a new monitor with the given inactivity timeout.
     pub fn new(timeout: Duration) -> Self {
-        Self {
-            clients: Arc::new(RwLock::new(HashMap::new())),
-            timeout,
-        }
+        Self { clients: Arc::new(RwLock::new(HashMap::new())), timeout }
     }
 
     /// Ensure a control-mode connection exists for `session_name`.
@@ -363,10 +343,7 @@ mod tests {
     }
 
     async fn kill_test_tmux_session(name: &str) {
-        let _ = Command::new("tmux")
-            .args(["kill-session", "-t", name])
-            .output()
-            .await;
+        let _ = Command::new("tmux").args(["kill-session", "-t", name]).output().await;
     }
 
     #[tokio::test]

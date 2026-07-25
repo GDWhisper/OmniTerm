@@ -1,22 +1,22 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
-use tokio::sync::oneshot;
-use std::time::Duration;
 use crate::AppState;
 use crate::tmux;
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -90,10 +90,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         Some((name,)) => name,
         None => {
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "session not found",
-            })
-            .unwrap();
+            let msg = serde_json::to_string(&ServerControl::Error { message: "session not found" })
+                .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
@@ -108,26 +106,22 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     }
 
     // Check if hooks are enabled for this session
-    let hook_enabled: bool = sqlx::query_as(
-        "SELECT hook_enabled FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten()
-    .map(|(enabled,): (bool,)| enabled)
-    .unwrap_or(false);
+    let hook_enabled: bool = sqlx::query_as("SELECT hook_enabled FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(enabled,): (bool,)| enabled)
+        .unwrap_or(false);
 
     // Look up workspace_path for the tmux session CWD
-    let cwd: Option<(String,)> = sqlx::query_as(
-        "SELECT workspace_path FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    let cwd: Option<(String,)> = sqlx::query_as("SELECT workspace_path FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
 
     let cwd = cwd
         .map(|(p,)| p)
@@ -137,17 +131,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     // falling back to 80x24 if not provided.
     let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
     let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
-    let pty_size = PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
+    let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
-    info!(
-        "terminal PTY initial size: {}x{} for session={}",
-        cols, rows, session_id
-    );
+    info!("terminal PTY initial size: {}x{} for session={}", cols, rows, session_id);
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -156,10 +142,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         Err(e) => {
             error!("failed to open PTY: {}", e);
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "failed to open PTY",
-            })
-            .unwrap();
+            let msg =
+                serde_json::to_string(&ServerControl::Error { message: "failed to open PTY" })
+                    .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
@@ -208,10 +193,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     // Send attached confirmation
-    let attached_msg = serde_json::to_string(&ServerControl::Attached {
-        session: &tmux_name,
-    })
-    .unwrap();
+    let attached_msg =
+        serde_json::to_string(&ServerControl::Attached { session: &tmux_name }).unwrap();
     if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
         return;
     }
@@ -242,7 +225,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     });
 
     // Forward loop: merge PTY output + agent state messages → WS
-    let mut ws_tx2 = ws_tx;  // ws_tx moved here
+    let mut ws_tx2 = ws_tx; // ws_tx moved here
     let forward_handle = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -522,10 +505,7 @@ async fn handle_external_terminal(
 
     // Establish control mode connection to track session activity.
     if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
-        warn!(
-            "failed to ensure control mode for external session {}: {}",
-            tmux_name, e
-        );
+        warn!("failed to ensure control mode for external session {}: {}", tmux_name, e);
     }
 
     let _hook_enabled = false;
@@ -538,17 +518,9 @@ async fn handle_external_terminal(
     // Determine initial PTY size from query params
     let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
     let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
-    let pty_size = PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
+    let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
-    info!(
-        "terminal PTY initial size: {}x{} for tmux={}",
-        cols, rows, tmux_name
-    );
+    info!("terminal PTY initial size: {}x{} for tmux={}", cols, rows, tmux_name);
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -557,10 +529,9 @@ async fn handle_external_terminal(
         Err(e) => {
             error!("failed to open PTY: {}", e);
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "failed to open PTY",
-            })
-            .unwrap();
+            let msg =
+                serde_json::to_string(&ServerControl::Error { message: "failed to open PTY" })
+                    .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
@@ -591,10 +562,8 @@ async fn handle_external_terminal(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    let attached_msg = serde_json::to_string(&ServerControl::Attached {
-        session: &tmux_name,
-    })
-    .unwrap();
+    let attached_msg =
+        serde_json::to_string(&ServerControl::Attached { session: &tmux_name }).unwrap();
     if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
         return;
     }

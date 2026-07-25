@@ -1,24 +1,21 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::acp::AcpClient;
 use crate::models::agent::{Agent, AgentEnvVar, CreateAgent, UpdateAgent};
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/agents", get(list_agents).post(create_agent))
-        .route(
-            "/agents/{id}",
-            get(get_agent).put(update_agent).delete(delete_agent),
-        )
+        .route("/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
         .route("/agents/{id}/test", post(test_agent))
 }
 
@@ -68,10 +65,7 @@ async fn get_agent(State(state): State<AppState>, Path(id): Path<String>) -> imp
 
     match row {
         Some(r) => (StatusCode::OK, Json(json!(r.into_agent()))),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "not found" })),
-        ),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
     }
 }
 
@@ -99,10 +93,7 @@ async fn create_agent(
     .await;
 
     if let Err(e) = result {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e.to_string() })),
-        );
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() })));
     }
 
     let agent = Agent {
@@ -130,10 +121,7 @@ async fn update_agent(
         .unwrap();
 
     let Some(existing) = existing else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "not found" })),
-        );
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     };
     let mut current = existing.into_agent();
 
@@ -171,11 +159,8 @@ async fn update_agent(
 }
 
 async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM agents WHERE id = ?")
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .unwrap();
+    let result =
+        sqlx::query("DELETE FROM agents WHERE id = ?").bind(&id).execute(&state.db).await.unwrap();
 
     if result.rows_affected() == 0 {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
@@ -198,10 +183,7 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
     let agent = match load_agent(&state.db, &id).await {
         Some(a) => a,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "agent not found" })),
-            );
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
         }
     };
 
@@ -211,9 +193,8 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
             client.disconnect().await;
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("connection failed: {}", e) })),
-        ),
+        Err(e) => {
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
+        }
     }
 }
