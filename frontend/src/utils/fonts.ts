@@ -10,10 +10,10 @@
  *   - PIXEL_FONT  → titles, buttons, status labels (always on)
  */
 
-/** Reader / body / code / inputs / terminal. JetBrains Mono must be installed
- *  locally or loaded via index.html — neither is currently true, so this stack
- *  silently falls back to the system monospace (`ui-monospace`, `Consolas`).
- *  See docs/debug-log.md if you change the loading strategy. */
+/** Reader / body / code / inputs / terminal. JetBrains Mono is self-hosted
+ *  via @font-face in index.css (jetbrains-mono-latin[-ext].woff2), so it loads
+ *  locally with no remote dependency. Keep this stack in sync with the
+ *  `--reader-font` CSS variable and the `.font-reader` rule in index.css. */
 export const READER_FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace"
 
 /** Logo wordmark — Press Start 2P first, VT323 fallback. */
