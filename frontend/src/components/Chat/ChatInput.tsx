@@ -5,6 +5,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import type { SlashCommand } from '../../stores/chatStore'
 
 interface ChatInputProps {
+  sessionId: string
   disabled: boolean
   onSend: (text: string) => void
   onCancel: () => void
@@ -12,17 +13,30 @@ interface ChatInputProps {
   commands?: SlashCommand[]
 }
 
-export function ChatInput({ disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
+/** In-memory per-session draft cache. Survives session switches within the
+ *  same browser tab; intentionally not persisted to localStorage. */
+const chatDrafts = new Map<string, string>()
+
+export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, commands = [] }: ChatInputProps) {
   const { t } = useTranslation()
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => chatDrafts.get(sessionId) ?? '')
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
+  // Persist unsent text per session and restore when switching back.
   useEffect(() => {
+    return () => {
+      // Save the current draft for the outgoing session.
+      chatDrafts.set(sessionId, text)
+    }
+  }, [sessionId])
+
+  useEffect(() => {
+    setText(chatDrafts.get(sessionId) ?? '')
     textareaRef.current?.focus()
-  }, [])
+  }, [sessionId])
 
   useEffect(() => {
     const el = textareaRef.current

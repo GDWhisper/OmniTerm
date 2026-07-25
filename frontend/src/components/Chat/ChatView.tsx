@@ -336,6 +336,7 @@ export function ChatView() {
       <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
 
       <ChatInput
+        sessionId={activeSessionId!}
         disabled={inputDisabled}
         sending={chatState.sending}
         onSend={handleSend}
