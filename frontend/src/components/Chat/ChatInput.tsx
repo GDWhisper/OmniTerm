@@ -27,26 +27,25 @@ export function ChatInput({ sessionId, disabled, onSend, onCancel, sending, comm
 
   // Persist unsent text per session and restore when switching back.
   const prevSessionIdRef = useRef(sessionId)
-  useEffect(() => {
-    if (prevSessionIdRef.current !== sessionId) {
-      // Save the draft for the outgoing session before switching.
-      if (text.trim() !== '') {
-        chatDrafts.set(prevSessionIdRef.current, text)
-      }
-      prevSessionIdRef.current = sessionId
-      setText(chatDrafts.get(sessionId) ?? '')
+  if (prevSessionIdRef.current !== sessionId) {
+    const prevId = prevSessionIdRef.current
+    // Save the draft for the outgoing session before applying the new one.
+    if (text.trim() !== '') {
+      chatDrafts.set(prevId, text)
     }
-
-    return () => {
-      // On unmount, save the current session draft.
-      if (text.trim() !== '') {
-        chatDrafts.set(sessionId, text)
-      }
-    }
-  }, [sessionId])
+    prevSessionIdRef.current = sessionId
+    setText(chatDrafts.get(sessionId) ?? '')
+  }
 
   useEffect(() => {
     textareaRef.current?.focus()
+    return () => {
+      // On unmount, save the current session draft.
+      const current = textareaRef.current
+      if (current && current.value.trim() !== '') {
+        chatDrafts.set(sessionId, current.value)
+      }
+    }
   }, [sessionId])
 
   useEffect(() => {
