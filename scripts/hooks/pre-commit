@@ -1,32 +1,40 @@
 #!/usr/bin/env bash
-# Pre-commit hook: run frontend lint and cargo check on staged files.
+# Pre-commit hook: run frontend lint/test and Rust fmt/clippy on staged files.
 # Catches the most common "missed before push" issues:
 #   - TypeScript / ESLint errors (pnpm lint)
-#   - Rust compile errors (cargo check)
+#   - Frontend test regressions (pnpm test --run)
+#   - Rust formatting drift (cargo fmt --check)
+#   - Rust lint / compile errors (cargo clippy -- -D warnings, 子集即 cargo check)
 #
-# Install (per worktree):
+# Install (per worktree，已由 dev.sh start 自动完成):
 #   git config core.hooksPath scripts/hooks
 #   chmod +x scripts/hooks/pre-commit
-# Disable per-commit: git commit --no-verify
+# 本次提交跳过: git commit --no-verify
+#
+# 设计依据: docs/dev/plans/2026-07-24-quality-gates.md §3.2
+# 不进 pre-commit 的（放 CI）: cargo test(编译慢)、cargo-deny(网络)、pnpm build。
 
 set -e
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
 
-# ── Frontend: pnpm lint on staged .ts / .tsx files ──
+# ── Frontend: pnpm lint 与 pnpm test --run（仅当暂存 .ts/.tsx）──
 STAGED_FE=$(echo "$STAGED" | grep -E '\.(ts|tsx)$' || true)
 if [ -n "$STAGED_FE" ]; then
   if [ -f frontend/package.json ]; then
     echo "[pre-commit] pnpm lint on $(echo "$STAGED_FE" | wc -l) staged frontend file(s)..."
     (cd frontend && pnpm lint)
+    echo "[pre-commit] pnpm test --run（前端，快速反馈）..."
+    (cd frontend && pnpm test --run)
   fi
 fi
 
-# ── Backend: cargo check on staged .rs files ──
+# ── Backend: cargo fmt --check 与 cargo clippy（仅当暂存 .rs）──
 STAGED_RS=$(echo "$STAGED" | grep -E '\.rs$' || true)
 if [ -n "$STAGED_RS" ]; then
-  # Make sure cargo is on PATH
   . "$HOME/.cargo/env" 2>/dev/null || true
-  echo "[pre-commit] cargo check on $(echo "$STAGED_RS" | wc -l) staged .rs file(s)..."
-  cargo check --quiet
+  echo "[pre-commit] cargo fmt --check on $(echo "$STAGED_RS" | wc -l) staged .rs file(s)..."
+  cargo fmt --all -- --check
+  echo "[pre-commit] cargo clippy -- -D warnings（含编译检查）..."
+  cargo clippy --quiet --workspace --all-targets -- -D warnings
 fi
