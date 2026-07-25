@@ -10,6 +10,8 @@ export function Markdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // TECH-DEBT: [react-markdown code 组件 props 用 any] | Markdown.tsx 13行 | 根因：pnpm 严格 node_modules 使同一 @types/react 经两条路径被 tsc 实例化为两份模块实例，导致显式类型化后 <code {...props}> 触发 Ref/VoidOrUndefinedOnly 双类型不兼容（tsc -b 报错）。去重需调整 pnpm 去重/hoist 策略，超出质量门禁范围。升级路径：对齐 @types/react 单实例（pnpm dedupe 或 overrides）后改为显式 React.HTMLAttributes 类型并移除本 disable。
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           code({ className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '')
             const codeStr = String(children).replace(/\n$/, '')

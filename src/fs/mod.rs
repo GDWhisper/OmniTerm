@@ -428,7 +428,8 @@ mod tests {
     #[test]
     fn test_sanitize_valid() {
         let base = Path::new("/tmp/omniterm_test");
-        fs::create_dir_all(base).unwrap();
+        // sanitize_path 是“读路径”变体：被校验路径必须实际存在（sanitize_path_new 才用于创建）
+        fs::create_dir_all(base.join("foo/bar")).unwrap();
         assert!(sanitize_path(base, "foo/bar").is_ok());
     }
 
