@@ -125,6 +125,8 @@
   "chat.input.queue": "排队",
   "chat.input.queueNext": "下一条",
   "chat.input.queueWithdraw": "撤回排队的消息",
+  "chat.input.queueSendNow": "立刻发送——打断 agent 当前任务并发出这条",
+  "chat.input.queueEdit": "编辑队列消息——撤回并回填到输入框",
   "chat.input.queueTitle": "排队此消息——agent 跑完后自动发送",
   "chat.input.queueFullTitle": "队列已满——请先点 ✕ 撤回上一条",
   "chat.input.queueEmptyTitle": "输入内容后可加入队列",

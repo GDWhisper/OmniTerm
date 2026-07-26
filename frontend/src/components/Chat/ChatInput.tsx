@@ -11,6 +11,13 @@ interface ChatInputProps {
   onCancel: () => void
   /** Clicked when the user taps ✕ on the queued-message chip above the input. */
   onCancelQueued: () => void
+  /**
+   * Clicked when the user taps ▶ on the queued-message chip. ChatView forwards
+   * to the in-flight `cancel()` — the existing `prompt_done`-driven drain in
+   * `useAcpChat` then auto-sends the queued text once the cancelled prompt
+   * finishes. No new state machine, no race with the in-flight's `markDone`.
+   */
+  onSendNow: () => void
   sending: boolean
   /** N=1 single-slot queued message buffer; rendered as a chip above the textarea. */
   queuedMessage: string | null
@@ -51,6 +58,7 @@ export function ChatInput({
   onSend,
   onCancel,
   onCancelQueued,
+  onSendNow,
   sending,
   queuedMessage,
   commands = [],
@@ -196,6 +204,16 @@ export function ChatInput({
     textareaRef.current?.focus()
   }
 
+  // Edit: 把队列里的文本回填到 textarea，然后撤回队列。用户看到 chip 消失、
+  // 文本出现在输入框，可继续编辑后 send（idle）或 queue（busy）。
+  const handleClickEditQueued = () => {
+    if (!queuedMessage) return
+    setText(queuedMessage)
+    setShowCommands(false)
+    onCancelQueued()
+    textareaRef.current?.focus()
+  }
+
   const inputStyle: React.CSSProperties = {
     flex: 1,
     resize: 'none',
@@ -272,6 +290,46 @@ export function ChatInput({
           >
             {previewText}
           </span>
+          <button
+            onClick={onSendNow}
+            title={t('chat.input.queueSendNow')}
+            aria-label={t('chat.input.queueSendNow')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-faint)',
+              cursor: 'pointer',
+              padding: '0 4px',
+              fontSize: 12,
+              lineHeight: 1,
+              fontFamily: 'inherit',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)' }}
+          >
+            ▶
+          </button>
+          <button
+            onClick={handleClickEditQueued}
+            title={t('chat.input.queueEdit')}
+            aria-label={t('chat.input.queueEdit')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-faint)',
+              cursor: 'pointer',
+              padding: '0 4px',
+              fontSize: 12,
+              lineHeight: 1,
+              fontFamily: 'inherit',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)' }}
+          >
+            ✎
+          </button>
           <button
             onClick={onCancelQueued}
             title={t('chat.input.queueWithdraw')}

@@ -125,6 +125,8 @@
   "chat.input.queue": "Queue",
   "chat.input.queueNext": "NEXT",
   "chat.input.queueWithdraw": "Withdraw queued message",
+  "chat.input.queueSendNow": "Send now — interrupt the current agent task and send this",
+  "chat.input.queueEdit": "Edit queued message — withdraw and put it back in the input box",
   "chat.input.queueTitle": "Queue this message — will send when the agent finishes",
   "chat.input.queueFullTitle": "Queue is full — tap ✕ on the chip to withdraw first",
   "chat.input.queueEmptyTitle": "Type a message to queue",

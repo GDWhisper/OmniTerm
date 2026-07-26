@@ -157,6 +157,15 @@ export function ChatView() {
     useChatStore.getState().clearQueuedMessage(activeSessionId)
   }
 
+  // Send Now on queued chip: 调 cancel() 打断当前 in-flight prompt。
+  // 不需要手动调 sendPrompt——现有 useAcpChat 的 prompt_done 分支已经有 drain
+  // 逻辑（加 queuedMessage → 调 sendPrompt），cancelled prompt 结束时 drain 自动
+  // 触发，队列里的消息随后发出。选这个路径避免 cancel+sendPrompt 的 race condition
+  // （旧 prompt_done 在新 in-flight 期间到达会把 sending 拉成 false，造成 UI 闪烁）。
+  const handleSendNowQueued = () => {
+    cancel()
+  }
+
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
   // 也应展示「恢复会话」按钮。acp_process_alive 由 Sidebar 的会话列表轮询刷新，
   // 因而释放后能即时（最多一个轮询周期）反映到 UI，无需刷新页面。
@@ -357,6 +366,7 @@ export function ChatView() {
         onSend={handleSend}
         onCancel={cancel}
         onCancelQueued={handleCancelQueued}
+        onSendNow={handleSendNowQueued}
         commands={chatState.commands}
       />
 
