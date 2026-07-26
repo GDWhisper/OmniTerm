@@ -453,23 +453,23 @@ export const api = {
   gitBranches: (bind: GitBind) =>
     request<{ branches: GitBranch[] } | { is_repo: false }>(`/git/branches?${gitBindQuery(bind)}`),
   gitStage: (bind: GitBind, paths: string[]) =>
-    request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }) }),
+    request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
   gitUnstage: (bind: GitBind, paths: string[]) =>
-    request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }) }),
+    request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
   gitCommit: (bind: GitBind, message: string) =>
-    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }) }),
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }), silent: true }),
   gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
-    request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }) }),
+    request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
   gitCheckout: (bind: GitBind, branch: string) =>
-    request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }) }),
+    request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>
-    request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }) }),
+    request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }), silent: true }),
   gitPush: (bind: GitBind) =>
-    request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+    request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
   gitPull: (bind: GitBind) =>
-    request('/git/pull', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+    request('/git/pull', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
   gitFetch: (bind: GitBind) =>
-    request('/git/fetch', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+    request('/git/fetch', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
 }
 
 // ── Git panel types ──

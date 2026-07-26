@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type GitBind, type GitLogEntry, type GitStatusEntry } from '../../api/client'
+import { api, ApiError, type GitBind, type GitLogEntry, type GitStatusEntry } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
 import { useToastStore } from '../../stores/toastStore'
@@ -9,6 +9,9 @@ import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 import { IconRefresh } from '../FileManager/icons'
 
 const LOG_PAGE_SIZE = 50
+
+/** Backend error codes (ADR-6 refined stderr) with localized toast copy. */
+const KNOWN_ERROR_CODES = ['auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout'] as const
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {
   if (entry.conflicted) return 'U'
@@ -157,10 +160,13 @@ export function GitPanel({ visible }: GitPanelProps) {
       await mutate(bind, op)
       setStatusTick((n) => n + 1)
       if (successMsg) addToast('success', successMsg)
-    } catch {
-      // request() already toasts the refined backend error
+    } catch (err: unknown) {
+      // Mutation calls are silent — map the refined backend code to localized copy here
+      const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+      const code = KNOWN_ERROR_CODES.find((c) => c === body?.code)
+      addToast('error', code ? t(`git.error.${code}`) : (err instanceof Error ? err.message : String(err)))
     }
-  }, [bind, mutate, addToast])
+  }, [bind, mutate, addToast, t])
 
   const entries = status?.entries ?? []
   const stagedEntries = entries.filter(isStaged)
