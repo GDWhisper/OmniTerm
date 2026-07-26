@@ -20,4 +20,4 @@ export const READER_FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-m
 export const LOGO_FONT = "'Press Start 2P', 'VT323', monospace"
 
 /** Display text — titles, buttons, status labels. */
-export const PIXEL_FONT = "'DotGothic16', 'VT323', 'Press Start 2P', monospace"
+export const PIXEL_FONT = "'Silkscreen', 'VT323', 'Press Start 2P', monospace"

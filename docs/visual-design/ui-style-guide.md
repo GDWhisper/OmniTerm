@@ -98,7 +98,7 @@ Three CSS classes, each gated by body class `body.pixel-font-on`:
 | Class | Font stack | When to use |
 |---|---|---|
 | `.font-logo` | `'Press Start 2P', 'VT323', monospace` | Logo wordmark only |
-| `.font-pixel` | `'DotGothic16', 'VT323', 'Press Start 2P', monospace` | Titles, buttons, status labels, short display text |
+| `.font-pixel` | `'Silkscreen', 'VT323', 'Press Start 2P', monospace` | Titles, buttons, status labels, short display text |
 | `.font-reader` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | Code, body text, inputs, terminal — always use this for readable content |
 
 Without `body.pixel-font-on`, `.font-logo` and `.font-pixel` fall back to plain `monospace`.
@@ -121,7 +121,7 @@ All `.font-pixel` text is `text-transform: uppercase`.
 | CSS Variable | Font stack | JS Constant (fonts.ts) |
 |---|---|---|
 | `--logo-font` | `'Press Start 2P', 'VT323', monospace` | `LOGO_FONT` |
-| `--pixel-font` | `'DotGothic16', 'VT323', 'Press Start 2P', monospace` | `PIXEL_FONT` |
+| `--pixel-font` | `'Silkscreen', 'VT323', 'Press Start 2P', monospace` | `PIXEL_FONT` |
 | `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | `READER_FONT` |
 
 ### 禁止硬编码 font-family
@@ -426,7 +426,7 @@ Feature flags are applied as classes on `<body>`:
 | Body class | Added when | What it enables |
 |---|---|---|
 | `body.pixel-ui-on` | always | `.btn-pixel-*`, `.panel-title-bar`, `.terminal-panel-pixel`, `.toast-pixel` styles |
-| `body.pixel-font-on` | always | `.font-logo` and `.font-pixel` use Press Start 2P / DotGothic16 |
+| `body.pixel-font-on` | always | `.font-logo` and `.font-pixel` use Press Start 2P / Silkscreen |
 | `body.parchment-texture` | `parchmentTextureEnabled === true` | Background dot-matrix overlay on body (light theme only) |
 
 ---
@@ -495,7 +495,7 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 
 | 元素 | 规格 |
 |------|------|
-| Tab 字体 | `.font-pixel` (DotGothic16) 14px，letter-spacing 1.5px，**UPPERCASE** |
+| Tab 字体 | `.font-pixel` (Silkscreen) 14px，letter-spacing 1.5px，**UPPERCASE** |
 | Tab padding | `9px 8px 9px 10px` |
 | Tab 左边框 | 3px（transparent 预留位，active 时变色） |
 | Inactive tab | `var(--text-muted)` 文字，透明背景 |
@@ -534,7 +534,7 @@ Popup 自身 `overflow: hidden`，滚动交给内层 `.overlay-scroll-content`�
 
 ### i18n 视觉约定
 
-- **Tab 文字**：英文 UPPERCASE（DotGothic16/VT323 不完整支持中文，pixel 风统一）
+- **Tab 文字**：英文 UPPERCASE（Silkscreen/VT323 不支持中文，pixel 风统一）
   en/zh 两个 locale **写同样的英文值**（如 `settings.category.appearance: "APPEARANCE"`）
 - **选项标签 / 标题 / hint**：正常翻译
 
