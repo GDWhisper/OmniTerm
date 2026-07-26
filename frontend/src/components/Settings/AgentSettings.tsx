@@ -25,7 +25,9 @@ const inputClass = 'w-full px-2 py-1.5 rounded-md text-xs focus:outline-none foc
 
 const btnBase: React.CSSProperties = {
   background: 'transparent',
-  border: '1px solid var(--border-strong)',
+  borderWidth: 1,
+  borderStyle: 'solid',
+  borderColor: 'var(--border-strong)',
   borderRadius: 6,
   cursor: 'pointer',
   fontFamily: READER_FONT,
