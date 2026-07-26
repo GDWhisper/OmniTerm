@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import { useAgentStore, type Agent } from '../../stores/agentStore'
 import type { AgentEnvVar, CreateAgent, UpdateAgent } from '../../api/client'
 import { READER_FONT } from '../../utils/fonts'
-import { AGENT_PRESETS } from './presets'
 
 /**
  * Agent CRUD panel rendered inside the Settings popup under the "Agents"
@@ -102,19 +101,6 @@ export function AgentSettings() {
     setSelectedId(null)
     setForm(emptyForm())
     setTestResult(null)
-  }
-
-  const applyPreset = (preset: (typeof AGENT_PRESETS)[number]) => {
-    setSelectedId(null)
-    setTestResult(null)
-    setForm({
-      id: '',
-      display_name: preset.display_name,
-      command: preset.command,
-      args_text: (preset.args ?? []).join(' '),
-      env: (preset.env ?? []).map((e) => ({ ...e })),
-      isNew: true,
-    })
   }
 
   const addEnvRow = () => {
@@ -273,23 +259,7 @@ export function AgentSettings() {
         <summary className="cursor-pointer select-none text-[11px]" style={{ color: 'var(--text-muted)' }}>
           {t('settings.agents.presetsHint')}
         </summary>
-        <div className="flex flex-wrap gap-1.5 pt-2">
-          {AGENT_PRESETS.map((p) => (
-            <button
-              key={p.labelKey}
-              type="button"
-              onClick={() => applyPreset(p)}
-              style={btnBase}
-              title={t(p.hintKey)}
-            >
-              {t(p.labelKey)}
-            </button>
-          ))}
-        </div>
-        <p className="pt-2 text-[11px] leading-relaxed" style={{ color: 'var(--danger, #c44)', fontFamily: READER_FONT }}>
-          {t('settings.agents.installHint')}
-        </p>
-        <p className="pt-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+        <p className="pt-2 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.agents.reference')}
         </p>
       </details>
