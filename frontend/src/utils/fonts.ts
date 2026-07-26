@@ -19,5 +19,6 @@ export const READER_FONT = "'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-m
 /** Logo wordmark — Press Start 2P first, VT323 fallback. */
 export const LOGO_FONT = "'Press Start 2P', 'VT323', monospace"
 
-/** Display text — titles, buttons, status labels. */
-export const PIXEL_FONT = "'Press Start 2P', 'VT323', monospace"
+/** Display text — titles, buttons, status labels. 'Press Start 2P UI' is the
+ *  same face as the logo but size-adjusted down in index.css @font-face. */
+export const PIXEL_FONT = "'Press Start 2P UI', 'VT323', monospace"

@@ -64,7 +64,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
-- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Press Start 2P（与 logo 字标同款街机字体，自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Press Start 2P 字形宽正、字高统一，全站像素风统一为单一字体；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
+- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Press Start 2P（与 logo 字标同款街机字体，自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Press Start 2P 字形宽正、字高统一，全站像素风统一为单一字体；UI 用途经 `size-adjust: 70%` 的 'Press Start 2P UI' 别名缩放避免同字号过大（logo 用原始版）；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
 - (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
 
 ### Fixed
