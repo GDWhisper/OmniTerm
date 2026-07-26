@@ -976,10 +976,8 @@ html, body, #root {
 
 .sidebar-project-header .proj-name {
   display: block;
-  font-family: var(--pixel-font);
   font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1028,9 +1026,7 @@ html, body, #root {
 }
 
 .sidebar-wt-row .branch-name {
-  font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 0.5px;
   color: var(--text-primary);
   flex: 1;
   min-width: 0;
