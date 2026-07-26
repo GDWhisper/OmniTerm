@@ -64,7 +64,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
-- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Silkscreen（几何方块风、自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Silkscreen 专为小字号 UI 标签设计，字形更宽、字高统一；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
+- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Press Start 2P（与 logo 字标同款街机字体，自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Press Start 2P 字形宽正、字高统一，全站像素风统一为单一字体；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
 - (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
 
 ### Fixed
