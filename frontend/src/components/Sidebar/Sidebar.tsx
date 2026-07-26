@@ -69,9 +69,6 @@ function SidebarBottomButton({
   )
 }
 
-// 侧栏窄于此宽度时，ACP 徽标缩写为单字母 A，给会话名让出空间
-const ACP_BADGE_FULL_MIN_SIDEBAR_WIDTH = 200
-
 export function Sidebar() {
   const {
     projects,
@@ -96,7 +93,6 @@ export function Sidebar() {
   } = useAppStore()
 
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
-  const sidebarWidth = useAppStore((s) => s.sidebarWidth)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
@@ -1193,13 +1189,17 @@ export function Sidebar() {
                                         attention.setActive(sessionKey)
                                       }}
                                     >
-                                      {/* ACP kind badge — 前置于指示灯，常驻标识会话类型；
-                                          绿字=进程驻留（未释放），灰字=已释放；窄侧栏缩写为 A */}
+                                      {/* ACP kind badge — 绝对定位叠加在左侧 28px 缩进槽，不占行内布局；
+                                          绿字=进程驻留（未释放），灰字=已释放 */}
                                       {s.runtime_kind === 'acp' && (
                                         <span
-                                          className="status-badge-3d font-pixel flex-shrink-0"
+                                          className="status-badge-3d font-pixel"
                                           style={{
-                                            padding: '1px 4px',
+                                            position: 'absolute',
+                                            left: -22,
+                                            top: '50%',
+                                            transform: 'translateY(-50%)',
+                                            padding: '1px 3px',
                                             background: 'var(--wood-shadow, #3A2E1F)',
                                             fontSize: 8,
                                             lineHeight: '10px',
@@ -1211,11 +1211,9 @@ export function Sidebar() {
                                               : t('sidebar.acpReleased')
                                           }
                                         >
-                                          {sidebarWidth >= ACP_BADGE_FULL_MIN_SIDEBAR_WIDTH ? 'ACP' : 'A'}
+                                          A
                                         </span>
                                       )}
-                                      {/* Active 指示条（行内元素，见 index.css .session-active-bar） */}
-                                      <div className="session-active-bar" />
                                       {/* Running indicator dot */}
                                       <div
                                         className="flex-shrink-0"

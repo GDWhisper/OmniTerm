@@ -1074,6 +1074,7 @@ html, body, #root {
 }
 
 .sidebar-session-item {
+  position: relative; /* ACP 徽标绝对定位锚点（叠加在左侧缩进槽，不占行内布局） */
   padding: 3px 6px;
   display: flex;
   align-items: center;
@@ -1089,19 +1090,9 @@ html, body, #root {
 
 .sidebar-session-item.active {
   background: var(--bg-surface);
+  border-left: 2px solid var(--accent);
+  padding-left: 4px;
   color: var(--text-primary);
-}
-
-/* 行内 active 指示条 — 用元素而非 border-left，让 ACP 徽标能排在它前面；
-   非 active 行保留透明占位以对齐 */
-.sidebar-session-item .session-active-bar {
-  width: 2px;
-  height: 14px;
-  flex-shrink: 0;
-}
-
-.sidebar-session-item.active .session-active-bar {
-  background: var(--accent);
 }
 
 .sidebar-session-item .session-name {
