@@ -210,25 +210,36 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
     [fileName],
   )
 
-  // Create the editor instance (mount once; editable/extensions trigger full recreation)
+  // Create the editor instance; reconfigure in-place on mode toggle (preserves scroll).
+  // Cleanup preserves the view on same-file re-runs (React Strict Mode) — only destroys
+  // on file change. This ensures the reconfigure path sees the existing view.
   useEffect(() => {
     if (!containerRef.current) return
 
-    // Only destroy the view when the file actually changed, not on mode toggle.
-    // On mode toggle (same file), the reconfigure effect updates the view in-place,
-    // preserving scroll position and cursor.
     const fileChanged = currentFilePathRef.current !== fileName
+    currentFilePathRef.current = fileName
+
     if (fileChanged) {
+      // File changed — destroy old view, fall through to create a new one
       viewRef.current?.destroy()
       viewRef.current = null
     }
-    currentFilePathRef.current = fileName
 
     if (viewRef.current) {
-      // View already exists (mode toggle on same file) — reconfigure effect handled it
+      // Same file, mode toggle — reconfigure compartment in-place (preserves scroll)
+      const view = viewRef.current
+      const savedScroll = view.scrollDOM.scrollTop
+      view.dispatch({
+        effects: editableCompartment.current.reconfigure(EditorView.editable.of(editable)),
+      })
+      // Restore scroll in case the browser auto-scrolled on contenteditable change
+      requestAnimationFrame(() => {
+        view.scrollDOM.scrollTop = savedScroll
+      })
       return
     }
 
+    // New file or first mount — create the editor
     let view: EditorView | null = null
     let cancelled = false
 
@@ -253,22 +264,14 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
 
     return () => {
       cancelled = true
-      view?.destroy()
-      viewRef.current = null
+      // Only destroy on file change or unmount — NOT on same-file re-runs (Strict Mode).
+      // Leave viewRef.current intact so the next setup reconfigures instead of recreating.
+      if (fileChanged) {
+        view?.destroy()
+        viewRef.current = null
+      }
     }
   }, [editable, createExtensions, fileName]) // NOTE: content intentionally omitted — editor manages its own state
-
-  // Reconfigure extensions in-place when switching edit/view mode on the same file.
-  // Only updates the editable compartment — NOT the entire extension tree.
-  // This preserves scroll position and cursor without destroying the EditorView.
-  useEffect(() => {
-    const view = viewRef.current
-    if (view) {
-      view.dispatch({
-        effects: editableCompartment.current.reconfigure(EditorView.editable.of(editable)),
-      })
-    }
-  }, [editable])
 
   // Sync external content changes into the editor (e.g. file reload, mode toggle, save).
   // Internal edits (typing) are no-ops because the editor's doc already matches the prop.
