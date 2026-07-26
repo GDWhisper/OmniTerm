@@ -69,6 +69,9 @@ function SidebarBottomButton({
   )
 }
 
+// 侧栏窄于此宽度时，ACP 徽标缩写为单字母 A，给会话名让出空间
+const ACP_BADGE_FULL_MIN_SIDEBAR_WIDTH = 200
+
 export function Sidebar() {
   const {
     projects,
@@ -93,6 +96,7 @@ export function Sidebar() {
   } = useAppStore()
 
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
+  const sidebarWidth = useAppStore((s) => s.sidebarWidth)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
@@ -1189,6 +1193,27 @@ export function Sidebar() {
                                         attention.setActive(sessionKey)
                                       }}
                                     >
+                                      {/* ACP kind badge — 前置于指示灯，常驻标识会话类型；
+                                          绿字=进程驻留（未释放），灰字=已释放；窄侧栏缩写为 A */}
+                                      {s.runtime_kind === 'acp' && (
+                                        <span
+                                          className="status-badge-3d font-pixel flex-shrink-0"
+                                          style={{
+                                            padding: '1px 4px',
+                                            background: 'var(--wood-shadow, #3A2E1F)',
+                                            fontSize: 8,
+                                            lineHeight: '10px',
+                                            color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
+                                          }}
+                                          title={
+                                            s.acp_process_alive
+                                              ? t('sidebar.acpRunning')
+                                              : t('sidebar.acpReleased')
+                                          }
+                                        >
+                                          {sidebarWidth >= ACP_BADGE_FULL_MIN_SIDEBAR_WIDTH ? 'ACP' : 'A'}
+                                        </span>
+                                      )}
                                       {/* Running indicator dot */}
                                       <div
                                         className="flex-shrink-0"
@@ -1207,26 +1232,6 @@ export function Sidebar() {
                                       <span className="session-name">
                                         {s.name || s.tmux_session_name}
                                       </span>
-                                      {/* ACP kind badge — 常驻标识会话类型；绿字=进程驻留（未释放），灰字=已释放 */}
-                                      {s.runtime_kind === 'acp' && (
-                                        <span
-                                          className="status-badge-3d font-pixel flex-shrink-0"
-                                          style={{
-                                            padding: '1px 4px',
-                                            background: 'var(--wood-shadow, #3A2E1F)',
-                                            fontSize: 8,
-                                            lineHeight: '10px',
-                                            color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
-                                          }}
-                                          title={
-                                            s.acp_process_alive
-                                              ? t('sidebar.acpRunning')
-                                              : t('sidebar.acpReleased')
-                                          }
-                                        >
-                                          ACP
-                                        </span>
-                                      )}
                                       {/* Attention badge */}
                                       {attnReason && (
                                         <span
