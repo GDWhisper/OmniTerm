@@ -1920,7 +1920,7 @@ select optgroup option {
   border: 2px solid var(--accent);
   border-radius: 0;
   color: var(--accent);
-  font-family: var(--reader-font);
+  font-family: var(--pixel-font);
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1960,7 +1960,7 @@ select optgroup option {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-family: var(--reader-font);
+  font-family: var(--pixel-font);
   font-size: 12px;
   text-align: left;
   overflow: hidden;
