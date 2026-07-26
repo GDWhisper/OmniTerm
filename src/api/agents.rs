@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use serde_json::json;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -15,6 +16,7 @@ use crate::models::agent::{Agent, AgentEnvVar, CreateAgent, UpdateAgent};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/agents", get(list_agents).post(create_agent))
+        .route("/agents/test-raw", post(test_agent_raw))
         .route("/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
         .route("/agents/{id}/test", post(test_agent))
 }
@@ -188,13 +190,48 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
     };
 
     let cwd = std::env::temp_dir();
-    match AcpClient::spawn_and_connect(agent, cwd).await {
-        Ok(client) => {
+    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
+        .await
+    {
+        Ok(Ok(client)) => {
             client.disconnect().await;
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
+        }
+        Err(_) => {
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
+        }
+    }
+}
+
+/// Test an agent configuration without saving it to the database.
+/// Accepts a `CreateAgent` body and attempts to spawn + connect.
+async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
+    let agent = Agent {
+        id: "test-raw".to_string(),
+        display_name: req.display_name,
+        command: req.command,
+        args: req.args,
+        env: req.env,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+
+    let cwd = std::env::temp_dir();
+    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
+        .await
+    {
+        Ok(Ok(client)) => {
+            client.disconnect().await;
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Ok(Err(e)) => {
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
+        }
+        Err(_) => {
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
         }
     }
 }

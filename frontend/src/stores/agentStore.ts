@@ -22,6 +22,7 @@ interface AgentState {
   updateAgent: (id: string, data: UpdateAgent) => Promise<Agent>
   deleteAgent: (id: string) => Promise<void>
   testAgent: (id: string) => Promise<void>
+  testAgentRaw: (data: CreateAgent) => Promise<void>
 }
 
 export const useAgentStore = create<AgentState>((set, get) => ({
@@ -63,5 +64,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
 
   testAgent: async (id) => {
     await api.testAgent(id)
+  },
+
+  testAgentRaw: async (data) => {
+    await api.testAgentRaw(data)
   },
 }))

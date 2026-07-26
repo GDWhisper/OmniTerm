@@ -252,6 +252,8 @@ export const api = {
     request(`/agents/${id}`, { method: 'DELETE' }),
   testAgent: (id: string) =>
     request<{ ok: boolean }>(`/agents/${id}/test`, { method: 'POST' }),
+  testAgentRaw: (data: CreateAgent) =>
+    request<{ ok: boolean }>('/agents/test-raw', { method: 'POST', body: JSON.stringify(data) }),
 
   // Session CWD
   getSessionCwd: (sessionId: string) =>

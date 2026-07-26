@@ -268,6 +268,7 @@
   "settings.agents.testFail": "失败",
   "settings.agents.presetsHint": "预设与字段参考",
   "settings.agents.reference": "命令是 OmniTerm 启动并通过 ACP（stdio）通信的可执行文件。参数以空格分隔作为 argv 传入。环境变量会注入到进程环境中。智能体必须能在 stdio 上讲 ACP 协议——请将「命令」指向兼容 ACP 的客户端（例如带有 ACP 模式的智能体 CLI）。",
+  "settings.agents.installHint": "使用预设前，请确保已安装对应的命令。点击预设按钮可自动填入配置，但不会自动安装依赖。",
   "settings.agents.preset.claude.label": "Claude Code",
   "settings.agents.preset.claude.hint": "启动 claude-agent-acp ACP 客户端。",
   "settings.agents.preset.codex.label": "Codex",

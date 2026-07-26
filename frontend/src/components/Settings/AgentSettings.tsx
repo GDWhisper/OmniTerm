@@ -75,6 +75,7 @@ export function AgentSettings() {
   const updateAgent = useAgentStore((s) => s.updateAgent)
   const deleteAgent = useAgentStore((s) => s.deleteAgent)
   const testAgent = useAgentStore((s) => s.testAgent)
+  const testAgentRaw = useAgentStore((s) => s.testAgentRaw)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm)
@@ -183,11 +184,24 @@ export function AgentSettings() {
   }
 
   const handleTest = async () => {
-    if (form.isNew || !form.id) return
     setTesting(true)
     setTestResult(null)
     try {
-      await testAgent(form.id)
+      if (form.isNew || !form.id) {
+        const args = form.args_text
+          .split(/\s+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+        const env = form.env.filter((e) => e.key.trim() !== '')
+        await testAgentRaw({
+          display_name: form.display_name.trim(),
+          command: form.command.trim(),
+          args,
+          env,
+        })
+      } else {
+        await testAgent(form.id)
+      }
       setTestResult('ok')
     } catch {
       setTestResult('fail')
@@ -207,7 +221,22 @@ export function AgentSettings() {
           letterSpacing: '0.5px',
         }}
       >
-        {t('settings.agents.title')}
+        {t('settings.agents.title')}{' '}
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 600,
+            color: 'var(--accent)',
+            background: 'var(--accent-10)',
+            border: '1px solid var(--accent)',
+            borderRadius: 3,
+            padding: '1px 4px',
+            verticalAlign: 'middle',
+            letterSpacing: '0.3px',
+          }}
+        >
+          BETA
+        </span>
       </h3>
 
       <div className="flex flex-wrap gap-1.5">
@@ -257,7 +286,10 @@ export function AgentSettings() {
             </button>
           ))}
         </div>
-        <p className="pt-2 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+        <p className="pt-2 text-[11px] leading-relaxed" style={{ color: 'var(--danger, #c44)', fontFamily: READER_FONT }}>
+          {t('settings.agents.installHint')}
+        </p>
+        <p className="pt-1 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.agents.reference')}
         </p>
       </details>
@@ -334,29 +366,27 @@ export function AgentSettings() {
               {t('settings.agents.delete')}
             </button>
           )}
-          {!form.isNew && (
-            <button
-              type="button"
-              onClick={handleTest}
-              disabled={testing || saving}
-              style={{
-                ...btnBase,
-                ...(testResult === 'ok'
-                  ? { borderColor: 'var(--success, #4a4)', color: 'var(--success, #4a4)' }
-                  : testResult === 'fail'
-                    ? { borderColor: 'var(--danger, #c44)', color: 'var(--danger, #c44)' }
-                    : {}),
-              }}
-            >
-              {testing
-                ? t('settings.agents.testing')
-                : testResult === 'ok'
-                  ? t('settings.agents.testOk')
-                  : testResult === 'fail'
-                    ? t('settings.agents.testFail')
-                    : t('settings.agents.test')}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={testing || saving || !form.command.trim()}
+            style={{
+              ...btnBase,
+              ...(testResult === 'ok'
+                ? { borderColor: 'var(--success, #4a4)', color: 'var(--success, #4a4)' }
+                : testResult === 'fail'
+                  ? { borderColor: 'var(--danger, #c44)', color: 'var(--danger, #c44)' }
+                  : {}),
+            }}
+          >
+            {testing
+              ? t('settings.agents.testing')
+              : testResult === 'ok'
+                ? t('settings.agents.testOk')
+                : testResult === 'fail'
+                  ? t('settings.agents.testFail')
+                  : t('settings.agents.test')}
+          </button>
           <button type="button" onClick={handleSave} disabled={saving} style={btnBase}>
             {saving ? t('settings.agents.saving') : t('settings.agents.save')}
           </button>
