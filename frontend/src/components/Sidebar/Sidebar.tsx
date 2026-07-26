@@ -1201,16 +1201,32 @@ export function Sidebar() {
                                         title={
                                           activity === 'waiting'
                                             ? t('sidebar.agentWaiting')
-                                            : s.runtime_kind === 'acp'
-                                              ? s.acp_process_alive
-                                                ? t('sidebar.acpRunning')
-                                                : t('sidebar.acpReleased')
-                                              : undefined
+                                            : undefined
                                         }
                                       />
                                       <span className="session-name">
                                         {s.name || s.tmux_session_name}
                                       </span>
+                                      {/* ACP kind badge — 常驻标识会话类型；绿字=进程驻留（未释放），灰字=已释放 */}
+                                      {s.runtime_kind === 'acp' && (
+                                        <span
+                                          className="status-badge-3d font-pixel flex-shrink-0"
+                                          style={{
+                                            padding: '1px 4px',
+                                            background: 'var(--wood-shadow, #3A2E1F)',
+                                            fontSize: 8,
+                                            lineHeight: '10px',
+                                            color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
+                                          }}
+                                          title={
+                                            s.acp_process_alive
+                                              ? t('sidebar.acpRunning')
+                                              : t('sidebar.acpReleased')
+                                          }
+                                        >
+                                          ACP
+                                        </span>
+                                      )}
                                       {/* Attention badge */}
                                       {attnReason && (
                                         <span
@@ -1230,7 +1246,8 @@ export function Sidebar() {
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
                                       )}
-                                      {s.runtime_kind === 'acp' && (
+                                      {/* Release 按钮仅在进程驻留时可用——已释放会话无可释放对象 */}
+                                      {s.runtime_kind === 'acp' && s.acp_process_alive && (
                                         <ReleaseButton
                                           onClick={(e) => {
                                             e.stopPropagation()
