@@ -113,6 +113,7 @@
   "terminal.status.connected": "Connected",
   "terminal.status.disconnected": "Disconnected",
   "terminal.status.connectionError": "Connection error",
+  "terminal.status.initFailed": "Terminal initialization failed, please retry",
   "terminal.status.attached": "Attached to {{session}}",
   "terminal.status.error": "Error: {{msg}}",
   "terminal.status.exited": "Process exited: {{code}}",

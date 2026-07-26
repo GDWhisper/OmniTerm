@@ -285,7 +285,7 @@ export function Terminal() {
             zIndex: 100,
           }}>
             <button
-              onClick={reconnect}
+              onClick={() => reconnect(containerRef.current)}
               style={{
                 padding: '8px 16px',
                 background: 'var(--accent)',

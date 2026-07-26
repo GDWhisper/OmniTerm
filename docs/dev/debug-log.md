@@ -523,4 +523,34 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 
 **教训**：「「session 的文件上下文」」这个语义贯穿三个进程层（agent OS / 后端 resolve / 前端 FileManager），修一层后必须从入口到 UI 走一遍完整请求流，确认每层都看到一致的 workspace。
 
+## 2026-07-26: 被替换 WebSocket 的晚到事件盖掉新连接状态（重连按钮偶发无反应）
+
+**症状**：终端长时间 idle 自动断开后，点重连按钮有概率无反应，刷新页面才能恢复。
+
+**具体根因（多个叠加，均为「点击看似无效」）**：
+
+1. **晚到事件竞态（测试确凿复现）**：`connectWs` 替换旧连接时只解绑 `onclose` 不解绑 `onerror`，且 handler 里 `setTerminalDisconnected(true)` 无条件执行。对 CONNECTING 中的 socket 调 `close()` 会异步触发 error 事件——用户连点两次重连时，第二次点击废弃的 ws2 的 error 事件在新 ws3 `onopen` 之后到达，把健康连接盖回「已断开」，覆盖层重新弹出。修复：`onclose`/`onerror` 首行 `if (wsRef.current !== ws) return`。
+2. **失败的动态 import 被模块级缓存**：xterm addon 的 `import()` promise 在模块顶层缓存，一旦 reject（典型：重新部署后旧 chunk 404，恰与「长时间挂机后」场景吻合）永久失败，每次重连点击都在 `await loadAddons()` 处抛错，无任何提示。修复：catch 后重建 promise 重试。
+3. **异步初始化链的异常黑洞**：`createTerminal(...)` 只有 `.finally` 没有 `.catch`，抛错变 unhandled rejection，UI 零反馈。修复：catch 中保持覆盖层 + toast 提示。
+
+**诊断过程要点**：
+
+- 用 mock WebSocket（手动驱动 onopen/onclose/onerror 时序）在 vitest/jsdom 里把「晚到事件」竞态变成确定性复现——竞态类 bug 的 feedback loop 关键是**把事件投递顺序变成测试输入**，而不是指望真实网络重现时序。
+- 一个曾被高度怀疑的假设被测试证伪：「Terminal.tsx effect 早退路径丢失 cleanup → session 往返后 xterm 留在已卸载 DOM」。写测试后发现 React reconciliation 按位置/类型复用了 container DOM 节点，xterm 命令式插入的子节点随之幸存，该路径实际不触发。**先写复现测试再定罪**，避免修一个不存在的 bug。
+
+### 可复用的调试理论
+
+**1. 手动管理的事件源被替换时，必须解绑全部 handler 或在 handler 内验证身份**
+
+`ws.onclose = null` 只挡住一个事件；close/error/message 是一组。更稳的模式是 handler 首行做身份校验（`if (currentRef !== this) return`）——它不依赖清理方记得每个事件名，天然免疫晚到事件。适用于 WebSocket、EventSource、MediaStream、任何「旧实例被替换但事件可能仍在飞行」的场景。
+
+**2. 模块级缓存的 promise 会把一次性失败固化成永久失败**
+
+`const p = import(...)` 顶层缓存是常见的预加载优化，但 rejected promise 不会自愈。所有缓存 promise 的地方都要问：reject 后下一次调用者拿到什么？要么 catch 后重建，要么缓存放在函数内按需创建。
+
+**3. 「按钮点了没反应」= 异步链路某环节静默死亡，从点击 handler 顺链路找无 catch 的 await**
+
+点击 → handler 早退（守卫/null ref）→ async 函数抛错无 catch → 状态更新被竞态覆盖，四类都表现为「无反应」。排查顺序：handler 的所有 return 路径 → 每个 await 的 reject 路径 → 状态被谁最后写。给每个静默 return/catch 补用户可见反馈（toast/overlay 文案）本身就是修复的一部分。
+
+
 
