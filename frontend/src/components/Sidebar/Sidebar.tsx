@@ -1,16 +1,17 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
-import { aggregateStatus } from '../../utils/agentAggregate'
+import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -89,8 +90,6 @@ export function Sidebar() {
     setConnected,
     workspaceSessionMemory,
     clearWorkspaceSession,
-    fmSessionStates,
-    resetFmToFollowing,
   } = useAppStore()
 
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
@@ -103,9 +102,26 @@ export function Sidebar() {
   const { t } = useTranslation()
   const attention = useAttention()
 
+  // ACP 会话活动状态（chatStore 派生）：与 tmux 屏幕检测的 agent_state 归一，
+  // 使两类会话的 Sidebar 状态点/聚合徽标表现一致。useShallow 保证仅在
+  // waiting/running 归属变化时重渲染（流式 chunk 不触发）。
+  const acpActivityMap = useChatStore(
+    useShallow((s) => {
+      const m: Record<string, AcpActivity> = {}
+      for (const [id, st] of Object.entries(s.states)) {
+        if (st.pendingPermission) m[id] = 'waiting'
+        else if (st.sending) m[id] = 'running'
+      }
+      return m
+    }),
+  )
+  const acpActivityFor = useCallback(
+    (sessionId: string): AcpActivity | undefined => acpActivityMap[sessionId],
+    [acpActivityMap],
+  )
+
   // Terminal button pulse: only when session exists and browsing outside its CWD
-  const fmState = activeSessionId ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }) : null
-  const isOutsideTerminalCwd = !!activeSessionId && fmState?.mode === 'manual'
+
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
@@ -944,18 +960,6 @@ export function Sidebar() {
           <div className="logo-version">v{APP_VERSION}</div>
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Terminal CWD button — pulses when outside terminal CWD */}
-          <button
-            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
-            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? 'var(--accent-bright)' : '#FAF2DE', fontSize: 14 }}
-            onClick={() => {
-              if (activeSessionId) resetFmToFollowing(activeSessionId)
-            }}
-            title={t('fm.backToTerminalDir')}
-            disabled={!activeSessionId}
-          >
-            <IconWorkbench width={13} height={13} />
-          </button>
           <button
             onClick={toggleSidebarCollapsed}
             className="flex items-center justify-center rounded-md transition-all"
@@ -1046,6 +1050,7 @@ export function Sidebar() {
             const projAgg = aggregateStatus(
               wtList.flatMap((wt) => sessionsForWorktree(proj.id, wt.path)),
               attention.reasonFor,
+              acpActivityFor,
             )
 
             return (
@@ -1104,7 +1109,7 @@ export function Sidebar() {
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
                         const wtSessions = sessionsForWorktree(proj.id, wt.path)
-                        const wtAgg = aggregateStatus(wtSessions, attention.reasonFor)
+                        const wtAgg = aggregateStatus(wtSessions, attention.reasonFor, acpActivityFor)
                         const isWtExpanded = isWtActive
 
                         return (
@@ -1153,6 +1158,28 @@ export function Sidebar() {
                                   const isSessionActive = activeSessionId === s.id
                                   const sessionKey = s.id
                                   const attnReason = attention.reasonFor(sessionKey)
+                                  // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
+                                  // 状态点/tooltip 两类会话表现一致
+                                  const activity =
+                                    s.runtime_kind === 'acp'
+                                      ? acpActivityFor(s.id)
+                                      : s.agent_state === 'waiting'
+                                        ? 'waiting'
+                                        : s.agent_state === 'running' || s.is_active
+                                          ? 'running'
+                                          : undefined
+                                  const dotColor = attnReason
+                                    ? attnReason === 'decision'
+                                      ? 'var(--warning)'
+                                      : attnReason === 'error'
+                                        ? 'var(--danger)'
+                                        : 'var(--success)'
+                                    : activity === 'waiting'
+                                      ? 'var(--warning)'
+                                      : activity === 'running'
+                                        ? 'var(--accent)'
+                                        : 'var(--text-faint)'
+                                  const dotGlow = dotColor !== 'var(--text-faint)'
                                   return (
                                     <div
                                       key={s.id}
@@ -1168,45 +1195,16 @@ export function Sidebar() {
                                         style={{
                                           width: 6,
                                           height: 6,
-                                          background: attnReason
-                                            ? attnReason === 'decision'
-                                              ? 'var(--warning)'
-                                              : attnReason === 'error'
-                                                ? 'var(--danger)'
-                                                : 'var(--success)'
-                                            : s.runtime_kind === 'acp'
-                                              ? s.acp_process_alive
-                                                ? 'var(--accent)'
-                                                : 'var(--text-faint)'
-                                              : s.agent_state === 'waiting'
-                                                ? 'var(--warning)'
-                                                : s.agent_state === 'running' || s.is_active
-                                                  ? 'var(--accent)'
-                                                  : 'var(--text-faint)',
-                                          // 运行中 ACP 常亮绿（轻微 glow），已释放灰；attnReason 仍脉冲提示
-                                          boxShadow: attnReason
-                                            ? attnReason === 'decision'
-                                              ? '0 0 4px var(--warning)'
-                                              : attnReason === 'error'
-                                                ? '0 0 4px var(--danger)'
-                                                : '0 0 4px var(--success)'
-                                            : s.runtime_kind === 'acp'
-                                              ? s.acp_process_alive
-                                                ? '0 0 4px var(--accent)'
-                                                : 'none'
-                                              : s.agent_state === 'waiting'
-                                                ? '0 0 4px var(--warning)'
-                                                : s.agent_state === 'running' || s.is_active
-                                                  ? '0 0 4px var(--accent)'
-                                                  : 'none',
+                                          background: dotColor,
+                                          boxShadow: dotGlow ? `0 0 4px ${dotColor}` : 'none',
                                         }}
                                         title={
-                                          s.runtime_kind === 'acp'
-                                            ? s.acp_process_alive
-                                              ? t('sidebar.acpRunning')
-                                              : t('sidebar.acpReleased')
-                                            : s.agent_state === 'waiting'
-                                              ? t('sidebar.agentWaiting')
+                                          activity === 'waiting'
+                                            ? t('sidebar.agentWaiting')
+                                            : s.runtime_kind === 'acp'
+                                              ? s.acp_process_alive
+                                                ? t('sidebar.acpRunning')
+                                                : t('sidebar.acpReleased')
                                               : undefined
                                         }
                                       />

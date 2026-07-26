@@ -621,11 +621,17 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
               }
+            } else if (!frame.stop_reason?.toLowerCase().includes('cancel')) {
+              // 与 tmux 链路表现一致（Sidebar 在 running→idle 转换 fire 'done'）；
+              // 用户主动取消不算完成，排队续发意味着 agent 还没歇。
+              attention.fire(sid, sid, 'done')
             }
           }
           break
         case 'prompt_error':
           s.markError(sid, frame.message ?? 'prompt failed')
+          // 与 tmux 链路的 attention_reason=error 表现一致
+          attention.fire(sid, sid, 'error')
           break
         case 'error':
           if (frame.code === 'session_not_found') {

@@ -39,6 +39,18 @@ describe('sessionStatus', () => {
   it('idle agent with seen output is none', () => {
     expect(sessionStatus(makeSession({ agent_state: 'idle' }), undefined)).toBe('none')
   })
+
+  it('acp session uses derived activity, not agent_state', () => {
+    const acp = makeSession({ runtime_kind: 'acp' })
+    expect(sessionStatus(acp, undefined, 'waiting')).toBe('blocked')
+    expect(sessionStatus(acp, undefined, 'running')).toBe('working')
+    expect(sessionStatus(acp, undefined, undefined)).toBe('none')
+  })
+
+  it('acp session ignores stale tmux agent_state field', () => {
+    const acp = makeSession({ runtime_kind: 'acp', agent_state: 'waiting' })
+    expect(sessionStatus(acp, undefined, undefined)).toBe('none')
+  })
 })
 
 describe('aggregateStatus', () => {
@@ -67,5 +79,14 @@ describe('aggregateStatus', () => {
 
   it('working when only active sessions', () => {
     expect(aggregateStatus([makeSession({ is_active: true })], noReason)).toBe('working')
+  })
+
+  it('acp activity accessor feeds aggregation', () => {
+    const sessions = [
+      makeSession({ id: 'a', runtime_kind: 'acp' }),
+      makeSession({ id: 'b', agent_state: 'idle' }),
+    ]
+    const acpFor = (id: string) => (id === 'a' ? ('waiting' as const) : undefined)
+    expect(aggregateStatus(sessions, noReason, acpFor)).toBe('blocked')
   })
 })

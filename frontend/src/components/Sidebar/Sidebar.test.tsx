@@ -107,7 +107,6 @@ describe('Sidebar handleCreateSession', () => {
       sidebarCollapsed: false,
       connected: true,
       workspaceSessionMemory: {},
-      fmSessionStates: {},
     })
 
     container = document.createElement('div')
