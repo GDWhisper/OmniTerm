@@ -63,7 +63,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
-- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Pixelify Sans（可变字重 400-700，自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Pixelify Sans 字形更宽、小字号可读性更好；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
+- (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 DotGothic16（点阵风、自托管 woff2，VT323 保留为回退）：VT323 过于窄长，DotGothic16 字形更宽、工整中性、小字号可读性更好；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
 - (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
 
 ### Fixed
