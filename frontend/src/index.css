@@ -106,6 +106,8 @@
      utils/fonts.ts). JS uses the READER_FONT constant; CSS uses this var
      (directly or via the .font-reader class). Keep in sync with fonts.ts. */
   --reader-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --logo-font: 'Press Start 2P', 'VT323', monospace;
+  --pixel-font: 'VT323', 'Press Start 2P', monospace;
 
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
@@ -202,13 +204,13 @@
    ──────────────────────────────────────────────────────────────────── */
 
 .font-logo {
-  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-family: var(--logo-font);
   letter-spacing: 1px;
   text-transform: uppercase;
 }
 
 .font-pixel {
-  font-family: 'VT323', 'Press Start 2P', monospace;
+  font-family: var(--pixel-font);
   letter-spacing: 1px;
   text-transform: uppercase;
 }
@@ -345,7 +347,7 @@ html, body, #root {
   overflow: hidden;
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family: var(--reader-font);
   font-size: 13px;
   display: flex;
   flex-direction: column;
@@ -1132,7 +1134,7 @@ html, body, #root {
   position: absolute;
   top: 0;
   left: 50%;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 16px;
   color: var(--success);
   text-shadow: 2px 2px 0px var(--pixel-shadow);
@@ -1174,7 +1176,7 @@ html, body, #root {
 }
 
 .logo-wordmark {
-  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-family: var(--logo-font);
   font-size: 17px;
   letter-spacing: 1px;
   text-transform: uppercase;
@@ -1183,7 +1185,7 @@ html, body, #root {
 }
 
 .logo-version {
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 15px;
   color: var(--gold-light, #FFCB6B);
   letter-spacing: 1px;
@@ -1201,7 +1203,7 @@ html, body, #root {
   justify-content: center;
   gap: 6px;
   padding: 6px 12px;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
   letter-spacing: 2px;
   text-transform: uppercase;
@@ -1277,7 +1279,7 @@ body.parchment-texture {
   padding: 5px 10px;
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 13px;
   letter-spacing: 3px;
   text-transform: uppercase;
@@ -1367,7 +1369,7 @@ body.parchment-texture {
   min-height: 0;
   background: var(--bg-elevated);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family: var(--reader-font);
 }
 .settings-tabs {
   width: 92px;
@@ -1386,7 +1388,7 @@ body.parchment-texture {
   /* Reserve 3px on the left so active state doesn't shift tab width. */
   border-left: 3px solid transparent;
   padding: 9px 8px 9px 10px;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
   letter-spacing: 1.5px;
   color: var(--text-muted);
@@ -1430,7 +1432,7 @@ body.parchment-texture {
 .progress-segmented-label {
   display: flex;
   justify-content: space-between;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 11px;
   letter-spacing: 2px;
   text-transform: uppercase;
@@ -1538,7 +1540,7 @@ body.parchment-texture {
   background: #12141A;
   border: 3px solid var(--wood-shadow, #3A2E1F);
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 16px;
   letter-spacing: 1px;
   line-height: 1.4;
@@ -1611,7 +1613,7 @@ body.parchment-texture {
   background: #12141A;
   border: 2px solid var(--success, #5A8F3A);
   color: #7EE787;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
   letter-spacing: 1px;
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
@@ -1662,7 +1664,7 @@ body.parchment-texture {
   user-select: none;
   background: var(--wood-dark);
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 13px;
   letter-spacing: 3px;
   text-transform: uppercase;
@@ -1690,7 +1692,7 @@ body.parchment-texture {
 
 .todo-board-header .todo-count {
   margin-left: auto;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 13px;
   letter-spacing: 2px;
   opacity: 0.7;
@@ -1722,7 +1724,7 @@ body.parchment-texture {
   gap: 5px;
   padding: 2px 0 6px;
   margin-bottom: 4px;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 12px;
   letter-spacing: 2px;
   text-transform: uppercase;

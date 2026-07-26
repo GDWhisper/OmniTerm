@@ -116,6 +116,25 @@ Without `body.pixel-font-on`, `.font-logo` and `.font-pixel` fall back to plain 
 
 All `.font-pixel` text is `text-transform: uppercase`.
 
+### CSS Variables (single source of truth)
+
+| CSS Variable | Font stack | JS Constant (fonts.ts) |
+|---|---|---|
+| `--logo-font` | `'Press Start 2P', 'VT323', monospace` | `LOGO_FONT` |
+| `--pixel-font` | `'VT323', 'Press Start 2P', monospace` | `PIXEL_FONT` |
+| `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | `READER_FONT` |
+
+### 禁止硬编码 font-family
+
+**组件/样式中禁止直接写 `font-family` 字面量。** 必须使用以下机制之一：
+- **CSS 类**：`.font-logo` / `.font-pixel` / `.font-reader`（优先）
+- **CSS 变量**：`var(--logo-font)` / `var(--pixel-font)` / `var(--reader-font)`（需要其他属性组合时）
+- **JS 常量**：`LOGO_FONT` / `PIXEL_FONT` / `READER_FONT`（`utils/fonts.ts`，仅用于 inline style）
+
+**唯一例外**：`index.css` 中的 `@font-face` 声明（注册字体本身）和 `.font-*` 类定义处。
+
+**检测**：`grep -rn "font-family:" frontend/src --include="*.css" --include="*.tsx" | grep -v "var(--" | grep -v "inherit" | grep -v "@font-face"` 应无命中。
+
 ---
 
 ## 3. Pixel UI Primitives
@@ -178,7 +197,7 @@ Undertale-style RPG dialogue box for key notifications.
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   max-width: 520px; padding: 12px 18px;
   background: #12141A; border: 3px solid var(--wood-shadow);
-  color: #FAF2DE; font-family: 'VT323', monospace; font-size: 16px;
+  color: #FAF2DE; font-family: var(--pixel-font); font-size: 16px;
   box-shadow: 4px 4px 0 var(--pixel-shadow);
 }
 ```
@@ -196,7 +215,7 @@ body.pixel-ui-on .panel-title-bar {
   padding: 5px 10px;
   background: var(--wood-dark);      /* #8B5A2B light / #2A2520 dark */
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 13px;
   letter-spacing: 3px;
   text-transform: uppercase;
@@ -375,7 +394,7 @@ body.pixel-ui-on .toast-pixel {
   background: #12141A;
   border: 2px solid var(--success);
   color: #7EE787;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
   box-shadow: 3px 3px 0 var(--pixel-shadow);
 }
