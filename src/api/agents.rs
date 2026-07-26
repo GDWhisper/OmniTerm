@@ -161,6 +161,22 @@ async fn update_agent(
 }
 
 async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    // Check if any sessions reference this agent
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE agent_id = ?")
+        .bind(&id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+
+    if session_count > 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(
+                json!({ "error": format!("Cannot delete agent: {} session(s) still reference it", session_count) }),
+            ),
+        );
+    }
+
     let result =
         sqlx::query("DELETE FROM agents WHERE id = ?").bind(&id).execute(&state.db).await.unwrap();
 
