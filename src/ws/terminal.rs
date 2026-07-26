@@ -55,6 +55,32 @@ pub struct TerminalQuery {
     pub rows: Option<u16>,
 }
 
+/// tmux 默认 escape-time 500ms 会导致:1) 孤立 ESC 延迟 500ms 才转发给 pane;
+/// 2) 500ms 内连按两次 ESC 被合并为 Alt+ESC(`\x1b\x1b`)一次转发,使 agent TUI
+/// (如 opencode)的 "esc again to interrupt" 中止流程失效。取 10ms 而非 0,
+/// 避免慢速链路上转义序列被拆断误判为孤立 ESC。
+const TMUX_ESCAPE_TIME_MS: &str = "10";
+
+/// Build the tmux client command spawned on the PTY: set server-level
+/// escape-time, then create-or-attach the target session.
+fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("tmux");
+    cmd.args([
+        "set-option",
+        "-s",
+        "escape-time",
+        TMUX_ESCAPE_TIME_MS,
+        ";",
+        "new-session",
+        "-A",
+        "-s",
+        tmux_name,
+    ]);
+    cmd.cwd(cwd);
+    cmd.env("TERM", "xterm-256color");
+    cmd
+}
+
 /// WebSocket upgrade handler for terminal connections.
 /// Accepts optional `cols` and `rows` query params for initial PTY size.
 pub async fn ws_terminal_handler(
@@ -151,10 +177,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         }
     };
 
-    let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(["new-session", "-A", "-s", &tmux_name]);
-    cmd.cwd(&cwd);
-    cmd.env("TERM", "xterm-256color");
+    let cmd = build_tmux_attach_cmd(&tmux_name, &cwd);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
@@ -536,10 +559,7 @@ async fn handle_external_terminal(
         }
     };
 
-    let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(["new-session", "-A", "-s", &tmux_name]);
-    cmd.cwd(&cwd);
-    cmd.env("TERM", "xterm-256color");
+    let cmd = build_tmux_attach_cmd(&tmux_name, &cwd);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,

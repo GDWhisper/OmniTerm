@@ -554,3 +554,25 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 
 
 
+
+---
+
+## 2026-07-26: tmux escape-time 吞掉连按 ESC（opencode 无法中止任务）
+
+**症状**：OmniTerm 终端里跑 opencode，按 ESC 无法中止运行中的任务；本地终端直接跑则正常。
+
+**具体根因**：opencode 中止任务需连按两次 ESC（"esc again to interrupt"）。tmux 收到孤立 `\x1b` 后等待 `escape-time`（默认 500ms）区分 Alt/功能键序列 → 单次 ESC 延迟 500ms 无即时反馈 → 用户自然快速再按 → 第二个 `\x1b` 落入窗口，tmux 将两者合并为 `\x1b\x1b`（Alt+ESC）一次转发 → opencode 收不到两次独立 ESC，中止永不触发。字节级实测：100ms 间隔双 ESC 到达 pane 为单次 `b'\x1b\x1b'`；700ms 间隔为两个独立 `\x1b`。修复：spawn tmux client 时链式 `set-option -s escape-time 10`（`ws/terminal.rs` `build_tmux_attach_cmd`）。
+
+**诊断过程中的正确做法（值得复用）**：
+
+1. **分层二分 + 每层字节级证据**：链路 = xterm.js → WS → PTY write → tmux → pane。在 pane 内程序入口放 raw-mode 字节记录器（`tty.setraw` + `os.read` 打时间戳），从后端模拟每种输入时序，直接观测「到达了什么、何时到达」——比在中间层加日志更快定位。
+2. **对协议软件测「时序矩阵」而非单次输入**：单发 ESC 测试会得出「能到达」的误导性结论（它确实到达，只是延迟 500ms）。真正的失效只在「快速连按」时序下出现。对任何涉及转义序列/组合键的链路，必须测：单发、窗口内连发、窗口外连发三种时序。
+3. **端到端复现后再下结论**：用 agent-browser 驱动真实浏览器复现了「快按两次失效、慢按两次成功」的完整对照，且 opencode 的 "esc interrupt" → "esc again to interrupt" 提示状态变化提供了免插桩的观测点——TUI 自身的状态提示是最好的探针。
+
+**可复用的理论**：
+
+**1. 终端链路中「字节能到达」≠「语义能到达」**。tmux/终端复用器会对字节流做时序敏感的重新分帧（escape-time 合并、bracketed paste 包裹等）。诊断按键问题时要同时验证字节内容和到达分组：两个 `\x1b` 合并成一个 `\x1b\x1b` 事件，对 TUI 就是完全不同的键。
+
+**2. 「延迟 + 无反馈」会诱导用户行为落入故障窗口**。单次 ESC 延迟 500ms 本身只是慢，但它诱导用户快速重按，恰好触发合并故障。分析用户报告的「完全不工作」时，考虑第一层小故障如何改变用户行为、进而触发第二层大故障。
+
+**3. 经 tmux 的托管终端必须显式设置 `escape-time`**。tmux 默认 500ms 是为 1980s 串行链路设计的；所有把 tmux 当基础设施的产品（web 终端、terminal manager）都应设为 0–50ms。neovim `:checkhealth` 同理建议。
