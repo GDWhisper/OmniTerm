@@ -248,9 +248,11 @@
   "sidebar.adoptSuccess": "Session \"{{name}}\" adopted",
   "sidebar.adoptFailed": "Failed to adopt session: {{msg}}",
 
-  "agentPicker.label": "Agent",
-  "agentPicker.none": "None (tmux shell)",
-  "agentPicker.hint": "Leave empty for a plain tmux shell. Pick an agent to spawn an ACP-backed AI session.",
+  "agentPicker.label": "Session type",
+  "agentPicker.none": "tmux",
+  "agentPicker.groupTerminal": "——· Terminal ·——",
+  "agentPicker.groupChat": "——· AI Chat(BETA) ·——",
+  "agentPicker.hint": "Terminal sessions are powered by tmux, AI sessions by ACP.",
 
   "settings.agents.title": "Agents",
   "settings.agents.new": "New",

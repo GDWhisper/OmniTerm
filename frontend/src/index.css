@@ -1808,3 +1808,14 @@ body.parchment-texture {
   color: var(--text-dim);
   font-style: italic;
 }
+
+select optgroup {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 500;
+}
+
+select optgroup option {
+  color: var(--text-primary);
+  font-weight: normal;
+}

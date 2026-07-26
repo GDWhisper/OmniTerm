@@ -1691,11 +1691,10 @@ export function Sidebar() {
             <AgentPicker
               value={sessAgentId}
               onChange={setSessAgentId}
-              noneLabel={t('agentPicker.none')}
               className={inputClass}
               style={inputStyle}
             />
-            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-dim)' }}>
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
               {t('agentPicker.hint')}
             </p>
           </div>

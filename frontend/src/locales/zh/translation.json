@@ -248,9 +248,11 @@
   "sidebar.adoptSuccess": "会话「{{name}}」已接管",
   "sidebar.adoptFailed": "接管会话失败：{{msg}}",
 
-  "agentPicker.label": "智能体",
-  "agentPicker.none": "无（tmux 普通 shell）",
-  "agentPicker.hint": "留空则创建普通 tmux shell；选择智能体则创建 ACP 驱动的 AI 会话。",
+  "agentPicker.label": "会话类型",
+  "agentPicker.none": "tmux",
+  "agentPicker.groupTerminal": "——· 终端会话 ·——",
+  "agentPicker.groupChat": "——· AI会话(BETA) ·——",
+  "agentPicker.hint": "终端会话由 tmux 驱动，AI 会话由 ACP 驱动。",
 
   "settings.agents.title": "智能体",
   "settings.agents.new": "新建",
