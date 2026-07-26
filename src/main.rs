@@ -47,6 +47,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
     pub acp_supervisor: acp::AcpSupervisor,
+    pub agent_watcher: tmux::agent_watch::AgentWatcher,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -100,7 +101,12 @@ async fn main() -> anyhow::Result<()> {
         jwt_secret: args.jwt_secret,
         activity_monitor,
         acp_supervisor: acp::AcpSupervisor::default(),
+        agent_watcher: tmux::agent_watch::AgentWatcher::default(),
     };
+
+    // 启动 agent 屏幕检测轮询：周期扫描 tmux 会话前台进程 + 可见屏，
+    // 识别 Claude/Codex/Qoder 的 Running/Waiting/Idle 状态（herdr 借鉴，见 docs/reference/herdr-reference.md）。
+    tmux::agent_watch::spawn(state.agent_watcher.clone());
 
     // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
     // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。

@@ -25,6 +25,7 @@ src/
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx

@@ -6,7 +6,6 @@ mod platform {
     use super::*;
     use std::fs;
 
-    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let cmdline_path = format!("/proc/{}/cmdline", pid);
         let content = fs::read_to_string(cmdline_path).ok()?;
@@ -16,7 +15,15 @@ mod platform {
         Some(content.replace('\0', " "))
     }
 
-    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+    /// 读 `/proc/<pid>/stat` 取前台进程组 ID（tpgid，第 8 字段）。
+    /// comm 字段可能含空格/括号，先 rsplit 到最后一个 ')' 再按空白切分。
+    pub fn foreground_pid_impl(pid: u32) -> Option<u32> {
+        let stat = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+        let after_comm = stat.rsplit_once(')')?.1;
+        let tpgid: i64 = after_comm.split_whitespace().nth(5)?.parse().ok()?;
+        if tpgid > 0 { Some(tpgid as u32) } else { None }
+    }
+
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
@@ -44,7 +51,6 @@ mod platform {
     use super::*;
     use sysinfo::{Pid, System};
 
-    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub fn read_cmdline_impl(pid: u32) -> Option<String> {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
@@ -54,7 +60,11 @@ mod platform {
         if cmdline.is_empty() { None } else { Some(cmdline.join(" ")) }
     }
 
-    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+    /// Windows 无进程组前台概念，直接回退子进程树扫描。
+    pub fn foreground_pid_impl(_pid: u32) -> Option<u32> {
+        None
+    }
+
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
@@ -91,16 +101,19 @@ mod platform {
 /// Read a process's command line and match against known agent CLIs.
 ///
 /// Returns `None` if the process doesn't exist, can't be read, or doesn't match.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
     platform::read_cmdline_impl(pid)
         .and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
 }
 
+/// 取 pane 主进程的前台进程组 ID（Unix tpgid）。Windows 返回 `None`。
+pub fn foreground_pid(pane_pid: u32) -> Option<u32> {
+    platform::foreground_pid_impl(pane_pid)
+}
+
 /// Walk the process tree from `pid` looking for agent processes.
 ///
 /// Checks the process itself and its descendants up to a platform-appropriate depth.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn walk_process_tree(pid: u32) -> Option<AgentKind> {
     if let Some(kind) = read_process_cmdline(pid) {
         return Some(kind);

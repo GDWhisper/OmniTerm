@@ -19,16 +19,16 @@
 | 2 | `src/auth/mod.rs:34` | `RequireAuth`（axum 提取器） | 未在任何 handler 用作鉴权参数 | 判断是预留鉴权中间件 vs 已弃用脚手架 |
 | 3 | `src/fs/mod.rs:139` | `normalize_path` | 仅 `\\`→`/` 辅助 | 无调用方，疑似残留，候选删除 |
 | 4 | `src/models/user.rs:4` | `User`（sqlx 模型） | 无 `FROM_ROW` 查询引用 | 是否有计划中的用户表查询路径 |
-| 5 | `src/tmux/mod.rs:252` | `capture_pane` | 旧 pane 捕获函数 | 与新 capture 路径是否冲突 |
-| 6 | `src/tmux/mod.rs:295` | `detect_agent_in_session` | 旧 agent 探测 | 与 agent_hooks 现行探测是否重叠 |
+| 5 | ~~`src/tmux/mod.rs` `capture_pane`~~ | **已处置**（2026-07-26） | 改造为 `capture_screen`（可见屏捕获），由 `agent_watch` 接线 | ✅ |
+| 6 | ~~`src/tmux/mod.rs` `detect_agent_in_session`~~ | **已删除**（2026-07-26） | 被 `agent_watch::identify_agent`（前台进程组优先）取代 | ✅ |
 | 7 | `src/tmux/agent_state.rs:120` | `AGENT_OPTION` 常量 | 未在 tmux option 读取处使用 | 检查是否漏接 `@omniterm_agent` 读取 |
 | 8 | `src/tmux/agent_state.rs:162` | `agent_value` | 与 `parse_agent_value` 不同 | 确认是否旧 API |
 | 9 | `src/tmux/agent_state.rs:177` | `clean_token` | **仅测试使用**（agent_hooks tests） | 保留；考虑将 fn 移入测试模块或标记 `#[cfg(test)]` |
 | 10 | `src/tmux/control_mode.rs:72` | `ControlModeClient::pid` | **仅测试使用** | 同上，考虑 `#[cfg(test)]` 化 |
-| 11 | `src/tmux/process_info.rs:90` | `read_process_cmdline` | tmux 进程检测遗迹 | 与 #5/#6 一并评估 |
-| 12 | `src/tmux/process_info.rs:98` | `walk_process_tree` | 同上 | |
-| 13 | `src/tmux/process_info.rs:9` | `read_cmdline_impl` | `read_process_cmdline` 的底层 | 随 #11 |
-| 14 | `src/tmux/process_info.rs:18` | `walk_children` | `walk_process_tree` 的底层 | 随 #12 |
+| 11 | ~~`src/tmux/process_info.rs` `read_process_cmdline`~~ | **已接线**（2026-07-26） | `agent_watch` 前台进程识别调用 | ✅ |
+| 12 | ~~`src/tmux/process_info.rs` `walk_process_tree`~~ | **已接线**（2026-07-26） | `agent_watch` 回退路径调用 | ✅ |
+| 13 | ~~`src/tmux/process_info.rs` `read_cmdline_impl`~~ | **已接线**（2026-07-26） | 随 #11 | ✅ |
+| 14 | ~~`src/tmux/process_info.rs` `walk_children`~~ | **已接线**（2026-07-26） | 随 #12 | ✅ |
 | 15 | `src/ws/terminal.rs:32` | `ServerControl` 枚举变体 `Pong`/`Exit`/`AgentState` | 协议变体未构造 | 评估是否前端期望但后端未发送（潜在 bug）→ 接线 |
 
 ## 升级路径

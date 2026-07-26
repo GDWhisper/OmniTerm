@@ -1,0 +1,58 @@
+# Codex CLI 屏幕检测规则。
+# Rules adapted from herdr (https://github.com/ogulcancelik/herdr, Apache-2.0)
+# src/detect/manifests/codex.toml — `after_last_prompt_marker` 区域降级为
+# `whole_recent`（OmniTerm 只取可见屏，近似等价）。
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+contains = ["action required"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "transcript_viewer"
+state = "unknown"
+priority = 1000
+region = "whole_recent"
+skip_state_update = true
+contains = ["↑/↓ to scroll", "home/end to jump", "q to quit"]
+
+[[rules]]
+id = "live_strong_blocker"
+state = "blocked"
+priority = 900
+region = "whole_recent"
+any = [
+  { contains = ["press enter to confirm or esc to cancel"] },
+  { contains = ["enter to submit answer"] },
+  { contains = ["enter to submit all"] },
+  { contains = ["allow command?"] },
+]
+
+[[rules]]
+id = "weak_blocker"
+state = "blocked"
+priority = 600
+region = "whole_recent"
+any = [
+  { contains = ["[y/n]"] },
+  { contains = ["yes (y)"] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+]
+
+[[rules]]
+id = "screen_working_fallback"
+state = "working"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+line_regex = ['^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$']
+not = [{ contains = ["conversation interrupted"] }]

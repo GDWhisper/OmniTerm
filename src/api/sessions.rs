@@ -78,6 +78,10 @@ async fn list_sessions(
     let alive_acp: std::collections::HashSet<String> =
         state.acp_supervisor.snapshot().await.into_iter().map(|(id, _)| id).collect();
 
+    // 屏幕检测快照（agent_watch 后台轮询产出）：作为状态权威覆盖 hook 上报的 state。
+    // hook 数据仍保留 attention_reason/event/nonce（屏幕检测不产出这些）。
+    let screen_map = state.agent_watcher.snapshot().await;
+
     // Enrich sessions with activity state and agent state from tmux.
     // Only tmux-backed sessions have a pane to poll; ACP sessions get their
     // state via the ACP event stream (Phase 3) and are skipped here.
@@ -103,14 +107,13 @@ async fn list_sessions(
                 session.agent_event = snapshot.agent_event.clone();
                 session.agent_nonce = snapshot.agent_nonce.clone();
             }
-            // Agent process detection is commented out pending notification scheme decision.
-            // See docs/requirements.md "Agent 状态监控与通知".
-            // else if !session.hook_enabled {
-            //     // No hook injected — scan process tree for agent detection
-            //     if let Some(kind) = tmux::detect_agent_in_session(tmux_name).await {
-            //         session.agent_detected = Some(kind.as_str().to_string());
-            //     }
-            // }
+            // 屏幕检测覆盖 kind/state（hook 事件流不完整，屏幕检测为状态权威，
+            // 见 docs/reference/herdr-reference.md 仲裁策略）
+            if let Some(screen) = screen_map.get(tmux_name) {
+                session.agent_kind = Some(screen.kind.as_str().to_string());
+                session.agent_state = Some(screen.state.as_str().to_string());
+                session.agent_detected = Some(screen.kind.as_str().to_string());
+            }
         }
     }
 
@@ -530,16 +533,19 @@ async fn list_external_sessions(State(state): State<AppState>) -> impl IntoRespo
 
     // Build result from external sessions. CWD is already available from the
     // batch `tmux::list_sessions()` call above — no per-session `pane_cwd` needed.
+    // 屏幕检测覆盖 kind/state（与 list_sessions 同一仲裁策略）。
+    let screen_map = state.agent_watcher.snapshot().await;
     let mut result = Vec::with_capacity(external.len());
     for s in external {
+        let screen = screen_map.get(&s.name);
         result.push(ExternalSessionResponse {
+            agent_kind: screen.map(|sc| sc.kind.as_str().to_string()).or(s.agent_kind),
+            agent_state: screen.map(|sc| sc.state.as_str().to_string()).or(s.agent_state),
             name: s.name,
             attached: s.attached,
             windows: s.windows,
             created: s.created,
             cwd: s.cwd,
-            agent_kind: s.agent_kind,
-            agent_state: s.agent_state,
             attention_reason: s.attention_reason,
             agent_event: s.agent_event,
             agent_nonce: s.agent_nonce,

@@ -10,6 +10,7 @@ import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, Icon
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
+import { aggregateStatus } from '../../utils/agentAggregate'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -354,6 +355,8 @@ export function Sidebar() {
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
   const decisionCandidatesRef = useRef<Set<string>>(new Set())
+  const firedWaitingRef = useRef<Set<string>>(new Set())
+  const prevAgentStateRef = useRef<Map<string, string>>(new Map())
 
   useEffect(() => {
     // 每 3 秒轮询：服务 **tmux** 会话的 agent_state / attention_reason 检测
@@ -385,28 +388,43 @@ export function Sidebar() {
 
             const state = s.agent_state
             const reason = s.attention_reason as AttentionReason | undefined
+            const prevState = prevAgentStateRef.current.get(sessionKey)
 
             if (state === 'idle' && reason === 'done') {
               // Done — fire immediately
               attention.fire(s.id, sessionKey, 'done')
-              decisionCandidatesRef.current.delete(sessionKey)
             } else if (state === 'idle' && reason === 'error') {
               // Error — fire immediately
               attention.fire(s.id, sessionKey, 'error')
-              decisionCandidatesRef.current.delete(sessionKey)
-            } else if (state === 'waiting' && reason === 'decision') {
-              // Decision — debounce: wait one more cycle
-              if (decisionCandidatesRef.current.has(sessionKey)) {
-                attention.fire(s.id, sessionKey, 'decision')
-                decisionCandidatesRef.current.delete(sessionKey)
-              } else {
-                decisionCandidatesRef.current.add(sessionKey)
-              }
+            } else if (state === 'idle' && !reason && prevState === 'running') {
+              // 屏幕检测：running → idle 转变即完成（done = idle + 未查看，
+              // 查看会话时 AttentionProvider.setActive 清除）
+              attention.fire(s.id, sessionKey, 'done')
             } else if (state === 'running') {
               // Running — clear any alert
               attention.clearAlert(sessionKey)
-              decisionCandidatesRef.current.delete(sessionKey)
             }
+          }
+
+          // Decision debounce（eventKey 不变也要推进：屏幕检测的 waiting 无 nonce 变化）：
+          // 连续两轮 waiting 才告警；每个 waiting 周期只告警一次
+          if (s.agent_state === 'waiting') {
+            if (!firedWaitingRef.current.has(sessionKey)) {
+              if (decisionCandidatesRef.current.has(sessionKey)) {
+                attention.fire(s.id, sessionKey, 'decision')
+                decisionCandidatesRef.current.delete(sessionKey)
+                firedWaitingRef.current.add(sessionKey)
+              } else {
+                decisionCandidatesRef.current.add(sessionKey)
+              }
+            }
+          } else {
+            decisionCandidatesRef.current.delete(sessionKey)
+            firedWaitingRef.current.delete(sessionKey)
+          }
+
+          if (s.agent_state) {
+            prevAgentStateRef.current.set(sessionKey, s.agent_state)
           }
         }
 
@@ -416,6 +434,8 @@ export function Sidebar() {
             attention.clearAlert(key)
             lastAgentEventRef.current.delete(key)
             decisionCandidatesRef.current.delete(key)
+            firedWaitingRef.current.delete(key)
+            prevAgentStateRef.current.delete(key)
           }
         }
 
@@ -1023,8 +1043,9 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
-            const projHasActiveSession = wtList.some((wt) =>
-              sessionsForWorktree(proj.id, wt.path).some((s) => s.is_active)
+            const projAgg = aggregateStatus(
+              wtList.flatMap((wt) => sessionsForWorktree(proj.id, wt.path)),
+              attention.reasonFor,
             )
 
             return (
@@ -1035,10 +1056,16 @@ export function Sidebar() {
                   onClick={() => toggleProject(proj.id)}
                 >
                   <span
-                    className={projHasActiveSession ? 'activity-pulse' : ''}
+                    className={projAgg === 'working' || projAgg === 'blocked' ? 'activity-pulse' : ''}
                     style={{
                       fontSize: 10,
-                      color: isExpanded || projHasActiveSession ? 'var(--text-secondary)' : 'var(--text-faint)',
+                      color: projAgg === 'blocked'
+                        ? 'var(--warning)'
+                        : projAgg === 'done'
+                          ? 'var(--success)'
+                          : isExpanded || projAgg === 'working'
+                            ? 'var(--text-secondary)'
+                            : 'var(--text-faint)',
                       marginTop: 2,
                     }}
                   >
@@ -1077,7 +1104,7 @@ export function Sidebar() {
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
                         const wtSessions = sessionsForWorktree(proj.id, wt.path)
-                        const wtHasActiveSession = wtSessions.some((s) => s.is_active)
+                        const wtAgg = aggregateStatus(wtSessions, attention.reasonFor)
                         const isWtExpanded = isWtActive
 
                         return (
@@ -1090,8 +1117,16 @@ export function Sidebar() {
                               <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
                               <GitBranchSprite
                                 size={14}
-                                color={isWtActive || wtHasActiveSession ? '#58A6FF' : '#A89474'}
-                                className={wtHasActiveSession ? 'activity-pulse' : ''}
+                                color={
+                                  wtAgg === 'blocked'
+                                    ? 'var(--warning)'
+                                    : wtAgg === 'done'
+                                      ? 'var(--success)'
+                                      : isWtActive || wtAgg === 'working'
+                                        ? '#58A6FF'
+                                        : '#A89474'
+                                }
+                                className={wtAgg === 'working' || wtAgg === 'blocked' ? 'activity-pulse' : ''}
                               />
                               <span className="branch-name">{wt.label}</span>
                               <CountBadge count={wtSessions.length} />
@@ -1143,9 +1178,11 @@ export function Sidebar() {
                                               ? s.acp_process_alive
                                                 ? 'var(--accent)'
                                                 : 'var(--text-faint)'
-                                              : s.is_active
-                                                ? 'var(--accent)'
-                                                : 'var(--text-faint)',
+                                              : s.agent_state === 'waiting'
+                                                ? 'var(--warning)'
+                                                : s.agent_state === 'running' || s.is_active
+                                                  ? 'var(--accent)'
+                                                  : 'var(--text-faint)',
                                           // 运行中 ACP 常亮绿（轻微 glow），已释放灰；attnReason 仍脉冲提示
                                           boxShadow: attnReason
                                             ? attnReason === 'decision'
@@ -1153,16 +1190,24 @@ export function Sidebar() {
                                               : attnReason === 'error'
                                                 ? '0 0 4px var(--danger)'
                                                 : '0 0 4px var(--success)'
-                                            : (s.runtime_kind === 'acp' ? s.acp_process_alive : s.is_active)
-                                              ? '0 0 4px var(--accent)'
-                                              : 'none',
+                                            : s.runtime_kind === 'acp'
+                                              ? s.acp_process_alive
+                                                ? '0 0 4px var(--accent)'
+                                                : 'none'
+                                              : s.agent_state === 'waiting'
+                                                ? '0 0 4px var(--warning)'
+                                                : s.agent_state === 'running' || s.is_active
+                                                  ? '0 0 4px var(--accent)'
+                                                  : 'none',
                                         }}
                                         title={
                                           s.runtime_kind === 'acp'
                                             ? s.acp_process_alive
                                               ? t('sidebar.acpRunning')
                                               : t('sidebar.acpReleased')
-                                            : undefined
+                                            : s.agent_state === 'waiting'
+                                              ? t('sidebar.agentWaiting')
+                                              : undefined
                                         }
                                       />
                                       <span className="session-name">
@@ -1180,8 +1225,8 @@ export function Sidebar() {
                                                 : 'var(--success)',
                                           }}
                                           title={
-                                            attnReason === 'decision' ? 'Needs decision' :
-                                            attnReason === 'error' ? 'Error' : 'Done'
+                                            attnReason === 'decision' ? t('sidebar.attnDecision') :
+                                            attnReason === 'error' ? t('sidebar.attnError') : t('sidebar.attnDone')
                                           }
                                         >
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}

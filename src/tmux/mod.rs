@@ -1,5 +1,7 @@
+pub mod agent_detect;
 pub mod agent_hooks;
 pub mod agent_state;
+pub mod agent_watch;
 pub mod control_mode;
 pub mod process_info;
 pub mod pty_io;
@@ -8,7 +10,7 @@ use anyhow::{Result, anyhow};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-use crate::tmux::agent_state::{AgentKind, AgentSnapshot};
+use crate::tmux::agent_state::AgentSnapshot;
 
 /// Platform-specific install commands for the terminal multiplexer.
 #[cfg(unix)]
@@ -248,13 +250,9 @@ pub async fn pane_cwd(session: &str) -> Result<String> {
     Ok(cwd)
 }
 
-/// Capture the last N lines of a tmux pane's content.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
-pub async fn capture_pane(session: &str, lines: usize) -> Result<String> {
-    let output = Command::new("tmux")
-        .args(["capture-pane", "-t", session, "-p", "-S", &format!("-{}", lines)])
-        .output()
-        .await?;
+/// Capture the current visible screen of a tmux pane (no scrollback).
+pub async fn capture_screen(session: &str) -> Result<String> {
+    let output = Command::new("tmux").args(["capture-pane", "-t", session, "-p"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -287,36 +285,6 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
     let value = stdout.strip_prefix("@omniterm_agent ").map(|v| v.trim()).unwrap_or("");
 
     Ok(agent_state::parse_agent_value(value))
-}
-
-/// Detect if a known agent CLI process is running in the given tmux session.
-///
-/// Gets pane PIDs via `tmux list-panes`, then walks the process tree from each
-/// pane PID checking against known agent CLIs.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
-pub async fn detect_agent_in_session(session_name: &str) -> Option<AgentKind> {
-    let output = Command::new("tmux")
-        .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        let pid: u32 = match line.trim().parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        if let Some(kind) = process_info::walk_process_tree(pid) {
-            return Some(kind);
-        }
-    }
-
-    None
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

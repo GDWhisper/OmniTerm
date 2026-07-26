@@ -39,6 +39,11 @@
 ## Agent 状态监控与通知 🔵
 
 > 2026-06-26 讨论结论：监控/通知通道方案尚未确定，当前实现已注释下线，待方案明确后重启。
+>
+> **2026-07-26 更新：已落地「方案 5：屏幕规则检测」（借鉴 herdr，见 `docs/reference/herdr-reference.md` P0 项）。**
+> 后端 `agent_watch` 每秒轮询活跃 pane，`capture-pane` 底部快照 + TOML manifest 规则引擎（`src/tmux/agent_detect.rs`）判 running/waiting/idle，无需 agent 配合、支持事后监控（覆盖方案 1 的两大缺点）。
+> 屏幕检测为状态权威覆盖 hook 上报状态；hook 仅供 attention_reason/事件。前端 Sidebar 已接 blocked>done>working 聚合徽标与会话状态点。
+> 剩余待办：声音/标签页闪烁等通知通道仍未定。
 
 当用户在 tmux session 中运行 Claude Code / Codex 等 AI Agent 时，OmniTerm 希望可以实时感知其状态（running / waiting / idle / error）并通过 Sidebar badge、声音、标签页闪烁等方式通知用户。已讨论的技术方案包括：
 

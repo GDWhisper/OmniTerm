@@ -30,11 +30,14 @@ src/
 ├── auth/mod.rs           # JWT token creation/verification, RequireAuth extractor
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── tmux/
-│   ├── mod.rs            # tmux command wrappers, multiplexer detection: new_session, kill_session, check_multiplexer
+│   ├── mod.rs            # tmux command wrappers, multiplexer detection: new_session, kill_session, check_multiplexer, capture_screen
 │   ├── agent_hooks.rs    # Agent CLI detection + hook config generation (Claude, Codex, Qoder)
 │   ├── agent_state.rs    # Agent state data model: AgentKind, AgentState, AgentSnapshot
+│   ├── agent_detect.rs   # 屏幕规则引擎：TOML manifest 编译 + evaluate(屏幕/标题→状态) + Debounce 防抖（herdr 借鉴）
+│   ├── agent_watch.rs    # 全局 agent 屏幕检测轮询器（1s tick）：前台进程识别 → capture_screen → evaluate → 内存快照
+│   ├── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
 │   ├── control_mode.rs   # tmux -C control mode session activity monitor
-│   ├── process_info.rs   # [platform] Process enumeration: read_process_cmdline, walk_process_tree
+│   ├── process_info.rs   # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
 │   └── pty_io.rs         # [platform] PTY writes + process cleanup: write_pty, kill_session_process
 ├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
 ├── git/
@@ -148,3 +151,13 @@ Options:
 
 **tmux escape-time 行为差异**：tmux 收到孤立 `\x1b` 后会等待 `escape-time`（默认 500ms）以区分 Alt/功能键序列。后果：1) 单次 ESC 延迟 500ms 才转发给 pane；2) 窗口内连按两次 ESC 被合并为 `\x1b\x1b`（Alt+ESC）一次转发。对需要连按 ESC 中止任务的 agent TUI（如 opencode 的 "esc again to interrupt"）这等于 ESC 完全失效。因此 `ws/terminal.rs` 的 `build_tmux_attach_cmd` 在 spawn tmux client 时链式执行 `set-option -s escape-time 10 \; new-session -A`（server 级选项，一次生效覆盖全部会话；取 10ms 而非 0 以免慢速链路上转义序列被拆断）。
 
+
+## Agent 屏幕状态检测（agent_watch / agent_detect）
+
+herdr 借鉴（P0，`docs/reference/herdr-reference.md`）。tmux 会话中 agent CLI（Claude/Codex/Qoder）的 Running/Waiting/Idle 状态由**屏幕检测**判定，作为状态权威覆盖 hook 上报的 `agent_state`（Claude/Codex 的生命周期 hook 事件流不完整）；hook 仍独家提供 `attention_reason` / `agent_event` / `agent_nonce`。
+
+链路：`agent_watch::spawn`（main.rs 启动，1s tick）→ `tmux list-panes -a` 列出活动 pane → `process_info::foreground_pid`（Unix 读 `/proc/<pid>/stat` tpgid；Windows 回退进程树）+ `read_process_cmdline` 识别 agent 种类 → `tmux::capture_screen` 取可见屏 → `agent_detect::evaluate`（TOML manifest 规则，优先级降序首中即停）→ `Debounce`（Running/Waiting 立即发布；Idle 需连续 2 tick 确认，除非规则带 `visible_idle` 证据）→ 内存快照。消费端：`api::sessions::list_sessions` / `list_external_sessions` 查询时合并（前端沿用既有 3s 轮询，无新增推送通道）。跳扫描优化：`#{window_activity}` 未变且已发布 Idle 时跳过 capture。
+
+规则清单在 `src/tmux/manifests/*.toml`（`include_str!` 内嵌，测试断言编译数量防无声丢规则）。regex 区分大小写（herdr 原始模式内嵌 `(?i)`），`contains` 不区分；`prompt_box_body` / `after_last_horizontal_rule` 等 region 提取时剥离盒线字符（│┃║）以便行锚定模式命中。
+
+**tmux -F 行为差异（踩坑）**：tmux 会把 format 字符串里的非打印字节按八进制转义为**字面文本**输出（`\x1f` → 4 字符 `\037`），因此 `-F` 分隔符不能用控制字符。`agent_watch` 用 `:`（tmux 会话名禁止含 `:`，中间字段均为数字，自由文本 `pane_title` 放末尾整体保留）；`mod.rs::list_sessions` 用 `|`（会话名放末尾 rejoin）。

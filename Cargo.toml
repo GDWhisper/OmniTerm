@@ -36,6 +36,8 @@ clap = { version = "4", features = ["derive", "env"] }
 rust-embed = "8"
 which = "7"
 agent-client-protocol = "1.2"
+regex = "1"
+toml = "0.8"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

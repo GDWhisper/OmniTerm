@@ -17,10 +17,10 @@ OmniTerm 用 tmux 做 server 层 + xterm.js 做渲染，架构层不需要照搬
 
 | # | 优先级 | 借鉴项 | herdr 出处 | OmniTerm 落地方式 |
 |---|--------|--------|-----------|------------------|
-| 1 | P0 | TOML manifest 屏幕规则引擎（agent 状态检测） | `src/detect/manifest.rs`、`src/detect/manifests/*.toml` | capture-pane 底部快照 + 声明式规则判 idle/working/blocked |
-| 2 | P0 | 检测防抖状态机 | `src/pane/agent_detection.rs`、`src/pane.rs:604-900` | pending-idle 三连确认、启动宽限、内容序号跳扫描 |
-| 3 | P0 | "done = idle + 未查看" + 聚合 rollup | `src/workspace/aggregate.rs:83-110` | Sidebar 会话状态徽标聚合优先级 |
-| 4 | P1 | 前台进程组识别 + wrapper 穿透 | `src/detect/mod.rs:210-608` | `#{pane_pid}` → 前台进程组 → agent 种类识别 |
+| 1 | P0 ✅ | TOML manifest 屏幕规则引擎（agent 状态检测） | `src/detect/manifest.rs`、`src/detect/manifests/*.toml` | **已落地 2026-07-26**：`src/tmux/agent_detect.rs` + `src/tmux/manifests/*.toml` |
+| 2 | P0 ✅ | 检测防抖状态机 | `src/pane/agent_detection.rs`、`src/pane.rs:604-900` | **已落地 2026-07-26**：`src/tmux/agent_watch.rs`（idle 两连确认 + window_activity 跳扫描） |
+| 3 | P0 ✅ | "done = idle + 未查看" + 聚合 rollup | `src/workspace/aggregate.rs:83-110` | **已落地 2026-07-26**：`frontend/src/utils/agentAggregate.ts`（blocked>done>working）+ Sidebar |
+| 4 | P1 | 前台进程组识别 + wrapper 穿透 | `src/detect/mod.rs:210-608` | `#{pane_pid}` → 前台进程组 → agent 种类识别（2026-07-26 已落地轻量版：tpgid 前台进程 + basename 匹配，见 `process_info::foreground_pid`；wrapper 穿透/打分未做） |
 | 5 | P1 | 官方 hooks 集成 + 单一状态权威仲裁 | `src/integration/`、`src/terminal/state.rs:1-30` | Claude Code hooks POST 到 Axum，hook 完整才做权威 |
 | 6 | P1 | agent session id 持久化 + `--resume` 自动恢复 | `src/agent_resume.rs`、`src/persist/` | 重启后自动 `claude --resume <id>` / `codex resume <id>` |
 | 7 | P2 | snapshot + 事件增量的客户端同步模型 | `src/api/`（`session.snapshot` + event hub） | WS 初始快照 + 事件增量维护前端 store |
