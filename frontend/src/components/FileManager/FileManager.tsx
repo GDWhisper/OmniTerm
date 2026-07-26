@@ -473,11 +473,12 @@ export function FileManager() {
     setEditingName(null)
   }
 
-  const handleDelete = async () => {
-    if (selected.size === 0 || !fmSource) return
-    if (!confirm(t('fm.confirmDelete', { count: selected.size }))) return
+  const handleDelete = async (paths?: Set<string>) => {
+    const targets = paths ?? selected
+    if (targets.size === 0 || !fmSource) return
+    if (!confirm(t('fm.confirmDelete', { count: targets.size }))) return
     try {
-      for (const p of selected) {
+      for (const p of targets) {
         await api.deleteFile2({
           session: fmSource.type === 'session' ? fmSource.id : undefined,
           workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
@@ -485,7 +486,7 @@ export function FileManager() {
           path: p,
         })
       }
-      addToast('success', t('fm.deleted', { count: selected.size }))
+      addToast('success', t('fm.deleted', { count: targets.size }))
       import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp'))
       fetchFiles()
     } catch (err: unknown) {
@@ -1022,7 +1023,7 @@ export function FileManager() {
                         <span
                           className="fm-act-icon fm-act-icon-danger"
                           title={t('fm.delete')}
-                          onClick={(e) => { e.stopPropagation(); triggerBump(e.currentTarget); setSelected(new Set([fullPath])); handleDelete() }}
+                          onClick={(e) => { e.stopPropagation(); triggerBump(e.currentTarget); setSelected(new Set([fullPath])); handleDelete(new Set([fullPath])) }}
                         >
                           <IconTrash />
                         </span>
