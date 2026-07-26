@@ -163,9 +163,13 @@ export function FileManager() {
     if (!fmSource) { setFiles([]); return undefined }
     if (!silent) setLoading(true)
     try {
-      // In workspace mode, always manual (no terminal to follow)
-      const effectiveMode = fmSource.type === 'workspace' ? 'manual' : fmState.mode
-      const effectivePath = path ?? (effectiveMode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
+      // Workspace mode has no session-keyed manualPath: fall back to current
+      // cwd so parameterless refreshes (create/upload/rename) keep the path.
+      const effectivePath = path ?? (
+        fmSource.type === 'workspace'
+          ? (cwdRef.current || '.')
+          : (fmState.mode === 'manual' && fmState.manualPath ? fmState.manualPath : '.')
+      )
       const data = await api.listFiles2({
         session: fmSource.type === 'session' ? fmSource.id : undefined,
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
@@ -198,6 +202,8 @@ export function FileManager() {
   sortKeyRef.current = sortKey
   const sortDescRef = useRef(sortDesc)
   sortDescRef.current = sortDesc
+  const cwdRef = useRef(cwd)
+  cwdRef.current = cwd
   const fetchFilesRef = useRef(fetchFiles)
   fetchFilesRef.current = fetchFiles
 
