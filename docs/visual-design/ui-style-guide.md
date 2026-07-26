@@ -98,7 +98,7 @@ Three CSS classes, each gated by body class `body.pixel-font-on`:
 | Class | Font stack | When to use |
 |---|---|---|
 | `.font-logo` | `'Press Start 2P', 'VT323', monospace` | Logo wordmark only |
-| `.font-pixel` | `'Press Start 2P UI', 'VT323', monospace`（同款字体经 size-adjust: 70% 缩放，logo 用原始版） | Titles, buttons, status labels, short display text |
+| `.font-pixel` | `'Press Start 2P', 'VT323', monospace` | Titles, buttons, status labels, short display text |
 | `.font-reader` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | Code, body text, inputs, terminal — always use this for readable content |
 
 Without `body.pixel-font-on`, `.font-logo` and `.font-pixel` fall back to plain `monospace`.
@@ -121,7 +121,7 @@ All `.font-pixel` text is `text-transform: uppercase`.
 | CSS Variable | Font stack | JS Constant (fonts.ts) |
 |---|---|---|
 | `--logo-font` | `'Press Start 2P', 'VT323', monospace` | `LOGO_FONT` |
-| `--pixel-font` | `'Press Start 2P UI', 'VT323', monospace` | `PIXEL_FONT` |
+| `--pixel-font` | `'Press Start 2P', 'VT323', monospace` | `PIXEL_FONT` |
 | `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | `READER_FONT` |
 
 ### 禁止硬编码 font-family
