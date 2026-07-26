@@ -1214,6 +1214,8 @@ export function Sidebar() {
                                           {sidebarWidth >= ACP_BADGE_FULL_MIN_SIDEBAR_WIDTH ? 'ACP' : 'A'}
                                         </span>
                                       )}
+                                      {/* Active 指示条（行内元素，见 index.css .session-active-bar） */}
+                                      <div className="session-active-bar" />
                                       {/* Running indicator dot */}
                                       <div
                                         className="flex-shrink-0"
