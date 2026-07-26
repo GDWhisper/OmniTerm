@@ -21,6 +21,7 @@ export interface AppState {
   sidebarCollapsed: boolean
   fileManagerOpen: boolean
   fileManagerCollapsed: boolean
+  rightPanelTab: 'files' | 'git'
   sidebarWidth: number
   fileManagerWidth: number
 
@@ -119,6 +120,7 @@ export interface AppState {
   setTerminalDisconnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
+  setRightPanelTab: (tab: AppState['rightPanelTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
@@ -147,6 +149,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarCollapsed: false,
   fileManagerOpen: true,
   fileManagerCollapsed: false,
+  rightPanelTab: (localStorage.getItem('omniterm_right_panel_tab') as AppState['rightPanelTab']) || 'files',
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || String(Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8)))),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
@@ -198,6 +201,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
   toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
+  setRightPanelTab: (tab) => {
+    localStorage.setItem('omniterm_right_panel_tab', tab)
+    set({ rightPanelTab: tab })
+  },
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, tmuxCheatsheetOpen: false })),
   toggleTmuxCheatsheet: () => set((s) => ({ tmuxCheatsheetOpen: !s.tmuxCheatsheetOpen, settingsOpen: false })),
 

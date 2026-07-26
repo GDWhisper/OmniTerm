@@ -5,7 +5,7 @@ import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
 import { AcpConnectionManager } from '../Chat/AcpConnectionManager'
-import { FileManager } from '../FileManager/FileManager'
+import { RightPanel } from '../RightPanel/RightPanel'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
@@ -212,7 +212,7 @@ export function Layout() {
             />
           )}
 
-          {/* FileManager */}
+          {/* RightPanel (FILES | GIT) */}
           {fileManagerOpen && (
             <div
               className="flex-shrink-0 overflow-hidden"
@@ -223,7 +223,7 @@ export function Layout() {
                 transition: isDragging ? 'none' : 'width 0.2s ease',
               }}
             >
-              <FileManager />
+              <RightPanel />
             </div>
           )}
         </div>
@@ -372,7 +372,7 @@ function MobileContent() {
     case 'terminal':
       return <SessionView key={activeSessionId ?? 'empty'} />
     case 'files':
-      return <div style={wrapperStyle}><FileManager /></div>
+      return <div style={wrapperStyle}><RightPanel /></div>
     case 'sessions':
       return <div style={wrapperStyle}><Sidebar /></div>
     default:

@@ -15,6 +15,7 @@ src/
 │   ├── themeStore.ts    # Zustand: light/dark/system theme + .dark class on <html>
 │   ├── toastStore.ts    # Zustand: toast notifications (auto-dismiss)
 │   ├── agentStore.ts    # Zustand: agent registry (Phase 3 — static catalog, no live state)
+│   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
 │   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size
@@ -30,7 +31,9 @@ src/
     ├── Terminal/ — Terminal.tsx
     ├── Chat/ — ChatView.tsx, ChatMessage.tsx, ChatInput.tsx (Phase 4a: ACP session rendering)
     ├── AgentPicker/ — AgentPicker.tsx (Phase 3: <select> for create-session modal)
-    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx
+    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
+    ├── RightPanel/ — RightPanel.tsx（右栏容器：FILES | GIT 标签、统一标题栏、折叠 rail；两 tab 常挂载 display 切换）
+    ├── GitPanel/ — GitPanel.tsx（分支/远端操作 + CHANGES|HISTORY + 底部提交框）, GitDrawer.tsx（diff/commit 抽屉）, DiffView.tsx, diffParser.ts（unified diff 解析）
     ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx
     ├── TmuxCheatsheet/ — TmuxCheatsheet.tsx (render), TmuxCheatsheetPopup.tsx (popup), data.ts (command list, single source of truth — 增/删/改命令改本文件 + 两个 translation.json；维护指引见 data.ts 顶部 JSDoc)
     ├── Icons/ — GitBranchIcon.tsx, KeyboardIcon.tsx

@@ -1819,3 +1819,538 @@ select optgroup option {
   color: var(--text-primary);
   font-weight: normal;
 }
+
+/* ────────────────────────────────────────────────────────────────────
+   Right panel tabs (FILES | GIT) — live inside .panel-title-bar.
+   VT323 pixel font, uppercase, wood-theme active state (§12).
+   ──────────────────────────────────────────────────────────────────── */
+.panel-title-bar .title-bar-tab {
+  background: transparent;
+  border: none;
+  padding: 1px 8px;
+  font-family: var(--pixel-font);
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(250, 242, 222, 0.55);
+  cursor: pointer;
+  transition: color 0.1s steps(2), background 0.1s steps(2);
+}
+.panel-title-bar .title-bar-tab:hover {
+  color: #FAF2DE;
+}
+.panel-title-bar .title-bar-tab.active {
+  color: var(--gold-light, #FFCB6B);
+  background: var(--wood-shadow, #3A2E1F);
+  /* Inset 3D — see §4.1 */
+  box-shadow:
+    inset 0 2px 0 var(--wood-inset-dark),
+    inset 2px 0 0 var(--wood-inset-dark),
+    inset 0 -2px 0 var(--wood-inset-light),
+    inset -2px 0 0 var(--wood-inset-light);
+}
+.panel-title-bar .title-bar-collapse {
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  font-size: 12px;
+  color: rgba(250, 242, 222, 0.55);
+  cursor: pointer;
+  transition: color 0.1s steps(2);
+}
+.panel-title-bar .title-bar-collapse:hover {
+  color: #FAF2DE;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Git panel — docs/dev/plans/2026-07-26-git-panel.md ADR-7.
+   Top branch/remote row + CHANGES|HISTORY switch + bottom commit box.
+   ──────────────────────────────────────────────────────────────────── */
+.git-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 80px;
+  padding: 16px;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+  text-align: center;
+}
+
+.git-topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  font-family: var(--reader-font);
+}
+
+.git-branch-wrap {
+  position: relative;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.git-branch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+  background: transparent;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.git-branch-btn:hover:not(:disabled) {
+  background: var(--accent-10);
+  color: var(--accent-bright);
+}
+.git-branch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.git-branch-glyph {
+  flex-shrink: 0;
+}
+.git-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-branch-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+.git-branch-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.git-branch-item:hover {
+  background: var(--accent-10);
+  color: var(--accent);
+}
+.git-branch-item.active {
+  color: var(--gold-light, #FFCB6B);
+  cursor: default;
+}
+.git-branch-create {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.git-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  outline: none;
+}
+.git-input:focus {
+  border-color: var(--accent);
+}
+
+.git-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-muted);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.git-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-10);
+}
+.git-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-ab-badge {
+  font-family: var(--reader-font);
+  font-size: 11px;
+  color: var(--gold-light, #FFCB6B);
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+
+.git-viewbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.git-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--pixel-font);
+  font-size: 14px;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: color 0.1s steps(2);
+}
+.git-view-tab:hover {
+  color: var(--text-primary);
+}
+.git-view-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.git-count-badge {
+  font-family: var(--reader-font);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  background: var(--accent-14);
+  color: var(--accent);
+}
+
+/* ── File sections (STAGED / CHANGES) ── */
+.git-section {
+  padding-bottom: 6px;
+}
+.git-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 4px;
+  color: var(--text-faint);
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  background: var(--bg-base);
+  z-index: 1;
+}
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: var(--reader-font);
+  font-size: 12px;
+  transition: background 0.1s ease;
+}
+.git-file-row:hover {
+  background: var(--accent-10);
+}
+.git-file-row:hover .git-file-actions {
+  opacity: 1;
+}
+.git-status-char {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+.git-status-M, .git-status-T { color: var(--warning); }
+.git-status-A { color: var(--success); }
+.git-status-D { color: var(--danger); }
+.git-status-R, .git-status-C { color: var(--accent); }
+.git-status-\? { color: var(--success); }
+.git-status-conflict, .git-status-U { color: var(--danger); }
+.git-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.git-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.git-row-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.git-row-btn:hover:not(:disabled) {
+  background: var(--accent-14);
+  color: var(--accent);
+}
+.git-row-btn-danger:hover:not(:disabled) {
+  background: var(--danger-12);
+  color: var(--danger);
+}
+.git-row-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Bottom-fixed commit box ── */
+.git-commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  flex-shrink: 0;
+}
+.git-commit-input {
+  resize: none;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  line-height: 1.4;
+  outline: none;
+}
+.git-commit-input:focus {
+  border-color: var(--accent);
+}
+.git-commit-btn {
+  padding: 5px 0;
+  background: transparent;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--pixel-font);
+  font-size: 14px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.git-commit-btn:hover:not(:disabled) {
+  background: var(--accent-10);
+  color: var(--accent-bright);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+.git-commit-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── History list ── */
+.git-log-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--reader-font);
+  transition: background 0.1s ease;
+}
+.git-log-row:hover {
+  background: var(--accent-10);
+}
+.git-log-subject {
+  color: var(--text-primary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.git-log-sha {
+  color: var(--gold-light, #FFCB6B);
+}
+.git-load-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+.git-load-more:hover:not(:disabled) {
+  background: var(--accent-10);
+}
+
+/* ── Diff drawer ── */
+.git-drawer-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+}
+.git-commit-meta {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.git-commit-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.git-commit-sha {
+  color: var(--gold-light, #FFCB6B);
+  font-family: var(--reader-font);
+  font-size: 11px;
+  word-break: break-all;
+}
+.git-commit-message {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+}
+
+/* ── Unified diff rendering (ADR-3) ── */
+.git-diff {
+  font-family: var(--reader-font);
+  font-size: 12px;
+  line-height: 1.5;
+  padding-bottom: 8px;
+}
+.git-diff-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+}
+.git-diff-file-header {
+  padding: 5px 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.git-diff-line {
+  display: flex;
+  white-space: pre;
+}
+.git-diff-lineno {
+  flex-shrink: 0;
+  width: 38px;
+  padding-right: 6px;
+  text-align: right;
+  color: var(--text-dim);
+  user-select: none;
+  font-size: 11px;
+}
+.git-diff-text {
+  flex: 1;
+  min-width: 0;
+  padding-left: 4px;
+  color: var(--text-muted);
+}
+.git-diff-line-add {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.git-diff-line-add .git-diff-text { color: var(--success); }
+.git-diff-line-del {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.git-diff-line-del .git-diff-text { color: var(--danger); }
+.git-diff-line-hunk .git-diff-text,
+.git-diff-line-meta .git-diff-text {
+  color: var(--accent);
+  opacity: 0.8;
+}
+.git-diff-truncated {
+  padding: 10px 12px;
+  color: var(--warning);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  text-align: center;
+}

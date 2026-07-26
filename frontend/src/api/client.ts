@@ -433,4 +433,107 @@ export const api = {
     if (params.projectId) url += `&workspace=${params.projectId}`
     return request<FileEntry[]>(url)
   },
+
+  // ── Git panel (docs/dev/plans/2026-07-26-git-panel.md ADR-2: repo bound
+  //    to session/workspace id only; the backend resolves the repo root) ──
+  gitStatus: (bind: GitBind) =>
+    request<GitStatus>(`/git/status?${gitBindQuery(bind)}`, { silent: true }),
+  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean }) => {
+    let url = `/git/diff?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
+    if (params.staged) url += '&staged=true'
+    if (params.untracked) url += '&untracked=true'
+    return request<{ diff: string; truncated: boolean }>(url)
+  },
+  gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
+    request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(
+      `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`,
+    ),
+  gitShow: (bind: GitBind, sha: string) =>
+    request<GitCommitDetail>(`/git/show?${gitBindQuery(bind)}&sha=${encodeURIComponent(sha)}`),
+  gitBranches: (bind: GitBind) =>
+    request<{ branches: GitBranch[] } | { is_repo: false }>(`/git/branches?${gitBindQuery(bind)}`),
+  gitStage: (bind: GitBind, paths: string[]) =>
+    request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }) }),
+  gitUnstage: (bind: GitBind, paths: string[]) =>
+    request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }) }),
+  gitCommit: (bind: GitBind, message: string) =>
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }) }),
+  gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
+    request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }) }),
+  gitCheckout: (bind: GitBind, branch: string) =>
+    request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }) }),
+  gitCreateBranch: (bind: GitBind, name: string) =>
+    request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }) }),
+  gitPush: (bind: GitBind) =>
+    request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+  gitPull: (bind: GitBind) =>
+    request('/git/pull', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+  gitFetch: (bind: GitBind) =>
+    request('/git/fetch', { method: 'POST', body: JSON.stringify(gitBindBody(bind)) }),
+}
+
+// ── Git panel types ──
+export interface GitBind {
+  session?: string
+  workspaceId?: string
+  projectId?: string
+}
+
+function gitBindQuery(bind: GitBind): string {
+  const parts: string[] = []
+  if (bind.session) parts.push(`session=${bind.session}`)
+  if (bind.workspaceId) parts.push(`workspace_id=${bind.workspaceId}`)
+  if (bind.projectId) parts.push(`workspace=${bind.projectId}`)
+  return parts.join('&')
+}
+
+function gitBindBody(bind: GitBind): { session?: string; workspace_id?: string; workspace?: string } {
+  return {
+    ...(bind.session ? { session: bind.session } : {}),
+    ...(bind.workspaceId ? { workspace_id: bind.workspaceId } : {}),
+    ...(bind.projectId ? { workspace: bind.projectId } : {}),
+  }
+}
+
+export interface GitStatusEntry {
+  path: string
+  orig_path?: string
+  index_status: string
+  worktree_status: string
+  conflicted: boolean
+}
+
+export interface GitStatus {
+  is_repo: boolean
+  repo_root?: string
+  branch?: string | null
+  detached?: boolean
+  upstream?: string | null
+  ahead?: number
+  behind?: number
+  entries?: GitStatusEntry[]
+}
+
+export interface GitLogEntry {
+  sha: string
+  short_sha: string
+  author: string
+  date: string
+  subject: string
+}
+
+export interface GitCommitDetail {
+  sha: string
+  short_sha: string
+  author: string
+  email: string
+  date: string
+  message: string
+  diff: string
+  truncated: boolean
+}
+
+export interface GitBranch {
+  name: string
+  current: boolean
 }

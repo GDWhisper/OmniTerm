@@ -25,7 +25,8 @@ src/
 │   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (tmux pane) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
-│   └── files_watch.rs    # File watcher: SSE endpoint for live directory updates
+│   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
+│   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
 ├── auth/mod.rs           # JWT token creation/verification, RequireAuth extractor
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── tmux/
@@ -36,7 +37,9 @@ src/
 │   ├── process_info.rs   # [platform] Process enumeration: read_process_cmdline, walk_process_tree
 │   └── pty_io.rs         # [platform] PTY writes + process cleanup: write_pty, kill_session_process
 ├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
-├── git/mod.rs            # Git worktree discovery
+├── git/
+│   ├── mod.rs            # Git worktree discovery
+│   └── repo.rs           # Git panel service: status(porcelain v2)/diff/log/show/branches/stage/unstage/commit/discard/checkout/push/pull/fetch via git CLI subprocess (no git2)
 ├── ws/
 │   ├── mod.rs
 │   ├── terminal.rs       # WebSocket terminal bridge: PTY ↔ WS binary frames, JSON control
@@ -71,7 +74,11 @@ POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
 GET  /api/v1/files/watch (SSE)
+GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
+POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
 ```
+
+git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
 
 ## ACP Module (Phase 3)
 

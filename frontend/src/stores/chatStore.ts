@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useGitStore } from './gitStore'
 
 // --- Content block types (Phase 7 structured rendering) ---
 
@@ -358,6 +359,17 @@ const applyActionsToMessages = (
         })
       }
     } else if (action.kind === 'upsertTool') {
+      // ADR-4: 编辑类工具完成 → 提示 git 面板刷新
+      if (action.status === 'completed') {
+        const lastMsg = next[next.length - 1]
+        const prevBlock = lastMsg?.blocks.find(
+          (b) => b.type === 'tool_call' && b.toolCallId === action.toolCallId,
+        ) as ToolCallBlock | undefined
+        const k = action.toolKind ?? prevBlock?.kind
+        if (k === 'edit' || k === 'delete' || k === 'move') {
+          useGitStore.getState().notifyExternalChange()
+        }
+      }
       const last = next[next.length - 1]
       if (last && last.role === 'assistant') {
         const toBlock = (prev?: ToolCallBlock): ToolCallBlock => ({

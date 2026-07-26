@@ -8,7 +8,6 @@ import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
-import { READER_FONT } from '../../utils/fonts'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
@@ -81,8 +80,6 @@ export function FileManager() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
-  const fileManagerCollapsed = useAppStore((s) => s.fileManagerCollapsed)
-  const toggleFileManagerCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
   const fmSessionStates = useAppStore((s) => s.fmSessionStates)
   const setFmSessionMode = useAppStore((s) => s.setFmSessionMode)
   const setFmManualPath = useAppStore((s) => s.setFmManualPath)
@@ -684,50 +681,6 @@ export function FileManager() {
     path: '/' + bcSegments.slice(0, i + 1).join('/')
   }))
 
-  if (fileManagerCollapsed) {
-    return (
-      <div
-        className="h-full flex flex-col items-center relative"
-        style={{ background: 'var(--bg-base)', fontFamily: READER_FONT, width: 40 }}
-      >
-        <button
-          onClick={toggleFileManagerCollapsed}
-          className="flex items-center justify-center rounded-md transition-all mt-3"
-          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
-          title={t('fm.expand')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
-        >
-          ◀
-        </button>
-
-        <div className="flex-1 flex items-center justify-center">
-          <button
-            onClick={toggleFileManagerCollapsed}
-            className="flex items-center justify-center rounded-md transition-all"
-            style={{ width: 28, height: 28, color: 'var(--text-dim)', fontSize: 14 }}
-            title={t('fm.expand')}
-            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-dim)'; e.currentTarget.style.background = 'transparent' }}
-          >
-            <IconFolderOpen width={18} height={18} />
-          </button>
-        </div>
-
-        <button
-          onClick={toggleFileManagerCollapsed}
-          className="flex items-center justify-center rounded-md transition-all mb-3"
-          style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
-          title={t('fm.expand')}
-          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
-        >
-          ◀
-        </button>
-      </div>
-    )
-  }
-
   return (
     <div
       className="omnifm-root"
@@ -735,24 +688,8 @@ export function FileManager() {
       tabIndex={0}
       onKeyDown={handleKeyDown}
     >
-      <div className="panel-title-bar">
-        <span>◆</span>
-        <span>files</span>
-        <span className="title-bar-spacer" />
-        {activeWorkspaceId && <span className="title-bar-path">~/{activeWorkspaceId}</span>}
-      </div>
       <div className="fm-toolbar">
         <div className="fm-toolbar-left">
-          <button
-            onClick={toggleFileManagerCollapsed}
-            className="flex items-center justify-center rounded-md transition-all"
-            style={{ width: 24, height: 24, color: 'var(--text-faint)', fontSize: 14 }}
-            title={t('fm.collapse')}
-            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
-          >
-            ▶
-          </button>
           {/* "回到终端目录" 按钮 — 脱离终端时脉冲 */}
           {fmSource && (
             <button
