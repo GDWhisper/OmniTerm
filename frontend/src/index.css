@@ -126,7 +126,12 @@
      (directly or via the .font-reader class). Keep in sync with fonts.ts. */
   --reader-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
   --logo-font: 'Press Start 2P', 'VT323', monospace;
-  --pixel-font: 'Silkscreen', 'VT323', 'Press Start 2P', monospace;
+  /* Pixel font is a BETA opt-in (Settings → Appearance). --pixel-font-static
+     is always pixel (top bar row: logo version + panel title bars); everything
+     else uses --pixel-font, which stays on the reader stack until
+     body.pixel-font-on flips it (below). */
+  --pixel-font-static: 'Silkscreen', 'VT323', 'Press Start 2P', monospace;
+  --pixel-font: var(--reader-font);
 
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
@@ -232,6 +237,13 @@
   font-family: var(--pixel-font);
   letter-spacing: 1px;
   text-transform: uppercase;
+}
+
+/* Pixel font BETA toggle (Settings → Appearance). App.tsx sets this body
+   class from appStore.pixelFontEnabled. Rules on --pixel-font-static
+   (top bar row) ignore the toggle by design. */
+body.pixel-font-on {
+  --pixel-font: var(--pixel-font-static);
 }
 
 .font-reader {
@@ -1205,7 +1217,7 @@ html, body, #root {
 }
 
 .logo-version {
-  font-family: var(--pixel-font);
+  font-family: var(--pixel-font-static);
   font-size: 15px;
   color: var(--gold-light, #FFCB6B);
   letter-spacing: 1px;
@@ -1299,7 +1311,7 @@ body.parchment-texture {
   padding: 5px 10px;
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
-  font-family: var(--pixel-font);
+  font-family: var(--pixel-font-static);
   font-size: 13px;
   letter-spacing: 3px;
   text-transform: uppercase;
@@ -1850,7 +1862,7 @@ select optgroup option {
   border: none;
   border-bottom: 2px solid transparent;
   padding: 1px 8px;
-  font-family: var(--pixel-font);
+  font-family: var(--pixel-font-static);
   font-size: 14px;
   letter-spacing: 2px;
   text-transform: uppercase;

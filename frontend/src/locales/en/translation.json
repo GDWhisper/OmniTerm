@@ -81,6 +81,8 @@
   "settings.crtScanlinesHint": "Subtle scanline overlay for retro terminal feel",
   "settings.parchmentTexture": "Parchment Texture",
   "settings.parchmentTextureHint": "Subtle dot-matrix pattern on parchment background",
+  "settings.pixelFont": "Pixel Font (BETA)",
+  "settings.pixelFontHint": "Retro pixel font for titles, buttons and status labels. The top bar always stays pixel.",
   "settings.category.appearance": "APPEARANCE",
   "settings.category.audio": "AUDIO",
   "settings.category.edit": "EDIT",

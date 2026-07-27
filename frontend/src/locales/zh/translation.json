@@ -81,6 +81,8 @@
   "settings.crtScanlinesHint": "微弱的扫描线覆盖层，营造复古终端氛围",
   "settings.parchmentTexture": "羊皮纸纹理",
   "settings.parchmentTextureHint": "羊皮纸背景上的微弱点阵图案",
+  "settings.pixelFont": "像素字体（BETA）",
+  "settings.pixelFontHint": "标题、按钮、状态标签使用复古像素字体；顶栏始终保持像素风格",
   "settings.category.appearance": "外观",
   "settings.category.audio": "音频",
   "settings.category.edit": "编辑",

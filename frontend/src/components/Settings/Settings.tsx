@@ -448,6 +448,12 @@ function ParchmentSection() {
   return <ToggleRow labelKey="settings.parchmentTexture" hintKey="settings.parchmentTextureHint" value={parchmentTextureEnabled} onToggle={() => setParchmentTextureEnabled(!parchmentTextureEnabled)} />
 }
 
+function PixelFontSection() {
+  const pixelFontEnabled = useAppStore((s) => s.pixelFontEnabled)
+  const setPixelFontEnabled = useAppStore((s) => s.setPixelFontEnabled)
+  return <ToggleRow labelKey="settings.pixelFont" hintKey="settings.pixelFontHint" value={pixelFontEnabled} onToggle={() => setPixelFontEnabled(!pixelFontEnabled)} />
+}
+
 function MobileGestureSection() {
   const mobileGestureEnabled = useAppStore((s) => s.mobileGestureEnabled)
   const setMobileGestureEnabled = useAppStore((s) => s.setMobileGestureEnabled)
@@ -491,7 +497,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'appearance',
     labelKey: 'settings.category.appearance',
-    sections: [ThemeSection, UiZoomSection, FontSizeSection, ChatFontSizeSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
+    sections: [ThemeSection, UiZoomSection, FontSizeSection, ChatFontSizeSection, PixelFontSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
   },
   {
     id: 'audio',

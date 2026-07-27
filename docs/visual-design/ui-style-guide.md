@@ -93,15 +93,17 @@ Two themes controlled by `.dark` on `<html>`:
 
 ## 2. Font Layers
 
-Three CSS classes, each gated by body class `body.pixel-font-on`:
+Three CSS classes. `.font-pixel`（及所有 `var(--pixel-font)` 用点）受**像素字体 BETA 开关**控制（设置 → 外观）：
 
 | Class | Font stack | When to use |
 |---|---|---|
 | `.font-logo` | `'Press Start 2P', 'VT323', monospace` | Logo wordmark only |
-| `.font-pixel` | `'Silkscreen', 'VT323', 'Press Start 2P', monospace` | Titles, buttons, status labels, short display text |
+| `.font-pixel` | 开关开：`'Silkscreen', 'VT323', 'Press Start 2P', monospace`；开关关：回退 `--reader-font` | Titles, buttons, status labels, short display text |
 | `.font-reader` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | Code, body text, inputs, terminal — always use this for readable content |
 
-Without `body.pixel-font-on`, `.font-logo` and `.font-pixel` fall back to plain `monospace`.
+开关机制：`App.tsx` 依据 `appStore.pixelFontEnabled`（localStorage `omniterm_pixel_font`，**默认关**）切换 `body.pixel-font-on`，该类把 `--pixel-font` 从 `var(--reader-font)` 覆盖为 `var(--pixel-font-static)`。
+
+**顶栏豁免**：顶栏一行永远保持像素 — `.logo-wordmark`（`--logo-font`）、`.logo-version`、`.panel-title-bar`、`.panel-title-bar .title-bar-tab` 直接使用 `var(--pixel-font-static)`，不受开关影响。
 
 ### Size reference
 
@@ -118,18 +120,19 @@ All `.font-pixel` text is `text-transform: uppercase`.
 
 ### CSS Variables (single source of truth)
 
-| CSS Variable | Font stack | JS Constant (fonts.ts) |
+| CSS Variable | Font stack | 说明 |
 |---|---|---|
-| `--logo-font` | `'Press Start 2P', 'VT323', monospace` | `LOGO_FONT` |
-| `--pixel-font` | `'Silkscreen', 'VT323', 'Press Start 2P', monospace` | `PIXEL_FONT` |
-| `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | `READER_FONT` |
+| `--logo-font` | `'Press Start 2P', 'VT323', monospace` | logo 字标，永远像素 |
+| `--pixel-font-static` | `'Silkscreen', 'VT323', 'Press Start 2P', monospace` | 顶栏豁免专用，永远像素 |
+| `--pixel-font` | 默认 `var(--reader-font)`；`body.pixel-font-on` 下 = `var(--pixel-font-static)` | 全部可切换像素文字走这个 |
+| `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | JS 镜像常量 `READER_FONT`（fonts.ts，供 xterm 等需要解析后字符串的消费者） |
 
 ### 禁止硬编码 font-family
 
 **组件/样式中禁止直接写 `font-family` 字面量。** 必须使用以下机制之一：
 - **CSS 类**：`.font-logo` / `.font-pixel` / `.font-reader`（优先）
-- **CSS 变量**：`var(--logo-font)` / `var(--pixel-font)` / `var(--reader-font)`（需要其他属性组合时）
-- **JS 常量**：`LOGO_FONT` / `PIXEL_FONT` / `READER_FONT`（`utils/fonts.ts`，仅用于 inline style）
+- **CSS 变量**：`var(--logo-font)` / `var(--pixel-font)` / `var(--reader-font)`（需要其他属性组合时；inline style 同样用 `fontFamily: 'var(--pixel-font)'`，否则不响应像素字体开关）
+- **JS 常量**：`READER_FONT`（`utils/fonts.ts`，仅限 xterm 等无法消费 CSS 变量的场景）
 
 **唯一例外**：`index.css` 中的 `@font-face` 声明（注册字体本身）和 `.font-*` 类定义处。
 
@@ -149,7 +152,7 @@ Location: `frontend/src/components/PixelUI/OmniTermLogo.tsx`
 
 ### 3.2 PixelButton (4 variants)
 
-All gated by `body.pixel-ui-on`. Share base class `.btn-pixel`.
+All share base class `.btn-pixel`.
 
 | Variant | Classes | Background | Border | Shadow |
 |---|---|---|---|---|
@@ -211,11 +214,11 @@ Includes corner nails (gold 8x8 squares), blinking pink caret `.dialogue-caret`,
 `.panel-title-bar` — wood-brown strip at the top of every panel (Sidebar sections, Terminal, FileManager, Settings, Modal).
 
 ```css
-body.pixel-ui-on .panel-title-bar {
+.panel-title-bar {
   padding: 5px 10px;
   background: var(--wood-dark);      /* #8B5A2B light / #2A2520 dark */
   color: #FAF2DE;
-  font-family: var(--pixel-font);
+  font-family: var(--pixel-font-static);  /* 顶栏豁免：不受像素字体开关影响 */
   font-size: 13px;
   letter-spacing: 3px;
   text-transform: uppercase;
@@ -371,26 +374,26 @@ Pink blinking `▶` on the left of the currently selected list item.
 
 ### 7.2 Terminal Pixel Border (`.terminal-panel-pixel`)
 
-Gated by `body.pixel-ui-on`. Wood-brown frame around xterm, keeping the dark terminal background.
+Wood-brown frame around xterm, keeping the dark terminal background.
 
 ```css
-body.pixel-ui-on .terminal-panel-pixel {
+.terminal-panel-pixel {
   background: var(--bg-elevated);
   border: 2px solid var(--wood-shadow);
   box-shadow: 3px 3px 0 var(--pixel-shadow);
 }
-body.pixel-ui-on .terminal-panel-pixel .xterm-viewport,
-body.pixel-ui-on .terminal-panel-pixel .xterm {
+.terminal-panel-pixel .xterm-viewport,
+.terminal-panel-pixel .xterm {
   background: #12141A !important;
 }
 ```
 
 ### 7.3 Pixel Toast (`.toast-pixel`)
 
-Gated by `body.pixel-ui-on`. Dark background + colored pixel border + VT323 font.
+Dark background + colored pixel border + pixel font.
 
 ```css
-body.pixel-ui-on .toast-pixel {
+.toast-pixel {
   background: #12141A;
   border: 2px solid var(--success);
   color: #7EE787;
@@ -425,8 +428,7 @@ Feature flags are applied as classes on `<body>`:
 
 | Body class | Added when | What it enables |
 |---|---|---|
-| `body.pixel-ui-on` | always | `.btn-pixel-*`, `.panel-title-bar`, `.terminal-panel-pixel`, `.toast-pixel` styles |
-| `body.pixel-font-on` | always | `.font-logo` and `.font-pixel` use Press Start 2P / Silkscreen |
+| `body.pixel-font-on` | `pixelFontEnabled === true`（像素字体 BETA 开关，默认关） | `--pixel-font` 覆盖为 `var(--pixel-font-static)`；关闭时所有 `var(--pixel-font)` 用点回退 reader 字体（顶栏豁免见 §2） |
 | `body.parchment-texture` | `parchmentTextureEnabled === true` | Background dot-matrix overlay on body (light theme only) |
 
 ---
@@ -596,7 +598,7 @@ Before adding any new UI element, verify:
 - [ ] Hard shadow uses `3px 3px 0` (not `4px` blur, not glow)
 - [ ] `border-radius: 0` everywhere (modals: `2px` max)
 - [ ] Pixel font (`.font-pixel`) only for display text, not body/code
-- [ ] Interactive element has `body.pixel-ui-on` gate if it's a game element
+- [ ] 可切换像素文字必须走 `var(--pixel-font)`（inline style 亦然），保证受像素字体 BETA 开关控制；顶栏豁免才用 `var(--pixel-font-static)`（§2）
 - [ ] Tested in both light and dark themes
 - [ ] Transitions use `steps(3)` for pixel elements, `ease-out` for modals
 - [ ] No emoji characters — SVG or monospace glyphs only

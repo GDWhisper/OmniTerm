@@ -1,10 +1,8 @@
-import { PIXEL_FONT } from '../../utils/fonts'
-
 export function CountBadge({ count }: { count: number }) {
   return (
     <span
       style={{
-        fontFamily: PIXEL_FONT,
+        fontFamily: 'var(--pixel-font)',
         fontSize: 16,
         lineHeight: 1,
         background: 'var(--wood-shadow, #3A2E1F)',

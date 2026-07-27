@@ -83,6 +83,9 @@ export interface AppState {
   soundEnabled: boolean
   crtScanlines: boolean
   parchmentTextureEnabled: boolean
+  /** Pixel display font (BETA). Off = pixel text falls back to reader font;
+   *  the top bar row (logo + panel title bars) stays pixel regardless. */
+  pixelFontEnabled: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -128,6 +131,7 @@ export interface AppState {
   setSoundEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
+  setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
   switchWorkspace: (project: Project, workspace: Workspace) => void
@@ -196,6 +200,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
+  // Default off: first-run users get the uniform reader font (BETA opt-in).
+  pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -330,6 +336,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setParchmentTextureEnabled: (v) => {
     localStorage.setItem('omniterm_parchment_texture', String(v))
     set({ parchmentTextureEnabled: v })
+  },
+  setPixelFontEnabled: (v) => {
+    localStorage.setItem('omniterm_pixel_font', String(v))
+    set({ pixelFontEnabled: v })
   },
 
   /** Batch all workspace-switch state into one set() to avoid cascading re-renders. */
