@@ -36,6 +36,7 @@ const TOOL_KIND_LABELS: Record<string, string> = {
  * 保留预览行数并提供展开/收起开关；短内容原样渲染。
  */
 function CollapsibleUserText({ text }: { text: string }) {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const lineCount = text.split('\n').length
   const collapsed = !open && lineCount > USER_TEXT_COLLAPSE_LINES
