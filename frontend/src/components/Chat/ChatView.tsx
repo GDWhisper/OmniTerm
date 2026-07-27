@@ -6,6 +6,7 @@ import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
+import type { ImageAttachment } from '../../utils/imageAttachment'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
@@ -138,16 +139,18 @@ export function ChatView() {
     )
   }
 
-  const handleSend = (text: string) => {
+  const handleSend = (text: string, images?: ImageAttachment[]) => {
     // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
     // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
     // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
     // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
+    // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃 images 是预期行为
+    // ——ChatInput 已在带附件时禁用 Queue，此路径不会带 images 进入。
     if (chatState.sending) {
       useChatStore.getState().enqueueMessage(activeSessionId!, text)
       return
     }
-    sendPrompt(text)
+    sendPrompt(text, images)
     // Re-stick so the user's own message is visible + next chunk scrolls in.
     setAutoStick(true)
   }
@@ -164,6 +167,29 @@ export function ChatView() {
   // （旧 prompt_done 在新 in-flight 期间到达会把 sending 拉成 false，造成 UI 闪烁）。
   const handleSendNowQueued = () => {
     cancel()
+  }
+
+  // F02 编辑重发：原消息标 edited，编辑稿作为全新 prompt 走 handleSend
+  // （sending 时自动进 N=1 队列，无需特判）。ACP 无编辑历史语义，见计划 §3.2。
+  const handleEditResend = (messageId: string, newText: string) => {
+    if (!activeSessionId) return
+    useChatStore.getState().markEdited(activeSessionId, messageId)
+    handleSend(newText)
+  }
+
+  // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
+  // sending 时走 enqueue+cancel（同 Send Now 的 drain 路径，天然规避与队列的竞态）。
+  const handleRegenerate = () => {
+    if (!activeSessionId) return
+    const lastUser = [...chatState.messages].reverse().find((m) => m.role === 'user' && !m.undelivered)
+    if (!lastUser) return
+    if (chatState.sending) {
+      useChatStore.getState().enqueueMessage(activeSessionId, lastUser.text)
+      cancel()
+      return
+    }
+    sendPrompt(lastUser.text)
+    setAutoStick(true)
   }
 
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
@@ -265,9 +291,18 @@ export function ChatView() {
             {t('chat.empty')}
           </div>
         )}
-        {chatState.messages.map((m) => (
-          <ChatMessageView key={m.id} message={m} />
-        ))}
+        {(() => {
+          const lastAssistantId = [...chatState.messages].reverse().find((m) => m.role === 'assistant')?.id
+          return chatState.messages.map((m) => (
+            <ChatMessageView
+              key={m.id}
+              message={m}
+              onEditResend={inputDisabled ? undefined : handleEditResend}
+              onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
+              isLastAssistant={m.id === lastAssistantId}
+            />
+          ))
+        })()}
         {chatState.sending && <ThinkingIndicator />}
         {isReplaying && (
           <div className="chat-replay-indicator">
@@ -370,6 +405,7 @@ export function ChatView() {
         onCancelQueued={handleCancelQueued}
         onSendNow={handleSendNowQueued}
         commands={chatState.commands}
+        imageSupported={chatState.imageSupported}
       />
 
       <ConfigToolbar

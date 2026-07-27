@@ -145,7 +145,17 @@
   "chat.input.queueTitle": "Queue this message — will send when the agent finishes",
   "chat.input.queueFullTitle": "Queue is full — tap ✕ on the chip to withdraw first",
   "chat.input.queueEmptyTitle": "Type a message to queue",
+  "chat.input.attachTooMany": "Up to {{max}} images per message",
+  "chat.input.attachTooLarge": "Image too large (max 5 MB)",
+  "chat.input.attachUnsupported": "Unsupported image type (PNG / JPEG / WebP / GIF)",
+  "chat.input.attachNoQueue": "Messages with images can't be queued — wait for the agent to finish",
+  "chat.input.attachRemove": "Remove image",
   "chat.input.message.undelivered": "not delivered — connection lost",
+  "chat.msg.edit": "edit",
+  "chat.msg.edited": "edited",
+  "chat.msg.editSend": "send",
+  "chat.msg.editCancel": "cancel",
+  "chat.msg.regenerate": "regenerate",
   "chat.status.connecting": "connecting…",
   "chat.status.disconnected": "disconnected",
   "chat.status.error": "connection error",
@@ -346,5 +356,13 @@
   "todo.header": "{{count}} TODOS",
   "todo.status.pending": "PENDING",
   "todo.status.active": "ACTIVE",
-  "todo.status.done": "DONE"
+  "todo.status.done": "DONE",
+
+  "auth.setPassword": "SET PASSWORD",
+  "auth.login": "LOGIN",
+  "auth.password": "Password",
+  "auth.wrongPassword": "Wrong password",
+  "auth.loggedIn": "LOGGED IN",
+  "auth.logout": "LOGOUT",
+  "settings.category.auth": "AUTH"
 }

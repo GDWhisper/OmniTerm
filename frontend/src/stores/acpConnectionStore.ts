@@ -1,9 +1,10 @@
 import { create } from 'zustand'
 import type { AcpConnectionState } from '../hooks/useAcpChat'
+import type { ImageAttachment } from '../utils/imageAttachment'
 
 interface AcpConnectionEntry {
   connectionState: AcpConnectionState
-  sendPrompt: (text: string) => void
+  sendPrompt: (text: string, images?: ImageAttachment[]) => void
   cancel: () => void
   restore: () => void
   respondPermission: (id: string, optionId: string) => void

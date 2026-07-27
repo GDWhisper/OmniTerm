@@ -145,7 +145,17 @@
   "chat.input.queueTitle": "排队此消息——agent 跑完后自动发送",
   "chat.input.queueFullTitle": "队列已满——请先点 ✕ 撤回上一条",
   "chat.input.queueEmptyTitle": "输入内容后可加入队列",
+  "chat.input.attachTooMany": "每条消息最多 {{max}} 张图片",
+  "chat.input.attachTooLarge": "图片过大（最大 5 MB）",
+  "chat.input.attachUnsupported": "不支持的图片类型（PNG / JPEG / WebP / GIF）",
+  "chat.input.attachNoQueue": "带图片的消息不能排队——请等 agent 跑完后直接发送",
+  "chat.input.attachRemove": "移除图片",
   "chat.input.message.undelivered": "未送达——连接已断开",
+  "chat.msg.edit": "编辑",
+  "chat.msg.edited": "已编辑",
+  "chat.msg.editSend": "发送",
+  "chat.msg.editCancel": "取消",
+  "chat.msg.regenerate": "重新生成",
   "chat.status.connecting": "连接中…",
   "chat.status.disconnected": "已断开",
   "chat.status.error": "连接错误",
@@ -346,5 +356,13 @@
   "todo.header": "{{count}} 个待办",
   "todo.status.pending": "待办",
   "todo.status.active": "进行中",
-  "todo.status.done": "已完成"
+  "todo.status.done": "已完成",
+
+  "auth.setPassword": "设置密码",
+  "auth.login": "登录",
+  "auth.password": "密码",
+  "auth.wrongPassword": "密码错误",
+  "auth.loggedIn": "已登录",
+  "auth.logout": "登出",
+  "settings.category.auth": "认证"
 }

@@ -1,6 +1,6 @@
 # ACP 会话功能增强计划
 
-> 状态：进行中 — F01 已完成（2026-07-27），其余待实施
+> 状态：进行中 — F01/F02/F03 已完成（2026-07-27），其余待实施
 > 触发条件：2026-07-27 功能审查，对比业界主流产品（Cursor / Cline / Aider / Copilot Chat / Claude Code）识别出高中优先级缺口
 > 关联：`docs/dev/plans/2026-07-20-acp-quality-gap.md`（测试基建）、`docs/architecture/frontend-patterns.md`（新组件模式）
 

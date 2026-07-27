@@ -67,7 +67,15 @@ export interface SystemBlock {
   label: string
 }
 
-export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock
+// F03 图片附件：用户消息内联 base64 图片（对应 ACP `ContentBlock::Image`）。
+export interface ImageBlock {
+  type: 'image'
+  mimeType: string
+  /** Base64 数据（不含 data URI 前缀）。 */
+  data: string
+}
+
+export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock
 
 // --- Agent terminal activity (from ACP `terminal/create`) ---
 // Surfaces commands the agent runs in background terminals so they aren't silent.
@@ -161,6 +169,13 @@ export interface ChatMessage {
    * in-memory chatStore until the session unmounts.
    */
   undelivered?: boolean
+  /**
+   * True when the user re-sent an edited copy of this message (F02). ACP has
+   * no "edit history" concept — the original stays in place with this marker
+   * and the edited text goes out as a brand-new prompt. In-memory only (not
+   * persisted; lost on refresh, which is acceptable since both messages are).
+   */
+  edited?: boolean
 }
 
 interface ChatSessionState {
@@ -188,6 +203,11 @@ interface ChatSessionState {
    * not drop the user's next message.
    */
   queuedMessage: string | null
+  /**
+   * F03: agent 是否声明 `promptCapabilities.image`（后端 capabilities 帧下发）。
+   * undefined = 尚未收到声明，UI 按不支持处理（保守降级）。
+   */
+  imageSupported?: boolean
 }
 
 interface ChatActions {
@@ -199,11 +219,13 @@ interface ChatActions {
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
-  addUserMessage: (sessionId: string, text: string) => void
+  addUserMessage: (sessionId: string, text: string, images?: ImageBlock[]) => void
   /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
   addUndeliveredMessage: (sessionId: string, text: string) => void
+  /** Mark a user message as superseded by an edited resend (F02). */
+  markEdited: (sessionId: string, messageId: string) => void
   markDone: (sessionId: string) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
@@ -228,6 +250,8 @@ interface ChatActions {
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
+  /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
+  setImageSupported: (sessionId: string, supported: boolean) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
   upsertTerminalActivity: (sessionId: string, event: TerminalActivity) => void
   reset: (sessionId: string) => void
@@ -605,9 +629,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages })
     }),
 
-  addUserMessage: (sessionId, text) =>
+  addUserMessage: (sessionId, text, images) =>
     set((state) => {
       const current = get(state, sessionId)
+      // 纯图片消息不塞空 text block（渲染与落库都无意义）。
+      const blocks: ContentBlock[] = text !== '' || !images?.length
+        ? [{ type: 'text' as const, text }]
+        : []
+      if (images) blocks.push(...images)
       return patch(state, sessionId, {
         messages: [
           ...current.messages,
@@ -615,7 +644,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             id: genId(),
             role: 'user',
             text,
-            blocks: [{ type: 'text' as const, text }],
+            blocks,
             createdAt: Date.now(),
           },
         ],
@@ -638,6 +667,15 @@ export const useChatStore = create<ChatStore>((set) => ({
           },
         ],
       })
+    }),
+
+  markEdited: (sessionId, messageId) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const messages = current.messages.map((m) =>
+        m.id === messageId && m.role === 'user' && !m.edited ? { ...m, edited: true } : m,
+      )
+      return patch(state, sessionId, { messages })
     }),
 
   enqueueMessage: (sessionId, text) =>
@@ -775,6 +813,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setConfigOptions: (sessionId, options) =>
     set((state) => patch(state, sessionId, { configOptions: options })),
+
+  setImageSupported: (sessionId, supported) =>
+    set((state) => patch(state, sessionId, { imageSupported: supported })),
 
   patchConfigOptionValue: (sessionId, configId, value) =>
     set((state) => {

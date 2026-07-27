@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction, type PendingPermission } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
+import type { ImageAttachment } from '../utils/imageAttachment'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -11,7 +12,7 @@ interface UseAcpChatOptions {
 
 interface UseAcpChatResult {
   connectionState: AcpConnectionState
-  sendPrompt: (text: string) => void
+  sendPrompt: (text: string, images?: ImageAttachment[]) => void
   cancel: () => void
   restore: () => void
   respondPermission: (id: string, optionId: string) => void
@@ -24,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity' | 'capabilities'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -36,6 +37,7 @@ interface ServerFrame {
   args?: string[]
   status?: string
   exit_code?: number | null
+  image?: boolean
 }
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
@@ -738,6 +740,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             useAppStore.getState().setAcpProcessAlive(sid, frame.alive)
           }
           break
+        case 'capabilities':
+          // F03: agent 是否支持图片 prompt（initialize 的 promptCapabilities.image）
+          if (typeof frame.image === 'boolean') {
+            useChatStore.getState().setImageSupported(sid, frame.image)
+          }
+          break
         default:
           // 未识别的帧类型：不静默吞掉，记录以便发现协议/版本漂移或 agent 私有扩展。
           console.warn('[ACP RX] unknown frame type:', (frame as { type?: unknown }).type, ev.data)
@@ -799,15 +807,26 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     }
   }, [sessionId])
 
-  const sendPrompt = useCallback((text: string) => {
+  const sendPrompt = useCallback((text: string, images?: ImageAttachment[]) => {
     const ws = wsRef.current
     const sid = sessionIdRef.current
     const trimmed = text.trim()
-    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || !trimmed) return
+    const hasImages = !!images && images.length > 0
+    // 纯图片消息（无文字）合法：粘贴截图直接发送。
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages)) return
     const s = useChatStore.getState()
-    s.addUserMessage(sid, trimmed)
+    const imageBlocks = images?.map((img) => ({
+      type: 'image' as const,
+      mimeType: img.mimeType,
+      data: img.data,
+    }))
+    s.addUserMessage(sid, trimmed, imageBlocks)
     try {
-      ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+      const frame: Record<string, unknown> = { type: 'prompt', text: trimmed }
+      if (hasImages) {
+        frame.images = images.map((img) => ({ data: img.data, mime_type: img.mimeType }))
+      }
+      ws.send(JSON.stringify(frame))
       s.beginPrompt(sid)
     } catch {
       // send 失败（底层缓冲满 / 连接已坏）：不乐观置 sending，直接报错

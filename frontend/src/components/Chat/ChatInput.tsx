@@ -3,11 +3,18 @@ import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
+import {
+  processImageFile,
+  extractImageFiles,
+  ImageAttachmentError,
+  MAX_IMAGE_ATTACHMENTS,
+  type ImageAttachment,
+} from '../../utils/imageAttachment'
 
 interface ChatInputProps {
   sessionId: string
   disabled: boolean
-  onSend: (text: string) => void
+  onSend: (text: string, images?: ImageAttachment[]) => void
   onCancel: () => void
   /** Clicked when the user taps ✕ on the queued-message chip above the input. */
   onCancelQueued: () => void
@@ -22,6 +29,8 @@ interface ChatInputProps {
   /** N=1 single-slot queued message buffer; rendered as a chip above the textarea. */
   queuedMessage: string | null
   commands?: SlashCommand[]
+  /** Agent 是否声明支持 image prompt capability（§8：未声明则隐藏附件入口）。 */
+  imageSupported?: boolean
 }
 
 const draftKey = (sessionId: string) => `omniterm_chat_draft:${sessionId}`
@@ -62,13 +71,17 @@ export function ChatInput({
   sending,
   queuedMessage,
   commands = [],
+  imageSupported = false,
 }: ChatInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState(() => getDraft(sessionId) || '')
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
+  const [attachError, setAttachError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const attachErrorTimerRef = useRef<number | null>(null)
 
   // Persist unsent text per session and restore when switching back.
   const prevSessionIdRef = useRef(sessionId)
@@ -80,6 +93,8 @@ export function ChatInput({
       }
       prevSessionIdRef.current = sessionId
       setText(getDraft(sessionId))
+      setAttachments([])
+      setAttachError(null)
       textareaRef.current?.focus()
       return
     }
@@ -135,14 +150,90 @@ export function ChatInput({
     if (showCommands) itemRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex, showCommands])
 
-  const canSend = !disabled && !sending && text.trim().length > 0
-  // N=1 约束：队列满时 Queue 按钮 disabled，强制用户先 ✕
-  const canQueue = !disabled && sending && !queuedMessage && text.trim().length > 0
+  const canSend = !disabled && !sending && (text.trim().length > 0 || attachments.length > 0)
+  // N=1 约束：队列满时 Queue 按钮 disabled，强制用户先 ✕。
+  // 附件只支持 idle 直发（queuedMessage 是纯 string 槽），带附件时禁止入队。
+  const canQueue = !disabled && sending && !queuedMessage && text.trim().length > 0 && attachments.length === 0
   const previewText = queuedMessage
     ? queuedMessage.length > QUEUE_PREVIEW_CHARS
       ? queuedMessage.slice(0, QUEUE_PREVIEW_CHARS) + '…'
       : queuedMessage
     : ''
+
+  const showAttachError = (message: string) => {
+    setAttachError(message)
+    if (attachErrorTimerRef.current !== null) window.clearTimeout(attachErrorTimerRef.current)
+    attachErrorTimerRef.current = window.setTimeout(() => {
+      setAttachError(null)
+      attachErrorTimerRef.current = null
+    }, 2500)
+  }
+
+  useEffect(() => () => {
+    if (attachErrorTimerRef.current !== null) window.clearTimeout(attachErrorTimerRef.current)
+  }, [])
+
+  const addImageFiles = async (files: File[]) => {
+    if (!imageSupported || disabled || files.length === 0) return
+    for (const file of files) {
+      let full = false
+      setAttachments((prev) => {
+        full = prev.length >= MAX_IMAGE_ATTACHMENTS
+        return prev
+      })
+      if (full) {
+        showAttachError(t('chat.input.attachTooMany', { max: MAX_IMAGE_ATTACHMENTS }))
+        return
+      }
+      try {
+        const attachment = await processImageFile(file)
+        setAttachments((prev) =>
+          prev.length >= MAX_IMAGE_ATTACHMENTS ? prev : [...prev, attachment],
+        )
+      } catch (err) {
+        if (err instanceof ImageAttachmentError && err.code === 'too_large') {
+          showAttachError(t('chat.input.attachTooLarge'))
+        } else {
+          showAttachError(t('chat.input.attachUnsupported'))
+        }
+      }
+    }
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!imageSupported) return
+    const files = extractImageFiles(e.clipboardData.items)
+    if (files.length === 0) return
+    e.preventDefault()
+    void addImageFiles(files)
+  }
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!imageSupported) return
+    const files = extractImageFiles(e.dataTransfer.items)
+    if (files.length === 0) return
+    e.preventDefault()
+    void addImageFiles(files)
+  }
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!imageSupported) return
+    if (Array.from(e.dataTransfer.items).some((item) => item.kind === 'file')) {
+      e.preventDefault()
+    }
+  }
+
+  const removeAttachment = (id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id))
+  }
+
+  const doSend = () => {
+    onSend(text, attachments.length > 0 ? attachments : undefined)
+    setText('')
+    setAttachments([])
+    deleteDraft(sessionId)
+    setShowCommands(false)
+  }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (showCommands && filteredCommands.length > 0) {
@@ -172,10 +263,7 @@ export function ChatInput({
       // busy + 队列满：Enter 静默 noop（Queue 按钮也 disabled，UI 一致）
       if (sending && queuedMessage) return
       if (canSend || canQueue) {
-        onSend(text)
-        setText('')
-        deleteDraft(sessionId)
-        setShowCommands(false)
+        doSend()
       }
     }
   }
@@ -188,19 +276,13 @@ export function ChatInput({
 
   const handleClickSend = () => {
     if (!canSend) return
-    onSend(text)
-    setText('')
-    deleteDraft(sessionId)
-    setShowCommands(false)
+    doSend()
     textareaRef.current?.focus()
   }
 
   const handleClickQueue = () => {
     if (!canQueue) return
-    onSend(text)
-    setText('')
-    deleteDraft(sessionId)
-    setShowCommands(false)
+    doSend()
     textareaRef.current?.focus()
   }
 
@@ -243,12 +325,82 @@ export function ChatInput({
 
   return (
     <div
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
       style={{
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
         padding: '8px 12px',
       }}
     >
+      {attachError && (
+        <div
+          style={{
+            marginBottom: 6,
+            padding: '4px 8px',
+            fontFamily: READER_FONT,
+            fontSize: 11,
+            color: 'var(--danger, #FF7B72)',
+          }}
+        >
+          {attachError}
+        </div>
+      )}
+      {attachments.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 6,
+            marginBottom: 6,
+            flexWrap: 'wrap',
+          }}
+        >
+          {attachments.map((att) => (
+            <div
+              key={att.id}
+              style={{
+                position: 'relative',
+                width: 56,
+                height: 56,
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 4,
+                overflow: 'hidden',
+                background: 'var(--bg-elevated)',
+                flexShrink: 0,
+              }}
+            >
+              <img
+                src={`data:${att.mimeType};base64,${att.data}`}
+                alt=""
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              />
+              <button
+                onClick={() => removeAttachment(att.id)}
+                title={t('chat.input.attachRemove')}
+                aria-label={t('chat.input.attachRemove')}
+                style={{
+                  position: 'absolute',
+                  top: 2,
+                  right: 2,
+                  width: 16,
+                  height: 16,
+                  padding: 0,
+                  border: 'none',
+                  borderRadius: 2,
+                  background: 'rgba(0,0,0,0.6)',
+                  color: '#fff',
+                  fontSize: 10,
+                  lineHeight: '16px',
+                  cursor: 'pointer',
+                  fontFamily: 'inherit',
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {queuedMessage && (
         <div
           className="chat-queue-chip"
@@ -424,6 +576,7 @@ export function ChatInput({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={t('chat.input.placeholder')}
           disabled={disabled}
           rows={1}
@@ -452,9 +605,11 @@ export function ChatInput({
               title={
                 queuedMessage
                   ? t('chat.input.queueFullTitle')
-                  : !text.trim()
-                    ? t('chat.input.queueEmptyTitle')
-                    : t('chat.input.queueTitle')
+                  : attachments.length > 0
+                    ? t('chat.input.attachNoQueue')
+                    : !text.trim()
+                      ? t('chat.input.queueEmptyTitle')
+                      : t('chat.input.queueTitle')
               }
               style={{
                 ...buttonBase,

@@ -249,13 +249,27 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
           [{block.label}]
         </span>
       )
+    case 'image':
+      // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
+      return null
   }
 }
 
-export function ChatMessageView({ message }: { message: ChatMessage }) {
+export interface ChatMessageViewProps {
+  message: ChatMessage
+  /** F02: resend an edited copy of this user message as a new prompt. */
+  onEditResend?: (messageId: string, newText: string) => void
+  /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
+  onRegenerate?: () => void
+  isLastAssistant?: boolean
+}
+
+export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant }: ChatMessageViewProps) {
   const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
 
   const label = (
     <div
@@ -268,18 +282,37 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
       }}
     >
       {isUser ? 'you' : isSystem ? 'system' : 'agent'}
+      {isUser && message.edited && (
+        <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
+      )}
     </div>
   )
 
+  const startEdit = () => {
+    setDraft(message.text)
+    setEditing(true)
+  }
+
+  const submitEdit = () => {
+    const trimmed = draft.trim()
+    if (!trimmed || !onEditResend) return
+    setEditing(false)
+    onEditResend(message.id, trimmed)
+  }
+
   if (isUser) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}>
+      <div
+        className="chat-msg-row"
+        style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}
+      >
         {label}
         <div
           style={{
             padding: '8px 12px',
             borderRadius: 8,
             maxWidth: '85%',
+            minWidth: editing ? '60%' : undefined,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
             border: message.undelivered
@@ -305,19 +338,91 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
               ⚠ {t('chat.input.message.undelivered')}
             </div>
           )}
-          <pre
-            style={{
-              margin: 0,
-              whiteSpace: 'pre-wrap',
-              fontFamily: 'inherit',
-              fontSize: 'inherit',
-              lineHeight: 'inherit',
-              color: 'inherit',
-            }}
-          >
-            {message.text}
-          </pre>
+          {editing ? (
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  submitEdit()
+                } else if (e.key === 'Escape') {
+                  setEditing(false)
+                }
+              }}
+              autoFocus
+              rows={Math.min(6, Math.max(2, draft.split('\n').length))}
+              style={{
+                width: '100%',
+                background: 'var(--bg-base)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 4,
+                color: 'var(--text-primary)',
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+                lineHeight: 'inherit',
+                padding: '4px 6px',
+                resize: 'vertical',
+                outline: 'none',
+              }}
+            />
+          ) : (
+            <>
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'inherit',
+                  fontSize: 'inherit',
+                  lineHeight: 'inherit',
+                  color: 'inherit',
+                }}
+              >
+                {message.text}
+              </pre>
+              {(() => {
+                const images = message.blocks.filter((b) => b.type === 'image')
+                if (images.length === 0) return null
+                return (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: message.text ? 6 : 0 }}>
+                    {images.map((img, i) => (
+                      <img
+                        key={i}
+                        src={`data:${img.mimeType};base64,${img.data}`}
+                        alt=""
+                        style={{
+                          maxWidth: 240,
+                          maxHeight: 200,
+                          borderRadius: 4,
+                          border: '1px solid var(--border-subtle)',
+                          display: 'block',
+                        }}
+                      />
+                    ))}
+                  </div>
+                )
+              })()}
+            </>
+          )}
         </div>
+        {editing ? (
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button className="chat-msg-action-btn" style={{ color: 'var(--accent)' }} onClick={submitEdit}>
+              ⏎ {t('chat.msg.editSend')}
+            </button>
+            <button className="chat-msg-action-btn" onClick={() => setEditing(false)}>
+              ✕ {t('chat.msg.editCancel')}
+            </button>
+          </div>
+        ) : (
+          onEditResend && !message.undelivered && (
+            <div className="chat-msg-actions" style={{ marginTop: 2 }}>
+              <button className="chat-msg-action-btn" onClick={startEdit} title={t('chat.msg.edit')}>
+                ✎ {t('chat.msg.edit')}
+              </button>
+            </div>
+          )
+        )}
       </div>
     )
   }
@@ -326,8 +431,10 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
   // rather than collapsing everything into a single bubble.
   const lastIdx = message.blocks.length - 1
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
+  const showRegenerate = !isSystem && isLastAssistant && !message.streaming && !!onRegenerate
   return (
     <div
+      className="chat-msg-row"
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -339,6 +446,13 @@ export function ChatMessageView({ message }: { message: ChatMessage }) {
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
+      {showRegenerate && (
+        <div className="chat-msg-actions">
+          <button className="chat-msg-action-btn" onClick={onRegenerate} title={t('chat.msg.regenerate')}>
+            ↻ {t('chat.msg.regenerate')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
