@@ -30,7 +30,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
    - **请示时汇报**：1. 结构阻碍/方案分歧；2. 你的倾向性建议；3. 影响范围。
 2. **长期主义** — 代码将长期留存并被他人接手。禁止为快速完成当前任务而牺牲可维护性或制造新技术债。
 3. **严守分层** — 遵循项目分层架构（Controller/Service/Repository），严禁越权调用。不盲从历史遗留代码（超长函数、硬编码、全局状态），新代码必须高内聚低耦合。
-4. **局部改善** — 修改某文件时，顺手清理当前修改区域内的重复代码或硬编码。禁止扩大到不相关范围。
+4. **局部改善** — 修改某文件时，顺手处理当前修改区域内的重复代码或硬编码。禁止扩大到不相关范围。
 5. **缺陷修复** — 追溯根因而非掩盖症状（禁止仅用 try-catch 吞异常或 if-else 绕过），必要时添加诊断日志请求用户复现问题。修复后评估对依赖模块的副作用，确保方案普适。
 6. **技术债红线**（严禁）：
    - 禁 Copy-Paste 代码（须提取公共函数）
@@ -94,6 +94,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `dev.sh` | 启动/停止开发环境（`./dev.sh start\|stop\|status\|logs`） | 端口配置变更、启动逻辑调整 |
 | `scripts/bump-version.sh` | 准备发布时同步版本号：`./scripts/bump-version.sh 0.2.0` | 版本号文件路径变更 |
 | `scripts/sync-main.sh` | 同步 dev → main（黑名单排除开发文档 + 修复分支配置） | 黑名单调整、分支配置修复逻辑变更 |
+| `docs/dev/plans/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，建议过一遍其**检查点清单**（非强制结构，按任务性质裁剪） | 检查点需调整（新增/精简维度）时更新 |
 | `docs/dev/plans/2026-07-24-quality-gates.md` | 修改质量门禁（CI、pre-commit、clippy、rustfmt、cargo-deny、tsc strict、check-doc-index）任一配置前 | 新增门禁检查、调整分阶段策略、跟进 backlog（§2.3 P2） |
 | `.github/workflows/ci.yml` | 修改 CI 门禁（触发分支、检查项、audit job）前 | 调整 CI 检查项、分阶段启用 clippy/fmt/deny、拆分 job |
 | `scripts/hooks/pre-commit` | 修改提交前检查前 | 调整 pre-commit 纳入的检查（lint/fmt/clippy/test） |
