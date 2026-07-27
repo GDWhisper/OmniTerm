@@ -2,7 +2,7 @@ export function CountBadge({ count }: { count: number }) {
   return (
     <span
       style={{
-        fontFamily: 'var(--pixel-font)',
+        fontFamily: 'var(--pixel-font-static)',
         fontSize: 16,
         lineHeight: 1,
         background: 'var(--wood-shadow, #3A2E1F)',
