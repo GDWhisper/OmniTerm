@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction, type PendingPermission } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 
@@ -124,9 +124,11 @@ function extractToolContent(inner: Record<string, unknown>): string | undefined 
     parts.push(content)
   }
 
-  // diff 优先展示；无 diff 时兜底显示 raw_input / raw_output（工具入参/结果）
+  // diff 优先展示；无 diff 时兜底显示 raw_input / raw_output（工具入参/结果）。
+  // 键名同时覆盖 snake_case 与 camelCase：ACP schema serde rename 为 camelCase
+  // （permission request 透传即此形态），个别实现/中转层用 snake_case。
   if (parts.length === 0) {
-    for (const key of ['raw_input', 'raw_output', 'input', 'arguments', 'params']) {
+    for (const key of ['raw_input', 'rawInput', 'raw_output', 'rawOutput', 'input', 'arguments', 'params']) {
       const v = inner[key]
       if (v && typeof v === 'object') {
         try {
@@ -159,6 +161,50 @@ function synthUnifiedDiff(d: Record<string, unknown>): string {
     ...newLines.map((l) => `+${l}`),
   ].join('\n')
   return `${header}\n${body}`
+}
+
+// ToolCallLocation 按 ACP schema 是 { path, line? } 对象；个别实现直接给
+// 字符串路径。两种形态统一归一为路径字符串数组（§8 多实现兼容性）。
+function extractLocations(inner: Record<string, unknown>): string[] | undefined {
+  const raw = inner['locations']
+  if (!Array.isArray(raw)) return undefined
+  const out: string[] = []
+  for (const l of raw) {
+    if (typeof l === 'string') {
+      out.push(l)
+    } else if (l && typeof l === 'object') {
+      const p = (l as Record<string, unknown>)['path']
+      if (typeof p === 'string') out.push(p)
+    }
+  }
+  return out.length > 0 ? out : undefined
+}
+
+// 解析 RequestPermissionRequest（后端 serde_json::to_value 全量透传）。
+// 标准 v1 结构：{ sessionId, toolCall: ToolCallUpdate, options: [...] }，
+// toolCall 与 session_update 的 ToolCallUpdate 同构，故复用 extractToolContent
+// 提取 diff / content / rawInput 预览；tool_call（snake_case）与顶层
+// tool_name/toolName 为非标准实现的回退路径。无预览数据时字段缺省，
+// banner 降级为纯文本展示（F01 设计决策 §3.1）。
+export function parsePermissionRequest(req: Record<string, unknown>): Omit<PendingPermission, 'id'> {
+  const rawOptions = Array.isArray(req['options']) ? req['options'] : []
+  const options = rawOptions
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+    .map((o) => ({
+      option_id: String(o['optionId'] ?? o['option_id'] ?? ''),
+      kind: String(o['kind'] ?? ''),
+      name: typeof o['name'] === 'string' ? o['name'] : undefined,
+    }))
+  const tcRaw = req['toolCall'] ?? req['tool_call']
+  const toolCall = tcRaw && typeof tcRaw === 'object' ? (tcRaw as Record<string, unknown>) : null
+  const title = typeof toolCall?.['title'] === 'string' && toolCall['title'] ? (toolCall['title'] as string) : undefined
+  const toolName = title
+    ?? (typeof req['tool_name'] === 'string' ? (req['tool_name'] as string) : undefined)
+    ?? (typeof req['toolName'] === 'string' ? (req['toolName'] as string) : undefined)
+  const toolKind = typeof toolCall?.['kind'] === 'string' ? (toolCall['kind'] as string) : undefined
+  const content = toolCall ? extractToolContent(toolCall) : undefined
+  const locations = toolCall ? extractLocations(toolCall) : undefined
+  return { options, toolName, toolKind, content, locations }
 }
 
 // --- Todo / task-list detection (非 ACP 标准，各 agent 私有约定) ---
@@ -317,9 +363,7 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
       const status = typeof statusRaw === 'string' ? statusRaw : undefined
       const toolKind = typeof inner['kind'] === 'string' ? inner['kind'] : undefined
       const content = extractToolContent(inner)
-      const locations = Array.isArray(inner['locations'])
-        ? (inner['locations'] as unknown[]).filter((l): l is string => typeof l === 'string')
-        : undefined
+      const locations = extractLocations(inner)
       // 工具调用内容若形如任务清单（todos / tasks），语义化为 TodoBlock，
       // 而非把 JSON 数组塞进普通工具卡片。识别失败则回落为普通工具调用。
       const todos = extractTodoList(inner)
@@ -681,19 +725,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         case 'permission_request': {
           const req = frame.request ?? {}
-          const rawOptions = Array.isArray(req['options']) ? req['options'] : []
-          const options = rawOptions
-            .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
-            .map((o) => ({
-              option_id: String(o['optionId'] ?? o['option_id'] ?? ''),
-              kind: String(o['kind'] ?? ''),
-              name: typeof o['name'] === 'string' ? o['name'] : undefined,
-            }))
-          const toolName = typeof req['tool_name'] === 'string' ? req['tool_name']
-            : typeof req['toolName'] === 'string' ? req['toolName']
-            : undefined
           if (frame.id) {
-            s.setPermission(sid, { id: frame.id, options, toolName })
+            s.setPermission(sid, { id: frame.id, ...parsePermissionRequest(req) })
             // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
             attention.fire(sid, sid, 'decision')
           }

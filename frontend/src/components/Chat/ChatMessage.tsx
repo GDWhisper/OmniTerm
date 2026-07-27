@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
+import { looksLikeDiff } from '../../utils/diff'
+import { DiffView } from './DiffView'
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -67,56 +69,6 @@ function ThoughtBlockView({ text }: { text: string }) {
         </div>
       )}
     </div>
-  )
-}
-
-function looksLikeDiff(text: string): boolean {
-  const lines = text.split('\n')
-  if (lines.length < 3) return false
-  let diffLines = 0
-  for (const l of lines.slice(0, 20)) {
-    if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@') || l.startsWith('+') || l.startsWith('-')) {
-      diffLines++
-    }
-  }
-  return diffLines >= 3
-}
-
-function DiffView({ text }: { text: string }) {
-  const lines = text.split('\n')
-  return (
-    <pre
-      style={{
-        margin: 0,
-        padding: '6px 8px',
-        background: 'var(--bg-elevated)',
-        borderRadius: 4,
-        fontSize: '0.846em',
-        overflow: 'auto',
-        maxHeight: 300,
-        fontFamily: READER_FONT,
-        lineHeight: 1.5,
-      }}
-    >
-      {lines.map((line, i) => {
-        let color = 'var(--text-muted)'
-        let bg = 'transparent'
-        if (line.startsWith('+++') || line.startsWith('---')) {
-          color = 'var(--text-faint)'
-        } else if (line.startsWith('@@')) {
-          color = 'var(--accent)'
-        } else if (line.startsWith('+')) {
-          color = 'var(--success)'
-          bg = 'color-mix(in srgb, var(--success) 15%, transparent)'
-        } else if (line.startsWith('-')) {
-          color = 'var(--danger)'
-          bg = 'color-mix(in srgb, var(--danger) 15%, transparent)'
-        }
-        return (
-          <div key={i} style={{ color, background: bg, minHeight: '1em' }}>{line || ' '}</div>
-        )
-      })}
-    </pre>
   )
 }
 

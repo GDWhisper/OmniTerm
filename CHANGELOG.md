@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-27) `[frontend]` ACP 权限审批 banner 增加 diff/内容预览（F01，见 `docs/dev/plans/2026-07-27-acp-session-enhancements.md` §3.1）：permission request 的 `toolCall` 数据（title/kind/content/locations/rawInput）此前被 WS handler 丢弃、banner 只显示工具名盲批，现由新导出的 `parsePermissionRequest` 解析——含 diff 复用 `DiffView` 彩色渲染，含文本/入参降级为只读预览，无数据保持原纯文本 banner；兼容 camelCase/snake_case 及 legacy `tool_name` 格式（附 vitest 单测），`extractLocations` 顺带修复 `{path,line}` 对象形态 locations 在工具卡片中被丢弃的问题（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/{PermissionBanner,ChatMessage}.tsx`）
 - (2026-07-27) `[frontend]` 设置 → 外观新增「像素字体（BETA）」开关（默认关，避免初见用户觉得风格不统一）：开启后标题/按钮/状态标签等显示文字使用像素字体，关闭时统一回退 reader 字体；顶栏一行（OMNITERM logo、版本号、面板标题条与 FILES|GIT 标签）始终保持像素。实现为 `body.pixel-font-on` 切换 `--pixel-font` 指向（关=`var(--reader-font)`，开=`var(--pixel-font-static)`），顶栏豁免规则直用 `--pixel-font-static`；顺手清理无 CSS 引用的死类 `pixel-ui-on` 与已无使用者的 `PIXEL_FONT`/`LOGO_FONT` JS 常量（`frontend/src/index.css`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Common/CountBadge.tsx`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2/§9）
 - (2026-07-27) `[frontend]` Sidebar ACP 会话驻留状态可视化：ACP 会话行左侧缩进槽叠加 `A` 徽标（`status-badge-3d` 规范，绝对定位不占行内布局），进程驻留（未释放）→绿字、已释放→灰字，不点进会话即可分辨会话类型与释放状态；Release 按钮改为仅进程驻留时显示（已释放会话无可释放对象）（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-26) `[frontend]` ACP 与 tmux 会话状态通知表现对齐：ACP 会话现与 tmux 同款状态点（等待决策→琥珀、执行中→蓝、空闲→灰）并纳入项目/worktree 聚合徽标（blocked>done>working）；`prompt_done` 触发完成提醒（用户取消/排队续发不触发）、`prompt_error` 触发错误提醒，与 tmux 屏幕检测链路的 done/error 一致。`agentAggregate.ts` 归一两类会话状态源（tmux `agent_state` / ACP chatStore `sending`+`pendingPermission`）；ACP 空闲驻留进程不再显示绿点（残留状态见 tooltip 与 Release 按钮）（`frontend/src/utils/agentAggregate.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`）
@@ -67,6 +68,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-07-27) `[frontend]` ACP 聊天列套用终端同款像素木框（`.terminal-panel-pixel`，2px 木色边框 + 3px 硬阴影）：聊天面板此前为平面 bg-base，与侧栏/右栏无反差导致三列分界不清；现标题条以下内容整体入框，与终端视图分区语言一致（`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-07-27) `[frontend]` UI 立体语言统一：所有浮层（Modal、Settings/Tmux 速查 popup、ConfigToolbar 下拉与 tooltip、聊天 @ 补全、Toast）从软阴影+圆角改为像素硬阴影（新增共享工具类 `.pixel-float` 4px / `.pixel-press` 2px+按压位移，禁止组件内联阴影）；补齐可交互元素硬阴影（Sidebar 加号/adopt 按钮、Git 分支/COMMIT 按钮、ConfirmDialog 改用 PixelButton、聊天发送/排队/取消、权限按钮）；圆角统一压平 0-2px；清理未定义变量 `--accent-glow-sm`/`--success-glow` 引用与残留模糊 glow（`frontend/src/index.css`、`docs/visual-design/ui-style-guide.md` §6.1/§12）
 
 - (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Silkscreen（几何方块风、自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Silkscreen 专为小字号 UI 标签设计，字形更宽、字高统一；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）

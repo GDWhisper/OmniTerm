@@ -92,6 +92,10 @@ export interface PendingPermission {
   id: string
   options: PermissionOption[]
   toolName?: string
+  toolKind?: string
+  /** 预览文本：unified diff 或工具入参（来自 toolCall.content / rawInput），缺省时 banner 降级为纯文本 */
+  content?: string
+  locations?: string[]
 }
 
 // --- Replay batching ---
