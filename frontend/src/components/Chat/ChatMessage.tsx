@@ -6,6 +6,11 @@ import { READER_FONT } from '../../utils/fonts'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 
+// 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
+const USER_TEXT_COLLAPSE_LINES = 8
+// 折叠态下展示的最大行数（其余内容隐藏，点击展开后全量显示）。
+const USER_TEXT_PREVIEW_LINES = 8
+
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
   edit: '✎',
@@ -24,6 +29,54 @@ const TOOL_KIND_LABELS: Record<string, string> = {
   delete: 'DELETE',
   write: 'WRITE',
   browser: 'BROWSE',
+}
+
+/**
+ * 已发送 user 消息正文。内容超过 USER_TEXT_COLLAPSE_LINES 行时默认折叠，
+ * 保留预览行数并提供展开/收起开关；短内容原样渲染。
+ */
+function CollapsibleUserText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const lineCount = text.split('\n').length
+  const collapsed = !open && lineCount > USER_TEXT_COLLAPSE_LINES
+
+  return (
+    <>
+      <pre
+        style={{
+          margin: 0,
+          whiteSpace: 'pre-wrap',
+          fontFamily: 'inherit',
+          fontSize: 'inherit',
+          lineHeight: 'inherit',
+          color: 'inherit',
+          overflow: collapsed ? 'hidden' : undefined,
+          maxHeight: collapsed ? `${USER_TEXT_PREVIEW_LINES * 1.5}em` : undefined,
+        }}
+      >
+        {text}
+      </pre>
+      {lineCount > USER_TEXT_COLLAPSE_LINES && (
+        <button
+          onClick={() => setOpen(!open)}
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: 'var(--text-faint)',
+            fontSize: '0.846em',
+            padding: '2px 0 0',
+            fontFamily: READER_FONT,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          {open ? '▴ ' + t('chat.msg.collapse') : '▾ ' + t('chat.msg.expand')}
+        </button>
+      )}
+    </>
+  )
 }
 
 function ThoughtBlockView({ text }: { text: string }) {
@@ -368,18 +421,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
             />
           ) : (
             <>
-              <pre
-                style={{
-                  margin: 0,
-                  whiteSpace: 'pre-wrap',
-                  fontFamily: 'inherit',
-                  fontSize: 'inherit',
-                  lineHeight: 'inherit',
-                  color: 'inherit',
-                }}
-              >
-                {message.text}
-              </pre>
+              <CollapsibleUserText text={message.text} />
               {(() => {
                 const images = message.blocks.filter((b) => b.type === 'image')
                 if (images.length === 0) return null
