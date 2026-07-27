@@ -124,6 +124,7 @@ export type SessionUpdateAction =
   | { kind: 'setUsage'; usage: Record<string, unknown> }
   | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
+  | { kind: 'addUserMessage'; text: string; messageId?: string }
   | { kind: 'pushSystem'; label: string }
   | { kind: 'drop' }
 
@@ -463,6 +464,19 @@ const applyActionsToMessages = (
         }
         next[next.length - 1] = { ...last, blocks }
       }
+    } else if (action.kind === 'addUserMessage') {
+      // 按 messageId 去重（重复 restore 不会重复添加）
+      if (action.messageId) {
+        const dup = next.find((m) => m.role === 'user' && m.text === action.text)
+        if (dup) continue
+      }
+      next.push({
+        id: genId(),
+        role: 'user',
+        text: action.text,
+        blocks: [{ type: 'text', text: action.text }],
+        createdAt: Date.now(),
+      })
     } else if (action.kind === 'pushSystem') {
       next.push({
         id: genId(),

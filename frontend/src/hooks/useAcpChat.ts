@@ -322,6 +322,14 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     if (text !== null) return { kind: 'appendText', text }
   }
 
+  // UserMessageChunk → user message (ACP replay)
+  const userMsgChunk = getVariantInner(obj, 'UserMessageChunk')
+  if (userMsgChunk) {
+    const text = extractContentText(userMsgChunk['content']) ?? (typeof userMsgChunk['text'] === 'string' ? userMsgChunk['text'] : null)
+    const messageId = typeof userMsgChunk['messageId'] === 'string' ? userMsgChunk['messageId'] : undefined
+    if (text !== null) return { kind: 'addUserMessage', text, messageId }
+  }
+
   // AgentThoughtChunk → thought
   const keys = Object.keys(obj)
   const variant = keys.length === 1 ? keys[0] : 'update'
