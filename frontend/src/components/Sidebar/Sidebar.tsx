@@ -321,6 +321,22 @@ export function Sidebar() {
     restoredSessionRef.current = true
   }, [sessions, activeProjectId, activeSessionId, setActiveSession])
 
+  // Prune workspaceSessionMemory entries pointing at sessions that no longer
+  // exist server-side (deleted session / DB reset). Scoped to the active
+  // project's workspaces — only its session list is loaded, so entries for
+  // other projects can't be judged and are left untouched.
+  useEffect(() => {
+    if (!activeProjectId) return
+    const sessList = sessions[activeProjectId]
+    const wtList = worktrees[activeProjectId]
+    if (!sessList || !wtList) return
+    const ids = new Set(sessList.map(s => s.id))
+    for (const wt of wtList) {
+      const remembered = workspaceSessionMemory[wt.id]
+      if (remembered && !ids.has(remembered)) clearWorkspaceSession(wt.id)
+    }
+  }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
+
   // Fetch directory entries for the new-project modal's browse list.
   const fetchDirs = useCallback(async (path: string) => {
     setBrowseLoading(true)
