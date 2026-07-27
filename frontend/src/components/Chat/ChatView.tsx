@@ -228,7 +228,7 @@ export function ChatView() {
         {titleChip}
       </div>
 
-      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0 }}>
+      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, background: 'var(--bg-base)' }}>
 
       {chatState.error && (
         <div
