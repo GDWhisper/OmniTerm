@@ -72,7 +72,7 @@ POST/PUT/DELETE /api/v1/agents[/{id}]
 GET  /api/v1/files (list)
 POST /api/v1/files (upload multipart)
 DELETE /api/v1/files
-GET  /api/v1/files/download|read|search
+GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（相对搜索根，@ 补全用）
 POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
@@ -95,7 +95,7 @@ Lifecycle:
    - `request_permission` → auto-allow (finds first `AllowOnce`/`AllowAlways` option; Phase 4 will add a user-prompted path).
    - `terminal/{create,output,wait_for_exit,kill,release}` → `AcpTerminalManager` spawns `tokio::process::Command` children and monitors them with `tokio::select!` racing child exit vs an mpsc kill channel.
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
-4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images`（可选，≤3 张 base64）映射为 `ContentBlock::Image` 追加在 text block 后；服务端推送 `{"type":"capabilities","image":bool}` 帧（client 就绪/restore 时），值来自 initialize 捕获的 `promptCapabilities.image`（§8：agent 未声明则前端隐藏附件入口、后端拒绝带图 prompt）。
+4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images`（可选，≤3 张 base64）映射为 `ContentBlock::Image` 追加在 text block 后；服务端推送 `{"type":"capabilities","image":bool}` 帧（client 就绪/restore 时），值来自 initialize 捕获的 `promptCapabilities.image`（§8：agent 未声明则前端隐藏附件入口、后端拒绝带图 prompt）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。
 5. `DELETE /sessions/{id}` on an ACP session calls `supervisor.dispose` + `AcpClient::disconnect`, which drops the shutdown oneshot so the connect_with closure returns and the child process is reaped.
 
 ### Multi-implementation compatibility

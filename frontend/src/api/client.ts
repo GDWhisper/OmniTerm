@@ -72,6 +72,8 @@ export interface FileEntry {
   name: string
   mtime: number
   size: number | null
+  /** 相对搜索根的路径，仅 /files/search 返回。 */
+  rel_path?: string
 }
 
 export interface Workspace {

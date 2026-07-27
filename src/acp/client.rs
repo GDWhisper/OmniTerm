@@ -4,13 +4,13 @@ use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, ImageContent,
-    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, TextContent, WaitForTerminalExitRequest, WriteTextFileRequest,
-    WriteTextFileResponse,
+    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, EmbeddedResource,
+    EmbeddedResourceResource, ImageContent, InitializeRequest, KillTerminalRequest,
+    LoadSessionRequest, NewSessionRequest, PromptRequest, PromptResponse, ReadTextFileRequest,
+    ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionRequest, SessionConfigId,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionId,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
+    TextResourceContents, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use serde::Deserialize;
@@ -28,6 +28,17 @@ pub struct ImageInput {
     /// Base64 编码的图片数据（不含 data URI 前缀）。
     pub data: String,
     pub mime_type: String,
+}
+
+/// `@path` 引用解析出的文件内容（映射为 `ContentBlock::Resource`，
+/// agent 不支持 embeddedContext 时降级内联进 text block）。
+#[derive(Debug)]
+pub struct ResourceInput {
+    /// `file://` 绝对路径 URI。
+    pub uri: String,
+    /// 用户输入的原始 `@` 相对路径（内联降级时的标题）。
+    pub label: String,
+    pub text: String,
 }
 
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
@@ -66,6 +77,9 @@ pub struct AcpClient {
     /// initialize 时 agent 通过 `promptCapabilities.image` 声明是否接受图片
     /// content block（§8 多实现兼容：未声明的 agent 不硬塞图片）。
     supports_image: bool,
+    /// `promptCapabilities.embeddedContext`：是否接受 `ContentBlock::Resource`；
+    /// 不支持时 @ 引用降级为内联 text（§8 多实现兼容）。
+    supports_embedded_context: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
@@ -220,6 +234,7 @@ impl AcpClient {
             SessionId,
             bool,
             bool,
+            bool,
             Vec<SessionConfigOption>,
         )>();
 
@@ -373,6 +388,8 @@ impl AcpClient {
                         .await?;
                     let supports_load = init_resp.agent_capabilities.load_session;
                     let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
+                    let supports_embedded =
+                        init_resp.agent_capabilities.prompt_capabilities.embedded_context;
 
                     let session_resp =
                         cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
@@ -385,6 +402,7 @@ impl AcpClient {
                         session_id,
                         supports_load,
                         supports_image,
+                        supports_embedded,
                         config_options,
                     ));
 
@@ -396,8 +414,14 @@ impl AcpClient {
 
         spawn_crash_watcher(connection_task, crash_tx.clone());
 
-        let (connection, session_id, supports_load_session, supports_image, initial_config_options) =
-            conn_rx.await.map_err(|_| AcpError::internal_error())?;
+        let (
+            connection,
+            session_id,
+            supports_load_session,
+            supports_image,
+            supports_embedded_context,
+            initial_config_options,
+        ) = conn_rx.await.map_err(|_| AcpError::internal_error())?;
 
         Ok(AcpClient {
             connection,
@@ -410,6 +434,7 @@ impl AcpClient {
             permission_manager,
             supports_load_session,
             supports_image,
+            supports_embedded_context,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
@@ -492,7 +517,20 @@ impl AcpClient {
         &self,
         text: &str,
         images: Vec<ImageInput>,
+        resources: Vec<ResourceInput>,
     ) -> Result<PromptResponse, AcpError> {
+        // 不支持 embeddedContext 的 agent：@ 引用文件内容内联进 text（§8 多实现兼容）。
+        let inline_resources = !self.supports_embedded_context && !resources.is_empty();
+        let text = if inline_resources {
+            let mut t = text.to_string();
+            for r in &resources {
+                t.push_str(&format!("\n\n--- @{} ---\n```\n{}\n```", r.label, r.text));
+            }
+            t
+        } else {
+            text.to_string()
+        };
+
         // 纯图片消息不塞空 text block（部分实现可能拒绝空文本，§8 保守处理）。
         let mut blocks = Vec::new();
         if !text.is_empty() || images.is_empty() {
@@ -500,6 +538,15 @@ impl AcpClient {
         }
         for img in images {
             blocks.push(ContentBlock::Image(ImageContent::new(img.data, img.mime_type)));
+        }
+        if !inline_resources {
+            for r in resources {
+                blocks.push(ContentBlock::Resource(EmbeddedResource::new(
+                    EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
+                        r.text, r.uri,
+                    )),
+                )));
+            }
         }
         self.connection
             .send_request(PromptRequest::new(self.session_id.clone(), blocks))
@@ -651,6 +698,7 @@ impl AcpClient {
             SessionId,
             bool,
             bool,
+            bool,
             Vec<SessionConfigOption>,
         )>();
 
@@ -804,6 +852,8 @@ impl AcpClient {
                         .await?;
                     let supports_load = init_resp.agent_capabilities.load_session;
                     let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
+                    let supports_embedded =
+                        init_resp.agent_capabilities.prompt_capabilities.embedded_context;
 
                     let session_id = SessionId::new(acp_session_id.as_str());
                     let _ = conn_tx.send((
@@ -811,6 +861,7 @@ impl AcpClient {
                         session_id,
                         supports_load,
                         supports_image,
+                        supports_embedded,
                         Vec::new(),
                     ));
 
@@ -822,8 +873,14 @@ impl AcpClient {
 
         spawn_crash_watcher(connection_task, crash_tx.clone());
 
-        let (connection, session_id, supports_load_session, supports_image, initial_config_options) =
-            conn_rx.await.map_err(|_| AcpError::internal_error())?;
+        let (
+            connection,
+            session_id,
+            supports_load_session,
+            supports_image,
+            supports_embedded_context,
+            initial_config_options,
+        ) = conn_rx.await.map_err(|_| AcpError::internal_error())?;
 
         Ok(AcpClient {
             connection,
@@ -836,6 +893,7 @@ impl AcpClient {
             permission_manager,
             supports_load_session,
             supports_image,
+            supports_embedded_context,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,

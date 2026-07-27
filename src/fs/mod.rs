@@ -122,6 +122,9 @@ pub struct FileEntry {
     pub name: String,
     pub mtime: u64,
     pub size: u64,
+    /// 相对搜索根的路径（仅 [`search_files`] 填充；目录列表为 None 不序列化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel_path: Option<String>,
 }
 
 impl FileEntry {
@@ -200,7 +203,7 @@ pub async fn list_dir(
             meta.len()
         };
 
-        entries.push(FileEntry { path_type, name, mtime, size });
+        entries.push(FileEntry { path_type, name, mtime, size, rel_path: None });
     }
 
     // Sort: directories first, then by chosen key
@@ -328,7 +331,7 @@ pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Ve
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    search_recursive(&dir, &query_lower, &mut results, 100, 8).await?;
+    search_recursive(&dir, &query_lower, "", &mut results, 100, 8).await?;
 
     Ok(results)
 }
@@ -349,9 +352,11 @@ const SKIP_DIRS: &[&str] = &[
 ];
 
 /// Recursive search with result and depth limits.
+/// `prefix` 是当前目录相对搜索根的路径（根为空串），用于填充 [`FileEntry::rel_path`]。
 fn search_recursive<'a>(
     dir: &'a Path,
     query: &'a str,
+    prefix: &'a str,
     results: &'a mut Vec<FileEntry>,
     max_results: usize,
     max_depth: usize,
@@ -377,6 +382,8 @@ fn search_recursive<'a>(
             if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
+
+            let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
 
             let meta = match fs::metadata(entry.path()).await {
                 Ok(m) => m,
@@ -405,11 +412,13 @@ fn search_recursive<'a>(
                     name,
                     mtime,
                     size: if is_dir { 0 } else { meta.len() },
+                    rel_path: Some(rel.clone()),
                 });
             }
 
             if is_dir && !is_symlink {
-                search_recursive(&entry.path(), query, results, max_results, max_depth - 1).await?;
+                search_recursive(&entry.path(), query, &rel, results, max_results, max_depth - 1)
+                    .await?;
             }
         }
 

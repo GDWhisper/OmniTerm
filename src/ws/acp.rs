@@ -10,17 +10,94 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
-use crate::acp::{AcpClient, ImageInput};
+use crate::acp::{AcpClient, ImageInput, ResourceInput};
 use crate::api::agents::load_agent;
 
 /// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
 const MAX_PROMPT_IMAGES: usize = 3;
+/// 单次 prompt 的 `@` 文件引用上限。
+const MAX_AT_REFERENCES: usize = 8;
+/// 单个 `@` 引用文件注入内容上限（超出截断）。
+const MAX_AT_FILE_BYTES: usize = 64 * 1024;
+
+/// 从 prompt 文本提取 `@path` 引用。`@` 前必须是行首或空白（排除 email 等误报），
+/// 去重保序，上限 [`MAX_AT_REFERENCES`]。
+fn extract_at_paths(text: &str) -> Vec<String> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?:^|\s)@([^\s@]+)").unwrap());
+    let mut out: Vec<String> = Vec::new();
+    for cap in re.captures_iter(text) {
+        let p = &cap[1];
+        if !out.iter().any(|e| e == p) {
+            out.push(p.to_string());
+            if out.len() >= MAX_AT_REFERENCES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// 解析 `@path` 引用为文件内容资源：workspace 内 sanitize + 读取（≤64KB 截断）。
+/// 任何失败（越界/不存在/目录/非 UTF-8）静默跳过该引用 —— 引用是增强不是硬依赖。
+async fn resolve_at_references(
+    db: &sqlx::SqlitePool,
+    session_id: &str,
+    text: &str,
+) -> Vec<ResourceInput> {
+    let paths = extract_at_paths(text);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let row: Option<(String,)> = sqlx::query_as("SELECT workspace_path FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+    let Some((ws_path,)) = row else {
+        return Vec::new();
+    };
+    let base = std::path::PathBuf::from(ws_path);
+    let mut out = Vec::new();
+    for rel in paths {
+        let abs = match crate::fs::sanitize_path(&base, &rel) {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("@ 引用跳过（路径无效）: {}: {}", rel, e);
+                continue;
+            }
+        };
+        if abs.is_dir() {
+            debug!("@ 引用跳过（是目录）: {}", rel);
+            continue;
+        }
+        let content = match tokio::fs::read_to_string(&abs).await {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("@ 引用跳过（读取失败）: {}: {}", rel, e);
+                continue;
+            }
+        };
+        let text = if content.len() > MAX_AT_FILE_BYTES {
+            let mut end = MAX_AT_FILE_BYTES;
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}\n… [content truncated at 64KB]", &content[..end])
+        } else {
+            content
+        };
+        out.push(ResourceInput { uri: format!("file://{}", abs.display()), label: rel, text });
+    }
+    out
+}
 
 pub async fn ws_acp_handler(
     ws: WebSocketUpgrade,
@@ -367,6 +444,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 ).await;
 
                                 let c = c.clone();
+                                // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
+                                let resources = resolve_at_references(&db, &sid, &prompt_text).await;
                                 // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
@@ -374,7 +453,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 let sid2 = sid.clone();
                                 let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
-                                    match c.send_prompt(&prompt_text, images).await {
+                                    match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
                                             c.mark_prompt_idle();
                                             tokio::task::yield_now().await;
@@ -617,5 +696,46 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_at_paths;
+
+    #[test]
+    fn extracts_basic_paths() {
+        assert_eq!(
+            extract_at_paths("看看 @src/main.rs 和 @README.md 的内容"),
+            vec!["src/main.rs", "README.md"]
+        );
+    }
+
+    #[test]
+    fn extracts_at_start_and_after_newline() {
+        assert_eq!(extract_at_paths("@a.txt first"), vec!["a.txt"]);
+        assert_eq!(extract_at_paths("line1\n@b.txt"), vec!["b.txt"]);
+    }
+
+    #[test]
+    fn dedupes_preserving_order() {
+        assert_eq!(extract_at_paths("@a.rs @b.rs @a.rs"), vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn caps_at_max_references() {
+        let text = (1..=10).map(|i| format!("@f{}.rs", i)).collect::<Vec<_>>().join(" ");
+        assert_eq!(extract_at_paths(&text).len(), super::MAX_AT_REFERENCES);
+    }
+
+    #[test]
+    fn ignores_email_like_tokens() {
+        assert_eq!(extract_at_paths("联系 user@example.com 谢谢"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn ignores_bare_at() {
+        assert_eq!(extract_at_paths("@ 后面是空格"), Vec::<String>::new());
+        assert_eq!(extract_at_paths("no refs here"), Vec::<String>::new());
     }
 }

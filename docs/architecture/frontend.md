@@ -25,7 +25,7 @@ src/
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx

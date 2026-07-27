@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
+import { api, type FileEntry } from '../../api/client'
+import { findAtToken, replaceAtToken, type AtToken } from '../../utils/atReference'
 import {
   processImageFile,
   extractImageFiles,
@@ -60,6 +62,10 @@ function deleteDraft(sessionId: string) {
 }
 
 const QUEUE_PREVIEW_CHARS = 40
+/** @ 文件补全弹窗展示的最大条数（后端搜索上限 100，取前 N）。 */
+const MAX_AT_RESULTS = 20
+/** @ 补全搜索防抖间隔。 */
+const AT_SEARCH_DEBOUNCE_MS = 200
 
 export function ChatInput({
   sessionId,
@@ -79,8 +85,16 @@ export function ChatInput({
   const [activeIndex, setActiveIndex] = useState(0)
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
+  // @ 文件补全：光标处的 @token / Esc 关闭标记 / 搜索结果
+  const [atToken, setAtToken] = useState<AtToken | null>(null)
+  const [atDismissedStart, setAtDismissedStart] = useState<number | null>(null)
+  const [fileResults, setFileResults] = useState<FileEntry[]>([])
+  const [fileSearching, setFileSearching] = useState(false)
+  const [fileActiveIndex, setFileActiveIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const fileItemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const atCursorRef = useRef(0)
   const attachErrorTimerRef = useRef<number | null>(null)
 
   // Persist unsent text per session and restore when switching back.
@@ -95,6 +109,9 @@ export function ChatInput({
       setText(getDraft(sessionId))
       setAttachments([])
       setAttachError(null)
+      setAtToken(null)
+      setAtDismissedStart(null)
+      setFileResults([])
       textareaRef.current?.focus()
       return
     }
@@ -149,6 +166,77 @@ export function ChatInput({
   useEffect(() => {
     if (showCommands) itemRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex, showCommands])
+
+  // ── @ 文件补全 ──────────────────────────────────────────────
+  // 斜杠弹窗优先；Esc 关闭后同一 token（start 不变）不再弹出。
+  const showFilePopup =
+    atToken !== null && !showCommands && atToken.start !== atDismissedStart
+
+  const updateAtToken = (el: HTMLTextAreaElement) => {
+    const pos = el.selectionStart ?? el.value.length
+    atCursorRef.current = pos
+    const token = findAtToken(el.value, pos)
+    setAtToken(token)
+    if (token === null) setAtDismissedStart(null)
+  }
+
+  const atQuery = showFilePopup && atToken ? atToken.query : null
+  useEffect(() => {
+    if (atQuery === null) {
+      setFileResults([])
+      setFileSearching(false)
+      return
+    }
+    setFileSearching(true)
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      api
+        .searchFilesBySession(sessionId, atQuery)
+        .then((entries) => {
+          if (cancelled) return
+          setFileResults(
+            entries
+              .filter(
+                (e) =>
+                  (e.path_type === 'File' || e.path_type === 'SymlinkFile') && e.rel_path,
+              )
+              .slice(0, MAX_AT_RESULTS),
+          )
+        })
+        .catch(() => {
+          if (!cancelled) setFileResults([])
+        })
+        .finally(() => {
+          if (!cancelled) setFileSearching(false)
+        })
+    }, AT_SEARCH_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [atQuery, sessionId])
+
+  useEffect(() => {
+    setFileActiveIndex((i) => Math.min(i, Math.max(0, fileResults.length - 1)))
+  }, [fileResults.length])
+  useEffect(() => {
+    if (!showFilePopup) setFileActiveIndex(0)
+  }, [showFilePopup])
+  useEffect(() => {
+    if (showFilePopup) fileItemRefs.current[fileActiveIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [fileActiveIndex, showFilePopup])
+
+  const selectFile = (relPath: string) => {
+    if (!atToken) return
+    const { text: next, cursor } = replaceAtToken(text, atToken.start, atCursorRef.current, relPath)
+    setText(next)
+    setAtToken(null)
+    const el = textareaRef.current
+    if (el) {
+      el.focus()
+      requestAnimationFrame(() => el.setSelectionRange(cursor, cursor))
+    }
+  }
 
   const canSend = !disabled && !sending && (text.trim().length > 0 || attachments.length > 0)
   // N=1 约束：队列满时 Queue 按钮 disabled，强制用户先 ✕。
@@ -233,6 +321,15 @@ export function ChatInput({
     setAttachments([])
     deleteDraft(sessionId)
     setShowCommands(false)
+    setAtToken(null)
+  }
+
+  const sendFromEnter = () => {
+    // busy + 队列满：Enter 静默 noop（Queue 按钮也 disabled，UI 一致）
+    if (sending && queuedMessage) return
+    if (canSend || canQueue) {
+      doSend()
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -258,13 +355,36 @@ export function ChatInput({
         setShowCommands(false)
         return
       }
+    } else if (showFilePopup) {
+      if (e.key === 'Escape') {
+        if (atToken) setAtDismissedStart(atToken.start)
+        return
+      }
+      if (fileResults.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          setFileActiveIndex((i) => (i + 1) % fileResults.length)
+          return
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          setFileActiveIndex((i) => (i - 1 + fileResults.length) % fileResults.length)
+          return
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault()
+          const entry = fileResults[fileActiveIndex]
+          if (entry?.rel_path) selectFile(entry.rel_path)
+          return
+        }
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        // 无匹配结果时 Enter 走正常发送，不困住用户
+        e.preventDefault()
+        sendFromEnter()
+      }
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      // busy + 队列满：Enter 静默 noop（Queue 按钮也 disabled，UI 一致）
-      if (sending && queuedMessage) return
-      if (canSend || canQueue) {
-        doSend()
-      }
+      sendFromEnter()
     }
   }
 
@@ -571,10 +691,87 @@ export function ChatInput({
             })}
           </OverlayScroll>
         )}
+        {showFilePopup && (fileResults.length > 0 || !fileSearching) && (
+          <OverlayScroll
+            className="pixel-float"
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              left: 0,
+              right: 0,
+              background: 'var(--bg-elevated)',
+              zIndex: 10,
+            }}
+            contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
+          >
+            {fileResults.length === 0 ? (
+              <div
+                style={{
+                  padding: '6px 12px',
+                  fontFamily: READER_FONT,
+                  fontSize: 12,
+                  color: 'var(--text-faint)',
+                }}
+              >
+                {t('chat.input.atNoResults')}
+              </div>
+            ) : (
+              fileResults.map((f, index) => {
+                const isActive = index === fileActiveIndex
+                return (
+                  <button
+                    key={f.rel_path}
+                    ref={(el) => { fileItemRefs.current[index] = el }}
+                    // 防止点击夺走 textarea 焦点（光标位置用于 token 替换）
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => f.rel_path && selectFile(f.rel_path)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: 8,
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: '6px 12px',
+                      background: isActive ? 'var(--accent-14)' : 'none',
+                      border: 'none',
+                      color: isActive ? 'var(--accent)' : 'var(--text-primary)',
+                      fontFamily: READER_FONT,
+                      fontSize: 12,
+                      cursor: 'pointer',
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) e.currentTarget.style.background = 'var(--bg-surface)'
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = isActive ? 'var(--accent-14)' : 'none'
+                    }}
+                  >
+                    <span style={{ flexShrink: 0 }}>{f.name}</span>
+                    <span
+                      style={{
+                        color: isActive ? 'var(--accent)' : 'var(--text-faint)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {f.rel_path}
+                    </span>
+                  </button>
+                )
+              })
+            )}
+          </OverlayScroll>
+        )}
         <textarea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            updateAtToken(e.currentTarget)
+          }}
+          onSelect={(e) => updateAtToken(e.currentTarget)}
+          onBlur={() => setAtToken(null)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
           placeholder={t('chat.input.placeholder')}

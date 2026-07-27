@@ -414,7 +414,7 @@ async fn send_prompt(
         }
     };
 
-    match client.send_prompt(&req.text, Vec::new()).await {
+    match client.send_prompt(&req.text, Vec::new(), Vec::new()).await {
         Ok(resp) => {
             (StatusCode::OK, Json(json!({ "stop_reason": format!("{:?}", resp.stop_reason) })))
         }
