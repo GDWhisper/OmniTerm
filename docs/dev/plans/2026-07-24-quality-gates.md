@@ -1,6 +1,6 @@
 # 项目质量门禁建设计划
 
-> 状态：已勘误，实施中
+> 状态：已归档（Phase 1+2 全部落地，P2 跟踪项见 `docs/dev/plans/backlog/qa-quality-gates-followups.md`）
 > 触发条件：2026-07-24 全面审计项目质量门禁现状，发现 pre-commit hook 已失效、无 PR CI、无 Rust lint/format 检查、无依赖审计
 >
 > **勘误（2026-07-24 实施）：** 计划设计稿与项目实际工程存在 4 处偏差，已就地修正：

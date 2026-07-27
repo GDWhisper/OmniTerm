@@ -72,14 +72,15 @@ fn cmd_output(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// 找到 omniterm.db 路径。优先用 DATABASE_URL，fallback 到工作目录。
+/// 找到 omniterm.db 路径。优先用 DATABASE_URL，fallback 到 ~/.omniterm/<binary>.db。
 fn db_path() -> String {
     if let Ok(url) = std::env::var("DATABASE_URL") {
         // strip "sqlite:" prefix and "?mode=rwc" suffix
         let p = url.strip_prefix("sqlite:").unwrap_or(&url).split('?').next().unwrap_or(&url);
         return p.to_string();
     }
-    "omniterm.db".into()
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    format!("{home}/.omniterm/{}.db", env!("CARGO_PKG_NAME"))
 }
 
 /// 创建/获取一个测试用 project。返回 project_id。

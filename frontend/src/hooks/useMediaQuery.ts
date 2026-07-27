@@ -17,37 +17,13 @@ export function useMobileDetection() {
 }
 
 export function useKeyboardHeight() {
-  const [kbHeight, setKbHeight] = useState(0)
-  const [viewportHeight, setViewportHeight] = useState(window.innerHeight)
   const [vvHeight, setVvHeight] = useState(window.visualViewport?.height ?? window.innerHeight)
 
   useEffect(() => {
     const vv = window.visualViewport
     if (!vv) return
 
-    const update = () => {
-      setViewportHeight(window.innerHeight)
-      setVvHeight(vv.height)
-      const rawKb = window.innerHeight - vv.height
-      
-      // 如果没有输入框聚焦，键盘一定已关闭
-      const activeEl = document.activeElement
-      const isInputFocused = activeEl && (
-        activeEl.tagName === 'INPUT' ||
-        activeEl.tagName === 'TEXTAREA' ||
-        (activeEl as HTMLElement).isContentEditable
-      )
-      
-      const kb = isInputFocused && rawKb > 50 ? rawKb : 0
-      console.log('[Keyboard]', { 
-        innerHeight: window.innerHeight, 
-        vvHeight: vv.height, 
-        rawKb, 
-        kbHeight: kb,
-        isInputFocused 
-      })
-      setKbHeight(kb)
-    }
+    const update = () => setVvHeight(vv.height)
 
     vv.addEventListener('resize', update)
     vv.addEventListener('scroll', update)
@@ -61,5 +37,5 @@ export function useKeyboardHeight() {
     }
   }, [])
 
-  return { kbHeight, viewportHeight, vvHeight }
+  return { vvHeight }
 }

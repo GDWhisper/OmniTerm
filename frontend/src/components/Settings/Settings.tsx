@@ -5,6 +5,7 @@ import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
+import { AuthSection } from './AuthSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { BetaBadge } from '../Common/BetaBadge'
 
@@ -576,7 +577,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'edit' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'edit' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -596,6 +597,11 @@ const CATEGORIES: Category[] = [
     id: 'audio',
     labelKey: 'settings.category.audio',
     sections: [SoundSection],
+  },
+  {
+    id: 'auth',
+    labelKey: 'settings.category.auth',
+    sections: [AuthSection],
   },
   {
     id: 'edit',

@@ -10,29 +10,21 @@ const tabs = [
 
 export function MobileNav() {
   const { activeTab, setActiveTab } = useAppStore()
-  const [shakeTab, setShakeTab] = useState<string | null>(null)
+  const [pulseTab, setPulseTab] = useState<string | null>(null)
 
   useEffect(() => {
-    setShakeTab(activeTab)
-    const timer = setTimeout(() => setShakeTab(null), 400)
+    setPulseTab(activeTab)
+    const timer = setTimeout(() => setPulseTab(null), 200)
     return () => clearTimeout(timer)
   }, [activeTab])
 
   return (
-    <>
-      <style>{`
-        @keyframes shake {
-          0%, 100% { transform: rotate(0deg); }
-          25% { transform: rotate(-12deg); }
-          50% { transform: rotate(12deg); }
-          75% { transform: rotate(-6deg); }
-        }
-      `}</style>
     <div
       style={{
         display: 'flex',
         justifyContent: 'center',
         padding: '6px 0',
+        paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
         flexShrink: 0,
@@ -51,7 +43,7 @@ export function MobileNav() {
       >
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id
-          const isShaking = shakeTab === tab.id
+          const isPulsing = pulseTab === tab.id
           return (
             <button
               key={tab.id}
@@ -70,12 +62,11 @@ export function MobileNav() {
               }}
               aria-label={tab.id}
             >
-              <tab.Icon width={18} height={18} style={isShaking ? { animation: 'shake 0.4s ease-in-out' } : {}} />
+              <tab.Icon width={18} height={18} style={isPulsing ? { animation: 'mobileNavPulse 0.2s ease-in-out' } : {}} />
             </button>
           )
         })}
       </nav>
     </div>
-    </>
   )
 }

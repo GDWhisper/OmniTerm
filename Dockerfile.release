@@ -11,4 +11,4 @@ ENV BIND_ADDR=0.0.0.0:9077
 ENV FRONTEND_DIR=frontend/dist
 EXPOSE 9077
 
-CMD ["./omniterm"]
+CMD ["./omniterm", "start"]

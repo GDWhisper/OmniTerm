@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAgentStore, type Agent } from '../../stores/agentStore'
 import type { AgentEnvVar, CreateAgent, UpdateAgent } from '../../api/client'
+import { AGENT_PRESETS } from './presets'
 import { READER_FONT } from '../../utils/fonts'
+import { BetaBadge } from '../Common/BetaBadge'
 
 /**
  * Agent CRUD panel rendered inside the Settings popup under the "Agents"
@@ -171,6 +173,18 @@ export function AgentSettings() {
     }
   }
 
+  const fillFromPreset = (preset: (typeof AGENT_PRESETS)[number]) => {
+    setSelectedId(null)
+    setForm({
+      ...emptyForm(),
+      display_name: t(preset.labelKey),
+      command: preset.command,
+      args_text: preset.args.join(' '),
+      env: preset.env.map((e) => ({ ...e })),
+    })
+    setTestResult(null)
+  }
+
   const handleTest = async () => {
     setTesting(true)
     setTestResult(null)
@@ -210,21 +224,7 @@ export function AgentSettings() {
         }}
       >
         {t('settings.agents.title')}{' '}
-        <span
-          style={{
-            fontSize: 9,
-            fontWeight: 600,
-            color: 'var(--accent)',
-            background: 'var(--accent-10)',
-            border: '1px solid var(--accent)',
-            borderRadius: 3,
-            padding: '1px 4px',
-            verticalAlign: 'middle',
-            letterSpacing: '0.3px',
-          }}
-        >
-          BETA
-        </span>
+        <BetaBadge />
       </h3>
 
       <div className="flex flex-wrap gap-1.5">
@@ -261,6 +261,19 @@ export function AgentSettings() {
         <summary className="cursor-pointer select-none text-[11px]" style={{ color: 'var(--text-muted)' }}>
           {t('settings.agents.presetsHint')}
         </summary>
+        <div className="flex flex-wrap gap-1.5 pt-2">
+          {AGENT_PRESETS.map((p) => (
+            <button
+              key={p.labelKey}
+              type="button"
+              title={t(p.hintKey)}
+              onClick={() => fillFromPreset(p)}
+              style={btnBase}
+            >
+              {t(p.labelKey)}
+            </button>
+          ))}
+        </div>
         <p className="pt-2 text-[11px] leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.agents.reference')}
         </p>
@@ -273,7 +286,7 @@ export function AgentSettings() {
             style={inputStyle}
             value={form.display_name}
             onChange={(e) => setForm((f) => ({ ...f, display_name: e.target.value }))}
-            placeholder="Claude Code"
+            placeholder="OpenCode"
           />
         </Field>
         <Field label={t('settings.agents.command')}>
@@ -282,7 +295,7 @@ export function AgentSettings() {
             style={inputStyle}
             value={form.command}
             onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
-            placeholder="claude"
+            placeholder="opencode"
           />
         </Field>
         <Field label={t('settings.agents.args')}>
@@ -291,7 +304,7 @@ export function AgentSettings() {
             style={inputStyle}
             value={form.args_text}
             onChange={(e) => setForm((f) => ({ ...f, args_text: e.target.value }))}
-            placeholder="--dangerously-skip-permissions"
+            placeholder="acp"
           />
         </Field>
 

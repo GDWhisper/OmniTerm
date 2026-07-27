@@ -9,6 +9,7 @@ import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolde
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
+import { useFileDrag } from './useFileDrag'
 
 type PathType = 'Dir' | 'File' | 'SymlinkDir' | 'SymlinkFile'
 
@@ -80,6 +81,7 @@ export function FileManager() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const uiZoom = useAppStore((s) => s.uiZoom)
   const fmSessionStates = useAppStore((s) => s.fmSessionStates)
   const setFmSessionMode = useAppStore((s) => s.setFmSessionMode)
   const setFmManualPath = useAppStore((s) => s.setFmManualPath)
@@ -204,6 +206,18 @@ export function FileManager() {
   const fetchFilesRef = useRef(fetchFiles)
   fetchFilesRef.current = fetchFiles
 
+  const {
+    handlePointerDown: handleFileDragStart,
+    preview: dragPreview,
+    dropTarget,
+    isDragging: isFileDragActive,
+    suppressClick,
+    tableWrapRef: fileDragTableRef,
+  } = useFileDrag({
+    cwd, selected, fmSource, activeProjectId,
+    onMoveComplete: () => fetchFiles(),
+  })
+
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
     if (!fileChangeEvent || !activeSessionId) return
@@ -294,14 +308,36 @@ export function FileManager() {
     }
   }
 
-  const handleRowClick = (entry: FileEntry) => {
+  const selectAnchor = useRef<number>(-1)
+
+  const handleRowClick = (entry: FileEntry, e?: React.MouseEvent) => {
+    if (suppressClick.current) return
     if (editingName) return
-    if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
-      const newPath = cwd ? `${cwd}/${entry.name}` : entry.name
-      navigateTo(newPath)
+    const fullPath = cwd ? `${cwd}/${entry.name}` : entry.name
+    const idx = files.indexOf(entry)
+
+    if (e?.shiftKey && selectAnchor.current >= 0) {
+      const start = Math.min(selectAnchor.current, idx)
+      const end = Math.max(selectAnchor.current, idx)
+      const range = files.slice(start, end + 1).map((f) => cwd ? `${cwd}/${f.name}` : f.name)
+      setSelected(new Set(range))
       return
     }
-    const fullPath = cwd ? `${cwd}/${entry.name}` : entry.name
+    if (e?.ctrlKey || e?.metaKey) {
+      selectAnchor.current = idx
+      setSelected((prev) => {
+        const next = new Set(prev)
+        if (next.has(fullPath)) next.delete(fullPath)
+        else next.add(fullPath)
+        return next
+      })
+      return
+    }
+    selectAnchor.current = idx
+    if (entry.path_type === 'Dir' || entry.path_type === 'SymlinkDir') {
+      navigateTo(fullPath)
+      return
+    }
     // Open file in drawer (single click)
     if (activeSessionId) {
       setFmDrawerPath(activeSessionId, fullPath, 'view')
@@ -416,10 +452,11 @@ export function FileManager() {
     }
   }
 
-  const handleDragOver = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); setDragOver(true) }
-  const handleDragLeave = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); setDragOver(false) }
+  const handleDragOver = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(true) }
+  const handleDragLeave = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(false) }
 
   const handleDrop = async (e: DragEvent) => {
+    if (isFileDragActive) return
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
@@ -728,6 +765,7 @@ export function FileManager() {
           {/* 2. Back to parent */}
           <button
             className="fm-btn"
+            data-drop-path={getParentPath(cwd) || undefined}
             onClick={() => {
               const parentPath = getParentPath(cwd)
               if (parentPath) navigateTo(parentPath)
@@ -812,7 +850,7 @@ export function FileManager() {
           >
             {bcItems.flatMap((item) => [
               <span key={`sep-${item.path}`} className="fm-bc-sep">/</span>,
-              <span key={item.path} className="fm-bc-seg" onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
+              <span key={item.path} className={`fm-bc-seg ${dropTarget === item.path ? 'fm-bc-seg-drop' : ''}`} data-drop-path={item.path} onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
             ])}
           </div>
           {isOutsideWorkspace && (
@@ -828,6 +866,7 @@ export function FileManager() {
       )}
 
       <div
+        ref={fileDragTableRef}
         className={`fm-table-wrap ${dragOver ? 'fm-drag-over' : ''}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -902,8 +941,9 @@ export function FileManager() {
                   return (
                     <tr
                       key={fullPath}
-                      className={isSel ? 'fm-tr-selected' : ''}
-                      onClick={() => handleRowClick(f)}
+                      className={`${isSel ? 'fm-tr-selected' : ''} ${dropTarget === fullPath ? 'fm-drop-target' : ''}`}
+                      data-drop-path={isDir ? fullPath : undefined}
+                      onClick={(e) => handleRowClick(f, e)}
                       onDoubleClick={() => {
                         if (isDir) navigateTo(fullPath)
                       }}
@@ -921,7 +961,7 @@ export function FileManager() {
                       )}
                       <td className="fm-td-name">
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
-                          <FileIcon entry={f} />
+                          <span className="fm-drag-handle" onPointerDown={(e) => handleFileDragStart(e, f)}><FileIcon entry={f} /></span>
                           {isEditing ? (
                             <input
                               className="fm-edit-input"
@@ -973,6 +1013,23 @@ export function FileManager() {
           </div>
         )}
       </div>
+
+      {dragPreview.visible && (
+        <div
+          className="fm-drag-preview"
+          style={{ transform: `translate(${dragPreview.x}px, ${dragPreview.y}px)`, zoom: uiZoom / 100 }}
+        >
+          <span className="fm-drag-preview-icon">
+            {dragPreview.icon === 'folder' && <FolderSprite size={14} />}
+            {dragPreview.icon === 'file' && <FileSprite size={14} />}
+            {dragPreview.icon === 'code' && <FileCodeSprite size={14} />}
+            {dragPreview.icon === 'multi' && <FolderSprite size={14} />}
+          </span>
+          <span className="fm-drag-preview-label">
+            {dragPreview.names.length === 1 ? dragPreview.names[0] : `${dragPreview.names.length} items`}
+          </span>
+        </div>
+      )}
 
       {/* File Drawer — slides up from bottom when a file is opened */}
       {(drawerFilePath || workspaceDrawerPath) && (

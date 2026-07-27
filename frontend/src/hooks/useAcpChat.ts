@@ -480,6 +480,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   sessionIdRef.current = sessionId
   const isReplaying = useRef(false)
   const suppressReplay = useRef(false)
+  const isManualRestore = useRef(false)
   // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
   const replayRaf = useRef<number | null>(null)
@@ -699,8 +700,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           isReplaying.current = true
           replayBuffer.current = []
           const msgs = s.states[sid]?.messages
-          suppressReplay.current = !!(msgs && msgs.length > 0)
-          // 仅当无历史时才显示恢复指示器（已有消息说明刚从 DB hydrate，无需重放）
+          // 手动 restore 必须走完整重放（DB hydrate 的旧快照不完整）。
+          suppressReplay.current = !isManualRestore.current && !!(msgs && msgs.length > 0)
+          // 仅当无历史时才显示恢复指示器（已有消息且非手动 restore 说明刚从 DB hydrate，无需重放）
           if (!suppressReplay.current) {
             useChatStore.getState().setReplaying(sid, true)
           }
@@ -709,6 +711,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'replay_end':
           isReplaying.current = false
           suppressReplay.current = false
+          isManualRestore.current = false
           // 把重放余量一次性 flush，并把残留 streaming 消息标为已完成
           if (replayRaf.current !== null) {
             cancelAnimationFrame(replayRaf.current)
@@ -770,6 +773,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
     ws.onclose = () => {
       if (wsRef.current === ws) {
+        isManualRestore.current = false
         setConnectionState('disconnected')
         wsRef.current = null
         const sid = sessionIdRef.current
@@ -843,6 +847,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const restore = useCallback(() => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
+    isManualRestore.current = true
     ws.send(JSON.stringify({ type: 'load_session' }))
   }, [])
 

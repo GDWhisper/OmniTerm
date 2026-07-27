@@ -393,8 +393,10 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     }
 
     // 2. Persist a session row so the WS handler accepts the id.
-    let db_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:omniterm.db?mode=rwc".into());
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        format!("sqlite:{home}/.omniterm/{}.db?mode=rwc", env!("CARGO_PKG_NAME"))
+    });
     let pool = sqlx::SqlitePool::connect(&db_url).await.ok();
     if pool.is_none() {
         eprintln!("SKIP: cannot connect to db");

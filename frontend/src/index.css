@@ -648,6 +648,61 @@ html, body, #root {
   pointer-events: none;
 }
 
+/* ── File drag-to-move ── */
+.fm-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  animation: fm-drag-preview-in 0.12s steps(3, end) forwards;
+}
+@keyframes fm-drag-preview-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fm-drag-preview-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.fm-drag-preview-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.fm-drop-target td {
+  background: rgba(88, 166, 255, 0.12) !important;
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.fm-bc-seg-drop {
+  background: rgba(88, 166, 255, 0.18);
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  color: var(--accent) !important;
+}
+body.fm-dragging,
+body.fm-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+.fm-drag-handle {
+  display: inline-flex;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
 /* ── Table wrapper — horizontal + vertical scroll ── */
 .fm-table-wrap {
   flex: 1 1 auto;
@@ -2454,4 +2509,39 @@ select optgroup option {
   font-family: var(--reader-font);
   font-size: 12px;
   text-align: center;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Mobile layout animations & components
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes mobileSlideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes mobileSlideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes mobileSlideOutLeft {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+@keyframes mobileSlideOutRight {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes mobileNavPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+.mobikey-btn {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  touch-action: manipulation;
+}
+.mobikey-btn:active {
+  transform: scale(0.93);
+  filter: brightness(1.35);
 }

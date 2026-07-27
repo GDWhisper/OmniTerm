@@ -75,6 +75,11 @@ export interface AppState {
   mobileFontSize: number
   mobileLastTab: string
 
+  // Auth
+  authState: 'loading' | 'authenticated' | 'unauthenticated'
+  authVersion: number
+  setAuthState: (state: AppState['authState']) => void
+
   // Settings panel
   settingsOpen: boolean
   tmuxCheatsheetOpen: boolean
@@ -191,6 +196,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   })(),
 
   fmSessionStates: {},
+
+  authState: 'loading' as const,
+  authVersion: 0,
 
   connected: false,
   terminalDisconnected: false,
@@ -311,6 +319,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
   setConnected: (v) => set({ connected: v }),
+  setAuthState: (state) =>
+    set((s) => ({ authState: state, authVersion: s.authVersion + 1 })),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {

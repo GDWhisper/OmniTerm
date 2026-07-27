@@ -10,10 +10,6 @@
 
 ---
 
-## 使用指南 🔴
-
-- [ ] **Sidebar 新增使用指南入口** — 在 Sidebar 设置齿轮旁边新增一个书本样式的图标按钮，点击后弹出 tmux 常用命令速查面板，帮助未接触过 tmux 的用户快速上手。
-
 ## 快捷键设置 🟡
 
 - [ ] **插件化快捷键模式** — 通过 tmux 插件生态（如 tmux-sensible, tmux-pain-control 等）实现快捷键定制，OmniTerm 提供 UI 开关和插件管理，不重复造轮子。底层拦截代码已就绪（appStore.keybindingMode + useTerminal handler），等插件系统就绪后激活。
@@ -34,51 +30,11 @@
   - 任务意外中断（异常退出）
   - 任务死循环（长时间无输出或 CPU 占用异常）
   - ⚠️ 待定：具体检测方式（轮询 tmux pane 状态 / hook / 资源监控）
-- [ ] **Sidebar 会话异常标记** — 与通知联动，当会话中的任务出现异常（中断、死循环等）时，在 Sidebar 对应会话项上显示醒目的视觉标记（如警告图标 / 颜色变化），方便用户快速定位问题会话。
 
-## Agent 状态监控与通知 🔵
-
-> 2026-06-26 讨论结论：监控/通知通道方案尚未确定，当前实现已注释下线，待方案明确后重启。
->
-> **2026-07-26 更新：已落地「方案 5：屏幕规则检测」（借鉴 herdr，见 `docs/reference/herdr-reference.md` P0 项）。**
-> 后端 `agent_watch` 每秒轮询活跃 pane，`capture-pane` 底部快照 + TOML manifest 规则引擎（`src/tmux/agent_detect.rs`）判 running/waiting/idle，无需 agent 配合、支持事后监控（覆盖方案 1 的两大缺点）。
-> 屏幕检测为状态权威覆盖 hook 上报状态；hook 仅供 attention_reason/事件。前端 Sidebar 已接 blocked>done>working 聚合徽标与会话状态点。
-> 剩余待办：声音/标签页闪烁等通知通道仍未定。
-
-当用户在 tmux session 中运行 Claude Code / Codex 等 AI Agent 时，OmniTerm 希望可以实时感知其状态（running / waiting / idle / error）并通过 Sidebar badge、声音、标签页闪烁等方式通知用户。已讨论的技术方案包括：
-
-### 方案 1：Agent Hook + tmux option（当前已实现但下线）
-- **原理**：创建 session 时通过 `CreateSession.command` 或 wrapper 以带 hook 参数的方式启动 agent；agent 在生命周期事件触发时执行 `tmux set-option @omniterm_agent <state>`；后端轮询读取该 option。
-- **优点**：状态准确、实时、实现简单。
-- **缺点**：强依赖用户以特定方式启动 agent，限制用户自由；对已经手动启动的 agent 无法事后启用监控。
-
-### 方案 2：tmux Control Mode 实时解析 pane 输出
-- **原理**：Backend 为每个受监控 session 挂一个 `tmux -C attach-session` 长连接，监听 `%output` 等事件，实时重建 pane 内容并做启发式状态判断（spinner → running、prompt → waiting、shell prompt 回来 → done）。
-- **优点**：不需要 agent 配合，用户可自由启动 agent。
-- **缺点**：仍然是启发式识别，准确率依赖输出模式；多语言场景下识别难度高；需要维护长连接和重连逻辑。
-
-### 方案 3：Agent Wrapper + OSC 9 主动上报
-- **原理**：用 wrapper（或 PATH 拦截）启动 agent，将 agent 的 hook 输出从 `tmux set-option` 改为打印 OSC 9 转义序列（如 `\033]9;omniterm:<state>:...\033\\`）；Backend 通过 control mode / pipe-pane / capture-pane 捕获 pane 输出并解析 OSC 9。
-- **优点**：通道通用、可跨终端、不依赖 tmux option。
-- **缺点**：仍需要 wrapper/agent 配合；PATH 拦截侵入用户环境；OSC 9 解析需要处理转义序列边界。
-
-### 方案 4：PTY Wrapper 全量 I/O 拦截
-- **原理**：在 tmux 与 shell 之间插入一个 PTY wrapper，拦截所有输入输出，自主判断 agent 状态并注入上报标记。
-- **优点**：不需要 agent 任何配合，用户完全自由。
-- **缺点**：工程量大，相当于实现一个迷你 terminal multiplexer；维护成本高。
-
-### 待定决策
-- 是否需要支持「手动启动的 agent」事后监控？
-- 是否接受 PATH wrapper / 启动参数等侵入式方案？
-- 在准确率和用户自由度之间如何取舍？
-
-**下一步动作**：待产品决策后，选择上述方案之一或组合方案进行实现。
 
 ## ACP 会话 ⚪
 
 - [ ] **todos list 看板功能** — ACP 会话的 todos list 看板功能未成功实现，待评估：放弃该功能，或换用更高级模型处理。（2026-07-24 记录）
-- [ ] **输入框切换会话丢失内容** — ACP 输入框在切换会话后会丢失用户临时输入的文字，需保留未发送的输入内容（按会话隔离缓存）。（2026-07-24 记录）
-- [ ] **执行中允许输入并排队发送** — ACP 输入框在 agent 执行中被置灰无法输入；预期应允许输入。衍生需求：用户在 agent 执行中按回车提交时，OmniTerm 先将消息 hold 在队列中，待 agent 完成任务后自动发送给 agent；用户中途可撤销队列中的消息。（2026-07-24 记录）
 
 ## Multiplexer 引擎 ⚪
 

@@ -153,6 +153,8 @@ export function Sidebar() {
   // create_project auto-creates non-existent paths, so this is friendly
   // info rather than a hard error — the UI shows a "will be created" hint.
   const [browseNotFound, setBrowseNotFound] = useState(false)
+  const [autocompleteActiveIndex, setAutocompleteActiveIndex] = useState(-1)
+  const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 409 Conflict response data when creating a project whose path is
   // already covered by an existing project.
   const [coverConflict, setCoverConflict] = useState<{
@@ -338,17 +340,22 @@ export function Sidebar() {
   }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
 
   // Fetch directory entries for the new-project modal's browse list.
-  const fetchDirs = useCallback(async (path: string) => {
+  // When `prefix` is provided, only entries whose name starts with it
+  // (case-insensitive) are kept — this powers real-time path autocomplete.
+  const fetchDirs = useCallback(async (path: string, prefix?: string) => {
     setBrowseLoading(true)
     setBrowseError(null)
     setBrowseNotFound(false)
     try {
       const data = await api.listDirs(path)
-      setBrowseEntries(
-        data.files.filter(
-          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
-        ),
+      let dirs = data.files.filter(
+        (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
       )
+      if (prefix) {
+        const lower = prefix.toLowerCase()
+        dirs = dirs.filter((f) => f.name.toLowerCase().startsWith(lower))
+      }
+      setBrowseEntries(dirs)
     } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 404) {
         setBrowseNotFound(true)
@@ -389,11 +396,32 @@ export function Sidebar() {
     fetchRepairDirs(repairBrowsePath)
   }, [repairBrowsePath, fetchRepairDirs])
 
-  // Auto-fetch when browsePath changes (covers click-dir, go-up, and type-apply)
+  // Real-time path autocomplete — debounced fetch on every keystroke.
+  // Parses the input: "/home/pax/Om" → list "/home/pax/" and filter by "Om".
   useEffect(() => {
-    if (!browsePath) return
-    fetchDirs(browsePath)
-  }, [browsePath, fetchDirs])
+    const input = projPath.trim()
+    if (!input || input === '/') {
+      setBrowsePath('')
+      setBrowseEntries([])
+      setBrowseError(null)
+      setBrowseNotFound(false)
+      return
+    }
+
+    const lastSlash = input.lastIndexOf('/')
+    const dirPart = lastSlash >= 0 ? input.slice(0, lastSlash + 1) : input
+    const prefix = lastSlash >= 0 ? input.slice(lastSlash + 1) : ''
+
+    if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
+    autocompleteTimerRef.current = setTimeout(() => {
+      setBrowsePath(dirPart)
+      fetchDirs(dirPart, prefix || undefined)
+    }, 200)
+
+    return () => {
+      if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
+    }
+  }, [projPath, fetchDirs])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
@@ -504,7 +532,7 @@ export function Sidebar() {
   useEffect(() => {
     if (createProjOpen && homeDir) {
       setBrowsePath(homeDir)
-      setProjPath(homeDir)
+      setProjPath(homeDir + '/')
       setBrowseError(null)
       setBrowseNotFound(false)
     }
@@ -514,11 +542,12 @@ export function Sidebar() {
   const closeCreateProj = () => {
     setCreateProjOpen(false)
     setProjName('')
-    setProjPath(homeDir)
+    setProjPath(homeDir + '/')
     setBrowsePath('')
     setBrowseEntries([])
     setBrowseError(null)
     setBrowseNotFound(false)
+    setAutocompleteActiveIndex(-1)
   }
 
   // Health polling
@@ -554,24 +583,14 @@ export function Sidebar() {
 
   // Browse handlers for the new-project modal
   const handleEnterDir = (entry: FileEntry) => {
-    const newPath = browsePath.endsWith('/')
-      ? `${browsePath}${entry.name}`
-      : `${browsePath}/${entry.name}`
-    setProjPath(newPath)
-    setBrowsePath(newPath)
+    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
+    setProjPath(`${dirPart}${entry.name}/`)
   }
 
   const handleGoUp = () => {
     const parent = getParentPath(browsePath)
     if (!parent) return
     setProjPath(parent)
-    setBrowsePath(parent)
-  }
-
-  const handlePathApply = () => {
-    const trimmed = projPath.trim()
-    if (!trimmed || trimmed === browsePath) return
-    setBrowsePath(trimmed)
   }
 
   const handleRefresh = () => {
@@ -681,7 +700,7 @@ export function Sidebar() {
       addToast('success', t('sidebar.projectCreated', { name: projName.trim() }) ?? `Project "${projName.trim()}" created`)
       setCreateProjOpen(false)
       setProjName('')
-      setProjPath(homeDir)
+      setProjPath(homeDir + '/')
     } catch (e) {
       // 409 Conflict: the new path is already covered by an existing
       // project. Surface a switch-to-existing dialog instead of letting
@@ -866,12 +885,49 @@ export function Sidebar() {
     }
   }
 
-  // Enter in path field = apply path (don't create)
+  // Path field keyboard navigation for autocomplete
   const handlePathKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setAutocompleteActiveIndex((prev) => {
+        const next = prev + 1
+        return next < browseEntries.length ? next : prev
+      })
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setAutocompleteActiveIndex((prev) => {
+        const next = prev - 1
+        return next >= 0 ? next : prev
+      })
+      return
+    }
+    if (e.key === 'Tab' && browseEntries.length > 0) {
+      e.preventDefault()
+      completAutocomplete(
+        autocompleteActiveIndex >= 0 ? autocompleteActiveIndex : 0,
+      )
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handlePathApply()
+      if (autocompleteActiveIndex >= 0) {
+        completAutocomplete(autocompleteActiveIndex)
+      }
     }
+    if (e.key === 'Escape') {
+      setAutocompleteActiveIndex(-1)
+    }
+  }
+
+  // Complete the autocomplete suggestion at the given index
+  const completAutocomplete = (index: number) => {
+    const entry = browseEntries[index]
+    if (!entry) return
+    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
+    setProjPath(`${dirPart}${entry.name}/`)
+    setAutocompleteActiveIndex(-1)
   }
 
   const handleSessKeyDown = (e: React.KeyboardEvent) => {
@@ -1598,10 +1654,12 @@ export function Sidebar() {
             <input
               type="text"
               value={projPath}
-              onChange={(e) => setProjPath(e.target.value)}
+              onChange={(e) => {
+                setProjPath(e.target.value)
+                setAutocompleteActiveIndex(-1)
+              }}
               onKeyDown={handlePathKeyDown}
               onBlur={(e) => {
-                handlePathApply()
                 e.currentTarget.style.borderColor = 'var(--border-strong)'
                 e.currentTarget.style.boxShadow = 'none'
               }}
@@ -1610,39 +1668,8 @@ export function Sidebar() {
               style={inputStyle}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
             />
-            <div className="text-[10px] mt-1" style={{ color: 'var(--text-faint)' }}>
-              {t('sidebar.pathHint') ?? '回车或失焦以应用路径'}
-            </div>
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                {t('sidebar.browse') ?? '浏览'}
-              </label>
-              <button
-                onClick={handleRefresh}
-                title={t('sidebar.refresh') ?? '刷新'}
-                className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
-                style={{
-                  border: '1px solid var(--border-strong)',
-                  color: 'var(--text-secondary)',
-                  fontSize: 11,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--accent)'
-                  e.currentTarget.style.color = 'var(--accent)'
-                  e.currentTarget.style.background = 'var(--accent-10)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border-strong)'
-                  e.currentTarget.style.color = 'var(--text-secondary)'
-                  e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                <IconRefresh width={10} height={10} />
-                {t('sidebar.refresh') ?? '刷新'}
-              </button>
-            </div>
             <div
               className="overflow-y-auto overlay-scroll-content"
               style={{
@@ -1714,28 +1741,35 @@ export function Sidebar() {
               )}
 
               {/* Directory entries */}
-              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry) => (
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry, idx) => {
+                const highlighted = idx === autocompleteActiveIndex
+                return (
                 <div
                   key={entry.name}
                   onClick={() => handleEnterDir(entry)}
                   className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
                   style={{
                     borderRadius: 4,
-                    color: 'var(--text-secondary)',
+                    color: highlighted ? 'var(--text-primary)' : 'var(--text-secondary)',
                     cursor: 'pointer',
+                    background: highlighted ? 'var(--accent-10)' : 'transparent',
                   }}
                   onMouseEnter={(e) => {
+                    setAutocompleteActiveIndex(idx)
                     e.currentTarget.style.background = 'var(--accent-10)'
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'transparent'
+                    if (!highlighted) {
+                      e.currentTarget.style.background = 'transparent'
+                    }
                   }}
                 >
                   <FolderSprite size={14} />
                   <span className="truncate">{entry.name}</span>
                   <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
@@ -2108,7 +2142,7 @@ export function Sidebar() {
                   setCoverConflict(null)
                   setCreateProjOpen(false)
                   setProjName('')
-                  setProjPath(homeDir)
+                  setProjPath(homeDir + '/')
                   addToast(
                     'success',
                     t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??

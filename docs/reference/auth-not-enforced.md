@@ -1,8 +1,8 @@
 # Auth 验证未生效（半成品 / 死代码）
 
 > 类别：已知缺陷（待正规开发流程处理）
-> 状态：已确认，未修复
-> 发现日期：2026-07-09
+> 状态：已修复（2026-07-27，见实施计划 `docs/dev/plans/2026-07-27-auth-enforcement.md`）
+> 发现日期：2026-07-09 · 重审：2026-07-27（新增 RequireAuth extractor bug）· 实施：2026-07-27
 
 ## 摘要
 
@@ -68,6 +68,24 @@
 - 端口/域名/版本等分支专属变量走 `.env.local`，勿硬编码。
 - 涉及前端架构模式（新增页面/状态栏）前，先读 `docs/architecture/frontend-patterns.md` 与 `docs/visual-design/ui-style-guide.md`。
 - 改动后端分层时遵守 `docs/architecture/backend.md`；新增 API 端点需同步更新该文档的端点列表。
+
+## 相关文件
+
+## 实现缺陷（RequireAuth 提取器自身 bug）
+
+`src/auth/mod.rs:58-62` 的 `RequireAuth` 提取器中取 JWT secret 的方式有误：
+
+```rust
+let secret = parts
+    .extensions
+    .get::<String>()
+    .cloned()
+    .unwrap_or_else(|| "omniterm-default-secret-change-me".to_string());
+```
+
+axum 的 `State` 提取器不会把 `AppState` 的单个字段作为裸 `String` 注入 `extensions`，因此该 `get::<String>()` 永远为空，**token 校验永远使用硬编码 fallback 值**，忽略 `args.jwt_secret` 的实际配置。
+
+正确做法：让 `RequireAuth` 通过 `FromRef<AppState>` 绑定 state 类型后直接从 state 读 `.jwt_secret`，而非依赖 `extensions`。
 
 ## 相关文件
 

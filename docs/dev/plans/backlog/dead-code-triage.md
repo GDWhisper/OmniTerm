@@ -15,8 +15,8 @@
 
 | # | 位置 | 符号 | 初判 | 备注 |
 |---|------|------|------|------|
-| 1 | `src/auth/mod.rs:24` | `verify_token` | 仅被 `RequireAuth::from_request_parts` 调用 | #2 若保留则连带保留；若 #2 删则本函数随之删 |
-| 2 | `src/auth/mod.rs:34` | `RequireAuth`（axum 提取器） | 未在任何 handler 用作鉴权参数 | 判断是预留鉴权中间件 vs 已弃用脚手架 |
+| 1 | ~~`src/auth/mod.rs:30`~~ | `verify_token` | **已接线**（2026-07-27） | 由 `require_auth_mw` 中间件 + `/auth/check` 接线，见 `docs/dev/plans/2026-07-27-auth-enforcement.md` | ✅ |
+| 2 | `src/auth/mod.rs:72` | `RequireAuth`（axum 提取器） | 有意保留（2026-07-27） | 预留 handler 级鉴权，当前使用 `require_auth_mw` 中间件替代 | 📌 |
 | 3 | `src/fs/mod.rs:139` | `normalize_path` | 仅 `\\`→`/` 辅助 | 无调用方，疑似残留，候选删除 |
 | 4 | `src/models/user.rs:4` | `User`（sqlx 模型） | 无 `FROM_ROW` 查询引用 | 是否有计划中的用户表查询路径 |
 | 5 | ~~`src/tmux/mod.rs` `capture_pane`~~ | **已处置**（2026-07-26） | 改造为 `capture_screen`（可见屏捕获），由 `agent_watch` 接线 | ✅ |

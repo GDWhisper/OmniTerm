@@ -152,12 +152,67 @@ export function Layout() {
     [fileManagerWidth, setFileManagerWidth, cleanUpDrag]
   )
 
-  // Mobile layout
-  if (isMobile) {
-    return <MobileLayout />
-  }
+  return (
+    <>
+      {/* Persistent ACP connections — rendered once outside the layout branch
+          so WS connections survive mobile↔desktop switches. */}
+      <AcpConnectionManager />
+      {isMobile ? <MobileLayout /> : <DesktopLayout
+        isDragging={isDragging}
+        layoutRef={layoutRef}
+        sidebarOpen={sidebarOpen}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        fileManagerOpen={fileManagerOpen}
+        fileManagerCollapsed={fileManagerCollapsed}
+        fileManagerWidth={fileManagerWidth}
+        activeSessionId={activeSessionId}
+        crtScanlines={crtScanlines}
+        uiZoom={uiZoom}
+        settingsOpen={settingsOpen}
+        tmuxCheatsheetOpen={tmuxCheatsheetOpen}
+        onSidebarDrag={handleSidebarDrag}
+        onFileManagerDrag={handleFileManagerDrag}
+      />}
+    </>
+  )
+}
 
-  // Desktop layout: Sidebar | Terminal | FileManager
+interface DesktopLayoutProps {
+  isDragging: boolean
+  layoutRef: React.RefObject<HTMLDivElement | null>
+  sidebarOpen: boolean
+  sidebarCollapsed: boolean
+  sidebarWidth: number
+  fileManagerOpen: boolean
+  fileManagerCollapsed: boolean
+  fileManagerWidth: number
+  activeSessionId: string | null
+  crtScanlines: boolean
+  uiZoom: number
+  settingsOpen: boolean
+  tmuxCheatsheetOpen: boolean
+  onSidebarDrag: (e: React.MouseEvent | React.TouchEvent) => void
+  onFileManagerDrag: (e: React.MouseEvent | React.TouchEvent) => void
+}
+
+function DesktopLayout({
+  isDragging,
+  layoutRef,
+  sidebarOpen,
+  sidebarCollapsed,
+  sidebarWidth,
+  fileManagerOpen,
+  fileManagerCollapsed,
+  fileManagerWidth,
+  activeSessionId,
+  crtScanlines,
+  uiZoom,
+  settingsOpen,
+  tmuxCheatsheetOpen,
+  onSidebarDrag,
+  onFileManagerDrag,
+}: DesktopLayoutProps) {
   return (
     <>
       <div
@@ -165,12 +220,10 @@ export function Layout() {
         className="flex"
         style={{ zoom: uiZoom / 100, height: `calc(100dvh / ${uiZoom / 100})`, background: 'var(--bg-base)', color: 'var(--text-primary)' } as React.CSSProperties}
       >
-        {/* Panels wrapper */}
         <div
           className="flex"
           style={{ width: '100%', height: '100%', minWidth: 0 }}
         >
-          {/* Sidebar */}
           {sidebarOpen && (
             <div
               className="flex-shrink-0"
@@ -186,33 +239,26 @@ export function Layout() {
             </div>
           )}
 
-          {/* Sidebar drag handle — hidden when collapsed */}
           {sidebarOpen && !sidebarCollapsed && (
             <div
               className="omniterm-drag-bar omniterm-drag-bar-v"
-              onMouseDown={handleSidebarDrag}
-              onTouchStart={handleSidebarDrag}
+              onMouseDown={onSidebarDrag}
+              onTouchStart={onSidebarDrag}
             />
           )}
 
-          {/* Persistent ACP connections — survives session switches */}
-          <AcpConnectionManager />
-
-          {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
           <div className="flex-1 min-w-0">
             <SessionView key={activeSessionId ?? 'empty'} />
           </div>
 
-          {/* FileManager drag handle — hidden when collapsed */}
           {fileManagerOpen && !fileManagerCollapsed && (
             <div
               className="omniterm-drag-bar omniterm-drag-bar-v"
-              onMouseDown={handleFileManagerDrag}
-              onTouchStart={handleFileManagerDrag}
+              onMouseDown={onFileManagerDrag}
+              onTouchStart={onFileManagerDrag}
             />
           )}
 
-          {/* RightPanel (FILES | GIT) */}
           {fileManagerOpen && (
             <div
               className="flex-shrink-0 overflow-hidden"
@@ -229,7 +275,6 @@ export function Layout() {
         </div>
       </div>
 
-      {/* Overlays — outside zoom container so popups stay stable during zoom changes */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
       {crtScanlines && <div className="crt-overlay" />}
@@ -252,6 +297,7 @@ function MobileLayout() {
     uiZoom,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
@@ -270,44 +316,24 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' } as React.CSSProperties}
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden', overscrollBehavior: 'none' } as React.CSSProperties}
       >
-        <style>{`
-          @keyframes mobileSlideInLeft {
-            from { transform: translateX(-100%); }
-            to { transform: translateX(0); }
-          }
-          @keyframes mobileSlideInRight {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-          }
-          @keyframes mobileSlideOutLeft {
-            from { transform: translateX(0); }
-            to { transform: translateX(-100%); }
-          }
-          @keyframes mobileSlideOutRight {
-            from { transform: translateX(0); }
-            to { transform: translateX(100%); }
-          }
-        `}</style>
         <MobileStatusBar
           connected={connected}
           sessionName={activeSessionName}
           onSessionClick={() => setActiveTab('sessions')}
           onNewSession={() => setActiveTab('sessions')}
         />
-        <AcpConnectionManager />
         <div
           className="flex-1 overflow-hidden"
           onTouchStart={mobileGestureEnabled ? (e) => {
             const touch = e.touches[0]
-            ;(e.currentTarget as HTMLDivElement).dataset.startX = String(touch.clientX)
-            ;(e.currentTarget as HTMLDivElement).dataset.startY = String(touch.clientY)
+            touchStart.current = { x: touch.clientX, y: touch.clientY }
           } : undefined}
           onTouchEnd={mobileGestureEnabled ? (e) => {
-            const div = e.currentTarget as HTMLDivElement
-            const startX = parseFloat(div.dataset.startX ?? '0')
-            const startY = parseFloat(div.dataset.startY ?? '0')
+            if (!touchStart.current) return
+            const { x: startX, y: startY } = touchStart.current
+            touchStart.current = null
             const touch = e.changedTouches[0]
             const dx = touch.clientX - startX
             const dy = touch.clientY - startY

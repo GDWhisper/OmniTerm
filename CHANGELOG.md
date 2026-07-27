@@ -79,6 +79,8 @@ Prefix each entry with the area it affects:
 - (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Silkscreen（几何方块风、自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Silkscreen 专为小字号 UI 标签设计，字形更宽、字高统一；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
 - (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
 
+- (2026-07-28) `[frontend]` 新建项目时路径输入实时目录补全：输入路径时不再需要回车/失焦确认，浏览面板自动根据已输入内容解析目录前缀并拉取过滤匹配结果（200ms 防抖）；目录项点击补全末尾自动追加 `/`，↑↓/Tab/Enter/Esc 键盘导航；移除「回车或失焦以应用路径」提示文字与刷新按钮（`frontend/src/components/Sidebar/Sidebar.tsx`）
+
 ### Fixed
 
 - (2026-07-27) `[frontend]` 修复服务端数据重置/删除后，localStorage 里的旧 project/workspace/session ID 永不清理导致文件列表等请求持续 404：Sidebar 的恢复逻辑此前以「列表非空」为触发条件，服务端列表为空时（如 DB 重建）早退跳过清理；现以「已完成拉取」判定（projects 加载标记 / worktrees・sessions 按 project 键判空），旧 ID 未命中即连带清空下游 workspace/session（`frontend/src/components/Sidebar/Sidebar.tsx`）

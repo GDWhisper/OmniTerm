@@ -12,12 +12,12 @@ pub mod targets;
 
 use crate::AppState;
 use crate::ws;
-use axum::Router;
+use axum::{Router, middleware};
 
 pub fn routes(state: AppState) -> Router {
-    let api = Router::new()
-        .merge(health::routes())
-        .merge(auth::routes())
+    let public = Router::new().merge(health::routes()).merge(auth::routes());
+
+    let protected = Router::new()
         .merge(system::routes())
         .merge(targets::routes())
         .merge(projects::routes())
@@ -32,7 +32,8 @@ pub fn routes(state: AppState) -> Router {
             "/ws/terminal/external/{tmux_name}",
             axum::routing::get(ws::ws_external_terminal_handler),
         )
-        .route("/ws/acp/{session_id}", axum::routing::get(ws::ws_acp_handler));
+        .route("/ws/acp/{session_id}", axum::routing::get(ws::ws_acp_handler))
+        .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth_mw));
 
-    Router::new().nest("/api/v1", api).with_state(state)
+    Router::new().nest("/api/v1", public.merge(protected)).with_state(state)
 }

@@ -14,11 +14,14 @@ export function MobileStatusBar({ connected, sessionName, onSessionClick, onNewS
   return (
     <div
       style={{
-        height: 30,
+        height: 'calc(30px + env(safe-area-inset-top, 0px))',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 12px',
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+        paddingBottom: 0,
+        paddingLeft: 'max(12px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(12px, env(safe-area-inset-right, 0px))',
         background: 'var(--bg-base)',
         borderBottom: '1px solid var(--border-subtle)',
         fontFamily: READER_FONT,
