@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Pre-commit hook: run frontend lint/test and Rust fmt/clippy on staged files.
+# Pre-commit hook: run frontend typecheck/lint/test and Rust fmt/clippy on staged files.
 # Catches the most common "missed before push" issues:
-#   - TypeScript / ESLint errors (pnpm lint)
+#   - TypeScript type errors (tsc -b)
+#   - ESLint errors (pnpm lint)
 #   - Frontend test regressions (pnpm test --run)
 #   - Rust formatting drift (cargo fmt --check)
 #   - Rust lint / compile errors (cargo clippy -- -D warnings, 子集即 cargo check)
@@ -18,10 +19,14 @@ set -e
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
 
-# ── Frontend: pnpm lint 与 pnpm test --run（仅当暂存 .ts/.tsx）──
+# ── Frontend: tsc -b / pnpm lint / pnpm test --run（仅当暂存 .ts/.tsx）──
+# tsc 必须用 -b（或 -p tsconfig.app.json）：根 tsconfig 是 references 空壳，
+# 裸 tsc --noEmit 不检查任何文件，未定义标识符等类型错误会漏网。
 STAGED_FE=$(echo "$STAGED" | grep -E '\.(ts|tsx)$' || true)
 if [ -n "$STAGED_FE" ]; then
   if [ -f frontend/package.json ]; then
+    echo "[pre-commit] tsc -b（类型检查）..."
+    (cd frontend && pnpm exec tsc -b)
     echo "[pre-commit] pnpm lint on $(echo "$STAGED_FE" | wc -l) staged frontend file(s)..."
     (cd frontend && pnpm lint)
     echo "[pre-commit] pnpm test --run（前端，快速反馈）..."

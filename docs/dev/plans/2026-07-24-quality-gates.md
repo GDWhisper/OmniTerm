@@ -116,11 +116,12 @@
 scripts/hooks/pre-commit（升级后）
 
 对暂存文件：
-1. 前端 .ts/.tsx → pnpm lint（已有）
-2. Rust .rs → cargo fmt --check（增量，仅检查不自动格式化）
-3. Rust .rs → cargo clippy（仅对 workspace 做全量 check，因为单文件 clippy 不可行）
-4. 前端 .ts/.tsx → pnpm test --run（仅前端测试，快速反馈）
-5. Rust .rs → cargo check（已有，保留）
+1. 前端 .ts/.tsx → pnpm exec tsc -b（类型检查；2026-07-27 补充：裸 `tsc --noEmit` 因根 tsconfig 是 references 空壳不检查任何文件，曾漏放未定义标识符错误进 dev）
+2. 前端 .ts/.tsx → pnpm lint（已有）
+3. Rust .rs → cargo fmt --check（增量，仅检查不自动格式化）
+4. Rust .rs → cargo clippy（仅对 workspace 做全量 check，因为单文件 clippy 不可行）
+5. 前端 .ts/.tsx → pnpm test --run（仅前端测试，快速反馈）
+6. Rust .rs → cargo check（已有，保留）
 ```
 
 不需要进 pre-commit 的：

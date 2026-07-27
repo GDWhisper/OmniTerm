@@ -13,7 +13,7 @@ import {
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
-function pngFile(bytes: Uint8Array, name = 'a.png'): File {
+function pngFile(bytes: Uint8Array<ArrayBuffer>, name = 'a.png'): File {
   return new File([bytes], name, { type: 'image/png' })
 }
 
