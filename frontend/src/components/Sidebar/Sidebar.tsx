@@ -1488,7 +1488,7 @@ export function Sidebar() {
             className="font-pixel"
             style={{
               fontSize: 13,
-              letterSpacing: 2,
+              letterSpacing: 'var(--pixel-tracking-md)',
               color: connected ? '#7EE787' : '#FF7B72',
             }}
           >

@@ -132,6 +132,12 @@
      body.pixel-font-on flips it (below). */
   --pixel-font-static: 'Silkscreen', 'VT323', 'Press Start 2P', monospace;
   --pixel-font: var(--reader-font);
+  /* ── Pixel display font tracking (single source of truth). Silkscreen 字形
+     本身偏宽，字距统一收紧 0.5px（原 1/2/3px → 0.5/1.5/2.5px）。
+     sm=徽标/小标签，md=按钮/tab/列头，lg=面板标题条。 */
+  --pixel-tracking-sm: 0.5px;
+  --pixel-tracking-md: 1.5px;
+  --pixel-tracking-lg: 2.5px;
 
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
@@ -229,13 +235,13 @@
 
 .font-logo {
   font-family: var(--logo-font);
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
 }
 
 .font-pixel {
   font-family: var(--pixel-font);
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
 }
 
@@ -1217,7 +1223,7 @@ html, body, #root {
 .logo-wordmark {
   font-family: var(--logo-font);
   font-size: 17px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
   color: #FAF2DE;
   line-height: 1.1;
@@ -1227,7 +1233,7 @@ html, body, #root {
   font-family: var(--pixel-font-static);
   font-size: 15px;
   color: var(--gold-light, #FFCB6B);
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   margin-top: 5px;
   line-height: 1;
 }
@@ -1244,7 +1250,7 @@ html, body, #root {
   padding: 6px 12px;
   font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   border-radius: 0;
   cursor: pointer;
@@ -1310,7 +1316,7 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Panel title bar — wood background, pixel font, 3px letter-spacing.
+   Panel title bar — wood background, pixel font, --pixel-tracking-lg spacing.
    Used on top of every panel (sidebar sections, terminal, file manager,
    settings, modal).
    ──────────────────────────────────────────────────────────────────── */
@@ -1320,7 +1326,7 @@ body.parchment-texture {
   color: #FAF2DE;
   font-family: var(--pixel-font-static);
   font-size: 13px;
-  letter-spacing: 3px;
+  letter-spacing: var(--pixel-tracking-lg);
   text-transform: uppercase;
   border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
   display: flex;
@@ -1429,7 +1435,7 @@ body.parchment-texture {
   padding: 9px 8px 9px 10px;
   font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 1.5px;
+  letter-spacing: var(--pixel-tracking-md);
   color: var(--text-muted);
   cursor: pointer;
   text-align: left;
@@ -1473,7 +1479,7 @@ body.parchment-texture {
   justify-content: space-between;
   font-family: var(--pixel-font);
   font-size: 11px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   color: var(--wood-dark, #8B5A2B);
   margin-bottom: 3px;
@@ -1607,7 +1613,7 @@ body.parchment-texture {
   color: #FAF2DE;
   font-family: var(--pixel-font);
   font-size: 16px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   line-height: 1.4;
   box-shadow: 4px 4px 0 var(--pixel-shadow, #8B7755);
   z-index: 10000;
@@ -1680,7 +1686,7 @@ body.parchment-texture {
   color: #7EE787;
   font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   border-radius: 0;
   padding: 8px 14px;
@@ -1731,7 +1737,7 @@ body.parchment-texture {
   color: #FAF2DE;
   font-family: var(--pixel-font);
   font-size: 13px;
-  letter-spacing: 3px;
+  letter-spacing: var(--pixel-tracking-lg);
   text-transform: uppercase;
   border-bottom: 2px solid var(--wood-shadow);
 }
@@ -1759,7 +1765,7 @@ body.parchment-texture {
   margin-left: auto;
   font-family: var(--pixel-font);
   font-size: 13px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   opacity: 0.7;
 }
 
@@ -1791,7 +1797,7 @@ body.parchment-texture {
   margin-bottom: 4px;
   font-family: var(--pixel-font);
   font-size: 12px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-subtle);
@@ -1897,7 +1903,7 @@ select optgroup option {
   padding: 1px 8px;
   font-family: var(--pixel-font-static);
   font-size: 14px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   color: rgba(250, 242, 222, 0.55);
   cursor: pointer;
@@ -2063,7 +2069,7 @@ select optgroup option {
   color: var(--text-muted);
   font-family: var(--pixel-font);
   font-size: 12px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   cursor: pointer;
   transition: all 0.15s ease;
   flex-shrink: 0;
@@ -2106,7 +2112,7 @@ select optgroup option {
   color: var(--text-muted);
   font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 1.5px;
+  letter-spacing: var(--pixel-tracking-md);
   cursor: pointer;
   transition: color 0.1s steps(2);
 }
@@ -2138,7 +2144,7 @@ select optgroup option {
   color: var(--text-faint);
   font-family: var(--pixel-font);
   font-size: 13px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   position: sticky;
   top: 0;
@@ -2254,7 +2260,7 @@ select optgroup option {
   color: var(--accent);
   font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   cursor: pointer;
   transition: all 0.15s ease;
   box-shadow: 2px 2px 0 var(--pixel-shadow);

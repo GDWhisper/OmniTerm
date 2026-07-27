@@ -68,6 +68,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-07-27) `[frontend]` 像素字体字距收归 token 统一管理并整体收紧 0.5px：新增 `--pixel-tracking-sm/md/lg`（0.5/1.5/2.5px，原硬编码 1/2/3px），index.css 18 处像素/logo 字体规则与 2 处 TSX 内联字距全部改引 token，Silkscreen 偏宽字形下观感更紧凑；阅读字体字距不受影响（`frontend/src/index.css`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Settings/Settings.tsx`）
 - (2026-07-27) `[frontend]` ACP 聊天列套用终端同款像素木框（`.terminal-panel-pixel`，2px 木色边框 + 3px 硬阴影）：聊天面板此前为平面 bg-base，与侧栏/右栏无反差导致三列分界不清；现标题条以下内容整体入框，与终端视图分区语言一致（`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-07-27) `[frontend]` UI 立体语言统一：所有浮层（Modal、Settings/Tmux 速查 popup、ConfigToolbar 下拉与 tooltip、聊天 @ 补全、Toast）从软阴影+圆角改为像素硬阴影（新增共享工具类 `.pixel-float` 4px / `.pixel-press` 2px+按压位移，禁止组件内联阴影）；补齐可交互元素硬阴影（Sidebar 加号/adopt 按钮、Git 分支/COMMIT 按钮、ConfirmDialog 改用 PixelButton、聊天发送/排队/取消、权限按钮）；圆角统一压平 0-2px；清理未定义变量 `--accent-glow-sm`/`--success-glow` 引用与残留模糊 glow（`frontend/src/index.css`、`docs/visual-design/ui-style-guide.md` §6.1/§12）
 

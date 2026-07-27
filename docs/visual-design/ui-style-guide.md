@@ -127,6 +127,16 @@ All `.font-pixel` text is `text-transform: uppercase`.
 | `--pixel-font` | 默认 `var(--reader-font)`；`body.pixel-font-on` 下 = `var(--pixel-font-static)` | 全部可切换像素文字走这个 |
 | `--reader-font` | `'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace` | JS 镜像常量 `READER_FONT`（fonts.ts，供 xterm 等需要解析后字符串的消费者） |
 
+### 像素字距 token（letter-spacing）
+
+像素/logo 字体的字距统一走三档 token，**禁止硬编码 px 值**（阅读字体的 0.04em 级微调不在此列）：
+
+| Token | 值 | 用途 |
+|---|---|---|
+| `--pixel-tracking-sm` | 0.5px | 徽标、小标签、logo 字标/版本号 |
+| `--pixel-tracking-md` | 1.5px | 按钮、tab、列头、todo 计数 |
+| `--pixel-tracking-lg` | 2.5px | 面板标题条（`.panel-title-bar`）、TodoBoard 标题 |
+
 ### 禁止硬编码 font-family
 
 **组件/样式中禁止直接写 `font-family` 字面量。** 必须使用以下机制之一：
@@ -189,7 +199,7 @@ HP/XP-style discrete block bar. Replaces continuous progress bars.
 .progress-segmented-segment.filled { background: #5A8F3A; }
 ```
 
-Label: `.progress-segmented-label` — 11px `.font-pixel`, letter-spacing 2px.
+Label: `.progress-segmented-label` — 11px `.font-pixel`, letter-spacing `var(--pixel-tracking-md)`.
 
 ### 3.5 DialogueToast
 
@@ -220,7 +230,7 @@ Includes corner nails (gold 8x8 squares), blinking pink caret `.dialogue-caret`,
   color: #FAF2DE;
   font-family: var(--pixel-font-static);  /* 顶栏豁免：不受像素字体开关影响 */
   font-size: 13px;
-  letter-spacing: 3px;
+  letter-spacing: var(--pixel-tracking-lg);
   text-transform: uppercase;
   border-bottom: 2px solid var(--wood-shadow);
 }
@@ -510,7 +520,7 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 
 | 元素 | 规格 |
 |------|------|
-| Tab 字体 | `.font-pixel` (Silkscreen) 14px，letter-spacing 1.5px，**UPPERCASE** |
+| Tab 字体 | `.font-pixel` (Silkscreen) 14px，letter-spacing `var(--pixel-tracking-md)`，**UPPERCASE** |
 | Tab padding | `9px 8px 9px 10px` |
 | Tab 左边框 | 3px（transparent 预留位，active 时变色） |
 | Inactive tab | `var(--text-muted)` 文字，透明背景 |
