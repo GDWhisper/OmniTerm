@@ -710,13 +710,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           const msgs = s.states[sid]?.messages
           // 手动 restore 必须走完整重放（DB hydrate 的旧快照不完整）。
           suppressReplay.current = !isManualRestore.current && !!(msgs && msgs.length > 0)
-          // 仅当无历史时才显示恢复指示器（已有消息且非手动 restore 说明刚从 DB hydrate，无需重放）
           if (!suppressReplay.current) {
+            // 清空已有消息：重放将完整重建对话，避免 hydrate 残留与重放内容重复。
+            useChatStore.getState().reset(sid)
             useChatStore.getState().setReplaying(sid, true)
           }
           break
         }
-        case 'replay_end':
+        case 'replay_end': {
+          const wasSuppressed = suppressReplay.current
           isReplaying.current = false
           suppressReplay.current = false
           isManualRestore.current = false
@@ -730,12 +732,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
           // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
-          // 仅当重放内容实际进入了 store（!suppressReplay）才同步，否则 DB 已有
+          // 仅当重放内容实际进入了 store（!wasSuppressed）才同步，否则 DB 已有
           // 由 prompt_done → syncToDb 写回的完整数据。
-          if (!suppressReplay.current) {
+          if (!wasSuppressed) {
             syncToDb()
           }
           break
+        }
         case 'permission_request': {
           const req = frame.request ?? {}
           if (frame.id) {

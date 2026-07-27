@@ -347,7 +347,7 @@ const applyActionsToMessages = (
   for (const action of actions) {
     if (action.kind === 'appendText') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant') {
+      if (last && last.role === 'assistant' && last.streaming) {
         const blocks = [...last.blocks]
         const lastBlock = blocks[blocks.length - 1]
         if (lastBlock && lastBlock.type === 'text') {
@@ -368,7 +368,7 @@ const applyActionsToMessages = (
       }
     } else if (action.kind === 'appendThought') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant') {
+      if (last && last.role === 'assistant' && last.streaming) {
         const blocks = [...last.blocks]
         const lastBlock = blocks[blocks.length - 1]
         if (lastBlock && lastBlock.type === 'thought') {
@@ -400,7 +400,7 @@ const applyActionsToMessages = (
         }
       }
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant') {
+      if (last && last.role === 'assistant' && last.streaming) {
         const toBlock = (prev?: ToolCallBlock): ToolCallBlock => ({
           type: 'tool_call',
           toolCallId: action.toolCallId,
@@ -442,7 +442,7 @@ const applyActionsToMessages = (
       }
     } else if (action.kind === 'setPlan') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant') {
+      if (last && last.role === 'assistant' && last.streaming) {
         const blocks = [...last.blocks]
         const idx = blocks.findIndex((b) => b.type === 'plan')
         if (idx >= 0) {
@@ -454,7 +454,7 @@ const applyActionsToMessages = (
       }
     } else if (action.kind === 'setTodos') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant') {
+      if (last && last.role === 'assistant' && last.streaming) {
         const blocks = [...last.blocks]
         const idx = blocks.findIndex((b) => b.type === 'todo')
         if (idx >= 0) {
@@ -783,7 +783,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   hydrate: (sessionId, messages) =>
     set((state) => {
       const current = get(state, sessionId)
-      if (current.messages.length > 0) return state
+      if (current.messages.length > 0 || current.replaying) return state
       // 扫描最后一条消息，提取最后一个 TodoBlock 作为看板数据
       let todos: TodoEntry[] = []
       let todosTitle: string | undefined
