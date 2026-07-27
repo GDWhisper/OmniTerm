@@ -974,7 +974,7 @@ export function Sidebar() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content">
         {/* Duplicate projects banner — surfaces legacy data that should
             be consolidated. Click to open the merge dialog. */}
         {duplicates.length > 0 && !duplicatesDismissed && (
@@ -1617,7 +1617,7 @@ export function Sidebar() {
               </button>
             </div>
             <div
-              className="overflow-y-auto"
+              className="overflow-y-auto overlay-scroll-content"
               style={{
                 height: 200,
                 background: 'var(--bg-base)',
@@ -1936,7 +1936,7 @@ export function Sidebar() {
                 </button>
               </div>
               <div
-                className="overflow-y-auto"
+                className="overflow-y-auto overlay-scroll-content"
                 style={{
                   height: 200,
                   background: 'var(--bg-base)',
