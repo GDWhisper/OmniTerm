@@ -177,6 +177,8 @@
   "fm.confirmDelete": "Delete {{count}} item(s)?",
   "fm.deleted": "Deleted {{count}} item(s)",
   "fm.deleteFailed": "Delete failed",
+  "fm.moveSuccess": "Moved {{count}} item(s)",
+  "fm.moveFailed": "Move failed",
   "fm.searchFailed": "Search failed",
   "fm.selectSessionFirst": "Please select a terminal session from the sidebar",
   "fm.loading": "Loading...",
@@ -367,5 +369,14 @@
   "auth.wrongPassword": "Wrong password",
   "auth.loggedIn": "LOGGED IN",
   "auth.logout": "LOGOUT",
+  "auth.changePassword": "CHANGE PASSWORD",
+  "auth.currentPassword": "Current password",
+  "auth.newPassword": "New password",
+  "auth.confirmNewPassword": "Confirm new password",
+  "auth.fillAllFields": "Please fill in all fields",
+  "auth.passwordMismatch": "Passwords do not match",
+  "auth.passwordTooShort": "Password must be at least 4 characters",
+  "auth.passwordChanged": "Password changed successfully",
+  "auth.changePasswordFailed": "Failed to change password",
   "settings.category.auth": "AUTH"
 }

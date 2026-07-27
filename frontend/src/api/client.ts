@@ -1,4 +1,5 @@
 import { useToastStore } from '../stores/toastStore'
+import { useAppStore } from '../stores/appStore'
 
 const BASE = '/api/v1'
 
@@ -19,6 +20,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, opts?: RequestInit & { silent?: boolean }): Promise<T> {
+  const authVersion = useAppStore.getState().authVersion
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers: {
@@ -29,6 +31,12 @@ async function request<T>(path: string, opts?: RequestInit & { silent?: boolean 
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
+    if (res.status === 401) {
+      const state = useAppStore.getState()
+      if (state.authState === 'authenticated' && state.authVersion === authVersion) {
+        useAppStore.getState().setAuthState('unauthenticated')
+      }
+    }
     const msg = body.error || `HTTP ${res.status}`
     if (!opts?.silent) {
       useToastStore.getState().addToast('error', msg)
@@ -183,7 +191,9 @@ export const api = {
   login: (password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean }>('/auth/check'),
+  check: () => request<{ authenticated: boolean; needs_setup?: boolean }>('/auth/check'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),
@@ -427,6 +437,16 @@ export const api = {
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
     return request('/files/rename', { method: 'POST', body: JSON.stringify(body) })
+  },
+  moveFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; paths: string[]; destination: string }) => {
+    const body: { paths: string[]; destination: string; session?: string; workspace_id?: string; workspace?: string } = {
+      paths: params.paths,
+      destination: params.destination,
+    }
+    if (params.session) body.session = params.session
+    if (params.workspaceId) body.workspace_id = params.workspaceId
+    if (params.projectId) body.workspace = params.projectId
+    return request('/files/move', { method: 'POST', body: JSON.stringify(body) })
   },
   searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
     let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`

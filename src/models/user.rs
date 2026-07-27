@@ -17,3 +17,9 @@ pub struct SetupRequest {
 pub struct LoginRequest {
     pub password: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
