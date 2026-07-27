@@ -135,7 +135,7 @@ All `.font-pixel` text is `text-transform: uppercase`.
 |---|---|---|
 | `--pixel-tracking-sm` | 0.5px | 徽标、小标签、logo 字标/版本号 |
 | `--pixel-tracking-md` | 1.5px | 按钮、tab、列头、todo 计数 |
-| `--pixel-tracking-lg` | 2.5px | 面板标题条（`.panel-title-bar`）、TodoBoard 标题 |
+| `--pixel-tracking-lg` | 2px | 面板标题条（`.panel-title-bar`）、TodoBoard 标题 |
 
 ### 禁止硬编码 font-family
 

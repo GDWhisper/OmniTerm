@@ -133,11 +133,11 @@
   --pixel-font-static: 'Silkscreen', 'VT323', 'Press Start 2P', monospace;
   --pixel-font: var(--reader-font);
   /* ── Pixel display font tracking (single source of truth). Silkscreen 字形
-     本身偏宽，字距统一收紧 0.5px（原 1/2/3px → 0.5/1.5/2.5px）。
+     本身偏宽，字距整体收紧（原 1/2/3px → 0.5/1.5/2px）。
      sm=徽标/小标签，md=按钮/tab/列头，lg=面板标题条。 */
   --pixel-tracking-sm: 0.5px;
   --pixel-tracking-md: 1.5px;
-  --pixel-tracking-lg: 2.5px;
+  --pixel-tracking-lg: 2px;
 
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
@@ -1674,6 +1674,28 @@ body.parchment-texture {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: replay-spin 0.7s linear infinite;
+}
+
+/* 消息级 hover 操作（编辑 / 重新生成）：默认隐藏，悬停消息行时淡入 */
+.chat-msg-row .chat-msg-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.chat-msg-row:hover .chat-msg-actions,
+.chat-msg-row:focus-within .chat-msg-actions {
+  opacity: 1;
+}
+.chat-msg-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 0.846em;
+  padding: 1px 4px;
+  font-family: var(--reader-font, monospace);
+}
+.chat-msg-action-btn:hover {
+  color: var(--text-secondary);
 }
 
 /* ────────────────────────────────────────────────────────────────────
