@@ -187,11 +187,15 @@ export function Sidebar() {
   // const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
   // const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Load projects
+  // Load projects. `projectsLoaded` distinguishes "fetched but empty" from
+  // "not yet fetched" so the restore effects below can clean up stale saved
+  // IDs even when the server has zero projects (e.g. after a DB reset).
+  const [projectsLoaded, setProjectsLoaded] = useState(false)
   const loadProjects = useCallback(async () => {
     try {
       const p = await api.listProjects()
       setProjects(p)
+      setProjectsLoaded(true)
     } catch {
       // api client already shows error toast
     }
@@ -257,27 +261,36 @@ export function Sidebar() {
   const restoredSessionRef = useRef(false)
 
   // After projects load, expand the saved project and load its data.
+  // A saved ID no longer on the server (deleted project / DB reset) is
+  // cleared together with its dependent workspace/session so consumers
+  // (FileManager, chat) stop requesting nonexistent resources (404s).
   useEffect(() => {
-    if (restoredProjectRef.current || projects.length === 0) return
+    if (restoredProjectRef.current || !projectsLoaded) return
     const savedProjectId = localStorage.getItem('omniterm_active_project')
-    if (savedProjectId && projects.some(p => p.id === savedProjectId)) {
-      setExpandedProjects(prev => {
-        const next = new Set(prev)
-        next.add(savedProjectId)
-        return next
-      })
-      setActiveProject(savedProjectId)
-      loadWorktrees(savedProjectId)
-      // loadSessions fires via its own useEffect when activeProjectId changes
+    if (savedProjectId) {
+      if (projects.some(p => p.id === savedProjectId)) {
+        setExpandedProjects(prev => {
+          const next = new Set(prev)
+          next.add(savedProjectId)
+          return next
+        })
+        setActiveProject(savedProjectId)
+        loadWorktrees(savedProjectId)
+        // loadSessions fires via its own useEffect when activeProjectId changes
+      } else {
+        setActiveProject(null)
+        setActiveWorkspace(null)
+        setActiveSession(null)
+      }
     }
     restoredProjectRef.current = true
-  }, [projects, setActiveProject, loadWorktrees])
+  }, [projectsLoaded, projects, setActiveProject, setActiveWorkspace, setActiveSession, loadWorktrees])
 
   // After worktrees load, restore the active workspace (or clean up stale saved ID).
   useEffect(() => {
     if (!activeProjectId) return
     const wtList = worktrees[activeProjectId]
-    if (!wtList || wtList.length === 0) return
+    if (!wtList) return // not yet fetched for this project
     const savedWorkspaceId = localStorage.getItem('omniterm_active_workspace')
     if (!savedWorkspaceId) {
       restoredWorkspaceRef.current = true
@@ -287,28 +300,26 @@ export function Sidebar() {
     if (wtList.some(w => w.id === savedWorkspaceId)) {
       if (activeWorkspaceId !== savedWorkspaceId) setActiveWorkspace(savedWorkspaceId)
     } else {
-      localStorage.removeItem('omniterm_active_workspace')
+      setActiveWorkspace(null)
     }
     restoredWorkspaceRef.current = true
   }, [worktrees, activeProjectId, activeWorkspaceId, setActiveWorkspace])
 
   // After sessions load, restore the active session (or clean up stale saved ID).
   useEffect(() => {
-    const allSessions = Object.values(sessions).flat()
-    if (allSessions.length === 0) return
+    if (restoredSessionRef.current || !activeProjectId) return
+    if (!sessions[activeProjectId]) return // not yet fetched for this project
     const savedSessionId = localStorage.getItem('omniterm_active_session')
-    if (!savedSessionId) {
-      restoredSessionRef.current = true
-      return
-    }
-    if (restoredSessionRef.current) return
-    if (allSessions.some(s => s.id === savedSessionId)) {
-      if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
-    } else {
-      localStorage.removeItem('omniterm_active_session')
+    if (savedSessionId) {
+      const allSessions = Object.values(sessions).flat()
+      if (allSessions.some(s => s.id === savedSessionId)) {
+        if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
+      } else {
+        setActiveSession(null)
+      }
     }
     restoredSessionRef.current = true
-  }, [sessions, activeSessionId, setActiveSession])
+  }, [sessions, activeProjectId, activeSessionId, setActiveSession])
 
   // Fetch directory entries for the new-project modal's browse list.
   const fetchDirs = useCallback(async (path: string) => {

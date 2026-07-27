@@ -81,6 +81,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-27) `[frontend]` 修复服务端数据重置/删除后，localStorage 里的旧 project/workspace/session ID 永不清理导致文件列表等请求持续 404：Sidebar 的恢复逻辑此前以「列表非空」为触发条件，服务端列表为空时（如 DB 重建）早退跳过清理；现以「已完成拉取」判定（projects 加载标记 / worktrees・sessions 按 project 键判空），旧 ID 未命中即连带清空下游 workspace/session（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-26) `[backend]` 修复终端内 agent TUI（如 opencode）按 ESC 无法中止任务：tmux 默认 `escape-time` 500ms 使孤立 ESC 延迟 500ms 转发、快速连按两次 ESC 被合并为 Alt+ESC 单次事件；现 spawn tmux client 时链式 `set-option -s escape-time 10`（`src/ws/terminal.rs`）
 - (2026-07-26) `[frontend]` 修复终端 idle 断开后重连按钮偶发无反应需刷新页面：被替换 socket 的晚到 close/error 事件会把健康新连接盖回「已断开」（现以 `wsRef.current === ws` 守卫并解绑旧 socket `onerror`）；addon 动态 import 失败被模块级缓存导致重连永久失败（现失败后重建 promise 可重试）；`createTerminal` 异常静默吞掉（现 toast 提示并保留覆盖层可重试）；重连按钮传入实时容器兜底 hook 内 `containerRef` 为 null 的场景（`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-07-25) `[frontend]` 修复界面缩放非 100% 时终端鼠标选取文字位置偏移：xterm.js 坐标换算不感知 CSS `zoom`，现给终端挂载容器施加反向 zoom 使 xterm 子树有效缩放归一，字号乘以缩放系数保持视觉尺寸不变（`frontend/src/components/Terminal/Terminal.tsx`）
