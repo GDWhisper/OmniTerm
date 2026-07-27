@@ -67,6 +67,8 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-07-27) `[frontend]` UI 立体语言统一：所有浮层（Modal、Settings/Tmux 速查 popup、ConfigToolbar 下拉与 tooltip、聊天 @ 补全、Toast）从软阴影+圆角改为像素硬阴影（新增共享工具类 `.pixel-float` 4px / `.pixel-press` 2px+按压位移，禁止组件内联阴影）；补齐可交互元素硬阴影（Sidebar 加号/adopt 按钮、Git 分支/COMMIT 按钮、ConfirmDialog 改用 PixelButton、聊天发送/排队/取消、权限按钮）；圆角统一压平 0-2px；清理未定义变量 `--accent-glow-sm`/`--success-glow` 引用与残留模糊 glow（`frontend/src/index.css`、`docs/visual-design/ui-style-guide.md` §6.1/§12）
+
 - (2026-07-26) `[frontend]` 像素显示字体从 VT323 换为 Silkscreen（几何方块风、自托管 woff2，VT323 保留为回退）：VT323 过于窄长，Silkscreen 专为小字号 UI 标签设计，字形更宽、字高统一；仅改 `--pixel-font` / `PIXEL_FONT` 单一真相源即全站生效（`frontend/src/index.css`、`frontend/src/utils/fonts.ts`、`docs/visual-design/ui-style-guide.md` §2）
 - (2026-07-24) `[frontend]` 启用 TypeScript `strict: true`（`tsconfig.app.json`/`tsconfig.node.json`）；评估下零错直接落地，`tsc -b`/`lint`/`test` 通过
 

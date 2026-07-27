@@ -355,6 +355,19 @@ Rules:
 - Non-interactive panels do not need shadows
 - Shadow color: `#8B7755` (light) / `#090A0D` (dark)
 
+### 6.1 共享工具类（禁止组件内联阴影）
+
+所有浮层与内联样式按钮**必须复用 `index.css` 的工具类**，禁止在 TSX 里各写一份
+`boxShadow`（无论软硬）：
+
+| Class | 适用对象 | 规格 |
+|---|---|---|
+| `.pixel-float` | 所有浮层：modal、popup、dropdown、tooltip、自动补全 | `2px solid var(--border-strong)` 边框 + `4px 4px 0` 硬阴影 + radius 0（modal 外壳可覆盖至 2px） |
+| `.pixel-press` | 不走 `.btn-pixel` 体系、自带边框/配色的内联样式按钮 | `2px 2px 0` 硬阴影 + `:active` 位移按压 + disabled 无阴影 + radius 0 |
+
+例外：`0 0 0 2px var(--accent-14)` 形式的 **focus ring**（spread、无 blur）允许保留，
+它不是阴影而是可访问性焦点指示。
+
 ---
 
 ## 7. Game UI Elements
@@ -491,7 +504,7 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | `maxHeight` 安全上限 | `useAnchorPopup` 算出 logo 底→按钮顶距离 | 同桌面 |
 | Tab 列宽 | 92px（固定） | 隐去 tab，全宽 |
 | 内容区 padding | 12px 14px | 12px 16px |
-| Border radius | 10px | 16px |
+| Border radius | 2px（挂 `.pixel-float`，见 §6.1） | 2px |
 
 ### Tab 菜单视觉
 
