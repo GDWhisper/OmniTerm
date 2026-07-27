@@ -6,5 +6,5 @@ pub mod reaper;
 pub mod supervisor;
 pub mod terminal;
 
-pub use client::AcpClient;
+pub use client::{AcpClient, ImageInput};
 pub use supervisor::AcpSupervisor;

@@ -4,14 +4,16 @@ use std::time::Instant;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, InitializeRequest,
-    KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest, PromptResponse,
-    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionRequest,
-    SessionConfigId, SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
-    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
+    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, ImageContent,
+    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent, WaitForTerminalExitRequest, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
+use serde::Deserialize;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
@@ -19,6 +21,14 @@ use crate::acp::handler;
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
 use crate::models::agent::Agent;
+
+/// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
+#[derive(Debug, Deserialize)]
+pub struct ImageInput {
+    /// Base64 编码的图片数据（不含 data URI 前缀）。
+    pub data: String,
+    pub mime_type: String,
+}
 
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
 ///
@@ -53,6 +63,9 @@ pub struct AcpClient {
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
+    /// initialize 时 agent 通过 `promptCapabilities.image` 声明是否接受图片
+    /// content block（§8 多实现兼容：未声明的 agent 不硬塞图片）。
+    supports_image: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
@@ -206,414 +219,6 @@ impl AcpClient {
             ConnectionTo<AcpAgentRole>,
             SessionId,
             bool,
-            Vec<SessionConfigOption>,
-        )>();
-
-        let notif_tx = session_update_tx.clone();
-        let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
-        let tm = terminal_manager.clone();
-        let permission_manager = Arc::new(PermissionManager::new());
-        let pm = permission_manager.clone();
-        let activity = Arc::new(Mutex::new(ActivityState::new()));
-        let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
-
-        let builder = agent_client_protocol::Client
-            .builder()
-            .name("omniterm")
-            .on_receive_notification(
-                {
-                    let tx = notif_tx.clone();
-                    let activity = activity.clone();
-                    let commands_notif = commands_notif.clone();
-                    async move |notification: SessionNotification, _cx| {
-                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
-                        if let Ok(mut st) = activity.lock() {
-                            st.last_activity = Instant::now();
-                        }
-                        if matches!(
-                            notification.update,
-                            SessionUpdate::AvailableCommandsUpdate(_)
-                        )
-                            && let Ok(mut guard) = commands_notif.lock() {
-                                *guard = Some(notification.clone());
-                            }
-                        handler::handle_session_update(&tx, notification)
-                    }
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_request(
-                {
-                    let pm = pm.clone();
-                    async move |request: RequestPermissionRequest, responder, _cx| {
-                        pm.handle_request(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let read_cwd = cwd.clone();
-                    async move |request: ReadTextFileRequest, responder, _cx| {
-                        let path = match resolve_fs_path(&read_cwd, &request.path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                let _ = responder.respond_with_internal_error(e);
-                                return Ok(());
-                            }
-                        };
-                        match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => {
-                                let _ = responder.respond(ReadTextFileResponse::new(content));
-                            }
-                            Err(e) => {
-                                let _ = responder
-                                    .respond_with_internal_error(format!("read failed: {}", e));
-                            }
-                        }
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let write_cwd = cwd.clone();
-                    async move |request: WriteTextFileRequest, responder, _cx| {
-                        let path = match resolve_fs_path(&write_cwd, &request.path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                let _ = responder.respond_with_internal_error(e);
-                                return Ok(());
-                            }
-                        };
-                        if let Some(parent) = path.parent() {
-                            let _ = tokio::fs::create_dir_all(parent).await;
-                        }
-                        match tokio::fs::write(&path, &request.content).await {
-                            Ok(()) => {
-                                let _ = responder.respond(WriteTextFileResponse::new());
-                            }
-                            Err(e) => {
-                                let _ = responder
-                                    .respond_with_internal_error(format!("write failed: {}", e));
-                            }
-                        }
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: CreateTerminalRequest, responder, _cx| {
-                        tm.handle_create(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: agent_client_protocol::schema::v1::TerminalOutputRequest, responder, _cx| {
-                        tm.handle_output(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: KillTerminalRequest, responder, _cx| {
-                        tm.handle_kill(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: ReleaseTerminalRequest, responder, _cx| {
-                        tm.handle_release(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: WaitForTerminalExitRequest, responder, _cx| {
-                        tm.handle_wait_for_exit(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            );
-
-        let connection_task = tokio::spawn(async move {
-            builder
-                .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
-                    let init_resp = cx
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                        .block_task()
-                        .await?;
-                    let supports_load = init_resp.agent_capabilities.load_session;
-
-                    let session_resp =
-                        cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
-
-                    let config_options = session_resp.config_options.clone().unwrap_or_default();
-
-                    let session_id = session_resp.session_id;
-                    let _ = conn_tx.send((cx.clone(), session_id, supports_load, config_options));
-
-                    let _ = shutdown_rx.await;
-                    Ok(())
-                })
-                .await
-        });
-
-        spawn_crash_watcher(connection_task, crash_tx.clone());
-
-        let (connection, session_id, supports_load_session, initial_config_options) =
-            conn_rx.await.map_err(|_| AcpError::internal_error())?;
-
-        Ok(AcpClient {
-            connection,
-            session_id,
-            session_update_tx,
-            _shutdown_tx: shutdown_tx,
-            crash_tx,
-            terminal_event_tx,
-            terminal_manager,
-            permission_manager,
-            supports_load_session,
-            initial_config_options: Arc::new(Mutex::new(initial_config_options)),
-            available_commands_notif: commands_notif,
-            activity,
-        })
-    }
-
-    pub fn session_update_subscribe(&self) -> broadcast::Receiver<SessionNotification> {
-        self.session_update_tx.subscribe()
-    }
-
-    /// 订阅 agent 进程崩溃错误（仅在连接任务非正常退出时收到）。
-    pub fn crash_subscribe(&self) -> broadcast::Receiver<String> {
-        self.crash_tx.subscribe()
-    }
-
-    /// 订阅 agent 终端命令生命周期事件（创建/退出）。
-    pub fn terminal_event_subscribe(&self) -> broadcast::Receiver<TerminalActivity> {
-        self.terminal_event_tx.subscribe()
-    }
-
-    pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
-        self.permission_manager.subscribe()
-    }
-
-    pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
-        self.permission_manager.resolve(id, option_id).await
-    }
-
-    pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
-        let config_id: Arc<str> = config_id.into();
-        let value: Arc<str> = value.into();
-
-        let is_boolean = self
-            .initial_config_options
-            .lock()
-            .ok()
-            .map(|opts| {
-                opts.iter()
-                    .any(|o| o.id.0 == config_id && matches!(o.kind, SessionConfigKind::Boolean(_)))
-            })
-            .unwrap_or(false);
-
-        let option_value = if is_boolean {
-            SessionConfigOptionValue::boolean(value.as_ref() == "true")
-        } else {
-            SessionConfigOptionValue::from(value.as_ref())
-        };
-
-        let resp = self
-            .connection
-            .send_request(SetSessionConfigOptionRequest::new(
-                self.session_id.clone(),
-                SessionConfigId::new(config_id),
-                option_value,
-            ))
-            .block_task()
-            .await?;
-
-        // Agents return the updated option set in the response; not all of
-        // them also push a ConfigOptionUpdate notification (codebuddy does,
-        // ccb/opencode don't), so synthesize one to keep the UI in sync.
-        if !resp.config_options.is_empty() {
-            if let Ok(mut guard) = self.initial_config_options.lock() {
-                *guard = resp.config_options.clone();
-            }
-            let notification = SessionNotification::new(
-                self.session_id.clone(),
-                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(resp.config_options)),
-            );
-            let _ = self.session_update_tx.send(notification);
-        }
-        Ok(())
-    }
-
-    pub fn session_id(&self) -> &SessionId {
-        &self.session_id
-    }
-
-    pub async fn send_prompt(&self, text: &str) -> Result<PromptResponse, AcpError> {
-        self.connection
-            .send_request(PromptRequest::new(
-                self.session_id.clone(),
-                vec![ContentBlock::Text(TextContent::new(text))],
-            ))
-            .block_task()
-            .await
-    }
-
-    pub fn cancel(&self) -> Result<(), AcpError> {
-        self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
-        let tm = self.terminal_manager.clone();
-        tokio::spawn(async move { tm.kill_all().await });
-        Ok(())
-    }
-
-    pub fn supports_load_session(&self) -> bool {
-        self.supports_load_session
-    }
-
-    // ---- 活跃度跟踪（供空闲回收看护任务 reaper 使用）----
-
-    /// 收到任意 agent 通知时刷新最后活动时间。
-    pub fn mark_activity(&self) {
-        if let Ok(mut st) = self.activity.lock() {
-            st.last_activity = Instant::now();
-        }
-    }
-
-    /// 标记有进行中的 prompt（由 WS handler 在收到用户 prompt 时调用）。
-    pub fn mark_prompt_active(&self) {
-        if let Ok(mut st) = self.activity.lock() {
-            st.active_prompt = true;
-            st.last_activity = Instant::now();
-        }
-    }
-
-    /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
-    pub fn mark_prompt_idle(&self) {
-        if let Ok(mut st) = self.activity.lock() {
-            st.active_prompt = false;
-        }
-    }
-
-    /// 当前未决权限请求数（requires_action 语义）。
-    pub async fn pending_permissions(&self) -> usize {
-        self.permission_manager.pending_count().await
-    }
-
-    /// 是否静默待命超时：无进行中 prompt、无未决权限、且距最后活动已满 idle_secs。
-    pub async fn is_idle_stale(&self, idle_secs: u64) -> bool {
-        let (active_prompt, last_activity) = {
-            let st = self.activity.lock().unwrap();
-            (st.active_prompt, st.last_activity)
-        };
-        let pending = self.permission_manager.pending_count().await;
-        !active_prompt && pending == 0 && last_activity.elapsed().as_secs() >= idle_secs
-    }
-
-    /// 是否权限请求超时无响应：有未决权限但久无活动（agent 等用户却无人应答）。
-    pub async fn is_permission_stale(&self, perm_secs: u64) -> bool {
-        let last_activity = {
-            let st = self.activity.lock().unwrap();
-            st.last_activity
-        };
-        let pending = self.permission_manager.pending_count().await;
-        pending > 0 && last_activity.elapsed().as_secs() >= perm_secs
-    }
-
-    pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
-        let resp = self
-            .connection
-            .send_request(LoadSessionRequest::new(SessionId::new(acp_session_id), cwd))
-            .block_task()
-            .await?;
-
-        // 优先用 load 响应里的 config；opencode 等 agent 不在 session/load 响应里
-        // 返回 config_options，回退到创建会话时缓存的 initial_config_options（与
-        // set_config_option 的兜底逻辑一致），保证恢复后配置栏仍有数据可显示。
-        let opts: Option<Vec<SessionConfigOption>> =
-            resp.config_options.filter(|o| !o.is_empty()).or_else(|| {
-                self.initial_config_options.lock().ok().map(|g| g.clone()).filter(|g| !g.is_empty())
-            });
-        if let Some(opts) = opts {
-            if let Ok(mut guard) = self.initial_config_options.lock() {
-                *guard = opts.clone();
-            }
-            let notification = SessionNotification::new(
-                self.session_id.clone(),
-                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
-            );
-            let _ = self.session_update_tx.send(notification);
-        }
-        Ok(())
-    }
-
-    /// Builds a `ConfigOptionUpdate` notification from the config options the
-    /// agent returned at session creation, if any. Sent to the WS on connect so
-    /// the toolbar has data before the first prompt turn.
-    pub fn initial_config_notification(&self) -> Option<SessionNotification> {
-        let opts = self.initial_config_options.lock().ok()?.clone();
-        if opts.is_empty() {
-            return None;
-        }
-        Some(SessionNotification::new(
-            self.session_id.clone(),
-            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
-        ))
-    }
-
-    /// Returns the cached `AvailableCommandsUpdate` notification, if the agent
-    /// already pushed one. Sent to the WS on connect so the slash-command
-    /// autocomplete has data even though the notification predates the WS.
-    pub fn initial_commands_notification(&self) -> Option<SessionNotification> {
-        self.available_commands_notif.lock().ok()?.clone()
-    }
-
-    pub async fn spawn_and_load(
-        agent: Agent,
-        cwd: PathBuf,
-        acp_session_id: String,
-    ) -> Result<Self, AcpError> {
-        let mut all_args: Vec<String> = Vec::new();
-        for env_var in &agent.env {
-            all_args.push(format!("{}={}", env_var.key, env_var.value));
-        }
-        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
-        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
-        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
-        #[cfg(unix)]
-        let (cmd, args) =
-            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
-        #[cfg(not(unix))]
-        let (cmd, args) = (agent.command.clone(), agent.args.clone());
-
-        all_args.push(cmd);
-        all_args.extend(args);
-
-        let transport = AcpAgent::from_args(all_args)?;
-
-        let (session_update_tx, _) = broadcast::channel(256);
-        let (crash_tx, _) = broadcast::channel::<String>(16);
-        let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let (conn_tx, conn_rx) = oneshot::channel::<(
-            ConnectionTo<AcpAgentRole>,
-            SessionId,
             bool,
             Vec<SessionConfigOption>,
         )>();
@@ -767,9 +372,21 @@ impl AcpClient {
                         .block_task()
                         .await?;
                     let supports_load = init_resp.agent_capabilities.load_session;
+                    let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
 
-                    let session_id = SessionId::new(acp_session_id.as_str());
-                    let _ = conn_tx.send((cx.clone(), session_id, supports_load, Vec::new()));
+                    let session_resp =
+                        cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
+
+                    let config_options = session_resp.config_options.clone().unwrap_or_default();
+
+                    let session_id = session_resp.session_id;
+                    let _ = conn_tx.send((
+                        cx.clone(),
+                        session_id,
+                        supports_load,
+                        supports_image,
+                        config_options,
+                    ));
 
                     let _ = shutdown_rx.await;
                     Ok(())
@@ -779,7 +396,7 @@ impl AcpClient {
 
         spawn_crash_watcher(connection_task, crash_tx.clone());
 
-        let (connection, session_id, supports_load_session, initial_config_options) =
+        let (connection, session_id, supports_load_session, supports_image, initial_config_options) =
             conn_rx.await.map_err(|_| AcpError::internal_error())?;
 
         Ok(AcpClient {
@@ -792,6 +409,433 @@ impl AcpClient {
             terminal_manager,
             permission_manager,
             supports_load_session,
+            supports_image,
+            initial_config_options: Arc::new(Mutex::new(initial_config_options)),
+            available_commands_notif: commands_notif,
+            activity,
+        })
+    }
+
+    pub fn session_update_subscribe(&self) -> broadcast::Receiver<SessionNotification> {
+        self.session_update_tx.subscribe()
+    }
+
+    /// 订阅 agent 进程崩溃错误（仅在连接任务非正常退出时收到）。
+    pub fn crash_subscribe(&self) -> broadcast::Receiver<String> {
+        self.crash_tx.subscribe()
+    }
+
+    /// 订阅 agent 终端命令生命周期事件（创建/退出）。
+    pub fn terminal_event_subscribe(&self) -> broadcast::Receiver<TerminalActivity> {
+        self.terminal_event_tx.subscribe()
+    }
+
+    pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
+        self.permission_manager.subscribe()
+    }
+
+    pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
+        self.permission_manager.resolve(id, option_id).await
+    }
+
+    pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
+        let config_id: Arc<str> = config_id.into();
+        let value: Arc<str> = value.into();
+
+        let is_boolean = self
+            .initial_config_options
+            .lock()
+            .ok()
+            .map(|opts| {
+                opts.iter()
+                    .any(|o| o.id.0 == config_id && matches!(o.kind, SessionConfigKind::Boolean(_)))
+            })
+            .unwrap_or(false);
+
+        let option_value = if is_boolean {
+            SessionConfigOptionValue::boolean(value.as_ref() == "true")
+        } else {
+            SessionConfigOptionValue::from(value.as_ref())
+        };
+
+        let resp = self
+            .connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                self.session_id.clone(),
+                SessionConfigId::new(config_id),
+                option_value,
+            ))
+            .block_task()
+            .await?;
+
+        // Agents return the updated option set in the response; not all of
+        // them also push a ConfigOptionUpdate notification (codebuddy does,
+        // ccb/opencode don't), so synthesize one to keep the UI in sync.
+        if !resp.config_options.is_empty() {
+            if let Ok(mut guard) = self.initial_config_options.lock() {
+                *guard = resp.config_options.clone();
+            }
+            let notification = SessionNotification::new(
+                self.session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(resp.config_options)),
+            );
+            let _ = self.session_update_tx.send(notification);
+        }
+        Ok(())
+    }
+
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub async fn send_prompt(
+        &self,
+        text: &str,
+        images: Vec<ImageInput>,
+    ) -> Result<PromptResponse, AcpError> {
+        // 纯图片消息不塞空 text block（部分实现可能拒绝空文本，§8 保守处理）。
+        let mut blocks = Vec::new();
+        if !text.is_empty() || images.is_empty() {
+            blocks.push(ContentBlock::Text(TextContent::new(text)));
+        }
+        for img in images {
+            blocks.push(ContentBlock::Image(ImageContent::new(img.data, img.mime_type)));
+        }
+        self.connection
+            .send_request(PromptRequest::new(self.session_id.clone(), blocks))
+            .block_task()
+            .await
+    }
+
+    pub fn cancel(&self) -> Result<(), AcpError> {
+        self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
+        let tm = self.terminal_manager.clone();
+        tokio::spawn(async move { tm.kill_all().await });
+        Ok(())
+    }
+
+    pub fn supports_load_session(&self) -> bool {
+        self.supports_load_session
+    }
+
+    pub fn supports_image(&self) -> bool {
+        self.supports_image
+    }
+
+    // ---- 活跃度跟踪（供空闲回收看护任务 reaper 使用）----
+
+    /// 收到任意 agent 通知时刷新最后活动时间。
+    pub fn mark_activity(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.last_activity = Instant::now();
+        }
+    }
+
+    /// 标记有进行中的 prompt（由 WS handler 在收到用户 prompt 时调用）。
+    pub fn mark_prompt_active(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.active_prompt = true;
+            st.last_activity = Instant::now();
+        }
+    }
+
+    /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
+    pub fn mark_prompt_idle(&self) {
+        if let Ok(mut st) = self.activity.lock() {
+            st.active_prompt = false;
+        }
+    }
+
+    /// 当前未决权限请求数（requires_action 语义）。
+    pub async fn pending_permissions(&self) -> usize {
+        self.permission_manager.pending_count().await
+    }
+
+    /// 是否静默待命超时：无进行中 prompt、无未决权限、且距最后活动已满 idle_secs。
+    pub async fn is_idle_stale(&self, idle_secs: u64) -> bool {
+        let (active_prompt, last_activity) = {
+            let st = self.activity.lock().unwrap();
+            (st.active_prompt, st.last_activity)
+        };
+        let pending = self.permission_manager.pending_count().await;
+        !active_prompt && pending == 0 && last_activity.elapsed().as_secs() >= idle_secs
+    }
+
+    /// 是否权限请求超时无响应：有未决权限但久无活动（agent 等用户却无人应答）。
+    pub async fn is_permission_stale(&self, perm_secs: u64) -> bool {
+        let last_activity = {
+            let st = self.activity.lock().unwrap();
+            st.last_activity
+        };
+        let pending = self.permission_manager.pending_count().await;
+        pending > 0 && last_activity.elapsed().as_secs() >= perm_secs
+    }
+
+    pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
+        let resp = self
+            .connection
+            .send_request(LoadSessionRequest::new(SessionId::new(acp_session_id), cwd))
+            .block_task()
+            .await?;
+
+        // 优先用 load 响应里的 config；opencode 等 agent 不在 session/load 响应里
+        // 返回 config_options，回退到创建会话时缓存的 initial_config_options（与
+        // set_config_option 的兜底逻辑一致），保证恢复后配置栏仍有数据可显示。
+        let opts: Option<Vec<SessionConfigOption>> =
+            resp.config_options.filter(|o| !o.is_empty()).or_else(|| {
+                self.initial_config_options.lock().ok().map(|g| g.clone()).filter(|g| !g.is_empty())
+            });
+        if let Some(opts) = opts {
+            if let Ok(mut guard) = self.initial_config_options.lock() {
+                *guard = opts.clone();
+            }
+            let notification = SessionNotification::new(
+                self.session_id.clone(),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
+            );
+            let _ = self.session_update_tx.send(notification);
+        }
+        Ok(())
+    }
+
+    /// Builds a `ConfigOptionUpdate` notification from the config options the
+    /// agent returned at session creation, if any. Sent to the WS on connect so
+    /// the toolbar has data before the first prompt turn.
+    pub fn initial_config_notification(&self) -> Option<SessionNotification> {
+        let opts = self.initial_config_options.lock().ok()?.clone();
+        if opts.is_empty() {
+            return None;
+        }
+        Some(SessionNotification::new(
+            self.session_id.clone(),
+            SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
+        ))
+    }
+
+    /// Returns the cached `AvailableCommandsUpdate` notification, if the agent
+    /// already pushed one. Sent to the WS on connect so the slash-command
+    /// autocomplete has data even though the notification predates the WS.
+    pub fn initial_commands_notification(&self) -> Option<SessionNotification> {
+        self.available_commands_notif.lock().ok()?.clone()
+    }
+
+    pub async fn spawn_and_load(
+        agent: Agent,
+        cwd: PathBuf,
+        acp_session_id: String,
+    ) -> Result<Self, AcpError> {
+        let mut all_args: Vec<String> = Vec::new();
+        for env_var in &agent.env {
+            all_args.push(format!("{}={}", env_var.key, env_var.value));
+        }
+        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
+        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
+        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
+        #[cfg(unix)]
+        let (cmd, args) =
+            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
+        #[cfg(not(unix))]
+        let (cmd, args) = (agent.command.clone(), agent.args.clone());
+
+        all_args.push(cmd);
+        all_args.extend(args);
+
+        let transport = AcpAgent::from_args(all_args)?;
+
+        let (session_update_tx, _) = broadcast::channel(256);
+        let (crash_tx, _) = broadcast::channel::<String>(16);
+        let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let (conn_tx, conn_rx) = oneshot::channel::<(
+            ConnectionTo<AcpAgentRole>,
+            SessionId,
+            bool,
+            bool,
+            Vec<SessionConfigOption>,
+        )>();
+
+        let notif_tx = session_update_tx.clone();
+        let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
+        let tm = terminal_manager.clone();
+        let permission_manager = Arc::new(PermissionManager::new());
+        let pm = permission_manager.clone();
+        let activity = Arc::new(Mutex::new(ActivityState::new()));
+        let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
+
+        let builder = agent_client_protocol::Client
+            .builder()
+            .name("omniterm")
+            .on_receive_notification(
+                {
+                    let tx = notif_tx.clone();
+                    let activity = activity.clone();
+                    let commands_notif = commands_notif.clone();
+                    async move |notification: SessionNotification, _cx| {
+                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
+                        if let Ok(mut st) = activity.lock() {
+                            st.last_activity = Instant::now();
+                        }
+                        if matches!(
+                            notification.update,
+                            SessionUpdate::AvailableCommandsUpdate(_)
+                        )
+                            && let Ok(mut guard) = commands_notif.lock() {
+                                *guard = Some(notification.clone());
+                            }
+                        handler::handle_session_update(&tx, notification)
+                    }
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_request(
+                {
+                    let pm = pm.clone();
+                    async move |request: RequestPermissionRequest, responder, _cx| {
+                        pm.handle_request(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let read_cwd = cwd.clone();
+                    async move |request: ReadTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&read_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        match tokio::fs::read_to_string(&path).await {
+                            Ok(content) => {
+                                let _ = responder.respond(ReadTextFileResponse::new(content));
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("read failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let write_cwd = cwd.clone();
+                    async move |request: WriteTextFileRequest, responder, _cx| {
+                        let path = match resolve_fs_path(&write_cwd, &request.path) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                let _ = responder.respond_with_internal_error(e);
+                                return Ok(());
+                            }
+                        };
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        match tokio::fs::write(&path, &request.content).await {
+                            Ok(()) => {
+                                let _ = responder.respond(WriteTextFileResponse::new());
+                            }
+                            Err(e) => {
+                                let _ = responder
+                                    .respond_with_internal_error(format!("write failed: {}", e));
+                            }
+                        }
+                        Ok(())
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tm = tm.clone();
+                    async move |request: CreateTerminalRequest, responder, _cx| {
+                        tm.handle_create(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tm = tm.clone();
+                    async move |request: agent_client_protocol::schema::v1::TerminalOutputRequest, responder, _cx| {
+                        tm.handle_output(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tm = tm.clone();
+                    async move |request: KillTerminalRequest, responder, _cx| {
+                        tm.handle_kill(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tm = tm.clone();
+                    async move |request: ReleaseTerminalRequest, responder, _cx| {
+                        tm.handle_release(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let tm = tm.clone();
+                    async move |request: WaitForTerminalExitRequest, responder, _cx| {
+                        tm.handle_wait_for_exit(request, responder).await
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            );
+
+        let connection_task = tokio::spawn(async move {
+            builder
+                .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
+                    let init_resp = cx
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task()
+                        .await?;
+                    let supports_load = init_resp.agent_capabilities.load_session;
+                    let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
+
+                    let session_id = SessionId::new(acp_session_id.as_str());
+                    let _ = conn_tx.send((
+                        cx.clone(),
+                        session_id,
+                        supports_load,
+                        supports_image,
+                        Vec::new(),
+                    ));
+
+                    let _ = shutdown_rx.await;
+                    Ok(())
+                })
+                .await
+        });
+
+        spawn_crash_watcher(connection_task, crash_tx.clone());
+
+        let (connection, session_id, supports_load_session, supports_image, initial_config_options) =
+            conn_rx.await.map_err(|_| AcpError::internal_error())?;
+
+        Ok(AcpClient {
+            connection,
+            session_id,
+            session_update_tx,
+            _shutdown_tx: shutdown_tx,
+            crash_tx,
+            terminal_event_tx,
+            terminal_manager,
+            permission_manager,
+            supports_load_session,
+            supports_image,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,

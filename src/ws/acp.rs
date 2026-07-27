@@ -13,11 +13,14 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::AppState;
-use crate::acp::AcpClient;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
+use crate::acp::{AcpClient, ImageInput};
 use crate::api::agents::load_agent;
+
+/// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
+const MAX_PROMPT_IMAGES: usize = 3;
 
 pub async fn ws_acp_handler(
     ws: WebSocketUpgrade,
@@ -32,7 +35,12 @@ pub async fn ws_acp_handler(
 #[serde(tag = "type")]
 enum AcpClientMessage {
     #[serde(rename = "prompt")]
-    Prompt { text: String },
+    Prompt {
+        text: String,
+        /// 图片附件（可选，旧前端不带此字段）。
+        #[serde(default)]
+        images: Vec<ImageInput>,
+    },
     #[serde(rename = "cancel")]
     Cancel,
     #[serde(rename = "load_session")]
@@ -74,6 +82,10 @@ enum AcpServerMessage<'a> {
     ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
     PermissionRequest { id: &'a str, request: &'a serde_json::Value },
+    /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
+    /// 前端据此显示/隐藏附件入口。
+    #[serde(rename = "capabilities")]
+    Capabilities { image: bool },
 }
 
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
@@ -264,6 +276,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                     .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
+                image: c.supports_image(),
+            })
+            .unwrap_or_default();
+            let _ = notify_tx.send(Message::Text(msg.into())).await;
             Some(c)
         }
         None => {
@@ -299,7 +316,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<AcpClientMessage>(&text) {
-                            Ok(AcpClientMessage::Prompt { text: prompt_text }) => {
+                            Ok(AcpClientMessage::Prompt { text: prompt_text, images }) => {
                                 let Some(ref c) = client else {
                                     let msg = serde_json::to_string(&AcpServerMessage::Error {
                                         code: Some("session_not_found"),
@@ -309,19 +326,55 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     continue;
                                 };
 
+                                // 附件校验：前端已限制，这里兜底（直连 WS 的客户端）。
+                                if images.len() > MAX_PROMPT_IMAGES {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: &format!("too many images (max {})", MAX_PROMPT_IMAGES),
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+                                if !images.is_empty() && !c.supports_image() {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: "agent does not support image input",
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+
+                                // 有图时把结构化 blocks 一并落库（text + image），
+                                // 刷新后 hydrate 能还原缩略图；纯文本保持 NULL 现状。
+                                let blocks_json = if images.is_empty() {
+                                    None
+                                } else {
+                                    let mut arr = Vec::new();
+                                    if !prompt_text.is_empty() {
+                                        arr.push(serde_json::json!({
+                                            "type": "text", "text": prompt_text,
+                                        }));
+                                    }
+                                    for img in &images {
+                                        arr.push(serde_json::json!({
+                                            "type": "image",
+                                            "mimeType": img.mime_type,
+                                            "data": img.data,
+                                        }));
+                                    }
+                                    serde_json::to_string(&arr).ok()
+                                };
                                 let _ = chat_persistence::insert_message(
-                                    &db, &sid, "user", &prompt_text, None,
+                                    &db, &sid, "user", &prompt_text, blocks_json.as_deref(),
                                 ).await;
 
                                 let c = c.clone();
-                                // 标记 prompt 进行中（活跃度守卫据此判�? agent 在工作中�?
+                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
                                 let db2 = db.clone();
                                 let sid2 = sid.clone();
                                 let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
-                                    match c.send_prompt(&prompt_text).await {
+                                    match c.send_prompt(&prompt_text, images).await {
                                         Ok(resp) => {
                                             c.mark_prompt_idle();
                                             tokio::task::yield_now().await;
@@ -422,6 +475,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let term_rx = new_client.terminal_event_subscribe();
                                         spawn_terminal_task(term_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());
+
+                                        let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
+                                            image: new_client.supports_image(),
+                                        }).unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
 
                                         let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
                                         let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
