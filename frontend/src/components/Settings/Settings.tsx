@@ -52,7 +52,7 @@ const languages = [
 const btnBase: React.CSSProperties = {
   background: 'transparent',
   border: '1px solid var(--border-strong)',
-  borderRadius: 6,
+  borderRadius: 0,
   transition: 'all 0.15s ease',
   fontFamily: READER_FONT,
   cursor: 'pointer',
@@ -63,7 +63,6 @@ const btnActive: React.CSSProperties = {
   borderColor: 'var(--accent)',
   color: 'var(--accent)',
   background: 'var(--accent-10)',
-  boxShadow: 'var(--accent-glow-sm)',
 }
 
 function btnHover(e: React.MouseEvent) {
@@ -79,12 +78,10 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
     el.style.borderColor = 'var(--accent)'
     el.style.color = 'var(--accent)'
     el.style.background = 'var(--accent-10)'
-    el.style.boxShadow = 'var(--accent-glow-sm)'
   } else {
     el.style.borderColor = 'var(--border-strong)'
     el.style.color = 'var(--text-muted)'
     el.style.background = 'transparent'
-    el.style.boxShadow = 'none'
   }
 }
 

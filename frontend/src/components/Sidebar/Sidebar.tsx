@@ -1179,7 +1179,6 @@ export function Sidebar() {
                                       : activity === 'running'
                                         ? 'var(--accent)'
                                         : 'var(--text-faint)'
-                                  const dotGlow = dotColor !== 'var(--text-faint)'
                                   return (
                                     <div
                                       key={s.id}
@@ -1221,7 +1220,6 @@ export function Sidebar() {
                                           width: 6,
                                           height: 6,
                                           background: dotColor,
-                                          boxShadow: dotGlow ? `0 0 4px ${dotColor}` : 'none',
                                         }}
                                         title={
                                           activity === 'waiting'
@@ -1360,7 +1358,6 @@ export function Sidebar() {
                         width: 5,
                         height: 5,
                         background: s.attached ? 'var(--success)' : 'var(--text-dim)',
-                        boxShadow: s.attached ? 'var(--success-glow)' : 'none',
                       }}
                     />
                     <div className="flex-1 min-w-0">
@@ -1414,7 +1411,7 @@ export function Sidebar() {
                             })
                           }}
                           disabled={!adoptProjectId}
-                          className="flex items-center justify-center rounded transition-all"
+                          className="flex items-center justify-center pixel-press transition-all"
                           style={{
                             padding: '2px 6px',
                             border: '1px solid var(--accent)',
@@ -1426,11 +1423,9 @@ export function Sidebar() {
                           onMouseEnter={(e) => {
                             if (!adoptProjectId) return
                             e.currentTarget.style.background = 'var(--accent-14)'
-                            e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.background = 'transparent'
-                            e.currentTarget.style.boxShadow = 'none'
                           }}
                         >
                           ✓
@@ -1450,7 +1445,7 @@ export function Sidebar() {
                           setAdoptTarget({ tmux_name: s.name })
                           setAdoptProjectId(activeProjectId || projects[0]?.id || '')
                         }}
-                        className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                        className="flex-shrink-0 flex items-center justify-center pixel-press transition-all"
                         style={{
                           padding: '2px 8px',
                           border: '1px solid var(--accent)',
@@ -1460,11 +1455,9 @@ export function Sidebar() {
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = 'var(--accent-14)'
-                          e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                         }}
                         onMouseLeave={(e) => {
                           e.currentTarget.style.background = 'transparent'
-                          e.currentTarget.style.boxShadow = 'none'
                         }}
                       >
                         {t('sidebar.adopt') ?? 'Adopt'}

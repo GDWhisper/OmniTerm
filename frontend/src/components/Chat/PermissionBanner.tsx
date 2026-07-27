@@ -43,10 +43,10 @@ export function PermissionBanner({ permission, onRespond }: Props) {
           <button
             key={opt.option_id || `opt-${i}`}
             onClick={() => onRespond(permission.id, opt.option_id)}
+            className="pixel-press"
             style={{
               padding: '4px 12px',
               fontSize: 11,
-              borderRadius: 4,
               border: `1px solid ${isAllow(opt.kind) ? 'var(--success)' : 'var(--danger, #C85A3A)'}`,
               background: isAllow(opt.kind)
                 ? 'color-mix(in srgb, var(--success) 14%, transparent)'

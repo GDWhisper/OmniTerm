@@ -35,10 +35,10 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
     >
       <div
-        className={`corner-nails ${maxWidth} w-full mx-4 rounded-xl shadow-2xl border animate-scale-in`}
+        className={`corner-nails pixel-float ${maxWidth} w-full mx-4 animate-scale-in`}
         style={{
           background: 'var(--bg-elevated)',
-          borderColor: 'var(--border-strong)',
+          borderRadius: 2,
           fontFamily: READER_FONT,
         }}
       >

@@ -41,7 +41,7 @@ export function SettingsPopup() {
     <div
       ref={ref}
       onMouseDown={(e) => e.stopPropagation()}
-      className="settings-popup"
+      className="settings-popup pixel-float"
       style={{
         position: 'fixed',
         display: 'flex',
@@ -55,7 +55,7 @@ export function SettingsPopup() {
               bottom: mobileBottom,
               height: `calc((100dvh - ${mobileTotal}px) / ${zoomRatio})`,
               maxHeight: `calc((100dvh - ${mobileTotal}px) / ${zoomRatio})`,
-              borderRadius: 16,
+              borderColor: 'var(--accent)',
               overflow: 'hidden',
             }
           : {
@@ -70,16 +70,12 @@ export function SettingsPopup() {
               maxHeight: pos.maxHeight / zoomRatio,
               top: pos.top,
               bottom: pos.bottom,
-              borderRadius: 10,
               overflow: 'hidden',
             }),
         width: isMobile ? undefined : `${POPUP_WIDTH_RATIO * 100 / zoomRatio}vw`,
         zIndex: 50,
         background: 'var(--bg-elevated)',
-        border: '1px solid var(--border-strong)',
-        borderWidth: isMobile ? '2px' : '1px',
-        borderColor: isMobile ? 'var(--accent)' : 'var(--border-strong)',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.7)',
+        borderRadius: 2,
         WebkitOverflowScrolling: 'touch',
         animation: 'settings-slide-in 150ms ease-out',
       }}

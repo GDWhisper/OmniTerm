@@ -796,7 +796,7 @@ html, body, #root {
   right: 0;
   z-index: 2;
   background: var(--bg-base);
-  box-shadow: -3px 0 4px -2px rgba(0,0,0,0.18);
+  box-shadow: -2px 0 0 var(--border-subtle);
 }
 
 /* Actions column header — sticky both top (via thead) and right */
@@ -1063,6 +1063,13 @@ html, body, #root {
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   cursor: pointer;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+
+.sidebar-wt-add-btn:active,
+.sidebar-proj-add-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
 }
 
 .sidebar-proj-add-btn {
@@ -1559,6 +1566,32 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Pixel float — unified elevation for ALL floating layers (modal,
+   popup, dropdown, tooltip, autocomplete). Hard 4px shadow, no blur,
+   square corners (modal shells may override radius up to 2px).
+   See ui-style-guide §6 — components must NOT inline soft shadows.
+   ──────────────────────────────────────────────────────────────────── */
+.pixel-float {
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--pixel-shadow);
+}
+
+/* Interactive elements that keep their own border/colors but need the
+   unified hard shadow + press displacement (see ui-style-guide §6). */
+.pixel-press {
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+.pixel-press:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.pixel-press:disabled {
+  box-shadow: none;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    DialogueToast — Undertale-style RPG dialogue box for key notifications.
    Dark background + wood-shadow outer frame + corner nails.
    ──────────────────────────────────────────────────────────────────── */
@@ -1937,14 +1970,20 @@ select optgroup option {
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
 }
 .git-branch-btn:hover:not(:disabled) {
   background: var(--accent-10);
   color: var(--accent-bright);
 }
+.git-branch-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
 .git-branch-btn:disabled {
   opacity: 0.5;
   cursor: default;
+  box-shadow: none;
 }
 .git-branch-glyph {
   flex-shrink: 0;
@@ -2218,15 +2257,21 @@ select optgroup option {
   letter-spacing: 2px;
   cursor: pointer;
   transition: all 0.15s ease;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
 }
 .git-commit-btn:hover:not(:disabled) {
   background: var(--accent-10);
   color: var(--accent-bright);
-  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+}
+.git-commit-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
 }
 .git-commit-btn:disabled {
   opacity: 0.4;
   cursor: default;
+  box-shadow: none;
 }
 
 /* ── History list ── */

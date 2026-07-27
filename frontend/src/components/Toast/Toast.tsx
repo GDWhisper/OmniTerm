@@ -31,7 +31,7 @@ export function ToastContainer() {
       {toasts.map((t) => (
         <div
           key={t.id}
-          className={`flex items-start gap-2 px-4 py-3 rounded-lg border shadow-lg text-sm animate-slide-in toast-pixel toast-${t.type} ${colorMap[t.type]}`}
+          className={`flex items-start gap-2 px-4 py-3 text-sm animate-slide-in toast-pixel toast-${t.type} ${colorMap[t.type]}`}
           onClick={() => removeToast(t.id)}
         >
           <span className="flex-shrink-0">{iconMap[t.type]}</span>

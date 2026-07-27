@@ -75,6 +75,7 @@ function ConfigDropdown({
       </button>
       {open && (
         <OverlayScroll
+          className="pixel-float"
           style={{
             position: 'absolute',
             bottom: '100%',
@@ -82,9 +83,6 @@ function ConfigDropdown({
             marginBottom: 2,
             minWidth: 160,
             background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 6,
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
             zIndex: 100,
           }}
           contentStyle={{ flex: '0 0 auto', maxHeight: 240, padding: '4px 0' }}
@@ -245,6 +243,7 @@ function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
             <UsageRing pct={pct} />
             {used !== null && size !== null && (
               <span
+                className="pixel-float"
                 style={{
                   position: 'absolute',
                   bottom: '100%',
@@ -254,9 +253,6 @@ function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
                   fontSize: 11,
                   whiteSpace: 'nowrap',
                   background: 'var(--bg-elevated)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 6,
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
                   color: 'var(--text-primary)',
                   opacity: hover ? 1 : 0,
                   transform: hover

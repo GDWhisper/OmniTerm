@@ -232,7 +232,7 @@ export function ChatInput({
 
   const buttonBase: React.CSSProperties = {
     border: 'none',
-    borderRadius: 6,
+    borderRadius: 0,
     padding: '6px 12px',
     fontFamily: READER_FONT,
     fontSize: 12,
@@ -362,15 +362,13 @@ export function ChatInput({
       >
         {showCommands && (
           <OverlayScroll
+            className="pixel-float"
             style={{
               position: 'absolute',
               bottom: '100%',
               left: 0,
               right: 0,
               background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 8,
-              boxShadow: '0 -4px 12px rgba(0,0,0,0.15)',
               zIndex: 10,
             }}
             contentStyle={{ flex: '0 0 auto', maxHeight: 160 }}
@@ -438,6 +436,7 @@ export function ChatInput({
           <>
             <button
               onClick={onCancel}
+              className="pixel-press"
               style={{
                 ...buttonBase,
                 background: 'var(--danger, #FF7B72)',
@@ -449,6 +448,7 @@ export function ChatInput({
             <button
               onClick={handleClickQueue}
               disabled={!canQueue}
+              className="pixel-press"
               title={
                 queuedMessage
                   ? t('chat.input.queueFullTitle')
@@ -470,6 +470,7 @@ export function ChatInput({
           <button
             onClick={handleClickSend}
             disabled={!canSend}
+            className="pixel-press"
             style={{
               ...buttonBase,
               background: canSend ? 'var(--accent)' : 'var(--bg-elevated)',
