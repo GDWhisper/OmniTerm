@@ -30,46 +30,7 @@ export interface AttentionContextValue {
 }
 
 import { AttentionContext } from '../../hooks/useAttention'
-
-// ── Sound playback ─────────────────────────────────────
-
-let audioCtx: AudioContext | null = null
-
-function getAudioContext(): AudioContext | null {
-  if (audioCtx && audioCtx.state !== 'closed') return audioCtx
-  try {
-    audioCtx = new AudioContext()
-    return audioCtx
-  } catch {
-    return null
-  }
-}
-
-/** Play a short sine-wave ping (880 Hz, 300ms decay) */
-function playPing() {
-  const ctx = getAudioContext()
-  if (!ctx) return
-
-  // Resume if suspended (autoplay policy)
-  if (ctx.state === 'suspended') {
-    ctx.resume().catch(() => {})
-  }
-
-  try {
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = 'sine'
-    osc.frequency.value = 880
-    gain.gain.setValueAtTime(0.3, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(ctx.currentTime)
-    osc.stop(ctx.currentTime + 0.3)
-  } catch {
-    // Web Audio not available
-  }
-}
+import { playPing } from '../../utils/audioFeedback'
 
 // ── Tab title flash ────────────────────────────────────
 

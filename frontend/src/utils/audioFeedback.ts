@@ -5,8 +5,13 @@ function getContext(): AudioContext {
   return audioCtx
 }
 
-function isSoundEnabled(): boolean {
-  return localStorage.getItem('omniterm_sound_enabled') === 'true'
+function isSoundEnabled(kind?: string): boolean {
+  const master = localStorage.getItem('omniterm_sound_enabled') === 'true'
+  if (!master) return false
+  if (kind) {
+    return localStorage.getItem(`omniterm_sound_${kind}_enabled`) !== 'false'
+  }
+  return true
 }
 
 const VOLUME = 0.1
@@ -25,8 +30,8 @@ function playTone(frequency: number, duration: number, startTime: number, type: 
   osc.stop(startTime + duration)
 }
 
-export function play8BitSound(type: 'coin' | 'stomp'): void {
-  if (!isSoundEnabled()) return
+export function play8BitSound(type: 'coin' | 'stomp', force = false): void {
+  if (!force && !isSoundEnabled(type)) return
   const ctx = getContext()
   const now = ctx.currentTime
 
@@ -45,5 +50,28 @@ export function play8BitSound(type: 'coin' | 'stomp'): void {
     gain.connect(ctx.destination)
     osc.start(now)
     osc.stop(now + 0.1)
+  }
+}
+
+export function playPing(force = false): void {
+  if (!force && !isSoundEnabled('ping')) return
+  const ctx = getContext()
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {})
+  }
+
+  try {
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 880
+    gain.gain.setValueAtTime(0.3, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + 0.3)
+  } catch {
+    // Web Audio not available
   }
 }

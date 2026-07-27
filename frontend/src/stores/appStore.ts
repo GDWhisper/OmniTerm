@@ -4,9 +4,9 @@ import type { Project, Workspace, Session } from '../api/client'
 // Re-export for convenience
 export type { Project, Workspace, Session }
 
-/** Default UI zoom (%). The layout applies `zoom: uiZoom / 100`, so 110 = a
- *  true 110% scale. Keep in sync with the reset button in Settings.tsx. */
-export const DEFAULT_UI_ZOOM = 110
+/** Default UI zoom (%). The layout applies `zoom: uiZoom / 100`, so 100 = 100%.
+ *  Keep in sync with the reset button in Settings.tsx. */
+export const DEFAULT_UI_ZOOM = 100
 
 interface FmSessionState {
   mode: 'following' | 'manual'
@@ -81,6 +81,9 @@ export interface AppState {
   immersiveMode: boolean
   pixelAnimationsEnabled: boolean
   soundEnabled: boolean
+  soundCoinEnabled: boolean
+  soundStompEnabled: boolean
+  soundPingEnabled: boolean
   crtScanlines: boolean
   parchmentTextureEnabled: boolean
   /** Pixel display font (BETA). Off = pixel text falls back to reader font;
@@ -129,6 +132,9 @@ export interface AppState {
   setImmersiveMode: (v: boolean) => void
   setPixelAnimationsEnabled: (v: boolean) => void
   setSoundEnabled: (v: boolean) => void
+  setSoundCoinEnabled: (v: boolean) => void
+  setSoundStompEnabled: (v: boolean) => void
+  setSoundPingEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
@@ -198,6 +204,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   immersiveMode: false,  // Disabled by default - feature not yet verified
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
+  soundCoinEnabled: localStorage.getItem('omniterm_sound_coin_enabled') !== 'false',
+  soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
+  soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
   // Default off: first-run users get the uniform reader font (BETA opt-in).
@@ -328,6 +337,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSoundEnabled: (v) => {
     localStorage.setItem('omniterm_sound_enabled', String(v))
     set({ soundEnabled: v })
+  },
+  setSoundCoinEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_coin_enabled', String(v))
+    set({ soundCoinEnabled: v })
+  },
+  setSoundStompEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_stomp_enabled', String(v))
+    set({ soundStompEnabled: v })
+  },
+  setSoundPingEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_ping_enabled', String(v))
+    set({ soundPingEnabled: v })
   },
   setCrtScanlines: (v) => {
     localStorage.setItem('omniterm_crt_scanlines', String(v))
