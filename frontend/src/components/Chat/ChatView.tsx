@@ -228,6 +228,8 @@ export function ChatView() {
         {titleChip}
       </div>
 
+      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0 }}>
+
       {chatState.error && (
         <div
           style={{
@@ -375,6 +377,8 @@ export function ChatView() {
         usage={chatState.usage}
         onSetConfigOption={setConfigOption}
       />
+
+      </div>
     </div>
   )
 }
