@@ -86,6 +86,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-29) `[backend]` 修复 `omniterm stop` 可能导致 ACP agent 子进程变孤儿：`AcpSupervisor::shutdown_all()` 原依赖 `Arc::try_unwrap` 获取所有权再调 `disconnect()`，WS handler 仍持有引用时 unwrap 失败静默跳过清理；正式版 stop 只发单进程 SIGTERM（非进程组 kill），无 OS 兜底。新增 `AcpClient::shutdown(&self)` 通过共享引用直接回收子进程，`shutdown_all()` 不再依赖 `try_unwrap`（`src/acp/client.rs`、`src/acp/supervisor.rs`）
 - (2026-07-27) `[frontend]` 修复服务端数据重置/删除后，localStorage 里的旧 project/workspace/session ID 永不清理导致文件列表等请求持续 404：Sidebar 的恢复逻辑此前以「列表非空」为触发条件，服务端列表为空时（如 DB 重建）早退跳过清理；现以「已完成拉取」判定（projects 加载标记 / worktrees・sessions 按 project 键判空），旧 ID 未命中即连带清空下游 workspace/session（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-26) `[backend]` 修复终端内 agent TUI（如 opencode）按 ESC 无法中止任务：tmux 默认 `escape-time` 500ms 使孤立 ESC 延迟 500ms 转发、快速连按两次 ESC 被合并为 Alt+ESC 单次事件；现 spawn tmux client 时链式 `set-option -s escape-time 10`（`src/ws/terminal.rs`）
 - (2026-07-26) `[frontend]` 修复终端 idle 断开后重连按钮偶发无反应需刷新页面：被替换 socket 的晚到 close/error 事件会把健康新连接盖回「已断开」（现以 `wsRef.current === ws` 守卫并解绑旧 socket `onerror`）；addon 动态 import 失败被模块级缓存导致重连永久失败（现失败后重建 promise 可重试）；`createTerminal` 异常静默吞掉（现 toast 提示并保留覆盖层可重试）；重连按钮传入实时容器兜底 hook 内 `containerRef` 为 null 的场景（`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`）
