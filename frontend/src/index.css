@@ -354,9 +354,9 @@ html, body, #root {
   }
 }
 
-/* Vertical drag bar — 4px wide, indicator is 4px × 48px centered pill. */
+/* Vertical drag bar — 6px wide, indicator is 6px × 48px centered pill. */
 .omniterm-drag-bar-v {
-  width: 4px;
+  width: 6px;
   cursor: col-resize;
 }
 
@@ -364,7 +364,7 @@ html, body, #root {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 4px;
+  width: 6px;
   height: 48px;
   border-radius: 0;
 }
@@ -858,6 +858,13 @@ body.fm-dragging * {
   z-index: 2;
   background: var(--bg-base);
   box-shadow: -2px 0 0 var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* Override row hover — actions cell must stay opaque so sticky
+   covers mtime/size content underneath. */
+.fm-table tr:hover .fm-td-actions-cell {
+  background: var(--bg-base);
 }
 
 /* Actions column header — sticky both top (via thead) and right */
@@ -870,8 +877,9 @@ body.fm-dragging * {
 }
 
 /* ── Name cell ── */
-.fm-td-name {
+.fm-table td.fm-td-name {
   overflow: hidden;
+  padding-left: 8px;
 }
 
 .fm-name-text {
@@ -888,7 +896,7 @@ body.fm-dragging * {
   font-variant-numeric: tabular-nums;
 }
 
-.fm-td-time {
+.fm-table td.fm-td-time {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -898,6 +906,8 @@ body.fm-dragging * {
   direction: rtl;
   text-align: left;
   unicode-bidi: plaintext;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 /* ── Action icon buttons ── */
@@ -940,10 +950,13 @@ body.fm-dragging * {
 }
 
 /* ── Size cell ── */
-.fm-td-size {
+.fm-table td.fm-td-size {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 /* ── Empty state ── */
@@ -1561,6 +1574,7 @@ body.parchment-texture {
   animation: blink-cursor 1s steps(1) infinite;
 }
 .selected-cursor.inactive { color: transparent; animation: none; }
+.selected-cursor.no-blink { animation: none; }
 
 @keyframes blink-cursor {
   50% { opacity: 0; }

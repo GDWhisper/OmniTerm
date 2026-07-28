@@ -71,6 +71,8 @@ export function Layout() {
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  const fileManagerRef = useRef<HTMLDivElement>(null)
 
   // Shared drag-teardown: remove all mouse+touch listeners and reset body styles
   const cleanUpDrag = useCallback(() => {
@@ -79,22 +81,22 @@ export function Layout() {
     setIsDragging(false)
   }, [])
 
-  // Drag resize handlers (mouse + touch)
+  // Drag resize — direct DOM updates during drag, sync to store on mouseup.
+  // Bypasses React re-render on every mousemove for smooth 60fps resize.
   const handleSidebarDrag = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault()
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const startX = clientX
-      const startWidth = sidebarWidth
+      let curWidth = sidebarWidth
       const maxSidebar = Math.floor(window.innerWidth / 3)
       setIsDragging(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        const delta = mvX - startX
-        const newWidth = Math.max(140, Math.min(maxSidebar, startWidth + delta))
-        setSidebarWidth(newWidth)
+        curWidth = Math.max(140, Math.min(maxSidebar, sidebarWidth + mvX - startX))
+        if (sidebarRef.current) sidebarRef.current.style.width = `${curWidth}px`
       }
 
       const onUp = () => {
@@ -102,8 +104,9 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.removeEventListener('touchmove', onMove)
         document.removeEventListener('touchend', onUp)
+        setSidebarWidth(curWidth)
+        localStorage.setItem('omniterm_sidebar_width', String(curWidth))
         cleanUpDrag()
-        localStorage.setItem('omniterm_sidebar_width', String(useAppStore.getState().sidebarWidth))
       }
 
       document.addEventListener('mousemove', onMove)
@@ -121,16 +124,15 @@ export function Layout() {
       e.preventDefault()
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const startX = clientX
-      const startWidth = fileManagerWidth
+      let curWidth = fileManagerWidth
       const maxFileManager = Math.floor(window.innerWidth / 2)
       setIsDragging(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        const delta = startX - mvX
-        const newWidth = Math.max(240, Math.min(maxFileManager, startWidth + delta))
-        setFileManagerWidth(newWidth)
+        curWidth = Math.max(240, Math.min(maxFileManager, fileManagerWidth + startX - mvX))
+        if (fileManagerRef.current) fileManagerRef.current.style.width = `${curWidth}px`
       }
 
       const onUp = () => {
@@ -138,8 +140,9 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.removeEventListener('touchmove', onMove)
         document.removeEventListener('touchend', onUp)
+        setFileManagerWidth(curWidth)
+        localStorage.setItem('omniterm_fm_width', String(curWidth))
         cleanUpDrag()
-        localStorage.setItem('omniterm_fm_width', String(useAppStore.getState().fileManagerWidth))
       }
 
       document.addEventListener('mousemove', onMove)
@@ -160,6 +163,8 @@ export function Layout() {
       {isMobile ? <MobileLayout /> : <DesktopLayout
         isDragging={isDragging}
         layoutRef={layoutRef}
+        sidebarRef={sidebarRef}
+        fileManagerRef={fileManagerRef}
         sidebarOpen={sidebarOpen}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
@@ -181,6 +186,8 @@ export function Layout() {
 interface DesktopLayoutProps {
   isDragging: boolean
   layoutRef: React.RefObject<HTMLDivElement | null>
+  sidebarRef: React.RefObject<HTMLDivElement | null>
+  fileManagerRef: React.RefObject<HTMLDivElement | null>
   sidebarOpen: boolean
   sidebarCollapsed: boolean
   sidebarWidth: number
@@ -199,6 +206,8 @@ interface DesktopLayoutProps {
 function DesktopLayout({
   isDragging,
   layoutRef,
+  sidebarRef,
+  fileManagerRef,
   sidebarOpen,
   sidebarCollapsed,
   sidebarWidth,
@@ -226,6 +235,7 @@ function DesktopLayout({
         >
           {sidebarOpen && (
             <div
+              ref={sidebarRef}
               className="flex-shrink-0"
               style={{
                 width: sidebarCollapsed ? 40 : sidebarWidth,
@@ -261,11 +271,12 @@ function DesktopLayout({
 
           {fileManagerOpen && (
             <div
+              ref={fileManagerRef}
               className="flex-shrink-0 overflow-hidden"
               style={{
                 width: fileManagerCollapsed ? 40 : fileManagerWidth,
                 background: 'var(--bg-base)',
-                borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
+                borderLeft: '1px solid var(--border-subtle)',
                 transition: isDragging ? 'none' : 'width 0.2s ease',
               }}
             >

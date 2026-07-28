@@ -976,12 +976,12 @@ export function FileManager() {
                               onClick={(e) => e.stopPropagation()}
                             />
                           ) : (
-                            <span className="fm-name-text">{f.name}</span>
+                            <span className="fm-name-text" title={f.name}>{f.name}</span>
                           )}
                         </div>
                       </td>
-                      <td className="fm-td-time">{formatTime(f.mtime)}</td>
-                      <td className="fm-td-size">{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
+                      <td className="fm-td-time" title={formatTime(f.mtime)}>{formatTime(f.mtime)}</td>
+                      <td className="fm-td-size" title={isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}>{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span
                           className="fm-act-icon"
