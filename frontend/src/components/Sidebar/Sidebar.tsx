@@ -1356,7 +1356,7 @@ export function Sidebar() {
                                     e.currentTarget.style.color = 'var(--text-faint)'
                                   }}
                                 >
-                                  <IconTrash width={12} height={12} />
+                                  <IconTrash width={14} height={14} />
                                 </button>
                               )}
                             </div>
