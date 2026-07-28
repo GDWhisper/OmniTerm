@@ -95,13 +95,34 @@ function UpdatePanel({ info, onClose }: { info: VersionInfo; onClose: () => void
         <span>{t('update.title')}</span>
       </div>
       <OverlayScroll style={{ flex: 1, minHeight: 0 }} contentStyle={{ flex: '0 0 auto' }}>
-        <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-          <div style={{ fontFamily: 'var(--pixel-font-static)', color: 'var(--gold-light, #FFCB6B)' }}>
-            v{info.current} → v{info.latest}
+        <div
+          style={{
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            fontSize: 13,
+            color: 'var(--text-primary)',
+          }}
+        >
+          <div style={{ fontFamily: 'var(--pixel-font-static)', letterSpacing: 'var(--pixel-tracking-sm)' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>v{info.current}</span>
+            <span style={{ color: 'var(--text-faint)' }}> → </span>
+            <span style={{ color: 'var(--success)', fontWeight: 700 }}>v{info.latest}</span>
           </div>
-          <div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
             {t('update.commandHint')}{' '}
-            <code style={{ color: 'var(--accent)', userSelect: 'all' }}>omniterm update</code>
+            <code
+              style={{
+                background: 'var(--bg-code-inline)',
+                color: 'var(--text-primary)',
+                padding: '2px 6px',
+                borderRadius: 2,
+                userSelect: 'all',
+              }}
+            >
+              omniterm update
+            </code>
           </div>
           {info.channel !== 'cargo' && phase !== 'done' && (
             <button
@@ -113,7 +134,7 @@ function UpdatePanel({ info, onClose }: { info: VersionInfo; onClose: () => void
             </button>
           )}
           {phase === 'done' && (
-            <div style={{ color: 'var(--success, #5A8F3A)' }}>{t('update.restartHint')}</div>
+            <div style={{ fontSize: 12, color: 'var(--success)' }}>{t('update.restartHint')}</div>
           )}
           <a
             href={`${GITHUB_REPO_URL}/releases/latest`}

@@ -1317,7 +1317,7 @@ body.fm-dragging * {
   margin-top: 5px;
   border-radius: 0;
   cursor: pointer;
-  background: var(--accent-pink, #F778BA);
+  background: var(--gold-light, #FFCB6B);
   color: var(--wood-shadow, #3A2E1F);
   border: none;
   box-shadow: 2px 2px 0 var(--wood-shadow, #3A2E1F);
