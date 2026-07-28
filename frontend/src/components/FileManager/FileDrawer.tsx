@@ -461,7 +461,9 @@ export function FileDrawer({
               onClick={fetchContent}
               style={{
                 padding: '4px 12px',
-                border: '1px solid var(--border-strong)',
+                borderWidth: '1px',
+                borderStyle: 'solid',
+                borderColor: 'var(--border-strong)',
                 borderRadius: 5,
                 background: 'transparent',
                 color: 'var(--accent)',

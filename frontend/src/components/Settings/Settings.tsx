@@ -53,7 +53,9 @@ const languages = [
 
 const btnBase: React.CSSProperties = {
   background: 'transparent',
-  border: '1px solid var(--border-strong)',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--border-strong)',
   borderRadius: 0,
   transition: 'all 0.15s ease',
   fontFamily: READER_FONT,

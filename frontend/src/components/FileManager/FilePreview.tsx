@@ -81,7 +81,9 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
           style={{
             marginTop: 4,
             padding: '4px 12px',
-            border: '1px solid var(--border-strong)',
+            borderWidth: '1px',
+            borderStyle: 'solid',
+            borderColor: 'var(--border-strong)',
             borderRadius: 5,
             color: 'var(--accent)',
             fontSize: 12,

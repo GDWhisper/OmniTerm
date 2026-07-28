@@ -44,11 +44,6 @@ vi.mock('../../hooks/useAttention', () => ({
   }),
 }))
 
-// Mock pixelAnimations
-vi.mock('../../utils/pixelAnimations', () => ({
-  triggerBump: vi.fn(),
-}))
-
 // Test data
 const fakeProject = {
   id: 'proj-1',
