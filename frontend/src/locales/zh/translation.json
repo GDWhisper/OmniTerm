@@ -393,5 +393,14 @@
   "auth.passwordTooShort": "密码至少需要 4 个字符",
   "auth.passwordChanged": "密码修改成功",
   "auth.changePasswordFailed": "密码修改失败",
-  "settings.category.auth": "认证"
+  "settings.category.auth": "认证",
+  "update.badge": "NEW",
+  "update.badgeTooltip": "新版本 v{{version}} 已发布",
+  "update.title": "发现新版本",
+  "update.viewRelease": "查看更新说明",
+  "update.commandHint": "或在终端执行：",
+  "update.updateNow": "一键升级",
+  "update.updating": "升级中...",
+  "update.updated": "已升级到 v{{version}}",
+  "update.restartHint": "升级完成，执行 `omniterm stop && omniterm start` 生效。"
 }

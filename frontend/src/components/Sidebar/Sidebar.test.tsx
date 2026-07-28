@@ -18,6 +18,7 @@ vi.mock('../../api/client', () => ({
     createSession: vi.fn(),
     listDirs: vi.fn().mockResolvedValue({ files: [] }),
     pathExists: vi.fn().mockResolvedValue({ exists: true }),
+    versionCheck: vi.fn().mockResolvedValue({ current: '0.1.9', latest: '0.1.9', update_available: false, channel: 'github_release' }),
   },
   ApiError: class ApiError extends Error {
     status: number

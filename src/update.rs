@@ -1,13 +1,13 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use semver::Version;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const NPM_PACKAGE: &str = "@gdwhisper/omniterm";
+pub(crate) const NPM_PACKAGE: &str = "@gdwhisper/omniterm";
 const CRATE_NAME: &str = "omniterm";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("omniterm-update/", env!("CARGO_PKG_VERSION"));
@@ -19,15 +19,16 @@ pub struct UpdateArgs {
     check: bool,
 }
 
-#[derive(Debug, PartialEq)]
-enum Channel {
+#[derive(Debug, PartialEq, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Channel {
     Npm,
     Cargo,
     GithubRelease,
 }
 
 #[derive(Deserialize)]
-struct ReleaseAsset {
+pub(crate) struct ReleaseAsset {
     name: String,
     browser_download_url: String,
     digest: Option<String>,
@@ -39,13 +40,29 @@ struct ReleaseInfo {
     assets: Vec<ReleaseAsset>,
 }
 
-struct LatestRelease {
-    version: Version,
+pub(crate) struct LatestRelease {
+    pub(crate) version: Version,
     assets: Vec<ReleaseAsset>,
 }
 
 fn repo_slug() -> &'static str {
     env!("CARGO_PKG_REPOSITORY").trim_start_matches("https://github.com/")
+}
+
+pub(crate) fn current_exe_channel() -> Result<(PathBuf, Channel)> {
+    let exe = std::env::current_exe()
+        .context("failed to locate current executable")?
+        .canonicalize()
+        .context("failed to canonicalize executable path")?;
+    let channel = detect_channel(
+        &exe,
+        std::env::var_os("CARGO_HOME").map(PathBuf::from).as_deref(),
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .as_deref(),
+    );
+    Ok((exe, channel))
 }
 
 pub async fn run(args: UpdateArgs) -> Result<()> {
@@ -68,18 +85,7 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
         Ordering::Greater => {}
     }
 
-    let exe = std::env::current_exe()
-        .context("failed to locate current executable")?
-        .canonicalize()
-        .context("failed to canonicalize executable path")?;
-    let channel = detect_channel(
-        &exe,
-        std::env::var_os("CARGO_HOME").map(PathBuf::from).as_deref(),
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .as_deref(),
-    );
+    let (exe, channel) = current_exe_channel()?;
 
     eprintln!("New version available: v{current} -> v{} (channel: {channel:?})", release.version);
     if args.check {
@@ -145,7 +151,7 @@ fn asset_name() -> Result<&'static str> {
     }
 }
 
-async fn fetch_latest() -> Result<LatestRelease> {
+pub(crate) async fn fetch_latest() -> Result<LatestRelease> {
     let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
     let url = format!("https://api.github.com/repos/{}/releases/latest", repo_slug());
     let resp = client
@@ -174,6 +180,8 @@ async fn fetch_latest() -> Result<LatestRelease> {
     Ok(LatestRelease { version, assets: info.assets })
 }
 
+// CLI 专用：继承 stdio 直通用户终端，失败时透传子进程退出码（会终止本进程）。
+// 服务器进程内严禁使用，Web 端点请用 delegate_captured。
 async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
     if which::which(cmd).is_err() {
         bail!(
@@ -191,7 +199,26 @@ async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-async fn self_replace(exe: &Path, release: &LatestRelease) -> Result<()> {
+// 服务器内安全版：捕获输出、失败返回 Err（携带 stderr 尾部），绝不退出进程
+pub(crate) async fn delegate_captured(cmd: &str, cmd_args: &[&str]) -> Result<String> {
+    if which::which(cmd).is_err() {
+        bail!("{cmd} not found in PATH");
+    }
+    let output = tokio::process::Command::new(cmd)
+        .args(cmd_args)
+        .output()
+        .await
+        .with_context(|| format!("failed to run {cmd}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: String =
+            stderr.chars().rev().take(2048).collect::<Vec<_>>().into_iter().rev().collect();
+        bail!("{cmd} exited with {}: {}", output.status, tail.trim());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+pub(crate) async fn self_replace(exe: &Path, release: &LatestRelease) -> Result<()> {
     let asset_name = asset_name()?;
     let asset = release.assets.iter().find(|a| a.name == asset_name).with_context(|| {
         format!(
@@ -425,6 +452,13 @@ mod tests {
             writer.finish().unwrap();
         }
         assert!(extract_exe_from_zip(cursor.get_ref()).is_err());
+    }
+
+    #[test]
+    fn channel_serializes_snake_case() {
+        assert_eq!(serde_json::to_value(Channel::GithubRelease).unwrap(), "github_release");
+        assert_eq!(serde_json::to_value(Channel::Npm).unwrap(), "npm");
+        assert_eq!(serde_json::to_value(Channel::Cargo).unwrap(), "cargo");
     }
 
     #[test]

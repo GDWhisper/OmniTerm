@@ -16,6 +16,7 @@ import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { UpdateBadge } from './UpdateBadge'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
@@ -1106,7 +1107,10 @@ export function Sidebar() {
         <OmniTermLogo size={48} />
         <div style={{ flex: 1, lineHeight: 1.1 }}>
           <div className="logo-wordmark">OmniTerm</div>
-          <div className="logo-version">v{APP_VERSION}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="logo-version">v{APP_VERSION}</div>
+            <UpdateBadge />
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           <button

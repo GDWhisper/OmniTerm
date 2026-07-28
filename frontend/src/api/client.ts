@@ -184,6 +184,10 @@ export const api = {
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
+  versionCheck: () =>
+    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release' }>('/system/version', { silent: true }),
+  systemUpdate: () =>
+    request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
 
   // Auth
   setup: (password: string) =>

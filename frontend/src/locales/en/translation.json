@@ -393,5 +393,14 @@
   "auth.passwordTooShort": "Password must be at least 4 characters",
   "auth.passwordChanged": "Password changed successfully",
   "auth.changePasswordFailed": "Failed to change password",
-  "settings.category.auth": "AUTH"
+  "settings.category.auth": "AUTH",
+  "update.badge": "NEW",
+  "update.badgeTooltip": "New version v{{version}} available",
+  "update.title": "Update Available",
+  "update.viewRelease": "View release notes",
+  "update.commandHint": "Or run in terminal:",
+  "update.updateNow": "Update Now",
+  "update.updating": "Updating...",
+  "update.updated": "Updated to v{{version}}",
+  "update.restartHint": "Updated. Run `omniterm stop && omniterm start` to apply."
 }

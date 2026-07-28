@@ -1306,6 +1306,31 @@ body.fm-dragging * {
   line-height: 1;
 }
 
+/* New-version reminder badge next to the version number. */
+.update-badge {
+  font-family: var(--pixel-font-static);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: var(--pixel-tracking-sm);
+  text-transform: uppercase;
+  padding: 3px 5px;
+  margin-top: 5px;
+  border-radius: 0;
+  cursor: pointer;
+  background: var(--accent-pink, #F778BA);
+  color: var(--wood-shadow, #3A2E1F);
+  border: none;
+  box-shadow: 2px 2px 0 var(--wood-shadow, #3A2E1F);
+  transition: all 0.1s steps(3);
+}
+.update-badge:hover {
+  filter: brightness(1.1);
+}
+.update-badge:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Game-style buttons — Primary / Secondary / Accent / Danger
    All have hard shadow + active displacement.

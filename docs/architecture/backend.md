@@ -77,6 +77,8 @@ POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
 GET  /api/v1/files/watch (SSE)
+GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min）
+POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400）
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
 POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
 ```
@@ -140,6 +142,11 @@ update options:
 | 其它（install.sh / 手动） | 兜底 | 下载平台 asset → sha256 digest 校验（GitHub API asset `digest` 字段，缺失则跳过）→ spawn `--version` 验证 → 同目录临时文件原子 rename 替换；目录不可写提示 `sudo omniterm update`（不自动提权）；Windows 走 rename-self-to-`.old` 手法 |
 
 Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Windows 为 `.zip`）。任何失败不留半更新状态（写操作全在临时文件，rename 是最后一步）。
+
+**Web 端点**（`src/api/system.rs`，供 Sidebar UpdateBadge 用）：
+- `GET /system/version` → `{current, latest, update_available, channel}`。后端做 semver 比较（dev 领先时 `update_available: false`）；GitHub latest 结果进程内缓存（成功 TTL 1h、失败负缓存 5min，防匿名限流 60 次/时）；GitHub 不可达且无缓存 → 502，前端 silent 降级不显示 badge。
+- `POST /system/update` → 一键升级。`try_lock` 全局锁防并发（占用中 409）；先 fresh 查询，无新版 409 `already up to date`；`github_release` 走 `self_replace`，`npm` 走 `delegate_captured`（300s 超时 → 504），`cargo` 编译耗时过长不支持一键 → 400 `unsupported_channel`（前端只显示命令提示）。成功返回 `restart_required: true`，**不自动重启服务器**（持有 tmux/ACP/WS 连接），提示用户 `omniterm stop && omniterm start`。
+- `delegate_captured()`（捕获输出、失败带 stderr 尾部返回 Result）专供服务器进程；CLI 的 `delegate()` 透传 stdio 且失败 `std::process::exit`，**严禁在服务器内使用**。
 
 ## Environment Variables
 
