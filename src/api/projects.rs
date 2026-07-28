@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, patch},
 };
+use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -17,7 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/duplicates", get(list_duplicates))
         .route("/projects/{id}", patch(update_project).delete(delete_project))
-        .route("/projects/{id}/worktrees", get(list_worktrees))
+        .route("/projects/{id}/worktrees", get(list_worktrees).post(create_worktree))
         .route("/projects/{id}/merge-into/{target_id}", axum::routing::post(merge_project_into))
 }
 
@@ -214,6 +215,80 @@ async fn delete_project(
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct CreateWorktreeRequest {
+    branch: String,
+    path: Option<String>,
+    base_branch: Option<String>,
+    detach: Option<bool>,
+}
+
+async fn create_worktree(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<CreateWorktreeRequest>,
+) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    let target_path = req.path.unwrap_or_else(|| {
+        let proj_path = std::path::Path::new(&project.path);
+        let parent = proj_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dirname =
+            proj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        parent.join(format!("{}-{}", dirname, req.branch)).to_string_lossy().to_string()
+    });
+
+    match crate::git::add_worktree(
+        &project.path,
+        &req.branch,
+        &target_path,
+        req.base_branch.as_deref(),
+        req.detach.unwrap_or(false),
+    )
+    .await
+    {
+        Ok(()) => {
+            let ws_list = workspaces::list_workspaces(&project).await;
+            let new_ws = ws_list.into_iter().find(|w| w.path == target_path);
+            match new_ws {
+                Some(ws) => (StatusCode::CREATED, Json(json!(ws))),
+                None => (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "path": target_path,
+                        "branch": req.branch,
+                    })),
+                ),
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // Git multi-line errors: use the last line which carries the
+            // actionable message (e.g. "fatal: ...")
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
 }
 
 async fn list_worktrees(

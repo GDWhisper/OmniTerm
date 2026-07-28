@@ -36,6 +36,39 @@ pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>>
     Ok(parse_worktree_list(&stdout))
 }
 
+/// Add a new git worktree to the repository at `repo_path`.
+/// Runs `git worktree add -b <branch> <target_path> [base]`.
+pub async fn add_worktree(
+    repo_path: &str,
+    branch: &str,
+    target_path: &str,
+    base: Option<&str>,
+    detach: bool,
+) -> anyhow::Result<()> {
+    let mut args: Vec<&str> = vec!["-C", repo_path, "worktree", "add"];
+
+    if detach {
+        args.push("--detach");
+    }
+
+    args.push("-b");
+    args.push(branch);
+    args.push(target_path);
+
+    if let Some(base_ref) = base {
+        args.push(base_ref);
+    }
+
+    let output = Command::new("git").args(&args).output().await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree add failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
     raw.trim()
         .split("\n\n")

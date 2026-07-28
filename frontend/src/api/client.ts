@@ -217,6 +217,11 @@ export const api = {
   // Worktrees (real-time git worktree discovery)
   listWorktrees: (projectId: string) =>
     request<Workspace[]>(`/projects/${projectId}/worktrees`),
+  createWorktree: (projectId: string, data: { branch: string; path?: string; base_branch?: string; detach?: boolean }) =>
+    request<Workspace>(`/projects/${projectId}/worktrees`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Sessions
   listSessions: (projectId: string) =>

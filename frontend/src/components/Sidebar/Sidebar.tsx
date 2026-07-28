@@ -18,7 +18,6 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
-import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
@@ -48,7 +47,9 @@ function SidebarBottomButton({
       style={{
         width: size,
         height: size,
-        border: '1px solid var(--border-strong)',
+        borderWidth: '1px',
+        borderStyle: 'solid',
+        borderColor: 'var(--border-strong)',
         color: 'var(--text-faint)',
         fontSize: 14,
       }}
@@ -97,6 +98,7 @@ export function Sidebar() {
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
+  const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
@@ -143,6 +145,13 @@ export function Sidebar() {
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  // Create worktree modal state
+  const [createWtOpen, setCreateWtOpen] = useState(false)
+  const [createWtProjectId, setCreateWtProjectId] = useState<string | null>(null)
+  const [createWtBranch, setCreateWtBranch] = useState('')
+  const [createWtPath, setCreateWtPath] = useState('')
+  const [createWtBaseBranch, setCreateWtBaseBranch] = useState('')
 
   // Browse state for the create-project modal's embedded directory list
   const [browsePath, setBrowsePath] = useState('')
@@ -723,6 +732,29 @@ export function Sidebar() {
     }
   }
 
+  const handleCreateWorktree = async () => {
+    if (!createWtProjectId || !createWtBranch.trim()) return
+    setSubmitting(true)
+    try {
+      await api.createWorktree(createWtProjectId, {
+        branch: createWtBranch.trim(),
+        path: createWtPath.trim() || undefined,
+        base_branch: createWtBaseBranch.trim() || undefined,
+      })
+      await loadWorktrees(createWtProjectId)
+      addToast('success', t('sidebar.worktreeCreated', { branch: createWtBranch.trim() }) ?? `Worktree "${createWtBranch.trim()}" created`)
+      setCreateWtOpen(false)
+      setCreateWtProjectId(null)
+      setCreateWtBranch('')
+      setCreateWtPath('')
+      setCreateWtBaseBranch('')
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const handleCreateSession = async () => {
     if (!activeProjectId || !sessWorkspaceId) return
     // Find the target worktree path (captured when "+" was clicked)
@@ -1111,10 +1143,7 @@ export function Sidebar() {
           <CountBadge count={projects.length} />
           <span className="title-bar-spacer" />
           <button
-            onClick={(e) => {
-              triggerBump(e.currentTarget)
-              setCreateProjOpen(true)
-            }}
+            onClick={() => setCreateProjOpen(true)}
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
@@ -1164,6 +1193,39 @@ export function Sidebar() {
                     <span className="proj-path">{proj.path}</span>
                   </div>
                   <div className="flex items-center gap-1">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!isExpanded) {
+                          setExpandedProjects(prev => {
+                            const next = new Set(prev)
+                            next.add(proj.id)
+                            return next
+                          })
+                          await Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
+                        }
+                        setCreateWtProjectId(proj.id)
+                        setCreateWtBranch('')
+                        setCreateWtPath('')
+                        setCreateWtBaseBranch('')
+                        setCreateWtOpen(true)
+                      }}
+                      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+                      title={t('sidebar.createWorktree') ?? 'Create Worktree'}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent)'
+                        e.currentTarget.style.color = 'var(--accent)'
+                        e.currentTarget.style.background = 'var(--accent-10)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-strong)'
+                        e.currentTarget.style.color = 'var(--text-faint)'
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      <IconPlus width={14} height={14} />
+                    </button>
                     <EditButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -1202,7 +1264,7 @@ export function Sidebar() {
                               className="sidebar-wt-row"
                               onClick={() => handleWorkspaceClick(proj, wt)}
                             >
-                              <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
+                              <span className={`selected-cursor ${isWtActive ? (pixelAnimationsEnabled ? '' : 'no-blink') : 'inactive'}`}>▶</span>
                               <GitBranchSprite
                                 size={14}
                                 color={
@@ -1222,7 +1284,6 @@ export function Sidebar() {
                                 className="sidebar-wt-add-btn"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  triggerBump(e.currentTarget)
                                   setActiveProject(proj.id)
                                   setActiveWorkspace(wt.id)
                                   setSessWorkspaceId(wt.id)
@@ -1601,7 +1662,9 @@ export function Sidebar() {
             style={{
               width: 26,
               height: 26,
-              border: '1px solid var(--border-strong)',
+              borderWidth: '1px',
+              borderStyle: 'solid',
+              borderColor: 'var(--border-strong)',
               color: 'var(--text-faint)',
               fontSize: 14,
             }}
@@ -1828,6 +1891,95 @@ export function Sidebar() {
         </div>
       </Modal>
 
+      {/* ── Create Worktree Modal ── */}
+      <Modal
+        open={createWtOpen}
+        onClose={() => {
+          setCreateWtOpen(false)
+          setCreateWtProjectId(null)
+          setCreateWtBranch('')
+          setCreateWtPath('')
+          setCreateWtBaseBranch('')
+        }}
+        title={t('sidebar.createWorktree') ?? 'Create Worktree'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreeBranch') ?? 'Branch Name'}
+            </label>
+            <input
+              type="text"
+              value={createWtBranch}
+              onChange={(e) => setCreateWtBranch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
+              placeholder="feature-xyz"
+              autoFocus
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreePath') ?? 'Target Path'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
+            </label>
+            <input
+              type="text"
+              value={createWtPath}
+              onChange={(e) => setCreateWtPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
+              placeholder={createWtProjectId
+                ? (() => {
+                    const proj = projects.find(p => p.id === createWtProjectId)
+                    if (!proj) return ''
+                    const p = proj.path.split('/')
+                    const dirname = p[p.length - 1]
+                    const parent = p.slice(0, -1).join('/') || '/'
+                    return `${parent}/${dirname}-${createWtBranch || '<branch>'}`
+                  })()
+                : ''}
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreeBaseBranch') ?? 'Base Branch'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
+            </label>
+            <input
+              type="text"
+              value={createWtBaseBranch}
+              onChange={(e) => setCreateWtBaseBranch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
+              placeholder="main"
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => {
+              setCreateWtOpen(false)
+              setCreateWtProjectId(null)
+              setCreateWtBranch('')
+              setCreateWtPath('')
+              setCreateWtBaseBranch('')
+            }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <ModalPrimary onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
+              {submitting ? t('sidebar.creating') : t('sidebar.create')}
+            </ModalPrimary>
+          </div>
+        </div>
+      </Modal>
+
       {/* ── Rename Modal (Project or Session, reused) ── */}
       <Modal
         open={renameOpen}
@@ -1977,7 +2129,9 @@ export function Sidebar() {
                   title={t('sidebar.refresh') ?? 'Refresh'}
                   className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
                   style={{
-                    border: '1px solid var(--border-strong)',
+                    borderWidth: '1px',
+                    borderStyle: 'solid',
+                    borderColor: 'var(--border-strong)',
                     color: 'var(--text-secondary)',
                     fontSize: 11,
                   }}
@@ -2180,7 +2334,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.rename')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--accent)'
@@ -2204,7 +2358,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all sidebar-glow-red-hover"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.delete')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--danger)'
@@ -2228,7 +2382,7 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.releaseAcp')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--warning)'
@@ -2251,7 +2405,7 @@ function ModalCancel({ onClick, children }: { onClick: () => void; children: Rea
     <button
       onClick={onClick}
       className="px-4 py-2 text-sm rounded-lg transition-all"
-      style={{ border: '1px solid var(--border-strong)', color: 'var(--text-muted)' }}
+      style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = 'var(--accent-10)'
         e.currentTarget.style.borderColor = 'var(--accent)'
@@ -2329,7 +2483,9 @@ function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
         style={{
           width: 18,
           height: 18,
-          border: '1px solid var(--border-strong)',
+          borderWidth: '1px',
+          borderStyle: 'solid',
+          borderColor: 'var(--border-strong)',
           color: 'var(--text-faint)',
           fontSize: 10,
         }}
