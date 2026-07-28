@@ -47,6 +47,7 @@
 - **决策**：接受进程丢失。DB 已存 `workspace_path` + 启动命令；新增两项恢复能力：
   1. **cwd 回写**：pty 会话定期（30s + 会话操作时）从 `/proc/<前台pid>/cwd` 采样回写 DB 新列 `last_cwd`，重建时用最后 cwd。
   2. **scrollback 落盘**：读循环 tee 进环形缓冲（内存 256KB/会话）并异步落盘（`$DATA_DIR/scrollback/<session_id>.log`，截尾保留末 256KB）；重启重建后先回放落盘内容再接新 pty，用户可见断点前上下文。
+- **落盘纪律（herdr 验证）**：ANSI 历史与结构数据**分文件**（终端输出可能含密钥，不混入结构文件）、文件权限 0600、tmp+rename 原子写、5s 去抖后台写、UTF-8 边界截断。"落盘可关闭"开关记为 P1 待定（安全 opt-out）。
 - **P1 增强**：agent 会话重建命令附加 resume 参数（如 `claude --continue`）。
 - **否决项**：守护进程分离（保活等价 tmux 但引入进程架构 + IPC，违反奥卡姆剃刀）。
 - **翻盘条件**：若用户实测"重建 + 回放"不足以恢复工作流，再评估守护进程方案。
@@ -58,6 +59,7 @@
 
 ### D7：agent hook 信道 = 本地 HTTP 回调
 - **决策**：`agent_hooks.rs` 生成的 hook 命令由 `tmux set-option -q @omniterm_agent <v>` 改为 `curl -s -X POST http://127.0.0.1:$PORT/api/v1/internal/agent-event -H 'X-OmniTerm-Token: <会话专属token>' -d '<kind>:<state>:<reason>:<event>:<ts>.$$'`。后端内存 KV（session_id → AgentSnapshot）+ tokio watch channel。
+- **herdr 三件套照搬**（socket 语义映射到 HTTP）：① spawn 时 env 注入 `OMNITERM_HOOK_URL` / `OMNITERM_SESSION_ID`（hook 命令引用 env，不硬编码端口）；② 按 source 记 seq 幂等去重；③ hook 侧 fail-silent + 0.5s 超时，绝不阻塞 agent。**HookAuthority 仲裁**：hook 集成存活时为状态权威，屏幕检测降级为 fallback。
 - **收益**：`ws/terminal.rs` 的 1s 轮询（L352）改为事件订阅推送；`api/hooks.rs` 读内存 KV。
 - **安全**：端点仅回环可用 + 每会话随机 token（spawn 时经环境变量注入），防同机其它进程伪造状态。
 - **否决项**：Unix socket（Windows/psmux 路径不兼容）；约定文件（竞态 + 清理负担）。
@@ -76,6 +78,12 @@
 - **决策**：`runtime_kind` 值 `'tmux'` → `'pty'`（migration UPDATE）；`tmux_session_name` 列重命名为 `engine_session_name`（语义：引擎内会话标识，沿用 `lt_{uuid8}` 生成规则）；新增 `last_cwd` 列。存量 tmux 会话迁移后按"进程已丢"处理，走 D5 重建流程。
 - **理由**：列名去 tmux 语义，避免长期误导；SQLite `ALTER TABLE RENAME COLUMN` 直接支持。
 
+### D11：分屏 = 前端原生，每 pane 一个独立会话（P1，不在本计划范围）
+- **决策**：tmux 分屏（用户敲 prefix、服务端渲染进单 xterm）随引擎移除。现代替代为**前端网格布局 + 多 xterm.js 实例，每 pane = 独立 pty 会话 + 独立 WS**；后端零新增概念（SessionManager 天然多会话），布局状态存前端/DB。归属方向规划 Phase 4（P1），单独立项。
+- **理由**：奥卡姆剃刀——服务端 pane 树是 tmux 遗留概念；herdr 亦证明布局纯属客户端层（其 BSP 树在 TUI 侧）。
+- **代价**：Phase 3 切换后至 P1 落地前，产品短暂无分屏能力（现状 modern 分屏键位使用率低，可接受）。
+- **翻盘条件**：若多 pane 场景强需求"同会话多视图"（同一 pty 两个 pane），再评估服务端订阅复用，仍无需 pane 树。
+
 ---
 
 ## 3. 实施分期（文件级）
@@ -83,6 +91,7 @@
 > 每 Phase 结束提交并保持 `cargo build` / `tsc` 通过。Phase 1-2 为纯新增（不动 tmux 链路），Phase 3 为切换点（单次提交内完成后端切换），风险集中可控。
 
 ### Phase 1：`src/pty/` 会话引擎（纯新增）
+> 实现细节参考 `docs/reference/herdr-reference.md` §去 tmux 增补：spawn 用 **dup 裸 fd + drop(PtyPair)**（根除 VEOF 注入，替代现 pty_io.rs 写侧 workaround，配 fd 计数回归测试）、resize 最新值覆盖槽、reattach 后 **resize nudge**（`rows-1 → 30ms → rows` 强制 TUI 重绘，补屏必备）、SIGHUP→TERM→KILL 三级进程树清理、POLLHUP 当可读、固定 `TERM=xterm-256color`。
 - **新增** `Cargo.toml`：`wezterm-term` 依赖。
 - **新增** `src/pty/mod.rs`：`SessionManager`（`HashMap<String, PtySession>`，create/get/kill/list/exists）。
 - **新增** `src/pty/session.rs`：`PtySession` —— openpty(初始尺寸) + spawn（shell 或 agent 命令，注入 hook token 环境变量）+ 读循环（tee → ① 订阅者广播 mpsc ② 环形缓冲 + 落盘 ③ wezterm-term feed ④ `last_output_at: Instant`）+ `write` / `resize` / `kill`（killpg）+ `capture_screen()` / `pane_title()` / `render_screen_ansi()`（补屏）。
@@ -146,4 +155,4 @@
 | Phase 3 单提交切换面大 | Phase 1-2 纯新增先行合入；Phase 3 前全量手测 |
 | scrollback 落盘 IO 放大 | 异步批量写 + 截尾；压测超大输出（`yes`）|
 
-**实施后更新**：`docs/architecture/backend.md`（引擎变更 + 多实现差异）、`docs/architecture/frontend.md`、`docs/workflows/agent-edit-manual.md`（tmux 条目清理）、`CHANGELOG.md`、`PROGRESS.md`、`docs/reference/user-testing.md`（新用例）、新建 `docs/reference/herdr-reference.md`；方向规划与本文件移入 `archive/`。
+**实施后更新**：`docs/architecture/backend.md`（引擎变更 + 多实现差异）、`docs/architecture/frontend.md`、`docs/workflows/agent-edit-manual.md`（tmux 条目清理）、`CHANGELOG.md`、`PROGRESS.md`、`docs/reference/user-testing.md`（新用例）；`docs/reference/herdr-reference.md` 已于 2026-07-28 增补 pty 引擎借鉴章节；方向规划与本文件移入 `archive/`。

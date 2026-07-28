@@ -106,3 +106,38 @@ OmniTerm 用 tmux 做 server 层 + xterm.js 做渲染，架构层不需要照搬
 - 移植路径：`tmux display -p '#{pane_pid}'` 找前台进程组 → `tmux capture-pane -p` 底部快照 → TOML 规则引擎 + 防抖 → Sidebar 状态徽标（Blocked > Done > Working 聚合）
 - `#{pane_title}` 可拿到 OSC 标题，作为廉价 working 信号（Claude spinner 标题）
 - P1 hooks：Claude Code hooks（Notification/Stop/PermissionRequest）POST 到 Axum 端点
+
+---
+
+## 去 tmux / 自管 pty 引擎借鉴（2026-07-28 增补）
+
+> 服务于 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` Phase 1-2。上文检测体系部分不重复，此处聚焦 PTY 管理、VT 模拟、持久化恢复、hook 信道。
+
+### 架构验证结论
+
+herdr 证明该路线可行：**portable-pty 只当 openpty+spawn 用（裸 fd 自管 I/O）、服务端 VT 模拟器做唯一真相源（capture / 补屏 / 恢复全部由它出）、ANSI dump 落盘重放恢复、hook 权威 + 屏幕检测兜底**。
+
+- **spawn 模式**（`src/pty/backend/unix.rs:12-42`）：`openpty` → dup 裸 fd（CLOEXEC）→ `spawn_command` → **立即 `drop(PtyPair)`**。从不用 portable-pty 的 reader/writer——`UnixMasterWriter::Drop` 会向 pty 注入 `\n + VEOF`（vendored `unix.rs:388-404`）。dup+drop 根除此坑（比 OmniTerm 现有 `pty_io.rs` 只绕写侧更彻底），配 `/proc/self/fd` 计数回归测试（backend/unix.rs:72-93）。
+- **无原始字节 broadcast**：读循环把字节喂给唯一 VT 模拟器（herdr 用 libghostty-vt，OmniTerm 换 wezterm-term 等价）；重连补屏 = 从模拟器重渲染整帧；重启恢复 = 把落盘 ANSI seed 进新模拟器（`pane/terminal.rs:1282-1295`）。模拟器要写回 pty 的应答（DSR/DA）由 I/O 层闭环处理（terminal.rs:1059-1207）。
+- **hook 信道**（Unix socket newline-JSON → OmniTerm 映射为 HTTP）：spawn 时 env 注入（`HERDR_SOCKET_PATH`/`PANE_ID` → `OMNITERM_HOOK_URL`/`SESSION_ID`）；按 source 记 seq 幂等去重（`terminal/state.rs:18-25`）；hook 脚本 fail-silent + 0.5s 超时，绝不阻塞 agent。
+- **冷重启恢复**（`src/persist/`）：结构快照与 ANSI 历史**分文件**（`session.json` / `session-history.json`，防终端密钥混入结构文件）；tmp+rename 原子写（io.rs:44-61）；5s 去抖后台线程；版本号 + 拒载新版（io.rs:128-141）。
+
+### 可移植边角处理
+
+| 模式 | herdr 位置 | 要点 |
+|---|---|---|
+| resize 最新值覆盖槽 | `pty/actor/unix.rs:160-184` | Mutex 槽位而非队列，连续 resize 天然去抖 |
+| 重绘 nudge | `pty/actor/unix.rs:712-756` | reattach 后 `rows-1 → 30ms → rows` 强制 TUI 重绘（替代 `tmux refresh-client`），**补屏必备，缺它 vim/htop 重连花屏** |
+| 进程树三级清理 | `pane.rs:1176-1224` | SIGHUP → SIGTERM → SIGKILL，各 250ms 宽限、20ms 轮询 |
+| 渲染信号合并 | `pane.rs:1978-1982` | `render_dirty.swap(true)` 为 false 才 notify——无锁去重 |
+| DEC 2026 抑制 | `pane/terminal.rs:1184` | 同步输出块内不触发下游推送 |
+| poll 细节 | `pty/fd.rs:182-215` | EINTR 重算 deadline；**POLLHUP 当可读**（读尽退出前残留输出） |
+| TERM 策略 | `pane.rs:53-63` | 固定 `TERM=xterm-256color` + `COLORTERM=truecolor`，不泄漏宿主环境 |
+| UTF-8 边界截断 | `pane.rs:1227-1240` | 历史截断对齐 UTF-8 边界 |
+| 写关闸防竞态 | `pty/actor/unix.rs:101-130` | gate 检查 → 预留 permit → 二次检查 |
+| child 收割 | `pane.rs:1926-1939` | `spawn_blocking(child.wait())`，不丢退出事件 |
+| OSC 尺寸护栏 | `pane/osc.rs:136-139` | OSC body 1024B 上限，防异常序列撑爆内存 |
+
+### 不适用项
+
+libghostty-vt FFI（Zig 构建链，用 wezterm-term 替代）；SCM_RIGHTS 活 fd 热切换 + actor quiesce 协议（为单二进制自更新设计，OmniTerm 走落盘恢复）；ratatui 帧 diff 二进制协议 wire.rs（前端是 xterm.js，WS 推 ANSI）；单 headless server + autodetect 拉起（Axum 本身常驻）；workspaces/tabs/BSP 布局树（OmniTerm 分屏为前端概念，每 pane = 独立会话）；thread-per-connection API server（tokio 下用异步任务）。
