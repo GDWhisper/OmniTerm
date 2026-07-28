@@ -1953,7 +1953,7 @@ export function Sidebar() {
                   })()
                 : ''}
               className={inputClass}
-              style={inputStyle}
+              style={{ ...inputStyle, direction: 'rtl', textAlign: 'left' as const }}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
