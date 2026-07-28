@@ -88,7 +88,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/dev/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（可复用理论 → 诊断错误 → 具体根因），详见文档头部写作规范 |
 | `docs/reference/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |
 | `docs/reference/references.md` | 需要查看外部参考实现或 License 合规规则 | 新增参考仓库、License 规则变更 |
-| `docs/reference/herdr-reference.md` | 开发 agent 状态检测、agent 会话恢复、agent 编排 API 前**必读**（herdr 借鉴清单） | herdr 新版本有新可借鉴项、借鉴项落地后标记状态 |
 | `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |
 | `CHANGELOG.md` | 查看面向用户的版本变更历史 | 有实质性的新功能/修复/重构/破坏性变更后**必须添加条目**（反复修改未解决的 bug 不写） |
 | `dev.sh` | 启动/停止开发环境（`./dev.sh start\|stop\|status\|logs`） | 端口配置变更、启动逻辑调整 |
