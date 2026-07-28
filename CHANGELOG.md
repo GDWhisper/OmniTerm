@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-28) `[backend]` 新增 `omniterm update` 自更新子命令：渠道感知（npm 装的代跑 `npm update -g`、cargo 装的代跑 `cargo install`、install.sh/手动装的从 GitHub Release 下载对应平台 asset 自替换），semver 三态比对防 dev 构建被降级，sha256 digest 校验 + `--version` 二次验证 + 原子 rename 确保不留半更新状态，`--check` 只查不装；依赖新增 reqwest（rustls）/semver/sha2（`src/update.rs`、`src/main.rs`、`Cargo.toml`）
 - (2026-07-28) `[frontend]` `[backend]` `[api]` Sidebar 一键创建 git worktree：项目行新增 `+` 按钮，弹窗填入分支名（必填）、目标路径（选填，留空创建平级目录 `<parent>/<dirname>-<branch>`，含提示文字）、基准分支（下拉框，从 `GET /projects/{id}/branches` 获取本地分支列表，默认当前 HEAD）；后端 `POST /projects/{id}/worktrees` 执行 `git worktree add -b`，创建成功后自动刷新 worktree 列表；新增 `GET /projects/{id}/branches` 获取本地分支（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/api/client.ts`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-27) `[frontend]` `[backend]` `[api]` ACP 聊天 `@` 引用文件（F04 Phase A，同计划 §3.4）：输入框光标处键入 `@` 触发文件补全弹窗（复用斜杠命令弹窗模式，200ms 防抖调 `/files/search`，↑↓/Enter/Tab/Esc 键盘导航），选中插入 `@相对路径`；发送时后端从 prompt 文本提取 `@path`（`@` 前须行首/空白排除 email，去重上限 8），经 sanitize（canonicalize + workspace 越界拒绝）读取内容（单文件 ≤64KB 截断、非 UTF-8/目录/不存在静默跳过）注入 `ContentBlock::Resource`；§8 能力门控：`promptCapabilities.embeddedContext` 未声明的 agent 降级为文件内容内联进 text block。`/files/search` 响应新增 `rel_path` 字段（相对搜索根路径，目录列表不返回）（`src/ws/acp.rs`、`src/acp/client.rs`、`src/fs/mod.rs`、`frontend/src/utils/atReference.ts`、`frontend/src/components/Chat/ChatInput.tsx`）
 

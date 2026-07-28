@@ -7,6 +7,7 @@ mod git;
 mod models;
 mod presets;
 mod tmux;
+mod update;
 mod utils;
 mod workspaces;
 mod ws;
@@ -43,6 +44,8 @@ enum Commands {
     Status(StatusArgs),
     /// 清空所有用户（忘记密码后，先用此命令再 start 设新密码）
     ResetAuth(ResetAuthArgs),
+    /// 自更新到最新发布版本
+    Update(update::UpdateArgs),
 }
 
 #[derive(Parser)]
@@ -156,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Update(args) => return update::run(args).await,
         Commands::ResetAuth(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
             let db = SqlitePoolOptions::new().max_connections(1).connect(&db_url).await?;

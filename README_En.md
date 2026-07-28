@@ -39,7 +39,7 @@ cargo install omniterm        # or see other methods below
 omniterm                      # open http://localhost:9077
 ```
 
-In the browser, set an initial password, add a project directory, and start a session — pick an agent for chat mode, or leave it blank for a plain terminal.
+In the browser, set an initial password, add a project directory, and start a session — pick an agent for chat mode, or leave it blank for a plain terminal. Upgrade anytime with `omniterm update`.
 
 <details>
 <summary>Other install methods (Shell script / PowerShell / Docker)</summary>

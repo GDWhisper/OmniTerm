@@ -38,6 +38,9 @@ which = "7"
 agent-client-protocol = "1.2"
 regex = "1"
 toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+semver = "1"
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -48,7 +51,6 @@ windows-sys = { version = "0.60", features = ["Win32_System_Console", "Win32_Sys
 
 [dev-dependencies]
 tokio-test = "0.4"
-reqwest = { version = "0.12", features = ["json"] }
 
 # Clippy 渐进策略 (docs/dev/plans/2026-07-24-quality-gates.md §3.3)：
 # 先以 warn 启用 correctness/suspicious/complexity/perf/style 组，

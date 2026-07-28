@@ -104,16 +104,42 @@ ACP is a protocol satisfied by multiple agent implementations. **Do not assume o
 
 ## CLI Reference
 
-```
-omniterm [OPTIONS]
+CLI 为 clap 4 子命令结构（`src/main.rs` 定义枚举与 dispatch；`update` 逻辑在 `src/update.rs`）。
 
-Options:
-  -p, --port <PORT>              监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker])
-      --db <DB>                  数据库连接 [env: DATABASE_URL]
-      --jwt-secret <KEY>         JWT 签名密钥 [env: JWT_SECRET]
-  -V, --version                  版本号
-  -h, --help                     帮助
 ```
+omniterm <COMMAND>
+
+Commands:
+  start       启动服务
+  stop        停止后台运行的服务（通过 PID 文件发 SIGTERM）
+  status      查看服务运行状态
+  reset-auth  清空所有用户（忘记密码后，先用此命令再 start 设新密码）
+  update      自更新到最新发布版本
+
+start options:
+  -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]
+      --db <DB>           数据库连接 [env: DATABASE_URL]
+      --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]
+      --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
+
+stop / status / reset-auth options:
+      --db <DB>           数据库连接（用于定位 PID 文件）[env: DATABASE_URL]
+
+update options:
+      --check             只检查是否有新版本，不执行更新
+```
+
+### `update` 渠道感知自更新
+
+按 `current_exe()` 路径检测安装渠道，统一先查 GitHub `releases/latest`（semver 三态比对：相等→已最新；本地更新→提示 development build 不动作；远端更新→执行）：
+
+| 渠道 | 判据 | 行为 |
+|------|------|------|
+| npm | 路径含 `node_modules` | 代跑 `npm update -g @gdwhisper/omniterm`（透传退出码） |
+| cargo | 位于 `$CARGO_HOME/bin`（fallback `~/.cargo/bin`） | 代跑 `cargo install omniterm`（不自替换，避免与 `.crates.toml` 元数据脱钩） |
+| 其它（install.sh / 手动） | 兜底 | 下载平台 asset → sha256 digest 校验（GitHub API asset `digest` 字段，缺失则跳过）→ spawn `--version` 验证 → 同目录临时文件原子 rename 替换；目录不可写提示 `sudo omniterm update`（不自动提权）；Windows 走 rename-self-to-`.old` 手法 |
+
+Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Windows 为 `.zip`）。任何失败不留半更新状态（写操作全在临时文件，rename 是最后一步）。
 
 ## Environment Variables
 
