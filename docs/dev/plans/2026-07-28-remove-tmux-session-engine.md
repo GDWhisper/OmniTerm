@@ -10,10 +10,11 @@
 ## 1. 背景与根因
 
 ### 1.1 现状
-OmniTerm 当前架构：`React 前端 → Axum 后端 → tmux（会话引擎）`。**终端（TUI 前端面板）是产品的核心载体——终端内能做大量工作（shell、编辑器、交互式 CLI、TUI 程序等），去除 tmux 仅替换其底层会话引擎，终端交互层不仅保留，且因摆脱 tmux 范式约束而得以强化。** tmux 实际承担三件事：
+OmniTerm 当前架构：`React 前端 → Axum 后端 → tmux（会话引擎）`。**终端（TUI 前端面板）是产品的核心载体——终端内能做大量工作（shell、编辑器、交互式 CLI、TUI 程序等），去除 tmux 仅替换其底层会话引擎，终端交互层不仅保留，且因摆脱 tmux 范式约束而得以强化。** tmux 实际承担四件事：
 1. **保活**：shell 进程在浏览器断开后继续运行，重连可接回。
 2. **多路复用**：一个后端管理多个 session / pane / window。
 3. **pty 承载**：为 shell 提供伪终端（行规、信号、窗口大小）。
+4. **agent 检测/状态钩子的事件源**：`src/tmux/` 下 `agent_detect / agent_hooks / agent_state / agent_watch`（约 1500 行）依赖 tmux control mode 与 hook 机制做 agent 状态检测与事件上报。**这是自管 pty 后需要自行实现等价机制的最大隐性成本**——`portable-pty` 不提供 control mode / hook 等价物，须基于进程树（`process_info`）与 pty 流自建事件源。
 
 ### 1.2 问题清单（与 tmux 耦合导致的冲突）
 | 问题 | 严重度 | 根因 |
@@ -89,7 +90,7 @@ React 前端 ──WebSocket──> Axum 后端 ──portable-pty──> shell
 ## 5. 实施分期（仅顺序，不含任务拆解）
 > 以下为依赖顺序方向的占位，具体 Phase 与文件改动须由后续实施计划细化。
 
-- **Phase 0（前置）**：盘点 `src/tmux/mod.rs` 的全部调用面，绘制"tmux 能力 → 自管 pty 等价实现"映射表。
+- **Phase 0（前置）**：盘点 tmux 的全部调用面，绘制"tmux 能力 → 自管 pty 等价实现"映射表。盘点范围不限于 `src/tmux/`（8 文件约 2447 行），须显式覆盖全部调用方——现状全仓 17 个文件约 294 处引用，重点包括 `src/api/sessions.rs`（约 60 处）、`src/ws/terminal.rs`、`src/api/files.rs`、`src/api/hooks.rs`、`src/api/projects.rs`、`src/models/session.rs` 及前端 `useTerminal.ts` 等。
 - **Phase 1（地基）**：Axum 引入 `portable-pty`，实现单 session 的 pty 创建 / 流式输出 / 输入转发 / 窗口大小同步 / 断线保活。
 - **Phase 2（多路）**：扩展为多 session / 多 pane 的生命周期管理，提供与原 tmux 调用等价的后端接口。
 - **Phase 3（切换）**：前端经 Axum 新接口驱动会话，移除对 tmux 的所有调用与配置。
