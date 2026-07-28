@@ -65,12 +65,11 @@ impl AcpSupervisor {
     }
 
     pub async fn shutdown_all(&self) {
-        let mut map = self.clients.lock().await;
-        for (_, client) in map.drain() {
-            let c = Arc::try_unwrap(client).ok();
-            if let Some(c) = c {
-                c.disconnect().await;
-            }
+        // 通过 Arc 引用调用 shutdown()，不依赖 try_unwrap（可能因 WS handler
+        // 仍持有引用而失败，导致 agent 子进程变孤儿）。
+        let clients: Vec<_> = self.clients.lock().await.drain().collect();
+        for (_, client) in clients {
+            client.shutdown().await;
         }
     }
 }

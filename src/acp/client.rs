@@ -65,7 +65,7 @@ pub struct AcpClient {
     connection: ConnectionTo<AcpAgentRole>,
     session_id: SessionId,
     session_update_tx: broadcast::Sender<SessionNotification>,
-    _shutdown_tx: oneshot::Sender<()>,
+    _shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// agent 连接任务崩溃时广播错误原因，供 WS 层即时透传给前端。
     /// 取代原先 `disconnect` 中 `let _ = connection_task.await` 被静默丢弃的错误。
     crash_tx: broadcast::Sender<String>,
@@ -427,7 +427,7 @@ impl AcpClient {
             connection,
             session_id,
             session_update_tx,
-            _shutdown_tx: shutdown_tx,
+            _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
             terminal_manager,
@@ -886,7 +886,7 @@ impl AcpClient {
             connection,
             session_id,
             session_update_tx,
-            _shutdown_tx: shutdown_tx,
+            _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
             terminal_manager,
@@ -900,11 +900,24 @@ impl AcpClient {
         })
     }
 
+    /// 通过 shared reference 回收所有子进程并通知连接任务退出。
+    /// 供 [`AcpSupervisor::shutdown_all`] 在持有 `Arc<AcpClient>` 时调用
+    /// （`disconnect` 消费 self，无法在 Arc 上使用）。
+    pub async fn shutdown(&self) {
+        self.terminal_manager.kill_all().await;
+        // 取出并 drop shutdown_tx → 连接任务的 shutdown_rx 收到 RecvError 后退出。
+        // lock().await 安全：shutdown_tx 仅在此处和 disconnect 中被 take，
+        // 且调用方不会跨 await 持有此锁。
+        let _ = self._shutdown_tx.lock().unwrap().take();
+    }
+
     pub async fn disconnect(self) {
         // 回收本会话可能创建的终端子进程（kill_on_drop 依赖 TerminalProcess 被 drop，
         // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
         self.terminal_manager.kill_all().await;
-        drop(self._shutdown_tx);
+        if let Ok(mut guard) = self._shutdown_tx.try_lock() {
+            let _ = guard.take();
+        }
         // 注意：agent 连接任务句柄已移交给 `spawn_crash_watcher`，由其负责在
         // 连接异常退出时广播错误；此处不再 `await`，仅触发优雅关闭。
     }
