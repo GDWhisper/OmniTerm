@@ -27,6 +27,9 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+
 #[derive(Parser)]
 #[command(name = "omniterm", version, about = "Web-based tmux terminal manager")]
 struct Cli {
@@ -86,6 +89,10 @@ struct StartArgs {
     /// 监听地址（默认 127.0.0.1；设为 0.0.0.0 可监听所有网络接口）
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
     host: String,
+
+    /// 启动后进入后台运行（Unix only；Windows 不支持）
+    #[arg(short = 'd', long)]
+    daemonize: bool,
 
     /// 启动前清空所有用户（忘记密码时使用，重启后需重设密码）
     #[arg(long, env = "OMNITERM_RESET_AUTH")]
@@ -154,16 +161,71 @@ fn default_db_url() -> String {
     format!("sqlite:{}/{}.db?mode=rwc", dir, name)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?))
-        .init();
+/// Unix daemonization: double-fork + setsid + stdio → /dev/null.
+/// Must be called before the tokio runtime starts (fork safety).
+#[cfg(unix)]
+fn daemonize() -> std::io::Result<()> {
+    use std::process;
 
+    // First fork — detach from terminal
+    match unsafe { libc::fork() } {
+        -1 => return Err(std::io::Error::last_os_error()),
+        0 => {}                // child continues
+        _ => process::exit(0), // parent exits
+    }
+
+    // Create new session (become session leader, detach from controlling terminal)
+    unsafe {
+        libc::setsid();
+    }
+
+    // Second fork — ensure we cannot re-acquire a controlling terminal
+    match unsafe { libc::fork() } {
+        -1 => return Err(std::io::Error::last_os_error()),
+        0 => {}                // child continues
+        _ => process::exit(0), // intermediate session leader exits
+    }
+
+    // Redirect stdin/stdout/stderr to /dev/null
+    let devnull = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null")?;
+    let fd = devnull.as_raw_fd();
+    unsafe {
+        libc::dup2(fd, 0); // stdin
+        libc::dup2(fd, 1); // stdout
+        libc::dup2(fd, 2); // stderr
+    }
+    drop(devnull); // close the original fd (dup'd fds remain open)
+
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    // Parse CLI synchronously *before* initializing the tokio runtime,
+    // so daemonization can fork safely.
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::Update(args) => return update::run(args).await,
+    // Daemonize before tokio runtime, if requested
+    #[cfg(unix)]
+    if let Commands::Start(ref args) = cli.command
+        && args.daemonize
+    {
+        daemonize()?;
+    }
+    #[cfg(not(unix))]
+    if let Commands::Start(ref args) = cli.command
+        && args.daemonize
+    {
+        anyhow::bail!("--daemonize is only supported on Unix");
+    }
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?))
+            .init();
+
+        match cli.command {
+        Commands::Update(args) => update::run(args).await,
         Commands::ResetAuth(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
             let db = SqlitePoolOptions::new().max_connections(1).connect(&db_url).await?;
@@ -179,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
                 "Deleted {} user account(s). Start the server with `omniterm start` and set a new password.",
                 count
             );
-            return Ok(());
+            Ok(())
         }
         Commands::Stop(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
@@ -220,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
             }
             let _ = std::fs::remove_file(&pid_file);
             eprintln!("Stopped.");
-            return Ok(());
+            Ok(())
         }
         Commands::Status(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
@@ -238,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             eprintln!("Running (PID: {})", pid);
-            return Ok(());
+            Ok(())
         }
         Commands::Start(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
@@ -369,4 +431,5 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+    })
 }
