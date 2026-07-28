@@ -21,6 +21,8 @@ export function UpdateBadge() {
   const { t } = useTranslation()
   const [info, setInfo] = useState<VersionInfo | null>(null)
   const [open, setOpen] = useState(false)
+  // Lifted above the panel so "updated, restart pending" survives close/reopen.
+  const [phase, setPhase] = useState<UpdatePhase>('idle')
 
   useEffect(() => {
     api
@@ -43,15 +45,26 @@ export function UpdateBadge() {
       >
         {t('update.badge')}
       </button>
-      {open && <UpdatePanel info={info} onClose={() => setOpen(false)} />}
+      {open && (
+        <UpdatePanel info={info} phase={phase} setPhase={setPhase} onClose={() => setOpen(false)} />
+      )}
     </>
   )
 }
 
-function UpdatePanel({ info, onClose }: { info: VersionInfo; onClose: () => void }) {
+function UpdatePanel({
+  info,
+  phase,
+  setPhase,
+  onClose,
+}: {
+  info: VersionInfo
+  phase: UpdatePhase
+  setPhase: (p: UpdatePhase) => void
+  onClose: () => void
+}) {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
-  const [phase, setPhase] = useState<UpdatePhase>('idle')
   const { ref, pos } = useAnchorPopup({
     toggleSelector: '[data-toggle="update-badge"]',
     width: POPUP_WIDTH,
