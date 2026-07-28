@@ -83,6 +83,10 @@ struct StartArgs {
     #[arg(long, env = "JWT_SECRET", default_value = "omniterm-default-secret-change-me")]
     jwt_secret: String,
 
+    /// 监听地址（默认 127.0.0.1；设为 0.0.0.0 可监听所有网络接口）
+    #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
+    host: String,
+
     /// 启动前清空所有用户（忘记密码时使用，重启后需重设密码）
     #[arg(long, env = "OMNITERM_RESET_AUTH")]
     reset_auth: bool,
@@ -313,9 +317,8 @@ async fn main() -> anyhow::Result<()> {
             let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
 
             // ── 绑定 ─────────────────────────────────────────────────
-            let host = std::env::var("OMNITERM_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-            let bind =
-                std::env::var("BIND_ADDR").unwrap_or_else(|_| format!("{}:{}", host, args.port));
+            let bind = std::env::var("BIND_ADDR")
+                .unwrap_or_else(|_| format!("{}:{}", args.host, args.port));
 
             let listener = tokio::net::TcpListener::bind(&bind).await?;
 
