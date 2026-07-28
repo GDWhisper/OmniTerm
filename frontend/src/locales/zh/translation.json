@@ -54,7 +54,7 @@
   "sidebar.worktreeBaseBranch": "基准分支",
   "sidebar.worktreeCreated": "Worktree「{{branch}}」创建成功",
   "sidebar.worktreePathHint": "留空则在项目同级目录创建 <项目名>-<分支名>",
-  "sidebar.worktreeDefaultBase": "默认 (当前 HEAD)",
+  "sidebar.worktreeDefaultBase": "默认（当前分支的最新提交）",
   "sidebar.loading": "加载中...",
   "sidebar.noSessions": "暂无会话",
   "settings.title": "设置",

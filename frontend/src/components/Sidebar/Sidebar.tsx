@@ -1975,7 +1975,7 @@ export function Sidebar() {
                 fontFamily: READER_FONT,
               }}
             >
-              <option value="">{createWtBranchesLoading ? (t('sidebar.loading') ?? 'Loading...') : (t('sidebar.worktreeDefaultBase') ?? '默认 (当前 HEAD)')}</option>
+              <option value="">{createWtBranchesLoading ? (t('sidebar.loading') ?? 'Loading...') : (t('sidebar.worktreeDefaultBase') ?? '默认（当前分支的最新提交）')}</option>
               {createWtBranches.map(b => (
                 <option key={b} value={b}>{b}</option>
               ))}

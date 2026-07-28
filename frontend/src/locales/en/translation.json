@@ -54,7 +54,7 @@
   "sidebar.worktreeBaseBranch": "Base Branch",
   "sidebar.worktreeCreated": "Worktree \"{{branch}}\" created",
   "sidebar.worktreePathHint": "Leave empty to create a sibling directory: <project>-<branch>",
-  "sidebar.worktreeDefaultBase": "Default (current HEAD)",
+  "sidebar.worktreeDefaultBase": "Default (current branch HEAD)",
   "sidebar.loading": "Loading...",
   "sidebar.noSessions": "No sessions",
   "settings.title": "Settings",
