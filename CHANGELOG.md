@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.0] - 2026-07-29
 
 ### Added
 
@@ -69,10 +69,6 @@ Prefix each entry with the area it affects:
 - (2026-07-26) `[backend]` `[frontend]` tmux agent 屏幕状态检测（借鉴 herdr P0，见 `docs/reference/herdr-reference.md`）：后端新增 `src/tmux/agent_detect.rs`（TOML manifest 屏幕规则引擎，`src/tmux/manifests/{claude,codex,qoder}.toml` 声明式判 running/waiting/idle）+ `src/tmux/agent_watch.rs`（每秒轮询活跃 pane，idle 两连击防抖、`#{window_activity}` 未变跳扫描）+ `process_info::foreground_pid`（tpgid 前台进程识别 agent 种类）；屏幕检测为状态权威覆盖 hook 上报，`GET /sessions`/`/sessions/external` 直接返回检测结果，无需 agent 配合、手动启动的 agent 也可监控。前端新增 `utils/agentAggregate.ts` 会话组聚合（blocked>done>working），Sidebar 项目/worktree/会话三级状态徽标：等待输入→琥珀、完成未查看→绿、运行中→蓝脉冲；新增依赖 `regex`/`toml`
 - (2026-07-26) `[frontend]` `[backend]` `[api]` 右侧栏 git 管理面板（FILES | GIT 标签路由）：新增 `RightPanel` 容器（统一标题栏/折叠 rail，FileManager 变纯内容组件）+ `GitPanel`（分支切换/新建、ahead/behind 徽标、FETCH/PULL/PUSH、CHANGES|HISTORY 视图、stage/unstage/discard、底部提交框）+ 自研 unified diff 渲染与 diff/commit 抽屉；后端 `src/git/repo.rs` git CLI 子进程服务 + `src/api/git.rs` 14 个 `/api/v1/git/*` 端点（仓库绑定复用 session/workspace 解析，不接受任意路径；错误细分 auth/non_fast_forward/no_upstream/dirty_worktree/timeout）；可见时串行轮询 5s + ACP 编辑工具完成即时刷新提示；设计文档 `docs/dev/plans/2026-07-26-git-panel.md`
 - (2026-07-25) `[frontend]` ACP 聊天排队后续消息（queued follow-up）：agent 忙碌期输入框保持可编辑，按 Enter 不打断当前任务而是暂存到单槽队列，agent `prompt_done` 后自动发出。chatStore `queuedMessage` 字段（sessionStorage 镜像，`omniterm_chat_queue:{sid}`，F5 友好）+ `enqueueMessage` / `clearQueuedMessage` / `hydrateQueuedMessage` / `addUndeliveredMessage` actions；ChatInput 输入框上方加 `Next: <预览> ✕` chip，busy 时双按钮（`Cancel` 取消 in-flight + `Queue` 排队新消息），队列满时 Queue 按钮 disabled 强制先 ✕。断连时未发队列消息作为 `undelivered: true` user 消息写入内存流（不入库）留痕。drain 在 `useAcpChat` `prompt_done` 分支内联处理（避免 `useCallback` TDZ 与 ChatView 状态机同步问题），详见 `docs/adr/0001-acp-queue-drain-location.md`；domain glossary 见 `CONTEXT.md`（`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/{ChatInput,ChatView,ChatMessage}.tsx`、`frontend/src/locales/{en,zh}/translation.json`、`docs/architecture/frontend.md`）
-- (2026-07-24) `[qa]` 新增 push CI 工作流 `.github/workflows/ci.yml`：push 到 `dev/main/preview/debug` 触发，rust job（`cargo check`/`fmt --check`/`clippy -- -D warnings`/`test`）+ frontend job（`pnpm lint`/`test`/`build`）+ audit job（`cargo-deny`/`pnpm audit`/`check-doc-index`，continue-on-error 不阻塞）；详见 `docs/dev/plans/2026-07-24-quality-gates.md`
-- (2026-07-24) `[qa]` 修复并升级 pre-commit hook：`dev.sh start` 自动设置 `core.hooksPath=scripts/hooks`（原指向不存在的 `.githooks` 致 hook 失效）；hook 纳入 `cargo fmt --check`、`cargo clippy -- -D warnings`、前端 `pnpm test --run`
-- (2026-07-24) `[qa]` 新增 `rustfmt.toml`（基线）、`deny.toml`（许可证 + 安全公告白名单含 FSL-1.1-MIT）、`Cargo.toml [lints.clippy]`（correctness/suspicious/style/complexity/perf=warn）
-
 ### Changed
 
 - (2026-07-27) `[frontend]` 像素字体字距收归 token 统一管理并整体收紧 0.5px：新增 `--pixel-tracking-sm/md/lg`（0.5/1.5/2px，原硬编码 1/2/3px），index.css 18 处像素/logo 字体规则与 2 处 TSX 内联字距全部改引 token，Silkscreen 偏宽字形下观感更紧凑；阅读字体字距不受影响（`frontend/src/index.css`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Settings/Settings.tsx`）
