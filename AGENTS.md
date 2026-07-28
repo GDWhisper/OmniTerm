@@ -94,6 +94,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `scripts/bump-version.sh` | 准备发布时同步版本号：`./scripts/bump-version.sh 0.2.0` | 版本号文件路径变更 |
 | `scripts/sync-main.sh` | 同步 dev → main（黑名单排除开发文档 + 修复分支配置） | 黑名单调整、分支配置修复逻辑变更 |
 | `docs/dev/plans/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，建议过一遍其**检查点清单**（非强制结构，按任务性质裁剪） | 检查点需调整（新增/精简维度）时更新 |
+| `docs/dev/plans/2026-07-28-pty-engine-implementation.md` | 涉及会话引擎（`src/tmux/`、`src/engine/`、pty、`runtime_kind`、终端 WS 链路）的任何开发前**必读**；tmux 相关代码已冻结，只修致命 bug 不加功能 | Phase 推进/决策变更/勘误时更新；Phase 5 摘除后随方向规划移入 archive |
 | `docs/dev/plans/2026-07-24-quality-gates.md` | 修改质量门禁（CI、pre-commit、clippy、rustfmt、cargo-deny、tsc strict、check-doc-index）任一配置前 | 新增门禁检查、调整分阶段策略、跟进 backlog（§2.3 P2） |
 | `.github/workflows/ci.yml` | 修改 CI 门禁（触发分支、检查项、audit job）前 | 调整 CI 检查项、分阶段启用 clippy/fmt/deny、拆分 job |
 | `scripts/hooks/pre-commit` | 修改提交前检查前 | 调整 pre-commit 纳入的检查（lint/fmt/clippy/test） |

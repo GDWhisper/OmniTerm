@@ -6,6 +6,13 @@
 
 > **勘误（2026-07-28 v2）**：初版目标为"一次性去除 tmux"。产品决策修订为：**解耦 tmux → 双引擎过渡共存 → tmux 冻结维护（不再迭代）→ 未来可无痛摘除**。即方向规划 D3（SessionBackend 抽象）由 P2 待定提为 **P0 必做**；原 D9（舍弃抽象）作废，D6/D10/D11 相应修订。tmux 能力的自管实现尽量沿 herdr 已验证路径（含分屏与现代化交互）。
 
+## 0. 新会话上手指引
+
+- **当前状态**：计划已定稿，**尚未开始编码**。下一步 = Phase 1（§3）。
+- **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
+- **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
+- **注意**：§1 盘点中的行号是 2026-07-28 快照，代码演进后以符号名为准（用 CodeGraph 查）。herdr 源码在 `research/herdr`（Apache-2.0 可参考移植）。
+
 ---
 
 ## 1. Phase 0 盘点结论（已完成）
@@ -115,7 +122,7 @@
 - **新增** `src/engine/pty/mod.rs`：`PtyEngine` 实现 `SessionEngine`。
 - **新增** `src/engine/pty/session.rs`：openpty + spawn（注入 hook env）+ 读循环（tee → 订阅广播 / 环形缓冲落盘 / wezterm-term feed / `last_output_at`）+ write/resize/kill + capture/pane_title/render_screen_ansi（补屏）。
 - **新增** `src/engine/pty/scrollback.rs`（D5 落盘纪律）、`src/engine/pty/cwd.rs`（`/proc` / libproc 采样 + `last_cwd` 回写）。
-- **新增** migration：`last_cwd` 列 + `runtime_kind` 允许 `'pty'`。
+- **新增** migration：`last_cwd` 列 + `runtime_kind` 允许 `'pty'`。**⚠️ 给 `runtime_kind` 枚举新增变体前，按 AGENTS 文档索引必读 `docs/workflows/integration-checklist.md`。**
 - **产出**：单测覆盖 create/write/read/resize/kill/capture/回放/fd 计数。
 
 ### Phase 3：pty hook 信道（纯新增）
