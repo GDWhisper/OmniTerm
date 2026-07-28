@@ -68,6 +68,23 @@ pub async fn list_branches(repo_path: &str) -> anyhow::Result<Vec<String>> {
     Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
+/// Remove a git worktree at `target_path`.
+/// Uses `--force` to skip the uncommitted-changes check (the user has
+/// already confirmed the irreversible action in the frontend).
+pub async fn remove_worktree(repo_path: &str, target_path: &str) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .args(["-C", repo_path, "worktree", "remove", "--force", target_path])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree remove failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 /// Add a new git worktree to the repository at `repo_path`.
 /// Runs `git worktree add -b <branch> <target_path> [base]`.
 pub async fn add_worktree(

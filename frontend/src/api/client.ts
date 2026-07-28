@@ -222,6 +222,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  deleteWorktree: (projectId: string, path: string) =>
+    request<{ ok: true }>(`/projects/${projectId}/worktrees?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }),
   listBranches: (projectId: string) =>
     request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`),
 

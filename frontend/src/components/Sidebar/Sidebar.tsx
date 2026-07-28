@@ -156,6 +156,10 @@ export function Sidebar() {
   const [createWtCurrentBranch, setCreateWtCurrentBranch] = useState('')
   const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
 
+  // Delete worktree confirmation dialog
+  const [confirmDeleteWt, setConfirmDeleteWt] = useState<{ projectId: string; path: string; label: string } | null>(null)
+  const [confirmDeleteWtChecked, setConfirmDeleteWtChecked] = useState(false)
+
   // Browse state for the create-project modal's embedded directory list
   const [browsePath, setBrowsePath] = useState('')
   const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
@@ -735,6 +739,31 @@ export function Sidebar() {
     }
   }
 
+  const handleDeleteWorktree = async () => {
+    if (!confirmDeleteWt) return
+    setSubmitting(true)
+    try {
+      await api.deleteWorktree(confirmDeleteWt.projectId, confirmDeleteWt.path)
+      await loadWorktrees(confirmDeleteWt.projectId)
+      // If the deleted worktree was active, clear the workspace selection
+      if (activeWorkspaceId) {
+        const wtList = worktrees[confirmDeleteWt.projectId] || []
+        const stillExists = wtList.some(w => w.id === activeWorkspaceId)
+        if (!stillExists) {
+          setActiveWorkspace(null)
+          setActiveSession(null)
+        }
+      }
+      addToast('success', t('sidebar.worktreeDeleted', { name: confirmDeleteWt.label }) ?? `Worktree "${confirmDeleteWt.label}" deleted`)
+      setConfirmDeleteWt(null)
+      setConfirmDeleteWtChecked(false)
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const handleCreateWorktree = async () => {
     if (!createWtProjectId || !createWtBranch.trim()) return
     setSubmitting(true)
@@ -1309,6 +1338,27 @@ export function Sidebar() {
                               >
                                 <IconPlus />
                               </button>
+                              {!wt.is_main && (
+                                <button
+                                  className="sidebar-wt-add-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setConfirmDeleteWt({ projectId: proj.id, path: wt.path, label: wt.label })
+                                    setConfirmDeleteWtChecked(false)
+                                  }}
+                                  title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--danger)'
+                                    e.currentTarget.style.color = 'var(--danger)'
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--border-strong)'
+                                    e.currentTarget.style.color = 'var(--text-faint)'
+                                  }}
+                                >
+                                  <IconTrash width={12} height={12} />
+                                </button>
+                              )}
                             </div>
 
                             {/* Sessions inline under active worktree */}
@@ -2077,6 +2127,56 @@ export function Sidebar() {
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
       />
+
+      {/* ── Delete Worktree Confirmation Dialog ── */}
+      <Modal
+        open={!!confirmDeleteWt}
+        onClose={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}
+        title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div
+            className="px-3 py-2.5 rounded-md"
+            style={{ background: 'var(--danger-12)', border: '1px solid var(--danger)', color: 'var(--text-primary)', fontSize: 12, fontFamily: READER_FONT }}
+          >
+            <p className="font-semibold mb-1" style={{ color: 'var(--danger)' }}>
+              {t('sidebar.deleteWorktreeWarning') ?? '⚠ 不可逆操作'}
+            </p>
+            <p>
+              {t('sidebar.deleteWorktreeConfirm', { name: confirmDeleteWt?.label ?? '', path: confirmDeleteWt?.path ?? '' }) ??
+                `将永久删除 worktree「${confirmDeleteWt?.label ?? ''}」（${confirmDeleteWt?.path ?? ''}），包括其中所有未提交的更改。此操作无法撤销。`}
+            </p>
+          </div>
+          <label
+            className="flex items-center gap-2 cursor-pointer select-none"
+            style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: READER_FONT }}
+          >
+            <input
+              type="checkbox"
+              checked={confirmDeleteWtChecked}
+              onChange={(e) => setConfirmDeleteWtChecked(e.target.checked)}
+              style={{ accentColor: 'var(--danger)' }}
+            />
+            {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <button
+              onClick={handleDeleteWorktree}
+              disabled={!confirmDeleteWtChecked || submitting}
+              className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
+              style={{ background: 'var(--danger)' }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = '#C85A3A' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--danger)' }}
+            >
+              {submitting ? t('sidebar.deleting') ?? 'Deleting...' : t('sidebar.delete')}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ── Release Confirmation Dialog ── */}
       <ConfirmDialog

@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch},
@@ -18,7 +18,10 @@ pub fn routes() -> Router<AppState> {
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/duplicates", get(list_duplicates))
         .route("/projects/{id}", patch(update_project).delete(delete_project))
-        .route("/projects/{id}/worktrees", get(list_worktrees).post(create_worktree))
+        .route(
+            "/projects/{id}/worktrees",
+            get(list_worktrees).post(create_worktree).delete(delete_worktree),
+        )
         .route("/projects/{id}/branches", get(list_branches))
         .route("/projects/{id}/merge-into/{target_id}", axum::routing::post(merge_project_into))
 }
@@ -286,6 +289,51 @@ async fn create_worktree(
             let msg = e.to_string();
             // Git multi-line errors: use the last line which carries the
             // actionable message (e.g. "fatal: ...")
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteWorktreeQuery {
+    path: String,
+}
+
+async fn delete_worktree(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteWorktreeQuery>,
+) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    // Safety: refuse to remove the project's own path (main worktree).
+    if q.path == project.path {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "cannot remove the main worktree (project path itself)" })),
+        );
+    }
+
+    match crate::git::remove_worktree(&project.path, &q.path).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            let msg = e.to_string();
             let short = msg.lines().last().unwrap_or(&msg).to_string();
             (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
         }
