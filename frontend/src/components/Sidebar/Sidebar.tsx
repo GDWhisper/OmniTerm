@@ -152,6 +152,8 @@ export function Sidebar() {
   const [createWtBranch, setCreateWtBranch] = useState('')
   const [createWtPath, setCreateWtPath] = useState('')
   const [createWtBaseBranch, setCreateWtBaseBranch] = useState('')
+  const [createWtBranches, setCreateWtBranches] = useState<string[]>([])
+  const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
 
   // Browse state for the create-project modal's embedded directory list
   const [browsePath, setBrowsePath] = useState('')
@@ -748,6 +750,7 @@ export function Sidebar() {
       setCreateWtBranch('')
       setCreateWtPath('')
       setCreateWtBaseBranch('')
+      setCreateWtBranches([])
     } catch {
       // api client already shows error toast
     } finally {
@@ -1208,7 +1211,14 @@ export function Sidebar() {
                         setCreateWtBranch('')
                         setCreateWtPath('')
                         setCreateWtBaseBranch('')
+                        setCreateWtBranches([])
                         setCreateWtOpen(true)
+                        // Fetch branches in background
+                        setCreateWtBranchesLoading(true)
+                        api.listBranches(proj.id)
+                          .then(data => setCreateWtBranches(data.branches))
+                          .catch(() => {})
+                          .finally(() => setCreateWtBranchesLoading(false))
                       }}
                       className="flex-shrink-0 flex items-center justify-center rounded transition-all"
                       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
@@ -1900,6 +1910,7 @@ export function Sidebar() {
           setCreateWtBranch('')
           setCreateWtPath('')
           setCreateWtBaseBranch('')
+          setCreateWtBranches([])
         }}
         title={t('sidebar.createWorktree') ?? 'Create Worktree'}
         maxWidth="max-w-sm"
@@ -1946,22 +1957,29 @@ export function Sidebar() {
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
               onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
             />
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+              {t('sidebar.worktreePathHint') ?? '留空则在项目同级目录创建 <项目名>-<分支名>'}
+            </p>
           </div>
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
               {t('sidebar.worktreeBaseBranch') ?? 'Base Branch'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
             </label>
-            <input
-              type="text"
+            <select
               value={createWtBaseBranch}
               onChange={(e) => setCreateWtBaseBranch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
-              placeholder="main"
               className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
+              style={{
+                ...inputStyle,
+                cursor: 'pointer',
+                fontFamily: READER_FONT,
+              }}
+            >
+              <option value="">{createWtBranchesLoading ? (t('sidebar.loading') ?? 'Loading...') : (t('sidebar.worktreeDefaultBase') ?? '默认 (当前 HEAD)')}</option>
+              {createWtBranches.map(b => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
           </div>
           <div className="flex justify-end gap-2 pt-1">
             <ModalCancel onClick={() => {
@@ -1970,6 +1988,7 @@ export function Sidebar() {
               setCreateWtBranch('')
               setCreateWtPath('')
               setCreateWtBaseBranch('')
+              setCreateWtBranches([])
             }}>
               {t('sidebar.cancel')}
             </ModalCancel>

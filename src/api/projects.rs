@@ -19,6 +19,7 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/duplicates", get(list_duplicates))
         .route("/projects/{id}", patch(update_project).delete(delete_project))
         .route("/projects/{id}/worktrees", get(list_worktrees).post(create_worktree))
+        .route("/projects/{id}/branches", get(list_branches))
         .route("/projects/{id}/merge-into/{target_id}", axum::routing::post(merge_project_into))
 }
 
@@ -307,6 +308,34 @@ async fn list_worktrees(
 
     let ws_list = workspaces::list_workspaces(&project).await;
     (StatusCode::OK, Json(json!(ws_list)))
+}
+
+async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    match crate::git::list_branches(&project.path).await {
+        Ok(branches) => (StatusCode::OK, Json(json!({ "branches": branches }))),
+        Err(e) => {
+            let msg = e.to_string();
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
 }
 
 /// Group of projects that share coverage of the same git repository (or

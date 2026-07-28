@@ -222,6 +222,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  listBranches: (projectId: string) =>
+    request<{ branches: string[] }>(`/projects/${projectId}/branches`),
 
   // Sessions
   listSessions: (projectId: string) =>
