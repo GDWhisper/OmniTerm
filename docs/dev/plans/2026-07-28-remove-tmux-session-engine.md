@@ -5,6 +5,8 @@
 > 关联：`src/tmux/mod.rs`、`frontend/src/hooks/useTerminal.ts`、AGENTS.md §8（多实现兼容性）、`docs/reference/herdr-reference.md`（待建）。
 > **⚠️ 本文档仅为方向规划，不含实施方案、不含代码、不含文件级改动清单。后续 LLM 实施前须先产出独立的实施计划，不得把本文件当作可直接执行的规格。**
 
+> **勘误（2026-07-28）**：实施计划评审后产品决策修订——不做一次性去除，改为**解耦 tmux → 双引擎过渡共存 → tmux 冻结维护 → 未来可无痛摘除**。本文 §3 决策 D3（SessionBackend 抽象）由 P2 待定**提为 P0 必做**；§2.2 P0 的"去除 tmux 依赖"修正为"解耦 tmux 依赖（可摘除）"。落定细节见 `2026-07-28-pty-engine-implementation.md`（D9/D12）。
+
 ---
 
 ## 1. 背景与根因
