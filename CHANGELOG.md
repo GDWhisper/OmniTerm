@@ -51,6 +51,13 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.1] - 2026-07-29
+
+### Fixed
+
+- (2026-07-29) `[infra]` 修复 CI 质量门禁（ci.yml）rust job 与 `build.rs` 契约不匹配：原 rust job 仅 `mkdir -p frontend/dist` 空占位，但 `build.rs` 校验 `frontend/dist/index.html` 存在，导致 push main 时 rust job 恒红、CI 门禁失效。现 rust job 先 `pnpm build` 再 `cargo check`，与 sync 脚本及 release.yml 对齐（`scripts/sync-main.sh`、`.github/workflows/ci.yml`、`build.rs`）
+- (2026-07-29) `[infra]` 发布流程强化：crates.io 发布不可逆，发布指导新增「强制发布顺序」铁律——`cargo publish` 必须排在 GitHub Release CI（release.yml）与 push main 的 CI（ci.yml）**全部转绿之后**，禁止抢跑。本次 0.2.0 因抢跑导致 crates.io 上线错版，以 0.2.1 重发覆盖（`docs/workflows/release-guide.md`）
+
 ## [0.2.0] - 2026-07-29
 
 ### Added
