@@ -43,3 +43,12 @@
   - 需要抽象出统一的引擎接口（trait），tmux 和 rmux 各自实现
   - 配置项切换引擎选择
   - 后续计划：rmux → 主引擎，tmux → fallback
+
+## Windows 后台服务支持 ⚪
+
+- [ ] **`--daemonize` / `stop` / `status` Windows 实现** — 目前 `start -d`、`stop`、`status` 在 Windows 上直接报错退出（`bail!` / `exit(1)`），需补齐。
+  - **`--daemonize`**：调用 `FreeConsole()` 脱离控制台（一行 API，现有 `windows-sys` 已含 `Win32_System_Console`）
+  - **`pid_exists`**：用 `OpenProcess` + `WaitForSingleObject(0)` 替代当前 `return false` stub
+  - **`stop`**：用 `OpenProcess(PROCESS_TERMINATE)` → `TerminateProcess` 强杀（等价 Unix `SIGKILL`）；优雅退出需额外 IPC（named event），可后续迭代
+  - **优雅退出**：daemonize 后无控制台，`ctrl_c()` 永不触发。如需要 ACP 子进程回收等清理逻辑，需用 named event `"omniterm-shutdown-{pid}"` 做关闭通知
+  - 预估改动量 ~50 行，全在 `src/main.rs`，无新增依赖
