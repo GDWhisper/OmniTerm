@@ -223,7 +223,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
   listBranches: (projectId: string) =>
-    request<{ branches: string[] }>(`/projects/${projectId}/branches`),
+    request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`),
 
   // Sessions
   listSessions: (projectId: string) =>

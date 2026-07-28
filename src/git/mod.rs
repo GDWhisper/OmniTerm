@@ -36,6 +36,21 @@ pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>>
     Ok(parse_worktree_list(&stdout))
 }
 
+/// Get the current branch name at `repo_path`.
+pub async fn current_branch(repo_path: &str) -> anyhow::Result<String> {
+    let output = Command::new("git")
+        .args(["-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git rev-parse failed: {}", stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// List all local branches in the repository at `repo_path`.
 /// Runs `git branch --format='%(refname:short)'`.
 pub async fn list_branches(repo_path: &str) -> anyhow::Result<Vec<String>> {

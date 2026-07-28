@@ -153,6 +153,7 @@ export function Sidebar() {
   const [createWtPath, setCreateWtPath] = useState('')
   const [createWtBaseBranch, setCreateWtBaseBranch] = useState('')
   const [createWtBranches, setCreateWtBranches] = useState<string[]>([])
+  const [createWtCurrentBranch, setCreateWtCurrentBranch] = useState('')
   const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
 
   // Browse state for the create-project modal's embedded directory list
@@ -751,6 +752,7 @@ export function Sidebar() {
       setCreateWtPath('')
       setCreateWtBaseBranch('')
       setCreateWtBranches([])
+      setCreateWtCurrentBranch('')
     } catch {
       // api client already shows error toast
     } finally {
@@ -1212,11 +1214,15 @@ export function Sidebar() {
                         setCreateWtPath('')
                         setCreateWtBaseBranch('')
                         setCreateWtBranches([])
+                        setCreateWtCurrentBranch('')
                         setCreateWtOpen(true)
                         // Fetch branches in background
                         setCreateWtBranchesLoading(true)
                         api.listBranches(proj.id)
-                          .then(data => setCreateWtBranches(data.branches))
+                          .then(data => {
+                            setCreateWtBranches(data.branches)
+                            setCreateWtCurrentBranch(data.current)
+                          })
                           .catch(() => {})
                           .finally(() => setCreateWtBranchesLoading(false))
                       }}
@@ -1911,6 +1917,7 @@ export function Sidebar() {
           setCreateWtPath('')
           setCreateWtBaseBranch('')
           setCreateWtBranches([])
+          setCreateWtCurrentBranch('')
         }}
         title={t('sidebar.createWorktree') ?? 'Create Worktree'}
         maxWidth="max-w-sm"
@@ -1975,7 +1982,13 @@ export function Sidebar() {
                 fontFamily: READER_FONT,
               }}
             >
-              <option value="">{createWtBranchesLoading ? (t('sidebar.loading') ?? 'Loading...') : (t('sidebar.worktreeDefaultBase') ?? '默认（当前分支的最新提交）')}</option>
+              <option value="">{
+  createWtBranchesLoading
+    ? (t('sidebar.loading') ?? 'Loading...')
+    : createWtCurrentBranch
+      ? (t('sidebar.worktreeDefaultBase', { branch: createWtCurrentBranch }) ?? `默认（${createWtCurrentBranch} 的最新提交）`)
+      : (t('sidebar.worktreeDefaultBaseFallback') ?? '默认（当前分支的最新提交）')
+}</option>
               {createWtBranches.map(b => (
                 <option key={b} value={b}>{b}</option>
               ))}
@@ -1989,6 +2002,7 @@ export function Sidebar() {
               setCreateWtPath('')
               setCreateWtBaseBranch('')
               setCreateWtBranches([])
+              setCreateWtCurrentBranch('')
             }}>
               {t('sidebar.cancel')}
             </ModalCancel>

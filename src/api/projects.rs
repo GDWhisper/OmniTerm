@@ -328,8 +328,16 @@ async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) ->
         );
     }
 
-    match crate::git::list_branches(&project.path).await {
-        Ok(branches) => (StatusCode::OK, Json(json!({ "branches": branches }))),
+    let (branches_res, current_res) = tokio::join!(
+        crate::git::list_branches(&project.path),
+        crate::git::current_branch(&project.path),
+    );
+
+    match branches_res {
+        Ok(branches) => {
+            let current = current_res.unwrap_or_default();
+            (StatusCode::OK, Json(json!({ "branches": branches, "current": current })))
+        }
         Err(e) => {
             let msg = e.to_string();
             let short = msg.lines().last().unwrap_or(&msg).to_string();
