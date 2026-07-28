@@ -27,10 +27,21 @@ jobs:
       - name: Install tmux
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      # src/embedded.rs 的 #[derive(RustEmbed)] 要求 frontend/dist/ 在编译期存在；
-      # rust job 不构建前端，故创建空目录占位
-      - name: Create empty frontend/dist for RustEmbed
-        run: mkdir -p frontend/dist
+      # src/embedded.rs 的 #[derive(RustEmbed)] 要求 frontend/dist/index.html 在编译期存在
+      # （build.rs 校验 index.html，而非仅目录）。rust job 需先构建前端，契约才能对齐。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build frontend (required by build.rs → RustEmbed)
+        run: pnpm install --no-frozen-lockfile && pnpm build
+        working-directory: frontend
 
       - run: cargo check --workspace
       - run: cargo fmt --check --all

@@ -34,6 +34,34 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ---
 
+## ⚠️ 强制发布顺序（crates.io 不可逆，必须先验证 CI）
+
+**Cargo (crates.io) 发布不可逆——一旦 `cargo publish` 成功，无法删除，只能发新版本覆盖。**
+
+**铁律：`cargo publish` 必须排在「GitHub Release CI 完全通过」之后，绝不可抢跑。**
+
+```
+正确顺序：
+  Step 1~4  →  bump / changelog / sync / release-notes 推送
+  Step 5    →  git tag + 推送（触发 release.yml CI）
+  ↓ 等待 release.yml 全绿（含 backend matrix 多平台编译 + frontend + docker）
+  Step 8    →  cargo publish --allow-dirty   ← 仅在此之后执行
+  Step 10   →  验证
+
+错误顺序（本次 0.2.0 踩坑）：
+  ✗ tag 推送后立刻 cargo publish，此时 release.yml 仍在跑 / ci.yml 已红
+  → 不可逆的 crate 已上线，但 GitHub Release 可能失败，造成「crates 有、GitHub 没有」的不一致
+```
+
+**判定「CI 完全通过」的标准：**
+- `gh run list --branch main` 中本次 tag 对应的 `Release` (release.yml) run 全部 job 绿
+- `gh run list` 中 push `main` 触发的 `CI` (ci.yml) run 也需绿（quality gate，非发布直接产物但反映 main 健康度）
+- 任一红灯 → **暂停 cargo publish**，先修 CI 再继续
+
+**配套约束：** `ci.yml` 的 rust job 与 `build.rs` 契约必须对齐（`build.rs` 校验 `frontend/dist/index.html` 存在，故 rust job 必须先 `pnpm build` 再 `cargo check`，不能只 `mkdir -p frontend/dist` 空占位）。sync 脚本与 release.yml 已 build 前端，ci.yml 若不一致会导致 push main 即红，进而阻塞发布判定。
+
+---
+
 ## 发布步骤
 
 ### Step 1：版本号 + 变更
@@ -190,6 +218,8 @@ git push origin main
 ```
 
 ### Step 8：Cargo 发布（crates.io）
+
+> **前置条件（铁律）**：必须已确认上方「强制发布顺序」——GitHub Release CI（release.yml）完全通过、且 push main 的 CI（ci.yml）全绿后，才执行本步。crates.io 不可逆，抢跑后果见上方说明。
 
 **发布前先验证包内容（不可逆，必做）：**
 
