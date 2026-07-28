@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
-import { useAppStore } from '../../stores/appStore'
+import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
+import { AuthSection } from './AuthSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
+import { BetaBadge } from '../Common/BetaBadge'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -51,8 +53,10 @@ const languages = [
 
 const btnBase: React.CSSProperties = {
   background: 'transparent',
-  border: '1px solid var(--border-strong)',
-  borderRadius: 6,
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--border-strong)',
+  borderRadius: 0,
   transition: 'all 0.15s ease',
   fontFamily: READER_FONT,
   cursor: 'pointer',
@@ -63,7 +67,6 @@ const btnActive: React.CSSProperties = {
   borderColor: 'var(--accent)',
   color: 'var(--accent)',
   background: 'var(--accent-10)',
-  boxShadow: 'var(--accent-glow-sm)',
 }
 
 function btnHover(e: React.MouseEvent) {
@@ -79,12 +82,10 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
     el.style.borderColor = 'var(--accent)'
     el.style.color = 'var(--accent)'
     el.style.background = 'var(--accent-10)'
-    el.style.boxShadow = 'var(--accent-glow-sm)'
   } else {
     el.style.borderColor = 'var(--border-strong)'
     el.style.color = 'var(--text-muted)'
     el.style.background = 'transparent'
-    el.style.boxShadow = 'none'
   }
 }
 
@@ -111,13 +112,17 @@ interface ToggleRowProps {
   hintKey: string
   value: boolean
   onToggle: () => void
+  badge?: boolean
 }
 
-function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
+function ToggleRow({ labelKey, hintKey, value, onToggle, badge }: ToggleRowProps) {
   const { t } = useTranslation()
   return (
     <section className="space-y-2">
-      <SectionTitle>{t(labelKey)}</SectionTitle>
+      <SectionTitle>
+        {t(labelKey)}
+        {badge && <>{' '}<BetaBadge /></>}
+      </SectionTitle>
       <button
         onClick={onToggle}
         style={{
@@ -235,6 +240,143 @@ function FontSizeSection() {
   )
 }
 
+function UiZoomSection() {
+  const { t } = useTranslation()
+  const { uiZoom, setUiZoom } = useAppStore()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.uiZoom')}</SectionTitle>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setUiZoom(uiZoom - 10)}
+          disabled={uiZoom <= 50}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: uiZoom <= 50 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          −
+        </button>
+        <div className="flex-1 text-center">
+          <span style={{ fontSize: 18, fontFamily: READER_FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{uiZoom}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>%</span>
+        </div>
+        <button
+          onClick={() => setUiZoom(uiZoom + 10)}
+          disabled={uiZoom >= 200}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: uiZoom >= 200 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          +
+        </button>
+      </div>
+      <input
+        type="range"
+        min={50}
+        max={200}
+        step={10}
+        value={uiZoom}
+        onChange={(e) => setUiZoom(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: 'var(--accent)', height: 4 }}
+      />
+      {uiZoom !== DEFAULT_UI_ZOOM && (
+        <button
+          onClick={() => setUiZoom(DEFAULT_UI_ZOOM)}
+          style={{ ...btnBase, fontSize: 11, padding: '3px 10px', color: 'var(--text-muted)' }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          {t('settings.uiZoomReset')}
+        </button>
+      )}
+    </section>
+  )
+}
+
+function ChatFontSizeSection() {
+  const { t } = useTranslation()
+  const { chatFontSize, setChatFontSize } = useAppStore()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.chatFontSize')}</SectionTitle>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => setChatFontSize(chatFontSize - 1)}
+          disabled={chatFontSize <= 10}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: chatFontSize <= 10 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          −
+        </button>
+        <div className="flex-1 text-center">
+          <span style={{ fontSize: 18, fontFamily: READER_FONT, fontWeight: 600, color: 'var(--text-primary)' }}>{chatFontSize}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', marginLeft: 3 }}>px</span>
+        </div>
+        <button
+          onClick={() => setChatFontSize(chatFontSize + 1)}
+          disabled={chatFontSize >= 20}
+          style={{
+            ...btnBase,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            opacity: chatFontSize >= 20 ? 0.5 : 1,
+            color: 'var(--text-muted)',
+          }}
+          onMouseEnter={btnHover}
+          onMouseLeave={(e) => btnLeave(e, false)}
+        >
+          +
+        </button>
+      </div>
+      <input
+        type="range"
+        min={10}
+        max={20}
+        value={chatFontSize}
+        onChange={(e) => setChatFontSize(Number(e.target.value))}
+        className="w-full"
+        style={{ accentColor: 'var(--accent)', height: 4 }}
+      />
+    </section>
+  )
+}
+
 function LanguageSection() {
   const { t, i18n } = useTranslation()
   return (
@@ -270,31 +412,122 @@ function AutoCopySection() {
 function AnimationsSection() {
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const setPixelAnimationsEnabled = useAppStore((s) => s.setPixelAnimationsEnabled)
-  return <ToggleRow labelKey="settings.pixelAnimations" hintKey="settings.pixelAnimationsHint" value={pixelAnimationsEnabled} onToggle={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)} />
+  return <ToggleRow labelKey="settings.pixelAnimations" hintKey="settings.pixelAnimationsHint" value={pixelAnimationsEnabled} onToggle={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)} badge />
 }
 
 function SoundSection() {
+  const { t } = useTranslation()
   const soundEnabled = useAppStore((s) => s.soundEnabled)
   const setSoundEnabled = useAppStore((s) => s.setSoundEnabled)
-  const handlePreview = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    import('../../utils/audioFeedback').then(({ play8BitSound }) => {
-      play8BitSound('coin')
-    })
-  }
+  const soundCoinEnabled = useAppStore((s) => s.soundCoinEnabled)
+  const setSoundCoinEnabled = useAppStore((s) => s.setSoundCoinEnabled)
+  const soundStompEnabled = useAppStore((s) => s.soundStompEnabled)
+  const setSoundStompEnabled = useAppStore((s) => s.setSoundStompEnabled)
+  const soundPingEnabled = useAppStore((s) => s.soundPingEnabled)
+  const setSoundPingEnabled = useAppStore((s) => s.setSoundPingEnabled)
+
+  const previewCoin = () => import('../../utils/audioFeedback').then(m => m.play8BitSound('coin', true))
+  const previewStomp = () => import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp', true))
+  const previewPing = () => import('../../utils/audioFeedback').then(m => m.playPing(true))
+
+  const subDisabled = !soundEnabled
+
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <div style={{ flex: 1 }}>
-        <ToggleRow labelKey="settings.sound" hintKey="settings.soundHint" value={soundEnabled} onToggle={() => setSoundEnabled(!soundEnabled)} />
+    <section className="space-y-4">
+      <div className="space-y-2">
+        <SectionTitle>{t('settings.sound.master')}</SectionTitle>
+        <button
+          onClick={() => setSoundEnabled(!soundEnabled)}
+          style={{
+            ...btnBase,
+            fontSize: 12,
+            padding: '5px 8px',
+            display: 'flex', alignItems: 'center', gap: 6,
+            ...(soundEnabled ? { border: '1px solid var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+          }}
+        >
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: soundEnabled ? 'var(--success)' : 'var(--text-dim)',
+            transition: 'background 0.15s ease',
+          }} />
+          {soundEnabled ? t('settings.on') : t('settings.off')}
+        </button>
+        <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.sound.masterHint')}</p>
       </div>
-      <button
-        type="button"
-        className="btn-pixel btn-pixel-accent"
-        style={{ padding: '3px 10px', fontSize: 12, letterSpacing: 1 }}
-        onClick={handlePreview}
-      >
-        ▶
-      </button>
+
+      <div style={{ opacity: subDisabled ? 0.45 : 1, transition: 'opacity 0.2s ease', pointerEvents: subDisabled ? 'none' : 'auto' }}>
+        <SoundItem
+          labelKey="settings.sound.coin"
+          hintKey="settings.sound.coinHint"
+          value={soundCoinEnabled}
+          onToggle={() => setSoundCoinEnabled(!soundCoinEnabled)}
+          onPreview={previewCoin}
+        />
+        <div style={{ height: 16 }} />
+        <SoundItem
+          labelKey="settings.sound.stomp"
+          hintKey="settings.sound.stompHint"
+          value={soundStompEnabled}
+          onToggle={() => setSoundStompEnabled(!soundStompEnabled)}
+          onPreview={previewStomp}
+        />
+        <div style={{ height: 16 }} />
+        <SoundItem
+          labelKey="settings.sound.ping"
+          hintKey="settings.sound.pingHint"
+          value={soundPingEnabled}
+          onToggle={() => setSoundPingEnabled(!soundPingEnabled)}
+          onPreview={previewPing}
+        />
+      </div>
+    </section>
+  )
+}
+
+interface SoundItemProps {
+  labelKey: string
+  hintKey: string
+  value: boolean
+  onToggle: () => void
+  onPreview: () => void
+}
+
+function SoundItem({ labelKey, hintKey, value, onToggle, onPreview }: SoundItemProps) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1.5">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <button
+            onClick={onToggle}
+            style={{
+              ...btnBase,
+              fontSize: 12,
+              padding: '5px 8px',
+              display: 'flex', alignItems: 'center', gap: 6,
+              width: '100%',
+              ...(value ? { border: '1px solid var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+            }}
+          >
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: value ? 'var(--success)' : 'var(--text-dim)',
+              transition: 'background 0.15s ease',
+            }} />
+            {t(labelKey)}
+          </button>
+        </div>
+        <button
+          type="button"
+          className="btn-pixel btn-pixel-accent"
+          style={{ padding: '3px 10px', fontSize: 12, letterSpacing: 'var(--pixel-tracking-sm)' }}
+          onClick={(e) => { e.stopPropagation(); onPreview() }}
+        >
+          ▶
+        </button>
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
     </div>
   )
 }
@@ -302,13 +535,19 @@ function SoundSection() {
 function CrtSection() {
   const crtScanlines = useAppStore((s) => s.crtScanlines)
   const setCrtScanlines = useAppStore((s) => s.setCrtScanlines)
-  return <ToggleRow labelKey="settings.crtScanlines" hintKey="settings.crtScanlinesHint" value={crtScanlines} onToggle={() => setCrtScanlines(!crtScanlines)} />
+  return <ToggleRow labelKey="settings.crtScanlines" hintKey="settings.crtScanlinesHint" value={crtScanlines} onToggle={() => setCrtScanlines(!crtScanlines)} badge />
 }
 
 function ParchmentSection() {
   const parchmentTextureEnabled = useAppStore((s) => s.parchmentTextureEnabled)
   const setParchmentTextureEnabled = useAppStore((s) => s.setParchmentTextureEnabled)
-  return <ToggleRow labelKey="settings.parchmentTexture" hintKey="settings.parchmentTextureHint" value={parchmentTextureEnabled} onToggle={() => setParchmentTextureEnabled(!parchmentTextureEnabled)} />
+  return <ToggleRow labelKey="settings.parchmentTexture" hintKey="settings.parchmentTextureHint" value={parchmentTextureEnabled} onToggle={() => setParchmentTextureEnabled(!parchmentTextureEnabled)} badge />
+}
+
+function PixelFontSection() {
+  const pixelFontEnabled = useAppStore((s) => s.pixelFontEnabled)
+  const setPixelFontEnabled = useAppStore((s) => s.setPixelFontEnabled)
+  return <ToggleRow labelKey="settings.pixelFont" hintKey="settings.pixelFontHint" value={pixelFontEnabled} onToggle={() => setPixelFontEnabled(!pixelFontEnabled)} badge />
 }
 
 function MobileGestureSection() {
@@ -340,7 +579,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'edit' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'edit' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -354,12 +593,17 @@ const CATEGORIES: Category[] = [
   {
     id: 'appearance',
     labelKey: 'settings.category.appearance',
-    sections: [ThemeSection, FontSizeSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
+    sections: [ThemeSection, UiZoomSection, FontSizeSection, ChatFontSizeSection, PixelFontSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
   },
   {
     id: 'audio',
     labelKey: 'settings.category.audio',
     sections: [SoundSection],
+  },
+  {
+    id: 'auth',
+    labelKey: 'settings.category.auth',
+    sections: [AuthSection],
   },
   {
     id: 'edit',

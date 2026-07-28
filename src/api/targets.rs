@@ -1,15 +1,15 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get},
-    Json, Router,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::models::target::{CreateTarget, Target};
 use crate::AppState;
+use crate::models::target::{CreateTarget, Target};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -33,17 +33,15 @@ async fn create_target(
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    sqlx::query(
-        "INSERT INTO targets (id, name, type, config, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&id)
-    .bind(&req.name)
-    .bind(&req.target_type)
-    .bind(&req.config)
-    .bind(&now)
-    .execute(&state.db)
-    .await
-    .unwrap();
+    sqlx::query("INSERT INTO targets (id, name, type, config, created_at) VALUES (?, ?, ?, ?, ?)")
+        .bind(&id)
+        .bind(&req.name)
+        .bind(&req.target_type)
+        .bind(&req.config)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
 
     let target = Target {
         id,
@@ -56,15 +54,9 @@ async fn create_target(
     (StatusCode::CREATED, Json(json!(target)))
 }
 
-async fn delete_target(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM targets WHERE id = ?")
-        .bind(&id)
-        .execute(&state.db)
-        .await
-        .unwrap();
+async fn delete_target(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let result =
+        sqlx::query("DELETE FROM targets WHERE id = ?").bind(&id).execute(&state.db).await.unwrap();
 
     if result.rows_affected() == 0 {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));

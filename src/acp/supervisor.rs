@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{Mutex, broadcast};
 
 use crate::acp::client::AcpClient;
 
@@ -28,19 +28,14 @@ impl Default for AcpSupervisor {
     fn default() -> Self {
         // broadcast::Sender 无 Default，手动构造频道（容量 64 足够并发连接数）。
         let (events, _) = broadcast::channel(64);
-        Self {
-            clients: Arc::new(Mutex::new(HashMap::new())),
-            events,
-        }
+        Self { clients: Arc::new(Mutex::new(HashMap::new())), events }
     }
 }
 
 impl AcpSupervisor {
     pub async fn insert(&self, session_id: String, client: Arc<AcpClient>) {
         self.clients.lock().await.insert(session_id.clone(), client);
-        let _ = self
-            .events
-            .send(AcpProcessEvent { session_id, alive: true });
+        let _ = self.events.send(AcpProcessEvent { session_id, alive: true });
     }
 
     pub async fn get(&self, session_id: &str) -> Option<Arc<AcpClient>> {
@@ -50,21 +45,15 @@ impl AcpSupervisor {
     /// 返回当前所有注册 client 的快照（session_id, Arc<AcpClient>）。
     /// 供空闲回收看护任务（reaper）遍历判定，不暴露内部 HashMap。
     pub async fn snapshot(&self) -> Vec<(String, Arc<AcpClient>)> {
-        self.clients
-            .lock()
-            .await
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        self.clients.lock().await.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
     pub async fn dispose(&self, session_id: &str) -> Option<Arc<AcpClient>> {
         let removed = self.clients.lock().await.remove(session_id);
         if removed.is_some() {
-            let _ = self.events.send(AcpProcessEvent {
-                session_id: session_id.to_string(),
-                alive: false,
-            });
+            let _ = self
+                .events
+                .send(AcpProcessEvent { session_id: session_id.to_string(), alive: false });
         }
         removed
     }
@@ -76,12 +65,11 @@ impl AcpSupervisor {
     }
 
     pub async fn shutdown_all(&self) {
-        let mut map = self.clients.lock().await;
-        for (_, client) in map.drain() {
-            let c = Arc::try_unwrap(client).ok();
-            if let Some(c) = c {
-                c.disconnect().await;
-            }
+        // 通过 Arc 引用调用 shutdown()，不依赖 try_unwrap（可能因 WS handler
+        // 仍持有引用而失败，导致 agent 子进程变孤儿）。
+        let clients: Vec<_> = self.clients.lock().await.drain().collect();
+        for (_, client) in clients {
+            client.shutdown().await;
         }
     }
 }

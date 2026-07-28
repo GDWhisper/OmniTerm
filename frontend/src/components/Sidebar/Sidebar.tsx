@@ -1,23 +1,26 @@
 import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconWorkbench, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
+import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
+import { UpdateBadge } from './UpdateBadge'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
-import { triggerBump } from '../../utils/pixelAnimations'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
+import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
@@ -45,7 +48,9 @@ function SidebarBottomButton({
       style={{
         width: size,
         height: size,
-        border: '1px solid var(--border-strong)',
+        borderWidth: '1px',
+        borderStyle: 'solid',
+        borderColor: 'var(--border-strong)',
         color: 'var(--text-faint)',
         fontSize: 14,
       }}
@@ -87,8 +92,6 @@ export function Sidebar() {
     setConnected,
     workspaceSessionMemory,
     clearWorkspaceSession,
-    fmSessionStates,
-    resetFmToFollowing,
   } = useAppStore()
 
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
@@ -96,14 +99,32 @@ export function Sidebar() {
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
+  const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
   const attention = useAttention()
 
+  // ACP 会话活动状态（chatStore 派生）：与 tmux 屏幕检测的 agent_state 归一，
+  // 使两类会话的 Sidebar 状态点/聚合徽标表现一致。useShallow 保证仅在
+  // waiting/running 归属变化时重渲染（流式 chunk 不触发）。
+  const acpActivityMap = useChatStore(
+    useShallow((s) => {
+      const m: Record<string, AcpActivity> = {}
+      for (const [id, st] of Object.entries(s.states)) {
+        if (st.pendingPermission) m[id] = 'waiting'
+        else if (st.sending) m[id] = 'running'
+      }
+      return m
+    }),
+  )
+  const acpActivityFor = useCallback(
+    (sessionId: string): AcpActivity | undefined => acpActivityMap[sessionId],
+    [acpActivityMap],
+  )
+
   // Terminal button pulse: only when session exists and browsing outside its CWD
-  const fmState = activeSessionId ? (fmSessionStates[activeSessionId] ?? { mode: 'following' as const, manualPath: null, drawerPath: null, drawerMode: 'view' as const }) : null
-  const isOutsideTerminalCwd = !!activeSessionId && fmState?.mode === 'manual'
+
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
@@ -115,14 +136,30 @@ export function Sidebar() {
     id: string
     name: string
   } | null>(null)
+  const [confirmRelease, setConfirmRelease] = useState<{ id: string; name: string | null } | null>(null)
 
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
   const [sessName, setSessName] = useState('')
   const [sessAgentId, setSessAgentId] = useState<string | null>(null)
+  const [sessWorkspaceId, setSessWorkspaceId] = useState<string | null>(null)
   const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  // Create worktree modal state
+  const [createWtOpen, setCreateWtOpen] = useState(false)
+  const [createWtProjectId, setCreateWtProjectId] = useState<string | null>(null)
+  const [createWtBranch, setCreateWtBranch] = useState('')
+  const [createWtPath, setCreateWtPath] = useState('')
+  const [createWtBaseBranch, setCreateWtBaseBranch] = useState('')
+  const [createWtBranches, setCreateWtBranches] = useState<string[]>([])
+  const [createWtCurrentBranch, setCreateWtCurrentBranch] = useState('')
+  const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
+
+  // Delete worktree confirmation dialog
+  const [confirmDeleteWt, setConfirmDeleteWt] = useState<{ projectId: string; path: string; label: string } | null>(null)
+  const [confirmDeleteWtChecked, setConfirmDeleteWtChecked] = useState(false)
 
   // Browse state for the create-project modal's embedded directory list
   const [browsePath, setBrowsePath] = useState('')
@@ -133,6 +170,8 @@ export function Sidebar() {
   // create_project auto-creates non-existent paths, so this is friendly
   // info rather than a hard error — the UI shows a "will be created" hint.
   const [browseNotFound, setBrowseNotFound] = useState(false)
+  const [autocompleteActiveIndex, setAutocompleteActiveIndex] = useState(-1)
+  const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 409 Conflict response data when creating a project whose path is
   // already covered by an existing project.
   const [coverConflict, setCoverConflict] = useState<{
@@ -167,11 +206,15 @@ export function Sidebar() {
   // const [tooltipSessionId, setTooltipSessionId] = useState<string | null>(null)
   // const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Load projects
+  // Load projects. `projectsLoaded` distinguishes "fetched but empty" from
+  // "not yet fetched" so the restore effects below can clean up stale saved
+  // IDs even when the server has zero projects (e.g. after a DB reset).
+  const [projectsLoaded, setProjectsLoaded] = useState(false)
   const loadProjects = useCallback(async () => {
     try {
       const p = await api.listProjects()
       setProjects(p)
+      setProjectsLoaded(true)
     } catch {
       // api client already shows error toast
     }
@@ -237,27 +280,36 @@ export function Sidebar() {
   const restoredSessionRef = useRef(false)
 
   // After projects load, expand the saved project and load its data.
+  // A saved ID no longer on the server (deleted project / DB reset) is
+  // cleared together with its dependent workspace/session so consumers
+  // (FileManager, chat) stop requesting nonexistent resources (404s).
   useEffect(() => {
-    if (restoredProjectRef.current || projects.length === 0) return
+    if (restoredProjectRef.current || !projectsLoaded) return
     const savedProjectId = localStorage.getItem('omniterm_active_project')
-    if (savedProjectId && projects.some(p => p.id === savedProjectId)) {
-      setExpandedProjects(prev => {
-        const next = new Set(prev)
-        next.add(savedProjectId)
-        return next
-      })
-      setActiveProject(savedProjectId)
-      loadWorktrees(savedProjectId)
-      // loadSessions fires via its own useEffect when activeProjectId changes
+    if (savedProjectId) {
+      if (projects.some(p => p.id === savedProjectId)) {
+        setExpandedProjects(prev => {
+          const next = new Set(prev)
+          next.add(savedProjectId)
+          return next
+        })
+        setActiveProject(savedProjectId)
+        loadWorktrees(savedProjectId)
+        // loadSessions fires via its own useEffect when activeProjectId changes
+      } else {
+        setActiveProject(null)
+        setActiveWorkspace(null)
+        setActiveSession(null)
+      }
     }
     restoredProjectRef.current = true
-  }, [projects, setActiveProject, loadWorktrees])
+  }, [projectsLoaded, projects, setActiveProject, setActiveWorkspace, setActiveSession, loadWorktrees])
 
   // After worktrees load, restore the active workspace (or clean up stale saved ID).
   useEffect(() => {
     if (!activeProjectId) return
     const wtList = worktrees[activeProjectId]
-    if (!wtList || wtList.length === 0) return
+    if (!wtList) return // not yet fetched for this project
     const savedWorkspaceId = localStorage.getItem('omniterm_active_workspace')
     if (!savedWorkspaceId) {
       restoredWorkspaceRef.current = true
@@ -267,41 +319,60 @@ export function Sidebar() {
     if (wtList.some(w => w.id === savedWorkspaceId)) {
       if (activeWorkspaceId !== savedWorkspaceId) setActiveWorkspace(savedWorkspaceId)
     } else {
-      localStorage.removeItem('omniterm_active_workspace')
+      setActiveWorkspace(null)
     }
     restoredWorkspaceRef.current = true
   }, [worktrees, activeProjectId, activeWorkspaceId, setActiveWorkspace])
 
   // After sessions load, restore the active session (or clean up stale saved ID).
   useEffect(() => {
-    const allSessions = Object.values(sessions).flat()
-    if (allSessions.length === 0) return
+    if (restoredSessionRef.current || !activeProjectId) return
+    if (!sessions[activeProjectId]) return // not yet fetched for this project
     const savedSessionId = localStorage.getItem('omniterm_active_session')
-    if (!savedSessionId) {
-      restoredSessionRef.current = true
-      return
-    }
-    if (restoredSessionRef.current) return
-    if (allSessions.some(s => s.id === savedSessionId)) {
-      if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
-    } else {
-      localStorage.removeItem('omniterm_active_session')
+    if (savedSessionId) {
+      const allSessions = Object.values(sessions).flat()
+      if (allSessions.some(s => s.id === savedSessionId)) {
+        if (activeSessionId !== savedSessionId) setActiveSession(savedSessionId)
+      } else {
+        setActiveSession(null)
+      }
     }
     restoredSessionRef.current = true
-  }, [sessions, activeSessionId, setActiveSession])
+  }, [sessions, activeProjectId, activeSessionId, setActiveSession])
+
+  // Prune workspaceSessionMemory entries pointing at sessions that no longer
+  // exist server-side (deleted session / DB reset). Scoped to the active
+  // project's workspaces — only its session list is loaded, so entries for
+  // other projects can't be judged and are left untouched.
+  useEffect(() => {
+    if (!activeProjectId) return
+    const sessList = sessions[activeProjectId]
+    const wtList = worktrees[activeProjectId]
+    if (!sessList || !wtList) return
+    const ids = new Set(sessList.map(s => s.id))
+    for (const wt of wtList) {
+      const remembered = workspaceSessionMemory[wt.id]
+      if (remembered && !ids.has(remembered)) clearWorkspaceSession(wt.id)
+    }
+  }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
 
   // Fetch directory entries for the new-project modal's browse list.
-  const fetchDirs = useCallback(async (path: string) => {
+  // When `prefix` is provided, only entries whose name starts with it
+  // (case-insensitive) are kept — this powers real-time path autocomplete.
+  const fetchDirs = useCallback(async (path: string, prefix?: string) => {
     setBrowseLoading(true)
     setBrowseError(null)
     setBrowseNotFound(false)
     try {
       const data = await api.listDirs(path)
-      setBrowseEntries(
-        data.files.filter(
-          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
-        ),
+      let dirs = data.files.filter(
+        (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
       )
+      if (prefix) {
+        const lower = prefix.toLowerCase()
+        dirs = dirs.filter((f) => f.name.toLowerCase().startsWith(lower))
+      }
+      setBrowseEntries(dirs)
     } catch (e: unknown) {
       if (e instanceof ApiError && e.status === 404) {
         setBrowseNotFound(true)
@@ -342,15 +413,38 @@ export function Sidebar() {
     fetchRepairDirs(repairBrowsePath)
   }, [repairBrowsePath, fetchRepairDirs])
 
-  // Auto-fetch when browsePath changes (covers click-dir, go-up, and type-apply)
+  // Real-time path autocomplete — debounced fetch on every keystroke.
+  // Parses the input: "/home/pax/Om" → list "/home/pax/" and filter by "Om".
   useEffect(() => {
-    if (!browsePath) return
-    fetchDirs(browsePath)
-  }, [browsePath, fetchDirs])
+    const input = projPath.trim()
+    if (!input || input === '/') {
+      setBrowsePath('')
+      setBrowseEntries([])
+      setBrowseError(null)
+      setBrowseNotFound(false)
+      return
+    }
+
+    const lastSlash = input.lastIndexOf('/')
+    const dirPart = lastSlash >= 0 ? input.slice(0, lastSlash + 1) : input
+    const prefix = lastSlash >= 0 ? input.slice(lastSlash + 1) : ''
+
+    if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
+    autocompleteTimerRef.current = setTimeout(() => {
+      setBrowsePath(dirPart)
+      fetchDirs(dirPart, prefix || undefined)
+    }, 200)
+
+    return () => {
+      if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
+    }
+  }, [projPath, fetchDirs])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
   const decisionCandidatesRef = useRef<Set<string>>(new Set())
+  const firedWaitingRef = useRef<Set<string>>(new Set())
+  const prevAgentStateRef = useRef<Map<string, string>>(new Map())
 
   useEffect(() => {
     // 每 3 秒轮询：服务 **tmux** 会话的 agent_state / attention_reason 检测
@@ -382,28 +476,43 @@ export function Sidebar() {
 
             const state = s.agent_state
             const reason = s.attention_reason as AttentionReason | undefined
+            const prevState = prevAgentStateRef.current.get(sessionKey)
 
             if (state === 'idle' && reason === 'done') {
               // Done — fire immediately
               attention.fire(s.id, sessionKey, 'done')
-              decisionCandidatesRef.current.delete(sessionKey)
             } else if (state === 'idle' && reason === 'error') {
               // Error — fire immediately
               attention.fire(s.id, sessionKey, 'error')
-              decisionCandidatesRef.current.delete(sessionKey)
-            } else if (state === 'waiting' && reason === 'decision') {
-              // Decision — debounce: wait one more cycle
-              if (decisionCandidatesRef.current.has(sessionKey)) {
-                attention.fire(s.id, sessionKey, 'decision')
-                decisionCandidatesRef.current.delete(sessionKey)
-              } else {
-                decisionCandidatesRef.current.add(sessionKey)
-              }
+            } else if (state === 'idle' && !reason && prevState === 'running') {
+              // 屏幕检测：running → idle 转变即完成（done = idle + 未查看，
+              // 查看会话时 AttentionProvider.setActive 清除）
+              attention.fire(s.id, sessionKey, 'done')
             } else if (state === 'running') {
               // Running — clear any alert
               attention.clearAlert(sessionKey)
-              decisionCandidatesRef.current.delete(sessionKey)
             }
+          }
+
+          // Decision debounce（eventKey 不变也要推进：屏幕检测的 waiting 无 nonce 变化）：
+          // 连续两轮 waiting 才告警；每个 waiting 周期只告警一次
+          if (s.agent_state === 'waiting') {
+            if (!firedWaitingRef.current.has(sessionKey)) {
+              if (decisionCandidatesRef.current.has(sessionKey)) {
+                attention.fire(s.id, sessionKey, 'decision')
+                decisionCandidatesRef.current.delete(sessionKey)
+                firedWaitingRef.current.add(sessionKey)
+              } else {
+                decisionCandidatesRef.current.add(sessionKey)
+              }
+            }
+          } else {
+            decisionCandidatesRef.current.delete(sessionKey)
+            firedWaitingRef.current.delete(sessionKey)
+          }
+
+          if (s.agent_state) {
+            prevAgentStateRef.current.set(sessionKey, s.agent_state)
           }
         }
 
@@ -413,6 +522,8 @@ export function Sidebar() {
             attention.clearAlert(key)
             lastAgentEventRef.current.delete(key)
             decisionCandidatesRef.current.delete(key)
+            firedWaitingRef.current.delete(key)
+            prevAgentStateRef.current.delete(key)
           }
         }
 
@@ -438,7 +549,7 @@ export function Sidebar() {
   useEffect(() => {
     if (createProjOpen && homeDir) {
       setBrowsePath(homeDir)
-      setProjPath(homeDir)
+      setProjPath(homeDir + '/')
       setBrowseError(null)
       setBrowseNotFound(false)
     }
@@ -448,11 +559,12 @@ export function Sidebar() {
   const closeCreateProj = () => {
     setCreateProjOpen(false)
     setProjName('')
-    setProjPath(homeDir)
+    setProjPath(homeDir + '/')
     setBrowsePath('')
     setBrowseEntries([])
     setBrowseError(null)
     setBrowseNotFound(false)
+    setAutocompleteActiveIndex(-1)
   }
 
   // Health polling
@@ -488,24 +600,14 @@ export function Sidebar() {
 
   // Browse handlers for the new-project modal
   const handleEnterDir = (entry: FileEntry) => {
-    const newPath = browsePath.endsWith('/')
-      ? `${browsePath}${entry.name}`
-      : `${browsePath}/${entry.name}`
-    setProjPath(newPath)
-    setBrowsePath(newPath)
+    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
+    setProjPath(`${dirPart}${entry.name}/`)
   }
 
   const handleGoUp = () => {
     const parent = getParentPath(browsePath)
     if (!parent) return
     setProjPath(parent)
-    setBrowsePath(parent)
-  }
-
-  const handlePathApply = () => {
-    const trimmed = projPath.trim()
-    if (!trimmed || trimmed === browsePath) return
-    setBrowsePath(trimmed)
   }
 
   const handleRefresh = () => {
@@ -615,7 +717,7 @@ export function Sidebar() {
       addToast('success', t('sidebar.projectCreated', { name: projName.trim() }) ?? `Project "${projName.trim()}" created`)
       setCreateProjOpen(false)
       setProjName('')
-      setProjPath(homeDir)
+      setProjPath(homeDir + '/')
     } catch (e) {
       // 409 Conflict: the new path is already covered by an existing
       // project. Surface a switch-to-existing dialog instead of letting
@@ -638,12 +740,62 @@ export function Sidebar() {
     }
   }
 
+  const handleDeleteWorktree = async () => {
+    if (!confirmDeleteWt) return
+    setSubmitting(true)
+    try {
+      await api.deleteWorktree(confirmDeleteWt.projectId, confirmDeleteWt.path)
+      await loadWorktrees(confirmDeleteWt.projectId)
+      // If the deleted worktree was active, clear the workspace selection
+      if (activeWorkspaceId) {
+        const wtList = worktrees[confirmDeleteWt.projectId] || []
+        const stillExists = wtList.some(w => w.id === activeWorkspaceId)
+        if (!stillExists) {
+          setActiveWorkspace(null)
+          setActiveSession(null)
+        }
+      }
+      addToast('success', t('sidebar.worktreeDeleted', { name: confirmDeleteWt.label }) ?? `Worktree "${confirmDeleteWt.label}" deleted`)
+      setConfirmDeleteWt(null)
+      setConfirmDeleteWtChecked(false)
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleCreateWorktree = async () => {
+    if (!createWtProjectId || !createWtBranch.trim()) return
+    setSubmitting(true)
+    try {
+      await api.createWorktree(createWtProjectId, {
+        branch: createWtBranch.trim(),
+        path: createWtPath.trim() || undefined,
+        base_branch: createWtBaseBranch.trim() || undefined,
+      })
+      await loadWorktrees(createWtProjectId)
+      addToast('success', t('sidebar.worktreeCreated', { branch: createWtBranch.trim() }) ?? `Worktree "${createWtBranch.trim()}" created`)
+      setCreateWtOpen(false)
+      setCreateWtProjectId(null)
+      setCreateWtBranch('')
+      setCreateWtPath('')
+      setCreateWtBaseBranch('')
+      setCreateWtBranches([])
+      setCreateWtCurrentBranch('')
+    } catch {
+      // api client already shows error toast
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const handleCreateSession = async () => {
-    if (!activeProjectId || !activeWorkspaceId) return
-    // Find the active worktree path
+    if (!activeProjectId || !sessWorkspaceId) return
+    // Find the target worktree path (captured when "+" was clicked)
     const wtList = worktrees[activeProjectId] || []
-    const activeWt = wtList.find(w => w.id === activeWorkspaceId)
-    if (!activeWt) return
+    const targetWt = wtList.find(w => w.id === sessWorkspaceId)
+    if (!targetWt) return
 
     setSubmitting(true)
     try {
@@ -658,7 +810,7 @@ export function Sidebar() {
         : undefined)
       const newSession = await api.createSession(
         activeProjectId,
-        activeWt.path,
+        targetWt.path,
         name || undefined,
         undefined,
         sessAgentId ? 'acp' : 'tmux',
@@ -673,6 +825,7 @@ export function Sidebar() {
       setCreateSessOpen(false)
       setSessName('')
       setSessAgentId(null)
+      setSessWorkspaceId(null)
     } catch {
       // api client already shows error toast
     } finally {
@@ -785,6 +938,11 @@ export function Sidebar() {
     }
   }
 
+  const handleConfirmRelease = () => {
+    if (!confirmRelease) return
+    handleReleaseSession(confirmRelease.id)
+    setConfirmRelease(null)
+  }
 
   // Enter in name field = create project
   const handleNameKeyDown = (e: React.KeyboardEvent) => {
@@ -794,12 +952,49 @@ export function Sidebar() {
     }
   }
 
-  // Enter in path field = apply path (don't create)
+  // Path field keyboard navigation for autocomplete
   const handlePathKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setAutocompleteActiveIndex((prev) => {
+        const next = prev + 1
+        return next < browseEntries.length ? next : prev
+      })
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setAutocompleteActiveIndex((prev) => {
+        const next = prev - 1
+        return next >= 0 ? next : prev
+      })
+      return
+    }
+    if (e.key === 'Tab' && browseEntries.length > 0) {
+      e.preventDefault()
+      completAutocomplete(
+        autocompleteActiveIndex >= 0 ? autocompleteActiveIndex : 0,
+      )
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handlePathApply()
+      if (autocompleteActiveIndex >= 0) {
+        completAutocomplete(autocompleteActiveIndex)
+      }
     }
+    if (e.key === 'Escape') {
+      setAutocompleteActiveIndex(-1)
+    }
+  }
+
+  // Complete the autocomplete suggestion at the given index
+  const completAutocomplete = (index: number) => {
+    const entry = browseEntries[index]
+    if (!entry) return
+    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
+    setProjPath(`${dirPart}${entry.name}/`)
+    setAutocompleteActiveIndex(-1)
   }
 
   const handleSessKeyDown = (e: React.KeyboardEvent) => {
@@ -912,21 +1107,12 @@ export function Sidebar() {
         <OmniTermLogo size={48} />
         <div style={{ flex: 1, lineHeight: 1.1 }}>
           <div className="logo-wordmark">OmniTerm</div>
-          <div className="logo-version">v{APP_VERSION}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div className="logo-version">v{APP_VERSION}</div>
+            <UpdateBadge />
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
-          {/* Terminal CWD button — pulses when outside terminal CWD */}
-          <button
-            className={`flex items-center justify-center rounded-md transition-all ${isOutsideTerminalCwd ? 'fm-btn-terminal-active' : ''}`}
-            style={{ width: 24, height: 24, color: isOutsideTerminalCwd ? 'var(--accent-bright)' : '#FAF2DE', fontSize: 14 }}
-            onClick={() => {
-              if (activeSessionId) resetFmToFollowing(activeSessionId)
-            }}
-            title={t('fm.backToTerminalDir')}
-            disabled={!activeSessionId}
-          >
-            <IconWorkbench width={13} height={13} />
-          </button>
           <button
             onClick={toggleSidebarCollapsed}
             className="flex items-center justify-center rounded-md transition-all"
@@ -941,7 +1127,7 @@ export function Sidebar() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16">
+      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content">
         {/* Duplicate projects banner — surfaces legacy data that should
             be consolidated. Click to open the merge dialog. */}
         {duplicates.length > 0 && !duplicatesDismissed && (
@@ -992,13 +1178,10 @@ export function Sidebar() {
         <div className="panel-title-bar mb-2.5">
           <span>◆</span>
           <span>{t('sidebar.projects') ?? 'Projects'}</span>
-          <span className="title-bar-badge">{projects.length}</span>
+          <CountBadge count={projects.length} />
           <span className="title-bar-spacer" />
           <button
-            onClick={(e) => {
-              triggerBump(e.currentTarget)
-              setCreateProjOpen(true)
-            }}
+            onClick={() => setCreateProjOpen(true)}
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
           >
@@ -1014,8 +1197,10 @@ export function Sidebar() {
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
             const wtList = worktrees[proj.id] || []
-            const projHasActiveSession = wtList.some((wt) =>
-              sessionsForWorktree(proj.id, wt.path).some((s) => s.is_active)
+            const projAgg = aggregateStatus(
+              wtList.flatMap((wt) => sessionsForWorktree(proj.id, wt.path)),
+              attention.reasonFor,
+              acpActivityFor,
             )
 
             return (
@@ -1026,10 +1211,16 @@ export function Sidebar() {
                   onClick={() => toggleProject(proj.id)}
                 >
                   <span
-                    className={projHasActiveSession ? 'activity-pulse' : ''}
+                    className={projAgg === 'working' || projAgg === 'blocked' ? 'activity-pulse' : ''}
                     style={{
                       fontSize: 10,
-                      color: isExpanded || projHasActiveSession ? 'var(--text-secondary)' : 'var(--text-faint)',
+                      color: projAgg === 'blocked'
+                        ? 'var(--warning)'
+                        : projAgg === 'done'
+                          ? 'var(--success)'
+                          : isExpanded || projAgg === 'working'
+                            ? 'var(--text-secondary)'
+                            : 'var(--text-faint)',
                       marginTop: 2,
                     }}
                   >
@@ -1040,6 +1231,50 @@ export function Sidebar() {
                     <span className="proj-path">{proj.path}</span>
                   </div>
                   <div className="flex items-center gap-1">
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation()
+                        if (!isExpanded) {
+                          setExpandedProjects(prev => {
+                            const next = new Set(prev)
+                            next.add(proj.id)
+                            return next
+                          })
+                          await Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
+                        }
+                        setCreateWtProjectId(proj.id)
+                        setCreateWtBranch('')
+                        setCreateWtPath('')
+                        setCreateWtBaseBranch('')
+                        setCreateWtBranches([])
+                        setCreateWtCurrentBranch('')
+                        setCreateWtOpen(true)
+                        // Fetch branches in background
+                        setCreateWtBranchesLoading(true)
+                        api.listBranches(proj.id)
+                          .then(data => {
+                            setCreateWtBranches(data.branches)
+                            setCreateWtCurrentBranch(data.current)
+                          })
+                          .catch(() => {})
+                          .finally(() => setCreateWtBranchesLoading(false))
+                      }}
+                      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+                      title={t('sidebar.createWorktree') ?? 'Create Worktree'}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--accent)'
+                        e.currentTarget.style.color = 'var(--accent)'
+                        e.currentTarget.style.background = 'var(--accent-10)'
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = 'var(--border-strong)'
+                        e.currentTarget.style.color = 'var(--text-faint)'
+                        e.currentTarget.style.background = 'transparent'
+                      }}
+                    >
+                      <IconPlus width={14} height={14} />
+                    </button>
                     <EditButton
                       onClick={(e) => {
                         e.stopPropagation()
@@ -1068,7 +1303,7 @@ export function Sidebar() {
                       wtList.map((wt) => {
                         const isWtActive = activeWorkspaceId === wt.id
                         const wtSessions = sessionsForWorktree(proj.id, wt.path)
-                        const wtHasActiveSession = wtSessions.some((s) => s.is_active)
+                        const wtAgg = aggregateStatus(wtSessions, attention.reasonFor, acpActivityFor)
                         const isWtExpanded = isWtActive
 
                         return (
@@ -1078,25 +1313,56 @@ export function Sidebar() {
                               className="sidebar-wt-row"
                               onClick={() => handleWorkspaceClick(proj, wt)}
                             >
-                              <span className={`selected-cursor ${isWtActive ? '' : 'inactive'}`}>▶</span>
+                              <span className={`selected-cursor ${isWtActive ? (pixelAnimationsEnabled ? '' : 'no-blink') : 'inactive'}`}>▶</span>
                               <GitBranchSprite
                                 size={14}
-                                color={isWtActive || wtHasActiveSession ? '#58A6FF' : '#A89474'}
-                                className={wtHasActiveSession ? 'activity-pulse' : ''}
+                                color={
+                                  wtAgg === 'blocked'
+                                    ? 'var(--warning)'
+                                    : wtAgg === 'done'
+                                      ? 'var(--success)'
+                                      : isWtActive || wtAgg === 'working'
+                                        ? '#58A6FF'
+                                        : '#A89474'
+                                }
+                                className={wtAgg === 'working' || wtAgg === 'blocked' ? 'activity-pulse' : ''}
                               />
                               <span className="branch-name">{wt.label}</span>
-                              <span className="session-count">{wtSessions.length}</span>
+                              <CountBadge count={wtSessions.length} />
                               <button
                                 className="sidebar-wt-add-btn"
                                 onClick={(e) => {
                                   e.stopPropagation()
-                                  triggerBump(e.currentTarget)
+                                  setActiveProject(proj.id)
+                                  setActiveWorkspace(wt.id)
+                                  setSessWorkspaceId(wt.id)
                                   setCreateSessOpen(true)
                                 }}
                                 title={t('sidebar.createSession')}
                               >
                                 <IconPlus />
                               </button>
+                              {!wt.is_main && (
+                                <button
+                                  className="sidebar-wt-add-btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setConfirmDeleteWt({ projectId: proj.id, path: wt.path, label: wt.label })
+                                    setConfirmDeleteWtChecked(false)
+                                  }}
+                                  title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--danger)'
+                                    e.currentTarget.style.color = 'var(--danger)'
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.borderColor = 'var(--border-strong)'
+                                    e.currentTarget.style.color = 'var(--text-faint)'
+                                  }}
+                                >
+                                  <IconTrash width={14} height={14} />
+                                </button>
+                              )}
                             </div>
 
                             {/* Sessions inline under active worktree */}
@@ -1106,6 +1372,27 @@ export function Sidebar() {
                                   const isSessionActive = activeSessionId === s.id
                                   const sessionKey = s.id
                                   const attnReason = attention.reasonFor(sessionKey)
+                                  // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
+                                  // 状态点/tooltip 两类会话表现一致
+                                  const activity =
+                                    s.runtime_kind === 'acp'
+                                      ? acpActivityFor(s.id)
+                                      : s.agent_state === 'waiting'
+                                        ? 'waiting'
+                                        : s.agent_state === 'running' || s.is_active
+                                          ? 'running'
+                                          : undefined
+                                  const dotColor = attnReason
+                                    ? attnReason === 'decision'
+                                      ? 'var(--warning)'
+                                      : attnReason === 'error'
+                                        ? 'var(--danger)'
+                                        : 'var(--success)'
+                                    : activity === 'waiting'
+                                      ? 'var(--warning)'
+                                      : activity === 'running'
+                                        ? 'var(--accent)'
+                                        : 'var(--text-faint)'
                                   return (
                                     <div
                                       key={s.id}
@@ -1115,41 +1402,42 @@ export function Sidebar() {
                                         attention.setActive(sessionKey)
                                       }}
                                     >
+                                      {/* ACP kind badge — 绝对定位叠加在左侧 28px 缩进槽，不占行内布局；
+                                          绿字=进程驻留（未释放），灰字=已释放 */}
+                                      {s.runtime_kind === 'acp' && (
+                                        <span
+                                          className="status-badge-3d font-pixel"
+                                          style={{
+                                            position: 'absolute',
+                                            left: -22,
+                                            top: '50%',
+                                            transform: 'translateY(-50%)',
+                                            padding: '1px 3px',
+                                            background: 'var(--wood-shadow, #3A2E1F)',
+                                            fontSize: 8,
+                                            lineHeight: '10px',
+                                            color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
+                                          }}
+                                          title={
+                                            s.acp_process_alive
+                                              ? t('sidebar.acpRunning')
+                                              : t('sidebar.acpReleased')
+                                          }
+                                        >
+                                          A
+                                        </span>
+                                      )}
                                       {/* Running indicator dot */}
                                       <div
                                         className="flex-shrink-0"
                                         style={{
                                           width: 6,
                                           height: 6,
-                                          background: attnReason
-                                            ? attnReason === 'decision'
-                                              ? 'var(--warning)'
-                                              : attnReason === 'error'
-                                                ? 'var(--danger)'
-                                                : 'var(--success)'
-                                            : s.runtime_kind === 'acp'
-                                              ? s.acp_process_alive
-                                                ? 'var(--accent)'
-                                                : 'var(--text-faint)'
-                                              : s.is_active
-                                                ? 'var(--accent)'
-                                                : 'var(--text-faint)',
-                                          // 运行中 ACP 常亮绿（轻微 glow），已释放灰；attnReason 仍脉冲提示
-                                          boxShadow: attnReason
-                                            ? attnReason === 'decision'
-                                              ? '0 0 4px var(--warning)'
-                                              : attnReason === 'error'
-                                                ? '0 0 4px var(--danger)'
-                                                : '0 0 4px var(--success)'
-                                            : (s.runtime_kind === 'acp' ? s.acp_process_alive : s.is_active)
-                                              ? '0 0 4px var(--accent)'
-                                              : 'none',
+                                          background: dotColor,
                                         }}
                                         title={
-                                          s.runtime_kind === 'acp'
-                                            ? s.acp_process_alive
-                                              ? t('sidebar.acpRunning')
-                                              : t('sidebar.acpReleased')
+                                          activity === 'waiting'
+                                            ? t('sidebar.agentWaiting')
                                             : undefined
                                         }
                                       />
@@ -1168,18 +1456,24 @@ export function Sidebar() {
                                                 : 'var(--success)',
                                           }}
                                           title={
-                                            attnReason === 'decision' ? 'Needs decision' :
-                                            attnReason === 'error' ? 'Error' : 'Done'
+                                            attnReason === 'decision' ? t('sidebar.attnDecision') :
+                                            attnReason === 'error' ? t('sidebar.attnError') : t('sidebar.attnDone')
                                           }
                                         >
                                           {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
                                         </span>
                                       )}
-                                      {s.runtime_kind === 'acp' && (
+                                      {/* Release 按钮仅在进程驻留时可用——已释放会话无可释放对象 */}
+                                      {s.runtime_kind === 'acp' && s.acp_process_alive && (
                                         <ReleaseButton
                                           onClick={(e) => {
                                             e.stopPropagation()
-                                            handleReleaseSession(s.id)
+                                            const chatState = useChatStore.getState().states[s.id]
+                                            if (chatState?.sending) {
+                                              setConfirmRelease({ id: s.id, name: s.name ?? null })
+                                            } else {
+                                              handleReleaseSession(s.id)
+                                            }
                                           }}
                                         />
                                       )}
@@ -1278,7 +1572,6 @@ export function Sidebar() {
                         width: 5,
                         height: 5,
                         background: s.attached ? 'var(--success)' : 'var(--text-dim)',
-                        boxShadow: s.attached ? 'var(--success-glow)' : 'none',
                       }}
                     />
                     <div className="flex-1 min-w-0">
@@ -1332,7 +1625,7 @@ export function Sidebar() {
                             })
                           }}
                           disabled={!adoptProjectId}
-                          className="flex items-center justify-center rounded transition-all"
+                          className="flex items-center justify-center pixel-press transition-all"
                           style={{
                             padding: '2px 6px',
                             border: '1px solid var(--accent)',
@@ -1344,11 +1637,9 @@ export function Sidebar() {
                           onMouseEnter={(e) => {
                             if (!adoptProjectId) return
                             e.currentTarget.style.background = 'var(--accent-14)'
-                            e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.background = 'transparent'
-                            e.currentTarget.style.boxShadow = 'none'
                           }}
                         >
                           ✓
@@ -1368,7 +1659,7 @@ export function Sidebar() {
                           setAdoptTarget({ tmux_name: s.name })
                           setAdoptProjectId(activeProjectId || projects[0]?.id || '')
                         }}
-                        className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                        className="flex-shrink-0 flex items-center justify-center pixel-press transition-all"
                         style={{
                           padding: '2px 8px',
                           border: '1px solid var(--accent)',
@@ -1378,11 +1669,9 @@ export function Sidebar() {
                         }}
                         onMouseEnter={(e) => {
                           e.currentTarget.style.background = 'var(--accent-14)'
-                          e.currentTarget.style.boxShadow = '0 0 8px var(--accent-14)'
                         }}
                         onMouseLeave={(e) => {
                           e.currentTarget.style.background = 'transparent'
-                          e.currentTarget.style.boxShadow = 'none'
                         }}
                       >
                         {t('sidebar.adopt') ?? 'Adopt'}
@@ -1413,7 +1702,7 @@ export function Sidebar() {
             className="font-pixel"
             style={{
               fontSize: 13,
-              letterSpacing: 2,
+              letterSpacing: 'var(--pixel-tracking-md)',
               color: connected ? '#7EE787' : '#FF7B72',
             }}
           >
@@ -1443,7 +1732,9 @@ export function Sidebar() {
             style={{
               width: 26,
               height: 26,
-              border: '1px solid var(--border-strong)',
+              borderWidth: '1px',
+              borderStyle: 'solid',
+              borderColor: 'var(--border-strong)',
               color: 'var(--text-faint)',
               fontSize: 14,
             }}
@@ -1496,10 +1787,12 @@ export function Sidebar() {
             <input
               type="text"
               value={projPath}
-              onChange={(e) => setProjPath(e.target.value)}
+              onChange={(e) => {
+                setProjPath(e.target.value)
+                setAutocompleteActiveIndex(-1)
+              }}
               onKeyDown={handlePathKeyDown}
               onBlur={(e) => {
-                handlePathApply()
                 e.currentTarget.style.borderColor = 'var(--border-strong)'
                 e.currentTarget.style.boxShadow = 'none'
               }}
@@ -1508,41 +1801,10 @@ export function Sidebar() {
               style={inputStyle}
               onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
             />
-            <div className="text-[10px] mt-1" style={{ color: 'var(--text-faint)' }}>
-              {t('sidebar.pathHint') ?? '回车或失焦以应用路径'}
-            </div>
           </div>
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                {t('sidebar.browse') ?? '浏览'}
-              </label>
-              <button
-                onClick={handleRefresh}
-                title={t('sidebar.refresh') ?? '刷新'}
-                className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
-                style={{
-                  border: '1px solid var(--border-strong)',
-                  color: 'var(--text-secondary)',
-                  fontSize: 11,
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--accent)'
-                  e.currentTarget.style.color = 'var(--accent)'
-                  e.currentTarget.style.background = 'var(--accent-10)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border-strong)'
-                  e.currentTarget.style.color = 'var(--text-secondary)'
-                  e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                <IconRefresh width={10} height={10} />
-                {t('sidebar.refresh') ?? '刷新'}
-              </button>
-            </div>
             <div
-              className="overflow-y-auto"
+              className="overflow-y-auto overlay-scroll-content"
               style={{
                 height: 200,
                 background: 'var(--bg-base)',
@@ -1612,28 +1874,35 @@ export function Sidebar() {
               )}
 
               {/* Directory entries */}
-              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry) => (
+              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry, idx) => {
+                const highlighted = idx === autocompleteActiveIndex
+                return (
                 <div
                   key={entry.name}
                   onClick={() => handleEnterDir(entry)}
                   className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
                   style={{
                     borderRadius: 4,
-                    color: 'var(--text-secondary)',
+                    color: highlighted ? 'var(--text-primary)' : 'var(--text-secondary)',
                     cursor: 'pointer',
+                    background: highlighted ? 'var(--accent-10)' : 'transparent',
                   }}
                   onMouseEnter={(e) => {
+                    setAutocompleteActiveIndex(idx)
                     e.currentTarget.style.background = 'var(--accent-10)'
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'transparent'
+                    if (!highlighted) {
+                      e.currentTarget.style.background = 'transparent'
+                    }
                   }}
                 >
                   <FolderSprite size={14} />
                   <span className="truncate">{entry.name}</span>
                   <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
@@ -1648,7 +1917,7 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
+      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
@@ -1674,19 +1943,124 @@ export function Sidebar() {
             <AgentPicker
               value={sessAgentId}
               onChange={setSessAgentId}
-              noneLabel={t('agentPicker.none')}
               className={inputClass}
               style={inputStyle}
             />
-            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-dim)' }}>
+            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
               {t('agentPicker.hint')}
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null) }}>
+            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
               {t('sidebar.cancel')}
             </ModalCancel>
             <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
+              {submitting ? t('sidebar.creating') : t('sidebar.create')}
+            </ModalPrimary>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Create Worktree Modal ── */}
+      <Modal
+        open={createWtOpen}
+        onClose={() => {
+          setCreateWtOpen(false)
+          setCreateWtProjectId(null)
+          setCreateWtBranch('')
+          setCreateWtPath('')
+          setCreateWtBaseBranch('')
+          setCreateWtBranches([])
+          setCreateWtCurrentBranch('')
+        }}
+        title={t('sidebar.createWorktree') ?? 'Create Worktree'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreeBranch') ?? 'Branch Name'}
+            </label>
+            <input
+              type="text"
+              value={createWtBranch}
+              onChange={(e) => setCreateWtBranch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
+              placeholder="feature-xyz"
+              autoFocus
+              className={inputClass}
+              style={inputStyle}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreePath') ?? 'Target Path'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
+            </label>
+            <input
+              type="text"
+              value={createWtPath}
+              onChange={(e) => setCreateWtPath(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
+              placeholder={createWtProjectId
+                ? (() => {
+                    const proj = projects.find(p => p.id === createWtProjectId)
+                    if (!proj) return ''
+                    const p = proj.path.split('/')
+                    const dirname = p[p.length - 1]
+                    const parent = p.slice(0, -1).join('/') || '/'
+                    return `${parent}/${dirname}-${createWtBranch || '<branch>'}`
+                  })()
+                : ''}
+              className={inputClass}
+              style={{ ...inputStyle, direction: 'rtl', textAlign: 'left' as const }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
+            />
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+              {t('sidebar.worktreePathHint') ?? '留空则在项目同级目录创建 <项目名>-<分支名>'}
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.worktreeBaseBranch') ?? 'Base Branch'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
+            </label>
+            <select
+              value={createWtBaseBranch}
+              onChange={(e) => setCreateWtBaseBranch(e.target.value)}
+              className={inputClass}
+              style={{
+                ...inputStyle,
+                cursor: 'pointer',
+                fontFamily: READER_FONT,
+              }}
+            >
+              <option value="">{
+  createWtBranchesLoading
+    ? (t('sidebar.loading') ?? 'Loading...')
+    : createWtCurrentBranch
+      ? (t('sidebar.worktreeDefaultBase', { branch: createWtCurrentBranch }) ?? `默认（${createWtCurrentBranch} 的最新提交）`)
+      : (t('sidebar.worktreeDefaultBaseFallback') ?? '默认（当前分支的最新提交）')
+}</option>
+              {createWtBranches.map(b => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => {
+              setCreateWtOpen(false)
+              setCreateWtProjectId(null)
+              setCreateWtBranch('')
+              setCreateWtPath('')
+              setCreateWtBaseBranch('')
+              setCreateWtBranches([])
+              setCreateWtCurrentBranch('')
+            }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <ModalPrimary onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
             </ModalPrimary>
           </div>
@@ -1756,6 +2130,66 @@ export function Sidebar() {
         confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
         destructive={confirmDelete?.type === 'session'}
         loading={submitting}
+      />
+
+      {/* ── Delete Worktree Confirmation Dialog ── */}
+      <Modal
+        open={!!confirmDeleteWt}
+        onClose={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}
+        title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
+        maxWidth="max-w-sm"
+      >
+        <div className="space-y-4">
+          <div
+            className="px-3 py-2.5 rounded-md"
+            style={{ background: 'var(--danger-12)', border: '1px solid var(--danger)', color: 'var(--text-primary)', fontSize: 12, fontFamily: READER_FONT }}
+          >
+            <p className="font-semibold mb-1" style={{ color: 'var(--danger)' }}>
+              {t('sidebar.deleteWorktreeWarning') ?? '⚠ 不可逆操作'}
+            </p>
+            <p>
+              {t('sidebar.deleteWorktreeConfirm', { name: confirmDeleteWt?.label ?? '', path: confirmDeleteWt?.path ?? '' }) ??
+                `将永久删除 worktree「${confirmDeleteWt?.label ?? ''}」（${confirmDeleteWt?.path ?? ''}），包括其中所有未提交的更改。此操作无法撤销。`}
+            </p>
+          </div>
+          <label
+            className="flex items-center gap-2 cursor-pointer select-none"
+            style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: READER_FONT }}
+          >
+            <input
+              type="checkbox"
+              checked={confirmDeleteWtChecked}
+              onChange={(e) => setConfirmDeleteWtChecked(e.target.checked)}
+              style={{ accentColor: 'var(--danger)' }}
+            />
+            {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
+          </label>
+          <div className="flex justify-end gap-2 pt-1">
+            <ModalCancel onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
+              {t('sidebar.cancel')}
+            </ModalCancel>
+            <button
+              onClick={handleDeleteWorktree}
+              disabled={!confirmDeleteWtChecked || submitting}
+              className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
+              style={{ background: 'var(--danger)' }}
+              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = '#C85A3A' }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--danger)' }}
+            >
+              {submitting ? t('sidebar.deleting') ?? 'Deleting...' : t('sidebar.delete')}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Release Confirmation Dialog ── */}
+      <ConfirmDialog
+        open={!!confirmRelease}
+        onClose={() => setConfirmRelease(null)}
+        onConfirm={handleConfirmRelease}
+        title={t('sidebar.releaseAgentTitle')}
+        message={t('sidebar.confirmReleaseAgent', { name: confirmRelease?.name ?? '' })}
+        confirmText={t('sidebar.release')}
       />
 
       {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}
@@ -1832,7 +2266,9 @@ export function Sidebar() {
                   title={t('sidebar.refresh') ?? 'Refresh'}
                   className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
                   style={{
-                    border: '1px solid var(--border-strong)',
+                    borderWidth: '1px',
+                    borderStyle: 'solid',
+                    borderColor: 'var(--border-strong)',
                     color: 'var(--text-secondary)',
                     fontSize: 11,
                   }}
@@ -1852,7 +2288,7 @@ export function Sidebar() {
                 </button>
               </div>
               <div
-                className="overflow-y-auto"
+                className="overflow-y-auto overlay-scroll-content"
                 style={{
                   height: 200,
                   background: 'var(--bg-base)',
@@ -1997,7 +2433,7 @@ export function Sidebar() {
                   setCoverConflict(null)
                   setCreateProjOpen(false)
                   setProjName('')
-                  setProjPath(homeDir)
+                  setProjPath(homeDir + '/')
                   addToast(
                     'success',
                     t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??
@@ -2035,7 +2471,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.rename')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--accent)'
@@ -2059,7 +2495,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all sidebar-glow-red-hover"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.delete')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--danger)'
@@ -2083,7 +2519,7 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
     <button
       onClick={onClick}
       className="flex-shrink-0 flex items-center justify-center rounded transition-all"
-      style={{ width: 20, height: 20, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
+      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.releaseAcp')}
       onMouseEnter={(e) => {
         e.currentTarget.style.borderColor = 'var(--warning)'
@@ -2106,7 +2542,7 @@ function ModalCancel({ onClick, children }: { onClick: () => void; children: Rea
     <button
       onClick={onClick}
       className="px-4 py-2 text-sm rounded-lg transition-all"
-      style={{ border: '1px solid var(--border-strong)', color: 'var(--text-muted)' }}
+      style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = 'var(--accent-10)'
         e.currentTarget.style.borderColor = 'var(--accent)'
@@ -2184,7 +2620,9 @@ function AgentOnboardingBanner({ sessions }: { sessions: Session[] }) {
         style={{
           width: 18,
           height: 18,
-          border: '1px solid var(--border-strong)',
+          borderWidth: '1px',
+          borderStyle: 'solid',
+          borderColor: 'var(--border-strong)',
           color: 'var(--text-faint)',
           fontSize: 10,
         }}

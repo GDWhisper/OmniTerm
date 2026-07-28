@@ -1,3 +1,5 @@
+pub mod repo;
+
 use serde::Serialize;
 use tokio::process::Command;
 
@@ -11,10 +13,8 @@ pub struct WorktreeInfo {
 
 /// Check if the given path is inside a git work tree.
 pub async fn is_git_repo(path: &str) -> bool {
-    let Ok(output) = Command::new("git")
-        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
-        .output()
-        .await
+    let Ok(output) =
+        Command::new("git").args(["-C", path, "rev-parse", "--is-inside-work-tree"]).output().await
     else {
         return false;
     };
@@ -24,10 +24,8 @@ pub async fn is_git_repo(path: &str) -> bool {
 /// Discover all git worktrees for the repository at the given path.
 /// Runs `git worktree list --porcelain` and parses the output.
 pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>> {
-    let output = Command::new("git")
-        .args(["-C", path, "worktree", "list", "--porcelain"])
-        .output()
-        .await?;
+    let output =
+        Command::new("git").args(["-C", path, "worktree", "list", "--porcelain"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -38,17 +36,95 @@ pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>>
     Ok(parse_worktree_list(&stdout))
 }
 
+/// Get the current branch name at `repo_path`.
+pub async fn current_branch(repo_path: &str) -> anyhow::Result<String> {
+    let output = Command::new("git")
+        .args(["-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git rev-parse failed: {}", stderr.trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// List all local branches in the repository at `repo_path`.
+/// Runs `git branch --format='%(refname:short)'`.
+pub async fn list_branches(repo_path: &str) -> anyhow::Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["-C", repo_path, "branch", "--format=%(refname:short)"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git branch failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+}
+
+/// Remove a git worktree at `target_path`.
+/// Uses `--force` to skip the uncommitted-changes check (the user has
+/// already confirmed the irreversible action in the frontend).
+pub async fn remove_worktree(repo_path: &str, target_path: &str) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .args(["-C", repo_path, "worktree", "remove", "--force", target_path])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree remove failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
+/// Add a new git worktree to the repository at `repo_path`.
+/// Runs `git worktree add -b <branch> <target_path> [base]`.
+pub async fn add_worktree(
+    repo_path: &str,
+    branch: &str,
+    target_path: &str,
+    base: Option<&str>,
+    detach: bool,
+) -> anyhow::Result<()> {
+    let mut args: Vec<&str> = vec!["-C", repo_path, "worktree", "add"];
+
+    if detach {
+        args.push("--detach");
+    }
+
+    args.push("-b");
+    args.push(branch);
+    args.push(target_path);
+
+    if let Some(base_ref) = base {
+        args.push(base_ref);
+    }
+
+    let output = Command::new("git").args(&args).output().await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git worktree add failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
     raw.trim()
         .split("\n\n")
         .filter(|chunk| !chunk.is_empty())
         .filter_map(|chunk| {
-            let mut info = WorktreeInfo {
-                path: String::new(),
-                branch: None,
-                bare: false,
-                detached: false,
-            };
+            let mut info =
+                WorktreeInfo { path: String::new(), branch: None, bare: false, detached: false };
             for line in chunk.lines() {
                 let mut parts = line.splitn(2, ' ');
                 let key = parts.next().unwrap_or("");
@@ -56,18 +132,15 @@ fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
                 match key {
                     "worktree" => info.path = value.to_string(),
                     "branch" => {
-                        info.branch = Some(value.strip_prefix("refs/heads/").unwrap_or(value).to_string());
+                        info.branch =
+                            Some(value.strip_prefix("refs/heads/").unwrap_or(value).to_string());
                     }
                     "bare" => info.bare = true,
                     "detached" => info.detached = true,
                     _ => {}
                 }
             }
-            if info.path.is_empty() {
-                None
-            } else {
-                Some(info)
-            }
+            if info.path.is_empty() { None } else { Some(info) }
         })
         .collect()
 }

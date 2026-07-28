@@ -18,6 +18,7 @@ vi.mock('../../api/client', () => ({
     createSession: vi.fn(),
     listDirs: vi.fn().mockResolvedValue({ files: [] }),
     pathExists: vi.fn().mockResolvedValue({ exists: true }),
+    versionCheck: vi.fn().mockResolvedValue({ current: '0.1.9', latest: '0.1.9', update_available: false, channel: 'github_release' }),
   },
   ApiError: class ApiError extends Error {
     status: number
@@ -41,11 +42,6 @@ vi.mock('../../hooks/useAttention', () => ({
     setActive: vi.fn(),
     reasonFor: vi.fn(),
   }),
-}))
-
-// Mock pixelAnimations
-vi.mock('../../utils/pixelAnimations', () => ({
-  triggerBump: vi.fn(),
 }))
 
 // Test data
@@ -107,7 +103,6 @@ describe('Sidebar handleCreateSession', () => {
       sidebarCollapsed: false,
       connected: true,
       workspaceSessionMemory: {},
-      fmSessionStates: {},
     })
 
     container = document.createElement('div')

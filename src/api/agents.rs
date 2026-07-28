@@ -1,24 +1,23 @@
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
+use std::time::Duration;
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::acp::AcpClient;
 use crate::models::agent::{Agent, AgentEnvVar, CreateAgent, UpdateAgent};
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/agents", get(list_agents).post(create_agent))
-        .route(
-            "/agents/{id}",
-            get(get_agent).put(update_agent).delete(delete_agent),
-        )
+        .route("/agents/test-raw", post(test_agent_raw))
+        .route("/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
         .route("/agents/{id}/test", post(test_agent))
 }
 
@@ -68,10 +67,7 @@ async fn get_agent(State(state): State<AppState>, Path(id): Path<String>) -> imp
 
     match row {
         Some(r) => (StatusCode::OK, Json(json!(r.into_agent()))),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "not found" })),
-        ),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
     }
 }
 
@@ -99,10 +95,7 @@ async fn create_agent(
     .await;
 
     if let Err(e) = result {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": e.to_string() })),
-        );
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() })));
     }
 
     let agent = Agent {
@@ -130,10 +123,7 @@ async fn update_agent(
         .unwrap();
 
     let Some(existing) = existing else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "not found" })),
-        );
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     };
     let mut current = existing.into_agent();
 
@@ -171,11 +161,24 @@ async fn update_agent(
 }
 
 async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM agents WHERE id = ?")
+    // Check if any sessions reference this agent
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE agent_id = ?")
         .bind(&id)
-        .execute(&state.db)
+        .fetch_one(&state.db)
         .await
-        .unwrap();
+        .unwrap_or(0);
+
+    if session_count > 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(
+                json!({ "error": format!("Cannot delete agent: {} session(s) still reference it", session_count) }),
+            ),
+        );
+    }
+
+    let result =
+        sqlx::query("DELETE FROM agents WHERE id = ?").bind(&id).execute(&state.db).await.unwrap();
 
     if result.rows_affected() == 0 {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
@@ -198,22 +201,53 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
     let agent = match load_agent(&state.db, &id).await {
         Some(a) => a,
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "agent not found" })),
-            );
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
         }
     };
 
     let cwd = std::env::temp_dir();
-    match AcpClient::spawn_and_connect(agent, cwd).await {
-        Ok(client) => {
+    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
+        .await
+    {
+        Ok(Ok(client)) => {
             client.disconnect().await;
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("connection failed: {}", e) })),
-        ),
+        Ok(Err(e)) => {
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
+        }
+        Err(_) => {
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
+        }
+    }
+}
+
+/// Test an agent configuration without saving it to the database.
+/// Accepts a `CreateAgent` body and attempts to spawn + connect.
+async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
+    let agent = Agent {
+        id: "test-raw".to_string(),
+        display_name: req.display_name,
+        command: req.command,
+        args: req.args,
+        env: req.env,
+        created_at: String::new(),
+        updated_at: String::new(),
+    };
+
+    let cwd = std::env::temp_dir();
+    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
+        .await
+    {
+        Ok(Ok(client)) => {
+            client.disconnect().await;
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
+        Ok(Err(e)) => {
+            (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
+        }
+        Err(_) => {
+            (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
+        }
     }
 }

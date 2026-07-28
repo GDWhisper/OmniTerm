@@ -1,8 +1,11 @@
 use axum::{
-    extract::{Query, State},
-    response::{sse::{Event, KeepAlive, Sse}, IntoResponse},
-    routing::get,
     Router,
+    extract::{Query, State},
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::get,
 };
 use futures_util::stream::{self, Stream};
 use notify::{Event as NotifyEvent, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -15,7 +18,7 @@ use tokio::sync::broadcast;
 
 use crate::AppState;
 
-use super::files::{resolve_session_base, resolve_project_root};
+use super::files::{resolve_project_root, resolve_session_base};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/files/watch", get(watch_files))
@@ -35,14 +38,10 @@ async fn watch_files(
 ) -> impl IntoResponse {
     // Resolve the directory to watch
     let watch_path = if let Some(sid) = q.session.as_deref() {
-        resolve_session_base(&state, sid)
-            .await
-            .map(|(cwd, _)| PathBuf::from(cwd))
+        resolve_session_base(&state, sid).await.map(|(cwd, _)| PathBuf::from(cwd))
     } else {
         let wid = q.workspace.as_deref().unwrap_or("default");
-        resolve_project_root(&state, wid)
-            .await
-            .map(PathBuf::from)
+        resolve_project_root(&state, wid).await.map(PathBuf::from)
     };
 
     let watch_path = match watch_path {
@@ -92,9 +91,11 @@ async fn watch_files(
         // `recv_timeout` returns `Disconnected` when the sender is dropped —
         // a pure sync mechanism that works reliably from any thread.
         loop {
-            match shutdown_rx.recv_timeout(Duration::from_millis(250)) {
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                _ => {} // Timeout or Ok — keep waiting
+            if let Err(std::sync::mpsc::RecvTimeoutError::Disconnected) =
+                shutdown_rx.recv_timeout(Duration::from_millis(250))
+            {
+                break;
+                // Timeout 或 Ok：继续等待
             }
         }
         // `watcher` drops here → `inotify_rm_watch` for every registered path.
@@ -116,14 +117,9 @@ async fn watch_files(
         }
     };
 
-    let boxed: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> =
-        Box::pin(sse_stream);
+    let boxed: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> = Box::pin(sse_stream);
 
-    Sse::new(boxed).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("ping"),
-    )
+    Sse::new(boxed).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
 }
 
 /// Convert a notify event into one or more JSON change messages.
@@ -132,11 +128,7 @@ fn notify_event_to_changes(event: &NotifyEvent, base_dir: &std::path::Path) -> V
 
     for path in &event.paths {
         // Compute relative path from the watched directory
-        let rel_path = path
-            .strip_prefix(base_dir)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
+        let rel_path = path.strip_prefix(base_dir).unwrap_or(path).to_string_lossy().to_string();
 
         // Skip hidden files and common non-interesting directories
         if should_ignore(&rel_path) {
@@ -150,36 +142,32 @@ fn notify_event_to_changes(event: &NotifyEvent, base_dir: &std::path::Path) -> V
             _ => continue, // ignore access, metadata, etc.
         };
 
-        let json = format!(
-            r#"{{"kind":"{}","path":"{}"}}"#,
-            kind_str,
-            escape_json(&rel_path)
-        );
+        let json = format!(r#"{{"kind":"{}","path":"{}"}}"#, kind_str, escape_json(&rel_path));
         changes.push(json);
     }
 
     // Handle renames specially
-    if let EventKind::Modify(notify::event::ModifyKind::Name(_)) = event.kind {
-        if event.paths.len() == 2 {
-            let from = event.paths[0]
-                .strip_prefix(base_dir)
-                .unwrap_or(&event.paths[0])
-                .to_string_lossy()
-                .to_string();
-            let to = event.paths[1]
-                .strip_prefix(base_dir)
-                .unwrap_or(&event.paths[1])
-                .to_string_lossy()
-                .to_string();
+    if let EventKind::Modify(notify::event::ModifyKind::Name(_)) = event.kind
+        && event.paths.len() == 2
+    {
+        let from = event.paths[0]
+            .strip_prefix(base_dir)
+            .unwrap_or(&event.paths[0])
+            .to_string_lossy()
+            .to_string();
+        let to = event.paths[1]
+            .strip_prefix(base_dir)
+            .unwrap_or(&event.paths[1])
+            .to_string_lossy()
+            .to_string();
 
-            if !should_ignore(&from) && !should_ignore(&to) {
-                changes.clear(); // remove the generic modify events
-                changes.push(format!(
-                    r#"{{"kind":"rename","path":"{}","newPath":"{}"}}"#,
-                    escape_json(&from),
-                    escape_json(&to)
-                ));
-            }
+        if !should_ignore(&from) && !should_ignore(&to) {
+            changes.clear(); // remove the generic modify events
+            changes.push(format!(
+                r#"{{"kind":"rename","path":"{}","newPath":"{}"}}"#,
+                escape_json(&from),
+                escape_json(&to)
+            ));
         }
     }
 

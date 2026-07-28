@@ -46,7 +46,26 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* VT323 — titles, buttons, status labels */
+/* Silkscreen — titles, buttons, status labels. Geometric small-size UI
+   pixel face with uniform cap height, wider than VT323 (kept as fallback). */
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/silkscreen-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./assets/fonts/silkscreen-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* VT323 — fallback for --pixel-font */
 @font-face {
   font-family: 'VT323';
   font-style: normal;
@@ -72,6 +91,27 @@
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* JetBrains Mono — reader / code / inputs / terminal (self-hosted, no remote).
+   Subset from @fontsource/jetbrains-mono; font-display: swap is intentional
+   here (unlike the pixel fonts) so long-form body text never blocks on load.
+   Must stay in sync with READER_FONT in utils/fonts.ts. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./assets/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
@@ -81,6 +121,24 @@
    Components use var(--token) instead of hardcoded hex.
    ──────────────────────────────────────────────────────────────────── */
 :root {
+  /* ── Font stack (single source of truth for CSS, mirrors READER_FONT in
+     utils/fonts.ts). JS uses the READER_FONT constant; CSS uses this var
+     (directly or via the .font-reader class). Keep in sync with fonts.ts. */
+  --reader-font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  --logo-font: 'Press Start 2P', 'VT323', monospace;
+  /* Pixel font is a BETA opt-in (Settings → Appearance). --pixel-font-static
+     is always pixel (top bar row: logo version + panel title bars); everything
+     else uses --pixel-font, which stays on the reader stack until
+     body.pixel-font-on flips it (below). */
+  --pixel-font-static: 'Silkscreen', 'VT323', 'Press Start 2P', monospace;
+  --pixel-font: var(--reader-font);
+  /* ── Pixel display font tracking (single source of truth). Silkscreen 字形
+     本身偏宽，字距整体收紧（原 1/2/3px → 0.5/1.5/2px）。
+     sm=徽标/小标签，md=按钮/tab/列头，lg=面板标题条。 */
+  --pixel-tracking-sm: 0.5px;
+  --pixel-tracking-md: 1.5px;
+  --pixel-tracking-lg: 2px;
+
   /* ── Parchment A2 light theme (primary) ── */
   /* --bg-* hierarchy: base (page) → elevated (panel) → surface (recessed).
      All three are warm parchment tones — NO near-white (#FFF, #FDF, etc.).
@@ -89,6 +147,7 @@
   --bg-base: #F5ECD8;
   --bg-elevated: #EBE0C4;
   --bg-surface: #F0E1B0;
+  --bg-code-inline: #E4D199; /* 行内代码底：比气泡 surface 更暗一档，避免撞色泛白 */
   --border-subtle: #D4C4A0;
   --border-strong: #3A2E1F;
   --text-primary: #3A2E1F;
@@ -119,6 +178,7 @@
   --bg-elevated-light: #EBE0C4;
   --pixel-shadow-light: #8B7755;
   --scrollbar-thumb: #8B7755;
+  --scrollbar-thumb-hover: #6B5A3E;
   --scrollbar-track: #EBE0C4;
   color-scheme: light;
 }
@@ -128,6 +188,7 @@
   --bg-base: #12141A;
   --bg-elevated: #1B1E26;
   --bg-surface: #242832;
+  --bg-code-inline: #3A404C; /* 行内代码底：比气泡 surface 明显更亮，深色下清晰可辨 */
   /* borders */
   --border-subtle: #30363D;
   --border-strong: #484F58;
@@ -154,6 +215,7 @@
   --pixel-shadow: #090A0D;
   /* scrollbar */
   --scrollbar-thumb: #484F58;
+  --scrollbar-thumb-hover: #58A6FF;
   --scrollbar-track: #12141A;
   color-scheme: dark;
 }
@@ -172,19 +234,26 @@
    ──────────────────────────────────────────────────────────────────── */
 
 .font-logo {
-  font-family: 'Press Start 2P', 'VT323', monospace;
-  letter-spacing: 1px;
+  font-family: var(--logo-font);
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
 }
 
 .font-pixel {
-  font-family: 'VT323', 'Press Start 2P', monospace;
-  letter-spacing: 1px;
+  font-family: var(--pixel-font);
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
 }
 
+/* Pixel font BETA toggle (Settings → Appearance). App.tsx sets this body
+   class from appStore.pixelFontEnabled. Rules on --pixel-font-static
+   (top bar row) ignore the toggle by design. */
+body.pixel-font-on {
+  --pixel-font: var(--pixel-font-static);
+}
+
 .font-reader {
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family: var(--reader-font);
 }
 
 /* CRT scanline overlay — 2% opacity, controlled by settings */
@@ -285,9 +354,9 @@ html, body, #root {
   }
 }
 
-/* Vertical drag bar — 4px wide, indicator is 4px × 48px centered pill. */
+/* Vertical drag bar — 6px wide, indicator is 6px × 48px centered pill. */
 .omniterm-drag-bar-v {
-  width: 4px;
+  width: 6px;
   cursor: col-resize;
 }
 
@@ -295,7 +364,7 @@ html, body, #root {
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 4px;
+  width: 6px;
   height: 48px;
   border-radius: 0;
 }
@@ -315,7 +384,7 @@ html, body, #root {
   overflow: hidden;
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family: var(--reader-font);
   font-size: 13px;
   display: flex;
   flex-direction: column;
@@ -579,6 +648,61 @@ html, body, #root {
   pointer-events: none;
 }
 
+/* ── File drag-to-move ── */
+.fm-drag-preview {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  animation: fm-drag-preview-in 0.12s steps(3, end) forwards;
+}
+@keyframes fm-drag-preview-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.fm-drag-preview-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.fm-drag-preview-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.fm-drop-target td {
+  background: rgba(88, 166, 255, 0.12) !important;
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+.fm-bc-seg-drop {
+  background: rgba(88, 166, 255, 0.18);
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  color: var(--accent) !important;
+}
+body.fm-dragging,
+body.fm-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+.fm-drag-handle {
+  display: inline-flex;
+  cursor: grab;
+  flex-shrink: 0;
+}
+
 /* ── Table wrapper — horizontal + vertical scroll ── */
 .fm-table-wrap {
   flex: 1 1 auto;
@@ -733,7 +857,14 @@ html, body, #root {
   right: 0;
   z-index: 2;
   background: var(--bg-base);
-  box-shadow: -3px 0 4px -2px rgba(0,0,0,0.18);
+  box-shadow: -2px 0 0 var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+}
+
+/* Override row hover — actions cell must stay opaque so sticky
+   covers mtime/size content underneath. */
+.fm-table tr:hover .fm-td-actions-cell {
+  background: var(--bg-base);
 }
 
 /* Actions column header — sticky both top (via thead) and right */
@@ -746,8 +877,9 @@ html, body, #root {
 }
 
 /* ── Name cell ── */
-.fm-td-name {
+.fm-table td.fm-td-name {
   overflow: hidden;
+  padding-left: 8px;
 }
 
 .fm-name-text {
@@ -764,10 +896,18 @@ html, body, #root {
   font-variant-numeric: tabular-nums;
 }
 
-.fm-td-time {
+.fm-table td.fm-td-time {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 /* ── Action icon buttons ── */
@@ -810,10 +950,13 @@ html, body, #root {
 }
 
 /* ── Size cell ── */
-.fm-td-size {
+.fm-table td.fm-td-size {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-subtle);
 }
 
 /* ── Empty state ── */
@@ -982,19 +1125,6 @@ html, body, #root {
   color: var(--accent);
 }
 
-.sidebar-wt-row .session-count {
-  font-family: 'VT323', monospace;
-  font-size: 12px;
-  background: var(--wood-shadow, #3A2E1F);
-  color: #7EE787;
-  padding: 0 4px;
-  box-shadow:
-    inset 0 2px 0 var(--wood-inset-dark, #140F0A),
-    inset 2px 0 0 var(--wood-inset-dark, #140F0A),
-    inset 0 -2px 0 var(--wood-inset-light, #6E543A),
-    inset -2px 0 0 var(--wood-inset-light, #6E543A);
-}
-
 .sidebar-wt-add-btn,
 .sidebar-proj-add-btn {
   display: inline-flex;
@@ -1007,6 +1137,13 @@ html, body, #root {
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   cursor: pointer;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+
+.sidebar-wt-add-btn:active,
+.sidebar-proj-add-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
 }
 
 .sidebar-proj-add-btn {
@@ -1030,6 +1167,7 @@ html, body, #root {
 }
 
 .sidebar-session-item {
+  position: relative; /* ACP 徽标绝对定位锚点（叠加在左侧缩进槽，不占行内布局） */
   padding: 3px 6px;
   display: flex;
   align-items: center;
@@ -1109,7 +1247,7 @@ html, body, #root {
   position: absolute;
   top: 0;
   left: 50%;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 16px;
   color: var(--success);
   text-shadow: 2px 2px 0px var(--pixel-shadow);
@@ -1151,21 +1289,46 @@ html, body, #root {
 }
 
 .logo-wordmark {
-  font-family: 'Press Start 2P', 'VT323', monospace;
+  font-family: var(--logo-font);
   font-size: 17px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   text-transform: uppercase;
   color: #FAF2DE;
   line-height: 1.1;
 }
 
 .logo-version {
-  font-family: 'VT323', monospace;
-  font-size: 11px;
+  font-family: var(--pixel-font-static);
+  font-size: 15px;
   color: var(--gold-light, #FFCB6B);
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   margin-top: 5px;
   line-height: 1;
+}
+
+/* New-version reminder badge next to the version number. */
+.update-badge {
+  font-family: var(--pixel-font-static);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: var(--pixel-tracking-sm);
+  text-transform: uppercase;
+  padding: 3px 5px;
+  margin-top: 5px;
+  border-radius: 0;
+  cursor: pointer;
+  background: var(--gold-light, #FFCB6B);
+  color: var(--wood-shadow, #3A2E1F);
+  border: none;
+  box-shadow: 2px 2px 0 var(--wood-shadow, #3A2E1F);
+  transition: all 0.1s steps(3);
+}
+.update-badge:hover {
+  filter: brightness(1.1);
+}
+.update-badge:active {
+  transform: translate(2px, 2px);
+  box-shadow: none;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -1178,9 +1341,9 @@ html, body, #root {
   justify-content: center;
   gap: 6px;
   padding: 6px 12px;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   border-radius: 0;
   cursor: pointer;
@@ -1246,7 +1409,7 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Panel title bar — wood background, pixel font, 3px letter-spacing.
+   Panel title bar — wood background, pixel font, --pixel-tracking-lg spacing.
    Used on top of every panel (sidebar sections, terminal, file manager,
    settings, modal).
    ──────────────────────────────────────────────────────────────────── */
@@ -1254,9 +1417,9 @@ body.parchment-texture {
   padding: 5px 10px;
   background: var(--wood-dark, #8B5A2B);
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font-static);
   font-size: 13px;
-  letter-spacing: 3px;
+  letter-spacing: var(--pixel-tracking-lg);
   text-transform: uppercase;
   border-bottom: 2px solid var(--wood-shadow, #3A2E1F);
   display: flex;
@@ -1295,30 +1458,41 @@ body.parchment-texture {
 
 /* ────────────────────────────────────────────────────────────────────
    Overlay scrollbar — backs the <OverlayScroll> component. The native
-   scrollbar is hidden entirely; a thin theme-aware thumb floats over the
-   content's right edge, fading in on scroll and out when idle. Because it
-   overlays rather than reserves a gutter, revealing it never reflows the
-   layout. Used by the chat message list, the config-toolbar dropdown, and
-   the settings/cheatsheet popup panes.
+   scrollbar reserves a 6px gutter from first paint (no reflow on show/hide)
+   but stays visually hidden until the pointer enters / focus lands in the
+   container, then themes in. Because it is the real native bar it stays
+   fully draggable. Used by the chat message list, the config-toolbar
+   dropdown, and the settings/cheatsheet popup panes.
    ──────────────────────────────────────────────────────────────────── */
 .overlay-scroll-content {
-  scrollbar-width: none;                  /* Firefox: hide native bar */
+  scrollbar-width: thin;                  /* Firefox: thin native bar */
+  scrollbar-color: transparent transparent;   /* hidden until hovered/focused */
+}
+.overlay-scroll-content:hover,
+.overlay-scroll-content:focus-within {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 .overlay-scroll-content::-webkit-scrollbar {
-  width: 0;                               /* WebKit: hide native bar */
-  height: 0;
+  width: 6px;                             /* WebKit: gutter reserved from first paint */
+  height: 6px;
 }
-.overlay-scroll-thumb {
-  position: absolute;
-  top: 0;
-  right: 2px;
-  width: 6px;
+.overlay-scroll-content::-webkit-scrollbar-track {
+  background: transparent;                /* hidden until hovered/focused */
+}
+.overlay-scroll-content::-webkit-scrollbar-thumb {
+  background: transparent;                /* hidden until hovered/focused */
   border-radius: 0;
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-track,
+.overlay-scroll-content:focus-within::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-thumb,
+.overlay-scroll-content:focus-within::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  pointer-events: none;
-  z-index: 20;
+}
+.overlay-scroll-content:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, var(--scrollbar-thumb));
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -1333,7 +1507,7 @@ body.parchment-texture {
   min-height: 0;
   background: var(--bg-elevated);
   color: var(--text-primary);
-  font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+  font-family: var(--reader-font);
 }
 .settings-tabs {
   width: 92px;
@@ -1352,9 +1526,9 @@ body.parchment-texture {
   /* Reserve 3px on the left so active state doesn't shift tab width. */
   border-left: 3px solid transparent;
   padding: 9px 8px 9px 10px;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 1.5px;
+  letter-spacing: var(--pixel-tracking-md);
   color: var(--text-muted);
   cursor: pointer;
   text-align: left;
@@ -1396,9 +1570,9 @@ body.parchment-texture {
 .progress-segmented-label {
   display: flex;
   justify-content: space-between;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 11px;
-  letter-spacing: 2px;
+  letter-spacing: var(--pixel-tracking-md);
   text-transform: uppercase;
   color: var(--wood-dark, #8B5A2B);
   margin-bottom: 3px;
@@ -1425,6 +1599,7 @@ body.parchment-texture {
   animation: blink-cursor 1s steps(1) infinite;
 }
 .selected-cursor.inactive { color: transparent; animation: none; }
+.selected-cursor.no-blink { animation: none; }
 
 @keyframes blink-cursor {
   50% { opacity: 0; }
@@ -1491,6 +1666,32 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Pixel float — unified elevation for ALL floating layers (modal,
+   popup, dropdown, tooltip, autocomplete). Hard 4px shadow, no blur,
+   square corners (modal shells may override radius up to 2px).
+   See ui-style-guide §6 — components must NOT inline soft shadows.
+   ──────────────────────────────────────────────────────────────────── */
+.pixel-float {
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 4px 4px 0 var(--pixel-shadow);
+}
+
+/* Interactive elements that keep their own border/colors but need the
+   unified hard shadow + press displacement (see ui-style-guide §6). */
+.pixel-press {
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+.pixel-press:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.pixel-press:disabled {
+  box-shadow: none;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    DialogueToast — Undertale-style RPG dialogue box for key notifications.
    Dark background + wood-shadow outer frame + corner nails.
    ──────────────────────────────────────────────────────────────────── */
@@ -1504,9 +1705,9 @@ body.parchment-texture {
   background: #12141A;
   border: 3px solid var(--wood-shadow, #3A2E1F);
   color: #FAF2DE;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 16px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   line-height: 1.4;
   box-shadow: 4px 4px 0 var(--pixel-shadow, #8B7755);
   z-index: 10000;
@@ -1543,6 +1744,54 @@ body.parchment-texture {
   to   { opacity: 0; transform: translate(-50%, 8px); }
 }
 
+@keyframes replay-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ACP 重放（恢复历史记录）时的轻量指示器 */
+.chat-replay-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px 6px;
+  font-family: var(--reader-font, monospace);
+  font-size: 0.923em;
+  line-height: 20px;
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+  user-select: none;
+}
+.chat-replay-indicator .replay-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--border-subtle);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: replay-spin 0.7s linear infinite;
+}
+
+/* 消息级 hover 操作（编辑 / 重新生成）：默认隐藏，悬停消息行时淡入 */
+.chat-msg-row .chat-msg-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.chat-msg-row:hover .chat-msg-actions,
+.chat-msg-row:focus-within .chat-msg-actions {
+  opacity: 1;
+}
+.chat-msg-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 0.846em;
+  padding: 1px 4px;
+  font-family: var(--reader-font, monospace);
+}
+.chat-msg-action-btn:hover {
+  color: var(--text-secondary);
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.
@@ -1551,9 +1800,9 @@ body.parchment-texture {
   background: #12141A;
   border: 2px solid var(--success, #5A8F3A);
   color: #7EE787;
-  font-family: 'VT323', monospace;
+  font-family: var(--pixel-font);
   font-size: 14px;
-  letter-spacing: 1px;
+  letter-spacing: var(--pixel-tracking-sm);
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   border-radius: 0;
   padding: 8px 14px;
@@ -1581,3 +1830,757 @@ body.parchment-texture {
 .dark .dialogue-toast > .nail-bl,
 .dark .dialogue-toast > .nail-br { background: #8B7755; }
 /* logo-version uses --accent-gold (same as title-bar-path) — see ui-style-guide §1.3 */
+
+/* ────────────────────────────────────────────────────────────────────
+   Todo Board — kanban-style task list fixed above ChatInput.
+   Three columns (PENDING / ACTIVE / DONE) with pixel-aesthetic cards.
+   ──────────────────────────────────────────────────────────────────── */
+/* ── Todo Kanban Board ── */
+.todo-board {
+  border-top: 2px solid var(--wood-shadow);
+  background: var(--bg-elevated);
+}
+
+/* Title bar — pixel panel-title-bar style (wood-dark bg, VT323, uppercase) */
+.todo-board-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--wood-dark);
+  color: #FAF2DE;
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  letter-spacing: var(--pixel-tracking-lg);
+  text-transform: uppercase;
+  border-bottom: 2px solid var(--wood-shadow);
+}
+
+.dark .todo-board-header {
+  background: #2A2520;
+  color: #E6DFD0;
+}
+
+.todo-board-header:hover {
+  filter: brightness(1.08);
+}
+
+.todo-board-header .todo-toggle {
+  font-size: 11px;
+  transition: transform 0.15s steps(2);
+  opacity: 0.7;
+}
+
+.todo-board-header .todo-toggle.collapsed {
+  transform: rotate(-90deg);
+}
+
+.todo-board-header .todo-count {
+  margin-left: auto;
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  letter-spacing: var(--pixel-tracking-md);
+  opacity: 0.7;
+}
+
+/* Three-column kanban grid */
+.todo-board-columns {
+  display: flex;
+  max-height: 180px;
+  background: var(--bg-elevated);
+}
+
+.todo-column {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 8px;
+}
+
+.todo-column + .todo-column {
+  border-left: 2px solid var(--wood-shadow);
+}
+
+/* Column header */
+.todo-column-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0 6px;
+  margin-bottom: 4px;
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  letter-spacing: var(--pixel-tracking-md);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.todo-column-header .todo-col-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+
+.todo-column-header .todo-col-count {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.5;
+}
+
+/* Column body — scrollable when items overflow */
+.todo-column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Kanban card row */
+.todo-card {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 6px;
+  font-family: var(--reader-font, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.todo-card:hover {
+  background: var(--bg-surface);
+}
+
+.todo-card-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+/* Status colors via CSS class (no inline styles) */
+.todo-card-icon.status-pending     { color: var(--text-faint); }
+.todo-card-icon.status-in_progress { color: var(--accent); }
+.todo-card-icon.status-completed   { color: var(--success); }
+
+.todo-card-priority {
+  flex-shrink: 0;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.todo-card-priority.priority-high   { color: var(--danger); }
+.todo-card-priority.priority-medium { color: var(--text-secondary); }
+.todo-card-priority.priority-low    { color: var(--text-faint); }
+
+.todo-card-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-card.status-completed .todo-card-text {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+.todo-column-empty {
+  padding: 4px 6px;
+  font-family: var(--reader-font, monospace);
+  font-size: 10px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+select optgroup {
+  color: var(--text-faint);
+  font-style: normal;
+  font-weight: 500;
+}
+
+select optgroup option {
+  color: var(--text-primary);
+  font-weight: normal;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Right panel tabs (FILES | GIT) — live inside .panel-title-bar.
+   VT323 pixel font, uppercase; active = gold underline (clickable-tab
+   pattern — §4.1 reserves the inset dark box for non-clickable badges).
+   ──────────────────────────────────────────────────────────────────── */
+.panel-title-bar .title-bar-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 1px 8px;
+  font-family: var(--pixel-font-static);
+  font-size: 14px;
+  letter-spacing: var(--pixel-tracking-md);
+  text-transform: uppercase;
+  color: rgba(250, 242, 222, 0.55);
+  cursor: pointer;
+  transition: color 0.1s steps(2), border-color 0.1s steps(2);
+}
+.panel-title-bar .title-bar-tab:hover {
+  color: #FAF2DE;
+}
+.panel-title-bar .title-bar-tab.active {
+  color: var(--gold-light, #FFCB6B);
+  border-bottom-color: var(--gold-light, #FFCB6B);
+}
+.panel-title-bar .title-bar-collapse {
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  font-size: 12px;
+  color: rgba(250, 242, 222, 0.55);
+  cursor: pointer;
+  transition: color 0.1s steps(2);
+}
+.panel-title-bar .title-bar-collapse:hover {
+  color: #FAF2DE;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Git panel — docs/dev/plans/2026-07-26-git-panel.md ADR-7.
+   Top branch/remote row + CHANGES|HISTORY switch + bottom commit box.
+   ──────────────────────────────────────────────────────────────────── */
+.git-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 80px;
+  padding: 16px;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+  text-align: center;
+}
+
+.git-topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  font-family: var(--reader-font);
+}
+
+.git-branch-wrap {
+  position: relative;
+  min-width: 0;
+  flex-shrink: 1;
+}
+.git-branch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+  background: transparent;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+.git-branch-btn:hover:not(:disabled) {
+  background: var(--accent-10);
+  color: var(--accent-bright);
+}
+.git-branch-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.git-branch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  box-shadow: none;
+}
+.git-branch-glyph {
+  flex-shrink: 0;
+}
+.git-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-branch-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  max-width: 280px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  box-shadow: 4px 4px 0px 0px var(--pixel-shadow);
+}
+.git-branch-item {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.git-branch-item:hover {
+  background: var(--accent-10);
+  color: var(--accent);
+}
+.git-branch-item.active {
+  color: var(--gold-light, #FFCB6B);
+  cursor: default;
+}
+.git-branch-create {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.git-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  outline: none;
+}
+.git-input:focus {
+  border-color: var(--accent);
+}
+
+.git-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 7px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-muted);
+  font-family: var(--pixel-font);
+  font-size: 12px;
+  letter-spacing: var(--pixel-tracking-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.git-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-10);
+}
+.git-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-ab-badge {
+  font-family: var(--reader-font);
+  font-size: 11px;
+  color: var(--gold-light, #FFCB6B);
+  padding: 0 3px;
+  flex-shrink: 0;
+}
+
+.git-viewbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.git-view-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--pixel-font);
+  font-size: 14px;
+  letter-spacing: var(--pixel-tracking-md);
+  cursor: pointer;
+  transition: color 0.1s steps(2);
+}
+.git-view-tab:hover {
+  color: var(--text-primary);
+}
+.git-view-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.git-count-badge {
+  font-family: var(--reader-font);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  background: var(--accent-14);
+  color: var(--accent);
+}
+
+/* ── File sections (STAGED / CHANGES) ── */
+.git-section {
+  padding-bottom: 6px;
+}
+.git-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 4px;
+  color: var(--text-faint);
+  font-family: var(--pixel-font);
+  font-size: 13px;
+  letter-spacing: var(--pixel-tracking-md);
+  text-transform: uppercase;
+  position: sticky;
+  top: 0;
+  background: var(--bg-base);
+  z-index: 1;
+}
+.git-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-family: var(--reader-font);
+  font-size: 12px;
+  transition: background 0.1s ease;
+}
+.git-file-row:hover {
+  background: var(--accent-10);
+}
+.git-file-row:hover .git-file-actions {
+  opacity: 1;
+}
+.git-status-char {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+.git-status-M, .git-status-T { color: var(--warning); }
+.git-status-A { color: var(--success); }
+.git-status-D { color: var(--danger); }
+.git-status-R, .git-status-C { color: var(--accent); }
+.git-status-\? { color: var(--success); }
+.git-status-conflict, .git-status-U { color: var(--danger); }
+.git-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.git-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.git-row-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+.git-row-btn:hover:not(:disabled) {
+  background: var(--accent-14);
+  color: var(--accent);
+}
+.git-row-btn-danger:hover:not(:disabled) {
+  background: var(--danger-12);
+  color: var(--danger);
+}
+.git-row-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ── Bottom-fixed commit box ── */
+.git-commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  flex-shrink: 0;
+}
+.git-commit-input {
+  resize: none;
+  padding: 6px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  line-height: 1.4;
+  outline: none;
+}
+.git-commit-input:focus {
+  border-color: var(--accent);
+}
+.git-commit-btn {
+  padding: 5px 0;
+  background: transparent;
+  border: 2px solid var(--accent);
+  border-radius: 0;
+  color: var(--accent);
+  font-family: var(--pixel-font);
+  font-size: 14px;
+  letter-spacing: var(--pixel-tracking-md);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+.git-commit-btn:hover:not(:disabled) {
+  background: var(--accent-10);
+  color: var(--accent-bright);
+  box-shadow: 3px 3px 0 var(--pixel-shadow);
+}
+.git-commit-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+.git-commit-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* ── History list ── */
+.git-log-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--reader-font);
+  transition: background 0.1s ease;
+}
+.git-log-row:hover {
+  background: var(--accent-10);
+}
+.git-log-subject {
+  color: var(--text-primary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.git-log-sha {
+  color: var(--gold-light, #FFCB6B);
+}
+.git-load-more {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+.git-load-more:hover:not(:disabled) {
+  background: var(--accent-10);
+}
+
+/* ── Diff drawer ── */
+.git-drawer-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+}
+.git-commit-meta {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.git-commit-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.git-commit-sha {
+  color: var(--gold-light, #FFCB6B);
+  font-family: var(--reader-font);
+  font-size: 11px;
+  word-break: break-all;
+}
+.git-commit-message {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+}
+
+/* ── Unified diff rendering (ADR-3) ── */
+.git-diff {
+  font-family: var(--reader-font);
+  font-size: 12px;
+  line-height: 1.5;
+  padding-bottom: 8px;
+}
+.git-diff-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+}
+.git-diff-file-header {
+  padding: 5px 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.git-diff-line {
+  display: flex;
+  white-space: pre;
+}
+.git-diff-lineno {
+  flex-shrink: 0;
+  width: 38px;
+  padding-right: 6px;
+  text-align: right;
+  color: var(--text-dim);
+  user-select: none;
+  font-size: 11px;
+}
+.git-diff-text {
+  flex: 1;
+  min-width: 0;
+  padding-left: 4px;
+  color: var(--text-muted);
+}
+.git-diff-line-add {
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.git-diff-line-add .git-diff-text { color: var(--success); }
+.git-diff-line-del {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.git-diff-line-del .git-diff-text { color: var(--danger); }
+.git-diff-line-hunk .git-diff-text,
+.git-diff-line-meta .git-diff-text {
+  color: var(--accent);
+  opacity: 0.8;
+}
+.git-diff-truncated {
+  padding: 10px 12px;
+  color: var(--warning);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Mobile layout animations & components
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes mobileSlideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+@keyframes mobileSlideInRight {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes mobileSlideOutLeft {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+@keyframes mobileSlideOutRight {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes mobileNavPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+.mobikey-btn {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  touch-action: manipulation;
+}
+.mobikey-btn:active {
+  transform: scale(0.93);
+  filter: brightness(1.35);
+}

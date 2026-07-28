@@ -4,6 +4,10 @@ import type { Project, Workspace, Session } from '../api/client'
 // Re-export for convenience
 export type { Project, Workspace, Session }
 
+/** Default UI zoom (%). The layout applies `zoom: uiZoom / 100`, so 100 = 100%.
+ *  Keep in sync with the reset button in Settings.tsx. */
+export const DEFAULT_UI_ZOOM = 100
+
 interface FmSessionState {
   mode: 'following' | 'manual'
   manualPath: string | null // absolute path when in manual mode
@@ -17,11 +21,18 @@ export interface AppState {
   sidebarCollapsed: boolean
   fileManagerOpen: boolean
   fileManagerCollapsed: boolean
+  rightPanelTab: 'files' | 'git'
   sidebarWidth: number
   fileManagerWidth: number
 
   // Terminal
   fontSize: number
+
+  // UI zoom (browser-level page zoom via CSS zoom)
+  uiZoom: number
+
+  // ACP chat font size (base px for ChatView content)
+  chatFontSize: number
 
   // Keybinding
   keybindingMode: 'tmux' | 'modern'
@@ -64,14 +75,25 @@ export interface AppState {
   mobileFontSize: number
   mobileLastTab: string
 
+  // Auth
+  authState: 'loading' | 'authenticated' | 'unauthenticated'
+  authVersion: number
+  setAuthState: (state: AppState['authState']) => void
+
   // Settings panel
   settingsOpen: boolean
   tmuxCheatsheetOpen: boolean
   immersiveMode: boolean
   pixelAnimationsEnabled: boolean
   soundEnabled: boolean
+  soundCoinEnabled: boolean
+  soundStompEnabled: boolean
+  soundPingEnabled: boolean
   crtScanlines: boolean
   parchmentTextureEnabled: boolean
+  /** Pixel display font (BETA). Off = pixel text falls back to reader font;
+   *  the top bar row (logo + panel title bars) stays pixel regardless. */
+  pixelFontEnabled: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -83,6 +105,8 @@ export interface AppState {
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
+  setUiZoom: (z: number) => void
+  setChatFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
   setProjects: (p: Project[]) => void
@@ -107,13 +131,18 @@ export interface AppState {
   setTerminalDisconnected: (v: boolean) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
+  setRightPanelTab: (tab: AppState['rightPanelTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
   setPixelAnimationsEnabled: (v: boolean) => void
   setSoundEnabled: (v: boolean) => void
+  setSoundCoinEnabled: (v: boolean) => void
+  setSoundStompEnabled: (v: boolean) => void
+  setSoundPingEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
+  setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
   switchWorkspace: (project: Project, workspace: Workspace) => void
@@ -135,9 +164,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   sidebarCollapsed: false,
   fileManagerOpen: true,
   fileManagerCollapsed: false,
+  rightPanelTab: (localStorage.getItem('omniterm_right_panel_tab') as AppState['rightPanelTab']) || 'files',
   sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || String(Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8)))),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
+  // Read persisted zoom; fall back to default if missing OR corrupted (e.g. a
+  // previously-written 'NaN' is truthy and parses to NaN, so the `||` above
+  // would not catch it). Non-finite values self-heal instead of breaking layout.
+  uiZoom: (() => {
+    const raw = parseInt(localStorage.getItem('omniterm_ui_zoom') ?? String(DEFAULT_UI_ZOOM))
+    return Number.isFinite(raw) ? raw : DEFAULT_UI_ZOOM
+  })(),
+  chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
 
@@ -159,6 +197,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   fmSessionStates: {},
 
+  authState: 'loading' as const,
+  authVersion: 0,
+
   connected: false,
   terminalDisconnected: false,
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
@@ -171,13 +212,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   immersiveMode: false,  // Disabled by default - feature not yet verified
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
+  soundCoinEnabled: localStorage.getItem('omniterm_sound_coin_enabled') !== 'false',
+  soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
+  soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
+  // Default off: first-run users get the uniform reader font (BETA opt-in).
+  pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   toggleFileManager: () => set((s) => ({ fileManagerOpen: !s.fileManagerOpen })),
   toggleFileManagerCollapsed: () => set((s) => ({ fileManagerCollapsed: !s.fileManagerCollapsed })),
+  setRightPanelTab: (tab) => {
+    localStorage.setItem('omniterm_right_panel_tab', tab)
+    set({ rightPanelTab: tab })
+  },
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, tmuxCheatsheetOpen: false })),
   toggleTmuxCheatsheet: () => set((s) => ({ tmuxCheatsheetOpen: !s.tmuxCheatsheetOpen, settingsOpen: false })),
 
@@ -189,6 +239,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const clamped = Math.max(10, Math.min(24, s))
     localStorage.setItem('omniterm_font_size', String(clamped))
     set({ fontSize: clamped })
+  },
+
+  setUiZoom: (z) => {
+    // Guard against non-finite input (e.g. undefined/NaN) so we never persist a
+    // 'NaN' string that would later poison the layout. Clamp only valid numbers.
+    if (!Number.isFinite(z)) return
+    const clamped = Math.max(50, Math.min(200, z))
+    localStorage.setItem('omniterm_ui_zoom', String(clamped))
+    set({ uiZoom: clamped })
+  },
+
+  setChatFontSize: (s) => {
+    const clamped = Math.max(10, Math.min(20, s))
+    localStorage.setItem('omniterm_chat_font_size', String(clamped))
+    set({ chatFontSize: clamped })
   },
 
   setKeybindingMode: (mode) => {
@@ -254,6 +319,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
   setConnected: (v) => set({ connected: v }),
+  setAuthState: (state) =>
+    set((s) => ({ authState: state, authVersion: s.authVersion + 1 })),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
@@ -281,6 +348,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     localStorage.setItem('omniterm_sound_enabled', String(v))
     set({ soundEnabled: v })
   },
+  setSoundCoinEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_coin_enabled', String(v))
+    set({ soundCoinEnabled: v })
+  },
+  setSoundStompEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_stomp_enabled', String(v))
+    set({ soundStompEnabled: v })
+  },
+  setSoundPingEnabled: (v) => {
+    localStorage.setItem('omniterm_sound_ping_enabled', String(v))
+    set({ soundPingEnabled: v })
+  },
   setCrtScanlines: (v) => {
     localStorage.setItem('omniterm_crt_scanlines', String(v))
     set({ crtScanlines: v })
@@ -288,6 +367,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setParchmentTextureEnabled: (v) => {
     localStorage.setItem('omniterm_parchment_texture', String(v))
     set({ parchmentTextureEnabled: v })
+  },
+  setPixelFontEnabled: (v) => {
+    localStorage.setItem('omniterm_pixel_font', String(v))
+    set({ pixelFontEnabled: v })
   },
 
   /** Batch all workspace-switch state into one set() to avoid cascading re-renders. */

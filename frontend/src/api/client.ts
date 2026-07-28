@@ -1,4 +1,5 @@
 import { useToastStore } from '../stores/toastStore'
+import { useAppStore } from '../stores/appStore'
 
 const BASE = '/api/v1'
 
@@ -19,6 +20,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, opts?: RequestInit & { silent?: boolean }): Promise<T> {
+  const authVersion = useAppStore.getState().authVersion
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
     headers: {
@@ -29,6 +31,12 @@ async function request<T>(path: string, opts?: RequestInit & { silent?: boolean 
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
+    if (res.status === 401) {
+      const state = useAppStore.getState()
+      if (state.authState === 'authenticated' && state.authVersion === authVersion) {
+        useAppStore.getState().setAuthState('unauthenticated')
+      }
+    }
     const msg = body.error || `HTTP ${res.status}`
     if (!opts?.silent) {
       useToastStore.getState().addToast('error', msg)
@@ -72,6 +80,8 @@ export interface FileEntry {
   name: string
   mtime: number
   size: number | null
+  /** 相对搜索根的路径，仅 /files/search 返回。 */
+  rel_path?: string
 }
 
 export interface Workspace {
@@ -174,6 +184,10 @@ export const api = {
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
+  versionCheck: () =>
+    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release' }>('/system/version', { silent: true }),
+  systemUpdate: () =>
+    request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
 
   // Auth
   setup: (password: string) =>
@@ -181,7 +195,9 @@ export const api = {
   login: (password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean }>('/auth/check'),
+  check: () => request<{ authenticated: boolean; needs_setup?: boolean }>('/auth/check'),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),
@@ -205,6 +221,17 @@ export const api = {
   // Worktrees (real-time git worktree discovery)
   listWorktrees: (projectId: string) =>
     request<Workspace[]>(`/projects/${projectId}/worktrees`),
+  createWorktree: (projectId: string, data: { branch: string; path?: string; base_branch?: string; detach?: boolean }) =>
+    request<Workspace>(`/projects/${projectId}/worktrees`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteWorktree: (projectId: string, path: string) =>
+    request<{ ok: true }>(`/projects/${projectId}/worktrees?path=${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+    }),
+  listBranches: (projectId: string) =>
+    request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`),
 
   // Sessions
   listSessions: (projectId: string) =>
@@ -252,6 +279,8 @@ export const api = {
     request(`/agents/${id}`, { method: 'DELETE' }),
   testAgent: (id: string) =>
     request<{ ok: boolean }>(`/agents/${id}/test`, { method: 'POST' }),
+  testAgentRaw: (data: CreateAgent) =>
+    request<{ ok: boolean }>('/agents/test-raw', { method: 'POST', body: JSON.stringify(data) }),
 
   // Session CWD
   getSessionCwd: (sessionId: string) =>
@@ -424,6 +453,16 @@ export const api = {
     if (params.projectId) body.workspace = params.projectId
     return request('/files/rename', { method: 'POST', body: JSON.stringify(body) })
   },
+  moveFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; paths: string[]; destination: string }) => {
+    const body: { paths: string[]; destination: string; session?: string; workspace_id?: string; workspace?: string } = {
+      paths: params.paths,
+      destination: params.destination,
+    }
+    if (params.session) body.session = params.session
+    if (params.workspaceId) body.workspace_id = params.workspaceId
+    if (params.projectId) body.workspace = params.projectId
+    return request('/files/move', { method: 'POST', body: JSON.stringify(body) })
+  },
   searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
     let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`
     if (params.session) url += `&session=${params.session}`
@@ -431,4 +470,107 @@ export const api = {
     if (params.projectId) url += `&workspace=${params.projectId}`
     return request<FileEntry[]>(url)
   },
+
+  // ── Git panel (docs/dev/plans/2026-07-26-git-panel.md ADR-2: repo bound
+  //    to session/workspace id only; the backend resolves the repo root) ──
+  gitStatus: (bind: GitBind) =>
+    request<GitStatus>(`/git/status?${gitBindQuery(bind)}`, { silent: true }),
+  gitDiff: (bind: GitBind, params: { path: string; staged?: boolean; untracked?: boolean }) => {
+    let url = `/git/diff?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
+    if (params.staged) url += '&staged=true'
+    if (params.untracked) url += '&untracked=true'
+    return request<{ diff: string; truncated: boolean }>(url)
+  },
+  gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
+    request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(
+      `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`,
+    ),
+  gitShow: (bind: GitBind, sha: string) =>
+    request<GitCommitDetail>(`/git/show?${gitBindQuery(bind)}&sha=${encodeURIComponent(sha)}`),
+  gitBranches: (bind: GitBind) =>
+    request<{ branches: GitBranch[] } | { is_repo: false }>(`/git/branches?${gitBindQuery(bind)}`),
+  gitStage: (bind: GitBind, paths: string[]) =>
+    request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
+  gitUnstage: (bind: GitBind, paths: string[]) =>
+    request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
+  gitCommit: (bind: GitBind, message: string) =>
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }), silent: true }),
+  gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
+    request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
+  gitCheckout: (bind: GitBind, branch: string) =>
+    request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
+  gitCreateBranch: (bind: GitBind, name: string) =>
+    request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }), silent: true }),
+  gitPush: (bind: GitBind) =>
+    request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
+  gitPull: (bind: GitBind) =>
+    request('/git/pull', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
+  gitFetch: (bind: GitBind) =>
+    request('/git/fetch', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
+}
+
+// ── Git panel types ──
+export interface GitBind {
+  session?: string
+  workspaceId?: string
+  projectId?: string
+}
+
+function gitBindQuery(bind: GitBind): string {
+  const parts: string[] = []
+  if (bind.session) parts.push(`session=${bind.session}`)
+  if (bind.workspaceId) parts.push(`workspace_id=${bind.workspaceId}`)
+  if (bind.projectId) parts.push(`workspace=${bind.projectId}`)
+  return parts.join('&')
+}
+
+function gitBindBody(bind: GitBind): { session?: string; workspace_id?: string; workspace?: string } {
+  return {
+    ...(bind.session ? { session: bind.session } : {}),
+    ...(bind.workspaceId ? { workspace_id: bind.workspaceId } : {}),
+    ...(bind.projectId ? { workspace: bind.projectId } : {}),
+  }
+}
+
+export interface GitStatusEntry {
+  path: string
+  orig_path?: string
+  index_status: string
+  worktree_status: string
+  conflicted: boolean
+}
+
+export interface GitStatus {
+  is_repo: boolean
+  repo_root?: string
+  branch?: string | null
+  detached?: boolean
+  upstream?: string | null
+  ahead?: number
+  behind?: number
+  entries?: GitStatusEntry[]
+}
+
+export interface GitLogEntry {
+  sha: string
+  short_sha: string
+  author: string
+  date: string
+  subject: string
+}
+
+export interface GitCommitDetail {
+  sha: string
+  short_sha: string
+  author: string
+  email: string
+  date: string
+  message: string
+  diff: string
+  truncated: boolean
+}
+
+export interface GitBranch {
+  name: string
+  current: boolean
 }

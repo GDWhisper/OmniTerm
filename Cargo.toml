@@ -1,6 +1,6 @@
 [package]
 name = "omniterm"
-version = "0.1.9"
+version = "0.2.0"
 edition = "2024"
 license = "FSL-1.1-MIT"
 authors = ["GDWhisper"]
@@ -28,7 +28,7 @@ axum-extra = { version = "0.10", features = ["cookie"] }
 time = "0.3"
 portable-pty = "0.9"
 futures-util = "0.3"
-notify = "7"
+notify = "8"
 async-stream = "0.3"
 sha1 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -36,6 +36,11 @@ clap = { version = "4", features = ["derive", "env"] }
 rust-embed = "8"
 which = "7"
 agent-client-protocol = "1.2"
+regex = "1"
+toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+semver = "1"
+sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -46,4 +51,13 @@ windows-sys = { version = "0.60", features = ["Win32_System_Console", "Win32_Sys
 
 [dev-dependencies]
 tokio-test = "0.4"
-reqwest = { version = "0.12", features = ["json"] }
+
+# Clippy 渐进策略 (docs/dev/plans/2026-07-24-quality-gates.md §3.3)：
+# 先以 warn 启用 correctness/suspicious/complexity/perf/style 组，
+# CI 与 pre-commit 以 `-- -D warnings` 兜底；清零后可按组升 deny。
+[lints.clippy]
+correctness = "warn"
+suspicious = "warn"
+complexity = "warn"
+perf = "warn"
+style = "warn"

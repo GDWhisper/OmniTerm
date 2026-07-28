@@ -22,6 +22,9 @@ export interface AgentPreset extends CreateAgent {
   labelKey: string
   /** 一键填入后的提示文案（i18n key） */
   hintKey: string
+  /** CreateAgent 里可选，预设必须显式给出（一键填入直接读取） */
+  args: string[]
+  env: NonNullable<CreateAgent['env']>
 }
 
 export const AGENT_PRESETS: AgentPreset[] = [

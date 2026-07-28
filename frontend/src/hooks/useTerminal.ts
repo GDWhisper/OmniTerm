@@ -14,11 +14,21 @@ import { syncTextareaInputMode } from '../utils/terminalInputMode'
 // This keeps the code-splitting benefit (addons in separate chunks)
 // while keeping createTerminal synchronous (no yield window for CSS
 // transitions / font swaps to change the container size mid-init).
-const FitAddonPromise = import('@xterm/addon-fit')
-const WebLinksAddonPromise = import('@xterm/addon-web-links')
+const importAddons = () =>
+  Promise.all([import('@xterm/addon-fit'), import('@xterm/addon-web-links')])
+let addonsPromise = importAddons()
 
 async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
-  const [{ FitAddon }, { WebLinksAddon }] = await Promise.all([FitAddonPromise, WebLinksAddonPromise])
+  let mods: [typeof import('@xterm/addon-fit'), typeof import('@xterm/addon-web-links')]
+  try {
+    mods = await addonsPromise
+  } catch {
+    // The cached import rejected (e.g. stale chunk 404 after a redeploy).
+    // Re-import so a reconnect click can recover without a page refresh.
+    addonsPromise = importAddons()
+    mods = await addonsPromise
+  }
+  const [{ FitAddon }, { WebLinksAddon }] = mods
   return [FitAddon, WebLinksAddon]
 }
 
@@ -138,6 +148,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // Close existing connection
     if (wsRef.current) {
       wsRef.current.onclose = null
+      wsRef.current.onerror = null
       wsRef.current.close()
       wsRef.current = null
     }
@@ -187,19 +198,18 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
 
     ws.onclose = () => {
+      // A superseded socket (replaced by a newer connectWs call) may fire
+      // late close/error events — they must not clobber the new connection.
+      if (wsRef.current !== ws) return
       useAppStore.getState().setTerminalDisconnected(true)
       tmuxScrollModeRef.current = false
-      // Only write if this WS is still the active one
-      if (wsRef.current === ws) {
-        termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
-      }
+      termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
     }
 
     ws.onerror = () => {
+      if (wsRef.current !== ws) return
       useAppStore.getState().setTerminalDisconnected(true)
-      if (wsRef.current === ws) {
-        termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.connectionError')}]\x1b[0m`)
-      }
+      termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.connectionError')}]\x1b[0m`)
     }
 
     // Dispose previous listeners to avoid accumulation on session switch
@@ -365,6 +375,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
     if (wsRef.current) {
       wsRef.current.onclose = null
+      wsRef.current.onerror = null
       wsRef.current.close()
       wsRef.current = null
     }
@@ -505,9 +516,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // aborts the previous one (if any) before we get here.
     const ac = new AbortController()
     abortRef.current = ac
-    createTerminal(container, ac.signal).finally(() => {
-      initializingRef.current = false
-    })
+    createTerminal(container, ac.signal)
+      .catch(() => {
+        if (ac.signal.aborted) return
+        // Keep the overlay up so the user can retry, and surface the failure
+        // instead of silently swallowing it (looks like a dead button).
+        useAppStore.getState().setTerminalDisconnected(true)
+        useToastStore.getState().addToast('error', i18n.t('terminal.status.initFailed'))
+      })
+      .finally(() => {
+        initializingRef.current = false
+      })
 
     return () => {
       disposeTerminal()
@@ -695,15 +714,20 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [sessionId, externalSessionName, disposeTerminal])
 
-  const reconnect = useCallback(() => {
-    const term = termRef.current
+  const reconnect = useCallback((container?: HTMLDivElement | null) => {
     const id = externalSessionName ?? sessionId
     if (!id) return
 
-    if (term) {
+    if (termRef.current) {
       connectWs()
-    } else if (containerRef.current) {
-      initTerminal(containerRef.current)
+      return
+    }
+    // containerRef is only set once createTerminal succeeds — fall back to
+    // the caller-provided live container so reconnect still works when the
+    // very first init failed (e.g. addon chunk 404).
+    const target = container ?? containerRef.current
+    if (target) {
+      initTerminal(target)
     }
   }, [sessionId, externalSessionName, connectWs, initTerminal])
 

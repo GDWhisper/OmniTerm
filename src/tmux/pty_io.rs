@@ -7,21 +7,12 @@ use std::io;
 /// since the Unix tty-layer bug does not apply.
 #[cfg(unix)]
 pub fn write_pty(fd: i32, data: &[u8]) -> io::Result<usize> {
-    let n = unsafe {
-        libc::write(fd, data.as_ptr() as *const libc::c_void, data.len())
-    };
-    if n < 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(n as usize)
-    }
+    let n = unsafe { libc::write(fd, data.as_ptr() as *const libc::c_void, data.len()) };
+    if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
 }
 
 #[cfg(windows)]
-pub fn write_pty(
-    writer: &mut dyn io::Write,
-    data: &[u8],
-) -> io::Result<usize> {
+pub fn write_pty(writer: &mut dyn io::Write, data: &[u8]) -> io::Result<usize> {
     writer.write(data)
 }
 
@@ -40,12 +31,8 @@ pub fn kill_session_process(pid: u32) {
 pub fn kill_session_process(pid: u32) {
     use std::thread;
     use std::time::Duration;
-    use windows_sys::Win32::System::Console::{
-        GenerateConsoleCtrlEvent, CTRL_CLOSE_EVENT,
-    };
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-    };
+    use windows_sys::Win32::System::Console::{CTRL_CLOSE_EVENT, GenerateConsoleCtrlEvent};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
     unsafe {
         let _ = GenerateConsoleCtrlEvent(CTRL_CLOSE_EVENT, 0);

@@ -1,19 +1,19 @@
+use anyhow::anyhow;
 use axum::{
+    Json, Router,
     body::Body,
     extract::{Multipart, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
-use anyhow::anyhow;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::error;
 
+use crate::AppState;
 use crate::fs;
 use crate::tmux;
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -31,9 +31,9 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct FileQuery {
     path: Option<String>,
-    workspace: Option<String>,      // project_id (existing, misnamed)
+    workspace: Option<String>, // project_id (existing, misnamed)
     session: Option<String>,
-    workspace_id: Option<String>,   // NEW: actual workspace id
+    workspace_id: Option<String>, // NEW: actual workspace id
     sort: Option<String>,
     order: Option<String>,
 }
@@ -92,29 +92,64 @@ pub async fn resolve_project_root(state: &AppState, project_id: &str) -> Option<
 }
 
 fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
-    let key = match sort.as_deref() {
+    let key = match sort {
         Some("mtime") => fs::SortKey::Mtime,
         Some("size") => fs::SortKey::Size,
         _ => fs::SortKey::Name,
     };
-    let desc = order.as_deref() == Some("desc");
+    let desc = order == Some("desc");
     (key, desc)
 }
 
-/// Resolve base path from session ID (via tmux pane CWD).
-/// Returns (base_path, tmux_session_name).
-/// If the tmux session is missing (e.g. tmux server restarted), re-creates it
-/// using the workspace_path as fallback CWD.
+/// Resolve base path from session ID.
+///
+/// Returns `(base_path, tmux_session_name_or_empty)`. The second value is the
+/// tmux session name for `runtime_kind='tmux'` sessions, and `""` (empty) for
+/// `runtime_kind='acp'` sessions — which **do not have a tmux session**, so
+/// FileManager must read the session's `workspace_path` directly (the agent
+/// process cwd was fixed in commit 27d815f to actually be that path).
+///
+/// For tmux sessions, falls back to re-creating the tmux session at
+/// `workspace_path` if `pane_cwd` fails (e.g. tmux server restart).
+///
+/// **历史 bug**：此前 ACP session 的 `tmux_session_name` 是 NULL，
+/// `SELECT tmux_session_name` 返回 None  → 整个函数返 None  →
+/// `/files?session=…` 返回 404 "session not found or tmux unavailable"，
+/// FileManager 加载 ACP session 的文件列表永远报错。修复后识别
+/// runtime_kind=acp 走 workspace_path 分支。
 pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
-    let tmux_name: (String,) =
-        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
-            .bind(session_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()?;
+    // 一次性取 session 关键字段，避免多次往返
+    let row: (String, Option<String>, String) = sqlx::query_as(
+        "SELECT runtime_kind, tmux_session_name, workspace_path FROM sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()?;
 
-    let tmux_name = tmux_name.0;
+    let (runtime_kind, tmux_name_opt, workspace_path) = row;
+
+    // ACP session：没有 tmux 会话，直接用 session 的 workspace_path 作为
+    // FileManager 起点。这与 agent 子进程 OS cwd 修复（commit 27d815f）
+    // 保持一致——agent 看到的是 workspace_path，FileManager 也展示
+    // workspace_path，UI 与 agent 实际文件上下文统一。
+    //
+    // 未来若引入非 tmux/非 acp 的新 runtime_kind，未设置 tmux_name 但
+    // 仍要求跟随会话工作区：也走此分支（`tmux_name_opt.is_none()`）。
+    if runtime_kind == "acp" || tmux_name_opt.is_none() {
+        tracing::debug!(
+            "session {} is non-tmux (runtime_kind={}), using workspace_path={} as FileManager cwd",
+            session_id,
+            runtime_kind,
+            workspace_path
+        );
+        return Some((workspace_path, String::new()));
+    }
+
+    // 走到这里说明是 tmux 会话。tmux_name_opt 一定是 Some
+    // （上面已 early-return None 分支）。
+    let tmux_name = tmux_name_opt.expect("checked above");
 
     // Try to get pane CWD; if it fails, the tmux session may have been lost
     match tmux::pane_cwd(&tmux_name).await {
@@ -122,14 +157,13 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
         Err(e) => {
             tracing::warn!(
                 "tmux session '{}' unavailable ({}), attempting re-create",
-                tmux_name, e
+                tmux_name,
+                e
             );
             // Resolve workspace root as fallback CWD
             let root = resolve_session_workspace_root(state, session_id)
                 .await
-                .unwrap_or_else(|| {
-                    std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-                });
+                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
             tmux::new_session(&tmux_name, &root, None).await.ok()?;
             let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
             tracing::info!("re-created tmux session '{}' at {}", tmux_name, cwd);
@@ -140,15 +174,13 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
 
 /// Get workspace_path for a session (used for is_outside_workspace check).
 async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> Option<String> {
-    sqlx::query_as::<_, (String,)>(
-        "SELECT workspace_path FROM sessions WHERE id = ?",
-    )
-    .bind(session_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten()
-    .map(|(p,)| p)
+    sqlx::query_as::<_, (String,)>("SELECT workspace_path FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(p,)| p)
 }
 
 /// Resolve base path from query: session > workspace_id > project.
@@ -181,9 +213,7 @@ async fn resolve_workspace_root(
     project_id: &str,
 ) -> Option<String> {
     use crate::workspaces;
-    let Some(project_root) = resolve_project_root(state, project_id).await else {
-        return None;
-    };
+    let project_root = resolve_project_root(state, project_id).await?;
     let project = crate::models::project::Project {
         id: project_id.to_string(),
         name: String::new(),
@@ -192,9 +222,7 @@ async fn resolve_workspace_root(
         created_at: String::new(),
     };
     let wts = workspaces::list_workspaces(&project).await;
-    wts.into_iter()
-        .find(|w| w.id == workspace_id)
-        .map(|w| w.path)
+    wts.into_iter().find(|w| w.id == workspace_id).map(|w| w.path)
 }
 
 async fn list_files(
@@ -216,15 +244,19 @@ async fn list_files(
         let base = std::path::Path::new(&cwd);
 
         if !base.exists() {
-            return (StatusCode::OK, Json(json!({ "files": [], "cwd": cwd, "is_outside_workspace": true })));
+            return (
+                StatusCode::OK,
+                Json(json!({ "files": [], "cwd": cwd, "is_outside_workspace": true })),
+            );
         }
 
         // Determine if CWD is outside workspace
-        let is_outside = if let Some(ws_root) = resolve_session_workspace_root(&state, session_id).await {
-            !cwd.starts_with(&ws_root)
-        } else {
-            false
-        };
+        let is_outside =
+            if let Some(ws_root) = resolve_session_workspace_root(&state, session_id).await {
+                !cwd.starts_with(&ws_root)
+            } else {
+                false
+            };
 
         // Resolve the actual directory to list
         let list_base = if rel_path.is_empty() || rel_path == "." {
@@ -237,23 +269,19 @@ async fn list_files(
 
         // Basic security: ensure path doesn't escape /
         let Ok(canonical) = list_base.canonicalize() else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "path not found" })),
-            );
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "path not found" })));
         };
 
         match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
-                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside })),
+                Json(
+                    json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside }),
+                ),
             ),
             Err(e) => {
                 error!("list_files (session) failed: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
             }
         }
     } else if let Some(workspace_id) = q.workspace_id.as_deref() {
@@ -261,15 +289,15 @@ async fn list_files(
         let project_id = q.workspace.as_deref().unwrap_or("default");
 
         let Some(root) = resolve_workspace_root(&state, workspace_id, project_id).await else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "workspace not found" })),
-            );
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "workspace not found" })));
         };
 
         let base = std::path::Path::new(&root);
         if !base.exists() {
-            return (StatusCode::OK, Json(json!({ "files": [], "cwd": root, "is_outside_workspace": false })));
+            return (
+                StatusCode::OK,
+                Json(json!({ "files": [], "cwd": root, "is_outside_workspace": false })),
+            );
         }
 
         let rel_path = q.path.as_deref().unwrap_or("");
@@ -282,10 +310,7 @@ async fn list_files(
         };
 
         let Ok(canonical) = list_base.canonicalize() else {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "path not found" })),
-            );
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "path not found" })));
         };
 
         // Detect if browsing outside workspace root (same as session mode behavior)
@@ -297,14 +322,13 @@ async fn list_files(
         match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
-                Json(json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside })),
+                Json(
+                    json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside }),
+                ),
             ),
             Err(e) => {
                 error!("list_files (workspace) failed: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
             }
         }
     } else if let Some(project_id) = q.workspace.as_deref() {
@@ -312,10 +336,7 @@ async fn list_files(
         let rel_path = q.path.as_deref().unwrap_or("");
 
         let Some(root) = resolve_project_root(&state, project_id).await else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "project not found" })),
-            );
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "project not found" })));
         };
 
         let base = std::path::Path::new(&root);
@@ -328,17 +349,14 @@ async fn list_files(
             Ok(entries) => (StatusCode::OK, Json(json!(entries))),
             Err(e) => {
                 error!("list_files failed: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e.to_string() })),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
             }
         }
     } else {
-        return (
+        (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "session, workspace_id, or workspace parameter required" })),
-        );
+        )
     }
 }
 
@@ -349,7 +367,14 @@ async fn upload_file(
 ) -> impl IntoResponse {
     let rel_path = q.path.as_deref().unwrap_or("");
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -365,28 +390,21 @@ async fn upload_file(
             Ok(d) => d,
             Err(e) => {
                 error!("failed to read upload data: {}", e);
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({ "error": "read failed" })),
-                );
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "read failed" })));
             }
         };
 
         // For session mode with absolute rel_path, use it as-is
         let target_path = if rel_path.is_empty() || rel_path == "." {
             file_name.clone()
-        } else if std::path::Path::new(rel_path).is_absolute() {
-            format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         } else {
+            // 绝对路径与相对路径的拼接形式一致，clippy 复核后合并分支
             format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         };
 
         if let Err(e) = fs::write_file(&base, &target_path, &data).await {
             error!("upload write failed: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
 
         uploaded.push(json!({
@@ -404,13 +422,17 @@ async fn delete_file(
     Query(q): Query<FileQuery>,
 ) -> impl IntoResponse {
     let Some(path_str) = q.path.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "path required" })),
-        );
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })));
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -421,24 +443,25 @@ async fn delete_file(
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("delete failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
     }
 }
 
 async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>) -> Response {
     let Some(path_str) = q.path.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "path required" })),
-        )
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })))
             .into_response();
     };
 
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "workspace or session not found" })),
@@ -452,22 +475,18 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
     } else {
         match fs::sanitize_path(&base, path_str) {
             Ok(p) => p,
-            Err(_) => return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid path" }))).into_response(),
+            Err(_) => {
+                return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid path" })))
+                    .into_response();
+            }
         }
     };
 
     // Directories are packed into a zip archive on the fly.
-    let is_dir = tokio::fs::metadata(&full_path)
-        .await
-        .map(|m| m.is_dir())
-        .unwrap_or(false);
+    let is_dir = tokio::fs::metadata(&full_path).await.map(|m| m.is_dir()).unwrap_or(false);
 
     if is_dir {
-        let dir_name = full_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let dir_name = full_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
 
         // Zip packing is CPU/IO bound; run it off the async runtime.
         let packed = match tokio::task::spawn_blocking(move || zip_directory(&full_path)).await {
@@ -505,18 +524,12 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "file not found" }))).into_response();
     };
 
-    let file_name = full_path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let file_name = full_path.file_name().unwrap_or_default().to_string_lossy();
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", file_name),
-        )
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", file_name))
         .body(Body::from(content))
         .unwrap()
 }
@@ -537,8 +550,8 @@ fn zip_directory(dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
 
         let mut stack: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
         while let Some(current) = stack.pop() {
-            let mut entries = std::fs::read_dir(&current)
-                .map_err(|e| anyhow!("read dir failed: {}", e))?;
+            let mut entries =
+                std::fs::read_dir(&current).map_err(|e| anyhow!("read dir failed: {}", e))?;
             while let Some(entry) = entries.next().transpose()? {
                 let path = entry.path();
                 // Zip entry path preserves the top-level folder name.
@@ -565,6 +578,243 @@ fn zip_directory(dir: &std::path::Path) -> anyhow::Result<Vec<u8>> {
         zw.finish()?;
     }
     Ok(buf)
+}
+
+async fn read_file(State(state): State<AppState>, Query(q): Query<FileQuery>) -> impl IntoResponse {
+    let Some(path_str) = q.path.as_deref() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })));
+    };
+
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    // For session mode, paths may be absolute
+    let content = if std::path::Path::new(path_str).is_absolute() {
+        tokio::fs::read_to_string(path_str).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::read_file(&base, path_str).await
+    };
+
+    match content {
+        Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
+        Err(e) => {
+            error!("read_file failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
+}
+
+async fn write_file(
+    State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
+    Json(req): Json<WriteRequest>,
+) -> impl IntoResponse {
+    let Some(path_str) = q.path.as_deref() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })));
+    };
+
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    // For session mode, paths may be absolute
+    let result: Result<(), anyhow::Error> = if std::path::Path::new(path_str).is_absolute() {
+        // Ensure parent directory exists
+        if let Some(parent) = std::path::Path::new(path_str).parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        tokio::fs::write(path_str, req.content.as_bytes()).await.map_err(|e| anyhow!(e))
+    } else {
+        fs::write_file(&base, path_str, req.content.as_bytes()).await
+    };
+
+    match result {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            error!("write_file failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
+}
+
+async fn mkdir(
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let session_id = req.get("session").and_then(|v| v.as_str());
+    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str());
+    let project_id = req.get("workspace").and_then(|v| v.as_str());
+    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
+
+    let Some((base, _)) =
+        resolve_base_from_query(&state, session_id, workspace_id, project_id).await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    let dir_path = if path.is_empty() || path == "." {
+        name.to_string()
+    } else {
+        format!("{}/{}", path.trim_end_matches('/'), name)
+    };
+
+    match fs::create_dir(&base, &dir_path).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            error!("mkdir failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
+}
+
+async fn rename(
+    State(state): State<AppState>,
+    Json(req): Json<RenameRequest>,
+) -> impl IntoResponse {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        req.session.as_deref(),
+        req.workspace_id.as_deref(),
+        req.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    // Compute new path: replace the file/dir name in the original path
+    let old_path = std::path::Path::new(&req.path);
+    let new_rel = match old_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            format!("{}/{}", parent.to_string_lossy().trim_end_matches('/'), req.new_name)
+        }
+        _ => req.new_name.clone(),
+    };
+
+    match fs::move_path(&base, &req.path, &new_rel).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            error!("rename failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
+}
+
+async fn move_files(
+    State(state): State<AppState>,
+    Json(req): Json<MoveRequest>,
+) -> impl IntoResponse {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        req.session.as_deref(),
+        req.workspace_id.as_deref(),
+        req.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    for p in &req.paths {
+        let file_name = std::path::Path::new(p)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let dest = format!("{}/{}", req.destination.trim_end_matches('/'), file_name);
+        if let Err(e) = fs::move_path(&base, p, &dest).await {
+            error!("move failed: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
+        }
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+async fn copy_files(
+    State(state): State<AppState>,
+    Json(req): Json<CopyRequest>,
+) -> impl IntoResponse {
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        req.session.as_deref(),
+        req.workspace_id.as_deref(),
+        req.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    match fs::copy_paths(&base, &req.paths, &req.destination).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            error!("copy failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
+}
+
+async fn search_files(
+    State(state): State<AppState>,
+    Query(q): Query<SearchQuery>,
+) -> impl IntoResponse {
+    let rel_path = q.path.as_deref().unwrap_or("");
+
+    let Some((base, _)) = resolve_base_from_query(
+        &state,
+        q.session.as_deref(),
+        q.workspace_id.as_deref(),
+        q.workspace.as_deref(),
+    )
+    .await
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace or session not found" })),
+        );
+    };
+
+    match fs::search_files(&base, rel_path, &q.q).await {
+        Ok(entries) => (StatusCode::OK, Json(json!(entries))),
+        Err(e) => {
+            error!("search failed: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -605,241 +855,14 @@ mod zip_tests {
         }
         assert!(names.iter().any(|n| n.ends_with("a.txt")), "a.txt present: {:?}", names);
         assert!(names.iter().any(|n| n.ends_with("sub/b.txt")), "sub/b.txt present: {:?}", names);
-        assert!(names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")), "top folder preserved: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.ends_with("ot_ziptest_mod/") || n.contains("ot_ziptest_mod")),
+            "top folder preserved: {:?}",
+            names
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[allow(dead_code)]
     fn _assert_path(_: &Path) {}
-}
-
-async fn read_file(
-    State(state): State<AppState>,
-    Query(q): Query<FileQuery>,
-) -> impl IntoResponse {
-    let Some(path_str) = q.path.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "path required" })),
-        );
-    };
-
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    // For session mode, paths may be absolute
-    let content = if std::path::Path::new(path_str).is_absolute() {
-        tokio::fs::read_to_string(path_str).await.map_err(|e| anyhow!(e))
-    } else {
-        fs::read_file(&base, path_str).await
-    };
-
-    match content {
-        Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
-        Err(e) => {
-            error!("read_file failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-async fn write_file(
-    State(state): State<AppState>,
-    Query(q): Query<FileQuery>,
-    Json(req): Json<WriteRequest>,
-) -> impl IntoResponse {
-    let Some(path_str) = q.path.as_deref() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "path required" })),
-        );
-    };
-
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    // For session mode, paths may be absolute
-    let result: Result<(), anyhow::Error> = if std::path::Path::new(path_str).is_absolute() {
-        // Ensure parent directory exists
-        if let Some(parent) = std::path::Path::new(path_str).parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-        tokio::fs::write(path_str, req.content.as_bytes()).await.map_err(|e| anyhow!(e))
-    } else {
-        fs::write_file(&base, path_str, req.content.as_bytes()).await
-    };
-
-    match result {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => {
-            error!("write_file failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-async fn mkdir(
-    State(state): State<AppState>,
-    Json(req): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let session_id = req.get("session").and_then(|v| v.as_str());
-    let workspace_id = req.get("workspace_id").and_then(|v| v.as_str());
-    let project_id = req.get("workspace").and_then(|v| v.as_str());
-    let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
-
-    let Some((base, _)) = resolve_base_from_query(&state, session_id, workspace_id, project_id).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    let dir_path = if path.is_empty() || path == "." {
-        name.to_string()
-    } else {
-        format!("{}/{}", path.trim_end_matches('/'), name)
-    };
-
-    match fs::create_dir(&base, &dir_path).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => {
-            error!("mkdir failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-async fn rename(
-    State(state): State<AppState>,
-    Json(req): Json<RenameRequest>,
-) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    // Compute new path: replace the file/dir name in the original path
-    let old_path = std::path::Path::new(&req.path);
-    let new_rel = match old_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => {
-            format!(
-                "{}/{}",
-                parent.to_string_lossy().trim_end_matches('/'),
-                req.new_name
-            )
-        }
-        _ => req.new_name.clone(),
-    };
-
-    match fs::move_path(&base, &req.path, &new_rel).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => {
-            error!("rename failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-async fn move_files(
-    State(state): State<AppState>,
-    Json(req): Json<MoveRequest>,
-) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    for p in &req.paths {
-        let file_name = std::path::Path::new(p)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let dest = format!(
-            "{}/{}",
-            req.destination.trim_end_matches('/'),
-            file_name
-        );
-        if let Err(e) = fs::move_path(&base, p, &dest).await {
-            error!("move failed: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
-        }
-    }
-
-    (StatusCode::OK, Json(json!({ "ok": true })))
-}
-
-async fn copy_files(
-    State(state): State<AppState>,
-    Json(req): Json<CopyRequest>,
-) -> impl IntoResponse {
-    let Some((base, _)) = resolve_base_from_query(&state, req.session.as_deref(), req.workspace_id.as_deref(), req.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    match fs::copy_paths(&base, &req.paths, &req.destination).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => {
-            error!("copy failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
-}
-
-async fn search_files(
-    State(state): State<AppState>,
-    Query(q): Query<SearchQuery>,
-) -> impl IntoResponse {
-    let rel_path = q.path.as_deref().unwrap_or("");
-
-    let Some((base, _)) = resolve_base_from_query(&state, q.session.as_deref(), q.workspace_id.as_deref(), q.workspace.as_deref()).await else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "workspace or session not found" })),
-        );
-    };
-
-    match fs::search_files(&base, rel_path, &q.q).await {
-        Ok(entries) => (StatusCode::OK, Json(json!(entries))),
-        Err(e) => {
-            error!("search failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            )
-        }
-    }
 }

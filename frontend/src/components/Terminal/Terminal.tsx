@@ -15,7 +15,14 @@ export function Terminal() {
   const isMobile = useAppStore((s) => s.isMobile)
   const fontSize = useAppStore((s) => s.fontSize)
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
-  const effectiveFontSize = isMobile ? mobileFontSize : fontSize
+  const uiZoom = useAppStore((s) => s.uiZoom)
+  // xterm.js mouse-coordinate math does not account for CSS zoom, so text
+  // selection drifts when the layout root is zoomed. The container below
+  // applies the inverse zoom to bring the xterm subtree back to effective
+  // zoom 1, and the font size is multiplied by the zoom factor instead —
+  // visual size and the character grid stay identical.
+  const zoomFactor = uiZoom / 100
+  const effectiveFontSize = (isMobile ? mobileFontSize : fontSize) * zoomFactor
 
   // MobileKeyBar modifier latch: tracks which modifier (Ctrl/Shift/Alt) is
   // currently active. Lifted here so useTerminal can intercept keyboard input
@@ -256,7 +263,17 @@ export function Terminal() {
         {hasSession && <span className="title-bar-badge">● LIVE</span>}
       </div>
       <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        <div ref={containerRef} className="h-full w-full p-1" />
+        <div
+          ref={containerRef}
+          style={{
+            // Percentage sizes resolve against the parent's visual size, so
+            // 100% fills the panel regardless of the inverse zoom.
+            zoom: 1 / zoomFactor,
+            width: '100%',
+            height: '100%',
+            padding: 4 * zoomFactor,
+          }}
+        />
         {hasSession && terminalDisconnected && (
           <div style={{
             position: 'absolute',
@@ -268,7 +285,7 @@ export function Terminal() {
             zIndex: 100,
           }}>
             <button
-              onClick={reconnect}
+              onClick={() => reconnect(containerRef.current)}
               style={{
                 padding: '8px 16px',
                 background: 'var(--accent)',

@@ -12,7 +12,7 @@
 use serde::Serialize;
 
 /// Supported agent CLIs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Claude,
@@ -117,6 +117,7 @@ pub struct AgentSnapshot {
 }
 
 /// The tmux session option name used to store agent state.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub const AGENT_OPTION: &str = "@omniterm_agent";
 
 /// Parse a `@omniterm_agent` value string into an `AgentSnapshot`.
@@ -144,50 +145,30 @@ pub fn parse_agent_value(value: &str) -> Option<AgentSnapshot> {
 
     let agent_kind = AgentKind::from_str(parts[0])?;
 
-    let agent_state = parts
-        .get(1)
-        .and_then(|s| AgentState::from_str(s))
-        .unwrap_or(AgentState::Idle);
+    let agent_state =
+        parts.get(1).and_then(|s| AgentState::from_str(s)).unwrap_or(AgentState::Idle);
 
-    let attention_reason = parts
-        .get(2)
-        .and_then(|s| AttentionReason::from_str(s));
+    let attention_reason = parts.get(2).and_then(|s| AttentionReason::from_str(s));
 
     let agent_event = parts.get(3).filter(|s| !s.is_empty()).map(|s| s.to_string());
 
     let agent_nonce = parts.get(4).filter(|s| !s.is_empty()).map(|s| s.to_string());
 
-    Some(AgentSnapshot {
-        agent_kind,
-        agent_state,
-        attention_reason,
-        agent_event,
-        agent_nonce,
-    })
+    Some(AgentSnapshot { agent_kind, agent_state, attention_reason, agent_event, agent_nonce })
 }
 
 /// Format an `AgentSnapshot` into the `@omniterm_agent` value string.
 ///
 /// All fields are sanitized via `clean_token()` to prevent shell injection.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn agent_value(snapshot: &AgentSnapshot) -> String {
     format!(
         "{}:{}:{}:{}:{}",
         clean_token(snapshot.agent_kind.as_str()),
         clean_token(snapshot.agent_state.as_str()),
-        snapshot
-            .attention_reason
-            .map(|r| clean_token(r.as_str()))
-            .unwrap_or_default(),
-        snapshot
-            .agent_event
-            .as_deref()
-            .map(clean_token)
-            .unwrap_or_default(),
-        snapshot
-            .agent_nonce
-            .as_deref()
-            .map(clean_token)
-            .unwrap_or_default(),
+        snapshot.attention_reason.map(|r| clean_token(r.as_str())).unwrap_or_default(),
+        snapshot.agent_event.as_deref().map(clean_token).unwrap_or_default(),
+        snapshot.agent_nonce.as_deref().map(clean_token).unwrap_or_default(),
     )
 }
 
@@ -195,15 +176,14 @@ pub fn agent_value(snapshot: &AgentSnapshot) -> String {
 ///
 /// Whitespace and characters outside `[A-Za-z0-9_.-]` are replaced with `_`.
 /// This prevents shell injection and ensures the value is safe for `tmux set-option`.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn clean_token(s: &str) -> String {
     s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(
+            |c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' { c } else { '_' }
+            },
+        )
         .collect()
 }
 
@@ -226,8 +206,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_codex_running() {
-        let snap =
-            parse_agent_value("codex:running::UserPromptSubmit:1719000001.54321").expect("should parse");
+        let snap = parse_agent_value("codex:running::UserPromptSubmit:1719000001.54321")
+            .expect("should parse");
         assert_eq!(snap.agent_kind, AgentKind::Codex);
         assert_eq!(snap.agent_state, AgentState::Running);
         assert_eq!(snap.attention_reason, None);
@@ -237,7 +217,8 @@ mod tests {
 
     #[test]
     fn test_parse_valid_idle_done() {
-        let snap = parse_agent_value("claude:idle:done:Stop:1719000002.11111").expect("should parse");
+        let snap =
+            parse_agent_value("claude:idle:done:Stop:1719000002.11111").expect("should parse");
         assert_eq!(snap.agent_state, AgentState::Idle);
         assert_eq!(snap.attention_reason, Some(AttentionReason::Done));
     }
@@ -296,8 +277,8 @@ mod tests {
         // via shell injection attempt. clean_token sanitizes, but parse doesn't
         // clean — it just splits. If the raw value has unexpected chars, parse
         // should still work on the clean parts.
-        let snap = parse_agent_value("claude:running:decision:Some_Event:1234.5")
-            .expect("should parse");
+        let snap =
+            parse_agent_value("claude:running:decision:Some_Event:1234.5").expect("should parse");
         assert_eq!(snap.agent_event.as_deref(), Some("Some_Event"));
     }
 

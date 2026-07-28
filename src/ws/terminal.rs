@@ -1,22 +1,22 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         Path, Query, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
-use tokio::sync::oneshot;
-use std::time::Duration;
 use crate::AppState;
 use crate::tmux;
+use std::time::Duration;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -29,6 +29,7 @@ enum ClientControl {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 enum ServerControl<'a> {
     #[serde(rename = "attached")]
     Attached { session: &'a str },
@@ -52,6 +53,32 @@ enum ServerControl<'a> {
 pub struct TerminalQuery {
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+}
+
+/// tmux 默认 escape-time 500ms 会导致:1) 孤立 ESC 延迟 500ms 才转发给 pane;
+/// 2) 500ms 内连按两次 ESC 被合并为 Alt+ESC(`\x1b\x1b`)一次转发,使 agent TUI
+/// (如 opencode)的 "esc again to interrupt" 中止流程失效。取 10ms 而非 0,
+/// 避免慢速链路上转义序列被拆断误判为孤立 ESC。
+const TMUX_ESCAPE_TIME_MS: &str = "10";
+
+/// Build the tmux client command spawned on the PTY: set server-level
+/// escape-time, then create-or-attach the target session.
+fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("tmux");
+    cmd.args([
+        "set-option",
+        "-s",
+        "escape-time",
+        TMUX_ESCAPE_TIME_MS,
+        ";",
+        "new-session",
+        "-A",
+        "-s",
+        tmux_name,
+    ]);
+    cmd.cwd(cwd);
+    cmd.env("TERM", "xterm-256color");
+    cmd
 }
 
 /// WebSocket upgrade handler for terminal connections.
@@ -90,10 +117,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         Some((name,)) => name,
         None => {
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "session not found",
-            })
-            .unwrap();
+            let msg = serde_json::to_string(&ServerControl::Error { message: "session not found" })
+                .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
@@ -108,26 +133,22 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     }
 
     // Check if hooks are enabled for this session
-    let hook_enabled: bool = sqlx::query_as(
-        "SELECT hook_enabled FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten()
-    .map(|(enabled,): (bool,)| enabled)
-    .unwrap_or(false);
+    let hook_enabled: bool = sqlx::query_as("SELECT hook_enabled FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(enabled,): (bool,)| enabled)
+        .unwrap_or(false);
 
     // Look up workspace_path for the tmux session CWD
-    let cwd: Option<(String,)> = sqlx::query_as(
-        "SELECT workspace_path FROM sessions WHERE id = ?",
-    )
-    .bind(&session_id)
-    .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    let cwd: Option<(String,)> = sqlx::query_as("SELECT workspace_path FROM sessions WHERE id = ?")
+        .bind(&session_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
 
     let cwd = cwd
         .map(|(p,)| p)
@@ -137,17 +158,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     // falling back to 80x24 if not provided.
     let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
     let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
-    let pty_size = PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
+    let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
-    info!(
-        "terminal PTY initial size: {}x{} for session={}",
-        cols, rows, session_id
-    );
+    info!("terminal PTY initial size: {}x{} for session={}", cols, rows, session_id);
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -156,19 +169,15 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
         Err(e) => {
             error!("failed to open PTY: {}", e);
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "failed to open PTY",
-            })
-            .unwrap();
+            let msg =
+                serde_json::to_string(&ServerControl::Error { message: "failed to open PTY" })
+                    .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
     };
 
-    let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(["new-session", "-A", "-s", &tmux_name]);
-    cmd.cwd(&cwd);
-    cmd.env("TERM", "xterm-256color");
+    let cmd = build_tmux_attach_cmd(&tmux_name, &cwd);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
@@ -208,10 +217,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     // Send attached confirmation
-    let attached_msg = serde_json::to_string(&ServerControl::Attached {
-        session: &tmux_name,
-    })
-    .unwrap();
+    let attached_msg =
+        serde_json::to_string(&ServerControl::Attached { session: &tmux_name }).unwrap();
     if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
         return;
     }
@@ -242,7 +249,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     });
 
     // Forward loop: merge PTY output + agent state messages → WS
-    let mut ws_tx2 = ws_tx;  // ws_tx moved here
+    let mut ws_tx2 = ws_tx; // ws_tx moved here
     let forward_handle = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -419,19 +426,17 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
-                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
-                                    if let Ok(guard) = resize_pty.lock() {
-                                        if let Some(master) = guard.as_ref() {
-                                            let new_size = PtySize {
-                                                rows,
-                                                cols,
-                                                pixel_width: 0,
-                                                pixel_height: 0,
-                                            };
-                                            if let Err(e) = master.resize(new_size) {
-                                                warn!("PTY resize failed: {}", e);
-                                            }
-                                        }
+                                if cols > 0
+                                    && cols <= 1000
+                                    && rows > 0
+                                    && rows <= 1000
+                                    && let Ok(guard) = resize_pty.lock()
+                                    && let Some(master) = guard.as_ref()
+                                {
+                                    let new_size =
+                                        PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+                                    if let Err(e) = master.resize(new_size) {
+                                        warn!("PTY resize failed: {}", e);
                                     }
                                 }
                             }
@@ -522,10 +527,7 @@ async fn handle_external_terminal(
 
     // Establish control mode connection to track session activity.
     if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
-        warn!(
-            "failed to ensure control mode for external session {}: {}",
-            tmux_name, e
-        );
+        warn!("failed to ensure control mode for external session {}: {}", tmux_name, e);
     }
 
     let _hook_enabled = false;
@@ -538,17 +540,9 @@ async fn handle_external_terminal(
     // Determine initial PTY size from query params
     let cols = query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80);
     let rows = query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24);
-    let pty_size = PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    };
+    let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
-    info!(
-        "terminal PTY initial size: {}x{} for tmux={}",
-        cols, rows, tmux_name
-    );
+    info!("terminal PTY initial size: {}x{} for tmux={}", cols, rows, tmux_name);
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -557,19 +551,15 @@ async fn handle_external_terminal(
         Err(e) => {
             error!("failed to open PTY: {}", e);
             let (mut sender, _) = ws.split();
-            let msg = serde_json::to_string(&ServerControl::Error {
-                message: "failed to open PTY",
-            })
-            .unwrap();
+            let msg =
+                serde_json::to_string(&ServerControl::Error { message: "failed to open PTY" })
+                    .unwrap();
             let _ = sender.send(Message::Text(msg.into())).await;
             return;
         }
     };
 
-    let mut cmd = CommandBuilder::new("tmux");
-    cmd.args(["new-session", "-A", "-s", &tmux_name]);
-    cmd.cwd(&cwd);
-    cmd.env("TERM", "xterm-256color");
+    let cmd = build_tmux_attach_cmd(&tmux_name, &cwd);
 
     let mut child = match pty_pair.slave.spawn_command(cmd) {
         Ok(child) => child,
@@ -591,10 +581,8 @@ async fn handle_external_terminal(
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    let attached_msg = serde_json::to_string(&ServerControl::Attached {
-        session: &tmux_name,
-    })
-    .unwrap();
+    let attached_msg =
+        serde_json::to_string(&ServerControl::Attached { session: &tmux_name }).unwrap();
     if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
         return;
     }
@@ -714,19 +702,17 @@ async fn handle_external_terminal(
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
-                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
-                                    if let Ok(guard) = resize_pty.lock() {
-                                        if let Some(master) = guard.as_ref() {
-                                            let new_size = PtySize {
-                                                rows,
-                                                cols,
-                                                pixel_width: 0,
-                                                pixel_height: 0,
-                                            };
-                                            if let Err(e) = master.resize(new_size) {
-                                                warn!("PTY resize failed: {}", e);
-                                            }
-                                        }
+                                if cols > 0
+                                    && cols <= 1000
+                                    && rows > 0
+                                    && rows <= 1000
+                                    && let Ok(guard) = resize_pty.lock()
+                                    && let Some(master) = guard.as_ref()
+                                {
+                                    let new_size =
+                                        PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
+                                    if let Err(e) = master.resize(new_size) {
+                                        warn!("PTY resize failed: {}", e);
                                     }
                                 }
                             }

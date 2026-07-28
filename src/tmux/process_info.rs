@@ -15,6 +15,15 @@ mod platform {
         Some(content.replace('\0', " "))
     }
 
+    /// 读 `/proc/<pid>/stat` 取前台进程组 ID（tpgid，第 8 字段）。
+    /// comm 字段可能含空格/括号，先 rsplit 到最后一个 ')' 再按空白切分。
+    pub fn foreground_pid_impl(pid: u32) -> Option<u32> {
+        let stat = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+        let after_comm = stat.rsplit_once(')')?.1;
+        let tpgid: i64 = after_comm.split_whitespace().nth(5)?.parse().ok()?;
+        if tpgid > 0 { Some(tpgid as u32) } else { None }
+    }
+
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
         if max_depth == 0 {
             return None;
@@ -46,14 +55,14 @@ mod platform {
         let mut sys = System::new();
         sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
         let process = sys.process(Pid::from_u32(pid))?;
-        let cmdline: Vec<String> = process.cmd().iter()
-            .map(|s| s.to_string_lossy().into_owned())
-            .collect();
-        if cmdline.is_empty() {
-            None
-        } else {
-            Some(cmdline.join(" "))
-        }
+        let cmdline: Vec<String> =
+            process.cmd().iter().map(|s| s.to_string_lossy().into_owned()).collect();
+        if cmdline.is_empty() { None } else { Some(cmdline.join(" ")) }
+    }
+
+    /// Windows 无进程组前台概念，直接回退子进程树扫描。
+    pub fn foreground_pid_impl(_pid: u32) -> Option<u32> {
+        None
     }
 
     pub fn walk_children(pid: u32, max_depth: u32) -> Option<AgentKind> {
@@ -95,6 +104,11 @@ mod platform {
 pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
     platform::read_cmdline_impl(pid)
         .and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
+}
+
+/// 取 pane 主进程的前台进程组 ID（Unix tpgid）。Windows 返回 `None`。
+pub fn foreground_pid(pane_pid: u32) -> Option<u32> {
+    platform::foreground_pid_impl(pane_pid)
 }
 
 /// Walk the process tree from `pid` looking for agent processes.
@@ -141,10 +155,7 @@ mod tests {
             agent_hooks::detect_agent_kind("claude --dangerously-skip-permissions"),
             Some(AgentKind::Claude)
         );
-        assert_eq!(
-            agent_hooks::detect_agent_kind("codex"),
-            Some(AgentKind::Codex)
-        );
+        assert_eq!(agent_hooks::detect_agent_kind("codex"), Some(AgentKind::Codex));
     }
 
     #[test]
@@ -161,9 +172,6 @@ mod tests {
     fn test_read_process_cmdline_handles_null_bytes() {
         let simulated_cmdline = "claude\0--dangerously-skip-permissions\0";
         let cmdline = simulated_cmdline.replace('\0', " ");
-        assert_eq!(
-            agent_hooks::detect_agent_kind(cmdline.trim()),
-            Some(AgentKind::Claude)
-        );
+        assert_eq!(agent_hooks::detect_agent_kind(cmdline.trim()), Some(AgentKind::Claude));
     }
 }

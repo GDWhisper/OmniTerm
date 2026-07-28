@@ -1,0 +1,5 @@
+# 以当前仓库主流风格为基线固化（不引入风格变更），见
+# docs/dev/plans/2026-07-24-quality-gates.md §3.4
+edition = "2024"
+max_width = 100
+use_small_heuristics = "Max"

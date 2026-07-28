@@ -168,6 +168,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
   const editableCompartment = useRef(new Compartment())
   const onChangeRef = useRef(onChange)
   const onSaveRef = useRef(onSave)
+  const currentFilePathRef = useRef(fileName)
 
   // Keep refs up to date without causing re-renders
   onChangeRef.current = onChange
@@ -188,36 +189,57 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editableCompartment.current.of(EditorView.editable.of(isEditable)),
         EditorView.lineWrapping,
-      ]
-
-      if (isEditable) {
-        extensions.push(
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
-              onChangeRef.current?.(update.state.doc.toString())
-            }
-          }),
-          keymap.of([
-            {
-              key: 'Mod-s',
-              run: () => {
-                onSaveRef.current?.()
-                return true
-              },
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            onChangeRef.current?.(update.state.doc.toString())
+          }
+        }),
+        keymap.of([
+          {
+            key: 'Mod-s',
+            run: () => {
+              onSaveRef.current?.()
+              return true
             },
-          ]),
-        )
-      }
+          },
+        ]),
+      ]
 
       return extensions
     },
     [fileName],
   )
 
-  // Create the editor instance (mount once; editable/extensions trigger full recreation)
+  // Create the editor instance; reconfigure in-place on mode toggle (preserves scroll).
+  // Cleanup preserves the view on same-file re-runs (React Strict Mode) — only destroys
+  // on file change. This ensures the reconfigure path sees the existing view.
   useEffect(() => {
     if (!containerRef.current) return
 
+    const fileChanged = currentFilePathRef.current !== fileName
+    currentFilePathRef.current = fileName
+
+    if (fileChanged) {
+      // File changed — destroy old view, fall through to create a new one
+      viewRef.current?.destroy()
+      viewRef.current = null
+    }
+
+    if (viewRef.current) {
+      // Same file, mode toggle — reconfigure compartment in-place (preserves scroll)
+      const view = viewRef.current
+      const savedScroll = view.scrollDOM.scrollTop
+      view.dispatch({
+        effects: editableCompartment.current.reconfigure(EditorView.editable.of(editable)),
+      })
+      // Restore scroll in case the browser auto-scrolled on contenteditable change
+      requestAnimationFrame(() => {
+        view.scrollDOM.scrollTop = savedScroll
+      })
+      return
+    }
+
+    // New file or first mount — create the editor
     let view: EditorView | null = null
     let cancelled = false
 
@@ -242,8 +264,12 @@ export function FileEditor({ content, editable, fileName, onChange, onSave }: Fi
 
     return () => {
       cancelled = true
-      view?.destroy()
-      viewRef.current = null
+      // Only destroy on file change or unmount — NOT on same-file re-runs (Strict Mode).
+      // Leave viewRef.current intact so the next setup reconfigures instead of recreating.
+      if (fileChanged) {
+        view?.destroy()
+        viewRef.current = null
+      }
     }
   }, [editable, createExtensions, fileName]) // NOTE: content intentionally omitted — editor manages its own state
 

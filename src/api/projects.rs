@@ -1,38 +1,36 @@
 use axum::{
-    extract::{Path, State},
+    Json, Router,
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch},
-    Json, Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::AppState;
 use crate::models::project::{CreateProject, Project, UpdateProject};
 use crate::workspaces::{self, CoverKind};
-use crate::AppState;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/duplicates", get(list_duplicates))
+        .route("/projects/{id}", patch(update_project).delete(delete_project))
         .route(
-            "/projects/{id}",
-            patch(update_project).delete(delete_project),
+            "/projects/{id}/worktrees",
+            get(list_worktrees).post(create_worktree).delete(delete_worktree),
         )
-        .route("/projects/{id}/worktrees", get(list_worktrees))
-        .route(
-            "/projects/{id}/merge-into/{target_id}",
-            axum::routing::post(merge_project_into),
-        )
+        .route("/projects/{id}/branches", get(list_branches))
+        .route("/projects/{id}/merge-into/{target_id}", axum::routing::post(merge_project_into))
 }
 
 async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
-    let projects: Vec<Project> =
-        sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
-            .fetch_all(&state.db)
-            .await
-            .unwrap();
+    let projects: Vec<Project> = sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
+        .fetch_all(&state.db)
+        .await
+        .unwrap();
 
     Json(json!(projects))
 }
@@ -60,11 +58,10 @@ async fn create_project(
     // Coverage check: if another project already covers this path (exact
     // match or shared git repo), reject with 409 so the UI can offer to
     // switch to the existing project instead of creating a duplicate.
-    let existing: Vec<Project> =
-        sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
-            .fetch_all(&state.db)
-            .await
-            .unwrap_or_default();
+    let existing: Vec<Project> = sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
 
     match workspaces::find_covering_project(std::path::Path::new(&path), &existing).await {
         Ok(Some((cover, kind))) => {
@@ -106,13 +103,7 @@ async fn create_project(
     .await
     .unwrap();
 
-    let project = Project {
-        id,
-        target_id: req.target_id,
-        name: req.name,
-        path,
-        created_at: now,
-    };
+    let project = Project { id, target_id: req.target_id, name: req.name, path, created_at: now };
 
     (StatusCode::CREATED, Json(json!(project)))
 }
@@ -125,21 +116,17 @@ async fn update_project(
     // If path is being updated, validate it exists
     if let Some(ref new_path) = req.path {
         if !std::path::Path::new(new_path).exists() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({ "error": "path does not exist" })),
-            );
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path does not exist" })));
         }
 
         // Cascade: update session workspace_path for sessions that used the old path.
         // Read the old project path first.
-        let old_path: Option<(String,)> =
-            sqlx::query_as("SELECT path FROM projects WHERE id = ?")
-                .bind(&id)
-                .fetch_optional(&state.db)
-                .await
-                .ok()
-                .flatten();
+        let old_path: Option<(String,)> = sqlx::query_as("SELECT path FROM projects WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
 
         if let Some((ref old_path_str,)) = old_path {
             // For each session whose workspace_path starts with the old project
@@ -175,10 +162,7 @@ async fn update_project(
             let total = exact_count + prefix_count;
 
             if let Err(e) = prefix_affected.as_ref().or(exact.as_ref()) {
-                tracing::warn!(
-                    "failed to cascade-update session workspace_path: {}",
-                    e
-                );
+                tracing::warn!("failed to cascade-update session workspace_path: {}", e);
             } else if total > 0 {
                 tracing::info!(
                     "updated workspace_path for {} session(s) after project path change: {} -> {}",
@@ -237,6 +221,125 @@ async fn delete_project(
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+struct CreateWorktreeRequest {
+    branch: String,
+    path: Option<String>,
+    base_branch: Option<String>,
+    detach: Option<bool>,
+}
+
+async fn create_worktree(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<CreateWorktreeRequest>,
+) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    let target_path = req.path.unwrap_or_else(|| {
+        let proj_path = std::path::Path::new(&project.path);
+        let parent = proj_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let dirname =
+            proj_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        parent.join(format!("{}-{}", dirname, req.branch)).to_string_lossy().to_string()
+    });
+
+    match crate::git::add_worktree(
+        &project.path,
+        &req.branch,
+        &target_path,
+        req.base_branch.as_deref(),
+        req.detach.unwrap_or(false),
+    )
+    .await
+    {
+        Ok(()) => {
+            let ws_list = workspaces::list_workspaces(&project).await;
+            let new_ws = ws_list.into_iter().find(|w| w.path == target_path);
+            match new_ws {
+                Some(ws) => (StatusCode::CREATED, Json(json!(ws))),
+                None => (
+                    StatusCode::CREATED,
+                    Json(json!({
+                        "path": target_path,
+                        "branch": req.branch,
+                    })),
+                ),
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // Git multi-line errors: use the last line which carries the
+            // actionable message (e.g. "fatal: ...")
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteWorktreeQuery {
+    path: String,
+}
+
+async fn delete_worktree(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteWorktreeQuery>,
+) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    // Safety: refuse to remove the project's own path (main worktree).
+    if q.path == project.path {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "cannot remove the main worktree (project path itself)" })),
+        );
+    }
+
+    match crate::git::remove_worktree(&project.path, &q.path).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Err(e) => {
+            let msg = e.to_string();
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
+}
+
 async fn list_worktrees(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -253,6 +356,42 @@ async fn list_worktrees(
 
     let ws_list = workspaces::list_workspaces(&project).await;
     (StatusCode::OK, Json(json!(ws_list)))
+}
+
+async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if !crate::git::is_git_repo(&project.path).await {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "project is not a git repository" })),
+        );
+    }
+
+    let (branches_res, current_res) = tokio::join!(
+        crate::git::list_branches(&project.path),
+        crate::git::current_branch(&project.path),
+    );
+
+    match branches_res {
+        Ok(branches) => {
+            let current = current_res.unwrap_or_default();
+            (StatusCode::OK, Json(json!({ "branches": branches, "current": current })))
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let short = msg.lines().last().unwrap_or(&msg).to_string();
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
+        }
+    }
 }
 
 /// Group of projects that share coverage of the same git repository (or
@@ -287,25 +426,23 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("list_duplicates: failed to load projects: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
-            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
     };
 
     // Map: canonical key -> (group_id, reason, [(project, session_count)])
     use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, (String, String, Vec<(Project, i64)>)> = BTreeMap::new();
+    // (group_id, reason, members[(project, session_count)]) — 提取别名避免 clippy type_complexity
+    type ProjectGroup = (String, String, Vec<(Project, i64)>);
+    let mut groups: BTreeMap<String, ProjectGroup> = BTreeMap::new();
 
     for project in &projects {
-        let session_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sessions WHERE project_id = ?",
-        )
-        .bind(&project.id)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+        let session_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE project_id = ?")
+                .bind(&project.id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(0);
 
         // Determine the canonical group key for this project.
         //
@@ -327,9 +464,7 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
                         .unwrap_or(wt.path)
                 })
         } else {
-            std::fs::canonicalize(&project.path)
-                .ok()
-                .map(|p| p.to_string_lossy().to_string())
+            std::fs::canonicalize(&project.path).ok().map(|p| p.to_string_lossy().to_string())
         };
 
         let Some(key) = group_key else {
@@ -343,9 +478,8 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
             "exact_path"
         };
 
-        let entry = groups
-            .entry(key.clone())
-            .or_insert_with(|| (key, reason.to_string(), Vec::new()));
+        let entry =
+            groups.entry(key.clone()).or_insert_with(|| (key, reason.to_string(), Vec::new()));
         if !entry.2.iter().any(|(p, _)| p.id == project.id) {
             entry.2.push((project.clone(), session_count));
         }
@@ -452,10 +586,8 @@ async fn merge_project_into(
         );
     }
 
-    if let Err(e) = sqlx::query("DELETE FROM projects WHERE id = ?")
-        .bind(&id)
-        .execute(&state.db)
-        .await
+    if let Err(e) =
+        sqlx::query("DELETE FROM projects WHERE id = ?").bind(&id).execute(&state.db).await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

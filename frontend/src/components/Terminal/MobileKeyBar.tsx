@@ -72,18 +72,6 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
   )
 
   return (
-    <>
-      <style>{`
-        .mobikey-btn {
-          -webkit-tap-highlight-color: transparent;
-          user-select: none;
-          touch-action: manipulation;
-        }
-        .mobikey-btn:active {
-          transform: scale(0.93);
-          filter: brightness(1.35);
-        }
-      `}</style>
     <div
       style={{
         display: 'flex',
@@ -126,7 +114,6 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         </div>
       </div>
     </div>
-    </>
   )
 }
 

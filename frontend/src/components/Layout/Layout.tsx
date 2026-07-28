@@ -5,7 +5,7 @@ import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
 import { AcpConnectionManager } from '../Chat/AcpConnectionManager'
-import { FileManager } from '../FileManager/FileManager'
+import { RightPanel } from '../RightPanel/RightPanel'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
@@ -67,9 +67,12 @@ export function Layout() {
     setSidebarWidth,
     setFileManagerWidth,
     crtScanlines,
+    uiZoom,
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
+  const sidebarRef = useRef<HTMLDivElement>(null)
+  const fileManagerRef = useRef<HTMLDivElement>(null)
 
   // Shared drag-teardown: remove all mouse+touch listeners and reset body styles
   const cleanUpDrag = useCallback(() => {
@@ -78,22 +81,22 @@ export function Layout() {
     setIsDragging(false)
   }, [])
 
-  // Drag resize handlers (mouse + touch)
+  // Drag resize — direct DOM updates during drag, sync to store on mouseup.
+  // Bypasses React re-render on every mousemove for smooth 60fps resize.
   const handleSidebarDrag = useCallback(
     (e: React.MouseEvent | React.TouchEvent) => {
       e.preventDefault()
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const startX = clientX
-      const startWidth = sidebarWidth
+      let curWidth = sidebarWidth
       const maxSidebar = Math.floor(window.innerWidth / 3)
       setIsDragging(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        const delta = mvX - startX
-        const newWidth = Math.max(140, Math.min(maxSidebar, startWidth + delta))
-        setSidebarWidth(newWidth)
+        curWidth = Math.max(140, Math.min(maxSidebar, sidebarWidth + mvX - startX))
+        if (sidebarRef.current) sidebarRef.current.style.width = `${curWidth}px`
       }
 
       const onUp = () => {
@@ -101,8 +104,9 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.removeEventListener('touchmove', onMove)
         document.removeEventListener('touchend', onUp)
+        setSidebarWidth(curWidth)
+        localStorage.setItem('omniterm_sidebar_width', String(curWidth))
         cleanUpDrag()
-        localStorage.setItem('omniterm_sidebar_width', String(useAppStore.getState().sidebarWidth))
       }
 
       document.addEventListener('mousemove', onMove)
@@ -120,16 +124,15 @@ export function Layout() {
       e.preventDefault()
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const startX = clientX
-      const startWidth = fileManagerWidth
+      let curWidth = fileManagerWidth
       const maxFileManager = Math.floor(window.innerWidth / 2)
       setIsDragging(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        const delta = startX - mvX
-        const newWidth = Math.max(240, Math.min(maxFileManager, startWidth + delta))
-        setFileManagerWidth(newWidth)
+        curWidth = Math.max(240, Math.min(maxFileManager, fileManagerWidth + startX - mvX))
+        if (fileManagerRef.current) fileManagerRef.current.style.width = `${curWidth}px`
       }
 
       const onUp = () => {
@@ -137,8 +140,9 @@ export function Layout() {
         document.removeEventListener('mouseup', onUp)
         document.removeEventListener('touchmove', onMove)
         document.removeEventListener('touchend', onUp)
+        setFileManagerWidth(curWidth)
+        localStorage.setItem('omniterm_fm_width', String(curWidth))
         cleanUpDrag()
-        localStorage.setItem('omniterm_fm_width', String(useAppStore.getState().fileManagerWidth))
       }
 
       document.addEventListener('mousemove', onMove)
@@ -151,87 +155,141 @@ export function Layout() {
     [fileManagerWidth, setFileManagerWidth, cleanUpDrag]
   )
 
-  // Mobile layout
-  if (isMobile) {
-    return <MobileLayout />
-  }
-
-  // Desktop layout: Sidebar | Terminal | FileManager
   return (
-    <div
-      ref={layoutRef}
-      className="flex"
-      style={{ height: '100dvh', background: 'var(--bg-base)', color: 'var(--text-primary)' }}
-    >
-      {/* Panels wrapper */}
+    <>
+      {/* Persistent ACP connections — rendered once outside the layout branch
+          so WS connections survive mobile↔desktop switches. */}
+      <AcpConnectionManager />
+      {isMobile ? <MobileLayout /> : <DesktopLayout
+        isDragging={isDragging}
+        layoutRef={layoutRef}
+        sidebarRef={sidebarRef}
+        fileManagerRef={fileManagerRef}
+        sidebarOpen={sidebarOpen}
+        sidebarCollapsed={sidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        fileManagerOpen={fileManagerOpen}
+        fileManagerCollapsed={fileManagerCollapsed}
+        fileManagerWidth={fileManagerWidth}
+        activeSessionId={activeSessionId}
+        crtScanlines={crtScanlines}
+        uiZoom={uiZoom}
+        settingsOpen={settingsOpen}
+        tmuxCheatsheetOpen={tmuxCheatsheetOpen}
+        onSidebarDrag={handleSidebarDrag}
+        onFileManagerDrag={handleFileManagerDrag}
+      />}
+    </>
+  )
+}
+
+interface DesktopLayoutProps {
+  isDragging: boolean
+  layoutRef: React.RefObject<HTMLDivElement | null>
+  sidebarRef: React.RefObject<HTMLDivElement | null>
+  fileManagerRef: React.RefObject<HTMLDivElement | null>
+  sidebarOpen: boolean
+  sidebarCollapsed: boolean
+  sidebarWidth: number
+  fileManagerOpen: boolean
+  fileManagerCollapsed: boolean
+  fileManagerWidth: number
+  activeSessionId: string | null
+  crtScanlines: boolean
+  uiZoom: number
+  settingsOpen: boolean
+  tmuxCheatsheetOpen: boolean
+  onSidebarDrag: (e: React.MouseEvent | React.TouchEvent) => void
+  onFileManagerDrag: (e: React.MouseEvent | React.TouchEvent) => void
+}
+
+function DesktopLayout({
+  isDragging,
+  layoutRef,
+  sidebarRef,
+  fileManagerRef,
+  sidebarOpen,
+  sidebarCollapsed,
+  sidebarWidth,
+  fileManagerOpen,
+  fileManagerCollapsed,
+  fileManagerWidth,
+  activeSessionId,
+  crtScanlines,
+  uiZoom,
+  settingsOpen,
+  tmuxCheatsheetOpen,
+  onSidebarDrag,
+  onFileManagerDrag,
+}: DesktopLayoutProps) {
+  return (
+    <>
       <div
+        ref={layoutRef}
         className="flex"
-        style={{ width: '100%', height: '100%', minWidth: 0 }}
+        style={{ zoom: uiZoom / 100, height: `calc(100dvh / ${uiZoom / 100})`, background: 'var(--bg-base)', color: 'var(--text-primary)' } as React.CSSProperties}
       >
-        {/* Sidebar */}
-        {sidebarOpen && (
-          <div
-            className="flex-shrink-0"
-            style={{
-              width: sidebarCollapsed ? 40 : sidebarWidth,
-              overflow: 'hidden',
-              background: 'var(--bg-base)',
-              borderRight: '1px solid var(--border-subtle)',
-              transition: isDragging ? 'none' : 'width 0.2s ease',
-            }}
-          >
-            <Sidebar />
+        <div
+          className="flex"
+          style={{ width: '100%', height: '100%', minWidth: 0 }}
+        >
+          {sidebarOpen && (
+            <div
+              ref={sidebarRef}
+              className="flex-shrink-0"
+              style={{
+                width: sidebarCollapsed ? 40 : sidebarWidth,
+                overflow: 'hidden',
+                background: 'var(--bg-base)',
+                borderRight: '1px solid var(--border-subtle)',
+                transition: isDragging ? 'none' : 'width 0.2s ease',
+              }}
+            >
+              <Sidebar />
+            </div>
+          )}
+
+          {sidebarOpen && !sidebarCollapsed && (
+            <div
+              className="omniterm-drag-bar omniterm-drag-bar-v"
+              onMouseDown={onSidebarDrag}
+              onTouchStart={onSidebarDrag}
+            />
+          )}
+
+          <div className="flex-1 min-w-0">
+            <SessionView key={activeSessionId ?? 'empty'} />
           </div>
-        )}
 
-        {/* Sidebar drag handle — hidden when collapsed */}
-        {sidebarOpen && !sidebarCollapsed && (
-          <div
-            className="omniterm-drag-bar omniterm-drag-bar-v"
-            onMouseDown={handleSidebarDrag}
-            onTouchStart={handleSidebarDrag}
-          />
-        )}
+          {fileManagerOpen && !fileManagerCollapsed && (
+            <div
+              className="omniterm-drag-bar omniterm-drag-bar-v"
+              onMouseDown={onFileManagerDrag}
+              onTouchStart={onFileManagerDrag}
+            />
+          )}
 
-        {/* Persistent ACP connections — survives session switches */}
-        <AcpConnectionManager />
-
-        {/* Session view — key forces full remount on session switch for clean WebSocket lifecycle */}
-        <div className="flex-1 min-w-0">
-          <SessionView key={activeSessionId ?? 'empty'} />
+          {fileManagerOpen && (
+            <div
+              ref={fileManagerRef}
+              className="flex-shrink-0 overflow-hidden"
+              style={{
+                width: fileManagerCollapsed ? 40 : fileManagerWidth,
+                background: 'var(--bg-base)',
+                borderLeft: '1px solid var(--border-subtle)',
+                transition: isDragging ? 'none' : 'width 0.2s ease',
+              }}
+            >
+              <RightPanel />
+            </div>
+          )}
         </div>
-
-        {/* FileManager drag handle — hidden when collapsed */}
-        {fileManagerOpen && !fileManagerCollapsed && (
-          <div
-            className="omniterm-drag-bar omniterm-drag-bar-v"
-            onMouseDown={handleFileManagerDrag}
-            onTouchStart={handleFileManagerDrag}
-          />
-        )}
-
-        {/* FileManager */}
-        {fileManagerOpen && (
-          <div
-            className="flex-shrink-0 overflow-hidden"
-            style={{
-              width: fileManagerCollapsed ? 40 : fileManagerWidth,
-              background: 'var(--bg-base)',
-              borderLeft: fileManagerCollapsed ? '1px solid var(--border-subtle)' : undefined,
-              transition: isDragging ? 'none' : 'width 0.2s ease',
-            }}
-          >
-            <FileManager />
-          </div>
-        )}
       </div>
 
-      {/* Settings popup — fixed positioning, independent of all panels */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
-      {/* CRT scanline overlay — controlled by settings, default off */}
       {crtScanlines && <div className="crt-overlay" />}
-    </div>
+    </>
   )
 }
 
@@ -247,8 +305,10 @@ function MobileLayout() {
     tmuxCheatsheetOpen,
     setActiveTab,
     crtScanlines,
+    uiZoom,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
   const handleSwipe = useCallback((direction: 'left' | 'right') => {
     const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
@@ -264,64 +324,47 @@ function MobileLayout() {
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
 
   return (
-    <div
-      className="flex flex-col"
-      style={{ height: `${vvHeight}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden' }}
-    >
-      <style>{`
-        @keyframes mobileSlideInLeft {
-          from { transform: translateX(-100%); }
-          to { transform: translateX(0); }
-        }
-        @keyframes mobileSlideInRight {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-        @keyframes mobileSlideOutLeft {
-          from { transform: translateX(0); }
-          to { transform: translateX(-100%); }
-        }
-        @keyframes mobileSlideOutRight {
-          from { transform: translateX(0); }
-          to { transform: translateX(100%); }
-        }
-      `}</style>
-      <MobileStatusBar
-        connected={connected}
-        sessionName={activeSessionName}
-        onSessionClick={() => setActiveTab('sessions')}
-        onNewSession={() => setActiveTab('sessions')}
-      />
-      <AcpConnectionManager />
+    <>
       <div
-        className="flex-1 overflow-hidden"
-        onTouchStart={mobileGestureEnabled ? (e) => {
-          const touch = e.touches[0]
-          ;(e.currentTarget as HTMLDivElement).dataset.startX = String(touch.clientX)
-          ;(e.currentTarget as HTMLDivElement).dataset.startY = String(touch.clientY)
-        } : undefined}
-        onTouchEnd={mobileGestureEnabled ? (e) => {
-          const div = e.currentTarget as HTMLDivElement
-          const startX = parseFloat(div.dataset.startX ?? '0')
-          const startY = parseFloat(div.dataset.startY ?? '0')
-          const touch = e.changedTouches[0]
-          const dx = touch.clientX - startX
-          const dy = touch.clientY - startY
-          const edgeMargin = 24
-          if (Math.abs(dx) < Math.abs(dy)) return
-          if (Math.abs(dx) < 40) return
-          if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
-          handleSwipe(dx < 0 ? 'left' : 'right')
-        } : undefined}
+        className="flex flex-col"
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden', overscrollBehavior: 'none' } as React.CSSProperties}
       >
-        <MobileContent />
+        <MobileStatusBar
+          connected={connected}
+          sessionName={activeSessionName}
+          onSessionClick={() => setActiveTab('sessions')}
+          onNewSession={() => setActiveTab('sessions')}
+        />
+        <div
+          className="flex-1 overflow-hidden"
+          onTouchStart={mobileGestureEnabled ? (e) => {
+            const touch = e.touches[0]
+            touchStart.current = { x: touch.clientX, y: touch.clientY }
+          } : undefined}
+          onTouchEnd={mobileGestureEnabled ? (e) => {
+            if (!touchStart.current) return
+            const { x: startX, y: startY } = touchStart.current
+            touchStart.current = null
+            const touch = e.changedTouches[0]
+            const dx = touch.clientX - startX
+            const dy = touch.clientY - startY
+            const edgeMargin = 24
+            if (Math.abs(dx) < Math.abs(dy)) return
+            if (Math.abs(dx) < 40) return
+            if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
+            handleSwipe(dx < 0 ? 'left' : 'right')
+          } : undefined}
+        >
+          <MobileContent />
+        </div>
+        <MobileNav />
       </div>
-      <MobileNav />
+
+      {/* Overlays — outside zoom container so popups stay stable during zoom changes */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
-      {/* CRT scanline overlay — controlled by settings, default off */}
       {crtScanlines && <div className="crt-overlay" />}
-    </div>
+    </>
   )
 }
 
@@ -366,7 +409,7 @@ function MobileContent() {
     case 'terminal':
       return <SessionView key={activeSessionId ?? 'empty'} />
     case 'files':
-      return <div style={wrapperStyle}><FileManager /></div>
+      return <div style={wrapperStyle}><RightPanel /></div>
     case 'sessions':
       return <div style={wrapperStyle}><Sidebar /></div>
     default:

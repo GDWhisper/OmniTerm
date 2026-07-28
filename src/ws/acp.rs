@@ -2,21 +2,102 @@ use std::sync::Arc;
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         Path, State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{debug, info};
 
+use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
-use crate::acp::AcpClient;
+use crate::acp::terminal::TerminalActivity;
+use crate::acp::{AcpClient, ImageInput, ResourceInput};
 use crate::api::agents::load_agent;
-use crate::AppState;
+
+/// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
+const MAX_PROMPT_IMAGES: usize = 3;
+/// 单次 prompt 的 `@` 文件引用上限。
+const MAX_AT_REFERENCES: usize = 8;
+/// 单个 `@` 引用文件注入内容上限（超出截断）。
+const MAX_AT_FILE_BYTES: usize = 64 * 1024;
+
+/// 从 prompt 文本提取 `@path` 引用。`@` 前必须是行首或空白（排除 email 等误报），
+/// 去重保序，上限 [`MAX_AT_REFERENCES`]。
+fn extract_at_paths(text: &str) -> Vec<String> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?:^|\s)@([^\s@]+)").unwrap());
+    let mut out: Vec<String> = Vec::new();
+    for cap in re.captures_iter(text) {
+        let p = &cap[1];
+        if !out.iter().any(|e| e == p) {
+            out.push(p.to_string());
+            if out.len() >= MAX_AT_REFERENCES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// 解析 `@path` 引用为文件内容资源：workspace 内 sanitize + 读取（≤64KB 截断）。
+/// 任何失败（越界/不存在/目录/非 UTF-8）静默跳过该引用 —— 引用是增强不是硬依赖。
+async fn resolve_at_references(
+    db: &sqlx::SqlitePool,
+    session_id: &str,
+    text: &str,
+) -> Vec<ResourceInput> {
+    let paths = extract_at_paths(text);
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let row: Option<(String,)> = sqlx::query_as("SELECT workspace_path FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
+    let Some((ws_path,)) = row else {
+        return Vec::new();
+    };
+    let base = std::path::PathBuf::from(ws_path);
+    let mut out = Vec::new();
+    for rel in paths {
+        let abs = match crate::fs::sanitize_path(&base, &rel) {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("@ 引用跳过（路径无效）: {}: {}", rel, e);
+                continue;
+            }
+        };
+        if abs.is_dir() {
+            debug!("@ 引用跳过（是目录）: {}", rel);
+            continue;
+        }
+        let content = match tokio::fs::read_to_string(&abs).await {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("@ 引用跳过（读取失败）: {}: {}", rel, e);
+                continue;
+            }
+        };
+        let text = if content.len() > MAX_AT_FILE_BYTES {
+            let mut end = MAX_AT_FILE_BYTES;
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}\n… [content truncated at 64KB]", &content[..end])
+        } else {
+            content
+        };
+        out.push(ResourceInput { uri: format!("file://{}", abs.display()), label: rel, text });
+    }
+    out
+}
 
 pub async fn ws_acp_handler(
     ws: WebSocketUpgrade,
@@ -31,7 +112,12 @@ pub async fn ws_acp_handler(
 #[serde(tag = "type")]
 enum AcpClientMessage {
     #[serde(rename = "prompt")]
-    Prompt { text: String },
+    Prompt {
+        text: String,
+        /// 图片附件（可选，旧前端不带此字段）。
+        #[serde(default)]
+        images: Vec<ImageInput>,
+    },
     #[serde(rename = "cancel")]
     Cancel,
     #[serde(rename = "load_session")]
@@ -57,6 +143,14 @@ enum AcpServerMessage<'a> {
     PromptDone { stop_reason: &'a str },
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
+    #[serde(rename = "terminal_activity")]
+    TerminalActivity {
+        id: String,
+        command: String,
+        args: Vec<String>,
+        status: String,
+        exit_code: Option<u32>,
+    },
     #[serde(rename = "replay_start")]
     ReplayStart,
     #[serde(rename = "replay_end")]
@@ -64,10 +158,11 @@ enum AcpServerMessage<'a> {
     #[serde(rename = "process_alive")]
     ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
-    PermissionRequest {
-        id: &'a str,
-        request: &'a serde_json::Value,
-    },
+    PermissionRequest { id: &'a str, request: &'a serde_json::Value },
+    /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
+    /// 前端据此显示/隐藏附件入口。
+    #[serde(rename = "capabilities")]
+    Capabilities { image: bool },
 }
 
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
@@ -76,19 +171,17 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
 
     let chunk = if let Some(c) = obj.get("AgentMessageChunk") {
         c
-    } else if obj.get("sessionUpdate").and_then(|v| v.as_str())
-        == Some("agent_message_chunk")
-    {
+    } else if obj.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
         update
     } else {
         return None;
     };
 
     let content = chunk.get("content")?;
-    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text")) {
-        if let Some(t) = text_obj.get("text").and_then(|v| v.as_str()) {
-            return Some(t.to_string());
-        }
+    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text"))
+        && let Some(t) = text_obj.get("text").and_then(|v| v.as_str())
+    {
+        return Some(t.to_string());
     }
     if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
         return Some(t.to_string());
@@ -100,7 +193,9 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
 }
 
 async fn spawn_notify_task(
-    mut rx: tokio::sync::broadcast::Receiver<agent_client_protocol::schema::v1::SessionNotification>,
+    mut rx: tokio::sync::broadcast::Receiver<
+        agent_client_protocol::schema::v1::SessionNotification,
+    >,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
     buf: Arc<Mutex<String>>,
 ) {
@@ -120,7 +215,81 @@ async fn spawn_notify_task(
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("ACP WS subscriber lagged by {} messages", n);
+                    tracing::warn!(
+                        "ACP WS subscriber lagged by {} messages; dropped stale updates",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// 转发 agent 进程崩溃错误：收到即作为 `prompt_error` 帧推给前端，
+/// 使用户能看到崩溃原因而非仅连接断开�?
+async fn spawn_crash_task(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(reason) => {
+                    let msg =
+                        serde_json::to_string(&AcpServerMessage::PromptError { message: &reason })
+                            .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP crash-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// 转发 agent 终端命令生命周期事件：创建/退出转为 `terminal_activity` 帧，
+/// 使前端能感知 agent 在后台执行的命令（否则完全不可见）。
+async fn spawn_terminal_task(
+    mut rx: tokio::sync::broadcast::Receiver<TerminalActivity>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let (id, command, args, status, exit_code) = match ev {
+                        TerminalActivity::Created { id, command, args } => {
+                            (id, command, args, "created".to_string(), None)
+                        }
+                        TerminalActivity::Exited { id, exit_code } => {
+                            (id, String::new(), Vec::new(), "exited".to_string(), exit_code)
+                        }
+                    };
+                    let msg = serde_json::to_string(&AcpServerMessage::TerminalActivity {
+                        id,
+                        command,
+                        args,
+                        status,
+                        exit_code,
+                    })
+                    .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP terminal-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
                 }
             }
         }
@@ -145,7 +314,12 @@ async fn spawn_permission_task(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP permission-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
             }
         }
     });
@@ -163,20 +337,27 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            let crash_rx = c.crash_subscribe();
+            spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            let term_rx = c.terminal_event_subscribe();
+            spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg =
-                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                    .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             if let Some(notif) = c.initial_commands_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg =
-                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
+                    .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
+                image: c.supports_image(),
+            })
+            .unwrap_or_default();
+            let _ = notify_tx.send(Message::Text(msg.into())).await;
             Some(c)
         }
         None => {
@@ -191,18 +372,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
         }
     };
 
-    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动，
-    // 替代前端对 acp_process_alive 的轮询）。
+    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动�?
+    // 替代前端�? acp_process_alive 的轮询）�?
     let mut proc_rx = state.acp_supervisor.process_event_subscribe();
-    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）。
+    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）�?
     let _ = notify_tx
-        .send(
-            Message::Text(
-                serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
-                    .unwrap_or_default()
-                    .into(),
-            ),
-        )
+        .send(Message::Text(
+            serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
+                .unwrap_or_default()
+                .into(),
+        ))
         .await;
 
     let db = state.db.clone();
@@ -214,7 +393,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<AcpClientMessage>(&text) {
-                            Ok(AcpClientMessage::Prompt { text: prompt_text }) => {
+                            Ok(AcpClientMessage::Prompt { text: prompt_text, images }) => {
                                 let Some(ref c) = client else {
                                     let msg = serde_json::to_string(&AcpServerMessage::Error {
                                         code: Some("session_not_found"),
@@ -224,11 +403,49 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     continue;
                                 };
 
+                                // 附件校验：前端已限制，这里兜底（直连 WS 的客户端）。
+                                if images.len() > MAX_PROMPT_IMAGES {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: &format!("too many images (max {})", MAX_PROMPT_IMAGES),
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+                                if !images.is_empty() && !c.supports_image() {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: "agent does not support image input",
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+
+                                // 有图时把结构化 blocks 一并落库（text + image），
+                                // 刷新后 hydrate 能还原缩略图；纯文本保持 NULL 现状。
+                                let blocks_json = if images.is_empty() {
+                                    None
+                                } else {
+                                    let mut arr = Vec::new();
+                                    if !prompt_text.is_empty() {
+                                        arr.push(serde_json::json!({
+                                            "type": "text", "text": prompt_text,
+                                        }));
+                                    }
+                                    for img in &images {
+                                        arr.push(serde_json::json!({
+                                            "type": "image",
+                                            "mimeType": img.mime_type,
+                                            "data": img.data,
+                                        }));
+                                    }
+                                    serde_json::to_string(&arr).ok()
+                                };
                                 let _ = chat_persistence::insert_message(
-                                    &db, &sid, "user", &prompt_text,
+                                    &db, &sid, "user", &prompt_text, blocks_json.as_deref(),
                                 ).await;
 
                                 let c = c.clone();
+                                // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
+                                let resources = resolve_at_references(&db, &sid, &prompt_text).await;
                                 // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
@@ -236,14 +453,14 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 let sid2 = sid.clone();
                                 let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
-                                    match c.send_prompt(&prompt_text).await {
+                                    match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
                                             c.mark_prompt_idle();
                                             tokio::task::yield_now().await;
                                             let assistant_text = buf2.lock().await.drain(..).collect::<String>();
                                             if !assistant_text.is_empty() {
                                                 let _ = chat_persistence::insert_message(
-                                                    &db2, &sid2, "assistant", &assistant_text,
+                                                    &db2, &sid2, "assistant", &assistant_text, None,
                                                 ).await;
                                             }
                                             let reason = format!("{:?}", resp.stop_reason);
@@ -266,10 +483,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
-                                    // 取消也视为 prompt 结束
+                                    // 取消也视�? prompt 结束
                                     c.mark_prompt_idle();
                                     if let Err(e) = c.cancel() {
-                                        error!("ACP cancel failed: {}", e);
+                                        let err_msg = format!("取消 agent 失败: {}", e);
+                                        let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                            code: Some("cancel_failed"),
+                                            message: &err_msg,
+                                        })
+                                        .unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
                                 }
                             }
@@ -318,25 +541,59 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
 
                                         // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏
-                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await {
-                                            if let Some(c) = Arc::try_unwrap(old).ok() {
+                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await
+                                            && let Ok(c) = Arc::try_unwrap(old) {
                                                 c.disconnect().await;
                                             }
-                                        }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
 
-                                        let rx = new_client.session_update_subscribe();
-                                        spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
+                                        let crash_rx = new_client.crash_subscribe();
+                                        spawn_crash_task(crash_rx, notify_tx.clone()).await;
+                                        let term_rx = new_client.terminal_event_subscribe();
+                                        spawn_terminal_task(term_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());
+
+                                        let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
+                                            image: new_client.supports_image(),
+                                        }).unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
 
                                         let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
                                         let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
 
                                         let tx = notify_tx.clone();
+                                        let buf2 = assistant_buf.clone();
                                         tokio::spawn(async move {
+                                            // 在 load_session 之前订阅，确保重放期间 agent 推来的
+                                            // 历史 session_update 全部进入本 receiver（broadcast 缓冲）。
+                                            let mut replay_rx = new_client.session_update_subscribe();
                                             let result = new_client.load_session(&acp_sid, cwd).await;
+                                            // load_session 返回即 agent 已推完全部历史。排空 replay_rx
+                                            // 后逐帧经 notify_tx 转发——notify_tx 为 FIFO，故 replay_end
+                                            // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
+                                            // 注意：重放帧不累积进 assistant_buf（避免与后续实时落库重复）。
+                                            loop {
+                                                match replay_rx.try_recv() {
+                                                    Ok(notif) => {
+                                                        let data = serde_json::to_value(&notif).unwrap_or_default();
+                                                        let frame = serde_json::to_string(
+                                                            &AcpServerMessage::SessionUpdate { data },
+                                                        )
+                                                        .unwrap_or_default();
+                                                        if tx.send(Message::Text(frame.into())).await.is_err() {
+                                                            break;
+                                                        }
+                                                    }
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                                                        tracing::warn!("ACP replay subscriber lagged by {} messages", n);
+                                                        break;
+                                                    }
+                                                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                                                }
+                                            }
                                             let msg = match result {
                                                 Ok(()) => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
                                                 Err(e) => serde_json::to_string(&AcpServerMessage::Error {
@@ -345,6 +602,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 }).unwrap_or_default(),
                                             };
                                             let _ = tx.send(Message::Text(msg.into())).await;
+                                            // replay_end 之后才接管实时帧：避免与上面 drain 重复订阅，
+                                            // 且保证恢复完成前的帧已全部按序送达。
+                                            spawn_notify_task(new_client.session_update_subscribe(), tx.clone(), buf2).await;
                                         });
                                     }
                                     Err(e) => {
@@ -363,11 +623,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 }
                             }
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
-                                if let Some(ref c) = client {
-                                    if let Err(e) = c.set_config_option(&config_id, &value).await {
-                                        error!("set_config_option failed: {}", e);
+                                if let Some(ref c) = client
+                                    && let Err(e) = c.set_config_option(&config_id, &value).await {
+                                        let err_msg = format!("配置�? {} 设置失败: {}", config_id, e);
+                                        let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                            code: Some("config_option_failed"),
+                                            message: &err_msg,
+                                        })
+                                        .unwrap_or_default();
+                                        let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
-                                }
                             }
                             Err(e) => {
                                 let err_msg = format!("invalid message: {}", e);
@@ -383,7 +648,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
-                    _ => {}
+                    // 非文本、非 Close 的帧（如二进制帧）：当前协议不支持，记录以便发现
+                    // 客户端/代理私自扩展或版本漂移，但不阻断连接。
+                    other => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            ?other,
+                            "received unsupported websocket frame (non-text/non-close); ignoring"
+                        );
+                    }
                 }
             }
             msg = notify_rx.recv() => {
@@ -398,21 +671,71 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             }
             msg = proc_rx.recv() => {
                 match msg {
-                    Ok(evt) => {
-                        if evt.session_id == session_id {
-                            let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
-                                alive: evt.alive,
-                            })
-                            .unwrap_or_default();
-                            if notify_tx.send(Message::Text(frame.into())).await.is_err() {
-                                break;
-                            }
+                    Ok(evt) if evt.session_id == session_id => {
+                        let frame = serde_json::to_string(&AcpServerMessage::ProcessAlive {
+                            alive: evt.alive,
+                        })
+                        .unwrap_or_default();
+                        if notify_tx.send(Message::Text(frame.into())).await.is_err() {
+                            break;
                         }
                     }
-                    // Lagged / Closed：忽略，等待下一次事件（参照现有 notify task 处理风格）
-                    Err(_) => {}
+                    // Lagged / Closed：订阅落后于发布端或通道已关闭，记录（但不阻断连接）。
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            skipped = n,
+                            "process-alive channel lagged; process events may be stale"
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::debug!(session_id = %session_id, "process-alive channel closed");
+                    }
+                    // 其他 Ok 事件（非本会话）直接忽略。
+                    Ok(_) => {}
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_at_paths;
+
+    #[test]
+    fn extracts_basic_paths() {
+        assert_eq!(
+            extract_at_paths("看看 @src/main.rs 和 @README.md 的内容"),
+            vec!["src/main.rs", "README.md"]
+        );
+    }
+
+    #[test]
+    fn extracts_at_start_and_after_newline() {
+        assert_eq!(extract_at_paths("@a.txt first"), vec!["a.txt"]);
+        assert_eq!(extract_at_paths("line1\n@b.txt"), vec!["b.txt"]);
+    }
+
+    #[test]
+    fn dedupes_preserving_order() {
+        assert_eq!(extract_at_paths("@a.rs @b.rs @a.rs"), vec!["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn caps_at_max_references() {
+        let text = (1..=10).map(|i| format!("@f{}.rs", i)).collect::<Vec<_>>().join(" ");
+        assert_eq!(extract_at_paths(&text).len(), super::MAX_AT_REFERENCES);
+    }
+
+    #[test]
+    fn ignores_email_like_tokens() {
+        assert_eq!(extract_at_paths("联系 user@example.com 谢谢"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn ignores_bare_at() {
+        assert_eq!(extract_at_paths("@ 后面是空格"), Vec::<String>::new());
+        assert_eq!(extract_at_paths("no refs here"), Vec::<String>::new());
     }
 }

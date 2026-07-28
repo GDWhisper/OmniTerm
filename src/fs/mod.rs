@@ -16,7 +16,7 @@
 //! No code is copied verbatim. Rust idioms, async I/O style, and the
 //! public API surface were rewritten for OmniTerm's needs.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -33,13 +33,10 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
         return Err(anyhow!("path does not exist: {}", joined.display()));
     }
 
-    let canonical = joined
-        .canonicalize()
-        .map_err(|e| anyhow!("path resolution failed: {}", e))?;
+    let canonical = joined.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
 
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| anyhow!("base path resolution failed: {}", e))?;
+    let canonical_base =
+        base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
 
     if !canonical.starts_with(&canonical_base) {
         return Err(anyhow!("access denied: path escapes workspace root"));
@@ -53,18 +50,16 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
 pub fn sanitize_path_new(base: &Path, requested: &str) -> Result<PathBuf> {
     let joined = join_and_validate(base, requested)?;
 
-    let canonical_base = base
-        .canonicalize()
-        .map_err(|e| anyhow!("base path resolution failed: {}", e))?;
+    let canonical_base =
+        base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
 
     // Walk up until we find an existing ancestor
     let mut check = joined.as_path();
     let mut tail = Vec::new();
     loop {
         if check.exists() {
-            let canonical = check
-                .canonicalize()
-                .map_err(|e| anyhow!("path resolution failed: {}", e))?;
+            let canonical =
+                check.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
             if !canonical.starts_with(&canonical_base) {
                 return Err(anyhow!("access denied: path escapes workspace root"));
             }
@@ -127,6 +122,9 @@ pub struct FileEntry {
     pub name: String,
     pub mtime: u64,
     pub size: u64,
+    /// 相对搜索根的路径（仅 [`search_files`] 填充；目录列表为 None 不序列化）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel_path: Option<String>,
 }
 
 impl FileEntry {
@@ -137,12 +135,11 @@ impl FileEntry {
 
 /// Convert `SystemTime` to unix milliseconds.
 fn to_timestamp(time: &SystemTime) -> u64 {
-    time.duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
+    time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
 /// Normalize path separators to forward slashes.
+#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 fn normalize_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -206,12 +203,7 @@ pub async fn list_dir(
             meta.len()
         };
 
-        entries.push(FileEntry {
-            path_type,
-            name,
-            mtime,
-            size,
-        });
+        entries.push(FileEntry { path_type, name, mtime, size, rel_path: None });
     }
 
     // Sort: directories first, then by chosen key
@@ -293,9 +285,7 @@ pub async fn copy_paths(base: &Path, paths: &[String], dest: &str) -> Result<()>
 
     for p in paths {
         let src = sanitize_path(base, p)?;
-        let file_name = src
-            .file_name()
-            .ok_or_else(|| anyhow!("invalid path"))?;
+        let file_name = src.file_name().ok_or_else(|| anyhow!("invalid path"))?;
         let target = dest_dir.join(file_name);
 
         let metadata = fs::metadata(&src).await?;
@@ -341,20 +331,32 @@ pub async fn search_files(base: &Path, rel_path: &str, query: &str) -> Result<Ve
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
-    search_recursive(&dir, &query_lower, &mut results, 100, 8).await?;
+    search_recursive(&dir, &query_lower, "", &mut results, 100, 8).await?;
 
     Ok(results)
 }
 
 const SKIP_DIRS: &[&str] = &[
-    "node_modules", ".git", "target", "__pycache__", ".venv", "venv",
-    ".next", ".nuxt", "dist", "build", ".cache", "vendor",
+    "node_modules",
+    ".git",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".next",
+    ".nuxt",
+    "dist",
+    "build",
+    ".cache",
+    "vendor",
 ];
 
 /// Recursive search with result and depth limits.
+/// `prefix` 是当前目录相对搜索根的路径（根为空串），用于填充 [`FileEntry::rel_path`]。
 fn search_recursive<'a>(
     dir: &'a Path,
     query: &'a str,
+    prefix: &'a str,
     results: &'a mut Vec<FileEntry>,
     max_results: usize,
     max_depth: usize,
@@ -366,7 +368,7 @@ fn search_recursive<'a>(
 
         let mut read_dir = match fs::read_dir(dir).await {
             Ok(rd) => rd,
-            Err(_) => return Ok(()),  // skip unreadable directories
+            Err(_) => return Ok(()), // skip unreadable directories
         };
 
         while let Some(entry) = read_dir.next_entry().await? {
@@ -381,9 +383,11 @@ fn search_recursive<'a>(
                 continue;
             }
 
+            let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+
             let meta = match fs::metadata(entry.path()).await {
                 Ok(m) => m,
-                Err(_) => continue,  // skip inaccessible entries
+                Err(_) => continue, // skip inaccessible entries
             };
             let meta2 = fs::symlink_metadata(entry.path()).await;
             let is_symlink = meta2.map(|m| m.is_symlink()).unwrap_or(false);
@@ -408,11 +412,13 @@ fn search_recursive<'a>(
                     name,
                     mtime,
                     size: if is_dir { 0 } else { meta.len() },
+                    rel_path: Some(rel.clone()),
                 });
             }
 
             if is_dir && !is_symlink {
-                search_recursive(&entry.path(), query, results, max_results, max_depth - 1).await?;
+                search_recursive(&entry.path(), query, &rel, results, max_results, max_depth - 1)
+                    .await?;
             }
         }
 
@@ -428,7 +434,8 @@ mod tests {
     #[test]
     fn test_sanitize_valid() {
         let base = Path::new("/tmp/omniterm_test");
-        fs::create_dir_all(base).unwrap();
+        // sanitize_path 是“读路径”变体：被校验路径必须实际存在（sanitize_path_new 才用于创建）
+        fs::create_dir_all(base.join("foo/bar")).unwrap();
         assert!(sanitize_path(base, "foo/bar").is_ok());
     }
 

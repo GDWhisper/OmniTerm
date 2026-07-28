@@ -39,7 +39,7 @@ cargo install omniterm        # 或见下方其他方式
 omniterm                      # 打开 http://localhost:9077
 ```
 
-浏览器里设个初始密码、添加项目目录，就能开会话了——选中助手走聊天模式，留空就是普通终端。
+浏览器里设个初始密码、添加项目目录，就能开会话了——选中助手走聊天模式，留空就是普通终端。升级到新版本只需 `omniterm update`。
 
 <details>
 <summary>其他安装方式（Shell 脚本 / PowerShell / Docker）</summary>

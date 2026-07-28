@@ -27,9 +27,7 @@ fn tmux(args: &[&str]) -> (bool, String, String) {
 
 /// ── Helper: cleanup a session ──
 fn cleanup(name: &str) {
-    let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", name])
-        .output();
+    let _ = std::process::Command::new("tmux").args(["kill-session", "-t", name]).output();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -89,16 +87,11 @@ async fn test_oneshot_shutdown_stops_poll_task() {
 #[tokio::test]
 async fn test_create_session_sets_agent_option() {
     let name = unique_session("agent_init");
-    let cwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
 
     // Create session with the tmux binary directly
-    let (ok, _, stderr) = tmux(&[
-        "new-session", "-d", "-s", &name, "-c", &cwd,
-        "-x", "80", "-y", "24",
-    ]);
+    let (ok, _, stderr) =
+        tmux(&["new-session", "-d", "-s", &name, "-c", &cwd, "-x", "80", "-y", "24"]);
 
     if !ok {
         // tmux server might not be running
@@ -107,28 +100,29 @@ async fn test_create_session_sets_agent_option() {
     }
 
     // Set an agent option value (simulating what hook would do)
-    let set_cmd = format!("claude:waiting:decision:PermissionRequest:{}", 
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs());
-    
-    let (ok, _, stderr) = tmux(&[
-        "set-option", "-t", &name, "@omniterm_agent", &set_cmd,
-    ]);
+    let set_cmd = format!(
+        "claude:waiting:decision:PermissionRequest:{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+    );
+
+    let (ok, _, stderr) = tmux(&["set-option", "-t", &name, "@omniterm_agent", &set_cmd]);
     assert!(ok, "failed to set @omniterm_agent: {}", stderr.trim());
 
     // Read it back
-    let (ok, stdout, stderr) = tmux(&[
-        "show-options", "-t", &name, "@omniterm_agent",
-    ]);
+    let (ok, stdout, stderr) = tmux(&["show-options", "-t", &name, "@omniterm_agent"]);
     assert!(ok, "failed to show-options: {}", stderr.trim());
-    
+
     // Output format: "@omniterm_agent <value>"
-    assert!(stdout.contains("@omniterm_agent"), 
-        "expected @omniterm_agent in output, got: {}", stdout.trim());
-    assert!(stdout.contains("claude:waiting:decision:PermissionRequest"),
-        "expected agent value in output, got: {}", stdout.trim());
+    assert!(
+        stdout.contains("@omniterm_agent"),
+        "expected @omniterm_agent in output, got: {}",
+        stdout.trim()
+    );
+    assert!(
+        stdout.contains("claude:waiting:decision:PermissionRequest"),
+        "expected agent value in output, got: {}",
+        stdout.trim()
+    );
 
     cleanup(&name);
     eprintln!("✓ agent option init test passed");
@@ -141,15 +135,10 @@ async fn test_create_session_sets_agent_option() {
 #[tokio::test]
 async fn test_session_without_agent_has_no_option() {
     let name = unique_session("no_agent");
-    let cwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
 
-    let (ok, _, stderr) = tmux(&[
-        "new-session", "-d", "-s", &name, "-c", &cwd,
-        "-x", "80", "-y", "24",
-    ]);
+    let (ok, _, stderr) =
+        tmux(&["new-session", "-d", "-s", &name, "-c", &cwd, "-x", "80", "-y", "24"]);
 
     if !ok {
         eprintln!("SKIP: cannot create tmux session: {}", stderr.trim());
@@ -157,16 +146,17 @@ async fn test_session_without_agent_has_no_option() {
     }
 
     // show-options should fail because the option was never set
-    let (ok, stdout, stderr) = tmux(&[
-        "show-options", "-t", &name, "@omniterm_agent",
-    ]);
-    
+    let (ok, stdout, stderr) = tmux(&["show-options", "-t", &name, "@omniterm_agent"]);
+
     // tmux returns error for unknown option
     let combined = format!("{}{}", stdout, stderr);
     assert!(
-        !ok || combined.contains("unknown option") || combined.contains("invalid option") || stdout.trim().is_empty(),
+        !ok || combined.contains("unknown option")
+            || combined.contains("invalid option")
+            || stdout.trim().is_empty(),
         "expected unknown option or empty, got stdout='{}' stderr='{}'",
-        stdout.trim(), stderr.trim()
+        stdout.trim(),
+        stderr.trim()
     );
 
     cleanup(&name);
@@ -197,9 +187,8 @@ async fn test_timeout_behavior_three_consecutive_failures() {
     }
 
     assert_eq!(consecutive_failures, 3);
-    assert!(consecutive_failures >= max_failures, 
-        "should have reached max failures");
-    
+    assert!(consecutive_failures >= max_failures, "should have reached max failures");
+
     eprintln!("✓ timeout counter test passed");
 }
 
@@ -214,19 +203,15 @@ fn test_shell_escaping_special_characters() {
 
     // We import our crate's function directly
     // (This test is in an integration test binary, so we use the public API)
-    
+
     // Since clean_token is not pub, we test via the agent_value round-trip.
     // The agent_value function calls clean_token internally.
-    
+
     // Simulate what clean_token does (same logic as in agent_state.rs)
     fn clean_token(s: &str) -> String {
         s.chars()
             .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
+                if c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-' { c } else { '_' }
             })
             .collect()
     }
@@ -234,34 +219,34 @@ fn test_shell_escaping_special_characters() {
     // Single quotes → underscore
     assert_eq!(clean_token("it's"), "it_s");
     assert_eq!(clean_token("don't"), "don_t");
-    
+
     // Double quotes → underscore
     assert_eq!(clean_token("say \"hello\""), "say__hello_");
-    
+
     // Backslashes → underscore
     assert_eq!(clean_token("path\\to\\file"), "path_to_file");
-    
+
     // Newlines → underscore
     assert_eq!(clean_token("line1\nline2"), "line1_line2");
-    
+
     // Tabs → underscore
     assert_eq!(clean_token("col1\tcol2"), "col1_col2");
-    
+
     // Semicolons (command injection) → underscore
     assert_eq!(clean_token("value; rm -rf /"), "value__rm_-rf__");
-    
+
     // Dollar signs → underscore
     assert_eq!(clean_token("${HOME}"), "__HOME_");
-    
+
     // Backticks (command substitution) → underscore
     assert_eq!(clean_token("`id`"), "_id_");
-    
+
     // Pipes → underscore
     assert_eq!(clean_token("a|b"), "a_b");
-    
+
     // Spaces → underscore
     assert_eq!(clean_token("hello world"), "hello_world");
-    
+
     // Valid characters pass through unchanged
     assert_eq!(clean_token("ABCdef123._-"), "ABCdef123._-");
 
@@ -275,15 +260,10 @@ fn test_shell_escaping_special_characters() {
 #[tokio::test]
 async fn test_list_sessions_pipe_format() {
     let name = unique_session("pipefmt");
-    let cwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
 
-    let (ok, _, stderr) = tmux(&[
-        "new-session", "-d", "-s", &name, "-c", &cwd,
-        "-x", "80", "-y", "24",
-    ]);
+    let (ok, _, stderr) =
+        tmux(&["new-session", "-d", "-s", &name, "-c", &cwd, "-x", "80", "-y", "24"]);
 
     if !ok {
         eprintln!("SKIP: cannot create tmux session: {}", stderr.trim());
@@ -292,7 +272,10 @@ async fn test_list_sessions_pipe_format() {
 
     // Set an agent option
     let (ok, _, stderr) = tmux(&[
-        "set-option", "-t", &name, "@omniterm_agent", 
+        "set-option",
+        "-t",
+        &name,
+        "@omniterm_agent",
         "claude:running::PreToolUse:12345.678",
     ]);
     if !ok {
@@ -303,7 +286,8 @@ async fn test_list_sessions_pipe_format() {
 
     // Run list-sessions with the new pipe format
     let (ok, stdout, stderr) = tmux(&[
-        "list-sessions", "-F",
+        "list-sessions",
+        "-F",
         "#{session_attached}|#{session_windows}|#{session_created}|#{@omniterm_agent}|#{session_name}",
     ]);
     assert!(ok, "list-sessions failed: {}", stderr.trim());
@@ -314,15 +298,27 @@ async fn test_list_sessions_pipe_format() {
 
     let line = line.unwrap();
     let parts: Vec<&str> = line.split('|').collect();
-    assert!(parts.len() >= 5, "expected at least 5 pipe-separated fields, got {}: '{}'", parts.len(), line);
+    assert!(
+        parts.len() >= 5,
+        "expected at least 5 pipe-separated fields, got {}: '{}'",
+        parts.len(),
+        line
+    );
 
     // Field 3 (index 3) is @omniterm_agent
-    assert!(parts[3].contains("claude:running"), 
-        "expected agent value in field 3, got: '{}'", parts[3]);
+    assert!(
+        parts[3].contains("claude:running"),
+        "expected agent value in field 3, got: '{}'",
+        parts[3]
+    );
 
     // Last field(s) should be session name
     let name_field = parts[4..].join("|");
-    assert_eq!(name_field, name, "session name mismatch: expected '{}', got '{}'", name, name_field);
+    assert_eq!(
+        name_field, name,
+        "session name mismatch: expected '{}', got '{}'",
+        name, name_field
+    );
 
     cleanup(&name);
     eprintln!("✓ list_sessions pipe format test passed");
@@ -335,15 +331,10 @@ async fn test_list_sessions_pipe_format() {
 #[tokio::test]
 async fn test_session_name_with_pipe_character() {
     let name = unique_session("pipe|name");
-    let cwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
 
-    let (ok, _, stderr) = tmux(&[
-        "new-session", "-d", "-s", &name, "-c", &cwd,
-        "-x", "80", "-y", "24",
-    ]);
+    let (ok, _, stderr) =
+        tmux(&["new-session", "-d", "-s", &name, "-c", &cwd, "-x", "80", "-y", "24"]);
 
     if !ok {
         eprintln!("SKIP: cannot create tmux session: {}", stderr.trim());
@@ -352,7 +343,8 @@ async fn test_session_name_with_pipe_character() {
 
     // Run list-sessions with pipe format
     let (ok, stdout, _) = tmux(&[
-        "list-sessions", "-F",
+        "list-sessions",
+        "-F",
         "#{session_attached}|#{session_windows}|#{session_created}|#{@omniterm_agent}|#{session_name}",
     ]);
     assert!(ok, "list-sessions failed");
@@ -366,7 +358,11 @@ async fn test_session_name_with_pipe_character() {
 
     // Rejoin name from parts[4..]
     let name_field = parts[4..].join("|");
-    assert_eq!(name_field, name, "session name with pipe not preserved: expected '{}', got '{}'", name, name_field);
+    assert_eq!(
+        name_field, name,
+        "session name with pipe not preserved: expected '{}', got '{}'",
+        name, name_field
+    );
 
     cleanup(&name);
     eprintln!("✓ pipe-in-name test passed");
@@ -384,26 +380,23 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     use std::io::Write;
 
     let name = unique_session("no_eof_leak");
-    let cwd = std::env::current_dir()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
 
     // 1. Create the session via tmux directly (skipping our HTTP layer for
     //    isolation — we only need a real tmux server + session to exercise
     //    the SIGHUP / PTY cleanup path).
-    let (ok, _, stderr) = tmux(&[
-        "new-session", "-d", "-s", &name, "-c", &cwd,
-        "-x", "80", "-y", "24",
-    ]);
+    let (ok, _, stderr) =
+        tmux(&["new-session", "-d", "-s", &name, "-c", &cwd, "-x", "80", "-y", "24"]);
     if !ok {
         eprintln!("SKIP: cannot create tmux session: {}", stderr.trim());
         return;
     }
 
     // 2. Persist a session row so the WS handler accepts the id.
-    let db_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite:omniterm.db?mode=rwc".into());
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        format!("sqlite:{home}/.omniterm/{}.db?mode=rwc", env!("CARGO_PKG_NAME"))
+    });
     let pool = sqlx::SqlitePool::connect(&db_url).await.ok();
     if pool.is_none() {
         eprintln!("SKIP: cannot connect to db");
@@ -411,6 +404,12 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
         return;
     }
     let pool = pool.unwrap();
+    // Ensure schema exists (CI connects to a fresh db; locally this is a no-op)
+    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+        eprintln!("SKIP: cannot run migrations: {e}");
+        cleanup(&name);
+        return;
+    }
     // Find or create an omniterm-dev project (matches the dev server's DB)
     let project_id: String = sqlx::query_scalar::<_, String>(
         "SELECT id FROM projects WHERE path LIKE '%OmniTerm%' LIMIT 1",
@@ -457,24 +456,17 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
 
     // 4. Connect to the running dev server's WS endpoint and disconnect.
     let port = std::env::var("OMNITERM_TEST_PORT").unwrap_or_else(|_| "9777".into());
-    let url = format!(
-        "ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24",
-        port, session_id
-    );
+    let _url = format!("ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24", port, session_id);
     // We need the websockets crate; if unavailable, skip the network half
     // and rely on the structural test below.
-    let connected = (|| -> bool {
-        std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
-            .map(|_| true)
-            .unwrap_or(false)
-    })();
+    let connected = std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
+        .map(|_| true)
+        .unwrap_or(false);
     if !connected {
         eprintln!("SKIP: dev server not reachable on :{}", port);
         cleanup(&name);
-        let _ = sqlx::query("DELETE FROM sessions WHERE id = ?")
-            .bind(&session_id)
-            .execute(&pool)
-            .await;
+        let _ =
+            sqlx::query("DELETE FROM sessions WHERE id = ?").bind(&session_id).execute(&pool).await;
         return;
     }
 
@@ -521,10 +513,7 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     );
 
     cleanup(&name);
-    let _ = sqlx::query("DELETE FROM sessions WHERE id = ?")
-        .bind(&session_id)
-        .execute(&pool)
-        .await;
+    let _ = sqlx::query("DELETE FROM sessions WHERE id = ?").bind(&session_id).execute(&pool).await;
     let _ = std::fs::remove_file(&log_path);
     let _ = std::fs::remove_file(&reader_path);
     eprintln!("✓ no EOF/Ctrl+D leak test passed");

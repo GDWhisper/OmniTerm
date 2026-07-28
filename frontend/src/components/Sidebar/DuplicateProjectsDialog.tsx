@@ -112,7 +112,7 @@ export function DuplicateProjectsDialog({
           <button
             onClick={handleClose}
             className="px-4 py-2 text-sm rounded-lg transition-all"
-            style={{ border: '1px solid var(--border-strong)', color: 'var(--text-muted)' }}
+            style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
             onMouseEnter={(e) => {
               e.currentTarget.style.background = 'var(--accent-10)'
               e.currentTarget.style.borderColor = 'var(--accent)'

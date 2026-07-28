@@ -79,10 +79,10 @@ pub async fn find_covering_project(
         match git::discover_worktrees(&project.path).await {
             Ok(worktrees) => {
                 for wt in worktrees {
-                    if let Some(wt_canon) = canonical(Path::new(&wt.path)) {
-                        if wt_canon == new_canon {
-                            return Ok(Some((project.clone(), CoverKind::WorktreeChild)));
-                        }
+                    if let Some(wt_canon) = canonical(Path::new(&wt.path))
+                        && wt_canon == new_canon
+                    {
+                        return Ok(Some((project.clone(), CoverKind::WorktreeChild)));
                     }
                 }
             }
@@ -131,13 +131,7 @@ pub async fn list_workspaces(project: &Project) -> Vec<Workspace> {
             let label = w
                 .branch
                 .clone()
-                .unwrap_or_else(|| {
-                    if w.detached {
-                        "detached".to_string()
-                    } else {
-                        leaf_name
-                    }
-                });
+                .unwrap_or_else(|| if w.detached { "detached".to_string() } else { leaf_name });
 
             Workspace {
                 id: workspace_id(&project.id, &w.path),
@@ -267,10 +261,7 @@ mod tests {
         let projects = vec![dummy_project("p1", &repo_str)];
 
         let result = find_covering_project(&repo, &projects).await.unwrap();
-        assert!(matches!(
-            result,
-            Some((_, CoverKind::ExactPath))
-        ));
+        assert!(matches!(result, Some((_, CoverKind::ExactPath))));
         cleanup(&repo);
     }
 
