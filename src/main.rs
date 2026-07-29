@@ -258,31 +258,33 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("Server is not running (stale PID file removed).");
                 std::process::exit(1);
             }
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
-            }
             #[cfg(windows)]
             {
                 eprintln!("stop is not supported on Windows");
                 std::process::exit(1);
             }
-            for _ in 0..100 {
-                if !pid_exists(pid) {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-            if pid_exists(pid) {
-                eprintln!("Server did not stop within 10s. Killing forcefully.");
-                #[cfg(unix)]
+            // Windows 分支已 exit，后续仅在 unix 编译，避免 unreachable_code
+            #[cfg(unix)]
+            {
                 unsafe {
-                    libc::kill(pid, libc::SIGKILL);
+                    libc::kill(pid, libc::SIGTERM);
                 }
+                for _ in 0..100 {
+                    if !pid_exists(pid) {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                if pid_exists(pid) {
+                    eprintln!("Server did not stop within 10s. Killing forcefully.");
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+                let _ = std::fs::remove_file(&pid_file);
+                eprintln!("Stopped.");
+                Ok(())
             }
-            let _ = std::fs::remove_file(&pid_file);
-            eprintln!("Stopped.");
-            Ok(())
         }
         Commands::Status(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);

@@ -17,8 +17,8 @@ const noHardcodedFontFamily = {
     schema: [],
   },
   create(context) {
-    // utils/fonts.ts 是字体栈的唯一真相源，允许在此定义字面量
-    if (context.filename.includes('utils/fonts.ts')) return {}
+    // utils/fonts.ts 是字体栈的唯一真相源，允许在此定义字面量（Windows 下 filename 是反斜杠，先归一）
+    if (context.filename.replace(/\\/g, '/').includes('utils/fonts.ts')) return {}
     const HARDCODED = /(SFMono|Menlo|Consolas|monospace|JetBrains Mono|Fira Code|Cascadia Code|Press Start 2P|VT323)/i
     function check(node) {
       if (node.type !== 'Literal' || typeof node.value !== 'string') return

@@ -33,7 +33,7 @@ pub fn check_multiplexer() -> Result<()> {
         Err(_) => {
             #[cfg(windows)]
             {
-                if let Ok(_) = which::which("psmux") {
+                if which::which("psmux").is_ok() {
                     debug!("multiplexer (psmux) found in PATH");
                     return Ok(());
                 }

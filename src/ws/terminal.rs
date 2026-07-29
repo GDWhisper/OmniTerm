@@ -417,6 +417,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
+                // clippy 建议把 if 折叠进 match guard，但 guard 内不能 .await，只能保持嵌套
+                #[allow(clippy::collapsible_match)]
                 Ok(Message::Binary(data)) => {
                     if pty_in_tx.send(data.to_vec()).await.is_err() {
                         break;
@@ -693,6 +695,8 @@ async fn handle_external_terminal(
     let read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
+                // clippy 建议把 if 折叠进 match guard，但 guard 内不能 .await，只能保持嵌套
+                #[allow(clippy::collapsible_match)]
                 Ok(Message::Binary(data)) => {
                     if pty_in_tx.send(data.to_vec()).await.is_err() {
                         break;
