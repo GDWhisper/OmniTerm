@@ -22,7 +22,8 @@
       "Bash(cd /home/pax/coding/OmniTerm-dev && cargo check 2>&1 | tail -15)",
       "Bash(gh run:*)",
       "Bash(tmux -V; tmux show-options -g -s escape-time 2>/dev/null; tmux show-options -g escape-time 2>/dev/null; ls ~/.tmux.conf 2>/dev/null && grep -n escape ~/.tmux.conf; which opencode && opencode --version 2>/dev/null | head -1)",
-      "Bash(ls ~/.cargo/registry/src/*/agent-client-protocol-1.2*/ 2>/dev/null | head -30)"
+      "Bash(ls ~/.cargo/registry/src/*/agent-client-protocol-1.2*/ 2>/dev/null | head -30)",
+      "Bash(cd /home/pax/coding/OmniTerm-dev && git --no-pager tag | tail -20; git --no-pager log --oneline -8; git --no-pager log --oneline v0.2.1..HEAD -- src/main.rs src/embedded.rs 2>/dev/null | head -30)"
     ]
   }
 }
