@@ -51,6 +51,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-07-29) `[backend]` 修复 Windows 上浏览用户主目录返回 500：`list_dir` 对单条目 `metadata` 失败（如 Windows 用户目录下 ACL 拒绝访问的遗留 junction「Application Data」「Cookies」等）直接 `?` 传播导致整个目录列表失败，现跳过不可读条目继续列出其余内容；子目录计数循环同样容错（`src/fs/mod.rs`）
+
 ## [0.2.1] - 2026-07-29
 
 ### Fixed

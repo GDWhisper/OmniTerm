@@ -167,8 +167,14 @@ pub async fn list_dir(
     while let Some(entry) = read_dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        let meta = fs::metadata(entry.path()).await?;
-        let meta2 = fs::symlink_metadata(entry.path()).await?;
+        // 单条目 metadata 失败（如 Windows 用户目录下 ACL 拒绝访问的遗留
+        // junction「Application Data」等）只跳过该条目，不让整个列表失败
+        let Ok(meta) = fs::metadata(entry.path()).await else {
+            continue;
+        };
+        let Ok(meta2) = fs::symlink_metadata(entry.path()).await else {
+            continue;
+        };
         let is_symlink = meta2.is_symlink();
         let is_dir = meta.is_dir();
 
@@ -191,7 +197,7 @@ pub async fn list_dir(
         let size = if is_dir {
             let mut count: u64 = 0;
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
-                while let Some(_sub_entry) = sub.next_entry().await? {
+                while let Ok(Some(_sub_entry)) = sub.next_entry().await {
                     count += 1;
                     if count >= MAX_SUBPATHS_COUNT {
                         break;

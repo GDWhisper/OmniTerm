@@ -593,3 +593,21 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 **1. 任何跨进程文本协议的分隔符选型，必须先验证中间层不会改写该字符**。终端多路复用器、shell、日志管道都可能对控制字符做转义/过滤/合并。选分隔符的稳妥顺序：领域内被禁止出现的可打印字符（如 tmux session 名禁 `:`、路径禁 `\0`）> 控制字符（需逐层验证）。
 
 **2. "程序读到的"与"人眼看到的"在含转义序列的输出里可以完全不同**。验证输出格式时用 `xxd`/`od -c` 看字节，而不是肉眼看渲染结果。
+
+---
+
+## 2026-07-29: 批量枚举中单条目错误用 `?` 传播 → Windows 主目录列表 500
+
+**症状**：Windows 正式二进制 `omniterm start` 后，前端浏览 `C:\Users\<name>` 时 `GET /api/v1/system/dirs` 返回 500，整个新建项目目录选择器不可用。Linux/macOS 从未复现。
+
+**根因**：`fs::list_dir` 对每个条目 `fs::metadata(entry.path()).await?`。Windows 用户主目录下存在一批为兼容旧程序保留的遗留 junction（`Application Data`、`Cookies`、`Local Settings` 等），其 ACL 显式 deny 遍历，`metadata` 返回 Access Denied。一个条目失败经 `?` 传播，整个目录列表变成 500。同文件的 `search_recursive` 早已用 `Ok(m) => m, Err(_) => continue` 正确容错——同一模块内两种策略不一致。
+
+**修复**：`list_dir` 的 per-entry `metadata`/`symlink_metadata` 失败改为 `continue` 跳过；子目录计数循环 `next_entry().await?` 改为 `while let Ok(Some(_))`（`src/fs/mod.rs`）。
+
+**可复用的理论**：
+
+**1. 批量枚举 API 中，单条目错误用 `?` 向上传播 = 一颗老鼠屎坏一锅粥**。列目录/批量 stat/递归扫描这类"尽力而为"语义的接口，per-item 错误应跳过（可选记日志），只有容器级错误（read_dir 本身失败）才值得让整个请求失败。写 `?` 前先问：这个错误影响的是整个操作还是当前条目？
+
+**2. "metadata 一定成功"是 Unix 惯性假设，Windows 上不成立**。Windows 用户主目录天然含 ACL deny 的遗留 junction，`GetFileAttributes` 直接 Access Denied。凡是会遍历用户主目录/系统目录的代码，跨平台测试至少要覆盖一次真实 Windows 主目录，CI 的干净 temp 目录测不出来。
+
+**3. 同一模块内已有正确的容错先例时，先对齐再造新逻辑**。`search_recursive` 的 skip-unreadable 模式早已存在，`list_dir` 却用了严格传播——review 时 grep 同类循环的错误处理策略是否一致。
