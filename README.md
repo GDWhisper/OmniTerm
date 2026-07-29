@@ -42,9 +42,14 @@ omniterm                      # 打开 http://localhost:9077
 浏览器里设个初始密码、添加项目目录，就能开会话了——选中助手走聊天模式，留空就是普通终端。升级到新版本只需 `omniterm update`。
 
 <details>
-<summary>其他安装方式（Shell 脚本 / PowerShell / Docker）</summary>
+<summary>其他安装方式（npm / Shell 脚本 / PowerShell / Docker）</summary>
 
 **前置**：tmux 可选（仅普通终端模式需要，聊天模式无需）。Windows 用 [psmux](https://github.com/psmux/psmux) 替代。
+
+```bash
+# npm（需要 Node.js ≥ 18，跨平台）
+npm install -g @gdwhisper/omniterm
+```
 
 ```bash
 # Shell 脚本（Linux/macOS）—— 缺 tmux 会自动装

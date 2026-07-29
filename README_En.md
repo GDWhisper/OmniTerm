@@ -42,9 +42,14 @@ omniterm                      # open http://localhost:9077
 In the browser, set an initial password, add a project directory, and start a session — pick an agent for chat mode, or leave it blank for a plain terminal. Upgrade anytime with `omniterm update`.
 
 <details>
-<summary>Other install methods (Shell script / PowerShell / Docker)</summary>
+<summary>Other install methods (npm / Shell script / PowerShell / Docker)</summary>
 
 **Prerequisites**: tmux is optional (only needed for plain-terminal mode; chat mode works without it). On Windows, use [psmux](https://github.com/psmux/psmux) instead.
+
+```bash
+# npm (requires Node.js >= 18, cross-platform)
+npm install -g @gdwhisper/omniterm
+```
 
 ```bash
 # Shell script (Linux/macOS) — installs tmux automatically if missing

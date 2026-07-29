@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-07-29) `[infra]` 恢复 npm 分发渠道，改用 esbuild 式原生平台分包：主包 `@gdwhisper/omniterm` 仅含 `shim.js`（`require.resolve` 定位平台包 binary + PATH 回退带递归守卫），`optionalDependencies` 精确锁定 4 个含真实 binary 的平台子包（`omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），安装时按 `os`/`cpu` 只拉当前平台——替代原 postinstall 从 GitHub Release 下载的壳包（此前误判「npm 无法原生发布」而下架）。发布经 `release.yml` 的 `npm-publish` job 自动化（tag push 后从 Release 拉资产、`scripts/npm-prepare.sh` staging、幂等发布平台包+主包），并支持 `workflow_dispatch` 补发历史版本（`npm-package/`、`scripts/npm-prepare.sh`、`.github/workflows/release.yml`）
+
 ### Fixed
 
 - (2026-07-29) `[infra]` 修复公开仓 main 的 CI audit job 恒红：`ci.yml` 无条件执行 `scripts/check-doc-index.sh`，但该脚本校验的 AGENTS.md/docs/ 均在 sync 黑名单中不进公开仓，脚本本身也随 main 清理不存在，push main 必然 exit 127；改为脚本存在时才执行（dev 生效、public main 跳过）（`.github/workflows/ci.yml`）

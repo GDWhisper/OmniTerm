@@ -246,20 +246,34 @@ cargo publish --allow-dirty
 - 如果发现问题，只能通过发布新版本修复
 - 确保版本号正确、代码无误、包内容验证通过后再发布
 
-### Step 9：npm 发布
+### Step 9：npm 发布（CI 自动，原生平台分包）
 
-CI 不自动发 npm。手动执行：
+npm 渠道采用 **esbuild 式原生平台分包**：主包 `@gdwhisper/omniterm` 仅含 `shim.js`，`optionalDependencies` 精确锁定 4 个平台子包（`@gdwhisper/omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），每个子包内嵌对应平台 binary，安装时 npm 按 `os`/`cpu` 只拉当前平台。**不再是 postinstall 下载壳包。**
+
+**CI 自动发布**：`release.yml` 的 `npm-publish` job 在 `github-release` 成功后运行——从本次 Release 下载 `omniterm-*` 资产、`scripts/npm-prepare.sh` staging 出主包+平台包、幂等发布（已存在版本自动跳过，平台包先发主包后发）。tag push 即自动发布，**无需手动操作**。
+
+**前置（一次性）**：公开仓 `GDWhisper/OmniTerm` 需配置 secret `NPM_TOKEN`：
+- npm granular access token，scope `@gdwhisper`、权限 Read/Write、**勾选允许创建新包**（4 个平台包首发时尚不存在）
+- `@gdwhisper/omniterm` 及新包发布策略设为「允许 automation/granular token」，否则 CI 报 403 EOTP
+
+**补发已发布版本**（如某版本 Release 已存在但 npm 漏发）：
 
 ```bash
-# 先核对版本号（bump-version.sh 已同步 npm-package/package.json；
-# 历史上曾长期漏更，npm 停在 0.1.4 而项目已 0.2.1）
-grep '"version"' npm-package/package.json
-npm view @gdwhisper/omniterm versions   # 确认目标版本未被占用
-
-npm login --registry https://registry.npmjs.org/
-cd npm-package
-npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
+# 触发 workflow_dispatch，仅 npm-publish 执行（frontend 等构建链被跳过）
+gh workflow run release.yml --repo GDWhisper/OmniTerm -f version=0.2.2
+gh run watch <run-id> --repo GDWhisper/OmniTerm   # 观察发布结果
 ```
+
+**本地验证 staging（可选，发布前自检）**：
+
+```bash
+gh release download vX.Y.Z --repo GDWhisper/OmniTerm --pattern 'omniterm-*' --dir /tmp/otassets
+./scripts/npm-prepare.sh X.Y.Z /tmp/otassets /tmp/otnpm
+# 检查 /tmp/otnpm/main/package.json 含 4 个精确锁定 optionalDependencies
+# 检查 /tmp/otnpm/platform/*/bin/omniterm(.exe) 可执行
+```
+
+> `npm-package/package.json` 只维护主包 version（由 `bump-version.sh` 同步），**不含 optionalDependencies**——后者与平台包 package.json 均由 `scripts/npm-prepare.sh` 在发布时注入生成，避免 4 份文件的版本漂移。
 
 ### Step 10：验证
 
@@ -278,7 +292,7 @@ npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
 | 操作 | 命令 | 说明 |
 |------|------|------|
 | 同步 main | `./scripts/sync-main.sh` | 日常操作，只更新 main 代码，不打 tag |
-| 发布新版本 | `./scripts/sync-main.sh` + `git tag` + `git push public` + `cargo publish` + `npm publish` | 正式发布，需要用户确认 |
+| 发布新版本 | `./scripts/sync-main.sh` + `git tag` + `git push public` + `cargo publish`（npm 由 CI 自动发布） | 正式发布，需要用户确认 |
 
 ---
 
@@ -323,6 +337,12 @@ Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binar
 ### npm publish 403：`You do not have permission to publish "omniterm"`
 
 包名已被占用。当前使用 scoped 包 `@gdwhisper/omniterm`。
+
+### npm publish 403 EOTP / `cannot publish over previously published version`
+
+- **EOTP（要求一次性密码）**：`NPM_TOKEN` 用的是需要 2FA 的普通 token，或包发布策略设为「所有写操作都要 2FA」。改用 granular/automation token，并把 `@gdwhisper/omniterm` 及新包策略设为「允许 automation token」。
+- **首发新平台包失败（cannot create package）**：granular token 未勾选「允许创建新包」。4 个 `@gdwhisper/omniterm-<plat>` 首发时不存在，token 必须有建包权限。
+- **cannot publish over previously published version**：该版本已发布。`npm-publish` job 已做 `npm view` 幂等跳过，正常不会触发；若手动 `npm publish` 撞车，说明版本号未 bump。
 
 ### 公共仓 tag 误推送到私有仓
 
@@ -465,12 +485,14 @@ git remote -v
 
 ## 平台映射表
 
-install.sh 和 install.js 中 OS/架构 → binary 文件名映射：
+install.sh / install.ps1 的 OS/架构 → Release 资产名，以及 npm 平台子包名映射：
 
-| 用户环境 | binary 文件名 |
-|----------|--------------|
-| Linux x86_64 | `omniterm-linux-x86_64` |
-| Linux aarch64 | `omniterm-linux-aarch64` |
-| macOS Apple Silicon | `omniterm-macos-aarch64` |
-| macOS Intel | 不支持（提示用户换 Apple Silicon） |
-| Windows | 不支持（依赖 tmux） |
+| 用户环境 | Release 资产名 | npm 平台子包 |
+|----------|--------------|-------------|
+| Linux x86_64 | `omniterm-linux-x86_64` | `@gdwhisper/omniterm-linux-x64` |
+| Linux aarch64 | `omniterm-linux-aarch64` | `@gdwhisper/omniterm-linux-arm64` |
+| macOS Apple Silicon | `omniterm-macos-aarch64` | `@gdwhisper/omniterm-darwin-arm64` |
+| Windows x86_64 | `omniterm-windows-x86_64.zip` | `@gdwhisper/omniterm-win32-x64` |
+| macOS Intel | 不支持（提示用户换 Apple Silicon） | — |
+
+> 资产名 ↔ npm 平台名的映射同时定义在 `scripts/npm-prepare.sh` 的 `asset_for()`。
