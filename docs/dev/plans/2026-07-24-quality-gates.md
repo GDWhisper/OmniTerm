@@ -109,6 +109,7 @@
 - **cargo fmt 和 clippy 都在 CI 跑**：pre-commit 是最后防线，CI 是公共真相源
 - **`cargo test` 只在 CI 跑，不进 pre-commit**：Rust 测试编译耗时，pre-commit 应保持在 <5s
 - **审计 job 标记 `continue-on-error: true`**：不阻塞合并，但保持可见性
+  - **勘误（2026-07-29）**：实测 job 级 `continue-on-error` 使整个 run 恒绿，审计失败完全不可见（audit 连续 failure 无人察觉）。已移除，audit job 改为阻塞门禁；仅 `pnpm audit` 保留 step 级 `continue-on-error`（上游公告不可控）。见 backlog R02。
 
 ### 3.2 pre-commit hook 设计
 

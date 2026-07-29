@@ -1,4 +1,4 @@
-# cargo-deny 配置 — 许可证 + 安全公告审计（CI audit job，continue-on-error 不阻塞合并）
+# cargo-deny 配置 — 许可证 + 安全公告审计（CI audit job，阻塞门禁）
 # 见 docs/dev/plans/2026-07-24-quality-gates.md §2.2 T06 / R02
 # 项目自身许可证: FSL-1.1-MIT（Functional Source License v1.1, MIT fallback）
 
@@ -18,8 +18,8 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
-    "MPL-2.0",
-    "OpenSSL",
+    # webpki-roots（reqwest → hyper-rustls 递归依赖）：Mozilla 根证书数据的宽松数据许可证
+    "CDLA-Permissive-2.0",
 ]
 # 置信度阈值：低于此值的不确定许可证将标记为 unlicensed
 confidence-threshold = 0.8
