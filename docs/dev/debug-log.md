@@ -611,3 +611,22 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 **2. "metadata 一定成功"是 Unix 惯性假设，Windows 上不成立**。Windows 用户主目录天然含 ACL deny 的遗留 junction，`GetFileAttributes` 直接 Access Denied。凡是会遍历用户主目录/系统目录的代码，跨平台测试至少要覆盖一次真实 Windows 主目录，CI 的干净 temp 目录测不出来。
 
 **3. 同一模块内已有正确的容错先例时，先对齐再造新逻辑**。`search_recursive` 的 skip-unreadable 模式早已存在，`list_dir` 却用了严格传播——review 时 grep 同类循环的错误处理策略是否一致。
+
+## 2026-07-29: direction:rtl 截断容器把路径尾部斜杠 bidi 重排到视觉开头（「DOM 里不存在的字符」）
+
+**症状**：Windows 上 Sidebar 项目路径显示为 `/g:/Codes/ot/OmniTerm-dev`，多一个前导 `/`；但用户查看元素发现 **DOM 文本里根本没有这个斜杠**。
+
+**具体根因**：DB 里项目路径带尾部斜杠（`g:/Codes/ot/OmniTerm-dev/`）；`.proj-path` 样式用 `direction: rtl` + `text-overflow: ellipsis` 实现「省略号在左、优先保留路径尾部」的截断技巧。Unicode 双向算法下，RTL 段落中 LTR 文本 run 首尾的中性字符（`/` `.` `:` `-` 等）采用段落方向，被重排到视觉另一端——尾部 `/` 「跳」到了最左边，看起来像前导斜杠。修复：外层保留 `direction: rtl`（截断效果不变），内容包 `<bdi dir="ltr">` 做双向隔离；同病同修三处（Sidebar `.proj-path`、GitPanel `.git-file-path`、FileManager `.fm-td-time`）。
+
+**诊断过程中的错误（上一轮）**：
+
+1. **同一症状只找了一个根因就收工**：首次报「路径多前导 /」时，在 FileManager 面包屑找到了真实的字符串拼接 bug（无条件 `'/' + joined`）并修复，但没有全局搜索「还有哪些地方渲染路径」——Sidebar 的同症状是完全独立的另一个根因（bidi）。**同一视觉症状在多处出现时，每处都要独立验证根因，不能修好一处就推定全部同源**。
+2. 用户的「DOM 里没有这个字符」观察是决定性线索：它直接排除了所有 JS 字符串拼接路径，剥下只剩 CSS 伪元素（`::before` content）和文本渲染层（bidi、ligature、font shaping）两类嫌疑人。
+
+**可复用的理论**：
+
+**1. 「页面上看得到、DOM 里搜不到」的字符，嫌疑人只有两类**：CSS 生成内容（`::before/::after` 的 `content`）和文本渲染层重排（bidi 算法、连字、RTL/LTR 混排）。按这个分类直接搜 `content:` 和 `direction:`，比盲查字符串拼接快得多。
+
+**2. `direction: rtl` 截断技巧必须配套双向隔离**。用 RTL 实现左侧省略号时，LTR 内容首尾的中性字符会被 bidi 重排（尾部 `/` 变前导、前导 `.` 变尾部、日期段颠倒）。标准做法：容器 `direction: rtl`，内容 `<bdi dir="ltr">`（或 `unicode-bidi: isolate` + `direction: ltr`）。凡新增 RTL 截断样式，隔离是必选项不是优化项。
+
+**3. Unix 路径会掩盖这类 bug，Windows 盘符路径会暴露它**。`/home/…/` 被 bidi 把尾斜杠挪到开头后仍是「斜杠开头」，视觉上正确；`g:/…/` 则立刻露馅。跟平台无关的渲染 bug 可能只在某平台的数据形态下可见——「只在 Windows 复现」不等于「平台相关代码的 bug」。
