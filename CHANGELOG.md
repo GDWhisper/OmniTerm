@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-29) `[frontend]` `[backend]` 修复 Windows 上侧边栏展开项目明显卡顿：前端 `toggleProject` 在 `setExpandedProjects` 前 `await` worktrees/sessions 请求，UI 展开被网络往返阻塞，改为立即展开 + fire-and-forget 加载（未加载时显示 Loading 占位）；后端 `list_workspaces` 串行 spawn 两个 git 子进程（`rev-parse` + `worktree list`，Windows 单次 spawn ~50ms），改用 `tokio::join!` 并发（`frontend/src/components/Sidebar/Sidebar.tsx`、`src/workspaces.rs`）
 - (2026-07-29) `[backend]` `[frontend]` 修复 Windows 上工作区路径显示异常（`/g:/Codes` 多前导 `/`）：后端 `canonicalize()` 透传 verbatim 路径（`\\?\G:\...`）、psmux `pane_current_path` 返回反斜杠路径，新增 `fs::display_path[_str]` 剥离 verbatim 前缀并统一正斜杠，files/sessions API 的 cwd 返回与 adopt 入库路径均归一化；前端面包屑与 `getParentPath` 识别盘符路径，不再无条件加 `/` 前缀，盘符段保持 `G:/` 形式避免 drive-relative 路径（`src/fs/mod.rs`、`src/api/files.rs`、`src/api/sessions.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/utils/path.ts`）
 - (2026-07-29) `[frontend]` 修复 RTL 截断技巧引发的 bidi 重排：`direction: rtl` 容器（左侧省略号截断）中 LTR 文本末尾的中性字符被挪到视觉开头——项目路径尾部 `/` 显示为前导 `/`（`g:/Codes/…/` → `/g:/Codes/…`），三处渲染（Sidebar 项目路径、Git 面板文件路径、文件管理器时间列）内容改用 `<bdi dir="ltr">` 隔离（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/GitPanel/GitPanel.tsx`、`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-07-29) `[infra]` 修复 `dev.ps1` stop/restart 永久挂死：`Get-ProcessTree` 用数组切片模拟出栈，单元素时 `$a[1..0]` 降序切片返回原数组导致死循环，改用 `Queue[int]`；同时修复 Hashtable 用 UInt32 作 key、Int32 查询永远查不到子进程导致进程树杀不干净的问题（`dev.ps1`）
