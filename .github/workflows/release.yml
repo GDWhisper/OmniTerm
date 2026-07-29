@@ -227,7 +227,7 @@ jobs:
             if npm view "$name@$VERSION" version >/dev/null 2>&1; then
               echo "⏭️  $name@$VERSION 已发布，跳过"
             else
-              npm publish "$dir" --access public
+              npm publish "./$dir" --access public
             fi
           done
 
