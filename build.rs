@@ -7,10 +7,10 @@ fn main() {
     if !dist.exists() {
         eprintln!(
             "\n  missing frontend assets (frontend/dist/)\n\
-               \n  Build the frontend first:\n\
-                cd frontend && pnpm install && pnpm build\n\
-               \n  Or install a pre-built binary:\n\
-                curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash\n"
+             \n  Build the frontend first:\n\
+              cd frontend && pnpm install && pnpm build\n\
+             \n  Or install a pre-built binary:\n\
+              curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash\n"
         );
         std::process::exit(1);
     }

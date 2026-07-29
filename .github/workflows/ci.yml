@@ -73,10 +73,9 @@ jobs:
       - run: pnpm build
         working-directory: frontend
 
-  # ── Audit（许可证 + 安全公告 + 文档索引，不阻塞合并）──
+  # ── Audit（许可证 + 安全公告 + 文档索引，阻塞门禁；pnpm audit 仅提示）──
   audit:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 

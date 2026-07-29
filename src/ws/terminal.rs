@@ -63,6 +63,7 @@ const TMUX_ESCAPE_TIME_MS: &str = "10";
 
 /// Build the tmux client command spawned on the PTY: set server-level
 /// escape-time, then create-or-attach the target session.
+#[cfg(unix)]
 fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("tmux");
     cmd.args([
@@ -79,6 +80,54 @@ fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd
+}
+
+/// Windows (psmux) 版本：不可与 set-option 用 `;` 链式组合。
+///
+/// 多实现差异（AGENTS §8）：tmux 的链式命令仍会进入交互 attach；而 psmux
+/// 一旦命令行含多条命令就进入一次性命令模式，执行完直接退出 (exit 0)，
+/// 终端只剩 "[attached]" 提示无任何输出。escape-time 改由
+/// `apply_escape_time_workaround` 单独一次性设置。
+#[cfg(windows)]
+fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("tmux");
+    cmd.args(["new-session", "-A", "-s", tmux_name]);
+    cmd.cwd(cwd);
+    cmd.env("TERM", "xterm-256color");
+    cmd
+}
+
+/// Windows (psmux)：链式命令不可用（见 `build_tmux_attach_cmd`），改用单独的
+/// 一次性命令设置 escape-time。fail-silent：server 未运行时失败不阻断 attach
+/// （随后的 new-session -A 会拉起 server，只是首次使用默认 escape-time）。
+///
+/// 性能：一次性 psmux 命令实测 ~40ms，若每次 attach 都串行等待会拖慢会话
+/// 切换。escape-time 是 server 级持久选项，设成功一次即覆盖全部会话，故：
+/// 成功后置位标志、后续连接直接跳过；失败（如 server 未起）不置位、
+/// 下次连接重试。调用方 fire-and-forget，不阻塞 attach 链路。
+///
+/// 已知边缘：psmux server 后续被杀重启后标志不会重置，新 server 回到默认
+/// 500ms（仅影响 ESC 手感，不破坏功能；重启后端即恢复）。
+#[cfg(windows)]
+async fn apply_escape_time_workaround() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static APPLIED: AtomicBool = AtomicBool::new(false);
+    if APPLIED.load(Ordering::Relaxed) {
+        return;
+    }
+    match tokio::process::Command::new("tmux")
+        .args(["set-option", "-s", "escape-time", TMUX_ESCAPE_TIME_MS])
+        .output()
+        .await
+    {
+        Ok(out) if out.status.success() => {
+            APPLIED.store(true, Ordering::Relaxed);
+        }
+        Ok(out) => {
+            debug!("escape-time set-option failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Err(e) => debug!("escape-time set-option spawn failed: {}", e),
+    }
 }
 
 /// WebSocket upgrade handler for terminal connections.
@@ -161,6 +210,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
     info!("terminal PTY initial size: {}x{} for session={}", cols, rows, session_id);
+
+    #[cfg(windows)]
+    tokio::spawn(apply_escape_time_workaround());
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -417,6 +469,8 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
+                // clippy 建议把 if 折叠进 match guard，但 guard 内不能 .await，只能保持嵌套
+                #[allow(clippy::collapsible_match)]
                 Ok(Message::Binary(data)) => {
                     if pty_in_tx.send(data.to_vec()).await.is_err() {
                         break;
@@ -543,6 +597,9 @@ async fn handle_external_terminal(
     let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
     info!("terminal PTY initial size: {}x{} for tmux={}", cols, rows, tmux_name);
+
+    #[cfg(windows)]
+    tokio::spawn(apply_escape_time_workaround());
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -693,6 +750,8 @@ async fn handle_external_terminal(
     let read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
+                // clippy 建议把 if 折叠进 match guard，但 guard 内不能 .await，只能保持嵌套
+                #[allow(clippy::collapsible_match)]
                 Ok(Message::Binary(data)) => {
                     if pty_in_tx.send(data.to_vec()).await.is_err() {
                         break;

@@ -712,11 +712,18 @@ export function FileManager() {
 
   // Breadcrumb segments — always in original order; RTL direction only changes
   // alignment (right) and clip side (left), never reverses LTR character flow.
+  // Windows drive-letter paths ("G:/Codes") have no leading '/'; prepending one
+  // would both display "/G:/Codes" and break navigation (not absolute on Windows).
+  const isWinPath = /^[A-Za-z]:/.test(cwd)
   const bcSegments = cwd.split('/').filter(Boolean)
-  const bcItems = bcSegments.map((s, i) => ({
-    name: s,
-    path: '/' + bcSegments.slice(0, i + 1).join('/')
-  }))
+  const bcItems = bcSegments.map((s, i) => {
+    const joined = bcSegments.slice(0, i + 1).join('/')
+    return {
+      name: s,
+      // Drive segment alone ("G:") is drive-relative on Windows; keep it rooted ("G:/")
+      path: isWinPath ? (i === 0 ? joined + '/' : joined) : '/' + joined
+    }
+  })
 
   return (
     <div
@@ -848,8 +855,9 @@ export function FileManager() {
             style={{ direction: bcOverflow ? 'rtl' : 'ltr', flex: 1, minWidth: 0 }}
             title={cwd}
           >
-            {bcItems.flatMap((item) => [
-              <span key={`sep-${item.path}`} className="fm-bc-sep">/</span>,
+            {bcItems.flatMap((item, i) => [
+              // No separator before the drive segment on Windows ("G:/Codes", not "/G:/Codes")
+              ...(isWinPath && i === 0 ? [] : [<span key={`sep-${item.path}`} className="fm-bc-sep">/</span>]),
               <span key={item.path} className={`fm-bc-seg ${dropTarget === item.path ? 'fm-bc-seg-drop' : ''}`} data-drop-path={item.path} onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
             ])}
           </div>
@@ -980,7 +988,8 @@ export function FileManager() {
                           )}
                         </div>
                       </td>
-                      <td className="fm-td-time" title={formatTime(f.mtime)}>{formatTime(f.mtime)}</td>
+                      {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免日期中的 - : 被 bidi 重排 */}
+                      <td className="fm-td-time" title={formatTime(f.mtime)}><bdi dir="ltr">{formatTime(f.mtime)}</bdi></td>
                       <td className="fm-td-size" title={isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}>{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span

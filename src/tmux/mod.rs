@@ -21,6 +21,15 @@ pub const MULTIPLEXER_INSTALL_HINTS: &[&str] =
 pub const MULTIPLEXER_INSTALL_HINTS: &[&str] =
     &["winget install psmux", "scoop install psmux", "cargo install psmux"];
 
+/// User-facing name of the platform's terminal multiplexer. Windows 用 psmux
+/// 平替 tmux（psmux 同时以 `tmux` 别名安装，因此不能靠 binary 名区分，
+/// 按平台编译期确定）。前端会话创建列表等 UI 文案使用此名称。
+#[cfg(unix)]
+pub const MULTIPLEXER_NAME: &str = "tmux";
+
+#[cfg(windows)]
+pub const MULTIPLEXER_NAME: &str = "psmux";
+
 /// Check whether a terminal multiplexer (tmux/psmux) is available in PATH.
 ///
 /// Returns `Ok(())` if found, or an error with platform-specific install hints.
@@ -33,7 +42,7 @@ pub fn check_multiplexer() -> Result<()> {
         Err(_) => {
             #[cfg(windows)]
             {
-                if let Ok(_) = which::which("psmux") {
+                if which::which("psmux").is_ok() {
                     debug!("multiplexer (psmux) found in PATH");
                     return Ok(());
                 }

@@ -97,6 +97,8 @@ export function Sidebar() {
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
+  const multiplexer = useAppStore((s) => s.multiplexer)
+  const setMultiplexer = useAppStore((s) => s.setMultiplexer)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
@@ -540,10 +542,11 @@ export function Sidebar() {
     api.systemInfo().then((info) => {
       setHomeDir(info.home_dir)
       setProjPath(info.home_dir)
+      if (info.multiplexer) setMultiplexer(info.multiplexer)
     }).catch(() => {
       // fallback: leave projPath empty, user fills it in
     })
-  }, [])
+  }, [setMultiplexer])
 
   // Reset browse state when the create-project modal opens
   useEffect(() => {
@@ -585,15 +588,15 @@ export function Sidebar() {
   // }, [])
 
   // Toggle project expansion
-  const toggleProject = async (projectId: string) => {
+  const toggleProject = (projectId: string) => {
     const newSet = new Set(expandedProjects)
     if (newSet.has(projectId)) {
       newSet.delete(projectId)
     } else {
       newSet.add(projectId)
-      // Load worktrees + sessions in parallel so per-worktree session counts
-      // are correct at expand time, not only after a worktree is activated.
-      await Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
+      // Fire-and-forget：展开立即生效，不等网络往返（Windows 上 git spawn 慢，
+      // await 会让展开卡 100ms+）。未加载时渲染侧显示 loading 占位。
+      void Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
     setExpandedProjects(newSet)
   }
@@ -1196,6 +1199,8 @@ export function Sidebar() {
         ) : (
           projects.map((proj) => {
             const isExpanded = expandedProjects.has(proj.id)
+            // undefined = 尚未加载（显示 loading），[] = 已加载但为空
+            const wtLoaded = worktrees[proj.id] !== undefined
             const wtList = worktrees[proj.id] || []
             const projAgg = aggregateStatus(
               wtList.flatMap((wt) => sessionsForWorktree(proj.id, wt.path)),
@@ -1228,7 +1233,8 @@ export function Sidebar() {
                   </span>
                   <div className="proj-info">
                     <span className="proj-name">{proj.name}</span>
-                    <span className="proj-path">{proj.path}</span>
+                    {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免尾部 / 被 bidi 挪到开头 */}
+                    <span className="proj-path"><bdi dir="ltr">{proj.path}</bdi></span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
@@ -1297,7 +1303,9 @@ export function Sidebar() {
                   <div className="sidebar-project-body">
                     {wtList.length === 0 ? (
                       <div className="px-2 py-1.5" style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                        {t('sidebar.noWorktrees') ?? 'No worktrees found'}
+                        {wtLoaded
+                          ? (t('sidebar.noWorktrees') ?? 'No worktrees found')
+                          : (t('sidebar.loading') ?? 'Loading...')}
                       </div>
                     ) : (
                       wtList.map((wt) => {
@@ -1947,7 +1955,7 @@ export function Sidebar() {
               style={inputStyle}
             />
             <p className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-              {t('agentPicker.hint')}
+              {t('agentPicker.hint', { mux: multiplexer })}
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">

@@ -246,14 +246,23 @@ async fn list_files(
         if !base.exists() {
             return (
                 StatusCode::OK,
-                Json(json!({ "files": [], "cwd": cwd, "is_outside_workspace": true })),
+                Json(
+                    json!({ "files": [], "cwd": fs::display_path_str(&cwd), "is_outside_workspace": true }),
+                ),
             );
         }
 
-        // Determine if CWD is outside workspace
+        // Determine if CWD is outside workspace.
+        // canonicalize 两侧后再比较，避免 Windows 上分隔符（G:\ vs g:/）与大小写差异误判
         let is_outside =
             if let Some(ws_root) = resolve_session_workspace_root(&state, session_id).await {
-                !cwd.starts_with(&ws_root)
+                match (
+                    std::path::Path::new(&cwd).canonicalize(),
+                    std::path::Path::new(&ws_root).canonicalize(),
+                ) {
+                    (Ok(c), Ok(r)) => !c.starts_with(&r),
+                    _ => !cwd.starts_with(&ws_root),
+                }
             } else {
                 false
             };
@@ -276,7 +285,7 @@ async fn list_files(
             Ok(entries) => (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside }),
+                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside }),
                 ),
             ),
             Err(e) => {
@@ -296,7 +305,9 @@ async fn list_files(
         if !base.exists() {
             return (
                 StatusCode::OK,
-                Json(json!({ "files": [], "cwd": root, "is_outside_workspace": false })),
+                Json(
+                    json!({ "files": [], "cwd": fs::display_path_str(&root), "is_outside_workspace": false }),
+                ),
             );
         }
 
@@ -323,7 +334,7 @@ async fn list_files(
             Ok(entries) => (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": entries, "cwd": canonical.to_string_lossy(), "is_outside_workspace": is_outside }),
+                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside }),
                 ),
             ),
             Err(e) => {

@@ -11,10 +11,14 @@
  * - '/a/b'       → '/a'
  * - '/a/b/'      → '/a'
  * - 'a/b'        → 'a'  (relative paths work too)
+ * - 'G:/Codes'   → 'G:/' (Windows drive root stays rooted; bare 'G:' is drive-relative)
+ * - 'G:/'        → ''  (drive root has no parent)
  */
 export function getParentPath(path: string): string {
   if (!path || path === '/') return ''
   const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
+  if (/^[A-Za-z]:$/.test(trimmed)) return ''
   const idx = trimmed.lastIndexOf('/')
-  return idx <= 0 ? '' : trimmed.slice(0, idx)
+  const parent = idx <= 0 ? '' : trimmed.slice(0, idx)
+  return /^[A-Za-z]:$/.test(parent) ? parent + '/' : parent
 }

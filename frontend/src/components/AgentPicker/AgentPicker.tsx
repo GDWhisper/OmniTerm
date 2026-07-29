@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAgentStore } from '../../stores/agentStore'
+import { useAppStore } from '../../stores/appStore'
 
 interface AgentPickerProps {
   /** Selected agent id, or null for the tmux runtime (no agent). */
@@ -21,6 +22,7 @@ export function AgentPicker({
   style,
 }: AgentPickerProps) {
   const { t } = useTranslation()
+  const multiplexer = useAppStore((s) => s.multiplexer)
   const agents = useAgentStore((s) => s.agents)
   const loaded = useAgentStore((s) => s.loaded)
   const loadAgents = useAgentStore((s) => s.loadAgents)
@@ -37,7 +39,8 @@ export function AgentPicker({
       style={style}
     >
       <optgroup label={t('agentPicker.groupTerminal')}>
-        <option value="">{t('agentPicker.none')}</option>
+        {/* Multiplexer name comes from the backend (tmux on unix, psmux on Windows) */}
+        <option value="">{multiplexer}</option>
       </optgroup>
       {agents.length > 0 && (
         <optgroup label={t('agentPicker.groupChat')}>

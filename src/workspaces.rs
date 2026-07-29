@@ -103,12 +103,15 @@ pub async fn find_covering_project(
 /// If the project path is a git repo, discovers worktrees.
 /// Otherwise, returns a single workspace (the project path itself).
 pub async fn list_workspaces(project: &Project) -> Vec<Workspace> {
-    let is_git = git::is_git_repo(&project.path).await;
+    // 并发 spawn 两个 git 子进程：Windows 上单次 spawn ~50ms，串行会让
+    // 侧边栏展开延迟翻倍。非 git 目录时 discover_worktrees 失败，结果丢弃。
+    let (is_git, worktrees_res) =
+        tokio::join!(git::is_git_repo(&project.path), git::discover_worktrees(&project.path));
     if !is_git {
         return vec![single_workspace(project, false)];
     }
 
-    let worktrees = match git::discover_worktrees(&project.path).await {
+    let worktrees = match worktrees_res {
         Ok(wt) => wt,
         Err(e) => {
             tracing::warn!("failed to discover worktrees for {}: {}", project.path, e);
@@ -200,16 +203,11 @@ mod tests {
 
     /// Add a worktree to an existing repo on a new branch.
     async fn add_worktree(repo: &Path, branch: &str, target: &Path) {
+        // Windows 上 canonicalize 产生的 verbatim 路径（\\?\C:\...）git 无法打开，
+        // 先用 display_path 剥掉前缀再传给 git CLI
+        let target_str = crate::fs::display_path(target);
         let status = Command::new("git")
-            .args([
-                "-C",
-                repo.to_str().unwrap(),
-                "worktree",
-                "add",
-                "-b",
-                branch,
-                target.to_str().unwrap(),
-            ])
+            .args(["-C", repo.to_str().unwrap(), "worktree", "add", "-b", branch, &target_str])
             .env("GIT_AUTHOR_NAME", "test")
             .env("GIT_AUTHOR_EMAIL", "test@test")
             .env("GIT_COMMITTER_NAME", "test")
@@ -335,6 +333,8 @@ mod tests {
         cleanup(&other);
     }
 
+    // Unix 专属：Windows 无 std::os::unix::fs::symlink（且建 symlink 需特权）
+    #[cfg(unix)]
     #[tokio::test]
     async fn symlink_path_canonicalized_to_match() {
         let repo = make_git_repo("symlink").await;

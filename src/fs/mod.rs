@@ -138,10 +138,30 @@ fn to_timestamp(time: &SystemTime) -> u64 {
     time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
 }
 
-/// Normalize path separators to forward slashes.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
-fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+/// Normalize a path for API responses / frontend display.
+///
+/// On Windows, `canonicalize()` returns verbatim paths (`\\?\G:\...`) and
+/// psmux reports backslash paths (`G:\...`); the frontend splits paths on
+/// `/`. Strip the verbatim prefix and use forward slashes so Windows paths
+/// come out as `G:/...`. Unix paths pass through unchanged.
+pub fn display_path(path: &Path) -> String {
+    display_path_str(&path.to_string_lossy())
+}
+
+/// String variant of [`display_path`] for paths already held as strings
+/// (e.g. pane CWD from the multiplexer).
+pub fn display_path_str(path: &str) -> String {
+    if !cfg!(windows) {
+        return path.to_string();
+    }
+    let s = path.replace('\\', "/");
+    if let Some(rest) = s.strip_prefix("//?/UNC/") {
+        format!("//{rest}")
+    } else if let Some(rest) = s.strip_prefix("//?/") {
+        rest.to_string()
+    } else {
+        s
+    }
 }
 
 /// Sort key for directory listing.
@@ -167,8 +187,14 @@ pub async fn list_dir(
     while let Some(entry) = read_dir.next_entry().await? {
         let name = entry.file_name().to_string_lossy().to_string();
 
-        let meta = fs::metadata(entry.path()).await?;
-        let meta2 = fs::symlink_metadata(entry.path()).await?;
+        // 单条目 metadata 失败（如 Windows 用户目录下 ACL 拒绝访问的遗留
+        // junction「Application Data」等）只跳过该条目，不让整个列表失败
+        let Ok(meta) = fs::metadata(entry.path()).await else {
+            continue;
+        };
+        let Ok(meta2) = fs::symlink_metadata(entry.path()).await else {
+            continue;
+        };
         let is_symlink = meta2.is_symlink();
         let is_dir = meta.is_dir();
 
@@ -191,7 +217,7 @@ pub async fn list_dir(
         let size = if is_dir {
             let mut count: u64 = 0;
             if let Ok(mut sub) = fs::read_dir(entry.path()).await {
-                while let Some(_sub_entry) = sub.next_entry().await? {
+                while let Ok(Some(_sub_entry)) = sub.next_entry().await {
                     count += 1;
                     if count >= MAX_SUBPATHS_COUNT {
                         break;
@@ -450,5 +476,20 @@ mod tests {
     fn test_sanitize_null_byte() {
         let base = Path::new("/tmp/omniterm_test");
         assert!(sanitize_path(base, "foo\0bar").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_display_path_windows() {
+        assert_eq!(display_path_str(r"\\?\G:\Codes\ot"), "G:/Codes/ot");
+        assert_eq!(display_path_str(r"G:\Codes\ot"), "G:/Codes/ot");
+        assert_eq!(display_path_str(r"\\?\UNC\server\share\x"), "//server/share/x");
+        assert_eq!(display_path_str("G:/already/normal"), "G:/already/normal");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_display_path_unix_passthrough() {
+        assert_eq!(display_path_str("/home/user/proj"), "/home/user/proj");
     }
 }

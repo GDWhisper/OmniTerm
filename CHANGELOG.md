@@ -51,6 +51,22 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.2] - 2026-07-29
+
+### Changed
+
+- (2026-07-29) `[frontend]` `[backend]` `[api]` Windows 上创建会话弹窗的终端会话类型显示为「psmux」（Windows 用 psmux 平替 tmux，两者无法在运行时区分，按平台编译期确定）：后端新增 `MULTIPLEXER_NAME` 常量经 `GET /system/info` 下发，前端 appStore 持有并在 AgentPicker 选项与提示文案中展示（`src/tmux/mod.rs`、`src/api/system.rs`、`frontend/src/stores/appStore.ts`、`frontend/src/components/AgentPicker/AgentPicker.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+
+### Fixed
+
+- (2026-07-29) `[backend]` 修复 Windows 上终端会话只显示「已附加」无 shell 提示符、完全无法输入：psmux 遇 `;` 链式多命令会进入一次性命令模式执行完 exit 0 不 attach（真 tmux 则照常进入交互 attach），`build_tmux_attach_cmd` 按平台拆分：Windows 只跑纯 `new-session -A`，escape-time 改为 attach 前单独一次性 `set-option` 设置；Unix 链式命令保持不变（`src/ws/terminal.rs`）
+- (2026-07-29) `[backend]` 降低 Windows 会话切换延迟：escape-time workaround 原为每次 WS 连接串行 `await` 一条 psmux 命令（实测 ~40ms 纯开销），改为 `tokio::spawn` fire-and-forget + 成功一次后 AtomicBool 缓存跳过（escape-time 是 server 级持久选项，设一次即全局生效）；剩余 ~100-200ms 为 Windows 固有成本（ConPTY 创建 + 进程 spawn + psmux DSR 探针/全屏重绘），基线数据见 `docs/architecture/backend.md`（`src/ws/terminal.rs`）
+- (2026-07-29) `[frontend]` `[backend]` 修复 Windows 上侧边栏展开项目明显卡顿：前端 `toggleProject` 在 `setExpandedProjects` 前 `await` worktrees/sessions 请求，UI 展开被网络往返阻塞，改为立即展开 + fire-and-forget 加载（未加载时显示 Loading 占位）；后端 `list_workspaces` 串行 spawn 两个 git 子进程（`rev-parse` + `worktree list`，Windows 单次 spawn ~50ms），改用 `tokio::join!` 并发（`frontend/src/components/Sidebar/Sidebar.tsx`、`src/workspaces.rs`）
+- (2026-07-29) `[backend]` `[frontend]` 修复 Windows 上工作区路径显示异常（`/g:/Codes` 多前导 `/`）：后端 `canonicalize()` 透传 verbatim 路径（`\\?\G:\...`）、psmux `pane_current_path` 返回反斜杠路径，新增 `fs::display_path[_str]` 剥离 verbatim 前缀并统一正斜杠，files/sessions API 的 cwd 返回与 adopt 入库路径均归一化；前端面包屑与 `getParentPath` 识别盘符路径，不再无条件加 `/` 前缀，盘符段保持 `G:/` 形式避免 drive-relative 路径（`src/fs/mod.rs`、`src/api/files.rs`、`src/api/sessions.rs`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/utils/path.ts`）
+- (2026-07-29) `[frontend]` 修复 RTL 截断技巧引发的 bidi 重排：`direction: rtl` 容器（左侧省略号截断）中 LTR 文本末尾的中性字符被挪到视觉开头——项目路径尾部 `/` 显示为前导 `/`（`g:/Codes/…/` → `/g:/Codes/…`），三处渲染（Sidebar 项目路径、Git 面板文件路径、文件管理器时间列）内容改用 `<bdi dir="ltr">` 隔离（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/GitPanel/GitPanel.tsx`、`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-07-29) `[infra]` 修复 `dev.ps1` stop/restart 永久挂死：`Get-ProcessTree` 用数组切片模拟出栈，单元素时 `$a[1..0]` 降序切片返回原数组导致死循环，改用 `Queue[int]`；同时修复 Hashtable 用 UInt32 作 key、Int32 查询永远查不到子进程导致进程树杀不干净的问题（`dev.ps1`）
+- (2026-07-29) `[backend]` 修复 Windows 上浏览用户主目录返回 500：`list_dir` 对单条目 `metadata` 失败（如 Windows 用户目录下 ACL 拒绝访问的遗留 junction「Application Data」「Cookies」等）直接 `?` 传播导致整个目录列表失败，现跳过不可读条目继续列出其余内容；子目录计数循环同样容错（`src/fs/mod.rs`）
+
 ## [0.2.1] - 2026-07-29
 
 ### Fixed

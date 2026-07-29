@@ -389,7 +389,7 @@ async fn get_session_cwd(
     };
 
     match tmux::pane_cwd(&tmux_name).await {
-        Ok(cwd) => (StatusCode::OK, Json(json!({ "cwd": cwd }))),
+        Ok(cwd) => (StatusCode::OK, Json(json!({ "cwd": crate::fs::display_path_str(&cwd) }))),
         Err(e) => {
             error!("pane_cwd failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -545,7 +545,7 @@ async fn list_external_sessions(State(state): State<AppState>) -> impl IntoRespo
             attached: s.attached,
             windows: s.windows,
             created: s.created,
-            cwd: s.cwd,
+            cwd: s.cwd.map(|c| crate::fs::display_path_str(&c)),
             attention_reason: s.attention_reason,
             agent_event: s.agent_event,
             agent_nonce: s.agent_nonce,
@@ -588,10 +588,13 @@ async fn adopt_session(
         return (StatusCode::CONFLICT, Json(json!({ "error": "session already adopted" })));
     }
 
-    // Resolve CWD; fall back to HOME if pane_cwd fails
+    // Resolve CWD; fall back to HOME if pane_cwd fails.
+    // display_path_str: Windows 下 pane_cwd 返回反斜杠路径，统一成正斜杠再入库，
+    // 否则与 worktree 路径（git 输出，正斜杠）永不匹配，会变成孤儿会话
     let tmux_name = req.tmux_name.clone();
     let workspace_path = tmux::pane_cwd(&tmux_name)
         .await
+        .map(|c| crate::fs::display_path_str(&c))
         .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
     let id = Uuid::new_v4().to_string();
