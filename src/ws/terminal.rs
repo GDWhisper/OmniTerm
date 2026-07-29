@@ -100,18 +100,33 @@ fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
 /// Windows (psmux)：链式命令不可用（见 `build_tmux_attach_cmd`），改用单独的
 /// 一次性命令设置 escape-time。fail-silent：server 未运行时失败不阻断 attach
 /// （随后的 new-session -A 会拉起 server，只是首次使用默认 escape-time）。
+///
+/// 性能：一次性 psmux 命令实测 ~40ms，若每次 attach 都串行等待会拖慢会话
+/// 切换。escape-time 是 server 级持久选项，设成功一次即覆盖全部会话，故：
+/// 成功后置位标志、后续连接直接跳过；失败（如 server 未起）不置位、
+/// 下次连接重试。调用方 fire-and-forget，不阻塞 attach 链路。
+///
+/// 已知边缘：psmux server 后续被杀重启后标志不会重置，新 server 回到默认
+/// 500ms（仅影响 ESC 手感，不破坏功能；重启后端即恢复）。
 #[cfg(windows)]
 async fn apply_escape_time_workaround() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static APPLIED: AtomicBool = AtomicBool::new(false);
+    if APPLIED.load(Ordering::Relaxed) {
+        return;
+    }
     match tokio::process::Command::new("tmux")
         .args(["set-option", "-s", "escape-time", TMUX_ESCAPE_TIME_MS])
         .output()
         .await
     {
-        Ok(out) if !out.status.success() => {
+        Ok(out) if out.status.success() => {
+            APPLIED.store(true, Ordering::Relaxed);
+        }
+        Ok(out) => {
             debug!("escape-time set-option failed: {}", String::from_utf8_lossy(&out.stderr));
         }
         Err(e) => debug!("escape-time set-option spawn failed: {}", e),
-        _ => {}
     }
 }
 
@@ -197,7 +212,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     info!("terminal PTY initial size: {}x{} for session={}", cols, rows, session_id);
 
     #[cfg(windows)]
-    apply_escape_time_workaround().await;
+    tokio::spawn(apply_escape_time_workaround());
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -584,7 +599,7 @@ async fn handle_external_terminal(
     info!("terminal PTY initial size: {}x{} for tmux={}", cols, rows, tmux_name);
 
     #[cfg(windows)]
-    apply_escape_time_workaround().await;
+    tokio::spawn(apply_escape_time_workaround());
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();

@@ -650,3 +650,26 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 **2. 「退出码 0 + 无输出」是「命令被理解成另一种模式」的特征签名**。崩溃/找不到命令会非零退出，而 exit 0 说明程序认为自己正确完成了工作——它执行的「工作」和你以为的不是同一个。此时该做的是逐项剔除参数找到触发模式切换的那一个，而不是查崩溃日志。
 
 **3. 诊断交互式程序必须复制它的真实运行环境（TTY/ConPTY）**。很多程序检测 `isatty` 后切换行为，管道下的表现与真实链路可以完全不同；若目标程序还会发终端探针（DSR/DA 查询），诊断工具还得扮演终端回复它，否则看到的是「卡死」假象。
+
+## 2026-07-29: Windows 会话切换可见延迟（「已连接」横幅停留）——热路径上每连接串行 spawn 子进程
+
+**症状**：Windows+psmux 切换会话时能看到 `[已连接][已附加到 lt_xxx]` 横幅停留片刻才出现会话内容；Linux+tmux 上同一横幅瞬间被重绘覆盖，感知不到。
+
+**具体根因**（两部分叠加）：
+
+1. **自身可消除开销 ~40ms**：上一轮修复引入的 `apply_escape_time_workaround` 每次 WS 连接都串行 `await` 一条一次性 psmux 命令，实测 ~35-40ms。但 escape-time 是 server 级持久选项，设成功一次即全局生效。修复：static AtomicBool 成功后缓存跳过 + 调用方 `tokio::spawn` fire-and-forget（失败如 server 未起不置位，下次重试）。
+2. **Windows 固有成本 ~100-200ms**：每次切换 = 新建 WS + 重新 spawn psmux client。portable-pty 探针实测分解：ConPTY openpty ~8ms、spawn ~26ms、attach 首字节 ~18ms、DSR 探针往返 + 全屏重绘 ~45-140ms。Linux 全链路 <10ms，所以同一横幅无感知。彻底消除需保活 client/连接池，属 pty-engine Phase 5 范围，不在 tmux 冻结代码内做。
+
+**诊断过程的弯路**：
+
+1. **先被文案带偏**：grep「恢复会话」命中的是 ACP chat 的 `chat.session.restore`，与终端无关。用户描述的文案未必是目标链路的文案，定位前先确认文案属于哪个模块，再倒推用户真实感知的是什么（这里是终端横幅→重绘的空窗期）。
+2. **先怀疑了控制模式**：以为 psmux 不支持 `-C` 导致 `ensure_session` 每次重建。查后端日志证实 psmux 控制模式正常产生 `%output`，且 `SessionActivityMonitor` 按会话名 HashMap 缓存只建一次——看日志时间戳比读代码推测更快排除嫌疑。
+3. **删 workaround 前先验证它是否还必要**：用 `tmux -L probe_default` 独立 socket 起干净 server 验证 psmux 默认 escape-time 也是 500ms → workaround 必须保留，只能降频不能删。
+
+**可复用的理论**：
+
+**1. 热路径上每次串行 spawn 子进程，先量化单次成本再决定放哪里**。Windows 进程 spawn ~30-50ms，是 Linux 习惯（fork+exec ~1-5ms）的盲区；同一代码在 Linux 上「免费」的每请求子进程调用，在 Windows 上直接变成可感知延迟（本文档 `list_workspaces` 串行 git spawn 是同一模式的另一例）。
+
+**2. 幂等的、目标状态持久的副作用 → 「成功一次后缓存跳过 + fire-and-forget」模式**。判断三问：目标状态是否持久（server 级选项 vs 会话级）？失败能否下次重试（不置位即可）？调用方是否真需要等结果（ESC 手感优化不阻塞 attach）？三者都成立就不该在热路径上 await。
+
+**3. 「只在某平台慢」的体感问题，先分解链路各段耗时再下结论**。用临时探针（复制真实链路：openpty→spawn→首字节→重绘完成逐段计时）把「感觉慢」变成数字表，才能区分可消除开销（自己加的 40ms）与固有成本（平台 100-200ms），避免在固有成本上白费力气或把可消除开销当成命运接受。

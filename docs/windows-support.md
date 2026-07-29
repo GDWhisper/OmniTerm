@@ -29,6 +29,8 @@ Windows uses psmux (see link above) as a drop-in tmux replacement (winget instal
 
 **Chained commands do not attach**: real tmux enters interactive attach after executing `cmd1 \; cmd2` chains; psmux treats any multi-command invocation as one-shot command mode and exits 0 without attaching. The backend therefore spawns a plain `tmux new-session -A -s <name>` on Windows and applies the `escape-time` workaround via a separate one-shot `set-option` call beforehand (see `docs/architecture/backend.md` §Terminal Input Path).
 
+**Session switch latency**: switching sessions respawns the psmux client on a fresh ConPTY, costing ~100-200ms (process spawn + DSR probe round trip + full redraw) vs <10ms on Linux/tmux. The `[connected]` banner is briefly visible before the screen redraw; this is intrinsic Windows process-creation cost, not a hang.
+
 ### ConPTY Intermediate Process
 
 On Windows, the `pane_pid` reported by psmux points to a ConPTY host process (`conhost.exe` or `OpenConsole.exe`), not the shell directly. Agent CLI processes (e.g. `claude.exe`) run 1–3 levels below this host process. OmniTerm's `walk_process_tree` handles this by recursively scanning child processes.

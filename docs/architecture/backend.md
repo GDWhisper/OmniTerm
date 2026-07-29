@@ -185,7 +185,9 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 **tmux escape-time 行为差异**：tmux 收到孤立 `\x1b` 后会等待 `escape-time`（默认 500ms）以区分 Alt/功能键序列。后果：1) 单次 ESC 延迟 500ms 才转发给 pane；2) 窗口内连按两次 ESC 被合并为 `\x1b\x1b`（Alt+ESC）一次转发。对需要连按 ESC 中止任务的 agent TUI（如 opencode 的 "esc again to interrupt"）这等于 ESC 完全失效。因此 `ws/terminal.rs` 的 `build_tmux_attach_cmd`（unix 版）在 spawn tmux client 时链式执行 `set-option -s escape-time 10 \; new-session -A`（server 级选项，一次生效覆盖全部会话；取 10ms 而非 0 以免慢速链路上转义序列被拆断）。
 
-**psmux 链式命令行为差异（Windows，踩坑）**：Windows 上 tmux 由 psmux 平替（winget 安装同时提供 `tmux.exe`/`psmux.exe`/`pmux.exe` 三个别名，`-V` 均输出 `tmux 3.3.6`，无法在运行时靠 binary 名或版本号区分实现）。真 tmux 的 `;` 链式多命令执行完后照常进入交互 attach；**psmux 一旦命令行含多条命令就进入一次性命令模式，执行完直接 exit 0，不 attach**——终端只剩 "attached" 提示、无 shell 输出。因此 `build_tmux_attach_cmd` 按平台 cfg 拆分：windows 版只跑纯 `new-session -A -s <name>`（create-or-attach 语义 psmux 支持正常），escape-time 改由 attach 前单独一次性 `tmux set-option -s escape-time 10` 设置（fail-silent）。另：psmux attach 时会先发 DSR 光标探针 `\x1b[6n` 并等待终端回复（xterm.js 会自动回 `\x1b[1;1R`），在非交互管道下 attach 类命令只打印版本号即退出，诊断时必须走真实 ConPTY 链路。
+**psmux 链式命令行为差异（Windows，踩坑）**：Windows 上 tmux 由 psmux 平替（winget 安装同时提供 `tmux.exe`/`psmux.exe`/`pmux.exe` 三个别名，`-V` 均输出 `tmux 3.3.6`，无法在运行时靠 binary 名或版本号区分实现）。真 tmux 的 `;` 链式多命令执行完后照常进入交互 attach；**psmux 一旦命令行含多条命令就进入一次性命令模式，执行完直接 exit 0，不 attach**——终端只剩 "attached" 提示、无 shell 输出。因此 `build_tmux_attach_cmd` 按平台 cfg 拆分：windows 版只跑纯 `new-session -A -s <name>`（create-or-attach 语义 psmux 支持正常），escape-time 改由 attach 前单独一次性 `tmux set-option -s escape-time 10` 设置（fail-silent；一次性 psmux 命令实测 ~40ms，故 fire-and-forget 不阻塞 attach，且成功一次后用进程内 AtomicBool 缓存跳过——escape-time 是 server 级持久选项）。另：psmux attach 时会先发 DSR 光标探针 `\x1b[6n` 并等待终端回复（xterm.js 会自动回 `\x1b[1;1R`），在非交互管道下 attach 类命令只打印版本号即退出，诊断时必须走真实 ConPTY 链路。
+
+**Windows 会话切换延迟基线**：每次切换 = 新建 WS + 重新 spawn psmux client。实测分解：ConPTY openpty ~8ms、spawn ~26ms、attach 首字节 ~18ms、DSR 探针往返 + 全屏重绘 ~45-140ms，合计 ~100-200ms（Linux+tmux 全链路 <10ms，故 `[已连接]` 横幅在 Linux 上瞬间被重绘覆盖无感知，Windows 上可见短暂停留）。这部分是 Windows 进程创建 + psmux 重绘的固有成本，进一步优化需要保活 client/连接池（属 pty-engine 计划 Phase 5 范围，不在 tmux 冻结代码内做）。
 
 
 ## Agent 屏幕状态检测（agent_watch / agent_detect）
