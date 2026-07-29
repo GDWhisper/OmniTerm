@@ -57,6 +57,7 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 - `gh run list --branch main` 中本次 tag 对应的 `Release` (release.yml) run 全部 job 绿
 - `gh run list` 中 push `main` 触发的 `CI` (ci.yml) run 也需绿（quality gate，非发布直接产物但反映 main 健康度）
 - 任一红灯 → **暂停 cargo publish**，先修 CI 再继续
+- **audit job 已是阻塞门禁**（2026-07-29 起移除 continue-on-error）：cargo-deny 对新发布的 RUSTSEC 公告会突然红灯。处置：确认公告影响后，短期在 `deny.toml` 的 `[advisories]` `ignore` 列表登记 id（附理由注释）解锁发布，长期升级依赖修复
 
 **配套约束：** `ci.yml` 的 rust job 与 `build.rs` 契约必须对齐（`build.rs` 校验 `frontend/dist/index.html` 存在，故 rust job 必须先 `pnpm build` 再 `cargo check`，不能只 `mkdir -p frontend/dist` 空占位）。sync 脚本与 release.yml 已 build 前端，ci.yml 若不一致会导致 push main 即红，进而阻塞发布判定。
 
@@ -70,11 +71,11 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 # 在 dev worktree 执行
 cd /home/pax/coding/OmniTerm-dev
 
-# 更新版本号
+# 更新版本号（脚本同步 Cargo.toml + Cargo.lock + frontend/package.json + npm-package/package.json）
 ./scripts/bump-version.sh 0.2.0
 
 # 更新 CHANGELOG（将 [Unreleased] 改为 [0.2.0]）
-# 提交版本号变更
+# 提交版本号变更（确认 Cargo.lock 的版本行也在本次提交内——历史上曾漏掉导致 lock 落后两个版本）
 git add -A && git commit -m "chore: bump to 0.2.0"
 ```
 
@@ -250,6 +251,11 @@ cargo publish --allow-dirty
 CI 不自动发 npm。手动执行：
 
 ```bash
+# 先核对版本号（bump-version.sh 已同步 npm-package/package.json；
+# 历史上曾长期漏更，npm 停在 0.1.4 而项目已 0.2.1）
+grep '"version"' npm-package/package.json
+npm view @gdwhisper/omniterm versions   # 确认目标版本未被占用
+
 npm login --registry https://registry.npmjs.org/
 cd npm-package
 npm publish --registry https://registry.npmjs.org/ --otp=<6位数字>
@@ -326,6 +332,15 @@ git remote -v
 # public → https://github.com/GDWhisper/OmniTerm.git
 # origin → https://github.com/GDWhisper/OmniTerm-dev.git
 ```
+
+### main 独有提交被 sync 静默覆盖（配置漂移）
+
+发布相关配置（release.yml、模板等）若直接提交在 main 上而未回流 dev，会造成 dev/main 漂移：`sync-main.sh` 对合并冲突的非黑名单文件**无条件接受 dev 版本**，main 独有改动会被静默回退。实例：release-notes 机制（`body_path` + 模板）曾只提交在 main（`1b43016`），dev 的 release.yml 长期停留旧版 `generate_release_notes`，2026-07-29 才在 dev 重放对齐。
+
+**守则：**
+- 所有代码/CI 配置改动**一律先改 dev**，经 `sync-main.sh` 流向 main；main 上只允许发布时产生的内容（如 `release-notes.md`）
+- 若历史上已有 main 独有改动，在 dev **重放等价改动**（复制文件/手动改），禁止 main→dev 反向合并（见 `branch-workflows.md` 同步规则）
+- 发布前对比：`git -C <main-worktree> log --oneline main --not origin/dev -- .github/ scripts/` 检查 main 是否有未回流的配置提交
 
 ### sync 脚本冲突
 
