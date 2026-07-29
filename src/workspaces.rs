@@ -335,6 +335,8 @@ mod tests {
         cleanup(&other);
     }
 
+    // Unix 专属：Windows 无 std::os::unix::fs::symlink（且建 symlink 需特权）
+    #[cfg(unix)]
     #[tokio::test]
     async fn symlink_path_canonicalized_to_match() {
         let repo = make_git_repo("symlink").await;
