@@ -51,6 +51,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-07-29) `[infra]` 修复公开仓 main 的 CI audit job 恒红：`ci.yml` 无条件执行 `scripts/check-doc-index.sh`，但该脚本校验的 AGENTS.md/docs/ 均在 sync 黑名单中不进公开仓，脚本本身也随 main 清理不存在，push main 必然 exit 127；改为脚本存在时才执行（dev 生效、public main 跳过）（`.github/workflows/ci.yml`）
+
 ## [0.2.2] - 2026-07-29
 
 ### Changed
