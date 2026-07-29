@@ -439,8 +439,9 @@ function FileSection({
           <span className={`git-status-char git-status-${e.conflicted ? 'conflict' : statusChar(e, staged)}`}>
             {statusChar(e, staged)}
           </span>
+          {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免前导 . 等中性字符被 bidi 重排 */}
           <span className="git-file-path" title={e.orig_path ? `${e.orig_path} → ${e.path}` : e.path}>
-            {e.path}
+            <bdi dir="ltr">{e.path}</bdi>
           </span>
           <span className="git-file-actions" onClick={(ev) => ev.stopPropagation()}>
             {onDiscard && !e.conflicted && (

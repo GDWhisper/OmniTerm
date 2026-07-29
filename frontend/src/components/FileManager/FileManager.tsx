@@ -988,7 +988,8 @@ export function FileManager() {
                           )}
                         </div>
                       </td>
-                      <td className="fm-td-time" title={formatTime(f.mtime)}>{formatTime(f.mtime)}</td>
+                      {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免日期中的 - : 被 bidi 重排 */}
+                      <td className="fm-td-time" title={formatTime(f.mtime)}><bdi dir="ltr">{formatTime(f.mtime)}</bdi></td>
                       <td className="fm-td-size" title={isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}>{isDir ? `${f.size} ${t('fm.items')}` : formatSize(f.size)}</td>
                       <td className="fm-td-actions-cell">
                         <span

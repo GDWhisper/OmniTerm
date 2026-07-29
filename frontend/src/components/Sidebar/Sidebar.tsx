@@ -1228,7 +1228,8 @@ export function Sidebar() {
                   </span>
                   <div className="proj-info">
                     <span className="proj-name">{proj.name}</span>
-                    <span className="proj-path">{proj.path}</span>
+                    {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免尾部 / 被 bidi 挪到开头 */}
+                    <span className="proj-path"><bdi dir="ltr">{proj.path}</bdi></span>
                   </div>
                   <div className="flex items-center gap-1">
                     <button
