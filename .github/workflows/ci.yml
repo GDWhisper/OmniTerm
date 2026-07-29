@@ -98,4 +98,11 @@ jobs:
         working-directory: frontend
         continue-on-error: true
 
-      - run: ./scripts/check-doc-index.sh
+      # 公开仓 main 不含 AGENTS.md/docs/（sync 黑名单），脚本缺失时跳过
+      - name: Doc index check (dev only)
+        run: |
+          if [ -f scripts/check-doc-index.sh ]; then
+            ./scripts/check-doc-index.sh
+          else
+            echo "skip: check-doc-index.sh not present (public main)"
+          fi
