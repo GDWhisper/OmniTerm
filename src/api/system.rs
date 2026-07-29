@@ -36,6 +36,8 @@ async fn system_info() -> Json<Value> {
 
     Json(json!({
         "home_dir": home,
+        // 平台终端复用器名称（unix: tmux / windows: psmux），供前端 UI 文案使用
+        "multiplexer": crate::tmux::MULTIPLEXER_NAME,
     }))
 }
 

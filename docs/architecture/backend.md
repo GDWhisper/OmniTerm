@@ -77,6 +77,7 @@ POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
 GET  /api/v1/files/watch (SSE)
+GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min）
 POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400）
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
@@ -182,7 +183,9 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 交互输入链路：xterm.js `onData` → WS binary → `ws/terminal.rs` 读循环 → mpsc → 写线程 `libc::write` 到 PTY master fd（`tmux/pty_io.rs`，刻意绕开 `portable_pty::MasterWriter` 的 Drop 注入 `\n\x04` 问题）→ PTY slave 上的 tmux client → tmux server → pane。**不走 `send-keys`**（`send-keys` 仅用于会话启动命令）。
 
-**tmux escape-time 行为差异**：tmux 收到孤立 `\x1b` 后会等待 `escape-time`（默认 500ms）以区分 Alt/功能键序列。后果：1) 单次 ESC 延迟 500ms 才转发给 pane；2) 窗口内连按两次 ESC 被合并为 `\x1b\x1b`（Alt+ESC）一次转发。对需要连按 ESC 中止任务的 agent TUI（如 opencode 的 "esc again to interrupt"）这等于 ESC 完全失效。因此 `ws/terminal.rs` 的 `build_tmux_attach_cmd` 在 spawn tmux client 时链式执行 `set-option -s escape-time 10 \; new-session -A`（server 级选项，一次生效覆盖全部会话；取 10ms 而非 0 以免慢速链路上转义序列被拆断）。
+**tmux escape-time 行为差异**：tmux 收到孤立 `\x1b` 后会等待 `escape-time`（默认 500ms）以区分 Alt/功能键序列。后果：1) 单次 ESC 延迟 500ms 才转发给 pane；2) 窗口内连按两次 ESC 被合并为 `\x1b\x1b`（Alt+ESC）一次转发。对需要连按 ESC 中止任务的 agent TUI（如 opencode 的 "esc again to interrupt"）这等于 ESC 完全失效。因此 `ws/terminal.rs` 的 `build_tmux_attach_cmd`（unix 版）在 spawn tmux client 时链式执行 `set-option -s escape-time 10 \; new-session -A`（server 级选项，一次生效覆盖全部会话；取 10ms 而非 0 以免慢速链路上转义序列被拆断）。
+
+**psmux 链式命令行为差异（Windows，踩坑）**：Windows 上 tmux 由 psmux 平替（winget 安装同时提供 `tmux.exe`/`psmux.exe`/`pmux.exe` 三个别名，`-V` 均输出 `tmux 3.3.6`，无法在运行时靠 binary 名或版本号区分实现）。真 tmux 的 `;` 链式多命令执行完后照常进入交互 attach；**psmux 一旦命令行含多条命令就进入一次性命令模式，执行完直接 exit 0，不 attach**——终端只剩 "attached" 提示、无 shell 输出。因此 `build_tmux_attach_cmd` 按平台 cfg 拆分：windows 版只跑纯 `new-session -A -s <name>`（create-or-attach 语义 psmux 支持正常），escape-time 改由 attach 前单独一次性 `tmux set-option -s escape-time 10` 设置（fail-silent）。另：psmux attach 时会先发 DSR 光标探针 `\x1b[6n` 并等待终端回复（xterm.js 会自动回 `\x1b[1;1R`），在非交互管道下 attach 类命令只打印版本号即退出，诊断时必须走真实 ConPTY 链路。
 
 
 ## Agent 屏幕状态检测（agent_watch / agent_detect）

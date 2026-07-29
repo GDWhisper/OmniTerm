@@ -23,6 +23,12 @@ OmniTerm supports Windows natively via [psmux](https://github.com/psmux/psmux), 
 
 ## Known Differences from Linux/macOS
 
+### psmux Instead of tmux
+
+Windows uses psmux (see link above) as a drop-in tmux replacement (winget install provides `tmux.exe` / `psmux.exe` / `pmux.exe` aliases; `-V` reports `tmux 3.3.6`, so the implementation cannot be distinguished at runtime). The UI shows "psmux" as the terminal session type via the compile-time `MULTIPLEXER_NAME` constant exposed in `GET /system/info`.
+
+**Chained commands do not attach**: real tmux enters interactive attach after executing `cmd1 \; cmd2` chains; psmux treats any multi-command invocation as one-shot command mode and exits 0 without attaching. The backend therefore spawns a plain `tmux new-session -A -s <name>` on Windows and applies the `escape-time` workaround via a separate one-shot `set-option` call beforehand (see `docs/architecture/backend.md` §Terminal Input Path).
+
 ### ConPTY Intermediate Process
 
 On Windows, the `pane_pid` reported by psmux points to a ConPTY host process (`conhost.exe` or `OpenConsole.exe`), not the shell directly. Agent CLI processes (e.g. `claude.exe`) run 1–3 levels below this host process. OmniTerm's `walk_process_tree` handles this by recursively scanning child processes.

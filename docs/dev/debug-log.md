@@ -630,3 +630,23 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 **2. `direction: rtl` 截断技巧必须配套双向隔离**。用 RTL 实现左侧省略号时，LTR 内容首尾的中性字符会被 bidi 重排（尾部 `/` 变前导、前导 `.` 变尾部、日期段颠倒）。标准做法：容器 `direction: rtl`，内容 `<bdi dir="ltr">`（或 `unicode-bidi: isolate` + `direction: ltr`）。凡新增 RTL 截断样式，隔离是必选项不是优化项。
 
 **3. Unix 路径会掩盖这类 bug，Windows 盘符路径会暴露它**。`/home/…/` 被 bidi 把尾斜杠挪到开头后仍是「斜杠开头」，视觉上正确；`g:/…/` 则立刻露馅。跟平台无关的渲染 bug 可能只在某平台的数据形态下可见——「只在 Windows 复现」不等于「平台相关代码的 bug」。
+
+## 2026-07-29: psmux 遇 `;` 链式命令不进交互 attach → Windows 终端只剩 "attached" 提示无 shell
+
+**症状**：Windows 上创建 tmux 会话后，终端只显示 `[已连接][已附加到 lt_xxx]`，无工作区路径、无 shell 提示符，完全无法输入。后端日志关键证据：`tmux process exited: Some(Some(0))`——client 刚 spawn 就正常退出。
+
+**具体根因**：Windows 上 tmux 由 psmux 平替（winget 同时安装 `tmux.exe`/`psmux.exe`/`pmux.exe` 别名，`-V` 均报 `tmux 3.3.6`）。后端 `build_tmux_attach_cmd` 用链式命令 `set-option -s escape-time 10 ; new-session -A -s <name>`：真 tmux 执行完链式命令后照常进入交互 attach，而 **psmux 一旦命令行含多条命令就进入一次性命令模式，执行完直接 exit 0 不 attach**。修复：`build_tmux_attach_cmd` 按平台 cfg 拆分，windows 版只跑纯 `new-session -A`，escape-time 改为 attach 前单独一次性 `set-option`（`src/ws/terminal.rs`）。
+
+**诊断过程中的弯路**：
+
+1. **首轮怀疑错了方向——binary 名不匹配**：`check_multiplexer` 检测 psmux 但所有命令硬编码 `tmux`，看似矛盾。`where.exe` 实测发现 winget 已装 `tmux.exe` 别名，binary 解析没问题。**先验证「命令能不能找到」再分析「命令行为对不对」**，两者是独立失败层。
+2. **管道下测试有迷惑性**：用普通 stdin/stdout 管道跑 attach 类命令，psmux 只打印版本号就退出（非 TTY 环境拒绝 attach），与 ConPTY 下行为完全不同，无法得出任何结论。最终用 portable-pty 写了临时探针（模拟后端真实 openpty+spawn 链路）才复现差异。
+3. **psmux attach 前会发 DSR 光标探针 `\x1b[6n` 等待回复**：探针初版只读不写，收到 4 字节后永久卡住，误以为 psmux 挂死。真实链路里 xterm.js 会自动回 `\x1b[1;1R`；探针补上这一手后两种行为（链式→exit 0 / 单命令→完整屏幕重绘）立刻区分开。
+
+**可复用的理论**：
+
+**1. 平替实现只保证主路径兼容，边缘语法是兼容断裂带**（AGENTS §8 的实例）。drop-in replacement（psmux/busybox/mawk 这类）对核心子命令兼容度高，但链式命令、引号展开、隐式默认值这类「语法胶水」最容易行为分岔。对平替实现只用最简单的单命令调用，复合需求拆成多次调用。
+
+**2. 「退出码 0 + 无输出」是「命令被理解成另一种模式」的特征签名**。崩溃/找不到命令会非零退出，而 exit 0 说明程序认为自己正确完成了工作——它执行的「工作」和你以为的不是同一个。此时该做的是逐项剔除参数找到触发模式切换的那一个，而不是查崩溃日志。
+
+**3. 诊断交互式程序必须复制它的真实运行环境（TTY/ConPTY）**。很多程序检测 `isatty` 后切换行为，管道下的表现与真实链路可以完全不同；若目标程序还会发终端探针（DSR/DA 查询），诊断工具还得扮演终端回复它，否则看到的是「卡死」假象。

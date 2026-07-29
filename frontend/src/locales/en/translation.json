@@ -338,10 +338,9 @@
   "sidebar.adoptFailed": "Failed to adopt session: {{msg}}",
 
   "agentPicker.label": "Session type",
-  "agentPicker.none": "tmux",
   "agentPicker.groupTerminal": "——· Terminal ·——",
   "agentPicker.groupChat": "——· AI Chat(BETA) ·——",
-  "agentPicker.hint": "Terminal sessions are powered by tmux, AI sessions by ACP.",
+  "agentPicker.hint": "Terminal sessions are powered by {{mux}}, AI sessions by ACP.",
 
   "settings.agents.title": "Agents",
   "settings.agents.new": "New",

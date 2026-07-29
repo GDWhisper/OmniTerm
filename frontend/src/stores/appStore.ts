@@ -68,6 +68,13 @@ export interface AppState {
    */
   terminalDisconnected: boolean
 
+  /**
+   * Terminal multiplexer name reported by the backend (`/system/info`):
+   * "tmux" on unix, "psmux" on Windows. Display-only — API fields and
+   * runtime_kind stay 'tmux' regardless of platform.
+   */
+  multiplexer: string
+
   // Mobile
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions'
@@ -129,6 +136,7 @@ export interface AppState {
   activateSession: (sessionId: string) => void
   setConnected: (v: boolean) => void
   setTerminalDisconnected: (v: boolean) => void
+  setMultiplexer: (v: string) => void
   setIsMobile: (v: boolean) => void
   setActiveTab: (tab: AppState['activeTab']) => void
   setRightPanelTab: (tab: AppState['rightPanelTab']) => void
@@ -202,6 +210,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   connected: false,
   terminalDisconnected: false,
+  multiplexer: 'tmux',
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
@@ -322,6 +331,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAuthState: (state) =>
     set((s) => ({ authState: state, authVersion: s.authVersion + 1 })),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
+  setMultiplexer: (v) => set({ multiplexer: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
     localStorage.setItem('omniterm_mobile_last_tab', tab)

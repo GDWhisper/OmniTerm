@@ -97,6 +97,8 @@ export function Sidebar() {
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
+  const multiplexer = useAppStore((s) => s.multiplexer)
+  const setMultiplexer = useAppStore((s) => s.setMultiplexer)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
@@ -540,10 +542,11 @@ export function Sidebar() {
     api.systemInfo().then((info) => {
       setHomeDir(info.home_dir)
       setProjPath(info.home_dir)
+      if (info.multiplexer) setMultiplexer(info.multiplexer)
     }).catch(() => {
       // fallback: leave projPath empty, user fills it in
     })
-  }, [])
+  }, [setMultiplexer])
 
   // Reset browse state when the create-project modal opens
   useEffect(() => {
@@ -1952,7 +1955,7 @@ export function Sidebar() {
               style={inputStyle}
             />
             <p className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-              {t('agentPicker.hint')}
+              {t('agentPicker.hint', { mux: multiplexer })}
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">

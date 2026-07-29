@@ -63,6 +63,7 @@ const TMUX_ESCAPE_TIME_MS: &str = "10";
 
 /// Build the tmux client command spawned on the PTY: set server-level
 /// escape-time, then create-or-attach the target session.
+#[cfg(unix)]
 fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("tmux");
     cmd.args([
@@ -79,6 +80,39 @@ fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
     cmd
+}
+
+/// Windows (psmux) 版本：不可与 set-option 用 `;` 链式组合。
+///
+/// 多实现差异（AGENTS §8）：tmux 的链式命令仍会进入交互 attach；而 psmux
+/// 一旦命令行含多条命令就进入一次性命令模式，执行完直接退出 (exit 0)，
+/// 终端只剩 "[attached]" 提示无任何输出。escape-time 改由
+/// `apply_escape_time_workaround` 单独一次性设置。
+#[cfg(windows)]
+fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("tmux");
+    cmd.args(["new-session", "-A", "-s", tmux_name]);
+    cmd.cwd(cwd);
+    cmd.env("TERM", "xterm-256color");
+    cmd
+}
+
+/// Windows (psmux)：链式命令不可用（见 `build_tmux_attach_cmd`），改用单独的
+/// 一次性命令设置 escape-time。fail-silent：server 未运行时失败不阻断 attach
+/// （随后的 new-session -A 会拉起 server，只是首次使用默认 escape-time）。
+#[cfg(windows)]
+async fn apply_escape_time_workaround() {
+    match tokio::process::Command::new("tmux")
+        .args(["set-option", "-s", "escape-time", TMUX_ESCAPE_TIME_MS])
+        .output()
+        .await
+    {
+        Ok(out) if !out.status.success() => {
+            debug!("escape-time set-option failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Err(e) => debug!("escape-time set-option spawn failed: {}", e),
+        _ => {}
+    }
 }
 
 /// WebSocket upgrade handler for terminal connections.
@@ -161,6 +195,9 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
     info!("terminal PTY initial size: {}x{} for session={}", cols, rows, session_id);
+
+    #[cfg(windows)]
+    apply_escape_time_workaround().await;
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
@@ -545,6 +582,9 @@ async fn handle_external_terminal(
     let pty_size = PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
 
     info!("terminal PTY initial size: {}x{} for tmux={}", cols, rows, tmux_name);
+
+    #[cfg(windows)]
+    apply_escape_time_workaround().await;
 
     // Open PTY at the correct viewport size and spawn tmux
     let pty_system = native_pty_system();
