@@ -10,16 +10,11 @@
   "bin": {
     "omniterm": "shim.js"
   },
-  "scripts": {
-    "postinstall": "node install.js"
-  },
   "files": [
-    "shim.js",
-    "install.js"
+    "shim.js"
   ],
   "keywords": ["tmux", "terminal", "web", "manager"],
   "engines": {
     "node": ">=18"
-  },
-  "os": ["linux", "darwin"]
+  }
 }

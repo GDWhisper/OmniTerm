@@ -3,6 +3,11 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '补发 npm publish（版本已发布过 GitHub Release），如 0.2.2'
+        required: true
 
 permissions:
   contents: write
@@ -10,7 +15,9 @@ permissions:
 
 jobs:
   # ── Build Frontend ──────────────────────────────────────────────
+  # tag push 才构建；workflow_dispatch 仅用于 npm 补发，跳过整条构建链
   frontend:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -163,3 +170,64 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # ── npm Publish（原生平台分包，esbuild 式）─────────────────────────
+  # tag push：github-release 成功后自动发布本次版本
+  # workflow_dispatch：补发已存在 Release 的版本（frontend 等被跳过）
+  npm-publish:
+    needs: github-release
+    if: ${{ !cancelled() && (needs.github-release.result == 'success' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org/
+
+      # 解析版本号并校验形如 X.Y.Z（防注入 / 拒绝畸形 ref）
+      - name: Resolve version
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            version="${REF_NAME#v}"
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ 非法版本号: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: gh release download "v${VERSION}" --repo "$REPO" --pattern 'omniterm-*' --dir assets
+
+      - name: Stage packages
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: ./scripts/npm-prepare.sh "$VERSION" assets npm-dist
+
+      # 平台包先发、主包后发；已存在的版本跳过（幂等，可安全重跑）
+      - name: Publish (idempotent)
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          for dir in npm-dist/platform/* npm-dist/main; do
+            name=$(node -p "require('./$dir/package.json').name")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "⏭️  $name@$VERSION 已发布，跳过"
+            else
+              npm publish "$dir" --access public
+            fi
+          done
+
