@@ -41,6 +41,16 @@ if (Test-Path $ENV_FILE) {
     }
 }
 
+# 与 dev.sh 的 export 对齐：导出到进程环境，让子进程能读到分支配置
+# （vite.config.ts 读 BACKEND_PORT/FRONTEND_PORT/DOMAIN，后端启动横幅读 BRANCH_NAME）
+$env:BACKEND_PORT        = "$BACKEND_PORT"
+$env:FRONTEND_PORT       = "$FRONTEND_PORT"
+$env:DOCKER_PORT         = "$DOCKER_PORT"
+$env:DOCKER_PORT_MAPPING = "$DOCKER_PORT_MAPPING"
+$env:BRANCH_NAME         = "$BRANCH_NAME"
+$env:BRANCH_BINARY_NAME  = "$BRANCH_BINARY_NAME"
+$env:DOMAIN              = "$DOMAIN"
+
 $PID_DIR   = Join-Path $PROJECT_DIR '.dev'
 $BACKEND_PID  = Join-Path $PID_DIR 'backend.pid'
 $FRONTEND_PID = Join-Path $PID_DIR 'frontend.pid'
@@ -74,10 +84,11 @@ function Get-PidByPort($port) {
 
 function Test-IsRunning($pidFile) {
     if (Test-Path $pidFile) {
-        $pid = (Get-Content $pidFile -Raw).Trim()
-        if ($pid -match '^\d+$') {
+        # 不可用 $pid（PowerShell 只读自动变量）；空文件时 -Raw 返回 $null，先转 string 再 Trim
+        $procId = ([string](Get-Content $pidFile -Raw)).Trim()
+        if ($procId -match '^\d+$') {
             try {
-                $p = Get-Process -Id $pid -ErrorAction SilentlyContinue
+                $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
                 if ($p) { return $true }
             } catch {}
         }
@@ -89,24 +100,29 @@ function Test-IsRunning($pidFile) {
 # 递归收集一个进程及其所有子孙进程的 PID
 function Get-ProcessTree($rootPid) {
     $all = @()
+    # CIM 的 ProcessId/ParentProcessId 是 UInt32，统一转 [int] 作 key，
+    # 否则 Hashtable 按类型+值匹配，Int32 查 UInt32 key 永远查不到
     $map = @{}
     try {
         foreach ($p in Get-CimInstance Win32_Process) {
             if ($p.ParentProcessId) {
-                if (-not $map.ContainsKey($p.ParentProcessId)) { $map[$p.ParentProcessId] = @() }
-                $map[$p.ParentProcessId] += $p.ProcessId
+                $parentId = [int]$p.ParentProcessId
+                if (-not $map.ContainsKey($parentId)) { $map[$parentId] = @() }
+                $map[$parentId] += [int]$p.ProcessId
             }
         }
     } catch {}
 
-    $stack = @([int]$rootPid)
-    while ($stack.Count -gt 0) {
-        $cur = $stack[0]
-        $stack = $stack[1..($stack.Count - 1)]
+    # 用真正的队列遍历。不可用数组切片模拟出栈：单元素时 $a[1..0] 是
+    # 降序切片，越界索引被忽略后返回原数组，栈永远弹不空 → 死循环
+    $queue = New-Object 'System.Collections.Generic.Queue[int]'
+    $queue.Enqueue([int]$rootPid)
+    while ($queue.Count -gt 0) {
+        $cur = $queue.Dequeue()
         if ($all -contains $cur) { continue }
         $all += $cur
         if ($map.ContainsKey($cur)) {
-            foreach ($child in $map[$cur]) { $stack += $child }
+            foreach ($child in $map[$cur]) { $queue.Enqueue($child) }
         }
     }
     return $all
@@ -114,13 +130,13 @@ function Get-ProcessTree($rootPid) {
 
 function Stop-ByPid($pidFile, $name) {
     if (Test-IsRunning $pidFile) {
-        $pid = [int](Get-Content $pidFile -Raw).Trim()
-        info "停止 $name (PID $pid) ..."
-        foreach ($p in (Get-ProcessTree $pid)) {
+        $procId = [int](Get-Content $pidFile -Raw).Trim()
+        info "停止 $name (PID $procId) ..."
+        foreach ($p in (Get-ProcessTree $procId)) {
             try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } catch {}
         }
         Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
-        ok "$name 已停止 (PID $pid)"
+        ok "$name 已停止 (PID $procId)"
         return $true
     }
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
@@ -128,10 +144,10 @@ function Stop-ByPid($pidFile, $name) {
 }
 
 function Stop-PortOrphans($port, $name) {
-    $pid = Get-PidByPort $port
-    if ($pid) {
-        warn "$name 端口 :$port 仍有残留进程 PID $pid"
-        foreach ($p in (Get-ProcessTree $pid)) {
+    $procId = Get-PidByPort $port
+    if ($procId) {
+        warn "$name 端口 :$port 仍有残留进程 PID $procId"
+        foreach ($p in (Get-ProcessTree $procId)) {
             try { Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; info "  已清理残留 PID $p" } catch {}
         }
         Start-Sleep -Milliseconds 500
@@ -145,13 +161,13 @@ function Clear-Orphans {
     $protected = @()
     foreach ($f in @($BACKEND_PID, $FRONTEND_PID)) {
         if (Test-Path $f) {
-            $pid = (Get-Content $f -Raw).Trim()
-            if ($pid -match '^\d+$') { $protected += [int]$pid }
+            $procId = ([string](Get-Content $f -Raw)).Trim()
+            if ($procId -match '^\d+$') { $protected += [int]$procId }
         }
     }
     foreach ($port in @($BACKEND_PORT, $FRONTEND_PORT)) {
-        $pid = Get-PidByPort $port
-        if ($pid) { $protected += [int]$pid }
+        $procId = Get-PidByPort $port
+        if ($procId) { $protected += [int]$procId }
     }
 
     $orphans = @()
@@ -160,11 +176,15 @@ function Clear-Orphans {
             $cmd = $p.CommandLine
             if (-not $cmd) { continue }
             if ($cmd -notmatch 'vite[\\/]bin[\\/]vite.js' -and $cmd -notmatch 'target[\\/]debug[\\/]omniterm') { continue }
-            try { $cwd = $p.WorkingDirectory } catch { $cwd = '' }
-            if ($cwd -ne $PROJECT_DIR -and $cwd -ne (Join-Path $PROJECT_DIR 'frontend')) { continue }
-            $pid = [int]$p.ProcessId
-            if ($protected -contains $pid) { continue }
-            $orphans += $pid
+            # Win32_Process 没有工作目录属性（dev.sh 用 /proc/<pid>/cwd）：
+            # 改用命令行/可执行文件路径是否落在本 worktree 内来限定清理范围
+            $exe = [string]$p.ExecutablePath
+            $inProject = ($cmd.IndexOf($PROJECT_DIR, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                         ($exe -and $exe.IndexOf($PROJECT_DIR, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+            if (-not $inProject) { continue }
+            $procId = [int]$p.ProcessId
+            if ($protected -contains $procId) { continue }
+            $orphans += $procId
         }
     } catch {}
 
@@ -177,6 +197,19 @@ function Clear-Orphans {
         }
         Start-Sleep -Milliseconds 500
         ok "孤儿进程已清理"
+    }
+}
+
+# 确保 git pre-commit hook 指向 scripts/hooks（与 dev.sh _ensure_hooks 对齐；Windows 无需 chmod）
+function Set-GitHooks {
+    $hooksDir = Join-Path $PROJECT_DIR 'scripts/hooks'
+    if (-not (Test-Path $hooksDir)) { return }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return }
+    $cur = ''
+    try { $cur = [string](git -C $PROJECT_DIR config core.hooksPath 2>$null) } catch {}
+    if ($cur -ne 'scripts/hooks') {
+        git -C $PROJECT_DIR config core.hooksPath 'scripts/hooks'
+        info "pre-commit hook 已生效: core.hooksPath=scripts/hooks"
     }
 }
 
@@ -224,14 +257,15 @@ function Start-Services {
 
     if (-not (Test-Path $PID_DIR)) { New-Item -ItemType Directory -Path $PID_DIR | Out-Null }
     Clear-Orphans
+    Set-GitHooks
 
     # 端口冲突检查
     $conflict = $false
     foreach ($port in @($BACKEND_PORT, $FRONTEND_PORT)) {
         if (Test-PortListening $port) {
             err "端口 $port 已被占用:"
-            $pid = Get-PidByPort $port
-            if ($pid) { err "  PID $pid ($( (Get-Process -Id $pid -ErrorAction SilentlyContinue).Name ))" }
+            $procId = Get-PidByPort $port
+            if ($procId) { err "  PID $procId ($( (Get-Process -Id $procId -ErrorAction SilentlyContinue).Name ))" }
             $conflict = $true
         }
     }
@@ -244,19 +278,20 @@ function Start-Services {
     # ── 后端 ──
     section "启动后端"
     info "编译并启动 (端口 $BACKEND_PORT) ..."
-    # Start-Process -Environment 会完全替换子进程环境，故需继承当前会话
-    # 的环境变量（尤其 PATH / HOME / USERPROFILE / TMP），再叠加自定义变量。
-    $backendEnv = @{}
-    foreach ($k in (Get-ChildItem Env:).Name) { $backendEnv[$k] = [string](Get-Item Env:$k).Value }
-    $backendEnv['BIND_ADDR'] = "127.0.0.1:$BACKEND_PORT"
-    $backendEnv['RUST_LOG']  = if ($env:RUST_LOG) { $env:RUST_LOG } else { 'omniterm_main=info,omniterm_server=info' }
-    $proc = Start-Process -FilePath 'cargo' -ArgumentList 'run' `
-        -WorkingDirectory $PROJECT_DIR -Environment $backendEnv `
-        -RedirectStandardOutput $BACKEND_LOG -RedirectStandardError $BACKEND_LOG `
-        -PassThru -WindowStyle Hidden
+    # 与 dev.sh 对齐：cargo run -- start，stdout/stderr 合并进同一日志。
+    # Start-Process 不允许 stdout/stderr 重定向到同一文件，故经 cmd /c 重定向；
+    # 子进程继承当前会话环境（含上方导出的 .env.local 变量）。
+    $env:BIND_ADDR = "127.0.0.1:$BACKEND_PORT"
+    $hadRustLog = [bool]$env:RUST_LOG
+    if (-not $hadRustLog) { $env:RUST_LOG = 'omniterm_main=info,omniterm_server=info' }
+    $proc = Start-Process -FilePath $env:ComSpec `
+        -ArgumentList "/d /c cargo run -- start > `"$BACKEND_LOG`" 2>&1" `
+        -WorkingDirectory $PROJECT_DIR -PassThru -WindowStyle Hidden
+    Remove-Item Env:BIND_ADDR -ErrorAction SilentlyContinue
+    if (-not $hadRustLog) { Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue }
     $proc.Id | Out-File -FilePath $BACKEND_PID -NoNewline
 
-    if (Wait-Port $BACKEND_PORT 120) {
+    if (Wait-Port $BACKEND_PORT 60) {
         $bpid = Get-PidByPort $BACKEND_PORT
         if ($bpid) { $bpid | Out-File -FilePath $BACKEND_PID -NoNewline }
         ok "后端已就绪  PID=$bpid  ->  http://localhost:$BACKEND_PORT"
@@ -273,30 +308,30 @@ function Start-Services {
     section "启动前端"
     info "安装依赖并启动 Vite (端口 $FRONTEND_PORT) ..."
     $feDir = Join-Path $PROJECT_DIR 'frontend'
-    $frontendEnv = @{}
-    foreach ($k in (Get-ChildItem Env:).Name) { $frontendEnv[$k] = [string](Get-Item Env:$k).Value }
-    $frontendEnv['NODE_ENV'] = 'development'
-    if ($env:http_proxy)  { $frontendEnv['http_proxy']  = $env:http_proxy }
-    if ($env:https_proxy) { $frontendEnv['https_proxy'] = $env:https_proxy }
+    $env:NODE_ENV = 'development'
 
-    # 首次或依赖缺失时自动安装
+    # 与 dev.sh 一致：install 与 dev 输出写入同一前端日志（先清空再追加）
+    Set-Content -Path $FRONTEND_LOG -Value $null
+    # 首次或依赖缺失时自动安装（pnpm 是 .cmd 脚本，经 cmd /c 调用并重定向日志）
     if (-not (Test-Path (Join-Path $feDir 'node_modules'))) {
         Write-Host "[dev.ps1] node_modules 不存在，执行 pnpm install ..."
-        $install = Start-Process -FilePath 'pnpm' -ArgumentList 'install' `
-            -WorkingDirectory $feDir -Wait -PassThru -WindowStyle Hidden -Environment $frontendEnv
+        $install = Start-Process -FilePath $env:ComSpec `
+            -ArgumentList "/d /c pnpm install >> `"$FRONTEND_LOG`" 2>&1" `
+            -WorkingDirectory $feDir -Wait -PassThru -WindowStyle Hidden
         if ($install.ExitCode -ne 0) {
             err "pnpm install 失败 (退出码 $($install.ExitCode))"
+            Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
             exit 1
         }
     }
 
-    $fproc = Start-Process -FilePath 'pnpm' -ArgumentList 'dev' `
-        -WorkingDirectory $feDir -Environment $frontendEnv `
-        -RedirectStandardOutput $FRONTEND_LOG -RedirectStandardError $FRONTEND_LOG `
-        -PassThru -WindowStyle Hidden
+    $fproc = Start-Process -FilePath $env:ComSpec `
+        -ArgumentList "/d /c pnpm dev >> `"$FRONTEND_LOG`" 2>&1" `
+        -WorkingDirectory $feDir -PassThru -WindowStyle Hidden
+    Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
     $fproc.Id | Out-File -FilePath $FRONTEND_PID -NoNewline
 
-    if (Wait-Port $FRONTEND_PORT 120) {
+    if (Wait-Port $FRONTEND_PORT 60) {
         $fpid = Get-PidByPort $FRONTEND_PORT
         if ($fpid) { $fpid | Out-File -FilePath $FRONTEND_PID -NoNewline }
         ok "前端已就绪  PID=$fpid  ->  http://localhost:$FRONTEND_PORT"
@@ -342,9 +377,9 @@ function Stop-Services {
         } else {
             warn "仍有 $still 个端口被占用，尝试强制清理 ..."
             foreach ($port in @($BACKEND_PORT, $FRONTEND_PORT)) {
-                $pid = Get-PidByPort $port
-                if ($pid) {
-                    foreach ($t in (Get-ProcessTree $pid)) {
+                $procId = Get-PidByPort $port
+                if ($procId) {
+                    foreach ($t in (Get-ProcessTree $procId)) {
                         try { Stop-Process -Id $t -Force -ErrorAction SilentlyContinue; info "  已释放端口 :$port (PID $t)" } catch {}
                     }
                 }
@@ -362,7 +397,8 @@ function Restart-Services {
     Stop-Services
     Start-Sleep -Seconds 1
 
-    $viteCache = Join-Path $PROJECT_DIR 'frontend' 'node_modules' '.vite'
+    # 嵌套 Join-Path 以兼容 PowerShell 5.1（多段参数需 6+）
+    $viteCache = Join-Path (Join-Path (Join-Path $PROJECT_DIR 'frontend') 'node_modules') '.vite'
     if (Test-Path $viteCache) {
         info "清理 Vite 缓存 ..."
         Remove-Item -Path $viteCache -Recurse -Force -ErrorAction SilentlyContinue
@@ -408,10 +444,10 @@ function Show-Status {
 # ── 命令: logs ──
 function Show-Logs($target = 'both') {
     switch ($target) {
-        'backend' { if (Test-Path $BACKEND_LOG) { info "实时查看后端日志 (Ctrl-C 退出) ..."; Get-Content -Path $BACKEND_LOG -Wait } else { err "后端日志不存在: $BACKEND_LOG" } }
-        'frontend' { if (Test-Path $FRONTEND_LOG) { info "实时查看前端日志 (Ctrl-C 退出) ..."; Get-Content -Path $FRONTEND_LOG -Wait } else { err "前端日志不存在: $FRONTEND_LOG" } }
+        { $_ -in 'backend', 'be' } { if (Test-Path $BACKEND_LOG) { info "实时查看后端日志 (Ctrl-C 退出) ..."; Get-Content -Path $BACKEND_LOG -Wait } else { err "后端日志不存在: $BACKEND_LOG" } }
+        { $_ -in 'frontend', 'fe' } { if (Test-Path $FRONTEND_LOG) { info "实时查看前端日志 (Ctrl-C 退出) ..."; Get-Content -Path $FRONTEND_LOG -Wait } else { err "前端日志不存在: $FRONTEND_LOG" } }
         default {
-            if (Test-Path $BACKEND_LOG -or Test-Path $FRONTEND_LOG) {
+            if ((Test-Path $BACKEND_LOG) -or (Test-Path $FRONTEND_LOG)) {
                 info "实时查看全部日志 (Ctrl-C 退出) ..."
                 $jobs = @()
                 if (Test-Path $BACKEND_LOG)  { $jobs += Start-Job -ScriptBlock { Get-Content -Path $using:BACKEND_LOG -Wait } }
