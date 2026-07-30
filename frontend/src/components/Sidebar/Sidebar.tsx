@@ -45,7 +45,7 @@ function SidebarBottomButton({
     <button
       data-toggle={toggle}
       onClick={onClick}
-      className={`flex items-center justify-center rounded transition-all ${className}`}
+      className={`row-action flex items-center justify-center transition-all ${className}`}
       style={{
         width: size,
         height: size,
@@ -1266,7 +1266,7 @@ export function Sidebar() {
                           .catch(() => {})
                           .finally(() => setCreateWtBranchesLoading(false))
                       }}
-                      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
                       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
                       title={t('sidebar.createWorktree') ?? 'Create Worktree'}
                       onMouseEnter={(e) => {
@@ -2480,7 +2480,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.rename')}
       onMouseEnter={(e) => {
@@ -2528,7 +2528,7 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.releaseAcp')}
       onMouseEnter={(e) => {

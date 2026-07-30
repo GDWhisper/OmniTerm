@@ -2623,3 +2623,23 @@ select optgroup option {
   transform: scale(0.93);
   filter: brightness(1.35);
 }
+
+/* ── Row action buttons — 平时隐藏，行 hover/focus-within/active 才显现（D2）── */
+.sidebar-project-header .row-action,
+.sidebar-wt-row .sidebar-wt-add-btn,
+.sidebar-wt-row .row-action,
+.sidebar-session-item .row-action {
+  opacity: 0;
+  transition: opacity 0.1s steps(2);
+}
+.sidebar-project-header:hover .row-action,
+.sidebar-project-header:focus-within .row-action,
+.sidebar-wt-row:hover .sidebar-wt-add-btn,
+.sidebar-wt-row:hover .row-action,
+.sidebar-wt-row:focus-within .sidebar-wt-add-btn,
+.sidebar-wt-row:focus-within .row-action,
+.sidebar-session-item:hover .row-action,
+.sidebar-session-item:focus-within .row-action,
+.sidebar-session-item.active .row-action {
+  opacity: 1;
+}
