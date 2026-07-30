@@ -35,8 +35,8 @@ export function MobileNav() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 40,
-          padding: '5px 32px',
+          gap: 24,
+          padding: '6px 24px',
           borderRadius: 20,
           background: 'var(--bg-base)',
           border: '1px solid var(--border-subtle)',
@@ -53,17 +53,17 @@ export function MobileNav() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 32,
-                height: 32,
+                width: 44,
+                height: 44,
                 color: isActive ? 'var(--accent)' : 'var(--text-muted)',
                 background: isActive ? 'rgba(167,139,250,0.10)' : 'transparent',
                 border: 'none',
-                borderRadius: 6,
+                borderRadius: 8,
                 transition: 'all 0.15s ease',
               }}
               aria-label={tab.id}
             >
-              <tab.Icon width={18} height={18} style={isPulsing ? { animation: 'mobileNavPulse 0.2s ease-in-out' } : {}} />
+              <tab.Icon width={20} height={20} style={isPulsing ? { animation: 'mobileNavPulse 0.2s ease-in-out' } : {}} />
             </button>
           )
         })}
