@@ -258,7 +258,7 @@ export function FileDrawer({
         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
         onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border-subtle)' }}
       >
-        <div style={{ width: 32, height: 2, borderRadius: 1, background: 'var(--text-dim)' }} />
+        <div style={{ width: 32, height: 2, borderRadius: 0, background: 'var(--text-dim)' }} />
       </div>
 
       {/* Top bar */}
@@ -320,7 +320,7 @@ export function FileDrawer({
                   padding: '3px 8px',
                   border: '1px solid',
                   borderColor: mode === 'view' ? 'var(--accent)' : 'var(--border-strong)',
-                  borderRadius: 5,
+                  borderRadius: 0,
                   background: mode === 'view' ? 'var(--accent-14)' : 'transparent',
                   color: mode === 'view' ? 'var(--accent)' : 'var(--text-muted)',
                   fontSize: 11,
@@ -353,7 +353,7 @@ export function FileDrawer({
                   padding: '3px 8px',
                   border: '1px solid',
                   borderColor: mode === 'edit' ? 'var(--accent)' : 'var(--border-strong)',
-                  borderRadius: 5,
+                  borderRadius: 0,
                   background: mode === 'edit' ? 'var(--accent-14)' : 'transparent',
                   color: mode === 'edit' ? 'var(--accent)' : 'var(--text-muted)',
                   fontSize: 11,
@@ -388,7 +388,7 @@ export function FileDrawer({
               width: 24,
               height: 24,
               border: 'none',
-              borderRadius: 5,
+              borderRadius: 0,
               background: 'transparent',
               color: 'var(--text-faint)',
               cursor: 'pointer',
@@ -464,7 +464,7 @@ export function FileDrawer({
                 borderWidth: '1px',
                 borderStyle: 'solid',
                 borderColor: 'var(--border-strong)',
-                borderRadius: 5,
+                borderRadius: 0,
                 background: 'transparent',
                 color: 'var(--accent)',
                 fontSize: 12,
@@ -539,7 +539,7 @@ export function FileDrawer({
                 style={{
                   padding: '1px 6px',
                   border: '2px solid var(--warning)',
-                  borderRadius: 3,
+                  borderRadius: 0,
                   background: 'transparent',
                   color: 'var(--warning)',
                   fontSize: 10,
