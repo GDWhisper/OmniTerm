@@ -435,16 +435,23 @@ const SCRAMBLE_LEN = 16
 
 function ThinkingIndicator() {
   const textRef = useRef<HTMLSpanElement | null>(null)
+  const startTimeRef = useRef(0)
 
   useEffect(() => {
+    startTimeRef.current = Date.now()
     let raf = 0
     const tick = () => {
       // 直接写 DOM，不进 React state：避免 thinking 阶段高频 appendThought
       // 重渲染挤占本动画的帧（setInterval 宏任务会被密集渲染推迟）。rAF 与
       // 渲染同调度，且本函数零 React 开销，主线程再忙也只占一帧极小成本。
       if (textRef.current) {
+        const elapsed = (Date.now() - startTimeRef.current) / 1000
+        const len = elapsed < 3 ? SCRAMBLE_LEN
+          : elapsed < 10 ? 24
+          : elapsed < 30 ? 36
+          : 54
         let s = ''
-        for (let i = 0; i < SCRAMBLE_LEN; i++) s += SCRAMBLE_HEX[(Math.random() * 16) | 0]
+        for (let i = 0; i < len; i++) s += SCRAMBLE_HEX[(Math.random() * 16) | 0]
         textRef.current.textContent = s
       }
       raf = window.requestAnimationFrame(tick)
@@ -460,16 +467,16 @@ function ThinkingIndicator() {
         alignItems: 'center',
         gap: 6,
         padding: '2px 12px 6px',
-        fontFamily: READER_FONT,
+        fontFamily: 'var(--pixel-font-static)',
         fontSize: '0.923em',
         lineHeight: '20px',
         color: 'var(--text-faint)',
-        letterSpacing: '0.08em',
+        letterSpacing: 'var(--pixel-tracking-sm)',
         userSelect: 'none',
       }}
     >
       <span style={{ color: 'var(--accent)', fontWeight: 700 }}>▌</span>
-      <span ref={textRef} />
+      <span ref={textRef} style={{ fontFamily: READER_FONT, letterSpacing: 0 }} />
     </div>
   )
 }
