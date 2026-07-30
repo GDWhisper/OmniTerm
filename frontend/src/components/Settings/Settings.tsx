@@ -234,7 +234,6 @@ function FontSizeSection() {
         value={effectiveFontSize}
         onChange={(e) => setEffectiveFontSize(Number(e.target.value))}
         className="w-full"
-        style={{ accentColor: 'var(--accent)', height: 4 }}
       />
     </section>
   )
@@ -298,7 +297,6 @@ function UiZoomSection() {
         value={uiZoom}
         onChange={(e) => setUiZoom(Number(e.target.value))}
         className="w-full"
-        style={{ accentColor: 'var(--accent)', height: 4 }}
       />
       {uiZoom !== DEFAULT_UI_ZOOM && (
         <button
@@ -371,7 +369,6 @@ function ChatFontSizeSection() {
         value={chatFontSize}
         onChange={(e) => setChatFontSize(Number(e.target.value))}
         className="w-full"
-        style={{ accentColor: 'var(--accent)', height: 4 }}
       />
     </section>
   )

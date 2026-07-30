@@ -1692,6 +1692,44 @@ body.parchment-texture {
   box-shadow: none;
 }
 
+/* ── Pixel range slider — 方块 thumb + 块状 track，取代原生圆润样式 ── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 20px;
+  margin-top: -7px; /* thumb 垂直居中于 track */
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 20px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+}
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
 /* ────────────────────────────────────────────────────────────────────
    DialogueToast — Undertale-style RPG dialogue box for key notifications.
    Dark background + wood-shadow outer frame + corner nails.
