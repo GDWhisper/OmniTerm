@@ -1703,6 +1703,7 @@ export function Sidebar() {
           style={{
             padding: '2px 6px',
             background: 'var(--wood-shadow, #3A2E1F)',
+            flexShrink: 0,
           }}
         >
           <SignalBarsSprite size={14} connected={connected} />
@@ -1712,6 +1713,7 @@ export function Sidebar() {
               fontSize: 13,
               letterSpacing: 'var(--pixel-tracking-md)',
               color: connected ? '#7EE787' : '#FF7B72',
+              whiteSpace: 'nowrap',
             }}
           >
             {connected ? t('sidebar.link') : t('sidebar.lost')}

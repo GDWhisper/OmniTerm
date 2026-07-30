@@ -250,4 +250,21 @@ describe('Sidebar handleCreateSession', () => {
       expect(useAppStore.getState().activeSessionId).toBe(fakeNewSession.id)
     })
   })
+
+  it('连接状态 badge 文本不换行（防 CJK 竖排堆叠）', async () => {
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+    await vi.waitFor(() => {
+      // 选择器必须锚定底部 status bar——T10 后 CountBadge 也带 status-badge-3d 类，
+      // 裸 querySelector('.status-badge-3d') 会命中DOM更靠前的计数 badge
+      expect(container.querySelector('.absolute.bottom-0 .status-badge-3d')).toBeTruthy()
+    })
+    const badge = container.querySelector('.absolute.bottom-0 .status-badge-3d') as HTMLElement
+    expect(badge.style.flexShrink).toBe('0')
+    const label = badge.querySelector('.font-pixel') as HTMLElement
+    expect(label.style.whiteSpace).toBe('nowrap')
+  })
 })
