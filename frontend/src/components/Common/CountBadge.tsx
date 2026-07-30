@@ -1,6 +1,7 @@
 export function CountBadge({ count }: { count: number }) {
   return (
     <span
+      className="status-badge-3d"
       style={{
         fontFamily: 'var(--pixel-font-static)',
         fontSize: 16,
@@ -10,12 +11,6 @@ export function CountBadge({ count }: { count: number }) {
         padding: '1px 6px',
         minWidth: 24,
         textAlign: 'center',
-        boxShadow: `
-          inset 0 2px 0 var(--wood-inset-dark, #140F0A),
-          inset 2px 0 0 var(--wood-inset-dark, #140F0A),
-          inset 0 -2px 0 var(--wood-inset-light, #6E543A),
-          inset -2px 0 0 var(--wood-inset-light, #6E543A)
-        `,
       }}
     >
       {count}
