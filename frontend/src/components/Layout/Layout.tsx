@@ -11,6 +11,7 @@ import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
+import { decideSwipeAxis, applyEdgeResistance, resolveSwipeCommit } from '../../utils/swipe'
 
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
@@ -293,6 +294,9 @@ function DesktopLayout({
   )
 }
 
+const TAB_ORDER: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
+const SWIPE_SETTLE_MS = 160
+
 function MobileLayout() {
   const { t } = useTranslation()
   const {
@@ -308,17 +312,70 @@ function MobileLayout() {
     uiZoom,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
-  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
-  const handleSwipe = useCallback((direction: 'left' | 'right') => {
-    const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
-    const idx = order.indexOf(activeTab)
-    if (idx === -1) return
-    const next = direction === 'left' ? idx + 1 : idx - 1
-    if (next >= 0 && next < order.length) {
-      setActiveTab(order[next])
+  const contentRef = useRef<HTMLDivElement>(null)
+  const swipeCommitRef = useRef(false)
+  const settlingRef = useRef(false)
+  const dragRef = useRef<{ startX: number; startY: number; dx: number; axis: 'x' | 'y' | null } | null>(null)
+
+  const settleTransform = useCallback((x: number, onDone: () => void) => {
+    const el = contentRef.current
+    if (!el) { onDone(); return }
+    settlingRef.current = true
+    el.style.transition = `transform ${SWIPE_SETTLE_MS}ms ease-out`
+    el.style.transform = `translateX(${x}px)`
+    window.setTimeout(() => {
+      el.style.transition = ''
+      el.style.transform = ''
+      settlingRef.current = false
+      onDone()
+    }, SWIPE_SETTLE_MS)
+  }, [])
+
+  const onSwipeStart = useCallback((e: React.TouchEvent) => {
+    if (settlingRef.current) return
+    // Terminal area: horizontal drag is text selection (plan D2/D3).
+    if ((e.target as HTMLElement).closest('.xterm')) return
+    const touch = e.touches[0]
+    dragRef.current = { startX: touch.clientX, startY: touch.clientY, dx: 0, axis: null }
+  }, [])
+
+  const onSwipeMove = useCallback((e: React.TouchEvent) => {
+    const drag = dragRef.current
+    if (!drag || !contentRef.current) return
+    const touch = e.touches[0]
+    const dx = touch.clientX - drag.startX
+    const dy = touch.clientY - drag.startY
+    if (!drag.axis) {
+      drag.axis = decideSwipeAxis(dx, dy)
+      if (drag.axis === 'y') dragRef.current = null // hand back to list scroll
+      return
     }
-  }, [activeTab, setActiveTab])
+    const idx = TAB_ORDER.indexOf(activeTab)
+    const damped = applyEdgeResistance(dx, idx > 0, idx < TAB_ORDER.length - 1)
+    drag.dx = damped
+    contentRef.current.style.transform = `translateX(${damped}px)`
+  }, [activeTab])
+
+  const onSwipeEnd = useCallback(() => {
+    const drag = dragRef.current
+    dragRef.current = null
+    if (!drag || drag.axis !== 'x' || !contentRef.current) return
+    const idx = TAB_ORDER.indexOf(activeTab)
+    const canPrev = idx > 0
+    const canNext = idx < TAB_ORDER.length - 1
+    const commit = resolveSwipeCommit(drag.dx, canPrev, canNext)
+    if (!commit) {
+      settleTransform(0, () => {})
+      return
+    }
+    const width = contentRef.current.clientWidth
+    const target = commit === 'next' ? TAB_ORDER[idx + 1] : TAB_ORDER[idx - 1]
+    settleTransform(commit === 'next' ? -width : width, () => {
+      swipeCommitRef.current = true // MobileContent skips its slide animations (D4)
+      setActiveTab(target)
+    })
+  }, [activeTab, setActiveTab, settleTransform])
 
   const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
@@ -336,26 +393,15 @@ function MobileLayout() {
           onNewSession={() => setActiveTab('sessions')}
         />
         <div
+          ref={contentRef}
           className="flex-1 overflow-hidden"
-          onTouchStart={mobileGestureEnabled ? (e) => {
-            const touch = e.touches[0]
-            touchStart.current = { x: touch.clientX, y: touch.clientY }
-          } : undefined}
-          onTouchEnd={mobileGestureEnabled ? (e) => {
-            if (!touchStart.current) return
-            const { x: startX, y: startY } = touchStart.current
-            touchStart.current = null
-            const touch = e.changedTouches[0]
-            const dx = touch.clientX - startX
-            const dy = touch.clientY - startY
-            const edgeMargin = 24
-            if (Math.abs(dx) < Math.abs(dy)) return
-            if (Math.abs(dx) < 40) return
-            if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
-            handleSwipe(dx < 0 ? 'left' : 'right')
-          } : undefined}
+          style={{ touchAction: 'pan-y' }}
+          onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
+          onTouchMove={mobileGestureEnabled ? onSwipeMove : undefined}
+          onTouchEnd={mobileGestureEnabled ? onSwipeEnd : undefined}
+          onTouchCancel={mobileGestureEnabled ? onSwipeEnd : undefined}
         >
-          <MobileContent />
+          <MobileContent swipeCommitRef={swipeCommitRef} />
         </div>
         <MobileNav />
       </div>
@@ -368,7 +414,7 @@ function MobileLayout() {
   )
 }
 
-function MobileContent() {
+function MobileContent({ swipeCommitRef }: { swipeCommitRef: React.MutableRefObject<boolean> }) {
   const activeTab = useAppStore((s) => s.activeTab)
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const [displayedTab, setDisplayedTab] = useState(activeTab)
@@ -376,7 +422,16 @@ function MobileContent() {
 
   useEffect(() => {
     if (activeTab === displayedTab) return
-    
+
+    // Swipe commit: the finger already conveyed direction/distance — switch
+    // instantly instead of replaying slide animations (would double-translate).
+    if (swipeCommitRef.current) {
+      swipeCommitRef.current = false
+      setDisplayedTab(activeTab)
+      setAnimState('idle')
+      return
+    }
+
     // Determine if current content needs exit animation
     const needsExit = displayedTab === 'sessions' || displayedTab === 'files'
     
@@ -390,7 +445,7 @@ function MobileContent() {
     } else {
       setDisplayedTab(activeTab)
     }
-  }, [activeTab, displayedTab])
+  }, [activeTab, displayedTab, swipeCommitRef])
 
   const getAnimation = () => {
     if (animState === 'exiting') {
