@@ -189,6 +189,15 @@ export const api = {
   systemUpdate: () =>
     request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
 
+  // tmux options
+  tmuxGetMouse: () =>
+    request<{ enabled: boolean }>('/system/tmux/mouse'),
+  tmuxSetMouse: (enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean }>('/system/tmux/mouse', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
   // Auth
   setup: (password: string) =>
     request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }) }),

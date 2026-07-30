@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
+import { api } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
@@ -406,6 +407,62 @@ function AutoCopySection() {
   return <ToggleRow labelKey="settings.autoCopySelect" hintKey="settings.autoCopySelectHint" value={autoCopySelect} onToggle={() => setAutoCopySelect(!autoCopySelect)} />
 }
 
+function TmuxMouseSection() {
+  const { t } = useTranslation()
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const sendDataRef = useRef(useAppStore.getState().terminalSendData)
+
+  // Keep ref in sync with the store
+  useEffect(() => {
+    return useAppStore.subscribe((s) => { sendDataRef.current = s.terminalSendData })
+  }, [])
+
+  // Fetch current mouse option on mount
+  useEffect(() => {
+    api.tmuxGetMouse().then((r) => setEnabled(r.enabled)).catch(() => setEnabled(false))
+  }, [])
+
+  const handleToggle = async () => {
+    const next = !enabled
+    setEnabled(next)
+    try {
+      await api.tmuxSetMouse(next)
+      // Force the connected tmux client to re-read the option immediately
+      sendDataRef.current?.(`\x02:set -g mouse ${next ? 'on' : 'off'}\n`)
+    } catch {
+      setEnabled(!next) // revert on failure
+    }
+  }
+
+  if (enabled === null) return null // still loading
+
+  return (
+    <section className="space-y-2">
+      <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        {t('settings.tmuxMouse')}
+      </h3>
+      <button
+        onClick={handleToggle}
+        style={{
+          ...btnBase,
+          fontSize: 12,
+          padding: '5px 8px',
+          display: 'flex', alignItems: 'center', gap: 6,
+          ...(enabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+        }}
+      >
+        <span style={{
+          width: 8, height: 8, borderRadius: '50%',
+          background: enabled ? 'var(--success)' : 'var(--text-dim)',
+          transition: 'background 0.15s ease',
+        }} />
+        {enabled ? t('settings.on') : t('settings.off')}
+      </button>
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.tmuxMouseHint')}</p>
+    </section>
+  )
+}
+
 function AnimationsSection() {
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const setPixelAnimationsEnabled = useAppStore((s) => s.setPixelAnimationsEnabled)
@@ -576,7 +633,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'edit' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -603,9 +660,9 @@ const CATEGORIES: Category[] = [
     sections: [AuthSection],
   },
   {
-    id: 'edit',
-    labelKey: 'settings.category.edit',
-    sections: [AutoCopySection],
+    id: 'terminal',
+    labelKey: 'settings.category.terminal',
+    sections: [AutoCopySection, TmuxMouseSection],
   },
   {
     id: 'language',

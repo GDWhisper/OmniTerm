@@ -318,6 +318,14 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [])
 
+  // Register sendData in the app store so cross-component features (e.g.
+  // Settings > Terminal > Mouse Mode toggle) can send tmux commands.
+  // Only the most recently mounted terminal will be registered.
+  useEffect(() => {
+    useAppStore.getState().setTerminalSendData(sendData)
+    return () => useAppStore.getState().setTerminalSendData(null)
+  }, [sendData])
+
   /** Enter tmux copy mode (if not already) and scroll one page in the given direction.
    *  Uses the real tmux copy-mode state (tmuxScrollModeRef) as the source of
    *  truth, not the React `scrollMode` flag, so pagging always works after the

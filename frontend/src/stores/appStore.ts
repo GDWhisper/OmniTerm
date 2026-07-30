@@ -78,6 +78,10 @@ export interface AppState {
    */
   multiplexer: string
 
+  /** Registered sendData from the active terminal for cross-component access. */
+  terminalSendData: ((data: string) => void) | null
+  setTerminalSendData: (fn: ((data: string) => void) | null) => void
+
   // Mobile
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions'
@@ -194,6 +198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
+  terminalSendData: null as ((data: string) => void) | null,
 
   projects: [],
   worktrees: {},
@@ -282,6 +287,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     localStorage.setItem('omniterm_auto_copy_select', String(v))
     set({ autoCopySelect: v })
   },
+
+  setTerminalSendData: (fn) => set({ terminalSendData: fn }),
 
   setProjects: (projects) => set({ projects }),
   setWorktrees: (projectId, ws) =>

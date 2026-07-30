@@ -309,3 +309,23 @@ pub struct TmuxSessionInfo {
     pub agent_event: Option<String>,
     pub agent_nonce: Option<String>,
 }
+
+/// Read the global tmux `mouse` option (`-g`).
+/// Returns `true` if mouse mode is enabled, `false` if disabled.
+pub async fn get_mouse_option() -> Result<bool> {
+    let output = Command::new("tmux").args(["show-options", "-g", "mouse"]).output().await?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Output format: "mouse on\n" or "mouse off\n"
+    Ok(stdout.trim().ends_with("on"))
+}
+
+/// Set the global tmux `mouse` option (`-g`).
+pub async fn set_mouse_option(enabled: bool) -> Result<()> {
+    let value = if enabled { "on" } else { "off" };
+    let output = Command::new("tmux").args(["set-option", "-g", "mouse", value]).output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("tmux set mouse failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
