@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage, type ContentBlock } from '../../stores/chatStore'
@@ -297,6 +297,7 @@ export function ChatView() {
             <ChatMessageView
               key={m.id}
               message={m}
+              agentName={chatState.agentName}
               onEditResend={inputDisabled ? undefined : handleEditResend}
               onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
               isLastAssistant={m.id === lastAssistantId}
@@ -433,7 +434,7 @@ export function ChatView() {
 const SCRAMBLE_HEX = '0123456789abcdef'
 const SCRAMBLE_LEN = 16
 
-function ThinkingIndicator() {
+const ThinkingIndicator = memo(function ThinkingIndicator() {
   const textRef = useRef<HTMLSpanElement | null>(null)
   const startTimeRef = useRef(0)
 
@@ -479,4 +480,4 @@ function ThinkingIndicator() {
       <span ref={textRef} style={{ fontFamily: READER_FONT, letterSpacing: 0 }} />
     </div>
   )
-}
+})
