@@ -236,11 +236,10 @@ Includes corner nails (gold 8x8 squares), blinking pink caret `.dialogue-caret`,
 }
 ```
 
-**Content pattern**: `[decorator] TITLE [.title-bar-spacer] [.title-bar-badge / .title-bar-path]`
+**Content pattern**: `[decorator] TITLE [.title-bar-spacer] [.title-bar-badge]`
 
 - `.title-bar-spacer` — `margin-left: auto`, pushes right-side items to the end
 - `.title-bar-badge` — small status pill (e.g. `LIVE`), dark background + green text
-- `.title-bar-path` — gold-colored path text (e.g. current directory)
 
 The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10px`) and the `.font-logo` wordmark.
 

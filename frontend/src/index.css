@@ -1456,10 +1456,6 @@ body.parchment-texture {
 .panel-title-bar .title-bar-badge.badge-danger {
   color: var(--danger, #FF7B72);
 }
-.panel-title-bar .title-bar-path {
-  font-size: 11px;
-  color: var(--gold-light, #FFCB6B);
-}
 
 /* ────────────────────────────────────────────────────────────────────
    Overlay scrollbar — backs the <OverlayScroll> component. The native
@@ -1834,7 +1830,7 @@ body.parchment-texture {
 .dark .dialogue-toast::after,
 .dark .dialogue-toast > .nail-bl,
 .dark .dialogue-toast > .nail-br { background: #8B7755; }
-/* logo-version uses --accent-gold (same as title-bar-path) — see ui-style-guide §1.3 */
+/* logo-version uses --accent-gold — see ui-style-guide §1.3 */
 
 /* ────────────────────────────────────────────────────────────────────
    Todo Board — kanban-style task list fixed above ChatInput.
