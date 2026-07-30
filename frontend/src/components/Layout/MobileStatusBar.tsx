@@ -1,18 +1,38 @@
+import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
+
+/** Minimum horizontal displacement to register a session-switch swipe. */
+const SWIPE_MIN_PX = 40
 
 interface MobileStatusBarProps {
   connected: boolean
   sessionName: string
   onSessionClick: () => void
   onNewSession: () => void
+  onSwipeSession: (direction: 'prev' | 'next') => void
 }
 
-export function MobileStatusBar({ connected, sessionName, onSessionClick, onNewSession }: MobileStatusBarProps) {
+export function MobileStatusBar({ connected, sessionName, onSessionClick, onNewSession, onSwipeSession }: MobileStatusBarProps) {
   const { t } = useTranslation()
+  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
   return (
     <div
+      onTouchStart={(e) => {
+        const touch = e.touches[0]
+        touchStart.current = { x: touch.clientX, y: touch.clientY }
+      }}
+      onTouchEnd={(e) => {
+        const start = touchStart.current
+        touchStart.current = null
+        if (!start) return
+        const touch = e.changedTouches[0]
+        const dx = touch.clientX - start.x
+        const dy = touch.clientY - start.y
+        if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy)) return
+        onSwipeSession(dx < 0 ? 'next' : 'prev')
+      }}
       style={{
         height: 'calc(30px + env(safe-area-inset-top, 0px))',
         display: 'flex',

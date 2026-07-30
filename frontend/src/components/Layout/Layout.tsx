@@ -13,6 +13,7 @@ import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
 import { decideSwipeAxis, applyEdgeResistance, resolveSwipeCommit } from '../../utils/swipe'
 import { hapticTap } from '../../utils/haptics'
+import { nextSessionId } from '../../utils/sessionNav'
 
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
@@ -311,6 +312,9 @@ function MobileLayout() {
     setActiveTab,
     crtScanlines,
     uiZoom,
+    projects,
+    activeExternalSession,
+    activateSession,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
 
@@ -379,6 +383,15 @@ function MobileLayout() {
     })
   }, [activeTab, setActiveTab, settleTransform])
 
+  const handleSwipeSession = useCallback((dir: 'prev' | 'next') => {
+    if (activeExternalSession) return // external tmux sessions have no DB ordering
+    const orderedIds = projects.flatMap((p) => sessions[p.id] ?? []).map((s) => s.id)
+    const nextId = nextSessionId(orderedIds, activeSessionId, dir)
+    if (!nextId) return
+    hapticTap()
+    activateSession(nextId)
+  }, [projects, sessions, activeSessionId, activeExternalSession, activateSession])
+
   const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
 
@@ -393,6 +406,7 @@ function MobileLayout() {
           sessionName={activeSessionName}
           onSessionClick={() => setActiveTab('sessions')}
           onNewSession={() => setActiveTab('sessions')}
+          onSwipeSession={handleSwipeSession}
         />
         <div
           ref={contentRef}

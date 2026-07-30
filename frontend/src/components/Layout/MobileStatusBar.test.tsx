@@ -11,7 +11,7 @@ describe('MobileStatusBar', () => {
     const root = createRoot(container)
     root.render(
       <I18nextProvider i18n={i18n}>
-        <MobileStatusBar connected sessionName="api-server" onSessionClick={vi.fn()} onNewSession={vi.fn()} />
+        <MobileStatusBar connected sessionName="api-server" onSessionClick={vi.fn()} onNewSession={vi.fn()} onSwipeSession={vi.fn()} />
       </I18nextProvider>
     )
     await vi.waitFor(() => {
