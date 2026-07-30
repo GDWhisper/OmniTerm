@@ -2648,3 +2648,12 @@ select optgroup option {
 .sidebar-session-item.active .row-action {
   opacity: 1;
 }
+/* ── Touch devices: action buttons always visible (no hover to reveal) ── */
+@media (pointer: coarse) {
+  .sidebar-project-header .row-action,
+  .sidebar-wt-row .sidebar-wt-add-btn,
+  .sidebar-wt-row .row-action,
+  .sidebar-session-item .row-action {
+    opacity: 1;
+  }
+}
