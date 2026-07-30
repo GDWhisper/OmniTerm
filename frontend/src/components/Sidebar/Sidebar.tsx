@@ -22,6 +22,7 @@ import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
+import { PixelButton } from '../PixelUI/PixelButton'
 import { READER_FONT } from '../../utils/fonts'
 
 
@@ -1014,7 +1015,7 @@ export function Sidebar() {
     }
   }
 
-  const inputClass = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-all"
+  const inputClass = "w-full px-3 py-2 text-sm focus:outline-none transition-all"
   const inputStyle: React.CSSProperties = {
     background: 'var(--bg-surface)',
     border: '1px solid var(--border-strong)',
@@ -1916,12 +1917,12 @@ export function Sidebar() {
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={closeCreateProj}>
+            <PixelButton variant="secondary" onClick={closeCreateProj}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -1961,12 +1962,12 @@ export function Sidebar() {
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
+            <PixelButton variant="secondary" onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateSession} disabled={submitting}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2059,7 +2060,7 @@ export function Sidebar() {
             </select>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => {
+            <PixelButton variant="secondary" onClick={() => {
               setCreateWtOpen(false)
               setCreateWtProjectId(null)
               setCreateWtBranch('')
@@ -2069,10 +2070,10 @@ export function Sidebar() {
               setCreateWtCurrentBranch('')
             }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2113,15 +2114,16 @@ export function Sidebar() {
             />
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
+            <PixelButton variant="secondary" onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary
+            </PixelButton>
+            <PixelButton
+              variant="accent"
               onClick={handleRename}
               disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
             >
               {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2175,19 +2177,16 @@ export function Sidebar() {
             {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
           </label>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
+            <PixelButton variant="secondary" onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <button
+            </PixelButton>
+            <PixelButton
+              variant="danger"
               onClick={handleDeleteWorktree}
               disabled={!confirmDeleteWtChecked || submitting}
-              className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
-              style={{ background: 'var(--danger)' }}
-              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = '#C85A3A' }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--danger)' }}
             >
               {submitting ? t('sidebar.deleting') ?? 'Deleting...' : t('sidebar.delete')}
-            </button>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2385,12 +2384,12 @@ export function Sidebar() {
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
-              <ModalCancel onClick={closeRepairDialog}>
+              <PixelButton variant="secondary" onClick={closeRepairDialog}>
                 {t('sidebar.cancel') ?? 'Cancel'}
-              </ModalCancel>
-              <ModalPrimary onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
+              </PixelButton>
+              <PixelButton variant="accent" onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
                 {repairSubmitting ? t('sidebar.repairUpdating') ?? 'Updating…' : t('sidebar.repairUpdate') ?? 'Update Path'}
-              </ModalPrimary>
+              </PixelButton>
             </div>
           </div>
         )}
@@ -2432,10 +2431,11 @@ export function Sidebar() {
                 'Switch to the existing project instead, or choose a different path.'}
             </p>
             <div className="flex justify-end gap-2 pt-1">
-              <ModalCancel onClick={() => setCoverConflict(null)}>
+              <PixelButton variant="secondary" onClick={() => setCoverConflict(null)}>
                 {t('sidebar.cancel') ?? 'Cancel'}
-              </ModalCancel>
-              <ModalPrimary
+              </PixelButton>
+              <PixelButton
+                variant="accent"
                 onClick={() => {
                   const coverId = coverConflict.coveringProject.id
                   setActiveProject(coverId)
@@ -2452,7 +2452,7 @@ export function Sidebar() {
                 }}
               >
                 {t('sidebar.coverConflictSwitch') ?? 'Switch to existing'}
-              </ModalPrimary>
+              </PixelButton>
             </div>
           </div>
         )}
@@ -2543,43 +2543,6 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
       }}
     >
       <IconPower width={14} height={14} />
-    </button>
-  )
-}
-
-function ModalCancel({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className="px-4 py-2 text-sm rounded-lg transition-all"
-      style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--accent-10)'
-        e.currentTarget.style.borderColor = 'var(--accent)'
-        e.currentTarget.style.color = 'var(--text-primary)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'transparent'
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-muted)'
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function ModalPrimary({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
-      style={{ background: 'var(--accent)' }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bright)' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-    >
-      {children}
     </button>
   )
 }
