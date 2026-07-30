@@ -305,6 +305,7 @@ The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10
   style={{
     padding: '2px 6px',
     background: 'var(--wood-shadow, #3A2E1F)',
+    flexShrink: 0,
   }}
 >
   <SignalBarsSprite size={14} connected={connected} />
@@ -314,12 +315,16 @@ The sidebar logo uses a separate `.logo-title-bar` with larger padding (`14px 10
       fontSize: 13,
       letterSpacing: 2,
       color: connected ? '#7EE787' : '#FF7B72',
+      whiteSpace: 'nowrap',
     }}
   >
     {connected ? t('sidebar.link') : t('sidebar.lost')}
   </span>
 </div>
 ```
+
+> `whiteSpace: 'nowrap'` 与 `flexShrink: 0` 必须存在——CJK 文案在被 flex 挤压时
+> 会逐字竖排堆叠（2026-07-30 审查实证），缺了就是 bug。
 
 **例外**（可使用亮背景 + 主题色）：移动端顶部状态栏（`MobileStatusBar`）、
 任何贴在浅背景上的状态点。**例外的情况也不要加 border / shadow**。
@@ -376,6 +381,17 @@ Rules:
 
 例外：`0 0 0 2px var(--accent-14)` 形式的 **focus ring**（spread、无 blur）允许保留，
 它不是阴影而是可访问性焦点指示。
+
+### 6.2 原生控件与遮罩的像素化
+
+未经处理的浏览器原生控件是现代圆润风格，与像素体系冲突，必须显式覆写：
+
+| 控件 | 规则 |
+|------|------|
+| `input[type="range"]` | 统一走 `index.css` 的 pixel range 样式（方块 thumb + 块状 track，见 `.pixel-press` 后样式块），禁止仅设 `accentColor` 了事 |
+| Modal 遮罩 | 一律 `var(--modal-backdrop)`（light 暖棕 45% / dark 深黑 60%），禁止 `backdrop-blur`（在羊皮纸上糊成灰绿） |
+| `<select>` / 文本输入 | `border-radius: 0`，边框 `var(--border-strong)` |
+| checkbox / radio | 允许原生 + `accentColor` 主题化（深度定制收益低，暂不强制） |
 
 ---
 
@@ -619,6 +635,7 @@ Before adding any new UI element, verify:
 - [ ] **不可按的状态指示器遵守 §4.1 Status Badge 规范** — 深棕黑底 + 亮色文字，**无 border / 无 box-shadow**（避免看起来像 button）
 - [ ] Hard shadow uses `3px 3px 0` (not `4px` blur, not glow)
 - [ ] `border-radius: 0` everywhere (modals: `2px` max)
+- [ ] Modal/弹窗标题一律 `.panel-title-bar` 木条（`Modal.tsx` 已内建），遮罩一律 `var(--modal-backdrop)`（§6.2），禁止 `backdrop-blur`
 - [ ] Pixel font (`.font-pixel`) only for display text, not body/code
 - [ ] 可切换像素文字必须走 `var(--pixel-font)`（inline style 亦然），保证受像素字体 BETA 开关控制；顶栏豁免才用 `var(--pixel-font-static)`（§2）
 - [ ] Tested in both light and dark themes
