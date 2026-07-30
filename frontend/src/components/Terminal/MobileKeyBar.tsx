@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { hapticTap } from '../../utils/haptics'
 
@@ -15,10 +16,13 @@ interface MobileKeyBarProps {
 }
 
 const MOD_KEYS = ['Shift', 'Ctrl', 'Alt'] as const
-const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
+const ROW1_ITEMS = ['Esc', '^C', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
 const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
+/** Keys that never combine with a latched modifier — sent as-is. */
+const LATCH_BYPASS_KEYS = new Set<string>(['Enter', '^C'])
 
 export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode, refocusTextarea }: MobileKeyBarProps) {
+  const { t } = useTranslation()
   const handleClick = useCallback(
     (name: string) => {
       hapticTap()
@@ -29,6 +33,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
         onSetLatchMod(latchMod === mod ? null : mod)
         refocusTextarea?.()
+      } else if (LATCH_BYPASS_KEYS.has(name)) {
+        if (latchMod) onSetLatchMod(null)
+        onKey(name)
       } else if (latchMod) {
         const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
         onKey(`${mod}+${name}`)
@@ -62,12 +69,15 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
     className: 'mobikey-btn',
   }
 
-  const renderBtn = (k: string) => (
+  const renderBtn = (k: string, fluid = false) => (
     <button
       key={k}
       {...mobiBtnProps}
       onClick={() => handleClick(k)}
-      style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
+      style={{
+        ...(isModKey(k) ? modBtnStyle(k) : keyButtonStyle),
+        ...(fluid ? { flex: 1, minWidth: 0 } : {}),
+      }}
     >
       {k}
     </button>
@@ -87,32 +97,38 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         flexShrink: 0,
       }}
     >
-      {/* Row 1: Esc Shift Tab PgUp PgDn  ·  ↑ 滚动 */}
+      {/* Row 1: Esc ^C Shift Tab PgUp PgDn  ·  ↑ 滚动 */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW1_ITEMS.map(renderBtn)}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button {...mobiBtnProps} key="arrow-up" onClick={() => handleClick('↑')} style={keyButtonStyle}>↑</button>
+        <div style={{ display: 'flex', gap: 6, flex: 1, minWidth: 0 }}>
+          {ROW1_ITEMS.map((k) => renderBtn(k, true))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', flexShrink: 0 }}>
+          <button {...mobiBtnProps} key="arrow-up" onClick={() => handleClick('↑')} style={clusterKeyStyle}>↑</button>
           <button
             {...mobiBtnProps}
             key="scroll"
             onClick={() => { onToggleScrollMode() }}
             style={{
-              ...keyButtonStyle,
+              ...clusterKeyStyle,
+              minWidth: 52,
               color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
               background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
             }}
           >
-            滚动
+            {t('terminal.keyScroll')}
           </button>
         </div>
       </div>
-      {/* Row 2: Ctrl Alt Del Home End  ·  ← ↓ → */}
+      {/* Row 2: Ctrl Alt Del Home End  ·  ← ↓ → ⏎ */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW2_ITEMS.map(renderBtn)}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button {...mobiBtnProps} key="arrow-left" onClick={() => handleClick('←')} style={keyButtonStyle}>←</button>
-          <button {...mobiBtnProps} key="arrow-down" onClick={() => handleClick('↓')} style={keyButtonStyle}>↓</button>
-          <button {...mobiBtnProps} key="arrow-right" onClick={() => handleClick('→')} style={keyButtonStyle}>→</button>
+        <div style={{ display: 'flex', gap: 6, flex: 1, minWidth: 0 }}>
+          {ROW2_ITEMS.map((k) => renderBtn(k, true))}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', flexShrink: 0 }}>
+          <button {...mobiBtnProps} key="arrow-left" onClick={() => handleClick('←')} style={clusterKeyStyle}>←</button>
+          <button {...mobiBtnProps} key="arrow-down" onClick={() => handleClick('↓')} style={clusterKeyStyle}>↓</button>
+          <button {...mobiBtnProps} key="arrow-right" onClick={() => handleClick('→')} style={clusterKeyStyle}>→</button>
+          <button {...mobiBtnProps} key="enter" onClick={() => handleClick('Enter')} style={clusterKeyStyle}>⏎</button>
         </div>
       </div>
     </div>
@@ -120,8 +136,8 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
 }
 
 const keyButtonStyle: React.CSSProperties = {
-  minWidth: 40,
-  minHeight: 32,
+  minWidth: 36,
+  minHeight: 36,
   padding: '0 8px',
   borderRadius: 5,
   border: '1px solid var(--border-strong)',
@@ -133,4 +149,9 @@ const keyButtonStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   transition: 'transform 0.08s ease, filter 0.08s ease',
+}
+
+const clusterKeyStyle: React.CSSProperties = {
+  ...keyButtonStyle,
+  flexShrink: 0,
 }

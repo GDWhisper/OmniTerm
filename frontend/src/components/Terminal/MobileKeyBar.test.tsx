@@ -144,4 +144,27 @@ describe('MobileKeyBar', () => {
     vi.unstubAllGlobals()
     teardown(container, root)
   })
+
+  it('emits Enter bypassing an active modifier latch', async () => {
+    const { container, root, onKey } = setup()
+    const ctrl = await findBtn(container, 'Ctrl')
+    flushSync(() => { ctrl.click() }) // latch Ctrl
+    const enter = await findBtn(container, '⏎')
+    enter.click()
+    expect(onKey).toHaveBeenCalledWith('Enter') // 不是 'Ctrl+Enter'
+    // latch 被消费：下一键为普通键
+    onKey.mockClear()
+    const esc = await findBtn(container, 'Esc')
+    esc.click()
+    expect(onKey).toHaveBeenCalledWith('Esc')
+    teardown(container, root)
+  })
+
+  it('emits ^C as a plain key', async () => {
+    const { container, root, onKey } = setup()
+    const cut = await findBtn(container, '^C')
+    cut.click()
+    expect(onKey).toHaveBeenCalledWith('^C')
+    teardown(container, root)
+  })
 })

@@ -208,6 +208,12 @@ export function Terminal() {
       case 'End':
         sendData('\x1b[F')
         break
+      case 'Enter':
+        sendData('\r')
+        break
+      case '^C':
+        sendData('\x03')
+        break
       case '←':
         sendData('\x1b[D')
         break
