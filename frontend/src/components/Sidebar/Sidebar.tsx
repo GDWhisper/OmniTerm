@@ -1365,8 +1365,8 @@ export function Sidebar() {
                                     e.currentTarget.style.color = 'var(--danger)'
                                   }}
                                   onMouseLeave={(e) => {
-                                    e.currentTarget.style.borderColor = 'var(--border-strong)'
-                                    e.currentTarget.style.color = 'var(--text-faint)'
+                                    e.currentTarget.style.borderColor = ''
+                                    e.currentTarget.style.color = ''
                                   }}
                                 >
                                   <IconTrash width={14} height={14} />
@@ -1655,7 +1655,7 @@ export function Sidebar() {
                         </button>
                         <button
                           onClick={() => { setAdoptTarget(null); setAdoptProjectId('') }}
-                          className="flex items-center justify-center rounded transition-all"
+                          className="flex items-center justify-center transition-all"
                           style={{ width: 18, height: 18, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 10 }}
                         >
                           ✕
@@ -1739,7 +1739,7 @@ export function Sidebar() {
             href={GITHUB_REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center rounded transition-all"
+            className="flex items-center justify-center transition-all"
             style={{
               width: 26,
               height: 26,
@@ -2504,7 +2504,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all sidebar-glow-red-hover"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all sidebar-glow-red-hover"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.delete')}
       onMouseEnter={(e) => {

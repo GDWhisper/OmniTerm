@@ -1116,11 +1116,16 @@ body.fm-dragging * {
 .sidebar-wt-row .branch-name {
   font-size: 14px;
   color: var(--text-primary);
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 会话计数贴着分支名（信息区居左），右侧留给 hover 才显现的动作钮 */
+.sidebar-wt-row .status-badge-3d {
+  margin-right: auto;
 }
 
 .sidebar-wt-slot.active .sidebar-wt-row .branch-name {
