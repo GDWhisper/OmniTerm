@@ -1295,6 +1295,9 @@ body.fm-dragging * {
   text-transform: uppercase;
   color: #FAF2DE;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logo-version {

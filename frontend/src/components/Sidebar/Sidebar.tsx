@@ -1108,7 +1108,7 @@ export function Sidebar() {
       {/* Header — logo title bar */}
       <div className="logo-title-bar">
         <OmniTermLogo size={48} />
-        <div style={{ flex: 1, lineHeight: 1.1 }}>
+        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.1 }}>
           <div className="logo-wordmark">OmniTerm</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="logo-version">v{APP_VERSION}</div>
