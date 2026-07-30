@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { READER_FONT } from '../../utils/fonts'
+import { PixelButton } from '../PixelUI/PixelButton'
 
 interface Props {
   needsSetup: boolean
@@ -45,34 +46,39 @@ export function AuthPage({ needsSetup }: Props) {
 
   return (
     <div style={wrapperStyle}>
-      <div style={panelStyle}>
-        <div className="corner-nails" style={panelStyle}>
-          <div className="panel-title-bar" style={titleBarStyle}>
-            <span style={{ fontFamily: READER_FONT, fontSize: 12 }}>{title}</span>
-          </div>
-          <form onSubmit={onSubmit} style={formStyle}>
-            <label style={labelStyle} htmlFor="auth-password">
-              {t('auth.password')}
-            </label>
-            <input
-              id="auth-password"
-              type="password"
-              autoFocus
-              value={password}
-              onChange={(e) => {
-                setPassword(e.target.value)
-                setError('')
-              }}
-              style={inputStyle}
-              disabled={submitting}
-              autoComplete={needsSetup ? 'new-password' : 'current-password'}
-            />
-            {error && <p style={errorStyle}>{error}</p>}
-            <button type="submit" disabled={!password || submitting} style={btnStyle} className="pixel-button">
-              {submitting ? '...' : title}
-            </button>
-          </form>
+      <div className="corner-nails pixel-float" style={panelStyle}>
+        <span className="nail-bl" />
+        <span className="nail-br" />
+        <div className="panel-title-bar" style={titleBarStyle}>
+          <span style={{ fontFamily: READER_FONT, fontSize: 12 }}>{title}</span>
         </div>
+        <form onSubmit={onSubmit} style={formStyle}>
+          <label style={labelStyle} htmlFor="auth-password">
+            {t('auth.password')}
+          </label>
+          <input
+            id="auth-password"
+            type="password"
+            autoFocus
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value)
+              setError('')
+            }}
+            style={inputStyle}
+            disabled={submitting}
+            autoComplete={needsSetup ? 'new-password' : 'current-password'}
+          />
+          {error && <p style={errorStyle}>{error}</p>}
+          <PixelButton
+            variant="primary"
+            type="submit"
+            disabled={!password || submitting}
+            style={{ marginTop: 4 }}
+          >
+            {submitting ? '...' : title}
+          </PixelButton>
+        </form>
       </div>
     </div>
   )
@@ -89,8 +95,6 @@ const wrapperStyle: React.CSSProperties = {
 
 const panelStyle: React.CSSProperties = {
   background: 'var(--bg-elevated)',
-  border: '1px solid var(--border-strong)',
-  boxShadow: '4px 4px 0 0 var(--pixel-shadow)',
 }
 
 const titleBarStyle: React.CSSProperties = {
@@ -132,10 +136,4 @@ const errorStyle: React.CSSProperties = {
   fontSize: 12,
   fontFamily: READER_FONT,
   margin: 0,
-}
-
-const btnStyle: React.CSSProperties = {
-  marginTop: 4,
-  fontFamily: READER_FONT,
-  fontSize: 13,
 }

@@ -180,6 +180,7 @@
   --scrollbar-thumb: #8B7755;
   --scrollbar-thumb-hover: #6B5A3E;
   --scrollbar-track: #EBE0C4;
+  --modal-backdrop: rgba(58, 46, 31, 0.45);
   color-scheme: light;
 }
 
@@ -217,6 +218,7 @@
   --scrollbar-thumb: #484F58;
   --scrollbar-thumb-hover: #58A6FF;
   --scrollbar-track: #12141A;
+  --modal-backdrop: rgba(9, 10, 13, 0.6);
   color-scheme: dark;
 }
 
@@ -1114,11 +1116,16 @@ body.fm-dragging * {
 .sidebar-wt-row .branch-name {
   font-size: 14px;
   color: var(--text-primary);
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 会话计数贴着分支名（信息区居左），右侧留给 hover 才显现的动作钮 */
+.sidebar-wt-row .status-badge-3d {
+  margin-right: auto;
 }
 
 .sidebar-wt-slot.active .sidebar-wt-row .branch-name {
@@ -1295,6 +1302,9 @@ body.fm-dragging * {
   text-transform: uppercase;
   color: #FAF2DE;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .logo-version {
@@ -1450,10 +1460,6 @@ body.parchment-texture {
 }
 .panel-title-bar .title-bar-badge.badge-danger {
   color: var(--danger, #FF7B72);
-}
-.panel-title-bar .title-bar-path {
-  font-size: 11px;
-  color: var(--gold-light, #FFCB6B);
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -1691,6 +1697,44 @@ body.parchment-texture {
   box-shadow: none;
 }
 
+/* ── Pixel range slider — 方块 thumb + 块状 track，取代原生圆润样式 ── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 20px;
+  margin-top: -7px; /* thumb 垂直居中于 track */
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 20px;
+  background: var(--bg-elevated);
+  border: 2px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+}
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: translate(2px, 2px);
+  box-shadow: none;
+}
+
 /* ────────────────────────────────────────────────────────────────────
    DialogueToast — Undertale-style RPG dialogue box for key notifications.
    Dark background + wood-shadow outer frame + corner nails.
@@ -1829,7 +1873,7 @@ body.parchment-texture {
 .dark .dialogue-toast::after,
 .dark .dialogue-toast > .nail-bl,
 .dark .dialogue-toast > .nail-br { background: #8B7755; }
-/* logo-version uses --accent-gold (same as title-bar-path) — see ui-style-guide §1.3 */
+/* logo-version uses --accent-gold — see ui-style-guide §1.3 */
 
 /* ────────────────────────────────────────────────────────────────────
    Todo Board — kanban-style task list fixed above ChatInput.
@@ -2583,4 +2627,24 @@ select optgroup option {
 .mobikey-btn:active {
   transform: scale(0.93);
   filter: brightness(1.35);
+}
+
+/* ── Row action buttons — 平时隐藏，行 hover/focus-within/active 才显现（D2）── */
+.sidebar-project-header .row-action,
+.sidebar-wt-row .sidebar-wt-add-btn,
+.sidebar-wt-row .row-action,
+.sidebar-session-item .row-action {
+  opacity: 0;
+  transition: opacity 0.1s steps(2);
+}
+.sidebar-project-header:hover .row-action,
+.sidebar-project-header:focus-within .row-action,
+.sidebar-wt-row:hover .sidebar-wt-add-btn,
+.sidebar-wt-row:hover .row-action,
+.sidebar-wt-row:focus-within .sidebar-wt-add-btn,
+.sidebar-wt-row:focus-within .row-action,
+.sidebar-session-item:hover .row-action,
+.sidebar-session-item:focus-within .row-action,
+.sidebar-session-item.active .row-action {
+  opacity: 1;
 }

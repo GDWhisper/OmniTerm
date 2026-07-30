@@ -22,6 +22,7 @@ import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
+import { PixelButton } from '../PixelUI/PixelButton'
 import { READER_FONT } from '../../utils/fonts'
 
 
@@ -44,7 +45,7 @@ function SidebarBottomButton({
     <button
       data-toggle={toggle}
       onClick={onClick}
-      className={`flex items-center justify-center rounded transition-all ${className}`}
+      className={`row-action flex items-center justify-center transition-all ${className}`}
       style={{
         width: size,
         height: size,
@@ -1014,7 +1015,7 @@ export function Sidebar() {
     }
   }
 
-  const inputClass = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none transition-all"
+  const inputClass = "w-full px-3 py-2 text-sm focus:outline-none transition-all"
   const inputStyle: React.CSSProperties = {
     background: 'var(--bg-surface)',
     border: '1px solid var(--border-strong)',
@@ -1108,7 +1109,7 @@ export function Sidebar() {
       {/* Header — logo title bar */}
       <div className="logo-title-bar">
         <OmniTermLogo size={48} />
-        <div style={{ flex: 1, lineHeight: 1.1 }}>
+        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.1 }}>
           <div className="logo-wordmark">OmniTerm</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div className="logo-version">v{APP_VERSION}</div>
@@ -1265,7 +1266,7 @@ export function Sidebar() {
                           .catch(() => {})
                           .finally(() => setCreateWtBranchesLoading(false))
                       }}
-                      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+                      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
                       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
                       title={t('sidebar.createWorktree') ?? 'Create Worktree'}
                       onMouseEnter={(e) => {
@@ -1364,8 +1365,8 @@ export function Sidebar() {
                                     e.currentTarget.style.color = 'var(--danger)'
                                   }}
                                   onMouseLeave={(e) => {
-                                    e.currentTarget.style.borderColor = 'var(--border-strong)'
-                                    e.currentTarget.style.color = 'var(--text-faint)'
+                                    e.currentTarget.style.borderColor = ''
+                                    e.currentTarget.style.color = ''
                                   }}
                                 >
                                   <IconTrash width={14} height={14} />
@@ -1654,7 +1655,7 @@ export function Sidebar() {
                         </button>
                         <button
                           onClick={() => { setAdoptTarget(null); setAdoptProjectId('') }}
-                          className="flex items-center justify-center rounded transition-all"
+                          className="flex items-center justify-center transition-all"
                           style={{ width: 18, height: 18, border: '1px solid var(--border-strong)', color: 'var(--text-faint)', fontSize: 10 }}
                         >
                           ✕
@@ -1703,6 +1704,7 @@ export function Sidebar() {
           style={{
             padding: '2px 6px',
             background: 'var(--wood-shadow, #3A2E1F)',
+            flexShrink: 0,
           }}
         >
           <SignalBarsSprite size={14} connected={connected} />
@@ -1712,6 +1714,7 @@ export function Sidebar() {
               fontSize: 13,
               letterSpacing: 'var(--pixel-tracking-md)',
               color: connected ? '#7EE787' : '#FF7B72',
+              whiteSpace: 'nowrap',
             }}
           >
             {connected ? t('sidebar.link') : t('sidebar.lost')}
@@ -1736,7 +1739,7 @@ export function Sidebar() {
             href={GITHUB_REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center rounded transition-all"
+            className="flex items-center justify-center transition-all"
             style={{
               width: 26,
               height: 26,
@@ -1914,12 +1917,12 @@ export function Sidebar() {
             </div>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={closeCreateProj}>
+            <PixelButton variant="secondary" onClick={closeCreateProj}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -1959,12 +1962,12 @@ export function Sidebar() {
             </p>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
+            <PixelButton variant="secondary" onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateSession} disabled={submitting}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateSession} disabled={submitting}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2057,7 +2060,7 @@ export function Sidebar() {
             </select>
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => {
+            <PixelButton variant="secondary" onClick={() => {
               setCreateWtOpen(false)
               setCreateWtProjectId(null)
               setCreateWtBranch('')
@@ -2067,10 +2070,10 @@ export function Sidebar() {
               setCreateWtCurrentBranch('')
             }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
+            </PixelButton>
+            <PixelButton variant="accent" onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
               {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2111,15 +2114,16 @@ export function Sidebar() {
             />
           </div>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
+            <PixelButton variant="secondary" onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <ModalPrimary
+            </PixelButton>
+            <PixelButton
+              variant="accent"
               onClick={handleRename}
               disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
             >
               {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
-            </ModalPrimary>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2173,19 +2177,16 @@ export function Sidebar() {
             {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
           </label>
           <div className="flex justify-end gap-2 pt-1">
-            <ModalCancel onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
+            <PixelButton variant="secondary" onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
               {t('sidebar.cancel')}
-            </ModalCancel>
-            <button
+            </PixelButton>
+            <PixelButton
+              variant="danger"
               onClick={handleDeleteWorktree}
               disabled={!confirmDeleteWtChecked || submitting}
-              className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
-              style={{ background: 'var(--danger)' }}
-              onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.background = '#C85A3A' }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--danger)' }}
             >
               {submitting ? t('sidebar.deleting') ?? 'Deleting...' : t('sidebar.delete')}
-            </button>
+            </PixelButton>
           </div>
         </div>
       </Modal>
@@ -2383,12 +2384,12 @@ export function Sidebar() {
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
-              <ModalCancel onClick={closeRepairDialog}>
+              <PixelButton variant="secondary" onClick={closeRepairDialog}>
                 {t('sidebar.cancel') ?? 'Cancel'}
-              </ModalCancel>
-              <ModalPrimary onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
+              </PixelButton>
+              <PixelButton variant="accent" onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
                 {repairSubmitting ? t('sidebar.repairUpdating') ?? 'Updating…' : t('sidebar.repairUpdate') ?? 'Update Path'}
-              </ModalPrimary>
+              </PixelButton>
             </div>
           </div>
         )}
@@ -2430,10 +2431,11 @@ export function Sidebar() {
                 'Switch to the existing project instead, or choose a different path.'}
             </p>
             <div className="flex justify-end gap-2 pt-1">
-              <ModalCancel onClick={() => setCoverConflict(null)}>
+              <PixelButton variant="secondary" onClick={() => setCoverConflict(null)}>
                 {t('sidebar.cancel') ?? 'Cancel'}
-              </ModalCancel>
-              <ModalPrimary
+              </PixelButton>
+              <PixelButton
+                variant="accent"
                 onClick={() => {
                   const coverId = coverConflict.coveringProject.id
                   setActiveProject(coverId)
@@ -2450,7 +2452,7 @@ export function Sidebar() {
                 }}
               >
                 {t('sidebar.coverConflictSwitch') ?? 'Switch to existing'}
-              </ModalPrimary>
+              </PixelButton>
             </div>
           </div>
         )}
@@ -2478,7 +2480,7 @@ function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.rename')}
       onMouseEnter={(e) => {
@@ -2502,7 +2504,7 @@ function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all sidebar-glow-red-hover"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all sidebar-glow-red-hover"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.delete')}
       onMouseEnter={(e) => {
@@ -2526,7 +2528,7 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
   return (
     <button
       onClick={onClick}
-      className="flex-shrink-0 flex items-center justify-center rounded transition-all"
+      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
       title={t('sidebar.releaseAcp')}
       onMouseEnter={(e) => {
@@ -2541,43 +2543,6 @@ function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) 
       }}
     >
       <IconPower width={14} height={14} />
-    </button>
-  )
-}
-
-function ModalCancel({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className="px-4 py-2 text-sm rounded-lg transition-all"
-      style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--accent-10)'
-        e.currentTarget.style.borderColor = 'var(--accent)'
-        e.currentTarget.style.color = 'var(--text-primary)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'transparent'
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-muted)'
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-function ModalPrimary({ onClick, disabled, children }: { onClick: () => void; disabled?: boolean; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
-      style={{ background: 'var(--accent)' }}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bright)' }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-    >
-      {children}
     </button>
   )
 }

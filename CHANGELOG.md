@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.3] - 2026-07-30
 
 ### Added
 
@@ -59,7 +59,17 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-30 11:16) `[frontend]` 修复侧栏默认宽度过窄（160px）导致 logo 词标、worktree 分支名、会话名被截断或完全不可见：默认/拖拽下限提至 256/200px，旧 localStorage 过窄值加载时自愈，词标窄宽走 ellipsis 优雅降级（`frontend/src/stores/appStore.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/index.css`）
+- (2026-07-30 11:13) `[frontend]` 修复桌面端连接状态 badge 中文文案被 flex 挤压时逐字竖排堆叠：badge 容器 `flexShrink: 0` + 文本 `nowrap`（`frontend/src/components/Sidebar/Sidebar.tsx`）
+- (2026-07-30 11:14) `[frontend]` 修复登录页主按钮引用不存在的 `pixel-button` 类导致零样式、面板双重边框且缺底部角钉：迁移共享 `PixelButton`，面板收敛为单层 `pixel-float` + 四角钉（`frontend/src/components/Auth/AuthPage.tsx`）
+- (2026-07-30 11:21) `[frontend]` 修复文件管理器表格默认列宽（name 固定 300px）超出面板导致大小列不可见、日期被裁断：name 列随容器 ResizeObserver 自适应，手动拖列后退出自适应（`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-07-29) `[infra]` 修复公开仓 main 的 CI audit job 恒红：`ci.yml` 无条件执行 `scripts/check-doc-index.sh`，但该脚本校验的 AGENTS.md/docs/ 均在 sync 黑名单中不进公开仓，脚本本身也随 main 清理不存在，push main 必然 exit 127；改为脚本存在时才执行（dev 生效、public main 跳过）（`.github/workflows/ci.yml`）
+
+### Changed
+
+- (2026-07-30 11:20) `[frontend]` Modal 弹窗统一木条标题栏（`.panel-title-bar`）与平涂遮罩 token `--modal-backdrop`（弃用 `backdrop-blur`）；弹窗内输入/select/按钮硬角化，按钮统一迁移共享 `PixelButton` 并删除 Sidebar 局部重复按钮组件（`frontend/src/components/Modal/Modal.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Sidebar/DuplicateProjectsDialog.tsx`、`frontend/src/index.css`）
+- (2026-07-30 11:29) `[frontend]` 设置页滑杆改为像素方块样式（方块 thumb + 块状 track）；Toast 通知移除 emoji 图标与旧 tailwind 色类，统一 `toast-pixel` 单轨样式；CountBadge 复用 `.status-badge-3d`；右栏标题栏不再展示 session-id hex；FileDrawer/FilePreview 圆角清零（`frontend/src/index.css`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Toast/Toast.tsx`、`frontend/src/components/Common/CountBadge.tsx`、`frontend/src/components/RightPanel/RightPanel.tsx`、`frontend/src/components/FileManager/`）
+- (2026-07-30 11:32) `[frontend]` 侧栏行内操作按钮（项目卡/worktree/会话行的重命名、删除、新建等）改为行 hover/键盘聚焦时显现，选中会话行常显，降低常驻视觉噪音（`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/index.css`）
 
 ## [0.2.2] - 2026-07-29
 

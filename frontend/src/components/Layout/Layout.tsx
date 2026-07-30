@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAppStore, type AppState } from '../../stores/appStore'
+import { useAppStore, MIN_SIDEBAR_WIDTH, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
@@ -95,7 +95,7 @@ export function Layout() {
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        curWidth = Math.max(140, Math.min(maxSidebar, sidebarWidth + mvX - startX))
+        curWidth = Math.max(MIN_SIDEBAR_WIDTH, Math.min(maxSidebar, sidebarWidth + mvX - startX))
         if (sidebarRef.current) sidebarRef.current.style.width = `${curWidth}px`
       }
 

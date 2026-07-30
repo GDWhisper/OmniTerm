@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Modal } from '../Modal/Modal'
 import { api, type DuplicateGroup, type DuplicateProject } from '../../api/client'
 import { READER_FONT } from '../../utils/fonts'
+import { PixelButton } from '../PixelUI/PixelButton'
 
 /**
  * Modal that lets the user reconcile legacy duplicate projects.
@@ -109,35 +110,14 @@ export function DuplicateProjectsDialog({
         )}
 
         <div className="flex justify-end gap-2 pt-1">
-          <button
-            onClick={handleClose}
-            className="px-4 py-2 text-sm rounded-lg transition-all"
-            style={{ borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-muted)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--accent-10)'
-              e.currentTarget.style.borderColor = 'var(--accent)'
-              e.currentTarget.style.color = 'var(--text-primary)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-              e.currentTarget.style.borderColor = 'var(--border-strong)'
-              e.currentTarget.style.color = 'var(--text-muted)'
-            }}
-          >
+          <PixelButton variant="secondary" onClick={handleClose}>
             {t('sidebar.cancel') ?? 'Cancel'}
-          </button>
-          <button
-            onClick={handleConfirm}
-            disabled={!allChosen || submitting}
-            className="px-4 py-2 text-sm rounded-lg text-white transition-all disabled:opacity-50"
-            style={{ background: 'var(--accent)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-bright)' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-          >
+          </PixelButton>
+          <PixelButton variant="accent" onClick={handleConfirm} disabled={!allChosen || submitting}>
             {submitting
               ? (t('sidebar.merging') ?? 'Merging…')
               : (t('sidebar.dupMerge') ?? 'Merge')}
-          </button>
+          </PixelButton>
         </div>
       </div>
     </Modal>
@@ -161,7 +141,7 @@ function DuplicateGroupCard({
 
   return (
     <div
-      className="rounded-lg p-3"
+      className="p-3"
       style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-strong)' }}
     >
       <div className="flex items-baseline justify-between mb-2">

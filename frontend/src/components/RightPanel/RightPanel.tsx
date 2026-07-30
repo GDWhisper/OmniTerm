@@ -17,7 +17,6 @@ export function RightPanel() {
   const setRightPanelTab = useAppStore((s) => s.setRightPanelTab)
   const collapsed = useAppStore((s) => s.fileManagerCollapsed)
   const toggleCollapsed = useAppStore((s) => s.toggleFileManagerCollapsed)
-  const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const isMobile = useAppStore((s) => s.isMobile)
 
   if (collapsed && !isMobile) {
@@ -84,7 +83,6 @@ export function RightPanel() {
           GIT
         </button>
         <span className="title-bar-spacer" />
-        {activeWorkspaceId && <span className="title-bar-path">~/{activeWorkspaceId}</span>}
         {!isMobile && (
           <button
             className="title-bar-collapse"

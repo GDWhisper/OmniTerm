@@ -8,6 +8,9 @@ export type { Project, Workspace, Session }
  *  Keep in sync with the reset button in Settings.tsx. */
 export const DEFAULT_UI_ZOOM = 100
 
+export const MIN_SIDEBAR_WIDTH = 200
+export const DEFAULT_SIDEBAR_WIDTH = 256
+
 interface FmSessionState {
   mode: 'following' | 'manual'
   manualPath: string | null // absolute path when in manual mode
@@ -173,7 +176,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   fileManagerOpen: true,
   fileManagerCollapsed: false,
   rightPanelTab: (localStorage.getItem('omniterm_right_panel_tab') as AppState['rightPanelTab']) || 'files',
-  sidebarWidth: parseInt(localStorage.getItem('omniterm_sidebar_width') || String(Math.max(160, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8)))),
+  sidebarWidth: (() => {
+    const fallback = Math.max(DEFAULT_SIDEBAR_WIDTH, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) / 8))
+    const stored = parseInt(localStorage.getItem('omniterm_sidebar_width') || String(fallback))
+    // 旧版本默认 160 留下的过窄存档值自愈到合法区间
+    return Number.isFinite(stored) ? Math.max(MIN_SIDEBAR_WIDTH, stored) : fallback
+  })(),
   fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   // Read persisted zoom; fall back to default if missing OR corrupted (e.g. a

@@ -84,7 +84,7 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
             borderWidth: '1px',
             borderStyle: 'solid',
             borderColor: 'var(--border-strong)',
-            borderRadius: 5,
+            borderRadius: 0,
             color: 'var(--accent)',
             fontSize: 12,
             textDecoration: 'none',
@@ -121,7 +121,7 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
             maxWidth: '100%',
             maxHeight: '100%',
             objectFit: 'contain',
-            borderRadius: 4,
+            borderRadius: 0,
           }}
         />
       </div>

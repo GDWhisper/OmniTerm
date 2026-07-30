@@ -32,7 +32,8 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in"
+      style={{ background: 'var(--modal-backdrop)' }}
     >
       <div
         className={`corner-nails pixel-float ${maxWidth} w-full mx-4 animate-scale-in`}
@@ -44,25 +45,13 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
       >
         <span className="nail-bl" />
         <span className="nail-br" />
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border-strong)' }}>
-          <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>{title}</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded transition-all"
-            style={{ color: 'var(--text-faint)' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = 'var(--text-primary)'
-              e.currentTarget.style.background = 'var(--accent-10)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = 'var(--text-faint)'
-              e.currentTarget.style.background = 'transparent'
-            }}
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+        {/* Header — 与其他面板一致的木条标题（ui-style-guide §4） */}
+        <div className="panel-title-bar">
+          <span>◆</span>
+          <h3 style={{ margin: 0, font: 'inherit' }}>{title}</h3>
+          <span className="title-bar-spacer" />
+          <button className="title-bar-collapse" onClick={onClose}>
+            ✕
           </button>
         </div>
 

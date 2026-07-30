@@ -29,6 +29,9 @@ const SortIndicator = ({ col, sortKey, sortDesc }: { col: SortKey; sortKey: Sort
     </span>
   ) : null
 
+// 文件表格固定列宽（px）——name 列在容器内自适应剩余宽度（D5）
+const FM_COL = { mtime: 140, size: 100, actions: 104, minName: 140 } as const
+
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
   if (bytes === 0) return '0 B'
@@ -139,7 +142,8 @@ export function FileManager() {
   const bcRef = useRef<HTMLDivElement>(null)
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [colWidths, setColWidths] = useState({ name: 300, mtime: 140, size: 100 })
+  const [colWidths, setColWidths] = useState({ name: 300, mtime: FM_COL.mtime, size: FM_COL.size })
+  const [nameColAuto, setNameColAuto] = useState(true)
   const colRefs = useRef<Record<'name' | 'mtime' | 'size', HTMLTableColElement | null>>({
     name: null,
     mtime: null,
@@ -218,6 +222,22 @@ export function FileManager() {
     onMoveComplete: () => fetchFiles(),
   })
 
+  // name 列随容器自适应；用户一旦手动拖拽任何列，永久退出自适应（D5）
+  useEffect(() => {
+    if (!nameColAuto) return
+    const el = fileDragTableRef.current
+    if (!el) return
+    const fit = () =>
+      setColWidths((cw) => {
+        const name = Math.max(FM_COL.minName, el.clientWidth - FM_COL.mtime - FM_COL.size - FM_COL.actions - 2)
+        return cw.name === name ? cw : { ...cw, name }
+      })
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [nameColAuto, fileDragTableRef])
+
   // SSE-driven refresh: when a file change event arrives, silently refresh the file list
   useEffect(() => {
     if (!fileChangeEvent || !activeSessionId) return
@@ -283,6 +303,7 @@ export function FileManager() {
   }, [])
 
   const handleResizeStart = (col: string, e: React.MouseEvent | React.TouchEvent) => {
+    setNameColAuto(false)
     e.preventDefault()
     e.stopPropagation()
     const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
