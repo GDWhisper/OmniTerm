@@ -1,25 +1,27 @@
-# OmniTerm v0.2.2 更新摘要
+# OmniTerm v0.2.3 更新摘要
 
 > 本版本亮点由发布 agent 基于 CHANGELOG 手动总结。详细条目见 CHANGELOG.md。
 
+## 新功能
+
+- 恢复 npm 分发渠道：`npm install -g @gdwhisper/omniterm`，采用原生平台分包，安装时只拉取当前平台的 binary
+
 ## 重要修复
 
-本版本集中修复 Windows 平台可用性问题：
-
-- 修复 Windows 上终端会话只显示「已附加」、完全无法输入的问题（psmux 链式命令不进入交互 attach）
-- 大幅降低 Windows 会话切换延迟（escape-time 设置改为一次性缓存 + 异步执行）
-- 修复侧边栏展开项目明显卡顿：前端展开不再被网络请求阻塞，后端 git 探测并发化
-- 修复 Windows 工作区路径显示异常（`/g:/Codes` 多前导斜杠）及路径尾部斜杠被 bidi 重排到开头的显示错误
-- 修复浏览 Windows 用户主目录返回 500：不可读条目（ACL 拒绝的遗留 junction）现被跳过
-- 修复 `dev.ps1` stop/restart 永久挂死及进程树杀不干净的问题
+- 修复登录页主按钮零样式、面板双重边框的问题
+- 修复侧栏默认宽度过窄导致分支名 / 会话名被截断不可见
+- 修复文件管理器默认列宽溢出导致大小列不可见、日期被裁断
+- 修复连接状态徽标中文文案被挤压成竖排堆叠
 
 ## 工程改进
 
-- Windows 上创建会话弹窗的终端类型按平台显示为「psmux」，避免与 tmux 混淆
+- UI 像素风统一：弹窗、Toast、滑杆、徽标等控件硬角化，删除重复局部实现
+- 侧栏行内操作按钮改为 hover / 键盘聚焦时显现，降低常驻视觉噪音
+- 修复公开仓 CI audit job 恒红（check-doc-index 改为条件执行）
 
 ## 安装与升级
 
 - 新用户：使用 `install.sh`（Linux / macOS）或 `install.ps1`（Windows）一键安装
-- 升级：从 Releases 下载对应平台 binary 覆盖，或运行 `omniterm update` 一键升级
+- 升级：`omniterm update`、`npm update -g @gdwhisper/omniterm` 或 `cargo install omniterm`
 
-**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.1...v0.2.2
+**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.2...v0.2.3
