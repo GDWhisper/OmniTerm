@@ -160,9 +160,10 @@ enum AcpServerMessage<'a> {
     #[serde(rename = "permission_request")]
     PermissionRequest { id: &'a str, request: &'a serde_json::Value },
     /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
-    /// 前端据此显示/隐藏附件入口。
+    /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
+    /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
     #[serde(rename = "capabilities")]
-    Capabilities { image: bool },
+    Capabilities { image: bool, agent_name: String },
 }
 
 fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
@@ -325,6 +326,19 @@ async fn spawn_permission_task(
     });
 }
 
+/// 查询 ACP 会话所用 agent 的 `display_name`（用于聊天气泡身份显示）。
+/// 查不到（非 ACP 会话 / agent 缺失）时返回空串，前端回退到 "agent"。
+async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT a.display_name FROM sessions s JOIN agents a ON a.id = s.agent_id WHERE s.id = ? AND s.runtime_kind = 'acp'")
+            .bind(session_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+    row.map(|(name,)| name).unwrap_or_default()
+}
+
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
@@ -353,8 +367,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                     .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            let agent_name = query_agent_name(&state.db, &session_id).await;
             let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                 image: c.supports_image(),
+                agent_name,
             })
             .unwrap_or_default();
             let _ = notify_tx.send(Message::Text(msg.into())).await;
@@ -525,6 +541,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 };
 
                                 let cwd = std::path::PathBuf::from(&ws_path);
+                                let agent_display_name = agent.display_name.clone();
                                 match AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone()).await {
                                     Ok(new_client) => {
                                         let new_client = Arc::new(new_client);
@@ -557,6 +574,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
                                         let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                                             image: new_client.supports_image(),
+                                            agent_name: agent_display_name,
                                         }).unwrap_or_default();
                                         let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
 

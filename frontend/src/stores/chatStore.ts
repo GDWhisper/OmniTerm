@@ -209,6 +209,8 @@ interface ChatSessionState {
    * undefined = 尚未收到声明，UI 按不支持处理（保守降级）。
    */
   imageSupported?: boolean
+  /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
+  agentName?: string
 }
 
 interface ChatActions {
@@ -253,6 +255,8 @@ interface ChatActions {
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
   setImageSupported: (sessionId: string, supported: boolean) => void
+  /** 设置当前会话 agent 的显示名（后端 capabilities 帧下发）。 */
+  setAgentName: (sessionId: string, name: string) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
   upsertTerminalActivity: (sessionId: string, event: TerminalActivity) => void
   reset: (sessionId: string) => void
@@ -830,6 +834,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setImageSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { imageSupported: supported })),
+
+  setAgentName: (sessionId, name) =>
+    set((state) => patch(state, sessionId, { agentName: name })),
 
   patchConfigOptionValue: (sessionId, configId, value) =>
     set((state) => {

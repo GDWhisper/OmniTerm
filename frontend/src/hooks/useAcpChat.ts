@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction, type PendingPermission } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -38,6 +38,7 @@ interface ServerFrame {
   status?: string
   exit_code?: number | null
   image?: boolean
+  agent_name?: string
 }
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [

@@ -316,9 +316,11 @@ export interface ChatMessageViewProps {
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   isLastAssistant?: boolean
+  /** agent 气泡显示名（后端 capabilities 帧下发的 display_name）；缺省回退 "agent"。 */
+  agentName?: string
 }
 
-export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant }: ChatMessageViewProps) {
+export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant, agentName }: ChatMessageViewProps) {
   const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -335,7 +337,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         letterSpacing: '0.05em',
       }}
     >
-      {isUser ? 'you' : isSystem ? 'system' : 'agent'}
+      {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
       )}
