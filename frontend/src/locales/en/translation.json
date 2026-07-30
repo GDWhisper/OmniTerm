@@ -150,6 +150,8 @@
   "terminal.status.exited": "Process exited: {{code}}",
   "terminal.copySuccess": "Text copied",
   "terminal.keyScroll": "SCROLL",
+  "terminal.paste": "Paste",
+  "terminal.pasteFailed": "Unable to read clipboard",
   "chat.noSession": "Select or create an ACP session",
   "chat.empty": "No messages yet — type a prompt below to start.",
   "chat.input.placeholder": "Type a prompt… (Enter to send, Shift+Enter for newline)",
