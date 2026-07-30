@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
+import { attachTouchScroll } from '../utils/touchScroll'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -102,6 +103,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
+  const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
   // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
   const tmuxScrollModeRef = useRef(false)
@@ -368,6 +370,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
     }
+    if (touchScrollCleanupRef.current) {
+      touchScrollCleanupRef.current()
+      touchScrollCleanupRef.current = null
+    }
     keyHandlerAttachedRef.current = false
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
     listenerDisposablesRef.current = []
@@ -506,6 +512,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     mouseUpHandlerRef.current = () => {
       container.removeEventListener('mouseup', handleMouseUp)
     }
+
+    // Mobile touch scroll: vertical finger drags become wheel events so
+    // tmux mouse-mode scrolls history (xterm has no native touch scroll).
+    touchScrollCleanupRef.current = attachTouchScroll(container)
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
