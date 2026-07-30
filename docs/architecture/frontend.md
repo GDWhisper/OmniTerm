@@ -19,13 +19,13 @@ src/
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
 │   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size
-│   ├── useMediaQuery.ts # Mobile breakpoint detection
+│   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
 │   └── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx, UpdateBadge.tsx（版本号旁新版本 badge + 升级面板，`useAnchorPopup` free 模式）

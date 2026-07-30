@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-07-31 00:21) `[frontend]` 移动端交互优化（计划 `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md`）：终端支持手指拖动滚动（纵向 drag 合成滚轮事件直达 tmux 历史，横向 drag 保留文本选择）；标签页切换改为跟手滑动（边缘阻尼 + 松手提交/回弹，终端区排除）；虚拟按键/导航/滑动提交/会话切换增加触觉反馈（Android，iOS 静默跳过）；横屏 + 软键盘弹出时自动隐藏虚拟键栏；顶部状态栏左右滑动循环切换会话；虚拟键栏新增 ⏎ 与一键 ^C 且按键触摸目标加大至 36px；长按终端弹出粘贴菜单；底部导航触摸目标加大至 44pt 并修正设置页手势文案（`frontend/src/utils/{touchScroll,swipe,haptics,sessionNav}.ts`、`frontend/src/hooks/{useTerminal,useMediaQuery}.ts`、`frontend/src/components/Terminal/{Terminal,MobileKeyBar}.tsx`、`frontend/src/components/Layout/{Layout,MobileNav,MobileStatusBar}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-29) `[infra]` 恢复 npm 分发渠道，改用 esbuild 式原生平台分包：主包 `@gdwhisper/omniterm` 仅含 `shim.js`（`require.resolve` 定位平台包 binary + PATH 回退带递归守卫），`optionalDependencies` 精确锁定 4 个含真实 binary 的平台子包（`omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），安装时按 `os`/`cpu` 只拉当前平台——替代原 postinstall 从 GitHub Release 下载的壳包（此前误判「npm 无法原生发布」而下架）。发布经 `release.yml` 的 `npm-publish` job 自动化（tag push 后从 Release 拉资产、`scripts/npm-prepare.sh` staging、幂等发布平台包+主包），并支持 `workflow_dispatch` 补发历史版本（`npm-package/`、`scripts/npm-prepare.sh`、`.github/workflows/release.yml`）
 
 ### Fixed
