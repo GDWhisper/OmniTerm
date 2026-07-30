@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { READER_FONT } from '../../utils/fonts'
+import { hapticTap } from '../../utils/haptics'
 
 interface MobileKeyBarProps {
   latchMod: string | null
@@ -20,6 +21,7 @@ const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
 export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode, refocusTextarea }: MobileKeyBarProps) {
   const handleClick = useCallback(
     (name: string) => {
+      hapticTap()
       // Modifier keys toggle the latch and refocus the xterm textarea so
       // the soft keyboard stays open for the subsequent character (e.g.
       // Ctrl+C typed via IME).

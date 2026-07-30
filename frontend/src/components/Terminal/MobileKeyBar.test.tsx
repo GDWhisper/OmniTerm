@@ -133,4 +133,15 @@ describe('MobileKeyBar', () => {
     expect(onKey).toHaveBeenCalledWith('Alt+Esc')
     teardown(container, root)
   })
+
+  it('fires haptic feedback on key tap', async () => {
+    const vibrate = vi.fn()
+    vi.stubGlobal('navigator', { vibrate })
+    const { container, root } = setup()
+    const esc = await findBtn(container, 'Esc')
+    esc.click()
+    expect(vibrate).toHaveBeenCalled()
+    vi.unstubAllGlobals()
+    teardown(container, root)
+  })
 })

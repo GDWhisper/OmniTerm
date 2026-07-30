@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { IconSessions, IconTerminal, IconFiles } from '../Icons/MobileIcons'
+import { hapticTap } from '../../utils/haptics'
 
 const tabs = [
   { id: 'sessions' as const, Icon: IconSessions },
@@ -47,7 +48,7 @@ export function MobileNav() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { hapticTap(); setActiveTab(tab.id) }}
               style={{
                 display: 'flex',
                 alignItems: 'center',

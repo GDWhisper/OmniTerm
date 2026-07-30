@@ -12,6 +12,7 @@ import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
 import { decideSwipeAxis, applyEdgeResistance, resolveSwipeCommit } from '../../utils/swipe'
+import { hapticTap } from '../../utils/haptics'
 
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
@@ -371,6 +372,7 @@ function MobileLayout() {
     }
     const width = contentRef.current.clientWidth
     const target = commit === 'next' ? TAB_ORDER[idx + 1] : TAB_ORDER[idx - 1]
+    hapticTap()
     settleTransform(commit === 'next' ? -width : width, () => {
       swipeCommitRef.current = true // MobileContent skips its slide animations (D4)
       setActiveTab(target)
