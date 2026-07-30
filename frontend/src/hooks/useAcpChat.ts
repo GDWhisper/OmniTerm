@@ -603,45 +603,23 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             }
             break
           }
+          // ALL actions → live buffer, flushed once per rAF frame via
+          // applyReplayBatch (single set() call = one re-render per frame).
           switch (action.kind) {
             case 'appendText':
             case 'appendThought':
-              // 高频流式 chunk：攒进 live buffer，按动画帧批量提交，避免逐帧重渲染。
+            case 'upsertTool':
+            case 'setPlan':
+            case 'setTodos':
+            case 'setMode':
+            case 'setUsage':
+            case 'setCommands':
+            case 'setConfigOptions':
+            case 'pushSystem':
               liveBuffer.current.push(action)
               if (liveRaf.current === null) {
                 liveRaf.current = requestAnimationFrame(flushLiveBuffer)
               }
-              break
-            case 'setMode':
-              s.setMode(sid, action.mode)
-              break
-            case 'upsertTool':
-              s.upsertToolCall(sid, {
-                toolCallId: action.toolCallId,
-                title: action.title,
-                status: action.status as ToolCallUpdate['status'],
-                kind: action.toolKind,
-                content: action.content,
-                locations: action.locations,
-              })
-              break
-            case 'setPlan':
-              s.setPlan(sid, action.entries)
-              break
-            case 'setTodos':
-              s.setTodos(sid, action.title, action.entries)
-              break
-            case 'setUsage':
-              s.setUsage(sid, action.usage)
-              break
-            case 'setCommands':
-              s.setCommands(sid, action.commands)
-              break
-            case 'setConfigOptions':
-              s.setConfigOptions(sid, action.options)
-              break
-            case 'pushSystem':
-              s.pushSystemEvent(sid, action.label)
               break
             case 'drop':
               if (import.meta.env.DEV) console.debug('[ACP drop]', frame.data?.update)
@@ -758,6 +736,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // F03: agent 是否支持图片 prompt（initialize 的 promptCapabilities.image）
           if (typeof frame.image === 'boolean') {
             useChatStore.getState().setImageSupported(sid, frame.image)
+          }
+          // 聊天气泡显示 agent 身份：后端下发所用 agent 的 display_name
+          if (typeof frame.agent_name === 'string') {
+            useChatStore.getState().setAgentName(sid, frame.agent_name)
           }
           break
         default:
