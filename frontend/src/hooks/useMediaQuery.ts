@@ -39,3 +39,19 @@ export function useKeyboardHeight() {
 
   return { vvHeight }
 }
+
+export function useIsLandscape() {
+  const [landscape, setLandscape] = useState(
+    () => window.matchMedia('(orientation: landscape)').matches,
+  )
+
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: landscape)')
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setLandscape(e.matches)
+    handler(mq)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
+
+  return landscape
+}

@@ -5,6 +5,11 @@ import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
 import { READER_FONT } from '../../utils/fonts'
+import { useKeyboardHeight, useIsLandscape } from '../../hooks/useMediaQuery'
+
+/** Heuristic (plan D5): soft keyboards are >=260px tall, browser chrome
+ *  shrinkage stays <=110px. Falls back to "closed" on odd WebViews. */
+const KEYBOARD_OPEN_MIN_PX = 150
 
 export function Terminal() {
   const { t } = useTranslation()
@@ -23,6 +28,11 @@ export function Terminal() {
   // visual size and the character grid stay identical.
   const zoomFactor = uiZoom / 100
   const effectiveFontSize = (isMobile ? mobileFontSize : fontSize) * zoomFactor
+
+  const isLandscape = useIsLandscape()
+  const { vvHeight } = useKeyboardHeight()
+  const keyboardOpen = isMobile && window.innerHeight - vvHeight > KEYBOARD_OPEN_MIN_PX
+  const hideKeyBar = isLandscape && keyboardOpen
 
   // MobileKeyBar modifier latch: tracks which modifier (Ctrl/Shift/Alt) is
   // currently active. Lifted here so useTerminal can intercept keyboard input
@@ -302,7 +312,7 @@ export function Terminal() {
           </div>
         )}
       </div>
-      {isMobile && (
+      {isMobile && !hideKeyBar && (
         <MobileKeyBar
           latchMod={latchMod}
           onSetLatchMod={setLatchMod}
