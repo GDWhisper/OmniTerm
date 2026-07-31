@@ -1,6 +1,6 @@
 # OmniTerm
 
-> *一个浏览器标签页，看住并驱动你所有的 AI 编码助手。*
+> *一个浏览器标签页，管住你手下所有的 AI 编码助手。*
 
 [![License](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE)
 
@@ -12,39 +12,39 @@
 
 ## 你是不是也这样？
 
-同时开着好几个 AI 编码助手——Claude Code 在这个终端，Codex 在那个窗口，Gemini 又开了一个。你只能来回切，挨个去看：哪个跑完了？哪个卡在等你点确认？哪个早就报错退出了？
+同时开着好几个 AI 编码助手——Claude Code 在这个终端，Codex 在那个窗口，Gemini 又占了一个。你只能来回切换、挨个盯：哪个跑完了？哪个卡在等你点确认？哪个早就报错退出了？
 
-**OmniTerm 把它们全收进一个浏览器标签页。** 每个助手一张卡片，实时告诉你它在干嘛；需要你时，标签页一闪、提示音一响，你立刻就知道。大多数时候，你只管看着它们干活。
+**OmniTerm 把它们全收进一个浏览器标签页。** 每个助手一张卡片，干到哪一步实时可见；需要你的时候，标签页一闪、提示音一响，你马上就知道。大多数时候，你只需要看着它们干活。
 
-## 你能用它做什么
+## 它能帮你做什么
 
-**一眼看全所有助手** — 运行中、等待输入、已完成，每个助手实时状态一目了然，不用再逐个窗口翻。
+**所有助手尽收眼底** — 谁在跑、谁在等你、谁已经干完，状态实时更新，再也不用一个窗口一个窗口地翻。
 
-**像聊天一样驱动助手** — 选一个助手直接开聊（走 [ACP 协议](https://agentclientprotocol.com/)）：它的回复变成清晰的文本、工具调用卡片、可折叠的思考过程，而不是一堵终端文字墙。Claude Code、Codex、Gemini、OpenCode、Qwen Code、Kiro 都有一键预设。
+**像聊天一样指挥助手** — 选中助手直接对话（基于 [ACP 协议](https://agentclientprotocol.com/)）：回复不再是刷屏的终端文字墙，而是清爽的正文、工具调用卡片和可折叠的思考过程。Claude Code、Codex、Gemini、OpenCode、Qwen Code、Kiro 全都有一键预设。
 
-**该出手时就出手** — 助手要执行工具，就地批准或拒绝；想换模型、调思考强度，会话中途随手切。
+**该出手时才出手** — 助手请求执行工具，就地批准或拒绝；想换模型、调思考强度，会话中途随手就切。
 
-**需要你时立刻提醒** — 权限请求、等待输入，标签页闪烁 + 提示音 + 侧边栏徽标三管齐下，切到别的页面也不会漏。
+**需要你时马上提醒** — 权限请求、等待输入，标签页闪烁 + 提示音 + 侧边栏徽标三管齐下，切去别的页面也漏不掉。
 
-**随时介入** — 内置终端（xterm.js）和文件浏览器，想看代码、改文件、敲命令随时上手，还支持手机软键盘。
+**随时亲自上阵** — 内置终端（xterm.js）和文件浏览器，想看代码、改文件、敲命令，随时接手；手机上也有软键盘可用。
 
-**省心省内存** — 会话用完一键释放、记录还在、随时恢复；空闲的自动回收，不占地方。
+**省心又省内存** — 会话一键释放内存，记录保留、随时恢复；闲置的自动回收，不占地方。
 
-**懂你的项目** — 自动识别 git worktree 按分支分组，文件浏览器跟随当前目录，13 种语言语法高亮。
+**懂你的项目** — 自动识别 git worktree、按分支给会话分组；文件浏览器跟着当前目录走，13 种语言语法高亮。
 
 ## 快速开始
 
 ```bash
-cargo install omniterm        # 或见下方其他方式
+cargo install omniterm        # 其他安装方式见下方
 omniterm                      # 打开 http://localhost:9077
 ```
 
-浏览器里设个初始密码、添加项目目录，就能开会话了——选中助手走聊天模式，留空就是普通终端。升级到新版本只需 `omniterm update`。
+在浏览器里设好初始密码、添加项目目录，就能开会话了——选中助手进聊天模式，留空则是普通终端。升级只需一句 `omniterm update`。
 
 <details>
 <summary>其他安装方式（npm / Shell 脚本 / PowerShell / Docker）</summary>
 
-**前置**：tmux 可选（仅普通终端模式需要，聊天模式无需）。Windows 用 [psmux](https://github.com/psmux/psmux) 替代。
+**前置条件**：tmux 可装可不装（只有普通终端模式用得到，聊天模式不需要）。Windows 上用 [psmux](https://github.com/psmux/psmux) 代替。
 
 ```bash
 # npm（需要 Node.js ≥ 18，跨平台）
@@ -72,7 +72,7 @@ docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 
 ## 开发者信息
 
-单文件部署：Rust 后端内嵌前端与 SQLite，一条命令启动。
+单二进制部署：Rust 后端内嵌前端资源与 SQLite，一条命令启动。
 
 | 层 | 技术 |
 |---|------|
@@ -81,6 +81,6 @@ docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 | 助手协议 | [ACP](https://agentclientprotocol.com/) 客户端 + tmux control mode |
 | 终端桥接 | portable-pty + WebSocket |
 
-**参与贡献** — ⭐ 点个 Star；🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) 提 Bug 或建议。
+**参与贡献** — 欢迎 ⭐ Star；Bug 和想法请提 [Issues](https://github.com/GDWhisper/OmniTerm/issues)。
 
 **许可证** — FSL-1.1-MIT © [GDWhisper](https://github.com/GDWhisper)
