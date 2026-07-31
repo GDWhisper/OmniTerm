@@ -56,11 +56,15 @@
 **诊断过程中犯的错误**：
 
 1. **误判为重连问题**：第一轮诊断把症状归因于 WS 重连后旧 buffer 残留，加了 `reset()` 修复。该修复对重连场景有效，但用户明确指出"不是重连触发"。应在第一轮就问清触发条件（"是每次重连后出现，还是正常使用中间歇出现？"），而不是假设最相近的已知场景。
+2. **把降低概率误标为消除竞态**：第二轮加 80ms 去抖后，提交与本记录曾写"xterm 与 tmux 原子同步，消除竞态窗口"——**不成立**。去抖只把布局抖动的 N 次中间尺寸 fit 合并为 1 次（降低命中频率），`fit → WS → 后端 master.resize() → SIGWINCH → tmux 重绘` 这条链仍然异步，每次真实的缩小 resize 仍有几十毫秒竞态窗口。**缓解措施可以留，但必须如实标注为"概率缓解"；写成"根治"会让下次间歇复现时被误判为新 bug。**
+3. **scrollback:0 想结构性根治，但破坏历史查看被否**：第三轮试过给 xterm 设 `scrollback: 0`（泄漏无处持久化）。但本项目 tmux `set -g mouse on`，桌面滚轮上翻看的历史正是 xterm 本地 scrollback——`scrollback:0` 会让滚轮看历史失效，故 revert。教训：动"垃圾桶"之前先确认它是不是也在当"正经容器"。
 
-**具体根因与修复**：
+**具体根因与修复（未根治，当前为概率缓解）**：
 
-- 根因链：ResizeObserver 触发 → `fit.fit()` 即时缩小 xterm 视口 → resize WS 消息异步发送 → tmux 尚未收到 SIGWINCH → tmux 1s 周期 status bar 重绘定位到旧 last-row → 超出新视口 → scroll → status bar 文本进入 scrollback → 每次触发叠加一行。
-- 修复：`useTerminal.ts` ResizeObserver 回调加 80ms 去抖——布局稳定后才执行 `fit.fit()`，`term.onResize` 随即发送 resize 消息，xterm 与 tmux 原子同步，消除竞态窗口。
+- 根因链：ResizeObserver 触发 → `fit.fit()` 即时缩小 xterm 视口 → resize WS 消息异步发送 → tmux 尚未收到 SIGWINCH → tmux 按旧尺寸重绘（status bar 绝对定位到旧 last-row）→ 该行越过缩小后的视口底部 → 触发 scroll → status bar 文本被**永久推入 xterm scrollback**（tmux 随后重绘只能修当前屏，改不了已进 scrollback 的历史）。
+- 当前状态：`useTerminal.ts` ResizeObserver 回调 80ms 去抖，**仅降低触发频率，未闭合竞态**。"暂时不复现"是概率下降，非根治。
+- 竞态难以简单闭合：`master.resize()` 返回 ≠ tmux 已重绘（SIGWINCH 由 tmux 事件循环异步处理），即使加 resize-ack 协议也只能缩小窗口不能归零；`scrollback:0` 又与滚轮历史查看冲突（见上）。
+- **遗留（TODO）**：真正根治留待自研终端引擎（见 `docs/dev/plans/2026-07-28-pty-engine-implementation.md`）——届时后端自持 VT 模拟器，可让服务端先按新尺寸重排、再推前端，从源头消除"前端即时缩、后端异步跟"的错位。tmux 会话冻结期不再深挖。
 
 ---
 
