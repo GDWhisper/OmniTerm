@@ -1,68 +1,68 @@
 # OmniTerm
 
-> *一个浏览器标签页，看住并驱动你所有的 AI 编码助手。*
+> *One browser tab to watch — and drive — every AI coding agent.*
 
 [![License](https://img.shields.io/badge/License-FSL--1.1--MIT-blue.svg)](LICENSE)
 
-**Claude Code · Codex · Gemini · OpenCode · Qwen Code · Kiro** ……
+**Claude Code · Codex · Gemini · OpenCode · Qwen Code · Kiro** …
 
 ![screenshot](pic/overview.png)
 
-> [English](README_En.md)
+> [中文](README_ZH.md)
 
-## 你是不是也这样？
+## Sound familiar?
 
-同时开着好几个 AI 编码助手——Claude Code 在这个终端，Codex 在那个窗口，Gemini 又开了一个。你只能来回切，挨个去看：哪个跑完了？哪个卡在等你点确认？哪个早就报错退出了？
+You've got several AI coding agents running at once — Claude Code in one terminal, Codex in another, Gemini in a third. You keep switching between them, checking one by one: which one finished? which one's stuck waiting for you to confirm? which one errored out ages ago?
 
-**OmniTerm 把它们全收进一个浏览器标签页。** 每个助手一张卡片，实时告诉你它在干嘛；需要你时，标签页一闪、提示音一响，你立刻就知道。大多数时候，你只管看着它们干活。
+**OmniTerm pulls them all into a single browser tab.** Each agent gets a card that tells you what it's doing in real time; when it needs you, the tab flashes, a sound plays, and you know instantly. Most of the time, you just watch them work.
 
-## 你能用它做什么
+## What you can do with it
 
-**一眼看全所有助手** — 运行中、等待输入、已完成，每个助手实时状态一目了然，不用再逐个窗口翻。
+**See every agent at a glance** — running, waiting for input, or done. Live status for each, no more flipping through windows one by one.
 
-**像聊天一样驱动助手** — 选一个助手直接开聊（走 [ACP 协议](https://agentclientprotocol.com/)）：它的回复变成清晰的文本、工具调用卡片、可折叠的思考过程，而不是一堵终端文字墙。Claude Code、Codex、Gemini、OpenCode、Qwen Code、Kiro 都有一键预设。
+**Drive agents like a chat** — pick an agent and just talk (over the [ACP protocol](https://agentclientprotocol.com/)): its replies become clean text, tool-call cards, and collapsible thinking — not a wall of terminal text. One-click presets for Claude Code, Codex, Gemini, OpenCode, Qwen Code, and Kiro.
 
-**该出手时就出手** — 助手要执行工具，就地批准或拒绝；想换模型、调思考强度，会话中途随手切。
+**Step in exactly when it matters** — approve or deny a tool right where it asks; switch models or thinking level mid-session.
 
-**需要你时立刻提醒** — 权限请求、等待输入，标签页闪烁 + 提示音 + 侧边栏徽标三管齐下，切到别的页面也不会漏。
+**Get pinged the moment you're needed** — permission requests and waiting prompts trigger a tab flash + sound + sidebar badge, even if you've navigated away.
 
-**随时介入** — 内置终端（xterm.js）和文件浏览器，想看代码、改文件、敲命令随时上手，还支持手机软键盘。
+**Jump in anytime** — built-in terminal (xterm.js) and file browser for when you want to read code, edit files, or run commands — mobile soft keyboard included.
 
-**省心省内存** — 会话用完一键释放、记录还在、随时恢复；空闲的自动回收，不占地方。
+**Easy on memory** — release a session with one click to free memory while keeping the log; resume anytime. Idle sessions recycle themselves.
 
-**懂你的项目** — 自动识别 git worktree 按分支分组，文件浏览器跟随当前目录，13 种语言语法高亮。
+**Knows your project** — auto-detects git worktrees and groups sessions by branch, file browser follows the current directory, syntax highlighting for 13 languages.
 
-## 快速开始
+## Quick start
 
 ```bash
-cargo install omniterm        # 或见下方其他方式
-omniterm                      # 打开 http://localhost:9077
+cargo install omniterm        # or see other methods below
+omniterm                      # open http://localhost:9077
 ```
 
-浏览器里设个初始密码、添加项目目录，就能开会话了——选中助手走聊天模式，留空就是普通终端。升级到新版本只需 `omniterm update`。
+In the browser, set an initial password, add a project directory, and start a session — pick an agent for chat mode, or leave it blank for a plain terminal. Upgrade anytime with `omniterm update`.
 
 <details>
-<summary>其他安装方式（npm / Shell 脚本 / PowerShell / Docker）</summary>
+<summary>Other install methods (npm / Shell script / PowerShell / Docker)</summary>
 
-**前置**：tmux 可选（仅普通终端模式需要，聊天模式无需）。Windows 用 [psmux](https://github.com/psmux/psmux) 替代。
+**Prerequisites**: tmux is optional (only needed for plain-terminal mode; chat mode works without it). On Windows, use [psmux](https://github.com/psmux/psmux) instead.
 
 ```bash
-# npm（需要 Node.js ≥ 18，跨平台）
+# npm (requires Node.js >= 18, cross-platform)
 npm install -g @gdwhisper/omniterm
 ```
 
 ```bash
-# Shell 脚本（Linux/macOS）—— 缺 tmux 会自动装
+# Shell script (Linux/macOS) — installs tmux automatically if missing
 curl -fsSL https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.sh | bash
 ```
 
 ```powershell
-# PowerShell（Windows）—— 需自备 psmux 或 tmux
+# PowerShell (Windows) — bring your own psmux or tmux
 irm https://raw.githubusercontent.com/GDWhisper/OmniTerm/main/install.ps1 | iex
 ```
 
 ```bash
-# Docker —— 已内置 tmux
+# Docker — tmux bundled
 docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 ```
 
@@ -70,17 +70,17 @@ docker run -d -p 9077:9077 -v omniterm-data:/app/data ghcr.io/GDWhisper/omniterm
 
 ---
 
-## 开发者信息
+## For developers
 
-单文件部署：Rust 后端内嵌前端与 SQLite，一条命令启动。
+Single-binary deployment: Rust backend with embedded frontend and SQLite, one command to start.
 
-| 层 | 技术 |
-|---|------|
-| 后端 | Rust + Axum + SQLite |
-| 前端 | React 19 + Tailwind CSS 4 + xterm.js |
-| 助手协议 | [ACP](https://agentclientprotocol.com/) 客户端 + tmux control mode |
-| 终端桥接 | portable-pty + WebSocket |
+| Layer | Technology |
+|-------|-----------|
+| Backend | Rust + Axum + SQLite |
+| Frontend | React 19 + Tailwind CSS 4 + xterm.js |
+| Agent protocol | [ACP](https://agentclientprotocol.com/) client + tmux control mode |
+| Terminal bridge | portable-pty + WebSocket |
 
-**参与贡献** — ⭐ 点个 Star；🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) 提 Bug 或建议。
+**Contributing** — ⭐ Star the repo; 🐛 [Issues](https://github.com/GDWhisper/OmniTerm/issues) for bugs or ideas.
 
-**许可证** — FSL-1.1-MIT © [GDWhisper](https://github.com/GDWhisper)
+**License** — FSL-1.1-MIT © [GDWhisper](https://github.com/GDWhisper)

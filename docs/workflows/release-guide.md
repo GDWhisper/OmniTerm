@@ -144,7 +144,7 @@ cargo check
   ```
   ⚠️ 根级文件（`build.rs`/`README.md`/`LICENSE.md`）**必须加 `/` 前缀锚定到包根**——裸写会按 gitignore 语法在任意层级匹配，把 `frontend/node_modules` 下约 1080 个同名文件打进 crate（实测 2.6M/1168 文件 → 锚定后 988K/88 文件）。
 - [ ] **crate 包内容验证** — `cargo package --allow-dirty` 后检查 `tar tzf target/package/omniterm-<ver>.crate`：`grep -c node_modules` 必须为 0，且含 `frontend/dist/`、`migrations/`、根级 `build.rs`/`README.md`/`LICENSE.md`。**不可逆发布前必做**。
-- [ ] **README 中英文同步** — `README.md`（中文，默认）与 `README_En.md`（英文）内容对应，改了一边必须改另一边
+- [ ] **README 中英文同步** — `README.md`（英文，默认）与 `README_ZH.md`（中文）内容对应，改了一边必须改另一边
 - [ ] **CHANGELOG** — 版本号、日期、内容是否准确
 - [ ] **Release Notes** — `.github/release-notes.md` 已基于模板生成并填好亮点（见下方「准备 Release Notes」步骤），否则 CI 发布会因 `body_path` 缺失文件失败
 
@@ -459,7 +459,7 @@ git remote -v
 
 **做法：**
 - Cargo.toml 检查：name、version、description、license、repository、readme、include（含 `/LICENSE.md`）
-- README 检查：README.md（中文，默认）与 README_En.md（英文）内容同步、安装方式准确
+- README 检查：README.md（英文，默认）与 README_ZH.md（中文）内容同步、安装方式准确
 - LICENSE.md 检查：与 Cargo.toml `license` 字段一致（当前 FSL-1.1-MIT）
 - CHANGELOG 检查：版本号、日期、内容完整
 
