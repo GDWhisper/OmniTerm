@@ -47,15 +47,52 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [0.2.4] - 2026-07-31
+## [0.2.5] - 2026-08-01
 
 ### Added
 
 - (2026-08-01 01:20) `[frontend]` `[api]` GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键把当前文件切到文件编辑器（复用 FileDrawer 的查看/编辑/保存能力），路径由 `/git/diff` 新增的 `root` 字段（仓库根，后端 ADR-2 已解析）拼接相对路径得出（`frontend/src/components/GitPanel/{GitDrawer,GitPanel}.tsx`、`frontend/src/api/client.ts`、`src/api/git.rs`、`frontend/src/locales/{en,zh}/translation.json`）
-
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600）——纯文字方案（无底色/边框，避免与气泡堆叠），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
-
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡 hover 显示消息系统时间：鼠标悬停消息时在标识行（USER/agent 名）旁显示小字本地时间（非浏览器原生 tooltip）——当天仅 `HH:mm`，今年内跨天 `MM-DD HH:mm`，跨年 `YYYY-MM-DD HH:mm`；时间戳沿用既有 `createdAt` 全链路（内存 `Date.now()` + DB `created_at` 持久化），零存储改动（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/formatTime.ts`）
+
+- (2026-07-31 22:54) `[backend]` 内置 ACP 预设新增 oh-my-pi（omp acp）：接入 omp 的 ACP 服务（`src/presets.rs`、`frontend/src/components/Settings/presets.ts`、`frontend/src/locales/{en,zh}/translation.json`）
+
+- (2026-07-31 20:26) `[backend]` 内置 ACP 预设新增 qoder / qoder cn（--acp 模式，国际版 command 用 qodercli）：可直接在设置 → 预设选择（`src/presets.rs`、`frontend/src/components/Settings/presets.ts`、`frontend/src/locales/{en,zh}/translation.json`）
+
+### Changed
+
+- (2026-08-01 01:25) `[frontend]` 文件抽屉默认高度改为视口 50%：FileDrawer（文件管理器与 GIT 面板「在编辑器中打开」两个入口）无历史记录时初始高度由固定 256px 改为视口高度一半（约文件管理器高度的 50%），拖拽后仍按记录值恢复；git diff 抽屉共用同一高度状态，默认同步提升（`frontend/src/utils/drawer.ts`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/GitPanel/GitPanel.tsx`）
+- (2026-08-01 01:20) `[frontend]` 底部抽屉骨架抽取：FileDrawer/GitDrawer 共用的外层容器、木纹标题栏、高度拖拽条（含拖拽状态机）提取为 `DrawerShell` + `useDrawerResize`，消除两处复制逻辑；拖拽把手圆角统一为 0（符合 ui-style-guide 全局硬角约定）（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/GitPanel/GitDrawer.tsx`）
+
+- (2026-07-31 23:14) `[backend]` Claude 预设改用社区 ACP 适配器 `@agentclientprotocol/claude-agent-acp`，不再依赖测试性适配器（`src/presets.rs`、`frontend/src/components/Settings/presets.ts`）
+
+- (2026-07-31 23:02) `[backend]` Codex 预设改用社区 ACP 适配器 `@agentclientprotocol/codex-acp`，不再依赖测试性适配器（`src/presets.rs`、`frontend/src/components/Settings/presets.ts`）
+
+- (2026-07-31 20:36) `[docs]` README 默认改回英文（`README.md`），中文版移至 `README_ZH.md` 并中英同步润色（前置条件恢复为需要 tmux）
+
+### Fixed
+
+- (2026-08-01 00:57) `[frontend]` 修复切换 tmux 会话时终端闪烁（~250ms 黑屏/重绘抖动）：`SessionView` 的 remount key 由 `activeSessionId` 改为**视图类型**（`tmux/acp/external/empty`），tmux↔tmux 切换不再销毁重建 xterm 实例（`useTerminal` 原地重连），仅视图类型变化才重挂载；`term.reset()` 从 WS `onopen` 移到**首个二进制帧**到达时执行——旧会话内容保持可见直到新会话全屏重绘抵达，一次交换完成而非先清空后等待（每次连接后端都 spawn 新 tmux client，attach 必发全屏重绘，reset 时机可安全后移）；原地切会话时同步重置 tmux copy-mode 滚动状态（`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useTerminal.ts`）
+- (2026-08-01 01:10) `[backend]` 修复 ACP 会话取消后 agent 补发的尾部帧不落库（刷新后取消前最后一段输出缺失）：cancel 分支原先立即 `mark_prompt_idle` 关闭 turn，agent 响应 cancel 期间补发的收尾帧因 turn 已关闭全部丢弃；改为 cancel 不立即收尾，合作的 agent 让 `send_prompt` 以 `Cancelled` 返回走正常定稿（尾部帧照常落库），另起超时兜底定时器（15s，prompt 世代计数守卫防误杀新 turn）应对无视 cancel 的 agent 实现，超时强制定稿 + 广播结束，会话不会卡在运行中（`src/acp/client.rs`、`src/ws/acp.rs`）
+- (2026-07-31 23:35) `[frontend]` 根治移动端 ACP 会话底部不可见（输入区/底部导航被裁，长消息会话必现）：MobileLayout 的 strip 容器（`flex-1`）缺 `minHeight: 0`——flex 子项默认 `min-height: auto` 使其无法收缩到内容最小高度以下，ACP 长消息列表的 min-content 高度达数千 px，strip 连同 MobileNav 被顶出 844px 根容器并被 `overflow: clip` 静默裁掉；tmux 会话正常是因为 xterm 内容有限高（min-content 小）。补 `minHeight: 0` 后 strip 正确收缩到剩余空间，输入区/导航恢复可见（`frontend/src/components/Layout/Layout.tsx`）
+- (2026-07-31 23:25) `[frontend]` 修复切换到 ACP 会话时底部（输入区/配置栏/看板）被裁切看不见：① ChatView 内容容器此前复用 `.terminal-panel-pixel`（Terminal/xterm 专用类，`overflow: clip` + `touch-action: none`）——空间不足时（矮窗口/软键盘弹出/看板展开）输入区被静默裁切、聊天列表触摸滚动被禁用；改为内联复刻像素面板外观，底部功能区 `flexShrink: 0` 保证输入区永远可见，TodoBoard 单独承担压缩（`flexShrink: 1` + `overflow: hidden`，可点 header 折叠看全）；② `useKeyboardHeight` 对 `vv.offsetTop` 越界钳制（`offsetTop + vv.height ≤ innerHeight` 数学不变量）：部分浏览器在键盘收起/会话切换时序下残留陈旧 offsetTop，布局整体下移把底部推出视口（「被拉长」感），钳制后自动回弹（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/hooks/useMediaQuery.ts`）
+- (2026-08-01 00:45) `[backend]` `[api]` 删除遗留 REST 端点 `POST /sessions/{id}/prompt`：Phase 3 早期的验证通道，未接入 turn 生命周期（不 `mark_prompt_active/idle`）——经它发 prompt 时 agent 回复不落库、不广播结束信号，开着聊天页的前端会永远显示运行中；前端从未使用该端点（聊天走 WS `prompt`），属死路径，按审计结论移除（`src/api/sessions.rs`、`docs/architecture/backend.md`）
+- (2026-08-01 00:20) `[backend]` `[frontend]` 修复 ACP 权限审批在别处应答后其余连接 banner 不消失：审批请求经 broadcast 发给所有连接，但 resolve/cancel 结果无任何通知，其他标签页/设备的 banner 与提醒永久残留（再点报 not found）；`PermissionManager` 新增 resolved broadcast 通道，`resolve`/`cancel_all` 应答后广播审批 id，WS 层下发 `permission_resolved{id}` 帧，前端匹配当前挂起审批 id 后清除 banner 与 attention 提醒（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）
+- (2026-07-31 23:55) `[frontend]` 修复 ACP 会话恢复重放期间 WS 断线后聊天界面永久冻结：`replay_end` 只发给发起 restore 的连接，断线后不可能到达，而重连不重置重放状态 → 所有后续 live 帧被无限期攒进 staging 缓冲永不提交；提取 `abortReplay` 在 `ws.onclose` 时终止重放（丢弃已攒帧、保留现有消息），与后端 error 帧路径共用（`frontend/src/hooks/useAcpChat.ts`）
+- (2026-07-31 23:30) `[backend]` `[api]` 修复 ACP 会话 agent 输出结束后前端仍显示运行中、收不到结束信号：`prompt_done`/`prompt_error` 原先只发给发起 prompt 的那条 WS 连接（per-connection mpsc），WS 断线自动重连后结束帧发进死连接被静默丢弃，新连接永远收不到；改为经 `AcpClient` 新增的 turn 结束 broadcast 通道发给所有连接（与 `session_update`/`crash` 同模式），重连后无需刷新页面即可正常收到结束信号（`src/acp/client.rs`、`src/ws/acp.rs`）
+- (2026-07-31 22:45) `[frontend]` 处理 thinking 块滚动锚定修复的遗留：① 工具调用块内容预览补同款流式滚动锚定（工具输出大量更新时保持钉底、上翻解除、滚回恢复，仅 streaming 消息生效）；② thinking/工具块的内部滚动容器统一迁移 OverlayScroll（主题化 6px 滚动条、hover 显现，消除手写 `overflow-y:auto`），锚定逻辑提取为共享 hook `useStickScroll`（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/hooks/useStickScroll.ts`）
+- (2026-07-31 22:30) `[frontend]` 修复 ACP 会话 thinking 块大量流式更新时滚动条不锚定底部：thinking 文本超过 300px 后内部滚动容器（`maxHeight:300` + `overflowY:auto`）没有任何跟随逻辑，`scrollTop` 恒为 0，最新思考内容始终在折叠线以下；新增与 ChatView 外层同语义的 stick-to-bottom——流式块默认钉住底部、用户上翻阅读时解除跟随、滚回底部自动恢复，重新展开流式块时直接定位最新内容（历史块不受影响，展开仍从顶部开始读）（`frontend/src/components/Chat/ChatMessage.tsx`）
+- (2026-07-31 22:35) `[frontend]` 根治移动端键盘弹出/滑动后整页底部裁切与 tmux 模式下虚拟键栏不可见：软键盘默认只缩小 visual viewport（`resizes-visual`），xterm 把隐藏 textarea 钉在光标行（tmux 下为终端最底行），IME 弹出时该点在键盘背后、布局链路已全部不可滚动，浏览器只能平移 visual viewport（`vv.offsetTop` ≈ 键盘高度，非 window 滚动，此前的 `scrollTo(0,0)` 兜底为 no-op）；布局仅消费 `vv.height`、锚在布局视口 y=0，pan 后整体上移、KeyBar/Nav 离开可见区。`useKeyboardHeight` 新增 `vvOffsetTop` 跟踪，移动端根容器 `translateY` 补偿贴合可见区；`.terminal-panel-pixel` 补 `overflow: clip` 防容器缩高后 FitAddon 重排前 xterm 画布溢出盖住键栏（`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/index.css`）
+
+- (2026-08-01 00:39) `[frontend]` 已释放会话气泡 agent 名回退：capabilities 帧仅在连接后可达，释放后 agent 名缺失时用会话关联的 `agents.display_name` 兜底（`frontend/src/components/Chat/{ChatMessage,ChatView}.tsx`）
+
+### Removed
+
+- (2026-07-31 23:41) `[frontend]` 清理确定的死代码：删除 GitBranchIcon 组件、pixelAnimations 4 个未调用函数、3 个未使用依赖（`frontend/src/components/Icons/GitBranchIcon.tsx`、`frontend/src/utils/pixelAnimations.ts`、`frontend/package.json`）
+
+## [0.2.4] - 2026-07-31
+
+### Added
 
 - (2026-07-31 16:40) `[backend]` 新增「密码验证」总开关（`settings.auth_enabled`）：**全新安装默认关闭**（免密码直接使用），用户在设置 → 认证自行开启（首次开启需设置密码）；升级保护——已有密码用户的部署迁移后自动保持开启，绝不静默降级；`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB；鉴权关闭 + 非回环监听时启动输出醒目警告（`src/main.rs`、`src/api/auth.rs`、`src/auth/mod.rs`、`migrations/20260801_add_settings_table.sql`）
 - (2026-07-31 16:40) `[frontend]` 设置 → 认证新增「密码验证」开关：关闭需确认弹窗（红字警告），开启时未设过密码则弹窗引导设置新密码（`frontend/src/components/Settings/{AuthSection,toggleRow}.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
@@ -70,26 +107,8 @@ Prefix each entry with the area it affects:
 - (2026-07-31 00:21) `[frontend]` 移动端交互优化（计划 `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md`）：终端支持手指拖动滚动（纵向 drag 合成滚轮事件直达 tmux 历史，横向 drag 保留文本选择）；标签页切换改为跟手滑动（边缘阻尼 + 松手提交/回弹，终端区排除）；虚拟按键/导航/滑动提交/会话切换增加触觉反馈（Android，iOS 静默跳过）；横屏 + 软键盘弹出时自动隐藏虚拟键栏；顶部状态栏左右滑动循环切换会话；虚拟键栏新增 ⏎ 与一键 ^C 且按键触摸目标加大至 36px；长按终端弹出粘贴菜单；底部导航触摸目标加大至 44pt 并修正设置页手势文案（`frontend/src/utils/{touchScroll,swipe,haptics,sessionNav}.ts`、`frontend/src/hooks/{useTerminal,useMediaQuery}.ts`、`frontend/src/components/Terminal/{Terminal,MobileKeyBar}.tsx`、`frontend/src/components/Layout/{Layout,MobileNav,MobileStatusBar}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-30 20:36) `[backend]` `[frontend]` 设置 → 终端新增「tmux mouse mode」开关：新增 `GET/POST /system/tmux/mouse`（读取/设置 tmux 全局 mouse option），切换时经当前终端 WebSocket 实时下发 tmux 命令即时生效（`src/api/system.rs`、`src/tmux/mod.rs`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/api/client.ts`、`frontend/src/stores/appStore.ts`）
 
-### Changed
-
-- (2026-08-01 01:25) `[frontend]` 文件抽屉默认高度改为视口 50%：FileDrawer（文件管理器与 GIT 面板「在编辑器中打开」两个入口）无历史记录时初始高度由固定 256px 改为视口高度一半（约文件管理器高度的 50%），拖拽后仍按记录值恢复；git diff 抽屉共用同一高度状态，默认同步提升（`frontend/src/utils/drawer.ts`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/GitPanel/GitPanel.tsx`）
-
-- (2026-08-01 01:20) `[frontend]` 底部抽屉骨架抽取：FileDrawer/GitDrawer 共用的外层容器、木纹标题栏、高度拖拽条（含拖拽状态机）提取为 `DrawerShell` + `useDrawerResize`，消除两处复制逻辑；拖拽把手圆角统一为 0（符合 ui-style-guide 全局硬角约定）（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/GitPanel/GitDrawer.tsx`）
-
 ### Fixed
 
-- (2026-08-01 00:57) `[frontend]` 修复切换 tmux 会话时终端闪烁（~250ms 黑屏/重绘抖动）：`SessionView` 的 remount key 由 `activeSessionId` 改为**视图类型**（`tmux/acp/external/empty`），tmux↔tmux 切换不再销毁重建 xterm 实例（`useTerminal` 原地重连），仅视图类型变化才重挂载；`term.reset()` 从 WS `onopen` 移到**首个二进制帧**到达时执行——旧会话内容保持可见直到新会话全屏重绘抵达，一次交换完成而非先清空后等待（每次连接后端都 spawn 新 tmux client，attach 必发全屏重绘，reset 时机可安全后移）；原地切会话时同步重置 tmux copy-mode 滚动状态（`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useTerminal.ts`）
-：`.git-diff-line` 的 `white-space: pre` 使长行横向溢出被裁（容器内无滚动条，超出部分看不到），改为 `pre-wrap` 保留缩进并自动折行；`.git-diff-text` 补 `overflow-wrap: anywhere` 兜底无空格超长 token（minified 代码/base64 等）（`frontend/src/index.css`）
-- (2026-08-01 01:10) `[backend]` 修复 ACP 会话取消后 agent 补发的尾部帧不落库（刷新后取消前最后一段输出缺失）：cancel 分支原先立即 `mark_prompt_idle` 关闭 turn，agent 响应 cancel 期间补发的收尾帧因 turn 已关闭全部丢弃；改为 cancel 不立即收尾，合作的 agent 让 `send_prompt` 以 `Cancelled` 返回走正常定稿（尾部帧照常落库），另起超时兜底定时器（15s，prompt 世代计数守卫防误杀新 turn）应对无视 cancel 的 agent 实现，超时强制定稿 + 广播结束，会话不会卡在运行中（`src/acp/client.rs`、`src/ws/acp.rs`）
-- (2026-07-31 23:35) `[frontend]` 根治移动端 ACP 会话底部不可见（输入区/底部导航被裁，长消息会话必现）：MobileLayout 的 strip 容器（`flex-1`）缺 `minHeight: 0`——flex 子项默认 `min-height: auto` 使其无法收缩到内容最小高度以下，ACP 长消息列表的 min-content 高度达数千 px，strip 连同 MobileNav 被顶出 844px 根容器并被 `overflow: clip` 静默裁掉；tmux 会话正常是因为 xterm 内容有限高（min-content 小）。补 `minHeight: 0` 后 strip 正确收缩到剩余空间，输入区/导航恢复可见（`frontend/src/components/Layout/Layout.tsx`）
-- (2026-07-31 23:25) `[frontend]` 修复切换到 ACP 会话时底部（输入区/配置栏/看板）被裁切看不见：① ChatView 内容容器此前复用 `.terminal-panel-pixel`（Terminal/xterm 专用类，`overflow: clip` + `touch-action: none`）——空间不足时（矮窗口/软键盘弹出/看板展开）输入区被静默裁切、聊天列表触摸滚动被禁用；改为内联复刻像素面板外观，底部功能区 `flexShrink: 0` 保证输入区永远可见，TodoBoard 单独承担压缩（`flexShrink: 1` + `overflow: hidden`，可点 header 折叠看全）；② `useKeyboardHeight` 对 `vv.offsetTop` 越界钳制（`offsetTop + vv.height ≤ innerHeight` 数学不变量）：部分浏览器在键盘收起/会话切换时序下残留陈旧 offsetTop，布局整体下移把底部推出视口（「被拉长」感），钳制后自动回弹（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/hooks/useMediaQuery.ts`）
-- (2026-08-01 00:45) `[backend]` `[api]` 删除遗留 REST 端点 `POST /sessions/{id}/prompt`：Phase 3 早期的验证通道，未接入 turn 生命周期（不 `mark_prompt_active/idle`）——经它发 prompt 时 agent 回复不落库、不广播结束信号，开着聊天页的前端会永远显示运行中；前端从未使用该端点（聊天走 WS `prompt`），属死路径，按审计结论移除（`src/api/sessions.rs`、`docs/architecture/backend.md`）
-- (2026-08-01 00:20) `[backend]` `[frontend]` 修复 ACP 权限审批在别处应答后其余连接 banner 不消失：审批请求经 broadcast 发给所有连接，但 resolve/cancel 结果无任何通知，其他标签页/设备的 banner 与提醒永久残留（再点报 not found）；`PermissionManager` 新增 resolved broadcast 通道，`resolve`/`cancel_all` 应答后广播审批 id，WS 层下发 `permission_resolved{id}` 帧，前端匹配当前挂起审批 id 后清除 banner 与 attention 提醒（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）
-- (2026-07-31 23:55) `[frontend]` 修复 ACP 会话恢复重放期间 WS 断线后聊天界面永久冻结：`replay_end` 只发给发起 restore 的连接，断线后不可能到达，而重连不重置重放状态 → 所有后续 live 帧被无限期攒进 staging 缓冲永不提交；提取 `abortReplay` 在 `ws.onclose` 时终止重放（丢弃已攒帧、保留现有消息），与后端 error 帧路径共用（`frontend/src/hooks/useAcpChat.ts`）
-- (2026-07-31 23:30) `[backend]` `[api]` 修复 ACP 会话 agent 输出结束后前端仍显示运行中、收不到结束信号：`prompt_done`/`prompt_error` 原先只发给发起 prompt 的那条 WS 连接（per-connection mpsc），WS 断线自动重连后结束帧发进死连接被静默丢弃，新连接永远收不到；改为经 `AcpClient` 新增的 turn 结束 broadcast 通道发给所有连接（与 `session_update`/`crash` 同模式），重连后无需刷新页面即可正常收到结束信号（`src/acp/client.rs`、`src/ws/acp.rs`）
-- (2026-07-31 22:45) `[frontend]` 处理 thinking 块滚动锚定修复的遗留：① 工具调用块内容预览补同款流式滚动锚定（工具输出大量更新时保持钉底、上翻解除、滚回恢复，仅 streaming 消息生效）；② thinking/工具块的内部滚动容器统一迁移 OverlayScroll（主题化 6px 滚动条、hover 显现，消除手写 `overflow-y:auto`），锚定逻辑提取为共享 hook `useStickScroll`（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/hooks/useStickScroll.ts`）
-- (2026-07-31 22:30) `[frontend]` 修复 ACP 会话 thinking 块大量流式更新时滚动条不锚定底部：thinking 文本超过 300px 后内部滚动容器（`maxHeight:300` + `overflowY:auto`）没有任何跟随逻辑，`scrollTop` 恒为 0，最新思考内容始终在折叠线以下；新增与 ChatView 外层同语义的 stick-to-bottom——流式块默认钉住底部、用户上翻阅读时解除跟随、滚回底部自动恢复，重新展开流式块时直接定位最新内容（历史块不受影响，展开仍从顶部开始读）（`frontend/src/components/Chat/ChatMessage.tsx`）
-- (2026-07-31 22:35) `[frontend]` 根治移动端键盘弹出/滑动后整页底部裁切与 tmux 模式下虚拟键栏不可见：软键盘默认只缩小 visual viewport（`resizes-visual`），xterm 把隐藏 textarea 钉在光标行（tmux 下为终端最底行），IME 弹出时该点在键盘背后、布局链路已全部不可滚动，浏览器只能平移 visual viewport（`vv.offsetTop` ≈ 键盘高度，非 window 滚动，此前的 `scrollTo(0,0)` 兜底为 no-op）；布局仅消费 `vv.height`、锚在布局视口 y=0，pan 后整体上移、KeyBar/Nav 离开可见区。`useKeyboardHeight` 新增 `vvOffsetTop` 跟踪，移动端根容器 `translateY` 补偿贴合可见区；`.terminal-panel-pixel` 补 `overflow: clip` 防容器缩高后 FitAddon 重排前 xterm 画布溢出盖住键栏（`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/index.css`）
 - (2026-07-31 19:55) `[frontend]` 修复移动端软键盘收起后整页底部被裁切（底部导航等所有页面底缘不可见，需刷新恢复）：聚焦输入弹键盘时浏览器对 `overflow: hidden` 的固定高度根容器仍可编程滚动（scrollIntoView），键盘收起后滚动残留使整个布局上移；根链路 `html/body/#root` 与移动端列容器改 `overflow: clip`（老引擎回退 hidden），`useKeyboardHeight` 在视口变化时归零 window 滚动兜底（`frontend/src/index.css`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useMediaQuery.ts`）
 - (2026-07-31 15:50) `[backend]` 认证安全加固：① JWT 密钥不再提供公开默认值（`omniterm-default-secret-change-me`），未显式设置 `JWT_SECRET` 时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600），修复默认密钥下攻击者可离线伪造 token 绕过全部鉴权的问题；② 会话令牌版本化（`users.token_version`）：登出/修改密码后所有已签发 token 立即失效，修复 token 泄露后无法撤销的问题；③ `/auth/setup|login|change-password` 新增 IP 维度限流（5 次失败/5 分钟 → 429），修复公网暴露时无限流暴力破解的问题；④ 删除含硬编码密钥兜底的死代码 `RequireAuth` extractor（`src/auth/mod.rs`、`src/api/auth.rs`、`src/auth/rate_limit.rs`、`src/main.rs`、`migrations/20260731_add_token_version.sql`）
 - (2026-07-31 15:50) `[infra]` docker-compose 移除公开默认 `JWT_SECRET=change-me-in-production`：未显式配置时由服务端自动生成随机密钥（容器重建后需重新登录）（`docker-compose.yml`）
