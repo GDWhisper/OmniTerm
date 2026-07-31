@@ -60,6 +60,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-31 11:16) `[frontend]` 修复 ACP 聊天输入区「发送/排队/取消」按钮与输入框未垂直居中对齐：按钮高度统一为输入框单行基准高度 36px（`INPUT_ROW_HEIGHT` 常量）（`frontend/src/components/Chat/ChatInput.tsx`）
 - (2026-07-31 01:30) `[backend]` `[frontend]` 修复 ACP 长会话点击「恢复会话」后聊天记录被清空：后端重放此前「先 await load_session 完成、再 try_recv 排空 broadcast」，历史超过 broadcast 容量 256 条时触发 Lagged 且旧代码直接 break，一帧都未转发；改为 `tokio::select!` 边加载边并发转发（Lagged 仅告警不中断），解除容量上限，并将 broadcast 容量 256→4096（`SESSION_UPDATE_CHANNEL_CAPACITY` 常量）进一步压低慢消费者积压丢帧概率。前端同步改为双缓冲原子提交：重放帧先入 staging 缓冲，`replay_end` 时非空才整体替换消息列表，空重放/加载失败保留本地消息并提示（ACP `session/load` 的历史回放为 agent 可选行为，omp 等实现可能不回放）（`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-30 11:16) `[frontend]` 修复侧栏默认宽度过窄（160px）导致 logo 词标、worktree 分支名、会话名被截断或完全不可见：默认/拖拽下限提至 256/200px，旧 localStorage 过窄值加载时自愈，词标窄宽走 ellipsis 优雅降级（`frontend/src/stores/appStore.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/index.css`）
 - (2026-07-30 11:13) `[frontend]` 修复桌面端连接状态 badge 中文文案被 flex 挤压时逐字竖排堆叠：badge 容器 `flexShrink: 0` + 文本 `nowrap`（`frontend/src/components/Sidebar/Sidebar.tsx`）
