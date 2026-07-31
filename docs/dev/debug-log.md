@@ -14,6 +14,30 @@
 
 ---
 
+## 2026-07-31: 嵌套滚动容器的流式内容没有自己的锚定逻辑——thinking 块滚动条不跟底
+
+**症状**：ACP 会话 thinking 块大量流式更新时，块内滚动条不锚定在底部，最新思考内容始终在折叠线以下（块外聊天列表的滚动条是贴底的）。
+
+**可复用的理论/模式**：
+
+**1. 外层滚动锚定只保证外层容器贴底，不保证嵌套滚动窗口里看到的是最新内容**。ChatView 的外层锚定 effect 把聊天容器钉在底部——底部是 300px thinking 窗口的下边缘，不是窗口内流式文本的末尾。凡是「内容在带 `maxHeight` + `overflow` 的嵌套容器里流式增长」的组件（thinking 块、工具输出预览、日志面板），都必须问：这个嵌套窗口自己有跟随逻辑吗？**外层钉底 ≠ 内层贴尾**。
+
+**2. 流式锚定的标准三件套**：默认跟随（stick ref 初值 true）→ 用户上翻即解除（onScroll 按 `scrollHeight - scrollTop - clientHeight < 阈值` 判定）→ 滚回底部自动恢复。另加两条语义决策：① 仅 streaming 块生效——历史块文本不再增长，展开应从头读、不跳底；② 折叠会卸载容器丢滚动位置，重新展开时恢复跟随态，让用户直接看到最新内容。
+
+**3. 渲染帧级更新用 useLayoutEffect 而非 useEffect 钉滚动位置**：effect 在绘制后运行，内容溢出的那一帧会先闪一帧顶部内容再跳底；layout effect 绘制前钉住，零闪烁，成本相同。
+
+**诊断过程中的错误**：
+
+1. 最初怀疑外层 ChatView 锚定失效（messages 引用没变之类），读 chatStore 确认 `applyReplayBatch` 每次生成新 messages 数组、外层 effect 每帧都触发——外层没有 bug。**嵌套滚动容器出现「滚动条不跟底」时，先确认报的是哪条滚动条**（外层聊天 vs 块内），再查对应的容器。
+2. 一度想顺手把块内滚动容器换成 OverlayScroll（frontend-patterns 约定禁止手写 `overflow-y:auto`）——但 ToolCallBlockView 的内容预览 pre 也是同款手写滚动，只换 thinking 一处反而制造兄弟组件不一致。**约定违规是既有存量时，一次修复只动症状现场，存量迁移另行处理**。
+
+**具体根因与修复**：
+
+- 根因：`ThoughtBlockView`（`frontend/src/components/Chat/ChatMessage.tsx`）把流式 thinking 文本渲染进 `maxHeight:300 + overflowY:auto` 的内部容器，无任何跟随逻辑；文本超过 300px 后 scrollTop 恒 0，最新内容在折叠线以下。外层 ChatView 锚定 effect 只钉外层容器。
+- 修复：ThoughtBlockView 加 scrollRef + stickRef + onScroll（<24px 判定）+ useLayoutEffect（依赖 `[text, open, streaming]`），仅 streaming 且 stick 时 `scrollTop = scrollHeight`；展开时恢复 stick。renderBlock 向 thought 传 `streaming={isLast && streaming}`。
+
+---
+
 ## 2026-07-31: 移动端键盘弹出后底部裁切二次复发——visual viewport pan 不是 window 滚动
 
 **症状**：上一轮修复（根链路 `overflow: clip` + `window.scrollTo(0,0)` 兜底，43fb786）后，移动端仍复现：① 滑动屏幕后整页底部被裁切；② tmux 模式打开输入法看不到 MobileKeyBar。

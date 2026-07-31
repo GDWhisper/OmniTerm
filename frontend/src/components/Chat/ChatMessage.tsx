@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -81,13 +81,42 @@ function CollapsibleUserText({ text }: { text: string }) {
   )
 }
 
-function ThoughtBlockView({ text }: { text: string }) {
+function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
   const expandThinking = useAppStore(s => s.expandThinking)
   const [open, setOpen] = useState(expandThinking)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  // 内部滚动容器锚定语义与 ChatView 外层一致：默认跟随底部；用户上翻阅读时
+  // 解除跟随，滚回底部自动恢复。仅 streaming 块生效——历史块文本不再增长，
+  // 展开时应从顶部开始读，不跳底。
+  const stickRef = useRef(true)
+
+  // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
+  // 钉住，避免溢出瞬间先闪一帧顶部内容。
+  useLayoutEffect(() => {
+    if (!streaming || !stickRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [text, open, streaming])
+
+  const handleInnerScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+  }
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态，让用户直接
+    // 看到最新内容（历史块 streaming=false 不受影响，仍在顶部）。
+    if (next) stickRef.current = true
+  }
+
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         style={{
           background: 'none',
           border: 'none',
@@ -108,6 +137,8 @@ function ThoughtBlockView({ text }: { text: string }) {
       </button>
       {open && (
         <div
+          ref={scrollRef}
+          onScroll={handleInnerScroll}
           style={{
             marginTop: 4,
             padding: '2px 10px',
@@ -302,7 +333,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
     case 'text':
       return <TextBlockView key={idx} text={block.text} caret={isLast && streaming} />
     case 'thought':
-      return <ThoughtBlockView key={idx} text={block.text} />
+      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
     case 'tool_call':
       return <ToolCallBlockView key={idx} block={block} />
     case 'plan':
