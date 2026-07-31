@@ -6,6 +6,7 @@ import { useStickScroll } from '../../hooks/useStickScroll'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
+import { formatHoverTime } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 
@@ -388,6 +389,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         fontFamily: READER_FONT,
         letterSpacing: '0.05em',
       }}
+      title={formatHoverTime(message.createdAt)}
     >
       {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       {isUser && message.edited && (
