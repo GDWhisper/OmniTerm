@@ -5,6 +5,7 @@ pub mod permission;
 pub mod reaper;
 pub mod supervisor;
 pub mod terminal;
+pub mod turn_accumulator;
 
 pub use client::{AcpClient, ImageInput, ResourceInput};
 pub use supervisor::AcpSupervisor;

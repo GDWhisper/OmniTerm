@@ -9,7 +9,6 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::AppState;
@@ -166,33 +165,6 @@ enum AcpServerMessage<'a> {
     Capabilities { image: bool, agent_name: String },
 }
 
-fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
-    let update = data.get("update")?;
-    let obj = update.as_object()?;
-
-    let chunk = if let Some(c) = obj.get("AgentMessageChunk") {
-        c
-    } else if obj.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
-        update
-    } else {
-        return None;
-    };
-
-    let content = chunk.get("content")?;
-    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text"))
-        && let Some(t) = text_obj.get("text").and_then(|v| v.as_str())
-    {
-        return Some(t.to_string());
-    }
-    if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
-        return Some(t.to_string());
-    }
-    if let Some(t) = chunk.get("text").and_then(|v| v.as_str()) {
-        return Some(t.to_string());
-    }
-    None
-}
-
 /// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
 /// 返回 false 表示通道已关闭（WS 断开），调用方可据此提前退出。
 async fn forward_session_update(
@@ -210,16 +182,12 @@ async fn spawn_notify_task(
         agent_client_protocol::schema::v1::SessionNotification,
     >,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
-    buf: Arc<Mutex<String>>,
 ) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(notification) => {
                     let data = serde_json::to_value(&notification).unwrap_or_default();
-                    if let Some(text) = extract_text_from_notification(&data) {
-                        buf.lock().await.push_str(&text);
-                    }
                     let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
                         .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
@@ -354,13 +322,12 @@ async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
-    let assistant_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     let mut client: Option<Arc<AcpClient>> = match state.acp_supervisor.get(&session_id).await {
         Some(c) => {
             info!("ACP WS connected: session_id={} (supervisor hit)", session_id);
             let rx = c.session_update_subscribe();
-            spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
+            spawn_notify_task(rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
             // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
@@ -484,23 +451,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 let c = c.clone();
                                 // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
                                 let resources = resolve_at_references(&db, &sid, &prompt_text).await;
-                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
+                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）。
+                                // 同时开启累积器 turn 门控；assistant 回复由累积器实时
+                                // 防抖落库（见 turn_accumulator），不再依赖 WS 任务收尾累积。
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
-                                let db2 = db.clone();
-                                let sid2 = sid.clone();
-                                let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
                                     match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
+                                            // mark_prompt_idle 内部定稿累积器进行中的 turn。
                                             c.mark_prompt_idle();
-                                            tokio::task::yield_now().await;
-                                            let assistant_text = buf2.lock().await.drain(..).collect::<String>();
-                                            if !assistant_text.is_empty() {
-                                                let _ = chat_persistence::insert_message(
-                                                    &db2, &sid2, "assistant", &assistant_text, None,
-                                                ).await;
-                                            }
                                             let reason = format!("{:?}", resp.stop_reason);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptDone { stop_reason: &reason },
@@ -509,7 +469,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
                                         Err(e) => {
                                             c.mark_prompt_idle();
-                                            buf2.lock().await.clear();
                                             let err_msg = format!("{}", e);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptError { message: &err_msg },
@@ -585,6 +544,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 c.disconnect().await;
                                             }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
+                                        // restore 出的新 client 绑定持久化：后续用户 prompt 的
+                                        // assistant 回复由累积器实时防抖落库。
+                                        new_client.attach_persistence(db.clone(), sid.clone());
 
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
@@ -604,7 +566,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
 
                                         let tx = notify_tx.clone();
-                                        let buf2 = assistant_buf.clone();
                                         tokio::spawn(async move {
                                             // 在 load_session 之前订阅，确保重放期间 agent 推来的
                                             // 历史 session_update 全部可见。
@@ -612,7 +573,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             // 与 load_session 并发转发重放帧：历史帧数可能远超
                                             // broadcast 容量（256），若等 load 返回后再排空，缓冲溢出
                                             // （Lagged）会静默丢帧，长会话恢复时曾导致一帧未发。
-                                            // 注意：重放帧不累积进 assistant_buf（避免与后续实时落库重复）。
+                                            // 注意：重放不经累积器落库——重放帧无 turn 门控（begin_turn
+                                            // 只由用户 prompt 触发），故不会与后续实时落库重复。
                                             let load_fut = new_client.load_session(&acp_sid, cwd);
                                             tokio::pin!(load_fut);
                                             let result = loop {
@@ -659,7 +621,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             let _ = tx.send(Message::Text(msg.into())).await;
                                             // 复用 replay_rx 接管实时帧：避免重新订阅在排空与订阅
                                             // 之间产生丢帧窗口，且保证恢复完成前的帧已全部按序送达。
-                                            spawn_notify_task(replay_rx, tx.clone(), buf2).await;
+                                            spawn_notify_task(replay_rx, tx.clone()).await;
                                         });
                                     }
                                     Err(e) => {

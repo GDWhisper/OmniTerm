@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use crate::acp::handler;
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
+use crate::acp::turn_accumulator::TurnAccumulator;
 use crate::models::agent::Agent;
 
 /// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
@@ -89,6 +90,9 @@ pub struct AcpClient {
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+    /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
+    /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
+    accumulator: Arc<TurnAccumulator>,
 }
 
 /// 看护 agent 连接任务：若其因 agent 进程崩溃/异常退出而返回 `Err`，
@@ -97,9 +101,13 @@ pub struct AcpClient {
 fn spawn_crash_watcher(
     connection_task: JoinHandle<Result<(), AcpError>>,
     crash_tx: broadcast::Sender<String>,
+    accumulator: Arc<TurnAccumulator>,
 ) {
     tokio::spawn(async move {
         if let Err(e) = connection_task.await {
+            // 进程崩溃也算 turn 结束：定稿进行中的 assistant 行（幂等），
+            // 使已折叠的部分内容不丢，且不会永远停留在 streaming 状态。
+            accumulator.finalize_turn();
             let _ = crash_tx.send(format!("{}", e));
         }
     });
@@ -250,6 +258,7 @@ impl AcpClient {
         let pm = permission_manager.clone();
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
+        let accumulator = Arc::new(TurnAccumulator::new());
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -259,11 +268,15 @@ impl AcpClient {
                     let tx = notif_tx.clone();
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
+                    let accumulator = accumulator.clone();
                     async move |notification: SessionNotification, _cx| {
                         // 收到任意 agent 通知即视为有活动，刷新最后活动时间
                         if let Ok(mut st) = activity.lock() {
                             st.last_activity = Instant::now();
                         }
+                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
+                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
+                        accumulator.fold(&notification);
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
@@ -417,7 +430,7 @@ impl AcpClient {
                 .await
         });
 
-        spawn_crash_watcher(connection_task, crash_tx.clone());
+        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
 
         let (
             connection,
@@ -443,6 +456,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            accumulator,
         })
     }
 
@@ -592,6 +606,9 @@ impl AcpClient {
             st.active_prompt = true;
             st.last_activity = Instant::now();
         }
+        // 用户 prompt 是唯一的 turn 起点：开启累积器 turn 门控。load_session 重放
+        // 从不走此路径，故重放帧不会被折叠进 streaming 行（结构性排除）。
+        self.accumulator.begin_turn();
     }
 
     /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
@@ -599,6 +616,19 @@ impl AcpClient {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = false;
         }
+        // turn 结束（正常完成 / 出错 / 取消）统一定稿进行中的 assistant 行（幂等）。
+        self.accumulator.finalize_turn();
+    }
+
+    /// 绑定持久化并启动防抖 writer。仅在真实会话注册点调用（create-session /
+    /// load_session restore）；能力探针不调用 → 折叠为内存 no-op（见 turn_accumulator）。
+    pub fn attach_persistence(&self, db: sqlx::SqlitePool, db_session_id: String) {
+        self.accumulator.attach_persistence(db, db_session_id);
+    }
+
+    /// 定稿进行中的 assistant turn（幂等）。供外部收尾路径显式调用。
+    pub fn finalize_turn(&self) {
+        self.accumulator.finalize_turn();
     }
 
     /// 当前未决权限请求数（requires_action 语义）。
@@ -722,6 +752,7 @@ impl AcpClient {
         let pm = permission_manager.clone();
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
+        let accumulator = Arc::new(TurnAccumulator::new());
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -731,11 +762,15 @@ impl AcpClient {
                     let tx = notif_tx.clone();
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
+                    let accumulator = accumulator.clone();
                     async move |notification: SessionNotification, _cx| {
                         // 收到任意 agent 通知即视为有活动，刷新最后活动时间
                         if let Ok(mut st) = activity.lock() {
                             st.last_activity = Instant::now();
                         }
+                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
+                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
+                        accumulator.fold(&notification);
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
@@ -884,7 +919,7 @@ impl AcpClient {
                 .await
         });
 
-        spawn_crash_watcher(connection_task, crash_tx.clone());
+        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
 
         let (
             connection,
@@ -910,6 +945,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            accumulator,
         })
     }
 

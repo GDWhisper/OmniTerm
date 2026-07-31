@@ -1,0 +1,266 @@
+//! Backend-authoritative accumulation of an in-progress ACP assistant turn.
+//!
+//! The reliability problem this solves: assistant streaming content (thoughts,
+//! tool cards, plans) used to live only in the browser's zustand store and was
+//! persisted by the frontend after `prompt_done`. Refreshing mid-turn lost the
+//! current turn entirely. The accumulator moves the source of truth to the backend:
+//! it is fed from the `AcpClient` notification callback (which runs on the ACP
+//! connection task, independent of any WebSocket), so a turn keeps being persisted
+//! even with zero WS clients connected.
+//!
+//! Storage strategy — **raw single-turn frames, not re-classified blocks**. The
+//! accumulator stores the raw `SessionUpdate` payloads of the active turn (bounded to
+//! one turn) as a JSON wrapper `{"v":1,"frames":[...]}` in the streaming row's `blocks`
+//! column. On refresh/reconnect the frontend re-runs its existing classifier over these
+//! frames, guaranteeing identical rendering with zero duplication of the (large,
+//! multi-implementation) classification logic in Rust.
+//!
+//! Writes are debounced: the fold path only flags dirty and pings a dedicated writer
+//! task, which coalesces bursts (trailing debounce + max-latency cap) so a high chunk
+//! rate maps to a few SQLite writes per second.
+
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use agent_client_protocol::schema::v1::{ContentBlock, SessionNotification, SessionUpdate};
+use serde_json::{Value, json};
+use sqlx::SqlitePool;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use crate::acp::chat_persistence;
+
+/// Trailing debounce: flush after this idle gap since the last fold.
+const DEBOUNCE: Duration = Duration::from_millis(250);
+/// Max latency cap: never let a steady stream go unpersisted longer than this.
+const MAX_LATENCY: Duration = Duration::from_millis(1000);
+/// Writer command channel depth (folds only ever send the cheap `Flush` ping).
+const WRITER_CHANNEL_CAPACITY: usize = 256;
+
+/// blocks-column wrapper version for raw-frame turns (see module docs).
+const RAW_FRAMES_VERSION: u64 = 1;
+
+#[derive(Default)]
+struct TurnState {
+    /// True between `begin_turn` and `finalize_turn`. Gates folding so replay /
+    /// idle notifications (which never call `begin_turn`) are ignored.
+    active: bool,
+    /// uuid of the in-progress `chat_messages` row. Created lazily on the first
+    /// folded frame so a turn that emits nothing leaves no empty bubble.
+    row_id: Option<String>,
+    /// Raw `SessionUpdate` payloads for the active turn, in arrival order.
+    frames: Vec<Value>,
+    /// Accumulated agent message text (for the NOT NULL `text` column and as a
+    /// plain-text fallback). Only `AgentMessageChunk` text is collected here.
+    text: String,
+    /// Per-client monotonic sequence, incremented on every folded frame. Never
+    /// reset across turns; consumed by the reconnect reconciliation in a later phase.
+    seq: u64,
+    /// Set on fold, cleared by the writer after a flush.
+    dirty: bool,
+}
+
+/// DB destination for persistence. Absent until [`TurnAccumulator::attach_persistence`]
+/// — capability-probe clients never attach, so their folds are in-memory no-ops.
+struct Sink {
+    cmd_tx: mpsc::Sender<WriterCmd>,
+}
+
+enum WriterCmd {
+    Flush,
+    Finalize,
+}
+
+pub struct TurnAccumulator {
+    inner: Mutex<TurnState>,
+    sink: Mutex<Option<Sink>>,
+}
+
+/// Snapshot of the row to persist, taken under the lock and handed to the writer.
+struct FlushSnapshot {
+    row_id: String,
+    text: String,
+    blocks: String,
+    last_seq: i64,
+}
+
+impl TurnAccumulator {
+    pub fn new() -> Self {
+        Self { inner: Mutex::new(TurnState::default()), sink: Mutex::new(None) }
+    }
+
+    /// Wire up persistence and spawn the debounce writer. Called once at real session
+    /// registration (create-session / load_session restore). Idempotent-ish: a second
+    /// call replaces the sink and spawns a new writer (not expected in practice).
+    pub fn attach_persistence(self: &Arc<Self>, db: SqlitePool, db_session_id: String) {
+        let (cmd_tx, cmd_rx) = mpsc::channel(WRITER_CHANNEL_CAPACITY);
+        if let Ok(mut guard) = self.sink.lock() {
+            *guard = Some(Sink { cmd_tx });
+        }
+        let acc = self.clone();
+        tokio::spawn(writer_loop(acc, db, db_session_id, cmd_rx));
+    }
+
+    /// Open a new turn. Resets per-turn state; `seq` stays monotonic.
+    pub fn begin_turn(&self) {
+        if let Ok(mut st) = self.inner.lock() {
+            st.active = true;
+            st.row_id = None;
+            st.frames.clear();
+            st.text.clear();
+            st.dirty = false;
+        }
+    }
+
+    /// Fold one agent notification into the active turn. No-op when no turn is active
+    /// (e.g. `load_session` replay frames), keeping replay out of live persistence.
+    pub fn fold(&self, notification: &SessionNotification) {
+        let ping = {
+            let Ok(mut st) = self.inner.lock() else { return };
+            if !st.active {
+                return;
+            }
+            st.seq += 1;
+            if st.row_id.is_none() {
+                st.row_id = Some(Uuid::new_v4().to_string());
+            }
+            if let Some(text) = agent_message_text(&notification.update) {
+                st.text.push_str(text);
+            }
+            match serde_json::to_value(&notification.update) {
+                Ok(v) => st.frames.push(v),
+                Err(e) => {
+                    tracing::warn!("failed to serialize session update for persistence: {}", e)
+                }
+            }
+            st.dirty = true;
+            true
+        };
+        if ping {
+            self.send_cmd(WriterCmd::Flush);
+        }
+    }
+
+    /// Close the active turn and finalize its row. Idempotent: a no-op if no turn is
+    /// active, so racing callers (send_prompt completion / cancel / crash watcher) are safe.
+    pub fn finalize_turn(&self) {
+        let should_finalize = {
+            let Ok(mut st) = self.inner.lock() else { return };
+            if !st.active {
+                return;
+            }
+            st.active = false;
+            st.row_id.is_some()
+        };
+        if should_finalize {
+            self.send_cmd(WriterCmd::Finalize);
+        }
+    }
+
+    fn send_cmd(&self, cmd: WriterCmd) {
+        if let Ok(guard) = self.sink.lock()
+            && let Some(sink) = guard.as_ref()
+        {
+            // try_send: the writer only needs to know work is pending; a full queue
+            // already has a pending signal, and a closed queue means no sink.
+            let _ = sink.cmd_tx.try_send(cmd);
+        }
+    }
+
+    /// Take a snapshot of the current row for persistence, or None if nothing was folded.
+    fn snapshot(&self) -> Option<FlushSnapshot> {
+        let st = self.inner.lock().ok()?;
+        let row_id = st.row_id.clone()?;
+        let blocks = json!({ "v": RAW_FRAMES_VERSION, "frames": st.frames }).to_string();
+        Some(FlushSnapshot { row_id, text: st.text.clone(), blocks, last_seq: st.seq as i64 })
+    }
+}
+
+impl Default for TurnAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Extract plain text from an `AgentMessageChunk`'s text content block; None otherwise.
+fn agent_message_text(update: &SessionUpdate) -> Option<&str> {
+    if let SessionUpdate::AgentMessageChunk(chunk) = update
+        && let ContentBlock::Text(t) = &chunk.content
+    {
+        return Some(&t.text);
+    }
+    None
+}
+
+/// Debounce writer: coalesces `Flush` pings into a bounded number of SQLite writes,
+/// and performs the final flush + status finalize on `Finalize`.
+async fn writer_loop(
+    acc: Arc<TurnAccumulator>,
+    db: SqlitePool,
+    session_id: String,
+    mut cmd_rx: mpsc::Receiver<WriterCmd>,
+) {
+    // Instant of the first un-flushed fold in the current pending window.
+    let mut pending_since: Option<Instant> = None;
+
+    loop {
+        let cmd = if let Some(since) = pending_since {
+            // A flush is pending: wait up to the debounce gap, but never exceed the
+            // max-latency cap measured from the first pending fold.
+            let elapsed = since.elapsed();
+            let wait = if elapsed >= MAX_LATENCY {
+                Duration::ZERO
+            } else {
+                DEBOUNCE.min(MAX_LATENCY - elapsed)
+            };
+            match tokio::time::timeout(wait, cmd_rx.recv()).await {
+                Err(_elapsed) => {
+                    // Debounce window elapsed with pending work → write once.
+                    flush_once(&acc, &db, &session_id).await;
+                    pending_since = None;
+                    continue;
+                }
+                Ok(None) => break, // all senders dropped
+                Ok(Some(c)) => c,
+            }
+        } else {
+            match cmd_rx.recv().await {
+                Some(c) => c,
+                None => break,
+            }
+        };
+
+        match cmd {
+            WriterCmd::Flush => {
+                if pending_since.is_none() {
+                    pending_since = Some(Instant::now());
+                }
+            }
+            WriterCmd::Finalize => {
+                flush_once(&acc, &db, &session_id).await;
+                pending_since = None;
+                if let Some(snap) = acc.snapshot()
+                    && let Err(e) = chat_persistence::finalize_message(&db, &snap.row_id).await
+                {
+                    tracing::warn!("failed to finalize streaming chat message: {}", e);
+                }
+            }
+        }
+    }
+}
+
+async fn flush_once(acc: &Arc<TurnAccumulator>, db: &SqlitePool, session_id: &str) {
+    let Some(snap) = acc.snapshot() else { return };
+    if let Err(e) = chat_persistence::upsert_streaming_message(
+        db,
+        &snap.row_id,
+        session_id,
+        &snap.text,
+        Some(&snap.blocks),
+        snap.last_seq,
+    )
+    .await
+    {
+        tracing::warn!("failed to upsert streaming chat message: {}", e);
+    }
+}

@@ -45,8 +45,6 @@ pub type ChatMessageRow = (String, String, String, String, Option<String>, Strin
 /// accumulator owns `row_id` (a uuid generated at turn start) and calls this on each
 /// debounced flush, so the row is created lazily on the first write and refreshed in
 /// place afterwards. `status` stays 'streaming' until [`finalize_message`].
-// Wired up by the turn accumulator in the next phase.
-#[allow(dead_code)]
 pub async fn upsert_streaming_message(
     db: &SqlitePool,
     row_id: &str,
@@ -74,7 +72,6 @@ pub async fn upsert_streaming_message(
 
 /// Mark an in-progress assistant row as finalized. Called once at turn end (normal
 /// completion, cancel, or crash). Idempotent — a missing/already-complete row is a no-op.
-#[allow(dead_code)]
 pub async fn finalize_message(db: &SqlitePool, row_id: &str) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE chat_messages SET status = 'complete' WHERE id = ?")
         .bind(row_id)
