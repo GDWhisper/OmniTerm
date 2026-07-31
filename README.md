@@ -44,7 +44,7 @@ In the browser, set an initial password, add a project directory, and start a se
 <details>
 <summary>Other install methods (npm / Shell script / PowerShell / Docker)</summary>
 
-**Prerequisites**: tmux is optional (only needed for plain-terminal mode; chat mode works without it). On Windows, use [psmux](https://github.com/psmux/psmux) instead.
+**Prerequisites**: tmux (on Windows, use [psmux](https://github.com/psmux/psmux) instead).
 
 ```bash
 # npm (requires Node.js >= 18, cross-platform)

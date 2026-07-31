@@ -44,7 +44,7 @@ omniterm                      # 打开 http://localhost:9077
 <details>
 <summary>其他安装方式（npm / Shell 脚本 / PowerShell / Docker）</summary>
 
-**前置条件**：tmux 可装可不装（只有普通终端模式用得到，聊天模式不需要）。Windows 上用 [psmux](https://github.com/psmux/psmux) 代替。
+**前置条件**：tmux（Windows 上用 [psmux](https://github.com/psmux/psmux) 代替）。
 
 ```bash
 # npm（需要 Node.js ≥ 18，跨平台）
