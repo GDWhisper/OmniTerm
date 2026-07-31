@@ -431,7 +431,13 @@ function MobileLayout() {
         />
         <div
           className="flex-1 overflow-hidden"
-          style={{ touchAction: 'pan-y' }}
+          // `overflow: clip` (unlike `hidden`) makes this a non-scroll-container:
+          // when the keyboard opens on a focused ACP chat input, the browser's
+          // scrollIntoView would otherwise set scrollLeft and silently shift the
+          // strip out of sync with activeTab. onScroll reset covers browsers
+          // that reject `clip` (falls back to the overflow-hidden class).
+          style={{ touchAction: 'pan-y', overflow: 'clip' }}
+          onScroll={(e) => { e.currentTarget.scrollLeft = 0; e.currentTarget.scrollTop = 0 }}
           onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
           onTouchMove={mobileGestureEnabled ? onSwipeMove : undefined}
           onTouchEnd={mobileGestureEnabled ? onSwipeEnd : undefined}
