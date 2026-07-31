@@ -787,7 +787,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages, sending: false })
+      // prompt 回合结束后未决审批已失效（agent 侧请求已被应答或取消），清掉残留 banner
+      return patch(state, sessionId, { messages, sending: false, pendingPermission: null })
     }),
 
   markError: (sessionId, message) =>
@@ -796,7 +797,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages, sending: false, error: message })
+      return patch(state, sessionId, { messages, sending: false, error: message, pendingPermission: null })
     }),
 
   beginPrompt: (sessionId) =>

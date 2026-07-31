@@ -363,6 +363,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
+            // （审批不再超时自动应答，可能跨 WS 重连长期未决）。
+            for event in c.pending_permission_events().await {
+                let msg = serde_json::to_string(&AcpServerMessage::PermissionRequest {
+                    id: &event.id,
+                    request: &event.request,
+                })
+                .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(msg.into())).await;
+            }
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();

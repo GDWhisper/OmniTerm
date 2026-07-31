@@ -561,6 +561,9 @@ impl AcpClient {
 
     pub fn cancel(&self) -> Result<(), AcpError> {
         self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
+        // ACP 规范：session/cancel 后 MUST 以 Cancelled 应答所有未决权限请求。
+        let pm = self.permission_manager.clone();
+        tokio::spawn(async move { pm.cancel_all().await });
         let tm = self.terminal_manager.clone();
         tokio::spawn(async move { tm.kill_all().await });
         Ok(())
@@ -601,6 +604,11 @@ impl AcpClient {
     /// 当前未决权限请求数（requires_action 语义）。
     pub async fn pending_permissions(&self) -> usize {
         self.permission_manager.pending_count().await
+    }
+
+    /// 未决审批事件快照（WS 连接/重连时重放，恢复前端 banner）。
+    pub async fn pending_permission_events(&self) -> Vec<PermissionRequestEvent> {
+        self.permission_manager.pending_events().await
     }
 
     /// 是否静默待命超时：无进行中 prompt、无未决权限、且距最后活动已满 idle_secs。

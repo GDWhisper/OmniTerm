@@ -12,7 +12,7 @@ src/
 │   ├── mod.rs            # Re-export AcpClient, AcpSupervisor
 │   ├── client.rs         # AcpClient: spawn agent subprocess, ACP handshake, session, prompt, cancel, disconnect
 │   ├── handler.rs        # Session-update broadcast helper (fed by ACP SessionNotification)
-│   ├── permission.rs     # Auto-allow permission resolver (Phase 3; Phase 4 will add user-prompted flow)
+│   ├── permission.rs     # PermissionManager: user-prompted approval via WS banner; no timeout auto-response
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
 │   └── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
 ├── api/
@@ -95,7 +95,7 @@ Lifecycle:
 2. `AcpClient::spawn_and_connect` builds an `AcpAgent` transport (`KEY=VALUE` env prefix + command + args), runs `Client::builder().connect_with(transport, closure)`. Inside the closure it sends `InitializeRequest` + `NewSessionRequest`, clones the `ConnectionTo<Agent>` (which is `Clone` — channel senders) out via a oneshot, then waits on a shutdown oneshot.
 3. Handlers registered on the builder:
    - `session/update` notification → broadcast via `session_update_tx` to all WS subscribers.
-   - `request_permission` → auto-allow (finds first `AllowOnce`/`AllowAlways` option; Phase 4 will add a user-prompted path).
+   - `request_permission` → `PermissionManager` 登记 pending 并经 WS 推 `permission_request` 帧给前端 banner，由用户点击 `permission_response` 应答。**无超时自动应答**（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）；`session/cancel` 时 `AcpClient::cancel` 调 `cancel_all()` 以 `Cancelled` 应答全部 pending（规范 MUST）；WS 重连时重放 pending 事件恢复 banner；无人应答的兜底回收由 reaper 负责（30 分钟 cancel + disconnect）。
    - `terminal/{create,output,wait_for_exit,kill,release}` → `AcpTerminalManager` spawns `tokio::process::Command` children and monitors them with `tokio::select!` racing child exit vs an mpsc kill channel.
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
 4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images`（可选，≤3 张 base64）映射为 `ContentBlock::Image` 追加在 text block 后；服务端推送 `{"type":"capabilities","image":bool}` 帧（client 就绪/restore 时），值来自 initialize 捕获的 `promptCapabilities.image`（§8：agent 未声明则前端隐藏附件入口、后端拒绝带图 prompt）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。
@@ -108,6 +108,7 @@ ACP is a protocol satisfied by multiple agent implementations. **Do not assume o
 已确认的行为差异：
 
 - **`session/load` 历史回放为 agent 可选行为**：协议只要求 agent 接受 load 请求，是否把历史以 `session/update` 逐帧回放、回放多少条均不保证（omp 回放全量 285 条长历史，其他实现可能只回放部分或完全不回放）。因此后端重放转发必须边加载边并发转发（`ws/acp.rs`，broadcast 容量不构成上限，`Lagged` 仅告警不中断）；前端必须容忍空回放——staging 双缓冲在 `replay_end` 非空时才原子替换本地消息，空回放/失败保留 DB 水合的本地记录（`useAcpChat.ts` / `chatStore.commitReplay`）。
+- **审批不一定都走 `session/request_permission`**：agent 内部的确认门（如 plan 模式的提案批准）可能在 agent 侧本地自动通过、完全不发 ACP 权限请求（实测 omp 的 propose 工具 4ms 内本地返回 "Plan approved"）。client 端无法拦截这类 agent 内部决策，权限 UI 只覆盖 agent 主动发来的 `request_permission`。
 
 ## CLI Reference
 

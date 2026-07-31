@@ -9,7 +9,8 @@ use crate::acp::supervisor::AcpSupervisor;
 pub const IDLE_RECYCLE_SECS: u64 = 300;
 
 /// 权限请求无响应兜底阈值（秒）：有未决权限但久无活动满 30 分钟则取消并回收。
-/// 注：ACP v1 下 PermissionManager 自身有 60s 超时自动取消，此为双保险。
+/// 注：PermissionManager 不做超时自动应答（ACP 规范 Cancelled 仅用于
+/// session/cancel 语义，且审批须等真人决策），此为无人应答时的唯一兜底。
 pub const REQUIRES_ACTION_RECYCLE_SECS: u64 = 1800;
 
 /// 看护任务扫描间隔（秒）。
