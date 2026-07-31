@@ -10,6 +10,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 
 - Each release uses `## [version] - YYYY-MM-DD` or `## [Unreleased]
 
+### Added
+
+- (2026-07-31 16:40) `[backend]` 新增「密码验证」总开关（`settings.auth_enabled`）：**全新安装默认关闭**（免密码直接使用），用户在设置 → 认证自行开启（首次开启需设置密码）；升级保护——已有密码用户的部署迁移后自动保持开启，绝不静默降级；`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB；鉴权关闭 + 非回环监听时启动输出醒目警告（`src/main.rs`、`src/api/auth.rs`、`src/auth/mod.rs`、`migrations/20260801_add_settings_table.sql`）
+- (2026-07-31 16:40) `[frontend]` 设置 → 认证新增「密码验证」开关：关闭需确认弹窗（红字警告），开启时未设过密码则弹窗引导设置新密码（`frontend/src/components/Settings/{AuthSection,toggleRow}.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-31 16:40) `[infra]` docker-compose 默认 `OMNITERM_AUTH_ENABLED=1`（容器 `BIND_ADDR=0.0.0.0` 全网暴露，无鉴权等于裸奔；仅本机可信环境可经 `.env.local` 关闭）（`docker-compose.yml`）
+
 ### Fixed
 
 - 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题 (2025-07-17 23:00)` for in-progress work.

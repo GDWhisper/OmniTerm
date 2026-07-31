@@ -11,14 +11,22 @@ use std::net::SocketAddr;
 
 use crate::AppState;
 use crate::auth;
-use crate::models::user::{ChangePasswordRequest, LoginRequest, SetupRequest};
+use crate::models::user::{AuthSettingsRequest, ChangePasswordRequest, LoginRequest, SetupRequest};
+use std::sync::atomic::Ordering;
 
+/// Public auth routes (no token required).
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/auth/setup", post(setup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
         .route("/auth/check", get(check))
+}
+
+/// Auth routes that require a valid token (mounted behind require_auth_mw).
+pub fn protected_routes() -> Router<AppState> {
+    Router::new()
+        .route("/auth/settings", post(set_auth_settings))
         .route("/auth/change-password", post(change_password))
 }
 
@@ -173,7 +181,34 @@ async fn change_password(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Toggle the password-verification master switch. Requires an authenticated
+/// session (mounted on the protected router). Persists to `settings` and
+/// updates the in-memory AtomicBool that require_auth_mw reads.
+async fn set_auth_settings(
+    State(state): State<AppState>,
+    Json(req): Json<AuthSettingsRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let v = if req.auth_enabled { "1" } else { "0" };
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ('auth_enabled', ?) \
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    )
+    .bind(v)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    state.auth_enabled.store(req.auth_enabled, Ordering::Relaxed);
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+    let auth_enabled = state.auth_enabled.load(Ordering::Relaxed);
+
+    // Master switch off ⇒ everything is open, report as authenticated.
+    if !auth_enabled {
+        return Json(json!({ "authenticated": true, "auth_enabled": false }));
+    }
+
     let token = jar.get("omniterm_token").map(|c| c.value().to_string());
 
     let authenticated = match token.as_deref() {
@@ -182,7 +217,7 @@ async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
     };
 
     if authenticated {
-        return Json(json!({ "authenticated": true }));
+        return Json(json!({ "authenticated": true, "auth_enabled": true }));
     }
 
     let needs_setup = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
@@ -191,5 +226,5 @@ async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
         .unwrap_or(0)
         == 0;
 
-    Json(json!({ "authenticated": false, "needs_setup": needs_setup }))
+    Json(json!({ "authenticated": false, "needs_setup": needs_setup, "auth_enabled": true }))
 }

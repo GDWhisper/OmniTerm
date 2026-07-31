@@ -20,7 +20,7 @@ src/
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
 │   ├── health.rs         # GET /api/v1/health
-│   ├── auth.rs           # POST /api/v1/auth/setup|login|logout, GET /auth/check
+│   ├── auth.rs           # POST /api/v1/auth/setup|login|logout|settings|change-password, GET /auth/check
 │   ├── targets.rs        # CRUD /api/v1/targets
 │   ├── projects.rs       # CRUD /api/v1/projects
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
@@ -29,7 +29,7 @@ src/
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
 │   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
-├── auth/mod.rs           # JWT token creation/verification, RequireAuth extractor
+├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── tmux/
 │   ├── mod.rs            # tmux command wrappers, multiplexer detection: new_session, kill_session, check_multiplexer, capture_screen
@@ -59,6 +59,8 @@ src/
 GET  /api/v1/health
 POST /api/v1/auth/setup|login|logout
 GET  /api/v1/auth/check
+POST /api/v1/auth/settings     # 密码验证总开关（受保护）
+POST /api/v1/auth/change-password  # 受保护（需登录 + 当前密码）
 GET  /api/v1/projects
 POST /api/v1/projects
 DELETE /api/v1/projects/{id}
@@ -145,6 +147,7 @@ start options:
   -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]
       --db <DB>           数据库连接 [env: DATABASE_URL]
       --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]（缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
+      --auth-enabled     强制密码验证开关 [env: OMNITERM_AUTH_ENABLED]（接受 1/0/true/false；未指定时用 DB 值）
       --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
 
 stop / status / reset-auth options:
@@ -177,6 +180,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 |----------|---------|-------------|
 | `DATABASE_URL` | `sqlite:omniterm.db?mode=rwc` | SQLite connection string |
 | `JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
+| `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
 | `BIND_ADDR` | `127.0.0.1:<port>` | Listen address (legacy, prefer --port) |
 | `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
@@ -185,10 +189,15 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 单用户（admin）密码认证，无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
 
+- **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `BIND_ADDR=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
 - **密钥**：`JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600）；容器/多实例场景建议显式设置 `JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
 - **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
 - **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。
 - 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。
+
+## Settings 表
+
+`migrations/20260801_add_settings_table.sql`：全局 KV 设置。当前 key：`auth_enabled`（`'1'`/`'0'`）。
 
 ## Sessions Table
 

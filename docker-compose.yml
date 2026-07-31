@@ -20,6 +20,9 @@ services:
       - DATABASE_URL=sqlite:/app/data/omniterm.db?mode=rwc
       # JWT_SECRET 不在此处设置：.env.local 若配置了会经 env_file 注入；
       # 否则由服务端自动生成随机密钥（容器内 ~/.omniterm/jwt_secret，重建容器后需重新登录）
+      # Docker 默认开启密码验证（BIND_ADDR=0.0.0.0 全网暴露，无鉴权 = 任何人可执行 shell）；
+      # 仅在本机可信环境可经 .env.local 设 OMNITERM_AUTH_ENABLED=0 关闭
+      - OMNITERM_AUTH_ENABLED=${OMNITERM_AUTH_ENABLED:-1}
       - BIND_ADDR=0.0.0.0:${DOCKER_PORT:-9077}
     restart: unless-stopped
 

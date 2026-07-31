@@ -8,7 +8,8 @@ import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
 import { AuthSection } from './AuthSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import { BetaBadge } from '../Common/BetaBadge'
+import { SectionTitle, ToggleRow } from './toggleRow'
+import { btnBase } from './settingsStyles'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -52,17 +53,6 @@ const languages = [
 
 /* ── Neon border button style helpers ── */
 
-const btnBase: React.CSSProperties = {
-  background: 'transparent',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'var(--border-strong)',
-  borderRadius: 0,
-  transition: 'all 0.15s ease',
-  fontFamily: READER_FONT,
-  cursor: 'pointer',
-}
-
 const btnActive: React.CSSProperties = {
   ...btnBase,
   borderColor: 'var(--accent)',
@@ -91,60 +81,6 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 }
 
 /* ── Section heading (used by every section) ── */
-
-const sectionTitleStyle: React.CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  fontWeight: 500,
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation()
-  void t
-  return <h3 style={sectionTitleStyle}>{children}</h3>
-}
-
-/* ── Reusable toggle row (label + ON/OFF button + hint) ── */
-
-interface ToggleRowProps {
-  labelKey: string
-  hintKey: string
-  value: boolean
-  onToggle: () => void
-  badge?: boolean
-}
-
-function ToggleRow({ labelKey, hintKey, value, onToggle, badge }: ToggleRowProps) {
-  const { t } = useTranslation()
-  return (
-    <section className="space-y-2">
-      <SectionTitle>
-        {t(labelKey)}
-        {badge && <>{' '}<BetaBadge /></>}
-      </SectionTitle>
-      <button
-        onClick={onToggle}
-        style={{
-          ...btnBase,
-          fontSize: 12,
-          padding: '5px 8px',
-          display: 'flex', alignItems: 'center', gap: 6,
-          ...(value ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-        }}
-      >
-        <span style={{
-          width: 8, height: 8, borderRadius: '50%',
-          background: value ? 'var(--success)' : 'var(--text-dim)',
-          transition: 'background 0.15s ease',
-        }} />
-        {value ? t('settings.on') : t('settings.off')}
-      </button>
-      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
-    </section>
-  )
-}
 
 /* ── Individual section components ── */
 

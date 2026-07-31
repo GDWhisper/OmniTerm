@@ -93,7 +93,10 @@ export interface AppState {
   // Auth
   authState: 'loading' | 'authenticated' | 'unauthenticated'
   authVersion: number
+  /** Password-verification master switch (mirrors backend settings.auth_enabled). */
+  authEnabled: boolean
   setAuthState: (state: AppState['authState']) => void
+  setAuthEnabled: (v: boolean) => void
 
   // Settings panel
   settingsOpen: boolean
@@ -228,6 +231,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   authState: 'loading' as const,
   authVersion: 0,
+  authEnabled: true,
 
   connected: false,
   terminalDisconnected: false,
@@ -366,6 +370,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConnected: (v) => set({ connected: v }),
   setAuthState: (state) =>
     set((s) => ({ authState: state, authVersion: s.authVersion + 1 })),
+  setAuthEnabled: (v) => set({ authEnabled: v }),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setMultiplexer: (v) => set({ multiplexer: v }),
   setIsMobile: (v) => set({ isMobile: v }),

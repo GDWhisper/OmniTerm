@@ -204,7 +204,9 @@ export const api = {
   login: (password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean; needs_setup?: boolean }>('/auth/check'),
+  check: () => request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean }>('/auth/check'),
+  setAuthSettings: (authEnabled: boolean) =>
+    request('/auth/settings', { method: 'POST', body: JSON.stringify({ auth_enabled: authEnabled }) }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
 

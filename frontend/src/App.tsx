@@ -14,7 +14,7 @@ function App() {
   useImmersive()
 
   const resolved = useThemeStore((s) => s.resolved)
-  const { authState, setAuthState, parchmentTextureEnabled, pixelFontEnabled } = useAppStore()
+  const { authState, setAuthState, setAuthEnabled, parchmentTextureEnabled, pixelFontEnabled } = useAppStore()
   const [needsSetup, setNeedsSetup] = useState(false)
 
   useEffect(() => {
@@ -25,6 +25,7 @@ function App() {
   useEffect(() => {
     api.check()
       .then((res) => {
+        setAuthEnabled(res.auth_enabled ?? true)
         if (res.authenticated) {
           setAuthState('authenticated')
         } else {

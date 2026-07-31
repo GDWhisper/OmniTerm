@@ -7,6 +7,7 @@ use axum::{
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::sync::atomic::Ordering;
 
 use crate::AppState;
 
@@ -86,6 +87,12 @@ pub async fn require_auth_mw(
     request: AxumRequest,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    // Password verification master switch: when disabled, every route is open.
+    // The AtomicBool mirrors `settings.auth_enabled` (updated by POST /auth/settings),
+    // so this check is a single relaxed load, no DB round-trip per request.
+    if !state.auth_enabled.load(Ordering::Relaxed) {
+        return Ok(next.run(request).await);
+    }
     let token = extract_token(&request).ok_or(StatusCode::UNAUTHORIZED)?;
     verify_token_for_state(&state.db, &state.jwt_secret, &token).await?;
     Ok(next.run(request).await)
