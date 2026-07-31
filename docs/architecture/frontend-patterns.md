@@ -32,6 +32,7 @@
 
 - `Settings.tsx` / `TmuxCheatsheetPopup.tsx` — 面板内容区（填满型 `flex: 1`）
 - `ConfigToolbar.tsx` / `ChatInput.tsx` — 下拉菜单（shrink-to-fit `maxHeight`）
+- `ChatMessage.tsx`（thinking 块 / 工具内容预览）— 消息块内滚动（shrink-to-fit `maxHeight`；流式内容锚定配套 `useStickScroll`，见 `frontend/src/hooks/useStickScroll.ts`）
 
 ## 数据/渲染分离 (data.ts convention)
 

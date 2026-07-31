@@ -21,7 +21,8 @@ src/
 │   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
-│   └── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
+│   ├── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
+│   └── useStickScroll.ts # 流式内容滚动锚定（stick-to-bottom）：默认钉底、上翻解除、滚回恢复（ChatMessage thinking/工具块）
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json

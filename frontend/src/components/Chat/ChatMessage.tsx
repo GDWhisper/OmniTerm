@@ -1,7 +1,9 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
+import { useStickScroll } from '../../hooks/useStickScroll'
+import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { looksLikeDiff } from '../../utils/diff'
@@ -84,33 +86,25 @@ function CollapsibleUserText({ text }: { text: string }) {
 function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
   const expandThinking = useAppStore(s => s.expandThinking)
   const [open, setOpen] = useState(expandThinking)
-  const scrollRef = useRef<HTMLDivElement | null>(null)
   // 内部滚动容器锚定语义与 ChatView 外层一致：默认跟随底部；用户上翻阅读时
   // 解除跟随，滚回底部自动恢复。仅 streaming 块生效——历史块文本不再增长，
   // 展开时应从顶部开始读，不跳底。
-  const stickRef = useRef(true)
+  const { containerRef: scrollRef, handleScroll: handleInnerScroll, stickToBottom, resetStick } =
+    useStickScroll<HTMLDivElement>()
 
   // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
   // 钉住，避免溢出瞬间先闪一帧顶部内容。
   useLayoutEffect(() => {
-    if (!streaming || !stickRef.current) return
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-  }, [text, open, streaming])
-
-  const handleInnerScroll = () => {
-    const el = scrollRef.current
-    if (!el) return
-    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
-  }
+    if (!streaming) return
+    stickToBottom()
+  }, [text, open, streaming, stickToBottom])
 
   const toggle = () => {
     const next = !open
     setOpen(next)
     // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态，让用户直接
     // 看到最新内容（历史块 streaming=false 不受影响，仍在顶部）。
-    if (next) stickRef.current = true
+    if (next) resetStick()
   }
 
   return (
@@ -136,11 +130,13 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
         {open ? '▾' : '▸'} thinking
       </button>
       {open && (
-        <div
+        <OverlayScroll
           ref={scrollRef}
           onScroll={handleInnerScroll}
-          style={{
-            marginTop: 4,
+          style={{ marginTop: 4 }}
+          contentStyle={{
+            flex: '0 0 auto',
+            maxHeight: 300,
             padding: '2px 10px',
             borderLeft: '2px solid var(--border-subtle)',
             fontSize: '0.923em',
@@ -148,20 +144,22 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
             color: 'var(--text-muted)',
             fontStyle: 'italic',
             whiteSpace: 'pre-wrap',
-            maxHeight: 300,
-            overflowY: 'auto',
           }}
         >
           {text}
-        </div>
+        </OverlayScroll>
       )}
     </div>
   )
 }
 
-function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
+function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streaming: boolean }) {
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const [open, setOpen] = useState(expandToolCalls)
+  // 内容预览滚动锚定：与 thinking 块同语义。仅消息 streaming 期间工具内容
+  // 可能更新（upsertTool 只作用于 streaming 消息），历史块展开从顶部读不跳底。
+  const { containerRef: contentScrollRef, handleScroll: handleContentScroll, stickToBottom, resetStick } =
+    useStickScroll<HTMLDivElement>()
   const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '◆'
   // 仅在 kind 是「已识别的已知类型」或「非空且非兜底 other」时显示类型标签；
   // 上游若只给模糊的 'other'（未透传真实工具名），则不强行显示误导性的 OTHER，
@@ -180,6 +178,19 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
   const isDiff = block.content ? looksLikeDiff(block.content) : false
   const hasContent = block.content || (block.locations && block.locations.length > 0)
 
+  // 内容更新时若用户处于底部则保持钉底（useLayoutEffect：绘制前钉住避免闪帧）
+  useLayoutEffect(() => {
+    if (!streaming) return
+    stickToBottom()
+  }, [block.content, open, streaming, stickToBottom])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态
+    if (next) resetStick()
+  }
+
   return (
     <div
       style={{
@@ -195,7 +206,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
       }}
     >
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         style={{
           background: 'none',
           border: 'none',
@@ -243,22 +254,23 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
           )}
           {block.content && isDiff && <DiffView text={block.content} />}
           {block.content && !isDiff && (
-            <pre
-              style={{
-                margin: 0,
+            <OverlayScroll
+              ref={contentScrollRef}
+              onScroll={handleContentScroll}
+              contentStyle={{
+                flex: '0 0 auto',
+                maxHeight: 200,
                 padding: '6px 8px',
                 background: 'var(--bg-base)',
                 borderRadius: 4,
                 fontSize: '0.846em',
-                overflow: 'auto',
-                maxHeight: 200,
                 whiteSpace: 'pre-wrap',
                 color: 'var(--text-muted)',
                 fontFamily: READER_FONT,
               }}
             >
               {block.content}
-            </pre>
+            </OverlayScroll>
           )}
         </div>
       )}
@@ -335,7 +347,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
     case 'thought':
       return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
     case 'tool_call':
-      return <ToolCallBlockView key={idx} block={block} />
+      return <ToolCallBlockView key={idx} block={block} streaming={streaming} />
     case 'plan':
       return <PlanBlockView key={idx} block={block} />
     case 'todo':
