@@ -14,6 +14,30 @@
 
 ---
 
+## 2026-07-31: 移动端键盘弹出后底部裁切二次复发——visual viewport pan 不是 window 滚动
+
+**症状**：上一轮修复（根链路 `overflow: clip` + `window.scrollTo(0,0)` 兜底，43fb786）后，移动端仍复现：① 滑动屏幕后整页底部被裁切；② tmux 模式打开输入法看不到 MobileKeyBar。
+
+**可复用的理论/模式**：
+
+**1. 移动端"页面上移/底部裁切"有三个独立层，逐层排查，修掉一层不代表根治**：① 布局滚动（`window.scrollY` / 祖先 `scrollTop`，`overflow: clip` + `scrollTo(0,0)` 可治）；② visual viewport pan（`vv.offsetTop`，键盘挂起时浏览器把可视窗格在布局视口内平移——**不是滚动，`scrollTo` 是 no-op**，Android 上 `scrollY` 始终为 0）；③ 布局视口本身缩放（`interactive-widget` / dvh）。诊断时用三元组 `window.scrollY / vv.offsetTop / vv.height` 快照定位在哪一层，别只看 scrollY。
+
+**2. 隐藏 input 的聚焦滚动目标由框架钉的位置决定**：xterm `_syncTextArea` 把隐藏 textarea 钉在**光标行**（`top = buffer.y * cellHeight`）。tmux 下提示符光标在最底行 → IME 弹出时该点必然在键盘背后 → 浏览器必然 pan ~一个键盘高度。任何"把 input 藏起来"的库（xterm、代码编辑器、自绘输入）都要问：它的真实 DOM 位置在哪，键盘弹出时浏览器会为它滚/平移什么。
+
+**3. 跟踪 `vv.height` 却忽略 `vv.offsetTop` 的布局是半套方案**：容器高度贴合可视区但锚点仍在布局视口 y=0，pan 一发生即错位。成对消费 `height + offsetTop`（容器 `translateY(offsetTop)`）才完整覆盖 resizes-visual 模式。
+
+**诊断过程中的错误**：
+
+1. 上一轮把症状归因于"window 滚动残留"就收工，未验证 `scrollTo(0,0)` 在复现场景里是否真的非零——Android pan 场景 `scrollY` 恒 0，兜底从未生效。**修复提交前应在症状现场打印被修状态的实际值，确认修复路径真的被走到。**
+2. 曾考虑加 `interactive-widget=resizes-content`（Android 布局视口随键盘缩小、pan 消失），但它会使 `innerHeight === vvHeight`，击穿 D5 键盘检测启发式（横屏隐藏 KeyBar 失效）。**改全局视口行为前，先 grep 所有依赖 `innerHeight/vvHeight` 差值的启发式。**
+
+**具体根因与修复**：
+
+- 根因：视口默认 `resizes-visual`，键盘只缩 visual viewport；布局链路全 clip 不可滚动，浏览器为露出 xterm 钉在光标行（终端底行）的 textarea 只能 pan visual viewport（`offsetTop` ≈ 键盘高度）；布局只消费 `vv.height`、锚在 y=0 → 整体上移、底部（KeyBar/Nav）离开可见区；键盘挂起期间滑动继续改变 pan。
+- 修复：`useKeyboardHeight` 增加 `vvOffsetTop` 跟踪；MobileLayout 根容器 `translateY(vvOffsetTop / zoom)` 贴合可见区（`useMediaQuery.ts`、`Layout.tsx`）。次要：`.terminal-panel-pixel` 补 `overflow: clip`，防容器缩高后 FitAddon 重排前 xterm 画布溢出盖住 KeyBar（`index.css`）。
+
+---
+
 ## 2026-07-31: 移动端 modal/弹层被 300% pane strip 的 containing block 拉走，按钮裁出屏幕
 
 **症状**：移动端 sidebar 内点击功能键（New Project / Delete 等）弹出 Modal，弹窗右缘超出视口（390px 屏上 panel right=478px），底部确认按钮（CREATE / REMOVE）被裁出屏幕看不见。UpdateBadge 面板、终端长按粘贴菜单同属一类。Settings/TmuxCheatsheet bottom sheet 正常（它们在 strip 外渲染）。

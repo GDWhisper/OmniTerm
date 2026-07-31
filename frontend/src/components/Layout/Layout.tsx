@@ -322,7 +322,7 @@ function MobileLayout() {
     activeExternalSession,
     activateSession,
   } = useAppStore()
-  const { vvHeight } = useKeyboardHeight()
+  const { vvHeight, vvOffsetTop } = useKeyboardHeight()
 
   const stripRef = useRef<HTMLDivElement>(null)
   const settlingRef = useRef(false)
@@ -420,7 +420,10 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
+        // translateY tracks the visual-viewport pan (keyboard revealing the
+        // focused input) so the layout always fills the visible region;
+        // divided by zoom like the height since both resolve pre-zoom.
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, transform: vvOffsetTop ? `translateY(${vvOffsetTop / (uiZoom / 100)}px)` : undefined, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
       >
         <MobileStatusBar
           connected={connected}

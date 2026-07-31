@@ -1670,6 +1670,11 @@ body.parchment-texture {
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   display: flex;
   flex-direction: column;
+  /* Keyboard-open shrink happens before FitAddon refits: without clipping
+     the stale xterm canvas paints over the MobileKeyBar below the panel.
+     `clip` also forbids scrollIntoView residue (see html/body/#root rule). */
+  overflow: hidden;
+  overflow: clip;
   touch-action: none;
   -webkit-touch-callout: none; /* iOS 长按系统菜单让位给自定义粘贴菜单 */
 }
