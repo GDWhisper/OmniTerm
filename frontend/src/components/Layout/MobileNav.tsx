@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../../stores/appStore'
 import { IconSessions, IconTerminal, IconFiles } from '../Icons/MobileIcons'
+import { hapticTap } from '../../utils/haptics'
 
 const tabs = [
   { id: 'sessions' as const, Icon: IconSessions },
@@ -23,8 +24,10 @@ export function MobileNav() {
       style={{
         display: 'flex',
         justifyContent: 'center',
-        padding: '6px 0',
-        paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
+        // Vertical padding kept minimal: the 44pt touch target lives inside the
+        // buttons, so the bar itself must not stack extra height on a phone.
+        padding: '2px 0',
+        paddingBottom: 'calc(2px + env(safe-area-inset-bottom, 0px))',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
         flexShrink: 0,
@@ -34,8 +37,8 @@ export function MobileNav() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 40,
-          padding: '5px 32px',
+          gap: 24,
+          padding: '0 24px',
           borderRadius: 20,
           background: 'var(--bg-base)',
           border: '1px solid var(--border-subtle)',
@@ -47,22 +50,22 @@ export function MobileNav() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { hapticTap(); setActiveTab(tab.id) }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 32,
-                height: 32,
+                width: 44,
+                height: 44,
                 color: isActive ? 'var(--accent)' : 'var(--text-muted)',
                 background: isActive ? 'rgba(167,139,250,0.10)' : 'transparent',
                 border: 'none',
-                borderRadius: 6,
+                borderRadius: 8,
                 transition: 'all 0.15s ease',
               }}
               aria-label={tab.id}
             >
-              <tab.Icon width={18} height={18} style={isPulsing ? { animation: 'mobileNavPulse 0.2s ease-in-out' } : {}} />
+              <tab.Icon width={20} height={20} style={isPulsing ? { animation: 'mobileNavPulse 0.2s ease-in-out' } : {}} />
             </button>
           )
         })}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
+import { useAppStore } from '../../stores/appStore'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { looksLikeDiff } from '../../utils/diff'
@@ -81,7 +82,8 @@ function CollapsibleUserText({ text }: { text: string }) {
 }
 
 function ThoughtBlockView({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+  const expandThinking = useAppStore(s => s.expandThinking)
+  const [open, setOpen] = useState(expandThinking)
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
@@ -127,7 +129,8 @@ function ThoughtBlockView({ text }: { text: string }) {
 }
 
 function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
-  const [open, setOpen] = useState(false)
+  const expandToolCalls = useAppStore(s => s.expandToolCalls)
+  const [open, setOpen] = useState(expandToolCalls)
   const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '◆'
   // 仅在 kind 是「已识别的已知类型」或「非空且非兜底 other」时显示类型标签；
   // 上游若只给模糊的 'other'（未透传真实工具名），则不强行显示误导性的 OTHER，
@@ -284,6 +287,16 @@ function TextBlockView({ text, caret }: { text: string; caret?: boolean }) {
   )
 }
 
+/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。 */
+function SystemBlockView({ label }: { label: string }) {
+  const { t } = useTranslation()
+  return (
+    <span style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em' }}>
+      [{t(label, { defaultValue: label })}]
+    </span>
+  )
+}
+
 function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
   switch (block.type) {
     case 'text':
@@ -298,11 +311,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
     case 'system':
-      return (
-        <span key={idx} style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em' }}>
-          [{block.label}]
-        </span>
-      )
+      return <SystemBlockView key={idx} label={block.label} />
     case 'image':
       // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
       return null
@@ -316,9 +325,11 @@ export interface ChatMessageViewProps {
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   isLastAssistant?: boolean
+  /** agent 气泡显示名（后端 capabilities 帧下发的 display_name）；缺省回退 "agent"。 */
+  agentName?: string
 }
 
-export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant }: ChatMessageViewProps) {
+export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant, agentName }: ChatMessageViewProps) {
   const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -335,7 +346,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         letterSpacing: '0.05em',
       }}
     >
-      {isUser ? 'you' : isSystem ? 'system' : 'agent'}
+      {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
       )}

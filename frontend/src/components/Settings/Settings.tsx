@@ -1,13 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
+import { api } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
 import { AuthSection } from './AuthSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
-import { BetaBadge } from '../Common/BetaBadge'
+import { SectionTitle, ToggleRow } from './toggleRow'
+import { btnBase } from './settingsStyles'
 
 /* ── SVG icons (16×16, stroke-width 1.5, viewBox 0 0 24 24) ── */
 
@@ -51,17 +53,6 @@ const languages = [
 
 /* ── Neon border button style helpers ── */
 
-const btnBase: React.CSSProperties = {
-  background: 'transparent',
-  borderWidth: '1px',
-  borderStyle: 'solid',
-  borderColor: 'var(--border-strong)',
-  borderRadius: 0,
-  transition: 'all 0.15s ease',
-  fontFamily: READER_FONT,
-  cursor: 'pointer',
-}
-
 const btnActive: React.CSSProperties = {
   ...btnBase,
   borderColor: 'var(--accent)',
@@ -90,60 +81,6 @@ function btnLeave(e: React.MouseEvent, isActive: boolean) {
 }
 
 /* ── Section heading (used by every section) ── */
-
-const sectionTitleStyle: React.CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  fontWeight: 500,
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation()
-  void t
-  return <h3 style={sectionTitleStyle}>{children}</h3>
-}
-
-/* ── Reusable toggle row (label + ON/OFF button + hint) ── */
-
-interface ToggleRowProps {
-  labelKey: string
-  hintKey: string
-  value: boolean
-  onToggle: () => void
-  badge?: boolean
-}
-
-function ToggleRow({ labelKey, hintKey, value, onToggle, badge }: ToggleRowProps) {
-  const { t } = useTranslation()
-  return (
-    <section className="space-y-2">
-      <SectionTitle>
-        {t(labelKey)}
-        {badge && <>{' '}<BetaBadge /></>}
-      </SectionTitle>
-      <button
-        onClick={onToggle}
-        style={{
-          ...btnBase,
-          fontSize: 12,
-          padding: '5px 8px',
-          display: 'flex', alignItems: 'center', gap: 6,
-          ...(value ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
-        }}
-      >
-        <span style={{
-          width: 8, height: 8, borderRadius: '50%',
-          background: value ? 'var(--success)' : 'var(--text-dim)',
-          transition: 'background 0.15s ease',
-        }} />
-        {value ? t('settings.on') : t('settings.off')}
-      </button>
-      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
-    </section>
-  )
-}
 
 /* ── Individual section components ── */
 
@@ -406,6 +343,62 @@ function AutoCopySection() {
   return <ToggleRow labelKey="settings.autoCopySelect" hintKey="settings.autoCopySelectHint" value={autoCopySelect} onToggle={() => setAutoCopySelect(!autoCopySelect)} />
 }
 
+function TmuxMouseSection() {
+  const { t } = useTranslation()
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const sendDataRef = useRef(useAppStore.getState().terminalSendData)
+
+  // Keep ref in sync with the store
+  useEffect(() => {
+    return useAppStore.subscribe((s) => { sendDataRef.current = s.terminalSendData })
+  }, [])
+
+  // Fetch current mouse option on mount
+  useEffect(() => {
+    api.tmuxGetMouse().then((r) => setEnabled(r.enabled)).catch(() => setEnabled(false))
+  }, [])
+
+  const handleToggle = async () => {
+    const next = !enabled
+    setEnabled(next)
+    try {
+      await api.tmuxSetMouse(next)
+      // Force the connected tmux client to re-read the option immediately
+      sendDataRef.current?.(`\x02:set -g mouse ${next ? 'on' : 'off'}\n`)
+    } catch {
+      setEnabled(!next) // revert on failure
+    }
+  }
+
+  if (enabled === null) return null // still loading
+
+  return (
+    <section className="space-y-2">
+      <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        {t('settings.tmuxMouse')}
+      </h3>
+      <button
+        onClick={handleToggle}
+        style={{
+          ...btnBase,
+          fontSize: 12,
+          padding: '5px 8px',
+          display: 'flex', alignItems: 'center', gap: 6,
+          ...(enabled ? { borderColor: 'var(--accent)', color: 'var(--accent)', background: 'var(--accent-10)' } : {}),
+        }}
+      >
+        <span style={{
+          width: 8, height: 8, borderRadius: '50%',
+          background: enabled ? 'var(--success)' : 'var(--text-dim)',
+          transition: 'background 0.15s ease',
+        }} />
+        {enabled ? t('settings.on') : t('settings.off')}
+      </button>
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.tmuxMouseHint')}</p>
+    </section>
+  )
+}
+
 function AnimationsSection() {
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const setPixelAnimationsEnabled = useAppStore((s) => s.setPixelAnimationsEnabled)
@@ -529,6 +522,30 @@ function SoundItem({ labelKey, hintKey, value, onToggle, onPreview }: SoundItemP
   )
 }
 
+function SessionsSection() {
+  const expandThinking = useAppStore(s => s.expandThinking)
+  const expandToolCalls = useAppStore(s => s.expandToolCalls)
+  const setExpandThinking = useAppStore(s => s.setExpandThinking)
+  const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
+
+  return (
+    <>
+      <ToggleRow
+        labelKey="settings.expandThinking"
+        hintKey="settings.expandThinkingHint"
+        value={expandThinking}
+        onToggle={() => setExpandThinking(!expandThinking)}
+      />
+      <ToggleRow
+        labelKey="settings.expandToolCalls"
+        hintKey="settings.expandToolCallsHint"
+        value={expandToolCalls}
+        onToggle={() => setExpandToolCalls(!expandToolCalls)}
+      />
+    </>
+  )
+}
+
 function CrtSection() {
   const crtScanlines = useAppStore((s) => s.crtScanlines)
   const setCrtScanlines = useAppStore((s) => s.setCrtScanlines)
@@ -551,6 +568,12 @@ function MobileGestureSection() {
   const mobileGestureEnabled = useAppStore((s) => s.mobileGestureEnabled)
   const setMobileGestureEnabled = useAppStore((s) => s.setMobileGestureEnabled)
   return <ToggleRow labelKey="settings.mobileGesture" hintKey="settings.mobileGestureHint" value={mobileGestureEnabled} onToggle={() => setMobileGestureEnabled(!mobileGestureEnabled)} />
+}
+
+function MobileHapticSection() {
+  const mobileHapticEnabled = useAppStore((s) => s.mobileHapticEnabled)
+  const setMobileHapticEnabled = useAppStore((s) => s.setMobileHapticEnabled)
+  return <ToggleRow labelKey="settings.mobileHaptic" hintKey="settings.mobileHapticHint" value={mobileHapticEnabled} onToggle={() => setMobileHapticEnabled(!mobileHapticEnabled)} />
 }
 
 function ImmersiveSection() {
@@ -576,7 +599,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'edit' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -603,9 +626,14 @@ const CATEGORIES: Category[] = [
     sections: [AuthSection],
   },
   {
-    id: 'edit',
-    labelKey: 'settings.category.edit',
-    sections: [AutoCopySection],
+    id: 'terminal',
+    labelKey: 'settings.category.terminal',
+    sections: [AutoCopySection, TmuxMouseSection],
+  },
+  {
+    id: 'sessions',
+    labelKey: 'settings.category.sessions',
+    sections: [SessionsSection],
   },
   {
     id: 'language',
@@ -620,7 +648,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'mobile',
     labelKey: 'settings.category.mobile',
-    sections: [MobileGestureSection, ImmersiveSection],
+    sections: [MobileGestureSection, MobileHapticSection, ImmersiveSection],
     mobileOnly: true,
   },
 ]

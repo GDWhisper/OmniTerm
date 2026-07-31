@@ -1,32 +1,39 @@
 use axum::{
-    RequestPartsExt,
-    extract::FromRequestParts,
-    http::{StatusCode, request::Parts},
+    extract::{Request as AxumRequest, State},
+    http::StatusCode,
+    middleware::Next,
+    response::Response,
 };
-use axum_extra::extract::CookieJar;
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
+use std::sync::atomic::Ordering;
 
 use crate::AppState;
 
-use axum::extract::{Request as AxumRequest, State};
-use axum::middleware::Next;
-use axum::response::Response;
+pub mod rate_limit;
+pub use rate_limit::LoginGuard;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+    /// Session token version — must equal `users.token_version` at verify
+    /// time, otherwise the token was revoked (logout / password change).
+    pub ver: i64,
 }
 
-pub fn create_token(secret: &str) -> Result<String, jsonwebtoken::errors::Error> {
+pub fn create_token(secret: &str, ver: i64) -> Result<String, jsonwebtoken::errors::Error> {
     let claims = Claims {
         sub: "admin".to_string(),
         exp: (chrono::Utc::now() + chrono::Duration::days(90)).timestamp() as usize,
+        ver,
     };
     encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
 }
 
+/// Pure signature/expiry verification (no revocation check). Prefer
+/// [`verify_token_for_state`] in handlers and middleware.
 pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let token_data = decode::<Claims>(
         token,
@@ -34,6 +41,25 @@ pub fn verify_token(secret: &str, token: &str) -> Result<Claims, jsonwebtoken::e
         &Validation::default(),
     )?;
     Ok(token_data.claims)
+}
+
+/// Signature/expiry verification plus revocation check: the claim's `ver`
+/// must match `users.token_version` (incremented on login/logout/change).
+/// No user row ⇒ nothing can be authenticated.
+pub async fn verify_token_for_state(
+    db: &SqlitePool,
+    secret: &str,
+    token: &str,
+) -> Result<Claims, StatusCode> {
+    let claims = verify_token(secret, token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let stored: Option<i64> = sqlx::query_scalar("SELECT token_version FROM users LIMIT 1")
+        .fetch_optional(db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if stored != Some(claims.ver) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(claims)
 }
 
 fn extract_token(req: &AxumRequest) -> Option<String> {
@@ -61,44 +87,13 @@ pub async fn require_auth_mw(
     request: AxumRequest,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = extract_token(&request).ok_or(StatusCode::UNAUTHORIZED)?;
-    verify_token(&state.jwt_secret, &token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok(next.run(request).await)
-}
-
-/// Extractor that requires a valid auth token.
-/// 有意保留（预留 handler 级鉴权），当前不使用（使用 require_auth_mw 中间件）。
-#[allow(dead_code)]
-pub struct RequireAuth;
-
-impl<S> FromRequestParts<S> for RequireAuth
-where
-    S: Send + Sync,
-{
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let jar = parts.extract::<CookieJar>().await.unwrap_or_default();
-
-        let token = jar.get("omniterm_token").map(|c| c.value().to_string()).or_else(|| {
-            parts
-                .headers
-                .get("authorization")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.strip_prefix("Bearer "))
-                .map(|v| v.to_string())
-        });
-
-        let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
-
-        let secret = parts
-            .extensions
-            .get::<String>()
-            .cloned()
-            .unwrap_or_else(|| "omniterm-default-secret-change-me".to_string());
-
-        verify_token(&secret, &token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-        Ok(RequireAuth)
+    // Password verification master switch: when disabled, every route is open.
+    // The AtomicBool mirrors `settings.auth_enabled` (updated by POST /auth/settings),
+    // so this check is a single relaxed load, no DB round-trip per request.
+    if !state.auth_enabled.load(Ordering::Relaxed) {
+        return Ok(next.run(request).await);
     }
+    let token = extract_token(&request).ok_or(StatusCode::UNAUTHORIZED)?;
+    verify_token_for_state(&state.db, &state.jwt_secret, &token).await?;
+    Ok(next.run(request).await)
 }

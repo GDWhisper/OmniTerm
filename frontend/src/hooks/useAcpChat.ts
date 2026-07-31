@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, type PlanEntry, type ConfigOption, type ToolCallUpdate, type SlashCommand, type SessionUpdateAction, type PendingPermission } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -25,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity' | 'capabilities'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -38,7 +38,27 @@ interface ServerFrame {
   status?: string
   exit_code?: number | null
   image?: boolean
+  agent_name?: string
+  /** session_update: turn 内单调 seq（config/commands/重放帧无此字段），用于重连去重。 */
+  seq?: number
+  /** turn_state: 连接时是否有进行中的 assistant turn。 */
+  active?: boolean
+  /** turn_snapshot: 进行中 turn 的 DB 行 id（= assistant 消息 id），供按 id 续接替换。 */
+  row_id?: string
+  /** turn_snapshot: 已累积的纯文本；blocks 为 `{"v":1,"frames":[...]}` 原始帧包裹 JSON。 */
+  text?: string
+  blocks?: string
 }
+
+// hydrate 落定前需缓冲的帧：这些会改动消息列表，若抢在 GET /messages 之前建消息，
+// 会让 hydrate 因 messages 非空而 bail（丢历史）。其余帧不触碰 hydrate 守卫。
+const HYDRATE_GATED_FRAMES: ReadonlySet<ServerFrame['type']> = new Set([
+  'session_update',
+  'turn_snapshot',
+  'turn_state',
+  'prompt_done',
+  'prompt_error',
+])
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
   ['codebuddy.ai/agentPhase', 'phase'],
@@ -479,6 +499,43 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
   return { kind: 'pushSystem', label: variant }
 }
 
+// --- Stored-frame decoding ---
+//
+// 后端把进行中/已完成的 assistant turn 以 `{"v":1,"frames":[<update>,...]}` 原始帧
+// 包裹持久化（见 turn_accumulator.rs），而非 cooked ContentBlock[]。DB hydrate 与
+// turn_snapshot 都要把这些原始帧还原成 blocks——复用同一套 live 分类器，杜绝
+// TS/Rust 双份分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。
+
+/** 把 `{"v":1,"frames":[...]}` 原始帧包裹还原成结构化 blocks（分类 → buildReplayMessages）。 */
+function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(wrapperJson)
+  } catch {
+    return []
+  }
+  if (!parsed || typeof parsed !== 'object') return []
+  const frames = (parsed as Record<string, unknown>)['frames']
+  if (!Array.isArray(frames)) return []
+  const actions = frames.map((f) => classifySessionUpdate(normalizeSessionUpdate(f)))
+  return buildReplayMessages(actions).flatMap((m) => m.blocks)
+}
+
+/** hydrate 入口：cooked 数组原样返回；原始帧包裹解码；未知形状返回 null（调用方回退纯文本）。 */
+export function decodeStoredBlocks(raw: string): ContentBlock[] | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (Array.isArray(parsed)) return parsed as ContentBlock[]
+  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['frames'])) {
+    return rawFramesToBlocks(raw)
+  }
+  return null
+}
+
 // --- Hook ---
 
 export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
@@ -489,15 +546,29 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const isReplaying = useRef(false)
   const suppressReplay = useRef(false)
   const isManualRestore = useRef(false)
-  // 重放批量缓冲：把重放帧先攒进 buffer，按动画帧一次性 flush，避免逐帧重渲染。
+  // 重放 staging 缓冲：重放帧全部攒在这里（不进渲染态），replay_end 时非空才
+  // 原子提交（双缓冲）。重放失败/为空时丢弃，现有消息不受影响。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
-  const replayRaf = useRef<number | null>(null)
   // 实时流式缓冲：文本/thinking chunk 高频到达时，攒进同一动画帧一次性提交，
   // 把「每 chunk 一次重渲染」降为「每帧最多一次」——IDE 文本流应有的朴素节流，
   // 非特效：输出速度不变，只是合并提交。工具/plan/权限等结构性 action 仍即时生效。
   const liveBuffer = useRef<SessionUpdateAction[]>([])
   const liveRaf = useRef<number | null>(null)
+  // 重连续接：进行中 turn 的 seq 高水位。收到 turn_snapshot 或 live session_update
+  // 时推高；prompt_done/turn_state(inactive) 清空。subscribe-before-snapshot 造成的
+  // 重叠帧（seq<=水位）据此丢弃，避免重复渲染（见 §4 对账）。
+  const inProgressSeq = useRef<number | null>(null)
+  // hydrate 门控：ChatView 的 GET /messages 落定前，把会影响消息列表的帧（turn_snapshot
+  // /session_update/turn_state/prompt_*）攒在此缓冲，避免抢在 hydrate 之前建消息导致
+  // hydrate 因 messages 非空而 bail（丢历史）。落定后按序回放。重连（无 remount）时
+  // hydrated 已 true，帧即时派发不入缓冲。
+  const preHydrateBuffer = useRef<ServerFrame[]>([])
+  const hydratedRef = useRef(false)
+  const frameHandlerRef = useRef<((frame: ServerFrame) => void) | null>(null)
   const attention = useAttention()
+
+  // ChatView hydrate 落定信号（每会话），用于放行 preHydrateBuffer。
+  const hydrated = useChatStore((s) => (sessionId ? s.states[sessionId]?.hydrated : false) ?? false)
 
   const flushLiveBuffer = useCallback(() => {
     liveRaf.current = null
@@ -506,16 +577,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const batch = liveBuffer.current
     if (batch.length === 0) return
     liveBuffer.current = []
-    useChatStore.getState().applyReplayBatch(sid, batch)
-  }, [])
-
-  const flushReplayBuffer = useCallback(() => {
-    replayRaf.current = null
-    const sid = sessionIdRef.current
-    if (!sid) return
-    const batch = replayBuffer.current
-    if (batch.length === 0) return
-    replayBuffer.current = []
     useChatStore.getState().applyReplayBatch(sid, batch)
   }, [])
 
@@ -549,35 +610,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${window.location.host}/api/v1/ws/acp/${encodeURIComponent(sessionId)}`
 
-    setConnectionState('connecting')
-    const store = useChatStore.getState()
-    store.setError(sessionId, null)
+    // 自动重连脚手架：unmounted 区分「主动拆除」（session 切换 / 组件卸载）与网络断开；
+    // retry 驱动指数退避（1→2→4→8…→cap 30s），onopen 成功归零。重连复用同一 dispatchFrame
+    // 与 store（无 remount），进行中 turn 由后端 turn_snapshot / turn_state 无缝续接，
+    // 故重连不重发 load_session（保持手动 restore）。见计划 §5。
+    let unmounted = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let retry = 0
 
-    const ws = new WebSocket(url)
-    wsRef.current = ws
-    let disposed = false
-
-    ws.onopen = () => {
-      if (disposed) { ws.close(); return }
-      setConnectionState('connected')
-      const sid = sessionIdRef.current
-      if (sid) useChatStore.getState().setError(sid, null)
-    }
-
-    ws.onmessage = (ev) => {
+    // 帧派发核心：live 路径与 preHydrateBuffer 回放共用。挂到 ref 供 hydrated 落定
+    // 后的 flush effect 调用（闭包捕获当前连接的 ws）。
+    const dispatchFrame = (frame: ServerFrame) => {
       const sid = sessionIdRef.current
       if (!sid) return
-      let frame: ServerFrame
-      try {
-        frame = typeof ev.data === 'string'
-          ? JSON.parse(ev.data)
-          : { type: 'error', message: 'non-text frame' }
-      } catch {
-        useChatStore.getState().setError(sid, 'malformed frame')
-        return
-      }
-      if (import.meta.env.DEV) console.debug('[ACP RX]', frame.type, ev.data)
-
       const s = useChatStore.getState()
       switch (frame.type) {
         case 'session_update': {
@@ -595,53 +640,40 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             }
             break
           }
-          // 重放期间：攒进 buffer，按动画帧批量 flush（一次重渲染处理多条帧）。
+          // 重放期间：全部攒进 staging 缓冲，replay_end 时一次性原子提交。
           if (isReplaying.current && !suppressReplay.current) {
             replayBuffer.current.push(action)
-            if (replayRaf.current === null) {
-              replayRaf.current = requestAnimationFrame(flushReplayBuffer)
-            }
             break
           }
+          // seq 去重：subscribe-before-snapshot 的重叠窗口会重复推送 seq<=水位 的帧，
+          // 已在 turn_snapshot 中体现，丢弃避免重复渲染。无 seq 的帧（config/commands）
+          // 不受门控，正常放行。
+          if (
+            inProgressSeq.current != null &&
+            typeof frame.seq === 'number' &&
+            frame.seq <= inProgressSeq.current
+          ) {
+            if (import.meta.env.DEV) console.debug('[ACP seq-drop]', frame.seq, '<=', inProgressSeq.current)
+            break
+          }
+          if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
+          // ALL actions → live buffer, flushed once per rAF frame via
+          // applyReplayBatch (single set() call = one re-render per frame).
           switch (action.kind) {
             case 'appendText':
             case 'appendThought':
-              // 高频流式 chunk：攒进 live buffer，按动画帧批量提交，避免逐帧重渲染。
+            case 'upsertTool':
+            case 'setPlan':
+            case 'setTodos':
+            case 'setMode':
+            case 'setUsage':
+            case 'setCommands':
+            case 'setConfigOptions':
+            case 'pushSystem':
               liveBuffer.current.push(action)
               if (liveRaf.current === null) {
                 liveRaf.current = requestAnimationFrame(flushLiveBuffer)
               }
-              break
-            case 'setMode':
-              s.setMode(sid, action.mode)
-              break
-            case 'upsertTool':
-              s.upsertToolCall(sid, {
-                toolCallId: action.toolCallId,
-                title: action.title,
-                status: action.status as ToolCallUpdate['status'],
-                kind: action.toolKind,
-                content: action.content,
-                locations: action.locations,
-              })
-              break
-            case 'setPlan':
-              s.setPlan(sid, action.entries)
-              break
-            case 'setTodos':
-              s.setTodos(sid, action.title, action.entries)
-              break
-            case 'setUsage':
-              s.setUsage(sid, action.usage)
-              break
-            case 'setCommands':
-              s.setCommands(sid, action.commands)
-              break
-            case 'setConfigOptions':
-              s.setConfigOptions(sid, action.options)
-              break
-            case 'pushSystem':
-              s.pushSystemEvent(sid, action.label)
               break
             case 'drop':
               if (import.meta.env.DEV) console.debug('[ACP drop]', frame.data?.update)
@@ -657,8 +689,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           flushLiveBuffer()
           s.markDone(sid)
-          // 实时 prompt 结束后立即将结构化 blocks 写回 DB（此前只落库了纯文本）。
-          syncToDb()
+          // assistant turn 已由后端累积器实时落库，前端不再回写。清空 seq 水位，
+          // 下一 turn 从零开始（不做 seq 门控）。
+          inProgressSeq.current = null
           // Drain queued follow-up: 用户在 agent 忙碌期按回车存到 chatStore.queuedMessage
           // 的下一条消息在 agent 跑完这一轮后自动发出。N=1 语义：只有一条可排队，发完即清空。
           // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
@@ -671,7 +704,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               fresh.clearQueuedMessage(sid)
               fresh.addUserMessage(sid, trimmed)
               try {
-                ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+                const cur = wsRef.current
+                if (!cur) throw new Error('socket unavailable')
+                cur.send(JSON.stringify({ type: 'prompt', text: trimmed }))
                 fresh.beginPrompt(sid)
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
@@ -689,6 +724,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           attention.fire(sid, sid, 'error')
           break
         case 'error':
+          // 重放中途失败（如 load_failed 时后端以 error 代替 replay_end）：
+          // 终止 staging 丢弃已攒帧，保留现有消息，解除「恢复中」状态。
+          if (isReplaying.current) {
+            isReplaying.current = false
+            suppressReplay.current = false
+            isManualRestore.current = false
+            replayBuffer.current = []
+            useChatStore.getState().setReplaying(sid, false)
+          }
           if (frame.code === 'session_not_found') {
             s.markEnded(sid)
           } else {
@@ -711,32 +755,45 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 手动 restore 必须走完整重放（DB hydrate 的旧快照不完整）。
           suppressReplay.current = !isManualRestore.current && !!(msgs && msgs.length > 0)
           if (!suppressReplay.current) {
-            // 清空已有消息：重放将完整重建对话，避免 hydrate 残留与重放内容重复。
-            useChatStore.getState().reset(sid)
+            // 不清空现有消息：重放帧进 staging，replay_end 非空才原子替换（双缓冲）。
+            // 重放失败/为空（agent 可能不推历史）时保留原内容，不会出现空白空窗。
             useChatStore.getState().setReplaying(sid, true)
           }
           break
         }
         case 'replay_end': {
           const wasSuppressed = suppressReplay.current
+          const wasManual = isManualRestore.current
           isReplaying.current = false
           suppressReplay.current = false
           isManualRestore.current = false
-          // 把重放余量一次性 flush，并把残留 streaming 消息标为已完成
-          if (replayRaf.current !== null) {
-            cancelAnimationFrame(replayRaf.current)
-            replayRaf.current = null
+          const staged = replayBuffer.current
+          replayBuffer.current = []
+          if (!wasSuppressed) {
+            if (buildReplayMessages(staged).length > 0) {
+              useChatStore.getState().commitReplay(sid, staged)
+              // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
+              syncToDb()
+            } else {
+              // 空重放：session/load 是否重放历史为 agent 可选行为，保留现有消息，
+              // 仅应用状态同步帧；手动恢复时提示用户历史未返回。
+              const stateActions = staged.filter(
+                (a) =>
+                  a.kind === 'setMode' ||
+                  a.kind === 'setUsage' ||
+                  a.kind === 'setCommands' ||
+                  a.kind === 'setConfigOptions',
+              )
+              if (stateActions.length > 0) {
+                useChatStore.getState().applyReplayBatch(sid, stateActions)
+              }
+              if (wasManual) {
+                useChatStore.getState().pushSystemEvent(sid, 'chat.replay.empty')
+              }
+            }
           }
-          flushReplayBuffer()
-          useChatStore.getState().finalizeReplay(sid)
           useChatStore.getState().setReplaying(sid, false)
           s.clearEnded(sid)
-          // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
-          // 仅当重放内容实际进入了 store（!wasSuppressed）才同步，否则 DB 已有
-          // 由 prompt_done → syncToDb 写回的完整数据。
-          if (!wasSuppressed) {
-            syncToDb()
-          }
           break
         }
         case 'permission_request': {
@@ -759,36 +816,107 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           if (typeof frame.image === 'boolean') {
             useChatStore.getState().setImageSupported(sid, frame.image)
           }
+          // 聊天气泡显示 agent 身份：后端下发所用 agent 的 display_name
+          if (typeof frame.agent_name === 'string') {
+            useChatStore.getState().setAgentName(sid, frame.agent_name)
+          }
+          break
+        case 'turn_snapshot': {
+          // 重连续接：用进行中 turn 的快照按 row_id 替换/收编在建 assistant 消息，
+          // 并把 seq 水位置为快照 seq——后续 live 帧 seq 需大于它才应用（丢弃
+          // subscribe-before-snapshot 的重叠重复帧）。
+          const blocks = frame.blocks ? rawFramesToBlocks(frame.blocks) : []
+          s.applyTurnSnapshot(sid, {
+            rowId: frame.row_id ?? '',
+            text: frame.text ?? '',
+            blocks,
+          })
+          if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
+          break
+        }
+        case 'turn_state':
+          if (frame.active === false) {
+            // turn 在断连期间已结束的兜底：定稿任何残留 streaming 消息。
+            s.markDone(sid)
+            inProgressSeq.current = null
+          } else if (frame.active === true) {
+            // 重连到进行中 turn：置 sending 以显示思考指示器。
+            s.beginPrompt(sid)
+          }
           break
         default:
           // 未识别的帧类型：不静默吞掉，记录以便发现协议/版本漂移或 agent 私有扩展。
-          console.warn('[ACP RX] unknown frame type:', (frame as { type?: unknown }).type, ev.data)
+          console.warn('[ACP RX] unknown frame type:', (frame as { type?: unknown }).type, frame)
           break
       }
     }
+    frameHandlerRef.current = dispatchFrame
 
-    ws.onerror = () => {
-      if (wsRef.current !== ws) return
-      const sid = sessionIdRef.current
-      if (sid) {
-        const st = useChatStore.getState().states[sid]
-        // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
-        if (st?.sending && !st.sessionEnded) {
-          useChatStore.getState().markError(sid, 'WebSocket error')
-        } else {
-          useChatStore.getState().setError(sid, 'WebSocket error')
-        }
+    const connect = () => {
+      if (unmounted) return
+      setConnectionState('connecting')
+      useChatStore.getState().setError(sessionId, null)
+
+      const ws = new WebSocket(url)
+      wsRef.current = ws
+      inProgressSeq.current = null
+      preHydrateBuffer.current = []
+
+      ws.onopen = () => {
+        if (unmounted) { ws.close(); return }
+        retry = 0
+        setConnectionState('connected')
+        const sid = sessionIdRef.current
+        if (sid) useChatStore.getState().setError(sid, null)
       }
-      setConnectionState('error')
-    }
 
-    ws.onclose = () => {
-      if (wsRef.current === ws) {
+      ws.onmessage = (ev) => {
+        const sid = sessionIdRef.current
+        if (!sid) return
+        let frame: ServerFrame
+        try {
+          frame = typeof ev.data === 'string'
+            ? JSON.parse(ev.data)
+            : { type: 'error', message: 'non-text frame' }
+        } catch {
+          useChatStore.getState().setError(sid, 'malformed frame')
+          return
+        }
+        if (import.meta.env.DEV) console.debug('[ACP RX]', frame.type, ev.data)
+
+        // hydrate 门控：GET /messages 落定前，会改动消息列表的帧先入缓冲按序回放，
+        // 避免抢跑 hydrate。其余帧（capabilities/process_alive/terminal_activity/
+        // permission_request/error/replay_*）不触碰 hydrate 守卫，即时派发。
+        if (!hydratedRef.current && HYDRATE_GATED_FRAMES.has(frame.type)) {
+          preHydrateBuffer.current.push(frame)
+          return
+        }
+        dispatchFrame(frame)
+      }
+
+      ws.onerror = () => {
+        if (wsRef.current !== ws) return
+        const sid = sessionIdRef.current
+        if (sid) {
+          const st = useChatStore.getState().states[sid]
+          // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
+          if (st?.sending && !st.sessionEnded) {
+            useChatStore.getState().markError(sid, 'WebSocket error')
+          } else {
+            useChatStore.getState().setError(sid, 'WebSocket error')
+          }
+        }
+        setConnectionState('error')
+      }
+
+      ws.onclose = () => {
+        // 陈旧 socket（已被后继连接替换）的迟到 onclose：忽略，避免重复调度重连。
+        if (wsRef.current !== ws) return
         isManualRestore.current = false
         setConnectionState('disconnected')
         wsRef.current = null
         const sid = sessionIdRef.current
-        if (sid && !disposed) {
+        if (sid && !unmounted) {
           const st = useChatStore.getState().states[sid]
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {
@@ -803,24 +931,48 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             useChatStore.getState().clearQueuedMessage(sid)
           }
         }
+        // 非主动拆除 → 指数退避重连。进行中 turn 由后端权威持久化 + turn_snapshot
+        // 续接，故重连无需重发 prompt / load_session。
+        if (!unmounted) {
+          const delay = Math.min(1000 * 2 ** retry, 30000)
+          retry += 1
+          if (import.meta.env.DEV) console.debug('[ACP reconnect] scheduling in', delay, 'ms (attempt', retry, ')')
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; connect() }, delay)
+        }
       }
     }
 
+    connect()
+
     return () => {
-      disposed = true
-      if (replayRaf.current !== null) {
-        cancelAnimationFrame(replayRaf.current)
-        replayRaf.current = null
+      unmounted = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
       }
       if (liveRaf.current !== null) {
         cancelAnimationFrame(liveRaf.current)
         liveRaf.current = null
       }
       flushLiveBuffer()
-      if (ws.readyState === WebSocket.OPEN) ws.close()
-      if (wsRef.current === ws) wsRef.current = null
+      frameHandlerRef.current = null
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+      wsRef.current = null
     }
   }, [sessionId])
+
+  // hydrate 落定 → 放行 preHydrateBuffer：按序回放缓冲帧到当前连接的派发器。
+  // 重连（无 remount）时 hydrated 早已 true，缓冲恒空，此 effect 为 no-op。
+  useEffect(() => {
+    if (!hydrated) return
+    hydratedRef.current = true
+    const buffered = preHydrateBuffer.current
+    if (buffered.length === 0) return
+    preHydrateBuffer.current = []
+    const handler = frameHandlerRef.current
+    if (handler) for (const f of buffered) handler(f)
+  }, [hydrated])
 
   const sendPrompt = useCallback((text: string, images?: ImageAttachment[]) => {
     const ws = wsRef.current

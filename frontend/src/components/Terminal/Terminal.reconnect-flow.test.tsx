@@ -26,6 +26,7 @@ vi.mock('@xterm/xterm', () => {
     loadAddon() {}
     write() {}
     writeln() {}
+    reset() {}
     dispose() {
       this.element?.remove()
       this.element = null

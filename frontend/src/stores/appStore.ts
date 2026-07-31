@@ -78,17 +78,25 @@ export interface AppState {
    */
   multiplexer: string
 
+  /** Registered sendData from the active terminal for cross-component access. */
+  terminalSendData: ((data: string) => void) | null
+  setTerminalSendData: (fn: ((data: string) => void) | null) => void
+
   // Mobile
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions'
   mobileGestureEnabled: boolean
+  mobileHapticEnabled: boolean
   mobileFontSize: number
   mobileLastTab: string
 
   // Auth
   authState: 'loading' | 'authenticated' | 'unauthenticated'
   authVersion: number
+  /** Password-verification master switch (mirrors backend settings.auth_enabled). */
+  authEnabled: boolean
   setAuthState: (state: AppState['authState']) => void
+  setAuthEnabled: (v: boolean) => void
 
   // Settings panel
   settingsOpen: boolean
@@ -104,6 +112,10 @@ export interface AppState {
   /** Pixel display font (BETA). Off = pixel text falls back to reader font;
    *  the top bar row (logo + panel title bars) stays pixel regardless. */
   pixelFontEnabled: boolean
+  /** Expand thinking blocks in chat by default (ON = visible, OFF = collapsed). */
+  expandThinking: boolean
+  /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
+  expandToolCalls: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -144,6 +156,7 @@ export interface AppState {
   setActiveTab: (tab: AppState['activeTab']) => void
   setRightPanelTab: (tab: AppState['rightPanelTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
+  setMobileHapticEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
   setPixelAnimationsEnabled: (v: boolean) => void
@@ -153,6 +166,8 @@ export interface AppState {
   setSoundPingEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
+  setExpandThinking: (v: boolean) => void
+  setExpandToolCalls: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
@@ -194,6 +209,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
+  terminalSendData: null as ((data: string) => void) | null,
 
   projects: [],
   worktrees: {},
@@ -215,6 +231,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   authState: 'loading' as const,
   authVersion: 0,
+  authEnabled: true,
 
   connected: false,
   terminalDisconnected: false,
@@ -222,6 +239,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
+  mobileHapticEnabled: localStorage.getItem('omniterm_mobile_haptic_enabled') !== 'false',
   mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '13'),
   mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
@@ -233,6 +251,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
   soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
+  expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
+  expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
   // Default off: first-run users get the uniform reader font (BETA opt-in).
   pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
@@ -282,6 +302,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     localStorage.setItem('omniterm_auto_copy_select', String(v))
     set({ autoCopySelect: v })
   },
+
+  setExpandThinking: (v) => {
+    localStorage.setItem('omniterm_expand_thinking', String(v))
+    set({ expandThinking: v })
+  },
+
+  setExpandToolCalls: (v) => {
+    localStorage.setItem('omniterm_expand_tool_calls', String(v))
+    set({ expandToolCalls: v })
+  },
+
+  setTerminalSendData: (fn) => set({ terminalSendData: fn }),
 
   setProjects: (projects) => set({ projects }),
   setWorktrees: (projectId, ws) =>
@@ -338,6 +370,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConnected: (v) => set({ connected: v }),
   setAuthState: (state) =>
     set((s) => ({ authState: state, authVersion: s.authVersion + 1 })),
+  setAuthEnabled: (v) => set({ authEnabled: v }),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setMultiplexer: (v) => set({ multiplexer: v }),
   setIsMobile: (v) => set({ isMobile: v }),
@@ -348,6 +381,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMobileGestureEnabled: (v) => {
     localStorage.setItem('omniterm_mobile_gesture_enabled', String(v))
     set({ mobileGestureEnabled: v })
+  },
+  setMobileHapticEnabled: (v) => {
+    localStorage.setItem('omniterm_mobile_haptic_enabled', String(v))
+    set({ mobileHapticEnabled: v })
   },
   setMobileFontSize: (s) => {
     const clamped = Math.max(12, Math.min(20, s))

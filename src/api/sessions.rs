@@ -177,6 +177,9 @@ async fn create_session(
         .await
         .unwrap();
 
+        // 绑定持久化：assistant 回复由累积器实时防抖落库到本会话行，
+        // 使流式中刷新/切设备不再丢失进行中的 turn（见 turn_accumulator）。
+        acp_client.attach_persistence(state.db.clone(), id.clone());
         state.acp_supervisor.insert(id.clone(), acp_client).await;
         info!(
             "created ACP session: {} (agent: {}, acp_session_id: {})",
@@ -427,13 +430,15 @@ async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) ->
         Ok(rows) => {
             let messages: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|(role, text, created_at, msg_id, blocks)| {
+                .map(|(role, text, created_at, msg_id, blocks, status, last_seq)| {
                     json!({
                         "id": msg_id,
                         "role": role,
                         "text": text,
                         "createdAt": created_at,
                         "blocks": blocks,
+                        "status": status,
+                        "lastSeq": last_seq,
                     })
                 })
                 .collect();

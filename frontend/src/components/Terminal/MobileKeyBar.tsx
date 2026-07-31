@@ -1,5 +1,7 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
+import { hapticTap } from '../../utils/haptics'
 
 interface MobileKeyBarProps {
   latchMod: string | null
@@ -14,12 +16,20 @@ interface MobileKeyBarProps {
 }
 
 const MOD_KEYS = ['Shift', 'Ctrl', 'Alt'] as const
-const ROW1_ITEMS = ['Esc', 'Shift', 'Tab', 'PgUp', 'PgDn'] as const
+const ROW1_ITEMS = ['Esc', '^C', 'Shift', 'Tab', 'PgUp', 'PgDn', '↑'] as const
 const ROW2_ITEMS = ['Ctrl', 'Alt', 'Del', 'Home', 'End'] as const
+/** Arrow/navigation keys trailing row 2 (Enter, arrows). */
+const ROW2_TRAILING = ['←', '↓', '→', 'Enter'] as const
+/** Button label when it differs from the key name sent to onKey. */
+const KEY_LABELS: Record<string, string> = { Enter: '⏎' }
+/** Keys that never combine with a latched modifier — sent as-is. */
+const LATCH_BYPASS_KEYS = new Set<string>(['Enter', '^C'])
 
 export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onToggleScrollMode, refocusTextarea }: MobileKeyBarProps) {
+  const { t } = useTranslation()
   const handleClick = useCallback(
     (name: string) => {
+      hapticTap()
       // Modifier keys toggle the latch and refocus the xterm textarea so
       // the soft keyboard stays open for the subsequent character (e.g.
       // Ctrl+C typed via IME).
@@ -27,6 +37,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         const mod = name.toLowerCase() as 'shift' | 'ctrl' | 'alt'
         onSetLatchMod(latchMod === mod ? null : mod)
         refocusTextarea?.()
+      } else if (LATCH_BYPASS_KEYS.has(name)) {
+        if (latchMod) onSetLatchMod(null)
+        onKey(name)
       } else if (latchMod) {
         const mod = latchMod.charAt(0).toUpperCase() + latchMod.slice(1)
         onKey(`${mod}+${name}`)
@@ -60,23 +73,28 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
     className: 'mobikey-btn',
   }
 
+  // All keys share the same grid columns (9 per row). A single shared grid
+  // makes both rows align column-by-column — previously the rows had 8 vs 9
+  // flex items, so every key in row 1 was wider than its row-2 counterpart.
   const renderBtn = (k: string) => (
     <button
       key={k}
       {...mobiBtnProps}
       onClick={() => handleClick(k)}
-      style={isModKey(k) ? modBtnStyle(k) : keyButtonStyle}
+      style={{
+        ...(isModKey(k) ? modBtnStyle(k) : keyButtonStyle),
+      }}
     >
-      {k}
+      {KEY_LABELS[k] ?? k}
     </button>
   )
 
   return (
     <div
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(9, minmax(0, 1fr))',
+        gap: '4px 6px',
         padding: '6px 8px',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
@@ -85,42 +103,31 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         flexShrink: 0,
       }}
     >
-      {/* Row 1: Esc Shift Tab PgUp PgDn  ·  ↑ 滚动 */}
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW1_ITEMS.map(renderBtn)}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button {...mobiBtnProps} key="arrow-up" onClick={() => handleClick('↑')} style={keyButtonStyle}>↑</button>
-          <button
-            {...mobiBtnProps}
-            key="scroll"
-            onClick={() => { onToggleScrollMode() }}
-            style={{
-              ...keyButtonStyle,
-              color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
-              background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
-            }}
-          >
-            滚动
-          </button>
-        </div>
-      </div>
-      {/* Row 2: Ctrl Alt Del Home End  ·  ← ↓ → */}
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {ROW2_ITEMS.map(renderBtn)}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-          <button {...mobiBtnProps} key="arrow-left" onClick={() => handleClick('←')} style={keyButtonStyle}>←</button>
-          <button {...mobiBtnProps} key="arrow-down" onClick={() => handleClick('↓')} style={keyButtonStyle}>↓</button>
-          <button {...mobiBtnProps} key="arrow-right" onClick={() => handleClick('→')} style={keyButtonStyle}>→</button>
-        </div>
-      </div>
+      {/* Row 1: Esc ^C Shift Tab PgUp PgDn ↑ 滚动(2列) */}
+      {ROW1_ITEMS.map((k) => renderBtn(k))}
+      <button
+        {...mobiBtnProps}
+        key="scroll"
+        onClick={() => { onToggleScrollMode() }}
+        style={{
+          ...keyButtonStyle,
+          gridColumn: 'span 2',
+          color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
+          background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
+        }}
+      >
+        {t('terminal.keyScroll')}
+      </button>
+      {/* Row 2: Ctrl Alt Del Home End ← ↓ → ⏎ */}
+      {ROW2_ITEMS.map((k) => renderBtn(k))}
+      {ROW2_TRAILING.map((k) => renderBtn(k))}
     </div>
   )
 }
 
 const keyButtonStyle: React.CSSProperties = {
-  minWidth: 40,
-  minHeight: 32,
-  padding: '0 8px',
+  minHeight: 36,
+  padding: '0 4px',
   borderRadius: 5,
   border: '1px solid var(--border-strong)',
   background: 'var(--bg-surface)',
@@ -132,3 +139,4 @@ const keyButtonStyle: React.CSSProperties = {
   justifyContent: 'center',
   transition: 'transform 0.08s ease, filter 0.08s ease',
 }
+

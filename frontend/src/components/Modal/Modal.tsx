@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { READER_FONT } from '../../utils/fonts'
 
 interface ModalProps {
@@ -28,7 +29,12 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
     if (e.target === backdropRef.current) onClose()
   }
 
-  return (
+  // Portal to document.body: the mobile strip (300%-wide pane carousel) uses
+  // will-change/transform, which makes `position: fixed` resolve against the
+  // strip instead of the viewport — modal would overflow the screen and clip
+  // its action buttons (mobile regression, see debug-log). Portaling keeps the
+  // backdrop viewport-anchored on both desktop and mobile.
+  return createPortal(
     <div
       ref={backdropRef}
       onClick={handleBackdropClick}
@@ -60,6 +66,7 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

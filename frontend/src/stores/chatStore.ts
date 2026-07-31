@@ -209,6 +209,13 @@ interface ChatSessionState {
    * undefined = 尚未收到声明，UI 按不支持处理（保守降级）。
    */
   imageSupported?: boolean
+  /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
+  agentName?: string
+  /**
+   * ChatView 的 GET /messages hydrate 是否已落定。useAcpChat 据此放行
+   * preHydrateBuffer：落定前会改动消息列表的帧先缓冲，避免抢跑 hydrate 丢历史。
+   */
+  hydrated?: boolean
 }
 
 interface ChatActions {
@@ -242,17 +249,29 @@ interface ChatActions {
   setMode: (sessionId: string, mode: string) => void
   setError: (sessionId: string, message: string | null) => void
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
+  /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
+  setHydrated: (sessionId: string, hydrated: boolean) => void
+  /** 重连续接：用进行中 turn 的快照（已解码 blocks）按 rowId 替换/收编在建 assistant
+   *  消息，无匹配则收编末尾 streaming assistant，再无则追加。置 streaming 供 live 帧续接。 */
+  applyTurnSnapshot: (
+    sessionId: string,
+    snapshot: { rowId: string; text: string; blocks: ContentBlock[] },
+  ) => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   setPermission: (sessionId: string, permission: PendingPermission) => void
   clearPermission: (sessionId: string) => void
   setReplaying: (sessionId: string, replaying: boolean) => void
-  finalizeReplay: (sessionId: string) => void
+  /** 双缓冲原子提交：用攒齐的重放帧从空白状态重建会话，staged 为空时不动现有状态。
+   *  等价「清空 + 重放 + finalize」，但不存在清空后无回填的空窗。 */
+  commitReplay: (sessionId: string, actions: SessionUpdateAction[]) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
   setImageSupported: (sessionId: string, supported: boolean) => void
+  /** 设置当前会话 agent 的显示名（后端 capabilities 帧下发）。 */
+  setAgentName: (sessionId: string, name: string) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
   upsertTerminalActivity: (sessionId: string, event: TerminalActivity) => void
   reset: (sessionId: string) => void
@@ -337,7 +356,7 @@ const genId = () =>
  * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
  * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
  * 一次全量浅拷贝。重放的历史回合视为已完成，新追加的 assistant 消息 `streaming`
- * 保持 true（由 `finalizeReplay` �? `replay_end` 时统一�? false）�?
+ * 保持 true（重放提交时由 `commitReplay` 统一置 false）。
  */
 const applyActionsToMessages = (
   messages: ChatMessage[],
@@ -488,6 +507,33 @@ const applyActionsToMessages = (
     }
     // drop / setMode / setUsage / setCommands / setConfigOptions 不进 messages�?
     // 由下�? applyReplayBatch 在顶层字段处理�?
+  }
+  return next
+}
+
+/** 纯函数：从空白消息列表重建重放结果。双缓冲提交前用于判断 staged 是否为空。 */
+export const buildReplayMessages = (actions: SessionUpdateAction[]): ChatMessage[] =>
+  applyActionsToMessages([], actions)
+
+/** 把 mode/usage/commands/configOptions/todos 等顶层字段 action 合并进 state。 */
+const applyTopLevelActions = (
+  state: ChatStoreState,
+  sessionId: string,
+  actions: SessionUpdateAction[],
+): ChatStoreState => {
+  let next = state
+  for (const action of actions) {
+    if (action.kind === 'setMode') {
+      next = patch(next, sessionId, { mode: action.mode })
+    } else if (action.kind === 'setUsage') {
+      next = patch(next, sessionId, { usage: action.usage })
+    } else if (action.kind === 'setCommands') {
+      next = patch(next, sessionId, { commands: action.commands })
+    } else if (action.kind === 'setConfigOptions') {
+      next = patch(next, sessionId, { configOptions: action.options })
+    } else if (action.kind === 'setTodos') {
+      next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
+    }
   }
   return next
 }
@@ -724,31 +770,29 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = get(state, sessionId)
       const messages = applyActionsToMessages(current.messages, actions)
       // 顶层字段（mode/usage/commands/configOptions/todos）一次性合并
-      let next = patch(state, sessionId, { messages })
-      for (const action of actions) {
-        if (action.kind === 'setMode') {
-          next = patch(next, sessionId, { mode: action.mode })
-        } else if (action.kind === 'setUsage') {
-          next = patch(next, sessionId, { usage: action.usage })
-        } else if (action.kind === 'setCommands') {
-          next = patch(next, sessionId, { commands: action.commands })
-        } else if (action.kind === 'setConfigOptions') {
-          next = patch(next, sessionId, { configOptions: action.options })
-        } else if (action.kind === 'setTodos') {
-          next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
-        }
-      }
-      return next
+      return applyTopLevelActions(patch(state, sessionId, { messages }), sessionId, actions)
     }),
 
-  // 重放结束：把残留�? streaming assistant 消息标记为已完成，清掉光标态�?
-  finalizeReplay: (sessionId) =>
+  commitReplay: (sessionId, actions) =>
     set((state) => {
-      const current = get(state, sessionId)
-      const messages = current.messages.map((m) =>
+      const messages = applyActionsToMessages([], actions).map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages })
+      // staged 为空不提交：保留现有消息（agent 可能不重放历史），由调用方回退。
+      if (messages.length === 0) return state
+      const prev = state.states[sessionId]
+      // 从空白状态重建（等价旧「reset + 重放」语义），但保留连接期已到达的
+      // capabilities 信息（imageSupported/agentName 不随重放下发）。
+      const cleared = { ...state.states }
+      delete cleared[sessionId]
+      removeQueuedFromStorage(sessionId)
+      const base = patch({ states: cleared }, sessionId, {
+        messages,
+        imageSupported: prev?.imageSupported,
+        agentName: prev?.agentName,
+        hydrated: prev?.hydrated,
+      })
+      return applyTopLevelActions(base, sessionId, actions)
     }),
 
   markDone: (sessionId) =>
@@ -757,7 +801,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages, sending: false })
+      // prompt 回合结束后未决审批已失效（agent 侧请求已被应答或取消），清掉残留 banner
+      return patch(state, sessionId, { messages, sending: false, pendingPermission: null })
     }),
 
   markError: (sessionId, message) =>
@@ -766,7 +811,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages, sending: false, error: message })
+      return patch(state, sessionId, { messages, sending: false, error: message, pendingPermission: null })
     }),
 
   beginPrompt: (sessionId) =>
@@ -804,6 +849,55 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages, todos, todosTitle })
     }),
 
+  setHydrated: (sessionId, hydrated) =>
+    set((state) => patch(state, sessionId, { hydrated })),
+
+  applyTurnSnapshot: (sessionId, { rowId, text, blocks }) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const messages = [...current.messages]
+      const idx = messages.findIndex((m) => m.id === rowId)
+      const prevCreatedAt =
+        idx >= 0
+          ? messages[idx].createdAt
+          : messages[messages.length - 1]?.role === 'assistant' &&
+              messages[messages.length - 1]?.streaming
+            ? messages[messages.length - 1].createdAt
+            : Date.now()
+      const msg: ChatMessage = {
+        id: rowId,
+        role: 'assistant',
+        text,
+        blocks,
+        createdAt: prevCreatedAt,
+        streaming: true,
+      }
+      if (idx >= 0) {
+        messages[idx] = msg
+      } else {
+        const lastIdx = messages.length - 1
+        const last = messages[lastIdx]
+        if (last && last.role === 'assistant' && last.streaming) {
+          // 收编末尾 live streaming 消息，统一 id=rowId 供后续快照匹配。
+          messages[lastIdx] = msg
+        } else {
+          messages.push(msg)
+        }
+      }
+      // 看板同步：快照 blocks 可能含最新 todo，扫描并更新（与 hydrate 一致）。
+      let todos = current.todos
+      let todosTitle = current.todosTitle
+      for (let j = blocks.length - 1; j >= 0; j--) {
+        const b = blocks[j]
+        if (b.type === 'todo') {
+          todos = b.entries
+          todosTitle = b.title
+          break
+        }
+      }
+      return patch(state, sessionId, { messages, todos, todosTitle })
+    }),
+
   markEnded: (sessionId) =>
     set((state) => patch(state, sessionId, { sessionEnded: true, sending: false })),
 
@@ -830,6 +924,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setImageSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { imageSupported: supported })),
+
+  setAgentName: (sessionId, name) =>
+    set((state) => patch(state, sessionId, { agentName: name })),
 
   patchConfigOptionValue: (sessionId, configId, value) =>
     set((state) => {

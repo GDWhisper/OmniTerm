@@ -7,6 +7,7 @@ import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
 import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
+import { attachTouchScroll } from '../utils/touchScroll'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -101,7 +102,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const externalSessionRef = useRef<string | null>(null)
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
+  const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
   // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
   const tmuxScrollModeRef = useRef(false)
@@ -166,6 +169,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
+      // Clear stale buffer on reconnect so tmux's full-screen redraw starts
+      // from a clean slate (prevents status-bar lines leaking into scrollback).
+      termRef.current?.reset()
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
@@ -318,6 +324,14 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     }
   }, [])
 
+  // Register sendData in the app store so cross-component features (e.g.
+  // Settings > Terminal > Mouse Mode toggle) can send tmux commands.
+  // Only the most recently mounted terminal will be registered.
+  useEffect(() => {
+    useAppStore.getState().setTerminalSendData(sendData)
+    return () => useAppStore.getState().setTerminalSendData(null)
+  }, [sendData])
+
   /** Enter tmux copy mode (if not already) and scroll one page in the given direction.
    *  Uses the real tmux copy-mode state (tmuxScrollModeRef) as the source of
    *  truth, not the React `scrollMode` flag, so pagging always works after the
@@ -356,9 +370,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     abortRef.current = null
     observerRef.current?.disconnect()
     observerRef.current = null
+    if (resizeTimerRef.current) {
+      clearTimeout(resizeTimerRef.current)
+      resizeTimerRef.current = null
+    }
     if (mouseUpHandlerRef.current) {
       mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
+    }
+    if (touchScrollCleanupRef.current) {
+      touchScrollCleanupRef.current()
+      touchScrollCleanupRef.current = null
     }
     keyHandlerAttachedRef.current = false
     listenerDisposablesRef.current.forEach((d) => d?.dispose())
@@ -451,14 +473,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
-    // Handle resize
+    // Handle resize — debounced so xterm.js and tmux resize together after
+    // layout stabilizes. Without debounce, fit.fit() changes xterm dimensions
+    // immediately while tmux still has the old size; if tmux redraws its
+    // status bar in that window it renders at the old last-row (now beyond
+    // the viewport), scrolling content into scrollback.
     const observer = new ResizeObserver(() => {
-      fit.fit()
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
-        )
-      }
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
+      resizeTimerRef.current = setTimeout(() => {
+        resizeTimerRef.current = null
+        fit.fit()
+      }, 80)
     })
     observer.observe(container)
     observerRef.current = observer
@@ -498,6 +523,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     mouseUpHandlerRef.current = () => {
       container.removeEventListener('mouseup', handleMouseUp)
     }
+
+    // Mobile touch scroll: vertical finger drags become wheel events so
+    // tmux mouse-mode scrolls history (xterm has no native touch scroll).
+    touchScrollCleanupRef.current = attachTouchScroll(container)
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)

@@ -9,7 +9,6 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use crate::AppState;
@@ -138,7 +137,13 @@ enum AcpServerMessage<'a> {
         message: &'a str,
     },
     #[serde(rename = "session_update")]
-    SessionUpdate { data: serde_json::Value },
+    SessionUpdate {
+        data: serde_json::Value,
+        /// accumulator 赋予该帧的 turn 内单调 seq；非 turn 帧（config/commands/重放）为 None。
+        /// 前端据此对进行中 turn 的 live 帧去重（见 turn_snapshot 帧与 useAcpChat 对账）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
     #[serde(rename = "prompt_done")]
     PromptDone { stop_reason: &'a str },
     #[serde(rename = "prompt_error")]
@@ -160,55 +165,47 @@ enum AcpServerMessage<'a> {
     #[serde(rename = "permission_request")]
     PermissionRequest { id: &'a str, request: &'a serde_json::Value },
     /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
-    /// 前端据此显示/隐藏附件入口。
+    /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
+    /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
     #[serde(rename = "capabilities")]
-    Capabilities { image: bool },
+    Capabilities { image: bool, agent_name: String },
+    /// 连接时下发当前是否有进行中的 assistant turn。`active:false` 时前端定稿
+    /// 任何残留的 streaming 消息（turn 在 WS 断开期间已结束的兜底）。
+    #[serde(rename = "turn_state")]
+    TurnState { active: bool },
+    /// 连接时下发进行中 turn 的快照，供重连客户端无缝续接（仅 active 且已折叠过帧时）。
+    /// `blocks` 是 `{"v":1,"frames":[...]}` 原始帧包裹；`seq` 为已折叠进该行的最高水位，
+    /// 后续 live 帧 seq 大于它才应用（见 useAcpChat 对账）。
+    #[serde(rename = "turn_snapshot")]
+    TurnSnapshot { row_id: String, text: String, blocks: String, seq: u64 },
 }
 
-fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
-    let update = data.get("update")?;
-    let obj = update.as_object()?;
-
-    let chunk = if let Some(c) = obj.get("AgentMessageChunk") {
-        c
-    } else if obj.get("sessionUpdate").and_then(|v| v.as_str()) == Some("agent_message_chunk") {
-        update
-    } else {
-        return None;
-    };
-
-    let content = chunk.get("content")?;
-    if let Some(text_obj) = content.get("Text").or_else(|| content.get("text"))
-        && let Some(t) = text_obj.get("text").and_then(|v| v.as_str())
-    {
-        return Some(t.to_string());
-    }
-    if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
-        return Some(t.to_string());
-    }
-    if let Some(t) = chunk.get("text").and_then(|v| v.as_str()) {
-        return Some(t.to_string());
-    }
-    None
+/// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
+/// 返回 false 表示通道已关闭（WS 断开），调用方可据此提前退出。
+async fn forward_session_update(
+    tx: &tokio::sync::mpsc::Sender<Message>,
+    notif: &crate::acp::handler::SeqNotification,
+) -> bool {
+    let data = serde_json::to_value(&notif.notification).unwrap_or_default();
+    let frame = serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: notif.seq })
+        .unwrap_or_default();
+    tx.send(Message::Text(frame.into())).await.is_ok()
 }
 
 async fn spawn_notify_task(
-    mut rx: tokio::sync::broadcast::Receiver<
-        agent_client_protocol::schema::v1::SessionNotification,
-    >,
+    mut rx: tokio::sync::broadcast::Receiver<crate::acp::handler::SeqNotification>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
-    buf: Arc<Mutex<String>>,
 ) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(notification) => {
-                    let data = serde_json::to_value(&notification).unwrap_or_default();
-                    if let Some(text) = extract_text_from_notification(&data) {
-                        buf.lock().await.push_str(&text);
-                    }
-                    let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                Ok(seq_notif) => {
+                    let data = serde_json::to_value(&seq_notif.notification).unwrap_or_default();
+                    let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate {
+                        data,
+                        seq: seq_notif.seq,
+                    })
+                    .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
@@ -325,36 +322,83 @@ async fn spawn_permission_task(
     });
 }
 
+/// 查询 ACP 会话所用 agent 的 `display_name`（用于聊天气泡身份显示）。
+/// 查不到（非 ACP 会话 / agent 缺失）时返回空串，前端回退到 "agent"。
+async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT a.display_name FROM sessions s JOIN agents a ON a.id = s.agent_id WHERE s.id = ? AND s.runtime_kind = 'acp'")
+            .bind(session_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+    row.map(|(name,)| name).unwrap_or_default()
+}
+
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
-    let assistant_buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 
     let mut client: Option<Arc<AcpClient>> = match state.acp_supervisor.get(&session_id).await {
         Some(c) => {
             info!("ACP WS connected: session_id={} (supervisor hit)", session_id);
+            // subscribe-before-snapshot：先订阅再取快照，消除两者之间的丢帧 gap，
+            // 把重叠窗退化为 seq 可解的重复窗（前端按 seq 去重，见 turn_snapshot 帧）。
             let rx = c.session_update_subscribe();
-            spawn_notify_task(rx, notify_tx.clone(), assistant_buf.clone()).await;
+            // 快照与 turn 帧必须先经 notify_tx 入队，再 spawn_notify_task 转发 live 帧；
+            // notify_tx 为 FIFO 单消费者，故快照帧保证先于任何 live 帧到达前端。
+            let snap = c.turn_snapshot();
+            let ts_msg =
+                serde_json::to_string(&AcpServerMessage::TurnState { active: snap.active })
+                    .unwrap_or_default();
+            let _ = notify_tx.send(Message::Text(ts_msg.into())).await;
+            if snap.active
+                && let Some(row_id) = snap.row_id
+            {
+                let snap_msg = serde_json::to_string(&AcpServerMessage::TurnSnapshot {
+                    row_id,
+                    text: snap.text,
+                    blocks: snap.blocks,
+                    seq: snap.seq,
+                })
+                .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(snap_msg.into())).await;
+            }
+            spawn_notify_task(rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
+            // （审批不再超时自动应答，可能跨 WS 重连长期未决）。
+            for event in c.pending_permission_events().await {
+                let msg = serde_json::to_string(&AcpServerMessage::PermissionRequest {
+                    id: &event.id,
+                    request: &event.request,
+                })
+                .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(msg.into())).await;
+            }
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                    .unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: None })
+                        .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             if let Some(notif) = c.initial_commands_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                    .unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: None })
+                        .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            let agent_name = query_agent_name(&state.db, &session_id).await;
             let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                 image: c.supports_image(),
+                agent_name,
             })
             .unwrap_or_default();
             let _ = notify_tx.send(Message::Text(msg.into())).await;
@@ -446,23 +490,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 let c = c.clone();
                                 // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
                                 let resources = resolve_at_references(&db, &sid, &prompt_text).await;
-                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）
+                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）。
+                                // 同时开启累积器 turn 门控；assistant 回复由累积器实时
+                                // 防抖落库（见 turn_accumulator），不再依赖 WS 任务收尾累积。
                                 c.mark_prompt_active();
                                 let tx = notify_tx.clone();
-                                let db2 = db.clone();
-                                let sid2 = sid.clone();
-                                let buf2 = assistant_buf.clone();
                                 tokio::spawn(async move {
                                     match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
+                                            // mark_prompt_idle 内部定稿累积器进行中的 turn。
                                             c.mark_prompt_idle();
-                                            tokio::task::yield_now().await;
-                                            let assistant_text = buf2.lock().await.drain(..).collect::<String>();
-                                            if !assistant_text.is_empty() {
-                                                let _ = chat_persistence::insert_message(
-                                                    &db2, &sid2, "assistant", &assistant_text, None,
-                                                ).await;
-                                            }
                                             let reason = format!("{:?}", resp.stop_reason);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptDone { stop_reason: &reason },
@@ -471,7 +508,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
                                         Err(e) => {
                                             c.mark_prompt_idle();
-                                            buf2.lock().await.clear();
                                             let err_msg = format!("{}", e);
                                             let msg = serde_json::to_string(
                                                 &AcpServerMessage::PromptError { message: &err_msg },
@@ -525,6 +561,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 };
 
                                 let cwd = std::path::PathBuf::from(&ws_path);
+                                let agent_display_name = agent.display_name.clone();
                                 match AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone()).await {
                                     Ok(new_client) => {
                                         let new_client = Arc::new(new_client);
@@ -546,6 +583,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 c.disconnect().await;
                                             }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
+                                        // restore 出的新 client 绑定持久化：后续用户 prompt 的
+                                        // assistant 回复由累积器实时防抖落库。
+                                        new_client.attach_persistence(db.clone(), sid.clone());
 
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
@@ -557,6 +597,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
                                         let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                                             image: new_client.supports_image(),
+                                            agent_name: agent_display_name,
                                         }).unwrap_or_default();
                                         let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
 
@@ -564,34 +605,49 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
 
                                         let tx = notify_tx.clone();
-                                        let buf2 = assistant_buf.clone();
                                         tokio::spawn(async move {
                                             // 在 load_session 之前订阅，确保重放期间 agent 推来的
-                                            // 历史 session_update 全部进入本 receiver（broadcast 缓冲）。
+                                            // 历史 session_update 全部可见。
                                             let mut replay_rx = new_client.session_update_subscribe();
-                                            let result = new_client.load_session(&acp_sid, cwd).await;
-                                            // load_session 返回即 agent 已推完全部历史。排空 replay_rx
-                                            // 后逐帧经 notify_tx 转发——notify_tx 为 FIFO，故 replay_end
+                                            // 与 load_session 并发转发重放帧：历史帧数可能远超
+                                            // broadcast 容量（256），若等 load 返回后再排空，缓冲溢出
+                                            // （Lagged）会静默丢帧，长会话恢复时曾导致一帧未发。
+                                            // 注意：重放不经累积器落库——重放帧无 turn 门控（begin_turn
+                                            // 只由用户 prompt 触发），故不会与后续实时落库重复。
+                                            let load_fut = new_client.load_session(&acp_sid, cwd);
+                                            tokio::pin!(load_fut);
+                                            let result = loop {
+                                                tokio::select! {
+                                                    r = &mut load_fut => break r,
+                                                    recved = replay_rx.recv() => match recved {
+                                                        Ok(notif) => {
+                                                            // 发送失败说明 WS 已断：继续等 load 结束即可退出。
+                                                            let _ = forward_session_update(&tx, &notif).await;
+                                                        }
+                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                            tracing::warn!("ACP replay subscriber lagged by {} messages; dropped frames", n);
+                                                        }
+                                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                                            break (&mut load_fut).await;
+                                                        }
+                                                    },
+                                                }
+                                            };
+                                            // load_session 返回即 agent 已推完全部历史。排空缓冲余量后
+                                            // 经 notify_tx 发 replay_end——notify_tx 为 FIFO，故 replay_end
                                             // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
-                                            // 注意：重放帧不累积进 assistant_buf（避免与后续实时落库重复）。
                                             loop {
                                                 match replay_rx.try_recv() {
                                                     Ok(notif) => {
-                                                        let data = serde_json::to_value(&notif).unwrap_or_default();
-                                                        let frame = serde_json::to_string(
-                                                            &AcpServerMessage::SessionUpdate { data },
-                                                        )
-                                                        .unwrap_or_default();
-                                                        if tx.send(Message::Text(frame.into())).await.is_err() {
+                                                        if !forward_session_update(&tx, &notif).await {
                                                             break;
                                                         }
                                                     }
-                                                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
                                                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
-                                                        tracing::warn!("ACP replay subscriber lagged by {} messages", n);
-                                                        break;
+                                                        // 不中断：后续 try_recv 仍能取到缓冲里保留的帧。
+                                                        tracing::warn!("ACP replay drain lagged by {} messages; dropped frames", n);
                                                     }
-                                                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                                                    Err(_) => break, // Empty / Closed
                                                 }
                                             }
                                             let msg = match result {
@@ -602,9 +658,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 }).unwrap_or_default(),
                                             };
                                             let _ = tx.send(Message::Text(msg.into())).await;
-                                            // replay_end 之后才接管实时帧：避免与上面 drain 重复订阅，
-                                            // 且保证恢复完成前的帧已全部按序送达。
-                                            spawn_notify_task(new_client.session_update_subscribe(), tx.clone(), buf2).await;
+                                            // 复用 replay_rx 接管实时帧：避免重新订阅在排空与订阅
+                                            // 之间产生丢帧窗口，且保证恢复完成前的帧已全部按序送达。
+                                            spawn_notify_task(replay_rx, tx.clone()).await;
                                         });
                                     }
                                     Err(e) => {

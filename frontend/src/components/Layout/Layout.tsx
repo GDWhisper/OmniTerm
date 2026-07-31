@@ -11,6 +11,9 @@ import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
+import { decideSwipeAxis, applyEdgeResistance, resolveSwipeCommit } from '../../utils/swipe'
+import { hapticTap } from '../../utils/haptics'
+import { nextSessionId } from '../../utils/sessionNav'
 
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
@@ -293,6 +296,15 @@ function DesktopLayout({
   )
 }
 
+const TAB_ORDER: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
+const SWIPE_SETTLE_MS = 160
+// Panes sit side by side in a 300%-wide strip; each pane is 1/3 of the strip
+// (= one viewport). Neighbors stay visible while dragging, so a swipe is one
+// continuous motion instead of "blank gap then content swap".
+const PANE_WIDTH_PCT = 100 / 3
+const stripTransform = (idx: number) => `translateX(${-idx * PANE_WIDTH_PCT}%)`
+const PANE_STYLE: React.CSSProperties = { width: `${PANE_WIDTH_PCT}%`, height: '100%', overflow: 'hidden', flexShrink: 0 }
+
 function MobileLayout() {
   const { t } = useTranslation()
   const {
@@ -306,19 +318,100 @@ function MobileLayout() {
     setActiveTab,
     crtScanlines,
     uiZoom,
+    projects,
+    activeExternalSession,
+    activateSession,
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
-  const touchStart = useRef<{ x: number; y: number } | null>(null)
 
-  const handleSwipe = useCallback((direction: 'left' | 'right') => {
-    const order: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
-    const idx = order.indexOf(activeTab)
-    if (idx === -1) return
-    const next = direction === 'left' ? idx + 1 : idx - 1
-    if (next >= 0 && next < order.length) {
-      setActiveTab(order[next])
+  const stripRef = useRef<HTMLDivElement>(null)
+  const settlingRef = useRef(false)
+  const prevIdxRef = useRef<number | null>(null)
+  const dragRef = useRef<{ startX: number; startY: number; dx: number; axis: 'x' | 'y' | null } | null>(null)
+
+  const tabIdx = TAB_ORDER.indexOf(activeTab)
+
+  // Single animation path for both swipe commits and nav taps: whenever the
+  // active tab changes, glide the strip from wherever it is (base position or
+  // mid-drag offset) to the new base — one continuous motion, no double slide.
+  useEffect(() => {
+    const el = stripRef.current
+    if (!el || prevIdxRef.current === tabIdx) return
+    const first = prevIdxRef.current === null
+    prevIdxRef.current = tabIdx
+    if (first) {
+      el.style.transform = stripTransform(tabIdx)
+      return
     }
+    settlingRef.current = true
+    el.style.transition = `transform ${SWIPE_SETTLE_MS}ms ease-out`
+    el.style.transform = stripTransform(tabIdx)
+    const timer = window.setTimeout(() => {
+      el.style.transition = ''
+      settlingRef.current = false
+    }, SWIPE_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [tabIdx])
+
+  const onSwipeStart = useCallback((e: React.TouchEvent) => {
+    if (settlingRef.current) return
+    // Terminal area: horizontal drag is text selection (plan D2/D3).
+    if ((e.target as HTMLElement).closest('.xterm')) return
+    const touch = e.touches[0]
+    dragRef.current = { startX: touch.clientX, startY: touch.clientY, dx: 0, axis: null }
+  }, [])
+
+  const onSwipeMove = useCallback((e: React.TouchEvent) => {
+    const drag = dragRef.current
+    if (!drag || !stripRef.current) return
+    const touch = e.touches[0]
+    const dx = touch.clientX - drag.startX
+    const dy = touch.clientY - drag.startY
+    if (!drag.axis) {
+      drag.axis = decideSwipeAxis(dx, dy)
+      if (drag.axis === 'y') dragRef.current = null // hand back to list scroll
+      return
+    }
+    const idx = TAB_ORDER.indexOf(activeTab)
+    const damped = applyEdgeResistance(dx, idx > 0, idx < TAB_ORDER.length - 1)
+    drag.dx = damped
+    stripRef.current.style.transition = 'none'
+    stripRef.current.style.transform = `translateX(calc(${-idx * PANE_WIDTH_PCT}% + ${damped}px))`
+  }, [activeTab])
+
+  const onSwipeEnd = useCallback(() => {
+    const drag = dragRef.current
+    dragRef.current = null
+    if (!drag || drag.axis !== 'x' || !stripRef.current) return
+    const idx = TAB_ORDER.indexOf(activeTab)
+    const canPrev = idx > 0
+    const canNext = idx < TAB_ORDER.length - 1
+    const commit = resolveSwipeCommit(drag.dx, canPrev, canNext)
+    if (!commit) {
+      // Snap back to the current pane
+      const el = stripRef.current
+      settlingRef.current = true
+      el.style.transition = `transform ${SWIPE_SETTLE_MS}ms ease-out`
+      el.style.transform = stripTransform(idx)
+      window.setTimeout(() => {
+        el.style.transition = ''
+        settlingRef.current = false
+      }, SWIPE_SETTLE_MS)
+      return
+    }
+    hapticTap()
+    // Tab-change effect glides the strip from the dragged offset to the target
+    setActiveTab(commit === 'next' ? TAB_ORDER[idx + 1] : TAB_ORDER[idx - 1])
   }, [activeTab, setActiveTab])
+
+  const handleSwipeSession = useCallback((dir: 'prev' | 'next') => {
+    if (activeExternalSession) return // external tmux sessions have no DB ordering
+    const orderedIds = projects.flatMap((p) => sessions[p.id] ?? []).map((s) => s.id)
+    const nextId = nextSessionId(orderedIds, activeSessionId, dir)
+    if (!nextId) return
+    hapticTap()
+    activateSession(nextId)
+  }, [projects, sessions, activeSessionId, activeExternalSession, activateSession])
 
   const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
   const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
@@ -327,35 +420,34 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden', overscrollBehavior: 'none' } as React.CSSProperties}
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
       >
         <MobileStatusBar
           connected={connected}
           sessionName={activeSessionName}
           onSessionClick={() => setActiveTab('sessions')}
           onNewSession={() => setActiveTab('sessions')}
+          onSwipeSession={handleSwipeSession}
         />
         <div
           className="flex-1 overflow-hidden"
-          onTouchStart={mobileGestureEnabled ? (e) => {
-            const touch = e.touches[0]
-            touchStart.current = { x: touch.clientX, y: touch.clientY }
-          } : undefined}
-          onTouchEnd={mobileGestureEnabled ? (e) => {
-            if (!touchStart.current) return
-            const { x: startX, y: startY } = touchStart.current
-            touchStart.current = null
-            const touch = e.changedTouches[0]
-            const dx = touch.clientX - startX
-            const dy = touch.clientY - startY
-            const edgeMargin = 24
-            if (Math.abs(dx) < Math.abs(dy)) return
-            if (Math.abs(dx) < 40) return
-            if (startX < edgeMargin || startX > window.innerWidth - edgeMargin) return
-            handleSwipe(dx < 0 ? 'left' : 'right')
-          } : undefined}
+          // `overflow: clip` (unlike `hidden`) makes this a non-scroll-container:
+          // when the keyboard opens on a focused ACP chat input, the browser's
+          // scrollIntoView would otherwise set scrollLeft and silently shift the
+          // strip out of sync with activeTab. onScroll reset covers browsers
+          // that reject `clip` (falls back to the overflow-hidden class).
+          style={{ touchAction: 'pan-y', overflow: 'clip' }}
+          onScroll={(e) => { e.currentTarget.scrollLeft = 0; e.currentTarget.scrollTop = 0 }}
+          onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
+          onTouchMove={mobileGestureEnabled ? onSwipeMove : undefined}
+          onTouchEnd={mobileGestureEnabled ? onSwipeEnd : undefined}
+          onTouchCancel={mobileGestureEnabled ? onSwipeEnd : undefined}
         >
-          <MobileContent />
+          <div ref={stripRef} style={{ display: 'flex', width: '300%', height: '100%', willChange: 'transform' }}>
+            <div style={PANE_STYLE}><Sidebar /></div>
+            <div style={PANE_STYLE}><SessionView key={activeSessionId ?? 'empty'} /></div>
+            <div style={PANE_STYLE}><RightPanel /></div>
+          </div>
         </div>
         <MobileNav />
       </div>
@@ -366,53 +458,4 @@ function MobileLayout() {
       {crtScanlines && <div className="crt-overlay" />}
     </>
   )
-}
-
-function MobileContent() {
-  const activeTab = useAppStore((s) => s.activeTab)
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
-  const [displayedTab, setDisplayedTab] = useState(activeTab)
-  const [animState, setAnimState] = useState<'idle' | 'exiting'>('idle')
-
-  useEffect(() => {
-    if (activeTab === displayedTab) return
-    
-    // Determine if current content needs exit animation
-    const needsExit = displayedTab === 'sessions' || displayedTab === 'files'
-    
-    if (needsExit) {
-      setAnimState('exiting')
-      const timer = setTimeout(() => {
-        setDisplayedTab(activeTab)
-        setAnimState('idle')
-      }, 200)
-      return () => clearTimeout(timer)
-    } else {
-      setDisplayedTab(activeTab)
-    }
-  }, [activeTab, displayedTab])
-
-  const getAnimation = () => {
-    if (animState === 'exiting') {
-      if (displayedTab === 'sessions') return 'mobileSlideOutLeft 0.2s ease-in forwards'
-      if (displayedTab === 'files') return 'mobileSlideOutRight 0.2s ease-in forwards'
-    }
-    // Enter animations
-    if (displayedTab === 'sessions') return 'mobileSlideInLeft 0.25s ease-out'
-    if (displayedTab === 'files') return 'mobileSlideInRight 0.25s ease-out'
-    return ''
-  }
-
-  const wrapperStyle = { height: '100%', animation: getAnimation() || undefined }
-
-  switch (displayedTab) {
-    case 'terminal':
-      return <SessionView key={activeSessionId ?? 'empty'} />
-    case 'files':
-      return <div style={wrapperStyle}><RightPanel /></div>
-    case 'sessions':
-      return <div style={wrapperStyle}><Sidebar /></div>
-    default:
-      return <SessionView key={activeSessionId ?? 'empty'} />
-  }
 }

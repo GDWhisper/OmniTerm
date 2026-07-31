@@ -18,6 +18,7 @@ pub fn routes(state: AppState) -> Router {
     let public = Router::new().merge(health::routes()).merge(auth::routes());
 
     let protected = Router::new()
+        .merge(auth::protected_routes())
         .merge(system::routes())
         .merge(targets::routes())
         .merge(projects::routes())

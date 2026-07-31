@@ -289,7 +289,12 @@ html, body, #root {
   margin: 0;
   padding: 0;
   height: 100dvh;
+  /* `clip` (with `hidden` fallback for old engines) forbids even programmatic
+     scrolling: mobile keyboards trigger scrollIntoView on focused inputs and
+     would scroll these fixed-height containers, leaving the whole layout
+     shifted up with the bottom edge clipped after the keyboard closes. */
   overflow: hidden;
+  overflow: clip;
 }
 
 /* Keep native browser UI (scrollbars, inputs) matching the theme */
@@ -1665,6 +1670,8 @@ body.parchment-texture {
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   display: flex;
   flex-direction: column;
+  touch-action: none;
+  -webkit-touch-callout: none; /* iOS 长按系统菜单让位给自定义粘贴菜单 */
 }
 .terminal-panel-pixel .xterm-viewport,
 .terminal-panel-pixel .xterm {
@@ -2597,23 +2604,6 @@ select optgroup option {
 /* ────────────────────────────────────────────────────────────────────
    Mobile layout animations & components
    ──────────────────────────────────────────────────────────────────── */
-@keyframes mobileSlideInLeft {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
-}
-@keyframes mobileSlideInRight {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-@keyframes mobileSlideOutLeft {
-  from { transform: translateX(0); }
-  to { transform: translateX(-100%); }
-}
-@keyframes mobileSlideOutRight {
-  from { transform: translateX(0); }
-  to { transform: translateX(100%); }
-}
-
 @keyframes mobileNavPulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.18); }
@@ -2647,4 +2637,13 @@ select optgroup option {
 .sidebar-session-item:focus-within .row-action,
 .sidebar-session-item.active .row-action {
   opacity: 1;
+}
+/* ── Touch devices: action buttons always visible (no hover to reveal) ── */
+@media (pointer: coarse) {
+  .sidebar-project-header .row-action,
+  .sidebar-wt-row .sidebar-wt-add-btn,
+  .sidebar-wt-row .row-action,
+  .sidebar-session-item .row-action {
+    opacity: 1;
+  }
 }

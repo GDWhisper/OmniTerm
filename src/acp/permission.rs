@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v1::{
@@ -11,16 +10,20 @@ use serde::Serialize;
 use tokio::sync::{Mutex, broadcast};
 use uuid::Uuid;
 
-const PERMISSION_TIMEOUT: Duration = Duration::from_secs(60);
-
 #[derive(Clone, Debug, Serialize)]
 pub struct PermissionRequestEvent {
     pub id: String,
     pub request: serde_json::Value,
 }
 
+/// 未决审批：应答句柄 + 原始请求（供 WS 重连时重放 banner）。
+struct PendingEntry {
+    responder: Responder<RequestPermissionResponse>,
+    request: serde_json::Value,
+}
+
 pub struct PermissionManager {
-    pending: Arc<Mutex<HashMap<String, Responder<RequestPermissionResponse>>>>,
+    pending: Arc<Mutex<HashMap<String, PendingEntry>>>,
     request_tx: broadcast::Sender<PermissionRequestEvent>,
 }
 
@@ -40,39 +43,58 @@ impl PermissionManager {
         self.pending.lock().await.len()
     }
 
+    /// 登记权限请求并广播给前端，等待用户经 [`Self::resolve`] 应答。
+    ///
+    /// 不设超时自动应答：ACP 规范规定 `Cancelled` outcome 仅用于响应
+    /// `session/cancel`（见 [`Self::cancel_all`]），审批必须等真人决策。
+    /// 长期无人应答的兜底回收由 reaper 负责（30 分钟 cancel + disconnect）。
     pub async fn handle_request(
         &self,
         request: RequestPermissionRequest,
         responder: Responder<RequestPermissionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         let id = Uuid::new_v4().to_string();
+        let request = serde_json::to_value(&request).unwrap_or_default();
 
-        let event = PermissionRequestEvent {
-            id: id.clone(),
-            request: serde_json::to_value(&request).unwrap_or_default(),
-        };
+        let event = PermissionRequestEvent { id: id.clone(), request: request.clone() };
 
-        self.pending.lock().await.insert(id.clone(), responder);
+        self.pending.lock().await.insert(id, PendingEntry { responder, request });
         let _ = self.request_tx.send(event);
-
-        let pending = self.pending.clone();
-        let timeout_id = id;
-        tokio::spawn(async move {
-            tokio::time::sleep(PERMISSION_TIMEOUT).await;
-            let mut map = pending.lock().await;
-            if let Some(responder) = map.remove(&timeout_id) {
-                let _ = responder
-                    .respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
-            }
-        });
 
         Ok(())
     }
 
+    /// 所有未决审批的事件快照（WS 连接/重连时重放，恢复前端 banner）。
+    pub async fn pending_events(&self) -> Vec<PermissionRequestEvent> {
+        self.pending
+            .lock()
+            .await
+            .iter()
+            .map(|(id, entry)| PermissionRequestEvent {
+                id: id.clone(),
+                request: entry.request.clone(),
+            })
+            .collect()
+    }
+
+    /// 以 `Cancelled` outcome 应答所有未决权限请求。
+    ///
+    /// ACP 规范：client 发送 `session/cancel` 后 MUST 用 `Cancelled` 回复
+    /// 所有 pending 的 `session/request_permission`。由 `AcpClient::cancel`
+    /// 在发出 CancelNotification 时调用。
+    pub async fn cancel_all(&self) {
+        let mut map = self.pending.lock().await;
+        for (_, entry) in map.drain() {
+            let _ = entry
+                .responder
+                .respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+        }
+    }
+
     pub async fn resolve(&self, id: &str, option_id: &str) -> bool {
         let mut map = self.pending.lock().await;
-        if let Some(responder) = map.remove(id) {
-            let _ = responder.respond(RequestPermissionResponse::new(
+        if let Some(entry) = map.remove(id) {
+            let _ = entry.responder.respond(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                     PermissionOptionId::new(option_id),
                 )),

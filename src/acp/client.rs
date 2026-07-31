@@ -17,10 +17,16 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
-use crate::acp::handler;
+use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
+use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot};
 use crate::models::agent::Agent;
+
+/// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
+/// 慢消费者（如弱网 WS 客户端）的积压缓冲；超长历史 + 持续慢消费才会 Lagged 丢帧，
+/// 每帧仅 Arc 克隆，放大容量的内存代价可忽略。
+const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 4096;
 
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Deserialize)]
@@ -64,7 +70,7 @@ impl ActivityState {
 pub struct AcpClient {
     connection: ConnectionTo<AcpAgentRole>,
     session_id: SessionId,
-    session_update_tx: broadcast::Sender<SessionNotification>,
+    session_update_tx: broadcast::Sender<SeqNotification>,
     _shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// agent 连接任务崩溃时广播错误原因，供 WS 层即时透传给前端。
     /// 取代原先 `disconnect` 中 `let _ = connection_task.await` 被静默丢弃的错误。
@@ -84,6 +90,9 @@ pub struct AcpClient {
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+    /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
+    /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
+    accumulator: Arc<TurnAccumulator>,
 }
 
 /// 看护 agent 连接任务：若其因 agent 进程崩溃/异常退出而返回 `Err`，
@@ -92,9 +101,13 @@ pub struct AcpClient {
 fn spawn_crash_watcher(
     connection_task: JoinHandle<Result<(), AcpError>>,
     crash_tx: broadcast::Sender<String>,
+    accumulator: Arc<TurnAccumulator>,
 ) {
     tokio::spawn(async move {
         if let Err(e) = connection_task.await {
+            // 进程崩溃也算 turn 结束：定稿进行中的 assistant 行（幂等），
+            // 使已折叠的部分内容不丢，且不会永远停留在 streaming 状态。
+            accumulator.finalize_turn();
             let _ = crash_tx.send(format!("{}", e));
         }
     });
@@ -225,7 +238,7 @@ impl AcpClient {
 
         let transport = AcpAgent::from_args(all_args)?;
 
-        let (session_update_tx, _) = broadcast::channel(256);
+        let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -245,6 +258,7 @@ impl AcpClient {
         let pm = permission_manager.clone();
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
+        let accumulator = Arc::new(TurnAccumulator::new());
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -254,11 +268,16 @@ impl AcpClient {
                     let tx = notif_tx.clone();
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
+                    let accumulator = accumulator.clone();
                     async move |notification: SessionNotification, _cx| {
                         // 收到任意 agent 通知即视为有活动，刷新最后活动时间
                         if let Ok(mut st) = activity.lock() {
                             st.last_activity = Instant::now();
                         }
+                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
+                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
+                        // fold 返回该帧的 seq（turn 内单调，非 turn 帧为 None），随广播下发供重连对账。
+                        let seq = accumulator.fold(&notification);
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
@@ -266,7 +285,7 @@ impl AcpClient {
                             && let Ok(mut guard) = commands_notif.lock() {
                                 *guard = Some(notification.clone());
                             }
-                        handler::handle_session_update(&tx, notification)
+                        handler::handle_session_update(&tx, SeqNotification { seq, notification })
                     }
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -412,7 +431,7 @@ impl AcpClient {
                 .await
         });
 
-        spawn_crash_watcher(connection_task, crash_tx.clone());
+        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
 
         let (
             connection,
@@ -438,10 +457,11 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            accumulator,
         })
     }
 
-    pub fn session_update_subscribe(&self) -> broadcast::Receiver<SessionNotification> {
+    pub fn session_update_subscribe(&self) -> broadcast::Receiver<SeqNotification> {
         self.session_update_tx.subscribe()
     }
 
@@ -504,7 +524,8 @@ impl AcpClient {
                 self.session_id.clone(),
                 SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(resp.config_options)),
             );
-            let _ = self.session_update_tx.send(notification);
+            // 合成的 config 更新不属于任何 turn，seq 为 None（前端无条件应用）。
+            let _ = self.session_update_tx.send(SeqNotification { seq: None, notification });
         }
         Ok(())
     }
@@ -556,6 +577,9 @@ impl AcpClient {
 
     pub fn cancel(&self) -> Result<(), AcpError> {
         self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
+        // ACP 规范：session/cancel 后 MUST 以 Cancelled 应答所有未决权限请求。
+        let pm = self.permission_manager.clone();
+        tokio::spawn(async move { pm.cancel_all().await });
         let tm = self.terminal_manager.clone();
         tokio::spawn(async move { tm.kill_all().await });
         Ok(())
@@ -584,6 +608,9 @@ impl AcpClient {
             st.active_prompt = true;
             st.last_activity = Instant::now();
         }
+        // 用户 prompt 是唯一的 turn 起点：开启累积器 turn 门控。load_session 重放
+        // 从不走此路径，故重放帧不会被折叠进 streaming 行（结构性排除）。
+        self.accumulator.begin_turn();
     }
 
     /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
@@ -591,11 +618,35 @@ impl AcpClient {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = false;
         }
+        // turn 结束（正常完成 / 出错 / 取消）统一定稿进行中的 assistant 行（幂等）。
+        self.accumulator.finalize_turn();
+    }
+
+    /// 绑定持久化并启动防抖 writer。仅在真实会话注册点调用（create-session /
+    /// load_session restore）；能力探针不调用 → 折叠为内存 no-op（见 turn_accumulator）。
+    pub fn attach_persistence(&self, db: sqlx::SqlitePool, db_session_id: String) {
+        self.accumulator.attach_persistence(db, db_session_id);
+    }
+
+    /// 定稿进行中的 assistant turn（幂等）。供外部收尾路径显式调用。
+    pub fn finalize_turn(&self) {
+        self.accumulator.finalize_turn();
+    }
+
+    /// 连接时的进行中 turn 快照，供 WS 层下发 turn_state / turn_snapshot 帧，
+    /// 让重连客户端无缝续接（见 turn_accumulator / WS turn_snapshot 帧）。
+    pub fn turn_snapshot(&self) -> TurnSnapshot {
+        self.accumulator.turn_snapshot()
     }
 
     /// 当前未决权限请求数（requires_action 语义）。
     pub async fn pending_permissions(&self) -> usize {
         self.permission_manager.pending_count().await
+    }
+
+    /// 未决审批事件快照（WS 连接/重连时重放，恢复前端 banner）。
+    pub async fn pending_permission_events(&self) -> Vec<PermissionRequestEvent> {
+        self.permission_manager.pending_events().await
     }
 
     /// 是否静默待命超时：无进行中 prompt、无未决权限、且距最后活动已满 idle_secs。
@@ -640,7 +691,8 @@ impl AcpClient {
                 self.session_id.clone(),
                 SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
             );
-            let _ = self.session_update_tx.send(notification);
+            // 合成的 config 更新不属于任何 turn，seq 为 None（前端无条件应用）。
+            let _ = self.session_update_tx.send(SeqNotification { seq: None, notification });
         }
         Ok(())
     }
@@ -689,7 +741,7 @@ impl AcpClient {
 
         let transport = AcpAgent::from_args(all_args)?;
 
-        let (session_update_tx, _) = broadcast::channel(256);
+        let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -709,6 +761,7 @@ impl AcpClient {
         let pm = permission_manager.clone();
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
+        let accumulator = Arc::new(TurnAccumulator::new());
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -718,11 +771,16 @@ impl AcpClient {
                     let tx = notif_tx.clone();
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
+                    let accumulator = accumulator.clone();
                     async move |notification: SessionNotification, _cx| {
                         // 收到任意 agent 通知即视为有活动，刷新最后活动时间
                         if let Ok(mut st) = activity.lock() {
                             st.last_activity = Instant::now();
                         }
+                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
+                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
+                        // fold 返回该帧的 seq（turn 内单调，非 turn 帧为 None），随广播下发供重连对账。
+                        let seq = accumulator.fold(&notification);
                         if matches!(
                             notification.update,
                             SessionUpdate::AvailableCommandsUpdate(_)
@@ -730,7 +788,7 @@ impl AcpClient {
                             && let Ok(mut guard) = commands_notif.lock() {
                                 *guard = Some(notification.clone());
                             }
-                        handler::handle_session_update(&tx, notification)
+                        handler::handle_session_update(&tx, SeqNotification { seq, notification })
                     }
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -871,7 +929,7 @@ impl AcpClient {
                 .await
         });
 
-        spawn_crash_watcher(connection_task, crash_tx.clone());
+        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
 
         let (
             connection,
@@ -897,6 +955,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            accumulator,
         })
     }
 

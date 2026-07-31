@@ -1,10 +1,22 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
+import { useToastStore } from '../../stores/toastStore'
 import { useTerminal } from '../../hooks/useTerminal'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
 import { READER_FONT } from '../../utils/fonts'
+import { hapticTap } from '../../utils/haptics'
+import { useKeyboardHeight, useIsLandscape } from '../../hooks/useMediaQuery'
+
+/** Heuristic (plan D5): soft keyboards are >=260px tall, browser chrome
+ *  shrinkage stays <=110px. Falls back to "closed" on odd WebViews. */
+const KEYBOARD_OPEN_MIN_PX = 150
+/** Long-press duration before the paste menu appears (plan D6). */
+const LONG_PRESS_MS = 500
+/** Finger movement beyond this cancels the pending long-press. */
+const LONG_PRESS_CANCEL_PX = 10
 
 export function Terminal() {
   const { t } = useTranslation()
@@ -23,6 +35,11 @@ export function Terminal() {
   // visual size and the character grid stay identical.
   const zoomFactor = uiZoom / 100
   const effectiveFontSize = (isMobile ? mobileFontSize : fontSize) * zoomFactor
+
+  const isLandscape = useIsLandscape()
+  const { vvHeight } = useKeyboardHeight()
+  const keyboardOpen = isMobile && window.innerHeight - vvHeight > KEYBOARD_OPEN_MIN_PX
+  const hideKeyBar = isLandscape && keyboardOpen
 
   // MobileKeyBar modifier latch: tracks which modifier (Ctrl/Shift/Alt) is
   // currently active. Lifted here so useTerminal can intercept keyboard input
@@ -53,6 +70,58 @@ export function Terminal() {
   })
 
   const hasSession = !!(activeSessionId || activeExternalSession)
+
+  // Long-press paste menu (plan D6): clipboard read happens only on the
+  // menu tap so it carries a user-gesture authorization context.
+  const [pasteMenu, setPasteMenu] = useState<{ x: number; y: number } | null>(null)
+  const longPressTimer = useRef<number | null>(null)
+  const longPressStart = useRef<{ x: number; y: number } | null>(null)
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }, [])
+
+  const handlePaste = useCallback(async () => {
+    setPasteMenu(null)
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text && sendData) sendData(text)
+    } catch {
+      useToastStore.getState().addToast('error', t('terminal.pasteFailed'))
+    }
+  }, [sendData, t])
+
+  const onTermTouchStart = (e: React.TouchEvent) => {
+    if (!isMobile) return
+    const touch = e.touches[0]
+    longPressStart.current = { x: touch.clientX, y: touch.clientY }
+    cancelLongPress()
+    longPressTimer.current = window.setTimeout(() => {
+      const start = longPressStart.current
+      if (!start) return
+      hapticTap()
+      // Clamp inside viewport: menu is ~120x44px.
+      setPasteMenu({
+        x: Math.min(start.x, window.innerWidth - 128),
+        y: Math.max(8, start.y - 52),
+      })
+    }, LONG_PRESS_MS)
+  }
+
+  const onTermTouchMove = (e: React.TouchEvent) => {
+    const start = longPressStart.current
+    if (!start) return
+    const touch = e.touches[0]
+    if (Math.abs(touch.clientX - start.x) > LONG_PRESS_CANCEL_PX ||
+        Math.abs(touch.clientY - start.y) > LONG_PRESS_CANCEL_PX) {
+      cancelLongPress()
+    }
+  }
+
+  useEffect(() => cancelLongPress, [cancelLongPress])
 
   // Initialize terminal on mount or when transitioning from empty state → active session.
   // Session switches (A→B) keep hasSession === true so the effect does not fire —
@@ -198,6 +267,12 @@ export function Terminal() {
       case 'End':
         sendData('\x1b[F')
         break
+      case 'Enter':
+        sendData('\r')
+        break
+      case '^C':
+        sendData('\x03')
+        break
       case '←':
         sendData('\x1b[D')
         break
@@ -262,7 +337,14 @@ export function Terminal() {
         <span className="title-bar-spacer" />
         {hasSession && <span className="title-bar-badge">● LIVE</span>}
       </div>
-      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+      <div
+        className="terminal-panel-pixel"
+        style={{ flex: 1, minHeight: 0, position: 'relative' }}
+        onTouchStart={onTermTouchStart}
+        onTouchMove={onTermTouchMove}
+        onTouchEnd={cancelLongPress}
+        onTouchCancel={cancelLongPress}
+      >
         <div
           ref={containerRef}
           style={{
@@ -302,7 +384,46 @@ export function Terminal() {
           </div>
         )}
       </div>
-      {isMobile && (
+      {/* Portal to body: inside the mobile pane strip, `position: fixed` would
+          resolve against the strip's transform containing block and overflow
+          the viewport (same regression class as Modal — see debug-log). */}
+      {pasteMenu &&
+        createPortal(
+          <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 199 }}
+            onClick={() => setPasteMenu(null)}
+            onTouchStart={() => setPasteMenu(null)}
+          />
+          <div
+            className="pixel-float"
+            style={{
+              position: 'fixed',
+              left: pasteMenu.x,
+              top: pasteMenu.y,
+              zIndex: 200,
+              background: 'var(--bg-elevated)',
+            }}
+          >
+            <button
+              type="button"
+              onClick={handlePaste}
+              style={{
+                padding: '10px 18px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontFamily: READER_FONT,
+                fontSize: 13,
+              }}
+            >
+              {t('terminal.paste')}
+            </button>
+          </div>
+          </>,
+          document.body,
+        )}
+      {isMobile && !hideKeyBar && (
         <MobileKeyBar
           latchMod={latchMod}
           onSetLatchMod={setLatchMod}

@@ -145,14 +145,14 @@ describe('Sidebar handleCreateSession', () => {
     expect(addButton).toBeTruthy()
     addButton!.click()
 
-    // Wait for modal to appear (Modal uses fixed inset-0 backdrop)
+    // Wait for modal to appear (Modal portals to document.body)
     await vi.waitFor(() => {
-      const modal = container.querySelector('.fixed.inset-0')
+      const modal = document.body.querySelector('.fixed.inset-0')
       expect(modal).toBeTruthy()
     })
 
-    // Find the session name input and type a name
-    const input = container.querySelector('input[type="text"]') as HTMLInputElement
+    // Find the session name input and type a name (modal lives in body via portal)
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
     expect(input).toBeTruthy()
     // Trigger change event
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
@@ -164,7 +164,7 @@ describe('Sidebar handleCreateSession', () => {
     input.dispatchEvent(new Event('change', { bubbles: true }))
 
     // Find and click the create/submit button (the primary button in modal)
-    const buttons = container.querySelectorAll('button')
+    const buttons = document.body.querySelectorAll('button')
     const submitButton = (Array.from(buttons).find(btn =>
       btn.textContent?.toLowerCase().includes('create') ||
       btn.textContent?.toLowerCase().includes('提交') ||
@@ -218,14 +218,14 @@ describe('Sidebar handleCreateSession', () => {
     const addButton = container.querySelector('.sidebar-wt-add-btn') as HTMLElement
     addButton!.click()
 
-    // Wait for modal (Modal uses fixed inset-0 backdrop)
+    // Wait for modal (Modal portals to document.body)
     await vi.waitFor(() => {
-      const modal = container.querySelector('.fixed.inset-0')
+      const modal = document.body.querySelector('.fixed.inset-0')
       expect(modal).toBeTruthy()
     })
 
-    // Click submit without entering a name
-    const buttons = container.querySelectorAll('button')
+    // Click submit without entering a name (modal lives in body via portal)
+    const buttons = document.body.querySelectorAll('button')
     const submitButton = (Array.from(buttons).find(btn =>
       btn.textContent?.toLowerCase().includes('create') ||
       btn.textContent?.toLowerCase().includes('提交') ||

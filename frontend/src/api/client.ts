@@ -189,13 +189,24 @@ export const api = {
   systemUpdate: () =>
     request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
 
+  // tmux options
+  tmuxGetMouse: () =>
+    request<{ enabled: boolean }>('/system/tmux/mouse'),
+  tmuxSetMouse: (enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean }>('/system/tmux/mouse', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
   // Auth
   setup: (password: string) =>
     request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }) }),
   login: (password: string) =>
     request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean; needs_setup?: boolean }>('/auth/check'),
+  check: () => request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean }>('/auth/check'),
+  setAuthSettings: (authEnabled: boolean) =>
+    request('/auth/settings', { method: 'POST', body: JSON.stringify({ auth_enabled: authEnabled }) }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
 

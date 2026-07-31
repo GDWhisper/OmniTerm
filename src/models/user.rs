@@ -23,3 +23,8 @@ pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct AuthSettingsRequest {
+    pub auth_enabled: bool,
+}

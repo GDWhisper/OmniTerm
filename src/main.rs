@@ -18,6 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
+use std::net::SocketAddr;
 use std::path::Path;
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
@@ -82,9 +83,20 @@ struct StartArgs {
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 
-    /// JWT 签名密钥
-    #[arg(long, env = "JWT_SECRET", default_value = "omniterm-default-secret-change-me")]
-    jwt_secret: String,
+    /// JWT 签名密钥（不设公开默认值；缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
+    #[arg(long, env = "JWT_SECRET")]
+    jwt_secret: Option<String>,
+
+    /// 强制密码验证开关（覆盖 DB 设置并写回；未指定时用 DB 值）。
+    /// Docker/公网部署应显式设为 1：无鉴权时任何能访问端口的人都能完全控制本机。
+    #[arg(
+        long,
+        env = "OMNITERM_AUTH_ENABLED",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool_flag,
+    )]
+    auth_enabled: Option<bool>,
 
     /// 监听地址（默认 127.0.0.1；设为 0.0.0.0 可监听所有网络接口）
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
@@ -103,6 +115,9 @@ struct StartArgs {
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    /// Password-verification master switch (mirrors `settings.auth_enabled`).
+    pub auth_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub login_guard: auth::LoginGuard,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
     pub acp_supervisor: acp::AcpSupervisor,
     pub agent_watcher: tmux::agent_watch::AgentWatcher,
@@ -159,6 +174,79 @@ fn default_db_url() -> String {
     let dir = format!("{}/.omniterm", home);
     let _ = std::fs::create_dir_all(&dir);
     format!("sqlite:{}/{}.db?mode=rwc", dir, name)
+}
+
+/// Lenient bool parser for `--auth-enabled` / `OMNITERM_AUTH_ENABLED`:
+/// clap's built-in bool parser rejects "1"/"0", which is what docker-compose
+/// and shell scripts naturally pass.
+fn parse_bool_flag(s: &str) -> Result<bool, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        other => Err(format!("invalid boolean value '{other}' (expected true/false/1/0)")),
+    }
+}
+
+/// Resolve the JWT signing secret:
+/// - explicit `--jwt-secret` / `JWT_SECRET` wins;
+/// - otherwise load `~/.omniterm/jwt_secret` (0600), generating and
+///   persisting a fresh random secret on first run.
+///
+/// There is deliberately no public default value: a predictable secret is
+/// equivalent to no authentication (an attacker can forge admin tokens).
+fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
+    if let Some(s) = explicit {
+        if s.trim().is_empty() {
+            anyhow::bail!("JWT_SECRET must not be empty");
+        }
+        return Ok(s);
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    let dir = format!("{}/.omniterm", home);
+    std::fs::create_dir_all(&dir)?;
+    let path = format!("{}/jwt_secret", dir);
+
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
+        }
+    }
+
+    // 256 bits of entropy (two v4 UUIDs).
+    let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).replace('-', "");
+    match write_secret_file(&path, &secret) {
+        Ok(()) => Ok(secret),
+        // Lost a race with a concurrent process that just created the file — reuse it.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let s = std::fs::read_to_string(&path)?.trim().to_string();
+            if s.is_empty() {
+                anyhow::bail!("jwt secret file {} is empty", path);
+            }
+            Ok(s)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(unix)]
+fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
 }
 
 /// Unix daemonization: double-fork + setsid + stdio → /dev/null.
@@ -306,6 +394,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Start(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
+            let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
 
             // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
             // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
@@ -320,12 +409,43 @@ fn main() -> anyhow::Result<()> {
 
             sqlx::migrate!("./migrations").run(&db).await?;
 
+            // 启动自愈：进程重启后不可能有进行中的 turn，任何残留的 'streaming' 行
+            // 都是被中断的 turn，统一收尾为 'complete'，避免前端把陈旧行当作活跃流。
+            if let Err(e) =
+                sqlx::query("UPDATE chat_messages SET status = 'complete' WHERE status = 'streaming'")
+                    .execute(&db)
+                    .await
+            {
+                tracing::warn!("failed to reconcile orphaned streaming chat messages: {}", e);
+            }
+
             // Seed built-in agent presets for commands actually installed on this machine.
             presets::seed_builtin_presets(&db).await;
 
             if args.reset_auth {
                 sqlx::query("DELETE FROM users").execute(&db).await?;
                 tracing::warn!("All user accounts deleted. Set a new password via the web UI.");
+            }
+
+            // Password-verification master switch: DB is the source of truth;
+            // `OMNITERM_AUTH_ENABLED` (CLI/env) overrides and writes back so the
+            // UI and the running flag never diverge.
+            let mut auth_enabled = sqlx::query_scalar::<_, String>(
+                "SELECT value FROM settings WHERE key = 'auth_enabled'",
+            )
+            .fetch_optional(&db)
+            .await?
+            .map(|v| v == "1")
+            .unwrap_or(false);
+            if let Some(forced) = args.auth_enabled {
+                auth_enabled = forced;
+                sqlx::query(
+                    "INSERT INTO settings (key, value) VALUES ('auth_enabled', ?) \
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                )
+                .bind(if forced { "1" } else { "0" })
+                .execute(&db)
+                .await?;
             }
 
             let pid_file = pid_path(&db_url);
@@ -342,7 +462,9 @@ fn main() -> anyhow::Result<()> {
 
             let state = AppState {
                 db,
-                jwt_secret: args.jwt_secret,
+                jwt_secret,
+                auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
+                login_guard: auth::LoginGuard::new(),
                 activity_monitor,
                 acp_supervisor: acp::AcpSupervisor::default(),
                 agent_watcher: tmux::agent_watch::AgentWatcher::default(),
@@ -386,6 +508,17 @@ fn main() -> anyhow::Result<()> {
 
             let listener = tokio::net::TcpListener::bind(&bind).await?;
 
+            // Warning uses the *effective* listen host (BIND_ADDR overrides --host).
+            let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
+            let is_loopback = matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
+            if !auth_enabled && !is_loopback {
+                tracing::warn!(
+                    "密码验证已关闭且监听非回环地址 {} — 任何能访问该端口的人都可完全控制本机。\
+                     请在设置中开启密码验证，或设置环境变量 OMNITERM_AUTH_ENABLED=1。",
+                    listen_host
+                );
+            }
+
             // ── 启动提示 ──────────────────────────────────────────────
             // dev 模式：详细日志（分支、版本、端口）
             // 生产模式：简洁一行（OmniTerm vX.Y.Z — http://host:port）
@@ -428,7 +561,9 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            axum::serve(listener, app).with_graceful_shutdown(shutdown_signal).await?;
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                .with_graceful_shutdown(shutdown_signal)
+                .await?;
 
             Ok(())
         }

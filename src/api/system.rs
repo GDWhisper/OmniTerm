@@ -20,6 +20,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/dirs", get(list_dirs))
         .route("/system/exists", get(check_exists))
         .route("/system/multiplexer", get(multiplexer_status))
+        .route("/system/tmux/mouse", get(get_tmux_mouse).post(set_tmux_mouse))
         .route("/system/version", get(version_check))
         .route("/system/update", post(run_update))
 }
@@ -95,6 +96,21 @@ async fn multiplexer_status() -> (StatusCode, Json<Value>) {
                 "install_hints": crate::tmux::MULTIPLEXER_INSTALL_HINTS,
             })),
         ),
+    }
+}
+
+async fn get_tmux_mouse() -> (StatusCode, Json<Value>) {
+    match crate::tmux::get_mouse_option().await {
+        Ok(enabled) => (StatusCode::OK, Json(json!({ "enabled": enabled }))),
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn set_tmux_mouse(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+    let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    match crate::tmux::set_mouse_option(enabled).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "enabled": enabled }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }
 }
 
