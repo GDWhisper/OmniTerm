@@ -15,17 +15,6 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 - Breaking API changes prefixed with **BREAKING**.
 - File paths are relative to project root (e.g. `src/api/files.rs`, `frontend/src/components/...`).
 
-### Added
-
-- (2026-07-31 16:40) `[backend]` 新增「密码验证」总开关（`settings.auth_enabled`）：**全新安装默认关闭**（免密码直接使用），用户在设置 → 认证自行开启（首次开启需设置密码）；升级保护——已有密码用户的部署迁移后自动保持开启，绝不静默降级；`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB；鉴权关闭 + 非回环监听时启动输出醒目警告（`src/main.rs`、`src/api/auth.rs`、`src/auth/mod.rs`、`migrations/20260801_add_settings_table.sql`）
-- (2026-07-31 16:40) `[frontend]` 设置 → 认证新增「密码验证」开关：关闭需确认弹窗（红字警告），开启时未设过密码则弹窗引导设置新密码（`frontend/src/components/Settings/{AuthSection,toggleRow}.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
-- (2026-07-31 16:40) `[infra]` docker-compose 默认 `OMNITERM_AUTH_ENABLED=1`（容器 `BIND_ADDR=0.0.0.0` 全网暴露，无鉴权等于裸奔；仅本机可信环境可经 `.env.local` 关闭）（`docker-compose.yml`）
-
-### Fixed
-
-- 修复移动端虚拟键栏按键大小不一的问题：取消右侧固定宽度按键簇，所有按键均分整行宽度（原混合布局下行内并存 33/36/40/52px 多种宽度） (2026-07-31 17:19)
-- 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题 (2025-07-17 23:00)
-
 ### When to add an entry
 
 - New API endpoint, new component, new feature → `Added`
@@ -58,36 +47,48 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.4] - 2026-07-31
 
 ### Added
 
+- (2026-07-31 16:40) `[backend]` 新增「密码验证」总开关（`settings.auth_enabled`）：**全新安装默认关闭**（免密码直接使用），用户在设置 → 认证自行开启（首次开启需设置密码）；升级保护——已有密码用户的部署迁移后自动保持开启，绝不静默降级；`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB；鉴权关闭 + 非回环监听时启动输出醒目警告（`src/main.rs`、`src/api/auth.rs`、`src/auth/mod.rs`、`migrations/20260801_add_settings_table.sql`）
+- (2026-07-31 16:40) `[frontend]` 设置 → 认证新增「密码验证」开关：关闭需确认弹窗（红字警告），开启时未设过密码则弹窗引导设置新密码（`frontend/src/components/Settings/{AuthSection,toggleRow}.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-31 16:40) `[infra]` docker-compose 默认 `OMNITERM_AUTH_ENABLED=1`（容器 `BIND_ADDR=0.0.0.0` 全网暴露，无鉴权等于裸奔；仅本机可信环境可经 `.env.local` 关闭）（`docker-compose.yml`）
+
 - (2026-07-31 15:55) `[backend]` `[api]` `[frontend]` ACP 会话流式消息后端权威持久化：assistant turn 不再只活在浏览器内存靠页面保活，改由 `AcpClient` 的 `on_receive_notification` 回调（不依赖 WS 存活）实时把进行中 turn 的原始 `session_update` 帧折叠进一条 `chat_messages` 行（`status='streaming'`，防抖落库，turn 结束定稿为 `complete`）。原始帧包裹 `{"v":1,"frames":[...]}` 由前端复用现有分类器还原成结构化 blocks（思考/工具/计划卡片），杜绝 TS/Rust 双份分类逻辑。用户在 agent 流式输出期间刷新页面/切换设备，进行中 turn 的完整结构现可从 DB 恢复。配套 per-client 单调 `seq` + 连接时 `turn_snapshot`/`turn_state` 帧（subscribe-before-snapshot），重连时无缝无重复续接进行中 turn（`src/acp/turn_accumulator.rs`、`src/acp/{client,handler}.rs`、`src/ws/acp.rs`、`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`src/main.rs`、`migrations/20260730_chat_message_status.sql`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-07-31 15:55) `[frontend]` ACP 会话 WebSocket 断线自动重连：网络抖动/服务重启导致 WS 断开时按指数退避（1→2→4→8→cap 30s）自动重连，onopen 成功归零，无需手动刷新；重连不重发 `load_session`（保持手动 restore 语义），进行中 turn 由后端 `turn_snapshot`/`turn_state` 续接（`frontend/src/hooks/useAcpChat.ts`）
+- (2026-07-31 12:30) `[frontend]` 设置新增「会话」分类，含「展开思考」「展开工具调用」两个开关（默认关）：开启后聊天消息中的思考块/工具调用块到达时自动展开，偏好持久化到 localStorage（`frontend/src/stores/appStore.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-31 11:50) `[frontend]` 移动端设置新增「触觉反馈」开关（默认开）：`hapticTap` 内统一读取 `mobileHapticEnabled` 门禁，虚拟按键/导航点按/滑动切换等全部震动调用点一处生效（`frontend/src/stores/appStore.ts`、`frontend/src/utils/haptics.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-31 00:50) `[backend]` `[frontend]` ACP 聊天气泡显示 agent 实际名称而非硬编码「agent」：后端 capabilities 帧新增 `agent_name`（连接就绪 + LoadSession 两路径下发 agent 的 `display_name`），前端存入 chatStore，气泡 user→USER / system→SYSTEM / assistant→agent 实际名称（缺省回退 agent）（`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`）
+- (2026-07-31 00:28) `[frontend]` ThinkingIndicator 状态行动效改用像素字体并渐进 hex 长度（`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-07-31 00:21) `[frontend]` 移动端交互优化（计划 `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md`）：终端支持手指拖动滚动（纵向 drag 合成滚轮事件直达 tmux 历史，横向 drag 保留文本选择）；标签页切换改为跟手滑动（边缘阻尼 + 松手提交/回弹，终端区排除）；虚拟按键/导航/滑动提交/会话切换增加触觉反馈（Android，iOS 静默跳过）；横屏 + 软键盘弹出时自动隐藏虚拟键栏；顶部状态栏左右滑动循环切换会话；虚拟键栏新增 ⏎ 与一键 ^C 且按键触摸目标加大至 36px；长按终端弹出粘贴菜单；底部导航触摸目标加大至 44pt 并修正设置页手势文案（`frontend/src/utils/{touchScroll,swipe,haptics,sessionNav}.ts`、`frontend/src/hooks/{useTerminal,useMediaQuery}.ts`、`frontend/src/components/Terminal/{Terminal,MobileKeyBar}.tsx`、`frontend/src/components/Layout/{Layout,MobileNav,MobileStatusBar}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-30 20:36) `[backend]` `[frontend]` 设置 → 终端新增「tmux mouse mode」开关：新增 `GET/POST /system/tmux/mouse`（读取/设置 tmux 全局 mouse option），切换时经当前终端 WebSocket 实时下发 tmux 命令即时生效（`src/api/system.rs`、`src/tmux/mod.rs`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/api/client.ts`、`frontend/src/stores/appStore.ts`）
 
 ### Fixed
 
 - (2026-07-31 19:55) `[frontend]` 修复移动端软键盘收起后整页底部被裁切（底部导航等所有页面底缘不可见，需刷新恢复）：聚焦输入弹键盘时浏览器对 `overflow: hidden` 的固定高度根容器仍可编程滚动（scrollIntoView），键盘收起后滚动残留使整个布局上移；根链路 `html/body/#root` 与移动端列容器改 `overflow: clip`（老引擎回退 hidden），`useKeyboardHeight` 在视口变化时归零 window 滚动兜底（`frontend/src/index.css`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useMediaQuery.ts`）
 - (2026-07-31 15:50) `[backend]` 认证安全加固：① JWT 密钥不再提供公开默认值（`omniterm-default-secret-change-me`），未显式设置 `JWT_SECRET` 时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600），修复默认密钥下攻击者可离线伪造 token 绕过全部鉴权的问题；② 会话令牌版本化（`users.token_version`）：登出/修改密码后所有已签发 token 立即失效，修复 token 泄露后无法撤销的问题；③ `/auth/setup|login|change-password` 新增 IP 维度限流（5 次失败/5 分钟 → 429），修复公网暴露时无限流暴力破解的问题；④ 删除含硬编码密钥兜底的死代码 `RequireAuth` extractor（`src/auth/mod.rs`、`src/api/auth.rs`、`src/auth/rate_limit.rs`、`src/main.rs`、`migrations/20260731_add_token_version.sql`）
 - (2026-07-31 15:50) `[infra]` docker-compose 移除公开默认 `JWT_SECRET=change-me-in-production`：未显式配置时由服务端自动生成随机密钥（容器重建后需重新登录）（`docker-compose.yml`）
+- (2026-07-31 17:19) `[frontend]` 修复移动端虚拟键栏按键大小不一的问题：取消右侧固定宽度按键簇，所有按键均分整行宽度（原混合布局下行内并存 33/36/40/52px 多种宽度），并改为 9 列网格使两行按键逐列对齐（`frontend/src/components/Terminal/MobileKeyBar.tsx`）
+- (2026-07-31 15:10) `[frontend]` 修复移动端 sidebar 内弹窗（新建项目/会话、删除确认等 Modal、更新面板、终端长按粘贴菜单）错位且操作按钮被裁出屏幕：三窗格滑动轮播容器（`will-change: transform`，宽 300%）成为后代 `position: fixed` 的 containing block，弹层以 3 倍视口宽为基准定位溢出屏幕，底部 CREATE/REMOVE 等按钮不可见；弹层统一 `createPortal` 到 `document.body`，恢复视口锚定（`frontend/src/components/Modal/Modal.tsx`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
+- (2026-07-31 14:55) `[frontend]` 根治 tmux status bar 内容间歇泄漏进终端 scrollback：xterm 实例改为 `scrollback: 0`——tmux 会话的历史完全由 tmux 持有（滚轮 mouse 序列 / copy-mode），本地 scrollback 只可能积累 resize 竞态窗口（fit → WS → SIGWINCH → tmux 重绘异步链路）泄漏的垃圾，取消后泄漏结构性无处持久化，窗口期瞬时错位由 tmux 全屏重绘自愈；此前的 80ms 去抖降级为合并布局抖动、减少 tmux 重绘次数的优化（`frontend/src/hooks/useTerminal.ts`）
+- (2026-07-31 14:52) `[frontend]` 修复移动端 ACP 会话下底部导航与实际聚焦窗格偶发错位（导航指 sidebar、屏幕显示终端，且因触摸落在 `.xterm` 被手势守卫排除而无法滑回，只能刷新）：三窗格轮播容器 `overflow: hidden` 仍是可编程滚动容器，软键盘弹出/聚焦聊天输入时浏览器 `scrollIntoView` 会偷偷设置 `scrollLeft` 把 transform 移出屏幕的窗格"滚"回来；改为 `overflow: clip`（非滚动容器）+ `onScroll` 归零兜底（`frontend/src/components/Layout/Layout.tsx`）
+- (2026-07-31 12:00) `[backend]` `[frontend]` 修复 ACP 审批请求 60 秒无人响应即被自动以 `Cancelled` 应答的协议违规（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）：用户不在页面前时审批被擅自取消、agent 误读为「用户取消」。移除超时自动应答（无人应答兜底仍由 reaper 30 分钟负责）；`session/cancel` 时按规范以 `Cancelled` 应答全部未决审批；WS 重连时重放未决审批恢复前端 banner；prompt 回合结束时清理残留 banner（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`）
+- (2026-07-31 11:38) `[frontend]` 压缩移动端底部导航垂直空间：保留 44pt 触控目标的前提下收敛容器叠加 padding，总高约 68→51px（`frontend/src/components/Layout/MobileNav.tsx`）
+- (2026-07-31 11:16) `[frontend]` 修复 ACP 聊天输入区「发送/排队/取消」按钮与输入框未垂直居中对齐：按钮高度统一为输入框单行基准高度 36px（`INPUT_ROW_HEIGHT` 常量）（`frontend/src/components/Chat/ChatInput.tsx`）
+- (2026-07-31 01:30) `[backend]` `[frontend]` 修复 ACP 长会话点击「恢复会话」后聊天记录被清空：后端重放此前「先 await load_session 完成、再 try_recv 排空 broadcast」，历史超过 broadcast 容量 256 条时触发 Lagged 且旧代码直接 break，一帧都未转发；改为 `tokio::select!` 边加载边并发转发（Lagged 仅告警不中断），解除容量上限，并将 broadcast 容量 256→4096（`SESSION_UPDATE_CHANNEL_CAPACITY` 常量）进一步压低慢消费者积压丢帧概率。前端同步改为双缓冲原子提交：重放帧先入 staging 缓冲，`replay_end` 时非空才整体替换消息列表，空重放/加载失败保留本地消息并提示（ACP `session/load` 的历史回放为 agent 可选行为，omp 等实现可能不回放）（`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
+- (2026-07-31 01:30) `[frontend]` 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题
+- (2026-07-31 00:38) `[frontend]` 修复 agent 输出期间 ThinkingIndicator 动画卡顿（`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-07-30 23:51) `[frontend]` 移动端侧栏功能按钮改为常驻显示，避免触摸误触呼出（`frontend/src/index.css`）
 
 ## [0.2.3] - 2026-07-30
 
 ### Added
 
-- (2026-07-31 12:30) `[frontend]` 设置新增「会话」分类，含「展开思考」「展开工具调用」两个开关（默认关）：开启后聊天消息中的思考块/工具调用块到达时自动展开，偏好持久化到 localStorage（`frontend/src/stores/appStore.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
-- (2026-07-31 11:50) `[frontend]` 移动端设置新增「触觉反馈」开关（默认开）：`hapticTap` 内统一读取 `mobileHapticEnabled` 门禁，虚拟按键/导航点按/滑动切换等全部震动调用点一处生效（`frontend/src/stores/appStore.ts`、`frontend/src/utils/haptics.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
-- (2026-07-31 00:21) `[frontend]` 移动端交互优化（计划 `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md`）：终端支持手指拖动滚动（纵向 drag 合成滚轮事件直达 tmux 历史，横向 drag 保留文本选择）；标签页切换改为跟手滑动（边缘阻尼 + 松手提交/回弹，终端区排除）；虚拟按键/导航/滑动提交/会话切换增加触觉反馈（Android，iOS 静默跳过）；横屏 + 软键盘弹出时自动隐藏虚拟键栏；顶部状态栏左右滑动循环切换会话；虚拟键栏新增 ⏎ 与一键 ^C 且按键触摸目标加大至 36px；长按终端弹出粘贴菜单；底部导航触摸目标加大至 44pt 并修正设置页手势文案（`frontend/src/utils/{touchScroll,swipe,haptics,sessionNav}.ts`、`frontend/src/hooks/{useTerminal,useMediaQuery}.ts`、`frontend/src/components/Terminal/{Terminal,MobileKeyBar}.tsx`、`frontend/src/components/Layout/{Layout,MobileNav,MobileStatusBar}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-29) `[infra]` 恢复 npm 分发渠道，改用 esbuild 式原生平台分包：主包 `@gdwhisper/omniterm` 仅含 `shim.js`（`require.resolve` 定位平台包 binary + PATH 回退带递归守卫），`optionalDependencies` 精确锁定 4 个含真实 binary 的平台子包（`omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），安装时按 `os`/`cpu` 只拉当前平台——替代原 postinstall 从 GitHub Release 下载的壳包（此前误判「npm 无法原生发布」而下架）。发布经 `release.yml` 的 `npm-publish` job 自动化（tag push 后从 Release 拉资产、`scripts/npm-prepare.sh` staging、幂等发布平台包+主包），并支持 `workflow_dispatch` 补发历史版本（`npm-package/`、`scripts/npm-prepare.sh`、`.github/workflows/release.yml`）
 
 ### Fixed
 
-- (2026-07-31 15:10) `[frontend]` 修复移动端 sidebar 内弹窗（新建项目/会话、删除确认等 Modal、更新面板、终端长按粘贴菜单）错位且操作按钮被裁出屏幕：三窗格滑动轮播容器（`will-change: transform`，宽 300%）成为后代 `position: fixed` 的 containing block，弹层以 3 倍视口宽为基准定位溢出屏幕，底部 CREATE/REMOVE 等按钮不可见；弹层统一 `createPortal` 到 `document.body`，恢复视口锚定（`frontend/src/components/Modal/Modal.tsx`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
-- (2026-07-31 14:52) `[frontend]` 修复移动端 ACP 会话下底部导航与实际聚焦窗格偶发错位（导航指 sidebar、屏幕显示终端，且因触摸落在 `.xterm` 被手势守卫排除而无法滑回，只能刷新）：三窗格轮播容器 `overflow: hidden` 仍是可编程滚动容器，软键盘弹出/聚焦聊天输入时浏览器 `scrollIntoView` 会偷偷设置 `scrollLeft` 把 transform 移出屏幕的窗格"滚"回来；改为 `overflow: clip`（非滚动容器）+ `onScroll` 归零兜底（`frontend/src/components/Layout/Layout.tsx`）
-- (2026-07-31 14:55) `[frontend]` 根治 tmux status bar 内容间歇泄漏进终端 scrollback：xterm 实例改为 `scrollback: 0`——tmux 会话的历史完全由 tmux 持有（滚轮 mouse 序列 / copy-mode），本地 scrollback 只可能积累 resize 竞态窗口（fit → WS → SIGWINCH → tmux 重绘异步链路）泄漏的垃圾，取消后泄漏结构性无处持久化，窗口期瞬时错位由 tmux 全屏重绘自愈；此前的 80ms 去抖降级为合并布局抖动、减少 tmux 重绘次数的优化（`frontend/src/hooks/useTerminal.ts`）
-- (2026-07-31 12:00) `[backend]` `[frontend]` 修复 ACP 审批请求 60 秒无人响应即被自动以 `Cancelled` 应答的协议违规（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）：用户不在页面前时审批被擅自取消、agent 误读为「用户取消」。移除超时自动应答（无人应答兜底仍由 reaper 30 分钟负责）；`session/cancel` 时按规范以 `Cancelled` 应答全部未决审批；WS 重连时重放未决审批恢复前端 banner；prompt 回合结束时清理残留 banner（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`）
-- (2026-07-31 11:16) `[frontend]` 修复 ACP 聊天输入区「发送/排队/取消」按钮与输入框未垂直居中对齐：按钮高度统一为输入框单行基准高度 36px（`INPUT_ROW_HEIGHT` 常量）（`frontend/src/components/Chat/ChatInput.tsx`）
-- (2026-07-31 01:30) `[backend]` `[frontend]` 修复 ACP 长会话点击「恢复会话」后聊天记录被清空：后端重放此前「先 await load_session 完成、再 try_recv 排空 broadcast」，历史超过 broadcast 容量 256 条时触发 Lagged 且旧代码直接 break，一帧都未转发；改为 `tokio::select!` 边加载边并发转发（Lagged 仅告警不中断），解除容量上限，并将 broadcast 容量 256→4096（`SESSION_UPDATE_CHANNEL_CAPACITY` 常量）进一步压低慢消费者积压丢帧概率。前端同步改为双缓冲原子提交：重放帧先入 staging 缓冲，`replay_end` 时非空才整体替换消息列表，空重放/加载失败保留本地消息并提示（ACP `session/load` 的历史回放为 agent 可选行为，omp 等实现可能不回放）（`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-30 11:16) `[frontend]` 修复侧栏默认宽度过窄（160px）导致 logo 词标、worktree 分支名、会话名被截断或完全不可见：默认/拖拽下限提至 256/200px，旧 localStorage 过窄值加载时自愈，词标窄宽走 ellipsis 优雅降级（`frontend/src/stores/appStore.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/index.css`）
 - (2026-07-30 11:13) `[frontend]` 修复桌面端连接状态 badge 中文文案被 flex 挤压时逐字竖排堆叠：badge 容器 `flexShrink: 0` + 文本 `nowrap`（`frontend/src/components/Sidebar/Sidebar.tsx`）
 - (2026-07-30 11:14) `[frontend]` 修复登录页主按钮引用不存在的 `pixel-button` 类导致零样式、面板双重边框且缺底部角钉：迁移共享 `PixelButton`，面板收敛为单层 `pixel-float` + 四角钉（`frontend/src/components/Auth/AuthPage.tsx`）
