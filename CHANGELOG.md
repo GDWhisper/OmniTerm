@@ -8,7 +8,12 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 
 ### Format
 
-- Each release uses `## [version] - YYYY-MM-DD` or `## [Unreleased]
+- Each release uses `## [version] - YYYY-MM-DD` or `## [Unreleased]` for in-progress work.
+- Changes grouped by category: `Added`, `Changed`, `Fixed`, `Removed`, `Refactored`.
+- One line per change — concise, describes **what** and **why**, not how.
+- Each entry ends with a timestamp in `(YYYY-MM-DD HH:MM)` format.
+- Breaking API changes prefixed with **BREAKING**.
+- File paths are relative to project root (e.g. `src/api/files.rs`, `frontend/src/components/...`).
 
 ### Added
 
@@ -18,12 +23,8 @@ This file follows [Keep a Changelog](https://keepachangelog.com/) with project-s
 
 ### Fixed
 
-- 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题 (2025-07-17 23:00)` for in-progress work.
-- Changes grouped by category: `Added`, `Changed`, `Fixed`, `Removed`, `Refactored`.
-- One line per change — concise, describes **what** and **why**, not how.
-- Each entry ends with a timestamp in `(YYYY-MM-DD HH:MM)` format.
-- Breaking API changes prefixed with **BREAKING**.
-- File paths are relative to project root (e.g. `src/api/files.rs`, `frontend/src/components/...`).
+- 修复移动端虚拟键栏按键大小不一的问题：取消右侧固定宽度按键簇，所有按键均分整行宽度（原混合布局下行内并存 33/36/40/52px 多种宽度） (2026-07-31 17:19)
+- 修复 ACP 会话聊天记录入库后，恢复/刷新页面时工具调用卡片与文本气泡顺序错乱或重复出现的问题 (2025-07-17 23:00)
 
 ### When to add an entry
 
