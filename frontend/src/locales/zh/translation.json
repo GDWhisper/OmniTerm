@@ -188,6 +188,7 @@
   "chat.session.restore": "恢复会话",
   "chat.thinking": "思考中…",
   "chat.replaying": "正在恢复会话记录…",
+  "chat.replay.empty": "恢复未返回历史记录，已保留本地消息",
   "fm.loadFailed": "加载文件列表失败",
   "fm.uploadComplete": "上传完成",
   "fm.uploadFailed": "上传失败",

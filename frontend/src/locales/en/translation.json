@@ -188,6 +188,7 @@
   "chat.session.restore": "Restore",
   "chat.thinking": "Thinking…",
   "chat.replaying": "Restoring session history…",
+  "chat.replay.empty": "Restore returned no history; local messages kept",
   "fm.loadFailed": "Failed to load file list",
   "fm.uploadComplete": "Upload complete",
   "fm.uploadFailed": "Upload failed",

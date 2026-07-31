@@ -284,6 +284,16 @@ function TextBlockView({ text, caret }: { text: string; caret?: boolean }) {
   )
 }
 
+/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。 */
+function SystemBlockView({ label }: { label: string }) {
+  const { t } = useTranslation()
+  return (
+    <span style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em' }}>
+      [{t(label, { defaultValue: label })}]
+    </span>
+  )
+}
+
 function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
   switch (block.type) {
     case 'text':
@@ -298,11 +308,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
     case 'system':
-      return (
-        <span key={idx} style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em' }}>
-          [{block.label}]
-        </span>
-      )
+      return <SystemBlockView key={idx} label={block.label} />
     case 'image':
       // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
       return null

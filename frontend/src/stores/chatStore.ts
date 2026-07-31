@@ -249,7 +249,9 @@ interface ChatActions {
   setPermission: (sessionId: string, permission: PendingPermission) => void
   clearPermission: (sessionId: string) => void
   setReplaying: (sessionId: string, replaying: boolean) => void
-  finalizeReplay: (sessionId: string) => void
+  /** 双缓冲原子提交：用攒齐的重放帧从空白状态重建会话，staged 为空时不动现有状态。
+   *  等价「清空 + 重放 + finalize」，但不存在清空后无回填的空窗。 */
+  commitReplay: (sessionId: string, actions: SessionUpdateAction[]) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
@@ -341,7 +343,7 @@ const genId = () =>
  * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
  * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
  * 一次全量浅拷贝。重放的历史回合视为已完成，新追加的 assistant 消息 `streaming`
- * 保持 true（由 `finalizeReplay` �? `replay_end` 时统一�? false）�?
+ * 保持 true（重放提交时由 `commitReplay` 统一置 false）。
  */
 const applyActionsToMessages = (
   messages: ChatMessage[],
@@ -492,6 +494,33 @@ const applyActionsToMessages = (
     }
     // drop / setMode / setUsage / setCommands / setConfigOptions 不进 messages�?
     // 由下�? applyReplayBatch 在顶层字段处理�?
+  }
+  return next
+}
+
+/** 纯函数：从空白消息列表重建重放结果。双缓冲提交前用于判断 staged 是否为空。 */
+export const buildReplayMessages = (actions: SessionUpdateAction[]): ChatMessage[] =>
+  applyActionsToMessages([], actions)
+
+/** 把 mode/usage/commands/configOptions/todos 等顶层字段 action 合并进 state。 */
+const applyTopLevelActions = (
+  state: ChatStoreState,
+  sessionId: string,
+  actions: SessionUpdateAction[],
+): ChatStoreState => {
+  let next = state
+  for (const action of actions) {
+    if (action.kind === 'setMode') {
+      next = patch(next, sessionId, { mode: action.mode })
+    } else if (action.kind === 'setUsage') {
+      next = patch(next, sessionId, { usage: action.usage })
+    } else if (action.kind === 'setCommands') {
+      next = patch(next, sessionId, { commands: action.commands })
+    } else if (action.kind === 'setConfigOptions') {
+      next = patch(next, sessionId, { configOptions: action.options })
+    } else if (action.kind === 'setTodos') {
+      next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
+    }
   }
   return next
 }
@@ -728,31 +757,28 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = get(state, sessionId)
       const messages = applyActionsToMessages(current.messages, actions)
       // 顶层字段（mode/usage/commands/configOptions/todos）一次性合并
-      let next = patch(state, sessionId, { messages })
-      for (const action of actions) {
-        if (action.kind === 'setMode') {
-          next = patch(next, sessionId, { mode: action.mode })
-        } else if (action.kind === 'setUsage') {
-          next = patch(next, sessionId, { usage: action.usage })
-        } else if (action.kind === 'setCommands') {
-          next = patch(next, sessionId, { commands: action.commands })
-        } else if (action.kind === 'setConfigOptions') {
-          next = patch(next, sessionId, { configOptions: action.options })
-        } else if (action.kind === 'setTodos') {
-          next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
-        }
-      }
-      return next
+      return applyTopLevelActions(patch(state, sessionId, { messages }), sessionId, actions)
     }),
 
-  // 重放结束：把残留�? streaming assistant 消息标记为已完成，清掉光标态�?
-  finalizeReplay: (sessionId) =>
+  commitReplay: (sessionId, actions) =>
     set((state) => {
-      const current = get(state, sessionId)
-      const messages = current.messages.map((m) =>
+      const messages = applyActionsToMessages([], actions).map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages })
+      // staged 为空不提交：保留现有消息（agent 可能不重放历史），由调用方回退。
+      if (messages.length === 0) return state
+      const prev = state.states[sessionId]
+      // 从空白状态重建（等价旧「reset + 重放」语义），但保留连接期已到达的
+      // capabilities 信息（imageSupported/agentName 不随重放下发）。
+      const cleared = { ...state.states }
+      delete cleared[sessionId]
+      removeQueuedFromStorage(sessionId)
+      const base = patch({ states: cleared }, sessionId, {
+        messages,
+        imageSupported: prev?.imageSupported,
+        agentName: prev?.agentName,
+      })
+      return applyTopLevelActions(base, sessionId, actions)
     }),
 
   markDone: (sessionId) =>

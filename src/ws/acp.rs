@@ -193,6 +193,18 @@ fn extract_text_from_notification(data: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
+/// 返回 false 表示通道已关闭（WS 断开），调用方可据此提前退出。
+async fn forward_session_update(
+    tx: &tokio::sync::mpsc::Sender<Message>,
+    notif: &agent_client_protocol::schema::v1::SessionNotification,
+) -> bool {
+    let data = serde_json::to_value(notif).unwrap_or_default();
+    let frame =
+        serde_json::to_string(&AcpServerMessage::SessionUpdate { data }).unwrap_or_default();
+    tx.send(Message::Text(frame.into())).await.is_ok()
+}
+
 async fn spawn_notify_task(
     mut rx: tokio::sync::broadcast::Receiver<
         agent_client_protocol::schema::v1::SessionNotification,
@@ -585,31 +597,46 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let buf2 = assistant_buf.clone();
                                         tokio::spawn(async move {
                                             // 在 load_session 之前订阅，确保重放期间 agent 推来的
-                                            // 历史 session_update 全部进入本 receiver（broadcast 缓冲）。
+                                            // 历史 session_update 全部可见。
                                             let mut replay_rx = new_client.session_update_subscribe();
-                                            let result = new_client.load_session(&acp_sid, cwd).await;
-                                            // load_session 返回即 agent 已推完全部历史。排空 replay_rx
-                                            // 后逐帧经 notify_tx 转发——notify_tx 为 FIFO，故 replay_end
-                                            // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
+                                            // 与 load_session 并发转发重放帧：历史帧数可能远超
+                                            // broadcast 容量（256），若等 load 返回后再排空，缓冲溢出
+                                            // （Lagged）会静默丢帧，长会话恢复时曾导致一帧未发。
                                             // 注意：重放帧不累积进 assistant_buf（避免与后续实时落库重复）。
+                                            let load_fut = new_client.load_session(&acp_sid, cwd);
+                                            tokio::pin!(load_fut);
+                                            let result = loop {
+                                                tokio::select! {
+                                                    r = &mut load_fut => break r,
+                                                    recved = replay_rx.recv() => match recved {
+                                                        Ok(notif) => {
+                                                            // 发送失败说明 WS 已断：继续等 load 结束即可退出。
+                                                            let _ = forward_session_update(&tx, &notif).await;
+                                                        }
+                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                            tracing::warn!("ACP replay subscriber lagged by {} messages; dropped frames", n);
+                                                        }
+                                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                                            break (&mut load_fut).await;
+                                                        }
+                                                    },
+                                                }
+                                            };
+                                            // load_session 返回即 agent 已推完全部历史。排空缓冲余量后
+                                            // 经 notify_tx 发 replay_end——notify_tx 为 FIFO，故 replay_end
+                                            // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
                                             loop {
                                                 match replay_rx.try_recv() {
                                                     Ok(notif) => {
-                                                        let data = serde_json::to_value(&notif).unwrap_or_default();
-                                                        let frame = serde_json::to_string(
-                                                            &AcpServerMessage::SessionUpdate { data },
-                                                        )
-                                                        .unwrap_or_default();
-                                                        if tx.send(Message::Text(frame.into())).await.is_err() {
+                                                        if !forward_session_update(&tx, &notif).await {
                                                             break;
                                                         }
                                                     }
-                                                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
                                                     Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
-                                                        tracing::warn!("ACP replay subscriber lagged by {} messages", n);
-                                                        break;
+                                                        // 不中断：后续 try_recv 仍能取到缓冲里保留的帧。
+                                                        tracing::warn!("ACP replay drain lagged by {} messages; dropped frames", n);
                                                     }
-                                                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+                                                    Err(_) => break, // Empty / Closed
                                                 }
                                             }
                                             let msg = match result {
@@ -620,9 +647,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 }).unwrap_or_default(),
                                             };
                                             let _ = tx.send(Message::Text(msg.into())).await;
-                                            // replay_end 之后才接管实时帧：避免与上面 drain 重复订阅，
-                                            // 且保证恢复完成前的帧已全部按序送达。
-                                            spawn_notify_task(new_client.session_update_subscribe(), tx.clone(), buf2).await;
+                                            // 复用 replay_rx 接管实时帧：避免重新订阅在排空与订阅
+                                            // 之间产生丢帧窗口，且保证恢复完成前的帧已全部按序送达。
+                                            spawn_notify_task(replay_rx, tx.clone(), buf2).await;
                                         });
                                     }
                                     Err(e) => {

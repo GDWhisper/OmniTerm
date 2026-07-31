@@ -142,6 +142,40 @@ describe('chatStore — queued follow-up actions', () => {
     })
   })
 
+  describe('commitReplay (双缓冲原子提交)', () => {
+    it('replaces existing messages with staged replay result atomically', () => {
+      useChatStore.getState().addUserMessage('s1', 'old message')
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+        { kind: 'appendText', text: 'replayed answer' },
+      ])
+      const msgs = useChatStore.getState().states['s1'].messages
+      expect(msgs).toHaveLength(2)
+      expect(msgs[0].text).toBe('replayed user')
+      expect(msgs[1].text).toBe('replayed answer')
+      // 重放消息视为已完成，不残留 streaming 光标态
+      expect(msgs[1].streaming).toBe(false)
+    })
+
+    it('keeps existing messages when staged frames produce no messages', () => {
+      useChatStore.getState().addUserMessage('s1', 'precious history')
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'setMode', mode: 'code' },
+      ])
+      const msgs = useChatStore.getState().states['s1'].messages
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0].text).toBe('precious history')
+    })
+
+    it('merges top-level fields (mode/todos) from staged frames', () => {
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'appendText', text: 'hi' },
+        { kind: 'setMode', mode: 'plan' },
+      ])
+      expect(useChatStore.getState().states['s1'].mode).toBe('plan')
+    })
+  })
+
   describe('sessionStorage helper', () => {
     it('readQueuedFromStorageForSession returns the cached value', () => {
       sessionStorage.setItem(`${QUEUE_PREFIX}s1`, 'cached')
