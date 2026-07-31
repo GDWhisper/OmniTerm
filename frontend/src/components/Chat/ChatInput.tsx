@@ -62,6 +62,8 @@ function deleteDraft(sessionId: string) {
 }
 
 const QUEUE_PREVIEW_CHARS = 40
+/** 输入行基准高度：textarea 单行 minHeight 与按钮高度一致，保证垂直居中对齐。 */
+const INPUT_ROW_HEIGHT = 36
 /** @ 文件补全弹窗展示的最大条数（后端搜索上限 100，取前 N）。 */
 const MAX_AT_RESULTS = 20
 /** @ 补全搜索防抖间隔。 */
@@ -429,13 +431,14 @@ export function ChatInput({
     lineHeight: '18px',
     outline: 'none',
     overflowY: 'auto',
-    minHeight: 36,
+    minHeight: INPUT_ROW_HEIGHT,
   }
 
   const buttonBase: React.CSSProperties = {
     border: 'none',
     borderRadius: 0,
-    padding: '6px 12px',
+    padding: '0 12px',
+    height: INPUT_ROW_HEIGHT,
     fontFamily: READER_FONT,
     fontSize: 12,
     fontWeight: 600,
