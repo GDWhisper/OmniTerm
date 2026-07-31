@@ -127,7 +127,7 @@ Commands:
 start options:
   -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]
       --db <DB>           数据库连接 [env: DATABASE_URL]
-      --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]
+      --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]（缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
       --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
 
 stop / status / reset-auth options:
@@ -159,10 +159,19 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | `sqlite:omniterm.db?mode=rwc` | SQLite connection string |
-| `JWT_SECRET` | `omniterm-default-secret-change-me` | JWT signing secret |
+| `JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
 | `BIND_ADDR` | `127.0.0.1:<port>` | Listen address (legacy, prefer --port) |
 | `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
+
+## Auth 安全模型
+
+单用户（admin）密码认证，无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
+
+- **密钥**：`JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600）；容器/多实例场景建议显式设置 `JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
+- **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
+- **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。
+- 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。
 
 ## Sessions Table
 

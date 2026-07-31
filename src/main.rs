@@ -18,6 +18,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
+use std::net::SocketAddr;
 use std::path::Path;
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
@@ -82,9 +83,9 @@ struct StartArgs {
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 
-    /// JWT 签名密钥
-    #[arg(long, env = "JWT_SECRET", default_value = "omniterm-default-secret-change-me")]
-    jwt_secret: String,
+    /// JWT 签名密钥（不设公开默认值；缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
+    #[arg(long, env = "JWT_SECRET")]
+    jwt_secret: Option<String>,
 
     /// 监听地址（默认 127.0.0.1；设为 0.0.0.0 可监听所有网络接口）
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
@@ -103,6 +104,7 @@ struct StartArgs {
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    pub login_guard: auth::LoginGuard,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
     pub acp_supervisor: acp::AcpSupervisor,
     pub agent_watcher: tmux::agent_watch::AgentWatcher,
@@ -159,6 +161,68 @@ fn default_db_url() -> String {
     let dir = format!("{}/.omniterm", home);
     let _ = std::fs::create_dir_all(&dir);
     format!("sqlite:{}/{}.db?mode=rwc", dir, name)
+}
+
+/// Resolve the JWT signing secret:
+/// - explicit `--jwt-secret` / `JWT_SECRET` wins;
+/// - otherwise load `~/.omniterm/jwt_secret` (0600), generating and
+///   persisting a fresh random secret on first run.
+///
+/// There is deliberately no public default value: a predictable secret is
+/// equivalent to no authentication (an attacker can forge admin tokens).
+fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
+    if let Some(s) = explicit {
+        if s.trim().is_empty() {
+            anyhow::bail!("JWT_SECRET must not be empty");
+        }
+        return Ok(s);
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    let dir = format!("{}/.omniterm", home);
+    std::fs::create_dir_all(&dir)?;
+    let path = format!("{}/jwt_secret", dir);
+
+    if let Ok(existing) = std::fs::read_to_string(&path) {
+        let existing = existing.trim();
+        if !existing.is_empty() {
+            return Ok(existing.to_string());
+        }
+    }
+
+    // 256 bits of entropy (two v4 UUIDs).
+    let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).replace('-', "");
+    match write_secret_file(&path, &secret) {
+        Ok(()) => Ok(secret),
+        // Lost a race with a concurrent process that just created the file — reuse it.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let s = std::fs::read_to_string(&path)?.trim().to_string();
+            if s.is_empty() {
+                anyhow::bail!("jwt secret file {} is empty", path);
+            }
+            Ok(s)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(unix)]
+fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
 }
 
 /// Unix daemonization: double-fork + setsid + stdio → /dev/null.
@@ -306,6 +370,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Start(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
+            let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
 
             // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
             // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
@@ -352,7 +417,8 @@ fn main() -> anyhow::Result<()> {
 
             let state = AppState {
                 db,
-                jwt_secret: args.jwt_secret,
+                jwt_secret,
+                login_guard: auth::LoginGuard::new(),
                 activity_monitor,
                 acp_supervisor: acp::AcpSupervisor::default(),
                 agent_watcher: tmux::agent_watch::AgentWatcher::default(),
@@ -438,7 +504,9 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            axum::serve(listener, app).with_graceful_shutdown(shutdown_signal).await?;
+            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                .with_graceful_shutdown(shutdown_signal)
+                .await?;
 
             Ok(())
         }

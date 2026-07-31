@@ -18,7 +18,8 @@ services:
       - .env.local
     environment:
       - DATABASE_URL=sqlite:/app/data/omniterm.db?mode=rwc
-      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      # JWT_SECRET 不在此处设置：.env.local 若配置了会经 env_file 注入；
+      # 否则由服务端自动生成随机密钥（容器内 ~/.omniterm/jwt_secret，重建容器后需重新登录）
       - BIND_ADDR=0.0.0.0:${DOCKER_PORT:-9077}
     restart: unless-stopped
 
