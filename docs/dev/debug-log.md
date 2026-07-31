@@ -14,6 +14,28 @@
 
 ---
 
+## 2026-08-01: git diff 长行不换行——`white-space: pre` 让 flex 行横向溢出
+
+**症状**：GIT 面板 CHANGES 点开文件 diff / commit 详情，长行横向溢出被裁，没有滚动条、超出部分看不到。
+
+**可复用的理论/模式**：
+
+**1. 渲染代码/文本长行前必须显式选 white-space 模式——`pre` 是「不换行」，不是「保留格式」**。`pre` 与 `pre-wrap` 都保留空白与缩进，唯一区别是后者在容器边缘折行。diff/代码查看器几乎总是要后者；选 `pre` 的长行在 flex 容器里横向溢出（本案例 419px 容器内撑到 3104px），溢出被外层裁切，用户既看不到全文也没有横向滚动条——比 wrap 更糟。排查「长行显示不全」先 grep 目标容器的 `white-space`，再怀疑布局。
+
+**2. `pre-wrap` 只按空白折行，无空格超长 token（minified/base64/长字符串字面量）仍需 `overflow-wrap: anywhere` 兜底**。两层互补：`pre-wrap` 处理常规长行，`overflow-wrap: anywhere` 处理单个不可断 token。只加 pre-wrap 会在 minified 文件上继续溢出。
+
+**3. 「同文件里旁边就是正确写法」是最快的对照实验**：`.git-commit-message`（同文件上方 30 行）用 `pre-wrap` 且用户从未抱怨 commit 消息不换行，`.git-diff-line` 却用 `pre`。排查换行类问题时先扫一遍同族组件的 white-space 差异。
+
+**诊断过程中的错误**：无重大弯路。Playwright 实测 `scrollWidth` vs `clientWidth` 一次锁定（3104 vs 419），比截图/目测快且可量化；验证脚本用「带空格长行 + 无空格超长 token」两类 fixture 同时覆盖两层修复。
+
+**具体根因与修复**：
+
+- 根因：`frontend/src/index.css` `.git-diff-line { white-space: pre }`（git 面板原始提交 051e70b 带入，与下方 `pre-wrap` 的 `.git-commit-message` 不一致）。diff 长行永不折行，横向溢出。
+- 修复：`.git-diff-line` 改 `white-space: pre-wrap`；`.git-diff-text` 加 `overflow-wrap: anywhere`。
+- 验证：370 字符带空格长行 + 500 字符无空格 token 的测试 diff，修复前 2/5 行溢出（scrollWidth 2348/3104 vs 容器 419），修复后 0 溢出、容器 scrollWidth == clientWidth；长行折为 7/10 个视觉行，行号仍钉在首行（flex 行号列不随折行重复）。
+
+---
+
 ## 2026-07-31: 一次性完成信号走 per-connection 通道，跨重连丢失——ACP 前端永远 running
 
 **症状**：ACP 会话 agent 输出结束后，前端依然显示 agent 运行中（sending 态），迟迟收不到结束信号；刷新页面后恢复正常。
