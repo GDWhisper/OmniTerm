@@ -70,7 +70,6 @@ POST /api/v1/projects/{pid}/sessions
 PATCH/DELETE /api/v1/sessions/{id}
 GET  /api/v1/sessions/{id}/hook-status
 POST /api/v1/sessions/{id}/hook-enable|hook-disable
-POST /api/v1/sessions/{id}/prompt     # ACP: send a user prompt, returns stop_reason
 GET  /api/v1/agents                   # CRUD agent process configs
 POST/PUT/DELETE /api/v1/agents[/{id}]
 GET  /api/v1/files (list)
