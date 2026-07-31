@@ -372,7 +372,7 @@
   "settings.agents.preset.claude.label": "Claude Code",
   "settings.agents.preset.claude.hint": "Spawns the claude-agent-acp ACP client.",
   "settings.agents.preset.codex.label": "Codex",
-  "settings.agents.preset.codex.hint": "Spawns the codex-acp ACP client.",
+  "settings.agents.preset.codex.hint": "Codex CLI has no built-in ACP; uses the community adapter @agentclientprotocol/codex-acp via npx.",
   "settings.agents.preset.gemini.label": "Gemini CLI",
   "settings.agents.preset.gemini.hint": "Spawns the Gemini CLI in ACP mode (--experimental-acp).",
   "settings.agents.preset.opencode.label": "OpenCode",

@@ -372,7 +372,7 @@
   "settings.agents.preset.claude.label": "Claude Code",
   "settings.agents.preset.claude.hint": "启动 claude-agent-acp ACP 客户端。",
   "settings.agents.preset.codex.label": "Codex",
-  "settings.agents.preset.codex.hint": "启动 codex-acp ACP 客户端。",
+  "settings.agents.preset.codex.hint": "Codex CLI 无内置 ACP，经 npx 启动社区适配器 @agentclientprotocol/codex-acp。",
   "settings.agents.preset.gemini.label": "Gemini CLI",
   "settings.agents.preset.gemini.hint": "以 ACP 模式（--experimental-acp）启动 Gemini CLI。",
   "settings.agents.preset.opencode.label": "OpenCode",

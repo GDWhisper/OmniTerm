@@ -28,8 +28,10 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
     AgentPreset {
         id: "preset-codex",
         display_name: "Codex",
-        command: "codex-acp",
-        args_json: "[]",
+        // Codex CLI 官方不支持 ACP（openai/codex#30052），codex-acp 是社区
+        // 适配器 @agentclientprotocol/codex-acp 提供的 bin，故经 npx 启动。
+        command: "npx",
+        args_json: r#"["-y", "@agentclientprotocol/codex-acp"]"#,
     },
     AgentPreset {
         id: "preset-gemini",
