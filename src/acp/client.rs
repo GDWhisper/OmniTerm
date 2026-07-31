@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -27,6 +27,11 @@ use crate::models::agent::Agent;
 /// 慢消费者（如弱网 WS 客户端）的积压缓冲；超长历史 + 持续慢消费才会 Lagged 丢帧，
 /// 每帧仅 Arc 克隆，放大容量的内存代价可忽略。
 const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 4096;
+
+/// cancel 后等待 agent 自行结束 turn 的兜底秒数：合作的 agent 通常 1-2s 内让
+/// send_prompt 以 Cancelled 返回；超时视为该实现无视 cancel，强制收尾
+/// （见 [`AcpClient::spawn_cancel_turn_fallback`]）。
+const CANCEL_TURN_FALLBACK_SECS: u64 = 15;
 
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Deserialize)]
@@ -67,12 +72,15 @@ pub enum TurnEndEvent {
 ///   三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
 struct ActivityState {
     active_prompt: bool,
+    /// prompt 世代计数：每次 `mark_prompt_active` 递增。cancel 兜底定时器
+    /// 据此识别自己要收尾的那个 turn，避免误杀取消后新发起的 turn。
+    prompt_generation: u64,
     last_activity: Instant,
 }
 
 impl ActivityState {
     fn new() -> Self {
-        Self { active_prompt: false, last_activity: Instant::now() }
+        Self { active_prompt: false, prompt_generation: 0, last_activity: Instant::now() }
     }
 }
 
@@ -635,6 +643,7 @@ impl AcpClient {
     pub fn mark_prompt_active(&self) {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = true;
+            st.prompt_generation = st.prompt_generation.wrapping_add(1);
             st.last_activity = Instant::now();
         }
         // 用户 prompt 是唯一的 turn 起点：开启累积器 turn 门控。load_session 重放
@@ -642,13 +651,47 @@ impl AcpClient {
         self.accumulator.begin_turn();
     }
 
-    /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
+    /// 标记 prompt 已结束（由 prompt 任务在 send_prompt 返回时调用，
+    /// cancel 路径经 [`Self::spawn_cancel_turn_fallback`] 超时兜底调用）。
     pub fn mark_prompt_idle(&self) {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = false;
         }
         // turn 结束（正常完成 / 出错 / 取消）统一定稿进行中的 assistant 行（幂等）。
         self.accumulator.finalize_turn();
+    }
+
+    /// cancel 的 turn 收尾兜底。
+    ///
+    /// 正常路径：合作的 agent 收到 `session/cancel` 后让 `send_prompt` 以
+    /// `Cancelled` 返回，prompt 任务照常定稿 turn 并广播结束——取消后 agent
+    /// 补发的尾部帧（收尾文本等）得以落库。但无视 cancel 的实现可能永不
+    /// 返回（§8 多实现兼容），超时后若同一 turn 仍在进行则强制定稿 + 广播
+    /// 结束，防止会话永久卡在运行中。世代守卫避免误杀取消后新发起的 turn。
+    pub fn spawn_cancel_turn_fallback(self: &Arc<Self>) {
+        let generation = {
+            let Ok(st) = self.activity.lock() else { return };
+            if !st.active_prompt {
+                return;
+            }
+            st.prompt_generation
+        };
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(CANCEL_TURN_FALLBACK_SECS)).await;
+            let same_turn_still_active = {
+                let Ok(st) = client.activity.lock() else { return };
+                st.active_prompt && st.prompt_generation == generation
+            };
+            if same_turn_still_active {
+                tracing::warn!(
+                    "agent 未在 {}s 内响应 session/cancel，强制定稿进行中 turn（兜底）",
+                    CANCEL_TURN_FALLBACK_SECS
+                );
+                client.mark_prompt_idle();
+                client.notify_turn_end(TurnEndEvent::Done { stop_reason: "Cancelled".into() });
+            }
+        });
     }
 
     /// 绑定持久化并启动防抖 writer。仅在真实会话注册点调用（create-session /

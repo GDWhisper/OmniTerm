@@ -588,8 +588,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
-                                    // 取消也视�? prompt 结束
-                                    c.mark_prompt_idle();
+                                    // 不立即 mark_prompt_idle：合作的 agent 会让 send_prompt
+                                    // 以 Cancelled 返回并走正常定稿路径，取消后补发的尾部帧
+                                    // 得以落库；无视 cancel 的实现由兜底定时器强制收尾。
+                                    c.spawn_cancel_turn_fallback();
                                     if let Err(e) = c.cancel() {
                                         let err_msg = format!("取消 agent 失败: {}", e);
                                         let msg = serde_json::to_string(&AcpServerMessage::Error {

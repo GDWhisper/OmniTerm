@@ -112,7 +112,7 @@ Lifecycle:
 - **fold**：`active` 时把 `serde_json::to_value(&update)` 追加进 `frames`，从 `AgentMessageChunk` 的文本块提取纯文本累加进 `text`（唯一的轻量提取，非完整分类），置 `dirty` 并向 writer 发 `Flush`。
 - **blocks 列格式**：streaming 与 complete 行的 `blocks` 都存**原始帧包裹** `{"v":1,"frames":[<update>,...]}`（`finalize` 只翻 status，不重写 blocks）；前端复用现有 TS 分类器还原成结构化 blocks，杜绝 Rust 侧重复分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。cooked `ContentBlock[]` 数组仅用于 user 图片消息、`load_session` 重放经前端 syncToDb 写回、legacy 行——判别：数组=cooked，对象含 `frames`=原始帧。
 - **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
-- **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / `cancel` / crash watcher→`finalize_turn`。
+- **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / crash watcher→`finalize_turn`。cancel **不立即** finalize：合作的 agent 收到 `session/cancel` 后会让 `send_prompt` 以 `Cancelled` 返回、走正常定稿路径（取消后补发的尾部帧照常落库）；无视 cancel 的实现（§8）由 `spawn_cancel_turn_fallback` 兜底——超时（`CANCEL_TURN_FALLBACK_SECS`）后若同一 turn 仍在进行（prompt 世代计数守卫）则强制 `mark_prompt_idle` + 广播 turn 结束。
 - **启动自愈**：`main.rs` migrate 后 `UPDATE chat_messages SET status='complete' WHERE status='streaming'`（重启后不可能有进行中 turn）。
 
 ### 重连续接协议（seq + turn_snapshot / turn_state）
