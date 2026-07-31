@@ -102,6 +102,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   const externalSessionRef = useRef<string | null>(null)
   const listenerDisposablesRef = useRef<Array<{ dispose: () => void }>>([])
   const observerRef = useRef<ResizeObserver | null>(null)
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
@@ -369,6 +370,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     abortRef.current = null
     observerRef.current?.disconnect()
     observerRef.current = null
+    if (resizeTimerRef.current) {
+      clearTimeout(resizeTimerRef.current)
+      resizeTimerRef.current = null
+    }
     if (mouseUpHandlerRef.current) {
       mouseUpHandlerRef.current()
       mouseUpHandlerRef.current = null
@@ -468,14 +473,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
-    // Handle resize
+    // Handle resize — debounced so xterm.js and tmux resize together after
+    // layout stabilizes. Without debounce, fit.fit() changes xterm dimensions
+    // immediately while tmux still has the old size; if tmux redraws its
+    // status bar in that window it renders at the old last-row (now beyond
+    // the viewport), scrolling content into scrollback.
     const observer = new ResizeObserver(() => {
-      fit.fit()
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows })
-        )
-      }
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
+      resizeTimerRef.current = setTimeout(() => {
+        resizeTimerRef.current = null
+        fit.fit()
+      }, 80)
     })
     observer.observe(container)
     observerRef.current = observer

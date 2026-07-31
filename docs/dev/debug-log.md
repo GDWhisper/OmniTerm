@@ -14,6 +14,31 @@
 
 ---
 
+## 2026-07-31: ResizeObserver 即时 fit 导致 tmux status bar 泄漏进 scrollback
+
+**症状**：聚焦终端时，底部 tmux status bar 内容（如 "DeepSeek V4 Pro | think:max | dir OmniTerm-dev"）时不时叠加出现在 scrollback 中。非重连触发，正常使用中间歇出现。
+
+**可复用的理论/模式**：
+
+**1. 前端即时生效 + 后端异步生效 = 竞态窗口**
+
+`fit.fit()` 立即改变 xterm.js 的 cols/rows（前端视觉即时），但 resize WS 消息→后端 `master.resize()`→SIGWINCH→tmux 重绘是异步链路。在这个窗口内，tmux 仍按旧尺寸绘制 status bar（光标定位到旧 last-row），而 xterm.js 视口已缩小——旧 last-row 超出视口，触发 scroll，status bar 内容被推入 scrollback。**凡是「前端即时变 + 后端异步跟随」的双端尺寸同步，都要问：中间窗口内后端按旧尺寸产出的内容，前端能否正确消化？**
+
+**2. 间歇性 bug 的触发源往往不是用户操作，而是后台周期任务**
+
+用户没有 resize 窗口，但 sidebar 动画、scrollbar 出现/消失、flex 布局微调都会触发 ResizeObserver。tmux 默认 `status-interval 1`（每秒重绘 status bar），只要 ResizeObserver 在某一秒内触发了一次 fit，那一秒的 status bar 重绘就可能命中竞态窗口。
+
+**诊断过程中犯的错误**：
+
+1. **误判为重连问题**：第一轮诊断把症状归因于 WS 重连后旧 buffer 残留，加了 `reset()` 修复。该修复对重连场景有效，但用户明确指出"不是重连触发"。应在第一轮就问清触发条件（"是每次重连后出现，还是正常使用中间歇出现？"），而不是假设最相近的已知场景。
+
+**具体根因与修复**：
+
+- 根因链：ResizeObserver 触发 → `fit.fit()` 即时缩小 xterm 视口 → resize WS 消息异步发送 → tmux 尚未收到 SIGWINCH → tmux 1s 周期 status bar 重绘定位到旧 last-row → 超出新视口 → scroll → status bar 文本进入 scrollback → 每次触发叠加一行。
+- 修复：`useTerminal.ts` ResizeObserver 回调加 80ms 去抖——布局稳定后才执行 `fit.fit()`，`term.onResize` 随即发送 resize 消息，xterm 与 tmux 原子同步，消除竞态窗口。
+
+---
+
 ## 2026-07-31: 有界 broadcast「先完成再排空」丢帧导致恢复会话清空
 
 **症状**：ACP 长会话（omp，285 条历史）点击「恢复会话」后聊天记录全部清空；短会话（codebuddy 测试会话）恢复正常。用户以为是 preview 分支特有 bug，dev 正常。
