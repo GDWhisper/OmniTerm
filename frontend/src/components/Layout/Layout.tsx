@@ -434,12 +434,17 @@ function MobileLayout() {
         />
         <div
           className="flex-1 overflow-hidden"
+          // `minHeight: 0` 是 flex 子项的关键（缺省 `min-height: auto`）：
+          // ACP 会话的长消息列表 min-content 高度很大（数千 px），flex 无法
+          // 把容器压到剩余空间（753px），整个 strip 连同 MobileNav 被顶出
+          // 844px 的根容器并被 clip 静默裁掉——底部输入区/导航全部不可见。
+          // tmux 会话不触发是因为 xterm 内容有限高（min-content 小）。
           // `overflow: clip` (unlike `hidden`) makes this a non-scroll-container:
           // when the keyboard opens on a focused ACP chat input, the browser's
           // scrollIntoView would otherwise set scrollLeft and silently shift the
           // strip out of sync with activeTab. onScroll reset covers browsers
           // that reject `clip` (falls back to the overflow-hidden class).
-          style={{ touchAction: 'pan-y', overflow: 'clip' }}
+          style={{ touchAction: 'pan-y', overflow: 'clip', minHeight: 0 }}
           onScroll={(e) => { e.currentTarget.scrollLeft = 0; e.currentTarget.scrollTop = 0 }}
           onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
           onTouchMove={mobileGestureEnabled ? onSwipeMove : undefined}

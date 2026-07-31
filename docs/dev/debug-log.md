@@ -36,6 +36,33 @@
 
 ---
 
+## 2026-07-31: 移动端 ACP 会话底部不可见——flex 子项 min-height:auto 陷阱（第三次「底部不可见」根因）
+
+**症状**：移动端切到 ACP 会话，底部（输入区/底部导航）不可见；长消息会话必现。tmux 会话正常。用户怀疑是 tmux 底部快捷键栏（MobileKeyBar）影响。
+
+**可复用的理论/模式**：
+
+**1. flex 布局里 `flex: 1` 子项必须显式 `minHeight: 0`，否则 `min-height: auto`（默认）使其无法收缩到内容最小高度以下**。flex-col 容器中，子项的内容 min-content 高度很大时（聊天长列表、日志、长 pre），flex-grow 分配的高度被 min-content 顶高，容器被撑爆，父容器 `overflow: clip` 把后续兄弟（底部导航、输入区）静默裁掉。诊断信号：**子项 computed `height` = 内容自然高度，而不是 flex 分配高度**（getComputedStyle 一眼可见）。修复：`flex: 1` 子项加 `minHeight: 0`。这是「弹性布局三件套」（flex:1 + minHeight:0 + overflow）里最容易漏的一件。
+
+**2. 「tmux 正常、ACP 异常」是强线索，但方向别被带偏**：用户怀疑 MobileKeyBar 遮挡——实际 KeyBar 是 Terminal 内文档流组件，切 ACP 后随 unmount 消失。真正的差异是**内容 min-content 高度**：xterm 画布有限高（fit 控制），ACP 长消息列表无上限。**表面相关（都是底部、都与 tmux 有关）≠ 根因**；但「为什么 tmux 不触发」这个反例是定位 flex 陷阱的关键钥匙。
+
+**3. 桌面验证通过 ≠ 移动端正常**：MobileLayout 与 Desktop Layout 是两条独立布局链。上一轮在桌面 Playwright（1200×800）验证通过就提交，实际移动端（390×844）另一条链上 strip 缺 `minHeight: 0`。**用户报哪个平台就测哪个平台**——headless 设移动端 viewport 即可（matchMedia 768px 断点自动触发 isMobile），配合覆写 `visualViewport` + dispatch resize/scroll 可模拟键盘弹出/pan 的任意组合。
+
+**4. 「底部不可见」到目前已累计四个独立根因，逐层排查**：① 布局高度消费不全（vvHeight 漏 offsetTop）→ ② translateY 补偿（pan）→ ③ 容器 overflow clip 裁切（ChatView 复用 Terminal 类）→ ④ flex min-height:auto 撑爆（strip 容器）。**同一症状反复出现时，每次都是新层，不要假设上一轮修的就是根因**；每轮修复后必须按目标平台验证。
+
+**诊断过程中的错误**：
+
+1. 上轮修复（ChatView flexShrink + vv 钳制）后只在桌面验证就收工，未跑移动端——MobileLayout 是独立布局路径，且「strip min-height」问题在桌面布局中不存在。
+2. 用户怀疑 MobileKeyBar 时没有直接否定：先查了渲染位置（文档流、仅 Terminal），确认不遮挡后才转向布局链分析。**用户的观察（tmux 正常/ACP 异常）值得采信，用户的机制猜测要独立验证**。
+
+**具体根因与修复**：
+
+- 根因：`MobileLayout` strip 容器 `className="flex-1 overflow-hidden"` 缺 `minHeight: 0`。ACP 长消息列表 min-content ≈ 2132px → strip 被撑到 2132px（computed height 2132，flex:1 1 0% 失效）→ 根容器（height: 844px, overflow: clip）内 strip 2132 + MobileNav 51 溢出 → MobileNav 与 ChatInput（y≈2100）被 clip 裁掉。tmux 会话 xterm 画布限高（fit 后 ≤ 视口），min-content 小，flex 正常收缩。
+- 修复：`frontend/src/components/Layout/Layout.tsx` strip 容器 style 加 `minHeight: 0`。
+- 验证：Playwright 390×844 下 ACP 长会话 textarea 从 y=2100（屏幕外）→ y=731（可见），MobileNav 796-842 可见；键盘弹出（vv=400）与 pan（offsetTop=200）模拟下输入区/导航均位于可视区内；tmux 会话 MobileKeyBar 17 键可见；桌面 1200×800 无回归；tsc/lint/162 测试全过。
+
+---
+
 ## 2026-07-31: 切换到 ACP 会话时底部看不见——共享 CSS 类的隐性契约 + vv 残留越界
 
 **症状**：移动端/矮窗口下切换到 ACP 会话，底部（输入区/配置栏）看不见，有「被拉长」感。上次键盘 pan 修复（63bf509）后仍复现。
