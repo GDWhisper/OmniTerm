@@ -120,6 +120,8 @@ Lifecycle:
 
 per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分配，跨 turn 不重置），broadcast 载荷为 `SeqNotification{ seq, notification }`；WS `session_update` 帧带 `seq`（config/commands/replay 帧无 seq）。连接时 supervisor-hit 分支**先 subscribe 再 snapshot**（消除 gap，把重叠窗变为 seq 可解的重复窗）：发 `turn_state{active}`，若 active 再发 `turn_snapshot{row_id, text, blocks, seq}`。前端据此按 `row_id` 收编在建消息、以 `seq` 为水位丢弃重叠重复帧（详见 frontend.md）。
 
+turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `AcpClient` 的 `turn_end_tx` broadcast 发给**所有** WS 连接（`spawn_turn_end_task`），与 `session_update`/`crash` 同模式。不能只回发起 prompt 的连接：prompt task 存活期跨 WS 重连，per-connection 通道会把结束帧发进死连接被静默丢弃，重连后的前端永远停留在 running 态。
+
 ### Multi-implementation compatibility
 
 ACP is a protocol satisfied by multiple agent implementations. **Do not assume one implementation's behavior is the protocol.** For any field/notification/capability that is optional or may be absent, implement a fallback and document the divergence in code comments — but keep case-specific details out of AGENTS.md (they go stale). Before adding protocol-touching logic, verify the field's behavior across implementations rather than inferring the whole from one. (See AGENTS.md §8 多实现兼容性.)

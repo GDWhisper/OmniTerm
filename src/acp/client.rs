@@ -47,6 +47,15 @@ pub struct ResourceInput {
     pub text: String,
 }
 
+/// turn 结束事件（正常完成 / 出错）。经 broadcast 发给所有 WS 连接：
+/// prompt task 完成时发起 prompt 的连接可能已断开重连，per-connection
+/// 通道会把结束帧发进死连接被静默丢弃，新连接则永远收不到结束信号。
+#[derive(Debug, Clone)]
+pub enum TurnEndEvent {
+    Done { stop_reason: String },
+    Error { message: String },
+}
+
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
 ///
 /// ACP v1 协议（所有当前对接的 agent 均协商 protocolVersion:1）没有官方
@@ -77,6 +86,9 @@ pub struct AcpClient {
     crash_tx: broadcast::Sender<String>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
+    /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
+    /// （断线重连后的新连接也必须收到，见 [`TurnEndEvent`]）。
+    turn_end_tx: broadcast::Sender<TurnEndEvent>,
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
@@ -241,6 +253,7 @@ impl AcpClient {
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
+        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -449,6 +462,7 @@ impl AcpClient {
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
+            turn_end_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -473,6 +487,16 @@ impl AcpClient {
     /// 订阅 agent 终端命令生命周期事件（创建/退出）。
     pub fn terminal_event_subscribe(&self) -> broadcast::Receiver<TerminalActivity> {
         self.terminal_event_tx.subscribe()
+    }
+
+    /// 订阅 turn 结束事件（所有 WS 连接都应订阅，见 [`TurnEndEvent`]）。
+    pub fn turn_end_subscribe(&self) -> broadcast::Receiver<TurnEndEvent> {
+        self.turn_end_tx.subscribe()
+    }
+
+    /// 广播 turn 结束事件（无订阅者时静默丢弃）。
+    pub fn notify_turn_end(&self, event: TurnEndEvent) {
+        let _ = self.turn_end_tx.send(event);
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -744,6 +768,7 @@ impl AcpClient {
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
+        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -947,6 +972,7 @@ impl AcpClient {
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
+            turn_end_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,

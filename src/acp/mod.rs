@@ -7,5 +7,5 @@ pub mod supervisor;
 pub mod terminal;
 pub mod turn_accumulator;
 
-pub use client::{AcpClient, ImageInput, ResourceInput};
+pub use client::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
 pub use supervisor::AcpSupervisor;

@@ -15,7 +15,7 @@ use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
-use crate::acp::{AcpClient, ImageInput, ResourceInput};
+use crate::acp::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
 use crate::api::agents::load_agent;
 
 /// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
@@ -222,6 +222,42 @@ async fn spawn_notify_task(
     });
 }
 
+/// 转发 turn 结束事件为 `prompt_done` / `prompt_error` 帧。经 broadcast
+/// 使所有连接（含 prompt 进行中断线重连的新连接）都能收到结束信号；
+/// 旧实现只发给发起 prompt 的连接，重连后前端永远停留在 running 态。
+async fn spawn_turn_end_task(
+    mut rx: tokio::sync::broadcast::Receiver<TurnEndEvent>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let msg = match &event {
+                        TurnEndEvent::Done { stop_reason } => {
+                            serde_json::to_string(&AcpServerMessage::PromptDone { stop_reason })
+                        }
+                        TurnEndEvent::Error { message } => {
+                            serde_json::to_string(&AcpServerMessage::PromptError { message })
+                        }
+                    }
+                    .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP turn-end subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
 /// 转发 agent 进程崩溃错误：收到即作为 `prompt_error` 帧推给前端，
 /// 使用户能看到崩溃原因而非仅连接断开�?
 async fn spawn_crash_task(
@@ -379,6 +415,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             }
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            let turn_end_rx = c.turn_end_subscribe();
+            spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
@@ -494,25 +532,21 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 // 同时开启累积器 turn 门控；assistant 回复由累积器实时
                                 // 防抖落库（见 turn_accumulator），不再依赖 WS 任务收尾累积。
                                 c.mark_prompt_active();
-                                let tx = notify_tx.clone();
                                 tokio::spawn(async move {
                                     match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
                                             // mark_prompt_idle 内部定稿累积器进行中的 turn。
                                             c.mark_prompt_idle();
-                                            let reason = format!("{:?}", resp.stop_reason);
-                                            let msg = serde_json::to_string(
-                                                &AcpServerMessage::PromptDone { stop_reason: &reason },
-                                            ).unwrap_or_default();
-                                            let _ = tx.send(Message::Text(msg.into())).await;
+                                            // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
+                                            c.notify_turn_end(TurnEndEvent::Done {
+                                                stop_reason: format!("{:?}", resp.stop_reason),
+                                            });
                                         }
                                         Err(e) => {
                                             c.mark_prompt_idle();
-                                            let err_msg = format!("{}", e);
-                                            let msg = serde_json::to_string(
-                                                &AcpServerMessage::PromptError { message: &err_msg },
-                                            ).unwrap_or_default();
-                                            let _ = tx.send(Message::Text(msg.into())).await;
+                                            c.notify_turn_end(TurnEndEvent::Error {
+                                                message: format!("{}", e),
+                                            });
                                         }
                                     }
                                 });
@@ -591,6 +625,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
                                         let crash_rx = new_client.crash_subscribe();
                                         spawn_crash_task(crash_rx, notify_tx.clone()).await;
+                                        let turn_end_rx = new_client.turn_end_subscribe();
+                                        spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
                                         let term_rx = new_client.terminal_event_subscribe();
                                         spawn_terminal_task(term_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());

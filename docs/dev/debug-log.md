@@ -14,6 +14,27 @@
 
 ---
 
+## 2026-07-31: 一次性完成信号走 per-connection 通道，跨重连丢失——ACP 前端永远 running
+
+**症状**：ACP 会话 agent 输出结束后，前端依然显示 agent 运行中（sending 态），迟迟收不到结束信号；刷新页面后恢复正常。
+
+**可复用的理论/模式**：
+
+**1. 长生命周期任务的完成信号必须广播，不能回发起连接**。prompt task 的存活期（分钟级）远长于单条 WS 连接的保证存活期；引入自动重连后，「发起连接 == 接收连接」的隐含假设失效。凡是 `tokio::spawn` 持有 per-connection `mpsc::Sender` 并在未来某时刻发送关键信号的模式，都要问：这个信号跨连接吗？跨就必须走 broadcast（session 级通道），per-connection 通道只配转发即时响应。
+
+**2. 同一状态机的事件应走同一通道类型，混用即隐患**。本例中 `session_update`/`crash`/`terminal_activity`/`permission_request` 全走 broadcast，唯独 `prompt_done`/`prompt_error` 走 per-connection mpsc——不一致本身就是信号。审查消息表时按「通道类型」列一遍，孤例优先怀疑。
+
+**3. 连接时快照 + 事件流的续接协议，快照只覆盖"连接时刻"，事件流必须完备**。重连时下发 `turn_state{active:true}` 让前端续接了进行中状态，但 turn 结束事件不在广播流里 → 状态机进得去出不来。快照兜底 ≠ 事件流可以缺帧。
+
+**诊断过程中的错误**：无重大弯路，但值得记录：`let _ = tx.send(...)` 把发送失败（通道已死）静默吞掉，使这个 bug 在日志层面完全不可见。关键信号的发送失败至少应 `tracing::debug`。
+
+**具体根因与修复**：
+
+- 根因：`src/ws/acp.rs` prompt task 完成后把 `prompt_done`/`prompt_error` 发进 spawn 时捕获的 `notify_tx`（per-connection mpsc）。WS 断线自动重连（f99a1c5）后旧连接的 mpsc 已死，帧被 `let _ =` 丢弃；新连接只在建立时收到一次 `turn_state{active:true}`，之后再无结束帧 → 前端 `sending` 永远 true。后端状态本身正确（`mark_prompt_idle` 已执行），故刷新页面经 `turn_state{active:false}` 恢复。
+- 修复：`AcpClient` 新增 `turn_end_tx: broadcast::Sender<TurnEndEvent>`（Done/Error 两变体），prompt task 改调 `notify_turn_end` 广播；WS 层新增 `spawn_turn_end_task` 在 supervisor-hit 与 LoadSession restore 两处订阅转发，所有连接（含重连新连接）都能收到 `prompt_done`/`prompt_error`。
+
+---
+
 ## 2026-07-31: 嵌套滚动容器的流式内容没有自己的锚定逻辑——thinking 块滚动条不跟底
 
 **症状**：ACP 会话 thinking 块大量流式更新时，块内滚动条不锚定在底部，最新思考内容始终在折叠线以下（块外聊天列表的滚动条是贴底的）。
