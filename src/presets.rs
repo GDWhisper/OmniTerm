@@ -58,7 +58,7 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
     AgentPreset {
         id: "preset-qoder",
         display_name: "qoder",
-        command: "qoder",
+        command: "qodercli",
         args_json: r#"["--acp"]"#,
     },
     AgentPreset {

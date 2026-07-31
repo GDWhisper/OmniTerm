@@ -80,7 +80,7 @@ export const AGENT_PRESETS: AgentPreset[] = [
     labelKey: 'settings.agents.preset.qoder.label',
     hintKey: 'settings.agents.preset.qoder.hint',
     display_name: 'qoder',
-    command: 'qoder',
+    command: 'qodercli',
     args: ['--acp'],
     env: [],
   },
