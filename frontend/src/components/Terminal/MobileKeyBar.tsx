@@ -73,9 +73,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
     className: 'mobikey-btn',
   }
 
-  // All keys share the row width equally (flex: 1). A uniform per-row grid
-  // keeps the bar tidy on any viewport — previously the right-side cluster
-  // used fixed widths, so keys within a row rendered at 2-3 different sizes.
+  // All keys share the same grid columns (9 per row). A single shared grid
+  // makes both rows align column-by-column — previously the rows had 8 vs 9
+  // flex items, so every key in row 1 was wider than its row-2 counterpart.
   const renderBtn = (k: string) => (
     <button
       key={k}
@@ -83,8 +83,6 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
       onClick={() => handleClick(k)}
       style={{
         ...(isModKey(k) ? modBtnStyle(k) : keyButtonStyle),
-        flex: 1,
-        minWidth: 0,
       }}
     >
       {KEY_LABELS[k] ?? k}
@@ -94,9 +92,9 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
   return (
     <div
       style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(9, minmax(0, 1fr))',
+        gap: '4px 6px',
         padding: '6px 8px',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
@@ -105,37 +103,31 @@ export function MobileKeyBar({ latchMod, onSetLatchMod, onKey, scrollMode, onTog
         flexShrink: 0,
       }}
     >
-      {/* Row 1: Esc ^C Shift Tab PgUp PgDn ↑ 滚动 */}
-      <div style={{ display: 'flex', gap: 6 }}>
-        {ROW1_ITEMS.map((k) => renderBtn(k))}
-        <button
-          {...mobiBtnProps}
-          key="scroll"
-          onClick={() => { onToggleScrollMode() }}
-          style={{
-            ...keyButtonStyle,
-            flex: 1,
-            minWidth: 0,
-            color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
-            background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
-          }}
-        >
-          {t('terminal.keyScroll')}
-        </button>
-      </div>
+      {/* Row 1: Esc ^C Shift Tab PgUp PgDn ↑ 滚动(2列) */}
+      {ROW1_ITEMS.map((k) => renderBtn(k))}
+      <button
+        {...mobiBtnProps}
+        key="scroll"
+        onClick={() => { onToggleScrollMode() }}
+        style={{
+          ...keyButtonStyle,
+          gridColumn: 'span 2',
+          color: scrollMode ? 'var(--accent)' : 'var(--text-muted)',
+          background: scrollMode ? 'rgba(167,139,250,0.10)' : 'var(--bg-surface)',
+        }}
+      >
+        {t('terminal.keyScroll')}
+      </button>
       {/* Row 2: Ctrl Alt Del Home End ← ↓ → ⏎ */}
-      <div style={{ display: 'flex', gap: 6 }}>
-        {ROW2_ITEMS.map((k) => renderBtn(k))}
-        {ROW2_TRAILING.map((k) => renderBtn(k))}
-      </div>
+      {ROW2_ITEMS.map((k) => renderBtn(k))}
+      {ROW2_TRAILING.map((k) => renderBtn(k))}
     </div>
   )
 }
 
 const keyButtonStyle: React.CSSProperties = {
-  minWidth: 36,
   minHeight: 36,
-  padding: '0 8px',
+  padding: '0 4px',
   borderRadius: 5,
   border: '1px solid var(--border-strong)',
   background: 'var(--bg-surface)',
