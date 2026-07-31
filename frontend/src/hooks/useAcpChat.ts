@@ -580,6 +580,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     useChatStore.getState().applyReplayBatch(sid, batch)
   }, [])
 
+  // 终止进行中的重放：丢弃 staging 已攒帧，复位全部重放状态，保留现有消息。
+  // 两个调用点：① 后端以 error 帧代替 replay_end（load_failed）；② 重放期间 WS
+  // 断开——replay_end 只会发进已死的旧连接，若不复位，重连后 isReplaying 仍为
+  // true，所有 live 帧被无限期攒进 staging 永不提交，聊天界面冻结。
+  const abortReplay = useCallback((sid: string) => {
+    if (!isReplaying.current) return
+    isReplaying.current = false
+    suppressReplay.current = false
+    isManualRestore.current = false
+    replayBuffer.current = []
+    useChatStore.getState().setReplaying(sid, false)
+  }, [])
+
   // 把当前 store 的完整消息（含结构化 blocks）写回 DB，刷新后可还原。
   // 不再合并相邻 assistant——每条消息独立对应一行，与实时 insert_message 粒度一致，
   // 确保 sync_messages 的 (session, role, text) 去重能精确命中并 UPDATE blocks。
@@ -726,13 +739,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'error':
           // 重放中途失败（如 load_failed 时后端以 error 代替 replay_end）：
           // 终止 staging 丢弃已攒帧，保留现有消息，解除「恢复中」状态。
-          if (isReplaying.current) {
-            isReplaying.current = false
-            suppressReplay.current = false
-            isManualRestore.current = false
-            replayBuffer.current = []
-            useChatStore.getState().setReplaying(sid, false)
-          }
+          abortReplay(sid)
           if (frame.code === 'session_not_found') {
             s.markEnded(sid)
           } else {
@@ -917,6 +924,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         wsRef.current = null
         const sid = sessionIdRef.current
         if (sid && !unmounted) {
+          // 重放中断线：replay_end 已不可能到达（发进死连接），终止 staging
+          // 防止重连后 live 帧被无限期缓冲（聊天冻结）。
+          abortReplay(sid)
           const st = useChatStore.getState().states[sid]
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {

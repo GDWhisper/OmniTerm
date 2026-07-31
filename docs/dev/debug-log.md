@@ -32,6 +32,7 @@
 
 - 根因：`src/ws/acp.rs` prompt task 完成后把 `prompt_done`/`prompt_error` 发进 spawn 时捕获的 `notify_tx`（per-connection mpsc）。WS 断线自动重连（f99a1c5）后旧连接的 mpsc 已死，帧被 `let _ =` 丢弃；新连接只在建立时收到一次 `turn_state{active:true}`，之后再无结束帧 → 前端 `sending` 永远 true。后端状态本身正确（`mark_prompt_idle` 已执行），故刷新页面经 `turn_state{active:false}` 恢复。
 - 修复：`AcpClient` 新增 `turn_end_tx: broadcast::Sender<TurnEndEvent>`（Done/Error 两变体），prompt task 改调 `notify_turn_end` 广播；WS 层新增 `spawn_turn_end_task` 在 supervisor-hit 与 LoadSession restore 两处订阅转发，所有连接（含重连新连接）都能收到 `prompt_done`/`prompt_error`。
+- 举一反三审计（按模式 1「一次性信号 vs 连接生命周期」复查全链路）发现同构 bug：`replay_end` 也只发给发起 restore 的连接，重放期间断线后前端 `isReplaying` 永不复位，live 帧被无限期攒进 staging → 聊天冻结。前端修复：`useAcpChat.ts` 提取 `abortReplay`，`ws.onclose` 时终止重放（`replay_end` 是 per-connection 动作的响应，合理保留 per-connection，由发起方对断线自行兜底）。
 
 ---
 
