@@ -390,18 +390,28 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         alignItems: 'baseline',
         gap: 6,
         fontSize: '0.769em',
-        color: 'var(--text-faint)',
+        color: 'var(--text-secondary)',
         marginBottom: 2,
         fontFamily: READER_FONT,
         letterSpacing: '0.05em',
       }}
     >
-      <span>{isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}</span>
+      <span
+        style={{
+          fontWeight: 600,
+          background: 'var(--bg-elevated)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 2,
+          padding: '0 4px',
+        }}
+      >
+        {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
+      </span>
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
       )}
       {hovered && (
-        <span style={{ letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+        <span style={{ letterSpacing: '0.03em', whiteSpace: 'nowrap', color: 'var(--text-faint)' }}>
           {formatHoverTime(message.createdAt)}
         </span>
       )}

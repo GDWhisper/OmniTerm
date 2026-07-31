@@ -2568,7 +2568,7 @@ select optgroup option {
 }
 .git-diff-line {
   display: flex;
-  white-space: pre;
+  white-space: pre-wrap;
 }
 .git-diff-lineno {
   flex-shrink: 0;
@@ -2584,6 +2584,9 @@ select optgroup option {
   min-width: 0;
   padding-left: 4px;
   color: var(--text-muted);
+  /* pre-wrap wraps at spaces; anywhere also breaks pathological unbroken tokens
+     (minified code, base64) so they never overflow the drawer. */
+  overflow-wrap: anywhere;
 }
 .git-diff-line-add {
   background: color-mix(in srgb, var(--success) 12%, transparent);
