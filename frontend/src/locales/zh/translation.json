@@ -295,6 +295,7 @@
   "git.createdBranch": "已创建分支 {{name}}",
   "git.stagedLabel": "已暂存",
   "git.unstagedLabel": "未暂存",
+  "git.openInEditor": "在编辑器中打开",
   "git.noDiff": "无变更",
   "git.binaryFile": "二进制文件",
   "git.diffTruncated": "diff 过大已截断",

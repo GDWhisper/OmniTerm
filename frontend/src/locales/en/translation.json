@@ -295,6 +295,7 @@
   "git.createdBranch": "Created branch {{name}}",
   "git.stagedLabel": "staged",
   "git.unstagedLabel": "unstaged",
+  "git.openInEditor": "Open in editor",
   "git.noDiff": "No changes",
   "git.binaryFile": "Binary file",
   "git.diffTruncated": "Diff truncated (too large)",

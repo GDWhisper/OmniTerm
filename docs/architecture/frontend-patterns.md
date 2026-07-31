@@ -34,6 +34,22 @@
 - `ConfigToolbar.tsx` / `ChatInput.tsx` — 下拉菜单（shrink-to-fit `maxHeight`）
 - `ChatMessage.tsx`（thinking 块 / 工具内容预览）— 消息块内滚动（shrink-to-fit `maxHeight`；流式内容锚定配套 `useStickScroll`，见 `frontend/src/hooks/useStickScroll.ts`）
 
+## 底部抽屉骨架 (drawer-shell convention)
+
+**适用场景**：底部滑出式抽屉（文件预览/编辑、diff 查看）——外层容器 + 木纹标题栏 + 高度拖拽条。
+
+**约定**：
+
+- 统一用 `<DrawerShell>`（`frontend/src/components/Common/DrawerShell.tsx`）：
+  - props：`height`（受控）、`onHeightChange`（调用方负责持久化）、`title`（`.panel-title-bar` 文案，调用方负责 i18n）、`children`
+  - 内部：外层容器（flex column + `--bg-elevated` + borderTop）+ `.panel-title-bar` + 6px 拖拽条
+  - 拖拽逻辑在 `useDrawerResize`（`frontend/src/hooks/useDrawerResize.ts`）：window mousemove/mouseup 生命周期、高度钳制 [120, innerHeight-60]
+- 调用方提供：header 行（标题 + 操作按钮）、内容区（`flex: 1, minHeight: 0`）、可选状态栏
+- 高度持久化由调用方做（FileDrawer → FileManager `omniterm_drawer_height`；GitDrawer → GitPanel `omniterm_git_drawer_height`），hook 只做纯拖拽状态机
+- 禁止复制拖拽逻辑/外层容器样式——新抽屉一律基于 DrawerShell
+
+**已有案例**：FileDrawer（文件查看/编辑）、GitDrawer（diff/commit 查看）
+
 ## 数据/渲染分离 (data.ts convention)
 
 **适用场景**：组件需要渲染一份**纯静态或低频变更**的展示数据

@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-01 01:20) `[frontend]` `[api]` GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键把当前文件切到文件编辑器（复用 FileDrawer 的查看/编辑/保存能力），路径由 `/git/diff` 新增的 `root` 字段（仓库根，后端 ADR-2 已解析）拼接相对路径得出（`frontend/src/components/GitPanel/{GitDrawer,GitPanel}.tsx`、`frontend/src/api/client.ts`、`src/api/git.rs`、`frontend/src/locales/{en,zh}/translation.json`）
+
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600）——纯文字方案（无底色/边框，避免与气泡堆叠），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
 
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡 hover 显示消息系统时间：鼠标悬停消息时在标识行（USER/agent 名）旁显示小字本地时间（非浏览器原生 tooltip）——当天仅 `HH:mm`，今年内跨天 `MM-DD HH:mm`，跨年 `YYYY-MM-DD HH:mm`；时间戳沿用既有 `createdAt` 全链路（内存 `Date.now()` + DB `created_at` 持久化），零存储改动（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/formatTime.ts`）
@@ -67,6 +69,10 @@ Prefix each entry with the area it affects:
 - (2026-07-31 00:28) `[frontend]` ThinkingIndicator 状态行动效改用像素字体并渐进 hex 长度（`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-07-31 00:21) `[frontend]` 移动端交互优化（计划 `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md`）：终端支持手指拖动滚动（纵向 drag 合成滚轮事件直达 tmux 历史，横向 drag 保留文本选择）；标签页切换改为跟手滑动（边缘阻尼 + 松手提交/回弹，终端区排除）；虚拟按键/导航/滑动提交/会话切换增加触觉反馈（Android，iOS 静默跳过）；横屏 + 软键盘弹出时自动隐藏虚拟键栏；顶部状态栏左右滑动循环切换会话；虚拟键栏新增 ⏎ 与一键 ^C 且按键触摸目标加大至 36px；长按终端弹出粘贴菜单；底部导航触摸目标加大至 44pt 并修正设置页手势文案（`frontend/src/utils/{touchScroll,swipe,haptics,sessionNav}.ts`、`frontend/src/hooks/{useTerminal,useMediaQuery}.ts`、`frontend/src/components/Terminal/{Terminal,MobileKeyBar}.tsx`、`frontend/src/components/Layout/{Layout,MobileNav,MobileStatusBar}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-07-30 20:36) `[backend]` `[frontend]` 设置 → 终端新增「tmux mouse mode」开关：新增 `GET/POST /system/tmux/mouse`（读取/设置 tmux 全局 mouse option），切换时经当前终端 WebSocket 实时下发 tmux 命令即时生效（`src/api/system.rs`、`src/tmux/mod.rs`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/api/client.ts`、`frontend/src/stores/appStore.ts`）
+
+### Changed
+
+- (2026-08-01 01:20) `[frontend]` 底部抽屉骨架抽取：FileDrawer/GitDrawer 共用的外层容器、木纹标题栏、高度拖拽条（含拖拽状态机）提取为 `DrawerShell` + `useDrawerResize`，消除两处复制逻辑；拖拽把手圆角统一为 0（符合 ui-style-guide 全局硬角约定）（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/GitPanel/GitDrawer.tsx`）
 
 ### Fixed
 
