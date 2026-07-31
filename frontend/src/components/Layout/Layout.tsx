@@ -18,8 +18,11 @@ import { nextSessionId } from '../../utils/sessionNav'
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
  * sessions, Terminal for tmux (and the null-session empty state). The
- * wrapper key in the callers forces a full remount when the active
- * session changes, so each view's WebSocket lifecycle resets cleanly.
+ * wrapper key in the callers forces a remount on VIEW-TYPE transitions
+ * (tmux↔acp↔none), while same-kind switches (tmux→tmux, acp→acp) keep the
+ * view mounted — useTerminal/useAcpChat reconnect in place. Keying on the
+ * session id instead would destroy and recreate the xterm on every switch,
+ * flashing a blank screen for ~250ms (see debug-log).
  */
 function SessionView() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
@@ -225,6 +228,8 @@ function DesktopLayout({
   onSidebarDrag,
   onFileManagerDrag,
 }: DesktopLayoutProps) {
+  const sessions = useAppStore((s) => s.sessions)
+  const activeExternalSession = useAppStore((s) => s.activeExternalSession)
   return (
     <>
       <div
@@ -261,7 +266,7 @@ function DesktopLayout({
           )}
 
           <div className="flex-1 min-w-0">
-            <SessionView key={activeSessionId ?? 'empty'} />
+            <SessionView key={sessionViewKey(sessions, activeSessionId, activeExternalSession)} />
           </div>
 
           {fileManagerOpen && !fileManagerCollapsed && (
@@ -305,6 +310,24 @@ const PANE_WIDTH_PCT = 100 / 3
 const stripTransform = (idx: number) => `translateX(${-idx * PANE_WIDTH_PCT}%)`
 const PANE_STYLE: React.CSSProperties = { width: `${PANE_WIDTH_PCT}%`, height: '100%', overflow: 'hidden', flexShrink: 0 }
 
+/**
+ * View-kind key for <SessionView>: 'empty' | 'tmux' | 'acp' | 'external'.
+ * Only view-kind transitions remount; same-kind session switches reconnect
+ * in place (useTerminal / useAcpChat), avoiding the xterm destroy+recreate
+ * flash on every tmux session switch.
+ */
+function sessionViewKey(
+  sessions: AppState['sessions'],
+  activeSessionId: string | null,
+  activeExternalSession: string | null,
+): string {
+  if (activeExternalSession) return 'external'
+  const active = activeSessionId
+    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+    : null
+  return active?.runtime_kind ?? 'empty'
+}
+
 function MobileLayout() {
   const { t } = useTranslation()
   const {
@@ -322,7 +345,7 @@ function MobileLayout() {
     activeExternalSession,
     activateSession,
   } = useAppStore()
-  const { vvHeight } = useKeyboardHeight()
+  const { vvHeight, vvOffsetTop } = useKeyboardHeight()
 
   const stripRef = useRef<HTMLDivElement>(null)
   const settlingRef = useRef(false)
@@ -420,7 +443,10 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
+        // translateY tracks the visual-viewport pan (keyboard revealing the
+        // focused input) so the layout always fills the visible region;
+        // divided by zoom like the height since both resolve pre-zoom.
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, transform: vvOffsetTop ? `translateY(${vvOffsetTop / (uiZoom / 100)}px)` : undefined, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
       >
         <MobileStatusBar
           connected={connected}
@@ -431,12 +457,17 @@ function MobileLayout() {
         />
         <div
           className="flex-1 overflow-hidden"
+          // `minHeight: 0` 是 flex 子项的关键（缺省 `min-height: auto`）：
+          // ACP 会话的长消息列表 min-content 高度很大（数千 px），flex 无法
+          // 把容器压到剩余空间（753px），整个 strip 连同 MobileNav 被顶出
+          // 844px 的根容器并被 clip 静默裁掉——底部输入区/导航全部不可见。
+          // tmux 会话不触发是因为 xterm 内容有限高（min-content 小）。
           // `overflow: clip` (unlike `hidden`) makes this a non-scroll-container:
           // when the keyboard opens on a focused ACP chat input, the browser's
           // scrollIntoView would otherwise set scrollLeft and silently shift the
           // strip out of sync with activeTab. onScroll reset covers browsers
           // that reject `clip` (falls back to the overflow-hidden class).
-          style={{ touchAction: 'pan-y', overflow: 'clip' }}
+          style={{ touchAction: 'pan-y', overflow: 'clip', minHeight: 0 }}
           onScroll={(e) => { e.currentTarget.scrollLeft = 0; e.currentTarget.scrollTop = 0 }}
           onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
           onTouchMove={mobileGestureEnabled ? onSwipeMove : undefined}
@@ -445,7 +476,7 @@ function MobileLayout() {
         >
           <div ref={stripRef} style={{ display: 'flex', width: '300%', height: '100%', willChange: 'transform' }}>
             <div style={PANE_STYLE}><Sidebar /></div>
-            <div style={PANE_STYLE}><SessionView key={activeSessionId ?? 'empty'} /></div>
+            <div style={PANE_STYLE}><SessionView key={sessionViewKey(sessions, activeSessionId, activeExternalSession)} /></div>
             <div style={PANE_STYLE}><RightPanel /></div>
           </div>
         </div>

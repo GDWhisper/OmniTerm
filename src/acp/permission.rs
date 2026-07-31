@@ -25,16 +25,25 @@ struct PendingEntry {
 pub struct PermissionManager {
     pending: Arc<Mutex<HashMap<String, PendingEntry>>>,
     request_tx: broadcast::Sender<PermissionRequestEvent>,
+    /// 审批解决（用户应答 / cancel_all）时广播其 id：审批可能由另一条 WS
+    /// 连接（其他标签页/设备）应答，所有连接都要即时清除对应 banner。
+    resolved_tx: broadcast::Sender<String>,
 }
 
 impl PermissionManager {
     pub fn new() -> Self {
         let (request_tx, _) = broadcast::channel(16);
-        Self { pending: Arc::new(Mutex::new(HashMap::new())), request_tx }
+        let (resolved_tx, _) = broadcast::channel(16);
+        Self { pending: Arc::new(Mutex::new(HashMap::new())), request_tx, resolved_tx }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
         self.request_tx.subscribe()
+    }
+
+    /// 订阅审批解决事件（载荷为审批 id）。
+    pub fn resolved_subscribe(&self) -> broadcast::Receiver<String> {
+        self.resolved_tx.subscribe()
     }
 
     /// 当前未决（等待用户响应）的权限请求数量。用于活跃度守卫判断 agent
@@ -84,10 +93,11 @@ impl PermissionManager {
     /// 在发出 CancelNotification 时调用。
     pub async fn cancel_all(&self) {
         let mut map = self.pending.lock().await;
-        for (_, entry) in map.drain() {
+        for (id, entry) in map.drain() {
             let _ = entry
                 .responder
                 .respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled));
+            let _ = self.resolved_tx.send(id);
         }
     }
 
@@ -99,6 +109,7 @@ impl PermissionManager {
                     PermissionOptionId::new(option_id),
                 )),
             ));
+            let _ = self.resolved_tx.send(id.to_string());
             true
         } else {
             false

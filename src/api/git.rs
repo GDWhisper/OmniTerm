@@ -127,7 +127,8 @@ async fn git_diff(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> 
     let untracked = q.untracked.unwrap_or(false);
     match repo::diff_file(&root, &path, staged, untracked).await {
         Ok((diff, truncated)) => {
-            (StatusCode::OK, Json(json!({ "diff": diff, "truncated": truncated }))).into_response()
+            (StatusCode::OK, Json(json!({ "diff": diff, "truncated": truncated, "root": root })))
+                .into_response()
         }
         Err(e) => git_error_response(e),
     }

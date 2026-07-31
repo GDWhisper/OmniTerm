@@ -169,14 +169,23 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
-      // Clear stale buffer on reconnect so tmux's full-screen redraw starts
-      // from a clean slate (prevents status-bar lines leaking into scrollback).
-      termRef.current?.reset()
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
+    // Every connection spawns a fresh tmux client whose attach starts with a
+    // full-screen redraw. Wipe the previous buffer when that redraw lands
+    // (first binary frame) instead of at WS open: on session switch/reconnect
+    // the old content stays visible until the new content arrives, so the
+    // swap is one frame instead of a blank gap while the redraw is in flight
+    // (prevents the ~250ms flicker; reset still guarantees a clean slate for
+    // the redraw and wipes stale scrollback — see debug-log).
+    let sawFirstBinary = false
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {
+        if (!sawFirstBinary) {
+          sawFirstBinary = true
+          termRef.current?.reset()
+        }
         termRef.current?.write(new Uint8Array(e.data))
       } else {
         try {
@@ -564,13 +573,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   // Connect WS when terminal is ready and session changes
   useEffect(() => {
-    if (termRef.current && sessionId && sessionId !== sessionIdRef.current) {
-      connectWs()
-      return
-    }
-    if (termRef.current && externalSessionName && externalSessionName !== externalSessionRef.current) {
-      connectWs()
-    }
+    const idChanged =
+      (sessionId && sessionId !== sessionIdRef.current) ||
+      (externalSessionName && externalSessionName !== externalSessionRef.current)
+    if (!idChanged || !termRef.current) return
+    // The Terminal view stays mounted across same-kind session switches
+    // (Layout keys on view kind, not session id) — reset the per-session UI
+    // state that the old full remount used to clear. tmux copy-mode state is
+    // session-local; the new session starts outside copy mode.
+    tmuxScrollModeRef.current = false
+    setScrollMode(false)
+    connectWs()
   }, [sessionId, externalSessionName, connectWs])
 
   // Auto-connect after init (first session)

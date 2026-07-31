@@ -15,7 +15,7 @@ use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
-use crate::acp::{AcpClient, ImageInput, ResourceInput};
+use crate::acp::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
 use crate::api::agents::load_agent;
 
 /// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
@@ -164,6 +164,10 @@ enum AcpServerMessage<'a> {
     ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
     PermissionRequest { id: &'a str, request: &'a serde_json::Value },
+    /// 审批已解决（用户在任一连接应答 / session cancel 批量取消）：所有连接
+    /// 据此清除对应 banner（审批可能由其他标签页/设备应答）。
+    #[serde(rename = "permission_resolved")]
+    PermissionResolved { id: &'a str },
     /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
     /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
     /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
@@ -214,6 +218,42 @@ async fn spawn_notify_task(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         "ACP WS subscriber lagged by {} messages; dropped stale updates",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// 转发 turn 结束事件为 `prompt_done` / `prompt_error` 帧。经 broadcast
+/// 使所有连接（含 prompt 进行中断线重连的新连接）都能收到结束信号；
+/// 旧实现只发给发起 prompt 的连接，重连后前端永远停留在 running 态。
+async fn spawn_turn_end_task(
+    mut rx: tokio::sync::broadcast::Receiver<TurnEndEvent>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    let msg = match &event {
+                        TurnEndEvent::Done { stop_reason } => {
+                            serde_json::to_string(&AcpServerMessage::PromptDone { stop_reason })
+                        }
+                        TurnEndEvent::Error { message } => {
+                            serde_json::to_string(&AcpServerMessage::PromptError { message })
+                        }
+                    }
+                    .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP turn-end subscriber lagged by {} messages; dropped stale events",
                         n
                     );
                 }
@@ -322,6 +362,35 @@ async fn spawn_permission_task(
     });
 }
 
+/// 转发审批解决事件为 `permission_resolved` 帧：审批可能由其他标签页/设备
+/// 应答（resolve）或经 session cancel 批量取消，所有连接都要即时清除 banner。
+async fn spawn_permission_resolved_task(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(id) => {
+                    let msg =
+                        serde_json::to_string(&AcpServerMessage::PermissionResolved { id: &id })
+                            .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP permission-resolved subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
 /// 查询 ACP 会话所用 agent 的 `display_name`（用于聊天气泡身份显示）。
 /// 查不到（非 ACP 会话 / agent 缺失）时返回空串，前端回退到 "agent"。
 async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
@@ -367,6 +436,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            spawn_permission_resolved_task(c.permission_resolved_subscribe(), notify_tx.clone())
+                .await;
             // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
             // （审批不再超时自动应答，可能跨 WS 重连长期未决）。
             for event in c.pending_permission_events().await {
@@ -379,6 +450,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             }
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            let turn_end_rx = c.turn_end_subscribe();
+            spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
@@ -494,33 +567,31 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 // 同时开启累积器 turn 门控；assistant 回复由累积器实时
                                 // 防抖落库（见 turn_accumulator），不再依赖 WS 任务收尾累积。
                                 c.mark_prompt_active();
-                                let tx = notify_tx.clone();
                                 tokio::spawn(async move {
                                     match c.send_prompt(&prompt_text, images, resources).await {
                                         Ok(resp) => {
                                             // mark_prompt_idle 内部定稿累积器进行中的 turn。
                                             c.mark_prompt_idle();
-                                            let reason = format!("{:?}", resp.stop_reason);
-                                            let msg = serde_json::to_string(
-                                                &AcpServerMessage::PromptDone { stop_reason: &reason },
-                                            ).unwrap_or_default();
-                                            let _ = tx.send(Message::Text(msg.into())).await;
+                                            // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
+                                            c.notify_turn_end(TurnEndEvent::Done {
+                                                stop_reason: format!("{:?}", resp.stop_reason),
+                                            });
                                         }
                                         Err(e) => {
                                             c.mark_prompt_idle();
-                                            let err_msg = format!("{}", e);
-                                            let msg = serde_json::to_string(
-                                                &AcpServerMessage::PromptError { message: &err_msg },
-                                            ).unwrap_or_default();
-                                            let _ = tx.send(Message::Text(msg.into())).await;
+                                            c.notify_turn_end(TurnEndEvent::Error {
+                                                message: format!("{}", e),
+                                            });
                                         }
                                     }
                                 });
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
-                                    // 取消也视�? prompt 结束
-                                    c.mark_prompt_idle();
+                                    // 不立即 mark_prompt_idle：合作的 agent 会让 send_prompt
+                                    // 以 Cancelled 返回并走正常定稿路径，取消后补发的尾部帧
+                                    // 得以落库；无视 cancel 的实现由兜底定时器强制收尾。
+                                    c.spawn_cancel_turn_fallback();
                                     if let Err(e) = c.cancel() {
                                         let err_msg = format!("取消 agent 失败: {}", e);
                                         let msg = serde_json::to_string(&AcpServerMessage::Error {
@@ -589,8 +660,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
+                                        spawn_permission_resolved_task(
+                                            new_client.permission_resolved_subscribe(),
+                                            notify_tx.clone(),
+                                        )
+                                        .await;
                                         let crash_rx = new_client.crash_subscribe();
                                         spawn_crash_task(crash_rx, notify_tx.clone()).await;
+                                        let turn_end_rx = new_client.turn_end_subscribe();
+                                        spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
                                         let term_rx = new_client.terminal_event_subscribe();
                                         spawn_terminal_task(term_rx, notify_tx.clone()).await;
                                         client = Some(new_client.clone());

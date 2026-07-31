@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type GitBind, type GitCommitDetail } from '../../api/client'
 import { OverlayScroll } from '../Common/OverlayScroll'
+import { DrawerShell } from '../Common/DrawerShell'
 import { DiffView } from './DiffView'
 import { READER_FONT } from '../../utils/fonts'
-import { IconX } from '../FileManager/icons'
+import { IconEdit, IconX } from '../FileManager/icons'
 
 export type GitDrawerTarget =
   | { kind: 'file'; path: string; staged: boolean; untracked: boolean }
@@ -18,12 +19,16 @@ interface GitDrawerProps {
   onHeightChange: (height: number) => void
   /** Status refresh tick — re-fetches the open file diff when the repo changes. */
   refreshTick: number
+  /** Open the file in the shared file editor (FileDrawer) instead of the diff. */
+  onOpenInEditor: (absolutePath: string) => void
 }
 
-export function GitDrawer({ target, bind, onClose, height, onHeightChange, refreshTick }: GitDrawerProps) {
+export function GitDrawer({ target, bind, onClose, height, onHeightChange, refreshTick, onOpenInEditor }: GitDrawerProps) {
   const { t } = useTranslation()
   const [diff, setDiff] = useState('')
   const [truncated, setTruncated] = useState(false)
+  /** Repo root returned by /git/diff — joins with the relative path for editor opens. */
+  const [repoRoot, setRepoRoot] = useState<string | null>(null)
   const [commit, setCommit] = useState<GitCommitDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,6 +48,7 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
           if (cancelled) return
           setDiff(data.diff)
           setTruncated(data.truncated)
+          setRepoRoot(data.root)
           setCommit(null)
         } else {
           const data = await api.gitShow(bind, target.sha)
@@ -50,6 +56,7 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
           setCommit(data)
           setDiff(data.diff)
           setTruncated(data.truncated)
+          setRepoRoot(null)
         }
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
@@ -63,74 +70,12 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, bind.session, bind.workspaceId, target.kind === 'file' ? refreshTick : 0])
 
-  // Drag bar resize (same interaction as FileDrawer)
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragRef.current) return
-      const delta = dragRef.current.startY - e.clientY
-      const newH = Math.max(120, Math.min(window.innerHeight - 60, dragRef.current.startH + delta))
-      onHeightChange(newH)
-    }
-    const onMouseUp = () => {
-      dragRef.current = null
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-  }, [onHeightChange])
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = { startY: e.clientY, startH: height }
-    document.body.style.cursor = 'ns-resize'
-    document.body.style.userSelect = 'none'
-  }
-
   const title = target.kind === 'file'
     ? target.path.split('/').pop() || target.path
     : commit?.short_sha || target.sha.slice(0, 7)
 
   return (
-    <div
-      style={{
-        height,
-        minHeight: 120,
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--bg-elevated)',
-        borderTop: '1px solid var(--border-strong)',
-        flexShrink: 0,
-      }}
-    >
-      <div className="panel-title-bar">
-        <span>◆</span>
-        <span>{target.kind === 'file' ? 'diff' : 'commit'}</span>
-      </div>
-
-      <div
-        onMouseDown={handleDragStart}
-        style={{
-          height: 6,
-          cursor: 'ns-resize',
-          background: 'var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'background 0.15s ease',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border-subtle)' }}
-      >
-        <div style={{ width: 32, height: 2, borderRadius: 1, background: 'var(--text-dim)' }} />
-      </div>
-
+    <DrawerShell height={height} onHeightChange={onHeightChange} title={target.kind === 'file' ? 'diff' : 'commit'}>
       {/* Header row */}
       <div
         style={{
@@ -163,6 +108,22 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
             </span>
           )}
         </span>
+        {target.kind === 'file' && repoRoot && (
+          <button
+            onClick={() => onOpenInEditor(`${repoRoot}/${target.path}`)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 24, height: 24, border: 'none', borderRadius: 0,
+              background: 'transparent', color: 'var(--text-faint)', cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'var(--accent-10)' }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)'; e.currentTarget.style.background = 'transparent' }}
+            title={t('git.openInEditor')}
+          >
+            <IconEdit width={14} height={14} />
+          </button>
+        )}
         <button
           onClick={onClose}
           style={{
@@ -203,6 +164,6 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
           </>
         )}
       </OverlayScroll>
-    </div>
+    </DrawerShell>
   )
 }

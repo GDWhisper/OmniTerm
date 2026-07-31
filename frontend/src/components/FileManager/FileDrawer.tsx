@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
+import { DrawerShell } from '../Common/DrawerShell'
 const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.FileEditor })))
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
@@ -191,76 +192,12 @@ export function FileDrawer({
     setModified(newContent !== content)
   }
 
-  // Drag bar resize logic
-  const dragRef = useRef<{ startY: number; startH: number } | null>(null)
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragRef.current) return
-      const delta = dragRef.current.startY - e.clientY // up = increase
-      const newH = Math.max(120, Math.min(window.innerHeight - 60, dragRef.current.startH + delta))
-      onHeightChange(newH)
-    }
-    const onMouseUp = () => {
-      dragRef.current = null
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    window.addEventListener('mousemove', onMouseMove)
-    window.addEventListener('mouseup', onMouseUp)
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove)
-      window.removeEventListener('mouseup', onMouseUp)
-    }
-  }, [onHeightChange])
-
-  const handleDragStart = (e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = { startY: e.clientY, startH: height }
-    document.body.style.cursor = 'ns-resize'
-    document.body.style.userSelect = 'none'
-  }
-
   // Compute status bar info
   const lineCount = isText ? editedContent.split('\n').length : 0
   const byteSize = isText ? new TextEncoder().encode(editedContent).length : 0
 
   return (
-    <div
-      style={{
-        height,
-        minHeight: 120,
-        display: 'flex',
-        flexDirection: 'column',
-        background: 'var(--bg-elevated)',
-        borderTop: '1px solid var(--border-strong)',
-        flexShrink: 0,
-      }}
-    >
-      <div className="panel-title-bar">
-        <span>◆</span>
-        <span>drawer</span>
-      </div>
-
-      {/* Drag bar */}
-      <div
-        onMouseDown={handleDragStart}
-        style={{
-          height: 6,
-          cursor: 'ns-resize',
-          background: 'var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'background 0.15s ease',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border-subtle)' }}
-      >
-        <div style={{ width: 32, height: 2, borderRadius: 0, background: 'var(--text-dim)' }} />
-      </div>
-
+    <DrawerShell height={height} onHeightChange={onHeightChange} title="drawer">
       {/* Top bar */}
       <div
         style={{
@@ -566,6 +503,6 @@ export function FileDrawer({
           </span>
         </div>
       )}
-    </div>
+    </DrawerShell>
   )
 }

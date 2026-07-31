@@ -490,7 +490,7 @@ export const api = {
     let url = `/git/diff?${gitBindQuery(bind)}&path=${encodeURIComponent(params.path)}`
     if (params.staged) url += '&staged=true'
     if (params.untracked) url += '&untracked=true'
-    return request<{ diff: string; truncated: boolean }>(url)
+    return request<{ diff: string; truncated: boolean; root: string }>(url)
   },
   gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
     request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
@@ -28,6 +28,11 @@ use crate::models::agent::Agent;
 /// 每帧仅 Arc 克隆，放大容量的内存代价可忽略。
 const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 4096;
 
+/// cancel 后等待 agent 自行结束 turn 的兜底秒数：合作的 agent 通常 1-2s 内让
+/// send_prompt 以 Cancelled 返回；超时视为该实现无视 cancel，强制收尾
+/// （见 [`AcpClient::spawn_cancel_turn_fallback`]）。
+const CANCEL_TURN_FALLBACK_SECS: u64 = 15;
+
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Deserialize)]
 pub struct ImageInput {
@@ -47,6 +52,15 @@ pub struct ResourceInput {
     pub text: String,
 }
 
+/// turn 结束事件（正常完成 / 出错）。经 broadcast 发给所有 WS 连接：
+/// prompt task 完成时发起 prompt 的连接可能已断开重连，per-connection
+/// 通道会把结束帧发进死连接被静默丢弃，新连接则永远收不到结束信号。
+#[derive(Debug, Clone)]
+pub enum TurnEndEvent {
+    Done { stop_reason: String },
+    Error { message: String },
+}
+
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
 ///
 /// ACP v1 协议（所有当前对接的 agent 均协商 protocolVersion:1）没有官方
@@ -58,12 +72,15 @@ pub struct ResourceInput {
 ///   三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
 struct ActivityState {
     active_prompt: bool,
+    /// prompt 世代计数：每次 `mark_prompt_active` 递增。cancel 兜底定时器
+    /// 据此识别自己要收尾的那个 turn，避免误杀取消后新发起的 turn。
+    prompt_generation: u64,
     last_activity: Instant,
 }
 
 impl ActivityState {
     fn new() -> Self {
-        Self { active_prompt: false, last_activity: Instant::now() }
+        Self { active_prompt: false, prompt_generation: 0, last_activity: Instant::now() }
     }
 }
 
@@ -77,6 +94,9 @@ pub struct AcpClient {
     crash_tx: broadcast::Sender<String>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
+    /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
+    /// （断线重连后的新连接也必须收到，见 [`TurnEndEvent`]）。
+    turn_end_tx: broadcast::Sender<TurnEndEvent>,
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
@@ -241,6 +261,7 @@ impl AcpClient {
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
+        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -449,6 +470,7 @@ impl AcpClient {
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
+            turn_end_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -475,8 +497,23 @@ impl AcpClient {
         self.terminal_event_tx.subscribe()
     }
 
+    /// 订阅 turn 结束事件（所有 WS 连接都应订阅，见 [`TurnEndEvent`]）。
+    pub fn turn_end_subscribe(&self) -> broadcast::Receiver<TurnEndEvent> {
+        self.turn_end_tx.subscribe()
+    }
+
+    /// 广播 turn 结束事件（无订阅者时静默丢弃）。
+    pub fn notify_turn_end(&self, event: TurnEndEvent) {
+        let _ = self.turn_end_tx.send(event);
+    }
+
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
         self.permission_manager.subscribe()
+    }
+
+    /// 订阅审批解决事件（载荷为审批 id），供 WS 层广播 `permission_resolved` 帧。
+    pub fn permission_resolved_subscribe(&self) -> broadcast::Receiver<String> {
+        self.permission_manager.resolved_subscribe()
     }
 
     pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
@@ -606,6 +643,7 @@ impl AcpClient {
     pub fn mark_prompt_active(&self) {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = true;
+            st.prompt_generation = st.prompt_generation.wrapping_add(1);
             st.last_activity = Instant::now();
         }
         // 用户 prompt 是唯一的 turn 起点：开启累积器 turn 门控。load_session 重放
@@ -613,13 +651,47 @@ impl AcpClient {
         self.accumulator.begin_turn();
     }
 
-    /// 标记 prompt 已结束（由 WS handler 在 PromptDone/PromptError/Cancel 时调用）。
+    /// 标记 prompt 已结束（由 prompt 任务在 send_prompt 返回时调用，
+    /// cancel 路径经 [`Self::spawn_cancel_turn_fallback`] 超时兜底调用）。
     pub fn mark_prompt_idle(&self) {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = false;
         }
         // turn 结束（正常完成 / 出错 / 取消）统一定稿进行中的 assistant 行（幂等）。
         self.accumulator.finalize_turn();
+    }
+
+    /// cancel 的 turn 收尾兜底。
+    ///
+    /// 正常路径：合作的 agent 收到 `session/cancel` 后让 `send_prompt` 以
+    /// `Cancelled` 返回，prompt 任务照常定稿 turn 并广播结束——取消后 agent
+    /// 补发的尾部帧（收尾文本等）得以落库。但无视 cancel 的实现可能永不
+    /// 返回（§8 多实现兼容），超时后若同一 turn 仍在进行则强制定稿 + 广播
+    /// 结束，防止会话永久卡在运行中。世代守卫避免误杀取消后新发起的 turn。
+    pub fn spawn_cancel_turn_fallback(self: &Arc<Self>) {
+        let generation = {
+            let Ok(st) = self.activity.lock() else { return };
+            if !st.active_prompt {
+                return;
+            }
+            st.prompt_generation
+        };
+        let client = Arc::clone(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(CANCEL_TURN_FALLBACK_SECS)).await;
+            let same_turn_still_active = {
+                let Ok(st) = client.activity.lock() else { return };
+                st.active_prompt && st.prompt_generation == generation
+            };
+            if same_turn_still_active {
+                tracing::warn!(
+                    "agent 未在 {}s 内响应 session/cancel，强制定稿进行中 turn（兜底）",
+                    CANCEL_TURN_FALLBACK_SECS
+                );
+                client.mark_prompt_idle();
+                client.notify_turn_end(TurnEndEvent::Done { stop_reason: "Cancelled".into() });
+            }
+        });
     }
 
     /// 绑定持久化并启动防抖 writer。仅在真实会话注册点调用（create-session /
@@ -744,6 +816,7 @@ impl AcpClient {
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
+        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
@@ -947,6 +1020,7 @@ impl AcpClient {
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
             terminal_event_tx,
+            turn_end_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,

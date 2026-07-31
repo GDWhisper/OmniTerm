@@ -22,14 +22,19 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
     AgentPreset {
         id: "preset-claude",
         display_name: "Claude Code",
-        command: "claude-agent-acp",
-        args_json: "[]",
+        // claude-agent-acp 不是 Claude Code 官方 CLI 自带的命令，而是社区
+        // @agentclientprotocol/claude-agent-acp（基于官方 Claude Agent SDK）
+        // 提供的 ACP 适配器，故经 npx 启动，无需全局安装。
+        command: "npx",
+        args_json: r#"["-y", "@agentclientprotocol/claude-agent-acp"]"#,
     },
     AgentPreset {
         id: "preset-codex",
         display_name: "Codex",
-        command: "codex-acp",
-        args_json: "[]",
+        // Codex CLI 官方不支持 ACP（openai/codex#30052），codex-acp 是社区
+        // 适配器 @agentclientprotocol/codex-acp 提供的 bin，故经 npx 启动。
+        command: "npx",
+        args_json: r#"["-y", "@agentclientprotocol/codex-acp"]"#,
     },
     AgentPreset {
         id: "preset-gemini",
@@ -53,6 +58,24 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
         id: "preset-kiro",
         display_name: "Kiro",
         command: "kiro-cli",
+        args_json: r#"["acp"]"#,
+    },
+    AgentPreset {
+        id: "preset-qoder",
+        display_name: "qoder",
+        command: "qodercli",
+        args_json: r#"["--acp"]"#,
+    },
+    AgentPreset {
+        id: "preset-qoder-cn",
+        display_name: "qoder cn",
+        command: "qoderclicn",
+        args_json: r#"["--acp"]"#,
+    },
+    AgentPreset {
+        id: "preset-oh-my-pi",
+        display_name: "oh-my-pi",
+        command: "omp",
         args_json: r#"["acp"]"#,
     },
 ];

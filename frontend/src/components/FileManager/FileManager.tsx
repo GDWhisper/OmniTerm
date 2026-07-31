@@ -1,4 +1,5 @@
 import { getParentPath } from '../../utils/path'
+import { getInitialDrawerHeight } from '../../utils/drawer'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
@@ -103,11 +104,8 @@ export function FileManager() {
   // Drawer state from store (persists across session switches)
   const drawerFilePath = fmState.drawerPath
 
-  // Drawer height (sessionStorage, shared across sessions)
-  const [drawerHeight, setDrawerHeight] = useState(() => {
-    const stored = sessionStorage.getItem('omniterm_drawer_height')
-    return stored ? parseInt(stored) : 256
-  })
+  // Drawer height (sessionStorage, shared across sessions; default = 50% viewport)
+  const [drawerHeight, setDrawerHeight] = useState(() => getInitialDrawerHeight('omniterm_drawer_height'))
 
   // SSE file watcher (replaces 3s polling)
   const { lastEvent: fileChangeEvent } = useFileWatcher({

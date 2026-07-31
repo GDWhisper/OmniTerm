@@ -1670,6 +1670,11 @@ body.parchment-texture {
   box-shadow: 3px 3px 0 var(--pixel-shadow, #8B7755);
   display: flex;
   flex-direction: column;
+  /* Keyboard-open shrink happens before FitAddon refits: without clipping
+     the stale xterm canvas paints over the MobileKeyBar below the panel.
+     `clip` also forbids scrollIntoView residue (see html/body/#root rule). */
+  overflow: hidden;
+  overflow: clip;
   touch-action: none;
   -webkit-touch-callout: none; /* iOS 长按系统菜单让位给自定义粘贴菜单 */
 }
@@ -2563,7 +2568,7 @@ select optgroup option {
 }
 .git-diff-line {
   display: flex;
-  white-space: pre;
+  white-space: pre-wrap;
 }
 .git-diff-lineno {
   flex-shrink: 0;
@@ -2579,6 +2584,9 @@ select optgroup option {
   min-width: 0;
   padding-left: 4px;
   color: var(--text-muted);
+  /* pre-wrap wraps at spaces; anywhere also breaks pathological unbroken tokens
+     (minified code, base64) so they never overflow the drawer. */
+  overflow-wrap: anywhere;
 }
 .git-diff-line-add {
   background: color-mix(in srgb, var(--success) 12%, transparent);

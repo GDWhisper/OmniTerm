@@ -25,7 +25,6 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{pid}/sessions", get(list_sessions).post(create_session))
         .route("/sessions/{id}", patch(update_session).delete(delete_session))
         .route("/sessions/{id}/cwd", get(get_session_cwd))
-        .route("/sessions/{id}/prompt", post(send_prompt))
         .route("/sessions/{id}/release", post(release_session))
         .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/{id}/messages/sync", post(sync_messages))
@@ -397,31 +396,6 @@ async fn get_session_cwd(
             error!("pane_cwd failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct PromptRequest {
-    text: String,
-}
-
-async fn send_prompt(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-    Json(req): Json<PromptRequest>,
-) -> impl IntoResponse {
-    let client = match state.acp_supervisor.get(&id).await {
-        Some(c) => c,
-        None => {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "ACP session not found" })));
-        }
-    };
-
-    match client.send_prompt(&req.text, Vec::new(), Vec::new()).await {
-        Ok(resp) => {
-            (StatusCode::OK, Json(json!({ "stop_reason": format!("{:?}", resp.stop_reason) })))
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{}", e) }))),
     }
 }
 

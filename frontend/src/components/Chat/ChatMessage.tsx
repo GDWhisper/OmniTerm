@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
+import { useStickScroll } from '../../hooks/useStickScroll'
+import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
+import { formatHoverTime } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 
@@ -81,13 +84,34 @@ function CollapsibleUserText({ text }: { text: string }) {
   )
 }
 
-function ThoughtBlockView({ text }: { text: string }) {
+function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
   const expandThinking = useAppStore(s => s.expandThinking)
   const [open, setOpen] = useState(expandThinking)
+  // 内部滚动容器锚定语义与 ChatView 外层一致：默认跟随底部；用户上翻阅读时
+  // 解除跟随，滚回底部自动恢复。仅 streaming 块生效——历史块文本不再增长，
+  // 展开时应从顶部开始读，不跳底。
+  const { containerRef: scrollRef, handleScroll: handleInnerScroll, stickToBottom, resetStick } =
+    useStickScroll<HTMLDivElement>()
+
+  // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
+  // 钉住，避免溢出瞬间先闪一帧顶部内容。
+  useLayoutEffect(() => {
+    if (!streaming) return
+    stickToBottom()
+  }, [text, open, streaming, stickToBottom])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态，让用户直接
+    // 看到最新内容（历史块 streaming=false 不受影响，仍在顶部）。
+    if (next) resetStick()
+  }
+
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         style={{
           background: 'none',
           border: 'none',
@@ -107,9 +131,13 @@ function ThoughtBlockView({ text }: { text: string }) {
         {open ? '▾' : '▸'} thinking
       </button>
       {open && (
-        <div
-          style={{
-            marginTop: 4,
+        <OverlayScroll
+          ref={scrollRef}
+          onScroll={handleInnerScroll}
+          style={{ marginTop: 4 }}
+          contentStyle={{
+            flex: '0 0 auto',
+            maxHeight: 300,
             padding: '2px 10px',
             borderLeft: '2px solid var(--border-subtle)',
             fontSize: '0.923em',
@@ -117,20 +145,22 @@ function ThoughtBlockView({ text }: { text: string }) {
             color: 'var(--text-muted)',
             fontStyle: 'italic',
             whiteSpace: 'pre-wrap',
-            maxHeight: 300,
-            overflowY: 'auto',
           }}
         >
           {text}
-        </div>
+        </OverlayScroll>
       )}
     </div>
   )
 }
 
-function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
+function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streaming: boolean }) {
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const [open, setOpen] = useState(expandToolCalls)
+  // 内容预览滚动锚定：与 thinking 块同语义。仅消息 streaming 期间工具内容
+  // 可能更新（upsertTool 只作用于 streaming 消息），历史块展开从顶部读不跳底。
+  const { containerRef: contentScrollRef, handleScroll: handleContentScroll, stickToBottom, resetStick } =
+    useStickScroll<HTMLDivElement>()
   const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '◆'
   // 仅在 kind 是「已识别的已知类型」或「非空且非兜底 other」时显示类型标签；
   // 上游若只给模糊的 'other'（未透传真实工具名），则不强行显示误导性的 OTHER，
@@ -149,6 +179,19 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
   const isDiff = block.content ? looksLikeDiff(block.content) : false
   const hasContent = block.content || (block.locations && block.locations.length > 0)
 
+  // 内容更新时若用户处于底部则保持钉底（useLayoutEffect：绘制前钉住避免闪帧）
+  useLayoutEffect(() => {
+    if (!streaming) return
+    stickToBottom()
+  }, [block.content, open, streaming, stickToBottom])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态
+    if (next) resetStick()
+  }
+
   return (
     <div
       style={{
@@ -164,7 +207,7 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
       }}
     >
       <button
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         style={{
           background: 'none',
           border: 'none',
@@ -212,22 +255,23 @@ function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
           )}
           {block.content && isDiff && <DiffView text={block.content} />}
           {block.content && !isDiff && (
-            <pre
-              style={{
-                margin: 0,
+            <OverlayScroll
+              ref={contentScrollRef}
+              onScroll={handleContentScroll}
+              contentStyle={{
+                flex: '0 0 auto',
+                maxHeight: 200,
                 padding: '6px 8px',
                 background: 'var(--bg-base)',
                 borderRadius: 4,
                 fontSize: '0.846em',
-                overflow: 'auto',
-                maxHeight: 200,
                 whiteSpace: 'pre-wrap',
                 color: 'var(--text-muted)',
                 fontFamily: READER_FONT,
               }}
             >
               {block.content}
-            </pre>
+            </OverlayScroll>
           )}
         </div>
       )}
@@ -302,9 +346,9 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
     case 'text':
       return <TextBlockView key={idx} text={block.text} caret={isLast && streaming} />
     case 'thought':
-      return <ThoughtBlockView key={idx} text={block.text} />
+      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
     case 'tool_call':
-      return <ToolCallBlockView key={idx} block={block} />
+      return <ToolCallBlockView key={idx} block={block} streaming={streaming} />
     case 'plan':
       return <PlanBlockView key={idx} block={block} />
     case 'todo':
@@ -325,7 +369,8 @@ export interface ChatMessageViewProps {
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   isLastAssistant?: boolean
-  /** agent 气泡显示名（后端 capabilities 帧下发的 display_name）；缺省回退 "agent"。 */
+  /** agent 气泡显示名（capabilities 帧下发；未连接/已释放时 ChatView 用会话关联的
+   *   agents.display_name 兜底）；两者都缺失时回退 "agent"。 */
   agentName?: string
 }
 
@@ -335,20 +380,50 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   const isSystem = message.role === 'system'
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
+  const [hovered, setHovered] = useState(false)
+
+  // hover 时间小字绝对定位：不占布局空间，避免把标识行（右对齐的 USER）挤向左侧。
+  // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
+  const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
 
   const label = (
     <div
       style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 6,
         fontSize: '0.769em',
-        color: 'var(--text-faint)',
+        color: 'var(--text-secondary)',
         marginBottom: 2,
         fontFamily: READER_FONT,
         letterSpacing: '0.05em',
+        position: 'relative',
       }}
     >
-      {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
+      <span
+        style={{
+          fontWeight: 600,
+        }}
+      >
+        {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
+      </span>
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
+      )}
+      {hovered && (
+        <span
+          style={{
+            position: 'absolute',
+            top: 0,
+            [timeSide]: 'calc(100% + 6px)',
+            letterSpacing: '0.03em',
+            whiteSpace: 'nowrap',
+            color: 'var(--text-faint)',
+          }}
+        >
+          {formatHoverTime(message.createdAt)}
+        </span>
       )}
     </div>
   )
@@ -369,6 +444,8 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
     return (
       <div
         className="chat-msg-row"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}
       >
         {label}
@@ -489,6 +566,8 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   return (
     <div
       className="chat-msg-row"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex',
         flexDirection: 'column',

@@ -32,16 +32,21 @@ export const AGENT_PRESETS: AgentPreset[] = [
     labelKey: 'settings.agents.preset.claude.label',
     hintKey: 'settings.agents.preset.claude.hint',
     display_name: 'Claude Code',
-    command: 'claude-agent-acp',
-    args: [],
+    // claude-agent-acp 不是 Claude Code 官方 CLI 自带的命令，而是社区
+    // @agentclientprotocol/claude-agent-acp（基于官方 Claude Agent SDK）
+    // 提供的 ACP 适配器，故经 npx 启动，无需全局安装。
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
     env: [],
   },
   {
     labelKey: 'settings.agents.preset.codex.label',
     hintKey: 'settings.agents.preset.codex.hint',
     display_name: 'Codex',
-    command: 'codex-acp',
-    args: [],
+    // Codex CLI 官方不支持 ACP（openai/codex#30052），codex-acp 是社区
+    // 适配器 @agentclientprotocol/codex-acp 提供的 bin，故经 npx 启动。
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/codex-acp'],
     env: [],
   },
   {
@@ -73,6 +78,30 @@ export const AGENT_PRESETS: AgentPreset[] = [
     hintKey: 'settings.agents.preset.kiro.hint',
     display_name: 'Kiro',
     command: 'kiro-cli',
+    args: ['acp'],
+    env: [],
+  },
+  {
+    labelKey: 'settings.agents.preset.qoder.label',
+    hintKey: 'settings.agents.preset.qoder.hint',
+    display_name: 'qoder',
+    command: 'qodercli',
+    args: ['--acp'],
+    env: [],
+  },
+  {
+    labelKey: 'settings.agents.preset.qoderCn.label',
+    hintKey: 'settings.agents.preset.qoderCn.hint',
+    display_name: 'qoder cn',
+    command: 'qoderclicn',
+    args: ['--acp'],
+    env: [],
+  },
+  {
+    labelKey: 'settings.agents.preset.ohMyPi.label',
+    hintKey: 'settings.agents.preset.ohMyPi.hint',
+    display_name: 'oh-my-pi',
+    command: 'omp',
     args: ['acp'],
     env: [],
   },

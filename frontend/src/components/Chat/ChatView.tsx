@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
+import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
@@ -38,6 +39,13 @@ export function ChatView() {
       ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
       : null
 
+  // 兜底 agent 显示名：会话关联的 agents.display_name（已释放/未连接时无 capabilities
+  // 帧，chatState.agentName 为空；恢复连接后 capabilities 帧的 agent_name 覆盖它）。
+  const agents = useAgentStore((s) => s.agents)
+  const loaded = useAgentStore((s) => s.loaded)
+  const loadAgents = useAgentStore((s) => s.loadAgents)
+  const fallbackAgentName = agents.find((a) => a.id === activeSession?.agent_id)?.display_name
+
   const conn = useAcpConnectionStore((s) =>
     activeSessionId ? s.connections[activeSessionId] : undefined,
   )
@@ -52,6 +60,12 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+
+  useEffect(() => {
+    // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
+    // 没有 capabilities 帧（未连接），agentName 缺失时用它回退，避免显示 "agent"。
+    if (!loaded) loadAgents()
+  }, [loaded, loadAgents])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -260,11 +274,27 @@ export function ChatView() {
         {titleChip}
       </div>
 
-      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, background: 'var(--bg-base)' }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          background: 'var(--bg-base)',
+          border: '2px solid var(--wood-shadow, #3A2E1F)',
+          boxShadow: '3px 3px 0 var(--pixel-shadow, #8B7755)',
+          display: 'flex',
+          flexDirection: 'column',
+          // 不复用 .terminal-panel-pixel（Terminal/xterm 专用）：其 overflow clip
+          // 会在空间不足时静默裁掉输入区，touch-action: none 会禁用聊天列表触摸
+          // 滚动。这里只复刻像素面板外观；clip 仅作极端溢出兜底（正常情况由
+          // 底部功能区的 flexShrink 策略保证输入区可见，见 TodoBoard/ChatInput）。
+          overflow: 'clip',
+        }}
+      >
 
       {chatState.error && (
         <div
           style={{
+            flexShrink: 0,
             padding: '6px 12px',
             background: 'rgba(255, 123, 114, 0.12)',
             color: 'var(--danger, #FF7B72)',
@@ -303,7 +333,7 @@ export function ChatView() {
             <ChatMessageView
               key={m.id}
               message={m}
-              agentName={chatState.agentName}
+              agentName={chatState.agentName || fallbackAgentName}
               onEditResend={inputDisabled ? undefined : handleEditResend}
               onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
               isLastAssistant={m.id === lastAssistantId}
@@ -359,15 +389,18 @@ export function ChatView() {
       </OverlayScroll>
 
       {chatState.pendingPermission && (
-        <PermissionBanner
-          permission={chatState.pendingPermission}
-          onRespond={respondPermission}
-        />
+        <div style={{ flexShrink: 0 }}>
+          <PermissionBanner
+            permission={chatState.pendingPermission}
+            onRespond={respondPermission}
+          />
+        </div>
       )}
 
       {showRestore && (
         <div
           style={{
+            flexShrink: 0,
             padding: '6px 12px',
             background: 'rgba(255, 255, 255, 0.04)',
             color: 'var(--text-muted)',
@@ -399,27 +432,36 @@ export function ChatView() {
         </div>
       )}
 
-      <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
+      {/* TodoBoard 允许压缩（flexShrink 1 + overflow hidden）：空间不足时
+          优先收缩看板而非输入区，用户可点 header 折叠后查看完整内容。 */}
+      <div style={{ flexShrink: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
+      </div>
 
-      <ChatInput
-        key={activeSessionId}
-        sessionId={activeSessionId!}
-        disabled={inputDisabled}
-        sending={chatState.sending}
-        queuedMessage={chatState.queuedMessage}
-        onSend={handleSend}
-        onCancel={cancel}
-        onCancelQueued={handleCancelQueued}
-        onSendNow={handleSendNowQueued}
-        commands={chatState.commands}
-        imageSupported={chatState.imageSupported}
-      />
+      {/* ChatInput / ConfigToolbar 不参与收缩：输入必须始终可见。 */}
+      <div style={{ flexShrink: 0 }}>
+        <ChatInput
+          key={activeSessionId}
+          sessionId={activeSessionId!}
+          disabled={inputDisabled}
+          sending={chatState.sending}
+          queuedMessage={chatState.queuedMessage}
+          onSend={handleSend}
+          onCancel={cancel}
+          onCancelQueued={handleCancelQueued}
+          onSendNow={handleSendNowQueued}
+          commands={chatState.commands}
+          imageSupported={chatState.imageSupported}
+        />
+      </div>
 
-      <ConfigToolbar
-        configOptions={chatState.configOptions}
-        usage={chatState.usage}
-        onSetConfigOption={setConfigOption}
-      />
+      <div style={{ flexShrink: 0 }}>
+        <ConfigToolbar
+          configOptions={chatState.configOptions}
+          usage={chatState.usage}
+          onSetConfigOption={setConfigOption}
+        />
+      </div>
 
       </div>
     </div>
