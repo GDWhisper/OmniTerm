@@ -383,6 +383,10 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
   const [hovered, setHovered] = useState(false)
 
+  // hover 时间小字绝对定位：不占布局空间，避免把标识行（右对齐的 USER）挤向左侧。
+  // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
+  const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
+
   const label = (
     <div
       style={{
@@ -394,6 +398,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         marginBottom: 2,
         fontFamily: READER_FONT,
         letterSpacing: '0.05em',
+        position: 'relative',
       }}
     >
       <span
@@ -407,7 +412,16 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
       )}
       {hovered && (
-        <span style={{ letterSpacing: '0.03em', whiteSpace: 'nowrap', color: 'var(--text-faint)' }}>
+        <span
+          style={{
+            position: 'absolute',
+            top: 0,
+            [timeSide]: 'calc(100% + 6px)',
+            letterSpacing: '0.03em',
+            whiteSpace: 'nowrap',
+            color: 'var(--text-faint)',
+          }}
+        >
           {formatHoverTime(message.createdAt)}
         </span>
       )}
