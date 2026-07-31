@@ -389,7 +389,6 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         fontFamily: READER_FONT,
         letterSpacing: '0.05em',
       }}
-      title={formatHoverTime(message.createdAt)}
     >
       {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       {isUser && message.edited && (
@@ -414,6 +413,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
     return (
       <div
         className="chat-msg-row"
+        title={formatHoverTime(message.createdAt)}
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}
       >
         {label}
@@ -534,6 +534,7 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   return (
     <div
       className="chat-msg-row"
+      title={formatHoverTime(message.createdAt)}
       style={{
         display: 'flex',
         flexDirection: 'column',
