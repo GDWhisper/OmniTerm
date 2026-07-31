@@ -320,6 +320,16 @@ fn main() -> anyhow::Result<()> {
 
             sqlx::migrate!("./migrations").run(&db).await?;
 
+            // 启动自愈：进程重启后不可能有进行中的 turn，任何残留的 'streaming' 行
+            // 都是被中断的 turn，统一收尾为 'complete'，避免前端把陈旧行当作活跃流。
+            if let Err(e) =
+                sqlx::query("UPDATE chat_messages SET status = 'complete' WHERE status = 'streaming'")
+                    .execute(&db)
+                    .await
+            {
+                tracing::warn!("failed to reconcile orphaned streaming chat messages: {}", e);
+            }
+
             // Seed built-in agent presets for commands actually installed on this machine.
             presets::seed_builtin_presets(&db).await;
 

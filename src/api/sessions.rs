@@ -427,13 +427,15 @@ async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) ->
         Ok(rows) => {
             let messages: Vec<serde_json::Value> = rows
                 .into_iter()
-                .map(|(role, text, created_at, msg_id, blocks)| {
+                .map(|(role, text, created_at, msg_id, blocks, status, last_seq)| {
                     json!({
                         "id": msg_id,
                         "role": role,
                         "text": text,
                         "createdAt": created_at,
                         "blocks": blocks,
+                        "status": status,
+                        "lastSeq": last_seq,
                     })
                 })
                 .collect();
