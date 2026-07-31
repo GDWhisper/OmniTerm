@@ -105,6 +105,10 @@ Lifecycle:
 
 ACP is a protocol satisfied by multiple agent implementations. **Do not assume one implementation's behavior is the protocol.** For any field/notification/capability that is optional or may be absent, implement a fallback and document the divergence in code comments — but keep case-specific details out of AGENTS.md (they go stale). Before adding protocol-touching logic, verify the field's behavior across implementations rather than inferring the whole from one. (See AGENTS.md §8 多实现兼容性.)
 
+已确认的行为差异：
+
+- **`session/load` 历史回放为 agent 可选行为**：协议只要求 agent 接受 load 请求，是否把历史以 `session/update` 逐帧回放、回放多少条均不保证（omp 回放全量 285 条长历史，其他实现可能只回放部分或完全不回放）。因此后端重放转发必须边加载边并发转发（`ws/acp.rs`，broadcast 容量不构成上限，`Lagged` 仅告警不中断）；前端必须容忍空回放——staging 双缓冲在 `replay_end` 非空时才原子替换本地消息，空回放/失败保留 DB 水合的本地记录（`useAcpChat.ts` / `chatStore.commitReplay`）。
+
 ## CLI Reference
 
 CLI 为 clap 4 子命令结构（`src/main.rs` 定义枚举与 dispatch；`update` 逻辑在 `src/update.rs`）。

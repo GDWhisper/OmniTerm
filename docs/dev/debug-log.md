@@ -14,6 +14,35 @@
 
 ---
 
+## 2026-07-31: 有界 broadcast「先完成再排空」丢帧导致恢复会话清空
+
+**症状**：ACP 长会话（omp，285 条历史）点击「恢复会话」后聊天记录全部清空；短会话（codebuddy 测试会话）恢复正常。用户以为是 preview 分支特有 bug，dev 正常。
+
+**可复用的理论/模式**：
+
+**1. 「先等生产者完成、再排空有界通道」的模式在数据量超过通道容量时必然丢数据**
+
+后端重放逻辑是 `await load_session(...)` 完成后再用 `try_recv` 排空 broadcast channel（容量 256）。生产者（agent 推送 session_update）在 await 期间持续写入，超过 256 条即触发 `Lagged`。凡是有界通道 + 消费延迟到生产结束之后的组合，都要问：数据量有上界保证吗？没有就必须边生产边消费（`tokio::select!` 并发转发），或改用无界/背压通道。
+
+**2. `RecvError::Lagged` 是「丢了 n 条」的警告，不是终止信号**
+
+旧代码把 `Lagged` 当 `Closed` 处理直接 `break`，导致丢帧升级为「一帧都不转发」。Lagged 后 receiver 仍然有效，正确处理是记日志后 `continue` 继续收后面的帧。
+
+**3. 「A 分支正常、B 分支有 bug」不等于代码有差异——先 diff 再假设**
+
+两个分支的重放代码完全相同，变量是**数据规模**（omp 285 条 vs codebuddy 几条）。分支差异报告应先 `git diff` 确认代码是否真的不同，避免在「分支特有 bug」的错误假设上浪费诊断时间。
+
+**诊断过程中犯的错误**：
+
+1. **DB 路径红鲱鱼**：先后查了 preview worktree 下的 `omniterm.db` 和 `~/.local/share/omniterm-preview.db`（0 字节空文件），都不是真实库。应第一时间读 `src/main.rs` 的 `default_db_url()` 确认默认路径（`~/.omniterm/<binary>.db`），而不是按惯例猜。
+2. **默认接受了「dev 正常」的前提**：实际 dev 的 bug 是潜伏的，只是没被长会话触发。
+
+**具体根因与修复**：
+
+- 根因链：broadcast 容量 256 < 285 条历史 → `try_recv` 遇 `Lagged` → 旧代码 `break` → 零帧转发 → 前端在 `replay_start` 已 `reset(sid)` → `replay_end` 时消息列表为空 → UI 清空（DB 数据未丢，`syncToDb` 跳过空 payload，刷新页面可恢复）。
+- 后端修复：`src/ws/acp.rs` 改为 `tokio::pin!(load_fut)` + `tokio::select!` 边加载边转发，Lagged 仅 `tracing::warn` 不中断，load 完成后再 `try_recv` 排空残余。
+- 前端加固：`chatStore.ts` / `useAcpChat.ts` 改双缓冲原子提交——重放帧入 staging 缓冲，`replay_end` 时非空才 `commitReplay` 整体替换，空重放/error 帧保留本地消息（ACP `session/load` 历史回放为 agent 可选行为，见 `docs/architecture/backend.md`）。
+
 ## 2026-07-08: 同步→异步重构破坏框架隐式不变量（终端 StrictMode 双重初始化）
 
 **症状**：终端点开会话后输入行/光标错位、大片黑屏、无法操作。
