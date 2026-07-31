@@ -369,7 +369,8 @@ export interface ChatMessageViewProps {
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   isLastAssistant?: boolean
-  /** agent 气泡显示名（后端 capabilities 帧下发的 display_name）；缺省回退 "agent"。 */
+  /** agent 气泡显示名（capabilities 帧下发；未连接/已释放时 ChatView 用会话关联的
+   *   agents.display_name 兜底）；两者都缺失时回退 "agent"。 */
   agentName?: string
 }
 

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
+import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
@@ -38,6 +39,13 @@ export function ChatView() {
       ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
       : null
 
+  // 兜底 agent 显示名：会话关联的 agents.display_name（已释放/未连接时无 capabilities
+  // 帧，chatState.agentName 为空；恢复连接后 capabilities 帧的 agent_name 覆盖它）。
+  const agents = useAgentStore((s) => s.agents)
+  const loaded = useAgentStore((s) => s.loaded)
+  const loadAgents = useAgentStore((s) => s.loadAgents)
+  const fallbackAgentName = agents.find((a) => a.id === activeSession?.agent_id)?.display_name
+
   const conn = useAcpConnectionStore((s) =>
     activeSessionId ? s.connections[activeSessionId] : undefined,
   )
@@ -52,6 +60,12 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+
+  useEffect(() => {
+    // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
+    // 没有 capabilities 帧（未连接），agentName 缺失时用它回退，避免显示 "agent"。
+    if (!loaded) loadAgents()
+  }, [loaded, loadAgents])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -319,7 +333,7 @@ export function ChatView() {
             <ChatMessageView
               key={m.id}
               message={m}
-              agentName={chatState.agentName}
+              agentName={chatState.agentName || fallbackAgentName}
               onEditResend={inputDisabled ? undefined : handleEditResend}
               onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
               isLastAssistant={m.id === lastAssistantId}
