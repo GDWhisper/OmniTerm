@@ -11,9 +11,11 @@ src/
 ├── acp/
 │   ├── mod.rs            # Re-export AcpClient, AcpSupervisor
 │   ├── client.rs         # AcpClient: spawn agent subprocess, ACP handshake, session, prompt, cancel, disconnect
-│   ├── handler.rs        # Session-update broadcast helper (fed by ACP SessionNotification)
+│   ├── handler.rs        # Session-update broadcast helper (fed by ACP SessionNotification); assigns per-client monotonic seq
 │   ├── permission.rs     # PermissionManager: user-prompted approval via WS banner; no timeout auto-response
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
+│   ├── turn_accumulator.rs # TurnAccumulator: folds in-progress turn's raw session_update frames → one streaming chat_messages row (debounced writer)
+│   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages / sync_messages (non-destructive dedup)
 │   └── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
@@ -100,6 +102,21 @@ Lifecycle:
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
 4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images`（可选，≤3 张 base64）映射为 `ContentBlock::Image` 追加在 text block 后；服务端推送 `{"type":"capabilities","image":bool}` 帧（client 就绪/restore 时），值来自 initialize 捕获的 `promptCapabilities.image`（§8：agent 未声明则前端隐藏附件入口、后端拒绝带图 prompt）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。
 5. `DELETE /sessions/{id}` on an ACP session calls `supervisor.dispose` + `AcpClient::disconnect`, which drops the shutdown oneshot so the connect_with closure returns and the child process is reaped.
+
+### 流式消息后端权威持久化（turn accumulator）
+
+消息真相源在后端，不依赖前端页面保活。`AcpClient` 持有 `accumulator: Arc<TurnAccumulator>`，在 `spawn_and_connect` / `spawn_and_load` 两处 `on_receive_notification` 回调（运行在 ACP 连接任务上、**不依赖任何 WS 客户端存活**）内喂入每条 `session/update`。
+
+- **turn 门控排除重放**：累积仅在 `active` 时进行。turn 只由 `mark_prompt_active()`（用户 prompt 路径）开启，`load_session` 重放从不调用它 → 重放帧结构性地不被折叠。
+- **fold**：`active` 时把 `serde_json::to_value(&update)` 追加进 `frames`，从 `AgentMessageChunk` 的文本块提取纯文本累加进 `text`（唯一的轻量提取，非完整分类），置 `dirty` 并向 writer 发 `Flush`。
+- **blocks 列格式**：streaming 与 complete 行的 `blocks` 都存**原始帧包裹** `{"v":1,"frames":[<update>,...]}`（`finalize` 只翻 status，不重写 blocks）；前端复用现有 TS 分类器还原成结构化 blocks，杜绝 Rust 侧重复分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。cooked `ContentBlock[]` 数组仅用于 user 图片消息、`load_session` 重放经前端 syncToDb 写回、legacy 行——判别：数组=cooked，对象含 `frames`=原始帧。
+- **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
+- **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / `cancel` / crash watcher→`finalize_turn`。
+- **启动自愈**：`main.rs` migrate 后 `UPDATE chat_messages SET status='complete' WHERE status='streaming'`（重启后不可能有进行中 turn）。
+
+### 重连续接协议（seq + turn_snapshot / turn_state）
+
+per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分配，跨 turn 不重置），broadcast 载荷为 `SeqNotification{ seq, notification }`；WS `session_update` 帧带 `seq`（config/commands/replay 帧无 seq）。连接时 supervisor-hit 分支**先 subscribe 再 snapshot**（消除 gap，把重叠窗变为 seq 可解的重复窗）：发 `turn_state{active}`，若 active 再发 `turn_snapshot{row_id, text, blocks, seq}`。前端据此按 `row_id` 收编在建消息、以 `seq` 为水位丢弃重叠重复帧（详见 frontend.md）。
 
 ### Multi-implementation compatibility
 

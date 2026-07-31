@@ -136,7 +136,7 @@ in-flight prompt completes (`prompt_done` from the WS), `useAcpChat`
 drains the queue in the same microtask:
 
 ```text
-prompt_done → markDone (sending: false) → syncToDb →
+prompt_done → flushLiveBuffer → markDone (sending: false) → inProgressSeq=null →
   if (queuedMessage) {
     clearQueuedMessage → addUserMessage → ws.send('prompt') → beginPrompt
   }
@@ -178,4 +178,15 @@ Other variants are pushed as generic `system` messages labelled by the
 top-level key (`ToolCall`, `Plan`, `CurrentModeUpdate`, …). Phase 5
 will tighten the types once fixture captures from a real agent exist,
 and render rich cards instead of the current text-only fallback.
+
+### Backend-authoritative persistence & reconnect
+
+消息真相源在后端（见 backend.md turn accumulator）。前端只 hydrate + 无缝续接，不再在 `prompt_done` 回写 assistant turn。
+
+- **hydrate 还原**：`ChatView` mount 时 `GET /messages` 返回 `{status, lastSeq}`；`decodeStoredBlocks`（导出自 `useAcpChat`）识别 blocks 列——数组=cooked `ContentBlock[]` 直用，`{"v":1,"frames":[...]}`=原始帧则复用 live 分类器 `classifySessionUpdate(normalizeSessionUpdate(frame))` + `buildReplayMessages` 还原成结构化 blocks（streaming 与 complete 行同源，杜绝 TS/Rust 双份分类）。`status==='streaming'` 映射为 `ChatMessage.streaming`。落定后 `setHydrated(sid, true)`。
+- **hydrated 门控**：`GET /messages` 落定前，会改动消息列表的帧（`session_update`/`turn_snapshot`/`turn_state`/`prompt_*`，见 `HYDRATE_GATED_FRAMES`）先入 `preHydrateBuffer`，避免抢在 hydrate 前建消息导致 hydrate 因 `messages` 非空而 bail（丢历史）；落定后经 `frameHandlerRef` 按序回放。重连（无 remount）时 `hydratedRef` 已 true，帧即时派发。
+- **turn_snapshot / turn_state**：连接时后端先发 `turn_state{active}` 再（active 时）发 `turn_snapshot{row_id, text, blocks, seq}`。`applyTurnSnapshot` 按 `row_id` 替换/收编在建 streaming 消息，并把 `inProgressSeq` 水位置为快照 seq。`turn_state{active:false}` 定稿残留 streaming 消息。
+- **seq 去重**：live `session_update` 帧带 `seq`；`inProgressSeq != null && frame.seq <= inProgressSeq` 时丢弃（subscribe-before-snapshot 的重叠重复帧已体现在快照里），否则应用并推高水位。`prompt_done` 清空水位，下一 turn 从零开始。
+- **自动重连**（`useAcpChat`，仿 `useFileWatcher`）：WS 连接逻辑封装进 `connect()`，`onclose` 非主动拆除（`unmounted` 区分 session 切换/卸载 vs 网络断）时按指数退避 `min(1000 * 2**retry, 30000)`（1→2→4→8→cap 30s）`setTimeout(connect)`，`onopen` 成功归零 `retry`。陈旧 socket（`wsRef.current !== ws`）的迟到 `onclose` 早返避免重复调度。重连**不重发** `load_session`（保持手动 `restore()` 语义，`suppressReplay`/`isManualRestore` 不受影响），进行中 turn 由 `turn_snapshot`/`turn_state` 续接；cleanup 清 timer + 关 socket。保留原有断连时 `sending→error` 与 `queuedMessage→undelivered` 留痕。
+- **syncToDb 现仅用于 `load_session` 重放路径**（进程死亡恢复 `restore()`）——累积器不持久化重放帧，故重放重建的历史仍经 `messagesToSyncPayload` 非破坏性写回 DB。`prompt_done` 不再调用它。
 

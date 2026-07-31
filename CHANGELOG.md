@@ -53,6 +53,11 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-07-31 15:55) `[backend]` `[api]` `[frontend]` ACP 会话流式消息后端权威持久化：assistant turn 不再只活在浏览器内存靠页面保活，改由 `AcpClient` 的 `on_receive_notification` 回调（不依赖 WS 存活）实时把进行中 turn 的原始 `session_update` 帧折叠进一条 `chat_messages` 行（`status='streaming'`，防抖落库，turn 结束定稿为 `complete`）。原始帧包裹 `{"v":1,"frames":[...]}` 由前端复用现有分类器还原成结构化 blocks（思考/工具/计划卡片），杜绝 TS/Rust 双份分类逻辑。用户在 agent 流式输出期间刷新页面/切换设备，进行中 turn 的完整结构现可从 DB 恢复。配套 per-client 单调 `seq` + 连接时 `turn_snapshot`/`turn_state` 帧（subscribe-before-snapshot），重连时无缝无重复续接进行中 turn（`src/acp/turn_accumulator.rs`、`src/acp/{client,handler}.rs`、`src/ws/acp.rs`、`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`src/main.rs`、`migrations/20260730_chat_message_status.sql`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-07-31 15:55) `[frontend]` ACP 会话 WebSocket 断线自动重连：网络抖动/服务重启导致 WS 断开时按指数退避（1→2→4→8→cap 30s）自动重连，onopen 成功归零，无需手动刷新；重连不重发 `load_session`（保持手动 restore 语义），进行中 turn 由后端 `turn_snapshot`/`turn_state` 续接（`frontend/src/hooks/useAcpChat.ts`）
+
 ### Fixed
 
 - (2026-07-31 15:50) `[backend]` 认证安全加固：① JWT 密钥不再提供公开默认值（`omniterm-default-secret-change-me`），未显式设置 `JWT_SECRET` 时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600），修复默认密钥下攻击者可离线伪造 token 绕过全部鉴权的问题；② 会话令牌版本化（`users.token_version`）：登出/修改密码后所有已签发 token 立即失效，修复 token 泄露后无法撤销的问题；③ `/auth/setup|login|change-password` 新增 IP 维度限流（5 次失败/5 分钟 → 429），修复公网暴露时无限流暴力破解的问题；④ 删除含硬编码密钥兜底的死代码 `RequireAuth` extractor（`src/auth/mod.rs`、`src/api/auth.rs`、`src/auth/rate_limit.rs`、`src/main.rs`、`migrations/20260731_add_token_version.sql`）
