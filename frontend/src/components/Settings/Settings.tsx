@@ -586,6 +586,30 @@ function SoundItem({ labelKey, hintKey, value, onToggle, onPreview }: SoundItemP
   )
 }
 
+function SessionsSection() {
+  const expandThinking = useAppStore(s => s.expandThinking)
+  const expandToolCalls = useAppStore(s => s.expandToolCalls)
+  const setExpandThinking = useAppStore(s => s.setExpandThinking)
+  const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
+
+  return (
+    <>
+      <ToggleRow
+        labelKey="settings.expandThinking"
+        hintKey="settings.expandThinkingHint"
+        value={expandThinking}
+        onToggle={() => setExpandThinking(!expandThinking)}
+      />
+      <ToggleRow
+        labelKey="settings.expandToolCalls"
+        hintKey="settings.expandToolCallsHint"
+        value={expandToolCalls}
+        onToggle={() => setExpandToolCalls(!expandToolCalls)}
+      />
+    </>
+  )
+}
+
 function CrtSection() {
   const crtScanlines = useAppStore((s) => s.crtScanlines)
   const setCrtScanlines = useAppStore((s) => s.setCrtScanlines)
@@ -639,7 +663,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'language' | 'mobile' | 'agents'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -669,6 +693,11 @@ const CATEGORIES: Category[] = [
     id: 'terminal',
     labelKey: 'settings.category.terminal',
     sections: [AutoCopySection, TmuxMouseSection],
+  },
+  {
+    id: 'sessions',
+    labelKey: 'settings.category.sessions',
+    sections: [SessionsSection],
   },
   {
     id: 'language',

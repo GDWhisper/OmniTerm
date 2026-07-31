@@ -109,6 +109,10 @@ export interface AppState {
   /** Pixel display font (BETA). Off = pixel text falls back to reader font;
    *  the top bar row (logo + panel title bars) stays pixel regardless. */
   pixelFontEnabled: boolean
+  /** Expand thinking blocks in chat by default (ON = visible, OFF = collapsed). */
+  expandThinking: boolean
+  /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
+  expandToolCalls: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -159,6 +163,8 @@ export interface AppState {
   setSoundPingEnabled: (v: boolean) => void
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
+  setExpandThinking: (v: boolean) => void
+  setExpandToolCalls: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
@@ -241,6 +247,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
   soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
+  expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
+  expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
   // Default off: first-run users get the uniform reader font (BETA opt-in).
   pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
@@ -289,6 +297,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAutoCopySelect: (v) => {
     localStorage.setItem('omniterm_auto_copy_select', String(v))
     set({ autoCopySelect: v })
+  },
+
+  setExpandThinking: (v) => {
+    localStorage.setItem('omniterm_expand_thinking', String(v))
+    set({ expandThinking: v })
+  },
+
+  setExpandToolCalls: (v) => {
+    localStorage.setItem('omniterm_expand_tool_calls', String(v))
+    set({ expandToolCalls: v })
   },
 
   setTerminalSendData: (fn) => set({ terminalSendData: fn }),

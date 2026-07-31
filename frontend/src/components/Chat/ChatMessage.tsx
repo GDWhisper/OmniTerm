@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
+import { useAppStore } from '../../stores/appStore'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { looksLikeDiff } from '../../utils/diff'
@@ -81,7 +82,8 @@ function CollapsibleUserText({ text }: { text: string }) {
 }
 
 function ThoughtBlockView({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+  const expandThinking = useAppStore(s => s.expandThinking)
+  const [open, setOpen] = useState(expandThinking)
   return (
     <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
@@ -127,7 +129,8 @@ function ThoughtBlockView({ text }: { text: string }) {
 }
 
 function ToolCallBlockView({ block }: { block: ToolCallBlock }) {
-  const [open, setOpen] = useState(false)
+  const expandToolCalls = useAppStore(s => s.expandToolCalls)
+  const [open, setOpen] = useState(expandToolCalls)
   const icon = TOOL_KIND_ICONS[block.kind ?? ''] ?? '◆'
   // 仅在 kind 是「已识别的已知类型」或「非空且非兜底 other」时显示类型标签；
   // 上游若只给模糊的 'other'（未透传真实工具名），则不强行显示误导性的 OTHER，
