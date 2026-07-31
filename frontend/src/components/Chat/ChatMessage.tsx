@@ -379,10 +379,15 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   const isSystem = message.role === 'system'
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
+  // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
+  const [hovered, setHovered] = useState(false)
 
   const label = (
     <div
       style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 6,
         fontSize: '0.769em',
         color: 'var(--text-faint)',
         marginBottom: 2,
@@ -390,9 +395,14 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
         letterSpacing: '0.05em',
       }}
     >
-      {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
+      <span>{isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}</span>
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
+      )}
+      {hovered && (
+        <span style={{ letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+          {formatHoverTime(message.createdAt)}
+        </span>
       )}
     </div>
   )
@@ -413,7 +423,8 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
     return (
       <div
         className="chat-msg-row"
-        title={formatHoverTime(message.createdAt)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}
       >
         {label}
@@ -534,7 +545,8 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
   return (
     <div
       className="chat-msg-row"
-      title={formatHoverTime(message.createdAt)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: 'flex',
         flexDirection: 'column',
