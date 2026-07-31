@@ -67,6 +67,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-31 19:55) `[frontend]` 修复移动端软键盘收起后整页底部被裁切（底部导航等所有页面底缘不可见，需刷新恢复）：聚焦输入弹键盘时浏览器对 `overflow: hidden` 的固定高度根容器仍可编程滚动（scrollIntoView），键盘收起后滚动残留使整个布局上移；根链路 `html/body/#root` 与移动端列容器改 `overflow: clip`（老引擎回退 hidden），`useKeyboardHeight` 在视口变化时归零 window 滚动兜底（`frontend/src/index.css`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useMediaQuery.ts`）
 - (2026-07-31 15:50) `[backend]` 认证安全加固：① JWT 密钥不再提供公开默认值（`omniterm-default-secret-change-me`），未显式设置 `JWT_SECRET` 时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600），修复默认密钥下攻击者可离线伪造 token 绕过全部鉴权的问题；② 会话令牌版本化（`users.token_version`）：登出/修改密码后所有已签发 token 立即失效，修复 token 泄露后无法撤销的问题；③ `/auth/setup|login|change-password` 新增 IP 维度限流（5 次失败/5 分钟 → 429），修复公网暴露时无限流暴力破解的问题；④ 删除含硬编码密钥兜底的死代码 `RequireAuth` extractor（`src/auth/mod.rs`、`src/api/auth.rs`、`src/auth/rate_limit.rs`、`src/main.rs`、`migrations/20260731_add_token_version.sql`）
 - (2026-07-31 15:50) `[infra]` docker-compose 移除公开默认 `JWT_SECRET=change-me-in-production`：未显式配置时由服务端自动生成随机密钥（容器重建后需重新登录）（`docker-compose.yml`）
 

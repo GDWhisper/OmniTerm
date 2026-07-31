@@ -420,7 +420,7 @@ function MobileLayout() {
     <>
       <div
         className="flex flex-col"
-        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'hidden', overscrollBehavior: 'none' } as React.CSSProperties}
+        style={{ zoom: uiZoom / 100, height: `${vvHeight / (uiZoom / 100)}px`, background: 'var(--bg-base)', color: 'var(--text-primary)', overflow: 'clip', overscrollBehavior: 'none' } as React.CSSProperties}
       >
         <MobileStatusBar
           connected={connected}

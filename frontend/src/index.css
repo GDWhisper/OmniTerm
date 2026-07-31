@@ -289,7 +289,12 @@ html, body, #root {
   margin: 0;
   padding: 0;
   height: 100dvh;
+  /* `clip` (with `hidden` fallback for old engines) forbids even programmatic
+     scrolling: mobile keyboards trigger scrollIntoView on focused inputs and
+     would scroll these fixed-height containers, leaving the whole layout
+     shifted up with the bottom edge clipped after the keyboard closes. */
   overflow: hidden;
+  overflow: clip;
 }
 
 /* Keep native browser UI (scrollbars, inputs) matching the theme */
