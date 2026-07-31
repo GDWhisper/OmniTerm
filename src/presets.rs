@@ -67,6 +67,12 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
         command: "qoderclicn",
         args_json: r#"["--acp"]"#,
     },
+    AgentPreset {
+        id: "preset-oh-my-pi",
+        display_name: "oh-my-pi",
+        command: "omp",
+        args_json: r#"["acp"]"#,
+    },
 ];
 
 /// Test whether `name` is findable on PATH.

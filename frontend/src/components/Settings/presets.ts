@@ -92,4 +92,12 @@ export const AGENT_PRESETS: AgentPreset[] = [
     args: ['--acp'],
     env: [],
   },
+  {
+    labelKey: 'settings.agents.preset.ohMyPi.label',
+    hintKey: 'settings.agents.preset.ohMyPi.hint',
+    display_name: 'oh-my-pi',
+    command: 'omp',
+    args: ['acp'],
+    env: [],
+  },
 ]
