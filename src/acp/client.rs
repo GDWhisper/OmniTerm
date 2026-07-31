@@ -22,6 +22,11 @@ use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
 use crate::models::agent::Agent;
 
+/// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
+/// 慢消费者（如弱网 WS 客户端）的积压缓冲；超长历史 + 持续慢消费才会 Lagged 丢帧，
+/// 每帧仅 Arc 克隆，放大容量的内存代价可忽略。
+const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 4096;
+
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Deserialize)]
 pub struct ImageInput {
@@ -225,7 +230,7 @@ impl AcpClient {
 
         let transport = AcpAgent::from_args(all_args)?;
 
-        let (session_update_tx, _) = broadcast::channel(256);
+        let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -689,7 +694,7 @@ impl AcpClient {
 
         let transport = AcpAgent::from_args(all_args)?;
 
-        let (session_update_tx, _) = broadcast::channel(256);
+        let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
