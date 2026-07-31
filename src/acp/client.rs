@@ -503,6 +503,11 @@ impl AcpClient {
         self.permission_manager.subscribe()
     }
 
+    /// 订阅审批解决事件（载荷为审批 id），供 WS 层广播 `permission_resolved` 帧。
+    pub fn permission_resolved_subscribe(&self) -> broadcast::Receiver<String> {
+        self.permission_manager.resolved_subscribe()
+    }
+
     pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
         self.permission_manager.resolve(id, option_id).await
     }

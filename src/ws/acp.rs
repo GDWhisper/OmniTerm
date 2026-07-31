@@ -164,6 +164,10 @@ enum AcpServerMessage<'a> {
     ProcessAlive { alive: bool },
     #[serde(rename = "permission_request")]
     PermissionRequest { id: &'a str, request: &'a serde_json::Value },
+    /// 审批已解决（用户在任一连接应答 / session cancel 批量取消）：所有连接
+    /// 据此清除对应 banner（审批可能由其他标签页/设备应答）。
+    #[serde(rename = "permission_resolved")]
+    PermissionResolved { id: &'a str },
     /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
     /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
     /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
@@ -358,6 +362,35 @@ async fn spawn_permission_task(
     });
 }
 
+/// 转发审批解决事件为 `permission_resolved` 帧：审批可能由其他标签页/设备
+/// 应答（resolve）或经 session cancel 批量取消，所有连接都要即时清除 banner。
+async fn spawn_permission_resolved_task(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(id) => {
+                    let msg =
+                        serde_json::to_string(&AcpServerMessage::PermissionResolved { id: &id })
+                            .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP permission-resolved subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
 /// 查询 ACP 会话所用 agent 的 `display_name`（用于聊天气泡身份显示）。
 /// 查不到（非 ACP 会话 / agent 缺失）时返回空串，前端回退到 "agent"。
 async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
@@ -403,6 +436,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_notify_task(rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
+            spawn_permission_resolved_task(c.permission_resolved_subscribe(), notify_tx.clone())
+                .await;
             // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
             // （审批不再超时自动应答，可能跨 WS 重连长期未决）。
             for event in c.pending_permission_events().await {
@@ -623,6 +658,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
+                                        spawn_permission_resolved_task(
+                                            new_client.permission_resolved_subscribe(),
+                                            notify_tx.clone(),
+                                        )
+                                        .await;
                                         let crash_rx = new_client.crash_subscribe();
                                         spawn_crash_task(crash_rx, notify_tx.clone()).await;
                                         let turn_end_rx = new_client.turn_end_subscribe();

@@ -66,6 +66,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-01 00:20) `[backend]` `[frontend]` 修复 ACP 权限审批在别处应答后其余连接 banner 不消失：审批请求经 broadcast 发给所有连接，但 resolve/cancel 结果无任何通知，其他标签页/设备的 banner 与提醒永久残留（再点报 not found）；`PermissionManager` 新增 resolved broadcast 通道，`resolve`/`cancel_all` 应答后广播审批 id，WS 层下发 `permission_resolved{id}` 帧，前端匹配当前挂起审批 id 后清除 banner 与 attention 提醒（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-07-31 23:55) `[frontend]` 修复 ACP 会话恢复重放期间 WS 断线后聊天界面永久冻结：`replay_end` 只发给发起 restore 的连接，断线后不可能到达，而重连不重置重放状态 → 所有后续 live 帧被无限期攒进 staging 缓冲永不提交；提取 `abortReplay` 在 `ws.onclose` 时终止重放（丢弃已攒帧、保留现有消息），与后端 error 帧路径共用（`frontend/src/hooks/useAcpChat.ts`）
 - (2026-07-31 23:30) `[backend]` `[api]` 修复 ACP 会话 agent 输出结束后前端仍显示运行中、收不到结束信号：`prompt_done`/`prompt_error` 原先只发给发起 prompt 的那条 WS 连接（per-connection mpsc），WS 断线自动重连后结束帧发进死连接被静默丢弃，新连接永远收不到；改为经 `AcpClient` 新增的 turn 结束 broadcast 通道发给所有连接（与 `session_update`/`crash` 同模式），重连后无需刷新页面即可正常收到结束信号（`src/acp/client.rs`、`src/ws/acp.rs`）
 - (2026-07-31 22:45) `[frontend]` 处理 thinking 块滚动锚定修复的遗留：① 工具调用块内容预览补同款流式滚动锚定（工具输出大量更新时保持钉底、上翻解除、滚回恢复，仅 streaming 消息生效）；② thinking/工具块的内部滚动容器统一迁移 OverlayScroll（主题化 6px 滚动条、hover 显现，消除手写 `overflow-y:auto`），锚定逻辑提取为共享 hook `useStickScroll`（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/hooks/useStickScroll.ts`）

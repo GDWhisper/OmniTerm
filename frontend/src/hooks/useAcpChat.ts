@@ -25,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -812,6 +812,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           break
         }
+        case 'permission_resolved':
+          // 审批已在别处解决（其他标签页/设备应答，或 session cancel 批量取消）：
+          // 清除对应 banner 与提醒。仅匹配当前挂着的 id，防止误清后到的新审批。
+          if (frame.id && s.states[sid]?.pendingPermission?.id === frame.id) {
+            s.clearPermission(sid)
+            attention.clearAlert(sid)
+          }
+          break
         case 'process_alive':
           // 后端进程存活状态事件驱动更新（替代轮询）：即时刷新指示灯。
           if (typeof frame.alive === 'boolean') {
