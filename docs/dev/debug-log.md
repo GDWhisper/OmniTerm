@@ -14,6 +14,33 @@
 
 ---
 
+## 2026-08-01: 切换 tmux 会话终端抖动——key 强制重挂载 + reset 时机放大 attach 延迟
+
+**症状**：在侧栏切换 tmux 会话（A→B），终端面板每次必闪一下：旧内容消失 → 黑底空屏 → 内容重新出现（约 250ms）。
+
+**可复用的理论/模式**：
+
+**1. `key={id}` 是「视图状态重置」的隐式开关：id 变化 ≠ 视图类型变化时，key 会强制销毁重建本可在原地重连的组件**。React key 变化 = 整棵子树 unmount + remount。当组件内部已为「会话切换」实现了原地重连（`useTerminal` 的 sessionId effect、`useAcpChat` 的 [sessionId] effect + cleanup 都明确支持切会话不重挂载），key 却在每个会话 id 变化时强制重挂载，内部的重连逻辑全部变成死代码，每次切换白白付出：xterm 销毁 + canvas 重建 + 字体重测 + fit + 新 WS 握手。**key 应该只承载「必须重建」的维度（视图类型 tmux/acp/external/none），同一类型内的切换交给组件自身的生命周期 effect**。判定：key 值的变化是否会同时改变渲染的组件树？不会，就不要用它做 key。
+
+**2. 「清屏 + 等数据」是闪烁的放大器：屏幕内容清空到新内容到达之间的窗口长度 = 用户感知的闪烁长度**。`term.reset()` 在 WS onopen 立即执行，但 tmux 的全屏重绘要等「WS 握手 + 后端 spawn 新 tmux client + attach 重绘」整条链路（实测 100-250ms）。凡是「旧内容必然被完全覆盖」的过渡（每次连接都是新 tmux client attach → 必发全屏重绘），**把清屏时机从「连接建立」推迟到「新内容首帧到达」**：旧内容保持可见直到替换内容就绪，一次交换完成，空白窗口从 250ms 收敛到 0-1 帧。前提是「首帧必为全屏重绘」这个不变式成立——每连接 spawn 新 client 的架构天然满足；若连接可能复用旧 client（增量输出），此优化不成立。
+
+**3. 前端视觉即时生效的机制（reset/fit/remount）都是「删除旧状态」；后端异步到达的才是「新状态」——两者的间距就是闪烁**。诊断闪烁类问题时先拆三段：①删除旧内容的动作在哪个事件里（onopen/onmessage/effect）？②新内容到达的事件是什么（首帧/重绘完成）？③两者的时间差是多少（实测而非估计）？把 ① 移到与 ② 相邻的位置即可最小化 ③。
+
+**诊断过程中的错误**：
+
+1. **轻信代码注释的「意图」而非代码的行为**：`Terminal.tsx` 注释写着「Session switches keep hasSession === true so the effect does not fire — useTerminal handles WS reconnection internally」，而 `Layout.tsx` 的 `key={activeSessionId}` 让这段注释永远不成立（每次切换都重挂载）。两处矛盾时，以**实际渲染路径**为准（直接测 DOM 元素生命周期），不要相信任何一侧的注释。
+2. **Vite dev 的文件 watcher 会漏掉部分编辑（本机环境问题）**：修改后 `curl` Vite 转换产物，发现服务端竟是「新旧混合」——helper 函数是新版、调用点是旧版，浏览器实际执行的模块与磁盘不符，导致前两轮实测「修复无效」。验证前端改动必须确认 dev server 实际服务的模块内容（curl `/src/<file>` 搜新符号），必要时 `touch` 文件强制重发。
+3. **首轮浏览器实测把 rAF 采样当主证据**：headless 下 rAF 首帧可能延迟数百 ms（页面隐藏态节流），仅靠「状态切换时间线」会漏掉瞬时事件（xterm 销毁重建只隔 7ms）。改用 MutationObserver（DOM 变更同步回调）记录 `.xterm` 元素身份 + 文本量，配合 WebSocket 构造器/事件钩子，拿到精确到 ms 的元素生命周期——**rAF 适合采样连续状态，瞬时事件用 MutationObserver**。
+4. 一开始假设「后端每次连接 spawn 新 tmux client」而没验证首帧必为全屏重绘——该假设由 `src/ws/terminal.rs` 的 `build_tmux_attach_cmd` 每连接执行 `new-session -A` 支撑，且实测首帧确实清屏重绘。**把「复位」建立在架构不变式上之前，先确认不变式成立**。
+
+**具体根因与修复**：
+
+- 根因链：`Layout.tsx` `key={activeSessionId ?? 'empty'}` → 每次切会话整个 `Terminal` 组件（含 xterm）销毁重建 → 黑屏（实测 dt=181ms xterm 消失）→ 新 xterm 空白 + 新 WS 握手 + 后端 spawn 新 tmux client（实测 ctor 193ms / open 294ms）→ `ws.onopen` 里 `term.reset()` 再清一次屏 → tmux attach 全屏重绘到达（dt=431ms 内容恢复）。**总空白 250ms**，每次切换必现。
+- 修复（两处）：① `Layout.tsx` 的 key 改为视图类型 `sessionViewKey(sessions, activeSessionId, activeExternalSession)`（`'empty'|'tmux'|'acp'|'external'`）——tmux↔tmux / acp↔acp 保持挂载、由 `useTerminal`/`useAcpChat` 原地重连（两条链路本就支持切会话，重挂载逻辑此前从未生效）；视图类型变化（tmux↔acp↔none）仍重挂载。② `useTerminal.ts` 把 `reset()` 从 `ws.onopen` 移到 `onmessage` 的首个二进制帧（`sawFirstBinary` 标志，按连接闭包作用域天然隔离）——旧内容保留到新重绘到达再一次性替换；`[connected]`/`[attached]` 状态行在首帧 reset 时一并清除，不残留。③ 原地切会话时重置 `tmuxScrollModeRef`/`scrollMode`（原重挂载隐含的清理）。
+- 验证（Playwright headless 实测，MutationObserver + WS 钩子）：修复前 tmux→tmux 切换 xterm 销毁重建（id null→2）、空白 181→431ms；修复后 xterm 保持同一实例（id 不变）、旧内容可见至 dt≈207ms、reset 仅 208→212ms、新内容 341ms 完整——无黑屏、无重建。视图类型切换（tmux→acp、acp→tmux）仍正常重挂载。tsc / vitest 165 全过。
+
+---
+
 ## 2026-08-01: git diff 长行不换行——`white-space: pre` 让 flex 行横向溢出
 
 **症状**：GIT 面板 CHANGES 点开文件 diff / commit 详情，长行横向溢出被裁，没有滚动条、超出部分看不到。
