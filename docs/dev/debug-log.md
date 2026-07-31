@@ -14,6 +14,31 @@
 
 ---
 
+## 2026-07-31: 移动端 modal/弹层被 300% pane strip 的 containing block 拉走，按钮裁出屏幕
+
+**症状**：移动端 sidebar 内点击功能键（New Project / Delete 等）弹出 Modal，弹窗右缘超出视口（390px 屏上 panel right=478px），底部确认按钮（CREATE / REMOVE）被裁出屏幕看不见。UpdateBadge 面板、终端长按粘贴菜单同属一类。Settings/TmuxCheatsheet bottom sheet 正常（它们在 strip 外渲染）。
+
+**可复用的理论/模式**：
+
+**1. `will-change: transform` / `transform` 会把后代 `position: fixed` 的包含块从视口改为该元素**（CSS containing block 规则）。滑动轮播/3D 变换容器内部的 fixed 弹层，几何基准从视口变成容器——容器是 300% 宽时弹层宽度随之膨胀、位置错位。排查「弹层出现在奇怪位置/尺寸」时，先沿祖先链找 transform/will-change/perspective/filter，不要先怀疑弹层自己的定位代码。
+
+**2. 几何 bug 的验证顺序：getBoundingClientRect 实测 > 截图 > 视觉描述**。第一次截图视觉描述甚至说弹窗“正常”，量了 rect 才知道 backdrop 宽 1170px（= 3×视口）而视觉上只看到其左侧部分。a11y 树能看到 DOM 里的按钮（opacity/裁剪不影响可访问性），不代表用户看得到——DOM 存在 ≠ 视觉可见。
+
+**3. 修一次、殃及一片**：Modal 是所有确认框/对话框的基座，一处 createPortal 修复全部继承者；UpdateBadge、Terminal pasteMenu 是内联 fixed，需逐个手动修。排查时先找「所有弹层共同的基类」——修基类比修每个调用点稳。
+
+**诊断过程中的错误**：
+
+1. 看到错误堆栈指向 `createPortal` 后，先手动在 console 调 `createPortal('x', document.body)` 验证成功，又花了几轮怀疑「document.body 不是合法容器」「React 版本差异」，其实那两个实验都受 Vite CJS interop 影响（patch 的是 `default.createPortal` 属性，而组件持的是模块加载时解构的旧引用），属于无效实验。**想验证组件内参数时，直接在组件源码加日志，别 monkey-patch 依赖模块**。
+2. 一开始凭 a11y 快照判断「按钮都在」，浪费了多轮；用 `getBoundingClientRect` 一次就锁定。
+
+**具体根因与修复**：
+
+- 根因：MobileLayout 的 pane strip（`width: 300%` + `willChange: 'transform'`，为滑动切 tab 而设）创建 containing block；Sidebar 内所有 `position: fixed` 弹层（Modal backdrop 等）改以 strip 为基准定位，strip 宽 1170px 且偏移 -350px，弹层溢出视口。桌面无 strip，不受影响。
+- 修复：`Modal.tsx`、`UpdateBadge.tsx`（UpdatePanel）、`Terminal.tsx`（长按粘贴菜单）三处 fixed 弹层一律 `createPortal(children, document.body)`，fixed 恢复相对视口。Sidebar.test.tsx 的 modal 断言从 `container.querySelector` 改 `document.body.querySelector`。
+- 验证：390px 视口下 panel right 478→374，REMOVE 按钮 right 427→352；桌面 1440px 居中正常；vitest 162 全过。
+
+---
+
 ## 2026-07-31: ResizeObserver 即时 fit 导致 tmux status bar 泄漏进 scrollback
 
 **症状**：聚焦终端时，底部 tmux status bar 内容（如 "DeepSeek V4 Pro | think:max | dir OmniTerm-dev"）时不时叠加出现在 scrollback 中。非重连触发，正常使用中间歇出现。

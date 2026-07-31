@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
@@ -383,8 +384,12 @@ export function Terminal() {
           </div>
         )}
       </div>
-      {pasteMenu && (
-        <>
+      {/* Portal to body: inside the mobile pane strip, `position: fixed` would
+          resolve against the strip's transform containing block and overflow
+          the viewport (same regression class as Modal — see debug-log). */}
+      {pasteMenu &&
+        createPortal(
+          <>
           <div
             style={{ position: 'fixed', inset: 0, zIndex: 199 }}
             onClick={() => setPasteMenu(null)}
@@ -415,8 +420,9 @@ export function Terminal() {
               {t('terminal.paste')}
             </button>
           </div>
-        </>
-      )}
+          </>,
+          document.body,
+        )}
       {isMobile && !hideKeyBar && (
         <MobileKeyBar
           latchMod={latchMod}

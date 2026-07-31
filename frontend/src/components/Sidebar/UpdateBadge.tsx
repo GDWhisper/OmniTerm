@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
@@ -82,7 +83,10 @@ function UpdatePanel({
       .catch(() => setPhase('idle'))
   }
 
-  return (
+  // Portal to body: inside the mobile pane strip, `position: fixed` would
+  // resolve against the strip's transform containing block and overflow the
+  // viewport (same regression class as Modal — see debug-log).
+  return createPortal(
     <div
       ref={ref}
       onMouseDown={(e) => e.stopPropagation()}
@@ -159,6 +163,7 @@ function UpdatePanel({
           </a>
         </div>
       </OverlayScroll>
-    </div>
+    </div>,
+    document.body,
   )
 }

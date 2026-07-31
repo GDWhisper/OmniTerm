@@ -62,6 +62,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-07-31 15:10) `[frontend]` 修复移动端 sidebar 内弹窗（新建项目/会话、删除确认等 Modal、更新面板、终端长按粘贴菜单）错位且操作按钮被裁出屏幕：三窗格滑动轮播容器（`will-change: transform`，宽 300%）成为后代 `position: fixed` 的 containing block，弹层以 3 倍视口宽为基准定位溢出屏幕，底部 CREATE/REMOVE 等按钮不可见；弹层统一 `createPortal` 到 `document.body`，恢复视口锚定（`frontend/src/components/Modal/Modal.tsx`、`frontend/src/components/Sidebar/UpdateBadge.tsx`、`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-07-31 14:52) `[frontend]` 修复移动端 ACP 会话下底部导航与实际聚焦窗格偶发错位（导航指 sidebar、屏幕显示终端，且因触摸落在 `.xterm` 被手势守卫排除而无法滑回，只能刷新）：三窗格轮播容器 `overflow: hidden` 仍是可编程滚动容器，软键盘弹出/聚焦聊天输入时浏览器 `scrollIntoView` 会偷偷设置 `scrollLeft` 把 transform 移出屏幕的窗格"滚"回来；改为 `overflow: clip`（非滚动容器）+ `onScroll` 归零兜底（`frontend/src/components/Layout/Layout.tsx`）
 - (2026-07-31 14:55) `[frontend]` 根治 tmux status bar 内容间歇泄漏进终端 scrollback：xterm 实例改为 `scrollback: 0`——tmux 会话的历史完全由 tmux 持有（滚轮 mouse 序列 / copy-mode），本地 scrollback 只可能积累 resize 竞态窗口（fit → WS → SIGWINCH → tmux 重绘异步链路）泄漏的垃圾，取消后泄漏结构性无处持久化，窗口期瞬时错位由 tmux 全屏重绘自愈；此前的 80ms 去抖降级为合并布局抖动、减少 tmux 重绘次数的优化（`frontend/src/hooks/useTerminal.ts`）
 - (2026-07-31 12:00) `[backend]` `[frontend]` 修复 ACP 审批请求 60 秒无人响应即被自动以 `Cancelled` 应答的协议违规（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）：用户不在页面前时审批被擅自取消、agent 误读为「用户取消」。移除超时自动应答（无人应答兜底仍由 reaper 30 分钟负责）；`session/cancel` 时按规范以 `Cancelled` 应答全部未决审批；WS 重连时重放未决审批恢复前端 banner；prompt 回合结束时清理残留 banner（`src/acp/permission.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/stores/chatStore.ts`）
