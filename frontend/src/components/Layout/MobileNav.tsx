@@ -24,8 +24,10 @@ export function MobileNav() {
       style={{
         display: 'flex',
         justifyContent: 'center',
-        padding: '6px 0',
-        paddingBottom: 'calc(6px + env(safe-area-inset-bottom, 0px))',
+        // Vertical padding kept minimal: the 44pt touch target lives inside the
+        // buttons, so the bar itself must not stack extra height on a phone.
+        padding: '2px 0',
+        paddingBottom: 'calc(2px + env(safe-area-inset-bottom, 0px))',
         background: 'var(--bg-elevated)',
         borderTop: '1px solid var(--border-subtle)',
         flexShrink: 0,
@@ -36,7 +38,7 @@ export function MobileNav() {
           display: 'flex',
           alignItems: 'center',
           gap: 24,
-          padding: '6px 24px',
+          padding: '0 24px',
           borderRadius: 20,
           background: 'var(--bg-base)',
           border: '1px solid var(--border-subtle)',
