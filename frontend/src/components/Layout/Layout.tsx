@@ -18,8 +18,11 @@ import { nextSessionId } from '../../utils/sessionNav'
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
  * sessions, Terminal for tmux (and the null-session empty state). The
- * wrapper key in the callers forces a full remount when the active
- * session changes, so each view's WebSocket lifecycle resets cleanly.
+ * wrapper key in the callers forces a remount on VIEW-TYPE transitions
+ * (tmux↔acp↔none), while same-kind switches (tmux→tmux, acp→acp) keep the
+ * view mounted — useTerminal/useAcpChat reconnect in place. Keying on the
+ * session id instead would destroy and recreate the xterm on every switch,
+ * flashing a blank screen for ~250ms (see debug-log).
  */
 function SessionView() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
@@ -225,6 +228,8 @@ function DesktopLayout({
   onSidebarDrag,
   onFileManagerDrag,
 }: DesktopLayoutProps) {
+  const sessions = useAppStore((s) => s.sessions)
+  const activeExternalSession = useAppStore((s) => s.activeExternalSession)
   return (
     <>
       <div
@@ -261,7 +266,7 @@ function DesktopLayout({
           )}
 
           <div className="flex-1 min-w-0">
-            <SessionView key={activeSessionId ?? 'empty'} />
+            <SessionView key={sessionViewKey(sessions, activeSessionId, activeExternalSession)} />
           </div>
 
           {fileManagerOpen && !fileManagerCollapsed && (
@@ -304,6 +309,24 @@ const SWIPE_SETTLE_MS = 160
 const PANE_WIDTH_PCT = 100 / 3
 const stripTransform = (idx: number) => `translateX(${-idx * PANE_WIDTH_PCT}%)`
 const PANE_STYLE: React.CSSProperties = { width: `${PANE_WIDTH_PCT}%`, height: '100%', overflow: 'hidden', flexShrink: 0 }
+
+/**
+ * View-kind key for <SessionView>: 'empty' | 'tmux' | 'acp' | 'external'.
+ * Only view-kind transitions remount; same-kind session switches reconnect
+ * in place (useTerminal / useAcpChat), avoiding the xterm destroy+recreate
+ * flash on every tmux session switch.
+ */
+function sessionViewKey(
+  sessions: AppState['sessions'],
+  activeSessionId: string | null,
+  activeExternalSession: string | null,
+): string {
+  if (activeExternalSession) return 'external'
+  const active = activeSessionId
+    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+    : null
+  return active?.runtime_kind ?? 'empty'
+}
 
 function MobileLayout() {
   const { t } = useTranslation()
@@ -453,7 +476,7 @@ function MobileLayout() {
         >
           <div ref={stripRef} style={{ display: 'flex', width: '300%', height: '100%', willChange: 'transform' }}>
             <div style={PANE_STYLE}><Sidebar /></div>
-            <div style={PANE_STYLE}><SessionView key={activeSessionId ?? 'empty'} /></div>
+            <div style={PANE_STYLE}><SessionView key={sessionViewKey(sessions, activeSessionId, activeExternalSession)} /></div>
             <div style={PANE_STYLE}><RightPanel /></div>
           </div>
         </div>

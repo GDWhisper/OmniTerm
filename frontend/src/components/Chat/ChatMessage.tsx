@@ -399,10 +399,6 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
       <span
         style={{
           fontWeight: 600,
-          background: 'var(--bg-elevated)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 2,
-          padding: '0 4px',
         }}
       >
         {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}

@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-- (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600），配浅色徽章底（`--bg-elevated` + `--border-subtle` 边框 + 2px 圆角），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
+- (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600）——纯文字方案（无底色/边框，避免与气泡堆叠），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
 
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡 hover 显示消息系统时间：鼠标悬停消息时在标识行（USER/agent 名）旁显示小字本地时间（非浏览器原生 tooltip）——当天仅 `HH:mm`，今年内跨天 `MM-DD HH:mm`，跨年 `YYYY-MM-DD HH:mm`；时间戳沿用既有 `createdAt` 全链路（内存 `Date.now()` + DB `created_at` 持久化），零存储改动（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/formatTime.ts`）
 
