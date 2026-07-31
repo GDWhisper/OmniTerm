@@ -370,7 +370,7 @@
   "settings.agents.reference": "Command is the executable OmniTerm spawns and talks to over ACP (stdio). Arguments are passed as argv, space-separated. Environment variables are injected into the process. An agent must speak the ACP protocol over its stdio — point Command at an ACP-compatible client (e.g. an agent CLI with an ACP mode).",
   "settings.agents.installHint": "Before using a preset, make sure the corresponding command is installed. Clicking a preset will auto-fill the configuration but won't install dependencies automatically.",
   "settings.agents.preset.claude.label": "Claude Code",
-  "settings.agents.preset.claude.hint": "Spawns the claude-agent-acp ACP client.",
+  "settings.agents.preset.claude.hint": "Claude Code CLI ships no ACP mode; uses the community adapter @agentclientprotocol/claude-agent-acp (official Agent SDK) via npx.",
   "settings.agents.preset.codex.label": "Codex",
   "settings.agents.preset.codex.hint": "Codex CLI has no built-in ACP; uses the community adapter @agentclientprotocol/codex-acp via npx.",
   "settings.agents.preset.gemini.label": "Gemini CLI",

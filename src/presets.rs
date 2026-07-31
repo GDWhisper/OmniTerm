@@ -22,8 +22,11 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
     AgentPreset {
         id: "preset-claude",
         display_name: "Claude Code",
-        command: "claude-agent-acp",
-        args_json: "[]",
+        // claude-agent-acp 不是 Claude Code 官方 CLI 自带的命令，而是社区
+        // @agentclientprotocol/claude-agent-acp（基于官方 Claude Agent SDK）
+        // 提供的 ACP 适配器，故经 npx 启动，无需全局安装。
+        command: "npx",
+        args_json: r#"["-y", "@agentclientprotocol/claude-agent-acp"]"#,
     },
     AgentPreset {
         id: "preset-codex",

@@ -32,8 +32,11 @@ export const AGENT_PRESETS: AgentPreset[] = [
     labelKey: 'settings.agents.preset.claude.label',
     hintKey: 'settings.agents.preset.claude.hint',
     display_name: 'Claude Code',
-    command: 'claude-agent-acp',
-    args: [],
+    // claude-agent-acp 不是 Claude Code 官方 CLI 自带的命令，而是社区
+    // @agentclientprotocol/claude-agent-acp（基于官方 Claude Agent SDK）
+    // 提供的 ACP 适配器，故经 npx 启动，无需全局安装。
+    command: 'npx',
+    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
     env: [],
   },
   {
