@@ -168,6 +168,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
+      // Clear stale buffer on reconnect so tmux's full-screen redraw starts
+      // from a clean slate (prevents status-bar lines leaking into scrollback).
+      termRef.current?.reset()
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
     }
 
