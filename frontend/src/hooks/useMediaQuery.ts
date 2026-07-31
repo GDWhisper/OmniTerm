@@ -31,7 +31,15 @@ export function useKeyboardHeight() {
       // cursor row, behind the keyboard in tmux mode). That pan is not a
       // window scroll — scrollTo can't undo it — so the layout must follow
       // offsetTop to stay aligned with the visible region.
-      setVvOffsetTop(vv.offsetTop)
+      //
+      // Clamp: the pan can never exceed the keyboard region, i.e.
+      // offsetTop + vv.height ≤ layout viewport height. Some browsers (or
+      // keyboard-dismissal sequences, e.g. session switch while typing)
+      // leave a stale offsetTop after vv.height already recovered — the
+      // layout would then translate below the viewport and clip the bottom
+      // bar. Clamping to the recoverable bound snaps it back.
+      const maxOffset = Math.max(0, window.innerHeight - vv.height)
+      setVvOffsetTop(Math.min(vv.offsetTop, maxOffset))
       // Mobile keyboards make the browser scroll the (unscrollable) document
       // to reveal the focused input; the offset survives keyboard dismissal
       // and leaves the fixed-height layout clipped at the bottom. The layout

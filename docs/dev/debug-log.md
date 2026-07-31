@@ -36,6 +36,34 @@
 
 ---
 
+## 2026-07-31: 切换到 ACP 会话时底部看不见——共享 CSS 类的隐性契约 + vv 残留越界
+
+**症状**：移动端/矮窗口下切换到 ACP 会话，底部（输入区/配置栏）看不见，有「被拉长」感。上次键盘 pan 修复（63bf509）后仍复现。
+
+**可复用的理论/模式**：
+
+**1. 共享 CSS 类名是隐性契约，跨域复用会把专用样式带进无关组件**。`.terminal-panel-pixel` 为 Terminal/xterm 而生（`overflow: clip` 防画布溢出、`touch-action: none` 防触摸干扰），ChatView 为省事复用它当外观容器——结果：空间不足时输入区被静默裁切（无法访问），移动端聊天列表触摸滚动被禁用。**复用一个带副作用样式类之前，先问：它的 overflow/touch-action/pointer-events 等行为类属性对我的组件意味着什么？** 外观（背景/边框/阴影）与行为（overflow/touch）应该分离，跨域复用只取外观。
+
+**2. 「底部看不见」有三层独立根因，逐层排查**：① 布局几何（`vvHeight`/`translateY` 数学，上一轮修的 pan）；② 容器 overflow 裁切（flex 溢出被 clip 静默裁掉，本轮）；③ 焦点/键盘（scrollIntoView/pan 时序）。同症状未必同根因——上一轮修完①，本轮是②。
+
+**3. flex 容器空间不足时的优先级控制**：必须永远可见的组件（输入区）`flexShrink: 0`；可牺牲的内容（看板）单独 `flexShrink: 1` + `minHeight: 0` + `overflow: hidden`（溢出可折叠恢复）。默认 flexShrink 1 会让输入区按比例被压扁/裁掉。
+
+**4. 浏览器状态值有数学不变量，防御性钳制优于信任事件**：visual viewport 的 `offsetTop + height ≤ innerHeight` 恒成立。键盘收起/会话切换时序下部分浏览器残留陈旧 `offsetTop`（事件丢失），布局整体下移越界（「被拉长」= 布局高度没变但被 translate 推出视口）。对这类状态值，读入时按不变量钳制（`min(offsetTop, innerHeight - vv.height)`），残留自动回弹，且不影响正常值。
+
+**诊断过程中的错误**：
+
+1. 一开始只盯着移动端键盘 pan 假设（最近修复的已知场景），差点在错误方向上深挖；实际上桌面上也能复现（矮窗口 + 内容超高被 clip）。**同症状先别急着假设平台/场景，把共享样式类和布局结构也扫一遍**。
+2. 依赖 Playwright headless 验证时，先被 sidebar 的 worktree 分组导航卡住（会话在项目→worktree 两级折叠下），最后用 localStorage 预置 `omniterm_active_session` 直达 ChatView——**验证脚本先打通目标视图的直达路径，别在导航 UI 上耗时间**。
+
+**具体根因与修复**：
+
+- 根因 A（结构性）：ChatView 复用 `.terminal-panel-pixel`，其 `overflow: clip` 在空间不足时静默裁掉输入区（TodoBoard 180px + 输入区 + 配置栏超出可用高度时 OverlayScroll 先缩到 0，剩余溢出被裁）；`touch-action: none` 禁用聊天列表触摸滚动。
+- 根因 B（时序性）：`useKeyboardHeight` 直接消费 `vv.offsetTop`，键盘收起/切会话时部分浏览器残留陈旧值 → 布局 `translateY` 永久下移，底部越界不可见。
+- 修复：ChatView 内容容器改内联样式（仅复刻外观，`overflow: clip` 只作极端兑底），ChatInput/ConfigToolbar/PermissionBanner/restore/error `flexShrink: 0`，TodoBoard 包 `flexShrink: 1 + minHeight: 0 + overflow: hidden` wrapper；`useMediaQuery` 的 update 里 `offsetTop` 钳制到 `max(0, innerHeight - vv.height)`。
+- 验证：Playwright 实测 1200×800/420/320/280 窗口下 textarea 始终可见；插入 300px 假看板块后 320px/280px 下看板被压缩至 200/160px 而输入区不变；tsc/lint/162 测试全过。
+
+---
+
 ## 2026-07-31: 嵌套滚动容器的流式内容没有自己的锚定逻辑——thinking 块滚动条不跟底
 
 **症状**：ACP 会话 thinking 块大量流式更新时，块内滚动条不锚定在底部，最新思考内容始终在折叠线以下（块外聊天列表的滚动条是贴底的）。

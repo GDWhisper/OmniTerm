@@ -260,11 +260,27 @@ export function ChatView() {
         {titleChip}
       </div>
 
-      <div className="terminal-panel-pixel" style={{ flex: 1, minHeight: 0, background: 'var(--bg-base)' }}>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          background: 'var(--bg-base)',
+          border: '2px solid var(--wood-shadow, #3A2E1F)',
+          boxShadow: '3px 3px 0 var(--pixel-shadow, #8B7755)',
+          display: 'flex',
+          flexDirection: 'column',
+          // 不复用 .terminal-panel-pixel（Terminal/xterm 专用）：其 overflow clip
+          // 会在空间不足时静默裁掉输入区，touch-action: none 会禁用聊天列表触摸
+          // 滚动。这里只复刻像素面板外观；clip 仅作极端溢出兜底（正常情况由
+          // 底部功能区的 flexShrink 策略保证输入区可见，见 TodoBoard/ChatInput）。
+          overflow: 'clip',
+        }}
+      >
 
       {chatState.error && (
         <div
           style={{
+            flexShrink: 0,
             padding: '6px 12px',
             background: 'rgba(255, 123, 114, 0.12)',
             color: 'var(--danger, #FF7B72)',
@@ -359,15 +375,18 @@ export function ChatView() {
       </OverlayScroll>
 
       {chatState.pendingPermission && (
-        <PermissionBanner
-          permission={chatState.pendingPermission}
-          onRespond={respondPermission}
-        />
+        <div style={{ flexShrink: 0 }}>
+          <PermissionBanner
+            permission={chatState.pendingPermission}
+            onRespond={respondPermission}
+          />
+        </div>
       )}
 
       {showRestore && (
         <div
           style={{
+            flexShrink: 0,
             padding: '6px 12px',
             background: 'rgba(255, 255, 255, 0.04)',
             color: 'var(--text-muted)',
@@ -399,27 +418,36 @@ export function ChatView() {
         </div>
       )}
 
-      <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
+      {/* TodoBoard 允许压缩（flexShrink 1 + overflow hidden）：空间不足时
+          优先收缩看板而非输入区，用户可点 header 折叠后查看完整内容。 */}
+      <div style={{ flexShrink: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <TodoBoard entries={chatState.todos} title={chatState.todosTitle} />
+      </div>
 
-      <ChatInput
-        key={activeSessionId}
-        sessionId={activeSessionId!}
-        disabled={inputDisabled}
-        sending={chatState.sending}
-        queuedMessage={chatState.queuedMessage}
-        onSend={handleSend}
-        onCancel={cancel}
-        onCancelQueued={handleCancelQueued}
-        onSendNow={handleSendNowQueued}
-        commands={chatState.commands}
-        imageSupported={chatState.imageSupported}
-      />
+      {/* ChatInput / ConfigToolbar 不参与收缩：输入必须始终可见。 */}
+      <div style={{ flexShrink: 0 }}>
+        <ChatInput
+          key={activeSessionId}
+          sessionId={activeSessionId!}
+          disabled={inputDisabled}
+          sending={chatState.sending}
+          queuedMessage={chatState.queuedMessage}
+          onSend={handleSend}
+          onCancel={cancel}
+          onCancelQueued={handleCancelQueued}
+          onSendNow={handleSendNowQueued}
+          commands={chatState.commands}
+          imageSupported={chatState.imageSupported}
+        />
+      </div>
 
-      <ConfigToolbar
-        configOptions={chatState.configOptions}
-        usage={chatState.usage}
-        onSetConfigOption={setConfigOption}
-      />
+      <div style={{ flexShrink: 0 }}>
+        <ConfigToolbar
+          configOptions={chatState.configOptions}
+          usage={chatState.usage}
+          onSetConfigOption={setConfigOption}
+        />
+      </div>
 
       </div>
     </div>
