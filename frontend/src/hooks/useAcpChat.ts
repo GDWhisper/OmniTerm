@@ -610,22 +610,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const url = `${proto}//${window.location.host}/api/v1/ws/acp/${encodeURIComponent(sessionId)}`
 
-    setConnectionState('connecting')
-    const store = useChatStore.getState()
-    store.setError(sessionId, null)
-
-    const ws = new WebSocket(url)
-    wsRef.current = ws
-    let disposed = false
-    inProgressSeq.current = null
-    preHydrateBuffer.current = []
-
-    ws.onopen = () => {
-      if (disposed) { ws.close(); return }
-      setConnectionState('connected')
-      const sid = sessionIdRef.current
-      if (sid) useChatStore.getState().setError(sid, null)
-    }
+    // 自动重连脚手架：unmounted 区分「主动拆除」（session 切换 / 组件卸载）与网络断开；
+    // retry 驱动指数退避（1→2→4→8…→cap 30s），onopen 成功归零。重连复用同一 dispatchFrame
+    // 与 store（无 remount），进行中 turn 由后端 turn_snapshot / turn_state 无缝续接，
+    // 故重连不重发 load_session（保持手动 restore）。见计划 §5。
+    let unmounted = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let retry = 0
 
     // 帧派发核心：live 路径与 preHydrateBuffer 回放共用。挂到 ref 供 hydrated 落定
     // 后的 flush effect 调用（闭包捕获当前连接的 ws）。
@@ -713,7 +704,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               fresh.clearQueuedMessage(sid)
               fresh.addUserMessage(sid, trimmed)
               try {
-                ws.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+                const cur = wsRef.current
+                if (!cur) throw new Error('socket unavailable')
+                cur.send(JSON.stringify({ type: 'prompt', text: trimmed }))
                 fresh.beginPrompt(sid)
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
@@ -859,52 +852,71 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     }
     frameHandlerRef.current = dispatchFrame
 
-    ws.onmessage = (ev) => {
-      const sid = sessionIdRef.current
-      if (!sid) return
-      let frame: ServerFrame
-      try {
-        frame = typeof ev.data === 'string'
-          ? JSON.parse(ev.data)
-          : { type: 'error', message: 'non-text frame' }
-      } catch {
-        useChatStore.getState().setError(sid, 'malformed frame')
-        return
-      }
-      if (import.meta.env.DEV) console.debug('[ACP RX]', frame.type, ev.data)
+    const connect = () => {
+      if (unmounted) return
+      setConnectionState('connecting')
+      useChatStore.getState().setError(sessionId, null)
 
-      // hydrate 门控：GET /messages 落定前，会改动消息列表的帧先入缓冲按序回放，
-      // 避免抢跑 hydrate。其余帧（capabilities/process_alive/terminal_activity/
-      // permission_request/error/replay_*）不触碰 hydrate 守卫，即时派发。
-      if (!hydratedRef.current && HYDRATE_GATED_FRAMES.has(frame.type)) {
-        preHydrateBuffer.current.push(frame)
-        return
-      }
-      dispatchFrame(frame)
-    }
+      const ws = new WebSocket(url)
+      wsRef.current = ws
+      inProgressSeq.current = null
+      preHydrateBuffer.current = []
 
-    ws.onerror = () => {
-      if (wsRef.current !== ws) return
-      const sid = sessionIdRef.current
-      if (sid) {
-        const st = useChatStore.getState().states[sid]
-        // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
-        if (st?.sending && !st.sessionEnded) {
-          useChatStore.getState().markError(sid, 'WebSocket error')
-        } else {
-          useChatStore.getState().setError(sid, 'WebSocket error')
+      ws.onopen = () => {
+        if (unmounted) { ws.close(); return }
+        retry = 0
+        setConnectionState('connected')
+        const sid = sessionIdRef.current
+        if (sid) useChatStore.getState().setError(sid, null)
+      }
+
+      ws.onmessage = (ev) => {
+        const sid = sessionIdRef.current
+        if (!sid) return
+        let frame: ServerFrame
+        try {
+          frame = typeof ev.data === 'string'
+            ? JSON.parse(ev.data)
+            : { type: 'error', message: 'non-text frame' }
+        } catch {
+          useChatStore.getState().setError(sid, 'malformed frame')
+          return
         }
-      }
-      setConnectionState('error')
-    }
+        if (import.meta.env.DEV) console.debug('[ACP RX]', frame.type, ev.data)
 
-    ws.onclose = () => {
-      if (wsRef.current === ws) {
+        // hydrate 门控：GET /messages 落定前，会改动消息列表的帧先入缓冲按序回放，
+        // 避免抢跑 hydrate。其余帧（capabilities/process_alive/terminal_activity/
+        // permission_request/error/replay_*）不触碰 hydrate 守卫，即时派发。
+        if (!hydratedRef.current && HYDRATE_GATED_FRAMES.has(frame.type)) {
+          preHydrateBuffer.current.push(frame)
+          return
+        }
+        dispatchFrame(frame)
+      }
+
+      ws.onerror = () => {
+        if (wsRef.current !== ws) return
+        const sid = sessionIdRef.current
+        if (sid) {
+          const st = useChatStore.getState().states[sid]
+          // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
+          if (st?.sending && !st.sessionEnded) {
+            useChatStore.getState().markError(sid, 'WebSocket error')
+          } else {
+            useChatStore.getState().setError(sid, 'WebSocket error')
+          }
+        }
+        setConnectionState('error')
+      }
+
+      ws.onclose = () => {
+        // 陈旧 socket（已被后继连接替换）的迟到 onclose：忽略，避免重复调度重连。
+        if (wsRef.current !== ws) return
         isManualRestore.current = false
         setConnectionState('disconnected')
         wsRef.current = null
         const sid = sessionIdRef.current
-        if (sid && !disposed) {
+        if (sid && !unmounted) {
           const st = useChatStore.getState().states[sid]
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {
@@ -919,19 +931,34 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             useChatStore.getState().clearQueuedMessage(sid)
           }
         }
+        // 非主动拆除 → 指数退避重连。进行中 turn 由后端权威持久化 + turn_snapshot
+        // 续接，故重连无需重发 prompt / load_session。
+        if (!unmounted) {
+          const delay = Math.min(1000 * 2 ** retry, 30000)
+          retry += 1
+          if (import.meta.env.DEV) console.debug('[ACP reconnect] scheduling in', delay, 'ms (attempt', retry, ')')
+          reconnectTimer = setTimeout(() => { reconnectTimer = null; connect() }, delay)
+        }
       }
     }
 
+    connect()
+
     return () => {
-      disposed = true
+      unmounted = true
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       if (liveRaf.current !== null) {
         cancelAnimationFrame(liveRaf.current)
         liveRaf.current = null
       }
       flushLiveBuffer()
       frameHandlerRef.current = null
-      if (ws.readyState === WebSocket.OPEN) ws.close()
-      if (wsRef.current === ws) wsRef.current = null
+      const ws = wsRef.current
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close()
+      wsRef.current = null
     }
   }, [sessionId])
 
