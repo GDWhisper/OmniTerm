@@ -211,6 +211,11 @@ interface ChatSessionState {
   imageSupported?: boolean
   /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
   agentName?: string
+  /**
+   * ChatView 的 GET /messages hydrate 是否已落定。useAcpChat 据此放行
+   * preHydrateBuffer：落定前会改动消息列表的帧先缓冲，避免抢跑 hydrate 丢历史。
+   */
+  hydrated?: boolean
 }
 
 interface ChatActions {
@@ -244,6 +249,14 @@ interface ChatActions {
   setMode: (sessionId: string, mode: string) => void
   setError: (sessionId: string, message: string | null) => void
   hydrate: (sessionId: string, messages: ChatMessage[]) => void
+  /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
+  setHydrated: (sessionId: string, hydrated: boolean) => void
+  /** 重连续接：用进行中 turn 的快照（已解码 blocks）按 rowId 替换/收编在建 assistant
+   *  消息，无匹配则收编末尾 streaming assistant，再无则追加。置 streaming 供 live 帧续接。 */
+  applyTurnSnapshot: (
+    sessionId: string,
+    snapshot: { rowId: string; text: string; blocks: ContentBlock[] },
+  ) => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   setPermission: (sessionId: string, permission: PendingPermission) => void
@@ -777,6 +790,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         messages,
         imageSupported: prev?.imageSupported,
         agentName: prev?.agentName,
+        hydrated: prev?.hydrated,
       })
       return applyTopLevelActions(base, sessionId, actions)
     }),
@@ -830,6 +844,55 @@ export const useChatStore = create<ChatStore>((set) => ({
             }
           }
           if (todos.length > 0) break
+        }
+      }
+      return patch(state, sessionId, { messages, todos, todosTitle })
+    }),
+
+  setHydrated: (sessionId, hydrated) =>
+    set((state) => patch(state, sessionId, { hydrated })),
+
+  applyTurnSnapshot: (sessionId, { rowId, text, blocks }) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const messages = [...current.messages]
+      const idx = messages.findIndex((m) => m.id === rowId)
+      const prevCreatedAt =
+        idx >= 0
+          ? messages[idx].createdAt
+          : messages[messages.length - 1]?.role === 'assistant' &&
+              messages[messages.length - 1]?.streaming
+            ? messages[messages.length - 1].createdAt
+            : Date.now()
+      const msg: ChatMessage = {
+        id: rowId,
+        role: 'assistant',
+        text,
+        blocks,
+        createdAt: prevCreatedAt,
+        streaming: true,
+      }
+      if (idx >= 0) {
+        messages[idx] = msg
+      } else {
+        const lastIdx = messages.length - 1
+        const last = messages[lastIdx]
+        if (last && last.role === 'assistant' && last.streaming) {
+          // 收编末尾 live streaming 消息，统一 id=rowId 供后续快照匹配。
+          messages[lastIdx] = msg
+        } else {
+          messages.push(msg)
+        }
+      }
+      // 看板同步：快照 blocks 可能含最新 todo，扫描并更新（与 hydrate 一致）。
+      let todos = current.todos
+      let todosTitle = current.todosTitle
+      for (let j = blocks.length - 1; j >= 0; j--) {
+        const b = blocks[j]
+        if (b.type === 'todo') {
+          todos = b.entries
+          todosTitle = b.title
+          break
         }
       }
       return patch(state, sessionId, { messages, todos, todosTitle })

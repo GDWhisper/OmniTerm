@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, type ChatMessage, type ContentBlock } from '../../stores/chatStore'
+import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
@@ -12,6 +12,7 @@ import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
+import { decodeStoredBlocks } from '../../hooks/useAcpChat'
 
 /**
  * ChatView — the ACP-runtime counterpart to `Terminal.tsx`. Renders a
@@ -27,17 +28,6 @@ import { READER_FONT } from '../../utils/fonts'
  * while the user is at the bottom; stop if they scroll up to read
  * history. Re-stick on next explicit send.
  */
-// hydrate 时从 DB 还原结构化 blocks；解析失败则回退纯文本，避免单条坏数据
-// 让整个会话历史加载失败。
-function safeParseBlocks(raw: string): ContentBlock[] | null {
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as ContentBlock[]) : null
-  } catch {
-    return null
-  }
-}
-
 export function ChatView() {
   const { t } = useTranslation()
   const activeSessionId = useAppStore((s) => s.activeSessionId)
@@ -65,14 +55,22 @@ export function ChatView() {
 
   useEffect(() => {
     if (!activeSessionId) return
+    const sid = activeSessionId
     let cancelled = false
-    fetch(`/api/v1/sessions/${encodeURIComponent(activeSessionId)}/messages`)
+    fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data?.messages?.length) return
         const msgs: ChatMessage[] = data.messages.map(
-          (m: { id: string; role: string; text: string; createdAt: string; blocks?: string | null }) => {
-            let blocks = m.blocks ? safeParseBlocks(m.blocks) : null
+          (m: {
+            id: string
+            role: string
+            text: string
+            createdAt: string
+            blocks?: string | null
+            status?: string | null
+          }) => {
+            let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
             if (!blocks || blocks.length === 0) {
               blocks = [{ type: 'text' as const, text: m.text }]
             }
@@ -82,13 +80,21 @@ export function ChatView() {
               text: m.text,
               blocks,
               createdAt: new Date(m.createdAt).getTime(),
+              // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
+              streaming: m.status === 'streaming',
             }
           },
         )
-        useChatStore.getState().hydrate(activeSessionId, msgs)
+        useChatStore.getState().hydrate(sid, msgs)
       })
       .catch(() => {})
-    return () => { cancelled = true }
+      .finally(() => {
+        // GET 落定（成功/空/失败）后放行 useAcpChat 的 preHydrateBuffer。
+        if (!cancelled) useChatStore.getState().setHydrated(sid, true)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [activeSessionId])
 
   // Re-stick whenever a new chunk/message lands while autoStick is on.
