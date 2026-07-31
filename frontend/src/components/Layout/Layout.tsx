@@ -298,6 +298,12 @@ function DesktopLayout({
 
 const TAB_ORDER: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
 const SWIPE_SETTLE_MS = 160
+// Panes sit side by side in a 300%-wide strip; each pane is 1/3 of the strip
+// (= one viewport). Neighbors stay visible while dragging, so a swipe is one
+// continuous motion instead of "blank gap then content swap".
+const PANE_WIDTH_PCT = 100 / 3
+const stripTransform = (idx: number) => `translateX(${-idx * PANE_WIDTH_PCT}%)`
+const PANE_STYLE: React.CSSProperties = { width: `${PANE_WIDTH_PCT}%`, height: '100%', overflow: 'hidden', flexShrink: 0 }
 
 function MobileLayout() {
   const { t } = useTranslation()
@@ -318,24 +324,34 @@ function MobileLayout() {
   } = useAppStore()
   const { vvHeight } = useKeyboardHeight()
 
-  const contentRef = useRef<HTMLDivElement>(null)
-  const swipeCommitRef = useRef(false)
+  const stripRef = useRef<HTMLDivElement>(null)
   const settlingRef = useRef(false)
+  const prevIdxRef = useRef<number | null>(null)
   const dragRef = useRef<{ startX: number; startY: number; dx: number; axis: 'x' | 'y' | null } | null>(null)
 
-  const settleTransform = useCallback((x: number, onDone: () => void) => {
-    const el = contentRef.current
-    if (!el) { onDone(); return }
+  const tabIdx = TAB_ORDER.indexOf(activeTab)
+
+  // Single animation path for both swipe commits and nav taps: whenever the
+  // active tab changes, glide the strip from wherever it is (base position or
+  // mid-drag offset) to the new base — one continuous motion, no double slide.
+  useEffect(() => {
+    const el = stripRef.current
+    if (!el || prevIdxRef.current === tabIdx) return
+    const first = prevIdxRef.current === null
+    prevIdxRef.current = tabIdx
+    if (first) {
+      el.style.transform = stripTransform(tabIdx)
+      return
+    }
     settlingRef.current = true
     el.style.transition = `transform ${SWIPE_SETTLE_MS}ms ease-out`
-    el.style.transform = `translateX(${x}px)`
-    window.setTimeout(() => {
+    el.style.transform = stripTransform(tabIdx)
+    const timer = window.setTimeout(() => {
       el.style.transition = ''
-      el.style.transform = ''
       settlingRef.current = false
-      onDone()
     }, SWIPE_SETTLE_MS)
-  }, [])
+    return () => window.clearTimeout(timer)
+  }, [tabIdx])
 
   const onSwipeStart = useCallback((e: React.TouchEvent) => {
     if (settlingRef.current) return
@@ -347,7 +363,7 @@ function MobileLayout() {
 
   const onSwipeMove = useCallback((e: React.TouchEvent) => {
     const drag = dragRef.current
-    if (!drag || !contentRef.current) return
+    if (!drag || !stripRef.current) return
     const touch = e.touches[0]
     const dx = touch.clientX - drag.startX
     const dy = touch.clientY - drag.startY
@@ -359,29 +375,34 @@ function MobileLayout() {
     const idx = TAB_ORDER.indexOf(activeTab)
     const damped = applyEdgeResistance(dx, idx > 0, idx < TAB_ORDER.length - 1)
     drag.dx = damped
-    contentRef.current.style.transform = `translateX(${damped}px)`
+    stripRef.current.style.transition = 'none'
+    stripRef.current.style.transform = `translateX(calc(${-idx * PANE_WIDTH_PCT}% + ${damped}px))`
   }, [activeTab])
 
   const onSwipeEnd = useCallback(() => {
     const drag = dragRef.current
     dragRef.current = null
-    if (!drag || drag.axis !== 'x' || !contentRef.current) return
+    if (!drag || drag.axis !== 'x' || !stripRef.current) return
     const idx = TAB_ORDER.indexOf(activeTab)
     const canPrev = idx > 0
     const canNext = idx < TAB_ORDER.length - 1
     const commit = resolveSwipeCommit(drag.dx, canPrev, canNext)
     if (!commit) {
-      settleTransform(0, () => {})
+      // Snap back to the current pane
+      const el = stripRef.current
+      settlingRef.current = true
+      el.style.transition = `transform ${SWIPE_SETTLE_MS}ms ease-out`
+      el.style.transform = stripTransform(idx)
+      window.setTimeout(() => {
+        el.style.transition = ''
+        settlingRef.current = false
+      }, SWIPE_SETTLE_MS)
       return
     }
-    const width = contentRef.current.clientWidth
-    const target = commit === 'next' ? TAB_ORDER[idx + 1] : TAB_ORDER[idx - 1]
     hapticTap()
-    settleTransform(commit === 'next' ? -width : width, () => {
-      swipeCommitRef.current = true // MobileContent skips its slide animations (D4)
-      setActiveTab(target)
-    })
-  }, [activeTab, setActiveTab, settleTransform])
+    // Tab-change effect glides the strip from the dragged offset to the target
+    setActiveTab(commit === 'next' ? TAB_ORDER[idx + 1] : TAB_ORDER[idx - 1])
+  }, [activeTab, setActiveTab])
 
   const handleSwipeSession = useCallback((dir: 'prev' | 'next') => {
     if (activeExternalSession) return // external tmux sessions have no DB ordering
@@ -409,7 +430,6 @@ function MobileLayout() {
           onSwipeSession={handleSwipeSession}
         />
         <div
-          ref={contentRef}
           className="flex-1 overflow-hidden"
           style={{ touchAction: 'pan-y' }}
           onTouchStart={mobileGestureEnabled ? onSwipeStart : undefined}
@@ -417,7 +437,11 @@ function MobileLayout() {
           onTouchEnd={mobileGestureEnabled ? onSwipeEnd : undefined}
           onTouchCancel={mobileGestureEnabled ? onSwipeEnd : undefined}
         >
-          <MobileContent swipeCommitRef={swipeCommitRef} />
+          <div ref={stripRef} style={{ display: 'flex', width: '300%', height: '100%', willChange: 'transform' }}>
+            <div style={PANE_STYLE}><Sidebar /></div>
+            <div style={PANE_STYLE}><SessionView key={activeSessionId ?? 'empty'} /></div>
+            <div style={PANE_STYLE}><RightPanel /></div>
+          </div>
         </div>
         <MobileNav />
       </div>
@@ -428,62 +452,4 @@ function MobileLayout() {
       {crtScanlines && <div className="crt-overlay" />}
     </>
   )
-}
-
-function MobileContent({ swipeCommitRef }: { swipeCommitRef: React.MutableRefObject<boolean> }) {
-  const activeTab = useAppStore((s) => s.activeTab)
-  const activeSessionId = useAppStore((s) => s.activeSessionId)
-  const [displayedTab, setDisplayedTab] = useState(activeTab)
-  const [animState, setAnimState] = useState<'idle' | 'exiting'>('idle')
-
-  useEffect(() => {
-    if (activeTab === displayedTab) return
-
-    // Swipe commit: the finger already conveyed direction/distance — switch
-    // instantly instead of replaying slide animations (would double-translate).
-    if (swipeCommitRef.current) {
-      swipeCommitRef.current = false
-      setDisplayedTab(activeTab)
-      setAnimState('idle')
-      return
-    }
-
-    // Determine if current content needs exit animation
-    const needsExit = displayedTab === 'sessions' || displayedTab === 'files'
-    
-    if (needsExit) {
-      setAnimState('exiting')
-      const timer = setTimeout(() => {
-        setDisplayedTab(activeTab)
-        setAnimState('idle')
-      }, 200)
-      return () => clearTimeout(timer)
-    } else {
-      setDisplayedTab(activeTab)
-    }
-  }, [activeTab, displayedTab, swipeCommitRef])
-
-  const getAnimation = () => {
-    if (animState === 'exiting') {
-      if (displayedTab === 'sessions') return 'mobileSlideOutLeft 0.2s ease-in forwards'
-      if (displayedTab === 'files') return 'mobileSlideOutRight 0.2s ease-in forwards'
-    }
-    // Enter animations
-    if (displayedTab === 'sessions') return 'mobileSlideInLeft 0.25s ease-out'
-    if (displayedTab === 'files') return 'mobileSlideInRight 0.25s ease-out'
-    return ''
-  }
-
-  const wrapperStyle = { height: '100%', animation: getAnimation() || undefined }
-
-  switch (displayedTab) {
-    case 'terminal':
-      return <SessionView key={activeSessionId ?? 'empty'} />
-    case 'files':
-      return <div style={wrapperStyle}><RightPanel /></div>
-    case 'sessions':
-      return <div style={wrapperStyle}><Sidebar /></div>
-    default:
-      return <SessionView key={activeSessionId ?? 'empty'} />
-  }
 }

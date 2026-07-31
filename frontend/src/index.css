@@ -2599,23 +2599,6 @@ select optgroup option {
 /* ────────────────────────────────────────────────────────────────────
    Mobile layout animations & components
    ──────────────────────────────────────────────────────────────────── */
-@keyframes mobileSlideInLeft {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
-}
-@keyframes mobileSlideInRight {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-@keyframes mobileSlideOutLeft {
-  from { transform: translateX(0); }
-  to { transform: translateX(-100%); }
-}
-@keyframes mobileSlideOutRight {
-  from { transform: translateX(0); }
-  to { transform: translateX(100%); }
-}
-
 @keyframes mobileNavPulse {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.18); }
