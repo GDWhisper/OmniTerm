@@ -72,6 +72,8 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-08-01 01:25) `[frontend]` 文件抽屉默认高度改为视口 50%：FileDrawer（文件管理器与 GIT 面板「在编辑器中打开」两个入口）无历史记录时初始高度由固定 256px 改为视口高度一半（约文件管理器高度的 50%），拖拽后仍按记录值恢复；git diff 抽屉共用同一高度状态，默认同步提升（`frontend/src/utils/drawer.ts`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/GitPanel/GitPanel.tsx`）
+
 - (2026-08-01 01:20) `[frontend]` 底部抽屉骨架抽取：FileDrawer/GitDrawer 共用的外层容器、木纹标题栏、高度拖拽条（含拖拽状态机）提取为 `DrawerShell` + `useDrawerResize`，消除两处复制逻辑；拖拽把手圆角统一为 0（符合 ui-style-guide 全局硬角约定）（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/GitPanel/GitDrawer.tsx`）
 
 ### Fixed

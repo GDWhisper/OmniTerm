@@ -4,6 +4,7 @@ import { api, ApiError, type GitBind, type GitLogEntry, type GitStatusEntry } fr
 import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
 import { useToastStore } from '../../stores/toastStore'
+import { getInitialDrawerHeight } from '../../utils/drawer'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
@@ -66,10 +67,7 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [drawerTarget, setDrawerTarget] = useState<GitDrawerTarget | null>(null)
   /** Absolute path of a file opened in the shared FileDrawer from the diff view. */
   const [editorTarget, setEditorTarget] = useState<string | null>(null)
-  const [drawerHeight, setDrawerHeight] = useState(() => {
-    const stored = sessionStorage.getItem('omniterm_git_drawer_height')
-    return stored ? parseInt(stored) : 256
-  })
+  const [drawerHeight, setDrawerHeight] = useState(() => getInitialDrawerHeight('omniterm_git_drawer_height'))
   const [log, setLog] = useState<GitLogEntry[]>([])
   const [logHasMore, setLogHasMore] = useState(false)
   const [logLoading, setLogLoading] = useState(false)

@@ -46,6 +46,7 @@
   - 拖拽逻辑在 `useDrawerResize`（`frontend/src/hooks/useDrawerResize.ts`）：window mousemove/mouseup 生命周期、高度钳制 [120, innerHeight-60]
 - 调用方提供：header 行（标题 + 操作按钮）、内容区（`flex: 1, minHeight: 0`）、可选状态栏
 - 高度持久化由调用方做（FileDrawer → FileManager `omniterm_drawer_height`；GitDrawer → GitPanel `omniterm_git_drawer_height`），hook 只做纯拖拽状态机
+- **默认高度**：无历史记录时取视口高度 50%（`getInitialDrawerHeight`，`frontend/src/utils/drawer.ts`，与拖拽钳制同范围）——点开文件默认占文件管理器一半
 - 禁止复制拖拽逻辑/外层容器样式——新抽屉一律基于 DrawerShell
 
 **已有案例**：FileDrawer（文件查看/编辑）、GitDrawer（diff/commit 查看）
