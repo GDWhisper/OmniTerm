@@ -137,7 +137,13 @@ enum AcpServerMessage<'a> {
         message: &'a str,
     },
     #[serde(rename = "session_update")]
-    SessionUpdate { data: serde_json::Value },
+    SessionUpdate {
+        data: serde_json::Value,
+        /// accumulator 赋予该帧的 turn 内单调 seq；非 turn 帧（config/commands/重放）为 None。
+        /// 前端据此对进行中 turn 的 live 帧去重（见 turn_snapshot 帧与 useAcpChat 对账）。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
     #[serde(rename = "prompt_done")]
     PromptDone { stop_reason: &'a str },
     #[serde(rename = "prompt_error")]
@@ -163,33 +169,43 @@ enum AcpServerMessage<'a> {
     /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
     #[serde(rename = "capabilities")]
     Capabilities { image: bool, agent_name: String },
+    /// 连接时下发当前是否有进行中的 assistant turn。`active:false` 时前端定稿
+    /// 任何残留的 streaming 消息（turn 在 WS 断开期间已结束的兜底）。
+    #[serde(rename = "turn_state")]
+    TurnState { active: bool },
+    /// 连接时下发进行中 turn 的快照，供重连客户端无缝续接（仅 active 且已折叠过帧时）。
+    /// `blocks` 是 `{"v":1,"frames":[...]}` 原始帧包裹；`seq` 为已折叠进该行的最高水位，
+    /// 后续 live 帧 seq 大于它才应用（见 useAcpChat 对账）。
+    #[serde(rename = "turn_snapshot")]
+    TurnSnapshot { row_id: String, text: String, blocks: String, seq: u64 },
 }
 
 /// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
 /// 返回 false 表示通道已关闭（WS 断开），调用方可据此提前退出。
 async fn forward_session_update(
     tx: &tokio::sync::mpsc::Sender<Message>,
-    notif: &agent_client_protocol::schema::v1::SessionNotification,
+    notif: &crate::acp::handler::SeqNotification,
 ) -> bool {
-    let data = serde_json::to_value(notif).unwrap_or_default();
-    let frame =
-        serde_json::to_string(&AcpServerMessage::SessionUpdate { data }).unwrap_or_default();
+    let data = serde_json::to_value(&notif.notification).unwrap_or_default();
+    let frame = serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: notif.seq })
+        .unwrap_or_default();
     tx.send(Message::Text(frame.into())).await.is_ok()
 }
 
 async fn spawn_notify_task(
-    mut rx: tokio::sync::broadcast::Receiver<
-        agent_client_protocol::schema::v1::SessionNotification,
-    >,
+    mut rx: tokio::sync::broadcast::Receiver<crate::acp::handler::SeqNotification>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(notification) => {
-                    let data = serde_json::to_value(&notification).unwrap_or_default();
-                    let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                        .unwrap_or_default();
+                Ok(seq_notif) => {
+                    let data = serde_json::to_value(&seq_notif.notification).unwrap_or_default();
+                    let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate {
+                        data,
+                        seq: seq_notif.seq,
+                    })
+                    .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
@@ -326,7 +342,28 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let mut client: Option<Arc<AcpClient>> = match state.acp_supervisor.get(&session_id).await {
         Some(c) => {
             info!("ACP WS connected: session_id={} (supervisor hit)", session_id);
+            // subscribe-before-snapshot：先订阅再取快照，消除两者之间的丢帧 gap，
+            // 把重叠窗退化为 seq 可解的重复窗（前端按 seq 去重，见 turn_snapshot 帧）。
             let rx = c.session_update_subscribe();
+            // 快照与 turn 帧必须先经 notify_tx 入队，再 spawn_notify_task 转发 live 帧；
+            // notify_tx 为 FIFO 单消费者，故快照帧保证先于任何 live 帧到达前端。
+            let snap = c.turn_snapshot();
+            let ts_msg =
+                serde_json::to_string(&AcpServerMessage::TurnState { active: snap.active })
+                    .unwrap_or_default();
+            let _ = notify_tx.send(Message::Text(ts_msg.into())).await;
+            if snap.active
+                && let Some(row_id) = snap.row_id
+            {
+                let snap_msg = serde_json::to_string(&AcpServerMessage::TurnSnapshot {
+                    row_id,
+                    text: snap.text,
+                    blocks: snap.blocks,
+                    seq: snap.seq,
+                })
+                .unwrap_or_default();
+                let _ = notify_tx.send(Message::Text(snap_msg.into())).await;
+            }
             spawn_notify_task(rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
             spawn_permission_task(perm_rx, notify_tx.clone()).await;
@@ -346,14 +383,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                    .unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: None })
+                        .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             if let Some(notif) = c.initial_commands_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
-                let msg = serde_json::to_string(&AcpServerMessage::SessionUpdate { data })
-                    .unwrap_or_default();
+                let msg =
+                    serde_json::to_string(&AcpServerMessage::SessionUpdate { data, seq: None })
+                        .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
             let agent_name = query_agent_name(&state.db, &session_id).await;

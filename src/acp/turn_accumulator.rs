@@ -114,11 +114,15 @@ impl TurnAccumulator {
 
     /// Fold one agent notification into the active turn. No-op when no turn is active
     /// (e.g. `load_session` replay frames), keeping replay out of live persistence.
-    pub fn fold(&self, notification: &SessionNotification) {
-        let ping = {
-            let Ok(mut st) = self.inner.lock() else { return };
+    ///
+    /// Returns the monotonic `seq` assigned to this frame when a turn is active, or
+    /// `None` otherwise. The caller stamps this seq onto the broadcast payload so
+    /// reconnecting clients can reconcile live frames against a `turn_snapshot`.
+    pub fn fold(&self, notification: &SessionNotification) -> Option<u64> {
+        let seq = {
+            let Ok(mut st) = self.inner.lock() else { return None };
             if !st.active {
-                return;
+                return None;
             }
             st.seq += 1;
             if st.row_id.is_none() {
@@ -134,11 +138,10 @@ impl TurnAccumulator {
                 }
             }
             st.dirty = true;
-            true
+            st.seq
         };
-        if ping {
-            self.send_cmd(WriterCmd::Flush);
-        }
+        self.send_cmd(WriterCmd::Flush);
+        Some(seq)
     }
 
     /// Close the active turn and finalize its row. Idempotent: a no-op if no turn is
@@ -174,6 +177,35 @@ impl TurnAccumulator {
         let blocks = json!({ "v": RAW_FRAMES_VERSION, "frames": st.frames }).to_string();
         Some(FlushSnapshot { row_id, text: st.text.clone(), blocks, last_seq: st.seq as i64 })
     }
+
+    /// Snapshot the live turn state for a freshly-connected WS client (reconnect
+    /// reconciliation). Always reports `active` and the current `seq` high-water mark;
+    /// `row_id` is `None` until the first frame is folded. See the WS `turn_snapshot`
+    /// frame and the frontend reconciliation in `useAcpChat`.
+    pub fn turn_snapshot(&self) -> TurnSnapshot {
+        let Ok(st) = self.inner.lock() else {
+            return TurnSnapshot::default();
+        };
+        let blocks = json!({ "v": RAW_FRAMES_VERSION, "frames": st.frames }).to_string();
+        TurnSnapshot {
+            active: st.active,
+            row_id: st.row_id.clone(),
+            text: st.text.clone(),
+            blocks,
+            seq: st.seq,
+        }
+    }
+}
+
+/// Live turn state handed to a connecting WS client so it can resume an in-progress
+/// assistant turn without gaps or duplicates.
+#[derive(Default)]
+pub struct TurnSnapshot {
+    pub active: bool,
+    pub row_id: Option<String>,
+    pub text: String,
+    pub blocks: String,
+    pub seq: u64,
 }
 
 impl Default for TurnAccumulator {
