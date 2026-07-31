@@ -1,30 +1,34 @@
-# OmniTerm v0.2.4 更新摘要
+# OmniTerm v0.2.5 更新摘要
 
 > 本版本亮点由发布 agent 基于 CHANGELOG 手动总结。详细条目见 CHANGELOG.md。
 
 ## 新功能
 
-- ACP 会话消息后端权威持久化：agent 流式输出期间刷新页面 / 切换设备不再丢失进行中对话，重连后从数据库无缝续接
-- 认证安全加固：随机 JWT 密钥、登出/改密即吊销全部已签发 token、登录失败限流；新增「密码验证」总开关（默认关闭，可自行开启）
-- 移动端交互优化：终端触摸拖动滚动、标签页跟手滑动切换、触觉反馈开关、横屏自动隐藏虚拟键栏、长按终端粘贴菜单
-- 设置新增「会话」分类（思考/工具调用自动展开开关）与「tmux mouse mode」开关；聊天气泡显示 agent 实际名称
+- 新增 oh-my-pi（omp acp）与 qoder / qoder cn 内置 ACP 预设，`--acp` 模式下可直接选用
+- GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键跳转文件编辑器
+- ACP 聊天气泡 hover 显示消息系统时间（当天 `HH:mm`，跨天 `MM-DD HH:mm`，跨年完整日期）
+- 聊天气泡标识行（USER/agent 名）视觉增强，与气泡区隔更明显
 
 ## 重要修复
 
-- 修复移动端软键盘收起后整页底部被裁切、弹窗错位被裁出屏幕的问题
-- 根治 tmux status bar 内容间歇泄漏进终端 scrollback（xterm scrollback 归零）
-- 修复 ACP 长会话恢复后聊天记录被清空（后端并发重放 + 前端双缓冲原子提交）
-- 修复 ACP 审批 60 秒无人响应即被自动取消的协议违规
-- 修复移动端虚拟键栏按键大小不一，改为等宽均分 + 9 列网格对齐
+- 修复切换 tmux 会话时终端闪烁（~250ms 黑屏/重绘抖动）
+- 修复 ACP 会话取消后 agent 尾部输出不落库（刷新后取消前最后一段缺失）
+- 修复移动端 ACP 会话底部不可见、切换会话时输入区被裁切
+- 修复 ACP 恢复会话期间 WS 断线导致聊天界面永久冻结
+- 修复 agent 输出结束后前端仍显示「运行中」、收不到结束信号
+- 修复 ACP 权限审批在别处应答后其余连接 banner 不消失
+- 修复 thinking / 工具调用块大量流式更新时滚动条不锚定底部
 
 ## 工程改进
 
-- ACP 消息持久化 Phase 1：`chat_messages` 流式落库原语 + turn 内单调 seq + `turn_snapshot`/`turn_state` 重连对账
-- `session_update` broadcast 容量 256→4096，进一步压低慢消费者丢帧概率
+- Claude / Codex 预设改用社区 ACP 适配器（`@agentclientprotocol/*-acp`）
+- README 默认改回英文，中文版移至 `README_ZH.md` 并中英同步润色
+- 文件抽屉默认高度改为视口 50%；FileDrawer/GitDrawer 共享骨架抽取为 DrawerShell
+- 清理确定的死代码（GitBranchIcon 组件、pixelAnimations、3 个未使用依赖）
 
 ## 安装与升级
 
 - 新用户：使用 `install.sh`（Linux / macOS）或 `install.ps1`（Windows）一键安装
-- 升级：`omniterm update`、`npm update -g @gdwhisper/omniterm` 或 `cargo install omniterm`
+- 升级：`cargo install omniterm` 或从 Releases 下载对应平台 binary 覆盖
 
-**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.3...v0.2.4
+**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.4...v0.2.5
