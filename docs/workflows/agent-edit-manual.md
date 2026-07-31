@@ -36,6 +36,7 @@
 Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修复已落地：外层 `overflow:hidden` + 显式 `height` 裁切 `borderRadius` 圆弧，内层 `overflowY:auto` 滚动。**
 
 - `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关。改这里动设置项
+- `frontend/src/components/Settings/AgentSettings.tsx` + `frontend/src/components/Settings/presets.ts` — **agent 预设**：增/改预设只动 `presets.ts`（维护指引见其文件头 JSDoc），`AgentSettings.tsx` 一般不改；同时改两个 translation.json 的 `settings.agents.preset.*` key
 - `frontend/src/components/Settings/SettingsPopup.tsx` — **弹出层骨架**：定位、滚动、关闭逻辑。一般不改；改这里意味着动弹出行为。从 `../constants/popup` import 定位常量
 - `frontend/src/components/constants/popup.ts` — 移动端定位常量（`MOBILE_NAV_HEIGHT`、`SIDEBAR_BOTTOM_BAR_HEIGHT`、`MOBILE_STATUS_BAR_RESERVE`、`GAP`），SettingsPopup 与 TmuxCheatsheetPopup 共享
 - `frontend/src/stores/appStore.ts` — `settingsOpen` + `toggleSettings()`（与 `tmuxCheatsheetOpen` 互斥）

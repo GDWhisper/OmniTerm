@@ -55,6 +55,18 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
         command: "kiro-cli",
         args_json: r#"["acp"]"#,
     },
+    AgentPreset {
+        id: "preset-qoder",
+        display_name: "qoder",
+        command: "qoder",
+        args_json: r#"["--acp"]"#,
+    },
+    AgentPreset {
+        id: "preset-qoder-cn",
+        display_name: "qoder cn",
+        command: "qoderclicn",
+        args_json: r#"["--acp"]"#,
+    },
 ];
 
 /// Test whether `name` is findable on PATH.

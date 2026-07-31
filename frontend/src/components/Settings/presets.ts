@@ -76,4 +76,20 @@ export const AGENT_PRESETS: AgentPreset[] = [
     args: ['acp'],
     env: [],
   },
+  {
+    labelKey: 'settings.agents.preset.qoder.label',
+    hintKey: 'settings.agents.preset.qoder.hint',
+    display_name: 'qoder',
+    command: 'qoder',
+    args: ['--acp'],
+    env: [],
+  },
+  {
+    labelKey: 'settings.agents.preset.qoderCn.label',
+    hintKey: 'settings.agents.preset.qoderCn.hint',
+    display_name: 'qoder cn',
+    command: 'qoderclicn',
+    args: ['--acp'],
+    env: [],
+  },
 ]
