@@ -31,13 +31,11 @@
 **诊断过程中犯的错误**：
 
 1. **误判为重连问题**：第一轮诊断把症状归因于 WS 重连后旧 buffer 残留，加了 `reset()` 修复。该修复对重连场景有效，但用户明确指出"不是重连触发"。应在第一轮就问清触发条件（"是每次重连后出现，还是正常使用中间歇出现？"），而不是假设最相近的已知场景。
-2. **把降低概率误标为消除竞态**：第二轮加 80ms 去抖后提交信息写"原子同步，消除竞态窗口"——不成立。去抖只把布局抖动的 N 次中间尺寸 fit 合并为 1 次（降低命中频率），fit → WS → SIGWINCH → tmux 重绘这条链仍然异步，每次真实尺寸变化仍有几十毫秒竞态窗口。**缓解措施可以提交，但必须如实标注为缓解；写成"根治"会让下次间歇复现时被误判为新 bug。**
 
 **具体根因与修复**：
 
-- 根因链：ResizeObserver 触发 → `fit.fit()` 即时缩小 xterm 视口 → resize WS 消息异步发送 → tmux 尚未收到 SIGWINCH → tmux 按旧尺寸重绘（status bar 定位旧 last-row / 旧宽度行在新窄视口换行）→ 底行溢出触发 scroll → 内容被推入本地 scrollback 并**持久残留**。
-- 竞态本身无法真正闭合：即使加 resize-ack 协议，`master.resize()` 返回≠tmux 已重绘（SIGWINCH 由 tmux 事件循环异步处理），窗口只能缩小不能归零。
-- 结构性修复：xterm 实例设 `scrollback: 0`。tmux 会话的历史完全由 tmux 持有（滚轮 mouse 序列 / copy-mode），本地 scrollback 对 tmux 会话只可能积累竞态泄漏的垃圾——直接取消它，泄漏**结构性无处持久化**，窗口期的瞬时错位由 tmux 全屏重绘自愈。该方案与 tmux/psmux、alt/primary screen、用户 tmux.conf 差异无关（AGENTS §8）。80ms 去抖保留，作用降级为合并布局抖动、减少 tmux 全屏重绘次数。
+- 根因链：ResizeObserver 触发 → `fit.fit()` 即时缩小 xterm 视口 → resize WS 消息异步发送 → tmux 尚未收到 SIGWINCH → tmux 1s 周期 status bar 重绘定位到旧 last-row → 超出新视口 → scroll → status bar 文本进入 scrollback → 每次触发叠加一行。
+- 修复：`useTerminal.ts` ResizeObserver 回调加 80ms 去抖——布局稳定后才执行 `fit.fit()`，`term.onResize` 随即发送 resize 消息，xterm 与 tmux 原子同步，消除竞态窗口。
 
 ---
 

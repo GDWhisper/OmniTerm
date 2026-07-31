@@ -441,14 +441,6 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
-      // History lives in tmux (mouse wheel / copy-mode), never in xterm.
-      // A local scrollback would only ever accumulate junk: during the
-      // async resize window (fit.fit() → WS → SIGWINCH → tmux redraw),
-      // tmux output rendered at the old size can overflow the new viewport
-      // and scroll — with scrollback 0 nothing can persist, and tmux's
-      // full redraw self-heals the visible screen. Holds regardless of
-      // tmux/psmux, alt/primary screen, or user tmux.conf differences.
-      scrollback: 0,
     })
 
     const fit = new FitAddon()
@@ -481,11 +473,11 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
-    // Handle resize — debounced to coalesce layout jitter (sidebar
-    // animation, scrollbar flicker) into one fit, sparing tmux a full
-    // redraw per intermediate size. Note the frontend→backend resize
-    // remains async (fit → WS → SIGWINCH → tmux redraw); that window is
-    // rendered harmless by scrollback: 0 above, not by this debounce.
+    // Handle resize — debounced so xterm.js and tmux resize together after
+    // layout stabilizes. Without debounce, fit.fit() changes xterm dimensions
+    // immediately while tmux still has the old size; if tmux redraws its
+    // status bar in that window it renders at the old last-row (now beyond
+    // the viewport), scrolling content into scrollback.
     const observer = new ResizeObserver(() => {
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current)
       resizeTimerRef.current = setTimeout(() => {
