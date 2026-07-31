@@ -88,6 +88,8 @@
   "settings.tmuxMouseHint": "启用 tmux 鼠标支持（滚动、选中、拖拽调整窗格大小）",
   "settings.mobileGesture": "滑动手势",
   "settings.mobileGestureHint": "在内容区左右滑动切换标签页（终端内横向拖动为选择文本）",
+  "settings.mobileHaptic": "触觉反馈",
+  "settings.mobileHapticHint": "虚拟按键、导航点按与滑动切换时短震动（iOS Safari 不支持）",
   "settings.immersiveMode": "沉浸模式",
   "settings.immersiveModeHint": "隐藏浏览器 UI，最大化终端显示空间。按 ESC 或从顶部边缘下滑可退出。",
   "settings.pixelAnimations": "像素动效",

@@ -86,6 +86,7 @@ export interface AppState {
   isMobile: boolean
   activeTab: 'terminal' | 'files' | 'sessions'
   mobileGestureEnabled: boolean
+  mobileHapticEnabled: boolean
   mobileFontSize: number
   mobileLastTab: string
 
@@ -148,6 +149,7 @@ export interface AppState {
   setActiveTab: (tab: AppState['activeTab']) => void
   setRightPanelTab: (tab: AppState['rightPanelTab']) => void
   setMobileGestureEnabled: (v: boolean) => void
+  setMobileHapticEnabled: (v: boolean) => void
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
   setPixelAnimationsEnabled: (v: boolean) => void
@@ -227,6 +229,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
+  mobileHapticEnabled: localStorage.getItem('omniterm_mobile_haptic_enabled') !== 'false',
   mobileFontSize: parseInt(localStorage.getItem('omniterm_mobile_font_size') || '13'),
   mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
@@ -355,6 +358,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMobileGestureEnabled: (v) => {
     localStorage.setItem('omniterm_mobile_gesture_enabled', String(v))
     set({ mobileGestureEnabled: v })
+  },
+  setMobileHapticEnabled: (v) => {
+    localStorage.setItem('omniterm_mobile_haptic_enabled', String(v))
+    set({ mobileHapticEnabled: v })
   },
   setMobileFontSize: (s) => {
     const clamped = Math.max(12, Math.min(20, s))

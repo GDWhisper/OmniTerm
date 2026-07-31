@@ -88,6 +88,8 @@
   "settings.tmuxMouseHint": "Enable tmux mouse support (scroll, select, resize panes with mouse)",
   "settings.mobileGesture": "Swipe gestures",
   "settings.mobileGestureHint": "Swipe left/right on the content area to switch tabs (horizontal drag inside the terminal selects text)",
+  "settings.mobileHaptic": "Haptic feedback",
+  "settings.mobileHapticHint": "Short vibration on virtual keys, nav taps and swipe commits (not supported on iOS Safari)",
   "settings.immersiveMode": "Immersive mode",
   "settings.immersiveModeHint": "Hide browser UI for maximum terminal space. Press ESC or swipe down from top edge to exit.",
   "settings.pixelAnimations": "Pixel Animations",

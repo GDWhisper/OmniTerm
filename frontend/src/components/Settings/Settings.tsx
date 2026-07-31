@@ -610,6 +610,12 @@ function MobileGestureSection() {
   return <ToggleRow labelKey="settings.mobileGesture" hintKey="settings.mobileGestureHint" value={mobileGestureEnabled} onToggle={() => setMobileGestureEnabled(!mobileGestureEnabled)} />
 }
 
+function MobileHapticSection() {
+  const mobileHapticEnabled = useAppStore((s) => s.mobileHapticEnabled)
+  const setMobileHapticEnabled = useAppStore((s) => s.setMobileHapticEnabled)
+  return <ToggleRow labelKey="settings.mobileHaptic" hintKey="settings.mobileHapticHint" value={mobileHapticEnabled} onToggle={() => setMobileHapticEnabled(!mobileHapticEnabled)} />
+}
+
 function ImmersiveSection() {
   const immersiveMode = useAppStore((s) => s.immersiveMode)
   const setImmersiveMode = useAppStore((s) => s.setImmersiveMode)
@@ -677,7 +683,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'mobile',
     labelKey: 'settings.category.mobile',
-    sections: [MobileGestureSection, ImmersiveSection],
+    sections: [MobileGestureSection, MobileHapticSection, ImmersiveSection],
     mobileOnly: true,
   },
 ]
