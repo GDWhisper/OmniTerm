@@ -41,7 +41,7 @@ omniterm                      # 打开 http://localhost:9077
 
 在浏览器里设好初始密码、添加项目目录，就能开会话了——选中助手进聊天模式，留空则是普通终端。升级只需一句 `omniterm update`。
 
-<details>
+<details open>
 <summary>其他安装方式（npm / Shell 脚本 / PowerShell / Docker）</summary>
 
 **前置条件**：tmux（Windows 上用 [psmux](https://github.com/psmux/psmux) 代替）。

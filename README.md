@@ -41,7 +41,7 @@ omniterm                      # open http://localhost:9077
 
 In the browser, set an initial password, add a project directory, and start a session — pick an agent for chat mode, or leave it blank for a plain terminal. Upgrade anytime with `omniterm update`.
 
-<details>
+<details open>
 <summary>Other install methods (npm / Shell script / PowerShell / Docker)</summary>
 
 **Prerequisites**: tmux (on Windows, use [psmux](https://github.com/psmux/psmux) instead).

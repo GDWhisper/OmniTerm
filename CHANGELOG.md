@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-01 01:40) `[docs]` README 安装方式区块默认展开（`<details open>`）：npm / Shell 脚本 / PowerShell / Docker 等除 cargo 外的安装方式不再折叠，中英同步（`README.md`、`README_ZH.md`）
+
 - (2026-08-01 01:20) `[frontend]` `[api]` GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键把当前文件切到文件编辑器（复用 FileDrawer 的查看/编辑/保存能力），路径由 `/git/diff` 新增的 `root` 字段（仓库根，后端 ADR-2 已解析）拼接相对路径得出（`frontend/src/components/GitPanel/{GitDrawer,GitPanel}.tsx`、`frontend/src/api/client.ts`、`src/api/git.rs`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600）——纯文字方案（无底色/边框，避免与气泡堆叠），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡 hover 显示消息系统时间：鼠标悬停消息时在标识行（USER/agent 名）旁显示小字本地时间（非浏览器原生 tooltip）——当天仅 `HH:mm`，今年内跨天 `MM-DD HH:mm`，跨年 `YYYY-MM-DD HH:mm`；时间戳沿用既有 `createdAt` 全链路（内存 `Date.now()` + DB `created_at` 持久化），零存储改动（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/utils/formatTime.ts`）
