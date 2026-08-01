@@ -741,6 +741,14 @@ impl AcpClient {
         pending > 0 && last_activity.elapsed().as_secs() >= perm_secs
     }
 
+    /// 是否 prompt 疑似卡死：有进行中 prompt 但久无 agent 通知（agent 可能从未
+    /// 发送 PromptResponse，§8 多实现兼容兜底）。reaper 据此强制定稿 turn，
+    /// 避免前端永久卡在 running 态。
+    pub fn is_prompt_stale(&self, stale_secs: u64) -> bool {
+        let Ok(st) = self.activity.lock() else { return false };
+        st.active_prompt && st.last_activity.elapsed().as_secs() >= stale_secs
+    }
+
     pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
         let resp = self
             .connection
