@@ -930,3 +930,27 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 **2. 幂等的、目标状态持久的副作用 → 「成功一次后缓存跳过 + fire-and-forget」模式**。判断三问：目标状态是否持久（server 级选项 vs 会话级）？失败能否下次重试（不置位即可）？调用方是否真需要等结果（ESC 手感优化不阻塞 attach）？三者都成立就不该在热路径上 await。
 
 **3. 「只在某平台慢」的体感问题，先分解链路各段耗时再下结论**。用临时探针（复制真实链路：openpty→spawn→首字节→重绘完成逐段计时）把「感觉慢」变成数字表，才能区分可消除开销（自己加的 40ms）与固有成本（平台 100-200ms），避免在固有成本上白费力气或把可消除开销当成命运接受。
+
+---
+
+## 2026-08-02: ACP 会话 agent 已输出结论但前端永久卡在 running 态——broadcast 订阅-快照顺序竞态 + 无 PromptResponse 兜底
+
+**症状**：ACP 会话（Pi ACP_0802-0036）agent 已输出完整结论，前端面板仍显示「正在运行」，输入框不可用，需刷新页面或切换会话才能恢复。
+
+**可复用的理论/模式**：
+
+**1. broadcast 通道无历史：订阅时机决定可见性，「先快照后订阅」在快照与订阅之间留下不可恢复的丢帧窗口**。tokio broadcast channel 的 `subscribe()` 只接收订阅之后的消息，不重放历史。当「取状态快照」与「订阅后续事件」分两步执行时，若状态变更（turn 结束）恰好落在两步之间：快照报告旧状态（`active: true`），事件无订阅者而丢失——前端收到陈旧的 `turn_state{active:true}` 却永远等不到 `prompt_done`。**修复模式：所有需要在连接建立时同步的 broadcast 通道，订阅必须发生在快照之前**（subscribe-before-snapshot）。重叠窗口内至多收到一个幂等事件（`markDone` 可重入），不会造成状态错乱；而丢帧窗口是不可恢复的。此模式已在 `session_update_subscribe()` 上应用（注释明确写了 subscribe-before-snapshot），但 `turn_end_subscribe()` 遗漏了——**同一连接建立路径上的所有 broadcast 订阅必须统一遵守同一顺序约束，不能只给第一个加注释**。
+
+**2. 依赖外部实现的协议完成信号时，必须有本地超时兜底——「对方会发」不是不变式**。ACP v1 协议规定 agent 以 `PromptResponse` 结束 turn，但社区适配器（pi-acp 等）可能不发或延迟发。`send_prompt().await` 无超时 → 永远挂起 → `notify_turn_end` 永远不被调用 → 前端永远 running。**凡等待外部进程/网络对端发来的「完成」信号，都要有本地 watchdog**：reaper 周期性检查 `active_prompt && last_activity.elapsed() >= threshold`，超时强制定稿 + 广播结束。阈值要宽松（10 分钟，避免误杀合法的长思考），但必须存在。
+
+**诊断过程中的错误**：
+
+1. **初始假设偏向「agent 没发 PromptResponse」而忽略了纯后端竞态**：用户描述「agent 已输出结论」直觉指向 agent 实现问题，但代码审计发现 `turn_end_subscribe()` 在 `turn_snapshot()` 之后 34 行——这是一个确定性的竞态窗口，无需 agent 配合即可复现（WS 重连 + turn 恰好在此窗口结束）。**先审计自己的代码路径，再怀疑外部实现**。
+2. **broadcast 的 subscribe-before-snapshot 模式已有先例和注释，但只覆盖了 session_update 通道**：注释写了「先订阅再取快照，消除两者之间的丢帧 gap」，却只应用于 `session_update_subscribe()`，同一函数里的 `turn_end_subscribe()` / `crash_subscribe()` 都在快照之后。**模式注释的覆盖范围必须与模式的实际适用范围一致——如果一个模式适用于 N 个通道，注释和代码都要覆盖 N 个，否则遗漏的那个就是 bug**。
+
+**具体根因与修复**：
+
+- 根因链（竞态）：WS 连接建立 → `session_update_subscribe()`（L416，快照前）→ `turn_snapshot()`（L419，取 `active` 状态）→ 发送 `turn_state{active}` 帧 → … 34 行后 … → `turn_end_subscribe()`（L453）。若 turn 在 L419-L453 之间结束：`mark_prompt_idle()` 把 `accumulator.active` 置 false + `notify_turn_end()` 广播 `TurnEndEvent::Done`，但此时 `turn_end_subscribe()` 尚未调用 → 事件无订阅者丢失；`turn_state` 帧报告 `active: true`（陈旧快照）→ 前端 `beginPrompt()` 置 `sending: true` → 永远收不到 `prompt_done` → 永久卡死。
+- 修复①（竞态）：`turn_end_subscribe()` 移至 `turn_snapshot()` 之前（与 `session_update_subscribe()` 并列），`spawn_turn_end_task` 仍在快照帧发送之后调用（保持 notify_tx FIFO 顺序：`turn_state` 先于 `prompt_done`）。重叠窗内前端至多收到 `turn_state{active:true}` + `prompt_done`（幂等 markDone），或 `turn_state{active:false}`（直接 markDone），两种时序都收敛到正确终态。
+- 修复②（兜底）：`AcpClient::is_prompt_stale(secs)` + reaper 第三路检查（`PROMPT_STALE_SECS=600`）：prompt 进行中但 10 分钟无 agent 通知 → `mark_prompt_idle()` + `notify_turn_end(Done{InactivityTimeout})`。不杀进程（agent 可能仍可用于后续 prompt），下一轮 idle 检查按常规回收。
+- 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test` / `vitest run`（165 tests）全过。
