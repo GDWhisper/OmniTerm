@@ -386,6 +386,8 @@
   "settings.agents.preset.qoder.hint": "Spawns the Qoder CLI in ACP mode (--acp).",
   "settings.agents.preset.qoderCn.label": "qoder cn",
   "settings.agents.preset.qoderCn.hint": "Spawns the Qoder CLI (CN) in ACP mode (--acp).",
+  "settings.agents.preset.piAcp.label": "Pi ACP",
+  "settings.agents.preset.piAcp.hint": "Pi ACP has no built-in ACP; spawns the community adapter pi-acp via npx (https://github.com/svkozak/pi-acp).",
   "settings.agents.preset.ohMyPi.label": "oh-my-pi",
   "settings.agents.preset.ohMyPi.hint": "Spawns the oh-my-pi CLI in ACP mode (acp).",
   "todo.header": "{{count}} TODOS",

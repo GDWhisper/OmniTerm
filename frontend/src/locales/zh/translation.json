@@ -386,6 +386,8 @@
   "settings.agents.preset.qoder.hint": "以 ACP 模式（--acp）启动 Qoder CLI。",
   "settings.agents.preset.qoderCn.label": "qoder cn",
   "settings.agents.preset.qoderCn.hint": "以 ACP 模式（--acp）启动 Qoder CLI（中国版）。",
+  "settings.agents.preset.piAcp.label": "Pi ACP",
+  "settings.agents.preset.piAcp.hint": "pi-acp CLI 无内置 ACP，经 npx 启动社区适配器 pi-acp（https://github.com/svkozak/pi-acp）。",
   "settings.agents.preset.ohMyPi.label": "oh-my-pi",
   "settings.agents.preset.ohMyPi.hint": "以 ACP 模式（acp）启动 oh-my-pi CLI。",
   "todo.header": "{{count}} 个待办",

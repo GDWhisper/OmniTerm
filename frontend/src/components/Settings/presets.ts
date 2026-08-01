@@ -98,6 +98,15 @@ export const AGENT_PRESETS: AgentPreset[] = [
     env: [],
   },
   {
+    labelKey: 'settings.agents.preset.piAcp.label',
+    hintKey: 'settings.agents.preset.piAcp.hint',
+    display_name: 'Pi',
+    // pi-acp 是社区 ACP 适配器，经 npx 启动，无需全局安装。
+    command: 'npx',
+    args: ['-y', 'pi-acp'],
+    env: [],
+  },
+  {
     labelKey: 'settings.agents.preset.ohMyPi.label',
     hintKey: 'settings.agents.preset.ohMyPi.hint',
     display_name: 'oh-my-pi',
