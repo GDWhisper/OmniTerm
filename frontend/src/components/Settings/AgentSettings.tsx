@@ -320,7 +320,7 @@ export function AgentSettings() {
             style={inputStyle}
             value={form.npm_package}
             onChange={(e) => setForm((f) => ({ ...f, npm_package: e.target.value }))}
-            placeholder="@scope/package"
+            placeholder={t('settings.agents.npmPackagePlaceholder')}
           />
         </Field>
 

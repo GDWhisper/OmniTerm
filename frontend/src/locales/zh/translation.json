@@ -359,6 +359,7 @@
   "settings.agents.command": "命令",
   "settings.agents.args": "参数（空格分隔）",
   "settings.agents.npmPackage": "npm 包名（PATH 中找不到时自动安装）",
+  "settings.agents.npmPackagePlaceholder": "原生支持 ACP 的 agent 无需填写",
   "settings.agents.env": "环境变量",
   "settings.agents.addEnv": "添加",
   "settings.agents.delete": "删除",
