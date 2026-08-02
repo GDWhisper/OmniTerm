@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-02 15:00) `[backend]` `[frontend]` ACP agent 命令解析：PATH 优先 → `~/.omniterm/agents/` 私有目录回退 → 首次使用自动 `npm install`（lazy install）。npx 启动的第三方适配器（Claude/Codex/Pi 预设）改为直接 binary + `npm_package` 字段，消除每次启动 ~1-2s 的 npx resolve 延迟；无 npm 环境时返回明确提示（`src/acp/resolve.rs`、`migrations/20260802_add_npm_package_to_agents.sql`、`frontend/src/components/Settings/presets.ts`）
+
 - (2026-08-01 01:40) `[docs]` README 安装方式区块默认展开（`<details open>`）：npm / Shell 脚本 / PowerShell / Docker 等除 cargo 外的安装方式不再折叠，中英同步（`README.md`、`README_ZH.md`）
 
 - (2026-08-01 01:20) `[frontend]` `[api]` GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键把当前文件切到文件编辑器（复用 FileDrawer 的查看/编辑/保存能力），路径由 `/git/diff` 新增的 `root` 字段（仓库根，后端 ADR-2 已解析）拼接相对路径得出（`frontend/src/components/GitPanel/{GitDrawer,GitPanel}.tsx`、`frontend/src/api/client.ts`、`src/api/git.rs`、`frontend/src/locales/{en,zh}/translation.json`）
