@@ -142,6 +142,7 @@ export interface Agent {
   command: string
   args: string[]
   env: AgentEnvVar[]
+  npm_package?: string
   created_at: string
   updated_at: string
 }
@@ -152,6 +153,7 @@ export interface CreateAgent {
   command: string
   args?: string[]
   env?: AgentEnvVar[]
+  npm_package?: string
 }
 
 export interface UpdateAgent {
@@ -159,6 +161,7 @@ export interface UpdateAgent {
   command?: string
   args?: string[]
   env?: AgentEnvVar[]
+  npm_package?: string | null
 }
 
 export interface ExternalSession {

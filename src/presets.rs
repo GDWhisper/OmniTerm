@@ -73,6 +73,14 @@ const BUILTIN_PRESETS: &[AgentPreset] = &[
         args_json: r#"["--acp"]"#,
     },
     AgentPreset {
+        id: "preset-pi-acp",
+        display_name: "Pi",
+        // pi-acp 是社区 ACP 适配器（https://github.com/svkozak/pi-acp），
+        // 需经 npx 启动，无需全局安装。
+        command: "npx",
+        args_json: r#"["-y", "pi-acp"]"#,
+    },
+    AgentPreset {
         id: "preset-oh-my-pi",
         display_name: "oh-my-pi",
         command: "omp",

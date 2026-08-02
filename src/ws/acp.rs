@@ -414,6 +414,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             // subscribe-before-snapshot：先订阅再取快照，消除两者之间的丢帧 gap，
             // 把重叠窗退化为 seq 可解的重复窗（前端按 seq 去重，见 turn_snapshot 帧）。
             let rx = c.session_update_subscribe();
+            // turn_end 也须在快照前订阅：若 turn 在快照与订阅之间结束，旧代码会发出
+            // 陈旧的 turn_state{active:true} 且 prompt_done 事件无订阅者而丢失，
+            // 前端永久卡在 running 态。订阅先于快照后，重叠窗内至多收到一个幂等的
+            // prompt_done（markDone 可重入），不会造成状态错乱。
+            let turn_end_rx = c.turn_end_subscribe();
             // 快照与 turn 帧必须先经 notify_tx 入队，再 spawn_notify_task 转发 live 帧；
             // notify_tx 为 FIFO 单消费者，故快照帧保证先于任何 live 帧到达前端。
             let snap = c.turn_snapshot();
@@ -450,7 +455,6 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             }
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
-            let turn_end_rx = c.turn_end_subscribe();
             spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(term_rx, notify_tx.clone()).await;
