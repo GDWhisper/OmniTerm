@@ -47,13 +47,23 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [0.2.5] - 2026-08-01
+## [0.2.6] - 2026-08-02
 
 ### Added
 
 - (2026-08-02 15:00) `[backend]` `[frontend]` ACP agent 命令解析：PATH 优先 → `~/.omniterm/agents/` 私有目录回退 → 首次使用自动 `npm install`（lazy install）。npx 启动的第三方适配器（Claude/Codex/Pi 预设）改为直接 binary + `npm_package` 字段，消除每次启动 ~1-2s 的 npx resolve 延迟；无 npm 环境时返回明确提示（`src/acp/resolve.rs`、`migrations/20260802_add_npm_package_to_agents.sql`、`frontend/src/components/Settings/presets.ts`）
-
+- (2026-08-02 16:00) `[frontend]` Agent 表单显露 npm 包名字段（高级选项）：预设 agent 的 `npm_package` 可在编辑表单中查看/修改，placeholder 提示原生 ACP agent 无需填写；`installHint` 文案更新为对应 binary 名（`frontend/src/components/Settings/AgentForm.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-08-01 01:40) `[docs]` README 安装方式区块默认展开（`<details open>`）：npm / Shell 脚本 / PowerShell / Docker 等除 cargo 外的安装方式不再折叠，中英同步（`README.md`、`README_ZH.md`）
+- (2026-08-01 02:00) `[backend]` 内置 ACP 预设新增 Pi（`pi --acp`）：接入 Pi 的 ACP 服务（`src/presets.rs`、`frontend/src/components/Settings/presets.ts`、`frontend/src/locales/{en,zh}/translation.json`）
+
+### Fixed
+
+- (2026-08-02 01:00) `[backend]` 修复 ACP 会话 agent 已输出结论但前端永久卡在运行中（结束信号丢失）：① WS 连接建立时 `turn_end_subscribe()` 在 `turn_snapshot()` 之后调用，turn 若在快照与订阅之间结束，`turn_state{active:true}` 已发出但 `prompt_done` 事件无订阅者而丢失——将 turn_end 订阅移至快照之前（与 session_update 的 subscribe-before-snapshot 模式一致），消除丢帧窗口；② reaper 新增 prompt 卡死兜底（`PROMPT_STALE_SECS`=600s）：有进行中 prompt 但 10 分钟无 agent 通知时强制定稿 turn 并广播结束，兜底不发送 `PromptResponse` 的 agent 实现（§8 多实现兼容）（`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/reaper.rs`）
+- (2026-08-02 14:00) `[backend]` 修复 resolve 对用户自定义 command 误触发 npm 查找：仅 `npm_package` 非空的预设 agent 走 PATH + lazy install 解析，用户手填 command 直接透传不干预（`src/acp/resolve.rs`）
+
+## [0.2.5] - 2026-08-01
+
+### Added
 
 - (2026-08-01 01:20) `[frontend]` `[api]` GIT 面板 diff 抽屉新增「在编辑器中打开」：diff 标题栏铅笔按钮一键把当前文件切到文件编辑器（复用 FileDrawer 的查看/编辑/保存能力），路径由 `/git/diff` 新增的 `root` 字段（仓库根，后端 ADR-2 已解析）拼接相对路径得出（`frontend/src/components/GitPanel/{GitDrawer,GitPanel}.tsx`、`frontend/src/api/client.ts`、`src/api/git.rs`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-08-01 00:15) `[frontend]` ACP 聊天气泡标识行（USER/agent 名）视觉增强：颜色由 `--text-faint` 提升至 `--text-secondary` 并加粗（600）——纯文字方案（无底色/边框，避免与气泡堆叠），与气泡区隔更明显；hover 时间小字保持次级（faint）层级（`frontend/src/components/Chat/ChatMessage.tsx`）
@@ -76,7 +86,6 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-08-02 01:00) `[backend]` 修复 ACP 会话 agent 已输出结论但前端永久卡在运行中（结束信号丢失）：① WS 连接建立时 `turn_end_subscribe()` 在 `turn_snapshot()` 之后调用，turn 若在快照与订阅之间结束，`turn_state{active:true}` 已发出但 `prompt_done` 事件无订阅者而丢失——将 turn_end 订阅移至快照之前（与 session_update 的 subscribe-before-snapshot 模式一致），消除丢帧窗口；② reaper 新增 prompt 卡死兜底（`PROMPT_STALE_SECS`=600s）：有进行中 prompt 但 10 分钟无 agent 通知时强制定稿 turn 并广播结束，兜底不发送 `PromptResponse` 的 agent 实现（§8 多实现兼容）（`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/reaper.rs`）
 - (2026-08-01 00:57) `[frontend]` 修复切换 tmux 会话时终端闪烁（~250ms 黑屏/重绘抖动）：`SessionView` 的 remount key 由 `activeSessionId` 改为**视图类型**（`tmux/acp/external/empty`），tmux↔tmux 切换不再销毁重建 xterm 实例（`useTerminal` 原地重连），仅视图类型变化才重挂载；`term.reset()` 从 WS `onopen` 移到**首个二进制帧**到达时执行——旧会话内容保持可见直到新会话全屏重绘抵达，一次交换完成而非先清空后等待（每次连接后端都 spawn 新 tmux client，attach 必发全屏重绘，reset 时机可安全后移）；原地切会话时同步重置 tmux copy-mode 滚动状态（`frontend/src/components/Layout/Layout.tsx`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-01 01:10) `[backend]` 修复 ACP 会话取消后 agent 补发的尾部帧不落库（刷新后取消前最后一段输出缺失）：cancel 分支原先立即 `mark_prompt_idle` 关闭 turn，agent 响应 cancel 期间补发的收尾帧因 turn 已关闭全部丢弃；改为 cancel 不立即收尾，合作的 agent 让 `send_prompt` 以 `Cancelled` 返回走正常定稿（尾部帧照常落库），另起超时兜底定时器（15s，prompt 世代计数守卫防误杀新 turn）应对无视 cancel 的 agent 实现，超时强制定稿 + 广播结束，会话不会卡在运行中（`src/acp/client.rs`、`src/ws/acp.rs`）
 - (2026-07-31 23:35) `[frontend]` 根治移动端 ACP 会话底部不可见（输入区/底部导航被裁，长消息会话必现）：MobileLayout 的 strip 容器（`flex-1`）缺 `minHeight: 0`——flex 子项默认 `min-height: auto` 使其无法收缩到内容最小高度以下，ACP 长消息列表的 min-content 高度达数千 px，strip 连同 MobileNav 被顶出 844px 根容器并被 `overflow: clip` 静默裁掉；tmux 会话正常是因为 xterm 内容有限高（min-content 小）。补 `minHeight: 0` 后 strip 正确收缩到剩余空间，输入区/导航恢复可见（`frontend/src/components/Layout/Layout.tsx`）
@@ -94,6 +103,7 @@ Prefix each entry with the area it affects:
 ### Removed
 
 - (2026-07-31 23:41) `[frontend]` 清理确定的死代码：删除 GitBranchIcon 组件、pixelAnimations 4 个未调用函数、3 个未使用依赖（`frontend/src/components/Icons/GitBranchIcon.tsx`、`frontend/src/utils/pixelAnimations.ts`、`frontend/package.json`）
+
 
 ## [0.2.4] - 2026-07-31
 
