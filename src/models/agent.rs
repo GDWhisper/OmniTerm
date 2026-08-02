@@ -23,6 +23,8 @@ pub struct Agent {
     pub command: String,
     pub args: Vec<String>,
     pub env: Vec<AgentEnvVar>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub npm_package: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,6 +38,8 @@ pub struct CreateAgent {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: Vec<AgentEnvVar>,
+    #[serde(default)]
+    pub npm_package: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,4 +48,6 @@ pub struct UpdateAgent {
     pub command: Option<String>,
     pub args: Option<Vec<String>>,
     pub env: Option<Vec<AgentEnvVar>>,
+    #[serde(default)]
+    pub npm_package: Option<Option<String>>,
 }

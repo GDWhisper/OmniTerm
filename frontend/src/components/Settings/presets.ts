@@ -32,22 +32,19 @@ export const AGENT_PRESETS: AgentPreset[] = [
     labelKey: 'settings.agents.preset.claude.label',
     hintKey: 'settings.agents.preset.claude.hint',
     display_name: 'Claude Code',
-    // claude-agent-acp 不是 Claude Code 官方 CLI 自带的命令，而是社区
-    // @agentclientprotocol/claude-agent-acp（基于官方 Claude Agent SDK）
-    // 提供的 ACP 适配器，故经 npx 启动，无需全局安装。
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+    command: 'claude-agent-acp',
+    args: [],
     env: [],
+    npm_package: '@agentclientprotocol/claude-agent-acp',
   },
   {
     labelKey: 'settings.agents.preset.codex.label',
     hintKey: 'settings.agents.preset.codex.hint',
     display_name: 'Codex',
-    // Codex CLI 官方不支持 ACP（openai/codex#30052），codex-acp 是社区
-    // 适配器 @agentclientprotocol/codex-acp 提供的 bin，故经 npx 启动。
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/codex-acp'],
+    command: 'codex-acp',
+    args: [],
     env: [],
+    npm_package: '@agentclientprotocol/codex-acp',
   },
   {
     labelKey: 'settings.agents.preset.gemini.label',
@@ -101,10 +98,10 @@ export const AGENT_PRESETS: AgentPreset[] = [
     labelKey: 'settings.agents.preset.piAcp.label',
     hintKey: 'settings.agents.preset.piAcp.hint',
     display_name: 'Pi',
-    // pi-acp 是社区 ACP 适配器，经 npx 启动，无需全局安装。
-    command: 'npx',
-    args: ['-y', 'pi-acp'],
+    command: 'pi-acp',
+    args: [],
     env: [],
+    npm_package: 'pi-acp',
   },
   {
     labelKey: 'settings.agents.preset.ohMyPi.label',

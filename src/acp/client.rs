@@ -239,6 +239,12 @@ fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path)
 
 impl AcpClient {
     pub async fn spawn_and_connect(agent: Agent, cwd: PathBuf) -> Result<Self, AcpError> {
+        let resolved_cmd =
+            crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
+                .await
+                .map_err(|e| AcpError::internal_error().data(e))?;
+        let resolved_cmd = resolved_cmd.to_string_lossy().to_string();
+
         let mut all_args: Vec<String> = Vec::new();
 
         for env_var in &agent.env {
@@ -249,9 +255,9 @@ impl AcpClient {
         // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
         #[cfg(unix)]
         let (cmd, args) =
-            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
+            ("/bin/sh".to_string(), wrap_agent_with_cwd(&resolved_cmd, &agent.args, &cwd));
         #[cfg(not(unix))]
-        let (cmd, args) = (agent.command.clone(), agent.args.clone());
+        let (cmd, args) = (resolved_cmd, agent.args.clone());
 
         all_args.push(cmd);
         all_args.extend(args);
@@ -803,6 +809,12 @@ impl AcpClient {
         cwd: PathBuf,
         acp_session_id: String,
     ) -> Result<Self, AcpError> {
+        let resolved_cmd =
+            crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
+                .await
+                .map_err(|e| AcpError::internal_error().data(e))?;
+        let resolved_cmd = resolved_cmd.to_string_lossy().to_string();
+
         let mut all_args: Vec<String> = Vec::new();
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
@@ -812,9 +824,9 @@ impl AcpClient {
         // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
         #[cfg(unix)]
         let (cmd, args) =
-            ("/bin/sh".to_string(), wrap_agent_with_cwd(&agent.command, &agent.args, &cwd));
+            ("/bin/sh".to_string(), wrap_agent_with_cwd(&resolved_cmd, &agent.args, &cwd));
         #[cfg(not(unix))]
-        let (cmd, args) = (agent.command.clone(), agent.args.clone());
+        let (cmd, args) = (resolved_cmd, agent.args.clone());
 
         all_args.push(cmd);
         all_args.extend(args);
