@@ -43,6 +43,7 @@ type FormState = {
   display_name: string
   command: string
   args_text: string
+  npm_package: string
   env: AgentEnvVar[]
   isNew: boolean
 }
@@ -53,6 +54,7 @@ function emptyForm(): FormState {
     display_name: '',
     command: '',
     args_text: '',
+    npm_package: '',
     env: [],
     isNew: true,
   }
@@ -64,6 +66,7 @@ function formFromAgent(a: Agent): FormState {
     display_name: a.display_name,
     command: a.command,
     args_text: a.args.join(' '),
+    npm_package: a.npm_package ?? '',
     env: a.env.map((e) => ({ ...e })),
     isNew: false,
   }
@@ -133,12 +136,14 @@ export function AgentSettings() {
           command: form.command.trim(),
           args,
           env,
+          npm_package: form.npm_package.trim() || undefined,
         } satisfies CreateAgent)
       : ({
           display_name: form.display_name.trim() || undefined,
           command: form.command.trim() || undefined,
           args,
           env,
+          npm_package: form.npm_package.trim() || null,
         } satisfies UpdateAgent)
 
     if (!payload.display_name || !payload.command) return
@@ -180,6 +185,7 @@ export function AgentSettings() {
       display_name: t(preset.labelKey),
       command: preset.command,
       args_text: preset.args.join(' '),
+      npm_package: preset.npm_package ?? '',
       env: preset.env.map((e) => ({ ...e })),
     })
     setTestResult(null)
@@ -200,6 +206,7 @@ export function AgentSettings() {
           command: form.command.trim(),
           args,
           env,
+          npm_package: form.npm_package.trim() || undefined,
         })
       } else {
         await testAgent(form.id)
@@ -305,6 +312,15 @@ export function AgentSettings() {
             value={form.args_text}
             onChange={(e) => setForm((f) => ({ ...f, args_text: e.target.value }))}
             placeholder="acp"
+          />
+        </Field>
+        <Field label={t('settings.agents.npmPackage')}>
+          <input
+            className={inputClass}
+            style={inputStyle}
+            value={form.npm_package}
+            onChange={(e) => setForm((f) => ({ ...f, npm_package: e.target.value }))}
+            placeholder="@scope/package"
           />
         </Field>
 
