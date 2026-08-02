@@ -239,11 +239,16 @@ fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path)
 
 impl AcpClient {
     pub async fn spawn_and_connect(agent: Agent, cwd: PathBuf) -> Result<Self, AcpError> {
-        let resolved_cmd =
-            crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
-                .await
-                .map_err(|e| AcpError::internal_error().data(e))?;
-        let resolved_cmd = resolved_cmd.to_string_lossy().to_string();
+        let resolved_cmd = match agent.npm_package.as_deref() {
+            Some(_) => {
+                crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
+                    .await
+                    .map_err(|e| AcpError::internal_error().data(e))?
+                    .to_string_lossy()
+                    .to_string()
+            }
+            None => agent.command.clone(),
+        };
 
         let mut all_args: Vec<String> = Vec::new();
 
@@ -809,11 +814,16 @@ impl AcpClient {
         cwd: PathBuf,
         acp_session_id: String,
     ) -> Result<Self, AcpError> {
-        let resolved_cmd =
-            crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
-                .await
-                .map_err(|e| AcpError::internal_error().data(e))?;
-        let resolved_cmd = resolved_cmd.to_string_lossy().to_string();
+        let resolved_cmd = match agent.npm_package.as_deref() {
+            Some(_) => {
+                crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
+                    .await
+                    .map_err(|e| AcpError::internal_error().data(e))?
+                    .to_string_lossy()
+                    .to_string()
+            }
+            None => agent.command.clone(),
+        };
 
         let mut all_args: Vec<String> = Vec::new();
         for env_var in &agent.env {
