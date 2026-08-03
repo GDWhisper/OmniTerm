@@ -656,10 +656,10 @@ export function Sidebar() {
               activeSessionId={activeSessionId}
               acpActivityFor={acpActivityFor}
               onToggle={() => toggleProject(proj.id)}
-              onOpenCreateWorktree={() => {
+              onOpenCreateWorktree={async () => {
                 if (!expandedProjects.has(proj.id)) {
                   setExpandedProjects(prev => { const next = new Set(prev); next.add(proj.id); return next })
-                  void Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
+                  await Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
                 }
                 setCreateWtProjectId(proj.id)
               }}
