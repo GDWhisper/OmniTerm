@@ -165,6 +165,8 @@ export function Sidebar() {
     projectName: string
     /** open-modal = 打开创建弹窗前检测到；submit-worktree = 提交创建时检测到（带表单参数重试） */
     mode: 'open-modal' | 'submit-worktree'
+    /** 项目目录是否有 .gitignore——无则初始化会提交全部现有文件，确认框需附加警告 */
+    hasGitignore: boolean
     params?: { branch: string; path: string; baseBranch: string }
   } | null>(null)
 
@@ -804,13 +806,14 @@ export function Sidebar() {
       setCreateWtCurrentBranch('')
       return true
     } catch (err) {
-      const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+      const body = err instanceof ApiError ? (err.body as { code?: string; has_gitignore?: boolean }) : undefined
       if (body?.code === 'not_a_git_repo' && !params.init) {
         const project = projects.find((p) => p.id === params.projectId)
         setGitInitConfirm({
           projectId: params.projectId,
           projectName: project?.name ?? params.projectId,
           mode: 'submit-worktree',
+          hasGitignore: body.has_gitignore ?? true,
           params: { branch: params.branch, path: params.path, baseBranch: params.baseBranch },
         })
       } else {
@@ -1347,9 +1350,14 @@ export function Sidebar() {
                           setCreateWtCurrentBranch(data.current)
                           setCreateWtOpen(true)
                         } catch (err) {
-                          const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+                          const body = err instanceof ApiError ? (err.body as { code?: string; has_gitignore?: boolean }) : undefined
                           if (body?.code === 'not_a_git_repo') {
-                            setGitInitConfirm({ projectId: proj.id, projectName: proj.name, mode: 'open-modal' })
+                            setGitInitConfirm({
+                              projectId: proj.id,
+                              projectName: proj.name,
+                              mode: 'open-modal',
+                              hasGitignore: body.has_gitignore ?? true,
+                            })
                           } else {
                             // 其他错误（网络/权限等）：照常打开弹窗，分支下拉显示默认
                             setCreateWtOpen(true)
@@ -2299,7 +2307,12 @@ export function Sidebar() {
         onClose={() => setGitInitConfirm(null)}
         onConfirm={handleConfirmGitInit}
         title={t('sidebar.gitInitTitle') ?? 'Initialize Git Repository?'}
-        message={t('sidebar.gitInitMessage', { name: gitInitConfirm?.projectName ?? '' }) ?? '该项目目录还不是 Git 仓库。是否先执行 git init 并创建初始提交，再继续创建 Worktree？'}
+        message={
+          (t('sidebar.gitInitMessage', { name: gitInitConfirm?.projectName ?? '' }) ?? '该项目目录还不是 Git 仓库。是否先执行 git init 并创建初始提交，再继续创建 Worktree？') +
+          (gitInitConfirm && !gitInitConfirm.hasGitignore
+            ? (t('sidebar.gitInitNoGitignore') ?? '\n\n注意：未检测到 .gitignore，初始化将把当前目录下所有现有文件（含大文件/敏感文件）纳入首次提交。')
+            : '')
+        }
         confirmText={t('sidebar.gitInitConfirm') ?? '初始化并继续'}
         loading={submitting}
       />

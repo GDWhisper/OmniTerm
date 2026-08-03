@@ -259,12 +259,7 @@ async fn create_worktree(
                 return (StatusCode::BAD_REQUEST, Json(json!({ "error": short })));
             }
         } else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    json!({ "error": "project is not a git repository", "code": "not_a_git_repo" }),
-                ),
-            );
+            return not_a_git_repo(&project);
         }
     }
 
@@ -317,6 +312,21 @@ struct DeleteWorktreeQuery {
     path: String,
 }
 
+/// Shared "project is not a git repository" error response. Carries a
+/// machine-readable `code` plus `has_gitignore` so the frontend can warn the
+/// user that initializing the repo will commit all existing files when no
+/// `.gitignore` is present.
+fn not_a_git_repo(project: &Project) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "project is not a git repository",
+            "code": "not_a_git_repo",
+            "has_gitignore": crate::git::has_gitignore(&project.path),
+        })),
+    )
+}
+
 /// Initialize the project's directory as a git repository (with an initial
 /// commit) so worktrees can be created. Called from the frontend after the
 /// user confirms the "not a git repo" prompt on the create-worktree flow.
@@ -359,10 +369,7 @@ async fn delete_worktree(
     };
 
     if !crate::git::is_git_repo(&project.path).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "project is not a git repository", "code": "not_a_git_repo" })),
-        );
+        return not_a_git_repo(&project);
     }
 
     // Safety: refuse to remove the project's own path (main worktree).
@@ -413,10 +420,7 @@ async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) ->
     };
 
     if !crate::git::is_git_repo(&project.path).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "project is not a git repository", "code": "not_a_git_repo" })),
-        );
+        return not_a_git_repo(&project);
     }
 
     let (branches_res, current_res) = tokio::join!(

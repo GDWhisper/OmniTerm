@@ -65,7 +65,7 @@ GET  /api/v1/projects
 POST /api/v1/projects
 DELETE /api/v1/projects/{id}
 GET  /api/v1/projects/{pid}/worktrees (git worktree discovery)
-POST /api/v1/projects/{pid}/worktrees    # 非 git 仓库返回 400 {error, code:"not_a_git_repo"}；请求体 init:true 时自动 git init + 初始提交
+POST /api/v1/projects/{pid}/worktrees    # 非 git 仓库返回 400 {error, code:"not_a_git_repo", has_gitignore:bool}；请求体 init:true 时自动 git init + 初始提交
 DELETE /api/v1/projects/{pid}/worktrees
 POST /api/v1/projects/{pid}/git-init    # git init + 初始提交（前端确认「非 git 仓库」后调用）
 GET  /api/v1/projects/{pid}/branches

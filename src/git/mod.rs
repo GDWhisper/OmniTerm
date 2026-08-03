@@ -21,6 +21,16 @@ pub async fn is_git_repo(path: &str) -> bool {
     String::from_utf8_lossy(&output.stdout).trim() == "true"
 }
 
+/// Whether the directory at `path` contains a `.gitignore` file.
+///
+/// Used to warn the user before initializing a fresh repo: `init_repo`
+/// stages everything (`git add -A`), so without ignore rules the initial
+/// commit may include build artifacts, secrets, or other files the user
+/// didn't intend to track.
+pub fn has_gitignore(path: &str) -> bool {
+    std::path::Path::new(path).join(".gitignore").is_file()
+}
+
 /// Initialize a git repository at `path` and create an initial commit.
 ///
 /// Needed when a project directory isn't a git repo yet but the user wants
@@ -273,6 +283,15 @@ mod tests {
             .unwrap();
         let second = String::from_utf8_lossy(&second_head.stdout).to_string();
         assert_eq!(first, second, "init_repo must not create a second commit");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_has_gitignore_detects_file() {
+        let dir = temp_dir();
+        assert!(!has_gitignore(dir.to_str().unwrap()), "no .gitignore yet");
+        std::fs::write(dir.join(".gitignore"), "node_modules\n").unwrap();
+        assert!(has_gitignore(dir.to_str().unwrap()), ".gitignore should be detected");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

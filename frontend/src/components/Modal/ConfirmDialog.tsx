@@ -30,7 +30,10 @@ export function ConfirmDialog({
   const resolvedConfirmText = confirmText ?? t('modal.confirm')
   return (
     <Modal open={open} onClose={onClose} title={title} maxWidth="max-w-sm">
-      <p className="text-sm mb-5" style={{ color: 'var(--text-muted)' }}>{message}</p>
+      <p
+        className="text-sm mb-5"
+        style={{ color: 'var(--text-muted)', whiteSpace: 'pre-line' }}
+      >{message}</p>
       <div className="flex justify-end gap-2">
         <PixelButton variant="secondary" onClick={onClose} disabled={loading}>
           {t('modal.cancel')}
