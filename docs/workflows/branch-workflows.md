@@ -58,7 +58,7 @@ dev (开发) ──┤
 
 每个 worktree 通过以下几项标识自己，**互不冲突**：
 
-| 分支 | 端口（dev.sh 开发端口） | 域名 | 二进制名 | Docker 部署端口 | 含义 |
+| 分支 | 端口（dev.sh 开发端口） | 域名 | DB 隔离标识（BRANCH_BINARY_NAME） | Docker 部署端口 | 含义 |
 |------|----------------------|------|---------|---------------|------|
 | `dev` | 9777 / 9778 | `term-dev.tokitoken.com` | `omniterm-dev` | 9777 | 日常开发 |
 | `preview` | 9075 / 9076 | `term-preview.tokitoken.com` | `omniterm-preview` | 9075 | 私人稳定分支 |
@@ -66,7 +66,8 @@ dev (开发) ──┤
 | `main` | — | — | `omniterm` | — | 发布分支（非 worktree） |
 
 **核心规则**：
-- 二进制名 = `omniterm-<branch>`，main 例外为干净 `omniterm`
+- DB 隔离标识 = `omniterm-<branch>`（仅决定 `~/.omniterm/<标识>.db` 文件名），main 例外为干净 `omniterm`
+- 编译二进制名全分支统一为 `omniterm`（`Cargo.toml` name，merge 不受影响），不再按分支区分
 - 端口由各 worktree 的 `.env.local` 决定（gitignored）
 - 域名仅 preview 和 dev 需要（main 不暴露到公网）
 

@@ -58,8 +58,8 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `DOCKER_PORT` | Docker 容器内监听端口 | Dockerfile `ARG` / docker-compose `BIND_ADDR` |
 | `DOCKER_PORT_MAPPING` | Docker 端口映射 `host:container` | docker-compose `ports` |
 | `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
-| `BRANCH_BINARY_NAME` | 二进制名（`omniterm-dev` / `omniterm-preview` / `omniterm`） | Dockerfile `CMD` / 日志 / dev.sh 生成 `DATABASE_URL` |
-| `DATABASE_URL` | SQLite 连接串，按二进制名隔离数据库（`~/.omniterm/<BRANCH_BINARY_NAME>.db`） | Rust `Args.db` (clap env) |
+| `BRANCH_BINARY_NAME` | 数据库隔离标识（`omniterm-dev` / `omniterm-preview` / `omniterm`），决定各 worktree 的 SQLite 文件名 | dev.sh 生成 `DATABASE_URL` |
+| `DATABASE_URL` | SQLite 连接串，由 dev.sh 基于 `BRANCH_BINARY_NAME` 生成（`~/.omniterm/<BRANCH_BINARY_NAME>.db`） | Rust `Args.db` (clap env) |
 | `DOMAIN` | 部署域名 | Vite `allowedHosts` |
 
 > **版本号不在此配置**：版本号由 `Cargo.toml` 的 `version` 字段作为唯一真相源（git 跟踪，随分支 merge 自动同步）。
@@ -70,10 +70,10 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 
 - **禁止在代码里硬编码**端口/域名/binary 名（`src/main.rs` `default_value`、Vite `allowedHosts`、Dockerfile `EXPOSE`、docker-compose `ports` 等）
 - 版本号**禁止硬编码**，统一由 `Cargo.toml` 的 `version` 管理；改版本号用 `./scripts/bump-version.sh`
-- 改端口/域名/binary 名时**只改 `.env.local`**（各 worktree 独立）
+- 改端口/域名/binary 名时**只改 `.env.local`**（各 worktree 独立）；二进制名固定为 `omniterm`，改它需改 `Cargo.toml`（各分支同步，见下）
 - dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
-- **例外**：`Cargo.toml` 的 `[package] name` 和 `[[bin]] name` 仍手动维护（cargo 不读 env）— 改 `BRANCH_BINARY_NAME` 时**同时改** `Cargo.toml`
-- **数据库隔离**：db 路径由 dev.sh 基于 `BRANCH_BINARY_NAME` 生成 `DATABASE_URL`（`~/.omniterm/<binary>.db`）注入后端，**不依赖** merge 会被覆盖的 `Cargo.toml` name；各 worktree 因此天然使用独立数据库，即使 merge 把 `Cargo.toml` name 同步成 dev 的，也不会再串库
+- **二进制名统一**：`Cargo.toml` 的 `[package] name` 全分支统一为 `omniterm`（编译产物 / Docker 镜像 / crates.io 包名一致），不按分支区分，merge 不会覆盖
+- **数据库隔离**：db 路径由 dev.sh 基于 `BRANCH_BINARY_NAME` 生成 `DATABASE_URL`（`~/.omniterm/<BRANCH_BINARY_NAME>.db`）注入后端；`BRANCH_BINARY_NAME` 仅为数据库隔离标识（非二进制名），各 worktree 在 `.env.local` 独立维护，merge 不会串库
 
 ## 文档索引
 
