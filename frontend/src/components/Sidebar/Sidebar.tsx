@@ -23,8 +23,7 @@ import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 import { ReleaseConfirmDialog, type ReleaseTarget } from './ReleaseConfirmDialog'
-import { AgentPicker } from '../AgentPicker/AgentPicker'
-import { useAgentStore } from '../../stores/agentStore'
+import { CreateSessionModal } from './CreateSessionModal'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
@@ -104,7 +103,6 @@ export function Sidebar() {
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
-  const multiplexer = useAppStore((s) => s.multiplexer)
   const setMultiplexer = useAppStore((s) => s.setMultiplexer)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
@@ -137,16 +135,13 @@ export function Sidebar() {
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
-  const [createSessOpen, setCreateSessOpen] = useState(false)
+  const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null)
   const [confirmRelease, setConfirmRelease] = useState<ReleaseTarget | null>(null)
 
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
-  const [sessName, setSessName] = useState('')
-  const [sessAgentId, setSessAgentId] = useState<string | null>(null)
-  const [sessWorkspaceId, setSessWorkspaceId] = useState<string | null>(null)
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -854,49 +849,6 @@ export function Sidebar() {
     }
   }
 
-  const handleCreateSession = async () => {
-    if (!activeProjectId || !sessWorkspaceId) return
-    // Find the target worktree path (captured when "+" was clicked)
-    const wtList = worktrees[activeProjectId] || []
-    const targetWt = wtList.find(w => w.id === sessWorkspaceId)
-    if (!targetWt) return
-
-    setSubmitting(true)
-    try {
-      const name = sessName.trim() || (sessAgentId
-        ? (() => {
-            const agent = useAgentStore.getState().agents.find((a) => a.id === sessAgentId)
-            if (!agent) return undefined
-            const now = new Date()
-            const ts = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-            return `${agent.display_name}_${ts}`
-          })()
-        : undefined)
-      const newSession = await api.createSession(
-        activeProjectId,
-        targetWt.path,
-        name || undefined,
-        undefined,
-        sessAgentId ? 'acp' : 'tmux',
-        sessAgentId ?? undefined,
-      )
-      await loadSessions()
-      // Auto-activate the newly created session so the terminal pane
-      // switches to it immediately. Atomic (clears external + sets
-      // activeSession + updates workspace memory in one set()).
-      activateSession(newSession.id)
-      addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? `Session created`)
-      setCreateSessOpen(false)
-      setSessName('')
-      setSessAgentId(null)
-      setSessWorkspaceId(null)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -979,13 +931,6 @@ export function Sidebar() {
     const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
     setProjPath(`${dirPart}${entry.name}/`)
     setAutocompleteActiveIndex(-1)
-  }
-
-  const handleSessKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleCreateSession()
-    }
   }
 
   // Filter sessions for a specific worktree.
@@ -1322,8 +1267,7 @@ export function Sidebar() {
                                   e.stopPropagation()
                                   setActiveProject(proj.id)
                                   setActiveWorkspace(wt.id)
-                                  setSessWorkspaceId(wt.id)
-                                  setCreateSessOpen(true)
+                                  setCreateSessWorkspaceId(wt.id)
                                 }}
                                 title={t('sidebar.createSession')}
                               >
@@ -1903,49 +1847,11 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Create Session Modal ── */}
-      <Modal open={createSessOpen} onClose={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }} title={t('sidebar.createSession')} maxWidth="max-w-sm">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.sessionName')} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
-            </label>
-            <input
-              type="text"
-              value={sessName}
-              onChange={(e) => setSessName(e.target.value)}
-              onKeyDown={handleSessKeyDown}
-              placeholder="dev-server"
-              autoFocus
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('agentPicker.label')}
-            </label>
-            <AgentPicker
-              value={sessAgentId}
-              onChange={setSessAgentId}
-              className={inputClass}
-              style={inputStyle}
-            />
-            <p className="mt-1.5 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-              {t('agentPicker.hint', { mux: multiplexer })}
-            </p>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <PixelButton variant="secondary" onClick={() => { setCreateSessOpen(false); setSessName(''); setSessAgentId(null); setSessWorkspaceId(null) }}>
-              {t('sidebar.cancel')}
-            </PixelButton>
-            <PixelButton variant="accent" onClick={handleCreateSession} disabled={submitting}>
-              {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </PixelButton>
-          </div>
-        </div>
-      </Modal>
+      <CreateSessionModal
+        workspaceId={createSessWorkspaceId}
+        onClose={() => setCreateSessWorkspaceId(null)}
+        reloadSessions={loadSessions}
+      />
 
       {/* ── Create Worktree Modal ── */}
       <Modal
