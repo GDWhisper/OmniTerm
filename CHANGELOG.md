@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-03 18:40) `[backend]` `[frontend]` 非 git 仓库项目创建 worktree 时先弹确认框询问是否初始化 git：用户确认后后端自动 `git init` + 初始提交（缺失 user.name/email 时用仓库级兜底身份，不污染全局配置）再创建 worktree；新增 `POST /projects/{id}/git-init` 端点与 `create_worktree` 的 `init` 标志，错误响应统一带 `code: "not_a_git_repo"` 供前端识别（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/{en,zh}/translation.json`）
+
 ## [0.2.7] - 2026-08-03
 
 ### Added

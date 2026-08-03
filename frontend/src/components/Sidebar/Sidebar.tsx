@@ -159,6 +159,14 @@ export function Sidebar() {
   const [createWtBranches, setCreateWtBranches] = useState<string[]>([])
   const [createWtCurrentBranch, setCreateWtCurrentBranch] = useState('')
   const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
+  // 非 git 仓库时弹确认框：询问是否先初始化 git（用户确认后自动 init + 继续）
+  const [gitInitConfirm, setGitInitConfirm] = useState<{
+    projectId: string
+    projectName: string
+    /** open-modal = 打开创建弹窗前检测到；submit-worktree = 提交创建时检测到（带表单参数重试） */
+    mode: 'open-modal' | 'submit-worktree'
+    params?: { branch: string; path: string; baseBranch: string }
+  } | null>(null)
 
   // Delete worktree confirmation dialog
   const [confirmDeleteWt, setConfirmDeleteWt] = useState<{ projectId: string; path: string; label: string } | null>(null)
@@ -769,17 +777,24 @@ export function Sidebar() {
     }
   }
 
-  const handleCreateWorktree = async () => {
-    if (!createWtProjectId || !createWtBranch.trim()) return
-    setSubmitting(true)
+  // 创建 worktree 的公共提交逻辑：成功时刷新 + 清理弹窗状态；失败时若
+  // 后端返回 not_a_git_repo 且未带 init，则弹确认框询问是否先初始化 git。
+  const submitWorktree = async (params: {
+    projectId: string
+    branch: string
+    path: string
+    baseBranch: string
+    init: boolean
+  }): Promise<boolean> => {
     try {
-      await api.createWorktree(createWtProjectId, {
-        branch: createWtBranch.trim(),
-        path: createWtPath.trim() || undefined,
-        base_branch: createWtBaseBranch.trim() || undefined,
+      await api.createWorktree(params.projectId, {
+        branch: params.branch,
+        path: params.path.trim() || undefined,
+        base_branch: params.baseBranch.trim() || undefined,
+        init: params.init,
       })
-      await loadWorktrees(createWtProjectId)
-      addToast('success', t('sidebar.worktreeCreated', { branch: createWtBranch.trim() }) ?? `Worktree "${createWtBranch.trim()}" created`)
+      await loadWorktrees(params.projectId)
+      addToast('success', t('sidebar.worktreeCreated', { branch: params.branch }) ?? `Worktree "${params.branch}" created`)
       setCreateWtOpen(false)
       setCreateWtProjectId(null)
       setCreateWtBranch('')
@@ -787,8 +802,76 @@ export function Sidebar() {
       setCreateWtBaseBranch('')
       setCreateWtBranches([])
       setCreateWtCurrentBranch('')
-    } catch {
-      // api client already shows error toast
+      return true
+    } catch (err) {
+      const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+      if (body?.code === 'not_a_git_repo' && !params.init) {
+        const project = projects.find((p) => p.id === params.projectId)
+        setGitInitConfirm({
+          projectId: params.projectId,
+          projectName: project?.name ?? params.projectId,
+          mode: 'submit-worktree',
+          params: { branch: params.branch, path: params.path, baseBranch: params.baseBranch },
+        })
+      } else {
+        addToast('error', err instanceof Error ? err.message : String(err))
+      }
+      return false
+    }
+  }
+
+  const handleCreateWorktree = async () => {
+    if (!createWtProjectId || !createWtBranch.trim()) return
+    setSubmitting(true)
+    await submitWorktree({
+      projectId: createWtProjectId,
+      branch: createWtBranch.trim(),
+      path: createWtPath,
+      baseBranch: createWtBaseBranch,
+      init: false,
+    })
+    setSubmitting(false)
+  }
+
+  // 用户确认初始化 git 后：先 init，再继续（打开弹窗 or 带 init 重试创建）
+  const handleConfirmGitInit = async () => {
+    if (!gitInitConfirm) return
+    setSubmitting(true)
+    try {
+      await api.initGit(gitInitConfirm.projectId)
+      if (gitInitConfirm.mode === 'submit-worktree' && gitInitConfirm.params) {
+        const { branch, path, baseBranch } = gitInitConfirm.params
+        const ok = await submitWorktree({
+          projectId: gitInitConfirm.projectId,
+          branch,
+          path,
+          baseBranch,
+          init: true,
+        })
+        if (ok) setGitInitConfirm(null)
+      } else {
+        // open-modal 模式：初始化成功后重新加载分支并打开创建弹窗
+        setGitInitConfirm(null)
+        setCreateWtProjectId(gitInitConfirm.projectId)
+        setCreateWtBranch('')
+        setCreateWtPath('')
+        setCreateWtBaseBranch('')
+        setCreateWtBranches([])
+        setCreateWtCurrentBranch('')
+        setCreateWtBranchesLoading(true)
+        try {
+          const data = await api.listBranches(gitInitConfirm.projectId)
+          setCreateWtBranches(data.branches)
+          setCreateWtCurrentBranch(data.current)
+        } catch {
+          // 分支加载失败也照常打开弹窗（下拉显示默认项）
+        } finally {
+          setCreateWtBranchesLoading(false)
+        }
+        setCreateWtOpen(true)
+      }
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : String(err))
     } finally {
       setSubmitting(false)
     }
@@ -1255,16 +1338,25 @@ export function Sidebar() {
                         setCreateWtBaseBranch('')
                         setCreateWtBranches([])
                         setCreateWtCurrentBranch('')
-                        setCreateWtOpen(true)
-                        // Fetch branches in background
+                        // 预检 git 仓库：非 git 仓库先弹确认框询问是否初始化，
+                        // 确认前不打开创建弹窗（避免填完分支名后才发现创建不了）
                         setCreateWtBranchesLoading(true)
-                        api.listBranches(proj.id)
-                          .then(data => {
-                            setCreateWtBranches(data.branches)
-                            setCreateWtCurrentBranch(data.current)
-                          })
-                          .catch(() => {})
-                          .finally(() => setCreateWtBranchesLoading(false))
+                        try {
+                          const data = await api.listBranches(proj.id)
+                          setCreateWtBranches(data.branches)
+                          setCreateWtCurrentBranch(data.current)
+                          setCreateWtOpen(true)
+                        } catch (err) {
+                          const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+                          if (body?.code === 'not_a_git_repo') {
+                            setGitInitConfirm({ projectId: proj.id, projectName: proj.name, mode: 'open-modal' })
+                          } else {
+                            // 其他错误（网络/权限等）：照常打开弹窗，分支下拉显示默认
+                            setCreateWtOpen(true)
+                          }
+                        } finally {
+                          setCreateWtBranchesLoading(false)
+                        }
                       }}
                       className="row-action flex-shrink-0 flex items-center justify-center transition-all"
                       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
@@ -2199,6 +2291,17 @@ export function Sidebar() {
         title={t('sidebar.releaseAgentTitle')}
         message={t('sidebar.confirmReleaseAgent', { name: confirmRelease?.name ?? '' })}
         confirmText={t('sidebar.release')}
+      />
+
+      {/* ── Git Init Confirmation: project directory is not a git repo yet ── */}
+      <ConfirmDialog
+        open={!!gitInitConfirm}
+        onClose={() => setGitInitConfirm(null)}
+        onConfirm={handleConfirmGitInit}
+        title={t('sidebar.gitInitTitle') ?? 'Initialize Git Repository?'}
+        message={t('sidebar.gitInitMessage', { name: gitInitConfirm?.projectName ?? '' }) ?? '该项目目录还不是 Git 仓库。是否先执行 git init 并创建初始提交，再继续创建 Worktree？'}
+        confirmText={t('sidebar.gitInitConfirm') ?? '初始化并继续'}
+        loading={submitting}
       />
 
       {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}
