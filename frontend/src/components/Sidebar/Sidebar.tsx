@@ -20,6 +20,9 @@ import { UpdateBadge } from './UpdateBadge'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
+import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
+import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
+import { ReleaseConfirmDialog, type ReleaseTarget } from './ReleaseConfirmDialog'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
@@ -136,12 +139,8 @@ export function Sidebar() {
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState<{
-    type: 'project' | 'session'
-    id: string
-    name: string
-  } | null>(null)
-  const [confirmRelease, setConfirmRelease] = useState<{ id: string; name: string | null } | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null)
+  const [confirmRelease, setConfirmRelease] = useState<ReleaseTarget | null>(null)
 
   const [projName, setProjName] = useState('')
   const [projPath, setProjPath] = useState('')
@@ -172,8 +171,7 @@ export function Sidebar() {
   } | null>(null)
 
   // Delete worktree confirmation dialog
-  const [confirmDeleteWt, setConfirmDeleteWt] = useState<{ projectId: string; path: string; label: string } | null>(null)
-  const [confirmDeleteWtChecked, setConfirmDeleteWtChecked] = useState(false)
+  const [confirmDeleteWt, setConfirmDeleteWt] = useState<DeleteWorktreeTarget | null>(null)
 
   // Browse state for the create-project modal's embedded directory list
   const [browsePath, setBrowsePath] = useState('')
@@ -755,31 +753,6 @@ export function Sidebar() {
     }
   }
 
-  const handleDeleteWorktree = async () => {
-    if (!confirmDeleteWt) return
-    setSubmitting(true)
-    try {
-      await api.deleteWorktree(confirmDeleteWt.projectId, confirmDeleteWt.path)
-      await loadWorktrees(confirmDeleteWt.projectId)
-      // If the deleted worktree was active, clear the workspace selection
-      if (activeWorkspaceId) {
-        const wtList = worktrees[confirmDeleteWt.projectId] || []
-        const stillExists = wtList.some(w => w.id === activeWorkspaceId)
-        if (!stillExists) {
-          setActiveWorkspace(null)
-          setActiveSession(null)
-        }
-      }
-      addToast('success', t('sidebar.worktreeDeleted', { name: confirmDeleteWt.label }) ?? `Worktree "${confirmDeleteWt.label}" deleted`)
-      setConfirmDeleteWt(null)
-      setConfirmDeleteWtChecked(false)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   // 创建 worktree 的公共提交逻辑：成功时刷新 + 清理弹窗状态；失败时若
   // 后端返回 not_a_git_repo 且未带 init，则弹确认框询问是否先初始化 git。
   const submitWorktree = async (params: {
@@ -938,55 +911,9 @@ export function Sidebar() {
   //   }
   // }, [loadSessions, addToast])
 
-  const handleDeleteProject = async () => {
-    if (!confirmDelete || confirmDelete.type !== 'project') return
-    setSubmitting(true)
-    try {
-      await api.deleteProject(confirmDelete.id)
-      await loadProjects()
-      if (activeProjectId === confirmDelete.id) {
-        setActiveProject(null)
-        setActiveWorkspace(null)
-        setSessions(confirmDelete.id, [])
-      }
-      addToast('success', t('sidebar.projectDeleted', { name: confirmDelete.name }) ?? `Project "${confirmDelete.name}" deleted`)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-      setConfirmDelete(null)
-    }
-  }
-
-  const handleDeleteSession = async () => {
-    if (!confirmDelete || confirmDelete.type !== 'session') return
-    setSubmitting(true)
-    // Clear active session immediately so FileManager stops requesting
-    // files for a session whose tmux process is about to be killed.
-    if (activeSessionId === confirmDelete.id) {
-      setActiveSession(null)
-    }
-    try {
-      await api.deleteSession(confirmDelete.id)
-      await loadSessions()
-      // Clean workspace session memory for the deleted session
-      for (const wsId of Object.keys(workspaceSessionMemory)) {
-        if (workspaceSessionMemory[wsId] === confirmDelete.id) {
-          clearWorkspaceSession(wsId)
-        }
-      }
-      addToast('success', t('sidebar.sessionDeleted', { name: confirmDelete.name }) ?? `Session deleted`)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-      setConfirmDelete(null)
-    }
-  }
-
   // 手动释放 ACP agent 子进程（保留会话记录，进程可后续恢复）。
   // 区别于删除：不删 DB 记录，仅 kill supervisor 中驻留的 codebuddy --acp 等进程。
-  const handleReleaseSession = async (id: string) => {
+  const releaseSessionNow = async (id: string) => {
     try {
       await api.releaseSession(id)
       await loadSessions()
@@ -999,12 +926,6 @@ export function Sidebar() {
     } catch {
       // api client already shows error toast
     }
-  }
-
-  const handleConfirmRelease = () => {
-    if (!confirmRelease) return
-    handleReleaseSession(confirmRelease.id)
-    setConfirmRelease(null)
   }
 
   // Enter in name field = create project
@@ -1414,7 +1335,6 @@ export function Sidebar() {
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     setConfirmDeleteWt({ projectId: proj.id, path: wt.path, label: wt.label })
-                                    setConfirmDeleteWtChecked(false)
                                   }}
                                   title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
                                   onMouseEnter={(e) => {
@@ -1538,7 +1458,7 @@ export function Sidebar() {
                                             if (chatState?.sending) {
                                               setConfirmRelease({ id: s.id, name: s.name ?? null })
                                             } else {
-                                              handleReleaseSession(s.id)
+                                              releaseSessionNow(s.id)
                                             }
                                           }}
                                         />
@@ -2141,76 +2061,25 @@ export function Sidebar() {
       />
 
       {/* ── Delete Confirmation Dialog ── */}
-      <ConfirmDialog
-        open={!!confirmDelete}
+      <DeleteConfirmDialog
+        target={confirmDelete}
         onClose={() => setConfirmDelete(null)}
-        onConfirm={confirmDelete?.type === 'project' ? handleDeleteProject : handleDeleteSession}
-        title={confirmDelete?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
-        message={
-          confirmDelete?.type === 'project'
-            ? (t('sidebar.confirmDeleteProject', { name: confirmDelete?.name }) ?? `Remove project "${confirmDelete?.name}" from the list? Files on disk are not affected.`)
-            : t('sidebar.confirmDeleteSession', { name: confirmDelete?.name })
-        }
-        confirmText={confirmDelete?.type === 'project' ? t('sidebar.remove') : t('sidebar.delete')}
-        destructive={confirmDelete?.type === 'session'}
-        loading={submitting}
+        reloadProjects={loadProjects}
+        reloadSessions={loadSessions}
       />
 
       {/* ── Delete Worktree Confirmation Dialog ── */}
-      <Modal
-        open={!!confirmDeleteWt}
-        onClose={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}
-        title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
-        maxWidth="max-w-sm"
-      >
-        <div className="space-y-4">
-          <div
-            className="px-3 py-2.5 rounded-md"
-            style={{ background: 'var(--danger-12)', border: '1px solid var(--danger)', color: 'var(--text-primary)', fontSize: 12, fontFamily: READER_FONT }}
-          >
-            <p className="font-semibold mb-1" style={{ color: 'var(--danger)' }}>
-              {t('sidebar.deleteWorktreeWarning') ?? '⚠ 不可逆操作'}
-            </p>
-            <p>
-              {t('sidebar.deleteWorktreeConfirm', { name: confirmDeleteWt?.label ?? '', path: confirmDeleteWt?.path ?? '' }) ??
-                `将永久删除 worktree「${confirmDeleteWt?.label ?? ''}」（${confirmDeleteWt?.path ?? ''}），包括其中所有未提交的更改。此操作无法撤销。`}
-            </p>
-          </div>
-          <label
-            className="flex items-center gap-2 cursor-pointer select-none"
-            style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: READER_FONT }}
-          >
-            <input
-              type="checkbox"
-              checked={confirmDeleteWtChecked}
-              onChange={(e) => setConfirmDeleteWtChecked(e.target.checked)}
-              style={{ accentColor: 'var(--danger)' }}
-            />
-            {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
-          </label>
-          <div className="flex justify-end gap-2 pt-1">
-            <PixelButton variant="secondary" onClick={() => { setConfirmDeleteWt(null); setConfirmDeleteWtChecked(false) }}>
-              {t('sidebar.cancel')}
-            </PixelButton>
-            <PixelButton
-              variant="danger"
-              onClick={handleDeleteWorktree}
-              disabled={!confirmDeleteWtChecked || submitting}
-            >
-              {submitting ? t('sidebar.deleting') ?? 'Deleting...' : t('sidebar.delete')}
-            </PixelButton>
-          </div>
-        </div>
-      </Modal>
+      <DeleteWorktreeDialog
+        target={confirmDeleteWt}
+        onClose={() => setConfirmDeleteWt(null)}
+        reloadWorktrees={loadWorktrees}
+      />
 
       {/* ── Release Confirmation Dialog ── */}
-      <ConfirmDialog
-        open={!!confirmRelease}
+      <ReleaseConfirmDialog
+        target={confirmRelease}
         onClose={() => setConfirmRelease(null)}
-        onConfirm={handleConfirmRelease}
-        title={t('sidebar.releaseAgentTitle')}
-        message={t('sidebar.confirmReleaseAgent', { name: confirmRelease?.name ?? '' })}
-        confirmText={t('sidebar.release')}
+        onRelease={releaseSessionNow}
       />
 
       {/* ── Git Init Confirmation: project directory is not a git repo yet ── */}
