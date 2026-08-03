@@ -5,30 +5,27 @@ import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
-import { api, ApiError } from '../../api/client'
+import { api } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconTrash, IconSettings } from '../FileManager/icons'
+import { IconPlus, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
-import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
-import { getParentPath } from '../../utils/path'
+import type { Session, DuplicateGroup, ExternalSession, Project, Workspace } from '../../api/client'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
-import { Modal } from '../Modal/Modal'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
-import { inputClass, inputStyle } from './sidebarModalStyles'
 import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 import { ReleaseConfirmDialog, type ReleaseTarget } from './ReleaseConfirmDialog'
+import { RepairPathDialog, type RepairTarget } from './RepairPathDialog'
 import { CreateSessionModal } from './CreateSessionModal'
 import { CreateProjectModal } from './CreateProjectModal'
 import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
-import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
-import { PixelButton } from '../PixelUI/PixelButton'
+import { GitBranchSprite, SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
 
@@ -152,14 +149,8 @@ export function Sidebar() {
 
   // Repair project path dialog — shown when user clicks a workspace whose
   // path no longer exists on disk. Lets them browse to the new location.
-  const [repairDialogOpen, setRepairDialogOpen] = useState(false)
-  const [repairProject, setRepairProject] = useState<{ project: Project; workspace: Workspace; oldPath: string } | null>(null)
-  const [repairPath, setRepairPath] = useState('')
-  const [repairBrowsePath, setRepairBrowsePath] = useState('')
-  const [repairBrowseEntries, setRepairBrowseEntries] = useState<FileEntry[]>([])
-  const [repairBrowseLoading, setRepairBrowseLoading] = useState(false)
-  const [repairBrowseError, setRepairBrowseError] = useState<string | null>(null)
-  const [repairSubmitting, setRepairSubmitting] = useState(false)
+  // 表单/目录浏览等状态均由 RepairPathDialog 自持；null = 关闭。
+  const [repairTarget, setRepairTarget] = useState<RepairTarget | null>(null)
 
   // External tmux sessions (not yet adopted into any project)
   const [externalSessions, setExternalSessions] = useState<ExternalSession[]>([])
@@ -328,34 +319,6 @@ export function Sidebar() {
     }
   }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
 
-  // Fetch directory entries for the repair-project-path dialog's browse list.
-  const fetchRepairDirs = useCallback(async (path: string) => {
-    setRepairBrowseLoading(true)
-    setRepairBrowseError(null)
-    try {
-      const data = await api.listDirs(path)
-      setRepairBrowseEntries(
-        data.files.filter(
-          (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
-        ),
-      )
-    } catch (e: unknown) {
-      if (e instanceof ApiError && e.status === 404) {
-        setRepairBrowseEntries([])
-      } else {
-        setRepairBrowseError((e instanceof Error ? e.message : String(e)) || '无法访问该目录')
-      }
-    } finally {
-      setRepairBrowseLoading(false)
-    }
-  }, [])
-
-  // Auto-fetch when repairBrowsePath changes
-  useEffect(() => {
-    if (!repairBrowsePath) return
-    fetchRepairDirs(repairBrowsePath)
-  }, [repairBrowsePath, fetchRepairDirs])
-
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
   const decisionCandidatesRef = useRef<Set<string>>(new Set())
@@ -492,77 +455,12 @@ export function Sidebar() {
     setExpandedProjects(newSet)
   }
 
-  // Repair dialog browse handlers
-  const handleRepairEnterDir = (entry: FileEntry) => {
-    const newPath = repairBrowsePath.endsWith('/')
-      ? `${repairBrowsePath}${entry.name}`
-      : `${repairBrowsePath}/${entry.name}`
-    setRepairPath(newPath)
-    setRepairBrowsePath(newPath)
-  }
-
-  const handleRepairGoUp = () => {
-    const parent = getParentPath(repairBrowsePath)
-    if (!parent) return
-    setRepairPath(parent)
-    setRepairBrowsePath(parent)
-  }
-
-  const handleRepairPathApply = () => {
-    const trimmed = repairPath.trim()
-    if (!trimmed || trimmed === repairBrowsePath) return
-    setRepairBrowsePath(trimmed)
-  }
-
-  const handleRepairRefresh = () => {
-    if (repairBrowsePath) fetchRepairDirs(repairBrowsePath)
-  }
-
-  const handleRepairUpdate = async () => {
-    if (!repairProject || !repairPath.trim()) return
-    setRepairSubmitting(true)
-    try {
-      await api.updateProject(repairProject.project.id, { path: repairPath.trim() })
-      addToast('success', t('sidebar.repairUpdated') ?? `Project path updated to "${repairPath.trim()}"`)
-      // Refresh projects + worktrees + sessions so the UI reflects the new path
-      await Promise.all([loadProjects(), loadWorktrees(repairProject.project.id), loadSessions(repairProject.project.id)])
-      // Activate the workspace after successful update
-      setActiveProject(repairProject.project.id)
-      setActiveSession(null)
-      setActiveWorkspace(repairProject.workspace.id)
-      setRepairDialogOpen(false)
-      setRepairProject(null)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setRepairSubmitting(false)
-    }
-  }
-
-  const openRepairDialog = (project: Project, workspace: Workspace, oldPath: string) => {
-    setRepairProject({ project, workspace, oldPath })
-    setRepairPath('')
-    setRepairBrowsePath(oldPath ? getParentPath(oldPath) : '')
-    setRepairBrowseEntries([])
-    setRepairBrowseError(null)
-    setRepairDialogOpen(true)
-  }
-
-  const closeRepairDialog = () => {
-    setRepairDialogOpen(false)
-    setRepairProject(null)
-    setRepairPath('')
-    setRepairBrowsePath('')
-    setRepairBrowseEntries([])
-    setRepairBrowseError(null)
-  }
-
   const handleWorkspaceClick = async (proj: Project, wt: Workspace) => {
     // Check if the workspace path exists on disk
     try {
       const { exists } = await api.pathExists(wt.path)
       if (!exists) {
-        openRepairDialog(proj, wt, proj.path)
+        setRepairTarget({ project: proj, workspace: wt, oldPath: proj.path })
         return
       }
     } catch {
@@ -1392,198 +1290,11 @@ export function Sidebar() {
       />
 
       {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}
-      <Modal
-        open={repairDialogOpen}
-        onClose={closeRepairDialog}
-        title={t('sidebar.repairTitle') ?? 'Project Path Not Found'}
-        maxWidth="max-w-lg"
-      >
-        {repairProject && (
-          <div className="space-y-4">
-            <div
-              className="rounded-md px-3 py-2"
-              style={{
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--danger-30)',
-                fontSize: 12,
-                color: 'var(--text-secondary)',
-              }}
-            >
-              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 4 }}>
-                {t('sidebar.repairOldPathLabel') ?? 'Original path (no longer exists)'}
-              </div>
-              <div
-                className="truncate"
-                style={{
-                  fontFamily: READER_FONT,
-                  fontSize: 11,
-                  color: 'var(--danger)',
-                }}
-              >
-                {repairProject.project.path}
-              </div>
-            </div>
-
-            <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-              {t('sidebar.repairHint') ??
-                'The project directory may have been moved or renamed. Browse to its new location below.'}
-            </p>
-
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                {t('sidebar.repairNewPathLabel') ?? 'New Path'}
-              </label>
-              <input
-                type="text"
-                value={repairPath}
-                onChange={(e) => setRepairPath(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    handleRepairPathApply()
-                  }
-                }}
-                onBlur={(e) => {
-                  handleRepairPathApply()
-                  e.currentTarget.style.borderColor = 'var(--border-strong)'
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-                placeholder="/home/user/project"
-                className={inputClass}
-                style={inputStyle}
-                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="block text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
-                  {t('sidebar.repairBrowse') ?? 'Browse'}
-                </label>
-                <button
-                  onClick={handleRepairRefresh}
-                  title={t('sidebar.refresh') ?? 'Refresh'}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded transition-all"
-                  style={{
-                    borderWidth: '1px',
-                    borderStyle: 'solid',
-                    borderColor: 'var(--border-strong)',
-                    color: 'var(--text-secondary)',
-                    fontSize: 11,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--accent)'
-                    e.currentTarget.style.color = 'var(--accent)'
-                    e.currentTarget.style.background = 'var(--accent-10)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-strong)'
-                    e.currentTarget.style.color = 'var(--text-secondary)'
-                    e.currentTarget.style.background = 'transparent'
-                  }}
-                >
-                  <IconRefresh width={10} height={10} />
-                  {t('sidebar.refresh') ?? 'Refresh'}
-                </button>
-              </div>
-              <div
-                className="overflow-y-auto overlay-scroll-content"
-                style={{
-                  height: 200,
-                  background: 'var(--bg-base)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 5,
-                  padding: 4,
-                }}
-              >
-                {/* ".." parent entry */}
-                <div
-                  onClick={handleRepairGoUp}
-                  className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
-                  style={{
-                    borderRadius: 4,
-                    color: 'var(--text-faint)',
-                    cursor: getParentPath(repairBrowsePath) ? 'pointer' : 'not-allowed',
-                    opacity: getParentPath(repairBrowsePath) ? 1 : 0.5,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!getParentPath(repairBrowsePath)) return
-                    e.currentTarget.style.background = 'var(--accent-10)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'transparent'
-                  }}
-                >
-                  <IconArrowUp width={14} height={14} />
-                  <span>..</span>
-                </div>
-
-                {/* Loading state */}
-                {repairBrowseLoading && (
-                  <div className="flex items-center justify-center py-6 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {t('sidebar.loading') ?? 'Loading…'}
-                  </div>
-                )}
-
-                {/* Error state */}
-                {!repairBrowseLoading && repairBrowseError && (
-                  <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
-                    <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
-                    <div style={{ color: 'var(--text-muted)' }}>{repairBrowseError}</div>
-                    <button
-                      onClick={handleRepairRefresh}
-                      className="px-2 py-0.5 rounded transition-all"
-                      style={{ border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: 11 }}
-                    >
-                      {t('sidebar.retry') ?? 'Retry'}
-                    </button>
-                  </div>
-                )}
-
-                {/* Empty state */}
-                {!repairBrowseLoading && !repairBrowseError && repairBrowseEntries.length === 0 && (
-                  <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
-                    <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
-                    <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? 'Empty directory'}</div>
-                  </div>
-                )}
-
-                {/* Directory entries */}
-                {!repairBrowseLoading && !repairBrowseError && repairBrowseEntries.map((entry) => (
-                  <div
-                    key={entry.name}
-                    onClick={() => handleRepairEnterDir(entry)}
-                    className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
-                    style={{
-                      borderRadius: 4,
-                      color: 'var(--text-secondary)',
-                      cursor: 'pointer',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--accent-10)'
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent'
-                    }}
-                  >
-                    <FolderSprite size={14} />
-                    <span className="truncate">{entry.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-1">
-              <PixelButton variant="secondary" onClick={closeRepairDialog}>
-                {t('sidebar.cancel') ?? 'Cancel'}
-              </PixelButton>
-              <PixelButton variant="accent" onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
-                {repairSubmitting ? t('sidebar.repairUpdating') ?? 'Updating…' : t('sidebar.repairUpdate') ?? 'Update Path'}
-              </PixelButton>
-            </div>
-          </div>
-        )}
-      </Modal>
+      <RepairPathDialog
+        target={repairTarget}
+        onClose={() => setRepairTarget(null)}
+        onRepaired={(pid) => Promise.all([loadProjects(), loadWorktrees(pid), loadSessions(pid)]).then(() => {})}
+      />
 
       {/* ── Legacy Duplicate Projects Reconciliation Dialog ── */}
       <DuplicateProjectsDialog
