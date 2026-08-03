@@ -47,7 +47,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.7] - 2026-08-03
 
 ### Added
 
