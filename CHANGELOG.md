@@ -56,7 +56,7 @@ Prefix each entry with the area it affects:
 
 ### Refactored
 
-- Refactored: `Sidebar.tsx`（2,618 行）拆分为 14 个自带状态的子组件/模块（含 useDirBrowser、useAgentAttentionPolling 两个 hook），主文件降至 ≤800 行；目录浏览重复逻辑收敛为 useDirBrowser hook，行为零变化 (2026-08-03 23:40)
+- (2026-08-03 23:40) `[frontend]` `Sidebar.tsx`（2,618 行）拆分为 14 个自带状态的子组件/模块（含 useDirBrowser、useAgentAttentionPolling 两个 hook），主文件降至 ≤800 行；目录浏览重复逻辑收敛为 useDirBrowser hook，行为零变化（`frontend/src/components/Sidebar/`、`frontend/src/hooks/useDirBrowser.ts`）
 
 ## [0.2.7] - 2026-08-03
 
