@@ -1,10 +1,9 @@
-import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
-import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconPlus, IconSettings } from '../FileManager/icons'
@@ -24,57 +23,13 @@ import { CreateSessionModal } from './CreateSessionModal'
 import { CreateProjectModal } from './CreateProjectModal'
 import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { ExternalSessionsSection } from './ExternalSessionsSection'
+import { SidebarBottomButton } from './RowActionButtons'
+import { useAgentAttentionPolling } from './useAgentAttentionPolling'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
-
-function SidebarBottomButton({
-  toggle,
-  icon,
-  title,
-  onClick,
-  size = 26,
-  className = '',
-}: {
-  toggle: string
-  icon: ReactNode
-  title: string
-  onClick: () => void
-  size?: number
-  className?: string
-}) {
-  return (
-    <button
-      data-toggle={toggle}
-      onClick={onClick}
-      className={`row-action flex items-center justify-center transition-all ${className}`}
-      style={{
-        width: size,
-        height: size,
-        borderWidth: '1px',
-        borderStyle: 'solid',
-        borderColor: 'var(--border-strong)',
-        color: 'var(--text-faint)',
-        fontSize: 14,
-      }}
-      title={title}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = 'var(--accent)'
-        e.currentTarget.style.color = 'var(--accent)'
-        e.currentTarget.style.background = 'var(--accent-10)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-faint)'
-        e.currentTarget.style.background = 'transparent'
-      }}
-    >
-      {icon}
-    </button>
-  )
-}
 
 export function Sidebar() {
   const {
@@ -105,7 +60,6 @@ export function Sidebar() {
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
-  const attention = useAttention()
 
   // ACP 会话活动状态（chatStore 派生）：与 tmux 屏幕检测的 agent_state 归一，
   // 使两类会话的 Sidebar 状态点/聚合徽标表现一致。useShallow 保证仅在
@@ -298,101 +252,8 @@ export function Sidebar() {
     }
   }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
 
-  // ── Smart diff: session polling + attention detection ──
-  const lastAgentEventRef = useRef<Map<string, string>>(new Map())
-  const decisionCandidatesRef = useRef<Set<string>>(new Set())
-  const firedWaitingRef = useRef<Set<string>>(new Set())
-  const prevAgentStateRef = useRef<Map<string, string>>(new Map())
-
-  useEffect(() => {
-    // 每 3 秒轮询：服务 **tmux** 会话的 agent_state / attention_reason 检测
-    // （tmux 无 WS 推送，仍需轮询）。注意：ACP 会话的 `acp_process_alive`
-    // 已由后端 WS 的 `process_alive` 事件驱动即时更新（见 useAcpChat），
-    // 不再依赖本轮询回流；轮询整体覆盖时 ACP 的 alive 值与推送最终一致，无副作用。
-    const interval = setInterval(async () => {
-      if (!activeProjectId) return
-      try {
-        const freshSessions = await api.listSessions(activeProjectId)
-        const currentSessionKeys = new Set<string>()
-
-        for (const s of freshSessions) {
-          const sessionKey = s.id
-          currentSessionKeys.add(sessionKey)
-
-          // Build event key from agent state fields
-          const eventKey = [
-            s.agent_kind ?? '',
-            s.agent_state ?? '',
-            s.attention_reason ?? '',
-            s.agent_event ?? '',
-            s.agent_nonce ?? '',
-          ].join(':')
-
-          const lastKey = lastAgentEventRef.current.get(sessionKey)
-          if (eventKey && eventKey !== lastKey) {
-            lastAgentEventRef.current.set(sessionKey, eventKey)
-
-            const state = s.agent_state
-            const reason = s.attention_reason as AttentionReason | undefined
-            const prevState = prevAgentStateRef.current.get(sessionKey)
-
-            if (state === 'idle' && reason === 'done') {
-              // Done — fire immediately
-              attention.fire(s.id, sessionKey, 'done')
-            } else if (state === 'idle' && reason === 'error') {
-              // Error — fire immediately
-              attention.fire(s.id, sessionKey, 'error')
-            } else if (state === 'idle' && !reason && prevState === 'running') {
-              // 屏幕检测：running → idle 转变即完成（done = idle + 未查看，
-              // 查看会话时 AttentionProvider.setActive 清除）
-              attention.fire(s.id, sessionKey, 'done')
-            } else if (state === 'running') {
-              // Running — clear any alert
-              attention.clearAlert(sessionKey)
-            }
-          }
-
-          // Decision debounce（eventKey 不变也要推进：屏幕检测的 waiting 无 nonce 变化）：
-          // 连续两轮 waiting 才告警；每个 waiting 周期只告警一次
-          if (s.agent_state === 'waiting') {
-            if (!firedWaitingRef.current.has(sessionKey)) {
-              if (decisionCandidatesRef.current.has(sessionKey)) {
-                attention.fire(s.id, sessionKey, 'decision')
-                decisionCandidatesRef.current.delete(sessionKey)
-                firedWaitingRef.current.add(sessionKey)
-              } else {
-                decisionCandidatesRef.current.add(sessionKey)
-              }
-            }
-          } else {
-            decisionCandidatesRef.current.delete(sessionKey)
-            firedWaitingRef.current.delete(sessionKey)
-          }
-
-          if (s.agent_state) {
-            prevAgentStateRef.current.set(sessionKey, s.agent_state)
-          }
-        }
-
-        // Clear alerts for sessions that disappeared
-        for (const key of lastAgentEventRef.current.keys()) {
-          if (!currentSessionKeys.has(key)) {
-            attention.clearAlert(key)
-            lastAgentEventRef.current.delete(key)
-            decisionCandidatesRef.current.delete(key)
-            firedWaitingRef.current.delete(key)
-            prevAgentStateRef.current.delete(key)
-          }
-        }
-
-        setSessions(activeProjectId, freshSessions)
-      } catch {
-        // Quietly ignore poll errors
-      }
-    }, 3000)
-
-    return () => clearInterval(interval)
-  }, [activeProjectId, setSessions, attention])
+  // ── Smart diff: session polling + attention detection（外移至 hook，见 E4）──
+  useAgentAttentionPolling(activeProjectId)
 
   useEffect(() => {
     api.systemInfo().then((info) => {

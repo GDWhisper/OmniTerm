@@ -837,6 +837,7 @@ git commit -m "docs: Sidebar 拆分验收与文档闭环（frontend/frontend-pat
 - **E1（Task 5，2026-08-03）**：初稿的渲染规格 `Modal open={phase === 'form'}` 在 submit-worktree 触发 git init 确认时会把表单 Modal 一并收起，与原实现「表单保留、确认框叠加其上」不一致（Esc 语义、取消后重挂载动画/autoFocus 均受影响），违背「行为零变化」约束。已修正为按 `mode === 'submit-worktree'` 叠加渲染（commit 82ac737），并同步更新 Task 5 Step 1 的渲染规格。
 - **E2（Task 6，2026-08-03）**：`useDirBrowser` 追加 `reset(): void`（清空 entries/error/notFound）。原实现中「路径输入被清空 / 弹窗打开 / 弹窗关闭」三处会显式清掉这三态，而 hook 封装了 setter，不提供 reset 就无法逐字保留——表现为输入清空后残留旧补全建议、重开弹窗时短暂闪现上次的错误/「将自动创建」态。CreateProjectModal 在三处对应调用 `reset()`，行为与拆分前一致；Task 1 的接口清单已同步更新。
 - **E3（Task 9，2026-08-03）**：Task 9 Step 2 挂载片段初稿写作 `void Promise.all([loadWorktrees, loadSessions])`，与原实现不一致——原「+」（创建 worktree）回调为 `async onClick`，先 `await` 展开兜底加载完成才 `setCreateWtProjectId` 打开弹窗。`void` 会让弹窗提前一个加载时延打开，违背「行为零变化」约束（与 E1 同类）。已恢复 `async/await` 时序（commit 7ddefda），并同步更新上方挂载片段。
+- **E4（Task 10，2026-08-03）**：行数验收 904 > 800。排查无搬移残留；超标源于两块不可删减内容——强制原样保留的「pending notification scheme decision」注释死代码（69 行）与 agent_state 轮询 effect（95 行），属结构性超标。按 Step 1 预案触发方向计划 D1 翻盘条件：轮询 effect 原样外移为 `useAgentAttentionPolling` hook（`Sidebar/useAgentAttentionPolling.ts`，effect 体逐字保留，`setSessions`/`attention` 改由 hook 内部获取）；另将 `SidebarBottomButton`（45 行，折叠栏与状态栏共用）并入既有 `RowActionButtons.tsx`，不新增其他实体。主文件降至 ≤800 行；「明确不做」清单中「不抽 agent_state 轮询 hook」一项随之失效。
 
 ## 风险与勘误约定
 
