@@ -14,7 +14,6 @@ import { getParentPath } from '../../utils/path'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { Modal } from '../Modal/Modal'
-import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
 import { inputClass, inputStyle } from './sidebarModalStyles'
@@ -24,6 +23,7 @@ import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 import { ReleaseConfirmDialog, type ReleaseTarget } from './ReleaseConfirmDialog'
 import { CreateSessionModal } from './CreateSessionModal'
+import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
 import { FolderSprite, GitBranchSprite, SignalBarsSprite } from '../PixelUI'
@@ -145,25 +145,9 @@ export function Sidebar() {
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // Create worktree modal state
-  const [createWtOpen, setCreateWtOpen] = useState(false)
+  // Create worktree modal switch（保存目标项目 id；null = 关闭）。
+  // 表单/分支列表/git-init 确认等状态均由 CreateWorktreeModal 自持。
   const [createWtProjectId, setCreateWtProjectId] = useState<string | null>(null)
-  const [createWtBranch, setCreateWtBranch] = useState('')
-  const [createWtPath, setCreateWtPath] = useState('')
-  const [createWtBaseBranch, setCreateWtBaseBranch] = useState('')
-  const [createWtBranches, setCreateWtBranches] = useState<string[]>([])
-  const [createWtCurrentBranch, setCreateWtCurrentBranch] = useState('')
-  const [createWtBranchesLoading, setCreateWtBranchesLoading] = useState(false)
-  // 非 git 仓库时弹确认框：询问是否先初始化 git（用户确认后自动 init + 继续）
-  const [gitInitConfirm, setGitInitConfirm] = useState<{
-    projectId: string
-    projectName: string
-    /** open-modal = 打开创建弹窗前检测到；submit-worktree = 提交创建时检测到（带表单参数重试） */
-    mode: 'open-modal' | 'submit-worktree'
-    /** 项目目录是否有 .gitignore——无则初始化会提交全部现有文件，确认框需附加警告 */
-    hasGitignore: boolean
-    params?: { branch: string; path: string; baseBranch: string }
-  } | null>(null)
 
   // Delete worktree confirmation dialog
   const [confirmDeleteWt, setConfirmDeleteWt] = useState<DeleteWorktreeTarget | null>(null)
@@ -748,107 +732,6 @@ export function Sidebar() {
     }
   }
 
-  // 创建 worktree 的公共提交逻辑：成功时刷新 + 清理弹窗状态；失败时若
-  // 后端返回 not_a_git_repo 且未带 init，则弹确认框询问是否先初始化 git。
-  const submitWorktree = async (params: {
-    projectId: string
-    branch: string
-    path: string
-    baseBranch: string
-    init: boolean
-  }): Promise<boolean> => {
-    try {
-      await api.createWorktree(params.projectId, {
-        branch: params.branch,
-        path: params.path.trim() || undefined,
-        base_branch: params.baseBranch.trim() || undefined,
-        init: params.init,
-      })
-      await loadWorktrees(params.projectId)
-      addToast('success', t('sidebar.worktreeCreated', { branch: params.branch }) ?? `Worktree "${params.branch}" created`)
-      setCreateWtOpen(false)
-      setCreateWtProjectId(null)
-      setCreateWtBranch('')
-      setCreateWtPath('')
-      setCreateWtBaseBranch('')
-      setCreateWtBranches([])
-      setCreateWtCurrentBranch('')
-      return true
-    } catch (err) {
-      const body = err instanceof ApiError ? (err.body as { code?: string; has_gitignore?: boolean }) : undefined
-      if (body?.code === 'not_a_git_repo' && !params.init) {
-        const project = projects.find((p) => p.id === params.projectId)
-        setGitInitConfirm({
-          projectId: params.projectId,
-          projectName: project?.name ?? params.projectId,
-          mode: 'submit-worktree',
-          hasGitignore: body.has_gitignore ?? true,
-          params: { branch: params.branch, path: params.path, baseBranch: params.baseBranch },
-        })
-      } else {
-        addToast('error', err instanceof Error ? err.message : String(err))
-      }
-      return false
-    }
-  }
-
-  const handleCreateWorktree = async () => {
-    if (!createWtProjectId || !createWtBranch.trim()) return
-    setSubmitting(true)
-    await submitWorktree({
-      projectId: createWtProjectId,
-      branch: createWtBranch.trim(),
-      path: createWtPath,
-      baseBranch: createWtBaseBranch,
-      init: false,
-    })
-    setSubmitting(false)
-  }
-
-  // 用户确认初始化 git 后：先 init，再继续（打开弹窗 or 带 init 重试创建）
-  const handleConfirmGitInit = async () => {
-    if (!gitInitConfirm) return
-    setSubmitting(true)
-    try {
-      await api.initGit(gitInitConfirm.projectId)
-      if (gitInitConfirm.mode === 'submit-worktree' && gitInitConfirm.params) {
-        const { branch, path, baseBranch } = gitInitConfirm.params
-        const ok = await submitWorktree({
-          projectId: gitInitConfirm.projectId,
-          branch,
-          path,
-          baseBranch,
-          init: true,
-        })
-        if (ok) setGitInitConfirm(null)
-      } else {
-        // open-modal 模式：初始化成功后重新加载分支并打开创建弹窗
-        setGitInitConfirm(null)
-        setCreateWtProjectId(gitInitConfirm.projectId)
-        setCreateWtBranch('')
-        setCreateWtPath('')
-        setCreateWtBaseBranch('')
-        setCreateWtBranches([])
-        setCreateWtCurrentBranch('')
-        setCreateWtBranchesLoading(true)
-        try {
-          const data = await api.listBranches(gitInitConfirm.projectId)
-          setCreateWtBranches(data.branches)
-          setCreateWtCurrentBranch(data.current)
-        } catch {
-          // 分支加载失败也照常打开弹窗（下拉显示默认项）
-        } finally {
-          setCreateWtBranchesLoading(false)
-        }
-        setCreateWtOpen(true)
-      }
-    } catch (err) {
-      addToast('error', err instanceof Error ? err.message : String(err))
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -1161,35 +1044,6 @@ export function Sidebar() {
                           await Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
                         }
                         setCreateWtProjectId(proj.id)
-                        setCreateWtBranch('')
-                        setCreateWtPath('')
-                        setCreateWtBaseBranch('')
-                        setCreateWtBranches([])
-                        setCreateWtCurrentBranch('')
-                        // 预检 git 仓库：非 git 仓库先弹确认框询问是否初始化，
-                        // 确认前不打开创建弹窗（避免填完分支名后才发现创建不了）
-                        setCreateWtBranchesLoading(true)
-                        try {
-                          const data = await api.listBranches(proj.id)
-                          setCreateWtBranches(data.branches)
-                          setCreateWtCurrentBranch(data.current)
-                          setCreateWtOpen(true)
-                        } catch (err) {
-                          const body = err instanceof ApiError ? (err.body as { code?: string; has_gitignore?: boolean }) : undefined
-                          if (body?.code === 'not_a_git_repo') {
-                            setGitInitConfirm({
-                              projectId: proj.id,
-                              projectName: proj.name,
-                              mode: 'open-modal',
-                              hasGitignore: body.has_gitignore ?? true,
-                            })
-                          } else {
-                            // 其他错误（网络/权限等）：照常打开弹窗，分支下拉显示默认
-                            setCreateWtOpen(true)
-                          }
-                        } finally {
-                          setCreateWtBranchesLoading(false)
-                        }
                       }}
                       className="row-action flex-shrink-0 flex items-center justify-center transition-all"
                       style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
@@ -1854,110 +1708,11 @@ export function Sidebar() {
       />
 
       {/* ── Create Worktree Modal ── */}
-      <Modal
-        open={createWtOpen}
-        onClose={() => {
-          setCreateWtOpen(false)
-          setCreateWtProjectId(null)
-          setCreateWtBranch('')
-          setCreateWtPath('')
-          setCreateWtBaseBranch('')
-          setCreateWtBranches([])
-          setCreateWtCurrentBranch('')
-        }}
-        title={t('sidebar.createWorktree') ?? 'Create Worktree'}
-        maxWidth="max-w-sm"
-      >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.worktreeBranch') ?? 'Branch Name'}
-            </label>
-            <input
-              type="text"
-              value={createWtBranch}
-              onChange={(e) => setCreateWtBranch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
-              placeholder="feature-xyz"
-              autoFocus
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.worktreePath') ?? 'Target Path'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
-            </label>
-            <input
-              type="text"
-              value={createWtPath}
-              onChange={(e) => setCreateWtPath(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCreateWorktree() } }}
-              placeholder={createWtProjectId
-                ? (() => {
-                    const proj = projects.find(p => p.id === createWtProjectId)
-                    if (!proj) return ''
-                    const p = proj.path.split('/')
-                    const dirname = p[p.length - 1]
-                    const parent = p.slice(0, -1).join('/') || '/'
-                    return `${parent}/${dirname}-${createWtBranch || '<branch>'}`
-                  })()
-                : ''}
-              className={inputClass}
-              style={{ ...inputStyle, direction: 'rtl', textAlign: 'left' as const }}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
-            <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-              {t('sidebar.worktreePathHint') ?? '留空则在项目同级目录创建 <项目名>-<分支名>'}
-            </p>
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.worktreeBaseBranch') ?? 'Base Branch'} <span style={{ color: 'var(--text-dim)' }}>{t('sidebar.optional')}</span>
-            </label>
-            <select
-              value={createWtBaseBranch}
-              onChange={(e) => setCreateWtBaseBranch(e.target.value)}
-              className={inputClass}
-              style={{
-                ...inputStyle,
-                cursor: 'pointer',
-                fontFamily: READER_FONT,
-              }}
-            >
-              <option value="">{
-  createWtBranchesLoading
-    ? (t('sidebar.loading') ?? 'Loading...')
-    : createWtCurrentBranch
-      ? (t('sidebar.worktreeDefaultBase', { branch: createWtCurrentBranch }) ?? `默认（${createWtCurrentBranch} 的最新提交）`)
-      : (t('sidebar.worktreeDefaultBaseFallback') ?? '默认（当前分支的最新提交）')
-}</option>
-              {createWtBranches.map(b => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <PixelButton variant="secondary" onClick={() => {
-              setCreateWtOpen(false)
-              setCreateWtProjectId(null)
-              setCreateWtBranch('')
-              setCreateWtPath('')
-              setCreateWtBaseBranch('')
-              setCreateWtBranches([])
-              setCreateWtCurrentBranch('')
-            }}>
-              {t('sidebar.cancel')}
-            </PixelButton>
-            <PixelButton variant="accent" onClick={handleCreateWorktree} disabled={submitting || !createWtBranch.trim()}>
-              {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </PixelButton>
-          </div>
-        </div>
-      </Modal>
+      <CreateWorktreeModal
+        projectId={createWtProjectId}
+        onClose={() => setCreateWtProjectId(null)}
+        reloadWorktrees={loadWorktrees}
+      />
 
       {/* ── Rename Modal (Project or Session, reused) ── */}
       <RenameDialog
@@ -1986,22 +1741,6 @@ export function Sidebar() {
         target={confirmRelease}
         onClose={() => setConfirmRelease(null)}
         onRelease={releaseSessionNow}
-      />
-
-      {/* ── Git Init Confirmation: project directory is not a git repo yet ── */}
-      <ConfirmDialog
-        open={!!gitInitConfirm}
-        onClose={() => setGitInitConfirm(null)}
-        onConfirm={handleConfirmGitInit}
-        title={t('sidebar.gitInitTitle') ?? 'Initialize Git Repository?'}
-        message={
-          (t('sidebar.gitInitMessage', { name: gitInitConfirm?.projectName ?? '' }) ?? '该项目目录还不是 Git 仓库。是否先执行 git init 并创建初始提交，再继续创建 Worktree？') +
-          (gitInitConfirm && !gitInitConfirm.hasGitignore
-            ? (t('sidebar.gitInitNoGitignore') ?? '\n\n注意：未检测到 .gitignore，初始化将把当前目录下所有现有文件（含大文件/敏感文件）纳入首次提交。')
-            : '')
-        }
-        confirmText={t('sidebar.gitInitConfirm') ?? '初始化并继续'}
-        loading={submitting}
       />
 
       {/* ── Repair Project Path Modal: shown when user clicks a workspace whose path no longer exists. */}
