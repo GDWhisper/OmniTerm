@@ -11,8 +11,12 @@
     "omniterm": "shim.js"
   },
   "files": [
-    "shim.js"
+    "shim.js",
+    "postinstall.js"
   ],
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
   "keywords": ["tmux", "terminal", "web", "manager"],
   "engines": {
     "node": ">=18"

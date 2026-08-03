@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-03 01:40) `[infra]` npm 安装完成引导提示：主包新增 `postinstall` 脚本，`npm install -g @gdwhisper/omniterm` 完成时提示「打开新终端运行 `omniterm start`」（安装后 PATH 缓存未刷新，需换新终端才能运行命令）（`npm-package/{package.json,postinstall.js}`、`scripts/npm-prepare.sh`）
+
 ## [0.2.6] - 2026-08-02
 
 ### Added

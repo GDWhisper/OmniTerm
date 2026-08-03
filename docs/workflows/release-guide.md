@@ -248,7 +248,7 @@ cargo publish --allow-dirty
 
 ### Step 9：npm 发布（CI 自动，原生平台分包）
 
-npm 渠道采用 **esbuild 式原生平台分包**：主包 `@gdwhisper/omniterm` 仅含 `shim.js`，`optionalDependencies` 精确锁定 4 个平台子包（`@gdwhisper/omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），每个子包内嵌对应平台 binary，安装时 npm 按 `os`/`cpu` 只拉当前平台。**不再是 postinstall 下载壳包。**
+npm 渠道采用 **esbuild 式原生平台分包**：主包 `@gdwhisper/omniterm` 仅含 `shim.js` + `postinstall.js`（安装完成向用户打印引导提示：`Open a NEW terminal and run: omniterm start`），`optionalDependencies` 精确锁定 4 个平台子包（`@gdwhisper/omniterm-{linux-x64,linux-arm64,darwin-arm64,win32-x64}`），每个子包内嵌对应平台 binary，安装时 npm 按 `os`/`cpu` 只拉当前平台。**不再是 postinstall 下载壳包。**
 
 **CI 自动发布**：`release.yml` 的 `npm-publish` job 在 `github-release` 成功后运行——从本次 Release 下载 `omniterm-*` 资产、`scripts/npm-prepare.sh` staging 出主包+平台包、幂等发布（已存在版本自动跳过，平台包先发主包后发）。tag push 即自动发布，**无需手动操作**。
 
@@ -270,6 +270,7 @@ gh run watch <run-id> --repo GDWhisper/OmniTerm   # 观察发布结果
 gh release download vX.Y.Z --repo GDWhisper/OmniTerm --pattern 'omniterm-*' --dir /tmp/otassets
 ./scripts/npm-prepare.sh X.Y.Z /tmp/otassets /tmp/otnpm
 # 检查 /tmp/otnpm/main/package.json 含 4 个精确锁定 optionalDependencies
+# 检查 /tmp/otnpm/main/ 含 shim.js + postinstall.js（npm 主包内容）
 # 检查 /tmp/otnpm/platform/*/bin/omniterm(.exe) 可执行
 ```
 
