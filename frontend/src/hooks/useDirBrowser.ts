@@ -41,5 +41,12 @@ export function useDirBrowser() {
     }
   }, [])
 
-  return { entries, loading, error, notFound, loadDirs }
+  /** 清空列表与错误标志，回到未浏览的空白态（弹窗打开/关闭、路径输入被清空时使用）。 */
+  const reset = useCallback(() => {
+    setEntries([])
+    setError(null)
+    setNotFound(false)
+  }, [])
+
+  return { entries, loading, error, notFound, loadDirs, reset }
 }

@@ -7,7 +7,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconTrash, IconSettings } from '../FileManager/icons'
+import { IconFolder, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -23,6 +23,7 @@ import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 import { ReleaseConfirmDialog, type ReleaseTarget } from './ReleaseConfirmDialog'
 import { CreateSessionModal } from './CreateSessionModal'
+import { CreateProjectModal } from './CreateProjectModal'
 import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
 import { CountBadge } from '../Common/CountBadge'
@@ -140,10 +141,7 @@ export function Sidebar() {
   const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null)
   const [confirmRelease, setConfirmRelease] = useState<ReleaseTarget | null>(null)
 
-  const [projName, setProjName] = useState('')
-  const [projPath, setProjPath] = useState('')
   const [homeDir, setHomeDir] = useState('')
-  const [submitting, setSubmitting] = useState(false)
 
   // Create worktree modal switch（保存目标项目 id；null = 关闭）。
   // 表单/分支列表/git-init 确认等状态均由 CreateWorktreeModal 自持。
@@ -152,23 +150,6 @@ export function Sidebar() {
   // Delete worktree confirmation dialog
   const [confirmDeleteWt, setConfirmDeleteWt] = useState<DeleteWorktreeTarget | null>(null)
 
-  // Browse state for the create-project modal's embedded directory list
-  const [browsePath, setBrowsePath] = useState('')
-  const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([])
-  const [browseLoading, setBrowseLoading] = useState(false)
-  const [browseError, setBrowseError] = useState<string | null>(null)
-  // True when the fetched path doesn't exist (404). The backend's
-  // create_project auto-creates non-existent paths, so this is friendly
-  // info rather than a hard error — the UI shows a "will be created" hint.
-  const [browseNotFound, setBrowseNotFound] = useState(false)
-  const [autocompleteActiveIndex, setAutocompleteActiveIndex] = useState(-1)
-  const autocompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // 409 Conflict response data when creating a project whose path is
-  // already covered by an existing project.
-  const [coverConflict, setCoverConflict] = useState<{
-    coveringProject: { id: string; name: string; path: string }
-    reason: 'exact_path' | 'worktree_child'
-  } | null>(null)
   // Repair project path dialog — shown when user clicks a workspace whose
   // path no longer exists on disk. Lets them browse to the new location.
   const [repairDialogOpen, setRepairDialogOpen] = useState(false)
@@ -347,35 +328,6 @@ export function Sidebar() {
     }
   }, [sessions, worktrees, activeProjectId, workspaceSessionMemory, clearWorkspaceSession])
 
-  // Fetch directory entries for the new-project modal's browse list.
-  // When `prefix` is provided, only entries whose name starts with it
-  // (case-insensitive) are kept — this powers real-time path autocomplete.
-  const fetchDirs = useCallback(async (path: string, prefix?: string) => {
-    setBrowseLoading(true)
-    setBrowseError(null)
-    setBrowseNotFound(false)
-    try {
-      const data = await api.listDirs(path)
-      let dirs = data.files.filter(
-        (f) => f.path_type === 'Dir' || f.path_type === 'SymlinkDir',
-      )
-      if (prefix) {
-        const lower = prefix.toLowerCase()
-        dirs = dirs.filter((f) => f.name.toLowerCase().startsWith(lower))
-      }
-      setBrowseEntries(dirs)
-    } catch (e: unknown) {
-      if (e instanceof ApiError && e.status === 404) {
-        setBrowseNotFound(true)
-        setBrowseEntries([])
-      } else {
-        setBrowseError((e instanceof Error ? e.message : String(e)) || '无法访问该目录')
-      }
-    } finally {
-      setBrowseLoading(false)
-    }
-  }, [])
-
   // Fetch directory entries for the repair-project-path dialog's browse list.
   const fetchRepairDirs = useCallback(async (path: string) => {
     setRepairBrowseLoading(true)
@@ -403,33 +355,6 @@ export function Sidebar() {
     if (!repairBrowsePath) return
     fetchRepairDirs(repairBrowsePath)
   }, [repairBrowsePath, fetchRepairDirs])
-
-  // Real-time path autocomplete — debounced fetch on every keystroke.
-  // Parses the input: "/home/pax/Om" → list "/home/pax/" and filter by "Om".
-  useEffect(() => {
-    const input = projPath.trim()
-    if (!input || input === '/') {
-      setBrowsePath('')
-      setBrowseEntries([])
-      setBrowseError(null)
-      setBrowseNotFound(false)
-      return
-    }
-
-    const lastSlash = input.lastIndexOf('/')
-    const dirPart = lastSlash >= 0 ? input.slice(0, lastSlash + 1) : input
-    const prefix = lastSlash >= 0 ? input.slice(lastSlash + 1) : ''
-
-    if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
-    autocompleteTimerRef.current = setTimeout(() => {
-      setBrowsePath(dirPart)
-      fetchDirs(dirPart, prefix || undefined)
-    }, 200)
-
-    return () => {
-      if (autocompleteTimerRef.current) clearTimeout(autocompleteTimerRef.current)
-    }
-  }, [projPath, fetchDirs])
 
   // ── Smart diff: session polling + attention detection ──
   const lastAgentEventRef = useRef<Map<string, string>>(new Map())
@@ -530,34 +455,11 @@ export function Sidebar() {
   useEffect(() => {
     api.systemInfo().then((info) => {
       setHomeDir(info.home_dir)
-      setProjPath(info.home_dir)
       if (info.multiplexer) setMultiplexer(info.multiplexer)
     }).catch(() => {
-      // fallback: leave projPath empty, user fills it in
+      // fallback: leave homeDir empty, user fills the path in manually
     })
   }, [setMultiplexer])
-
-  // Reset browse state when the create-project modal opens
-  useEffect(() => {
-    if (createProjOpen && homeDir) {
-      setBrowsePath(homeDir)
-      setProjPath(homeDir + '/')
-      setBrowseError(null)
-      setBrowseNotFound(false)
-    }
-  }, [createProjOpen, homeDir])
-
-  // Unified close: clear form + browse state
-  const closeCreateProj = () => {
-    setCreateProjOpen(false)
-    setProjName('')
-    setProjPath(homeDir + '/')
-    setBrowsePath('')
-    setBrowseEntries([])
-    setBrowseError(null)
-    setBrowseNotFound(false)
-    setAutocompleteActiveIndex(-1)
-  }
 
   // Health polling
   useEffect(() => {
@@ -588,22 +490,6 @@ export function Sidebar() {
       void Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
     setExpandedProjects(newSet)
-  }
-
-  // Browse handlers for the new-project modal
-  const handleEnterDir = (entry: FileEntry) => {
-    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
-    setProjPath(`${dirPart}${entry.name}/`)
-  }
-
-  const handleGoUp = () => {
-    const parent = getParentPath(browsePath)
-    if (!parent) return
-    setProjPath(parent)
-  }
-
-  const handleRefresh = () => {
-    if (browsePath) fetchDirs(browsePath)
   }
 
   // Repair dialog browse handlers
@@ -700,38 +586,6 @@ export function Sidebar() {
     setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
   }
 
-  const handleCreateProject = async () => {
-    if (!projName.trim()) return
-    setSubmitting(true)
-    try {
-      await api.createProject({ name: projName.trim(), path: projPath.trim() })
-      await loadProjects()
-      addToast('success', t('sidebar.projectCreated', { name: projName.trim() }) ?? `Project "${projName.trim()}" created`)
-      setCreateProjOpen(false)
-      setProjName('')
-      setProjPath(homeDir + '/')
-    } catch (e) {
-      // 409 Conflict: the new path is already covered by an existing
-      // project. Surface a switch-to-existing dialog instead of letting
-      // the generic toast dismiss.
-      if (e instanceof ApiError && e.status === 409) {
-        const body = e.body as Record<string, unknown> | undefined
-        if (body?.error === 'already_covered') {
-          const coveringProject = body.covering_project as { id: string; name: string; path: string }
-          const reason = body.reason as 'exact_path' | 'worktree_child'
-          setCoverConflict({
-            coveringProject,
-            reason,
-          })
-          return
-        }
-      }
-      // api client already shows error toast for other failures
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -761,59 +615,6 @@ export function Sidebar() {
     } catch {
       // api client already shows error toast
     }
-  }
-
-  // Enter in name field = create project
-  const handleNameKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleCreateProject()
-    }
-  }
-
-  // Path field keyboard navigation for autocomplete
-  const handlePathKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setAutocompleteActiveIndex((prev) => {
-        const next = prev + 1
-        return next < browseEntries.length ? next : prev
-      })
-      return
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setAutocompleteActiveIndex((prev) => {
-        const next = prev - 1
-        return next >= 0 ? next : prev
-      })
-      return
-    }
-    if (e.key === 'Tab' && browseEntries.length > 0) {
-      e.preventDefault()
-      completAutocomplete(
-        autocompleteActiveIndex >= 0 ? autocompleteActiveIndex : 0,
-      )
-      return
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      if (autocompleteActiveIndex >= 0) {
-        completAutocomplete(autocompleteActiveIndex)
-      }
-    }
-    if (e.key === 'Escape') {
-      setAutocompleteActiveIndex(-1)
-    }
-  }
-
-  // Complete the autocomplete suggestion at the given index
-  const completAutocomplete = (index: number) => {
-    const entry = browseEntries[index]
-    if (!entry) return
-    const dirPart = browsePath.endsWith('/') ? browsePath : `${browsePath}/`
-    setProjPath(`${dirPart}${entry.name}/`)
-    setAutocompleteActiveIndex(-1)
   }
 
   // Filter sessions for a specific worktree.
@@ -1540,165 +1341,12 @@ export function Sidebar() {
       </div>
 
       {/* ── Create Project Modal ── */}
-      <Modal
+      <CreateProjectModal
         open={createProjOpen}
-        onClose={closeCreateProj}
-        title={t('sidebar.createProject') ?? 'Create Project'}
-        maxWidth="max-w-lg"
-      >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.projectName') ?? 'Project Name'}
-            </label>
-            <input
-              type="text"
-              value={projName}
-              onChange={(e) => setProjName(e.target.value)}
-              onKeyDown={handleNameKeyDown}
-              placeholder="my-project"
-              autoFocus
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {t('sidebar.repoPath') ?? 'Git Repository Path'}
-            </label>
-            <input
-              type="text"
-              value={projPath}
-              onChange={(e) => {
-                setProjPath(e.target.value)
-                setAutocompleteActiveIndex(-1)
-              }}
-              onKeyDown={handlePathKeyDown}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-strong)'
-                e.currentTarget.style.boxShadow = 'none'
-              }}
-              placeholder={homeDir}
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-            />
-          </div>
-          <div>
-            <div
-              className="overflow-y-auto overlay-scroll-content"
-              style={{
-                height: 200,
-                background: 'var(--bg-base)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 5,
-                padding: 4,
-              }}
-            >
-              {/* ".." parent entry */}
-              <div
-                onClick={handleGoUp}
-                className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
-                style={{
-                  borderRadius: 4,
-                  color: 'var(--text-faint)',
-                  cursor: getParentPath(browsePath) ? 'pointer' : 'not-allowed',
-                  opacity: getParentPath(browsePath) ? 1 : 0.5,
-                }}
-                onMouseEnter={(e) => {
-                  if (!getParentPath(browsePath)) return
-                  e.currentTarget.style.background = 'var(--accent-10)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                <IconArrowUp width={14} height={14} />
-                <span>..</span>
-              </div>
-
-              {/* Loading state */}
-              {browseLoading && (
-                <div className="flex items-center justify-center py-6 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  {t('sidebar.loading') ?? '加载中…'}
-                </div>
-              )}
-
-              {/* Error state */}
-              {!browseLoading && !browseNotFound && browseError && (
-                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
-                  <IconWarning width={20} height={20} style={{ color: 'var(--warning)' }} />
-                  <div style={{ color: 'var(--text-muted)' }}>{browseError}</div>
-                  <button
-                    onClick={handleRefresh}
-                    className="px-2 py-0.5 rounded transition-all"
-                    style={{ border: '1px solid var(--border-strong)', color: 'var(--text-secondary)', fontSize: 11 }}
-                  >
-                    {t('sidebar.retry') ?? '重试'}
-                  </button>
-                </div>
-              )}
-
-              {/* Path doesn't exist — will be auto-created on submit */}
-              {!browseLoading && browseNotFound && (
-                <div className="flex flex-col items-center justify-center gap-2 py-6 text-xs">
-                  <IconFolderPlus width={20} height={20} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
-                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.pathWillBeCreated') ?? '该路径不存在，创建项目时将自动创建'}</div>
-                </div>
-              )}
-
-              {/* Empty state */}
-              {!browseLoading && !browseNotFound && !browseError && browseEntries.length === 0 && (
-                <div className="flex flex-col items-center justify-center gap-1 py-6 text-xs">
-                  <IconFolder width={24} height={24} style={{ color: 'var(--accent)', filter: 'drop-shadow(0 0 6px var(--accent-14))' }} />
-                  <div style={{ color: 'var(--text-muted)' }}>{t('sidebar.emptyDir') ?? '空目录'}</div>
-                </div>
-              )}
-
-              {/* Directory entries */}
-              {!browseLoading && !browseNotFound && !browseError && browseEntries.map((entry, idx) => {
-                const highlighted = idx === autocompleteActiveIndex
-                return (
-                <div
-                  key={entry.name}
-                  onClick={() => handleEnterDir(entry)}
-                  className="flex items-center gap-2 px-2.5 py-1.5 text-xs transition-all"
-                  style={{
-                    borderRadius: 4,
-                    color: highlighted ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    background: highlighted ? 'var(--accent-10)' : 'transparent',
-                  }}
-                  onMouseEnter={(e) => {
-                    setAutocompleteActiveIndex(idx)
-                    e.currentTarget.style.background = 'var(--accent-10)'
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!highlighted) {
-                      e.currentTarget.style.background = 'transparent'
-                    }
-                  }}
-                >
-                  <FolderSprite size={14} />
-                  <span className="truncate">{entry.name}</span>
-                  <span className="ml-auto" style={{ color: 'var(--text-faint)', fontSize: 11 }}>{entry.size ?? 0}</span>
-                </div>
-                )
-              })}
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <PixelButton variant="secondary" onClick={closeCreateProj}>
-              {t('sidebar.cancel')}
-            </PixelButton>
-            <PixelButton variant="accent" onClick={handleCreateProject} disabled={!projName.trim() || submitting}>
-              {submitting ? t('sidebar.creating') : t('sidebar.create')}
-            </PixelButton>
-          </div>
-        </div>
-      </Modal>
+        homeDir={homeDir}
+        onClose={() => setCreateProjOpen(false)}
+        reloadProjects={loadProjects}
+      />
 
       {/* ── Create Session Modal ── */}
       <CreateSessionModal
@@ -1931,69 +1579,6 @@ export function Sidebar() {
               </PixelButton>
               <PixelButton variant="accent" onClick={handleRepairUpdate} disabled={!repairPath.trim() || repairSubmitting}>
                 {repairSubmitting ? t('sidebar.repairUpdating') ?? 'Updating…' : t('sidebar.repairUpdate') ?? 'Update Path'}
-              </PixelButton>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* ── Cover-Conflict Modal: shown when POST /projects returns 409.
-          Offers to switch to the existing project that already covers the
-          requested path (instead of creating a duplicate). */}
-      <Modal
-        open={!!coverConflict}
-        onClose={() => setCoverConflict(null)}
-        title={t('sidebar.coverConflictTitle') ?? 'Project Already Exists'}
-        maxWidth="max-w-md"
-      >
-        {coverConflict && (
-          <div className="space-y-4">
-            <p style={{ fontSize: 13, color: 'var(--text-primary)' }}>
-              {coverConflict.reason === 'exact_path'
-                ? (t('sidebar.coverConflictExact', { name: coverConflict.coveringProject.name }) ??
-                  `A project named "${coverConflict.coveringProject.name}" already uses this exact path.`)
-                : (t('sidebar.coverConflictWorktree', { name: coverConflict.coveringProject.name }) ??
-                  `A project named "${coverConflict.coveringProject.name}" already covers this path — they belong to the same git repository.`)}
-            </p>
-            <div
-              className="rounded-md px-3 py-2 truncate"
-              style={{
-                background: 'var(--bg-surface)',
-                border: '1px solid var(--border-strong)',
-                fontSize: 11,
-                color: 'var(--text-muted)',
-                fontFamily: READER_FONT,
-              }}
-              title={coverConflict.coveringProject.path}
-            >
-              {coverConflict.coveringProject.path}
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-              {t('sidebar.coverConflictHint') ??
-                'Switch to the existing project instead, or choose a different path.'}
-            </p>
-            <div className="flex justify-end gap-2 pt-1">
-              <PixelButton variant="secondary" onClick={() => setCoverConflict(null)}>
-                {t('sidebar.cancel') ?? 'Cancel'}
-              </PixelButton>
-              <PixelButton
-                variant="accent"
-                onClick={() => {
-                  const coverId = coverConflict.coveringProject.id
-                  setActiveProject(coverId)
-                  setActiveWorkspace(null)
-                  setCoverConflict(null)
-                  setCreateProjOpen(false)
-                  setProjName('')
-                  setProjPath(homeDir + '/')
-                  addToast(
-                    'success',
-                    t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??
-                      `Switched to project "${coverConflict.coveringProject.name}"`,
-                  )
-                }}
-              >
-                {t('sidebar.coverConflictSwitch') ?? 'Switch to existing'}
               </PixelButton>
             </div>
           </div>

@@ -74,7 +74,7 @@ wc -l src/components/Sidebar/Sidebar.tsx      # 行数验收（Task 10，目标 
 **Interfaces:**
 - Consumes: `api.listDirs`、`ApiError`（`frontend/src/api/client.ts`）；`FileEntry` 类型
 - Produces:
-  - `useDirBrowser(): { entries: FileEntry[]; loading: boolean; error: string | null; notFound: boolean; loadDirs: (path: string, prefix?: string) => Promise<void> }`
+  - `useDirBrowser(): { entries: FileEntry[]; loading: boolean; error: string | null; notFound: boolean; loadDirs: (path: string, prefix?: string) => Promise<void>; reset: () => void }`（`reset` 为 Task 6 勘误 E2 追加）
   - `filterDirEntries(files: FileEntry[], prefix?: string): FileEntry[]`（纯函数，供单测）
   - `inputClass: string`、`inputStyle: React.CSSProperties`
   - `EditButton` / `DeleteButton` / `ReleaseButton`：`({ onClick }: { onClick: (e: React.MouseEvent) => void }) => JSX`
@@ -835,6 +835,7 @@ git commit -m "docs: Sidebar 拆分验收与文档闭环（frontend/frontend-pat
 ## 勘误
 
 - **E1（Task 5，2026-08-03）**：初稿的渲染规格 `Modal open={phase === 'form'}` 在 submit-worktree 触发 git init 确认时会把表单 Modal 一并收起，与原实现「表单保留、确认框叠加其上」不一致（Esc 语义、取消后重挂载动画/autoFocus 均受影响），违背「行为零变化」约束。已修正为按 `mode === 'submit-worktree'` 叠加渲染（commit 82ac737），并同步更新 Task 5 Step 1 的渲染规格。
+- **E2（Task 6，2026-08-03）**：`useDirBrowser` 追加 `reset(): void`（清空 entries/error/notFound）。原实现中「路径输入被清空 / 弹窗打开 / 弹窗关闭」三处会显式清掉这三态，而 hook 封装了 setter，不提供 reset 就无法逐字保留——表现为输入清空后残留旧补全建议、重开弹窗时短暂闪现上次的错误/「将自动创建」态。CreateProjectModal 在三处对应调用 `reset()`，行为与拆分前一致；Task 1 的接口清单已同步更新。
 
 ## 风险与勘误约定
 
