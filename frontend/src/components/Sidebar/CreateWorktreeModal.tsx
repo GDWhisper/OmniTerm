@@ -19,8 +19,10 @@ import { inputClass, inputStyle } from './sidebarModalStyles'
  * - 'loading-branches': branch pre-check in flight — neither overlay renders
  *   (today the modal only opens after the pre-check resolves).
  * - 'form': the create-worktree form modal.
- * - 'git-init-confirm': the "initialize git repo?" ConfirmDialog ONLY
- *   (no form modal behind it) when the pre-check hits not_a_git_repo.
+ * - 'git-init-confirm': the "initialize git repo?" ConfirmDialog. When the
+ *   pre-check hits not_a_git_repo the form never rendered; when a submit
+ *   failed (submit-worktree mode) the form modal stays mounted underneath,
+ *   matching the original stacked createWtOpen + gitInitConfirm behavior.
  */
 type Phase = 'loading-branches' | 'form' | 'git-init-confirm'
 
@@ -206,9 +208,11 @@ export function CreateWorktreeModal(props: {
 
   return (
     <>
-      {/* ── Create Worktree Modal ── */}
+      {/* ── Create Worktree Modal ──
+          submit-worktree 模式下确认框叠在表单之上，表单保持挂载（回归原实现：
+          取消回表单不重播动画；Esc 两个监听都触发，整体关闭） */}
       <Modal
-        open={projectId !== null && phase === 'form'}
+        open={projectId !== null && (phase === 'form' || (phase === 'git-init-confirm' && gitInitConfirm?.mode === 'submit-worktree'))}
         onClose={() => props.onClose()}
         title={t('sidebar.createWorktree') ?? 'Create Worktree'}
         maxWidth="max-w-sm"
