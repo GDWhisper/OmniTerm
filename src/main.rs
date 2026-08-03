@@ -337,7 +337,7 @@ fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm_dev=debug".parse()?))
+            .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm=debug".parse()?))
             .init();
 
         match cli.command {

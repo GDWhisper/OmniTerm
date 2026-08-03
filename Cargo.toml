@@ -1,5 +1,5 @@
 [package]
-name = "omniterm-dev"
+name = "omniterm"
 version = "0.2.7"
 edition = "2024"
 license = "FSL-1.1-MIT"

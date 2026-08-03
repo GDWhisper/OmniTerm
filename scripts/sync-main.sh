@@ -7,9 +7,10 @@
 # 2. 切换到 main
 # 3. 合并 dev（保留个体 commit 历史）
 # 4. 删除黑名单文件（静默处理冲突）
-# 5. 修复分支专属配置（Cargo.toml, Dockerfile 等）
-# 6. 重新生成 Cargo.lock
-# 7. 提交
+# 5. 提交
+#
+# 注：Cargo.toml name 全分支统一为 omniterm，二进制名不再按分支区分，
+#     无需再修复分支专属配置（Cargo.toml / Dockerfile / docker-compose）。
 
 set -euo pipefail
 
@@ -89,24 +90,6 @@ for item in "${BLACKLIST[@]}"; do
     git rm -rf "$item" 2>/dev/null || true
   fi
 done
-
-# 修复分支专属配置
-echo "🔧 修复分支专属配置..."
-
-# Cargo.toml: name
-sed -i 's/^name = "omniterm-dev"/name = "omniterm"/' Cargo.toml
-
-# Dockerfile
-sed -i 's/ARG BRANCH_BINARY_NAME=omniterm-dev/ARG BRANCH_BINARY_NAME=omniterm/' Dockerfile
-sed -i 's/ARG BRANCH_BINARY_NAME=omniterm-main/ARG BRANCH_BINARY_NAME=omniterm/' Dockerfile
-
-# docker-compose.yml
-sed -i 's/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-dev}/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm}/' docker-compose.yml
-sed -i 's/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm-main}/BRANCH_BINARY_NAME: ${BRANCH_BINARY_NAME:-omniterm}/' docker-compose.yml
-
-# 重新生成 Cargo.lock（修复包名）
-echo "📦 重新生成 Cargo.lock..."
-cargo generate-lockfile 2>/dev/null || true
 
 # 编译验证
 echo "🔍 编译验证..."

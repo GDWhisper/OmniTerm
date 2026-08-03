@@ -266,8 +266,8 @@ cmd_start() {
         trap '' HUP
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
-        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
-        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_server=info}"
+        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅（crate 名统一为 omniterm）
+        export RUST_LOG="${RUST_LOG:-omniterm=info}"
         cargo run -- start
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
