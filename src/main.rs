@@ -12,14 +12,15 @@ mod utils;
 mod workspaces;
 mod ws;
 
+use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
 use tower_http::cors::CorsLayer;
@@ -40,7 +41,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 启动服务
+    /// 启动服务（默认前台运行；加 -d/--daemonize 可转入后台，Unix only）
     Start(StartArgs),
     /// 停止后台运行的服务（通过 PID 文件发 SIGTERM）
     Stop(StopArgs),
@@ -102,7 +103,7 @@ struct StartArgs {
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
     host: String,
 
-    /// 启动后进入后台运行（Unix only；Windows 不支持）
+    /// 启动后进入后台运行（Unix only；Windows 不支持）。日志写入 ~/.omniterm/<binary>.log
     #[arg(short = 'd', long)]
     daemonize: bool,
 
@@ -160,20 +161,34 @@ fn pid_exists(_pid: i32) -> bool {
     false
 }
 
-/// 未指定 `--db` 时，按 binary 名推导：`~/.omniterm/<binary>.db`。
-fn default_db_url() -> String {
-    let name = std::env::args()
+/// 按二进制名推导数据文件名（binary 名如 `omniterm-dev`，含 worktree 后缀）。
+fn binary_name() -> String {
+    std::env::args()
         .next()
         .and_then(|a| Path::new(&a).file_stem().map(|s| s.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "omniterm".to_string());
+        .unwrap_or_else(|| "omniterm".to_string())
+}
 
+/// OmniTerm 用户数据目录 `~/.omniterm`（HOME/USERPROFILE 缺失时回退 `.`，与既有约定一致）。
+/// db、jwt_secret、daemon 日志统一落盘于此，避免数据与日志分家。
+fn omniterm_data_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".into());
+    Path::new(&home).join(".omniterm")
+}
 
-    let dir = format!("{}/.omniterm", home);
+/// daemon 模式的日志文件路径：`~/.omniterm/<binary>.log`（与 db / jwt_secret 同目录）。
+#[cfg(unix)]
+fn daemon_log_path() -> PathBuf {
+    omniterm_data_dir().join(format!("{}.log", binary_name()))
+}
+
+/// 未指定 `--db` 时，按 binary 名推导：`~/.omniterm/<binary>.db`。
+fn default_db_url() -> String {
+    let dir = omniterm_data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    format!("sqlite:{}/{}.db?mode=rwc", dir, name)
+    format!("sqlite:{}?mode=rwc", dir.join(format!("{}.db", binary_name())).display())
 }
 
 /// Lenient bool parser for `--auth-enabled` / `OMNITERM_AUTH_ENABLED`:
@@ -202,12 +217,10 @@ fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
         return Ok(s);
     }
 
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".into());
-    let dir = format!("{}/.omniterm", home);
+    let dir = omniterm_data_dir();
     std::fs::create_dir_all(&dir)?;
-    let path = format!("{}/jwt_secret", dir);
+    let path = dir.join("jwt_secret");
+    let path = path.to_string_lossy().into_owned();
 
     if let Ok(existing) = std::fs::read_to_string(&path) {
         let existing = existing.trim();
@@ -249,11 +262,22 @@ fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Unix daemonization: double-fork + setsid + stdio → /dev/null.
+/// Unix daemonization: double-fork + setsid + stdio 重定向。
+/// stdin → /dev/null；stdout/stderr → `log_file`（追加模式）。
 /// Must be called before the tokio runtime starts (fork safety).
+///
+/// 日志文件在 fork 前打开：double-fork 后父进程已退出，无法再向用户报告打开失败。
 #[cfg(unix)]
-fn daemonize() -> std::io::Result<()> {
+fn daemonize(log_file: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
     use std::process;
+
+    // 日志文件必须在 fork 前打开并设 0600：fork 后父进程已退出，无法再向前台报错；
+    // 日志可能含会话/agent 活动痕迹，权限与 jwt_secret（0600）对齐。
+    if let Some(parent) = log_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let log = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(log_file)?;
 
     // First fork — detach from terminal
     match unsafe { libc::fork() } {
@@ -274,15 +298,16 @@ fn daemonize() -> std::io::Result<()> {
         _ => process::exit(0), // intermediate session leader exits
     }
 
-    // Redirect stdin/stdout/stderr to /dev/null
-    let devnull = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null")?;
-    let fd = devnull.as_raw_fd();
+    // Redirect stdin → /dev/null; stdout/stderr → log file
+    let devnull = std::fs::OpenOptions::new().read(true).open("/dev/null")?;
     unsafe {
-        libc::dup2(fd, 0); // stdin
-        libc::dup2(fd, 1); // stdout
-        libc::dup2(fd, 2); // stderr
+        if libc::dup2(devnull.as_raw_fd(), 0) < 0
+            || libc::dup2(log.as_raw_fd(), 1) < 0
+            || libc::dup2(log.as_raw_fd(), 2) < 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
     }
-    drop(devnull); // close the original fd (dup'd fds remain open)
 
     Ok(())
 }
@@ -290,14 +315,17 @@ fn daemonize() -> std::io::Result<()> {
 fn main() -> anyhow::Result<()> {
     // Parse CLI synchronously *before* initializing the tokio runtime,
     // so daemonization can fork safely.
-    let cli = Cli::parse();
+    let cli_matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&cli_matches)?;
 
     // Daemonize before tokio runtime, if requested
     #[cfg(unix)]
     if let Commands::Start(ref args) = cli.command
         && args.daemonize
     {
-        daemonize()?;
+        let log_path = daemon_log_path();
+        daemonize(&log_path)
+            .with_context(|| format!("failed to daemonize (log file: {})", log_path.display()))?;
     }
     #[cfg(not(unix))]
     if let Commands::Start(ref args) = cli.command
@@ -503,8 +531,20 @@ fn main() -> anyhow::Result<()> {
             let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
 
             // ── 绑定 ─────────────────────────────────────────────────
-            let bind = std::env::var("BIND_ADDR")
-                .unwrap_or_else(|_| format!("{}:{}", args.host, args.port));
+            // `BIND_ADDR` 是 dev.sh / docker 的部署层兜底（docker 用它指定 0.0.0.0 host）。
+            // 用户显式传了 `-p`/`-H` 时它不得覆盖——否则残留的 dev 环境变量
+            // 会劫持正式版用户的端口选择（例如 npm 正式版被 BIND_ADDR=127.0.0.1:9075 劫持）。
+            let bind_explicit = cli_matches.subcommand_matches("start").is_some_and(|m| {
+                use clap::parser::ValueSource;
+                m.value_source("port") == Some(ValueSource::CommandLine)
+                    || m.value_source("host") == Some(ValueSource::CommandLine)
+            });
+            let bind = if bind_explicit {
+                format!("{}:{}", args.host, args.port)
+            } else {
+                std::env::var("BIND_ADDR")
+                    .unwrap_or_else(|_| format!("{}:{}", args.host, args.port))
+            };
 
             let listener = tokio::net::TcpListener::bind(&bind).await?;
 

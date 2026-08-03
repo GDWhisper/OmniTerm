@@ -30,12 +30,14 @@ Thumbs.db
 # Claude
 .claude/
 
+# Qoder（本地 AI 工具配置，sync-main 黑名单排除，不随分支同步）
+.qoder/
+
+# Pi（本地 AI 工具配置，mirror of .qoder/，sync-main 黑名单排除）
+.pi/
+
 # Playwright CLI temporary output (local debugging)
 .playwright-cli/
-
-# Local-only skill symlinks (mirror of .agents/skills/)
-.pi/skills/playwright-cli
-.pi/skills/skill-manager
 
 
 # Added by cargo

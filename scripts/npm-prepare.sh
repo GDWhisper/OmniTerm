@@ -59,9 +59,9 @@ for plat in $TARGETS; do
 EOF
 done
 
-# 主包：copy checked-in package.json + shim.js，注入 version + optionalDependencies
+# 主包：copy checked-in package.json + shim.js + postinstall.js，注入 version + optionalDependencies
 mkdir -p "$OUT/main"
-cp "$ROOT/npm-package/package.json" "$ROOT/npm-package/shim.js" "$OUT/main/"
+cp "$ROOT/npm-package/package.json" "$ROOT/npm-package/shim.js" "$ROOT/npm-package/postinstall.js" "$OUT/main/"
 node -e '
   const fs = require("fs");
   const [dir, version, targets] = process.argv.slice(1);

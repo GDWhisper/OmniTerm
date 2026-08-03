@@ -1,6 +1,6 @@
 {
   "name": "@gdwhisper/omniterm",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Web-based tmux terminal manager",
   "license": "FSL-1.1-MIT",
   "publishConfig": {
@@ -11,8 +11,12 @@
     "omniterm": "shim.js"
   },
   "files": [
-    "shim.js"
+    "shim.js",
+    "postinstall.js"
   ],
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
   "keywords": ["tmux", "terminal", "web", "manager"],
   "engines": {
     "node": ">=18"
