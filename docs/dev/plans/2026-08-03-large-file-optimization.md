@@ -1,6 +1,6 @@
 # 大文件优化方向计划（Code Quality Pass）
 
-> 状态：设计稿（2026-08-03）
+> 状态：进行中（2026-08-03）
 > 触发条件：代码规模审计产出；后续接「拆分 Sidebar / 拆分 ws 处理函数」等具体任务时，以此为方向指引
 > 关联：`docs/architecture/frontend-patterns.md`（Section 拆分原则）、`docs/dev/plans/PLAN-TEMPLATE.md`、AGENTS.md §7 奥卡姆剃刀
 > 定位：**方向性计划**，只记录现象与解决方向，不含具体代码改动；具体拆分任务落地时另出实施计划
@@ -68,14 +68,14 @@
 | Phase | 内容 | 产出 | 依赖 |
 |-------|------|------|------|
 | 0 | 本方向计划定稿 | 本文件 | — |
-| 1 | Sidebar 拆分（P0） | 子组件文件 + 主组件瘦身 + 相关 store/hook 调整 | frontend-patterns.md 约定 |
+| 1 | Sidebar 拆分（P0）（已实施 2026-08-03） | 子组件文件 + 主组件瘦身 + 相关 store/hook 调整 | frontend-patterns.md 约定 |
 | 2 | `ws/acp.rs` `handle_acp_ws` 拆分（P1） | 独立事件 handler + 单测 | 需先读 `2026-07-28-pty-engine-implementation.md` |
 | 3 | `api/files.rs` `resolve_base_from_query` 拆分（P1） | 小函数化 + 现有测试覆盖 | — |
 
 ## 5. 验收标准
 
-- [ ] `Sidebar.tsx` 拆分后主文件降至 ~800 行以内，每个 modal 为独立子组件且自带状态
-- [ ] `Sidebar.tsx` 拆分后全部现有交互（创建/重命名/删除/修复/外部会话）行为不变，`Sidebar.test.tsx` 通过
+- [x] `Sidebar.tsx` 拆分后主文件降至 ~800 行以内，每个 modal 为独立子组件且自带状态
+- [x] `Sidebar.tsx` 拆分后全部现有交互（创建/重命名/删除/修复/外部会话）行为不变，`Sidebar.test.tsx` 通过
 - [ ] `ws/acp.rs` `handle_acp_ws` 拆出的事件分支均有对应函数名，行为经 ACP 链路手动回归验证
 - [ ] `resolve_base_from_query` 拆分后三种路径来源（project / session / query）行为一致
 - [ ] 质量门禁零新增违规：`clippy` / `tsc strict` / `cargo test` 全绿

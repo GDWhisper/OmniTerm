@@ -239,6 +239,25 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 }
 ```
 
+### Sidebar modal 子组件契约
+
+**每个 modal 独立文件、自持表单/提交状态**，主组件只做列表渲染与状态提升——与上节
+Section 拆分原则同构（2026-08-03 `Sidebar.tsx` 拆分确立，实施计划见
+`docs/dev/plans/2026-08-03-sidebar-component-split.md`）：
+
+- 每个 modal 独立文件，自持表单字段 / `submitting` / 错误态；同一时刻仅一个弹窗可见可提交，各自持有后并发语义不变
+- `target: T | null`（null = 关闭）或 `open: boolean` prop 作开关，主组件只持有「打开哪一个」，不复述弹窗内部状态
+- 数据刷新经回调 prop（`reloadProjects` / `reloadWorktrees` / `reloadSessions` 等）回流主组件，弹窗私有状态不进 store
+- store 直读仅限既有全局切片（`useAppStore` / `useChatStore`），不为弹窗新增切片
+
+已有案例（本次拆分 13 文件 + E4 追加 1 hook）：`sidebarModalStyles.ts`（弹窗共享样式）、
+`RowActionButtons.tsx`（行按钮，含 `SidebarBottomButton`）、`RenameDialog.tsx`、
+`DeleteConfirmDialog.tsx`、`DeleteWorktreeDialog.tsx`、`ReleaseConfirmDialog.tsx`、
+`RepairPathDialog.tsx`、`CreateSessionModal.tsx`、`CreateProjectModal.tsx`、
+`CreateWorktreeModal.tsx`、`ExternalSessionsSection.tsx`、`ProjectCard.tsx`、
+`hooks/useDirBrowser.ts`（目录浏览重复逻辑收敛），以及 E4 外移的
+`useAgentAttentionPolling.ts`（agent_state 轮询 + attention 检测）。
+
 ### i18n 约定
 
 | 元素 | 风格 | 原因 |

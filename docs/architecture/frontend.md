@@ -29,7 +29,7 @@ src/
 ├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
-    ├── Sidebar/ — Sidebar.tsx, UpdateBadge.tsx（版本号旁新版本 badge + 升级面板，`useAnchorPopup` free 模式）
+    ├── Sidebar/ — Sidebar.tsx（列表渲染+状态提升，≤800 行）、ProjectCard.tsx（项目树渲染）、Create{Project,Session,Worktree}Modal.tsx、Rename/Delete{Confirm,Worktree}/ReleaseConfirm/RepairPath 对话框、ExternalSessionsSection.tsx（外部会话轮询+adopt）、DuplicateProjectsDialog.tsx、UpdateBadge.tsx、RowActionButtons.tsx（含 SidebarBottomButton）、sidebarModalStyles.ts、useAgentAttentionPolling.ts
     ├── Terminal/ — Terminal.tsx
     ├── Chat/ — ChatView.tsx, ChatMessage.tsx, ChatInput.tsx (Phase 4a: ACP session rendering)
     ├── AgentPicker/ — AgentPicker.tsx (Phase 3: <select> for create-session modal)
