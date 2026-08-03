@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-03 02:55) `[backend]` `BIND_ADDR` 监听地址优先级修复：用户显式传 `-p`/`-H` 时不再被 `BIND_ADDR` env 覆盖（此前 `BIND_ADDR` 优先级高于 CLI 参数，残留的 dev 环境变量会劫持 npm 正式版端口导致 Address already in use）；未显式传参时 `BIND_ADDR` 仍作为 dev.sh / docker 的部署层兜底生效（`src/main.rs`）
+- (2026-08-03 02:20) `[backend]` daemon 模式日志增强：`omniterm start --daemonize` 后台运行时 stdout/stderr 从 /dev/null 改为追加写入 `~/.omniterm/<binary>.log`（0600，与 jwt_secret 一致；日志文件在 double-fork 前打开，打开失败在前台报错退出，不再静默丢日志）；`omniterm --help` 的 start 子命令与 `-d/--daemonize` 参数描述补充后台运行与日志路径说明（`src/main.rs`）
 - (2026-08-03 01:40) `[infra]` npm 安装完成引导提示：主包新增 `postinstall` 脚本，`npm install -g @gdwhisper/omniterm` 完成时提示「打开新终端运行 `omniterm start`」（安装后 PATH 缓存未刷新，需换新终端才能运行命令）（`npm-package/{package.json,postinstall.js}`、`scripts/npm-prepare.sh`）
 
 ## [0.2.6] - 2026-08-02

@@ -138,18 +138,19 @@ CLI 为 clap 4 子命令结构（`src/main.rs` 定义枚举与 dispatch；`updat
 omniterm <COMMAND>
 
 Commands:
-  start       启动服务
+  start       启动服务（默认前台运行；加 -d/--daemonize 可转入后台，Unix only）
   stop        停止后台运行的服务（通过 PID 文件发 SIGTERM）
   status      查看服务运行状态
   reset-auth  清空所有用户（忘记密码后，先用此命令再 start 设新密码）
   update      自更新到最新发布版本
 
 start options:
-  -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]
+  -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]；显式传 -p/-H 时优先于 BIND_ADDR env
       --db <DB>           数据库连接 [env: DATABASE_URL]
       --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]（缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
       --auth-enabled     强制密码验证开关 [env: OMNITERM_AUTH_ENABLED]（接受 1/0/true/false；未指定时用 DB 值）
       --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
+  -d, --daemonize         后台运行（Unix only；Windows 报错退出），日志追加写入 ~/.omniterm/<binary>.log
 
 stop / status / reset-auth options:
       --db <DB>           数据库连接（用于定位 PID 文件）[env: DATABASE_URL]
@@ -182,7 +183,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `DATABASE_URL` | `sqlite:omniterm.db?mode=rwc` | SQLite connection string |
 | `JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
 | `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
-| `BIND_ADDR` | `127.0.0.1:<port>` | Listen address (legacy, prefer --port) |
+| `BIND_ADDR` | `127.0.0.1:<port>` | 监听地址部署层兜底：dev.sh 与 docker-compose 用它指定监听地址（docker 传 `0.0.0.0:<port>` 全网暴露）。**用户显式传 `-p`/`-H` 时被忽略**（CLI 优先级高于该 env），避免残留 dev 环境变量劫持正式版端口 |
 | `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
 
