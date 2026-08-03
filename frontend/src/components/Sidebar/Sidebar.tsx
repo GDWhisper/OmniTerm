@@ -19,6 +19,7 @@ import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
+import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
@@ -134,8 +135,7 @@ export function Sidebar() {
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessOpen, setCreateSessOpen] = useState(false)
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [renameTarget, setRenameTarget] = useState<{ type: 'project' | 'session'; id: string; name: string } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<{
     type: 'project' | 'session'
     id: string
@@ -148,7 +148,6 @@ export function Sidebar() {
   const [sessName, setSessName] = useState('')
   const [sessAgentId, setSessAgentId] = useState<string | null>(null)
   const [sessWorkspaceId, setSessWorkspaceId] = useState<string | null>(null)
-  const [renameName, setRenameName] = useState('')
   const [homeDir, setHomeDir] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -925,34 +924,6 @@ export function Sidebar() {
     }
   }
 
-  const handleRename = async () => {
-    if (!renameTarget) return
-    const newName = renameName.trim()
-    if (!newName || newName === renameTarget.name) {
-      setRenameOpen(false)
-      return
-    }
-    setSubmitting(true)
-    try {
-      if (renameTarget.type === 'project') {
-        await api.updateProject(renameTarget.id, { name: newName })
-        await loadProjects()
-        addToast('success', t('sidebar.projectRenamed', { name: newName }) ?? `Project renamed to "${newName}"`)
-      } else {
-        await api.updateSession(renameTarget.id, { name: newName })
-        await loadSessions()
-        addToast('success', t('sidebar.sessionRenamed', { name: newName }) ?? `Session renamed to "${newName}"`)
-      }
-      setRenameOpen(false)
-      setRenameTarget(null)
-      setRenameName('')
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -1093,13 +1064,6 @@ export function Sidebar() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleCreateSession()
-    }
-  }
-
-  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleRename()
     }
   }
 
@@ -1381,8 +1345,6 @@ export function Sidebar() {
                       onClick={(e) => {
                         e.stopPropagation()
                         setRenameTarget({ type: 'project', id: proj.id, name: proj.name })
-                        setRenameName(proj.name)
-                        setRenameOpen(true)
                       }}
                     />
                     <DeleteButton
@@ -1585,8 +1547,6 @@ export function Sidebar() {
                                         onClick={(e) => {
                                           e.stopPropagation()
                                           setRenameTarget({ type: 'session', id: s.id, name: s.name || '' })
-                                          setRenameName(s.name || '')
-                                          setRenameOpen(true)
                                         }}
                                       />
                                       <DeleteButton
@@ -2174,54 +2134,11 @@ export function Sidebar() {
       </Modal>
 
       {/* ── Rename Modal (Project or Session, reused) ── */}
-      <Modal
-        open={renameOpen}
-        onClose={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}
-        title={
-          renameTarget?.type === 'project'
-            ? (t('sidebar.renameProject') ?? 'Rename Project')
-            : (t('sidebar.renameSession') ?? 'Rename Session')
-        }
-        maxWidth="max-w-sm"
-      >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              {renameTarget?.type === 'project'
-                ? (t('sidebar.projectName') ?? 'Project Name')
-                : t('sidebar.sessionName')}
-            </label>
-            <input
-              type="text"
-              value={renameName}
-              onChange={(e) => setRenameName(e.target.value)}
-              onKeyDown={handleRenameKeyDown}
-              placeholder={
-                renameTarget?.type === 'project'
-                  ? (t('sidebar.projectName') ?? 'my-project')
-                  : (t('sidebar.sessionName') ?? 'dev-server')
-              }
-              autoFocus
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-strong)'; e.currentTarget.style.boxShadow = 'none' }}
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <PixelButton variant="secondary" onClick={() => { setRenameOpen(false); setRenameTarget(null); setRenameName('') }}>
-              {t('sidebar.cancel')}
-            </PixelButton>
-            <PixelButton
-              variant="accent"
-              onClick={handleRename}
-              disabled={!renameName.trim() || renameName.trim() === renameTarget?.name || submitting}
-            >
-              {submitting ? t('sidebar.renaming') : t('sidebar.rename')}
-            </PixelButton>
-          </div>
-        </div>
-      </Modal>
+      <RenameDialog
+        target={renameTarget}
+        onClose={() => setRenameTarget(null)}
+        onRenamed={(type) => (type === 'project' ? loadProjects() : loadSessions())}
+      />
 
       {/* ── Delete Confirmation Dialog ── */}
       <ConfirmDialog
