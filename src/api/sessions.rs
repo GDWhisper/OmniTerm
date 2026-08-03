@@ -298,6 +298,36 @@ async fn update_session(
     (StatusCode::OK, Json(json!(session)))
 }
 
+/// 按 `runtime_kind` 清理会话的运行时资源：acp → 释放 supervisor 持有的 agent
+/// 子进程；tmux/psmux → 关闭 control-mode 连接并 `kill-session` 杀会话进程。
+///
+/// 只负责进程/运行时清理，**不删除 DB 记录**——由调用方（`delete_session` /
+/// `delete_project`）负责删库。两处共用，避免清理逻辑漂移。
+pub async fn cleanup_session_runtime(
+    state: &AppState,
+    session_id: &str,
+    tmux_name: Option<&str>,
+    runtime_kind: &str,
+) {
+    match runtime_kind {
+        "acp" => {
+            if let Some(client) = state.acp_supervisor.dispose(session_id).await
+                && let Ok(c) = Arc::try_unwrap(client)
+            {
+                c.disconnect().await;
+            }
+        }
+        _ => {
+            if let Some(name) = tmux_name {
+                state.activity_monitor.remove_session(name).await;
+                if let Err(e) = tmux::kill_session(name).await {
+                    error!("failed to kill tmux session {}: {}", name, e);
+                }
+            }
+        }
+    }
+}
+
 async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -321,19 +351,7 @@ async fn delete_session(
     }
 
     if let Some((tmux_name, runtime_kind)) = row {
-        if runtime_kind == "acp" {
-            if let Some(client) = state.acp_supervisor.dispose(&id).await {
-                let c = Arc::try_unwrap(client).ok();
-                if let Some(c) = c {
-                    c.disconnect().await;
-                }
-            }
-        } else if let Some(tmux_name) = tmux_name {
-            state.activity_monitor.remove_session(&tmux_name).await;
-            if let Err(e) = tmux::kill_session(&tmux_name).await {
-                error!("failed to kill tmux session {}: {}", tmux_name, e);
-            }
-        }
+        cleanup_session_runtime(&state, &id, tmux_name.as_deref(), &runtime_kind).await;
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))

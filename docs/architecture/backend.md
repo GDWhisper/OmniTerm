@@ -63,7 +63,7 @@ POST /api/v1/auth/settings     # 密码验证总开关（受保护）
 POST /api/v1/auth/change-password  # 受保护（需登录 + 当前密码）
 GET  /api/v1/projects
 POST /api/v1/projects
-DELETE /api/v1/projects/{id}
+DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
 GET  /api/v1/projects/{pid}/worktrees (git worktree discovery)
 POST /api/v1/projects/{pid}/worktrees    # 非 git 仓库返回 400 {error, code:"not_a_git_repo", has_gitignore:bool}；请求体 init:true 时自动 git init + 初始提交
 DELETE /api/v1/projects/{pid}/worktrees
@@ -107,6 +107,7 @@ Lifecycle:
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
 4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images`（可选，≤3 张 base64）映射为 `ContentBlock::Image` 追加在 text block 后；服务端推送 `{"type":"capabilities","image":bool}` 帧（client 就绪/restore 时），值来自 initialize 捕获的 `promptCapabilities.image`（§8：agent 未声明则前端隐藏附件入口、后端拒绝带图 prompt）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。
 5. `DELETE /sessions/{id}` on an ACP session calls `supervisor.dispose` + `AcpClient::disconnect`, which drops the shutdown oneshot so the connect_with closure returns and the child process is reaped.
+6. `DELETE /projects/{id}` 先取该项目下全部 session 的 `id`/`tmux_session_name`/`runtime_kind`，逐个调用 `api::sessions::cleanup_session_runtime`（acp → dispose+disconnect；tmux → `activity_monitor.remove_session` + `tmux::kill_session`），再删 `sessions`/`projects` 行——**删库不等于杀进程**，直接 `DELETE FROM sessions` 会让 psmux/tmux 会话与 agent 子进程残留（2026-08-04 修复）。
 
 ### 流式消息后端权威持久化（turn accumulator）
 

@@ -41,6 +41,27 @@
 
 ---
 
+## 2026-08-04: 删除 project 残留 psmux/tmux 会话——删库不等于杀进程
+
+**症状**：Windows 上「移除项目」（`DELETE /projects/{id}`）后，该项目下创建的 psmux 会话进程仍存活（Linux 上 tmux 会话同样残留，只是 Windows 上 psmux 是独立可见进程，更易察觉）。
+
+**可复用的理论/模式**：
+
+**1. 「删除记录」与「释放运行时资源」是两个独立动作，容易只做前者**。凡是「DB 持久化行 + 外部运行时对象（进程 / 会话 / 连接 / 锁）」成对出现的资源，销毁路径必须成对执行：删行前先取该行的运行时标识（`tmux_session_name`、`runtime_kind`），据此释放进程/连接，再删行。直接 `DELETE FROM ...` 只完成了一半生命周期。**级联删除（`ON DELETE CASCADE` / 手动 `DELETE WHERE project_id=…`）是隐藏运行时泄漏的高发区**——它帮你把子记录删干净，却不帮你释放子记录对应的外部资源。
+
+**2. 批量/级联操作里，逐个处理比一把梭更安全**：单条记录处理（`delete_session`）里成熟的清理模式，被「批量删子行」的捷径绕过时，先确认批量路径是否逐个复用了单条路径的清理逻辑，而不是重新写一遍删除。
+
+**诊断过程中的错误**：
+
+1. 一开始被「Windows 环境」带偏，以为有平台特有原因（Job Object / 进程组清理差异），先查了 `pty_io.rs` 的 Windows `kill_session_process` 实现——方向错误。实际与平台无关，是 `delete_project` 根本没调 `kill_session`。
+2. 后来才对比 `delete_session`（完整清理）与 `delete_project`（只删 DB），发现两者的差异就是根因。**同层级的相似 handler 是黄金对照物**——一个清理完备、一个缺失，diff 一眼可见。
+
+**具体根因**：`src/api/projects.rs` `delete_project` 只执行 `DELETE FROM sessions WHERE project_id=?` 级联删库，从未调用 `tmux::kill_session` / `acp_supervisor.dispose`，导致该项目下所有 psmux/tmux 会话及 acp agent 子进程残留。
+
+**修复**：提取公共函数 `api::sessions::cleanup_session_runtime(state, session_id, tmux_name, runtime_kind)`（acp → dispose+disconnect；tmux → `activity_monitor.remove_session` + `tmux::kill_session`），`delete_session` 与 `delete_project` 共用；`delete_project` 先 SELECT 项目下全部 session 逐条清理，再删库。回归测试 `tests/runtime_kind_matrix.rs` Case 4（DELETE /projects/{id} 后 `tmux list-sessions` 断言会话消失）。
+
+---
+
 ## 2026-08-01: git diff 长行不换行——`white-space: pre` 让 flex 行横向溢出
 
 **症状**：GIT 面板 CHANGES 点开文件 diff / commit 详情，长行横向溢出被裁，没有滚动条、超出部分看不到。

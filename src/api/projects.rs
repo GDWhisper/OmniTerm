@@ -202,6 +202,26 @@ async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // 先取该项目下全部 session 的运行时信息，逐个清理进程资源
+    // （psmux/tmux 会话、acp agent 子进程），再删 DB——否则会话进程残留。
+    let sessions: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, tmux_session_name, runtime_kind FROM sessions WHERE project_id = ?",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+
+    for (session_id, tmux_name, runtime_kind) in sessions {
+        crate::api::sessions::cleanup_session_runtime(
+            &state,
+            &session_id,
+            tmux_name.as_deref(),
+            &runtime_kind,
+        )
+        .await;
+    }
+
     // Cascade: delete sessions first
     sqlx::query("DELETE FROM sessions WHERE project_id = ?")
         .bind(&id)
