@@ -456,7 +456,7 @@ type Phase = 'loading-branches' | 'form' | 'git-init-confirm'
 
 - 自持状态：`phase`、`branch`、`path`、`baseBranch`、`branches`、`currentBranch`、`branchesLoading`、`gitInitConfirm`（原类型定义逐字保留：`mode`/`hasGitignore`/`params`）、`submitting`。
 - `useEffect(() => { if (projectId) open(projectId) }, [projectId])`：`open()` 即原「+」按钮回调中 `setCreateWtBranchesLoading(true)` 之后的部分——`api.listBranches` 成功 → 填充分支 → `phase='form'`；`not_a_git_repo` → `phase='git-init-confirm'`（mode='open-modal'）；其他错误 → 照常 `phase='form'`。
-- 渲染：`<Modal open={projectId !== null && phase === 'form'} ...>` + `<ConfirmDialog open={projectId !== null && phase === 'git-init-confirm'} ...>`——**loading-branches 阶段两者都不出现**，与现状（弹窗在分支加载完成后才打开）逐帧一致。
+- 渲染：`<Modal open={projectId !== null && (phase === 'form' || (phase === 'git-init-confirm' && gitInitConfirm?.mode === 'submit-worktree'))} ...>` + `<ConfirmDialog open={projectId !== null && phase === 'git-init-confirm'} ...>`——**loading-branches 阶段两者都不出现**（与现状「预检完成才开弹窗」逐帧一致）；**submit-worktree 模式下表单 Modal 保持挂载、ConfirmDialog 叠加其上**（与原实现一致：Esc 关闭全部、取消返回带值表单、无重挂载动画，见文末勘误 E1）。
 - `handleConfirmGitInit`：open-modal 分支成功后改为置 `phase='form'`（分支已在重新加载后填充）；submit-worktree 分支成功 → `props.onClose()`；initGit 失败保持当前 phase（与原「弹框不关」一致）。
 - `submitWorktree` 成功 → `await props.reloadWorktrees(projectId)` → toast → `props.onClose()`。
 - `props.projectId` 变 null 时重置全部内部状态（`useEffect` 清理或下一次 open 时重置均可，保证重开同一项目状态干净）。
@@ -831,6 +831,10 @@ git commit -m "docs: Sidebar 拆分验收与文档闭环（frontend/frontend-pat
 ```
 
 ---
+
+## 勘误
+
+- **E1（Task 5，2026-08-03）**：初稿的渲染规格 `Modal open={phase === 'form'}` 在 submit-worktree 触发 git init 确认时会把表单 Modal 一并收起，与原实现「表单保留、确认框叠加其上」不一致（Esc 语义、取消后重挂载动画/autoFocus 均受影响），违背「行为零变化」约束。已修正为按 `mode === 'submit-worktree'` 叠加渲染（commit 82ac737），并同步更新 Task 5 Step 1 的渲染规格。
 
 ## 风险与勘误约定
 
