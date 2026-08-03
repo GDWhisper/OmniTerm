@@ -75,7 +75,7 @@ describe('useDirBrowser', () => {
   })
 
   afterEach(() => {
-    root.unmount()
+    act(() => { root.unmount() })
     document.body.removeChild(container)
   })
 
