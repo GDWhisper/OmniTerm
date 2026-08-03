@@ -7,7 +7,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAttention, type AttentionReason } from '../../hooks/useAttention'
 import { api, ApiError } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconPower, IconPencil, IconTrash, IconSettings } from '../FileManager/icons'
+import { IconFolder, IconFolderPlus, IconArrowUp, IconRefresh, IconWarning, IconPlus, IconTrash, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { Session, DuplicateGroup, FileEntry, ExternalSession, Project, Workspace } from '../../api/client'
 import { getParentPath } from '../../utils/path'
@@ -17,6 +17,8 @@ import { Modal } from '../Modal/Modal'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
+import { inputClass, inputStyle } from './sidebarModalStyles'
+import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { useAgentStore } from '../../stores/agentStore'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
@@ -1099,13 +1101,6 @@ export function Sidebar() {
       e.preventDefault()
       handleRename()
     }
-  }
-
-  const inputClass = "w-full px-3 py-2 text-sm focus:outline-none transition-all"
-  const inputStyle: React.CSSProperties = {
-    background: 'var(--bg-surface)',
-    border: '1px solid var(--border-strong)',
-    color: 'var(--text-primary)',
   }
 
   // Filter sessions for a specific worktree.
@@ -2588,78 +2583,6 @@ export function Sidebar() {
         }}
       />
     </div>
-  )
-}
-
-function EditButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
-  const { t } = useTranslation()
-  return (
-    <button
-      onClick={onClick}
-      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
-      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
-      title={t('sidebar.rename')}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = 'var(--accent)'
-        e.currentTarget.style.color = 'var(--accent)'
-        e.currentTarget.style.background = 'var(--accent-10)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-faint)'
-        e.currentTarget.style.background = 'transparent'
-      }}
-    >
-      <IconPencil width={14} height={14} />
-    </button>
-  )
-}
-
-function DeleteButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
-  const { t } = useTranslation()
-  return (
-    <button
-      onClick={onClick}
-      className="row-action flex-shrink-0 flex items-center justify-center transition-all sidebar-glow-red-hover"
-      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
-      title={t('sidebar.delete')}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = 'var(--danger)'
-        e.currentTarget.style.color = 'var(--danger)'
-        e.currentTarget.style.background = 'var(--danger-12)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-faint)'
-        e.currentTarget.style.background = 'transparent'
-      }}
-    >
-      <IconTrash width={14} height={14} />
-    </button>
-  )
-}
-
-function ReleaseButton({ onClick }: { onClick: (e: React.MouseEvent) => void }) {
-  const { t } = useTranslation()
-  return (
-    <button
-      onClick={onClick}
-      className="row-action flex-shrink-0 flex items-center justify-center transition-all"
-      style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', fontSize: 11 }}
-      title={t('sidebar.releaseAcp')}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.borderColor = 'var(--warning)'
-        e.currentTarget.style.color = 'var(--warning)'
-        e.currentTarget.style.background = 'var(--warning-12)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = 'var(--border-strong)'
-        e.currentTarget.style.color = 'var(--text-faint)'
-        e.currentTarget.style.background = 'transparent'
-      }}
-    >
-      <IconPower width={14} height={14} />
-    </button>
   )
 }
 
