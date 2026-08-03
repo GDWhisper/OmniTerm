@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> 状态：设计稿（2026-08-03）
+> 状态：已实施（2026-08-03，验收 ≤800 行达标；手动浏览器回归待人工执行）
 > 触发条件：`docs/dev/plans/2026-08-03-large-file-optimization.md` Phase 1（P0：Sidebar 拆分）
 > 关联：`docs/architecture/frontend-patterns.md`（Section 拆分原则）、`docs/architecture/frontend.md` §Source Tree、AGENTS.md §6/§7
 
