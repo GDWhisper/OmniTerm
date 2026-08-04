@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-05 00:30) `[backend]` `[frontend]` `[api]` 设置面板新增「自动断连/释放超时」调节：设置 → 会话新增三个分钟滑块（值域 1..60，≥30 分钟显示内存占用警告）——ACP 空闲回收（默认 5 分钟，`GET/PUT /api/v1/settings/acp-idle-recycle` 持久化到 settings 表，reaper 每个 tick 动态读取实现运行时热更新）、tmux 失焦断连（默认 10 分钟，localStorage `omniterm_blur_disconnect_min`）、tmux 空闲断连（默认 15 分钟，`omniterm_idle_disconnect_min`）；`useTerminal` 断连定时器改从 store 读分钟值 ×60_000，删除硬编码 `BLUR/IDLE_DISCONNECT_DELAY_MS` 常量（`src/api/settings.rs`、`src/main.rs`、`src/acp/reaper.rs`、`frontend/src/stores/appStore.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/api/client.ts`）
+
 ## [0.2.8] - 2026-08-04
 
 ### Added

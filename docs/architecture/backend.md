@@ -27,6 +27,7 @@ src/
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
 │   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (tmux pane) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
+│   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
 │   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
@@ -62,6 +63,8 @@ POST /api/v1/auth/setup|login|logout
 GET  /api/v1/auth/check
 POST /api/v1/auth/settings     # 密码验证总开关（受保护）
 POST /api/v1/auth/change-password  # 受保护（需登录 + 当前密码）
+GET  /api/v1/settings/acp-idle-recycle  # 读 ACP 空闲回收阈值（分钟；settings 表无记录/非数字回退 5）——受保护
+PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，值域 1..=60，越界 400）——受保护
 GET  /api/v1/projects
 POST /api/v1/projects
 DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
@@ -227,7 +230,14 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Settings 表
 
-`migrations/20260801_add_settings_table.sql`：全局 KV 设置。当前 key：`auth_enabled`（`'1'`/`'0'`）。
+`migrations/20260801_add_settings_table.sql`：全局 KV 设置（key → value 字符串）。当前 key：
+
+| key | 语义 | 消费方 |
+|-----|------|--------|
+| `auth_enabled` | 密码验证总开关（`'1'`/`'0'`） | `main.rs` 启动注入 `AppState.auth_enabled`；`POST /auth/settings` 切换 |
+| `acp_idle_recycle_min` | ACP 空闲回收阈值（分钟，值域 1..=60） | `main.rs` 启动解析（缺失/非数字回退 `IDLE_RECYCLE_SECS`=300s）注入 `AppState.acp_idle_recycle_secs: Arc<AtomicU64>`；`src/acp/reaper.rs` 每个 tick 动态 `load`（运行时热更新） |
+
+**ACP 空闲回收阈值 API**（`src/api/settings.rs`，挂载在 `require_auth_mw` 保护路由组）：`GET /api/v1/settings/acp-idle-recycle` 返回 `{minutes}`，无记录/非数字回退默认 5；`PUT` 校验分钟值 1..=60（越界 400），合法则 upsert settings 表并热更新内存秒级阈值（分钟×60）。`run_reaper(supervisor, idle_recycle_secs)` 的 idle 判定每次读取该共享值，改配置无需重启即生效。`IDLE_RECYCLE_SECS` 保留为 DB 无配置时的兜底默认；`REQUIRES_ACTION_RECYCLE_SECS`（1800s）与 `PROMPT_STALE_SECS`（600s）仍为硬编码，本次仅把 idle 阈值提为可配置。
 
 ## Sessions Table
 

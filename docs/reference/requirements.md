@@ -58,3 +58,8 @@
   - **`stop`**：用 `OpenProcess(PROCESS_TERMINATE)` → `TerminateProcess` 强杀（等价 Unix `SIGKILL`）；优雅退出需额外 IPC（named event），可后续迭代
   - **优雅退出**：daemonize 后无控制台，`ctrl_c()` 永不触发。如需要 ACP 子进程回收等清理逻辑，需用 named event `"omniterm-shutdown-{pid}"` 做关闭通知
   - 预估改动量 ~50 行，全在 `src/main.rs`，无新增依赖
+
+## 自动断连 / 释放超时可调 ✅（2026-08-05 完成）
+
+- [x] **设置面板调节自动断连/释放超时** — 设置 → 会话新增三个分钟滑块（值域 1..60）：ACP 空闲回收（默认 5，`GET/PUT /api/v1/settings/acp-idle-recycle` 持久化到后端 settings 表，reaper 运行时热更新）、tmux 失焦断连（默认 10，localStorage `omniterm_blur_disconnect_min`）、tmux 空闲断连（默认 15，`omniterm_idle_disconnect_min`）。
+- [x] **超时值 ≥30 分钟内存占用提醒** — 长超时会让 tmux/ACP 进程长时间驻留内存，设置面板滑块值 ≥30 分钟时显示警告文案。

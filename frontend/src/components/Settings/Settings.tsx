@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
-import { useAppStore, DEFAULT_UI_ZOOM } from '../../stores/appStore'
+import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN } from '../../stores/appStore'
 import { api } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
@@ -50,6 +50,51 @@ const languages = [
   { value: 'zh', label: '中' },
   { value: 'en', label: 'En' },
 ]
+
+/** Minutes above which an over-long disconnect/recycle timeout is flagged. */
+const WARNING_THRESHOLD_MIN = 30
+
+/* ── Disconnect / recycle timeout slider (minutes) ── */
+
+interface DisconnectSliderProps {
+  titleKey: string
+  hintKey: string
+  warningKey: string
+  value: number
+  onChange: (n: number) => void
+  /** Optional fire-and-forget side effect (e.g. persisting to the backend). */
+  onCommit?: (n: number) => void
+}
+
+function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCommit }: DisconnectSliderProps) {
+  const { t } = useTranslation()
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t(titleKey)}</SectionTitle>
+      <div className="flex items-baseline gap-1">
+        <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>{value}</span>
+        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('settings.minutesUnit')}</span>
+      </div>
+      <input
+        type="range"
+        min={MIN_DISCONNECT_MIN}
+        max={MAX_DISCONNECT_MIN}
+        step={1}
+        value={value}
+        onChange={(e) => {
+          const n = Number(e.target.value)
+          onChange(n)
+          onCommit?.(n)
+        }}
+        className="w-full"
+      />
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
+      {value >= WARNING_THRESHOLD_MIN && (
+        <p style={{ fontSize: 11, color: 'var(--warning)', lineHeight: 1.5 }}>{t(warningKey)}</p>
+      )}
+    </section>
+  )
+}
 
 /* ── Neon border button style helpers ── */
 
@@ -527,6 +572,12 @@ function SessionsSection() {
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const setExpandThinking = useAppStore(s => s.setExpandThinking)
   const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
+  const acpIdleRecycleMin = useAppStore(s => s.acpIdleRecycleMin)
+  const setAcpIdleRecycleMin = useAppStore(s => s.setAcpIdleRecycleMin)
+  const blurDisconnectMin = useAppStore(s => s.blurDisconnectMin)
+  const setBlurDisconnectMin = useAppStore(s => s.setBlurDisconnectMin)
+  const idleDisconnectMin = useAppStore(s => s.idleDisconnectMin)
+  const setIdleDisconnectMin = useAppStore(s => s.setIdleDisconnectMin)
 
   return (
     <>
@@ -541,6 +592,30 @@ function SessionsSection() {
         hintKey="settings.expandToolCallsHint"
         value={expandToolCalls}
         onToggle={() => setExpandToolCalls(!expandToolCalls)}
+      />
+      <DisconnectSlider
+        titleKey="settings.acpIdleRecycle"
+        hintKey="settings.acpIdleRecycleHint"
+        warningKey="settings.acpIdleRecycleWarning"
+        value={acpIdleRecycleMin}
+        onChange={setAcpIdleRecycleMin}
+        onCommit={(n) => {
+          api.setAcpIdleRecycle(n).catch(() => {})
+        }}
+      />
+      <DisconnectSlider
+        titleKey="settings.tmuxBlurDisconnect"
+        hintKey="settings.tmuxBlurDisconnectHint"
+        warningKey="settings.tmuxDisconnectWarning"
+        value={blurDisconnectMin}
+        onChange={setBlurDisconnectMin}
+      />
+      <DisconnectSlider
+        titleKey="settings.tmuxIdleDisconnect"
+        hintKey="settings.tmuxIdleDisconnectHint"
+        warningKey="settings.tmuxDisconnectWarning"
+        value={idleDisconnectMin}
+        onChange={setIdleDisconnectMin}
       />
     </>
   )

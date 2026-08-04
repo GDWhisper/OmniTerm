@@ -35,7 +35,7 @@
 
 Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修复已落地：外层 `overflow:hidden` + 显式 `height` 裁切 `borderRadius` 圆弧，内层 `overflowY:auto` 滚动。**
 
-- `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关。改这里动设置项
+- `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关 / 会话 section（`SessionsSection`，含三个 `DisconnectSlider` 分钟滑块）。改这里动设置项
 - `frontend/src/components/Settings/AgentSettings.tsx` + `frontend/src/components/Settings/presets.ts` — **agent 预设**：增/改预设只动 `presets.ts`（维护指引见其文件头 JSDoc），`AgentSettings.tsx` 一般不改；同时改两个 translation.json 的 `settings.agents.preset.*` key
 - `frontend/src/components/Settings/SettingsPopup.tsx` — **弹出层骨架**：定位、滚动、关闭逻辑。一般不改；改这里意味着动弹出行为。从 `../constants/popup` import 定位常量
 - `frontend/src/components/constants/popup.ts` — 移动端定位常量（`MOBILE_NAV_HEIGHT`、`SIDEBAR_BOTTOM_BAR_HEIGHT`、`MOBILE_STATUS_BAR_RESERVE`、`GAP`），SettingsPopup 与 TmuxCheatsheetPopup 共享
@@ -43,7 +43,7 @@ Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修�
 - `frontend/src/components/Layout/Layout.tsx` — 触发按钮 `data-toggle="settings"` + Desktop/Mobile 双路径条件渲染 `<SettingsPopup />`
 - `frontend/src/locales/{en,zh}/translation.json` — 改这里：增/删/改 `settings.*` i18n key
 
-**加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。
+**加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。断连/回收类分钟滑块复用 `DisconnectSlider`（值域 1..60、`WARNING_THRESHOLD_MIN=30` 触发内存警告，见 `Settings.tsx` 顶部常量）；若需后端持久化（如 ACP 空闲回收走 `api.setAcpIdleRecycle`）→ `client.ts` 加 API 函数 + 后端 `src/api/settings.rs` 加路由（挂 `require_auth_mw` 保护组）。
 
 **复制为新弹窗**：见 `docs/architecture/frontend-patterns.md`：
 - 简单单 section 走「Sidebar 底部按钮弹出面板」契约

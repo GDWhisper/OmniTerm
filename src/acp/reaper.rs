@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use tokio::time::interval;
@@ -5,7 +7,9 @@ use tokio::time::interval;
 use crate::acp::client::TurnEndEvent;
 use crate::acp::supervisor::AcpSupervisor;
 
-/// 静默待命回收阈值（秒）：无进行中 prompt、无未决权限、且距最后活动满 5 分钟即回收。
+/// 静默待命回收阈值（秒）默认值：无进行中 prompt、无未决权限、且距最后活动满 5 分钟即回收。
+/// 实际阈值可由 `run_reaper` 的 `Arc<AtomicU64>` 在运行时覆盖（main.rs 从 settings 表注入），
+/// 此常量作为 DB 无配置时的兜底默认值。
 pub const IDLE_RECYCLE_SECS: u64 = 300;
 
 /// 权限请求无响应兜底阈值（秒）：有未决权限但久无活动满 30 分钟则取消并回收。
@@ -33,15 +37,21 @@ const TICK_SECS: u64 = 30;
 /// 即使 WS 连接仍持有 `Arc<AcpClient>` 也会立即触发连接任务退出、杀子进程，保证
 /// supervisor 移除与进程死亡同步（否则 Sidebar 的 `acp_process_alive` 与实际进程
 /// 存活脱节）。
-pub async fn run_reaper(supervisor: AcpSupervisor) {
+///
+/// `idle_recycle_secs` 为共享的 idle 回收阈值（秒）：main.rs 从 settings 表读取
+/// `acp_idle_recycle_min` 换算后注入，可在运行时热更新。每个 tick 判定前动态
+/// `load`，改动无需重启即可生效；缺省兜底见 [`IDLE_RECYCLE_SECS`]。
+pub async fn run_reaper(supervisor: AcpSupervisor, idle_recycle_secs: Arc<AtomicU64>) {
     let mut ticker = interval(Duration::from_secs(TICK_SECS));
     loop {
         ticker.tick().await;
 
         // 1) 快照 + 判定（不在持锁状态下做 async 回收）
+        // idle 阈值每次判定前动态读取，使运行时改配置即时生效。
+        let idle_secs = idle_recycle_secs.load(Ordering::Relaxed);
         let mut to_reap: Vec<(String, bool /*perm_stale*/)> = Vec::new();
         for (sid, client) in supervisor.snapshot().await {
-            if client.is_idle_stale(IDLE_RECYCLE_SECS).await {
+            if client.is_idle_stale(idle_secs).await {
                 to_reap.push((sid, false));
             } else if client.is_permission_stale(REQUIRES_ACTION_RECYCLE_SECS).await {
                 to_reap.push((sid, true));

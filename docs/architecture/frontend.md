@@ -11,14 +11,14 @@ src/
 ├── i18n.ts              # i18n configuration
 ├── api/client.ts        # Typed fetch wrapper for all API endpoints
 ├── stores/
-│   ├── appStore.ts      # Zustand: layout, projects, sessions, font size, mobile detection
+│   ├── appStore.ts      # Zustand: layout, projects, sessions, font size, mobile detection + 断连/回收超时（分钟，可配置）
 │   ├── themeStore.ts    # Zustand: light/dark/system theme + .dark class on <html>
 │   ├── toastStore.ts    # Zustand: toast notifications (auto-dismiss)
 │   ├── agentStore.ts    # Zustand: agent registry (Phase 3 — static catalog, no live state)
 │   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
-│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size
+│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
 │   ├── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
@@ -36,7 +36,7 @@ src/
     ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
     ├── RightPanel/ — RightPanel.tsx（右栏容器：FILES | GIT 标签、统一标题栏、折叠 rail；两 tab 常挂载 display 切换）
     ├── GitPanel/ — GitPanel.tsx（分支/远端操作 + CHANGES|HISTORY + 底部提交框）, GitDrawer.tsx（diff/commit 抽屉）, DiffView.tsx, diffParser.ts（unified diff 解析）
-    ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx
+    ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx（SessionsSection 含三个断连/回收滑块，复用 DisconnectSlider 组件）
     ├── TmuxCheatsheet/ — TmuxCheatsheet.tsx (render), TmuxCheatsheetPopup.tsx (popup), data.ts (command list, single source of truth — 增/删/改命令改本文件 + 两个 translation.json；维护指引见 data.ts 顶部 JSDoc)
     ├── Icons/ — GitBranchIcon.tsx, KeyboardIcon.tsx
     ├── Modal/ — Modal.tsx, ConfirmDialog.tsx
@@ -93,6 +93,21 @@ src/
 
 > 此规则与工程准则"禁 Copy-Paste"（必须提取）和"奥卡姆剃刀"（不过度抽象）协同 ——
 > 重复代码必须提取，但形式由以上条件决定；单一组件内的 Hook 级逻辑不必急于抽出。
+
+## 断连 / 空闲回收超时（可配置）
+
+设置 → 会话（`Settings.tsx` 的 `SessionsSection`）三个 range 滑块把三类超时提为可调（值域 1..60 分钟，`WARNING_THRESHOLD_MIN=30`，≥30 时显示内存占用警告）：
+
+| 滑块 | store 字段 | 默认 | 持久化 |
+|------|-----------|------|--------|
+| ACP 空闲回收 | `acpIdleRecycleMin` | 5 | 后端 settings 表（`PUT /api/v1/settings/acp-idle-recycle`），onChange 调 `api.setAcpIdleRecycle` |
+| tmux 失焦断连 | `blurDisconnectMin` | 10 | localStorage `omniterm_blur_disconnect_min` |
+| tmux 空闲断连 | `idleDisconnectMin` | 15 | localStorage `omniterm_idle_disconnect_min` |
+
+- **store 层**（`appStore.ts`）：导出 `MIN_DISCONNECT_MIN=1` / `MAX_DISCONNECT_MIN=60`；三个字段各有 setter，`blurDisconnectMin`/`idleDisconnectMin` 从 localStorage 读取并 clamp 到值域（非法回退默认），`acpIdleRecycleMin` 为纯内存（不跨重启）。
+- **消费方**（`useTerminal.ts`）：删除 `BLUR_DISCONNECT_DELAY_MS`/`IDLE_DISCONNECT_DELAY_MS` 常量，blur/idle 断连定时器改从 store 读分钟值 ×60_000；acpIdleRecycleMin 仅在前端渲染（后端 reaper 消费秒级阈值，见 backend.md Settings 表）。
+- **滑块组件**（`Settings.tsx`）：`DisconnectSlider` 为共享 range 滑块（title/hint/warning 三文案 + value/onChange/onCommit），三个用例复用同一组件；ACP 滑块 onCommit 调 `api.setAcpIdleRecycle(n)` 持久化。
+- **API client**（`client.ts`）：`getAcpIdleRecycle()` / `setAcpIdleRecycle(minutes)` 对应后端 `GET/PUT /api/v1/settings/acp-idle-recycle`。
 
 ## ACP Chat View (Phase 4a)
 
