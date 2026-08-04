@@ -662,6 +662,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         // restore 出的新 client 绑定持久化：后续用户 prompt 的
                                         // assistant 回复由累积器实时防抖落库。
                                         new_client.attach_persistence(db.clone(), sid.clone());
+                                        // 绑定配置偏好持久化（agent_id 来自上文 DB 查询的 row）。
+                                        // restore_config_prefs 在 load_session 返回后调用——此时
+                                        // spawn_and_load 的 initial_config_options 缓存才被回填。
+                                        new_client.attach_config_prefs(db.clone(), sid.clone(), agent_id.clone());
 
                                         let perm_rx = new_client.permission_subscribe();
                                         spawn_permission_task(perm_rx, notify_tx.clone()).await;
@@ -716,6 +720,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                     },
                                                 }
                                             };
+                                            // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、
+                                            // 排空缓冲前调用。restore 发出的 ConfigOptionUpdate 广播会进
+                                            // replay_rx → 前端 staging，ReplayEnd 的 commitReplay 时恢复值
+                                            // 覆盖重放默认值，配置栏最终显示用户上次的设置。
+                                            if result.is_ok() {
+                                                new_client.restore_config_prefs().await;
+                                            }
                                             // load_session 返回即 agent 已推完全部历史。排空缓冲余量后
                                             // 经 notify_tx 发 replay_end——notify_tx 为 FIFO，故 replay_end
                                             // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。

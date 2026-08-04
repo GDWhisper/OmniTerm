@@ -1,5 +1,6 @@
 pub mod chat_persistence;
 pub mod client;
+pub mod config_prefs;
 pub mod handler;
 pub mod permission;
 pub mod reaper;

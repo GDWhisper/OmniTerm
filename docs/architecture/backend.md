@@ -11,6 +11,7 @@ src/
 ├── acp/
 │   ├── mod.rs            # Re-export AcpClient, AcpSupervisor
 │   ├── client.rs         # AcpClient: spawn agent subprocess, ACP handshake, session, prompt, cancel, disconnect
+│   ├── config_prefs.rs   # 配置偏好持久化：session_config_options + agent_config_preferences 两层 CRUD + 恢复值校验
 │   ├── handler.rs        # Session-update broadcast helper (fed by ACP SessionNotification); assigns per-client monotonic seq
 │   ├── permission.rs     # PermissionManager: user-prompted approval via WS banner; no timeout auto-response
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
@@ -119,6 +120,20 @@ Lifecycle:
 - **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
 - **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / crash watcher→`finalize_turn`。cancel **不立即** finalize：合作的 agent 收到 `session/cancel` 后会让 `send_prompt` 以 `Cancelled` 返回、走正常定稿路径（取消后补发的尾部帧照常落库）；无视 cancel 的实现（§8）由 `spawn_cancel_turn_fallback` 兜底——超时（`CANCEL_TURN_FALLBACK_SECS`）后若同一 turn 仍在进行（prompt 世代计数守卫）则强制 `mark_prompt_idle` + 广播 turn 结束。
 - **启动自愈**：`main.rs` migrate 后 `UPDATE chat_messages SET status='complete' WHERE status='streaming'`（重启后不可能有进行中 turn）。
+
+### 配置偏好持久化（两层记忆）
+
+底部配置栏（mode/model/thinking/config 选择器）的值**跨进程重启/新会话记忆**，migration `20260804_acp_config_preferences.sql`：
+
+| 表 | 语义 | 应用时机 |
+|----|------|---------|
+| `session_config_options(session_id, config_id, value, updated_at)` | 会话级覆盖：单个会话内用户主动 set 过的配置 | restore 该会话时优先（覆盖 agent 级） |
+| `agent_config_preferences(agent_id, config_id, value, updated_at)` | agent 级全局偏好：用户为该 agent 设过的配置 | 新建/恢复会话时作为默认值 |
+
+- **写入时机**：只在**用户主动 set**（`AcpClient::set_config_option` 成功，`src/ws/acp.rs` 收 `set_config_option` 帧）时写库，不记 agent 内部状态变化。句柄经 `attach_config_prefs(db, db_session_id, agent_id)` 绑定（仿 `attach_persistence`），仅在真实会话注册点（create session / load restore）设置；能力探针不绑定 → 写入/恢复 no-op。
+- **恢复时机**（`AcpClient::restore_config_prefs`）：读 agent 偏好 + 会话级 → 合并（会话级覆盖）→ 逐项 `set_config_option`。**必须在 `initial_config_options` 缓存已填充后调用**——create 路径 `spawn_and_connect` 已走 `NewSession` 可立即恢复；load 路径 `spawn_and_load` 缓存恒为空（不发送 NewSession），须等 `load_session` 返回（缓存被 `LoadSessionResponse.config_options` 回填）后再恢复。恢复广播的 `ConfigOptionUpdate` 经 replay staging 在 `ReplayEnd` 时落位，前端零改动。整体 10s 超时，单项目失败 warn 跳过。
+- **删除清理**：SQLx 默认开启 `foreign_keys`（`ON DELETE CASCADE` 生效），`delete_session` / `delete_project` / `delete_agent` 的显式 `clear_*` 为防御性兜底。
+- **§8 多实现差异**：restore 只匹配 agent **当前**仍提供的 `config_id`（缓存过滤，agent 已移除项自动跳过）；`validate_config_value` 校验值合法性——Boolean 限定 `"true"/"false"`，Select 扁平化 Ungrouped/Grouped 匹配，**options 为空放行**（不因信息缺失阻断恢复）。agent 不在 NewSession/LoadSession 响应返回 `config_options` 时（如 opencode 的 load 响应），restore 自动跳过（缓存空无法过滤、也不盲发）——该边界下配置栏本就可能为空，属已知能力边界。
 
 ### 重连续接协议（seq + turn_snapshot / turn_state）
 

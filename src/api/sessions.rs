@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::acp::AcpClient;
+use crate::acp::config_prefs;
 use crate::api::agents::load_agent;
 use crate::models::session::{
     AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
@@ -179,6 +180,11 @@ async fn create_session(
         // 绑定持久化：assistant 回复由累积器实时防抖落库到本会话行，
         // 使流式中刷新/切设备不再丢失进行中的 turn（见 turn_accumulator）。
         acp_client.attach_persistence(state.db.clone(), id.clone());
+        // 绑定配置偏好持久化并同步恢复：agent 全局偏好（+ 本会话历史覆盖）在
+        // spawn 后立即下发，WS 连接时 initial_config_notification 缓存已是恢复值，
+        // 前端新建会话即可看到用户上次的配置。内部带 10s 超时，不阻塞会话注册。
+        acp_client.attach_config_prefs(state.db.clone(), id.clone(), agent_id.clone());
+        acp_client.restore_config_prefs().await;
         state.acp_supervisor.insert(id.clone(), acp_client).await;
         info!(
             "created ACP session: {} (agent: {}, acp_session_id: {})",
@@ -354,6 +360,9 @@ async fn delete_session(
     if let Some((tmux_name, runtime_kind)) = row {
         cleanup_session_runtime(&state, &id, tmux_name.as_deref(), &runtime_kind).await;
     }
+
+    // 清理会话级配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
+    let _ = config_prefs::clear_session_configs(&state.db, &id).await;
 
     (StatusCode::OK, Json(json!({ "ok": true })))
 }

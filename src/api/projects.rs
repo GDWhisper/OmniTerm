@@ -220,6 +220,8 @@ async fn delete_project(
             &runtime_kind,
         )
         .await;
+        // 清理该会话的配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
+        let _ = crate::acp::config_prefs::clear_session_configs(&state.db, &session_id).await;
     }
 
     // Cascade: delete sessions first

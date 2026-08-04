@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-04 17:00) `[backend]` ACP 会话底部配置（mode/model/thinking/config 选择器）持久化记忆：两层模型——`agent_config_preferences`（按 agent 记住用户全局偏好，新建会话自动应用）+ `session_config_options`（会话级覆盖，restore 该会话时优先恢复）；用户改配置成功即落库，进程 release/reaper 回收/后端重启/新会话后自动逐项恢复，前端零改动（`migrations/20260804_acp_config_preferences.sql`、`src/acp/config_prefs.rs`、`src/acp/client.rs`、`src/api/sessions.rs`、`src/ws/acp.rs`）
 - (2026-08-03 18:40) `[backend]` `[frontend]` 非 git 仓库项目创建 worktree 时先弹确认框询问是否初始化 git：用户确认后后端自动 `git init` + 初始提交（缺失 user.name/email 时用仓库级兜底身份，不污染全局配置）再创建 worktree；新增 `POST /projects/{id}/git-init` 端点与 `create_worktree` 的 `init` 标志，错误响应统一带 `code: "not_a_git_repo"` 供前端识别（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/api/client.ts`、`frontend/src/locales/{en,zh}/translation.json`）
 - (2026-08-03 18:50) `[backend]` `[frontend]` 初始化 git 确认框新增 .gitignore 警告：`not_a_git_repo` 错误响应附带 `has_gitignore` 字段，无 .gitignore 时确认框额外提示「初始化将把当前目录下所有现有文件（含大文件/敏感文件）纳入首次提交」（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Modal/ConfirmDialog.tsx`、`frontend/src/locales/{en,zh}/translation.json`）
 

@@ -191,6 +191,10 @@ async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> 
     if result.rows_affected() == 0 {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
+
+    // 清理该 agent 的全局配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
+    let _ = crate::acp::config_prefs::clear_agent_prefs(&state.db, &id).await;
+
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
 

@@ -589,6 +589,53 @@ FRONTEND_DIR=frontend/dist
 
 ---
 
+## 13. ACP 配置偏好持久化（2026-08-04）
+
+> 前置：§11 创建过可用 agent；后端已应用 migration `20260804_acp_config_preferences.sql`。
+> 底部配置栏（Mode/Model/Thinking/Config 选择器）只在 agent 下发 `config_options` 后可见，以下用例以可见为前提。
+
+### 13.1 新建会话继承 agent 全局偏好
+
+| 步骤 | 预期 |
+|------|------|
+| 在会话 A 的底部配置栏修改 Model（如从默认切到另一值） | 配置生效，配置栏显示新值 |
+| 新建同一 agent 的会话 B | B 的底部配置自动显示会话 A 设置的 Model 值（agent 级偏好继承） |
+| 在 B 中改回默认值 | B 生效；下次再建同 agent 会话 C 时按 B 的最终值继承 |
+
+### 13.2 会话级覆盖优先
+
+| 步骤 | 预期 |
+|------|------|
+| 在会话 A 设置 Model=X（此时 agent 全局偏好也是 X） | 两个表记录一致 |
+| 在会话 A 把 Model 改成 Y | 仅会话 A 变 Y；agent 全局偏好仍 X |
+| 新建会话 B | B 显示 X（agent 级） |
+| 手动释放会话 A（release）后重新恢复（load_session） | A 显示 Y（会话级覆盖） |
+
+### 13.3 进程生命周期内配置记忆
+
+| 步骤 | 预期 |
+|------|------|
+| 修改配置后刷新浏览器（进程存活） | 刷新后配置栏仍显示上次值（`initial_config_notification` 回推缓存） |
+| 手动 release 会话 → 重新进入会话 → 点「恢复会话」 | 重放期间配置栏短暂显示 agent 默认值，`ReplayEnd` 后切换为恢复值 |
+
+### 13.4 删除清理
+
+| 步骤 | 预期 |
+|------|------|
+| 删除一个 ACP 会话 | `session_config_options` 对应行被清理（或 FK 级联） |
+| 删除一个项目 | 项目下全部会话的 `session_config_options` 被清理 |
+| 删除一个 agent（无会话引用时） | `agent_config_preferences` 对应行被清理 |
+
+### 13.5 边界与降级
+
+| 步骤 | 预期 |
+|------|------|
+| agent 侧移除某配置项后恢复会话 | 该项被跳过、不报错，其余项正常恢复 |
+| agent 不返回 `config_options`（如 opencode 部分路径） | restore 自动跳过（缓存空无法过滤），会话正常建立，配置栏可能为空（已知能力边界） |
+| 恢复期间 agent 响应慢/失败 | 单项目 warn 跳过，10s 超时兜底，不阻塞会话建立/恢复 |
+
+---
+
 ## 反馈模板
 
 测试完成后请填写：
