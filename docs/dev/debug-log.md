@@ -1023,9 +1023,9 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 修复：① `turn_accumulator.rs`：`frames` 从 `Vec<Value>` 改 `VecDeque<Value>`，新增 `MAX_FRAMES=2000` 有界窗口，fold 超限 `pop_front` 丢弃最旧帧；`text` 仍全量累积（正文完整），turn 结束后前端 `syncToDb` 写回完整结构化 blocks。② 前端 `useAcpChat.ts` `rawFramesToBlocks` 加 `MAX_BLOCKS_FRAMES=2000` `slice(-N)` 防御存量超大 blocks 在 hydrate 时逐帧分类卡死。
 - 验证：`cargo check` / `cargo fmt --check` / `cargo clippy -D warnings` 全过；新增单测 `frames_retention_is_bounded_over_long_turn`（fold 5000 帧 → frames 恰为 2000、text 全量 5000 chunk）；前端 `tsc -b` / eslint / vitest 174 全过。
 
-## 2026-08-04: 移动端 tmux 终端右侧竖向黑条——FitAddon 的滚动条宽度预留假设在触摸设备失效
+## 2026-08-04: 移动端 tmux 终端右侧竖向黑条 + 行尾换行字符截断——FitAddon 滚动条预留失效与 cell 测量亚像素偏差叠加
 
-**症状**：移动端 tmux 终端最右侧有一条竖向黑条（无任何内容），右侧文字显示不全。用户描述「看起来有一个竖向的黑条，什么都不显示」。
+**症状**：移动端 tmux 终端最右侧有一条竖向黑条（无任何内容），右侧文字显示不全。用户描述「看起来有一个竖向的黑条，什么都不显示」。黑条缩小后（gap 11→4px）又暴露出第二层问题：行尾换行字符被截断，呈现出不完整的字形。
 
 **可复用的理论/模式**：
 
@@ -1033,17 +1033,22 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 
 **2. 现象「被遮挡/截断」先区分「内容被裁」与「内容没延伸到那里」**：用户描述「右侧显示不全/被东西挡住」，实测 `getBoundingClientRect` 发现 `.xterm-screen`（内容）只有 367px、`.xterm-viewport`（容器）378px——不是内容被裁剪（无 overflow 截断），是内容根本没渲染到右缘，露出的容器黑背景被误读为「遮挡物」。**同一症状先量出「内容元素 vs 容器元素」的几何差，再判断是裁剪（overflow）还是留空（尺寸计算偏小），两条路线的修复完全不同**。
 
-**3. 修复「环境特有假设」时，把平台差异收敛到一个可切换的适配点，而不是改库或散落 hack**。覆盖 FitAddon 实例的 `proposeDimensions`（该方法是 addon-fit 的公开 API，`fit()` 内部 `this.proposeDimensions()` 动态查找），内部按 `useAppStore.isMobile` 分支：桌面透传原版、移动端用容器实际 content-box（`clientWidth − padding`）除以 cell 尺寸重算列数。一处收敛、随实例安装，桌面零回归（实测桌面 gap 仍为滚动条预留，行为不变）。
+**3. 字体「测量宽度」与「渲染宽度」的亚像素偏差，会在行尾累积成可见截断，且修复「列数偏小」后反而暴露**。xterm 用 `.xterm-char-measure-element` 测出 cellW≈7.779，但字形实际渲染宽度≈7.797（字体 hinting / 亚像素取整），差 0.018px/字符。`Range.getBoundingClientRect()` 实测第 48 列字符右边缘 379.41，而 `.xterm-screen` 右缘恰为 `cols × cellW`=380——**余量仅 0.6px**，真实设备（不同字体、DPR、hinting）下就会溢出被裁。关键公式：**最后一列字符的溢出量 = 实际字形宽 − 测量 cellW（与列数无关）**，但只要 `.xterm-screen` 比 `cols × cellW` 略宽就有缓冲。**修「内容不够宽」类问题后必须复查「内容恰好填满」时的亚像素边界，两类问题互为镜像**。
 
 **诊断过程中的错误**：
 
 1. **无活动会话时反复截图浪费多轮**：页面默认空态（「选择或创建一个会话」），不激活 tmux 会话就看不到终端渲染，前几轮截图内容完全一致（md5 相同）才意识到没复现到终端。**复现前先确认已经走到目标渲染分支**。
 2. **headless 截图无法区分 11px 量级差异**：同尺寸对比截图肉眼分不出黑条宽窄，**几何测量（`getBoundingClientRect` / `clientWidth`）比截图可靠得多**——一次 `evaluate` 就能拿到 screen 与 viewport 的精确右缘差。
 3. **把「接管（Adopt）」当成「激活」**：外部会话列表「点击会话行 = 激活」「点「接管」按钮 = 收入某项目」是两个独立动作，点了接管只弹项目选择下拉，终端一直没激活。**先确认 UI 动作语义与目标状态的关系再点击**。
+4. **拿现有会话测试干扰了用户**：一直激活用户正在查看的 `lt_*` 外部会话做测试，把用户从移动端切走。**终端类自动化测试必须 `tmux new-session -d -s omniterm-test-*` 自建独立会话，禁止碰用户的活动会话**。
+5. **headless 的 DOM renderer 里 `.xterm-screen canvas` 不存在**（xterm 6 默认 DOM renderer 而非 canvas renderer），第一版测 canvas 宽度的脚本全 null。**先 dump `.xterm` 的内部 HTML 确认渲染后端，再选测量对象**。
+6. **`Range.setStart(row.firstChild, 46)` 抛 IndexSizeError**：DOM renderer 每行是 span 包裹的文本节点，`row.firstChild` 是 span 不是文本。**用 `TreeWalker(SHOW_TEXT)` 收集文本节点再定位字符索引**。
 
 **具体根因与修复**：
 
-- 根因：`@xterm/addon-fit` 的 `proposeDimensions`（`FitAddon.ts:68-85`）——`scrollbarWidth = scrollback===0 ? 0 : overviewRuler?.width || DEFAULT_SCROLL_BAR_WIDTH`（本项目 scrollback 非 0 → 恒 14px）；`parentElementWidth` 取容器 border-box（`getComputedStyle().width`，含 container 4px padding ×2），且只减去 `.xterm` 自身 padding（0）。移动端实测：viewport 宽 378px、screen（内容）宽 367px，右侧空出 11px，显示的是 viewport 的 `#000` 背景。
-- 修复①（`frontend/src/hooks/useTerminal.ts`）：createTerminal 内覆盖 `fit.proposeDimensions`，`useAppStore.getState().isMobile` 为真时按 `container.clientWidth − paddingX/Y` 除以 `core._renderService.dimensions.css.cell` 取整列数（不预留滚动条宽度）；桌面透传原版。实测 gap 11px → 4px（剩余 4px 是 xterm 自身 cell 浮点取整的固有舍入，任何平台都有，桌面端被滚动条区域吸收）。
+- 根因①（黑条）：`@xterm/addon-fit` 的 `proposeDimensions`（`FitAddon.ts:68-85`）——`scrollbarWidth = scrollback===0 ? 0 : overviewRuler?.width || DEFAULT_SCROLL_BAR_WIDTH`（本项目 scrollback 非 0 → 恒 14px）；`parentElementWidth` 取容器 border-box（`getComputedStyle().width`，含 container 4px padding ×2），且只减去 `.xterm` 自身 padding（0）。移动端实测：viewport 宽 378px、screen（内容）宽 367px，右侧空出 11px，显示的是 viewport 的 `#000` 背景。
+- 根因②（截断）：修复①后 cols 47→48、screen 367→374，`.xterm-screen` = `48 × cellW`=374 恰等于内容宽。但 Range 实测第 48 列字符右边缘 379.41 > screen 右缘 380−0.6px 余量——测量 cellW（7.779）窄于字形渲染宽（7.797），真实设备上最后一列字符溢出被裁（全角字符同理，实测右边缘 379.44）。
+- 修复①（`frontend/src/hooks/useTerminal.ts`）：createTerminal 内覆盖 `fit.proposeDimensions`，`useAppStore.getState().isMobile` 为真时按 `container.clientWidth − paddingX/Y` 除以 `core._renderService.dimensions.css.cell` 取整列数（不预留滚动条宽度）；桌面透传原版。实测 gap 11px → 4px。
 - 修复②（`frontend/src/index.css`）：`@media (pointer: coarse)` 下隐藏 `.xterm-viewport` 原生滚动条（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`）——移动端历史滚动走 touch-drag → 合成 wheel → tmux copy-mode，不经 viewport 滚动条，隐藏后触摸时 overlay thumb 不再闪现遮挡贴满的末列。
-- 验证：移动端 headless 实测 screen 367→374px、gap 11→4px；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。
+- 修复③（`frontend/src/index.css`）：同一 media query 下 `.terminal-panel-pixel .xterm-screen { width: 100% !important }`——screen 从 374 撑到 378（= viewport），列仍从左侧起排，但最后一列字符右边缘 379.41 距 viewport 右缘 384 获得 4.6px 缓冲，全角字符同样完整，且 gap 归零（黑条彻底消失）。
+- 验证：移动端 headless 实测 48 个半角字符行尾右边缘 379.41（距右缘 4.59px）、46 半角 + 全角「汉」行尾右边缘 379.44（距右缘 4.56px）均完整；screen 378=viewport 378、gap 0；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。
