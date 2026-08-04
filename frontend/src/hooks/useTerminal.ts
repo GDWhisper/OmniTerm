@@ -458,6 +458,37 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     term.loadAddon(fit)
     term.loadAddon(webLinks)
     term.open(container)
+
+    // Mobile fit correction. FitAddon measures the container's border-box
+    // (padding included, never subtracted) and always reserves the desktop
+    // scrollbar width (DEFAULT_SCROLL_BAR_WIDTH = 14px) when scrollback is
+    // enabled. On touch devices the scrollbar is overlay (zero-width), so
+    // both errors stack up: the rendered cell grid stops ~11px short of the
+    // container's right edge and the black .xterm-viewport background shows
+    // through as a vertical strip with no content (reported as "right side
+    // of the tmux terminal cut off"). Recompute against the container's
+    // actual content box on mobile; the desktop path stays untouched.
+    const proposeOriginal = fit.proposeDimensions.bind(fit)
+    fit.proposeDimensions = () => {
+      if (!useAppStore.getState().isMobile) return proposeOriginal()
+      const core = (term as unknown as {
+        _core: {
+          _renderService: { dimensions: { css: { cell: { width: number; height: number } } } }
+        }
+      })._core
+      const cell = core._renderService.dimensions.css.cell
+      // Cell metrics are only available after the first render pass.
+      if (cell.width === 0 || cell.height === 0) return proposeOriginal()
+      const cs = window.getComputedStyle(container)
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+      const width = container.clientWidth - padX
+      const height = container.clientHeight - padY
+      return {
+        cols: Math.max(2, Math.floor(width / cell.width)),
+        rows: Math.max(1, Math.floor(height / cell.height)),
+      }
+    }
     fit.fit()
 
     termRef.current = term

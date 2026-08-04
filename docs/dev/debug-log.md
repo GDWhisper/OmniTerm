@@ -1022,3 +1022,28 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 根因链：`turn_accumulator::fold` 每收一条 agent notification 就把完整 JSON `push` 进 `Vec<Value>`（`turn_accumulator.rs`），只在下个 `begin_turn` 才清空 → 长任务中 opencode 类 agent 高频推送 thought/tool chunk（实测 ~7.7 万帧，thought 占 61%）→ frames 无界膨胀 → `snapshot()` 每次 flush 全量重序列化（O(n)）+ `upsert_streaming_message` 全量覆盖写库 → 单条 `blocks` 100MB、DB 262MB、进程 RES 4.5GB、一个 tokio worker 被序列化+写库占满 99%。WS/hydrate 再把 100MB 推给浏览器 → 远程前端顿卡。
 - 修复：① `turn_accumulator.rs`：`frames` 从 `Vec<Value>` 改 `VecDeque<Value>`，新增 `MAX_FRAMES=2000` 有界窗口，fold 超限 `pop_front` 丢弃最旧帧；`text` 仍全量累积（正文完整），turn 结束后前端 `syncToDb` 写回完整结构化 blocks。② 前端 `useAcpChat.ts` `rawFramesToBlocks` 加 `MAX_BLOCKS_FRAMES=2000` `slice(-N)` 防御存量超大 blocks 在 hydrate 时逐帧分类卡死。
 - 验证：`cargo check` / `cargo fmt --check` / `cargo clippy -D warnings` 全过；新增单测 `frames_retention_is_bounded_over_long_turn`（fold 5000 帧 → frames 恰为 2000、text 全量 5000 chunk）；前端 `tsc -b` / eslint / vitest 174 全过。
+
+## 2026-08-04: 移动端 tmux 终端右侧竖向黑条——FitAddon 的滚动条宽度预留假设在触摸设备失效
+
+**症状**：移动端 tmux 终端最右侧有一条竖向黑条（无任何内容），右侧文字显示不全。用户描述「看起来有一个竖向的黑条，什么都不显示」。
+
+**可复用的理论/模式**：
+
+**1. 第三方库里的「桌面环境」像素常量假设，在设备类型切换时失效，且常以「留白/黑条」而非「报错」的形态暴露**。xterm FitAddon 计算列数时固定预留 `DEFAULT_SCROLL_BAR_WIDTH=14px` 滚动条宽度（`scrollback>0` 时恒为 14，`FitAddon.ts:68-70`），并取父容器 border-box（`getComputedStyle().width`，含 padding）而未扣除 padding（`FitAddon.ts:72-85`）。桌面滚动条真实占宽 → 预留合理；触摸设备滚动条是 overlay（宽 0）→ 内容网格比容器右缘少 ~11px，黑色 `.xterm-viewport` 背景透出成「黑条」。**凡第三方库有「桌面环境」的像素常量假设（滚动条宽、字体度量、光标形状），排查移动端视觉异常时先 grep 库源码里的常量是否可被环境差异推翻，而不是先怀疑自己的布局**。
+
+**2. 现象「被遮挡/截断」先区分「内容被裁」与「内容没延伸到那里」**：用户描述「右侧显示不全/被东西挡住」，实测 `getBoundingClientRect` 发现 `.xterm-screen`（内容）只有 367px、`.xterm-viewport`（容器）378px——不是内容被裁剪（无 overflow 截断），是内容根本没渲染到右缘，露出的容器黑背景被误读为「遮挡物」。**同一症状先量出「内容元素 vs 容器元素」的几何差，再判断是裁剪（overflow）还是留空（尺寸计算偏小），两条路线的修复完全不同**。
+
+**3. 修复「环境特有假设」时，把平台差异收敛到一个可切换的适配点，而不是改库或散落 hack**。覆盖 FitAddon 实例的 `proposeDimensions`（该方法是 addon-fit 的公开 API，`fit()` 内部 `this.proposeDimensions()` 动态查找），内部按 `useAppStore.isMobile` 分支：桌面透传原版、移动端用容器实际 content-box（`clientWidth − padding`）除以 cell 尺寸重算列数。一处收敛、随实例安装，桌面零回归（实测桌面 gap 仍为滚动条预留，行为不变）。
+
+**诊断过程中的错误**：
+
+1. **无活动会话时反复截图浪费多轮**：页面默认空态（「选择或创建一个会话」），不激活 tmux 会话就看不到终端渲染，前几轮截图内容完全一致（md5 相同）才意识到没复现到终端。**复现前先确认已经走到目标渲染分支**。
+2. **headless 截图无法区分 11px 量级差异**：同尺寸对比截图肉眼分不出黑条宽窄，**几何测量（`getBoundingClientRect` / `clientWidth`）比截图可靠得多**——一次 `evaluate` 就能拿到 screen 与 viewport 的精确右缘差。
+3. **把「接管（Adopt）」当成「激活」**：外部会话列表「点击会话行 = 激活」「点「接管」按钮 = 收入某项目」是两个独立动作，点了接管只弹项目选择下拉，终端一直没激活。**先确认 UI 动作语义与目标状态的关系再点击**。
+
+**具体根因与修复**：
+
+- 根因：`@xterm/addon-fit` 的 `proposeDimensions`（`FitAddon.ts:68-85`）——`scrollbarWidth = scrollback===0 ? 0 : overviewRuler?.width || DEFAULT_SCROLL_BAR_WIDTH`（本项目 scrollback 非 0 → 恒 14px）；`parentElementWidth` 取容器 border-box（`getComputedStyle().width`，含 container 4px padding ×2），且只减去 `.xterm` 自身 padding（0）。移动端实测：viewport 宽 378px、screen（内容）宽 367px，右侧空出 11px，显示的是 viewport 的 `#000` 背景。
+- 修复①（`frontend/src/hooks/useTerminal.ts`）：createTerminal 内覆盖 `fit.proposeDimensions`，`useAppStore.getState().isMobile` 为真时按 `container.clientWidth − paddingX/Y` 除以 `core._renderService.dimensions.css.cell` 取整列数（不预留滚动条宽度）；桌面透传原版。实测 gap 11px → 4px（剩余 4px 是 xterm 自身 cell 浮点取整的固有舍入，任何平台都有，桌面端被滚动条区域吸收）。
+- 修复②（`frontend/src/index.css`）：`@media (pointer: coarse)` 下隐藏 `.xterm-viewport` 原生滚动条（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`）——移动端历史滚动走 touch-drag → 合成 wheel → tmux copy-mode，不经 viewport 滚动条，隐藏后触摸时 overlay thumb 不再闪现遮挡贴满的末列。
+- 验证：移动端 headless 实测 screen 367→374px、gap 11→4px；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。

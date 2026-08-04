@@ -1683,6 +1683,20 @@ body.parchment-texture {
   background: #12141A !important;
 }
 
+/* Touch devices: scrollbars are overlay (zero-width) and the terminal's
+   history scrolling goes through the touch-drag → wheel bridge, never the
+   native viewport scrollbar. Hide xterm's scrollbar so a transient thumb
+   never covers the last column (which now fits flush against the panel edge
+   thanks to the mobile fit correction in useTerminal.ts). */
+@media (pointer: coarse) {
+  .terminal-panel-pixel .xterm-viewport {
+    scrollbar-width: none; /* Firefox */
+  }
+  .terminal-panel-pixel .xterm-viewport::-webkit-scrollbar {
+    display: none; /* Chromium / Safari */
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel float — unified elevation for ALL floating layers (modal,
    popup, dropdown, tooltip, autocomplete). Hard 4px shadow, no blur,

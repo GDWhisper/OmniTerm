@@ -57,6 +57,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-04 17:50) `[frontend]` 修复移动端 tmux 终端右侧竖向黑条（最右列字符显示不全）：xterm FitAddon 计算列数时固定预留 14px 桌面滚动条宽度且未扣除容器 padding，触摸设备滚动条为 overlay（不占空间），内容网格距容器右缘 ~11px，露出纯黑 `.xterm-viewport` 背景——移动端覆盖 fit 尺寸计算改为按容器实际内容盒（`clientWidth − padding`）取整列数，并隐藏 xterm 原生滚动条避免触摸时 thumb 闪现遮挡末列（`frontend/src/hooks/useTerminal.ts`、`frontend/src/index.css`）
 - (2026-08-04 17:30) `[frontend]` 修复移动端滑屏滚动后 MobileKeyBar「滚动」按钮不同步高亮：触摸滚动走合成 wheel 让 tmux 进入 copy-mode，但 `scrollMode` 状态未联动，导致按钮视觉与真实滚动状态漂移——`attachTouchScroll` 新增 `onScrollStart` 回调，每次手势首次实际滚动时同步置位滚动模式，高亮/方向键/输入法行为与 tmux 状态一致（`frontend/src/utils/touchScroll.ts`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-04 16:40) `[backend]` `[frontend]` 修复长 ACP 任务 CPU 脉冲/内存暴涨/DB 膨胀：turn_accumulator 把每条 agent notification 无界累积进原始帧数组，每次防抖 flush 全量重序列化覆盖写库，长任务（高频 thought/tool chunk，实测单条 blocks 可达 100MB、进程 RES 4.5GB、tokio worker 99%）——改为 `VecDeque` 有界窗口（保留最近 2000 帧，`text` 仍全量累积），前端 `rawFramesToBlocks` 同步限制解码帧数防御存量超大 blocks（`src/acp/turn_accumulator.rs`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-08-04 15:45) `[frontend]` ACP 会话流式输出 CPU 优化：streaming 期间 markdown 降级为纯文本渲染（避免每 rAF 帧对增长中文本全量解析 + 代码块语法高亮，turn 结束再一次性渲染），历史消息气泡 `memo` 跳过流式期间的重渲染（`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/components/Chat/ChatView.tsx`）

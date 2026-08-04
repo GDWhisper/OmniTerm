@@ -47,7 +47,17 @@ vi.mock('@xterm/xterm', () => {
   }
   return { Terminal: FakeXterm }
 })
-vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit() {}
+    // proposeDimensions is a public API of the real addon-fit; the
+    // terminal hook overrides it on mobile (see useTerminal.ts), so the
+    // fake must provide it for that override to be installed safely.
+    proposeDimensions() {
+      return { cols: 80, rows: 24 }
+    }
+  }
+}))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
 
 class FakeWebSocket {
