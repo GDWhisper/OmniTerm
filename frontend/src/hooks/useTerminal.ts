@@ -535,7 +535,15 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
     // Mobile touch scroll: vertical finger drags become wheel events so
     // tmux mouse-mode scrolls history (xterm has no native touch scroll).
-    touchScrollCleanupRef.current = attachTouchScroll(container)
+    // A wheel-up scroll makes tmux enter copy mode, so flip the UI scroll
+    // flag on the first real scroll of each gesture — keeps the MobileKeyBar
+    //「滚动」button highlight in sync with the actual tmux state.
+    touchScrollCleanupRef.current = attachTouchScroll(container, () => {
+      if (!tmuxScrollModeRef.current) {
+        tmuxScrollModeRef.current = true
+        setScrollMode(true)
+      }
+    })
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)
