@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react'
+import { memo, useLayoutEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -308,7 +308,7 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
   )
 }
 
-function TextBlockView({ text, caret }: { text: string; caret?: boolean }) {
+function TextBlockView({ text, caret, streaming }: { text: string; caret?: boolean; streaming?: boolean }) {
   return (
     <div
       style={{
@@ -325,7 +325,7 @@ function TextBlockView({ text, caret }: { text: string; caret?: boolean }) {
         wordBreak: 'break-word',
       }}
     >
-      <Markdown text={text} />
+      <Markdown text={text} streaming={streaming} />
       {caret && <span className="chat-streaming-caret" />}
     </div>
   )
@@ -344,7 +344,16 @@ function SystemBlockView({ label }: { label: string }) {
 function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
   switch (block.type) {
     case 'text':
-      return <TextBlockView key={idx} text={block.text} caret={isLast && streaming} />
+      return (
+        <TextBlockView
+          key={idx}
+          text={block.text}
+          caret={isLast && streaming}
+          // 仅正在增长的最后一个 text block 降级纯文本；历史 block 文本引用
+          // 稳定，靠 Markdown 的 memo 跳过重渲染。
+          streaming={isLast && streaming}
+        />
+      )
     case 'thought':
       return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
     case 'tool_call':
@@ -374,7 +383,12 @@ export interface ChatMessageViewProps {
   agentName?: string
 }
 
-export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant, agentName }: ChatMessageViewProps) {
+/**
+ * 消息气泡。memo 浅比较：非 streaming 历史消息的 message 引用在每帧流式渲染中
+ * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
+ * 使历史消息在流式期间跳过重渲染。
+ */
+export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant, agentName }: ChatMessageViewProps) {
   const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -588,4 +602,4 @@ export function ChatMessageView({ message, onEditResend, onRegenerate, isLastAss
       )}
     </div>
   )
-}
+})
