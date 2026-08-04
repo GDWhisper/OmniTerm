@@ -56,6 +56,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-04 15:45) `[frontend]` ACP 会话流式输出 CPU 优化：streaming 期间 markdown 降级为纯文本渲染（避免每 rAF 帧对增长中文本全量解析 + 代码块语法高亮，turn 结束再一次性渲染），历史消息气泡 `memo` 跳过流式期间的重渲染（`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-08-04 13:20) `[backend]` 修复 ACP 会话空闲自动回收（reaper）后 Sidebar 状态与真实进程脱节：reaper 回收、手动释放（release）与删除会话时改用 `AcpClient::shutdown()` 强制 kill 子进程——此前依赖 `Arc::try_unwrap` 在引用归零后自然 drop，但聚焦会话的 WS 连接持有 `Arc<AcpClient>` 时引用永不归零，进程残留且可继续对话，而 supervisor 已移除导致 `acp_process_alive=false`，Sidebar 永久显示「已释放」、进程脱离 reaper 管辖后无限驻留（`src/acp/reaper.rs`、`src/api/sessions.rs`、`src/ws/acp.rs`）
 - (2026-08-04 12:30) `[backend]` 移除项目（`DELETE /projects/{id}`）时级联清理其下全部会话的运行时资源：tmux/psmux 会话执行 `kill-session` 杀进程、acp 会话 dispose agent 子进程——此前只删 DB 导致会话进程残留（Windows 上 psmux 会话不随项目删除而清理）。清理逻辑提取为 `api::sessions::cleanup_session_runtime` 与 `delete_session` 共用（`src/api/projects.rs`、`src/api/sessions.rs`）
 
