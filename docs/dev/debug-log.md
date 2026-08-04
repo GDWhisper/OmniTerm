@@ -14,6 +14,29 @@
 
 ---
 
+## 2026-08-04: npm 版 Windows 二进制 migration checksum 不匹配——CI autocrlf 把 .sql 转成 CRLF
+
+**症状**：Windows 上 `npm install -g @gdwhisper/omniterm` 后 `omniterm start` 报 `Error: migration 20260620 was previously applied but has been modified`；同一台机器 `cargo install omniterm` 正常。Linux 上两渠道均正常。
+
+**可复用的理论/模式**：
+
+**1. `sqlx::migrate!` 的 checksum 是编译时对文件原始字节的哈希——任何「构建环境」与「权威源码」之间的字节差异（最典型是换行符）都会在运行时炸成 migration 已修改错误**。`sqlx::migrate!("./migrations")` 编译期读文件、`Sha384(file_contents)` 嵌入二进制，运行时与 `_sqlx_migrations` 表比对。因此**同一数据库上，只要两个二进制编译时的 migration 字节不同，就必然一正一错**。migration 文件是「内容即契约」的构建期资产，必须保证所有构建环境拿到逐字节一致的输入。诊断此类错误的切入点是「这个二进制的 migration 是从什么字节编译来的」，而不是「数据库怎么了」。
+
+**2. 跨平台发布构建，文本类构建期资产必须显式声明换行符（`.gitattributes` `eol=lf`），不能依赖 git 默认行为**。GitHub Actions `windows-latest` runner 的 git 默认 `core.autocrlf=true`，checkout 时把无属性的文本文件 LF→CRLF；crates.io 的 `.crate`（tar.gz）不经 autocrlf、保持 git 存储的 LF。**同一份源码、同一次 tag，两种安装渠道的二进制内嵌字节可以不同**——发布流程里「源码构建的二进制」不等于「源码字节的二进制」。凡参与编译期内容哈希（`include_str!` / embed / 宏）或脚本逐字节比较的文件，都要在 `.gitattributes` 用 `text eol=lf` 钉死。
+
+**3. 「为什么 A 渠道正常、B 渠道报错」是构建产物差异的探针**：同一数据库、同一版本、不同安装渠道行为不一致 → 差异不在代码逻辑、不在数据，而在**两个产物二进制内嵌的构建期内容**。优先对比两渠道的构建环境（OS / git 配置 / 打包方式），而非 debug 业务代码。
+
+**诊断过程中的错误**：
+
+1. 一开始被错误信息「previously applied but has been modified」引向「是不是有人改了 init.sql / 数据库被手动改过」，先查 migration 的 git 历史——`20260620_init.sql` 确实从未被修改（`git log --follow` 仅一次提交），方向错误。**git 历史干净不能排除「构建时字节被环境改写」**，换行符转换不在 git 历史里体现。
+2. 曾怀疑 npm 平台包与 crates.io 代码不同步（不同 commit），查 release.yml 构建流程后才确认是同一 commit、不同 checkout 环境。**对比安装渠道时先确认两者是否同 commit，再对比构建环境**。
+
+**具体根因**：release.yml `backend` job 的 Windows 二进制在 `windows-latest` runner 构建，git 默认 `autocrlf=true` 把 `migrations/*.sql` checkout 成 CRLF，`cargo build` 内嵌 CRLF 字节；crates.io 包为 LF。数据库 `_sqlx_migrations` 记录的是 LF checksum（cargo 版创建），npm 版（CRLF checksum）校验失败。20260620 是第一个 migration，故首先报它。
+
+**修复**：① 新增 `.gitattributes`：`migrations/*.sql text eol=lf`，任何平台 checkout 均为 LF；② `git add --renormalize .` 清理存量 worktree；③ bump 版本重新发布 npm 平台包（CI 重建后内嵌 LF checksum，与 crates.io 对齐）。用户侧临时解困：继续用 cargo 版，或删 `~/.omniterm/omniterm.db` 让 npm 版重建（丢数据，且修复版发布前勿混用两渠道）。
+
+---
+
 ## 2026-08-01: 切换 tmux 会话终端抖动——key 强制重挂载 + reset 时机放大 attach 延迟
 
 **症状**：在侧栏切换 tmux 会话（A→B），终端面板每次必闪一下：旧内容消失 → 黑底空屏 → 内容重新出现（约 250ms）。

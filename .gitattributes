@@ -1,0 +1,7 @@
+# SQLite migration 文件必须保持 LF 换行。
+# sqlx::migrate! 在编译期内嵌文件原始内容并计算 Sha384 checksum，运行时与
+# `_sqlx_migrations` 表比对。若 Windows CI（git core.autocrlf=true）把 .sql 转成
+# CRLF，构建出的二进制内嵌 checksum 将与 crates.io 包（LF）不一致，导致已应用
+# migration 报 `was previously applied but has been modified`。
+# 参见 docs/dev/debug-log.md 2026-08-04 记录。
+migrations/*.sql text eol=lf

@@ -233,6 +233,15 @@ tar tzf target/package/omniterm-<ver>.crate | grep -c node_modules   # 期望输
 tar tzf target/package/omniterm-<ver>.crate | grep -E "frontend/dist|migrations/|build.rs|README.md|LICENSE.md" | head
 ```
 
+**migration 换行符检查（npm Windows 二进制 checksum 契约，必做）：** `sqlx::migrate!` 编译期内嵌 `migrations/*.sql` 原始字节算 Sha384 checksum，Windows CI（git `autocrlf`）若把文件转成 CRLF，npm 平台包内嵌 checksum 将与 crates.io 包（LF）不一致，用户会在已初始化的库上报 `migration N was previously applied but has been modified`。发布前必须确认：
+
+```bash
+# 1) .gitattributes 已提交并推送到 public main（CI checkout 的是 public main）
+git -C /home/pax/coding/OmniTerm show HEAD:.gitattributes | grep "migrations/\*.sql" || echo "❌ .gitattributes 缺失"
+# 2) migration 文件全为 LF
+grep -rl $'\r' migrations/ >/dev/null && echo "❌ migrations 含 CRLF" || echo "✅ migrations 全为 LF"
+```
+
 ```bash
 # 登录 crates.io（如果未登录）
 cargo login <your-crate-token>
@@ -317,6 +326,12 @@ PROGRESS.md
 ---
 
 ## 常见问题
+
+### Windows 用户报 `migration N was previously applied but has been modified`（npm 版）
+
+**背景**：npm Windows 平台包由 CI 在 `windows-latest` runner 构建，git 默认 `autocrlf=true` 会把 `migrations/*.sql` 转成 CRLF，导致内嵌 checksum 与 crates.io 包（LF）不一致。数据库由 LF 版（cargo）初始化后，npm 版启动即报此错；`cargo install` 同机正常。已在 `.gitattributes` 强制 `eol=lf` 并从新版本起生效。
+
+**用户侧解困**：等修复版发布后重装 npm 包；立即要用则改用 `cargo install omniterm`（LF，正常）。**勿删库**（`~/.omniterm/omniterm.db` 重建会丢数据），除非确认无需保留会话/聊天历史。
 
 ### CI frontend 失败：`No pnpm version is specified`
 
