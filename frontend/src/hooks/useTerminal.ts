@@ -358,13 +358,19 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     ws.send(new TextEncoder().encode(key))
   }, [])
 
-  /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
+  /** Exit tmux copy mode — only if we believe tmux is actually in copy mode.
+   *
+   *  Sends Escape instead of `q`: tmux's default copy-mode key table binds
+   *  both to cancel, but `q` gets *typed into the shell* if tmux already left
+   *  copy mode (the touch-scroll path enters `copy-mode -e`, which auto-exits
+   *  when scrolled back to the bottom of history — we cannot detect that), while
+   *  a lone Escape is a no-op in a shell command line. */
   const exitScrollMode = useCallback(() => {
     if (!tmuxScrollModeRef.current) {
       setScrollMode(false)
       return
     }
-    sendData('q')
+    sendData('\x1b')
     tmuxScrollModeRef.current = false
     setScrollMode(false)
   }, [sendData])
@@ -566,11 +572,13 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
     // Mobile touch scroll: vertical finger drags become wheel events so
     // tmux mouse-mode scrolls history (xterm has no native touch scroll).
-    // A wheel-up scroll makes tmux enter copy mode, so flip the UI scroll
-    // flag on the first real scroll of each gesture — keeps the MobileKeyBar
-    //「滚动」button highlight in sync with the actual tmux state.
-    touchScrollCleanupRef.current = attachTouchScroll(container, () => {
-      if (!tmuxScrollModeRef.current) {
+    // Only the "view history" direction (wheel up, deltaY < 0) makes tmux
+    // enter copy mode — flip the scroll flag there so the MobileKeyBar「滚动」
+    // button highlight tracks the real tmux state. Scrolling back toward live
+    // output (deltaY > 0) is left alone: tmux's `copy-mode -e` only auto-exits
+    // once the history bottom is reached, which we cannot observe here.
+    touchScrollCleanupRef.current = attachTouchScroll(container, (deltaY) => {
+      if (deltaY < 0 && !tmuxScrollModeRef.current) {
         tmuxScrollModeRef.current = true
         setScrollMode(true)
       }

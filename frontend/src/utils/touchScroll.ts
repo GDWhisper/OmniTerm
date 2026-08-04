@@ -65,28 +65,21 @@ export function createTouchScroll(onScroll: (deltaY: number) => void): TouchScro
 
 /** Attach the bridge to the xterm host container. Returns a detach function.
  *
- *  `onScrollStart` fires once per touch gesture, right before the first real
- *  scroll delta is dispatched. Callers use it to sync UI state that mirrors
- *  tmux's copy mode — a wheel-up scroll makes tmux enter copy mode, so the
- *  MobileKeyBar「滚动」button highlight should reflect that. */
-export function attachTouchScroll(container: HTMLElement, onScrollStart?: () => void): () => void {
+ *  `onScroll` fires with the synthesized deltaY right before each wheel event
+ *  is dispatched (deltaY < 0 = wheel up = viewing history). Callers use it to
+ *  keep UI state in sync with tmux's copy mode: a wheel-up scroll makes tmux
+ *  enter copy mode, so the MobileKeyBar「滚动」button highlight should follow. */
+export function attachTouchScroll(container: HTMLElement, onScroll?: (deltaY: number) => void): () => void {
   let wheelTarget: EventTarget | null = null
-  let scrollNotified = false
   const handlers = createTouchScroll((deltaY) => {
     if (!wheelTarget) return
-    if (!scrollNotified) {
-      scrollNotified = true
-      onScrollStart?.()
-    }
+    onScroll?.(deltaY)
     wheelTarget.dispatchEvent(
       new WheelEvent('wheel', { deltaY, deltaMode: 0, bubbles: true, cancelable: true }),
     )
   })
   const onStart = (e: TouchEvent) => {
     wheelTarget = e.target
-    // A fresh gesture may scroll again — allow the start notification to
-    // fire once more.
-    scrollNotified = false
     handlers.onStart(e)
   }
   container.addEventListener('touchstart', onStart, { passive: true })
