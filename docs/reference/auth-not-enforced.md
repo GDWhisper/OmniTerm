@@ -1,95 +1,57 @@
-# Auth 验证未生效（半成品 / 死代码）
+# Auth 鉴权：从「实现未接入」到完整启用
 
-> 类别：已知缺陷（待正规开发流程处理）
-> 状态：已修复（2026-07-27，见实施计划 `docs/dev/plans/2026-07-27-auth-enforcement.md`）
-> 发现日期：2026-07-09 · 重审：2026-07-27（新增 RequireAuth extractor bug）· 实施：2026-07-27
+> 类别：历史缺陷记录（已修复）
+> 状态：✅ **已完整实现并接入**（2026-07-27 修复，见实施计划 `docs/dev/plans/2026-07-27-auth-enforcement.md`）
+> 发现日期：2026-07-09 · 重审：2026-07-27（RequireAuth 提取器 fallback bug）· 修复：2026-07-27
+>
+> ⚠️ 本文档早期版本描述「鉴权从未接入路由」——**该状态已修复**。下面的「历史缺陷」仅作为教训留存，**当前实现以「现状」章节为准**。
 
-## 摘要
+## 本文档的用途
 
-后端实现了完整的 JWT 鉴权逻辑（`src/auth/mod.rs`），但**从未接入路由保护层**，且 `/auth/check` 端点伪造返回值；前端虽写了 `auth` 的 API 客户端方法，但**没有任何页面或组件调用**，也没有登录/设置密码/登出 UI。整体处于"名义上有 auth、实际匿名可完全访问"的状态。
+1. 记录「安全机制实现后未接入链路」的教训（映射到 `docs/dev/performance-and-safety.md` §S5）。
+2. 说明当前鉴权架构，供安全评审 / 修改鉴权代码 / 排查登录问题参考。
 
-## 触发条件（何时读本文档）
+## 历史缺陷（2026-07-09 发现 → 2026-07-27 修复）
 
-- 评估安全模型、部署到公网前的安全评审
-- 规划"登录页 / 设置密码 / 登出"等前端功能
-- 排查"为什么没有登录也能用所有功能"类问题
-- 准备把 auth 真正启用时的改造方案设计
+当初后端实现了 JWT 鉴权逻辑但从未接入路由，`/auth/check` 伪造返回，前端无登录 UI——整体「名义上有 auth、实际匿名可完全访问」。**教训：启用任何安全机制时必须验证它真正挂在链路上，而非只有定义处**（grep 确认 extractor/中间件被路由引用）。
 
-## 现状明细
+## 当前实现（已生效）
 
-### 1. 后端 `RequireAuth` 定义后从未被使用
+### 后端
 
-- `src/auth/mod.rs:38` 实现了 `RequireAuth` 提取器，会校验 `omniterm_token` cookie / `Bearer` header。
-- 全仓库 grep `RequireAuth` 仅命中定义处，**无任何路由处理器 `use` 它**。
-- `src/api/mod.rs` 中 `targets` / `projects` / `sessions` / `files` / `files_watch` / `ws` 等路由**全部未挂载 `RequireAuth`**，handler 签名中也没有该参数。
-- 后果：**匿名用户可直接调用所有业务 API、读写文件系统、创建 tmux 会话、连 WebSocket 终端**，鉴权形同虚设。
+- **统一保护中间件** `require_auth_mw`（`src/auth/mod.rs`）：从 `State<AppState>` 读取 `jwt_secret`（无 extensions fallback）；master switch `state.auth_enabled`（`AtomicBool` 镜像 `settings.auth_enabled`，单次 relaxed load，**无每请求 DB round-trip**）。auth 关闭时全部路由放行。
+- **路由挂载**（`src/api/mod.rs`）：
+  - public：`/auth/setup`、`/auth/login`、`/auth/logout`、`/auth/check`（及 health 等）
+  - protected：其余全部业务路由 + 三个 WS 路由（`/ws/terminal/*`、`/ws/terminal/external/*`、`/ws/acp/*`），经 `route_layer(middleware::from_fn_with_state(require_auth_mw))` 统一保护
+  - WS 握手同样走中间件（请求头携带 cookie），无需 handler 内单独校验
+- **`/auth/check`**（`src/api/auth.rs`）：真实校验 `omniterm_token` cookie，返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`。
+- **登录限流** `LoginGuard`（`src/auth/rate_limit.rs`）：滑动窗口，单 IP 5 次失败 / 5 分钟触发 429，成功登录重置。
+- **启动安全**：监听非回环地址且 auth 关闭时打印高危警告（`src/main.rs`）；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
 
-### 2. 后端 `/auth/check` 返回伪造值
+### 前端
 
-- `src/api/auth.rs:108` 的 `check` 处理器**无条件**返回 `{ authenticated: true }`，不校验请求是否携带合法 token。
-- 该端点无法用于前端判断登录态。
+- 登录/setup 页：`frontend/src/components/Auth/AuthPage.tsx`
+- 设置页开关与改密：`frontend/src/components/Settings/AuthSection.tsx`
+- `frontend/src/App.tsx` 集成登录态判断；`api.client.ts` 提供 `setup / login / logout / check / setAuthSettings / changePassword`。
 
-### 3. 前端仅有 client 方法，无 UI 调用
-
-- `frontend/src/api/client.ts:134-139` 实现了 `auth.setup / login / logout / check`。
-- 全前端 grep 确认：无组件调用 `api.auth.*` / `useAuth` / `authClient` 等；无登录页、设置密码页、登出入口。
-- 前端不会在启动后调用 `check`、不会发起登录、不会处理 401。
-
-### 4. 校验逻辑本身正确（可复用）
-
-- `src/auth/mod.rs` 的 `create_token` / `verify_token` 实现正确，token 通过 cookie（`omniterm_token`，http_only，24h）下发与读取逻辑也完整。问题仅在"未被挂载使用"。
-
-## 影响范围
+## 影响范围（当前）
 
 | 维度 | 现状 |
 |------|------|
-| 路由保护 | ❌ 所有业务/文件/WS 路由均未挂载鉴权，匿名可访问 |
-| `/auth/check` | ❌ 伪造返回 `authenticated: true`，无实际校验 |
-| 前端登录 UI | ❌ 仅有 client 方法，无页面/组件/状态/拦截器调用 |
-| token 校验逻辑 | ✅ `verify_token` 正确，但无人调用 |
+| 路由保护 | ✅ 全部业务 + WS 路由经 `require_auth_mw` 保护（auth 启用时） |
+| `/auth/check` | ✅ 真实校验 token |
+| 前端登录 UI | ✅ AuthPage / AuthSection / App 集成 |
+| token 校验 | ✅ 从 state 读 jwt_secret，无 fallback bug |
+| 登录防爆破 | ✅ LoginGuard 限流 |
+| 高危暴露预警 | ✅ 非回环 + auth 关闭时启动警告 |
 
-- 若当前部署在公网/不可信网络，**任何人都可未经授权操作终端与文件系统**，属高危。
-- 本地/受信任网络单用户使用暂无明显风险，但功能链路不完整。
-
-## 修复方案（建议，交由正规开发流程细化）
-
-### 后端
-1. 将 `RequireAuth`（或 `axum::middleware::from_extractor::<RequireAuth>`）挂到除 `health`、`auth/setup`、`auth/login` 之外的所有 `/api/v1` 路由，作为统一保护层。
-2. 修正 `check`：真实校验当前请求的 token，未携带/无效返回 `401` + `authenticated: false`。
-3. WebSocket 终端路由（`/ws/terminal/*`）需单独在 handler 内校验 token（WS 握手阶段取 cookie/query，无法走 `RequireAuth` 提取器）。
-
-### 前端
-1. 启动时调用 `auth.check` 判断登录态；未登录则展示登录/设置密码页（首次为 setup，之后为 login）。
-2. 新增登录页、设置密码页、登出入口（建议放入 `components/Auth/` 或 `Settings/`）。
-3. 封装 `request` 拦截：遇到 `401` 自动跳转登录页。
-4. 在 `appStore` 或独立 `authStore` 维护登录态。
-
-### 注意（项目约束）
-- 端口/域名/版本等分支专属变量走 `.env.local`，勿硬编码。
-- 涉及前端架构模式（新增页面/状态栏）前，先读 `docs/architecture/frontend-patterns.md` 与 `docs/visual-design/ui-style-guide.md`。
-- 改动后端分层时遵守 `docs/architecture/backend.md`；新增 API 端点需同步更新该文档的端点列表。
+**注意**：`settings.auth_enabled` 默认关闭（本地开发便利）。部署到公网/不可信网络前必须开启密码验证（设置页开关，或 `OMNITERM_AUTH_ENABLED=1`）。
 
 ## 相关文件
 
-## 实现缺陷（RequireAuth 提取器自身 bug）
-
-`src/auth/mod.rs:58-62` 的 `RequireAuth` 提取器中取 JWT secret 的方式有误：
-
-```rust
-let secret = parts
-    .extensions
-    .get::<String>()
-    .cloned()
-    .unwrap_or_else(|| "omniterm-default-secret-change-me".to_string());
-```
-
-axum 的 `State` 提取器不会把 `AppState` 的单个字段作为裸 `String` 注入 `extensions`，因此该 `get::<String>()` 永远为空，**token 校验永远使用硬编码 fallback 值**，忽略 `args.jwt_secret` 的实际配置。
-
-正确做法：让 `RequireAuth` 通过 `FromRef<AppState>` 绑定 state 类型后直接从 state 读 `.jwt_secret`，而非依赖 `extensions`。
-
-## 相关文件
-
-- `src/auth/mod.rs` — JWT 创建/校验 + `RequireAuth` 提取器
-- `src/api/auth.rs` — `setup` / `login` / `logout` / `check` 路由
-- `src/api/mod.rs` — 路由注册（未挂载鉴权）
-- `frontend/src/api/client.ts` — 前端 auth API 客户端（未被调用）
+- `src/auth/mod.rs` — `create_token` / `verify_token` / `require_auth_mw` / `extract_token`
+- `src/auth/rate_limit.rs` — `LoginGuard` 登录限流
+- `src/api/auth.rs` — `setup` / `login` / `logout` / `check` / `protected_routes`
+- `src/api/mod.rs` — 路由注册与 `require_auth_mw` 挂载
+- `src/main.rs` — `auth_enabled` 初始化与启动警告
+- `frontend/src/components/Auth/AuthPage.tsx`、`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/api/client.ts`

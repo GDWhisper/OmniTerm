@@ -82,7 +82,7 @@ token、密码、密钥、API key：
 
 ### S4 权限最小暴露
 
-- 新 API 端点 / WebSocket：确认是否需要鉴权，勿默认匿名可访问（教训见 `docs/reference/auth-not-enforced.md`——鉴权实现后从未接入路由）。
+- 新 API 端点 / WebSocket：确认是否需要鉴权，勿默认匿名可访问（历史教训：鉴权曾实现后从未接入路由，见 `docs/reference/auth-not-enforced.md`，当前已修复）。
 - 文件系统访问：以 session 的 workspace_path 为根，任何越界访问必须拒绝（S1 路径 sanitize）。
 - 后台命令：agent 的 `terminal/create` 等能力按需开放，不做多余暴露。
 
@@ -114,4 +114,4 @@ token、密码、密钥、API key：
 |---|---|---|
 | P1/P2/P3/P4/P5 | 2026-08-04 长 ACP 任务 O(n²) 帧累积 | 单条 blocks 100MB、进程 RES 4.5GB、tokio worker 99%、DB 262MB、远程浏览器顿卡。根因：`turn_accumulator` 无界累积原始帧 + 每次防抖全量重序列化覆盖写库。修复：`MAX_FRAMES=2000` 有界窗口 + 单测。完整诊断见 `docs/dev/debug-log.md`「2026-08-04 长 ACP turn」条目 |
 | P6 | 本地永远测不出 | 上述问题在 30 分钟长任务的第 25 分钟才爆发，短对话完全正常 |
-| S4/S5 | 2026-07-27 鉴权未接入 | 后端实现 JWT 但从未挂载到路由，匿名可访问全部 API。见 `docs/reference/auth-not-enforced.md` |
+| S4/S5 | 2026-07-27 鉴权未接入（已修复） | 后端曾实现 JWT 但从未挂载到路由，匿名可访问全部 API；现已完整接入（中间件 + 登录 UI + 限流）。历史教训见 `docs/reference/auth-not-enforced.md` |

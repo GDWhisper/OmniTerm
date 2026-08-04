@@ -97,6 +97,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/dev/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（可复用理论 → 诊断错误 → 具体根因），详见文档头部写作规范 |
 | `docs/dev/performance-and-safety.md` | 涉及数据累积/缓冲、持久化写入策略、外部输入（agent 通知/用户输入/文件内容）、命令执行、跨层数据传输或吞吐量相关的代码前**必读** | 新增性能/安全红线、检查项调整、补充新案例 |
 | `docs/reference/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |
+| `docs/reference/auth-not-enforced.md` | 修改鉴权/认证相关代码（auth 路由、`require_auth_mw`、登录限流、前端登录 UI）、部署公网前的安全评审 | 鉴权架构变更、安全机制启用/关闭逻辑调整 |
 | `docs/reference/references.md` | 需要查看外部参考实现或 License 合规规则 | 新增参考仓库、License 规则变更 |
 | `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |
 | `CHANGELOG.md` | 查看面向用户的版本变更历史 | 有实质性的新功能/修复/重构/破坏性变更后**必须添加条目**（反复修改未解决的 bug 不写） |
