@@ -490,8 +490,15 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
       const width = container.clientWidth - padX
       const height = container.clientHeight - padY
+      // Reserve a small proportional margin so the rightmost column is never
+      // clipped. Font metrics measure a hair narrower than glyphs actually
+      // render, and on viewport widths where the cols×cellWidth leftover is
+      // ~0 the last character would overflow the panel edge. 0.13 × cellWidth
+      // (~1px at the default size) covers that overshoot while scaling with
+      // the font size — independent of viewport width, DPR or font metrics.
+      const safety = cell.width * 0.13
       return {
-        cols: Math.max(2, Math.floor(width / cell.width)),
+        cols: Math.max(2, Math.floor((width - safety) / cell.width)),
         rows: Math.max(1, Math.floor(height / cell.height)),
       }
     }

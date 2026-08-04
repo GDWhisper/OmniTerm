@@ -1695,15 +1695,22 @@ body.parchment-texture {
   .terminal-panel-pixel .xterm-viewport::-webkit-scrollbar {
     display: none; /* Chromium / Safari */
   }
-  /* xterm sizes .xterm-screen to cols × cellWidth, which leaves the last
-     column flush against the screen's right edge. Cell metrics are measured
-     slightly narrower than glyphs actually render (font hinting), so the
-     rightmost character can overflow the screen and get clipped. Let the
-     screen fill the container (same width as the viewport): columns still
-     lay out from the left, but the last column now has ~4px of breathing
-     room against subpixel overshoot. */
+  /* xterm sizes .xterm-screen and its rows to cols × cellWidth and clips
+     rows (overflow: hidden), so the last column sits flush against the
+     grid edge with no buffer for font-rendering overshoot (measured
+     cellWidth is a hair narrower than glyphs actually paint) — on viewport
+     widths where the cols×cellWidth leftover is ~0 the last character gets
+     clipped. Fill the screen AND its rows to the container and stop
+     clipping rows: columns still lay out from the left by cellWidth, but
+     the right edge now has the deterministic margin guaranteed by the
+     mobile fit's proportional safety margin (useTerminal.ts), independent
+     of viewport width / DPR / font metrics. */
   .terminal-panel-pixel .xterm-screen {
     width: 100% !important;
+  }
+  .terminal-panel-pixel .xterm-rows > div {
+    width: 100% !important;
+    overflow: visible !important;
   }
 }
 

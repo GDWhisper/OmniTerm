@@ -1035,6 +1035,8 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 
 **3. 字体「测量宽度」与「渲染宽度」的亚像素偏差，会在行尾累积成可见截断，且修复「列数偏小」后反而暴露**。xterm 用 `.xterm-char-measure-element` 测出 cellW≈7.779，但字形实际渲染宽度≈7.797（字体 hinting / 亚像素取整），差 0.018px/字符。`Range.getBoundingClientRect()` 实测第 48 列字符右边缘 379.41，而 `.xterm-screen` 右缘恰为 `cols × cellW`=380——**余量仅 0.6px**，真实设备（不同字体、DPR、hinting）下就会溢出被裁。关键公式：**最后一列字符的溢出量 = 实际字形宽 − 测量 cellW（与列数无关）**，但只要 `.xterm-screen` 比 `cols × cellW` 略宽就有缓冲。**修「内容不够宽」类问题后必须复查「内容恰好填满」时的亚像素边界，两类问题互为镜像**。
 
+**4. 移动端布局修复必须「按比例/按测量自适应」，任何固定 px 结论都只对测出它的那台设备成立**。移动端视口宽度千差万别（320-430px+），DPR 2-3 不等、字体渲染各异——`cols × cellW` 与容器宽相除的**余量 ∈ [0, cellW) 不可控**，余量恰好 ≈ 0 的宽度上末列字符必然溢出。因此修复必须满足：① 用运行时测量值（`container.clientWidth`、`dims.css.cell.width`）而非写死像素；② 安全余量用 cellW 的比例（`0.13 × cellW`）而非「headless 测出来 4.6px」这类特定值；③ 用 CSS 相对单位（`100%`）覆盖 xterm 的 inline 像素宽度。**验收方法：按 1px 步长扫一组视口宽度（含临界余量宽度），断言末列余量恒 > 0**。
+
 **诊断过程中的错误**：
 
 1. **无活动会话时反复截图浪费多轮**：页面默认空态（「选择或创建一个会话」），不激活 tmux 会话就看不到终端渲染，前几轮截图内容完全一致（md5 相同）才意识到没复现到终端。**复现前先确认已经走到目标渲染分支**。
@@ -1043,12 +1045,14 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 4. **拿现有会话测试干扰了用户**：一直激活用户正在查看的 `lt_*` 外部会话做测试，把用户从移动端切走。**终端类自动化测试必须 `tmux new-session -d -s omniterm-test-*` 自建独立会话，禁止碰用户的活动会话**。
 5. **headless 的 DOM renderer 里 `.xterm-screen canvas` 不存在**（xterm 6 默认 DOM renderer 而非 canvas renderer），第一版测 canvas 宽度的脚本全 null。**先 dump `.xterm` 的内部 HTML 确认渲染后端，再选测量对象**。
 6. **`Range.setStart(row.firstChild, 46)` 抛 IndexSizeError**：DOM renderer 每行是 span 包裹的文本节点，`row.firstChild` 是 span 不是文本。**用 `TreeWalker(SHOW_TEXT)` 收集文本节点再定位字符索引**。
+7. **想用 `letterSpacing` 微调 cellW 精确填满——被 xterm 的整数取整否决**：`device.char.width + Math.round(letterSpacing)`，最小有效值 1px，1px 字距让 13px 字体下 cols 从 48 骤降 43（内容明显减少）。**改库行为前先查它是否对参数做取整/缩放**，整数化的参数无法承载「亚像素」意图。
+8. **读 inline style 误判 CSS 未生效**：测 `row.getAttribute('style')` 看到 `width:374px` 以为覆盖失败，实际 `getComputedStyle` 已是 378px——**验证 CSS 覆盖要看 computed style，不是 inline 属性**。
 
 **具体根因与修复**：
 
 - 根因①（黑条）：`@xterm/addon-fit` 的 `proposeDimensions`（`FitAddon.ts:68-85`）——`scrollbarWidth = scrollback===0 ? 0 : overviewRuler?.width || DEFAULT_SCROLL_BAR_WIDTH`（本项目 scrollback 非 0 → 恒 14px）；`parentElementWidth` 取容器 border-box（`getComputedStyle().width`，含 container 4px padding ×2），且只减去 `.xterm` 自身 padding（0）。移动端实测：viewport 宽 378px、screen（内容）宽 367px，右侧空出 11px，显示的是 viewport 的 `#000` 背景。
-- 根因②（截断）：修复①后 cols 47→48、screen 367→374，`.xterm-screen` = `48 × cellW`=374 恰等于内容宽。但 Range 实测第 48 列字符右边缘 379.41 > screen 右缘 380−0.6px 余量——测量 cellW（7.779）窄于字形渲染宽（7.797），真实设备上最后一列字符溢出被裁（全角字符同理，实测右边缘 379.44）。
-- 修复①（`frontend/src/hooks/useTerminal.ts`）：createTerminal 内覆盖 `fit.proposeDimensions`，`useAppStore.getState().isMobile` 为真时按 `container.clientWidth − paddingX/Y` 除以 `core._renderService.dimensions.css.cell` 取整列数（不预留滚动条宽度）；桌面透传原版。实测 gap 11px → 4px。
-- 修复②（`frontend/src/index.css`）：`@media (pointer: coarse)` 下隐藏 `.xterm-viewport` 原生滚动条（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`）——移动端历史滚动走 touch-drag → 合成 wheel → tmux copy-mode，不经 viewport 滚动条，隐藏后触摸时 overlay thumb 不再闪现遮挡贴满的末列。
-- 修复③（`frontend/src/index.css`）：同一 media query 下 `.terminal-panel-pixel .xterm-screen { width: 100% !important }`——screen 从 374 撑到 378（= viewport），列仍从左侧起排，但最后一列字符右边缘 379.41 距 viewport 右缘 384 获得 4.6px 缓冲，全角字符同样完整，且 gap 归零（黑条彻底消失）。
-- 验证：移动端 headless 实测 48 个半角字符行尾右边缘 379.41（距右缘 4.59px）、46 半角 + 全角「汉」行尾右边缘 379.44（距右缘 4.56px）均完整；screen 378=viewport 378、gap 0；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。
+- 根因②（截断，双层）：第一层——行 div 有 inline `width: cols×cellW + overflow: hidden`，末列字符右缘一旦超出 `cols×cellW` 即被行 div 裁剪；第二层——`cols×cellW` 与容器宽的 floor 余量 ∈ [0, cellW) 不可控，余量 ≈ 0 的视口宽度上末列字符右缘 ≈ 容器右缘 +（字形宽−cellW），溢出被容器 `overflow: clip` 裁剪。
+- 修复①（`frontend/src/hooks/useTerminal.ts`）：createTerminal 内覆盖 `fit.proposeDimensions`，`useAppStore.getState().isMobile` 为真时按 `container.clientWidth − paddingX/Y` 除以 `core._renderService.dimensions.css.cell` 取整列数，**并预留 `0.13 × cellWidth` 比例安全余量**（随字体缩放，覆盖 floor 余量 ≈ 0 的宽度）；桌面透传原版。
+- 修复②（`frontend/src/index.css`）：`@media (pointer: coarse)` 下隐藏 `.xterm-viewport` 原生滚动条（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`）——移动端历史滚动走 touch-drag → 合成 wheel → tmux copy-mode，不经 viewport 滚动条。
+- 修复③（`frontend/src/index.css`）：同一 media query 下 `.terminal-panel-pixel .xterm-screen { width: 100% !important }` + `.terminal-panel-pixel .xterm-rows > div { width: 100% !important; overflow: visible !important }`——screen 与行 div 都填满容器（列仍自左按 cellWidth 排布），取消行 div 的 `overflow: hidden`，末列字符不再被行 div 裁剪；缓冲区为终端底色（行背景 transparent），普通行无黑条，tmux 状态栏高亮段自然延伸至字符区右缘。
+- 验证：多视口宽度扫描（320/360/390/414/430 + 临界 384-389）末列字符右边缘距 viewport 右缘恒 ≥ 2.59px（48 列半角与全角「汉」均完整），screen=viewport 宽 gap 0；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。
