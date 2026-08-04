@@ -975,3 +975,26 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 修复①（竞态）：`turn_end_subscribe()` 移至 `turn_snapshot()` 之前（与 `session_update_subscribe()` 并列），`spawn_turn_end_task` 仍在快照帧发送之后调用（保持 notify_tx FIFO 顺序：`turn_state` 先于 `prompt_done`）。重叠窗内前端至多收到 `turn_state{active:true}` + `prompt_done`（幂等 markDone），或 `turn_state{active:false}`（直接 markDone），两种时序都收敛到正确终态。
 - 修复②（兜底）：`AcpClient::is_prompt_stale(secs)` + reaper 第三路检查（`PROMPT_STALE_SECS=600`）：prompt 进行中但 10 分钟无 agent 通知 → `mark_prompt_idle()` + `notify_turn_end(Done{InactivityTimeout})`。不杀进程（agent 可能仍可用于后续 prompt），下一轮 idle 检查按常规回收。
 - 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test` / `vitest run`（165 tests）全过。
+
+---
+
+## 2026-08-04: reaper 自动回收后 Sidebar 显示「已释放」但进程实际存活可对话——Arc::try_unwrap 依赖引用归零才杀进程
+
+**症状**：ACP 会话空闲倒计时（reaper 5 分钟 idle 回收）自动断开时，用户若仍聚焦该会话窗口，可以继续输入文字对话（进程没死），但 Sidebar 的 ACP badge 仍是灰色「已释放」，且永远不会恢复为活跃。
+
+**可复用的理论/模式**：
+
+**1. `Arc::try_unwrap` 是「引用计数恰好为 1」的脆弱断言——凡是「移除注册后必须立即杀外部进程」的地方，不得用它来决定杀不杀**。`try_unwrap` 成功意味着当前持有者是最后一个引用；任何长期存活的引用（WS handler 的 `Option<Arc<AcpClient>>`、缓存、观察者）都会让它在「注册表已移除、进程却还活着」的状态下静默失败。**判断标准：进程的生死是否与注册表的移除必须严格同步？若是，就调用 shared-reference 的显式 kill 方法（本项目是 `AcpClient::shutdown(&self)`），而不是「引用归零后自然 drop」的隐式回收**。`shutdown` 与 `disconnect` 的签名差异（`&self` vs `self`）本身就是设计信号：凡是持有 `Arc` 的调用方无法消费 self，只能走 `&self` 路径。
+**2. 外部资源的「注册」与「实际存在」是两个可分离的事实，后端状态接口必须二选一对齐**：`acp_process_alive` 的真相源是 supervisor 注册表，而进程的实际生死由引用计数决定——两者在 WS 持引用时脱节，前端轮询/事件驱动拿到的状态就与真实情况不一致。**任何「布尔存活状态」的对外接口，要么以资源真实生命周期为真相源，要么确保注册表移除 = 资源销毁是原子不变式**。本例选后者（dispose + shutdown 同步执行）。
+**3. 「回收后还能对话」不是 feature 而是泄漏信号**：设计注释写着「回收即 kill 子进程、释放内存」，实际因引用计数没达成——**代码注释描述的是意图，实现是否兑现意图必须用「极端场景 + 所有引用路径」验证**：遍历所有持有该对象的引用（WS handler、spawn task、缓存），确认每个引用都不会阻止意图达成。
+
+**诊断过程中的错误**：
+
+1. **一开始只盯 WS 重连与前端帧流，忽略了「进程根本没死」这条更基础的根因**：用户描述「瞬时重连 ws 到 agent，这没问题」被当成「WS 断开后自动重连成功」的正常流程，但代码审计发现：WS handler 持 `Arc<AcpClient>` → reaper 的 `Arc::try_unwrap` 必失败 → 进程存活、WS 从未断开，前端也从未真正「重连」。**「用户说没问题」的部分往往是 bug 的藏身处——先验证它的前提（进程死了吗？WS 断了吗？）再进入下一层**。
+2. **同构 bug 的审计范围一开始只盯 reaper**：grep `Arc::try_unwrap` 发现 delete_session / release_session / load_session 覆盖旧 client 三处同构（都依赖引用归零杀进程）。**修复「依赖引用归零」的根因时，必须 grep 出所有同构调用点一次性收敛，否则只修一处、下次在其他入口复发**。
+
+**具体根因与修复**：
+
+- 根因链：reaper 30s tick 判定 idle 超时 → `supervisor.dispose(&sid)` 从 HashMap 移除 + 广播 `alive:false`（`supervisor.rs:51-59`）→ `Arc::try_unwrap(client)` 失败（WS handler 在 `ws/acp.rs:411` 持有 `Option<Arc<AcpClient>>`）→ 不调 `disconnect` → connection_task 不退出、子进程不 kill、WS 不断 → 用户可继续对话（`client` 仍是 Some）→ 但 supervisor 已移除该 session → `list_sessions` 的 `acp_process_alive=false`（`sessions.rs:77-91`）→ Sidebar 灰「已释放」→ 此后无 insert 事件 → 永不恢复，进程还脱离 reaper 管辖无限驻留。
+- 修复：reaper 回收（`src/acp/reaper.rs`）、`cleanup_session_runtime` 删除会话（`src/api/sessions.rs`）、`release_session` 手动释放（`src/api/sessions.rs`）、load_session 覆盖旧 client（`src/ws/acp.rs`）四处统一改为 `client.shutdown().await`（shared reference 立即 kill 子进程 + 触发连接任务退出）。修复后 dispose 移除与进程死亡同步：进程被杀 → WS 断开 → 前端自动重连 → supervisor miss 发 `session_not_found` → ChatView 显示 restore 按钮 → 用户 restore 后 `insert` 广播 `alive:true` → Sidebar 恢复绿色，状态全程一致。
+- 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test`（126+8+2 全过）。

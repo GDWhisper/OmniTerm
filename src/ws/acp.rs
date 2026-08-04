@@ -647,16 +647,17 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                                 message: "agent does not support session/load",
                                             }).unwrap_or_default();
                                             let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                            let c = Arc::try_unwrap(new_client).ok();
-                                            if let Some(c) = c { c.disconnect().await; }
+                                            new_client.shutdown().await;
                                             continue;
                                         }
 
-                                        // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏
-                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await
-                                            && let Ok(c) = Arc::try_unwrap(old) {
-                                                c.disconnect().await;
-                                            }
+                                        // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏。
+                                        // 用 shutdown（shared ref）而非 Arc::try_unwrap：同连接
+                                        // 的 WS handler 持有旧 client 引用时 try_unwrap 失败，
+                                        // 旧进程会残留。
+                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await {
+                                            old.shutdown().await;
+                                        }
                                         state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
                                         // restore 出的新 client 绑定持久化：后续用户 prompt 的
                                         // assistant 回复由累积器实时防抖落库。
