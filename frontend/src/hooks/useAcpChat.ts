@@ -506,6 +506,11 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
 // turn_snapshot 都要把这些原始帧还原成 blocks——复用同一套 live 分类器，杜绝
 // TS/Rust 双份分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。
 
+// 与后端 turn_accumulator 的 MAX_FRAMES 一致：只解码最近 N 帧。防御存量超大
+// blocks（修复前长 turn 可累积数万帧、上百 MB）在 hydrate 时逐帧分类卡死浏览器；
+// 文本完整性由消息的 text 字段兜底，截断的只是历史 UI 结构窗口。
+const MAX_BLOCKS_FRAMES = 2000
+
 /** 把 `{"v":1,"frames":[...]}` 原始帧包裹还原成结构化 blocks（分类 → buildReplayMessages）。 */
 function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
   let parsed: unknown
@@ -517,7 +522,8 @@ function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
   if (!parsed || typeof parsed !== 'object') return []
   const frames = (parsed as Record<string, unknown>)['frames']
   if (!Array.isArray(frames)) return []
-  const actions = frames.map((f) => classifySessionUpdate(normalizeSessionUpdate(f)))
+  const recent = frames.slice(-MAX_BLOCKS_FRAMES)
+  const actions = recent.map((f) => classifySessionUpdate(normalizeSessionUpdate(f)))
   return buildReplayMessages(actions).flatMap((m) => m.blocks)
 }
 

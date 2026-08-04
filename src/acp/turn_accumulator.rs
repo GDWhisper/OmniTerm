@@ -15,10 +15,18 @@
 //! frames, guaranteeing identical rendering with zero duplication of the (large,
 //! multi-implementation) classification logic in Rust.
 //!
+//! **Frame retention is bounded** ([`MAX_FRAMES`]): long agent turns emit a high rate
+//! of raw notifications (thought/tool chunks can exceed tens of thousands per turn).
+//! The accumulator keeps only the most recent window for mid-turn crash recovery —
+//! `text` still accumulates the full agent message text, and the frontend writes back
+//! its complete structured blocks on `sync` — so memory, flush cost and the `blocks`
+//! column stay bounded instead of growing quadratically over a long turn.
+//!
 //! Writes are debounced: the fold path only flags dirty and pings a dedicated writer
 //! task, which coalesces bursts (trailing debounce + max-latency cap) so a high chunk
 //! rate maps to a few SQLite writes per second.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -40,6 +48,14 @@ const WRITER_CHANNEL_CAPACITY: usize = 256;
 /// blocks-column wrapper version for raw-frame turns (see module docs).
 const RAW_FRAMES_VERSION: u64 = 1;
 
+/// Bounded retention window for raw frames. Long turns can emit tens of thousands of
+/// notifications; keeping all of them makes flush (full re-serialization) and the
+/// `blocks` column grow quadratically. Only the most recent [`MAX_FRAMES`] frames are
+/// kept for mid-turn recovery — full text lives in `text`, full structure comes back
+/// from the frontend's `sync` after the turn ends. ~1.5KB/frame observed → ~3MB worst
+/// case per flush, a constant cost regardless of turn length.
+const MAX_FRAMES: usize = 2000;
+
 #[derive(Default)]
 struct TurnState {
     /// True between `begin_turn` and `finalize_turn`. Gates folding so replay /
@@ -48,8 +64,10 @@ struct TurnState {
     /// uuid of the in-progress `chat_messages` row. Created lazily on the first
     /// folded frame so a turn that emits nothing leaves no empty bubble.
     row_id: Option<String>,
-    /// Raw `SessionUpdate` payloads for the active turn, in arrival order.
-    frames: Vec<Value>,
+    /// Raw `SessionUpdate` payloads for the active turn, in arrival order. Bounded to
+    /// the most recent [`MAX_FRAMES`] frames (front pops on overflow), so a long turn
+    /// cannot grow this unboundedly.
+    frames: VecDeque<Value>,
     /// Accumulated agent message text (for the NOT NULL `text` column and as a
     /// plain-text fallback). Only `AgentMessageChunk` text is collected here.
     text: String,
@@ -132,7 +150,15 @@ impl TurnAccumulator {
                 st.text.push_str(text);
             }
             match serde_json::to_value(&notification.update) {
-                Ok(v) => st.frames.push(v),
+                Ok(v) => {
+                    st.frames.push_back(v);
+                    // Bounded window: drop the oldest frame once retention is exceeded.
+                    // `text` accumulates full agent text separately, so a dropped
+                    // thought/tool frame only narrows the mid-turn recovery window.
+                    if st.frames.len() > MAX_FRAMES {
+                        st.frames.pop_front();
+                    }
+                }
                 Err(e) => {
                     tracing::warn!("failed to serialize session update for persistence: {}", e)
                 }
@@ -294,5 +320,43 @@ async fn flush_once(acc: &Arc<TurnAccumulator>, db: &SqlitePool, session_id: &st
     .await
     {
         tracing::warn!("failed to upsert streaming chat message: {}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agent_client_protocol::schema::v1::{ContentChunk, SessionId, TextContent};
+
+    /// 长 turn 高频帧（thought/tool chunk）不能把 frames 撑成无界：窗口保留最近
+    /// MAX_FRAMES 帧，text 仍全量累积。回归防护 2026-08-04 线上问题（单条 blocks
+    /// 累积到 100MB、tokio worker 99% CPU、进程 RES 4.5GB）。
+    #[test]
+    fn frames_retention_is_bounded_over_long_turn() {
+        const FOLD_COUNT: u32 = 5000;
+        assert!(FOLD_COUNT as usize > MAX_FRAMES, "测试需超过窗口以触发淘汰");
+
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+        for i in 0..FOLD_COUNT {
+            let notif = SessionNotification::new(
+                sid.clone(),
+                SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                    TextContent::new(format!("chunk-{i} ")),
+                ))),
+            );
+            assert!(acc.fold(&notif).is_some(), "turn active 时应折叠出 seq");
+        }
+
+        let snap = acc.turn_snapshot();
+        let wrapper: Value = serde_json::from_str(&snap.blocks).expect("blocks 应为合法 JSON");
+        let frames = wrapper["frames"].as_array().expect("frames 应为数组");
+        assert_eq!(frames.len(), MAX_FRAMES, "frames 只保留最近窗口，不随 turn 长度增长");
+
+        // text 全量累积：丢弃的只是 UI 恢复窗口，正文文本不受影响。
+        assert!(snap.text.starts_with("chunk-0 "), "text 保留最早 chunk");
+        assert!(snap.text.ends_with("chunk-4999 "), "text 保留最新 chunk");
+        assert_eq!(snap.text.matches("chunk-").count(), FOLD_COUNT as usize);
     }
 }
