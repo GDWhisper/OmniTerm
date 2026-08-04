@@ -67,14 +67,6 @@ const DARK_TERMINAL_THEME = {
   brightWhite: '#E6EDF3',
 }
 
-// Timeout before disconnecting when the tab loses focus / becomes hidden.
-// 10 minutes gives a grace window for brief tab switches or notifications.
-const BLUR_DISCONNECT_DELAY_MS = 10 * 60 * 1000
-// Timeout before disconnecting when the tab is focused but idle (no user
-// activity). 15 minutes covers long reads or pauses without killing the
-// session too aggressively.
-const IDLE_DISCONNECT_DELAY_MS = 15 * 60 * 1000
-
 /** Translate a typed character through a latched modifier from MobileKeyBar. */
 function translateLatch(latch: string, data: string): string {
   switch (latch) {
@@ -93,6 +85,10 @@ function translateLatch(latch: string, data: string): string {
 export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const attention = useAttention()  // Agent attention context
+  // Blur / idle disconnect timeouts (minutes). Read reactively from the store;
+  // each timer reads the value when it is armed and keeps it for that firing.
+  const blurDisconnectMin = useAppStore((s) => s.blurDisconnectMin)
+  const idleDisconnectMin = useAppStore((s) => s.idleDisconnectMin)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -682,6 +678,10 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   //   - switching browser tabs (`visibilitychange`)
   //   - switching to another app/window (`window.blur`)
   //   - returning to the tab (`visibilitychange` / `window.focus`)
+  // NOTE: `blurDisconnectMin` / `idleDisconnectMin` are intentionally NOT in
+  // the deps array — each timer reads the value when it is armed and keeps it
+  // for that firing. Adding them would re-run this effect (and reset armed
+  // timers) on a settings change, changing the disconnect/reset semantics.
   useEffect(() => {
     const clearBlurTimer = () => {
       if (blurTimerRef.current) {
@@ -701,7 +701,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
           useAppStore.getState().setTerminalDisconnected(true)
           disposeTerminal()
         }
-      }, IDLE_DISCONNECT_DELAY_MS)
+      }, idleDisconnectMin * 60_000)
     }
 
     const handleVisibility = () => {
@@ -713,7 +713,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
             useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
-        }, BLUR_DISCONNECT_DELAY_MS)
+        }, blurDisconnectMin * 60_000)
         // Stop the idle timer while hidden; it will be restarted on focus.
         if (idleTimerRef.current) {
           clearTimeout(idleTimerRef.current)
@@ -744,7 +744,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
             useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
-        }, BLUR_DISCONNECT_DELAY_MS)
+        }, blurDisconnectMin * 60_000)
         if (idleTimerRef.current) {
           clearTimeout(idleTimerRef.current)
           idleTimerRef.current = null
@@ -777,8 +777,11 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
   // Track user activity to reset the idle disconnect timer.  Any meaningful
   // interaction (mouse move, key press, scroll, touch, click) resets the
-  // 15-minute idle countdown, so long-running sessions aren't killed while
-  // the tab is focused.
+  // idle countdown (idleDisconnectMin), so long-running sessions aren't
+  // killed while the tab is focused.
+  // NOTE: `idleDisconnectMin` is intentionally NOT in the deps array — the
+  // re-armed timer reads the value at arm time (see the visibility/focus
+  // effect above for the rationale).
   useEffect(() => {
     const ACTIVITY_EVENTS: (keyof DocumentEventMap)[] = [
       'mousemove', 'keydown', 'scroll', 'touchstart', 'click',
@@ -787,7 +790,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     const onActivity = () => {
       lastActivityRef.current = Date.now()
       // If the tab is focused and we have an idle timer, reset it so the
-      // 15-minute countdown starts from now.
+      // idle countdown starts from now.
       if (isFocusedRef.current && document.hasFocus() && idleTimerRef.current) {
         clearTimeout(idleTimerRef.current)
         idleTimerRef.current = setTimeout(() => {
@@ -795,7 +798,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
             useAppStore.getState().setTerminalDisconnected(true)
             disposeTerminal()
           }
-        }, IDLE_DISCONNECT_DELAY_MS)
+        }, idleDisconnectMin * 60_000)
       }
     }
 

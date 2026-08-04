@@ -7,6 +7,7 @@ pub mod health;
 pub mod hooks;
 pub mod projects;
 pub mod sessions;
+pub mod settings;
 pub mod system;
 pub mod targets;
 
@@ -23,6 +24,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(targets::routes())
         .merge(projects::routes())
         .merge(sessions::routes())
+        .merge(settings::routes())
         .merge(hooks::routes())
         .merge(files::routes())
         .merge(files_watch::routes())

@@ -404,6 +404,178 @@ async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
     row.map(|(name,)| name).unwrap_or_default()
 }
 
+/// 向 agent 发送 prompt 并处理 turn 收尾（广播 prompt_done / prompt_error）。
+/// 「连接存活即时发送」与「自动恢复后延迟发送」两条路径复用同一实现。
+async fn dispatch_prompt(
+    c: Arc<AcpClient>,
+    text: String,
+    images: Vec<ImageInput>,
+    resources: Vec<ResourceInput>,
+) {
+    // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中），并开启累积器
+    // turn 门控；assistant 回复由累积器实时防抖落库（见 turn_accumulator）。
+    c.mark_prompt_active();
+    match c.send_prompt(&text, images, resources).await {
+        Ok(resp) => {
+            // mark_prompt_idle 内部定稿累积器进行中的 turn。
+            c.mark_prompt_idle();
+            // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
+            c.notify_turn_end(TurnEndEvent::Done {
+                stop_reason: format!("{:?}", resp.stop_reason),
+            });
+        }
+        Err(e) => {
+            c.mark_prompt_idle();
+            c.notify_turn_end(TurnEndEvent::Error { message: format!("{}", e) });
+        }
+    }
+}
+
+/// 恢复 ACP 会话：spawn agent 子进程、注册 supervisor、挂接持久化与事件转发
+/// 链路，并启动历史重放（session/load）。返回新 client 与重放任务句柄——
+/// 重放任务负责转发 replay 帧、完成后发送 replay_end 并接管实时帧转发。
+///
+/// 供手动「恢复会话」（LoadSession 消息）与自动恢复（Prompt 到达时发现进程
+/// 已释放 / 连接已死，F 方向）两条路径复用，避免复制粘贴。
+/// 失败返回 Err(用户可读错误)。
+async fn restore_acp_session(
+    state: &AppState,
+    db: &sqlx::SqlitePool,
+    sid: &str,
+    client: &mut Option<Arc<AcpClient>>,
+    notify_tx: &tokio::sync::mpsc::Sender<Message>,
+) -> Result<(Arc<AcpClient>, tokio::task::JoinHandle<()>), String> {
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT agent_id, acp_session_id, workspace_path FROM sessions WHERE id = ? AND runtime_kind = 'acp'",
+    )
+    .bind(sid)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+    let Some((agent_id, acp_sid, ws_path)) = row else {
+        return Err("session row not found or not ACP".to_string());
+    };
+    let Some(agent) = load_agent(db, &agent_id).await else {
+        return Err("agent config not found".to_string());
+    };
+
+    let cwd = std::path::PathBuf::from(&ws_path);
+    let agent_display_name = agent.display_name.clone();
+    let new_client = AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone())
+        .await
+        .map_err(|e| format!("failed to spawn agent: {}", e))?;
+    let new_client = Arc::new(new_client);
+
+    if !new_client.supports_load_session() {
+        new_client.shutdown().await;
+        return Err("agent does not support session/load".to_string());
+    }
+
+    // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏。用 shutdown（shared ref）
+    // 而非 Arc::try_unwrap：同连接的 WS handler 持有旧 client 引用时 try_unwrap
+    // 失败，旧进程会残留。
+    if let Some(old) = state.acp_supervisor.dispose(sid).await {
+        old.shutdown().await;
+    }
+    state.acp_supervisor.insert(sid.to_string(), new_client.clone()).await;
+    // restore 出的新 client 绑定持久化：后续用户 prompt 的 assistant 回复由
+    // 累积器实时防抖落库。
+    new_client.attach_persistence(db.clone(), sid.to_string());
+    new_client.attach_config_prefs(db.clone(), sid.to_string(), agent_id);
+
+    let perm_rx = new_client.permission_subscribe();
+    spawn_permission_task(perm_rx, notify_tx.clone()).await;
+    spawn_permission_resolved_task(new_client.permission_resolved_subscribe(), notify_tx.clone())
+        .await;
+    let crash_rx = new_client.crash_subscribe();
+    spawn_crash_task(crash_rx, notify_tx.clone()).await;
+    let turn_end_rx = new_client.turn_end_subscribe();
+    spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
+    let term_rx = new_client.terminal_event_subscribe();
+    spawn_terminal_task(term_rx, notify_tx.clone()).await;
+    *client = Some(new_client.clone());
+
+    let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
+        image: new_client.supports_image(),
+        agent_name: agent_display_name,
+    })
+    .unwrap_or_default();
+    let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
+
+    let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
+    let _ = notify_tx.send(Message::Text(replay_msg.into())).await;
+
+    // 重放转发任务：与 load_session 并发转发重放帧，历史帧数可能远超 broadcast
+    // 容量（256），若等 load 返回后再排空，缓冲溢出（Lagged）会静默丢帧（长会话
+    // 恢复时曾导致一帧未发）。重放不经累积器落库（无 turn 门控，begin_turn 只由
+    // 用户 prompt 触发）。完成后发送 replay_end 并复用 replay_rx 接管实时帧——
+    // 避免重新订阅在排空与订阅之间产生丢帧窗口。
+    let task_client = new_client.clone();
+    let tx = notify_tx.clone();
+    let replay_sid = acp_sid.clone();
+    let replay_cwd = cwd.clone();
+    let handle = tokio::spawn(async move {
+        let mut replay_rx = task_client.session_update_subscribe();
+        let load_fut = task_client.load_session(&replay_sid, replay_cwd);
+        tokio::pin!(load_fut);
+        let result = loop {
+            tokio::select! {
+                r = &mut load_fut => break r,
+                recved = replay_rx.recv() => match recved {
+                    Ok(notif) => {
+                        // 发送失败说明 WS 已断：继续等 load 结束即可退出。
+                        let _ = forward_session_update(&tx, &notif).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("ACP replay subscriber lagged by {} messages; dropped frames", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break (&mut load_fut).await;
+                    }
+                },
+            }
+        };
+        // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、排空缓冲前调用。
+        // restore 发出的 ConfigOptionUpdate 广播会进 replay_rx → 前端 staging，
+        // ReplayEnd 的 commitReplay 时恢复值覆盖重放默认值，配置栏最终显示用户
+        // 上次的设置。
+        if result.is_ok() {
+            task_client.restore_config_prefs().await;
+        }
+        // load_session 返回即 agent 已推完全部历史。排空缓冲余量后经 notify_tx
+        // 发 replay_end——notify_tx 为 FIFO，故 replay_end 必在最后一条重放帧之后
+        // 到达前端（前端据此即时 sync 即可）。
+        loop {
+            match replay_rx.try_recv() {
+                Ok(notif) => {
+                    if !forward_session_update(&tx, &notif).await {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                    // 不中断：后续 try_recv 仍能取到缓冲里保留的帧。
+                    tracing::warn!("ACP replay drain lagged by {} messages; dropped frames", n);
+                }
+                Err(_) => break, // Empty / Closed
+            }
+        }
+        let msg = match result {
+            Ok(()) => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&AcpServerMessage::Error {
+                code: Some("load_failed"),
+                message: &format!("session/load failed: {}", e),
+            })
+            .unwrap_or_default(),
+        };
+        let _ = tx.send(Message::Text(msg.into())).await;
+        // 复用 replay_rx 接管实时帧，避免重新订阅在排空与订阅之间产生丢帧窗口。
+        spawn_notify_task(replay_rx, tx.clone()).await;
+    });
+
+    Ok((new_client, handle))
+}
+
 async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<Message>(64);
@@ -483,12 +655,26 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
         }
         None => {
             info!("ACP WS: session_id={} not in supervisor, keeping alive for restore", session_id);
-            let msg = serde_json::to_string(&AcpServerMessage::Error {
-                code: Some("session_not_found"),
-                message: "ACP session not found",
-            })
-            .unwrap();
-            let _ = ws_tx.send(Message::Text(msg.into())).await;
+            // 区分「已释放但可恢复」与「会话已删除」：
+            // - DB 行仍存在（reaper 回收 / 手动 release / 后端重启）→ 不发送
+            //   session_not_found，前端保持 released 态（随后的 process_alive:false
+            //   帧驱动）。用户可直接发送消息触发自动恢复（发送即恢复），无需先
+            //   手动点「恢复会话」。
+            // - DB 行已删除 → 发 session_not_found，前端 markEnded。
+            let row_exists: bool =
+                sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sessions WHERE id = ?")
+                    .bind(&session_id)
+                    .fetch_one(&state.db)
+                    .await
+                    .unwrap_or(true); // 查询失败时保守不标记 ended，避免误伤
+            if !row_exists {
+                let msg = serde_json::to_string(&AcpServerMessage::Error {
+                    code: Some("session_not_found"),
+                    message: "ACP session not found",
+                })
+                .unwrap();
+                let _ = ws_tx.send(Message::Text(msg.into())).await;
+            }
             None
         }
     };
@@ -515,26 +701,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<AcpClientMessage>(&text) {
                             Ok(AcpClientMessage::Prompt { text: prompt_text, images }) => {
-                                let Some(ref c) = client else {
-                                    let msg = serde_json::to_string(&AcpServerMessage::Error {
-                                        code: Some("session_not_found"),
-                                        message: "no active ACP session",
-                                    }).unwrap_or_default();
-                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    continue;
-                                };
-
                                 // 附件校验：前端已限制，这里兜底（直连 WS 的客户端）。
+                                // 数量校验与 agent 能力无关，先于恢复流程执行。
                                 if images.len() > MAX_PROMPT_IMAGES {
                                     let msg = serde_json::to_string(&AcpServerMessage::PromptError {
                                         message: &format!("too many images (max {})", MAX_PROMPT_IMAGES),
-                                    }).unwrap_or_default();
-                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    continue;
-                                }
-                                if !images.is_empty() && !c.supports_image() {
-                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
-                                        message: "agent does not support image input",
                                     }).unwrap_or_default();
                                     let _ = ws_tx.send(Message::Text(msg.into())).await;
                                     continue;
@@ -564,31 +735,58 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     &db, &sid, "user", &prompt_text, blocks_json.as_deref(),
                                 ).await;
 
-                                let c = c.clone();
                                 // 解析 @path 文件引用（失败静默跳过，不阻塞发送）
                                 let resources = resolve_at_references(&db, &sid, &prompt_text).await;
-                                // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中）。
-                                // 同时开启累积器 turn 门控；assistant 回复由累积器实时
-                                // 防抖落库（见 turn_accumulator），不再依赖 WS 任务收尾累积。
-                                c.mark_prompt_active();
-                                tokio::spawn(async move {
-                                    match c.send_prompt(&prompt_text, images, resources).await {
-                                        Ok(resp) => {
-                                            // mark_prompt_idle 内部定稿累积器进行中的 turn。
-                                            c.mark_prompt_idle();
-                                            // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
-                                            c.notify_turn_end(TurnEndEvent::Done {
-                                                stop_reason: format!("{:?}", resp.stop_reason),
-                                            });
-                                        }
-                                        Err(e) => {
-                                            c.mark_prompt_idle();
-                                            c.notify_turn_end(TurnEndEvent::Error {
-                                                message: format!("{}", e),
-                                            });
-                                        }
-                                    }
-                                });
+
+                                // 确保存在可用 client：进程已被释放（reaper 回收 / 手动
+                                // release / 后端重启）或连接已死（崩溃）时，自动恢复进程
+                                // 后再发送——用户无需手动点「恢复会话」，「发送」本身即恢复。
+                                // replay_handle 仅在本次走自动恢复时存在；若连接本就可活，
+                                // 直接即时发送。
+                                let (live, replay_handle) =
+                                    match client.as_ref().and_then(|c| c.is_alive().then(|| c.clone())) {
+                                        Some(c) => (c, None),
+                                        None => match restore_acp_session(
+                                            &state, &db, &sid, &mut client, &notify_tx,
+                                        )
+                                        .await
+                                        {
+                                            Ok((c, handle)) => (c, Some(handle)),
+                                            Err(e) => {
+                                                let msg = serde_json::to_string(
+                                                    &AcpServerMessage::Error {
+                                                        code: Some("session_released"),
+                                                        message: &e,
+                                                    },
+                                                )
+                                                .unwrap_or_default();
+                                                let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                                continue;
+                                            }
+                                        },
+                                    };
+
+                                if !images.is_empty() && !live.supports_image() {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: "agent does not support image input",
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+
+                                if let Some(handle) = replay_handle {
+                                    // 自动恢复路径：历史重放尚未完成。等重放结束
+                                    // （agent 就绪、前端对账完成）再发送 prompt，避免
+                                    // 与 replay 帧交错。发起连接已在等待（前端 sending
+                                    // 已置位），prompt_done 到达前前端不会重发。
+                                    let c = live;
+                                    tokio::spawn(async move {
+                                        let _ = handle.await;
+                                        dispatch_prompt(c, prompt_text, images, resources).await;
+                                    });
+                                } else {
+                                    tokio::spawn(dispatch_prompt(live, prompt_text, images, resources));
+                                }
                             }
                             Ok(AcpClientMessage::Cancel) => {
                                 if let Some(ref c) = client {
@@ -608,163 +806,19 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 }
                             }
                             Ok(AcpClientMessage::LoadSession) => {
-                                let row: Option<(String, String, String)> = sqlx::query_as(
-                                    "SELECT agent_id, acp_session_id, workspace_path FROM sessions WHERE id = ? AND runtime_kind = 'acp'",
+                                // 手动恢复会话：与 Prompt 的自动恢复共用 restore_acp_session
+                                // （spawn agent + supervisor 注册 + 历史重放转发）。
+                                if let Err(e) = restore_acp_session(
+                                    &state, &db, &sid, &mut client, &notify_tx,
                                 )
-                                .bind(&sid)
-                                .fetch_optional(&db)
                                 .await
-                                .ok()
-                                .flatten();
-
-                                let Some((agent_id, acp_sid, ws_path)) = row else {
+                                {
                                     let msg = serde_json::to_string(&AcpServerMessage::Error {
                                         code: None,
-                                        message: "session row not found or not ACP",
-                                    }).unwrap_or_default();
+                                        message: &e,
+                                    })
+                                    .unwrap_or_default();
                                     let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    continue;
-                                };
-
-                                let Some(agent) = load_agent(&db, &agent_id).await else {
-                                    let msg = serde_json::to_string(&AcpServerMessage::Error {
-                                        code: None,
-                                        message: "agent config not found",
-                                    }).unwrap_or_default();
-                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    continue;
-                                };
-
-                                let cwd = std::path::PathBuf::from(&ws_path);
-                                let agent_display_name = agent.display_name.clone();
-                                match AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone()).await {
-                                    Ok(new_client) => {
-                                        let new_client = Arc::new(new_client);
-
-                                        if !new_client.supports_load_session() {
-                                            let msg = serde_json::to_string(&AcpServerMessage::Error {
-                                                code: Some("load_not_supported"),
-                                                message: "agent does not support session/load",
-                                            }).unwrap_or_default();
-                                            let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                            new_client.shutdown().await;
-                                            continue;
-                                        }
-
-                                        // 覆盖前先回收可能残留的旧 client，避免旧进程泄漏。
-                                        // 用 shutdown（shared ref）而非 Arc::try_unwrap：同连接
-                                        // 的 WS handler 持有旧 client 引用时 try_unwrap 失败，
-                                        // 旧进程会残留。
-                                        if let Some(old) = state.acp_supervisor.dispose(&sid).await {
-                                            old.shutdown().await;
-                                        }
-                                        state.acp_supervisor.insert(sid.clone(), new_client.clone()).await;
-                                        // restore 出的新 client 绑定持久化：后续用户 prompt 的
-                                        // assistant 回复由累积器实时防抖落库。
-                                        new_client.attach_persistence(db.clone(), sid.clone());
-                                        // 绑定配置偏好持久化（agent_id 来自上文 DB 查询的 row）。
-                                        // restore_config_prefs 在 load_session 返回后调用——此时
-                                        // spawn_and_load 的 initial_config_options 缓存才被回填。
-                                        new_client.attach_config_prefs(db.clone(), sid.clone(), agent_id.clone());
-
-                                        let perm_rx = new_client.permission_subscribe();
-                                        spawn_permission_task(perm_rx, notify_tx.clone()).await;
-                                        spawn_permission_resolved_task(
-                                            new_client.permission_resolved_subscribe(),
-                                            notify_tx.clone(),
-                                        )
-                                        .await;
-                                        let crash_rx = new_client.crash_subscribe();
-                                        spawn_crash_task(crash_rx, notify_tx.clone()).await;
-                                        let turn_end_rx = new_client.turn_end_subscribe();
-                                        spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
-                                        let term_rx = new_client.terminal_event_subscribe();
-                                        spawn_terminal_task(term_rx, notify_tx.clone()).await;
-                                        client = Some(new_client.clone());
-
-                                        let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
-                                            image: new_client.supports_image(),
-                                            agent_name: agent_display_name,
-                                        }).unwrap_or_default();
-                                        let _ = notify_tx.send(Message::Text(cap_msg.into())).await;
-
-                                        let replay_msg = serde_json::to_string(&AcpServerMessage::ReplayStart).unwrap_or_default();
-                                        let _ = ws_tx.send(Message::Text(replay_msg.into())).await;
-
-                                        let tx = notify_tx.clone();
-                                        tokio::spawn(async move {
-                                            // 在 load_session 之前订阅，确保重放期间 agent 推来的
-                                            // 历史 session_update 全部可见。
-                                            let mut replay_rx = new_client.session_update_subscribe();
-                                            // 与 load_session 并发转发重放帧：历史帧数可能远超
-                                            // broadcast 容量（256），若等 load 返回后再排空，缓冲溢出
-                                            // （Lagged）会静默丢帧，长会话恢复时曾导致一帧未发。
-                                            // 注意：重放不经累积器落库——重放帧无 turn 门控（begin_turn
-                                            // 只由用户 prompt 触发），故不会与后续实时落库重复。
-                                            let load_fut = new_client.load_session(&acp_sid, cwd);
-                                            tokio::pin!(load_fut);
-                                            let result = loop {
-                                                tokio::select! {
-                                                    r = &mut load_fut => break r,
-                                                    recved = replay_rx.recv() => match recved {
-                                                        Ok(notif) => {
-                                                            // 发送失败说明 WS 已断：继续等 load 结束即可退出。
-                                                            let _ = forward_session_update(&tx, &notif).await;
-                                                        }
-                                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                                            tracing::warn!("ACP replay subscriber lagged by {} messages; dropped frames", n);
-                                                        }
-                                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                                            break (&mut load_fut).await;
-                                                        }
-                                                    },
-                                                }
-                                            };
-                                            // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、
-                                            // 排空缓冲前调用。restore 发出的 ConfigOptionUpdate 广播会进
-                                            // replay_rx → 前端 staging，ReplayEnd 的 commitReplay 时恢复值
-                                            // 覆盖重放默认值，配置栏最终显示用户上次的设置。
-                                            if result.is_ok() {
-                                                new_client.restore_config_prefs().await;
-                                            }
-                                            // load_session 返回即 agent 已推完全部历史。排空缓冲余量后
-                                            // 经 notify_tx 发 replay_end——notify_tx 为 FIFO，故 replay_end
-                                            // 必在最后一条重放帧之后到达前端（前端据此即时 sync 即可）。
-                                            loop {
-                                                match replay_rx.try_recv() {
-                                                    Ok(notif) => {
-                                                        if !forward_session_update(&tx, &notif).await {
-                                                            break;
-                                                        }
-                                                    }
-                                                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
-                                                        // 不中断：后续 try_recv 仍能取到缓冲里保留的帧。
-                                                        tracing::warn!("ACP replay drain lagged by {} messages; dropped frames", n);
-                                                    }
-                                                    Err(_) => break, // Empty / Closed
-                                                }
-                                            }
-                                            let msg = match result {
-                                                Ok(()) => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
-                                                Err(e) => serde_json::to_string(&AcpServerMessage::Error {
-                                                    code: Some("load_failed"),
-                                                    message: &format!("session/load failed: {}", e),
-                                                }).unwrap_or_default(),
-                                            };
-                                            let _ = tx.send(Message::Text(msg.into())).await;
-                                            // 复用 replay_rx 接管实时帧：避免重新订阅在排空与订阅
-                                            // 之间产生丢帧窗口，且保证恢复完成前的帧已全部按序送达。
-                                            spawn_notify_task(replay_rx, tx.clone()).await;
-                                        });
-                                    }
-                                    Err(e) => {
-                                        let err_msg = format!("failed to spawn agent: {}", e);
-                                        let msg = serde_json::to_string(&AcpServerMessage::Error {
-                                            code: Some("spawn_failed"),
-                                            message: &err_msg,
-                                        }).unwrap_or_default();
-                                        let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    }
                                 }
                             }
                             Ok(AcpClientMessage::PermissionResponse { id, option_id }) => {

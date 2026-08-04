@@ -201,6 +201,15 @@ export const api = {
       body: JSON.stringify({ enabled }),
     }),
 
+  // Settings
+  getAcpIdleRecycle: () =>
+    request<{ minutes: number }>('/settings/acp-idle-recycle'),
+  setAcpIdleRecycle: (minutes: number) =>
+    request<{ minutes: number }>('/settings/acp-idle-recycle', {
+      method: 'PUT',
+      body: JSON.stringify({ minutes }),
+    }),
+
   // Auth
   setup: (password: string) =>
     request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }) }),

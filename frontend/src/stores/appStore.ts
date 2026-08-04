@@ -11,6 +11,31 @@ export const DEFAULT_UI_ZOOM = 100
 export const MIN_SIDEBAR_WIDTH = 200
 export const DEFAULT_SIDEBAR_WIDTH = 256
 
+// Disconnect / recycle timeouts (minutes). Persisted via localStorage for
+// blur & idle; acp recycle is in-memory only (backend API lands separately).
+export const MIN_DISCONNECT_MIN = 1
+export const MAX_DISCONNECT_MIN = 60
+export const DEFAULT_BLUR_DISCONNECT_MIN = 10
+export const DEFAULT_IDLE_DISCONNECT_MIN = 15
+export const DEFAULT_ACP_IDLE_RECYCLE_MIN = 5
+
+/** Clamp a disconnect timeout (minutes) into the supported range. */
+function clampDisconnectMin(n: number): number {
+  return Math.max(MIN_DISCONNECT_MIN, Math.min(MAX_DISCONNECT_MIN, n))
+}
+
+/**
+ * Read a persisted disconnect timeout (minutes). Missing, non-finite, or
+ * out-of-range stored values self-heal to the fallback default.
+ */
+function readDisconnectMin(key: string, fallback: number): number {
+  const raw = parseInt(localStorage.getItem(key) ?? '', 10)
+  if (!Number.isFinite(raw) || raw < MIN_DISCONNECT_MIN || raw > MAX_DISCONNECT_MIN) {
+    return fallback
+  }
+  return raw
+}
+
 interface FmSessionState {
   mode: 'following' | 'manual'
   manualPath: string | null // absolute path when in manual mode
@@ -42,6 +67,11 @@ export interface AppState {
 
   // Terminal behavior
   autoCopySelect: boolean
+
+  // Disconnect / recycle timeouts (minutes)
+  blurDisconnectMin: number
+  idleDisconnectMin: number
+  acpIdleRecycleMin: number
 
   // Data
   projects: Project[]
@@ -131,6 +161,9 @@ export interface AppState {
   setChatFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
+  setBlurDisconnectMin: (n: number) => void
+  setIdleDisconnectMin: (n: number) => void
+  setAcpIdleRecycleMin: (n: number) => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
@@ -209,6 +242,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
+  blurDisconnectMin: readDisconnectMin('omniterm_blur_disconnect_min', DEFAULT_BLUR_DISCONNECT_MIN),
+  idleDisconnectMin: readDisconnectMin('omniterm_idle_disconnect_min', DEFAULT_IDLE_DISCONNECT_MIN),
+  // Pure in-memory — the backend recycle setting isn't wired up yet.
+  acpIdleRecycleMin: DEFAULT_ACP_IDLE_RECYCLE_MIN,
   terminalSendData: null as ((data: string) => void) | null,
 
   projects: [],
@@ -301,6 +338,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAutoCopySelect: (v) => {
     localStorage.setItem('omniterm_auto_copy_select', String(v))
     set({ autoCopySelect: v })
+  },
+
+  setBlurDisconnectMin: (n) => {
+    const clamped = clampDisconnectMin(n)
+    localStorage.setItem('omniterm_blur_disconnect_min', String(clamped))
+    set({ blurDisconnectMin: clamped })
+  },
+
+  setIdleDisconnectMin: (n) => {
+    const clamped = clampDisconnectMin(n)
+    localStorage.setItem('omniterm_idle_disconnect_min', String(clamped))
+    set({ idleDisconnectMin: clamped })
+  },
+
+  // In-memory only — no localStorage write.
+  setAcpIdleRecycleMin: (n) => {
+    set({ acpIdleRecycleMin: clampDisconnectMin(n) })
   },
 
   setExpandThinking: (v) => {

@@ -118,6 +118,9 @@ pub struct AppState {
     pub jwt_secret: String,
     /// Password-verification master switch (mirrors `settings.auth_enabled`).
     pub auth_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// ACP 静默待命回收阈值（秒），由 settings 表 `acp_idle_recycle_min` 注入，
+    /// reaper 每个 tick 动态读取（运行时热更新）。
+    pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub login_guard: auth::LoginGuard,
     pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
     pub acp_supervisor: acp::AcpSupervisor,
@@ -476,6 +479,20 @@ fn main() -> anyhow::Result<()> {
                 .await?;
             }
 
+            // ACP 静默待命回收阈值（分钟）：DB 是唯一真相源，记录缺失/解析失败
+            // 回退到 reaper 默认 300 秒（与硬编码时代行为完全一致）。
+            let acp_idle_recycle_secs = sqlx::query_scalar::<_, String>(
+                "SELECT value FROM settings WHERE key = 'acp_idle_recycle_min'",
+            )
+            .fetch_optional(&db)
+            .await?
+            .as_deref()
+            .map(|v| acp_idle_recycle_secs_from_setting(Some(v)))
+            .unwrap_or(acp::reaper::IDLE_RECYCLE_SECS);
+            let acp_idle_recycle_secs = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(
+                acp_idle_recycle_secs,
+            ));
+
             let pid_file = pid_path(&db_url);
             if let Some(parent) = Path::new(&pid_file).parent()
                 && !parent.as_os_str().is_empty()
@@ -492,6 +509,7 @@ fn main() -> anyhow::Result<()> {
                 db,
                 jwt_secret,
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
+                acp_idle_recycle_secs,
                 login_guard: auth::LoginGuard::new(),
                 activity_monitor,
                 acp_supervisor: acp::AcpSupervisor::default(),
@@ -503,10 +521,12 @@ fn main() -> anyhow::Result<()> {
             tmux::agent_watch::spawn(state.agent_watcher.clone());
 
             // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
-            // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。
+            // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。idle 阈值经
+            // `state.acp_idle_recycle_secs` 注入（settings 表可运行时热更新）。
             let reaper_supervisor = state.acp_supervisor.clone();
+            let reaper_idle_secs = state.acp_idle_recycle_secs.clone();
             tokio::spawn(async move {
-                acp::reaper::run_reaper(reaper_supervisor).await;
+                acp::reaper::run_reaper(reaper_supervisor, reaper_idle_secs).await;
             });
             let frontend_dir =
                 std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
@@ -609,4 +629,40 @@ fn main() -> anyhow::Result<()> {
         }
     }
     })
+}
+
+/// 解析 `settings` 表中 ACP 静默待命回收阈值。`acp_idle_recycle_min` 以分钟存储，
+/// 换算成秒返回；记录缺失或非数字（解析失败）时回退到 reaper 默认 300 秒，
+/// 保证 DB 无该 key 时行为与硬编码常量时代完全一致。抽成纯函数便于单测。
+fn acp_idle_recycle_secs_from_setting(setting_min: Option<&str>) -> u64 {
+    match setting_min.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(min) => min.saturating_mul(60),
+        None => acp::reaper::IDLE_RECYCLE_SECS,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acp_idle_recycle_secs_from_setting;
+    use crate::acp::reaper::IDLE_RECYCLE_SECS;
+
+    #[test]
+    fn missing_setting_falls_back_to_default() {
+        assert_eq!(acp_idle_recycle_secs_from_setting(None), IDLE_RECYCLE_SECS);
+    }
+
+    #[test]
+    fn unparseable_setting_falls_back_to_default() {
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("abc")), IDLE_RECYCLE_SECS);
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("")), IDLE_RECYCLE_SECS);
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("  ")), IDLE_RECYCLE_SECS);
+    }
+
+    #[test]
+    fn minutes_are_converted_to_seconds() {
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("1")), 60);
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("5")), 300);
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("30")), 1800);
+        assert_eq!(acp_idle_recycle_secs_from_setting(Some("  10  ")), 600);
+    }
 }

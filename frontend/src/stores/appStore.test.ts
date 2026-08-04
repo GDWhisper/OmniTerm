@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useAppStore } from './appStore'
 
 describe('appStore mobile state', () => {
@@ -97,5 +97,97 @@ describe('appStore.activateSession', () => {
     const mem = useAppStore.getState().workspaceSessionMemory
     expect(mem['ws-1']).toBe('sess-old')
     expect(mem['ws-2']).toBe('sess-2')
+  })
+})
+
+describe('appStore disconnect timeout settings', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    useAppStore.setState({
+      blurDisconnectMin: 10,
+      idleDisconnectMin: 15,
+      acpIdleRecycleMin: 5,
+    })
+  })
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('clamps blurDisconnectMin to 1..60 and persists to omniterm_blur_disconnect_min', () => {
+    const s = useAppStore.getState()
+    s.setBlurDisconnectMin(0)
+    expect(useAppStore.getState().blurDisconnectMin).toBe(1)
+    expect(localStorage.getItem('omniterm_blur_disconnect_min')).toBe('1')
+    s.setBlurDisconnectMin(61)
+    expect(useAppStore.getState().blurDisconnectMin).toBe(60)
+    expect(localStorage.getItem('omniterm_blur_disconnect_min')).toBe('60')
+    s.setBlurDisconnectMin(30)
+    expect(useAppStore.getState().blurDisconnectMin).toBe(30)
+    expect(localStorage.getItem('omniterm_blur_disconnect_min')).toBe('30')
+  })
+
+  it('clamps idleDisconnectMin to 1..60 and persists to omniterm_idle_disconnect_min', () => {
+    const s = useAppStore.getState()
+    s.setIdleDisconnectMin(0)
+    expect(useAppStore.getState().idleDisconnectMin).toBe(1)
+    expect(localStorage.getItem('omniterm_idle_disconnect_min')).toBe('1')
+    s.setIdleDisconnectMin(61)
+    expect(useAppStore.getState().idleDisconnectMin).toBe(60)
+    expect(localStorage.getItem('omniterm_idle_disconnect_min')).toBe('60')
+    s.setIdleDisconnectMin(30)
+    expect(useAppStore.getState().idleDisconnectMin).toBe(30)
+    expect(localStorage.getItem('omniterm_idle_disconnect_min')).toBe('30')
+  })
+
+  it('clamps acpIdleRecycleMin to 1..60 without writing localStorage', () => {
+    const s = useAppStore.getState()
+    s.setAcpIdleRecycleMin(0)
+    expect(useAppStore.getState().acpIdleRecycleMin).toBe(1)
+    s.setAcpIdleRecycleMin(61)
+    expect(useAppStore.getState().acpIdleRecycleMin).toBe(60)
+    // acp setter is in-memory only — must not touch any localStorage key.
+    expect(localStorage.length).toBe(0)
+  })
+})
+
+describe('appStore disconnect timeout initial values', () => {
+  it('defaults blur/idle/acp to 10/15/5 when localStorage has no values', async () => {
+    localStorage.clear()
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    const s = freshStore.getState()
+    expect(s.blurDisconnectMin).toBe(10)
+    expect(s.idleDisconnectMin).toBe(15)
+    expect(s.acpIdleRecycleMin).toBe(5)
+  })
+
+  it('self-heals NaN persisted values to defaults', async () => {
+    localStorage.setItem('omniterm_blur_disconnect_min', 'NaN')
+    localStorage.setItem('omniterm_idle_disconnect_min', 'NaN')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    const s = freshStore.getState()
+    expect(s.blurDisconnectMin).toBe(10)
+    expect(s.idleDisconnectMin).toBe(15)
+  })
+
+  it('self-heals out-of-range persisted values to defaults', async () => {
+    localStorage.setItem('omniterm_blur_disconnect_min', '0')
+    localStorage.setItem('omniterm_idle_disconnect_min', '999')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    const s = freshStore.getState()
+    expect(s.blurDisconnectMin).toBe(10)
+    expect(s.idleDisconnectMin).toBe(15)
+  })
+
+  it('reads valid persisted values within range', async () => {
+    localStorage.setItem('omniterm_blur_disconnect_min', '25')
+    localStorage.setItem('omniterm_idle_disconnect_min', '40')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    const s = freshStore.getState()
+    expect(s.blurDisconnectMin).toBe(25)
+    expect(s.idleDisconnectMin).toBe(40)
   })
 })
