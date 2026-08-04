@@ -36,6 +36,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
    - 禁 Copy-Paste 代码（须提取公共函数）
    - 禁魔法数字/硬编码（须提取至常量/配置）
    - 禁留存无用死代码
+   - 禁无界累积/无界缓冲（一切 push/append/collect 的累积结构必须有显式上限 + 超限策略 + 单测，详见 `docs/dev/performance-and-safety.md` §P1）
 7. **奥卡姆剃刀与可维护性的平衡（抽象有度）**
    - **默认不增实体**：没有真实收益时，不引入多余的抽象层、配置项、依赖、工具函数或开关；新实体须由**当前已确证**的需求证明，而非"将来可能用到"。
    - **但出现以下任一信号时，必须主动增加抽象层或拆分模块来解耦**——此时"当下代码量最少"要让位于"未来改起来省力"：
@@ -94,6 +95,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/visual-design/ui-style-guide.md` | 任何涉及 UI 的**修改或规范撰写**（组件样式、布局、色板、字体、尺寸 token、面板/弹窗视觉态、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距）、补充面板/弹窗尺寸规格 |
 | `docs/reference/user-testing.md` | 功能开发完成后的手动回归测试 | 新增测试用例、发现并记录已知限制 |
 | `docs/dev/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（可复用理论 → 诊断错误 → 具体根因），详见文档头部写作规范 |
+| `docs/dev/performance-and-safety.md` | 涉及数据累积/缓冲、持久化写入策略、外部输入（agent 通知/用户输入/文件内容）、命令执行、跨层数据传输或吞吐量相关的代码前**必读** | 新增性能/安全红线、检查项调整、补充新案例 |
 | `docs/reference/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |
 | `docs/reference/references.md` | 需要查看外部参考实现或 License 合规规则 | 新增参考仓库、License 规则变更 |
 | `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |
