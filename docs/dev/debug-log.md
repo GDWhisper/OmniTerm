@@ -998,3 +998,27 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 根因链：reaper 30s tick 判定 idle 超时 → `supervisor.dispose(&sid)` 从 HashMap 移除 + 广播 `alive:false`（`supervisor.rs:51-59`）→ `Arc::try_unwrap(client)` 失败（WS handler 在 `ws/acp.rs:411` 持有 `Option<Arc<AcpClient>>`）→ 不调 `disconnect` → connection_task 不退出、子进程不 kill、WS 不断 → 用户可继续对话（`client` 仍是 Some）→ 但 supervisor 已移除该 session → `list_sessions` 的 `acp_process_alive=false`（`sessions.rs:77-91`）→ Sidebar 灰「已释放」→ 此后无 insert 事件 → 永不恢复，进程还脱离 reaper 管辖无限驻留。
 - 修复：reaper 回收（`src/acp/reaper.rs`）、`cleanup_session_runtime` 删除会话（`src/api/sessions.rs`）、`release_session` 手动释放（`src/api/sessions.rs`）、load_session 覆盖旧 client（`src/ws/acp.rs`）四处统一改为 `client.shutdown().await`（shared reference 立即 kill 子进程 + 触发连接任务退出）。修复后 dispose 移除与进程死亡同步：进程被杀 → WS 断开 → 前端自动重连 → supervisor miss 发 `session_not_found` → ChatView 显示 restore 按钮 → 用户 restore 后 `insert` 广播 `alive:true` → Sidebar 恢复绿色，状态全程一致。
 - 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test`（126+8+2 全过）。
+
+## 2026-08-04: 长 ACP turn 的「无界帧累积 + 全量重写」O(n²) 吃满单核——CPU 脉冲与浏览器顿卡的共同根因
+
+**症状**：preview 分支上执行长任务时，Linux 上 `omniterm` 主进程吃满 ~91% 单核（top 呈周期性脉冲），进程 RES 内存涨到 4.5GB 且持续增长；远程连入的 Windows 浏览器同步顿卡。
+
+**可复用的理论/模式**：
+
+**1. 「防抖写」不等于「增量写」：每写一次就全量重新序列化累积状态的防抖，会把 O(n) 的单次写放大成 O(n²) 的总成本**。`turn_accumulator` 的 writer 每 250ms~1s flush 一次，每次把**全部**累积帧 `json!` 重序列化 + `upsert` 覆盖写库。帧数 n 随 turn 时长线性增长，每次 flush 成本随之线性增长，长期运行总成本是平方级。**任何「周期快照整个增长中的缓冲区」的模式，缓冲区必须有界**——否则 CPU、内存、存储（DB 膨胀）三者一起平方膨胀，且三者是同一根因的三个投影。
+
+**2. 无界累积的进度状态必然同时伤害内存、CPU 和传输带宽**：同一条消息的 `blocks` 从几百 KB 涨到 100MB（7.7 万帧），进程 RES 4.5GB、flush 序列化吃满 tokio worker、WS/hydrate 把 100MB 原始帧推给浏览器导致前端卡死。三处症状同源，诊断时从「累积缓冲是否有界」切入可一击命中，不必逐个排查。
+
+**3. 「用户感知的症状」先归属到层再排查**：浏览器顿卡听起来是前端问题，但 top 里 91% CPU 的 `omniterm` 是**后端进程**——前端渲染再烂也不会上 Linux 主进程的 CPU。先看 top 里高占用进程的归属（前端浏览器 / 后端 / agent 子进程），别被症状带偏到错误的层。
+
+**诊断过程中的错误**：
+
+1. **一开始怀疑前端渲染（markdown 全量解析）**——因为「浏览器顿卡」的症状符合前端热点；但 Linux 侧 91% CPU 的 omniterm 是后端，前端 markdown 解析再重也只是浏览器进程。**顶层判定先做「症状归属」：top 里的高 CPU 进程是哪个二进制？**
+2. **perf/gdb 都因权限不可用**（`perf_event_paranoid` / `ptrace_scope`）。不硬磕工具，换更快的路径：`/proc/<pid>/task/*/stat` 两次采样定位到热点线程（`tokio-rt-worker` 99%）→ 查 SQLite 单条 `blocks` 长度（100MB）→ 提取 blocks 数帧构成（thought 4.7 万 / tool 2.4 万 / text 0.6 万）→ 读代码确认 fold 无界 push + snapshot 全量重写。**DB 内容 + 代码审计是权限受限时的替代证据链**。
+3. 中途看到 VIRT 5.6GB→6.5GB 的快速增长一度怀疑是 agent_client_protocol 库的 stdout 缓冲，方向偏了——实际是 turn_accumulator 的 frames 无界累积。**内存暴涨先找「谁在累积」，按增长速率 × 时长反推总量，再对代码里的 `push`/`append` 逐一核对是否有界**。
+
+**具体根因与修复**：
+
+- 根因链：`turn_accumulator::fold` 每收一条 agent notification 就把完整 JSON `push` 进 `Vec<Value>`（`turn_accumulator.rs`），只在下个 `begin_turn` 才清空 → 长任务中 opencode 类 agent 高频推送 thought/tool chunk（实测 ~7.7 万帧，thought 占 61%）→ frames 无界膨胀 → `snapshot()` 每次 flush 全量重序列化（O(n)）+ `upsert_streaming_message` 全量覆盖写库 → 单条 `blocks` 100MB、DB 262MB、进程 RES 4.5GB、一个 tokio worker 被序列化+写库占满 99%。WS/hydrate 再把 100MB 推给浏览器 → 远程前端顿卡。
+- 修复：① `turn_accumulator.rs`：`frames` 从 `Vec<Value>` 改 `VecDeque<Value>`，新增 `MAX_FRAMES=2000` 有界窗口，fold 超限 `pop_front` 丢弃最旧帧；`text` 仍全量累积（正文完整），turn 结束后前端 `syncToDb` 写回完整结构化 blocks。② 前端 `useAcpChat.ts` `rawFramesToBlocks` 加 `MAX_BLOCKS_FRAMES=2000` `slice(-N)` 防御存量超大 blocks 在 hydrate 时逐帧分类卡死。
+- 验证：`cargo check` / `cargo fmt --check` / `cargo clippy -D warnings` 全过；新增单测 `frames_retention_is_bounded_over_long_turn`（fold 5000 帧 → frames 恰为 2000、text 全量 5000 chunk）；前端 `tsc -b` / eslint / vitest 174 全过。
