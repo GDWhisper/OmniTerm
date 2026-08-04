@@ -99,7 +99,8 @@ pub struct Session {
     pub agent_detected: Option<String>,
     // ACP agent subprocess currently resident in the supervisor (runtime, not persisted).
     // `true` = process alive and reachable; `false` = released/reaped, session can be restored.
-    #[serde(skip_serializing_if = "is_false")]
+    // 恒序列化（不 skip false）：前端轮询整体替换 sessions 时若缺省该字段会把「已释放」
+    // 态覆盖成 undefined，导致恢复按钮/DEAD 指示闪断（见 ws/acp.rs 发送即自动恢复）。
     #[sqlx(default)]
     pub acp_process_alive: bool,
 }

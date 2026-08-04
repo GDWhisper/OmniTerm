@@ -1056,3 +1056,28 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 修复②（`frontend/src/index.css`）：`@media (pointer: coarse)` 下隐藏 `.xterm-viewport` 原生滚动条（`scrollbar-width:none` + `::-webkit-scrollbar{display:none}`）——移动端历史滚动走 touch-drag → 合成 wheel → tmux copy-mode，不经 viewport 滚动条。
 - 修复③（`frontend/src/index.css`）：同一 media query 下 `.terminal-panel-pixel .xterm-screen { width: 100% !important }` + `.terminal-panel-pixel .xterm-rows > div { width: 100% !important; overflow: visible !important }`——screen 与行 div 都填满容器（列仍自左按 cellWidth 排布），取消行 div 的 `overflow: hidden`，末列字符不再被行 div 裁剪；缓冲区为终端底色（行背景 transparent），普通行无黑条，tmux 状态栏高亮段自然延伸至字符区右缘。
 - 验证：多视口宽度扫描（320/360/390/414/430 + 临界 384-389）末列字符右边缘距 viewport 右缘恒 ≥ 2.59px（48 列半角与全角「汉」均完整），screen=viewport 宽 gap 0；桌面 1440px gap 9px（滚动条预留）零回归；`tsc -b` / eslint（0 error）/ vitest 177 全过。
+
+---
+
+## 2026-08-04: reaper 释放后「恢复会话」按钮短暂出现即消失，发送报 Internal error——WS 未断但连接已死 + skip_serializing_if 吞掉 false
+
+**症状**：ACP 会话静默空闲 5 分钟被 reaper 回收后，「恢复会话」按钮短暂出现即消失（用户以为是点击输入框导致），发送消息报 `Internal error: failed to send outgoing request session/prompt: connection is no longer running`。体验断裂：明明进程已释放，UI 却允许发送且报错。
+
+**可复用的理论/模式**：
+
+**1. `skip_serializing_if = "is_false"` 会把「显式 false 有语义」的布尔字段在响应里抹掉，而轮询整体替换会把「字段缺失」当成「非 false」**。`acp_process_alive` 的 released 态就是 `false` 本身（≠ 缺失）：WS 事件帧把 sessions 里该字段置 `false`，前端 3s 轮询 `setSessions(api.listSessions())` 整体替换数组，而 list_sessions 响应因 skip_serializing_if 不含该字段 → 合并结果变成 `undefined` → `released` 判定失败 → 按钮/DEAD 指示闪断。**判定：布尔字段若承担「三态语义」（true/false/缺失等价于某态），绝不可 skip；skip 只适合「字段缺省 = false」的纯可选标注**（如 is_active 类）。修复：恒序列化，或把该字段移出会被整体替换的数组进独立 store。
+
+**2. 两个写同一字段的真相源必须语义等价，否则快的那次被慢的那次整体覆盖**：WS 事件驱动（`setAcpProcessAlive` 精准到瞬间）与轮询整体替换（`setSessions` 每 3s 一次）写的是同一个 sessions 数组里的同一个字段。事件驱动状态天然脆弱——任何「整体替换」的写方只要响应里缺该字段就会冲掉它。**事件驱动状态要么收敛进不被整体替换的独立 store，要么保证每个写方的响应字段完整**。
+
+**3. 「WS 没断」≠「连接可用」：进程/连接级存活与 WS 传输级存活是两个独立事实**。reaper `shutdown` 只杀 agent 子进程并让 ACP 连接任务退出，但 WS handler 主循环仍持有 `notify_tx`（mpsc 不关闭），`client` 是 `Some(死连接)`——WS 保持打开、前端显示 connected、输入可用。**发送类操作必须用连接级活性检测（`ConnectionTo::is_incoming_closed()`），不能依赖 WS open 状态**。同类：debug-log 2026-08-04「reaper 回收后 WS 断开→前端自动重连」的描述与此不符——轻信文档注释的「意图」会漏掉真实行为（WS 实际未断，是连接死了）。
+
+**诊断过程中的错误**：
+
+1. **被「点击输入框后按钮消失」带偏**：以为是输入框 focus 触发了什么状态翻转，实际是 3s 轮询的时间巧合（process_alive:false 帧到达 → 按钮出现 → ≤3s 内下一轮轮询把字段抹掉）。**「用户动作前后变化」要先排除周期任务/轮询的巧合，再归因到动作本身**。
+2. **轻信既有 debug-log 的「修复后行为描述」**：上一条 2026-08-04 记录声称修复后「WS 断开 → 前端自动重连 → supervisor miss 发 session_not_found」，据此先假设了重连路径，但用户实际能发送并收到库错误——这要求 WS 保持打开 + client 是 Some(死连接)，与文档描述矛盾。**文档写的是意图/预期，排查时必须回到代码验证真实链路**。
+
+**具体根因与修复**：
+
+- 根因链：reaper 回收 → `supervisor.dispose`（广播 `alive:false`）+ `client.shutdown`（杀进程，WS 不断）→ 前端 `released=true` 按钮短暂出现 → 3s 轮询整体替换 sessions，`acp_process_alive` 因 `#[serde(skip_serializing_if="is_false")]` 缺失 → 按钮消失 → 用户发送 → 后端 `client` 为 Some 但 `ConnectionTo` 已停 → `send_request` 报 "connection is no longer running" 原样透传。
+- 修复（发送即自动恢复，`src/ws/acp.rs` / `src/acp/client.rs` / `src/models/session.rs`）：① `AcpClient::is_alive()`（`!is_incoming_closed()`）检测死连接，Prompt 到达时 client 缺失/已死则自动 `restore_acp_session`（与手动恢复共用流程）→ 历史重放完成后 `dispatch_prompt` 延迟发送；② 连接时按 `sessions` 行存在性区分「已释放可恢复」与「已删除」，行存在不再发 `session_not_found`，前端保持 released 态输入可用；③ `acp_process_alive` 移除 `skip_serializing_if` 恒序列化，轮询不再抹掉 released 态。
+- 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test`（145 passed）/ `cargo fmt --check` 全过。

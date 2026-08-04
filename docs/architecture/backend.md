@@ -141,6 +141,14 @@ per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分
 
 turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `AcpClient` 的 `turn_end_tx` broadcast 发给**所有** WS 连接（`spawn_turn_end_task`），与 `session_update`/`crash` 同模式。不能只回发起 prompt 的连接：prompt task 存活期跨 WS 重连，per-connection 通道会把结束帧发进死连接被静默丢弃，重连后的前端永远停留在 running 态。
 
+### 发送即自动恢复（进程已释放）
+
+reaper 空闲回收 / 手动 release / 后端重启都会让 ACP agent 子进程离开 supervisor，但 WS 连接（`ws/acp.rs::handle_acp_ws`）不随之关闭——主循环仍持有 `notify_tx`，`client` 为 `Some`（连接已死）。此前用户此时发送 prompt 会命中死连接，`send_request` 报 "connection is no longer running" 原样透传前端。现在：
+
+- **Prompt 到达时按需恢复**：`AcpClient::is_alive()`（`!connection.is_incoming_closed()`）检测连接活性。client 缺失或已死 → 调 `restore_acp_session`（spawn agent + supervisor 注册 + 历史重放转发，与手动 `load_session` 复用同一流程），返回 `(new_client, replay_handle)`；历史重放完成后才经 `dispatch_prompt` 发送 prompt（避免与 replay 帧交错）。前端零改动——重放走既有 replay 协议，`suppressReplay`（非手动 restore 且本地已有消息）自动丢弃重放内容帧，用户刚发的消息保留。
+- **连接时区分「已释放可恢复」与「已删除」**：supervisor miss 时查 `sessions` 行存在性。行存在（可恢复）→ 只发 `process_alive:false` 不发 `session_not_found`，前端保持 released 态、输入可用；行已删 → 发 `session_not_found` 标记 ended。
+- **`acp_process_alive` 恒序列化**（`src/models/session.rs`，移除 `skip_serializing_if`）：此前 false 不出现在 `list_sessions` 响应，前端 3s 轮询整体替换 sessions 会把「已释放」态覆盖成 undefined，导致恢复按钮/DEAD 指示闪断。
+
 ### Multi-implementation compatibility
 
 ACP is a protocol satisfied by multiple agent implementations. **Do not assume one implementation's behavior is the protocol.** For any field/notification/capability that is optional or may be absent, implement a fallback and document the divergence in code comments — but keep case-specific details out of AGENTS.md (they go stale). Before adding protocol-touching logic, verify the field's behavior across implementations rather than inferring the whole from one. (See AGENTS.md §8 多实现兼容性.)

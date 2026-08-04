@@ -668,6 +668,13 @@ impl AcpClient {
         self.supports_image
     }
 
+    /// ACP 连接是否仍可发送请求（agent 子进程存活且未被释放）。
+    /// 供 WS 层在 prompt 到达时判断是否需要自动恢复：reaper 空闲回收 / 手动
+    /// release / 后端重启 / agent 崩溃后连接进入 incoming-EOF，返回 false。
+    pub fn is_alive(&self) -> bool {
+        !self.connection.is_incoming_closed()
+    }
+
     // ---- 活跃度跟踪（供空闲回收看护任务 reaper 使用）----
 
     /// 收到任意 agent 通知时刷新最后活动时间。
