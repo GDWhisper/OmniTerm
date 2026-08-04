@@ -16,6 +16,9 @@ vi.mock('../../api/client', () => ({
     systemInfo: vi.fn().mockResolvedValue({ home_dir: '/home/user' }),
     listDuplicates: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
+    createWorktree: vi.fn(),
+    listBranches: vi.fn(),
+    initGit: vi.fn(),
     listDirs: vi.fn().mockResolvedValue({ files: [] }),
     pathExists: vi.fn().mockResolvedValue({ exists: true }),
     versionCheck: vi.fn().mockResolvedValue({ current: '0.1.9', latest: '0.1.9', update_available: false, channel: 'github_release' }),
@@ -249,6 +252,107 @@ describe('Sidebar handleCreateSession', () => {
     await vi.waitFor(() => {
       expect(useAppStore.getState().activeSessionId).toBe(fakeNewSession.id)
     })
+  })
+
+  it('非 git 仓库项目点击创建 worktree 的 + 时弹出初始化确认框，确认后调用 initGit', async () => {
+    i18n.changeLanguage('en')
+    // listBranches rejects with a mocked ApiError carrying code=not_a_git_repo.
+    // The vi.mock factory's ApiError has signature (message, status, body),
+    // which differs from the real class — cast to the mock signature.
+    const MockApiError = ((await import('../../api/client')).ApiError as unknown as new (
+      message: string,
+      status: number,
+      body?: unknown
+    ) => Error)
+    const notGitError = new MockApiError('project is not a git repository', 400, {
+      code: 'not_a_git_repo',
+      has_gitignore: false,
+    })
+    vi.mocked(api.listBranches).mockRejectedValue(notGitError)
+
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeProject.name)
+    })
+
+    // Click the project's "+" (create worktree) button. The project is
+    // collapsed by default, so clicking the header expands it first.
+    const projectHeader = container.querySelector('.sidebar-project-header') as HTMLElement
+    projectHeader!.click()
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeWorkspace.label)
+    })
+
+    // The header "+" button has title="Create Worktree"
+    const wtAddButton = (Array.from(container.querySelectorAll('button')).find(btn =>
+      btn.getAttribute('title') === 'Create Worktree' || btn.getAttribute('title') === '创建 Worktree'
+    ) || (Array.from(container.querySelectorAll('button')).find(btn =>
+      btn.querySelector('svg') !== null && btn.getAttribute('title')?.includes('Worktree')
+    ))) as HTMLElement
+    expect(wtAddButton).toBeTruthy()
+    wtAddButton!.click()
+
+    // Confirm dialog should appear (portaled to body) with the git-init copy
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Initialize Git Repository?')
+    })
+
+    // No .gitignore → the warning about committing all existing files shows
+    expect(document.body.textContent).toContain('no .gitignore detected')
+
+    // Click the confirm button (confirmText = 'Initialize & Continue')
+    const confirmBtn = (Array.from(document.body.querySelectorAll('button')).find(btn =>
+      btn.textContent?.includes('Initialize & Continue')
+    )) as HTMLElement
+    expect(confirmBtn).toBeTruthy()
+    confirmBtn!.click()
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.initGit)).toHaveBeenCalledWith(fakeProject.id)
+    })
+  })
+
+  it('项目目录已有 .gitignore 时确认框不显示提交警告', async () => {
+    i18n.changeLanguage('en')
+    const MockApiError = ((await import('../../api/client')).ApiError as unknown as new (
+      message: string,
+      status: number,
+      body?: unknown
+    ) => Error)
+    const notGitError = new MockApiError('project is not a git repository', 400, {
+      code: 'not_a_git_repo',
+      has_gitignore: true,
+    })
+    vi.mocked(api.listBranches).mockRejectedValue(notGitError)
+
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeProject.name)
+    })
+    const projectHeader = container.querySelector('.sidebar-project-header') as HTMLElement
+    projectHeader!.click()
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeWorkspace.label)
+    })
+    const wtAddButton = (Array.from(container.querySelectorAll('button')).find(btn =>
+      btn.getAttribute('title') === 'Create Worktree' || btn.getAttribute('title') === '创建 Worktree'
+    )) as HTMLElement
+    wtAddButton!.click()
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Initialize Git Repository?')
+    })
+    expect(document.body.textContent).not.toContain('no .gitignore detected')
   })
 
   it('连接状态 badge 文本不换行（防 CJK 竖排堆叠）', async () => {

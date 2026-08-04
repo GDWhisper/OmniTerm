@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
             "/projects/{id}/worktrees",
             get(list_worktrees).post(create_worktree).delete(delete_worktree),
         )
+        .route("/projects/{id}/git-init", axum::routing::post(init_project_git))
         .route("/projects/{id}/branches", get(list_branches))
         .route("/projects/{id}/merge-into/{target_id}", axum::routing::post(merge_project_into))
 }
@@ -201,6 +202,28 @@ async fn delete_project(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    // 先取该项目下全部 session 的运行时信息，逐个清理进程资源
+    // （psmux/tmux 会话、acp agent 子进程），再删 DB——否则会话进程残留。
+    let sessions: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, tmux_session_name, runtime_kind FROM sessions WHERE project_id = ?",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap();
+
+    for (session_id, tmux_name, runtime_kind) in sessions {
+        crate::api::sessions::cleanup_session_runtime(
+            &state,
+            &session_id,
+            tmux_name.as_deref(),
+            &runtime_kind,
+        )
+        .await;
+        // 清理该会话的配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
+        let _ = crate::acp::config_prefs::clear_session_configs(&state.db, &session_id).await;
+    }
+
     // Cascade: delete sessions first
     sqlx::query("DELETE FROM sessions WHERE project_id = ?")
         .bind(&id)
@@ -227,6 +250,10 @@ struct CreateWorktreeRequest {
     path: Option<String>,
     base_branch: Option<String>,
     detach: Option<bool>,
+    /// Initialize the project directory as a git repo first (with an
+    /// initial commit) when it isn't one yet. Set by the frontend after the
+    /// user confirms the "not a git repo" prompt.
+    init: Option<bool>,
 }
 
 async fn create_worktree(
@@ -245,10 +272,17 @@ async fn create_worktree(
     };
 
     if !crate::git::is_git_repo(&project.path).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "project is not a git repository" })),
-        );
+        if req.init.unwrap_or(false) {
+            // User confirmed: initialize the repo, then fall through to add
+            // the worktree on the freshly created HEAD.
+            if let Err(e) = crate::git::init_repo(&project.path).await {
+                let msg = e.to_string();
+                let short = msg.lines().last().unwrap_or(&msg).to_string();
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": short })));
+            }
+        } else {
+            return not_a_git_repo(&project);
+        }
     }
 
     let target_path = req.path.unwrap_or_else(|| {
@@ -300,6 +334,47 @@ struct DeleteWorktreeQuery {
     path: String,
 }
 
+/// Shared "project is not a git repository" error response. Carries a
+/// machine-readable `code` plus `has_gitignore` so the frontend can warn the
+/// user that initializing the repo will commit all existing files when no
+/// `.gitignore` is present.
+fn not_a_git_repo(project: &Project) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "error": "project is not a git repository",
+            "code": "not_a_git_repo",
+            "has_gitignore": crate::git::has_gitignore(&project.path),
+        })),
+    )
+}
+
+/// Initialize the project's directory as a git repository (with an initial
+/// commit) so worktrees can be created. Called from the frontend after the
+/// user confirms the "not a git repo" prompt on the create-worktree flow.
+async fn init_project_git(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let project: Option<Project> = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+
+    let Some(project) = project else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "project not found" })));
+    };
+
+    if let Err(e) = crate::git::init_repo(&project.path).await {
+        let msg = e.to_string();
+        let short = msg.lines().last().unwrap_or(&msg).to_string();
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": short })));
+    }
+
+    (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
 async fn delete_worktree(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -316,10 +391,7 @@ async fn delete_worktree(
     };
 
     if !crate::git::is_git_repo(&project.path).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "project is not a git repository" })),
-        );
+        return not_a_git_repo(&project);
     }
 
     // Safety: refuse to remove the project's own path (main worktree).
@@ -370,10 +442,7 @@ async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) ->
     };
 
     if !crate::git::is_git_repo(&project.path).await {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "project is not a git repository" })),
-        );
+        return not_a_git_repo(&project);
     }
 
     let (branches_res, current_res) = tokio::join!(

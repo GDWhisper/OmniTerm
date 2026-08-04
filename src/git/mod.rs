@@ -21,6 +21,77 @@ pub async fn is_git_repo(path: &str) -> bool {
     String::from_utf8_lossy(&output.stdout).trim() == "true"
 }
 
+/// Whether the directory at `path` contains a `.gitignore` file.
+///
+/// Used to warn the user before initializing a fresh repo: `init_repo`
+/// stages everything (`git add -A`), so without ignore rules the initial
+/// commit may include build artifacts, secrets, or other files the user
+/// didn't intend to track.
+pub fn has_gitignore(path: &str) -> bool {
+    std::path::Path::new(path).join(".gitignore").is_file()
+}
+
+/// Initialize a git repository at `path` and create an initial commit.
+///
+/// Needed when a project directory isn't a git repo yet but the user wants
+/// to create worktrees. `git worktree add` technically works on an empty
+/// repo (git infers `--orphan`), but the resulting worktree would contain
+/// none of the project files — so we do the standard thing: `git init`,
+/// stage everything, and commit. Uses a local (repo-scoped) identity if the
+/// user has no global `user.name`/`user.email`, never touching the global
+/// config. No-op when the path is already a git repo with commits.
+pub async fn init_repo(path: &str) -> anyhow::Result<()> {
+    // git init is idempotent on an existing repo.
+    let init = Command::new("git").args(["-C", path, "init"]).output().await?;
+    if !init.status.success() {
+        let stderr = String::from_utf8_lossy(&init.stderr);
+        anyhow::bail!("git init failed: {}", stderr.trim());
+    }
+
+    // If the repo already has a HEAD, there's nothing to initialize.
+    let head =
+        Command::new("git").args(["-C", path, "rev-parse", "--verify", "HEAD"]).output().await?;
+    if head.status.success() {
+        return Ok(());
+    }
+
+    // `git commit` aborts without an identity. Prefer the user's existing
+    // (global or local) config; only fall back to a repo-scoped identity so
+    // the initial commit succeeds without mutating the user's global config.
+    for key in ["user.name", "user.email"] {
+        let probe = Command::new("git").args(["-C", path, "config", key]).output().await?;
+        let missing = !probe.status.success() || probe.stdout.is_empty();
+        if missing {
+            let fallback = if key == "user.name" { "omniterm" } else { "omniterm@localhost" };
+            let set =
+                Command::new("git").args(["-C", path, "config", key, fallback]).output().await?;
+            if !set.status.success() {
+                let stderr = String::from_utf8_lossy(&set.stderr);
+                anyhow::bail!("git config {} failed: {}", key, stderr.trim());
+            }
+        }
+    }
+
+    let add = Command::new("git").args(["-C", path, "add", "-A"]).output().await?;
+    if !add.status.success() {
+        let stderr = String::from_utf8_lossy(&add.stderr);
+        anyhow::bail!("git add failed: {}", stderr.trim());
+    }
+
+    // --allow-empty handles a directory with no trackable files (e.g. only
+    // ignored files) so the repo still gets a usable HEAD for worktrees.
+    let commit = Command::new("git")
+        .args(["-C", path, "commit", "--allow-empty", "-m", "Initial commit"])
+        .output()
+        .await?;
+    if !commit.status.success() {
+        let stderr = String::from_utf8_lossy(&commit.stderr);
+        anyhow::bail!("git commit failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 /// Discover all git worktrees for the repository at the given path.
 /// Runs `git worktree list --porcelain` and parses the output.
 pub async fn discover_worktrees(path: &str) -> anyhow::Result<Vec<WorktreeInfo>> {
@@ -148,6 +219,81 @@ fn parse_worktree_list(raw: &str) -> Vec<WorktreeInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TMP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    /// Create a fresh empty directory under the system temp dir for tests
+    /// that need to run real git commands.
+    fn temp_dir() -> std::path::PathBuf {
+        let n = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("omniterm-git-test-{}-{}", std::process::id(), n));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_init_repo_creates_head() {
+        let dir = temp_dir();
+        init_repo(dir.to_str().unwrap()).await.unwrap();
+        assert!(is_git_repo(dir.to_str().unwrap()).await);
+        let output = Command::new("git")
+            .args(["-C", dir.to_str().unwrap(), "rev-parse", "--verify", "HEAD"])
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success(), "HEAD should exist after init_repo");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_init_repo_stages_existing_files() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("hello.txt"), "world").unwrap();
+        init_repo(dir.to_str().unwrap()).await.unwrap();
+        // The staged file should be committed, so it shows up in `git ls-files`.
+        let output = Command::new("git")
+            .args(["-C", dir.to_str().unwrap(), "ls-files"])
+            .output()
+            .await
+            .unwrap();
+        let files = String::from_utf8_lossy(&output.stdout);
+        assert!(files.contains("hello.txt"), "existing file should be committed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_init_repo_idempotent_on_existing_repo() {
+        let dir = temp_dir();
+        init_repo(dir.to_str().unwrap()).await.unwrap();
+        let first_head = Command::new("git")
+            .args(["-C", dir.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .await
+            .unwrap();
+        let first = String::from_utf8_lossy(&first_head.stdout).to_string();
+
+        // Second call should be a no-op and keep the same HEAD.
+        init_repo(dir.to_str().unwrap()).await.unwrap();
+        let second_head = Command::new("git")
+            .args(["-C", dir.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .await
+            .unwrap();
+        let second = String::from_utf8_lossy(&second_head.stdout).to_string();
+        assert_eq!(first, second, "init_repo must not create a second commit");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_has_gitignore_detects_file() {
+        let dir = temp_dir();
+        assert!(!has_gitignore(dir.to_str().unwrap()), "no .gitignore yet");
+        std::fs::write(dir.join(".gitignore"), "node_modules\n").unwrap();
+        assert!(has_gitignore(dir.to_str().unwrap()), ".gitignore should be detected");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn test_parse_worktree_list_single() {

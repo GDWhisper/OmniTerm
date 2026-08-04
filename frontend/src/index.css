@@ -1683,6 +1683,37 @@ body.parchment-texture {
   background: #12141A !important;
 }
 
+/* Touch devices: scrollbars are overlay (zero-width) and the terminal's
+   history scrolling goes through the touch-drag → wheel bridge, never the
+   native viewport scrollbar. Hide xterm's scrollbar so a transient thumb
+   never covers the last column (which now fits flush against the panel edge
+   thanks to the mobile fit correction in useTerminal.ts). */
+@media (pointer: coarse) {
+  .terminal-panel-pixel .xterm-viewport {
+    scrollbar-width: none; /* Firefox */
+  }
+  .terminal-panel-pixel .xterm-viewport::-webkit-scrollbar {
+    display: none; /* Chromium / Safari */
+  }
+  /* xterm sizes .xterm-screen and its rows to cols × cellWidth and clips
+     rows (overflow: hidden), so the last column sits flush against the
+     grid edge with no buffer for font-rendering overshoot (measured
+     cellWidth is a hair narrower than glyphs actually paint) — on viewport
+     widths where the cols×cellWidth leftover is ~0 the last character gets
+     clipped. Fill the screen AND its rows to the container and stop
+     clipping rows: columns still lay out from the left by cellWidth, but
+     the right edge now has the deterministic margin guaranteed by the
+     mobile fit's proportional safety margin (useTerminal.ts), independent
+     of viewport width / DPR / font metrics. */
+  .terminal-panel-pixel .xterm-screen {
+    width: 100% !important;
+  }
+  .terminal-panel-pixel .xterm-rows > div {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel float — unified elevation for ALL floating layers (modal,
    popup, dropdown, tooltip, autocomplete). Hard 4px shadow, no blur,

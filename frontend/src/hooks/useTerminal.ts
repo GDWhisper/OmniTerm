@@ -358,13 +358,19 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     ws.send(new TextEncoder().encode(key))
   }, [])
 
-  /** Exit tmux copy mode by sending 'q' — only if actually in copy mode */
+  /** Exit tmux copy mode — only if we believe tmux is actually in copy mode.
+   *
+   *  Sends Escape instead of `q`: tmux's default copy-mode key table binds
+   *  both to cancel, but `q` gets *typed into the shell* if tmux already left
+   *  copy mode (the touch-scroll path enters `copy-mode -e`, which auto-exits
+   *  when scrolled back to the bottom of history — we cannot detect that), while
+   *  a lone Escape is a no-op in a shell command line. */
   const exitScrollMode = useCallback(() => {
     if (!tmuxScrollModeRef.current) {
       setScrollMode(false)
       return
     }
-    sendData('q')
+    sendData('\x1b')
     tmuxScrollModeRef.current = false
     setScrollMode(false)
   }, [sendData])
@@ -458,6 +464,44 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     term.loadAddon(fit)
     term.loadAddon(webLinks)
     term.open(container)
+
+    // Mobile fit correction. FitAddon measures the container's border-box
+    // (padding included, never subtracted) and always reserves the desktop
+    // scrollbar width (DEFAULT_SCROLL_BAR_WIDTH = 14px) when scrollback is
+    // enabled. On touch devices the scrollbar is overlay (zero-width), so
+    // both errors stack up: the rendered cell grid stops ~11px short of the
+    // container's right edge and the black .xterm-viewport background shows
+    // through as a vertical strip with no content (reported as "right side
+    // of the tmux terminal cut off"). Recompute against the container's
+    // actual content box on mobile; the desktop path stays untouched.
+    const proposeOriginal = fit.proposeDimensions.bind(fit)
+    fit.proposeDimensions = () => {
+      if (!useAppStore.getState().isMobile) return proposeOriginal()
+      const core = (term as unknown as {
+        _core: {
+          _renderService: { dimensions: { css: { cell: { width: number; height: number } } } }
+        }
+      })._core
+      const cell = core._renderService.dimensions.css.cell
+      // Cell metrics are only available after the first render pass.
+      if (cell.width === 0 || cell.height === 0) return proposeOriginal()
+      const cs = window.getComputedStyle(container)
+      const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+      const width = container.clientWidth - padX
+      const height = container.clientHeight - padY
+      // Reserve a small proportional margin so the rightmost column is never
+      // clipped. Font metrics measure a hair narrower than glyphs actually
+      // render, and on viewport widths where the cols×cellWidth leftover is
+      // ~0 the last character would overflow the panel edge. 0.13 × cellWidth
+      // (~1px at the default size) covers that overshoot while scaling with
+      // the font size — independent of viewport width, DPR or font metrics.
+      const safety = cell.width * 0.13
+      return {
+        cols: Math.max(2, Math.floor((width - safety) / cell.width)),
+        rows: Math.max(1, Math.floor(height / cell.height)),
+      }
+    }
     fit.fit()
 
     termRef.current = term
@@ -535,7 +579,17 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
 
     // Mobile touch scroll: vertical finger drags become wheel events so
     // tmux mouse-mode scrolls history (xterm has no native touch scroll).
-    touchScrollCleanupRef.current = attachTouchScroll(container)
+    // Only the "view history" direction (wheel up, deltaY < 0) makes tmux
+    // enter copy mode — flip the scroll flag there so the MobileKeyBar「滚动」
+    // button highlight tracks the real tmux state. Scrolling back toward live
+    // output (deltaY > 0) is left alone: tmux's `copy-mode -e` only auto-exits
+    // once the history bottom is reached, which we cannot observe here.
+    touchScrollCleanupRef.current = attachTouchScroll(container, (deltaY) => {
+      if (deltaY < 0 && !tmuxScrollModeRef.current) {
+        tmuxScrollModeRef.current = true
+        setScrollMode(true)
+      }
+    })
 
     // Signal terminal is ready — triggers WS effects
     setTerminalReady(true)

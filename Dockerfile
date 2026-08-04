@@ -21,18 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
 # 分支专属变量（build 时由 --build-arg 传入；详见 AGENTS.md "配置统一管理"）
-# - BRANCH_BINARY_NAME: 二进制文件名（如 omniterm）
 # - DOCKER_PORT: 容器内监听端口（与 host 端口映射 host:container）
-# 都有合理默认值（main worktree 默认值）
-ARG BRANCH_BINARY_NAME=omniterm
+# 有合理默认值（main worktree 默认值）
+# 二进制名固定为 omniterm（Cargo.toml name 全分支统一，不再按分支区分）
 ARG DOCKER_PORT=9077
 
 WORKDIR /app
-COPY --from=backend /app/target/release/${BRANCH_BINARY_NAME} ./
+COPY --from=backend /app/target/release/omniterm ./
 COPY --from=frontend /app/dist ./frontend/dist
 
 ENV BIND_ADDR=0.0.0.0:${DOCKER_PORT}
 ENV FRONTEND_DIR=frontend/dist
 EXPOSE ${DOCKER_PORT}
 
-CMD ./${BRANCH_BINARY_NAME} start
+CMD ./omniterm start

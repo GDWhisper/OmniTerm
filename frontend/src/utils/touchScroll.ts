@@ -63,11 +63,17 @@ export function createTouchScroll(onScroll: (deltaY: number) => void): TouchScro
   }
 }
 
-/** Attach the bridge to the xterm host container. Returns a detach function. */
-export function attachTouchScroll(container: HTMLElement): () => void {
+/** Attach the bridge to the xterm host container. Returns a detach function.
+ *
+ *  `onScroll` fires with the synthesized deltaY right before each wheel event
+ *  is dispatched (deltaY < 0 = wheel up = viewing history). Callers use it to
+ *  keep UI state in sync with tmux's copy mode: a wheel-up scroll makes tmux
+ *  enter copy mode, so the MobileKeyBar「滚动」button highlight should follow. */
+export function attachTouchScroll(container: HTMLElement, onScroll?: (deltaY: number) => void): () => void {
   let wheelTarget: EventTarget | null = null
   const handlers = createTouchScroll((deltaY) => {
     if (!wheelTarget) return
+    onScroll?.(deltaY)
     wheelTarget.dispatchEvent(
       new WheelEvent('wheel', { deltaY, deltaMode: 0, bubbles: true, cancelable: true }),
     )

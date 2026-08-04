@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
@@ -50,8 +50,11 @@ export function ChatView() {
     activeSessionId ? s.connections[activeSessionId] : undefined,
   )
   const connectionState = conn?.connectionState ?? 'disconnected'
-  const sendPrompt = conn?.sendPrompt ?? (() => {})
-  const cancel = conn?.cancel ?? (() => {})
+  // 连接回调经 AcpConnectionManager 注册为稳定引用；`?? (() => {})` 兜底若直接内联
+  // 会在每次渲染新建函数，使依赖它们的 useCallback 引用漂移、ChatMessageView memo
+  // 失效——故用 useMemo 缓存兜底。
+  const sendPrompt = useMemo(() => conn?.sendPrompt ?? (() => {}), [conn])
+  const cancel = useMemo(() => conn?.cancel ?? (() => {}), [conn])
   const restore = conn?.restore ?? (() => {})
   const respondPermission = conn?.respondPermission ?? (() => {})
   const setConfigOption = conn?.setConfigOption ?? (() => {})
@@ -133,6 +136,57 @@ export function ChatView() {
     setConfigOption,
   })
 
+  const handleSend = useCallback(
+    (text: string, images?: ImageAttachment[]) => {
+      // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
+      // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
+      // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
+      // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
+      // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃 images 是预期行为
+      // ——ChatInput 已在带附件时禁用 Queue，此路径不会带 images 进入。
+      // 从 store 读 sending（而非闭包 chatState），保证回调引用稳定供 ChatMessageView
+      // memo 命中，语义不变：两者都是调用时刻的当前状态。
+      if (!activeSessionId) return
+      const s = useChatStore.getState()
+      if (s.states[activeSessionId]?.sending) {
+        s.enqueueMessage(activeSessionId, text)
+        return
+      }
+      sendPrompt(text, images)
+      // Re-stick so the user's own message is visible + next chunk scrolls in.
+      setAutoStick(true)
+    },
+    [activeSessionId, sendPrompt],
+  )
+
+  // F02 编辑重发：原消息标 edited，编辑稿作为全新 prompt 走 handleSend
+  // （sending 时自动进 N=1 队列，无需特判）。ACP 无编辑历史语义，见计划 §3.2。
+  const handleEditResend = useCallback(
+    (messageId: string, newText: string) => {
+      if (!activeSessionId) return
+      useChatStore.getState().markEdited(activeSessionId, messageId)
+      handleSend(newText)
+    },
+    [activeSessionId, handleSend],
+  )
+
+  // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
+  // sending 时走 enqueue+cancel（同 Send Now 的 drain 路径，天然规避与队列的竞态）。
+  const handleRegenerate = useCallback(() => {
+    if (!activeSessionId) return
+    const s = useChatStore.getState()
+    const msgs = s.states[activeSessionId]?.messages ?? []
+    const lastUser = [...msgs].reverse().find((m) => m.role === 'user' && !m.undelivered)
+    if (!lastUser) return
+    if (s.states[activeSessionId]?.sending) {
+      s.enqueueMessage(activeSessionId, lastUser.text)
+      cancel()
+      return
+    }
+    sendPrompt(lastUser.text)
+    setAutoStick(true)
+  }, [activeSessionId, sendPrompt, cancel])
+
   // No session: empty-state placeholder matching Terminal.tsx's look.
   if (!activeSession) {
     return (
@@ -159,22 +213,6 @@ export function ChatView() {
     )
   }
 
-  const handleSend = (text: string, images?: ImageAttachment[]) => {
-    // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
-    // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
-    // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
-    // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
-    // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃 images 是预期行为
-    // ——ChatInput 已在带附件时禁用 Queue，此路径不会带 images 进入。
-    if (chatState.sending) {
-      useChatStore.getState().enqueueMessage(activeSessionId!, text)
-      return
-    }
-    sendPrompt(text, images)
-    // Re-stick so the user's own message is visible + next chunk scrolls in.
-    setAutoStick(true)
-  }
-
   const handleCancelQueued = () => {
     if (!activeSessionId) return
     useChatStore.getState().clearQueuedMessage(activeSessionId)
@@ -187,29 +225,6 @@ export function ChatView() {
   // （旧 prompt_done 在新 in-flight 期间到达会把 sending 拉成 false，造成 UI 闪烁）。
   const handleSendNowQueued = () => {
     cancel()
-  }
-
-  // F02 编辑重发：原消息标 edited，编辑稿作为全新 prompt 走 handleSend
-  // （sending 时自动进 N=1 队列，无需特判）。ACP 无编辑历史语义，见计划 §3.2。
-  const handleEditResend = (messageId: string, newText: string) => {
-    if (!activeSessionId) return
-    useChatStore.getState().markEdited(activeSessionId, messageId)
-    handleSend(newText)
-  }
-
-  // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
-  // sending 时走 enqueue+cancel（同 Send Now 的 drain 路径，天然规避与队列的竞态）。
-  const handleRegenerate = () => {
-    if (!activeSessionId) return
-    const lastUser = [...chatState.messages].reverse().find((m) => m.role === 'user' && !m.undelivered)
-    if (!lastUser) return
-    if (chatState.sending) {
-      useChatStore.getState().enqueueMessage(activeSessionId, lastUser.text)
-      cancel()
-      return
-    }
-    sendPrompt(lastUser.text)
-    setAutoStick(true)
   }
 
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，

@@ -17,6 +17,7 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
@@ -108,6 +109,11 @@ pub struct AcpClient {
     supports_embedded_context: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
+    /// 配置偏好持久化句柄（`attach_config_prefs` 绑定）。仅在实际会话注册点
+    /// （create-session / load restore）设置；能力探针不绑定 → 写入与恢复 no-op。
+    /// 用 `std::sync::Mutex<Option<_>>`：使用时 lock 克隆 handle、立即 drop guard
+    /// 再 await，避免跨 await 持 std MutexGuard 破坏 Send（replay task 是 tokio::spawn）。
+    config_prefs: Mutex<Option<config_prefs::ConfigPrefsHandle>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
@@ -491,6 +497,7 @@ impl AcpClient {
             available_commands_notif: commands_notif,
             activity,
             accumulator,
+            config_prefs: Mutex::new(None),
         })
     }
 
@@ -555,7 +562,7 @@ impl AcpClient {
             .connection
             .send_request(SetSessionConfigOptionRequest::new(
                 self.session_id.clone(),
-                SessionConfigId::new(config_id),
+                SessionConfigId::new(config_id.clone()),
                 option_value,
             ))
             .block_task()
@@ -574,6 +581,26 @@ impl AcpClient {
             );
             // 合成的 config 更新不属于任何 turn，seq 为 None（前端无条件应用）。
             let _ = self.session_update_tx.send(SeqNotification { seq: None, notification });
+        }
+        // 配置变更持久化：只记用户主动 set（restore 路径调用本方法写回相同值，幂等）。
+        // 失败仅 warn，不阻断 agent 配置生效。
+        if let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) {
+            if let Err(e) = config_prefs::save_session_config(
+                &handle.db,
+                &handle.db_session_id,
+                &config_id,
+                &value,
+            )
+            .await
+            {
+                tracing::warn!(config_id = %config_id, "save session config failed: {}", e);
+            }
+            if let Err(e) =
+                config_prefs::save_agent_pref(&handle.db, &handle.agent_id, &config_id, &value)
+                    .await
+            {
+                tracing::warn!(config_id = %config_id, "save agent config pref failed: {}", e);
+            }
         }
         Ok(())
     }
@@ -709,6 +736,71 @@ impl AcpClient {
     /// load_session restore）；能力探针不调用 → 折叠为内存 no-op（见 turn_accumulator）。
     pub fn attach_persistence(&self, db: sqlx::SqlitePool, db_session_id: String) {
         self.accumulator.attach_persistence(db, db_session_id);
+    }
+
+    /// 绑定配置偏好持久化句柄。仅在真实会话注册点调用（create-session /
+    /// load_session restore）；能力探针不调用 → 写入与恢复均为 no-op。
+    pub fn attach_config_prefs(
+        &self,
+        db: sqlx::SqlitePool,
+        db_session_id: String,
+        agent_id: String,
+    ) {
+        if let Ok(mut guard) = self.config_prefs.lock() {
+            *guard = Some(config_prefs::ConfigPrefsHandle { db, db_session_id, agent_id });
+        }
+    }
+
+    /// 恢复持久化的配置偏好（agent 级偏好 + 会话级覆盖，会话级优先）。
+    ///
+    /// **必须在 `initial_config_options` 缓存已填充后调用**：
+    /// - create 路径：`spawn_and_connect` 已走 `NewSession`，缓存已填充（新建会话后即可调用）；
+    /// - load 路径：`spawn_and_load` 的缓存恒为空（不发送 NewSession），必须等
+    ///   `load_session` 返回（缓存被 `LoadSessionResponse.config_options` 回填）后再调用。
+    ///
+    /// 过滤规则（§8 多实现兼容）：`config_id` 不在 agent 当前配置集合中 → 跳过
+    /// （agent 已移除该项）；`config_prefs::validate_config_value` 不过 → 跳过。
+    /// 单项目失败静默跳过 + warn；整体 10s 超时，防止拖慢会话建立/恢复。
+    pub async fn restore_config_prefs(&self) {
+        let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) else {
+            return;
+        };
+        // 会话级覆盖 agent 级（restore 同一 session 时用户上次的会话内设置优先）。
+        let agent =
+            config_prefs::list_agent_prefs(&handle.db, &handle.agent_id).await.unwrap_or_default();
+        let session = config_prefs::list_session_configs(&handle.db, &handle.db_session_id)
+            .await
+            .unwrap_or_default();
+        let merged = config_prefs::merge_prefs(agent, session);
+        if merged.is_empty() {
+            return;
+        }
+
+        let opts = self.initial_config_options.lock().ok().map(|g| g.clone()).unwrap_or_default();
+        let client = self;
+        let applied = async move {
+            for (config_id, value) in merged {
+                // config_id 已不在 agent 当前集合 → 跳过（残留行下次恢复仍被过滤）。
+                let Some(opt) = opts.iter().find(|o| o.id.0.as_ref() == config_id) else {
+                    continue;
+                };
+                if !config_prefs::validate_config_value(opt, &value) {
+                    tracing::warn!(
+                        config_id = %config_id,
+                        value = %value,
+                        "restore config value rejected (not in agent options); skipping"
+                    );
+                    continue;
+                }
+                if let Err(e) = client.set_config_option(&config_id, &value).await {
+                    tracing::warn!(config_id = %config_id, "restore config option failed: {}", e);
+                }
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(10), applied).await {
+            Ok(()) => {}
+            Err(_) => tracing::warn!("restore_config_prefs timed out after 10s"),
+        }
     }
 
     /// 定稿进行中的 assistant turn（幂等）。供外部收尾路径显式调用。
@@ -1060,6 +1152,7 @@ impl AcpClient {
             available_commands_notif: commands_notif,
             activity,
             accumulator,
+            config_prefs: Mutex::new(None),
         })
     }
 

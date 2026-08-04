@@ -235,17 +235,20 @@ export const api = {
   // Worktrees (real-time git worktree discovery)
   listWorktrees: (projectId: string) =>
     request<Workspace[]>(`/projects/${projectId}/worktrees`),
-  createWorktree: (projectId: string, data: { branch: string; path?: string; base_branch?: string; detach?: boolean }) =>
+  createWorktree: (projectId: string, data: { branch: string; path?: string; base_branch?: string; detach?: boolean; init?: boolean }) =>
     request<Workspace>(`/projects/${projectId}/worktrees`, {
       method: 'POST',
       body: JSON.stringify(data),
+      silent: true, // caller handles the not_a_git_repo prompt / error toast
     }),
   deleteWorktree: (projectId: string, path: string) =>
     request<{ ok: true }>(`/projects/${projectId}/worktrees?path=${encodeURIComponent(path)}`, {
       method: 'DELETE',
     }),
   listBranches: (projectId: string) =>
-    request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`),
+    request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`, { silent: true }),
+  initGit: (projectId: string) =>
+    request<{ ok: true }>(`/projects/${projectId}/git-init`, { method: 'POST' }),
 
   // Sessions
   listSessions: (projectId: string) =>

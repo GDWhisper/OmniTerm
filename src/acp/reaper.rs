@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::interval;
@@ -25,12 +24,15 @@ const TICK_SECS: u64 = 30;
 /// 空闲回收看护任务。
 ///
 /// 周期性遍历 supervisor 中所有 ACP client，按后端可观测的活跃度信号决定回收：
-/// - idle 超时（静默待命）→ 直接 disconnect 杀进程
-/// - 权限请求超时无响应（requires_action 但无人应答）→ 先 cancel 再 disconnect
+/// - idle 超时（静默待命）→ 强制 `shutdown` kill 子进程
+/// - 权限请求超时无响应（requires_action 但无人应答）→ 先 cancel 再 kill
 /// - prompt 卡死（有进行中 prompt 但久无通知）→ 强制定稿 turn，不杀进程
 ///
 /// 活跃判定逻辑见 `AcpClient::is_idle_stale` / `is_permission_stale` / `is_prompt_stale`。
-/// 进程所有权在后端，回收即 kill 子进程、释放内存。
+/// 进程所有权在后端，回收即 kill 子进程、释放内存。`shutdown` 走 shared reference，
+/// 即使 WS 连接仍持有 `Arc<AcpClient>` 也会立即触发连接任务退出、杀子进程，保证
+/// supervisor 移除与进程死亡同步（否则 Sidebar 的 `acp_process_alive` 与实际进程
+/// 存活脱节）。
 pub async fn run_reaper(supervisor: AcpSupervisor) {
     let mut ticker = interval(Duration::from_secs(TICK_SECS));
     loop {
@@ -63,10 +65,14 @@ pub async fn run_reaper(supervisor: AcpSupervisor) {
                     // 先取消卡住的权限请求，避免 agent 永久阻塞
                     let _ = client.cancel();
                 }
-                // Arc 引用归零后 drop → connection_task 结束 → 子进程被 kill
-                if let Ok(c) = Arc::try_unwrap(client) {
-                    c.disconnect().await;
-                }
+                // 强制回收：即使仍有 WS 连接持有 Arc 引用也立即 kill 子进程。
+                // 旧实现依赖 `Arc::try_unwrap` 在引用归零后自然 drop 再杀进程，但
+                // WS handler 持 `Option<Arc<AcpClient>>` 时引用永远不会归零 → 进程
+                // 存活、可继续对话，而 supervisor 已移除该 session，`list_sessions`
+                // 报 `acp_process_alive=false`，Sidebar 显示「已释放」与实际进程存活
+                // 不一致，且进程脱离 reaper 管辖后无限驻留。`shutdown` 走 shared
+                // reference 触发连接任务退出 → 子进程被 kill，WS 随之断开。
+                client.shutdown().await;
             }
         }
     }

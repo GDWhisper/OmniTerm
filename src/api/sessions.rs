@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::acp::AcpClient;
+use crate::acp::config_prefs;
 use crate::api::agents::load_agent;
 use crate::models::session::{
     AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
@@ -179,6 +180,11 @@ async fn create_session(
         // 绑定持久化：assistant 回复由累积器实时防抖落库到本会话行，
         // 使流式中刷新/切设备不再丢失进行中的 turn（见 turn_accumulator）。
         acp_client.attach_persistence(state.db.clone(), id.clone());
+        // 绑定配置偏好持久化并同步恢复：agent 全局偏好（+ 本会话历史覆盖）在
+        // spawn 后立即下发，WS 连接时 initial_config_notification 缓存已是恢复值，
+        // 前端新建会话即可看到用户上次的配置。内部带 10s 超时，不阻塞会话注册。
+        acp_client.attach_config_prefs(state.db.clone(), id.clone(), agent_id.clone());
+        acp_client.restore_config_prefs().await;
         state.acp_supervisor.insert(id.clone(), acp_client).await;
         info!(
             "created ACP session: {} (agent: {}, acp_session_id: {})",
@@ -298,6 +304,37 @@ async fn update_session(
     (StatusCode::OK, Json(json!(session)))
 }
 
+/// 按 `runtime_kind` 清理会话的运行时资源：acp → 释放 supervisor 持有的 agent
+/// 子进程；tmux/psmux → 关闭 control-mode 连接并 `kill-session` 杀会话进程。
+///
+/// 只负责进程/运行时清理，**不删除 DB 记录**——由调用方（`delete_session` /
+/// `delete_project`）负责删库。两处共用，避免清理逻辑漂移。
+pub async fn cleanup_session_runtime(
+    state: &AppState,
+    session_id: &str,
+    tmux_name: Option<&str>,
+    runtime_kind: &str,
+) {
+    match runtime_kind {
+        "acp" => {
+            if let Some(client) = state.acp_supervisor.dispose(session_id).await {
+                // shutdown 走 shared reference 立即杀子进程，不依赖 Arc 引用归零：
+                // WS handler 持 `Arc<AcpClient>` 时 try_unwrap 永远失败，旧写法会
+                // 留下孤儿进程（删了 DB 行/释放了注册，进程却还在跑）。
+                client.shutdown().await;
+            }
+        }
+        _ => {
+            if let Some(name) = tmux_name {
+                state.activity_monitor.remove_session(name).await;
+                if let Err(e) = tmux::kill_session(name).await {
+                    error!("failed to kill tmux session {}: {}", name, e);
+                }
+            }
+        }
+    }
+}
+
 async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -321,20 +358,11 @@ async fn delete_session(
     }
 
     if let Some((tmux_name, runtime_kind)) = row {
-        if runtime_kind == "acp" {
-            if let Some(client) = state.acp_supervisor.dispose(&id).await {
-                let c = Arc::try_unwrap(client).ok();
-                if let Some(c) = c {
-                    c.disconnect().await;
-                }
-            }
-        } else if let Some(tmux_name) = tmux_name {
-            state.activity_monitor.remove_session(&tmux_name).await;
-            if let Err(e) = tmux::kill_session(&tmux_name).await {
-                error!("failed to kill tmux session {}: {}", tmux_name, e);
-            }
-        }
+        cleanup_session_runtime(&state, &id, tmux_name.as_deref(), &runtime_kind).await;
     }
+
+    // 清理会话级配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
+    let _ = config_prefs::clear_session_configs(&state.db, &id).await;
 
     (StatusCode::OK, Json(json!({ "ok": true })))
 }
@@ -359,10 +387,10 @@ async fn release_session(
 
     match runtime_kind.as_deref() {
         Some("acp") => {
-            if let Some(client) = state.acp_supervisor.dispose(&id).await
-                && let Ok(c) = Arc::try_unwrap(client)
-            {
-                c.disconnect().await;
+            if let Some(client) = state.acp_supervisor.dispose(&id).await {
+                // 同上：shutdown 强制杀进程，否则聚焦该会话时 WS handler 持有的
+                // Arc 引用会让进程残留，Sidebar 却显示已释放（与实际进程存活脱节）。
+                client.shutdown().await;
             }
             (StatusCode::OK, Json(json!({ "ok": true })))
         }

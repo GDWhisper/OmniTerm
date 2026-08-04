@@ -17,10 +17,15 @@ FRONTEND_PORT=${FRONTEND_PORT:-9076}
 DOCKER_PORT=${DOCKER_PORT:-$BACKEND_PORT}
 DOCKER_PORT_MAPPING=${DOCKER_PORT_MAPPING:-${DOCKER_PORT}:${DOCKER_PORT}}
 BRANCH_NAME=${BRANCH_NAME:-main}
-BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm-main}
+BRANCH_BINARY_NAME=${BRANCH_BINARY_NAME:-omniterm}
 DOMAIN=${DOMAIN:-localhost}
 export BACKEND_PORT FRONTEND_PORT DOCKER_PORT DOCKER_PORT_MAPPING
 export BRANCH_NAME BRANCH_BINARY_NAME DOMAIN
+
+# 数据库路径按二进制名隔离：~/.omniterm/<BRANCH_BINARY_NAME>.db
+# 显式 DATABASE_URL 优先于后端按 argv0 推导的默认值，避免 merge 同步 Cargo.toml
+# 导致 binary 名变化、preview/dev 意外共享同一数据库（见 AGENTS.md 配置统一管理）
+export DATABASE_URL="sqlite:${HOME}/.omniterm/${BRANCH_BINARY_NAME}.db?mode=rwc"
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
@@ -261,8 +266,8 @@ cmd_start() {
         trap '' HUP
         . "$HOME/.cargo/env"
         export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
-        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅
-        export RUST_LOG="${RUST_LOG:-omniterm_main=info,omniterm_server=info}"
+        # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅（crate 名统一为 omniterm）
+        export RUST_LOG="${RUST_LOG:-omniterm=info}"
         cargo run -- start
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"

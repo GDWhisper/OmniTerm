@@ -372,3 +372,75 @@ async fn invalid_runtime_kind_is_rejected_not_silently_accepted() {
 
     let _ = std::fs::remove_dir_all(&workspace);
 }
+
+/// Case 4: DELETE /projects/{id} 必须连带清理该项目下 tmux/psmux 会话的进程资源。
+/// 复盘 2026-08-04 bug：`delete_project` 只删 DB 不 kill session，导致会话进程
+/// 残留（Windows 上 psmux 是独立进程，症状更明显）。
+#[tokio::test]
+#[ignore]
+async fn delete_project_kills_tmux_sessions() {
+    if let Some(reason) = preflight() {
+        eprintln!("SKIP: {reason}");
+        return;
+    }
+    if cmd_output("tmux", &["list-sessions"]).is_none() {
+        eprintln!("SKIP: tmux not available");
+        return;
+    }
+
+    let workspace = format!("/tmp/omniterm-matrix-delproj-{}", uuid_v4());
+    std::fs::create_dir_all(&workspace).ok();
+    let project_id = match ensure_test_project("matrix_delproj", &workspace) {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: cannot ensure test project");
+            return;
+        }
+    };
+
+    // 创建 tmux session
+    let body = format!(
+        r#"{{"name":"matrix_delproj","workspace_path":"{workspace}","runtime_kind":"tmux"}}"#
+    );
+    let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: POST /sessions failed (server down?)");
+            return;
+        }
+    };
+    if code != 201 {
+        eprintln!("SKIP: session create returned {code}: {body}");
+        return;
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).expect("parse session response");
+    let tmux_name = match v["tmux_session_name"].as_str() {
+        Some(n) => n.to_string(),
+        None => {
+            eprintln!("SKIP: session response lacks tmux_session_name");
+            return;
+        }
+    };
+
+    // 前序确认：session 确实存在
+    let listed =
+        cmd_output("tmux", &["list-sessions", "-F", "#{session_name}"]).unwrap_or_default();
+    assert!(
+        listed.lines().any(|l| l.trim() == tmux_name),
+        "precondition: session {tmux_name} should exist in tmux"
+    );
+
+    // 删除 project（应连带清理其下所有 session 的运行时）
+    http_delete(&format!("/projects/{project_id}"));
+
+    // 核心断言：tmux/psmux 会话进程已被 kill
+    let listed_after =
+        cmd_output("tmux", &["list-sessions", "-F", "#{session_name}"]).unwrap_or_default();
+    assert!(
+        !listed_after.lines().any(|l| l.trim() == tmux_name),
+        "BUG REGRESSION: deleting project left tmux session {tmux_name} alive.\n\
+         delete_project must kill all sessions under the project before removing DB rows."
+    );
+
+    let _ = std::fs::remove_dir_all(&workspace);
+}
