@@ -4,6 +4,7 @@ pub mod agent_state;
 pub mod agent_watch;
 pub mod control_mode;
 pub mod process_info;
+pub mod pty;
 pub mod pty_io;
 
 use anyhow::{Result, anyhow};

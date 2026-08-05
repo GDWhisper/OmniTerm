@@ -210,11 +210,21 @@ async fn spawn_notify_task(
                         seq: seq_notif.seq,
                     })
                     .unwrap_or_default();
+                    tracing::debug!(
+                        "ACP notify task: forwarding session_update seq={:?}",
+                        seq_notif.seq
+                    );
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        tracing::warn!("ACP notify task: notify_tx closed (WS gone), exiting");
                         break;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    tracing::warn!(
+                        "ACP notify task: session_update broadcast closed (client dropped), exiting"
+                    );
+                    break;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         "ACP WS subscriber lagged by {} messages; dropped stale updates",
@@ -536,6 +546,7 @@ async fn restore_acp_session(
                 },
             }
         };
+        tracing::info!("ACP replay task: load_session done, result={:?}", result.is_ok());
         // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、排空缓冲前调用。
         // restore 发出的 ConfigOptionUpdate 广播会进 replay_rx → 前端 staging，
         // ReplayEnd 的 commitReplay 时恢复值覆盖重放默认值，配置栏最终显示用户
@@ -543,6 +554,7 @@ async fn restore_acp_session(
         if result.is_ok() {
             task_client.restore_config_prefs().await;
         }
+        tracing::info!("ACP replay task: restore_config_prefs done");
         // load_session 返回即 agent 已推完全部历史。排空缓冲余量后经 notify_tx
         // 发 replay_end——notify_tx 为 FIFO，故 replay_end 必在最后一条重放帧之后
         // 到达前端（前端据此即时 sync 即可）。
@@ -569,8 +581,10 @@ async fn restore_acp_session(
             .unwrap_or_default(),
         };
         let _ = tx.send(Message::Text(msg.into())).await;
+        tracing::info!("ACP replay task: replay_end sent, moving replay_rx into notify task");
         // 复用 replay_rx 接管实时帧，避免重新订阅在排空与订阅之间产生丢帧窗口。
         spawn_notify_task(replay_rx, tx.clone()).await;
+        tracing::info!("ACP replay task: notify task spawned, replay task finishing");
     });
 
     Ok((new_client, handle))
