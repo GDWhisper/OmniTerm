@@ -190,6 +190,8 @@ update options:
       --check             只检查是否有新版本，不执行更新
 ```
 
+日志级别由 `RUST_LOG` 环境变量控制（`tracing_subscriber::EnvFilter`）：未设置时默认 `omniterm=info`（只输出 omniterm 的 info/warn/error，屏蔽 debug）；需要调试日志时设 `RUST_LOG=omniterm=debug`（或更具体 target 如 `omniterm::tmux=debug`）。`dev.sh` 已兜底 `export RUST_LOG="${RUST_LOG:-omniterm=info}"`。
+
 ### `update` 渠道感知自更新
 
 按 `current_exe()` 路径检测安装渠道，统一先查 GitHub `releases/latest`（semver 三态比对：相等→已最新；本地更新→提示 development build 不动作；远端更新→执行）：
