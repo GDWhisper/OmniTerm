@@ -2,6 +2,7 @@ mod acp;
 mod api;
 mod auth;
 mod embedded;
+mod engine;
 mod fs;
 mod git;
 mod models;
