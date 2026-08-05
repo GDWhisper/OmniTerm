@@ -182,6 +182,7 @@ start options:
       --auth-enabled     强制密码验证开关 [env: OMNITERM_AUTH_ENABLED]（接受 1/0/true/false；未指定时用 DB 值）
       --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
   -d, --daemonize         后台运行（Unix only；Windows 报错退出），日志追加写入 ~/.omniterm/<binary>.log
+      --debug             强制开启 omniterm 调试日志（等价 RUST_LOG=omniterm=debug，优先级高于 RUST_LOG 中 omniterm 的级别设置）
 
 stop / status / reset-auth options:
       --db <DB>           数据库连接（用于定位 PID 文件）[env: DATABASE_URL]
@@ -190,7 +191,7 @@ update options:
       --check             只检查是否有新版本，不执行更新
 ```
 
-日志级别由 `RUST_LOG` 环境变量控制（`tracing_subscriber::EnvFilter`）：未设置时默认 `omniterm=info`（只输出 omniterm 的 info/warn/error，屏蔽 debug）；需要调试日志时设 `RUST_LOG=omniterm=debug`（或更具体 target 如 `omniterm::tmux=debug`）。`dev.sh` 已兜底 `export RUST_LOG="${RUST_LOG:-omniterm=info}"`。
+日志级别由 `RUST_LOG` 环境变量控制（`tracing_subscriber::EnvFilter`）：未设置时默认 `omniterm=info`（只输出 omniterm 的 info/warn/error，屏蔽 debug）；需要调试日志时用 `omniterm start --debug`（优先级高于 `RUST_LOG` 中 omniterm 的级别，其余 target 保留）或设 `RUST_LOG=omniterm=debug`（或更具体 target 如 `RUST_LOG=omniterm::tmux=debug`）。`dev.sh` 已兜底 `export RUST_LOG="${RUST_LOG:-omniterm=info}"`。
 
 ### `update` 渠道感知自更新
 

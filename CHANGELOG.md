@@ -51,11 +51,13 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-05 05:43) `[backend]` 新增 `omniterm start --debug` 强制开启调试日志：无需设置 `RUST_LOG` 即可查看 omniterm 内部 debug 日志，优先级高于 `RUST_LOG` 中 omniterm 的级别设置（其余 target 的 directive 保留）；未传 `--debug` 时日志级别由 `RUST_LOG` 控制、未设置默认 `omniterm=info`（不再硬编码 debug，正式版不再刷屏）（`src/main.rs`）
 - (2026-08-05 00:30) `[backend]` `[frontend]` `[api]` 设置面板新增「自动断连/释放超时」调节：设置 → 会话新增三个分钟滑块（值域 1..60，≥30 分钟显示内存占用警告）——ACP 空闲回收（默认 5 分钟，`GET/PUT /api/v1/settings/acp-idle-recycle` 持久化到 settings 表，reaper 每个 tick 动态读取实现运行时热更新）、tmux 失焦断连（默认 10 分钟，localStorage `omniterm_blur_disconnect_min`）、tmux 空闲断连（默认 15 分钟，`omniterm_idle_disconnect_min`）；`useTerminal` 断连定时器改从 store 读分钟值 ×60_000，删除硬编码 `BLUR/IDLE_DISCONNECT_DELAY_MS` 常量（`src/api/settings.rs`、`src/main.rs`、`src/acp/reaper.rs`、`frontend/src/stores/appStore.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/api/client.ts`）
 - (2026-08-04 12:40) `[backend]` ACP 会话「发送即自动恢复」：进程被 reaper 空闲回收/手动 release/后端重启释放后，用户无需先点「恢复会话」，直接发送消息即自动 spawn agent 进程 + 历史重放，重放完成后才发送 prompt（避免与 replay 帧交错）；`AcpClient::is_alive()` 检测连接活性，手动「恢复会话」与自动恢复共用同一恢复流程（`restore_acp_session`）；连接时对「已释放但可恢复」（DB 行存在）与「会话已删除」分流，仅删除才发 `session_not_found`；`acp_process_alive` 恒序列化使「已释放」指示稳定不再被轮询覆盖闪断（`src/ws/acp.rs`、`src/acp/client.rs`、`src/models/session.rs`）
 
 ### Fixed
 
+- (2026-08-05 05:37) `[backend]` 修复正式版默认输出 DEBUG 日志：日志过滤器硬编码 `omniterm=debug` 会覆盖 `RUST_LOG` 中 omniterm 的级别设置（tracing EnvFilter 同 target 后添加 directive 替换先添加），npm 正式版（无 RUST_LOG）启动即刷 debug 日志——改为尊重 `RUST_LOG`、未设置时默认 `omniterm=info`，需要调试日志时用 `omniterm start --debug` 或 `RUST_LOG=omniterm=debug`（`src/main.rs`）
 - (2026-08-04 23:22) `[infra]` 强制 migration 文件 LF 换行：`.gitattributes` 声明 `migrations/*.sql text eol=lf` 并 renormalize 存量文件——sqlx::migrate! 编译期内嵌 .sql 原始字节算 Sha384 checksum，Windows CI 的 git autocrlf 会把 .sql 转 CRLF，导致 npm Windows 平台包内嵌 checksum 与 crates.io 包（LF）不一致，已初始化库启动即报 `migration was previously applied but has been modified`
 
 ## [0.2.8] - 2026-08-04
