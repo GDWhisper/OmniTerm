@@ -47,28 +47,31 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.10] - 2026-08-05
 
 ### Added
 
+- (2026-08-05 17:12) `[backend]` `[api]` 新增 Pty 原生运行时（runtime_kind=pty）：会话可直接由后端通过 portable_pty spawn 子进程 + PTY master fd 读写，不依赖 tmux；新增 PTY websocket 链路与 runtime-aware 会话 API（创建/清理/cwd 查询按 runtime_kind 分流，`src/engine/pty/mod.rs`、`src/tmux/pty.rs`、`src/ws/terminal.rs`、`src/api/sessions.rs`、`src/models/session.rs`）
+- (2026-08-05 16:48) `[backend]` `[infra]` 新增 `PtySession`（portable_pty 封装：openpty/spawn/resize/write/Drop 兜底清理）与 ACP replay 诊断日志：replay 任务关键节点（load_session/restore_config_prefs/replay_end/notify task 移交）与 notify 转发异常均补 debug/warn 日志，便于定位 ACP 恢复链路问题（`src/tmux/pty.rs`、`src/ws/acp.rs`）
 - (2026-08-05 15:49) `[backend]` `[api]` 文件写类 API 支持显式 `allow_escape=true` 越界放行：delete/write/mkdir/upload/rename/move/copy 在 query 传 `allow_escape=true` 时允许目标路径逃逸出 workspace 根目录（受信调用方显式请求），未传时保持严格越界校验不变；`GET /files` 响应新增 `workspace_root` 字段（session/workspace_id 模式，值为 workspace 根路径，供前端判断越界）；`GET /files/download` 对相对路径越界不再返回 403，直接以 base 拼接原始路径放行下载（`src/api/files.rs`、`src/fs/mod.rs`）
 - (2026-08-05 15:49) `[frontend]` 文件管理「跳过越界确认」：FileManager 越界操作透传 `allow_escape=true`，确认框提供跳过选项直接放行（`frontend/src/api/client.ts`、`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-08-05 05:43) `[backend]` 新增 `omniterm start --debug` 强制开启调试日志：无需设置 `RUST_LOG` 即可查看 omniterm 内部 debug 日志，优先级高于 `RUST_LOG` 中 omniterm 的级别设置（其余 target 的 directive 保留）；未传 `--debug` 时日志级别由 `RUST_LOG` 控制、未设置默认 `omniterm=info`（不再硬编码 debug，正式版不再刷屏）（`src/main.rs`）
 
 ### Fixed
 
+- (2026-08-05 15:17) `[backend]` 修复 ACP「发送即自动恢复」在进程刚被释放后无效：`is_incoming_closed()` 在主动 shutdown 后恒返回 false，`is_alive()` 又把已关闭连接误判为存活，导致自动恢复的 restore 分支永不触发——改为显式维护 shutdown 标记，恢复流程与手动「恢复会话」一致（`src/acp/client.rs`）
 - (2026-08-05 15:49) `[backend]` 修复 `sanitize_path_new` 多层缺失目录拼接反序：`tail` 循环漏 `.rev()` 导致 `a/b/c` 解析成 `a/c/b`（当 `a` 存在而 `b/c` 不存在时，mkdir/嵌套写入/越界 move 到多层新目录会生成错误目录结构）（`src/fs/mod.rs`）
+- (2026-08-05 05:37) `[backend]` 修复正式版默认输出 DEBUG 日志：日志过滤器硬编码 `omniterm=debug` 会覆盖 `RUST_LOG` 中 omniterm 的级别设置（tracing EnvFilter 同 target 后添加 directive 替换先添加），npm 正式版（无 RUST_LOG）启动即刷 debug 日志——改为尊重 `RUST_LOG`、未设置时默认 `omniterm=info`，需要调试日志时用 `omniterm start --debug` 或 `RUST_LOG=omniterm=debug`（`src/main.rs`）
 
 ## [0.2.9] - 2026-08-05
 
 ### Added
 
-- (2026-08-05 05:43) `[backend]` 新增 `omniterm start --debug` 强制开启调试日志：无需设置 `RUST_LOG` 即可查看 omniterm 内部 debug 日志，优先级高于 `RUST_LOG` 中 omniterm 的级别设置（其余 target 的 directive 保留）；未传 `--debug` 时日志级别由 `RUST_LOG` 控制、未设置默认 `omniterm=info`（不再硬编码 debug，正式版不再刷屏）（`src/main.rs`）
 - (2026-08-05 00:30) `[backend]` `[frontend]` `[api]` 设置面板新增「自动断连/释放超时」调节：设置 → 会话新增三个分钟滑块（值域 1..60，≥30 分钟显示内存占用警告）——ACP 空闲回收（默认 5 分钟，`GET/PUT /api/v1/settings/acp-idle-recycle` 持久化到 settings 表，reaper 每个 tick 动态读取实现运行时热更新）、tmux 失焦断连（默认 10 分钟，localStorage `omniterm_blur_disconnect_min`）、tmux 空闲断连（默认 15 分钟，`omniterm_idle_disconnect_min`）；`useTerminal` 断连定时器改从 store 读分钟值 ×60_000，删除硬编码 `BLUR/IDLE_DISCONNECT_DELAY_MS` 常量（`src/api/settings.rs`、`src/main.rs`、`src/acp/reaper.rs`、`frontend/src/stores/appStore.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/api/client.ts`）
 - (2026-08-04 12:40) `[backend]` ACP 会话「发送即自动恢复」：进程被 reaper 空闲回收/手动 release/后端重启释放后，用户无需先点「恢复会话」，直接发送消息即自动 spawn agent 进程 + 历史重放，重放完成后才发送 prompt（避免与 replay 帧交错）；`AcpClient::is_alive()` 检测连接活性，手动「恢复会话」与自动恢复共用同一恢复流程（`restore_acp_session`）；连接时对「已释放但可恢复」（DB 行存在）与「会话已删除」分流，仅删除才发 `session_not_found`；`acp_process_alive` 恒序列化使「已释放」指示稳定不再被轮询覆盖闪断（`src/ws/acp.rs`、`src/acp/client.rs`、`src/models/session.rs`）
 
 ### Fixed
 
-- (2026-08-05 05:37) `[backend]` 修复正式版默认输出 DEBUG 日志：日志过滤器硬编码 `omniterm=debug` 会覆盖 `RUST_LOG` 中 omniterm 的级别设置（tracing EnvFilter 同 target 后添加 directive 替换先添加），npm 正式版（无 RUST_LOG）启动即刷 debug 日志——改为尊重 `RUST_LOG`、未设置时默认 `omniterm=info`，需要调试日志时用 `omniterm start --debug` 或 `RUST_LOG=omniterm=debug`（`src/main.rs`）
 - (2026-08-04 23:22) `[infra]` 强制 migration 文件 LF 换行：`.gitattributes` 声明 `migrations/*.sql text eol=lf` 并 renormalize 存量文件——sqlx::migrate! 编译期内嵌 .sql 原始字节算 Sha384 checksum，Windows CI 的 git autocrlf 会把 .sql 转 CRLF，导致 npm Windows 平台包内嵌 checksum 与 crates.io 包（LF）不一致，已初始化库启动即报 `migration was previously applied but has been modified`
 
 ## [0.2.8] - 2026-08-04
