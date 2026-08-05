@@ -1104,3 +1104,24 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 根因链：reaper 回收 → `supervisor.dispose`（广播 `alive:false`）+ `client.shutdown`（杀进程，WS 不断）→ 前端 `released=true` 按钮短暂出现 → 3s 轮询整体替换 sessions，`acp_process_alive` 因 `#[serde(skip_serializing_if="is_false")]` 缺失 → 按钮消失 → 用户发送 → 后端 `client` 为 Some 但 `ConnectionTo` 已停 → `send_request` 报 "connection is no longer running" 原样透传。
 - 修复（发送即自动恢复，`src/ws/acp.rs` / `src/acp/client.rs` / `src/models/session.rs`）：① `AcpClient::is_alive()`（`!is_incoming_closed()`）检测死连接，Prompt 到达时 client 缺失/已死则自动 `restore_acp_session`（与手动恢复共用流程）→ 历史重放完成后 `dispatch_prompt` 延迟发送；② 连接时按 `sessions` 行存在性区分「已释放可恢复」与「已删除」，行存在不再发 `session_not_found`，前端保持 released 态输入可用；③ `acp_process_alive` 移除 `skip_serializing_if` 恒序列化，轮询不再抹掉 released 态。
 - 验证：`cargo check` / `cargo clippy -D warnings` / `cargo test`（145 passed）/ `cargo fmt --check` 全过。
+
+## 2026-08-05: 「发送即自动恢复」在 Pi ACP 会话无效报错——`is_incoming_closed()` 在主动 shutdown 后恒 false，误判死连接为存活
+
+**症状**：发送即自动恢复上线后，Pi（pi-acp）会话被 reaper 回收后直接发送消息仍报 `Internal error: ... connection is no longer running`，功能完全无效。其他 agent（codebuddy）没测，未暴露。
+
+**可复用的理论/模式**：
+
+**1. 库的「连接关闭」状态有多个、且语义不同：`is_incoming_closed()`（读侧 EOF）≠ `send_request` 可用（写侧驱动存活）**。agent-client-protocol 的 `is_incoming_closed()` 只在 **incoming 传输读到 EOF 且 on_close 回调完成后**才置位。而**主动 shutdown**（`shutdown_tx` 被 drop → 连接任务闭包返回 → 驱动 teardown）根本不走 incoming EOF——read actor 随驱动停止被 drop，EOF 永远读不到，`is_incoming_closed()` 恒 false。但此时 `send_request` 已失败（驱动停止，`message_tx` drop）。**「进程级死亡」与「传输级 EOF」是两个独立事实，用 EOF 判断进程生死会漏掉主动回收路径**。这是第三次踩「WS/连接/进程存活是多层独立事实」——WS open ≠ 连接可用（昨天），连接可用 ≠ 进程存活（今天，反方向）。
+
+**2. 判定「外部进程是否已被我方回收」时，最可靠的不是探测对端状态，而是记录我方已执行的回收动作**。显式标志（`AtomicBool`，`shutdown()`/`disconnect()` 里置 false）比探测库状态可靠得多：它反映「我方意图」，不会受库 teardown 顺序影响。库的 `is_incoming_closed()` 只应作为**崩溃等异常路径**（对端自己死了，我方没执行 shutdown）的补充兜底。组合：`alive.load() && !is_incoming_closed()`。
+
+**诊断过程中的错误**：
+
+1. **用 `is_incoming_closed()` 单测 as「连接是否可发送」，没验证 shutdown 后的实际值**。`is_alive` 第一次实现时只读库文档/源码推断了 EOF 语义，没写一个「spawn → shutdown → 断言」的探针测试。**凡是对库状态接口的假设，必须用一个能区分「我方主动回收」与「对端崩溃」两种路径的最小探针验证**——mock agent 脚本 + `spawn_and_load` + `shutdown()` + `assert!(!is_alive())` 一条测试 30 秒就能暴露。上一轮的 serde/polling 分析（released 态被覆盖）解释了按钮闪断，但**没有解释「发送仍报 connection is no longer running」**——那部分假设了自动恢复会被触发，而 is_alive 的误判让它压根没触发。两个问题同时存在，只修了可见的那个。
+2. **第一轮修复没做端到端验证就认为生效**：只跑了编译/单测，没在真实 agent（pi-acp）上复现「释放 → 发送」路径。用户测出无效后，用 node 脚本手动走 pi-acp 全链路（initialize→load→prompt）确认协议层没问题，才把怀疑点收敛到 is_alive 判定。**协议/库/我方逻辑三层都要单独验证**，UI 层报错先归因到哪一层再动代码。
+
+**具体根因与修复**：
+
+- 根因链：reaper 回收 → `AcpClient::shutdown()`（drop shutdown_tx，主动 teardown）→ `is_incoming_closed()` 恒 false（incoming 不读 EOF）→ Prompt 分支 `is_alive()` 返回 true → 不走自动恢复 → `send_prompt` 命中死连接 → 库报 "connection is no longer running" 原样透传。
+- 修复（`src/acp/client.rs`）：`AcpClient` 新增 `alive: AtomicBool`，两个构造器初始 `true`，`shutdown()`/`disconnect()` 置 `false`；`is_alive()` 改为 `alive.load() && !connection.is_incoming_closed()`（后者兜底 agent 崩溃的 EOF 路径）。
+- 验证：临时探针测试（spawn mock agent → `is_alive()==true` → `shutdown()` → `is_alive()==false`）通过；`cargo check`/`clippy -D warnings`/`cargo test`（154 passed）/`cargo fmt --check` 全过；node 脚本走 pi-acp initialize→load→prompt 全链路确认协议层可用。

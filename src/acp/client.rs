@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -119,6 +120,13 @@ pub struct AcpClient {
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
     /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
     accumulator: Arc<TurnAccumulator>,
+    /// 显式存活标志：`shutdown()` / `disconnect()` 时置 false。
+    ///
+    /// **不能用 `is_incoming_closed()` 单测判定死连接**：reaper 主动 `shutdown`
+    /// 是让连接任务退出（`shutdown_rx.await` 返回），incoming 传输不读 EOF，
+    /// `is_incoming_closed()` 保持 false，但 `send_request` 已报 "connection is
+    /// no longer running"。`is_alive()` 因此必须组合本标志 + incoming-closed。
+    alive: AtomicBool,
 }
 
 /// 看护 agent 连接任务：若其因 agent 进程崩溃/异常退出而返回 `Err`，
@@ -498,6 +506,7 @@ impl AcpClient {
             activity,
             accumulator,
             config_prefs: Mutex::new(None),
+            alive: AtomicBool::new(true),
         })
     }
 
@@ -670,9 +679,14 @@ impl AcpClient {
 
     /// ACP 连接是否仍可发送请求（agent 子进程存活且未被释放）。
     /// 供 WS 层在 prompt 到达时判断是否需要自动恢复：reaper 空闲回收 / 手动
-    /// release / 后端重启 / agent 崩溃后连接进入 incoming-EOF，返回 false。
+    /// release / 后端重启 / agent 崩溃后返回 false。
+    ///
+    /// **判定依据**：`alive` 显式标志（`shutdown`/`disconnect` 置 false）+ 库的
+    /// `is_incoming_closed()`（agent 崩溃等异常退出走 EOF）。两者缺一不可——
+    /// 主动 shutdown 不会触发 incoming EOF，仅靠 `is_incoming_closed()` 会误判
+    /// 已释放的连接为存活，导致发送即报 "connection is no longer running"。
     pub fn is_alive(&self) -> bool {
-        !self.connection.is_incoming_closed()
+        self.alive.load(Ordering::Acquire) && !self.connection.is_incoming_closed()
     }
 
     // ---- 活跃度跟踪（供空闲回收看护任务 reaper 使用）----
@@ -1160,6 +1174,7 @@ impl AcpClient {
             activity,
             accumulator,
             config_prefs: Mutex::new(None),
+            alive: AtomicBool::new(true),
         })
     }
 
@@ -1167,6 +1182,8 @@ impl AcpClient {
     /// 供 [`AcpSupervisor::shutdown_all`] 在持有 `Arc<AcpClient>` 时调用
     /// （`disconnect` 消费 self，无法在 Arc 上使用）。
     pub async fn shutdown(&self) {
+        // 先置存活标志 false：即使 teardown 尚未完成，prompt 到达时也应走自动恢复。
+        self.alive.store(false, Ordering::Release);
         self.terminal_manager.kill_all().await;
         // 取出并 drop shutdown_tx → 连接任务的 shutdown_rx 收到 RecvError 后退出。
         // lock().await 安全：shutdown_tx 仅在此处和 disconnect 中被 take，
@@ -1177,6 +1194,7 @@ impl AcpClient {
     pub async fn disconnect(self) {
         // 回收本会话可能创建的终端子进程（kill_on_drop 依赖 TerminalProcess 被 drop，
         // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
+        self.alive.store(false, Ordering::Release);
         self.terminal_manager.kill_all().await;
         if let Ok(mut guard) = self._shutdown_tx.try_lock() {
             let _ = guard.take();
