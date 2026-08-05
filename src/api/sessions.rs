@@ -85,6 +85,8 @@ async fn list_sessions(
     // Enrich sessions with activity state and agent state from tmux.
     // Only tmux-backed sessions have a pane to poll; ACP sessions get their
     // state via the ACP event stream (Phase 3) and are skipped here.
+    // Pty sessions have no multiplexer state; they start inactive until a
+    // WS handler attaches and drives the PTY.
     for session in &mut sessions {
         // ACP 会话：标记 agent 子进程是否在后端驻留（未释放/未被回收）。
         // 这与 tmux 的 is_active 不同，是 supervisor 中真实存在的进程状态。
@@ -216,6 +218,50 @@ async fn create_session(
         return (StatusCode::CREATED, Json(json!(session)));
     }
 
+    if runtime_kind == RuntimeKind::Pty {
+        let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
+        let id = Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, NULL, 0, NULL, ?, 'pty', NULL)",
+        )
+        .bind(&id)
+        .bind(&pid)
+        .bind(&workspace_path)
+        .bind(&req.name)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        info!("created pty session: {} (cwd: {})", id, workspace_path);
+
+        let session = Session {
+            id,
+            project_id: pid,
+            workspace_path,
+            name: req.name,
+            tmux_session_name: None,
+            hook_enabled: false,
+            hook_status: None,
+            created_at: now,
+            runtime_kind: RuntimeKind::Pty,
+            acp_session_id: None,
+            agent_id: None,
+            is_active: false,
+            agent_kind: None,
+            agent_state: None,
+            attention_reason: None,
+            agent_event: None,
+            agent_nonce: None,
+            agent_detected: None,
+            acp_process_alive: false,
+        };
+
+        return (StatusCode::CREATED, Json(json!(session)));
+    }
+
     // Resolve workspace_path: use provided path, fallback to project path
     let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
 
@@ -324,6 +370,9 @@ pub async fn cleanup_session_runtime(
                 client.shutdown().await;
             }
         }
+        "pty" => {
+            // PtyEngine sessions are owned by the WS handler; nothing to dispose here.
+        }
         _ => {
             if let Some(name) = tmux_name {
                 state.activity_monitor.remove_session(name).await;
@@ -405,26 +454,38 @@ async fn get_session_cwd(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    // Look up tmux session name
-    let tmux_name: Option<(String,)> =
-        sqlx::query_as("SELECT tmux_session_name FROM sessions WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
+    // Look up session base info
+    let row: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT runtime_kind, tmux_session_name, workspace_path FROM sessions WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
 
-    let Some((tmux_name,)) = tmux_name else {
+    let Some((runtime_kind, tmux_name, workspace_path_opt)) = row else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })));
     };
 
-    match tmux::pane_cwd(&tmux_name).await {
-        Ok(cwd) => (StatusCode::OK, Json(json!({ "cwd": crate::fs::display_path_str(&cwd) }))),
-        Err(e) => {
-            error!("pane_cwd failed: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
-        }
+    let workspace_path = workspace_path_opt
+        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+
+    // Pty / ACP sessions do not have a live multiplexer pane; use workspace_path.
+    if runtime_kind != "tmux" || tmux_name.is_empty() {
+        return (StatusCode::OK, Json(json!({ "cwd": workspace_path })));
     }
+
+    // Resolve CWD from the live tmux pane (fall back to workspace_path)
+    let cwd = match tmux::pane_cwd(&tmux_name).await {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            error!("pane_cwd failed for {}: {}", tmux_name, e);
+            workspace_path
+        }
+    };
+
+    (StatusCode::OK, Json(json!({ "cwd": crate::fs::display_path_str(&cwd) })))
 }
 
 async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {

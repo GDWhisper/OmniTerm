@@ -20,7 +20,7 @@ interface GitDrawerProps {
   /** Status refresh tick — re-fetches the open file diff when the repo changes. */
   refreshTick: number
   /** Open the file in the shared file editor (FileDrawer) instead of the diff. */
-  onOpenInEditor: (absolutePath: string) => void
+  onOpenInEditor: (absolutePath: string, repoRoot: string | null) => void
 }
 
 export function GitDrawer({ target, bind, onClose, height, onHeightChange, refreshTick, onOpenInEditor }: GitDrawerProps) {
@@ -110,7 +110,7 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
         </span>
         {target.kind === 'file' && repoRoot && (
           <button
-            onClick={() => onOpenInEditor(`${repoRoot}/${target.path}`)}
+            onClick={() => onOpenInEditor(`${repoRoot}/${target.path}`, repoRoot)}
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               width: 24, height: 24, border: 'none', borderRadius: 0,

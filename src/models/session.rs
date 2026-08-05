@@ -8,6 +8,7 @@ fn is_false(v: &bool) -> bool {
 ///
 /// - `Tmux`: session driven by a tmux pane; identified by `tmux_session_name`.
 /// - `Acp`: session driven by an ACP adapter subprocess; identified by `acp_session_id`.
+/// - `Pty`: session driven by a self-managed PTY engine; no multiplexer.
 ///
 /// Default flipped from `Tmux` (Phase 2) to `Acp` in Phase 4 once the frontend
 /// Chat view landed. Callers that still want a tmux session must pass
@@ -20,6 +21,7 @@ pub enum RuntimeKind {
     Tmux,
     #[default]
     Acp,
+    Pty,
 }
 
 /// Request DTO for adopting an external tmux session into a project.

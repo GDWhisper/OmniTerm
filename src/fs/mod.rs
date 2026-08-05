@@ -27,6 +27,18 @@ const MAX_SUBPATHS_COUNT: u64 = 1000;
 /// Sanitize a requested path against a base directory.
 /// Prevents directory traversal attacks. The path must already exist.
 pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
+    sanitize_path_inner(base, requested, false)
+}
+
+/// Like [`sanitize_path`], but allows the resolved path to escape the base
+/// directory. Only use for trusted callers that explicitly need unrestricted
+/// filesystem access (e.g. sessions pinned to an absolute path outside the
+/// workspace). Null-byte validation and the existence requirement still apply.
+pub fn sanitize_path_allow_escape(base: &Path, requested: &str) -> Result<PathBuf> {
+    sanitize_path_inner(base, requested, true)
+}
+
+fn sanitize_path_inner(base: &Path, requested: &str, allow_escape: bool) -> Result<PathBuf> {
     let joined = join_and_validate(base, requested)?;
 
     if !joined.exists() {
@@ -35,11 +47,12 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
 
     let canonical = joined.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
 
-    let canonical_base =
-        base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
-
-    if !canonical.starts_with(&canonical_base) {
-        return Err(anyhow!("access denied: path escapes workspace root"));
+    if !allow_escape {
+        let canonical_base =
+            base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
+        if !canonical.starts_with(&canonical_base) {
+            return Err(anyhow!("access denied: path escapes workspace root"));
+        }
     }
 
     Ok(canonical)
@@ -48,6 +61,18 @@ pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
 /// Sanitize a path for creation (write, mkdir, upload).
 /// Does NOT require the path to exist — only validates the parent is within base.
 pub fn sanitize_path_new(base: &Path, requested: &str) -> Result<PathBuf> {
+    sanitize_path_new_inner(base, requested, false)
+}
+
+/// Like [`sanitize_path_new`], but allows creating paths outside the base
+/// directory. Only use for trusted callers that explicitly need unrestricted
+/// filesystem access. Null-byte validation and the parent-ancestor resolution
+/// still apply.
+pub fn sanitize_path_new_allow_escape(base: &Path, requested: &str) -> Result<PathBuf> {
+    sanitize_path_new_inner(base, requested, true)
+}
+
+fn sanitize_path_new_inner(base: &Path, requested: &str, allow_escape: bool) -> Result<PathBuf> {
     let joined = join_and_validate(base, requested)?;
 
     let canonical_base =
@@ -60,11 +85,13 @@ pub fn sanitize_path_new(base: &Path, requested: &str) -> Result<PathBuf> {
         if check.exists() {
             let canonical =
                 check.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
-            if !canonical.starts_with(&canonical_base) {
+            if !allow_escape && !canonical.starts_with(&canonical_base) {
                 return Err(anyhow!("access denied: path escapes workspace root"));
             }
             let mut result = canonical;
-            for component in tail {
+            // tail 从最深到最浅压栈，需反转后按「浅→深」拼接
+            // （历史 bug：漏掉 .rev() 会把多层缺失目录拼成反序，如 a/b/c → a/c/b）
+            for component in tail.into_iter().rev() {
                 result = result.join(component);
             }
             return Ok(result);
@@ -100,6 +127,25 @@ fn join_and_validate(base: &Path, requested: &str) -> Result<PathBuf> {
     };
 
     Ok(joined)
+}
+
+/// 按 `allow_escape` 分发到严格版或放行版（读路径）。文件操作以 `base` 为根时
+/// 统一走这里，避免各调用点重复 if/else。
+fn sanitize_read(base: &Path, requested: &str, allow_escape: bool) -> Result<PathBuf> {
+    if allow_escape {
+        sanitize_path_allow_escape(base, requested)
+    } else {
+        sanitize_path(base, requested)
+    }
+}
+
+/// 按 `allow_escape` 分发到严格版或放行版（新建路径）。
+fn sanitize_new(base: &Path, requested: &str, allow_escape: bool) -> Result<PathBuf> {
+    if allow_escape {
+        sanitize_path_new_allow_escape(base, requested)
+    } else {
+        sanitize_path_new(base, requested)
+    }
 }
 
 /// Path type of a filesystem entry.
@@ -258,7 +304,23 @@ pub async fn read_file(base: &Path, rel_path: &str) -> Result<String> {
 
 /// Write content to a file. Creates the file if it doesn't exist.
 pub async fn write_file(base: &Path, rel_path: &str, content: &[u8]) -> Result<()> {
-    let path = sanitize_path_new(base, rel_path)?;
+    write_file_impl(base, rel_path, content, false).await
+}
+
+/// Like [`write_file`], but allows the target to escape `base` for trusted
+/// callers that explicitly request unrestricted access
+/// (see [`sanitize_path_new_allow_escape`]).
+pub async fn write_file_allow_escape(base: &Path, rel_path: &str, content: &[u8]) -> Result<()> {
+    write_file_impl(base, rel_path, content, true).await
+}
+
+async fn write_file_impl(
+    base: &Path,
+    rel_path: &str,
+    content: &[u8],
+    allow_escape: bool,
+) -> Result<()> {
+    let path = sanitize_new(base, rel_path, allow_escape)?;
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).await?;
@@ -270,14 +332,34 @@ pub async fn write_file(base: &Path, rel_path: &str, content: &[u8]) -> Result<(
 
 /// Create a directory (and parents).
 pub async fn create_dir(base: &Path, rel_path: &str) -> Result<()> {
-    let path = sanitize_path_new(base, rel_path)?;
+    create_dir_impl(base, rel_path, false).await
+}
+
+/// Like [`create_dir`], but allows creating directories outside `base`
+/// for trusted callers (see [`sanitize_path_new_allow_escape`]).
+pub async fn create_dir_allow_escape(base: &Path, rel_path: &str) -> Result<()> {
+    create_dir_impl(base, rel_path, true).await
+}
+
+async fn create_dir_impl(base: &Path, rel_path: &str, allow_escape: bool) -> Result<()> {
+    let path = sanitize_new(base, rel_path, allow_escape)?;
     fs::create_dir_all(&path).await?;
     Ok(())
 }
 
 /// Delete a file or directory.
 pub async fn delete_path(base: &Path, rel_path: &str) -> Result<()> {
-    let path = sanitize_path(base, rel_path)?;
+    delete_path_impl(base, rel_path, false).await
+}
+
+/// Like [`delete_path`], but allows deleting paths outside `base` for
+/// trusted callers (see [`sanitize_path_allow_escape`]).
+pub async fn delete_path_allow_escape(base: &Path, rel_path: &str) -> Result<()> {
+    delete_path_impl(base, rel_path, true).await
+}
+
+async fn delete_path_impl(base: &Path, rel_path: &str, allow_escape: bool) -> Result<()> {
+    let path = sanitize_read(base, rel_path, allow_escape)?;
     let metadata = fs::metadata(&path).await?;
 
     if metadata.is_dir() {
@@ -292,8 +374,23 @@ pub async fn delete_path(base: &Path, rel_path: &str) -> Result<()> {
 /// Rename/move a file or directory to a new path.
 /// `new_rel_path` is the full new relative path, not just a name.
 pub async fn move_path(base: &Path, old_rel: &str, new_rel: &str) -> Result<()> {
-    let old = sanitize_path(base, old_rel)?;
-    let new = sanitize_path_new(base, new_rel)?;
+    move_path_impl(base, old_rel, new_rel, false).await
+}
+
+/// Like [`move_path`], but allows moving between paths outside `base` for
+/// trusted callers (see [`sanitize_path_allow_escape`]).
+pub async fn move_path_allow_escape(base: &Path, old_rel: &str, new_rel: &str) -> Result<()> {
+    move_path_impl(base, old_rel, new_rel, true).await
+}
+
+async fn move_path_impl(
+    base: &Path,
+    old_rel: &str,
+    new_rel: &str,
+    allow_escape: bool,
+) -> Result<()> {
+    let old = sanitize_read(base, old_rel, allow_escape)?;
+    let new = sanitize_new(base, new_rel, allow_escape)?;
 
     if let Some(parent) = new.parent() {
         fs::create_dir_all(parent).await?;
@@ -305,12 +402,27 @@ pub async fn move_path(base: &Path, old_rel: &str, new_rel: &str) -> Result<()> 
 
 /// Copy files/directories to a destination directory.
 pub async fn copy_paths(base: &Path, paths: &[String], dest: &str) -> Result<()> {
-    let dest_dir = sanitize_path_new(base, dest)?;
+    copy_paths_impl(base, paths, dest, false).await
+}
+
+/// Like [`copy_paths`], but allows copying from/to paths outside `base` for
+/// trusted callers (see [`sanitize_path_allow_escape`]).
+pub async fn copy_paths_allow_escape(base: &Path, paths: &[String], dest: &str) -> Result<()> {
+    copy_paths_impl(base, paths, dest, true).await
+}
+
+async fn copy_paths_impl(
+    base: &Path,
+    paths: &[String],
+    dest: &str,
+    allow_escape: bool,
+) -> Result<()> {
+    let dest_dir = sanitize_new(base, dest, allow_escape)?;
 
     fs::create_dir_all(&dest_dir).await?;
 
     for p in paths {
-        let src = sanitize_path(base, p)?;
+        let src = sanitize_read(base, p, allow_escape)?;
         let file_name = src.file_name().ok_or_else(|| anyhow!("invalid path"))?;
         let target = dest_dir.join(file_name);
 
@@ -469,13 +581,67 @@ mod tests {
     fn test_sanitize_traversal() {
         let base = Path::new("/tmp/omniterm_test");
         fs::create_dir_all(base).unwrap();
-        assert!(sanitize_path(base, "../../../etc/passwd").is_err());
+        let err = sanitize_path(base, "../../../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
     }
 
     #[test]
     fn test_sanitize_null_byte() {
         let base = Path::new("/tmp/omniterm_test");
         assert!(sanitize_path(base, "foo\0bar").is_err());
+    }
+
+    /// 构造 (base, outside) 夹具：两个同级目录，outside 位于 base 之外。
+    fn escape_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("omniterm_fs_escape_{tag}"));
+        let base = root.join("base");
+        let outside = root.join("outside");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&base).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        (base, outside)
+    }
+
+    #[test]
+    fn test_sanitize_allow_escape_reads_outside_base() {
+        let (base, outside) = escape_fixture("read");
+        // 严格版拒绝逃逸
+        let err = sanitize_path(&base, "../outside").unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        // allow_escape 放行
+        let resolved = sanitize_path_allow_escape(&base, "../outside").unwrap();
+        assert_eq!(resolved, outside.canonicalize().unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_sanitize_allow_escape_etc_passwd() {
+        // 验收标准：路径存在时 "../../../etc/passwd" 放行并解析到 /etc/passwd
+        let base = Path::new("/tmp/omniterm_test");
+        fs::create_dir_all(base).unwrap();
+        let resolved = sanitize_path_allow_escape(base, "../../../etc/passwd").unwrap();
+        assert_eq!(resolved, Path::new("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_sanitize_new_allow_escape_creates_outside_base() {
+        let (base, outside) = escape_fixture("new");
+        // 严格版：父目录解析后逃逸 → 拒绝
+        let err = sanitize_path_new(&base, "../outside/newfile").unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        // allow_escape：允许创建 base 之外的路径
+        let target = sanitize_path_new_allow_escape(&base, "../outside/newfile").unwrap();
+        assert_eq!(target, outside.join("newfile"));
+    }
+
+    /// 回归：多层缺失目录必须按原始顺序拼接（曾因 tail 漏 .rev() 变成 a/c/b）。
+    #[test]
+    fn test_sanitize_new_nested_missing_components_keep_order() {
+        let (base, _outside) = escape_fixture("nested");
+        std::fs::create_dir_all(base.join("a")).unwrap();
+        let resolved = sanitize_path_new(&base, "a/b/c").unwrap();
+        let expected = base.canonicalize().unwrap().join("a").join("b").join("c");
+        assert_eq!(resolved, expected);
     }
 
     #[cfg(windows)]
@@ -491,5 +657,71 @@ mod tests {
     #[test]
     fn test_display_path_unix_passthrough() {
         assert_eq!(display_path_str("/home/user/proj"), "/home/user/proj");
+    }
+
+    // ── *_allow_escape 操作变体：严格版拒绝逃逸，allow_escape 版放行 ──
+
+    #[tokio::test]
+    async fn test_write_file_allow_escape_creates_outside_base() {
+        let (base, outside) = escape_fixture("op_write");
+        // 严格版拒绝逃逸写入
+        let err = write_file(&base, "../outside/strict.txt", b"x").await.unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        assert!(!outside.join("strict.txt").exists());
+        // allow_escape 放行
+        write_file_allow_escape(&base, "../outside/allowed.txt", b"hi").await.unwrap();
+        assert_eq!(fs::read_to_string(outside.join("allowed.txt")).unwrap(), "hi");
+    }
+
+    #[tokio::test]
+    async fn test_delete_path_allow_escape_deletes_outside_base() {
+        let (base, outside) = escape_fixture("op_delete");
+        let target = outside.join("to_delete.txt");
+        fs::write(&target, b"x").unwrap();
+        // 严格版拒绝
+        let err = delete_path(&base, "../outside/to_delete.txt").await.unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        assert!(target.exists());
+        // allow_escape 放行
+        delete_path_allow_escape(&base, "../outside/to_delete.txt").await.unwrap();
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn test_create_dir_allow_escape_creates_outside_base() {
+        let (base, outside) = escape_fixture("op_mkdir");
+        let err = create_dir(&base, "../outside/strict").await.unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        assert!(!outside.join("strict").exists());
+        // allow_escape 放行
+        create_dir_allow_escape(&base, "../outside/allowed").await.unwrap();
+        assert!(outside.join("allowed").is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_move_path_allow_escape_moves_outside_base() {
+        let (base, outside) = escape_fixture("op_move");
+        fs::write(base.join("src.txt"), b"x").unwrap();
+        // 目标在 base 外：严格版拒绝且源文件保留
+        let err = move_path(&base, "src.txt", "../outside/dst.txt").await.unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        assert!(base.join("src.txt").exists());
+        // allow_escape 放行
+        move_path_allow_escape(&base, "src.txt", "../outside/dst.txt").await.unwrap();
+        assert!(outside.join("dst.txt").exists());
+        assert!(!base.join("src.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_copy_paths_allow_escape_copies_outside_base() {
+        let (base, outside) = escape_fixture("op_copy");
+        fs::write(base.join("a.txt"), b"x").unwrap();
+        // 目标在 base 外：严格版拒绝
+        let err = copy_paths(&base, &["a.txt".to_string()], "../outside").await.unwrap_err();
+        assert!(err.to_string().contains("access denied: path escapes workspace root"));
+        assert!(!outside.join("a.txt").exists());
+        // allow_escape 放行
+        copy_paths_allow_escape(&base, &["a.txt".to_string()], "../outside").await.unwrap();
+        assert!(outside.join("a.txt").exists());
     }
 }

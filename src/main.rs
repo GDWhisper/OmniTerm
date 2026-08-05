@@ -2,6 +2,7 @@ mod acp;
 mod api;
 mod auth;
 mod embedded;
+mod engine;
 mod fs;
 mod git;
 mod models;
@@ -11,6 +12,9 @@ mod update;
 mod utils;
 mod workspaces;
 mod ws;
+
+#[cfg(test)]
+mod test_utils;
 
 use anyhow::Context;
 use axum::Router;
@@ -110,6 +114,10 @@ struct StartArgs {
     /// 启动前清空所有用户（忘记密码时使用，重启后需重设密码）
     #[arg(long, env = "OMNITERM_RESET_AUTH")]
     reset_auth: bool,
+
+    /// 强制开启 omniterm 调试日志（等价于 RUST_LOG=omniterm=debug，优先级高于 RUST_LOG 中 omniterm 的级别设置）
+    #[arg(long)]
+    debug: bool,
 }
 
 #[derive(Clone)]
@@ -321,6 +329,9 @@ fn main() -> anyhow::Result<()> {
     let cli_matches = Cli::command().get_matches();
     let cli = Cli::from_arg_matches(&cli_matches)?;
 
+    // `--debug` 由 start 子命令携带（日志初始化在 daemonize 之后，需提前提取）
+    let debug_logging = matches!(&cli.command, Commands::Start(args) if args.debug);
+
     // Daemonize before tokio runtime, if requested
     #[cfg(unix)]
     if let Commands::Start(ref args) = cli.command
@@ -339,9 +350,13 @@ fn main() -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env().add_directive("omniterm=debug".parse()?))
-            .init();
+        let filter = if debug_logging {
+            // --debug 显式开启：覆盖 RUST_LOG 中 omniterm 级别的设置，但保留其他 target 的 directive
+            EnvFilter::from_default_env().add_directive("omniterm=debug".parse()?)
+        } else {
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("omniterm=info"))
+        };
+        tracing_subscriber::fmt().with_env_filter(filter).init();
 
         match cli.command {
         Commands::Update(args) => update::run(args).await,
