@@ -417,22 +417,24 @@ export const api = {
     if (params.projectId) url += `&workspace=${params.projectId}`
     if (params.sort) url += `&sort=${params.sort}`
     if (params.desc) url += `&order=desc`
-    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean }>(url)
+    return request<{ files: FileEntry[]; cwd: string; is_outside_workspace: boolean; workspace_root?: string }>(url)
   },
-  deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string }) => {
+  deleteFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; allowEscape?: boolean }) => {
     let url = `/files?path=${encodeURIComponent(params.path)}`
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
+    if (params.allowEscape) url += `&allow_escape=true`
     return request(url, { method: 'DELETE' })
   },
-  uploadFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; file: File }) => {
+  uploadFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; file: File; allowEscape?: boolean }) => {
     const form = new FormData()
     form.append('file', params.file)
     let url = `/api/v1/files?path=${encodeURIComponent(params.path)}`
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
+    if (params.allowEscape) url += `&allow_escape=true`
     return fetch(url, { method: 'POST', body: form }).then((r) => {
       if (!r.ok) throw new Error(`Upload failed: ${r.status}`)
       return r.json()
@@ -452,14 +454,15 @@ export const api = {
     if (params.projectId) url += `&workspace=${params.projectId}`
     return request<{ content: string }>(url)
   },
-  writeFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; content: string }) => {
+  writeFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; content: string; allowEscape?: boolean }) => {
     let url = `/files/write?path=${encodeURIComponent(params.path)}`
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
+    if (params.allowEscape) url += `&allow_escape=true`
     return request(url, { method: 'POST', body: JSON.stringify({ content: params.content }) })
   },
-  mkdir2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; name: string }) => {
+  mkdir2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; name: string; allowEscape?: boolean }) => {
     const body: { path: string; name: string; session?: string; workspace_id?: string; workspace?: string } = {
       path: params.path,
       name: params.name,
@@ -467,9 +470,11 @@ export const api = {
     if (params.session) body.session = params.session
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
-    return request('/files/mkdir', { method: 'POST', body: JSON.stringify(body) })
+    let url = '/files/mkdir'
+    if (params.allowEscape) url += '?allow_escape=true'
+    return request(url, { method: 'POST', body: JSON.stringify(body) })
   },
-  rename2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; newName: string }) => {
+  rename2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; newName: string; allowEscape?: boolean }) => {
     const body: { path: string; newName: string; session?: string; workspace_id?: string; workspace?: string } = {
       path: params.path,
       newName: params.newName,
@@ -477,9 +482,11 @@ export const api = {
     if (params.session) body.session = params.session
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
-    return request('/files/rename', { method: 'POST', body: JSON.stringify(body) })
+    let url = '/files/rename'
+    if (params.allowEscape) url += '?allow_escape=true'
+    return request(url, { method: 'POST', body: JSON.stringify(body) })
   },
-  moveFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; paths: string[]; destination: string }) => {
+  moveFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; paths: string[]; destination: string; allowEscape?: boolean }) => {
     const body: { paths: string[]; destination: string; session?: string; workspace_id?: string; workspace?: string } = {
       paths: params.paths,
       destination: params.destination,
@@ -487,7 +494,9 @@ export const api = {
     if (params.session) body.session = params.session
     if (params.workspaceId) body.workspace_id = params.workspaceId
     if (params.projectId) body.workspace = params.projectId
-    return request('/files/move', { method: 'POST', body: JSON.stringify(body) })
+    let url = '/files/move'
+    if (params.allowEscape) url += '?allow_escape=true'
+    return request(url, { method: 'POST', body: JSON.stringify(body) })
   },
   searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
     let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`

@@ -22,3 +22,20 @@ export function getParentPath(path: string): string {
   const parent = idx <= 0 ? '' : trimmed.slice(0, idx)
   return /^[A-Za-z]:$/.test(parent) ? parent + '/' : parent
 }
+
+/**
+ * 判断 `filePath` 是否超出 `workspaceRoot` 边界（用于越界写拦截）。
+ *
+ * - workspaceRoot 为 undefined/null/空：视为越界（安全默认——project 模式拿不到
+ *   workspace_root，宁可每次都确认）。
+ * - 路径分隔符边界：用「等于 root 或 root + '/' 前缀」判断，避免 `/home/a`
+ *   误匹配 `/home/ab`。
+ * - workspaceRoot 尾随斜杠先归一化；root 为 `/`（文件系统根）时任何绝对路径都在内。
+ * - Windows 大小写敏感差异忽略（后端有最终防线）。
+ */
+export function isPathOutsideWorkspace(filePath: string, workspaceRoot: string | undefined | null): boolean {
+  if (!workspaceRoot) return true
+  const root = workspaceRoot.replace(/\/+$/, '') || '/'
+  if (root === '/') return false
+  return !(filePath === root || filePath.startsWith(root + '/'))
+}

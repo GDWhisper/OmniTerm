@@ -12,6 +12,9 @@ mod utils;
 mod workspaces;
 mod ws;
 
+#[cfg(test)]
+mod test_utils;
+
 use anyhow::Context;
 use axum::Router;
 use axum::body::Body;

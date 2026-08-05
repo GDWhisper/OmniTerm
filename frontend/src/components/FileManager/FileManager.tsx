@@ -6,6 +6,8 @@ import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
+import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
+import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -116,9 +118,17 @@ export function FileManager() {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [cwd, setCwd] = useState('')  // absolute path from server
   const [isOutsideWorkspace, setIsOutsideWorkspace] = useState(false)
+  // workspace 边界根路径（listFiles2 返回的 workspace_root）；project 模式为 undefined
+  const [workspaceRoot, setWorkspaceRoot] = useState<string | undefined>(undefined)
+
+  // ── 越界写拦截弹窗状态 ──
+  // pendingOutsideAction: 越界且未「暂时别提醒」时挂起的写操作（确认后执行，请求带 allow_escape=true）
+  const [pendingOutsideAction, setPendingOutsideAction] = useState<{ run: () => void } | null>(null)
+  // deleteDialog: 非越界删除的普通确认弹窗（取代原 window.confirm）
+  const [deleteDialog, setDeleteDialog] = useState<{ count: number; run: () => void } | null>(null)
 
   // Per-session file list cache for instant display on session switch
-  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean }>>(new Map())
+  const fileCache = useRef<Map<string, { files: FileEntry[]; cwd: string; isOutsideWorkspace: boolean; workspaceRoot?: string }>>(new Map())
   const [loading, setLoading] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDesc, setSortDesc] = useState(false)
@@ -183,8 +193,10 @@ export function FileManager() {
       setFiles((prev) => filesEqual(prev, newFiles) ? prev : newFiles)
       if (data.cwd) setCwd(data.cwd)
       setIsOutsideWorkspace(data.is_outside_workspace ?? false)
+      // project 模式无 workspace_root（undefined）→ 重置为 undefined，此时总是弹确认（安全默认）
+      setWorkspaceRoot(data.workspace_root)
       if (data.cwd) {
-        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false })
+        fileCache.current.set(sourceKey!, { files: newFiles, cwd: data.cwd, isOutsideWorkspace: data.is_outside_workspace ?? false, workspaceRoot: data.workspace_root })
       }
       if (!silent) setSelected(new Set())
       return data.cwd
@@ -207,6 +219,30 @@ export function FileManager() {
   cwdRef.current = cwd
   const fetchFilesRef = useRef(fetchFiles)
   fetchFilesRef.current = fetchFiles
+
+  // ── 越界写拦截 ──
+  // 越界（isOutsideWorkspace）且未勾选「暂时别提醒」时，挂起写操作并弹 ConfirmDialog；
+  // 否则直接执行（越界已跳过时同样直接执行，请求仍带 allow_escape=true）。
+  const gateWrite = (run: () => void) => {
+    if (isOutsideWorkspace && !isOutsideSkipped(workspaceRoot)) {
+      setPendingOutsideAction({ run })
+    } else {
+      run()
+    }
+  }
+
+  const handleOutsideConfirm = (checked: boolean) => {
+    if (checked) markOutsideSkipped(workspaceRoot)
+    const action = pendingOutsideAction
+    setPendingOutsideAction(null)
+    action?.run()
+  }
+
+  const handleDeleteDialogConfirm = () => {
+    const d = deleteDialog
+    setDeleteDialog(null)
+    d?.run()
+  }
 
   const {
     handlePointerDown: handleFileDragStart,
@@ -257,6 +293,7 @@ export function FileManager() {
       setFiles(cached.files)
       setCwd(cached.cwd)
       setIsOutsideWorkspace(cached.isOutsideWorkspace)
+      setWorkspaceRoot(cached.workspaceRoot)
     }
     if (fmSource.type === 'workspace') {
       fetchFilesRef.current('.')
@@ -474,30 +511,34 @@ export function FileManager() {
   const handleDragOver = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(true) }
   const handleDragLeave = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(false) }
 
-  const handleDrop = async (e: DragEvent) => {
+  const handleDrop = (e: DragEvent) => {
     if (isFileDragActive) return
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
     if (!droppedFiles?.length || !fmSource) return
-    for (let i = 0; i < droppedFiles.length; i++) {
-      const file = droppedFiles[i]
-      try {
-        await api.uploadFile2({
-          session: fmSource.type === 'session' ? fmSource.id : undefined,
-          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-          projectId: activeProjectId ?? undefined,
-          path: cwd,
-          file,
-        })
-      } catch (err: unknown) {
-        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
+    const runUpload = async () => {
+      for (let i = 0; i < droppedFiles.length; i++) {
+        const file = droppedFiles[i]
+        try {
+          await api.uploadFile2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: cwd,
+            file,
+            allowEscape: isOutsideWorkspace ? true : undefined,
+          })
+        } catch (err: unknown) {
+          addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
+        }
       }
+      addToast('success', t('fm.uploadComplete'))
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
+      fetchFiles()
     }
-    addToast('success', t('fm.uploadComplete'))
-    import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-    fetchFiles()
+    gateWrite(runUpload)
   }
 
   const startRename = () => {
@@ -508,7 +549,7 @@ export function FileManager() {
     setEditValue(name)
   }
 
-  const commitRename = async () => {
+  const runRename = async () => {
     if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
     try {
       await api.rename2({
@@ -517,6 +558,7 @@ export function FileManager() {
         projectId: activeProjectId ?? undefined,
         path: editingName,
         newName: editValue.trim(),
+        allowEscape: isOutsideWorkspace ? true : undefined,
       })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
@@ -526,24 +568,38 @@ export function FileManager() {
     setEditingName(null)
   }
 
-  const handleDelete = async (paths?: Set<string>) => {
+  const commitRename = () => {
+    if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
+    gateWrite(runRename)
+  }
+
+  const handleDelete = (paths?: Set<string>) => {
     const targets = paths ?? selected
     if (targets.size === 0 || !fmSource) return
-    if (!confirm(t('fm.confirmDelete', { count: targets.size }))) return
-    try {
-      for (const p of targets) {
-        await api.deleteFile2({
-          session: fmSource.type === 'session' ? fmSource.id : undefined,
-          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-          projectId: activeProjectId ?? undefined,
-          path: p,
-        })
+    const runDelete = async () => {
+      try {
+        for (const p of targets) {
+          await api.deleteFile2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: p,
+            allowEscape: isOutsideWorkspace ? true : undefined,
+          })
+        }
+        addToast('success', t('fm.deleted', { count: targets.size }))
+        import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp'))
+        fetchFiles()
+      } catch (err: unknown) {
+        addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.deleteFailed'))
       }
-      addToast('success', t('fm.deleted', { count: targets.size }))
-      import('../../utils/audioFeedback').then(m => m.play8BitSound('stomp'))
-      fetchFiles()
-    } catch (err: unknown) {
-      addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.deleteFailed'))
+    }
+    if (isOutsideWorkspace) {
+      // 越界：未跳过则弹越界确认；已勾选「暂时别提醒」则直接放行
+      gateWrite(runDelete)
+    } else {
+      // 非越界：普通删除确认弹窗（取代 window.confirm）
+      setDeleteDialog({ count: targets.size, run: runDelete })
     }
   }
 
@@ -573,24 +629,31 @@ export function FileManager() {
     const input = document.createElement('input')
     input.type = 'file'
     input.multiple = true
-    input.onchange = async () => {
+    input.onchange = () => {
       if (!input.files?.length) return
-      for (let i = 0; i < input.files.length; i++) {
-        try {
-          await api.uploadFile2({
-            session: fmSource.type === 'session' ? fmSource.id : undefined,
-            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-            projectId: activeProjectId ?? undefined,
-            path: cwd,
-            file: input.files[i],
-          })
-        } catch (err: unknown) {
-          addToast('error', t('fm.uploadFileFailed', { name: input.files[i].name, msg: err instanceof Error ? err.message : String(err) }))
+      // 快照 File 列表：runUpload 可能被挂起到确认弹窗之后才执行
+      const files = Array.from(input.files)
+      const runUpload = async () => {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i]
+          try {
+            await api.uploadFile2({
+              session: fmSource.type === 'session' ? fmSource.id : undefined,
+              workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+              projectId: activeProjectId ?? undefined,
+              path: cwd,
+              file,
+              allowEscape: isOutsideWorkspace ? true : undefined,
+            })
+          } catch (err: unknown) {
+            addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
+          }
         }
+        addToast('success', t('fm.uploadComplete'))
+        import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
+        fetchFiles()
       }
-      addToast('success', t('fm.uploadComplete'))
-      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-      fetchFiles()
+      gateWrite(runUpload)
     }
     input.click()
   }
@@ -695,38 +758,43 @@ export function FileManager() {
     setTimeout(() => createInputRef.current?.focus(), 0)
   }
 
-  const submitCreate = async () => {
+  const submitCreate = () => {
     if (!fmSource || !createOpen) return
     const name = createName.trim()
     if (!name) { addToast('error', t('fm.nameRequired')); return }
     if (name.includes('/')) { addToast('error', t('fm.nameInvalid')); return }
     const mode = createOpen
-    try {
-      if (mode === 'folder') {
-        await api.mkdir2({
-          session: fmSource.type === 'session' ? fmSource.id : undefined,
-          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-          projectId: activeProjectId ?? undefined,
-          path: cwd,
-          name,
-        })
-      } else {
-        const fullPath = cwd ? `${cwd}/${name}` : name
-        await api.writeFile2({
-          session: fmSource.type === 'session' ? fmSource.id : undefined,
-          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-          projectId: activeProjectId ?? undefined,
-          path: fullPath,
-          content: '',
-        })
+    const runCreate = async () => {
+      try {
+        if (mode === 'folder') {
+          await api.mkdir2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: cwd,
+            name,
+            allowEscape: isOutsideWorkspace ? true : undefined,
+          })
+        } else {
+          const fullPath = cwd ? `${cwd}/${name}` : name
+          await api.writeFile2({
+            session: fmSource.type === 'session' ? fmSource.id : undefined,
+            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+            projectId: activeProjectId ?? undefined,
+            path: fullPath,
+            content: '',
+            allowEscape: isOutsideWorkspace ? true : undefined,
+          })
+        }
+        addToast('success', t('fm.createSuccess', { name }))
+        closeCreate()
+        fetchFiles()
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err)
+        addToast('error', msg || t('fm.createFailed', { msg: msg || '' }))
       }
-      addToast('success', t('fm.createSuccess', { name }))
-      closeCreate()
-      fetchFiles()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      addToast('error', msg || t('fm.createFailed', { msg: msg || '' }))
     }
+    gateWrite(runCreate)
   }
 
   // Breadcrumb segments — always in original order; RTL direction only changes
@@ -1059,6 +1127,27 @@ export function FileManager() {
         </div>
       )}
 
+      {/* 越界写入确认：当前目录超出 workspace 边界，写操作需显式放行（请求带 allow_escape=true） */}
+      <ConfirmDialog
+        open={pendingOutsideAction !== null}
+        onClose={() => setPendingOutsideAction(null)}
+        onConfirmWithChecked={handleOutsideConfirm}
+        title={t('fm.outsideConfirmTitle')}
+        message={t('fm.outsideConfirmMessage')}
+        checkboxLabel={t('fm.outsideSkipCheckbox')}
+        confirmText={t('fm.outsideConfirm')}
+      />
+      {/* 删除确认（非越界，取代原 window.confirm） */}
+      <ConfirmDialog
+        open={deleteDialog !== null}
+        onClose={() => setDeleteDialog(null)}
+        onConfirm={handleDeleteDialogConfirm}
+        title={t('fm.deleteConfirmTitle')}
+        message={deleteDialog ? t('fm.confirmDelete', { count: deleteDialog.count }) : ''}
+        confirmText={t('fm.delete')}
+        destructive
+      />
+
       {/* File Drawer — slides up from bottom when a file is opened */}
       {(drawerFilePath || workspaceDrawerPath) && (
         <FileDrawer
@@ -1066,6 +1155,7 @@ export function FileManager() {
           sessionId={activeSessionId ?? undefined}
           workspaceId={activeWorkspaceId ?? undefined}
           projectId={activeProjectId}
+          workspaceRoot={workspaceRoot}
           onClose={() => {
             if (activeSessionId) closeFmDrawer(activeSessionId)
             else setWorkspaceDrawerPath(null)

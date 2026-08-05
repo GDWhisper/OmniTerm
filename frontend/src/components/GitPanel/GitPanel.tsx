@@ -67,6 +67,8 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [drawerTarget, setDrawerTarget] = useState<GitDrawerTarget | null>(null)
   /** Absolute path of a file opened in the shared FileDrawer from the diff view. */
   const [editorTarget, setEditorTarget] = useState<string | null>(null)
+  /** Repo root of the file opened in the editor — FileDrawer 用它判断越界保存确认 */
+  const [editorWorkspaceRoot, setEditorWorkspaceRoot] = useState<string | null>(null)
   const [drawerHeight, setDrawerHeight] = useState(() => getInitialDrawerHeight('omniterm_git_drawer_height'))
   const [log, setLog] = useState<GitLogEntry[]>([])
   const [logHasMore, setLogHasMore] = useState(false)
@@ -399,9 +401,10 @@ export function GitPanel({ visible }: GitPanelProps) {
           height={drawerHeight}
           onHeightChange={setDrawerHeight}
           refreshTick={statusTick}
-          onOpenInEditor={(absolutePath) => {
+          onOpenInEditor={(absolutePath, repoRoot) => {
             setDrawerTarget(null)
             setEditorTarget(absolutePath)
+            setEditorWorkspaceRoot(repoRoot)
           }}
         />
       )}
@@ -412,6 +415,7 @@ export function GitPanel({ visible }: GitPanelProps) {
           sessionId={bind.session}
           workspaceId={bind.workspaceId}
           projectId={bind.projectId}
+          workspaceRoot={editorWorkspaceRoot ?? undefined}
           onClose={() => setEditorTarget(null)}
           height={drawerHeight}
           onHeightChange={setDrawerHeight}

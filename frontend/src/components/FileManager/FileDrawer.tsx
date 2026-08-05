@@ -7,6 +7,9 @@ const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.F
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 import { READER_FONT } from '../../utils/fonts'
+import { isPathOutsideWorkspace } from '../../utils/path'
+import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
+import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
 /** Supported image extensions for preview mode */
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
@@ -52,6 +55,8 @@ interface FileDrawerProps {
   workspaceId?: string
   /** Project ID — required with workspaceId */
   projectId?: string | null
+  /** Workspace root path (listFiles2 workspace_root); undefined in project mode → 视为越界（安全默认，总是确认） */
+  workspaceRoot?: string
   /** Called when the drawer should close */
   onClose: () => void
   /** Current drawer height in px */
@@ -67,6 +72,7 @@ export function FileDrawer({
   sessionId,
   workspaceId,
   projectId,
+  workspaceRoot,
   onClose,
   height,
   onHeightChange,
@@ -85,6 +91,13 @@ export function FileDrawer({
   const [error, setError] = useState<string | null>(null)
   const [externalChange, setExternalChange] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  // 越界且未勾选「暂时别提醒」时挂起的保存操作（确认后执行，请求带 allow_escape=true）
+  const [pendingSave, setPendingSave] = useState<(() => void) | null>(null)
+  // 当保存被越界弹窗挂起时，把「确认后保存完成」信号传回给等待方（handleClose 的 .then(onClose)）
+  const pendingSaveResolveRef = useRef<(() => void) | null>(null)
+
+  // 是否越界：workspaceRoot 为 undefined（project 模式）时视为越界（安全默认）
+  const isOutside = isPathOutsideWorkspace(filePath, workspaceRoot)
 
   // Track if the file content has been loaded at least once
   const loadedRef = useRef(false)
@@ -144,12 +157,11 @@ export function FileDrawer({
     }
   }, [fileChangeEvent])
 
-  // Save handler
-  const handleSave = async () => {
-    if (!modified || saving) return
+  // 实际写文件逻辑（保存与越界确认后共用）
+  const runSave = async () => {
     setSaving(true)
     try {
-      await api.writeFile2({ session: sessionId, workspaceId, projectId: projectId ?? undefined, path: filePath, content: editedContent })
+      await api.writeFile2({ session: sessionId, workspaceId, projectId: projectId ?? undefined, path: filePath, content: editedContent, allowEscape: isOutside ? true : undefined })
       setContent(editedContent)
       setModified(false)
       setExternalChange(false)
@@ -160,6 +172,28 @@ export function FileDrawer({
     } finally {
       setSaving(false)
     }
+  }
+
+  // Save handler：越界且未「暂时别提醒」时挂起并弹确认，否则直接执行
+  const handleSave = async (): Promise<void> => {
+    if (!modified || saving) return
+    if (isOutside && !isOutsideSkipped(workspaceRoot)) {
+      setPendingSave(() => runSave)
+      await new Promise<void>((resolve) => {
+        pendingSaveResolveRef.current = resolve
+      })
+      return
+    }
+    await runSave()
+  }
+
+  const handleOutsideSaveConfirm = async (checked?: boolean) => {
+    if (checked) markOutsideSkipped(workspaceRoot)
+    const run = pendingSave
+    setPendingSave(null)
+    if (run) await run()
+    pendingSaveResolveRef.current?.()
+    pendingSaveResolveRef.current = null
   }
 
   // Reload from server (discard edits)
@@ -503,6 +537,19 @@ export function FileDrawer({
           </span>
         </div>
       )}
+
+      {/* 越界保存确认：文件超出 workspace 边界，保存需显式放行（请求带 allow_escape=true） */}
+      <ConfirmDialog
+        open={!!pendingSave}
+        onClose={() => setPendingSave(null)}
+        onConfirm={handleOutsideSaveConfirm}
+        title={t('drawer.outsideSaveTitle')}
+        message={t('drawer.outsideSaveMessage', { path: filePath })}
+        confirmText={t('drawer.outsideSaveConfirm')}
+        // workspaceRoot 为 undefined（project 模式）时勾选框无意义（markOutsideSkipped 为 no-op），只保留确认
+        checkboxLabel={workspaceRoot ? t('drawer.outsideSkipCheckbox') : undefined}
+        onConfirmWithChecked={handleOutsideSaveConfirm}
+      />
     </DrawerShell>
   )
 }

@@ -47,6 +47,17 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-05 15:49) `[backend]` `[api]` 文件写类 API 支持显式 `allow_escape=true` 越界放行：delete/write/mkdir/upload/rename/move/copy 在 query 传 `allow_escape=true` 时允许目标路径逃逸出 workspace 根目录（受信调用方显式请求），未传时保持严格越界校验不变；`GET /files` 响应新增 `workspace_root` 字段（session/workspace_id 模式，值为 workspace 根路径，供前端判断越界）；`GET /files/download` 对相对路径越界不再返回 403，直接以 base 拼接原始路径放行下载（`src/api/files.rs`、`src/fs/mod.rs`）
+- (2026-08-05 15:49) `[frontend]` 文件管理「跳过越界确认」：FileManager 越界操作透传 `allow_escape=true`，确认框提供跳过选项直接放行（`frontend/src/api/client.ts`、`frontend/src/components/FileManager/FileManager.tsx`）
+
+### Fixed
+
+- (2026-08-05 15:49) `[backend]` 修复 `sanitize_path_new` 多层缺失目录拼接反序：`tail` 循环漏 `.rev()` 导致 `a/b/c` 解析成 `a/c/b`（当 `a` 存在而 `b/c` 不存在时，mkdir/嵌套写入/越界 move 到多层新目录会生成错误目录结构）（`src/fs/mod.rs`）
+
 ## [0.2.9] - 2026-08-05
 
 ### Added

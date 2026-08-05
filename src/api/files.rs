@@ -36,6 +36,9 @@ struct FileQuery {
     workspace_id: Option<String>, // NEW: actual workspace id
     sort: Option<String>,
     order: Option<String>,
+    /// 前端写类请求透传（delete/write/mkdir/upload/rename/move/copy）：
+    /// 为 true 时允许目标路径逃逸出 workspace 根目录（受信调用方显式请求）。
+    allow_escape: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +243,9 @@ async fn list_files(
             );
         };
 
+        // workspace 根路径：供前端判断越界；解析失败时回退为空串
+        let ws_root = resolve_session_workspace_root(&state, session_id).await.unwrap_or_default();
+
         let rel_path = q.path.as_deref().unwrap_or("");
         let base = std::path::Path::new(&cwd);
 
@@ -247,25 +253,24 @@ async fn list_files(
             return (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": [], "cwd": fs::display_path_str(&cwd), "is_outside_workspace": true }),
+                    json!({ "files": [], "cwd": fs::display_path_str(&cwd), "is_outside_workspace": true, "workspace_root": ws_root }),
                 ),
             );
         }
 
         // Determine if CWD is outside workspace.
         // canonicalize 两侧后再比较，避免 Windows 上分隔符（G:\ vs g:/）与大小写差异误判
-        let is_outside =
-            if let Some(ws_root) = resolve_session_workspace_root(&state, session_id).await {
-                match (
-                    std::path::Path::new(&cwd).canonicalize(),
-                    std::path::Path::new(&ws_root).canonicalize(),
-                ) {
-                    (Ok(c), Ok(r)) => !c.starts_with(&r),
-                    _ => !cwd.starts_with(&ws_root),
-                }
-            } else {
-                false
-            };
+        let is_outside = if !ws_root.is_empty() {
+            match (
+                std::path::Path::new(&cwd).canonicalize(),
+                std::path::Path::new(&ws_root).canonicalize(),
+            ) {
+                (Ok(c), Ok(r)) => !c.starts_with(&r),
+                _ => !cwd.starts_with(&ws_root),
+            }
+        } else {
+            false
+        };
 
         // Resolve the actual directory to list
         let list_base = if rel_path.is_empty() || rel_path == "." {
@@ -285,7 +290,7 @@ async fn list_files(
             Ok(entries) => (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside }),
+                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": ws_root }),
                 ),
             ),
             Err(e) => {
@@ -306,7 +311,7 @@ async fn list_files(
             return (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": [], "cwd": fs::display_path_str(&root), "is_outside_workspace": false }),
+                    json!({ "files": [], "cwd": fs::display_path_str(&root), "is_outside_workspace": false, "workspace_root": root }),
                 ),
             );
         }
@@ -334,7 +339,7 @@ async fn list_files(
             Ok(entries) => (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside }),
+                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": root }),
                 ),
             ),
             Err(e) => {
@@ -377,6 +382,7 @@ async fn upload_file(
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let rel_path = q.path.as_deref().unwrap_or("");
+    let allow_escape = q.allow_escape.unwrap_or(false);
 
     let Some((base, _)) = resolve_base_from_query(
         &state,
@@ -413,7 +419,11 @@ async fn upload_file(
             format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         };
 
-        if let Err(e) = fs::write_file(&base, &target_path, &data).await {
+        if let Err(e) = if allow_escape {
+            fs::write_file_allow_escape(&base, &target_path, &data).await
+        } else {
+            fs::write_file(&base, &target_path, &data).await
+        } {
             error!("upload write failed: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
@@ -450,7 +460,15 @@ async fn delete_file(
         );
     };
 
-    match fs::delete_path(&base, path_str).await {
+    let allow_escape = q.allow_escape.unwrap_or(false);
+
+    let result = if allow_escape {
+        fs::delete_path_allow_escape(&base, path_str).await
+    } else {
+        fs::delete_path(&base, path_str).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("delete failed: {}", e);
@@ -481,15 +499,15 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
     };
 
     // For session mode, paths may be absolute
+    // 越界路径直接放行：相对路径 sanitize 失败（不存在或逃逸）时以 base 拼接原始
+    // 路径继续下载，不再返回 FORBIDDEN —— 对齐 allow_escape 语义，用于会话被固定
+    // 在工作区外的场景。文件确实不存在时由后续 read 返回 NOT_FOUND。
     let full_path = if std::path::Path::new(path_str).is_absolute() {
         std::path::PathBuf::from(path_str)
     } else {
         match fs::sanitize_path(&base, path_str) {
             Ok(p) => p,
-            Err(_) => {
-                return (StatusCode::FORBIDDEN, Json(json!({ "error": "invalid path" })))
-                    .into_response();
-            }
+            Err(_) => base.join(path_str),
         }
     };
 
@@ -649,6 +667,8 @@ async fn write_file(
         );
     };
 
+    let allow_escape = q.allow_escape.unwrap_or(false);
+
     // For session mode, paths may be absolute
     let result: Result<(), anyhow::Error> = if std::path::Path::new(path_str).is_absolute() {
         // Ensure parent directory exists
@@ -656,6 +676,8 @@ async fn write_file(
             let _ = tokio::fs::create_dir_all(parent).await;
         }
         tokio::fs::write(path_str, req.content.as_bytes()).await.map_err(|e| anyhow!(e))
+    } else if allow_escape {
+        fs::write_file_allow_escape(&base, path_str, req.content.as_bytes()).await
     } else {
         fs::write_file(&base, path_str, req.content.as_bytes()).await
     };
@@ -671,6 +693,7 @@ async fn write_file(
 
 async fn mkdir(
     State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let session_id = req.get("session").and_then(|v| v.as_str());
@@ -678,6 +701,7 @@ async fn mkdir(
     let project_id = req.get("workspace").and_then(|v| v.as_str());
     let path = req.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let allow_escape = q.allow_escape.unwrap_or(false);
 
     let Some((base, _)) =
         resolve_base_from_query(&state, session_id, workspace_id, project_id).await
@@ -694,7 +718,13 @@ async fn mkdir(
         format!("{}/{}", path.trim_end_matches('/'), name)
     };
 
-    match fs::create_dir(&base, &dir_path).await {
+    let result = if allow_escape {
+        fs::create_dir_allow_escape(&base, &dir_path).await
+    } else {
+        fs::create_dir(&base, &dir_path).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("mkdir failed: {}", e);
@@ -705,8 +735,11 @@ async fn mkdir(
 
 async fn rename(
     State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
     Json(req): Json<RenameRequest>,
 ) -> impl IntoResponse {
+    let allow_escape = q.allow_escape.unwrap_or(false);
+
     let Some((base, _)) = resolve_base_from_query(
         &state,
         req.session.as_deref(),
@@ -730,7 +763,13 @@ async fn rename(
         _ => req.new_name.clone(),
     };
 
-    match fs::move_path(&base, &req.path, &new_rel).await {
+    let result = if allow_escape {
+        fs::move_path_allow_escape(&base, &req.path, &new_rel).await
+    } else {
+        fs::move_path(&base, &req.path, &new_rel).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("rename failed: {}", e);
@@ -741,8 +780,11 @@ async fn rename(
 
 async fn move_files(
     State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
     Json(req): Json<MoveRequest>,
 ) -> impl IntoResponse {
+    let allow_escape = q.allow_escape.unwrap_or(false);
+
     let Some((base, _)) = resolve_base_from_query(
         &state,
         req.session.as_deref(),
@@ -763,7 +805,12 @@ async fn move_files(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let dest = format!("{}/{}", req.destination.trim_end_matches('/'), file_name);
-        if let Err(e) = fs::move_path(&base, p, &dest).await {
+        let result = if allow_escape {
+            fs::move_path_allow_escape(&base, p, &dest).await
+        } else {
+            fs::move_path(&base, p, &dest).await
+        };
+        if let Err(e) = result {
             error!("move failed: {}", e);
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
         }
@@ -774,8 +821,11 @@ async fn move_files(
 
 async fn copy_files(
     State(state): State<AppState>,
+    Query(q): Query<FileQuery>,
     Json(req): Json<CopyRequest>,
 ) -> impl IntoResponse {
+    let allow_escape = q.allow_escape.unwrap_or(false);
+
     let Some((base, _)) = resolve_base_from_query(
         &state,
         req.session.as_deref(),
@@ -790,7 +840,13 @@ async fn copy_files(
         );
     };
 
-    match fs::copy_paths(&base, &req.paths, &req.destination).await {
+    let result = if allow_escape {
+        fs::copy_paths_allow_escape(&base, &req.paths, &req.destination).await
+    } else {
+        fs::copy_paths(&base, &req.paths, &req.destination).await
+    };
+
+    match result {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
         Err(e) => {
             error!("copy failed: {}", e);
@@ -825,6 +881,283 @@ async fn search_files(
             error!("search failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
         }
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    use super::*;
+    use crate::test_utils::test_state;
+    use axum::body::to_bytes;
+    use std::path::PathBuf;
+
+    /// 建一个 `runtime_kind=acp` 的会话，`workspace_path` 指向临时 base 目录。
+    /// 返回 `(base, outside)` 两个同级目录，outside 位于 base 之外（供逃逸测试）。
+    async fn fixture_session(state: &AppState) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "omniterm_files_handler_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let base = root.join("base");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        sqlx::query(
+            "INSERT INTO projects (id, target_id, name, path, created_at) \
+             VALUES ('test-project', NULL, 'test', ?, '2026-01-01')",
+        )
+        .bind(base.to_str().unwrap())
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, \
+             hook_enabled, hook_status, created_at, runtime_kind) \
+             VALUES ('test-session', 'test-project', ?, 'test', NULL, 0, 'idle', '2026-01-01', 'acp')",
+        )
+        .bind(base.to_str().unwrap())
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        (base, outside)
+    }
+
+    fn session_query(path: &str, allow_escape: Option<bool>) -> FileQuery {
+        FileQuery {
+            path: Some(path.to_string()),
+            workspace: None,
+            session: Some("test-session".to_string()),
+            workspace_id: None,
+            sort: None,
+            order: None,
+            allow_escape,
+        }
+    }
+
+    /// 只带 allow_escape 的 query（session/workspace 走 JSON body 的 handler 用）。
+    fn allow_only(allow_escape: Option<bool>) -> FileQuery {
+        FileQuery {
+            path: None,
+            workspace: None,
+            session: None,
+            workspace_id: None,
+            sort: None,
+            order: None,
+            allow_escape,
+        }
+    }
+
+    async fn body_json(res: Response) -> serde_json::Value {
+        let bytes = to_bytes(res.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn delete_file_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        let target = outside.join("victim.txt");
+        std::fs::write(&target, b"x").unwrap();
+
+        // 未传 allow_escape：越界删除被拒绝（500），文件保留
+        let res =
+            delete_file(State(state.clone()), Query(session_query("../outside/victim.txt", None)))
+                .await
+                .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(target.exists());
+
+        // allow_escape=true：越界删除成功
+        let res =
+            delete_file(State(state), Query(session_query("../outside/victim.txt", Some(true))))
+                .await
+                .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn write_file_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+
+        let res = write_file(
+            State(state.clone()),
+            Query(session_query("../outside/w.txt", None)),
+            Json(WriteRequest { content: "hi".into() }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!outside.join("w.txt").exists());
+
+        let res = write_file(
+            State(state),
+            Query(session_query("../outside/w.txt", Some(true))),
+            Json(WriteRequest { content: "hello".into() }),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(std::fs::read_to_string(outside.join("w.txt")).unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn mkdir_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        let body = || json!({ "session": "test-session", "path": "../outside", "name": "newdir" });
+
+        let res = mkdir(State(state.clone()), Query(allow_only(None)), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!outside.join("newdir").exists());
+
+        let res =
+            mkdir(State(state), Query(allow_only(Some(true))), Json(body())).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(outside.join("newdir").is_dir());
+    }
+
+    #[tokio::test]
+    async fn rename_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        std::fs::write(outside.join("a.txt"), b"x").unwrap();
+        let body = || RenameRequest {
+            path: "../outside/a.txt".into(),
+            new_name: "renamed.txt".into(),
+            session: Some("test-session".into()),
+            workspace: None,
+            workspace_id: None,
+        };
+
+        let res = rename(State(state.clone()), Query(allow_only(None)), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(outside.join("a.txt").exists());
+
+        let res =
+            rename(State(state), Query(allow_only(Some(true))), Json(body())).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(outside.join("renamed.txt").exists());
+        assert!(!outside.join("a.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn move_files_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        std::fs::write(outside.join("m.txt"), b"x").unwrap();
+        let body = || MoveRequest {
+            paths: vec!["../outside/m.txt".into()],
+            destination: "../outside/moved".into(),
+            session: Some("test-session".into()),
+            workspace: None,
+            workspace_id: None,
+        };
+
+        let res = move_files(State(state.clone()), Query(allow_only(None)), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(outside.join("m.txt").exists());
+
+        let res = move_files(State(state), Query(allow_only(Some(true))), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(outside.join("moved").join("m.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn copy_files_escape_rejected_by_default_allowed_with_flag() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        std::fs::write(outside.join("c.txt"), b"x").unwrap();
+        let body = || CopyRequest {
+            paths: vec!["../outside/c.txt".into()],
+            destination: "../outside/copied".into(),
+            session: Some("test-session".into()),
+            workspace: None,
+            workspace_id: None,
+        };
+
+        let res = copy_files(State(state.clone()), Query(allow_only(None)), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!outside.join("copied").join("c.txt").exists());
+
+        let res = copy_files(State(state), Query(allow_only(Some(true))), Json(body()))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(outside.join("copied").join("c.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn download_out_of_base_returns_content_not_forbidden() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+        std::fs::write(outside.join("dl.txt"), b"download-me").unwrap();
+
+        let res =
+            download_file(State(state), Query(session_query("../outside/dl.txt", None))).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"download-me");
+    }
+
+    #[tokio::test]
+    async fn list_files_session_response_includes_workspace_root() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+
+        let res = list_files(State(state), Query(session_query("", None))).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["workspace_root"].as_str(), Some(base.to_str().unwrap()));
+        assert_eq!(v["is_outside_workspace"].as_bool(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn list_files_session_early_return_includes_workspace_root() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        let ghost = base.join("does-not-exist");
+
+        // 插一个 workspace_path 不存在的会话 → 触发 base 不存在早退分支
+        sqlx::query(
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, \
+             hook_enabled, hook_status, created_at, runtime_kind) \
+             VALUES ('ghost-session', 'test-project', ?, 'ghost', NULL, 0, 'idle', '2026-01-01', 'acp')",
+        )
+        .bind(ghost.to_str().unwrap())
+        .execute(&state.db)
+        .await
+        .unwrap();
+
+        let q = FileQuery {
+            path: None,
+            workspace: None,
+            session: Some("ghost-session".to_string()),
+            workspace_id: None,
+            sort: None,
+            order: None,
+            allow_escape: None,
+        };
+        let res = list_files(State(state), Query(q)).await.into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["workspace_root"].as_str(), Some(ghost.to_str().unwrap()));
+        assert_eq!(v["is_outside_workspace"].as_bool(), Some(true));
     }
 }
 
