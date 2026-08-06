@@ -68,6 +68,7 @@ Prefix each entry with the area it affects:
 - (2026-08-05 15:17) `[backend]` 修复 ACP「发送即自动恢复」在进程刚被释放后无效：`is_incoming_closed()` 在主动 shutdown 后恒返回 false，`is_alive()` 又把已关闭连接误判为存活，导致自动恢复的 restore 分支永不触发——改为显式维护 shutdown 标记，恢复流程与手动「恢复会话」一致（`src/acp/client.rs`）
 - (2026-08-05 15:49) `[backend]` 修复 `sanitize_path_new` 多层缺失目录拼接反序：`tail` 循环漏 `.rev()` 导致 `a/b/c` 解析成 `a/c/b`（当 `a` 存在而 `b/c` 不存在时，mkdir/嵌套写入/越界 move 到多层新目录会生成错误目录结构）（`src/fs/mod.rs`）
 - (2026-08-05 05:37) `[backend]` 修复正式版默认输出 DEBUG 日志：日志过滤器硬编码 `omniterm=debug` 会覆盖 `RUST_LOG` 中 omniterm 的级别设置（tracing EnvFilter 同 target 后添加 directive 替换先添加），npm 正式版（无 RUST_LOG）启动即刷 debug 日志——改为尊重 `RUST_LOG`、未设置时默认 `omniterm=info`，需要调试日志时用 `omniterm start --debug` 或 `RUST_LOG=omniterm=debug`（`src/main.rs`）
+- (2026-08-06 23:06) `[frontend]` 修复图片预览在文件改名后显示「加载失败」：drawer 打开图片时 `filePath` 冻结为打开时的绝对路径，文件在 FileManager 中改名后磁盘旧路径消失，后端 download 返回 404 → `<img>` onError → 显示「图片加载失败」；SSE 自动刷新按 basename 匹配，新旧名不匹配也无法挽救。`runRename` 成功后若 drawer 正打开被改名的文件（session 模式 `drawerFilePath` / workspace 模式 `workspaceDrawerPath`）则同步 drawerPath 到新绝对路径（`frontend/src/components/FileManager/FileManager.tsx`）
 
 ## [0.2.9] - 2026-08-05
 

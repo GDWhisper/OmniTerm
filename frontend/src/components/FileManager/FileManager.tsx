@@ -560,17 +560,27 @@ export function FileManager() {
 
   const runRename = async () => {
     if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
+    const newName = editValue.trim()
     try {
       await api.rename2({
         session: fmSource.type === 'session' ? fmSource.id : undefined,
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
         projectId: activeProjectId ?? undefined,
         path: editingName,
-        newName: editValue.trim(),
+        newName,
         allowEscape: isOutsideWorkspace ? true : undefined,
       })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
+      // Drawer 正打开被改名的文件时，同步 drawerPath 到新路径，
+      // 避免预览继续请求已不存在的旧路径而 404（图片预览会显示「加载失败」）
+      const slashIdx = editingName.lastIndexOf('/')
+      const newPath = slashIdx >= 0 ? `${editingName.slice(0, slashIdx)}/${newName}` : newName
+      if (drawerFilePath === editingName) {
+        if (activeSessionId) setFmDrawerPath(activeSessionId, newPath, 'view')
+      } else if (workspaceDrawerPath === editingName) {
+        setWorkspaceDrawerPath(newPath)
+      }
     } catch (err: unknown) {
       addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.renameFailed'))
     }
