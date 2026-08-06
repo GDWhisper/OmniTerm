@@ -726,6 +726,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
                 const cur = wsRef.current
                 if (!cur) throw new Error('socket unavailable')
                 cur.send(JSON.stringify({ type: 'prompt', text: trimmed }))
+                // 排队续发同样代表用户在本会话继续输入：清除旧通知（发送成功才清）。
+                attention.clearAlert(sid)
                 fresh.beginPrompt(sid)
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
@@ -1018,12 +1020,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         frame.images = images.map((img) => ({ data: img.data, mime_type: img.mimeType }))
       }
       ws.send(JSON.stringify(frame))
+      // 用户已回到本会话继续输入 → 知晓最新状况，清除旧通知（done/error/decision）。
+      // 清除放在 send 成功之后：发送失败时用户正面对错误提示，通知语义不破坏。
+      attention.clearAlert(sid)
       s.beginPrompt(sid)
     } catch {
       // send 失败（底层缓冲满 / 连接已坏）：不乐观置 sending，直接报错
       s.markError(sid, 'Failed to send message — connection unavailable')
     }
-  }, [])
+  }, [attention])
 
   const cancel = useCallback(() => {
     const ws = wsRef.current
