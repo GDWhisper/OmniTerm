@@ -33,6 +33,9 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
   useEffect(() => {
     if (!fileChangeEvent) return
     if (fileChangeEvent.kind === 'delete') return
+    // rename 事件的路径切换由 FileDrawer 统一处理（onPathChange 跟随新路径），
+    // 这里只负责内容变更（modify）刷新，避免用旧路径重新请求触发 404
+    if (fileChangeEvent.kind === 'rename') return
     // Match by basename (SSE event path is relative, filePath is absolute)
     const eventName = fileChangeEvent.path.split('/').pop()
     if (eventName !== fileName) return

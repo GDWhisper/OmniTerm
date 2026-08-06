@@ -496,6 +496,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
           )}
           {editing ? (
             <textarea
+              className="overlay-scroll-content"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {

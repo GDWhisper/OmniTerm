@@ -286,8 +286,17 @@ export function FileManager() {
   // ── Primary fetch effect: triggers on source/mode/path change ──
   // Replaces 3 previously-separate effects (manual mode, following mode, source switch)
   // that redundantly overlapped on session switch, causing duplicate requests.
+  const prevSourceTypeRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!fmSource) { setFiles([]); setCwd(''); return }
+    // 切换 source 类型（workspace ↔ session）时清空旧 source 留下的 drawer 路径，
+    // 避免 workspaceRoot 更新为新源后与旧 filePath 失配而误弹越界确认
+    // （FileDrawer 的 workspaceDrawerPath 属于 workspace 模式，fmState.drawerPath 属于 session 模式）。
+    const newType = fmSource.type
+    if (prevSourceTypeRef.current && prevSourceTypeRef.current !== newType) {
+      setWorkspaceDrawerPath(null)
+    }
+    prevSourceTypeRef.current = newType
     const cached = fileCache.current.get(sourceKey!)
     if (cached) {
       setFiles(cached.files)
@@ -551,17 +560,27 @@ export function FileManager() {
 
   const runRename = async () => {
     if (!editingName || !editValue.trim() || !fmSource) { setEditingName(null); return }
+    const newName = editValue.trim()
     try {
       await api.rename2({
         session: fmSource.type === 'session' ? fmSource.id : undefined,
         workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
         projectId: activeProjectId ?? undefined,
         path: editingName,
-        newName: editValue.trim(),
+        newName,
         allowEscape: isOutsideWorkspace ? true : undefined,
       })
       addToast('success', t('fm.renameSuccess'))
       fetchFiles()
+      // Drawer 正打开被改名的文件时，同步 drawerPath 到新路径，
+      // 避免预览继续请求已不存在的旧路径而 404（图片预览会显示「加载失败」）
+      const slashIdx = editingName.lastIndexOf('/')
+      const newPath = slashIdx >= 0 ? `${editingName.slice(0, slashIdx)}/${newName}` : newName
+      if (drawerFilePath === editingName) {
+        if (activeSessionId) setFmDrawerPath(activeSessionId, newPath, 'view')
+      } else if (workspaceDrawerPath === editingName) {
+        setWorkspaceDrawerPath(newPath)
+      }
     } catch (err: unknown) {
       addToast('error', (err instanceof Error ? err.message : String(err)) || t('fm.renameFailed'))
     }
@@ -1156,6 +1175,10 @@ export function FileManager() {
           workspaceId={activeWorkspaceId ?? undefined}
           projectId={activeProjectId}
           workspaceRoot={workspaceRoot}
+          onPathChange={(newPath) => {
+            if (activeSessionId) setFmDrawerPath(activeSessionId, newPath, 'view')
+            else setWorkspaceDrawerPath(newPath)
+          }}
           onClose={() => {
             if (activeSessionId) closeFmDrawer(activeSessionId)
             else setWorkspaceDrawerPath(null)

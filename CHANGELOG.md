@@ -47,6 +47,17 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.11] - 2026-08-06
+
+### Fixed
+
+- (2026-08-06 23:45) `[frontend]` ACP 会话输入框等 textarea 滚动条统一走 `overlay-scroll-content` 主题化样式：ChatInput/ChatMessage/GitPanel 的滚动条与全局主题一致，不再出现浏览器默认滚动条样式（`frontend/src/components/Chat/ChatInput.tsx`、`ChatMessage.tsx`、`GitPanel.tsx`）
+- (2026-08-06 23:31) `[frontend]` 修复外部改名（SSE rename 事件）后 drawer 预览同样显示「加载失败」：tmux/IDE 里 `mv` 触发的 rename 事件被 basename 匹配命中后仍用旧 filePath 重新加载而 404（图片 bump version 重载旧路径同样失败）。新增 `resolveRenamedPath`（`frontend/src/utils/path.ts`）：drawer 绝对路径以「/ + 相对旧路径」结尾时还原 watch 根并拼出新绝对路径，同目录改名与跨目录 move 均覆盖、同名不同目录不误切；FileDrawer 收到 rename 事件经 `onPathChange` 回调切换 drawerPath（`frontend/src/components/FileManager/FileDrawer.tsx`、`FilePreview.tsx`、`FileManager.tsx`）
+- (2026-08-06 23:06) `[frontend]` 修复图片预览在文件改名后显示「加载失败」：drawer 打开图片时 `filePath` 冻结为打开时的绝对路径，文件在 FileManager 中改名后磁盘旧路径消失，后端 download 返回 404 → `<img>` onError → 显示「图片加载失败」；SSE 自动刷新按 basename 匹配，新旧名不匹配也无法挽救。`runRename` 成功后若 drawer 正打开被改名的文件（session 模式 `drawerFilePath` / workspace 模式 `workspaceDrawerPath`）则同步 drawerPath 到新绝对路径（`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-08-06 18:04) `[backend]` 修复已释放会话发送 prompt 报原始库错误 `connection is no longer running`：自动恢复路径 `let _ = handle.await` 只等 replay 任务结束不取 load 结果，session/load 失败后 prompt 仍发进未加载/已死连接；死 client 滞留 supervisor 使重试无法触发新恢复。改为 replay 任务返回 load 结果，仅 load 成功才 dispatch；load 失败时 dispose+shutdown 死 client（Arc::ptr_eq 守卫）；dispatch 失败且连接已主动释放（reaper 回收/手动 release）时不再透传库原始错误，改发可操作提示「会话进程已释放，请重新发送以自动恢复连接」（`src/ws/acp.rs`）
+- (2026-08-06 16:35) `[backend]` `[frontend]` 修复在工作区内编辑文件仍误弹「文件不在当前工作区内」二次确认：根因是 `is_outside_workspace` 用 tmux 静态 cwd + session 创建时记录的 `workspace_path` 静态边界判断，而用户实际浏览/编辑的目录常与二者都不一致（adopt 外部 tmux 会话时 pane_cwd 偶发不在项目根、跨 worktree 浏览、tmux 临时 cd 出去又回到项目内等）。修复点：(1) `listFiles2` 的 `is_outside_workspace` 与 `workspace_root` 改基于用户实际浏览目录（`list_base.canonicalize()`），并在原始判断为越界时**回退探测**——先查 session 所属 project 的 worktrees，再退化为 `git rev-parse --show-toplevel`，命中则视为在工作区内（`src/api/files.rs`）；(2) `fs::sanitize_path[_new]_inner` 同步加入 git_toplevel 兜底，让 mkdir/rename/move/copy/delete 在跨 worktree / workspace_path 失配场景下不再 403，与 listFiles2 兜底语义一致（`src/fs/mod.rs`）；(3) 前端 `FileDrawer.isOutside` 在 `workspaceRoot` 为空（DB 暂未返回 / 会话无 workspace_path / 瞬时网络错误）时不再视为越界，与后端 `is_outside_workspace` 在 `ws_root` 为空时返回 `false` 的语义对齐，避免后端不拦前端却误弹（`frontend/src/components/FileManager/FileDrawer.tsx`）；(4) 切换 `fmSource` 类型（workspace ↔ session）时清空遗留的 `workspaceDrawerPath`，避免 workspaceRoot 切换为新源后与旧 filePath 失配而误弹（`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-08-06 16:04) `[frontend]` 修复 ACP 会话旧通知残留：用户已在会话中继续发送新 prompt（即时发送或排队续发）时清除该会话的 done/error/decision 提醒——发送成功即视为用户已知晓最新状况，不再反复提示（`frontend/src/hooks/useAcpChat.ts`）
+
 ## [0.2.10] - 2026-08-05
 
 ### Added

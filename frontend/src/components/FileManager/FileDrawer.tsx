@@ -7,8 +7,9 @@ const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.F
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 import { READER_FONT } from '../../utils/fonts'
-import { isPathOutsideWorkspace } from '../../utils/path'
+import { isPathOutsideWorkspace, resolveRenamedPath } from '../../utils/path'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
+import type { FileChangeEvent } from '../../hooks/useFileWatcher'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
 /** Supported image extensions for preview mode */
@@ -59,12 +60,14 @@ interface FileDrawerProps {
   workspaceRoot?: string
   /** Called when the drawer should close */
   onClose: () => void
+  /** Called when the open file is renamed externally (SSE rename event) — switch to the new path */
+  onPathChange?: (newPath: string) => void
   /** Current drawer height in px */
   height: number
   /** Called when height changes (drag) */
   onHeightChange: (height: number) => void
   /** SSE change events — when the current file changes externally */
-  fileChangeEvent: { kind: string; path: string } | null
+  fileChangeEvent: FileChangeEvent | null
 }
 
 export function FileDrawer({
@@ -74,6 +77,7 @@ export function FileDrawer({
   projectId,
   workspaceRoot,
   onClose,
+  onPathChange,
   height,
   onHeightChange,
   fileChangeEvent,
@@ -96,8 +100,14 @@ export function FileDrawer({
   // 当保存被越界弹窗挂起时，把「确认后保存完成」信号传回给等待方（handleClose 的 .then(onClose)）
   const pendingSaveResolveRef = useRef<(() => void) | null>(null)
 
-  // 是否越界：workspaceRoot 为 undefined（project 模式）时视为越界（安全默认）
-  const isOutside = isPathOutsideWorkspace(filePath, workspaceRoot)
+  // 是否越界：与后端 listFiles2 的 is_outside_workspace 语义一致——
+  // workspaceRoot 为空（DB 暂未返回 / 会话无 workspace_path / network error）时
+  // 视为"无边界信息"不弹确认（与后端 ws_root.is_empty() → false 保持一致），
+  // 避免 DB 瞬时错误或 project 模式（FileDrawer 在 fmSource=null 时本不渲染）下误报。
+  // 真正的安全防线在后端 fs::sanitize_path 仍会拦截 allowEscape 缺失的越界写。
+  const isOutside = workspaceRoot
+    ? isPathOutsideWorkspace(filePath, workspaceRoot)
+    : false
 
   // Track if the file content has been loaded at least once
   const loadedRef = useRef(false)
@@ -145,6 +155,15 @@ export function FileDrawer({
 
     if (fileChangeEvent.kind === 'delete') {
       setError(t('drawer.fileDeletedExternally'))
+      return
+    }
+
+    // 外部改名（如 tmux 里 mv）：跟随到新路径，避免旧路径 404（图片预览会显示「加载失败」）
+    // resolveRenamedPath 通过「绝对路径以 /+相对旧路径 结尾」还原 watch 根并拼出新绝对路径，
+    // 覆盖同目录改名与跨目录 move，且避免同名文件被改名时基于 basename 误切路径
+    if (fileChangeEvent.kind === 'rename' && fileChangeEvent.newPath) {
+      const newPath = resolveRenamedPath(filePath, fileChangeEvent.path, fileChangeEvent.newPath)
+      if (newPath) onPathChange?.(newPath)
       return
     }
 

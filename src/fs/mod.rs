@@ -51,6 +51,16 @@ fn sanitize_path_inner(base: &Path, requested: &str, allow_escape: bool) -> Resu
         let canonical_base =
             base.canonicalize().map_err(|e| anyhow!("base path resolution failed: {}", e))?;
         if !canonical.starts_with(&canonical_base) {
+            // 兜底：绝对路径且不在 base 内（典型场景：session.adopt 时
+            // workspace_path 存错 / 跨 worktree 浏览），若该路径有祖先 git repo
+            // 且 toplevel 存在，视为在工作区内放行。与 listFiles2 的
+            // `resolve_effective_workspace_root` 兜底语义保持一致——前端不弹
+            // 越界提示时后端也不应拒绝，否则 user 视角"在工作区内"的操作会
+            // 莫名其妙 403。FileDrawer 等调用方在 effective_workspace_root 命中
+            // 时不传 allow_escape（不弹即不传），依赖此兜底完成写入。
+            if is_inside_git_toplevel(&canonical) {
+                return Ok(canonical);
+            }
             return Err(anyhow!("access denied: path escapes workspace root"));
         }
     }
@@ -86,6 +96,14 @@ fn sanitize_path_new_inner(base: &Path, requested: &str, allow_escape: bool) -> 
             let canonical =
                 check.canonicalize().map_err(|e| anyhow!("path resolution failed: {}", e))?;
             if !allow_escape && !canonical.starts_with(&canonical_base) {
+                // 同 sanitize_path_inner：绝对路径 + git_toplevel 兜底
+                if is_inside_git_toplevel(&canonical) {
+                    let mut result = canonical;
+                    for component in tail.into_iter().rev() {
+                        result = result.join(component);
+                    }
+                    return Ok(result);
+                }
                 return Err(anyhow!("access denied: path escapes workspace root"));
             }
             let mut result = canonical;
@@ -110,6 +128,36 @@ fn sanitize_path_new_inner(base: &Path, requested: &str, allow_escape: bool) -> 
             }
         }
     }
+}
+
+/// 兜底检查：`path` 是否位于某个祖先 git 仓库的 toplevel 之下。
+/// 用于 session.adopt workspace_path 存错 / 跨 worktree 浏览时，sanitize_path
+/// 拒绝 base 外的写操作的兜底放行——与 listFiles2 `resolve_effective_workspace_root`
+/// 的 git_toplevel 兜底语义保持一致。
+/// 失败/非 git repo 返回 false（仍走原拒绝路径，行为不变）。
+fn is_inside_git_toplevel(path: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    let Some(path_str) = path.to_str() else {
+        return false;
+    };
+    let output = Command::new("git")
+        .args(["-C", path_str, "rev-parse", "--show-toplevel"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(out) = output else { return false };
+    if !out.status.success() {
+        return false;
+    }
+    let Ok(s) = String::from_utf8(out.stdout) else { return false };
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(toplevel) = std::path::Path::new(trimmed).canonicalize() else {
+        return false;
+    };
+    path.starts_with(&toplevel)
 }
 
 /// Shared helper: strip null bytes and join against base.
