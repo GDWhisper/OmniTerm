@@ -27,6 +27,9 @@
     内容少时自适应高度、超出 maxHeight 才滚动（详见组件 docstring）
 - **唯一例外**：需要**横向**滚动的容器（如 FileManager 表格 `.fm-table-wrap`）
   ——OverlayScroll 只支持纵向，这类保留主题化原生滚动条
+- **原生表单元素（textarea 等）**：无法被 `<OverlayScroll>` 的 div 包裹，直接在
+  元素上挂 `.overlay-scroll-content` 类即可获得同一主题化滚动条
+  （窄、pixel 直角、hover/focus 才显现），禁止裸用浏览器默认滚动条
 
 **已有案例**：
 

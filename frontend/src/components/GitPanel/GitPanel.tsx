@@ -344,7 +344,7 @@ export function GitPanel({ visible }: GitPanelProps) {
           {/* ── Bottom-fixed commit box ── */}
           <div className="git-commit-box">
             <textarea
-              className="git-commit-input"
+              className="git-commit-input overlay-scroll-content"
               placeholder={t('git.commitPlaceholder')}
               value={message}
               onChange={(e) => setMessage(e.target.value)}

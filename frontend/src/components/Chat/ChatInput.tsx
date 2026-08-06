@@ -768,6 +768,7 @@ export function ChatInput({
         )}
         <textarea
           ref={textareaRef}
+          className="overlay-scroll-content"
           value={text}
           onChange={(e) => {
             setText(e.target.value)
