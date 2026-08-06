@@ -148,7 +148,9 @@ turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `
 
 reaper 空闲回收 / 手动 release / 后端重启都会让 ACP agent 子进程离开 supervisor，但 WS 连接（`ws/acp.rs::handle_acp_ws`）不随之关闭——主循环仍持有 `notify_tx`，`client` 为 `Some`（连接已死）。此前用户此时发送 prompt 会命中死连接，`send_request` 报 "connection is no longer running" 原样透传前端。现在：
 
-- **Prompt 到达时按需恢复**：`AcpClient::is_alive()`（`!connection.is_incoming_closed()`）检测连接活性。client 缺失或已死 → 调 `restore_acp_session`（spawn agent + supervisor 注册 + 历史重放转发，与手动 `load_session` 复用同一流程），返回 `(new_client, replay_handle)`；历史重放完成后才经 `dispatch_prompt` 发送 prompt（避免与 replay 帧交错）。前端零改动——重放走既有 replay 协议，`suppressReplay`（非手动 restore 且本地已有消息）自动丢弃重放内容帧，用户刚发的消息保留。
+- **Prompt 到达时按需恢复**：`AcpClient::is_alive()` 组合显式 `alive: AtomicBool`（`shutdown()`/`disconnect()` 置 false——主动回收不触发 incoming EOF，仅靠 `is_incoming_closed()` 会误判死连接为存活）+ `!connection.is_incoming_closed()`（兜底 agent 崩溃的 EOF 路径）。client 缺失或已死 → 调 `restore_acp_session`（spawn agent + supervisor 注册 + 历史重放转发，与手动 `load_session` 复用同一流程），返回 `(new_client, replay_handle)`；replay 任务携带 load 结果（`JoinHandle<Result<(), String>>`），**仅 load 成功后**才经 `dispatch_prompt` 发送 prompt（避免与 replay 帧交错，更避免发进未加载/已死的会话）。前端零改动——重放走既有 replay 协议，`suppressReplay`（非手动 restore 且本地已有消息）自动丢弃重放内容帧，用户刚发的消息保留。
+- **load 失败不发送 + 清理重试**：`session/load` 失败（agent 拒绝/进程死亡）时 replay 任务发 `load_failed` error 帧代替 `replay_end`，prompt 不 dispatch；同时若 supervisor 中仍是该 client（`Arc::ptr_eq` 防误删并发恢复的新 client）则 dispose + shutdown，让下次发送从干净状态重试恢复。
+- **释放态发送的报错可读化**：`dispatch_prompt` 失败时若 `is_alive()` 已为 false（reaper 回收等在途 kill），不透传库的 "connection is no longer running"，改发「会话进程已释放，请重新发送以自动恢复连接」；连接存活时的 agent 侧错误仍原样透传。
 - **连接时区分「已释放可恢复」与「已删除」**：supervisor miss 时查 `sessions` 行存在性。行存在（可恢复）→ 只发 `process_alive:false` 不发 `session_not_found`，前端保持 released 态、输入可用；行已删 → 发 `session_not_found` 标记 ended。
 - **`acp_process_alive` 恒序列化**（`src/models/session.rs`，移除 `skip_serializing_if`）：此前 false 不出现在 `list_sessions` 响应，前端 3s 轮询整体替换 sessions 会把「已释放」态覆盖成 undefined，导致恢复按钮/DEAD 指示闪断。
 

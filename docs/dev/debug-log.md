@@ -1125,3 +1125,30 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 根因链：reaper 回收 → `AcpClient::shutdown()`（drop shutdown_tx，主动 teardown）→ `is_incoming_closed()` 恒 false（incoming 不读 EOF）→ Prompt 分支 `is_alive()` 返回 true → 不走自动恢复 → `send_prompt` 命中死连接 → 库报 "connection is no longer running" 原样透传。
 - 修复（`src/acp/client.rs`）：`AcpClient` 新增 `alive: AtomicBool`，两个构造器初始 `true`，`shutdown()`/`disconnect()` 置 `false`；`is_alive()` 改为 `alive.load() && !connection.is_incoming_closed()`（后者兜底 agent 崩溃的 EOF 路径）。
 - 验证：临时探针测试（spawn mock agent → `is_alive()==true` → `shutdown()` → `is_alive()==false`）通过；`cargo check`/`clippy -D warnings`/`cargo test`（154 passed）/`cargo fmt --check` 全过；node 脚本走 pi-acp initialize→load→prompt 全链路确认协议层可用。
+
+## 2026-08-06: 「发送即自动恢复」第三次复现——恢复后 dispatch 不检查 load 成败 + 在途 prompt 被 kill 时透传库原始错误
+
+**症状**：preview 分支 codebuddy 会话被释放后发送提示词报 `Internal error: "failed to send outgoing request \`session/prompt\`: connection is no longer running"`，未自动恢复。前两次修复（08-04 自动恢复流程、08-05 alive 标志）均已在代码与运行二进制中，说明是**新的漏判路径**而非旧修复失效。
+
+**可复用的理论/模式**：
+
+**1. 「等前置步骤完成再执行下一步」的编排必须区分「完成」与「完成后成功」——`JoinHandle<()>` 把业务成败抹平成任务生命周期**。自动恢复路径 `let _ = handle.await; dispatch_prompt(...)` 只等 replay 任务结束，不取 load 结果：`session/load` 失败（agent 拒绝未知会话 / 进程中途死亡）后 prompt 仍被发进未加载或已死的连接，命中死连接报 "connection is no longer running"。**凡是「前置步骤失败则后续不得执行」的串联，前置任务必须返回 `Result`，等待方必须分支处理**，JoinHandle 只保证任务退出、不保证业务成功。
+
+**2. 恢复类流程失败必须把状态收敛回「可从干净状态重试」，否则半成品会污染后续所有基于它的判定**。restore 先 `supervisor.insert` 再异步 load；load 失败后死 client 滞留 supervisor——agent 存活但会话未 load 时 `is_alive()` 恒 true，后续 prompt 直接发进未加载会话，连「再试一次自动恢复」的机会都没有。修复：load 失败时 dispose+shutdown（`Arc::ptr_eq` 守卫防误删并发恢复出的新 client）。**注册表先注册后初始化的模式，失败路径必须有配套的注销**。
+
+**3. 错误透传要区分「我方主动动作的后续效应」与「对端故障」，前者翻译成可操作提示**。reaper 回收杀掉连接时，在途的 `send_prompt` 以 "connection is no longer running" 失败并原样广播——用户看到的是「发送功能坏了」，实际是「进程已被回收，重发即可自动恢复」。`dispatch_prompt` 失败分支按 `is_alive()` 分流：已释放 → 「会话进程已释放，请重新发送以自动恢复连接」；连接存活 → agent 侧错误原样透传。
+
+**4. 运行日志缺某条诊断日志 ≠ 该路径没走——先核对运行二进制是否包含该日志的提交**。preview 日志里完全没有 replay 诊断行，一度被当成「自动恢复没执行」的证据；实际是运行二进制（17:01 构建）早于诊断日志提交 477d79c（16:48 提交、构建已开始未包含）——用 `strings 二进制 | grep 日志文案` 验证二进制的实际内容，再下结论。
+
+**诊断过程中的错误**：
+
+1. **先怀疑旧修复未部署**：看到同样报错直接假设 preview 二进制缺 08-05 的 alive 修复，浪费一轮排查。核对构建时间（进程启动 17:01 晚于修复提交 15:17）即排除。**同一报错复现 ≠ 同一根因复现**——先确认旧修复在不在，再找新路径。
+2. **把「日志里没有 replay 行」当作自动恢复未执行的证据**：实际是二进制不含该诊断提交（见理论 4）。日志缺失的归因顺序：路径没走 → 日志级别被过滤 → 二进制没有该日志代码，逐一排除。
+
+**具体根因与修复**：
+
+- 根因链 A（主）：已释放会话发送 → 自动恢复 spawn 新 client 并注册 supervisor → `session/load` 失败（agent 拒绝/进程死亡）→ replay 任务只发 load_failed 帧、`JoinHandle<()>` 不带成败 → dispatch 任务照发 prompt → 命中死/未加载连接报原始错误；且死 client 滞留 supervisor，重试也无法触发新恢复。
+- 根因链 B（次）：reaper 回收时若有 prompt 在途，pending `send_request` 随 teardown 失败，库原始错误 "connection is no longer running" 直接广播前端。
+- 修复（`src/ws/acp.rs`）：① replay 任务返回 `JoinHandle<Result<(), String>>`，Prompt 自动恢复仅 `Ok(Ok(()))` 才 `dispatch_prompt`；② load 失败时若 supervisor 仍是该 client（`Arc::ptr_eq`）则 dispose+shutdown，下次发送重新恢复；③ `dispatch_prompt` 失败且 `!is_alive()` 时改发「会话进程已释放，请重新发送以自动恢复连接」。
+- 验证：`cargo fmt`/`check`/`clippy -D warnings`/`test` 全过；真实 dev 环境 e2e 三组——pi-acp「发送→release→再发送」自动恢复成功（replay_end + prompt_done）；mock agent（session/load 恒拒）验证 load 失败分支：只收 load_failed 帧、prompt 不 dispatch、重发再次触发恢复（清理生效）；codebuddy 无效 acp_session_id 下 load 被其容忍、自动恢复成功。
+- CHANGELOG 暂不记录：该 bug 家族三次复现，按惯例彻底解决前不写条目。

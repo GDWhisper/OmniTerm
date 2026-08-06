@@ -436,7 +436,16 @@ async fn dispatch_prompt(
         }
         Err(e) => {
             c.mark_prompt_idle();
-            c.notify_turn_end(TurnEndEvent::Error { message: format!("{}", e) });
+            // 连接已被主动释放（reaper 回收 / 手动 release）时，库错误
+            // "connection is no longer running" 对用户无意义且误导（看似发送功能
+            // 坏了，实为进程已回收）——改为可操作提示：重新发送即自动恢复。
+            // 连接仍存活时的 agent 侧错误原样透传。
+            let message = if c.is_alive() {
+                format!("{}", e)
+            } else {
+                "会话进程已释放，请重新发送以自动恢复连接".to_string()
+            };
+            c.notify_turn_end(TurnEndEvent::Error { message });
         }
     }
 }
@@ -454,7 +463,7 @@ async fn restore_acp_session(
     sid: &str,
     client: &mut Option<Arc<AcpClient>>,
     notify_tx: &tokio::sync::mpsc::Sender<Message>,
-) -> Result<(Arc<AcpClient>, tokio::task::JoinHandle<()>), String> {
+) -> Result<(Arc<AcpClient>, tokio::task::JoinHandle<Result<(), String>>), String> {
     let row: Option<(String, String, String)> = sqlx::query_as(
         "SELECT agent_id, acp_session_id, workspace_path FROM sessions WHERE id = ? AND runtime_kind = 'acp'",
     )
@@ -521,10 +530,14 @@ async fn restore_acp_session(
     // 恢复时曾导致一帧未发）。重放不经累积器落库（无 turn 门控，begin_turn 只由
     // 用户 prompt 触发）。完成后发送 replay_end 并复用 replay_rx 接管实时帧——
     // 避免重新订阅在排空与订阅之间产生丢帧窗口。
+    // 任务返回 load 结果：Prompt 自动恢复路径据此决定是否发送（load 失败时不得
+    // 向未加载/已死的会话发送，否则命中死连接报 connection is no longer running）。
     let task_client = new_client.clone();
     let tx = notify_tx.clone();
     let replay_sid = acp_sid.clone();
     let replay_cwd = cwd.clone();
+    let restore_state = state.clone();
+    let restore_sid = sid.to_string();
     let handle = tokio::spawn(async move {
         let mut replay_rx = task_client.session_update_subscribe();
         let load_fut = task_client.load_session(&replay_sid, replay_cwd);
@@ -546,12 +559,14 @@ async fn restore_acp_session(
                 },
             }
         };
-        tracing::info!("ACP replay task: load_session done, result={:?}", result.is_ok());
+        let load_err: Option<String> =
+            result.as_ref().err().map(|e| format!("session/load failed: {}", e));
+        tracing::info!("ACP replay task: load_session done, ok={}", load_err.is_none());
         // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、排空缓冲前调用。
         // restore 发出的 ConfigOptionUpdate 广播会进 replay_rx → 前端 staging，
         // ReplayEnd 的 commitReplay 时恢复值覆盖重放默认值，配置栏最终显示用户
         // 上次的设置。
-        if result.is_ok() {
+        if load_err.is_none() {
             task_client.restore_config_prefs().await;
         }
         tracing::info!("ACP replay task: restore_config_prefs done");
@@ -572,11 +587,11 @@ async fn restore_acp_session(
                 Err(_) => break, // Empty / Closed
             }
         }
-        let msg = match result {
-            Ok(()) => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
-            Err(e) => serde_json::to_string(&AcpServerMessage::Error {
+        let msg = match &load_err {
+            None => serde_json::to_string(&AcpServerMessage::ReplayEnd).unwrap_or_default(),
+            Some(e) => serde_json::to_string(&AcpServerMessage::Error {
                 code: Some("load_failed"),
-                message: &format!("session/load failed: {}", e),
+                message: e,
             })
             .unwrap_or_default(),
         };
@@ -585,6 +600,22 @@ async fn restore_acp_session(
         // 复用 replay_rx 接管实时帧，避免重新订阅在排空与订阅之间产生丢帧窗口。
         spawn_notify_task(replay_rx, tx.clone()).await;
         tracing::info!("ACP replay task: notify task spawned, replay task finishing");
+        match load_err {
+            None => Ok(()),
+            Some(e) => {
+                // load 失败清理：supervisor 中若仍是本 client（未被并发恢复替换），
+                // 移除并回收进程，让下次发送/恢复从干净状态重试。否则死 client
+                // 滞留：agent 存活但会话未 load 时 is_alive() 仍为 true，后续
+                // prompt 会直接发进未加载的会话；agent 已死则命中死连接。
+                if let Some(cur) = restore_state.acp_supervisor.get(&restore_sid).await
+                    && Arc::ptr_eq(&cur, &task_client)
+                {
+                    let _ = restore_state.acp_supervisor.dispose(&restore_sid).await;
+                    task_client.shutdown().await;
+                }
+                Err(e)
+            }
+        }
     });
 
     Ok((new_client, handle))
@@ -793,10 +824,29 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     // （agent 就绪、前端对账完成）再发送 prompt，避免
                                     // 与 replay 帧交错。发起连接已在等待（前端 sending
                                     // 已置位），prompt_done 到达前前端不会重发。
+                                    // load 失败时不得发送：replay 任务已发 load_failed
+                                    // error 帧并清理了死 client，重发即可重试恢复。
                                     let c = live;
+                                    let tx = notify_tx.clone();
                                     tokio::spawn(async move {
-                                        let _ = handle.await;
-                                        dispatch_prompt(c, prompt_text, images, resources).await;
+                                        match handle.await {
+                                            Ok(Ok(())) => {
+                                                dispatch_prompt(c, prompt_text, images, resources)
+                                                    .await;
+                                            }
+                                            Ok(Err(_)) => {} // load_failed 帧已由 replay 任务发送
+                                            Err(e) => {
+                                                let err_msg = format!("replay task failed: {}", e);
+                                                let msg = serde_json::to_string(
+                                                    &AcpServerMessage::Error {
+                                                        code: Some("load_failed"),
+                                                        message: &err_msg,
+                                                    },
+                                                )
+                                                .unwrap_or_default();
+                                                let _ = tx.send(Message::Text(msg.into())).await;
+                                            }
+                                        }
                                     });
                                 } else {
                                     tokio::spawn(dispatch_prompt(live, prompt_text, images, resources));
