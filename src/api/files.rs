@@ -164,9 +164,10 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
                 e
             );
             // Resolve workspace root as fallback CWD
-            let root = resolve_session_workspace_root(state, session_id)
-                .await
-                .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+            let (root, _project_id) =
+                resolve_session_workspace_root(state, session_id).await.unwrap_or_else(|| {
+                    (std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()), String::new())
+                });
             tmux::new_session(&tmux_name, &root, None).await.ok()?;
             let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
             tracing::info!("re-created tmux session '{}' at {}", tmux_name, cwd);
@@ -175,15 +176,87 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
     }
 }
 
-/// Get workspace_path for a session (used for is_outside_workspace check).
-async fn resolve_session_workspace_root(state: &AppState, session_id: &str) -> Option<String> {
-    sqlx::query_as::<_, (String,)>("SELECT workspace_path FROM sessions WHERE id = ?")
-        .bind(session_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-        .map(|(p,)| p)
+/// Get workspace_path and project_id for a session (used for is_outside_workspace check).
+async fn resolve_session_workspace_root(
+    state: &AppState,
+    session_id: &str,
+) -> Option<(String, String)> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT workspace_path, project_id FROM sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Fallback: 当 `list_base` 不在 session 的 `workspace_path`（ws_root）内时，
+/// 先在 session 所属 project 的 worktrees 中寻找**包含** `list_base` 的最近
+/// worktree；找不到再退化为 `git rev-parse --show-toplevel`（任意 git 仓库的
+/// 顶层目录），命中则作为 effective workspace_root。覆盖以下场景：
+/// 1. adopt 时 session workspace_path 存错（最常见根因）
+/// 2. 跨 project 浏览到其它 worktree（adopt 外部 tmux 会话后又切到别的项目）
+/// 3. tmux 临时 cd 出去又 manual 浏览回工作区
+///
+/// 命中时 is_outside = false 且返回的 workspace_root 改为 effective 值，
+/// 让前端的 `isPathOutsideWorkspace(filePath, workspaceRoot)` 也能正确通过。
+async fn resolve_effective_workspace_root(
+    state: &AppState,
+    project_id: &str,
+    list_base_canonical: &std::path::Path,
+) -> Option<String> {
+    // 1) 同 project 的 worktree（最近祖先）
+    if !project_id.is_empty()
+        && let Some(p) = resolve_effective_in_project(state, project_id, list_base_canonical).await
+    {
+        return Some(p);
+    }
+    // 2) 退化：任意祖先 git repo 的 toplevel
+    resolve_git_toplevel(list_base_canonical)
+}
+
+async fn resolve_effective_in_project(
+    state: &AppState,
+    project_id: &str,
+    list_base_canonical: &std::path::Path,
+) -> Option<String> {
+    use crate::workspaces;
+    let project_root = resolve_project_root(state, project_id).await?;
+    let project = crate::models::project::Project {
+        id: project_id.to_string(),
+        name: String::new(),
+        path: project_root,
+        target_id: None,
+        created_at: String::new(),
+    };
+    let wts = workspaces::list_workspaces(&project).await;
+    wts.into_iter()
+        .filter_map(|w| {
+            let wp = std::path::Path::new(&w.path);
+            let wp_canon = wp.canonicalize().ok()?;
+            if list_base_canonical.starts_with(&wp_canon) { Some((wp_canon, w.path)) } else { None }
+        })
+        .max_by_key(|(p, _)| p.as_os_str().len())
+        .map(|(_, p)| p)
+}
+
+/// `git -C <path> rev-parse --show-toplevel`，失败返回 None。
+/// 不依赖 git 二进制的 panic：用 timeout + spawn，stderr 吞掉。
+fn resolve_git_toplevel(path: &std::path::Path) -> Option<String> {
+    use std::process::{Command, Stdio};
+    let output = Command::new("git")
+        .args(["-C", path.to_str()?, "rev-parse", "--show-toplevel"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(output.stdout).ok()?;
+    let trimmed = s.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
 }
 
 /// Resolve base path from query: session > workspace_id > project.
@@ -244,7 +317,8 @@ async fn list_files(
         };
 
         // workspace 根路径：供前端判断越界；解析失败时回退为空串
-        let ws_root = resolve_session_workspace_root(&state, session_id).await.unwrap_or_default();
+        let (ws_root, project_id) =
+            resolve_session_workspace_root(&state, session_id).await.unwrap_or_default();
 
         let rel_path = q.path.as_deref().unwrap_or("");
         let base = std::path::Path::new(&cwd);
@@ -257,20 +331,6 @@ async fn list_files(
                 ),
             );
         }
-
-        // Determine if CWD is outside workspace.
-        // canonicalize 两侧后再比较，避免 Windows 上分隔符（G:\ vs g:/）与大小写差异误判
-        let is_outside = if !ws_root.is_empty() {
-            match (
-                std::path::Path::new(&cwd).canonicalize(),
-                std::path::Path::new(&ws_root).canonicalize(),
-            ) {
-                (Ok(c), Ok(r)) => !c.starts_with(&r),
-                _ => !cwd.starts_with(&ws_root),
-            }
-        } else {
-            false
-        };
 
         // Resolve the actual directory to list
         let list_base = if rel_path.is_empty() || rel_path == "." {
@@ -286,11 +346,44 @@ async fn list_files(
             return (StatusCode::NOT_FOUND, Json(json!({ "error": "path not found" })));
         };
 
+        // Determine if the **browsed directory** (not tmux's own cwd) is outside
+        // the session's workspace. Using `canonical` (the directory the user is
+        // actually viewing) instead of `cwd` (tmux pane_cwd) avoids false
+        // positives when the user manually navigates back into the workspace
+        // via FileManager (manual mode) while tmux's pane cwd is elsewhere.
+        //
+        // Fallback: 若 `canonical` 不在 session 的 `workspace_path` 内（adopt 时存
+        // 错 / 跨 worktree 浏览），在 session 所属 project 的 git worktrees 中寻找
+        // **包含** `canonical` 的最近 worktree，作为 effective workspace_root。
+        // 命中时 is_outside = false 且返回的 workspace_root 改为 effective 值，
+        // 让前端的 `isPathOutsideWorkspace(filePath, workspaceRoot)` 也能正确通过。
+        // canonicalize 两侧后再比较，避免 Windows 上分隔符（G:\ vs g:/）与大小写差异误判
+        let (is_outside, effective_root) = if !ws_root.is_empty() {
+            let raw_outside =
+                match (canonical.canonicalize(), std::path::Path::new(&ws_root).canonicalize()) {
+                    (Ok(c), Ok(r)) => !c.starts_with(&r),
+                    _ => !canonical.starts_with(&ws_root),
+                };
+            if raw_outside && !project_id.is_empty() {
+                if let Some(eff) =
+                    resolve_effective_workspace_root(&state, &project_id, &canonical).await
+                {
+                    (false, eff)
+                } else {
+                    (true, ws_root)
+                }
+            } else {
+                (raw_outside, ws_root)
+            }
+        } else {
+            (false, ws_root)
+        };
+
         match fs::list_dir(&canonical, "", sort, desc).await {
             Ok(entries) => (
                 StatusCode::OK,
                 Json(
-                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": ws_root }),
+                    json!({ "files": entries, "cwd": fs::display_path(&canonical), "is_outside_workspace": is_outside, "workspace_root": effective_root }),
                 ),
             ),
             Err(e) => {
@@ -1158,6 +1251,195 @@ mod handler_tests {
         let v = body_json(res).await;
         assert_eq!(v["workspace_root"].as_str(), Some(ghost.to_str().unwrap()));
         assert_eq!(v["is_outside_workspace"].as_bool(), Some(true));
+    }
+
+    /// is_outside_workspace 应基于「用户实际浏览的目录」而非 tmux 静态 cwd，
+    /// 否则用户 manual 浏览到 ws_root 外时会被误判为在工作区内（acp fixture
+    /// 下 cwd == workspace_path，旧实现用 cwd 判断永远 false）。
+    #[tokio::test]
+    async fn list_files_session_is_outside_reflects_browsed_path() {
+        let state = test_state().await;
+        let (base, outside) = fixture_session(&state).await;
+        let inside_sub = base.join("sub");
+        std::fs::create_dir_all(&inside_sub).unwrap();
+
+        // manual 浏览到 ws_root 子目录 → is_outside = false
+        let res = list_files(
+            State(state.clone()),
+            Query(session_query(inside_sub.to_str().unwrap(), None)),
+        )
+        .await
+        .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(
+            v["is_outside_workspace"].as_bool(),
+            Some(false),
+            "subdir of workspace_path must not be flagged as outside"
+        );
+
+        // manual 浏览到 ws_root 外 → is_outside = true（旧实现下永远 false）
+        let res = list_files(State(state), Query(session_query(outside.to_str().unwrap(), None)))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(
+            v["is_outside_workspace"].as_bool(),
+            Some(true),
+            "dir outside workspace_path must be flagged as outside"
+        );
+    }
+
+    /// 当 session 的 `workspace_path` 错误/过时（adopt 时存错、跨 worktree 浏览），
+    /// 但用户实际浏览的目录在该 session 所属 project 的另一个 worktree 内时，
+    /// 应 fallback 到该 worktree 作为 effective workspace_root，避免误报越界。
+    #[tokio::test]
+    async fn list_files_session_falls_back_to_project_worktree() {
+        let state = test_state().await;
+        let (base, outside) = fixture_session(&state).await;
+
+        // 把 session 的 workspace_path 改成 outside（与 base 同级、不在 base 内）
+        // 模拟「adopt 时 cwd 错 / 跨 worktree 误用旧 session」的场景
+        sqlx::query("UPDATE sessions SET workspace_path = ? WHERE id = 'test-session'")
+            .bind(outside.to_str().unwrap())
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        // 浏览到 base（项目内）→ raw_outside=true，但 base 是 test-project 的
+        // worktree（list_workspaces 对非 git 目录返回 single_workspace=base），
+        // fallback 命中 → is_outside=false、workspace_root 改为 base
+        let res = list_files(State(state), Query(session_query(base.to_str().unwrap(), None)))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(
+            v["is_outside_workspace"].as_bool(),
+            Some(false),
+            "browsed dir inside a project worktree must fall back"
+        );
+        assert_eq!(
+            v["workspace_root"].as_str(),
+            Some(base.to_str().unwrap()),
+            "workspace_root should be the effective worktree path"
+        );
+    }
+
+    /// 跨 project 浏览且 list_base 不在 session 所属 project 的任何 worktree 内时，
+    /// 退化为 `git rev-parse --show-toplevel` 探测，命中则视为工作区内。
+    /// 这是「用 test 项目的会话编辑 OmniTerm-dev 文件」场景的最后兜底。
+    #[tokio::test]
+    async fn list_files_session_falls_back_to_git_toplevel() {
+        let state = test_state().await;
+        let (_base, outside) = fixture_session(&state).await;
+
+        // 建一个临时 git repo（不在 test-project 的 worktree 内）
+        let git_root = std::env::temp_dir().join(format!(
+            "omniterm_fb_git_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let git_sub = git_root.join("sub");
+        std::fs::create_dir_all(&git_sub).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(&git_root)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        // session workspace_path = outside（与 base 同级，session 属 test-project）
+        sqlx::query("UPDATE sessions SET workspace_path = ? WHERE id = 'test-session'")
+            .bind(outside.to_str().unwrap())
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        // 浏览到 git_root/sub → 不在 test-project worktree 内（test-project=base/_base），
+        // 但 .git 祖先在 git_root → git_toplevel fallback 命中
+        let res = list_files(State(state), Query(session_query(git_sub.to_str().unwrap(), None)))
+            .await
+            .into_response();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(
+            v["is_outside_workspace"].as_bool(),
+            Some(false),
+            "browsed dir inside an unrelated git repo must fall back to git toplevel"
+        );
+        // workspace_root 应指向 git_root（git rev-parse --show-toplevel 输出）
+        let root = v["workspace_root"].as_str().expect("workspace_root set");
+        assert!(
+            std::path::Path::new(root).canonicalize().unwrap()
+                == std::path::Path::new(&git_root).canonicalize().unwrap(),
+            "workspace_root should be the git toplevel, got {root}"
+        );
+
+        let _ = std::fs::remove_dir_all(&git_root);
+    }
+
+    /// session.adopt workspace_path 存错 / 跨 worktree 浏览时，sanitize_path
+    /// 的 git_toplevel 兜底应放行位于祖先 git 仓库内的写操作（与 listFiles2
+    /// `resolve_effective_workspace_root` 兜底语义一致）。
+    #[tokio::test]
+    async fn mkdir_in_ancestor_git_repo_falls_back_to_git_toplevel() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+
+        // 在 base 的**同级**建一个 git repo，使 "../<name>/sub" 落在 git repo 内
+        let parent = base.parent().unwrap().to_path_buf();
+        let git_root = parent.join(format!(
+            "sanitize_fb_git_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let git_sub = git_root.join("sub");
+        std::fs::create_dir_all(&git_sub).unwrap();
+        let init = std::process::Command::new("git")
+            .args(["init", "-q", "-b", "main"])
+            .current_dir(&git_root)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+
+        // base = parent/base, git_root = parent/git_root → "../<git_root_name>/sub"
+        let rel = format!("../{}/sub", git_root.file_name().unwrap().to_str().unwrap());
+        let body = json!({ "session": "test-session", "path": rel, "name": "newdir" });
+        let res = mkdir(State(state), Query(allow_only(None)), Json(body)).await.into_response();
+        assert_eq!(
+            res.status(),
+            StatusCode::OK,
+            "mkdir inside an ancestor git repo must fall back to git toplevel"
+        );
+        assert!(git_sub.join("newdir").exists());
+
+        let _ = std::fs::remove_dir_all(&git_root);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// 非 git 目录的逃逸仍应被拒绝（兜底不放过非 git 路径，安全语义不变）
+    #[tokio::test]
+    async fn mkdir_in_non_git_dir_still_rejected() {
+        let state = test_state().await;
+        let (_base, _outside) = fixture_session(&state).await;
+        let body = json!({ "session": "test-session", "path": "../outside", "name": "d" });
+
+        let res = mkdir(State(state), Query(allow_only(None)), Json(body)).await.into_response();
+        assert_eq!(
+            res.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "non-git escape must still be rejected"
+        );
     }
 }
 

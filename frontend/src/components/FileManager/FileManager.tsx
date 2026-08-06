@@ -286,8 +286,17 @@ export function FileManager() {
   // ── Primary fetch effect: triggers on source/mode/path change ──
   // Replaces 3 previously-separate effects (manual mode, following mode, source switch)
   // that redundantly overlapped on session switch, causing duplicate requests.
+  const prevSourceTypeRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!fmSource) { setFiles([]); setCwd(''); return }
+    // 切换 source 类型（workspace ↔ session）时清空旧 source 留下的 drawer 路径，
+    // 避免 workspaceRoot 更新为新源后与旧 filePath 失配而误弹越界确认
+    // （FileDrawer 的 workspaceDrawerPath 属于 workspace 模式，fmState.drawerPath 属于 session 模式）。
+    const newType = fmSource.type
+    if (prevSourceTypeRef.current && prevSourceTypeRef.current !== newType) {
+      setWorkspaceDrawerPath(null)
+    }
+    prevSourceTypeRef.current = newType
     const cached = fileCache.current.get(sourceKey!)
     if (cached) {
       setFiles(cached.files)

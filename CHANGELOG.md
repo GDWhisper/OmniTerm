@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [0.2.10] - 2026-08-05
 
+### Fixed
+
+- (2026-08-06 16:35) `[backend]` `[frontend]` 修复在工作区内编辑文件仍误弹「文件不在当前工作区内」二次确认：根因是 `is_outside_workspace` 用 tmux 静态 cwd + session 创建时记录的 `workspace_path` 静态边界判断，而用户实际浏览/编辑的目录常与二者都不一致（adopt 外部 tmux 会话时 pane_cwd 偶发不在项目根、跨 worktree 浏览、tmux 临时 cd 出去又回到项目内等）。修复点：(1) `listFiles2` 的 `is_outside_workspace` 与 `workspace_root` 改基于用户实际浏览目录（`list_base.canonicalize()`），并在原始判断为越界时**回退探测**——先查 session 所属 project 的 worktrees，再退化为 `git rev-parse --show-toplevel`，命中则视为在工作区内（`src/api/files.rs`）；(2) `fs::sanitize_path[_new]_inner` 同步加入 git_toplevel 兜底，让 mkdir/rename/move/copy/delete 在跨 worktree / workspace_path 失配场景下不再 403，与 listFiles2 兜底语义一致（`src/fs/mod.rs`）；(3) 前端 `FileDrawer.isOutside` 在 `workspaceRoot` 为空（DB 暂未返回 / 会话无 workspace_path / 瞬时网络错误）时不再视为越界，与后端 `is_outside_workspace` 在 `ws_root` 为空时返回 `false` 的语义对齐，避免后端不拦前端却误弹（`frontend/src/components/FileManager/FileDrawer.tsx`）；(4) 切换 `fmSource` 类型（workspace ↔ session）时清空遗留的 `workspaceDrawerPath`，避免 workspaceRoot 切换为新源后与旧 filePath 失配而误弹（`frontend/src/components/FileManager/FileManager.tsx`）
+
 ### Added
 
 - (2026-08-05 17:12) `[backend]` `[api]` 新增 Pty 原生运行时（runtime_kind=pty）：会话可直接由后端通过 portable_pty spawn 子进程 + PTY master fd 读写，不依赖 tmux；新增 PTY websocket 链路与 runtime-aware 会话 API（创建/清理/cwd 查询按 runtime_kind 分流，`src/engine/pty/mod.rs`、`src/tmux/pty.rs`、`src/ws/terminal.rs`、`src/api/sessions.rs`、`src/models/session.rs`）
@@ -59,6 +63,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-06 16:35) `[backend]` `[frontend]` 修复在工作区内编辑文件仍误弹「文件不在当前工作区内」二次确认：根因是 `is_outside_workspace` 用 tmux 静态 cwd + session 创建时记录的 `workspace_path` 静态边界判断，而用户实际浏览/编辑的目录常与二者都不一致（adopt 外部 tmux 会话时 pane_cwd 偶发不在项目根、跨 worktree 浏览、tmux 临时 cd 出去又回到项目内等）。修复点：(1) `listFiles2` 的 `is_outside_workspace` 与 `workspace_root` 改基于用户实际浏览目录（`list_base.canonicalize()`），并在原始判断为越界时**回退探测**——先查 session 所属 project 的 worktrees，再退化为 `git rev-parse --show-toplevel`，命中则视为在工作区内（`src/api/files.rs`）；(2) `fs::sanitize_path[_new]_inner` 同步加入 git_toplevel 兜底，让 mkdir/rename/move/copy/delete 在跨 worktree / workspace_path 失配场景下不再 403，与 listFiles2 兜底语义一致（`src/fs/mod.rs`）；(3) 前端 `FileDrawer.isOutside` 在 `workspaceRoot` 为空（DB 暂未返回 / 会话无 workspace_path / 瞬时网络错误）时不再视为越界，与后端 `is_outside_workspace` 在 `ws_root` 为空时返回 `false` 的语义对齐，避免后端不拦前端却误弹（`frontend/src/components/FileManager/FileDrawer.tsx`）；(4) 切换 `fmSource` 类型（workspace ↔ session）时清空遗留的 `workspaceDrawerPath`，避免 workspaceRoot 切换为新源后与旧 filePath 失配而误弹（`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-08-06 16:04) `[frontend]` 修复 ACP 会话旧通知残留：用户已在会话中继续发送新 prompt（即时发送或排队续发）时清除该会话的 done/error/decision 提醒——发送成功即视为用户已知晓最新状况，不再反复提示（`frontend/src/hooks/useAcpChat.ts`）
 - (2026-08-05 15:17) `[backend]` 修复 ACP「发送即自动恢复」在进程刚被释放后无效：`is_incoming_closed()` 在主动 shutdown 后恒返回 false，`is_alive()` 又把已关闭连接误判为存活，导致自动恢复的 restore 分支永不触发——改为显式维护 shutdown 标记，恢复流程与手动「恢复会话」一致（`src/acp/client.rs`）
 - (2026-08-05 15:49) `[backend]` 修复 `sanitize_path_new` 多层缺失目录拼接反序：`tail` 循环漏 `.rev()` 导致 `a/b/c` 解析成 `a/c/b`（当 `a` 存在而 `b/c` 不存在时，mkdir/嵌套写入/越界 move 到多层新目录会生成错误目录结构）（`src/fs/mod.rs`）
