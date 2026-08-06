@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, isPathOutsideWorkspace } from './path'
+import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -55,5 +55,29 @@ describe('isPathOutsideWorkspace', () => {
   it('treats a file above the workspace root as outside', () => {
     expect(isPathOutsideWorkspace('/home/user/other.txt', '/home/user/proj')).toBe(true)
     expect(isPathOutsideWorkspace('/tmp/x', '/home/user/proj')).toBe(true)
+  })
+})
+
+describe('resolveRenamedPath', () => {
+  it('resolves a same-directory rename to the new absolute path', () => {
+    expect(resolveRenamedPath('/root/img/a.png', 'img/a.png', 'img/b.png')).toBe('/root/img/b.png')
+    // File at watch root
+    expect(resolveRenamedPath('/root/a.png', 'a.png', 'b.png')).toBe('/root/b.png')
+    // File at filesystem root
+    expect(resolveRenamedPath('/a.png', 'a.png', 'b.png')).toBe('/b.png')
+  })
+
+  it('resolves a cross-directory move to the new absolute path', () => {
+    expect(resolveRenamedPath('/root/img/a.png', 'img/a.png', 'new/b.png')).toBe('/root/new/b.png')
+  })
+
+  it('returns null when the rename does not point at absPath (same basename, different dir)', () => {
+    // watch 树内其他目录的同名文件被改名，不应误切 drawer 路径
+    expect(resolveRenamedPath('/root/a.png', 'sub/a.png', 'sub/b.png')).toBeNull()
+    expect(resolveRenamedPath('/root/img/a.png', 'other/a.png', 'other/b.png')).toBeNull()
+  })
+
+  it('returns null when absPath is relative (no reliable watch-root derivation)', () => {
+    expect(resolveRenamedPath('a.png', 'a.png', 'b.png')).toBeNull()
   })
 })

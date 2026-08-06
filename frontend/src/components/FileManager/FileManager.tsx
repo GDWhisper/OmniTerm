@@ -1175,6 +1175,10 @@ export function FileManager() {
           workspaceId={activeWorkspaceId ?? undefined}
           projectId={activeProjectId}
           workspaceRoot={workspaceRoot}
+          onPathChange={(newPath) => {
+            if (activeSessionId) setFmDrawerPath(activeSessionId, newPath, 'view')
+            else setWorkspaceDrawerPath(newPath)
+          }}
           onClose={() => {
             if (activeSessionId) closeFmDrawer(activeSessionId)
             else setWorkspaceDrawerPath(null)

@@ -69,6 +69,7 @@ Prefix each entry with the area it affects:
 - (2026-08-05 15:49) `[backend]` 修复 `sanitize_path_new` 多层缺失目录拼接反序：`tail` 循环漏 `.rev()` 导致 `a/b/c` 解析成 `a/c/b`（当 `a` 存在而 `b/c` 不存在时，mkdir/嵌套写入/越界 move 到多层新目录会生成错误目录结构）（`src/fs/mod.rs`）
 - (2026-08-05 05:37) `[backend]` 修复正式版默认输出 DEBUG 日志：日志过滤器硬编码 `omniterm=debug` 会覆盖 `RUST_LOG` 中 omniterm 的级别设置（tracing EnvFilter 同 target 后添加 directive 替换先添加），npm 正式版（无 RUST_LOG）启动即刷 debug 日志——改为尊重 `RUST_LOG`、未设置时默认 `omniterm=info`，需要调试日志时用 `omniterm start --debug` 或 `RUST_LOG=omniterm=debug`（`src/main.rs`）
 - (2026-08-06 23:06) `[frontend]` 修复图片预览在文件改名后显示「加载失败」：drawer 打开图片时 `filePath` 冻结为打开时的绝对路径，文件在 FileManager 中改名后磁盘旧路径消失，后端 download 返回 404 → `<img>` onError → 显示「图片加载失败」；SSE 自动刷新按 basename 匹配，新旧名不匹配也无法挽救。`runRename` 成功后若 drawer 正打开被改名的文件（session 模式 `drawerFilePath` / workspace 模式 `workspaceDrawerPath`）则同步 drawerPath 到新绝对路径（`frontend/src/components/FileManager/FileManager.tsx`）
+- (2026-08-06 23:31) `[frontend]` 修复外部改名（SSE rename 事件）后 drawer 预览同样显示「加载失败」：tmux/IDE 里 `mv` 触发的 rename 事件被 basename 匹配命中后仍用旧 filePath 重新加载而 404（图片 bump version 重载旧路径同样失败）。新增 `resolveRenamedPath`（`frontend/src/utils/path.ts`）：drawer 绝对路径以「/ + 相对旧路径」结尾时还原 watch 根并拼出新绝对路径，同目录改名与跨目录 move 均覆盖、同名不同目录不误切；FileDrawer 收到 rename 事件经 `onPathChange` 回调切换 drawerPath（`frontend/src/components/FileManager/FileDrawer.tsx`、`FilePreview.tsx`、`FileManager.tsx`）
 
 ## [0.2.9] - 2026-08-05
 

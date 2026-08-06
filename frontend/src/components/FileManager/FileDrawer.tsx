@@ -7,8 +7,9 @@ const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.F
 import { FilePreview } from './FilePreview'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 import { READER_FONT } from '../../utils/fonts'
-import { isPathOutsideWorkspace } from '../../utils/path'
+import { isPathOutsideWorkspace, resolveRenamedPath } from '../../utils/path'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
+import type { FileChangeEvent } from '../../hooks/useFileWatcher'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 
 /** Supported image extensions for preview mode */
@@ -59,12 +60,14 @@ interface FileDrawerProps {
   workspaceRoot?: string
   /** Called when the drawer should close */
   onClose: () => void
+  /** Called when the open file is renamed externally (SSE rename event) — switch to the new path */
+  onPathChange?: (newPath: string) => void
   /** Current drawer height in px */
   height: number
   /** Called when height changes (drag) */
   onHeightChange: (height: number) => void
   /** SSE change events — when the current file changes externally */
-  fileChangeEvent: { kind: string; path: string } | null
+  fileChangeEvent: FileChangeEvent | null
 }
 
 export function FileDrawer({
@@ -74,6 +77,7 @@ export function FileDrawer({
   projectId,
   workspaceRoot,
   onClose,
+  onPathChange,
   height,
   onHeightChange,
   fileChangeEvent,
@@ -151,6 +155,15 @@ export function FileDrawer({
 
     if (fileChangeEvent.kind === 'delete') {
       setError(t('drawer.fileDeletedExternally'))
+      return
+    }
+
+    // 外部改名（如 tmux 里 mv）：跟随到新路径，避免旧路径 404（图片预览会显示「加载失败」）
+    // resolveRenamedPath 通过「绝对路径以 /+相对旧路径 结尾」还原 watch 根并拼出新绝对路径，
+    // 覆盖同目录改名与跨目录 move，且避免同名文件被改名时基于 basename 误切路径
+    if (fileChangeEvent.kind === 'rename' && fileChangeEvent.newPath) {
+      const newPath = resolveRenamedPath(filePath, fileChangeEvent.path, fileChangeEvent.newPath)
+      if (newPath) onPathChange?.(newPath)
       return
     }
 

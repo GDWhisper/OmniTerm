@@ -39,3 +39,20 @@ export function isPathOutsideWorkspace(filePath: string, workspaceRoot: string |
   if (root === '/') return false
   return !(filePath === root || filePath.startsWith(root + '/'))
 }
+
+/**
+ * 外部改名事件路径还原：drawer 打开文件的绝对路径 `absPath` 以「/ + from（相对 watch 根的
+ * 旧路径）」结尾时，前缀即 watch 根，据此把 `to`（相对 watch 根的新路径）还原成新的绝对路径。
+ *
+ * - 匹配：`resolveRenamedPath('/root/img/a.png', 'img/a.png', 'img/b.png')` → `/root/img/b.png`
+ * - 跨目录 move：`resolveRenamedPath('/root/img/a.png', 'img/a.png', 'new/b.png')` → `/root/new/b.png`
+ * - 不匹配（rename 与 absPath 无关，如同名文件在别的目录被改名）：返回 `null`
+ *
+ * 比 basename 匹配更精确：要求目录结构对齐，避免 watch 树内同名文件被改名时误切路径。
+ */
+export function resolveRenamedPath(absPath: string, from: string, to: string): string | null {
+  const suffix = `/${from}`
+  if (!absPath.endsWith(suffix)) return null
+  const watchRoot = absPath.slice(0, absPath.length - from.length - 1)
+  return `${watchRoot}/${to}`
+}
