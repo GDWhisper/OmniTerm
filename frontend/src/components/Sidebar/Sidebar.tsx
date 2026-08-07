@@ -68,7 +68,7 @@ export function Sidebar() {
     useShallow((s) => {
       const m: Record<string, AcpActivity> = {}
       for (const [id, st] of Object.entries(s.states)) {
-        if (st.pendingPermission) m[id] = 'waiting'
+        if (st.pendingPermissions.length > 0) m[id] = 'waiting'
         else if (st.sending) m[id] = 'running'
       }
       return m

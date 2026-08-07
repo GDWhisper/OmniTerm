@@ -20,10 +20,12 @@ function isAllow(kind: string): boolean {
 
 interface Props {
   permission: PendingPermission
+  /** 队列里排在本条之后的未决审批数（>0 时提示，应答后自动露出下一条）。 */
+  remaining?: number
   onRespond: (id: string, optionId: string) => void
 }
 
-export function PermissionBanner({ permission, onRespond }: Props) {
+export function PermissionBanner({ permission, remaining, onRespond }: Props) {
   // 上游若只给模糊的兜底 'other'，不显示误导性标签（同 ToolCallBlockView 约定）
   const toolKind = permission.toolKind && permission.toolKind !== 'other' ? permission.toolKind : undefined
   const content = permission.content
@@ -47,6 +49,11 @@ export function PermissionBanner({ permission, onRespond }: Props) {
         {toolKind && (
           <span style={{ color: 'var(--text-faint)', fontWeight: 600, fontSize: 10, letterSpacing: '0.04em' }}>
             {toolKind.toUpperCase()}
+          </span>
+        )}
+        {!!remaining && remaining > 0 && (
+          <span style={{ color: 'var(--text-faint)', fontSize: 10, marginLeft: 'auto' }}>
+            +{remaining} queued
           </span>
         )}
       </div>

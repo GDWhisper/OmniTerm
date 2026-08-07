@@ -8,7 +8,7 @@ import type { AttentionReason } from '../hooks/useAttention'
 export type AggregateStatus = 'blocked' | 'done' | 'working' | 'none'
 
 /**
- * ACP 会话的派生活动状态（来自 chatStore：pendingPermission → waiting、sending → running）。
+ * ACP 会话的派生活动状态（来自 chatStore：pendingPermissions 非空 → waiting、sending → running）。
  * tmux 会话的对应物是后端屏幕检测的 agent_state；两条链路在此归一，保证 UI 表现一致。
  */
 export type AcpActivity = 'running' | 'waiting'

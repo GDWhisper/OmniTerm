@@ -144,6 +144,16 @@ per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分
 
 turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `AcpClient` 的 `turn_end_tx` broadcast 发给**所有** WS 连接（`spawn_turn_end_task`），与 `session_update`/`crash` 同模式。不能只回发起 prompt 的连接：prompt task 存活期跨 WS 重连，per-connection 通道会把结束帧发进死连接被静默丢弃，重连后的前端永远停留在 running 态。
 
+### 权限审批帧协议（permission_request / permission_resolved / permissions_synced）
+
+未决审批的权威在后端 `PermissionManager`（`src/acp/permission.rs`），支持**并发多个** `request_permission`（HashMap 按 id 挂起）。三条前端收敛路径：
+
+- **事件驱动**：`handle_request` 广播 `permission_request`；`resolve` / `cancel_all`（用户应答、session cancel、reaper 权限超时 cancel）广播 `permission_resolved{id}`，所有连接据此出队。
+- **连接重放 + 对账标记**：连接时逐条重放 `pending_events()`，完毕后发 `permissions_synced` 标记帧——前端清掉不在重放集合里的陈旧 banner（断连窗口错过 resolved 广播的过期项）。`restore_acp_session` 的新 client 无未决审批，同样发该标记清掉旧 client 遗留 banner。
+- **resolve 失败收敛**：`permission_response` 消息 resolve 返回 false（审批已被其他连接应答 / cancel / 会话已释放）或 client 缺失时，向本连接回发 `permission_resolved{id}`，让陈旧点击收敛清除而非静默无响应。
+
+前端侧为按 id 的**队列**（`chatStore.pendingPermissions`，上限 16 丢新到达项 + warn），UI 显示队首——单槽会被并发审批互相覆盖导致被覆盖项无 UI 入口、会话卡死。turn 收尾（`markDone`）**不得**清队列：合法清除只有上述三条路径（教训见 debug-log 2026-08-07）。
+
 ### 发送即自动恢复（进程已释放）
 
 reaper 空闲回收 / 手动 release / 后端重启都会让 ACP agent 子进程离开 supervisor，但 WS 连接（`ws/acp.rs::handle_acp_ws`）不随之关闭——主循环仍持有 `notify_tx`，`client` 为 `Some`（连接已死）。此前用户此时发送 prompt 会命中死连接，`send_request` 报 "connection is no longer running" 原样透传前端。现在：

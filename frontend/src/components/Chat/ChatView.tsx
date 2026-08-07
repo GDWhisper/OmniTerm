@@ -403,10 +403,11 @@ export function ChatView() {
         ))}
       </OverlayScroll>
 
-      {chatState.pendingPermission && (
+      {chatState.pendingPermissions[0] && (
         <div style={{ flexShrink: 0 }}>
           <PermissionBanner
-            permission={chatState.pendingPermission}
+            permission={chatState.pendingPermissions[0]}
+            remaining={chatState.pendingPermissions.length - 1}
             onRespond={respondPermission}
           />
         </div>
