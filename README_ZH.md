@@ -6,13 +6,17 @@
 
 **Claude Code · Codex · Gemini · OpenCode · Qwen Code · Kiro** ……
 
-<p align="center">
-  <img src="pic/overview_chat.png" width="49%" alt="Agent 聊天界面" />
-  <img src="pic/overview_term.png" width="49%" alt="终端界面" />
-</p>
-<p align="center">
-  <img src="pic/overview_mobile.jpg" width="32%" alt="移动端界面" />
-</p>
+**Agent 聊天界面**
+
+<img src="pic/overview_chat.png" width="80%" alt="Agent 聊天界面" />
+
+**终端界面**
+
+<img src="pic/overview_term.png" width="80%" alt="终端界面" />
+
+**移动端预览**
+
+<img src="pic/overview_mobile.jpg" width="40%" alt="移动端界面" />
 
 > [English](README.md)
 
