@@ -505,7 +505,7 @@ const ThinkingIndicator = memo(function ThinkingIndicator() {
     startTimeRef.current = Date.now()
     // 自适应帧率上限：rAF 回调频率本身等于浏览器实际刷新率，无需主动检测。
     // 高刷屏（>60Hz）压到 60fps 以削减无谓的 layout 抖动；低刷屏跟着屏走。
-    const MAX_FPS = 60
+    const MAX_FPS = 90
     let raf = 0
     let lastDraw = 0
     let minInterval = 1000 / MAX_FPS
