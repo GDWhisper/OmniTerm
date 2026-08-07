@@ -233,6 +233,32 @@ describe('chatStore — queued follow-up actions', () => {
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(false)
     })
   })
+
+  describe('pending permission banner lifecycle', () => {
+    const perm = {
+      id: 'perm-1',
+      options: [{ option_id: 'allow', name: 'Allow', kind: 'allow_once' }],
+    }
+
+    it('markDone preserves pendingPermission (turn end ≠ approval invalidated)', () => {
+      // 回归：会话 A 的 turn 挂在未决审批上时，另一 turn 结束（或重连时缓冲的
+      // turn_state{active:false} 落定）触发 markDone，不得清掉仍在等待的审批
+      // banner——后端 PermissionManager 才是未决审批的权威，合法清除路径只有
+      // permission_resolved 广播与错误/崩溃（markError）。
+      useChatStore.getState().setPermission('s1', perm)
+      useChatStore.getState().beginPrompt('s1')
+      useChatStore.getState().markDone('s1')
+      const st = useChatStore.getState().states['s1']
+      expect(st.sending).toBe(false)
+      expect(st.pendingPermission?.id).toBe('perm-1')
+    })
+
+    it('markError clears pendingPermission (turn error invalidates the request)', () => {
+      useChatStore.getState().setPermission('s1', perm)
+      useChatStore.getState().markError('s1', 'boom')
+      expect(useChatStore.getState().states['s1'].pendingPermission).toBeNull()
+    })
+  })
 })
 
 describe('messagesToSyncPayload', () => {

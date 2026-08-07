@@ -801,8 +801,12 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      // prompt 回合结束后未决审批已失效（agent 侧请求已被应答或取消），清掉残留 banner
-      return patch(state, sessionId, { messages, sending: false, pendingPermission: null })
+      // 不清 pendingPermission：turn 结束不代表未决审批失效——审批可能属于仍挂在
+      // request_permission 上的更早 turn（后端会持续重放它）。未决审批的权威在
+      // 后端 PermissionManager，合法清除路径只有 permission_resolved 广播
+      // （resolve / cancel_all）与 markError（turn 出错 / 连接死亡）。曾在此清除
+      // 导致重连后 markDone 抹掉重放的 banner，会话卡在等待决策无法应答。
+      return patch(state, sessionId, { messages, sending: false })
     }),
 
   markError: (sessionId, message) =>

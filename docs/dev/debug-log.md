@@ -1152,3 +1152,27 @@ ACP 的 `NewSessionRequest::new(cwd)` 是「「告诉 agent 期望的工作区�
 - 修复（`src/ws/acp.rs`）：① replay 任务返回 `JoinHandle<Result<(), String>>`，Prompt 自动恢复仅 `Ok(Ok(()))` 才 `dispatch_prompt`；② load 失败时若 supervisor 仍是该 client（`Arc::ptr_eq`）则 dispose+shutdown，下次发送重新恢复；③ `dispatch_prompt` 失败且 `!is_alive()` 时改发「会话进程已释放，请重新发送以自动恢复连接」。
 - 验证：`cargo fmt`/`check`/`clippy -D warnings`/`test` 全过；真实 dev 环境 e2e 三组——pi-acp「发送→release→再发送」自动恢复成功（replay_end + prompt_done）；mock agent（session/load 恒拒）验证 load 失败分支：只收 load_failed 帧、prompt 不 dispatch、重发再次触发恢复（清理生效）；codebuddy 无效 acp_session_id 下 load 被其容忍、自动恢复成功。
 - CHANGELOG 暂不记录：该 bug 家族三次复现，按惯例彻底解决前不写条目。
+
+## 2026-08-07: ACP「需要决策」banner 长等待后消失、会话无法恢复——markDone 误清后端仍在重放的未决审批
+
+**症状**：preview 分支 codebuddy 会话（codebuddy_0807-1632）的 ExitPlanMode 权限请求长时间未应答，之后「需要决策」banner 消失，用户没有任何 UI 入口去批准/拒绝，会话卡死无法恢复（直到 reaper 30 分钟 permission-stale 兜底 kill）。
+
+**可复用的理论/模式**：
+
+**1. hydrate 门控缓冲会反转 gated 帧与非 gated 帧的到达顺序——连接早期的帧序不代表派发序**。后端 WS 连接时按固定顺序重放：`turn_state{active:false}` → `permission_request` → session_update/capabilities。前端为避免抢跑 hydrate，把会改消息列表的帧（turn_state 等）缓冲到 GET /messages 落定后回放，而 `permission_request` 不门控、立即派发。结果：`permission_request` 先落地（banner 出现），被缓冲的 `turn_state{active:false}` 在 hydrate 后才回放触发 `markDone`——连接时「先收尾再给审批」的顺序在派发侧被反转成「先给审批再收尾」。
+
+**2. 后端持续重放的权威状态，前端不得用无关的本地收尾语义单方面清除**。未决审批的权威在后端 PermissionManager（每次连接重放 `pending_events()`，合法清除只有 resolve/cancel_all 广播 `permission_resolved`）。「turn 结束」与「未决审批失效」没有蕴含关系——审批可能属于仍挂在 `request_permission` 上的更早 turn。`markDone`（turn 收尾）清 `pendingPermission` 等于用本地簿记否决后端事实。**状态的清除路径必须与它的权威来源对齐：后端重放的状态，只能被后端事件（resolved 广播）或明确的失效事件（error/崩溃）清除**。
+
+**3. 任何「重连/刷新后状态丢失」的 bug，先在状态机里枚举所有写该状态的 action，再逐条核对触发条件**。本例中 `pendingPermission` 有 setPermission/markDone/markError/permission_resolved 四个写方，bug 藏在最不像嫌疑的 markDone 里（语义上是 turn 收尾，与审批无关）。
+
+**诊断过程中的错误**：
+
+1. **preview 运行时日志全程缺失**：进程 env `RUST_LOG=omniterm_main=info,omniterm_server=info` 与 crate target `omniterm` 不匹配，所有后端日志被过滤，浪费多轮取证（DB 考古 + WS 探针替代）。**日志为空时先核对 RUST_LOG target 与实际 crate 名是否一致，再怀疑路径没走**（与 08-06 理论 4 同族：日志缺失 ≠ 路径没走）。
+2. **页面 eval 拿到的 store 实例可能不是 app 正在用的那份**：`import('/src/stores/chatStore.ts')` 有时返回空 states 的独立模块实例，据此误判「store 里没有该会话」。**在页面里验证 store 状态，要么确认模块实例同一（对比函数源码/引用），要么直接看 DOM 渲染结果**。
+3. **RED 复现是时序竞态，fresh 会话连刷 6 次不复现**：帧序反转要求 WS 帧先于 hydrate（GET /messages）完成，消息多的大会话更容易命中；小会话 hydrate 快，缓冲回放顺序恰好不触发。**竞态类 bug 的 RED 要以「确定性最小单元」（本例是单测 markDone 保 banner）为准，页面级复现只作佐证**。
+
+**具体根因与修复**：
+
+- 根因链：ExitPlanMode 权限请求长挂 → 用户刷新/重连（或发了第二条 prompt 开新 turn）→ 后端重放 `turn_state{active:false}` + `permission_request` → 前端立即派发 permission_request（banner 出现），turn_state 被 hydrate 门控缓冲 → hydrate 完成后回放 turn_state 触发 `markDone` → `markDone` 清 `pendingPermission: null` → banner 消失，后端审批仍在等、前端再无入口 → 会话卡死，直到 reaper 30 分钟超时 cancel+kill。
+- 修复（`frontend/src/stores/chatStore.ts`）：`markDone` 不再清 `pendingPermission`（turn 收尾与审批生命周期解耦）；合法清除路径只剩 `permission_resolved` 广播（resolve/cancel_all，含 reaper 超时 cancel）与 `markError`（turn 出错/连接死亡，审批确实失效）。
+- 验证：单测 2 条回归（markDone 保 banner / markError 清 banner），frontend vitest 230 全过、tsc 干净；真实 e2e：新会话触发 ExitPlanMode 权限 → banner 渲染 → 刷新页面 banner 存活 → 点 Reject turn 正常结束、会话恢复。

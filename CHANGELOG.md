@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-08-07 18:01) `[frontend]` 修复 ACP 会话「需要决策」banner 长时间等待后消失、会话卡死无法恢复：后端 PermissionManager 每次连接重放未决审批，但重连/二次发送后 `markDone`（turn 收尾）会误清 `pendingPermission`——尤其 hydrate 门控缓冲把 `turn_state{active:false}` 延后到 `permission_request` 之后回放，banner 刚出现即被抹掉，用户再无入口批准/拒绝。`markDone` 不再清 `pendingPermission`，未决审批的合法清除路径收敛为后端 `permission_resolved` 广播（resolve/cancel_all，含 reaper 超时）与 `markError`（turn 出错/连接死亡）；附 2 条回归测试（`frontend/src/stores/chatStore.ts`、`chatStore.test.ts`）
+
 ## [0.2.11] - 2026-08-06
 
 ### Fixed
