@@ -6,13 +6,17 @@
 
 **Claude Code · Codex · Gemini · OpenCode · Qwen Code · Kiro** …
 
-<p align="center">
-  <img src="pic/overview_chat.png" width="49%" alt="Agent chat view" />
-  <img src="pic/overview_term.png" width="49%" alt="Terminal view" />
-</p>
-<p align="center">
-  <img src="pic/overview_mobile.jpg" width="32%" alt="Mobile view" />
-</p>
+**Agent chat view**
+
+<img src="pic/overview_chat.png" width="80%" alt="Agent chat view" />
+
+**Terminal view**
+
+<img src="pic/overview_term.png" width="80%" alt="Terminal view" />
+
+**Mobile view**
+
+<img src="pic/overview_mobile.jpg" width="40%" alt="Mobile view" />
 
 > [中文](README_ZH.md)
 
