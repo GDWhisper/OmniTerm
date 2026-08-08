@@ -1126,6 +1126,10 @@ body.fm-dragging * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* direction:rtl makes ellipsis appear on the left (truncating the
+     start of the string); bdi[dir=ltr] keeps the text visually LTR. */
+  direction: rtl;
+  text-align: left;
 }
 
 /* 会话计数贴着分支名（信息区居左），右侧留给 hover 才显现的动作钮 */

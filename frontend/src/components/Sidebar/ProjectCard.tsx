@@ -202,7 +202,7 @@ export function ProjectCard(props: {
                       }
                       className={wtAgg === 'working' || wtAgg === 'blocked' ? 'activity-pulse' : ''}
                     />
-                    <span className="branch-name">{wt.label}</span>
+                    <span className="branch-name" title={wt.label}><bdi dir="ltr">{wt.label}</bdi></span>
                     <CountBadge count={wtSessions.length} />
                     <button
                       className="sidebar-wt-add-btn"
