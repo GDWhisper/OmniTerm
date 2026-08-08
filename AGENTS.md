@@ -94,7 +94,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/workflows/release-guide.md` | 执行正式发布（同步 main、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整、sync-main.sh 黑名单调整 |
 | `docs/visual-design/ui-style-guide.md` | 任何涉及 UI 的**修改或规范撰写**（组件样式、布局、色板、字体、尺寸 token、面板/弹窗视觉态、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距）、补充面板/弹窗尺寸规格 |
 | `docs/reference/user-testing.md` | 功能开发完成后的手动回归测试 | 新增测试用例、发现并记录已知限制 |
-| `docs/dev/debug-log.md` | 遇到 bug 先查是否有类似记录 | 新踩坑后追加（可复用理论 → 诊断错误 → 具体根因），详见文档头部写作规范 |
+| `docs/dev/debug-guide.md` | 遇到 bug 先读它（路由索引）定位领域，再按需读 `docs/dev/debug-patterns/` 下对应领域文件，看是否有已沉淀模式命中 | 新踩坑后提炼为模式（规律 → 弯路 → 案例证据），按领域归档到 `debug-patterns/` 并**登记一行到 debug-guide.md 索引**；详见其写作规范（家族合并、体积纪律、无理论不入库） |
 | `docs/dev/performance-and-safety.md` | 涉及数据累积/缓冲、持久化写入策略、外部输入（agent 通知/用户输入/文件内容）、命令执行、跨层数据传输或吞吐量相关的代码前**必读** | 新增性能/安全红线、检查项调整、补充新案例 |
 | `docs/reference/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |
 | `docs/reference/auth-not-enforced.md` | 修改鉴权/认证相关代码（auth 路由、`require_auth_mw`、登录限流、前端登录 UI）、部署公网前的安全评审 | 鉴权架构变更、安全机制启用/关闭逻辑调整 |

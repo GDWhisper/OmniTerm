@@ -152,7 +152,7 @@ turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `
 - **连接重放 + 对账标记**：连接时逐条重放 `pending_events()`，完毕后发 `permissions_synced` 标记帧——前端清掉不在重放集合里的陈旧 banner（断连窗口错过 resolved 广播的过期项）。`restore_acp_session` 的新 client 无未决审批，同样发该标记清掉旧 client 遗留 banner。
 - **resolve 失败收敛**：`permission_response` 消息 resolve 返回 false（审批已被其他连接应答 / cancel / 会话已释放）或 client 缺失时，向本连接回发 `permission_resolved{id}`，让陈旧点击收敛清除而非静默无响应。
 
-前端侧为按 id 的**队列**（`chatStore.pendingPermissions`，上限 16 丢新到达项 + warn），UI 显示队首——单槽会被并发审批互相覆盖导致被覆盖项无 UI 入口、会话卡死。turn 收尾（`markDone`）**不得**清队列：合法清除只有上述三条路径（教训见 debug-log 2026-08-07）。
+前端侧为按 id 的**队列**（`chatStore.pendingPermissions`，上限 16 丢新到达项 + warn），UI 显示队首——单槽会被并发审批互相覆盖导致被覆盖项无 UI 入口、会话卡死。turn 收尾（`markDone`）**不得**清队列：合法清除只有上述三条路径（教训见 `docs/dev/debug-patterns/frontend-react.md` 模式 8）。
 
 ### 发送即自动恢复（进程已释放）
 

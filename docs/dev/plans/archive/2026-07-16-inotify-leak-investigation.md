@@ -2,7 +2,7 @@
 
 > 日期：2026-07-16
 > 作者：Qoder
-> 状态：**已完成**（2026-07-17） — 根因定位 `src/api/files_watch.rs`；已修复并验证。详见 `docs/dev/debug-log.md` 2026-07-16→07-17 条目。
+> 状态：**已完成**（2026-07-17） — 根因定位 `src/api/files_watch.rs`；已修复并验证。详见 `docs/dev/debug-patterns/resource-lifecycle.md` 模式 3（对称释放路径）。
 > 优先级：**高** — 影响用户长期使用（后端跑一周即可撑满系统 inotify 上限）
 
 ---
@@ -174,7 +174,7 @@ lsof -p $PID | grep -c inotify   # 应回到基线
 | 复现脚本 + 数据采集 | 1-2 小时 |
 | 嫌疑模块代码审计 | 2-3 小时 |
 | 修复 + 验证（每个泄漏点） | 1-2 小时 |
-| 文档（`docs/dev/debug-log.md` 条目） | 30 分钟 |
+| 文档（`docs/dev/debug-patterns/resource-lifecycle.md` 模式） | 30 分钟 |
 | **总计** | **半天（4-8 小时）** |
 
 **注**：若 §2.1 文件监听是主因，单个修复可能 1-2 小时搞定；若涉及多处，按泄漏点数量线性叠加。
@@ -183,7 +183,7 @@ lsof -p $PID | grep -c inotify   # 应回到基线
 
 ## 5. 产出物
 
-1. **`docs/dev/debug-log.md`** 追加「inotify 泄漏」条目（按 AGENTS.md 文档索引约定）
+1. **`docs/dev/debug-patterns/resource-lifecycle.md`** 追加「对称释放路径」模式（按 debug-guide 写作规范）
 2. **`PROGRESS.md`** 或本执行计划加一条技术债记录
 3. **代码修复 commit**：`fix(backend): inotify watch 泄漏（<模块名>）`
 4. **回归测试**（可选）：`tests/inotify_leak.rs` 跑 N 次 session 创建/删除，断言 fd 数回到基线 ± 容差
@@ -204,7 +204,7 @@ lsof -p $PID | grep -c inotify   # 应回到基线
 2. 读 AGENTS.md §"工程准则"（特别是「缺陷修复 — 追溯根因而非掩盖症状」）
 3. 验证当前进度：
    ```bash
-   grep -n 'inotify' docs/dev/debug-log.md  # 是否已有条目
+   grep -n '对称释放' docs/dev/debug-patterns/resource-lifecycle.md  # 是否已有模式
    cat /proc/sys/fs/inotify/max_user_watches  # 应为 524288
    ```
 4. 按 §3 排查步骤执行；每完成一个嫌疑模块的审计/修复，单独 commit

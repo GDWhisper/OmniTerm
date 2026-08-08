@@ -34,7 +34,7 @@
 | 3 | 无触觉反馈 | 🟡 P1 | backlog 已有；MobileKeyBar 按键无物理行程 |
 | 4 | 横屏键盘挤出终端 | 🟡 P1 | backlog 方案 A：横屏+软键盘弹出时可视高度为负 |
 | 5 | 会话切换 3 步 | 🟡 P1 | 状态栏点名 → sessions tab → 点会话；无快速通道 |
-| 6 | KeyBar 缺 Enter / 一键 ^C | 🟡 P1 | `docs/dev/debug-log.md:203` 记录在案；软键盘收起（滚动模式）时无 Enter |
+| 6 | KeyBar 缺 Enter / 一键 ^C | 🟡 P1 | `docs/dev/debug-guide.md` 记录在案；软键盘收起（滚动模式）时无 Enter |
 | 7 | 无粘贴路径 | 🟡 P1 | 移动端无 Ctrl+V/右键；长按菜单从未实现 |
 | 8 | 触摸目标偏小 + 文案矛盾 | 🟢 P2 | Nav 键 32×32、KeyBar 键高 32（iOS 指南 44pt）；手势文案与实际行为不符 |
 

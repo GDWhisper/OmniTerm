@@ -174,7 +174,7 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // the old content stays visible until the new content arrives, so the
     // swap is one frame instead of a blank gap while the redraw is in flight
     // (prevents the ~250ms flicker; reset still guarantees a clean slate for
-    // the redraw and wipes stale scrollback — see debug-log).
+    // the redraw and wipes stale scrollback — see docs/dev/debug-guide.md).
     let sawFirstBinary = false
     ws.onmessage = (e) => {
       if (e.data instanceof ArrayBuffer) {

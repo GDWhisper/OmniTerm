@@ -10,7 +10,7 @@
 
 ## 背景：2026-07-23 连续两个 bug
 
-> 完整诊断见 [`docs/dev/debug-log.md`](../dev/debug-log.md) `## 2026-07-23` 条目。
+> 完整诊断见 [`docs/dev/debug-guide.md`](../dev/debug-guide.md) 的 `resource-lifecycle.md` 模式 4（spawn cwd 验证）。
 
 **Bug A — spawn 没设 cwd**：`agent-client-protocol` crate 的 `AcpAgent::spawn_process` 不调 `Command::current_dir()`，子进程 OS cwd 继承父进程（后端）。后端在 `NewSessionRequest` 协议层传对了 cwd，但 agent 子进程实际在错的目录里跑——所有 git / 文件读取 / 派生子进程都用错的 cwd。
 
@@ -72,7 +72,7 @@ pub async fn spawn_my_thing(workspace: &Path) -> Result<...> {
 }
 ```
 
-**注释内容包括**：验证日期、用了什么命令验证、链接到 checklist / debug-log 条目。**6 个月后看这段代码的人（包括你自己）不会重新踩坑**。
+**注释内容包括**：验证日期、用了什么命令验证、链接到 checklist / debug-guide 模式条目。**6 个月后看这段代码的人（包括你自己）不会重新踩坑**。
 
 ### A.3 必做：跨库 API 假设校验
 
@@ -155,7 +155,7 @@ let tmux_name: (String,) = sqlx::query_as("SELECT tmux_session_name ...")
 - serialize / deserialize 两端都认识所有变体
 - 未知变体的默认行为（reject / 视为 default / 视为 unknown）
 
-**反例**：ACP wire format 用 `sessionUpdate: "agent_message_chunk"` 蛇形命名，crate 默认是 PascalCase 外部标签——不在边界加 adapter 就 100% 失配（`debug-log.md` 2026-07-19 条目记录了完整案例）。
+**反例**：ACP wire format 用 `sessionUpdate: "agent_message_chunk"` 蛇形命名，crate 默认是 PascalCase 外部标签——不在边界加 adapter 就 100% 失配（`debug-patterns/platform-protocol.md` 模式 4「wire-format 抓帧」记录了完整案例）。
 
 ---
 
@@ -187,15 +187,15 @@ DB → 后端 API → 后端 handler → spawn → 子进程 OS → 子进程应
 └────────────── FileManager / WS 透传 ◄────────────────────┘
 ```
 
-每层都可能假设某个状态正确。**修完后必须从入口到 UI 走一遍完整请求流**，确认每层都看到一致的状态。debug-log 2026-07-23 §6 记录了这次的教训：先修 spawn cwd 暴露了后端 FileManager 的 404 假设。
+每层都可能假设某个状态正确。**修完后必须从入口到 UI 走一遍完整请求流**，确认每层都看到一致的状态。debug-guide 的 `resource-lifecycle.md` 模式 4（spawn cwd 验证）补遗记录了这次的教训：先修 spawn cwd 暴露了后端 FileManager 的 404 假设。
 
 ---
 
 ## 相关文档
 
-- [`docs/dev/debug-log.md`](../dev/debug-log.md) `## 2026-07-23` — 本 checklist 触发的原始 bug 诊断
+- [`docs/dev/debug-guide.md`](../dev/debug-guide.md) — 调试方法论路由索引；spawn cwd 模式见 [`debug-patterns/resource-lifecycle.md`](../dev/debug-patterns/resource-lifecycle.md) 模式 4（本 checklist 触发的原始 bug 诊断）
 - [`docs/architecture/backend.md`](../architecture/backend.md) — 后端架构（含 ACP runtime 章节）
-- 关联 commit：`27d815f` (spawn cwd)、`dde6298` (FileManager 404)、`cb49ab3` (debug-log 补遗)
+- 关联 commit：`27d815f` (spawn cwd)、`dde6298` (FileManager 404)、`cb49ab3` (debug-guide 补遗)
 - 关联 issue 字段：`sessions` 表 `runtime_kind` / `tmux_session_name` / `workspace_path` 三列的耦合关系
 
 ---
