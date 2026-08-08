@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
+
 ### Fixed
 
 - (2026-08-07 18:40) `[backend]` `[frontend]` ACP 权限审批链路健壮性加固（防「banner 丢失/陈旧、会话卡死」同族问题）：(1) 前端 `pendingPermission` 单槽改为按 id 队列（上限 16，超限丢新到达项并 warn），并发多个 `request_permission` 不再互相覆盖导致被覆盖项无 UI 入口，banner 显示队首并提示 `+N queued`（`frontend/src/stores/chatStore.ts`、`ChatView.tsx`、`PermissionBanner.tsx`）；(2) 后端连接重放 pending 审批后新增 `permissions_synced` 标记帧，restore 出的新 client 同样发送，前端据此对账清掉断连窗口错过 `permission_resolved` 广播的陈旧 banner（`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）；(3) `permission_response` resolve 失败（审批已被其他连接应答/cancel/会话已释放）不再静默吞掉，向本连接回发 `permission_resolved` 使陈旧点击收敛清除（`src/ws/acp.rs`）；(4) `respondPermission` 发送失败保留队列并报错、不再裸 `ws.send`；WS 错误/断连走 `markError` 清队列时同步清 decision 提醒（`frontend/src/hooks/useAcpChat.ts`）；附 7 条 store 单测

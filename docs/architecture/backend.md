@@ -65,7 +65,7 @@ POST /api/v1/auth/settings     # 密码验证总开关（受保护）
 POST /api/v1/auth/change-password  # 受保护（需登录 + 当前密码）
 GET  /api/v1/settings/acp-idle-recycle  # 读 ACP 空闲回收阈值（分钟；settings 表无记录/非数字回退 5）——受保护
 PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，值域 1..=60，越界 400）——受保护
-GET  /api/v1/projects
+GET  /api/v1/projects        # 响应每项含 path_valid：list_projects 实时计算项目路径是否仍存在（src/api/projects.rs），供前端标记失效项目
 POST /api/v1/projects
 DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
 GET  /api/v1/projects/{pid}/worktrees (git worktree discovery)

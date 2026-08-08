@@ -3,7 +3,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
-import { IconPlus, IconTrash } from '../FileManager/icons'
+import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
 import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
@@ -46,6 +46,7 @@ export function ProjectCard(props: {
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
   onWorkspaceClick: (wt: Workspace) => void
+  onRepairProject: (project: Project) => void
   onOpenCreateSession: (wt: Workspace) => void
   onDeleteWorktree: (target: DeleteWorktreeTarget) => void
   onDeleteSession: (target: DeleteTarget) => void
@@ -91,9 +92,43 @@ export function ProjectCard(props: {
         <div className="proj-info">
           <span className="proj-name">{props.project.name}</span>
           {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免尾部 / 被 bidi 挪到开头 */}
-          <span className="proj-path"><bdi dir="ltr">{props.project.path}</bdi></span>
+          <span
+            className="proj-path"
+            style={!props.project.path_valid ? { color: 'var(--danger)' } : undefined}
+            title={
+              !props.project.path_valid
+                ? (t('sidebar.projectPathMissing') ?? 'Project path missing — click to repair')
+                : undefined
+            }
+          >
+            {!props.project.path_valid && <span style={{ marginRight: 4 }}>⚠</span>}
+            <bdi dir="ltr">{props.project.path}</bdi>
+          </span>
         </div>
         <div className="flex items-center gap-1">
+          {!props.project.path_valid && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                props.onRepairProject(props.project)
+              }}
+              className="row-action flex-shrink-0 flex items-center justify-center transition-all"
+              style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--danger-30)', color: 'var(--danger)', fontSize: 11 }}
+              title={t('sidebar.projectPathMissing') ?? 'Project path missing — click to repair'}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--warning)'
+                e.currentTarget.style.color = 'var(--warning)'
+                e.currentTarget.style.background = 'rgba(251, 191, 36, 0.1)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--danger-30)'
+                e.currentTarget.style.color = 'var(--danger)'
+                e.currentTarget.style.background = 'transparent'
+              }}
+            >
+              <IconWarning width={14} height={14} />
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation()

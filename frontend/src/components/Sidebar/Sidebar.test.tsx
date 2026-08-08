@@ -53,6 +53,7 @@ const fakeProject = {
   name: 'Test Project',
   path: '/home/user/test-project',
   created_at: '2026-01-01T00:00:00Z',
+  path_valid: true,
 }
 
 const fakeWorkspace = {
@@ -370,5 +371,35 @@ describe('Sidebar handleCreateSession', () => {
     expect(badge.style.flexShrink).toBe('0')
     const label = badge.querySelector('.font-pixel') as HTMLElement
     expect(label.style.whiteSpace).toBe('nowrap')
+  })
+
+  it('项目路径失效时显示修复按钮，点击打开 RepairPathDialog', async () => {
+    i18n.changeLanguage('en')
+    const { api } = await import('../../api/client')
+    const broken = { ...fakeProject, path_valid: false }
+    vi.mocked(api.listProjects).mockResolvedValue([broken])
+
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+
+    // Wait for the broken project to render
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(broken.name)
+    })
+
+    // Repair button (⚠) is shown only for invalid paths
+    const repairBtn = container.querySelector('button[title*="Project path missing"]') as HTMLElement
+    expect(repairBtn).toBeTruthy()
+    repairBtn!.click()
+
+    // RepairPathDialog opens (portaled to document.body) with the repair title
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Project Path Not Found')
+    })
+    // Original (invalid) path is surfaced in the dialog
+    expect(document.body.textContent).toContain(broken.path)
   })
 })

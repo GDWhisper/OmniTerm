@@ -28,10 +28,16 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
-    let projects: Vec<Project> = sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
-        .fetch_all(&state.db)
-        .await
-        .unwrap();
+    let mut projects: Vec<Project> =
+        sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+
+    // Compute path validity at query time — cheap (few projects), always fresh.
+    for p in &mut projects {
+        p.path_valid = crate::fs::dir_exists(&p.path);
+    }
 
     Json(json!(projects))
 }
@@ -41,12 +47,7 @@ async fn create_project(
     Json(req): Json<CreateProject>,
 ) -> impl IntoResponse {
     // Expand ~ to actual home directory
-    let path = if req.path == "~" || req.path.starts_with("~/") {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
-        req.path.replacen('~', &home, 1)
-    } else {
-        req.path.clone()
-    };
+    let path = crate::fs::expand_home(&req.path);
 
     // Auto-create directory if it doesn't exist
     if let Err(e) = tokio::fs::create_dir_all(&path).await {
@@ -104,7 +105,14 @@ async fn create_project(
     .await
     .unwrap();
 
-    let project = Project { id, target_id: req.target_id, name: req.name, path, created_at: now };
+    let project = Project {
+        id,
+        target_id: req.target_id,
+        name: req.name,
+        path,
+        created_at: now,
+        path_valid: true, // directory was just created (or already existed)
+    };
 
     (StatusCode::CREATED, Json(json!(project)))
 }
@@ -189,11 +197,14 @@ async fn update_project(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    let project: Project = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
+    let mut project: Project = sqlx::query_as("SELECT * FROM projects WHERE id = ?")
         .bind(&id)
         .fetch_one(&state.db)
         .await
         .unwrap();
+
+    // Recompute validity — the path may have just been updated.
+    project.path_valid = crate::fs::dir_exists(&project.path);
 
     (StatusCode::OK, Json(json!(project)))
 }

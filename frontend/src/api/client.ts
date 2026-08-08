@@ -53,6 +53,8 @@ export interface Project {
   name: string
   path: string
   created_at: string
+  /** Whether the project path currently exists on disk (computed server-side). */
+  path_valid: boolean
 }
 
 /** One project inside a duplicate group. */

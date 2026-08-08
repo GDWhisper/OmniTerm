@@ -7,6 +7,12 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub created_at: String,
+    /// Whether the project path currently exists on disk. Computed at query
+    /// time by `list_projects` (and refreshed on create/update responses).
+    /// `#[sqlx(default)]` keeps `SELECT *` rows (no such column) valid.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub path_valid: bool,
 }
 
 #[derive(Debug, Deserialize)]

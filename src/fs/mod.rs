@@ -24,6 +24,24 @@ use tokio::fs;
 
 const MAX_SUBPATHS_COUNT: u64 = 1000;
 
+/// Expand a leading `~` / `~/` to the user's home directory. Other paths
+/// pass through unchanged. Single source of truth for `~` expansion
+/// (used by project creation, session workspace resolution, path-validity checks).
+pub fn expand_home(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        path.replacen('~', &home, 1)
+    } else {
+        path.to_string()
+    }
+}
+
+/// Whether the (possibly `~`-prefixed) path currently points to an existing
+/// directory. Used to flag project paths that were moved/renamed/deleted.
+pub fn dir_exists(path: &str) -> bool {
+    Path::new(&expand_home(path)).is_dir()
+}
+
 /// Sanitize a requested path against a base directory.
 /// Prevents directory traversal attacks. The path must already exist.
 pub fn sanitize_path(base: &Path, requested: &str) -> Result<PathBuf> {
@@ -771,5 +789,32 @@ mod tests {
         // allow_escape 放行
         copy_paths_allow_escape(&base, &["a.txt".to_string()], "../outside").await.unwrap();
         assert!(outside.join("a.txt").exists());
+    }
+
+    // ── expand_home / dir_exists ──
+
+    #[test]
+    fn test_expand_home() {
+        // 无 ~ 前缀原样返回
+        assert_eq!(expand_home("/home/user/proj"), "/home/user/proj");
+        assert_eq!(expand_home(""), "");
+        assert_eq!(expand_home("relative/path"), "relative/path");
+        // 仅在路径首位的 ~ 展开（不展开中间或尾部的 ~）
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(expand_home("~"), home);
+            assert_eq!(expand_home("~/proj"), format!("{home}/proj"));
+        }
+    }
+
+    #[test]
+    fn test_dir_exists() {
+        let (base, _outside) = escape_fixture("dir_exists");
+        let base_str = base.to_str().unwrap();
+        assert!(dir_exists(base_str));
+        assert!(!dir_exists(&format!("{base_str}/nope")));
+        // 普通文件不算目录
+        let f = base.join("file.txt");
+        fs::write(&f, b"x").unwrap();
+        assert!(!dir_exists(f.to_str().unwrap()));
     }
 }

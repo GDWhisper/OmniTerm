@@ -261,6 +261,12 @@ Section 拆分原则同构（2026-08-03 `Sidebar.tsx` 拆分确立，实施计�
 `hooks/useDirBrowser.ts`（目录浏览重复逻辑收敛），以及 E4 外移的
 `useAgentAttentionPolling.ts`（agent_state 轮询 + attention 检测）。
 
+> **RepairPathDialog 契约**：`RepairTarget = { project; workspace?: Workspace | null; oldPath }`。
+> 两种触发入口共用同一弹窗——(1) 点击 worktree 时 `handleWorkspaceClick` 检测 `wt.path` 失效（
+> `workspace` 携带被激活的 worktree）；(2) 项目路径失效时点击项目行 ⚠ 修复按钮（`workspace: null`，
+> 纯项目级修复，提交后不激活 workspace，仅激活 project）。`path_valid` 由后端 `GET /projects`
+> 实时计算返回，项目列表在挂载/切回页面/手动刷新时重新加载。
+
 ### i18n 约定
 
 | 元素 | 风格 | 原因 |

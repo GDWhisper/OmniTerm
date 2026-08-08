@@ -272,6 +272,14 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
+  // Refresh projects when the page becomes visible again — catches
+  // directories moved/deleted while the tab was hidden (path_valid changes).
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') loadProjects() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [loadProjects])
+
   // Cleanup tooltip timeout on unmount — commented out pending notification scheme decision.
   // useEffect(() => {
   //   return () => {
@@ -527,6 +535,7 @@ export function Sidebar() {
               onRename={setRenameTarget}
               onDeleteProject={() => setConfirmDelete({ type: 'project', id: proj.id, name: proj.name })}
               onWorkspaceClick={(wt) => handleWorkspaceClick(proj, wt)}
+              onRepairProject={(project) => setRepairTarget({ project, workspace: null, oldPath: project.path })}
               onOpenCreateSession={(wt) => {
                 setActiveProject(proj.id)
                 setActiveWorkspace(wt.id)

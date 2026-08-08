@@ -367,6 +367,7 @@
   "sidebar.repairUpdate": "Update Path",
   "sidebar.repairUpdating": "Updating…",
   "sidebar.repairUpdated": "Project path updated to \"{{path}}\"",
+  "sidebar.projectPathMissing": "Project path missing — click to repair",
   "sidebar.externalSessions": "External Sessions",
   "sidebar.adopt": "Adopt",
   "sidebar.adoptSuccess": "Session \"{{name}}\" adopted",

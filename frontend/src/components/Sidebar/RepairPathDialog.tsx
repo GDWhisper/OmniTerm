@@ -12,7 +12,7 @@ import { FolderSprite } from '../PixelUI'
 import { IconFolder, IconArrowUp, IconRefresh, IconWarning } from '../FileManager/icons'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 
-export interface RepairTarget { project: Project; workspace: Workspace; oldPath: string }
+export interface RepairTarget { project: Project; workspace?: Workspace | null; oldPath: string }
 
 /**
  * Repair-project-path dialog: shown when the user clicks a workspace whose
@@ -106,10 +106,13 @@ export function RepairPathDialog(props: {
       addToast('success', t('sidebar.repairUpdated') ?? `Project path updated to "${repairPath.trim()}"`)
       // Refresh projects + worktrees + sessions so the UI reflects the new path
       await props.onRepaired(repairProject.project.id)
-      // Activate the workspace after successful update
+      // Activate the workspace after successful update (project-level repairs
+      // have no workspace target — just activate the project).
       setActiveProject(repairProject.project.id)
       setActiveSession(null)
-      setActiveWorkspace(repairProject.workspace.id)
+      if (repairProject.workspace) {
+        setActiveWorkspace(repairProject.workspace.id)
+      }
       props.onClose()
     } catch {
       // api client already shows error toast

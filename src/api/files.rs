@@ -229,6 +229,7 @@ async fn resolve_effective_in_project(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;
     wts.into_iter()
@@ -296,6 +297,7 @@ async fn resolve_workspace_root(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;
     wts.into_iter().find(|w| w.id == workspace_id).map(|w| w.path)
