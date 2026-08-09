@@ -17,7 +17,7 @@
 | 领域 | 文件 | 覆盖内容（关键词） |
 |------|------|------|
 | 异步与竞态 | `debug-patterns/async-race.md` | broadcast/mpsc 通道、订阅-快照顺序、完成信号广播、边生产边消费、identity guard、即时 vs 异步竞态窗口 |
-| 资源与生命周期 | `debug-patterns/resource-lifecycle.md` | 删记录≠释放运行时资源、Drop 隐式副作用、对称释放路径、spawn 抽象 cwd、map vs 持久化行、存活多层独立事实、回收编排失败路径、无界累积有界化 |
+| 资源与生命周期 | `debug-patterns/resource-lifecycle.md` | 删记录≠释放运行时资源、Drop 隐式副作用、对称释放路径、spawn 抽象 cwd、map vs 持久化行、存活多层独立事实、回收编排失败路径、无界累积有界化、后台化进程启动结果握手反馈 |
 | React 与前端 | `debug-patterns/frontend-react.md` | key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调 |
 | 布局与 CSS | `debug-patterns/layout-visual.md` | flex 三件套、共享 CSS 类隐性契约、visual viewport 三层模型、containing block、RTL bidi 隔离、table-layout、white-space、底部不可见分层排查清单 |
 | 终端与 PTY | `debug-patterns/terminal-pty.md` | MasterWriter Drop 副作用、字节能到达≠语义能到达、跨进程分隔符选型、平替实现边缘语法、FitAddon 桌面像素常量、escape-time 时序矩阵 |
