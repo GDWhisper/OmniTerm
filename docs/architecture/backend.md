@@ -175,32 +175,32 @@ ACP is a protocol satisfied by multiple agent implementations. **Do not assume o
 
 ## CLI Reference
 
-CLI 为 clap 4 子命令结构（`src/main.rs` 定义枚举与 dispatch；`update` 逻辑在 `src/update.rs`）。
+CLI 为 clap 4 子命令结构（`src/main.rs` 定义枚举与 dispatch；`update` 逻辑在 `src/update.rs`）。**CLI 输出统一英文**（help、启动/停止/状态提示、错误消息），与前端 i18n（zh/en）相互独立。
 
 ```
 omniterm <COMMAND>
 
 Commands:
-  start       启动服务（默认前台运行；加 -d/--daemonize 可转入后台，Unix only）
-  stop        停止后台运行的服务（通过 PID 文件发 SIGTERM）
-  status      查看服务运行状态
-  reset-auth  清空所有用户（忘记密码后，先用此命令再 start 设新密码）
-  update      自更新到最新发布版本
+  start       Start the server (foreground by default; add -d/--daemonize to run in background, Unix only)
+  stop        Stop the background server (sends SIGTERM via the PID file)
+  status      Show server running status
+  reset-auth  Delete all user accounts (use after forgetting the password, then start to set a new one)
+  update      Self-update to the latest release
 
 start options:
-  -p, --port <PORT>       监听端口 (默认: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]；显式传 -p/-H 时优先于 BIND_ADDR env
-      --db <DB>           数据库连接 [env: DATABASE_URL]
-      --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]（缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
-      --auth-enabled     强制密码验证开关 [env: OMNITERM_AUTH_ENABLED]（接受 1/0/true/false；未指定时用 DB 值）
-      --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
-  -d, --daemonize         后台运行（Unix only；Windows 报错退出），日志追加写入 ~/.omniterm/<binary>.log；父进程会阻塞等待 daemon 完成端口绑定后才返回——成功时打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」，失败（端口被占/DB 连不上等）时把错误原文打印到终端并以非零退出，不会静默"成功"
-      --debug             强制开启 omniterm 调试日志（等价 RUST_LOG=omniterm=debug，优先级高于 RUST_LOG 中 omniterm 的级别设置）
+  -p, --port <PORT>       Listen port (default: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]; explicit -p/-H overrides BIND_ADDR env
+      --db <DB>           Database connection string [env: DATABASE_URL]
+      --jwt-secret <KEY>  JWT signing key [env: JWT_SECRET] (auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
+      --auth-enabled      Force password verification [env: OMNITERM_AUTH_ENABLED] (accepts 1/0/true/false; DB value used if unset)
+      --reset-auth        Delete all users before startup [env: OMNITERM_RESET_AUTH]
+  -d, --daemonize         Run in background (Unix only; errors on Windows), logs appended to ~/.omniterm/<binary>.log; the parent process blocks until the daemon binds the port — on success it prints "OmniTerm vX.Y.Z started in the background — http://host:port (PID)", on failure (port in use / DB unreachable) it prints the error to the terminal and exits non-zero, never silently "succeeding"
+      --debug             Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
 
 stop / status / reset-auth options:
-      --db <DB>           数据库连接（用于定位 PID 文件）[env: DATABASE_URL]
+      --db <DB>           Database connection (used to locate the PID file) [env: DATABASE_URL]
 
 update options:
-      --check             只检查是否有新版本，不执行更新
+      --check             Only check for a new version, do not update
 ```
 
 日志级别由 `RUST_LOG` 环境变量控制（`tracing_subscriber::EnvFilter`）：未设置时默认 `omniterm=info`（只输出 omniterm 的 info/warn/error，屏蔽 debug）；需要调试日志时用 `omniterm start --debug`（优先级高于 `RUST_LOG` 中 omniterm 的级别，其余 target 保留）或设 `RUST_LOG=omniterm=debug`（或更具体 target 如 `RUST_LOG=omniterm::tmux=debug`）。`dev.sh` 已兜底 `export RUST_LOG="${RUST_LOG:-omniterm=info}"`。

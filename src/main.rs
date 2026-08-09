@@ -45,55 +45,55 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 启动服务（默认前台运行；加 -d/--daemonize 可转入后台，Unix only）
+    /// Start the server (foreground by default; add -d/--daemonize to run in background, Unix only)
     Start(StartArgs),
-    /// 停止后台运行的服务（通过 PID 文件发 SIGTERM）
+    /// Stop the background server (sends SIGTERM via the PID file)
     Stop(StopArgs),
-    /// 查看服务运行状态
+    /// Show server running status
     Status(StatusArgs),
-    /// 清空所有用户（忘记密码后，先用此命令再 start 设新密码）
+    /// Delete all user accounts (use after forgetting the password, then start to set a new one)
     ResetAuth(ResetAuthArgs),
-    /// 自更新到最新发布版本
+    /// Self-update to the latest release
     Update(update::UpdateArgs),
 }
 
 #[derive(Parser)]
 struct StopArgs {
-    /// 数据库连接字符串（用于定位 PID 文件）
+    /// Database connection string (used to locate the PID file)
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct StatusArgs {
-    /// 数据库连接字符串（用于定位 PID 文件）
+    /// Database connection string (used to locate the PID file)
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct ResetAuthArgs {
-    /// 数据库连接字符串
+    /// Database connection string
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct StartArgs {
-    /// 监听端口（优先级：CLI > 环境变量 > fallback）
+    /// Listen port (priority: CLI > env > fallback)
     #[arg(short = 'p', long, env = "BACKEND_PORT", default_value = "9077")]
     port: u16,
 
-    /// 数据库连接字符串
+    /// Database connection string
     #[arg(long, env = "DATABASE_URL")]
     db: Option<String>,
 
-    /// JWT 签名密钥（不设公开默认值；缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
+    /// JWT signing key (no public default; auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
     #[arg(long, env = "JWT_SECRET")]
     jwt_secret: Option<String>,
 
-    /// 强制密码验证开关（覆盖 DB 设置并写回；未指定时用 DB 值）。
-    /// Docker/公网部署应显式设为 1：无鉴权时任何能访问端口的人都能完全控制本机。
+    /// Force password verification (overrides the DB setting and writes back; DB value used if unset).
+    /// Set to 1 for Docker/public deployments: without auth, anyone who can reach the port fully controls this machine.
     #[arg(
         long,
         env = "OMNITERM_AUTH_ENABLED",
@@ -103,19 +103,19 @@ struct StartArgs {
     )]
     auth_enabled: Option<bool>,
 
-    /// 监听地址（默认 127.0.0.1；设为 0.0.0.0 可监听所有网络接口）
+    /// Listen address (default 127.0.0.1; set 0.0.0.0 to listen on all interfaces)
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
     host: String,
 
-    /// 启动后进入后台运行（Unix only；Windows 不支持）。日志写入 ~/.omniterm/<binary>.log
+    /// Run in background after startup (Unix only; not supported on Windows). Logs appended to ~/.omniterm/<binary>.log
     #[arg(short = 'd', long)]
     daemonize: bool,
 
-    /// 启动前清空所有用户（忘记密码时使用，重启后需重设密码）
+    /// Delete all users before startup (for forgotten passwords; re-set a new password after restart)
     #[arg(long, env = "OMNITERM_RESET_AUTH")]
     reset_auth: bool,
 
-    /// 强制开启 omniterm 调试日志（等价于 RUST_LOG=omniterm=debug，优先级高于 RUST_LOG 中 omniterm 的级别设置）
+    /// Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
     #[arg(long)]
     debug: bool,
 }
@@ -685,7 +685,7 @@ fn main() -> anyhow::Result<()> {
             daemon_notify_ready(
                 daemon_pipe,
                 &format!(
-                    "OmniTerm v{} 后台已启动 — http://{} (PID: {})",
+                    "OmniTerm v{} started in the background — http://{} (PID: {})",
                     env!("CARGO_PKG_VERSION"),
                     bind,
                     std::process::id()

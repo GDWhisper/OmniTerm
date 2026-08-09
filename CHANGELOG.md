@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 - (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
 
+### Changed
+
+- (2026-08-09 16:10) `[backend]` CLI 输出统一改为英文：`--help` 全部子命令/参数说明、启动/停止/状态提示、`start -d` 成功消息、自更新消息（此前 clap help 与 daemon 启动提示为中文；CLI 与前端 i18n 相互独立，后端不引入语言切换）
+
 ### Fixed
 
 - (2026-08-09 15:20) `[backend]` `start -d` 启动成功不再静默：daemon 握手扩展为携带启动结果消息，父进程打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」并返回 0；配合上一项，后台启动无论成败终端都有明确反馈（`src/main.rs`）
