@@ -7,3 +7,4 @@ pub mod cli;
 pub mod detect;
 pub mod process;
 pub mod state;
+pub mod watch;

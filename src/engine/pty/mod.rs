@@ -1,4 +1,5 @@
 pub mod session;
+pub mod terminal_ws;
 
 use std::sync::{Arc, Mutex};
 use tokio::task::spawn_blocking;

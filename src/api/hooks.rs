@@ -9,7 +9,7 @@ use serde_json::json;
 use tracing::error;
 
 use crate::AppState;
-use crate::engine::tmux;
+use crate::models::session::RuntimeKind;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -27,7 +27,7 @@ async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> i
             .ok()
             .flatten();
 
-    let Some((tmux_name, hook_enabled)) = session else {
+    let Some((engine_name, hook_enabled)) = session else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })));
     };
 
@@ -41,8 +41,8 @@ async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> i
         );
     }
 
-    // First, try to read agent state from the tmux session option
-    match tmux::get_session_agent_option(&tmux_name).await {
+    // First, try to read agent state from the engine's structured agent channel
+    match state.engines.agent_snapshot(RuntimeKind::Tmux, &engine_name).await {
         Ok(Some(snapshot)) => {
             return (
                 StatusCode::OK,
@@ -60,7 +60,7 @@ async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> i
             // Option not set — hooks may not have been injected yet
         }
         Err(e) => {
-            tracing::warn!("failed to read agent option for {}: {}", tmux_name, e);
+            tracing::warn!("failed to read agent state for {}: {}", engine_name, e);
         }
     }
 

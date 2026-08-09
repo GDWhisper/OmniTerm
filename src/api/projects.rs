@@ -214,7 +214,7 @@ async fn delete_project(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     // 先取该项目下全部 session 的运行时信息，逐个清理进程资源
-    // （psmux/tmux 会话、acp agent 子进程），再删 DB——否则会话进程残留。
+    // （复用器会话、acp agent 子进程），再删 DB——否则会话进程残留。
     let sessions: Vec<(String, Option<String>, String)> = sqlx::query_as(
         "SELECT id, tmux_session_name, runtime_kind FROM sessions WHERE project_id = ?",
     )
@@ -223,11 +223,11 @@ async fn delete_project(
     .await
     .unwrap();
 
-    for (session_id, tmux_name, runtime_kind) in sessions {
+    for (session_id, engine_name, runtime_kind) in sessions {
         crate::api::sessions::cleanup_session_runtime(
             &state,
             &session_id,
-            tmux_name.as_deref(),
+            engine_name.as_deref(),
             &runtime_kind,
         )
         .await;
@@ -589,7 +589,7 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Merge source project `id` into `target_id`: reassign all sessions, then
 /// delete the source project. Rejects with 409 if any session's
-/// `tmux_session_name` would collide with an existing target session.
+/// The engine session name column would collide with an existing target session.
 async fn merge_project_into(
     State(state): State<AppState>,
     Path((id, target_id)): Path<(String, String)>,
@@ -622,9 +622,9 @@ async fn merge_project_into(
         }
     };
 
-    // Detect tmux_session_name collisions between source and target.
+    // Detect engine session name collisions between source and target.
     // A collision means both projects have a session backed by the same
-    // tmux process; we can't safely merge those (would lose access to one).
+    // live multiplexer process; we can't safely merge those (would lose access to one).
     let collisions: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT s.id, s.tmux_session_name, s.name FROM sessions s \
          WHERE s.project_id = ? AND s.tmux_session_name IS NOT NULL \

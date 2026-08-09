@@ -17,7 +17,6 @@ use crate::acp::AcpClient;
 use crate::acp::config_prefs;
 use crate::agent::state::AgentSnapshot;
 use crate::api::agents::load_agent;
-use crate::engine::tmux;
 use crate::models::session::{
     AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
 };
@@ -45,10 +44,12 @@ async fn list_sessions(
             .await
             .unwrap();
 
-    // Batch-fetch agent state from all tmux sessions in a single call.
-    // We build a map keyed by tmux session name so the per-session loop
+    // Batch-fetch agent state from all engine sessions in a single call.
+    // We build a map keyed by engine session name so the per-session loop
     // below can look up agent state without spawning additional processes.
-    let agent_map: HashMap<String, AgentSnapshot> = tmux::list_sessions()
+    let agent_map: HashMap<String, AgentSnapshot> = state
+        .engines
+        .list_sessions()
         .await
         .unwrap_or_default()
         .into_iter()
@@ -82,16 +83,16 @@ async fn list_sessions(
 
     // 屏幕检测快照（agent_watch 后台轮询产出）：作为状态权威覆盖 hook 上报的 state。
     // hook 数据仍保留 attention_reason/event/nonce（屏幕检测不产出这些）。
-    let screen_map = state.agent_watcher.snapshot().await;
+    let screen_map = state.engines.watcher().snapshot().await;
 
-    // Enrich sessions with activity state and agent state from tmux.
-    // Only tmux-backed sessions have a pane to poll; ACP sessions get their
+    // Enrich sessions with activity state and agent state from the engine.
+    // Only multiplexer-backed sessions have a pane to poll; ACP sessions get their
     // state via the ACP event stream (Phase 3) and are skipped here.
     // Pty sessions have no multiplexer state; they start inactive until a
     // WS handler attaches and drives the PTY.
     for session in &mut sessions {
         // ACP 会话：标记 agent 子进程是否在后端驻留（未释放/未被回收）。
-        // 这与 tmux 的 is_active 不同，是 supervisor 中真实存在的进程状态。
+        // 这与复用器的 is_active 不同，是 supervisor 中真实存在的进程状态。
         if session.runtime_kind == RuntimeKind::Acp {
             session.acp_process_alive = alive_acp.contains(&session.id);
             continue;
@@ -99,10 +100,10 @@ async fn list_sessions(
         if session.runtime_kind != RuntimeKind::Tmux {
             continue;
         }
-        if let Some(ref tmux_name) = session.tmux_session_name {
-            session.is_active = state.activity_monitor.is_active(tmux_name).await;
+        if let Some(ref engine_name) = session.tmux_session_name {
+            session.is_active = state.engines.is_active(session.runtime_kind, engine_name).await;
 
-            if let Some(snapshot) = agent_map.get(tmux_name) {
+            if let Some(snapshot) = agent_map.get(engine_name) {
                 // Hook-injected session: use option data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
                 session.agent_state = Some(snapshot.agent_state.as_str().to_string());
@@ -113,7 +114,7 @@ async fn list_sessions(
             }
             // 屏幕检测覆盖 kind/state（hook 事件流不完整，屏幕检测为状态权威，
             // 见 docs/reference/herdr-reference.md 仲裁策略）
-            if let Some(screen) = screen_map.get(tmux_name) {
+            if let Some(screen) = screen_map.get(engine_name) {
                 session.agent_kind = Some(screen.kind.as_str().to_string());
                 session.agent_state = Some(screen.state.as_str().to_string());
                 session.agent_detected = Some(screen.kind.as_str().to_string());
@@ -268,21 +269,24 @@ async fn create_session(
     let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
 
     let id = Uuid::new_v4().to_string();
-    let tmux_name = format!("lt_{}", &id[..8]);
+    let engine_name = format!("lt_{}", &id[..8]);
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Create the tmux session; detect agent and inject hooks if applicable
-    let hook_enabled =
-        match tmux::new_session(&tmux_name, &workspace_path, req.command.as_deref()).await {
-            Ok(injected) => {
-                info!("created tmux session: {} (cwd: {})", tmux_name, workspace_path);
-                injected && req.command.is_some()
-            }
-            Err(e) => {
-                error!("failed to create tmux session: {}", e);
-                false
-            }
-        };
+    // Create the multiplexer session; detect agent and inject hooks if applicable
+    let hook_enabled = match state
+        .engines
+        .create_session(RuntimeKind::Tmux, &engine_name, &workspace_path, req.command.as_deref())
+        .await
+    {
+        Ok(injected) => {
+            info!("created multiplexer session: {} (cwd: {})", engine_name, workspace_path);
+            injected && req.command.is_some()
+        }
+        Err(e) => {
+            error!("failed to create multiplexer session: {}", e);
+            false
+        }
+    };
 
     sqlx::query(
         "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'tmux', NULL)",
@@ -291,15 +295,15 @@ async fn create_session(
     .bind(&pid)
     .bind(&workspace_path)
     .bind(&req.name)
-    .bind(&tmux_name)
+    .bind(&engine_name)
     .bind(hook_enabled as i32)
     .bind(&now)
     .execute(&state.db)
     .await
     .unwrap();
 
-    if let Err(e) = state.activity_monitor.ensure_session(&tmux_name).await {
-        error!("failed to ensure control mode for new session {}: {}", tmux_name, e);
+    if let Err(e) = state.engines.track_session(RuntimeKind::Tmux, &engine_name).await {
+        error!("failed to ensure activity tracking for new session {}: {}", engine_name, e);
     }
 
     let session = Session {
@@ -307,7 +311,7 @@ async fn create_session(
         project_id: pid,
         workspace_path,
         name: req.name,
-        tmux_session_name: Some(tmux_name.clone()),
+        tmux_session_name: Some(engine_name.clone()),
         hook_enabled,
         hook_status: None,
         created_at: now,
@@ -353,14 +357,14 @@ async fn update_session(
 }
 
 /// 按 `runtime_kind` 清理会话的运行时资源：acp → 释放 supervisor 持有的 agent
-/// 子进程；tmux/psmux → 关闭 control-mode 连接并 `kill-session` 杀会话进程。
+/// 子进程；复用器会话 → 关闭活跃度跟踪并 `kill-session` 杀会话进程。
 ///
 /// 只负责进程/运行时清理，**不删除 DB 记录**——由调用方（`delete_session` /
 /// `delete_project`）负责删库。两处共用，避免清理逻辑漂移。
 pub async fn cleanup_session_runtime(
     state: &AppState,
     session_id: &str,
-    tmux_name: Option<&str>,
+    engine_name: Option<&str>,
     runtime_kind: &str,
 ) {
     match runtime_kind {
@@ -376,10 +380,10 @@ pub async fn cleanup_session_runtime(
             // PtyEngine sessions are owned by the WS handler; nothing to dispose here.
         }
         _ => {
-            if let Some(name) = tmux_name {
-                state.activity_monitor.remove_session(name).await;
-                if let Err(e) = tmux::kill_session(name).await {
-                    error!("failed to kill tmux session {}: {}", name, e);
+            if let Some(name) = engine_name {
+                state.engines.untrack_session(RuntimeKind::Tmux, name).await;
+                if let Err(e) = state.engines.kill_session(RuntimeKind::Tmux, name).await {
+                    error!("failed to kill multiplexer session {}: {}", name, e);
                 }
             }
         }
@@ -408,8 +412,8 @@ async fn delete_session(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    if let Some((tmux_name, runtime_kind)) = row {
-        cleanup_session_runtime(&state, &id, tmux_name.as_deref(), &runtime_kind).await;
+    if let Some((engine_name, runtime_kind)) = row {
+        cleanup_session_runtime(&state, &id, engine_name.as_deref(), &runtime_kind).await;
     }
 
     // 清理会话级配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
@@ -466,7 +470,7 @@ async fn get_session_cwd(
     .ok()
     .flatten();
 
-    let Some((runtime_kind, tmux_name, workspace_path_opt)) = row else {
+    let Some((runtime_kind, engine_name, workspace_path_opt)) = row else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })));
     };
 
@@ -474,15 +478,15 @@ async fn get_session_cwd(
         .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
 
     // Pty / ACP sessions do not have a live multiplexer pane; use workspace_path.
-    if runtime_kind != "tmux" || tmux_name.is_empty() {
+    if runtime_kind != "tmux" || engine_name.is_empty() {
         return (StatusCode::OK, Json(json!({ "cwd": workspace_path })));
     }
 
-    // Resolve CWD from the live tmux pane (fall back to workspace_path)
-    let cwd = match tmux::pane_cwd(&tmux_name).await {
+    // Resolve CWD from the live multiplexer pane (fall back to workspace_path)
+    let cwd = match state.engines.current_cwd(RuntimeKind::Tmux, &engine_name).await {
         Ok(cwd) => cwd,
         Err(e) => {
-            error!("pane_cwd failed for {}: {}", tmux_name, e);
+            error!("pane_cwd failed for {}: {}", engine_name, e);
             workspace_path
         }
     };
@@ -576,18 +580,18 @@ async fn resolve_workspace_path(req_path: &str, project_id: &str, state: &AppSta
     }
 }
 
-/// GET /sessions/external — list tmux sessions not yet recorded in the DB.
+/// GET /sessions/external — list multiplexer sessions not yet recorded in the DB.
 async fn list_external_sessions(State(state): State<AppState>) -> impl IntoResponse {
-    // Get all tmux sessions (returns empty vec if no server running or error)
-    let tmux_sessions = match tmux::list_sessions().await {
+    // Get all multiplexer sessions (returns empty vec if no server running or error)
+    let mux_sessions = match state.engines.list_sessions().await {
         Ok(s) => s,
         Err(e) => {
-            error!("list_external_sessions: tmux error: {}", e);
+            error!("list_external_sessions: multiplexer error: {}", e);
             return (StatusCode::OK, Json(json!({ "sessions": [] })));
         }
     };
 
-    // Get all recorded tmux session names from DB
+    // Get all recorded engine session names from DB
     let recorded: Vec<(String,)> = sqlx::query_as(
         "SELECT tmux_session_name FROM sessions WHERE tmux_session_name IS NOT NULL",
     )
@@ -599,12 +603,12 @@ async fn list_external_sessions(State(state): State<AppState>) -> impl IntoRespo
 
     // Filter to external (unadopted) sessions only
     let external: Vec<_> =
-        tmux_sessions.into_iter().filter(|s| !recorded_names.contains(&s.name)).collect();
+        mux_sessions.into_iter().filter(|s| !recorded_names.contains(&s.name)).collect();
 
     // Build result from external sessions. CWD is already available from the
-    // batch `tmux::list_sessions()` call above — no per-session `pane_cwd` needed.
+    // batch `list_sessions()` call above — no per-session `current_cwd` needed.
     // 屏幕检测覆盖 kind/state（与 list_sessions 同一仲裁策略）。
-    let screen_map = state.agent_watcher.snapshot().await;
+    let screen_map = state.engines.watcher().snapshot().await;
     let mut result = Vec::with_capacity(external.len());
     for s in external {
         let screen = screen_map.get(&s.name);
@@ -625,14 +629,14 @@ async fn list_external_sessions(State(state): State<AppState>) -> impl IntoRespo
     (StatusCode::OK, Json(json!({ "sessions": result })))
 }
 
-/// POST /sessions/adopt — adopt an external tmux session into a project.
+/// POST /sessions/adopt — adopt an external multiplexer session into a project.
 async fn adopt_session(
     State(state): State<AppState>,
     Json(req): Json<AdoptSession>,
 ) -> impl IntoResponse {
-    // Verify the tmux session still exists
-    if !tmux::session_exists(&req.tmux_name).await {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "tmux session not found" })));
+    // Verify the multiplexer session still exists
+    if !state.engines.session_exists(RuntimeKind::Tmux, &req.external_name).await {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "multiplexer session not found" })));
     }
 
     // Verify the project exists
@@ -649,7 +653,7 @@ async fn adopt_session(
     // Check for race: session may have been adopted between the GET and this POST
     let already_adopted: bool =
         sqlx::query_scalar("SELECT COUNT(*) > 0 FROM sessions WHERE tmux_session_name = ?")
-            .bind(&req.tmux_name)
+            .bind(&req.external_name)
             .fetch_one(&state.db)
             .await
             .unwrap_or(false);
@@ -661,8 +665,10 @@ async fn adopt_session(
     // Resolve CWD; fall back to HOME if pane_cwd fails.
     // display_path_str: Windows 下 pane_cwd 返回反斜杠路径，统一成正斜杠再入库，
     // 否则与 worktree 路径（git 输出，正斜杠）永不匹配，会变成孤儿会话
-    let tmux_name = req.tmux_name.clone();
-    let workspace_path = tmux::pane_cwd(&tmux_name)
+    let engine_name = req.external_name.clone();
+    let workspace_path = state
+        .engines
+        .current_cwd(RuntimeKind::Tmux, &engine_name)
         .await
         .map(|c| crate::fs::display_path_str(&c))
         .unwrap_or_else(|_| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
@@ -676,25 +682,25 @@ async fn adopt_session(
     .bind(&id)
     .bind(&req.project_id)
     .bind(&workspace_path)
-    .bind(&tmux_name)
-    .bind(&tmux_name)
+    .bind(&engine_name)
+    .bind(&engine_name)
     .bind(false as i32)
     .bind(&now)
     .execute(&state.db)
     .await
     .unwrap();
 
-    // Start the activity monitor for the adopted session
-    if let Err(e) = state.activity_monitor.ensure_session(&req.tmux_name).await {
-        error!("failed to ensure control mode for adopted session {}: {}", req.tmux_name, e);
+    // Start activity tracking for the adopted session
+    if let Err(e) = state.engines.track_session(RuntimeKind::Tmux, &engine_name).await {
+        error!("failed to ensure activity tracking for adopted session {}: {}", engine_name, e);
     }
 
     let session = Session {
         id,
         project_id: req.project_id,
         workspace_path,
-        name: Some(tmux_name.clone()),
-        tmux_session_name: Some(tmux_name),
+        name: Some(engine_name.clone()),
+        tmux_session_name: Some(engine_name),
         hook_enabled: false,
         hook_status: None,
         created_at: now,

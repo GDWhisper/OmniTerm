@@ -1,12 +1,17 @@
 pub mod agent_hooks;
-pub mod agent_watch;
 pub mod control_mode;
+pub mod engine;
+pub mod terminal_ws;
+pub mod watch_source;
 
 use anyhow::{Result, anyhow};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
 use crate::agent::state::AgentSnapshot;
+use crate::engine::EngineSessionInfo;
+
+pub use engine::TmuxEngine;
 
 /// Platform-specific install commands for the terminal multiplexer.
 #[cfg(unix)]
@@ -137,7 +142,7 @@ pub async fn kill_session(name: &str) -> Result<()> {
 /// Uses `|` as the format separator (unified). The session name is the last field
 /// and re-joined from remaining parts after the fixed fields — this handles names
 /// that contain `|` characters.
-pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
+pub async fn list_sessions() -> Result<Vec<EngineSessionInfo>> {
     let output = Command::new("tmux")
         .args([
             "list-sessions",
@@ -192,7 +197,7 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
                 // Session name: rejoin remaining parts with |
                 let name = parts[5..].join("|");
 
-                Some(TmuxSessionInfo {
+                Some(EngineSessionInfo {
                     name,
                     attached,
                     windows,
@@ -290,20 +295,6 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
     let value = stdout.strip_prefix("@omniterm_agent ").map(|v| v.trim()).unwrap_or("");
 
     Ok(crate::agent::state::parse_agent_value(value))
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TmuxSessionInfo {
-    pub name: String,
-    pub attached: bool,
-    pub windows: u32,
-    pub created: String,
-    pub cwd: Option<String>,
-    pub agent_kind: Option<String>,
-    pub agent_state: Option<String>,
-    pub attention_reason: Option<String>,
-    pub agent_event: Option<String>,
-    pub agent_nonce: Option<String>,
 }
 
 /// Read the global tmux `mouse` option (`-g`).
