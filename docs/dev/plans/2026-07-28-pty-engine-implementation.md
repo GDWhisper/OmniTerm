@@ -10,7 +10,7 @@
 
 ## 0. 新会话上手指引
 
-- **当前状态（v3 修订）**：pty **脚手架已存在但偏离本计划**（见 §1.4 盘点：连接期生命周期、未走抽象层、前端零支持）——不要在脚手架上打补丁，Phase 1 收敛、Phase 2 切片 A 替换为常驻会话。Phase 1（解耦）本身未开始。下一步 = Phase 1（§3）。
+- **当前状态（2026-08-09 更新）**：**Phase 1（解耦）已完成**（commit `3b394de` / `0ffbeb6` / `70840c5`）：`SessionEngine` trait + `EngineRegistry` 落地，`src/tmux/` 全部移入 `src/engine/tmux/` 冻结边界，agent 检测体系提为 `src/agent/`，所有调用方经注册表访问引擎；摘除演练通过（删 `src/engine/tmux/` + 打桩注册行后 `cargo build` 零改动通过）。pty 脚手架收敛进 `src/engine/pty/terminal_ws.rs`，仍是连接期生命周期——下一步 = **Phase 2 切片 A（常驻会话）**（§3），不得在脚手架上打补丁。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
 - **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
 - **注意**：§1 盘点中的行号是 2026-07-28 快照，代码演进后以符号名为准（用 CodeGraph 查）。~~herdr 源码在 `research/herdr`~~（v3 勘误：该目录不存在）——herdr 参考以 `docs/reference/herdr-reference.md` 为准；确需对照源码移植时先自行 clone herdr（Apache-2.0）。
@@ -136,6 +136,9 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **改调用方走 trait**：`api/sessions.rs`、`ws/terminal.rs`、`api/files.rs`、`api/hooks.rs`、`api/settings.rs`、`test_utils.rs`、`main.rs`（AppState 持 `EngineRegistry`）；`agent_watch.rs` 改为经 trait 枚举会话 + capture（移入 `src/agent/watch.rs`）。
 - **external/adopt 链路**：实现收进 `src/engine/tmux/external.rs`，API 层仅薄转发（标记冻结）。
 - **产出**：行为回归——现有 tmux 会话全功能不变；`rg tmux src/ -g '!src/engine/tmux/*'` 仅剩 DB 枚举值/注册行。
+- **完成记录（2026-08-09）**：按上述清单落地，187 测试全过、clippy/fmt 零警告。两点执行偏差记录：
+  1. **验收口径细化**：`rg tmux`（大小写敏感）边界外残留 = ① `src/engine/mod.rs` 注册行/门面分发（`pub mod tmux;`、WS attach 分发、Windows workaround 门面）；② 冻结持久化/wire 契约——DB 列 `tmux_session_name`、DB 值 `'tmux'`、路由串 `/system/tmux/mouse` 与 `/ws/terminal/external/{tmux_name}`、adopt 请求字段（已 serde rename 中性化）。Phase 5 摘除时 ①②一并处理。
+  2. **pty 脚手架消重降级为"搬家"**：原计划"收敛内联实现进 engine/pty 并消除与 `PtySession` 的重复"，执行中发现 `PtySession::spawn` 对 child 做 `mem::forget`（防孤儿），复用它将失去子进程退出检测（WS 提前关闭语义变化）。因该流程本就由 Phase 2 切片 A 整体替换，此处只移动不消重，避免给临时件投入行为风险。
 
 ### Phase 2：PtyEngine 地基（纯新增，v3 改为垂直切片）
 > 实现细节按 `docs/reference/herdr-reference.md` §去 tmux 增补：**dup 裸 fd + drop(PtyPair)**（根除 VEOF，配 fd 计数回归测试）、resize 最新值覆盖槽、reattach **resize nudge**（`rows-1 → 30ms → rows`，防 vim/htop 重连花屏）、SIGHUP→TERM→KILL 三级清理、POLLHUP 当可读、固定 `TERM=xterm-256color`、渲染信号 swap+Notify 合并、DEC 2026 抑制。
@@ -175,9 +178,10 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **hook 回调**：依赖会话内 `curl`；缺失则降级纯屏幕检测（`agent_detect` 不受影响）。
 
 ## 5. 验收标准
-- **Phase 1（解耦）**：
-  - [ ] 现有 tmux 会话全功能回归（创建/输入/复制/agent 检测/external 收养）零变化。
-  - [ ] `rg tmux src/ -g '!src/engine/tmux/*'` 仅剩 DB 枚举值与注册行。
+- **Phase 1（解耦）** ✅ 2026-08-09：
+  - [x] 现有 tmux 会话全功能回归（创建/输入/复制/agent 检测/external 收养）零变化（187 测试 + clippy/fmt 全绿；纯重构无行为变化）。
+  - [x] `rg tmux src/ -g '!src/engine/tmux/*'` 仅剩 DB 枚举值与注册行（口径细化见 Phase 1 完成记录）。
+  - [x] 模拟摘除演练：删 `src/engine/tmux/` + 打桩注册行后 `cargo build` 通过，其余模块零改动（未提交）。
 - **Phase 2-4（pty 引擎）**：
   - [ ] pty 会话：创建/输入/输出/resize/kill 全链路无 tmux 进程参与。
   - [ ] `tests/runtime_kind_matrix.rs` 含 pty 全路径 case（创建/files/清理），integration-checklist §B.2 表无 `?`。
