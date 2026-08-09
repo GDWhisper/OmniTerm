@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
-use crate::tmux;
+use crate::engine::tmux;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -355,7 +355,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                    match crate::engine::pty_io::write_pty(pty_fd, &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -385,7 +385,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(writer.as_mut(), &data[written..]) {
+                    match crate::engine::pty_io::write_pty(writer.as_mut(), &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -569,7 +569,7 @@ async fn handle_terminal(ws: WebSocket, session_id: String, query: TerminalQuery
     // occur.
 
     if let Some(pid) = child_pid {
-        tmux::pty_io::kill_session_process(pid);
+        crate::engine::pty_io::kill_session_process(pid);
         debug!("sent SIGHUP to tmux client pid={}", pid);
     }
 
@@ -712,7 +712,7 @@ async fn handle_external_terminal(
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                    match crate::engine::pty_io::write_pty(pty_fd, &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -742,7 +742,7 @@ async fn handle_external_terminal(
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(writer.as_mut(), &data[written..]) {
+                    match crate::engine::pty_io::write_pty(writer.as_mut(), &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -829,7 +829,7 @@ async fn handle_external_terminal(
     }
 
     if let Some(pid) = child_pid {
-        tmux::pty_io::kill_session_process(pid);
+        crate::engine::pty_io::kill_session_process(pid);
         debug!("sent SIGHUP to tmux client pid={}", pid);
     }
 
@@ -967,7 +967,7 @@ async fn handle_pty_terminal(
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(pty_fd, &data[written..]) {
+                    match crate::engine::pty_io::write_pty(pty_fd, &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -997,7 +997,7 @@ async fn handle_pty_terminal(
             while let Some(data) = pty_in_rx.blocking_recv() {
                 let mut written = 0;
                 while written < data.len() {
-                    match tmux::pty_io::write_pty(writer.as_mut(), &data[written..]) {
+                    match crate::engine::pty_io::write_pty(writer.as_mut(), &data[written..]) {
                         Ok(0) => return,
                         Ok(n) => written += n,
                         Err(e) => {
@@ -1081,7 +1081,7 @@ async fn handle_pty_terminal(
     }
 
     if let Some(pid) = child_pid {
-        tmux::pty_io::kill_session_process(pid);
+        crate::engine::pty_io::kill_session_process(pid);
         debug!("sent SIGHUP to pty pid={}", pid);
     }
 

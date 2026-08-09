@@ -38,7 +38,7 @@ async fn system_info() -> Json<Value> {
     Json(json!({
         "home_dir": home,
         // 平台终端复用器名称（unix: tmux / windows: psmux），供前端 UI 文案使用
-        "multiplexer": crate::tmux::MULTIPLEXER_NAME,
+        "multiplexer": crate::engine::tmux::MULTIPLEXER_NAME,
     }))
 }
 
@@ -86,21 +86,21 @@ async fn check_exists(Query(q): Query<ExistsQuery>) -> (StatusCode, Json<Value>)
 }
 
 async fn multiplexer_status() -> (StatusCode, Json<Value>) {
-    match crate::tmux::check_multiplexer() {
+    match crate::engine::tmux::check_multiplexer() {
         Ok(()) => (StatusCode::OK, Json(json!({ "available": true }))),
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "available": false,
                 "error": e.to_string(),
-                "install_hints": crate::tmux::MULTIPLEXER_INSTALL_HINTS,
+                "install_hints": crate::engine::tmux::MULTIPLEXER_INSTALL_HINTS,
             })),
         ),
     }
 }
 
 async fn get_tmux_mouse() -> (StatusCode, Json<Value>) {
-    match crate::tmux::get_mouse_option().await {
+    match crate::engine::tmux::get_mouse_option().await {
         Ok(enabled) => (StatusCode::OK, Json(json!({ "enabled": enabled }))),
         Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": e.to_string() }))),
     }
@@ -108,7 +108,7 @@ async fn get_tmux_mouse() -> (StatusCode, Json<Value>) {
 
 async fn set_tmux_mouse(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
     let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-    match crate::tmux::set_mouse_option(enabled).await {
+    match crate::engine::tmux::set_mouse_option(enabled).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "enabled": enabled }))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }

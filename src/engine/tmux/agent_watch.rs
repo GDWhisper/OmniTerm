@@ -19,9 +19,9 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::tmux::agent_detect::{self, Debounce};
-use crate::tmux::agent_state::{AgentKind, AgentState};
-use crate::tmux::process_info;
+use crate::engine::tmux::agent_detect::{self, Debounce};
+use crate::engine::tmux::agent_state::{AgentKind, AgentState};
+use crate::engine::tmux::process_info;
 
 /// 轮询间隔。herdr 用 300ms（进程内读屏）；OmniTerm 走 tmux 子进程，1s 够用
 /// （前端消费端本身是 3s 轮询）。
@@ -162,7 +162,7 @@ async fn tick(watcher: &AgentWatcher) {
         }
         let prev = old.remove(&pane.session);
 
-        let screen = match crate::tmux::capture_screen(&pane.session).await {
+        let screen = match crate::engine::tmux::capture_screen(&pane.session).await {
             Ok(s) => s,
             Err(_) => continue, // 会话可能刚被 kill；下个 tick 自然收敛
         };

@@ -4,14 +4,12 @@ pub mod agent_state;
 pub mod agent_watch;
 pub mod control_mode;
 pub mod process_info;
-pub mod pty;
-pub mod pty_io;
 
 use anyhow::{Result, anyhow};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-use crate::tmux::agent_state::AgentSnapshot;
+use crate::engine::tmux::agent_state::AgentSnapshot;
 
 /// Platform-specific install commands for the terminal multiplexer.
 #[cfg(unix)]
@@ -62,7 +60,7 @@ pub fn check_multiplexer() -> Result<()> {
 ///
 /// Returns whether hooks were injected.
 pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
-    use crate::tmux::agent_hooks;
+    use crate::engine::tmux::agent_hooks;
 
     // 1. Create the tmux session (plain shell)
     let output = Command::new("tmux")

@@ -73,8 +73,8 @@ mod tests {
     use super::*;
     use crate::acp::AcpSupervisor;
     use crate::auth::LoginGuard;
-    use crate::tmux::agent_watch::AgentWatcher;
-    use crate::tmux::control_mode::{DEFAULT_ACTIVITY_TIMEOUT, SessionActivityMonitor};
+    use crate::engine::tmux::agent_watch::AgentWatcher;
+    use crate::engine::tmux::control_mode::{DEFAULT_ACTIVITY_TIMEOUT, SessionActivityMonitor};
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};

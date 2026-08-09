@@ -7,7 +7,7 @@ mod fs;
 mod git;
 mod models;
 mod presets;
-mod tmux;
+
 mod update;
 mod utils;
 mod workspaces;
@@ -130,9 +130,9 @@ pub struct AppState {
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub login_guard: auth::LoginGuard,
-    pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
+    pub activity_monitor: engine::tmux::control_mode::SessionActivityMonitor,
     pub acp_supervisor: acp::AcpSupervisor,
-    pub agent_watcher: tmux::agent_watch::AgentWatcher,
+    pub agent_watcher: engine::tmux::agent_watch::AgentWatcher,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -538,7 +538,7 @@ fn main() -> anyhow::Result<()> {
 
             // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
             // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
-            if let Err(e) = tmux::check_multiplexer() {
+            if let Err(e) = engine::tmux::check_multiplexer() {
                 tracing::warn!(
                     "{} — tmux-backed sessions will fail until installed; ACP sessions unaffected.",
                     e
@@ -604,8 +604,8 @@ fn main() -> anyhow::Result<()> {
 
             let pid_file = pid_path(&db_url);
 
-            let activity_monitor = tmux::control_mode::SessionActivityMonitor::new(
-                tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT,
+            let activity_monitor = engine::tmux::control_mode::SessionActivityMonitor::new(
+                engine::tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT,
             );
 
             let state = AppState {
@@ -616,12 +616,12 @@ fn main() -> anyhow::Result<()> {
                 login_guard: auth::LoginGuard::new(),
                 activity_monitor,
                 acp_supervisor: acp::AcpSupervisor::default(),
-                agent_watcher: tmux::agent_watch::AgentWatcher::default(),
+                agent_watcher: engine::tmux::agent_watch::AgentWatcher::default(),
             };
 
             // 启动 agent 屏幕检测轮询：周期扫描 tmux 会话前台进程 + 可见屏，
             // 识别 Claude/Codex/Qoder 的 Running/Waiting/Idle 状态（herdr 借鉴，见 docs/reference/herdr-reference.md）。
-            tmux::agent_watch::spawn(state.agent_watcher.clone());
+            engine::tmux::agent_watch::spawn(state.agent_watcher.clone());
 
             // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
             // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。idle 阈值经

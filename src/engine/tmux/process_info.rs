@@ -1,5 +1,5 @@
-use crate::tmux::agent_hooks;
-use crate::tmux::agent_state::AgentKind;
+use crate::engine::tmux::agent_hooks;
+use crate::engine::tmux::agent_state::AgentKind;
 
 #[cfg(unix)]
 mod platform {

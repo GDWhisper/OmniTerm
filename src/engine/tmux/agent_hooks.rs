@@ -3,7 +3,7 @@
 //! This module detects agent CLIs from session commands and generates
 //! hook configuration flags for Claude Code and Codex.
 
-use crate::tmux::agent_state::AgentKind;
+use crate::engine::tmux::agent_state::AgentKind;
 
 /// Detect the agent kind from a command string.
 ///
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_shell_escaping_special_chars() {
-        use crate::tmux::agent_state::clean_token;
+        use crate::engine::tmux::agent_state::clean_token;
 
         // Single quotes are replaced
         assert_eq!(clean_token("it's"), "it_s");

@@ -25,7 +25,7 @@ use regex::Regex;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::tmux::agent_state::{AgentKind, AgentState};
+use crate::engine::tmux::agent_state::{AgentKind, AgentState};
 
 const CLAUDE_MANIFEST: &str = include_str!("manifests/claude.toml");
 const CODEX_MANIFEST: &str = include_str!("manifests/codex.toml");

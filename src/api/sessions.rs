@@ -16,10 +16,11 @@ use crate::AppState;
 use crate::acp::AcpClient;
 use crate::acp::config_prefs;
 use crate::api::agents::load_agent;
+use crate::engine::tmux;
+use crate::engine::tmux::agent_state::AgentSnapshot;
 use crate::models::session::{
     AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
 };
-use crate::tmux::{self, agent_state::AgentSnapshot};
 
 pub fn routes() -> Router<AppState> {
     Router::new()

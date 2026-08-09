@@ -1,8 +1,10 @@
+pub mod session;
+
 use std::sync::{Arc, Mutex};
 use tokio::task::spawn_blocking;
 use tracing::debug;
 
-use crate::tmux::pty;
+use crate::engine::pty::session as pty;
 
 #[allow(dead_code)]
 pub struct PtyEngine;
