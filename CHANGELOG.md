@@ -55,6 +55,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-09 14:10) `[backend]` 修复 `start -d` 后台模式启动失败静默无反馈并残留 stale PID 文件：daemonize 增加启动握手（pipe 就绪/失败通知），父进程阻塞等待 daemon 完成端口绑定后才返回，失败时把错误原文打印到终端并以非零退出——此前 daemon 的 stdout/stderr 已重定向到日志，端口被占/DB 连不上等失败对用户完全无感知且命令返回 0（`src/main.rs`）；PID 文件写入移到 bind 成功之后，启动失败不再留下 stale PID、也不会覆盖已在运行实例的 PID 文件
+
 - (2026-08-07 18:40) `[backend]` `[frontend]` ACP 权限审批链路健壮性加固（防「banner 丢失/陈旧、会话卡死」同族问题）：(1) 前端 `pendingPermission` 单槽改为按 id 队列（上限 16，超限丢新到达项并 warn），并发多个 `request_permission` 不再互相覆盖导致被覆盖项无 UI 入口，banner 显示队首并提示 `+N queued`（`frontend/src/stores/chatStore.ts`、`ChatView.tsx`、`PermissionBanner.tsx`）；(2) 后端连接重放 pending 审批后新增 `permissions_synced` 标记帧，restore 出的新 client 同样发送，前端据此对账清掉断连窗口错过 `permission_resolved` 广播的陈旧 banner（`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）；(3) `permission_response` resolve 失败（审批已被其他连接应答/cancel/会话已释放）不再静默吞掉，向本连接回发 `permission_resolved` 使陈旧点击收敛清除（`src/ws/acp.rs`）；(4) `respondPermission` 发送失败保留队列并报错、不再裸 `ws.send`；WS 错误/断连走 `markError` 清队列时同步清 decision 提醒（`frontend/src/hooks/useAcpChat.ts`）；附 7 条 store 单测
 
 - (2026-08-07 18:01) `[frontend]` 修复 ACP 会话「需要决策」banner 长时间等待后消失、会话卡死无法恢复：后端 PermissionManager 每次连接重放未决审批，但重连/二次发送后 `markDone`（turn 收尾）会误清 `pendingPermission`——尤其 hydrate 门控缓冲把 `turn_state{active:false}` 延后到 `permission_request` 之后回放，banner 刚出现即被抹掉，用户再无入口批准/拒绝。`markDone` 不再清 `pendingPermission`，未决审批的合法清除路径收敛为后端 `permission_resolved` 广播（resolve/cancel_all，含 reaper 超时）与 `markError`（turn 出错/连接死亡）；附 2 条回归测试（`frontend/src/stores/chatStore.ts`、`chatStore.test.ts`）

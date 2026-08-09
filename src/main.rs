@@ -34,7 +34,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(unix)]
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 
 #[derive(Parser)]
 #[command(name = "omniterm", version, about = "Web-based tmux terminal manager")]
@@ -278,8 +278,16 @@ fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
 /// Must be called before the tokio runtime starts (fork safety).
 ///
 /// 日志文件在 fork 前打开：double-fork 后父进程已退出，无法再向用户报告打开失败。
+///
+/// 通过 pipe 向父进程反馈启动结果：父进程阻塞等待，daemon 子进程完成端口绑定并
+/// 写入 PID 文件后调用 `daemon_notify_ready` 通知成功；任何启动失败经
+/// `daemon_notify_fail` 透传错误原文给父进程终端。否则 daemon 模式下 stdout/stderr
+/// 已重定向到日志，用户对启动失败毫无感知（命令"看似成功"却返回 0）。
+///
+/// 返回 daemon 子进程持有的 pipe 写端，调用方用 `daemon_notify_ready` /
+/// `daemon_notify_fail` 上报结果；前台模式不用此返回值。
 #[cfg(unix)]
-fn daemonize(log_file: &Path) -> std::io::Result<()> {
+fn daemonize(log_file: &Path) -> std::io::Result<RawFd> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::process;
 
@@ -290,11 +298,41 @@ fn daemonize(log_file: &Path) -> std::io::Result<()> {
     }
     let log = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(log_file)?;
 
+    // 握手 pipe：父进程据此获知 daemon 是否真正启动成功。
+    let mut fds = [0 as RawFd; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+
     // First fork — detach from terminal
     match unsafe { libc::fork() } {
         -1 => return Err(std::io::Error::last_os_error()),
-        0 => {}                // child continues
-        _ => process::exit(0), // parent exits
+        0 => unsafe {
+            libc::close(read_fd);
+        }, // child (P1) keeps write end
+        _ => {
+            // Parent (P0): 阻塞等 daemon 就绪/失败通知，把结果如实反馈给终端后退出。
+            // P0 的 stderr 尚未重定向，eprintln 直达用户终端。
+            unsafe { libc::close(write_fd) };
+            let mut buf = [0u8; 4096];
+            let n =
+                unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n > 0 && buf[0] == 1 {
+                process::exit(0); // daemon 就绪
+            } else if n > 1 {
+                let msg = String::from_utf8_lossy(&buf[1..n as usize]);
+                eprintln!("Error: {}", msg);
+                process::exit(1);
+            } else {
+                // 子进程未通知即退出（崩溃）或读取失败
+                eprintln!(
+                    "Error: server exited before it was ready (see {} for details)",
+                    log_file.display()
+                );
+                process::exit(1);
+            }
+        }
     }
 
     // Create new session (become session leader, detach from controlling terminal)
@@ -320,8 +358,42 @@ fn daemonize(log_file: &Path) -> std::io::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(write_fd)
 }
+
+/// 通知父进程 daemon 启动成功（daemon 子进程内调用；前台模式 pipe 为 None 时 no-op）。
+#[cfg(unix)]
+fn daemon_notify_ready(pipe_write: Option<RawFd>) {
+    if let Some(fd) = pipe_write {
+        let one: u8 = 1;
+        unsafe {
+            let _ = libc::write(fd, &one as *const u8 as *const libc::c_void, 1);
+            libc::close(fd);
+        }
+    }
+}
+
+/// 通知父进程 daemon 启动失败并透传错误信息（daemon 子进程内调用）。
+/// 错误原文截断到 4KB，避免 pipe 写阻塞（父进程只读一次）。
+#[cfg(unix)]
+fn daemon_notify_fail(pipe_write: Option<RawFd>, msg: &str) {
+    if let Some(fd) = pipe_write {
+        let body = &msg.as_bytes()[..msg.len().min(4000)];
+        let mut buf = Vec::with_capacity(1 + body.len());
+        buf.push(0u8);
+        buf.extend_from_slice(body);
+        unsafe {
+            let _ = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
+            libc::close(fd);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn daemon_notify_ready(_pipe_write: ()) {}
+
+#[cfg(not(unix))]
+fn daemon_notify_fail(_pipe_write: (), _msg: &str) {}
 
 fn main() -> anyhow::Result<()> {
     // Parse CLI synchronously *before* initializing the tokio runtime,
@@ -332,15 +404,22 @@ fn main() -> anyhow::Result<()> {
     // `--debug` 由 start 子命令携带（日志初始化在 daemonize 之后，需提前提取）
     let debug_logging = matches!(&cli.command, Commands::Start(args) if args.debug);
 
-    // Daemonize before tokio runtime, if requested
+    // Daemonize before tokio runtime. 父进程阻塞等待 daemon 子进程的就绪/失败握手，
+    // 保证 `start -d` 能如实反馈启动结果：失败时错误打印到终端并以非零退出。
     #[cfg(unix)]
-    if let Commands::Start(ref args) = cli.command
-        && args.daemonize
-    {
-        let log_path = daemon_log_path();
-        daemonize(&log_path)
-            .with_context(|| format!("failed to daemonize (log file: {})", log_path.display()))?;
-    }
+    let daemon_pipe: Option<RawFd> =
+        if let Commands::Start(ref args) = cli.command
+            && args.daemonize
+        {
+            let log_path = daemon_log_path();
+            Some(daemonize(&log_path).with_context(|| {
+                format!("failed to daemonize (log file: {})", log_path.display())
+            })?)
+        } else {
+            None
+        };
+    #[cfg(not(unix))]
+    let daemon_pipe: () = ();
     #[cfg(not(unix))]
     if let Commands::Start(ref args) = cli.command
         && args.daemonize
@@ -358,7 +437,11 @@ fn main() -> anyhow::Result<()> {
         };
         tracing_subscriber::fmt().with_env_filter(filter).init();
 
-        match cli.command {
+        // 启动逻辑整体包一层：daemon 子进程任何启动失败（DB 连接/bind 等）都把错误
+        // 原文透传给父进程终端（前台模式 pipe 为 None，notify 为 no-op，错误仍由
+        // anyhow 直接打印）。成功路径由 Start 分支在 bind 后显式调用 notify_ready。
+        let result: anyhow::Result<()> = async {
+            match cli.command {
         Commands::Update(args) => update::run(args).await,
         Commands::ResetAuth(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
@@ -509,12 +592,6 @@ fn main() -> anyhow::Result<()> {
             ));
 
             let pid_file = pid_path(&db_url);
-            if let Some(parent) = Path::new(&pid_file).parent()
-                && !parent.as_os_str().is_empty()
-            {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            std::fs::write(&pid_file, std::process::id().to_string())?;
 
             let activity_monitor = tmux::control_mode::SessionActivityMonitor::new(
                 tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT,
@@ -583,6 +660,18 @@ fn main() -> anyhow::Result<()> {
 
             let listener = tokio::net::TcpListener::bind(&bind).await?;
 
+            // PID 文件在 bind 成功后才写入：启动失败（端口被占/DB 连不上）不会留下
+            // stale PID 文件，也不会覆盖已在运行实例的 PID 文件（否则 stop 会误杀）。
+            if let Some(parent) = Path::new(&pid_file).parent()
+                && !parent.as_os_str().is_empty()
+            {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&pid_file, std::process::id().to_string())?;
+
+            // daemon 模式：通知父进程启动成功（前台模式 pipe 为 None，no-op）。
+            daemon_notify_ready(daemon_pipe);
+
             // Warning uses the *effective* listen host (BIND_ADDR overrides --host).
             let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
             let is_loopback = matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
@@ -643,6 +732,12 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+        }
+        .await;
+        if let Err(ref e) = result {
+            daemon_notify_fail(daemon_pipe, &format!("{e:#}"));
+        }
+        result
     })
 }
 
