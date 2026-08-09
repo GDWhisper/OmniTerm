@@ -386,7 +386,7 @@ export function Terminal() {
       </div>
       {/* Portal to body: inside the mobile pane strip, `position: fixed` would
           resolve against the strip's transform containing block and overflow
-          the viewport (same regression class as Modal — see debug-log). */}
+          the viewport (same regression class as Modal — see docs/dev/debug-guide.md). */}
       {pasteMenu &&
         createPortal(
           <>

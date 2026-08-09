@@ -146,6 +146,8 @@ export interface AppState {
   expandThinking: boolean
   /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
   expandToolCalls: boolean
+  /** Expand all session-hosting worktrees in the sidebar (ON = all expanded, OFF = focused worktree only). */
+  expandAllSessions: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -201,6 +203,7 @@ export interface AppState {
   setParchmentTextureEnabled: (v: boolean) => void
   setExpandThinking: (v: boolean) => void
   setExpandToolCalls: (v: boolean) => void
+  setExpandAllSessions: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
@@ -290,6 +293,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
   expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
+  expandAllSessions: localStorage.getItem('omniterm_expand_all_sessions') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
   // Default off: first-run users get the uniform reader font (BETA opt-in).
   pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
@@ -367,6 +371,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ expandToolCalls: v })
   },
 
+  setExpandAllSessions: (v) => {
+    localStorage.setItem('omniterm_expand_all_sessions', String(v))
+    set({ expandAllSessions: v })
+  },
+
   setTerminalSendData: (fn) => set({ terminalSendData: fn }),
 
   setProjects: (projects) => set({ projects }),
@@ -405,19 +414,63 @@ export const useAppStore = create<AppState>((set, get) => ({
    * Atomic session activation — see interface for contract. Batches all
    * related state + localStorage writes into one set() so subscribers
    * re-render at most once. Mirrors the pattern used by switchWorkspace.
+   *
+   * Resolves the session's owning project/worktree from `workspace_path` and
+   * activates them together, so the sidebar worktree highlight follows the
+   * focused session. Worktree resolution spans all projects — a session may
+   * be registered under one project while its `workspace_path` maps to a
+   * worktree of another (it renders as an orphan under the registered
+   * project's main worktree, but the focused worktree should be the one its
+   * path actually belongs to). When the owner can't be resolved (genuine
+   * orphan / adopted external session with no matching worktree anywhere,
+   * or sessions aren't loaded yet) the active project/workspace are left
+   * untouched; session memory falls back to the currently active workspace
+   * (legacy contract).
    */
   activateSession: (sessionId) => {
-    const { activeWorkspaceId, workspaceSessionMemory } = get()
+    const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory } = get()
     localStorage.setItem('omniterm_active_session', sessionId)
-    const newMemory = activeWorkspaceId
-      ? { ...workspaceSessionMemory, [activeWorkspaceId]: sessionId }
+
+    // Resolve the owning project + worktree from loaded session data. The
+    // worktree lookup spans ALL projects (not just the session's registered
+    // project) because a session can carry a `workspace_path` that belongs to
+    // another project's worktree — such sessions render as orphans under the
+    // registered project's main worktree, but focusing them should highlight
+    // the worktree their path actually maps to.
+    let ownerProjectId: string | null = null
+    let ownerWorkspaceId: string | null = null
+    for (const [pid, sessList] of Object.entries(sessions)) {
+      const s = sessList.find((x) => x.id === sessionId)
+      if (s) {
+        ownerProjectId = pid
+        for (const [wpid, wtList] of Object.entries(worktrees)) {
+          const wt = (wtList || []).find((w) => w.path === s.workspace_path)
+          if (wt) {
+            ownerProjectId = wpid
+            ownerWorkspaceId = wt.id
+            break
+          }
+        }
+        break
+      }
+    }
+
+    // Memory keyed to the resolved worktree (or legacy: current active one).
+    const memoryTarget = ownerWorkspaceId ?? activeWorkspaceId
+    const newMemory = memoryTarget
+      ? { ...workspaceSessionMemory, [memoryTarget]: sessionId }
       : workspaceSessionMemory
-    if (activeWorkspaceId) {
+    if (memoryTarget) {
       localStorage.setItem('omniterm_ws_session_memory', JSON.stringify(newMemory))
     }
+    if (ownerProjectId) localStorage.setItem('omniterm_active_project', ownerProjectId)
+    if (ownerWorkspaceId) localStorage.setItem('omniterm_active_workspace', ownerWorkspaceId)
+
     set({
       activeExternalSession: null,
       activeSessionId: sessionId,
+      activeProjectId: ownerProjectId ?? get().activeProjectId,
+      activeWorkspaceId: ownerWorkspaceId ?? get().activeWorkspaceId,
       workspaceSessionMemory: newMemory,
     })
   },

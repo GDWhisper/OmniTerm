@@ -47,6 +47,31 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.12] - 2026-08-09
+
+### Added
+
+- (2026-08-09 16:12) `[frontend]` sidebar 新增「会话展开模式」切换按钮（Projects 标题栏、新建项目按钮旁）：模式 1 自动展开所有含会话的项目及其下所有含会话的 worktree，模式 2（默认）仅展开聚焦中的 worktree；折叠优先——模式 1 下手动折叠的项目不再自动弹回；偏好经 localStorage（`omniterm_expand_all_sessions`）持久化（`frontend/src/components/Sidebar/Sidebar.tsx`、`ProjectCard.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/worktreeSessions.ts`）
+- (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
+
+### Changed
+
+- (2026-08-09 16:10) `[backend]` CLI 输出统一改为英文：`--help` 全部子命令/参数说明、启动/停止/状态提示、`start -d` 成功消息、自更新消息（此前 clap help 与 daemon 启动提示为中文；CLI 与前端 i18n 相互独立，后端不引入语言切换）
+- (2026-08-07 16:34) `[frontend]` ThinkingIndicator 乱码特效自适应帧率节流：rAF 回调频率本身等于浏览器实际刷新率，高刷屏（>60Hz）压到上限 60fps 削减无谓 layout 抖动、低刷屏跟着屏走，零额外测量成本；随后上限提高到 90fps 以充分利用高刷屏，动画在高性能设备上更流畅（`frontend/src/components/Chat/ChatView.tsx`）
+
+### Fixed
+
+- (2026-08-09 00:35) `[frontend]` 修复侧栏分支名过长被省略号截断时 bidi 重排：`direction: rtl` 容器（左侧省略号截断）中 LTR 分支名末尾中性字符被挪到视觉开头，分支名显示错乱——分支名改用 `<bdi dir="ltr">` 隔离，截断方向保留为「省略开头」且文字视觉保持 LTR（`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/index.css`）
+- (2026-08-09 22:58) `[backend]` `[frontend]` 文件浏览器文本预览改为**内容兜底**：不再依赖扩展名白名单，非常见后缀的文本文件（如 `Cargo.lock`）也能以普通文本查看。`GET /files/read` 响应新增 `is_text` 字段——后端按内容探测文件是否为合法 UTF-8（先探测头部 64KB 判定、**NUL 字节快检短路**，避免把大型二进制文件整体读入内存，再全量严格校验），非文本返回 `is_text:false` 而非报错（`src/fs/mod.rs`、`src/api/files.rs`）；前端 `FileDrawer` 移除 `TEXT_EXTS` 白名单，非图片文件一律尝试按文本读取，读取结果非文本时降级为「无法预览」（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/api/client.ts`）
+- (2026-08-09 18:45) `[frontend]` 修复激活会话未同步激活所属 worktree：点击/新建/键盘切换会话时，sidebar 的 worktree 高亮底色不跟随（展开模式下可点非聚焦 worktree 的会话而该行不亮）。`activateSession` 现从会话 `workspace_path` 跨所有项目反查所属 project + worktree 并原子激活——会话可能登记在 A 项目但其路径属于 B 项目的 worktree（渲染为孤儿显示在主 worktree 下），此时激活路径实际归属的 B 项目 worktree；会话记忆归位到所属 worktree；无任何 worktree 匹配的孤儿/外部会话保持原行为（`frontend/src/stores/appStore.ts`）
+- (2026-08-09 15:20) `[backend]` `start -d` 启动成功不再静默：daemon 握手扩展为携带启动结果消息，父进程打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」并返回 0；配合上一项，后台启动无论成败终端都有明确反馈（`src/main.rs`）
+
+- (2026-08-09 14:10) `[backend]` 修复 `start -d` 后台模式启动失败静默无反馈并残留 stale PID 文件：daemonize 增加启动握手（pipe 就绪/失败通知），父进程阻塞等待 daemon 完成端口绑定后才返回，失败时把错误原文打印到终端并以非零退出——此前 daemon 的 stdout/stderr 已重定向到日志，端口被占/DB 连不上等失败对用户完全无感知且命令返回 0（`src/main.rs`）；PID 文件写入移到 bind 成功之后，启动失败不再留下 stale PID、也不会覆盖已在运行实例的 PID 文件
+
+- (2026-08-07 18:40) `[backend]` `[frontend]` ACP 权限审批链路健壮性加固（防「banner 丢失/陈旧、会话卡死」同族问题）：(1) 前端 `pendingPermission` 单槽改为按 id 队列（上限 16，超限丢新到达项并 warn），并发多个 `request_permission` 不再互相覆盖导致被覆盖项无 UI 入口，banner 显示队首并提示 `+N queued`（`frontend/src/stores/chatStore.ts`、`ChatView.tsx`、`PermissionBanner.tsx`）；(2) 后端连接重放 pending 审批后新增 `permissions_synced` 标记帧，restore 出的新 client 同样发送，前端据此对账清掉断连窗口错过 `permission_resolved` 广播的陈旧 banner（`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）；(3) `permission_response` resolve 失败（审批已被其他连接应答/cancel/会话已释放）不再静默吞掉，向本连接回发 `permission_resolved` 使陈旧点击收敛清除（`src/ws/acp.rs`）；(4) `respondPermission` 发送失败保留队列并报错、不再裸 `ws.send`；WS 错误/断连走 `markError` 清队列时同步清 decision 提醒（`frontend/src/hooks/useAcpChat.ts`）；附 7 条 store 单测
+
+- (2026-08-07 18:01) `[frontend]` 修复 ACP 会话「需要决策」banner 长时间等待后消失、会话卡死无法恢复：后端 PermissionManager 每次连接重放未决审批，但重连/二次发送后 `markDone`（turn 收尾）会误清 `pendingPermission`——尤其 hydrate 门控缓冲把 `turn_state{active:false}` 延后到 `permission_request` 之后回放，banner 刚出现即被抹掉，用户再无入口批准/拒绝。`markDone` 不再清 `pendingPermission`，未决审批的合法清除路径收敛为后端 `permission_resolved` 广播（resolve/cancel_all，含 reaper 超时）与 `markError`（turn 出错/连接死亡）；附 2 条回归测试（`frontend/src/stores/chatStore.ts`、`chatStore.test.ts`）
+
 ## [0.2.11] - 2026-08-06
 
 ### Fixed

@@ -6,7 +6,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
-import { IconPlus, IconSettings } from '../FileManager/icons'
+import { IconEye, IconPlus, IconSettings } from '../FileManager/icons'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { DuplicateGroup, Project, Workspace } from '../../api/client'
 import { type AcpActivity } from '../../utils/agentAggregate'
@@ -14,6 +14,7 @@ import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
 import { ProjectCard } from './ProjectCard'
+import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -57,6 +58,8 @@ export function Sidebar() {
   const setMultiplexer = useAppStore((s) => s.setMultiplexer)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
+  const expandAllSessions = useAppStore((s) => s.expandAllSessions)
+  const setExpandAllSessions = useAppStore((s) => s.setExpandAllSessions)
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
@@ -68,7 +71,7 @@ export function Sidebar() {
     useShallow((s) => {
       const m: Record<string, AcpActivity> = {}
       for (const [id, st] of Object.entries(s.states)) {
-        if (st.pendingPermission) m[id] = 'waiting'
+        if (st.pendingPermissions.length > 0) m[id] = 'waiting'
         else if (st.sending) m[id] = 'running'
       }
       return m
@@ -83,6 +86,9 @@ export function Sidebar() {
 
 
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
+  // 用户手动折叠过的项目集合——「折叠优先」：即使 expandAllSessions 模式下
+  // 项目本应自动展开，被手动折叠后也不再自动弹回。
+  const [manuallyCollapsed, setManuallyCollapsed] = useState<Set<string>>(new Set())
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
@@ -236,6 +242,17 @@ export function Sidebar() {
     restoredSessionRef.current = true
   }, [sessions, activeProjectId, activeSessionId, setActiveSession])
 
+  // 模式 1（expandAllSessions=true）：全量加载所有项目的数据，使含会话的
+  // 项目无需点击即可按会话存在性自动展开。`=== undefined` 判断避免对已加载
+  // 项目重复请求；加载中由渲染侧的 loading 占位承接。
+  useEffect(() => {
+    if (!expandAllSessions) return
+    for (const p of projects) {
+      if (worktrees[p.id] === undefined) void loadWorktrees(p.id)
+      if (sessions[p.id] === undefined) void loadSessions(p.id)
+    }
+  }, [expandAllSessions, projects, worktrees, sessions, loadWorktrees, loadSessions])
+
   // Prune workspaceSessionMemory entries pointing at sessions that no longer
   // exist server-side (deleted session / DB reset). Scoped to the active
   // project's workspaces — only its session list is loaded, so entries for
@@ -272,6 +289,14 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
+  // Refresh projects when the page becomes visible again — catches
+  // directories moved/deleted while the tab was hidden (path_valid changes).
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible') loadProjects() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [loadProjects])
+
   // Cleanup tooltip timeout on unmount — commented out pending notification scheme decision.
   // useEffect(() => {
   //   return () => {
@@ -281,18 +306,51 @@ export function Sidebar() {
   //   }
   // }, [])
 
-  // Toggle project expansion
+  // 某项目是否含会话：worktrees 尚未加载时返回 false（加载中不据此展开）。
+  // 依赖 sessionsForWorktree 判定孤儿会话归属，与 ProjectCard 内统计口径一致。
+  const projectHasSessions = (projId: string): boolean => {
+    const wtList = worktrees[projId]
+    const sessList = sessions[projId] || []
+    if (wtList === undefined) return false
+    return wtList.some((wt) => sessionsForWorktree(sessList, wtList, wt.path).length > 0)
+  }
+
+  // 项目当前是否显示为展开。折叠优先：手动折叠过的项目即使满足
+  // expandAllSessions 自动展开条件也不再弹回。
+  const isProjectDisplayExpanded = (projId: string): boolean =>
+    (expandedProjects.has(projId) || (expandAllSessions && projectHasSessions(projId))) &&
+    !manuallyCollapsed.has(projId)
+
+  // Toggle project expansion — 双向操作，基于显示状态：
+  // - 当前显示展开 → 折叠：清掉手动展开标记 + 记录手动折叠（防模式 1 自动弹回）
+  // - 当前显示折叠 → 展开：清除手动折叠标记 + 记录手动展开 + 火并忘加载数据
   const toggleProject = (projectId: string) => {
-    const newSet = new Set(expandedProjects)
-    if (newSet.has(projectId)) {
-      newSet.delete(projectId)
+    if (isProjectDisplayExpanded(projectId)) {
+      setExpandedProjects((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev)
+        next.add(projectId)
+        return next
+      })
     } else {
-      newSet.add(projectId)
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+      setExpandedProjects((prev) => {
+        const next = new Set(prev)
+        next.add(projectId)
+        return next
+      })
       // Fire-and-forget：展开立即生效，不等网络往返（Windows 上 git spawn 慢，
       // await 会让展开卡 100ms+）。未加载时渲染侧显示 loading 占位。
       void Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
     }
-    setExpandedProjects(newSet)
   }
 
   const handleWorkspaceClick = async (proj: Project, wt: Workspace) => {
@@ -493,6 +551,18 @@ export function Sidebar() {
           <CountBadge count={projects.length} />
           <span className="title-bar-spacer" />
           <button
+            onClick={() => setExpandAllSessions(!expandAllSessions)}
+            className="sidebar-proj-add-btn"
+            title={
+              expandAllSessions
+                ? (t('sidebar.expandAllSessions.on') ?? 'Session expansion: all worktrees with sessions (click for focused only)')
+                : (t('sidebar.expandAllSessions.off') ?? 'Session expansion: focused worktree only (click to expand all)')
+            }
+            style={expandAllSessions ? { color: 'var(--accent)' } : undefined}
+          >
+            {expandAllSessions ? '⤢' : <IconEye />}
+          </button>
+          <button
             onClick={() => setCreateProjOpen(true)}
             className="sidebar-proj-add-btn"
             title={t('sidebar.createProject') ?? 'Create Project'}
@@ -510,7 +580,8 @@ export function Sidebar() {
             <ProjectCard
               key={proj.id}
               project={proj}
-              isExpanded={expandedProjects.has(proj.id)}
+              isExpanded={isProjectDisplayExpanded(proj.id)}
+              expandAllSessions={expandAllSessions}
               worktrees={worktrees[proj.id]}
               sessions={sessions[proj.id] || []}
               activeWorkspaceId={activeWorkspaceId}
@@ -518,8 +589,9 @@ export function Sidebar() {
               acpActivityFor={acpActivityFor}
               onToggle={() => toggleProject(proj.id)}
               onOpenCreateWorktree={async () => {
-                if (!expandedProjects.has(proj.id)) {
+                if (!isProjectDisplayExpanded(proj.id)) {
                   setExpandedProjects(prev => { const next = new Set(prev); next.add(proj.id); return next })
+                  setManuallyCollapsed(prev => { const next = new Set(prev); next.delete(proj.id); return next })
                   await Promise.all([loadWorktrees(proj.id), loadSessions(proj.id)])
                 }
                 setCreateWtProjectId(proj.id)
@@ -527,6 +599,7 @@ export function Sidebar() {
               onRename={setRenameTarget}
               onDeleteProject={() => setConfirmDelete({ type: 'project', id: proj.id, name: proj.name })}
               onWorkspaceClick={(wt) => handleWorkspaceClick(proj, wt)}
+              onRepairProject={(project) => setRepairTarget({ project, workspace: null, oldPath: project.path })}
               onOpenCreateSession={(wt) => {
                 setActiveProject(proj.id)
                 setActiveWorkspace(wt.id)

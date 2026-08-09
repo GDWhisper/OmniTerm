@@ -98,6 +98,73 @@ describe('appStore.activateSession', () => {
     expect(mem['ws-1']).toBe('sess-old')
     expect(mem['ws-2']).toBe('sess-2')
   })
+
+  it('activates the owning project + worktree of a loaded session', () => {
+    useAppStore.setState({
+      activeProjectId: 'proj-other',
+      activeWorkspaceId: 'wt-other',
+      sessions: {
+        'project-1': [
+          { id: 'sess-1', workspace_path: '/repo/wt-1' },
+        ] as never,
+      },
+      worktrees: {
+        'project-1': [
+          { id: 'wt-1', path: '/repo/wt-1' },
+          { id: 'wt-2', path: '/repo/wt-2' },
+        ] as never,
+      },
+    })
+    useAppStore.getState().activateSession('sess-1')
+    const s = useAppStore.getState()
+    expect(s.activeProjectId).toBe('project-1')
+    expect(s.activeWorkspaceId).toBe('wt-1')
+    // Memory keys to the resolved worktree, not the stale current one.
+    expect(s.workspaceSessionMemory['wt-1']).toBe('sess-1')
+    expect(s.workspaceSessionMemory['wt-other']).toBeUndefined()
+    expect(localStorage.getItem('omniterm_active_project')).toBe('project-1')
+    expect(localStorage.getItem('omniterm_active_workspace')).toBe('wt-1')
+  })
+
+  it('keeps current workspace when session owner cannot be resolved', () => {
+    useAppStore.setState({
+      activeProjectId: 'proj-x',
+      activeWorkspaceId: 'wt-x',
+      sessions: {}, // owning project's sessions not loaded
+    })
+    useAppStore.getState().activateSession('sess-ghost')
+    const s = useAppStore.getState()
+    expect(s.activeSessionId).toBe('sess-ghost')
+    expect(s.activeProjectId).toBe('proj-x')
+    expect(s.activeWorkspaceId).toBe('wt-x')
+  })
+
+  it('activates the worktree in ANOTHER project when the session path maps there', () => {
+    // Session is registered under proj-A but its workspace_path belongs to
+    // proj-B's worktree (cross-project orphan session). Focusing it should
+    // highlight proj-B's worktree, not leave the old workspace highlighted.
+    useAppStore.setState({
+      activeProjectId: 'proj-A',
+      activeWorkspaceId: 'wt-A-main',
+      sessions: {
+        'proj-A': [
+          { id: 'sess-cross', workspace_path: '/repo/proj-B' },
+        ] as never,
+      },
+      worktrees: {
+        'proj-A': [{ id: 'wt-A-main', path: '/repo/proj-A' }] as never,
+        'proj-B': [{ id: 'wt-B-1', path: '/repo/proj-B' }] as never,
+      },
+    })
+    useAppStore.getState().activateSession('sess-cross')
+    const s = useAppStore.getState()
+    expect(s.activeProjectId).toBe('proj-B')
+    expect(s.activeWorkspaceId).toBe('wt-B-1')
+    expect(s.workspaceSessionMemory['wt-B-1']).toBe('sess-cross')
+    expect(s.workspaceSessionMemory['wt-A-main']).toBeUndefined()
+    expect(localStorage.getItem('omniterm_active_project')).toBe('proj-B')
+    expect(localStorage.getItem('omniterm_active_workspace')).toBe('wt-B-1')
+  })
 })
 
 describe('appStore disconnect timeout settings', () => {
@@ -189,5 +256,36 @@ describe('appStore disconnect timeout initial values', () => {
     const s = freshStore.getState()
     expect(s.blurDisconnectMin).toBe(25)
     expect(s.idleDisconnectMin).toBe(40)
+  })
+})
+
+describe('appStore expandAllSessions', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('defaults to false when localStorage has no record', async () => {
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().expandAllSessions).toBe(false)
+  })
+
+  it('initializes to true when localStorage holds a true record', async () => {
+    localStorage.setItem('omniterm_expand_all_sessions', 'true')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().expandAllSessions).toBe(true)
+  })
+
+  it('setExpandAllSessions updates state and persists to localStorage', () => {
+    useAppStore.getState().setExpandAllSessions(true)
+    expect(useAppStore.getState().expandAllSessions).toBe(true)
+    expect(localStorage.getItem('omniterm_expand_all_sessions')).toBe('true')
+    useAppStore.getState().setExpandAllSessions(false)
+    expect(useAppStore.getState().expandAllSessions).toBe(false)
+    expect(localStorage.getItem('omniterm_expand_all_sessions')).toBe('false')
   })
 })

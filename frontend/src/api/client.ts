@@ -53,6 +53,8 @@ export interface Project {
   name: string
   path: string
   created_at: string
+  /** Whether the project path currently exists on disk (computed server-side). */
+  path_valid: boolean
 }
 
 /** One project inside a duplicate group. */
@@ -452,7 +454,7 @@ export const api = {
     if (params.session) url += `&session=${params.session}`
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
-    return request<{ content: string }>(url)
+    return request<{ content: string | null; is_text: boolean }>(url)
   },
   writeFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; content: string; allowEscape?: boolean }) => {
     let url = `/files/write?path=${encodeURIComponent(params.path)}`

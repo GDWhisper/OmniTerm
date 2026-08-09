@@ -168,6 +168,10 @@ enum AcpServerMessage<'a> {
     /// 据此清除对应 banner（审批可能由其他标签页/设备应答）。
     #[serde(rename = "permission_resolved")]
     PermissionResolved { id: &'a str },
+    /// 连接时 pending 审批重放完毕的标记帧：前端据此对账——内存中不在重放集合
+    /// 里的 banner 是断连窗口过期项（错过了 permission_resolved 广播），应清除。
+    #[serde(rename = "permissions_synced")]
+    PermissionsSynced,
     /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
     /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
     /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
@@ -507,6 +511,10 @@ async fn restore_acp_session(
     spawn_permission_task(perm_rx, notify_tx.clone()).await;
     spawn_permission_resolved_task(new_client.permission_resolved_subscribe(), notify_tx.clone())
         .await;
+    // 新 client 无未决审批：发标记帧让前端清掉旧 client 遗留的陈旧 banner
+    // （旧进程已回收，其审批随之失效，但前端可能错过了 resolved 广播）。
+    let synced = serde_json::to_string(&AcpServerMessage::PermissionsSynced).unwrap_or_default();
+    let _ = notify_tx.send(Message::Text(synced.into())).await;
     let crash_rx = new_client.crash_subscribe();
     spawn_crash_task(crash_rx, notify_tx.clone()).await;
     let turn_end_rx = new_client.turn_end_subscribe();
@@ -670,6 +678,11 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(msg.into())).await;
             }
+            // 重放完毕的标记帧：前端清掉不在重放集合里的陈旧 banner（断连窗口
+            // 错过 permission_resolved 广播的过期审批）。
+            let synced =
+                serde_json::to_string(&AcpServerMessage::PermissionsSynced).unwrap_or_default();
+            let _ = notify_tx.send(Message::Text(synced.into())).await;
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
             spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
@@ -886,8 +899,19 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                 }
                             }
                             Ok(AcpClientMessage::PermissionResponse { id, option_id }) => {
-                                if let Some(ref c) = client {
-                                    c.resolve_permission(&id, &option_id).await;
+                                // resolve 成功时 resolved 广播已覆盖所有连接；失败（审批
+                                // 已被其他连接应答 / cancel / 会话已释放）时向本连接回发
+                                // permission_resolved，让陈旧 banner 收敛清除而非静默无响应。
+                                let resolved = match client {
+                                    Some(ref c) => c.resolve_permission(&id, &option_id).await,
+                                    None => false,
+                                };
+                                if !resolved {
+                                    let msg = serde_json::to_string(
+                                        &AcpServerMessage::PermissionResolved { id: &id },
+                                    )
+                                    .unwrap_or_default();
+                                    let _ = notify_tx.send(Message::Text(msg.into())).await;
                                 }
                             }
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {

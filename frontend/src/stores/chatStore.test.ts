@@ -3,6 +3,7 @@ import {
   useChatStore,
   readQueuedFromStorageForSession,
   messagesToSyncPayload,
+  MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
 } from './chatStore'
@@ -231,6 +232,91 @@ describe('chatStore — queued follow-up actions', () => {
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(true)
       useChatStore.getState().setImageSupported('s1', false)
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(false)
+    })
+  })
+
+  describe('pending permission queue lifecycle', () => {
+    const perm = (id: string) => ({
+      id,
+      options: [{ option_id: 'allow', name: 'Allow', kind: 'allow_once' }],
+    })
+
+    it('markDone preserves the queue (turn end ≠ approval invalidated)', () => {
+      // 回归：会话 A 的 turn 挂在未决审批上时，另一 turn 结束（或重连时缓冲的
+      // turn_state{active:false} 落定）触发 markDone，不得清掉仍在等待的审批
+      // banner——后端 PermissionManager 才是未决审批的权威，合法清除路径只有
+      // permission_resolved 广播 / permissions_synced 对账与 markError。
+      useChatStore.getState().setPermission('s1', perm('perm-1'))
+      useChatStore.getState().beginPrompt('s1')
+      useChatStore.getState().markDone('s1')
+      const st = useChatStore.getState().states['s1']
+      expect(st.sending).toBe(false)
+      expect(st.pendingPermissions.map((p) => p.id)).toEqual(['perm-1'])
+    })
+
+    it('markError clears the queue (turn error invalidates the requests)', () => {
+      useChatStore.getState().setPermission('s1', perm('perm-1'))
+      useChatStore.getState().markError('s1', 'boom')
+      expect(useChatStore.getState().states['s1'].pendingPermissions).toEqual([])
+    })
+
+    it('concurrent approvals queue in arrival order (no overwrite)', () => {
+      // 回归：后端支持并发多个 request_permission，单槽会互相覆盖导致被覆盖项
+      // 无 UI 入口、会话卡死——必须按到达序排队。
+      const s = useChatStore.getState()
+      s.setPermission('s1', perm('a'))
+      s.setPermission('s1', perm('b'))
+      s.setPermission('s1', perm('c'))
+      expect(useChatStore.getState().states['s1'].pendingPermissions.map((p) => p.id))
+        .toEqual(['a', 'b', 'c'])
+    })
+
+    it('setPermission with existing id replaces in place (replay does not duplicate)', () => {
+      const s = useChatStore.getState()
+      s.setPermission('s1', perm('a'))
+      s.setPermission('s1', perm('b'))
+      s.setPermission('s1', { ...perm('a'), toolName: 'updated' })
+      const q = useChatStore.getState().states['s1'].pendingPermissions
+      expect(q.map((p) => p.id)).toEqual(['a', 'b'])
+      expect(q[0].toolName).toBe('updated')
+    })
+
+    it('removePermission dequeues by id, others advance', () => {
+      const s = useChatStore.getState()
+      s.setPermission('s1', perm('a'))
+      s.setPermission('s1', perm('b'))
+      s.removePermission('s1', 'a')
+      const q = useChatStore.getState().states['s1'].pendingPermissions
+      expect(q.map((p) => p.id)).toEqual(['b'])
+      // 未知 id 是 no-op
+      s.removePermission('s1', 'nope')
+      expect(useChatStore.getState().states['s1'].pendingPermissions.map((p) => p.id)).toEqual(['b'])
+    })
+
+    it('reconcilePermissions keeps only ids in the authoritative set', () => {
+      // permissions_synced 对账：断连窗口错过 permission_resolved 广播的陈旧项被清除
+      const s = useChatStore.getState()
+      s.setPermission('s1', perm('stale'))
+      s.setPermission('s1', perm('alive'))
+      s.reconcilePermissions('s1', new Set(['alive']))
+      expect(useChatStore.getState().states['s1'].pendingPermissions.map((p) => p.id)).toEqual(['alive'])
+      // 空集合 = 后端无未决审批，全部清除
+      s.reconcilePermissions('s1', new Set())
+      expect(useChatStore.getState().states['s1'].pendingPermissions).toEqual([])
+    })
+
+    it('queue is capped: overflow drops the newcomer with a warning', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const s = useChatStore.getState()
+      for (let i = 0; i < MAX_PENDING_PERMISSIONS + 3; i++) {
+        s.setPermission('s1', perm(`p${i}`))
+      }
+      const q = useChatStore.getState().states['s1'].pendingPermissions
+      expect(q).toHaveLength(MAX_PENDING_PERMISSIONS)
+      expect(q[0].id).toBe('p0')
+      expect(q[MAX_PENDING_PERMISSIONS - 1].id).toBe(`p${MAX_PENDING_PERMISSIONS - 1}`)
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
     })
   })
 })

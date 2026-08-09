@@ -22,7 +22,7 @@ import { nextSessionId } from '../../utils/sessionNav'
  * (tmux↔acp↔none), while same-kind switches (tmux→tmux, acp→acp) keep the
  * view mounted — useTerminal/useAcpChat reconnect in place. Keying on the
  * session id instead would destroy and recreate the xterm on every switch,
- * flashing a blank screen for ~250ms (see debug-log).
+ * flashing a blank screen for ~250ms (see docs/dev/debug-guide.md).
  */
 function SessionView() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)

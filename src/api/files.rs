@@ -229,6 +229,7 @@ async fn resolve_effective_in_project(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;
     wts.into_iter()
@@ -296,6 +297,7 @@ async fn resolve_workspace_root(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;
     wts.into_iter().find(|w| w.id == workspace_id).map(|w| w.path)
@@ -723,13 +725,17 @@ async fn read_file(State(state): State<AppState>, Query(q): Query<FileQuery>) ->
 
     // For session mode, paths may be absolute
     let content = if std::path::Path::new(path_str).is_absolute() {
-        tokio::fs::read_to_string(path_str).await.map_err(|e| anyhow!(e))
+        fs::read_text_file(std::path::Path::new(path_str)).await.map_err(|e| anyhow!(e))
     } else {
         fs::read_file(&base, path_str).await
     };
 
     match content {
-        Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
+        // is_text: false → 非 UTF-8 文本（如二进制），前端降级为「无法预览」
+        Ok(Some(content)) => (StatusCode::OK, Json(json!({ "content": content, "is_text": true }))),
+        Ok(None) => {
+            (StatusCode::OK, Json(json!({ "content": serde_json::Value::Null, "is_text": false })))
+        }
         Err(e) => {
             error!("read_file failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))

@@ -32,7 +32,7 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
   // Portal to document.body: the mobile strip (300%-wide pane carousel) uses
   // will-change/transform, which makes `position: fixed` resolve against the
   // strip instead of the viewport — modal would overflow the screen and clip
-  // its action buttons (mobile regression, see debug-log). Portaling keeps the
+  // its action buttons (mobile regression, see docs/dev/debug-guide.md). Portaling keeps the
   // backdrop viewport-anchored on both desktop and mobile.
   return createPortal(
     <div

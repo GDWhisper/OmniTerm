@@ -3,7 +3,8 @@ import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
-import { IconPlus, IconTrash } from '../FileManager/icons'
+import { sessionsForWorktree } from '../../utils/worktreeSessions'
+import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
 import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
@@ -11,31 +12,10 @@ import type { RenameTarget } from './RenameDialog'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 
-// Filter sessions for a specific worktree.
-// "Orphan" sessions (whose workspace_path doesn't match any worktree)
-// are shown under the main worktree (or first worktree) so that
-// adopted external sessions remain visible even when their CWD
-// doesn't correspond to a known worktree path.
-function sessionsForWorktree(allSessions: Session[], worktreeList: Workspace[], wtPath: string): Session[] {
-  // Sessions that exactly match this worktree
-  const exactMatches = allSessions.filter(s => s.workspace_path === wtPath)
-
-  // For the primary worktree, also include sessions that don't match
-  // any worktree (e.g. adopted external sessions whose tmux CWD is
-  // outside the project's worktree paths).
-  const primaryWt = worktreeList.find(w => w.is_main) || worktreeList[0]
-  if (primaryWt && wtPath === primaryWt.path) {
-    const matchedPaths = new Set(worktreeList.map(w => w.path))
-    const orphans = allSessions.filter(s => !matchedPaths.has(s.workspace_path))
-    return [...exactMatches, ...orphans]
-  }
-
-  return exactMatches
-}
-
 export function ProjectCard(props: {
   project: Project
   isExpanded: boolean
+  expandAllSessions: boolean
   worktrees: Workspace[] | undefined    // undefined = 尚未加载（显示 loading 占位）
   sessions: Session[]                   // 该项目全部会话
   activeWorkspaceId: string | null
@@ -46,6 +26,7 @@ export function ProjectCard(props: {
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
   onWorkspaceClick: (wt: Workspace) => void
+  onRepairProject: (project: Project) => void
   onOpenCreateSession: (wt: Workspace) => void
   onDeleteWorktree: (target: DeleteWorktreeTarget) => void
   onDeleteSession: (target: DeleteTarget) => void
@@ -91,9 +72,43 @@ export function ProjectCard(props: {
         <div className="proj-info">
           <span className="proj-name">{props.project.name}</span>
           {/* 容器 direction:rtl 只为左侧省略号；bdi 隔离避免尾部 / 被 bidi 挪到开头 */}
-          <span className="proj-path"><bdi dir="ltr">{props.project.path}</bdi></span>
+          <span
+            className="proj-path"
+            style={!props.project.path_valid ? { color: 'var(--danger)' } : undefined}
+            title={
+              !props.project.path_valid
+                ? (t('sidebar.projectPathMissing') ?? 'Project path missing — click to repair')
+                : undefined
+            }
+          >
+            {!props.project.path_valid && <span style={{ marginRight: 4 }}>⚠</span>}
+            <bdi dir="ltr">{props.project.path}</bdi>
+          </span>
         </div>
         <div className="flex items-center gap-1">
+          {!props.project.path_valid && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                props.onRepairProject(props.project)
+              }}
+              className="row-action flex-shrink-0 flex items-center justify-center transition-all"
+              style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--danger-30)', color: 'var(--danger)', fontSize: 11 }}
+              title={t('sidebar.projectPathMissing') ?? 'Project path missing — click to repair'}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--warning)'
+                e.currentTarget.style.color = 'var(--warning)'
+                e.currentTarget.style.background = 'rgba(251, 191, 36, 0.1)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--danger-30)'
+                e.currentTarget.style.color = 'var(--danger)'
+                e.currentTarget.style.background = 'transparent'
+              }}
+            >
+              <IconWarning width={14} height={14} />
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation()
@@ -144,7 +159,7 @@ export function ProjectCard(props: {
               const isWtActive = props.activeWorkspaceId === wt.id
               const wtSessions = sessionsForWorktree(props.sessions, props.worktrees || [], wt.path)
               const wtAgg = aggregateStatus(wtSessions, attention.reasonFor, props.acpActivityFor)
-              const isWtExpanded = isWtActive
+              const isWtExpanded = isWtActive || (props.expandAllSessions && wtSessions.length > 0)
 
               return (
                 <div key={wt.id} className={`sidebar-wt-slot ${isWtActive ? 'active' : ''}`}>
@@ -167,7 +182,7 @@ export function ProjectCard(props: {
                       }
                       className={wtAgg === 'working' || wtAgg === 'blocked' ? 'activity-pulse' : ''}
                     />
-                    <span className="branch-name">{wt.label}</span>
+                    <span className="branch-name" title={wt.label}><bdi dir="ltr">{wt.label}</bdi></span>
                     <CountBadge count={wtSessions.length} />
                     <button
                       className="sidebar-wt-add-btn"

@@ -25,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -570,6 +570,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // hydrated 已 true，帧即时派发不入缓冲。
   const preHydrateBuffer = useRef<ServerFrame[]>([])
   const hydratedRef = useRef(false)
+  // 本次连接见过的审批 id（permission_request 帧累计）：permissions_synced 到达时
+  // 用它对账——队列里不在集合内的 banner 是错过 resolved 广播的陈旧项，清除。
+  const permIdsThisConnect = useRef<Set<string>>(new Set())
   const frameHandlerRef = useRef<((frame: ServerFrame) => void) | null>(null)
   const attention = useAttention()
 
@@ -814,6 +817,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'permission_request': {
           const req = frame.request ?? {}
           if (frame.id) {
+            permIdsThisConnect.current.add(frame.id)
             s.setPermission(sid, { id: frame.id, ...parsePermissionRequest(req) })
             // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
             attention.fire(sid, sid, 'decision')
@@ -821,13 +825,25 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         }
         case 'permission_resolved':
-          // 审批已在别处解决（其他标签页/设备应答，或 session cancel 批量取消）：
-          // 清除对应 banner 与提醒。仅匹配当前挂着的 id，防止误清后到的新审批。
-          if (frame.id && s.states[sid]?.pendingPermission?.id === frame.id) {
-            s.clearPermission(sid)
+          // 审批已在别处解决（其他标签页/设备应答、session cancel 批量取消、或本端
+          // 应答了已失效的审批时后端的收敛回发）：按 id 出队，队列空了才清提醒。
+          if (frame.id) {
+            s.removePermission(sid, frame.id)
+            if ((useChatStore.getState().states[sid]?.pendingPermissions ?? []).length === 0) {
+              attention.clearAlert(sid)
+            }
+          }
+          break
+        case 'permissions_synced': {
+          // 后端 pending 集合重放完毕：对账清掉错过 resolved 广播的陈旧 banner
+          // （断连窗口过期项 / restore 后旧 client 遗留项）。
+          const seen = new Set(permIdsThisConnect.current)
+          s.reconcilePermissions(sid, seen)
+          if ((useChatStore.getState().states[sid]?.pendingPermissions ?? []).length === 0) {
             attention.clearAlert(sid)
           }
           break
+        }
         case 'process_alive':
           // 后端进程存活状态事件驱动更新（替代轮询）：即时刷新指示灯。
           if (typeof frame.alive === 'boolean') {
@@ -884,6 +900,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       wsRef.current = ws
       inProgressSeq.current = null
       preHydrateBuffer.current = []
+      permIdsThisConnect.current.clear()
 
       ws.onopen = () => {
         if (unmounted) { ws.close(); return }
@@ -925,6 +942,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 若仍在等待回复，连接已不可达 → 复位 sending 并报错，避免占位永久卡死
           if (st?.sending && !st.sessionEnded) {
             useChatStore.getState().markError(sid, 'WebSocket error')
+            // markError 清了审批队列，对应的 decision 提醒一并清除
+            attention.clearAlert(sid)
           } else {
             useChatStore.getState().setError(sid, 'WebSocket error')
           }
@@ -947,6 +966,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {
             useChatStore.getState().markError(sid, 'Connection lost — message may not have been delivered')
+            // markError 清了审批队列，对应的 decision 提醒一并清除
+            attention.clearAlert(sid)
           }
           // 5.3=C 路径：连接断时如果队列里有未发的消息，把它写入 chat history 作为
           // 「undelivered」留痕（仅在内存，不入 DB），并清空队列槽位。连接恢复后
@@ -1047,9 +1068,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const ws = wsRef.current
     const sid = sessionIdRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !sid) return
-    ws.send(JSON.stringify({ type: 'permission_response', id, option_id: optionId }))
-    useChatStore.getState().clearPermission(sid)
-    attention.clearAlert(sid)
+    try {
+      ws.send(JSON.stringify({ type: 'permission_response', id, option_id: optionId }))
+    } catch {
+      // 发送失败不清队列：审批仍在后端挂着，保留 banner 供重试
+      useChatStore.getState().setError(sid, 'Failed to send permission response — connection unavailable')
+      return
+    }
+    // 乐观出队：后端 resolve 成功会广播 permission_resolved（幂等 no-op）；
+    // resolve 失败（审批已失效）后端会向本连接回发 permission_resolved 收敛。
+    const store = useChatStore.getState()
+    store.removePermission(sid, id)
+    if ((store.states[sid]?.pendingPermissions ?? []).length === 0) {
+      attention.clearAlert(sid)
+    }
   }, [attention])
 
   const setConfigOption = useCallback((configId: string, value: string) => {

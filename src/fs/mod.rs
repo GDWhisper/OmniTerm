@@ -21,8 +21,31 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 
 const MAX_SUBPATHS_COUNT: u64 = 1000;
+
+/// 文本探测窗口大小：读取文件头部此字节数判定是否为 UTF-8 文本。
+/// 非文本（二进制）文件在窗口内即命中非法序列，可避免把大型二进制文件整体读入内存。
+const TEXT_PROBE_BYTES: usize = 64 * 1024;
+
+/// Expand a leading `~` / `~/` to the user's home directory. Other paths
+/// pass through unchanged. Single source of truth for `~` expansion
+/// (used by project creation, session workspace resolution, path-validity checks).
+pub fn expand_home(path: &str) -> String {
+    if path == "~" || path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        path.replacen('~', &home, 1)
+    } else {
+        path.to_string()
+    }
+}
+
+/// Whether the (possibly `~`-prefixed) path currently points to an existing
+/// directory. Used to flag project paths that were moved/renamed/deleted.
+pub fn dir_exists(path: &str) -> bool {
+    Path::new(&expand_home(path)).is_dir()
+}
 
 /// Sanitize a requested path against a base directory.
 /// Prevents directory traversal attacks. The path must already exist.
@@ -343,11 +366,64 @@ pub async fn list_dir(
     Ok(entries)
 }
 
-/// Read file content as UTF-8 string.
-pub async fn read_file(base: &Path, rel_path: &str) -> Result<String> {
+/// 判定字节流能否视为 UTF-8 文本（探测用途）。
+///
+/// 只校验「完整前缀」：忽略窗口末尾可能被截断的多字节序列，避免把恰好
+/// 跨越探测窗口边界的多字节字符（如中文）误判为二进制。窗口内出现
+/// NUL 字节（二进制强信号，快检短路）或非法 UTF-8 序列即判定为非文本。
+fn probe_is_utf8_text(buf: &[u8]) -> bool {
+    // NULL 快检：正常文本文件不含 NUL 字节，而二进制数据几乎都含。
+    // 在完整 UTF-8 校验前先线性扫描，命中即判定非文本——扫描单字节
+    // 比跑完整 UTF-8 状态机校验便宜得多（性能优化）。
+    if buf.contains(&0) {
+        return false;
+    }
+    let mut end = buf.len();
+    // 去掉末尾连续的 continuation 字节（0b10xxxxxx）
+    while end > 0 && (buf[end - 1] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+    // 结尾是多字节字符的起始字节 → 是被截断的序列，一并舍去
+    if end > 0 {
+        let b = buf[end - 1];
+        if b & 0xE0 == 0xC0 || b & 0xF0 == 0xE0 || b & 0xF8 == 0xF0 {
+            end -= 1;
+        }
+    }
+    std::str::from_utf8(&buf[..end]).is_ok()
+}
+
+/// 读取文件内容；文件不是合法 UTF-8 文本时返回 `Ok(None)`（供调用方降级为
+/// 「无法预览」，而非报错）。文本兜底依赖此内容判定，不依赖扩展名白名单。
+///
+/// 先探测头部避免把大型二进制文件整体读入内存，全量解码时再做严格校验
+/// （头部合法不代表整个文件合法）。
+pub async fn read_text_file(path: &Path) -> Result<Option<String>> {
+    let mut file = fs::File::open(path).await?;
+    let mut probe = vec![0u8; TEXT_PROBE_BYTES];
+    let n = file.read(&mut probe).await?;
+    probe.truncate(n);
+    if !probe_is_utf8_text(&probe) {
+        return Ok(None);
+    }
+    let mut bytes = probe;
+    file.read_to_end(&mut bytes).await?;
+    // 全量 NULL 快检：探测窗口通过但文件后部混入 NUL（如文本尾随二进制
+    // 数据）时提前返回，避免 `String::from_utf8` 全量校验的额外开销。
+    if bytes.contains(&0) {
+        return Ok(None);
+    }
+    match String::from_utf8(bytes) {
+        Ok(s) => Ok(Some(s)),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Read file content as UTF-8 string. Returns `Ok(None)` when the file is not
+/// valid UTF-8 text (caller should degrade to "cannot preview").
+pub async fn read_file(base: &Path, rel_path: &str) -> Result<Option<String>> {
     let path = sanitize_path(base, rel_path)?;
-    let content = fs::read_to_string(&path).await?;
-    Ok(content)
+    read_text_file(&path).await
 }
 
 /// Write content to a file. Creates the file if it doesn't exist.
@@ -771,5 +847,87 @@ mod tests {
         // allow_escape 放行
         copy_paths_allow_escape(&base, &["a.txt".to_string()], "../outside").await.unwrap();
         assert!(outside.join("a.txt").exists());
+    }
+
+    // ── expand_home / dir_exists ──
+
+    #[test]
+    fn test_expand_home() {
+        // 无 ~ 前缀原样返回
+        assert_eq!(expand_home("/home/user/proj"), "/home/user/proj");
+        assert_eq!(expand_home(""), "");
+        assert_eq!(expand_home("relative/path"), "relative/path");
+        // 仅在路径首位的 ~ 展开（不展开中间或尾部的 ~）
+        if let Ok(home) = std::env::var("HOME") {
+            assert_eq!(expand_home("~"), home);
+            assert_eq!(expand_home("~/proj"), format!("{home}/proj"));
+        }
+    }
+
+    #[test]
+    fn test_dir_exists() {
+        let (base, _outside) = escape_fixture("dir_exists");
+        let base_str = base.to_str().unwrap();
+        assert!(dir_exists(base_str));
+        assert!(!dir_exists(&format!("{base_str}/nope")));
+        // 普通文件不算目录
+        let f = base.join("file.txt");
+        fs::write(&f, b"x").unwrap();
+        assert!(!dir_exists(f.to_str().unwrap()));
+    }
+
+    // ── probe_is_utf8_text ──
+
+    #[test]
+    fn test_probe_is_utf8_text_ascii() {
+        assert!(probe_is_utf8_text(b"hello world"));
+        assert!(probe_is_utf8_text(b""));
+    }
+
+    #[test]
+    fn test_probe_is_utf8_text_multibyte() {
+        // 完整多字节字符
+        assert!(probe_is_utf8_text("中文".as_bytes()));
+        // 窗口末尾被截断的多字节序列 → 不应误判为二进制
+        let cut = &"中文".as_bytes()[..4]; // "中"完整 + "文"的前一字节
+        assert!(probe_is_utf8_text(cut));
+        assert!(probe_is_utf8_text(&[0xE4, 0xB8])); // "中" 截断两字节
+    }
+
+    #[test]
+    fn test_probe_is_utf8_text_binary() {
+        // NUL 字节：快检命中 → 非文本（NUL 在 UTF-8 语义上合法，但二进制强信号）
+        assert!(!probe_is_utf8_text(&[0x00, 0x01, 0x02]));
+        // PNG 魔数含 0x89（非法单字节）→ 非文本
+        assert!(!probe_is_utf8_text(b"\x89PNG\x0d\x0a\x1a\x0a"));
+        // 多字节起始字节后跟非 continuation 字节（0xC3 期待 0x80-0xBF）
+        assert!(!probe_is_utf8_text(&[0xC3, 0x28]));
+        // 文本中混入非法字节 → 非文本
+        assert!(!probe_is_utf8_text(b"abc\xffxyz"));
+    }
+
+    // ── read_text_file ──
+
+    #[tokio::test]
+    async fn test_read_text_file_utf8_vs_binary() {
+        let (base, _outside) = escape_fixture("read_text_file");
+        let text = base.join("a.txt");
+        let bin = base.join("a.bin");
+        fs::write(&text, "hello 中文").unwrap();
+        fs::write(&bin, [0x89, b'P', b'N', b'G', 0x00, 0x01]).unwrap();
+        assert_eq!(read_text_file(&text).await.unwrap(), Some("hello 中文".to_string()));
+        assert_eq!(read_text_file(&bin).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_full_null_rejected() {
+        let (base, _outside) = escape_fixture("read_text_file_null");
+        // 探测窗口内无 NUL 且为合法 UTF-8，但文件后部混入 NUL
+        // → 全量 NULL 快检判定非文本
+        let mut content = vec![b'a'; TEXT_PROBE_BYTES];
+        content.push(0);
+        let f = base.join("tail_null.txt");
+        fs::write(&f, &content).unwrap();
+        assert_eq!(read_text_file(&f).await.unwrap(), None);
     }
 }

@@ -1905,7 +1905,7 @@ dependencies = [
 
 [[package]]
 name = "omniterm"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "agent-client-protocol",
  "anyhow",

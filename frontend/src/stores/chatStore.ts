@@ -106,6 +106,10 @@ export interface PendingPermission {
   locations?: string[]
 }
 
+/** 未决审批队列上限（防无界累积红线）：超限丢弃新到达项并 warn——实践中 agent
+ *  并发审批数远小于此值，触发即上游异常，保留已展示的旧项比静默丢新项更安全。 */
+export const MAX_PENDING_PERMISSIONS = 16
+
 // --- Replay batching ---
 //
 // 重放（replay）期间后端会把历史记录逐帧以大批量 `session_update` 推回。若前端�?
@@ -187,7 +191,13 @@ interface ChatSessionState {
   sessionEnded: boolean
   /** 正在从后端重放历史记录（replay_start �? replay_end 之间），�? UI 显示恢复指示�? */
   replaying: boolean
-  pendingPermission: PendingPermission | null
+  /**
+   * 未决审批队列（按到达序；UI 只显示队首，应答后出队露出下一个）。
+   * 后端 PermissionManager 支持并发多个 request_permission，单槽会互相覆盖
+   * 导致被覆盖项无 UI 入口、会话卡死。权威清除路径只有 permission_resolved
+   * 帧、permissions_synced 对账与 markError（turn 出错 / 连接死亡）。
+   */
+  pendingPermissions: PendingPermission[]
   usage: Record<string, unknown> | null
   commands: SlashCommand[]
   configOptions: ConfigOption[]
@@ -259,8 +269,12 @@ interface ChatActions {
   ) => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
+  /** 审批入队（upsert）：id 已存在则原位替换（重放/重发不产生重复项），否则追加。 */
   setPermission: (sessionId: string, permission: PendingPermission) => void
-  clearPermission: (sessionId: string) => void
+  /** 按 id 出队（permission_resolved / 用户应答）。 */
+  removePermission: (sessionId: string, id: string) => void
+  /** 对账：只保留 id 在集合内的审批（permissions_synced 帧携带后端权威 pending 集合）。 */
+  reconcilePermissions: (sessionId: string, ids: ReadonlySet<string>) => void
   setReplaying: (sessionId: string, replaying: boolean) => void
   /** 双缓冲原子提交：用攒齐的重放帧从空白状态重建会话，staged 为空时不动现有状态。
    *  等价「清空 + 重放 + finalize」，但不存在清空后无回填的空窗。 */
@@ -284,7 +298,7 @@ const EMPTY: ChatSessionState = {
   mode: null,
   sessionEnded: false,
   replaying: false,
-  pendingPermission: null,
+  pendingPermissions: [],
   usage: null,
   commands: [],
   configOptions: [],
@@ -801,8 +815,12 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      // prompt 回合结束后未决审批已失效（agent 侧请求已被应答或取消），清掉残留 banner
-      return patch(state, sessionId, { messages, sending: false, pendingPermission: null })
+      // 不清 pendingPermissions：turn 结束不代表未决审批失效——审批可能属于仍挂在
+      // request_permission 上的更早 turn（后端会持续重放它）。未决审批的权威在
+      // 后端 PermissionManager，合法清除路径只有 permission_resolved 广播
+      // （resolve / cancel_all）、permissions_synced 对账与 markError（turn 出错 /
+      // 连接死亡）。曾在 markDone 清除导致重放 banner 被抹掉、会话卡死无法应答。
+      return patch(state, sessionId, { messages, sending: false })
     }),
 
   markError: (sessionId, message) =>
@@ -811,7 +829,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      return patch(state, sessionId, { messages, sending: false, error: message, pendingPermission: null })
+      return patch(state, sessionId, { messages, sending: false, error: message, pendingPermissions: [] })
     }),
 
   beginPrompt: (sessionId) =>
@@ -905,10 +923,41 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => patch(state, sessionId, { sessionEnded: false })),
 
   setPermission: (sessionId, permission) =>
-    set((state) => patch(state, sessionId, { pendingPermission: permission })),
+    set((state) => {
+      const current = get(state, sessionId)
+      const queue = current.pendingPermissions
+      const idx = queue.findIndex((p) => p.id === permission.id)
+      if (idx >= 0) {
+        // 原位替换：重连重放/后端重发同一审批不产生重复项
+        const next = [...queue]
+        next[idx] = permission
+        return patch(state, sessionId, { pendingPermissions: next })
+      }
+      if (queue.length >= MAX_PENDING_PERMISSIONS) {
+        console.warn(
+          `[ACP] pending permission queue full (${MAX_PENDING_PERMISSIONS}); dropping request ${permission.id}`,
+        )
+        return state
+      }
+      return patch(state, sessionId, { pendingPermissions: [...queue, permission] })
+    }),
 
-  clearPermission: (sessionId) =>
-    set((state) => patch(state, sessionId, { pendingPermission: null })),
+  removePermission: (sessionId, id) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      if (!current.pendingPermissions.some((p) => p.id === id)) return state
+      return patch(state, sessionId, {
+        pendingPermissions: current.pendingPermissions.filter((p) => p.id !== id),
+      })
+    }),
+
+  reconcilePermissions: (sessionId, ids) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      const kept = current.pendingPermissions.filter((p) => ids.has(p.id))
+      if (kept.length === current.pendingPermissions.length) return state
+      return patch(state, sessionId, { pendingPermissions: kept })
+    }),
 
   setReplaying: (sessionId, replaying) =>
     set((state) => patch(state, sessionId, { replaying })),
