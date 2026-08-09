@@ -369,9 +369,15 @@ pub async fn list_dir(
 /// 判定字节流能否视为 UTF-8 文本（探测用途）。
 ///
 /// 只校验「完整前缀」：忽略窗口末尾可能被截断的多字节序列，避免把恰好
-/// 跨越探测窗口边界的多字节字符（如中文）误判为二进制。窗口内部出现
-/// 非法 UTF-8 序列（如二进制文件的 NUL / 魔数）即判定为非文本。
+/// 跨越探测窗口边界的多字节字符（如中文）误判为二进制。窗口内出现
+/// NUL 字节（二进制强信号，快检短路）或非法 UTF-8 序列即判定为非文本。
 fn probe_is_utf8_text(buf: &[u8]) -> bool {
+    // NULL 快检：正常文本文件不含 NUL 字节，而二进制数据几乎都含。
+    // 在完整 UTF-8 校验前先线性扫描，命中即判定非文本——扫描单字节
+    // 比跑完整 UTF-8 状态机校验便宜得多（性能优化）。
+    if buf.contains(&0) {
+        return false;
+    }
     let mut end = buf.len();
     // 去掉末尾连续的 continuation 字节（0b10xxxxxx）
     while end > 0 && (buf[end - 1] & 0xC0) == 0x80 {
@@ -402,6 +408,11 @@ pub async fn read_text_file(path: &Path) -> Result<Option<String>> {
     }
     let mut bytes = probe;
     file.read_to_end(&mut bytes).await?;
+    // 全量 NULL 快检：探测窗口通过但文件后部混入 NUL（如文本尾随二进制
+    // 数据）时提前返回，避免 `String::from_utf8` 全量校验的额外开销。
+    if bytes.contains(&0) {
+        return Ok(None);
+    }
     match String::from_utf8(bytes) {
         Ok(s) => Ok(Some(s)),
         Err(_) => Ok(None),
@@ -885,6 +896,8 @@ mod tests {
 
     #[test]
     fn test_probe_is_utf8_text_binary() {
+        // NUL 字节：快检命中 → 非文本（NUL 在 UTF-8 语义上合法，但二进制强信号）
+        assert!(!probe_is_utf8_text(&[0x00, 0x01, 0x02]));
         // PNG 魔数含 0x89（非法单字节）→ 非文本
         assert!(!probe_is_utf8_text(b"\x89PNG\x0d\x0a\x1a\x0a"));
         // 多字节起始字节后跟非 continuation 字节（0xC3 期待 0x80-0xBF）
@@ -904,5 +917,17 @@ mod tests {
         fs::write(&bin, [0x89, b'P', b'N', b'G', 0x00, 0x01]).unwrap();
         assert_eq!(read_text_file(&text).await.unwrap(), Some("hello 中文".to_string()));
         assert_eq!(read_text_file(&bin).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn test_read_text_file_full_null_rejected() {
+        let (base, _outside) = escape_fixture("read_text_file_null");
+        // 探测窗口内无 NUL 且为合法 UTF-8，但文件后部混入 NUL
+        // → 全量 NULL 快检判定非文本
+        let mut content = vec![b'a'; TEXT_PROBE_BYTES];
+        content.push(0);
+        let f = base.join("tail_null.txt");
+        fs::write(&f, &content).unwrap();
+        assert_eq!(read_text_file(&f).await.unwrap(), None);
     }
 }
