@@ -15,22 +15,6 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 /** Supported image extensions for preview mode */
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
 
-/** Known text file extensions */
-const TEXT_EXTS = new Set([
-  // Code
-  'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts',
-  'py', 'pyw', 'rs', 'go', 'java', 'c', 'cpp', 'cc', 'cxx',
-  'h', 'hpp', 'hxx', 'php', 'sh', 'bash', 'zsh', 'fish',
-  // Markup / data
-  'html', 'htm', 'css', 'scss', 'less', 'json', 'jsonl',
-  'xml', 'yaml', 'yml', 'toml', 'md', 'markdown', 'sql',
-  // Config
-  'env', 'conf', 'cfg', 'ini', 'gitignore', 'dockerignore',
-  'editorconfig', 'prettierrc', 'eslintrc',
-  // Other
-  'txt', 'log', 'csv', 'tsv', 'makefile', 'dockerfile',
-])
-
 function getExtension(fileName: string): string {
   const ext = fileName.split('.').pop()?.toLowerCase() || ''
   return ext
@@ -38,13 +22,6 @@ function getExtension(fileName: string): string {
 
 function isImageFile(fileName: string): boolean {
   return IMAGE_EXTS.has(getExtension(fileName))
-}
-
-function isTextFile(fileName: string): boolean {
-  const ext = getExtension(fileName)
-  // No extension = likely text
-  if (!ext || ext === fileName.toLowerCase()) return true
-  return TEXT_EXTS.has(ext)
 }
 
 interface FileDrawerProps {
@@ -113,18 +90,26 @@ export function FileDrawer({
   const loadedRef = useRef(false)
 
   const isImage = isImageFile(fileName)
-  const isText = isTextFile(fileName)
-  const isSupported = isImage || isText
+  // 文本判定不依赖扩展名白名单：非图片文件一律尝试按文本读取，
+  // 后端按内容探测 UTF-8 返回 is_text，非文本时降级为「无法预览」。
+  // null = 尚未读取（loading / 错误态），false = 已确认非文本。
+  const [isText, setIsText] = useState<boolean | null>(null)
+  const isSupported = isImage || isText !== false
 
-  // Fetch file content
+  // Fetch file content — 非图片文件都尝试按文本读取，是否文本由后端探测
   const fetchContent = useCallback(async () => {
-    if (!isText) return
+    if (isImage) return
     setLoading(true)
     setError(null)
     try {
       const data = await api.readFile2({ session: sessionId, workspaceId, projectId: projectId ?? undefined, path: filePath })
-      setContent(data.content)
-      setEditedContent(data.content)
+      if (!data.is_text) {
+        setIsText(false)
+        return
+      }
+      setIsText(true)
+      setContent(data.content ?? '')
+      setEditedContent(data.content ?? '')
       setModified(false)
       setExternalChange(false)
       loadedRef.current = true
@@ -133,10 +118,11 @@ export function FileDrawer({
     } finally {
       setLoading(false)
     }
-  }, [sessionId, workspaceId, projectId, filePath, isText])
+  }, [sessionId, workspaceId, projectId, filePath, isImage])
 
   // Initial load
   useEffect(() => {
+    setIsText(null)
     fetchContent()
     setMode('view')
     setModified(false)
@@ -246,8 +232,8 @@ export function FileDrawer({
   }
 
   // Compute status bar info
-  const lineCount = isText ? editedContent.split('\n').length : 0
-  const byteSize = isText ? new TextEncoder().encode(editedContent).length : 0
+  const lineCount = isText === true ? editedContent.split('\n').length : 0
+  const byteSize = isText === true ? new TextEncoder().encode(editedContent).length : 0
 
   return (
     <DrawerShell height={height} onHeightChange={onHeightChange} title="drawer">
@@ -299,7 +285,7 @@ export function FileDrawer({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-          {isText && (
+          {isText === true && (
             <>
               <button
                 onClick={() => setMode('view')}
@@ -506,7 +492,7 @@ export function FileDrawer({
       </div>
 
       {/* Status bar */}
-      {isText && !loading && !error && (
+      {isText === true && !loading && !error && (
         <div
           style={{
             display: 'flex',
