@@ -47,7 +47,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.12] - 2026-08-09
 
 ### Added
 
@@ -57,9 +57,11 @@ Prefix each entry with the area it affects:
 ### Changed
 
 - (2026-08-09 16:10) `[backend]` CLI 输出统一改为英文：`--help` 全部子命令/参数说明、启动/停止/状态提示、`start -d` 成功消息、自更新消息（此前 clap help 与 daemon 启动提示为中文；CLI 与前端 i18n 相互独立，后端不引入语言切换）
+- (2026-08-07 16:34) `[frontend]` ThinkingIndicator 乱码特效自适应帧率节流：rAF 回调频率本身等于浏览器实际刷新率，高刷屏（>60Hz）压到上限 60fps 削减无谓 layout 抖动、低刷屏跟着屏走，零额外测量成本；随后上限提高到 90fps 以充分利用高刷屏，动画在高性能设备上更流畅（`frontend/src/components/Chat/ChatView.tsx`）
 
 ### Fixed
 
+- (2026-08-09 00:35) `[frontend]` 修复侧栏分支名过长被省略号截断时 bidi 重排：`direction: rtl` 容器（左侧省略号截断）中 LTR 分支名末尾中性字符被挪到视觉开头，分支名显示错乱——分支名改用 `<bdi dir="ltr">` 隔离，截断方向保留为「省略开头」且文字视觉保持 LTR（`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/index.css`）
 - (2026-08-09 22:58) `[backend]` `[frontend]` 文件浏览器文本预览改为**内容兜底**：不再依赖扩展名白名单，非常见后缀的文本文件（如 `Cargo.lock`）也能以普通文本查看。`GET /files/read` 响应新增 `is_text` 字段——后端按内容探测文件是否为合法 UTF-8（先探测头部 64KB 判定、**NUL 字节快检短路**，避免把大型二进制文件整体读入内存，再全量严格校验），非文本返回 `is_text:false` 而非报错（`src/fs/mod.rs`、`src/api/files.rs`）；前端 `FileDrawer` 移除 `TEXT_EXTS` 白名单，非图片文件一律尝试按文本读取，读取结果非文本时降级为「无法预览」（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/api/client.ts`）
 - (2026-08-09 18:45) `[frontend]` 修复激活会话未同步激活所属 worktree：点击/新建/键盘切换会话时，sidebar 的 worktree 高亮底色不跟随（展开模式下可点非聚焦 worktree 的会话而该行不亮）。`activateSession` 现从会话 `workspace_path` 跨所有项目反查所属 project + worktree 并原子激活——会话可能登记在 A 项目但其路径属于 B 项目的 worktree（渲染为孤儿显示在主 worktree 下），此时激活路径实际归属的 B 项目 worktree；会话记忆归位到所属 worktree；无任何 worktree 匹配的孤儿/外部会话保持原行为（`frontend/src/stores/appStore.ts`）
 - (2026-08-09 15:20) `[backend]` `start -d` 启动成功不再静默：daemon 握手扩展为携带启动结果消息，父进程打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」并返回 0；配合上一项，后台启动无论成败终端都有明确反馈（`src/main.rs`）
