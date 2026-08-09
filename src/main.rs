@@ -319,8 +319,15 @@ fn daemonize(log_file: &Path) -> std::io::Result<RawFd> {
             let n =
                 unsafe { libc::read(read_fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
             if n > 0 && buf[0] == 1 {
-                process::exit(0); // daemon 就绪
-            } else if n > 1 {
+                // daemon 就绪：打印成功消息（含端口/PID），后台启动不再静默
+                if n > 1 {
+                    let msg = String::from_utf8_lossy(&buf[1..n as usize]);
+                    eprintln!("{}", msg);
+                } else {
+                    eprintln!("OmniTerm started in the background");
+                }
+                process::exit(0);
+            } else if n > 0 && buf[0] == 0 {
                 let msg = String::from_utf8_lossy(&buf[1..n as usize]);
                 eprintln!("Error: {}", msg);
                 process::exit(1);
@@ -361,13 +368,17 @@ fn daemonize(log_file: &Path) -> std::io::Result<RawFd> {
     Ok(write_fd)
 }
 
-/// 通知父进程 daemon 启动成功（daemon 子进程内调用；前台模式 pipe 为 None 时 no-op）。
+/// 通知父进程 daemon 启动成功并携带成功消息（如监听端口/PID），由父进程打印到终端。
+/// 前台模式 pipe 为 None 时 no-op。
 #[cfg(unix)]
-fn daemon_notify_ready(pipe_write: Option<RawFd>) {
+fn daemon_notify_ready(pipe_write: Option<RawFd>, msg: &str) {
     if let Some(fd) = pipe_write {
-        let one: u8 = 1;
+        let body = &msg.as_bytes()[..msg.len().min(4000)];
+        let mut buf = Vec::with_capacity(1 + body.len());
+        buf.push(1u8);
+        buf.extend_from_slice(body);
         unsafe {
-            let _ = libc::write(fd, &one as *const u8 as *const libc::c_void, 1);
+            let _ = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
             libc::close(fd);
         }
     }
@@ -390,7 +401,7 @@ fn daemon_notify_fail(pipe_write: Option<RawFd>, msg: &str) {
 }
 
 #[cfg(not(unix))]
-fn daemon_notify_ready(_pipe_write: ()) {}
+fn daemon_notify_ready(_pipe_write: (), _msg: &str) {}
 
 #[cfg(not(unix))]
 fn daemon_notify_fail(_pipe_write: (), _msg: &str) {}
@@ -669,8 +680,17 @@ fn main() -> anyhow::Result<()> {
             }
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
-            // daemon 模式：通知父进程启动成功（前台模式 pipe 为 None，no-op）。
-            daemon_notify_ready(daemon_pipe);
+            // daemon 模式：通知父进程启动成功，并附带监听地址/PID 由父进程打印到终端
+            // （前台模式 pipe 为 None，no-op，启动提示走下面的 dev/prod 分支）。
+            daemon_notify_ready(
+                daemon_pipe,
+                &format!(
+                    "OmniTerm v{} 后台已启动 — http://{} (PID: {})",
+                    env!("CARGO_PKG_VERSION"),
+                    bind,
+                    std::process::id()
+                ),
+            );
 
             // Warning uses the *effective* listen host (BIND_ADDR overrides --host).
             let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);

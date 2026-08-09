@@ -193,7 +193,7 @@ start options:
       --jwt-secret <KEY>  JWT 签名密钥 [env: JWT_SECRET]（缺省时自动生成随机密钥并持久化到 ~/.omniterm/jwt_secret）
       --auth-enabled     强制密码验证开关 [env: OMNITERM_AUTH_ENABLED]（接受 1/0/true/false；未指定时用 DB 值）
       --reset-auth        启动前清空所有用户 [env: OMNITERM_RESET_AUTH]
-  -d, --daemonize         后台运行（Unix only；Windows 报错退出），日志追加写入 ~/.omniterm/<binary>.log；父进程会阻塞等待 daemon 完成端口绑定后才返回——启动失败（端口被占/DB 连不上等）时把错误原文打印到终端并以非零退出，不会静默"成功"
+  -d, --daemonize         后台运行（Unix only；Windows 报错退出），日志追加写入 ~/.omniterm/<binary>.log；父进程会阻塞等待 daemon 完成端口绑定后才返回——成功时打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」，失败（端口被占/DB 连不上等）时把错误原文打印到终端并以非零退出，不会静默"成功"
       --debug             强制开启 omniterm 调试日志（等价 RUST_LOG=omniterm=debug，优先级高于 RUST_LOG 中 omniterm 的级别设置）
 
 stop / status / reset-auth options:
