@@ -98,6 +98,46 @@ describe('appStore.activateSession', () => {
     expect(mem['ws-1']).toBe('sess-old')
     expect(mem['ws-2']).toBe('sess-2')
   })
+
+  it('activates the owning project + worktree of a loaded session', () => {
+    useAppStore.setState({
+      activeProjectId: 'proj-other',
+      activeWorkspaceId: 'wt-other',
+      sessions: {
+        'project-1': [
+          { id: 'sess-1', workspace_path: '/repo/wt-1' },
+        ] as never,
+      },
+      worktrees: {
+        'project-1': [
+          { id: 'wt-1', path: '/repo/wt-1' },
+          { id: 'wt-2', path: '/repo/wt-2' },
+        ] as never,
+      },
+    })
+    useAppStore.getState().activateSession('sess-1')
+    const s = useAppStore.getState()
+    expect(s.activeProjectId).toBe('project-1')
+    expect(s.activeWorkspaceId).toBe('wt-1')
+    // Memory keys to the resolved worktree, not the stale current one.
+    expect(s.workspaceSessionMemory['wt-1']).toBe('sess-1')
+    expect(s.workspaceSessionMemory['wt-other']).toBeUndefined()
+    expect(localStorage.getItem('omniterm_active_project')).toBe('project-1')
+    expect(localStorage.getItem('omniterm_active_workspace')).toBe('wt-1')
+  })
+
+  it('keeps current workspace when session owner cannot be resolved', () => {
+    useAppStore.setState({
+      activeProjectId: 'proj-x',
+      activeWorkspaceId: 'wt-x',
+      sessions: {}, // owning project's sessions not loaded
+    })
+    useAppStore.getState().activateSession('sess-ghost')
+    const s = useAppStore.getState()
+    expect(s.activeSessionId).toBe('sess-ghost')
+    expect(s.activeProjectId).toBe('proj-x')
+    expect(s.activeWorkspaceId).toBe('wt-x')
+  })
 })
 
 describe('appStore disconnect timeout settings', () => {
