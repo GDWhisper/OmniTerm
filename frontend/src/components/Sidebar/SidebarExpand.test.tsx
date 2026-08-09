@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
@@ -161,7 +162,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
 
     // 手动折叠
     const header = container.querySelector('.sidebar-project-header') as HTMLElement
-    header.click()
+    act(() => { header.click() })
     await vi.waitFor(() => {
       expect(container.querySelector('.sidebar-wt-row')).toBeFalsy()
     })
@@ -172,7 +173,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
 
     // 再次点击 header 重新展开
     const header2 = container.querySelector('.sidebar-project-header') as HTMLElement
-    header2.click()
+    act(() => { header2.click() })
     await vi.waitFor(() => {
       expect(container.querySelector('.sidebar-wt-row')).toBeTruthy()
     })
@@ -194,7 +195,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
       'Session expansion: focused worktree only (click to expand all)'
     )
 
-    toggleBtn.click()
+    act(() => { toggleBtn.click() })
     await vi.waitFor(() => {
       expect(useAppStore.getState().expandAllSessions).toBe(true)
     })
@@ -225,7 +226,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
     expect(container.querySelector('.sidebar-wt-row')).toBeFalsy()
 
     const header = container.querySelector('.sidebar-project-header') as HTMLElement
-    header.click()
+    act(() => { header.click() })
     await vi.waitFor(() => {
       expect(container.querySelector('.sidebar-wt-row')).toBeTruthy()
     })
@@ -242,7 +243,7 @@ describe('Sidebar 会话展开模式（expandAllSessions）', () => {
     expect(toggleBtn).toBeTruthy()
     expect(toggleBtn.getAttribute('title')).toBe('会话展开：仅聚焦的 worktree（点击切换为全部展开）')
 
-    toggleBtn.click()
+    act(() => { toggleBtn.click() })
     await vi.waitFor(() => {
       const btn = container.querySelector('button[title*="会话展开"]') as HTMLElement
       expect(btn.getAttribute('title')).toBe('会话展开：所有含会话的 worktree（点击切换为仅聚焦）')
