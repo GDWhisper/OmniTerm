@@ -1,4 +1,5 @@
 mod acp;
+mod agent;
 mod api;
 mod auth;
 mod embedded;

@@ -19,9 +19,10 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-use crate::engine::tmux::agent_detect::{self, Debounce};
-use crate::engine::tmux::agent_state::{AgentKind, AgentState};
-use crate::engine::tmux::process_info;
+use crate::agent::detect as agent_detect;
+use crate::agent::detect::Debounce;
+use crate::agent::process as process_info;
+use crate::agent::state::{AgentKind, AgentState};
 
 /// 轮询间隔。herdr 用 300ms（进程内读屏）；OmniTerm 走 tmux 子进程，1s 够用
 /// （前端消费端本身是 3s 轮询）。

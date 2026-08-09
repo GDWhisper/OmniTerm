@@ -15,9 +15,9 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::acp::AcpClient;
 use crate::acp::config_prefs;
+use crate::agent::state::AgentSnapshot;
 use crate::api::agents::load_agent;
 use crate::engine::tmux;
-use crate::engine::tmux::agent_state::AgentSnapshot;
 use crate::models::session::{
     AdoptSession, CreateSession, ExternalSessionResponse, RuntimeKind, Session, UpdateSession,
 };
@@ -54,13 +54,14 @@ async fn list_sessions(
         .into_iter()
         .filter_map(|info| {
             let kind =
-                tmux::agent_state::AgentKind::from_str(info.agent_kind.as_deref().unwrap_or(""))?;
-            let state =
-                tmux::agent_state::AgentState::from_str(info.agent_state.as_deref().unwrap_or(""))?;
+                crate::agent::state::AgentKind::from_str(info.agent_kind.as_deref().unwrap_or(""))?;
+            let state = crate::agent::state::AgentState::from_str(
+                info.agent_state.as_deref().unwrap_or(""),
+            )?;
             let reason = info
                 .attention_reason
                 .as_deref()
-                .and_then(tmux::agent_state::AttentionReason::from_str);
+                .and_then(crate::agent::state::AttentionReason::from_str);
             Some((
                 info.name,
                 AgentSnapshot {

@@ -1,7 +1,7 @@
 //! Agent 屏幕状态检测引擎（herdr manifest 体系的精简移植）。
 //!
 //! 每个 agent 一份 TOML 规则文件（`manifests/*.toml`，编译进二进制），对
-//! `tmux capture-pane` 的可见屏文本 + `#{pane_title}`（OSC 标题）做声明式
+//! 对 capture-pane 可见屏文本 + `#{pane_title}`（OSC 标题）做声明式
 //! 匹配，输出 [`AgentState`]。规则按 `priority` 降序取首个命中；无命中回退
 //! Idle（blocked 检测刻意保守：宁漏报不误报，与 herdr 一致）。
 //!
@@ -25,7 +25,7 @@ use regex::Regex;
 use serde::Deserialize;
 use tracing::warn;
 
-use crate::engine::tmux::agent_state::{AgentKind, AgentState};
+use crate::agent::state::{AgentKind, AgentState};
 
 const CLAUDE_MANIFEST: &str = include_str!("manifests/claude.toml");
 const CODEX_MANIFEST: &str = include_str!("manifests/codex.toml");

@@ -1,5 +1,5 @@
-use crate::engine::tmux::agent_hooks;
-use crate::engine::tmux::agent_state::AgentKind;
+use crate::agent::cli;
+use crate::agent::state::AgentKind;
 
 #[cfg(unix)]
 mod platform {
@@ -102,8 +102,7 @@ mod platform {
 ///
 /// Returns `None` if the process doesn't exist, can't be read, or doesn't match.
 pub fn read_process_cmdline(pid: u32) -> Option<AgentKind> {
-    platform::read_cmdline_impl(pid)
-        .and_then(|cmdline| agent_hooks::detect_agent_kind(cmdline.trim()))
+    platform::read_cmdline_impl(pid).and_then(|cmdline| cli::detect_agent_kind(cmdline.trim()))
 }
 
 /// 取 pane 主进程的前台进程组 ID（Unix tpgid）。Windows 返回 `None`。
@@ -147,24 +146,21 @@ mod tests {
 
     #[test]
     fn test_read_process_cmdline_matches_claude() {
+        assert_eq!(cli::detect_agent_kind("/usr/local/bin/claude"), Some(AgentKind::Claude));
         assert_eq!(
-            agent_hooks::detect_agent_kind("/usr/local/bin/claude"),
+            cli::detect_agent_kind("claude --dangerously-skip-permissions"),
             Some(AgentKind::Claude)
         );
-        assert_eq!(
-            agent_hooks::detect_agent_kind("claude --dangerously-skip-permissions"),
-            Some(AgentKind::Claude)
-        );
-        assert_eq!(agent_hooks::detect_agent_kind("codex"), Some(AgentKind::Codex));
+        assert_eq!(cli::detect_agent_kind("codex"), Some(AgentKind::Codex));
     }
 
     #[test]
     fn test_read_process_cmdline_sleep_not_agent() {
-        assert_eq!(agent_hooks::detect_agent_kind("sleep 30"), None);
-        assert_eq!(agent_hooks::detect_agent_kind("bash"), None);
-        assert_eq!(agent_hooks::detect_agent_kind("zsh"), None);
-        assert_eq!(agent_hooks::detect_agent_kind("vim"), None);
-        assert_eq!(agent_hooks::detect_agent_kind("ls -la"), None);
+        assert_eq!(cli::detect_agent_kind("sleep 30"), None);
+        assert_eq!(cli::detect_agent_kind("bash"), None);
+        assert_eq!(cli::detect_agent_kind("zsh"), None);
+        assert_eq!(cli::detect_agent_kind("vim"), None);
+        assert_eq!(cli::detect_agent_kind("ls -la"), None);
     }
 
     #[cfg(unix)]
@@ -172,6 +168,6 @@ mod tests {
     fn test_read_process_cmdline_handles_null_bytes() {
         let simulated_cmdline = "claude\0--dangerously-skip-permissions\0";
         let cmdline = simulated_cmdline.replace('\0', " ");
-        assert_eq!(agent_hooks::detect_agent_kind(cmdline.trim()), Some(AgentKind::Claude));
+        assert_eq!(cli::detect_agent_kind(cmdline.trim()), Some(AgentKind::Claude));
     }
 }
