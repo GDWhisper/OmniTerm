@@ -138,6 +138,33 @@ describe('appStore.activateSession', () => {
     expect(s.activeProjectId).toBe('proj-x')
     expect(s.activeWorkspaceId).toBe('wt-x')
   })
+
+  it('activates the worktree in ANOTHER project when the session path maps there', () => {
+    // Session is registered under proj-A but its workspace_path belongs to
+    // proj-B's worktree (cross-project orphan session). Focusing it should
+    // highlight proj-B's worktree, not leave the old workspace highlighted.
+    useAppStore.setState({
+      activeProjectId: 'proj-A',
+      activeWorkspaceId: 'wt-A-main',
+      sessions: {
+        'proj-A': [
+          { id: 'sess-cross', workspace_path: '/repo/proj-B' },
+        ] as never,
+      },
+      worktrees: {
+        'proj-A': [{ id: 'wt-A-main', path: '/repo/proj-A' }] as never,
+        'proj-B': [{ id: 'wt-B-1', path: '/repo/proj-B' }] as never,
+      },
+    })
+    useAppStore.getState().activateSession('sess-cross')
+    const s = useAppStore.getState()
+    expect(s.activeProjectId).toBe('proj-B')
+    expect(s.activeWorkspaceId).toBe('wt-B-1')
+    expect(s.workspaceSessionMemory['wt-B-1']).toBe('sess-cross')
+    expect(s.workspaceSessionMemory['wt-A-main']).toBeUndefined()
+    expect(localStorage.getItem('omniterm_active_project')).toBe('proj-B')
+    expect(localStorage.getItem('omniterm_active_workspace')).toBe('wt-B-1')
+  })
 })
 
 describe('appStore disconnect timeout settings', () => {

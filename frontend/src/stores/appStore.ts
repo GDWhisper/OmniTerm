@@ -417,24 +417,40 @@ export const useAppStore = create<AppState>((set, get) => ({
    *
    * Resolves the session's owning project/worktree from `workspace_path` and
    * activates them together, so the sidebar worktree highlight follows the
-   * focused session. When the owner can't be resolved (orphan / adopted
-   * external session, or the owning project's sessions aren't loaded yet)
-   * the active project/workspace are left untouched; session memory falls
-   * back to the currently active workspace (legacy contract).
+   * focused session. Worktree resolution spans all projects — a session may
+   * be registered under one project while its `workspace_path` maps to a
+   * worktree of another (it renders as an orphan under the registered
+   * project's main worktree, but the focused worktree should be the one its
+   * path actually belongs to). When the owner can't be resolved (genuine
+   * orphan / adopted external session with no matching worktree anywhere,
+   * or sessions aren't loaded yet) the active project/workspace are left
+   * untouched; session memory falls back to the currently active workspace
+   * (legacy contract).
    */
   activateSession: (sessionId) => {
     const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory } = get()
     localStorage.setItem('omniterm_active_session', sessionId)
 
-    // Resolve the owning project + worktree from loaded session data.
+    // Resolve the owning project + worktree from loaded session data. The
+    // worktree lookup spans ALL projects (not just the session's registered
+    // project) because a session can carry a `workspace_path` that belongs to
+    // another project's worktree — such sessions render as orphans under the
+    // registered project's main worktree, but focusing them should highlight
+    // the worktree their path actually maps to.
     let ownerProjectId: string | null = null
     let ownerWorkspaceId: string | null = null
     for (const [pid, sessList] of Object.entries(sessions)) {
       const s = sessList.find((x) => x.id === sessionId)
       if (s) {
         ownerProjectId = pid
-        const wt = (worktrees[pid] || []).find((w) => w.path === s.workspace_path)
-        if (wt) ownerWorkspaceId = wt.id
+        for (const [wpid, wtList] of Object.entries(worktrees)) {
+          const wt = (wtList || []).find((w) => w.path === s.workspace_path)
+          if (wt) {
+            ownerProjectId = wpid
+            ownerWorkspaceId = wt.id
+            break
+          }
+        }
         break
       }
     }

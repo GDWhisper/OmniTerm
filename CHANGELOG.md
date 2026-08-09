@@ -60,7 +60,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-08-09 18:06) `[frontend]` 修复激活会话未同步激活所属 worktree：点击/新建/键盘切换会话时，sidebar 的 worktree 高亮底色不跟随（展开模式下可点非聚焦 worktree 的会话而该行不亮）。`activateSession` 现从会话 `workspace_path` 反查所属 project + worktree 并原子激活，会话记忆归位到所属 worktree；孤儿/外部会话（无法归属 worktree）保持原行为（`frontend/src/stores/appStore.ts`）
+- (2026-08-09 18:45) `[frontend]` 修复激活会话未同步激活所属 worktree：点击/新建/键盘切换会话时，sidebar 的 worktree 高亮底色不跟随（展开模式下可点非聚焦 worktree 的会话而该行不亮）。`activateSession` 现从会话 `workspace_path` 跨所有项目反查所属 project + worktree 并原子激活——会话可能登记在 A 项目但其路径属于 B 项目的 worktree（渲染为孤儿显示在主 worktree 下），此时激活路径实际归属的 B 项目 worktree；会话记忆归位到所属 worktree；无任何 worktree 匹配的孤儿/外部会话保持原行为（`frontend/src/stores/appStore.ts`）
 - (2026-08-09 15:20) `[backend]` `start -d` 启动成功不再静默：daemon 握手扩展为携带启动结果消息，父进程打印「OmniTerm vX.Y.Z 后台已启动 — http://host:port (PID)」并返回 0；配合上一项，后台启动无论成败终端都有明确反馈（`src/main.rs`）
 
 - (2026-08-09 14:10) `[backend]` 修复 `start -d` 后台模式启动失败静默无反馈并残留 stale PID 文件：daemonize 增加启动握手（pipe 就绪/失败通知），父进程阻塞等待 daemon 完成端口绑定后才返回，失败时把错误原文打印到终端并以非零退出——此前 daemon 的 stdout/stderr 已重定向到日志，端口被占/DB 连不上等失败对用户完全无感知且命令返回 0（`src/main.rs`）；PID 文件写入移到 bind 成功之后，启动失败不再留下 stale PID、也不会覆盖已在运行实例的 PID 文件
