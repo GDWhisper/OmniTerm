@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-09 16:12) `[frontend]` sidebar 新增「会话展开模式」切换按钮（Projects 标题栏、新建项目按钮旁）：模式 1 自动展开所有含会话的项目及其下所有含会话的 worktree，模式 2（默认）仅展开聚焦中的 worktree；折叠优先——模式 1 下手动折叠的项目不再自动弹回；偏好经 localStorage（`omniterm_expand_all_sessions`）持久化（`frontend/src/components/Sidebar/Sidebar.tsx`、`ProjectCard.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/worktreeSessions.ts`）
 - (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
 
 ### Changed

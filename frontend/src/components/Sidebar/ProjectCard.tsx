@@ -3,6 +3,7 @@ import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
+import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
@@ -11,31 +12,10 @@ import type { RenameTarget } from './RenameDialog'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { DeleteWorktreeTarget } from './DeleteWorktreeDialog'
 
-// Filter sessions for a specific worktree.
-// "Orphan" sessions (whose workspace_path doesn't match any worktree)
-// are shown under the main worktree (or first worktree) so that
-// adopted external sessions remain visible even when their CWD
-// doesn't correspond to a known worktree path.
-function sessionsForWorktree(allSessions: Session[], worktreeList: Workspace[], wtPath: string): Session[] {
-  // Sessions that exactly match this worktree
-  const exactMatches = allSessions.filter(s => s.workspace_path === wtPath)
-
-  // For the primary worktree, also include sessions that don't match
-  // any worktree (e.g. adopted external sessions whose tmux CWD is
-  // outside the project's worktree paths).
-  const primaryWt = worktreeList.find(w => w.is_main) || worktreeList[0]
-  if (primaryWt && wtPath === primaryWt.path) {
-    const matchedPaths = new Set(worktreeList.map(w => w.path))
-    const orphans = allSessions.filter(s => !matchedPaths.has(s.workspace_path))
-    return [...exactMatches, ...orphans]
-  }
-
-  return exactMatches
-}
-
 export function ProjectCard(props: {
   project: Project
   isExpanded: boolean
+  expandAllSessions: boolean
   worktrees: Workspace[] | undefined    // undefined = 尚未加载（显示 loading 占位）
   sessions: Session[]                   // 该项目全部会话
   activeWorkspaceId: string | null
@@ -179,7 +159,7 @@ export function ProjectCard(props: {
               const isWtActive = props.activeWorkspaceId === wt.id
               const wtSessions = sessionsForWorktree(props.sessions, props.worktrees || [], wt.path)
               const wtAgg = aggregateStatus(wtSessions, attention.reasonFor, props.acpActivityFor)
-              const isWtExpanded = isWtActive
+              const isWtExpanded = isWtActive || (props.expandAllSessions && wtSessions.length > 0)
 
               return (
                 <div key={wt.id} className={`sidebar-wt-slot ${isWtActive ? 'active' : ''}`}>

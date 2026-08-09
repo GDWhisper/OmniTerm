@@ -191,3 +191,34 @@ describe('appStore disconnect timeout initial values', () => {
     expect(s.idleDisconnectMin).toBe(40)
   })
 })
+
+describe('appStore expandAllSessions', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('defaults to false when localStorage has no record', async () => {
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().expandAllSessions).toBe(false)
+  })
+
+  it('initializes to true when localStorage holds a true record', async () => {
+    localStorage.setItem('omniterm_expand_all_sessions', 'true')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().expandAllSessions).toBe(true)
+  })
+
+  it('setExpandAllSessions updates state and persists to localStorage', () => {
+    useAppStore.getState().setExpandAllSessions(true)
+    expect(useAppStore.getState().expandAllSessions).toBe(true)
+    expect(localStorage.getItem('omniterm_expand_all_sessions')).toBe('true')
+    useAppStore.getState().setExpandAllSessions(false)
+    expect(useAppStore.getState().expandAllSessions).toBe(false)
+    expect(localStorage.getItem('omniterm_expand_all_sessions')).toBe('false')
+  })
+})

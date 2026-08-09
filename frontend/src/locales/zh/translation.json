@@ -68,6 +68,8 @@
   "sidebar.gitInitConfirm": "初始化并继续",
   "sidebar.loading": "加载中...",
   "sidebar.noSessions": "暂无会话",
+  "sidebar.expandAllSessions.off": "会话展开：仅聚焦的 worktree（点击切换为全部展开）",
+  "sidebar.expandAllSessions.on": "会话展开：所有含会话的 worktree（点击切换为仅聚焦）",
   "settings.title": "设置",
   "settings.on": "开",
   "settings.off": "关",

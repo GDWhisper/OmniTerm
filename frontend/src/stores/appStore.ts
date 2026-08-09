@@ -146,6 +146,8 @@ export interface AppState {
   expandThinking: boolean
   /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
   expandToolCalls: boolean
+  /** Expand all session-hosting worktrees in the sidebar (ON = all expanded, OFF = focused worktree only). */
+  expandAllSessions: boolean
 
   // Actions
   toggleSidebar: () => void
@@ -201,6 +203,7 @@ export interface AppState {
   setParchmentTextureEnabled: (v: boolean) => void
   setExpandThinking: (v: boolean) => void
   setExpandToolCalls: (v: boolean) => void
+  setExpandAllSessions: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
 
   // Workspace switching (batched update, replaces 3-4 separate set* calls)
@@ -290,6 +293,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
   expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
+  expandAllSessions: localStorage.getItem('omniterm_expand_all_sessions') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
   // Default off: first-run users get the uniform reader font (BETA opt-in).
   pixelFontEnabled: localStorage.getItem('omniterm_pixel_font') === 'true',
@@ -365,6 +369,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setExpandToolCalls: (v) => {
     localStorage.setItem('omniterm_expand_tool_calls', String(v))
     set({ expandToolCalls: v })
+  },
+
+  setExpandAllSessions: (v) => {
+    localStorage.setItem('omniterm_expand_all_sessions', String(v))
+    set({ expandAllSessions: v })
   },
 
   setTerminalSendData: (fn) => set({ terminalSendData: fn }),
