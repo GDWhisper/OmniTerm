@@ -16,10 +16,10 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 1. **严格遵守AGENTS.md所有条例**
 2. **每次改动后提交**：功能的开发/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
 3. **CHANGELOG 只写实质性的功能改动，排除开发文档改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
-4. **CodeGraph 用于定位，不用于精读** — 先 `codegraph sync` 确认索引最新，再按阶段选工具：
-   - **不知道代码在哪**（冷启动）→ `codegraph_explore`，**上限 1-2 次**，建议传 `maxFiles=3~4` 压量。它给出符号链与文件清单，这是 Grep 试错换不来的
-   - **已知符号名/文件路径** → 一律 `rg -n '<符号>'` + `read(offset/limit)` 定点取证。**禁止对同一批文件重复 explore**（工具不跨调用去重，同一文件会被整份重贴）
-   - **要 callers / 影响面 / 测试覆盖** → `codegraph_callers` / `codegraph_impact` / `codegraph_node`，取结构化结论，不要靠 explore 倾倒源码去人工推断
+4. **冷启动优先 CodeGraph，定位后转定点取证** — 先 `codegraph sync` 确认索引最新：
+   - **不知道代码在哪时，必须先 `codegraph_explore`** — 它给出符号链与文件清单，这是 Grep 多轮试错换不来的。调多少次、何时够了，自己判断
+   - **已拿到符号名/文件路径后，改用 `rg -n '<符号>'` + `read(offset/limit)` 定点取证** — explore 每次贴整份文件且不跨调用去重，同一文件重复 explore 是纯浪费（需收窄召回时可传 `maxFiles`）
+   - **要 callers / 影响面 / 测试覆盖** → `codegraph_callers` / `codegraph_impact` / `codegraph_node`，取结构化结论，不靠 explore 倾倒源码去人工推断
    - **主战场单文件**（改动集中处）→ 完整 `read` 一遍。约束常藏在注释里（如 memo 引用稳定性契约），Grep 搜不到「你不知道要搜什么」的东西
    - 配置文件、文档、非索引文件 → 直接 Read/Grep
 
