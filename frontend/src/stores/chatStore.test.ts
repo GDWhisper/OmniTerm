@@ -177,6 +177,65 @@ describe('chatStore — queued follow-up actions', () => {
     })
   })
 
+  describe('history pagination (上拉加载更早历史)', () => {
+    const mk = (id: string): ChatMessage => ({
+      id,
+      role: 'assistant',
+      text: id,
+      blocks: [{ type: 'text', text: id }],
+      createdAt: 0,
+    })
+
+    it('hydrate records the cursor for the first page', () => {
+      useChatStore.getState().hydrate('s1', [mk('m9')], 'ts|m9')
+      expect(useChatStore.getState().states['s1'].historyCursor).toBe('ts|m9')
+    })
+
+    it('prepends older messages before existing ones and advances the cursor', () => {
+      useChatStore.getState().hydrate('s1', [mk('m3')], 'ts|m3')
+      useChatStore.getState().beginLoadHistory('s1')
+      expect(useChatStore.getState().states['s1'].loadingHistory).toBe(true)
+
+      useChatStore.getState().prependMessages('s1', [mk('m1'), mk('m2')], 'ts|m1')
+      const st = useChatStore.getState().states['s1']
+      expect(st.messages.map((m) => m.id)).toEqual(['m1', 'm2', 'm3'])
+      expect(st.historyCursor).toBe('ts|m1')
+      expect(st.loadingHistory).toBe(false)
+    })
+
+    it('drops ids already present (live frames / overlapping page)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2'), mk('m3')], 'ts|m2')
+      useChatStore.getState().prependMessages('s1', [mk('m1'), mk('m2')], null)
+      expect(useChatStore.getState().states['s1'].messages.map((m) => m.id)).toEqual([
+        'm1',
+        'm2',
+        'm3',
+      ])
+    })
+
+    it('null cursor marks the start of history (stops further loading)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().prependMessages('s1', [mk('m1')], null)
+      expect(useChatStore.getState().states['s1'].historyCursor).toBeNull()
+    })
+
+    it('empty page still clears the in-flight flag so 上拉 does not deadlock', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().beginLoadHistory('s1')
+      useChatStore.getState().prependMessages('s1', [], 'ts|m2')
+      const st = useChatStore.getState().states['s1']
+      expect(st.loadingHistory).toBe(false)
+      expect(st.historyCursor).toBe('ts|m2')
+      expect(st.messages.map((m) => m.id)).toEqual(['m2'])
+    })
+
+    it('commitReplay clears the cursor (replay is the full history)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().commitReplay('s1', [{ kind: 'appendText', text: 'replayed' }])
+      expect(useChatStore.getState().states['s1'].historyCursor).toBeNull()
+    })
+  })
+
   describe('sessionStorage helper', () => {
     it('readQueuedFromStorageForSession returns the cached value', () => {
       sessionStorage.setItem(`${QUEUE_PREFIX}s1`, 'cached')

@@ -16,7 +16,7 @@ src/
 │   ├── permission.rs     # PermissionManager: user-prompted approval via WS banner; no timeout auto-response
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
 │   ├── turn_accumulator.rs # TurnAccumulator: folds in-progress turn's raw session_update frames → one streaming chat_messages row (debounced writer)
-│   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages / sync_messages (non-destructive dedup)
+│   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages_page (cursor + byte-budget pagination) / sync_messages (non-destructive dedup)
 │   └── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
@@ -125,6 +125,16 @@ Lifecycle:
 - **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
 - **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / crash watcher→`finalize_turn`。cancel **不立即** finalize：合作的 agent 收到 `session/cancel` 后会让 `send_prompt` 以 `Cancelled` 返回、走正常定稿路径（取消后补发的尾部帧照常落库）；无视 cancel 的实现（§8）由 `spawn_cancel_turn_fallback` 兜底——超时（`CANCEL_TURN_FALLBACK_SECS`）后若同一 turn 仍在进行（prompt 世代计数守卫）则强制 `mark_prompt_idle` + 广播 turn 结束。
 - **启动自愈**：`main.rs` migrate 后 `UPDATE chat_messages SET status='complete' WHERE status='streaming'`（重启后不可能有进行中 turn）。
+
+#### 历史分页：`GET /sessions/{id}/messages`
+
+参数 `?before=<cursor>&limit=<n>`，响应 `{ messages, hasMore, nextCursor }`，messages 永远**旧→新**排序（前端可直接前插）。
+
+- **双预算切页**（与 turn 窗口同一哲学）：`MESSAGES_PAGE_DEFAULT_LIMIT=100` 条 / `MESSAGES_PAGE_MAX_LIMIT=500` 硬顶 / `MESSAGES_PAGE_MAX_BYTES=2MiB`。字节预算从最新端累加，**总至少返回一条**——否则单条超预算的存量巨行会让客户端无限翻页却永远渲染不出。
+- **预算在 Rust 层而非 SQL 层**施加：本地 SQLite 读取比序列化+传输便宜一个数量级（实测 11MB 会话：读 50ms vs 序列化+传输 450ms+），限住「出进程的量」才是杠杆。
+- **游标是复合的** `(created_at, id)`，编码为不透明字符串 `<created_at>|<id>`：`created_at` 单键**不是全序**（实测真实数据中 4 条消息同为 `06:17:57`），仅用它会在同秒边界上重取或漏取。
+- **坐标不合法返回 400** 而非静默回退到首页：静默回退会让分页客户端反复拿到同一页而死循环。
+- **与 `sync_messages` 兼容**：后者按 `(session, role, text)` 去重且从不 DELETE，所以前端 store 里只有部分历史时写回不会删掉未加载的更早行。
 
 ### 配置偏好持久化（两层记忆）
 

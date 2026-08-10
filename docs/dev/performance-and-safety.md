@@ -113,6 +113,6 @@ token、密码、密钥、API key：
 | 红线 | 案例 | 详情 |
 |---|---|---|
 | P1/P2/P3/P4/P5 | 2026-08-04 长 ACP 任务 O(n²) 帧累积 | 单条 blocks 100MB、进程 RES 4.5GB、tokio worker 99%、DB 262MB、远程浏览器顿卡。根因：`turn_accumulator` 无界累积原始帧 + 每次防抖全量重序列化覆盖写库。修复：`MAX_FRAMES=2000` 有界窗口 + 单测。完整诊断见 `docs/dev/debug-patterns/resource-lifecycle.md` 模式 8（无界累积有界化） |
-| P1/P4/P5 | 2026-08-10 上限维度选错（案例 2） | 帧数上限守住了，体积照样爆：codebuddy 每个 `tool_call_update` 只带 1 字符增量却重复携带完整 `rawInput`（4.5KB/帧）→ 2000 帧窗口 = 8.7MB 单行，`GET /messages` 下发 15MB，切 ACP 会话阻塞 ~0.5s。修复：补 `MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES` 字节维度上限 + 四个不变式单测 |
+| P1/P4/P5 | 2026-08-10 上限维度选错（案例 2） | 帧数上限守住了，体积照样爆：codebuddy 每个 `tool_call_update` 只带 1 字符增量却重复携带完整 `rawInput`（4.5KB/帧）→ 2000 帧窗口 = 8.7MB 单行，`GET /messages` 下发 15MB，切 ACP 会话阻塞 ~0.5s。修复：补 `MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES` 字节维度上限 + 四个不变式单测；出口侧（P5）另给 `GET /messages` 加游标分页 + 每页字节预算，使响应量不随会话长度增长 |
 | P6 | 本地永远测不出 | 上述问题在 30 分钟长任务的第 25 分钟才爆发，短对话完全正常 |
 | S4/S5 | 2026-07-27 鉴权未接入（已修复） | 后端曾实现 JWT 但从未挂载到路由，匿名可访问全部 API；现已完整接入（中间件 + 登录 UI + 限流）。历史教训见 `docs/reference/auth-not-enforced.md` |

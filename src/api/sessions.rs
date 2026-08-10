@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, patch, post},
@@ -494,10 +494,64 @@ async fn get_session_cwd(
     (StatusCode::OK, Json(json!({ "cwd": crate::fs::display_path_str(&cwd) })))
 }
 
-async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    match crate::acp::chat_persistence::list_messages(&state.db, &id).await {
-        Ok(rows) => {
-            let messages: Vec<serde_json::Value> = rows
+/// Default page size for `GET /messages`. Sized so an ordinary session loads in one
+/// request (no visible paging) while a session that ran for weeks cannot make the first
+/// paint wait on its whole history.
+const MESSAGES_PAGE_DEFAULT_LIMIT: usize = 100;
+
+/// Hard ceiling for a client-supplied `limit` — the client picks its page size, it does
+/// not get to ask for an unbounded response (performance-and-safety.md §P4).
+const MESSAGES_PAGE_MAX_LIMIT: usize = 500;
+
+/// Payload budget per page. Row count alone does not bound the response: a single
+/// `blocks` column can be megabytes (see `turn_accumulator`), so bytes are the axis that
+/// keeps first paint fast. Applied newest-first, always yielding at least one row.
+const MESSAGES_PAGE_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[derive(serde::Deserialize)]
+struct ListMessagesQuery {
+    /// Opaque cursor from a previous response's `nextCursor`; absent = newest page.
+    before: Option<String>,
+    /// Page size, clamped to [`MESSAGES_PAGE_MAX_LIMIT`].
+    limit: Option<usize>,
+}
+
+/// Newest page of a session's chat history, or the page before `?before=<cursor>`.
+/// Messages are oldest-first; `nextCursor` is non-null when older messages remain
+/// (the frontend requests them when the user scrolls to the top).
+async fn list_messages(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<ListMessagesQuery>,
+) -> impl IntoResponse {
+    let before = match q.before.as_deref() {
+        Some(raw) => match crate::acp::chat_persistence::MessageCursor::parse(raw) {
+            Some(c) => Some(c),
+            // Reject rather than silently serving the newest page: a client that keeps
+            // getting page 1 back would paginate forever.
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": "malformed before cursor" })),
+                );
+            }
+        },
+        None => None,
+    };
+    let limit = q.limit.unwrap_or(MESSAGES_PAGE_DEFAULT_LIMIT).min(MESSAGES_PAGE_MAX_LIMIT);
+
+    match crate::acp::chat_persistence::list_messages_page(
+        &state.db,
+        &id,
+        before.as_ref(),
+        limit,
+        MESSAGES_PAGE_MAX_BYTES,
+    )
+    .await
+    {
+        Ok(page) => {
+            let messages: Vec<serde_json::Value> = page
+                .rows
                 .into_iter()
                 .map(|(role, text, created_at, msg_id, blocks, status, last_seq)| {
                     json!({
@@ -511,14 +565,22 @@ async fn list_messages(State(state): State<AppState>, Path(id): Path<String>) ->
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(json!({ "messages": messages })))
+            let next_cursor = page.next_cursor.map(|c| c.encode());
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "messages": messages,
+                    "hasMore": next_cursor.is_some(),
+                    "nextCursor": next_cursor,
+                })),
+            )
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }
 }
 
 /// 恢复会话重放完成后，前端把重建出的完整消息（含结构化 blocks）写回 DB。
-/// 后端按内容去重、不删除已有记录，使刷新浏览器后仍可从 `list_messages` 还原
+/// 后端按内容去重、不删除已有记录，使刷新浏览器后仍可从 `list_messages_page` 还原
 /// 完整历史（含工具卡片 / 思考 / 计划），且保留实时 prompt 已落库的 user 消息。
 async fn sync_messages(
     State(state): State<AppState>,
