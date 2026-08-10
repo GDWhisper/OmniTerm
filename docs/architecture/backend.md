@@ -70,7 +70,7 @@ POST /api/v1/projects
 DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
 GET  /api/v1/projects/{pid}/worktrees (git worktree discovery)
 POST /api/v1/projects/{pid}/worktrees    # 非 git 仓库返回 400 {error, code:"not_a_git_repo", has_gitignore:bool}；请求体 init:true 时自动 git init + 初始提交
-DELETE /api/v1/projects/{pid}/worktrees
+DELETE /api/v1/projects/{pid}/worktrees    # ?path=<worktree 绝对路径>[&delete_branch=true]；默认只 `git worktree remove --force`（**分支 ref 会保留**，仍出现在 /branches 与基准分支下拉）；`delete_branch=true` 时先从 `git worktree list` 反查该 path 对应分支（不信任前端传值）再 `git branch -D`，响应 `{ok:true, branch_deleted?:string, branch_error?:string}`——worktree 已移除后分支删除失败不降级为整体错误，而是用 `branch_error` 并存上报
 POST /api/v1/projects/{pid}/git-init    # git init + 初始提交（前端确认「非 git 仓库」后调用）
 GET  /api/v1/projects/{pid}/branches
 GET  /api/v1/projects/{pid}/sessions

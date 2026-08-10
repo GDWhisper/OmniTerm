@@ -165,6 +165,19 @@ curl -X DELETE http://localhost:9777/api/v1/workspaces/{id}
 - [ ] 修复后在新项目路径下新建会话，终端 cwd 为新的项目目录（不再静默回退到 HOME）
 - [ ] 点击失效项目下 worktree 的既有修复流程（`handleWorkspaceClick`）不回归
 
+### 3.5 删除 Worktree 时的分支处理（2026-08-10）
+
+`git worktree remove` 不删分支 ref，所以删除确认框提供 opt-in 的「同时删除分支」。
+
+1. 在某项目下创建 worktree（分支名 `wt-test`）
+2. 点该 worktree 行的删除按钮
+
+**验证点：**
+- [ ] 确认框里「同时删除分支「wt-test」」复选框**默认未勾选**，下方有未合并提交会丢失的提示
+- [ ] 不勾选删除 → 目录消失，再开「创建 Worktree」的基准分支下拉里 **`wt-test` 仍在**（预期行为）
+- [ ] 勾选删除 → toast 提示「worktree 及分支已删除」，基准分支下拉里 `wt-test` **消失**，且可再用同名 `wt-test` 重新创建 worktree（不再报「分支已存在」）
+- [ ] 当前正在使用（活跃）的 worktree 被删除时，左栏选中态清空，不留失效面板
+
 ---
 
 ## 4. 终端会话

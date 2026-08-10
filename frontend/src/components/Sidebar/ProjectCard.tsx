@@ -199,7 +199,7 @@ export function ProjectCard(props: {
                         className="sidebar-wt-add-btn"
                         onClick={(e) => {
                           e.stopPropagation()
-                          props.onDeleteWorktree({ projectId: props.project.id, path: wt.path, label: wt.label })
+                          props.onDeleteWorktree({ projectId: props.project.id, path: wt.path, label: wt.label, branch: wt.branch ?? null })
                         }}
                         title={t('sidebar.deleteWorktree') ?? 'Delete Worktree'}
                         onMouseEnter={(e) => {

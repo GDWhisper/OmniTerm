@@ -252,10 +252,12 @@ export const api = {
       body: JSON.stringify(data),
       silent: true, // caller handles the not_a_git_repo prompt / error toast
     }),
-  deleteWorktree: (projectId: string, path: string) =>
-    request<{ ok: true }>(`/projects/${projectId}/worktrees?path=${encodeURIComponent(path)}`, {
-      method: 'DELETE',
-    }),
+  deleteWorktree: (projectId: string, path: string, opts?: { deleteBranch?: boolean }) =>
+    request<{ ok: true; branch_deleted?: string; branch_error?: string }>(
+      `/projects/${projectId}/worktrees?path=${encodeURIComponent(path)}` +
+        (opts?.deleteBranch ? '&delete_branch=true' : ''),
+      { method: 'DELETE' },
+    ),
   listBranches: (projectId: string) =>
     request<{ branches: string[]; current: string }>(`/projects/${projectId}/branches`, { silent: true }),
   initGit: (projectId: string) =>

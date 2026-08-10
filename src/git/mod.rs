@@ -156,6 +156,25 @@ pub async fn remove_worktree(repo_path: &str, target_path: &str) -> anyhow::Resu
     Ok(())
 }
 
+/// Force-delete the local branch `branch` in the repository at `repo_path`.
+/// Runs `git branch -D -- <branch>`.
+///
+/// `-D` (not `-d`) because a worktree branch is by definition not merged into
+/// the current HEAD; the user has already acknowledged the irreversible action
+/// in the frontend. The `--` terminator keeps a branch name that starts with
+/// `-` from being parsed as an option.
+pub async fn delete_branch(repo_path: &str, branch: &str) -> anyhow::Result<()> {
+    let output =
+        Command::new("git").args(["-C", repo_path, "branch", "-D", "--", branch]).output().await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("git branch -D failed: {}", stderr.trim());
+    }
+
+    Ok(())
+}
+
 /// Add a new git worktree to the repository at `repo_path`.
 /// Runs `git worktree add -b <branch> <target_path> [base]`.
 pub async fn add_worktree(
@@ -292,6 +311,74 @@ mod tests {
         assert!(!has_gitignore(dir.to_str().unwrap()), "no .gitignore yet");
         std::fs::write(dir.join(".gitignore"), "node_modules\n").unwrap();
         assert!(has_gitignore(dir.to_str().unwrap()), ".gitignore should be detected");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Regression guard for the "deleted worktree still shows up as a base
+    /// branch" bug: `git worktree remove` deletes the checkout but keeps the
+    /// branch ref, so the branch stays in `list_branches` (the base-branch
+    /// dropdown's data source) until `delete_branch` is called explicitly.
+    #[tokio::test]
+    async fn test_remove_worktree_keeps_branch_until_delete_branch() {
+        let dir = temp_dir();
+        let repo = dir.to_str().unwrap().to_string();
+        init_repo(&repo).await.unwrap();
+
+        let wt_path = dir.with_extension("wt");
+        let wt = wt_path.to_str().unwrap().to_string();
+        add_worktree(&repo, "feature-xyz", &wt, None, false).await.unwrap();
+        assert!(list_branches(&repo).await.unwrap().contains(&"feature-xyz".to_string()));
+
+        remove_worktree(&repo, &wt).await.unwrap();
+        assert!(!wt_path.exists(), "worktree directory should be gone");
+        assert!(
+            list_branches(&repo).await.unwrap().contains(&"feature-xyz".to_string()),
+            "git keeps the branch ref after `worktree remove` — this is the bug's root cause"
+        );
+
+        delete_branch(&repo, "feature-xyz").await.unwrap();
+        assert!(
+            !list_branches(&repo).await.unwrap().contains(&"feature-xyz".to_string()),
+            "delete_branch must remove the branch from the base-branch list"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The delete-worktree handler resolves the branch by matching the client's
+    /// path against `discover_worktrees` output. Guard that the path a worktree
+    /// is created with round-trips byte-identically, otherwise the lookup
+    /// silently finds nothing and the branch is never deleted.
+    #[tokio::test]
+    async fn test_discover_worktrees_resolves_branch_for_created_path() {
+        let dir = temp_dir();
+        let repo = dir.to_str().unwrap().to_string();
+        init_repo(&repo).await.unwrap();
+
+        let wt_path = dir.with_extension("wt");
+        let wt = wt_path.to_str().unwrap().to_string();
+        add_worktree(&repo, "feature-abc", &wt, None, false).await.unwrap();
+
+        let list = discover_worktrees(&repo).await.unwrap();
+        let entry = list
+            .iter()
+            .find(|w| w.path == wt)
+            .expect("created worktree path must match discover_worktrees output verbatim");
+        assert_eq!(entry.branch.as_deref(), Some("feature-abc"));
+
+        std::fs::remove_dir_all(&wt_path).ok();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_branch_fails_for_unknown_branch() {
+        let dir = temp_dir();
+        let repo = dir.to_str().unwrap().to_string();
+        init_repo(&repo).await.unwrap();
+        assert!(
+            delete_branch(&repo, "no-such-branch").await.is_err(),
+            "deleting a missing branch must surface an error, not silently succeed"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
