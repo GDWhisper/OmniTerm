@@ -73,6 +73,14 @@ export function ChatView() {
   useEffect(() => {
     if (!activeSessionId) return
     const sid = activeSessionId
+    // 已 hydrate 过的会话不再重复拉取。GET /messages 全量下发 blocks 列（单个 turn
+    // 可达数 MB，见 turn_accumulator 的 MAX_BLOCKS_BYTES），而 hydrate 自身有
+    // 「messages 非空即 bail」守卫——重复拉取的结果会被整份丢弃，纯浪费一次
+    // 多 MB 的传输 + JSON.parse + 逐条 decodeStoredBlocks，切换会话因此明显卡顿。
+    // 跳过是安全的：切换不拆 WS（AcpConnectionManager 持久 slot），live 帧持续进
+    // store；commitReplay 重建条目时刻意保留 hydrated；chatStore 无 persist，刷新
+    // 页面 states 清空 → hydrated 回 false 自然重新拉取。
+    if (useChatStore.getState().states[sid]?.hydrated) return
     let cancelled = false
     fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
       .then((r) => (r.ok ? r.json() : null))
