@@ -107,16 +107,19 @@ export function DeleteWorktreeDialog(props: {
         {target?.branch && (
           <div>
             <label
-              className="flex items-center gap-2 cursor-pointer select-none"
+              className="flex items-start gap-2 cursor-pointer select-none"
               style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: READER_FONT }}
             >
               <input
                 type="checkbox"
                 checked={deleteBranch}
                 onChange={(e) => setDeleteBranch(e.target.checked)}
-                style={{ accentColor: 'var(--danger)' }}
+                style={{ accentColor: 'var(--danger)', flexShrink: 0, marginTop: 2 }}
               />
-              {t('sidebar.deleteWorktreeAlsoBranch', { branch: target.branch }) ?? `Also delete branch "${target.branch}"`}
+              {/* min-w-0: 不加则 flex 子项按 min-content 尺寸撑开，长分支名顶破弹窗 */}
+              <span style={{ minWidth: 0 }}>
+                {t('sidebar.deleteWorktreeAlsoBranch', { branch: target.branch }) ?? `Also delete branch "${target.branch}"`}
+              </span>
             </label>
             <p className="mt-1 text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
               {t('sidebar.deleteWorktreeAlsoBranchHint')}
@@ -124,16 +127,16 @@ export function DeleteWorktreeDialog(props: {
           </div>
         )}
         <label
-          className="flex items-center gap-2 cursor-pointer select-none"
+          className="flex items-start gap-2 cursor-pointer select-none"
           style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: READER_FONT }}
         >
           <input
             type="checkbox"
             checked={checked}
             onChange={(e) => setChecked(e.target.checked)}
-            style={{ accentColor: 'var(--danger)' }}
+            style={{ accentColor: 'var(--danger)', flexShrink: 0, marginTop: 2 }}
           />
-          {t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}
+          <span style={{ minWidth: 0 }}>{t('sidebar.deleteWorktreeAck') ?? '我已知悉，确认删除'}</span>
         </label>
         <div className="flex justify-end gap-2 pt-1">
           <PixelButton variant="secondary" onClick={handleClose}>

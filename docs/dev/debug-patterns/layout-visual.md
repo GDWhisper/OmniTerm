@@ -74,10 +74,11 @@
 
 **布局-文本**：`pre` 是「不换行」，不是「保留格式」。diff/代码查看器用 `pre-wrap` + `overflow-wrap: anywhere`（后者兜底无空格超长 token：minified/base64/长字符串字面量）。排查「长行显示不全」先 grep 目标容器 `white-space`；「同文件里旁边就是正确写法」是最快对照实验。
 
-**适用**：diff 视图、日志、代码预览任何可能含长行的容器。
+**适用**：diff 视图、日志、代码预览任何可能含长行的容器；以及任何会展示路径 / 分支名 / URL / hash 的弹窗与面板。**`max-width` 只管盒子宽度，不管内容溢出**——盒子被 `max-w-*` 限住了，不能换行的文本照样画到边框外。兜底属性要加在**共享容器**（Modal body）而非每个调用方，否则每个新弹窗都会重犯一次。
 
 **案例证据**：
 - 2026-08-01 git diff 长行横向溢出被裁（419px 容器内撑到 3104px）。修复：`.git-diff-line` 改 `pre-wrap`、`.git-diff-text` 加 `overflow-wrap: anywhere`。
+- 2026-08-10 删除 worktree 弹窗里的长路径（opencode 的 40 位 hash 目录）冲出弹窗右边界约 320px。修复：`Modal` body 加 `overflow-wrap: anywhere`（一处覆盖 8 个弹窗 + 所有 `ConfirmDialog` 调用点）。验证手法：**把修复属性临时改回 `normal` 再截一张对比图**，比“看起来好了”可信——CSS 修复很容易因为数据恰好不够长而假阳。
 
 ---
 

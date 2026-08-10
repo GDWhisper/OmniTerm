@@ -61,8 +61,11 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-5 py-4">
+        {/* Body — `overflow-wrap: anywhere` 兜底无空格超长 token（文件路径、
+            分支名、URL）：默认 `normal` 下它们不参与换行，会突破 max-w-*
+            边框画到弹窗外面（layout-visual 模式 7）。放在 Modal 而非各弹窗，
+            避免每个新弹窗重犯一次。 */}
+        <div className="px-5 py-4" style={{ overflowWrap: 'anywhere' }}>
           {children}
         </div>
       </div>

@@ -219,6 +219,20 @@ Includes corner nails (gold 8x8 squares), blinking pink caret `.dialogue-caret`,
 
 ---
 
+### 3.6 Modal 内容区的长文本（路径 / 分支名 / URL）
+
+`Modal` 的 body 容器统一带 `overflow-wrap: anywhere`，**各弹窗不再自己处理**：
+文件路径 / 分支名 / URL 是无空格超长 token，默认 `normal` 下不参与换行，
+会突破 `max-w-*` 边框画到弹窗外（实测一个 100 多字符的 worktree 路径
+溢出约 320px）。新弹窗一律基于 `Modal` / `ConfirmDialog`，不自建 portal 结构；
+确需单行截断路径时按 `docs/dev/debug-patterns/layout-visual.md` 模式 5 配
+`direction: rtl` + `<bdi dir="ltr">`（bidi 隔离）。
+
+flex 行内的长文本（如复选框 label 里的分支名）额外需两件：文本 span `min-width: 0`（否则
+按 min-content 撑开）+ 控件 `flex-shrink: 0`（否则复选框被压缩变形）。
+
+---
+
 ## 4. Panel Title Bars
 
 `.panel-title-bar` — wood-brown strip at the top of every panel (Sidebar sections, Terminal, FileManager, Settings, Modal).
