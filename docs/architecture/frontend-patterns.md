@@ -135,6 +135,44 @@
 
 ---
 
+## 在 memo 组件内触发全局动作 (getState-action convention)
+
+**适用场景**：深埋在 `memo` 组件树里的小控件需要触发一个全局状态变更
+（聊天消息里的可点击文件路径、工具卡片里的操作按钮等），而它所在的
+子树依赖 memo 跳过流式重渲染。
+
+**反模式**：从顶层用 props 往下透传 `onXxx` 回调。这会新增一个
+`useCallback` 及其依赖数组，任何一次依赖漂移都让整棵子树的 memo 失效。
+`ChatView.tsx` 顶部注释记录过这个坑（「使依赖它们的 useCallback 引用漂移、
+ChatMessageView memo 失效」），流式渲染期表现为每帧全量重渲染历史消息。
+
+**约定**：
+
+- 叶子组件**不接收回调 props、不订阅 store**，在事件处理函数里用
+  `useAppStore.getState()` / `useChatStore.getState()` 一次性读取所需的
+  state 与 action（`useAcpChat.ts` 的帧派发已是同一手法）
+- 效果：父组件 props 签名不变 → memo 契约零触碰；无新增订阅 →
+  渲染期零成本，开销全部推到用户点击之后
+- **仅限「读一次就用」的事件路径**。需要随 state 变化重渲染的地方
+  必须正常用 selector 订阅——`getState()` 不会触发更新
+
+**复合动作放 store**：若该动作要改多个 state 切片（例：打开抽屉同时要
+保证面板 open + 非 collapsed + 切到 files tab），在 store 里做成一个
+原子 action，用单次 `set()` 批量提交，让订阅者最多重渲染一次。参考
+`activateSession` / `switchWorkspace` / `revealFileInDrawer`
+（`frontend/src/stores/appStore.ts`）。散在调用方逐个 set 会导致级联重渲染，
+且逻辑在每个入口重复一遍。
+
+**已有案例**：
+
+- `frontend/src/components/Chat/FileLocationLink.tsx` — ACP 工具调用
+  `locations` 里的文件路径变可点击，点击调 `revealFileInDrawer` 在
+  FileManager 抽屉打开。路径来自协议权威值（`extractLocations`），
+  相对路径由 `toAbsolutePath`（`frontend/src/utils/path.ts`）以 session
+  的 `workspace_path` 为基准归一——agent 子进程 cwd 就是该路径
+
+---
+
 ## 状态栏游戏风格面板模板 (Game-style Status Bar Panel Template)
 
 **适用场景**：状态栏新增按钮，弹出**复杂面板**——多 section、多分类、

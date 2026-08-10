@@ -23,6 +23,37 @@ export function getParentPath(path: string): string {
   return /^[A-Za-z]:$/.test(parent) ? parent + '/' : parent
 }
 
+/** POSIX `/…` 或 Windows `C:/…` 视为绝对路径（分隔符已归一为 `/`）。 */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:\//.test(path)
+}
+
+/**
+ * 把外部报告的文件路径归一为绝对路径，基准为 session 的 workspace root。
+ *
+ * 用于 ACP `ToolCallLocation.path` 一类 agent 上报的路径：agent 子进程的 OS cwd
+ * 就是 session 的 `workspace_path`（后端 spawn 时固定；`src/api/files.rs` 中 ACP
+ * session 取 `workspace_path` 作为 FileManager cwd 的注释记录了这一致性），因此
+ * 相对路径一律以 workspaceRoot 解析。
+ *
+ * - 已是绝对路径 → 仅归一分隔符后原样返回（含 Windows 盘符形式）
+ * - `./x` / `x` / `a/b` → `<root>/x`
+ * - workspaceRoot 缺省（会话无 workspace_path / 尚未加载）→ 无基准可用，原样返回
+ *
+ * 不解析 `..`、不做越界判断：那是安全决策，权威在后端 `fs::sanitize_path`
+ * （canonicalize 后校验前缀），前端解析只会给出与后端不一致的第二份事实。
+ */
+export function toAbsolutePath(reported: string, workspaceRoot: string | undefined | null): string {
+  const path = reported.replace(/\\/g, '/').trim()
+  if (!path) return ''
+  if (isAbsolutePath(path)) return path
+  if (!workspaceRoot) return path
+  const root = workspaceRoot.replace(/\\/g, '/').trim().replace(/\/+$/, '')
+  const rel = path.replace(/^\.\//, '')
+  // root 归一后为空 = workspaceRoot 是文件系统根 '/'
+  return root ? `${root}/${rel}` : `/${rel}`
+}
+
 /**
  * 判断 `filePath` 是否超出 `workspaceRoot` 边界（用于越界写拦截）。
  *

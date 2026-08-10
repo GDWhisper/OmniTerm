@@ -200,6 +200,7 @@
   "chat.msg.editCancel": "取消",
   "chat.msg.expand": "展开",
   "chat.msg.collapse": "收起",
+  "chat.msg.openFile": "在文件管理器中打开",
   "chat.msg.regenerate": "重新生成",
   "chat.status.connecting": "连接中…",
   "chat.status.disconnected": "已断开",

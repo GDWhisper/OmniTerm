@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-10 16:12) `[frontend]` ACP 聊天里 agent 上报的文件路径可一键点开：工具调用卡片展开后的 `locations` 从纯文本变为可点击链接，点击直接在 FileManager 抽屉打开该文件（自动展开右栏、切到 FILES 标签，移动端切到 files 面板）。路径取自 ACP `ToolCallLocation`（协议权威值，非正文猜测），相对路径以 session 的 `workspace_path` 为基准归一（新增 `toAbsolutePath`）；无效路径/目录由抽屉展示后端错误而非静默失败。新增 store 原子动作 `revealFileInDrawer` 单次 `set()` 提交面板可见性与抽屉路径，链接组件用 `getState()` 读取以完全不触碰 `ChatMessageView` 的 memo 契约、流式渲染期零新增成本（`frontend/src/components/Chat/FileLocationLink.tsx`、`ChatMessage.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/path.ts`）
 - (2026-08-09 16:12) `[frontend]` sidebar 新增「会话展开模式」切换按钮（Projects 标题栏、新建项目按钮旁）：模式 1 自动展开所有含会话的项目及其下所有含会话的 worktree，模式 2（默认）仅展开聚焦中的 worktree；折叠优先——模式 1 下手动折叠的项目不再自动弹回；偏好经 localStorage（`omniterm_expand_all_sessions`）持久化（`frontend/src/components/Sidebar/Sidebar.tsx`、`ProjectCard.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/worktreeSessions.ts`）
 - (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
 

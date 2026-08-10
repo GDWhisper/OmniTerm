@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath } from './path'
+import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -79,5 +79,57 @@ describe('resolveRenamedPath', () => {
 
   it('returns null when absPath is relative (no reliable watch-root derivation)', () => {
     expect(resolveRenamedPath('a.png', 'a.png', 'b.png')).toBeNull()
+  })
+})
+
+describe('toAbsolutePath', () => {
+  const root = '/home/u/proj'
+
+  it('joins a relative path onto the workspace root', () => {
+    expect(toAbsolutePath('docs/a.md', root)).toBe('/home/u/proj/docs/a.md')
+    expect(toAbsolutePath('a.md', root)).toBe('/home/u/proj/a.md')
+  })
+
+  it('strips a leading ./', () => {
+    expect(toAbsolutePath('./docs/a.md', root)).toBe('/home/u/proj/docs/a.md')
+  })
+
+  it('leaves an already-absolute path untouched', () => {
+    expect(toAbsolutePath('/etc/hosts', root)).toBe('/etc/hosts')
+    expect(toAbsolutePath('/home/u/proj/a.md', root)).toBe('/home/u/proj/a.md')
+  })
+
+  it('treats a windows drive path as absolute and normalizes separators', () => {
+    expect(toAbsolutePath('C:\\Codes\\a.md', root)).toBe('C:/Codes/a.md')
+    expect(toAbsolutePath('g:/Codes/a.md', root)).toBe('g:/Codes/a.md')
+  })
+
+  it('normalizes windows separators in relative paths and in the root', () => {
+    expect(toAbsolutePath('docs\\a.md', 'C:\\Codes\\proj')).toBe('C:/Codes/proj/docs/a.md')
+  })
+
+  it('normalizes a trailing slash on the root', () => {
+    expect(toAbsolutePath('a.md', '/home/u/proj/')).toBe('/home/u/proj/a.md')
+    expect(toAbsolutePath('a.md', '/home/u/proj///')).toBe('/home/u/proj/a.md')
+  })
+
+  it('handles a filesystem-root workspace', () => {
+    expect(toAbsolutePath('a.md', '/')).toBe('/a.md')
+  })
+
+  it('returns the relative path unchanged when no root is available', () => {
+    // 无基准时不造假绝对路径，交后端 sanitize_path 判定
+    expect(toAbsolutePath('docs/a.md', undefined)).toBe('docs/a.md')
+    expect(toAbsolutePath('docs/a.md', null)).toBe('docs/a.md')
+    expect(toAbsolutePath('docs/a.md', '')).toBe('docs/a.md')
+  })
+
+  it('returns empty for blank input', () => {
+    expect(toAbsolutePath('', root)).toBe('')
+    expect(toAbsolutePath('   ', root)).toBe('')
+  })
+
+  it('does not resolve .. — traversal is the backend\'s call', () => {
+    expect(toAbsolutePath('../outside/a.md', root)).toBe('/home/u/proj/../outside/a.md')
   })
 })

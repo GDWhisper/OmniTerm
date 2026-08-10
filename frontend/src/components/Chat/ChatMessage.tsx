@@ -9,6 +9,7 @@ import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
+import { FileLocationLink } from './FileLocationLink'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -249,8 +250,8 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
       {open && (
         <div style={{ padding: '0 10px 8px 32px' }}>
           {block.locations && block.locations.length > 0 && (
-            <div style={{ color: 'var(--text-faint)', fontSize: '0.846em', marginBottom: 4 }}>
-              {block.locations.map((l) => <div key={l}>▸ {l}</div>)}
+            <div style={{ fontSize: '0.846em', marginBottom: 4 }}>
+              {block.locations.map((l) => <FileLocationLink key={l} path={l} />)}
             </div>
           )}
           {block.content && isDiff && <DiffView text={block.content} />}

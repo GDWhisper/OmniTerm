@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { Project, Workspace, Session } from '../api/client'
+import { toAbsolutePath } from '../utils/path'
 
 // Re-export for convenience
 export type { Project, Workspace, Session }
@@ -41,6 +42,14 @@ interface FmSessionState {
   manualPath: string | null // absolute path when in manual mode
   drawerPath: string | null // file path open in drawer (null = closed)
   drawerMode: 'view' | 'edit' // drawer view/edit mode
+}
+
+/** A session's FM state before the user has interacted with the panel. */
+export const DEFAULT_FM_SESSION_STATE: FmSessionState = {
+  mode: 'following',
+  manualPath: null,
+  drawerPath: null,
+  drawerMode: 'view',
 }
 
 export interface AppState {
@@ -218,6 +227,17 @@ export interface AppState {
   setFmManualPath: (sessionId: string, path: string | null) => void
   resetFmToFollowing: (sessionId: string) => void
   setFmDrawerPath: (sessionId: string, path: string | null, mode?: 'view' | 'edit') => void
+  /**
+   * Open a file reported from outside the FileManager (e.g. an ACP tool call's
+   * `locations`) in the drawer, making the drawer actually visible in one
+   * atomic update: panel open, un-collapsed, on the `files` tab (and on the
+   * `files` pane on mobile). `reportedPath` may be relative to the session's
+   * workspace root; it is resolved via [`toAbsolutePath`].
+   *
+   * Batched into a single `set()` (same rationale as `activateSession`) so
+   * subscribers re-render at most once instead of four times.
+   */
+  revealFileInDrawer: (sessionId: string, reportedPath: string) => void
   closeFmDrawer: (sessionId: string) => void
 }
 
@@ -631,6 +651,38 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       },
     })),
+
+  revealFileInDrawer: (sessionId, reportedPath) => {
+    const s = get()
+    const session = Object.values(s.sessions)
+      .flat()
+      .find((x) => x.id === sessionId)
+    const abs = toAbsolutePath(reportedPath, session?.workspace_path)
+    // 空路径无可打开之物；不要把 drawer 置为 '' 造一个必失败的抽屉
+    if (!abs) return
+
+    localStorage.setItem('omniterm_right_panel_tab', 'files')
+    if (s.isMobile) localStorage.setItem('omniterm_mobile_last_tab', 'files')
+
+    set({
+      fileManagerOpen: true,
+      fileManagerCollapsed: false,
+      rightPanelTab: 'files',
+      // 桌面端 activeTab 不参与布局，不动它（避免污染移动端记忆）
+      ...(s.isMobile ? { activeTab: 'files' as const, mobileLastTab: 'files' } : {}),
+      fmSessionStates: {
+        ...s.fmSessionStates,
+        [sessionId]: {
+          // 这可能是本会话的首个 FM entry（用户从未打开过面板），
+          // 必须铺齐默认值，不能只展开 undefined 留下缺字段的半成品 entry。
+          ...DEFAULT_FM_SESSION_STATE,
+          ...s.fmSessionStates[sessionId],
+          drawerPath: abs,
+          drawerMode: 'view' as const,
+        },
+      },
+    })
+  },
 
   closeFmDrawer: (sessionId) =>
     set((s) => ({
