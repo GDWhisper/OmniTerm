@@ -444,3 +444,122 @@ async fn delete_project_kills_tmux_sessions() {
 
     let _ = std::fs::remove_dir_all(&workspace);
 }
+
+/// Case 5: pty session 调 /files?session=… 必须 200 且 cwd 跟随 workspace。
+/// Phase 2 切片 A：pty 会话惰性 spawn（PtyEngine resolve-or-create），
+/// resolve_session_base 的引擎路由必须认识 runtime_kind='pty'。
+#[tokio::test]
+#[ignore]
+async fn pty_session_file_endpoint_returns_workspace_path() {
+    if let Some(reason) = preflight() {
+        eprintln!("SKIP: {reason}");
+        return;
+    }
+
+    let workspace = format!("/tmp/omniterm-matrix-pty-{}", uuid_v4());
+    std::fs::create_dir_all(&workspace).ok();
+    let project_id = match ensure_test_project("matrix_pty", &workspace) {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: cannot ensure test project");
+            return;
+        }
+    };
+
+    let body =
+        format!(r#"{{"name":"matrix_pty","workspace_path":"{workspace}","runtime_kind":"pty"}}"#);
+    let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: POST /sessions failed (server down?)");
+            return;
+        }
+    };
+    if code != 201 {
+        eprintln!("SKIP: session create returned {code}: {body}");
+        return;
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).expect("parse session response");
+    let session_id = v["id"].as_str().expect("session id").to_string();
+    // wire 契约：pty 会话的引擎键回填冻结列 tmux_session_name（= session id）
+    assert_eq!(
+        v["tmux_session_name"].as_str(),
+        Some(session_id.as_str()),
+        "pty session must store its engine key in tmux_session_name"
+    );
+
+    // 核心断言：文件列表 200 + cwd = workspace（惰性 spawn 后采样 shell cwd）
+    let (code, body) =
+        http_get(&format!("/files?path=.&session={session_id}&workspace={project_id}&sort=name"))
+            .expect("curl /files");
+    assert_eq!(
+        code, 200,
+        "BUG REGRESSION: /files for pty session returned {code} (expected 200).\n\
+         resolve_session_base must route runtime_kind='pty' to PtyEngine.\n\
+         Response: {body}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&body).expect("parse files response");
+    let cwd = v["cwd"].as_str().unwrap_or("").to_string();
+    // macOS /tmp → /private/tmp 一类符号链接差异：两端都 canonicalize 比较
+    let canon = |p: &str| {
+        std::fs::canonicalize(p).map(|c| c.to_string_lossy().into_owned()).unwrap_or_default()
+    };
+    assert_eq!(
+        canon(&cwd),
+        canon(&workspace),
+        "BUG REGRESSION: FileManager cwd {cwd:?} != pty session workspace {workspace:?}"
+    );
+
+    // 清理
+    http_delete(&format!("/sessions/{session_id}"));
+    let _ = std::fs::remove_dir_all(&workspace);
+}
+
+/// Case 6: DELETE /sessions/{id} 对 pty session 必须删 DB 行并走引擎清理。
+/// 进程级清理（三级信号 + fd 回收）由引擎单测覆盖，这里守 API/DB 层。
+#[tokio::test]
+#[ignore]
+async fn delete_pty_session_removes_db_row() {
+    if let Some(reason) = preflight() {
+        eprintln!("SKIP: {reason}");
+        return;
+    }
+
+    let workspace = format!("/tmp/omniterm-matrix-ptydel-{}", uuid_v4());
+    std::fs::create_dir_all(&workspace).ok();
+    let project_id = match ensure_test_project("matrix_ptydel", &workspace) {
+        Some(p) => p,
+        None => return,
+    };
+
+    let body = format!(
+        r#"{{"name":"matrix_ptydel","workspace_path":"{workspace}","runtime_kind":"pty"}}"#
+    );
+    let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
+        Some(r) => r,
+        None => return,
+    };
+    if code != 201 {
+        eprintln!("SKIP: session create returned {code}: {body}");
+        return;
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let session_id = v["id"].as_str().unwrap().to_string();
+
+    http_delete(&format!("/sessions/{session_id}"));
+
+    // DB 行必须消失（cleanup_session_runtime + delete 一起生效）
+    let db = db_path();
+    let remaining = cmd_output(
+        "sqlite3",
+        &[&db, &format!("SELECT COUNT(*) FROM sessions WHERE id='{session_id}'")],
+    )
+    .unwrap_or_default();
+    assert_eq!(
+        remaining.trim(),
+        "0",
+        "BUG REGRESSION: DELETE /sessions left the pty session row in DB"
+    );
+
+    let _ = std::fs::remove_dir_all(&workspace);
+}

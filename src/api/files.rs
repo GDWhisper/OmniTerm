@@ -107,13 +107,15 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 /// Resolve base path from session ID.
 ///
 /// Returns `(base_path, engine_session_name_or_empty)`. The second value is
-/// the engine session name for multiplexer-backed sessions, and `""` (empty)
-/// for sessions without a multiplexer pane (e.g. `runtime_kind='acp'`) —
-/// FileManager must then read the session's `workspace_path` directly (the
-/// agent process cwd was fixed in commit 27d815f to actually be that path).
+/// the engine session key for terminal-engine sessions (tmux / pty), and
+/// `""` (empty) for sessions without an engine session (e.g.
+/// `runtime_kind='acp'`) — FileManager must then read the session's
+/// `workspace_path` directly (the agent process cwd was fixed in commit
+/// 27d815f to actually be that path).
 ///
-/// For multiplexer sessions, falls back to re-creating the session at
-/// `workspace_path` if `current_cwd` fails (e.g. multiplexer server restart).
+/// For engine sessions, falls back to re-creating the session at
+/// `workspace_path` if `current_cwd` fails (e.g. multiplexer server restart
+/// or pty process exit/backend restart).
 ///
 /// **历史 bug**：此前 ACP session 的引擎会话名列是 NULL，SELECT 返回 None →
 /// 整个函数返 None → `/files?session=…` 返回 404 "session not found or engine
@@ -132,16 +134,15 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
 
     let (runtime_kind, engine_name_opt, workspace_path) = row;
 
-    // ACP session：没有复用器会话，直接用 session 的 workspace_path 作为
+    // ACP session：没有引擎会话，直接用 session 的 workspace_path 作为
     // FileManager 起点。这与 agent 子进程 OS cwd 修复（commit 27d815f）
     // 保持一致——agent 看到的是 workspace_path，FileManager 也展示
     // workspace_path，UI 与 agent 实际文件上下文统一。
     //
-    // 未来若引入非复用器/非 acp 的新 runtime_kind，未设置引擎会话名但
-    // 仍要求跟随会话工作区：也走此分支（`engine_name_opt.is_none()`）。
+    // 引擎键列为 NULL 的记录（如旧 pty 行）同样走此回退。
     if runtime_kind == "acp" || engine_name_opt.is_none() {
         tracing::debug!(
-            "session {} has no multiplexer pane (runtime_kind={}), using workspace_path={} as FileManager cwd",
+            "session {} has no engine session key (runtime_kind={}), using workspace_path={} as FileManager cwd",
             session_id,
             runtime_kind,
             workspace_path
@@ -149,16 +150,20 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
         return Some((workspace_path, String::new()));
     }
 
-    // 走到这里说明是复用器会话。engine_name_opt 一定是 Some
+    // 走到这里说明是终端引擎会话（tmux / pty）。engine_name_opt 一定是 Some
     // （上面已 early-return None 分支）。
     let engine_name = engine_name_opt.expect("checked above");
+    let kind = match runtime_kind.as_str() {
+        "pty" => RuntimeKind::Pty,
+        _ => RuntimeKind::Tmux,
+    };
 
-    // Try to get pane CWD; if it fails, the multiplexer session may have been lost
-    match state.engines.current_cwd(RuntimeKind::Tmux, &engine_name).await {
+    // Try to get pane/process CWD; if it fails, the engine session may have been lost
+    match state.engines.current_cwd(kind, &engine_name).await {
         Ok(cwd) => Some((cwd, engine_name)),
         Err(e) => {
             tracing::warn!(
-                "multiplexer session '{}' unavailable ({}), attempting re-create",
+                "engine session '{}' unavailable ({}), attempting re-create",
                 engine_name,
                 e
             );
@@ -167,13 +172,9 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
                 resolve_session_workspace_root(state, session_id).await.unwrap_or_else(|| {
                     (std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()), String::new())
                 });
-            state
-                .engines
-                .create_session(RuntimeKind::Tmux, &engine_name, &root, None)
-                .await
-                .ok()?;
-            let cwd = state.engines.current_cwd(RuntimeKind::Tmux, &engine_name).await.ok()?;
-            tracing::info!("re-created multiplexer session '{}' at {}", engine_name, cwd);
+            state.engines.create_session(kind, &engine_name, &root, None).await.ok()?;
+            let cwd = state.engines.current_cwd(kind, &engine_name).await.ok()?;
+            tracing::info!("re-created engine session '{}' at {}", engine_name, cwd);
             Some((cwd, engine_name))
         }
     }

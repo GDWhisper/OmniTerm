@@ -1,21 +1,17 @@
-//! 自管 pty 引擎的终端 WS 链路。
+//! 自管 pty 引擎的终端 WS 链路（Phase 2 切片 A：常驻会话）。
 //!
-//! 注意：当前实现生命周期 = WS 连接期（断开即 SIGHUP），属 Phase 1 收敛的
-//! 临时形态；Phase 2 切片 A 将以 PtyEngine 常驻会话（断开不杀进程 + 输出
-//! 订阅 + 补屏）整体替换，勿在此基础上加功能。
+//! 生命周期：WS 只是会话的一个「视图」——attach 时订阅输出 + 收补屏，
+//! 断开只解绑订阅，会话进程由 [`super::PtyEngine`] 常驻持有；会话自身
+//! 退出后引擎自动注销，下次 attach 重建（D5 过渡形态）。
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-#[cfg(unix)]
-use std::os::unix::io::RawFd;
-use std::sync::{Arc, Mutex};
+use portable_pty::PtySize;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
-use crate::engine::pty_io;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
-use tokio::sync::oneshot;
 
 pub async fn handle_pty_terminal(
     ws: WebSocket,
@@ -25,52 +21,41 @@ pub async fn handle_pty_terminal(
 ) {
     info!("terminal WS connected (pty): session={}", session_id);
 
-    let cwd: String = sqlx::query_as("SELECT workspace_path FROM sessions WHERE id = ?")
-        .bind(&session_id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-        .map(|(p,)| p)
-        .unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()));
+    // 引擎会话键存于冻结列 tmux_session_name（过渡期两引擎共用，D10）；
+    // 旧记录可能为 NULL，回退用 session_id。
+    let row: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT workspace_path, tmux_session_name FROM sessions WHERE id = ?")
+            .bind(&session_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
 
-    let pty_size = PtySize {
+    let Some((workspace, engine_key)) = row else {
+        let (mut sender, _) = ws.split();
+        let msg =
+            serde_json::to_string(&ServerControl::Error { message: "session not found" }).unwrap();
+        let _ = sender.send(Message::Text(msg.into())).await;
+        return;
+    };
+    let key = engine_key.unwrap_or_else(|| session_id.clone());
+
+    let size = PtySize {
         rows: query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24),
         cols: query.cols.filter(|&c| c > 0 && c <= 1000).unwrap_or(80),
         pixel_width: 0,
         pixel_height: 0,
     };
-
     info!(
-        "terminal PTY initial size: {}x{} for session={}",
-        pty_size.cols, pty_size.rows, session_id
+        "terminal PTY initial size: {}x{} for session={} (pty key={})",
+        size.cols, size.rows, session_id, key
     );
 
-    #[cfg(windows)]
-    tokio::spawn(crate::engine::apply_multiplexer_escape_time_workaround());
-
-    let pty_system = native_pty_system();
-    let pty_pair = match pty_system.openpty(pty_size) {
-        Ok(pair) => pair,
+    // resolve-or-create：后端重启/进程退出后的 attach 自动重建会话
+    let attach = match state.engines.attach_pty(&key, &workspace, size).await {
+        Ok(a) => a,
         Err(e) => {
-            error!("failed to open PTY (pty): {}", e);
-            let (mut sender, _) = ws.split();
-            let msg =
-                serde_json::to_string(&ServerControl::Error { message: "failed to open PTY" })
-                    .unwrap();
-            let _ = sender.send(Message::Text(msg.into())).await;
-            return;
-        }
-    };
-
-    let mut cmd = CommandBuilder::new(if cfg!(windows) { "cmd.exe" } else { "bash" });
-    cmd.cwd(&cwd);
-    cmd.env("TERM", "xterm-256color");
-
-    let mut child = match pty_pair.slave.spawn_command(cmd) {
-        Ok(child) => child,
-        Err(e) => {
-            error!("failed to spawn pty shell: {}", e);
+            error!("failed to attach pty session {}: {}", key, e);
             let (mut sender, _) = ws.split();
             let msg = serde_json::to_string(&ServerControl::Error {
                 message: "failed to start terminal",
@@ -81,118 +66,63 @@ pub async fn handle_pty_terminal(
         }
     };
 
-    let mut pty_reader = pty_pair.master.try_clone_reader().expect("clone reader");
-    let master_pty: Arc<Mutex<Option<Box<dyn portable_pty::MasterPty>>>> =
-        Arc::new(Mutex::new(Some(pty_pair.master)));
+    // 本连接视口尺寸生效（单视图模型：最后 attach 者决定尺寸）
+    if let Err(e) = attach.resize(size) {
+        warn!("initial resize failed (pty): {}", e);
+    }
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
-    let attached_msg =
-        serde_json::to_string(&ServerControl::Attached { session: &session_id }).unwrap();
+    let attached_msg = serde_json::to_string(&ServerControl::Attached { session: &key }).unwrap();
     if ws_tx.send(Message::Text(attached_msg.into())).await.is_err() {
         return;
     }
 
-    let (_agent_tx, mut agent_rx) = tokio::sync::mpsc::channel::<String>(16);
-    let (pty_out_tx, mut pty_out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    // 补屏：attach 时刻的窗口快照（切片 B 换 VT 模拟器重渲染）
+    if !attach.replay.is_empty()
+        && ws_tx.send(Message::Binary(attach.replay.clone().into())).await.is_err()
+    {
+        return;
+    }
 
-    tokio::task::spawn_blocking(move || {
-        use std::io::Read;
-        let mut buf = [0u8; 8192];
-        loop {
-            match pty_reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if pty_out_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        debug!("PTY reader exited (pty)");
-    });
-
-    let mut ws_tx2 = ws_tx;
-    let forward_handle = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                Some(data) = pty_out_rx.recv() => {
-                    if ws_tx2.send(Message::Binary(data.into())).await.is_err() {
-                        break;
-                    }
-                }
-                Some(_json_text) = agent_rx.recv() => {
-                    // Pty sessions currently have no agent state channel.
-                }
-                else => break,
-            }
-        }
-    });
-
+    // === WS binary → PTY stdin（专用写线程，写尽语义见 PtyAttach::write）===
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    let writer_attach = attach.clone();
+    let resize_attach = attach.clone();
+    let writer_key = key.clone();
+    std::thread::spawn(move || {
+        while let Some(data) = pty_in_rx.blocking_recv() {
+            if let Err(e) = writer_attach.write(&data) {
+                warn!("PTY write failed (pty session {writer_key}): {e}");
+                return;
+            }
+        }
+        debug!("PTY writer exited (pty session {writer_key})");
+    });
 
-    #[cfg(unix)]
-    {
-        let pty_fd: RawFd = master_pty
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.as_raw_fd())
-            .expect("master PTY has a raw fd on unix");
-        std::thread::spawn(move || {
-            while let Some(data) = pty_in_rx.blocking_recv() {
-                let mut written = 0;
-                while written < data.len() {
-                    match pty_io::write_pty(pty_fd, &data[written..]) {
-                        Ok(0) => return,
-                        Ok(n) => written += n,
-                        Err(e) => {
-                            if e.raw_os_error() == Some(libc::EBADF) {
-                                debug!("PTY fd closed (pty), writer thread exiting");
-                            } else {
-                                warn!("PTY write failed (pty): {}", e);
-                            }
-                            return;
-                        }
+    // === 输出订阅 → WS binary 帧 ===
+    let mut rx = attach.rx;
+    let mut forward_handle = tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(data) => {
+                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                        break;
                     }
                 }
-            }
-            debug!("PTY writer exited (pty)");
-        });
-    }
-    #[cfg(windows)]
-    {
-        let writer = master_pty
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.take_writer().ok())
-            .expect("master PTY has a writer on windows");
-        std::thread::spawn(move || {
-            let mut writer = writer;
-            while let Some(data) = pty_in_rx.blocking_recv() {
-                let mut written = 0;
-                while written < data.len() {
-                    match pty_io::write_pty(writer.as_mut(), &data[written..]) {
-                        Ok(0) => return,
-                        Ok(n) => written += n,
-                        Err(e) => {
-                            warn!("PTY write failed (pty): {}", e);
-                            return;
-                        }
-                    }
+                // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
+                Err(RecvError::Lagged(n)) => {
+                    warn!("pty output lagged, dropped {n} frames");
+                    continue;
                 }
+                // 会话进程退出、引擎注销 → 关闭本连接（前端重连会重建会话）
+                Err(RecvError::Closed) => break,
             }
-            debug!("PTY writer exited (pty)");
-        });
-    }
+        }
+    });
 
-    let (_shutdown_tx, _shutdown_rx) = oneshot::channel::<()>();
-    let agent_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    let resize_pty = Arc::clone(&master_pty);
-    let read_handle = tokio::spawn(async move {
+    // === WS 消息读循环（输入 + resize + ping）===
+    let mut read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
                 #[allow(clippy::collapsible_match)]
@@ -205,16 +135,10 @@ pub async fn handle_pty_terminal(
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
-                                if cols > 0
-                                    && cols <= 1000
-                                    && rows > 0
-                                    && rows <= 1000
-                                    && let Ok(guard) = resize_pty.lock()
-                                    && let Some(master) = guard.as_ref()
-                                {
+                                if cols > 0 && cols <= 1000 && rows > 0 && rows <= 1000 {
                                     let new_size =
                                         PtySize { rows, cols, pixel_width: 0, pixel_height: 0 };
-                                    if let Err(e) = master.resize(new_size) {
+                                    if let Err(e) = resize_attach.resize(new_size) {
                                         warn!("PTY resize failed (pty): {}", e);
                                     }
                                 }
@@ -232,39 +156,19 @@ pub async fn handle_pty_terminal(
         }
     });
 
-    let child_pid = child.process_id();
-    let (exit_tx, mut exit_rx) = tokio::sync::mpsc::channel::<Option<i32>>(1);
-    tokio::task::spawn_blocking(move || {
-        let status = child.wait();
-        let code = status.ok().map(|s| s.exit_code() as i32);
-        let _ = exit_tx.blocking_send(code);
-    });
-
     tokio::select! {
-        _ = forward_handle => {
-            debug!("PTY->WS forward ended (pty)");
+        _ = &mut forward_handle => {
+            debug!("PTY→WS forward ended (pty): session={key}");
         }
-        _ = read_handle => {
-            debug!("WS->PTY read ended (pty)");
-        }
-        code = exit_rx.recv() => {
-            info!("pty process exited: {:?}", code);
+        _ = &mut read_handle => {
+            debug!("WS→PTY read ended (pty): session={key}");
         }
     }
+    // 会话常驻：输出生流不会随连接结束，两个 task 都必须显式终止，
+    // 否则败者会守着已死的 WS/通道泄漏（read 侧 drop in_tx 同时让写线程退出）。
+    forward_handle.abort();
+    read_handle.abort();
 
-    if let Some(handle) = agent_handle {
-        let _ = handle.await;
-        debug!("agent poll task joined (pty)");
-    }
-
-    if let Some(pid) = child_pid {
-        pty_io::kill_session_process(pid);
-        debug!("sent SIGHUP to pty pid={}", pid);
-    }
-
-    if let Ok(mut guard) = master_pty.lock() {
-        guard.take();
-    }
-
-    info!("terminal WS disconnected (pty): session={}", session_id);
+    // detach 语义：不杀会话进程，引擎常驻持有（D5/§1.2）
+    info!("terminal WS disconnected (pty): session={session_id} — 会话进程保持常驻");
 }
