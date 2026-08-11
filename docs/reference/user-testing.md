@@ -463,15 +463,16 @@ curl http://localhost:9777/api/v1/health
 ### 8.3 环境变量
 
 ```bash
-# 自定义配置
-JWT_SECRET=your-secure-secret
-DATABASE_URL=sqlite:/app/data/omniterm.db?mode=rwc
-BIND_ADDR=0.0.0.0:9777
+# 自定义配置（后端只读 OMNITERM_* 前缀，通用名如 DATABASE_URL 一律忽略）
+OMNITERM_JWT_SECRET=your-secure-secret
+OMNITERM_DB=sqlite:/app/data/omniterm.db?mode=rwc
+OMNITERM_HOST=0.0.0.0
+OMNITERM_PORT=9777
 FRONTEND_DIR=frontend/dist
 ```
 
 **验证点：**
-- [ ] 自定义 JWT_SECRET 生效
+- [ ] 自定义 OMNITERM_JWT_SECRET 生效
 - [ ] 数据持久化到 Docker volume
 - [ ] 数据库文件在重启后保留
 

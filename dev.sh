@@ -23,9 +23,11 @@ export BACKEND_PORT FRONTEND_PORT DOCKER_PORT DOCKER_PORT_MAPPING
 export BRANCH_NAME BRANCH_BINARY_NAME DOMAIN
 
 # 数据库路径按二进制名隔离：~/.omniterm/<BRANCH_BINARY_NAME>.db
-# 显式 DATABASE_URL 优先于后端按 argv0 推导的默认值，避免 merge 同步 Cargo.toml
+# 显式 --db 优先于后端按 argv0 推导的默认值，避免 merge 同步 Cargo.toml
 # 导致 binary 名变化、preview/dev 意外共享同一数据库（见 AGENTS.md 配置统一管理）
-export DATABASE_URL="sqlite:${HOME}/.omniterm/${BRANCH_BINARY_NAME}.db?mode=rwc"
+# 刻意不 export：后端配置一律走命令行参数，避免开发环境变量被后端派生的
+# 用户终端继承，进而劫持正式版 omniterm 的端口/数据库（见 §配置统一管理）
+DEV_DATABASE_URL="sqlite:${HOME}/.omniterm/${BRANCH_BINARY_NAME}.db?mode=rwc"
 PID_DIR="$PROJECT_DIR/.dev"
 BACKEND_PID="$PID_DIR/backend.pid"
 FRONTEND_PID="$PID_DIR/frontend.pid"
@@ -265,10 +267,11 @@ cmd_start() {
         # 忽略 SIGHUP：dev.sh 主流程退出时不会通过 shell 杀 cargo run
         trap '' HUP
         . "$HOME/.cargo/env"
-        export BIND_ADDR="127.0.0.1:$BACKEND_PORT"
         # 启用 info 级别，输出 starting omniterm branch=X version=Y 启动横幅（crate 名统一为 omniterm）
         export RUST_LOG="${RUST_LOG:-omniterm=info}"
-        cargo run -- start
+        # 端口/数据库走命令行参数而非环境变量：后端派生的用户终端会继承其环境，
+        # 环境变量形式会让正式版 omniterm 在这些终端里被开发配置劫持
+        cargo run -- start -H 127.0.0.1 -p "$BACKEND_PORT" --db "$DEV_DATABASE_URL"
     ) > "$BACKEND_LOG" 2>&1 &
     echo $! > "$BACKEND_PID"
 

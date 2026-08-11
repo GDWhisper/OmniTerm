@@ -138,7 +138,7 @@
    - 各 worktree `Cargo.toml` `[package] name` + `[[bin]] name`
    - 各 worktree `.env.local` `BRANCH_BINARY_NAME`（须与 Cargo.toml 一致）
    - `Dockerfile` `ARG` / `CMD`
-   - `docker-compose` `ports` / `BIND_ADDR`
+   - `docker-compose` `ports` / `OMNITERM_HOST` + `OMNITERM_PORT`
    - `dev.sh` 端口 / 分支逻辑
    - `AGENTS.md` 配置统一管理表 + 分支身份约定
    - `branch-workflows.md` 全文

@@ -281,13 +281,13 @@ function Start-Services {
     # 与 dev.sh 对齐：cargo run -- start，stdout/stderr 合并进同一日志。
     # Start-Process 不允许 stdout/stderr 重定向到同一文件，故经 cmd /c 重定向；
     # 子进程继承当前会话环境（含上方导出的 .env.local 变量）。
-    $env:BIND_ADDR = "127.0.0.1:$BACKEND_PORT"
+    # 监听地址走命令行参数而非环境变量：后端派生的用户终端会继承其环境，
+    # 环境变量形式会让正式版 omniterm 在这些终端里被开发配置劫持。
     $hadRustLog = [bool]$env:RUST_LOG
     if (-not $hadRustLog) { $env:RUST_LOG = 'omniterm_main=info,omniterm_server=info' }
     $proc = Start-Process -FilePath $env:ComSpec `
-        -ArgumentList "/d /c cargo run -- start > `"$BACKEND_LOG`" 2>&1" `
+        -ArgumentList "/d /c cargo run -- start -H 127.0.0.1 -p $BACKEND_PORT > `"$BACKEND_LOG`" 2>&1" `
         -WorkingDirectory $PROJECT_DIR -PassThru -WindowStyle Hidden
-    Remove-Item Env:BIND_ADDR -ErrorAction SilentlyContinue
     if (-not $hadRustLog) { Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue }
     $proc.Id | Out-File -FilePath $BACKEND_PID -NoNewline
 

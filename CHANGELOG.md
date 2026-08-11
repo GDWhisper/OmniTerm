@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-08-11 23:20) `[backend]` `[infra]` 修复正式版（npm / cargo / install.sh 各渠道）在某些终端里 `omniterm start` 必然报 `Address already in use (os error 98)`：后端以往把 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 这些**通用名**环境变量作为配置来源，而开发实例（dev.sh）会 export 它们，其派生的每个终端都继承——用户在这种终端里启动正式版会被劫持去绑开发实例已占用的端口（实测 `env -u BIND_ADDR -u BACKEND_PORT` 后立刻正常启动）。**BREAKING**：后端现在只读 `OMNITERM_*` 前缀的环境变量（`OMNITERM_HOST` / `OMNITERM_PORT` / `OMNITERM_DB` / `OMNITERM_JWT_SECRET` / `OMNITERM_AUTH_ENABLED`），旧名一律忽略并在启动时 warn 提示改名；`BIND_ADDR` 兜底整条移除，监听地址只由 `-H/--host` + `-p/--port` 决定。自建 Docker/compose 部署若设过 `DATABASE_URL` / `JWT_SECRET` / `BIND_ADDR`，须改用新名（否则回落默认库路径与随机密钥，需重新登录）（`src/main.rs`、`dev.sh`、`dev.ps1`、`Dockerfile`、`Dockerfile.release`、`docker-compose.yml`）
+
 ## [0.2.13] - 2026-08-11
 
 ### Added

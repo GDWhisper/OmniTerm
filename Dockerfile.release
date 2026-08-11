@@ -7,7 +7,8 @@ WORKDIR /app
 COPY omniterm-linux-x86_64 ./omniterm
 COPY frontend-dist ./frontend/dist
 
-ENV BIND_ADDR=0.0.0.0:9077
+ENV OMNITERM_HOST=0.0.0.0
+ENV OMNITERM_PORT=9077
 ENV FRONTEND_DIR=frontend/dist
 EXPOSE 9077
 

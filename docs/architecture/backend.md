@@ -220,16 +220,16 @@ Commands:
   update      Self-update to the latest release
 
 start options:
-  -p, --port <PORT>       Listen port (default: 9777 [dev], 9075 [preview], 9077 [main/docker]) [env: BACKEND_PORT]; explicit -p/-H overrides BIND_ADDR env
-      --db <DB>           Database connection string [env: DATABASE_URL]
-      --jwt-secret <KEY>  JWT signing key [env: JWT_SECRET] (auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
+  -p, --port <PORT>       Listen port (default: 9077; dev.sh 各 worktree 经 -p 传 9777 [dev] / 9075 [preview]) [env: OMNITERM_PORT]
+      --db <DB>           Database connection string [env: OMNITERM_DB]
+      --jwt-secret <KEY>  JWT signing key [env: OMNITERM_JWT_SECRET] (auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
       --auth-enabled      Force password verification [env: OMNITERM_AUTH_ENABLED] (accepts 1/0/true/false; DB value used if unset)
       --reset-auth        Delete all users before startup [env: OMNITERM_RESET_AUTH]
   -d, --daemonize         Run in background (Unix only; errors on Windows), logs appended to ~/.omniterm/<binary>.log; the parent process blocks until the daemon binds the port — on success it prints "OmniTerm vX.Y.Z started in the background — http://host:port (PID)", on failure (port in use / DB unreachable) it prints the error to the terminal and exits non-zero, never silently "succeeding"
       --debug             Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
 
 stop / status / reset-auth options:
-      --db <DB>           Database connection (used to locate the PID file) [env: DATABASE_URL]
+      --db <DB>           Database connection (used to locate the PID file) [env: OMNITERM_DB]
 
 update options:
       --check             Only check for a new version, do not update
@@ -260,19 +260,21 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:omniterm.db?mode=rwc` | SQLite connection string |
-| `JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
+| `OMNITERM_DB` | 按 argv0 推导（`~/.omniterm/<binary>.db`） | SQLite connection string（等价 `--db`） |
+| `OMNITERM_JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
 | `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
-| `BIND_ADDR` | `127.0.0.1:<port>` | 监听地址部署层兜底：dev.sh 与 docker-compose 用它指定监听地址（docker 传 `0.0.0.0:<port>` 全网暴露）。**用户显式传 `-p`/`-H` 时被忽略**（CLI 优先级高于该 env），避免残留 dev 环境变量劫持正式版端口 |
-| `OMNITERM_PORT` | 9777 (dev) / 9075 (preview) / 9077 (main) | CLI --port override via env |
+| `OMNITERM_HOST` | `127.0.0.1` | 监听地址（等价 `-H`）；Docker 传 `0.0.0.0` 全网暴露 |
+| `OMNITERM_PORT` | `9077` | 监听端口（等价 `-p`） |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
+
+**只认 `OMNITERM_*` 前缀**：通用名 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 已全部弃用且**不再读取**（启动时若检测到会 warn 提示改名）。原因：这些名字会被继承的环境意外命中——开发实例派生的终端里启动 npm 正式版会被 `BIND_ADDR=127.0.0.1:<dev port>` 劫持（报 `Address already in use`），而 `DATABASE_URL` 是用户自己项目里极常见的变量（指向 Postgres 等），会让 omniterm 连错库。部署层改用 `OMNITERM_HOST` + `OMNITERM_PORT`（docker）或命令行参数（dev.sh）。
 
 ## Auth 安全模型
 
 单用户（admin）密码认证，无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
 
-- **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `BIND_ADDR=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
-- **密钥**：`JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600）；容器/多实例场景建议显式设置 `JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
+- **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `OMNITERM_HOST=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
+- **密钥**：`OMNITERM_JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600）；容器/多实例场景建议显式设置 `OMNITERM_JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
 - **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
 - **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。
 - 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。
