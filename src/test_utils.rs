@@ -21,12 +21,12 @@ pub async fn test_state() -> AppState {
         .expect("in-memory sqlite pool");
     sqlx::migrate!("./migrations").run(&db).await.expect("run migrations");
     AppState {
-        db,
         jwt_secret: "test-secret".into(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
         login_guard: LoginGuard::new(),
-        engines: EngineRegistry::new(),
+        engines: EngineRegistry::new(db.clone()),
         acp_supervisor: AcpSupervisor::default(),
+        db,
     }
 }

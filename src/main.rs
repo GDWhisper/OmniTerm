@@ -562,7 +562,12 @@ fn main() -> anyhow::Result<()> {
             let db_url = args.db.unwrap_or_else(default_db_url);
             let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
 
-            let engines = engine::EngineRegistry::new();
+            let db = SqlitePoolOptions::new().max_connections(5).connect(&db_url).await?;
+
+            sqlx::migrate!("./migrations").run(&db).await?;
+
+            // 引擎注册表在 DB 就绪后构建：pty 引擎的 cwd 回写任务要更新 sessions 表
+            let engines = engine::EngineRegistry::new(db.clone());
 
             // 复用器缺失不再阻断启动：ACP runtime 不依赖它。
             // 复用器会话会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
@@ -572,10 +577,6 @@ fn main() -> anyhow::Result<()> {
                     e
                 );
             }
-
-            let db = SqlitePoolOptions::new().max_connections(5).connect(&db_url).await?;
-
-            sqlx::migrate!("./migrations").run(&db).await?;
 
             // 启动自愈：进程重启后不可能有进行中的 turn，任何残留的 'streaming' 行
             // 都是被中断的 turn，统一收尾为 'complete'，避免前端把陈旧行当作活跃流。

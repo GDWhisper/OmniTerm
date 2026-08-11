@@ -22,16 +22,18 @@ pub async fn handle_pty_terminal(
     info!("terminal WS connected (pty): session={}", session_id);
 
     // 引擎会话键存于冻结列 tmux_session_name（过渡期两引擎共用，D10）；
-    // 旧记录可能为 NULL，回退用 session_id。
-    let row: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT workspace_path, tmux_session_name FROM sessions WHERE id = ?")
-            .bind(&session_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
+    // 旧记录可能为 NULL，回退用 session_id。last_cwd 是 cwd 采样回写值（D5），
+    // 重建会话时优先使用，目录已失效则回退 workspace_path。
+    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT workspace_path, tmux_session_name, last_cwd FROM sessions WHERE id = ?",
+    )
+    .bind(&session_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
 
-    let Some((workspace, engine_key)) = row else {
+    let Some((workspace, engine_key, last_cwd)) = row else {
         let (mut sender, _) = ws.split();
         let msg =
             serde_json::to_string(&ServerControl::Error { message: "session not found" }).unwrap();
@@ -39,6 +41,7 @@ pub async fn handle_pty_terminal(
         return;
     };
     let key = engine_key.unwrap_or_else(|| session_id.clone());
+    let spawn_cwd = last_cwd.filter(|p| std::path::Path::new(p).is_dir()).unwrap_or(workspace);
 
     let size = PtySize {
         rows: query.rows.filter(|&r| r > 0 && r <= 1000).unwrap_or(24),
@@ -52,7 +55,7 @@ pub async fn handle_pty_terminal(
     );
 
     // resolve-or-create：后端重启/进程退出后的 attach 自动重建会话
-    let attach = match state.engines.attach_pty(&key, &workspace, size).await {
+    let attach = match state.engines.attach_pty(&key, &spawn_cwd, size).await {
         Ok(a) => a,
         Err(e) => {
             error!("failed to attach pty session {}: {}", key, e);

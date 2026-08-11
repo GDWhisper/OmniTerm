@@ -118,23 +118,6 @@ impl VtState {
         }
         out
     }
-
-    /// 全部 scrollback + 可见屏纯文本（切片 C 的 ANSI seed 源之一）。
-    #[allow(dead_code)]
-    pub fn capture_all(&self) -> String {
-        let screen = self.term.screen();
-        let total = screen.physical_rows;
-        let bottom = screen.visible_row_to_stable_row((total - 1) as i64) + 1;
-        let top = bottom - total as isize - screen.scrollback_rows() as isize;
-        let phys_range = screen.stable_range(&(top..bottom));
-        let mut out = String::new();
-        for line in screen.lines_in_phys_range(phys_range) {
-            let text: String = line.visible_cells().map(|c| c.str().to_string()).collect();
-            out.push_str(text.trim_end());
-            out.push('\n');
-        }
-        out
-    }
 }
 
 #[cfg(test)]

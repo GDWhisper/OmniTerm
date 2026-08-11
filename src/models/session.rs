@@ -77,6 +77,11 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub agent_id: Option<String>,
+    /// pty 会话前台进程 cwd 的最近采样（D5：后端重启重建用最后 cwd）。
+    /// tmux/acp 会话为 NULL。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub last_cwd: Option<String>,
     // Runtime activity indicator (multiplexer activity tracking, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]

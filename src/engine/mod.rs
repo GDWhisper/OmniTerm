@@ -69,15 +69,13 @@ pub struct EngineRegistry {
     watcher: AgentWatcher,
 }
 
-impl Default for EngineRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EngineRegistry {
-    pub fn new() -> Self {
-        Self { mux: TmuxEngine::new(), pty: PtyEngine::new(), watcher: AgentWatcher::default() }
+    pub fn new(db: sqlx::SqlitePool) -> Self {
+        Self {
+            mux: TmuxEngine::new(),
+            pty: PtyEngine::with_db(db),
+            watcher: AgentWatcher::default(),
+        }
     }
 
     pub fn watcher(&self) -> &AgentWatcher {

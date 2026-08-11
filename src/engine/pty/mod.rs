@@ -11,6 +11,7 @@
 
 pub mod cwd;
 pub mod ring;
+pub mod scrollback;
 pub mod session;
 pub mod terminal_ws;
 pub mod vt;
@@ -23,8 +24,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use portable_pty::{CommandBuilder, PtySize};
+use sqlx::SqlitePool;
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::agent::state::AgentSnapshot;
 use crate::engine::pty::ring::{ByteRing, DEFAULT_REPLAY_BYTES};
@@ -40,6 +42,10 @@ const OUTPUT_CHANNEL_FRAMES: usize = 256;
 const ACTIVE_WINDOW: Duration = Duration::from_secs(2);
 /// 无尺寸输入时的默认视口（trait create 路径用；attach 会按客户端尺寸 resize）。
 const DEFAULT_SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 };
+/// ANSI 历史去抖落盘周期（D5：herdr 5s debounce）。
+const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+/// 前台进程 cwd 采样回写周期（D5：30s；会话操作时的回写由退出 flush 覆盖）。
+const CWD_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 
 /// 输出汇聚点：补屏环 + 广播。读循环与 attach 在同一把锁下操作，
 /// 保证「快照 + 订阅」无重复无丢失（先 push 后 send，attach 先 snapshot
@@ -52,11 +58,15 @@ struct Output {
 struct SessionState {
     session: Arc<PtySession>,
     out: Mutex<Output>,
-    /// 服务端 VT grid（capture/title/resize；切片 C 接 ANSI seed 回放）。
+    /// 服务端 VT grid（capture/title/resize；重建时接受 ANSI seed）。
     vt: Mutex<VtState>,
     last_activity: Mutex<Instant>,
     /// 输出序号（agent 检测跳扫描用，等值比较语义，见 agent::watch）。
     output_seq: AtomicU64,
+    /// 已落盘到的 output_seq（去抖 flush 用，避免重复写盘）。
+    flushed_seq: AtomicU64,
+    /// 最近一次回写 DB 的 cwd（去重用）。
+    last_written_cwd: Mutex<Option<String>>,
     size: Mutex<PtySize>,
     created: String,
     /// spawn 时的工作目录（cwd 采样不可用时的回退）。
@@ -76,6 +86,83 @@ pub struct PtyEngine {
 impl Default for PtyEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl PtyEngine {
+    /// 无 DB 引擎（单测用）：不落盘、不回写 cwd。
+    pub fn new() -> Self {
+        Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) }
+    }
+
+    /// 生产引擎：挂 DB 并启动后台任务——
+    /// ① ANSI 历史 5s 去抖落盘（D5）；② 前台 cwd 30s 采样回写 `last_cwd`。
+    pub fn with_db(db: SqlitePool) -> Self {
+        let engine = Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) };
+        engine.spawn_flush_task();
+        engine.spawn_cwd_sampler(db);
+        engine
+    }
+
+    /// 去抖落盘：每 [`FLUSH_INTERVAL`] 把有新输出的会话补屏环快照写盘。
+    fn spawn_flush_task(&self) {
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(FLUSH_INTERVAL).await;
+                let states: Vec<(String, Arc<SessionState>)> = inner
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                    .collect();
+                for (key, state) in states {
+                    flush_if_dirty(&key, &state);
+                }
+            }
+        });
+    }
+
+    /// cwd 采样回写：每 [`CWD_SAMPLE_INTERVAL`] 采样前台进程 cwd，
+    /// 变化时写 `sessions.last_cwd`（后端重启重建的落点，D5）。
+    fn spawn_cwd_sampler(&self, db: SqlitePool) {
+        let inner = Arc::clone(&self.inner);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(CWD_SAMPLE_INTERVAL).await;
+                let states: Vec<(String, Arc<SessionState>)> = inner
+                    .sessions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                    .collect();
+                for (key, state) in states {
+                    let Some(cwd) = cwd::session_cwd(state.session.child_pid()) else {
+                        continue;
+                    };
+                    let cwd_str = cwd.to_string_lossy().into_owned();
+                    if *state.last_written_cwd.lock().unwrap() == Some(cwd_str.clone()) {
+                        continue;
+                    }
+                    // 引擎会话键存于冻结列 tmux_session_name（D10）
+                    match sqlx::query(
+                        "UPDATE sessions SET last_cwd = ? WHERE tmux_session_name = ?",
+                    )
+                    .bind(&cwd_str)
+                    .bind(&key)
+                    .execute(&db)
+                    .await
+                    {
+                        Ok(_) => {
+                            *state.last_written_cwd.lock().unwrap() = Some(cwd_str);
+                        }
+                        Err(e) => warn!("failed to write back last_cwd for {key}: {e}"),
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -122,10 +209,6 @@ impl PtyAttach {
 }
 
 impl PtyEngine {
-    pub fn new() -> Self {
-        Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) }
-    }
-
     /// resolve-or-create + attach。会话已存在则直接订阅（WS 层据
     /// `reconnected` 做 resize nudge 重绘）；不存在则以 `cwd`/`size` spawn。
     pub fn attach(&self, key: &str, cwd: &str, size: PtySize) -> Result<PtyAttach> {
@@ -181,10 +264,22 @@ impl PtyEngine {
             vt: Mutex::new(vt),
             last_activity: Mutex::new(Instant::now()),
             output_seq: AtomicU64::new(0),
+            flushed_seq: AtomicU64::new(0),
+            last_written_cwd: Mutex::new(None),
             size: Mutex::new(size),
             created: chrono::Utc::now().to_rfc3339(),
             spawn_cwd: cwd.to_string(),
         });
+
+        // 重建回放（D5）：后端重启/进程退出后重建时，把落盘 ANSI seed 进
+        // 补屏环与 VT grid（herdr seed_history_ansi 模式）——重连即可见历史。
+        if let Some(seed) = scrollback::load(key)
+            && !seed.is_empty()
+        {
+            state.out.lock().unwrap().ring.push(&seed);
+            state.vt.lock().unwrap().feed(&seed);
+            debug!("pty session rebuilt with {} bytes of history: {key}", seed.len());
+        }
 
         // 读循环：push 补屏环 → broadcast → feed VT grid。EOF/EIO 时注销（幂等）。
         let reader_state = Arc::clone(&state);
@@ -232,11 +327,28 @@ impl PtyEngine {
 }
 
 /// 幂等注销：仅当 map 中该 key 仍是同一个 Arc 时移除
-/// （防止误删 kill 后同名重建的新会话）。
+/// （防止误删 kill 后同名重建的新会话）。移除前把未落盘的历史写盘
+/// （自然退出保留历史供重建；显式 kill 先摘 map，不会走到这里）。
 fn unregister_if_same(inner: &Inner, key: &str, state: &Arc<SessionState>) {
     let mut sessions = inner.sessions.lock().unwrap();
     if sessions.get(key).is_some_and(|s| Arc::ptr_eq(s, state)) {
         sessions.remove(key);
+        flush_if_dirty(key, state);
+    }
+}
+
+/// 有新输出（output_seq 前进）时把补屏环快照写盘（D5 落盘纪律见 scrollback 模块）。
+fn flush_if_dirty(key: &str, state: &SessionState) {
+    let seq = state.output_seq.load(Ordering::Relaxed);
+    if seq == state.flushed_seq.load(Ordering::Relaxed) {
+        return;
+    }
+    let snapshot = state.out.lock().unwrap().ring.snapshot();
+    match scrollback::save(key, &snapshot) {
+        Ok(()) => {
+            state.flushed_seq.store(seq, Ordering::Relaxed);
+        }
+        Err(e) => warn!("failed to persist pty history for {key}: {e}"),
     }
 }
 
@@ -270,6 +382,8 @@ impl SessionEngine for PtyEngine {
         .await
         .map_err(|e| anyhow!("kill task join failed: {e}"))?;
         state.session.close_master();
+        // 显式 kill = 不需要重建，落盘历史一并删除（先摘 map，退出路径不会再写回）
+        scrollback::remove(name);
         info!("pty session killed: {name}");
         Ok(())
     }
@@ -475,6 +589,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exit_persists_history_and_rebuild_seeds_it() {
+        // 切片 C 验收：自然退出落盘历史 → 重建时 seed 回补屏环与 VT grid
+        let engine = engine();
+        let tmp = std::env::temp_dir();
+        let key = "rebuild-seed-test";
+
+        let attach = engine.attach(key, tmp.to_str().unwrap(), DEFAULT_SIZE).unwrap();
+        let writer = attach.clone();
+        let mut rx = attach.rx;
+        writer.write(b"echo REBUILD_MARK\n").unwrap();
+        let out = wait_for_output(&mut rx, b"REBUILD_MARK").await;
+        assert!(out.windows(12).any(|w| w == b"REBUILD_MARK"));
+        writer.write(b"exit\n").unwrap();
+        drop(rx);
+        drop(writer);
+
+        // 等注销 + 退出 flush 落盘
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while engine.session_exists(key).await {
+            assert!(tokio::time::Instant::now() < deadline, "session not unregistered");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let persisted = scrollback::load(key).expect("history must be persisted on exit");
+        assert!(
+            persisted.windows(12).any(|w| w == b"REBUILD_MARK"),
+            "persisted history must contain the output"
+        );
+
+        // 重建：补屏回放与 capture 都带历史
+        let attach2 = engine.attach(key, tmp.to_str().unwrap(), DEFAULT_SIZE).unwrap();
+        assert!(
+            attach2.replay.windows(12).any(|w| w == b"REBUILD_MARK"),
+            "rebuild replay must be seeded from persisted history"
+        );
+        let cap = engine.capture_screen(key).await.unwrap();
+        assert!(cap.contains("REBUILD_MARK"), "rebuild capture must see seeded history");
+
+        // 显式 kill：历史文件一并删除（不需要重建）
+        engine.kill_session(key).await.unwrap();
+        assert!(scrollback::load(key).is_none(), "kill must remove persisted history");
+    }
+
+    #[tokio::test]
     async fn child_exit_unregisters_session() {
         let engine = engine();
         let tmp = std::env::temp_dir();
@@ -487,6 +644,8 @@ mod tests {
             assert!(tokio::time::Instant::now() < deadline, "session not unregistered after exit");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        // 自然退出会落盘历史（供重建）；测试收尾清掉
+        scrollback::remove("exit-self");
     }
 
     #[cfg(target_os = "linux")]
