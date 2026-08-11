@@ -33,6 +33,13 @@ confidence-threshold = 0.8
 [advisories]
 # 漏洞公告：默认对已发布公告的 crate 报错
 # 忽略已撤回/误报需在此登记 id
+ignore = [
+    # adler ← miniz_oxide 0.4 ← wezterm-term（D8 git 依赖锁 2024 tag，无法独立升级）；
+    # 仅"不再维护"通告、非漏洞，功能由 flate2/miniz_oxide 链路内部使用
+    { id = "RUSTSEC-2025-0056", reason = "wezterm-term 锁版传递依赖，unmaintained 非漏洞" },
+    # paste ← termwiz ← wezterm-term；构建期 proc-macro，仓库归档但功能完备稳定
+    { id = "RUSTSEC-2024-0436", reason = "wezterm-term 锁版传递依赖，构建期宏，无运行时风险" },
+]
 
 [bans]
 # 依赖禁用/多重版本策略：使用默认（多版本仅警告）
