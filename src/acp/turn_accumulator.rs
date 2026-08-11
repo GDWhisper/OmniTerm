@@ -261,6 +261,15 @@ impl TurnAccumulator {
         })
     }
 
+    /// The DB row id of the current (or just-finished) turn; `None` until the first frame
+    /// is folded. Deliberately separate from [`Self::turn_snapshot`], which clones the
+    /// whole `text` and re-serializes the frame window (up to `MAX_BLOCKS_BYTES`) — far
+    /// too much work when a caller only needs the id. Survives `finalize_turn` (only
+    /// `begin_turn` clears it), so a turn-end event can still report it.
+    pub fn turn_row_id(&self) -> Option<String> {
+        self.inner.lock().ok()?.row_id.clone()
+    }
+
     /// Snapshot the live turn state for a freshly-connected WS client (reconnect
     /// reconciliation). Always reports `active` and the current `seq` high-water mark;
     /// `row_id` is `None` until the first frame is folded. See the WS `turn_snapshot`
@@ -426,6 +435,30 @@ mod tests {
     fn parse_frames(blocks: &str) -> Vec<Value> {
         let wrapper: Value = serde_json::from_str(blocks).expect("blocks 应为合法 JSON");
         wrapper["frames"].as_array().expect("frames 应为数组").clone()
+    }
+
+    /// `turn_row_id` must survive `finalize_turn`: the WS layer reads it *after* the turn
+    /// is finalized in order to hand it to the frontend in `prompt_done`, which is what
+    /// lets the frontend write cooked blocks back to that exact row. Only `begin_turn`
+    /// may clear it — otherwise every turn would end with "no row to write to".
+    #[test]
+    fn row_id_is_readable_after_finalize_and_reset_by_next_turn() {
+        let acc = TurnAccumulator::new();
+        let sid = SessionId::new("s1");
+
+        assert_eq!(acc.turn_row_id(), None, "未开始 turn 时无行 id");
+        acc.begin_turn();
+        assert_eq!(acc.turn_row_id(), None, "首帧折叠前仍无行 id（行是惰创建的）");
+
+        acc.fold(&text_chunk(&sid, "hello"));
+        let row_id = acc.turn_row_id().expect("首帧折叠后应有行 id");
+        assert_eq!(acc.turn_snapshot().row_id.as_deref(), Some(row_id.as_str()), "与快照同源");
+
+        acc.finalize_turn();
+        assert_eq!(acc.turn_row_id().as_deref(), Some(row_id.as_str()), "定稿后仍可读到");
+
+        acc.begin_turn();
+        assert_eq!(acc.turn_row_id(), None, "下一 turn 开始才清除");
     }
 
     /// 长 turn 高频帧（thought/tool chunk）不能把 frames 撑成无界：窗口在帧数与字节

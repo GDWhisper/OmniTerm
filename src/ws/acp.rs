@@ -145,7 +145,14 @@ enum AcpServerMessage<'a> {
         seq: Option<u64>,
     },
     #[serde(rename = "prompt_done")]
-    PromptDone { stop_reason: &'a str },
+    PromptDone {
+        stop_reason: &'a str,
+        /// 刚结束 turn 的 DB 行 id。前端据此把 cooked `blocks` 精确回写到那一行
+        /// （后端落的是原始帧，体积大两个数量级）。`None` = 本 turn 未折叠任何帧，
+        /// 无行可回写。与 `turn_snapshot.row_id` 同一个值。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        row_id: Option<&'a str>,
+    },
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
     #[serde(rename = "terminal_activity")]
@@ -252,8 +259,11 @@ async fn spawn_turn_end_task(
             match rx.recv().await {
                 Ok(event) => {
                     let msg = match &event {
-                        TurnEndEvent::Done { stop_reason } => {
-                            serde_json::to_string(&AcpServerMessage::PromptDone { stop_reason })
+                        TurnEndEvent::Done { stop_reason, row_id } => {
+                            serde_json::to_string(&AcpServerMessage::PromptDone {
+                                stop_reason,
+                                row_id: row_id.as_deref(),
+                            })
                         }
                         TurnEndEvent::Error { message } => {
                             serde_json::to_string(&AcpServerMessage::PromptError { message })
@@ -436,6 +446,9 @@ async fn dispatch_prompt(
             // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
             c.notify_turn_end(TurnEndEvent::Done {
                 stop_reason: format!("{:?}", resp.stop_reason),
+                // mark_prompt_idle 已定稿本 turn，但 row_id 要到下一次 begin_turn 才清 ——
+                // 此处仍能读到本 turn 的行 id，交给前端做 cooked 回写。
+                row_id: c.turn_row_id(),
             });
         }
         Err(e) => {

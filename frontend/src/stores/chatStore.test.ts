@@ -3,6 +3,7 @@ import {
   useChatStore,
   readQueuedFromStorageForSession,
   messagesToSyncPayload,
+  turnToSyncPayload,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
@@ -475,5 +476,77 @@ describe('messagesToSyncPayload', () => {
     ]
     const payload = messagesToSyncPayload(msgs)
     expect(payload.map((p) => p.text)).toEqual(['1', '2', '4'])
+  })
+})
+
+describe('turnToSyncPayload', () => {
+  function mk(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
+    return {
+      id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
+      text: overrides.text ?? '',
+      blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
+      createdAt: overrides.createdAt ?? 0,
+      streaming: overrides.streaming,
+      role: overrides.role,
+    }
+  }
+
+  it('targets the backend row id and carries the cooked blocks', () => {
+    const msgs = [
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'a', streaming: true }),
+    ]
+    expect(turnToSyncPayload(msgs, 'row-1')).toEqual([
+      {
+        id: 'row-1',
+        role: 'assistant',
+        text: 'a',
+        blocks: JSON.stringify([{ type: 'text', text: 'a' }]),
+      },
+    ])
+  })
+
+  it('ignores finished messages from earlier turns', () => {
+    const msgs = [
+      mk({ role: 'assistant', text: 'old turn' }),
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'this turn', streaming: true }),
+    ]
+    const payload = turnToSyncPayload(msgs, 'row-1')
+    expect(payload[0].text).toBe('this turn')
+    expect(payload[0].blocks).toBe(JSON.stringify([{ type: 'text', text: 'this turn' }]))
+  })
+
+  it('collapses a multi-message turn into one row (DB keeps one row per turn)', () => {
+    const msgs = [
+      mk({ role: 'assistant', text: 'part1', streaming: true }),
+      mk({ role: 'assistant', text: 'part2', streaming: true }),
+    ]
+    const payload = turnToSyncPayload(msgs, 'row-1')
+    expect(payload).toHaveLength(1)
+    expect(payload[0].text).toBe('part1part2')
+    expect(payload[0].blocks).toBe(
+      JSON.stringify([
+        { type: 'text', text: 'part1' },
+        { type: 'text', text: 'part2' },
+      ]),
+    )
+  })
+
+  it('keeps tool-only turns (empty text, fat blocks) \u2014 those are the big rows', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'tool_call', toolCallId: 't1', title: 'read', status: 'completed' },
+    ]
+    const payload = turnToSyncPayload([mk({ role: 'assistant', blocks, streaming: true })], 'row-1')
+    expect(payload).toHaveLength(1)
+    expect(payload[0].text).toBe('')
+    expect(payload[0].blocks).toBe(JSON.stringify(blocks))
+  })
+
+  it('returns nothing when the turn has no blocks (do not blank out the backend row)', () => {
+    expect(turnToSyncPayload([mk({ role: 'assistant', blocks: [], streaming: true })], 'row-1')).toEqual([])
+    expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
+    expect(turnToSyncPayload([], 'row-1')).toEqual([])
   })
 })

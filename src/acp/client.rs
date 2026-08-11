@@ -59,8 +59,16 @@ pub struct ResourceInput {
 /// 通道会把结束帧发进死连接被静默丢弃，新连接则永远收不到结束信号。
 #[derive(Debug, Clone)]
 pub enum TurnEndEvent {
-    Done { stop_reason: String },
-    Error { message: String },
+    Done {
+        stop_reason: String,
+        /// 刚结束的 turn 的 DB 行 id（`None` 表示本 turn 未折叠任何帧）。前端据此
+        /// 把 cooked `blocks` 精确回写到那一行（见 `chat_persistence::sync_messages`）：
+        /// 后端落的是原始帧，体积比 cooked 大两个数量级。
+        row_id: Option<String>,
+    },
+    Error {
+        message: String,
+    },
 }
 
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
@@ -529,6 +537,12 @@ impl AcpClient {
         self.turn_end_tx.subscribe()
     }
 
+    /// 当前（或刚结束的）turn 的 DB 行 id。专用轻量访问器：`turn_snapshot()`
+    /// 会克隆全量 `text` 并序列化整个帧窗口（可达 128KB），为拿一个 id 不值得。
+    pub fn turn_row_id(&self) -> Option<String> {
+        self.accumulator.turn_row_id()
+    }
+
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
     pub fn notify_turn_end(&self, event: TurnEndEvent) {
         let _ = self.turn_end_tx.send(event);
@@ -748,7 +762,10 @@ impl AcpClient {
                     CANCEL_TURN_FALLBACK_SECS
                 );
                 client.mark_prompt_idle();
-                client.notify_turn_end(TurnEndEvent::Done { stop_reason: "Cancelled".into() });
+                client.notify_turn_end(TurnEndEvent::Done {
+                    stop_reason: "Cancelled".into(),
+                    row_id: client.turn_row_id(),
+                });
             }
         });
     }

@@ -197,7 +197,7 @@ and render rich cards instead of the current text-only fallback.
 
 ### Backend-authoritative persistence & reconnect
 
-消息真相源在后端（见 backend.md turn accumulator）。前端只 hydrate + 无缝续接，不再在 `prompt_done` 回写 assistant turn。
+消息真相源在后端（见 backend.md turn accumulator）：`text` 与消息存在性由累积器权威落库，前端只 hydrate + 无缝续接。**唯一的例外是 `blocks`**——后端落原始帧，只有前端能 cook 成折叠后的结构化 blocks（体积差两个数量级），所以 turn 结束时前端把 cooked blocks 回写到那一行。
 
 - **hydrate 还原**：`ChatView` mount 时 `GET /messages` 取**最近一页**（后端按条数 + 字节双预算切页，见 backend.md）；`decodeStoredBlocks`（导出自 `useAcpChat`）识别 blocks 列——数组=cooked `ContentBlock[]` 直用，`{"v":1,"frames":[...]}`=原始帧则复用 live 分类器 `classifySessionUpdate(normalizeSessionUpdate(frame))` + `buildReplayMessages` 还原成结构化 blocks（streaming 与 complete 行同源，杜绝 TS/Rust 双份分类）。`status==='streaming'` 映射为 `ChatMessage.streaming`。落定后 `setHydrated(sid, true)`。DB 行→`ChatMessage` 的转换集中在 `toChatMessages`，首屏与上拉分页共用。
 - **上拉加载更早历史**：`historyCursor`（后端 `nextCursor`，`null` = 已到开头，**唯一信号源，不另存 hasMore**）+ `loadingHistory`（防重入）。滚到距顶 `TOP_LOAD_THRESHOLD_PX` 内且容器真的可滚动时拉下一页 → `prependMessages`（按 id 去重，单次 `set()` 提交消息+游标+清 in-flight）。**前插必须补偿滚动位置**：前插前记 `scrollHeight`，`useLayoutEffect` 里把差值加回 `scrollTop`（绘制前改，否则闪一帧跳动）。只在可滚动时触发是必要的：内容不足一屏时 `scrollTop` 恒为 0，会在 `autoStick` 仍为 true 时自动拉取并被贴底逻辑拽回底部。`commitReplay`（手动 restore）重建的是 agent 侧完整历史，故显式置 `historyCursor: null`。
@@ -206,5 +206,13 @@ and render rich cards instead of the current text-only fallback.
 - **turn_snapshot / turn_state**：连接时后端先发 `turn_state{active}` 再（active 时）发 `turn_snapshot{row_id, text, blocks, seq}`。`applyTurnSnapshot` 按 `row_id` 替换/收编在建 streaming 消息，并把 `inProgressSeq` 水位置为快照 seq。`turn_state{active:false}` 定稿残留 streaming 消息。
 - **seq 去重**：live `session_update` 帧带 `seq`；`inProgressSeq != null && frame.seq <= inProgressSeq` 时丢弃（subscribe-before-snapshot 的重叠重复帧已体现在快照里），否则应用并推高水位。`prompt_done` 清空水位，下一 turn 从零开始。
 - **自动重连**（`useAcpChat`，仿 `useFileWatcher`）：WS 连接逻辑封装进 `connect()`，`onclose` 非主动拆除（`unmounted` 区分 session 切换/卸载 vs 网络断）时按指数退避 `min(1000 * 2**retry, 30000)`（1→2→4→8→cap 30s）`setTimeout(connect)`，`onopen` 成功归零 `retry`。陈旧 socket（`wsRef.current !== ws`）的迟到 `onclose` 早返避免重复调度。重连**不重发** `load_session`（保持手动 `restore()` 语义，`suppressReplay`/`isManualRestore` 不受影响），进行中 turn 由 `turn_snapshot`/`turn_state` 续接；cleanup 清 timer + 关 socket。保留原有断连时 `sending→error` 与 `queuedMessage→undelivered` 留痕。
-- **syncToDb 现仅用于 `load_session` 重放路径**（进程死亡恢复 `restore()`）——累积器不持久化重放帧，故重放重建的历史仍经 `messagesToSyncPayload` 非破坏性写回 DB。`prompt_done` 不再调用它。
+- **两条回写路径，粒度不同**（都经 `POST /messages/sync`，匹配语义见 backend.md）：
+
+  | 触发 | 发什么 | 定位键 | 为什么 |
+  |---|---|---|---|
+  | `prompt_done`（每 turn） | `turnToSyncPayload` 只发**本 turn 一条** | `frame.row_id`（后端行 id） | 全量重写会随会话增长变成 O(m²) 写放大；本 turn 消息靠 `streaming` 标记界定，故**必须在 `markDone` 之前**调用（它会清掉该标记） |
+  | `replay_end`（手动 restore） | `syncToDb` 发全量 `messagesToSyncPayload` | 无 id → 后端文本匹配 | 累积器不持久化重放帧，重放重建的历史只活在内存，需整份写回；手动恢复罕见，全量可接受 |
+
+  **为什么按 `row_id` 而不是文本匹配**：后端一个 turn 一行，前端本 turn 可能不止一条消息；且文本相等这个不变式易漂移（丢帧、cancel 补发帧、拆分粒度），对不上就会 INSERT 重复行。`ChatMessage.dbId` 承载「已知的真 DB 行 id」（hydrate 行 / `turn_snapshot` 的 `row_id`），本地 `genId()` 的消息不填——谎报会静默命中零行。
+  **纯工具调用 turn 的 `text` 为空**（后端只累积 `AgentMessageChunk`），却恰好是 blocks 最肥的一类，所以后端的空 text 跳过守卫只作用于文本匹配路径。
 

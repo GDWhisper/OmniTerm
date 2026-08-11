@@ -120,9 +120,13 @@ Lifecycle:
 - **turn 门控排除重放**：累积仅在 `active` 时进行。turn 只由 `mark_prompt_active()`（用户 prompt 路径）开启，`load_session` 重放从不调用它 → 重放帧结构性地不被折叠。
 - **fold**：`active` 时把 `serde_json::value::to_raw_value(&update)` 追加进 `frames`（预序列化 `RawValue`：窗口字节数免手工计量，flush 时只拷贝字节而非重新格式化），从 `AgentMessageChunk` 的文本块提取纯文本累加进 `text`（唯一的轻量提取，非完整分类），置 `dirty` 并向 writer 发 `Flush`。
 - **窗口双维度限界**（`MAX_FRAMES=2000` 帧数 / `MAX_BLOCKS_BYTES=128KB` 字节 / `MAX_FRAME_BYTES=64KB` 单帧）：超限从队首淘汰，单帧超限则不入窗（`text` 仍全量兜底）。字节维度是必须的，不是保险——**单帧大小由 agent 决定，不由我们决定**（§8 实测差异：codebuddy 每个 `tool_call_update` 只带 1 字符增量内容，却在每一帧里重复携带完整 `rawInput`，实测 4.5KB/帧，>97% 是同一份副本；opencode/ccb 未观察到此行为）。仅限帧数时 2000 帧窗口曾达 8.7MB 单行，使 `GET /messages` 下发 15MB、切 ACP 会话阻塞约 0.5s。代价：肥帧下结构恢复窗口缩到数十帧，可接受——`text` 保全正文，且前端分类器把同 `toolCallId` 的所有 update 折叠成一张卡片，渲染结果几乎不变。
-- **blocks 列格式**：streaming 与 complete 行的 `blocks` 都存**原始帧包裹** `{"v":1,"frames":[<update>,...]}`（`finalize` 只翻 status，不重写 blocks）；前端复用现有 TS 分类器还原成结构化 blocks，杜绝 Rust 侧重复分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。cooked `ContentBlock[]` 数组仅用于 user 图片消息、`load_session` 重放经前端 syncToDb 写回、legacy 行——判别：数组=cooked，对象含 `frames`=原始帧。
+- **blocks 列格式**：streaming 与 complete 行的 `blocks` 都存**原始帧包裹** `{"v":1,"frames":[<update>,...]}`（`finalize` 只翻 status，不重写 blocks）；前端复用现有 TS 分类器还原成结构化 blocks，杜绝 Rust 侧重复分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。cooked `ContentBlock[]` 数组用于 user 图片消息、**turn 结束后的回写**、`load_session` 重放写回、legacy 行——判别：数组=cooked，对象含 `frames`=原始帧。
   > **存量数据**：上述字节上限只作用于新写入。修复前产生的超大行（本地实测最大单行 9MB）仍会让那些历史会话首次打开时慢，需要时另做一次性截断迁移。
-- **存储格式两态**：streaming 期间 `blocks` 是**原始帧** `{"v":1,"frames":[...]}`；前端 `syncToDb` 会用 **cooked** `ContentBlock[]` 通过 `sync_messages` 覆盖它（`chat_persistence.rs` 的 `UPDATE ... SET blocks`）。两者体积差两个数量级——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个 `tool_call`，每帧重复携带的 `rawInput` 副本只剩一份（实测：cooked 行最大 114KB，同库未覆盖的原始帧行达 9,150,950 字符）。**但 `sync_messages` 只在 `replay_end`（用户手动 restore）时触发**，所以未做过 restore 的行会永久停在原始帧状态——存量巨行全部出自此，详见 `docs/reference/chat-history-loading-comparison.md`。
+- **存储格式两态与收敛时机**：streaming 期间 `blocks` 是**原始帧** `{"v":1,"frames":[...]}`；前端用 **cooked** `ContentBlock[]` 经 `sync_messages` 覆盖它。两者体积差两个数量级——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个 `tool_call`，每帧重复携带的 `rawInput` 副本只剩一份（实测：cooked 行最大 114KB，同库未被覆盖的原始帧行达 9,150,950 字符）。两个收敛触发点：
+  - **`prompt_done`（每 turn）**：帧携带本 turn 的 `row_id`，前端只发**本 turn 一条** payload 按行 id 回写。不发全量——每 turn 重写整个会话是 O(m²) 写放大。短 turn 可能抢在防抖写之前 sync（影响 0 行），该行留在原始帧态。
+  - **`replay_end`（手动 restore，罕见）**：全量写回，无 id 走文本匹配。
+
+  前端 cook **不是重复劳动**而是唯一的体积收敛路径；但窗口上限（`MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES`）仍是必需兜底——前端不在线时（用户关了浏览器而 agent 继续跑）无人 cook。代价：cooked 覆盖后原始帧不可恢复，失去「分类器升级后重新解释旧历史」的能力（已明确接受，见计划 D2）。详见 `docs/reference/chat-history-loading-comparison.md`。
 - **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
 - **生命周期钩子**（挂 `AcpClient`，幂等）：`mark_prompt_active`→`begin_turn`；`send_prompt` 返回 / crash watcher→`finalize_turn`。cancel **不立即** finalize：合作的 agent 收到 `session/cancel` 后会让 `send_prompt` 以 `Cancelled` 返回、走正常定稿路径（取消后补发的尾部帧照常落库）；无视 cancel 的实现（§8）由 `spawn_cancel_turn_fallback` 兜底——超时（`CANCEL_TURN_FALLBACK_SECS`）后若同一 turn 仍在进行（prompt 世代计数守卫）则强制 `mark_prompt_idle` + 广播 turn 结束。
 - **启动自愈**：`main.rs` migrate 后 `UPDATE chat_messages SET status='complete' WHERE status='streaming'`（重启后不可能有进行中 turn）。
@@ -167,6 +171,8 @@ Lifecycle:
 ### 重连续接协议（seq + turn_snapshot / turn_state）
 
 per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分配，跨 turn 不重置），broadcast 载荷为 `SeqNotification{ seq, notification }`；WS `session_update` 帧带 `seq`（config/commands/replay 帧无 seq）。连接时 supervisor-hit 分支**先 subscribe 再 snapshot**（消除 gap，把重叠窗变为 seq 可解的重复窗）：发 `turn_state{active}`，若 active 再发 `turn_snapshot{row_id, text, blocks, seq}`。前端据此按 `row_id` 收编在建消息、以 `seq` 为水位丢弃重叠重复帧（详见 frontend.md）。
+
+`prompt_done{stop_reason, row_id?}` 同样携带本 turn 的 `row_id`（与 `turn_snapshot.row_id` 同一个值，`None` = 本 turn 未折叠任何帧），供前端把 cooked blocks 精确回写到那一行。三个广播点（正常完成、cancel 兜底、reaper 超时）均经 `AcpClient::turn_row_id()` 取值——专用轻量访问器，**不走 `turn_snapshot()`**（后者克隆全量 `text` 并重新序列化整个帧窗口，为拿一个 id 不值得）。`row_id` 存活到下一次 `begin_turn`，所以定稿后仍可读。
 
 turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `AcpClient` 的 `turn_end_tx` broadcast 发给**所有** WS 连接（`spawn_turn_end_task`），与 `session_update`/`crash` 同模式。不能只回发起 prompt 的连接：prompt task 存活期跨 WS 重连，per-connection 通道会把结束帧发进死连接被静默丢弃，重连后的前端永远停留在 running 态。
 

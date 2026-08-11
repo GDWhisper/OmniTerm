@@ -1,6 +1,6 @@
 # ACP 会话可靠性加固：存储限界与数据正确性
 
-> 状态：设计稿（2026-08-10）
+> 状态：Phase 0 / Phase 1 已实施（2026-08-11，提交 `2d18fa1` 起）；Phase 2-4 待办
 > 触发条件：修改 `src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx` 中任一项前必读
 > 关联：`docs/reference/chat-history-loading-comparison.md`（三方参考实现对比与实测数据）、`docs/dev/performance-and-safety.md` §P1/§P2/§P5、`docs/architecture/backend.md`（blocks 两态）、`docs/dev/plans/2026-07-28-pty-engine-implementation.md`
 > 前置认识：**样本量不能当作"极端情况罕见"的证据**。本项目开发库会话数少，是因为维护者不信任 ACP 会话而习惯改用终端——这是不可靠导致的结果，不是"不需要加固"的理由。实测那条 9,150,950 字符的巨行出现在一个**仅 19 条消息**的会话里。
@@ -11,8 +11,8 @@
 
 | # | 问题 | 严重度 | 实测证据 |
 |---|---|---|---|
-| P0 | `sync_messages` 的 `UPDATE` 无行限定，同文本消息的 `blocks` 互相污染 | **高（损坏数据）** | dev 库某会话 14 行 assistant `"OK"`、14 个不同 `id`，但 `count(DISTINCT blocks) = 1` —— 全被同一份覆盖 |
-| P1 | 原始帧 `blocks` 可能永久留存，不收敛成 cooked | 高（体积差 2 个数量级） | 所有超大行都是未被 sync 覆盖的原始帧；cooked 行最大 114KB，原始帧行达 9,150,950 字符 |
+| P0 ✅ | `sync_messages` 的 `UPDATE` 无行限定，同文本消息的 `blocks` 互相污染 | **高（损坏数据）** | dev 库某会话 14 行 assistant `"OK"`、14 个不同 `id`，但 `count(DISTINCT blocks) = 1` —— 全被同一份覆盖 |
+| P1 ✅ | 原始帧 `blocks` 可能永久留存，不收敛成 cooked | 高（体积差 2 个数量级） | 所有超大行都是未被 sync 覆盖的原始帧；cooked 行最大 114KB，原始帧行达 9,150,950 字符 |
 | P2 | `text` 列无字节上限 | 中（O(n²) 写放大） | `turn_accumulator.rs:188` `st.text.push_str()` 无上限；当前实测最大 36,834 字符，属未爆发风险 |
 | P3 | 触顶加载无滞后锁 | 中（交互失控） | 停在顶部时请求落定后下一个滚动事件立刻触发下一页 |
 | P4 | 会话数无上限 | 低 | `sessions` 表无任何行数约束 |
@@ -102,7 +102,7 @@
 
 ## 实施分期
 
-### Phase 0（P0，前置）— 修 blocks 污染
+### Phase 0（P0，前置）— 修 blocks 污染 ✅ 已完成（2026-08-11，`2d18fa1`）
 
 | 项 | 内容 |
 |---|---|
@@ -110,14 +110,24 @@
 | 测试 | 后端单测：同一会话两条 text 相同但 id 不同的 assistant 行，sync 后各自 blocks 独立（当前实现会失败——先写测试复现，见 `docs/dev/plans/2026-07-24-quality-gates.md` 的 TDD 约定） |
 | 验收 | 上述单测通过；`count(DISTINCT blocks)` 与行数一致 |
 
-### Phase 1（P1）— turn 结束落 cooked
+### Phase 1（P1）— turn 结束落 cooked ✅ 已实施（2026-08-11，待手动回归）
+
+> **勘误（2026-08-11）— 实施手段与 D2 偏离（方向不变）**
+>
+> D2 预设的「`prompt_done` 时调 `syncToDb()`」有两个实施时才看清的问题，已改做法：
+>
+> 1. **不能复用全量 `syncToDb()`**。它发的是整个会话的全部消息。`replay_end` 是手动恢复、罕见，全量可接受；`prompt_done` 每 turn 都发生，全量重写就是本文「写入策略」一节批评 obsidian-agent-client 的 O(m²) 写放大。现只发**本 turn 一条** payload（`chatStore.turnToSyncPayload`）。
+> 2. **不靠 text 一致性，改用 `row_id` 精确匹配**。原「前置验证」要求确认两侧 `text` 逐字节一致；实测语义确实一致（后端 `turn_accumulator.rs:187-188` 只追加 `AgentMessageChunk`，前端 `chatStore.ts` `appendChunk` 同样），**但这是个易漂移的不变式**——丢帧、cancel 补发帧、消息拆分粒度任一处变动就静默 INSERT 重复行。而更好的键已存在：后端 turn 行的 `row_id`，且 `turn_snapshot` 帧已有下发先例。现 `prompt_done` 帧一并下发 `row_id`，正确性从「文本相等」上解耦。
+> 3. 连带发现：`sync_messages` 原有的 `text.is_empty()` 跳过守卫会把**纯工具调用 turn**（后端 `text` 本就为空，却恰好是 blocks 最肥的一类）全部排除在外。该守卫已收窄到只适用于无 id 的文本匹配路径。
+>
+> 短 turn（< 250ms 防抖窗）仍有竞态：`prompt_done` 广播可能早于 writer 落库，此时按 id 更新影响 0 行 → 该行留在原始帧态（无害，不会插重复行）。补齐路径（hydrate 落定后对原始帧行回写一次，此时 id 天然是 DB 行 id、无竞态）**未纳入本次范围**，待 Phase 1 效果确认后再评估。
 
 | 项 | 内容 |
 |---|---|
-| 依赖 | **Phase 0 必须先完成** |
-| 改动 | `frontend/src/hooks/useAcpChat.ts`：`prompt_done` 分支（:706-714）调用 `syncToDb()`，并**改写那条"前端不再回写"的注释**为新的决策依据（保留决策留痕，不要静默删掉） |
-| 前置验证（务必先做） | 确认前端 cooked 消息的 `text` 与后端 `turn_accumulator` 累积的 `text` 是否**逐字节一致**。后端只累积 `AgentMessageChunk` 的文本（`turn_accumulator.rs:187-189` + `agent_message_text`），若前端 `ChatMessage.text` 包含其他来源，文本匹配会失败并**INSERT 出重复行**。Phase 0 的 id 匹配可缓解，但 live 消息无 DB id，仍会走文本路径 |
-| 验收 | 跑完一个含工具调用的 turn 后，该行 `blocks` 以 `[` 开头（cooked）而非 `{"v":1,"frames"`；消息条数不增加（无重复行） |
+| 依赖 | **Phase 0 必须先完成**（已完成，提交 `2d18fa1`） |
+| 改动 | 后端：`TurnEndEvent::Done` 与 WS `prompt_done` 帧加 `row_id`（`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/reaper.rs`），新增 `TurnAccumulator::turn_row_id()` 轻量访问器（不走 `turn_snapshot`——后者克隆全量 text + 序列化 128KB 帧窗）；前端：`prompt_done` 分支在 `markDone` **之前**调 `syncTurnToDb`（`useAcpChat.ts`），约束逻辑抽为纯函数 `turnToSyncPayload`（`chatStore.ts`） |
+| 测试 | 后端：`row_id` 跨 `finalize_turn` 存活、仅 `begin_turn` 清除；空 text 行在 id 路径下仍可回写 / 在文本路径下仍被跳过。前端：5 条 `turnToSyncPayload`（streaming 边界、多条合并、纯工具 turn、空 blocks 不写） |
+| 验收 | 已做：HTTP 端到端验证（临时实例 + 临时库）——带 id 只改那一行且不动 text、同 text 另一行未被污染、空 text 行可写、未知 id 不插行、无 id 的 replay 路径仍能逐行落位与 INSERT。**待手动回归**：跑一个含工具调用的真实 turn 后，该行 `blocks` 以 `[` 开头（cooked）而非 `{"v":1,"frames"`；消息条数不增加 |
 
 ### Phase 2（P2）— `text` 字节上限
 

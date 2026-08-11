@@ -1115,3 +1115,34 @@ export function messagesToSyncPayload(
   }
   return payload
 }
+
+/**
+ * Build the sync payload for a turn that just finished, targeting the single DB row the
+ * backend accumulator created for it (`rowId`).
+ *
+ * Must be called **before `markDone`**: the turn's messages are identified by the
+ * `streaming` flag, which `markDone` clears.
+ *
+ * - Multiple messages collapse into one entry — the backend keeps one row per turn, and
+ *   hydrating that row yields one message again.
+ * - `text` is a placeholder: the id-carrying path never writes `text` (its authority is
+ *   the backend accumulator), it only replaces the raw-frame `blocks` with cooked ones.
+ * - Empty `blocks` → empty payload: nothing to converge, and a blank write would only
+ *   destroy the raw frames the backend already stored.
+ */
+export function turnToSyncPayload(
+  messages: readonly ChatMessage[],
+  rowId: string,
+): SyncMessagePayload[] {
+  const live = messages.filter((m) => m.role === 'assistant' && m.streaming)
+  const blocks = live.flatMap((m) => m.blocks)
+  if (blocks.length === 0) return []
+  return [
+    {
+      id: rowId,
+      role: 'assistant',
+      text: live.map((m) => m.text).join(''),
+      blocks: JSON.stringify(blocks),
+    },
+  ]
+}

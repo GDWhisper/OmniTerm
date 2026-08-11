@@ -225,10 +225,6 @@ pub async fn sync_messages(
     let mut candidates: HashMap<(&str, &str), VecDeque<String>> = HashMap::new();
 
     for m in messages {
-        if m.text.is_empty() {
-            continue;
-        }
-
         if let Some(row_id) = &m.id {
             let Some(blocks) = &m.blocks else { continue };
             let affected =
@@ -246,6 +242,13 @@ pub async fn sync_messages(
             } else {
                 consumed.insert(row_id.clone());
             }
+            continue;
+        }
+
+        // 无 id 路径才要求 text 非空：它靠 text 匹配，空 text 无法定位，也不该 INSERT
+        // 空行。带 id 的路径无此限制——**纯工具调用 turn 的 `text` 本就是空的**
+        // （后端只累积 `AgentMessageChunk`），却恰好是 blocks 最肥的一类 turn。
+        if m.text.is_empty() {
             continue;
         }
 
@@ -607,6 +610,31 @@ mod tests {
                 .await
                 .expect("fetch");
         assert_eq!(blocks, ["[\"a\"]", "[\"b\"]"], "第二轮按同顺序落到同两行");
+    }
+
+    /// A tool-only turn accumulates no `AgentMessageChunk` text, so its row has an empty
+    /// `text` — yet those are exactly the turns with the fattest `blocks`. The row-id path
+    /// must not skip them.
+    #[tokio::test]
+    async fn row_id_path_accepts_empty_text_rows() {
+        let db = fresh_db().await;
+        seed_row(&db, "row-a", "assistant", "", "2026-08-10T00:00:01Z").await;
+
+        sync_messages(&db, SESSION, &[id_entry("row-a", "", "[\"cooked\"]")]).await.expect("sync");
+
+        assert_eq!(blocks_of(&db, "row-a").await.as_deref(), Some("[\"cooked\"]"));
+        assert_eq!(row_count(&db).await, 1);
+    }
+
+    /// An empty-text entry *without* an id has nothing to match on — inserting it would
+    /// create a blank history row.
+    #[tokio::test]
+    async fn text_path_skips_empty_text_entries() {
+        let db = fresh_db().await;
+
+        sync_messages(&db, SESSION, &[text_entry("", "[\"cooked\"]")]).await.expect("sync");
+
+        assert_eq!(row_count(&db).await, 0, "空 text 无 id 无法定位，不得 INSERT 空行");
     }
 
     #[test]

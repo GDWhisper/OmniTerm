@@ -33,6 +33,8 @@ obsidian-agent-client 存 **cooked** 产物（`MessageContent[]` 联合类型：
 于是 blocks 膨胀的根因有了更准确的表述：**不是「缺少上限」，而是「原始帧这个中间状态可能永久留存」**。`sync_messages` 会用前端 cooked blocks `UPDATE` 覆盖（`chat_persistence.rs:214`），是天然的收敛机制，但它**只在 `replay_end`（用户手动 restore）时触发**，所以没做过 restore 的行永远停在原始帧状态。
 
 据此，比「压缩存储」或「截断」更根本的方向是：**让 turn 结束时就落 cooked**。前端已有完整路径（`messagesToSyncPayload` → `sync_messages`），只缺一个触发点（`prompt_done` 时也 sync，而非只在 `replay_end`）。注意两点：
+
+> **已实施（2026-08-11）**：`prompt_done` 帧现携带后端 turn 行的 `row_id`，前端按行 id 精确回写**本 turn 一条** payload。两处偏离本节初稿的设想：(a) 不复用全量 `syncToDb`——每 turn 全量重写正是本文下一节批评 obsidian-agent-client 的 O(m²) 放大；(b) 不靠「两侧 `text` 逐字节相等」这个易漂移的不变式定位行。详见 `docs/dev/plans/2026-08-10-acp-session-reliability.md` Phase 1 勘误。
 - 窗口字节上限（`MAX_BLOCKS_BYTES`）**仍然必需，不能撤** —— 前端不在线时（用户关了浏览器而 agent 继续跑）没人 cook。
 - 代价是失去「分类器升级后重新解释历史」的能力。obsidian-agent-client 证明存 cooked 是可行的主流选择。
 
