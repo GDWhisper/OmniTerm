@@ -40,6 +40,8 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
     }
     return {
       id: m.id,
+      // Hydrated rows carry their real DB id, so a later sync can target them exactly.
+      dbId: m.id,
       role: m.role as 'user' | 'assistant',
       text: m.text,
       blocks,

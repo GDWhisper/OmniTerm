@@ -159,6 +159,20 @@ export interface SlashCommand {
 
 export interface ChatMessage {
   id: string
+  /**
+   * The real `chat_messages.id` row id, when known. Set for hydrated messages
+   * (`GET /messages` returns row ids) and for the in-progress turn once the
+   * backend pushes its `row_id` down (`turn_snapshot` / `prompt_done`). Absent
+   * for messages the frontend minted itself (live streaming before any snapshot,
+   * replay reconstruction) — their `id` is a local `genId()` value that does not
+   * exist in the DB.
+   *
+   * Why a separate field instead of reusing `id`: the sync endpoint treats a
+   * supplied id as authoritative and updates exactly that row, so claiming a
+   * local id is a DB id would silently target nothing. See
+   * `messagesToSyncPayload` and `chat_persistence::sync_messages`.
+   */
+  dbId?: string
   role: 'user' | 'assistant' | 'system'
   /** Plain-text accumulator �? kept for persistence hydration compatibility. */
   text: string
@@ -918,6 +932,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             : Date.now()
       const msg: ChatMessage = {
         id: rowId,
+        dbId: rowId,
         role: 'assistant',
         text,
         blocks,
@@ -1057,6 +1072,8 @@ export function readQueuedFromStorageForSession(sessionId: string): string | nul
 
 /** Shape of each message entry in the `/sessions/{id}/messages/sync` POST body. */
 export interface SyncMessagePayload {
+  /** Authoritative DB row id when known — backend updates exactly that row. */
+  id?: string
   role: string
   text: string
   blocks?: string
@@ -1075,6 +1092,10 @@ export interface SyncMessagePayload {
  *   agent never received.
  * - `blocks` is stringified when non-empty; omitted when empty so the
  *   backend's `(session, role, text)` dedup has stable rows.
+ * - `id` is forwarded **only** from `ChatMessage.dbId` (a real row id), never
+ *   from the local `id`. With an id the backend updates that one row and
+ *   inserts nothing; without one it falls back to text matching. Passing a
+ *   local id would match no row and silently drop the write.
  */
 export function messagesToSyncPayload(
   messages: readonly ChatMessage[],
@@ -1084,6 +1105,9 @@ export function messagesToSyncPayload(
     if (m.role !== 'user' && m.role !== 'assistant') continue
     if (m.undelivered) continue
     const entry: SyncMessagePayload = { role: m.role, text: m.text }
+    if (m.dbId) {
+      entry.id = m.dbId
+    }
     if (m.blocks.length) {
       entry.blocks = JSON.stringify(m.blocks)
     }

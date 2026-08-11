@@ -384,6 +384,7 @@ describe('messagesToSyncPayload', () => {
   function mkMsg(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
     return {
       id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
       text: overrides.text ?? '',
       blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
       createdAt: overrides.createdAt ?? 0,
@@ -392,6 +393,17 @@ describe('messagesToSyncPayload', () => {
       role: overrides.role,
     }
   }
+
+  it('forwards dbId as the payload id so the backend updates that exact row', () => {
+    const msg = mkMsg({ role: 'assistant', text: 'hi', id: 'local-1', dbId: 'row-1' })
+    expect(messagesToSyncPayload([msg])[0].id).toBe('row-1')
+  })
+
+  it('omits id for locally minted messages (a local id matches no DB row)', () => {
+    const msg = mkMsg({ role: 'assistant', text: 'hi', id: 'local-1' })
+    const entry = messagesToSyncPayload([msg])[0]
+    expect(entry).not.toHaveProperty('id')
+  })
 
   it('returns empty array for empty input', () => {
     expect(messagesToSyncPayload([])).toEqual([])

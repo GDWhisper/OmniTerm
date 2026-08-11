@@ -16,7 +16,7 @@ src/
 │   ├── permission.rs     # PermissionManager: user-prompted approval via WS banner; no timeout auto-response
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
 │   ├── turn_accumulator.rs # TurnAccumulator: folds in-progress turn's raw session_update frames → one streaming chat_messages row (debounced writer)
-│   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages_page (cursor + byte-budget pagination) / sync_messages (non-destructive dedup)
+│   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages_page (cursor + byte-budget pagination) / sync_messages (row-id-first matching, non-destructive)
 │   └── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
@@ -135,7 +135,20 @@ Lifecycle:
 - **预算在 Rust 层而非 SQL 层**施加：本地 SQLite 读取比序列化+传输便宜一个数量级（实测 11MB 会话：读 50ms vs 序列化+传输 450ms+），限住「出进程的量」才是杠杆。
 - **游标是复合的** `(created_at, id)`，编码为不透明字符串 `<created_at>|<id>`：`created_at` 单键**不是全序**（实测真实数据中 4 条消息同为 `06:17:57`），仅用它会在同秒边界上重取或漏取。
 - **坐标不合法返回 400** 而非静默回退到首页：静默回退会让分页客户端反复拿到同一页而死循环。
-- **与 `sync_messages` 兼容**：后者按 `(session, role, text)` 去重且从不 DELETE，所以前端 store 里只有部分历史时写回不会删掉未加载的更早行。
+- **与 `sync_messages` 兼容**：后者从不 DELETE，所以前端 store 里只有部分历史时写回不会删掉未加载的更早行。
+
+#### 回写匹配语义：`POST /sessions/{id}/messages/sync`
+
+前端把重建（`replay_end`）或 cooked 的消息写回时，每条 payload 项**带不带 `id` 决定走哪条路径**——两者不可合并，因为前端消息的 id 有两个来源：hydrate 来的是真 DB 行 id，live/replay 自造的 `genId()` 在 DB 中不存在。
+
+| payload | 匹配 | 未命中时 | 更新范围 |
+|---|---|---|---|
+| 带 `id`（权威：hydrate 行 / turn 的 `row_id`） | `WHERE id=? AND session_id=?` | **跳过**（不猜、不 INSERT） | 只 `blocks` |
+| 无 `id`（replay 重建） | `(session, role, text)` 的候选行按 `(created_at, id)` 取一条 | INSERT 新行 | 只 `blocks` |
+
+- **一条 payload 只消费一行**，且同一次调用内已消费的行 id 不再命中。此前 `UPDATE ... WHERE session_id AND role AND text` 无行限定，把 text 相同的所有行一次覆盖成同一份 `blocks`（dev 库实测：14 行 `assistant`/"OK" 只剩 1 份 distinct blocks）。**匹配键不唯一等于没有约束**，与「上限维度选错」「淘汰轴选错」同族。
+- **带 id 的路径不更新 `text`**：`text` 的权威在后端累积器，前端只拥有 cooked `blocks`。
+- **未命中即跳过**是刻意的：短 turn 可能抢在防抖写之前 sync，此时行还不存在——留在原始帧态可自愈，猜一行更新则是不可逆的错误赋值。
 
 ### 配置偏好持久化（两层记忆）
 

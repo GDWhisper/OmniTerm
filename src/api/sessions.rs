@@ -579,19 +579,25 @@ async fn list_messages(
     }
 }
 
-/// 恢复会话重放完成后，前端把重建出的完整消息（含结构化 blocks）写回 DB。
-/// 后端按内容去重、不删除已有记录，使刷新浏览器后仍可从 `list_messages_page` 还原
-/// 完整历史（含工具卡片 / 思考 / 计划），且保留实时 prompt 已落库的 user 消息。
+/// 恢复会话重放完成后 / 一个 turn 结束时，前端把重建或 cooked 的消息（含结构化 blocks）
+/// 写回 DB。后端按行 id 优先、文本退回匹配，不删除已有记录，使刷新浏览器后仍可从
+/// `list_messages_page` 还原完整历史（含工具卡片 / 思考 / 计划），且保留实时 prompt
+/// 已落库的 user 消息。匹配语义见 `chat_persistence::sync_messages`。
 async fn sync_messages(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<SyncMessagesRequest>,
 ) -> impl IntoResponse {
-    let rows: Vec<(String, String, Option<String>)> = body
+    let rows: Vec<crate::acp::chat_persistence::SyncMessageInput> = body
         .messages
         .into_iter()
         .filter(|m| m.role == "user" || m.role == "assistant")
-        .map(|m| (m.role, m.text, m.blocks))
+        .map(|m| crate::acp::chat_persistence::SyncMessageInput {
+            id: m.id,
+            role: m.role,
+            text: m.text,
+            blocks: m.blocks,
+        })
         .collect();
     match crate::acp::chat_persistence::sync_messages(&state.db, &id, &rows).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
@@ -606,6 +612,11 @@ struct SyncMessagesRequest {
 
 #[derive(serde::Deserialize)]
 struct SyncMessage {
+    /// DB row id, present only when the frontend knows the real one (hydrated rows / the
+    /// in-progress turn's `row_id`). Absent → text matching, see
+    /// `chat_persistence::SyncMessageInput`.
+    #[serde(default)]
+    id: Option<String>,
     role: String,
     text: String,
     #[serde(default)]
