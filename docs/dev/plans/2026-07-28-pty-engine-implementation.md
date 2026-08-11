@@ -10,7 +10,7 @@
 
 ## 0. 新会话上手指引
 
-- **当前状态（2026-08-09 更新）**：**Phase 1（解耦）已完成**（commit `3b394de` / `0ffbeb6` / `70840c5`）：`SessionEngine` trait + `EngineRegistry` 落地，`src/tmux/` 全部移入 `src/engine/tmux/` 冻结边界，agent 检测体系提为 `src/agent/`，所有调用方经注册表访问引擎；摘除演练通过（删 `src/engine/tmux/` + 打桩注册行后 `cargo build` 零改动通过）。pty 脚手架收敛进 `src/engine/pty/terminal_ws.rs`，仍是连接期生命周期——下一步 = **Phase 2 切片 A（常驻会话）**（§3），不得在脚手架上打补丁。
+- **当前状态（2026-08-12 更新）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。下一步 = **Phase 3（pty hook 信道）**。Phase 2 完成记录见 §3 Phase 2 节尾。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
 - **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
 - **注意**：§1 盘点中的行号是 2026-07-28 快照，代码演进后以符号名为准（用 CodeGraph 查）。~~herdr 源码在 `research/herdr`~~（v3 勘误：该目录不存在）——herdr 参考以 `docs/reference/herdr-reference.md` 为准；确需对照源码移植时先自行 clone herdr（Apache-2.0）。
@@ -147,6 +147,11 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **切片 B：补屏 + VT**。`Cargo.toml` 引入 `wezterm-term`（**git 依赖**，见 D8 v3）。spike 先行：git dep 可拉取 + 编译通过 → feed + capture + 补屏三能力验证；再接 resize nudge。spike 失败 → 走 D8 翻盘（vt100/vte），不硬扛。
 - **切片 C：恢复**。`src/engine/pty/scrollback.rs`（D5 落盘纪律）、`src/engine/pty/cwd.rs`（`/proc` / libproc 采样 + `last_cwd` 回写）、migration 仅加 `last_cwd` 列；后端重启重建 + ANSI seed 回放。
 - **产出**：单测覆盖 create/write/read/resize/kill/capture/回放/fd 计数（OS 级断言按 integration-checklist §A.1 模板）；runtime_kind_matrix 含 pty 全路径 case。
+- **完成记录（2026-08-12）**：三切片独立提交、独立验收：
+  - **切片 A**：`PtyEngine` 实现 `SessionEngine`，会话 map 常驻持有 pty 进程；WS 断开只解绑订阅；attach 同锁「先快照后订阅」保证补屏与增量不重不漏；子进程退出自动注销、下次 attach 重建；三级信号清理 + child 收割（`mem::forget` 已移除）。引擎级验收（断开→重连存活可输入）+ 真实 WS 冒烟通过；fd 计数/spawn cwd OS 真相回归测试就位。
+  - **切片 B**：spike 结论——wezterm-term 以 git 依赖锁 tag `20240203-110809-5046fc22` 可拉取、全树编译通过（D8 翻盘条件不触发）；`vt.rs` 提供 feed/capture/title/resize，capture 走 VT grid 消除 ANSI 碎片；重连 resize nudge 落地（`reconnected` 标志）。**执行偏差**：补屏未采用「模拟器重渲染整帧」，沿用补屏环原始 ANSI 回放——前端 xterm.js 消费原始 ANSI 流，字节回放保真度更高；herdr 的帧重渲染适配其帧 diff 协议，对 ANSI 流客户端无增益（记录在 `vt.rs` 头注）。
+  - **切片 C**：`scrollback.rs`（分文件/0600/tmp+rename/UTF-8 截断）+ 5s 去抖 flush（快照对象为 256KB 有界环，避 P2 O(n²)）+ 30s cwd 采样回写 `last_cwd`（migration 仅此一列）+ 重建 ANSI seed。端到端验收：真实重启后端 → 会话重建于最后 cwd、重连补屏见重启前输出。显式 kill 删除历史文件（无需重建）。
+  - §B.2 穷举：`runtime_kind_matrix` 6/6 通过（含 pty files/删除 case），无 `?`。
 
 ### Phase 3：pty hook 信道（纯新增）
 - **新增** `src/api/agent_events.rs`：`POST /api/v1/internal/agent-event`（回环 + token + seq 去重）→ 内存 KV + watch channel。
@@ -183,13 +188,13 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - [x] `rg tmux src/ -g '!src/engine/tmux/*'` 仅剩 DB 枚举值与注册行（口径细化见 Phase 1 完成记录）。
   - [x] 模拟摘除演练：删 `src/engine/tmux/` + 打桩注册行后 `cargo build` 通过，其余模块零改动（未提交）。
 - **Phase 2-4（pty 引擎）**：
-  - [ ] pty 会话：创建/输入/输出/resize/kill 全链路无 tmux 进程参与。
-  - [ ] `tests/runtime_kind_matrix.rs` 含 pty 全路径 case（创建/files/清理），integration-checklist §B.2 表无 `?`。
-  - [ ] WS 断开→重连：进程存活、补屏 + nudge 正确（含 vim/htop 用例）。
-  - [ ] 后端重启：pty 会话从 `last_cwd` + 原命令重建，scrollback 回放可见；tmux 会话照常幸存。
-  - [ ] agent 检测：pty 会话 hook 经 HTTP 上报（HookAuthority 生效）、屏幕检测行为与 tmux 链路一致。
-  - [ ] pty 会话复制：纯左键拖选即复制；移动端滚动本地化。tmux 会话交互不变。
-  - [ ] FileManager 根目录在两种会话下均跟随终端 cwd。
+  - [x] pty 会话：创建/输入/输出/resize/kill 全链路无 tmux 进程参与（Phase 2 ✅）。
+  - [x] `tests/runtime_kind_matrix.rs` 含 pty 全路径 case（创建/files/清理），integration-checklist §B.2 表无 `?`（Phase 2 ✅，6/6 通过）。
+  - [x] WS 断开→重连：进程存活、补屏 + nudge 正确（Phase 2 ✅：引擎级测试 + 真实 WS 冒烟；vim/htop TUI 用例待 Phase 4 前端分流后人工回归）。
+  - [x] 后端重启：pty 会话从 `last_cwd` + 原命令重建，scrollback 回放可见（Phase 2 ✅ 端到端验收；tmux 会话照常幸存不受影响）。
+  - [ ] agent 检测：pty 会话 hook 经 HTTP 上报（HookAuthority 生效）、屏幕检测行为与 tmux 链路一致。（Phase 3；屏幕检测输入侧 Phase 2 已就位）
+  - [ ] pty 会话复制：纯左键拖选即复制；移动端滚动本地化。tmux 会话交互不变。（Phase 4 前端分流）
+  - [x] FileManager 根目录在两种会话下均跟随终端 cwd（Phase 2 ✅：pty 走 /proc 采样，实测 `cd` 后跟随）。
 - **通用**：
   - [ ] migration 幂等；`cargo build` / clippy / fmt / `tsc` 零新增错误；新增单测通过。
   - [ ] 模拟摘除演练：本地删 `src/engine/tmux/` + 注册行，`cargo build` 通过（解耦达标证明，不提交）。

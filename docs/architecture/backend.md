@@ -25,7 +25,7 @@ src/
 │   ├── targets.rs        # CRUD /api/v1/targets
 │   ├── projects.rs       # CRUD /api/v1/projects
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
-│   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (tmux pane) | 'acp' (spawns AcpClient via supervisor)
+│   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (TmuxEngine) | 'pty' (PtyEngine, lazy spawn) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
 │   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
@@ -33,27 +33,64 @@ src/
 │   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
 ├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
-├── tmux/
-│   ├── mod.rs            # tmux command wrappers, multiplexer detection: new_session, kill_session, check_multiplexer, capture_screen
-│   ├── agent_hooks.rs    # Agent CLI detection + hook config generation (Claude, Codex, Qoder)
-│   ├── agent_state.rs    # Agent state data model: AgentKind, AgentState, AgentSnapshot
-│   ├── agent_detect.rs   # 屏幕规则引擎：TOML manifest 编译 + evaluate(屏幕/标题→状态) + Debounce 防抖（herdr 借鉴）
-│   ├── agent_watch.rs    # 全局 agent 屏幕检测轮询器（1s tick）：前台进程识别 → capture_screen → evaluate → 内存快照
-│   ├── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
-│   ├── control_mode.rs   # tmux -C control mode session activity monitor
-│   ├── process_info.rs   # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
-│   └── pty_io.rs         # [platform] PTY writes + process cleanup: write_pty, kill_session_process
+├── engine/               # 会话引擎抽象层（D9）：SessionEngine trait + EngineRegistry 按 runtime_kind 路由
+│   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
+│   ├── pty_io.rs         # [platform] PTY 写 + 进程清理（引擎公共件）：write_pty, kill_session_process, kill_process_escalating
+│   ├── tmux/             # 冻结引擎边界（只修致命 bug 不加功能）：tmux 命令门面 / control mode / hook 注入 / pane 枚举 / attach WS
+│   └── pty/              # 自管 pty 引擎（Phase 2）：常驻会话 map + 补屏环 + wezterm-term VT grid
+│       ├── mod.rs        # PtyEngine（SessionEngine 实现）：spawn/读循环/广播订阅/去抖落盘/cwd 采样回写后台任务
+│       ├── session.rs    # PtySession：openpty + spawn + child 收割句柄
+│       ├── ring.rs       # ByteRing：256KB 字节环形缓冲（重连补屏窗口，P1 有界）
+│       ├── vt.rs         # VtState：wezterm-term Terminal 封装（feed/capture_visible/title/resize，DSR 应答回写闭环）
+│       ├── scrollback.rs # ANSI 历史落盘（D5：0600/tmp+rename/UTF-8 截断/路径逃逸防护）
+│       ├── cwd.rs        # [platform] 前台进程 cwd 采样（/proc）
+│       └── terminal_ws.rs# pty WS attach：补屏回放 + resize nudge + detach 语义
+├── agent/                # 引擎无关的 agent 检测体系
+│   ├── state.rs          # Agent state data model: AgentKind, AgentState, AgentSnapshot
+│   ├── detect.rs         # 屏幕规则引擎：TOML manifest 编译 + evaluate(屏幕/标题→状态) + Debounce 防抖（herdr 借鉴）
+│   ├── watch.rs          # 全局屏幕检测轮询器（1s tick）：经 EngineRegistry 枚举 watch_targets → capture_screen → evaluate
+│   ├── cli.rs            # agent CLI 识别（命令行模式匹配）
+│   ├── process.rs        # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
+│   └── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
 ├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
 ├── git/
 │   ├── mod.rs            # Git worktree discovery
 │   └── repo.rs           # Git panel service: status(porcelain v2)/diff/log/show/branches/stage/unstage/commit/discard/checkout/push/pull/fetch via git CLI subprocess (no git2)
 ├── ws/
 │   ├── mod.rs
-│   ├── terminal.rs       # WebSocket terminal bridge: PTY ↔ WS binary frames, JSON control
+│   ├── terminal.rs       # 终端 WS 入口：共享协议类型（ClientControl/ServerControl）+ 按 runtime_kind 分发到 engine/*/terminal_ws
 │   └── acp.rs            # WebSocket ACP bridge: session_update broadcast ↔ WS, prompt/cancel commands
 ├── utils/path.rs         # Path security: sanitize_path
 └── workspaces.rs         # Workspace operations
 ```
+
+## 会话引擎（SessionEngine 抽象 + 双引擎）
+
+终端会话按 `runtime_kind` 路由到引擎（`engine::EngineRegistry`）：
+`'tmux'` → `TmuxEngine`（冻结边界 `src/engine/tmux/`，只修致命 bug）；
+`'pty'` → `PtyEngine`（自管常驻会话）；`'acp'` 不经此抽象。引擎之外
+的代码（api/、ws/、agent/watch）只经注册表访问会话能力。
+
+**PtyEngine 生命周期**：会话进程由引擎 map 常驻持有；WS 只是视图
+（断开 = 解绑订阅，不杀进程）；子进程退出自动注销，下次 attach 重建。
+attach = 补屏环快照回放（256KB 有界，原始 ANSI 字节）+ broadcast 订阅；
+同锁「先快照后订阅」保证不重不漏。重连既有会话触发 resize nudge
+（rows-1 → 30ms → rows）强制 TUI 重绘。恢复链路（D5）：5s 去抖落盘
+ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
+30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
+并 seed 历史进补屏环与 VT grid（wezterm-term）。显式 kill 删历史文件。
+
+**双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
+
+| 维度 | TmuxEngine | PtyEngine |
+|------|-----------|-----------|
+| 会话存活 | tmux server 常驻，后端重启幸存 | 后端进程持有，后端重启丢失 → D5 重建 + 回放 |
+| is_active | control mode「最近 2s 有输出」 | 读循环时间戳 2s 窗口 |
+| cwd 来源 | tmux `pane_current_path` | `/proc` 前台进程采样（Windows 回退 last_cwd） |
+| agent 信道 | `@omniterm_agent` option 轮询（1s） | 屏幕检测（Phase 3 加 HTTP hook 推送） |
+| capture | tmux `capture-pane`（干净文本） | wezterm-term VT grid 渲染（干净文本） |
+| 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
+| 补屏 | tmux `new-session -A` 原生 | 补屏环 ANSI 回放 + resize nudge |
 
 ## API Endpoints
 
@@ -292,7 +329,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Sessions Table
 
-定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql`。
+定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql`。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -300,15 +337,19 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `project_id` | TEXT FK | 所属项目 |
 | `workspace_path` | TEXT | 工作目录 |
 | `name` | TEXT? | 用户可见名 |
-| `tmux_session_name` | TEXT? | tmux runtime 的会话名（`lt_xxxxxxxx`）；ACP session 为 NULL |
-| `hook_enabled` | BOOLEAN | 是否注入了 tmux agent hook |
+| `tmux_session_name` | TEXT? | 引擎内会话键（冻结列名，两引擎共用，D10）：tmux 为 `lt_xxxxxxxx`，pty 为 session id；ACP session 为 NULL |
+| `hook_enabled` | BOOLEAN | 是否注入了 agent hook |
 | `hook_status` | TEXT? | hook 运行状态 |
 | `created_at` | TEXT | RFC3339 |
-| `runtime_kind` | TEXT NOT NULL | `tmux` \| `acp`。DEFAULT `tmux` |
-| `acp_session_id` | TEXT? | ACP adapter 分配的 session id；tmux session 为 NULL |
+| `runtime_kind` | TEXT NOT NULL | `tmux` \| `acp` \| `pty`。DEFAULT `tmux`（无 CHECK 约束） |
+| `acp_session_id` | TEXT? | ACP adapter 分配的 session id；tmux/pty session 为 NULL |
 | `agent_id` | TEXT? | 关联的 `agents.id`；仅 `runtime_kind='acp'` 有值 |
+| `last_cwd` | TEXT? | pty 会话前台进程 cwd 的最近采样（30s 回写，D5 重建用）；tmux/acp 为 NULL |
 
-创建 session 时 `runtime_kind` 默认 `tmux`（Phase 2）。传 `runtime_kind: 'acp'` + `agent_id` 时走 ACP 分支（Phase 3 后端实装）；前端 Chat 视图（Phase 4）上线后会默认翻转为 `acp`。
+创建 session 时 `runtime_kind` 枚举默认 `Acp`（ACP 阶段推进所致）；
+创建路径显式传 `'tmux'` / `'pty'` 分流到对应引擎。pty 会话惰性 spawn：
+创建只写 DB 行，进程在首次 WS attach / files 解析时由 PtyEngine
+resolve-or-create。Phase 4 将把前端创建入口默认翻转为 `'pty'`。
 
 ## Terminal Input Path（tmux escape-time）
 
