@@ -16,6 +16,12 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
+    # Unicode 数据许可证：wezterm-term（D8 git 依赖）传递引入
+    # （finl_unicode / wezterm-bidi 的 "… AND Unicode-DFS-2016"），OSI 批准
+    "Unicode-DFS-2016",
+    # termwiz → terminfo 0.8（wezterm-term 传递引入）：WTFPL，FSF Free/Libre，
+    # 极宽松（近似公有领域）；仅随 wezterm-term 引入，非直接依赖
+    "WTFPL",
     "Zlib",
     "CC0-1.0",
     # webpki-roots（reqwest → hyper-rustls 递归依赖）：Mozilla 根证书数据的宽松数据许可证
@@ -35,3 +41,5 @@ confidence-threshold = 0.8
 # 仅允许 crates.io 与 crates.io 镜像
 unknown-registry = "deny"
 unknown-git = "warn"
+# 白名单 git 源：wezterm-term 未发布 crates.io（计划 D8），锁 tag 引入
+allow-git = ["https://github.com/wez/wezterm.git"]

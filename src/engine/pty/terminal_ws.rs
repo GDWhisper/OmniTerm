@@ -70,6 +70,14 @@ pub async fn handle_pty_terminal(
     if let Err(e) = attach.resize(size) {
         warn!("initial resize failed (pty): {}", e);
     }
+    // 重连重绘 nudge（herdr pty/actor/unix.rs:712-756）：rows-1 → 30ms → rows，
+    // 强制 TUI（vim/htop 类）按新尺寸重绘，防补屏后花屏。新建会话不需要。
+    if attach.reconnected && size.rows > 1 {
+        let nudged = PtySize { rows: size.rows - 1, ..size };
+        let _ = attach.resize(nudged);
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        let _ = attach.resize(size);
+    }
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
@@ -78,7 +86,7 @@ pub async fn handle_pty_terminal(
         return;
     }
 
-    // 补屏：attach 时刻的窗口快照（切片 B 换 VT 模拟器重渲染）
+    // 补屏：attach 时刻的补屏环快照（原始 ANSI 字节回放，xterm.js 直接消费）
     if !attach.replay.is_empty()
         && ws_tx.send(Message::Binary(attach.replay.clone().into())).await.is_err()
     {

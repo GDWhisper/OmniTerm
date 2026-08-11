@@ -1,8 +1,10 @@
-//! 自管 pty 引擎（Phase 2 切片 A：常驻会话）。
+//! 自管 pty 引擎（Phase 2 切片 A：常驻会话；切片 B：VT 模拟器）。
 //!
 //! 生命周期语义与复用器引擎对齐（计划 §1.2 "detach 不杀进程"）：
 //! - 会话进程由引擎常驻持有（会话 map），**WS 断开只解绑订阅、不杀进程**；
-//! - attach = 订阅输出 + 重发补屏窗口（切片 B 换 VT 模拟器重渲染）；
+//! - attach = 订阅输出 + 重放补屏环窗口（原始 ANSI 字节回放）；重连另有
+//!   resize nudge 重绘；VT grid（wezterm-term）承担 capture/title/resize
+//!   与切片 C 的 ANSI seed 回放；
 //! - 子进程退出（读循环 EOF / child.wait）时自动从 map 注销（幂等、
 //!   Arc 指针比对防止误删同名重建会话），下次 attach 自动重建（D5 重建
 //!   语义的过渡形态）。
@@ -11,6 +13,7 @@ pub mod cwd;
 pub mod ring;
 pub mod session;
 pub mod terminal_ws;
+pub mod vt;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,6 +29,7 @@ use tracing::{debug, info};
 use crate::agent::state::AgentSnapshot;
 use crate::engine::pty::ring::{ByteRing, DEFAULT_REPLAY_BYTES};
 use crate::engine::pty::session::PtySession;
+use crate::engine::pty::vt::VtState;
 use crate::engine::pty_io;
 use crate::engine::{EngineSessionInfo, SessionEngine, WatchTarget};
 use crate::models::session::RuntimeKind;
@@ -46,8 +50,10 @@ struct Output {
 }
 
 struct SessionState {
-    session: PtySession,
+    session: Arc<PtySession>,
     out: Mutex<Output>,
+    /// 服务端 VT grid（capture/title/resize；切片 C 接 ANSI seed 回放）。
+    vt: Mutex<VtState>,
     last_activity: Mutex<Instant>,
     /// 输出序号（agent 检测跳扫描用，等值比较语义，见 agent::watch）。
     output_seq: AtomicU64,
@@ -76,17 +82,19 @@ impl Default for PtyEngine {
 /// WS 连接持有的 attach 句柄。drop = detach（解绑订阅），不触碰会话进程。
 /// Clone = 同一会话再开一个订阅（写线程用），不重放补屏。
 pub struct PtyAttach {
-    /// attach 时刻的补屏窗口快照（原始字节；切片 B 换 VT 重渲染）。
+    /// attach 时刻的补屏窗口快照（原始字节回放；VT grid 供 capture/title）。
     pub replay: Vec<u8>,
-    /// 后续输出订阅。Lagged = 慢消费丢帧（切片 B 补屏可兜底）。
+    /// 后续输出订阅。Lagged = 慢消费丢帧（补屏回放可兜底）。
     pub rx: broadcast::Receiver<Vec<u8>>,
+    /// attach 的是既有会话（非本次新建）→ WS 层据此做 resize nudge 重绘。
+    pub reconnected: bool,
     state: Arc<SessionState>,
 }
 
 impl Clone for PtyAttach {
     fn clone(&self) -> Self {
         let rx = self.state.out.lock().unwrap().tx.subscribe();
-        Self { replay: Vec::new(), rx, state: Arc::clone(&self.state) }
+        Self { replay: Vec::new(), rx, reconnected: false, state: Arc::clone(&self.state) }
     }
 }
 
@@ -104,9 +112,10 @@ impl PtyAttach {
         Ok(())
     }
 
-    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）。
+    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）；VT grid 同步。
     pub fn resize(&self, size: PtySize) -> Result<()> {
         self.state.session.resize(size).map_err(|e| anyhow!("pty resize failed: {e}"))?;
+        self.state.vt.lock().unwrap().resize(size.rows, size.cols);
         *self.state.size.lock().unwrap() = size;
         Ok(())
     }
@@ -117,32 +126,38 @@ impl PtyEngine {
         Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) }
     }
 
-    /// resolve-or-create + attach。会话已存在则直接订阅（并按需 resize 由
-    /// WS 层做）；不存在则以 `cwd`/`size` spawn。
+    /// resolve-or-create + attach。会话已存在则直接订阅（WS 层据
+    /// `reconnected` 做 resize nudge 重绘）；不存在则以 `cwd`/`size` spawn。
     pub fn attach(&self, key: &str, cwd: &str, size: PtySize) -> Result<PtyAttach> {
-        let state = self.resolve_or_create(key, cwd, size)?;
+        let (state, reconnected) = self.resolve_or_create(key, cwd, size)?;
         // 同一把锁内「先快照后订阅」：与读循环「先 push 后 send」串行，
         // 补屏与增量不重不漏。
         let (replay, rx) = {
             let g = state.out.lock().unwrap();
             (g.ring.snapshot(), g.tx.subscribe())
         };
-        Ok(PtyAttach { replay, rx, state })
+        Ok(PtyAttach { replay, rx, reconnected, state })
     }
 
     fn get(&self, key: &str) -> Option<Arc<SessionState>> {
         self.inner.sessions.lock().unwrap().get(key).cloned()
     }
 
-    fn resolve_or_create(&self, key: &str, cwd: &str, size: PtySize) -> Result<Arc<SessionState>> {
+    /// 返回 (会话状态, 是否为既有会话)。
+    fn resolve_or_create(
+        &self,
+        key: &str,
+        cwd: &str,
+        size: PtySize,
+    ) -> Result<(Arc<SessionState>, bool)> {
         let mut sessions = self.inner.sessions.lock().unwrap();
         if let Some(existing) = sessions.get(key) {
-            return Ok(Arc::clone(existing));
+            return Ok((Arc::clone(existing), true));
         }
         let state = self.spawn_session(key, cwd, size)?;
         sessions.insert(key.to_string(), Arc::clone(&state));
         info!("pty session created: {} (cwd: {}, {}x{})", key, cwd, size.cols, size.rows);
-        Ok(state)
+        Ok((state, false))
     }
 
     fn spawn_session(&self, key: &str, cwd: &str, size: PtySize) -> Result<Arc<SessionState>> {
@@ -152,16 +167,18 @@ impl PtyEngine {
         // 见 docs/reference/herdr-reference.md「可移植边角处理」。
         cmd.env("TERM", "xterm-256color");
 
-        let session = PtySession::spawn(cmd, size).map_err(|e| anyhow!("{e}"))?;
+        let session = Arc::new(PtySession::spawn(cmd, size).map_err(|e| anyhow!("{e}"))?);
         // VERIFIED 2026-08-12: /proc/<child_pid>/cwd == spawn cwd（child_pid 见
         // PtySession::child_pid；integration-checklist §A.1，回归测试见
         // tests::spawn_cwd_matches_requested）
         let mut reader = session.try_clone_reader().map_err(|e| anyhow!("{e}"))?;
+        let vt = VtState::new(size.rows, size.cols, Arc::clone(&session));
 
         let (tx, _rx) = broadcast::channel::<Vec<u8>>(OUTPUT_CHANNEL_FRAMES);
         let state = Arc::new(SessionState {
             session,
             out: Mutex::new(Output { ring: ByteRing::new(DEFAULT_REPLAY_BYTES), tx }),
+            vt: Mutex::new(vt),
             last_activity: Mutex::new(Instant::now()),
             output_seq: AtomicU64::new(0),
             size: Mutex::new(size),
@@ -169,7 +186,7 @@ impl PtyEngine {
             spawn_cwd: cwd.to_string(),
         });
 
-        // 读循环：push 补屏环 → broadcast。EOF/EIO 时注销会话（幂等）。
+        // 读循环：push 补屏环 → broadcast → feed VT grid。EOF/EIO 时注销（幂等）。
         let reader_state = Arc::clone(&state);
         let reader_inner = Arc::clone(&self.inner);
         let reader_key = key.to_string();
@@ -184,8 +201,9 @@ impl PtyEngine {
                         {
                             let mut g = reader_state.out.lock().unwrap();
                             g.ring.push(&chunk);
-                            let _ = g.tx.send(chunk); // 无接收者时 send 报错即丢弃
+                            let _ = g.tx.send(chunk.clone()); // 无接收者时 send 报错即丢弃
                         }
+                        reader_state.vt.lock().unwrap().feed(&chunk);
                         *reader_state.last_activity.lock().unwrap() = Instant::now();
                         reader_state.output_seq.fetch_add(1, Ordering::Relaxed);
                     }
@@ -224,13 +242,13 @@ fn unregister_if_same(inner: &Inner, key: &str, state: &Arc<SessionState>) {
 
 impl SessionEngine for PtyEngine {
     async fn create_session(&self, name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
-        let state = self.resolve_or_create(name, cwd, DEFAULT_SIZE)?;
+        let (state, _) = self.resolve_or_create(name, cwd, DEFAULT_SIZE)?;
         if let Some(cmd) = command {
             // 与复用器 send-keys 语义一致：发命令文本 + 回车。
             let mut bytes = cmd.as_bytes().to_vec();
             bytes.push(b'\r');
             let rx = state.out.lock().unwrap().tx.subscribe();
-            let attach = PtyAttach { replay: Vec::new(), rx, state };
+            let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state };
             attach.write(&bytes)?;
         }
         Ok(false) // hook 注入为 Phase 3（HTTP 信道，D7）
@@ -292,12 +310,10 @@ impl SessionEngine for PtyEngine {
             .unwrap_or_else(|| state.spawn_cwd.clone()))
     }
 
-    /// 过渡形态：补屏环原始字节的 lossy UTF-8（可能含转义序列碎片）。
-    /// 切片 B 接入 VT 模拟器后由服务端 grid 重渲染取代。
+    /// 服务端 VT grid 的可见屏纯文本（tmux `capture-pane -p` 等价语义）。
     async fn capture_screen(&self, name: &str) -> Result<String> {
         let state = self.get(name).ok_or_else(|| anyhow!("pty session '{name}' not found"))?;
-        let snapshot = state.out.lock().unwrap().ring.snapshot();
-        Ok(String::from_utf8_lossy(&snapshot).into_owned())
+        Ok(state.vt.lock().unwrap().capture_visible())
     }
 
     /// hook 信道为 Phase 3（HTTP 回调，D7）；此前仅屏幕检测覆盖 pty 会话。
@@ -325,7 +341,7 @@ impl SessionEngine for PtyEngine {
                 session: name.clone(),
                 pane_pid: st.session.child_pid().unwrap_or(0),
                 activity: st.output_seq.load(Ordering::Relaxed).to_string(),
-                title: String::new(), // OSC 标题随切片 B 的 VT 模拟器提供
+                title: st.vt.lock().unwrap().title(), // OSC 0/2（VT 模拟器截获）
             })
             .collect()
     }
@@ -436,6 +452,26 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "pid {pid} survived kill");
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn capture_screen_returns_clean_text_via_vt() {
+        // 切片 B 验收：capture 走 VT grid，输出干净文本（无转义序列碎片）
+        let engine = engine();
+        let tmp = std::env::temp_dir();
+        let attach = engine.attach("vt-capture", tmp.to_str().unwrap(), DEFAULT_SIZE).unwrap();
+        let writer = attach.clone();
+        let mut rx = attach.rx;
+        // 带颜色的输出：ANSI 经 VT 解析后不应出现在 capture
+        writer.write(b"printf '\\033[1;32mVT_MARKER\\033[0m\\n'\n").unwrap();
+        let out = wait_for_output(&mut rx, b"VT_MARKER").await;
+        assert!(out.windows(9).any(|w| w == b"VT_MARKER"), "echo output missing");
+
+        let cap = engine.capture_screen("vt-capture").await.unwrap();
+        assert!(cap.contains("VT_MARKER"), "capture must contain the marker, got: {cap:?}");
+        assert!(!cap.contains('\x1b'), "capture must not contain escape bytes");
+
+        engine.kill_session("vt-capture").await.unwrap();
     }
 
     #[tokio::test]

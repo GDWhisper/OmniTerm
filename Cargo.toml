@@ -27,6 +27,8 @@ jsonwebtoken = "9"
 axum-extra = { version = "0.10", features = ["cookie"] }
 time = "0.3"
 portable-pty = "0.9"
+# VT 模拟器（计划 D8）：wezterm-term 未发布 crates.io，git 依赖锁稳定 tag（MIT）
+wezterm-term = { git = "https://github.com/wez/wezterm.git", tag = "20240203-110809-5046fc22" }
 futures-util = "0.3"
 notify = "8"
 async-stream = "0.3"
