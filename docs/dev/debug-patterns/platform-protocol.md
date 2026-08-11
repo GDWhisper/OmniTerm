@@ -1,6 +1,6 @@
 # 构建与协议 — 调试模式
 
-覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针。
+覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）。
 
 ---
 
@@ -68,6 +68,17 @@
 **案例证据**：
 - 2026-08-04 migration checksum 两渠道不一致（见模式 1）。
 - 2026-08-06 preview 日志无 replay 诊断行，实为运行二进制（17:01 构建）早于诊断日志提交。修复过程用 `strings` 验证二进制内容。
+
+---
+
+## 模式 7：Windows spawn 裸命令名 —— 存在性检查通过 ≠ 能 spawn（PATHEXT 盲区）
+
+**协议-平台**：`std::process::Command::new("npm")` 在 Windows 上**只**按 PATH 补 `.exe`，**不读 `PATHEXT`**；而 npm/yarn/pnpm/tsc 这类 Node 工具在 Windows 只落 `npm.cmd`/`npm.ps1`，于是 spawn 直接返回 `NotFound: program not found`。危险的是「前置存在性检查用 `which`、spawn 用裸名」的组合：`which` crate 遵循 PATHEXT 能解析到 `npm.cmd`，检查通过 → 友好提示分支被跳过 → 用户只看到裸的 `program not found`。**规律：谁做存在性检查，就必须把它解析出的绝对路径交给 spawn**，两条不同的解析规则各查一遍必然在某平台错位。std ≥1.77.2 对 `.bat`/`.cmd` 结尾的 program 会自动用 cmd.exe 包装并做 CVE-2024-24576 参数转义，所以传绝对路径是安全且够用的（无需自己拼 `cmd /C`）。
+
+**适用**：任何 spawn 外部 CLI（包管理器/git/node 工具链）的代码；Linux 上「裸名能跑」是最强的假阴性来源，本地测不出来。
+
+**案例证据**：
+- 2026-08-08 Windows `omniterm update` 报 `failed to run npm / Caused by: program not found`：`which::which("npm")` 解析到 `npm.cmd` 通过前置检查，`Command::new("npm")` 找不到 `npm.exe`。修复：抽 `resolve_program()` 统一 `which` 解析为绝对路径后 spawn（`delegate` / `delegate_captured` 共用）。同源旁证：`npm-package/shim.js` 早已用 `shell: process.platform === 'win32'` 绕过同一坑。
 
 ---
 

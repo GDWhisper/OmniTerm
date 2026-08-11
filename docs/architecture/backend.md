@@ -223,7 +223,7 @@ update options:
 
 | 渠道 | 判据 | 行为 |
 |------|------|------|
-| npm | 路径含 `node_modules` | 代跑 `npm update -g @gdwhisper/omniterm`（透传退出码） |
+| npm | 路径含 `node_modules` | 代跑 `npm install -g @gdwhisper/omniterm@latest`（透传退出码）。**不用 `npm update -g`**：`update` 受已安装 semver range 约束（不跨 major），且对平台二进制所在的 optionalDependencies 重解析不可靠 |
 | cargo | 位于 `$CARGO_HOME/bin`（fallback `~/.cargo/bin`） | 代跑 `cargo install omniterm`（不自替换，避免与 `.crates.toml` 元数据脱钩） |
 | 其它（install.sh / 手动） | 兜底 | 下载平台 asset → sha256 digest 校验（GitHub API asset `digest` 字段，缺失则跳过）→ spawn `--version` 验证 → 同目录临时文件原子 rename 替换；目录不可写提示 `sudo omniterm update`（不自动提权）；Windows 走 rename-self-to-`.old` 手法 |
 
@@ -232,7 +232,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 **Web 端点**（`src/api/system.rs`，供 Sidebar UpdateBadge 用）：
 - `GET /system/version` → `{current, latest, update_available, channel}`。后端做 semver 比较（dev 领先时 `update_available: false`）；GitHub latest 结果进程内缓存（成功 TTL 1h、失败负缓存 5min，防匿名限流 60 次/时）；GitHub 不可达且无缓存 → 502，前端 silent 降级不显示 badge。
 - `POST /system/update` → 一键升级。`try_lock` 全局锁防并发（占用中 409）；先 fresh 查询，无新版 409 `already up to date`；`github_release` 走 `self_replace`，`npm` 走 `delegate_captured`（300s 超时 → 504），`cargo` 编译耗时过长不支持一键 → 400 `unsupported_channel`（前端只显示命令提示）。成功返回 `restart_required: true`，**不自动重启服务器**（持有 tmux/ACP/WS 连接），提示用户 `omniterm stop && omniterm start`。
-- `delegate_captured()`（捕获输出、失败带 stderr 尾部返回 Result）专供服务器进程；CLI 的 `delegate()` 透传 stdio 且失败 `std::process::exit`，**严禁在服务器内使用**。
+- `delegate_captured()`（捕获输出、失败带 stderr 尾部返回 Result）专供服务器进程；CLI 的 `delegate()` 透传 stdio 且失败 `std::process::exit`，**严禁在服务器内使用**。两者都经 `resolve_program()`（`which` 解析为绝对路径）再 spawn：Windows 上 `std::process::Command` 只按 PATH 补 `.exe`、不读 `PATHEXT`，传裸名 `npm` 会因实际只有 `npm.cmd` 而报 `program not found`；`which` 遵循 PATHEXT，且 std ≥1.77.2 对 `.bat`/`.cmd` 结尾的 program 自动用 cmd.exe 包装（含 CVE-2024-24576 转义）。
 
 ## Environment Variables
 

@@ -7,7 +7,17 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub(crate) const NPM_PACKAGE: &str = "@gdwhisper/omniterm";
+/// npm 包名的单一真源（宏形式以便 `concat!` 编译期拼接 spec）。
+macro_rules! npm_package {
+    () => {
+        "@gdwhisper/omniterm"
+    };
+}
+
+/// 全局 CLI 升级统一用 `npm install -g <pkg>@latest`，不用 `npm update -g`：
+/// `update` 受已安装的 semver range 约束（不跨 major），且对本包分发平台二进制所用的
+/// optionalDependencies 重解析不可靠；`install @latest` 语义明确、幂等、可跨 major。
+pub(crate) const NPM_UPGRADE_ARGS: &[&str] = &["install", "-g", concat!(npm_package!(), "@latest")];
 const CRATE_NAME: &str = "omniterm";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("omniterm-update/", env!("CARGO_PKG_VERSION"));
@@ -94,8 +104,8 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
 
     match channel {
         Channel::Npm => {
-            eprintln!("Detected npm installation. Running: npm update -g {NPM_PACKAGE}");
-            delegate("npm", &["update", "-g", NPM_PACKAGE]).await?;
+            eprintln!("Detected npm installation. Running: npm {}", NPM_UPGRADE_ARGS.join(" "));
+            delegate("npm", NPM_UPGRADE_ARGS).await?;
             eprintln!(
                 "Run 'omniterm --version' to verify — the npm package may lag behind the GitHub release."
             );
@@ -180,15 +190,25 @@ pub(crate) async fn fetch_latest() -> Result<LatestRelease> {
     Ok(LatestRelease { version, assets: info.assets })
 }
 
+/// 解析外部命令到**绝对路径**再交给 `Command`，而不是传裸名。
+///
+/// Windows 必需：`std::process::Command` 只按 PATH 补 `.exe`，不读 `PATHEXT`，
+/// 而 npm 在 Windows 上只有 `npm.cmd`/`npm.ps1` → 裸名 spawn 报 `program not found`。
+/// `which` 遵循 PATHEXT 能解析到 `npm.cmd`，且 std（≥1.77.2）对 `.bat`/`.cmd`
+/// 结尾的 program 会自动用 cmd.exe 包装并做 CVE-2024-24576 的参数转义。
+fn resolve_program(cmd: &str) -> Result<PathBuf> {
+    which::which(cmd).with_context(|| format!("{cmd} not found in PATH"))
+}
+
 // CLI 专用：继承 stdio 直通用户终端，失败时透传子进程退出码（会终止本进程）。
 // 服务器进程内严禁使用，Web 端点请用 delegate_captured。
 async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
-    if which::which(cmd).is_err() {
-        bail!(
-            "{cmd} not found in PATH but the binary appears to be {cmd}-managed. Update manually or reinstall via install.sh."
-        );
-    }
-    let status = tokio::process::Command::new(cmd)
+    let program = resolve_program(cmd).with_context(|| {
+        format!(
+            "the binary appears to be {cmd}-managed but {cmd} is unavailable. Update manually or reinstall via install.sh."
+        )
+    })?;
+    let status = tokio::process::Command::new(program)
         .args(cmd_args)
         .status()
         .await
@@ -201,10 +221,8 @@ async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
 
 // 服务器内安全版：捕获输出、失败返回 Err（携带 stderr 尾部），绝不退出进程
 pub(crate) async fn delegate_captured(cmd: &str, cmd_args: &[&str]) -> Result<String> {
-    if which::which(cmd).is_err() {
-        bail!("{cmd} not found in PATH");
-    }
-    let output = tokio::process::Command::new(cmd)
+    let program = resolve_program(cmd)?;
+    let output = tokio::process::Command::new(program)
         .args(cmd_args)
         .output()
         .await
@@ -452,6 +470,25 @@ mod tests {
             writer.finish().unwrap();
         }
         assert!(extract_exe_from_zip(cursor.get_ref()).is_err());
+    }
+
+    #[test]
+    fn npm_upgrade_uses_install_latest_not_update() {
+        assert_eq!(NPM_UPGRADE_ARGS, &["install", "-g", "@gdwhisper/omniterm@latest"]);
+    }
+
+    #[test]
+    fn resolve_program_rejects_missing_command() {
+        assert!(resolve_program("omniterm-no-such-program-xyz").is_err());
+    }
+
+    #[test]
+    fn resolve_program_returns_absolute_path() {
+        // cargo 一定存在于测试环境（CARGO 由 cargo 自身注入）
+        let cargo = std::env::var("CARGO").expect("CARGO env var set by cargo test");
+        let name = Path::new(&cargo).file_stem().unwrap().to_string_lossy().into_owned();
+        let resolved = resolve_program(&name).expect("cargo resolvable via PATH/which");
+        assert!(resolved.is_absolute(), "expected absolute path, got {}", resolved.display());
     }
 
     #[test]

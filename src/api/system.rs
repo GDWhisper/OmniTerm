@@ -205,14 +205,14 @@ async fn run_update() -> (StatusCode, Json<Value>) {
         update::Channel::Npm => {
             match tokio::time::timeout(
                 UPDATE_TIMEOUT,
-                update::delegate_captured("npm", &["update", "-g", update::NPM_PACKAGE]),
+                update::delegate_captured("npm", update::NPM_UPGRADE_ARGS),
             )
             .await
             {
                 Err(_) => {
                     return (
                         StatusCode::GATEWAY_TIMEOUT,
-                        Json(json!({ "error": "npm update timed out" })),
+                        Json(json!({ "error": "npm install timed out" })),
                     );
                 }
                 Ok(r) => r.map(|_| ()),
