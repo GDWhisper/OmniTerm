@@ -1,6 +1,6 @@
 # 构建与协议 — 调试模式
 
-覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）。
+覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败。
 
 ---
 
@@ -79,6 +79,17 @@
 
 **案例证据**：
 - 2026-08-08 Windows `omniterm update` 报 `failed to run npm / Caused by: program not found`：`which::which("npm")` 解析到 `npm.cmd` 通过前置检查，`Command::new("npm")` 找不到 `npm.exe`。修复：抽 `resolve_program()` 统一 `which` 解析为绝对路径后 spawn（`delegate` / `delegate_captured` 共用）。同源旁证：`npm-package/shim.js` 早已用 `shell: process.platform === 'win32'` 绕过同一坑。
+
+---
+
+## 模式 8：warn 级日志被读成失败 —— 判定成败只认退出码
+
+**协议-语义**：代跑外部工具时，**唯一的成败真相是退出码**，stderr 上的 `warn` / 堆栈 / `EPERM` 字样都不是。危险在于 CLI 直通 stdio 时，这些 warn 会原样打到用户眼前，而用户（和读日志的 agent）会把它读成失败 → 埋头修一个不存在的 bug。**代跑的工具已知会在正常路径上吐 warn 时，调用方有义务补一句消歧义提示**，而不是把解释成本留给用户。读报错时先找「最终状态行」（如 npm 的 `changed N packages`）再下结论。
+
+**适用**：任何 spawn 包管理器/构建工具并透传输出的代码；用户报「报错了」但贴的日志里存在成功标志时。
+
+**案例证据**：
+- 2026-08-11 Windows 服务器运行中执行 `npm install -g @gdwhisper/omniterm@latest` 输出一屏 `npm warn cleanup ... EPERM ... unlink omniterm.exe`，被读成升级失败；实际末尾 `changed 2 packages in 2s` 且退出码 0。机制：npm 先 rename 旧包目录为 `.omniterm-<hash>`（retire）→ 新包就位 → 删 retire 目录时因运行中的 exe 而 unlink 失败（Windows 允许 rename 含运行中 exe 的目录，不允许 unlink）。修复：CLI 在 `cfg!(windows)` 下补消歧义提示，不改判定逻辑。
 
 ---
 

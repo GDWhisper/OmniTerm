@@ -106,8 +106,22 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
         Channel::Npm => {
             eprintln!("Detected npm installation. Running: npm {}", NPM_UPGRADE_ARGS.join(" "));
             delegate("npm", NPM_UPGRADE_ARGS).await?;
+            // Windows 上 npm 升级本包必伴 cleanup EPERM warn，但那是成功路径：npm 先把旧
+            // 包目录 rename 为 `.omniterm-<hash>`（retire）再装新的，最后删 retire 目录时因
+            // 里面的 omniterm.exe 正被本进程/服务器进程持有而 unlink 失败。退出码仍为 0，
+            // 不加这句用户会把成功误读为失败。
+            if cfg!(windows) {
+                eprintln!(
+                    "Note: any 'npm warn cleanup ... EPERM ... unlink omniterm.exe' above is harmless. \
+                     npm moved the old binary aside and a running omniterm process still holds it; \
+                     the new version is already installed."
+                );
+            }
             eprintln!(
                 "Run 'omniterm --version' to verify — the npm package may lag behind the GitHub release."
+            );
+            eprintln!(
+                "If a server is running, restart it to pick up the new version: omniterm stop && omniterm start"
             );
             Ok(())
         }

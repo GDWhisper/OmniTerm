@@ -230,6 +230,8 @@ update options:
 
 Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Windows 为 `.zip`）。任何失败不留半更新状态（写操作全在临时文件，rename 是最后一步）。
 
+- 升级命令统一为 `npm install -g <pkg>@latest`。**Windows npm 渠道的已知行为差异**：npm reify 先把旧包目录 rename 为 `node_modules/@gdwhisper/.omniterm-<hash>`（retire）再就位新包，最后删 retire 目录。Windows 允许 rename 含运行中 exe 的目录、但不允许 unlink 运行中的 exe，所以服务器（或 `omniterm update` 自身）运行时升级会输出 `npm warn cleanup ... EPERM ... unlink omniterm.exe`。**这是成功路径**：新版已就位、退出码 0，仅留下一个待清的 retire 目录，且运行中的进程仍执行旧映像（必须重启才生效，即 `restart_required`）。CLI 在 Windows 下会补一句消歧义提示，避免用户把 warn 误读为失败。
+
 **Web 端点**（`src/api/system.rs`，供 Sidebar UpdateBadge 用）：
 - `GET /system/version` → `{current, latest, update_available, channel}`。后端做 semver 比较（dev 领先时 `update_available: false`）；GitHub latest 结果进程内缓存（成功 TTL 1h、失败负缓存 5min，防匿名限流 60 次/时）；GitHub 不可达且无缓存 → 502，前端 silent 降级不显示 badge。
 - `POST /system/update` → 一键升级。`try_lock` 全局锁防并发（占用中 409）；先 fresh 查询，无新版 409 `already up to date`；`github_release` 走 `self_replace`，`npm` 走 `delegate_captured`（300s 超时 → 504），`cargo` 编译耗时过长不支持一键 → 400 `unsupported_channel`（前端只显示命令提示）。成功返回 `restart_required: true`，**不自动重启服务器**（持有 tmux/ACP/WS 连接），提示用户 `omniterm stop && omniterm start`。
