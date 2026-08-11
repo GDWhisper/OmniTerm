@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
@@ -14,6 +14,43 @@ import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 import { decodeStoredBlocks } from '../../hooks/useAcpChat'
+
+/** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
+const TOP_LOAD_THRESHOLD_PX = 200
+
+/** `GET /messages` 响应里的单条消息。 */
+interface StoredMessage {
+  id: string
+  role: string
+  text: string
+  createdAt: string
+  blocks?: string | null
+  status?: string | null
+}
+
+/**
+ * DB 行 → `ChatMessage`。首屏 hydrate 与上拉分页共用同一转换，避免两份平行的
+ * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列总是完整的）。
+ */
+function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
+  return rows.map((m) => {
+    let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
+    if (!blocks || blocks.length === 0) {
+      blocks = [{ type: 'text' as const, text: m.text }]
+    }
+    return {
+      id: m.id,
+      // Hydrated rows carry their real DB id, so a later sync can target them exactly.
+      dbId: m.id,
+      role: m.role as 'user' | 'assistant',
+      text: m.text,
+      blocks,
+      createdAt: new Date(m.createdAt).getTime(),
+      // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
+      streaming: m.status === 'streaming',
+    }
+  })
+}
 
 /**
  * ChatView — the ACP-runtime counterpart to `Terminal.tsx`. Renders a
@@ -63,6 +100,8 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+  // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
+  const prependAnchorRef = useRef<number | null>(null)
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
@@ -73,36 +112,21 @@ export function ChatView() {
   useEffect(() => {
     if (!activeSessionId) return
     const sid = activeSessionId
+    // 已 hydrate 过的会话不再重复拉取。GET /messages 下发 blocks 列（单个 turn
+    // 可达数百 KB，存量旧行更大），而 hydrate 自身有「messages 非空即 bail」守卫
+    // ——重复拉取的结果会被整份丢弃，纯浪费一次传输 + JSON.parse + 逐条
+    // decodeStoredBlocks，切换会话因此明显卡顿。
+    // 跳过是安全的：切换不拆 WS（AcpConnectionManager 持久 slot），live 帧持续进
+    // store；commitReplay 重建条目时刻意保留 hydrated；chatStore 无 persist，刷新
+    // 页面 states 清空 → hydrated 回 false 自然重新拉取。
+    if (useChatStore.getState().states[sid]?.hydrated) return
     let cancelled = false
+    // 不传 limit：页大小与字节预算由后端守（只有它知道行实际多大）。
     fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled || !data?.messages?.length) return
-        const msgs: ChatMessage[] = data.messages.map(
-          (m: {
-            id: string
-            role: string
-            text: string
-            createdAt: string
-            blocks?: string | null
-            status?: string | null
-          }) => {
-            let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
-            if (!blocks || blocks.length === 0) {
-              blocks = [{ type: 'text' as const, text: m.text }]
-            }
-            return {
-              id: m.id,
-              role: m.role as 'user' | 'assistant',
-              text: m.text,
-              blocks,
-              createdAt: new Date(m.createdAt).getTime(),
-              // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
-              streaming: m.status === 'streaming',
-            }
-          },
-        )
-        useChatStore.getState().hydrate(sid, msgs)
+        useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
       })
       .catch(() => {})
       .finally(() => {
@@ -113,6 +137,45 @@ export function ChatView() {
       cancelled = true
     }
   }, [activeSessionId])
+
+  // 上拉加载更早的一页历史。首屏只取最近一页（后端按条数 + 字节双预算切页），
+  // 用户滚到顶部才继续向前取——绝大多数切换只关心最新那批记录。
+  const loadOlderHistory = useCallback(async () => {
+    const sid = activeSessionId
+    if (!sid) return
+    const s = useChatStore.getState()
+    const st = s.states[sid]
+    const cursor = st?.historyCursor
+    // cursor 为 null/undefined = 已到历史开头；loadingHistory = 已有请求在飞。
+    if (!cursor || st?.loadingHistory) return
+    s.beginLoadHistory(sid)
+    try {
+      const r = await fetch(
+        `/api/v1/sessions/${encodeURIComponent(sid)}/messages?before=${encodeURIComponent(cursor)}`,
+      )
+      const data = r.ok ? await r.json() : null
+      // 前插前记录当前 scrollHeight，供 layout effect 补偿滚动位置。
+      prependAnchorRef.current = scrollRef.current?.scrollHeight ?? null
+      useChatStore
+        .getState()
+        .prependMessages(sid, toChatMessages(data?.messages ?? []), data?.nextCursor ?? null)
+    } catch {
+      // 网络失败：清 in-flight 但保留游标，用户再次上拉即重试。
+      prependAnchorRef.current = null
+      useChatStore.getState().prependMessages(sid, [], cursor)
+    }
+  }, [activeSessionId])
+
+  // 前插补偿：内容变高后把 scrollTop 前移同样的量，视口停在用户原来读的那一行。
+  // 必须用 layout effect（在浏览器绘制前改 scrollTop），否则会闪一帧跳动。
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const anchor = prependAnchorRef.current
+    if (!el || anchor === null) return
+    prependAnchorRef.current = null
+    const delta = el.scrollHeight - anchor
+    if (delta !== 0) el.scrollTop += delta
+  }, [chatState.messages])
 
   // Re-stick whenever a new chunk/message lands while autoStick is on.
   useEffect(() => {
@@ -127,6 +190,10 @@ export function ChatView() {
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
     setAutoStick(atBottom)
+    // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
+    // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
+    const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
+    if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
   }
 
   // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode 等）。
@@ -327,6 +394,12 @@ export function ChatView() {
         style={{ flex: 1, minHeight: 0 }}
         contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
       >
+        {chatState.loadingHistory && (
+          <div className="chat-replay-indicator">
+            <span className="replay-spinner" />
+            <span>{t('chat.loadingHistory')}</span>
+          </div>
+        )}
         {chatState.messages.length === 0 && (
           <div
             style={{

@@ -20,7 +20,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/dirs", get(list_dirs))
         .route("/system/exists", get(check_exists))
         .route("/system/multiplexer", get(multiplexer_status))
-        .route("/system/tmux/mouse", get(get_tmux_mouse).post(set_tmux_mouse))
+        .route("/system/tmux/mouse", get(get_mouse_mode).post(set_mouse_mode))
         .route("/system/version", get(version_check))
         .route("/system/update", post(run_update))
 }
@@ -30,15 +30,15 @@ struct ListDirsQuery {
     path: String,
 }
 
-async fn system_info() -> Json<Value> {
+async fn system_info(State(state): State<AppState>) -> Json<Value> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "/".into());
 
     Json(json!({
         "home_dir": home,
-        // 平台终端复用器名称（unix: tmux / windows: psmux），供前端 UI 文案使用
-        "multiplexer": crate::tmux::MULTIPLEXER_NAME,
+        // 平台终端复用器名称（按平台编译期确定），供前端 UI 文案使用
+        "multiplexer": state.engines.multiplexer_name(),
     }))
 }
 
@@ -85,30 +85,33 @@ async fn check_exists(Query(q): Query<ExistsQuery>) -> (StatusCode, Json<Value>)
     (StatusCode::OK, Json(json!({ "exists": exists })))
 }
 
-async fn multiplexer_status() -> (StatusCode, Json<Value>) {
-    match crate::tmux::check_multiplexer() {
+async fn multiplexer_status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    match state.engines.check_multiplexer() {
         Ok(()) => (StatusCode::OK, Json(json!({ "available": true }))),
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "available": false,
                 "error": e.to_string(),
-                "install_hints": crate::tmux::MULTIPLEXER_INSTALL_HINTS,
+                "install_hints": state.engines.multiplexer_install_hints(),
             })),
         ),
     }
 }
 
-async fn get_tmux_mouse() -> (StatusCode, Json<Value>) {
-    match crate::tmux::get_mouse_option().await {
+async fn get_mouse_mode(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    match state.engines.mouse_enabled().await {
         Ok(enabled) => (StatusCode::OK, Json(json!({ "enabled": enabled }))),
         Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": e.to_string() }))),
     }
 }
 
-async fn set_tmux_mouse(Json(body): Json<Value>) -> (StatusCode, Json<Value>) {
+async fn set_mouse_mode(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
     let enabled = body.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-    match crate::tmux::set_mouse_option(enabled).await {
+    match state.engines.set_mouse_enabled(enabled).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "enabled": enabled }))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))),
     }
@@ -202,14 +205,14 @@ async fn run_update() -> (StatusCode, Json<Value>) {
         update::Channel::Npm => {
             match tokio::time::timeout(
                 UPDATE_TIMEOUT,
-                update::delegate_captured("npm", &["update", "-g", update::NPM_PACKAGE]),
+                update::delegate_captured("npm", update::NPM_UPGRADE_ARGS),
             )
             .await
             {
                 Err(_) => {
                     return (
                         StatusCode::GATEWAY_TIMEOUT,
-                        Json(json!({ "error": "npm update timed out" })),
+                        Json(json!({ "error": "npm install timed out" })),
                     );
                 }
                 Ok(r) => r.map(|_| ()),

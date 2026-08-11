@@ -1,4 +1,5 @@
 mod acp;
+mod agent;
 mod api;
 mod auth;
 mod embedded;
@@ -7,7 +8,7 @@ mod fs;
 mod git;
 mod models;
 mod presets;
-mod tmux;
+
 mod update;
 mod utils;
 mod workspaces;
@@ -37,7 +38,7 @@ use tracing_subscriber::EnvFilter;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 #[derive(Parser)]
-#[command(name = "omniterm", version, about = "Web-based tmux terminal manager")]
+#[command(name = "omniterm", version, about = "Web-based terminal session manager")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -130,9 +131,9 @@ pub struct AppState {
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub login_guard: auth::LoginGuard,
-    pub activity_monitor: tmux::control_mode::SessionActivityMonitor,
+    /// 会话引擎注册表（D9）：持有复用器引擎 + agent 屏幕检测注册表。
+    pub engines: engine::EngineRegistry,
     pub acp_supervisor: acp::AcpSupervisor,
-    pub agent_watcher: tmux::agent_watch::AgentWatcher,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -536,11 +537,13 @@ fn main() -> anyhow::Result<()> {
             let db_url = args.db.unwrap_or_else(default_db_url);
             let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
 
-            // tmux 缺失不再阻断启动：ACP runtime 不依赖 tmux。
-            // tmux-backed session 会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
-            if let Err(e) = tmux::check_multiplexer() {
+            let engines = engine::EngineRegistry::new();
+
+            // 复用器缺失不再阻断启动：ACP runtime 不依赖它。
+            // 复用器会话会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
+            if let Err(e) = engines.check_multiplexer() {
                 tracing::warn!(
-                    "{} — tmux-backed sessions will fail until installed; ACP sessions unaffected.",
+                    "{} — multiplexer-backed sessions will fail until installed; ACP sessions unaffected.",
                     e
                 );
             }
@@ -604,24 +607,19 @@ fn main() -> anyhow::Result<()> {
 
             let pid_file = pid_path(&db_url);
 
-            let activity_monitor = tmux::control_mode::SessionActivityMonitor::new(
-                tmux::control_mode::DEFAULT_ACTIVITY_TIMEOUT,
-            );
-
             let state = AppState {
                 db,
                 jwt_secret,
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
                 acp_idle_recycle_secs,
                 login_guard: auth::LoginGuard::new(),
-                activity_monitor,
+                engines,
                 acp_supervisor: acp::AcpSupervisor::default(),
-                agent_watcher: tmux::agent_watch::AgentWatcher::default(),
             };
 
-            // 启动 agent 屏幕检测轮询：周期扫描 tmux 会话前台进程 + 可见屏，
+            // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，
             // 识别 Claude/Codex/Qoder 的 Running/Waiting/Idle 状态（herdr 借鉴，见 docs/reference/herdr-reference.md）。
-            tmux::agent_watch::spawn(state.agent_watcher.clone());
+            agent::watch::spawn(state.engines.watcher().clone(), state.engines.clone());
 
             // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
             // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。idle 阈值经

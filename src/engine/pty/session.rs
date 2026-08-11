@@ -3,7 +3,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
 
-use crate::tmux::pty_io::{kill_session_process, write_pty};
+use crate::engine::pty_io::{kill_session_process, write_pty};
 
 #[cfg(unix)]
 use std::os::unix::io::RawFd;

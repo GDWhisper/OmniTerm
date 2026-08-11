@@ -214,7 +214,7 @@ async fn delete_project(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     // 先取该项目下全部 session 的运行时信息，逐个清理进程资源
-    // （psmux/tmux 会话、acp agent 子进程），再删 DB——否则会话进程残留。
+    // （复用器会话、acp agent 子进程），再删 DB——否则会话进程残留。
     let sessions: Vec<(String, Option<String>, String)> = sqlx::query_as(
         "SELECT id, tmux_session_name, runtime_kind FROM sessions WHERE project_id = ?",
     )
@@ -223,11 +223,11 @@ async fn delete_project(
     .await
     .unwrap();
 
-    for (session_id, tmux_name, runtime_kind) in sessions {
+    for (session_id, engine_name, runtime_kind) in sessions {
         crate::api::sessions::cleanup_session_runtime(
             &state,
             &session_id,
-            tmux_name.as_deref(),
+            engine_name.as_deref(),
             &runtime_kind,
         )
         .await;
@@ -287,9 +287,7 @@ async fn create_worktree(
             // User confirmed: initialize the repo, then fall through to add
             // the worktree on the freshly created HEAD.
             if let Err(e) = crate::git::init_repo(&project.path).await {
-                let msg = e.to_string();
-                let short = msg.lines().last().unwrap_or(&msg).to_string();
-                return (StatusCode::BAD_REQUEST, Json(json!({ "error": short })));
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": short_git_err(&e) })));
             }
         } else {
             return not_a_git_repo(&project);
@@ -330,19 +328,24 @@ async fn create_worktree(
                 ),
             }
         }
-        Err(e) => {
-            let msg = e.to_string();
-            // Git multi-line errors: use the last line which carries the
-            // actionable message (e.g. "fatal: ...")
-            let short = msg.lines().last().unwrap_or(&msg).to_string();
-            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
-        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": short_git_err(&e) }))),
     }
+}
+
+/// Git multi-line errors: keep the last line, which carries the actionable
+/// message (e.g. `fatal: ...`). Shared by every git-backed handler here.
+fn short_git_err(e: &anyhow::Error) -> String {
+    let msg = e.to_string();
+    msg.lines().last().unwrap_or(&msg).to_string()
 }
 
 #[derive(Deserialize)]
 struct DeleteWorktreeQuery {
     path: String,
+    /// Also force-delete the branch this worktree had checked out
+    /// (`git branch -D`). Opt-in: `git worktree remove` alone keeps the branch
+    /// ref, which then lingers in the base-branch dropdown.
+    delete_branch: Option<bool>,
 }
 
 /// Shared "project is not a git repository" error response. Carries a
@@ -378,9 +381,7 @@ async fn init_project_git(
     };
 
     if let Err(e) = crate::git::init_repo(&project.path).await {
-        let msg = e.to_string();
-        let short = msg.lines().last().unwrap_or(&msg).to_string();
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": short })));
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": short_git_err(&e) })));
     }
 
     (StatusCode::OK, Json(json!({ "ok": true })))
@@ -413,14 +414,42 @@ async fn delete_worktree(
         );
     }
 
-    match crate::git::remove_worktree(&project.path, &q.path).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
-        Err(e) => {
-            let msg = e.to_string();
-            let short = msg.lines().last().unwrap_or(&msg).to_string();
-            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
-        }
+    // Resolve the branch *before* removing the worktree: afterwards the
+    // worktree is gone from `git worktree list` and the mapping is lost.
+    // The branch name comes from git itself, not from the client, so a stale
+    // frontend cannot make us delete the wrong ref.
+    let branch_plan: Option<Result<String, String>> = if q.delete_branch.unwrap_or(false) {
+        Some(match crate::git::discover_worktrees(&project.path).await {
+            Ok(list) => match list.into_iter().find(|w| w.path == q.path) {
+                Some(w) => w
+                    .branch
+                    .ok_or_else(|| "worktree has a detached HEAD; no branch to delete".to_string()),
+                None => Err("worktree not found in git worktree list".to_string()),
+            },
+            Err(e) => Err(short_git_err(&e)),
+        })
+    } else {
+        None
+    };
+
+    if let Err(e) = crate::git::remove_worktree(&project.path, &q.path).await {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": short_git_err(&e) })));
     }
+
+    // The worktree is already gone, so a branch-deletion failure must not turn
+    // into a blanket error: report it alongside the success so the frontend can
+    // warn instead of implying nothing happened.
+    let mut body = json!({ "ok": true });
+    match branch_plan {
+        None => {}
+        Some(Ok(branch)) => match crate::git::delete_branch(&project.path, &branch).await {
+            Ok(()) => body["branch_deleted"] = json!(branch),
+            Err(e) => body["branch_error"] = json!(short_git_err(&e)),
+        },
+        Some(Err(reason)) => body["branch_error"] = json!(reason),
+    }
+
+    (StatusCode::OK, Json(body))
 }
 
 async fn list_worktrees(
@@ -466,11 +495,7 @@ async fn list_branches(State(state): State<AppState>, Path(id): Path<String>) ->
             let current = current_res.unwrap_or_default();
             (StatusCode::OK, Json(json!({ "branches": branches, "current": current })))
         }
-        Err(e) => {
-            let msg = e.to_string();
-            let short = msg.lines().last().unwrap_or(&msg).to_string();
-            (StatusCode::BAD_REQUEST, Json(json!({ "error": short })))
-        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": short_git_err(&e) }))),
     }
 }
 
@@ -589,7 +614,7 @@ async fn list_duplicates(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Merge source project `id` into `target_id`: reassign all sessions, then
 /// delete the source project. Rejects with 409 if any session's
-/// `tmux_session_name` would collide with an existing target session.
+/// The engine session name column would collide with an existing target session.
 async fn merge_project_into(
     State(state): State<AppState>,
     Path((id, target_id)): Path<(String, String)>,
@@ -622,9 +647,9 @@ async fn merge_project_into(
         }
     };
 
-    // Detect tmux_session_name collisions between source and target.
+    // Detect engine session name collisions between source and target.
     // A collision means both projects have a session backed by the same
-    // tmux process; we can't safely merge those (would lose access to one).
+    // live multiplexer process; we can't safely merge those (would lose access to one).
     let collisions: Vec<(String, String, String)> = sqlx::query_as(
         "SELECT s.id, s.tmux_session_name, s.name FROM sessions s \
          WHERE s.project_id = ? AND s.tmux_session_name IS NOT NULL \

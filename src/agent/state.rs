@@ -1,6 +1,6 @@
 //! Agent state data model for hook-driven agent monitoring.
 //!
-//! This module defines the types and parsing logic for the `@omniterm_agent` tmux
+//! This module defines the types and parsing logic for the `@omniterm_agent` session
 //! session option. The value format is colon-separated:
 //!
 //! ```text
@@ -106,7 +106,7 @@ impl AttentionReason {
     }
 }
 
-/// A snapshot of agent state parsed from the `@omniterm_agent` tmux option.
+/// A snapshot of agent state parsed from the `@omniterm_agent` session option.
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentSnapshot {
     pub agent_kind: AgentKind,
@@ -116,7 +116,7 @@ pub struct AgentSnapshot {
     pub agent_nonce: Option<String>,
 }
 
-/// The tmux session option name used to store agent state.
+/// The session option name used to store agent state.
 #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub const AGENT_OPTION: &str = "@omniterm_agent";
 
@@ -175,7 +175,7 @@ pub fn agent_value(snapshot: &AgentSnapshot) -> String {
 /// Sanitize a token for use in the agent option value.
 ///
 /// Whitespace and characters outside `[A-Za-z0-9_.-]` are replaced with `_`.
-/// This prevents shell injection and ensures the value is safe for `tmux set-option`.
+/// This prevents shell injection and ensures the value is safe for `set-option` transport.
 #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub fn clean_token(s: &str) -> String {
     s.chars()

@@ -11,7 +11,7 @@ fn is_false(v: &bool) -> bool {
 /// - `Pty`: session driven by a self-managed PTY engine; no multiplexer.
 ///
 /// Default flipped from `Tmux` (Phase 2) to `Acp` in Phase 4 once the frontend
-/// Chat view landed. Callers that still want a tmux session must pass
+/// Chat view landed. Callers that still want a multiplexer session must pass
 /// `runtime_kind = 'tmux'` explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[sqlx(rename_all = "lowercase")]
@@ -24,14 +24,16 @@ pub enum RuntimeKind {
     Pty,
 }
 
-/// Request DTO for adopting an external tmux session into a project.
+/// Request DTO for adopting an external multiplexer session into a project.
 #[derive(Debug, Deserialize)]
 pub struct AdoptSession {
-    pub tmux_name: String,
+    /// 外部会话名。wire 字段名为冻结前端契约（serde rename 保留原名），仅 Rust 侧中性化。
+    #[serde(rename = "tmux_name")]
+    pub external_name: String,
     pub project_id: String,
 }
 
-/// Response type for GET /sessions/external — a tmux session not yet in the DB,
+/// Response type for GET /sessions/external — a multiplexer session not yet in the DB,
 /// enriched with CWD.
 #[derive(Debug, Serialize)]
 pub struct ExternalSessionResponse {
@@ -63,23 +65,23 @@ pub struct Session {
     pub hook_enabled: bool,
     pub hook_status: Option<String>,
     pub created_at: String,
-    /// Which runtime drives this session. Persisted, defaults to `tmux` in DB.
+    /// Which runtime drives this session. Persisted, defaults to 'tmux' in DB (migration default).
     #[sqlx(default)]
     pub runtime_kind: RuntimeKind,
-    /// ACP adapter session id when `runtime_kind = 'acp'`. NULL for tmux sessions.
+    /// ACP adapter session id when `runtime_kind = 'acp'`. NULL for non-ACP sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub acp_session_id: Option<String>,
     /// Which agent registry row this session was spawned from. Required for
-    /// `runtime_kind = 'acp'`, NULL for tmux sessions.
+    /// `runtime_kind = 'acp'`, NULL for non-ACP sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub agent_id: Option<String>,
-    // Runtime activity indicator (tmux control mode, not persisted)
+    // Runtime activity indicator (multiplexer activity tracking, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]
     pub is_active: bool,
-    // Agent state fields (read-only, derived from tmux option at query time, not persisted)
+    // Agent state fields (read-only, derived from the agent option channel at query time, not persisted)
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub agent_kind: Option<String>,

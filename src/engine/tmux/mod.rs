@@ -1,17 +1,17 @@
-pub mod agent_detect;
 pub mod agent_hooks;
-pub mod agent_state;
-pub mod agent_watch;
 pub mod control_mode;
-pub mod process_info;
-pub mod pty;
-pub mod pty_io;
+pub mod engine;
+pub mod terminal_ws;
+pub mod watch_source;
 
 use anyhow::{Result, anyhow};
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-use crate::tmux::agent_state::AgentSnapshot;
+use crate::agent::state::AgentSnapshot;
+use crate::engine::EngineSessionInfo;
+
+pub use engine::TmuxEngine;
 
 /// Platform-specific install commands for the terminal multiplexer.
 #[cfg(unix)]
@@ -62,7 +62,7 @@ pub fn check_multiplexer() -> Result<()> {
 ///
 /// Returns whether hooks were injected.
 pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
-    use crate::tmux::agent_hooks;
+    use crate::engine::tmux::agent_hooks;
 
     // 1. Create the tmux session (plain shell)
     let output = Command::new("tmux")
@@ -89,7 +89,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
     // 3. If an agent command is provided, detect agent, inject hooks, and send command
     let mut hook_injected = false;
     if let Some(cmd) = command {
-        if let Some(kind) = agent_hooks::detect_agent_kind(cmd) {
+        if let Some(kind) = crate::agent::cli::detect_agent_kind(cmd) {
             // Initialize agent option before launching agent
             let initial_value = agent_hooks::initial_agent_option_value(kind);
             let opt_out = Command::new("tmux")
@@ -142,7 +142,7 @@ pub async fn kill_session(name: &str) -> Result<()> {
 /// Uses `|` as the format separator (unified). The session name is the last field
 /// and re-joined from remaining parts after the fixed fields — this handles names
 /// that contain `|` characters.
-pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
+pub async fn list_sessions() -> Result<Vec<EngineSessionInfo>> {
     let output = Command::new("tmux")
         .args([
             "list-sessions",
@@ -176,7 +176,7 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
 
                 // Parse agent option value
                 let agent_val = parts[3];
-                let agent_snapshot = agent_state::parse_agent_value(agent_val);
+                let agent_snapshot = crate::agent::state::parse_agent_value(agent_val);
                 let (agent_kind, agent_state, attention_reason, agent_event, agent_nonce) =
                     if let Some(snap) = agent_snapshot {
                         (
@@ -197,7 +197,7 @@ pub async fn list_sessions() -> Result<Vec<TmuxSessionInfo>> {
                 // Session name: rejoin remaining parts with |
                 let name = parts[5..].join("|");
 
-                Some(TmuxSessionInfo {
+                Some(EngineSessionInfo {
                     name,
                     attached,
                     windows,
@@ -294,21 +294,7 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
     // Output format: "@omniterm_agent <value>"
     let value = stdout.strip_prefix("@omniterm_agent ").map(|v| v.trim()).unwrap_or("");
 
-    Ok(agent_state::parse_agent_value(value))
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TmuxSessionInfo {
-    pub name: String,
-    pub attached: bool,
-    pub windows: u32,
-    pub created: String,
-    pub cwd: Option<String>,
-    pub agent_kind: Option<String>,
-    pub agent_state: Option<String>,
-    pub attention_reason: Option<String>,
-    pub agent_event: Option<String>,
-    pub agent_nonce: Option<String>,
+    Ok(crate::agent::state::parse_agent_value(value))
 }
 
 /// Read the global tmux `mouse` option (`-g`).

@@ -1,7 +1,7 @@
 # Claude Code 屏幕检测规则。
 # Rules adapted from herdr (https://github.com/ogulcancelik/herdr, Apache-2.0)
 # src/detect/manifests/claude.toml — 区域语义精简为 OmniTerm 引擎支持的子集
-# （见 src/tmux/agent_detect.rs 顶部注释）。改规则后跑 `cargo test agent_detect`。
+# （见 src/agent/detect.rs 顶部注释）。改规则后跑 `cargo test agent_detect`。
 
 [[rules]]
 id = "osc_title_working"
@@ -94,7 +94,7 @@ all = [
   ] },
 ]
 
-# OmniTerm 补充：Claude 工作中的底部状态行（herdr 依赖 OSC 标题，tmux 下
+# OmniTerm 补充：Claude 工作中的底部状态行（herdr 依赖 OSC 标题，复用器下
 # pane_title 可能被 shell 覆盖，故加一条屏幕兜底）。
 [[rules]]
 id = "screen_working_fallback"

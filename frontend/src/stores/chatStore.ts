@@ -159,6 +159,20 @@ export interface SlashCommand {
 
 export interface ChatMessage {
   id: string
+  /**
+   * The real `chat_messages.id` row id, when known. Set for hydrated messages
+   * (`GET /messages` returns row ids) and for the in-progress turn once the
+   * backend pushes its `row_id` down (`turn_snapshot` / `prompt_done`). Absent
+   * for messages the frontend minted itself (live streaming before any snapshot,
+   * replay reconstruction) — their `id` is a local `genId()` value that does not
+   * exist in the DB.
+   *
+   * Why a separate field instead of reusing `id`: the sync endpoint treats a
+   * supplied id as authoritative and updates exactly that row, so claiming a
+   * local id is a DB id would silently target nothing. See
+   * `messagesToSyncPayload` and `chat_persistence::sync_messages`.
+   */
+  dbId?: string
   role: 'user' | 'assistant' | 'system'
   /** Plain-text accumulator �? kept for persistence hydration compatibility. */
   text: string
@@ -226,6 +240,13 @@ interface ChatSessionState {
    * preHydrateBuffer：落定前会改动消息列表的帧先缓冲，避免抢跑 hydrate 丢历史。
    */
   hydrated?: boolean
+  /**
+   * 历史分页游标（后端 `nextCursor`）：指向比已加载的最旧一条更早的那页。
+   * `null`/`undefined` = 已到历史开头，不再上拉加载。唯一信号源，不另存 hasMore。
+   */
+  historyCursor?: string | null
+  /** 上拉加载更早历史的 in-flight 标志（防重入 + 顶部加载指示）。 */
+  loadingHistory?: boolean
 }
 
 interface ChatActions {
@@ -258,7 +279,16 @@ interface ChatActions {
   hydrateQueuedMessage: (sessionId: string, text: string) => void
   setMode: (sessionId: string, mode: string) => void
   setError: (sessionId: string, message: string | null) => void
-  hydrate: (sessionId: string, messages: ChatMessage[]) => void
+  hydrate: (sessionId: string, messages: ChatMessage[], historyCursor?: string | null) => void
+  /** 上拉加载更早历史：置 in-flight 标志（防重入）。 */
+  beginLoadHistory: (sessionId: string) => void
+  /** 前插更早的一页历史并推进游标，同时清 in-flight 标志（单次 set 原子提交）。
+   *  消息为空时仍推游标（可能整页被后端去重/过滤），避免上拉卡死。 */
+  prependMessages: (
+    sessionId: string,
+    messages: ChatMessage[],
+    historyCursor: string | null,
+  ) => void
   /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
   setHydrated: (sessionId: string, hydrated: boolean) => void
   /** 重连续接：用进行中 turn 的快照（已解码 blocks）按 rowId 替换/收编在建 assistant
@@ -805,6 +835,9 @@ export const useChatStore = create<ChatStore>((set) => ({
         imageSupported: prev?.imageSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
+        // 重放是 agent 侧的完整历史，重建后已无「更早一页」可取；显式置 null
+        // 而非靠 delete 后的 undefined，以免误读为遗漏。
+        historyCursor: null,
       })
       return applyTopLevelActions(base, sessionId, actions)
     }),
@@ -843,7 +876,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   setError: (sessionId, message) =>
     set((state) => patch(state, sessionId, { error: message })),
 
-  hydrate: (sessionId, messages) =>
+  hydrate: (sessionId, messages, historyCursor) =>
     set((state) => {
       const current = get(state, sessionId)
       if (current.messages.length > 0 || current.replaying) return state
@@ -864,7 +897,22 @@ export const useChatStore = create<ChatStore>((set) => ({
           if (todos.length > 0) break
         }
       }
-      return patch(state, sessionId, { messages, todos, todosTitle })
+      return patch(state, sessionId, { messages, todos, todosTitle, historyCursor })
+    }),
+
+  beginLoadHistory: (sessionId) => set((state) => patch(state, sessionId, { loadingHistory: true })),
+
+  prependMessages: (sessionId, messages, historyCursor) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      // 按 id 去重：live 帧或上一页可能已带来同一条（重放/并发场景）。
+      const known = new Set(current.messages.map((m) => m.id))
+      const older = messages.filter((m) => !known.has(m.id))
+      return patch(state, sessionId, {
+        messages: older.length > 0 ? [...older, ...current.messages] : current.messages,
+        historyCursor,
+        loadingHistory: false,
+      })
     }),
 
   setHydrated: (sessionId, hydrated) =>
@@ -884,6 +932,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             : Date.now()
       const msg: ChatMessage = {
         id: rowId,
+        dbId: rowId,
         role: 'assistant',
         text,
         blocks,
@@ -1023,6 +1072,8 @@ export function readQueuedFromStorageForSession(sessionId: string): string | nul
 
 /** Shape of each message entry in the `/sessions/{id}/messages/sync` POST body. */
 export interface SyncMessagePayload {
+  /** Authoritative DB row id when known — backend updates exactly that row. */
+  id?: string
   role: string
   text: string
   blocks?: string
@@ -1041,6 +1092,10 @@ export interface SyncMessagePayload {
  *   agent never received.
  * - `blocks` is stringified when non-empty; omitted when empty so the
  *   backend's `(session, role, text)` dedup has stable rows.
+ * - `id` is forwarded **only** from `ChatMessage.dbId` (a real row id), never
+ *   from the local `id`. With an id the backend updates that one row and
+ *   inserts nothing; without one it falls back to text matching. Passing a
+ *   local id would match no row and silently drop the write.
  */
 export function messagesToSyncPayload(
   messages: readonly ChatMessage[],
@@ -1050,10 +1105,44 @@ export function messagesToSyncPayload(
     if (m.role !== 'user' && m.role !== 'assistant') continue
     if (m.undelivered) continue
     const entry: SyncMessagePayload = { role: m.role, text: m.text }
+    if (m.dbId) {
+      entry.id = m.dbId
+    }
     if (m.blocks.length) {
       entry.blocks = JSON.stringify(m.blocks)
     }
     payload.push(entry)
   }
   return payload
+}
+
+/**
+ * Build the sync payload for a turn that just finished, targeting the single DB row the
+ * backend accumulator created for it (`rowId`).
+ *
+ * Must be called **before `markDone`**: the turn's messages are identified by the
+ * `streaming` flag, which `markDone` clears.
+ *
+ * - Multiple messages collapse into one entry — the backend keeps one row per turn, and
+ *   hydrating that row yields one message again.
+ * - `text` is a placeholder: the id-carrying path never writes `text` (its authority is
+ *   the backend accumulator), it only replaces the raw-frame `blocks` with cooked ones.
+ * - Empty `blocks` → empty payload: nothing to converge, and a blank write would only
+ *   destroy the raw frames the backend already stored.
+ */
+export function turnToSyncPayload(
+  messages: readonly ChatMessage[],
+  rowId: string,
+): SyncMessagePayload[] {
+  const live = messages.filter((m) => m.role === 'assistant' && m.streaming)
+  const blocks = live.flatMap((m) => m.blocks)
+  if (blocks.length === 0) return []
+  return [
+    {
+      id: rowId,
+      role: 'assistant',
+      text: live.map((m) => m.text).join(''),
+      blocks: JSON.stringify(blocks),
+    },
+  ]
 }

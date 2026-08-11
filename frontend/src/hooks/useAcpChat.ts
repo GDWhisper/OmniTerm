@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, turnToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -43,7 +43,8 @@ interface ServerFrame {
   seq?: number
   /** turn_state: 连接时是否有进行中的 assistant turn。 */
   active?: boolean
-  /** turn_snapshot: 进行中 turn 的 DB 行 id（= assistant 消息 id），供按 id 续接替换。 */
+  /** turn_snapshot: 进行中 turn 的 DB 行 id（= assistant 消息 id），供按 id 续接替换。
+   *  prompt_done: 刚结束 turn 的行 id，供前端把 cooked blocks 精确回写到那一行。 */
   row_id?: string
   /** turn_snapshot: 已累积的纯文本；blocks 为 `{"v":1,"frames":[...]}` 原始帧包裹 JSON。 */
   text?: string
@@ -607,11 +608,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 确保 sync_messages 的 (session, role, text) 去重能精确命中并 UPDATE blocks。
   // 过滤规则（undelivered 跳过、只 user/assistant 入库）抽到 chatStore.messagesToSyncPayload
   // 纯函数里，便于单测。
-  const syncToDb = useCallback(() => {
-    const sid = sessionIdRef.current
-    if (!sid) return
-    const msgs = useChatStore.getState().states[sid]?.messages ?? []
-    const payload = messagesToSyncPayload(msgs)
+  const postSync = useCallback((sid: string, payload: SyncMessagePayload[]) => {
     if (payload.length === 0) return
     if (import.meta.env.DEV) {
       console.debug('[ACP sync]', payload.length, 'msgs,', payload.reduce((n, p) => n + p.text.length, 0), 'chars')
@@ -622,6 +619,38 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       body: JSON.stringify({ messages: payload }),
     }).catch(() => {})
   }, [])
+
+  const syncToDb = useCallback(() => {
+    const sid = sessionIdRef.current
+    if (!sid) return
+    const msgs = useChatStore.getState().states[sid]?.messages ?? []
+    postSync(sid, messagesToSyncPayload(msgs))
+  }, [postSync])
+
+  // turn 结束时把本 turn 的 **cooked** blocks 回写到后端累积器建的那一行。
+  //
+  // 为什么要回写：后端落的是原始 ACP 帧（`{"v":1,"frames":[...]}`），而 cook 会把同一
+  // toolCallId 的上千个 tool_call_update 折叠成一个 tool_call，每帧重复携带的 rawInput
+  // 副本只剩一份——实测同库 cooked 行最大 114KB，未被覆盖的原始帧行达 9,150,950 字符。
+  // 前端 cook 不是重复劳动，而是唯一的体积收敛路径（此前注释「前端不再回写」的前提
+  // 「后端已落库」成立，但两者体积差两个数量级，见计划 D2）。窗口上限
+  // （MAX_BLOCKS_BYTES / MAX_FRAME_BYTES）仍是必需兜底：前端不在线时无人 cook。
+  //
+  // 为什么不复用全量 syncToDb：那会在每个 turn 重写整个会话的全部消息（O(m²) 写放大）。
+  // replay_end 是手动恢复、罕见，全量可接受；prompt_done 每 turn 都发生。
+  //
+  // 为什么按 row_id 而非文本匹配：后端一个 turn 一行，前端本 turn 可能不止一条消息，
+  // 且 text 一致性靠的是「两侧都只追加 AgentMessageChunk」这个易漂移的不变式——对不上
+  // 就会 INSERT 重复行。带 id 时后端只更新那一行、不匹配就跳过（见 sync_messages）。
+  const syncTurnToDb = useCallback(
+    (sid: string, rowId: string | undefined) => {
+      // 无 row_id = 本 turn 未折叠任何帧（无行可写）。
+      if (!rowId) return
+      const msgs = useChatStore.getState().states[sid]?.messages ?? []
+      postSync(sid, turnToSyncPayload(msgs, rowId))
+    },
+    [postSync],
+  )
 
   useEffect(() => {
     if (!sessionId) {
@@ -710,9 +739,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             liveRaf.current = null
           }
           flushLiveBuffer()
+          // 在 markDone 之前：本 turn 的 cooked blocks 靠 streaming 标记界定。
+          syncTurnToDb(sid, frame.row_id)
           s.markDone(sid)
-          // assistant turn 已由后端累积器实时落库，前端不再回写。清空 seq 水位，
-          // 下一 turn 从零开始（不做 seq 门控）。
+          // assistant turn 由后端累积器实时落库**原始帧**，前端在此把 cooked blocks
+          // 回写到同一行以收敛体积（见 syncTurnToDb）。清空 seq 水位，下一 turn 从零
+          // 开始（不做 seq 门控）。
           inProgressSeq.current = null
           // Drain queued follow-up: 用户在 agent 忙碌期按回车存到 chatStore.queuedMessage
           // 的下一条消息在 agent 跑完这一轮后自动发出。N=1 语义：只有一条可排队，发完即清空。

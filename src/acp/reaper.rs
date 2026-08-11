@@ -64,6 +64,7 @@ pub async fn run_reaper(supervisor: AcpSupervisor, idle_recycle_secs: Arc<Atomic
                 client.mark_prompt_idle();
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "InactivityTimeout".into(),
+                    row_id: client.turn_row_id(),
                 });
             }
         }

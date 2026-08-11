@@ -13,7 +13,7 @@ use tracing::error;
 
 use crate::AppState;
 use crate::fs;
-use crate::tmux;
+use crate::models::session::RuntimeKind;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -106,19 +106,18 @@ fn parse_sort(sort: Option<&str>, order: Option<&str>) -> (fs::SortKey, bool) {
 
 /// Resolve base path from session ID.
 ///
-/// Returns `(base_path, tmux_session_name_or_empty)`. The second value is the
-/// tmux session name for `runtime_kind='tmux'` sessions, and `""` (empty) for
-/// `runtime_kind='acp'` sessions — which **do not have a tmux session**, so
-/// FileManager must read the session's `workspace_path` directly (the agent
-/// process cwd was fixed in commit 27d815f to actually be that path).
+/// Returns `(base_path, engine_session_name_or_empty)`. The second value is
+/// the engine session name for multiplexer-backed sessions, and `""` (empty)
+/// for sessions without a multiplexer pane (e.g. `runtime_kind='acp'`) —
+/// FileManager must then read the session's `workspace_path` directly (the
+/// agent process cwd was fixed in commit 27d815f to actually be that path).
 ///
-/// For tmux sessions, falls back to re-creating the tmux session at
-/// `workspace_path` if `pane_cwd` fails (e.g. tmux server restart).
+/// For multiplexer sessions, falls back to re-creating the session at
+/// `workspace_path` if `current_cwd` fails (e.g. multiplexer server restart).
 ///
-/// **历史 bug**：此前 ACP session 的 `tmux_session_name` 是 NULL，
-/// `SELECT tmux_session_name` 返回 None  → 整个函数返 None  →
-/// `/files?session=…` 返回 404 "session not found or tmux unavailable"，
-/// FileManager 加载 ACP session 的文件列表永远报错。修复后识别
+/// **历史 bug**：此前 ACP session 的引擎会话名列是 NULL，SELECT 返回 None →
+/// 整个函数返 None → `/files?session=…` 返回 404 "session not found or engine
+/// unavailable"，FileManager 加载 ACP session 的文件列表永远报错。修复后识别
 /// runtime_kind=acp 走 workspace_path 分支。
 pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<(String, String)> {
     // 一次性取 session 关键字段，避免多次往返
@@ -131,18 +130,18 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
     .ok()
     .flatten()?;
 
-    let (runtime_kind, tmux_name_opt, workspace_path) = row;
+    let (runtime_kind, engine_name_opt, workspace_path) = row;
 
-    // ACP session：没有 tmux 会话，直接用 session 的 workspace_path 作为
+    // ACP session：没有复用器会话，直接用 session 的 workspace_path 作为
     // FileManager 起点。这与 agent 子进程 OS cwd 修复（commit 27d815f）
     // 保持一致——agent 看到的是 workspace_path，FileManager 也展示
     // workspace_path，UI 与 agent 实际文件上下文统一。
     //
-    // 未来若引入非 tmux/非 acp 的新 runtime_kind，未设置 tmux_name 但
-    // 仍要求跟随会话工作区：也走此分支（`tmux_name_opt.is_none()`）。
-    if runtime_kind == "acp" || tmux_name_opt.is_none() {
+    // 未来若引入非复用器/非 acp 的新 runtime_kind，未设置引擎会话名但
+    // 仍要求跟随会话工作区：也走此分支（`engine_name_opt.is_none()`）。
+    if runtime_kind == "acp" || engine_name_opt.is_none() {
         tracing::debug!(
-            "session {} is non-tmux (runtime_kind={}), using workspace_path={} as FileManager cwd",
+            "session {} has no multiplexer pane (runtime_kind={}), using workspace_path={} as FileManager cwd",
             session_id,
             runtime_kind,
             workspace_path
@@ -150,17 +149,17 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
         return Some((workspace_path, String::new()));
     }
 
-    // 走到这里说明是 tmux 会话。tmux_name_opt 一定是 Some
+    // 走到这里说明是复用器会话。engine_name_opt 一定是 Some
     // （上面已 early-return None 分支）。
-    let tmux_name = tmux_name_opt.expect("checked above");
+    let engine_name = engine_name_opt.expect("checked above");
 
-    // Try to get pane CWD; if it fails, the tmux session may have been lost
-    match tmux::pane_cwd(&tmux_name).await {
-        Ok(cwd) => Some((cwd, tmux_name)),
+    // Try to get pane CWD; if it fails, the multiplexer session may have been lost
+    match state.engines.current_cwd(RuntimeKind::Tmux, &engine_name).await {
+        Ok(cwd) => Some((cwd, engine_name)),
         Err(e) => {
             tracing::warn!(
-                "tmux session '{}' unavailable ({}), attempting re-create",
-                tmux_name,
+                "multiplexer session '{}' unavailable ({}), attempting re-create",
+                engine_name,
                 e
             );
             // Resolve workspace root as fallback CWD
@@ -168,10 +167,14 @@ pub async fn resolve_session_base(state: &AppState, session_id: &str) -> Option<
                 resolve_session_workspace_root(state, session_id).await.unwrap_or_else(|| {
                     (std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()), String::new())
                 });
-            tmux::new_session(&tmux_name, &root, None).await.ok()?;
-            let cwd = tmux::pane_cwd(&tmux_name).await.ok()?;
-            tracing::info!("re-created tmux session '{}' at {}", tmux_name, cwd);
-            Some((cwd, tmux_name))
+            state
+                .engines
+                .create_session(RuntimeKind::Tmux, &engine_name, &root, None)
+                .await
+                .ok()?;
+            let cwd = state.engines.current_cwd(RuntimeKind::Tmux, &engine_name).await.ok()?;
+            tracing::info!("re-created multiplexer session '{}' at {}", engine_name, cwd);
+            Some((cwd, engine_name))
         }
     }
 }
@@ -196,8 +199,8 @@ async fn resolve_session_workspace_root(
 /// worktree；找不到再退化为 `git rev-parse --show-toplevel`（任意 git 仓库的
 /// 顶层目录），命中则作为 effective workspace_root。覆盖以下场景：
 /// 1. adopt 时 session workspace_path 存错（最常见根因）
-/// 2. 跨 project 浏览到其它 worktree（adopt 外部 tmux 会话后又切到别的项目）
-/// 3. tmux 临时 cd 出去又 manual 浏览回工作区
+/// 2. 跨 project 浏览到其它 worktree（adopt 外部复用器会话后又切到别的项目）
+/// 3. 复用器会话临时 cd 出去又 manual 浏览回工作区
 ///
 /// 命中时 is_outside = false 且返回的 workspace_root 改为 effective 值，
 /// 让前端的 `isPathOutsideWorkspace(filePath, workspaceRoot)` 也能正确通过。
@@ -309,12 +312,12 @@ async fn list_files(
 ) -> impl IntoResponse {
     let (sort, desc) = parse_sort(q.sort.as_deref(), q.order.as_deref());
 
-    // Session-based mode: resolve CWD from tmux
+    // Session-based mode: resolve CWD from the session engine
     if let Some(session_id) = q.session.as_deref() {
-        let Some((cwd, _tmux_name)) = resolve_session_base(&state, session_id).await else {
+        let Some((cwd, _engine_name)) = resolve_session_base(&state, session_id).await else {
             return (
                 StatusCode::NOT_FOUND,
-                Json(json!({ "error": "session not found or tmux unavailable" })),
+                Json(json!({ "error": "session not found or engine unavailable" })),
             );
         };
 
@@ -348,11 +351,11 @@ async fn list_files(
             return (StatusCode::NOT_FOUND, Json(json!({ "error": "path not found" })));
         };
 
-        // Determine if the **browsed directory** (not tmux's own cwd) is outside
+        // Determine if the **browsed directory** (not the engine pane's own cwd) is outside
         // the session's workspace. Using `canonical` (the directory the user is
-        // actually viewing) instead of `cwd` (tmux pane_cwd) avoids false
+        // actually viewing) instead of `cwd` (engine pane cwd) avoids false
         // positives when the user manually navigates back into the workspace
-        // via FileManager (manual mode) while tmux's pane cwd is elsewhere.
+        // via FileManager (manual mode) while the pane cwd is elsewhere.
         //
         // Fallback: 若 `canonical` 不在 session 的 `workspace_path` 内（adopt 时存
         // 错 / 跨 worktree 浏览），在 session 所属 project 的 git worktrees 中寻找
@@ -1259,7 +1262,7 @@ mod handler_tests {
         assert_eq!(v["is_outside_workspace"].as_bool(), Some(true));
     }
 
-    /// is_outside_workspace 应基于「用户实际浏览的目录」而非 tmux 静态 cwd，
+    /// is_outside_workspace 应基于「用户实际浏览的目录」而非复用器静态 cwd，
     /// 否则用户 manual 浏览到 ws_root 外时会被误判为在工作区内（acp fixture
     /// 下 cwd == workspace_path，旧实现用 cwd 判断永远 false）。
     #[tokio::test]

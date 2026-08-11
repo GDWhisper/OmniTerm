@@ -47,6 +47,26 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.13] - 2026-08-11
+
+### Added
+
+- (2026-08-10 16:12) `[frontend]` ACP 聊天里 agent 上报的文件路径可一键点开：工具调用卡片展开后的 `locations` 从纯文本变为可点击链接，点击直接在 FileManager 抽屉打开该文件（自动展开右栏、切到 FILES 标签，移动端切到 files 面板）。路径取自 ACP `ToolCallLocation`（协议权威值，非正文猜测），相对路径以 session 的 `workspace_path` 为基准归一（新增 `toAbsolutePath`）；无效路径/目录由抽屉展示后端错误而非静默失败。新增 store 原子动作 `revealFileInDrawer` 单次 `set()` 提交面板可见性与抽屉路径，链接组件用 `getState()` 读取以完全不触碰 `ChatMessageView` 的 memo 契约、流式渲染期零新增成本（`frontend/src/components/Chat/FileLocationLink.tsx`、`ChatMessage.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/path.ts`）
+
+### Fixed
+
+- (2026-08-11 16:20) `[backend]` `[api]` `[frontend]` ACP 聊天记录体积从源头收敛：turn 正常结束时前端把 **cooked** blocks 回写数据库那一行，取代此前只在用户手动「恢复会话」时才发生的收敛。后端累积器落的是原始 ACP 帧，同一份内容与 cooked 差两个数量级（实测同库：cooked 行最大 114KB，未被覆盖的原始帧行达 9,150,950 字符——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个，每帧重复携带的 `rawInput` 副本只剩一份），未做过恢复的行以往会永久停在原始帧态，是存量巨行的唯一来源。WS `prompt_done` 帧新增 `row_id`（三个广播点均经新的轻量访问器 `turn_row_id()` 取值，不走会克隆全量 text + 序列化 128KB 帧窗的 `turn_snapshot()`），前端据此按行 id 精确回写并**只发本 turn 一条**——全量回写会随会话增长变成 O(m²) 写放大；同时修复纯工具调用 turn（`text` 为空但 blocks 最肥）以往被 sync 的空 text 守卫整体排除在外。帧窗口上限（`MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES`）保持不变——前端不在线时无人 cook，两者是优化与兜底、不可互相替代（`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/turn_accumulator.rs`、`src/acp/reaper.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）
+- (2026-08-11 15:55) `[backend]` `[api]` 修复聊天历史回写互相污染：`POST /sessions/{id}/messages/sync` 以往用 `UPDATE ... WHERE session_id AND role AND text` 定位行，**无行限定**——text 相同的所有历史行被同一份 `blocks` 一次覆盖（dev 库实测：同一会话 14 行 `assistant`/“OK” 但 `count(DISTINCT blocks)` 只有 1，工具卡片/思考/计划全部串位）。现改为行 id 优先匹配：payload 新增可选 `id`，带 id 时只更新 `WHERE id=? AND session_id=?` 那一行的 `blocks`（未命中则跳过，不猜也不 INSERT 重复行），无 id 的 replay 重建消息退回文本匹配但**一条 payload 只消费一行**且同一次调用内不重复命中同一行；`text` 不再被前端回写覆盖（其权威在后端累积器）。前端 `ChatMessage` 新增 `dbId` 字段区分「真 DB 行 id」与「本地 `genId()`」，只有前者会作为 `id` 上报；附 7 条后端 + 2 条前端单测（`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-08-11 14:05) `[backend]` 修复 Windows 上 `omniterm update` 与 Web 端一键升级对 npm 渠道必然失败：报 `failed to run npm / Caused by: program not found`——`std::process::Command` 在 Windows 只按 PATH 补 `.exe`、不读 `PATHEXT`，而 npm 实际是 `npm.cmd`；前置存在性检查用的 `which` 遵循 PATHEXT 所以通过，友好提示分支反而被跳过。现统一经 `resolve_program()` 将命令 `which` 解析为绝对路径后再 spawn（`.cmd` 由 std 自动用 cmd.exe 包装，含 CVE-2024-24576 参数转义）。同时升级命令由 `npm update -g <pkg>` 改为 `npm install -g <pkg>@latest`：`update` 受已安装 semver range 约束（不跨 major），且对分发平台二进制的 optionalDependencies 重解析不可靠（`src/update.rs`、`src/api/system.rs`）
+- (2026-08-10 20:40) `[frontend]` 弹窗里的长路径/分支名不再冲出边框：删除 worktree 确认框展示 opencode 这类带 40 位 hash 目录的路径时，文本溢出弹窗右侧约 320px——无空格超长 token 在默认 `overflow-wrap: normal` 下不参与换行，`max-w-*` 只限住盒子宽度、拦不住内容。修在 `Modal` body 容器（`overflow-wrap: anywhere`），一处覆盖全部 8 个弹窗及所有 `ConfirmDialog` 调用点，而非逐个弹窗打补丁；同时修复复选框行的 flex 布局（文本 `min-width: 0` + 控件 `flex-shrink: 0`，避免长分支名撑破容器、复选框被压变形）（`frontend/src/components/Modal/Modal.tsx`、`frontend/src/components/Sidebar/DeleteWorktreeDialog.tsx`）
+- (2026-08-10 20:05) `[backend]` `[api]` `[frontend]` 删除 worktree 时可一并删除其分支：`git worktree remove` 只删工作目录、保留分支 ref，导致已删除的 worktree 的分支仍出现在「创建 Worktree」的基准分支下拉里，且用同名分支重建 worktree 会被 git 拒绝（`fatal: 分支已经存在`）。删除确认框新增「同时删除分支」勾选项（**默认不勾**——基于无 worktree 的既有分支创建 worktree 是正常用法），勾选时 `DELETE /projects/{pid}/worktrees` 带 `?delete_branch=true`，后端在移除 worktree 前从 `git worktree list` 反查分支名（不信任前端传值），成功返回 `branch_deleted`；worktree 已删但分支删除失败（含 detached HEAD）时返回 `branch_error` 并由前端以 warning toast 提示，不伪装为完全成功（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/components/Sidebar/DeleteWorktreeDialog.tsx`、`ProjectCard.tsx`、`frontend/src/api/client.ts`）
+- (2026-08-10 18:05) `[backend]` `[api]` `[frontend]` ACP 聊天历史改为游标分页加载：`GET /sessions/{id}/messages` 新增 `?before=<cursor>&limit=<n>`，响应新增 `hasMore` / `nextCursor`，首屏只取最近一页（默认 100 条，且单页 payload 上限 2MiB——条数不约束体积，单条 `blocks` 可达 MB 级），用户滚到聊天区顶部时自动向前加载下一页并保持阅读位置不跳动。游标为复合 `(created_at, id)`——`created_at` 单键不是全序（真实数据里 4 条消息同为一秒），仅用它会在同秒边界重取或漏取。实测 11MB 历史的会话：首屏响应从 15.9MB / 843ms 降到 2.1MB / 286ms（`src/api/sessions.rs`、`src/acp/chat_persistence.rs`、`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/stores/chatStore.ts`）
+- (2026-08-10 17:05) `[backend]` `[frontend]` 修复切到 ACP 会话时的卡顿（历史越多越明显，实测阻塞 ~0.5s）：`turn_accumulator` 的帧窗口以往只限帧数（`MAX_FRAMES=2000`），而单帧大小由 agent 决定——codebuddy 每个 `tool_call_update` 只带 1 字符增量却重复携带完整 `rawInput`（4.5KB/帧），使单条消息的 `blocks` 列达 8.7MB、`GET /messages` 下发 15MB。现补齐字节维度上限（`MAX_BLOCKS_BYTES=128KB` 窗口 + `MAX_FRAME_BYTES=64KB` 单帧，超限帧不入窗、`text` 全量兜底），帧改存预序列化 `RawValue` 使 flush 不再重格式化每帧（`src/acp/turn_accumulator.rs`）；前端对已 hydrate 的会话不再重复 `GET /messages`（结果本就会被 hydrate 守卫丢弃，白付一次多 MB 传输与逐条解码）（`frontend/src/components/Chat/ChatView.tsx`）。**已存在的超大历史行不受影响**，那些会话首次打开仍慢
+
+### Refactored
+
+- (2026-08-10 01:03) `[backend]` 会话引擎解耦 Phase 1 落地：tmux 模块整体移入 `src/engine/` 边界（冻结件），agent 检测体系提为引擎无关公共模块 `src/agent/`（state/detect/process/manifests），新增 `SessionEngine` trait + `EngineRegistry` 按 `runtime_kind` 路由（`TmuxEngine` 纯包装既有门面），终端 WS attach 分发移入各引擎侧 `terminal_ws.rs`。纯结构重组、行为零变化（187 测试全过），为后续 pty 原生会话铺路（`src/engine/`、`src/agent/`、`src/ws/terminal.rs`）
+
 ## [0.2.12] - 2026-08-09
 
 ### Added

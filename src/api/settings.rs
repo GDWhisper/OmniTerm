@@ -73,8 +73,7 @@ mod tests {
     use super::*;
     use crate::acp::AcpSupervisor;
     use crate::auth::LoginGuard;
-    use crate::tmux::agent_watch::AgentWatcher;
-    use crate::tmux::control_mode::{DEFAULT_ACTIVITY_TIMEOUT, SessionActivityMonitor};
+    use crate::engine::EngineRegistry;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -92,9 +91,8 @@ mod tests {
             auth_enabled: Arc::new(AtomicBool::new(false)),
             acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
             login_guard: LoginGuard::new(),
-            activity_monitor: SessionActivityMonitor::new(DEFAULT_ACTIVITY_TIMEOUT),
+            engines: EngineRegistry::new(),
             acp_supervisor: AcpSupervisor::default(),
-            agent_watcher: AgentWatcher::default(),
         }
     }
 

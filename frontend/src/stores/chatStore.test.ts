@@ -3,6 +3,7 @@ import {
   useChatStore,
   readQueuedFromStorageForSession,
   messagesToSyncPayload,
+  turnToSyncPayload,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
@@ -177,6 +178,65 @@ describe('chatStore — queued follow-up actions', () => {
     })
   })
 
+  describe('history pagination (上拉加载更早历史)', () => {
+    const mk = (id: string): ChatMessage => ({
+      id,
+      role: 'assistant',
+      text: id,
+      blocks: [{ type: 'text', text: id }],
+      createdAt: 0,
+    })
+
+    it('hydrate records the cursor for the first page', () => {
+      useChatStore.getState().hydrate('s1', [mk('m9')], 'ts|m9')
+      expect(useChatStore.getState().states['s1'].historyCursor).toBe('ts|m9')
+    })
+
+    it('prepends older messages before existing ones and advances the cursor', () => {
+      useChatStore.getState().hydrate('s1', [mk('m3')], 'ts|m3')
+      useChatStore.getState().beginLoadHistory('s1')
+      expect(useChatStore.getState().states['s1'].loadingHistory).toBe(true)
+
+      useChatStore.getState().prependMessages('s1', [mk('m1'), mk('m2')], 'ts|m1')
+      const st = useChatStore.getState().states['s1']
+      expect(st.messages.map((m) => m.id)).toEqual(['m1', 'm2', 'm3'])
+      expect(st.historyCursor).toBe('ts|m1')
+      expect(st.loadingHistory).toBe(false)
+    })
+
+    it('drops ids already present (live frames / overlapping page)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2'), mk('m3')], 'ts|m2')
+      useChatStore.getState().prependMessages('s1', [mk('m1'), mk('m2')], null)
+      expect(useChatStore.getState().states['s1'].messages.map((m) => m.id)).toEqual([
+        'm1',
+        'm2',
+        'm3',
+      ])
+    })
+
+    it('null cursor marks the start of history (stops further loading)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().prependMessages('s1', [mk('m1')], null)
+      expect(useChatStore.getState().states['s1'].historyCursor).toBeNull()
+    })
+
+    it('empty page still clears the in-flight flag so 上拉 does not deadlock', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().beginLoadHistory('s1')
+      useChatStore.getState().prependMessages('s1', [], 'ts|m2')
+      const st = useChatStore.getState().states['s1']
+      expect(st.loadingHistory).toBe(false)
+      expect(st.historyCursor).toBe('ts|m2')
+      expect(st.messages.map((m) => m.id)).toEqual(['m2'])
+    })
+
+    it('commitReplay clears the cursor (replay is the full history)', () => {
+      useChatStore.getState().hydrate('s1', [mk('m2')], 'ts|m2')
+      useChatStore.getState().commitReplay('s1', [{ kind: 'appendText', text: 'replayed' }])
+      expect(useChatStore.getState().states['s1'].historyCursor).toBeNull()
+    })
+  })
+
   describe('sessionStorage helper', () => {
     it('readQueuedFromStorageForSession returns the cached value', () => {
       sessionStorage.setItem(`${QUEUE_PREFIX}s1`, 'cached')
@@ -325,6 +385,7 @@ describe('messagesToSyncPayload', () => {
   function mkMsg(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
     return {
       id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
       text: overrides.text ?? '',
       blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
       createdAt: overrides.createdAt ?? 0,
@@ -333,6 +394,17 @@ describe('messagesToSyncPayload', () => {
       role: overrides.role,
     }
   }
+
+  it('forwards dbId as the payload id so the backend updates that exact row', () => {
+    const msg = mkMsg({ role: 'assistant', text: 'hi', id: 'local-1', dbId: 'row-1' })
+    expect(messagesToSyncPayload([msg])[0].id).toBe('row-1')
+  })
+
+  it('omits id for locally minted messages (a local id matches no DB row)', () => {
+    const msg = mkMsg({ role: 'assistant', text: 'hi', id: 'local-1' })
+    const entry = messagesToSyncPayload([msg])[0]
+    expect(entry).not.toHaveProperty('id')
+  })
 
   it('returns empty array for empty input', () => {
     expect(messagesToSyncPayload([])).toEqual([])
@@ -404,5 +476,77 @@ describe('messagesToSyncPayload', () => {
     ]
     const payload = messagesToSyncPayload(msgs)
     expect(payload.map((p) => p.text)).toEqual(['1', '2', '4'])
+  })
+})
+
+describe('turnToSyncPayload', () => {
+  function mk(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
+    return {
+      id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
+      text: overrides.text ?? '',
+      blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
+      createdAt: overrides.createdAt ?? 0,
+      streaming: overrides.streaming,
+      role: overrides.role,
+    }
+  }
+
+  it('targets the backend row id and carries the cooked blocks', () => {
+    const msgs = [
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'a', streaming: true }),
+    ]
+    expect(turnToSyncPayload(msgs, 'row-1')).toEqual([
+      {
+        id: 'row-1',
+        role: 'assistant',
+        text: 'a',
+        blocks: JSON.stringify([{ type: 'text', text: 'a' }]),
+      },
+    ])
+  })
+
+  it('ignores finished messages from earlier turns', () => {
+    const msgs = [
+      mk({ role: 'assistant', text: 'old turn' }),
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'this turn', streaming: true }),
+    ]
+    const payload = turnToSyncPayload(msgs, 'row-1')
+    expect(payload[0].text).toBe('this turn')
+    expect(payload[0].blocks).toBe(JSON.stringify([{ type: 'text', text: 'this turn' }]))
+  })
+
+  it('collapses a multi-message turn into one row (DB keeps one row per turn)', () => {
+    const msgs = [
+      mk({ role: 'assistant', text: 'part1', streaming: true }),
+      mk({ role: 'assistant', text: 'part2', streaming: true }),
+    ]
+    const payload = turnToSyncPayload(msgs, 'row-1')
+    expect(payload).toHaveLength(1)
+    expect(payload[0].text).toBe('part1part2')
+    expect(payload[0].blocks).toBe(
+      JSON.stringify([
+        { type: 'text', text: 'part1' },
+        { type: 'text', text: 'part2' },
+      ]),
+    )
+  })
+
+  it('keeps tool-only turns (empty text, fat blocks) \u2014 those are the big rows', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'tool_call', toolCallId: 't1', title: 'read', status: 'completed' },
+    ]
+    const payload = turnToSyncPayload([mk({ role: 'assistant', blocks, streaming: true })], 'row-1')
+    expect(payload).toHaveLength(1)
+    expect(payload[0].text).toBe('')
+    expect(payload[0].blocks).toBe(JSON.stringify(blocks))
+  })
+
+  it('returns nothing when the turn has no blocks (do not blank out the backend row)', () => {
+    expect(turnToSyncPayload([mk({ role: 'assistant', blocks: [], streaming: true })], 'row-1')).toEqual([])
+    expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
+    expect(turnToSyncPayload([], 'row-1')).toEqual([])
   })
 })
