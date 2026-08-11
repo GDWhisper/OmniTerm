@@ -47,18 +47,11 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [0.2.12] - 2026-08-09
+## [0.2.13] - 2026-08-11
 
 ### Added
 
 - (2026-08-10 16:12) `[frontend]` ACP 聊天里 agent 上报的文件路径可一键点开：工具调用卡片展开后的 `locations` 从纯文本变为可点击链接，点击直接在 FileManager 抽屉打开该文件（自动展开右栏、切到 FILES 标签，移动端切到 files 面板）。路径取自 ACP `ToolCallLocation`（协议权威值，非正文猜测），相对路径以 session 的 `workspace_path` 为基准归一（新增 `toAbsolutePath`）；无效路径/目录由抽屉展示后端错误而非静默失败。新增 store 原子动作 `revealFileInDrawer` 单次 `set()` 提交面板可见性与抽屉路径，链接组件用 `getState()` 读取以完全不触碰 `ChatMessageView` 的 memo 契约、流式渲染期零新增成本（`frontend/src/components/Chat/FileLocationLink.tsx`、`ChatMessage.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/path.ts`）
-- (2026-08-09 16:12) `[frontend]` sidebar 新增「会话展开模式」切换按钮（Projects 标题栏、新建项目按钮旁）：模式 1 自动展开所有含会话的项目及其下所有含会话的 worktree，模式 2（默认）仅展开聚焦中的 worktree；折叠优先——模式 1 下手动折叠的项目不再自动弹回；偏好经 localStorage（`omniterm_expand_all_sessions`）持久化（`frontend/src/components/Sidebar/Sidebar.tsx`、`ProjectCard.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/worktreeSessions.ts`）
-- (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
-
-### Changed
-
-- (2026-08-09 16:10) `[backend]` CLI 输出统一改为英文：`--help` 全部子命令/参数说明、启动/停止/状态提示、`start -d` 成功消息、自更新消息（此前 clap help 与 daemon 启动提示为中文；CLI 与前端 i18n 相互独立，后端不引入语言切换）
-- (2026-08-07 16:34) `[frontend]` ThinkingIndicator 乱码特效自适应帧率节流：rAF 回调频率本身等于浏览器实际刷新率，高刷屏（>60Hz）压到上限 60fps 削减无谓 layout 抖动、低刷屏跟着屏走，零额外测量成本；随后上限提高到 90fps 以充分利用高刷屏，动画在高性能设备上更流畅（`frontend/src/components/Chat/ChatView.tsx`）
 
 ### Fixed
 
@@ -69,6 +62,25 @@ Prefix each entry with the area it affects:
 - (2026-08-10 20:05) `[backend]` `[api]` `[frontend]` 删除 worktree 时可一并删除其分支：`git worktree remove` 只删工作目录、保留分支 ref，导致已删除的 worktree 的分支仍出现在「创建 Worktree」的基准分支下拉里，且用同名分支重建 worktree 会被 git 拒绝（`fatal: 分支已经存在`）。删除确认框新增「同时删除分支」勾选项（**默认不勾**——基于无 worktree 的既有分支创建 worktree 是正常用法），勾选时 `DELETE /projects/{pid}/worktrees` 带 `?delete_branch=true`，后端在移除 worktree 前从 `git worktree list` 反查分支名（不信任前端传值），成功返回 `branch_deleted`；worktree 已删但分支删除失败（含 detached HEAD）时返回 `branch_error` 并由前端以 warning toast 提示，不伪装为完全成功（`src/git/mod.rs`、`src/api/projects.rs`、`frontend/src/components/Sidebar/DeleteWorktreeDialog.tsx`、`ProjectCard.tsx`、`frontend/src/api/client.ts`）
 - (2026-08-10 18:05) `[backend]` `[api]` `[frontend]` ACP 聊天历史改为游标分页加载：`GET /sessions/{id}/messages` 新增 `?before=<cursor>&limit=<n>`，响应新增 `hasMore` / `nextCursor`，首屏只取最近一页（默认 100 条，且单页 payload 上限 2MiB——条数不约束体积，单条 `blocks` 可达 MB 级），用户滚到聊天区顶部时自动向前加载下一页并保持阅读位置不跳动。游标为复合 `(created_at, id)`——`created_at` 单键不是全序（真实数据里 4 条消息同为一秒），仅用它会在同秒边界重取或漏取。实测 11MB 历史的会话：首屏响应从 15.9MB / 843ms 降到 2.1MB / 286ms（`src/api/sessions.rs`、`src/acp/chat_persistence.rs`、`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/stores/chatStore.ts`）
 - (2026-08-10 17:05) `[backend]` `[frontend]` 修复切到 ACP 会话时的卡顿（历史越多越明显，实测阻塞 ~0.5s）：`turn_accumulator` 的帧窗口以往只限帧数（`MAX_FRAMES=2000`），而单帧大小由 agent 决定——codebuddy 每个 `tool_call_update` 只带 1 字符增量却重复携带完整 `rawInput`（4.5KB/帧），使单条消息的 `blocks` 列达 8.7MB、`GET /messages` 下发 15MB。现补齐字节维度上限（`MAX_BLOCKS_BYTES=128KB` 窗口 + `MAX_FRAME_BYTES=64KB` 单帧，超限帧不入窗、`text` 全量兜底），帧改存预序列化 `RawValue` 使 flush 不再重格式化每帧（`src/acp/turn_accumulator.rs`）；前端对已 hydrate 的会话不再重复 `GET /messages`（结果本就会被 hydrate 守卫丢弃，白付一次多 MB 传输与逐条解码）（`frontend/src/components/Chat/ChatView.tsx`）。**已存在的超大历史行不受影响**，那些会话首次打开仍慢
+
+### Refactored
+
+- (2026-08-10 01:03) `[backend]` 会话引擎解耦 Phase 1 落地：tmux 模块整体移入 `src/engine/` 边界（冻结件），agent 检测体系提为引擎无关公共模块 `src/agent/`（state/detect/process/manifests），新增 `SessionEngine` trait + `EngineRegistry` 按 `runtime_kind` 路由（`TmuxEngine` 纯包装既有门面），终端 WS attach 分发移入各引擎侧 `terminal_ws.rs`。纯结构重组、行为零变化（187 测试全过），为后续 pty 原生会话铺路（`src/engine/`、`src/agent/`、`src/ws/terminal.rs`）
+
+## [0.2.12] - 2026-08-09
+
+### Added
+
+- (2026-08-09 16:12) `[frontend]` sidebar 新增「会话展开模式」切换按钮（Projects 标题栏、新建项目按钮旁）：模式 1 自动展开所有含会话的项目及其下所有含会话的 worktree，模式 2（默认）仅展开聚焦中的 worktree；折叠优先——模式 1 下手动折叠的项目不再自动弹回；偏好经 localStorage（`omniterm_expand_all_sessions`）持久化（`frontend/src/components/Sidebar/Sidebar.tsx`、`ProjectCard.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/utils/worktreeSessions.ts`）
+- (2026-08-08 23:20) `[backend]` `[frontend]` 项目路径失效检测与提示：`GET /projects` 响应新增 `path_valid` 字段，`list_projects` 实时计算项目路径是否仍存在（`src/api/projects.rs`、`src/models/project.rs`、`src/fs/mod.rs`）；Sidebar 项目行在路径失效时标红并显示 ⚠ 修复按钮，点击打开既有 `RepairPathDialog` 重新定位项目路径（改造为支持无 workspace 的纯项目修复），页面切回时自动刷新项目列表（`frontend/src/components/Sidebar/ProjectCard.tsx`、`RepairPathDialog.tsx`、`Sidebar.tsx`）
+
+### Changed
+
+- (2026-08-09 16:10) `[backend]` CLI 输出统一改为英文：`--help` 全部子命令/参数说明、启动/停止/状态提示、`start -d` 成功消息、自更新消息（此前 clap help 与 daemon 启动提示为中文；CLI 与前端 i18n 相互独立，后端不引入语言切换）
+- (2026-08-07 16:34) `[frontend]` ThinkingIndicator 乱码特效自适应帧率节流：rAF 回调频率本身等于浏览器实际刷新率，高刷屏（>60Hz）压到上限 60fps 削减无谓 layout 抖动、低刷屏跟着屏走，零额外测量成本；随后上限提高到 90fps 以充分利用高刷屏，动画在高性能设备上更流畅（`frontend/src/components/Chat/ChatView.tsx`）
+
+### Fixed
+
 - (2026-08-09 00:35) `[frontend]` 修复侧栏分支名过长被省略号截断时 bidi 重排：`direction: rtl` 容器（左侧省略号截断）中 LTR 分支名末尾中性字符被挪到视觉开头，分支名显示错乱——分支名改用 `<bdi dir="ltr">` 隔离，截断方向保留为「省略开头」且文字视觉保持 LTR（`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/index.css`）
 - (2026-08-09 22:58) `[backend]` `[frontend]` 文件浏览器文本预览改为**内容兜底**：不再依赖扩展名白名单，非常见后缀的文本文件（如 `Cargo.lock`）也能以普通文本查看。`GET /files/read` 响应新增 `is_text` 字段——后端按内容探测文件是否为合法 UTF-8（先探测头部 64KB 判定、**NUL 字节快检短路**，避免把大型二进制文件整体读入内存，再全量严格校验），非文本返回 `is_text:false` 而非报错（`src/fs/mod.rs`、`src/api/files.rs`）；前端 `FileDrawer` 移除 `TEXT_EXTS` 白名单，非图片文件一律尝试按文本读取，读取结果非文本时降级为「无法预览」（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/api/client.ts`）
 - (2026-08-09 18:45) `[frontend]` 修复激活会话未同步激活所属 worktree：点击/新建/键盘切换会话时，sidebar 的 worktree 高亮底色不跟随（展开模式下可点非聚焦 worktree 的会话而该行不亮）。`activateSession` 现从会话 `workspace_path` 跨所有项目反查所属 project + worktree 并原子激活——会话可能登记在 A 项目但其路径属于 B 项目的 worktree（渲染为孤儿显示在主 worktree 下），此时激活路径实际归属的 B 项目 worktree；会话记忆归位到所属 worktree；无任何 worktree 匹配的孤儿/外部会话保持原行为（`frontend/src/stores/appStore.ts`）
