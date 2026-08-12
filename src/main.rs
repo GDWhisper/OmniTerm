@@ -283,6 +283,7 @@ fn resolve_api_keys() -> HashMap<String, String> {
                 keys.insert(k, val.to_string());
             }
         }
+        tracing::info!("loaded {} API key(s) from {}", keys.len(), path.display());
     }
 
     // 2. Environment variables take precedence (allows dev.sh export / systemd Environment)
@@ -292,6 +293,15 @@ fn resolve_api_keys() -> HashMap<String, String> {
         {
             keys.insert(var.to_string(), val);
         }
+    }
+
+    if !keys.is_empty() {
+        let names: Vec<&str> = keys.keys().map(|s| s.as_str()).collect();
+        tracing::info!("ACP agent API keys configured: {}", names.join(", "));
+    } else {
+        tracing::warn!(
+            "no ACP model API keys configured (create ~/.omniterm/api_keys.toml or set env vars)"
+        );
     }
 
     keys
