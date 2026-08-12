@@ -17,6 +17,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 2. **每次改动后提交**：功能的开发/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
 3. **CHANGELOG 只写实质性的功能改动，排除开发文档改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
 4. **查源码**：先 `codegraph sync`。不知道代码在哪 → `codegraph_explore`；已知符号名/路径 → `rg -n` + `read(offset/limit)`，勿对同一文件重复 explore；要 callers/影响面 → `codegraph_callers` / `codegraph_impact`；主战场单文件通读一遍；配置/文档/非索引文件直接 Read/Grep
+5. **启动开发环境服务必须走 `./dev.sh start|restart|stop`**（端口与 db 隔离的唯一正确入口）。**禁止**绕过 dev.sh 直接运行 `cargo run` 或 `target/debug/omniterm` 二进制启动后端/前端：不传 `--db` 时 `default_db_url()` 按二进制名（全分支统一 `omniterm`）推导到 `~/.omniterm/omniterm.db`（正式版数据库），开发分支的新 migration 会**静默污染正式版库**（2026-08-11 实踩：正式版 v0.2.13 启动报 migration 不匹配）。确需手动运行二进制验证时，必须显式传 `--db` 指向本 worktree 的库（路径规则见 dev.sh 的 `BRANCH_BINARY_NAME`）。
 
 ## 工程准则
 
