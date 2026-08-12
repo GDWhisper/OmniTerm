@@ -1,27 +1,24 @@
-# OmniTerm v0.2.13 更新摘要
+# OmniTerm v0.2.14 更新摘要
 
 > 本版本亮点由发布 agent 基于 CHANGELOG 手动总结。详细条目见 CHANGELOG.md。
 
 ## 新功能
 
-- ACP 聊天中 agent 上报的文件路径可一键点开：工具调用里的文件直接跳转 FileManager 抽屉查看
-- ACP 聊天历史游标分页加载：超大会话首屏加载从 15.9MB/843ms 降到 2.1MB/286ms
+- 自管 pty 会话引擎（Phase 2）落地：WS 断开不杀进程、重连自动补屏、后端重启后按最后 cwd 重建会话并回放历史
+- Agent 预设新增 CodeBuddy：`codebuddy --acp` 一键以 ACP 模式启动 CodeBuddy Code
+- ACP agent 的 API key 改为从 `~/.omniterm/api_keys.toml` 统一读取，正式版（systemd / docker）不再依赖 shell 环境透传
 
 ## 重要修复
 
-- 聊天记录体积从源头收敛：turn 结束自动回写 cooked blocks，不再积累超大历史行（实测最大行曾达 900 万字符）
-- 修复聊天历史回写互相污染：同文本历史行不再被同一份 blocks 串位覆盖
-- 修复 Windows 上 `omniterm update` 与 Web 端一键升级对 npm 渠道必然失败
-- 删除 worktree 时可一并删除其残留分支，不再污染「创建 Worktree」基准分支下拉
-- 修复切到 ACP 会话时的卡顿（历史越多越明显）、弹窗内长路径/分支名溢出边框
-
-## 工程改进
-
-- 会话引擎解耦 Phase 1：tmux 模块移入 `src/engine/` 引擎边界、agent 检测体系提为公共模块、`SessionEngine` 抽象落地——为后续 pty 原生会话铺路，本轮行为零变化
+- 修复正式版在某些终端里 `omniterm start` 必然报 `Address already in use`：后端不再读取会被开发环境劫持的通用名环境变量（只认 `OMNITERM_*` 前缀）
+- 修复开启密码验证时被立即踢回登录页，改为在设置界面就地设置密码
+- 修复文件拖拽悬浮预览不贴鼠标（界面缩放 ≠ 100% 时越拖越远）
+- 修复「新建项目」弹窗第二次打开起目录浏览区持续显示空目录
+- ACP 聊天正文 `text` 列收口为有界（1 MiB），超大 turn 不再 O(n²) 写放大
 
 ## 安装与升级
 
 - 新用户：使用 `install.sh`（Linux / macOS）或 `install.ps1`（Windows）一键安装
 - 升级：`cargo install omniterm` 或从 Releases 下载对应平台 binary 覆盖
 
-**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.12...v0.2.13
+**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.13...v0.2.14
