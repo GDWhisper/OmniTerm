@@ -111,4 +111,12 @@ export const AGENT_PRESETS: AgentPreset[] = [
     args: ['acp'],
     env: [],
   },
+  {
+    labelKey: 'settings.agents.preset.codebuddy.label',
+    hintKey: 'settings.agents.preset.codebuddy.hint',
+    display_name: 'CodeBuddy',
+    command: 'codebuddy',
+    args: ['--acp'],
+    env: [],
+  },
 ]

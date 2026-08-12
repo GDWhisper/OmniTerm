@@ -1132,7 +1132,7 @@ export function FileManager() {
       {dragPreview.visible && (
         <div
           className="fm-drag-preview"
-          style={{ transform: `translate(${dragPreview.x}px, ${dragPreview.y}px)`, zoom: uiZoom / 100 }}
+          style={{ transform: `translate(${dragPreview.x / (uiZoom / 100)}px, ${dragPreview.y / (uiZoom / 100)}px)` }}
         >
           <span className="fm-drag-preview-icon">
             {dragPreview.icon === 'folder' && <FolderSprite size={14} />}

@@ -1,12 +1,8 @@
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io;
 use std::sync::{Arc, Mutex};
-use tracing::debug;
 
-use crate::engine::pty_io::{kill_session_process, write_pty};
-
-#[cfg(unix)]
-use std::os::unix::io::RawFd;
+use crate::engine::pty_io::write_pty;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -32,16 +28,15 @@ pub type PtyResult<T> = Result<T, PtyError>;
 
 /// Minimal owned PTY session.
 ///
-/// Holds the master side and child pid. The slave side is handed off to the
-/// spawned child. Drop performs a best-effort SIGHUP/termination and closes
-/// the master fd.
-#[allow(dead_code)]
+/// Holds the master side, child handle and pid. The slave side is handed off
+/// to the spawned child. The engine takes the child via [`PtySession::take_child`]
+/// to reap it (exit detection); `kill` performs best-effort SIGHUP.
 pub struct PtySession {
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
+    child: Mutex<Option<Box<dyn Child + Send + Sync>>>,
     child_pid: Option<u32>,
 }
 
-#[allow(dead_code)]
 impl PtySession {
     /// Open a new PTY and spawn `cmd`.
     pub fn spawn(cmd: CommandBuilder, size: PtySize) -> PtyResult<Self> {
@@ -52,15 +47,20 @@ impl PtySession {
             pty_pair.slave.spawn_command(cmd).map_err(|e| PtyError::Spawn(e.to_string()))?;
 
         let child_pid = child.process_id();
-
-        // SAFETY: we must keep the child alive until drop; otherwise the session
-        // process can become orphaned. We intentionally do not wait here; the
-        // caller may drop the session while the child is still running.
-        std::mem::forget(child);
-
         let master = Arc::new(Mutex::new(Some(pty_pair.master)));
 
-        Ok(Self { master, child_pid })
+        Ok(Self { master, child: Mutex::new(Some(child)), child_pid })
+    }
+
+    /// Child pid（spawn 时记录；进程树识别/cwd 采样/清理用它）。
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
+    }
+
+    /// 交出 child 句柄供调用方收割（`wait` 检测退出，避免僵尸）。
+    /// 只能取一次；取走后本结构不再持有 child。
+    pub fn take_child(&self) -> Option<Box<dyn Child + Send + Sync>> {
+        self.child.lock().ok().and_then(|mut g| g.take())
     }
 
     /// Resize the PTY viewport.
@@ -100,12 +100,6 @@ impl PtySession {
         write_pty(writer.as_mut(), data).map_err(|e| PtyError::Io(e.to_string()))
     }
 
-    /// Attempt to take the master for raw-fd access on unix.
-    #[cfg(unix)]
-    pub fn take_master_raw_fd(&self) -> Option<RawFd> {
-        self.master.lock().ok().and_then(|g| g.as_ref().and_then(|m| m.as_raw_fd()))
-    }
-
     /// Clone the master reader for a read loop.
     pub fn try_clone_reader(&self) -> PtyResult<Box<dyn io::Read + Send>> {
         let guard = self.master.lock().map_err(|e| PtyError::Io(format!("mutex poisoned: {e}")))?;
@@ -116,11 +110,10 @@ impl PtySession {
         }
     }
 
-    /// Kill the child process if known.
-    pub fn kill(&self) {
-        if let Some(pid) = self.child_pid {
-            debug!("killing pty child pid={}", pid);
-            kill_session_process(pid);
+    /// 关闭 master（drop fd）。读循环收到 EOF/EIO 退出，写侧后续写入 EBADF。
+    pub fn close_master(&self) {
+        if let Ok(mut guard) = self.master.lock() {
+            guard.take();
         }
     }
 }
@@ -128,6 +121,7 @@ impl PtySession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::pty_io;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -139,7 +133,22 @@ mod tests {
         assert!(session.is_ok());
         let session = session.unwrap();
         assert!(session.child_pid.is_some());
-        session.kill();
+        let mut child = session.take_child().expect("child handle");
+        pty_io::kill_session_process(session.child_pid().unwrap());
+        // 收割 child：kill 后 wait 必须返回（进程可被检测退出，无僵尸）
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        panic!("child did not exit after SIGHUP");
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => panic!("try_wait failed: {e}"),
+            }
+        }
     }
 
     #[test]
@@ -173,6 +182,8 @@ mod tests {
         assert!(!buf.is_empty(), "expected output from echo, got no bytes");
         let text = String::from_utf8_lossy(&buf);
         assert!(text.contains("ping"), "expected 'ping' in echo output, got: {text}");
+        let mut child = session.take_child().expect("child handle");
+        let _ = child.wait();
     }
 
     #[test]
@@ -185,5 +196,8 @@ mod tests {
         let result =
             session.resize(PtySize { rows: 30, cols: 120, pixel_width: 0, pixel_height: 0 });
         assert!(result.is_ok());
+        let mut child = session.take_child().expect("child handle");
+        pty_io::kill_session_process(session.child_pid().unwrap());
+        let _ = child.wait();
     }
 }

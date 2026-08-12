@@ -8,6 +8,7 @@ pub mod pty_io;
 pub mod tmux; // 注册行：冻结引擎边界
 
 use anyhow::{Result, anyhow};
+use pty::PtyEngine; // 注册行
 use tmux::TmuxEngine; // 注册行
 
 use crate::agent::state::AgentSnapshot;
@@ -64,22 +65,31 @@ pub trait SessionEngine: Send + Sync {
 #[derive(Clone)]
 pub struct EngineRegistry {
     mux: TmuxEngine,
+    pty: PtyEngine,
     watcher: AgentWatcher,
 }
 
-impl Default for EngineRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EngineRegistry {
-    pub fn new() -> Self {
-        Self { mux: TmuxEngine::new(), watcher: AgentWatcher::default() }
+    pub fn new(db: sqlx::SqlitePool) -> Self {
+        Self {
+            mux: TmuxEngine::new(),
+            pty: PtyEngine::with_db(db),
+            watcher: AgentWatcher::default(),
+        }
     }
 
     pub fn watcher(&self) -> &AgentWatcher {
         &self.watcher
+    }
+
+    /// pty 会话 attach（WS 层专用）：resolve-or-create + 订阅输出 + 补屏快照。
+    pub async fn attach_pty(
+        &self,
+        key: &str,
+        cwd: &str,
+        size: portable_pty::PtySize,
+    ) -> Result<pty::PtyAttach> {
+        self.pty.attach(key, cwd, size)
     }
 
     pub async fn create_session(
@@ -91,6 +101,7 @@ impl EngineRegistry {
     ) -> Result<bool> {
         match kind {
             RuntimeKind::Tmux => self.mux.create_session(name, cwd, command).await,
+            RuntimeKind::Pty => self.pty.create_session(name, cwd, command).await,
             _ => Err(anyhow!("no session engine registered for runtime kind")),
         }
     }
@@ -98,6 +109,7 @@ impl EngineRegistry {
     pub async fn kill_session(&self, kind: RuntimeKind, name: &str) -> Result<()> {
         match kind {
             RuntimeKind::Tmux => self.mux.kill_session(name).await,
+            RuntimeKind::Pty => self.pty.kill_session(name).await,
             _ => Err(anyhow!("no session engine registered for runtime kind")),
         }
     }
@@ -105,6 +117,7 @@ impl EngineRegistry {
     pub async fn session_exists(&self, kind: RuntimeKind, name: &str) -> bool {
         match kind {
             RuntimeKind::Tmux => self.mux.session_exists(name).await,
+            RuntimeKind::Pty => self.pty.session_exists(name).await,
             _ => false,
         }
     }
@@ -116,6 +129,7 @@ impl EngineRegistry {
     pub async fn current_cwd(&self, kind: RuntimeKind, name: &str) -> Result<String> {
         match kind {
             RuntimeKind::Tmux => self.mux.current_cwd(name).await,
+            RuntimeKind::Pty => self.pty.current_cwd(name).await,
             _ => Err(anyhow!("no session engine registered for runtime kind")),
         }
     }
@@ -123,6 +137,7 @@ impl EngineRegistry {
     pub async fn capture_screen(&self, kind: RuntimeKind, name: &str) -> Result<String> {
         match kind {
             RuntimeKind::Tmux => self.mux.capture_screen(name).await,
+            RuntimeKind::Pty => self.pty.capture_screen(name).await,
             _ => Err(anyhow!("no session engine registered for runtime kind")),
         }
     }
@@ -134,6 +149,7 @@ impl EngineRegistry {
     ) -> Result<Option<AgentSnapshot>> {
         match kind {
             RuntimeKind::Tmux => self.mux.agent_snapshot(name).await,
+            RuntimeKind::Pty => self.pty.agent_snapshot(name).await,
             _ => Ok(None),
         }
     }
@@ -141,6 +157,7 @@ impl EngineRegistry {
     pub async fn is_active(&self, kind: RuntimeKind, name: &str) -> bool {
         match kind {
             RuntimeKind::Tmux => self.mux.is_active(name).await,
+            RuntimeKind::Pty => self.pty.is_active(name).await,
             _ => false,
         }
     }
@@ -148,18 +165,23 @@ impl EngineRegistry {
     pub async fn track_session(&self, kind: RuntimeKind, name: &str) -> Result<()> {
         match kind {
             RuntimeKind::Tmux => self.mux.track_session(name).await,
+            RuntimeKind::Pty => self.pty.track_session(name).await,
             _ => Ok(()),
         }
     }
 
     pub async fn untrack_session(&self, kind: RuntimeKind, name: &str) {
-        if kind == RuntimeKind::Tmux {
-            self.mux.untrack_session(name).await;
+        match kind {
+            RuntimeKind::Tmux => self.mux.untrack_session(name).await,
+            RuntimeKind::Pty => self.pty.untrack_session(name).await,
+            _ => {}
         }
     }
 
     pub async fn watch_targets(&self) -> Vec<WatchTarget> {
-        self.mux.watch_targets().await
+        let mut targets = self.mux.watch_targets().await;
+        targets.extend(self.pty.watch_targets().await);
+        targets
     }
 
     // 复用器可用性/元数据（冻结能力面，供 /system/* 与启动自检）

@@ -30,7 +30,8 @@ WORKDIR /app
 COPY --from=backend /app/target/release/omniterm ./
 COPY --from=frontend /app/dist ./frontend/dist
 
-ENV BIND_ADDR=0.0.0.0:${DOCKER_PORT}
+ENV OMNITERM_HOST=0.0.0.0
+ENV OMNITERM_PORT=${DOCKER_PORT}
 ENV FRONTEND_DIR=frontend/dist
 EXPOSE ${DOCKER_PORT}
 

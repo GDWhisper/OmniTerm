@@ -86,18 +86,14 @@ async fn list_sessions(
     let screen_map = state.engines.watcher().snapshot().await;
 
     // Enrich sessions with activity state and agent state from the engine.
-    // Only multiplexer-backed sessions have a pane to poll; ACP sessions get their
-    // state via the ACP event stream (Phase 3) and are skipped here.
-    // Pty sessions have no multiplexer state; they start inactive until a
-    // WS handler attaches and drives the PTY.
+    // ACP sessions get their state via the ACP event stream and are skipped;
+    // tmux/pty 会话经引擎注册表取 is_active（control mode 2s 窗口 /
+    // pty 读循环时间戳，口径见计划 §4）与屏幕检测结果。
     for session in &mut sessions {
         // ACP 会话：标记 agent 子进程是否在后端驻留（未释放/未被回收）。
         // 这与复用器的 is_active 不同，是 supervisor 中真实存在的进程状态。
         if session.runtime_kind == RuntimeKind::Acp {
             session.acp_process_alive = alive_acp.contains(&session.id);
-            continue;
-        }
-        if session.runtime_kind != RuntimeKind::Tmux {
             continue;
         }
         if let Some(ref engine_name) = session.tmux_session_name {
@@ -208,6 +204,7 @@ async fn create_session(
             runtime_kind: RuntimeKind::Acp,
             acp_session_id: Some(acp_session_id),
             agent_id: Some(agent_id),
+            last_cwd: None,
             is_active: true,
             agent_kind: None,
             agent_state: None,
@@ -226,13 +223,17 @@ async fn create_session(
         let id = Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
+        // 引擎会话键 = session id，存入冻结列 tmux_session_name（过渡期两引擎
+        // 共用，D10）。进程惰性 spawn：首次 WS attach 或 files 解析时由
+        // PtyEngine resolve-or-create。
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, NULL, 0, NULL, ?, 'pty', NULL)",
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'pty', NULL)",
         )
         .bind(&id)
         .bind(&pid)
         .bind(&workspace_path)
         .bind(&req.name)
+        .bind(&id)
         .bind(&now)
         .execute(&state.db)
         .await
@@ -240,18 +241,20 @@ async fn create_session(
 
         info!("created pty session: {} (cwd: {})", id, workspace_path);
 
+        let engine_key = id.clone();
         let session = Session {
             id,
             project_id: pid,
             workspace_path,
             name: req.name,
-            tmux_session_name: None,
+            tmux_session_name: Some(engine_key),
             hook_enabled: false,
             hook_status: None,
             created_at: now,
             runtime_kind: RuntimeKind::Pty,
             acp_session_id: None,
             agent_id: None,
+            last_cwd: None,
             is_active: false,
             agent_kind: None,
             agent_state: None,
@@ -318,6 +321,7 @@ async fn create_session(
         runtime_kind: RuntimeKind::Tmux,
         acp_session_id: None,
         agent_id: None,
+        last_cwd: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -377,7 +381,13 @@ pub async fn cleanup_session_runtime(
             }
         }
         "pty" => {
-            // PtyEngine sessions are owned by the WS handler; nothing to dispose here.
+            // 常驻会话由 PtyEngine 持有：显式 kill（三级信号升级），
+            // WS 断开不触发此路径（detach 语义）。
+            if let Some(name) = engine_name
+                && let Err(e) = state.engines.kill_session(RuntimeKind::Pty, name).await
+            {
+                error!("failed to kill pty session {}: {}", name, e);
+            }
         }
         _ => {
             if let Some(name) = engine_name {
@@ -780,6 +790,7 @@ async fn adopt_session(
         runtime_kind: RuntimeKind::Tmux,
         acp_session_id: None,
         agent_id: None,
+        last_cwd: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,

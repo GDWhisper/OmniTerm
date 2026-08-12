@@ -30,7 +30,8 @@ interface StoredMessage {
 
 /**
  * DB 行 → `ChatMessage`。首屏 hydrate 与上拉分页共用同一转换，避免两份平行的
- * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列总是完整的）。
+ * blocks 解码/兜底逻辑跑偏。blocks 解不出结构时回退纯文本（text 列
+ * 超长会被后端折叠成头尾 + 「已省略 N 字符」标记，故兜底文本可能不完整，但一定可读）。
  */
 function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
   return rows.map((m) => {

@@ -51,7 +51,10 @@ export function AuthSection() {
   // Master-switch modals
   const [disableOpen, setDisableOpen] = useState(false)
   const [setupOpen, setSetupOpen] = useState(false)
+  /** 'setup' = no password exists yet → ask for new + confirm; 'verify' = one already exists → ask for it. */
+  const [enableMode, setEnableMode] = useState<'setup' | 'verify'>('setup')
   const [setupPw, setSetupPw] = useState('')
+  const [setupConfirmPw, setSetupConfirmPw] = useState('')
   const [setupMsg, setSetupMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [switchBusy, setSwitchBusy] = useState(false)
 
@@ -99,7 +102,7 @@ export function AuthSection() {
     }
   }
 
-  /** Toggle pressed: enabling goes through setup-if-needed, disabling through a confirm modal. */
+  /** Toggle pressed: enabling goes through a password form (set-up or verify), disabling through a confirm modal. */
   const handleToggle = async () => {
     if (authEnabled) {
       setDisableOpen(true)
@@ -107,15 +110,15 @@ export function AuthSection() {
     }
     setSwitchBusy(true)
     try {
-      const { needs_setup } = await api.check()
-      if (needs_setup) {
-        setSetupMsg(null)
-        setSetupPw('')
-        setSetupOpen(true)
-      } else {
-        await api.setAuthSettings(true)
-        setAuthEnabled(true)
-      }
+      const res = await api.check()
+      // Never flip the master switch straight away: with auth off there is no
+      // valid session cookie, so the next protected request would 401 and the
+      // app would hard-jump to the login page. Ask for the password first.
+      setEnableMode(res.needs_setup ? 'setup' : 'verify')
+      setSetupMsg(null)
+      setSetupPw('')
+      setSetupConfirmPw('')
+      setSetupOpen(true)
     } catch {
       // silent: modal path re-checks; direct path shows nothing extra
     } finally {
@@ -137,21 +140,57 @@ export function AuthSection() {
     }
   }
 
+  /** Enable when no password exists yet: create the user, flip the switch, then sign the user out so they log in with the new password. */
   const handleSetupEnable = async () => {
     setSetupMsg(null)
     if (setupPw.length < 4) {
       setSetupMsg({ type: 'err', text: t('auth.passwordTooShort') })
       return
     }
+    if (setupPw !== setupConfirmPw) {
+      setSetupMsg({ type: 'err', text: t('auth.passwordMismatch') })
+      return
+    }
     setSwitchBusy(true)
     try {
-      await api.setup(setupPw)
-      await api.setAuthSettings(true)
+      await api.setup(setupPw) // creates the user + issues a session cookie
+      await api.setAuthSettings(true) // flip the master switch
       setAuthEnabled(true)
       setSetupOpen(false)
       setSetupPw('')
+      setSetupConfirmPw('')
+      // Deliberately re-enter the login flow: the setup cookie must not keep
+      // the session open silently, and the user asked for a fresh sign-in.
+      await api.logout().catch(() => {})
+      setAuthState('unauthenticated')
     } catch {
       setSetupMsg({ type: 'err', text: t('auth.enableFailed') })
+    } finally {
+      setSwitchBusy(false)
+    }
+  }
+
+  /** Enable when a password already exists: verify it (fresh cookie), then flip the switch and stay signed in. */
+  const handleVerifyEnable = async () => {
+    setSetupMsg(null)
+    if (!setupPw) {
+      setSetupMsg({ type: 'err', text: t('auth.fillAllFields') })
+      return
+    }
+    setSwitchBusy(true)
+    try {
+      await api.login(setupPw) // verify the current password → new session cookie
+      await api.setAuthSettings(true) // flip the master switch
+      setAuthEnabled(true)
+      setSetupOpen(false)
+      setSetupPw('')
+    } catch (err) {
+      const status = (err as { status?: number })?.status
+      if (status === 401) {
+        setSetupMsg({ type: 'err', text: t('auth.wrongPassword') })
+      } else {
+        setSetupMsg({ type: 'err', text: t('auth.enableFailed') })
+      }
     } finally {
       setSwitchBusy(false)
     }
@@ -252,24 +291,50 @@ export function AuthSection() {
         </div>
       </Modal>
 
-      {/* ── Enable: first-time password setup modal ── */}
+      {/* ── Enable: set-up new password or verify existing one ── */}
       <Modal
         open={setupOpen}
         onClose={() => setSetupOpen(false)}
-        title={t('auth.setPassword')}
+        title={enableMode === 'setup' ? t('auth.setPassword') : t('auth.enableAuthTitle')}
       >
         <div className="space-y-4">
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            {t('auth.setupPasswordText')}
-          </p>
-          <input
-            type="password"
-            placeholder={t('auth.password')}
-            value={setupPw}
-            onChange={(e) => setSetupPw(e.target.value)}
-            style={inputStyle}
-            autoComplete="new-password"
-          />
+          {enableMode === 'setup' ? (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                {t('auth.setupPasswordText')}
+              </p>
+              <input
+                type="password"
+                placeholder={t('auth.newPassword')}
+                value={setupPw}
+                onChange={(e) => setSetupPw(e.target.value)}
+                style={inputStyle}
+                autoComplete="new-password"
+              />
+              <input
+                type="password"
+                placeholder={t('auth.confirmNewPassword')}
+                value={setupConfirmPw}
+                onChange={(e) => setSetupConfirmPw(e.target.value)}
+                style={inputStyle}
+                autoComplete="new-password"
+              />
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                {t('auth.enableAuthCurrentPwText')}
+              </p>
+              <input
+                type="password"
+                placeholder={t('auth.currentPassword')}
+                value={setupPw}
+                onChange={(e) => setSetupPw(e.target.value)}
+                style={inputStyle}
+                autoComplete="current-password"
+              />
+            </>
+          )}
           {setupMsg && (
             <p style={{ fontSize: 11, color: 'var(--danger)', lineHeight: 1.5 }}>
               {setupMsg.text}
@@ -279,7 +344,11 @@ export function AuthSection() {
             <PixelButton variant="secondary" onClick={() => setSetupOpen(false)}>
               {t('sidebar.cancel')}
             </PixelButton>
-            <PixelButton variant="accent" onClick={handleSetupEnable} disabled={switchBusy}>
+            <PixelButton
+              variant="accent"
+              onClick={enableMode === 'setup' ? handleSetupEnable : handleVerifyEnable}
+              disabled={switchBusy}
+            >
               {t('auth.enable')}
             </PixelButton>
           </div>

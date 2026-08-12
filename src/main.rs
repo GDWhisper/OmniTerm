@@ -22,7 +22,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -62,36 +62,36 @@ enum Commands {
 #[derive(Parser)]
 struct StopArgs {
     /// Database connection string (used to locate the PID file)
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "OMNITERM_DB")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct StatusArgs {
     /// Database connection string (used to locate the PID file)
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "OMNITERM_DB")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct ResetAuthArgs {
     /// Database connection string
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "OMNITERM_DB")]
     db: Option<String>,
 }
 
 #[derive(Parser)]
 struct StartArgs {
     /// Listen port (priority: CLI > env > fallback)
-    #[arg(short = 'p', long, env = "BACKEND_PORT", default_value = "9077")]
+    #[arg(short = 'p', long, env = "OMNITERM_PORT", default_value = "9077")]
     port: u16,
 
     /// Database connection string
-    #[arg(long, env = "DATABASE_URL")]
+    #[arg(long, env = "OMNITERM_DB")]
     db: Option<String>,
 
     /// JWT signing key (no public default; auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
-    #[arg(long, env = "JWT_SECRET")]
+    #[arg(long, env = "OMNITERM_JWT_SECRET")]
     jwt_secret: Option<String>,
 
     /// Force password verification (overrides the DB setting and writes back; DB value used if unset).
@@ -457,11 +457,34 @@ fn daemon_notify_ready(_pipe_write: (), _msg: &str) {}
 #[cfg(not(unix))]
 fn daemon_notify_fail(_pipe_write: (), _msg: &str) {}
 
+/// 启动配置只认 `OMNITERM_*` 前缀的环境变量。曾经支持的通用变量名
+/// (`BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET`) 一律忽略：
+/// 它们会被开发环境或用户自己项目的环境（`DATABASE_URL` 尤其常见）意外继承，
+/// 劫持正式版的端口与数据库（实测：npm 正式版在开发实例的终端里启动会被
+/// `BIND_ADDR=127.0.0.1:9075` 劫持，报 "Address already in use"）。
+/// 仅在检测到残留旧变量时提示改名，不做兼容回退。
+fn warn_legacy_env() {
+    const RENAMED: &[(&str, &str)] = &[
+        ("BIND_ADDR", "OMNITERM_HOST + OMNITERM_PORT"),
+        ("BACKEND_PORT", "OMNITERM_PORT"),
+        ("DATABASE_URL", "OMNITERM_DB"),
+        ("JWT_SECRET", "OMNITERM_JWT_SECRET"),
+    ];
+    for (legacy, replacement) in RENAMED {
+        if std::env::var_os(legacy).is_some() {
+            tracing::warn!(
+                "ignoring legacy env var {} — omniterm only reads {} now (rename or unset it)",
+                legacy,
+                replacement
+            );
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse CLI synchronously *before* initializing the tokio runtime,
     // so daemonization can fork safely.
-    let cli_matches = Cli::command().get_matches();
-    let cli = Cli::from_arg_matches(&cli_matches)?;
+    let cli = Cli::parse();
 
     // `--debug` 由 start 子命令携带（日志初始化在 daemonize 之后，需提前提取）
     let debug_logging = matches!(&cli.command, Commands::Start(args) if args.debug);
@@ -498,6 +521,8 @@ fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("omniterm=info"))
         };
         tracing_subscriber::fmt().with_env_filter(filter).init();
+
+        warn_legacy_env();
 
         // 启动逻辑整体包一层：daemon 子进程任何启动失败（DB 连接/bind 等）都把错误
         // 原文透传给父进程终端（前台模式 pipe 为 None，notify 为 no-op，错误仍由
@@ -587,7 +612,12 @@ fn main() -> anyhow::Result<()> {
             let db_url = args.db.unwrap_or_else(default_db_url);
             let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
 
-            let engines = engine::EngineRegistry::new();
+            let db = SqlitePoolOptions::new().max_connections(5).connect(&db_url).await?;
+
+            sqlx::migrate!("./migrations").run(&db).await?;
+
+            // 引擎注册表在 DB 就绪后构建：pty 引擎的 cwd 回写任务要更新 sessions 表
+            let engines = engine::EngineRegistry::new(db.clone());
 
             // 复用器缺失不再阻断启动：ACP runtime 不依赖它。
             // 复用器会话会在运行时按需失败并返回错误，前端可查 /system/multiplexer。
@@ -597,10 +627,6 @@ fn main() -> anyhow::Result<()> {
                     e
                 );
             }
-
-            let db = SqlitePoolOptions::new().max_connections(5).connect(&db_url).await?;
-
-            sqlx::migrate!("./migrations").run(&db).await?;
 
             // 启动自愈：进程重启后不可能有进行中的 turn，任何残留的 'streaming' 行
             // 都是被中断的 turn，统一收尾为 'complete'，避免前端把陈旧行当作活跃流。
@@ -703,20 +729,9 @@ fn main() -> anyhow::Result<()> {
             let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
 
             // ── 绑定 ─────────────────────────────────────────────────
-            // `BIND_ADDR` 是 dev.sh / docker 的部署层兜底（docker 用它指定 0.0.0.0 host）。
-            // 用户显式传了 `-p`/`-H` 时它不得覆盖——否则残留的 dev 环境变量
-            // 会劫持正式版用户的端口选择（例如 npm 正式版被 BIND_ADDR=127.0.0.1:9075 劫持）。
-            let bind_explicit = cli_matches.subcommand_matches("start").is_some_and(|m| {
-                use clap::parser::ValueSource;
-                m.value_source("port") == Some(ValueSource::CommandLine)
-                    || m.value_source("host") == Some(ValueSource::CommandLine)
-            });
-            let bind = if bind_explicit {
-                format!("{}:{}", args.host, args.port)
-            } else {
-                std::env::var("BIND_ADDR")
-                    .unwrap_or_else(|_| format!("{}:{}", args.host, args.port))
-            };
+            // 监听地址只由 `-H/--host` + `-p/--port`（含各自的 `OMNITERM_*` env）决定，
+            // 不再有部署层 `BIND_ADDR` 兜底：通用变量名会被继承的开发环境劫持。
+            let bind = format!("{}:{}", args.host, args.port);
 
             let listener = tokio::net::TcpListener::bind(&bind).await?;
 
@@ -741,7 +756,7 @@ fn main() -> anyhow::Result<()> {
                 ),
             );
 
-            // Warning uses the *effective* listen host (BIND_ADDR overrides --host).
+            // 非回环监听 = 全网暴露，鉴权关闭时必须醒目告警。
             let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
             let is_loopback = matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
             if !auth_enabled && !is_loopback {

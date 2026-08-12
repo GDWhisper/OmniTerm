@@ -91,7 +91,10 @@ export function CreateProjectModal(props: {
   const closeCreateProj = () => {
     props.onClose()
     setProjName('')
-    setProjPath(homeDir + '/')
+    // 置空而非 homeDir + '/'：让下次打开时 projPath 从 '' 变化到
+    // homeDir + '/'，从而触发自动补全 effect 重新 loadDirs（否则第二次
+    // 打开因 projPath 值未变化而不加载，浏览区残留「空目录」态）
+    setProjPath('')
     setBrowsePath('')
     reset()
     setAutocompleteActiveIndex(-1)
@@ -106,7 +109,7 @@ export function CreateProjectModal(props: {
       addToast('success', t('sidebar.projectCreated', { name: projName.trim() }) ?? `Project "${projName.trim()}" created`)
       props.onClose()
       setProjName('')
-      setProjPath(homeDir + '/')
+      setProjPath('')
     } catch (e) {
       // 409 Conflict: the new path is already covered by an existing
       // project. Surface a switch-to-existing dialog instead of letting
@@ -409,7 +412,7 @@ export function CreateProjectModal(props: {
                   setCoverConflict(null)
                   props.onClose()
                   setProjName('')
-                  setProjPath(homeDir + '/')
+                  setProjPath('')
                   addToast(
                     'success',
                     t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??

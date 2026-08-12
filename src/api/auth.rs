@@ -206,7 +206,17 @@ async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
 
     // Master switch off ⇒ everything is open, report as authenticated.
     if !auth_enabled {
-        return Json(json!({ "authenticated": true, "auth_enabled": false }));
+        // Still report whether a password has ever been set, so the frontend
+        // can decide whether enabling needs a brand-new password (no user row)
+        // or proof of the existing one.
+        let needs_setup = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0)
+            == 0;
+        return Json(
+            json!({ "authenticated": true, "auth_enabled": false, "needs_setup": needs_setup }),
+        );
     }
 
     let token = jar.get("omniterm_token").map(|c| c.value().to_string());
