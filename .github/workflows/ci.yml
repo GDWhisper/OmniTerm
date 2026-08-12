@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
 
       - name: Build frontend (required by build.rs → RustEmbed)
-        run: pnpm install --no-frozen-lockfile && pnpm build
+        - run: pnpm install --frozen-lockfile && pnpm build
         working-directory: frontend
 
       - run: cargo check --workspace
@@ -64,7 +64,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - run: pnpm lint
         working-directory: frontend
@@ -91,7 +91,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - name: Frontend audit (high/critical)
         run: pnpm audit --audit-level=high
