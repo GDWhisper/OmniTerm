@@ -453,6 +453,8 @@
   "auth.enableFailed": "开启失败，请重试",
   "auth.disableFailed": "关闭失败，请重试",
   "auth.setupPasswordText": "首次开启密码验证：设置一个密码，之后访问所有功能都需要登录。",
+  "auth.enableAuthTitle": "开启密码验证",
+  "auth.enableAuthCurrentPwText": "已设置过密码：输入当前密码以开启密码验证，开启后保持登录。",
   "settings.category.auth": "认证",
   "update.badge": "NEW",
   "update.badgeTooltip": "新版本 v{{version}} 已发布",

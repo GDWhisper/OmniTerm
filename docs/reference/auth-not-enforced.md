@@ -24,7 +24,7 @@
   - public：`/auth/setup`、`/auth/login`、`/auth/logout`、`/auth/check`（及 health 等）
   - protected：其余全部业务路由 + 三个 WS 路由（`/ws/terminal/*`、`/ws/terminal/external/*`、`/ws/acp/*`），经 `route_layer(middleware::from_fn_with_state(require_auth_mw))` 统一保护
   - WS 握手同样走中间件（请求头携带 cookie），无需 handler 内单独校验
-- **`/auth/check`**（`src/api/auth.rs`）：真实校验 `omniterm_token` cookie，返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`。
+- **`/auth/check`**（`src/api/auth.rs`）：真实校验 `omniterm_token` cookie，返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`（同时返回 `needs_setup`，供设置页决定「开启密码验证」是弹新建密码表单还是验证既有密码）。
 - **登录限流** `LoginGuard`（`src/auth/rate_limit.rs`）：滑动窗口，单 IP 5 次失败 / 5 分钟触发 429，成功登录重置。
 - **启动安全**：监听非回环地址且 auth 关闭时打印高危警告（`src/main.rs`）；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
 

@@ -453,6 +453,8 @@
   "auth.enableFailed": "Failed to enable, please retry",
   "auth.disableFailed": "Failed to disable, please retry",
   "auth.setupPasswordText": "First-time enable: set a password — signing in will be required for all features afterwards.",
+  "auth.enableAuthTitle": "Enable password verification",
+  "auth.enableAuthCurrentPwText": "A password already exists: enter it to enable password verification — you'll stay signed in.",
   "settings.category.auth": "AUTH",
   "update.badge": "NEW",
   "update.badgeTooltip": "New version v{{version}} available",

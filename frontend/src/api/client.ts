@@ -19,7 +19,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, opts?: RequestInit & { silent?: boolean }): Promise<T> {
+async function request<T>(path: string, opts?: RequestInit & { silent?: boolean; noAuthRedirect?: boolean }): Promise<T> {
   const authVersion = useAppStore.getState().authVersion
   const res = await fetch(`${BASE}${path}`, {
     ...opts,
@@ -31,7 +31,10 @@ async function request<T>(path: string, opts?: RequestInit & { silent?: boolean 
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    if (res.status === 401) {
+    // 401 on the public auth endpoints (login/setup/change-password) is a
+    // business error — wrong password, not an expired session. Only treat a
+    // 401 as "session expired" on protected routes.
+    if (res.status === 401 && !opts?.noAuthRedirect) {
       const state = useAppStore.getState()
       if (state.authState === 'authenticated' && state.authVersion === authVersion) {
         useAppStore.getState().setAuthState('unauthenticated')
@@ -212,17 +215,19 @@ export const api = {
       body: JSON.stringify({ minutes }),
     }),
 
-  // Auth
+  // Auth — public endpoints where a 401/409 is a business error (wrong
+  // password / user already exists), never an expired session, so the
+  // caller must handle it locally without triggering the logout redirect.
   setup: (password: string) =>
-    request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }) }),
+    request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
   login: (password: string) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
+    request('/auth/login', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
   logout: () => request('/auth/logout', { method: 'POST' }),
   check: () => request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean }>('/auth/check'),
   setAuthSettings: (authEnabled: boolean) =>
     request('/auth/settings', { method: 'POST', body: JSON.stringify({ auth_enabled: authEnabled }) }),
   changePassword: (currentPassword: string, newPassword: string) =>
-    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }) }),
+    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }), noAuthRedirect: true }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),
