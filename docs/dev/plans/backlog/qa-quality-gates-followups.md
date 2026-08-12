@@ -10,6 +10,34 @@
 | R03 | PR CI 总耗时优化 | clippy+test+lint+build 单机串行 | 首次落地以正确性优先；实测若 >8min 引入 `Swatinem/rust-cache`（已加）+ 并行矩阵 / 拆 job |
 | R04 | `dev.sh check` 一键质量门禁 | 尚未实现 | 视开发者反馈，按计划附录 A 实现 `check_quality()` 子命令 |
 | R05 | dead-code 清零 | 15 处 `#[allow(dead_code)]`，清单见 `dead-code-triage.md` | 逐条删除/接线后移除 allow |
+| R06 | 前端 `vi.waitFor` 测试间歇失败（flaky） | 见下方专节 | 再次出现时抓住失败详情，或 CI 出现随机红灯 |
+
+## R06 详情：前端 `vi.waitFor` 测试间歇失败
+
+**现象**（2026-08-10 观测）：一次全量 `pnpm test --run` 出现
+`1 failed | 276 passed (277)`，未捕获到失败详情；随后**连续 18 次重跑全绿**，
+未能复现。
+
+**归属判断**（已排除当次改动）：当时新增的 23 条测试
+（`appStore.test.ts` / `path.test.ts`）全为纯同步 state 断言，无定时器 /
+`Date` / 异步，结构上不具备 flaky 条件。
+
+**真实嫌疑**：13 个使用 `vi.waitFor`（默认超时 1000ms）的组件测试在机器
+负载高时可能撞上限。风险最高的是
+`frontend/src/components/FileManager/FileEditor.dynamic.test.tsx`——它等的是
+CodeMirror 的动态 `import()`，冷加载耗时最不可控。
+
+**为何未直接修**：无复现证据时改超时只是掩盖症状，无法验证修复有效。
+待再次出现时先拿到具体失败用例再动。
+
+**候选处理方向**（待证据后选择）：
+
+1. 给等待动态 import 的用例显式放宽 `vi.waitFor` 超时（最小改动）
+2. 在 test setup 里预热惰加载模块，把冷加载成本移出断言窗口
+3. CI 开启 `--retry=1` 仅针对组件测试（下策：会掩盖真实竞态，不推荐）
+
+**复现时请保留证据**：`pnpm vitest run --reporter=verbose > /tmp/vt.log 2>&1`，
+失败时把完整日志附到本节。
 
 ## 远程 CI 验证
 

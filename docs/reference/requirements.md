@@ -23,6 +23,8 @@
 ## 改动记录 ⚪
 
 - [ ] **新增改动记录栏** — 在界面中新增一个「改动记录」面板，记录本次会话中改动过的文件和新增的文件，按时间倒序排列，支持点击文件名直接打开文件预览。
+  - 💡 **打开文件的基础设施已就绪**（2026-08-10）：`revealFileInDrawer`（`frontend/src/stores/appStore.ts`）与 `FileLocationLink`（`frontend/src/components/Chat/FileLocationLink.tsx`）已实现「给一个路径 → 在 FM 抽屉打开并保证抽屉可见」，本需求实现时直接复用，不要另写一套。
+  - 数据来源可复用 ACP 工具调用的 `locations` / diff `path`（见下方 ACP 会话章节 A1）。
 
 ## Sidebar 便条 🔵
 
@@ -41,6 +43,39 @@
 ## ACP 会话 ⚪
 
 - [ ] **todos list 看板功能** — ACP 会话的 todos list 看板功能未成功实现，待评估：放弃该功能，或换用更高级模型处理。（2026-07-24 记录）
+
+### 会话中提到的文件一键点开
+
+目标：agent 说「文档已定稿在 xxx.md」时，用户能直接点开查阅，不必去文件树里翻。
+方案分三层（成本/收益差异明显），**层 C 已评估为不做**。
+
+- [x] **A1 · 工具调用 `locations` 可点击** — ✅ 2026-08-10 完成（commit `224d12c`）
+  - 工具卡片展开后的路径从纯文本变为可点击链接，点击在 FM 抽屉打开，并自动展开右栏 + 切到 FILES 标签（移动端切 files 面板）。
+  - 数据取自 ACP `ToolCallLocation`（**协议权威值，非正文猜测**），故不做存在性校验；无效路径/目录/越界由 FileDrawer 展示后端错误。
+  - 相对路径以 session 的 `workspace_path` 归一（`toAbsolutePath`）——agent 子进程 OS cwd 就是该路径，见 `src/api/files.rs` 中 ACP session 取 `workspace_path` 作 FM cwd 的注释。
+  - 性能：链接组件不接回调 props、不订阅 store，点击时才 `getState()`，`ChatMessageView` 的 memo 契约零触碰（模式见 `docs/architecture/frontend-patterns.md` 的 getState-action convention）。
+
+- [ ] **A2 · `locations` 缺失时用 diff path 兜底** — ⏸ 待实测触发
+  - `locations` 是 ACP **可选**字段（§8 多实现兼容性），有实现不提供。届时工具卡片展开后没有可点路径。
+  - 兜底数据已在手上：`useAcpChat.ts` 的 `synthUnifiedDiff` 已解析出 diff 的 `path`，只是没存进 block，并入 `locations` 即可（十来行）。
+  - **故意暂缓**：在确认手头 agent 到底给不给之前，这是没有需求证明的抽象（AGENTS §7 奥卡姆剃刀）。**触发条件：实测发现工具卡片展开后无路径行。**
+
+- [ ] **B · 正文 inline code 里的路径可点击** — 🟡 待决策
+  - agent 说「定稿在 \`docs/xxx.md\`」绝大多数用反引号包裹 → 落在 `Markdown.tsx` 的 `code` 渲染器，**不需要碰 remark AST**。
+  - 关键设计：**粗筛 → 验证 → 才渲染成链接**。正则只做候选筛（含 `/` 或已知扩展名、无空格、长度上限），再异步确认文件存在，存在才可点。把「启发式猜测」降级为「提示信号」，误判率趋零。
+  - 打开动作直接复用 A1 的 `revealFileInDrawer`，无需重写。
+  - ⚠️ **需人工拍板的取舍**：存在性校验走哪条路——
+    | 方案 | 成本 | 代价 |
+    |------|------|------|
+    | 复用 `GET /api/v1/files?session=` 列目录 | 0 后端改动 | 一个目录一次请求，须前端缓存 |
+    | 新增 batch exists 端点 | +1 API + `backend.md` 维护 | 更干净，请求可合并 |
+
+    倾向前者（目录列表本身有缓存价值，且不增实体）。
+  - ⚠️ **必须配 session 级缓存 + 并发上限**：否则历史消息一多就是一堆并发请求，触犯 `docs/dev/performance-and-safety.md` 的无界红线。
+
+- [x] **C · 裸文本路径（无反引号）识别** — ❌ 评估后不做（2026-08-10）
+  - 需自定义 remark plugin 改 AST，误判面大（散文里的 `and/or`、版本号、URL 片段），而 A+B 已覆盖约 95% 真实场景。属过度设计。
+  - 翻盘条件：实测发现常用 agent 大量输出不带反引号的裸路径，且用户明确反馈够痛。
 
 ## Multiplexer 引擎 ⚪
 
