@@ -260,7 +260,11 @@ fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path)
 }
 
 impl AcpClient {
-    pub async fn spawn_and_connect(agent: Agent, cwd: PathBuf) -> Result<Self, AcpError> {
+    pub async fn spawn_and_connect(
+        agent: Agent,
+        cwd: PathBuf,
+        api_keys: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, AcpError> {
         let resolved_cmd = match agent.npm_package.as_deref() {
             Some(_) => {
                 crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
@@ -274,8 +278,16 @@ impl AcpClient {
 
         let mut all_args: Vec<String> = Vec::new();
 
+        // agent.env（DB 配置）显式指定
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
+        }
+        // 注入全局 API key（~/.omniterm/api_keys.toml / 环境变量配置的模型 key）
+        // agent.env 中显式配置的 key 优先，不覆盖
+        for (key, value) in api_keys {
+            if !agent.env.iter().any(|e| e.key == *key) {
+                all_args.push(format!("{}={}", key, value));
+            }
         }
         // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
         // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
@@ -943,6 +955,7 @@ impl AcpClient {
         agent: Agent,
         cwd: PathBuf,
         acp_session_id: String,
+        api_keys: &std::collections::HashMap<String, String>,
     ) -> Result<Self, AcpError> {
         let resolved_cmd = match agent.npm_package.as_deref() {
             Some(_) => {
@@ -956,8 +969,16 @@ impl AcpClient {
         };
 
         let mut all_args: Vec<String> = Vec::new();
+        // agent.env（DB 配置）显式指定
         for env_var in &agent.env {
             all_args.push(format!("{}={}", env_var.key, env_var.value));
+        }
+        // 注入全局 API key（~/.omniterm/api_keys.toml / 环境变量配置的模型 key）
+        // agent.env 中显式配置的 key 优先，不覆盖
+        for (key, value) in api_keys {
+            if !agent.env.iter().any(|e| e.key == *key) {
+                all_args.push(format!("{}={}", key, value));
+            }
         }
         // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
         // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上

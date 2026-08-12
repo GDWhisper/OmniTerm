@@ -9,6 +9,7 @@ use crate::acp::AcpSupervisor;
 use crate::auth::LoginGuard;
 use crate::engine::EngineRegistry;
 use sqlx::sqlite::SqlitePoolOptions;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
@@ -23,6 +24,7 @@ pub async fn test_state() -> AppState {
     AppState {
         db,
         jwt_secret: "test-secret".into(),
+        api_keys: HashMap::new(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
         login_guard: LoginGuard::new(),

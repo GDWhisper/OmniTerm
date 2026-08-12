@@ -153,7 +153,7 @@ async fn create_session(
         let workspace_path = resolve_workspace_path(&req.workspace_path, &pid, &state).await;
 
         let cwd = std::path::PathBuf::from(&workspace_path);
-        let acp_client = match AcpClient::spawn_and_connect(agent, cwd).await {
+        let acp_client = match AcpClient::spawn_and_connect(agent, cwd, &state.api_keys).await {
             Ok(c) => Arc::new(c),
             Err(e) => {
                 error!("ACP spawn failed: {}", e);
