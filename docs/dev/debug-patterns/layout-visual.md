@@ -95,6 +95,19 @@
 
 ---
 
+## 模式 9：全局 zoom 祖先会放大 fixed 弹层的 translate 值
+
+**布局-zoom 缩放**：CSS `zoom`（界面缩放实现）不改变 fixed 元素的 containing block（仍相对视口），但会把 fixed 后代的**绘制与 transform 长度单位按因子 z 放大**——`transform: translate(clientX px, ...)` 里的 px 值被放大 z 倍，物理位置 = 值 × z，元素自身尺寸也同步放大 z 倍。因此在「全局 zoom 容器 + fixed 弹层用视口物理坐标（`clientX/clientY`）做 translate」的组合里，**translate 坐标必须除以 z**（外层 zoom 恰好把它放大回物理像素，`translate(x/z, y/z) × z = x`）；若弹层自身再套一次 zoom，则是双重缩放，偏差随鼠标/视口位置线性增大，离原点越远越离谱。
+
+**诊断信号**：`getBoundingClientRect()` 的 x/y ≈ 预期值 × z 且元素宽高也放大 z 倍；界面缩放 = 100% 时完全正常，≠ 100% 时明显错位——先怀疑坐标值，实测 rect 再定罪，别在偏移常数上瞎调。修复后对照 `Layout.tsx` 里 `translateY(vvOffsetTop / zoom)` 的既有补偿惯例。
+
+**适用**：任何跟随指针/视口的 fixed 悬浮层（拖拽预览、tooltip、自定义 menu）在全局 zoom 容器内用物理坐标定位时。
+
+**案例证据**：
+- 2026-08-12 FileManager 拖拽预览不贴鼠标：鼠标 200px 处预览落 265px（z=1.25），且预览自身又套了 `zoom: uiZoom/100` 二次缩放。修复：去内层 zoom，translate 除以 z。
+
+---
+
 ## 元模式：底部不可见分层排查清单
 
 「底部不可见」累计 4 个独立根因，每次都是新层——**同一症状反复出现时，不要假设上一轮修的就是根因**，按以下顺序逐层排查：
