@@ -1,6 +1,6 @@
 # ACP 会话可靠性加固：存储限界与数据正确性
 
-> 状态：Phase 0 / Phase 1 已实施（2026-08-11，提交 `2d18fa1` 起）；Phase 2-4 待办
+> 状态：Phase 0 / Phase 1 / Phase 2 已实施（2026-08-11 起，提交 `2d18fa1` 起）；Phase 3-4 待办
 > 触发条件：修改 `src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx` 中任一项前必读
 > 关联：`docs/reference/chat-history-loading-comparison.md`（三方参考实现对比与实测数据）、`docs/dev/performance-and-safety.md` §P1/§P2/§P5、`docs/architecture/backend.md`（blocks 两态）、`docs/dev/plans/2026-07-28-pty-engine-implementation.md`
 > 前置认识：**样本量不能当作"极端情况罕见"的证据**。本项目开发库会话数少，是因为维护者不信任 ACP 会话而习惯改用终端——这是不可靠导致的结果，不是"不需要加固"的理由。实测那条 9,150,950 字符的巨行出现在一个**仅 19 条消息**的会话里。
@@ -13,7 +13,7 @@
 |---|---|---|---|
 | P0 ✅ | `sync_messages` 的 `UPDATE` 无行限定，同文本消息的 `blocks` 互相污染 | **高（损坏数据）** | dev 库某会话 14 行 assistant `"OK"`、14 个不同 `id`，但 `count(DISTINCT blocks) = 1` —— 全被同一份覆盖 |
 | P1 ✅ | 原始帧 `blocks` 可能永久留存，不收敛成 cooked | 高（体积差 2 个数量级） | 所有超大行都是未被 sync 覆盖的原始帧；cooked 行最大 114KB，原始帧行达 9,150,950 字符 |
-| P2 | `text` 列无字节上限 | 中（O(n²) 写放大） | `turn_accumulator.rs:188` `st.text.push_str()` 无上限；当前实测最大 36,834 字符，属未爆发风险 |
+| P2 ✅ | `text` 列无字节上限 | 中（O(n²) 写放大） | `turn_accumulator.rs:188` `st.text.push_str()` 无上限；当前实测最大 36,834 字符，属未爆发风险 |
 | P3 | 触顶加载无滞后锁 | 中（交互失控） | 停在顶部时请求落定后下一个滚动事件立刻触发下一页 |
 | P4 | 会话数无上限 | 低 | `sessions` 表无任何行数约束 |
 
@@ -70,7 +70,7 @@
 - 纯尾部窗口（保留最后 N 字节）——正文开头丢失，可读性最差
 - 硬上限后停止累积——agent 还在输出而用户看不到，且无任何提示
 
-**上限取值**：待实施时定，建议量级 1 MiB（当前实测最大 36,834 字符，留两个数量级余量）。**必须是命名常量**并与 `MAX_BLOCKS_BYTES` 放在同一常量区（`turn_accumulator.rs:80-90`），附带 `const _: () = assert!(...)` 形式的不变式（如折叠后长度必然 ≤ 上限）。
+**上限取值**：**已定 1 MiB**（实施于 2026-08-12；当前实测最大 36,834 字符，留两个数量级余量）。**必须是命名常量**并与 `MAX_BLOCKS_BYTES` 放在同一常量区（`turn_accumulator.rs:80-90`），附带 `const _: () = assert!(...)` 形式的不变式（如折叠后长度必然 ≤ 上限）。
 
 **注意 `text` 的兜底角色**：`ChatView.tsx` 的 `toChatMessages` 在 blocks 解不出结构时回退为 `[{type:'text', text:m.text}]`，所以截断 `text` 会同时削弱这条兜底路径 —— 折叠标记因此必须对用户可读，不能是内部标记。
 
@@ -129,13 +129,23 @@
 | 测试 | 后端：`row_id` 跨 `finalize_turn` 存活、仅 `begin_turn` 清除；空 text 行在 id 路径下仍可回写 / 在文本路径下仍被跳过。前端：5 条 `turnToSyncPayload`（streaming 边界、多条合并、纯工具 turn、空 blocks 不写） |
 | 验收 | 已做：HTTP 端到端验证（临时实例 + 临时库）——带 id 只改那一行且不动 text、同 text 另一行未被污染、空 text 行可写、未知 id 不插行、无 id 的 replay 路径仍能逐行落位与 INSERT。**待手动回归**：跑一个含工具调用的真实 turn 后，该行 `blocks` 以 `[` 开头（cooked）而非 `{"v":1,"frames"`；消息条数不增加 |
 
-### Phase 2（P2）— `text` 字节上限
+### Phase 2（P2）— `text` 字节上限 ✅ 已实施（2026-08-12）
+
+> **实施说明（2026-08-12）— D3 未写清的三个流式约束（方向不变）**
+>
+> D3 描述的是“超限时把中段换成标记”这个**结果**，但 `text` 是**流式累积**的，“每次超限就重新折叠整串”正好是本文要消除的 O(n²)。实现为私有结构 `BoundedText`（冻结头部 + 滑动尾窗 + 省略计数），渲染时才拼出标记，追加为摊还 O(1)/字节。三个实施时才看清的约束：
+>
+> 1. **头部需“封口标志”而不能只看长度**。UTF-8 字符边界会让头部停在预算之下几字节；若以“头部未满”为条件续填，会把**更新的文本插到更旧的文本之前**，正文顺序错乱。故一旦有内容落入尾窗，头部永久冻结（`head_sealed`）。
+> 2. **尾窗必须按块摊还修剪**。修剪到恰好等于预算，则此后每个 chunk 都要 memmove 整个尾窗——换了个形式的 O(n²)。现一次修剪掉 1/4 预算的富余量（`TEXT_TAIL_TRIM_SLACK`），代价是尾窗平均持有略少于预算。
+> 3. **单个 chunk 自身超预算时要先裁再入缓冲**。先推整段再修剪会让内存峰值等于 chunk 大小，上限形同虚设——与 `MAX_FRAME_BYTES` 存在的理由同构。
+>
+> 另有一条**已知边界（未修，见下方风险表）**：正文被折叠后，`sync_messages` 的**无 id 文本匹配退回路径**会失配（前端持完整 text、DB 是折叠 text）。仅当正文 > 1 MiB **且**走 replay 恢复路径时触发；Phase 1 已把主路径换成 `row_id` 精确匹配，所以不作为本期范围。
 
 | 项 | 内容 |
 |---|---|
-| 改动 | `src/acp/turn_accumulator.rs`：常量区（:80-90）加上限；`st.text.push_str()` 处（:188）改为限界追加；折叠函数须处理 UTF-8 边界 |
-| 测试 | 超长输入后 `text` 长度 ≤ 上限；折叠标记存在且含省略字符数；UTF-8 多字节字符不被切坏（用中文/emoji 构造边界样本）；`begin_turn` 重置计数 |
-| 验收 | 上述单测通过；`cargo clippy --all-targets` 零新增 |
+| 改动 | `src/acp/turn_accumulator.rs`：常量区新增 `MAX_TEXT_BYTES`（1 MiB）/ `TEXT_HEAD_BYTES`（256 KiB）/ `TEXT_MARKER_MAX_BYTES`（96）/ `TEXT_TAIL_BYTES`（余额）/ `TEXT_TAIL_TRIM_SLACK`（尾窗的 1/4）/ `TEXT_OMISSION_PREFIX\|SUFFIX`，附 3 条 `const _: () = assert!` 不变式；`TurnState::text` 由 `String` 换为 `BoundedText`；边界切割统一走 std 的 `floor_char_boundary` / `ceil_char_boundary`。连带修正四处已失真注释（原文把 `text` 描述为“全量兜底”）与 `ChatView.tsx` 的“text 列总是完整的” |
+| 测试 | 6 条新单测：长 turn 折叠后守住上限且头尾均保留；未超限时逐字节原样；中文/emoji 边界不被切坏；单个超大 chunk 到达即限界；`begin_turn` 重置折叠状态；标记最坏情况装得进预算。其中三条带**守恒断言**（保留字符数 + 声称省略数 == 输入字符数）以禁止静默丢弃；两条直接断言**内部缓冲**字节数（仅限界渲染值会让累积缓冲与每次重写仍然无界） |
+| 验收 | 已做：先写测试看它们以正确理由失败（4 红）再实现；`cargo test` 231+8+2 全绿；`cargo clippy --all-targets` 零警告；`cargo fmt --check` 通过；前端 `tsc --noEmit` / `pnpm lint` 无新增问题 |
 
 ### Phase 3（P3）— 触顶滞后锁 + 视口比例阈值
 
@@ -160,6 +170,7 @@
 | Phase 1 因 text 不一致插出重复行 | Phase 0 的 id 匹配先落地；Phase 1 前做逐字节一致性验证；验收明确检查"消息条数不增加" |
 | Phase 1 后原始帧不可恢复 | 已明确接受（D2）。若需语料，另存冷层而非回退 |
 | Phase 2 截断削弱 `text` 的兜底角色 | 折叠标记必须用户可读；保留头尾而非纯尾窗 |
+| Phase 2 折叠后与 `sync_messages` 的无 id 文本匹配路径失配（可能 INSERT 重复行） | 仅在正文 > 1 MiB **且**走 replay 恢复路径时触发；Phase 1 已把主路径改为 `row_id` 精确匹配。**未修，待观察**；若实际出现，正确修法是让 replay 路径也携行 id（D1 的翻盘条件），而非放宽正文上限 |
 | Phase 4 淘汰导致用户数据消失 | 标为阻塞点，实施前必须确认语义 |
 | 四项都动了 `blocks`/`text` 读写路径，可能互相干扰 | 严格分 Phase 提交，每 Phase 独立跑全量测试（后端 `cargo test`、前端 `pnpm test --run`、`tsc --noEmit`、`cargo clippy --all-targets`、`cargo fmt --check`） |
 

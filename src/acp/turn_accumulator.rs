@@ -21,7 +21,8 @@
 //! thousands per turn), and a frame count cap alone only bounds the column when frames
 //! are small — which is not something we get to assume (see the byte-cap docs). The
 //! accumulator keeps only the most recent window for mid-turn crash recovery —
-//! `text` still accumulates the full agent message text, and the frontend writes back
+//! `text` accumulates the agent message text under its own byte cap ([`MAX_TEXT_BYTES`],
+//! head + tail with an explicit omission marker), and the frontend writes back
 //! its complete structured blocks on `sync` — so memory, flush cost and the `blocks`
 //! column stay bounded instead of growing quadratically over a long turn.
 //!
@@ -55,8 +56,9 @@ const RAW_FRAMES_VERSION: u64 = 1;
 /// Bounded retention window for raw frames. Long turns can emit tens of thousands of
 /// notifications; keeping all of them makes flush (full re-serialization) and the
 /// `blocks` column grow quadratically. Only the most recent [`MAX_FRAMES`] frames are
-/// kept for mid-turn recovery — full text lives in `text`, full structure comes back
-/// from the frontend's `sync` after the turn ends.
+/// kept for mid-turn recovery — the prose lives in `text` (bounded separately by
+/// [`MAX_TEXT_BYTES`]), full structure comes back from the frontend's `sync` after the
+/// turn ends.
 ///
 /// This axis bounds *decode CPU* (the frontend re-classifies every retained frame on
 /// hydrate), while [`MAX_BLOCKS_BYTES`] bounds I/O. Both are needed: 2000 tiny frames
@@ -74,20 +76,68 @@ const MAX_FRAMES: usize = 2000;
 /// so the column stays constant-order for any agent behaviour.
 ///
 /// Trade-off: with fat frames the structural recovery window shrinks to a few dozen
-/// frames. Acceptable because `text` keeps the full agent text and the frontend's
-/// classifier folds all updates of one `toolCallId` into a single card anyway, so the
-/// rendered result is near-identical.
+/// frames. Acceptable because `text` keeps the prose (bounded, head + tail) and the
+/// frontend's classifier folds all updates of one `toolCallId` into a single card
+/// anyway, so the rendered result is near-identical.
 const MAX_BLOCKS_BYTES: usize = 128 * 1024;
 
 /// Per-frame cap: a frame larger than this never enters the window (its text, if any,
-/// is still accumulated into `text`). Without it a single oversized frame — an agent
-/// inlining a whole file into one notification — would occupy the entire byte budget
-/// and make [`MAX_BLOCKS_BYTES`] no bound at all.
+/// is still accumulated into `text`, subject to that column's own cap). Without it a
+/// single oversized frame — an agent inlining a whole file into one notification —
+/// would occupy the entire byte budget and make [`MAX_BLOCKS_BYTES`] no bound at all.
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 
 // A frame that passes the per-frame cap must fit the window budget, otherwise the
 // eviction loop below could drain the window down to nothing on every fold.
 const _: () = assert!(MAX_FRAME_BYTES <= MAX_BLOCKS_BYTES);
+
+/// Byte budget for the accumulated agent message text (the `text` column). The frame
+/// window above is bounded on two axes, but `text` used to be the one structure that
+/// grew without any cap at all — it was *deliberately* the unbounded fallback ("full
+/// text lives in `text`"), which only holds as long as agents stay polite. They do not:
+/// a measured dev-library row reached 9,150,950 characters in a 19-message session.
+/// Every debounced flush re-writes the whole column, so an unbounded `text` turns one
+/// long turn into O(n²) write amplification (performance-and-safety.md §P1).
+///
+/// Sized two orders of magnitude above the largest legitimate text observed so far
+/// (36,834 characters), so folding stays a safety net rather than a routine event.
+const MAX_TEXT_BYTES: usize = 1024 * 1024;
+
+/// Head budget: the first bytes of the turn are frozen once the cap is hit, so the
+/// reader keeps the *beginning* of the answer. A pure tail window (keep the last N
+/// bytes) would make the prose start mid-sentence, which is the least readable option.
+const TEXT_HEAD_BYTES: usize = 256 * 1024;
+
+/// Reserved room for the omission marker, so head + marker + tail provably fits
+/// [`MAX_TEXT_BYTES`] without the marker itself having to be budgeted at runtime.
+const TEXT_MARKER_MAX_BYTES: usize = 96;
+
+/// Tail budget: a sliding window over the most recent text, so the reader keeps the
+/// *conclusion* of the answer.
+const TEXT_TAIL_BYTES: usize = MAX_TEXT_BYTES - TEXT_HEAD_BYTES - TEXT_MARKER_MAX_BYTES;
+
+/// Slack trimmed off in one go when the tail window overflows. Trimming exactly back to
+/// the budget would memmove the whole tail on *every* subsequent chunk — the very O(n²)
+/// this cap exists to prevent. Dropping a chunk of slack instead amortizes it to O(1)
+/// per byte at the cost of the tail holding slightly less than its budget.
+const TEXT_TAIL_TRIM_SLACK: usize = TEXT_TAIL_BYTES / 4;
+
+/// Marker wrapped around the omitted-character count. Deliberately user-readable rather
+/// than an internal sentinel: `text` doubles as the plain-text fallback when `blocks`
+/// cannot be decoded (`ChatView.tsx` `toChatMessages`), so a reader must be able to tell
+/// "content was dropped here" from the rendered bubble alone. Every reference
+/// implementation states the omitted amount explicitly; none drop content silently.
+const TEXT_OMISSION_PREFIX: &str = "\n…（已省略 ";
+const TEXT_OMISSION_SUFFIX: &str = " 字符）…\n";
+
+// The rendered text is head + marker + tail; the three budgets must fit the cap.
+const _: () = assert!(TEXT_HEAD_BYTES + TEXT_MARKER_MAX_BYTES + TEXT_TAIL_BYTES <= MAX_TEXT_BYTES);
+// A trim must leave a non-empty tail window, and must actually free slack — otherwise
+// the tail either collapses to nothing or is memmoved on every chunk.
+const _: () = assert!(TEXT_TAIL_TRIM_SLACK > 0 && TEXT_TAIL_TRIM_SLACK < TEXT_TAIL_BYTES);
+// The marker's fixed part must leave room for the count (20 digits covers u64::MAX).
+const _: () =
+    assert!(TEXT_OMISSION_PREFIX.len() + TEXT_OMISSION_SUFFIX.len() + 20 <= TEXT_MARKER_MAX_BYTES);
 
 #[derive(Default)]
 struct TurnState {
@@ -107,12 +157,97 @@ struct TurnState {
     frames_bytes: usize,
     /// Accumulated agent message text (for the NOT NULL `text` column and as a
     /// plain-text fallback). Only `AgentMessageChunk` text is collected here.
-    text: String,
+    /// Bounded by [`MAX_TEXT_BYTES`] — see [`BoundedText`].
+    text: BoundedText,
     /// Per-client monotonic sequence, incremented on every folded frame. Never
     /// reset across turns; consumed by the reconnect reconciliation in a later phase.
     seq: u64,
     /// Set on fold, cleared by the writer after a flush.
     dirty: bool,
+}
+
+/// Byte-bounded accumulator for the turn's plain text.
+///
+/// Keeps a frozen **head** and a sliding **tail**, and counts what fell in between, so
+/// the rendered value is `head + "…（已省略 N 字符）…" + tail` — the reader keeps both
+/// the opening and the conclusion of the answer, and is told explicitly how much is
+/// missing. Appending is amortized O(1) per byte: the head stops growing entirely and
+/// the tail is trimmed in slack-sized chunks rather than on every push.
+#[derive(Default)]
+struct BoundedText {
+    /// The turn's opening bytes; frozen once [`BoundedText::head_sealed`] is set.
+    head: String,
+    /// Set the moment any content lands in `tail`. The head must then stay frozen even
+    /// though a UTF-8 boundary may have left it a few bytes below its budget — topping
+    /// it up later would splice newer text *in front of* older text.
+    head_sealed: bool,
+    /// Sliding window over the most recent bytes; front-trimmed on overflow.
+    tail: String,
+    /// Characters (not bytes) dropped between `head` and `tail`, reported to the user.
+    omitted_chars: usize,
+}
+
+impl BoundedText {
+    fn clear(&mut self) {
+        self.head.clear();
+        self.head_sealed = false;
+        self.tail.clear();
+        self.omitted_chars = 0;
+    }
+
+    fn push_str(&mut self, chunk: &str) {
+        let mut rest = chunk;
+        if !self.head_sealed {
+            let room = TEXT_HEAD_BYTES - self.head.len();
+            if rest.len() <= room {
+                self.head.push_str(rest);
+                return;
+            }
+            // Cut on a char boundary (`floor_char_boundary`): slicing mid-character
+            // would panic and take down the whole ACP connection task.
+            let cut = rest.floor_char_boundary(room);
+            self.head.push_str(&rest[..cut]);
+            self.head_sealed = true;
+            rest = &rest[cut..];
+        }
+        // A single chunk bigger than the tail budget (an agent inlining a whole file in
+        // one `AgentMessageChunk`) must be trimmed *before* it lands: pushing it whole
+        // and trimming afterwards would spike the buffer to the chunk's size, making the
+        // cap no cap at all.
+        if rest.len() > TEXT_TAIL_BYTES {
+            let cut = rest.ceil_char_boundary(rest.len() - TEXT_TAIL_BYTES);
+            self.omitted_chars += rest[..cut].chars().count();
+            rest = &rest[cut..];
+        }
+        self.tail.push_str(rest);
+        if self.tail.len() > TEXT_TAIL_BYTES {
+            // Trim down to budget *minus slack* so the next chunks are free — trimming
+            // back to exactly the budget would memmove the tail on every single push.
+            let target = TEXT_TAIL_BYTES - TEXT_TAIL_TRIM_SLACK;
+            let cut = self.tail.ceil_char_boundary(self.tail.len() - target);
+            self.omitted_chars += self.tail[..cut].chars().count();
+            self.tail.drain(..cut);
+        }
+    }
+
+    fn render(&self) -> String {
+        if !self.head_sealed {
+            return self.head.clone();
+        }
+        let mut out =
+            String::with_capacity(self.head.len() + TEXT_MARKER_MAX_BYTES + self.tail.len());
+        out.push_str(&self.head);
+        // `omitted_chars == 0` means the text merely outgrew the head budget without
+        // anything being dropped yet — head + tail is still the complete text, so
+        // claiming an omission would be a lie.
+        if self.omitted_chars > 0 {
+            out.push_str(TEXT_OMISSION_PREFIX);
+            out.push_str(&self.omitted_chars.to_string());
+            out.push_str(TEXT_OMISSION_SUFFIX);
+        }
+        out.push_str(&self.tail);
+        out
+    }
 }
 
 /// DB destination for persistence. Absent until [`TurnAccumulator::attach_persistence`]
@@ -255,7 +390,7 @@ impl TurnAccumulator {
         let row_id = st.row_id.clone()?;
         Some(FlushSnapshot {
             row_id,
-            text: st.text.clone(),
+            text: st.text.render(),
             blocks: wrap_frames(&st.frames),
             last_seq: st.seq as i64,
         })
@@ -281,7 +416,7 @@ impl TurnAccumulator {
         TurnSnapshot {
             active: st.active,
             row_id: st.row_id.clone(),
-            text: st.text.clone(),
+            text: st.text.render(),
             blocks: wrap_frames(&st.frames),
             seq: st.seq,
         }
@@ -432,6 +567,37 @@ mod tests {
         (st.frames.len(), st.frames_bytes)
     }
 
+    /// Internal text buffers: `(head bytes, tail bytes, omitted chars)`. Asserted
+    /// directly because bounding only the *rendered* value would still leave the
+    /// in-memory accumulation — and therefore every debounced re-write — unbounded.
+    fn text_buffers(acc: &TurnAccumulator) -> (usize, usize, usize) {
+        let st = acc.inner.lock().expect("lock");
+        (st.text.head.len(), st.text.tail.len(), st.text.omitted_chars)
+    }
+
+    /// Split a rendered text into `(head, omitted_chars, tail)`; `None` when unfolded.
+    fn split_folded(text: &str) -> Option<(&str, usize, &str)> {
+        let (head, rest) = text.split_once(TEXT_OMISSION_PREFIX)?;
+        let (count, tail) = rest.split_once(TEXT_OMISSION_SUFFIX)?;
+        Some((head, count.parse().expect("折叠标记应包含可解析的省略字符数"), tail))
+    }
+
+    /// Fold `unit` repeatedly until at least `total_bytes` of text has been fed in.
+    /// Returns the full text that was fed, for conservation assertions.
+    fn fold_until(
+        acc: &TurnAccumulator,
+        sid: &SessionId,
+        unit: &str,
+        total_bytes: usize,
+    ) -> String {
+        let mut fed = String::new();
+        while fed.len() < total_bytes {
+            acc.fold(&text_chunk(sid, unit));
+            fed.push_str(unit);
+        }
+        fed
+    }
+
     fn parse_frames(blocks: &str) -> Vec<Value> {
         let wrapper: Value = serde_json::from_str(blocks).expect("blocks 应为合法 JSON");
         wrapper["frames"].as_array().expect("frames 应为数组").clone()
@@ -491,10 +657,150 @@ mod tests {
         );
         assert_eq!(parse_frames(&snap.blocks).len(), len, "包裹后的帧数应等于窗口帧数");
 
-        // text 全量累积：丢弃的只是 UI 恢复窗口，正文文本不受影响。
+        // text 在未触及 [`MAX_TEXT_BYTES`] 前全量累积：丢弃的只是 UI 恢复窗口，正文不受影响。
+        assert!(
+            snap.text.len() < MAX_TEXT_BYTES,
+            "本例输入量应远低于正文上限，否则下方全量断言不成立"
+        );
         assert!(snap.text.starts_with("chunk-0 "), "text 保留最早 chunk");
         assert!(snap.text.ends_with("chunk-4999 "), "text 保留最新 chunk");
         assert_eq!(snap.text.matches("chunk-").count(), FOLD_COUNT as usize);
+    }
+
+    /// 正文超过 [`MAX_TEXT_BYTES`] 时必须收敛，且**头尾都保留**、省略量显式可读。
+    /// 每次 debounce flush 都会重写整个 `text` 列，无界正文即 O(n²) 写放大
+    /// （performance-and-safety.md §P1）。
+    #[test]
+    fn long_text_folds_to_head_and_tail_within_cap() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+
+        // 每条 chunk 带序号，以便区分“保留了开头”与“保留了结尾”。
+        let mut fed = String::new();
+        let mut i = 0usize;
+        while fed.len() < MAX_TEXT_BYTES * 2 {
+            let chunk = format!("line-{i:08}-{}\n", "f".repeat(48));
+            acc.fold(&text_chunk(&sid, chunk.clone()));
+            fed.push_str(&chunk);
+            i += 1;
+        }
+
+        let text = acc.turn_snapshot().text;
+        assert!(text.len() <= MAX_TEXT_BYTES, "正文不得超字节上限，得到 {} 字节", text.len());
+
+        let (head, omitted, tail) = split_folded(&text).expect("超限后应出现可读的折叠标记");
+        assert!(omitted > 0, "折叠标记必须报出实际省略量");
+        assert!(head.starts_with("line-00000000-"), "头部必须是正文开头（约 {head:.20}）");
+        assert!(
+            tail.ends_with(&format!("line-{:08}-{}\n", i - 1, "f".repeat(48))),
+            "尾部必须是正文结尾"
+        );
+
+        // 守恒：保留的 + 声称省略的 == 全部输入。静默丢弃无人采用（D3）。
+        assert_eq!(
+            head.chars().count() + omitted + tail.chars().count(),
+            fed.chars().count(),
+            "保留量与省略量之和必须等于输入量（不得静默丢弃）"
+        );
+
+        // 内存侧也必须有界：仅限界渲染值会让累积缓冲与每次重写仍然无界。
+        let (head_bytes, tail_bytes, _) = text_buffers(&acc);
+        assert!(head_bytes <= TEXT_HEAD_BYTES, "头部缓冲超预算：{head_bytes}");
+        assert!(tail_bytes <= TEXT_TAIL_BYTES, "尾窗缓冲超预算：{tail_bytes}");
+    }
+
+    /// 未达上限时正文必须逐字节原样 —— 折叠是安全网，不得污染常规路径。
+    #[test]
+    fn text_under_cap_is_verbatim() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+        acc.fold(&text_chunk(&sid, "你好，"));
+        acc.fold(&text_chunk(&sid, "world \u{1F642}"));
+
+        let text = acc.turn_snapshot().text;
+        assert_eq!(text, "你好，world \u{1F642}");
+        assert!(!text.contains(TEXT_OMISSION_PREFIX), "未超限不得出现折叠标记");
+    }
+
+    /// 头部封口与尾窗修剪都会落在任意位置，必须按 UTF-8 字符边界切 —— 切在多字节
+    /// 字符中间在 Rust 里直接 panic（`String` 无法持有非法 UTF-8），在生产里就是折断
+    /// 整个 ACP 连接任务。单元长 16 字节且与各预算不整除，确保边界落在字符内部。
+    #[test]
+    fn folding_never_splits_multibyte_chars() {
+        const UNIT: &str = "中文测试\u{1F642}"; // 3*4 + 4 = 16 字节
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+        let fed = fold_until(&acc, &sid, UNIT, MAX_TEXT_BYTES * 2);
+
+        let text = acc.turn_snapshot().text;
+        assert!(text.len() <= MAX_TEXT_BYTES, "多字节正文仍须守住上限：{}", text.len());
+
+        let (head, omitted, tail) = split_folded(&text).expect("超限后应折叠");
+        let unit_chars: Vec<char> = UNIT.chars().collect();
+        for (label, part) in [("头部", head), ("尾部", tail)] {
+            assert!(
+                part.chars().all(|c| unit_chars.contains(&c)),
+                "{label}出现不属于输入字符集的字符（说明字符被切坏）"
+            );
+            assert!(!part.contains('\u{FFFD}'), "{label}不得出现替换字符");
+        }
+        assert_eq!(
+            head.chars().count() + omitted + tail.chars().count(),
+            fed.chars().count(),
+            "字符级守恒在多字节下同样成立"
+        );
+    }
+
+    /// 单个 chunk 本身就超过上限（agent 把整份文件塞进一个 AgentMessageChunk）时，不得先把
+    /// 它整段推进缓冲再修剪 —— 那会让内存峰值等于 chunk 大小，上限形同虚设。
+    #[test]
+    fn single_oversized_chunk_is_bounded_on_arrival() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+        let sid = SessionId::new("s1");
+        let huge = "x".repeat(MAX_TEXT_BYTES * 3);
+        acc.fold(&text_chunk(&sid, huge.clone()));
+
+        let (head_bytes, tail_bytes, _) = text_buffers(&acc);
+        assert!(head_bytes <= TEXT_HEAD_BYTES, "头部缓冲超预算：{head_bytes}");
+        assert!(tail_bytes <= TEXT_TAIL_BYTES, "尾窗缓冲超预算：{tail_bytes}");
+
+        let text = acc.turn_snapshot().text;
+        assert!(text.len() <= MAX_TEXT_BYTES, "超大单帧正文仍须守住上限：{}", text.len());
+        let (head, omitted, tail) = split_folded(&text).expect("超限后应折叠");
+        assert_eq!(head.chars().count() + omitted + tail.chars().count(), huge.chars().count());
+    }
+
+    /// 新 turn 必须重置折叠状态：否则上一个长 turn 的封口标志与省略计数会泄漏到下一
+    /// 个 turn，让一句短回答迷不丁地带上“已省略 N 字符”。
+    #[test]
+    fn begin_turn_resets_text_folding_state() {
+        const UNIT: &str = "旧 turn 的冗长正文 ";
+        let acc = TurnAccumulator::new();
+        let sid = SessionId::new("s1");
+        acc.begin_turn();
+        fold_until(&acc, &sid, UNIT, MAX_TEXT_BYTES + TEXT_TAIL_BYTES);
+        assert!(text_buffers(&acc).2 > 0, "前一个 turn 应已发生折叠");
+
+        acc.begin_turn();
+        acc.fold(&text_chunk(&sid, "新 turn"));
+        assert_eq!(text_buffers(&acc), ("新 turn".len(), 0, 0), "新 turn 应从空缓冲开始");
+        assert_eq!(acc.turn_snapshot().text, "新 turn");
+    }
+
+    /// 折叠标记必须装得进为它预留的预算，否则 head + marker + tail 会溢出总上限；
+    /// 预算里的 20 位数字余量由 const 断言保证，这里取最坏情况实测。
+    #[test]
+    fn omission_marker_fits_reserved_budget() {
+        let widest = format!("{TEXT_OMISSION_PREFIX}{}{TEXT_OMISSION_SUFFIX}", usize::MAX);
+        assert!(
+            widest.len() <= TEXT_MARKER_MAX_BYTES,
+            "标记最坏情况 {} 字节超出预算 {TEXT_MARKER_MAX_BYTES}",
+            widest.len()
+        );
     }
 
     /// 回归防护 2026-08-10：codebuddy 每个 tool_call_update 只带 1 字符增量，却重复携带
