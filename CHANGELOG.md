@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-13 11:30) `[frontend]` Agent 预设新增 CodeBuddy：`codebuddy --acp` 以 ACP（ndJsonStream）模式启动 CodeBuddy Code（`frontend/src/components/Settings/presets.ts`）
 - (2026-08-12 01:40) `[backend]` 自管 pty 会话引擎落地（Phase 2）：`runtime_kind='pty'` 会话由后端常驻持有——WS 断开不杀进程，重连补屏 + resize 重绘 nudge；子进程退出自动注销、下次 attach 重建；wezterm-term VT 模拟器提供干净屏幕捕获与 OSC 标题（agent 屏幕检测覆盖 pty 会话）；后端重启后按最后采样 cwd 重建会话并回放 ANSI 历史（落盘 0600，5s 去抖）。创建入口的前端分流为下一步（Phase 4），当前经 API 可用（`src/engine/pty/`、`migrations/20260812_add_last_cwd.sql`）
 
 ### Fixed
