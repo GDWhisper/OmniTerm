@@ -36,6 +36,19 @@ cp branch.config.example .env.local
 
 `branch.config.example` 缺失时直接创建 `.env.local`（参考其他 worktree 的 `.env.local` 和 `docs/workflows/branch-workflows.md` 表）。
 
+### 前端依赖安装：`pnpm` 必须带 `--ignore-workspace`
+
+```bash
+cd frontend && pnpm install --ignore-workspace
+```
+
+**不带这个参数会误操作你的 home workspace。** `~/` 下存在 `pnpm-workspace.yaml` + `package.json`（全局 CLI 工具的安装位置），pnpm 会从 `frontend/` 向上递归找到它并当作 workspace root；而本项目并不在其 `packages` 列表里，于是：本项目的依赖一个也不装，却会按 home 的 lockfile 重排 `~/node_modules`（实测输出过 `-69` 个包的移除）。
+
+另外两个已踩过的坑：
+
+- **`pnpm` 报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`**：切换安装模式时它要重建 `node_modules` 但无法交互确认。先 `mv node_modules node_modules.bak` 再装（比 `CI=true` 直接 rm 可逆）；**备份目录不在 `.gitignore` 里**，装完记得删，否则 `git add -A` 会把它整个提交进去。
+- **验证类型检查只能用 `pnpm exec tsc -b`**：根 `tsconfig.json` 是 references 空壳，裸 `tsc --noEmit` 不检查任何文件、总是假绿（同 `scripts/hooks/pre-commit:23-24`）。写验证命令时也别把它接管道，`$?` 拿到的是末端（如 `tail`）的退出码。
+
 ## Remote Repos
 
 - **私有仓**（`origin`）：存放所有分支（main/dev/preview/debug），完整开发历史
