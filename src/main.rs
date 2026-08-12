@@ -24,6 +24,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -125,6 +126,9 @@ struct StartArgs {
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    /// API keys for ACP agent models (SENSENOVA_API_KEY, STEPFUN_API_KEY, AMD_API_KEY).
+    /// Loaded from `~/.omniterm/api_keys.toml` at startup, injected into ACP agent subprocess env.
+    pub api_keys: HashMap<String, String>,
     /// Password-verification master switch (mirrors `settings.auth_enabled`).
     pub auth_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// ACP 静默待命回收阈值（秒），由 settings 表 `acp_idle_recycle_min` 注入，
@@ -255,6 +259,42 @@ fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
         }
         Err(e) => Err(e.into()),
     }
+}
+
+/// Resolve API keys for ACP agent models.
+/// Reads `~/.omniterm/api_keys.toml` (if exists) and returns a map of env-var-name → value.
+/// If the file doesn't exist, returns an empty map (no error — models without
+/// API key config simply won't have access to the corresponding provider).
+/// Keys can also be set via environment variables (backward-compatible with
+/// shell export / systemd Environment), taking precedence over the TOML file.
+/// Environment variable fallback allows existing dev.sh exports to continue working.
+fn resolve_api_keys() -> HashMap<String, String> {
+    let mut keys = HashMap::new();
+
+    // 1. Load from TOML config file
+    let path = omniterm_data_dir().join("api_keys.toml");
+    if let Ok(content) = std::fs::read_to_string(&path)
+        && let Ok(parsed) = content.parse::<toml::Table>()
+    {
+        for (k, v) in parsed {
+            if let Some(val) = v.as_str()
+                && !val.is_empty()
+            {
+                keys.insert(k, val.to_string());
+            }
+        }
+    }
+
+    // 2. Environment variables take precedence (allows dev.sh export / systemd Environment)
+    for var in ["SENSENOVA_API_KEY", "STEPFUN_API_KEY", "AMD_API_KEY"] {
+        if let Ok(val) = std::env::var(var)
+            && !val.is_empty()
+        {
+            keys.insert(var.to_string(), val);
+        }
+    }
+
+    keys
 }
 
 #[cfg(unix)]
@@ -636,6 +676,7 @@ fn main() -> anyhow::Result<()> {
             let state = AppState {
                 db,
                 jwt_secret,
+                api_keys: resolve_api_keys(),
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
                 acp_idle_recycle_secs,
                 login_guard: auth::LoginGuard::new(),

@@ -218,8 +218,11 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
     };
 
     let cwd = std::env::temp_dir();
-    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
-        .await
+    match tokio::time::timeout(
+        Duration::from_secs(15),
+        AcpClient::spawn_and_connect(agent, cwd, &state.api_keys),
+    )
+    .await
     {
         Ok(Ok(client)) => {
             client.disconnect().await;
@@ -249,8 +252,11 @@ async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
     };
 
     let cwd = std::env::temp_dir();
-    match tokio::time::timeout(Duration::from_secs(15), AcpClient::spawn_and_connect(agent, cwd))
-        .await
+    match tokio::time::timeout(
+        Duration::from_secs(15),
+        AcpClient::spawn_and_connect(agent, cwd, &std::collections::HashMap::new()),
+    )
+    .await
     {
         Ok(Ok(client)) => {
             client.disconnect().await;

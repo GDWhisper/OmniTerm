@@ -498,9 +498,10 @@ async fn restore_acp_session(
 
     let cwd = std::path::PathBuf::from(&ws_path);
     let agent_display_name = agent.display_name.clone();
-    let new_client = AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone())
-        .await
-        .map_err(|e| format!("failed to spawn agent: {}", e))?;
+    let new_client =
+        AcpClient::spawn_and_load(agent, cwd.clone(), acp_sid.clone(), &state.api_keys)
+            .await
+            .map_err(|e| format!("failed to spawn agent: {}", e))?;
     let new_client = Arc::new(new_client);
 
     if !new_client.supports_load_session() {
