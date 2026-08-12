@@ -47,18 +47,21 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.14] - 2026-08-13
 
 ### Added
 
-- (2026-08-13 11:30) `[frontend]` Agent 预设新增 CodeBuddy：`codebuddy --acp` 以 ACP（ndJsonStream）模式启动 CodeBuddy Code（`frontend/src/components/Settings/presets.ts`）
+- (2026-08-13 00:16) `[frontend]` Agent 预设新增 CodeBuddy：`codebuddy --acp` 以 ACP（ndJsonStream）模式启动 CodeBuddy Code（`frontend/src/components/Settings/presets.ts`）
+- (2026-08-12 23:52) `[backend]` ACP agent 的 API key 从 `~/.omniterm/api_keys.toml` 加载并注入 agent 子进程：此前只靠 dev.sh 里 export 环境变量透传，正式版（systemd / docker / `omniterm start`）不经过 dev.sh 而缺失。现新增 `resolve_api_keys()` 统一读取，环境变量同名 key 优先、`agent.env` 显式配置优先且不覆盖，dev 与正式版行为一致（`src/main.rs`、`src/acp/client.rs`）
 - (2026-08-12 01:40) `[backend]` 自管 pty 会话引擎落地（Phase 2）：`runtime_kind='pty'` 会话由后端常驻持有——WS 断开不杀进程，重连补屏 + resize 重绘 nudge；子进程退出自动注销、下次 attach 重建；wezterm-term VT 模拟器提供干净屏幕捕获与 OSC 标题（agent 屏幕检测覆盖 pty 会话）；后端重启后按最后采样 cwd 重建会话并回放 ANSI 历史（落盘 0600，5s 去抖）。创建入口的前端分流为下一步（Phase 4），当前经 API 可用（`src/engine/pty/`、`migrations/20260812_add_last_cwd.sql`）
 
 ### Fixed
 
+- (2026-08-12 15:35) `[frontend]` 密码验证开启改为在设置界面就地设置，不再立即踢回登录页：根因是 `/auth/check` 在开关关闭时不返回 `needs_setup`，前端误判为「已有密码」直接翻转开关，而鉴权关闭期间无有效会话 cookie，开启后下一个受保护请求 401 即被登出跳转。现点击开启时弹窗就地处理——未设过密码走「新密码 + 确认」提交后开启并触发重新登入，已设过密码走「当前密码」验证通过后开启且保持登录不跳转；`client.ts` 对 `/auth/login`、`/auth/setup`、`/auth/change-password` 的 401（密码错误属业务错误而非会话过期）不再误触发登出（`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/api/client.ts`、`src/api/auth.rs`）
 - (2026-08-12 18:30) `[frontend]` 修复文件拖拽悬浮预览不贴鼠标：预览元素此前在全局 `zoom`（`Layout.tsx` 根容器已按 `uiZoom` 缩放一次）内又重复套了 `zoom: uiZoom/100`，且 `translate` 直接使用视口物理坐标——外层 zoom 会把 translate 的 px 值再放大 z 倍（实测 z=1.25 时鼠标在 200px 处预览落到 265px），界面缩放 ≠ 100% 时悬浮文件名越拖离鼠标越远。现移除内层 zoom、translate 坐标除以 zoomFactor（与 `Layout.tsx` 的 `translateY(vvOffsetTop / zoom)` 同一补偿惯例）（`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-08-12 02:30) `[backend]` ACP 聊天正文 `text` 列收口为有界：此前它是**故意留的无界兜底**（帧窗口有帧数与字节双上限，正文却不设限），而每次防抖 flush 都重写整列，一个长 turn 就是 O(n²) 写放大——实测 dev 库某行达 9,150,950 字符，所在会话只有 19 条消息。现上限 1 MiB（当前正常最大 36,834 字符，留两个数量级余量），超限后保留头部 256 KiB 与尾部滑窗，中段替换为用户可读的 `…（已省略 N 字符）…` 标记，绝不静默丢弃：头尾都留是因为纯尾窗会让正文从句子中间开始，而 `text` 同时是 blocks 解码失败时的兜底渲染源。头部一旦封口即永久冻结（UTF-8 边界会让它停在预算之下几字节，续填会把新文本插到旧文本之前）；尾窗按 1/4 预算的块摊还修剪（修剪到恰好等于预算会让此后每个 chunk 都 memmove 整个尾窗，即要避免的 O(n²)）；单个 chunk 自身超预算时先裁再入缓冲，否则内存峰值等于 chunk 大小、上限形同虚设。切割一律走 `floor_char_boundary` / `ceil_char_boundary`——切在多字节字符中间会 panic 并折断整个 ACP 连接任务。附 6 条单测（含中文/emoji 边界样本与「保留量+省略量==输入量」守恒断言）与 3 条编译期不变式（`src/acp/turn_accumulator.rs`）
 - (2026-08-11 23:20) `[backend]` `[infra]` 修复正式版（npm / cargo / install.sh 各渠道）在某些终端里 `omniterm start` 必然报 `Address already in use (os error 98)`：后端以往把 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 这些**通用名**环境变量作为配置来源，而开发实例（dev.sh）会 export 它们，其派生的每个终端都继承——用户在这种终端里启动正式版会被劫持去绑开发实例已占用的端口（实测 `env -u BIND_ADDR -u BACKEND_PORT` 后立刻正常启动）。**BREAKING**：后端现在只读 `OMNITERM_*` 前缀的环境变量（`OMNITERM_HOST` / `OMNITERM_PORT` / `OMNITERM_DB` / `OMNITERM_JWT_SECRET` / `OMNITERM_AUTH_ENABLED`），旧名一律忽略并在启动时 warn 提示改名；`BIND_ADDR` 兜底整条移除，监听地址只由 `-H/--host` + `-p/--port` 决定。自建 Docker/compose 部署若设过 `DATABASE_URL` / `JWT_SECRET` / `BIND_ADDR`，须改用新名（否则回落默认库路径与随机密钥，需重新登录）（`src/main.rs`、`dev.sh`、`dev.ps1`、`Dockerfile`、`Dockerfile.release`、`docker-compose.yml`）
+- (2026-08-11 22:52) `[frontend]` 修复「新建项目」弹窗第二次打开起目录浏览区持续显示「空目录」：关闭/创建成功时把路径输入框重置为 `homeDir + '/'`，导致下次打开时 `projPath` 值未变化、驱动自动补全的 effect 不重新运行，`loadDirs` 不被调用，而打开时的 `reset()` 已把条目清空。现改为关闭时重置为 `''`，每次打开都会从空值变化到 `homeDir + '/'` 从而重新加载目录列表（`frontend/src/components/Sidebar/CreateProjectModal.tsx`）
 
 ## [0.2.13] - 2026-08-11
 
@@ -68,7 +71,6 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-08-11 22:52) `[frontend]` 修复「新建项目」弹窗第二次打开起目录浏览区持续显示「空目录」：关闭/创建成功时把路径输入框重置为 `homeDir + '/'`，导致下次打开时 `projPath` 值未变化、驱动自动补全的 effect 不重新运行，`loadDirs` 不被调用，而打开时的 `reset()` 已把条目清空。现改为关闭时重置为 `''`，每次打开都会从空值变化到 `homeDir + '/'` 从而重新加载目录列表（`frontend/src/components/Sidebar/CreateProjectModal.tsx`）
 - (2026-08-11 16:20) `[backend]` `[api]` `[frontend]` ACP 聊天记录体积从源头收敛：turn 正常结束时前端把 **cooked** blocks 回写数据库那一行，取代此前只在用户手动「恢复会话」时才发生的收敛。后端累积器落的是原始 ACP 帧，同一份内容与 cooked 差两个数量级（实测同库：cooked 行最大 114KB，未被覆盖的原始帧行达 9,150,950 字符——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个，每帧重复携带的 `rawInput` 副本只剩一份），未做过恢复的行以往会永久停在原始帧态，是存量巨行的唯一来源。WS `prompt_done` 帧新增 `row_id`（三个广播点均经新的轻量访问器 `turn_row_id()` 取值，不走会克隆全量 text + 序列化 128KB 帧窗的 `turn_snapshot()`），前端据此按行 id 精确回写并**只发本 turn 一条**——全量回写会随会话增长变成 O(m²) 写放大；同时修复纯工具调用 turn（`text` 为空但 blocks 最肥）以往被 sync 的空 text 守卫整体排除在外。帧窗口上限（`MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES`）保持不变——前端不在线时无人 cook，两者是优化与兜底、不可互相替代（`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/turn_accumulator.rs`、`src/acp/reaper.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`）
 - (2026-08-11 15:55) `[backend]` `[api]` 修复聊天历史回写互相污染：`POST /sessions/{id}/messages/sync` 以往用 `UPDATE ... WHERE session_id AND role AND text` 定位行，**无行限定**——text 相同的所有历史行被同一份 `blocks` 一次覆盖（dev 库实测：同一会话 14 行 `assistant`/“OK” 但 `count(DISTINCT blocks)` 只有 1，工具卡片/思考/计划全部串位）。现改为行 id 优先匹配：payload 新增可选 `id`，带 id 时只更新 `WHERE id=? AND session_id=?` 那一行的 `blocks`（未命中则跳过，不猜也不 INSERT 重复行），无 id 的 replay 重建消息退回文本匹配但**一条 payload 只消费一行**且同一次调用内不重复命中同一行；`text` 不再被前端回写覆盖（其权威在后端累积器）。前端 `ChatMessage` 新增 `dbId` 字段区分「真 DB 行 id」与「本地 `genId()`」，只有前者会作为 `id` 上报；附 7 条后端 + 2 条前端单测（`src/acp/chat_persistence.rs`、`src/api/sessions.rs`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-08-11 14:05) `[backend]` 修复 Windows 上 `omniterm update` 与 Web 端一键升级对 npm 渠道必然失败：报 `failed to run npm / Caused by: program not found`——`std::process::Command` 在 Windows 只按 PATH 补 `.exe`、不读 `PATHEXT`，而 npm 实际是 `npm.cmd`；前置存在性检查用的 `which` 遵循 PATHEXT 所以通过，友好提示分支反而被跳过。现统一经 `resolve_program()` 将命令 `which` 解析为绝对路径后再 spawn（`.cmd` 由 std 自动用 cmd.exe 包装，含 CVE-2024-24576 参数转义）。同时升级命令由 `npm update -g <pkg>` 改为 `npm install -g <pkg>@latest`：`update` 受已安装 semver range 约束（不跨 major），且对分发平台二进制的 optionalDependencies 重解析不可靠（`src/update.rs`、`src/api/system.rs`）
