@@ -8,6 +8,7 @@ mod fs;
 mod git;
 mod models;
 mod presets;
+mod proxy;
 
 mod update;
 mod utils;
@@ -138,6 +139,8 @@ pub struct AppState {
     /// 会话引擎注册表（D9）：持有复用器引擎 + agent 屏幕检测注册表。
     pub engines: engine::EngineRegistry,
     pub acp_supervisor: acp::AcpSupervisor,
+    /// 端口转发反向代理状态：reqwest 客户端单例 + 自身监听端口（防回环）。
+    pub proxy: proxy::ProxyState,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -683,6 +686,13 @@ fn main() -> anyhow::Result<()> {
 
             let pid_file = pid_path(&db_url);
 
+            // 端口转发反向代理客户端：连接超时 5s（连接拒绝/超时快速失败），
+            // 不设整体读超时——SSE/长连接/大文件下载需要长生命周期（D5）。
+            let proxy_client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .build()
+                .context("failed to build proxy HTTP client")?;
+
             let state = AppState {
                 db,
                 jwt_secret,
@@ -692,6 +702,10 @@ fn main() -> anyhow::Result<()> {
                 login_guard: auth::LoginGuard::new(),
                 engines,
                 acp_supervisor: acp::AcpSupervisor::default(),
+                proxy: proxy::ProxyState {
+                    client: proxy_client,
+                    self_port: args.port,
+                },
             };
 
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，

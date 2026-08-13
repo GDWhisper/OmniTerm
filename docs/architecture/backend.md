@@ -33,6 +33,9 @@ src/
 │   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
 ├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
+├── proxy/                # 端口转发反向代理 /proxy/{port}/{*path}（P1 HTTP 转发 + P2 WS relay）
+│   ├── mod.rs            # ProxyState（reqwest client + self_port）、routes、proxy_handler（WS/HTTP 分流）、端口白名单、header 重写纯函数 + 单测
+│   └── ws.rs             # WS 双向 relay：connect_async 上游 + 四任务双向 + mpsc(64) 有界队列
 ├── engine/               # 会话引擎抽象层（D9）：SessionEngine trait + EngineRegistry 按 runtime_kind 路由
 │   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
 │   ├── pty_io.rs         # [platform] PTY 写 + 进程清理（引擎公共件）：write_pty, kill_session_process, kill_process_escalating
@@ -143,9 +146,30 @@ GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub la
 POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400）
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
 POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
+ANY  /proxy/{port}/{*path}           # 端口转发反向代理（与 /api/v1 平级挂载，D1 禁止套进 /api/v1）；见「Port-forward proxy」小节
 ```
 
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
+
+## Port-forward proxy（`src/proxy/`）
+
+`/proxy/{port}/{*path}` 把浏览器请求转发到宿主机 `127.0.0.1:{port}`，让机器 A 的浏览器经跑在机器 B 上的 OmniTerm 访问 B 的 localhost 服务（如 dev server）。设计见 `docs/dev/plans/2026-08-13-port-forward-proxy.md`（D1-D6）。
+
+- **路由**：单一通配符 `/proxy/{*path}`（不拆 `{port}` + `{*rest}` 两条——axum 0.8 的 `{*rest}` 不匹配空剩余），handler 从通配符首个路径段解析端口，剩余路径取 `OriginalUri` 未解码原始路径（`strip_prefix("/proxy/{port}")`）。
+- **安全边界（D2）**：目标 IP 永远硬编码 `127.0.0.1`，绝不从 path/header/query 解析地址。端口白名单 `3000..=65535` − 黑名单常量表（3306/5432/6379/27017/11211 + Consul 8500-8503 + ES 9200-9300）− 自身监听端口（`args.port` 经 `AppState.proxy.self_port` 注入，防回环）。路由挂 `require_auth_mw`（auth 开启时）；转发前剥离 `omniterm_token` cookie。
+- **有界性（D5）**：请求体 `to_bytes` 上限 2MB（与 axum DefaultBodyLimit 一致）；响应 `Response::chunk()` + `unfold` 流式回写不 collect；WS 每方向 `mpsc(64)` 有界，满则拒新数据 + warn。
+- **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
+
+### 多实现差异（AGENTS §8）
+
+反向代理的「协议」= HTTP/WS，被无数 dev server 实现满足，不得以某一种（如 Vite）行为推断全部：
+
+| 维度 | 差异 | 兜底 |
+|---|---|---|
+| 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | `Location` 头重写 + 明确接受「绝对路径应用需配合 base path」的已知限制（D1 翻盘条件：用户反馈影响面大则升子域名方案） |
+| WS 子协议 | Vite HMR 用 `vite-hmr`；Socket.IO 自定义；graphql-ws 用 `graphql-transport-ws` | 透传 `Sec-WebSocket-Protocol`，不假设不硬编码 |
+| Origin 校验 | 部分 dev server（webpack-dev-server 等）严格校验 Origin；Vite 较宽松 | WS 握手统一重写 Origin 为 `http://127.0.0.1:{port}` 兜底 |
+| Cookie 域 | 目标服务可能 `Set-Cookie` 带 `Domain=localhost` 或绝对 `Path` | 响应侧统一重写（D6） |
 
 ## ACP Module (Phase 3)
 

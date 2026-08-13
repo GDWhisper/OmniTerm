@@ -27,7 +27,7 @@ src/
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx（列表渲染+状态提升，≤800 行）、ProjectCard.tsx（项目树渲染）、Create{Project,Session,Worktree}Modal.tsx、Rename/Delete{Confirm,Worktree}/ReleaseConfirm/RepairPath 对话框、ExternalSessionsSection.tsx（外部会话轮询+adopt）、DuplicateProjectsDialog.tsx、UpdateBadge.tsx、RowActionButtons.tsx（含 SidebarBottomButton）、sidebarModalStyles.ts、useAgentAttentionPolling.ts
@@ -217,3 +217,12 @@ and render rich cards instead of the current text-only fallback.
   **为什么按 `row_id` 而不是文本匹配**：后端一个 turn 一行，前端本 turn 可能不止一条消息；且文本相等这个不变式易漂移（丢帧、cancel 补发帧、拆分粒度），对不上就会 INSERT 重复行。`ChatMessage.dbId` 承载「已知的真 DB 行 id」（hydrate 行 / `turn_snapshot` 的 `row_id`），本地 `genId()` 的消息不填——谎报会静默命中零行。
   **纯工具调用 turn 的 `text` 为空**（后端只累积 `AgentMessageChunk`），却恰好是 blocks 最肥的一类，所以后端的空 text 跳过守卫只作用于文本匹配路径。
 
+
+## localhost 链接重写（端口转发代理 P3）
+
+机器 A 的浏览器经 OmniTerm 访问宿主机 B 的 localhost 服务时，直接点 `http://localhost:{port}` 会打到浏览器 A 自己的回环地址。前端把它重写为 `/proxy/{port}/`（同源相对路径，计划 D4），由后端转发到 `127.0.0.1:{port}`。
+
+- **`utils/proxyUrl.ts::rewriteLocalUrl(raw)`**：匹配 `http(s)://(localhost|127.0.0.1|0.0.0.0):{port}` 或裸 `hostname:port`，返回 `/proxy/{port}/...` 相对 URL；非本机 URL 返回 `null`。端口范围与后端白名单对齐（3000..=65535），黑名单/自身端口由后端 403 兜底。
+- **Chat 接入点**（`components/Chat/Markdown.tsx`）：react-markdown 的 `a` 组件渲染时判断 href 是否本机链接——是则保留原始 href（hover/复制仍是 localhost），`onClick` 里 `e.preventDefault()` + `window.open(rewritten, '_blank', 'noopener')`。
+- **终端接入点**（`hooks/useTerminal.ts`）：`WebLinksAddon` 构造传 `handler` 回调接管链接点击，`rewriteLocalUrl` 命中则重写、否则默认 `window.open(uri)`。**已知限制**：addon 0.12 内部用 `new URL()` 校验，无法识别无 scheme 的裸 `localhost:3000`（只识别 `http(s)://` 开头），见计划风险表降级。
+- **dev 代理**（`vite.config.ts`）：`/proxy` 前缀透传到后端，`ws: true` 支撑 WS relay（P2）。

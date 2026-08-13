@@ -9,6 +9,7 @@ import { copyText } from '../utils/clipboard'
 import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
+import { rewriteLocalUrl } from '../utils/proxyUrl'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -456,7 +457,14 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     })
 
     const fit = new FitAddon()
-    const webLinks = new WebLinksAddon()
+    // WebLinksAddon handler 接管链接点击：本机 localhost 链接重写为
+    // /proxy/{port}/（端口转发代理），其余走默认新标签打开。
+    // 已知限制：addon 内部用 `new URL()` 校验，无法识别无 scheme 的裸
+    // `localhost:3000`（只识别 http(s):// 开头的链接），见计划风险表降级。
+    const webLinks = new WebLinksAddon((_event, uri) => {
+      const rewritten = rewriteLocalUrl(uri)
+      window.open(rewritten ?? uri, '_blank', 'noopener')
+    })
 
     term.loadAddon(fit)
     term.loadAddon(webLinks)

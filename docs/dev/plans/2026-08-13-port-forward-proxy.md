@@ -1,8 +1,14 @@
 # 端口转发反向代理：`/proxy/{port}/{*path}`
 
-> 状态：设计稿（2026-08-13）
+> 状态：**P1-P3 已实施（2026-08-14）**；P4 安全加固（settings 表白名单 + UI 开关 + 按 session 授权 + 审计日志）留待后续，产出模糊且验收标准未覆盖，实施边界需另行确认
 > 触发条件：修改 `src/proxy/`、`src/api/mod.rs`（路由挂载）、`src/main.rs`（`AppState`）、`frontend/vite.config.ts`（代理）、`frontend/src/utils/proxyUrl.ts`、终端/聊天链接重写逻辑中任一项前必读
 > 关联：`docs/architecture/backend.md`、`docs/architecture/frontend.md`、`docs/reference/auth-not-enforced.md`（鉴权挂载）、`docs/dev/performance-and-safety.md` §P1/§P4（有界缓冲 / 外部输入速率）、`docs/reference/references.md`（code-server `proxy.ts` / jupyter-server-proxy 参考实现）
+
+> **勘误（2026-08-14 实施偏差）**：
+> 1. **路由形态**：D1 的 `/proxy/{port}` + `/proxy/{port}/{*rest}` 两条路由改为单一 `/proxy/{*path}` 通配符——axum 0.8 的 `{*rest}` 不匹配空剩余（`/proxy/3444/` 落空），单通配符统一解析端口 + 剩余路径更稳。
+> 2. **WS 分流**：axum 0.8 的 `WebSocketUpgrade` 只实现 `FromRequestParts`、未实现 `OptionalFromRequestParts`，无法直接 `Option<WebSocketUpgrade>`——新增自定义 extractor `OptionalWebSocketUpgrade` 把 reject 折叠为 `None`。
+> 3. **有界队列超限策略**：D5 的「满则丢最旧」改为「满则拒新数据 + warn」——丢最旧需独占 `Receiver` 做 `try_recv`，与写侧 `recv().await` 借用冲突；且拒新数据保留帧序（两者都是 §P1 允许的超限策略）。
+> 4. **响应流式**：不用 reqwest `stream` feature（其引入 wasm-streams 依赖且当前环境联网受限），改用 `Response::chunk()` + `futures_util::unfold` 等价实现。
 
 ---
 

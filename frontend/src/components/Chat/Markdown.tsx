@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { READER_FONT } from '../../utils/fonts'
+import { rewriteLocalUrl } from '../../utils/proxyUrl'
 
 /**
  * Markdown 渲染。`streaming=true` 时文本仍在增长且常处于不完整语法状态
@@ -70,6 +71,23 @@ export const Markdown = memo(function Markdown({ text, streaming }: { text: stri
             return <>{children}</>
           },
           a({ href, children }) {
+            // 本机 localhost 链接 → 走端口转发代理（新标签，同源 cookie 自动带鉴权）。
+            // 保留原始 href（hover/复制仍是 localhost），点击时重写为 /proxy/{port}/。
+            if (typeof href === 'string' && rewriteLocalUrl(href)) {
+              return (
+                <a
+                  href={href}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    const rewritten = rewriteLocalUrl(href)
+                    if (rewritten) window.open(rewritten, '_blank', 'noopener')
+                  }}
+                  style={{ color: 'var(--accent)' }}
+                >
+                  {children}
+                </a>
+              )
+            }
             return (
               <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>
                 {children}

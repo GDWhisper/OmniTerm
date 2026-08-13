@@ -8,6 +8,7 @@ use crate::AppState;
 use crate::acp::AcpSupervisor;
 use crate::auth::LoginGuard;
 use crate::engine::EngineRegistry;
+use crate::proxy::ProxyState;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,6 +30,7 @@ pub async fn test_state() -> AppState {
         login_guard: LoginGuard::new(),
         engines: EngineRegistry::new(db.clone()),
         acp_supervisor: AcpSupervisor::default(),
+        proxy: ProxyState { client: reqwest::Client::new(), self_port: 9777 },
         db,
     }
 }

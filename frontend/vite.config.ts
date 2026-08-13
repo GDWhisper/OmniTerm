@@ -35,6 +35,12 @@ export default defineConfig({
         changeOrigin: true,
         ws: true,
       },
+      // 端口转发反向代理（P2/P3）：/proxy 前缀透传到后端；ws:true 支撑 WS relay。
+      '/proxy': {
+        target: `http://localhost:${backendPort}`,
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 })
