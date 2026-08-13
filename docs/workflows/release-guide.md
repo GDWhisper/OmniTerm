@@ -132,6 +132,19 @@ cargo check
 
 **编译通过不等于发布就绪。** 逐项确认：
 
+#### 渠道可发布性预检（打 tag / 建 Release 前必须通过）
+
+**先跑预检脚本**，一次性验证 crates.io / npm 版本号可用性与 cargo 依赖可发布性，**避免 GitHub Release 已建、CI 跑完才发现渠道发不了**（v0.2.14 实测：npm 5 包版本号在 08-12 中止时已发布又删除、immutable 无法重发，tag/Release 建完 CI 跑到 npm-publish 才暴露）：
+
+```bash
+# 在 main worktree 执行
+./scripts/preflight-release.sh 0.2.15
+```
+
+检查项：版本号格式与三处一致（Cargo.toml / frontend/package.json / npm-package/package.json）、crates.io 未发布、npm 5 包未发布且未被烧、无 git/path 依赖、Cargo.toml 元数据完整、migrations 全 LF。**任一 ❌ → 先修复再重跑，通过后才允许打 tag**。
+
+> 版本号建议在 bump（Step 1）后立即跑一次预检，确认本次版本号四个渠道都发得出去，再继续 sync。
+
 #### 验证完整性
 - [ ] **目标平台编译** — 不只是本地平台，CI 会构建的所有平台都要验证（Linux/macOS/Windows）
 - [ ] **测试通过** — `cargo test` + `pnpm test`（CI 会跑测试，失败会阻塞发布）
