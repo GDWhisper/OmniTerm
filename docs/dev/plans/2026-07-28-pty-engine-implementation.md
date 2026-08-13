@@ -95,6 +95,11 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **v3 修订（2026-08-09）**：`wezterm-term` **未发布到 crates.io**（crates.io API / lib.rs 均 404，系 wezterm 工作区内部 crate），只能以 **git 依赖**引入（pin wez/wezterm 仓库 `term/` 子目录，锁 commit hash）。License 为 MIT，与本项目兼容。Phase 2 spike 第一项因此改为"**git dep 可拉取 + 编译通过**"，再验 feed + capture + 补屏。
 - **否决项**：libghostty-vt（Zig 构建链）；alacritty_terminal（API 摩擦）；vt100（覆盖弱）。
 - **翻盘条件**：git dep 拉取/编译不可接受、依赖树过重 → 降级 vt100（registry 备选，接受 osc_title 弱化）或 vte 自建。
+- **v4 勘误（2026-08-13）**：git 依赖阻塞 **crates.io 发布**（此前 v3 只记录「git dep 可拉取」，未评估对发布流程的影响）。
+  - **事实**：`cargo package` / `cargo publish` 报 `dependency 'wezterm-term' does not specify a version`——crates.io 打包要求所有依赖有 version 且能解析到 registry；git 依赖即使补 `version` 也会在用户 `cargo install` 时解析失败。`wezterm-term` 及其依赖 `wezterm-cell` 均未发布 crates.io（API 404），兄弟 crate（termwiz/vtparse/wezterm-bidi/wezterm-dynamic）已发布但版本与锁定的 git tag 20240203 不同。
+  - **影响**：crates.io 渠道（`cargo install omniterm`）被阻塞；GitHub Release / npm / Docker 渠道不受影响。2026-08-13 发布 v0.2.14 时因此在 CI 全绿后中止，撤回 tag 与已发产物。
+  - **替代调研**（2026-08-13 实测）：`vt100` 0.16.2（MIT）、`vte` 0.15（Alacritty 团队，Apache-2.0/MIT）在 crates.io 可用。`vt.rs`（183 行）使用面小：调用点仅 `mod.rs` 4 处（feed/title/resize/capture_visible），`scrollback.rs` 独立实现不依赖模拟器。
+  - **倾向方案（待定）**：`vt100` 为主 + `vte` 补 OSC 0/2 标题解析（`title()` 是 watch_targets 证据源，不可降级）；需重验 `capture_visible` 语义并重跑 `vt.rs` 5 条单测 + pty 会话验收。若 crates.io 渠道可长期暂停，也可维持 wezterm-term 现状。
 
 ### D9（v2 重写）：引入 `SessionEngine` 抽象，tmux 为冻结后端
 - **决策**：定义 `SessionEngine` trait（方向规划 D3 提为 P0），能力面 = §1.3 调用方实际所需：`create / kill / exists / list / write / resize / subscribe_output / capture_screen / pane_title / current_cwd / is_active / agent_snapshot`。两个实现：
