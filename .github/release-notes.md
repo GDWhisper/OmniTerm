@@ -4,6 +4,7 @@
 
 ## 新功能
 
+- ACP 聊天气泡动作体系：消息支持复制正文、引用到输入框、编辑重发、重新生成四个动作（桌面 hover 动作条 + 移动端长按菜单），新增块级复制与「复制为 Markdown」
 - 自管 pty 会话引擎（Phase 2）落地：WS 断开不杀进程、重连自动补屏、后端重启后按最后 cwd 重建会话并回放历史
 - Agent 预设新增 CodeBuddy：`codebuddy --acp` 一键以 ACP 模式启动 CodeBuddy Code
 - ACP agent 的 API key 改为从 `~/.omniterm/api_keys.toml` 统一读取，正式版（systemd / docker）不再依赖 shell 环境透传
@@ -15,6 +16,10 @@
 - 修复文件拖拽悬浮预览不贴鼠标（界面缩放 ≠ 100% 时越拖越远）
 - 修复「新建项目」弹窗第二次打开起目录浏览区持续显示空目录
 - ACP 聊天正文 `text` 列收口为有界（1 MiB），超大 turn 不再 O(n²) 写放大
+
+## 工程改进
+
+- pty 会话 VT 模拟器改用 crates.io registry 依赖 `alacritty_terminal`，恢复 crates.io 发布渠道（此前 `wezterm-term` git 依赖导致发布中止）
 
 ## 安装与升级
 
