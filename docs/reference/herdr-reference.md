@@ -118,7 +118,7 @@ OmniTerm 用 tmux 做 server 层 + xterm.js 做渲染，架构层不需要照搬
 herdr 证明该路线可行：**portable-pty 只当 openpty+spawn 用（裸 fd 自管 I/O）、服务端 VT 模拟器做唯一真相源（capture / 补屏 / 恢复全部由它出）、ANSI dump 落盘重放恢复、hook 权威 + 屏幕检测兜底**。
 
 - **spawn 模式**（`src/pty/backend/unix.rs:12-42`）：`openpty` → dup 裸 fd（CLOEXEC）→ `spawn_command` → **立即 `drop(PtyPair)`**。从不用 portable-pty 的 reader/writer——`UnixMasterWriter::Drop` 会向 pty 注入 `\n + VEOF`（vendored `unix.rs:388-404`）。dup+drop 根除此坑（比 OmniTerm 现有 `pty_io.rs` 只绕写侧更彻底），配 `/proc/self/fd` 计数回归测试（backend/unix.rs:72-93）。
-- **无原始字节 broadcast**：读循环把字节喂给唯一 VT 模拟器（herdr 用 libghostty-vt，OmniTerm 换 wezterm-term 等价）；重连补屏 = 从模拟器重渲染整帧；重启恢复 = 把落盘 ANSI seed 进新模拟器（`pane/terminal.rs:1282-1295`）。模拟器要写回 pty 的应答（DSR/DA）由 I/O 层闭环处理（terminal.rs:1059-1207）。
+- **无原始字节 broadcast**：读循环把字节喂给唯一 VT 模拟器（herdr 用 libghostty-vt，OmniTerm 换 alacritty_terminal 等价，D8 v5——原 wezterm-term 因 git 依赖阻塞 crates.io 发布弃用）；重连补屏 = 从模拟器重渲染整帧；重启恢复 = 把落盘 ANSI seed 进新模拟器（`pane/terminal.rs:1282-1295`）。模拟器要写回 pty 的应答（DSR/DA）herdr 由 I/O 层无条件闭环（terminal.rs:1059-1207）；OmniTerm 改为读循环 drain 后**按 attach 状态门控**回写——有客户端时由浏览器 xterm.js 应答，避免双应答（计划 D8 v5）。
 - **hook 信道**（Unix socket newline-JSON → OmniTerm 映射为 HTTP）：spawn 时 env 注入（`HERDR_SOCKET_PATH`/`PANE_ID` → `OMNITERM_HOOK_URL`/`SESSION_ID`）；按 source 记 seq 幂等去重（`terminal/state.rs:18-25`）；hook 脚本 fail-silent + 0.5s 超时，绝不阻塞 agent。
 - **冷重启恢复**（`src/persist/`）：结构快照与 ANSI 历史**分文件**（`session.json` / `session-history.json`，防终端密钥混入结构文件）；tmp+rename 原子写（io.rs:44-61）；5s 去抖后台线程；版本号 + 拒载新版（io.rs:128-141）。
 
@@ -140,4 +140,4 @@ herdr 证明该路线可行：**portable-pty 只当 openpty+spawn 用（裸 fd �
 
 ### 不适用项
 
-libghostty-vt FFI（Zig 构建链，用 wezterm-term 替代）；SCM_RIGHTS 活 fd 热切换 + actor quiesce 协议（为单二进制自更新设计，OmniTerm 走落盘恢复）；ratatui 帧 diff 二进制协议 wire.rs（前端是 xterm.js，WS 推 ANSI）；单 headless server + autodetect 拉起（Axum 本身常驻）；workspaces/tabs/BSP 布局树（OmniTerm 分屏为前端概念，每 pane = 独立会话）；thread-per-connection API server（tokio 下用异步任务）。
+libghostty-vt FFI（Zig 构建链，用 alacritty_terminal 替代）；SCM_RIGHTS 活 fd 热切换 + actor quiesce 协议（为单二进制自更新设计，OmniTerm 走落盘恢复）；ratatui 帧 diff 二进制协议 wire.rs（前端是 xterm.js，WS 推 ANSI）；单 headless server + autodetect 拉起（Axum 本身常驻）；workspaces/tabs/BSP 布局树（OmniTerm 分屏为前端概念，每 pane = 独立会话）；thread-per-connection API server（tokio 下用异步任务）。

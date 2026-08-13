@@ -3,8 +3,9 @@
 //! 生命周期语义与复用器引擎对齐（计划 §1.2 "detach 不杀进程"）：
 //! - 会话进程由引擎常驻持有（会话 map），**WS 断开只解绑订阅、不杀进程**；
 //! - attach = 订阅输出 + 重放补屏环窗口（原始 ANSI 字节回放）；重连另有
-//!   resize nudge 重绘；VT grid（wezterm-term）承担 capture/title/resize
-//!   与切片 C 的 ANSI seed 回放；
+//!   resize nudge 重绘；VT grid（alacritty_terminal，D8 v5）承担
+//!   capture/title/resize 与切片 C 的 ANSI seed 回放；模拟器应答
+//!   （DSR/DA 等）由读循环按 attach 状态门控回写（`should_server_respond`）；
 //! - 子进程退出（读循环 EOF / child.wait）时自动从 map 注销（幂等、
 //!   Arc 指针比对防止误删同名重建会话），下次 attach 自动重建（D5 重建
 //!   语义的过渡形态）。
@@ -255,7 +256,9 @@ impl PtyEngine {
         // PtySession::child_pid；integration-checklist §A.1，回归测试见
         // tests::spawn_cwd_matches_requested）
         let mut reader = session.try_clone_reader().map_err(|e| anyhow!("{e}"))?;
-        let vt = VtState::new(size.rows, size.cols, Arc::clone(&session));
+        // 应答回写不在模拟器内部闭环：读循环 feed 后 drain 应答并按 attach
+        // 状态门控写回（D8 v5 双应答修复，见 should_server_respond）
+        let vt = VtState::new(size.rows, size.cols);
 
         let (tx, _rx) = broadcast::channel::<Vec<u8>>(OUTPUT_CHANNEL_FRAMES);
         let state = Arc::new(SessionState {
@@ -278,6 +281,9 @@ impl PtyEngine {
         {
             state.out.lock().unwrap().ring.push(&seed);
             state.vt.lock().unwrap().feed(&seed);
+            // 历史里的查询（DSR 等）产生的应答不回写新 pty：重建即有客户端
+            // 即将 attach，由浏览器应答（D8 v5 应答归属）
+            state.vt.lock().unwrap().take_responses();
             debug!("pty session rebuilt with {} bytes of history: {key}", seed.len());
         }
 
@@ -298,7 +304,17 @@ impl PtyEngine {
                             g.ring.push(&chunk);
                             let _ = g.tx.send(chunk.clone()); // 无接收者时 send 报错即丢弃
                         }
-                        reader_state.vt.lock().unwrap().feed(&chunk);
+                        let responses = {
+                            let mut vt = reader_state.vt.lock().unwrap();
+                            vt.feed(&chunk);
+                            vt.take_responses()
+                        };
+                        if !responses.is_empty()
+                            && should_server_respond(&reader_state)
+                            && let Err(e) = reader_state.session.write(&responses)
+                        {
+                            warn!("failed to write VT response to pty ({reader_key}): {e}");
+                        }
                         *reader_state.last_activity.lock().unwrap() = Instant::now();
                         reader_state.output_seq.fetch_add(1, Ordering::Relaxed);
                     }
@@ -324,6 +340,14 @@ impl PtyEngine {
 
         Ok(state)
     }
+}
+
+/// 应答门控（D8 v5 应答归属）：DSR/DA 等查询有两个可能应答主体——浏览器
+/// xterm.js（onData 回送）与服务端 VT。有客户端订阅时让浏览器应答，
+/// 服务端保持沉默；detach 期间才由服务端应答，保持应答闭环。
+/// 复用 `receiver_count` 作 attached 判据（`list_sessions` 同款），不新增实体。
+fn should_server_respond(state: &SessionState) -> bool {
+    state.out.lock().unwrap().tx.receiver_count() == 0
 }
 
 /// 幂等注销：仅当 map 中该 key 仍是同一个 Arc 时移除
@@ -486,6 +510,21 @@ mod tests {
             }
         }
         acc
+    }
+
+    #[tokio::test]
+    async fn dsr_response_gated_by_attach_state() {
+        // 应答归属（D8 v5）：attach 时浏览器 xterm.js 应答、服务端沉默；
+        // detach 时服务端应答保持闭环。detach 期 DSR 实测走人工回归
+        // （pty 行纪律回显会吞转义字节，补屏环观察不到 CPR 应答，不做 e2e）
+        let engine = engine();
+        let tmp = std::env::temp_dir();
+        let attach = engine.attach("dsr-gate", tmp.to_str().unwrap(), DEFAULT_SIZE).unwrap();
+        let state = engine.get("dsr-gate").unwrap();
+        assert!(!should_server_respond(&state), "attached: server must stay silent");
+        drop(attach);
+        assert!(should_server_respond(&state), "detached: server must respond");
+        engine.kill_session("dsr-gate").await.unwrap();
     }
 
     #[cfg(target_os = "linux")]

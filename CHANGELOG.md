@@ -55,6 +55,10 @@ Prefix each entry with the area it affects:
 - (2026-08-12 23:52) `[backend]` ACP agent 的 API key 从 `~/.omniterm/api_keys.toml` 加载并注入 agent 子进程：此前只靠 dev.sh 里 export 环境变量透传，正式版（systemd / docker / `omniterm start`）不经过 dev.sh 而缺失。现新增 `resolve_api_keys()` 统一读取，环境变量同名 key 优先、`agent.env` 显式配置优先且不覆盖，dev 与正式版行为一致（`src/main.rs`、`src/acp/client.rs`）
 - (2026-08-12 01:40) `[backend]` 自管 pty 会话引擎落地（Phase 2）：`runtime_kind='pty'` 会话由后端常驻持有——WS 断开不杀进程，重连补屏 + resize 重绘 nudge；子进程退出自动注销、下次 attach 重建；wezterm-term VT 模拟器提供干净屏幕捕获与 OSC 标题（agent 屏幕检测覆盖 pty 会话）；后端重启后按最后采样 cwd 重建会话并回放 ANSI 历史（落盘 0600，5s 去抖）。创建入口的前端分流为下一步（Phase 4），当前经 API 可用（`src/engine/pty/`、`migrations/20260812_add_last_cwd.sql`）
 
+### Changed
+
+- (2026-08-13 23:00) `[backend]` pty 会话 VT 模拟器改用 crates.io registry 依赖 `alacritty_terminal` 0.26，恢复 crates.io 发布渠道：原 `wezterm-term` 为 git 依赖，`cargo package`/`cargo publish` 要求全部依赖可解析到 registry，发布 0.2.14 时因此中止。模拟器对外四件套（feed/屏幕捕获/标题/resize）语义不变；顺带修复双应答缺陷——前端 xterm.js 会把自己对 DA/DSR 的应答经 onData 回送后端、服务端 VT 此前也应答一次，现服务端应答按 attach 状态门控（有客户端订阅时浏览器应答、detach 期间服务端应答保持闭环），应答缓冲有界（≤64 条且 ≤8KB）（`src/engine/pty/vt.rs`、`src/engine/pty/mod.rs`、`Cargo.toml`）
+
 ### Fixed
 
 - (2026-08-12 15:35) `[frontend]` 密码验证开启改为在设置界面就地设置，不再立即踢回登录页：根因是 `/auth/check` 在开关关闭时不返回 `needs_setup`，前端误判为「已有密码」直接翻转开关，而鉴权关闭期间无有效会话 cookie，开启后下一个受保护请求 401 即被登出跳转。现点击开启时弹窗就地处理——未设过密码走「新密码 + 确认」提交后开启并触发重新登入，已设过密码走「当前密码」验证通过后开启且保持登录不跳转；`client.ts` 对 `/auth/login`、`/auth/setup`、`/auth/change-password` 的 401（密码错误属业务错误而非会话过期）不再误触发登出（`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/api/client.ts`、`src/api/auth.rs`）

@@ -37,11 +37,11 @@ src/
 │   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
 │   ├── pty_io.rs         # [platform] PTY 写 + 进程清理（引擎公共件）：write_pty, kill_session_process, kill_process_escalating
 │   ├── tmux/             # 冻结引擎边界（只修致命 bug 不加功能）：tmux 命令门面 / control mode / hook 注入 / pane 枚举 / attach WS
-│   └── pty/              # 自管 pty 引擎（Phase 2）：常驻会话 map + 补屏环 + wezterm-term VT grid
+│   └── pty/              # 自管 pty 引擎（Phase 2）：常驻会话 map + 补屏环 + alacritty_terminal VT grid
 │       ├── mod.rs        # PtyEngine（SessionEngine 实现）：spawn/读循环/广播订阅/去抖落盘/cwd 采样回写后台任务
 │       ├── session.rs    # PtySession：openpty + spawn + child 收割句柄
 │       ├── ring.rs       # ByteRing：256KB 字节环形缓冲（重连补屏窗口，P1 有界）
-│       ├── vt.rs         # VtState：wezterm-term Terminal 封装（feed/capture_visible/title/resize，DSR 应答回写闭环）
+│       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/title/resize；应答经 take_responses 排空，由读循环按 attach 门控回写）
 │       ├── scrollback.rs # ANSI 历史落盘（D5：0600/tmp+rename/UTF-8 截断/路径逃逸防护）
 │       ├── cwd.rs        # [platform] 前台进程 cwd 采样（/proc）
 │       └── terminal_ws.rs# pty WS attach：补屏回放 + resize nudge + detach 语义
@@ -78,9 +78,19 @@ attach = 补屏环快照回放（256KB 有界，原始 ANSI 字节）+ broadcast
 （rows-1 → 30ms → rows）强制 TUI 重绘。恢复链路（D5）：5s 去抖落盘
 ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
-并 seed 历史进补屏环与 VT grid（wezterm-term）。显式 kill 删历史文件。
+并 seed 历史进补屏环与 VT grid（alacritty_terminal）。显式 kill 删历史文件。
 
-> **VT 模拟器选型待迁移（2026-08-13）**：现用 `wezterm-term` 为 **git 依赖**，使 `cargo package` 失败、阻塞 crates.io 发布。已定案换为 registry 依赖 `alacritty_terminal` 0.26（含应答门控：仅在无客户端订阅时由服务端应答 DSR/DA），决策与实测证据见 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` D8 v5 / Phase 2.5——**代码尚未实施，本文描述仍为现状**。
+> **VT 模拟器 = `alacritty_terminal` 0.26（registry 依赖，计划 D8 v5 / Phase 2.5）**：
+> 原 `wezterm-term` 为 git 依赖，使 `cargo package` 失败、阻塞 crates.io 发布
+> （0.2.14 中止事故），已换 registry 依赖。对外四件套 feed/capture_visible/
+> title/resize 语义不变。**应答归属**：pty 会话的 DSR/DA/颜色查询有两个可能
+> 应答主体——浏览器 xterm.js（onData 回送）与服务端 VT；读循环 feed 后 drain
+> 应答并门控：**有客户端订阅时服务端沉默（浏览器应答），detach 期间服务端
+> 应答**（`should_server_respond`，以 `receiver_count()==0` 判据），杜绝双应答。
+> 应答缓冲有界（≤64 条且 ≤8KB，超限丢旧 + warn）。**capture 细微差异**：
+> 进入 alt-screen 时保留当前光标行（`\x1b[?1049h` 后 capture 首行可能为空，
+> wezterm-term/vt100 归位首行）——xterm 语义上更正确，对整屏文本匹配的
+> agent 检测无影响。OSC 52 剪贴板在服务端显式关闭（归前端 xterm.js）。
 
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 
@@ -90,7 +100,8 @@ ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 | is_active | control mode「最近 2s 有输出」 | 读循环时间戳 2s 窗口 |
 | cwd 来源 | tmux `pane_current_path` | `/proc` 前台进程采样（Windows 回退 last_cwd） |
 | agent 信道 | `@omniterm_agent` option 轮询（1s） | 屏幕检测（Phase 3 加 HTTP hook 推送） |
-| capture | tmux `capture-pane`（干净文本） | wezterm-term VT grid 渲染（干净文本） |
+| capture | tmux `capture-pane`（干净文本） | alacritty_terminal VT grid 渲染（干净文本） |
+| VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
 | 补屏 | tmux `new-session -A` 原生 | 补屏环 ANSI 回放 + resize nudge |
 

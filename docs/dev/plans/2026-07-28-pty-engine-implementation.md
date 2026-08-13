@@ -12,7 +12,7 @@
 
 ## 0. 新会话上手指引
 
-- **当前状态（2026-08-13 更新）**：Phase 2 已完成，但 **Phase 2.5（VT 模拟器换 registry 依赖）为当前第一优先**——`wezterm-term` git 依赖使 `cargo package` 失败、crates.io 渠道中断（0.2.14 发布已中止并撤回 tag）。决策见 D8 v5，文件级清单见 §3 Phase 2.5；完成后再进 Phase 3（pty hook 信道）。
+- **当前状态（2026-08-13 更新）**：**Phase 2.5（VT 模拟器换 registry 依赖）已完成**——`wezterm-term` git 依赖已换为 `alacritty_terminal` 0.26（crates.io），`cargo package` 通过、crates.io 渠道恢复；顺带修双应答（服务端应答门控在 detach 期）。完成记录与执行偏差见 §3 Phase 2.5 节尾。**下一步 = Phase 3（pty hook 信道）**。
 - **Phase 2 完成情况（2026-08-12）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。~~下一步 = **Phase 3（pty hook 信道）**~~（v5：先做 Phase 2.5）。Phase 2 完成记录见 §3 Phase 2 节尾。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
 - **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
@@ -180,14 +180,15 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - **切片 C**：`scrollback.rs`（分文件/0600/tmp+rename/UTF-8 截断）+ 5s 去抖 flush（快照对象为 256KB 有界环，避 P2 O(n²)）+ 30s cwd 采样回写 `last_cwd`（migration 仅此一列）+ 重建 ANSI seed。端到端验收：真实重启后端 → 会话重建于最后 cwd、重连补屏见重启前输出。显式 kill 删除历史文件（无需重建）。
   - §B.2 穷举：`runtime_kind_matrix` 6/6 通过（含 pty files/删除 case），无 `?`。
 
-### Phase 2.5（当前第一优先，代码未开工）：VT 模拟器换 registry 依赖——解锁 crates.io（D8 v5）
-> 触发：2026-08-13 发布 0.2.14 时 `cargo package` 报「dependency 'wezterm-term' does not specify a version」而中止（tag 已撤回）。本轮（2026-08-13）仅完成**调研 + 决策 + 文档**，下列代码改动尚未实施。
+### Phase 2.5（已完成 2026-08-13）：VT 模拟器换 registry 依赖——解锁 crates.io（D8 v5）
+> 触发：2026-08-13 发布 0.2.14 时 `cargo package` 报「dependency 'wezterm-term' does not specify a version」而中止（tag 已撤回）。
 - **`Cargo.toml`**：删 `wezterm-term` git 依赖与 tag 注释，改为 `alacritty_terminal = { version = "0.26", default-features = false }`。
 - **`src/engine/pty/vt.rs`**（183 行；对外四件套 `feed` / `title` / `resize` / `capture_visible` 签名不变，调用方零感知）：`Term<Sink>` + `Processor`；自实现 `Dimensions` 与 `EventListener`；应答缓冲有界（D8 v5 P1）；删 `ResponseWriter`，改为「feed 后 drain 应答 → `PtySession::write`」，避免在监听器内回写造成锁嵌套。
 - **`src/engine/pty/mod.rs`**：应答门控（`out.tx.receiver_count() == 0` 时才回写，修双应答）；文件头注与 L258 构造调用点措辞。
 - **测试**：原 5 条单测保留（构造不再需 spawn `sleep` 提供 fd）+ 新增四条——alt-screen 切换、宽字符不重复、应答缓冲超限丢弃、attach 状态不应答。
 - **文档**：`docs/architecture/backend.md`（`vt.rs` 描述 + capture 差异表 + 应答归属）、`docs/reference/herdr-reference.md`（模拟器选型措辞）、`CHANGELOG.md`（Changed：VT 模拟器换 registry 依赖，恢复 crates.io 渠道）。
 - **验收**：`cargo package --no-verify --allow-dirty` 通过；`cargo test` / clippy / fmt 全绿；pty 会话人工回归（vim/htop 重连不花屏、agent 屏幕检测、OSC 标题、detach 期间 `printf '\e[6n'` 有应答且 attach 时不双应答）。
+- **完成记录（2026-08-13）**：按上述清单落地——`cargo package` 通过（129 文件 / 3.6MiB，全仓无 git/path 依赖）、`cargo test` 248 通过 / clippy / fmt 全绿；vt.rs 11 条单测（原 5 + alt-screen / 宽字符 / DSR drain / 超限丢弃×3）+ mod.rs 门控测试 1 条。依赖净增与 D8 v5 预测一致（alacritty_terminal/vte/arrayvec/unicode-width/home/rustix-openpty/cursor-icon）。**执行偏差**：「detach 期 DSR 应答回显进补屏环」的 e2e 测试废弃——实测 pty 行纪律回显会吞转义字节（`\x1b[1;1R` 只回显尾部 `R`），补屏环观察不到 CPR 应答，该路径改由人工回归覆盖；门控行为由 `dsr_response_gated_by_attach_state` 确定性验证。另发现两个实测点入档：① `Term::new` 收 `&impl Dimensions` 而 `resize` 收值；② `Row` 无 `iter()`，逐行 capture 走 `[Column(0)..Column(cols)]` 切片索引。
 
 ### Phase 3：pty hook 信道（纯新增）
 - **新增** `src/api/agent_events.rs`：`POST /api/v1/internal/agent-event`（回环 + token + seq 去重）→ 内存 KV + watch channel。
@@ -233,8 +234,8 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - [ ] pty 会话复制：纯左键拖选即复制；移动端滚动本地化。tmux 会话交互不变。（Phase 4 前端分流）
   - [x] FileManager 根目录在两种会话下均跟随终端 cwd（Phase 2 ✅：pty 走 /proc 采样，实测 `cd` 后跟随）。
 - **Phase 2.5（registry VT 依赖）**：
-  - [ ] `cargo package --no-verify --allow-dirty` 通过（全仓无 git/path 依赖）。
-  - [ ] `vt.rs` 原 5 条单测 + 新增 4 条（alt-screen / 宽字符 / 应答缓冲超限 / attach 不应答）全部通过。
+  - [x] `cargo package --no-verify --allow-dirty` 通过（全仓无 git/path 依赖）。
+  - [x] `vt.rs` 原 5 条单测 + 新增 4 条（alt-screen / 宽字符 / 应答缓冲超限 / attach 不应答）全部通过（2026-08-13；vt.rs 共 11 条 + mod.rs 门控测试）。
   - [ ] pty 会话人工回归：agent 屏幕检测与迁移前一致、OSC 标题正常、detach 期间 DSR 有应答。
 - **通用**：
   - [ ] migration 幂等；`cargo build` / clippy / fmt / `tsc` 零新增错误；新增单测通过。
