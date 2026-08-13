@@ -1884,12 +1884,13 @@ input[type="range"]:active::-webkit-slider-thumb {
   color: var(--text-secondary);
 }
 /* 动作条只显示图标；hover 到某个图标时才以浮层显示该图标的功能文字。
-   浮层绝对定位、不参与布局——文字出现不会挤动其他图标。 */
+   浮层绝对定位、不参与布局——文字出现不会挤动其他图标。
+   布局方向运行时测量（MessageActionBar）：默认下方，下方空间不足（贴滚动
+   容器底部）时经 data-dir="above" 翻转到上方；水平 left 由 hover 测量 clamp。 */
 .chat-msg-action-btn span {
   position: absolute;
-  bottom: calc(100% + 4px);
-  left: 50%;
-  transform: translateX(-50%);
+  top: calc(100% + 4px);
+  left: 0;
   white-space: nowrap;
   padding: 1px 6px;
   background: var(--bg-elevated);
@@ -1899,6 +1900,10 @@ input[type="range"]:active::-webkit-slider-thumb {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease;
+}
+.chat-msg-action-btn span[data-dir='above'] {
+  top: auto;
+  bottom: calc(100% + 4px);
 }
 .chat-msg-action-btn:hover span {
   opacity: 1;
