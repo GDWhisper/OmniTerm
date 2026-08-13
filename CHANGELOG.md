@@ -47,16 +47,11 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
-
-### Added
-
-- (2026-08-13 23:26) `[frontend]` ACP 聊天气泡动作体系：复制正文、引用到输入框、编辑重发、重新生成四个动作统一由 `messageActions.ts` 注册表驱动（桌面 hover 动作条 + 移动端长按菜单两套触发共用同一份定义）；新增块级复制（text / thought / tool_call 卡片各自 hover 复制原文）与「复制为 Markdown」（单条消息含工具卡片摘要导出到剪贴板，thought 默认省略）。剪贴板写入统一走 `utils/clipboard.ts`（async API + textarea 兜底，修复裸 http 下 `useTerminal` 选中复制静默失效），引用经 chatStore `pendingInsert` 通道注入输入框（`frontend/src/components/Chat/`、`frontend/src/utils/`、`frontend/src/hooks/useLongPress.ts`）
-
 ## [0.2.14] - 2026-08-13
 
 ### Added
 
+- (2026-08-13 23:26) `[frontend]` ACP 聊天气泡动作体系：复制正文、引用到输入框、编辑重发、重新生成四个动作统一由 `messageActions.ts` 注册表驱动（桌面 hover 动作条 + 移动端长按菜单两套触发共用同一份定义）；新增块级复制（text / thought / tool_call 卡片各自 hover 复制原文）与「复制为 Markdown」（单条消息含工具卡片摘要导出到剪贴板，thought 默认省略）。剪贴板写入统一走 `utils/clipboard.ts`（async API + textarea 兜底，修复裸 http 下 `useTerminal` 选中复制静默失效），引用经 chatStore `pendingInsert` 通道注入输入框（`frontend/src/components/Chat/`、`frontend/src/utils/`、`frontend/src/hooks/useLongPress.ts`）
 - (2026-08-13 00:16) `[frontend]` Agent 预设新增 CodeBuddy：`codebuddy --acp` 以 ACP（ndJsonStream）模式启动 CodeBuddy Code（`frontend/src/components/Settings/presets.ts`）
 - (2026-08-12 23:52) `[backend]` ACP agent 的 API key 从 `~/.omniterm/api_keys.toml` 加载并注入 agent 子进程：此前只靠 dev.sh 里 export 环境变量透传，正式版（systemd / docker / `omniterm start`）不经过 dev.sh 而缺失。现新增 `resolve_api_keys()` 统一读取，环境变量同名 key 优先、`agent.env` 显式配置优先且不覆盖，dev 与正式版行为一致（`src/main.rs`、`src/acp/client.rs`）
 - (2026-08-12 01:40) `[backend]` 自管 pty 会话引擎落地（Phase 2）：`runtime_kind='pty'` 会话由后端常驻持有——WS 断开不杀进程，重连补屏 + resize 重绘 nudge；子进程退出自动注销、下次 attach 重建；wezterm-term VT 模拟器提供干净屏幕捕获与 OSC 标题（agent 屏幕检测覆盖 pty 会话）；后端重启后按最后采样 cwd 重建会话并回放 ANSI 历史（落盘 0600，5s 去抖）。创建入口的前端分流为下一步（Phase 4），当前经 API 可用（`src/engine/pty/`、`migrations/20260812_add_last_cwd.sql`）
