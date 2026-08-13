@@ -1,6 +1,6 @@
 # ACP 聊天气泡动作体系（复制 / 引用 / 动作注册表）
 
-> 状态：已实施（2026-08-11 设计稿；2026-08-13 评审修订，见 §8；同日 Phase 1-4 落地，见 §9 实施记录）
+> 状态：已归档（2026-08-11 设计稿；2026-08-13 评审修订见 §8；同日 Phase 1-4 全部落地，2026-08-14 归档。约束已沉淀到 `docs/architecture/frontend-patterns.md` action-registry 条目）
 > 触发条件：修改 `frontend/src/components/Chat/ChatMessage.tsx` 的消息动作、块级操作、剪贴板相关代码前必读
 > 关联：`docs/architecture/frontend-patterns.md`（数据/渲染分离、getState-action）、`docs/visual-design/ui-style-guide.md` §13（图标规则）、`docs/dev/plans/2026-07-30-mobile-interaction-optimization.md` D6（长按菜单范式）、`docs/dev/plans/2026-08-10-acp-session-reliability.md`（`sync_messages` 不变量）
 

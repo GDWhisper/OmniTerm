@@ -96,7 +96,7 @@
 **必须**用注册表，否则每加一个动作都要在每套触发 × 每条渲染分支下各写一遍。
 
 **约定**（实现见 `frontend/src/components/Chat/messageActions.ts` +
-`MessageActionBar.tsx`，计划 `docs/dev/plans/2026-08-11-chat-bubble-actions.md`）：
+`MessageActionBar.tsx`，计划 `docs/dev/plans/archive/2026-08-11-chat-bubble-actions.md`）：
 
 - 注册表是模块级常量数组 `MessageAction[]`，字段：`id` / `Icon` / `labelKey` /
   `visible(ctx)` / `run(ctx)`。**动作唯一真源在此**，新增动作只改这一个文件

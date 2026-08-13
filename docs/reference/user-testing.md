@@ -705,7 +705,7 @@ FRONTEND_DIR=frontend/dist
 
 ## 15. 聊天气泡动作体系（2026-08-13）
 
-> 前置：需可用 agent（见 §11）。覆盖 `docs/dev/plans/2026-08-11-chat-bubble-actions.md` 的 P0/P1 验收点。
+> 前置：需可用 agent（见 §11）。覆盖 `docs/dev/plans/archive/2026-08-11-chat-bubble-actions.md` 的 P0/P1 验收点。
 
 ### 15.1 桌面 hover 动作条
 
