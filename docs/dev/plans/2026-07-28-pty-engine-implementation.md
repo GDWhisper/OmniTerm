@@ -1,16 +1,19 @@
 # 会话引擎解耦 + 自管 pty 引擎 — 实施计划
 
-> 状态：设计稿（2026-07-28，同日方向修订 v2；2026-08-09 盘点勘误 v3）
+> 状态：设计稿（2026-07-28，同日方向修订 v2；2026-08-09 盘点勘误 v3；2026-08-13 D8 选型翻盘 v5）
 > 触发条件：`2026-07-28-remove-tmux-session-engine.md`（方向规划）获批落地，本文件是其要求的独立实施计划。
 > 关联：方向规划（同目录）、`docs/reference/herdr-reference.md`（herdr 借鉴清单）、`src/tmux/`、`src/ws/terminal.rs`、`src/api/sessions.rs`、`frontend/src/hooks/useTerminal.ts`、AGENTS.md §7/§8。
 
 > **勘误（2026-07-28 v2）**：初版目标为"一次性去除 tmux"。产品决策修订为：**解耦 tmux → 双引擎过渡共存 → tmux 冻结维护（不再迭代）→ 未来可无痛摘除**。即方向规划 D3（SessionBackend 抽象）由 P2 待定提为 **P0 必做**；原 D9（舍弃抽象）作废，D6/D10/D11 相应修订。tmux 能力的自管实现尽量沿 herdr 已验证路径（含分屏与现代化交互）。
 
+> **勘误（2026-08-13 v5，D8 翻盘）**：`wezterm-term` git 依赖阻塞 crates.io 发布（v4 已记录事实），**替代方案调研完成并选定 `alacritty_terminal` 0.26**（registry 可用、应答闭环齐全、本项目净新增 7 个依赖包）。选型对照与实测证据见 D8 v5；代码改动列为 **Phase 2.5**（本轮仅决策与文档，未动代码）。
+
 > **勘误（2026-08-09 v3，核查后修订）**：① 仓库已有 pty 脚手架（commit `477d79c`/`9a731de`，2026-08-05）：`RuntimeKind::Pty`、pty 创建分支、`handle_pty_terminal`、`PtyEngine` 骨架——但生命周期是"WS 连接期"（断开即杀进程），与本计划 D5 常驻设计冲突，定性为**临时件**，详见 §1.4；② `wezterm-term` **未发布到 crates.io**，只能 git 依赖引入（D8 修订）；③ `research/herdr` 目录不存在，herdr 参考以 `docs/reference/herdr-reference.md` 为准；④ `pty_io.rs` 须提为引擎公共件而非随 tmux 冻结，否则 PtyEngine 依赖冻结目录、摘除演练必失败（D9/Phase 1 修订）；⑤ §1.3 调用面补漏 `api/settings.rs`、`test_utils.rs`；⑥ Phase 2 改为垂直切片推进（§3）。
 
 ## 0. 新会话上手指引
 
-- **当前状态（2026-08-12 更新）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。下一步 = **Phase 3（pty hook 信道）**。Phase 2 完成记录见 §3 Phase 2 节尾。
+- **当前状态（2026-08-13 更新）**：Phase 2 已完成，但 **Phase 2.5（VT 模拟器换 registry 依赖）为当前第一优先**——`wezterm-term` git 依赖使 `cargo package` 失败、crates.io 渠道中断（0.2.14 发布已中止并撤回 tag）。决策见 D8 v5，文件级清单见 §3 Phase 2.5；完成后再进 Phase 3（pty hook 信道）。
+- **Phase 2 完成情况（2026-08-12）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。~~下一步 = **Phase 3（pty hook 信道）**~~（v5：先做 Phase 2.5）。Phase 2 完成记录见 §3 Phase 2 节尾。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
 - **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
 - **注意**：§1 盘点中的行号是 2026-07-28 快照，代码演进后以符号名为准（用 CodeGraph 查）。~~herdr 源码在 `research/herdr`~~（v3 勘误：该目录不存在）——herdr 参考以 `docs/reference/herdr-reference.md` 为准；确需对照源码移植时先自行 clone herdr（Apache-2.0）。
@@ -90,7 +93,7 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **否决项**：Unix socket（Windows/psmux 不兼容）；约定文件（竞态）。
 - **翻盘条件**：容器内 curl 缺失比例高 → 回退"约定文件 + watch"。
 
-### D8：VT 模拟器 = wezterm-term
+### D8：VT 模拟器（**v5 定案：`alacritty_terminal`**；初版 wezterm-term 因 git 依赖弃用）
 - **决策**：新增依赖 `wezterm-term`（与 portable-pty 同作者），每 pty 会话服务端维护 grid：capture（agent 检测）、OSC 0/2 标题、重连补屏、重启 ANSI seed 恢复。herdr 用 libghostty-vt 验证了"模拟器唯一真相源"模式，wezterm-term 纯 Rust 等价且免 FFI。
 - **v3 修订（2026-08-09）**：`wezterm-term` **未发布到 crates.io**（crates.io API / lib.rs 均 404，系 wezterm 工作区内部 crate），只能以 **git 依赖**引入（pin wez/wezterm 仓库 `term/` 子目录，锁 commit hash）。License 为 MIT，与本项目兼容。Phase 2 spike 第一项因此改为"**git dep 可拉取 + 编译通过**"，再验 feed + capture + 补屏。
 - **否决项**：libghostty-vt（Zig 构建链）；alacritty_terminal（API 摩擦）；vt100（覆盖弱）。
@@ -99,7 +102,26 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - **事实**：`cargo package` / `cargo publish` 报 `dependency 'wezterm-term' does not specify a version`——crates.io 打包要求所有依赖有 version 且能解析到 registry；git 依赖即使补 `version` 也会在用户 `cargo install` 时解析失败。`wezterm-term` 及其依赖 `wezterm-cell` 均未发布 crates.io（API 404），兄弟 crate（termwiz/vtparse/wezterm-bidi/wezterm-dynamic）已发布但版本与锁定的 git tag 20240203 不同。
   - **影响**：crates.io 渠道（`cargo install omniterm`）被阻塞；GitHub Release / npm / Docker 渠道不受影响。2026-08-13 发布 v0.2.14 时因此在 CI 全绿后中止，撤回 tag 与已发产物。
   - **替代调研**（2026-08-13 实测）：`vt100` 0.16.2（MIT）、`vte` 0.15（Alacritty 团队，Apache-2.0/MIT）在 crates.io 可用。`vt.rs`（183 行）使用面小：调用点仅 `mod.rs` 4 处（feed/title/resize/capture_visible），`scrollback.rs` 独立实现不依赖模拟器。
-  - **倾向方案（待定）**：`vt100` 为主 + `vte` 补 OSC 0/2 标题解析（`title()` 是 watch_targets 证据源，不可降级）；需重验 `capture_visible` 语义并重跑 `vt.rs` 5 条单测 + pty 会话验收。若 crates.io 渠道可长期暂停，也可维持 wezterm-term 现状。
+  - ~~**倾向方案（待定）**：`vt100` 为主 + `vte` 补 OSC 0/2 标题解析~~——v5 定案为 `alacritty_terminal`（见下）；`vt100` 降为翻盘备选。
+- **v5 决策（2026-08-13）：VT 模拟器改用 `alacritty_terminal` 0.26**（crates.io，Apache-2.0/MIT），取代 v3 的 wezterm-term git 依赖路线。
+  - **选型对照**（2026-08-13 于 `/tmp` 独立 spike 实测 + crates.io API 核查，非文档推断）：
+
+    | 候选 | crates.io | 传递依赖包数 | 服务端应答（DSR/DA/颜色查询） | 结论 |
+    |---|---|---|---|---|
+    | `wezterm-term`（v3 现状） | ❌ crate 不存在（API 404） | 164 | 自动（不可关） | 阻塞发布，弃用 |
+    | `alacritty_terminal` 0.26.0 | ✅ 活跃（2026-04） | 子树 35，本项目**净新增 7**（alacritty_terminal / vte / arrayvec / unicode-width / home / rustix-openpty / cursor-icon） | `Event::PtyWrite` 显式闭环（可门控） | **采用** |
+    | `vt100` 0.16.2 | ✅（950 万下载） | 3 | 无（需自建 `unhandled_csi` 白名单） | 备选 |
+    | `vt100-ctt` 0.17.1 | ✅（vt100 fork，vte 0.13 偏旧） | 4 | 无 | 备选之备选 |
+
+  - **语义等价性实测**：对照 `vt.rs` 现有 5 条单测 + 4 项补充场景，`alacritty_terminal` 全部通过——ANSI 剥离、CR 覆写、OSC 0/2 标题、resize 保内容、跨 feed 切断的 CSI、滚屏可见窗口、alt-screen（vim/htop）切换与回落、宽字符 + UTF-8 半包切块。
+  - **API 映射**：`Processor::advance(&mut term, bytes)` = feed；`Term::resize(impl Dimensions)` = resize；`grid()[Line(i)][Column(j)].c` 逐行 `trim_end` = `capture_visible`（**必须跳过 `Flags::WIDE_CHAR_SPACER | LEADING_WIDE_CHAR_SPACER`**，否则宽字符重复）；标题与应答经自实现 `EventListener`（`Event::Title` / `ResetTitle` / `PtyWrite` / `ColorRequest` / `TextAreaSizeRequest`；`send_event(&self)` 只给不可变引用 → 内部 `Mutex` 收集）；`Dimensions` 自实现三方法，不用上游标为 test helper 的 `term::test::TermSize`。
+  - **配置要点**：`Config { scrolling_history: VT_SCROLLBACK_LINES, osc52: Osc52::Disabled, ..default() }`——OSC 52 剪贴板归前端 xterm.js，服务端不参与（上游默认 `OnlyCopy`，须显式关闭）；`default-features = false` 去掉 serde。
+  - **P1 有界（AGENTS §6）**：`EventListener` 收集的应答缓冲必须有显式上限（建议 ≤64 条且 ≤8KB，超限丢弃 + `warn` + 单测），否则无人 drain 时无界累积。`Term` 自身 damage 状态为按屏幕行数定长的 `Vec<LineDamageBounds>`（已核 `TermDamageState`），无累积风险。
+  - **顺带修的既存缺陷（双应答）**：前端 xterm.js 会把自己对 DA/DSR 的应答经 `onData` 回送后端（`frontend/src/hooks/useTerminal.ts:235-256`），而服务端 VT 也应答一次 → **有客户端连接时应用收到两份应答**（多余字节可能落进 shell 输入）。迁移时将服务端应答**门控在「无客户端订阅」**：复用 `out.tx.receiver_count() == 0`（`list_sessions` 已以此作 attached 判据，不新增实体）。attach 时浏览器唯一应答，detach 时服务端应答——这是选 `alacritty_terminal` 而非更轻的 `vt100` 的唯一理由（detach 期间保持应答闭环）。
+  - **已知细微差异**：进入 alt-screen 时 alacritty 保留当前光标行（`\x1b[?1049h` 后 capture 首行为空），wezterm/vt100 归位首行。xterm 语义上 alacritty 更正确，对 agent 屏幕检测（整屏文本匹配）无影响。
+  - **否决项**：vendoring wezterm-term 源码（需连带未发布的 `wezterm-cell` 等兄弟 crate + termwiz 版本错配，git checkout 740MB）；「放弃 crates.io 渠道」（release-guide Step 8 与验证表将其列为正式渠道）。
+  - **v4「vt100 为主 + vte 补标题」判断勘误**：`vt100` 自带标题回调（`callbacks.rs:23 set_window_title`、`perform.rs:201-208` 处理 OSC 0/1/2），不需第二个解析器。
+  - **翻盘条件**：`alacritty_terminal` 的 `capture_visible` 在真实 agent 屏幕（Claude Code / Codex TUI）上与 tmux `capture-pane` 明显不一致，或新增依赖面被判过重 → 降级 `vt100`（依赖 3 个，代价是自建 DSR/DA 白名单应答、且 detach 期无应答）。
 
 ### D9（v2 重写）：引入 `SessionEngine` 抽象，tmux 为冻结后端
 - **决策**：定义 `SessionEngine` trait（方向规划 D3 提为 P0），能力面 = §1.3 调用方实际所需：`create / kill / exists / list / write / resize / subscribe_output / capture_screen / pane_title / current_cwd / is_active / agent_snapshot`。两个实现：
@@ -158,6 +180,15 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - **切片 C**：`scrollback.rs`（分文件/0600/tmp+rename/UTF-8 截断）+ 5s 去抖 flush（快照对象为 256KB 有界环，避 P2 O(n²)）+ 30s cwd 采样回写 `last_cwd`（migration 仅此一列）+ 重建 ANSI seed。端到端验收：真实重启后端 → 会话重建于最后 cwd、重连补屏见重启前输出。显式 kill 删除历史文件（无需重建）。
   - §B.2 穷举：`runtime_kind_matrix` 6/6 通过（含 pty files/删除 case），无 `?`。
 
+### Phase 2.5（当前第一优先，代码未开工）：VT 模拟器换 registry 依赖——解锁 crates.io（D8 v5）
+> 触发：2026-08-13 发布 0.2.14 时 `cargo package` 报「dependency 'wezterm-term' does not specify a version」而中止（tag 已撤回）。本轮（2026-08-13）仅完成**调研 + 决策 + 文档**，下列代码改动尚未实施。
+- **`Cargo.toml`**：删 `wezterm-term` git 依赖与 tag 注释，改为 `alacritty_terminal = { version = "0.26", default-features = false }`。
+- **`src/engine/pty/vt.rs`**（183 行；对外四件套 `feed` / `title` / `resize` / `capture_visible` 签名不变，调用方零感知）：`Term<Sink>` + `Processor`；自实现 `Dimensions` 与 `EventListener`；应答缓冲有界（D8 v5 P1）；删 `ResponseWriter`，改为「feed 后 drain 应答 → `PtySession::write`」，避免在监听器内回写造成锁嵌套。
+- **`src/engine/pty/mod.rs`**：应答门控（`out.tx.receiver_count() == 0` 时才回写，修双应答）；文件头注与 L258 构造调用点措辞。
+- **测试**：原 5 条单测保留（构造不再需 spawn `sleep` 提供 fd）+ 新增四条——alt-screen 切换、宽字符不重复、应答缓冲超限丢弃、attach 状态不应答。
+- **文档**：`docs/architecture/backend.md`（`vt.rs` 描述 + capture 差异表 + 应答归属）、`docs/reference/herdr-reference.md`（模拟器选型措辞）、`CHANGELOG.md`（Changed：VT 模拟器换 registry 依赖，恢复 crates.io 渠道）。
+- **验收**：`cargo package --no-verify --allow-dirty` 通过；`cargo test` / clippy / fmt 全绿；pty 会话人工回归（vim/htop 重连不花屏、agent 屏幕检测、OSC 标题、detach 期间 `printf '\e[6n'` 有应答且 attach 时不双应答）。
+
 ### Phase 3：pty hook 信道（纯新增）
 - **新增** `src/api/agent_events.rs`：`POST /api/v1/internal/agent-event`（回环 + token + seq 去重）→ 内存 KV + watch channel。
 - **新增** `src/engine/pty/agent_hooks.rs`：以 tmux 版为蓝本，hook 命令模板换 `curl $OMNITERM_HOOK_URL`（fail-silent + 0.5s）。
@@ -186,6 +217,7 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **双引擎行为差异须显式**：`is_active`（control mode 2s vs 读循环时间戳）、cwd（tmux 跟踪 vs /proc 采样）、agent 信道（option 轮询 vs HTTP 推送）、复制/滚动交互（D12 分流）——差异表记入 `docs/architecture/backend.md`，前端不得以单一引擎行为推断另一引擎。
 - **cwd 采样**：Linux `/proc` / macOS libproc / Windows 无可靠等价 → Windows 兜底 DB `last_cwd`。
 - **hook 回调**：依赖会话内 `curl`；缺失则降级纯屏幕检测（`agent_detect` 不受影响）。
+- **VT 应答归属（D8 v5）**：pty 会话的 DSR/DA 应答有两个可能主体（浏览器 xterm.js / 服务端 VT），约定为**按是否有客户端订阅二选一**，不得两边同时应答；tmux 会话无此概念（tmux server 自己应答）。
 
 ## 5. 验收标准
 - **Phase 1（解耦）** ✅ 2026-08-09：
@@ -200,6 +232,10 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - [ ] agent 检测：pty 会话 hook 经 HTTP 上报（HookAuthority 生效）、屏幕检测行为与 tmux 链路一致。（Phase 3；屏幕检测输入侧 Phase 2 已就位）
   - [ ] pty 会话复制：纯左键拖选即复制；移动端滚动本地化。tmux 会话交互不变。（Phase 4 前端分流）
   - [x] FileManager 根目录在两种会话下均跟随终端 cwd（Phase 2 ✅：pty 走 /proc 采样，实测 `cd` 后跟随）。
+- **Phase 2.5（registry VT 依赖）**：
+  - [ ] `cargo package --no-verify --allow-dirty` 通过（全仓无 git/path 依赖）。
+  - [ ] `vt.rs` 原 5 条单测 + 新增 4 条（alt-screen / 宽字符 / 应答缓冲超限 / attach 不应答）全部通过。
+  - [ ] pty 会话人工回归：agent 屏幕检测与迁移前一致、OSC 标题正常、detach 期间 DSR 有应答。
 - **通用**：
   - [ ] migration 幂等；`cargo build` / clippy / fmt / `tsc` 零新增错误；新增单测通过。
   - [ ] 模拟摘除演练：本地删 `src/engine/tmux/` + 注册行，`cargo build` 通过（解耦达标证明，不提交）。
@@ -209,7 +245,7 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 |---|---|
 | Phase 1 重构面大（一次触碰全部调用方） | trait 签名先按 TmuxEngine 现有行为 1:1 定义，不夹带行为变化；回归清单先行 |
 | 双引擎并存状态不一致 | §4 差异表 + D12 分流；agent 状态统一经 `agent_snapshot` 读口 |
-| wezterm-term 仅 git 依赖可得（v3 新发现）+ 集成摩擦/依赖树重 | spike 首项"可拉取 + 编译通过"，锁 commit hash；不行走 D8 翻盘（vt100/vte） |
+| ~~wezterm-term 仅 git 依赖可得（v3 新发现）~~ → **已发生：git 依赖阻塞 crates.io 发布**（0.2.14 中止） | 已结案：D8 v5 改用 registry 依赖 `alacritty_terminal`，Phase 2.5 执行；今后**新增依赖必须来自 crates.io**，`cargo package --no-verify` 入发布前检查单（release-guide） |
 | 存量 pty 脚手架与计划冲突（v3 新发现） | §1.4 定性临时件；Phase 1 收敛、Phase 2 切片 A 替换；禁止在脚手架上加功能 |
 | 补屏 ANSI 与 xterm.js 显示偏差 | 验收含 TUI 程序重连用例 + resize nudge |
 | scrollback 落盘 IO 放大 | 异步批量写 + 截尾；压测 `yes` |

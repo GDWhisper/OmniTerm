@@ -80,6 +80,8 @@ ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
 并 seed 历史进补屏环与 VT grid（wezterm-term）。显式 kill 删历史文件。
 
+> **VT 模拟器选型待迁移（2026-08-13）**：现用 `wezterm-term` 为 **git 依赖**，使 `cargo package` 失败、阻塞 crates.io 发布。已定案换为 registry 依赖 `alacritty_terminal` 0.26（含应答门控：仅在无客户端订阅时由服务端应答 DSR/DA），决策与实测证据见 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` D8 v5 / Phase 2.5——**代码尚未实施，本文描述仍为现状**。
+
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 
 | 维度 | TmuxEngine | PtyEngine |

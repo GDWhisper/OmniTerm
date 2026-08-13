@@ -222,6 +222,13 @@ git push origin main
 
 > **前置条件（铁律）**：必须已确认上方「强制发布顺序」——GitHub Release CI（release.yml）完全通过、且 push main 的 CI（ci.yml）全绿后，才执行本步。crates.io 不可逆，抢跑后果见上方说明。
 
+**依赖来源检查（git/path 依赖会直接阻塞发布，必做）：** crates.io 打包要求**所有依赖都能从 registry 解析**。任意一个 `git = "..."` 或 `path = "..."` 依赖都会让 `cargo package` 直接失败（实例见下方「Cargo publish 失败」）。此检查应在**打 tag 之前**就跑一次，避免 tag 推出后才发现不可发布而需撤回：
+
+```bash
+cargo package --no-verify --allow-dirty >/dev/null && echo "✅ 依赖均可从 registry 解析" || echo "❌ 存在 git/path 依赖或元数据缺失"
+grep -nE '^\s*[a-z0-9_-]+\s*=\s*\{[^}]*(git|path)\s*=' Cargo.toml   # 期望无输出
+```
+
 **发布前先验证包内容（不可逆，必做）：**
 
 ```bash
@@ -388,6 +395,7 @@ git remote -v
 ### Cargo publish 失败
 
 常见原因：
+- **依赖含 git / path 来源**（已实际发生，2026-08-13）：`cargo package` 报 `all dependencies must have a version requirement specified when packaging. dependency 'X' does not specify a version`。补 `version` 也无用——git 依赖的 crate 未发布到 registry 时，用户 `cargo install` 依旧解析失败。当时因 `wezterm-term`（wezterm 工作区内部 crate，从未发布）中止 v0.2.14 发布、撤回 tag 与已发产物。**规则：新增依赖必须来自 crates.io；选型阶段就要把「能否发布」当硬约束**（本例后续处理见 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` D8 v5）。
 - 版本号未更新（Cargo.toml 中 version 与已发布版本重复）
 - 依赖问题（运行 `cargo publish --dry-run` 检查）
 - 元数据缺失（Cargo.toml 缺少 `description`、`license`、`include` 等字段）
