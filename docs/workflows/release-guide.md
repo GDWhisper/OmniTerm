@@ -366,6 +366,7 @@ Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binar
 - **EOTP（要求一次性密码）**：`NPM_TOKEN` 用的是需要 2FA 的普通 token，或包发布策略设为「所有写操作都要 2FA」。改用 granular/automation token，并把 `@gdwhisper/omniterm` 及新包策略设为「允许 automation token」。
 - **首发新平台包失败（cannot create package）**：granular token 未勾选「允许创建新包」。4 个 `@gdwhisper/omniterm-<plat>` 首发时不存在，token 必须有建包权限。
 - **cannot publish over previously published version**：该版本已发布。`npm-publish` job 已做 `npm view` 幂等跳过，正常不会触发；若手动 `npm publish` 撞车，说明版本号未 bump。
+- **npm 版本号被烧（发布后删除，版本号 immutable）**：v0.2.14 中止发布时 5 个包（主包 + 4 平台包）已发布又删除，`time` 元数据里留下该版本时间戳但 `versions` 里没有——**npm 不允许重发同名版本**，`npm view` 幂等检查对已删版本返回 404 拦不住 publish，CI 报 `Cannot publish over previously published version`。**判定**：`curl https://registry.npmjs.org/@gdwhisper/<pkg> | jq '.time["0.2.14"]'` 有值但 `.versions` 无 → 版本号已烧，必须 bump 新版本号重发（npm 渠道可用 `X.Y.Z-fix` 形式作为独立版本号跳过冲突，但它是 pre-release，`cargo install` 默认不选中）。**教训：中止发布时如需撤回 npm，只能删除「刚发布且 24h 内、且不是唯一版本」的版本，且删除即烧号**——中止发布前先确认 npm 是否已发出，发出则后续只能换版本号。
 
 ### 公共仓 tag 误推送到私有仓
 
