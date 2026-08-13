@@ -13,6 +13,8 @@ import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
+import { copyText } from '../../utils/clipboard'
+import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks } from '../../hooks/useAcpChat'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
@@ -255,6 +257,23 @@ export function ChatView() {
     setAutoStick(true)
   }, [activeSessionId, sendPrompt, cancel])
 
+  // D4 复制正文：统一走 utils/clipboard.ts，成功/失败各一条 toast。
+  // getState-action 约定：不订阅 store，保持回调引用稳定供 ChatMessageView memo 命中。
+  const handleCopyMessage = useCallback((text: string) => {
+    void copyText(text).then((ok) => {
+      useToastStore.getState().addToast(
+        ok ? 'success' : 'error',
+        ok ? t('chat.msg.copySuccess') : t('chat.msg.copyFailed'),
+      )
+    })
+  }, [t])
+
+  // D7 引用到输入框：写入 pendingInsert 通道，ChatInput 按 sessionId 消费。
+  const handleQuoteMessage = useCallback((text: string) => {
+    if (!activeSessionId) return
+    useChatStore.getState().requestInsert(activeSessionId, text)
+  }, [activeSessionId])
+
   // No session: empty-state placeholder matching Terminal.tsx's look.
   if (!activeSession) {
     return (
@@ -425,6 +444,8 @@ export function ChatView() {
               agentName={chatState.agentName || fallbackAgentName}
               onEditResend={inputDisabled ? undefined : handleEditResend}
               onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
+              onCopyMessage={handleCopyMessage}
+              onQuoteMessage={handleQuoteMessage}
               isLastAssistant={m.id === lastAssistantId}
             />
           ))

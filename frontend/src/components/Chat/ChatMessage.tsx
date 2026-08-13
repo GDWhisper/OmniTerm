@@ -1,8 +1,9 @@
-import { memo, useLayoutEffect, useState } from 'react'
+import { memo, useLayoutEffect, useMemo, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
 import { useStickScroll } from '../../hooks/useStickScroll'
+import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
@@ -10,6 +11,9 @@ import { formatHoverTime } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
+import { messageActions, type MessageActionHandlers, type MessageActionContext } from './messageActions'
+import { MessageActionBar, type ActionMenuPosition } from './MessageActionBar'
+import { hapticTap } from '../../utils/haptics'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -110,7 +114,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   }
 
   return (
-    <div style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
+    <div data-chat-body="true" style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
         onClick={toggle}
         style={{
@@ -195,6 +199,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
 
   return (
     <div
+      data-chat-body="true"
       style={{
         display: 'inline-flex',
         flexDirection: 'column',
@@ -283,6 +288,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
 function PlanBlockView({ block }: { block: PlanBlock }) {
   return (
     <div
+      data-chat-body="true"
       style={{
         alignSelf: 'flex-start',
         maxWidth: '85%',
@@ -312,6 +318,7 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
 function TextBlockView({ text, caret, streaming }: { text: string; caret?: boolean; streaming?: boolean }) {
   return (
     <div
+      data-chat-body="true"
       style={{
         alignSelf: 'flex-start',
         maxWidth: '85%',
@@ -378,6 +385,10 @@ export interface ChatMessageViewProps {
   onEditResend?: (messageId: string, newText: string) => void
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
+  /** D4: 复制正文（toast 文案由 ChatView 注入，本地化文案各异）。 */
+  onCopyMessage?: (text: string) => void
+  /** D7: 引用到输入框（写入 chatStore.pendingInsert 通道）。 */
+  onQuoteMessage?: (text: string) => void
   isLastAssistant?: boolean
   /** agent 气泡显示名（capabilities 帧下发；未连接/已释放时 ChatView 用会话关联的
    *   agents.display_name 兜底）；两者都缺失时回退 "agent"。 */
@@ -389,7 +400,7 @@ export interface ChatMessageViewProps {
  * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
  * 使历史消息在流式期间跳过重渲染。
  */
-export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, isLastAssistant, agentName }: ChatMessageViewProps) {
+export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
   const { t } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -397,6 +408,49 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   const [draft, setDraft] = useState('')
   // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
   const [hovered, setHovered] = useState(false)
+  // 移动端长按动作菜单锚点（D3）
+  const [actionMenu, setActionMenu] = useState<ActionMenuPosition | null>(null)
+  const isMobile = useAppStore((s) => s.isMobile)
+
+  // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调，
+  // startEdit 是组件内部编辑态入口。全部 useCallback/稳定引用，不破坏 memo 契约。
+  const startEdit = useCallback(() => {
+    setDraft(message.text)
+    setEditing(true)
+  }, [message.text])
+
+  const handlers = useMemo<MessageActionHandlers>(
+    () => ({
+      copyMessage: onCopyMessage ?? (() => {}),
+      quoteMessage: onQuoteMessage ?? (() => {}),
+      startEdit,
+      regenerate: onRegenerate ?? (() => {}),
+      // 会话未连接/已结束时 ChatView 不注入这些回调 → 对应动作隐藏
+      canEdit: !!onEditResend,
+      canRegenerate: !!onRegenerate,
+    }),
+    [onCopyMessage, onQuoteMessage, startEdit, onRegenerate, onEditResend],
+  )
+
+  const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers }
+  const visibleActions = messageActions.filter((a) => a.visible(ctx))
+
+  // 长按手势（D3）：绑定消息行，但正文块（data-chat-body）不触发——保留系统
+  // 文本选择；只在 label 行/空白区长按弹动作菜单。
+  const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = useLongPress({
+    disabled: !isMobile || visibleActions.length === 0,
+    onLongPress: (p, e) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest('[data-chat-body]')) return
+      hapticTap()
+      setActionMenu({
+        // Clamp inside viewport: menu width ~140px
+        x: Math.min(p.x, window.innerWidth - 148),
+        y: p.y,
+      })
+    },
+  })
+  const closeActionMenu = useCallback(() => setActionMenu(null), [])
 
   // hover 时间小字绝对定位：不占布局空间，避免把标识行（右对齐的 USER）挤向左侧。
   // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
@@ -443,11 +497,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
     </div>
   )
 
-  const startEdit = () => {
-    setDraft(message.text)
-    setEditing(true)
-  }
-
   const submitEdit = () => {
     const trimmed = draft.trim()
     if (!trimmed || !onEditResend) return
@@ -461,10 +510,16 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
         className="chat-msg-row"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchCancel}
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', padding: '4px 12px' }}
       >
         {label}
         <div
+          // data-chat-body: 长按正文保留系统文本选择，不弹动作菜单（D3）
+          data-chat-body="true"
           style={{
             padding: '8px 12px',
             borderRadius: 8,
@@ -562,13 +617,12 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
             </button>
           </div>
         ) : (
-          onEditResend && !message.undelivered && (
-            <div className="chat-msg-actions" style={{ marginTop: 2 }}>
-              <button className="chat-msg-action-btn" onClick={startEdit} title={t('chat.msg.edit')}>
-                ✎ {t('chat.msg.edit')}
-              </button>
-            </div>
-          )
+          <MessageActionBar
+            actions={visibleActions}
+            ctx={ctx}
+            menu={actionMenu}
+            onCloseMenu={closeActionMenu}
+          />
         )}
       </div>
     )
@@ -578,12 +632,15 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   // rather than collapsing everything into a single bubble.
   const lastIdx = message.blocks.length - 1
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
-  const showRegenerate = !isSystem && isLastAssistant && !message.streaming && !!onRegenerate
   return (
     <div
       className="chat-msg-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+      onTouchCancel={onTouchCancel}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -595,13 +652,12 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
-      {showRegenerate && (
-        <div className="chat-msg-actions">
-          <button className="chat-msg-action-btn" onClick={onRegenerate} title={t('chat.msg.regenerate')}>
-            ↻ {t('chat.msg.regenerate')}
-          </button>
-        </div>
-      )}
+      <MessageActionBar
+        actions={visibleActions}
+        ctx={ctx}
+        menu={actionMenu}
+        onCloseMenu={closeActionMenu}
+      />
     </div>
   )
 })
