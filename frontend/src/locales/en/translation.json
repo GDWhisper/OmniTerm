@@ -466,5 +466,10 @@
   "update.updateNow": "Update Now",
   "update.updating": "Updating...",
   "update.updated": "Updated to v{{version}}",
-  "update.restartHint": "Updated. Run `omniterm stop && omniterm start` to apply."
+  "update.restartHint": "Updated. Run `omniterm stop && omniterm start` to apply.",
+  "chat.msg.copy": "copy",
+  "chat.msg.copySuccess": "Message copied",
+  "chat.msg.copyFailed": "Copy failed",
+  "chat.msg.quote": "quote",
+  "chat.msg.copyMarkdown": "copy as Markdown"
 }

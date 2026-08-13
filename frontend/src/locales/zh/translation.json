@@ -466,5 +466,10 @@
   "update.updateNow": "一键升级",
   "update.updating": "升级中...",
   "update.updated": "已升级到 v{{version}}",
-  "update.restartHint": "升级完成，执行 `omniterm stop && omniterm start` 生效。"
+  "update.restartHint": "升级完成，执行 `omniterm stop && omniterm start` 生效。",
+  "chat.msg.copy": "复制",
+  "chat.msg.copySuccess": "消息已复制",
+  "chat.msg.copyFailed": "复制失败",
+  "chat.msg.quote": "引用",
+  "chat.msg.copyMarkdown": "复制为 Markdown"
 }

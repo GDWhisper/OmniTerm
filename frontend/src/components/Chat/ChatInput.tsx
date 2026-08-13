@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
+import { getDraft, saveDraft, deleteDraft } from '../../utils/chatDraft'
 import { api, type FileEntry } from '../../api/client'
 import { findAtToken, replaceAtToken, type AtToken } from '../../utils/atReference'
 import {
@@ -33,32 +34,6 @@ interface ChatInputProps {
   commands?: SlashCommand[]
   /** Agent 是否声明支持 image prompt capability（§8：未声明则隐藏附件入口）。 */
   imageSupported?: boolean
-}
-
-const draftKey = (sessionId: string) => `omniterm_chat_draft:${sessionId}`
-
-function getDraft(sessionId: string): string {
-  try {
-    return sessionStorage.getItem(draftKey(sessionId)) ?? ''
-  } catch {
-    return ''
-  }
-}
-
-function saveDraft(sessionId: string, text: string) {
-  try {
-    sessionStorage.setItem(draftKey(sessionId), text)
-  } catch {
-    // Ignore storage errors (quota, private mode, etc.)
-  }
-}
-
-function deleteDraft(sessionId: string) {
-  try {
-    sessionStorage.removeItem(draftKey(sessionId))
-  } catch {
-    // Ignore storage errors
-  }
 }
 
 const QUEUE_PREVIEW_CHARS = 40
@@ -98,6 +73,24 @@ export function ChatInput({
   const fileItemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const atCursorRef = useRef(0)
   const attachErrorTimerRef = useRef<number | null>(null)
+
+  // D7「引用到输入框」通道：动作写入 pendingInsert，本组件按 sessionId 消费。
+  // 订阅而非 getState：挂载时若已有未消费值（跨会话切换），effect 能读到。
+  const pendingInsert = useChatStore((s) => s.pendingInsert)
+
+  useEffect(() => {
+    if (!pendingInsert || pendingInsert.sessionId !== sessionId) return
+    const quote = pendingInsert.text
+    setText(quote)
+    useChatStore.getState().consumeInsert()
+    textareaRef.current?.focus()
+    // 光标置末尾：引用块应可直接继续输入追问
+    const el = textareaRef.current
+    if (el) {
+      const len = quote.length
+      requestAnimationFrame(() => el.setSelectionRange(len, len))
+    }
+  }, [pendingInsert, sessionId])
 
   // Persist unsent text per session and restore when switching back.
   const prevSessionIdRef = useRef(sessionId)

@@ -5,6 +5,7 @@ import { useAttention } from './useAttention'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../stores/appStore'
 import { useToastStore } from '../stores/toastStore'
+import { copyText } from '../utils/clipboard'
 import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
@@ -547,23 +548,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
         const sel = term.getSelection()
         if (sel) {
           const copied = i18n.t('terminal.copySuccess')
-          if (navigator.clipboard) {
-            navigator.clipboard.writeText(sel).then(
-              () => useToastStore.getState().addToast('success', copied),
-              () => {},
-            )
-          } else {
-            // Fallback for insecure contexts (non-HTTPS)
-            const ta = document.createElement('textarea')
-            ta.value = sel
-            ta.style.position = 'fixed'
-            ta.style.opacity = '0'
-            document.body.appendChild(ta)
-            ta.select()
-            document.execCommand('copy')
-            document.body.removeChild(ta)
-            useToastStore.getState().addToast('success', copied)
-          }
+          // D1：统一走 utils/clipboard.ts（async API + textarea 兜底），
+          // 原内联实现收敛到公共 util；失败时同样提示，不静默。
+          void copyText(sel).then((ok) => {
+            if (ok) useToastStore.getState().addToast('success', copied)
+            else useToastStore.getState().addToast('error', copied)
+          })
         }
       })
     }
