@@ -297,6 +297,10 @@ interface ChatActions {
     sessionId: string,
     snapshot: { rowId: string; text: string; blocks: ContentBlock[] },
   ) => void
+  /** D7「引用到输入框」通道：写入待插入文本，ChatInput 挂载时按 sessionId 消费。 */
+  requestInsert: (sessionId: string, text: string) => void
+  /** 消费 pendingInsert（ChatInput 用掉后立即清空，避免切会话后旧引用复活）。 */
+  consumeInsert: () => void
   markEnded: (sessionId: string) => void
   clearEnded: (sessionId: string) => void
   /** 审批入队（upsert）：id 已存在则原位替换（重放/重发不产生重复项），否则追加。 */
@@ -370,6 +374,12 @@ function removeQueuedFromStorage(sessionId: string): void {
 
 interface ChatStoreState {
   states: Record<string, ChatSessionState>
+  /**
+   * D7「引用到输入框」：跨会话一次性插入信号。ChatInput 挂载时以 effect 消费
+   * （仅当 sessionId 匹配自身），随后置 null。放顶层而非 per-session，因为它
+   * 是「注入输入框」的显式信号，不是会话状态的一部分。
+   */
+  pendingInsert: { sessionId: string; text: string } | null
 }
 
 type ChatStore = ChatStoreState & ChatActions
@@ -384,6 +394,7 @@ const patch = (
 ): ChatStoreState => {
   const current = get(state, sessionId)
   return {
+    ...state,
     states: {
       ...state.states,
       [sessionId]: { ...current, ...next },
@@ -584,6 +595,7 @@ const applyTopLevelActions = (
 
 export const useChatStore = create<ChatStore>((set) => ({
   states: {},
+  pendingInsert: null,
 
   appendChunk: (sessionId, chunk) =>
     set((state) => {
@@ -830,7 +842,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       const cleared = { ...state.states }
       delete cleared[sessionId]
       removeQueuedFromStorage(sessionId)
-      const base = patch({ states: cleared }, sessionId, {
+      const base = patch({ ...state, states: cleared }, sessionId, {
         messages,
         imageSupported: prev?.imageSupported,
         agentName: prev?.agentName,
@@ -1054,8 +1066,14 @@ export const useChatStore = create<ChatStore>((set) => ({
       delete next[sessionId]
       // 同步清掉 sessionStorage 里残留的 queue 缓存（防止 F5 后 stale 数据复活）
       removeQueuedFromStorage(sessionId)
-      return { states: next }
+      return { ...state, states: next }
     }),
+
+  requestInsert: (sessionId, text) =>
+    set({ pendingInsert: { sessionId, text } }),
+
+  consumeInsert: () =>
+    set({ pendingInsert: null }),
 }))
 
 export const selectChatState = (sessionId: string | null) => (s: ChatStore) =>

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { useTerminal } from '../../hooks/useTerminal'
+import { useLongPress } from '../../hooks/useLongPress'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { MobileKeyBar } from './MobileKeyBar'
 import { READER_FONT } from '../../utils/fonts'
@@ -13,10 +14,6 @@ import { useKeyboardHeight, useIsLandscape } from '../../hooks/useMediaQuery'
 /** Heuristic (plan D5): soft keyboards are >=260px tall, browser chrome
  *  shrinkage stays <=110px. Falls back to "closed" on odd WebViews. */
 const KEYBOARD_OPEN_MIN_PX = 150
-/** Long-press duration before the paste menu appears (plan D6). */
-const LONG_PRESS_MS = 500
-/** Finger movement beyond this cancels the pending long-press. */
-const LONG_PRESS_CANCEL_PX = 10
 
 export function Terminal() {
   const { t } = useTranslation()
@@ -74,15 +71,6 @@ export function Terminal() {
   // Long-press paste menu (plan D6): clipboard read happens only on the
   // menu tap so it carries a user-gesture authorization context.
   const [pasteMenu, setPasteMenu] = useState<{ x: number; y: number } | null>(null)
-  const longPressTimer = useRef<number | null>(null)
-  const longPressStart = useRef<{ x: number; y: number } | null>(null)
-
-  const cancelLongPress = useCallback(() => {
-    if (longPressTimer.current !== null) {
-      clearTimeout(longPressTimer.current)
-      longPressTimer.current = null
-    }
-  }, [])
 
   const handlePaste = useCallback(async () => {
     setPasteMenu(null)
@@ -94,34 +82,18 @@ export function Terminal() {
     }
   }, [sendData, t])
 
-  const onTermTouchStart = (e: React.TouchEvent) => {
-    if (!isMobile) return
-    const touch = e.touches[0]
-    longPressStart.current = { x: touch.clientX, y: touch.clientY }
-    cancelLongPress()
-    longPressTimer.current = window.setTimeout(() => {
-      const start = longPressStart.current
-      if (!start) return
+  // 长按手势统一走 useLongPress（D3）：终端 paste 菜单与聊天气泡动作菜单共用。
+  const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = useLongPress({
+    disabled: !isMobile,
+    onLongPress: (p) => {
       hapticTap()
       // Clamp inside viewport: menu is ~120x44px.
       setPasteMenu({
-        x: Math.min(start.x, window.innerWidth - 128),
-        y: Math.max(8, start.y - 52),
+        x: Math.min(p.x, window.innerWidth - 128),
+        y: Math.max(8, p.y - 52),
       })
-    }, LONG_PRESS_MS)
-  }
-
-  const onTermTouchMove = (e: React.TouchEvent) => {
-    const start = longPressStart.current
-    if (!start) return
-    const touch = e.touches[0]
-    if (Math.abs(touch.clientX - start.x) > LONG_PRESS_CANCEL_PX ||
-        Math.abs(touch.clientY - start.y) > LONG_PRESS_CANCEL_PX) {
-      cancelLongPress()
-    }
-  }
-
-  useEffect(() => cancelLongPress, [cancelLongPress])
+    },
+  })
 
   // Initialize terminal on mount or when transitioning from empty state → active session.
   // Session switches (A→B) keep hasSession === true so the effect does not fire —
@@ -340,10 +312,10 @@ export function Terminal() {
       <div
         className="terminal-panel-pixel"
         style={{ flex: 1, minHeight: 0, position: 'relative' }}
-        onTouchStart={onTermTouchStart}
-        onTouchMove={onTermTouchMove}
-        onTouchEnd={cancelLongPress}
-        onTouchCancel={cancelLongPress}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={onTouchCancel}
       >
         <div
           ref={containerRef}

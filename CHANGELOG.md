@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-13 23:26) `[frontend]` ACP 聊天气泡动作体系：复制正文、引用到输入框、编辑重发、重新生成四个动作统一由 `messageActions.ts` 注册表驱动（桌面 hover 动作条 + 移动端长按菜单两套触发共用同一份定义）；新增块级复制（text / thought / tool_call 卡片各自 hover 复制原文）与「复制为 Markdown」（单条消息含工具卡片摘要导出到剪贴板，thought 默认省略）。剪贴板写入统一走 `utils/clipboard.ts`（async API + textarea 兜底，修复裸 http 下 `useTerminal` 选中复制静默失效），引用经 chatStore `pendingInsert` 通道注入输入框（`frontend/src/components/Chat/`、`frontend/src/utils/`、`frontend/src/hooks/useLongPress.ts`）
+
 ## [0.2.14] - 2026-08-13
 
 ### Added

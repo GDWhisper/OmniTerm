@@ -89,6 +89,37 @@
   （build-time i18n key 校验是未来工作）
 - `cmd` 字符串目前是英文硬编码；如需本地化按键需额外搬进 i18n
 
+## 动作注册表 (action-registry convention)
+
+**适用场景**：消息/卡片上的一组**动作**需要被多套触发形态共用——桌面 hover
+动作条、移动长按菜单、未来可能的键盘菜单等。动作数 ≥3 且有两套以上触发时
+**必须**用注册表，否则每加一个动作都要在每套触发 × 每条渲染分支下各写一遍。
+
+**约定**（实现见 `frontend/src/components/Chat/messageActions.ts` +
+`MessageActionBar.tsx`，计划 `docs/dev/plans/2026-08-11-chat-bubble-actions.md`）：
+
+- 注册表是模块级常量数组 `MessageAction[]`，字段：`id` / `Icon` / `labelKey` /
+  `visible(ctx)` / `run(ctx)`。**动作唯一真源在此**，新增动作只改这一个文件
+- `ctx: MessageActionContext` 携带 `message` / `isLastAssistant` / `handlers` /
+  `agentName`。`handlers` 是**稳定引用**的聚合对象（外部回调 useCallback +
+  内部状态入口 useCallback，整体 useMemo），保证 memo 组件的浅比较不失效
+- `MessageActionBar` 只做两件事：按 `visible` 过滤渲染 + 把 `run` 绑定到按钮；
+  桌面 hover 动作条（`.chat-msg-actions`）与移动长按菜单共用同一数组
+- **visible 边界**必须在此处一次性写全（system 无动作 / undelivered 不编辑 /
+  streaming 不复制 / assistant 无 text 块不可复制引用 / editing 态整体隐藏 /
+  inputDisabled 时编辑与重新生成隐藏），迁移或加动作时逐条对照
+- `Icon` 类型用 `ReactElement`（React 19 已移除全局 `JSX` 命名空间），图标
+  一律取自 `components/FileManager/icons.tsx` 线性图标库（ui-style-guide §13）
+
+**已有案例**：
+
+- `frontend/src/components/Chat/messageActions.ts` — ACP 聊天气泡动作
+  （copy / quote / edit / regenerate / copyMarkdown）
+
+**收益**：新增同类动作 = 一行数据 + 一个 locale key；两套触发零改动。
+**代价**：`visible` 的边界条件集中后，迁移旧内联动作时若漏掉一条会回归
+（注册表文件的 JSDoc 已列边界清单，验收测试覆盖 memo 契约不被破坏）。
+
 ## Sidebar 底部按钮弹出面板 (sidebar-popup convention)
 
 **适用场景**：Sidebar 底部状态栏新增按钮 → 点击弹出 fixed 面板。

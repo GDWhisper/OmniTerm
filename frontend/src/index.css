@@ -1883,6 +1883,31 @@ input[type="range"]:active::-webkit-slider-thumb {
   color: var(--text-secondary);
 }
 
+/* 块级复制角标（P1）：悬浮块内容右上角显示，点击复制该块原文 */
+.chat-block {
+  position: relative;
+}
+.chat-block-copy-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 3px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.chat-block:hover .chat-block-copy-btn {
+  opacity: 1;
+}
+.chat-block-copy-btn:hover {
+  color: var(--text-secondary);
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.
