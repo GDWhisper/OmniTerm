@@ -37,7 +37,9 @@ export function MessageActionBar({ actions, ctx, menu, onCloseMenu }: MessageAct
             key={action.id}
             type="button"
             className="chat-msg-action-btn"
-            title={t(action.labelKey)}
+            // 功能文字用自定义浮层（hover 图标时显示），aria-label 保留可访问性，
+            // 不设 title 避免与浮层双重 tooltip
+            aria-label={t(action.labelKey)}
             onClick={() => {
               action.run(ctx)
               onCloseMenu()
