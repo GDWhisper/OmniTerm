@@ -1,6 +1,6 @@
 # ACP 聊天气泡动作体系（复制 / 引用 / 动作注册表）
 
-> 状态：设计稿（2026-08-11；2026-08-13 评审修订，见 §8）
+> 状态：已实施（2026-08-11 设计稿；2026-08-13 评审修订，见 §8；同日 Phase 1-4 落地，见 §9 实施记录）
 > 触发条件：修改 `frontend/src/components/Chat/ChatMessage.tsx` 的消息动作、块级操作、剪贴板相关代码前必读
 > 关联：`docs/architecture/frontend-patterns.md`（数据/渲染分离、getState-action）、`docs/visual-design/ui-style-guide.md` §13（图标规则）、`docs/dev/plans/2026-07-30-mobile-interaction-optimization.md` D6（长按菜单范式）、`docs/dev/plans/2026-08-10-acp-session-reliability.md`（`sync_messages` 不变量）
 
@@ -196,3 +196,14 @@ ACP 聊天气泡当前只有两个动作，均藏在 hover 层（`index.css:1865
 | `JSX.Element` 在 React 19 + TS 6 下编译不过 | D2 接口类型改为 `ReactElement` |
 | handlers 聚合形态未定，memo 契约表述过弱 | D2 明确聚合为单个 `handlers` 对象 + `useMemo`；验收项措辞同步 |
 | D5 Markdown 导出格式缺定义 | D5 补 text + tool_call 转换样例与规则 |
+
+## 9. 实施记录（2026-08-13）
+
+| Phase | 产出 | commit | 备注 |
+|---|---|---|---|
+| 1 | `utils/clipboard.ts` + test、`utils/messageText.ts` + test；FileManager / useTerminal 改调统一 util | `5969f95`（基线文档）后 1 个 `feat:` | 实施时发现 `useTerminal.ts:550` 实际**已有** textarea 兜底（方案审计 #2「缺兜底」不准确，实为 `navigator.clipboard` 分支失败路径静默吞错）——已统一收敛并补失败反馈 |
+| 2 | `useLongPress.ts`、`messageActions.ts`、`MessageActionBar.tsx`、ChatMessage/ChatView/ChatInput/Terminal/chatStore/locale | 1 个 `feat:` | 实施偏差：`handlers` 中的 `startEdit` 无法由 ChatView 注入（编辑态是 ChatMessage 内部 state），实际由 ChatMessage 内部组装，ChatView 注入 copy/quote/regenerate + `canEdit`/`canRegenerate` 能力标志 |
+| 3 | 块级复制角标、`utils/messageMarkdown.ts` + test、copyMarkdown 动作 | 1 个 `feat:` | `messageMarkdown` 过滤条件放宽：无 content 的 tool_call 也保留摘要行（记录调用事实） |
+| 4 | CHANGELOG、frontend-patterns（action-registry）、frontend.md、user-testing §15、AGENTS.md 索引、本文件状态 | 1 个 `docs:` | — |
+
+**验收状态**：`tsc -b` 通过；`pnpm lint` 0 errors / 19 warnings（与 dev 基线一致，零新增）；`pnpm test --run` 38 files / 315 tests 全绿。手动回归用例见 `docs/reference/user-testing.md` §15。
