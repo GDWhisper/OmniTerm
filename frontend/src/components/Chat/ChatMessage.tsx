@@ -14,6 +14,9 @@ import { FileLocationLink } from './FileLocationLink'
 import { messageActions, type MessageActionHandlers, type MessageActionContext } from './messageActions'
 import { MessageActionBar, type ActionMenuPosition } from './MessageActionBar'
 import { hapticTap } from '../../utils/haptics'
+import { copyText } from '../../utils/clipboard'
+import { useToastStore } from '../../stores/toastStore'
+import { IconCopy } from '../FileManager/icons'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -38,6 +41,35 @@ const TOOL_KIND_LABELS: Record<string, string> = {
   delete: 'DELETE',
   write: 'WRITE',
   browser: 'BROWSE',
+}
+
+/**
+ * 块级复制角标（P1）：悬浮块内容右上角显示，点击复制该块原文。
+ * 语义按块类型：text 复制正文、thought 复制思考、tool_call 复制 content（含 diff 原文）。
+ * 用 getState-action（useToastStore.getState().addToast）避免订阅 store 破坏 memo。
+ */
+function BlockCopyButton({ text }: { text: string }) {
+  const { t } = useTranslation()
+  if (!text) return null
+  return (
+    <button
+      type="button"
+      className="chat-block-copy-btn"
+      title={t('chat.msg.copy')}
+      aria-label={t('chat.msg.copy')}
+      onClick={(e) => {
+        e.stopPropagation()
+        void copyText(text).then((ok) => {
+          useToastStore.getState().addToast(
+            ok ? 'success' : 'error',
+            ok ? t('chat.msg.copySuccess') : t('chat.msg.copyFailed'),
+          )
+        })
+      }}
+    >
+      <IconCopy style={{ width: 12, height: 12, verticalAlign: 'text-bottom' }} />
+    </button>
+  )
 }
 
 /**
@@ -114,7 +146,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   }
 
   return (
-    <div data-chat-body="true" style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
+    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
       <button
         onClick={toggle}
         style={{
@@ -135,6 +167,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
         <span style={{ fontStyle: 'normal' }}>◆</span>
         {open ? '▾' : '▸'} thinking
       </button>
+      {!streaming && <BlockCopyButton text={text} />}
       {open && (
         <OverlayScroll
           ref={scrollRef}
@@ -200,6 +233,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
   return (
     <div
       data-chat-body="true"
+      className="chat-block"
       style={{
         display: 'inline-flex',
         flexDirection: 'column',
@@ -252,6 +286,8 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
           <span style={{ color: 'var(--text-faint)', fontSize: '0.769em' }}>{open ? '▾' : '▸'}</span>
         )}
       </button>
+      {/* 块级复制：tool_call 复制 block.content 原文（含 diff），P1 */}
+      {!streaming && block.content && <BlockCopyButton text={block.content} />}
       {open && (
         <div style={{ padding: '0 10px 8px 32px' }}>
           {block.locations && block.locations.length > 0 && (
@@ -319,6 +355,7 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
   return (
     <div
       data-chat-body="true"
+      className="chat-block"
       style={{
         alignSelf: 'flex-start',
         maxWidth: '85%',
@@ -335,6 +372,7 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
     >
       <Markdown text={text} streaming={streaming} />
       {caret && <span className="chat-streaming-caret" />}
+      {!streaming && <BlockCopyButton text={text} />}
     </div>
   )
 }
@@ -432,7 +470,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
     [onCopyMessage, onQuoteMessage, startEdit, onRegenerate, onEditResend],
   )
 
-  const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers }
+  const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers, agentName }
   const visibleActions = messageActions.filter((a) => a.visible(ctx))
 
   // 长按手势（D3）：绑定消息行，但正文块（data-chat-body）不触发——保留系统

@@ -1,7 +1,8 @@
 import type { ReactElement, SVGProps } from 'react'
 import type { ChatMessage } from '../../stores/chatStore'
 import { extractMessageText } from '../../utils/messageText'
-import { IconCopy, IconLink, IconPencil, IconRefresh } from '../FileManager/icons'
+import { messageToMarkdown } from '../../utils/messageMarkdown'
+import { IconCopy, IconDownload, IconLink, IconPencil, IconRefresh } from '../FileManager/icons'
 
 /**
  * 气泡动作注册表（D2）。动作的唯一真源：新增一个动作只需在此追加一行数据，
@@ -32,6 +33,8 @@ export interface MessageActionContext {
   message: ChatMessage
   isLastAssistant: boolean
   handlers: MessageActionHandlers
+  /** agent 显示名（D5 复制为 Markdown 的 header 用）。 */
+  agentName?: string
 }
 
 export interface MessageAction {
@@ -86,6 +89,21 @@ export const messageActions: MessageAction[] = [
       !message.undelivered &&
       !message.streaming,
     run: ({ message, handlers }) => handlers.startEdit(message.id),
+  },
+  {
+    id: 'copyMarkdown',
+    // 复制为 Markdown（D5）：整条 assistant 消息（含工具卡片摘要）导出到剪贴板。
+    Icon: IconDownload,
+    labelKey: 'chat.msg.copyMarkdown',
+    visible: ({ message }) =>
+      message.role === 'assistant' &&
+      !message.streaming &&
+      (extractMessageText(message) !== '' ||
+        message.blocks.some((b) => b.type === 'tool_call')),
+    run: ({ message, handlers, agentName }) => {
+      const md = messageToMarkdown(message, { agentName })
+      if (md) handlers.copyMessage(md)
+    },
   },
   {
     id: 'regenerate',

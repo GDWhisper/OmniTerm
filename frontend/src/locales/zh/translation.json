@@ -470,5 +470,6 @@
   "chat.msg.copy": "复制",
   "chat.msg.copySuccess": "消息已复制",
   "chat.msg.copyFailed": "复制失败",
-  "chat.msg.quote": "引用"
+  "chat.msg.quote": "引用",
+  "chat.msg.copyMarkdown": "复制为 Markdown"
 }

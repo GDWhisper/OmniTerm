@@ -470,5 +470,6 @@
   "chat.msg.copy": "copy",
   "chat.msg.copySuccess": "Message copied",
   "chat.msg.copyFailed": "Copy failed",
-  "chat.msg.quote": "quote"
+  "chat.msg.quote": "quote",
+  "chat.msg.copyMarkdown": "copy as Markdown"
 }
