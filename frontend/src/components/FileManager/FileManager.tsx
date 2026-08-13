@@ -7,6 +7,7 @@ import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
+import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
@@ -623,24 +624,10 @@ export function FileManager() {
   }
 
   const handleCopyPath = async (fullPath: string) => {
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(fullPath)
-      } else {
-        // Fallback for non-secure contexts / older browsers
-        const ta = document.createElement('textarea')
-        ta.value = fullPath
-        ta.style.position = 'fixed'
-        ta.style.opacity = '0'
-        document.body.appendChild(ta)
-        ta.select()
-        document.execCommand('copy')
-        document.body.removeChild(ta)
-      }
-      addToast('success', t('fm.copyPathSuccess'))
-    } catch {
-      addToast('error', t('fm.copyPathFailed'))
-    }
+    // D1：统一走 utils/clipboard.ts（async API + textarea 兜底），
+    // 原内联实现收敛到公共 util，避免裸 http 下复制失效与逻辑重复。
+    const ok = await copyText(fullPath)
+    addToast(ok ? 'success' : 'error', ok ? t('fm.copyPathSuccess') : t('fm.copyPathFailed'))
   }
 
   const handleUpload = () => {
