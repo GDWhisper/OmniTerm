@@ -1979,6 +1979,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-test",
+ "tokio-tungstenite",
  "toml",
  "tower",
  "tower-http",

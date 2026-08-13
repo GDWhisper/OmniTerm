@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-08-14 00:26) `[backend]` `[frontend]` 新增 localhost 端口转发反向代理 `/proxy/{port}/{*path}`：机器 A 的浏览器经跑在机器 B 上的 OmniTerm 访问 B 的 localhost 服务（如 dev server）。目标 IP 硬编码 `127.0.0.1`、端口白名单（`3000..=65535` 减数据库/内部服务端口黑名单，并动态排除自身监听端口防回环），请求/响应 header 重写（Host/Origin/hop-by-hop 剥离/`Set-Cookie` 域与路径/`Location` 相对化，转发时剥离 `omniterm_token`），响应 `chunk()` 流式回写不落内存；WebSocket 双向 relay（每方向 `mpsc(64)` 有界，满则拒新数据 + warn）支撑 Vite HMR 等 WS dev server。前端 Chat 与终端里的 localhost 链接自动重写为 `/proxy/{port}/` 新标签打开（`src/proxy/`、`src/api/mod.rs`、`src/main.rs`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/vite.config.ts`）
+
 ## [0.2.14] - 2026-08-13
 
 ### Added

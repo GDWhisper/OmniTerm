@@ -1871,6 +1871,7 @@ input[type="range"]:active::-webkit-slider-thumb {
   opacity: 1;
 }
 .chat-msg-action-btn {
+  position: relative;
   background: none;
   border: none;
   cursor: pointer;
@@ -1881,6 +1882,26 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 .chat-msg-action-btn:hover {
   color: var(--text-secondary);
+}
+/* 动作条只显示图标；hover 到某个图标时才以浮层显示该图标的功能文字。
+   浮层绝对定位、不参与布局——文字出现不会挤动其他图标。 */
+.chat-msg-action-btn span {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 1px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  z-index: 30;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.chat-msg-action-btn:hover span {
+  opacity: 1;
 }
 
 /* 块级复制角标（P1）：悬浮块内容右上角显示，点击复制该块原文 */

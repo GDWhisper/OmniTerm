@@ -38,5 +38,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/ws/acp/{session_id}", axum::routing::get(ws::ws_acp_handler))
         .route_layer(middleware::from_fn_with_state(state.clone(), crate::auth::require_auth_mw));
 
-    Router::new().nest("/api/v1", public.merge(protected)).with_state(state)
+    Router::new()
+        .nest("/api/v1", public.merge(protected))
+        // 端口转发代理与 /api/v1 平级挂载（D1：不得套进 /api/v1 前缀下，
+        // 否则目标应用的绝对路径资源会与 /api/v1 冲突）。
+        .merge(crate::proxy::routes(state.clone()))
+        .with_state(state)
 }
