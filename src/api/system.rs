@@ -39,6 +39,8 @@ async fn system_info(State(state): State<AppState>) -> Json<Value> {
         "home_dir": home,
         // 平台终端复用器名称（按平台编译期确定），供前端 UI 文案使用
         "multiplexer": state.engines.multiplexer_name(),
+        // 子域名代理 base（`--proxy-domain`）；`null` = 未启用，前端据此决定是否生成子域名 URL
+        "proxy_domain": state.proxy.base_host,
     }))
 }
 

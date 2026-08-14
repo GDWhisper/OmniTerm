@@ -26,7 +26,7 @@ use axum::{
     body::Body,
     extract::{FromRequestParts, OriginalUri, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
-    middleware,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::any,
 };
@@ -96,6 +96,9 @@ pub fn is_port_allowed(port: u16, self_port: u16) -> bool {
 pub struct ProxyState {
     pub client: reqwest::Client,
     pub self_port: u16,
+    /// 子域名代理 base（如 `omniterm.lan`）。`None`/空字符串 = 不启用子域名 Host 路由。
+    /// 由 `--proxy-domain` / `OMNITERM_PROXY_DOMAIN` 注入（见 main.rs）。
+    pub base_host: Option<String>,
 }
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -139,6 +142,89 @@ async fn dispatch_proxy(
     }
 
     forward_http(state, port, uri, request).await
+}
+
+/// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
+/// `port` 段须为纯数字，其余形式（`www.{base}`、`x3306.{base}`、`{base}` 本身）一律 `None`。
+/// 大小写不敏感（DNS Host 大小写无关）。纯函数，便于单测。
+pub fn parse_proxy_host(host: &str, base: &str) -> Option<u16> {
+    if base.is_empty() {
+        return None;
+    }
+    // 剥离 `:{listen_port}` 后缀（若有）。Host 头是域名场景，无 IPv6 字面量需特殊处理；
+    // 即便误剥 IPv6（`[::1]:8080`），后续 `strip_suffix` 不匹配也会返回 None，安全。
+    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let host = host.to_ascii_lowercase();
+    let base = base.to_ascii_lowercase();
+    let prefix = host.strip_suffix(&format!(".{}", base))?;
+    if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    prefix.parse::<u16>().ok()
+}
+
+fn host_from_request(request: &Request) -> Option<&str> {
+    request.headers().get(header::HOST).and_then(|v| v.to_str().ok())
+}
+
+fn is_ws_upgrade(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+/// 子域名 Host 路由中间件：`{port}.{base}` 命中时直接代理，否则放行给后续路由。
+///
+/// 挂**最外层**（见 main.rs，仅 `base_host` 配置时挂载），先于 CorsLayer/TraceLayer/
+/// Router/fallback 执行——子域名请求（如 `3000.omniterm.lan/assets/x.js`）在进入 SPA
+/// fallback 前被拦截，浏览器对绝对路径资源的解析天然落到本 Host 上（D1 翻盘）。
+pub async fn proxy_host_mw(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(base) = state.proxy.base_host.as_deref().filter(|b| !b.is_empty()) else {
+        return next.run(request).await;
+    };
+    let Some(host) = host_from_request(&request) else {
+        return next.run(request).await;
+    };
+    let Some(port) = parse_proxy_host(host, base) else {
+        return next.run(request).await;
+    };
+
+    // 端口白名单（D2）：WS 分支绕过 dispatch_proxy，须在此先行校验，提前 403。
+    if !is_port_allowed(port, state.proxy.self_port) {
+        tracing::warn!("proxy host port denied: {}", port);
+        return (StatusCode::FORBIDDEN, "port not allowed").into_response();
+    }
+
+    // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
+    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。
+    let token = crate::auth::extract_token(&request);
+    if let Err(status) = crate::auth::verify_request(&state, token.as_deref()).await {
+        return status.into_response();
+    }
+
+    // 标准化 uri 为 `/proxy/{port}{原始 path}?{原始 query}`，复用 dispatch_proxy 的
+    // upstream_url 前缀剥离逻辑（子域名下 path 无 `/proxy/{port}` 前缀）。
+    let orig = request.uri().clone();
+    let normalized: axum::http::Uri = match orig.query() {
+        Some(q) => format!("/proxy/{}{}?{}", port, orig.path(), q).parse().unwrap_or(orig.clone()),
+        None => format!("/proxy/{}{}", port, orig.path()).parse().unwrap_or(orig.clone()),
+    };
+
+    if is_ws_upgrade(&request) {
+        let (mut parts, _body) = request.into_parts();
+        return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone()).await,
+            Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),
+        };
+    }
+
+    dispatch_proxy(state, port, normalized, None, request).await
 }
 
 /// 构造目标上游 URL：`http://127.0.0.1:{port}/{剩余路径}?{原始 query}`。
@@ -526,5 +612,50 @@ mod tests {
         assert_eq!(upstream_url(&uri, 3000), "http://127.0.0.1:3000/a/b?x=1&y=2");
         let uri: axum::http::Uri = "/proxy/3000/".parse().unwrap();
         assert_eq!(upstream_url(&uri, 3000), "http://127.0.0.1:3000/");
+    }
+
+    #[test]
+    fn proxy_host_parses_port_subdomain() {
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", "omniterm.lan"), Some(3000));
+        assert_eq!(parse_proxy_host("5173.omniterm.lan", "omniterm.lan"), Some(5173));
+    }
+
+    #[test]
+    fn proxy_host_strips_listen_port() {
+        assert_eq!(parse_proxy_host("3000.omniterm.lan:9777", "omniterm.lan"), Some(3000));
+    }
+
+    #[test]
+    fn proxy_host_rejects_non_digit_prefix() {
+        assert_eq!(parse_proxy_host("www.omniterm.lan", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("x3306.omniterm.lan", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("omniterm.lan", "omniterm.lan"), None);
+    }
+
+    #[test]
+    fn proxy_host_rejects_mismatched_base() {
+        assert_eq!(parse_proxy_host("3000.example.com", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", ""), None);
+    }
+
+    #[test]
+    fn proxy_host_is_case_insensitive() {
+        assert_eq!(parse_proxy_host("3000.OMNITERM.LAN", "omniterm.lan"), Some(3000));
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", "OMNITERM.LAN"), Some(3000));
+    }
+
+    #[test]
+    fn proxy_host_supports_multi_level_base() {
+        assert_eq!(
+            parse_proxy_host("3000.omniterm.example.com", "omniterm.example.com"),
+            Some(3000)
+        );
+    }
+
+    #[test]
+    fn proxy_host_parses_denylisted_port_for_later_allowlist_check() {
+        // parse 只负责「解析出纯数字端口」，白名单拒绝由 is_port_allowed 负责。
+        assert_eq!(parse_proxy_host("3306.omniterm.lan", "omniterm.lan"), Some(3306));
+        assert!(!is_port_allowed(3306, 9777));
     }
 }

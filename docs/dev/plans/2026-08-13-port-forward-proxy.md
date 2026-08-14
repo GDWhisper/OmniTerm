@@ -1,6 +1,6 @@
 # 端口转发反向代理：`/proxy/{port}/{*path}`
 
-> 状态：**P1-P3 已实施（2026-08-14）**；P4 安全加固（settings 表白名单 + UI 开关 + 按 session 授权 + 审计日志）留待后续，产出模糊且验收标准未覆盖，实施边界需另行确认
+> 状态：**P1-P3 已实施（2026-08-14）**；**D1 翻盘触发——子域名方案 `{port}.{base}` 已实施（2026-08-14，见 §D1 翻盘）**；P4 安全加固（settings 表白名单 + UI 开关 + 按 session 授权 + 审计日志）留待后续，产出模糊且验收标准未覆盖，实施边界需另行确认
 > 触发条件：修改 `src/proxy/`、`src/api/mod.rs`（路由挂载）、`src/main.rs`（`AppState`）、`frontend/vite.config.ts`（代理）、`frontend/src/utils/proxyUrl.ts`、终端/聊天链接重写逻辑中任一项前必读
 > 关联：`docs/architecture/backend.md`、`docs/architecture/frontend.md`、`docs/reference/auth-not-enforced.md`（鉴权挂载）、`docs/dev/performance-and-safety.md` §P1/§P4（有界缓冲 / 外部输入速率）、`docs/reference/references.md`（code-server `proxy.ts` / jupyter-server-proxy 参考实现）
 
@@ -9,6 +9,7 @@
 > 2. **WS 分流**：axum 0.8 的 `WebSocketUpgrade` 只实现 `FromRequestParts`、未实现 `OptionalFromRequestParts`，无法直接 `Option<WebSocketUpgrade>`——新增自定义 extractor `OptionalWebSocketUpgrade` 把 reject 折叠为 `None`。
 > 3. **有界队列超限策略**：D5 的「满则丢最旧」改为「满则拒新数据 + warn」——丢最旧需独占 `Receiver` 做 `try_recv`，与写侧 `recv().await` 借用冲突；且拒新数据保留帧序（两者都是 §P1 允许的超限策略）。
 > 4. **响应流式**：不用 reqwest `stream` feature（其引入 wasm-streams 依赖且当前环境联网受限），改用 `Response::chunk()` + `futures_util::unfold` 等价实现。
+> 5. **子域名方案实施（2026-08-14）**：D1 翻盘条件触发（用户反馈绝对路径 SPA 白屏），按「保留路径前缀 + 新增子域名 Host 路由」实施。两点实施偏差：① 鉴权共享函数 `verify_request` 不能持 `&Request` 跨 await——`Request<Body>` 含 `dyn HttpBody`（非 `Sync`），`&Request` 不 `Send` 连带整个 middleware future 失去 `Send` 而无法挂载，改为接收已提取的 `token: Option<&str>`；② 子域名入口是 middleware 无法用 extractor 提取 `WebSocketUpgrade`，改为 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取。
 
 ---
 
@@ -60,6 +61,8 @@
 **否决项**：套进 `/api/v1` 前缀下（`/api/v1/proxy/...`）。目标应用的绝对路径资源与 query 会与 `/api/v1` 冲突，且语义混乱。proxy 路由必须与 `/api/v1` **平级**挂载。
 
 **已知缺陷（明确接受）**：目标应用内**硬编码绝对路径**的资源（Vite 的 `/@vite/client`、`/src/main.tsx`，Next.js 的 `/_next/...`）会绕过 `/proxy/{port}/` 前缀，直接请求 `omniterm-host/...` 而 404。用 `Location` 头重写 + 响应 HTML 内相对化兜底，但无法根治。**翻盘条件**：若用户反馈绝对路径应用不可用且影响面大，升级为子域名方案（引入 wildcard DNS/TLS）。
+
+> **翻盘已触发（2026-08-14）**：用户反馈绝对路径 SPA（new-api 等）白屏。方案定为「保留路径前缀（相对路径应用）+ 新增子域名 Host 路由 `{port}.{base}`（绝对路径应用）」。子域名方案不引入 wildcard TLS——沿用现有单端口监听，仅按 Host 头路由；DNS 通配符解析为用户部署负担（dnsmasq/公网/hosts 三选一）。实施详见 `docs/architecture/backend.md`「子域名 Host 路由」与 CHANGELOG。
 
 ### D2：安全边界 —— 硬编码 127.0.0.1 + 端口白名单
 

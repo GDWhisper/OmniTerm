@@ -62,7 +62,7 @@ pub async fn verify_token_for_state(
     Ok(claims)
 }
 
-fn extract_token(req: &AxumRequest) -> Option<String> {
+pub fn extract_token(req: &AxumRequest) -> Option<String> {
     if let Some(cookie) = req.headers().get("cookie").and_then(|v| v.to_str().ok()) {
         for pair in cookie.split(';') {
             let pair = pair.trim();
@@ -82,18 +82,32 @@ fn extract_token(req: &AxumRequest) -> Option<String> {
     None
 }
 
+/// 共享请求鉴权校验：auth 关闭放行；开启则验 token 签名/过期 + revocation。
+/// 供 `require_auth_mw`（路由层）与子域名代理中间件（`proxy_host_mw`）复用——
+/// 后者是 middleware 不走路由层，须显式调用，否则 auth 开启时子域名成开放代理。
+///
+/// `token` 是已提取的令牌（`extract_token` 的返回值），而非 `&Request`：`Request<Body>`
+/// 含 `dyn HttpBody`（非 `Sync`），`&Request` 不可跨线程发送，会连带整个 future 失去
+/// `Send`，无法作为 axum middleware 挂载。提取为 `&str` 后只借用纯字符串，future 恢复
+/// `Send`。
+pub async fn verify_request(state: &AppState, token: Option<&str>) -> Result<(), StatusCode> {
+    // Password verification master switch: when disabled, every route is open.
+    // The AtomicBool mirrors `settings.auth_enabled` (updated by POST /auth/settings),
+    // so this check is a single relaxed load, no DB round-trip per request.
+    if !state.auth_enabled.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let token = token.ok_or(StatusCode::UNAUTHORIZED)?;
+    verify_token_for_state(&state.db, &state.jwt_secret, token).await?;
+    Ok(())
+}
+
 pub async fn require_auth_mw(
     State(state): State<AppState>,
     request: AxumRequest,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    // Password verification master switch: when disabled, every route is open.
-    // The AtomicBool mirrors `settings.auth_enabled` (updated by POST /auth/settings),
-    // so this check is a single relaxed load, no DB round-trip per request.
-    if !state.auth_enabled.load(Ordering::Relaxed) {
-        return Ok(next.run(request).await);
-    }
-    let token = extract_token(&request).ok_or(StatusCode::UNAUTHORIZED)?;
-    verify_token_for_state(&state.db, &state.jwt_secret, &token).await?;
+    let token = extract_token(&request);
+    verify_request(&state, token.as_deref()).await?;
     Ok(next.run(request).await)
 }

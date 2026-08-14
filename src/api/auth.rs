@@ -30,21 +30,32 @@ pub fn protected_routes() -> Router<AppState> {
         .route("/auth/change-password", post(change_password))
 }
 
-fn token_cookie(token: &str) -> String {
-    Cookie::build(("omniterm_token", token))
+/// 构造登录/签发的 `omniterm_token` cookie。`domain` 为子域名代理 base
+/// （`Some("omniterm.lan")`）时给 cookie 加 `Domain=omniterm.lan`，使 `{port}.{base}`
+/// 子域名也能携带该 cookie 通过鉴权；`None` 时维持 host-only（现状）。
+fn token_cookie(token: &str, domain: Option<&str>) -> String {
+    let builder = Cookie::build(("omniterm_token", token))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
-        .max_age(time::Duration::days(90))
-        .to_string()
+        .max_age(time::Duration::days(90));
+    match domain {
+        Some(d) => builder.domain(d),
+        None => builder,
+    }
+    .to_string()
 }
 
-fn clear_cookie() -> String {
-    Cookie::build(("omniterm_token", ""))
+fn clear_cookie(domain: Option<&str>) -> String {
+    let builder = Cookie::build(("omniterm_token", ""))
         .path("/")
         .http_only(true)
-        .max_age(time::Duration::ZERO)
-        .to_string()
+        .max_age(time::Duration::ZERO);
+    match domain {
+        Some(d) => builder.domain(d),
+        None => builder,
+    }
+    .to_string()
 }
 
 /// Reject clients that exhausted the login failure budget (5 failures / 5 min).
@@ -89,7 +100,7 @@ async fn setup(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let token = auth::create_token(&state.jwt_secret, ver)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = token_cookie(&token);
+    let cookie = token_cookie(&token, state.proxy.base_host.as_deref());
 
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
@@ -122,7 +133,7 @@ async fn login(
 
     let token = auth::create_token(&state.jwt_secret, ver)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = token_cookie(&token);
+    let cookie = token_cookie(&token, state.proxy.base_host.as_deref());
 
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
@@ -135,7 +146,7 @@ async fn logout(State(state): State<AppState>) -> Result<impl IntoResponse, Stat
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = clear_cookie();
+    let cookie = clear_cookie(state.proxy.base_host.as_deref());
     Ok((AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
 

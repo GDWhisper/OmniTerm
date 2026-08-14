@@ -24,6 +24,8 @@ export default defineConfig({
   // 注入分支版本给前端（运行时代码可用 import.meta.env.VITE_APP_VERSION 访问）
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(branchVersion),
+    // 后端端口（子域名代理 URL 生成用；dev 前后端分离时前端不知道后端端口，构建时注入）
+    'import.meta.env.VITE_BACKEND_PORT': JSON.stringify(backendPort),
   },
   server: {
     port: Number(frontendPort),

@@ -187,7 +187,8 @@ export const api = {
   health: () => request<{ status: string }>('/health'),
 
   // System
-  systemInfo: () => request<{ home_dir: string; multiplexer?: string }>('/system/info'),
+  systemInfo: () =>
+    request<{ home_dir: string; multiplexer?: string; proxy_domain?: string | null }>('/system/info'),
   listDirs: (path: string) =>
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>

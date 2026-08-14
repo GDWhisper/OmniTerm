@@ -33,8 +33,8 @@ src/
 │   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
 ├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
-├── proxy/                # 端口转发反向代理 /proxy/{port}/{*path}（P1 HTTP 转发 + P2 WS relay）
-│   ├── mod.rs            # ProxyState（reqwest client + self_port）、routes、proxy_handler（WS/HTTP 分流）、端口白名单、header 重写纯函数 + 单测
+├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP 转发 + P2 WS relay）
+│   ├── mod.rs            # ProxyState（reqwest client + self_port + base_host）、routes、proxy_handler（WS/HTTP 分流）、proxy_host_mw（子域名 Host 路由）、parse_proxy_host、端口白名单、header 重写纯函数 + 单测
 │   └── ws.rs             # WS 双向 relay：connect_async 上游 + 四任务双向 + mpsc(64) 有界队列
 ├── engine/               # 会话引擎抽象层（D9）：SessionEngine trait + EngineRegistry 按 runtime_kind 路由
 │   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
@@ -147,6 +147,7 @@ POST /api/v1/system/update            # 一键升级（github_release 自替换 
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
 POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
 ANY  /proxy/{port}/{*path}           # 端口转发反向代理（与 /api/v1 平级挂载，D1 禁止套进 /api/v1）；见「Port-forward proxy」小节
+ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy-domain/OMNITERM_PROXY_DOMAIN 时挂最外层 middleware，先于 fallback）；见「Port-forward proxy」小节
 ```
 
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
@@ -160,13 +161,23 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 - **有界性（D5）**：请求体 `to_bytes` 上限 2MB（与 axum DefaultBodyLimit 一致）；响应 `Response::chunk()` + `unfold` 流式回写不 collect；WS 每方向 `mpsc(64)` 有界，满则拒新数据 + warn。
 - **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
 
+### 子域名 Host 路由（`{port}.{base}`，D1 翻盘）
+
+路径前缀无法代理**绝对路径资源**的 SPA（Vite `/@vite/client`、Next.js `/_next/*` 会绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404）。配置 `--proxy-domain <base>`（env `OMNITERM_PROXY_DOMAIN`）后启用子域名方案：
+
+- **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。
+- **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。
+- **鉴权 cookie 跨子域名**：登录/登出的 `omniterm_token` cookie 在启用子域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；未启用时维持 host-only。
+- **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
+- **DNS 部署（用户侧，非代码）**：局域网 IP 无法子域名（`3000.192.168.5.216` 非法），需用户配置可通配符解析的域名指向 OmniTerm 机器，三选一：局域网 DNS（dnsmasq/pihole `address=/.{base}/{IP}`）、公网 DNS（wildcard A 记录）、hosts 文件（逐端口加）。未配 DNS 则子域名不生效、路径前缀兜底。
+
 ### 多实现差异（AGENTS §8）
 
 反向代理的「协议」= HTTP/WS，被无数 dev server 实现满足，不得以某一种（如 Vite）行为推断全部：
 
 | 维度 | 差异 | 兜底 |
 |---|---|---|
-| 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | `Location` 头重写 + 明确接受「绝对路径应用需配合 base path」的已知限制（D1 翻盘条件：用户反馈影响面大则升子域名方案） |
+| 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | 路径前缀下 `Location` 头重写兜底（接受已知限制）；**子域名方案（`{port}.{base}`）根治**——浏览器对绝对路径的解析天然落到子域名 Host 上（D1 翻盘已实施，见上） |
 | WS 子协议 | Vite HMR 用 `vite-hmr`；Socket.IO 自定义；graphql-ws 用 `graphql-transport-ws` | 透传 `Sec-WebSocket-Protocol`，不假设不硬编码 |
 | Origin 校验 | 部分 dev server（webpack-dev-server 等）严格校验 Origin；Vite 较宽松 | WS 握手统一重写 Origin 为 `http://127.0.0.1:{port}` 兜底 |
 | Cookie 域 | 目标服务可能 `Set-Cookie` 带 `Domain=localhost` 或绝对 `Path` | 响应侧统一重写（D6） |
