@@ -159,7 +159,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 - **路由**：单一通配符 `/proxy/{*path}`（不拆 `{port}` + `{*rest}` 两条——axum 0.8 的 `{*rest}` 不匹配空剩余），handler 从通配符首个路径段解析端口，剩余路径取 `OriginalUri` 未解码原始路径（`strip_prefix("/proxy/{port}")`）。
 - **安全边界（D2）**：目标 IP 永远硬编码 `127.0.0.1`，绝不从 path/header/query 解析地址。端口白名单 `3000..=65535` − 黑名单常量表（3306/5432/6379/27017/11211 + Consul 8500-8503 + ES 9200-9300）− 自身监听端口（`args.port` 经 `AppState.proxy.self_port` 注入，防回环）。路由挂 `require_auth_mw`（auth 开启时）；转发前剥离 `omniterm_token` cookie。
 - **有界性（D5）**：请求体 `to_bytes` 上限 2MB（与 axum DefaultBodyLimit 一致）；响应 `Response::chunk()` + `unfold` 流式回写不 collect；WS 每方向 `mpsc(64)` 有界，满则拒新数据 + warn。
-- **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
+- **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、剥离 **Accept-Encoding**（防上游返回 gzip 压缩体——reqwest 未启用自动解压，压缩字节经重写转码会被破坏，浏览器 `ERR_CONTENT_DECODING_FAILED`；强制明文 + 回环传输压缩收益可忽略）、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
 - **响应体重写（绝对路径 SPA 兜底）**：`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性、`text/javascript`（及 `application/javascript` 等）的 `"/api/`、`'/api/`、`` `/api/ `` 字符串字面量，统一补 `/proxy/{port}` 前缀。上限 HTML 4MiB / JS 16MiB，超限放弃重写、已读头部拼回流前部继续流式透传。重写是**全局一致**的——请求路径与 `===`/`includes` 比较字面量同步带前缀，比较逻辑不失真；外部 URL（`https://…`）、协议相对（`//cdn…`）、相对路径、已带 `/proxy/` 前缀的不动。见「响应体重写与绝对路径 SPA」小节。
 
 ### 子域名 Host 路由（`{port}.{base}`，D1 翻盘）
@@ -178,7 +178,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 
 - **HTML**（`text/html`）：重写 `src`/`href`/`srcset`/`action`/`poster` 属性值——`src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`。`srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）。
 - **JS**（`text/javascript`/`application/javascript`/`application/x-javascript`）：重写字符串字面量 `"/api/`、`'/api/`、`` `/api/ ``（含模板字符串）——`fe.post("/api/card/batch")` → `fe.post("/proxy/3000/api/card/batch")`。不匹配变量拼接、正则字面量、相对路径。
-- **边界**：① 超限（HTML 4MiB / JS 16MiB）回退流式透传（已读头部拼回流前部）；② 重写只覆盖「响应体静态内容」，**运行时动态拼接的绝对路径**（如 `"/api" + id`、服务端返回的 URL）覆盖不到，属已知限制；③ 内联 `<script>` 内的字符串不重写（HTML 属性重写只认属性）；④ `Content-Encoding` 由 reqwest 自动解压后再重写，无压缩字节破坏问题。
+- **边界**：① 超限（HTML 4MiB / JS 16MiB）回退流式透传（已读头部拼回流前部）；② 重写只覆盖「响应体静态内容」，**运行时动态拼接的绝对路径**（如 `"/api" + id`、服务端返回的 URL）覆盖不到，属已知限制；③ 内联 `<script>` 内的字符串不重写（HTML 属性重写只认属性）；④ **压缩体不重写**（2026-08-14 勘误）：reqwest 未启用 gzip feature（`default-features=false`），`chunk()` 返回压缩字节而非明文——`from_utf8_lossy` 转码会损坏 gzip 二进制，重写后响应头仍带 `Content-Encoding: gzip`，浏览器解码失败白屏（`ERR_CONTENT_DECODING_FAILED`）。修复：请求侧剥离 Accept-Encoding 强制上游回明文（主），响应侧 `Content-Encoding` 非空时跳过重写走流式原样透传（双重保险，压缩字节 + 保留编码头浏览器可正常解码）。
 - **全局一致重写保证比较逻辑自洽**：请求路径字面量与 `===`/`includes` 比较字面量同步带前缀（如 new-api 的 `Y==="/api/ratio_config"`），故不破坏应用内路径判定。
 
 ### 多实现差异（AGENTS §8）
