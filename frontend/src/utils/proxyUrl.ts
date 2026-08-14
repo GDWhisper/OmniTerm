@@ -6,11 +6,13 @@
  * 这里把它重写为 OmniTerm 后端的代理入口，由后端转发到 127.0.0.1:{port}。
  *
  * 两种代理形态：
- * 1. **路径前缀**（默认）：`/proxy/{port}/...` 同源相对路径（见计划 D4）。相对路径应用可用，
- *    但绝对路径资源（Vite `/@vite/client`、Next.js `/_next/*`）会绕过前缀而 404（D1 已知限制）。
+ * 1. **路径前缀**（默认）：`/proxy/{port}/...` 同源相对路径（见计划 D4）。绝对路径 SPA
+ *    （new-api `/assets/*`、`/api/*`）的资源与 API 由**后端响应体重写**兜底——后端对 HTML/JS
+ *    响应统一补 `/proxy/{port}` 前缀（见 backend.md「响应体重写与绝对路径 SPA」），
+ *    局域网纯 IP 场景开箱即用。
  * 2. **子域名**（配置 `proxyDomain` 后）：`{protocol}//{port}.{domain}:{backendPort}/...`。
  *    浏览器对绝对路径资源的解析天然落到子域名 Host，由后端按 Host 头路由到对应端口
- *    （D1 翻盘，见 plan `2026-08-13-port-forward-proxy.md` 子域名方案）。
+ *    （D1 翻盘，见 plan `2026-08-13-port-forward-proxy.md` 子域名方案）；需可通配符解析的域名。
  *
  * `proxyDomain` 由 App 启动时 fetch `/api/v1/system/info` 的 `proxy_domain` 字段注入
  * （见 `App.tsx`），`null` 表示未启用子域名（回退路径前缀）。

@@ -224,6 +224,7 @@ and render rich cards instead of the current text-only fallback.
 
 - **`utils/proxyUrl.ts::rewriteLocalUrl(raw)`**：匹配 `http(s)://(localhost|127.0.0.1|0.0.0.0):{port}` 或裸 `hostname:port`，返回 `/proxy/{port}/...` 相对 URL；非本机 URL 返回 `null`。端口范围与后端白名单对齐（3000..=65535），黑名单/自身端口由后端 403 兜底。
 - **子域名形态（`setProxyDomain` + `proxy_domain`）**：后端配置 `--proxy-domain` 时，`/system/info` 返回 `proxy_domain`，App 启动时 `setProxyDomain` 缓存到模块级变量；此后 `rewriteLocalUrl` 命中本机 URL 时生成 `{protocol}//{port}.{domain}:{backendPort}/...` 子域名绝对 URL（根治绝对路径 SPA），未配置则回退路径前缀。后端端口 = `import.meta.env.VITE_BACKEND_PORT`（dev 构建注入，`vite.config.ts`）/ `window.location.port`（生产同源，`import.meta.env.PROD` 区分）。
+- **路径前缀形态的绝对路径 SPA 兜底（后端响应体重写）**：路径前缀下目标应用内绝对路径资源/API（`/assets/*`、`/api/*`）会绕过前缀直达 omniterm-host 而 404——后端对 `text/html`/`text/javascript` 响应做字节级前缀重写兜底（见 `docs/architecture/backend.md`「响应体重写与绝对路径 SPA」），局域网纯 IP 场景开箱即用；子域名方案（有域名时）仍为首选。
 - **Chat 接入点**（`components/Chat/Markdown.tsx`）：react-markdown 的 `a` 组件渲染时判断 href 是否本机链接——是则保留原始 href（hover/复制仍是 localhost），`onClick` 里 `e.preventDefault()` + `window.open(rewritten, '_blank', 'noopener')`。
 - **终端接入点**（`hooks/useTerminal.ts`）：`WebLinksAddon` 构造传 `handler` 回调接管链接点击，`rewriteLocalUrl` 命中则重写、否则默认 `window.open(uri)`。**已知限制**：addon 0.12 内部用 `new URL()` 校验，无法识别无 scheme 的裸 `localhost:3000`（只识别 `http(s)://` 开头），见计划风险表降级。
 - **dev 代理**（`vite.config.ts`）：`/proxy` 前缀透传到后端，`ws: true` 支撑 WS relay（P2）。

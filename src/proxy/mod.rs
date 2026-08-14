@@ -31,6 +31,10 @@ use axum::{
     routing::any,
 };
 use std::ops::RangeInclusive;
+use std::sync::OnceLock;
+
+use futures_util::StreamExt;
+use regex::Regex;
 
 use crate::AppState;
 
@@ -64,6 +68,12 @@ const DENIED_PORT_RANGES: &[(u16, u16)] = &[(8500, 8503), (9200, 9300)];
 
 /// 请求体上限：与 axum `DefaultBodyLimit` 一致（2MB），防大体积上传耗内存（D5）。
 const MAX_REQUEST_BODY: usize = 2 * 1024 * 1024;
+
+/// HTML 响应体重写上限：超过则不重写、原样流式透传（HTML 页面通常 < 1MiB）。
+const REWRITE_HTML_MAX: usize = 4 * 1024 * 1024;
+
+/// JS 响应体重写上限：单文件主包（如 new-api 9.2MB）可能较大，放宽到 16MiB。
+const REWRITE_JS_MAX: usize = 16 * 1024 * 1024;
 
 /// hop-by-hop 头（RFC 7230 §6.1）：只对单跳连接有意义，跨代理必须剥离、禁止透传。
 const HOP_BY_HOP_HEADERS: &[&str] = &[
@@ -282,23 +292,213 @@ async fn forward_http(
     if let Some(hm) = builder.headers_mut() {
         *hm = resp_headers;
     }
+
+    // 响应体重写（D1 兜底）：绝对路径 SPA（new-api 等）的 HTML 资源与 JS 内
+    // `/api/` 字面量是根绝对路径，路径前缀方案下会绕过 `/proxy/{port}/` 直达
+    // omniterm-host 而 404 → 白屏。局域网纯 IP 场景无法子域名（`3000.192.168.5.216`
+    // 非法），Service Worker 需 secure context 也不可用——唯一通用手段是后端对
+    // HTML/JS 响应做字节级前缀重写（见 plan 勘误与 backend.md）。
+    let content_type = upstream_resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if let Some(kind) = RewriteKind::from_content_type(&content_type) {
+        match try_rewrite_body(upstream_resp, kind, port).await {
+            Ok(RewriteOutcome::Done(body)) => {
+                return match builder.body(Body::from(body)) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        tracing::error!("proxy failed to build response (port {}): {}", port, e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
+                    }
+                };
+            }
+            Ok(RewriteOutcome::Fallthrough(head, resp)) => {
+                // 超限放弃重写：已读头部拼回流前部，继续流式透传（D5 有界缓冲）。
+                let head_stream = futures_util::stream::iter(
+                    head.chunks(64 * 1024)
+                        .map(|c| Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(c)))
+                        .collect::<Vec<_>>(),
+                );
+                let stream = head_stream.chain(body_stream(resp));
+                return match builder.body(Body::from_stream(stream)) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        tracing::error!("proxy failed to build response (port {}): {}", port, e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
+                    }
+                };
+            }
+            Err(e) => {
+                tracing::warn!("proxy failed to read body for rewrite (port {}): {}", port, e);
+                return (StatusCode::BAD_GATEWAY, "upstream unreachable").into_response();
+            }
+        }
+    }
+
     // 流式回写：`Response::chunk()` + `unfold` 边读边写，绝不 collect 到内存
     // （SSE/长连接/大文件下载天然安全，D5）。不用 reqwest `stream` feature——
     // 它额外引入 wasm-streams（WASM 平台依赖），而 `chunk()` 已足够。
-    let stream = futures_util::stream::unfold(upstream_resp, |mut resp| async {
-        match resp.chunk().await {
-            Ok(Some(chunk)) => Some((Ok::<_, std::io::Error>(chunk), resp)),
-            Ok(None) => None,
-            Err(e) => Some((Err(std::io::Error::other(e)), resp)),
-        }
-    });
-    match builder.body(Body::from_stream(stream)) {
+    match builder.body(Body::from_stream(body_stream(upstream_resp))) {
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("proxy failed to build response (port {}): {}", port, e);
             (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
         }
     }
+}
+
+/// 响应体流（chunk 边读边写，不 collect）——HTTP 转发公共尾部。
+fn body_stream(
+    resp: reqwest::Response,
+) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
+    futures_util::stream::unfold(resp, |mut resp| async {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => Some((Ok::<_, std::io::Error>(chunk), resp)),
+            Ok(None) => None,
+            Err(e) => Some((Err(std::io::Error::other(e)), resp)),
+        }
+    })
+}
+
+/// 响应体重写类型：按 Content-Type 决定是否把根绝对路径前缀化。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RewriteKind {
+    /// HTML：重写 `src`/`href`/`srcset`/`action`/`poster` 属性。
+    Html,
+    /// JS：重写字符串字面量 `"/api/`、`'/api/`、`` `/api/ ``。
+    Js,
+}
+
+impl RewriteKind {
+    fn from_content_type(ct: &str) -> Option<Self> {
+        match ct {
+            "text/html" => Some(Self::Html),
+            "text/javascript" | "application/javascript" | "application/x-javascript" => {
+                Some(Self::Js)
+            }
+            _ => None,
+        }
+    }
+
+    fn max_bytes(self) -> usize {
+        match self {
+            Self::Html => REWRITE_HTML_MAX,
+            Self::Js => REWRITE_JS_MAX,
+        }
+    }
+}
+
+/// 响应体缓冲重写结果：`Done` 完整重写；`Fallthrough` 超限回退（已读前缀 + 剩余响应流）。
+enum RewriteOutcome {
+    Done(Vec<u8>),
+    Fallthrough(Vec<u8>, reqwest::Response),
+}
+
+/// 缓冲读取 + 重写。超过 `kind.max_bytes()` 上限立即放弃重写（回退流式透传，
+/// 已读部分拼回流前部），保证大文件下载不被阻塞（D5 有界缓冲）。
+async fn try_rewrite_body(
+    mut resp: reqwest::Response,
+    kind: RewriteKind,
+    port: u16,
+) -> Result<RewriteOutcome, reqwest::Error> {
+    let limit = kind.max_bytes();
+    let mut buf = Vec::with_capacity(64 * 1024);
+    while let Some(c) = resp.chunk().await? {
+        if buf.len() + c.len() > limit {
+            return Ok(RewriteOutcome::Fallthrough(buf, resp));
+        }
+        buf.extend_from_slice(&c);
+    }
+    let out = match kind {
+        RewriteKind::Html => rewrite_html(&buf, port),
+        RewriteKind::Js => rewrite_js(&buf, port),
+    };
+    Ok(RewriteOutcome::Done(out))
+}
+
+/// HTML 属性重写正则（惰性编译）：`src`/`href`/`srcset`/`action`/`poster` 单双引号属性。
+static HTML_ATTR_RE: OnceLock<Regex> = OnceLock::new();
+
+/// JS API 字面量重写正则（惰性编译）：双/单/反引号后紧跟 `/api/`。
+static JS_API_RE: OnceLock<Regex> = OnceLock::new();
+
+/// HTML 内根绝对路径资源属性 → `/proxy/{port}` 前缀（D1 兜底）。
+/// 覆盖 `src`/`href`/`srcset`/`action`/`poster`（单双引号皆可）：
+/// - `src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`
+/// - 外部 URL（`https://…`）、协议相对（`//cdn…`）、已带前缀（`/proxy/{port}/…`）不动
+/// - `srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）
+fn rewrite_html(body: &[u8], port: u16) -> Vec<u8> {
+    let s = String::from_utf8_lossy(body);
+    let prefix = format!("/proxy/{}", port);
+    let re = HTML_ATTR_RE.get_or_init(|| {
+        // 不用反向引用 `\2`（regex crate 不支持）：组 3 匹配值（不含引号，遇引号即停），
+        // 组 4 捕获闭合引号一并消费，重建时用组 2/4 的引号还原（HTML 实体 `&quot;` 不影响）。
+        Regex::new(r#"(?i)(src|href|srcset|action|poster)=(["'])([^"']*)(["'])"#)
+            .expect("valid html attr regex")
+    });
+    re.replace_all(&s, |caps: &regex::Captures| {
+        let attr = &caps[1];
+        let quote = &caps[2];
+        let value = rewrite_attr_value(&caps[3], &prefix);
+        format!("{}={}{}{}", attr, quote, value, &caps[4])
+    })
+    .into_owned()
+    .into_bytes()
+}
+
+/// 单个 HTML 属性值重写：根绝对路径（`/x`）→ `/proxy/{port}/x`；其余原样。
+fn rewrite_attr_value(value: &str, prefix: &str) -> String {
+    // 已带任何 /proxy/ 前缀（含其他端口）一律跳过，防二次叠加。
+    if value.starts_with("/proxy/") {
+        return value.to_string();
+    }
+    // srcset 逗号分隔多候选：`/a.png 1x, /b.png 2x`——逐项重写 URL 部分。
+    if value.contains(',') {
+        return value
+            .split(',')
+            .map(|item| {
+                let t = item.trim();
+                if t.starts_with('/') && !t.starts_with("//") {
+                    let (url, desc) = match t.split_once(char::is_whitespace) {
+                        Some((u, d)) => (u, d),
+                        None => (t, ""),
+                    };
+                    let mut out = format!("{}{}", prefix, url);
+                    if !desc.is_empty() {
+                        out.push(' ');
+                        out.push_str(desc);
+                    }
+                    out
+                } else {
+                    t.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    if value.starts_with('/') && !value.starts_with("//") {
+        format!("{}{}", prefix, value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// JS 内 API 路径字面量 → `/proxy/{port}` 前缀（D1 兜底）。
+/// 匹配 `"/api/`、`'/api/`、`` `/api/ ``（双/单/反引号字符串与模板字符串），
+/// 统一加前缀。**全局一致重写**保证比较逻辑自洽：请求路径与 `===` 比较的字面量
+/// 同步带前缀（如 new-api 的 `Y==="/api/ratio_config"`）。
+/// 不匹配：非引号开头（变量拼接、正则字面量）、注释与 i18n 文案（加前缀无害）。
+fn rewrite_js(body: &[u8], port: u16) -> Vec<u8> {
+    let s = String::from_utf8_lossy(body);
+    let prefix = format!("/proxy/{}", port);
+    let re = JS_API_RE.get_or_init(|| Regex::new(r#"(["'`])/api/"#).expect("valid js api regex"));
+    let replacement = format!("$1{}/api/", prefix);
+    re.replace_all(&s, replacement).into_owned().into_bytes()
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
@@ -657,5 +857,123 @@ mod tests {
         // parse 只负责「解析出纯数字端口」，白名单拒绝由 is_port_allowed 负责。
         assert_eq!(parse_proxy_host("3306.omniterm.lan", "omniterm.lan"), Some(3306));
         assert!(!is_port_allowed(3306, 9777));
+    }
+
+    // ── 响应体重写（D1 兜底）──
+
+    fn html(s: &str) -> String {
+        String::from_utf8(rewrite_html(s.as_bytes(), 3000)).unwrap()
+    }
+
+    fn js(s: &str) -> String {
+        String::from_utf8(rewrite_js(s.as_bytes(), 3000)).unwrap()
+    }
+
+    #[test]
+    fn rewrite_html_prefixes_absolute_src_and_href() {
+        let out = html(r#"<script src="/assets/index-x.js"></script><link href="/logo.svg?v=2">"#);
+        assert_eq!(
+            out,
+            r#"<script src="/proxy/3000/assets/index-x.js"></script><link href="/proxy/3000/logo.svg?v=2">"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_supports_single_quotes_and_other_attrs() {
+        let out = html(r#"<form action='/submit'><img src='/img/a.png'><video poster='/p.jpg'>"#);
+        assert_eq!(
+            out,
+            r#"<form action='/proxy/3000/submit'><img src='/proxy/3000/img/a.png'><video poster='/proxy/3000/p.jpg'>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_srcset_rewrites_each_candidate() {
+        let out = html(r#"<img srcset="/a.png 1x, /b.png 2x, https://cdn/x.png 3x">"#);
+        assert_eq!(
+            out,
+            r#"<img srcset="/proxy/3000/a.png 1x, /proxy/3000/b.png 2x, https://cdn/x.png 3x">"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_external_and_scheme_relative() {
+        let out = html(
+            r##"<a href="https://example.com/x"><a href="//cdn.example.com/y"><a href="mailto:a@b.c"><a href="#anchor">"##,
+        );
+        assert_eq!(
+            out,
+            r##"<a href="https://example.com/x"><a href="//cdn.example.com/y"><a href="mailto:a@b.c"><a href="#anchor">"##
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_already_prefixed() {
+        let out = html(
+            r#"<script src="/proxy/3000/assets/x.js"></script><script src="/proxy/9999/assets/y.js"></script>"#,
+        );
+        // 已带任何 /proxy/ 前缀（含其他端口）不再叠加
+        assert_eq!(
+            out,
+            r#"<script src="/proxy/3000/assets/x.js"></script><script src="/proxy/9999/assets/y.js"></script>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_relative_and_non_attr_paths() {
+        let out = html(r#"<img src="assets/x.js"><script>const p = "/api/health";</script>"#);
+        // 相对路径不动；内联 JS 的字符串不在 HTML 属性重写范围
+        assert_eq!(out, r#"<img src="assets/x.js"><script>const p = "/api/health";</script>"#);
+    }
+
+    #[test]
+    fn rewrite_js_prefixes_double_single_and_template_strings() {
+        let out =
+            js(r#"fe.post("/api/card/batch");get('/api/user');req(`/api/card/${id}/renew`);"#);
+        assert_eq!(
+            out,
+            r#"fe.post("/proxy/3000/api/card/batch");get('/proxy/3000/api/user');req(`/proxy/3000/api/card/${id}/renew`);"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_keeps_comparison_consistent() {
+        // 全局一致重写：请求路径与 === 比较字面量同步带前缀，逻辑自洽。
+        let out = js(
+            r#"const A = Y === "/api/ratio_config" ? "ratio_config" : Y === "/api/pricing" ? "pricing" : "";"#,
+        );
+        assert_eq!(
+            out,
+            r#"const A = Y === "/proxy/3000/api/ratio_config" ? "ratio_config" : Y === "/proxy/3000/api/pricing" ? "pricing" : "";"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_api_strings() {
+        let out = js(
+            r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#,
+        );
+        // 非 `/api/` 字面量（根路径外、协议内、正则、相对路径）一律不动
+        assert_eq!(
+            out,
+            r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#
+        );
+    }
+
+    #[test]
+    fn rewrite_kind_matches_content_types() {
+        assert_eq!(RewriteKind::from_content_type("text/html"), Some(RewriteKind::Html));
+        assert_eq!(RewriteKind::from_content_type("text/html; charset=utf-8"), None);
+        // 带 charset 的由调用方 split(';') 后传入，此处只吃纯类型
+        assert_eq!(RewriteKind::from_content_type("text/javascript"), Some(RewriteKind::Js));
+        assert_eq!(RewriteKind::from_content_type("application/javascript"), Some(RewriteKind::Js));
+        assert_eq!(RewriteKind::from_content_type("application/json"), None);
+        assert_eq!(RewriteKind::from_content_type("text/css"), None);
+    }
+
+    #[test]
+    fn rewrite_max_bytes_limits() {
+        assert_eq!(RewriteKind::Html.max_bytes(), REWRITE_HTML_MAX);
+        assert_eq!(RewriteKind::Js.max_bytes(), REWRITE_JS_MAX);
     }
 }

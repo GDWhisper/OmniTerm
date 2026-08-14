@@ -10,6 +10,7 @@
 > 3. **有界队列超限策略**：D5 的「满则丢最旧」改为「满则拒新数据 + warn」——丢最旧需独占 `Receiver` 做 `try_recv`，与写侧 `recv().await` 借用冲突；且拒新数据保留帧序（两者都是 §P1 允许的超限策略）。
 > 4. **响应流式**：不用 reqwest `stream` feature（其引入 wasm-streams 依赖且当前环境联网受限），改用 `Response::chunk()` + `futures_util::unfold` 等价实现。
 > 5. **子域名方案实施（2026-08-14）**：D1 翻盘条件触发（用户反馈绝对路径 SPA 白屏），按「保留路径前缀 + 新增子域名 Host 路由」实施。两点实施偏差：① 鉴权共享函数 `verify_request` 不能持 `&Request` 跨 await——`Request<Body>` 含 `dyn HttpBody`（非 `Sync`），`&Request` 不 `Send` 连带整个 middleware future 失去 `Send` 而无法挂载，改为接收已提取的 `token: Option<&str>`；② 子域名入口是 middleware 无法用 extractor 提取 `WebSocketUpgrade`，改为 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取。
+> 6. **路径前缀兜底 = 响应体重写（2026-08-14）**：D1 翻盘为子域名方案后发现其依赖可通配符解析的域名，**局域网纯 IP 直连（`http://192.168.5.216:9777`）不可用**（`3000.192.168.5.216` 非法）；Service Worker 方案又需 secure context（HTTPS/localhost），局域网 HTTP 也不可用。故路径前缀形态新增**响应体字节级重写**兜底：`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性与 `text/javascript` 的 `"/api/`、`'/api/`、`` `/api/ `` 字面量统一补 `/proxy/{port}` 前缀（HTML 4MiB / JS 16MiB 上限，超限回退流式）。**全局一致重写**保证 `===` 比较逻辑自洽；JS 运行时动态拼接路径覆盖不到，属已知限制。覆盖「绝对路径 SPA 白屏」的局域网纯 IP 场景，与子域名方案互补（子域名管有域名场景，重写管纯 IP 场景）。
 
 ---
 
@@ -63,6 +64,8 @@
 **已知缺陷（明确接受）**：目标应用内**硬编码绝对路径**的资源（Vite 的 `/@vite/client`、`/src/main.tsx`，Next.js 的 `/_next/...`）会绕过 `/proxy/{port}/` 前缀，直接请求 `omniterm-host/...` 而 404。用 `Location` 头重写 + 响应 HTML 内相对化兜底，但无法根治。**翻盘条件**：若用户反馈绝对路径应用不可用且影响面大，升级为子域名方案（引入 wildcard DNS/TLS）。
 
 > **翻盘已触发（2026-08-14）**：用户反馈绝对路径 SPA（new-api 等）白屏。方案定为「保留路径前缀（相对路径应用）+ 新增子域名 Host 路由 `{port}.{base}`（绝对路径应用）」。子域名方案不引入 wildcard TLS——沿用现有单端口监听，仅按 Host 头路由；DNS 通配符解析为用户部署负担（dnsmasq/公网/hosts 三选一）。实施详见 `docs/architecture/backend.md`「子域名 Host 路由」与 CHANGELOG。
+>
+> **翻盘后补充（2026-08-14 14:11）**：子域名方案依赖可通配符解析的域名，**局域网纯 IP 直连不可用**；路径前缀形态新增**响应体重写兜底**（HTML 属性 + JS `/api/` 字面量加前缀）覆盖纯 IP 场景。两个方案互补，见勘误第 6 条与 `docs/architecture/backend.md`「响应体重写与绝对路径 SPA」。
 
 ### D2：安全边界 —— 硬编码 127.0.0.1 + 端口白名单
 

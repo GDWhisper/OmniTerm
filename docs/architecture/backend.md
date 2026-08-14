@@ -160,6 +160,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 - **安全边界（D2）**：目标 IP 永远硬编码 `127.0.0.1`，绝不从 path/header/query 解析地址。端口白名单 `3000..=65535` − 黑名单常量表（3306/5432/6379/27017/11211 + Consul 8500-8503 + ES 9200-9300）− 自身监听端口（`args.port` 经 `AppState.proxy.self_port` 注入，防回环）。路由挂 `require_auth_mw`（auth 开启时）；转发前剥离 `omniterm_token` cookie。
 - **有界性（D5）**：请求体 `to_bytes` 上限 2MB（与 axum DefaultBodyLimit 一致）；响应 `Response::chunk()` + `unfold` 流式回写不 collect；WS 每方向 `mpsc(64)` 有界，满则拒新数据 + warn。
 - **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
+- **响应体重写（绝对路径 SPA 兜底）**：`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性、`text/javascript`（及 `application/javascript` 等）的 `"/api/`、`'/api/`、`` `/api/ `` 字符串字面量，统一补 `/proxy/{port}` 前缀。上限 HTML 4MiB / JS 16MiB，超限放弃重写、已读头部拼回流前部继续流式透传。重写是**全局一致**的——请求路径与 `===`/`includes` 比较字面量同步带前缀，比较逻辑不失真；外部 URL（`https://…`）、协议相对（`//cdn…`）、相对路径、已带 `/proxy/` 前缀的不动。见「响应体重写与绝对路径 SPA」小节。
 
 ### 子域名 Host 路由（`{port}.{base}`，D1 翻盘）
 
@@ -171,13 +172,23 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 - **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
 - **DNS 部署（用户侧，非代码）**：局域网 IP 无法子域名（`3000.192.168.5.216` 非法），需用户配置可通配符解析的域名指向 OmniTerm 机器，三选一：局域网 DNS（dnsmasq/pihole `address=/.{base}/{IP}`）、公网 DNS（wildcard A 记录）、hosts 文件（逐端口加）。未配 DNS 则子域名不生效、路径前缀兜底。
 
+### 响应体重写与绝对路径 SPA（路径前缀兜底，2026-08-14）
+
+子域名方案依赖可通配符解析的域名，**局域网纯 IP 直连场景（`http://192.168.5.216:9777`）不可用**；Service Worker 方案需 secure context（HTTPS 或 localhost），局域网 HTTP 也不可用。因此路径前缀形态内置**响应体字节级重写**作为兜底，让绝对路径 SPA（new-api/one-api 等）在纯 IP 场景开箱即用：
+
+- **HTML**（`text/html`）：重写 `src`/`href`/`srcset`/`action`/`poster` 属性值——`src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`。`srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）。
+- **JS**（`text/javascript`/`application/javascript`/`application/x-javascript`）：重写字符串字面量 `"/api/`、`'/api/`、`` `/api/ ``（含模板字符串）——`fe.post("/api/card/batch")` → `fe.post("/proxy/3000/api/card/batch")`。不匹配变量拼接、正则字面量、相对路径。
+- **边界**：① 超限（HTML 4MiB / JS 16MiB）回退流式透传（已读头部拼回流前部）；② 重写只覆盖「响应体静态内容」，**运行时动态拼接的绝对路径**（如 `"/api" + id`、服务端返回的 URL）覆盖不到，属已知限制；③ 内联 `<script>` 内的字符串不重写（HTML 属性重写只认属性）；④ `Content-Encoding` 由 reqwest 自动解压后再重写，无压缩字节破坏问题。
+- **全局一致重写保证比较逻辑自洽**：请求路径字面量与 `===`/`includes` 比较字面量同步带前缀（如 new-api 的 `Y==="/api/ratio_config"`），故不破坏应用内路径判定。
+
 ### 多实现差异（AGENTS §8）
 
 反向代理的「协议」= HTTP/WS，被无数 dev server 实现满足，不得以某一种（如 Vite）行为推断全部：
 
 | 维度 | 差异 | 兜底 |
 |---|---|---|
-| 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | 路径前缀下 `Location` 头重写兜底（接受已知限制）；**子域名方案（`{port}.{base}`）根治**——浏览器对绝对路径的解析天然落到子域名 Host 上（D1 翻盘已实施，见上） |
+| 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | 路径前缀下 **HTML/JS 响应体重写兜底**（HTML 属性 + JS `/api/` 字面量加前缀，见上）；**子域名方案（`{port}.{base}`）根治**——浏览器对绝对路径的解析天然落到子域名 Host 上（D1 翻盘已实施，见上）；两者适用场景不同：子域名需可通配符解析域名，重写兜底覆盖局域网纯 IP |
+| JS 运行时动态拼接路径 | 部分 SPA 用 `"/api" + id` 拼接、服务端返回 URL、axios 封装函数内拼 baseURL | 响应体重写覆盖不到，属已知限制（见上小节「边界」）；子域名方案不受此限 |
 | WS 子协议 | Vite HMR 用 `vite-hmr`；Socket.IO 自定义；graphql-ws 用 `graphql-transport-ws` | 透传 `Sec-WebSocket-Protocol`，不假设不硬编码 |
 | Origin 校验 | 部分 dev server（webpack-dev-server 等）严格校验 Origin；Vite 较宽松 | WS 握手统一重写 Origin 为 `http://127.0.0.1:{port}` 兜底 |
 | Cookie 域 | 目标服务可能 `Set-Cookie` 带 `Domain=localhost` 或绝对 `Path` | 响应侧统一重写（D6） |
