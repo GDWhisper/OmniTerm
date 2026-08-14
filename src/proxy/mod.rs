@@ -298,6 +298,15 @@ async fn forward_http(
     // omniterm-host 而 404 → 白屏。局域网纯 IP 场景无法子域名（`3000.192.168.5.216`
     // 非法），Service Worker 需 secure context 也不可用——唯一通用手段是后端对
     // HTML/JS 响应做字节级前缀重写（见 plan 勘误与 backend.md）。
+    // 兜底：上游若无视 Accept-Encoding 剥离仍返回压缩体（Content-Encoding 非空），
+    // 跳过重写走流式原样透传——压缩字节经 from_utf8_lossy 转码会被破坏（浏览器
+    // ERR_CONTENT_DECODING_FAILED），原样透传 + 保留编码头浏览器可正常解码。
+    let content_encoding = upstream_resp
+        .headers()
+        .get(header::CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let content_type = upstream_resp
         .headers()
         .get(header::CONTENT_TYPE)
@@ -306,7 +315,9 @@ async fn forward_http(
         .map(str::trim)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if let Some(kind) = RewriteKind::from_content_type(&content_type) {
+    if content_encoding.is_none()
+        && let Some(kind) = RewriteKind::from_content_type(&content_type)
+    {
         match try_rewrite_body(upstream_resp, kind, port).await {
             Ok(RewriteOutcome::Done(body)) => {
                 return match builder.body(Body::from(body)) {
@@ -523,6 +534,12 @@ fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> Head
             continue;
         }
         match lower.as_str() {
+            // 剥离 Accept-Encoding：上游（new-api 等）会返回 gzip 压缩体，而本代理
+            // reqwest 未启用自动解压（default-features=false 无 gzip feature），
+            // 压缩字节经 rewrite_html/rewrite_js 的 from_utf8_lossy 转码会被破坏，
+            // 导致浏览器 ERR_CONTENT_DECODING_FAILED。强制上游回明文最可靠；
+            // 代理本身走 127.0.0.1 回环，压缩收益可忽略。
+            "accept-encoding" => {}
             // Host 永远重写为本地目标，否则目标服务的虚拟主机路由错乱。
             "host" => {
                 if let Ok(v) = host_value(port) {
@@ -705,6 +722,16 @@ mod tests {
         assert!(!out.contains_key("upgrade"));
         assert!(!out.contains_key("te"));
         assert!(!out.contains_key("keep-alive"));
+    }
+
+    #[test]
+    fn request_headers_strip_accept_encoding() {
+        // 剥离 Accept-Encoding：上游回明文，避免 gzip 压缩体被响应体重写破坏
+        // （reqwest 未启用自动解压，from_utf8_lossy 转码会损坏压缩字节）。
+        let mut h = HeaderMap::new();
+        h.insert("accept-encoding", HeaderValue::from_static("gzip, deflate, br"));
+        let out = rewrite_request_headers(&h, 3000, false);
+        assert!(!out.contains_key("accept-encoding"));
     }
 
     #[test]
