@@ -320,6 +320,16 @@ async fn forward_http(
     {
         match try_rewrite_body(upstream_resp, kind, port).await {
             Ok(RewriteOutcome::Done(body)) => {
+                // SPA 路由适配：HTML 开头内联 polyfill（必须在主 JS 之前执行）。
+                // 见 `build_spa_polyfill` 注释。仅在 HTML 类型注入，JS 类型跳过。
+                let body = match kind {
+                    RewriteKind::Html => {
+                        let mut with_polyfill = build_spa_polyfill(port);
+                        with_polyfill.extend_from_slice(&body);
+                        with_polyfill
+                    }
+                    RewriteKind::Js => body,
+                };
                 return match builder.body(Body::from(body)) {
                     Ok(resp) => resp,
                     Err(e) => {
@@ -361,6 +371,49 @@ async fn forward_http(
             (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
         }
     }
+}
+
+/// SPA 客户端路由适配 polyfill（路径前缀形态，P3）。
+///
+/// 路径前缀形态下浏览器地址栏保留 `/proxy/{port}` 前缀，但 SPA 路由框架（React Router /
+/// Vue Router 等）`location.pathname` 看到的是 `/proxy/3000/console` 等带前缀路径，路由表
+/// 不匹配 → 404。子域名方案天然回避此问题（子域名作为 origin，pathname 不带前缀），但
+/// 需可通配符解析的域名，局域网纯 IP 场景不可用。
+///
+/// 在主 JS 之前执行此 polyfill（HTML `<body>` 开头内联 `<script>`）：
+/// 1. 劫持 `Location.prototype.pathname` getter，让 SPA 看到剥掉代理前缀的路径，
+///    React Router 创建 history 时 `state.pathname = "/console"` → 路由匹配正常；
+/// 2. 劫持 `history.pushState` / `replaceState`，SPA 内部跳转时传入的是 SPA 路径
+///    （如 `/console`），劫持后自动加回 `/proxy/3000`，浏览器地址栏保留前缀；
+/// 3. SPA 写 history 后再次读 `window.location.pathname`（已劫持），history 内部
+///    state.pathname 始终是剥前缀的，路由匹配保持正确。
+///
+/// 已知限制：SPA 的 `<Link>` 组件根据当前 pathname 生成 `<a href>`，显示为 SPA 内部
+/// 路径（不带前缀）；点击时 `pushState` 劫持会自动加前缀，不影响功能，但 hover 看到的
+/// URL 与浏览器地址栏会短暂不一致。根治需 SPA 端配置 basename 或子域名方案。
+///
+/// `try/catch` 包裹劫持失败兜底：旧版浏览器若拒绝重定义 `Location.pathname`，主流程
+/// 仍走重写后的 HTML（功能退化到原 404 状态，不引入新崩溃）。
+fn build_spa_polyfill(port: u16) -> Vec<u8> {
+    // SPA 客户端路由适配 polyfill（路径前缀形态）。
+    //
+    // 劫持 Location.pathname getter 让 SPA（React Router / Vue Router 等）看到剥前缀路径
+    // → 路由匹配正常；劫持 history.pushState/replaceState 让 SPA 内部跳转自动加回前缀
+    // → 浏览器地址栏保留 `/proxy/{port}`。Location.pathname 劫持用 try/catch 兜底（旧浏览
+    // 器拒绝重定义时主流程降级到原 404 状态，不引入新崩溃）。
+    let prefix = format!("/proxy/{}", port);
+    let mut s = String::with_capacity(512 + prefix.len());
+    s.push_str("<script>(function(){var P=\"");
+    s.push_str(&prefix);
+    s.push_str("\";if(!window.location.pathname.startsWith(P))return;");
+    // 劫持 Location.pathname
+    s.push_str("try{var d=Object.getOwnPropertyDescriptor(Location.prototype,\"pathname\");Object.defineProperty(Location.prototype,\"pathname\",{get:function(){var p=d.get.call(this);return p.indexOf(P)===0?(p.slice(P.length)||\"/\"):p},configurable:true})}catch(e){}");
+    // 劫持 history.pushState/replaceState
+    s.push_str("var op=history.pushState.bind(history),or=history.replaceState.bind(history);");
+    s.push_str("history.pushState=function(s,t,u){if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;return op(s,t,u)};");
+    s.push_str("history.replaceState=function(s,t,u){if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;return or(s,t,u)}");
+    s.push_str("})();</script>");
+    s.into_bytes()
 }
 
 /// 响应体流（chunk 边读边写，不 collect）——HTTP 转发公共尾部。
@@ -985,6 +1038,30 @@ mod tests {
             out,
             r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#
         );
+    }
+
+    // ── SPA 路由适配 polyfill（P3 路径前缀形态兜底）──
+
+    #[test]
+    fn spa_polyfill_contains_prefix_and_script_tag() {
+        let s = String::from_utf8(build_spa_polyfill(3000)).unwrap();
+        // 必须包含 prefix 与脚本包裹标签
+        assert!(s.starts_with("<script>"), "polyfill must be a <script>: {s}");
+        assert!(s.ends_with("</script>"), "polyfill must end with </script>: {s}");
+        assert!(s.contains("/proxy/3000"), "polyfill must contain port prefix: {s}");
+        // 必须劫持 Location.pathname 与 history.pushState/replaceState
+        assert!(s.contains("Location.prototype"), "must patch Location.pathname: {s}");
+        assert!(s.contains("pushState"), "must patch pushState: {s}");
+        assert!(s.contains("replaceState"), "must patch replaceState: {s}");
+    }
+
+    #[test]
+    fn spa_polyfill_uses_requested_port() {
+        let s_3000 = String::from_utf8(build_spa_polyfill(3000)).unwrap();
+        assert!(s_3000.contains("P=\"/proxy/3000\""));
+        let s_9076 = String::from_utf8(build_spa_polyfill(9076)).unwrap();
+        assert!(s_9076.contains("P=\"/proxy/9076\""));
+        assert!(!s_9076.contains("/proxy/3000"));
     }
 
     #[test]
