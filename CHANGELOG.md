@@ -47,10 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.15] - 2026-08-16
 
 ### Added
 
+- (2026-08-14 01:04) `[frontend]` ACP 聊天桌面动作条浮层动态定位：优先显示在图标下方，空间不足（贴近视口底部）时翻转到上方，避免操作条浮层被视口裁切（`frontend/src/components/Chat/MessageActionBar.tsx`、`frontend/src/index.css`）
+- (2026-08-14 00:38) `[frontend]` ACP 聊天桌面动作条两段式 hover：气泡 hover 仅显示图标（文字隐藏），hover 到具体图标时才以浮层显示功能文字——动作条常驻态更简洁，避免误触与双重原生 tooltip（`frontend/src/components/Chat/MessageActionBar.tsx`、`frontend/src/index.css`）
 - (2026-08-14 00:26) `[backend]` `[frontend]` 新增 localhost 端口转发反向代理 `/proxy/{port}/{*path}`：机器 A 的浏览器经跑在机器 B 上的 OmniTerm 访问 B 的 localhost 服务（如 dev server）。目标 IP 硬编码 `127.0.0.1`、端口白名单（`3000..=65535` 减数据库/内部服务端口黑名单，并动态排除自身监听端口防回环），请求/响应 header 重写（Host/Origin/hop-by-hop 剥离/`Set-Cookie` 域与路径/`Location` 相对化，转发时剥离 `omniterm_token`），响应 `chunk()` 流式回写不落内存；WebSocket 双向 relay（每方向 `mpsc(64)` 有界，满则拒新数据 + warn）支撑 Vite HMR 等 WS dev server。前端 Chat 与终端里的 localhost 链接自动重写为 `/proxy/{port}/` 新标签打开（`src/proxy/`、`src/api/mod.rs`、`src/main.rs`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/vite.config.ts`）
 - (2026-08-14 02:00) `[backend]` `[frontend]` 端口转发反向代理新增子域名形态 `{port}.{proxy_domain}`：配置 `--proxy-domain`（`OMNITERM_PROXY_DOMAIN`）后，绝对路径资源的 SPA（Vite/Next.js）不再白屏——浏览器对 `/assets/*`、`/_next/*` 的解析天然落到子域名 Host，由最外层 middleware 按 Host 头路由到 `127.0.0.1:{port}`。鉴权 cookie 跨子域名（`Domain={base}`）、`/system/info` 透出 `proxy_domain`、前端 `rewriteLocalUrl` 按需生成子域名 URL；未配置时行为不变（路径前缀兜底）。DNS 通配符解析为用户部署负担（dnsmasq/公网/hosts 三选一）（`src/proxy/mod.rs`、`src/auth/mod.rs`、`src/api/auth.rs`、`src/api/system.rs`、`src/main.rs`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/App.tsx`、`frontend/vite.config.ts`）
 - (2026-08-14 14:11) `[backend]` 反向代理路径前缀形态支持绝对路径 SPA（局域网 IP 直连场景不再白屏）：新增 HTML/JS 响应体字节级重写——`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性与 `text/javascript` 的 `"/api/`、`'/api/`、`` `/api/ `` 字符串字面量统一补 `/proxy/{port}` 前缀（全局一致重写保证 `===` 比较逻辑自洽；外部 URL/协议相对/相对路径/已带前缀不动）。子域名方案在局域网纯 IP（`3000.192.168.5.216` 非法）与非 secure context（SW 不可用）场景失效，此兜底是唯一通用解；HTML 4MiB / JS 16MiB 上限，超限回退流式透传（`src/proxy/mod.rs`）

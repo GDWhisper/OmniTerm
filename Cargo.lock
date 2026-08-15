@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "omniterm"
-version = "0.2.14"
+version = "0.2.15"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",
@@ -1986,6 +1986,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
  "which",
  "windows-sys 0.60.2",
  "zip",
