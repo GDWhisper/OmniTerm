@@ -30,9 +30,25 @@ pub fn protected_routes() -> Router<AppState> {
         .route("/auth/change-password", post(change_password))
 }
 
+/// 浏览器规范：`Domain` 属性必须包含至少一个点，且不能是 IP 地址或 `localhost`。
+/// 若 base_host 是 IP（如 `192.168.5.216`）/ localhost / 无点单标签域名，设置
+/// `Domain` 会导致浏览器直接拒绝该 cookie（子域名鉴权永久失效），此时保持
+/// host-only（不加 Domain 属性）。参考 code-server `http.ts:getCookieDomain`。
+fn should_set_cookie_domain(domain: &str) -> bool {
+    let d = domain.trim_matches('[').trim_end_matches(']');
+    if d.eq_ignore_ascii_case("localhost") {
+        return false;
+    }
+    if d.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    d.contains('.')
+}
+
 /// 构造登录/签发的 `omniterm_token` cookie。`domain` 为子域名代理 base
 /// （`Some("omniterm.lan")`）时给 cookie 加 `Domain=omniterm.lan`，使 `{port}.{base}`
-/// 子域名也能携带该 cookie 通过鉴权；`None` 时维持 host-only（现状）。
+/// 子域名也能携带该 cookie 通过鉴权；`None` 或 base 为 IP/localhost/无点域名时
+/// 维持 host-only（现状 + P0-4.7 防御）。
 fn token_cookie(token: &str, domain: Option<&str>) -> String {
     let builder = Cookie::build(("omniterm_token", token))
         .path("/")
@@ -40,8 +56,8 @@ fn token_cookie(token: &str, domain: Option<&str>) -> String {
         .same_site(SameSite::Lax)
         .max_age(time::Duration::days(90));
     match domain {
-        Some(d) => builder.domain(d),
-        None => builder,
+        Some(d) if should_set_cookie_domain(d) => builder.domain(d),
+        _ => builder,
     }
     .to_string()
 }
@@ -52,8 +68,8 @@ fn clear_cookie(domain: Option<&str>) -> String {
         .http_only(true)
         .max_age(time::Duration::ZERO);
     match domain {
-        Some(d) => builder.domain(d),
-        None => builder,
+        Some(d) if should_set_cookie_domain(d) => builder.domain(d),
+        _ => builder,
     }
     .to_string()
 }
@@ -248,4 +264,43 @@ async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
         == 0;
 
     Json(json!({ "authenticated": false, "needs_setup": needs_setup, "auth_enabled": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_cookie_no_domain_for_ip_or_localhost_base() {
+        // 浏览器拒绝 Domain=IP / Domain=localhost（必须含点），host-only 才生效
+        for bad in ["192.168.5.216", "[::1]", "localhost", "omniterm"] {
+            let c = token_cookie("tok", Some(bad));
+            assert!(!c.to_lowercase().contains("domain="), "base={bad} cookie={c}");
+            let c2 = clear_cookie(Some(bad));
+            assert!(!c2.to_lowercase().contains("domain="), "clear base={bad} cookie={c2}");
+        }
+    }
+
+    #[test]
+    fn set_cookie_keeps_domain_for_dotted_base() {
+        // 合法带点域名：保留 Domain，子域名可携带
+        let c = token_cookie("tok", Some("omniterm.lan"));
+        assert!(c.to_lowercase().contains("domain=omniterm.lan"), "cookie={c}");
+        let c2 = clear_cookie(Some("omniterm.lan"));
+        assert!(c2.to_lowercase().contains("domain=omniterm.lan"), "cookie={c2}");
+        // 多级域名同样保留
+        let c3 = token_cookie("tok", Some("omniterm.example.com"));
+        assert!(c3.to_lowercase().contains("domain=omniterm.example.com"), "cookie={c3}");
+    }
+
+    #[test]
+    fn should_set_cookie_domain_guards() {
+        assert!(!should_set_cookie_domain("192.168.5.216"));
+        assert!(!should_set_cookie_domain("[::1]"));
+        assert!(!should_set_cookie_domain("localhost"));
+        assert!(!should_set_cookie_domain("LOCALHOST"));
+        assert!(!should_set_cookie_domain("omniterm"));
+        assert!(should_set_cookie_domain("omniterm.lan"));
+        assert!(should_set_cookie_domain("omniterm.example.com"));
+    }
 }

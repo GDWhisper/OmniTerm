@@ -57,6 +57,16 @@ Prefix each entry with the area it affects:
 - (2026-08-14 21:30) `[backend]` 修复反代响应体重写破坏 gzip 压缩体导致浏览器 `ERR_CONTENT_DECODING_FAILED`（3000 端口等绝对路径 SPA 经代理打开仍白屏的根因）：reqwest 未启用自动解压（`default-features=false` 无 gzip feature），上游返回的 gzip 压缩字节经 `from_utf8_lossy` 转码被损坏，响应头却保留 `Content-Encoding: gzip` → 浏览器解码失败。请求侧剥离 Accept-Encoding 强制上游回明文（回环传输压缩收益可忽略），响应侧 `Content-Encoding` 非空时跳过重写走流式原样透传作双重保险（`src/proxy/mod.rs`）
 - (2026-08-15) `[backend]` 反代路径前缀形态支持 SPA 客户端路由（new-api 等 React Router 应用不再渲染 404，浏览器无 MIME 报错）：JS 重写注入 React Router v7 `<BrowserRouter>` `basename:"/proxy/{port}"`（以 `v7_startTransition` 特征匹配）——React Router 自动剥前缀匹配路由、Link/navigate 自动带前缀、地址栏正确、刷新正常；另改写 Vite 8 preload helper `return"/"+e` → `return"/proxy/{port}/"+e`（Vite 8 把依赖硬编码成根绝对路径绕过 `import.meta.url`，反代下 chunk 请求根路径 404）。早期 polyfill 方案（劫持 `Location.prototype.pathname`）因 Chrome 的 Location 是 [LegacyUnforgeable] 特殊对象而无效，已废弃。子域名方案仍为根治，本修复让局域网纯 IP 场景也能用（`src/proxy/mod.rs`）
 
+### Fixed
+
+- (2026-08-15) `[backend]` 反向代理（`src/proxy/`、`src/api/auth.rs`）正确性加固一轮（修复审查报告 P0 项）：
+  1. JS 重写补上**无尾随斜杠的 `/api` 字面量**（`"/api"`、`"/api?x"`、`"/api#x"`）——此前只重写 `/api/`，`fetch('/api')` 等请求落 OmniTerm 根路径 404；regex crate 不支持 lookahead，边界判定改捕获组 + 函数式检查（`/api` 后须为 `/`、引号、空白、`?`、`#`、`$` 或字符串结束，避免误匹配 `/apix`）
+  2. 请求转发补 `X-Forwarded-For`（已有链逗号追加客户端 IP，无则新建）/ `X-Forwarded-Proto`（缺失补 `http`）/ `X-Forwarded-Host`（缺失取原始 Host）——已有值保留不覆盖（外层 nginx 已带 https/真实 Host 时覆盖会误导上游）
+  3. HTML 属性重写补 `formaction`（`<button formaction>` / `<input formaction>` 提交目标）；`<base href>` 已由 `href` 分支覆盖，补单测确认
+  4. `Location` 重写支持 `http(s)://0.0.0.0:{port}` 与 `https://localhost|127.0.0.1:{port}` 的回环重定向
+  5. WS 入口新增 **Origin 校验（CSWSH 防御）**：Origin 的 host（忽略端口）与请求 Host 不一致的 WS 握手 403，无 Origin（curl/原生 WS 等非浏览器）放行
+  6. 子域名登录 cookie 对 **IP / localhost / 无点域名 base 不再设 `Domain`**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/api/auth.rs`）
+
 ## [0.2.14] - 2026-08-13
 
 ### Added

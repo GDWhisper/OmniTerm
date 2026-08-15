@@ -24,12 +24,13 @@ mod ws;
 use axum::{
     Router,
     body::Body,
-    extract::{FromRequestParts, OriginalUri, Path, Request, State, WebSocketUpgrade},
+    extract::{ConnectInfo, FromRequestParts, OriginalUri, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::any,
 };
+use std::net::IpAddr;
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;
 
@@ -146,12 +147,48 @@ async fn dispatch_proxy(
         return (StatusCode::FORBIDDEN, "port not allowed").into_response();
     }
 
+    let client_ip = request_client_ip(&request);
+
     // WS 分流（P2）：`Some` 说明带 `Upgrade: websocket` 握手头。
     if let Some(ws) = upgrade {
-        return ws::relay(ws, port, &uri, request.headers().clone()).await;
+        // Origin 校验（CSWSH 防御，P0-4.6）：浏览器发起的 WS 必带 Origin，其 host
+        // 必须与请求 Host 一致；跨站页面（如 evil.com 的 iframe）Origin 的 host 不同，
+        // 拒绝。无 Origin（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        if let Some(host) = host_from_request(&request)
+            && let Some(origin) = request.headers().get(header::ORIGIN)
+            && !origin_matches_host(origin, host)
+        {
+            tracing::warn!("ws proxy origin rejected (port {}): {:?}", port, origin);
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+        return ws::relay(ws, port, &uri, request.headers().clone(), client_ip).await;
     }
 
-    forward_http(state, port, uri, request).await
+    forward_http(state, port, uri, request, client_ip).await
+}
+
+/// WS Origin 校验：Origin 的 host（忽略端口）与请求 Host（忽略端口）比对。
+/// `Origin: http://3000.omniterm.lan:9777` 与 Host `3000.omniterm.lan:9777` → 匹配。
+/// 解析失败 / host 为空 → 拒绝（防御畸形 Origin）。纯函数，便于单测。
+fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
+    let Ok(o) = origin.to_str() else {
+        return false;
+    };
+    let Some(authority) = o.split_once("://").map(|(_, rest)| rest) else {
+        return false;
+    };
+    let origin_host = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let origin_host = strip_port(origin_host);
+    let host = strip_port(host);
+    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
+}
+
+/// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
+fn strip_port(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split_once(']').map(|(h, _)| h).unwrap_or(rest);
+    }
+    s.split(':').next().unwrap_or(s)
 }
 
 /// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
@@ -226,10 +263,12 @@ pub async fn proxy_host_mw(
         None => format!("/proxy/{}{}", port, orig.path()).parse().unwrap_or(orig.clone()),
     };
 
+    let client_ip = request_client_ip(&request);
+
     if is_ws_upgrade(&request) {
         let (mut parts, _body) = request.into_parts();
         return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
-            Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone()).await,
+            Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone(), client_ip).await,
             Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),
         };
     }
@@ -253,10 +292,11 @@ async fn forward_http(
     port: u16,
     uri: axum::http::Uri,
     request: Request,
+    client_ip: Option<IpAddr>,
 ) -> Response {
     let target = upstream_url(&uri, port);
     let method = request.method().clone();
-    let req_headers = rewrite_request_headers(request.headers(), port, false);
+    let req_headers = rewrite_request_headers(request.headers(), port, false, client_ip);
 
     // 请求体（有界：`MAX_REQUEST_BODY`，超限直接拒绝，防无界缓冲）。
     let body = match axum::body::to_bytes(request.into_body(), MAX_REQUEST_BODY).await {
@@ -432,10 +472,14 @@ async fn try_rewrite_body(
     Ok(RewriteOutcome::Done(out))
 }
 
-/// HTML 属性重写正则（惰性编译）：`src`/`href`/`srcset`/`action`/`poster` 单双引号属性。
+/// HTML 属性重写正则（惰性编译）：`src`/`href`/`srcset`/`action`/`poster`/`formaction`
+/// 单双引号属性。`href` 分支天然覆盖 `<base href>`（HTML `<base>` 标签指定相对 URL
+/// 基准，必须重写，否则页面相对路径绕过代理前缀直接落到 OmniTerm 根路径）。
+/// `formaction` 用于 `<button formaction>` / `<input formaction>` 的表单提交目标。
 static HTML_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 
-/// JS API 字面量重写正则（惰性编译）：双/单/反引号后紧跟 `/api/`。
+/// JS API 字面量重写正则（惰性编译）：双/单/反引号后紧跟 `/api`。
+/// 边界判定在 `rewrite_js` 内函数式完成（regex crate 不支持 lookahead）。
 static JS_API_RE: OnceLock<Regex> = OnceLock::new();
 
 /// React Router v7 `<BrowserRouter future={{v7_startTransition,...}}>` 特征正则：
@@ -450,8 +494,9 @@ static VITE_PRELOAD_RE: OnceLock<Regex> = OnceLock::new();
 static HTML_PRERENDER_RE: OnceLock<Regex> = OnceLock::new();
 
 /// HTML 内根绝对路径资源属性 → `/proxy/{port}` 前缀（D1 兜底）。
-/// 覆盖 `src`/`href`/`srcset`/`action`/`poster`（单双引号皆可）：
+/// 覆盖 `src`/`href`/`srcset`/`action`/`poster`/`formaction`（单双引号皆可）：
 /// - `src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`
+/// - `<base href="/">` → `<base href="/proxy/3000/">`（相对 URL 基准改到代理前缀）
 /// - 外部 URL（`https://…`）、协议相对（`//cdn…`）、已带前缀（`/proxy/{port}/…`）不动
 /// - `srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）
 ///
@@ -464,7 +509,10 @@ fn rewrite_html(body: &[u8], port: u16) -> Vec<u8> {
     let re = HTML_ATTR_RE.get_or_init(|| {
         // 不用反向引用 `\2`（regex crate 不支持）：组 3 匹配值（不含引号，遇引号即停），
         // 组 4 捕获闭合引号一并消费，重建时用组 2/4 的引号还原（HTML 实体 `&quot;` 不影响）。
-        Regex::new(r#"(?i)(src|href|srcset|action|poster)=(["'])([^"']*)(["'])"#)
+        // `formaction` 置于 `action` 之前：`<button formaction>` 的 `formaction` 是整体属性，
+        // 交替在 `f` 位置即完整匹配，组 1 语义正确（旧实现依赖 `action=` 匹配 `formaction=`
+        // 中的 `action` 子串隐式生效，显式列出更稳健）。
+        Regex::new(r#"(?i)(src|href|srcset|action|formaction|poster)=(["'])([^"']*)(["'])"#)
             .expect("valid html attr regex")
     });
     let rewritten = re.replace_all(&s, |caps: &regex::Captures| {
@@ -537,12 +585,30 @@ fn rewrite_attr_value(value: &str, prefix: &str) -> String {
 /// 无此特征的 Vite 版本（老版本用 `new URL(d, import.meta.url)`，天然带前缀）
 /// 不命中，维持原行为。
 fn rewrite_js(body: &[u8], port: u16) -> Vec<u8> {
-    let s = String::from_utf8_lossy(body);
+    let s = String::from_utf8_lossy(body).into_owned();
     let prefix = format!("/proxy/{}", port);
-    // 1. `/api/` 字面量加前缀
-    let re = JS_API_RE.get_or_init(|| Regex::new(r#"(["'`])/api/"#).expect("valid js api regex"));
-    let replacement = format!("$1{}/api/", prefix);
-    let out = re.replace_all(&s, replacement);
+    // 1. `/api` 字面量加前缀。regex crate 不支持 lookahead，改用捕获组 + 函数式替换：
+    // 匹配引号后紧跟 `/api`，再检查其后一个字符是否为边界（`/`、引号、空白、`?`、`#`、
+    // `$` 或字符串结束）——覆盖无尾随斜杠的 `"/api"`、带 query/hash 的 `"/api?x"`/
+    // `"/api#x"`，同时避免误匹配 `/apix`。非边界（如 `/apix`）返回原样不重写。
+    let re = JS_API_RE.get_or_init(|| Regex::new(r#"(["'`])/api"#).expect("valid js api regex"));
+    let out = re.replace_all(&s, |caps: &regex::Captures| {
+        let whole = caps.get(0).unwrap();
+        let is_boundary = match s[whole.end()..].chars().next() {
+            None => true, // 字符串结束
+            Some(c) => {
+                c == '/'
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '?'
+                    || c == '#'
+                    || c == '$'
+                    || c.is_whitespace()
+            }
+        };
+        if is_boundary { format!("{}{}/api", &caps[1], prefix) } else { whole.as_str().to_string() }
+    });
     // 2. React Router v7 BrowserRouter basename 注入
     let basename = format!("basename:\"{}\",", prefix);
     let br_re = JS_BROWSER_ROUTER_RE.get_or_init(|| {
@@ -571,9 +637,16 @@ fn origin_value(port: u16) -> Result<HeaderValue, header::InvalidHeaderValue> {
 }
 
 /// 请求侧 header 重写（D6）：转发给上游前调用。
+/// `client_ip` 为连接对端 IP（经 ConnectInfo 注入），用于追加 `X-Forwarded-For`。
 /// 纯函数，便于单测。
-fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> HeaderMap {
+fn rewrite_request_headers(
+    original: &HeaderMap,
+    port: u16,
+    is_ws: bool,
+    client_ip: Option<IpAddr>,
+) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(original.len());
+    let mut had_forwarded_for = false;
     for (name, value) in original.iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if is_hop_by_hop(&lower) {
@@ -604,6 +677,27 @@ fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> Head
                     out.insert(name.clone(), v);
                 }
             }
+            // X-Forwarded-For（D6）：已有链则追加客户端 IP（逗号分隔，标准做法），
+            // 无链且 client_ip 可得则新建。
+            "x-forwarded-for" => {
+                had_forwarded_for = true;
+                let v = match client_ip {
+                    Some(ip) => match value.to_str() {
+                        Ok(s) if !s.is_empty() => HeaderValue::from_str(&format!("{}, {}", s, ip))
+                            .unwrap_or_else(|_| value.clone()),
+                        _ => {
+                            HeaderValue::from_str(&ip.to_string()).unwrap_or_else(|_| value.clone())
+                        }
+                    },
+                    None => value.clone(),
+                };
+                out.insert(name.clone(), v);
+            }
+            // X-Forwarded-Proto / Host（D6）：保留已有值——外层可能已带 nginx 的
+            // https/真实 Host（多实现差异 §8），覆盖会误导上游；缺失的循环后补齐。
+            "x-forwarded-proto" | "x-forwarded-host" => {
+                out.insert(name.clone(), value.clone());
+            }
             _ => {
                 out.insert(name.clone(), value.clone());
             }
@@ -615,7 +709,28 @@ fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> Head
     {
         out.insert(header::HOST, v);
     }
+    // D6：缺失的 X-Forwarded-* 按 OmniTerm 侧值补齐（上游感知真实客户端/协议）。
+    if !out.contains_key("x-forwarded-proto") {
+        out.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    }
+    if !out.contains_key("x-forwarded-host")
+        && let Some(h) = original.get(header::HOST)
+    {
+        out.insert("x-forwarded-host", h.clone());
+    }
+    if !had_forwarded_for
+        && let Some(ip) = client_ip
+        && let Ok(v) = HeaderValue::from_str(&ip.to_string())
+    {
+        out.insert("x-forwarded-for", v);
+    }
     out
+}
+
+/// 从请求 extensions 提取客户端 IP（`into_make_service_with_connect_info` 注入，
+/// handler 与 middleware 都能取到）。无则 `None`（`X-Forwarded-For` 追加不可得）。
+fn request_client_ip(request: &Request) -> Option<IpAddr> {
+    request.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip())
 }
 
 /// 从 `Cookie` 头剥离 `omniterm_token=...` 项（D2 cookie 隔离）。
@@ -676,7 +791,14 @@ fn rewrite_location(value: &HeaderValue, port: u16) -> HeaderValue {
     {
         return v;
     }
-    for base in [format!("http://localhost:{}", port), format!("http://127.0.0.1:{}", port)] {
+    for base in [
+        format!("http://localhost:{}", port),
+        format!("http://127.0.0.1:{}", port),
+        format!("http://0.0.0.0:{}", port),
+        format!("https://localhost:{}", port),
+        format!("https://127.0.0.1:{}", port),
+        format!("https://0.0.0.0:{}", port),
+    ] {
         if let Some(rest) = s.strip_prefix(&base)
             && let Ok(v) = HeaderValue::from_str(&format!("{}{}", prefix, rest))
         {
@@ -763,7 +885,7 @@ mod tests {
         h.insert("upgrade", HeaderValue::from_static("websocket"));
         h.insert("te", HeaderValue::from_static("trailers"));
         h.insert("keep-alive", HeaderValue::from_static("timeout=5"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert!(!out.contains_key("connection"));
         assert!(!out.contains_key("upgrade"));
         assert!(!out.contains_key("te"));
@@ -776,7 +898,7 @@ mod tests {
         // （reqwest 未启用自动解压，from_utf8_lossy 转码会损坏压缩字节）。
         let mut h = HeaderMap::new();
         h.insert("accept-encoding", HeaderValue::from_static("gzip, deflate, br"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert!(!out.contains_key("accept-encoding"));
     }
 
@@ -784,14 +906,14 @@ mod tests {
     fn request_headers_rewrite_host() {
         let mut h = HeaderMap::new();
         h.insert("host", HeaderValue::from_static("example.com:9077"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert_eq!(out["host"], "127.0.0.1:3000");
     }
 
     #[test]
     fn request_headers_inject_host_when_missing() {
         let h = HeaderMap::new();
-        let out = rewrite_request_headers(&h, 5173, false);
+        let out = rewrite_request_headers(&h, 5173, false, None);
         assert_eq!(out["host"], "127.0.0.1:5173");
     }
 
@@ -802,7 +924,7 @@ mod tests {
             "cookie",
             HeaderValue::from_static("sid=abc; omniterm_token=secret.jwt; theme=dark"),
         );
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         let cookie = out["cookie"].to_str().unwrap();
         assert!(cookie.contains("sid=abc"));
         assert!(cookie.contains("theme=dark"));
@@ -813,7 +935,7 @@ mod tests {
     fn request_headers_drop_cookie_when_only_token() {
         let mut h = HeaderMap::new();
         h.insert("cookie", HeaderValue::from_static("omniterm_token=secret.jwt"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert!(!out.contains_key("cookie"));
     }
 
@@ -822,11 +944,60 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("origin", HeaderValue::from_static("http://example.com"));
         // 普通 HTTP：Origin 保留
-        let out_http = rewrite_request_headers(&h, 3000, false);
+        let out_http = rewrite_request_headers(&h, 3000, false, None);
         assert_eq!(out_http["origin"], "http://example.com");
         // WS：Origin 重写为本地目标
-        let out_ws = rewrite_request_headers(&h, 3000, true);
+        let out_ws = rewrite_request_headers(&h, 3000, true, None);
         assert_eq!(out_ws["origin"], "http://127.0.0.1:3000");
+    }
+
+    // ── X-Forwarded-*（P0-4.2）──
+
+    #[test]
+    fn request_headers_sets_x_forwarded_for_from_client_ip() {
+        let h = HeaderMap::new();
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let out = rewrite_request_headers(&h, 3000, false, Some(ip));
+        assert_eq!(out["x-forwarded-for"], "192.168.1.5");
+    }
+
+    #[test]
+    fn request_headers_appends_x_forwarded_for_when_present() {
+        // 已有链（外层代理已设）→ 追加客户端 IP，逗号分隔（标准做法）
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", HeaderValue::from_static("10.0.0.1"));
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let out = rewrite_request_headers(&h, 3000, false, Some(ip));
+        assert_eq!(out["x-forwarded-for"], "10.0.0.1, 192.168.1.5");
+        // 无 client_ip（测试/非 ConnectInfo 场景）→ 透传已有值
+        let out2 = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out2["x-forwarded-for"], "10.0.0.1");
+    }
+
+    #[test]
+    fn request_headers_sets_x_forwarded_proto_when_missing() {
+        let h = HeaderMap::new();
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out["x-forwarded-proto"], "http");
+    }
+
+    #[test]
+    fn request_headers_keeps_existing_x_forwarded_proto() {
+        // 外层 nginx 已标 https：覆盖会误导上游，保留（多实现差异 §8）
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out["x-forwarded-proto"], "https");
+    }
+
+    #[test]
+    fn request_headers_sets_x_forwarded_host_from_host() {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("3000.omniterm.lan:9777"));
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        // X-Forwarded-Host 取**原始** Host（浏览器访问的），而非重写后的 127.0.0.1
+        assert_eq!(out["x-forwarded-host"], "3000.omniterm.lan:9777");
+        assert_eq!(out["host"], "127.0.0.1:3000");
     }
 
     #[test]
@@ -1115,5 +1286,91 @@ mod tests {
     fn rewrite_max_bytes_limits() {
         assert_eq!(RewriteKind::Html.max_bytes(), REWRITE_HTML_MAX);
         assert_eq!(RewriteKind::Js.max_bytes(), REWRITE_JS_MAX);
+    }
+
+    // ── P0 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+
+    #[test]
+    fn rewrite_html_prefixes_base_tag() {
+        // `<base href>` 被 href 属性正则覆盖：根绝对路径加前缀（相对 URL 基准改到
+        // 代理前缀）；已带前缀与外部 URL 不动。
+        let out = html(
+            r#"<head><base href="/"><base href="/proxy/3000/"><base href="https://ext.example.com/"></head>"#,
+        );
+        assert_eq!(
+            out,
+            r#"<head><base href="/proxy/3000/"><base href="/proxy/3000/"><base href="https://ext.example.com/"></head>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_prefixes_formaction() {
+        // HTML5 `<button formaction>` / `<input formaction>` 提交目标
+        let out = html(r#"<button formaction="/submit">S</button><input formaction='/upload'>"#);
+        assert_eq!(
+            out,
+            r#"<button formaction="/proxy/3000/submit">S</button><input formaction='/proxy/3000/upload'>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_prefixes_api_without_trailing_slash() {
+        // 无尾随斜杠的 `/api` 字面量：`"/api"`、带 query/hash 的变体也要重写
+        let out = js(
+            r#"const a = "/api"; const b = "/api?key=1"; const c = '/api#x'; const d = `/api`;"#,
+        );
+        assert_eq!(
+            out,
+            r#"const a = "/proxy/3000/api"; const b = "/proxy/3000/api?key=1"; const c = '/proxy/3000/api#x'; const d = `/proxy/3000/api`;"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_does_not_match_api_prefix_of_longer_words() {
+        // lookahead 限定：`/apix`、`/apikey` 等不是 `/api` 边界，不得误重写
+        let out = js(r#"const a = "/apix"; const b = '/apikey';"#);
+        assert_eq!(out, r#"const a = "/apix"; const b = '/apikey';"#);
+    }
+
+    #[test]
+    fn location_rewrites_https_and_0_0_0_0() {
+        // 绑定 0.0.0.0 或 https 回环重定向也要相对化到代理前缀
+        let v = HeaderValue::from_static("http://0.0.0.0:3000/");
+        assert_eq!(rewrite_location(&v, 3000).to_str().unwrap(), "/proxy/3000/");
+        let v2 = HeaderValue::from_static("https://localhost:3000/x");
+        assert_eq!(rewrite_location(&v2, 3000).to_str().unwrap(), "/proxy/3000/x");
+        let v3 = HeaderValue::from_static("https://127.0.0.1:3000/");
+        assert_eq!(rewrite_location(&v3, 3000).to_str().unwrap(), "/proxy/3000/");
+        let v4 = HeaderValue::from_static("https://0.0.0.0:3000/y");
+        assert_eq!(rewrite_location(&v4, 3000).to_str().unwrap(), "/proxy/3000/y");
+    }
+
+    #[test]
+    fn ws_origin_matches_subdomain_host() {
+        // 同源 WS 握手：Origin host 与 Host（均忽略端口）一致 → 放行
+        let o = HeaderValue::from_static("http://3000.omniterm.lan:9777");
+        assert!(origin_matches_host(&o, "3000.omniterm.lan:9777"));
+        let o2 = HeaderValue::from_static("https://3000.omniterm.lan");
+        assert!(origin_matches_host(&o2, "3000.omniterm.lan"));
+    }
+
+    #[test]
+    fn ws_origin_rejects_cross_site() {
+        // 跨站页面（evil.com）发起 WS → host 不同 → 拒绝
+        let o = HeaderValue::from_static("https://evil.com");
+        assert!(!origin_matches_host(&o, "3000.omniterm.lan"));
+        // 畸形 Origin（无 scheme）→ 拒绝
+        let o2 = HeaderValue::from_static("3000.omniterm.lan");
+        assert!(!origin_matches_host(&o2, "3000.omniterm.lan"));
+    }
+
+    #[test]
+    fn strip_port_keeps_ipv6_literal() {
+        assert_eq!(strip_port("3000.omniterm.lan:9777"), "3000.omniterm.lan");
+        assert_eq!(strip_port("192.168.5.216:9077"), "192.168.5.216");
+        assert_eq!(strip_port("3000.omniterm.lan"), "3000.omniterm.lan");
+        // IPv6：方括号内地址整体保留
+        assert_eq!(strip_port("[::1]:8080"), "::1");
+        assert_eq!(strip_port("[::1]"), "::1");
     }
 }

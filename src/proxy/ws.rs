@@ -35,10 +35,11 @@ pub async fn relay(
     port: u16,
     uri: &axum::http::Uri,
     headers: HeaderMap,
+    client_ip: Option<std::net::IpAddr>,
 ) -> Response {
     let target = upstream_ws_url(uri, port);
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = relay_inner(socket, target, port, headers).await {
+        if let Err(e) = relay_inner(socket, target, port, headers, client_ip).await {
             tracing::warn!("ws relay terminated (port {}): {}", port, e);
         }
     })
@@ -54,12 +55,13 @@ async fn relay_inner(
     target: String,
     port: u16,
     headers: HeaderMap,
+    client_ip: Option<std::net::IpAddr>,
 ) -> anyhow::Result<()> {
     // 上游 WS 握手：透传重写后的 end-to-end 头（Origin 重写 / Cookie 剥离 / 子协议透传），
     // 握手头（Sec-WebSocket-Key/Version）留给 tungstenite 生成规范值。
     let mut req: tokio_tungstenite::tungstenite::handshake::client::Request =
         target.into_client_request()?;
-    let rewritten = super::rewrite_request_headers(&headers, port, true);
+    let rewritten = super::rewrite_request_headers(&headers, port, true, client_ip);
     for (name, value) in rewritten.iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if lower == "sec-websocket-key" || lower == "sec-websocket-version" {
