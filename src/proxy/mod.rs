@@ -320,16 +320,6 @@ async fn forward_http(
     {
         match try_rewrite_body(upstream_resp, kind, port).await {
             Ok(RewriteOutcome::Done(body)) => {
-                // SPA 路由适配：HTML 开头内联 polyfill（必须在主 JS 之前执行）。
-                // 见 `build_spa_polyfill` 注释。仅在 HTML 类型注入，JS 类型跳过。
-                let body = match kind {
-                    RewriteKind::Html => {
-                        let mut with_polyfill = build_spa_polyfill(port);
-                        with_polyfill.extend_from_slice(&body);
-                        with_polyfill
-                    }
-                    RewriteKind::Js => body,
-                };
                 return match builder.body(Body::from(body)) {
                     Ok(resp) => resp,
                     Err(e) => {
@@ -371,49 +361,6 @@ async fn forward_http(
             (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
         }
     }
-}
-
-/// SPA 客户端路由适配 polyfill（路径前缀形态，P3）。
-///
-/// 路径前缀形态下浏览器地址栏保留 `/proxy/{port}` 前缀，但 SPA 路由框架（React Router /
-/// Vue Router 等）`location.pathname` 看到的是 `/proxy/3000/console` 等带前缀路径，路由表
-/// 不匹配 → 404。子域名方案天然回避此问题（子域名作为 origin，pathname 不带前缀），但
-/// 需可通配符解析的域名，局域网纯 IP 场景不可用。
-///
-/// 在主 JS 之前执行此 polyfill（HTML `<body>` 开头内联 `<script>`）：
-/// 1. 劫持 `Location.prototype.pathname` getter，让 SPA 看到剥掉代理前缀的路径，
-///    React Router 创建 history 时 `state.pathname = "/console"` → 路由匹配正常；
-/// 2. 劫持 `history.pushState` / `replaceState`，SPA 内部跳转时传入的是 SPA 路径
-///    （如 `/console`），劫持后自动加回 `/proxy/3000`，浏览器地址栏保留前缀；
-/// 3. SPA 写 history 后再次读 `window.location.pathname`（已劫持），history 内部
-///    state.pathname 始终是剥前缀的，路由匹配保持正确。
-///
-/// 已知限制：SPA 的 `<Link>` 组件根据当前 pathname 生成 `<a href>`，显示为 SPA 内部
-/// 路径（不带前缀）；点击时 `pushState` 劫持会自动加前缀，不影响功能，但 hover 看到的
-/// URL 与浏览器地址栏会短暂不一致。根治需 SPA 端配置 basename 或子域名方案。
-///
-/// `try/catch` 包裹劫持失败兜底：旧版浏览器若拒绝重定义 `Location.pathname`，主流程
-/// 仍走重写后的 HTML（功能退化到原 404 状态，不引入新崩溃）。
-fn build_spa_polyfill(port: u16) -> Vec<u8> {
-    // SPA 客户端路由适配 polyfill（路径前缀形态）。
-    //
-    // 劫持 Location.pathname getter 让 SPA（React Router / Vue Router 等）看到剥前缀路径
-    // → 路由匹配正常；劫持 history.pushState/replaceState 让 SPA 内部跳转自动加回前缀
-    // → 浏览器地址栏保留 `/proxy/{port}`。Location.pathname 劫持用 try/catch 兜底（旧浏览
-    // 器拒绝重定义时主流程降级到原 404 状态，不引入新崩溃）。
-    let prefix = format!("/proxy/{}", port);
-    let mut s = String::with_capacity(512 + prefix.len());
-    s.push_str("<script>(function(){var P=\"");
-    s.push_str(&prefix);
-    s.push_str("\";if(!window.location.pathname.startsWith(P))return;");
-    // 劫持 Location.pathname
-    s.push_str("try{var d=Object.getOwnPropertyDescriptor(Location.prototype,\"pathname\");Object.defineProperty(Location.prototype,\"pathname\",{get:function(){var p=d.get.call(this);return p.indexOf(P)===0?(p.slice(P.length)||\"/\"):p},configurable:true})}catch(e){}");
-    // 劫持 history.pushState/replaceState
-    s.push_str("var op=history.pushState.bind(history),or=history.replaceState.bind(history);");
-    s.push_str("history.pushState=function(s,t,u){if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;return op(s,t,u)};");
-    s.push_str("history.replaceState=function(s,t,u){if(typeof u===\"string\"&&u.charAt(0)===\"/\"&&u.indexOf(P)!==0)u=P+u;return or(s,t,u)}");
-    s.push_str("})();</script>");
-    s.into_bytes()
 }
 
 /// 响应体流（chunk 边读边写，不 collect）——HTTP 转发公共尾部。
@@ -491,11 +438,26 @@ static HTML_ATTR_RE: OnceLock<Regex> = OnceLock::new();
 /// JS API 字面量重写正则（惰性编译）：双/单/反引号后紧跟 `/api/`。
 static JS_API_RE: OnceLock<Regex> = OnceLock::new();
 
+/// React Router v7 `<BrowserRouter future={{v7_startTransition,...}}>` 特征正则：
+/// 匹配 props 对象开头，注入 `basename`（SPA 路由前缀适配，见 `rewrite_js`）。
+static JS_BROWSER_ROUTER_RE: OnceLock<Regex> = OnceLock::new();
+
+/// Vite 8 preload helper 依赖路径特征正则：`return"/"+e`（把相对依赖硬编码成根
+/// 绝对路径，见 `rewrite_js` 步骤 3）。
+static VITE_PRELOAD_RE: OnceLock<Regex> = OnceLock::new();
+
+/// HTML `rel="prerender"` 降级正则（`prerender` → `prefetch`，见 `rewrite_html`）。
+static HTML_PRERENDER_RE: OnceLock<Regex> = OnceLock::new();
+
 /// HTML 内根绝对路径资源属性 → `/proxy/{port}` 前缀（D1 兜底）。
 /// 覆盖 `src`/`href`/`srcset`/`action`/`poster`（单双引号皆可）：
 /// - `src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`
 /// - 外部 URL（`https://…`）、协议相对（`//cdn…`）、已带前缀（`/proxy/{port}/…`）不动
 /// - `srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）
+///
+/// 另做 `rel="prerender"` 降级（2026-08-15）：Chrome 对 `prerender` 按 module script
+/// 预取，`landing.html` 等返回 `text/html` 会触发 MIME 报错（无害但刷 console）。
+/// 降级为 `rel="prefetch"`（普通预取，不要求 module script 类型）。
 fn rewrite_html(body: &[u8], port: u16) -> Vec<u8> {
     let s = String::from_utf8_lossy(body);
     let prefix = format!("/proxy/{}", port);
@@ -505,14 +467,16 @@ fn rewrite_html(body: &[u8], port: u16) -> Vec<u8> {
         Regex::new(r#"(?i)(src|href|srcset|action|poster)=(["'])([^"']*)(["'])"#)
             .expect("valid html attr regex")
     });
-    re.replace_all(&s, |caps: &regex::Captures| {
+    let rewritten = re.replace_all(&s, |caps: &regex::Captures| {
         let attr = &caps[1];
         let quote = &caps[2];
         let value = rewrite_attr_value(&caps[3], &prefix);
         format!("{}={}{}{}", attr, quote, value, &caps[4])
-    })
-    .into_owned()
-    .into_bytes()
+    });
+    // prerender → prefetch（预渲染按 module script 预取会 MIME 报错，降级无害）
+    let prerender_re = HTML_PRERENDER_RE
+        .get_or_init(|| Regex::new(r#"(?i)rel=["']prerender["']"#).expect("valid rel regex"));
+    prerender_re.replace_all(&rewritten, r#"rel="prefetch""#).into_owned().into_bytes()
 }
 
 /// 单个 HTML 属性值重写：根绝对路径（`/x`）→ `/proxy/{port}/x`；其余原样。
@@ -557,12 +521,41 @@ fn rewrite_attr_value(value: &str, prefix: &str) -> String {
 /// 统一加前缀。**全局一致重写**保证比较逻辑自洽：请求路径与 `===` 比较的字面量
 /// 同步带前缀（如 new-api 的 `Y==="/api/ratio_config"`）。
 /// 不匹配：非引号开头（变量拼接、正则字面量）、注释与 i18n 文案（加前缀无害）。
+///
+/// 另做 SPA 路由 basename 注入（2026-08-15）：React Router v7 的
+/// `<BrowserRouter future={{v7_startTransition,...}}>` 若配置 `basename`，
+/// 路由匹配会自动剥前缀——路径前缀形态下 `location.pathname = /proxy/{port}/console`
+/// 匹配 `path:"/console"`，SPA 不再 404；Link 生成的 href 与 navigate 自动带前缀。
+/// 以 `v7_startTransition` 特征匹配（React Router v7 BrowserRouter 独有配置项），
+/// 注入 `basename:"/proxy/{port}"`；无此特征的 SPA（v6 及以下、Vue Router 等）
+/// 不注入，维持原行为。
+///
+/// 再做 Vite preload helper 依赖路径重写（2026-08-15）：Vite 8 的
+/// `k9r=function(e){return"/"+e}` 把 mapDeps 相对路径（`assets/x.js`）硬编码成
+/// 根绝对路径（`/assets/x.js`），绕过 `import.meta.url` → 反代下这些 `<link>` /
+/// 动态 import 请求根路径而 404。改为 `return"/proxy/{port}/"+e` 使其带前缀；
+/// 无此特征的 Vite 版本（老版本用 `new URL(d, import.meta.url)`，天然带前缀）
+/// 不命中，维持原行为。
 fn rewrite_js(body: &[u8], port: u16) -> Vec<u8> {
     let s = String::from_utf8_lossy(body);
     let prefix = format!("/proxy/{}", port);
+    // 1. `/api/` 字面量加前缀
     let re = JS_API_RE.get_or_init(|| Regex::new(r#"(["'`])/api/"#).expect("valid js api regex"));
     let replacement = format!("$1{}/api/", prefix);
-    re.replace_all(&s, replacement).into_owned().into_bytes()
+    let out = re.replace_all(&s, replacement);
+    // 2. React Router v7 BrowserRouter basename 注入
+    let basename = format!("basename:\"{}\",", prefix);
+    let br_re = JS_BROWSER_ROUTER_RE.get_or_init(|| {
+        Regex::new(r#"(\{)(future:\{v7_startTransition)"#).expect("valid browser router regex")
+    });
+    // 函数式替换（避免 `$1basename` 被 regex 解析为命名组引用 `1basename`）
+    let injected = br_re
+        .replace(&out, |caps: &regex::Captures| format!("{}{}{}", &caps[1], basename, &caps[2]));
+    // 3. Vite 8 preload helper 依赖路径重写：`return"/"+e` → `return"/proxy/{port}/"+e`
+    let vp_re = VITE_PRELOAD_RE
+        .get_or_init(|| Regex::new(r#"return"/"\+e"#).expect("valid vite preload regex"));
+    let prefixed = vp_re.replace_all(&injected, format!("return\"{}/\"+e", prefix));
+    prefixed.into_owned().into_bytes()
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
@@ -1007,6 +1000,20 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_html_downgrades_prerender_to_prefetch() {
+        // Chrome 把 rel=prerender 按 module script 预取,text/html 会 MIME 报错;降级无害
+        let out = html(
+            r#"<link rel="prerender" href="/landing.html"><link rel="prefetch" href="/x.html">"#,
+        );
+        assert!(
+            out.contains(r#"rel="prefetch" href="/proxy/3000/landing.html""#),
+            "prerender downgraded: {out}"
+        );
+        assert!(!out.contains("prerender"), "no prerender left: {out}");
+        assert!(out.contains(r#"rel="prefetch" href="/proxy/3000/x.html""#));
+    }
+
+    #[test]
     fn rewrite_js_prefixes_double_single_and_template_strings() {
         let out =
             js(r#"fe.post("/api/card/batch");get('/api/user');req(`/api/card/${id}/renew`);"#);
@@ -1014,6 +1021,59 @@ mod tests {
             out,
             r#"fe.post("/proxy/3000/api/card/batch");get('/proxy/3000/api/user');req(`/proxy/3000/api/card/${id}/renew`);"#
         );
+    }
+
+    // ── SPA 路由 basename 注入（React Router v7 BrowserRouter，2026-08-15）──
+
+    #[test]
+    fn rewrite_js_injects_basename_into_v7_browser_router() {
+        let out =
+            js(r#"a.jsx(Y3t,{future:{v7_startTransition:!0,v7_relativeSplatPath:!0},children:o})"#);
+        assert!(out.contains(r#"basename:"/proxy/3000","#), "basename injected: {out}");
+        assert!(out.contains(r#"{basename:"/proxy/3000",future:{v7_startTransition"#));
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_v7_router_unchanged() {
+        // 非 React Router v7 特征（无 v7_startTransition）：不注入 basename
+        let out = js(r#"a.jsx(Rt,{children:o})"#);
+        assert_eq!(out, r#"a.jsx(Rt,{children:o})"#);
+        // 普通对象带 future 字段但不是 v7_startTransition 的也不动
+        let out2 = js(r#"a.jsx(Bt,{future:{v7_relativeSplatPath:!0},children:o})"#);
+        assert_eq!(out2, r#"a.jsx(Bt,{future:{v7_relativeSplatPath:!0},children:o})"#);
+    }
+
+    #[test]
+    fn rewrite_js_basename_uses_requested_port() {
+        let out_3000 = js(r#"a.jsx(Y3t,{future:{v7_startTransition:!0},children:o})"#);
+        assert!(out_3000.contains(r#"basename:"/proxy/3000","#));
+        let out_9076 = String::from_utf8(rewrite_js(
+            r#"a.jsx(Y3t,{future:{v7_startTransition:!0},children:o})"#.as_bytes(),
+            9076,
+        ))
+        .unwrap();
+        assert!(out_9076.contains(r#"basename:"/proxy/9076","#));
+        assert!(!out_9076.contains("/proxy/3000"));
+    }
+
+    // ── Vite 8 preload helper 依赖路径重写（2026-08-15）──
+
+    #[test]
+    fn rewrite_js_vite_preload_helper_gets_prefix() {
+        // Vite 8: k9r=function(e){return"/"+e} 把 assets/x.js 硬编码成 /assets/x.js
+        //（绕过 import.meta.url），反代下根路径请求 404。改为 /proxy/{port}/ 前缀。
+        let out = js(r#"k9r=function(e){return"/"+e}"#);
+        assert!(out.contains(r#"return"/proxy/3000/"+e"#), "vite preload prefixed: {out}");
+        assert!(!out.contains(r#"return"/"+e"#), "root path gone: {out}");
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_vite_preload_unchanged() {
+        // 无 `return"/"+e` 特征（老 Vite 用 new URL(d, import.meta.url)，天然带前缀）不动
+        let out = js(r#"const k9r=(e)=>"/"+e"#);
+        assert_eq!(out, r#"const k9r=(e)=>"/"+e"#);
+        let out2 = js(r#"var r=function(e){return "/" + e}"#);
+        assert_eq!(out2, r#"var r=function(e){return "/" + e}"#);
     }
 
     #[test]
@@ -1038,30 +1098,6 @@ mod tests {
             out,
             r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#
         );
-    }
-
-    // ── SPA 路由适配 polyfill（P3 路径前缀形态兜底）──
-
-    #[test]
-    fn spa_polyfill_contains_prefix_and_script_tag() {
-        let s = String::from_utf8(build_spa_polyfill(3000)).unwrap();
-        // 必须包含 prefix 与脚本包裹标签
-        assert!(s.starts_with("<script>"), "polyfill must be a <script>: {s}");
-        assert!(s.ends_with("</script>"), "polyfill must end with </script>: {s}");
-        assert!(s.contains("/proxy/3000"), "polyfill must contain port prefix: {s}");
-        // 必须劫持 Location.pathname 与 history.pushState/replaceState
-        assert!(s.contains("Location.prototype"), "must patch Location.pathname: {s}");
-        assert!(s.contains("pushState"), "must patch pushState: {s}");
-        assert!(s.contains("replaceState"), "must patch replaceState: {s}");
-    }
-
-    #[test]
-    fn spa_polyfill_uses_requested_port() {
-        let s_3000 = String::from_utf8(build_spa_polyfill(3000)).unwrap();
-        assert!(s_3000.contains("P=\"/proxy/3000\""));
-        let s_9076 = String::from_utf8(build_spa_polyfill(9076)).unwrap();
-        assert!(s_9076.contains("P=\"/proxy/9076\""));
-        assert!(!s_9076.contains("/proxy/3000"));
     }
 
     #[test]
