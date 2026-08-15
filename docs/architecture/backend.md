@@ -140,7 +140,7 @@ GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（�
 POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
-GET  /api/v1/files/watch (SSE)
+GET  /api/v1/files/watch (SSE)   # 实时目录变更推送；watch 树**手动递归注册**（跳过 node_modules/.git/target/隐藏目录，见「File watcher」小节）
 GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min）
 POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400）
@@ -151,6 +151,14 @@ ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy
 ```
 
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
+
+## File watcher（`src/api/files_watch.rs`）
+
+`GET /api/v1/files/watch`（SSE）实时推送工作区目录变更。inotify（Linux）递归 watch：
+
+- **watch 树手动递归注册**（2026-08-16 修复）：notify 的 `RecursiveMode::Recursive` 内部 `WalkDir` **不跳过任何目录**——项目含 node_modules 时会把整个依赖树注册进 inotify（实测 OmniTerm-dev 项目 1 万+ watch），且 notify 8.2 在该规模 + 持续事件下 `handle_inotify` 内层 `read_events` 循环饿死 mio poll：`notify-rx` 线程 100% CPU、高频分配致堆膨胀（正式版 RSS +5MB/s 到 7GB 的根因）。现改为 `collect_watch_dirs`（walkdir `filter_entry` 剪枝，跳过 node_modules/.git/target/隐藏目录）对根目录 + 非 ignore 子目录逐个 `NonRecursive` 注册；新目录经 `new_dir_tx` 通道由消费循环补注册。`should_ignore` 只过滤事件、**不减少注册**——它从「回调过滤」提升为「注册剪枝」双重把关。
+- **生命周期**：每请求一个 watcher（1 inotify fd），SSE 断开即 drop（`shutdown_rx` Disconnected 检测，`spawn_blocking` 内 250ms 轮询）。
+- **有界性**：事件 → 有界 `broadcast(64)`，Lagged 丢弃；watch 目录列表有界于实际业务目录数（剪枝后）。
 
 ## Port-forward proxy（`src/proxy/`）
 

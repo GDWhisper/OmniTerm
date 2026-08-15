@@ -71,6 +71,7 @@ Prefix each entry with the area it affects:
   2. `Content-Encoding: identity`（明文标识）/空视为无编码，**仍可做响应体重写**——旧 `is_none()` 判断把它当非明文误跳过（提取 `rewrite_allowed_for_encoding` 纯函数并单测）
   3. 请求体上限（默认 2MB）**可配置化**：新增 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY`，注入 `ProxyState.max_request_body`，大文件上传场景可调大
   4. `parse_proxy_host` 对 IPv6 字面量 Host（`[::1]:8080`）不再误剥端口（按 `]` 结尾判别），返回 None 而非错误端口（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/main.rs`）
+- (2026-08-16) `[backend]` 修复文件监控（`/files/watch` SSE）在项目含 node_modules 时内存无界增长（正式版 RSS +~5MB/s 直至 OOM，实测最高 7GB）：notify 的 `RecursiveMode::Recursive` 内部 WalkDir **不跳过任何目录**，node_modules/.git/target 的目录全被注册进 inotify（实测 OmniTerm-dev 项目 1 万+ watch），notify 8.2 在该规模 + 持续文件事件下 `notify-rx` 线程 `handle_inotify` 内层循环饿死 mio poll——100% CPU 忙循环 + 高频分配致堆膨胀。现改为**手动递归注册**（walkdir `filter_entry` 剪枝，跳过 ignore 目录及整棵子树，watch 数降到实际业务目录量级）+ 新目录经通道由消费循环补注册（`should_ignore` 从仅回调过滤提升为注册剪枝）（`src/api/files_watch.rs`、`Cargo.toml`）
 
 ## [0.2.14] - 2026-08-13
 
