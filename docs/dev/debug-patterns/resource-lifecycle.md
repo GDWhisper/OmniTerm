@@ -112,6 +112,7 @@
 - 2026-08-04 长 ACP turn `turn_accumulator` 无界 `Vec<Value>` push 7.7 万帧 + 每次 flush 全量重序列化覆盖写库 → 单条 blocks 100MB、RES 4.5GB、tokio worker 99%。修复：`VecDeque` + `MAX_FRAMES=2000` 有界窗口，text 仍全量累积。
 - 2026-08-10 同一家族复发：切 ACP 会话卡顿且历史越多越慢。`MAX_FRAMES=2000` 帧数上限完好，但 codebuddy 每个 `tool_call_update` 只带 1 字符增量却重复携带完整 `rawInput`（实测 4.5KB/帧，>97% 是同一份副本）→ 单条 blocks 8.7MB、`GET /messages` 下发 15MB、切会话阻塞约 0.5s。修复：补 `MAX_BLOCKS_BYTES=128KB` 窗口字节上限 + `MAX_FRAME_BYTES=64KB` 单帧上限（超限帧不入窗、text 兜底），帧改存 `RawValue` 使字节计量免费且 flush 不再重格式化；前端 `ChatView` 对已 hydrate 会话不再重复 `GET /messages`。
 - 2026-08-12 同一家族第三次，这回就是前两次的“兜底”：上两条修复都以“`text` 仍全量累积”作为丢帧的理由，而 `text` 恰恰因此从未被限——实测 dev 库单行 9,150,950 字符，所在会话只有 19 条消息（即“会话短”不提供任何保护），且同一个防抖 writer 每次 flush 重写整列。修复：`MAX_TEXT_BYTES=1MiB`，头 256KiB 冻结 + 尾窗滑动，中段为可读的 `…（已省略 N 字符）…`；切割走 `floor_char_boundary` / `ceil_char_boundary`（切在多字节字符中间会 panic 并折断整个 ACP 连接任务）。
+- 2026-08-16 同一家族（外部注册集无界）：`files_watch` 用 notify `RecursiveMode::Recursive`，其内部 WalkDir 不跳过 node_modules/.git/target——OmniTerm-dev 项目注册 1 万+ inotify watch（事件侧 `should_ignore` 过滤不掉注册侧），notify 8.2 在该规模 + 持续事件下 `handle_inotify` 内层 `read_events` 循环饿死 mio poll：`notify-rx` 线程 100% CPU、高频分配致堆膨胀（正式版 RSS +5MB/s 至 7GB）。修复：`collect_watch_dirs`（walkdir `filter_entry` 剪枝）手动递归注册 + 新目录通道补注册，watch 数降到业务目录量级。
 
 ---
 
