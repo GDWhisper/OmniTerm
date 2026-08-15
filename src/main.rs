@@ -22,6 +22,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
@@ -121,6 +122,17 @@ struct StartArgs {
     /// Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
     #[arg(long)]
     debug: bool,
+
+    /// Base domain for subdomain reverse proxy (e.g. `omniterm.lan`). When set, requests to
+    /// `{port}.{domain}` are routed to `127.0.0.1:{port}` via the Host header, so absolute-path
+    /// SPAs (Next.js/Vite) load correctly. Unset disables subdomain routing (path-prefix only).
+    #[arg(long, env = "OMNITERM_PROXY_DOMAIN")]
+    proxy_domain: Option<String>,
+
+    /// Max request body size in bytes for the reverse proxy (default 2 MiB). Raise it to proxy
+    /// large uploads to the target dev server (e.g. `--proxy-max-body 104857600`).
+    #[arg(long, env = "OMNITERM_PROXY_MAX_BODY")]
+    proxy_max_body: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -705,6 +717,8 @@ fn main() -> anyhow::Result<()> {
                 proxy: proxy::ProxyState {
                     client: proxy_client,
                     self_port: args.port,
+                    base_host: args.proxy_domain.clone(),
+                    max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
                 },
             };
 
@@ -741,6 +755,15 @@ fn main() -> anyhow::Result<()> {
             };
 
             let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
+
+            // 子域名代理：仅配置 base_host 时挂最外层 Host 路由中间件。
+            // layer 顺序「后加的先执行」，加在 CorsLayer/TraceLayer 之后 = 最外层，
+            // 先于 Router/fallback 拦截 `{port}.{base}` 请求；未配置则不挂（避免每请求空跑）。
+            let app = if state.proxy.base_host.is_some() {
+                app.layer(middleware::from_fn_with_state(state.clone(), proxy::proxy_host_mw))
+            } else {
+                app
+            };
 
             // ── 绑定 ─────────────────────────────────────────────────
             // 监听地址只由 `-H/--host` + `-p/--port`（含各自的 `OMNITERM_*` env）决定，

@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { rewriteLocalUrl } from './proxyUrl'
+import { describe, it, expect, afterEach } from 'vitest'
+import { rewriteLocalUrl, setProxyDomain } from './proxyUrl'
 
-describe('rewriteLocalUrl', () => {
+// proxyDomain 是模块级状态，测试间必须重置，避免子域名配置污染后续用例。
+afterEach(() => setProxyDomain(null))
+
+describe('rewriteLocalUrl（路径前缀，默认）', () => {
   it('重写 http://localhost:port 为 /proxy/{port}/', () => {
     expect(rewriteLocalUrl('http://localhost:3000')).toBe('/proxy/3000/')
     expect(rewriteLocalUrl('http://localhost:3000/')).toBe('/proxy/3000/')
@@ -37,5 +40,42 @@ describe('rewriteLocalUrl', () => {
   it('空字符串返回 null', () => {
     expect(rewriteLocalUrl('')).toBeNull()
     expect(rewriteLocalUrl('   ')).toBeNull()
+  })
+})
+
+describe('rewriteLocalUrl（子域名，配置 proxyDomain 后）', () => {
+  it('生成 {port}.{domain} 子域名 URL', () => {
+    setProxyDomain('omniterm.lan')
+    const url = rewriteLocalUrl('http://localhost:8080')
+    expect(url).toMatch(/^https?:\/\/8080\.omniterm\.lan(:[0-9]+)?\/$/)
+  })
+
+  it('保留剩余路径与 query', () => {
+    setProxyDomain('omniterm.lan')
+    const url = rewriteLocalUrl('http://localhost:3000/a/b?x=1')
+    expect(url).toMatch(/^https?:\/\/3000\.omniterm\.lan(:[0-9]+)?\/a\/b\?x=1$/)
+  })
+
+  it('裸 hostname:port 同样走子域名', () => {
+    setProxyDomain('omniterm.lan')
+    const url = rewriteLocalUrl('localhost:5173/foo')
+    expect(url).toMatch(/^https?:\/\/5173\.omniterm\.lan(:[0-9]+)?\/foo$/)
+  })
+
+  it('端口范围过滤仍生效', () => {
+    setProxyDomain('omniterm.lan')
+    expect(rewriteLocalUrl('http://localhost:80')).toBeNull()
+    expect(rewriteLocalUrl('http://localhost:99999')).toBeNull()
+  })
+
+  it('非本机 URL 仍返回 null', () => {
+    setProxyDomain('omniterm.lan')
+    expect(rewriteLocalUrl('http://example.com:3000')).toBeNull()
+  })
+
+  it('清除 proxyDomain 后回退路径前缀', () => {
+    setProxyDomain('omniterm.lan')
+    setProxyDomain(null)
+    expect(rewriteLocalUrl('http://localhost:3000')).toBe('/proxy/3000/')
   })
 })

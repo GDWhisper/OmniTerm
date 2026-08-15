@@ -8,6 +8,7 @@ import { useImmersive } from './hooks/useImmersive'
 import { useThemeStore } from './stores/themeStore'
 import { useAppStore } from './stores/appStore'
 import { api } from './api/client'
+import { setProxyDomain } from './utils/proxyUrl'
 
 function App() {
   useMobileDetection()
@@ -35,6 +36,12 @@ function App() {
       })
       .catch(() => setAuthState('unauthenticated'))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    // 子域名代理 base：`/system/info` 的 `proxy_domain`（null = 未启用，回退路径前缀）。
+    // 首次渲染未加载时 rewriteLocalUrl 自然回退路径前缀，加载后切子域名（链接在点击时才调用，无需重渲染）。
+    api.systemInfo().then((res) => setProxyDomain(res.proxy_domain ?? null)).catch(() => {})
+  }, [])
 
   if (authState === 'loading') {
     return (

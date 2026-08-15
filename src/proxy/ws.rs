@@ -35,10 +35,11 @@ pub async fn relay(
     port: u16,
     uri: &axum::http::Uri,
     headers: HeaderMap,
+    client_ip: Option<std::net::IpAddr>,
 ) -> Response {
     let target = upstream_ws_url(uri, port);
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = relay_inner(socket, target, port, headers).await {
+        if let Err(e) = relay_inner(socket, target, port, headers, client_ip).await {
             tracing::warn!("ws relay terminated (port {}): {}", port, e);
         }
     })
@@ -54,12 +55,13 @@ async fn relay_inner(
     target: String,
     port: u16,
     headers: HeaderMap,
+    client_ip: Option<std::net::IpAddr>,
 ) -> anyhow::Result<()> {
     // 上游 WS 握手：透传重写后的 end-to-end 头（Origin 重写 / Cookie 剥离 / 子协议透传），
     // 握手头（Sec-WebSocket-Key/Version）留给 tungstenite 生成规范值。
     let mut req: tokio_tungstenite::tungstenite::handshake::client::Request =
         target.into_client_request()?;
-    let rewritten = super::rewrite_request_headers(&headers, port, true);
+    let rewritten = super::rewrite_request_headers(&headers, port, true, client_ip);
     for (name, value) in rewritten.iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if lower == "sec-websocket-key" || lower == "sec-websocket-version" {
@@ -139,11 +141,16 @@ async fn relay_inner(
         _ = &mut read_up => {}
         _ = &mut write_client => {}
     }
-    // 任一方向结束即终止整条 relay：其余 task 必须显式 abort，
-    // 否则败者会守着已死的半边连接泄漏。
+    // 任一方向结束即终止整条 relay（P1-4.9）：
+    // 读侧 abort 后其持有的队列 Sender 随之 drop，channel 关闭，写侧会把队列中
+    // 残留的 Close 帧发完（`relay_to_ws(RelayMsg::Close)` → 上游/客户端收到 Close，
+    // 不再干等连接超时）再自然退出。**不立即 abort 写侧**——否则 Close 来不及发出。
+    // 写侧 `send` 可能阻塞在对方不消费上，用有界超时兜底后 abort，避免死等。
     read_client.abort();
-    write_up.abort();
     read_up.abort();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), &mut write_up).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), &mut write_client).await;
+    write_up.abort();
     write_client.abort();
     Ok(())
 }
@@ -232,5 +239,13 @@ mod tests {
     fn upstream_ws_url_swaps_scheme() {
         let uri: axum::http::Uri = "/proxy/3000/hmr?x=1".parse().unwrap();
         assert_eq!(upstream_ws_url(&uri, 3000), "ws://127.0.0.1:3000/hmr?x=1");
+    }
+
+    #[test]
+    fn close_message_roundtrips_through_relay_types() {
+        // 读侧收到 Close → RelayMsg::Close → 写侧转回 Close 帧（P1-4.9 优雅关闭基础）
+        assert!(matches!(axum_to_relay(Message::Close(None)), Some(RelayMsg::Close)));
+        assert!(matches!(relay_to_ws(RelayMsg::Close), WsMessage::Close(_)));
+        assert!(matches!(relay_to_axum(RelayMsg::Close), Message::Close(_)));
     }
 }

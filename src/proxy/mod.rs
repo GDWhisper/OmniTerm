@@ -24,13 +24,18 @@ mod ws;
 use axum::{
     Router,
     body::Body,
-    extract::{FromRequestParts, OriginalUri, Path, Request, State, WebSocketUpgrade},
+    extract::{ConnectInfo, FromRequestParts, OriginalUri, Path, Request, State, WebSocketUpgrade},
     http::{HeaderMap, HeaderValue, StatusCode, header, request::Parts},
-    middleware,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::any,
 };
+use std::net::IpAddr;
 use std::ops::RangeInclusive;
+use std::sync::OnceLock;
+
+use futures_util::StreamExt;
+use regex::Regex;
 
 use crate::AppState;
 
@@ -62,8 +67,15 @@ const DENIED_PORTS: &[u16] = &[3306, 5432, 6379, 27017, 11211];
 /// 黑名单端口范围（D2）：Consul、Elasticsearch 连续端口段。
 const DENIED_PORT_RANGES: &[(u16, u16)] = &[(8500, 8503), (9200, 9300)];
 
-/// 请求体上限：与 axum `DefaultBodyLimit` 一致（2MB），防大体积上传耗内存（D5）。
-const MAX_REQUEST_BODY: usize = 2 * 1024 * 1024;
+/// 请求体上限默认值：与 axum `DefaultBodyLimit` 一致（2MB），防大体积上传耗内存（D5）。
+/// 经 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY` 可覆盖（见 main.rs）。
+pub const MAX_REQUEST_BODY: usize = 2 * 1024 * 1024;
+
+/// HTML 响应体重写上限：超过则不重写、原样流式透传（HTML 页面通常 < 1MiB）。
+const REWRITE_HTML_MAX: usize = 4 * 1024 * 1024;
+
+/// JS 响应体重写上限：单文件主包（如 new-api 9.2MB）可能较大，放宽到 16MiB。
+const REWRITE_JS_MAX: usize = 16 * 1024 * 1024;
 
 /// hop-by-hop 头（RFC 7230 §6.1）：只对单跳连接有意义，跨代理必须剥离、禁止透传。
 const HOP_BY_HOP_HEADERS: &[&str] = &[
@@ -96,6 +108,12 @@ pub fn is_port_allowed(port: u16, self_port: u16) -> bool {
 pub struct ProxyState {
     pub client: reqwest::Client,
     pub self_port: u16,
+    /// 子域名代理 base（如 `omniterm.lan`）。`None`/空字符串 = 不启用子域名 Host 路由。
+    /// 由 `--proxy-domain` / `OMNITERM_PROXY_DOMAIN` 注入（见 main.rs）。
+    pub base_host: Option<String>,
+    /// 请求体上限（默认 `MAX_REQUEST_BODY` = 2MB）。由 `--proxy-max-body` /
+    /// `OMNITERM_PROXY_MAX_BODY` 注入（见 main.rs），供大文件上传场景调大。
+    pub max_request_body: usize,
 }
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -133,12 +151,139 @@ async fn dispatch_proxy(
         return (StatusCode::FORBIDDEN, "port not allowed").into_response();
     }
 
+    let client_ip = request_client_ip(&request);
+
     // WS 分流（P2）：`Some` 说明带 `Upgrade: websocket` 握手头。
     if let Some(ws) = upgrade {
-        return ws::relay(ws, port, &uri, request.headers().clone()).await;
+        // Origin 校验（CSWSH 防御，P0-4.6）：浏览器发起的 WS 必带 Origin，其 host
+        // 必须与请求 Host 一致；跨站页面（如 evil.com 的 iframe）Origin 的 host 不同，
+        // 拒绝。无 Origin（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        if let Some(host) = host_from_request(&request)
+            && let Some(origin) = request.headers().get(header::ORIGIN)
+            && !origin_matches_host(origin, host)
+        {
+            tracing::warn!("ws proxy origin rejected (port {}): {:?}", port, origin);
+            return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+        return ws::relay(ws, port, &uri, request.headers().clone(), client_ip).await;
     }
 
-    forward_http(state, port, uri, request).await
+    forward_http(state, port, uri, request, client_ip).await
+}
+
+/// WS Origin 校验：Origin 的 host（忽略端口）与请求 Host（忽略端口）比对。
+/// `Origin: http://3000.omniterm.lan:9777` 与 Host `3000.omniterm.lan:9777` → 匹配。
+/// 解析失败 / host 为空 → 拒绝（防御畸形 Origin）。纯函数，便于单测。
+fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
+    let Ok(o) = origin.to_str() else {
+        return false;
+    };
+    let Some(authority) = o.split_once("://").map(|(_, rest)| rest) else {
+        return false;
+    };
+    let origin_host = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let origin_host = strip_port(origin_host);
+    let host = strip_port(host);
+    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
+}
+
+/// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
+fn strip_port(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('[') {
+        return rest.split_once(']').map(|(h, _)| h).unwrap_or(rest);
+    }
+    s.split(':').next().unwrap_or(s)
+}
+
+/// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
+/// `port` 段须为纯数字，其余形式（`www.{base}`、`x3306.{base}`、`{base}` 本身）一律 `None`。
+/// 大小写不敏感（DNS Host 大小写无关）。纯函数，便于单测。
+pub fn parse_proxy_host(host: &str, base: &str) -> Option<u16> {
+    if base.is_empty() {
+        return None;
+    }
+    // 剥离 `:{listen_port}` 后缀（若有）。IPv6 字面量防御（P1-4.13）：Host 以 `]` 结尾
+    // 即无端口后缀（`[::1]`），整体保留不剥；带端口（`[::1]:8080`）按 `:` 剥离后得
+    // `[::1]`。子域名模式 base 是域名/IPv4，IPv6 base 无法通配子域名，后续
+    // `strip_suffix` 不匹配自然返回 `None`，绝不误剥出错误端口。
+    let host = if host.ends_with(']') {
+        host
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
+    let host = host.to_ascii_lowercase();
+    let base = base.to_ascii_lowercase();
+    let prefix = host.strip_suffix(&format!(".{}", base))?;
+    if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    prefix.parse::<u16>().ok()
+}
+
+fn host_from_request(request: &Request) -> Option<&str> {
+    request.headers().get(header::HOST).and_then(|v| v.to_str().ok())
+}
+
+fn is_ws_upgrade(request: &Request) -> bool {
+    request
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+/// 子域名 Host 路由中间件：`{port}.{base}` 命中时直接代理，否则放行给后续路由。
+///
+/// 挂**最外层**（见 main.rs，仅 `base_host` 配置时挂载），先于 CorsLayer/TraceLayer/
+/// Router/fallback 执行——子域名请求（如 `3000.omniterm.lan/assets/x.js`）在进入 SPA
+/// fallback 前被拦截，浏览器对绝对路径资源的解析天然落到本 Host 上（D1 翻盘）。
+pub async fn proxy_host_mw(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(base) = state.proxy.base_host.as_deref().filter(|b| !b.is_empty()) else {
+        return next.run(request).await;
+    };
+    let Some(host) = host_from_request(&request) else {
+        return next.run(request).await;
+    };
+    let Some(port) = parse_proxy_host(host, base) else {
+        return next.run(request).await;
+    };
+
+    // 端口白名单（D2）：WS 分支绕过 dispatch_proxy，须在此先行校验，提前 403。
+    if !is_port_allowed(port, state.proxy.self_port) {
+        tracing::warn!("proxy host port denied: {}", port);
+        return (StatusCode::FORBIDDEN, "port not allowed").into_response();
+    }
+
+    // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
+    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。
+    let token = crate::auth::extract_token(&request);
+    if let Err(status) = crate::auth::verify_request(&state, token.as_deref()).await {
+        return status.into_response();
+    }
+
+    // 标准化 uri 为 `/proxy/{port}{原始 path}?{原始 query}`，复用 dispatch_proxy 的
+    // upstream_url 前缀剥离逻辑（子域名下 path 无 `/proxy/{port}` 前缀）。
+    let orig = request.uri().clone();
+    let normalized: axum::http::Uri = match orig.query() {
+        Some(q) => format!("/proxy/{}{}?{}", port, orig.path(), q).parse().unwrap_or(orig.clone()),
+        None => format!("/proxy/{}{}", port, orig.path()).parse().unwrap_or(orig.clone()),
+    };
+
+    let client_ip = request_client_ip(&request);
+
+    if is_ws_upgrade(&request) {
+        let (mut parts, _body) = request.into_parts();
+        return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+            Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone(), client_ip).await,
+            Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),
+        };
+    }
+
+    dispatch_proxy(state, port, normalized, None, request).await
 }
 
 /// 构造目标上游 URL：`http://127.0.0.1:{port}/{剩余路径}?{原始 query}`。
@@ -157,13 +302,15 @@ async fn forward_http(
     port: u16,
     uri: axum::http::Uri,
     request: Request,
+    client_ip: Option<IpAddr>,
 ) -> Response {
     let target = upstream_url(&uri, port);
     let method = request.method().clone();
-    let req_headers = rewrite_request_headers(request.headers(), port, false);
+    let req_headers = rewrite_request_headers(request.headers(), port, false, client_ip);
 
-    // 请求体（有界：`MAX_REQUEST_BODY`，超限直接拒绝，防无界缓冲）。
-    let body = match axum::body::to_bytes(request.into_body(), MAX_REQUEST_BODY).await {
+    // 请求体（有界：`state.proxy.max_request_body`，超限直接拒绝，防无界缓冲；
+    // 默认 2MB，经 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY` 可调）。
+    let body = match axum::body::to_bytes(request.into_body(), state.proxy.max_request_body).await {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("proxy failed to read request body (port {}): {}", port, e);
@@ -196,23 +343,306 @@ async fn forward_http(
     if let Some(hm) = builder.headers_mut() {
         *hm = resp_headers;
     }
+
+    // 响应体重写（D1 兜底）：绝对路径 SPA（new-api 等）的 HTML 资源与 JS 内
+    // `/api/` 字面量是根绝对路径，路径前缀方案下会绕过 `/proxy/{port}/` 直达
+    // omniterm-host 而 404 → 白屏。局域网纯 IP 场景无法子域名（`3000.192.168.5.216`
+    // 非法），Service Worker 需 secure context 也不可用——唯一通用手段是后端对
+    // HTML/JS 响应做字节级前缀重写（见 plan 勘误与 backend.md）。
+    // 兜底：上游若无视 Accept-Encoding 剥离仍返回压缩体（Content-Encoding 非空），
+    // 跳过重写走流式原样透传——压缩字节经 from_utf8_lossy 转码会被破坏（浏览器
+    // ERR_CONTENT_DECODING_FAILED），原样透传 + 保留编码头浏览器可正常解码。
+    // `identity`（明文标识）/空视为无编码，仍可重写（P1-4.10）。
+    let content_encoding =
+        upstream_resp.headers().get(header::CONTENT_ENCODING).and_then(|v| v.to_str().ok());
+    let content_type = upstream_resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if rewrite_allowed_for_encoding(content_encoding)
+        && let Some(kind) = RewriteKind::from_content_type(&content_type)
+    {
+        match try_rewrite_body(upstream_resp, kind, port).await {
+            Ok(RewriteOutcome::Done(body)) => {
+                return match builder.body(Body::from(body)) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        tracing::error!("proxy failed to build response (port {}): {}", port, e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
+                    }
+                };
+            }
+            Ok(RewriteOutcome::Fallthrough(head, resp)) => {
+                // 超限放弃重写：已读头部拼回流前部，继续流式透传（D5 有界缓冲）。
+                let head_stream = futures_util::stream::iter(
+                    head.chunks(64 * 1024)
+                        .map(|c| Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(c)))
+                        .collect::<Vec<_>>(),
+                );
+                let stream = head_stream.chain(body_stream(resp));
+                return match builder.body(Body::from_stream(stream)) {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        tracing::error!("proxy failed to build response (port {}): {}", port, e);
+                        (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
+                    }
+                };
+            }
+            Err(e) => {
+                tracing::warn!("proxy failed to read body for rewrite (port {}): {}", port, e);
+                return (StatusCode::BAD_GATEWAY, "upstream unreachable").into_response();
+            }
+        }
+    }
+
     // 流式回写：`Response::chunk()` + `unfold` 边读边写，绝不 collect 到内存
     // （SSE/长连接/大文件下载天然安全，D5）。不用 reqwest `stream` feature——
     // 它额外引入 wasm-streams（WASM 平台依赖），而 `chunk()` 已足够。
-    let stream = futures_util::stream::unfold(upstream_resp, |mut resp| async {
-        match resp.chunk().await {
-            Ok(Some(chunk)) => Some((Ok::<_, std::io::Error>(chunk), resp)),
-            Ok(None) => None,
-            Err(e) => Some((Err(std::io::Error::other(e)), resp)),
-        }
-    });
-    match builder.body(Body::from_stream(stream)) {
+    match builder.body(Body::from_stream(body_stream(upstream_resp))) {
         Ok(resp) => resp,
         Err(e) => {
             tracing::error!("proxy failed to build response (port {}): {}", port, e);
             (StatusCode::INTERNAL_SERVER_ERROR, "proxy error").into_response()
         }
     }
+}
+
+/// 响应体流（chunk 边读边写，不 collect）——HTTP 转发公共尾部。
+fn body_stream(
+    resp: reqwest::Response,
+) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
+    futures_util::stream::unfold(resp, |mut resp| async {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => Some((Ok::<_, std::io::Error>(chunk), resp)),
+            Ok(None) => None,
+            Err(e) => Some((Err(std::io::Error::other(e)), resp)),
+        }
+    })
+}
+
+/// 响应体重写类型：按 Content-Type 决定是否把根绝对路径前缀化。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum RewriteKind {
+    /// HTML：重写 `src`/`href`/`srcset`/`action`/`poster` 属性。
+    Html,
+    /// JS：重写字符串字面量 `"/api/`、`'/api/`、`` `/api/ ``。
+    Js,
+}
+
+impl RewriteKind {
+    fn from_content_type(ct: &str) -> Option<Self> {
+        match ct {
+            "text/html" => Some(Self::Html),
+            "text/javascript" | "application/javascript" | "application/x-javascript" => {
+                Some(Self::Js)
+            }
+            _ => None,
+        }
+    }
+
+    fn max_bytes(self) -> usize {
+        match self {
+            Self::Html => REWRITE_HTML_MAX,
+            Self::Js => REWRITE_JS_MAX,
+        }
+    }
+}
+
+/// 响应体缓冲重写结果：`Done` 完整重写；`Fallthrough` 超限回退（已读前缀 + 剩余响应流）。
+enum RewriteOutcome {
+    Done(Vec<u8>),
+    Fallthrough(Vec<u8>, reqwest::Response),
+}
+
+/// 该 `Content-Encoding` 是否允许响应体重写：`None` / 空 / `identity`（明文标识）→ 允许；
+/// `gzip`/`br`/`deflate` 等真实压缩 → 禁止（压缩字节经 `from_utf8_lossy` 转码会被破坏，
+/// 浏览器 `ERR_CONTENT_DECODING_FAILED`）。纯函数，便于单测（P1-4.10）。
+fn rewrite_allowed_for_encoding(content_encoding: Option<&str>) -> bool {
+    match content_encoding {
+        None => true,
+        Some(s) => {
+            let t = s.trim();
+            t.is_empty() || t.eq_ignore_ascii_case("identity")
+        }
+    }
+}
+
+/// 缓冲读取 + 重写。超过 `kind.max_bytes()` 上限立即放弃重写（回退流式透传，
+/// 已读部分拼回流前部），保证大文件下载不被阻塞（D5 有界缓冲）。
+async fn try_rewrite_body(
+    mut resp: reqwest::Response,
+    kind: RewriteKind,
+    port: u16,
+) -> Result<RewriteOutcome, reqwest::Error> {
+    let limit = kind.max_bytes();
+    let mut buf = Vec::with_capacity(64 * 1024);
+    while let Some(c) = resp.chunk().await? {
+        if buf.len() + c.len() > limit {
+            return Ok(RewriteOutcome::Fallthrough(buf, resp));
+        }
+        buf.extend_from_slice(&c);
+    }
+    let out = match kind {
+        RewriteKind::Html => rewrite_html(&buf, port),
+        RewriteKind::Js => rewrite_js(&buf, port),
+    };
+    Ok(RewriteOutcome::Done(out))
+}
+
+/// HTML 属性重写正则（惰性编译）：`src`/`href`/`srcset`/`action`/`poster`/`formaction`
+/// 单双引号属性。`href` 分支天然覆盖 `<base href>`（HTML `<base>` 标签指定相对 URL
+/// 基准，必须重写，否则页面相对路径绕过代理前缀直接落到 OmniTerm 根路径）。
+/// `formaction` 用于 `<button formaction>` / `<input formaction>` 的表单提交目标。
+static HTML_ATTR_RE: OnceLock<Regex> = OnceLock::new();
+
+/// JS API 字面量重写正则（惰性编译）：双/单/反引号后紧跟 `/api`。
+/// 边界判定在 `rewrite_js` 内函数式完成（regex crate 不支持 lookahead）。
+static JS_API_RE: OnceLock<Regex> = OnceLock::new();
+
+/// React Router v7 `<BrowserRouter future={{v7_startTransition,...}}>` 特征正则：
+/// 匹配 props 对象开头，注入 `basename`（SPA 路由前缀适配，见 `rewrite_js`）。
+static JS_BROWSER_ROUTER_RE: OnceLock<Regex> = OnceLock::new();
+
+/// Vite 8 preload helper 依赖路径特征正则：`return"/"+e`（把相对依赖硬编码成根
+/// 绝对路径，见 `rewrite_js` 步骤 3）。
+static VITE_PRELOAD_RE: OnceLock<Regex> = OnceLock::new();
+
+/// HTML `rel="prerender"` 降级正则（`prerender` → `prefetch`，见 `rewrite_html`）。
+static HTML_PRERENDER_RE: OnceLock<Regex> = OnceLock::new();
+
+/// HTML 内根绝对路径资源属性 → `/proxy/{port}` 前缀（D1 兜底）。
+/// 覆盖 `src`/`href`/`srcset`/`action`/`poster`/`formaction`（单双引号皆可）：
+/// - `src="/assets/x.js"` → `src="/proxy/3000/assets/x.js"`
+/// - `<base href="/">` → `<base href="/proxy/3000/">`（相对 URL 基准改到代理前缀）
+/// - 外部 URL（`https://…`）、协议相对（`//cdn…`）、已带前缀（`/proxy/{port}/…`）不动
+/// - `srcset` 逗号分隔多项逐个重写（`/a.png 1x, /b.png 2x`）
+///
+/// 另做 `rel="prerender"` 降级（2026-08-15）：Chrome 对 `prerender` 按 module script
+/// 预取，`landing.html` 等返回 `text/html` 会触发 MIME 报错（无害但刷 console）。
+/// 降级为 `rel="prefetch"`（普通预取，不要求 module script 类型）。
+fn rewrite_html(body: &[u8], port: u16) -> Vec<u8> {
+    let s = String::from_utf8_lossy(body);
+    let prefix = format!("/proxy/{}", port);
+    let re = HTML_ATTR_RE.get_or_init(|| {
+        // 不用反向引用 `\2`（regex crate 不支持）：组 3 匹配值（不含引号，遇引号即停），
+        // 组 4 捕获闭合引号一并消费，重建时用组 2/4 的引号还原（HTML 实体 `&quot;` 不影响）。
+        // `formaction` 置于 `action` 之前：`<button formaction>` 的 `formaction` 是整体属性，
+        // 交替在 `f` 位置即完整匹配，组 1 语义正确（旧实现依赖 `action=` 匹配 `formaction=`
+        // 中的 `action` 子串隐式生效，显式列出更稳健）。
+        Regex::new(r#"(?i)(src|href|srcset|action|formaction|poster)=(["'])([^"']*)(["'])"#)
+            .expect("valid html attr regex")
+    });
+    let rewritten = re.replace_all(&s, |caps: &regex::Captures| {
+        let attr = &caps[1];
+        let quote = &caps[2];
+        let value = rewrite_attr_value(&caps[3], &prefix);
+        format!("{}={}{}{}", attr, quote, value, &caps[4])
+    });
+    // prerender → prefetch（预渲染按 module script 预取会 MIME 报错，降级无害）
+    let prerender_re = HTML_PRERENDER_RE
+        .get_or_init(|| Regex::new(r#"(?i)rel=["']prerender["']"#).expect("valid rel regex"));
+    prerender_re.replace_all(&rewritten, r#"rel="prefetch""#).into_owned().into_bytes()
+}
+
+/// 单个 HTML 属性值重写：根绝对路径（`/x`）→ `/proxy/{port}/x`；其余原样。
+fn rewrite_attr_value(value: &str, prefix: &str) -> String {
+    // 已带任何 /proxy/ 前缀（含其他端口）一律跳过，防二次叠加。
+    if value.starts_with("/proxy/") {
+        return value.to_string();
+    }
+    // srcset 逗号分隔多候选：`/a.png 1x, /b.png 2x`——逐项重写 URL 部分。
+    if value.contains(',') {
+        return value
+            .split(',')
+            .map(|item| {
+                let t = item.trim();
+                if t.starts_with('/') && !t.starts_with("//") {
+                    let (url, desc) = match t.split_once(char::is_whitespace) {
+                        Some((u, d)) => (u, d),
+                        None => (t, ""),
+                    };
+                    let mut out = format!("{}{}", prefix, url);
+                    if !desc.is_empty() {
+                        out.push(' ');
+                        out.push_str(desc);
+                    }
+                    out
+                } else {
+                    t.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    if value.starts_with('/') && !value.starts_with("//") {
+        format!("{}{}", prefix, value)
+    } else {
+        value.to_string()
+    }
+}
+
+/// JS 内 API 路径字面量 → `/proxy/{port}` 前缀（D1 兜底）。
+/// 匹配 `"/api/`、`'/api/`、`` `/api/ ``（双/单/反引号字符串与模板字符串），
+/// 统一加前缀。**全局一致重写**保证比较逻辑自洽：请求路径与 `===` 比较的字面量
+/// 同步带前缀（如 new-api 的 `Y==="/api/ratio_config"`）。
+/// 不匹配：非引号开头（变量拼接、正则字面量）、注释与 i18n 文案（加前缀无害）。
+///
+/// 另做 SPA 路由 basename 注入（2026-08-15）：React Router v7 的
+/// `<BrowserRouter future={{v7_startTransition,...}}>` 若配置 `basename`，
+/// 路由匹配会自动剥前缀——路径前缀形态下 `location.pathname = /proxy/{port}/console`
+/// 匹配 `path:"/console"`，SPA 不再 404；Link 生成的 href 与 navigate 自动带前缀。
+/// 以 `v7_startTransition` 特征匹配（React Router v7 BrowserRouter 独有配置项），
+/// 注入 `basename:"/proxy/{port}"`；无此特征的 SPA（v6 及以下、Vue Router 等）
+/// 不注入，维持原行为。
+///
+/// 再做 Vite preload helper 依赖路径重写（2026-08-15）：Vite 8 的
+/// `k9r=function(e){return"/"+e}` 把 mapDeps 相对路径（`assets/x.js`）硬编码成
+/// 根绝对路径（`/assets/x.js`），绕过 `import.meta.url` → 反代下这些 `<link>` /
+/// 动态 import 请求根路径而 404。改为 `return"/proxy/{port}/"+e` 使其带前缀；
+/// 无此特征的 Vite 版本（老版本用 `new URL(d, import.meta.url)`，天然带前缀）
+/// 不命中，维持原行为。
+fn rewrite_js(body: &[u8], port: u16) -> Vec<u8> {
+    let s = String::from_utf8_lossy(body).into_owned();
+    let prefix = format!("/proxy/{}", port);
+    // 1. `/api` 字面量加前缀。regex crate 不支持 lookahead，改用捕获组 + 函数式替换：
+    // 匹配引号后紧跟 `/api`，再检查其后一个字符是否为边界（`/`、引号、空白、`?`、`#`、
+    // `$` 或字符串结束）——覆盖无尾随斜杠的 `"/api"`、带 query/hash 的 `"/api?x"`/
+    // `"/api#x"`，同时避免误匹配 `/apix`。非边界（如 `/apix`）返回原样不重写。
+    let re = JS_API_RE.get_or_init(|| Regex::new(r#"(["'`])/api"#).expect("valid js api regex"));
+    let out = re.replace_all(&s, |caps: &regex::Captures| {
+        let whole = caps.get(0).unwrap();
+        let is_boundary = match s[whole.end()..].chars().next() {
+            None => true, // 字符串结束
+            Some(c) => {
+                c == '/'
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '?'
+                    || c == '#'
+                    || c == '$'
+                    || c.is_whitespace()
+            }
+        };
+        if is_boundary { format!("{}{}/api", &caps[1], prefix) } else { whole.as_str().to_string() }
+    });
+    // 2. React Router v7 BrowserRouter basename 注入
+    let basename = format!("basename:\"{}\",", prefix);
+    let br_re = JS_BROWSER_ROUTER_RE.get_or_init(|| {
+        Regex::new(r#"(\{)(future:\{v7_startTransition)"#).expect("valid browser router regex")
+    });
+    // 函数式替换（避免 `$1basename` 被 regex 解析为命名组引用 `1basename`）
+    let injected = br_re
+        .replace(&out, |caps: &regex::Captures| format!("{}{}{}", &caps[1], basename, &caps[2]));
+    // 3. Vite 8 preload helper 依赖路径重写：`return"/"+e` → `return"/proxy/{port}/"+e`
+    let vp_re = VITE_PRELOAD_RE
+        .get_or_init(|| Regex::new(r#"return"/"\+e"#).expect("valid vite preload regex"));
+    let prefixed = vp_re.replace_all(&injected, format!("return\"{}/\"+e", prefix));
+    prefixed.into_owned().into_bytes()
 }
 
 fn is_hop_by_hop(name: &str) -> bool {
@@ -228,15 +658,28 @@ fn origin_value(port: u16) -> Result<HeaderValue, header::InvalidHeaderValue> {
 }
 
 /// 请求侧 header 重写（D6）：转发给上游前调用。
+/// `client_ip` 为连接对端 IP（经 ConnectInfo 注入），用于追加 `X-Forwarded-For`。
 /// 纯函数，便于单测。
-fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> HeaderMap {
+fn rewrite_request_headers(
+    original: &HeaderMap,
+    port: u16,
+    is_ws: bool,
+    client_ip: Option<IpAddr>,
+) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(original.len());
+    let mut had_forwarded_for = false;
     for (name, value) in original.iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if is_hop_by_hop(&lower) {
             continue;
         }
         match lower.as_str() {
+            // 剥离 Accept-Encoding：上游（new-api 等）会返回 gzip 压缩体，而本代理
+            // reqwest 未启用自动解压（default-features=false 无 gzip feature），
+            // 压缩字节经 rewrite_html/rewrite_js 的 from_utf8_lossy 转码会被破坏，
+            // 导致浏览器 ERR_CONTENT_DECODING_FAILED。强制上游回明文最可靠；
+            // 代理本身走 127.0.0.1 回环，压缩收益可忽略。
+            "accept-encoding" => {}
             // Host 永远重写为本地目标，否则目标服务的虚拟主机路由错乱。
             "host" => {
                 if let Ok(v) = host_value(port) {
@@ -255,6 +698,27 @@ fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> Head
                     out.insert(name.clone(), v);
                 }
             }
+            // X-Forwarded-For（D6）：已有链则追加客户端 IP（逗号分隔，标准做法），
+            // 无链且 client_ip 可得则新建。
+            "x-forwarded-for" => {
+                had_forwarded_for = true;
+                let v = match client_ip {
+                    Some(ip) => match value.to_str() {
+                        Ok(s) if !s.is_empty() => HeaderValue::from_str(&format!("{}, {}", s, ip))
+                            .unwrap_or_else(|_| value.clone()),
+                        _ => {
+                            HeaderValue::from_str(&ip.to_string()).unwrap_or_else(|_| value.clone())
+                        }
+                    },
+                    None => value.clone(),
+                };
+                out.insert(name.clone(), v);
+            }
+            // X-Forwarded-Proto / Host（D6）：保留已有值——外层可能已带 nginx 的
+            // https/真实 Host（多实现差异 §8），覆盖会误导上游；缺失的循环后补齐。
+            "x-forwarded-proto" | "x-forwarded-host" => {
+                out.insert(name.clone(), value.clone());
+            }
             _ => {
                 out.insert(name.clone(), value.clone());
             }
@@ -266,7 +730,28 @@ fn rewrite_request_headers(original: &HeaderMap, port: u16, is_ws: bool) -> Head
     {
         out.insert(header::HOST, v);
     }
+    // D6：缺失的 X-Forwarded-* 按 OmniTerm 侧值补齐（上游感知真实客户端/协议）。
+    if !out.contains_key("x-forwarded-proto") {
+        out.insert("x-forwarded-proto", HeaderValue::from_static("http"));
+    }
+    if !out.contains_key("x-forwarded-host")
+        && let Some(h) = original.get(header::HOST)
+    {
+        out.insert("x-forwarded-host", h.clone());
+    }
+    if !had_forwarded_for
+        && let Some(ip) = client_ip
+        && let Ok(v) = HeaderValue::from_str(&ip.to_string())
+    {
+        out.insert("x-forwarded-for", v);
+    }
     out
+}
+
+/// 从请求 extensions 提取客户端 IP（`into_make_service_with_connect_info` 注入，
+/// handler 与 middleware 都能取到）。无则 `None`（`X-Forwarded-For` 追加不可得）。
+fn request_client_ip(request: &Request) -> Option<IpAddr> {
+    request.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip())
 }
 
 /// 从 `Cookie` 头剥离 `omniterm_token=...` 项（D2 cookie 隔离）。
@@ -327,7 +812,14 @@ fn rewrite_location(value: &HeaderValue, port: u16) -> HeaderValue {
     {
         return v;
     }
-    for base in [format!("http://localhost:{}", port), format!("http://127.0.0.1:{}", port)] {
+    for base in [
+        format!("http://localhost:{}", port),
+        format!("http://127.0.0.1:{}", port),
+        format!("http://0.0.0.0:{}", port),
+        format!("https://localhost:{}", port),
+        format!("https://127.0.0.1:{}", port),
+        format!("https://0.0.0.0:{}", port),
+    ] {
         if let Some(rest) = s.strip_prefix(&base)
             && let Ok(v) = HeaderValue::from_str(&format!("{}{}", prefix, rest))
         {
@@ -414,7 +906,7 @@ mod tests {
         h.insert("upgrade", HeaderValue::from_static("websocket"));
         h.insert("te", HeaderValue::from_static("trailers"));
         h.insert("keep-alive", HeaderValue::from_static("timeout=5"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert!(!out.contains_key("connection"));
         assert!(!out.contains_key("upgrade"));
         assert!(!out.contains_key("te"));
@@ -422,17 +914,27 @@ mod tests {
     }
 
     #[test]
+    fn request_headers_strip_accept_encoding() {
+        // 剥离 Accept-Encoding：上游回明文，避免 gzip 压缩体被响应体重写破坏
+        // （reqwest 未启用自动解压，from_utf8_lossy 转码会损坏压缩字节）。
+        let mut h = HeaderMap::new();
+        h.insert("accept-encoding", HeaderValue::from_static("gzip, deflate, br"));
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        assert!(!out.contains_key("accept-encoding"));
+    }
+
+    #[test]
     fn request_headers_rewrite_host() {
         let mut h = HeaderMap::new();
         h.insert("host", HeaderValue::from_static("example.com:9077"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert_eq!(out["host"], "127.0.0.1:3000");
     }
 
     #[test]
     fn request_headers_inject_host_when_missing() {
         let h = HeaderMap::new();
-        let out = rewrite_request_headers(&h, 5173, false);
+        let out = rewrite_request_headers(&h, 5173, false, None);
         assert_eq!(out["host"], "127.0.0.1:5173");
     }
 
@@ -443,7 +945,7 @@ mod tests {
             "cookie",
             HeaderValue::from_static("sid=abc; omniterm_token=secret.jwt; theme=dark"),
         );
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         let cookie = out["cookie"].to_str().unwrap();
         assert!(cookie.contains("sid=abc"));
         assert!(cookie.contains("theme=dark"));
@@ -454,7 +956,7 @@ mod tests {
     fn request_headers_drop_cookie_when_only_token() {
         let mut h = HeaderMap::new();
         h.insert("cookie", HeaderValue::from_static("omniterm_token=secret.jwt"));
-        let out = rewrite_request_headers(&h, 3000, false);
+        let out = rewrite_request_headers(&h, 3000, false, None);
         assert!(!out.contains_key("cookie"));
     }
 
@@ -463,11 +965,60 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("origin", HeaderValue::from_static("http://example.com"));
         // 普通 HTTP：Origin 保留
-        let out_http = rewrite_request_headers(&h, 3000, false);
+        let out_http = rewrite_request_headers(&h, 3000, false, None);
         assert_eq!(out_http["origin"], "http://example.com");
         // WS：Origin 重写为本地目标
-        let out_ws = rewrite_request_headers(&h, 3000, true);
+        let out_ws = rewrite_request_headers(&h, 3000, true, None);
         assert_eq!(out_ws["origin"], "http://127.0.0.1:3000");
+    }
+
+    // ── X-Forwarded-*（P0-4.2）──
+
+    #[test]
+    fn request_headers_sets_x_forwarded_for_from_client_ip() {
+        let h = HeaderMap::new();
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let out = rewrite_request_headers(&h, 3000, false, Some(ip));
+        assert_eq!(out["x-forwarded-for"], "192.168.1.5");
+    }
+
+    #[test]
+    fn request_headers_appends_x_forwarded_for_when_present() {
+        // 已有链（外层代理已设）→ 追加客户端 IP，逗号分隔（标准做法）
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", HeaderValue::from_static("10.0.0.1"));
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let out = rewrite_request_headers(&h, 3000, false, Some(ip));
+        assert_eq!(out["x-forwarded-for"], "10.0.0.1, 192.168.1.5");
+        // 无 client_ip（测试/非 ConnectInfo 场景）→ 透传已有值
+        let out2 = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out2["x-forwarded-for"], "10.0.0.1");
+    }
+
+    #[test]
+    fn request_headers_sets_x_forwarded_proto_when_missing() {
+        let h = HeaderMap::new();
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out["x-forwarded-proto"], "http");
+    }
+
+    #[test]
+    fn request_headers_keeps_existing_x_forwarded_proto() {
+        // 外层 nginx 已标 https：覆盖会误导上游，保留（多实现差异 §8）
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        assert_eq!(out["x-forwarded-proto"], "https");
+    }
+
+    #[test]
+    fn request_headers_sets_x_forwarded_host_from_host() {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static("3000.omniterm.lan:9777"));
+        let out = rewrite_request_headers(&h, 3000, false, None);
+        // X-Forwarded-Host 取**原始** Host（浏览器访问的），而非重写后的 127.0.0.1
+        assert_eq!(out["x-forwarded-host"], "3000.omniterm.lan:9777");
+        assert_eq!(out["host"], "127.0.0.1:3000");
     }
 
     #[test]
@@ -527,4 +1078,365 @@ mod tests {
         let uri: axum::http::Uri = "/proxy/3000/".parse().unwrap();
         assert_eq!(upstream_url(&uri, 3000), "http://127.0.0.1:3000/");
     }
+
+    #[test]
+    fn proxy_host_parses_port_subdomain() {
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", "omniterm.lan"), Some(3000));
+        assert_eq!(parse_proxy_host("5173.omniterm.lan", "omniterm.lan"), Some(5173));
+    }
+
+    #[test]
+    fn proxy_host_strips_listen_port() {
+        assert_eq!(parse_proxy_host("3000.omniterm.lan:9777", "omniterm.lan"), Some(3000));
+    }
+
+    #[test]
+    fn proxy_host_rejects_non_digit_prefix() {
+        assert_eq!(parse_proxy_host("www.omniterm.lan", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("x3306.omniterm.lan", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("omniterm.lan", "omniterm.lan"), None);
+    }
+
+    #[test]
+    fn proxy_host_rejects_mismatched_base() {
+        assert_eq!(parse_proxy_host("3000.example.com", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", ""), None);
+    }
+
+    #[test]
+    fn proxy_host_is_case_insensitive() {
+        assert_eq!(parse_proxy_host("3000.OMNITERM.LAN", "omniterm.lan"), Some(3000));
+        assert_eq!(parse_proxy_host("3000.omniterm.lan", "OMNITERM.LAN"), Some(3000));
+    }
+
+    #[test]
+    fn proxy_host_supports_multi_level_base() {
+        assert_eq!(
+            parse_proxy_host("3000.omniterm.example.com", "omniterm.example.com"),
+            Some(3000)
+        );
+    }
+
+    #[test]
+    fn proxy_host_parses_denylisted_port_for_later_allowlist_check() {
+        // parse 只负责「解析出纯数字端口」，白名单拒绝由 is_port_allowed 负责。
+        assert_eq!(parse_proxy_host("3306.omniterm.lan", "omniterm.lan"), Some(3306));
+        assert!(!is_port_allowed(3306, 9777));
+    }
+
+    // ── 响应体重写（D1 兜底）──
+
+    fn html(s: &str) -> String {
+        String::from_utf8(rewrite_html(s.as_bytes(), 3000)).unwrap()
+    }
+
+    fn js(s: &str) -> String {
+        String::from_utf8(rewrite_js(s.as_bytes(), 3000)).unwrap()
+    }
+
+    #[test]
+    fn rewrite_html_prefixes_absolute_src_and_href() {
+        let out = html(r#"<script src="/assets/index-x.js"></script><link href="/logo.svg?v=2">"#);
+        assert_eq!(
+            out,
+            r#"<script src="/proxy/3000/assets/index-x.js"></script><link href="/proxy/3000/logo.svg?v=2">"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_supports_single_quotes_and_other_attrs() {
+        let out = html(r#"<form action='/submit'><img src='/img/a.png'><video poster='/p.jpg'>"#);
+        assert_eq!(
+            out,
+            r#"<form action='/proxy/3000/submit'><img src='/proxy/3000/img/a.png'><video poster='/proxy/3000/p.jpg'>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_srcset_rewrites_each_candidate() {
+        let out = html(r#"<img srcset="/a.png 1x, /b.png 2x, https://cdn/x.png 3x">"#);
+        assert_eq!(
+            out,
+            r#"<img srcset="/proxy/3000/a.png 1x, /proxy/3000/b.png 2x, https://cdn/x.png 3x">"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_external_and_scheme_relative() {
+        let out = html(
+            r##"<a href="https://example.com/x"><a href="//cdn.example.com/y"><a href="mailto:a@b.c"><a href="#anchor">"##,
+        );
+        assert_eq!(
+            out,
+            r##"<a href="https://example.com/x"><a href="//cdn.example.com/y"><a href="mailto:a@b.c"><a href="#anchor">"##
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_already_prefixed() {
+        let out = html(
+            r#"<script src="/proxy/3000/assets/x.js"></script><script src="/proxy/9999/assets/y.js"></script>"#,
+        );
+        // 已带任何 /proxy/ 前缀（含其他端口）不再叠加
+        assert_eq!(
+            out,
+            r#"<script src="/proxy/3000/assets/x.js"></script><script src="/proxy/9999/assets/y.js"></script>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_keeps_relative_and_non_attr_paths() {
+        let out = html(r#"<img src="assets/x.js"><script>const p = "/api/health";</script>"#);
+        // 相对路径不动；内联 JS 的字符串不在 HTML 属性重写范围
+        assert_eq!(out, r#"<img src="assets/x.js"><script>const p = "/api/health";</script>"#);
+    }
+
+    #[test]
+    fn rewrite_html_downgrades_prerender_to_prefetch() {
+        // Chrome 把 rel=prerender 按 module script 预取,text/html 会 MIME 报错;降级无害
+        let out = html(
+            r#"<link rel="prerender" href="/landing.html"><link rel="prefetch" href="/x.html">"#,
+        );
+        assert!(
+            out.contains(r#"rel="prefetch" href="/proxy/3000/landing.html""#),
+            "prerender downgraded: {out}"
+        );
+        assert!(!out.contains("prerender"), "no prerender left: {out}");
+        assert!(out.contains(r#"rel="prefetch" href="/proxy/3000/x.html""#));
+    }
+
+    #[test]
+    fn rewrite_js_prefixes_double_single_and_template_strings() {
+        let out =
+            js(r#"fe.post("/api/card/batch");get('/api/user');req(`/api/card/${id}/renew`);"#);
+        assert_eq!(
+            out,
+            r#"fe.post("/proxy/3000/api/card/batch");get('/proxy/3000/api/user');req(`/proxy/3000/api/card/${id}/renew`);"#
+        );
+    }
+
+    // ── SPA 路由 basename 注入（React Router v7 BrowserRouter，2026-08-15）──
+
+    #[test]
+    fn rewrite_js_injects_basename_into_v7_browser_router() {
+        let out =
+            js(r#"a.jsx(Y3t,{future:{v7_startTransition:!0,v7_relativeSplatPath:!0},children:o})"#);
+        assert!(out.contains(r#"basename:"/proxy/3000","#), "basename injected: {out}");
+        assert!(out.contains(r#"{basename:"/proxy/3000",future:{v7_startTransition"#));
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_v7_router_unchanged() {
+        // 非 React Router v7 特征（无 v7_startTransition）：不注入 basename
+        let out = js(r#"a.jsx(Rt,{children:o})"#);
+        assert_eq!(out, r#"a.jsx(Rt,{children:o})"#);
+        // 普通对象带 future 字段但不是 v7_startTransition 的也不动
+        let out2 = js(r#"a.jsx(Bt,{future:{v7_relativeSplatPath:!0},children:o})"#);
+        assert_eq!(out2, r#"a.jsx(Bt,{future:{v7_relativeSplatPath:!0},children:o})"#);
+    }
+
+    #[test]
+    fn rewrite_js_basename_uses_requested_port() {
+        let out_3000 = js(r#"a.jsx(Y3t,{future:{v7_startTransition:!0},children:o})"#);
+        assert!(out_3000.contains(r#"basename:"/proxy/3000","#));
+        let out_9076 = String::from_utf8(rewrite_js(
+            r#"a.jsx(Y3t,{future:{v7_startTransition:!0},children:o})"#.as_bytes(),
+            9076,
+        ))
+        .unwrap();
+        assert!(out_9076.contains(r#"basename:"/proxy/9076","#));
+        assert!(!out_9076.contains("/proxy/3000"));
+    }
+
+    // ── Vite 8 preload helper 依赖路径重写（2026-08-15）──
+
+    #[test]
+    fn rewrite_js_vite_preload_helper_gets_prefix() {
+        // Vite 8: k9r=function(e){return"/"+e} 把 assets/x.js 硬编码成 /assets/x.js
+        //（绕过 import.meta.url），反代下根路径请求 404。改为 /proxy/{port}/ 前缀。
+        let out = js(r#"k9r=function(e){return"/"+e}"#);
+        assert!(out.contains(r#"return"/proxy/3000/"+e"#), "vite preload prefixed: {out}");
+        assert!(!out.contains(r#"return"/"+e"#), "root path gone: {out}");
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_vite_preload_unchanged() {
+        // 无 `return"/"+e` 特征（老 Vite 用 new URL(d, import.meta.url)，天然带前缀）不动
+        let out = js(r#"const k9r=(e)=>"/"+e"#);
+        assert_eq!(out, r#"const k9r=(e)=>"/"+e"#);
+        let out2 = js(r#"var r=function(e){return "/" + e}"#);
+        assert_eq!(out2, r#"var r=function(e){return "/" + e}"#);
+    }
+
+    #[test]
+    fn rewrite_js_keeps_comparison_consistent() {
+        // 全局一致重写：请求路径与 === 比较字面量同步带前缀，逻辑自洽。
+        let out = js(
+            r#"const A = Y === "/api/ratio_config" ? "ratio_config" : Y === "/api/pricing" ? "pricing" : "";"#,
+        );
+        assert_eq!(
+            out,
+            r#"const A = Y === "/proxy/3000/api/ratio_config" ? "ratio_config" : Y === "/proxy/3000/api/pricing" ? "pricing" : "";"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_keeps_non_api_strings() {
+        let out = js(
+            r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#,
+        );
+        // 非 `/api/` 字面量（根路径外、协议内、正则、相对路径）一律不动
+        assert_eq!(
+            out,
+            r#"const a = "/foo"; const b = "http://x/api/v1"; const c = /\/api\//; const d = 'api/rel';"#
+        );
+    }
+
+    #[test]
+    fn rewrite_kind_matches_content_types() {
+        assert_eq!(RewriteKind::from_content_type("text/html"), Some(RewriteKind::Html));
+        assert_eq!(RewriteKind::from_content_type("text/html; charset=utf-8"), None);
+        // 带 charset 的由调用方 split(';') 后传入，此处只吃纯类型
+        assert_eq!(RewriteKind::from_content_type("text/javascript"), Some(RewriteKind::Js));
+        assert_eq!(RewriteKind::from_content_type("application/javascript"), Some(RewriteKind::Js));
+        assert_eq!(RewriteKind::from_content_type("application/json"), None);
+        assert_eq!(RewriteKind::from_content_type("text/css"), None);
+    }
+
+    #[test]
+    fn rewrite_max_bytes_limits() {
+        assert_eq!(RewriteKind::Html.max_bytes(), REWRITE_HTML_MAX);
+        assert_eq!(RewriteKind::Js.max_bytes(), REWRITE_JS_MAX);
+    }
+
+    // ── P0 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+
+    #[test]
+    fn rewrite_html_prefixes_base_tag() {
+        // `<base href>` 被 href 属性正则覆盖：根绝对路径加前缀（相对 URL 基准改到
+        // 代理前缀）；已带前缀与外部 URL 不动。
+        let out = html(
+            r#"<head><base href="/"><base href="/proxy/3000/"><base href="https://ext.example.com/"></head>"#,
+        );
+        assert_eq!(
+            out,
+            r#"<head><base href="/proxy/3000/"><base href="/proxy/3000/"><base href="https://ext.example.com/"></head>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_html_prefixes_formaction() {
+        // HTML5 `<button formaction>` / `<input formaction>` 提交目标
+        let out = html(r#"<button formaction="/submit">S</button><input formaction='/upload'>"#);
+        assert_eq!(
+            out,
+            r#"<button formaction="/proxy/3000/submit">S</button><input formaction='/proxy/3000/upload'>"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_prefixes_api_without_trailing_slash() {
+        // 无尾随斜杠的 `/api` 字面量：`"/api"`、带 query/hash 的变体也要重写
+        let out = js(
+            r#"const a = "/api"; const b = "/api?key=1"; const c = '/api#x'; const d = `/api`;"#,
+        );
+        assert_eq!(
+            out,
+            r#"const a = "/proxy/3000/api"; const b = "/proxy/3000/api?key=1"; const c = '/proxy/3000/api#x'; const d = `/proxy/3000/api`;"#
+        );
+    }
+
+    #[test]
+    fn rewrite_js_does_not_match_api_prefix_of_longer_words() {
+        // lookahead 限定：`/apix`、`/apikey` 等不是 `/api` 边界，不得误重写
+        let out = js(r#"const a = "/apix"; const b = '/apikey';"#);
+        assert_eq!(out, r#"const a = "/apix"; const b = '/apikey';"#);
+    }
+
+    #[test]
+    fn location_rewrites_https_and_0_0_0_0() {
+        // 绑定 0.0.0.0 或 https 回环重定向也要相对化到代理前缀
+        let v = HeaderValue::from_static("http://0.0.0.0:3000/");
+        assert_eq!(rewrite_location(&v, 3000).to_str().unwrap(), "/proxy/3000/");
+        let v2 = HeaderValue::from_static("https://localhost:3000/x");
+        assert_eq!(rewrite_location(&v2, 3000).to_str().unwrap(), "/proxy/3000/x");
+        let v3 = HeaderValue::from_static("https://127.0.0.1:3000/");
+        assert_eq!(rewrite_location(&v3, 3000).to_str().unwrap(), "/proxy/3000/");
+        let v4 = HeaderValue::from_static("https://0.0.0.0:3000/y");
+        assert_eq!(rewrite_location(&v4, 3000).to_str().unwrap(), "/proxy/3000/y");
+    }
+
+    #[test]
+    fn ws_origin_matches_subdomain_host() {
+        // 同源 WS 握手：Origin host 与 Host（均忽略端口）一致 → 放行
+        let o = HeaderValue::from_static("http://3000.omniterm.lan:9777");
+        assert!(origin_matches_host(&o, "3000.omniterm.lan:9777"));
+        let o2 = HeaderValue::from_static("https://3000.omniterm.lan");
+        assert!(origin_matches_host(&o2, "3000.omniterm.lan"));
+    }
+
+    #[test]
+    fn ws_origin_rejects_cross_site() {
+        // 跨站页面（evil.com）发起 WS → host 不同 → 拒绝
+        let o = HeaderValue::from_static("https://evil.com");
+        assert!(!origin_matches_host(&o, "3000.omniterm.lan"));
+        // 畸形 Origin（无 scheme）→ 拒绝
+        let o2 = HeaderValue::from_static("3000.omniterm.lan");
+        assert!(!origin_matches_host(&o2, "3000.omniterm.lan"));
+    }
+
+    #[test]
+    fn strip_port_keeps_ipv6_literal() {
+        assert_eq!(strip_port("3000.omniterm.lan:9777"), "3000.omniterm.lan");
+        assert_eq!(strip_port("192.168.5.216:9077"), "192.168.5.216");
+        assert_eq!(strip_port("3000.omniterm.lan"), "3000.omniterm.lan");
+        // IPv6：方括号内地址整体保留
+        assert_eq!(strip_port("[::1]:8080"), "::1");
+        assert_eq!(strip_port("[::1]"), "::1");
+    }
+
+    // ── P1 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+
+    #[test]
+    fn rewrite_allowed_for_encoding_accepts_none_and_identity() {
+        // P1-4.10：identity 是明文标识，应允许重写（旧实现 is_none() 判断把它当非明文跳过）
+        assert!(rewrite_allowed_for_encoding(None));
+        assert!(rewrite_allowed_for_encoding(Some("")));
+        assert!(rewrite_allowed_for_encoding(Some("identity")));
+        assert!(rewrite_allowed_for_encoding(Some("  IDENTITY  ")));
+    }
+
+    #[test]
+    fn rewrite_allowed_for_encoding_rejects_compressed() {
+        // 真实压缩：跳过重写（压缩字节转码会破坏）
+        assert!(!rewrite_allowed_for_encoding(Some("gzip")));
+        assert!(!rewrite_allowed_for_encoding(Some("br")));
+        assert!(!rewrite_allowed_for_encoding(Some("deflate")));
+        assert!(!rewrite_allowed_for_encoding(Some("gzip, br")));
+    }
+
+    #[test]
+    fn proxy_host_parses_ipv6_port() {
+        // P1-4.13：IPv6 Host 不误剥端口——`[::1]:8080` 剥端口后 `[::1]` 无法匹配 `.base`
+        // 返回 None（IPv6 base 无法通配子域名），而不是解析出错误端口。
+        assert_eq!(parse_proxy_host("[::1]:8080", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("[::1]", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("[::1]:8080", "::1"), None);
+        // 正常域名 Host 行为不变
+        assert_eq!(parse_proxy_host("3000.omniterm.lan:9777", "omniterm.lan"), Some(3000));
+    }
+
+    #[test]
+    fn max_request_body_default_is_two_mib() {
+        // 未配置时默认 2MiB（与 axum DefaultBodyLimit 一致），可经 ProxyState 覆盖
+        assert_eq!(MAX_REQUEST_BODY, 2 * 1024 * 1024);
+    }
+
+    // ── 进程内集成测试（mock 目标服务 + proxy 全链路）──────────────
+    // 已用单测覆盖 HTML/JS/Location/Header 重写与 X-Forwarded-* 逻辑（见上）。
+    // 全链路 roundtrip（真实 TCP + mock 目标服务）留作手动回归：当前开发机
+    // 内存长期紧张（omniterm 生产实例 ~7GB），进程内起 mock 服务的测试
+    // codegen 会让 `cargo test` 编译逼近 OOM（实测编译卡死）。需跑时：
+    // 1) 在内存充足环境（或 `./dev.sh stop` 后）把下述测试块恢复；
+    // 2) 或按 `docs/reference/user-testing.md` 用手动回归脚本验证。
 }

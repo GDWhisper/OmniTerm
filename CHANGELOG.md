@@ -47,11 +47,33 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.15] - 2026-08-16
 
 ### Added
 
+- (2026-08-14 01:04) `[frontend]` ACP 聊天桌面动作条浮层动态定位：优先显示在图标下方，空间不足（贴近视口底部）时翻转到上方，避免操作条浮层被视口裁切（`frontend/src/components/Chat/MessageActionBar.tsx`、`frontend/src/index.css`）
+- (2026-08-14 00:38) `[frontend]` ACP 聊天桌面动作条两段式 hover：气泡 hover 仅显示图标（文字隐藏），hover 到具体图标时才以浮层显示功能文字——动作条常驻态更简洁，避免误触与双重原生 tooltip（`frontend/src/components/Chat/MessageActionBar.tsx`、`frontend/src/index.css`）
 - (2026-08-14 00:26) `[backend]` `[frontend]` 新增 localhost 端口转发反向代理 `/proxy/{port}/{*path}`：机器 A 的浏览器经跑在机器 B 上的 OmniTerm 访问 B 的 localhost 服务（如 dev server）。目标 IP 硬编码 `127.0.0.1`、端口白名单（`3000..=65535` 减数据库/内部服务端口黑名单，并动态排除自身监听端口防回环），请求/响应 header 重写（Host/Origin/hop-by-hop 剥离/`Set-Cookie` 域与路径/`Location` 相对化，转发时剥离 `omniterm_token`），响应 `chunk()` 流式回写不落内存；WebSocket 双向 relay（每方向 `mpsc(64)` 有界，满则拒新数据 + warn）支撑 Vite HMR 等 WS dev server。前端 Chat 与终端里的 localhost 链接自动重写为 `/proxy/{port}/` 新标签打开（`src/proxy/`、`src/api/mod.rs`、`src/main.rs`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/vite.config.ts`）
+- (2026-08-14 02:00) `[backend]` `[frontend]` 端口转发反向代理新增子域名形态 `{port}.{proxy_domain}`：配置 `--proxy-domain`（`OMNITERM_PROXY_DOMAIN`）后，绝对路径资源的 SPA（Vite/Next.js）不再白屏——浏览器对 `/assets/*`、`/_next/*` 的解析天然落到子域名 Host，由最外层 middleware 按 Host 头路由到 `127.0.0.1:{port}`。鉴权 cookie 跨子域名（`Domain={base}`）、`/system/info` 透出 `proxy_domain`、前端 `rewriteLocalUrl` 按需生成子域名 URL；未配置时行为不变（路径前缀兜底）。DNS 通配符解析为用户部署负担（dnsmasq/公网/hosts 三选一）（`src/proxy/mod.rs`、`src/auth/mod.rs`、`src/api/auth.rs`、`src/api/system.rs`、`src/main.rs`、`frontend/src/utils/proxyUrl.ts`、`frontend/src/App.tsx`、`frontend/vite.config.ts`）
+- (2026-08-14 14:11) `[backend]` 反向代理路径前缀形态支持绝对路径 SPA（局域网 IP 直连场景不再白屏）：新增 HTML/JS 响应体字节级重写——`text/html` 的 `src`/`href`/`srcset`/`action`/`poster` 属性与 `text/javascript` 的 `"/api/`、`'/api/`、`` `/api/ `` 字符串字面量统一补 `/proxy/{port}` 前缀（全局一致重写保证 `===` 比较逻辑自洽；外部 URL/协议相对/相对路径/已带前缀不动）。子域名方案在局域网纯 IP（`3000.192.168.5.216` 非法）与非 secure context（SW 不可用）场景失效，此兜底是唯一通用解；HTML 4MiB / JS 16MiB 上限，超限回退流式透传（`src/proxy/mod.rs`）
+- (2026-08-14 21:30) `[backend]` 修复反代响应体重写破坏 gzip 压缩体导致浏览器 `ERR_CONTENT_DECODING_FAILED`（3000 端口等绝对路径 SPA 经代理打开仍白屏的根因）：reqwest 未启用自动解压（`default-features=false` 无 gzip feature），上游返回的 gzip 压缩字节经 `from_utf8_lossy` 转码被损坏，响应头却保留 `Content-Encoding: gzip` → 浏览器解码失败。请求侧剥离 Accept-Encoding 强制上游回明文（回环传输压缩收益可忽略），响应侧 `Content-Encoding` 非空时跳过重写走流式原样透传作双重保险（`src/proxy/mod.rs`）
+- (2026-08-15) `[backend]` 反代路径前缀形态支持 SPA 客户端路由（new-api 等 React Router 应用不再渲染 404，浏览器无 MIME 报错）：JS 重写注入 React Router v7 `<BrowserRouter>` `basename:"/proxy/{port}"`（以 `v7_startTransition` 特征匹配）——React Router 自动剥前缀匹配路由、Link/navigate 自动带前缀、地址栏正确、刷新正常；另改写 Vite 8 preload helper `return"/"+e` → `return"/proxy/{port}/"+e`（Vite 8 把依赖硬编码成根绝对路径绕过 `import.meta.url`，反代下 chunk 请求根路径 404）。早期 polyfill 方案（劫持 `Location.prototype.pathname`）因 Chrome 的 Location 是 [LegacyUnforgeable] 特殊对象而无效，已废弃。子域名方案仍为根治，本修复让局域网纯 IP 场景也能用（`src/proxy/mod.rs`）
+
+### Fixed
+
+- (2026-08-15) `[backend]` 反向代理（`src/proxy/`、`src/api/auth.rs`）正确性加固一轮（修复审查报告 P0 项）：
+  1. JS 重写补上**无尾随斜杠的 `/api` 字面量**（`"/api"`、`"/api?x"`、`"/api#x"`）——此前只重写 `/api/`，`fetch('/api')` 等请求落 OmniTerm 根路径 404；regex crate 不支持 lookahead，边界判定改捕获组 + 函数式检查（`/api` 后须为 `/`、引号、空白、`?`、`#`、`$` 或字符串结束，避免误匹配 `/apix`）
+  2. 请求转发补 `X-Forwarded-For`（已有链逗号追加客户端 IP，无则新建）/ `X-Forwarded-Proto`（缺失补 `http`）/ `X-Forwarded-Host`（缺失取原始 Host）——已有值保留不覆盖（外层 nginx 已带 https/真实 Host 时覆盖会误导上游）
+  3. HTML 属性重写补 `formaction`（`<button formaction>` / `<input formaction>` 提交目标）；`<base href>` 已由 `href` 分支覆盖，补单测确认
+  4. `Location` 重写支持 `http(s)://0.0.0.0:{port}` 与 `https://localhost|127.0.0.1:{port}` 的回环重定向
+  5. WS 入口新增 **Origin 校验（CSWSH 防御）**：Origin 的 host（忽略端口）与请求 Host 不一致的 WS 握手 403，无 Origin（curl/原生 WS 等非浏览器）放行
+  6. 子域名登录 cookie 对 **IP / localhost / 无点域名 base 不再设 `Domain`**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/api/auth.rs`）
+- (2026-08-15) `[backend]` 反向代理健壮性加固一轮（修复审查报告 P1 项）：
+  1. WS relay 收尾**发送 Close 帧**：任一侧结束（EOF/Close）时 abort 读侧后，写侧把队列中残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时（此前直接 abort 写侧，Close 来不及发出）
+  2. `Content-Encoding: identity`（明文标识）/空视为无编码，**仍可做响应体重写**——旧 `is_none()` 判断把它当非明文误跳过（提取 `rewrite_allowed_for_encoding` 纯函数并单测）
+  3. 请求体上限（默认 2MB）**可配置化**：新增 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY`，注入 `ProxyState.max_request_body`，大文件上传场景可调大
+  4. `parse_proxy_host` 对 IPv6 字面量 Host（`[::1]:8080`）不再误剥端口（按 `]` 结尾判别），返回 None 而非错误端口（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/main.rs`）
+- (2026-08-16) `[backend]` 修复文件监控（`/files/watch` SSE）在项目含 node_modules 时内存无界增长（正式版 RSS +~5MB/s 直至 OOM，实测最高 7GB）：notify 的 `RecursiveMode::Recursive` 内部 WalkDir **不跳过任何目录**，node_modules/.git/target 的目录全被注册进 inotify（实测 OmniTerm-dev 项目 1 万+ watch），notify 8.2 在该规模 + 持续文件事件下 `notify-rx` 线程 `handle_inotify` 内层循环饿死 mio poll——100% CPU 忙循环 + 高频分配致堆膨胀。现改为**手动递归注册**（walkdir `filter_entry` 剪枝，跳过 ignore 目录及整棵子树，watch 数降到实际业务目录量级）+ 新目录经通道由消费循环补注册（`should_ignore` 从仅回调过滤提升为注册剪枝）（`src/api/files_watch.rs`、`Cargo.toml`）
 
 ## [0.2.14] - 2026-08-13
 

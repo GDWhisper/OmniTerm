@@ -1,6 +1,6 @@
 [package]
 name = "omniterm"
-version = "0.2.14"
+version = "0.2.15"
 edition = "2024"
 license = "FSL-1.1-MIT"
 authors = ["GDWhisper"]
@@ -44,6 +44,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio-tungstenite = "0.29"
 semver = "1"
 sha2 = "0.10"
+# files_watch 手动递归注册 inotify watch 时遍历目录树（跳过 node_modules 等）
+walkdir = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

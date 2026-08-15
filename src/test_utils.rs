@@ -30,7 +30,12 @@ pub async fn test_state() -> AppState {
         login_guard: LoginGuard::new(),
         engines: EngineRegistry::new(db.clone()),
         acp_supervisor: AcpSupervisor::default(),
-        proxy: ProxyState { client: reqwest::Client::new(), self_port: 9777 },
+        proxy: ProxyState {
+            client: reqwest::Client::new(),
+            self_port: 9777,
+            base_host: None,
+            max_request_body: crate::proxy::MAX_REQUEST_BODY,
+        },
         db,
     }
 }
