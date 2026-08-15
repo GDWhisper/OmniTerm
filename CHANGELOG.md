@@ -66,6 +66,11 @@ Prefix each entry with the area it affects:
   4. `Location` 重写支持 `http(s)://0.0.0.0:{port}` 与 `https://localhost|127.0.0.1:{port}` 的回环重定向
   5. WS 入口新增 **Origin 校验（CSWSH 防御）**：Origin 的 host（忽略端口）与请求 Host 不一致的 WS 握手 403，无 Origin（curl/原生 WS 等非浏览器）放行
   6. 子域名登录 cookie 对 **IP / localhost / 无点域名 base 不再设 `Domain`**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/api/auth.rs`）
+- (2026-08-15) `[backend]` 反向代理健壮性加固一轮（修复审查报告 P1 项）：
+  1. WS relay 收尾**发送 Close 帧**：任一侧结束（EOF/Close）时 abort 读侧后，写侧把队列中残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时（此前直接 abort 写侧，Close 来不及发出）
+  2. `Content-Encoding: identity`（明文标识）/空视为无编码，**仍可做响应体重写**——旧 `is_none()` 判断把它当非明文误跳过（提取 `rewrite_allowed_for_encoding` 纯函数并单测）
+  3. 请求体上限（默认 2MB）**可配置化**：新增 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY`，注入 `ProxyState.max_request_body`，大文件上传场景可调大
+  4. `parse_proxy_host` 对 IPv6 字面量 Host（`[::1]:8080`）不再误剥端口（按 `]` 结尾判别），返回 None 而非错误端口（`src/proxy/mod.rs`、`src/proxy/ws.rs`、`src/main.rs`）
 
 ## [0.2.14] - 2026-08-13
 

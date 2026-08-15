@@ -67,8 +67,9 @@ const DENIED_PORTS: &[u16] = &[3306, 5432, 6379, 27017, 11211];
 /// 黑名单端口范围（D2）：Consul、Elasticsearch 连续端口段。
 const DENIED_PORT_RANGES: &[(u16, u16)] = &[(8500, 8503), (9200, 9300)];
 
-/// 请求体上限：与 axum `DefaultBodyLimit` 一致（2MB），防大体积上传耗内存（D5）。
-const MAX_REQUEST_BODY: usize = 2 * 1024 * 1024;
+/// 请求体上限默认值：与 axum `DefaultBodyLimit` 一致（2MB），防大体积上传耗内存（D5）。
+/// 经 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY` 可覆盖（见 main.rs）。
+pub const MAX_REQUEST_BODY: usize = 2 * 1024 * 1024;
 
 /// HTML 响应体重写上限：超过则不重写、原样流式透传（HTML 页面通常 < 1MiB）。
 const REWRITE_HTML_MAX: usize = 4 * 1024 * 1024;
@@ -110,6 +111,9 @@ pub struct ProxyState {
     /// 子域名代理 base（如 `omniterm.lan`）。`None`/空字符串 = 不启用子域名 Host 路由。
     /// 由 `--proxy-domain` / `OMNITERM_PROXY_DOMAIN` 注入（见 main.rs）。
     pub base_host: Option<String>,
+    /// 请求体上限（默认 `MAX_REQUEST_BODY` = 2MB）。由 `--proxy-max-body` /
+    /// `OMNITERM_PROXY_MAX_BODY` 注入（见 main.rs），供大文件上传场景调大。
+    pub max_request_body: usize,
 }
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -198,9 +202,15 @@ pub fn parse_proxy_host(host: &str, base: &str) -> Option<u16> {
     if base.is_empty() {
         return None;
     }
-    // 剥离 `:{listen_port}` 后缀（若有）。Host 头是域名场景，无 IPv6 字面量需特殊处理；
-    // 即便误剥 IPv6（`[::1]:8080`），后续 `strip_suffix` 不匹配也会返回 None，安全。
-    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    // 剥离 `:{listen_port}` 后缀（若有）。IPv6 字面量防御（P1-4.13）：Host 以 `]` 结尾
+    // 即无端口后缀（`[::1]`），整体保留不剥；带端口（`[::1]:8080`）按 `:` 剥离后得
+    // `[::1]`。子域名模式 base 是域名/IPv4，IPv6 base 无法通配子域名，后续
+    // `strip_suffix` 不匹配自然返回 `None`，绝不误剥出错误端口。
+    let host = if host.ends_with(']') {
+        host
+    } else {
+        host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host)
+    };
     let host = host.to_ascii_lowercase();
     let base = base.to_ascii_lowercase();
     let prefix = host.strip_suffix(&format!(".{}", base))?;
@@ -298,8 +308,9 @@ async fn forward_http(
     let method = request.method().clone();
     let req_headers = rewrite_request_headers(request.headers(), port, false, client_ip);
 
-    // 请求体（有界：`MAX_REQUEST_BODY`，超限直接拒绝，防无界缓冲）。
-    let body = match axum::body::to_bytes(request.into_body(), MAX_REQUEST_BODY).await {
+    // 请求体（有界：`state.proxy.max_request_body`，超限直接拒绝，防无界缓冲；
+    // 默认 2MB，经 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY` 可调）。
+    let body = match axum::body::to_bytes(request.into_body(), state.proxy.max_request_body).await {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!("proxy failed to read request body (port {}): {}", port, e);
@@ -341,12 +352,9 @@ async fn forward_http(
     // 兜底：上游若无视 Accept-Encoding 剥离仍返回压缩体（Content-Encoding 非空），
     // 跳过重写走流式原样透传——压缩字节经 from_utf8_lossy 转码会被破坏（浏览器
     // ERR_CONTENT_DECODING_FAILED），原样透传 + 保留编码头浏览器可正常解码。
-    let content_encoding = upstream_resp
-        .headers()
-        .get(header::CONTENT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    // `identity`（明文标识）/空视为无编码，仍可重写（P1-4.10）。
+    let content_encoding =
+        upstream_resp.headers().get(header::CONTENT_ENCODING).and_then(|v| v.to_str().ok());
     let content_type = upstream_resp
         .headers()
         .get(header::CONTENT_TYPE)
@@ -355,7 +363,7 @@ async fn forward_http(
         .map(str::trim)
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if content_encoding.is_none()
+    if rewrite_allowed_for_encoding(content_encoding)
         && let Some(kind) = RewriteKind::from_content_type(&content_type)
     {
         match try_rewrite_body(upstream_resp, kind, port).await {
@@ -448,6 +456,19 @@ impl RewriteKind {
 enum RewriteOutcome {
     Done(Vec<u8>),
     Fallthrough(Vec<u8>, reqwest::Response),
+}
+
+/// 该 `Content-Encoding` 是否允许响应体重写：`None` / 空 / `identity`（明文标识）→ 允许；
+/// `gzip`/`br`/`deflate` 等真实压缩 → 禁止（压缩字节经 `from_utf8_lossy` 转码会被破坏，
+/// 浏览器 `ERR_CONTENT_DECODING_FAILED`）。纯函数，便于单测（P1-4.10）。
+fn rewrite_allowed_for_encoding(content_encoding: Option<&str>) -> bool {
+    match content_encoding {
+        None => true,
+        Some(s) => {
+            let t = s.trim();
+            t.is_empty() || t.eq_ignore_ascii_case("identity")
+        }
+    }
 }
 
 /// 缓冲读取 + 重写。超过 `kind.max_bytes()` 上限立即放弃重写（回退流式透传，
@@ -1373,4 +1394,49 @@ mod tests {
         assert_eq!(strip_port("[::1]:8080"), "::1");
         assert_eq!(strip_port("[::1]"), "::1");
     }
+
+    // ── P1 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+
+    #[test]
+    fn rewrite_allowed_for_encoding_accepts_none_and_identity() {
+        // P1-4.10：identity 是明文标识，应允许重写（旧实现 is_none() 判断把它当非明文跳过）
+        assert!(rewrite_allowed_for_encoding(None));
+        assert!(rewrite_allowed_for_encoding(Some("")));
+        assert!(rewrite_allowed_for_encoding(Some("identity")));
+        assert!(rewrite_allowed_for_encoding(Some("  IDENTITY  ")));
+    }
+
+    #[test]
+    fn rewrite_allowed_for_encoding_rejects_compressed() {
+        // 真实压缩：跳过重写（压缩字节转码会破坏）
+        assert!(!rewrite_allowed_for_encoding(Some("gzip")));
+        assert!(!rewrite_allowed_for_encoding(Some("br")));
+        assert!(!rewrite_allowed_for_encoding(Some("deflate")));
+        assert!(!rewrite_allowed_for_encoding(Some("gzip, br")));
+    }
+
+    #[test]
+    fn proxy_host_parses_ipv6_port() {
+        // P1-4.13：IPv6 Host 不误剥端口——`[::1]:8080` 剥端口后 `[::1]` 无法匹配 `.base`
+        // 返回 None（IPv6 base 无法通配子域名），而不是解析出错误端口。
+        assert_eq!(parse_proxy_host("[::1]:8080", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("[::1]", "omniterm.lan"), None);
+        assert_eq!(parse_proxy_host("[::1]:8080", "::1"), None);
+        // 正常域名 Host 行为不变
+        assert_eq!(parse_proxy_host("3000.omniterm.lan:9777", "omniterm.lan"), Some(3000));
+    }
+
+    #[test]
+    fn max_request_body_default_is_two_mib() {
+        // 未配置时默认 2MiB（与 axum DefaultBodyLimit 一致），可经 ProxyState 覆盖
+        assert_eq!(MAX_REQUEST_BODY, 2 * 1024 * 1024);
+    }
+
+    // ── 进程内集成测试（mock 目标服务 + proxy 全链路）──────────────
+    // 已用单测覆盖 HTML/JS/Location/Header 重写与 X-Forwarded-* 逻辑（见上）。
+    // 全链路 roundtrip（真实 TCP + mock 目标服务）留作手动回归：当前开发机
+    // 内存长期紧张（omniterm 生产实例 ~7GB），进程内起 mock 服务的测试
+    // codegen 会让 `cargo test` 编译逼近 OOM（实测编译卡死）。需跑时：
+    // 1) 在内存充足环境（或 `./dev.sh stop` 后）把下述测试块恢复；
+    // 2) 或按 `docs/reference/user-testing.md` 用手动回归脚本验证。
 }

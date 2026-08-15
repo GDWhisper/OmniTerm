@@ -128,6 +128,11 @@ struct StartArgs {
     /// SPAs (Next.js/Vite) load correctly. Unset disables subdomain routing (path-prefix only).
     #[arg(long, env = "OMNITERM_PROXY_DOMAIN")]
     proxy_domain: Option<String>,
+
+    /// Max request body size in bytes for the reverse proxy (default 2 MiB). Raise it to proxy
+    /// large uploads to the target dev server (e.g. `--proxy-max-body 104857600`).
+    #[arg(long, env = "OMNITERM_PROXY_MAX_BODY")]
+    proxy_max_body: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -713,6 +718,7 @@ fn main() -> anyhow::Result<()> {
                     client: proxy_client,
                     self_port: args.port,
                     base_host: args.proxy_domain.clone(),
+                    max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
                 },
             };
 
