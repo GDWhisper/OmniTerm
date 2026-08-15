@@ -1,29 +1,25 @@
-# OmniTerm v0.2.14 更新摘要
+# OmniTerm v0.2.15 更新摘要
 
 > 本版本亮点由发布 agent 基于 CHANGELOG 手动总结。详细条目见 CHANGELOG.md。
 
 ## 新功能
 
-- ACP 聊天气泡动作体系：消息支持复制正文、引用到输入框、编辑重发、重新生成四个动作（桌面 hover 动作条 + 移动端长按菜单），新增块级复制与「复制为 Markdown」
-- 自管 pty 会话引擎（Phase 2）落地：WS 断开不杀进程、重连自动补屏、后端重启后按最后 cwd 重建会话并回放历史
-- Agent 预设新增 CodeBuddy：`codebuddy --acp` 一键以 ACP 模式启动 CodeBuddy Code
-- ACP agent 的 API key 改为从 `~/.omniterm/api_keys.toml` 统一读取，正式版（systemd / docker）不再依赖 shell 环境透传
+- 新增 localhost 端口转发反向代理 `/proxy/{port}`：浏览器经 OmniTerm 访问远程机器的 localhost 服务（dev server、new-api 等），聊天与终端里的 localhost 链接自动改写为代理地址一键打开
+- 反代支持子域名形态 `{port}.{proxy_domain}` 与局域网 IP 直连的绝对路径 SPA（HTML/JS 字节级重写 + React Router basename 注入），并支持 Vite HMR 等 WebSocket dev server 双向 relay
+- ACP 聊天桌面动作条交互优化：两段式 hover（气泡只显图标、图标 hover 才显文字）+ 浮层动态定位（空间不足自动翻转）
 
 ## 重要修复
 
-- 修复正式版在某些终端里 `omniterm start` 必然报 `Address already in use`：后端不再读取会被开发环境劫持的通用名环境变量（只认 `OMNITERM_*` 前缀）
-- 修复开启密码验证时被立即踢回登录页，改为在设置界面就地设置密码
-- 修复文件拖拽悬浮预览不贴鼠标（界面缩放 ≠ 100% 时越拖越远）
-- 修复「新建项目」弹窗第二次打开起目录浏览区持续显示空目录
-- ACP 聊天正文 `text` 列收口为有界（1 MiB），超大 turn 不再 O(n²) 写放大
+- 修复文件监控（`/files/watch`）在含 node_modules 的大项目里内存无界增长直至 OOM（正式版曾实测 RSS 涨至 7GB）：手动递归注册 inotify watch 并剪枝 node_modules/.git/target，watch 数降到业务目录量级
+- 反向代理正确性/健壮性加固：`/api` 无尾随斜杠字面量重写、`X-Forwarded-*` 透传、`Location` 回环重定向、WS 入口 Origin 校验（CSWSH 防御）、relay 收尾发送 Close 帧、`Content-Encoding: identity` 明文重写、IPv6 Host 解析、请求体上限可配置（`--proxy-max-body`）
 
 ## 工程改进
 
-- pty 会话 VT 模拟器改用 crates.io registry 依赖 `alacritty_terminal`，恢复 crates.io 发布渠道（此前 `wezterm-term` git 依赖导致发布中止）
+- 新增 `scripts/preflight-release.sh` 发布前渠道可发布性预检（crates.io / npm 版本号可用性 + cargo 依赖可发布性），避免发布中途才发现渠道不可用
 
 ## 安装与升级
 
 - 新用户：使用 `install.sh`（Linux / macOS）或 `install.ps1`（Windows）一键安装
 - 升级：`cargo install omniterm` 或从 Releases 下载对应平台 binary 覆盖
 
-**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.13...v0.2.14
+**Full Changelog**: https://github.com/GDWhisper/OmniTerm/compare/v0.2.14...v0.2.15
