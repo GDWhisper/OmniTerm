@@ -47,6 +47,14 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- (2026-08-16 15:10) `[backend]` `[frontend]` `/files/watch` SSE 事件去抖：后端 100ms 窗口按 `(kind, path)` 去重合并后批量下发，合并缓冲超限或广播溢出时下发 `resync` 全量重同步；前端收到事件 500ms 防抖刷新一次，切到 GIT tab 时断开 SSE（后端 watcher 注销）——降低「单次保存多个事件 → 多次全量列表请求」的放大，面板不可见时不再持续 watch 目录树（`src/api/files_watch.rs`、`frontend/src/hooks/useFileWatcher.ts`、`frontend/src/components/FileManager/FileManager.tsx`）
+
+---
+
 ## [0.2.15] - 2026-08-16
 
 ### Added

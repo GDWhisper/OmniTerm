@@ -158,7 +158,8 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/2026-07-26-git-pan
 
 - **watch 树手动递归注册**（2026-08-16 修复）：notify 的 `RecursiveMode::Recursive` 内部 `WalkDir` **不跳过任何目录**——项目含 node_modules 时会把整个依赖树注册进 inotify（实测 OmniTerm-dev 项目 1 万+ watch），且 notify 8.2 在该规模 + 持续事件下 `handle_inotify` 内层 `read_events` 循环饿死 mio poll：`notify-rx` 线程 100% CPU、高频分配致堆膨胀（正式版 RSS +5MB/s 到 7GB 的根因）。现改为 `collect_watch_dirs`（walkdir `filter_entry` 剪枝，跳过 node_modules/.git/target/隐藏目录）对根目录 + 非 ignore 子目录逐个 `NonRecursive` 注册；新目录经 `new_dir_tx` 通道由消费循环补注册。`should_ignore` 只过滤事件、**不减少注册**——它从「回调过滤」提升为「注册剪枝」双重把关。
 - **生命周期**：每请求一个 watcher（1 inotify fd），SSE 断开即 drop（`shutdown_rx` Disconnected 检测，`spawn_blocking` 内 250ms 轮询）。
-- **有界性**：事件 → 有界 `broadcast(64)`，Lagged 丢弃；watch 目录列表有界于实际业务目录数（剪枝后）。
+- **事件去抖（ADR-6）**：SSE generator 侧 100ms 窗口按 `(kind, path)` 去重合并后批量下发，消除「单次保存的 N 个 Modify → N 次前端全量 list」的请求放大；合并缓冲 `MAX_PENDING=256` 超限或 `broadcast(64)` Lagged 时，统一下发单条 `resync`（`{"kind":"resync","path":""}`）让前端全量重同步。前端对 `resync` 天然生效（任意事件触发一次全量刷新）；前端另有 500ms 刷新防抖（`FileManager.tsx`），把一次操作残留的多条事件收敛为一次 `list`。
+- **有界性**：事件 → 有界 `broadcast(64)`；watch 目录列表有界于实际业务目录数（剪枝后）；去抖合并缓冲 `MAX_PENDING=256` 有界 + 超限降级。
 
 ## Port-forward proxy（`src/proxy/`）
 

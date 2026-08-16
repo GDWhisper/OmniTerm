@@ -9,6 +9,10 @@
 > 1. **问题 10 从「P2 未验证」升为「P0 已确认」，并并入 Phase 1**。读 notify 8.2 源码后因果链已闭合，不需实测即可确认缺陷存在（证据见「问题 10 因果链」）；且 `188a6b2` 已随 **v0.2.15** 打 tag 发布，缺陷已在生产。修法比原估算简单得多（放宽一个 `if` 匹配条件，不需注册表），新增 ADR-8。
 > 2. **ADR-1 的选项结构变了**：`walkdir` **只支持深度优先**（`walkdir-2/src/lib.rs:161`），「保留 walkdir 用其 API 实现 BFS」不成立；并新增否决项 (d)「从入口限制超大项目根」供权衡。
 > 3. **ADR-4 的代价比原描述小**：`SKIP_DIRS` 只在 `search_recursive` 使用，**`list_dir` 不过滤** → 忽略只影响自动刷新，不影响浏览/编辑；且四个目录的证据强度不同，已调为分批推进。
+>
+> **勘误 2（2026-08-16，ADR-6 去抖 + 前端防抖/可见性已实施）**：
+> 1. **ADR-6（Phase 4 的去抖部分）已实施**：`DEBOUNCE_WINDOW_MS=100` 窗口按 (kind, path) 去重合并，`MAX_PENDING=256` 超限或 broadcast Lagged 统一走 `resync` 降级出口（问题 6、7 一并关闭）。前端 `useFileWatcher.ts` 扩展 `kind: 'resync'`；`FileManager.tsx` 加 500ms 刷新防抖。**ADR-7（空流挂住 + 前端退避，问题 8）未做**，仍待 Phase 4 剩余部分。
+> 2. **前端面板可见性控制（非 plan 范围，另行决策）**：`FileManager.tsx` 的 `useFileWatcher` 增加 `rightPanelTab === 'files'` 条件——切到 GIT tab 时断开 SSE（后端 watcher 注销），因组件仅 CSS 隐藏仍挂载。折叠 40px rail 时 RightPanel 直接卸载 FileManager，天然断开，无需处理。
 
 ---
 
