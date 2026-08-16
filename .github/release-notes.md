@@ -4,7 +4,7 @@
 
 ## 新功能
 
-- 新增 localhost 端口转发反向代理 `/proxy/{port}`：浏览器经 OmniTerm 访问远程机器的 localhost 服务（dev server、new-api 等），聊天与终端里的 localhost 链接自动改写为代理地址一键打开
+- 新增 localhost 端口转发反向代理 `/proxy/{port}`：浏览器经 OmniTerm 访问远程机器的 localhost 服务，聊天与终端里的 localhost 链接自动改写为代理地址一键打开
 - 反代支持子域名形态 `{port}.{proxy_domain}` 与局域网 IP 直连的绝对路径 SPA（HTML/JS 字节级重写 + React Router basename 注入），并支持 Vite HMR 等 WebSocket dev server 双向 relay
 - ACP 聊天桌面动作条交互优化：两段式 hover（气泡只显图标、图标 hover 才显文字）+ 浮层动态定位（空间不足自动翻转）
 
