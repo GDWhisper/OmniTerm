@@ -5,6 +5,11 @@
 > 关联：`docs/architecture/backend.md` §File watcher、`docs/dev/debug-patterns/resource-lifecycle.md` 模式 8（外部注册集无界家族）、`docs/dev/performance-and-safety.md` §P1（无界累积）、`scripts/verify-inotify-fix.sh`
 > 前序修复：commit `188a6b2`（手动递归注册跳过 node_modules）、`fbeb05d` / `9277493`（inotify fd 泄漏）
 
+> **勘误 1（2026-08-16，落盘后核实取舍前提时三条证据修正）**：
+> 1. **问题 10 从「P2 未验证」升为「P0 已确认」，并并入 Phase 1**。读 notify 8.2 源码后因果链已闭合，不需实测即可确认缺陷存在（证据见「问题 10 因果链」）；且 `188a6b2` 已随 **v0.2.15** 打 tag 发布，缺陷已在生产。修法比原估算简单得多（放宽一个 `if` 匹配条件，不需注册表），新增 ADR-8。
+> 2. **ADR-1 的选项结构变了**：`walkdir` **只支持深度优先**（`walkdir-2/src/lib.rs:161`），「保留 walkdir 用其 API 实现 BFS」不成立；并新增否决项 (d)「从入口限制超大项目根」供权衡。
+> 3. **ADR-4 的代价比原描述小**：`SKIP_DIRS` 只在 `search_recursive` 使用，**`list_dir` 不过滤** → 忽略只影响自动刷新，不影响浏览/编辑；且四个目录的证据强度不同，已调为分批推进。
+
 ---
 
 ## 背景
@@ -43,23 +48,34 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 | 1 | watch 目录数无显式上界（违反 AGENTS §6 无界累积红线） | `files_watch.rs:239` `collect_watch_dirs` | **P0** |
 | 2 | 注册失败静默 `break`：inotify `max_user_watches` 耗尽 / EMFILE 时直接跳出，前端仍显示 `connected` 却永久收不到深层目录事件 | `files_watch.rs:105-108`、`:118-123` | **P0** |
 | 3 | 手动递归在 macOS/Windows 上净退化（见上表） | `files_watch.rs:104-123` | **P0** |
-| 4 | ignore 规则两处真源不一致，watch 侧仍注册 `dist`/`build`/`venv`/`vendor` —— `vite build` 猛写 `dist/` 正是事件风暴源 | `files_watch.rs:216` vs `src/fs/mod.rs:601` | P1 |
+| 4 | ignore 规则两处真源不一致，watch 侧仍注册 `dist`/`build`/`venv`/`vendor`（`venv`/`vendor` 吃 watch 预算；`dist` 疑为事件风暴源，**未实测**，见 ADR-4 证据分级） | `files_watch.rs:216` vs `src/fs/mod.rs:601` | P1 |
 | 5 | 手写 JSON + `escape_json` 只转义 5 个字符，文件名含其它 C0 控制字符（U+0000–U+001F）产出非法 JSON，被前端 `catch {}` 静默吞掉 | `files_watch.rs:180/190-198/246`、`useFileWatcher.ts:70` | P1 |
 | 6 | `broadcast(64)` 的 `Lagged` 静默 `continue`：`git checkout` 切大分支瞬间溢出 → 前端列表停在旧状态且无感知 | `files_watch.rs:143` | P1 |
 | 7 | 无事件去抖：单次文件保存产生 N 个 Modify，而前端对**每个**事件都触发一次全量 list（`FileManager.tsx:278-280`）→ N 倍请求放大 | `files_watch.rs` + 前端 | P1 |
 | 8 | 路径解析失败返回**立即结束的空流** → EventSource 视为错误 → 每 3s 无限重连，**每次重连后端都重跑全树遍历 + 逐个注册**；`useFileWatcher.ts:76-84` 固定 3s 无退避无上限 | `files_watch.rs:50-56`、`useFileWatcher.ts:76-84` | P1 |
 | 9 | 零可观测性：本次定位靠 SIGSTOP 冻结线程试错 | `files_watch.rs` 全局 | P2 |
-| 10 | 目录 rename 后 notify 路径映射可能失配（inotify watch 绑 inode 不绑路径；Recursive 模式下 notify 内部自维护映射，手动递归把该责任接了过来但未实现） | `files_watch.rs:83-92` | P2（**未验证** ） |
+| 10 | **目录 rename / move-in 后整棵子树不再被监控且无任何提示**（手动递归从 `Recursive` 接过来但未实现的责任，因果链见下） | `files_watch.rs:83` | **P0**（源码已证；**已随 v0.2.15 发布**） |
 
 > 问题 8 有旁证：`scripts/verify-inotify-fix.sh:31-33` 的注释专门警告「the watcher returns an empty stream for unknown paths, which would silently make the test vacuous」—— 连自家验证脚本都得绕开这个静默失效。
+
+### 问题 10 因果链（notify 8.2 源码实证，无需实测即可确认）
+
+目录被 `mv` 进来或改名后，新路径子树完全不被监控，因为**两道补注册机制同时失效**：
+
+1. **notify 侧不补**：notify 对新目录自动补注册的唯一路径是 `add_watch_by_event`（`inotify.rs:61-76`），而它**要求父目录 `is_recursive == true`**（`:69-72`）。本代码全部用 `NonRecursive` 注册 → 条件永远为假 → notify 永不补注册。
+2. **本代码侧也不补**：自建钩子只匹配 `EventKind::Create(CreateKind::Folder)`（`files_watch.rs:83`）。而 `mv` 进来的目录在 inotify 侧是 `MOVED_TO`（`inotify.rs:244-267`），被 notify 映射为 `Modify(Name(...))` / rename 事件，**不是** `Create(Folder)` → 钩子不触发。
+
+反向的 `MOVED_FROM` 由 notify 自己 `remove_watch_by_event`（`:233`）处理，**旧路径 watch 不泄漏** —— 这一半没问题。
+
+加重因素：`188a6b2` 已随 **v0.2.15** 打 tag 发布（`git tag --contains 188a6b2` → `v0.2.15`）；且 rename 是被重视的路径，已有两个专门修复（`f7273cb` 外部改名后 drawer 跟随、`8ca8ce3` 图片改名同步）。
 
 ---
 
 ## 范围与优先级
 
-- **P0（有界性与跨平台正确性）**：问题 1 / 2 / 3。目标 = 任何输入下 watch 数有硬上界，超限可解释地降级且用户可见；非 Linux 平台不退化。
+- **P0（有界性与跨平台正确性、已发布缺陷）**：问题 1 / 2 / 3 / **10**。目标 = 任何输入下 watch 数有硬上界，超限可解释地降级且用户可见；非 Linux 平台不退化；rename / move-in 后子树仍被监控。
 - **P1（正确性与单一真源）**：问题 4 / 5 / 6 / 7 / 8。
-- **P2（另行排期）**：问题 9 / 10。问题 10 **先验证再定方案**，不在本轮承诺修法。
+- **P2（另行排期）**：问题 9（可观测性）。
 
 ### 不纳入范围
 
@@ -79,15 +95,22 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 
 **理由**：上限依据 = 本仓库剪枝后 165 个目录（12× 余量），而触发 notify 忙循环的实测规模是 1 万+，两者间有一个数量级的安全带。选截断而非拒绝服务，是因为「部分监控 + 明确告知」优于「完全不监控」。
 
-**配套必需项 —— 遍历顺序必须从 DFS 改 BFS**：当前 `WalkDir` 是深度优先，截断会被某一棵深子树吃满而饿死其他顶层目录，退化行为不可解释也不可测。改为按深度递增的 BFS 后，截断语义变成「浅层全覆盖、深层丢弃」—— 用户正在浏览的路径大概率仍被监听，且可写成断言。
+**配套项 —— 遍历顺序从 DFS 改 BFS**：当前是深度优先，截断会被某一棵深子树吃满而饿死其他顶层目录；改为按深度递增的 BFS 后，截断语义变成「浅层全覆盖、深层丢弃」，可写成断言。
+
+> **`walkdir` 只支持 DFS**（`walkdir-2/src/lib.rs:161`「Results are returned in depth first fashion」；`contents_first` 只是 DFS 的先叶后枝变体）。因此「保留 walkdir 用其 API 实现 BFS」不成立，真实选项只有：手写 BFS（`VecDeque` + `read_dir`，约 15 行，可同时移除 `Cargo.toml:48` 的 `walkdir` 依赖）、或保留 walkdir 但放弃浅层优先。手写的风险比看上去小：`std::fs::DirEntry::file_type()` **不跟随** symlink，symlink-to-dir 被判为 symlink 而非 dir → 天然无 loop 风险，而 loop 检测正是 `walkdir` 的主要价值（其排序 / min_depth / follow_links 本处一概不用）。
+
+**BFS 必要性的判据 = 「`~` 作为项目根」算不算真实场景**（本 ADR 唯一存疑处）：
+- 若算（它正是问题 1 的反证基础，实测剪枝后 35330 目录，必然触顶）—— DFS 截断会把 2000 预算全花在字母序第一个顶层目录的深处，用户实际项目目录**完全不被监控**，表现为「彻底失效」；BFS 下浅层全覆盖，降级从「彻底失效」变成「部分可用」。此时 BFS 不是优化，是降级可用性的前提。
+- 若不算 —— 则应选否决项 (d)，且 BFS 变为过度设计（为罕见路径做精心顺序设计）。
 
 **否决项**：
 - 限制最大深度（`maxdepth`）—— 深浅项目差异太大，同一个深度上限对 monorepo 和扁平项目意义完全不同，且仍不构成数量上界。
 - 静默截断不通知前端 —— 制造「看起来在工作实则半瘫」的静默失效，与问题 2 同类。
+- **(d) 从入口限制超大项目根**（添加项目时对目录数过大警告 / 拒绝）—— **保留为待拍板替代方案，非彻底否决**。它更接近根因（不让不合理的输入进来），选它则 BFS 与 `walkdir` 取舍一同消失；代价是把限制加在用户可见的产品行为上（「不得把 home 当工作区」），而该用法对终端管理器而言完全合理。若选 (d)，硬上界仍需保留（红线），只是截断退化为罕见分支。
 
 **翻盘条件**：实测出现正常项目频繁触顶 2000（说明上限选低），或 notify 升级后忙循环消失（说明上限可放宽，但**红线要求的上界本身不取消**）。
 
-**顺带取舍（需拍板）**：BFS 用 `VecDeque` + `std::fs::read_dir` 手写约 15 行即可实现，则前序修复引入的 `walkdir` 依赖（`Cargo.toml:48`）可移除。倾向这么做（奥卡姆剃刀：少一个依赖、且 `filter_entry` 的剪枝语义手写同样清晰）。
+**顺带取舍（需拍板）**：见上方 BFS 段与否决项 (d) —— 「手写 BFS + 去 walkdir」与「入口限制」二选一。
 
 ### ADR-2 · 手动递归注册按平台分流（`#[cfg]`）
 
@@ -121,9 +144,22 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 
 **理由**：两处语义已核对为**等价** —— `fs/mod.rs:644` 是 `name.starts_with('.') || SKIP_DIRS.contains(name)`，`files_watch.rs:216-224` 是逐段的同一判断；差异仅在黑名单条目。且 `SKIP_DIRS` 里 `.git` / `.venv` / `.next` / `.cache` 四项被 `starts_with('.')` 完全覆盖，是死条目，合并时一并清理。命中 AGENTS §7.1（同一判断出现在 ≥2 处 → 立单一真源）。
 
-`HEAVY_DIRS` = `node_modules` / `target` / `__pycache__` / `venv` / `dist` / `build` / `vendor`。
+`HEAVY_DIRS` 候选全集 = `node_modules` / `target` / `__pycache__` / `venv` / `vendor` / `dist` / `build`。
+实际首批取前 5 项（见下方「实施调整」），`dist` / `build` 待实测。
 
-**⚠️ 行为变更（需拍板）**：watch 侧将新增忽略 `dist` / `build` / `venv` / `vendor`。收益是消掉主要事件风暴源；代价是**用户手动改 `dist/` 里的文件不再自动刷新列表**。这改了用户可见语义，须显式确认，并写入 CHANGELOG。
+**代价比初估小**（落盘后核实）：`SKIP_DIRS` 只在 `search_recursive`（`fs/mod.rs:644`）使用，**`list_dir`（`:293`）不过滤**。所以 watch 侧忽略某目录只意味着「不自动刷新」—— 用户仍能正常浏览 / 打开 / 编辑 `dist/` 里的文件，手动刷新即可见。这也排除了「全禁 / 仅不 watch」两级黑名单的必要：一级列表足够。
+
+**四个新增目录属于两类原因，证据强度不同**：
+
+| 目录 | 纳入理由 | 证据强度 |
+|---|---|---|
+| `node_modules`（已有） | 高频写 → 事件风暴 + 目录数极大 | **实测**（10056→165，RSS 归因已验） |
+| `venv` / `vendor` | 目录数大 → 吃 watch 预算 | 推断（本机无样本；site-packages 典型数百至数千目录）。但**收益无争议** —— 没人需要 site-packages 自动刷新 |
+| `dist` / `build` | 高频写 → 事件风暴 | **仅推断，未实测**。且 `vite dev` 的 HMR 走内存不落盘，只有 `vite build` 才写 `dist` |
+
+支持纳入 `dist` 的论证（非数据）：风暴发生在**构建进行中**，而那时用户注意力在终端而非文件列表；「构建完想看 dist 自动刷新」这个损失场景恰好与风暴场景重合但错峰。
+
+**实施调整（需拍板）**：改为**分批** —— 先只加 `venv` / `vendor`（收益无争议、语义变更几乎不可感）；`dist` / `build` 待一次实测（跑 `pnpm build` 数事件速率）后再定。理由：按证据分级推进，不用未实测的推断改用户可见语义。若选择一次到位（全 7 项），CHANGELOG **必须**写明 `dist`/`build` 不再自动刷新。
 
 **否决项**：只在 watch 侧补齐条目、不动 `fs` 侧 —— 留下两份需同步维护的清单，正是本条要消除的问题。
 
@@ -157,19 +193,31 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 
 **否决项**：只加前端退避不改后端 —— 退避把频率从 3s 降到 30s，自激循环仍在，且用户永远看不到「路径没解析出来」这个真实原因。
 
+### ADR-8 · rename / move-in 的补注册：放宽钩子匹配条件，不引入注册表
+
+**决策**：把 `files_watch.rs:83` 的钩子从 `EventKind::Create(CreateKind::Folder)` 扩到「`Create(Folder)` 加 rename-To/Both 事件且目标路径实际是目录」，沿用现有 `new_dir_tx` 通道。
+
+**理由**：消费循环已经会对收到的目录补注册并 `collect_watch_dirs` 补整棵子树（`:111-118`），所以修法本质是**放宽一个 `if` 的匹配条件**，不需新建状态。这推翻了初估的「修法可能需引入 path→WatchDescriptor 注册表」担心。
+
+**否决项**：
+- 自建 `path → WatchDescriptor` 注册表并在 rename 时 unwatch 旧子树 + rewatch 新子树 —— 旧路径侧 notify 已自行处理（`inotify.rs:233` `remove_watch_by_event`），自建注册表是重复造轮且与当前无状态设计冲突。
+- 回退到 `RecursiveMode::Recursive` 以让 notify 自己补注册（其 `is_recursive` 分支会生效）—— 等于放弃前序修复，node_modules 重新被全量注册，OOM 回归。
+
+**翻盘条件**：若实测发现同一目录既走 rename-To 又走 Create 导致 watch 预算被重复消耗，则需在消费侧加幂等判重（notify 对已注册路径会合并 watchmask，见 `inotify.rs:439-441`，预计不会真正双计，但需验）。
+
 ---
 
 ## 实施分期
 
 | Phase | 内容 | 改动文件 | 依赖 | commit |
 |---|---|---|---|---|
-| 1 | ADR-1（上界 + BFS + 截断）、ADR-2（`cfg` 分平台）、ADR-3（降级通道）、问题 2（`break` → `warn!` + 上报） | `src/api/files_watch.rs`、`frontend/src/hooks/useFileWatcher.ts`、`Cargo.toml`（可选移除 `walkdir`） | 无 | `fix(files_watch): watch 数硬上界与截断降级，手动递归按平台分流` |
+| 1 | ADR-1（上界 + BFS + 截断）、ADR-2（`cfg` 分平台）、ADR-3（降级通道）、**ADR-8（rename/move-in 补注册）**、问题 2（`break` → `warn!` + 上报） | `src/api/files_watch.rs`、`frontend/src/hooks/useFileWatcher.ts`、`Cargo.toml`（可选移除 `walkdir`） | 无 | `fix(files_watch): watch 数硬上界与截断降级、平台分流、rename 子树补注册` |
 | 2 | ADR-4（单一真源） | `src/fs/mod.rs`、`src/api/files_watch.rs` | Phase 1 | `refactor(fs): ignore 规则单一真源，watch 与搜索共用` |
 | 3 | ADR-5（serde） | `src/api/files_watch.rs` | 无（可与 2 并行） | `fix(files_watch): 改 serde 序列化，修控制字符产生非法 JSON` |
 | 4 | ADR-6（去抖 + Lagged）、ADR-7（空流 + 退避） | `src/api/files_watch.rs`、`frontend/src/hooks/useFileWatcher.ts` | Phase 1（复用 `resync`/`degraded` 类型） | `fix(files_watch): 事件去抖与溢出重同步；前端重连退避` |
-| 5 | 问题 10 验证 → 另行排期 | — | — | 不在本轮 |
+| 5 | 问题 9（可观测性：启动时 `debug!(watch_dirs)`、超阈值 `warn!`） | — | — | 另行排期 |
 
-**Phase 5 验证脚本先行**（只验证、不预设修法）：`mkdir -p a/b` → 建立 watch → `mv a c` → `touch c/b/f`，观察事件路径报 `a/b/f`（映射过期，需修）还是 `c/b/f`（无问题）。
+原 Phase 5（问题 10 验证）**已并入 Phase 1**（勘误 1）。验证脚本仍要跑，但作用从「判断有没有问题」变为「验证修复有效」：`mkdir -p a/b` → 建立 watch → `mv a c` → `touch c/b/f`，断言收到 `c/b/f` 事件（修复前根据因果链预期收不到任何事件）。
 
 ---
 
@@ -183,6 +231,8 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 - [ ] serde wire format 单测：文件名含 `"`、`\n`、U+0008、中文 —— 输出可被 `serde_json::from_str` 回读（直接回归问题 5）
 - [ ] 去抖合并纯函数单测：同路径多事件合并为一；pending 超限转单条 `resync`
 - [ ] 注册失败路径有 `warn!` 且下发 `degraded`
+- [ ] **rename / move-in 补注册（ADR-8）**：`mkdir -p a/b` → watch → `mv a c` → `touch c/b/f` 收到 `c/b/f` 事件；从 watch 树外 `mv` 入一个含子目录的目录，其深层文件变动也能收到
+- [ ] rename 补注册不重复消耗 watch 预算（ADR-8 翻盘条件）
 
 **前端**
 - [ ] `FileChangeEvent.kind` 扩展后 `tsc` 零新增错误
@@ -204,10 +254,11 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 
 | 风险 | 缓解 |
 |---|---|
-| ADR-4 的语义变更用户可察觉（`dist/` 不再刷新） | 唯一不可静默回退项 → 需事前拍板 + 写入 CHANGELOG；若反馈为负，`HEAVY_DIRS` 移除 `dist`/`build` 即可回退（单一真源使回退是一行改动） |
+| ADR-4 的语义变更用户可察觉（`dist/` 不再刷新）—— **仅在选「一次到位」时存在**，选分批则首批无可感变更 | 唯一不可静默回退项 → 需事前拍板 + 写入 CHANGELOG；若反馈为负，`HEAVY_DIRS` 移除 `dist`/`build` 即可回退（单一真源使回退是一行改动） |
 | ADR-6 引入 ≤100ms 刷新延迟 | 人眼阈值下；若感知迟滞降到 50ms（常量单点可调） |
 | ADR-2 的非 Linux 分支缺真机验证 | 本机无 macOS/Windows 环境 → 只能保证 `cargo check --target` 通过，行为正确性依赖 notify 原生 `Recursive` 语义（分流后即回到前序修复之前的、已长期运行的代码路径，风险低于现状） |
-| BFS 手写替代 `walkdir` 引入新遍历 bug | 上限截断 + 浅层优先两条断言直接覆盖遍历语义；符号链接不跟随（与 `walkdir` 默认一致）需显式测 |
+| BFS 手写替代 `walkdir` 引入新遍历 bug | 上限截断 + 浅层优先两条断言直接覆盖遍历语义；`DirEntry::file_type()` 不跟随 symlink → 天然无 loop 风险（与 `walkdir` 默认一致），仍需显式测 |
+| ADR-8 扩大钩子匹配面，可能对同一目录双重注册 | notify 对已注册路径合并 watchmask（`inotify.rs:439-441`），预计不双计；列入验收清单显式验证 |
 
 ---
 
@@ -219,12 +270,13 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 | `docs/dev/debug-patterns/resource-lifecycle.md` 模式 8 | 2026-08-16 案例补一句结论：**剪枝 ≠ 有界，硬上限才是**；补跨平台后端代价差异 |
 | `docs/dev/performance-and-safety.md` §P1 | 登记两个新界：`MAX_WATCH_DIRS`、`MAX_PENDING` |
 | `AGENTS.md` 文档索引 | 新增本 plan 条目（`scripts/check-doc-index.sh` 会校验存在性与 git 跟踪） |
-| `CHANGELOG.md` | 一条：文件监控有界化 + 事件去抖 + 非法 JSON 修复；**须写明 `dist`/`build` 不再监控的行为变更** |
+| `CHANGELOG.md` | 一条：文件监控有界化 + 事件去抖 + 非法 JSON 修复；若含 `dist`/`build`（一次到位路线）**须写明该行为变更** |
 
 ---
 
 ## 待拍板事项
 
-1. **ADR-4 行为变更**：watch 不再监听 `dist` / `build` / `venv` / `vendor` —— 接受吗？
-2. **ADR-1 顺带取舍**：手写 BFS 换掉 `walkdir` 依赖（少一个依赖），还是保留 `walkdir` 用其 API 实现 BFS？
-3. **Phase 5**（目录 rename 映射失配）本轮验证还是完全另排？
+1. **ADR-4 分批 vs 一次到位**：先只加 `venv`/`vendor`（推荐，收益无争议），还是连 `dist`/`build` 一次加完（需接受「未实测推断改用户可见语义」）？
+2. **ADR-1 路线**：「手写 BFS + 移除 `walkdir`」（推荐，前提是认可 `~` 作项目根是真实场景），还是否决项 (d)「从入口限制超大项目根」（更接近根因，但限制用户行为，选它则 BFS 与 walkdir 取舍一同消失）？
+
+> 原第 3 项（Phase 5 是否本轮做）**已决**：源码证据把它升为 P0 且修法极小，并入 Phase 1（ADR-8）。
