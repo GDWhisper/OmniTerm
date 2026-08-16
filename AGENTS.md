@@ -114,6 +114,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md` | 修改移动端手势（滑动切 tab/触摸滚动/长按）、MobileKeyBar、状态栏交互前参考其 ADR（D1-D6） | ADR 决策被推翻或翻盘条件触发时更新 |
 | `docs/dev/plans/2026-08-10-acp-session-reliability.md` | 修改 `turn_accumulator.rs` / `chat_persistence.rs` / `useAcpChat.ts` / `ChatView.tsx` 任一项前**必读**（P0 blocks 污染修复、cooked 收敛、text 限界、触顶锁、会话上限的决策与实施分期） | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/plans/2026-08-13-port-forward-proxy.md` | 修改 `src/proxy/`、`src/api/mod.rs`（路由挂载）、`src/main.rs`（`AppState`）、`frontend/vite.config.ts`（代理）、`frontend/src/utils/proxyUrl.ts`、终端/聊天链接重写逻辑任一项前**必读**（路径前缀 D1、安全边界 D2 硬编码 127.0.0.1+端口白名单、header 重写表 D6、有界缓冲 D5、多实现差异） | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
+| `docs/dev/plans/2026-08-16-files-watch-hardening.md` | 修改 `src/api/files_watch.rs`、`src/fs/mod.rs` 的 ignore 规则（`SKIP_DIRS` / `search_recursive`）、`frontend/src/hooks/useFileWatcher.ts`、`FileManager.tsx` 文件变更刷新链路任一项前**必读**（watch 数硬上界 ADR-1、手动递归按平台分流 ADR-2、ignore 单一真源 ADR-4 的决策与分期） | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `.github/workflows/ci.yml` | 修改 CI 门禁（触发分支、检查项、audit job）前 | 调整 CI 检查项、分阶段启用 clippy/fmt/deny、拆分 job |
 | `scripts/hooks/pre-commit` | 修改提交前检查前 | 调整 pre-commit 纳入的检查（lint/fmt/clippy/test） |
 | `deny.toml` / `rustfmt.toml` | 修改依赖审计或格式化基线前 | 调整许可证白名单、格式化选项 |
