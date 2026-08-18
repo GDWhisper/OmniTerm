@@ -89,3 +89,14 @@
 
 **案例证据**：
 - 2026-08-07 ACP ExitPlanMode 权限请求长挂后 banner 消失、会话卡死：hydrate 门控缓冲把 `turn_state{active:false}` 延迟回放，晚于立即派发的 `permission_request` → 回放触发 `markDone` 清掉 `pendingPermission`（本地收尾否决了后端仍挂着的审批）。修复：`markDone` 不再清 `pendingPermission`，合法清除只剩 `permission_resolved` 广播与 `markError`。
+
+---
+
+## 模式 9：慢速拖动位移未达 slop 也会滚动内容——滚动检测必须看 scrollTop 而非触点位移
+
+**React-手势滚动**：长按/滑动分流等手势判定，用「触点位移 > 阈值」识别滚动不可靠——慢速拖动（每帧位移 < slop，如 10px）时内容已滚动但位移始终不达标，手指停住后长按计时器到期误触（用户「只是滑动上下文」却弹出功能菜单，且关闭后再次轻触静止循环复现）。**滚动的最可靠信号是滚动容器 scrollTop 变化 / scroll 事件，与触点位移大小无关**：位移未达阈值时补查 touchstart 时缓存的最近滚动容器（overflow-y auto/scroll）scrollTop，变化即取消长按；滚动停止后的新触摸加冷却期（如 400ms）不启动计时，覆盖「滚动后轻触静止」误触。scroll 事件不冒泡但捕获阶段在 window 上可统一监听（`{capture:true}`），模块级注册一次即可覆盖所有滚动容器，无需逐消费方传信号。
+
+**适用**：移动端长按/拖拽/滑动手势分流；「滚动/滑动后误触 X、关掉又循环触发」类 bug；长按取消逻辑只依赖位移阈值的实现。
+
+**案例证据**：
+- 2026-08-18 移动端滑动聊天上下文时手指停在气泡上触发功能菜单、关闭后按任意气泡又触发：慢速拖动 scrollTop 已变但位移 < 10px，`useLongPress` 计时器未取消。修复：scrollTop 变化即取消 + 滚动后 400ms 冷却；终端长按粘贴菜单同修复。

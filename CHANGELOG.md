@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 - (2026-08-16 15:10) `[backend]` `[frontend]` `/files/watch` SSE 事件去抖：后端 100ms 窗口按 `(kind, path)` 去重合并后批量下发，合并缓冲超限或广播溢出时下发 `resync` 全量重同步；前端收到事件 500ms 防抖刷新一次，切到 GIT tab 时断开 SSE（后端 watcher 注销）——降低「单次保存多个事件 → 多次全量列表请求」的放大，面板不可见时不再持续 watch 目录树（`src/api/files_watch.rs`、`frontend/src/hooks/useFileWatcher.ts`、`frontend/src/components/FileManager/FileManager.tsx`）
 
+### Fixed
+
+- (2026-08-18 13:58) `[frontend]` 修复移动端滑动聊天上下文时长按误触气泡功能菜单：慢速拖动（位移未达取消阈值）时内容已滚动但长按计时器未取消，手指停住即弹菜单且关闭后循环复现——滚动容器 scrollTop 变化即取消长按（与位移大小无关），滚动停止后 400ms 冷却期内不启动新长按（`frontend/src/hooks/useLongPress.ts`）
+
 ---
 
 ## [0.2.15] - 2026-08-16
