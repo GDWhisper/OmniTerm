@@ -15,7 +15,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
-import { decodeStoredBlocks } from '../../hooks/useAcpChat'
+import { decodeStoredBlocks, isRawFrameWrapper } from '../../hooks/useAcpChat'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -37,9 +37,15 @@ interface StoredMessage {
  */
 function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
   return rows.map((m) => {
+    // rawStored：blocks 来源为后端原始帧包裹（{"v":1,"frames":[...]}）且解码出
+    // 非空结构。useAcpChat 在 hydrate 落定后据此做带 dbId 的 cooked 回写收敛残留
+    // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
+    // 兜底会覆盖后端原始帧，堵死未来分类器升级后重新解释历史的路径。
+    let rawStored = m.blocks ? isRawFrameWrapper(m.blocks) : false
     let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
     if (!blocks || blocks.length === 0) {
       blocks = [{ type: 'text' as const, text: m.text }]
+      rawStored = false
     }
     return {
       id: m.id,
@@ -49,6 +55,7 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       role: m.role as ChatMessage['role'],
       text: m.text,
       blocks,
+      rawStored,
       createdAt: new Date(m.createdAt).getTime(),
       // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
       streaming: m.status === 'streaming',

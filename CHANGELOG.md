@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-18 16:45) `[frontend]` 修复 ACP 会话幽灵行：turn 结束时前端不在线（切走/关页面）→ 该行停在原始帧包裹态（体积比 cooked 大两个数量级）；页面刷新时若 agent 重放帧先于历史加载落定到达，store 为空窗口内用重建消息（无 DB 行 id）覆盖历史并全量写回，后端按文本匹配失败即静默插入重复的 assistant 消息——重放帧纳入 hydrate 门控（历史先落定、重放被抑制），hydrate 后 RAW 残留行以带行 id 的 cooked 形态回写收敛（UPDATE 该行不 INSERT）（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-08-18 16:05) `[backend]` `[frontend]` 权限请求 30 分钟无人审批被 reaper 强制回收（cancel + kill）时，在聊天会话写入并广播一条 system 消息告知用户回收原因（此前 agent 静默消失，权限弹窗只推给对应会话的 WS 客户端、切走即不知情）：`chat_messages.role` 放宽为 `user/assistant/system`（表重建 migration）、reaper 注入 db 落库 + 经 `system_message` WS 帧实时推送、前端 hydrate 与实时两条路径均以 system 消息渲染（`migrations/20260818_chat_message_role_system.sql`、`src/acp/reaper.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-08-18 13:58) `[frontend]` 修复移动端滑动聊天上下文时长按误触气泡功能菜单：慢速拖动（位移未达取消阈值）时内容已滚动但长按计时器未取消，手指停住即弹菜单且关闭后循环复现——滚动容器 scrollTop 变化即取消长按（与位移大小无关），滚动停止后 400ms 冷却期内不启动新长按（`frontend/src/hooks/useLongPress.ts`）
 

@@ -230,9 +230,10 @@ Lifecycle:
 - **正文列限界（`text`）**（`MAX_TEXT_BYTES=1MiB` 总上限 / `TEXT_HEAD_BYTES=256KiB` 头部 / `TEXT_MARKER_MAX_BYTES=96` 标记预留 / 余下为尾窗）：**过去 `text` 是故意留的无界兜底，那本身就是缺口**——兜底路径不会因为叫兜底就不增长（实测单行 9,150,950 字符，所在会话只有 19 条消息），而每次防抖 flush 都重写整列，无界正文即 O(n²) 写放大（§P2）。超限策略是**头尾保留 + 中段显式标注**：渲染值为 `头部 + …（已省略 N 字符）… + 尾部`。三个不能简化的约束：（a）头部一旦封口就永久冻结，因为 UTF-8 边界会让它停在预算之下几字节，续填会把更新的文本插到更旧的文本之前；（b）尾窗按 1/4 预算的块摊还修剪，修剪到恰好等于预算则此后每个 chunk 都要 memmove 整个尾窗（又一个 O(n²)）；（c）单个 chunk 自身超预算时先裁再入缓冲，否则内存峰值等于 chunk 大小、上限形同虚设（与 `MAX_FRAME_BYTES` 存在的理由同构）。切割一律走 `floor_char_boundary` / `ceil_char_boundary`——切在多字节字符中间会 panic，而这段代码跑在 ACP 连接任务上，会折断整条连接。**对前端的影响**：`ChatView.tsx` 的 `toChatMessages` 在 blocks 解不出结构时会回退到 `text`，所以兜底文本在超长正文下**可能不完整但一定可读**（标记是给人看的，不是内部哨兵）。
 - **blocks 列格式**：streaming 与 complete 行的 `blocks` 都存**原始帧包裹** `{"v":1,"frames":[<update>,...]}`（`finalize` 只翻 status，不重写 blocks）；前端复用现有 TS 分类器还原成结构化 blocks，杜绝 Rust 侧重复分类逻辑（AGENTS.md §8 / 禁 Copy-Paste）。cooked `ContentBlock[]` 数组用于 user 图片消息、**turn 结束后的回写**、`load_session` 重放写回、legacy 行、**`role='system'` 的系统消息行**（`[{type:'system',label}]`，migration `20260818_chat_message_role_system.sql` 放宽 CHECK 约束后由 reaper 权限超时回收写入）——判别：数组=cooked，对象含 `frames`=原始帧。前端 `messagesToSyncPayload` 过滤 `user|assistant`，system 行从不被前端回写（后端行即真相源）。
   > **存量数据**：上述字节上限只作用于新写入。修复前产生的超大行（本地实测最大单行 9MB）仍会让那些历史会话首次打开时慢，需要时另做一次性截断迁移。
-- **存储格式两态与收敛时机**：streaming 期间 `blocks` 是**原始帧** `{"v":1,"frames":[...]}`；前端用 **cooked** `ContentBlock[]` 经 `sync_messages` 覆盖它。两者体积差两个数量级——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个 `tool_call`，每帧重复携带的 `rawInput` 副本只剩一份（实测：cooked 行最大 114KB，同库未被覆盖的原始帧行达 9,150,950 字符）。两个收敛触发点：
+- **存储格式两态与收敛时机**：streaming 期间 `blocks` 是**原始帧** `{"v":1,"frames":[...]}`；前端用 **cooked** `ContentBlock[]` 经 `sync_messages` 覆盖它。两者体积差两个数量级——cook 把同一 `toolCallId` 的上千个 `tool_call_update` 折叠成一个 `tool_call`，每帧重复携带的 `rawInput` 副本只剩一份（实测：cooked 行最大 114KB，同库未被覆盖的原始帧行达 9,150,950 字符）。三个收敛触发点：
   - **`prompt_done`（每 turn）**：帧携带本 turn 的 `row_id`，前端只发**本 turn 一条** payload 按行 id 回写。不发全量——每 turn 重写整个会话是 O(m²) 写放大。短 turn 可能抢在防抖写之前 sync（影响 0 行），该行留在原始帧态。
   - **`replay_end`（手动 restore，罕见）**：全量写回，无 id 走文本匹配。
+  - **hydrate 落定（每会话一次，2026-08-18 起）**：turn 结束时前端 WS 不在线（切走/关页面）的 RAW 残留行由下一次 hydrate 收敛——前端对原始帧包裹行解码出 cooked blocks 后，带 dbId 回写（走 id 路径，UPDATE 该行 blocks 不 INSERT）。streaming 行跳过：后端累积器仍在写它，`prompt_done` 的正常路径会接管。
 
   前端 cook **不是重复劳动**而是唯一的体积收敛路径；但窗口上限（`MAX_BLOCKS_BYTES` / `MAX_FRAME_BYTES`）仍是必需兜底——前端不在线时（用户关了浏览器而 agent 继续跑）无人 cook。代价：cooked 覆盖后原始帧不可恢复，失去「分类器升级后重新解释旧历史」的能力（已明确接受，见计划 D2）。详见 `docs/reference/chat-history-loading-comparison.md`。
 - **进行中行**：`chat_messages.status`（`streaming` | `complete`，migration `20260730_chat_message_status.sql`，字面默认值保持旧行有效）+ `last_seq`。一行一 turn，懒创建避免空气泡。防抖 writer（trailing ~250ms + max-latency ~1s）合并突发 `UPDATE`；`upsert_streaming_message`（INSERT..ON CONFLICT(id) DO UPDATE）/ `finalize_message`。DB sink 经 `attach_persistence(db, db_session_id)` 附加，仅在真实注册点（create session、load restore）调用；能力探针不 attach → fold 为内存 no-op（不改 spawn 签名）。
@@ -259,6 +260,7 @@ Lifecycle:
 | 无 `id`（replay 重建） | `(session, role, text)` 的候选行按 `(created_at, id)` 取一条 | INSERT 新行 | 只 `blocks` |
 
 - **一条 payload 只消费一行**，且同一次调用内已消费的行 id 不再命中。此前 `UPDATE ... WHERE session_id AND role AND text` 无行限定，把 text 相同的所有行一次覆盖成同一份 `blocks`（dev 库实测：14 行 `assistant`/"OK" 只剩 1 份 distinct blocks）。**匹配键不唯一等于没有约束**，与「上限维度选错」「淘汰轴选错」同族。
+- **无 id 的 text 匹配还依赖「两侧 text 语义恰好一致」的易漂移不变式**：后端累积器 `text` 含 tool 流式描述段，前端 cook 折叠后重建消息的 `text` 是纯文本，两侧不等价即静默 INSERT 重复行（2026-08-18 幽灵行根因，见 `docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md`）——**匹配路径失控同样等于没有约束**。该路径只应由 `replay_end` 触发（罕见；且 replay 帧已纳入 hydrate 门控，hydrate 落定后 store 有带 dbId 的权威消息 → suppressReplay → 不再触发全量写回）。新增其它无 id 触发点前先确认 text 语义两侧恒等。
 - **带 id 的路径不更新 `text`**：`text` 的权威在后端累积器，前端只拥有 cooked `blocks`。
 - **未命中即跳过**是刻意的：短 turn 可能抢在防抖写之前 sync，此时行还不存在——留在原始帧态可自愈，猜一行更新则是不可逆的错误赋值。
 

@@ -4,6 +4,7 @@ import {
   readQueuedFromStorageForSession,
   messagesToSyncPayload,
   turnToSyncPayload,
+  storedRawRowToSyncPayload,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
@@ -548,6 +549,60 @@ describe('turnToSyncPayload', () => {
     expect(turnToSyncPayload([mk({ role: 'assistant', blocks: [], streaming: true })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([], 'row-1')).toEqual([])
+  })
+})
+
+describe('storedRawRowToSyncPayload (方案 B：hydrate 后收敛 RAW 残留行)', () => {
+  function mk(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
+    return {
+      id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
+      text: overrides.text ?? '',
+      blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
+      createdAt: overrides.createdAt ?? 0,
+      streaming: overrides.streaming,
+      rawStored: overrides.rawStored,
+      role: overrides.role,
+    }
+  }
+
+  it('targets the real dbId and carries the cooked blocks (UPDATE, never INSERT)', () => {
+    const m = mk({
+      role: 'assistant',
+      text: 'partial',
+      dbId: 'row-1',
+      rawStored: true,
+      blocks: [
+        { type: 'text', text: 'partial' },
+        { type: 'tool_call', toolCallId: 'tc-1', title: 'read', status: 'completed' },
+      ],
+    })
+    expect(storedRawRowToSyncPayload(m)).toEqual({
+      id: 'row-1',
+      role: 'assistant',
+      text: 'partial',
+      blocks: JSON.stringify(m.blocks),
+    })
+  })
+
+  it('returns null for rows not marked rawStored (already cooked)', () => {
+    const m = mk({ role: 'assistant', text: 'cooked', dbId: 'row-1' })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('returns null without a dbId (locally minted id matches no DB row)', () => {
+    const m = mk({ role: 'assistant', text: 'x', rawStored: true })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('skips streaming rows — the in-progress turn is still owned by the accumulator', () => {
+    const m = mk({ role: 'assistant', text: 'in flight', dbId: 'row-2', rawStored: true, streaming: true })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('skips empty cooked blocks — a blank write would destroy the raw frames', () => {
+    const m = mk({ role: 'assistant', text: 'unparsed', dbId: 'row-3', rawStored: true, blocks: [] })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
   })
 })
 

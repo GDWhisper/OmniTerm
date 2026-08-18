@@ -1,6 +1,6 @@
 # React 与前端 — 调试模式
 
-覆盖：key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调。
+覆盖：key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调、后端权威状态清除、慢速拖动手势误触、写回定位键权威性。
 
 ---
 
@@ -100,3 +100,15 @@
 
 **案例证据**：
 - 2026-08-18 移动端滑动聊天上下文时手指停在气泡上触发功能菜单、关闭后按任意气泡又触发：慢速拖动 scrollTop 已变但位移 < 10px，`useLongPress` 计时器未取消。修复：scrollTop 变化即取消 + 滚动后 400ms 冷却；终端长按粘贴菜单同修复。
+
+---
+
+## 模式 10：写回定位键必须来自权威方，触发路径必须与权威数据到达串行化
+
+**React-写回定位**：把内存态写回持久层的路径，定位键必须来自权威方（DB 行 id / 后端下发的 `row_id`），不得依赖「两侧恰好一致」的派生不变式（如 text 相等）——这类不变式在任一语义漂移处静默失配，失配后果是**静默 INSERT 重复行**（无报错、无冲突，就是多一行，数据污染）。同时写回触发路径必须与权威数据到达（hydrate）串行化：权威数据未落定前的竞态窗口内，用无键重建数据覆盖权威态 + 全量写回 = 批量制造幽灵行。**匹配键选错或匹配路径失控，等于没有约束**——「有兜底匹配」比「没有匹配」更危险，因为兜底路径的错误不会报错。
+
+**适用**：任何「前端内存态 → 后端持久层」的写回/同步路径（sync 端点、blocks 回写、重建历史落库）；新增写回路径时先回答两个问题：定位键来自谁？权威数据何时可判定为已落定？（本项目的答案：定位键一律取 DB 行 id / `row_id`，权威数据以 hydrate 落定为准，replay 帧纳入 hydrate 门控。）
+
+**案例证据**：
+- 2026-08-18 幽灵行：replay 帧不在 `HYDRATE_GATED_FRAMES` → 刷新后 replay 先于 `GET /messages` 落定到达，store 空 → `commitReplay` 用重建消息（无 dbId）替换 → `replay_end` 全量 `syncToDb` 无 id 文本匹配，而后端累积 `text` 含 tool 流式描述、前端 cook 后为纯文本，语义已漂移 → 匹配失败 INSERT 重复 assistant 行。修复：replay 帧纳入 hydrate 门控（suppress）+ hydrate 落定后 RAW 残留行带 dbId 回写（`storedRawRowToSyncPayload`）。
+- 2026-08-11 同族：后端 `UPDATE ... WHERE role AND text` 无行限定 + text 无唯一性 → 14 行同 text 的 `blocks` 被一次覆盖成 1 份（匹配键不唯一 = 无约束）。修复：payload 带 `id` 精确匹配，无 id 时逐行消费且限定单行。
