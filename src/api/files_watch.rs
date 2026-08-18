@@ -22,6 +22,16 @@ use crate::AppState;
 
 use super::files::{resolve_project_root, resolve_session_base};
 
+/// 事件去抖窗口（ADR-6）：短窗口内按 (kind, path) 去重合并后再批量下发，
+/// 消除「单次保存的 N 个 Modify → N 次前端全量 list」的请求放大。
+const DEBOUNCE_WINDOW_MS: u64 = 100;
+/// 合并窗口内 pending 表的上限：洪峰时不等待窗口，超限立即清空并下发单条
+/// `resync` 让前端全量重同步（有界缓冲红线，见 docs/dev/performance-and-safety.md §P1）。
+const MAX_PENDING: usize = 256;
+/// 全量重同步事件：消费跟不上（broadcast Lagged）或合并缓冲超限时的降级出口，
+/// 前端收到即触发一次全量刷新（ADR-6）。
+const RESYNC_EVENT: &str = r#"{"kind":"resync","path":""}"#;
+
 pub fn routes() -> Router<AppState> {
     Router::new().route("/files/watch", get(watch_files))
 }
@@ -142,13 +152,47 @@ async fn watch_files(
         // body drops the generator, which drops the guard, which drops the
         // channel sender, which wakes the blocking task via `Disconnected`.
         let _shutdown_guard = shutdown_tx;
+        // 事件去抖（ADR-6）：窗口内按 (kind, path) 去重合并后批量 yield，
+        // 降低「每事件一次全量 list」的请求放大。两个溢出源收敛到同一条
+        // `resync` 出口（合并缓冲超限 / broadcast Lagged）。
+        let mut pending: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Sleep 是 !Unpin，用 Pin<Box<..>> 持有以便 select 循环里重复 await
+        let mut flush_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
         loop {
-            match rx.recv().await {
-                Ok(data) => {
-                    yield Ok(Event::default().event("change").data(data));
+            tokio::select! {
+                recv = rx.recv() => match recv {
+                    Ok(data) => {
+                        let over = merge_pending(&mut pending, &mut seen, data, MAX_PENDING);
+                        if over {
+                            yield Ok(Event::default().event("change").data(RESYNC_EVENT));
+                            pending.clear();
+                            seen.clear();
+                            flush_timer = None;
+                        } else if flush_timer.is_none() {
+                            flush_timer = Some(Box::pin(tokio::time::sleep(Duration::from_millis(DEBOUNCE_WINDOW_MS))));
+                        }
+                    }
+                    // 消费跟不上导致广播溢出：数据已不连续，下发 resync 全量重同步
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        yield Ok(Event::default().event("change").data(RESYNC_EVENT));
+                        pending.clear();
+                        seen.clear();
+                        flush_timer = None;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
+                _ = async {
+                    if let Some(t) = &mut flush_timer {
+                        t.await;
+                    }
+                }, if flush_timer.is_some() => {
+                    for change in pending.drain(..) {
+                        yield Ok(Event::default().event("change").data(change));
+                    }
+                    seen.clear();
+                    flush_timer = None;
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     };
@@ -156,6 +200,22 @@ async fn watch_files(
     let boxed: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> = Box::pin(sse_stream);
 
     Sse::new(boxed).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
+}
+
+/// 把一条 change 消息去重合并进 pending 表。返回 `true` 表示已超 `max_pending`
+/// 上限，调用方应清空 pending 并下发单条 `resync`（洪峰时不等待窗口，直接全量
+/// 重同步，见 ADR-6）。同一 (kind, path) 产生相同的 JSON 字符串，以此作为去重键。
+/// 纯函数，便于单测。
+fn merge_pending(
+    pending: &mut Vec<String>,
+    seen: &mut std::collections::HashSet<String>,
+    change: String,
+    max_pending: usize,
+) -> bool {
+    if seen.insert(change.clone()) {
+        pending.push(change);
+    }
+    pending.len() >= max_pending
 }
 
 /// Convert a notify event into one or more JSON change messages.
@@ -306,6 +366,48 @@ mod tests {
         assert!(!is_ignored_dir(&base.join("src"), &base));
         assert!(is_ignored_dir(&base.join("node_modules").join("pkg"), &base));
         assert!(is_ignored_dir(&base.join(".git"), &base));
+    }
+
+    #[test]
+    fn merge_pending_dedups_same_kind_path() {
+        let mut pending: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let change = r#"{"kind":"modify","path":"a.txt"}"#.to_string();
+        assert!(!merge_pending(&mut pending, &mut seen, change.clone(), 10));
+        assert!(!merge_pending(&mut pending, &mut seen, change, 10));
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn merge_pending_keeps_distinct_kind_or_path() {
+        let mut pending: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let a = r#"{"kind":"create","path":"b.txt"}"#.to_string();
+        let b = r#"{"kind":"modify","path":"b.txt"}"#.to_string();
+        let c = r#"{"kind":"modify","path":"c.txt"}"#.to_string();
+        assert!(!merge_pending(&mut pending, &mut seen, a, 10));
+        assert!(!merge_pending(&mut pending, &mut seen, b, 10));
+        assert!(!merge_pending(&mut pending, &mut seen, c, 10));
+        assert_eq!(pending.len(), 3);
+    }
+
+    #[test]
+    fn merge_pending_flags_when_over_limit() {
+        let mut pending: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut over = false;
+        for i in 0..4 {
+            over = merge_pending(
+                &mut pending,
+                &mut seen,
+                format!(r#"{{"kind":"modify","path":"f{}.txt"}}"#, i),
+                3,
+            );
+        }
+        assert!(over);
+        // merge_pending 在 push 后检查超限并返回 true，调用方收到后负责清空；
+        // 若未清空继续插入，则最后一条也会入列（故 len 可为 4）
+        assert_eq!(pending.len(), 4);
     }
 
     #[test]

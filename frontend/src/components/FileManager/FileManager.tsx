@@ -61,6 +61,9 @@ function filesEqual(a: FileEntry[], b: FileEntry[]): boolean {
 }
 
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.rs', '.js', '.py', '.go', '.c', '.h'])
+// SSE 事件刷新防抖窗口：窗口内多次事件（后端去重后仍可能一次操作产生多条，
+// 如 create + rename）收敛为一次全量刷新，避免「每事件一次 list」的请求放大
+const SSE_REFRESH_DEBOUNCE_MS = 500
 
 function isCodeFile(name: string): boolean {
   const dot = name.lastIndexOf('.')
@@ -110,10 +113,13 @@ export function FileManager() {
   // Drawer height (sessionStorage, shared across sessions; default = 50% viewport)
   const [drawerHeight, setDrawerHeight] = useState(() => getInitialDrawerHeight('omniterm_drawer_height'))
 
+  // 面板可见性：切到 GIT tab 时 FileManager 仅 CSS 隐藏（组件仍挂载），
+  // 断开 SSE 让后端 watcher 注销，避免不可见时仍持续 watch 目录树
+  const rightPanelTab = useAppStore((s) => s.rightPanelTab)
   // SSE file watcher (replaces 3s polling)
   const { lastEvent: fileChangeEvent } = useFileWatcher({
     sessionId: activeSessionId,
-    enabled: !!activeSessionId,
+    enabled: !!activeSessionId && rightPanelTab === 'files',
   })
 
   const [files, setFiles] = useState<FileEntry[]>([])
@@ -273,10 +279,21 @@ export function FileManager() {
     return () => ro.disconnect()
   }, [nameColAuto, fileDragTableRef])
 
-  // SSE-driven refresh: when a file change event arrives, silently refresh the file list
+  // SSE-driven refresh: debounce 防抖，把窗口内多次事件收敛为一次全量刷新
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (!fileChangeEvent || !activeSessionId) return
-    fetchFiles(undefined, undefined, undefined, true)
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null
+      fetchFilesRef.current(undefined, undefined, undefined, true)
+    }, SSE_REFRESH_DEBOUNCE_MS)
+    return () => {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current)
+        refreshTimerRef.current = null
+      }
+    }
   }, [fileChangeEvent, activeSessionId])
 
   // Save drawer height to sessionStorage

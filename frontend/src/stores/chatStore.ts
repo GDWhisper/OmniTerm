@@ -195,6 +195,16 @@ export interface ChatMessage {
    * persisted; lost on refresh, which is acceptable since both messages are).
    */
   edited?: boolean
+  /**
+   * True when this row's `blocks` came from the backend accumulator's raw-frame
+   * wrapper (`{"v":1,"frames":[...]}`) and decoded to a non-empty structure.
+   * Set only by the hydrate conversion (`ChatView.toChatMessages`); used by
+   * `useAcpChat`'s hydrate-settled effect to write the cooked blocks back with
+   * the real `dbId` (see `storedRawRowToSyncPayload`). Rows whose frames
+   * decoded to nothing are left unmarked — overwriting them with the text
+   * fallback would destroy frames a future classifier could interpret.
+   */
+  rawStored?: boolean
 }
 
 interface ChatSessionState {
@@ -1163,4 +1173,24 @@ export function turnToSyncPayload(
       blocks: JSON.stringify(blocks),
     },
   ]
+}
+
+/**
+ * Build the sync payload that converges a RAW-stored row left behind by a turn whose
+ * `prompt_done` never reached a live frontend (user switched away / closed the page).
+ * The row's `blocks` are still the raw-frame wrapper; hydrate decoded them to cooked
+ * blocks, and writing those back with the real `dbId` updates exactly that row and
+ * inserts nothing (id path in `chat_persistence::sync_messages`).
+ *
+ * Skipped cases:
+ * - streaming rows — the backend accumulator is still writing raw frames for the
+ *   in-progress turn; `prompt_done`'s `turnToSyncPayload` covers them once it ends.
+ * - empty cooked `blocks` — a blank write would only destroy the raw frames (same
+ *   rule as `turnToSyncPayload`).
+ */
+export function storedRawRowToSyncPayload(m: ChatMessage): SyncMessagePayload | null {
+  if (!m.rawStored || !m.dbId) return null
+  if (m.streaming) return null
+  if (m.blocks.length === 0) return null
+  return { id: m.dbId, role: m.role, text: m.text, blocks: JSON.stringify(m.blocks) }
 }

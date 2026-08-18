@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 export interface FileChangeEvent {
-  kind: 'create' | 'modify' | 'delete' | 'rename'
+  kind: 'create' | 'modify' | 'delete' | 'rename' | 'resync'
   path: string
   newPath?: string
 }

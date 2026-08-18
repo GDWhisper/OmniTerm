@@ -362,6 +362,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn system_role_message_can_be_inserted_and_read_back() {
+        let db = fresh_db().await;
+
+        // migration 放宽 CHECK 约束后，reaper 的权限超时回收告知（role='system'）可落库
+        insert_message(
+            &db,
+            SESSION,
+            "system",
+            "权限请求 30 分钟未获响应，系统已自动取消该请求并回收会话",
+            Some(r#"[{"type":"system","label":"权限请求 30 分钟未获响应"}]"#),
+        )
+        .await
+        .expect("role='system' insert must succeed after migration");
+
+        let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
+        assert!(
+            page.rows.iter().any(|(role, text, ..)| {
+                role == "system" && text.starts_with("权限请求 30 分钟未获响应")
+            }),
+            "hydrate 应能回读 system 消息"
+        );
+    }
+
+    #[tokio::test]
     async fn newest_page_is_oldest_first_and_reports_more() {
         let db = fresh_db().await;
         seed(&db, 25, 0).await;

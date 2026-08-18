@@ -4,6 +4,7 @@ import {
   readQueuedFromStorageForSession,
   messagesToSyncPayload,
   turnToSyncPayload,
+  storedRawRowToSyncPayload,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
@@ -422,7 +423,7 @@ describe('messagesToSyncPayload', () => {
     ])
   })
 
-  it('drops system messages (UI-only events, not in DB)', () => {
+  it('drops system messages (backend writes them; frontend never syncs them back)', () => {
     const msgs = [
       mkMsg({ role: 'user', text: 'hi' }),
       mkMsg({ role: 'system', text: '[ToolCall]' }),
@@ -548,5 +549,82 @@ describe('turnToSyncPayload', () => {
     expect(turnToSyncPayload([mk({ role: 'assistant', blocks: [], streaming: true })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([], 'row-1')).toEqual([])
+  })
+})
+
+describe('storedRawRowToSyncPayload (方案 B：hydrate 后收敛 RAW 残留行)', () => {
+  function mk(overrides: Partial<ChatMessage> & { role: ChatMessage['role'] }): ChatMessage {
+    return {
+      id: overrides.id ?? `m-${Math.random()}`,
+      dbId: overrides.dbId,
+      text: overrides.text ?? '',
+      blocks: overrides.blocks ?? [{ type: 'text', text: overrides.text ?? '' }],
+      createdAt: overrides.createdAt ?? 0,
+      streaming: overrides.streaming,
+      rawStored: overrides.rawStored,
+      role: overrides.role,
+    }
+  }
+
+  it('targets the real dbId and carries the cooked blocks (UPDATE, never INSERT)', () => {
+    const m = mk({
+      role: 'assistant',
+      text: 'partial',
+      dbId: 'row-1',
+      rawStored: true,
+      blocks: [
+        { type: 'text', text: 'partial' },
+        { type: 'tool_call', toolCallId: 'tc-1', title: 'read', status: 'completed' },
+      ],
+    })
+    expect(storedRawRowToSyncPayload(m)).toEqual({
+      id: 'row-1',
+      role: 'assistant',
+      text: 'partial',
+      blocks: JSON.stringify(m.blocks),
+    })
+  })
+
+  it('returns null for rows not marked rawStored (already cooked)', () => {
+    const m = mk({ role: 'assistant', text: 'cooked', dbId: 'row-1' })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('returns null without a dbId (locally minted id matches no DB row)', () => {
+    const m = mk({ role: 'assistant', text: 'x', rawStored: true })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('skips streaming rows — the in-progress turn is still owned by the accumulator', () => {
+    const m = mk({ role: 'assistant', text: 'in flight', dbId: 'row-2', rawStored: true, streaming: true })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+
+  it('skips empty cooked blocks — a blank write would destroy the raw frames', () => {
+    const m = mk({ role: 'assistant', text: 'unparsed', dbId: 'row-3', rawStored: true, blocks: [] })
+    expect(storedRawRowToSyncPayload(m)).toBeNull()
+  })
+})
+
+describe('pushSystemEvent (后端系统通知：权限超时回收告知)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('appends a system message with the given label', () => {
+    useChatStore.getState().hydrate('s1', [], null)
+    useChatStore.getState().pushSystemEvent('s1', '权限请求超时')
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('system')
+    expect(msgs[0].blocks).toEqual([{ type: 'system', label: '权限请求超时' }])
+    expect(msgs[0].text).toBe('[权限请求超时]')
+  })
+
+  it('is excluded from sync payloads (backend rows are authoritative for system rows)', () => {
+    useChatStore.getState().hydrate('s1', [], null)
+    useChatStore.getState().pushSystemEvent('s1', '权限请求超时')
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(messagesToSyncPayload(msgs)).toEqual([])
   })
 })

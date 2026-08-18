@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, turnToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -25,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -39,6 +39,8 @@ interface ServerFrame {
   exit_code?: number | null
   image?: boolean
   agent_name?: string
+  /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
+  label?: string
   /** session_update: turn 内单调 seq（config/commands/重放帧无此字段），用于重连去重。 */
   seq?: number
   /** turn_state: 连接时是否有进行中的 assistant turn。 */
@@ -52,13 +54,20 @@ interface ServerFrame {
 }
 
 // hydrate 落定前需缓冲的帧：这些会改动消息列表，若抢在 GET /messages 之前建消息，
-// 会让 hydrate 因 messages 非空而 bail（丢历史）。其余帧不触碰 hydrate 守卫。
-const HYDRATE_GATED_FRAMES: ReadonlySet<ServerFrame['type']> = new Set([
+// 会让 hydrate 因 messages 非空而 bail（丢历史）。replay_start/replay_end 也在其列：
+// 页面刷新后若 replay 帧先于 hydrate 落定到达，store 仍空 → suppressReplay 判 false
+// → commitReplay 用重建消息（无 dbId）替换 store → replay_end 全量 syncToDb → 无 id
+// 文本匹配失败 → INSERT 幽灵行（2026-08-18 计划 P0 根因链 2）。门控后 hydrate 先落定，
+// store 已有带 dbId 的权威历史 → replay 被 suppress：内容帧丢弃、不 commitReplay 不
+// syncToDb。其余帧不触碰 hydrate 守卫。
+export const HYDRATE_GATED_FRAMES: ReadonlySet<ServerFrame['type']> = new Set([
   'session_update',
   'turn_snapshot',
   'turn_state',
   'prompt_done',
   'prompt_error',
+  'replay_start',
+  'replay_end',
 ])
 
 const VENDOR_AGENT_PHASE_KEYS: ReadonlyArray<readonly [string, string]> = [
@@ -528,6 +537,25 @@ function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
   return buildReplayMessages(actions).flatMap((m) => m.blocks)
 }
 
+/** 判定已 parse 的值是否为后端累积器的原始帧包裹形态（`{"v":1,"frames":[...]}`）。 */
+function isFrameWrapperParsed(parsed: unknown): boolean {
+  return !!parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['frames'])
+}
+
+/** 判定 blocks 字符串是否为后端累积器的原始帧包裹（`{"v":1,"frames":[...]}`）。
+ *  `decodeStoredBlocks` 会把包裹解码成 cooked blocks，解码后无法反推来源——hydrate
+ *  转换（ChatView `toChatMessages`）用此判定标记 RAW 残留行，方案 B 据此做带 id 的
+ *  cooked 回写（见 2026-08-18 计划 P0）。 */
+export function isRawFrameWrapper(raw: string): boolean {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return false
+  }
+  return isFrameWrapperParsed(parsed)
+}
+
 /** hydrate 入口：cooked 数组原样返回；原始帧包裹解码；未知形状返回 null（调用方回退纯文本）。 */
 export function decodeStoredBlocks(raw: string): ContentBlock[] | null {
   let parsed: unknown
@@ -537,7 +565,7 @@ export function decodeStoredBlocks(raw: string): ContentBlock[] | null {
     return null
   }
   if (Array.isArray(parsed)) return parsed as ContentBlock[]
-  if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['frames'])) {
+  if (isFrameWrapperParsed(parsed)) {
     return rawFramesToBlocks(raw)
   }
   return null
@@ -779,6 +807,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 与 tmux 链路的 attention_reason=error 表现一致
           attention.fire(sid, sid, 'error')
           break
+        case 'system_message':
+          // 后端主动产生的系统通知（权限超时回收告知等）：以 system 消息显示在聊天流。
+          // 断线期间产生的通知已由后端落库，hydrate 补上；此帧只服务在线连接。
+          if (frame.label) {
+            useChatStore.getState().pushSystemEvent(sid, frame.label)
+          }
+          break
         case 'error':
           // 重放中途失败（如 load_failed 时后端以 error 代替 replay_end）：
           // 终止 staging 丢弃已攒帧，保留现有消息，解除「恢复中」状态。
@@ -956,9 +991,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         }
         if (import.meta.env.DEV) console.debug('[ACP RX]', frame.type, ev.data)
 
-        // hydrate 门控：GET /messages 落定前，会改动消息列表的帧先入缓冲按序回放，
-        // 避免抢跑 hydrate。其余帧（capabilities/process_alive/terminal_activity/
-        // permission_request/error/replay_*）不触碰 hydrate 守卫，即时派发。
+        // hydrate 门控：GET /messages 落定前，会改动消息列表的帧（session_update /
+        // turn_snapshot / turn_state / prompt_* / replay_start / replay_end，见
+        // HYDRATE_GATED_FRAMES）先入缓冲按序回放，避免抢跑 hydrate。其余帧
+        // （capabilities/process_alive/terminal_activity/permission_request/error）
+        // 不触碰 hydrate 守卫，即时派发。
         if (!hydratedRef.current && HYDRATE_GATED_FRAMES.has(frame.type)) {
           preHydrateBuffer.current.push(frame)
           return
@@ -1046,12 +1083,28 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   useEffect(() => {
     if (!hydrated) return
     hydratedRef.current = true
+    // 方案 B（2026-08-18 计划 P0）：hydrate 落定后，把 RAW 残留行收敛成 cooked。
+    // 残留来源：turn 结束时前端 WS 不在线（切走/关页面），prompt_done 的
+    // syncTurnToDb 无人执行，该行停在原始帧包裹态（{"v":1,"frames":[...]}，
+    // 体积比 cooked 大两个数量级）。hydrate 已把包裹解码成 cooked blocks，此处带
+    // dbId 回写——后端 id 路径只 UPDATE blocks 不 INSERT（不产生幽灵行）。streaming
+    // 行跳过：后端累积器仍在写它，prompt_done 的正常路径会接管。每会话只执行一次。
+    const sid = sessionIdRef.current
+    if (sid) {
+      const msgs = useChatStore.getState().states[sid]?.messages ?? []
+      const payload: SyncMessagePayload[] = []
+      for (const m of msgs) {
+        const entry = storedRawRowToSyncPayload(m)
+        if (entry) payload.push(entry)
+      }
+      postSync(sid, payload)
+    }
     const buffered = preHydrateBuffer.current
     if (buffered.length === 0) return
     preHydrateBuffer.current = []
     const handler = frameHandlerRef.current
     if (handler) for (const f of buffered) handler(f)
-  }, [hydrated])
+  }, [hydrated, postSync])
 
   const sendPrompt = useCallback((text: string, images?: ImageAttachment[]) => {
     const ws = wsRef.current

@@ -731,8 +731,9 @@ fn main() -> anyhow::Result<()> {
             // `state.acp_idle_recycle_secs` 注入（settings 表可运行时热更新）。
             let reaper_supervisor = state.acp_supervisor.clone();
             let reaper_idle_secs = state.acp_idle_recycle_secs.clone();
+            let reaper_db = state.db.clone();
             tokio::spawn(async move {
-                acp::reaper::run_reaper(reaper_supervisor, reaper_idle_secs).await;
+                acp::reaper::run_reaper(reaper_supervisor, reaper_db, reaper_idle_secs).await;
             });
             let frontend_dir =
                 std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
