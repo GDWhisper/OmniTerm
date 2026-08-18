@@ -521,8 +521,32 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
 // 文本完整性由消息的 text 字段兜底，截断的只是历史 UI 结构窗口。
 const MAX_BLOCKS_FRAMES = 2000
 
-/** 把 `{"v":1,"frames":[...]}` 原始帧包裹还原成结构化 blocks（分类 → buildReplayMessages）。 */
-function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
+/**
+ * 后端累积器帧窗口按字节/帧数双限界、从头部驱逐（turn_accumulator.rs MAX_BLOCKS_BYTES），
+ * 流式中刷新时早期正文只活在 text 列里。窗口帧重建出的正文（appendText 拼接）若恰好是
+ * 全量 text 的精确后缀，差集即被驱逐的前缀，补成纯文本块。
+ *
+ * 单一守卫 `endsWith` 即充分：text 被 BoundedText 头尾折叠时，窗口 text 若仍是渲染值的
+ * 后缀则照补——前缀带上用户可读的「已省略 N 字符」标记，text 列是唯一真相源；尾窗摊还
+ * 修剪裁掉了比帧窗口更少的正文、或 text 语义漂移（见 2026-08-18 幽灵行根因 3）时后缀
+ * 失配 → 不补。宁缺勿错：绝不补出错序/重复内容。appendText 取自与后端 agent_message_text
+ * 同源的 AgentMessageChunk 分类，失配由守卫兜底。
+ */
+function prependEvictedProse(blocks: ContentBlock[], actions: SessionUpdateAction[], fullText: string | undefined): ContentBlock[] {
+  if (!fullText || blocks.length === 0) return blocks
+  let windowText = ''
+  for (const a of actions) {
+    if (a.kind === 'appendText') windowText += a.text
+  }
+  if (!fullText.endsWith(windowText)) return blocks
+  const prefix = fullText.slice(0, fullText.length - windowText.length)
+  if (!prefix.trim()) return blocks
+  return [{ type: 'text', text: prefix }, ...blocks]
+}
+
+/** 把 `{"v":1,"frames":[...]}` 原始帧包裹还原成结构化 blocks（分类 → buildReplayMessages）。
+ *  传入后端全量 `text`（hydrate 的 text 列 / turn_snapshot 的 text）时补被驱逐的正文前缀。 */
+function rawFramesToBlocks(wrapperJson: string, fullText?: string): ContentBlock[] {
   let parsed: unknown
   try {
     parsed = JSON.parse(wrapperJson)
@@ -534,7 +558,8 @@ function rawFramesToBlocks(wrapperJson: string): ContentBlock[] {
   if (!Array.isArray(frames)) return []
   const recent = frames.slice(-MAX_BLOCKS_FRAMES)
   const actions = recent.map((f) => classifySessionUpdate(normalizeSessionUpdate(f)))
-  return buildReplayMessages(actions).flatMap((m) => m.blocks)
+  const blocks = buildReplayMessages(actions).flatMap((m) => m.blocks)
+  return prependEvictedProse(blocks, actions, fullText)
 }
 
 /** 判定已 parse 的值是否为后端累积器的原始帧包裹形态（`{"v":1,"frames":[...]}`）。 */
@@ -556,8 +581,9 @@ export function isRawFrameWrapper(raw: string): boolean {
   return isFrameWrapperParsed(parsed)
 }
 
-/** hydrate 入口：cooked 数组原样返回；原始帧包裹解码；未知形状返回 null（调用方回退纯文本）。 */
-export function decodeStoredBlocks(raw: string): ContentBlock[] | null {
+/** hydrate 入口：cooked 数组原样返回；原始帧包裹解码；未知形状返回 null（调用方回退纯文本）。
+ *  `fullText` 为后端全量 text 列：RAW 包裹解码时用于补被驱逐的正文前缀（见 prependEvictedProse）。 */
+export function decodeStoredBlocks(raw: string, fullText?: string): ContentBlock[] | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -566,7 +592,7 @@ export function decodeStoredBlocks(raw: string): ContentBlock[] | null {
   }
   if (Array.isArray(parsed)) return parsed as ContentBlock[]
   if (isFrameWrapperParsed(parsed)) {
-    return rawFramesToBlocks(raw)
+    return rawFramesToBlocks(raw, fullText)
   }
   return null
 }
@@ -593,6 +619,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 时推高；prompt_done/turn_state(inactive) 清空。subscribe-before-snapshot 造成的
   // 重叠帧（seq<=水位）据此丢弃，避免重复渲染（见 §4 对账）。
   const inProgressSeq = useRef<number | null>(null)
+  // 中途加入标记：收到 turn_snapshot（刷新/重连续接进行中 turn）即置位。此时 store 的
+  // 在建消息只含后端帧窗口残片（早期帧已被驱逐），prompt_done 的 cooked 回写会用残缺
+  // blocks 覆盖 DB 行、把早期正文永久固化丢失——故该 turn 的回写被跳过（见 prompt_done
+  // 分支）。本连接从头跑的 turn 不会收到 turn_snapshot，标记保持 false。
+  const joinedMidTurn = useRef(false)
   // hydrate 门控：ChatView 的 GET /messages 落定前，把会影响消息列表的帧（turn_snapshot
   // /session_update/turn_state/prompt_*）攒在此缓冲，避免抢在 hydrate 之前建消息导致
   // hydrate 因 messages 非空而 bail（丢历史）。落定后按序回放。重连（无 remount）时
@@ -768,7 +799,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           flushLiveBuffer()
           // 在 markDone 之前：本 turn 的 cooked blocks 靠 streaming 标记界定。
-          syncTurnToDb(sid, frame.row_id)
+          // 中途加入的 turn（joinedMidTurn）跳过回写：本端 blocks 只有帧窗口残片，
+          // 回写会把残缺内容固化进 DB（早期正文永久丢失）；DB 保留后端原始帧行，
+          // 其 text 列完整，hydrate/快照渲染会用 text 补前缀（prependEvictedProse）。
+          if (!joinedMidTurn.current) {
+            syncTurnToDb(sid, frame.row_id)
+          }
+          joinedMidTurn.current = false
           s.markDone(sid)
           // assistant turn 由后端累积器实时落库**原始帧**，前端在此把 cooked blocks
           // 回写到同一行以收敛体积（见 syncTurnToDb）。清空 seq 水位，下一 turn 从零
@@ -930,8 +967,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'turn_snapshot': {
           // 重连续接：用进行中 turn 的快照按 row_id 替换/收编在建 assistant 消息，
           // 并把 seq 水位置为快照 seq——后续 live 帧 seq 需大于它才应用（丢弃
-          // subscribe-before-snapshot 的重叠重复帧）。
-          const blocks = frame.blocks ? rawFramesToBlocks(frame.blocks) : []
+          // subscribe-before-snapshot 的重叠重复帧）。text 传给 rawFramesToBlocks：
+          // 后端帧窗口从头部驱逐，快照 blocks 缺早期正文，用全量 text 补前缀。
+          const blocks = frame.blocks ? rawFramesToBlocks(frame.blocks, frame.text) : []
+          // 本连接是中途加入该 turn 的（刷新/重连）：store 里的 blocks 只有窗口残片，
+          // prompt_done 时若照常回写 cooked，会把残缺内容固化进 DB 行（早期正文永久
+          // 丢失）。置位标记让回写跳过，DB 保留后端原始帧窗口（含完整 text 列）。
+          joinedMidTurn.current = true
           s.applyTurnSnapshot(sid, {
             rowId: frame.row_id ?? '',
             text: frame.text ?? '',

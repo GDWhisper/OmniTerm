@@ -42,7 +42,9 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
     // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
     // 兜底会覆盖后端原始帧，堵死未来分类器升级后重新解释历史的路径。
     let rawStored = m.blocks ? isRawFrameWrapper(m.blocks) : false
-    let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
+    // text 列传给解码器：RAW 帧窗口行的 blocks 可能缺被驱逐的早期正文，
+    // 解码时用全量 text 补前缀（见 useAcpChat.prependEvictedProse）。
+    let blocks = m.blocks ? decodeStoredBlocks(m.blocks, m.text) : null
     if (!blocks || blocks.length === 0) {
       blocks = [{ type: 'text' as const, text: m.text }]
       rawStored = false

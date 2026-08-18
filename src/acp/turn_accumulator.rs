@@ -76,9 +76,13 @@ const MAX_FRAMES: usize = 2000;
 /// so the column stays constant-order for any agent behaviour.
 ///
 /// Trade-off: with fat frames the structural recovery window shrinks to a few dozen
-/// frames. Acceptable because `text` keeps the prose (bounded, head + tail) and the
-/// frontend's classifier folds all updates of one `toolCallId` into a single card
-/// anyway, so the rendered result is near-identical.
+/// frames. Acceptable because `text` keeps the prose (bounded, head + tail) — but only
+/// because the frontend *uses* it: hydrate/`turn_snapshot` decode prepends the evicted
+/// prose prefix recovered from the full `text` (exact-suffix guard), and a connection
+/// that joined mid-turn skips its cooked write-back so these window remnants are never
+/// persisted as cooked (see `useAcpChat` `prependEvictedProse` / `joinedMidTurn`, and
+/// the 2026-08-10 plan errata 2026-08-19). Evicted *structure* (thought/tool cards) is
+/// still unrecoverable mid-turn by design — the window is crash recovery, not archive.
 const MAX_BLOCKS_BYTES: usize = 128 * 1024;
 
 /// Per-frame cap: a frame larger than this never enters the window (its text, if any,

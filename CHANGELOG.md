@@ -47,6 +47,14 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-08-19 00:26) `[frontend]` 修复 ACP 会话流式输出中刷新页面丢失早期 assistant 正文：后端 turn 累积器帧窗口按字节上限从头部驱逐旧帧，刷新后 hydrate/续接快照只含窗口残片，且 turn 结束时前端把残缺 cooked blocks 回写覆盖 DB 行使缺失永久化——现收到续接快照的 turn 跳过 cooked 回写（DB 保留完整 text 列的原始帧行），且 RAW 帧解码与快照还原时用后端全量 text 把被驱逐的正文前缀补回显示（精确后缀匹配守卫，失配宁缺勿错）（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
+
+---
+
 ## [0.2.16] - 2026-08-18
 
 ### Changed

@@ -178,6 +178,23 @@
 
 维护者反馈"觉得 ACP 会话不可靠"，但**具体现象尚未确认**。已列候选：消息未送达 / 刷新后记录缺失或错序 / restore 后历史对不上 / 卡在"正在输出" / 取消无效 / 权限弹窗异常 / 断网后会话报废。本计划四项针对的是**存储限界与数据正确性**，若实际不可靠源于上述其它现象，需另立根因排查（遵循 `~/.pi/agent/skills/systematic-debugging/SKILL.md`：先取证再改）。**Phase 0 的污染 bug 本身即是一个已确证的可靠性缺陷**，无论上述答案为何都该修。
 
+> **勘误（2026-08-19）— 「刷新后记录缺失」的一个已确证实例：流式中刷新丢早期正文**
+>
+> **现象**：ACP 会话流式输出中刷新页面，聚焦会话缺失 assistant 侧早期一部分内容；turn 结束后刷新仍缺；释放会话再「恢复会话」（agent 重放全量历史）才找回。
+>
+> **根因链**（两段）：
+>
+> 1. 帧窗口从头部驱逐（`MAX_BLOCKS_BYTES`/`MAX_FRAMES`，D2 明确保留的兜底）：长 turn 早期帧被 `pop_front`，落库行与 `turn_snapshot` 都只含窗口。设计注释声称"`text` 保留正文所以可接受"，但前端 hydrate/快照两条渲染路径都只走 blocks、不合并 text，该前提不成立。
+> 2. `prompt_done` 的 cooked 回写（Phase 1/D2）把刷新后从窗口残片重建的残缺 blocks 带 `row_id` 覆盖进 DB 行——临时缺失被固化为永久缺失。
+>
+> **修复（前端，后端零改动）**：
+>
+> - **A 回写门控**：收到 `turn_snapshot` 即置 `joinedMidTurn`，该 turn 的 `prompt_done` 跳过 cooked 回写（DB 保留原始帧行，text 列完整）；turn 结束复位。
+> - **B 前缀恢复**：`rawFramesToBlocks`/`decodeStoredBlocks` 接收后端全量 text（快照 `text` / hydrate 的 text 列），窗口帧正文恰为其精确后缀时把差集补成 text 块（`prependEvictedProse`，`endsWith` 单一守卫，失配宁缺勿错；BoundedText 折叠时前缀携带用户可读的省略标记）。
+> - **否决项（C）**：后端侧增量 cook。否决理由沿用模块文档：分类器是多实现前端资产（vendor adapters），Rust 复刻 = 双份真相源永久同步（AGENTS.md §8）。翻案条件：出现「后端必须理解消息结构」的新需求（服务端搜索/摘要），届时另立冷层方案而非替换现有路径。
+>
+> 测试：`useAcpChat.midturn.test.tsx` 8 条（前缀恢复 4 种守卫 + 回写门控 3 条路径）。局限：被驱逐的**结构**（thought/tool 卡片）仍不可恢复，只有正文以纯文本补回——帧窗口是崩溃恢复兜底，不是历史存档，此定位不变。
+
 ## 文档闭环
 
 | 文档 | 更新触发 |
