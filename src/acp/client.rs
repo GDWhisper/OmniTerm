@@ -102,6 +102,9 @@ pub struct AcpClient {
     /// agent 连接任务崩溃时广播错误原因，供 WS 层即时透传给前端。
     /// 取代原先 `disconnect` 中 `let _ = connection_task.await` 被静默丢弃的错误。
     crash_tx: broadcast::Sender<String>,
+    /// 后端主动产生的系统通知（如权限超时回收告知），广播给所有 WS 连接，
+    /// 由 WS 层转成 `system_message` 帧显示在聊天流里。
+    system_notice_tx: broadcast::Sender<String>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
     /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
@@ -305,6 +308,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
+        let (system_notice_tx, _) = broadcast::channel::<String>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -514,6 +518,7 @@ impl AcpClient {
             session_update_tx,
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
+            system_notice_tx,
             terminal_event_tx,
             turn_end_tx,
             terminal_manager,
@@ -539,6 +544,11 @@ impl AcpClient {
         self.crash_tx.subscribe()
     }
 
+    /// 订阅后端主动产生的系统通知（权限超时回收等，与 agent 崩溃无关）。
+    pub fn system_notice_subscribe(&self) -> broadcast::Receiver<String> {
+        self.system_notice_tx.subscribe()
+    }
+
     /// 订阅 agent 终端命令生命周期事件（创建/退出）。
     pub fn terminal_event_subscribe(&self) -> broadcast::Receiver<TerminalActivity> {
         self.terminal_event_tx.subscribe()
@@ -558,6 +568,11 @@ impl AcpClient {
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
     pub fn notify_turn_end(&self, event: TurnEndEvent) {
         let _ = self.turn_end_tx.send(event);
+    }
+
+    /// 广播后端主动产生的系统通知（权限超时回收告知等；无订阅者时静默丢弃）。
+    pub fn notify_system_message(&self, label: String) {
+        let _ = self.system_notice_tx.send(label);
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -996,6 +1011,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
+        let (system_notice_tx, _) = broadcast::channel::<String>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -1200,6 +1216,7 @@ impl AcpClient {
             session_update_tx,
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
             crash_tx,
+            system_notice_tx,
             terminal_event_tx,
             turn_end_tx,
             terminal_manager,

@@ -25,7 +25,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message'
   code?: string
   data?: SessionUpdateFrame
   stop_reason?: string
@@ -39,6 +39,8 @@ interface ServerFrame {
   exit_code?: number | null
   image?: boolean
   agent_name?: string
+  /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
+  label?: string
   /** session_update: turn 内单调 seq（config/commands/重放帧无此字段），用于重连去重。 */
   seq?: number
   /** turn_state: 连接时是否有进行中的 assistant turn。 */
@@ -778,6 +780,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           s.markError(sid, frame.message ?? 'prompt failed')
           // 与 tmux 链路的 attention_reason=error 表现一致
           attention.fire(sid, sid, 'error')
+          break
+        case 'system_message':
+          // 后端主动产生的系统通知（权限超时回收告知等）：以 system 消息显示在聊天流。
+          // 断线期间产生的通知已由后端落库，hydrate 补上；此帧只服务在线连接。
+          if (frame.label) {
+            useChatStore.getState().pushSystemEvent(sid, frame.label)
+          }
           break
         case 'error':
           // 重放中途失败（如 load_failed 时后端以 error 代替 replay_end）：

@@ -2,8 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use sqlx::sqlite::SqlitePool;
 use tokio::time::interval;
 
+use crate::acp::chat_persistence;
 use crate::acp::client::TurnEndEvent;
 use crate::acp::supervisor::AcpSupervisor;
 
@@ -16,6 +18,10 @@ pub const IDLE_RECYCLE_SECS: u64 = 300;
 /// 注：PermissionManager 不做超时自动应答（ACP 规范 Cancelled 仅用于
 /// session/cancel 语义，且审批须等真人决策），此为无人应答时的唯一兜底。
 pub const REQUIRES_ACTION_RECYCLE_SECS: u64 = 1800;
+
+/// 权限超时回收时写入会话的 system 消息文案（role='system' 的 `text` 列
+/// 与 `blocks[0].label` 一致；前端命中 i18n key 才翻译，未命中原样显示）。
+pub const PERMISSION_TIMEOUT_NOTICE: &str = "权限请求 30 分钟未获响应，系统已自动取消该请求并回收会话（agent 已终止）。可重新打开会话继续。";
 
 /// prompt 卡死兜底阈值（秒）：有进行中 prompt 但久无 agent 通知满 10 分钟，
 /// 强制定稿 turn 并广播结束。兜底不发送 PromptResponse 的 agent（§8 多实现兼容）。
@@ -41,7 +47,14 @@ const TICK_SECS: u64 = 30;
 /// `idle_recycle_secs` 为共享的 idle 回收阈值（秒）：main.rs 从 settings 表读取
 /// `acp_idle_recycle_min` 换算后注入，可在运行时热更新。每个 tick 判定前动态
 /// `load`，改动无需重启即可生效；缺省兜底见 [`IDLE_RECYCLE_SECS`]。
-pub async fn run_reaper(supervisor: AcpSupervisor, idle_recycle_secs: Arc<AtomicU64>) {
+///
+/// `db` 用于权限超时回收时写入 system 告知消息（agent 被 cancel+kill 的原因，
+/// 用户刷新会话后仍可见）；idle 回收（用户完全不用）不写。
+pub async fn run_reaper(
+    supervisor: AcpSupervisor,
+    db: SqlitePool,
+    idle_recycle_secs: Arc<AtomicU64>,
+) {
     let mut ticker = interval(Duration::from_secs(TICK_SECS));
     loop {
         ticker.tick().await;
@@ -73,6 +86,30 @@ pub async fn run_reaper(supervisor: AcpSupervisor, idle_recycle_secs: Arc<Atomic
         for (sid, perm_stale) in to_reap {
             if let Some(client) = supervisor.dispose(&sid).await {
                 if perm_stale {
+                    // 权限超时回收前，先让用户知道 agent 为什么消失：
+                    // 1) 持久化 system 消息（刷新后 hydrate 仍可见）；
+                    // 2) 广播给在线 WS 连接（shutdown 前，连接仍存活）；
+                    // 3) 再 cancel + kill（安全策略不变，见 PERMISSION_TIMEOUT_NOTICE）。
+                    let blocks = serde_json::json!([
+                        { "type": "system", "label": PERMISSION_TIMEOUT_NOTICE }
+                    ])
+                    .to_string();
+                    if let Err(e) = chat_persistence::insert_message(
+                        &db,
+                        &sid,
+                        "system",
+                        PERMISSION_TIMEOUT_NOTICE,
+                        Some(&blocks),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            session_id = %sid,
+                            error = %e,
+                            "reaper: failed to persist permission-timeout system message"
+                        );
+                    }
+                    client.notify_system_message(PERMISSION_TIMEOUT_NOTICE.to_string());
                     // 先取消卡住的权限请求，避免 agent 永久阻塞
                     let _ = client.cancel();
                 }

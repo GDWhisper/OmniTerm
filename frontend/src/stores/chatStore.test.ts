@@ -422,7 +422,7 @@ describe('messagesToSyncPayload', () => {
     ])
   })
 
-  it('drops system messages (UI-only events, not in DB)', () => {
+  it('drops system messages (backend writes them; frontend never syncs them back)', () => {
     const msgs = [
       mkMsg({ role: 'user', text: 'hi' }),
       mkMsg({ role: 'system', text: '[ToolCall]' }),
@@ -548,5 +548,28 @@ describe('turnToSyncPayload', () => {
     expect(turnToSyncPayload([mk({ role: 'assistant', blocks: [], streaming: true })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([], 'row-1')).toEqual([])
+  })
+})
+
+describe('pushSystemEvent (后端系统通知：权限超时回收告知)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('appends a system message with the given label', () => {
+    useChatStore.getState().hydrate('s1', [], null)
+    useChatStore.getState().pushSystemEvent('s1', '权限请求超时')
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('system')
+    expect(msgs[0].blocks).toEqual([{ type: 'system', label: '权限请求超时' }])
+    expect(msgs[0].text).toBe('[权限请求超时]')
+  })
+
+  it('is excluded from sync payloads (backend rows are authoritative for system rows)', () => {
+    useChatStore.getState().hydrate('s1', [], null)
+    useChatStore.getState().pushSystemEvent('s1', '权限请求超时')
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(messagesToSyncPayload(msgs)).toEqual([])
   })
 })

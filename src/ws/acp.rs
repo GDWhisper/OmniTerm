@@ -155,6 +155,10 @@ enum AcpServerMessage<'a> {
     },
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
+    /// 后端主动产生的系统通知（如权限超时回收告知）：在聊天流里以 system
+    /// 消息显示，与 agent 崩溃（`prompt_error`）语义区分。
+    #[serde(rename = "system_message")]
+    SystemMessage { label: &'a str },
     #[serde(rename = "terminal_activity")]
     TerminalActivity {
         id: String,
@@ -307,6 +311,35 @@ async fn spawn_crash_task(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         "ACP crash-event subscriber lagged by {} messages; dropped stale events",
+                        n
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// 转发后端主动产生的系统通知（权限超时回收告知等）：收到即作为
+/// `system_message` 帧推给前端，在聊天流里显示（与崩溃的 `prompt_error` 区分）。
+async fn spawn_system_notice_task(
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    notify_tx: tokio::sync::mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(label) => {
+                    let msg =
+                        serde_json::to_string(&AcpServerMessage::SystemMessage { label: &label })
+                            .unwrap_or_default();
+                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(
+                        "ACP system-notice subscriber lagged by {} messages; dropped stale notices",
                         n
                     );
                 }
@@ -531,6 +564,8 @@ async fn restore_acp_session(
     let _ = notify_tx.send(Message::Text(synced.into())).await;
     let crash_rx = new_client.crash_subscribe();
     spawn_crash_task(crash_rx, notify_tx.clone()).await;
+    let system_notice_rx = new_client.system_notice_subscribe();
+    spawn_system_notice_task(system_notice_rx, notify_tx.clone()).await;
     let turn_end_rx = new_client.turn_end_subscribe();
     spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
     let term_rx = new_client.terminal_event_subscribe();
@@ -699,6 +734,8 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             let _ = notify_tx.send(Message::Text(synced.into())).await;
             let crash_rx = c.crash_subscribe();
             spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            let system_notice_rx = c.system_notice_subscribe();
+            spawn_system_notice_task(system_notice_rx, notify_tx.clone()).await;
             spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(term_rx, notify_tx.clone()).await;

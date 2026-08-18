@@ -45,7 +45,8 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       id: m.id,
       // Hydrated rows carry their real DB id, so a later sync can target them exactly.
       dbId: m.id,
-      role: m.role as 'user' | 'assistant',
+      // system 行（权限超时回收告知等）由后端写入，hydrate 后以 system 消息渲染。
+      role: m.role as ChatMessage['role'],
       text: m.text,
       blocks,
       createdAt: new Date(m.createdAt).getTime(),
