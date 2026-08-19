@@ -22,6 +22,32 @@ const CRATE_NAME: &str = "omniterm";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("omniterm-update/", env!("CARGO_PKG_VERSION"));
 
+/// 自重启的 exec 参数剥离 `-d/--daemonize`：当前进程若原为 daemon，exec 后
+/// 已在无终端环境，无需再次 daemonize（重复 double-fork 只会让 PID 漂移，
+/// 白白引入 pid 文件迁移问题）。剥离后新进程以前台模式续跑，stdout/stderr
+/// 仍指向原 log fd（exec 保留非 CLOEXEC fd），行为与 daemon 一致。
+fn strip_daemon_flag(args: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
+    args.iter()
+        .filter(|a| a.as_os_str() != "-d" && a.as_os_str() != "--daemonize")
+        .cloned()
+        .collect()
+}
+
+/// 是否运行在容器环境（Docker 等）。容器内自更新替换的二进制在容器重启后会
+/// 还原为镜像旧版，属无效更新——Web 端据此禁用一键升级并提示重新拉取镜像。
+/// 用 `/.dockerenv`（Docker 官方标记）为主判据，cgroup 特征兜底其他运行时
+/// （podman/containerd）；未命中的容器环境视为普通安装（可更新但不持久，用户自担）。
+pub(crate) fn in_container() -> bool {
+    if Path::new("/.dockerenv").exists() {
+        return true;
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(cg) = std::fs::read_to_string("/proc/1/cgroup") {
+        return ["docker", "containerd", "libpod"].iter().any(|k| cg.contains(k));
+    }
+    false
+}
+
 #[derive(Parser)]
 pub struct UpdateArgs {
     /// 只检查是否有新版本，不执行更新
@@ -376,6 +402,37 @@ fn replace_exe(tmp: &Path, exe: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 更新完成后自动重启当前进程（Unix）：exec 新二进制，**PID 不变**——pid 文件、
+/// 监听地址、daemon 身份全部无需迁移。exec 前必须已回收 ACP 子进程（见
+/// `api/system.rs::run_update`），否则它们会被 init 收养成孤儿。
+///
+/// 关键机制：
+/// - listen socket 由 tokio/mio 以 CLOEXEC 创建，exec 时内核自动关闭，
+///   新进程 bind 不会 `Address already in use`；
+/// - daemon 模式的 log fd 非 CLOEXEC，exec 后保留，新进程日志继续落同一文件；
+/// - exec 失败时本进程**继续运行旧版本**（不会退出），由调用方记 error 日志，
+///   前端兜底显示手动重启提示——自重启失败不造成服务中断。
+#[cfg(unix)]
+pub(crate) fn relaunch() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let exe = std::env::current_exe().context("failed to locate current executable")?;
+    let args = strip_daemon_flag(&std::env::args_os().collect::<Vec<_>>());
+    let mut cmd = std::process::Command::new(&exe);
+    // 保留原始 argv[0]（可能为相对路径/别名），参数从 argv[1] 起
+    if let Some(argv0) = args.first() {
+        cmd.arg0(argv0);
+    }
+    cmd.args(&args[1..]);
+    let err = cmd.exec();
+    Err(err).with_context(|| format!("failed to relaunch {}", exe.display()))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn relaunch() -> Result<()> {
+    bail!("automatic relaunch is not supported on this platform")
+}
+
 #[cfg(any(windows, test))]
 fn extract_exe_from_zip(bytes: &[u8]) -> Result<Vec<u8>> {
     use std::io::Read;
@@ -518,5 +575,30 @@ mod tests {
         assert_eq!(Version::parse("0.1.9").unwrap().cmp(&local), Ordering::Equal);
         assert_eq!(Version::parse("0.2.0").unwrap().cmp(&local), Ordering::Greater);
         assert_eq!(Version::parse("0.1.8").unwrap().cmp(&local), Ordering::Less);
+    }
+
+    fn os(s: &str) -> std::ffi::OsString {
+        std::ffi::OsString::from(s)
+    }
+
+    #[test]
+    fn strip_daemon_flag_removes_short_and_long_forms() {
+        let args =
+            vec![os("omniterm"), os("start"), os("-d"), os("--daemonize"), os("-p"), os("9077")];
+        let stripped = strip_daemon_flag(&args);
+        assert_eq!(stripped, vec![os("omniterm"), os("start"), os("-p"), os("9077")]);
+    }
+
+    #[test]
+    fn strip_daemon_flag_keeps_args_without_flag() {
+        let args = vec![os("omniterm"), os("start"), os("-p"), os("9077")];
+        assert_eq!(strip_daemon_flag(&args), args);
+    }
+
+    #[test]
+    fn strip_daemon_flag_keeps_dash_values_untouched() {
+        // `-d` 只剥离独立 token；`-d` 作为其他参数的值（如 db 路径片段）不得误删
+        let args = vec![os("omniterm"), os("start"), os("--db"), os("/data/-d/omniterm.db")];
+        assert_eq!(strip_daemon_flag(&args), args);
     }
 }

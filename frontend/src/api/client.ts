@@ -194,9 +194,9 @@ export const api = {
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
   versionCheck: () =>
-    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release' }>('/system/version', { silent: true }),
+    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release'; container: boolean }>('/system/version', { silent: true }),
   systemUpdate: () =>
-    request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
+    request<{ status: string; version: string; restart_required: boolean; auto_restart: boolean }>('/system/update', { method: 'POST' }),
 
   // tmux options
   tmuxGetMouse: () =>
