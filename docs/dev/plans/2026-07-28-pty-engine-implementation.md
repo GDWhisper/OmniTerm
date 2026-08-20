@@ -12,7 +12,8 @@
 
 ## 0. 新会话上手指引
 
-- **当前状态（2026-08-13 更新）**：**Phase 2.5（VT 模拟器换 registry 依赖）已完成**——`wezterm-term` git 依赖已换为 `alacritty_terminal` 0.26（crates.io），`cargo package` 通过、crates.io 渠道恢复；顺带修双应答（服务端应答门控在 detach 期）。完成记录与执行偏差见 §3 Phase 2.5 节尾。**下一步 = Phase 3（pty hook 信道）**。
+- **当前状态（2026-08-20 更新）**：**Phase 3（pty hook 信道）已完成**——HTTP 上报端点（回环 + 会话 token + nonce 去重）+ curl 版 hook 模板 + spawn env 注入 + HookAuthority 仲裁（新鲜度窗口 60s）+ pty WS `agent_state` 门铃推送；完成记录与执行细化见 §3 Phase 3 节尾。**下一步 = Phase 4（切换默认 + 前端分流）**。
+- **上一里程碑（2026-08-13）**：Phase 2.5（VT 模拟器换 registry 依赖）完成——`wezterm-term` git 依赖已换为 `alacritty_terminal` 0.26（crates.io），`cargo package` 通过、crates.io 渠道恢复。
 - **Phase 2 完成情况（2026-08-12）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。~~下一步 = **Phase 3（pty hook 信道）**~~（v5：先做 Phase 2.5）。Phase 2 完成记录见 §3 Phase 2 节尾。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
 - **执行纪律**：每 Phase 结束提交并过 `cargo build`/`tsc`；Phase 1 是纯重构，**不得夹带任何行为变化**；`src/engine/tmux/` 落位后即冻结（D9）。
@@ -190,10 +191,16 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **验收**：`cargo package --no-verify --allow-dirty` 通过；`cargo test` / clippy / fmt 全绿；pty 会话人工回归（vim/htop 重连不花屏、agent 屏幕检测、OSC 标题、detach 期间 `printf '\e[6n'` 有应答且 attach 时不双应答）。
 - **完成记录（2026-08-13）**：按上述清单落地——`cargo package` 通过（129 文件 / 3.6MiB，全仓无 git/path 依赖）、`cargo test` 248 通过 / clippy / fmt 全绿；vt.rs 11 条单测（原 5 + alt-screen / 宽字符 / DSR drain / 超限丢弃×3）+ mod.rs 门控测试 1 条。依赖净增与 D8 v5 预测一致（alacritty_terminal/vte/arrayvec/unicode-width/home/rustix-openpty/cursor-icon）。**执行偏差**：「detach 期 DSR 应答回显进补屏环」的 e2e 测试废弃——实测 pty 行纪律回显会吞转义字节（`\x1b[1;1R` 只回显尾部 `R`），补屏环观察不到 CPR 应答，该路径改由人工回归覆盖；门控行为由 `dsr_response_gated_by_attach_state` 确定性验证。另发现两个实测点入档：① `Term::new` 收 `&impl Dimensions` 而 `resize` 收值；② `Row` 无 `iter()`，逐行 capture 走 `[Column(0)..Column(cols)]` 切片索引。
 
-### Phase 3：pty hook 信道（纯新增）
+### Phase 3：pty hook 信道（纯新增，已完成 2026-08-20）
 - **新增** `src/api/agent_events.rs`：`POST /api/v1/internal/agent-event`（回环 + token + seq 去重）→ 内存 KV + watch channel。
 - **新增** `src/engine/pty/agent_hooks.rs`：以 tmux 版为蓝本，hook 命令模板换 `curl $OMNITERM_HOOK_URL`（fail-silent + 0.5s）。
 - `PtyEngine::agent_snapshot` 读 KV；`ws/terminal.rs` 对 pty 会话用 watch 订阅推送（tmux 会话维持 1s 轮询，冻结）。
+- **完成记录（2026-08-20）**：按上述清单落地，三点执行细化：
+  1. **KV/watch/token 落位 `src/engine/pty/agent_events.rs`**（引擎层而非 api 层）：`PtyEngine::agent_snapshot` / spawn env 注入 / kill 清理都要触达它，api 层只留 HTTP handler；watch 用作**门铃**（单调计数），WS 订阅者被唤醒后回读 KV 取本会话最新值，跨会话覆盖不失真。
+  2. **HookAuthority 判据 = 新鲜度窗口**：`HOOK_ALIVE_WINDOW=60s`，`agent_snapshot` 仅在窗口内返回（过期 `None` → 屏幕检测 fallback）。读口收敛在 `PtyEngine::agent_snapshot`，`api/sessions.rs` 合并处据此仲裁（pty hook 存活时 kind/state 以 hook 为权威；tmux 冻结行为不变——屏幕检测恒为权威、hook 只供 reason/event/nonce）。
+  3. **带 agent 命令的 pty 创建改即时 spawn**（此前 pty 创建一律惰性）：与 tmux 路径语义对齐（命令必须立即进 shell 才能增补 hook）；无命令仍惰性。
+  - 有界性（P1）：KV/token 表 `MAX_HOOK_ENTRIES=256` 超限淘汰最旧 + 单测；上报 body ≤1KB（P4）；nonce 等值去重（herdr 三件套）。端点挂公开路由组，安全边界 = 回环校验 + 会话专属 token（S4/S5 显式校验在 handler 内）。
+  - 验收：`cargo test` 335 通过 / clippy / fmt 全绿；dev 环境 e2e——会话内 `curl $OMNITERM_HOOK_URL` 上报 200、`list_sessions` 五段字段回流（running→waiting/decision）、重复 nonce `accepted:false`、未知 token 401、畸形 body 400、kill 后旧 token 401、`command=claude` 创建 `hook_enabled:true`。
 
 ### Phase 4：切换默认 + 前端分流
 - **后端**：`api/sessions.rs` 创建会话默认 `runtime_kind='pty'`（无 agent 时；有 agent 仍 `'acp'`）；`ws/terminal.rs` pty 路径接重建 + 回放 + 补屏 + nudge；`api/files.rs` pty 路径用 `last_cwd`/实时采样。
@@ -230,7 +237,7 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - [x] `tests/runtime_kind_matrix.rs` 含 pty 全路径 case（创建/files/清理），integration-checklist §B.2 表无 `?`（Phase 2 ✅，6/6 通过）。
   - [x] WS 断开→重连：进程存活、补屏 + nudge 正确（Phase 2 ✅：引擎级测试 + 真实 WS 冒烟；vim/htop TUI 用例待 Phase 4 前端分流后人工回归）。
   - [x] 后端重启：pty 会话从 `last_cwd` + 原命令重建，scrollback 回放可见（Phase 2 ✅ 端到端验收；tmux 会话照常幸存不受影响）。
-  - [ ] agent 检测：pty 会话 hook 经 HTTP 上报（HookAuthority 生效）、屏幕检测行为与 tmux 链路一致。（Phase 3；屏幕检测输入侧 Phase 2 已就位）
+  - [x] agent 检测：pty 会话 hook 经 HTTP 上报（HookAuthority 生效）、屏幕检测行为与 tmux 链路一致。（Phase 3 ✅ 2026-08-20：e2e 验证上报/回流/去重/token 失效；屏幕检测输入侧 Phase 2 已就位，hook 过期后 fallback 语义与 tmux 屏幕权威一致）
   - [ ] pty 会话复制：纯左键拖选即复制；移动端滚动本地化。tmux 会话交互不变。（Phase 4 前端分流）
   - [x] FileManager 根目录在两种会话下均跟随终端 cwd（Phase 2 ✅：pty 走 /proc 采样，实测 `cd` 后跟随）。
 - **Phase 2.5（registry VT 依赖）**：

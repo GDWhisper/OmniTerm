@@ -99,8 +99,17 @@ async fn list_sessions(
         if let Some(ref engine_name) = session.tmux_session_name {
             session.is_active = state.engines.is_active(session.runtime_kind, engine_name).await;
 
-            if let Some(snapshot) = agent_map.get(engine_name) {
-                // Hook-injected session: use option data
+            // hook 信道数据：tmux 从 agent_map（`@omniterm_agent` option 枚举）；
+            // pty 从 HTTP hook 信道 KV（agent_snapshot 仅在存活窗口内返回，
+            // 即 HookAuthority 的「hook 存活」判据，D7）。
+            let hook_snapshot: Option<AgentSnapshot> = if session.runtime_kind == RuntimeKind::Pty {
+                state.engines.agent_snapshot(RuntimeKind::Pty, engine_name).await.ok().flatten()
+            } else {
+                agent_map.get(engine_name).cloned()
+            };
+
+            if let Some(ref snapshot) = hook_snapshot {
+                // Hook-injected session: use hook channel data
                 session.agent_kind = Some(snapshot.agent_kind.as_str().to_string());
                 session.agent_state = Some(snapshot.agent_state.as_str().to_string());
                 session.attention_reason =
@@ -108,11 +117,16 @@ async fn list_sessions(
                 session.agent_event = snapshot.agent_event.clone();
                 session.agent_nonce = snapshot.agent_nonce.clone();
             }
-            // 屏幕检测覆盖 kind/state（hook 事件流不完整，屏幕检测为状态权威，
-            // 见 docs/reference/herdr-reference.md 仲裁策略）
+            // 屏幕检测覆盖 kind/state（tmux：hook 事件流不完整，屏幕检测恒为
+            // 状态权威，冻结行为；pty：hook 存活时为权威、屏幕检测降级
+            // fallback，见计划 D7 HookAuthority）
+            let hook_authoritative =
+                session.runtime_kind == RuntimeKind::Pty && hook_snapshot.is_some();
             if let Some(screen) = screen_map.get(engine_name) {
-                session.agent_kind = Some(screen.kind.as_str().to_string());
-                session.agent_state = Some(screen.state.as_str().to_string());
+                if !hook_authoritative {
+                    session.agent_kind = Some(screen.kind.as_str().to_string());
+                    session.agent_state = Some(screen.state.as_str().to_string());
+                }
                 session.agent_detected = Some(screen.kind.as_str().to_string());
             }
         }
@@ -224,16 +238,35 @@ async fn create_session(
         let now = chrono::Utc::now().to_rfc3339();
 
         // 引擎会话键 = session id，存入冻结列 tmux_session_name（过渡期两引擎
-        // 共用，D10）。进程惰性 spawn：首次 WS attach 或 files 解析时由
-        // PtyEngine resolve-or-create。
+        // 共用，D10）。无命令时惰性 spawn（首次 WS attach / files 解析时由
+        // PtyEngine resolve-or-create）；携带 agent 命令时立即 spawn 并注入
+        // hook（curl 上报信道，D7），与复用器路径语义对齐。
+        let hook_enabled = match req.command.as_deref() {
+            Some(cmd) => {
+                match state
+                    .engines
+                    .create_session(RuntimeKind::Pty, &id, &workspace_path, Some(cmd))
+                    .await
+                {
+                    Ok(injected) => injected,
+                    Err(e) => {
+                        error!("failed to create pty session with command: {}", e);
+                        false
+                    }
+                }
+            }
+            None => false,
+        };
+
         sqlx::query(
-            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'pty', NULL)",
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, hook_status, created_at, runtime_kind, acp_session_id) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, 'pty', NULL)",
         )
         .bind(&id)
         .bind(&pid)
         .bind(&workspace_path)
         .bind(&req.name)
         .bind(&id)
+        .bind(hook_enabled as i32)
         .bind(&now)
         .execute(&state.db)
         .await
@@ -248,7 +281,7 @@ async fn create_session(
             workspace_path,
             name: req.name,
             tmux_session_name: Some(engine_key),
-            hook_enabled: false,
+            hook_enabled,
             hook_status: None,
             created_at: now,
             runtime_kind: RuntimeKind::Pty,

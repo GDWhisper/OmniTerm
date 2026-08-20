@@ -10,6 +10,8 @@
 //!   Arc 指针比对防止误删同名重建会话），下次 attach 自动重建（D5 重建
 //!   语义的过渡形态）。
 
+pub mod agent_events;
+pub mod agent_hooks;
 pub mod cwd;
 pub mod ring;
 pub mod scrollback;
@@ -76,6 +78,10 @@ struct SessionState {
 
 struct Inner {
     sessions: Mutex<HashMap<String, Arc<SessionState>>>,
+    /// hook 信道（D7）：token 注册 + 上报 KV + 变更门铃。
+    events: agent_events::AgentEventStore,
+    /// 后端监听端口：spawn 时拼 `OMNITERM_HOOK_URL`（回环地址固定 127.0.0.1）。
+    listen_port: u16,
 }
 
 /// 自管 pty 引擎。Clone 共享同一会话 map。
@@ -91,18 +97,34 @@ impl Default for PtyEngine {
 }
 
 impl PtyEngine {
+    fn with_port(listen_port: u16) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                sessions: Mutex::new(HashMap::new()),
+                events: agent_events::AgentEventStore::new(),
+                listen_port,
+            }),
+        }
+    }
+
     /// 无 DB 引擎（单测用）：不落盘、不回写 cwd。
     pub fn new() -> Self {
-        Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) }
+        Self::with_port(0)
     }
 
     /// 生产引擎：挂 DB 并启动后台任务——
     /// ① ANSI 历史 5s 去抖落盘（D5）；② 前台 cwd 30s 采样回写 `last_cwd`。
-    pub fn with_db(db: SqlitePool) -> Self {
-        let engine = Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) };
+    /// `listen_port` 用于 spawn 时注入 `OMNITERM_HOOK_URL`（hook 信道，D7）。
+    pub fn with_db(db: SqlitePool, listen_port: u16) -> Self {
+        let engine = Self::with_port(listen_port);
         engine.spawn_flush_task();
         engine.spawn_cwd_sampler(db);
         engine
+    }
+
+    /// hook 信道状态库句柄（HTTP 端点与 WS 推送共用）。
+    pub fn agent_events(&self) -> agent_events::AgentEventStore {
+        self.inner.events.clone()
     }
 
     /// 去抖落盘：每 [`FLUSH_INTERVAL`] 把有新输出的会话补屏环快照写盘。
@@ -250,6 +272,17 @@ impl PtyEngine {
         // VERIFIED 2026-08-12: TERM 固定 xterm-256color（herdr TERM 策略），
         // 见 docs/reference/herdr-reference.md「可移植边角处理」。
         cmd.env("TERM", "xterm-256color");
+        // hook 信道 env 注入（D7 herdr 三件套之一）：hook 命令引用 env，
+        // 不硬编码端口/token。端点路径与 api::agent_events 路由保持一致。
+        let token = self.inner.events.register(key);
+        cmd.env(
+            "OMNITERM_HOOK_URL",
+            format!(
+                "http://127.0.0.1:{}/api/v1/internal/agent-event?token={token}",
+                self.inner.listen_port
+            ),
+        );
+        cmd.env("OMNITERM_SESSION_ID", key);
 
         let session = Arc::new(PtySession::spawn(cmd, size).map_err(|e| anyhow!("{e}"))?);
         // VERIFIED 2026-08-12: /proc/<child_pid>/cwd == spawn cwd（child_pid 见
@@ -357,6 +390,7 @@ fn unregister_if_same(inner: &Inner, key: &str, state: &Arc<SessionState>) {
     let mut sessions = inner.sessions.lock().unwrap();
     if sessions.get(key).is_some_and(|s| Arc::ptr_eq(s, state)) {
         sessions.remove(key);
+        inner.events.unregister(key);
         flush_if_dirty(key, state);
     }
 }
@@ -379,19 +413,27 @@ fn flush_if_dirty(key: &str, state: &SessionState) {
 impl SessionEngine for PtyEngine {
     async fn create_session(&self, name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
         let (state, _) = self.resolve_or_create(name, cwd, DEFAULT_SIZE)?;
+        let mut hook_injected = false;
         if let Some(cmd) = command {
+            // agent CLI → 增补 hook 配置（curl 上报，D7）；与复用器引擎
+            // create_session 的 hook 注入语义对齐。
+            let augmented =
+                agent_hooks::augment_agent_command(cmd).unwrap_or_else(|| cmd.to_string());
+            hook_injected = augmented != cmd;
             // 与复用器 send-keys 语义一致：发命令文本 + 回车。
-            let mut bytes = cmd.as_bytes().to_vec();
+            let mut bytes = augmented.as_bytes().to_vec();
             bytes.push(b'\r');
             let rx = state.out.lock().unwrap().tx.subscribe();
             let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state };
             attach.write(&bytes)?;
         }
-        Ok(false) // hook 注入为 Phase 3（HTTP 信道，D7）
+        Ok(hook_injected)
     }
 
     async fn kill_session(&self, name: &str) -> Result<()> {
         let state = self.inner.sessions.lock().unwrap().remove(name);
+        // 显式 kill 先摘 map，unregister_if_same 不会再触发，hook 信道在此清理
+        self.inner.events.unregister(name);
         let Some(state) = state else {
             // 进程已自行退出并注销——幂等成功
             return Ok(());
@@ -454,9 +496,10 @@ impl SessionEngine for PtyEngine {
         Ok(state.vt.lock().unwrap().capture_visible())
     }
 
-    /// hook 信道为 Phase 3（HTTP 回调，D7）；此前仅屏幕检测覆盖 pty 会话。
-    async fn agent_snapshot(&self, _name: &str) -> Result<Option<AgentSnapshot>> {
-        Ok(None)
+    /// hook 信道读口（D7 HookAuthority）：返回存活窗口内的最近上报；
+    /// 过期/无上报返回 `None`，由屏幕检测 fallback（仲裁见 api::sessions 合并处）。
+    async fn agent_snapshot(&self, name: &str) -> Result<Option<AgentSnapshot>> {
+        Ok(self.inner.events.fresh_snapshot(name))
     }
 
     async fn is_active(&self, name: &str) -> bool {

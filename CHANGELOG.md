@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-20 15:30) `[backend]` `[api]` pty 会话 agent hook 信道（pty 引擎 Phase 3）：pty 会话内 Claude/Codex/Qoder 的生命周期状态经本地 HTTP 回调即时上报——spawn 时注入 `OMNITERM_HOOK_URL`/`OMNITERM_SESSION_ID` env（会话专属 token），agent 命令自动增补 curl hook 配置（fail-silent + 0.5s 超时）；新增 `POST /api/v1/internal/agent-event`（回环 + token 双重校验，nonce 幂等去重）。HookAuthority 仲裁：hook 存活（60s 新鲜度窗口）时为状态权威，过期降级屏幕检测 fallback；hook 上报经终端 WS `agent_state` 帧即时推送（tmux 会话信道与交互冻结不变）。缺 curl 环境静默降级纯屏幕检测（`src/engine/pty/agent_events.rs`、`src/engine/pty/agent_hooks.rs`、`src/api/agent_events.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`、`src/api/sessions.rs`、`src/api/hooks.rs`）
 - (2026-08-19 12:40) `[update]` 一键升级后自动重启生效：Unix 上更新成功即调度延迟自重启（exec 新二进制、PID 不变，回收 ACP 子进程后原地替换），前端显示倒计时并自动刷新页面拿到新版本，不再需要手动执行 `omniterm stop && omniterm start`；Windows 维持手动重启提示。`/system/version` 新增 `container` 字段、`/system/update` 新增 `auto_restart` 字段，容器环境（Docker 等）禁用一键升级并提示重新拉取镜像（容器内替换无法持久）（`src/update.rs`、`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
 
 ### Fixed

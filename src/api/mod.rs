@@ -1,3 +1,4 @@
+pub mod agent_events;
 pub mod agents;
 pub mod auth;
 pub mod files;
@@ -16,7 +17,10 @@ use crate::ws;
 use axum::{Router, middleware};
 
 pub fn routes(state: AppState) -> Router {
-    let public = Router::new().merge(health::routes()).merge(auth::routes());
+    // hook 上报端点在公开组（会话内 curl 无 JWT）；安全边界 = 回环 + 会话专属
+    // token，handler 内显式校验（见 api::agent_events 模块注）。
+    let public =
+        Router::new().merge(health::routes()).merge(auth::routes()).merge(agent_events::routes());
 
     let protected = Router::new()
         .merge(auth::protected_routes())

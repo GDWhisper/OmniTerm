@@ -21,6 +21,7 @@ src/
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
 │   ├── health.rs         # GET /api/v1/health
+│   ├── agent_events.rs   # POST /api/v1/internal/agent-event — pty hook 上报端点（回环 + 会话 token，不走 JWT；见「pty hook 信道」）
 │   ├── auth.rs           # POST /api/v1/auth/setup|login|logout|settings|change-password, GET /auth/check
 │   ├── targets.rs        # CRUD /api/v1/targets
 │   ├── projects.rs       # CRUD /api/v1/projects
@@ -42,6 +43,8 @@ src/
 │   ├── tmux/             # 冻结引擎边界（只修致命 bug 不加功能）：tmux 命令门面 / control mode / hook 注入 / pane 枚举 / attach WS
 │   └── pty/              # 自管 pty 引擎（Phase 2）：常驻会话 map + 补屏环 + alacritty_terminal VT grid
 │       ├── mod.rs        # PtyEngine（SessionEngine 实现）：spawn/读循环/广播订阅/去抖落盘/cwd 采样回写后台任务
+│       ├── agent_events.rs # hook 信道状态库（D7）：会话 token 注册表 + 上报 KV（有界）+ watch 门铃 + HookAuthority 新鲜度窗口
+│       ├── agent_hooks.rs  # hook 命令模板（tmux 冻结版蓝本）：claude --settings / codex -c 的 curl 上报命令 + augment_agent_command
 │       ├── session.rs    # PtySession：openpty + spawn + child 收割句柄
 │       ├── ring.rs       # ByteRing：256KB 字节环形缓冲（重连补屏窗口，P1 有界）
 │       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/title/resize；应答经 take_responses 排空，由读循环按 attach 门控回写）
@@ -102,16 +105,59 @@ ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 | 会话存活 | tmux server 常驻，后端重启幸存 | 后端进程持有，后端重启丢失 → D5 重建 + 回放 |
 | is_active | control mode「最近 2s 有输出」 | 读循环时间戳 2s 窗口 |
 | cwd 来源 | tmux `pane_current_path` | `/proc` 前台进程采样（Windows 回退 last_cwd） |
-| agent 信道 | `@omniterm_agent` option 轮询（1s） | 屏幕检测（Phase 3 加 HTTP hook 推送） |
+| agent 信道 | `@omniterm_agent` option 轮询（1s）；屏幕检测恒为状态权威，hook 只供 reason/event/nonce | HTTP hook 推送（`internal/agent-event`）；HookAuthority——hook 存活（60s 新鲜度窗口）时为状态权威，过期降级屏幕检测 fallback |
 | capture | tmux `capture-pane`（干净文本） | alacritty_terminal VT grid 渲染（干净文本） |
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
 | 补屏 | tmux `new-session -A` 原生 | 补屏环 ANSI 回放 + resize nudge |
 
+## pty hook 信道（D7，Phase 3）
+
+pty 会话内 agent CLI 的生命周期状态经**本地 HTTP 回调**上报（tmux 会话沿用
+`@omniterm_agent` option 信道，冻结不改）。链路：
+
+1. **注入**：`PtyEngine::spawn_session` 给每个 pty 会话注入 env
+   `OMNITERM_HOOK_URL`（`http://127.0.0.1:<listen_port>/api/v1/internal/agent-event?token=<会话专属 token>`）
+   与 `OMNITERM_SESSION_ID`（herdr 三件套之一：hook 命令引用 env，不硬编码端口）。
+   创建会话携带 agent 命令（`detect_agent_kind` 命中）时，命令经
+   `engine::pty::agent_hooks::augment_agent_command` 增补 hook 配置
+   （claude `--settings` JSON / codex `-c hooks.*.command`），hook 命令为
+   `curl -fs -m 0.5 -o /dev/null --data kind:state:reason:event:$(date +%s).$$ $OMNITERM_HOOK_URL || true`
+   （fail-silent + 0.5s 超时，herdr 三件套之二）；`hook_enabled` 落 DB。
+   **带命令创建 = 即时 spawn**（命令须立即进 shell 才能增补），无命令仍惰性 spawn。
+2. **上报**：`POST /api/v1/internal/agent-event`（`api/agent_events.rs`）。
+   body 为 option 信道同款五段串（`parse_agent_value` 统一解析）。
+3. **落地**：`engine::pty::agent_events::AgentEventStore`——token→会话键映射 +
+   上报 KV + watch 门铃。按 nonce 等值去重（herdr 三件套之三：按 source 记 seq
+   幂等，重放返回 `accepted:false`）。KV/token 表 `MAX_HOOK_ENTRIES=256` 有界，
+   超限淘汰最旧（P1）；body ≤1KB（P4）。会话注销/kill 即清理（kill 路径先摘
+   map，单独调 `unregister`）。
+4. **消费**：
+   - **HookAuthority 仲裁**（读口收敛在 `PtyEngine::agent_snapshot`）：最近上报
+     在 `HOOK_ALIVE_WINDOW`（60s）内 → hook 为状态权威（kind/state/reason/event/nonce
+     全用 hook 值）；过期返回 `None` → 屏幕检测接管（fallback）。取短窗口的理由：
+     生命周期 hook 事件流不完整（见下节），过期状态尽快交还屏幕真相。
+   - `api/sessions.rs::list_sessions` 合并处按 runtime 分流：tmux 保持冻结行为
+     （屏幕检测恒覆盖 kind/state，hook 只供 reason/event/nonce）；pty 按上述仲裁。
+   - pty 终端 WS（`engine/pty/terminal_ws.rs`）对 `hook_enabled` 会话订阅门铃，
+     有新上报即推 `agent_state` 帧（nonce 去重，与 tmux 轮询推送语义一致）；
+     tmux 会话维持 1s 轮询（冻结）。
+   - `/sessions/{id}/hook-status` 按会话 `runtime_kind` 路由到对应引擎读口。
+
+**安全边界（S4/S5）**：端点挂公开路由组（会话内 curl 无登录态），鉴权 =
+`ConnectInfo` 源 IP 回环校验 + 会话专属 token（spawn 时随机 UUID，仅经 env
+进入该会话进程树）。未知 token 401、非回环 403、畸形 body 400。
+
+**多实现差异（AGENTS §8）**：hook 依赖会话内 `curl`，缺失时静默失败
+（`|| true`），该会话降级纯屏幕检测（输入侧 Phase 2 已就位），行为与 tmux
+无 hook 会话一致。hook 事件表与冻结的 tmux 版保持镜像（Phase 5 摘除 tmux 后
+为单一真源）。
+
 ## API Endpoints
 
 ```
 GET  /api/v1/health
+POST /api/v1/internal/agent-event?token=<会话专属 token>   # pty hook 上报（回环 + token 双重校验，不走 JWT；body = kind:state:reason:event:nonce 五段串，见「pty hook 信道」）
 POST /api/v1/auth/setup|login|logout
 GET  /api/v1/auth/check
 POST /api/v1/auth/settings     # 密码验证总开关（受保护）

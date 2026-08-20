@@ -24,8 +24,8 @@ pub async fn handle_pty_terminal(
     // 引擎会话键存于冻结列 tmux_session_name（过渡期两引擎共用，D10）；
     // 旧记录可能为 NULL，回退用 session_id。last_cwd 是 cwd 采样回写值（D5），
     // 重建会话时优先使用，目录已失效则回退 workspace_path。
-    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT workspace_path, tmux_session_name, last_cwd FROM sessions WHERE id = ?",
+    let row: Option<(String, Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT workspace_path, tmux_session_name, last_cwd, hook_enabled FROM sessions WHERE id = ?",
     )
     .bind(&session_id)
     .fetch_optional(&state.db)
@@ -33,7 +33,7 @@ pub async fn handle_pty_terminal(
     .ok()
     .flatten();
 
-    let Some((workspace, engine_key, last_cwd)) = row else {
+    let Some((workspace, engine_key, last_cwd, hook_enabled)) = row else {
         let (mut sender, _) = ws.split();
         let msg =
             serde_json::to_string(&ServerControl::Error { message: "session not found" }).unwrap();
@@ -111,23 +111,63 @@ pub async fn handle_pty_terminal(
         debug!("PTY writer exited (pty session {writer_key})");
     });
 
-    // === 输出订阅 → WS binary 帧 ===
+    // === hook 信道推送（D7）：门铃唤醒 → 回读本会话最新上报 → agent_state 帧。
+    // 仅 hook 注入过的会话启用；nonce 去重与复用器轮询路径语义一致。
+    let (agent_tx, mut agent_rx) = tokio::sync::mpsc::channel::<String>(16);
+    let agent_handle: Option<tokio::task::JoinHandle<()>> = if hook_enabled {
+        let store = state.engines.pty_agent_events();
+        let push_key = key.clone();
+        Some(tokio::spawn(async move {
+            let mut rx = store.subscribe();
+            let mut last_nonce: Option<String> = None;
+            // 连接即推一次当前态（如有），与复用器轮询的首轮语义对齐
+            if let Some(snap) = store.fresh_snapshot(&push_key)
+                && let Some(msg) = agent_state_frame(&snap, &mut last_nonce)
+                && agent_tx.send(msg).await.is_err()
+            {
+                return;
+            }
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let Some(snap) = store.fresh_snapshot(&push_key) else { continue };
+                if let Some(msg) = agent_state_frame(&snap, &mut last_nonce)
+                    && agent_tx.send(msg).await.is_err()
+                {
+                    break;
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // === 输出订阅 → WS binary 帧（select 合流 hook agent_state 帧）===
     let mut rx = attach.rx;
     let mut forward_handle = tokio::spawn(async move {
         loop {
-            match rx.recv().await {
-                Ok(data) => {
-                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+            tokio::select! {
+                out = rx.recv() => match out {
+                    Ok(data) => {
+                        if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
+                    Err(RecvError::Lagged(n)) => {
+                        warn!("pty output lagged, dropped {n} frames");
+                        continue;
+                    }
+                    // 会话进程退出、引擎注销 → 关闭本连接（前端重连会重建会话）
+                    Err(RecvError::Closed) => break,
+                },
+                agent_msg = agent_rx.recv() => {
+                    let Some(msg) = agent_msg else { break };
+                    if ws_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
                 }
-                // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
-                Err(RecvError::Lagged(n)) => {
-                    warn!("pty output lagged, dropped {n} frames");
-                    continue;
-                }
-                // 会话进程退出、引擎注销 → 关闭本连接（前端重连会重建会话）
-                Err(RecvError::Closed) => break,
             }
         }
     });
@@ -179,7 +219,30 @@ pub async fn handle_pty_terminal(
     // 否则败者会守着已死的 WS/通道泄漏（read 侧 drop in_tx 同时让写线程退出）。
     forward_handle.abort();
     read_handle.abort();
+    if let Some(h) = agent_handle {
+        h.abort();
+    }
 
     // detach 语义：不杀会话进程，引擎常驻持有（D5/§1.2）
     info!("terminal WS disconnected (pty): session={session_id} — 会话进程保持常驻");
+}
+
+/// hook 上报 → `agent_state` WS 帧；nonce 与上次相同视为重复，返回 `None`
+/// （与复用器轮询推送的 nonce 去重语义一致）。
+fn agent_state_frame(
+    snap: &crate::agent::state::AgentSnapshot,
+    last_nonce: &mut Option<String>,
+) -> Option<String> {
+    if snap.agent_nonce.is_some() && snap.agent_nonce == *last_nonce {
+        return None;
+    }
+    *last_nonce = snap.agent_nonce.clone();
+    serde_json::to_string(&ServerControl::AgentState {
+        agent_kind: Some(snap.agent_kind.as_str()),
+        state: snap.agent_state.as_str(),
+        attention_reason: snap.attention_reason.map(|r| r.as_str()),
+        agent_event: snap.agent_event.as_deref(),
+        agent_nonce: snap.agent_nonce.as_deref(),
+    })
+    .ok()
 }
