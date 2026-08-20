@@ -5,7 +5,7 @@
 > 关联：`src/tmux/mod.rs`、`frontend/src/hooks/useTerminal.ts`、AGENTS.md §8（多实现兼容性）、`docs/reference/herdr-reference.md`（待建）。
 > **⚠️ 本文档仅为方向规划，不含实施方案、不含代码、不含文件级改动清单。后续 LLM 实施前须先产出独立的实施计划，不得把本文件当作可直接执行的规格。**
 
-> **📌 现状指针（2026-08-04 复核）**：本文档所描述的方向已落地为实施计划 `2026-07-28-pty-engine-implementation.md`（双引擎过渡 + tmux 冻结 + 自研 PtyEngine）。当前状态——**tmux 已冻结为 `TmuxEngine`（只修致命 bug，不加功能），新建会话默认 pty 引擎**；"一次性摘除 tmux" 推迟到该实施计划的 Phase 5（未来独立触发）。**本文档仅作方向史保留，实施细节一律以 pty-engine 计划为准。** 计划 Phase 5 摘除后，本文档随同移入 `archive/`。
+> **📌 现状指针（2026-08-20 v6 更新）**：本文档所描述的方向已落地为实施计划 `2026-07-28-pty-engine-implementation.md`（双引擎 + tmux 冻结 + 自研 PtyEngine），但**产品方向于 2026-08-20 再次修订（实施计划 v6）：pty 与 tmux 长期共存**——创建会话时用户可选 pty / tmux，**"去除/摘除 tmux" 路线整体作废**（实施计划原 Phase 5 作废），tmux 引擎作为冻结的维护态选项长期保留。**本文档仅作方向史保留，实施细节与最新方向一律以 pty-engine 计划为准**；两份文档均不移入 `archive/`，作为长期架构依据保留。
 
 > **勘误（2026-07-28）**：实施计划评审后产品决策修订——不做一次性去除，改为**解耦 tmux → 双引擎过渡共存 → tmux 冻结维护 → 未来可无痛摘除**。本文 §3 决策 D3（SessionBackend 抽象）由 P2 待定**提为 P0 必做**；§2.2 P0 的"去除 tmux 依赖"修正为"解耦 tmux 依赖（可摘除）"。落定细节见 `2026-07-28-pty-engine-implementation.md`（D9/D12）。
 

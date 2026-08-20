@@ -108,7 +108,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `scripts/preflight-release.sh` | **发布前渠道可发布性预检**（打 tag / 建 Release 前必跑）：`./scripts/preflight-release.sh 0.2.15`，检查 crates.io/npm 版本号可用性与 cargo 依赖可发布性 | 检查项调整（新增渠道、检查维度变化） |
 | `scripts/sync-main.sh` | 同步 dev → main（黑名单排除开发文档 + 修复分支配置） | 黑名单调整、分支配置修复逻辑变更 |
 | `docs/dev/plans/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，建议过一遍其**检查点清单**（非强制结构，按任务性质裁剪） | 检查点需调整（新增/精简维度）时更新 |
-| `docs/dev/plans/2026-07-28-pty-engine-implementation.md` | 涉及会话引擎（`src/tmux/`、`src/engine/`、pty、`runtime_kind`、终端 WS 链路）的任何开发前**必读**；tmux 相关代码已冻结，只修致命 bug 不加功能 | Phase 推进/决策变更/勘误时更新；Phase 5 摘除后随方向规划移入 archive |
+| `docs/dev/plans/2026-07-28-pty-engine-implementation.md` | 涉及会话引擎（`src/tmux/`、`src/engine/`、pty、`runtime_kind`、终端 WS 链路）的任何开发前**必读**；tmux 相关代码已冻结，只修致命 bug 不加功能（v6 方向：pty/tmux 长期共存，无摘除阶段） | Phase 推进/决策变更/勘误时更新 |
 | `docs/dev/plans/2026-07-24-quality-gates.md` | 修改质量门禁（CI、pre-commit、clippy、rustfmt、cargo-deny、tsc strict、check-doc-index）任一配置前 | 新增门禁检查、调整分阶段策略、跟进 backlog（§2.3 P2） |
 | `docs/dev/plans/2026-07-30-ui-polish.md` | 修改侧栏宽度/行布局、Modal 体系、文件表格列宽、像素控件（range/toast/badge）前参考其 ADR（D1-D7） | ADR 决策被推翻或翻盘条件触发时更新状态 |
 | `docs/dev/plans/2026-07-30-mobile-interaction-optimization.md` | 修改移动端手势（滑动切 tab/触摸滚动/长按）、MobileKeyBar、状态栏交互前参考其 ADR（D1-D6） | ADR 决策被推翻或翻盘条件触发时更新 |
