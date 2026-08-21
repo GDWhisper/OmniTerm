@@ -27,8 +27,11 @@ export function CreateSessionModal(props: {
   const worktrees = useAppStore((s) => s.worktrees)
   const activateSession = useAppStore((s) => s.activateSession)
   const multiplexer = useAppStore((s) => s.multiplexer)
+  const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
   const [sessName, setSessName] = useState('')
   const [sessAgentId, setSessAgentId] = useState<string | null>(null)
+  // 引擎选择仅对无 agent 的终端会话生效（选了 agent → ACP 会话，选择器隐藏）。
+  const [engine, setEngine] = useState<'pty' | 'tmux'>('pty')
   const [submitting, setSubmitting] = useState(false)
 
   const workspaceId = props.workspaceId
@@ -37,6 +40,7 @@ export function CreateSessionModal(props: {
     props.onClose()
     setSessName('')
     setSessAgentId(null)
+    setEngine('pty')
   }
 
   const handleCreateSession = async () => {
@@ -62,7 +66,7 @@ export function CreateSessionModal(props: {
         targetWt.path,
         name || undefined,
         undefined,
-        sessAgentId ? 'acp' : 'tmux',
+        sessAgentId ? 'acp' : engine,
         sessAgentId ?? undefined,
       )
       await props.reloadSessions()
@@ -120,6 +124,51 @@ export function CreateSessionModal(props: {
             {t('agentPicker.hint', { mux: multiplexer })}
           </p>
         </div>
+        {!sessAgentId && (
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {t('sidebar.engineLabel')}
+            </label>
+            <div className="space-y-1.5">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="session-engine"
+                  value="pty"
+                  checked={engine === 'pty'}
+                  onChange={() => setEngine('pty')}
+                  style={{ accentColor: 'var(--accent)', marginTop: 2 }}
+                />
+                <span>
+                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>pty</span>
+                  <span className="block text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+                    {t('sidebar.enginePtyHint')}
+                  </span>
+                </span>
+              </label>
+              <label
+                className="flex items-start gap-2"
+                style={{ opacity: multiplexerAvailable ? 1 : 0.5, cursor: multiplexerAvailable ? 'pointer' : 'not-allowed' }}
+              >
+                <input
+                  type="radio"
+                  name="session-engine"
+                  value="tmux"
+                  checked={engine === 'tmux'}
+                  onChange={() => setEngine('tmux')}
+                  disabled={!multiplexerAvailable}
+                  style={{ accentColor: 'var(--accent)', marginTop: 2 }}
+                />
+                <span>
+                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>tmux</span>
+                  <span className="block text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+                    {multiplexerAvailable ? t('sidebar.engineTmuxHint') : t('sidebar.engineTmuxUnavailable', { mux: multiplexer })}
+                  </span>
+                </span>
+              </label>
+            </div>
+          </div>
+        )}
         <div className="flex justify-end gap-2 pt-1">
           <PixelButton variant="secondary" onClick={handleClose}>
             {t('sidebar.cancel')}

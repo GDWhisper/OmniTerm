@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-08-21 23:10) `[frontend]` 创建会话支持引擎选择（pty 引擎 Phase 4）：无 agent 的终端会话可在创建弹窗选择 pty（默认，自管终端：后端重启自动重建、直接拖选即复制）或 tmux（后端重启幸存、prefix 键位与 copy-mode）；系统无 tmux 时 tmux 选项禁用并提示（探测 `/system/multiplexer`），external 会话区块同步仅在 tmux 可用时展示。pty 会话交互分流：滚动/翻页走 xterm 本地 scrollback、modern 键位不再注入 tmux prefix 字节；tmux 会话交互原样（`frontend/src/components/Sidebar/CreateSessionModal.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`、`frontend/src/components/Sidebar/ExternalSessionsSection.tsx`、`frontend/src/stores/appStore.ts`）
+
 - (2026-08-20 15:30) `[backend]` `[api]` pty 会话 agent hook 信道（pty 引擎 Phase 3）：pty 会话内 Claude/Codex/Qoder 的生命周期状态经本地 HTTP 回调即时上报——spawn 时注入 `OMNITERM_HOOK_URL`/`OMNITERM_SESSION_ID` env（会话专属 token），agent 命令自动增补 curl hook 配置（fail-silent + 0.5s 超时）；新增 `POST /api/v1/internal/agent-event`（回环 + token 双重校验，nonce 幂等去重）。HookAuthority 仲裁：hook 存活（60s 新鲜度窗口）时为状态权威，过期降级屏幕检测 fallback；hook 上报经终端 WS `agent_state` 帧即时推送（tmux 会话信道与交互冻结不变）。缺 curl 环境静默降级纯屏幕检测（`src/engine/pty/agent_events.rs`、`src/engine/pty/agent_hooks.rs`、`src/api/agent_events.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`、`src/api/sessions.rs`、`src/api/hooks.rs`）
 - (2026-08-19 12:40) `[update]` 一键升级后自动重启生效：Unix 上更新成功即调度延迟自重启（exec 新二进制、PID 不变，回收 ACP 子进程后原地替换），前端显示倒计时并自动刷新页面拿到新版本，不再需要手动执行 `omniterm stop && omniterm start`；Windows 维持手动重启提示。`/system/version` 新增 `container` 字段、`/system/update` 新增 `auto_restart` 字段，容器环境（Docker 等）禁用一键升级并提示重新拉取镜像（容器内替换无法持久）（`src/update.rs`、`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
 

@@ -14,7 +14,8 @@
 
 ## 0. 新会话上手指引
 
-- **当前状态（2026-08-20 更新）**：**Phase 3（pty hook 信道）已完成**——HTTP 上报端点（回环 + 会话 token + nonce 去重）+ curl 版 hook 模板 + spawn env 注入 + HookAuthority 仲裁（新鲜度窗口 60s）+ pty WS `agent_state` 门铃推送；完成记录与执行细化见 §3 Phase 3 节尾。**下一步 = Phase 4（前端双引擎可选，v6 修订：pty/tmux 长期共存，不再有摘除阶段）**。
+- **当前状态（2026-08-21 更新）**：**Phase 4（前端双引擎可选 + 交互分流）已完成**——创建会话引擎选择器（pty 默认 / tmux 维护态，multiplexer 不可用禁用）+ useTerminal 按 runtime_kind 分流（pty：本地 scrollback、零注入字节）+ external 区块按 tmux 可用性显隐；后端零改动（前端恒显式传 runtime_kind）。完成记录与执行细化见 §3 Phase 4 节尾。**计划内所有 Phase 已落地**（Phase 5 于 v6 作废）；余量为 §5 中拖选复制/移动端滚动的人工回归项。
+- **上一里程碑（2026-08-20）**：Phase 3（pty hook 信道）完成——HTTP 上报端点（回环 + 会话 token + nonce 去重）+ curl 版 hook 模板 + spawn env 注入 + HookAuthority 仲裁（新鲜度窗口 60s）+ pty WS `agent_state` 门铃推送。
 - **上一里程碑（2026-08-13）**：Phase 2.5（VT 模拟器换 registry 依赖）完成——`wezterm-term` git 依赖已换为 `alacritty_terminal` 0.26（crates.io），`cargo package` 通过、crates.io 渠道恢复。
 - **Phase 2 完成情况（2026-08-12）**：**Phase 2（PtyEngine 地基）已完成**（commit `6065fa1` / `e7aab2a` / 切片 C，分支 `feature/pty-phase2`）：三个垂直切片全部落地并端到端验收——切片 A 常驻会话（断开不杀进程、重连补屏）、切片 B wezterm-term VT 模拟器（capture/title/resize nudge，spike 通过未触发 D8 翻盘）、切片 C 恢复能力（scrollback 落盘 + `last_cwd` 回写 + 重启重建回放）。~~下一步 = **Phase 3（pty hook 信道）**~~（v5：先做 Phase 2.5）。Phase 2 完成记录见 §3 Phase 2 节尾。
 - **阅读顺序**：本文件 §2 决策 + §3 分期 → `docs/reference/herdr-reference.md`（Phase 2 实现细节，含 herdr 文件行号）→ 方向规划（仅需背景时）。
@@ -218,6 +219,12 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
   - 文案：新增 pty 会话相关措辞；tmux 文案保留。
 - **产出**：新建会话可在两种引擎间选择并各自全功能可用；旧会话照常。
 - **验收**：pty/tmux 各走一遍创建/输入/复制/agent 检测/重连/后端重启场景（`docs/reference/user-testing.md` 双引擎用例）。
+- **完成记录（2026-08-21）**：按 v6 清单落地，四点执行细化：
+  1. **后端零改动**（v3 修订口径）：`RuntimeKind::default()=Acp` 不回改——前端创建路径恒显式传 `runtime_kind`（`'pty'`/`'tmux'`/`'acp'`），`unwrap_or_default` 落点仅对不带该字段的裸 API 调用生效，无回归面。
+  2. **tmux 可用性单一真相源 = `appStore.multiplexerAvailable`**：Sidebar 挂载时探测 `GET /system/multiplexer`（503/异常 → false，silent 无 toast）；引擎选择器禁用态与 external 区块渲染/轮询共用该标志（external 不可用时连 10s 轮询一并停掉）。
+  3. **pty 滚动态派生而非模拟**：pty 无 copy-mode 状态可查，`scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）改由 `term.onScroll` 按视口位置派生（`viewportY < baseY`）；翻页 `scrollLines` / 退出 `scrollToBottom`，零注入字节。跨引擎切换由 `Layout::sessionViewKey`（以 runtime_kind 为 key）强制重挂载，保证 onScroll 订阅时机正确。
+  4. **顺带修的既存文案缺陷**：删除会话确认文案原写「对应的 tmux 会话也将被终止」，pty 会话不经过 tmux，改为引擎中性「终端进程」。
+  - 验收：tsc / vitest 358 条 / eslint 全绿（5 条 react-hooks warning 为既有刻意省略依赖）；dev 环境 e2e——pty 会话创建（默认选中）/输入回显/刷新重连补屏（seq 历史可见）/继续输入；tmux 会话创建（选择器切 tmux）/输入/状态栏；选 agent 时选择器隐藏；两测试会话事后清理。**未覆盖**：拖选复制与移动端滚动为纯浏览器交互，headless 无法拖选，按 §16.2 留人工回归。
 
 ### ~~Phase 5：摘除 tmux~~（v6 作废）
 > **v6 方向修订（2026-08-20）整节作废**：pty 与 tmux 长期共存，不再规划摘除。`src/engine/tmux/` 作为**冻结的维护态引擎边界**长期保留（纪律不变：只修致命 bug，不加功能）；external 会话收养、copy-mode 注入、TmuxCheatsheet 等 tmux 专属能力随之长期保留。`tmux_session_name` 冻结列名不再改名。若未来产品方向再次变化，另立新计划。

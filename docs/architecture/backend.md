@@ -110,6 +110,8 @@ ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
 | 补屏 | tmux `new-session -A` 原生 | 补屏环 ANSI 回放 + resize nudge |
+| 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）+ 直接拖选复制，无任何注入字节 |
+| 创建入口（Phase 4） | 创建会话弹窗引擎选择器可选项（multiplexer 不可用时禁用），长期维护态 | 同选择器默认选中项 |
 
 ## pty hook 信道（D7，Phase 3）
 

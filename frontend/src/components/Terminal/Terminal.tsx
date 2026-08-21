@@ -25,6 +25,18 @@ export function Terminal() {
   const fontSize = useAppStore((s) => s.fontSize)
   const mobileFontSize = useAppStore((s) => s.mobileFontSize)
   const uiZoom = useAppStore((s) => s.uiZoom)
+  // 会话引擎判别（D12 交互分流的依据）：external 会话无 DB id，返回
+  // undefined，useTerminal 按 tmux 处理（external 是 tmux 专属能力）。
+  // 选择器返回原始值，sessions 轮询整体替换不引发重渲染。
+  const runtimeKind = useAppStore((s) => {
+    const id = s.activeSessionId
+    if (!id) return undefined
+    for (const list of Object.values(s.sessions)) {
+      const found = list.find((x) => x.id === id)
+      if (found) return found.runtime_kind
+    }
+    return undefined
+  })
   // xterm.js mouse-coordinate math does not account for CSS zoom, so text
   // selection drifts when the layout root is zoomed. The container below
   // applies the inverse zoom to bring the xterm subtree back to effective
@@ -61,6 +73,7 @@ export function Terminal() {
   } = useTerminal({
     sessionId: activeSessionId,
     externalSessionName: activeExternalSession,
+    runtimeKind,
     fontSize: effectiveFontSize,
     latchModRef,
     onConsumeLatch: consumeLatch,

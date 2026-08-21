@@ -117,7 +117,30 @@ Session pane splits on `Session.runtime_kind`:
 | runtime_kind | Component | Transport |
 |--------------|-----------|-----------|
 | `tmux` | `components/Terminal/Terminal.tsx` | xterm.js + `/api/v1/ws/terminal/{id}` |
+| `pty` | `components/Terminal/Terminal.tsx` | xterm.js + `/api/v1/ws/terminal/{id}` |
 | `acp` | `components/Chat/ChatView.tsx` | React DOM + `/api/v1/ws/acp/{id}` |
+
+### 双引擎交互分流（D12，Phase 4）
+
+tmux 与 pty 会话共用 Terminal 组件与 WS 路由，但交互语义按引擎分流，
+判别值 = 会话 `runtime_kind`（`Terminal.tsx` 从 sessions 查得传入
+`useTerminal`；external 会话无 DB id，恒按 tmux 处理）：
+
+- **tmux 路径**（冻结不改）：滚动/翻页注入 copy-mode 字节（prefix+`[`），
+  `tmuxScrollModeRef` 跟踪 copy-mode 状态；modern 键位注入 prefix 组合；
+  复制需 Shift 拖选绕过 mouse mode。
+- **pty 路径**：零注入字节——翻页走 `term.scrollLines`，退出走
+  `scrollToBottom`；`scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）
+  由 `term.onScroll` 按视口位置派生（`viewportY < baseY`）；modern 键位
+  拦截直接放行；无 mouse mode，直接拖选即复制（autoCopySelect 机制共用）。
+- 引擎间切换会话时 `Layout::sessionViewKey` 以 runtime_kind 为 key，
+  跨引擎切换强制重挂载（pty 的 onScroll 订阅在创建期注册）。
+
+创建入口：`CreateSessionModal` 无 agent 时显示引擎选择器（pty 默认 /
+tmux 可选）；选了 agent 则隐藏（ACP 会话）。tmux 选项由
+`appStore.multiplexerAvailable`（Sidebar 挂载时探测 `/system/multiplexer`，
+503/异常 → false）门控禁用。同一标志也门控 Sidebar external 会话区块
+的渲染与轮询（external 是 tmux 专属能力，D6）。
 
 The dispatcher lives in `components/Layout/Layout.tsx::SessionView` — it
 reads `activeSession.runtime_kind` and renders the matching view. Both

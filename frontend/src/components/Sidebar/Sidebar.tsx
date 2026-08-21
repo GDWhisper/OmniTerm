@@ -56,6 +56,7 @@ export function Sidebar() {
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
   const setMultiplexer = useAppStore((s) => s.setMultiplexer)
+  const setMultiplexerAvailable = useAppStore((s) => s.setMultiplexerAvailable)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
   const expandAllSessions = useAppStore((s) => s.expandAllSessions)
@@ -279,7 +280,11 @@ export function Sidebar() {
     }).catch(() => {
       // fallback: leave homeDir empty, user fills the path in manually
     })
-  }, [setMultiplexer])
+    // tmux 可用性探测（503 → request 抛错）：tmux 引擎选项与 external 区块的显隐依据
+    api.multiplexerStatus()
+      .then((st) => setMultiplexerAvailable(st.available))
+      .catch(() => setMultiplexerAvailable(false))
+  }, [setMultiplexer, setMultiplexerAvailable])
 
   // Health polling
   useEffect(() => {

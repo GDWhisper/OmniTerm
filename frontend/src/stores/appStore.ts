@@ -117,6 +117,16 @@ export interface AppState {
    */
   multiplexer: string
 
+  /**
+   * Whether the multiplexer (tmux/psmux) is actually usable on the backend
+   * host (`/system/multiplexer` probe). Gates the tmux engine option in the
+   * create-session modal and the sidebar external-sessions section (both are
+   * tmux-only capabilities). Default false until the probe resolves — a
+   * pty-only host never flickers tmux UI.
+   */
+  multiplexerAvailable: boolean
+  setMultiplexerAvailable: (v: boolean) => void
+
   /** Registered sendData from the active terminal for cross-component access. */
   terminalSendData: ((data: string) => void) | null
   setTerminalSendData: (fn: ((data: string) => void) | null) => void
@@ -296,6 +306,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   connected: false,
   terminalDisconnected: false,
   multiplexer: 'tmux',
+  multiplexerAvailable: false,
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
@@ -500,6 +511,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAuthEnabled: (v) => set({ authEnabled: v }),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setMultiplexer: (v) => set({ multiplexer: v }),
+  setMultiplexerAvailable: (v) => set({ multiplexerAvailable: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
     localStorage.setItem('omniterm_mobile_last_tab', tab)

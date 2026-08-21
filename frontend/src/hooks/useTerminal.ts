@@ -38,6 +38,9 @@ async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/add
 interface UseTerminalOptions {
   sessionId: string | null
   externalSessionName?: string | null
+  /** Session engine: 'pty' 会话不注入 tmux copy-mode/prefix 字节，滚动走
+   *  xterm 本地 scrollback；缺省（含 external 会话）按 tmux 处理。 */
+  runtimeKind?: 'tmux' | 'pty' | 'acp'
   fontSize?: number
   onTitleChange?: (title: string) => void
   /** Ref tracking the currently-latched modifier key (Ctrl/Shift/Alt) from MobileKeyBar */
@@ -84,7 +87,7 @@ function translateLatch(latch: string, data: string): string {
   }
 }
 
-export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
+export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const attention = useAttention()  // Agent attention context
   // Blur / idle disconnect timeouts (minutes). Read reactively from the store;
@@ -273,9 +276,11 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     if (!keyHandlerAttachedRef.current) {
       keyHandlerAttachedRef.current = true
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
-        // Only intercept in modern mode
+        // Only intercept in modern mode — and only for tmux sessions: the
+        // shortcuts inject tmux prefix bytes (\x02...), which a pty session
+        // has no concept of (D12 分流).
         const mode = useAppStore.getState().keybindingMode
-        if (mode !== 'modern') return true
+        if (mode !== 'modern' || runtimeKindRef.current === 'pty') return true
 
         // Only handle keydown, ignore keyup to prevent double-trigger
         if (ev.type !== 'keydown') return true
@@ -342,8 +347,18 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   /** Enter tmux copy mode (if not already) and scroll one page in the given direction.
    *  Uses the real tmux copy-mode state (tmuxScrollModeRef) as the source of
    *  truth, not the React `scrollMode` flag, so pagging always works after the
-   *  user has toggled scroll on via the UI button. */
+   *  user has toggled scroll on via the UI button.
+   *
+   *  pty 会话分流（D12）：无 copy-mode，直接滚动 xterm 本地 scrollback；
+   *  scrollMode 状态由 createTerminal 里的 term.onScroll 按视口位置驱动。 */
   const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
+    if (runtimeKindRef.current === 'pty') {
+      const term = termRef.current
+      if (!term) return
+      const page = Math.max(1, term.rows - 1)
+      term.scrollLines(direction === 'up' ? -page : page)
+      return
+    }
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     if (!tmuxScrollModeRef.current) {
@@ -364,6 +379,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
    *  when scrolled back to the bottom of history — we cannot detect that), while
    *  a lone Escape is a no-op in a shell command line. */
   const exitScrollMode = useCallback(() => {
+    if (runtimeKindRef.current === 'pty') {
+      // pty 分流：本地 scrollback 无 mode 概念，回到底部即退出；
+      // scrollMode 由 term.onScroll 按视口位置复位。
+      termRef.current?.scrollToBottom()
+      return
+    }
     if (!tmuxScrollModeRef.current) {
       setScrollMode(false)
       return
@@ -429,6 +450,12 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
   // font-size change — the live-update effect handles that in-place).
   const fontSizeRef = useRef(fontSize)
   fontSizeRef.current = fontSize
+
+  // Mirror runtimeKind for long-lived closures (custom key handler / scroll
+  // callbacks / createTerminal) — same pattern as fontSizeRef. 缺省按 tmux：
+  // external 会话恒为 tmux（D6 冻结边界）。
+  const runtimeKindRef = useRef(runtimeKind)
+  runtimeKindRef.current = runtimeKind
 
   /** Create a terminal on the given container and return a cleanup function.
    *
@@ -531,6 +558,18 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
+    // pty 分流（D12）：无 tmux copy-mode 状态可查，滚动态改由视口位置派生——
+    // 视口不在 scrollback 底部即视为"滚动中"（MobileKeyBar 高亮 + 软键盘抑制
+    // 与 tmux 路径语义一致）。tmux 会话走 tmuxScrollModeRef，不订阅。
+    if (runtimeKindRef.current === 'pty') {
+      listenerDisposablesRef.current.push(
+        term.onScroll(() => {
+          const buf = term.buffer.active
+          setScrollMode(buf.viewportY < buf.baseY)
+        })
+      )
+    }
+
     // Handle resize — debounced so xterm.js and tmux resize together after
     // layout stabilizes. Without debounce, fit.fit() changes xterm dimensions
     // immediately while tmux still has the old size; if tmux redraws its
@@ -579,6 +618,9 @@ export function useTerminal({ sessionId, externalSessionName, fontSize = 14, onT
     // output (deltaY > 0) is left alone: tmux's `copy-mode -e` only auto-exits
     // once the history bottom is reached, which we cannot observe here.
     touchScrollCleanupRef.current = attachTouchScroll(container, (deltaY) => {
+      // pty 分流：wheel 直接滚动 xterm 本地 scrollback，无 copy-mode 标志可维护
+      //（scrollMode 由上方 onScroll 订阅驱动）。
+      if (runtimeKindRef.current === 'pty') return
       if (deltaY < 0 && !tmuxScrollModeRef.current) {
         tmuxScrollModeRef.current = true
         setScrollMode(true)

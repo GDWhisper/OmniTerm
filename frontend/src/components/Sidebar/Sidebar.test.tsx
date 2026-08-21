@@ -14,6 +14,7 @@ vi.mock('../../api/client', () => ({
     listExternalSessions: vi.fn().mockResolvedValue({ sessions: [] }),
     health: vi.fn().mockResolvedValue({ status: 'ok' }),
     systemInfo: vi.fn().mockResolvedValue({ home_dir: '/home/user' }),
+    multiplexerStatus: vi.fn().mockResolvedValue({ available: true }),
     listDuplicates: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
     createWorktree: vi.fn(),
@@ -183,7 +184,7 @@ describe('Sidebar handleCreateSession', () => {
         fakeWorkspace.path,
         'my-test-session',
         undefined,
-        'tmux',
+        'pty',
         undefined,
       )
     })
@@ -244,7 +245,7 @@ describe('Sidebar handleCreateSession', () => {
         fakeWorkspace.path,
         undefined,
         undefined,
-        'tmux',
+        'pty',
         undefined,
       )
     })

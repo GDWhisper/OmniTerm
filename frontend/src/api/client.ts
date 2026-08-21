@@ -109,8 +109,9 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
-  // Runtime discriminator: 'tmux' = tmux-backed pane, 'acp' = ACP adapter subprocess
-  runtime_kind: 'tmux' | 'acp'
+  // Runtime discriminator: 'tmux' = tmux-backed pane, 'pty' = self-managed PTY
+  // engine (no multiplexer), 'acp' = ACP adapter subprocess
+  runtime_kind: 'tmux' | 'pty' | 'acp'
   // ACP adapter session id; present only when runtime_kind='acp'
   acp_session_id?: string
   // Agent config id (from `agents` table); present when runtime_kind='acp'
@@ -189,6 +190,11 @@ export const api = {
   // System
   systemInfo: () =>
     request<{ home_dir: string; multiplexer?: string; proxy_domain?: string | null }>('/system/info'),
+  // Multiplexer (tmux/psmux) availability probe: 200 {available:true} or
+  // 503 {available:false, install_hints}. silent — absence is a normal state
+  // (pty-only hosts), surfaced as a disabled option, not an error toast.
+  multiplexerStatus: () =>
+    request<{ available: boolean; error?: string; install_hints?: string }>('/system/multiplexer', { silent: true }),
   listDirs: (path: string) =>
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>
@@ -277,7 +283,7 @@ export const api = {
     workspacePath: string,
     name?: string,
     command?: string,
-    runtimeKind?: 'tmux' | 'acp',
+    runtimeKind?: 'tmux' | 'pty' | 'acp',
     agentId?: string,
   ) =>
     request<Session>(`/projects/${projectId}/sessions`, {
