@@ -163,7 +163,7 @@ export function CreateSessionModal(props: {
                   style={{ accentColor: 'var(--accent)', marginTop: 2 }}
                 />
                 <span>
-                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>tmux</span>
+                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>Terminal</span>
                   <span className="block text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
                     {multiplexerAvailable ? t('sidebar.engineTmuxHint') : t('sidebar.engineTmuxUnavailable', { mux: multiplexer })}
                   </span>
