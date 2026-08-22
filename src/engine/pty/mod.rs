@@ -2,9 +2,10 @@
 //!
 //! 生命周期语义与复用器引擎对齐（计划 §1.2 "detach 不杀进程"）：
 //! - 会话进程由引擎常驻持有（会话 map），**WS 断开只解绑订阅、不杀进程**；
-//! - attach = 订阅输出 + 重放补屏环窗口（原始 ANSI 字节回放）；重连另有
-//!   resize nudge 重绘；VT grid（alacritty_terminal，D8 v5）承担
-//!   capture/title/resize 与切片 C 的 ANSI seed 回放；模拟器应答
+//! - attach = 订阅输出 + 补屏帧下发（原始字节尾进 scrollback + 清可见屏 +
+//!   VT grid 重渲染当前屏，见 `vt.rs` 补屏说明）；重连另有 resize nudge
+//!   重绘；VT grid（alacritty_terminal，D8 v5）承担 capture/title/
+//!   render_screen/resize 与切片 C 的 ANSI seed 回放；模拟器应答
 //!   （DSR/DA 等）由读循环按 attach 状态门控回写（`should_server_respond`）；
 //! - 子进程退出（读循环 EOF / child.wait）时自动从 map 注销（幂等、
 //!   Arc 指针比对防止误删同名重建会话），下次 attach 自动重建（D5 重建
@@ -53,6 +54,10 @@ const CWD_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
 /// 输出汇聚点：补屏环 + 广播。读循环与 attach 在同一把锁下操作，
 /// 保证「快照 + 订阅」无重复无丢失（先 push 后 send，attach 先 snapshot
 /// 后 subscribe，两侧被本锁串行化）。
+///
+/// **锁序契约：out → vt**（读循环与 attach 均按此嵌套；vt 不得反向包住
+/// out）。ring 快照、grid 渲染、订阅三者在 attach 的同一临界区内完成，
+/// 否则「渲染帧已含字节 X 而 rx 再投递 X」会重复、「渲染落后于快照」会缺失。
 struct Output {
     ring: ByteRing,
     tx: broadcast::Sender<Vec<u8>>,
@@ -192,7 +197,7 @@ impl PtyEngine {
 /// WS 连接持有的 attach 句柄。drop = detach（解绑订阅），不触碰会话进程。
 /// Clone = 同一会话再开一个订阅（写线程用），不重放补屏。
 pub struct PtyAttach {
-    /// attach 时刻的补屏窗口快照（原始字节回放；VT grid 供 capture/title）。
+    /// attach 时刻的补屏帧（raw 尾 + 清可见屏 + grid 重渲染，见 vt.rs 补屏说明）。
     pub replay: Vec<u8>,
     /// 后续输出订阅。Lagged = 慢消费丢帧（补屏回放可兜底）。
     pub rx: broadcast::Receiver<Vec<u8>>,
@@ -222,13 +227,19 @@ impl PtyAttach {
         Ok(())
     }
 
-    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）；VT grid 同步。
+    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）。
     pub fn resize(&self, size: PtySize) -> Result<()> {
-        self.state.session.resize(size).map_err(|e| anyhow!("pty resize failed: {e}"))?;
-        self.state.vt.lock().unwrap().resize(size.rows, size.cols);
-        *self.state.size.lock().unwrap() = size;
-        Ok(())
+        resize_state(&self.state, size)
     }
+}
+
+/// 覆盖式 resize：pty master + VT grid + 记录尺寸三处同步（最新值生效）。
+/// 内核在尺寸未变时不发 SIGWINCH，重复调用无副作用。
+fn resize_state(state: &SessionState, size: PtySize) -> Result<()> {
+    state.session.resize(size).map_err(|e| anyhow!("pty resize failed: {e}"))?;
+    state.vt.lock().unwrap().resize(size.rows, size.cols);
+    *state.size.lock().unwrap() = size;
+    Ok(())
 }
 
 impl PtyEngine {
@@ -236,11 +247,24 @@ impl PtyEngine {
     /// `reconnected` 做 resize nudge 重绘）；不存在则以 `cwd`/`size` spawn。
     pub fn attach(&self, key: &str, cwd: &str, size: PtySize) -> Result<PtyAttach> {
         let (state, reconnected) = self.resolve_or_create(key, cwd, size)?;
-        // 同一把锁内「先快照后订阅」：与读循环「先 push 后 send」串行，
-        // 补屏与增量不重不漏。
+        // 视口先行同步（单视图模型：最后 attach 者决定尺寸）：补屏渲染必须
+        // 按本次连接的尺寸出帧，否则断开期间窗口变宽/窄会按旧 cols 渲染。
+        resize_state(&state, size)?;
+        // 同一把临界区内完成「快照 + 渲染 + 订阅」（锁序 out→vt，与读循环
+        // 一致）：补屏与增量不重不漏。
         let (replay, rx) = {
             let g = state.out.lock().unwrap();
-            (g.ring.snapshot(), g.tx.subscribe())
+            let vt = state.vt.lock().unwrap();
+            let mut frame = g.ring.snapshot();
+            if !frame.is_empty() {
+                // 原始字节尾先进 scrollback 并恢复模式态（DECSET/alt-screen 等），
+                // 再清可见屏、以 grid 为真相源重画当前屏——原始 diff 流单独回放
+                // 对增量绘制的 TUI 会花屏（见 vt.rs 补屏说明）。
+                frame.extend_from_slice(b"\x1b[H\x1b[2J");
+                frame.extend_from_slice(&vt.render_screen());
+            }
+            let rx = g.tx.subscribe();
+            (frame, rx)
         };
         Ok(PtyAttach { replay, rx, reconnected, state })
     }
@@ -332,13 +356,13 @@ impl PtyEngine {
                     Ok(0) => break,
                     Ok(n) => {
                         let chunk = buf[..n].to_vec();
-                        {
+                        // 锁序 out→vt（与 attach 一致）：ring push、广播、grid
+                        // feed 原子于 attach 临界区，补屏帧不会重复或缺失字节。
+                        let responses = {
                             let mut g = reader_state.out.lock().unwrap();
+                            let mut vt = reader_state.vt.lock().unwrap();
                             g.ring.push(&chunk);
                             let _ = g.tx.send(chunk.clone()); // 无接收者时 send 报错即丢弃
-                        }
-                        let responses = {
-                            let mut vt = reader_state.vt.lock().unwrap();
                             vt.feed(&chunk);
                             vt.take_responses()
                         };

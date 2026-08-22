@@ -180,7 +180,8 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 - **产出**：单测覆盖 create/write/read/resize/kill/capture/回放/fd 计数（OS 级断言按 integration-checklist §A.1 模板）；runtime_kind_matrix 含 pty 全路径 case。
 - **完成记录（2026-08-12）**：三切片独立提交、独立验收：
   - **切片 A**：`PtyEngine` 实现 `SessionEngine`，会话 map 常驻持有 pty 进程；WS 断开只解绑订阅；attach 同锁「先快照后订阅」保证补屏与增量不重不漏；子进程退出自动注销、下次 attach 重建；三级信号清理 + child 收割（`mem::forget` 已移除）。引擎级验收（断开→重连存活可输入）+ 真实 WS 冒烟通过；fd 计数/spawn cwd OS 真相回归测试就位。
-  - **切片 B**：spike 结论——wezterm-term 以 git 依赖锁 tag `20240203-110809-5046fc22` 可拉取、全树编译通过（D8 翻盘条件不触发）；`vt.rs` 提供 feed/capture/title/resize，capture 走 VT grid 消除 ANSI 碎片；重连 resize nudge 落地（`reconnected` 标志）。**执行偏差**：补屏未采用「模拟器重渲染整帧」，沿用补屏环原始 ANSI 回放——前端 xterm.js 消费原始 ANSI 流，字节回放保真度更高；herdr 的帧重渲染适配其帧 diff 协议，对 ANSI 流客户端无增益（记录在 `vt.rs` 头注）。
+   - **切片 B**：spike 结论——wezterm-term 以 git 依赖锁 tag `20240203-110809-5046fc22` 可拉取、全树编译通过（D8 翻盘条件不触发）；`vt.rs` 提供 feed/capture/title/resize，capture 走 VT grid 消除 ANSI 碎片；重连 resize nudge 落地（`reconnected` 标志）。**执行偏差**：补屏未采用「模拟器重渲染整帧」，沿用补屏环原始 ANSI 回放——前端 xterm.js 消费原始 ANSI 流，字节回放保真度更高；herdr 的帧重渲染适配其帧 diff 协议，对 ANSI 流客户端无增益（记录在 `vt.rs` 头注）。
+     - **勘误（2026-08-22）**：上项执行偏差被实测推翻——增量绘制型 agent TUI（chat 型 CLI：光标绝对定位 + 局部擦除的 diff 流，每条序列依赖上一帧屏幕状态）在「清屏后回放字节尾」下必然花屏（序列落在错误位置），且 ByteRing 可从转义序列中间截断、resize nudge 只救 SIGWINCH 全量重绘型程序。补屏改为混合方案：raw 字节尾回放（进 scrollback + 恢复 DECSET/alt-screen 模式态）+ `\x1b[H\x1b[2J` 清可见屏（不清 scrollback）+ `VtState::render_screen()` 以 grid 为真相源带 SGR 样式整帧重画 + 光标定位/显隐复位；锁序契约 out→vt 保证快照/渲染/订阅原子。原「字节回放保真度更高」的判断只对全量重绘型 TUI 成立，见 `vt.rs` 补屏说明与 debug-patterns「终端-屏幕态」。
   - **切片 C**：`scrollback.rs`（分文件/0600/tmp+rename/UTF-8 截断）+ 5s 去抖 flush（快照对象为 256KB 有界环，避 P2 O(n²)）+ 30s cwd 采样回写 `last_cwd`（migration 仅此一列）+ 重建 ANSI seed。端到端验收：真实重启后端 → 会话重建于最后 cwd、重连补屏见重启前输出。显式 kill 删除历史文件（无需重建）。
   - §B.2 穷举：`runtime_kind_matrix` 6/6 通过（含 pty files/删除 case），无 `?`。
 
@@ -265,7 +266,7 @@ commit `477d79c` / `9a731de`（2026-08-05）已落地一批 pty 脚手架，均�
 | 双引擎并存状态不一致 | §4 差异表 + D12 分流；agent 状态统一经 `agent_snapshot` 读口 |
 | ~~wezterm-term 仅 git 依赖可得（v3 新发现）~~ → **已发生：git 依赖阻塞 crates.io 发布**（0.2.14 中止） | 已结案：D8 v5 改用 registry 依赖 `alacritty_terminal`，Phase 2.5 执行；今后**新增依赖必须来自 crates.io**，`cargo package --no-verify` 入发布前检查单（release-guide） |
 | 存量 pty 脚手架与计划冲突（v3 新发现） | §1.4 定性临时件；Phase 1 收敛、Phase 2 切片 A 替换；禁止在脚手架上加功能 |
-| 补屏 ANSI 与 xterm.js 显示偏差 | 验收含 TUI 程序重连用例 + resize nudge |
+| ~~补屏 ANSI 与 xterm.js 显示偏差~~ **已发生并结案（2026-08-22）**：原始字节尾回放对增量绘制型 agent TUI 重连花屏 | 已修复：补屏改混合方案（raw 尾进 scrollback+模式态恢复 → 清可见屏 → `render_screen` grid 整帧重画），详见切片 B 勘误；验收仍含 TUI 程序重连用例 |
 | scrollback 落盘 IO 放大 | 异步批量写 + 截尾；压测 `yes` |
 | 冻结纪律流失（有人继续给 tmux 加功能） | AGENTS.md 文档索引加冻结说明；PR 审查以 D9 为据 |
 

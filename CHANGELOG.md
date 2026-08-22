@@ -58,6 +58,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-22 00:00) `[backend]` 修复 pty 会话重连后画面花屏：增量绘制型 agent TUI（光标绝对定位 + 局部擦除的 diff 流）在「清屏后回放原始字节尾」下序列落在错误位置，且字节环可从转义序列中间截断、resize nudge 救不了非全量重绘型程序——补屏帧改为混合方案：raw 字节尾回放（进 scrollback + 恢复 alt-screen 等模式态）→ 清可见屏（不清 scrollback）→ 服务端 VT grid 为真相源带 SGR 样式整帧重画 + 光标定位/显隐复位；attach 时先按本次连接尺寸同步视口（修断开期间窗口变宽/窄按旧尺寸渲染的既存缺陷），快照/渲染/订阅单临界区原子完成（`src/engine/pty/vt.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`）
+
 - (2026-08-19 00:26) `[frontend]` 修复 ACP 会话流式输出中刷新页面丢失早期 assistant 正文：后端 turn 累积器帧窗口按字节上限从头部驱逐旧帧，刷新后 hydrate/续接快照只含窗口残片，且 turn 结束时前端把残缺 cooked blocks 回写覆盖 DB 行使缺失永久化——现收到续接快照的 turn 跳过 cooked 回写（DB 保留完整 text 列的原始帧行），且 RAW 帧解码与快照还原时用后端全量 text 把被驱逐的正文前缀补回显示（精确后缀匹配守卫，失配宁缺勿错）（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 
 ---

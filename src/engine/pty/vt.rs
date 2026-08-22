@@ -15,10 +15,12 @@
 //! （D8 v5 选型对照实测）。已知细微差异：进入 alt-screen 时保留当前光标行
 //! （`\x1b[?1049h` 后 capture 首行可能为空），对整屏文本匹配的检测无影响。
 //!
-//! 补屏说明：前端 xterm.js 消费原始 ANSI 流，重连补屏继续用补屏环回放
-//! （字节级保真，切片 A 已验收）；herdr 的「模拟器重渲染整帧」适配其
-//! 帧 diff 协议，对 ANSI 流客户端无增益，故不采用（计划 §3 切片 B 的
-//! 执行偏差记录）。模拟器承担 capture/title/resize + 切片 C 的 ANSI seed。
+//! 补屏说明：重连补屏 = 补屏环原始字节尾（进本地 scrollback + 恢复模式态：
+//! DECSET/alt-screen 等）+ 清可见屏（`\x1b[H\x1b[2J`，不清 scrollback）+
+//! [`VtState::render_screen`] 以 grid 为真相源重画当前屏。原始字节尾单独回放
+//! 对增量绘制的 TUI 会花屏（diff 序列依赖已不存在的屏幕状态），可见屏必须
+//! 整帧重画，后续增量才能衔接。模拟器承担 capture/title/render_screen/
+//! resize + 切片 C 的 ANSI seed。
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -26,9 +28,9 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config as TermConfig, Osc52, Term};
-use alacritty_terminal::vte::ansi::{Processor, Rgb};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use tracing::warn;
 
 /// VT scrollback 行数上限（P1 有界：grid 内存 ≈ 行数 × 列数 × 单元开销，
@@ -136,6 +138,125 @@ impl Dimensions for VtSize {
 /// 颜色查询的兜底色（调色板未设置该索引时）：xterm 经典默认前景。
 const FALLBACK_COLOR: Rgb = Rgb { r: 0xd8, g: 0xd8, b: 0xd8 };
 
+/// 相邻单元合并为同段的样式键（减少 SGR 序列量）。
+/// fg/bg 为 `None` 表示默认色；flags 全集参与等值比较（变化即重发）。
+#[derive(Clone, Copy, PartialEq)]
+struct CellStyle {
+    fg: Option<Color>,
+    bg: Option<Color>,
+    flags: Flags,
+}
+
+impl Default for CellStyle {
+    fn default() -> Self {
+        Self { fg: None, bg: None, flags: Flags::empty() }
+    }
+}
+
+impl CellStyle {
+    fn of(cell: &Cell) -> Self {
+        Self { fg: normalize_color(cell.fg), bg: normalize_color(cell.bg), flags: cell.flags }
+    }
+
+    /// 默认样式（行尾裁剪判据：只有默认样式的空白才可裁）。
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// 默认色归一为 `None`：Foreground/Background/Cursor 及 Dim* 系仅内部
+/// 调色板/特殊场景使用，单元色不携带；标准 16 色原样保留供 SGR 映射。
+fn normalize_color(c: Color) -> Option<Color> {
+    let Color::Named(n) = c else { return Some(c) };
+    match n {
+        NamedColor::Black
+        | NamedColor::Red
+        | NamedColor::Green
+        | NamedColor::Yellow
+        | NamedColor::Blue
+        | NamedColor::Magenta
+        | NamedColor::Cyan
+        | NamedColor::White
+        | NamedColor::BrightBlack
+        | NamedColor::BrightRed
+        | NamedColor::BrightGreen
+        | NamedColor::BrightYellow
+        | NamedColor::BrightBlue
+        | NamedColor::BrightMagenta
+        | NamedColor::BrightCyan
+        | NamedColor::BrightWhite => Some(c),
+        _ => None,
+    }
+}
+
+/// 样式 → SGR 参数体（不含 CSI 与结尾 `m`）；默认样式返回 `None`（仅发 reset）。
+/// 扩展下划线系 flag（DOUBLE_UNDERLINE 等）不映射：样式键含全集 flags，
+/// 变化检测不受影响，仅该类罕见样式降级为普通文本（不影响正确性）。
+/// blink（SGR 5）同样不映射——alacritty 0.26 无对应单元位，无从检测。
+fn sgr_body(style: &CellStyle) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for (flag, code) in [
+        (Flags::BOLD, "1"),
+        (Flags::DIM, "2"),
+        (Flags::ITALIC, "3"),
+        (Flags::UNDERLINE, "4"),
+        (Flags::INVERSE, "7"),
+        (Flags::HIDDEN, "8"),
+        (Flags::STRIKEOUT, "9"),
+    ] {
+        if style.flags.contains(flag) {
+            parts.push(code.to_string());
+        }
+    }
+    if let Some(c) = style.fg {
+        let p = color_sgr(c, true);
+        if !p.is_empty() {
+            parts.push(p);
+        }
+    }
+    if let Some(c) = style.bg {
+        let p = color_sgr(c, false);
+        if !p.is_empty() {
+            parts.push(p);
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(";"))
+}
+
+/// 单色 → SGR 参数：标准 16 色用基础码（30-37/90-97、40-47/100-107），
+/// 其余走扩展形式（38;5;n / 38;2;r;g;b）。归一化后的默认色不会到达此处；
+/// 防御性兜底按默认处理（降级显示，不出错码）。
+fn color_sgr(c: Color, foreground: bool) -> String {
+    let std = if foreground { 30 } else { 40 };
+    let bright = if foreground { 90 } else { 100 };
+    let ext = if foreground { 38 } else { 48 };
+    match c {
+        Color::Named(n) => {
+            let idx: u8 = match n {
+                NamedColor::Black => 0,
+                NamedColor::Red => 1,
+                NamedColor::Green => 2,
+                NamedColor::Yellow => 3,
+                NamedColor::Blue => 4,
+                NamedColor::Magenta => 5,
+                NamedColor::Cyan => 6,
+                NamedColor::White => 7,
+                NamedColor::BrightBlack => 8,
+                NamedColor::BrightRed => 9,
+                NamedColor::BrightGreen => 10,
+                NamedColor::BrightYellow => 11,
+                NamedColor::BrightBlue => 12,
+                NamedColor::BrightMagenta => 13,
+                NamedColor::BrightCyan => 14,
+                _ => return String::new(),
+            };
+            if idx < 8 { (std + idx).to_string() } else { (bright + idx - 8).to_string() }
+        }
+        Color::Indexed(i) => format!("{ext};5;{i}"),
+        Color::Spec(rgb) => format!("{ext};2;{};{};{}", rgb.r, rgb.g, rgb.b),
+    }
+}
+
 pub struct VtState {
     term: Term<VtEventListener>,
     processor: Processor,
@@ -228,6 +349,65 @@ impl VtState {
             }
             out.push_str(line.trim_end());
             out.push('\n');
+        }
+        out
+    }
+
+    /// 可见屏带样式渲染——补屏帧的「当前屏」部分（客户端清屏后整帧重画）。
+    ///
+    /// 输出 = 逐行 SGR 样式文本（`\r\n` 连接；行尾仅裁「默认样式的空白」，
+    /// 带底色的行尾空白保留——TUI 整行铺底的常态）+ 收尾 reset + 光标定位
+    /// 与显隐复位。光标必须复位：后续 TUI 增量多为相对移动/局部擦写，
+    /// 客户端光标位置与服务端 grid 不一致即错位。
+    ///
+    /// P1 有界：输出上限 ≈ rows × cols × 单元预算（SGR 重发 ~24B + 字符
+    /// ≤4B，容量按 8B/单元预留），视口尺寸经 PtySize 校验（≤1000×1000）；
+    /// 构造即有界、不随时间累积。
+    pub fn render_screen(&self) -> Vec<u8> {
+        let grid = self.term.grid();
+        let rows = self.term.screen_lines();
+        let cols = self.term.columns();
+        let mut out: Vec<u8> = Vec::with_capacity(rows * cols * 8 + 64);
+        let mut cur = CellStyle::default();
+
+        for row in 0..rows {
+            let cells: Vec<(char, CellStyle)> = grid[Line(row as i32)][Column(0)..Column(cols)]
+                .iter()
+                .filter(|c| {
+                    !c.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                })
+                .map(|c| (c.c, CellStyle::of(c)))
+                .collect();
+            let trimmed =
+                cells.iter().rev().take_while(|(ch, st)| *ch == ' ' && st.is_default()).count();
+            for (ch, st) in &cells[..cells.len() - trimmed] {
+                if *st != cur {
+                    out.extend_from_slice(b"\x1b[0m");
+                    if let Some(body) = sgr_body(st) {
+                        out.push(b'\x1b');
+                        out.push(b'[');
+                        out.extend_from_slice(body.as_bytes());
+                        out.push(b'm');
+                    }
+                    cur = *st;
+                }
+                let mut buf = [0u8; 4];
+                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            }
+            out.extend_from_slice(b"\r\n");
+        }
+
+        if cur != CellStyle::default() {
+            out.extend_from_slice(b"\x1b[0m");
+        }
+        let rc = self.term.renderable_content();
+        let point = rc.cursor.point;
+        out.extend_from_slice(
+            format!("\x1b[{};{}H", point.line.0 + 1, point.column.0 + 1).as_bytes(),
+        );
+        match rc.cursor.shape {
+            CursorShape::Hidden => out.extend_from_slice(b"\x1b[?25l"),
+            _ => out.extend_from_slice(b"\x1b[?25h"),
         }
         out
     }
@@ -349,5 +529,62 @@ mod tests {
         sink.push(PendingResponse::Bytes(vec![b'z'; MAX_RESPONSE_BYTES + 1]));
         let g = sink.inner.lock().unwrap();
         assert!(g.queue.is_empty(), "oversized entry must be rejected, not queued");
+    }
+
+    #[test]
+    fn render_screen_emits_styled_text_with_reset() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[1;31mRED\x1b[0m tail\r\n");
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        // 样式段：reset + 参数体；回落默认时仅发 reset
+        assert!(r.contains("\x1b[0m\x1b[1;31mRED\x1b[0m tail"), "got: {r:?}");
+    }
+
+    #[test]
+    fn render_screen_trims_only_default_trailing_blank() {
+        let mut v = vt(24, 80);
+        v.feed(b"abc\r\n"); // 行尾默认样式空白 → 裁剪
+        v.feed(b"\x1b[41mA \x1b[0m\r\n"); // 行尾带底色空白 → 保留
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        assert!(r.contains("abc\r\n"), "default trailing blank must be trimmed: {r:?}");
+        // 样式变化按「reset + SGR 体」前发（见 render_screen），故带底色空白
+        // 保留的形态是 `\x1b[41mA \r\n`——空格未被裁剪即为保留
+        assert!(r.contains("\x1b[41mA \r\n"), "colored trailing blank must be kept: {r:?}");
+    }
+
+    #[test]
+    fn render_screen_restores_cursor_position_and_visibility() {
+        let mut v = vt(24, 80);
+        v.feed(b"abc\r\nxy"); // 光标应落在第 2 行第 3 列
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        assert!(r.ends_with("\x1b[2;3H\x1b[?25h"), "cursor restore wrong: {r:?}");
+        v.feed(b"\x1b[?25l"); // 隐藏光标（DECTCEM）
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        assert!(r.ends_with("\x1b[?25l"), "hidden cursor not synced: {r:?}");
+    }
+
+    #[test]
+    fn render_screen_wide_chars_once() {
+        let mut v = vt(24, 80);
+        v.feed("终端宽度测试".as_bytes());
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        assert_eq!(r.matches("终端宽度测试").count(), 1, "wide char duplicated: {r:?}");
+    }
+
+    #[test]
+    fn render_screen_shows_active_screen() {
+        let mut v = vt(24, 80);
+        v.feed(b"main screen\r\n");
+        v.feed(b"\x1b[?1049h"); // alt-screen（vim/htop 类）
+        v.feed(b"alt content");
+        let rendered = v.render_screen();
+        let r = String::from_utf8_lossy(&rendered);
+        assert!(r.contains("alt content"), "alt screen missing: {r:?}");
+        assert!(!r.contains("main screen"), "main screen leaked into render: {r:?}");
     }
 }

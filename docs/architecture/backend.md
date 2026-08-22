@@ -47,7 +47,7 @@ src/
 │       ├── agent_hooks.rs  # hook 命令模板（tmux 冻结版蓝本）：claude --settings / codex -c 的 curl 上报命令 + augment_agent_command
 │       ├── session.rs    # PtySession：openpty + spawn + child 收割句柄
 │       ├── ring.rs       # ByteRing：256KB 字节环形缓冲（重连补屏窗口，P1 有界）
-│       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/title/resize；应答经 take_responses 排空，由读循环按 attach 门控回写）
+│       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/render_screen/title/resize；应答经 take_responses 排空，由读循环按 attach 门控回写）
 │       ├── scrollback.rs # ANSI 历史落盘（D5：0600/tmp+rename/UTF-8 截断/路径逃逸防护）
 │       ├── cwd.rs        # [platform] 前台进程 cwd 采样（/proc）
 │       └── terminal_ws.rs# pty WS attach：补屏回放 + resize nudge + detach 语义
@@ -79,11 +79,13 @@ src/
 
 **PtyEngine 生命周期**：会话进程由引擎 map 常驻持有；WS 只是视图
 （断开 = 解绑订阅，不杀进程）；子进程退出自动注销，下次 attach 重建。
-attach = 补屏环快照回放（256KB 有界，原始 ANSI 字节）+ broadcast 订阅；
-同锁「先快照后订阅」保证不重不漏。重连既有会话触发 resize nudge
-（rows-1 → 30ms → rows）强制 TUI 重绘。恢复链路（D5）：5s 去抖落盘
-ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
-30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
+attach = 补屏帧下发（raw 字节尾进 scrollback 并恢复模式态 + `\x1b[H\x1b[2J`
+清可见屏 + `render_screen()` 以 VT grid 为真相源带样式整帧重画 + 光标/显隐复位；
+256KB 有界）+ broadcast 订阅；attach 内先按本次连接尺寸同步视口，再在单临界区
+（锁序 out→vt，与读循环一致）完成「快照 + 渲染 + 订阅」保证不重不漏。
+重连既有会话触发 resize nudge（rows-1 → 30ms → rows）强制 TUI 重绘。恢复链路
+（D5）：5s 去抖落盘 ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，
+0600）+ 30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
 并 seed 历史进补屏环与 VT grid（alacritty_terminal）。显式 kill 删历史文件。
 
 > **VT 模拟器 = `alacritty_terminal` 0.26（registry 依赖，计划 D8 v5 / Phase 2.5）**：
@@ -109,7 +111,7 @@ ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，0600）+
 | capture | tmux `capture-pane`（干净文本） | alacritty_terminal VT grid 渲染（干净文本） |
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
-| 补屏 | tmux `new-session -A` 原生 | 补屏环 ANSI 回放 + resize nudge |
+| 补屏 | tmux `new-session -A` 原生 | raw 尾回放（scrollback+模式态）+ 清可见屏 + VT grid 整帧重渲染（`render_screen`，带 SGR 样式与光标复位）+ resize nudge |
 | 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）+ 直接拖选复制，无任何注入字节 |
 | 创建入口（Phase 4） | 创建会话弹窗引擎选择器可选项（multiplexer 不可用时禁用），长期维护态 | 同选择器默认选中项 |
 

@@ -69,10 +69,8 @@ pub async fn handle_pty_terminal(
         }
     };
 
-    // 本连接视口尺寸生效（单视图模型：最后 attach 者决定尺寸）
-    if let Err(e) = attach.resize(size) {
-        warn!("initial resize failed (pty): {}", e);
-    }
+    // 视口尺寸已在 engine::attach 内于补屏快照前同步（单视图模型：最后
+    // attach 者决定尺寸），此处无需再 resize。
     // 重连重绘 nudge（herdr pty/actor/unix.rs:712-756）：rows-1 → 30ms → rows，
     // 强制 TUI（vim/htop 类）按新尺寸重绘，防补屏后花屏。新建会话不需要。
     if attach.reconnected && size.rows > 1 {
@@ -89,7 +87,8 @@ pub async fn handle_pty_terminal(
         return;
     }
 
-    // 补屏：attach 时刻的补屏环快照（原始 ANSI 字节回放，xterm.js 直接消费）
+    // 补屏：attach 时刻的补屏帧（原始字节尾 + 清可见屏 + grid 重渲染当前
+    // 屏，见 engine::attach / vt.rs 补屏说明），xterm.js 直接消费
     if !attach.replay.is_empty()
         && ws_tx.send(Message::Binary(attach.replay.clone().into())).await.is_err()
     {
