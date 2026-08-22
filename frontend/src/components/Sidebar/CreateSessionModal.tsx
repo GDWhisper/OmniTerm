@@ -8,6 +8,7 @@ import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
 import { READER_FONT } from '../../utils/fonts'
+import { BetaBadge } from '../Common/BetaBadge'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 
 /**
@@ -140,7 +141,9 @@ export function CreateSessionModal(props: {
                   style={{ accentColor: 'var(--accent)', marginTop: 2 }}
                 />
                 <span>
-                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>pty</span>
+                  <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                    pty <BetaBadge />
+                  </span>
                   <span className="block text-xs" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
                     {t('sidebar.enginePtyHint')}
                   </span>
