@@ -394,7 +394,11 @@ impl VtState {
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
-            out.extend_from_slice(b"\r\n");
+            // 行分隔只发在行间：末行若也补 `\r\n`，满屏客户端会因 LF 越界
+            // 上滚一行（首行被顶出屏幕）——光标落点由收尾 CUP 保证。
+            if row + 1 < rows {
+                out.extend_from_slice(b"\r\n");
+            }
         }
 
         if cur != CellStyle::default() {
@@ -586,5 +590,29 @@ mod tests {
         let r = String::from_utf8_lossy(&rendered);
         assert!(r.contains("alt content"), "alt screen missing: {r:?}");
         assert!(!r.contains("main screen"), "main screen leaked into render: {r:?}");
+    }
+
+    #[test]
+    fn render_screen_roundtrip_reproduces_visible_screen() {
+        // 花屏场景的确定性回归：增量绘制型 agent TUI（光标绝对定位 + 局部
+        // 擦除的 diff 流）画出的屏幕，经「清屏 + 补屏帧重放」后必须与真相源
+        // 逐行一致——字节尾回放做不到，grid 整帧重渲染必须做到。
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[1;1Hheader line\x1b[K"); // 定位首行 + 行尾擦除
+        v.feed(b"\x1b[2;1H\x1b[32mbody: ok\x1b[0m");
+        v.feed(b"\x1b[5;10Hprogress: 42%");
+        let frame = v.render_screen();
+        let mut client = vt(24, 80);
+        client.feed(&frame);
+        assert_eq!(
+            client.capture_visible(),
+            v.capture_visible(),
+            "replay frame diverges from server grid"
+        );
+        // 光标也必须一致（后续 TUI 增量多为相对移动，位置错即全错）
+        assert_eq!(
+            client.term.renderable_content().cursor.point,
+            v.term.renderable_content().cursor.point
+        );
     }
 }
