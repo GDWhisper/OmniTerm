@@ -71,14 +71,12 @@ pub async fn handle_pty_terminal(
 
     // 视口尺寸已在 engine::attach 内于补屏快照前同步（单视图模型：最后
     // attach 者决定尺寸），此处无需再 resize。
-    // 重连重绘 nudge（herdr pty/actor/unix.rs:712-756）：rows-1 → 30ms → rows，
-    // 强制 TUI（vim/htop 类）按新尺寸重绘，防补屏后花屏。新建会话不需要。
-    if attach.reconnected && size.rows > 1 {
-        let nudged = PtySize { rows: size.rows - 1, ..size };
-        let _ = attach.resize(nudged);
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        let _ = attach.resize(size);
-    }
+    // 注意：不再做重连 resize nudge（rows-1 → 30ms → rows）。该技巧服务于
+    // 「补屏=原始字节回放」时代的全量重绘型 TUI；grid 整帧重渲染落地后，
+    // 同尺寸重连的补屏帧已精确，而实测 alacritty 对 shrink→expand 并非
+    // 内容中性——nudge 会把屏幕上滚一行并在顶部混入历史残片，恰好污染
+    // 补屏帧赖以生成的真相源。变尺寸重连由真实 resize 触发内核 SIGWINCH，
+    // 全量重绘型程序自然重绘（2026-08-22 实测翻盘，见计划文档切片 B 勘误）。
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 

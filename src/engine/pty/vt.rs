@@ -353,6 +353,14 @@ impl VtState {
         out
     }
 
+    /// 光标位置（视口相对坐标，行/列）——补屏重放一致性测试的比较读口。
+    /// 仅测试编译（生产无消费者，避免 dead_code 告警）。
+    #[cfg(test)]
+    pub fn renderable_cursor_for_test(&self) -> (i32, u16) {
+        let rc = self.term.renderable_content();
+        (rc.cursor.point.line.0, rc.cursor.point.column.0 as u16)
+    }
+
     /// 可见屏带样式渲染——补屏帧的「当前屏」部分（客户端清屏后整帧重画）。
     ///
     /// 输出 = 逐行 SGR 样式文本（`\r\n` 连接；行尾仅裁「默认样式的空白」，

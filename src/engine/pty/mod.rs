@@ -695,6 +695,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconnect_replay_frame_reproduces_screen_exactly() {
+        // 补屏验收（2026-08-22 花屏翻盘修复）：增量绘制型 TUI（绝对定位 +
+        // 局部擦除）画出的屏幕，经补屏帧（raw 尾 + 清可见屏 + grid 整帧重
+        // 渲染）重放到干净客户端后必须与真相源逐行一致；重复 attach 不得
+        // 使 grid 漂移（resize nudge 已移除——实测 shrink→expand 会上滚一行）。
+        // PS1='' + stty -echo 隔离 bash 提示/回显噪声，保证字节流确定。
+        // catch_unwind 兜底：断言失败也要先杀会话再恢复 panic，
+        // 否则泄漏的常驻会话让测试进程永不退出（表现为超时假死）。
+        let engine = engine();
+        let tmp = std::env::temp_dir();
+        let size = PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 };
+        let key = "replay-screen";
+        let result = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
+            replay_screen_body(&engine, &tmp, size, key).await
+        }))
+        .await;
+        let _ = engine.kill_session(key).await;
+        result.unwrap();
+    }
+
+    async fn replay_screen_body(
+        engine: &PtyEngine,
+        tmp: &std::path::Path,
+        size: PtySize,
+        key: &str,
+    ) {
+        let attach = engine.attach(key, tmp.to_str().unwrap(), size).unwrap();
+        let writer = attach.clone();
+        writer.write(b"stty -echo; PS1=''; printf '\\033[2J\\033[1;1HAGENT PANEL v1\\033[3;1Hprogress: [####      ] 40%%\\033[5;1Hstatus: working'\n").unwrap();
+        writer
+            .write(b"printf '\\033[3;12H########\\033[3;24H80%%\\033[K\\033[5;1Hstatus: DONE \\033[K'\n")
+            .unwrap();
+
+        let state = engine.get(key).unwrap();
+        // 等第二段 printf 执行完（注意不能拿命令回显里的字面量当标记——
+        // 回显先于执行出现在 grid 上），落定后再取最终快照与光标。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let cap = state.vt.lock().unwrap().capture_visible();
+            let drawn = cap.contains("progress: [########  ] 80%") && cap.contains("status: DONE");
+            if drawn || std::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await; // 尾部字节落定
+        let expected = state.vt.lock().unwrap().capture_visible();
+        let expected_cursor = state.vt.lock().unwrap().renderable_cursor_for_test();
+
+        drop(attach);
+
+        // 第一次重连：重放帧 → 干净客户端，屏幕与光标须逐一还原
+        let mut client = VtState::new(size.rows, size.cols);
+        let replay1 = { engine.attach(key, tmp.to_str().unwrap(), size).unwrap() };
+        client.feed(&replay1.replay);
+        assert_eq!(client.capture_visible(), expected, "replayed screen diverges from server grid");
+        assert_eq!(
+            client.renderable_cursor_for_test(),
+            expected_cursor,
+            "replayed cursor diverges from server grid"
+        );
+
+        // 第二次重连（回归：nudge 曾致 grid 上滚一行、顶部混入残片）
+        drop(replay1);
+        let mut client2 = VtState::new(size.rows, size.cols);
+        let replay2 = { engine.attach(key, tmp.to_str().unwrap(), size).unwrap() };
+        client2.feed(&replay2.replay);
+        assert_eq!(client2.capture_visible(), expected, "grid drifted across reconnects");
+    }
+
+    #[tokio::test]
     async fn exit_persists_history_and_rebuild_seeds_it() {
         // 切片 C 验收：自然退出落盘历史 → 重建时 seed 回补屏环与 VT grid
         let engine = engine();

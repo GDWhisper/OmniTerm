@@ -83,7 +83,10 @@ attach = 补屏帧下发（raw 字节尾进 scrollback 并恢复模式态 + `\x1
 清可见屏 + `render_screen()` 以 VT grid 为真相源带样式整帧重画 + 光标/显隐复位；
 256KB 有界）+ broadcast 订阅；attach 内先按本次连接尺寸同步视口，再在单临界区
 （锁序 out→vt，与读循环一致）完成「快照 + 渲染 + 订阅」保证不重不漏。
-重连既有会话触发 resize nudge（rows-1 → 30ms → rows）强制 TUI 重绘。恢复链路
+不做重连 resize nudge：grid 整帧重渲染落地后补屏帧已精确，实测 alacritty
+shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反而污染真相源；
+变尺寸重连由真实 resize 触发内核 SIGWINCH，全量重绘型程序自然重绘
+（2026-08-22 实测翻盘）。恢复链路
 （D5）：5s 去抖落盘 ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，
 0600）+ 30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
 并 seed 历史进补屏环与 VT grid（alacritty_terminal）。显式 kill 删历史文件。
@@ -111,7 +114,7 @@ attach = 补屏帧下发（raw 字节尾进 scrollback 并恢复模式态 + `\x1
 | capture | tmux `capture-pane`（干净文本） | alacritty_terminal VT grid 渲染（干净文本） |
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
-| 补屏 | tmux `new-session -A` 原生 | raw 尾回放（scrollback+模式态）+ 清可见屏 + VT grid 整帧重渲染（`render_screen`，带 SGR 样式与光标复位）+ resize nudge |
+| 补屏 | tmux `new-session -A` 原生 | raw 尾回放（scrollback+模式态）+ 清可见屏 + VT grid 整帧重渲染（`render_screen`，带 SGR 样式与光标复位）；无 nudge |
 | 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）+ 直接拖选复制，无任何注入字节 |
 | 创建入口（Phase 4） | 创建会话弹窗引擎选择器可选项（multiplexer 不可用时禁用），长期维护态 | 同选择器默认选中项 |
 
