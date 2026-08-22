@@ -11,6 +11,9 @@
 | R04 | `dev.sh check` 一键质量门禁 | 尚未实现 | 视开发者反馈，按计划附录 A 实现 `check_quality()` 子命令 |
 | R05 | dead-code 清零 | 15 处 `#[allow(dead_code)]`，清单见 `dead-code-triage.md` | 逐条删除/接线后移除 allow |
 | R06 | 前端 `vi.waitFor` 测试间歇失败（flaky） | 见下方专节 | 再次出现时抓住失败详情，或 CI 出现随机红灯 |
+| R07 | ACP 后端零测试模块补测：`supervisor.rs` / `terminal.rs` / `permission.rs` | 三模块共 ~430 行仍零测试。源自已关闭的 `2026-07-20-acp-quality-gap.md` T02/T03/T04，任务描述按当前架构改写 | 下次修改对应模块时顺带补测；或 `agent-client-protocol` crate 大版本升级前集中补 |
+| R08 | `AcpClient` 协议交互层测试 | client.rs 已涨至 1433 行，现有 12 个测试仅覆盖 `sh_quote`/`wrap` 子进程包装；prompt/cancel/disconnect 链路无回归保护。原计划的 FakeConnection 方案因 crate API 演进需按当前 schema 重写 | 改动 client.rs 连接/发送/取消路径时 |
+| R09 | WS ACP 帧主路径集成测试 | ws/acp.rs 现有 6 个测试仅覆盖 @ 引用解析；帧编解码/replay 门控/重连去重主路径未覆盖 | 新增帧类型或修改帧协议字段时 |
 
 ## R06 详情：前端 `vi.waitFor` 测试间歇失败
 

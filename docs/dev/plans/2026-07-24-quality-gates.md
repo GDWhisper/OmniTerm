@@ -218,7 +218,7 @@ use_small_heuristics = "Max"
 ## 6. 不纳入范围
 
 - **Branch protection rules**（GitHub repo settings）：需仓库管理员在 GitHub UI 配置，本计划仅提供 CI workflow，不操作 repo 设置
-- **代码覆盖率阈值**（tarpaulin / codecov）：让 `docs/dev/plans/2026-07-20-acp-quality-gap.md` 先落地测试补充，覆盖率工具延后
+- **代码覆盖率阈值**（tarpaulin / codecov）：原定让 `docs/dev/plans/2026-07-20-acp-quality-gap.md` 先落地测试补充（该计划已于 2026-08-23 关闭，未覆盖缺口迁至 `backlog/qa-quality-gates-followups.md` R07–R09），覆盖率工具延后
 - **端到端测试**：成本过高，留给手工测试（`docs/reference/user-testing.md`）
 - **rust-toolchain.toml 版本锁定**：当前未锁定工具链版本是一个独立决策，不混入本计划
 - **Docker 构建验证**（`Dockerfile` multi-stage build 在 CI 验证）：低优先级，`Dockerfile.release` 已在 release CI 覆盖

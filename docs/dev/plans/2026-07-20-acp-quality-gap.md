@@ -1,8 +1,8 @@
 # ACP 模块质量缺口填补计划
 
-> 状态：设计定稿，待实施
-> 触发条件：2026-07-20 审查发现 ACP 核心模块零自动化测试覆盖；`useAcpChat` 职责偏高；FileManager 持续增长
-> 关联：`AGENTS.md` 工程准则第 5 条「验证闭环」、第 7 条「奥卡姆剃刀」
+> 状态：**已关闭（2026-08-23 审查归档）** — 部分吸收。T08 与前端测试由后续计划超额完成；T02/T03/T04/T05/T06 后端测试未落地，且任务描述已因模块重构失效；剩余缺口迁移至 `backlog/qa-quality-gates-followups.md`（R07–R09）。逐项结论见文末「处置记录」。
+> 原触发条件：2026-07-20 审查发现 ACP 核心模块零自动化测试覆盖；`useAcpChat` 职责偏高；FileManager 持续增长
+> 关联：`AGENTS.md` 工程准则第 5 条「验证闭环」、第 7 条「奥卡姆剃刀」；接棒者 `2026-07-24-quality-gates.md`
 
 ---
 
@@ -172,3 +172,41 @@ useAcpChat (orchestrator, ~80 行)
 - 需要修改 WS 重连逻辑（如指数退避、max retry）
 - 需要新增协议帧类型（如 replay/replay_end）
 - 需要支持第二个 vendor 的 wire format
+
+---
+
+## 处置记录（2026-08-23 审查）
+
+> 本文自 2026-07-22 归档后未再更新。本次审查逐项核对落地情况：**约半数被后续工作吸收或超额完成，其余因模块重构失效而未实施**。计划就此关闭；未覆盖缺口已按新架构改写并迁移至 `backlog/qa-quality-gates-followups.md` R07–R09。以下逐项结论为终局记录，正文不再作为实施依据。
+
+### P0/P1 逐项核对
+
+| 序号 | 计划任务 | 终局结论 |
+|------|---------|---------|
+| T01 | `extract_text_from_notification` 多 format 解析测试 | **任务失效** — 该函数已不存在；等价逻辑由 `turn_accumulator.rs::agent_message_text` 承载，现有 11 个测试覆盖提取/folding/限界（来自 turn_accumulator 落地计划） |
+| T02 | supervisor 测试 | ❌ 未落地 — supervisor.rs（75 行）至今零测试 → 迁移至 backlog R07 |
+| T03 | terminal spawn/read/kill/release 集成测试 | ❌ 未落地 — terminal.rs（236 行）至今零测试 → 迁移至 backlog R07 |
+| T04 | PermissionManager 状态机测试 | ❌ 后端零测试 — 仅前端 `useAcpChat.permission.test.ts` 间接覆盖 → 迁移至 backlog R07 |
+| T05 | client.rs 协议交互测试（FakeConnection mock ConnectionTo） | ⚠️ 未按方案实施 — client.rs 现有 12 个测试但全部是后续功能（`sh_quote`/`wrap` 子进程包装），prompt/cancel/disconnect 协议链路仍无回归保护；且 crate API 已演进，原 FakeConnection 方案需按当前 schema 重写 → 迁移至 backlog R08 |
+| T06 | WS handler 主路径测试 | ⚠️ 部分 — ws/acp.rs 现有 6 个测试但均为 @ 引用解析（2026-07-27 功能）；帧编解码/replay 门控主路径未覆盖 → 迁移至 backlog R09 |
+| T07 | handler.rs 分发逻辑测试 | **任务失效** — handler.rs 已萎缩为 27 行 broadcast 转发壳，分发逻辑重构进 turn_accumulator/client |
+| T08 | chat_persistence DB 测试 | ✅ 超额完成 — 16 个测试覆盖游标分页/sync/system role |
+
+### P2 技术债去向
+
+- **R01 useAcpChat 拆分**：❌ 从未实施，449 行 → 1223 行，触发条件（改重连/新增帧类型/第二 vendor）已多次满足。跟踪转移至 `backlog/giant-components.md`
+- **R02 FileManager 拆分**：❌ 未拆分（现 1197 行），跟踪在 `backlog/giant-components.md` 继续
+- **R03/R04 死代码**：✅ 被 `2026-07-24-quality-gates.md` Phase 2 生成的 `backlog/dead-code-triage.md` 系统性接管（15 处全量盘点）；其中 `verify_token` 已于 07-27 经 `require_auth_mw` 接线，`User` struct 仍在清单待决
+
+### §5 验收标准核对
+
+1. "cargo test 新增 15+" — ✅ 名义达成（全仓现 332 单测通过），但主要产出来自后续各计划
+2. "覆盖率 >60%（tarpaulin/llvm-cov）" — ❌ 从未度量，仓库无覆盖率工具配置
+3. 前端等价逻辑测试 — ✅ messageText/chatStore/useAcpChat.*（ghost/midturn/permission）均已存在
+4. R01 触发存档 — ✅ `giant-components.md` 承接
+5. R02–R04 登记 backlog — ✅ `dead-code-triage.md` + `giant-components.md`
+
+### 过时根因
+
+1. **被接棒**：4 天后 `2026-07-24-quality-gates.md` 接管验证闭环基础设施（CI/pre-commit/clippy），本计划的测试补齐任务未随迁
+2. **模块面目全非**：7 月底至 8 月 ACP 经历 pty engine v6、turn_accumulator 新建、聊天历史分页、ghost message 修复等多轮重构——client.rs 约 200 行 → 1433 行，新增 turn_accumulator/config_prefs/reaper/resolve 四个模块，本文的行数估算、函数名、mock 方案全部失去参照
