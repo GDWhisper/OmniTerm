@@ -141,7 +141,7 @@ const FALLBACK_COLOR: Rgb = Rgb { r: 0xd8, g: 0xd8, b: 0xd8 };
 /// 相邻单元合并为同段的样式键（减少 SGR 序列量）。
 /// fg/bg 为 `None` 表示默认色；flags 全集参与等值比较（变化即重发）。
 #[derive(Clone, Copy, PartialEq)]
-struct CellStyle {
+pub struct CellStyle {
     fg: Option<Color>,
     bg: Option<Color>,
     flags: Flags,
@@ -154,12 +154,12 @@ impl Default for CellStyle {
 }
 
 impl CellStyle {
-    fn of(cell: &Cell) -> Self {
+    pub fn of(cell: &Cell) -> Self {
         Self { fg: normalize_color(cell.fg), bg: normalize_color(cell.bg), flags: cell.flags }
     }
 
     /// 默认样式（行尾裁剪判据：只有默认样式的空白才可裁）。
-    fn is_default(&self) -> bool {
+    pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 }
@@ -193,7 +193,7 @@ fn normalize_color(c: Color) -> Option<Color> {
 /// 扩展下划线系 flag（DOUBLE_UNDERLINE 等）不映射：样式键含全集 flags，
 /// 变化检测不受影响，仅该类罕见样式降级为普通文本（不影响正确性）。
 /// blink（SGR 5）同样不映射——alacritty 0.26 无对应单元位，无从检测。
-fn sgr_body(style: &CellStyle) -> Option<String> {
+pub fn sgr_body(style: &CellStyle) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     for (flag, code) in [
         (Flags::BOLD, "1"),
@@ -226,7 +226,7 @@ fn sgr_body(style: &CellStyle) -> Option<String> {
 /// 单色 → SGR 参数：标准 16 色用基础码（30-37/90-97、40-47/100-107），
 /// 其余走扩展形式（38;5;n / 38;2;r;g;b）。归一化后的默认色不会到达此处；
 /// 防御性兜底按默认处理（降级显示，不出错码）。
-fn color_sgr(c: Color, foreground: bool) -> String {
+pub fn color_sgr(c: Color, foreground: bool) -> String {
     let std = if foreground { 30 } else { 40 };
     let bright = if foreground { 90 } else { 100 };
     let ext = if foreground { 38 } else { 48 };
@@ -422,6 +422,67 @@ impl VtState {
             _ => out.extend_from_slice(b"\x1b[?25h"),
         }
         out
+    }
+
+    /// 将当前 VT grid 编码为 CellFrame JSON（Phase 1 cell-frame 编码）。
+    ///
+    /// 每 cell 携带 SGR 参数体（不含 \x1b[ 前缀和 m 后缀）+ 字符；
+    /// 宽字符占位单元格 skip=true。输出 JSON 供 WebSocket Text 帧传输
+    /// （§4.2），前端 renderCellFrame 直接消费。
+    pub fn encode_cell_frame(&self, session_id: &str) -> String {
+        use crate::engine::pty::frame::{CellData, CellFrame, CursorState, RowData};
+
+        let grid = self.term.grid();
+        let rows = self.term.screen_lines();
+        let cols = self.term.columns();
+
+        let mut frame_rows: Vec<RowData> = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let mut cells: Vec<CellData> = Vec::with_capacity(cols);
+            for col in 0..cols {
+                let cell_ref = &grid[Line(row as i32)][Column(col)];
+                if cell_ref
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    cells.push(CellData {
+                        sgr: String::new(),
+                        ch: String::new(),
+                        skip: true,
+                    });
+                } else {
+                    let style = CellStyle::of(cell_ref);
+                    let sgr = sgr_body(&style).unwrap_or_default();
+                    let ch = cell_ref.c.to_string();
+                    cells.push(CellData { sgr, ch, skip: false });
+                }
+            }
+            frame_rows.push(RowData { cells });
+        }
+
+        let rc = self.term.renderable_content();
+        let cursor = CursorState {
+            row: rc.cursor.point.line.0 + 1,
+            col: (rc.cursor.point.column.0 + 1) as u16,
+            visible: !matches!(
+                rc.cursor.shape,
+                alacritty_terminal::vte::ansi::CursorShape::Hidden
+            ),
+        };
+
+        let frame = CellFrame {
+            t: "cell_frame",
+            session_id: session_id.to_string(),
+            width: cols as u16,
+            height: rows as u16,
+            full: true,
+            cursor: Some(cursor),
+            overlay: false,
+            rows: frame_rows,
+        };
+
+        serde_json::to_string(&frame)
+            .expect("CellFrame serialization must not fail")
     }
 }
 
@@ -622,5 +683,72 @@ mod tests {
             client.term.renderable_content().cursor.point,
             v.term.renderable_content().cursor.point
         );
+    }
+
+    // ──── Phase 1: encode_cell_frame (§1.1) ────
+
+    #[test]
+    fn encode_cell_frame_produces_valid_json() {
+        let v = vt(24, 80);
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["t"], "cell_frame");
+        assert_eq!(parsed["session_id"], "test-session");
+        assert_eq!(parsed["width"], 80);
+        assert_eq!(parsed["height"], 24);
+        assert_eq!(parsed["full"], true);
+        assert_eq!(parsed["overlay"], false);
+        assert!(parsed["cursor"].is_object(), "cursor must be present");
+        assert_eq!(parsed["rows"].as_array().unwrap().len(), 24);
+    }
+
+    #[test]
+    fn encode_cell_frame_includes_sgr_for_styled_cells() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[1;31mRED\x1b[0m");
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        let rows = parsed["rows"].as_array().unwrap();
+        let cells = rows[0]["cells"].as_array().unwrap();
+        // First cell: "R" with bold+red SGR
+        assert_eq!(cells[0]["ch"].as_str(), Some("R"));
+        assert_eq!(cells[0]["sgr"].as_str(), Some("1;31"));
+        assert_eq!(cells[0]["skip"].as_bool(), Some(false));
+        // Cursor should be at col 4 (after RED)
+        let cursor = parsed["cursor"].as_object().unwrap();
+        assert_eq!(cursor["col"], 4);
+    }
+
+    #[test]
+    fn encode_cell_frame_sets_skip_for_wide_char_spacers() {
+        let mut v = vt(24, 80);
+        v.feed("你好".as_bytes()); // each CJK char occupies 2 cells
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        let cells = parsed["rows"][0]["cells"].as_array().unwrap();
+        // 你好 → cells: 你(skip=false), 占位(skip=true), 好(skip=false), 占位(skip=true)
+        assert_eq!(cells[0]["ch"].as_str(), Some("你"));
+        assert_eq!(cells[0]["skip"].as_bool(), Some(false));
+        assert_eq!(cells[1]["skip"].as_bool(), Some(true));
+        assert_eq!(cells[2]["ch"].as_str(), Some("好"));
+        assert_eq!(cells[2]["skip"].as_bool(), Some(false));
+        assert_eq!(cells[3]["skip"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn encode_cell_frame_empty_screen_has_80_default_cells() {
+        let v = vt(24, 80);
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        let rows = parsed["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 24);
+        let cells = rows[0]["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), 80);
+        // All cells should have skip=false and no sgr field (default style → empty SGR omitted)
+        for cell in cells.iter() {
+            assert_eq!(cell["skip"].as_bool(), Some(false));
+            // empty SGR is skip_serialized, so the key should be absent
+            assert!(cell.get("sgr").is_none() || cell["sgr"].as_str().map(|s| s.is_empty()).unwrap_or(true));
+        }
     }
 }

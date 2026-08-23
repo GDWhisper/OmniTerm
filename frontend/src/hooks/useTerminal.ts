@@ -10,6 +10,7 @@ import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
+import { renderCellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -171,6 +172,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
+      // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）
+      ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
     }
 
     // Every connection spawns a fresh tmux client whose attach starts with a
@@ -191,6 +194,15 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       } else {
         try {
           const msg = JSON.parse(e.data)
+          // Phase 1: cell_frame 路由（Pty 可选编码模式）
+          if (msg.t === 'cell_frame') {
+            if (!sawFirstBinary) {
+              sawFirstBinary = true
+              termRef.current?.reset()
+            }
+            renderCellFrame(termRef.current!, msg)
+            return
+          }
           if (msg.type === 'attached') {
             termRef.current?.writeln(`\x1b[36m[${i18n.t('terminal.status.attached', { session: msg.session })}]\x1b[0m`)
           } else if (msg.type === 'error') {

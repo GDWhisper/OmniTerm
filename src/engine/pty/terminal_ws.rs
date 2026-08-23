@@ -7,11 +7,22 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::PtySize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
+
+use serde::Deserialize;
+
+/// Cell-frame capability handshake from frontend (§4.2 hello frame).
+#[derive(Debug, Deserialize)]
+struct ClientHello {
+    t: String,
+    supports_cell_frame: bool,
+}
 
 pub async fn handle_pty_terminal(
     ws: WebSocket,
@@ -140,29 +151,72 @@ pub async fn handle_pty_terminal(
         None
     };
 
-    // === 输出订阅 → WS binary 帧（select 合流 hook agent_state 帧）===
+    // === 输出转发（cell_frame / raw binary fallback + hook agent_state 帧）===
+    let cell_frame_enabled = Arc::new(AtomicBool::new(false));
+    // forward handle 专用克隆（避免 session_id 被 move）
+    let fwd_cfe = cell_frame_enabled.clone();
+    let session_id_for_frame = session_id.clone();
+    let encode_attach = attach.clone();
+
     let mut rx = attach.rx;
     let mut forward_handle = tokio::spawn(async move {
+        // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
+        let mut ticker: Option<tokio::time::Interval> = None;
+
         loop {
-            tokio::select! {
-                out = rx.recv() => match out {
-                    Ok(data) => {
-                        if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+            // 懒初始化：前端 hello 握手激活 cell_frame 模式时启动编码定时器
+            if fwd_cfe.load(Ordering::Relaxed) && ticker.is_none() {
+                ticker = Some(tokio::time::interval(std::time::Duration::from_millis(33)));
+                info!("cell_frame encoder started: session={session_id_for_frame}");
+            }
+
+            if let Some(ref mut tick) = ticker {
+                // ── Cell-frame 模式：定时器驱动 VT grid 编码 ──
+                tokio::select! {
+                    biased;
+                    // agent_state 帧优先级最高
+                    agent_msg = agent_rx.recv() => {
+                        let Some(msg) = agent_msg else { break };
+                        if ws_tx.send(Message::Text(msg.into())).await.is_err() {
                             break;
                         }
                     }
-                    // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
-                    Err(RecvError::Lagged(n)) => {
-                        warn!("pty output lagged, dropped {n} frames");
-                        continue;
+                    // 排干 raw bytes（维持 broadcast channel 健康；VT grid
+                    // 模式下 raw bytes 丢弃，grid 是真相源）
+                    _ = rx.recv() => {}
+                    // 30fps tick：output_seq 变化检测避免空转
+                    _ = tick.tick() => {
+                        let json = {
+                            let vt_guard = encode_attach.state.vt.lock().unwrap();
+                            vt_guard.encode_cell_frame(&session_id_for_frame)
+                        };
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
                     }
-                    // 会话进程退出、引擎注销 → 关闭本连接（前端重连会重建会话）
-                    Err(RecvError::Closed) => break,
-                },
-                agent_msg = agent_rx.recv() => {
-                    let Some(msg) = agent_msg else { break };
-                    if ws_tx.send(Message::Text(msg.into())).await.is_err() {
-                        break;
+                }
+            } else {
+                // ── Raw binary 模式（legacy，不变）──
+                tokio::select! {
+                    out = rx.recv() => match out {
+                        Ok(data) => {
+                            if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
+                        Err(RecvError::Lagged(n)) => {
+                            warn!("pty output lagged, dropped {n} frames");
+                            continue;
+                        }
+                        // 会话进程退出、引擎注销 → 关闭本连接
+                        Err(RecvError::Closed) => break,
+                    },
+                    agent_msg = agent_rx.recv() => {
+                        let Some(msg) = agent_msg else { break };
+                        if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -170,6 +224,8 @@ pub async fn handle_pty_terminal(
     });
 
     // === WS 消息读循环（输入 + resize + ping）===
+    let read_cfe = cell_frame_enabled.clone();
+    let read_session_id = session_id.clone();
     let mut read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
@@ -180,6 +236,14 @@ pub async fn handle_pty_terminal(
                     }
                 }
                 Ok(Message::Text(text)) => {
+                    // Phase 1: cell_frame 能力握手
+                    if let Ok(hello) = serde_json::from_str::<ClientHello>(&text) {
+                        if hello.t == "hello" && hello.supports_cell_frame {
+                            read_cfe.store(true, Ordering::Relaxed);
+                            info!("cell_frame enabled: session={}", read_session_id);
+                        }
+                        continue;
+                    }
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {

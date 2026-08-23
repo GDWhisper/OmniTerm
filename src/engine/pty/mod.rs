@@ -19,6 +19,7 @@ pub mod scrollback;
 pub mod session;
 pub mod terminal_ws;
 pub mod vt;
+pub mod frame;
 
 use std::collections::HashMap;
 use std::sync::Arc;
