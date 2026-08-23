@@ -29,7 +29,7 @@ use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Config as TermConfig, Osc52, Term};
+use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use tracing::warn;
 
@@ -430,6 +430,21 @@ impl VtState {
     /// 宽字符占位单元格 skip=true。输出 JSON 供 WebSocket Text 帧传输
     /// （§4.2），前端 renderCellFrame 直接消费。
     pub fn encode_cell_frame(&self, session_id: &str) -> String {
+        self.encode_frame_inner(session_id, false)
+    }
+
+    /// Phase 2 overlay 帧：前端收到后先清屏再完整重绘当前 grid，
+    /// 用于 alt-screen 退出等场景消除残留。
+    pub fn encode_overlay_frame(&self, session_id: &str) -> String {
+        self.encode_frame_inner(session_id, true)
+    }
+
+    /// 当前终端 mode flags（Phase 2 事件检测用）。
+    pub fn mode(&self) -> TermMode {
+        *self.term.mode()
+    }
+
+    fn encode_frame_inner(&self, session_id: &str, overlay: bool) -> String {
         use crate::engine::pty::frame::{CellData, CellFrame, CursorState, RowData};
 
         let grid = self.term.grid();
@@ -445,11 +460,7 @@ impl VtState {
                     .flags
                     .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
                 {
-                    cells.push(CellData {
-                        sgr: String::new(),
-                        ch: String::new(),
-                        skip: true,
-                    });
+                    cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
                 } else {
                     let style = CellStyle::of(cell_ref);
                     let sgr = sgr_body(&style).unwrap_or_default();
@@ -464,10 +475,7 @@ impl VtState {
         let cursor = CursorState {
             row: rc.cursor.point.line.0 + 1,
             col: (rc.cursor.point.column.0 + 1) as u16,
-            visible: !matches!(
-                rc.cursor.shape,
-                alacritty_terminal::vte::ansi::CursorShape::Hidden
-            ),
+            visible: !matches!(rc.cursor.shape, alacritty_terminal::vte::ansi::CursorShape::Hidden),
         };
 
         let frame = CellFrame {
@@ -477,12 +485,11 @@ impl VtState {
             height: rows as u16,
             full: true,
             cursor: Some(cursor),
-            overlay: false,
+            overlay,
             rows: frame_rows,
         };
 
-        serde_json::to_string(&frame)
-            .expect("CellFrame serialization must not fail")
+        serde_json::to_string(&frame).expect("CellFrame serialization must not fail")
     }
 }
 
@@ -748,7 +755,10 @@ mod tests {
         for cell in cells.iter() {
             assert_eq!(cell["skip"].as_bool(), Some(false));
             // empty SGR is skip_serialized, so the key should be absent
-            assert!(cell.get("sgr").is_none() || cell["sgr"].as_str().map(|s| s.is_empty()).unwrap_or(true));
+            assert!(
+                cell.get("sgr").is_none()
+                    || cell["sgr"].as_str().map(|s| s.is_empty()).unwrap_or(true)
+            );
         }
     }
 }

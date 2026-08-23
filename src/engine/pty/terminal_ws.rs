@@ -7,12 +7,13 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::PtySize;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
+use crate::engine::pty::events::SemanticEvent;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
 
 use serde::Deserialize;
@@ -159,6 +160,7 @@ pub async fn handle_pty_terminal(
     let encode_attach = attach.clone();
 
     let mut rx = attach.rx;
+    let mut event_rx = attach.event_rx;
     let mut forward_handle = tokio::spawn(async move {
         // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
         let mut ticker: Option<tokio::time::Interval> = None;
@@ -179,6 +181,22 @@ pub async fn handle_pty_terminal(
                         let Some(msg) = agent_msg else { break };
                         if ws_tx.send(Message::Text(msg.into())).await.is_err() {
                             break;
+                        }
+                    }
+                    // Phase 2: semantic 事件 → overlay cell_frame
+                    event = event_rx.recv() => {
+                        if let Ok(ev) = event {
+                            // alt-screen 切换需要前端清屏重绘
+                            let needs_overlay = matches!(ev, SemanticEvent::AltScreenEnter | SemanticEvent::AltScreenExit);
+                            if needs_overlay {
+                                let json = {
+                                    let vt_guard = encode_attach.state.vt.lock().unwrap();
+                                    vt_guard.encode_overlay_frame(&session_id_for_frame)
+                                };
+                                if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                     // 排干 raw bytes（维持 broadcast channel 健康；VT grid

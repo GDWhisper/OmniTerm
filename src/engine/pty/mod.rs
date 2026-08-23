@@ -14,12 +14,13 @@
 pub mod agent_events;
 pub mod agent_hooks;
 pub mod cwd;
+pub mod events;
+pub mod frame;
 pub mod ring;
 pub mod scrollback;
 pub mod session;
 pub mod terminal_ws;
 pub mod vt;
-pub mod frame;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,12 +35,14 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::agent::state::AgentSnapshot;
+use crate::engine::pty::events::{SemanticEvent, detect_events};
 use crate::engine::pty::ring::{ByteRing, DEFAULT_REPLAY_BYTES};
 use crate::engine::pty::session::PtySession;
 use crate::engine::pty::vt::VtState;
 use crate::engine::pty_io;
 use crate::engine::{EngineSessionInfo, SessionEngine, WatchTarget};
 use crate::models::session::RuntimeKind;
+use alacritty_terminal::term::TermMode;
 
 /// 输出广播通道在途帧上限（P1 有界；慢消费者 Lagged 丢帧保连接）。
 const OUTPUT_CHANNEL_FRAMES: usize = 256;
@@ -51,6 +54,8 @@ const DEFAULT_SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixe
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 /// 前台进程 cwd 采样回写周期（D5：30s；会话操作时的回写由退出 flush 覆盖）。
 const CWD_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+/// Semantic 事件广播通道在途事件上限（P1 有界；事件频率远低于数据帧，16 足够）。
+const EVENT_CHANNEL_CAP: usize = 16;
 
 /// 输出汇聚点：补屏环 + 广播。读循环与 attach 在同一把锁下操作，
 /// 保证「快照 + 订阅」无重复无丢失（先 push 后 send，attach 先 snapshot
@@ -80,6 +85,10 @@ struct SessionState {
     created: String,
     /// spawn 时的工作目录（cwd 采样不可用时的回退）。
     spawn_cwd: String,
+    /// Phase 2: semantic 事件广播（alt-screen 切换 / mode 变化等）。
+    event_tx: broadcast::Sender<SemanticEvent>,
+    /// Phase 2: 前一次 VT mode 快照（读循环用，检测差值）。
+    prev_mode: Mutex<TermMode>,
 }
 
 struct Inner {
@@ -205,12 +214,19 @@ pub struct PtyAttach {
     /// attach 的是既有会话（非本次新建）→ WS 层据此做 resize nudge 重绘。
     pub reconnected: bool,
     state: Arc<SessionState>,
+    pub event_rx: broadcast::Receiver<SemanticEvent>,
 }
 
 impl Clone for PtyAttach {
     fn clone(&self) -> Self {
         let rx = self.state.out.lock().unwrap().tx.subscribe();
-        Self { replay: Vec::new(), rx, reconnected: false, state: Arc::clone(&self.state) }
+        Self {
+            replay: Vec::new(),
+            rx,
+            reconnected: false,
+            state: Arc::clone(&self.state),
+            event_rx: self.state.event_tx.subscribe(),
+        }
     }
 }
 
@@ -253,21 +269,19 @@ impl PtyEngine {
         resize_state(&state, size)?;
         // 同一把临界区内完成「快照 + 渲染 + 订阅」（锁序 out→vt，与读循环
         // 一致）：补屏与增量不重不漏。
-        let (replay, rx) = {
+        let (replay, rx, event_rx) = {
             let g = state.out.lock().unwrap();
             let vt = state.vt.lock().unwrap();
             let mut frame = g.ring.snapshot();
             if !frame.is_empty() {
-                // 原始字节尾先进 scrollback 并恢复模式态（DECSET/alt-screen 等），
-                // 再清可见屏、以 grid 为真相源重画当前屏——原始 diff 流单独回放
-                // 对增量绘制的 TUI 会花屏（见 vt.rs 补屏说明）。
                 frame.extend_from_slice(b"\x1b[H\x1b[2J");
                 frame.extend_from_slice(&vt.render_screen());
             }
             let rx = g.tx.subscribe();
-            (frame, rx)
+            let event_rx = state.event_tx.subscribe();
+            (frame, rx, event_rx)
         };
-        Ok(PtyAttach { replay, rx, reconnected, state })
+        Ok(PtyAttach { replay, rx, reconnected, state, event_rx })
     }
 
     fn get(&self, key: &str) -> Option<Arc<SessionState>> {
@@ -319,6 +333,7 @@ impl PtyEngine {
         let vt = VtState::new(size.rows, size.cols);
 
         let (tx, _rx) = broadcast::channel::<Vec<u8>>(OUTPUT_CHANNEL_FRAMES);
+        let (event_tx, _) = broadcast::channel::<SemanticEvent>(EVENT_CHANNEL_CAP);
         let state = Arc::new(SessionState {
             session,
             out: Mutex::new(Output { ring: ByteRing::new(DEFAULT_REPLAY_BYTES), tx }),
@@ -330,6 +345,8 @@ impl PtyEngine {
             size: Mutex::new(size),
             created: chrono::Utc::now().to_rfc3339(),
             spawn_cwd: cwd.to_string(),
+            event_tx,
+            prev_mode: Mutex::new(TermMode::empty()),
         });
 
         // 重建回放（D5）：后端重启/进程退出后重建时，把落盘 ANSI seed 进
@@ -365,6 +382,14 @@ impl PtyEngine {
                             g.ring.push(&chunk);
                             let _ = g.tx.send(chunk.clone()); // 无接收者时 send 报错即丢弃
                             vt.feed(&chunk);
+                            // Phase 2: 检测 semantic 事件（alt-screen / mode 变化）
+                            {
+                                let mut pm = reader_state.prev_mode.lock().unwrap();
+                                let events = detect_events(&vt, &mut pm);
+                                for ev in events {
+                                    let _ = reader_state.event_tx.send(ev);
+                                }
+                            }
                             vt.take_responses()
                         };
                         if !responses.is_empty()
@@ -449,7 +474,8 @@ impl SessionEngine for PtyEngine {
             let mut bytes = augmented.as_bytes().to_vec();
             bytes.push(b'\r');
             let rx = state.out.lock().unwrap().tx.subscribe();
-            let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state };
+            let event_rx = state.event_tx.subscribe();
+            let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state, event_rx };
             attach.write(&bytes)?;
         }
         Ok(hook_injected)
