@@ -1,6 +1,6 @@
 # 自研终端渲染架构研究计划
 
-> 状态：草稿（待评审）
+> 状态：草稿→评审完成，待执行
 > 触发：alt-screen 水印 bug 修复过程中暴露的 raw-byte pass-through 架构局限性
 > 关联：`docs/dev/plans/2026-07-28-pty-engine-implementation.md`（Phase 2 补屏机制依赖此架构）
 
