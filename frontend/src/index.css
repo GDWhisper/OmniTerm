@@ -1049,6 +1049,50 @@ body.fm-dragging * {
   box-shadow: none;
 }
 
+/* Archived sessions section — action button hover states (CSS-driven,
+   replaces inline onMouseEnter/Leave pattern in ArchivedSessionsSection
+   and ReleaseButton). */
+.archived-unarchive-btn {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-faint);
+  background: transparent;
+}
+.archived-unarchive-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-10);
+}
+.archived-delete-btn {
+  width: 20px;
+  height: 20px;
+  font-family: var(--reader-font);
+  border: 1px solid var(--border-strong);
+  color: var(--text-faint);
+  background: transparent;
+}
+.archived-delete-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-12);
+  box-shadow: none;
+}
+.release-btn {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-faint);
+  background: transparent;
+}
+.release-btn:hover {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-12);
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Sidebar project card — bordered card with light header row.
    Follows docs/ui-style-guide.md: border-radius 0, hard shadow,

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useAgentStore } from '../../stores/agentStore'
-import { READER_FONT } from '../../utils/fonts'
 import { IconTrash, IconRefresh } from '../FileManager/icons'
 
 /**
@@ -79,19 +78,8 @@ export function ArchivedSessionsSection(props: {
                     e.stopPropagation()
                     props.onUnarchive(s)
                   }}
-                  className="row-action flex-shrink-0 flex items-center justify-center transition-all"
-                  style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', background: 'transparent' }}
+                  className="row-action flex-shrink-0 flex items-center justify-center transition-all archived-unarchive-btn"
                   title={t('sidebar.unarchiveSession') ?? 'Restore to list'}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--accent)'
-                    e.currentTarget.style.color = 'var(--accent)'
-                    e.currentTarget.style.background = 'var(--accent-10)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-strong)'
-                    e.currentTarget.style.color = 'var(--text-faint)'
-                    e.currentTarget.style.background = 'transparent'
-                  }}
                 >
                   <IconRefresh width={13} height={13} />
                 </button>
@@ -100,19 +88,8 @@ export function ArchivedSessionsSection(props: {
                     e.stopPropagation()
                     props.onDelete(s)
                   }}
-                  className="row-action flex-shrink-0 flex items-center justify-center transition-all sidebar-glow-red-hover"
-                  style={{ width: 20, height: 20, borderWidth: '1px', borderStyle: 'solid', borderColor: 'var(--border-strong)', color: 'var(--text-faint)', background: 'transparent', fontFamily: READER_FONT }}
+                  className="row-action flex-shrink-0 flex items-center justify-center transition-all archived-delete-btn"
                   title={t('sidebar.delete') ?? 'Delete'}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--danger)'
-                    e.currentTarget.style.color = 'var(--danger)'
-                    e.currentTarget.style.background = 'var(--danger-12)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border-strong)'
-                    e.currentTarget.style.color = 'var(--text-faint)'
-                    e.currentTarget.style.background = 'transparent'
-                  }}
                 >
                   <IconTrash width={13} height={13} />
                 </button>
