@@ -41,7 +41,7 @@ async fn list_sessions(
     Path(pid): Path<String>,
 ) -> impl IntoResponse {
     let mut sessions: Vec<Session> =
-        sqlx::query_as("SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at DESC")
+        sqlx::query_as("SELECT * FROM sessions WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at DESC")
             .bind(&pid)
             .fetch_all(&state.db)
             .await
@@ -954,12 +954,18 @@ mod archive_tests {
         .await
         .unwrap();
 
-        let acp_col = if kind == "acp" { "'acp-uuid-1'" } else { "NULL" };
-        let sql = format!(
+        let acp_session_id = if kind == "acp" { Some("acp-uuid-1") } else { None };
+        sqlx::query(
             "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, created_at, runtime_kind, acp_session_id) \
-             VALUES ('{id}', 'p1', '/tmp', '{id}', NULL, 0, '2026-08-23', '{kind}', {acp_col})"
-        );
-        sqlx::query(&sql).execute(pool).await.unwrap();
+             VALUES (?, 'p1', '/tmp', ?, NULL, 0, '2026-08-23', ?, ?)"
+        )
+        .bind(id)
+        .bind(id)
+        .bind(kind)
+        .bind(acp_session_id)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     /// 复制 handler 的两条列表谓词——谓词被改动而测试未同步时此处失败提醒。
