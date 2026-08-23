@@ -40,7 +40,7 @@ function App() {
       // every 5 s, and the reconnect effect below re-checks auth once
       // connected becomes true.
       .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setters are stable; mount-only correct
   }, [setAuthState, setAuthEnabled, setNeedsSetup])
 
   // When the Sidebar health poll brings the connection back, re-verify
@@ -62,7 +62,7 @@ function App() {
       // If the backend dropped again between check and now, stay in
       // loading — the reconnect effect will fire again when it returns.
       .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connected gate + authState guard keep this mount-only on connection
   }, [connected, setAuthState, setAuthEnabled, setNeedsSetup])
 
   useEffect(() => {
