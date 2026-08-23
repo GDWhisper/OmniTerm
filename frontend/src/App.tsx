@@ -40,7 +40,6 @@ function App() {
       // every 5 s, and the reconnect effect below re-checks auth once
       // connected becomes true.
       .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- setters are stable; mount-only correct
   }, [setAuthState, setAuthEnabled, setNeedsSetup])
 
   // When the Sidebar health poll brings the connection back, re-verify
