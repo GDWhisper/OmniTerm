@@ -86,6 +86,9 @@ export interface AppState {
   projects: Project[]
   worktrees: Record<string, Workspace[]> // keyed by project_id
   sessions: Record<string, Session[]> // keyed by project_id
+  // 归档会话（跨项目全局列表，GET /sessions/archived）。与项目切片分离：
+  // 默认列表服务端已排除归档行，SessionView 据此兜底解析只读查看的活跃会话。
+  archivedSessions: Session[]
   activeProjectId: string | null
   activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
@@ -188,6 +191,7 @@ export interface AppState {
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
+  setArchivedSessions: (sessions: Session[]) => void
   // ACP 进程存活状态由后端 WS 事件驱动即时更新（替代 3 秒轮询）。
   setAcpProcessAlive: (sessionId: string, alive: boolean) => void
   setActiveProject: (id: string | null) => void
@@ -284,6 +288,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   worktrees: {},
   sessions: {},
+  archivedSessions: [],
   activeProjectId: localStorage.getItem('omniterm_active_project') || null,
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
@@ -414,6 +419,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (projectId, sessions) =>
     set((s) => ({ sessions: { ...s.sessions, [projectId]: sessions } })),
+  setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
   setAcpProcessAlive: (sessionId, alive) =>
     set((s) => {
       const next: Record<string, Session[]> = {}

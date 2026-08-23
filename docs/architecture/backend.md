@@ -182,6 +182,8 @@ GET  /api/v1/projects/{pid}/branches
 GET  /api/v1/projects/{pid}/sessions
 POST /api/v1/projects/{pid}/sessions
 PATCH/DELETE /api/v1/sessions/{id}
+POST /api/v1/sessions/{id}/archive|unarchive  # 归档（仅 acp，非 acp 返 400）：dispose+shutdown agent 进程 + 打 archived_at 标记 / 清除标记；归档会话从 GET /projects/{pid}/sessions 消失、chat_messages 保留
+GET  /api/v1/sessions/archived          # 全部归档会话（跨项目，纯 DB 读，无引擎状态富化——进程必然已释放）
 GET  /api/v1/sessions/{id}/hook-status
 POST /api/v1/sessions/{id}/hook-enable|hook-disable
 GET  /api/v1/agents                   # CRUD agent process configs

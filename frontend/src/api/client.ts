@@ -116,6 +116,9 @@ export interface Session {
   acp_session_id?: string
   // Agent config id (from `agents` table); present when runtime_kind='acp'
   agent_id?: string
+  // 归档时间戳（RFC3339）；undefined/null = 未归档。仅 acp 会话可归档：
+  // 归档 = 释放 agent 进程 + 从默认列表隐藏，聊天记录保留（只读可看）。
+  archived_at?: string | null
   // Runtime activity indicator (tmux control mode)
   is_active?: boolean
   // ACP agent subprocess currently resident in the backend supervisor.
@@ -303,6 +306,16 @@ export const api = {
   /** Release a running ACP agent subprocess without deleting the session record. */
   releaseSession: (id: string) =>
     request(`/sessions/${id}/release`, { method: 'POST' }),
+  /** Archive an ACP session: release its agent process and hide it from the
+   *  default session list (chat history kept, viewable read-only). */
+  archiveSession: (id: string) =>
+    request(`/sessions/${id}/archive`, { method: 'POST' }),
+  /** Remove the archive flag — the session returns to its project's default list. */
+  unarchiveSession: (id: string) =>
+    request(`/sessions/${id}/unarchive`, { method: 'POST' }),
+  /** All archived sessions across projects (agent processes already released). */
+  listArchivedSessions: () =>
+    request<Session[]>('/sessions/archived', { silent: true }),
   /** Send a user prompt to an ACP session. Returns the model's stop reason. */
   sendPrompt: (sessionId: string, text: string) =>
     request<{ stop_reason?: string }>(`/sessions/${sessionId}/prompt`, {

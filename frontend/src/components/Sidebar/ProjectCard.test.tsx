@@ -89,6 +89,7 @@ function baseProps(overrides: Partial<Parameters<typeof ProjectCard>[0]>): Param
     onDeleteWorktree: vi.fn(),
     onDeleteSession: vi.fn(),
     onReleaseRequest: vi.fn(),
+    onArchiveRequest: vi.fn(),
     expandAllSessions: false,
     ...overrides,
   }

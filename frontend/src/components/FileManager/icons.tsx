@@ -19,6 +19,16 @@ export function IconFolder(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconArchive(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2" y="2.5" width="12" height="3.25" />
+      <path d="M3.25 5.75v7a1 1 0 001 1h7.5a1 1 0 001-1v-7" />
+      <path d="M6.25 8.5h3.5" />
+    </svg>
+  )
+}
+
 export function IconFile(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

@@ -82,6 +82,12 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub last_cwd: Option<String>,
+    /// 归档时间戳（RFC3339；NULL = 未归档）。仅 ACP 会话可归档：归档 =
+    /// 释放 agent 子进程 + 从默认列表隐藏，聊天记录保留。经
+    /// GET /sessions/archived 单独列出。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub archived_at: Option<String>,
     // Runtime activity indicator (multiplexer activity tracking, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]

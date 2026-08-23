@@ -27,9 +27,12 @@ pub fn routes() -> Router<AppState> {
         .route("/sessions/{id}", patch(update_session).delete(delete_session))
         .route("/sessions/{id}/cwd", get(get_session_cwd))
         .route("/sessions/{id}/release", post(release_session))
+        .route("/sessions/{id}/archive", post(archive_session))
+        .route("/sessions/{id}/unarchive", post(unarchive_session))
         .route("/sessions/{id}/messages", get(list_messages))
         .route("/sessions/{id}/messages/sync", post(sync_messages))
         .route("/sessions/external", get(list_external_sessions))
+        .route("/sessions/archived", get(list_archived_sessions))
         .route("/sessions/adopt", post(adopt_session))
 }
 
@@ -219,6 +222,7 @@ async fn create_session(
             acp_session_id: Some(acp_session_id),
             agent_id: Some(agent_id),
             last_cwd: None,
+            archived_at: None,
             is_active: true,
             agent_kind: None,
             agent_state: None,
@@ -288,6 +292,7 @@ async fn create_session(
             acp_session_id: None,
             agent_id: None,
             last_cwd: None,
+            archived_at: None,
             is_active: false,
             agent_kind: None,
             agent_state: None,
@@ -355,6 +360,7 @@ async fn create_session(
         acp_session_id: None,
         agent_id: None,
         last_cwd: None,
+        archived_at: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -497,6 +503,90 @@ async fn release_session(
         }
         None => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
     }
+}
+
+/// 归档 ACP 会话：释放 agent 子进程（与 release 同一清理路径）+ 打归档标记。
+/// 归档会话从默认列表消失、聊天记录保留，经 GET /sessions/archived 单独列出，
+/// 点击后只读查看历史（前端复用已释放会话的渲染路径）。非 acp 会话返回 400
+/// ——终端会话没有值得冷藏的历史，不需要的直接删除即可。
+async fn archive_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let runtime_kind: Option<String> =
+        sqlx::query_scalar("SELECT runtime_kind FROM sessions WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    match runtime_kind.as_deref() {
+        Some("acp") => {}
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "only acp sessions can be archived" })),
+            );
+        }
+        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
+    }
+
+    // 归档即释放：dispose + shutdown supervisor 中驻留的 agent 子进程。
+    cleanup_session_runtime(&state, &id, None, "acp").await;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    match mark_archived(&state.db, &id, Some(&now)).await {
+        Ok(1) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
+        Err(e) => {
+            error!("failed to archive session {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "archive failed" })))
+        }
+    }
+}
+
+/// 取消归档：清除标记，会话回到原项目/worktree 的默认列表。运行时进程不随之
+/// 恢复——ACP 会话与已释放会话一样经「恢复会话」路径按需重新 spawn。
+async fn unarchive_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match mark_archived(&state.db, &id, None).await {
+        Ok(1) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))),
+        Err(e) => {
+            error!("failed to unarchive session {}: {}", id, e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "unarchive failed" })))
+        }
+    }
+}
+
+/// 归档标记唯一写入口：`Some(ts)` 归档 / `None` 取消归档，返回受影响行数
+/// （0 = 会话不存在）。抽成独立函数使 DB 级测试可直接驱动同一 SQL 语义。
+async fn mark_archived(
+    db: &sqlx::SqlitePool,
+    id: &str,
+    archived_at: Option<&str>,
+) -> sqlx::Result<u64> {
+    let result = sqlx::query("UPDATE sessions SET archived_at = ? WHERE id = ?")
+        .bind(archived_at)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(result.rows_affected())
+}
+
+/// 全局列出所有归档会话（跨项目，Session.project_id 供前端标注来源项目）。
+/// 归档会话的 agent 进程必然已释放，无需引擎状态富化——纯 DB 读，零引擎调用。
+async fn list_archived_sessions(State(state): State<AppState>) -> impl IntoResponse {
+    let sessions: Vec<Session> = sqlx::query_as(
+        "SELECT * FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    Json(json!(sessions))
 }
 
 async fn get_session_cwd(
@@ -824,6 +914,7 @@ async fn adopt_session(
         acp_session_id: None,
         agent_id: None,
         last_cwd: None,
+        archived_at: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -835,4 +926,110 @@ async fn adopt_session(
     };
 
     (StatusCode::CREATED, Json(json!(session)))
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::mark_archived;
+    use sqlx::{Row, sqlite::SqlitePoolOptions};
+
+    /// 与 `runtime_kind_migration.rs` 同一模式：内存 sqlite + migrations，
+    /// 无 HTTP / 无进程。验证归档标记的 SQL 语义与两条列表谓词的不变式。
+    async fn fresh_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory sqlite");
+        sqlx::migrate!("./migrations").run(&pool).await.expect("run migrations");
+        pool
+    }
+
+    /// 种一个项目 + 一条会话。kind: "acp" | "tmux"。
+    async fn seed_session(pool: &sqlx::SqlitePool, id: &str, kind: &str) {
+        sqlx::query(
+            "INSERT OR IGNORE INTO projects (id, name, path, created_at) VALUES ('p1', 'proj', '/tmp', '2026-08-23')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let acp_col = if kind == "acp" { "'acp-uuid-1'" } else { "NULL" };
+        let sql = format!(
+            "INSERT INTO sessions (id, project_id, workspace_path, name, tmux_session_name, hook_enabled, created_at, runtime_kind, acp_session_id) \
+             VALUES ('{id}', 'p1', '/tmp', '{id}', NULL, 0, '2026-08-23', '{kind}', {acp_col})"
+        );
+        sqlx::query(&sql).execute(pool).await.unwrap();
+    }
+
+    /// 复制 handler 的两条列表谓词——谓词被改动而测试未同步时此处失败提醒。
+    const DEFAULT_LIST_SQL: &str = "SELECT id FROM sessions WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at DESC";
+    const ARCHIVED_LIST_SQL: &str =
+        "SELECT id FROM sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC";
+
+    #[tokio::test]
+    async fn archived_at_defaults_to_null_and_fromrow_is_compatible() {
+        let pool = fresh_pool().await;
+        seed_session(&pool, "s1", "acp").await;
+
+        // legacy INSERT 未带 archived_at → NULL；Session 经 #[sqlx(default)] 可反序列化。
+        let row = sqlx::query("SELECT archived_at FROM sessions WHERE id = 's1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let archived_at: Option<String> = row.get(0);
+        assert!(archived_at.is_none(), "未归档会话的 archived_at 必须为 NULL");
+
+        let session: Option<crate::models::session::Session> =
+            sqlx::query_as("SELECT * FROM sessions WHERE id = 's1'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(session.is_some(), "Session FromRow 应兼容无 archived_at 值的行");
+        assert_eq!(session.unwrap().archived_at, None);
+    }
+
+    #[tokio::test]
+    async fn archive_moves_session_between_default_and_archived_lists() {
+        let pool = fresh_pool().await;
+        seed_session(&pool, "acp1", "acp").await;
+        seed_session(&pool, "tmux1", "tmux").await;
+
+        let affected = mark_archived(&pool, "acp1", Some("2026-08-23T00:00:00Z")).await.unwrap();
+        assert_eq!(affected, 1);
+
+        let default_ids: Vec<String> =
+            sqlx::query_scalar(DEFAULT_LIST_SQL).bind("p1").fetch_all(&pool).await.unwrap();
+        let archived_ids: Vec<String> =
+            sqlx::query_scalar(ARCHIVED_LIST_SQL).fetch_all(&pool).await.unwrap();
+        assert_eq!(default_ids, vec!["tmux1".to_string()], "归档会话必须从默认列表消失");
+        assert_eq!(archived_ids, vec!["acp1".to_string()], "归档列表只含已归档会话");
+
+        // 取消归档 → 回到默认列表、归档列表消失
+        let affected = mark_archived(&pool, "acp1", None).await.unwrap();
+        assert_eq!(affected, 1);
+        let default_ids: Vec<String> =
+            sqlx::query_scalar(DEFAULT_LIST_SQL).bind("p1").fetch_all(&pool).await.unwrap();
+        let archived_ids: Vec<String> =
+            sqlx::query_scalar(ARCHIVED_LIST_SQL).fetch_all(&pool).await.unwrap();
+        assert!(
+            default_ids.contains(&"acp1".to_string()) && archived_ids.is_empty(),
+            "取消归档后会话应回到默认列表且归档列表清空"
+        );
+
+        // 清除后必须严格为 NULL（而非空串），保证 IS NULL 谓词恒可靠
+        let row = sqlx::query("SELECT archived_at FROM sessions WHERE id = 'acp1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let archived_at: Option<String> = row.get(0);
+        assert_eq!(archived_at, None);
+    }
+
+    #[tokio::test]
+    async fn mark_archived_reports_zero_rows_for_missing_session() {
+        let pool = fresh_pool().await;
+        let affected = mark_archived(&pool, "nope", Some("2026-08-23T00:00:00Z")).await.unwrap();
+        assert_eq!(affected, 0, "不存在的会话必须返回 0 行（handler 据此返 404）");
+    }
 }
