@@ -2,4 +2,3 @@
 -- 归档会话不出现在默认会话列表（GET /projects/{pid}/sessions），
 -- 经 GET /sessions/archived 单独列出；聊天记录（chat_messages）保留。
 ALTER TABLE sessions ADD COLUMN archived_at TEXT;
-CREATE INDEX IF NOT EXISTS idx_sessions_archived_at ON sessions(archived_at);
