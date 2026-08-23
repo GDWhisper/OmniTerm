@@ -15,7 +15,7 @@ function App() {
   useImmersive()
 
   const resolved = useThemeStore((s) => s.resolved)
-  const { authState, setAuthState, setAuthEnabled, parchmentTextureEnabled, pixelFontEnabled } = useAppStore()
+  const { authState, connected, setAuthState, setAuthEnabled, parchmentTextureEnabled, pixelFontEnabled } = useAppStore()
   const [needsSetup, setNeedsSetup] = useState(false)
 
   useEffect(() => {
@@ -34,8 +34,36 @@ function App() {
           setAuthState('unauthenticated')
         }
       })
-      .catch(() => setAuthState('unauthenticated'))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+      // Network errors (fetch throws TypeError) are NOT auth failures —
+      // the backend may be temporarily unreachable. Skip so the loading
+      // placeholder stays visible; Sidebar's health poll will try again
+      // every 5 s, and the reconnect effect below re-checks auth once
+      // connected becomes true.
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setAuthState, setAuthEnabled, setNeedsSetup])
+
+  // When the Sidebar health poll brings the connection back, re-verify
+  // auth so we recover from the initial "check failed" state without
+  // requiring a page reload.
+  useEffect(() => {
+    if (!connected) return
+    if (authState !== 'loading') return
+    api.check()
+      .then((res) => {
+        setAuthEnabled(res.auth_enabled ?? true)
+        if (res.authenticated) {
+          setAuthState('authenticated')
+        } else {
+          setNeedsSetup(res.needs_setup ?? false)
+          setAuthState('unauthenticated')
+        }
+      })
+      // If the backend dropped again between check and now, stay in
+      // loading — the reconnect effect will fire again when it returns.
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, setAuthState, setAuthEnabled, setNeedsSetup])
 
   useEffect(() => {
     // 子域名代理 base：`/system/info` 的 `proxy_domain`（null = 未启用，回退路径前缀）。
