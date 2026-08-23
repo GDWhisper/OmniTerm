@@ -52,11 +52,12 @@ Prefix each entry with the area it affects:
 ### Added
 
 - (2026-08-21 23:10) `[frontend]` 创建会话支持引擎选择（pty 引擎 Phase 4）：无 agent 的终端会话可在创建弹窗选择 pty（默认，自管终端：后端重启自动重建、直接拖选即复制）或 tmux（后端重启幸存、prefix 键位与 copy-mode）；系统无 tmux 时 tmux 选项禁用并提示（探测 `/system/multiplexer`），external 会话区块同步仅在 tmux 可用时展示。pty 会话交互分流：滚动/翻页走 xterm 本地 scrollback、modern 键位不再注入 tmux prefix 字节；tmux 会话交互原样（`frontend/src/components/Sidebar/CreateSessionModal.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`、`frontend/src/components/Sidebar/ExternalSessionsSection.tsx`、`frontend/src/stores/appStore.ts`）
-
 - (2026-08-20 15:30) `[backend]` `[api]` pty 会话 agent hook 信道（pty 引擎 Phase 3）：pty 会话内 Claude/Codex/Qoder 的生命周期状态经本地 HTTP 回调即时上报——spawn 时注入 `OMNITERM_HOOK_URL`/`OMNITERM_SESSION_ID` env（会话专属 token），agent 命令自动增补 curl hook 配置（fail-silent + 0.5s 超时）；新增 `POST /api/v1/internal/agent-event`（回环 + token 双重校验，nonce 幂等去重）。HookAuthority 仲裁：hook 存活（60s 新鲜度窗口）时为状态权威，过期降级屏幕检测 fallback；hook 上报经终端 WS `agent_state` 帧即时推送（tmux 会话信道与交互冻结不变）。缺 curl 环境静默降级纯屏幕检测（`src/engine/pty/agent_events.rs`、`src/engine/pty/agent_hooks.rs`、`src/api/agent_events.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`、`src/api/sessions.rs`、`src/api/hooks.rs`）
 - (2026-08-19 12:40) `[update]` 一键升级后自动重启生效：Unix 上更新成功即调度延迟自重启（exec 新二进制、PID 不变，回收 ACP 子进程后原地替换），前端显示倒计时并自动刷新页面拿到新版本，不再需要手动执行 `omniterm stop && omniterm start`；Windows 维持手动重启提示。`/system/version` 新增 `container` 字段、`/system/update` 新增 `auto_restart` 字段，容器环境（Docker 等）禁用一键升级并提示重新拉取镜像（容器内替换无法持久）（`src/update.rs`、`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
 
 ### Fixed
+
+- (2026-08-23 12:00) `[frontend]` 修复移动端软键盘弹出后底部导航与输入法之间出现一段空白：Android Chrome 默认 `resizes-visual` 下键盘只缩 visual viewport，布局按 `vv.height` 定高会低于键盘顶（且 `vv.offsetTop` pan 让布局整体下移、顶部露底）。现为 Android 声明 `interactive-widget: resizes-content`（布局视口随键盘收缩、`100dvh` 直达键盘顶、`offsetTop` 恒 0），iOS 不支持该属性自动保持原 vv 补偿路径；键盘开合检测随之改为「vvHeight 相对挂载时 innerHeight 收缩」而非 `innerHeight − vvHeight` 差值（resizes-content 下差值恒 0，旧启发式失效）（`frontend/src/index.css`、`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Terminal/Terminal.tsx`）
 
 - (2026-08-22 00:00) `[backend]` 修复 pty 会话重连后画面花屏/错位：增量绘制型 agent TUI（光标绝对定位 + 局部擦除的 diff 流）在「清屏后回放原始字节尾」下序列落在错误位置，且字节环可从转义序列中间截断、resize nudge 救不了非全量重绘型程序——补屏帧改为混合方案：raw 字节尾回放（进 scrollback + 恢复 alt-screen 等模式态）→ 清可见屏（不清 scrollback）→ 服务端 VT grid 为真相源带 SGR 样式整帧重画 + 光标定位/显隐复位；attach 时先按本次连接尺寸同步视口（修断开期间窗口变宽/窄按旧尺寸渲染的既存缺陷），快照/渲染/订阅单临界区原子完成。同日移除重连 resize nudge：实测 alacritty shrink→expand 非内容中性（上滚一行混入残片），grid 整帧渲染后补屏帧已精确，nudge 反而污染真相源；变尺寸重连由真实 SIGWINCH 触发全量重绘（`src/engine/pty/vt.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`）
 

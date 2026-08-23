@@ -46,8 +46,14 @@ export function Terminal() {
   const effectiveFontSize = (isMobile ? mobileFontSize : fontSize) * zoomFactor
 
   const isLandscape = useIsLandscape()
-  const { vvHeight } = useKeyboardHeight()
-  const keyboardOpen = isMobile && window.innerHeight - vvHeight > KEYBOARD_OPEN_MIN_PX
+  const { vvHeight, initialInnerHeight } = useKeyboardHeight()
+  // Keyboard-open heuristic (plan D5, revised): detect the viewport shrinking
+  // below its keyboard-free height instead of the innerHeight − vvHeight gap.
+  // With `interactive-widget: resizes-content` (Android Chrome 108+) the
+  // keyboard shrinks the layout viewport itself, making the gap collapse to 0;
+  // iOS keeps resizes-visual where vvHeight still shrinks, so the comparison
+  // works on both paths. Address-bar contraction stays ≤ ~110px < 150.
+  const keyboardOpen = isMobile && vvHeight < initialInnerHeight - KEYBOARD_OPEN_MIN_PX
   const hideKeyBar = isLandscape && keyboardOpen
 
   // MobileKeyBar modifier latch: tracks which modifier (Ctrl/Shift/Alt) is

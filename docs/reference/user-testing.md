@@ -529,6 +529,9 @@ FRONTEND_DIR=frontend/dist
 | T31 | 状态栏滑切会话 | 状态栏横向快滑 | 循环切换上/下一个会话 |
 | T32 | 横屏键盘隐藏 KeyBar | 横屏 + 弹出软键盘 | MobileKeyBar 自动隐藏 |
 | T33 | 长按粘贴 | 长按终端 500ms → 点 Paste | 剪贴板文本写入终端 |
+| T34 | 键盘弹出无空白（Android） | 移动端聚焦输入框弹出软键盘 | 布局底贴键盘顶，底部导航与输入法之间无空白；顶部无露底 |
+| T35 | 键盘收起恢复 | 软键盘收起 | 布局恢复全屏，无底部裁切/残留偏移 |
+| T36 | 横屏键盘隐藏 KeyBar（resizes-content 回归） | 横屏 + 弹出软键盘 | MobileKeyBar 自动隐藏（keyboardOpen 收缩检测双端生效） |
 
 ---
 

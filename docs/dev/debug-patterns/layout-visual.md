@@ -34,6 +34,7 @@
 
 **案例证据**：
 - 2026-07-31 移动端键盘弹出后底部裁切二次复发：布局只消费 `vv.height`、锚在 y=0，pan 后整体上移、底部离开可见区。修复：`useKeyboardHeight` 跟踪 `vvOffsetTop`，根容器 `translateY(offsetTop)`；`offsetTop` 按不变量钳制。
+- 2026-08-23 移动端底部导航与输入法之间出现空白：resizes-visual 下布局按 `vv.height` 定高低于键盘顶，且 `translateY` 让顶部露底。修复：Android 声明 `interactive-widget: resizes-content` 把键盘收缩从第②层（vv pan）整体迁移到第③层（布局视口缩放），`100dvh` 直达键盘顶、offsetTop 恒 0，布局不再依赖 `vv.height` 精度；`innerHeight === vvHeight` 击穿差值启发式，改 vvHeight 相对初始值收缩检测。**修一层不等于根治——同一症状在 pan/缩放两层各复发一次后，优先考虑整体迁移层（声明 resizes-content）而非继续打补丁。**
 
 ---
 

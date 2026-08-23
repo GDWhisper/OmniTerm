@@ -289,6 +289,15 @@ html, body, #root {
   margin: 0;
   padding: 0;
   height: 100dvh;
+  /* Android Chrome 108+: soft keyboard shrinks the *layout* viewport to the
+     area above it (interactive-widget=resizes-content), so `100dvh` tracks
+     the keyboard edge exactly and vv.offsetTop stays 0. Without this the
+     keyboard only shrinks the visual viewport (resizes-visual) and the
+     layout height (vv.height) can undershoot the keyboard top, leaving a
+     blank parchment gap between the bottom bar and the IME. iOS ignores
+     this property and keeps resizes-visual — the vvHeight/vvOffsetTop
+     compensation in useKeyboardHeight covers that path. */
+  interactive-widget: resizes-content;
   /* `clip` (with `hidden` fallback for old engines) forbids even programmatic
      scrolling: mobile keyboards trigger scrollIntoView on focused inputs and
      would scroll these fixed-height containers, leaving the whole layout

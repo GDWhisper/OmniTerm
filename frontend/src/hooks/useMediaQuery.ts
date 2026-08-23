@@ -19,6 +19,12 @@ export function useMobileDetection() {
 export function useKeyboardHeight() {
   const [vvHeight, setVvHeight] = useState(window.visualViewport?.height ?? window.innerHeight)
   const [vvOffsetTop, setVvOffsetTop] = useState(window.visualViewport?.offsetTop ?? 0)
+  // Layout-viewport height at mount, before any soft keyboard. Keyboard-open
+  // detection compares the *current* vvHeight against this instead of the
+  // innerHeight − vvHeight gap: with `interactive-widget: resizes-content`
+  // (Android Chrome 108+) the keyboard shrinks the layout viewport itself,
+  // so innerHeight === vvHeight and the old gap heuristic collapses to 0.
+  const [initialInnerHeight] = useState(() => window.innerHeight)
 
   useEffect(() => {
     const vv = window.visualViewport
@@ -59,7 +65,7 @@ export function useKeyboardHeight() {
     }
   }, [])
 
-  return { vvHeight, vvOffsetTop }
+  return { vvHeight, vvOffsetTop, initialInnerHeight }
 }
 
 export function useIsLandscape() {

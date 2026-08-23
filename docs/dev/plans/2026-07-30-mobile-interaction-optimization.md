@@ -91,6 +91,8 @@
 - **否决项**：focus 事件推断（xterm textarea 常聚焦，键盘未必弹出）。
 - **翻盘条件**：某 WebView `innerHeight === vvHeight` → keyboardOpen 恒 false，回退现状（KeyBar 常显），无回归。
 
+> **勘误（2026-08-23）**：D5 翻盘条件触发并已修订。Android Chrome 108+ 声明 `interactive-widget: resizes-content`（`index.css` `html/body/#root`）后布局视口随键盘收缩，`innerHeight === vvHeight` 使原差值启发式恒 0（KeyBar 常显、横屏不隐藏）。检测改为「当前 `vvHeight` 相对挂载时 `innerHeight` 的收缩」：`useKeyboardHeight` 返回 `initialInnerHeight`，`Terminal.tsx` 用 `vvHeight < initialInnerHeight - 150` 判定——resizes-content（Android）与 resizes-visual（iOS）两条路径下 vvHeight 都会随键盘收缩，同一公式双端生效；地址栏伸缩（≤110px）仍低于 150 阈值不误判。该声明同时根治了 resizes-visual 下布局底低于键盘顶导致「底部导航与输入法之间空白」的问题（布局直接跟 `100dvh` 收缩，不再依赖 `vv.height` 精度）。
+
 ### D6：粘贴走「长按弹菜单 → 点击触发 readText」
 
 - **决策**：长按 500ms 弹单选项浮动菜单，点击「粘贴」才调 `navigator.clipboard.readText()`。
