@@ -58,10 +58,26 @@ export function useKeyboardHeight() {
     window.addEventListener('resize', update)
     update()
 
+    // Some WebViews / older Chrome builds do not fire visualViewport
+    // resize/scroll events while the soft keyboard animates (observed on a
+    // device where interactive-widget is unsupported: the event fired once
+    // mid-animation and never again), leaving vvHeight stuck at a stale
+    // value and the layout too short — a blank gap appears between the
+    // bottom bar and the IME. Poll at a low rate as a backstop; skip the
+    // re-render when the value has not actually moved.
+    const poll = window.setInterval(() => {
+      const maxOffset = Math.max(0, window.innerHeight - vv.height)
+      const offsetTop = Math.min(vv.offsetTop, maxOffset)
+      setVvHeight((prev) => (Math.abs(prev - vv.height) > 2 ? vv.height : prev))
+      setVvOffsetTop((prev) => (Math.abs(prev - offsetTop) > 2 ? offsetTop : prev))
+      if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0)
+    }, 500)
+
     return () => {
       vv.removeEventListener('resize', update)
       vv.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
+      window.clearInterval(poll)
     }
   }, [])
 
