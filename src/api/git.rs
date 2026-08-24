@@ -79,6 +79,7 @@ fn not_repo_response() -> Response {
     (StatusCode::OK, Json(json!({ "is_repo": false }))).into_response()
 }
 
+#[allow(clippy::result_large_err)]
 async fn resolve_root(
     state: &AppState,
     session: Option<&str>,
