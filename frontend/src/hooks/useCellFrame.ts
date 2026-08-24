@@ -1,18 +1,21 @@
 // Phase 1: cell-frame decoder + 30fps throttle for Pty sessions.
+// Phase 3: diff-frame support (row-level delta).
 //
-// CellFrame wire format per design §9 — JSON via WebSocket Text frame.
+// CellFrame wire format per design §9 + Phase 3 node — JSON via WebSocket Text frame.
 // Frontend receives cell_frame → renderCellFrame writes ANSI to xterm.js.
 
 import { useCallback, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
 
 // ──────────────────────────────────────────────────────────
-// Wire format types (§9.2)
+// Wire format types (§9.2, Phase 3 additions)
 // ──────────────────────────────────────────────────────────
 
 export interface CursorState {
   row: number
   col: number
+  /** DECSCUSR shape code (0-6). Undefined → keep frontend's current shape. */
+  shape?: number
   visible: boolean
 }
 
@@ -34,55 +37,90 @@ export interface CellFrame {
   session_id: string
   width: number
   height: number
+  /** true = 全帧（覆盖全部 rows）；false = diff 帧（rows 仅含变化行） */
   full: boolean
   cursor?: CursorState
   overlay: boolean
+  /** diff 帧时必填：变化行在原 grid 中的 0-based 行号。 */
+  row_indices?: number[]
   rows: CellRow[]
 }
 
 // ──────────────────────────────────────────────────────────
-// Row-batched renderer (§10.2)
+// Row renderer helpers
 // ──────────────────────────────────────────────────────────
 
 const SGR_RESET = '\x1b[0m'
 
 /**
+ * Render one row's cells into the chunks buffer.
+ *
+ * CUP to the target row is done by the caller so that diff frames can
+ * EL (erase-to-EOL) before rendering to remove leftover characters.
+ */
+function renderRowCells(cells: CellData[]): string[] {
+  const chunks: string[] = []
+  let prevSgr = ''
+
+  for (const cell of cells) {
+    if (cell.skip) continue
+    if (cell.sgr !== prevSgr) {
+      chunks.push(SGR_RESET)
+      if (cell.sgr) chunks.push(`\x1b[${cell.sgr}m`)
+      prevSgr = cell.sgr
+    }
+    chunks.push(cell.ch)
+  }
+  chunks.push(SGR_RESET)
+  return chunks
+}
+
+function renderCursor(term: Terminal, cursor?: CursorState): void {
+  if (!cursor) return
+  term.write(`\x1b[${cursor.row};${cursor.col}H`)
+  if (cursor.shape !== undefined) {
+    term.write(`\x1b[?${cursor.shape}h`)
+  }
+  term.write(cursor.visible ? '\x1b[?25h' : '\x1b[?25l')
+}
+
+// ──────────────────────────────────────────────────────────
+// Main renderer
+// ──────────────────────────────────────────────────────────
+
+/**
  * Convert cell_frame JSON → ANSI escape sequences on an xterm.js instance.
  *
- * Row-batched: one CUP + style runs + chars per row, with per-row SGR reset.
- * Matches existing `rowBatched` pattern in cellRenderer.ts (Phase R1 verified).
+ * Phase 3 diff support:
+ * - `overlay || full`: clear screen + home + render all rows (Phase 1 behavior).
+ * - `diff` (`full: false` + `row_indices`): per-row CUP + EL + render only
+ *   changed rows; no screen clear.
  */
 export function renderCellFrame(term: Terminal, frame: CellFrame): void {
-  // overlay / full frame: clear screen + home cursor first
-  if (frame.overlay || frame.full) {
-    term.write('\x1b[2J\x1b[H')
-  }
-
-  let prevSgr = ''
+  const isFull = frame.overlay || frame.full
   const chunks: string[] = []
 
-  for (let r = 0; r < frame.height; r++) {
-    chunks.push(`\x1b[${r + 1};1H`)
-    const row = frame.rows[r]?.cells ?? []
-    for (const cell of row) {
-      if (cell.skip) continue
-      if (cell.sgr !== prevSgr) {
-        chunks.push(SGR_RESET)
-        if (cell.sgr) chunks.push(`\x1b[${cell.sgr}m`)
-        prevSgr = cell.sgr
-      }
-      chunks.push(cell.ch)
+  if (isFull) {
+    term.write('\x1b[2J\x1b[H')
+    for (let r = 0; r < frame.height; r++) {
+      const cells = frame.rows[r]?.cells ?? []
+      chunks.push(`\x1b[${r + 1};1H`)
+      chunks.push(...renderRowCells(cells))
     }
-    chunks.push(SGR_RESET)
-    prevSgr = '' // reset per row (matches render_screen behavior)
+  } else {
+    // Diff frame: render only changed rows (no screen clear)
+    const indices = frame.row_indices ?? []
+    for (let i = 0; i < indices.length; i++) {
+      const rowIdx = indices[i]
+      const cells = frame.rows[i]?.cells ?? []
+      chunks.push(`\x1b[${rowIdx + 1};1H`)
+      chunks.push('\x1b[K') // Erase to end of line — remove stale chars
+      chunks.push(...renderRowCells(cells))
+    }
   }
 
   term.write(chunks.join(''))
-
-  if (frame.cursor) {
-    term.write(`\x1b[${frame.cursor.row};${frame.cursor.col}H`)
-    term.write(frame.cursor.visible ? '\x1b[?25h' : '\x1b[?25l')
-  }
+  renderCursor(term, frame.cursor)
 }
 
 // ──────────────────────────────────────────────────────────

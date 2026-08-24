@@ -33,6 +33,8 @@ use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use tracing::warn;
 
+use super::frame::{CellData, CellFrame, CursorState, DiffEngine, RowData, decscusr_code};
+
 /// VT scrollback 行数上限（P1 有界：grid 内存 ≈ 行数 × 列数 × 单元开销，
 /// 1000 行 × 200 列 ≈ 数 MB 量级/会话）。
 const VT_SCROLLBACK_LINES: usize = 1000;
@@ -263,6 +265,10 @@ pub struct VtState {
     sink: Arc<ResponseSink>,
     rows: u16,
     cols: u16,
+    /// Phase 3: row-level diff tracker (invalidated on full frame / resize / mode change).
+    diff_engine: DiffEngine,
+    /// Phase 3: last encoded cursor state — omit cursor field when unchanged (reduce flicker).
+    last_cursor: Mutex<Option<(i32, u16, u8, bool)>>,
 }
 
 impl VtState {
@@ -278,7 +284,15 @@ impl VtState {
         let sink = Arc::new(ResponseSink::default());
         let size = VtSize { rows, cols };
         let term = Term::new(config, &size, VtEventListener { sink: Arc::clone(&sink) });
-        Self { term, processor: Processor::new(), sink, rows: rows as u16, cols: cols as u16 }
+        Self {
+            term,
+            processor: Processor::new(),
+            sink,
+            rows: rows as u16,
+            cols: cols as u16,
+            diff_engine: DiffEngine::with_rows(rows),
+            last_cursor: Mutex::new(None),
+        }
     }
 
     /// 喂入 pty 输出（允许任意切片边界，解析器自处理跨块序列）。
@@ -328,6 +342,12 @@ impl VtState {
         self.rows = rows as u16;
         self.cols = cols as u16;
         self.term.resize(VtSize { rows, cols });
+        self.diff_engine.resize(rows);
+        self.diff_engine.invalidate();
+        // Invalidate cursor diff so a resize-triggered frame always includes cursor.
+        if let Ok(mut lc) = self.last_cursor.lock() {
+            lc.take();
+        }
     }
 
     /// 可见屏纯文本（tmux `capture-pane -p` 等价语义：活动屏、不带转义）。
@@ -424,59 +444,37 @@ impl VtState {
         out
     }
 
-    /// 将当前 VT grid 编码为 CellFrame JSON（Phase 1 cell-frame 编码）。
+    /// 将当前 VT grid 编码为 CellFrame JSON（Phase 1 cell-frame 编码；Phase 3 行级 diff）。
+    ///
+    /// 首次调用（或 `invalidate_diff()` 后）输出全帧，后续调用输出 diff 帧
+    /// （仅包含变化行），减少 JSON 序列化开销。
     ///
     /// 每 cell 携带 SGR 参数体（不含 \x1b[ 前缀和 m 后缀）+ 字符；
     /// 宽字符占位单元格 skip=true。输出 JSON 供 WebSocket Text 帧传输
     /// （§4.2），前端 renderCellFrame 直接消费。
-    pub fn encode_cell_frame(&self, session_id: &str) -> String {
-        self.encode_frame_inner(session_id, false)
+    pub fn encode_cell_frame(&mut self, session_id: &str) -> String {
+        self.encode_frame_body(session_id, false)
     }
 
     /// Phase 2 overlay 帧：前端收到后先清屏再完整重绘当前 grid，
     /// 用于 alt-screen 退出等场景消除残留。
-    pub fn encode_overlay_frame(&self, session_id: &str) -> String {
-        self.encode_frame_inner(session_id, true)
-    }
-
-    /// 当前终端 mode flags（Phase 2 事件检测用）。
-    pub fn mode(&self) -> TermMode {
-        *self.term.mode()
-    }
-
-    fn encode_frame_inner(&self, session_id: &str, overlay: bool) -> String {
-        use crate::engine::pty::frame::{CellData, CellFrame, CursorState, RowData};
-
+    ///
+    /// Always produces a full frame (`full: true`) and invalidates the diff
+    /// engine so the next periodic `encode_cell_frame` starts fresh.
+    pub fn encode_overlay_frame(&mut self, session_id: &str) -> String {
         let grid = self.term.grid();
         let rows = self.term.screen_lines();
         let cols = self.term.columns();
-
-        let mut frame_rows: Vec<RowData> = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut cells: Vec<CellData> = Vec::with_capacity(cols);
-            for col in 0..cols {
-                let cell_ref = &grid[Line(row as i32)][Column(col)];
-                if cell_ref
-                    .flags
-                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-                {
-                    cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
-                } else {
-                    let style = CellStyle::of(cell_ref);
-                    let sgr = sgr_body(&style).unwrap_or_default();
-                    let ch = cell_ref.c.to_string();
-                    cells.push(CellData { sgr, ch, skip: false });
-                }
-            }
-            frame_rows.push(RowData { cells });
-        }
+        let out_rows: Vec<RowData> =
+            (0..rows).map(|r| self.encode_row_static(grid, cols, r)).collect();
 
         let rc = self.term.renderable_content();
-        let cursor = CursorState {
+        let cursor = Some(CursorState {
             row: rc.cursor.point.line.0 + 1,
             col: (rc.cursor.point.column.0 + 1) as u16,
-            visible: !matches!(rc.cursor.shape, alacritty_terminal::vte::ansi::CursorShape::Hidden),
-        };
+            shape: Some(decscusr_code(rc.cursor.shape)),
+            visible: !matches!(rc.cursor.shape, CursorShape::Hidden),
+        });
 
         let frame = CellFrame {
             t: "cell_frame",
@@ -484,12 +482,148 @@ impl VtState {
             width: cols as u16,
             height: rows as u16,
             full: true,
-            cursor: Some(cursor),
-            overlay,
-            rows: frame_rows,
+            cursor,
+            overlay: true,
+            row_indices: None,
+            rows: out_rows,
         };
 
-        serde_json::to_string(&frame).expect("CellFrame serialization must not fail")
+        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
+
+        // Force next periodic frame to be full since rendering context changed.
+        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
+
+        json
+    }
+
+    /// Phase 3: invalidate diff tracker → 下一帧强制全帧（resize / overlay / mode change 后调用）。
+    pub fn invalidate_diff(&mut self) {
+        self.diff_engine.invalidate();
+        if let Ok(mut lc) = self.last_cursor.lock() {
+            lc.take();
+        }
+    }
+
+    /// 当前终端 mode flags（Phase 2 事件检测用）。
+    pub fn mode(&self) -> TermMode {
+        *self.term.mode()
+    }
+
+    /// Encode body (shared full/diff logic). Needs &mut for diff_engine updates.
+    fn encode_frame_body(&mut self, session_id: &str, overlay: bool) -> String {
+        use crate::engine::pty::frame::{CellFrame, RowData, hash_row};
+
+        let grid = self.term.grid();
+        let rows = self.term.screen_lines();
+        let cols = self.term.columns();
+
+        // Probe untracked state BEFORE mutating the hash table — the first encode
+        // after construction or `invalidate_diff()` must be a full frame.
+        let full = self.diff_engine.is_untracked();
+
+        // Compute row hashes first (immutable borrow of self for row_cells)
+        let mut row_hashes: Vec<u64> = Vec::with_capacity(rows);
+        for r in 0..rows {
+            row_hashes.push(hash_row(&self.row_cells(grid, cols, r)));
+        }
+
+        // Diff-engine comparison (mutable borrow of diff_engine)
+        let changed_indices = self.diff_engine.changed_rows_from(&row_hashes);
+
+        // Build row data only for changed rows
+        let out_rows: Vec<RowData> =
+            changed_indices.iter().map(|&r| self.encode_row_static(grid, cols, r)).collect();
+
+        // Cursor diff: include only when position/shape/visibility changed
+        let rc = self.term.renderable_content();
+        let cursor_key = (
+            rc.cursor.point.line.0 + 1,
+            (rc.cursor.point.column.0 + 1) as u16,
+            decscusr_code(rc.cursor.shape),
+            !matches!(rc.cursor.shape, CursorShape::Hidden),
+        );
+        let cursor = {
+            let mut last = self.last_cursor.lock().unwrap();
+            let changed = last.map(|l| l != cursor_key).unwrap_or(true);
+            if changed {
+                *last = Some(cursor_key);
+                Some(CursorState {
+                    row: cursor_key.0,
+                    col: cursor_key.1,
+                    shape: Some(cursor_key.2),
+                    visible: cursor_key.3,
+                })
+            } else {
+                None
+            }
+        };
+
+        let row_indices = if full { None } else { Some(changed_indices) };
+
+        let frame = CellFrame {
+            t: "cell_frame",
+            session_id: session_id.to_string(),
+            width: cols as u16,
+            height: rows as u16,
+            full,
+            cursor,
+            overlay,
+            row_indices,
+            rows: out_rows,
+        };
+
+        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
+
+        // Phase 3: record frame size for metrics
+        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
+
+        json
+    }
+
+    /// Extract cells for a single grid row (used by diff engine hashing).
+    fn row_cells(
+        &self,
+        grid: &alacritty_terminal::grid::Grid<Cell>,
+        cols: usize,
+        row: usize,
+    ) -> Vec<CellData> {
+        let mut cells: Vec<CellData> = Vec::with_capacity(cols);
+        for col in 0..cols {
+            let cell_ref = &grid[Line(row as i32)][Column(col)];
+            if cell_ref.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
+            } else {
+                let style = CellStyle::of(cell_ref);
+                let sgr = sgr_body(&style).unwrap_or_default();
+                let ch = cell_ref.c.to_string();
+                cells.push(CellData { sgr, ch, skip: false });
+            }
+        }
+        cells
+    }
+
+    /// Encode one row as RowData (no lock needed - caller holds grid ref).
+    fn encode_row_static(
+        &self,
+        grid: &alacritty_terminal::grid::Grid<Cell>,
+        cols: usize,
+        row: usize,
+    ) -> RowData {
+        let mut cells: Vec<CellData> = Vec::with_capacity(cols);
+        for col in 0..cols {
+            let cell_ref = &grid[Line(row as i32)][Column(col)];
+            if cell_ref.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
+            } else {
+                let style = CellStyle::of(cell_ref);
+                let sgr = sgr_body(&style).unwrap_or_default();
+                let ch = cell_ref.c.to_string();
+                cells.push(CellData { sgr, ch, skip: false });
+            }
+        }
+        RowData { cells }
     }
 }
 
@@ -696,7 +830,7 @@ mod tests {
 
     #[test]
     fn encode_cell_frame_produces_valid_json() {
-        let v = vt(24, 80);
+        let mut v = vt(24, 80);
         let json = v.encode_cell_frame("test-session");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["t"], "cell_frame");
@@ -744,7 +878,7 @@ mod tests {
 
     #[test]
     fn encode_cell_frame_empty_screen_has_80_default_cells() {
-        let v = vt(24, 80);
+        let mut v = vt(24, 80);
         let json = v.encode_cell_frame("test-session");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         let rows = parsed["rows"].as_array().unwrap();
@@ -760,5 +894,99 @@ mod tests {
                     || cell["sgr"].as_str().map(|s| s.is_empty()).unwrap_or(true)
             );
         }
+    }
+
+    // ──── Phase 3: row-level diff + cursor diff ────
+
+    #[test]
+    fn first_cell_frame_is_full() {
+        let mut v = vt(24, 80);
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], true, "first frame must be full");
+        assert!(parsed["row_indices"].is_null(), "full frame must not have row_indices");
+    }
+
+    #[test]
+    fn unchanged_second_frame_is_diff() {
+        let mut v = vt(24, 80);
+        v.feed(b"stable\r\n");
+        let _ = v.encode_cell_frame("test-session"); // first = full
+        let json = v.encode_cell_frame("test-session"); // second = diff
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], false, "unchanged second frame should be diff");
+        assert!(parsed.get("row_indices").is_some(), "diff frame must have row_indices");
+        let indices = parsed["row_indices"].as_array().unwrap();
+        assert!(indices.is_empty(), "unchanged rows must produce empty diff");
+    }
+
+    #[test]
+    fn changed_row_appears_in_row_indices() {
+        let mut v = vt(24, 80);
+        v.feed(b"stable\r\n"); // fills row 1 (0-indexed)
+        let _ = v.encode_cell_frame("test-session"); // first = full
+        v.feed(b"\x1b[5;1Hchanged"); // change row 4 (1-indexed = 0-indexed 4)
+        let json = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], false);
+        let indices = parsed["row_indices"].as_array().unwrap();
+        assert_eq!(indices.len(), 1, "one row changed");
+        let rows = parsed["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "one row in diff");
+        assert_eq!(rows[0]["cells"][0]["ch"].as_str(), Some("c"));
+    }
+
+    #[test]
+    fn cursor_omitted_when_unchanged() {
+        let mut v = vt(24, 80);
+        v.feed(b"hello");
+        let json1 = v.encode_cell_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json1).expect("must be valid JSON");
+        assert!(parsed["cursor"].is_object(), "first frame must include cursor");
+        let _ = v.encode_cell_frame("test-session"); // second = diff, cursor unchanged
+        let json2 = v.encode_cell_frame("test-session");
+        // Re-feed same content; diff frame will report no changed rows
+        // Cursor should be omitted because position/shape didn't change
+        let parsed2: serde_json::Value = serde_json::from_str(&json2).expect("must be valid JSON");
+        // Since changed_indices is empty, no rows emitted; cursor must also be omitted
+        assert!(parsed2["cursor"].is_null(), "cursor must be omitted when unchanged");
+    }
+
+    #[test]
+    fn invalidate_diff_forces_next_frame_full() {
+        let mut v = vt(24, 80);
+        v.feed(b"a\r\n");
+        let _ = v.encode_cell_frame("ts"); // full
+        let _ = v.encode_cell_frame("ts"); // diff (unchanged)
+        v.invalidate_diff(); // force full
+        let json = v.encode_cell_frame("ts");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], true, "after invalidate_diff must be full");
+        assert!(parsed["row_indices"].is_null());
+    }
+
+    #[test]
+    fn diff_engine_resizes_on_vt_resize() {
+        let mut v = vt(24, 80);
+        let _ = v.encode_cell_frame("ts"); // full at 24 rows
+        let _ = v.encode_cell_frame("ts"); // diff
+        v.resize(40, 80);
+        // Next frame: prev hashes resized to 40 None entries → all rows reported changed → full
+        let json = v.encode_cell_frame("ts");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], true, "after resize must be full");
+        assert_eq!(parsed["height"], 40);
+    }
+
+    #[test]
+    fn overlay_frame_includes_shape_in_cursor() {
+        let mut v = vt(24, 80);
+        v.feed(b"hello");
+        let json = v.encode_overlay_frame("test-session");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["overlay"], true);
+        assert_eq!(parsed["full"], true);
+        let cursor = parsed["cursor"].as_object().unwrap();
+        assert!(cursor.get("shape").is_some(), "overlay cursor must include shape");
     }
 }

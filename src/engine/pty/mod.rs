@@ -16,6 +16,7 @@ pub mod agent_hooks;
 pub mod cwd;
 pub mod events;
 pub mod frame;
+pub mod metrics;
 pub mod ring;
 pub mod scrollback;
 pub mod session;

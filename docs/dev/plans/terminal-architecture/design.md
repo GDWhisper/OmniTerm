@@ -96,16 +96,25 @@
 
 **Phase 2 验证结果**: 340+ tests pass, 0 fail (commit `7836532`)
 
-### Phase 3：优化与监控（2-3 周）
+### Phase 3：优化与监控（✅ 已完成）
 
 **目标**：diff 引擎优化、性能预算、光标同步。
 
-| 步骤 | 内容 | 文件 | 备注 |
-|------|------|------|------|
-| 3.1 | row-level diff（对比 cell-level diff） | frame.rs DiffEngine | 行级 hash 先比，行级变化才细算 cell |
-| 3.2 | 光标状态机 | vt.rs + frame.rs | DECSCUSR 形状记忆（减少光标闪烁） |
-| 3.3 | 前端渲染调度 | useCellFrame | 30fps 限速 + rAF 合并 |
-| 3.4 | 帧大小监控 | engine/metrics.rs | ByteRing 帧大小统计暴露为 hook 可观测数据 |
+| 步骤 | 内容 | 文件 | 状态 | 备注 |
+|------|------|------|------|------|
+| 3.1 | row-level diff（对比 cell-level diff） | `frame.rs` DiffEngine + `vt.rs` 集成 | ✅ | FNV-1a 行级 hash，增减行 auto-tracking，`changed_rows_from()` 分离 borrow |
+| 3.2 | 光标状态机 | `vt.rs` + `frame.rs` | ✅ | `CursorState::shape` DECSCUSR 码，`last_cursor` diff 避免每帧重写入 |
+| 3.3 | 前端渲染调度 | `useCellFrame.ts` | ✅ | diff 帧 selective render + EL 安全擦除 |
+| 3.4 | 帧大小监控 | `engine/metrics.rs` | ✅ | `FrameMetrics` 单例 + `record_cell_frame_bytes()` hook |
+
+**验收条件**:
+
+| # | 条件 | 验证方式 |
+|---|------|---------|
+| 3.1 | 首帧 full，内容未变帧 diff 空 | 350 tests（含 6 新 Phase 3 tests） |
+| 3.2 | Cursor shape 记忆 + omit 同位置 | 单测验证 cursor omit + overlay include |
+| 3.3 | Diff 帧前端仅渲染变化行 | JSON row_indices + EL erase-to-EOL |
+| 3.4 | 帧 byte 统计可观测 | METRICS.record_cell_frame_bytes 每次 encode |
 
 ## 4. 协议兼容性
 
@@ -205,6 +214,15 @@ function renderCellFrame(frame: CellFrame): string {
 - [x] 补屏帧时序对齐（A7 关闭）— detach/attach 路径无变更，事件检测在增量路径上叠加
 - [x] Mode switch 可见 — `\x1b[?1049h/l` 触发 AltScreenEnter/Exit → overlay cell_frame 推送前端
 
+### Phase 3 结束时检查点（✅ 通过）：
+- [x] 首帧 full、内容不变帧 diff 空 — DiffEngine FNV-1a hash + `row_indices` 路由
+- [x] Cursor 同位置 omit — `last_cursor` diff 避免每帧写入
+- [x] DECSCUSR shape 记忆 — `shape` 字段随 CellFrame 下发，前端 restore
+- [x] Resize 后强制全帧 — `resize()` invalidate diff_engine + cursor
+- [x] Overlay 后强制全帧 — `encode_overlay_frame` 内部 invalidate + last_cursor reset
+- [x] Diff 帧前端仅渲染变化行 — `row_indices` + `\x1b[K` erase-to-EOL
+- [x] 帧 byte 统计可观测 — `metrics::record_cell_frame_bytes()` 每次 encode
+
 ---
 
 ## 9. CellFrame wire 格式（精确 spec）
@@ -245,10 +263,12 @@ function renderCellFrame(frame: CellFrame): string {
 | `session_id` | string | 是 | 会话 ID |
 | `width` | u16 | 是 | 视口列数 |
 | `height` | u16 | 是 | 视口行数 |
-| `full` | bool | 是 | `true` = 全帧（覆盖所有 cell），`false` = diff（仅变化行） |
-| `cursor` | object | 否 | `{ row, col, visible }`，省略时前端保持当前 cursor 状态 |
+| `full` | bool | 是 | `true` = 全帧（覆盖所有 cell），`false` = diff（仅变化行，由 `row_indices` 标注） |
+| `cursor` | object | 否 | `{ row, col, shape?, visible }`，省略时前端保持当前 cursor 状态 |
+| `shape` | u8 | 否 | DECSCUSR 码（0/1=blink-block, 2=steady-block, 3=blink-under, 4=steady-under, 5=blink-bar, 6=steady-bar）。省略时前端保持当前形状，用于 DECSCUSR 形状记忆 |
 | `overlay` | bool | 否 | `true` = selective overlay（到达前先执行 `\x1b[2J` 清屏），默认 `false` |
-| `rows` | array | 是 | 长度为 `height`，每元素一行 |
+| `row_indices` | array | 条件 | diff 帧（`full: false`）时必填，变化行在 grid 中的 0-based 行号；全帧时省略 |
+| `rows` | array | 条件 | 全帧时长度为 `height`（每元素一行），diff 帧时长度 = `row_indices` 长度 |
 
 **行内 cell 格式**：
 

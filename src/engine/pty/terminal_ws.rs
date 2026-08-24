@@ -189,9 +189,14 @@ pub async fn handle_pty_terminal(
                             // alt-screen 切换需要前端清屏重绘
                             let needs_overlay = matches!(ev, SemanticEvent::AltScreenEnter | SemanticEvent::AltScreenExit);
                             if needs_overlay {
+                                // Encode overlay + invalidate diff inside the lock (mut borrow),
+                                // then drop the guard before the await point to keep the
+                                // spawned future Send.
                                 let json = {
-                                    let vt_guard = encode_attach.state.vt.lock().unwrap();
-                                    vt_guard.encode_overlay_frame(&session_id_for_frame)
+                                    let mut vt_guard = encode_attach.state.vt.lock().unwrap();
+                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame);
+                                    vt_guard.invalidate_diff();
+                                    json
                                 };
                                 if ws_tx.send(Message::Text(json.into())).await.is_err() {
                                     break;
@@ -205,7 +210,7 @@ pub async fn handle_pty_terminal(
                     // 30fps tick：output_seq 变化检测避免空转
                     _ = tick.tick() => {
                         let json = {
-                            let vt_guard = encode_attach.state.vt.lock().unwrap();
+                            let mut vt_guard = encode_attach.state.vt.lock().unwrap();
                             vt_guard.encode_cell_frame(&session_id_for_frame)
                         };
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
