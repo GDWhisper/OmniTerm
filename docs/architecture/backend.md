@@ -426,7 +426,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OMNITERM_DB` | 按 argv0 推导（`~/.omniterm/<binary>.db`） | SQLite connection string（等价 `--db`） |
+| `OMNITERM_DB` | 开发构建（debug / `target/` 下产物）`~/.omniterm/omniterm-dev.db`；release 正式安装按 argv0 推导（`~/.omniterm/<binary>.db`） | SQLite connection string（等价 `--db`）。开发构建固定走 `omniterm-dev`，杜绝 dev/preview 的 `target/debug/omniterm` 裸跑（无 `--db`）因 Cargo.toml name 统一而静默连正式版库（历史事故 20260812 / 20260823） |
 | `OMNITERM_JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
 | `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
 | `OMNITERM_HOST` | `127.0.0.1` | 监听地址（等价 `-H`）；Docker 传 `0.0.0.0` 全网暴露 |

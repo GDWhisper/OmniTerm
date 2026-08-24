@@ -17,7 +17,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 2. **每次改动后提交**：功能的开发/修复用 `feat:` / `fix:`，文档/配置用 `docs:` / `chore:`
 3. **CHANGELOG 只写实质性的功能改动，排除开发文档改动** — 反复修改未解决的 bug、中间调试状态、回退的改动不写
 4. **查源码**：先 `codegraph sync`。不知道代码在哪 → `codegraph_explore`；已知符号名/路径 → `rg -n` + `read(offset/limit)`，勿对同一文件重复 explore；要 callers/影响面 → `codegraph_callers` / `codegraph_impact`；主战场单文件通读一遍；配置/文档/非索引文件直接 Read/Grep
-5. **启动开发环境服务必须走 `./dev.sh start|restart|stop`**，禁止直接运行 `cargo run` 或 `target/debug/omniterm` 二进制启动后端/前端：不传 `--db` 会连到 `~/.omniterm/omniterm.db`（正式版库），开发分支的新 migration 将污染正式版数据库。确需手动运行二进制时，必须显式传 `--db`（指向本 worktree 库，见 dev.sh 的 `BRANCH_BINARY_NAME`）。
+5. **启动开发环境服务必须走 `./dev.sh start|restart|stop`**，禁止直接运行 `cargo run` 或 `target/debug/omniterm` 二进制启动后端/前端：开发构建（debug / `target/` 下产物）不传 `--db` 默认连 `~/.omniterm/omniterm-dev.db`（开发库），而 release 正式安装（npm/crates.io/Docker/cargo install）不传 `--db` 会连 `~/.omniterm/omniterm.db`（正式版库）。手动运行 release 二进制或跨 worktree 场景必须显式传 `--db`（指向本 worktree 库，见 dev.sh 的 `BRANCH_BINARY_NAME`）。
 
 ## 工程准则
 
@@ -75,7 +75,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 - dev.sh 已 `source .env.local` 并 export 全部变量；Dockerfile 用 `ARG` + 默认值；docker-compose 用 `env_file` 引入
 - **后端配置只走命令行参数或 `OMNITERM_*` 前缀 env**：dev.sh 把端口/db 以 `-H/-p/--db` 传给后端，**不得** export 通用名环境变量（`BIND_ADDR`/`BACKEND_PORT`/`DATABASE_URL`/`JWT_SECRET`）——后端派生的用户终端会继承其环境，正式版 omniterm 在这些终端里启动就会被开发配置劫持（实测报 `Address already in use`）。新增后端 env 一律加 `OMNITERM_` 前缀
 - **二进制名统一**：`Cargo.toml` 的 `[package] name` 全分支统一为 `omniterm`（编译产物 / Docker 镜像 / crates.io 包名一致），不按分支区分，merge 不会覆盖
-- **数据库隔离**：db 路径由 dev.sh 基于 `BRANCH_BINARY_NAME` 拼出并以 `--db` 传给后端（`~/.omniterm/<BRANCH_BINARY_NAME>.db`）；`BRANCH_BINARY_NAME` 仅为数据库隔离标识（非二进制名），各 worktree 在 `.env.local` 独立维护，merge 不会串库
+- **数据库隔离**：db 路径由 dev.sh 基于 `BRANCH_BINARY_NAME` 拼出并以 `--db` 传给后端（`~/.omniterm/<BRANCH_BINARY_NAME>.db`）；`BRANCH_BINARY_NAME` 仅为数据库隔离标识（非二进制名），各 worktree 在 `.env.local` 独立维护，merge 不会串库。**无 `--db` 时的默认库**（`src/main.rs` `default_db_stem`）：开发构建（debug / `target/` 下产物）固定 `~/.omniterm/omniterm-dev.db`，release 正式安装按 binary 名推导 `~/.omniterm/omniterm.db`——历史上开发二进制因 Cargo.toml name 统一为 `omniterm` 而按 argv0 推导撞正式版库并应用新 migration（20260812 / 20260823 两次事故）
 
 ## 文档索引
 

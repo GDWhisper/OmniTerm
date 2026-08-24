@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- (2026-08-25 00:40) `[backend]` `[infra]` 数据库默认隔离加固：开发构建（debug 或 `target/` 下产物）不传 `--db` 时默认连 `~/.omniterm/omniterm-dev.db`，release 正式安装仍按 binary 名推导正式版库——杜绝开发二进制裸跑静默污染正式版数据库（20260812 / 20260823 两次 migration 事故的根因）（`src/main.rs` `default_db_stem`）
+
 ## [0.2.17] - 2026-08-24
 
 ### Added
