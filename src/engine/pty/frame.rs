@@ -115,9 +115,7 @@ impl DiffEngine {
     /// Mark all rows as untracked — the next `changed_rows()` call will
     /// report every row as changed (producing a full frame).
     pub fn invalidate(&mut self) {
-        for h in &mut self.prev {
-            *h = None;
-        }
+        self.prev.fill(None);
     }
 
     /// Return true when all rows are untracked (first frame after
