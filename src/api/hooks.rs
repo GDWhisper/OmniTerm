@@ -19,15 +19,16 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
-    let session: Option<(String, bool)> =
-        sqlx::query_as("SELECT tmux_session_name, hook_enabled FROM sessions WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
+    let session: Option<(String, bool, RuntimeKind)> = sqlx::query_as(
+        "SELECT tmux_session_name, hook_enabled, runtime_kind FROM sessions WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
 
-    let Some((engine_name, hook_enabled)) = session else {
+    let Some((engine_name, hook_enabled, runtime_kind)) = session else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "session not found" })));
     };
 
@@ -42,7 +43,8 @@ async fn hook_status(State(state): State<AppState>, Path(id): Path<String>) -> i
     }
 
     // First, try to read agent state from the engine's structured agent channel
-    match state.engines.agent_snapshot(RuntimeKind::Tmux, &engine_name).await {
+    // （tmux = `@omniterm_agent` option；pty = HTTP hook 信道 KV，按 runtime 路由）
+    match state.engines.agent_snapshot(runtime_kind, &engine_name).await {
         Ok(Some(snapshot)) => {
             return (
                 StatusCode::OK,

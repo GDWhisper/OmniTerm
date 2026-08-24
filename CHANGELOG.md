@@ -47,6 +47,30 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.17] - 2026-08-24
+
+### Added
+
+- (2026-08-23 21:30) `[backend]` `[frontend]` ACP 会话归档：会话行新增「归档」动作（仅 acp 会话）——释放 agent 子进程（与手动释放同路径）并从默认列表隐藏，聊天记录保留；Sidebar 底部新增全局「已归档」折叠区块（跨项目聚合，标注 agent/来源项目），点击归档会话只读查看历史（无恢复按钮，恢复需先取消归档），行内可取消归档回到原列表或彻底删除。进程驻留时归档先弹确认（终止运行中 agent）。新增 `POST /sessions/{id}/archive|unarchive`、`GET /sessions/archived` 与 `sessions.archived_at` 列（migration）（`src/api/sessions.rs`、`src/models/session.rs`、`migrations/20260823_add_sessions_archived_at.sql`、`frontend/src/components/Sidebar/ArchivedSessionsSection.tsx`、`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/components/Sidebar/Sidebar.tsx`、`frontend/src/components/Chat/ChatView.tsx`）
+- (2026-08-21 23:10) `[frontend]` 创建会话支持引擎选择（pty 引擎 Phase 4）：无 agent 的终端会话可在创建弹窗选择 pty（默认，自管终端：后端重启自动重建、直接拖选即复制）或 tmux（后端重启幸存、prefix 键位与 copy-mode）；系统无 tmux 时 tmux 选项禁用并提示（探测 `/system/multiplexer`），external 会话区块同步仅在 tmux 可用时展示。pty 会话交互分流：滚动/翻页走 xterm 本地 scrollback、modern 键位不再注入 tmux prefix 字节；tmux 会话交互原样（`frontend/src/components/Sidebar/CreateSessionModal.tsx`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`、`frontend/src/components/Sidebar/ExternalSessionsSection.tsx`、`frontend/src/stores/appStore.ts`）
+- (2026-08-20 15:30) `[backend]` `[api]` pty 会话 agent hook 信道（pty 引擎 Phase 3）：pty 会话内 Claude/Codex/Qoder 的生命周期状态经本地 HTTP 回调即时上报——spawn 时注入 `OMNITERM_HOOK_URL`/`OMNITERM_SESSION_ID` env（会话专属 token），agent 命令自动增补 curl hook 配置（fail-silent + 0.5s 超时）；新增 `POST /api/v1/internal/agent-event`（回环 + token 双重校验，nonce 幂等去重）。HookAuthority 仲裁：hook 存活（60s 新鲜度窗口）时为状态权威，过期降级屏幕检测 fallback；hook 上报经终端 WS `agent_state` 帧即时推送（tmux 会话信道与交互冻结不变）。缺 curl 环境静默降级纯屏幕检测（`src/engine/pty/agent_events.rs`、`src/engine/pty/agent_hooks.rs`、`src/api/agent_events.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`、`src/api/sessions.rs`、`src/api/hooks.rs`）
+- (2026-08-19 12:40) `[update]` 一键升级后自动重启生效：Unix 上更新成功即调度延迟自重启（exec 新二进制、PID 不变，回收 ACP 子进程后原地替换），前端显示倒计时并自动刷新页面拿到新版本，不再需要手动执行 `omniterm stop && omniterm start`；Windows 维持手动重启提示。`/system/version` 新增 `container` 字段、`/system/update` 新增 `auto_restart` 字段，容器环境（Docker 等）禁用一键升级并提示重新拉取镜像（容器内替换无法持久）（`src/update.rs`、`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
+- (2026-08-18 18:00) `[backend]` `[frontend]` Pty 会话 cell-frame 编码行级 diff（terminal-architecture Phase 3）：服务端 `DiffEngine` 对 grid 每行做 FNV-1a hash，内容未变的行跳过 JSON 序列化并以 `row_indices[]` 标注变化行；首帧 / resize / overlay 后强制全帧。前端 diff 帧不再清屏，逐行 CUP + `\x1b[K` 擦遗后重写变化行。光标四元组（row/col/shape/visible）diff 记忆——同位置帧省略 cursor 字段减少写入抖动；DECSCUSR 形状码随 `CellFrame.cursor.shape` 下发，前端 restore 光标样式（不再每帧重发 CUP + DECTCEM）。新增 `engine/metrics.rs` 单例记录每次 cell_frame 编码字节数，为可观测 dashboard 提供 hook（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`src/engine/pty/metrics.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`、`frontend/src/hooks/useCellFrame.ts`）
+
+### Fixed
+
+- (2026-08-23 12:00) `[frontend]` 修复移动端软键盘弹出后底部导航与输入法之间出现一段空白：Android Chrome 默认 `resizes-visual` 下键盘只缩 visual viewport，布局按 `vv.height` 定高会低于键盘顶（且 `vv.offsetTop` pan 让布局整体下移、顶部露底）。现为 Android 声明 `interactive-widget: resizes-content`（布局视口随键盘收缩、`100dvh` 直达键盘顶、`offsetTop` 恒 0），iOS 不支持该属性自动保持原 vv 补偿路径；键盘开合检测随之改为「vvHeight 相对挂载时 innerHeight 收缩」而非 `innerHeight − vvHeight` 差值（resizes-content 下差值恒 0，旧启发式失效）（`frontend/src/index.css`、`frontend/src/hooks/useMediaQuery.ts`、`frontend/src/components/Terminal/Terminal.tsx`）
+
+- (2026-08-22 00:00) `[backend]` 修复 pty 会话重连后画面花屏/错位：增量绘制型 agent TUI（光标绝对定位 + 局部擦除的 diff 流）在「清屏后回放原始字节尾」下序列落在错误位置，且字节环可从转义序列中间截断、resize nudge 救不了非全量重绘型程序——补屏帧改为混合方案：raw 字节尾回放（进 scrollback + 恢复 alt-screen 等模式态）→ 清可见屏（不清 scrollback）→ 服务端 VT grid 为真相源带 SGR 样式整帧重画 + 光标定位/显隐复位；attach 时先按本次连接尺寸同步视口（修断开期间窗口变宽/窄按旧尺寸渲染的既存缺陷），快照/渲染/订阅单临界区原子完成。同日移除重连 resize nudge：实测 alacritty shrink→expand 非内容中性（上滚一行混入残片），grid 整帧渲染后补屏帧已精确，nudge 反而污染真相源；变尺寸重连由真实 SIGWINCH 触发全量重绘（`src/engine/pty/vt.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`）
+
+- (2026-08-19 00:26) `[frontend]` 修复 ACP 会话流式输出中刷新页面丢失早期 assistant 正文：后端 turn 累积器帧窗口按字节上限从头部驱逐旧帧，刷新后 hydrate/续接快照只含窗口残片，且 turn 结束时前端把残缺 cooked blocks 回写覆盖 DB 行使缺失永久化——现收到续接快照的 turn 跳过 cooked 回写（DB 保留完整 text 列的原始帧行），且 RAW 帧解码与快照还原时用后端全量 text 把被驱逐的正文前缀补回显示（精确后缀匹配守卫，失配宁缺勿错）（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
+
+---
+
+## [Unreleased]
+
+---
+
 ## [0.2.16] - 2026-08-18
 
 ### Changed

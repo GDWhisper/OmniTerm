@@ -22,6 +22,8 @@ export function DeleteConfirmDialog(props: {
   onClose: () => void
   reloadProjects: () => Promise<void>  // Sidebar 侧 loadProjects
   reloadSessions: () => Promise<void>  // Sidebar 侧 loadSessions
+  /** 会话删除成功后的附加刷新（Sidebar 用于同步已归档区块）。 */
+  onSessionDeleted?: () => Promise<void>
 }) {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
@@ -68,6 +70,8 @@ export function DeleteConfirmDialog(props: {
     try {
       await api.deleteSession(target.id)
       await props.reloadSessions()
+      // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
+      await props.onSessionDeleted?.()
       // Clean workspace session memory for the deleted session
       for (const wsId of Object.keys(workspaceSessionMemory)) {
         if (workspaceSessionMemory[wsId] === target.id) {

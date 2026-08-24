@@ -42,7 +42,9 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
     // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
     // 兜底会覆盖后端原始帧，堵死未来分类器升级后重新解释历史的路径。
     let rawStored = m.blocks ? isRawFrameWrapper(m.blocks) : false
-    let blocks = m.blocks ? decodeStoredBlocks(m.blocks) : null
+    // text 列传给解码器：RAW 帧窗口行的 blocks 可能缺被驱逐的早期正文，
+    // 解码时用全量 text 补前缀（见 useAcpChat.prependEvictedProse）。
+    let blocks = m.blocks ? decodeStoredBlocks(m.blocks, m.text) : null
     if (!blocks || blocks.length === 0) {
       blocks = [{ type: 'text' as const, text: m.text }]
       rawStored = false
@@ -82,9 +84,12 @@ export function ChatView() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const chatFontSize = useAppStore((s) => s.chatFontSize)
   const sessions = useAppStore((s) => s.sessions)
+  // 归档会话不在项目切片里，从 archivedSessions 兜底（与 SessionView 同口径）。
+  const archivedSessions = useAppStore((s) => s.archivedSessions)
   const activeSession =
     activeSessionId
-      ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+      ? (Object.values(sessions).flat().find((s) => s.id === activeSessionId) ??
+        archivedSessions.find((s) => s.id === activeSessionId))
       : null
 
   // 兜底 agent 显示名：会话关联的 agents.display_name（已释放/未连接时无 capabilities
@@ -322,14 +327,20 @@ export function ChatView() {
     cancel()
   }
 
+  // 归档会话：进程必然已释放，只读查看历史。不显示「恢复会话」——
+  // 恢复前必须先在 Sidebar 取消归档（否则归档态下 spawn 出新进程，语义混乱）。
+  const archived = activeSession?.archived_at != null
   // 进程已被释放（手动 release / reaper 自动回收 / 后端重启）且未重新连接时，
   // 也应展示「恢复会话」按钮。acp_process_alive 由 Sidebar 的会话列表轮询刷新，
   // 因而释放后能即时（最多一个轮询周期）反映到 UI，无需刷新页面。
   const released =
-    activeSession?.runtime_kind === 'acp' && activeSession?.acp_process_alive === false
-  const showRestore = chatState.sessionEnded || released
+    !archived && activeSession?.runtime_kind === 'acp' && activeSession?.acp_process_alive === false
+  const showRestore = !archived && (chatState.sessionEnded || released)
 
   const titleChip = (() => {
+    if (archived) {
+      return <span className="title-bar-badge">● ARCHIVED</span>
+    }
     if (chatState.sessionEnded) {
       return <span className="title-bar-badge badge-danger">● DEAD</span>
     }

@@ -7,7 +7,7 @@ import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
-import { EditButton, DeleteButton, ReleaseButton } from './RowActionButtons'
+import { EditButton, DeleteButton, ReleaseButton, ArchiveButton } from './RowActionButtons'
 import type { RenameTarget } from './RenameDialog'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -31,6 +31,7 @@ export function ProjectCard(props: {
   onDeleteWorktree: (target: DeleteWorktreeTarget) => void
   onDeleteSession: (target: DeleteTarget) => void
   onReleaseRequest: (session: Session) => void
+  onArchiveRequest: (session: Session) => void
 }) {
   const { t } = useTranslation()
   const attention = useAttention()
@@ -320,6 +321,15 @@ export function ProjectCard(props: {
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   props.onReleaseRequest(s)
+                                }}
+                              />
+                            )}
+                            {/* 归档仅对 ACP 会话开放（终端会话无历史可冷藏） */}
+                            {s.runtime_kind === 'acp' && (
+                              <ArchiveButton
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  props.onArchiveRequest(s)
                                 }}
                               />
                             )}

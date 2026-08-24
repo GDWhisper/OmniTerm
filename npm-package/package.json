@@ -1,6 +1,6 @@
 {
   "name": "@gdwhisper/omniterm",
-  "version": "0.2.16",
+  "version": "0.2.17",
   "description": "Web-based tmux terminal manager",
   "license": "FSL-1.1-MIT",
   "publishConfig": {

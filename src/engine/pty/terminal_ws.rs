@@ -7,11 +7,23 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::PtySize;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
+use crate::engine::pty::events::SemanticEvent;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
+
+use serde::Deserialize;
+
+/// Cell-frame capability handshake from frontend (§4.2 hello frame).
+#[derive(Debug, Deserialize)]
+struct ClientHello {
+    t: String,
+    supports_cell_frame: bool,
+}
 
 pub async fn handle_pty_terminal(
     ws: WebSocket,
@@ -24,8 +36,8 @@ pub async fn handle_pty_terminal(
     // 引擎会话键存于冻结列 tmux_session_name（过渡期两引擎共用，D10）；
     // 旧记录可能为 NULL，回退用 session_id。last_cwd 是 cwd 采样回写值（D5），
     // 重建会话时优先使用，目录已失效则回退 workspace_path。
-    let row: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT workspace_path, tmux_session_name, last_cwd FROM sessions WHERE id = ?",
+    let row: Option<(String, Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT workspace_path, tmux_session_name, last_cwd, hook_enabled FROM sessions WHERE id = ?",
     )
     .bind(&session_id)
     .fetch_optional(&state.db)
@@ -33,7 +45,7 @@ pub async fn handle_pty_terminal(
     .ok()
     .flatten();
 
-    let Some((workspace, engine_key, last_cwd)) = row else {
+    let Some((workspace, engine_key, last_cwd, hook_enabled)) = row else {
         let (mut sender, _) = ws.split();
         let msg =
             serde_json::to_string(&ServerControl::Error { message: "session not found" }).unwrap();
@@ -69,18 +81,14 @@ pub async fn handle_pty_terminal(
         }
     };
 
-    // 本连接视口尺寸生效（单视图模型：最后 attach 者决定尺寸）
-    if let Err(e) = attach.resize(size) {
-        warn!("initial resize failed (pty): {}", e);
-    }
-    // 重连重绘 nudge（herdr pty/actor/unix.rs:712-756）：rows-1 → 30ms → rows，
-    // 强制 TUI（vim/htop 类）按新尺寸重绘，防补屏后花屏。新建会话不需要。
-    if attach.reconnected && size.rows > 1 {
-        let nudged = PtySize { rows: size.rows - 1, ..size };
-        let _ = attach.resize(nudged);
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-        let _ = attach.resize(size);
-    }
+    // 视口尺寸已在 engine::attach 内于补屏快照前同步（单视图模型：最后
+    // attach 者决定尺寸），此处无需再 resize。
+    // 注意：不再做重连 resize nudge（rows-1 → 30ms → rows）。该技巧服务于
+    // 「补屏=原始字节回放」时代的全量重绘型 TUI；grid 整帧重渲染落地后，
+    // 同尺寸重连的补屏帧已精确，而实测 alacritty 对 shrink→expand 并非
+    // 内容中性——nudge 会把屏幕上滚一行并在顶部混入历史残片，恰好污染
+    // 补屏帧赖以生成的真相源。变尺寸重连由真实 resize 触发内核 SIGWINCH，
+    // 全量重绘型程序自然重绘（2026-08-22 实测翻盘，见计划文档切片 B 勘误）。
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
@@ -89,7 +97,8 @@ pub async fn handle_pty_terminal(
         return;
     }
 
-    // 补屏：attach 时刻的补屏环快照（原始 ANSI 字节回放，xterm.js 直接消费）
+    // 补屏：attach 时刻的补屏帧（原始字节尾 + 清可见屏 + grid 重渲染当前
+    // 屏，见 engine::attach / vt.rs 补屏说明），xterm.js 直接消费
     if !attach.replay.is_empty()
         && ws_tx.send(Message::Binary(attach.replay.clone().into())).await.is_err()
     {
@@ -111,28 +120,135 @@ pub async fn handle_pty_terminal(
         debug!("PTY writer exited (pty session {writer_key})");
     });
 
-    // === 输出订阅 → WS binary 帧 ===
+    // === hook 信道推送（D7）：门铃唤醒 → 回读本会话最新上报 → agent_state 帧。
+    // 仅 hook 注入过的会话启用；nonce 去重与复用器轮询路径语义一致。
+    let (agent_tx, mut agent_rx) = tokio::sync::mpsc::channel::<String>(16);
+    let agent_handle: Option<tokio::task::JoinHandle<()>> = if hook_enabled {
+        let store = state.engines.pty_agent_events();
+        let push_key = key.clone();
+        Some(tokio::spawn(async move {
+            let mut rx = store.subscribe();
+            let mut last_nonce: Option<String> = None;
+            // 连接即推一次当前态（如有），与复用器轮询的首轮语义对齐
+            if let Some(snap) = store.fresh_snapshot(&push_key)
+                && let Some(msg) = agent_state_frame(&snap, &mut last_nonce)
+                && agent_tx.send(msg).await.is_err()
+            {
+                return;
+            }
+            loop {
+                if rx.changed().await.is_err() {
+                    break;
+                }
+                let Some(snap) = store.fresh_snapshot(&push_key) else { continue };
+                if let Some(msg) = agent_state_frame(&snap, &mut last_nonce)
+                    && agent_tx.send(msg).await.is_err()
+                {
+                    break;
+                }
+            }
+        }))
+    } else {
+        None
+    };
+
+    // === 输出转发（cell_frame / raw binary fallback + hook agent_state 帧）===
+    let cell_frame_enabled = Arc::new(AtomicBool::new(false));
+    // forward handle 专用克隆（避免 session_id 被 move）
+    let fwd_cfe = cell_frame_enabled.clone();
+    let session_id_for_frame = session_id.clone();
+    let encode_attach = attach.clone();
+
     let mut rx = attach.rx;
+    let mut event_rx = attach.event_rx;
     let mut forward_handle = tokio::spawn(async move {
+        // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
+        let mut ticker: Option<tokio::time::Interval> = None;
+
         loop {
-            match rx.recv().await {
-                Ok(data) => {
-                    if ws_tx.send(Message::Binary(data.into())).await.is_err() {
-                        break;
+            // 懒初始化：前端 hello 握手激活 cell_frame 模式时启动编码定时器
+            if fwd_cfe.load(Ordering::Relaxed) && ticker.is_none() {
+                ticker = Some(tokio::time::interval(std::time::Duration::from_millis(33)));
+                info!("cell_frame encoder started: session={session_id_for_frame}");
+            }
+
+            if let Some(ref mut tick) = ticker {
+                // ── Cell-frame 模式：定时器驱动 VT grid 编码 ──
+                tokio::select! {
+                    biased;
+                    // agent_state 帧优先级最高
+                    agent_msg = agent_rx.recv() => {
+                        let Some(msg) = agent_msg else { break };
+                        if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Phase 2: semantic 事件 → overlay cell_frame
+                    event = event_rx.recv() => {
+                        if let Ok(ev) = event {
+                            // alt-screen 切换需要前端清屏重绘
+                            let needs_overlay = matches!(ev, SemanticEvent::AltScreenEnter | SemanticEvent::AltScreenExit);
+                            if needs_overlay {
+                                // Encode overlay + invalidate diff inside the lock (mut borrow),
+                                // then drop the guard before the await point to keep the
+                                // spawned future Send.
+                                let json = {
+                                    let mut vt_guard = encode_attach.state.vt.lock().unwrap();
+                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame);
+                                    vt_guard.invalidate_diff();
+                                    json
+                                };
+                                if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // 排干 raw bytes（维持 broadcast channel 健康；VT grid
+                    // 模式下 raw bytes 丢弃，grid 是真相源）
+                    _ = rx.recv() => {}
+                    // 30fps tick：output_seq 变化检测避免空转
+                    _ = tick.tick() => {
+                        let json = {
+                            let mut vt_guard = encode_attach.state.vt.lock().unwrap();
+                            vt_guard.encode_cell_frame(&session_id_for_frame)
+                        };
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
                     }
                 }
-                // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
-                Err(RecvError::Lagged(n)) => {
-                    warn!("pty output lagged, dropped {n} frames");
-                    continue;
+            } else {
+                // ── Raw binary 模式（legacy，不变）──
+                tokio::select! {
+                    out = rx.recv() => match out {
+                        Ok(data) => {
+                            if ws_tx.send(Message::Binary(data.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        // 慢消费丢帧保连接；丢的屏面由下次补屏兜底（切片 B）
+                        Err(RecvError::Lagged(n)) => {
+                            warn!("pty output lagged, dropped {n} frames");
+                            continue;
+                        }
+                        // 会话进程退出、引擎注销 → 关闭本连接
+                        Err(RecvError::Closed) => break,
+                    },
+                    agent_msg = agent_rx.recv() => {
+                        let Some(msg) = agent_msg else { break };
+                        if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
                 }
-                // 会话进程退出、引擎注销 → 关闭本连接（前端重连会重建会话）
-                Err(RecvError::Closed) => break,
             }
         }
     });
 
     // === WS 消息读循环（输入 + resize + ping）===
+    let read_cfe = cell_frame_enabled.clone();
+    let read_session_id = session_id.clone();
     let mut read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
             match msg {
@@ -143,6 +259,14 @@ pub async fn handle_pty_terminal(
                     }
                 }
                 Ok(Message::Text(text)) => {
+                    // Phase 1: cell_frame 能力握手
+                    if let Ok(hello) = serde_json::from_str::<ClientHello>(&text) {
+                        if hello.t == "hello" && hello.supports_cell_frame {
+                            read_cfe.store(true, Ordering::Relaxed);
+                            info!("cell_frame enabled: session={}", read_session_id);
+                        }
+                        continue;
+                    }
                     if let Ok(ctrl) = serde_json::from_str::<ClientControl>(&text) {
                         match ctrl {
                             ClientControl::Resize { cols, rows } => {
@@ -179,7 +303,30 @@ pub async fn handle_pty_terminal(
     // 否则败者会守着已死的 WS/通道泄漏（read 侧 drop in_tx 同时让写线程退出）。
     forward_handle.abort();
     read_handle.abort();
+    if let Some(h) = agent_handle {
+        h.abort();
+    }
 
     // detach 语义：不杀会话进程，引擎常驻持有（D5/§1.2）
     info!("terminal WS disconnected (pty): session={session_id} — 会话进程保持常驻");
+}
+
+/// hook 上报 → `agent_state` WS 帧；nonce 与上次相同视为重复，返回 `None`
+/// （与复用器轮询推送的 nonce 去重语义一致）。
+fn agent_state_frame(
+    snap: &crate::agent::state::AgentSnapshot,
+    last_nonce: &mut Option<String>,
+) -> Option<String> {
+    if snap.agent_nonce.is_some() && snap.agent_nonce == *last_nonce {
+        return None;
+    }
+    *last_nonce = snap.agent_nonce.clone();
+    serde_json::to_string(&ServerControl::AgentState {
+        agent_kind: Some(snap.agent_kind.as_str()),
+        state: snap.agent_state.as_str(),
+        attention_reason: snap.attention_reason.map(|r| r.as_str()),
+        agent_event: snap.agent_event.as_deref(),
+        agent_nonce: snap.agent_nonce.as_deref(),
+    })
+    .ok()
 }

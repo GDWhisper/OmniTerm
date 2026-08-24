@@ -631,8 +631,9 @@ fn main() -> anyhow::Result<()> {
 
             sqlx::migrate!("./migrations").run(&db).await?;
 
-            // 引擎注册表在 DB 就绪后构建：pty 引擎的 cwd 回写任务要更新 sessions 表
-            let engines = engine::EngineRegistry::new(db.clone());
+            // 引擎注册表在 DB 就绪后构建：pty 引擎的 cwd 回写任务要更新 sessions 表；
+            // 监听端口注入 pty 引擎（spawn 时拼 OMNITERM_HOOK_URL，hook 信道 D7）
+            let engines = engine::EngineRegistry::new(db.clone(), args.port);
 
             // 复用器缺失不再阻断启动：ACP runtime 不依赖它。
             // 复用器会话会在运行时按需失败并返回错误，前端可查 /system/multiplexer。

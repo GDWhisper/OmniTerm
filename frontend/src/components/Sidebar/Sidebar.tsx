@@ -24,6 +24,9 @@ import { CreateSessionModal } from './CreateSessionModal'
 import { CreateProjectModal } from './CreateProjectModal'
 import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { ExternalSessionsSection } from './ExternalSessionsSection'
+import { ArchivedSessionsSection } from './ArchivedSessionsSection'
+import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import type { Session } from '../../api/client'
 import { SidebarBottomButton } from './RowActionButtons'
 import { useAgentAttentionPolling } from './useAgentAttentionPolling'
 import { OmniTermLogo } from '../PixelUI/OmniTermLogo'
@@ -37,6 +40,7 @@ export function Sidebar() {
     projects,
     worktrees,
     sessions,
+    archivedSessions,
     activeProjectId,
     activeWorkspaceId,
     activeSessionId,
@@ -45,6 +49,7 @@ export function Sidebar() {
     setProjects,
     setWorktrees,
     setSessions,
+    setArchivedSessions,
     setActiveProject,
     setActiveWorkspace,
     setActiveSession,
@@ -55,7 +60,9 @@ export function Sidebar() {
   } = useAppStore()
 
   const toggleSidebarCollapsed = useAppStore((s) => s.toggleSidebarCollapsed)
+  const activateSession = useAppStore((s) => s.activateSession)
   const setMultiplexer = useAppStore((s) => s.setMultiplexer)
+  const setMultiplexerAvailable = useAppStore((s) => s.setMultiplexerAvailable)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
   const expandAllSessions = useAppStore((s) => s.expandAllSessions)
@@ -94,6 +101,8 @@ export function Sidebar() {
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null)
   const [confirmRelease, setConfirmRelease] = useState<ReleaseTarget | null>(null)
+  // 归档确认（仅在 agent 进程驻留时弹出；null = 关闭）
+  const [confirmArchive, setConfirmArchive] = useState<{ id: string; name: string } | null>(null)
 
   const [homeDir, setHomeDir] = useState('')
 
@@ -161,6 +170,17 @@ export function Sidebar() {
 
   useEffect(() => { loadProjects() }, [loadProjects])
   useEffect(() => { loadSessions() }, [loadSessions])
+
+  // Load archived sessions (global, cross-project). Refreshed on mount and
+  // after every archive/unarchive/delete so the sidebar section stays in sync.
+  const loadArchived = useCallback(async () => {
+    try {
+      setArchivedSessions(await api.listArchivedSessions())
+    } catch {
+      // silent — the section simply renders nothing while the fetch fails
+    }
+  }, [setArchivedSessions])
+  useEffect(() => { loadArchived() }, [loadArchived])
 
   // Check for legacy duplicate projects (created before the coverage check).
   // Surface a banner; the user can open the merge dialog to consolidate.
@@ -279,7 +299,11 @@ export function Sidebar() {
     }).catch(() => {
       // fallback: leave homeDir empty, user fills the path in manually
     })
-  }, [setMultiplexer])
+    // tmux 可用性探测（503 → request 抛错）：tmux 引擎选项与 external 区块的显隐依据
+    api.multiplexerStatus()
+      .then((st) => setMultiplexerAvailable(st.available))
+      .catch(() => setMultiplexerAvailable(false))
+  }, [setMultiplexer, setMultiplexerAvailable])
 
   // Health polling
   useEffect(() => {
@@ -410,6 +434,40 @@ export function Sidebar() {
       addToast('success', t('sidebar.sessionReleased') ?? `Session process released`)
     } catch {
       // api client already shows error toast
+    }
+  }
+
+  // 归档 ACP 会话：后端释放 agent 进程 + 打归档标记；前端刷新两个列表，
+  // 若归档的是当前聚焦会话则切回空视图（默认列表已无此行）。
+  const archiveSessionNow = async (id: string) => {
+    try {
+      await api.archiveSession(id)
+      await Promise.all([loadSessions(), loadArchived()])
+      if (id === activeSessionId) setActiveSession(null)
+      addToast('success', t('sidebar.sessionArchived') ?? `Session archived`)
+    } catch {
+      // api client already shows error toast
+    }
+  }
+
+  // 取消归档：清除标记回到原项目/worktree 列表。进程不随之恢复——
+  // 与已释放会话一致，走「恢复会话」按需 spawn。
+  const unarchiveSessionNow = async (id: string) => {
+    try {
+      await api.unarchiveSession(id)
+      await Promise.all([loadSessions(), loadArchived()])
+      addToast('success', t('sidebar.sessionUnarchived') ?? `Session restored to list`)
+    } catch {
+      // api client already shows error toast
+    }
+  }
+
+  // 归档入口：进程驻留时先确认（会终止运行中的 agent），空闲直接归档。
+  const requestArchive = (s: Session) => {
+    if (s.acp_process_alive) {
+      setConfirmArchive({ id: s.id, name: s.name || s.tmux_session_name || t('sidebar.unnamed') })
+    } else {
+      void archiveSessionNow(s.id)
     }
   }
 
@@ -612,12 +670,27 @@ export function Sidebar() {
                 if (chatState?.sending) setConfirmRelease({ id: s.id, name: s.name ?? null })
                 else releaseSessionNow(s.id)
               }}
+              onArchiveRequest={requestArchive}
             />
           ))
         )}
 
         {/* External Sessions — tmux sessions not yet adopted into any project */}
         <ExternalSessionsSection reloadSessions={loadSessions} />
+
+        {/* Archived ACP sessions — global collapsible list, read-only history */}
+        <ArchivedSessionsSection
+          sessions={archivedSessions}
+          onOpen={(s) => activateSession(s.id)}
+          onUnarchive={(s) => void unarchiveSessionNow(s.id)}
+          onDelete={(s) =>
+            setConfirmDelete({
+              type: 'session',
+              id: s.id,
+              name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
+            })
+          }
+        />
       </div>
 
       {/* Bottom status bar */}
@@ -727,6 +800,24 @@ export function Sidebar() {
         onClose={() => setConfirmDelete(null)}
         reloadProjects={loadProjects}
         reloadSessions={loadSessions}
+        onSessionDeleted={loadArchived}
+      />
+
+      {/* ── Archive Confirmation Dialog（仅进程驻留时弹出）── */}
+      <ConfirmDialog
+        open={!!confirmArchive}
+        onClose={() => setConfirmArchive(null)}
+        onConfirm={() => {
+          if (!confirmArchive) return
+          void archiveSessionNow(confirmArchive.id)
+          setConfirmArchive(null)
+        }}
+        title={t('sidebar.archiveConfirmTitle') ?? 'Archive Session'}
+        message={
+          t('sidebar.archiveConfirmRunning', { name: confirmArchive?.name }) ??
+          `The running agent for "${confirmArchive?.name}" will be terminated. Chat history is kept and stays viewable under Archived.`
+        }
+        confirmText={t('sidebar.archive') ?? 'Archive'}
       />
 
       {/* ── Delete Worktree Confirmation Dialog ── */}

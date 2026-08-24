@@ -28,7 +28,7 @@ pub async fn test_state() -> AppState {
         auth_enabled: Arc::new(AtomicBool::new(false)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
         login_guard: LoginGuard::new(),
-        engines: EngineRegistry::new(db.clone()),
+        engines: EngineRegistry::new(db.clone(), 9777),
         acp_supervisor: AcpSupervisor::default(),
         proxy: ProxyState {
             client: reqwest::Client::new(),

@@ -24,6 +24,9 @@ export function ExternalSessionsSection(props: {
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const setActiveExternalSession = useAppStore((s) => s.setActiveExternalSession)
+  // external 会话发现/收养是 tmux 专属能力（D6 冻结边界）：无 multiplexer 的
+  // pty-only 主机上整块不渲染、不轮询。
+  const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
 
   // External tmux sessions (not yet adopted into any project)
   const [externalSessions, setExternalSessions] = useState<ExternalSession[]>([])
@@ -33,6 +36,7 @@ export function ExternalSessionsSection(props: {
 
   // ── External sessions polling (every 10s) ──
   useEffect(() => {
+    if (!multiplexerAvailable) return
     const fetchExternal = () => {
       api.listExternalSessions()
         .then(data => setExternalSessions(data.sessions))
@@ -41,10 +45,10 @@ export function ExternalSessionsSection(props: {
     fetchExternal()
     const interval = setInterval(fetchExternal, 10_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [multiplexerAvailable])
 
   // External Sessions — tmux sessions not yet adopted into any project
-  if (externalSessions.length === 0) return null
+  if (!multiplexerAvailable || externalSessions.length === 0) return null
 
   return (
     <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--border-subtle)' }}>

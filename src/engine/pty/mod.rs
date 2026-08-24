@@ -2,15 +2,21 @@
 //!
 //! 生命周期语义与复用器引擎对齐（计划 §1.2 "detach 不杀进程"）：
 //! - 会话进程由引擎常驻持有（会话 map），**WS 断开只解绑订阅、不杀进程**；
-//! - attach = 订阅输出 + 重放补屏环窗口（原始 ANSI 字节回放）；重连另有
-//!   resize nudge 重绘；VT grid（alacritty_terminal，D8 v5）承担
-//!   capture/title/resize 与切片 C 的 ANSI seed 回放；模拟器应答
+//! - attach = 订阅输出 + 补屏帧下发（原始字节尾进 scrollback + 清可见屏 +
+//!   VT grid 重渲染当前屏，见 `vt.rs` 补屏说明）；重连另有 resize nudge
+//!   重绘；VT grid（alacritty_terminal，D8 v5）承担 capture/title/
+//!   render_screen/resize 与切片 C 的 ANSI seed 回放；模拟器应答
 //!   （DSR/DA 等）由读循环按 attach 状态门控回写（`should_server_respond`）；
 //! - 子进程退出（读循环 EOF / child.wait）时自动从 map 注销（幂等、
 //!   Arc 指针比对防止误删同名重建会话），下次 attach 自动重建（D5 重建
 //!   语义的过渡形态）。
 
+pub mod agent_events;
+pub mod agent_hooks;
 pub mod cwd;
+pub mod events;
+pub mod frame;
+pub mod metrics;
 pub mod ring;
 pub mod scrollback;
 pub mod session;
@@ -30,12 +36,14 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::agent::state::AgentSnapshot;
+use crate::engine::pty::events::{SemanticEvent, detect_events};
 use crate::engine::pty::ring::{ByteRing, DEFAULT_REPLAY_BYTES};
 use crate::engine::pty::session::PtySession;
 use crate::engine::pty::vt::VtState;
 use crate::engine::pty_io;
 use crate::engine::{EngineSessionInfo, SessionEngine, WatchTarget};
 use crate::models::session::RuntimeKind;
+use alacritty_terminal::term::TermMode;
 
 /// 输出广播通道在途帧上限（P1 有界；慢消费者 Lagged 丢帧保连接）。
 const OUTPUT_CHANNEL_FRAMES: usize = 256;
@@ -47,10 +55,16 @@ const DEFAULT_SIZE: PtySize = PtySize { rows: 24, cols: 80, pixel_width: 0, pixe
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 /// 前台进程 cwd 采样回写周期（D5：30s；会话操作时的回写由退出 flush 覆盖）。
 const CWD_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+/// Semantic 事件广播通道在途事件上限（P1 有界；事件频率远低于数据帧，16 足够）。
+const EVENT_CHANNEL_CAP: usize = 16;
 
 /// 输出汇聚点：补屏环 + 广播。读循环与 attach 在同一把锁下操作，
 /// 保证「快照 + 订阅」无重复无丢失（先 push 后 send，attach 先 snapshot
 /// 后 subscribe，两侧被本锁串行化）。
+///
+/// **锁序契约：out → vt**（读循环与 attach 均按此嵌套；vt 不得反向包住
+/// out）。ring 快照、grid 渲染、订阅三者在 attach 的同一临界区内完成，
+/// 否则「渲染帧已含字节 X 而 rx 再投递 X」会重复、「渲染落后于快照」会缺失。
 struct Output {
     ring: ByteRing,
     tx: broadcast::Sender<Vec<u8>>,
@@ -72,10 +86,18 @@ struct SessionState {
     created: String,
     /// spawn 时的工作目录（cwd 采样不可用时的回退）。
     spawn_cwd: String,
+    /// Phase 2: semantic 事件广播（alt-screen 切换 / mode 变化等）。
+    event_tx: broadcast::Sender<SemanticEvent>,
+    /// Phase 2: 前一次 VT mode 快照（读循环用，检测差值）。
+    prev_mode: Mutex<TermMode>,
 }
 
 struct Inner {
     sessions: Mutex<HashMap<String, Arc<SessionState>>>,
+    /// hook 信道（D7）：token 注册 + 上报 KV + 变更门铃。
+    events: agent_events::AgentEventStore,
+    /// 后端监听端口：spawn 时拼 `OMNITERM_HOOK_URL`（回环地址固定 127.0.0.1）。
+    listen_port: u16,
 }
 
 /// 自管 pty 引擎。Clone 共享同一会话 map。
@@ -91,18 +113,34 @@ impl Default for PtyEngine {
 }
 
 impl PtyEngine {
+    fn with_port(listen_port: u16) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                sessions: Mutex::new(HashMap::new()),
+                events: agent_events::AgentEventStore::new(),
+                listen_port,
+            }),
+        }
+    }
+
     /// 无 DB 引擎（单测用）：不落盘、不回写 cwd。
     pub fn new() -> Self {
-        Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) }
+        Self::with_port(0)
     }
 
     /// 生产引擎：挂 DB 并启动后台任务——
     /// ① ANSI 历史 5s 去抖落盘（D5）；② 前台 cwd 30s 采样回写 `last_cwd`。
-    pub fn with_db(db: SqlitePool) -> Self {
-        let engine = Self { inner: Arc::new(Inner { sessions: Mutex::new(HashMap::new()) }) };
+    /// `listen_port` 用于 spawn 时注入 `OMNITERM_HOOK_URL`（hook 信道，D7）。
+    pub fn with_db(db: SqlitePool, listen_port: u16) -> Self {
+        let engine = Self::with_port(listen_port);
         engine.spawn_flush_task();
         engine.spawn_cwd_sampler(db);
         engine
+    }
+
+    /// hook 信道状态库句柄（HTTP 端点与 WS 推送共用）。
+    pub fn agent_events(&self) -> agent_events::AgentEventStore {
+        self.inner.events.clone()
     }
 
     /// 去抖落盘：每 [`FLUSH_INTERVAL`] 把有新输出的会话补屏环快照写盘。
@@ -170,19 +208,26 @@ impl PtyEngine {
 /// WS 连接持有的 attach 句柄。drop = detach（解绑订阅），不触碰会话进程。
 /// Clone = 同一会话再开一个订阅（写线程用），不重放补屏。
 pub struct PtyAttach {
-    /// attach 时刻的补屏窗口快照（原始字节回放；VT grid 供 capture/title）。
+    /// attach 时刻的补屏帧（raw 尾 + 清可见屏 + grid 重渲染，见 vt.rs 补屏说明）。
     pub replay: Vec<u8>,
     /// 后续输出订阅。Lagged = 慢消费丢帧（补屏回放可兜底）。
     pub rx: broadcast::Receiver<Vec<u8>>,
     /// attach 的是既有会话（非本次新建）→ WS 层据此做 resize nudge 重绘。
     pub reconnected: bool,
     state: Arc<SessionState>,
+    pub event_rx: broadcast::Receiver<SemanticEvent>,
 }
 
 impl Clone for PtyAttach {
     fn clone(&self) -> Self {
         let rx = self.state.out.lock().unwrap().tx.subscribe();
-        Self { replay: Vec::new(), rx, reconnected: false, state: Arc::clone(&self.state) }
+        Self {
+            replay: Vec::new(),
+            rx,
+            reconnected: false,
+            state: Arc::clone(&self.state),
+            event_rx: self.state.event_tx.subscribe(),
+        }
     }
 }
 
@@ -200,13 +245,19 @@ impl PtyAttach {
         Ok(())
     }
 
-    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）；VT grid 同步。
+    /// 覆盖式 resize（最新值生效，连续 resize 天然去抖）。
     pub fn resize(&self, size: PtySize) -> Result<()> {
-        self.state.session.resize(size).map_err(|e| anyhow!("pty resize failed: {e}"))?;
-        self.state.vt.lock().unwrap().resize(size.rows, size.cols);
-        *self.state.size.lock().unwrap() = size;
-        Ok(())
+        resize_state(&self.state, size)
     }
+}
+
+/// 覆盖式 resize：pty master + VT grid + 记录尺寸三处同步（最新值生效）。
+/// 内核在尺寸未变时不发 SIGWINCH，重复调用无副作用。
+fn resize_state(state: &SessionState, size: PtySize) -> Result<()> {
+    state.session.resize(size).map_err(|e| anyhow!("pty resize failed: {e}"))?;
+    state.vt.lock().unwrap().resize(size.rows, size.cols);
+    *state.size.lock().unwrap() = size;
+    Ok(())
 }
 
 impl PtyEngine {
@@ -214,13 +265,24 @@ impl PtyEngine {
     /// `reconnected` 做 resize nudge 重绘）；不存在则以 `cwd`/`size` spawn。
     pub fn attach(&self, key: &str, cwd: &str, size: PtySize) -> Result<PtyAttach> {
         let (state, reconnected) = self.resolve_or_create(key, cwd, size)?;
-        // 同一把锁内「先快照后订阅」：与读循环「先 push 后 send」串行，
-        // 补屏与增量不重不漏。
-        let (replay, rx) = {
+        // 视口先行同步（单视图模型：最后 attach 者决定尺寸）：补屏渲染必须
+        // 按本次连接的尺寸出帧，否则断开期间窗口变宽/窄会按旧 cols 渲染。
+        resize_state(&state, size)?;
+        // 同一把临界区内完成「快照 + 渲染 + 订阅」（锁序 out→vt，与读循环
+        // 一致）：补屏与增量不重不漏。
+        let (replay, rx, event_rx) = {
             let g = state.out.lock().unwrap();
-            (g.ring.snapshot(), g.tx.subscribe())
+            let vt = state.vt.lock().unwrap();
+            let mut frame = g.ring.snapshot();
+            if !frame.is_empty() {
+                frame.extend_from_slice(b"\x1b[H\x1b[2J");
+                frame.extend_from_slice(&vt.render_screen());
+            }
+            let rx = g.tx.subscribe();
+            let event_rx = state.event_tx.subscribe();
+            (frame, rx, event_rx)
         };
-        Ok(PtyAttach { replay, rx, reconnected, state })
+        Ok(PtyAttach { replay, rx, reconnected, state, event_rx })
     }
 
     fn get(&self, key: &str) -> Option<Arc<SessionState>> {
@@ -250,6 +312,17 @@ impl PtyEngine {
         // VERIFIED 2026-08-12: TERM 固定 xterm-256color（herdr TERM 策略），
         // 见 docs/reference/herdr-reference.md「可移植边角处理」。
         cmd.env("TERM", "xterm-256color");
+        // hook 信道 env 注入（D7 herdr 三件套之一）：hook 命令引用 env，
+        // 不硬编码端口/token。端点路径与 api::agent_events 路由保持一致。
+        let token = self.inner.events.register(key);
+        cmd.env(
+            "OMNITERM_HOOK_URL",
+            format!(
+                "http://127.0.0.1:{}/api/v1/internal/agent-event?token={token}",
+                self.inner.listen_port
+            ),
+        );
+        cmd.env("OMNITERM_SESSION_ID", key);
 
         let session = Arc::new(PtySession::spawn(cmd, size).map_err(|e| anyhow!("{e}"))?);
         // VERIFIED 2026-08-12: /proc/<child_pid>/cwd == spawn cwd（child_pid 见
@@ -261,6 +334,7 @@ impl PtyEngine {
         let vt = VtState::new(size.rows, size.cols);
 
         let (tx, _rx) = broadcast::channel::<Vec<u8>>(OUTPUT_CHANNEL_FRAMES);
+        let (event_tx, _) = broadcast::channel::<SemanticEvent>(EVENT_CHANNEL_CAP);
         let state = Arc::new(SessionState {
             session,
             out: Mutex::new(Output { ring: ByteRing::new(DEFAULT_REPLAY_BYTES), tx }),
@@ -272,6 +346,8 @@ impl PtyEngine {
             size: Mutex::new(size),
             created: chrono::Utc::now().to_rfc3339(),
             spawn_cwd: cwd.to_string(),
+            event_tx,
+            prev_mode: Mutex::new(TermMode::empty()),
         });
 
         // 重建回放（D5）：后端重启/进程退出后重建时，把落盘 ANSI seed 进
@@ -299,14 +375,22 @@ impl PtyEngine {
                     Ok(0) => break,
                     Ok(n) => {
                         let chunk = buf[..n].to_vec();
-                        {
+                        // 锁序 out→vt（与 attach 一致）：ring push、广播、grid
+                        // feed 原子于 attach 临界区，补屏帧不会重复或缺失字节。
+                        let responses = {
                             let mut g = reader_state.out.lock().unwrap();
+                            let mut vt = reader_state.vt.lock().unwrap();
                             g.ring.push(&chunk);
                             let _ = g.tx.send(chunk.clone()); // 无接收者时 send 报错即丢弃
-                        }
-                        let responses = {
-                            let mut vt = reader_state.vt.lock().unwrap();
                             vt.feed(&chunk);
+                            // Phase 2: 检测 semantic 事件（alt-screen / mode 变化）
+                            {
+                                let mut pm = reader_state.prev_mode.lock().unwrap();
+                                let events = detect_events(&vt, &mut pm);
+                                for ev in events {
+                                    let _ = reader_state.event_tx.send(ev);
+                                }
+                            }
                             vt.take_responses()
                         };
                         if !responses.is_empty()
@@ -357,6 +441,7 @@ fn unregister_if_same(inner: &Inner, key: &str, state: &Arc<SessionState>) {
     let mut sessions = inner.sessions.lock().unwrap();
     if sessions.get(key).is_some_and(|s| Arc::ptr_eq(s, state)) {
         sessions.remove(key);
+        inner.events.unregister(key);
         flush_if_dirty(key, state);
     }
 }
@@ -379,19 +464,28 @@ fn flush_if_dirty(key: &str, state: &SessionState) {
 impl SessionEngine for PtyEngine {
     async fn create_session(&self, name: &str, cwd: &str, command: Option<&str>) -> Result<bool> {
         let (state, _) = self.resolve_or_create(name, cwd, DEFAULT_SIZE)?;
+        let mut hook_injected = false;
         if let Some(cmd) = command {
+            // agent CLI → 增补 hook 配置（curl 上报，D7）；与复用器引擎
+            // create_session 的 hook 注入语义对齐。
+            let augmented =
+                agent_hooks::augment_agent_command(cmd).unwrap_or_else(|| cmd.to_string());
+            hook_injected = augmented != cmd;
             // 与复用器 send-keys 语义一致：发命令文本 + 回车。
-            let mut bytes = cmd.as_bytes().to_vec();
+            let mut bytes = augmented.as_bytes().to_vec();
             bytes.push(b'\r');
             let rx = state.out.lock().unwrap().tx.subscribe();
-            let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state };
+            let event_rx = state.event_tx.subscribe();
+            let attach = PtyAttach { replay: Vec::new(), rx, reconnected: false, state, event_rx };
             attach.write(&bytes)?;
         }
-        Ok(false) // hook 注入为 Phase 3（HTTP 信道，D7）
+        Ok(hook_injected)
     }
 
     async fn kill_session(&self, name: &str) -> Result<()> {
         let state = self.inner.sessions.lock().unwrap().remove(name);
+        // 显式 kill 先摘 map，unregister_if_same 不会再触发，hook 信道在此清理
+        self.inner.events.unregister(name);
         let Some(state) = state else {
             // 进程已自行退出并注销——幂等成功
             return Ok(());
@@ -454,9 +548,10 @@ impl SessionEngine for PtyEngine {
         Ok(state.vt.lock().unwrap().capture_visible())
     }
 
-    /// hook 信道为 Phase 3（HTTP 回调，D7）；此前仅屏幕检测覆盖 pty 会话。
-    async fn agent_snapshot(&self, _name: &str) -> Result<Option<AgentSnapshot>> {
-        Ok(None)
+    /// hook 信道读口（D7 HookAuthority）：返回存活窗口内的最近上报；
+    /// 过期/无上报返回 `None`，由屏幕检测 fallback（仲裁见 api::sessions 合并处）。
+    async fn agent_snapshot(&self, name: &str) -> Result<Option<AgentSnapshot>> {
+        Ok(self.inner.events.fresh_snapshot(name))
     }
 
     async fn is_active(&self, name: &str) -> bool {
@@ -625,6 +720,77 @@ mod tests {
         assert!(!cap.contains('\x1b'), "capture must not contain escape bytes");
 
         engine.kill_session("vt-capture").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reconnect_replay_frame_reproduces_screen_exactly() {
+        // 补屏验收（2026-08-22 花屏翻盘修复）：增量绘制型 TUI（绝对定位 +
+        // 局部擦除）画出的屏幕，经补屏帧（raw 尾 + 清可见屏 + grid 整帧重
+        // 渲染）重放到干净客户端后必须与真相源逐行一致；重复 attach 不得
+        // 使 grid 漂移（resize nudge 已移除——实测 shrink→expand 会上滚一行）。
+        // PS1='' + stty -echo 隔离 bash 提示/回显噪声，保证字节流确定。
+        // catch_unwind 兜底：断言失败也要先杀会话再恢复 panic，
+        // 否则泄漏的常驻会话让测试进程永不退出（表现为超时假死）。
+        let engine = engine();
+        let tmp = std::env::temp_dir();
+        let size = PtySize { rows: 10, cols: 40, pixel_width: 0, pixel_height: 0 };
+        let key = "replay-screen";
+        let result = futures_util::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
+            replay_screen_body(&engine, &tmp, size, key).await
+        }))
+        .await;
+        let _ = engine.kill_session(key).await;
+        result.unwrap();
+    }
+
+    async fn replay_screen_body(
+        engine: &PtyEngine,
+        tmp: &std::path::Path,
+        size: PtySize,
+        key: &str,
+    ) {
+        let attach = engine.attach(key, tmp.to_str().unwrap(), size).unwrap();
+        let writer = attach.clone();
+        writer.write(b"stty -echo; PS1=''; printf '\\033[2J\\033[1;1HAGENT PANEL v1\\033[3;1Hprogress: [####      ] 40%%\\033[5;1Hstatus: working'\n").unwrap();
+        writer
+            .write(b"printf '\\033[3;12H########\\033[3;24H80%%\\033[K\\033[5;1Hstatus: DONE \\033[K'\n")
+            .unwrap();
+
+        let state = engine.get(key).unwrap();
+        // 等第二段 printf 执行完（注意不能拿命令回显里的字面量当标记——
+        // 回显先于执行出现在 grid 上），落定后再取最终快照与光标。
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let cap = state.vt.lock().unwrap().capture_visible();
+            let drawn = cap.contains("progress: [########  ] 80%") && cap.contains("status: DONE");
+            if drawn || std::time::Instant::now() > deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await; // 尾部字节落定
+        let expected = state.vt.lock().unwrap().capture_visible();
+        let expected_cursor = state.vt.lock().unwrap().renderable_cursor_for_test();
+
+        drop(attach);
+
+        // 第一次重连：重放帧 → 干净客户端，屏幕与光标须逐一还原
+        let mut client = VtState::new(size.rows, size.cols);
+        let replay1 = { engine.attach(key, tmp.to_str().unwrap(), size).unwrap() };
+        client.feed(&replay1.replay);
+        assert_eq!(client.capture_visible(), expected, "replayed screen diverges from server grid");
+        assert_eq!(
+            client.renderable_cursor_for_test(),
+            expected_cursor,
+            "replayed cursor diverges from server grid"
+        );
+
+        // 第二次重连（回归：nudge 曾致 grid 上滚一行、顶部混入残片）
+        drop(replay1);
+        let mut client2 = VtState::new(size.rows, size.cols);
+        let replay2 = { engine.attach(key, tmp.to_str().unwrap(), size).unwrap() };
+        client2.feed(&replay2.replay);
+        assert_eq!(client2.capture_visible(), expected, "grid drifted across reconnects");
     }
 
     #[tokio::test]

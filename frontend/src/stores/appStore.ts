@@ -86,6 +86,9 @@ export interface AppState {
   projects: Project[]
   worktrees: Record<string, Workspace[]> // keyed by project_id
   sessions: Record<string, Session[]> // keyed by project_id
+  // 归档会话（跨项目全局列表，GET /sessions/archived）。与项目切片分离：
+  // 默认列表服务端已排除归档行，SessionView 据此兜底解析只读查看的活跃会话。
+  archivedSessions: Session[]
   activeProjectId: string | null
   activeWorkspaceId: string | null // worktree id
   activeSessionId: string | null
@@ -116,6 +119,16 @@ export interface AppState {
    * runtime_kind stay 'tmux' regardless of platform.
    */
   multiplexer: string
+
+  /**
+   * Whether the multiplexer (tmux/psmux) is actually usable on the backend
+   * host (`/system/multiplexer` probe). Gates the tmux engine option in the
+   * create-session modal and the sidebar external-sessions section (both are
+   * tmux-only capabilities). Default false until the probe resolves — a
+   * pty-only host never flickers tmux UI.
+   */
+  multiplexerAvailable: boolean
+  setMultiplexerAvailable: (v: boolean) => void
 
   /** Registered sendData from the active terminal for cross-component access. */
   terminalSendData: ((data: string) => void) | null
@@ -178,6 +191,7 @@ export interface AppState {
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
+  setArchivedSessions: (sessions: Session[]) => void
   // ACP 进程存活状态由后端 WS 事件驱动即时更新（替代 3 秒轮询）。
   setAcpProcessAlive: (sessionId: string, alive: boolean) => void
   setActiveProject: (id: string | null) => void
@@ -274,6 +288,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   worktrees: {},
   sessions: {},
+  archivedSessions: [],
   activeProjectId: localStorage.getItem('omniterm_active_project') || null,
   activeWorkspaceId: localStorage.getItem('omniterm_active_workspace') || null,
   activeSessionId: localStorage.getItem('omniterm_active_session') || null,
@@ -296,6 +311,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   connected: false,
   terminalDisconnected: false,
   multiplexer: 'tmux',
+  multiplexerAvailable: false,
   isMobile: typeof window !== 'undefined' ? window.matchMedia('(max-width: 768px)').matches : false,
   activeTab: (localStorage.getItem('omniterm_mobile_last_tab') as AppState['activeTab']) || 'terminal',
   mobileGestureEnabled: localStorage.getItem('omniterm_mobile_gesture_enabled') !== 'false',
@@ -403,6 +419,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ worktrees: { ...s.worktrees, [projectId]: ws } })),
   setSessions: (projectId, sessions) =>
     set((s) => ({ sessions: { ...s.sessions, [projectId]: sessions } })),
+  setArchivedSessions: (archivedSessions) => set({ archivedSessions }),
   setAcpProcessAlive: (sessionId, alive) =>
     set((s) => {
       const next: Record<string, Session[]> = {}
@@ -500,6 +517,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAuthEnabled: (v) => set({ authEnabled: v }),
   setTerminalDisconnected: (v) => set({ terminalDisconnected: v }),
   setMultiplexer: (v) => set({ multiplexer: v }),
+  setMultiplexerAvailable: (v) => set({ multiplexerAvailable: v }),
   setIsMobile: (v) => set({ isMobile: v }),
   setActiveTab: (tab) => {
     localStorage.setItem('omniterm_mobile_last_tab', tab)

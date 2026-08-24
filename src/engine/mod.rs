@@ -70,16 +70,23 @@ pub struct EngineRegistry {
 }
 
 impl EngineRegistry {
-    pub fn new(db: sqlx::SqlitePool) -> Self {
+    /// `listen_port`：后端监听端口，pty 引擎 spawn 时注入 `OMNITERM_HOOK_URL`
+    /// （hook 信道，计划 D7）。
+    pub fn new(db: sqlx::SqlitePool, listen_port: u16) -> Self {
         Self {
             mux: TmuxEngine::new(),
-            pty: PtyEngine::with_db(db),
+            pty: PtyEngine::with_db(db, listen_port),
             watcher: AgentWatcher::default(),
         }
     }
 
     pub fn watcher(&self) -> &AgentWatcher {
         &self.watcher
+    }
+
+    /// pty hook 信道状态库（HTTP 上报端点 / WS 推送共用）。
+    pub fn pty_agent_events(&self) -> pty::agent_events::AgentEventStore {
+        self.pty.agent_events()
     }
 
     /// pty 会话 attach（WS 层专用）：resolve-or-create + 订阅输出 + 补屏快照。

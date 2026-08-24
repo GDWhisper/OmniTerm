@@ -1,6 +1,6 @@
 [package]
 name = "omniterm"
-version = "0.2.16"
+version = "0.2.17"
 edition = "2024"
 license = "FSL-1.1-MIT"
 authors = ["GDWhisper"]
@@ -8,6 +8,12 @@ description = "Web-based tmux terminal manager — one browser tab to watch and 
 repository = "https://github.com/GDWhisper/OmniTerm"
 readme = "README.md"
 include = ["src/**", "frontend/dist/**", "migrations/**", "/build.rs", "/README.md", "/LICENSE.md"]
+default-run = "omniterm"
+
+# Research binaries: standalone instrumentation tools that do not affect production
+[[bin]]
+name = "bench-frames"
+path = "src/engine/pty/bench.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }

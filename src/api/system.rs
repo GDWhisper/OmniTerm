@@ -123,6 +123,9 @@ const VERSION_CACHE_TTL: Duration = Duration::from_secs(3600);
 // 失败负缓存：防止刷新页面连环触发 GitHub 匿名限流（60 次/时/IP）
 const VERSION_CACHE_NEG_TTL: Duration = Duration::from_secs(300);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+// 自重启延迟：先让 POST /system/update 的响应完整 flush 回前端（keep-alive
+// 连接在 exec 后即断，响应体未读完会触发前端 fetch 异常），再 exec 新二进制。
+const RELAUNCH_DELAY: Duration = Duration::from_secs(3);
 
 struct CacheEntry {
     at: Instant,
@@ -169,14 +172,21 @@ async fn version_check() -> (StatusCode, Json<Value>) {
             "latest": latest.to_string(),
             "update_available": update_available,
             "channel": channel,
+            // 容器环境：一键升级替换的二进制在容器重启后还原为镜像旧版，属无效更新
+            "container": update::in_container(),
         })),
     )
 }
 
-async fn run_update() -> (StatusCode, Json<Value>) {
+async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let Ok(_guard) = UPDATE_LOCK.try_lock() else {
         return (StatusCode::CONFLICT, Json(json!({ "error": "update already in progress" })));
     };
+
+    // 容器内自更新不持久（容器重启还原镜像），Web 端直接拒绝并提示重新拉取镜像
+    if update::in_container() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "container_environment" })));
+    }
 
     let current = match Version::parse(env!("CARGO_PKG_VERSION")) {
         Ok(v) => v,
@@ -224,14 +234,37 @@ async fn run_update() -> (StatusCode, Json<Value>) {
     };
 
     match result {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "updated",
-                "version": release.version.to_string(),
-                "restart_required": true,
-            })),
-        ),
+        Ok(()) => {
+            // 更新成功。Unix 上调度延迟自重启：响应先 flush 回前端（见
+            // RELAUNCH_DELAY），随后回收 ACP 子进程并 exec 新二进制（PID 不变，
+            // 见 `update::relaunch`）。exec 失败时服务继续跑旧版本，仅留 error
+            // 日志，前端倒计时超时后兜底显示手动重启提示。
+            #[cfg(unix)]
+            let auto_restart = {
+                let supervisor = state.acp_supervisor.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(RELAUNCH_DELAY).await;
+                    supervisor.shutdown_all().await;
+                    if let Err(e) = update::relaunch() {
+                        tracing::error!("auto-relaunch failed, restart manually: {e:#}");
+                    }
+                });
+                true
+            };
+            // Windows 无 exec 等价物（stop 亦不支持），保持手动重启提示
+            #[cfg(not(unix))]
+            let auto_restart = false;
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "updated",
+                    "version": release.version.to_string(),
+                    "restart_required": true,
+                    "auto_restart": auto_restart,
+                })),
+            )
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{e:#}") }))),
     }
 }

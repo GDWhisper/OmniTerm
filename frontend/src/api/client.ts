@@ -109,12 +109,16 @@ export interface Session {
   hook_enabled: boolean
   hook_status?: string
   created_at: string
-  // Runtime discriminator: 'tmux' = tmux-backed pane, 'acp' = ACP adapter subprocess
-  runtime_kind: 'tmux' | 'acp'
+  // Runtime discriminator: 'tmux' = tmux-backed pane, 'pty' = self-managed PTY
+  // engine (no multiplexer), 'acp' = ACP adapter subprocess
+  runtime_kind: 'tmux' | 'pty' | 'acp'
   // ACP adapter session id; present only when runtime_kind='acp'
   acp_session_id?: string
   // Agent config id (from `agents` table); present when runtime_kind='acp'
   agent_id?: string
+  // 归档时间戳（RFC3339）；undefined/null = 未归档。仅 acp 会话可归档：
+  // 归档 = 释放 agent 进程 + 从默认列表隐藏，聊天记录保留（只读可看）。
+  archived_at?: string | null
   // Runtime activity indicator (tmux control mode)
   is_active?: boolean
   // ACP agent subprocess currently resident in the backend supervisor.
@@ -189,14 +193,19 @@ export const api = {
   // System
   systemInfo: () =>
     request<{ home_dir: string; multiplexer?: string; proxy_domain?: string | null }>('/system/info'),
+  // Multiplexer (tmux/psmux) availability probe: 200 {available:true} or
+  // 503 {available:false, install_hints}. silent — absence is a normal state
+  // (pty-only hosts), surfaced as a disabled option, not an error toast.
+  multiplexerStatus: () =>
+    request<{ available: boolean; error?: string; install_hints?: string }>('/system/multiplexer', { silent: true }),
   listDirs: (path: string) =>
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
   versionCheck: () =>
-    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release' }>('/system/version', { silent: true }),
+    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release'; container: boolean }>('/system/version', { silent: true }),
   systemUpdate: () =>
-    request<{ status: string; version: string; restart_required: boolean }>('/system/update', { method: 'POST' }),
+    request<{ status: string; version: string; restart_required: boolean; auto_restart: boolean }>('/system/update', { method: 'POST' }),
 
   // tmux options
   tmuxGetMouse: () =>
@@ -277,7 +286,7 @@ export const api = {
     workspacePath: string,
     name?: string,
     command?: string,
-    runtimeKind?: 'tmux' | 'acp',
+    runtimeKind?: 'tmux' | 'pty' | 'acp',
     agentId?: string,
   ) =>
     request<Session>(`/projects/${projectId}/sessions`, {
@@ -297,6 +306,16 @@ export const api = {
   /** Release a running ACP agent subprocess without deleting the session record. */
   releaseSession: (id: string) =>
     request(`/sessions/${id}/release`, { method: 'POST' }),
+  /** Archive an ACP session: release its agent process and hide it from the
+   *  default session list (chat history kept, viewable read-only). */
+  archiveSession: (id: string) =>
+    request(`/sessions/${id}/archive`, { method: 'POST' }),
+  /** Remove the archive flag — the session returns to its project's default list. */
+  unarchiveSession: (id: string) =>
+    request(`/sessions/${id}/unarchive`, { method: 'POST' }),
+  /** All archived sessions across projects (agent processes already released). */
+  listArchivedSessions: () =>
+    request<Session[]>('/sessions/archived', { silent: true }),
   /** Send a user prompt to an ACP session. Returns the model's stop reason. */
   sendPrompt: (sessionId: string, text: string) =>
     request<{ stop_reason?: string }>(`/sessions/${sessionId}/prompt`, {

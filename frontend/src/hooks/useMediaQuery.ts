@@ -19,6 +19,12 @@ export function useMobileDetection() {
 export function useKeyboardHeight() {
   const [vvHeight, setVvHeight] = useState(window.visualViewport?.height ?? window.innerHeight)
   const [vvOffsetTop, setVvOffsetTop] = useState(window.visualViewport?.offsetTop ?? 0)
+  // Layout-viewport height at mount, before any soft keyboard. Keyboard-open
+  // detection compares the *current* vvHeight against this instead of the
+  // innerHeight − vvHeight gap: with `interactive-widget: resizes-content`
+  // (Android Chrome 108+) the keyboard shrinks the layout viewport itself,
+  // so innerHeight === vvHeight and the old gap heuristic collapses to 0.
+  const [initialInnerHeight] = useState(() => window.innerHeight)
 
   useEffect(() => {
     const vv = window.visualViewport
@@ -52,14 +58,30 @@ export function useKeyboardHeight() {
     window.addEventListener('resize', update)
     update()
 
+    // Some WebViews / older Chrome builds do not fire visualViewport
+    // resize/scroll events while the soft keyboard animates (observed on a
+    // device where interactive-widget is unsupported: the event fired once
+    // mid-animation and never again), leaving vvHeight stuck at a stale
+    // value and the layout too short — a blank gap appears between the
+    // bottom bar and the IME. Poll at a low rate as a backstop; skip the
+    // re-render when the value has not actually moved.
+    const poll = window.setInterval(() => {
+      const maxOffset = Math.max(0, window.innerHeight - vv.height)
+      const offsetTop = Math.min(vv.offsetTop, maxOffset)
+      setVvHeight((prev) => (Math.abs(prev - vv.height) > 2 ? vv.height : prev))
+      setVvOffsetTop((prev) => (Math.abs(prev - offsetTop) > 2 ? offsetTop : prev))
+      if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0)
+    }, 500)
+
     return () => {
       vv.removeEventListener('resize', update)
       vv.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
+      window.clearInterval(poll)
     }
   }, [])
 
-  return { vvHeight, vvOffsetTop }
+  return { vvHeight, vvOffsetTop, initialInnerHeight }
 }
 
 export function useIsLandscape() {

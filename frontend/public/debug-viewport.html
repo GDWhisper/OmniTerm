@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>viewport debug v2</title>
+<style>
+  body { margin: 0; font-family: ui-monospace, monospace; background: #eee; }
+  #panel {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: #fff; border-bottom: 4px solid #ff8c42;
+    padding: 10px 14px; font-size: 17px; line-height: 1.75;
+    white-space: pre; color: #111;
+  }
+  #inp { margin-top: 240px; margin-left: 12px; width: calc(100% - 24px); height: 44px; font-size: 16px; border-radius: 8px; border: 1px solid #888; padding: 0 10px; box-sizing: border-box; }
+  #nav { margin-top: 8px; height: 56px; background: #3a5b8c; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; }
+  .hl { color: #c0392b; font-weight: bold; }
+</style>
+</head>
+<body>
+  <div id="panel">loading…</div>
+  <input id="inp" placeholder="点我聚焦，弹出输入法（面板在顶部不会被顶走）">
+  <div id="nav">NAV 模拟（omniterm 底部导航）</div>
+  <script>
+    function render() {
+      const nav = document.getElementById('nav').getBoundingClientRect()
+      const vv = window.visualViewport
+      const vvH = vv ? Math.round(vv.height) : null
+      const innerH = window.innerHeight
+      const kbTop = Math.max(0, innerH - vvH)
+      const d = {
+        innerHeight: innerH,
+        vvHeight: vvH,
+        offsetTop: vv ? Math.round(vv.offsetTop) : null,
+        scrollY: Math.round(window.scrollY),
+        interactiveW: getComputedStyle(document.documentElement).interactiveWidget,
+        navBottom: Math.round(nav.bottom),
+        keyboardTop: kbTop,
+      }
+      const el = document.getElementById('panel')
+      el.innerHTML =
+        '<span class="hl">innerHeight</span> = ' + d.innerHeight + '\n' +
+        '<span class="hl">vvHeight</span>   = ' + d.vvHeight + '\n' +
+        '<span class="hl">offsetTop</span>  = ' + d.offsetTop + '\n' +
+        'scrollY      = ' + d.scrollY + '\n' +
+        'interactiveW = ' + d.interactiveWidget + '\n' +
+        'navBottom    = ' + d.navBottom + '\n' +
+        '<span class="hl">keyboardTop</span> = ' + d.keyboardTop
+    }
+    const vv = window.visualViewport
+    if (vv) { vv.addEventListener('resize', render); vv.addEventListener('scroll', render) }
+    window.addEventListener('resize', render)
+    window.addEventListener('scroll', render)
+    setInterval(render, 300)
+    render()
+  </script>
+</body>
+</html>

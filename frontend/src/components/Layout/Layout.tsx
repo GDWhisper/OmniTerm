@@ -27,8 +27,12 @@ import { nextSessionId } from '../../utils/sessionNav'
 function SessionView() {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const sessions = useAppStore((s) => s.sessions)
+  // 归档会话不在任何项目切片里（默认列表服务端已排除），只读查看时从
+  // archivedSessions 兜底解析，否则会卡在下方 loading 占位。
+  const archivedSessions = useAppStore((s) => s.archivedSessions)
   const activeSession = activeSessionId
-    ? Object.values(sessions).flat().find((s) => s.id === activeSessionId)
+    ? (Object.values(sessions).flat().find((s) => s.id === activeSessionId) ??
+      archivedSessions.find((s) => s.id === activeSessionId))
     : null
 
   if (activeSession?.runtime_kind === 'acp') return <ChatView />
