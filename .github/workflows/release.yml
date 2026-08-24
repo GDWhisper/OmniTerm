@@ -79,7 +79,7 @@ jobs:
         shell: bash
         run: |
           BIN=$(cargo metadata --format-version=1 --no-deps | \
-                jq -r '.packages[0].targets[] | select(.kind[0]=="bin") | .name')
+                jq -r '.packages[0].targets[] | select(.kind[0]=="bin" and .name == "omniterm") | .name')
           echo "name=$BIN" >> "$GITHUB_OUTPUT"
 
       - name: Package binary (Unix)
