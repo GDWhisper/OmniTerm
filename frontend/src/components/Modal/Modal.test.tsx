@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Modal } from './Modal'
+import { useAppStore } from '../../stores/appStore'
 
 // Contract test, not a rendering test: the body container must keep
 // `overflow-wrap: anywhere`. Without it, no-space long tokens (file paths,
@@ -21,6 +22,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   container.remove()
+  // Restore default zoom for subsequent tests
+  useAppStore.setState({ uiZoom: 100 })
 })
 
 describe('Modal', () => {
@@ -51,5 +54,21 @@ describe('Modal', () => {
       )
     })
     expect(document.body.textContent).not.toContain('hidden')
+  })
+
+  it('applies zoom compensation to match interface zoom level', () => {
+    useAppStore.setState({ uiZoom: 150 })
+    act(() => {
+      root.render(
+        <Modal open onClose={() => {}} title="Zoom Test">
+          <p>content</p>
+        </Modal>,
+      )
+    })
+
+    const modalContent = document.body.querySelector('.corner-nails') as HTMLElement
+    expect(modalContent).toBeTruthy()
+    const style = getComputedStyle(modalContent)
+    expect(parseFloat(style.zoom)).toBe(1.5)
   })
 })

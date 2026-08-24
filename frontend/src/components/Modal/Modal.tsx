@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useAppStore } from '../../stores/appStore'
 import { READER_FONT } from '../../utils/fonts'
 
 interface ModalProps {
@@ -12,6 +13,8 @@ interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }: ModalProps) {
+  const uiZoom = useAppStore((s) => s.uiZoom)
+  const zoomRatio = uiZoom / 100
   const backdropRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -47,6 +50,7 @@ export function Modal({ open, onClose, title, children, maxWidth = 'max-w-md' }:
           background: 'var(--bg-elevated)',
           borderRadius: 2,
           fontFamily: READER_FONT,
+          zoom: zoomRatio,
         }}
       >
         <span className="nail-bl" />
