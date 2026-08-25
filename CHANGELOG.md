@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-08-25 15:10) `[backend]` 修复 pty 终端输出「不实时」：cell_frame 编码此前仅由 33ms 定时器触发（raw bytes 分支只排干不编码），快速连续输入时变化被攒进同一帧、行突然出现。改为收到输出事件即编码推送、定时器降为兜底——回车→上屏延迟实测 avg 11.1ms/max 13.1ms → avg 3.7ms/max 5.8ms（`src/engine/pty/terminal_ws.rs`）
+
 ### Changed
 
 - (2026-08-25 00:40) `[backend]` `[infra]` 数据库默认隔离加固：开发构建（debug 或 `target/` 下产物）不传 `--db` 时默认连 `~/.omniterm/omniterm-dev.db`，release 正式安装仍按 binary 名推导正式版库——杜绝开发二进制裸跑静默污染正式版数据库（20260812 / 20260823 两次 migration 事故的根因）（`src/main.rs` `default_db_stem`）

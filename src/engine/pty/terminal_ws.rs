@@ -165,6 +165,13 @@ pub async fn handle_pty_terminal(
         // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
         let mut ticker: Option<tokio::time::Interval> = None;
 
+        // 编码当前 grid 为 cell_frame JSON。读循环先 feed grid 再广播
+        // （out/vt 同锁原子），故收到 raw bytes 时 grid 已是最新，可立即编码。
+        let encode_now = || {
+            let mut vt_guard = encode_attach.state.vt.lock().unwrap();
+            vt_guard.encode_cell_frame(&session_id_for_frame)
+        };
+
         loop {
             // 懒初始化：前端 hello 握手激活 cell_frame 模式时启动编码定时器
             if fwd_cfe.load(Ordering::Relaxed) && ticker.is_none() {
@@ -204,15 +211,17 @@ pub async fn handle_pty_terminal(
                             }
                         }
                     }
-                    // 排干 raw bytes（维持 broadcast channel 健康；VT grid
-                    // 模式下 raw bytes 丢弃，grid 是真相源）
-                    _ = rx.recv() => {}
-                    // 30fps tick：output_seq 变化检测避免空转
+                    // 排干 raw bytes + 立即编码推送：消除最长 33ms 的 tick
+                    // 盲区（连按回车时行「攒一批突然出现」的根因）
+                    _ = rx.recv() => {
+                        let json = encode_now();
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）
                     _ = tick.tick() => {
-                        let json = {
-                            let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-                            vt_guard.encode_cell_frame(&session_id_for_frame)
-                        };
+                        let json = encode_now();
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }
