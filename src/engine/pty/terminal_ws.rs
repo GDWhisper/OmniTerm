@@ -290,6 +290,11 @@ pub async fn handle_pty_terminal(
                             ClientControl::Ping => {
                                 debug!("ping received (pty)");
                             }
+                            ClientControl::Resync => {
+                                // 前端丢帧后重同步：作废 diff 基线，下一帧发全帧。
+                                // vt 为会话共享，全帧对其他连接同样安全。
+                                resize_attach.state.vt.lock().unwrap().invalidate_diff();
+                            }
                         }
                     }
                 }

@@ -105,54 +105,83 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     for (let r = 0; r < frame.height; r++) {
       const cells = frame.rows[r]?.cells ?? []
       chunks.push(`\x1b[${r + 1};1H`)
+      chunks.push(SGR_RESET)
       chunks.push(...renderRowCells(cells))
     }
-  } else {
-    // Diff frame: render only changed rows (no screen clear)
-    const indices = frame.row_indices ?? []
-    for (let i = 0; i < indices.length; i++) {
-      const rowIdx = indices[i]
-      const cells = frame.rows[i]?.cells ?? []
-      chunks.push(`\x1b[${rowIdx + 1};1H`)
-      chunks.push('\x1b[K') // Erase to end of line — remove stale chars
-      chunks.push(...renderRowCells(cells))
+    term.write(chunks.join(''))
+    if (frame.cursor) {
+      renderCursor(term, frame.cursor)
     }
+    return
   }
 
+  // Diff frame: render only changed rows (no screen clear).
+  // SGR reset before each row prevents style leakage from the previous
+  // frame's terminal state.
+  const indices = frame.row_indices ?? []
+  for (let i = 0; i < indices.length; i++) {
+    const rowIdx = indices[i]
+    const cells = frame.rows[i]?.cells ?? []
+    chunks.push(`\x1b[${rowIdx + 1};1H`)
+    chunks.push('\x1b[K')  // Erase to end of line — remove stale chars
+    chunks.push(SGR_RESET)
+    chunks.push(...renderRowCells(cells))
+  }
   term.write(chunks.join(''))
-  renderCursor(term, frame.cursor)
+  if (frame.cursor) {
+    renderCursor(term, frame.cursor)
+  }
 }
 
 // ──────────────────────────────────────────────────────────
-// 30fps latest-wins throttle (§10.3)
+// Ordered frame queue (§10.3 修订)
 // ──────────────────────────────────────────────────────────
 
+/** 待渲染帧上限。超限 = 渲染跟不上产出，清空积压并请求全帧重同步。 */
+const MAX_PENDING_FRAMES = 120
+
+/** resync 请求节流窗口：隐藏标签页等场景 rAF 停摆会持续超限，防刷屏。 */
+const RESYNC_THROTTLE_MS = 1000
+
 /**
- * Hook: queue cell_frames, render at most once per rAF.
+ * Hook: queue cell_frames, render all pending frames in order once per rAF.
  *
- * Latest-wins semantics: only the most recent frame in each animation
- * frame is rendered — intermediate states are discarded.
- *
- * Phase 1: backend already sends ≤30fps (timer), but hook protects
- * against future changes (e.g. raw passthrough mode with higher rate).
+ * diff 帧相对上一帧的编码基线，**中间帧不可丢弃**——丢掉即永久丢失那次
+ * 行变化（症状：连按回车丢行，切换会话经补屏全帧才恢复）。故每个 rAF
+ * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时清空队列并请求
+ * 后端作废 diff 基线、下一帧发全帧兜底。
  */
-export function useCellFrame(termRef: React.RefObject<Terminal | null>) {
-  const frameQueue = useRef<CellFrame | null>(null)
+export function useCellFrame(
+  termRef: React.RefObject<Terminal | null>,
+  requestResync?: () => void,
+) {
+  const frameQueue = useRef<CellFrame[]>([])
   const rafId = useRef<number | null>(null)
+  const lastResyncAt = useRef(0)
 
   const enqueue = useCallback((frame: CellFrame) => {
-    frameQueue.current = frame
+    const q = frameQueue.current
+    if (q.length >= MAX_PENDING_FRAMES) {
+      q.length = 0
+      const now = performance.now()
+      if (now - lastResyncAt.current >= RESYNC_THROTTLE_MS) {
+        lastResyncAt.current = now
+        requestResync?.()
+      }
+      return
+    }
+    q.push(frame)
     if (rafId.current == null) {
       rafId.current = requestAnimationFrame(() => {
         rafId.current = null
-        const f = frameQueue.current
-        if (f && termRef.current) {
-          frameQueue.current = null
-          renderCellFrame(termRef.current, f)
-        }
+        const term = termRef.current
+        const frames = frameQueue.current
+        frameQueue.current = []
+        if (!term) return
+        for (const f of frames) renderCellFrame(term, f)
       })
     }
-  }, [termRef])
+  }, [termRef, requestResync])
 
   return { enqueue }
 }

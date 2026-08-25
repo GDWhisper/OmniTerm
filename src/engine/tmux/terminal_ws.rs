@@ -444,6 +444,9 @@ pub async fn handle_terminal(
                                 // Client handles missing pong via timeout — low priority.
                                 debug!("ping received");
                             }
+                            // tmux 会话是 raw 字节直通，无 cell_frame diff 基线，
+                            // 重同步请求无操作（仅 pty 引擎消费，见其读循环）。
+                            ClientControl::Resync => {}
                         }
                     }
                 }
@@ -725,6 +728,8 @@ pub async fn handle_external_terminal(
                             ClientControl::Ping => {
                                 debug!("ping received");
                             }
+                            // raw 字节直通，无 diff 基线可作废（见 handle_terminal 同名分支）
+                            ClientControl::Resync => {}
                         }
                     }
                 }

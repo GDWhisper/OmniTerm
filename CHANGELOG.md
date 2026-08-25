@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-26 00:10) `[backend]` `[frontend]` 修复 pty 终端快速输入丢行（连按回车丢好多行、切换会话才补全）：事件驱动编码让帧率突破 30fps 后，前端 rAF latest-wins 聚合丢弃的 diff 帧（相对上一帧的行增量）永久丢失。前端改有界有序队列、每个 rAF 按序渲染全部积压帧（上限 120，超限清空并请求重同步）；新增 `resync` WS 控制帧——后端作废 diff 编码基线、下一帧发全帧兜底恢复。浏览器实测连按 100 次回车可见屏无缺行（`frontend/src/hooks/useCellFrame.ts`、`frontend/src/hooks/useTerminal.ts`、`src/ws/terminal.rs`、`src/engine/pty/terminal_ws.rs`、`src/engine/tmux/terminal_ws.rs`）
 - (2026-08-25 15:10) `[backend]` 修复 pty 终端输出「不实时」：cell_frame 编码此前仅由 33ms 定时器触发（raw bytes 分支只排干不编码），快速连续输入时变化被攒进同一帧、行突然出现。改为收到输出事件即编码推送、定时器降为兜底——回车→上屏延迟实测 avg 11.1ms/max 13.1ms → avg 3.7ms/max 5.8ms（`src/engine/pty/terminal_ws.rs`）
 
 ### Changed
