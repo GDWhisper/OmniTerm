@@ -9,7 +9,7 @@ import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconWorkbench } from './icons'
+import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
@@ -96,6 +96,7 @@ export function FileManager() {
   const setFmSessionMode = useAppStore((s) => s.setFmSessionMode)
   const setFmManualPath = useAppStore((s) => s.setFmManualPath)
   const resetFmToFollowing = useAppStore((s) => s.resetFmToFollowing)
+  const activateSession = useAppStore((s) => s.activateSession)
   const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
   const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
 
@@ -852,6 +853,25 @@ export function FileManager() {
                 if (activeSessionId) resetFmToFollowing(activeSessionId)
               }}
               title={t('fm.backToTerminalDir')}
+            >
+              <IconHome width={15} height={15} />
+            </button>
+          )}
+          {/* "在此打开终端" — 在 FM 当前目录下新建 pty 会话 */}
+          {fmSource && (
+            <button
+              className="fm-bc-root"
+              onClick={async () => {
+                if (!cwd || !activeProjectId) return
+                try {
+                  const newSession = await api.createSession(activeProjectId, workspaceRoot || cwd, undefined, undefined, 'pty')
+                  activateSession(newSession.id)
+                  addToast('success', t('fm.terminalOpened'))
+                } catch {
+                  // api client already shows error toast
+                }
+              }}
+              title={t('fm.openTerminalHere')}
             >
               <IconWorkbench width={13} height={13} />
             </button>

@@ -209,17 +209,46 @@ fn omniterm_data_dir() -> PathBuf {
     Path::new(&home).join(".omniterm")
 }
 
-/// daemon 模式的日志文件路径：`~/.omniterm/<binary>.log`（与 db / jwt_secret 同目录）。
-#[cfg(unix)]
-fn daemon_log_path() -> PathBuf {
-    omniterm_data_dir().join(format!("{}.log", binary_name()))
+/// 是否判定为开发构建。cargo 产物（debug 构建，或任何 target/ 下的 release）一律按
+/// 开发构建处理：无 `--db` 时默认走开发库，绝不静默连正式版库。
+fn is_dev_build() -> bool {
+    if cfg!(debug_assertions) {
+        return true;
+    }
+    std::env::args()
+        .next()
+        .map(|a| {
+            let parent = Path::new(&a).parent();
+            parent.is_some_and(|d| d.ends_with("target/debug") || d.ends_with("target/release"))
+        })
+        .unwrap_or(false)
 }
 
-/// 未指定 `--db` 时，按 binary 名推导：`~/.omniterm/<binary>.db`。
+/// 默认 db / daemon 日志文件名（无后缀）。
+///
+/// - release 正式安装（npm / crates.io / Docker / cargo install）：按 binary 名推导，
+///   正式版连 `~/.omniterm/omniterm.db`（既有行为，不变）。
+/// - 开发构建（`cargo run` / `target/debug|release/omniterm` 裸跑，未显式 `--db`）：
+///   固定 `omniterm-dev`，落 `~/.omniterm/omniterm-dev.db`。历史事故中 dev/preview
+///   的 target/debug 二进制因 Cargo.toml name 统一为 `omniterm` 而按 argv0 推导撞上
+///   正式版库并应用新 migration（20260812 / 20260823 两次），从代码层根治。
+fn default_db_stem() -> String {
+    if is_dev_build() { "omniterm-dev".to_string() } else { binary_name() }
+}
+
+/// daemon 模式的日志文件路径：`~/.omniterm/<stem>.log`（与 db / jwt_secret 同目录，
+/// 前缀与默认 db 保持一致）。
+#[cfg(unix)]
+fn daemon_log_path() -> PathBuf {
+    omniterm_data_dir().join(format!("{}.log", default_db_stem()))
+}
+
+/// 未指定 `--db` 时，按 binary 名推导：`~/.omniterm/<binary>.db`（开发构建走 dev 库，
+/// 见 [`default_db_stem`]）。
 fn default_db_url() -> String {
     let dir = omniterm_data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    format!("sqlite:{}?mode=rwc", dir.join(format!("{}.db", binary_name())).display())
+    format!("sqlite:{}?mode=rwc", dir.join(format!("{}.db", default_db_stem())).display())
 }
 
 /// Lenient bool parser for `--auth-enabled` / `OMNITERM_AUTH_ENABLED`:

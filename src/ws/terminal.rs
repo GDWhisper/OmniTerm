@@ -17,6 +17,10 @@ pub enum ClientControl {
     Resize { cols: u16, rows: u16 },
     #[serde(rename = "ping")]
     Ping,
+    /// 前端渲染积压丢帧后请求重同步：diff 帧相对上一帧编码基线，丢弃的
+    /// 中间帧无法重建，服务端收到后作废 diff 记忆，下一帧发全帧。
+    #[serde(rename = "resync")]
+    Resync,
 }
 
 #[derive(Debug, Serialize)]

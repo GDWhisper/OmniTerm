@@ -47,6 +47,21 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [0.2.18] - 2026-08-27
+
+### Added
+
+- (2026-08-27 00:30) `[frontend]` FileManager 工具栏新增「在此打开终端」：在文件管理器当前目录下直接新建 pty 会话并激活，一键从浏览目录切换到终端操作，无需手动打开终端再 cd（`frontend/src/components/FileManager/FileManager.tsx`）
+
+### Fixed
+
+- (2026-08-26 00:10) `[backend]` `[frontend]` 修复 pty 终端快速输入丢行（连按回车丢好多行、切换会话才补全）：事件驱动编码让帧率突破 30fps 后，前端 rAF latest-wins 聚合丢弃的 diff 帧（相对上一帧的行增量）永久丢失。前端改有界有序队列、每个 rAF 按序渲染全部积压帧（上限 120，超限清空并请求重同步）；新增 `resync` WS 控制帧——后端作废 diff 编码基线、下一帧发全帧兜底恢复。浏览器实测连按 100 次回车可见屏无缺行（`frontend/src/hooks/useCellFrame.ts`、`frontend/src/hooks/useTerminal.ts`、`src/ws/terminal.rs`、`src/engine/pty/terminal_ws.rs`、`src/engine/tmux/terminal_ws.rs`）
+- (2026-08-25 15:10) `[backend]` 修复 pty 终端输出「不实时」：cell_frame 编码此前仅由 33ms 定时器触发（raw bytes 分支只排干不编码），快速连续输入时变化被攒进同一帧、行突然出现。改为收到输出事件即编码推送、定时器降为兜底——回车→上屏延迟实测 avg 11.1ms/max 13.1ms → avg 3.7ms/max 5.8ms（`src/engine/pty/terminal_ws.rs`）
+
+### Changed
+
+- (2026-08-25 00:40) `[backend]` `[infra]` 数据库默认隔离加固：开发构建（debug 或 `target/` 下产物）不传 `--db` 时默认连 `~/.omniterm/omniterm-dev.db`，release 正式安装仍按 binary 名推导正式版库——杜绝开发二进制裸跑静默污染正式版数据库（20260812 / 20260823 两次 migration 事故的根因）（`src/main.rs` `default_db_stem`）
+
 ## [0.2.17] - 2026-08-24
 
 ### Added
@@ -64,10 +79,6 @@ Prefix each entry with the area it affects:
 - (2026-08-22 00:00) `[backend]` 修复 pty 会话重连后画面花屏/错位：增量绘制型 agent TUI（光标绝对定位 + 局部擦除的 diff 流）在「清屏后回放原始字节尾」下序列落在错误位置，且字节环可从转义序列中间截断、resize nudge 救不了非全量重绘型程序——补屏帧改为混合方案：raw 字节尾回放（进 scrollback + 恢复 alt-screen 等模式态）→ 清可见屏（不清 scrollback）→ 服务端 VT grid 为真相源带 SGR 样式整帧重画 + 光标定位/显隐复位；attach 时先按本次连接尺寸同步视口（修断开期间窗口变宽/窄按旧尺寸渲染的既存缺陷），快照/渲染/订阅单临界区原子完成。同日移除重连 resize nudge：实测 alacritty shrink→expand 非内容中性（上滚一行混入残片），grid 整帧渲染后补屏帧已精确，nudge 反而污染真相源；变尺寸重连由真实 SIGWINCH 触发全量重绘（`src/engine/pty/vt.rs`、`src/engine/pty/mod.rs`、`src/engine/pty/terminal_ws.rs`）
 
 - (2026-08-19 00:26) `[frontend]` 修复 ACP 会话流式输出中刷新页面丢失早期 assistant 正文：后端 turn 累积器帧窗口按字节上限从头部驱逐旧帧，刷新后 hydrate/续接快照只含窗口残片，且 turn 结束时前端把残缺 cooked blocks 回写覆盖 DB 行使缺失永久化——现收到续接快照的 turn 跳过 cooked 回写（DB 保留完整 text 列的原始帧行），且 RAW 帧解码与快照还原时用后端全量 text 把被驱逐的正文前缀补回显示（精确后缀匹配守卫，失配宁缺勿错）（`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
-
----
-
-## [Unreleased]
 
 ---
 

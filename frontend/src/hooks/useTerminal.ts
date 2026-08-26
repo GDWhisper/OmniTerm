@@ -10,7 +10,7 @@ import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
-import { renderCellFrame } from './useCellFrame'
+import { useCellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -98,6 +98,14 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  // 前端丢帧后请求后端作废 diff 基线、下一帧发全帧（useCellFrame 超限路径）
+  const requestResync = useCallback(() => {
+    const ws = wsRef.current
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resync' }))
+    }
+  }, [])
+  const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const composingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -194,13 +202,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       } else {
         try {
           const msg = JSON.parse(e.data)
-          // Phase 1: cell_frame 路由（Pty 可选编码模式）
           if (msg.t === 'cell_frame') {
             if (!sawFirstBinary) {
               sawFirstBinary = true
               termRef.current?.reset()
             }
-            renderCellFrame(termRef.current!, msg)
+            enqueueCellFrame(msg)
             return
           }
           if (msg.type === 'attached') {
