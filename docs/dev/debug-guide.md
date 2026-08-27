@@ -20,7 +20,7 @@
 | 资源与生命周期 | `debug-patterns/resource-lifecycle.md` | 删记录≠释放运行时资源、删一层≠删邻接资源（worktree remove 不删 branch）、Drop 隐式副作用、对称释放路径、spawn 抽象 cwd、map vs 持久化行、存活多层独立事实、回收编排失败路径、无界累积有界化、后台化进程启动结果握手反馈 |
 | React 与前端 | `debug-patterns/frontend-react.md` | key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调、后端权威状态清除、慢速拖动手势误触、写回定位键权威性（匹配键/匹配路径失控 = 无约束） |
 | 布局与 CSS | `debug-patterns/layout-visual.md` | flex 三件套、共享 CSS 类隐性契约、visual viewport 三层模型、containing block、zoom 祖先放大 fixed translate、RTL bidi 隔离、table-layout、white-space、底部不可见分层排查清单 |
-| 终端与 PTY | `debug-patterns/terminal-pty.md` | MasterWriter Drop 副作用、字节能到达≠语义能到达、跨进程分隔符选型、平替实现边缘语法、FitAddon 桌面像素常量、escape-time 时序矩阵、增量绘制 diff 流不可字节尾回放（字节流≠屏幕状态）、轮询推送的时延下界、diff 流不可 latest-wins 聚合 |
+| 终端与 PTY | `debug-patterns/terminal-pty.md` | MasterWriter Drop 副作用、字节能到达≠语义能到达、跨进程分隔符选型、平替实现边缘语法、FitAddon 桌面像素常量、escape-time 时序矩阵、增量绘制 diff 流不可字节尾回放（字节流≠屏幕状态）、轮询推送的时延下界、diff 流不可 latest-wins 聚合、双终端模拟器重复应答（迟到应答透传回显） |
 | 构建与协议 | `debug-patterns/platform-protocol.md` | 构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持 |
 | 通用诊断手法 | `debug-patterns/investigation.md` | 诊断三阶段、分层二分+字节级证据、先写复现测试再定罪、验证脚本先自证、实物验证>代码推测、假设先行验证滞后、tracing directive 陷阱 |
 | 已知未解问题 | `debug-patterns/unresolved.md` | 已排除方向记录、待查清单（避免重复排查） |

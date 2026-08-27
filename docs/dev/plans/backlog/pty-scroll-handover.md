@@ -238,6 +238,7 @@ grep -rn 'term\.write\|term\.writeln\|\.send(data' frontend/src/ --include="*.ts
 | WS onmessage 首帧 reset | `useTerminal.ts:connectWs()` → `sawFirstBinary` + `term.reset()` |
 | 后端 VT grid 编码 | `src/engine/pty/vt.rs:encode_cell_frame()` / `encode_frame_body()` |
 | 后端 PTY 输出转发 | `src/engine/pty/terminal_ws.rs:forward_handle` → `encode_now()` |
+| 输入侧自动应答过滤 | `frontend/src/utils/ptyInputFilter.ts` + `useTerminal.ts` onData 内 pty 分流（1;2c 修复，见 §零 核查点 4） |
 
 ---
 
