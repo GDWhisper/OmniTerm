@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath } from './path'
+import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -131,5 +131,44 @@ describe('toAbsolutePath', () => {
 
   it('does not resolve .. — traversal is the backend\'s call', () => {
     expect(toAbsolutePath('../outside/a.md', root)).toBe('/home/u/proj/../outside/a.md')
+  })
+})
+
+describe('findCoveringProject', () => {
+  const projects = [
+    { id: 'p-home', path: '/home/user' },
+    { id: 'p-proj', path: '/home/user/proj' },
+    { id: 'p-sibling', path: '/home/a' },
+  ]
+
+  it('matches exact project path', () => {
+    expect(findCoveringProject('/home/user/proj', projects)?.id).toBe('p-proj')
+  })
+
+  it('matches a child directory', () => {
+    expect(findCoveringProject('/home/user/proj/src', projects)?.id).toBe('p-proj')
+    expect(findCoveringProject('/home/user/docs', projects)?.id).toBe('p-home')
+  })
+
+  it('returns the deepest covering project when nested', () => {
+    expect(findCoveringProject('/home/user/proj/src/deep', projects)?.id).toBe('p-proj')
+  })
+
+  it('does not match a sibling prefix (boundary check)', () => {
+    // /home/a 不得误覆盖 /home/ab
+    expect(findCoveringProject('/home/ab/x', projects)).toBeUndefined()
+  })
+
+  it('normalizes trailing slashes on project paths', () => {
+    expect(findCoveringProject('/data/x', [{ id: 'p', path: '/data/' }])?.id).toBe('p')
+  })
+
+  it('treats a root project as covering any absolute path', () => {
+    expect(findCoveringProject('/etc/hosts', [{ id: 'p', path: '/' }])?.id).toBe('p')
+  })
+
+  it('returns undefined when nothing covers', () => {
+    expect(findCoveringProject('/tmp/scratch', projects)).toBeUndefined()
+    expect(findCoveringProject('/tmp/scratch', [])).toBeUndefined()
   })
 })

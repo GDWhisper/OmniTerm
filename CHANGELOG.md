@@ -54,6 +54,10 @@ Prefix each entry with the area it affects:
 - (2026-08-27 18:15) `[backend]` `[frontend]` 修复一键升级「自重启静默失败 + 自动刷新假承诺」（实测远程实例升级到新版后进程未换血、页面刷新永远拿旧版）：后端自重启链的 ACP 回收包上 15s 超时（`RELAUNCH_SHUTDOWN_TIMEOUT`），超时记 warn 后照常 exec，杜绝 `shutdown_all` 无界挂起导致 exec 永不执行；前端 UpdateBadge 重启监测从「捕捉断连→恢复」改为按 `/api/v1/health` 的 `version` 字段比对目标版本（不再要求捕捉断连瞬间，SSH 隧道拆线/后台标签节流的远程接入也能确认切换；health 缺 version 的旧实现保留断连-恢复回退）；文案去除「页面将自动刷新」承诺，60s 未确认时显示需手动重启的诚实提示（`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
 - (2026-08-27 18:40) `[backend]` `[frontend]` 手动重启提示不再盲目写死 `omniterm stop && omniterm start`：照抄会丢自定义启动参数（`-H 0.0.0.0` 丢 → 只绑 localhost 断掉远程接入；`-d` 丢 → 前台进程随终端退出；`--db` 丢 → stop 停错实例）。`GET /system/version` 新增 `restart_command`，服务端按自身 argv 忠实组装重启命令（daemon 态补 `-d`、stop 携带定位 pid 的 `--db`、`--jwt-secret` 值脱敏），前端两条重启提示渲染该命令并附「systemd/容器托管请用原管理方式重启」兜底
 
+### Changed
+
+- (2026-08-27 19:05) `[frontend]` 「在此打开终端」补齐越界目录归属：浏览目录被某个已打开项目覆盖时直接挂到该项目；不被任何项目覆盖时弹窗引导为该目录新建项目（次选挂到当前项目），避免终端误挂不相干项目；启动目录恒为浏览目录（原先界内回退 workspace_root 会开错位置）（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/OpenTerminalDialog.tsx`）
+
 ## [0.2.18] - 2026-08-27
 
 ### Added

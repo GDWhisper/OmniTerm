@@ -87,3 +87,30 @@ export function resolveRenamedPath(absPath: string, from: string, to: string): s
   const watchRoot = absPath.slice(0, absPath.length - from.length - 1)
   return `${watchRoot}/${to}`
 }
+
+/**
+ * 在已加载项目中找出路径**覆盖** `dir` 的项目（路径相等或子目录前缀），
+ * 多个覆盖时返回最深（路径最长）的一个；无覆盖返回 `undefined`。
+ *
+ * - 前缀判断带分隔符边界，避免 `/home/a` 误覆盖 `/home/ab`（同
+ *   [`isPathOutsideWorkspace`]）；尾随斜杠先归一，`/` 覆盖一切绝对路径。
+ * - 仅为前端快路径探测：git worktree 兄弟目录可能不在项目根前缀下，
+ *   后端 `POST /projects` 的同仓库覆盖判定（409 already_covered）更权威，
+ *   调用方需以其兜底。
+ */
+export function findCoveringProject<T extends { path: string }>(
+  dir: string,
+  projects: readonly T[],
+): T | undefined {
+  let best: T | undefined
+  let bestLen = -1
+  for (const p of projects) {
+    const root = p.path.replace(/\/+$/, '') || '/'
+    const covers = root === '/' ? dir.startsWith('/') : dir === root || dir.startsWith(root + '/')
+    if (covers && root.length > bestLen) {
+      best = p
+      bestLen = root.length
+    }
+  }
+  return best
+}
