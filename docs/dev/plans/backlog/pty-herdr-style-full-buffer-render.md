@@ -140,6 +140,39 @@ xterm.js 的文本选择仍正常工作——它操作的是**当前渲染在屏
 
 **建议**：先做 B 验证坐标对齐的正确性，再考虑 C 做最终体验优化。B 是 C 的垫脚石。
 
+> ⚠️ **勘误（2026-08-28）**：上文"先做 B"的建议随方案 B 撤销而作废——B 的前提（前端 viewport 偏移）已被证明不存在，直接按本方案实施。
+
+### 实施前评审决策点（2026-08-28 评审补充）
+
+以下决策点基于 xterm.js 6.0.0 与 alacritty_terminal 0.26.0 源码验证，实施时按此推进；翻盘就地加勘误。
+
+**D1 wheel 接管点与鼠标协议互斥（已验证可行）**
+xterm.js 6.0.0 的 wheel 处理顺序：① 应用侧注册了 mouse wheel（鼠标协议激活）→ 直接交给应用，② `attachCustomWheelEventHandler` 返回 false → 取消默认滚动，③ 否则走 viewport 滚动。方案 C 用 ② 接管；鼠标协议场景（tmux mouse mode / vim / htop）在 ① 已被消费，**天然互斥，无需自行判断**。
+
+**D2 请求节流与 stale 响应**
+wheel 高频触发：按 rAF 合并、仅发最新 `y`（本地 WS RTT < 1ms，无需额外限速）。响应按 y 单调性判 stale——用户已滚走的窗口帧直接丢弃，不写 xterm。
+
+**D3 全帧流暂停/恢复状态机（细化原 Q2）**
+状态：`live`（回底，正常 30fps）/ `viewport`（滚离底部）。进入 viewport：立即停止全帧/overlay/diff 渲染（避免 CUP 写入干扰窗口帧展示——虽然不拉视口，但会污染用户正在看的历史区域）；回底且停止滚动 200ms → 恢复 live 并触发一次 resync。原 Q2 的"暂停 30fps"指前端渲染层暂停，后端定时器不必停（帧到达但不渲染，避免恢复时的状态切换协议）。
+
+**D4 alt-screen 互斥**
+后端已有 alt-screen 语义事件（overlay 帧）。alt-screen 激活期间 viewport 控制器禁用，wheel 交回 xterm 默认路径（无 scrollback 时 xterm 自动转方向键发给应用，实测行为正确）。
+
+**D5 历史行列宽**
+后端 grid 历史行按会话当前宽度存储，alacritty resize 自带 reflow；`encode_viewport_frame` 按 grid 行编码，前端按当前列宽渲染。超宽内容编码时按当前 cols 裁剪，与可见屏行为一致。
+
+**D6 移动端 touch**
+`attachTouchScroll` 产生的模拟 wheel 走同一条 customWheelHandler 路径，自动进入 viewport_request，无额外工作。
+
+**D7 遗留清理（随方案 C 落地一并删除）**
+尝试 3 遗留的 `scrollModeRef` 暂存 / `pendingFullRef` flush / 回底 resync 机制：其防御的"全帧拉视口"已被证明不存在（`pty-scroll-handover.md` §零 核查点 2），方案 C 落地后成为死代码，必须移除而非兼容。
+
+**D8 灰度策略**
+一次性实现 + 配置开关（如 `OMNITERM_TERMINAL_SCROLLBACK_VIEWPORT`），不做双路径灰度——wheel 接管是行为级切换，无中间态可灰度。
+
+**D9 分期**
+Phase 1：后端 `encode_viewport_frame` + WS `viewport_request` 控制帧（含有界约束，参照 performance-and-safety §P1）；Phase 2：前端 ViewportController + customWheelHandler 接管 + D3 状态机；Phase 3：D5/D7 清理 + 手动回归（验收标准见上）。每 Phase 独立可验证、独立提交。
+
 ### 不做的
 
 - 不放弃 cell frame diff 机制（正常输出仍用 diff 帧，节约带宽）
