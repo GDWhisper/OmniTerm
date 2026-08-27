@@ -1,7 +1,7 @@
 # PTY Cell Frame Viewport-Relative 渲染
 
-> **状态**：backlog（方案 A 已修复滚轮基础可用性，本方案解决滚动中途渲染错位）。
-> **触发条件**：修改 `renderCellFrame` / `encode_cell_frame` / 前端 viewport 同步逻辑前必读。
+> **状态**：❌ **已撤销（2026-08-28）**。前提崩塌：xterm.js 6.0.0 + cell_frame 架构下，前端 xterm scrollback 结构性冻结（后端只发定点重绘帧，前端永远收不到底部 LF，`ybase ≈ 0` 恒定），viewport 偏移几乎不存在，"用户滚回后全帧写入错误位置"的场景不会发生。详见 `pty-scroll-handover.md` §零 核查点 2/3。后继方案见方案 C。
+> **触发条件**：（已失效）修改 `renderCellFrame` / `encode_cell_frame` / 前端 viewport 同步逻辑前必读。
 > **关联**：`docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md`（cell frame diff 机制）、
 > `docs/dev/plans/backlog/scroll-pty-paging-bug.md`（tmux scroll mode 历史）。
 

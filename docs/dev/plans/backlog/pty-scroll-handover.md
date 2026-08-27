@@ -1,13 +1,75 @@
 # PTY 终端滚轮问题交接文档
 
-> **状态**：方案 A 未收敛，停止修补，等待新思路。
-> **最后修改**：`d54745c`（会话切换内容泄漏修复）
-> **关联文档**：`docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B）
-> `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`（方案 C）
+> **状态**：根因已定位（2026-08-28 静态核查，见 §零）。出路为方案 C。
+> **最后修改**：2026-08-28 根因核查
+> **关联文档**：`docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B，**已撤销**）
+> `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`（方案 C，**唯一自洽出路，已确认前提**）
+
+---
+
+## 零、2026-08-28 根因核查：此前全部尝试的前提与 xterm.js 6.0.0 实际行为不符
+
+本轮核查将交接文档的假设链逐条对照实际安装的 `@xterm/xterm@6.0.0` 源码与后端代码验证，结论如下。
+
+### 核查点 1：`ESC[2J`（ED2）在 xterm.js 6.0.0 中**不清 scrollback**
+
+`InputHandler.eraseInDisplay` case 2 仅 reset 视口内各行；清 scrollback 的是 case 3（ED3 / `ESC[3J`）。case 2 仅在 `scrollOnEraseInDisplay` 选项开启时才连带滚动（本项目未开启）。
+
+→ **尝试 1 的前提（"ED2 周期性清掉 scrollback 导致滚轮失效"）不成立**。那次修复修的是一个不存在的机制；其"画面漂移"副作用另有原因（diff 帧误走全屏路径，已在尝试 2 修复），与 scrollback 无关。
+
+### 核查点 2："全帧 30fps 写入把 viewport 拉回底部"**不存在**
+
+xterm.js 6.0.0 有原生的用户滚动保持机制：
+
+- `BufferService.scrollLines`：用户向上滚（disp < 0）置 `isUserScrolling = true`；滚回底部才复位。
+- `BufferService.scroll`（底部行换行推 scrollback 时触发）：`isUserScrolling` 置位时**不**强制 `ydisp = ybase`，视口保持。
+- cell_frame 全帧是纯 CUP + EL + 内容重绘，**不产生底部换行，从不触发 `BufferService.scroll`**，ydisp 无从被"拉"。
+
+→ **尝试 2 的分析（"光标定位最后一行触发 auto-scroll"）与尝试 3 的整套 `scrollModeRef` 暂存/回底 resync 机制，防的是一个基本不存在的敌人**。方向 1（scrollModeRef 时序诊断）随之失效。
+
+### 核查点 3：真根因 —— cell_frame 模式下**前端 xterm scrollback 结构性冻结**
+
+hello 握手后，后端只发 cell_frame 文本帧（`terminal_ws.rs` cell-frame ticker 分支，raw 字节只喂 VT grid，不再转发）。前端 xterm 因此**永远收不到底部行的 LF** → `BufferService.scroll` 永不触发 → `ybase ≈ 0` 恒定 → **滚轮无内容可滚**。
+
+前端 scrollback 仅有的来源：
+
+1. WS open 到 hello 生效之间的**raw 窗口期**（tmux attach 重绘 burst，概率性滚入几行内容）；
+2. 状态行 `writeln`。
+
+这完整解释了全部症状：
+
+| 症状 | 解释 |
+|------|------|
+| 有时无法滑动 | `ybase = 0`，滚轮无空间 |
+| 滑一下又被弹回 | 窗口期恰好滚入 1~2 行，滚完即到底；且 xterm 默认 `scrollOnUserInput: true`（滚动中按任意键强制回底）加重"弹回"体感 |
+| 切换会话临时恢复 | 每次重连产生新的 raw burst，重建一小段（垃圾）scrollback |
+| 间歇性 | 窗口期输出量随 attach 时序波动 |
+
+### 核查点 4：`1;2c1;2c` 已定位 —— Primary DA 应答泄漏
+
+链条：tmux attach 时（raw 窗口期内）发 `ESC[c`（Primary DA 查询）→ 转发到前端 → xterm.js 自动经 `onData` 回复 `\x1b[?1;2c`（InputHandler DA1 handler）→ WS → 后端写入 PTY stdin → tmux 收到**迟到/多余**的应答，透传给 pane 内 shell → PTY echo 回显（ESC 不可见）→ 屏幕出现 `1;2c`。每次会话切换泄漏一次，多次切换连成串——与症状完全吻合。
+
+关键事实：**后端 alacritty VT 已经应答 DA1**（`identify_terminal` → `PtyWrite("\x1b[?6c")`，经 `vt.rs` 的 `ResponseSink` 回写 PTY）。前端应答是**纯重复**，过滤它不影响 tmux 拿到应答。
+
+修复方案（已落地）：pty 会话的 `onData` 路径按**锚定整串白名单**过滤 xterm.js 全部自动应答形态（DA1/DA2/CPR/DECXCPR/DSR/DECRPM/窗口尺寸/OSC 应答），tmux/外部会话不过滤（那里 xterm 是唯一终端模拟器，应答必需）。鼠标协议上报（SGR/X10 mouse report）形态与白名单不重叠，正常放行。
+
+### 探索方向重估（对照原文档 §五）
+
+| 原方向 | 重估结论 |
+|--------|---------|
+| 方向 1（scrollModeRef 时序） | ❌ 前提失效（核查点 2），撤 |
+| 方向 2（平台重现/远程调试） | ❌ 不需要，根因已静态确认 |
+| 方向 3（wheel 时暂停全帧） | ❌ 全帧不拉视口（核查点 2），撤 |
+| 方向 4（限制 ESC[2J 频率） | ❌ ED2 不清 scrollback（核查点 1），撤 |
+| 方向 5（未追踪输入路径） | ✅ 已解开：`1;2c` = DA1 应答泄漏（核查点 4） |
+| 方向 6 / 方案 B | ❌ 前提崩塌：scrollback 冻结意味着 viewport 偏移几乎恒为 0，坐标映射修的是不会发生的状态。**已撤销** |
+| **方案 C** | ✅ **唯一架构自洽的出路**：把"历史视图"职责整个移交后端 viewport 窗口请求。前提已验证：后端 grid 配有 1000 行 scrollback（`vt.rs` `scrolling_history: VT_SCROLLBACK_LINES`） |
 
 ---
 
 ## 一、问题描述
+
+> 症状描述仍然有效，成因见 §零。
 
 PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史输出时，滚轮有时无法滑动，或滑了一下又被弹回底部。切换会话再切回来可以临时恢复，但很快再次失效。
 
@@ -16,6 +78,8 @@ PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史
 ---
 
 ## 二、已尝试的方案与尝试记录
+
+> ⚠️ **2026-08-28 勘误**：本节尝试 1/2/3 的**分析前提**均已被核查推翻（见 §零），记录保留仅为历史价值，勿沿其结论继续推理。
 
 ### 尝试 1：去掉全帧的 `ESC[2J`（commit `172723a`）
 
@@ -69,8 +133,10 @@ PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史
   ✅ 输出不实时（commit 78e4093）  
   ✅ 会话切换时旧 buffer 残留（commit d54745c）
   ✅ 键盘快捷键打到旧连接（commit d54745c）
-  ⚠️ 滚轮概率性失效（多次尝试未收敛）
-  ⚠️ 多次会话切换冒出 1;2c1;2c1;2c（仍未定位来源）
+  ✅ 滚轮概率性失效 —— 根因已定位（§零核查点 3：scrollback 结构性冻结），
+     出路 = 方案 C（后端 viewport 窗口渲染）
+  ✅ 多次会话切换冒出 1;2c1;2c1;2c —— 已定位（§零核查点 4：DA1 应答泄漏），
+     修复 = pty 会话 onData 过滤 xterm.js 自动应答
 ```
 
 ### 代码当前状态
@@ -86,6 +152,8 @@ PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史
 
 ## 四、已排除的方向
 
+> ⚠️ 2026-08-28：本表与 §零 核查冲突时，以 §零 为准。
+
 | 方向 | 排除原因 |
 |------|---------|
 | xterm.js 版本问题 | 使用的是最新稳定版，无已知 scroll wheel bug |
@@ -98,6 +166,8 @@ PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史
 ---
 
 ## 五、可能的探索方向
+
+> ⚠️ **2026-08-28 勘误**：本节已整体被 §零 的方向重估表取代——方向 1/2/3/4/6 撤销，方向 5 已解答，方案 C 立项。以下原文保留作历史记录。
 
 ### 方向 1：诊断 `scrollModeRef` 同步时序（低成本）
 
@@ -173,10 +243,8 @@ grep -rn 'term\.write\|term\.writeln\|\.send(data' frontend/src/ --include="*.ts
 
 ## 七、不误导声明
 
-以下是我**不确定**的：
+原交接时的三条不确定性，2026-08-28 核查后状态：
 
-1. **尝试 3 失败的确切原因**。我怀疑是 `scrollModeRef` 时序问题，但没有加日志验证。可能是这个，也可能完全是另一个问题。
-2. **`1;2c1;2c1;2c` 的来源**。session-switch 的 `reset()` 和键盘 handler 的 `wsRef` 改法看起来正确，但用户反馈仍未改善。不排除有其他代码路径在写入这些字符。
-3. **问题是否与 tmux multi-client 有关**。同一 tmux session 有 PTY client + control mode client 两个 attach。在 copy-mode + 多 client 的场景下可能有输入竞争，这是 tmux 官方文档中提到过的问题域。
-
-这些不确定性应该被下一个接手的人认真对待，不要假设"应该修好了"。
+1. **尝试 3 失败原因** —— 已解答：前提错误（全帧写入本就不会拉视口，见 §零 核查点 2），非时序问题。
+2. **`1;2c1;2c1;2c` 来源** —— 已定位：xterm.js 对 Primary DA 查询的自动应答泄漏（见 §零 核查点 4）。
+3. **tmux multi-client 竞争** —— 与本问题无关；root cause 在前端双终端模拟器消费同一流的架构，已由 §零 排除。
