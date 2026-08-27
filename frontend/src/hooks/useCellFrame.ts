@@ -97,23 +97,25 @@ function renderCursor(term: Terminal, cursor?: CursorState): void {
  *   changed rows; no screen clear.
  */
 export function renderCellFrame(term: Terminal, frame: CellFrame): void {
-  const isFull = frame.overlay || frame.full
   const chunks: string[] = []
 
-  if (isFull) {
-    term.write('\x1b[2J\x1b[H')
-    for (let r = 0; r < frame.height; r++) {
-      const cells = frame.rows[r]?.cells ?? []
-      chunks.push(`\x1b[${r + 1};1H`)
-      chunks.push(SGR_RESET)
-      chunks.push(...renderRowCells(cells))
-    }
-    term.write(chunks.join(''))
-    if (frame.cursor) {
-      renderCursor(term, frame.cursor)
-    }
-    return
+  // Full frame: render every row with CUP + EL + content (no screen
+  // clear).  Erase-to-EOL removes any stale characters left over from a
+  // previous wider/longer frame so a shrink-then-grow cycle stays clean.
+  // Skipping ESC[2J preserves scrollback — a full frame is a complete
+  // repaint of the visible screen, not an "erase everything" command.
+  for (let r = 0; r < frame.height; r++) {
+    const cells = frame.rows[r]?.cells ?? []
+    chunks.push(`\x1b[${r + 1};1H`)
+    chunks.push('\x1b[K')
+    chunks.push(SGR_RESET)
+    chunks.push(...renderRowCells(cells))
   }
+  term.write(chunks.join(''))
+  if (frame.cursor) {
+    renderCursor(term, frame.cursor)
+  }
+  return
 
   // Diff frame: render only changed rows (no screen clear).
   // SGR reset before each row prevents style leakage from the previous

@@ -500,6 +500,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
+      // Match the backend VT scrollback (VT_SCROLLBACK_LINES = 1000 in
+      // src/engine/pty/vt.rs) so the xterm scrollback depth equals what
+      // the PTY grid can produce.  Without this, xterm defaults to 1000
+      // anyway — explicit here for clarity and to catch divergences at
+      // review time if the backend constant changes.
+      scrollback: 1000,
     })
 
     const fit = new FitAddon()
