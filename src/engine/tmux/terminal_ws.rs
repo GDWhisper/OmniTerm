@@ -447,6 +447,8 @@ pub async fn handle_terminal(
                             // tmux 会话是 raw 字节直通，无 cell_frame diff 基线，
                             // 重同步请求无操作（仅 pty 引擎消费，见其读循环）。
                             ClientControl::Resync => {}
+                            // tmux raw 直通无服务端 grid，历史窗口由 tmux 自身管理。
+                            ClientControl::ViewportRequest { .. } => {}
                         }
                     }
                 }
@@ -730,6 +732,8 @@ pub async fn handle_external_terminal(
                             }
                             // raw 字节直通，无 diff 基线可作废（见 handle_terminal 同名分支）
                             ClientControl::Resync => {}
+                            // 同上：无服务端 grid，viewport 窗口由 tmux 自身管理
+                            ClientControl::ViewportRequest { .. } => {}
                         }
                     }
                 }

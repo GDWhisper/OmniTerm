@@ -47,10 +47,10 @@ src/
 │       ├── agent_hooks.rs  # hook 命令模板（tmux 冻结版蓝本）：claude --settings / codex -c 的 curl 上报命令 + augment_agent_command
 │       ├── session.rs    # PtySession：openpty + spawn + child 收割句柄
 │       ├── ring.rs       # ByteRing：256KB 字节环形缓冲（重连补屏窗口，P1 有界）
-│       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/render_screen/title/resize；应答经 take_responses 排空，由读循环按 attach 门控回写）
+│       ├── vt.rs         # VtState：alacritty_terminal Term 封装（feed/capture_visible/render_screen/title/resize/cell_frame 与 viewport 帧编码；应答经 take_responses 排空，由读循环按 attach 门控回写）
 │       ├── scrollback.rs # ANSI 历史落盘（D5：0600/tmp+rename/UTF-8 截断/路径逃逸防护）
 │       ├── cwd.rs        # [platform] 前台进程 cwd 采样（/proc）
-│       └── terminal_ws.rs# pty WS attach：补屏回放 + resize nudge + detach 语义
+│       └── terminal_ws.rs# pty WS attach：补屏回放 + detach 语义 + cell_frame/viewport_request 读转发循环
 ├── agent/                # 引擎无关的 agent 检测体系
 │   ├── state.rs          # Agent state data model: AgentKind, AgentState, AgentSnapshot
 │   ├── detect.rs         # 屏幕规则引擎：TOML manifest 编译 + evaluate(屏幕/标题→状态) + Debounce 防抖（herdr 借鉴）
@@ -102,6 +102,16 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 > 进入 alt-screen 时保留当前光标行（`\x1b[?1049h` 后 capture 首行可能为空，
 > wezterm-term/vt100 归位首行）——xterm 语义上更正确，对整屏文本匹配的
 > agent 检测无影响。OSC 52 剪贴板在服务端显式关闭（归前端 xterm.js）。
+>
+> **历史视口窗口（方案 C Phase 1，2026-08-28）**：cell_frame 模式下前端 xterm
+> scrollback 结构性冻结（根因核查见 `docs/dev/plans/backlog/pty-scroll-handover.md`
+> §零），历史视图职责移交后端：前端发 `{"type":"viewport_request","y"}` 控制帧
+> （仅 pty 引擎消费；tmux raw 直通无服务端 grid，no-op），读循环经有界通道
+> （容量 4，队满丢新不阻塞输入）递交转发循环，由 `encode_viewport_frame(y)`
+> 编码：以 y（行，0=live 屏）为窗口顶的整屏全帧，y 钳制到 grid
+> `history_size()`（1000 行 scrollback），y>0 光标隐藏、不触碰 diff 基线
+> （实时流独立继续）。帧携带 `viewport: y` 标记供前端区分历史帧并按 y
+> 单调性丢弃 stale 响应（方案 D2）。
 
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 

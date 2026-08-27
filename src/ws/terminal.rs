@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum ClientControl {
     #[serde(rename = "resize")]
@@ -21,6 +21,11 @@ pub enum ClientControl {
     /// 中间帧无法重建，服务端收到后作废 diff 记忆，下一帧发全帧。
     #[serde(rename = "resync")]
     Resync,
+    /// 历史视口窗口请求（方案 C Phase 1，仅 pty 引擎消费）：滚轮接管后前端
+    /// 请求以 `y`（行，0 = live 屏）为顶的历史窗口帧。负值无意义，处理侧
+    /// 钳制；上界由 encode_viewport_frame 钳到实际 history_size。
+    #[serde(rename = "viewport_request")]
+    ViewportRequest { y: i32 },
 }
 
 #[derive(Debug, Serialize)]
@@ -90,4 +95,25 @@ pub async fn ws_external_terminal_handler(
     ws.on_upgrade(move |socket| {
         crate::engine::run_external_terminal_session(socket, session_name, query, state)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn viewport_request_parses() {
+        let ctrl: ClientControl =
+            serde_json::from_str(r#"{"type":"viewport_request","y":42}"#).unwrap();
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42 });
+    }
+
+    #[test]
+    fn legacy_control_frames_still_parse() {
+        let resync: ClientControl = serde_json::from_str(r#"{"type":"resync"}"#).unwrap();
+        assert_eq!(resync, ClientControl::Resync);
+        let resize: ClientControl =
+            serde_json::from_str(r#"{"type":"resize","cols":80,"rows":24}"#).unwrap();
+        assert_eq!(resize, ClientControl::Resize { cols: 80, rows: 24 });
+    }
 }

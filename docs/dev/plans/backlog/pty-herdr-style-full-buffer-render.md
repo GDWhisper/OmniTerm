@@ -1,6 +1,7 @@
 # PTY Herdr 式全缓冲前端渲染
 
 > **状态**：✅ **已立项（2026-08-28）**。核查确认本方案是唯一架构自洽的出路：cell_frame 模式下前端 xterm scrollback 结构性冻结（详见 `pty-scroll-handover.md` §零 核查点 3），滚轮问题的唯一出路是把历史视图职责整个移交后端。前提已验证：后端 grid 实际使用 **alacritty_terminal**（非早期文档所述 avt），配有 1000 行 scrollback（`vt.rs` `scrolling_history: VT_SCROLLBACK_LINES`），`encode_viewport_frame` 的数据基础真实存在。实施前需过一遍文末「实施前评审决策点」。
+> **进度**：Phase 1 ✅（2026-08-28：`encode_viewport_frame` + `viewport_request` 控制帧 + 有界通道，前后端协议字段 `viewport: y` 已定型；前端未消费，行为无变化）。Phase 2（ViewportController + wheel 接管 + D3 状态机）与 Phase 3（D5/D7 清理 + 回归）待实施。
 > **触发条件**：重新评估终端滚动架构、或前端渲染层改造时参考。
 > **关联**：`docs/dev/plans/2026-08-13-port-forward-proxy.md`（协议设计）、
 > `docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B，已撤销）。

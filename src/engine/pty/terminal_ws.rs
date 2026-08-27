@@ -10,13 +10,17 @@ use portable_pty::PtySize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::AppState;
 use crate::engine::pty::events::SemanticEvent;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
 
 use serde::Deserialize;
+
+/// Viewport 请求通道容量上限（P1 有界）：wheel 高频时旧请求由前端 rAF 合并
+/// （D2），后端仅兜底；队满丢新不阻塞读循环，后续 wheel 请求即覆盖。
+const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).
 #[derive(Debug, Deserialize)]
@@ -107,6 +111,9 @@ pub async fn handle_pty_terminal(
 
     // === WS binary → PTY stdin（专用写线程，写尽语义见 PtyAttach::write）===
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    // === 历史视口请求（方案 C Phase 1）：读循环递交 y，转发循环编码响应帧 ===
+    let (viewport_tx, mut viewport_rx) =
+        tokio::sync::mpsc::channel::<u32>(MAX_PENDING_VIEWPORT_REQUESTS);
     let writer_attach = attach.clone();
     let resize_attach = attach.clone();
     let writer_key = key.clone();
@@ -211,6 +218,22 @@ pub async fn handle_pty_terminal(
                             }
                         }
                     }
+                    // 历史视口请求：编码 y 窗口帧（y 钳制在 encode 内；实时
+                    // diff 流独立继续，前端在 viewport 模式下自行丢弃实时帧）
+                    viewport_y = viewport_rx.recv() => {
+                        // None = 读循环已结束（唯一 sender 被 drop），与
+                        // agent_rx 同语义退出，避免空转
+                        let Some(y) = viewport_y else { break };
+                        trace!(y, "viewport request served: session={session_id_for_frame}");
+                        let json = {
+                            // encode_viewport_frame 仅需 &self（不动 diff 基线）
+                            let vt_guard = encode_attach.state.vt.lock().unwrap();
+                            vt_guard.encode_viewport_frame(&session_id_for_frame, y)
+                        };
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
                     // 排干 raw bytes + 立即编码推送：消除最长 33ms 的 tick
                     // 盲区（连按回车时行「攒一批突然出现」的根因）
                     _ = rx.recv() => {
@@ -294,6 +317,17 @@ pub async fn handle_pty_terminal(
                                 // 前端丢帧后重同步：作废 diff 基线，下一帧发全帧。
                                 // vt 为会话共享，全帧对其他连接同样安全。
                                 resize_attach.state.vt.lock().unwrap().invalidate_diff();
+                            }
+                            ClientControl::ViewportRequest { y } => {
+                                // 方案 C Phase 1：仅 cell_frame 模式有意义（raw
+                                // 模式 xterm 自持 scrollback）。负值锂 0，上界
+                                // 由 encode_viewport_frame 钳到 history_size。
+                                if read_cfe.load(Ordering::Relaxed) {
+                                    let y = y.max(0) as u32;
+                                    if let Err(e) = viewport_tx.try_send(y) {
+                                        debug!(y, "viewport request dropped: {e}");
+                                    }
+                                }
                             }
                         }
                     }

@@ -466,7 +466,7 @@ impl VtState {
         let rows = self.term.screen_lines();
         let cols = self.term.columns();
         let out_rows: Vec<RowData> =
-            (0..rows).map(|r| self.encode_row_static(grid, cols, r)).collect();
+            (0..rows).map(|r| self.encode_row_static(grid, cols, Line(r as i32))).collect();
 
         let rc = self.term.renderable_content();
         let cursor = Some(CursorState {
@@ -485,6 +485,7 @@ impl VtState {
             cursor,
             overlay: true,
             row_indices: None,
+            viewport: None,
             rows: out_rows,
         };
 
@@ -493,6 +494,54 @@ impl VtState {
         // Force next periodic frame to be full since rendering context changed.
         crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
 
+        json
+    }
+
+    /// 历史视口窗口帧（方案 C Phase 1，`pty-herdr-style-full-buffer-render.md`）：
+    /// 以偏移 `y`（行，0 = live 屏，向上递增）为窗口顶，编码 `screen_lines()` 行。
+    /// 滚轮接管后前端经 `viewport_request` 请求，取代 xterm 本地 scrollback。
+    ///
+    /// - `y` 钳制到 `history_size()`（外部输入兜底，负偏移在读循环侧已拦）；
+    /// - 帧恒 `full: true` + `viewport: Some(y)`，不触碰 diff 基线
+    ///   （实时流独立继续，前端在 viewport 模式下自行丢弃实时帧）；
+    /// - `y > 0` 时光标隐藏（历史窗口内无活光标），`y = 0` 携带真实光标
+    ///   （回底校准帧与 overlay 帧同语义）。
+    ///
+    /// 响应体积由构造有界（`rows × cols`，与 overlay 帧同级，PtySize ≤ 1000×1000）。
+    pub fn encode_viewport_frame(&self, session_id: &str, y: u32) -> String {
+        let grid = self.term.grid();
+        let rows = self.term.screen_lines();
+        let cols = self.term.columns();
+        let y = (y as usize).min(grid.history_size()) as u32;
+
+        let out_rows: Vec<RowData> = (0..rows)
+            .map(|i| self.encode_row_static(grid, cols, Line(i as i32 - y as i32)))
+            .collect();
+
+        let rc = self.term.renderable_content();
+        let cursor = Some(CursorState {
+            row: 1,
+            col: 1,
+            shape: Some(decscusr_code(rc.cursor.shape)),
+            // y = 0 回底校准帧携带真实光标；y > 0 历史窗口无活光标，隐藏
+            visible: y == 0 && !matches!(rc.cursor.shape, CursorShape::Hidden),
+        });
+
+        let frame = CellFrame {
+            t: "cell_frame",
+            session_id: session_id.to_string(),
+            width: cols as u16,
+            height: rows as u16,
+            full: true,
+            cursor,
+            overlay: false,
+            row_indices: None,
+            viewport: Some(y),
+            rows: out_rows,
+        };
+
+        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
+        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
         json
     }
 
@@ -531,8 +580,10 @@ impl VtState {
         let changed_indices = self.diff_engine.changed_rows_from(&row_hashes);
 
         // Build row data only for changed rows
-        let out_rows: Vec<RowData> =
-            changed_indices.iter().map(|&r| self.encode_row_static(grid, cols, r)).collect();
+        let out_rows: Vec<RowData> = changed_indices
+            .iter()
+            .map(|&r| self.encode_row_static(grid, cols, Line(r as i32)))
+            .collect();
 
         // Cursor diff: include only when position/shape/visibility changed
         let rc = self.term.renderable_content();
@@ -569,6 +620,7 @@ impl VtState {
             cursor,
             overlay,
             row_indices,
+            viewport: None,
             rows: out_rows,
         };
 
@@ -604,15 +656,17 @@ impl VtState {
     }
 
     /// Encode one row as RowData (no lock needed - caller holds grid ref).
+    /// `line` 为 grid 绝对行：`Line(0..screen_lines)` = 可见屏，负值 = 历史
+    /// （`Line(-1)` 紧贴屏顶上方），供 viewport 窗口编码复用。
     fn encode_row_static(
         &self,
         grid: &alacritty_terminal::grid::Grid<Cell>,
         cols: usize,
-        row: usize,
+        line: Line,
     ) -> RowData {
         let mut cells: Vec<CellData> = Vec::with_capacity(cols);
         for col in 0..cols {
-            let cell_ref = &grid[Line(row as i32)][Column(col)];
+            let cell_ref = &grid[line][Column(col)];
             if cell_ref.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
                 cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
@@ -988,5 +1042,98 @@ mod tests {
         assert_eq!(parsed["full"], true);
         let cursor = parsed["cursor"].as_object().unwrap();
         assert!(cursor.get("shape").is_some(), "overlay cursor must include shape");
+    }
+
+    // ──── 方案 C Phase 1: encode_viewport_frame ────
+
+    /// 填满 24 行屏后多滚进历史的固定场景：末次 \r\n 也触发上滚，
+    /// 历史 7 行（L0..L6），屏顶 L7，末行空白（光标行）。
+    fn vt_with_history() -> VtState {
+        let mut v = vt(24, 80);
+        for i in 0..30 {
+            v.feed(format!("L{i}\r\n").as_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn viewport_frame_y0_is_live_screen_with_marker() {
+        let v = vt_with_history();
+        let json = v.encode_viewport_frame("ts", 0);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["viewport"], 0, "viewport marker must carry y");
+        assert_eq!(parsed["full"], true);
+        assert_eq!(parsed["overlay"], false);
+        assert!(parsed["row_indices"].is_null());
+        let rows = parsed["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 24);
+        // y=0 窗口 = live 屏：顶行 L7
+        assert_eq!(rows[0]["cells"][0]["ch"].as_str(), Some("L"));
+        assert_eq!(rows[0]["cells"][1]["ch"].as_str(), Some("7"));
+        // 光标可见（回底校准帧与 overlay 同语义）
+        assert_eq!(parsed["cursor"]["visible"].as_bool(), Some(true));
+    }
+
+    /// 断言窗口顶行文本（取前两格，避开尾随空白格）
+    fn top_row_text(parsed: &serde_json::Value) -> String {
+        let cells = parsed["rows"][0]["cells"].as_array().unwrap();
+        cells[0]["ch"].as_str().unwrap().to_string() + cells[1]["ch"].as_str().unwrap()
+    }
+
+    #[test]
+    fn viewport_frame_scrolls_into_history() {
+        let v = vt_with_history();
+        // 历史 7 行（L0..L6）；y=7 窗口顶 = Line(-7) = L0
+        let json = v.encode_viewport_frame("ts", 7);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(top_row_text(&parsed), "L0");
+        // y=5 窗口顶 = Line(-5) = L2
+        let json = v.encode_viewport_frame("ts", 5);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(top_row_text(&parsed), "L2");
+    }
+
+    #[test]
+    fn viewport_frame_y_clamps_to_history_size() {
+        let v = vt_with_history();
+        // 超界 y 钳制到 history_size（6），不 panic 且内容与 y=6 相同
+        let json = v.encode_viewport_frame("ts", u32::MAX);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["viewport"], 7, "y must clamp to history size");
+        assert_eq!(top_row_text(&parsed), "L0");
+    }
+
+    #[test]
+    fn viewport_frame_hides_cursor_above_bottom() {
+        let v = vt_with_history();
+        let json = v.encode_viewport_frame("ts", 6);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(
+            parsed["cursor"]["visible"].as_bool(),
+            Some(false),
+            "history window has no live cursor"
+        );
+        let json = v.encode_viewport_frame("ts", 0);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["cursor"]["visible"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn viewport_frame_does_not_disturb_diff_baseline() {
+        let mut v = vt_with_history();
+        let _ = v.encode_cell_frame("ts"); // full
+        let _ = v.encode_viewport_frame("ts", 6); // 不触碰 diff 基线
+        let json = v.encode_cell_frame("ts"); // 实时流继续 diff
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["full"], false, "viewport encode must not invalidate diff");
+        assert!(parsed["row_indices"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn viewport_frame_empty_history_clamps_to_zero() {
+        let v = vt(24, 80); // 无历史
+        let json = v.encode_viewport_frame("ts", 10);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
+        assert_eq!(parsed["viewport"], 0, "empty history clamps y to 0");
     }
 }

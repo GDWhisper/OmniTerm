@@ -25,6 +25,11 @@ pub struct CellFrame {
     /// diff 帧时 `rows` 仅含变化行，`row_indices` 标注各行在原 grid 中的位置。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_indices: Option<Vec<usize>>,
+    /// Viewport 窗口帧标记（方案 C Phase 1）：携带本帧展示的历史窗口偏移
+    /// （行，0 = live 屏）。仅 `viewport_request` 的响应帧携带，常规/overlay
+    /// 帧省略——前端据此区分历史帧与实时帧（stale 响应按 y 单调性丢弃）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<u32>,
     pub rows: Vec<RowData>,
 }
 
