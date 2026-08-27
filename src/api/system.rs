@@ -126,6 +126,10 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
 // 自重启延迟：先让 POST /system/update 的响应完整 flush 回前端（keep-alive
 // 连接在 exec 后即断，响应体未读完会触发前端 fetch 异常），再 exec 新二进制。
 const RELAUNCH_DELAY: Duration = Duration::from_secs(3);
+// 自重启前回收 ACP 子进程的最长等待：shutdown_all 内部依赖子进程退出确认，
+// 任一环节卡住会让 exec 永远执行不到且无日志（静默不重启）。超时后放弃等待
+// 照常 exec——进程换血优先，残留子进程过继给 init 并留 warn 日志。
+const RELAUNCH_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
 struct CacheEntry {
     at: Instant,
@@ -244,7 +248,15 @@ async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                 let supervisor = state.acp_supervisor.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(RELAUNCH_DELAY).await;
-                    supervisor.shutdown_all().await;
+                    if tokio::time::timeout(RELAUNCH_SHUTDOWN_TIMEOUT, supervisor.shutdown_all())
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!(
+                            "ACP shutdown exceeded {:?}, relaunching anyway; stale agent children may linger",
+                            RELAUNCH_SHUTDOWN_TIMEOUT,
+                        );
+                    }
                     if let Err(e) = update::relaunch() {
                         tracing::error!("auto-relaunch failed, restart manually: {e:#}");
                     }

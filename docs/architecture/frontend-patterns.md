@@ -151,7 +151,7 @@
 
 - `frontend/src/components/Settings/SettingsPopup.tsx` + `Settings.tsx` — 设置面板（游戏风格 tab 菜单，详细见下节）
 - `frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx` + `TmuxCheatsheet.tsx` — tmux 快捷键速查（简单单 section 版本）
-- `frontend/src/components/Sidebar/UpdateBadge.tsx` — 版本升级面板；`useAnchorPopup` **free 模式**首个使用者（不传 `topAnchorSelector`，触发按钮在顶栏、上方空间不足自动向下弹）；open 状态为组件本地 `useState`，不进 appStore
+- `frontend/src/components/Sidebar/UpdateBadge.tsx` — 版本升级面板；`useAnchorPopup` **free 模式**首个使用者（不传 `topAnchorSelector`，触发按钮在顶栏、上方空间不足自动向下弹）；open 状态为组件本地 `useState`，不进 appStore；一键升级后的自重启确认按 `/api/v1/health` 的 `version` 字段比对目标版本（非捕捉断连，行为详述见 `docs/architecture/backend.md` /system/update）
 
 **复制清单**（新增一个简单 sidebar 弹出面板时）：
 

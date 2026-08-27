@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-08-27 18:15) `[backend]` `[frontend]` 修复一键升级「自重启静默失败 + 自动刷新假承诺」（实测远程实例升级到新版后进程未换血、页面刷新永远拿旧版）：后端自重启链的 ACP 回收包上 15s 超时（`RELAUNCH_SHUTDOWN_TIMEOUT`），超时记 warn 后照常 exec，杜绝 `shutdown_all` 无界挂起导致 exec 永不执行；前端 UpdateBadge 重启监测从「捕捉断连→恢复」改为按 `/api/v1/health` 的 `version` 字段比对目标版本（不再要求捕捉断连瞬间，SSH 隧道拆线/后台标签节流的远程接入也能确认切换；health 缺 version 的旧实现保留断连-恢复回退）；文案去除「页面将自动刷新」承诺，60s 未确认时显示需手动重启的诚实提示（`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
+
 ## [0.2.18] - 2026-08-27
 
 ### Added
