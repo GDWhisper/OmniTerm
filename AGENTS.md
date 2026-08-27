@@ -114,8 +114,6 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `docs/dev/plans/2026-08-16-files-watch-hardening.md` | 修改 `src/api/files_watch.rs`、`src/fs/mod.rs` 的 ignore 规则（`SKIP_DIRS` / `search_recursive`）、`frontend/src/hooks/useFileWatcher.ts`、`FileManager.tsx` 文件变更刷新链路任一项前**必读**（watch 数硬上界 ADR-1、手动递归按平台分流 ADR-2、ignore 单一真源 ADR-4 的决策与分期） | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/plans/2026-08-18-permission-recycle-notice.md` | 修改 `src/acp/reaper.rs`（回收分支）、`src/acp/client.rs`（system 通知通道）、`src/ws/acp.rs`（system_message 帧）、`chat_messages.role` 语义（migration `20260818_chat_message_role_system.sql`）任一项前**必读**（权限超时回收时 system 告知的决策与实施） | 行为变更、勘误时更新 |
 | `docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md` | 修改 `useAcpChat.ts`（replay 帧门控 / hydrate 收敛）、`chatStore.ts`（sync 路径）、`chat_persistence.rs`（sync_messages 匹配）、`turn_accumulator.rs`（text 语义）前**必读**——幽灵行（RAW 残留 + hydrate/replay 竞态 + text 语义漂移 → INSERT 重复消息）的根因链与修复方案，及正式版环境污染/日志丢失待办 | Phase 推进、方案实施后更新状态 |
-| `docs/dev/plans/backlog/pty-scroll-handover.md` | 修改 pty 终端滚轮/scrollback/输入回显相关（`useTerminal.ts` 输入/滚动路径、`ptyInputFilter.ts`、`useCellFrame.ts`、`terminal_ws.rs` 转发分支）前**必读**——滚轮间歇失效根因（cell_frame 下前端 scrollback 冻结）与 `1;2c` DA1 应答泄漏的完整核查链，及对前期错误前提的勘误 | 根因链补充、勘误追加时更新 |
-| `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md` | 实施方案 C（后端 viewport 窗口渲染）或重构终端滚动架构前**必读**（架构、D1-D9 实施决策点、分期）；方案 B（`pty-cell-frame-viewport-scroll.md`）已撤销，勿实施 | Phase 推进、决策翻盘（就地加「勘误」块） |
 | `.github/workflows/ci.yml` | 修改 CI 门禁（触发分支、检查项、audit job）前 | 调整 CI 检查项、分阶段启用 clippy/fmt/deny、拆分 job |
 | `scripts/hooks/pre-commit` | 修改提交前检查前 | 调整 pre-commit 纳入的检查（lint/fmt/clippy/test） |
 | `deny.toml` / `rustfmt.toml` | 修改依赖审计或格式化基线前 | 调整许可证白名单、格式化选项 |
