@@ -105,7 +105,11 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       ws.send(JSON.stringify({ type: 'resync' }))
     }
   }, [])
-  const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync)
+  // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
+  const [scrollMode, setScrollMode] = useState(false)
+  const scrollModeRef = useRef(false)
+  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
+  const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync, scrollModeRef)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const composingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -134,8 +138,6 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   // creation (e.g., React StrictMode double-mount or rapid session switch).
   // A fresh controller is created for each initTerminal call.
   const abortRef = useRef<AbortController | null>(null)
-  // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
-  const [scrollMode, setScrollMode] = useState(false)
   // Guards against concurrent terminal (re)creation. After a blur/idle
   // disconnect the term ref is nulled, so `initTerminal`'s `termRef.current`
   // guard can't stop a second (rapid) click from also entering
@@ -146,12 +148,6 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   // Stable ref for the consume-latch callback so connectWs closure is current
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
-  // Mirror scrollMode into a ref so the createTerminal closure (and any
-  // other long-lived callback) can read the current value without being
-  // rebuilt on every state change.  createTerminal has [] deps to keep its
-  // identity stable across renders — we can't add scrollMode there.
-  const scrollModeRef = useRef(false)
-  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -585,12 +581,20 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     // pty 分流（D12）：无 tmux copy-mode 状态可查，滚动态改由视口位置派生——
     // 视口不在 scrollback 底部即视为"滚动中"（MobileKeyBar 高亮 + 软键盘抑制
-    // 与 tmux 路径语义一致）。tmux 会话走 tmuxScrollModeRef，不订阅。
+    // 与 tmux 路径语义一致）。用户滚回底部时触发 resync，确保最新全帧
+    // 刷新已过期的 viewport 内容（关闭 scrollback 可视化间隙）。
     if (runtimeKindRef.current === 'pty') {
       listenerDisposablesRef.current.push(
         term.onScroll(() => {
           const buf = term.buffer.active
-          setScrollMode(buf.viewportY < buf.baseY)
+          const wasScrolled = scrollModeRef.current
+          const isScrolled = buf.viewportY < buf.baseY
+          setScrollMode(isScrolled)
+          // 从滚动中回到底部：触发 resync 让后端发全帧，
+          // useCellFrame 会 flush 之前 stash 的全帧。
+          if (wasScrolled && !isScrolled) {
+            requestResync()
+          }
         })
       )
     }

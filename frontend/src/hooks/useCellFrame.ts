@@ -159,13 +159,60 @@ const RESYNC_THROTTLE_MS = 1000
 export function useCellFrame(
   termRef: React.RefObject<Terminal | null>,
   requestResync?: () => void,
+  /**
+   * Current scroll mode state (true = user has scrolled up into scrollback).
+   * When true, full/overlay frames are stashed instead of rendered — they
+   * would otherwise overwrite the viewport with live content and yank the
+   * user's scroll position back to the bottom.
+   */
+  scrollModeRef?: React.MutableRefObject<boolean>,
 ) {
   const frameQueue = useRef<CellFrame[]>([])
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
+  // Latest full/overlay frame received while user is scrolled up.  Rendered
+  // the moment scrollMode goes false (user returns to bottom).
+  const pendingFullRef = useRef<CellFrame | null>(null)
 
   const enqueue = useCallback((frame: CellFrame) => {
     const q = frameQueue.current
+
+    // When the user is viewing scrollback, full/overlay frames would overwrite
+    // the viewport with live content (disrupting scroll).  Stash the latest
+    // one — it will be flushed when scrollMode goes false.  Diff frames are
+    // still rendered (they touch specific rows that are visible).
+    const skipFull = (frame.full || frame.overlay) && scrollModeRef?.current
+    if (skipFull) {
+      pendingFullRef.current = frame
+      return
+    }
+
+    // Flush any stashed full frame before the new one so the terminal
+    // transitions from stale → fresh in the correct order.
+    const pending = pendingFullRef.current
+    if (pending) {
+      pendingFullRef.current = null
+      if (q.length >= MAX_PENDING_FRAMES) {
+        q.length = 0
+        const now = performance.now()
+        if (now - lastResyncAt.current >= RESYNC_THROTTLE_MS) {
+          lastResyncAt.current = now
+          requestResync?.()
+        }
+        return
+      }
+      q.push(pending)
+      if (rafId.current == null) {
+        rafId.current = requestAnimationFrame(() => {
+          rafId.current = null
+          const term = termRef.current
+          const frames = frameQueue.current
+          frameQueue.current = []
+          if (!term) return
+          for (const f of frames) renderCellFrame(term, f)
+        })
+      }
+    }
     if (q.length >= MAX_PENDING_FRAMES) {
       q.length = 0
       const now = performance.now()
@@ -186,7 +233,7 @@ export function useCellFrame(
         for (const f of frames) renderCellFrame(term, f)
       })
     }
-  }, [termRef, requestResync])
+  }, [termRef, requestResync, scrollModeRef])
 
   return { enqueue }
 }
