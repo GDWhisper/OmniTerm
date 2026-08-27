@@ -10,6 +10,7 @@ import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
+import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
 import { useCellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
@@ -264,6 +265,11 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     listenerDisposablesRef.current.push(
       term.onData((data) => {
         if (ws.readyState !== WebSocket.OPEN) return
+        // pty 双终端模拟器架构：查询类序列的应答由后端 VT 统一回写 PTY，
+        // 前端 xterm 的自动应答是纯重复，tmux 对迟到重复应答会透传回显
+        // （症状：会话切换后屏幕冒出 1;2c1;2c，详见 ptyInputFilter.ts 顶部）。
+        // tmux/外部会话不过滤 —— 那里前端 xterm 是唯一终端模拟器，应答必需。
+        if (runtimeKindRef.current === 'pty' && isTerminalAutoResponse(data)) return
         // During IME composition, xterm emits intermediate (half-finished)
         // text. Always drop it — whether or not a modifier is latched. The
         // final committed text is re-emitted by xterm via onData AFTER
