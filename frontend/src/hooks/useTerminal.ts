@@ -155,11 +155,21 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (!id || !term) return
 
     // Close existing connection
+    const wasConnected = wsRef.current !== null
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.onerror = null
       wsRef.current.close()
       wsRef.current = null
+    }
+
+    // Reset terminal immediately on session switch so the old session's
+    // scrollback / SGR state can't bleed into the new session's first
+    // cell_frame.  The onmessage handler also resets on first frame as a
+    // safety net, but that fires AFTER the frame is decoded — too late to
+    // prevent a flash of stale content.
+    if (wasConnected) {
+      termRef.current?.reset()
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -291,6 +301,11 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (!keyHandlerAttachedRef.current) {
       keyHandlerAttachedRef.current = true
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+        // Read the current WS from the ref (not closure) so session-switch
+        // always targets the live connection.
+        const ws = wsRef.current
+        if (!ws || ws.readyState !== WebSocket.OPEN) return true
+
         // Only intercept in modern mode — and only for tmux sessions: the
         // shortcuts inject tmux prefix bytes (\x02...), which a pty session
         // has no concept of (D12 分流).
@@ -310,27 +325,25 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
         // Ctrl+Shift+Right → horizontal split
         if (ctrl && shift && !alt && key === 'ArrowRight') {
-          ws.send(new TextEncoder().encode('\x02%'))
+          wsRef.current?.send(new TextEncoder().encode('\x02%'))
           return false
         }
         // Ctrl+Shift+Down → vertical split
         if (ctrl && shift && !alt && key === 'ArrowDown') {
-          ws.send(new TextEncoder().encode('\x02"'))
+          wsRef.current?.send(new TextEncoder().encode('\x02"'))
           return false
         }
         // Ctrl+Shift+Q → new window
         if (ctrl && shift && !alt && key === 'Q') {
-          ws.send(new TextEncoder().encode('\x02c'))
+          wsRef.current?.send(new TextEncoder().encode('\x02c'))
           return false
         }
         // Ctrl+Shift+X → close pane (send kill-pane + auto-confirm 'y')
         if (ctrl && shift && !alt && key === 'X') {
-          ws.send(new TextEncoder().encode('\x02x'))
+          wsRef.current?.send(new TextEncoder().encode('\x02x'))
           // Auto-confirm the tmux kill-pane prompt
           setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(new TextEncoder().encode('y\n'))
-            }
+            wsRef.current?.send(new TextEncoder().encode('y\n'))
           }, 50)
           return false
         }
