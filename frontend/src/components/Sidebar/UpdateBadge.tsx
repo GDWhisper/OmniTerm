@@ -20,6 +20,8 @@ interface VersionInfo {
   latest: string
   channel: 'npm' | 'cargo' | 'github_release'
   container: boolean
+  /** 服务端按自身 argv 组装的忠实重启命令（补 -d、带 --db、脱敏 secret） */
+  restart_command: string
 }
 
 type UpdatePhase = 'idle' | 'updating' | 'done'
@@ -257,8 +259,8 @@ function UpdatePanel({
                   ? t('update.autoRestarting', { seconds: countdown })
                   : t('update.restarting', { version: targetVersion ?? info.latest })
                 : restartFailed
-                  ? t('update.restartTimeout', { version: targetVersion ?? info.latest })
-                  : t('update.restartHint')}
+                  ? t('update.restartTimeout', { version: targetVersion ?? info.latest, command: info.restart_command })
+                  : t('update.restartHint', { command: info.restart_command })}
             </div>
           )}
           <a

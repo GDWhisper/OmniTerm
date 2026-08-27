@@ -178,6 +178,11 @@ async fn version_check() -> (StatusCode, Json<Value>) {
             "channel": channel,
             // 容器环境：一键升级替换的二进制在容器重启后还原为镜像旧版，属无效更新
             "container": update::in_container(),
+            // 忠实复现本进程启动形态的重启命令（前端手动重启提示用，见 update::restart_command）
+            "restart_command": update::restart_command(
+                &std::env::args_os().collect::<Vec<_>>(),
+                crate::DAEMONIZED.load(std::sync::atomic::Ordering::Relaxed),
+            ),
         })),
     )
 }

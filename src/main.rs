@@ -182,6 +182,11 @@ fn pid_path(db_url: &str) -> String {
     format!("{}.pid", path)
 }
 
+/// 进程是否为 `start -d` daemon 形态（daemon 子进程置位）。exec 自重启会剥离
+/// argv 里的 `-d`（见 `update::strip_daemon_flag`）但进程仍是 daemon，前端手动
+/// 重启提示组装命令时需据此补回 `-d`（见 `update::restart_command`）。
+pub static DAEMONIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(unix)]
 fn pid_exists(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
@@ -536,17 +541,20 @@ fn main() -> anyhow::Result<()> {
     // Daemonize before tokio runtime. 父进程阻塞等待 daemon 子进程的就绪/失败握手，
     // 保证 `start -d` 能如实反馈启动结果：失败时错误打印到终端并以非零退出。
     #[cfg(unix)]
-    let daemon_pipe: Option<RawFd> =
-        if let Commands::Start(ref args) = cli.command
-            && args.daemonize
-        {
-            let log_path = daemon_log_path();
+    let daemon_pipe: Option<RawFd> = if let Commands::Start(ref args) = cli.command
+        && args.daemonize
+    {
+        let log_path = daemon_log_path();
+        let fd =
             Some(daemonize(&log_path).with_context(|| {
                 format!("failed to daemonize (log file: {})", log_path.display())
-            })?)
-        } else {
-            None
-        };
+            })?);
+        // daemonize() 父进程在其内部握手后已退出，走到这里只可能是 daemon 子进程
+        DAEMONIZED.store(true, std::sync::atomic::Ordering::Relaxed);
+        fd
+    } else {
+        None
+    };
     #[cfg(not(unix))]
     let daemon_pipe: () = ();
     #[cfg(not(unix))]

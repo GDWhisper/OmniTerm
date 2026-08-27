@@ -76,6 +76,7 @@ describe('UpdateBadge 重启监测', () => {
       latest: '0.2.18',
       channel: 'github_release',
       container: false,
+      restart_command: 'omniterm stop && omniterm start -d -H 0.0.0.0',
     })
     vi.mocked(api.systemUpdate).mockResolvedValue({
       status: 'updated',
@@ -143,6 +144,8 @@ describe('UpdateBadge 重启监测', () => {
     await advanceClock(65_000)
     expect(reload).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('has not switched to v0.2.18')
+    // 手动重启提示渲染服务端回传的忠实命令（自定义参数不丢失）
+    expect(document.body.textContent).toContain('omniterm start -d -H 0.0.0.0')
   })
 
   it('旧实现 health 无 version 字段 → 回退到断连→恢复触发刷新', async () => {
