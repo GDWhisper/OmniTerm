@@ -103,6 +103,13 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 > wezterm-term/vt100 归位首行）——xterm 语义上更正确，对整屏文本匹配的
 > agent 检测无影响。OSC 52 剪贴板在服务端显式关闭（归前端 xterm.js）。
 >
+> **每个 TCP 连接开 `TCP_NODELAY`（2026-08-28）**：终端是交互式小包流（键盘字节、
+> 30fps cell_frame 差分帧、viewport 请求）。开 Nagle 时，紧随一个大帧发出的小帧
+> 要等前一个包的 ACK，与对端 Delayed ACK（Linux 默认 40 ms）叠加后，实测 viewport
+> 请求→响应的尾延迟 p95 从 5.4 ms 涨到 42 ms、max 50 ms。经 `axum::serve` 的
+> `ListenerExt::tap_io` 在 accept 时逐个连接设置（`src/main.rs`）；HTTP 响应同样
+> 受益。相关实测见 `docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2(b)。
+>
 > **cell_frame 行编码（RLE，2026-08-28）**：`rows[]` 每行有两种负载，由**连接级**
 > `hello` 握手协商（`{"t":"hello","supports_cell_frame":true,"row_encoding":"runs"}`
 > → RLE；字段缺失或取其他值 → 逐 cell）：

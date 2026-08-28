@@ -24,6 +24,12 @@ use serde::Deserialize;
 /// （D2），后端仅兜底；队满丢新不阻塞读循环，后续 wheel 请求即覆盖。
 const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 
+/// 单帧「编码 + 发送」耗时告警阈值。转发循环是单个 `select!`，分支内的
+/// `send().await` 一旦被背压阻塞，其余分支（含 viewport 请求）在此期间得不到
+/// 轮询 —— 这是 30fps 实时帧拖慢滚动响应的机制，留告警防止其悄悄回潮
+/// （`docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
+const SLOW_FRAME_US: u64 = 5_000;
+
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).
 #[derive(Debug, Deserialize)]
 struct ClientHello {
@@ -267,8 +273,14 @@ pub async fn handle_pty_terminal(
                     }
                     // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）
                     _ = tick.tick() => {
+                        let t0 = std::time::Instant::now();
                         let json = encode_now();
-                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                        let sent = ws_tx.send(Message::Text(json.into())).await;
+                        let el = t0.elapsed().as_micros() as u64;
+                        if el > SLOW_FRAME_US {
+                            warn!(el, "slow tick frame: loop blocked while sending");
+                        }
+                        if sent.is_err() {
                             break;
                         }
                     }

@@ -84,36 +84,6 @@ pub struct CursorState {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Row hashing (Phase 3 DiffEngine)
-// ──────────────────────────────────────────────────────────────
-
-/// Row-level fingerprint: FNV-1a 64-bit over visible cells' (char, sgr) pairs.
-/// Unchanged rows produce identical hashes → skipped in diff frames.
-#[inline]
-pub fn hash_row(cells: &[CellData]) -> u64 {
-    let mut h: u64 = 14695981039346656037;
-    for cell in cells {
-        if cell.skip {
-            // Spacer cell: mix in a sentinel so empty spacer disturbs hash differently
-            // from no-cell-at-all (both happen in well-formed grids).
-            h ^= 0x42;
-            h = h.wrapping_mul(1099511628211);
-            continue;
-        }
-        for b in cell.ch.bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(1099511628211);
-        }
-        for b in cell.sgr.bytes() {
-            // Prefix sgr bytes with 0x80 to disambiguate from identical char bytes.
-            h ^= 0x80 | (b as u64);
-            h = h.wrapping_mul(1099511628211);
-        }
-    }
-    h
-}
-
-// ──────────────────────────────────────────────────────────────
 // DiffEngine (Phase 3)
 // ──────────────────────────────────────────────────────────────
 

@@ -14,9 +14,10 @@
  *   [C] 帧体积 vs 滚动步长 —— 验证「滚 1 行也传整屏」
  *   [D] 按内容类型的瘦身收益与无损性
  *
- * [A][B][C] 走 RLE（runs）连接；[D] 对**同一会话**另开一个 cells 连接，
- * 同一 y 各取一帧做交叉比对 —— 行编码是连接级协商的结果，故两个连接可
- * 同时存在且互不干扰，无损性由此成为实测而非估算。
+ * [A][B][C] 只开一条主连接（编码由 `ROW_ENCODING` 指定，默认 runs）；[D] 对
+ * **同一会话**另开一个用另一种编码的连接，同一 y 各取一帧做交叉比对 —— 行
+ * 编码是连接级协商的结果，故两个连接可同时存在且互不干扰，无损性由此成为
+ * 实测而非估算。
  *
  * 依赖：Node ≥ 22（内置 WebSocket / fetch）。`DEBUG=1` 可打印前若干条原始消息。
  */
@@ -42,6 +43,14 @@ const ROWS = 40
 /** [D] 低重复内容样本：默认本仓库源码，可经 argv[2] 覆盖。 */
 const SOURCE_SAMPLE = process.argv[2] ?? new URL('../src/main.rs', import.meta.url).pathname
 const DEBUG = process.env.DEBUG === '1'
+/**
+ * 主连接的行编码（`ROW_ENCODING=cells` 跑旧格式对照）。
+ *
+ * [A][B][C] 只开一条连接：两条连接共享同一个 Node 事件循环，另一条持续收
+ * 30fps 实时帧会把本组的尾延迟抬高一个量级。要测另一种编码就重跑一次
+ * （`ROW_ENCODING=cells node scripts/pty-viewport-probe.mjs`）。
+ */
+const ROW_ENCODING = process.env.ROW_ENCODING === 'cells' ? null : 'runs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const pct = (a, p) => a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))]
@@ -69,6 +78,12 @@ async function connect(rowEncoding) {
   await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no })
 
   const viewportFrames = []
+  /**
+   * 是否保留帧原文。仅 [D] 组（跨格式交叉比对）需要 raw；[A][B][C] 只统计
+   * 体积与延迟。开着会累积数 MB 字符串，触发 V8 GC 停顿并污染 RTT 测量
+   * （实测：30fps 实时帧下 [A] 的尾延迟有 ~7% 落在 47ms，全是这里的 GC）。
+   */
+  const state = { keepRaw: false }
   /** 等待特定 y 的响应帧（事件驱动，避免轮询误差污染 RTT 测量）。 */
   const waiters = []
   let liveFrames = 0
@@ -87,7 +102,12 @@ async function connect(rowEncoding) {
     let f
     try { f = JSON.parse(ev.data) } catch { return }
     if (f.viewport != null) {
-      const frame = { y: f.viewport, size: ev.data.length, at: performance.now(), raw: ev.data }
+      const frame = {
+        y: f.viewport,
+        size: ev.data.length,
+        at: performance.now(),
+        raw: state.keepRaw ? ev.data : null,
+      }
       viewportFrames.push(frame)
       for (let i = waiters.length - 1; i >= 0; i--) {
         if (waiters[i].y === frame.y) {
@@ -118,24 +138,18 @@ async function connect(rowEncoding) {
       }, timeoutMs)
     })
 
-  return { ws, viewportFrames, waitViewport, liveStats: () => ({ liveFrames, liveBytes }) }
+  return { ws, viewportFrames, waitViewport, state, liveStats: () => ({ liveFrames, liveBytes }) }
 }
 
-const runs = await connect('runs')
-const cells = await connect(null)
+const main = await connect(ROW_ENCODING)
 await sleep(800)
 // 造历史：3000 行输出填满后端 grid scrollback（1000 行）
-runs.ws.send(new TextEncoder().encode('seq 1 3000\n'))
+main.ws.send(new TextEncoder().encode('seq 1 3000\n'))
 await sleep(2500)
-runs.viewportFrames.length = 0
-cells.viewportFrames.length = 0
-runs.liveStats() // 丢弃计数前先读一次无副作用，真正的清零见下
-const liveBefore = runs.liveStats()
+main.viewportFrames.length = 0
+const liveBefore = main.liveStats()
 
 // ── A：串行往返（事件驱动计时，无轮询误差）──
-//
-// 两个连接各测一遍：帧体积相差 ~20×，若 RTT 无差异即证明延迟地板与体积无关
-// （编码不再是瓶颈，继续压缩帧也压不动延迟）。两个连接串行测，避免互相抢 vt 锁。
 async function measureRtt(conn, n = 40) {
   const rtts = []
   const sizes = []
@@ -151,31 +165,30 @@ async function measureRtt(conn, n = 40) {
   }
   return { rtts, sizes }
 }
-const cellsRtt = await measureRtt(cells)
-const runsRtt = await measureRtt(runs)
-const rtts = runsRtt.rtts
-const sizes = runsRtt.sizes
+const mainRtt = await measureRtt(main)
+const rtts = mainRtt.rtts
+const sizes = mainRtt.sizes
 
 // ── B：16ms 间隔连发，不等响应 ──
-runs.viewportFrames.length = 0
+main.viewportFrames.length = 0
 const sent = []
 for (let i = 0; i < 60; i++) {
   const y = 200 + i * 5
   sent.push(y)
-  runs.ws.send(JSON.stringify({ type: 'viewport_request', y }))
+  main.ws.send(JSON.stringify({ type: 'viewport_request', y }))
   await sleep(16)
 }
 await sleep(500)
-const gotYs = runs.viewportFrames.map((f) => f.y)
+const gotYs = main.viewportFrames.map((f) => f.y)
 
 // ── C：帧体积 vs 滚动步长 ──
-runs.viewportFrames.length = 0
+main.viewportFrames.length = 0
 const steps = [['Δy=1', 300], ['Δy=1（再滚 1 行）', 301], ['Δy=40（整屏）', 341]]
 const sample = []
 for (const [tag, y] of steps) {
-  runs.ws.send(JSON.stringify({ type: 'viewport_request', y }))
+  main.ws.send(JSON.stringify({ type: 'viewport_request', y }))
   await sleep(250)
-  const f = runs.viewportFrames.filter((v) => v.y === y).pop()
+  const f = main.viewportFrames.filter((v) => v.y === y).pop()
   if (f) sample.push([tag, f.size])
 }
 
@@ -222,16 +235,24 @@ function seqRuns(runs) {
   return out.join(' ')
 }
 
+// [D] 需要帧原文做交叉比对；[A][B][C] 已跑完，此处才打开。
+// 对照连接（另一种行编码）也延到此处建立，避免它在 [A] 期间干扰 RTT 测量。
+const other = await connect(ROW_ENCODING === null ? 'runs' : null)
+await sleep(800)
+main.state.keepRaw = true
+other.state.keepRaw = true
 const comp = []
 for (const [label, cmd] of CASES) {
-  runs.ws.send(new TextEncoder().encode('clear\n'))
+  main.ws.send(new TextEncoder().encode('clear\n'))
   await sleep(400)
-  runs.ws.send(new TextEncoder().encode(cmd + '\n'))
+  main.ws.send(new TextEncoder().encode(cmd + '\n'))
   await sleep(3000)
   // 同一 grid、同一 y：两个连接的取样间隔内 shell 已空闲，grid 不变
-  const runsFrame = await requestViewport(runs, 300)
-  const cellsFrame = await requestViewport(cells, 300)
-  if (!runsFrame || !cellsFrame) { comp.push([label, 0, 0, 0, '无帧']); continue }
+  const mainFrame = await requestViewport(main, 300)
+  const otherFrame = await requestViewport(other, 300)
+  if (!mainFrame || !otherFrame) { comp.push([label, 0, 0, 0, '无帧']); continue }
+  const [cellsFrame, runsFrame] =
+    ROW_ENCODING === null ? [mainFrame, otherFrame] : [otherFrame, mainFrame]
   const gz = zlib.gzipSync(Buffer.from(runsFrame.raw)).length
   comp.push([
     label,
@@ -242,19 +263,17 @@ for (const [label, cmd] of CASES) {
   ])
 }
 
-const liveAfter = runs.liveStats()
-// 尾延迟定位：RTT 分布是双峰的（常态 ~5ms + 少量 ~50ms），标出最慢样本
-// 才能判断离群点是启动预热还是稳态抖动。
-const describeRtt = (tag, m) => {
+const liveAfter = main.liveStats()
+// 标出最慢样本：均值会掩盖尾延迟，而滚动卡顿正来自尾部的偶发长帧。
+const describeRtt = (m) => {
   const slowest = m.rtts.map((v, i) => [i, v]).sort((a, b) => b[1] - a[1]).slice(0, 3)
   console.log(
-    `    ${tag}  RTT ${fmt(m.rtts)}  帧 ${(pct(m.sizes, 0.5) / 1024).toFixed(1)} KB`
+    `    RTT ${fmt(m.rtts)}  帧 ${(pct(m.sizes, 0.5) / 1024).toFixed(1)} KB`
     + `  最慢: ${slowest.map(([i, v]) => `#${i}=${v.toFixed(0)}ms`).join(' ')}`,
   )
 }
-console.log(`\n[A] 串行往返 n=${rtts.length}/40（cells vs runs：体积差 ~20× 时延迟差多少）`)
-describeRtt('cells', cellsRtt)
-describeRtt('runs ', runsRtt)
+console.log(`\n[A] 串行往返 n=${rtts.length}/40（行编码=${ROW_ENCODING ?? 'cells'}）`)
+describeRtt(mainRtt)
 console.log(`\n[B] 每 16ms 一个请求（模拟滑动 1 秒）`)
 console.log(`    发出 ${sent.length}  收到 viewport 帧 ${gotYs.length}  丢失/未响应 ${sent.length - gotYs.length}`)
 console.log(`    首/末响应 y = ${gotYs[0]} / ${gotYs.at(-1)}（请求区间 ${sent[0]}..${sent.at(-1)}）`)
@@ -271,7 +290,7 @@ const liveFrames = liveAfter.liveFrames - liveBefore.liveFrames
 const liveBytes = liveAfter.liveBytes - liveBefore.liveBytes
 console.log(`\n[对照] 期间实时帧 ${liveFrames} 帧，共 ${(liveBytes / 1024).toFixed(1)} KB（diff 帧，平均 ${(liveBytes / Math.max(1, liveFrames)).toFixed(0)} B）`)
 
-runs.ws.close()
-cells.ws.close()
+main.ws.close()
+if (other) other.ws.close()
 await fetch(`${BASE}/api/v1/sessions/${sid}`, { method: 'DELETE' })
 console.log('\n临时会话已删除')

@@ -193,6 +193,51 @@ fn normalize_color(c: Color) -> Option<Color> {
     }
 }
 
+/// 颜色 → 判别值（供行指纹用，避免 `sgr_body` 的 String 分配）。
+///
+/// 只要求「颜色变 → 值变」，与 SGR 编码形式无关。
+fn color_key(c: Option<Color>) -> u64 {
+    match c {
+        None => 0,
+        Some(Color::Named(n)) => 1 + n as u64,
+        Some(Color::Indexed(i)) => 0x100 + i as u64,
+        Some(Color::Spec(rgb)) => {
+            0x1_0000 + ((rgb.r as u64) << 16 | (rgb.g as u64) << 8 | rgb.b as u64)
+        }
+    }
+}
+
+/// 行级指纹（FNV-1a 64）：**直接遍历 grid，不构造 `CellData`**。
+///
+/// 原实现先 `row_cells()` 为整行构造 `CellData`（每 cell 一次 `sgr_body` 的
+/// String 分配 + 一次 `to_string`），再交给 `hash_row`。40×100 的屏即 4000 次
+/// 分配/帧——RLE 把行编码成本压下来后，这笔开销反成了实时帧的主要成本
+/// （实测 7.5 ms/帧，占 30fps 转发循环 23% 的时间，期间到达的 viewport 请求
+/// 只能排队）。指纹只需保证「内容/样式变 → 值变」，无需经过 SGR 字符串。
+fn hash_grid_row(grid: &alacritty_terminal::grid::Grid<Cell>, cols: usize, line: Line) -> u64 {
+    const FNV_OFFSET: u64 = 14695981039346656037;
+    const FNV_PRIME: u64 = 1099511628211;
+    let mut h = FNV_OFFSET;
+    let mut mix = |v: u64| {
+        h ^= v;
+        h = h.wrapping_mul(FNV_PRIME);
+    };
+    for col in 0..cols {
+        let cell_ref = &grid[line][Column(col)];
+        if cell_ref.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            // 占位 cell：混入哨兵，与「该位置无 cell」区分（沿用原 hash_row 语义）
+            mix(0x42);
+            continue;
+        }
+        mix(cell_ref.c as u64);
+        let style = CellStyle::of(cell_ref);
+        mix(style.flags.bits() as u64);
+        mix(color_key(style.fg));
+        mix(color_key(style.bg));
+    }
+    h
+}
+
 /// 样式 → SGR 参数体（不含 CSI 与结尾 `m`）；默认样式返回 `None`（仅发 reset）。
 /// 扩展下划线系 flag（DOUBLE_UNDERLINE 等）不映射：样式键含全集 flags，
 /// 变化检测不受影响，仅该类罕见样式降级为普通文本（不影响正确性）。
@@ -575,7 +620,7 @@ impl VtState {
         overlay: bool,
         encoding: RowEncoding,
     ) -> String {
-        use crate::engine::pty::frame::{CellFrame, RowData, hash_row};
+        use crate::engine::pty::frame::{CellFrame, RowData};
 
         let grid = self.term.grid();
         let rows = self.term.screen_lines();
@@ -585,10 +630,10 @@ impl VtState {
         // after construction or `invalidate_diff()` must be a full frame.
         let full = self.diff_engine.is_untracked();
 
-        // Compute row hashes first (immutable borrow of self for row_cells)
+        // Compute row hashes first (immutable borrow of grid, 无分配)
         let mut row_hashes: Vec<u64> = Vec::with_capacity(rows);
         for r in 0..rows {
-            row_hashes.push(hash_row(&self.row_cells(grid, cols, r)));
+            row_hashes.push(hash_grid_row(grid, cols, Line(r as i32)));
         }
 
         // Diff-engine comparison (mutable borrow of diff_engine)
@@ -646,29 +691,6 @@ impl VtState {
         crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
 
         json
-    }
-
-    /// Extract cells for a single grid row (used by diff engine hashing).
-    fn row_cells(
-        &self,
-        grid: &alacritty_terminal::grid::Grid<Cell>,
-        cols: usize,
-        row: usize,
-    ) -> Vec<CellData> {
-        let mut cells: Vec<CellData> = Vec::with_capacity(cols);
-        for col in 0..cols {
-            let cell_ref = &grid[Line(row as i32)][Column(col)];
-            if cell_ref.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-            {
-                cells.push(CellData { sgr: String::new(), ch: String::new(), skip: true });
-            } else {
-                let style = CellStyle::of(cell_ref);
-                let sgr = sgr_body(&style).unwrap_or_default();
-                let ch = cell_ref.c.to_string();
-                cells.push(CellData { sgr, ch, skip: false });
-            }
-        }
-        cells
     }
 
     /// Encode one row as RowData (no lock needed - caller holds grid ref).
@@ -1360,6 +1382,28 @@ mod tests {
             serde_json::from_str(&v.encode_viewport_frame("ts", 0, RowEncoding::Runs)).unwrap();
         assert!(runs["rows"][0]["runs"].is_array(), "runs 行必须带 runs");
         assert!(runs["rows"][0]["cells"].is_null(), "runs 行不得带 cells");
+    }
+
+    /// 行指纹的不变式：**内容或样式任一改变都必须改变指纹**。
+    ///
+    /// 漏检的后果是 diff 帧不发该行 → 界面停在旧内容（且要等下次全帧才恢复），
+    /// 属于静默错误，故单独守护。
+    #[test]
+    fn row_hash_detects_content_and_style_changes() {
+        let mut v = vt(6, 20);
+        v.feed(b"abc\r\ndef\r\n");
+        let base = hash_grid_row(v.term.grid(), 20, Line(0));
+        assert_eq!(base, hash_grid_row(v.term.grid(), 20, Line(0)), "同内容必须同指纹");
+        assert_ne!(base, hash_grid_row(v.term.grid(), 20, Line(1)), "不同行内容必须不同");
+
+        v.feed(b"\x1b[1;1Habd");
+        assert_ne!(base, hash_grid_row(v.term.grid(), 20, Line(0)), "字符变化必须检出");
+
+        v.feed(b"\x1b[1;1Habc"); // 还原字符
+        assert_eq!(base, hash_grid_row(v.term.grid(), 20, Line(0)), "还原后回到原指纹");
+
+        v.feed(b"\x1b[1;1H\x1b[1mabc"); // 同字符、加粗重写
+        assert_ne!(base, hash_grid_row(v.term.grid(), 20, Line(0)), "样式变化必须检出");
     }
 
     /// D2：三种帧共用 `encode_row_static`，传 Runs 后全部受益。

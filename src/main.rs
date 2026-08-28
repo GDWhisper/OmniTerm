@@ -24,6 +24,7 @@ use axum::body::Body;
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
+use axum::serve::ListenerExt;
 use clap::{Parser, Subcommand};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::HashMap;
@@ -34,7 +35,7 @@ use tokio::signal::unix::{self, SignalKind};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[cfg(unix)]
@@ -809,7 +810,16 @@ fn main() -> anyhow::Result<()> {
             // 不再有部署层 `BIND_ADDR` 兜底：通用变量名会被继承的开发环境劫持。
             let bind = format!("{}:{}", args.host, args.port);
 
-            let listener = tokio::net::TcpListener::bind(&bind).await?;
+            // 终端是交互式小包流（键盘字节、30fps cell_frame 差分帧、viewport
+            // 请求）。开 Nagle 的话，紧随一个大帧发出的小帧要等前一个包的 ACK，
+            // 与对端 Delayed ACK（Linux 默认 40ms）叠加后，实测 viewport 请求→
+            // 响应的尾延迟 p95 从 5.4ms 涨到 42ms、max 50ms（`docs/dev/plans/
+            // 2026-08-28-pty-frame-rle.md` §10.2）。HTTP 响应同理受益。
+            let listener = tokio::net::TcpListener::bind(&bind).await?.tap_io(|stream| {
+                if let Err(e) = stream.set_nodelay(true) {
+                    warn!("failed to set TCP_NODELAY on accepted connection: {e}");
+                }
+            });
 
             // PID 文件在 bind 成功后才写入：启动失败（端口被占/DB 连不上）不会留下
             // stale PID 文件，也不会覆盖已在运行实例的 PID 文件（否则 stop 会误杀）。

@@ -1,8 +1,9 @@
 # PTY 帧 RLE 编码（pty 移动端手感改造 P1）
 
 > **状态**：P1/P2 已实施（2026-08-28），P3 验证与清理待办。**实施后实测见 §10**——
-> 帧体积 94.4 KB → 4.8 KB（19.8×）、四类内容无损全部 PASS，并暴露出一个独立的
-> 延迟源（30fps tick 争用，§10.2），需另立项处理。
+> 帧体积 94.4 KB → 4.8 KB（19.8×）、RTT p50 12.75 ms → 2.84 ms、四类内容无损全部
+> PASS。过程中暴露并一并修掉两个独立的延迟源：diff 指纹的每帧 4000 次堆分配
+> （E-7）与 Nagle + Delayed ACK 造成的 ~40 ms 尾延迟（E-8）。
 > **触发条件**：`docs/dev/plans/backlog/pty-mobile-termux-feel.md` §9 E-5 —— 实测确认单帧 94.4 KB 且与滚动步长无关，帧体积是移动端滚动滞后的主因，需先做帧瘦身。
 > **关联**：
 > - `docs/dev/plans/backlog/pty-mobile-termux-feel.md`（方向稿与实测数据，§3.2 / §9）
@@ -129,7 +130,7 @@
 
 | Phase | 内容 | 改动文件 | 状态 |
 |---|---|---|---|
-| **P1** | 后端 RLE 编码 + 协商 | `src/engine/pty/frame.rs`（`RowEncoding` + `RowData` 改 enum + runs 编码）、`src/engine/pty/vt.rs`（`encode_row_static` 分派）、`src/engine/pty/terminal_ws.rs`（hello 解析） | ✅ 完成（见 §11 勘误 E-6：行编码改连接级） |
+| **P1** | 后端 RLE 编码 + 协商 | `src/engine/pty/frame.rs`（`RowEncoding` + `RowData` 改 enum + runs 编码）、`src/engine/pty/vt.rs`（`encode_row_static` 分派 + 零分配行指纹）、`src/engine/pty/terminal_ws.rs`（hello 解析）、`src/main.rs`（TCP_NODELAY） | ✅ 完成（偏差见 §11 E-6/E-7/E-8） |
 | **P2** | 前端解码与渲染 | `frontend/src/hooks/useCellFrame.ts`（类型 + `renderRowRuns` + 分派）、`frontend/src/hooks/useTerminal.ts`（hello 带 `row_encoding`）、`useCellFrame.test.ts` | ✅ 完成 |
 | **P3** | 验证 + 清理 | 探针复跑、手动回归、移除 cells 路径（D4） | ⏳ 待办：手动回归（§6 末组）未完成；cells 路径按 D4 在回归通过后移除 |
 
@@ -152,7 +153,7 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
 **端到端（`node scripts/pty-viewport-probe.mjs`，改动前后对比）**
 - [x] [A] 单帧体积：94.4 KB → **4.8 KB**（目标 ≤6 KB）
-- [ ] [A] RTT p50：12.3 ms → **4.8 ms**（目标 ≤3 ms，未达）—— 根因是 30fps tick 争用而非帧体积，见 §10.2
+- [x] [A] RTT p50：12.75 ms → **2.84 ms**（目标 ≤3 ms）—— 需连 E-7/E-8 一起才达标，见 §10.2
 - [x] [D] 四类内容（数字 / 彩色 ls / 源码 / CJK）`无损=PASS`
 - [x] [B] 吞吐仍零丢失
 
@@ -206,48 +207,65 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
 ### 10.1 收益
 
-| 指标 | 改动前（cells） | 改动后（runs） | 变化 |
+两种行编码各跑一轮（`node scripts/pty-viewport-probe.mjs` 与
+`ROW_ENCODING=cells node ...`），同一环境、同一后端二进制：
+
+| 指标 | cells（旧） | runs（新） | 变化 |
 |---|---|---|---|
 | 单帧体积（数字 seq） | 94.4 KB | 4.8 KB | **19.8×** |
 | 单帧体积（彩色 ls） | 98.5 KB | 5.4 KB | 18.1× |
 | 单帧体积（源码 cat） | 94.4 KB | 4.8 KB | 19.8× |
 | 单帧体积（CJK 混排） | 93.4 KB | 4.3 KB | **21.9×** |
-| 请求→响应 p50 | 12.3 ms | 4.8 ms | 2.6× |
+| 请求→响应 p50 | 12.75 ms | **2.84 ms** | 4.5× |
+| 请求→响应 p95 | 15.87 ms | 5.38 ms | 3.0× |
+| 请求→响应 max | 15.93 ms | 6.07 ms | 2.6× |
+| 实时 diff 帧平均 | 3758 B | **409 B** | 9.2×（实时流同样走 runs） |
 | 无损性 | — | 四类内容全部 PASS | 双连接交叉比对 |
 | 吞吐（16ms 连发 60 次） | 零丢失 | 零丢失 | 持平 |
+
+验收标准里的「RTT p50 ≤3 ms」**达标**（2.84 ms）。
 
 无损验证方式同步升级：行编码改为**连接级**后（§11 E-6），探针可对同一会话同时
 开 cells 与 runs 两个连接、对同一 y 各取一帧做逐行 `(字符 → 该字符生效时 sgr)`
 序列比对——不再是设计期的估算，而是服务端真实产出的交叉验证。
 
-### 10.2 未达标项与根因：RTT p50 4.8 ms（目标 ≤3 ms）
+> 两种编码的 RTT 不能在同一轮里对照测：两条连接共享同一个 Node 事件循环，
+> 另一条持续收 30fps 实时帧会把本组的尾延迟抬高一个量级（曾据此得出过错误
+> 结论）。故探针改为一轮只开一条连接，换编码要重跑。
 
-体积降 19.8× 而 RTT 只降 2.6×，说明编码已不是 RTT 的主要成分。用「同环境
-cells vs runs 对照」+「临时把 30fps tick 改成 1000ms」两步定位：
+### 10.2 过程中暴露并修掉的两个独立延迟源
 
-| 条件 | runs RTT p50 | runs RTT max |
-|---|---|---|
-| tick = 33ms（现状） | 4.83 ms | **49.95 ms** |
-| tick = 1000ms（仅实验，已还原） | 2.48 ms | 2.67 ms |
+原假设是「p50 的主因就是编码 94 KB JSON」。实测后发现不止于此——按发现顺序：
 
-**根因**：`src/engine/pty/terminal_ws.rs` 的转发循环用单个 `tokio::select!`
-串行处理多路输出，tick 分支与 viewport 分支都在分支内部 `ws_tx.send(..).await`。
-一旦某次发送因背压阻塞，**整个 select! 循环就停在该分支上**，期间到达的
-viewport 请求只能排队。tick 每 33ms 触发一次，故尖峰与其同周期（后端 trace
-日志显示相邻响应间隔 ~41-50 ms 的尖峰，占样本 ~7.5%）。
+**(a) diff 指纹的每帧 4000 次分配（§11 E-7）**
 
-帧变小后尖峰的**绝对值反而变大**（cells max 21 ms → runs max 50 ms）：cells
-时代 p50 本身有 12 ms 的编码成本垫底，尖峰不突出；runs 把常态压到 2.5 ms 后，
-tick 争用成为唯一剩下的延迟源，对比度因此变高。cells 侧同样受此影响
-（tick=1000ms 时 p50 12.3 → 9.7 ms）。
+`encode_cell_frame` 的 diff 路径先 `row_cells()` 为整行构造 `CellData`（每 cell
+一次 `sgr_body` 的 String 分配 + 一次 `to_string`），再交给 `hash_row`。40×100 的
+屏即 4000 次分配/帧。RLE 把行编码成本压下来后，这笔开销反成了实时帧的主要成本：
+30fps tick 的「编码 + 发送」实测 p50 **7.5 ms**/帧，占转发循环 23% 的时间——而
+同一循环内分支的 `send().await` 一阻塞，其余分支（含 viewport 请求）就得不到轮询。
+改为 `hash_grid_row` 直接遍历 grid 后，>5 ms 的慢帧告警从 **405 次/轮降到 2 次**。
 
-**不纳入本计划**：修它要动转发循环的 task 结构（把发送移出 select! 分支，或让
-viewport 响应绕过排队），有方案取舍 → 另立项，已登记到方向稿 §5。
+**(b) Nagle + Delayed ACK（§11 E-8）**
 
-### 10.3 编码成本本身
+修掉 (a) 后，RTT 的尾部尖峰（max ~50 ms）**仍在**。逐项排除：后端 viewport 处理
+只占 p50 2.5 ms / max 6.3 ms，其中 send 仅 50-150 µs（即无背压）；单连接、非
+V8 GC 均已排除。~40 ms 这个量级指向 Delayed ACK 超时：WebSocket 每 33 ms 发一个
+~200 B 的实时小帧，Nagle 会把它攒到前一个包的 ACK 到达，与对端 40 ms 的
+Delayed ACK 叠加。给 accept 的每个连接开 `TCP_NODELAY` 后，max 从 50 ms 降到
+**6.07 ms**、p95 从 42 ms 降到 5.38 ms，两轮稳定复现。
 
-tick=1000ms 下 cells p50 9.73 ms / runs p50 2.48 ms → **94 KB 的 JSON 编码约占
-7.3 ms**，与方向稿 §9 E-2「p50 10.2ms 主因是服务端编码」的推断吻合。
+tick 之所以是这个链条的触发点：只有它在 33 ms 周期上持续产出小包——临时把它改成
+1000 ms 尖峰即消失，这是最初的定位线索（该实验已还原，tick 仍为 33 ms）。
+
+**遗留的结构弱点**：转发循环是单个 `select!`，分支内的 `send().await` 一旦被背压
+阻塞仍会拖住其余分支。当前帧已小到几乎不触发，故不改动 task 结构；在 tick 分支
+留了 `SLOW_FRAME_US` 告警作为哨兵，防止其悄悄回潮。
+
+### 10.3 编码成本
+
+cells p50 12.75 ms − runs p50 2.84 ms ≈ **10 ms**，是「94 KB 的 JSON 编码 +
+序列化 + 传输」的总差，与方向稿 §9 E-2「p50 主因是服务端编码」的推断吻合。
 
 ---
 
@@ -266,3 +284,28 @@ tick=1000ms 下 cells p50 9.73 ms / runs p50 2.48 ms → **94 KB 的 JSON 编码
 `VtState` 恢复「纯屏幕真相源」语义。
 
 正向副作用：两个连接可用不同编码并存，探针因此能做 §10.1 的交叉无损验证。
+
+### E-7 diff 行指纹改为零分配（实施期，由 §10.2(a) 暴露）
+
+原 `hash_row(&[CellData])` 的输入来自 `row_cells()`，后者为整行构造 `CellData`
+（每 cell 一次 `sgr_body` 的 String 分配 + 一次 `c.to_string()`）。40×100 的屏 =
+4000 次分配/帧，30fps 下即 12 万次/秒——RLE 压下行编码成本后，这笔开销成了
+实时帧的主要成本（实测 tick 帧 7.5 ms/帧）。
+
+改为 `hash_grid_row(grid, cols, line)` 直接遍历 grid：字符用码点、样式用
+`(flags.bits(), color_key(fg), color_key(bg))`，全程无堆分配。指纹只需保证
+「内容/样式变 → 值变」，无需经过 SGR 字符串，故与编码格式解耦。
+
+`row_cells`（仅服务于 hash）与 `frame::hash_row` 一并删除，无死代码残留。
+新增单测 `row_hash_detects_content_and_style_changes` 守住「变必检出」——漏检的
+后果是 diff 帧不发该行、界面停在旧内容，属静默错误。
+
+### E-8 给每个 TCP 连接开 TCP_NOELAY（实施期，由 §10.2(b) 暴露）
+
+原启动时直接 `axum::serve(TcpListener, ..)`，accept 出的连接保持系统默认的
+Nagle 开启。终端是交互式小包流，小帧被 Nagle 攒到 ACK 到达，与对端 40 ms 的
+Delayed ACK 叠加后，单次请求-响应的尾延迟暴涨到 ~50 ms。
+
+改为用 axum 自带的 `ListenerExt::tap_io`（`src/main.rs`）在 accept 时对每个
+连接 `set_nodelay(true)`，跨平台且不新增依赖（axum 官方示例即为此用途）。
+HTTP 响应同样受益。
