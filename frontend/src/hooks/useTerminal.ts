@@ -123,8 +123,17 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       ws.send(JSON.stringify({ type: 'resync' }))
     }
   }, [])
-  // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
-  const [scrollMode, setScrollMode] = useState(false)
+  // ── 滚动状态：pty 与 tmux 各持一份，互不共享 ──
+  // 两侧语义本就不同（pty = 已滚离 live 底部；tmux = 处于 copy-mode），且
+  // pty 后续改造不得波及 tmux 路径，故不复用同一个 state。对外统一出口见
+  // 下方 `scrollMode` selector（按 runtimeKind 取源）。
+  /** pty：由 ViewportController.onModeChange 驱动（方案 C D3 状态机）。 */
+  const [ptyScrollMode, setPtyScrollMode] = useState(false)
+  /** tmux：由 copy-mode 进入/退出驱动。UI 渲染用；即时真值见 tmuxScrollModeRef。 */
+  const [tmuxScrollMode, setTmuxScrollMode] = useState(false)
+  /** 对外统一出口（MobileKeyBar 高亮 / 方向键分流 / inputmode 同步都读它）。
+   *  缺省按 tmux，与 runtimeKindRef 的缺省约定一致（external 会话恒为 tmux）。 */
+  const scrollMode = runtimeKind === 'pty' ? ptyScrollMode : tmuxScrollMode
   const scrollModeRef = useRef(false)
   useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
   // 方案 C Phase 2：历史视口控制器（lazy ref；实例跨会话/重连复用，状态由
@@ -138,7 +147,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
           ws.send(JSON.stringify({ type: 'viewport_request', y }))
         }
       },
-      onModeChange: setScrollMode,
+      onModeChange: setPtyScrollMode,
       onLiveRestore: requestResync,
     })
   }
@@ -153,7 +162,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
-  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
+  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback).
+  // 即时真值（同一手势内多次 touchmove 需立即读到新值，否则会重复发
+  // Ctrl+B [ 进 copy-mode）；`tmuxScrollMode` 是它的 UI 渲染副本。
   const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
@@ -420,8 +431,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
    *  truth, not the React `scrollMode` flag, so pagging always works after the
    *  user has toggled scroll on via the UI button.
    *
-   *  pty 会话分流（D12）：无 copy-mode，直接滚动 xterm 本地 scrollback；
-   *  scrollMode 状态由 createTerminal 里的 term.onScroll 按视口位置驱动。 */
+   *  pty 会话分流：pty 无 copy-mode 语义，翻页走 ViewportController.pageScroll
+   *  （后端历史窗口帧）；其滚动状态由 ViewportController.onModeChange 驱动，
+   *  与 tmux 的 tmuxScrollMode / tmuxScrollModeRef 完全无关。 */
   const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
     if (runtimeKindRef.current === 'pty') {
       const term = termRef.current
@@ -442,7 +454,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       // tmux prefix is Ctrl+B (0x02), then [ enters copy mode
       ws.send(new TextEncoder().encode('\x02['))
       tmuxScrollModeRef.current = true
-      setScrollMode(true)
+      setTmuxScrollMode(true)
     }
     const key = direction === 'up' ? '\x1b[5~' : '\x1b[6~' // PageUp / PageDown
     ws.send(new TextEncoder().encode(key))
@@ -462,12 +474,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       return
     }
     if (!tmuxScrollModeRef.current) {
-      setScrollMode(false)
+      setTmuxScrollMode(false)
       return
     }
     sendData('\x1b')
     tmuxScrollModeRef.current = false
-    setScrollMode(false)
+    setTmuxScrollMode(false)
   }, [sendData])
 
   /** Dispose the current terminal and all associated resources */
@@ -703,18 +715,26 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     // Mobile touch scroll: vertical finger drags become wheel events so
     // tmux mouse-mode scrolls history (xterm has no native touch scroll).
-    // Only the "view history" direction (wheel up, deltaY < 0) makes tmux
-    // enter copy mode — flip the scroll flag there so the MobileKeyBar「滚动」
-    // button highlight tracks the real tmux state. Scrolling back toward live
-    // output (deltaY > 0) is left alone: tmux's `copy-mode -e` only auto-exits
-    // once the history bottom is reached, which we cannot observe here.
+    //
+    // 物理监听必须唯一（touchmove 只能注册一次）：注册两份会让每个手势派发
+    // 两个 wheel 事件，pty 侧表现为双倍滚动量。故 pty/tmux 共用同一个监听器，
+    // 但在回调入口立即按 runtime 分派到两条互不干涉的处理路径 —— pty 侧的
+    // 滚动逻辑全部在 ViewportController（wheel handler 内接管），这里不维护
+    // 任何状态；tmux 侧只需维护 copy-mode 标志。
     touchScrollCleanupRef.current = attachTouchScroll(container, (deltaY) => {
-      // pty 分流：wheel 直接滚动 xterm 本地 scrollback，无 copy-mode 标志可维护
-      //（scrollMode 由上方 onScroll 订阅驱动）。
-      if (runtimeKindRef.current === 'pty') return
+      if (runtimeKindRef.current === 'pty') {
+        // pty：合成 wheel 已被 ViewportController 接管，无 copy-mode 语义，
+        // 不维护本地状态（滚动状态源在 ViewportController.onModeChange）。
+        return
+      }
+      // tmux：合成 wheel 交回 xterm 默认路径（xterm 本地 scrollback）。
+      // 只在这里维护 copy-mode 标志 —— 仅「查看历史」方向（wheel up，
+      // deltaY < 0）会让 tmux 进 copy mode，翻转标志使 MobileKeyBar「滚动」
+      // 高亮跟随真实 tmux 状态。滚回 live 方向（deltaY > 0）不动：tmux 的
+      // `copy-mode -e` 只在滚到历史底部时自动退出，此处无法观测。
       if (deltaY < 0 && !tmuxScrollModeRef.current) {
         tmuxScrollModeRef.current = true
-        setScrollMode(true)
+        setTmuxScrollMode(true)
       }
     })
 
@@ -762,8 +782,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     // (Layout keys on view kind, not session id) — reset the per-session UI
     // state that the old full remount used to clear. tmux copy-mode state is
     // session-local; the new session starts outside copy mode.
+    //
+    // 只归位 tmux 侧：pty 侧的视口状态由下方 connectWs() 里的
+    // ViewportController.reset() 归位（它会回调 onModeChange(false)）。
+    // 在两侧状态分离后，此处不得写 ptyScrollMode —— 那是控制器的真值。
     tmuxScrollModeRef.current = false
-    setScrollMode(false)
+    setTmuxScrollMode(false)
     connectWs()
   }, [sessionId, externalSessionName, connectWs])
 

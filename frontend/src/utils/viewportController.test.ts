@@ -257,3 +257,49 @@ describe('ViewportController.reset', () => {
     expect(ctl.handleWheel(wheel(-100), METRICS)).toBe(true)
   })
 })
+
+// ──────────────────────────────────────────────────────────
+// touch → wheel → y 方向契约（回归：D8「内容跟手」语义）
+//
+// 链路：touchScroll 把相邻 clientY 差分后乘 2 倍率（TOUCH_SCROLL_FACTOR）
+// 当作 wheel deltaY 派发，deltaMode=0（像素）。ViewPortController 把它
+// 解释为：deltaY 正 = 屏幕内容向上移 = 看新内容（live 方向，y 减小）；
+// deltaY 负 = 屏幕内容向下移 = 看历史（y 增大）。
+// 与 touchScroll.test.ts 配合：touch 产 deltaY 的符号在那一层覆盖，
+// 本组断言 wheel → y 的最终落点。
+// ──────────────────────────────────────────────────────────
+describe('touch → viewport y 方向契约', () => {
+  let raf: ReturnType<typeof stubRaf>
+  beforeEach(() => { raf = stubRaf() })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('deltaY 负（手指下滑）→ y 增大 → 看历史（内容跟手向下）', () => {
+    const { ctl, sent } = makeController()
+    ctl.handleWheel({ deltaY: -60, deltaMode: 0 }, METRICS)
+    raf.flush()
+    expect(sent).toEqual([6])
+    expect(ctl.viewportActive).toBe(true)
+  })
+
+  it('deltaY 正（手指上滑）→ y 减小 → 回 live（内容跟手向上）', () => {
+    const { ctl, sent } = makeController()
+    // 先下滑进历史
+    ctl.handleWheel({ deltaY: -120, deltaMode: 0 }, METRICS)
+    raf.flush()
+    const first = sent[0]
+    expect(first).toBeGreaterThan(0)
+    // 再上滑
+    ctl.handleWheel({ deltaY: 60, deltaMode: 0 }, METRICS)
+    raf.flush()
+    expect(sent.length).toBe(2)
+    expect(sent[1]).toBeLessThan(first)
+  })
+
+  it('live 底部 deltaY 正应为 no-op（已无更新内容可看）', () => {
+    const { ctl, sent } = makeController()
+    ctl.handleWheel({ deltaY: 30, deltaMode: 0 }, METRICS)
+    raf.flush()
+    expect(sent).toEqual([])
+    expect(ctl.viewportActive).toBe(false)
+  })
+})
