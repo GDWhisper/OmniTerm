@@ -125,7 +125,7 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
 | 补屏 | tmux `new-session -A` 原生 | raw 尾回放（scrollback+模式态）+ 清可见屏 + VT grid 整帧重渲染（`render_screen`，带 SGR 样式与光标复位）；无 nudge |
-| 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）+ 直接拖选复制，无任何注入字节 |
+| 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | 后端视口供给（方案 C）：滚轮/翻页 → 前端 `viewport_request {y}` → `encode_viewport_frame` 整屏全帧（y 钳制到 grid scrollback 1000 行）；xterm 本地 scrollback 在 cell_frame 模式下结构性冻结，滚动状态在前端 `ViewportController`（live/viewport 状态机）；alt-screen 与鼠标协议激活期间交回 xterm 默认路径；直接拖选复制，无任何注入字节 |
 | 创建入口（Phase 4） | 创建会话弹窗引擎选择器可选项（multiplexer 不可用时禁用），长期维护态 | 同选择器默认选中项 |
 
 ## pty hook 信道（D7，Phase 3）

@@ -282,6 +282,8 @@ P0 单独做即能拿到大部分"跟手 + 惯性"收益，且不动后端与数
 
 **附带约束（避免违反 AGENTS §6 禁 copy-paste）**：两个组件共用的交互逻辑 —— 修饰键 latch、长按重复调度、popup 抬手判定 —— **必须抽到共享 hook/工具，不得存在两份 `handleClick` 实现**。DOM 层的输入模式同步已是可复用 util（`utils/terminalInputMode.ts`），直接复用而非复制。测试按各自键位表单独写，不算重复。
 
-### 顺带发现的文档漂移（待修，非本改造范围）
+### 顺带修复的文档漂移（2026-08-28，同批提交）
 
-`docs/architecture/backend.md:128` 双引擎差异表 D12 行仍写 pty 为「xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）」—— 方案 C Phase 2（`af3f2c1` 之后）已改为后端 viewport 供给，该行过时，会误导后来者。
+`docs/architecture/backend.md` 双引擎差异表 D12 行原写 pty 为「xterm 本地 scrollback（`scrollLines`/视口位置驱动 scrollMode）」—— 方案 C Phase 2（`af3f2c1`）后已改为后端 viewport 供给，已更正为现行行为（后端视口供给 + `ViewportController` + alt-screen/鼠标协议交回 xterm 默认路径）。
+
+> 同类命中已排查：archive 下的历史计划与 `pty-scroll-handover.md:24`（讲 xterm 内部 `BufferService.scrollLines` 机制，属根因分析）均为历史/正确表述，未改动。
