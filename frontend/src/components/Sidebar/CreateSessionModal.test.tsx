@@ -29,19 +29,24 @@ let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 
 function setup() {
+  localStorage.removeItem('omniterm_last_terminal_engine')
   useAppStore.setState({
     activeProjectId: 'proj-1',
     worktrees: { 'proj-1': [{ id: 'wt-1', project_id: 'proj-1', path: '/tmp/proj', label: 'main', is_main: true, is_git_repo: true, is_git_worktree: false }] },
-    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux',
+    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux', lastTerminalEngine: null,
   })
   useAgentStore.setState({ agents: [{ id: 'agent-1', display_name: 'Claude', command: 'claude', args: [], env: [], created_at: '', updated_at: '' }] })
   useToastStore.setState({ addToast: vi.fn() })
 }
 
-function renderModal(workspaceId = 'wt-1') {
+function renderModal(
+  workspaceId = 'wt-1',
+  seed?: { lastTerminalEngine?: 'pty' | 'tmux' | null; multiplexerAvailable?: boolean },
+) {
   const reloadSessions = vi.fn().mockResolvedValue(undefined)
   const onClose = vi.fn()
   setup()
+  if (seed) useAppStore.setState(seed)
   act(() => {
     root.render(
       <I18nextProvider i18n={i18n}>
@@ -89,7 +94,7 @@ describe('CreateSessionModal', () => {
 
   // ─── 展开终端引擎 ───
 
-  it('shows pty and tmux engine options and "default" badge on pty after expanding', () => {
+  it('shows pty and tmux engine options and the BETA badge on pty after expanding', () => {
     renderModal()
     const terminalCard = Array.from(document.body.querySelectorAll('button')).find(
       (b) => b.textContent?.includes('终端') && !b.textContent!.includes('ACP'),
@@ -98,7 +103,46 @@ describe('CreateSessionModal', () => {
     act(() => terminalCard!.click())
     expect(document.body.textContent).toContain('pty')
     expect(document.body.textContent).toContain('tmux')
-    expect(document.body.textContent).toContain('默认')
+    expect(document.body.textContent).toContain('BETA')
+  })
+
+  // ─── 引擎记忆 + 上次选择角标 ───
+
+  const engineCard = (engine: 'pty' | 'tmux') =>
+    Array.from(document.body.querySelectorAll('button')).find((b) =>
+      b.textContent?.startsWith(engine),
+    )
+
+  it('remembers the engine of the session just created', async () => {
+    renderModal()
+    act(() => engineCard('tmux')!.click())
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'tmux', undefined)
+    })
+    expect(useAppStore.getState().lastTerminalEngine).toBe('tmux')
+    expect(localStorage.getItem('omniterm_last_terminal_engine')).toBe('tmux')
+  })
+
+  it('marks the remembered engine card with a last-used badge on reopen', () => {
+    renderModal('wt-1', { lastTerminalEngine: 'tmux' })
+    const label = i18n.t('sidebar.lastUsed')
+    expect(engineCard('tmux')!.textContent).toContain(label)
+    expect(engineCard('pty')!.textContent).not.toContain(label)
+  })
+
+  it('falls back to pty when the remembered tmux host has no multiplexer', async () => {
+    renderModal('wt-1', { lastTerminalEngine: 'tmux', multiplexerAvailable: false })
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'pty', undefined)
+    })
   })
 
   // ─── ACP 选择 ───

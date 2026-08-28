@@ -19,6 +19,7 @@
   "sidebar.sessionTypeTmuxLabel": "tmux",
   "sidebar.sessionTypePtyHint": "OmniTerm 深度定制终端引擎，会话随后端生命周期存在，断开重连自动补屏。",
   "sidebar.sessionTypeTmuxHint": "tmux 驱动：成熟的终端复用器，会话独立于 OmniTerm 生命周期，后端重启不丢失。",
+  "sidebar.lastUsed": "上次选择",
   "sidebar.muxUnavailable": "{{mux}} 不可用（当前主机未安装）",
   "sidebar.deleteProject": "从列表移除项目",
   "sidebar.deleteSession": "删除会话",

@@ -77,6 +77,10 @@ export interface AppState {
   // Terminal behavior
   autoCopySelect: boolean
 
+  /** Engine the user last created a terminal session with. null = no record
+   *  yet (never created one), so the modal still falls back to 'pty'. */
+  lastTerminalEngine: 'pty' | 'tmux' | null
+
   // Disconnect / recycle timeouts (minutes)
   blurDisconnectMin: number
   idleDisconnectMin: number
@@ -185,6 +189,7 @@ export interface AppState {
   setChatFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
+  setLastTerminalEngine: (engine: 'pty' | 'tmux') => void
   setBlurDisconnectMin: (n: number) => void
   setIdleDisconnectMin: (n: number) => void
   setAcpIdleRecycleMin: (n: number) => void
@@ -279,6 +284,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
+  // 只认合法字面量——存档值损坏时回落 null（无记录），避免脏值被当成引擎提交
+  lastTerminalEngine: (() => {
+    const stored = localStorage.getItem('omniterm_last_terminal_engine')
+    return stored === 'pty' || stored === 'tmux' ? stored : null
+  })(),
   blurDisconnectMin: readDisconnectMin('omniterm_blur_disconnect_min', DEFAULT_BLUR_DISCONNECT_MIN),
   idleDisconnectMin: readDisconnectMin('omniterm_idle_disconnect_min', DEFAULT_IDLE_DISCONNECT_MIN),
   // Pure in-memory — the backend recycle setting isn't wired up yet.
@@ -378,6 +388,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAutoCopySelect: (v) => {
     localStorage.setItem('omniterm_auto_copy_select', String(v))
     set({ autoCopySelect: v })
+  },
+
+  setLastTerminalEngine: (engine) => {
+    localStorage.setItem('omniterm_last_terminal_engine', engine)
+    set({ lastTerminalEngine: engine })
   },
 
   setBlurDisconnectMin: (n) => {
