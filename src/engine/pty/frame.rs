@@ -38,9 +38,25 @@ pub struct CellFrame {
     pub rows: Vec<RowData>,
 }
 
+/// 行编码格式（`hello` 握手协商，见 `docs/dev/plans/2026-08-28-pty-frame-rle.md` D3）。
+///
+/// 默认 `Cells`：旧客户端不发 `row_encoding` 字段，行为与协商前一致。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowEncoding {
+    /// 逐 cell 对象（现行格式）。
+    #[default]
+    Cells,
+    /// 行内按 sgr 合并连续字符的扁平 runs 数组 `[sgr, text, sgr, text, ...]`。
+    Runs,
+}
+
+/// 一行的线格负载。`Runs` 是 `Cells` 的无损紧凑表示（同一行的两种编码
+/// 渲染等价），前端按字段存在与否分派，无需协商版本。
 #[derive(Serialize)]
-pub struct RowData {
-    pub cells: Vec<CellData>,
+#[serde(untagged)]
+pub enum RowData {
+    Cells { cells: Vec<CellData> },
+    Runs { runs: Vec<String> },
 }
 
 #[derive(Serialize)]

@@ -28,8 +28,15 @@ export interface CellData {
   skip?: boolean
 }
 
+/**
+ * 一行线格数据。`cells` 与 `runs` 二选一，由后端 `hello` 握手协商的格式决定
+ * （`docs/dev/plans/2026-08-28-pty-frame-rle.md` D3/D6）：
+ * - `cells`：逐 cell 对象（旧格式 / 未协商时的默认）
+ * - `runs`：行内 RLE 扁平数组 `[sgr, text, sgr, text, ...]`
+ */
 export interface CellRow {
-  cells: CellData[]
+  cells?: CellData[]
+  runs?: string[]
 }
 
 export interface CellFrame {
@@ -58,12 +65,26 @@ export interface CellFrame {
 
 const SGR_RESET = '\x1b[0m'
 
+/** 畸形 runs（奇数长度）告警只报一次，避免刷屏控制台。 */
+let warnedOddRuns = false
+
 /**
- * Render one row's cells into the chunks buffer.
+ * Render one row into the chunks buffer, dispatching on the negotiated
+ * row encoding (`runs` wins when present; `cells` is the legacy fallback).
  *
  * CUP to the target row is done by the caller so that diff frames can
  * EL (erase-to-EOL) before rendering to remove leftover characters.
  */
+export function renderRow(row: CellRow): string[] {
+  // 旧后端不发 runs；长度奇数属协议畸形，忽略末尾不完整的对并告警一次。
+  if (!row.runs) return renderRowCells(row.cells ?? [])
+  if (row.runs.length % 2 !== 0 && !warnedOddRuns) {
+    warnedOddRuns = true
+    console.warn('[cell_frame] odd-length runs array, trailing pair ignored')
+  }
+  return renderRowRuns(row.runs)
+}
+
 function renderRowCells(cells: CellData[]): string[] {
   const chunks: string[] = []
   let prevSgr = ''
@@ -76,6 +97,25 @@ function renderRowCells(cells: CellData[]): string[] {
       prevSgr = cell.sgr
     }
     chunks.push(cell.ch)
+  }
+  chunks.push(SGR_RESET)
+  return chunks
+}
+
+/**
+ * Render a RLE row: the caller has already emitted SGR_RESET before this
+ * row, so each run re-establishes its style from a known-clean state —
+ * equivalent to `renderRowCells` output for the same row.
+ *
+ * 连续同 sgr 的字符已在后端合并，故每 run 只切一次样式（比逐 cell 判断更快）。
+ */
+function renderRowRuns(runs: string[]): string[] {
+  const chunks: string[] = []
+  for (let i = 0; i + 1 < runs.length; i += 2) {
+    const sgr = runs[i] ?? ''
+    chunks.push(SGR_RESET)
+    if (sgr) chunks.push(`\x1b[${sgr}m`)
+    chunks.push(runs[i + 1] ?? '')
   }
   chunks.push(SGR_RESET)
   return chunks
@@ -113,11 +153,10 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
   // repaint of the visible screen, not an "erase everything" command.
   if (isFull) {
     for (let r = 0; r < frame.height; r++) {
-      const cells = frame.rows[r]?.cells ?? []
       chunks.push(`\x1b[${r + 1};1H`)
       chunks.push('\x1b[K')
       chunks.push(SGR_RESET)
-      chunks.push(...renderRowCells(cells))
+      chunks.push(...renderRow(frame.rows[r] ?? {}))
     }
     term.write(chunks.join(''))
     if (frame.cursor) {
@@ -132,11 +171,10 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
   const indices = frame.row_indices ?? []
   for (let i = 0; i < indices.length; i++) {
     const rowIdx = indices[i]
-    const cells = frame.rows[i]?.cells ?? []
     chunks.push(`\x1b[${rowIdx + 1};1H`)
     chunks.push('\x1b[K')  // Erase to end of line — remove stale chars
     chunks.push(SGR_RESET)
-    chunks.push(...renderRowCells(cells))
+    chunks.push(...renderRow(frame.rows[i] ?? {}))
   }
   term.write(chunks.join(''))
   if (frame.cursor) {

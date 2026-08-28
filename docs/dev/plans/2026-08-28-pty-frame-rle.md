@@ -1,6 +1,8 @@
 # PTY 帧 RLE 编码（pty 移动端手感改造 P1）
 
-> **状态**：设计稿（2026-08-28）
+> **状态**：P1/P2 已实施（2026-08-28），P3 验证与清理待办。**实施后实测见 §10**——
+> 帧体积 94.4 KB → 4.8 KB（19.8×）、四类内容无损全部 PASS，并暴露出一个独立的
+> 延迟源（30fps tick 争用，§10.2），需另立项处理。
 > **触发条件**：`docs/dev/plans/backlog/pty-mobile-termux-feel.md` §9 E-5 —— 实测确认单帧 94.4 KB 且与滚动步长无关，帧体积是移动端滚动滞后的主因，需先做帧瘦身。
 > **关联**：
 > - `docs/dev/plans/backlog/pty-mobile-termux-feel.md`（方向稿与实测数据，§3.2 / §9）
@@ -125,11 +127,11 @@
 
 ## 5. 实施分期
 
-| Phase | 内容 | 改动文件 | 独立可验证 |
+| Phase | 内容 | 改动文件 | 状态 |
 |---|---|---|---|
-| **P1** | 后端 RLE 编码 + 协商 | `src/engine/pty/frame.rs`（`RowData` 改 enum + runs 编码）、`src/engine/pty/vt.rs`（`encode_row_static` 分派 + `row_encoding` 字段/setter）、`src/engine/pty/terminal_ws.rs`（hello 解析） | 单测通过；探针在 cells 模式下行为不变 |
-| **P2** | 前端解码与渲染 | `frontend/src/hooks/useCellFrame.ts`（类型 + `renderRowRuns` + 分派）、`frontend/src/hooks/useTerminal.ts`（hello 带 `row_encoding`） | 前端单测通过（渲染等价） |
-| **P3** | 验证 + 清理 | 探针复跑、`useCellFrame.test.ts` 扩展、移除 cells 路径（D4） | 实测收益达标 + 手动回归通过 |
+| **P1** | 后端 RLE 编码 + 协商 | `src/engine/pty/frame.rs`（`RowEncoding` + `RowData` 改 enum + runs 编码）、`src/engine/pty/vt.rs`（`encode_row_static` 分派）、`src/engine/pty/terminal_ws.rs`（hello 解析） | ✅ 完成（见 §11 勘误 E-6：行编码改连接级） |
+| **P2** | 前端解码与渲染 | `frontend/src/hooks/useCellFrame.ts`（类型 + `renderRowRuns` + 分派）、`frontend/src/hooks/useTerminal.ts`（hello 带 `row_encoding`）、`useCellFrame.test.ts` | ✅ 完成 |
+| **P3** | 验证 + 清理 | 探针复跑、手动回归、移除 cells 路径（D4） | ⏳ 待办：手动回归（§6 末组）未完成；cells 路径按 D4 在回归通过后移除 |
 
 P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
@@ -138,21 +140,27 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 ## 6. 验收标准
 
 **后端**
-- [ ] `encode_row_static` 的 runs 编码单测：空行、整行同 sgr、sgr 频繁切换、CJK 宽字符（含占位）、超长 run、行尾空格
-- [ ] 不变式单测：runs 展开后的「字符 → 该字符生效时 sgr」序列 == cells 的同一序列（覆盖 D5）
-- [ ] 协商单测：hello 带/不带 `row_encoding` 分别产出 runs / cells
-- [ ] `cargo clippy -- -D warnings` 与 `cargo fmt --check` 零新增
+- [x] `encode_row_static` 的 runs 编码单测：空行、整行同 sgr、sgr 频繁切换、CJK 宽字符（含占位）、整行单 run、行尾空格
+- [x] 不变式单测：runs 展开后的「字符 → 该字符生效时 sgr」序列 == cells 的同一序列（覆盖 D5）
+- [x] 协商单测：`parse_row_encoding` 仅 `"runs"` 切 RLE，其余（含字段缺失）回落 cells
+- [x] `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 零新增
 
 **前端**
-- [ ] `useCellFrame.test.ts`：`renderRowRuns` 与 `renderRowCells` 对同一行渲染输出等价（复用探针里的模拟渲染判据）
-- [ ] 兼容性单测：帧无 `runs` 时回落 cells；`runs` 长度为奇数时不抛异常
-- [ ] `pnpm lint` / `tsc -b` / `pnpm test --run` 零新增失败
+- [x] `useCellFrame.test.ts`：`renderRowRuns` 与 `renderRowCells` 对同一行渲染输出等价（模拟 SGR 状态机判据）
+- [x] 兼容性单测：帧无 `runs` 时回落 cells；`runs` 长度为奇数时不抛异常（warn 一次）
+- [x] `pnpm lint` / `tsc -b` / `pnpm test --run` 零新增失败（顺手修了既有的一处脆弱断言：resync 用例依赖 jsdom 真实时钟累积到 1s，改为固定 `performance.now()`）
 
 **端到端（`node scripts/pty-viewport-probe.mjs`，改动前后对比）**
-- [ ] [A] 单帧体积：94.4 KB → **≤ 6 KB**
-- [ ] [A] RTT p50：10.2 ms → **≤ 3 ms**
-- [ ] [D] 四类内容（数字 / 彩色 ls / 源码 / CJK）`无损=PASS`
-- [ ] [B] 吞吐仍零丢失
+- [x] [A] 单帧体积：94.4 KB → **4.8 KB**（目标 ≤6 KB）
+- [ ] [A] RTT p50：12.3 ms → **4.8 ms**（目标 ≤3 ms，未达）—— 根因是 30fps tick 争用而非帧体积，见 §10.2
+- [x] [D] 四类内容（数字 / 彩色 ls / 源码 / CJK）`无损=PASS`
+- [x] [B] 吞吐仍零丢失
+
+**手动回归（`docs/reference/user-testing.md`）** —— P3 待办
+- [ ] pty 会话显示正常：CJK、emoji、TUI（htop）、vim、alt-screen 进入/退出
+- [ ] 滚动历史窗口内容正确（含 CJK 行的对齐）
+- [ ] 快速输出（如 `seq 1 20000`）不丢行、不错位
+- [ ] 断线重连补屏正常
 
 **手动回归（`docs/reference/user-testing.md`）**
 - [ ] pty 会话显示正常：CJK、emoji、TUI（htop）、vim、alt-screen 进入/退出
@@ -191,3 +199,70 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 | runs 格式 | 本计划引入：行内按 sgr 合并连续字符的扁平数组 `[sgr, text, ...]` |
 | 占位 cell | 宽字符占的第二列，`skip:true`、`ch:""`，渲染时被跳过 |
 | 无损 | 同一行用两种格式渲染后，每个可见字符及其生效 sgr 完全一致 |
+
+---
+
+## 10. 实施后实测（2026-08-28，`scripts/pty-viewport-probe.mjs`，100×40 pty 会话）
+
+### 10.1 收益
+
+| 指标 | 改动前（cells） | 改动后（runs） | 变化 |
+|---|---|---|---|
+| 单帧体积（数字 seq） | 94.4 KB | 4.8 KB | **19.8×** |
+| 单帧体积（彩色 ls） | 98.5 KB | 5.4 KB | 18.1× |
+| 单帧体积（源码 cat） | 94.4 KB | 4.8 KB | 19.8× |
+| 单帧体积（CJK 混排） | 93.4 KB | 4.3 KB | **21.9×** |
+| 请求→响应 p50 | 12.3 ms | 4.8 ms | 2.6× |
+| 无损性 | — | 四类内容全部 PASS | 双连接交叉比对 |
+| 吞吐（16ms 连发 60 次） | 零丢失 | 零丢失 | 持平 |
+
+无损验证方式同步升级：行编码改为**连接级**后（§11 E-6），探针可对同一会话同时
+开 cells 与 runs 两个连接、对同一 y 各取一帧做逐行 `(字符 → 该字符生效时 sgr)`
+序列比对——不再是设计期的估算，而是服务端真实产出的交叉验证。
+
+### 10.2 未达标项与根因：RTT p50 4.8 ms（目标 ≤3 ms）
+
+体积降 19.8× 而 RTT 只降 2.6×，说明编码已不是 RTT 的主要成分。用「同环境
+cells vs runs 对照」+「临时把 30fps tick 改成 1000ms」两步定位：
+
+| 条件 | runs RTT p50 | runs RTT max |
+|---|---|---|
+| tick = 33ms（现状） | 4.83 ms | **49.95 ms** |
+| tick = 1000ms（仅实验，已还原） | 2.48 ms | 2.67 ms |
+
+**根因**：`src/engine/pty/terminal_ws.rs` 的转发循环用单个 `tokio::select!`
+串行处理多路输出，tick 分支与 viewport 分支都在分支内部 `ws_tx.send(..).await`。
+一旦某次发送因背压阻塞，**整个 select! 循环就停在该分支上**，期间到达的
+viewport 请求只能排队。tick 每 33ms 触发一次，故尖峰与其同周期（后端 trace
+日志显示相邻响应间隔 ~41-50 ms 的尖峰，占样本 ~7.5%）。
+
+帧变小后尖峰的**绝对值反而变大**（cells max 21 ms → runs max 50 ms）：cells
+时代 p50 本身有 12 ms 的编码成本垫底，尖峰不突出；runs 把常态压到 2.5 ms 后，
+tick 争用成为唯一剩下的延迟源，对比度因此变高。cells 侧同样受此影响
+（tick=1000ms 时 p50 12.3 → 9.7 ms）。
+
+**不纳入本计划**：修它要动转发循环的 task 结构（把发送移出 select! 分支，或让
+viewport 响应绕过排队），有方案取舍 → 另立项，已登记到方向稿 §5。
+
+### 10.3 编码成本本身
+
+tick=1000ms 下 cells p50 9.73 ms / runs p50 2.48 ms → **94 KB 的 JSON 编码约占
+7.3 ms**，与方向稿 §9 E-2「p50 10.2ms 主因是服务端编码」的推断吻合。
+
+---
+
+## 11. 勘误与实施偏差
+
+### E-6 行编码由会话级改为连接级（实施期修正）
+
+原设计（D3）把 `row_encoding` 存在 `VtState` 上。实施中发现这是把**视图属性**
+放进了**屏幕状态**：一个 pty 会话可被多个 WS 连接同时 attach（多标签页/多设备），
+会话级存放会互相覆盖——若最后 hello 的是新客户端，先前连着的旧客户端就会被切
+成 runs 格式而白屏（它只认 cells）。
+
+改为：`encode_cell_frame` / `encode_overlay_frame` / `encode_viewport_frame`
+各接受一个 `encoding: RowEncoding` 参数，由 `terminal_ws.rs` 按连接持有
+（`Arc<Mutex<RowEncoding>>`，hello 时写入、编码时瞬时读取，不跨 await）。
+`VtState` 恢复「纯屏幕真相源」语义。
+
+正向副作用：两个连接可用不同编码并存，探针因此能做 §10.1 的交叉无损验证。

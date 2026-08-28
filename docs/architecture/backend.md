@@ -103,6 +103,19 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 > wezterm-term/vt100 归位首行）——xterm 语义上更正确，对整屏文本匹配的
 > agent 检测无影响。OSC 52 剪贴板在服务端显式关闭（归前端 xterm.js）。
 >
+> **cell_frame 行编码（RLE，2026-08-28）**：`rows[]` 每行有两种负载，由**连接级**
+> `hello` 握手协商（`{"t":"hello","supports_cell_frame":true,"row_encoding":"runs"}`
+> → RLE；字段缺失或取其他值 → 逐 cell）：
+> - `cells`：`[{"sgr":"1;32","ch":"x","skip":false}, ...]`（旧格式，默认）
+> - `runs`：行内按 sgr 合并连续字符的扁平数组 `["1;32","text","","more"]`
+>
+> 二者渲染等价（宽字符占位 cell 在两侧都不产生输出），`runs` 把单帧从 94.4 KB
+> 压到 4.8 KB（19.8×，四类内容实测无损）。**行编码是视图属性而非屏幕状态**：会话
+> 可被多个连接同时 attach，故存在 `terminal_ws.rs`（`Arc<Mutex<RowEncoding>>`）
+> 而非 `VtState`，编码时作为参数传入三个 `encode_*_frame` —— 会话级存放会让后
+> hello 的连接把旧客户端切成它不认的格式。前端按字段存在与否分派，新旧版本任意
+> 组合均可独立回滚。详见 `docs/dev/plans/2026-08-28-pty-frame-rle.md`。
+>
 > **历史视口窗口（方案 C Phase 1，2026-08-28）**：cell_frame 模式下前端 xterm
 > scrollback 结构性冻结（根因核查见 `docs/dev/plans/backlog/pty-scroll-handover.md`
 > §零），历史视图职责移交后端：前端发 `{"type":"viewport_request","y"}` 控制帧

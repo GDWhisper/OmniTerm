@@ -8,12 +8,14 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::PtySize;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::AppState;
 use crate::engine::pty::events::SemanticEvent;
+use crate::engine::pty::frame::RowEncoding;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
 
 use serde::Deserialize;
@@ -27,6 +29,19 @@ const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 struct ClientHello {
     t: String,
     supports_cell_frame: bool,
+    /// 行编码格式（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D3）：
+    /// `"runs"` → 行内 RLE；字段缺失或取其他值 → 逐 cell（旧客户端行为）。
+    #[serde(default)]
+    row_encoding: Option<String>,
+}
+
+/// 解析 `hello.row_encoding`：仅 `"runs"` 切 RLE，其余（含字段缺失）回落
+/// cells —— 旧客户端不发该字段，行为与协商前完全一致（计划 §4 降级表）。
+fn parse_row_encoding(value: Option<&str>) -> RowEncoding {
+    match value {
+        Some("runs") => RowEncoding::Runs,
+        _ => RowEncoding::Cells,
+    }
 }
 
 pub async fn handle_pty_terminal(
@@ -163,6 +178,10 @@ pub async fn handle_pty_terminal(
     let cell_frame_enabled = Arc::new(AtomicBool::new(false));
     // forward handle 专用克隆（避免 session_id 被 move）
     let fwd_cfe = cell_frame_enabled.clone();
+    // 行编码是**本连接**的 hello 协商结果：会话可被多个连接同时 attach，
+    // 存进共享的 VtState 会互相覆盖，让未协商 runs 的旧客户端收到 runs 帧。
+    let row_encoding = Arc::new(Mutex::new(RowEncoding::default()));
+    let fwd_encoding = Arc::clone(&row_encoding);
     let session_id_for_frame = session_id.clone();
     let encode_attach = attach.clone();
 
@@ -174,9 +193,11 @@ pub async fn handle_pty_terminal(
 
         // 编码当前 grid 为 cell_frame JSON。读循环先 feed grid 再广播
         // （out/vt 同锁原子），故收到 raw bytes 时 grid 已是最新，可立即编码。
+        // 锁内同步取行编码（瞬时读，不跨 await）。
         let encode_now = || {
+            let encoding = *fwd_encoding.lock().unwrap();
             let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-            vt_guard.encode_cell_frame(&session_id_for_frame)
+            vt_guard.encode_cell_frame(&session_id_for_frame, encoding)
         };
 
         loop {
@@ -207,8 +228,9 @@ pub async fn handle_pty_terminal(
                                 // then drop the guard before the await point to keep the
                                 // spawned future Send.
                                 let json = {
+                                    let encoding = *fwd_encoding.lock().unwrap();
                                     let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame);
+                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame, encoding);
                                     vt_guard.invalidate_diff();
                                     json
                                 };
@@ -227,8 +249,9 @@ pub async fn handle_pty_terminal(
                         trace!(y, "viewport request served: session={session_id_for_frame}");
                         let json = {
                             // encode_viewport_frame 仅需 &self（不动 diff 基线）
+                            let encoding = *fwd_encoding.lock().unwrap();
                             let vt_guard = encode_attach.state.vt.lock().unwrap();
-                            vt_guard.encode_viewport_frame(&session_id_for_frame, y)
+                            vt_guard.encode_viewport_frame(&session_id_for_frame, y, encoding)
                         };
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                             break;
@@ -280,6 +303,7 @@ pub async fn handle_pty_terminal(
 
     // === WS 消息读循环（输入 + resize + ping）===
     let read_cfe = cell_frame_enabled.clone();
+    let read_encoding = Arc::clone(&row_encoding);
     let read_session_id = session_id.clone();
     let mut read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
@@ -294,8 +318,15 @@ pub async fn handle_pty_terminal(
                     // Phase 1: cell_frame 能力握手
                     if let Ok(hello) = serde_json::from_str::<ClientHello>(&text) {
                         if hello.t == "hello" && hello.supports_cell_frame {
+                            // 先记录行编码再置位开关：转发循环见开关为真即启动
+                            // 编码定时器，顺序颠倒会让首帧退回 cells 格式。
+                            let encoding = parse_row_encoding(hello.row_encoding.as_deref());
+                            *read_encoding.lock().unwrap() = encoding;
                             read_cfe.store(true, Ordering::Relaxed);
-                            info!("cell_frame enabled: session={}", read_session_id);
+                            info!(
+                                "cell_frame enabled (row_encoding={:?}): session={}",
+                                encoding, read_session_id
+                            );
                         }
                         continue;
                     }
@@ -377,4 +408,20 @@ fn agent_state_frame(
         agent_nonce: snap.agent_nonce.as_deref(),
     })
     .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 计划 §4 降级表：只有精确的 `"runs"` 切 RLE，其余（含旧客户端的字段缺失）
+    /// 一律回落 cells。
+    #[test]
+    fn row_encoding_negotiation_falls_back_to_cells() {
+        assert_eq!(parse_row_encoding(Some("runs")), RowEncoding::Runs);
+        assert_eq!(parse_row_encoding(Some("cells")), RowEncoding::Cells);
+        assert_eq!(parse_row_encoding(None), RowEncoding::Cells);
+        assert_eq!(parse_row_encoding(Some("")), RowEncoding::Cells);
+        assert_eq!(parse_row_encoding(Some("RUNS")), RowEncoding::Cells);
+    }
 }

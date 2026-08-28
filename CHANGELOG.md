@@ -52,6 +52,7 @@ Prefix each entry with the area it affects:
 ### Added
 
 - (2026-08-28 11:10) `[backend]` `[frontend]` pty 终端滚轮接管（历史视口后端渲染，方案 C Phase 2）：cell_frame 模式下前端 xterm scrollback 结构性冻结（滚轮间歇性失效的根因），现改为前端只维护窗口偏移 `y`，滚轮/翻页时发 `viewport_request` 由后端按 VT grid（含 1000 行 scrollback）编码对应历史窗口帧，前端在 viewport 模式下暂停实时帧渲染、回底停稳 200ms 后恢复并重同步；alt-screen（vim/htop）与鼠标协议激活时自动交还默认行为，移动端触摸滚动经同一接管路径生效。可用 `VITE_TERMINAL_SCROLLBACK_VIEWPORT=0` 关闭回到旧行为（`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/hooks/useCellFrame.ts`、`src/engine/pty/vt.rs`、`src/engine/pty/frame.rs`）
+- (2026-08-28 16:10) `[backend]` `[frontend]` pty 终端帧体积瘦身 20 倍：cell_frame 每行由「逐 cell 对象」改为按样式合并连续字符的 RLE 扁平数组（`{"runs":["1;32","text",...]}`），单帧从 94.4 KB 降到 4.8 KB，历史窗口滚动的请求→响应 p50 从 12.3 ms 降到 4.8 ms。行编码经 `hello` 握手的 `row_encoding` 字段按**连接**协商（不是按会话，避免多标签页/多设备同时 attach 时互相切换格式），缺省仍走旧格式；前端按字段分派，新旧前后端任意组合都能独立回滚。四类内容（数字/彩色 ls/源码/CJK 宽字符）逐字渲染等价性经同会话双连接交叉比对验证通过（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`src/engine/pty/terminal_ws.rs`、`frontend/src/hooks/useCellFrame.ts`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-28 12:24) `[frontend]` 创建会话弹窗记住上次使用的终端引擎：pty/tmux 选择此前是弹窗本地 state，每次打开都回到 pty，习惯 tmux 的用户要重复点选。现按「本次点选 > 上次成功创建的引擎（localStorage `omniterm_last_terminal_engine`，仅创建成功才记，取消不污染）> pty」生效，并在上次使用的引擎卡右上角加「上次选择」角标（不可按指示器，遵循 ui-style-guide §4.1 status-badge-3d）；pty 卡的「● 默认」标记改为复用共享 `BetaBadge`（引擎已非无条件默认），终端大类卡副标题跟随当前引擎而不再写死 pty；宿主探测无复用器时记忆值不点亮不可选的 tmux 卡，存档值损坏回落 pty（`frontend/src/components/Sidebar/CreateSessionModal.tsx`、`frontend/src/stores/appStore.ts`）
 
 ### Fixed
