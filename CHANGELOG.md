@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-08-28 11:10) `[backend]` `[frontend]` pty 终端滚轮接管（历史视口后端渲染，方案 C Phase 2）：cell_frame 模式下前端 xterm scrollback 结构性冻结（滚轮间歇性失效的根因），现改为前端只维护窗口偏移 `y`，滚轮/翻页时发 `viewport_request` 由后端按 VT grid（含 1000 行 scrollback）编码对应历史窗口帧，前端在 viewport 模式下暂停实时帧渲染、回底停稳 200ms 后恢复并重同步；alt-screen（vim/htop）与鼠标协议激活时自动交还默认行为，移动端触摸滚动经同一接管路径生效。可用 `VITE_TERMINAL_SCROLLBACK_VIEWPORT=0` 关闭回到旧行为（`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/hooks/useCellFrame.ts`、`src/engine/pty/vt.rs`、`src/engine/pty/frame.rs`）
+
 ### Fixed
 
 - (2026-08-28 00:35) `[frontend]` 修复 pty 会话切换后屏幕冒出 `1;2c1;2c` 字样：tmux attach 时探测设备属性（`ESC[c`），连接初期裸字节窗口期把查询转发到前端，xterm.js 自动应答经 onData 回写 PTY——而应答权本在后端 VT（已回写一份），tmux 收到迟到的第二份后透传给 shell 回显。pty 会话 onData 路径按锚定整串白名单过滤 xterm.js 全部自动应答（DA1/DA2/CPR/DECXCPR/DSR/DECRPM/窗口尺寸/OSC 颜色）；tmux/外部会话不过滤（那里前端是唯一终端模拟器，应答必需）；鼠标上报与 DECRQSS 应答明确放行（`frontend/src/utils/ptyInputFilter.ts`、`frontend/src/hooks/useTerminal.ts`）

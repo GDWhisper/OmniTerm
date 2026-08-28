@@ -486,6 +486,8 @@ impl VtState {
             overlay: true,
             row_indices: None,
             viewport: None,
+            // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
+            alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
             rows: out_rows,
         };
 
@@ -537,6 +539,7 @@ impl VtState {
             overlay: false,
             row_indices: None,
             viewport: Some(y),
+            alt_screen: None,
             rows: out_rows,
         };
 
@@ -621,6 +624,7 @@ impl VtState {
             overlay,
             row_indices,
             viewport: None,
+            alt_screen: None,
             rows: out_rows,
         };
 
@@ -1042,6 +1046,32 @@ mod tests {
         assert_eq!(parsed["full"], true);
         let cursor = parsed["cursor"].as_object().unwrap();
         assert!(cursor.get("shape").is_some(), "overlay cursor must include shape");
+    }
+
+    // ──── 方案 C Phase 2: alt_screen 标记（D4）────
+
+    #[test]
+    fn overlay_frame_carries_alt_screen_flag() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?1049h"); // 进入 alt-screen
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
+        assert_eq!(parsed["alt_screen"], true, "enter overlay must carry alt_screen=true");
+
+        v.feed(b"\x1b[?1049l"); // 退出回主屏
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
+        assert_eq!(parsed["alt_screen"], false, "exit overlay must carry alt_screen=false");
+    }
+
+    #[test]
+    fn regular_frames_omit_alt_screen_field() {
+        let mut v = vt(24, 80);
+        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        assert!(parsed.get("alt_screen").is_none(), "regular frame must omit alt_screen");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0)).unwrap();
+        assert!(parsed.get("alt_screen").is_none(), "viewport frame must omit alt_screen");
     }
 
     // ──── 方案 C Phase 1: encode_viewport_frame ────

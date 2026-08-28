@@ -43,6 +43,12 @@ export interface CellFrame {
   overlay: boolean
   /** diff 帧时必填：变化行在原 grid 中的 0-based 行号。 */
   row_indices?: number[]
+  /** 历史窗口帧标记（方案 C）：本帧展示的历史窗口偏移（行，0 = live 屏）。
+   * 仅 viewport_request 的响应帧携带；消费方为 ViewportController。 */
+  viewport?: number
+  /** alt-screen 激活标记（方案 C D4）：仅 overlay 帧携带；消费方为
+   * ViewportController（alt-screen 期间禁用滚轮接管）。 */
+  alt_screen?: boolean
   rows: CellRow[]
 }
 
@@ -155,64 +161,20 @@ const RESYNC_THROTTLE_MS = 1000
  * 行变化（症状：连按回车丢行，切换会话经补屏全帧才恢复）。故每个 rAF
  * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时清空队列并请求
  * 后端作废 diff 基线、下一帧发全帧兜底。
+ *
+ * 滚动期的帧丢弃（方案 C D3：viewport 模式下实时帧不渲染）由
+ * ViewportController.acceptFrame 在入队前门控，本 hook 不感知滚动状态。
  */
 export function useCellFrame(
   termRef: React.RefObject<Terminal | null>,
   requestResync?: () => void,
-  /**
-   * Current scroll mode state (true = user has scrolled up into scrollback).
-   * When true, full/overlay frames are stashed instead of rendered — they
-   * would otherwise overwrite the viewport with live content and yank the
-   * user's scroll position back to the bottom.
-   */
-  scrollModeRef?: React.MutableRefObject<boolean>,
 ) {
   const frameQueue = useRef<CellFrame[]>([])
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
-  // Latest full/overlay frame received while user is scrolled up.  Rendered
-  // the moment scrollMode goes false (user returns to bottom).
-  const pendingFullRef = useRef<CellFrame | null>(null)
 
   const enqueue = useCallback((frame: CellFrame) => {
     const q = frameQueue.current
-
-    // When the user is viewing scrollback, full/overlay frames would overwrite
-    // the viewport with live content (disrupting scroll).  Stash the latest
-    // one — it will be flushed when scrollMode goes false.  Diff frames are
-    // still rendered (they touch specific rows that are visible).
-    const skipFull = (frame.full || frame.overlay) && scrollModeRef?.current
-    if (skipFull) {
-      pendingFullRef.current = frame
-      return
-    }
-
-    // Flush any stashed full frame before the new one so the terminal
-    // transitions from stale → fresh in the correct order.
-    const pending = pendingFullRef.current
-    if (pending) {
-      pendingFullRef.current = null
-      if (q.length >= MAX_PENDING_FRAMES) {
-        q.length = 0
-        const now = performance.now()
-        if (now - lastResyncAt.current >= RESYNC_THROTTLE_MS) {
-          lastResyncAt.current = now
-          requestResync?.()
-        }
-        return
-      }
-      q.push(pending)
-      if (rafId.current == null) {
-        rafId.current = requestAnimationFrame(() => {
-          rafId.current = null
-          const term = termRef.current
-          const frames = frameQueue.current
-          frameQueue.current = []
-          if (!term) return
-          for (const f of frames) renderCellFrame(term, f)
-        })
-      }
-    }
     if (q.length >= MAX_PENDING_FRAMES) {
       q.length = 0
       const now = performance.now()
@@ -233,7 +195,7 @@ export function useCellFrame(
         for (const f of frames) renderCellFrame(term, f)
       })
     }
-  }, [termRef, requestResync, scrollModeRef])
+  }, [termRef, requestResync])
 
   return { enqueue }
 }

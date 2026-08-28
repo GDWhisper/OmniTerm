@@ -18,7 +18,7 @@ src/
 │   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
-│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）
+│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ pty 滚轮接管（方案 C，ViewportController 接线）
 │   ├── useLongPress.ts  # 移动端长按手势（500ms + 位移取消），终端 paste 菜单与聊天气泡动作菜单共用（D3）
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
@@ -27,7 +27,7 @@ src/
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, viewportController.ts pty 历史视口状态机（方案 C：live/viewport 模式、wheel 接管、rAF 合并、alt-screen 互斥）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx（列表渲染+状态提升，≤800 行）、ProjectCard.tsx（项目树渲染）、Create{Project,Session,Worktree}Modal.tsx、Rename/Delete{Confirm,Worktree}/ReleaseConfirm/RepairPath 对话框、ExternalSessionsSection.tsx（外部会话轮询+adopt）、ArchivedSessionsSection.tsx（已归档 ACP 会话全局折叠区块——点击只读查看历史/取消归档/删除；数据存 appStore.archivedSessions，SessionView 与 ChatView 据此兜底解析归档态活跃会话）、DuplicateProjectsDialog.tsx、UpdateBadge.tsx、RowActionButtons.tsx（含 SidebarBottomButton）、sidebarModalStyles.ts、useAgentAttentionPolling.ts
@@ -129,10 +129,13 @@ tmux 与 pty 会话共用 Terminal 组件与 WS 路由，但交互语义按引�
 - **tmux 路径**（冻结不改）：滚动/翻页注入 copy-mode 字节（prefix+`[`），
   `tmuxScrollModeRef` 跟踪 copy-mode 状态；modern 键位注入 prefix 组合；
   复制需 Shift 拖选绕过 mouse mode。
-- **pty 路径**：零注入字节——翻页走 `term.scrollLines`，退出走
-  `scrollToBottom`；`scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）
-  由 `term.onScroll` 按视口位置派生（`viewportY < baseY`）；modern 键位
-  拦截直接放行；无 mouse mode，直接拖选即复制（autoCopySelect 机制共用）。
+- **pty 路径**：零注入字节——滚轮/翻页/退出滚动全部经 `utils/viewportController.ts`
+  请求后端历史窗口帧（方案 C，D1-D6；`attachCustomWheelEventHandler` 接管
+  wheel，alt-screen / 鼠标协议激活时交还 xterm 默认路径；开关
+  `VITE_TERMINAL_SCROLLBACK_VIEWPORT`，详见计划文档 Phase 2 勘误）；
+  `scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）由控制器的
+  viewport 模式启停回调驱动（`y > 0` 即滚动中）；modern 键位拦截直接
+  放行；无 mouse mode，直接拖选即复制（autoCopySelect 机制共用）。
 - 引擎间切换会话时 `Layout::sessionViewKey` 以 runtime_kind 为 key，
   跨引擎切换强制重挂载（pty 的 onScroll 订阅在创建期注册）。
 

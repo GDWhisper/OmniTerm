@@ -30,6 +30,11 @@ pub struct CellFrame {
     /// 帧省略——前端据此区分历史帧与实时帧（stale 响应按 y 单调性丢弃）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<u32>,
+    /// alt-screen 激活标记（方案 C Phase 2，D4）：仅 overlay 帧携带（enter/exit
+    /// 都发 overlay，无此标记前端无法区分）。viewport 控制器据此在 alt-screen
+    /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_screen: Option<bool>,
     pub rows: Vec<RowData>,
 }
 

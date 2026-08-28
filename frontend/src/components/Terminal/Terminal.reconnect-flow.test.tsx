@@ -41,6 +41,7 @@ vi.mock('@xterm/xterm', () => {
       return { dispose() {} }
     }
     attachCustomKeyEventHandler() {}
+    attachCustomWheelEventHandler() {}
     getSelection() {
       return ''
     }

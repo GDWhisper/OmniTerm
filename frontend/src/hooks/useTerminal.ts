@@ -11,6 +11,7 @@ import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
 import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
+import { ViewportController } from '../utils/viewportController'
 import { useCellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
@@ -22,6 +23,22 @@ import { useCellFrame } from './useCellFrame'
 const importAddons = () =>
   Promise.all([import('@xterm/addon-fit'), import('@xterm/addon-web-links')])
 let addonsPromise = importAddons()
+
+/** 方案 C D8：滚轮接管总开关（行为级切换，无中间态可灰度）。置 '0' 关闭
+ *  接管（wheel 交回 xterm 默认路径）；其余值/缺省开启。Phase 3 回归后移除。 */
+const VIEWPORT_TAKEOVER_ENABLED = import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT !== '0'
+
+/** 当前字号下一行的像素高度（viewport 控制器像素 wheel 换算用）。渲染服务
+ *  尺寸首帧前不可用，退回字号×行高比估算。 */
+function cellHeightPx(term: Terminal): number {
+  const core = (
+    term as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } }
+    }
+  )._core
+  const h = core?._renderService?.dimensions?.css?.cell?.height
+  return h && h > 0 ? h : (term.options.fontSize ?? 14) * 1.35
+}
 
 async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
   let mods: [typeof import('@xterm/addon-fit'), typeof import('@xterm/addon-web-links')]
@@ -110,7 +127,22 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const [scrollMode, setScrollMode] = useState(false)
   const scrollModeRef = useRef(false)
   useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
-  const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync, scrollModeRef)
+  // 方案 C Phase 2：历史视口控制器（lazy ref；实例跨会话/重连复用，状态由
+  // reset() 归位）。pty 会话滚轮/翻页经它请求后端历史窗口帧。
+  const viewportCtlRef = useRef<ViewportController | null>(null)
+  if (viewportCtlRef.current === null) {
+    viewportCtlRef.current = new ViewportController({
+      sendRequest: (y) => {
+        const ws = wsRef.current
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'viewport_request', y }))
+        }
+      },
+      onModeChange: setScrollMode,
+      onLiveRestore: requestResync,
+    })
+  }
+  const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const composingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -172,6 +204,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (wasConnected) {
       termRef.current?.reset()
     }
+    // 方案 C：会话切换/重连后视口控制器无条件回 live 初态（不发请求）
+    viewportCtlRef.current?.reset()
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const path = externalSessionName
@@ -214,7 +248,10 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
               sawFirstBinary = true
               termRef.current?.reset()
             }
-            enqueueCellFrame(msg)
+            // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
+            // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。
+            const ctl = viewportCtlRef.current
+            if (!ctl || ctl.acceptFrame(msg)) enqueueCellFrame(msg)
             return
           }
           if (msg.type === 'attached') {
@@ -390,6 +427,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       const term = termRef.current
       if (!term) return
       const page = Math.max(1, term.rows - 1)
+      // 方案 C：WS 可用时翻页走后端历史窗口；离线退回本地 scrollback
+      // 滚动（两者在离线态都无内容可见，仅为行为兜底）。
+      if (wsRef.current?.readyState === WebSocket.OPEN && viewportCtlRef.current) {
+        viewportCtlRef.current.pageScroll(direction === 'up' ? -1 : 1, page)
+        return
+      }
       term.scrollLines(direction === 'up' ? -page : page)
       return
     }
@@ -414,9 +457,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
    *  a lone Escape is a no-op in a shell command line. */
   const exitScrollMode = useCallback(() => {
     if (runtimeKindRef.current === 'pty') {
-      // pty 分流：本地 scrollback 无 mode 概念，回到底部即退出；
-      // scrollMode 由 term.onScroll 按视口位置复位。
-      termRef.current?.scrollToBottom()
+      // pty 分流：方案 C，回底 = 恢复 live（控制器触发 resync 全帧重绘）
+      viewportCtlRef.current?.scrollToLive()
       return
     }
     if (!tmuxScrollModeRef.current) {
@@ -598,24 +640,25 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
-    // pty 分流（D12）：无 tmux copy-mode 状态可查，滚动态改由视口位置派生——
-    // 视口不在 scrollback 底部即视为"滚动中"（MobileKeyBar 高亮 + 软键盘抑制
-    // 与 tmux 路径语义一致）。用户滚回底部时触发 resync，确保最新全帧
-    // 刷新已过期的 viewport 内容（关闭 scrollback 可视化间隙）。
-    if (runtimeKindRef.current === 'pty') {
-      listenerDisposablesRef.current.push(
-        term.onScroll(() => {
-          const buf = term.buffer.active
-          const wasScrolled = scrollModeRef.current
-          const isScrolled = buf.viewportY < buf.baseY
-          setScrollMode(isScrolled)
-          // 从滚动中回到底部：触发 resync 让后端发全帧，
-          // useCellFrame 会 flush 之前 stash 的全帧。
-          if (wasScrolled && !isScrolled) {
-            requestResync()
-          }
+    // pty 历史滚动（方案 C D1）：滚轮接管请求后端历史窗口帧，取代 xterm
+    // 本地 scrollback（cell_frame 模式下结构性冻结，见 pty-scroll-handover.md）。
+    // 互斥判定顺序：① tmux/external 会话不接管（冻结路径：xterm scrollback
+    // + touchScroll→tmux copy-mode）；② 鼠标协议激活（vim/htop 等）不接管
+    // ——xterm 6.0.0 中自定义 wheel handler 在鼠标协议路径同样最先执行，
+    // 必须显式放行让鼠标上报发出；③ 其余 pty 场景接管（取消 xterm 默认
+    // 滚动），alt-screen / 离线由控制器内部拒绝（D4）。
+    if (VIEWPORT_TAKEOVER_ENABLED) {
+      term.attachCustomWheelEventHandler((ev: WheelEvent) => {
+        if (runtimeKindRef.current !== 'pty') return true
+        if (term.modes.mouseTrackingMode !== 'none') return true
+        const ctl = viewportCtlRef.current
+        if (!ctl) return true
+        return !ctl.handleWheel(ev, {
+          lineHeightPx: cellHeightPx(term),
+          rows: term.rows,
+          wsOpen: wsRef.current?.readyState === WebSocket.OPEN,
         })
-      )
+      })
     }
 
     // Handle resize — debounced so xterm.js and tmux resize together after

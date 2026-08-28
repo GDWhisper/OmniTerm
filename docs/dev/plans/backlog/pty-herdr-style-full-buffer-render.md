@@ -1,7 +1,7 @@
 # PTY Herdr 式全缓冲前端渲染
 
 > **状态**：✅ **已立项（2026-08-28）**。核查确认本方案是唯一架构自洽的出路：cell_frame 模式下前端 xterm scrollback 结构性冻结（详见 `pty-scroll-handover.md` §零 核查点 3），滚轮问题的唯一出路是把历史视图职责整个移交后端。前提已验证：后端 grid 实际使用 **alacritty_terminal**（非早期文档所述 avt），配有 1000 行 scrollback（`vt.rs` `scrolling_history: VT_SCROLLBACK_LINES`），`encode_viewport_frame` 的数据基础真实存在。实施前需过一遍文末「实施前评审决策点」。
-> **进度**：Phase 1 ✅（2026-08-28：`encode_viewport_frame` + `viewport_request` 控制帧 + 有界通道，前后端协议字段 `viewport: y` 已定型；前端未消费，行为无变化）。Phase 2（ViewportController + wheel 接管 + D3 状态机）与 Phase 3（D5/D7 清理 + 回归）待实施。
+> **进度**：Phase 1 ✅（2026-08-28：`encode_viewport_frame` + `viewport_request` 控制帧 + 有界通道，前后端协议字段 `viewport: y` 已定型；前端未消费，行为无变化）。Phase 2 ✅（2026-08-28：前端 `ViewportController` + `attachCustomWheelEventHandler` 接管 + D3 状态机 + D4 alt-screen 互斥 + 单测 17 例；实施偏差见下方「Phase 2 实施勘误」）。Phase 3（手动回归验收 + 开关移除）待实施。
 > **触发条件**：重新评估终端滚动架构、或前端渲染层改造时参考。
 > **关联**：`docs/dev/plans/2026-08-13-port-forward-proxy.md`（协议设计）、
 > `docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B，已撤销）。
@@ -179,3 +179,10 @@ Phase 1：后端 `encode_viewport_frame` + WS `viewport_request` 控制帧（含
 - 不放弃 cell frame diff 机制（正常输出仍用 diff 帧，节约带宽）
 - 不做后端行缓存层（VT grid 已经是缓存）
 - 不拦截 xterm 的文本选择（保持前端能力）
+
+### Phase 2 实施勘误（2026-08-28，实施时就地记录）
+
+1. **D4 需要协议补字段**：overlay 帧在 AltScreenEnter/Exit **都**会发送，仅凭帧无法区分 enter/exit，前端无法可靠判定 alt-screen 状态。落地为 `CellFrame` 新增可选字段 `alt_screen: bool`（仅 overlay 帧携带，值取编码时刻的 `TermMode::ALT_SCREEN`），协议向后兼容（其余帧省略）。原型示意中「overlay 帧即信号」的假设不成立。
+2. **D2 stale-drop 降级为权威同步**：协议无请求回显字段，响应 y 经后端 `history_size` 钳制后与请求值可能不等，「按 y 单调性判 stale」不可靠（会把钳制响应误判为 stale 并永久卡死等待）。实际落地：**不丢弃**，响应 y 权威回写本地 y（无更新请求排队时），有序 WS + rAF 合并（单请求在飞）+ 本地 RTT <1ms 保证收敛，乱序窗口实际不存在。另加防御：live 模式下迟到的 y>0 窗口帧直接丢弃（恢复/重置前发出的残留请求）。
+3. **D8 开关定名与范围**：定名 `VITE_TERMINAL_SCROLLBACK_VIEWPORT`（vite.config `define` 从 `.env.local` 注入，缺省开启，置 `0` 关闭）；范围仅限 **wheel handler 挂载点**（关闭即交回 xterm 默认路径——无 scrollback 时自动转方向键，仍是可用降级）。翻页/退出滚动按钮与帧门控不走开关（后端 viewport 路径相对旧 xterm 本地滚动是纯改进，无保留双路径价值）。开关属过渡期脚手架，Phase 3 验收通过后移除。
+4. **D7 提前至 Phase 2**：尝试 3 遗留的 `scrollModeRef` 暂存 / `pendingFullRef` flush / pty `onScroll` 回底 resync 与 D3 状态机管转同一处代码（`useCellFrame` 入队门控 + 滚动状态源），留下即双份冲突逻辑。随 D3 落地一并移除（`useCellFrame` 不再感知滚动状态，viewport 期丢帧由控制器 `acceptFrame` 入队前门控）。Phase 3 残余范围：手动回归验收 + 开关移除。

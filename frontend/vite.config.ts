@@ -9,6 +9,8 @@ import { resolve } from 'node:path'
 const backendPort = process.env.BACKEND_PORT || '9075'
 const frontendPort = process.env.FRONTEND_PORT || '9076'
 const domain = process.env.DOMAIN || 'localhost'
+// 方案 C D8：pty 滚轮接管开关（.env.local 可置 0 关闭；缺省开启）
+const viewportTakeover = process.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT || '1'
 
 // 版本号唯一真相源 = Cargo.toml（git 跟踪，随分支 merge 同步）
 // 不再依赖 .env.local 的 BRANCH_VERSION，避免各 worktree 版本号失同步
@@ -26,6 +28,8 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(branchVersion),
     // 后端端口（子域名代理 URL 生成用；dev 前后端分离时前端不知道后端端口，构建时注入）
     'import.meta.env.VITE_BACKEND_PORT': JSON.stringify(backendPort),
+    // pty 滚轮接管开关（方案 C D8，详见 viewportController.ts 顶部注释）
+    'import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT': JSON.stringify(viewportTakeover),
   },
   server: {
     port: Number(frontendPort),

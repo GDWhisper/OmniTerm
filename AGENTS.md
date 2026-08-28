@@ -62,6 +62,7 @@ Rust (Axum) backend + React (Vite + TypeScript) frontend. FSL-1.1-MIT licensed.
 | `BRANCH_NAME` | 当前 worktree 分支名 | Rust 启动日志 |
 | `BRANCH_BINARY_NAME` | 数据库隔离标识（`omniterm-dev` / `omniterm-preview` / `omniterm`），决定各 worktree 的 SQLite 文件名 | dev.sh 拼出 `--db` 路径 |
 | `DOMAIN` | 部署域名 | Vite `allowedHosts` |
+| `VITE_TERMINAL_SCROLLBACK_VIEWPORT` | pty 滚轮接管开关（方案 C D8，置 `0` 关闭；缺省开启） | vite.config `define` → 前端 wheel handler 挂载 |
 
 > **版本号不在此配置**：版本号由 `Cargo.toml` 的 `version` 字段作为唯一真相源（git 跟踪，随分支 merge 自动同步）。
 > 前端经 `vite.config.ts` 在构建时读取 `Cargo.toml` 注入 `import.meta.env.VITE_APP_VERSION`；Rust 用 `env!("CARGO_PKG_VERSION")`。
