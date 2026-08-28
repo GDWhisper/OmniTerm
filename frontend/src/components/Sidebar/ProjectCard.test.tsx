@@ -267,6 +267,20 @@ describe('ProjectCard ACP 会话折叠', () => {
     expect(container.textContent).toContain('sidebar.showMoreSessions')
   })
 
+  it('展开时隐藏行从切换行下方追加，不回插原序中间', () => {
+    reasonForImpl = (key: string) => (key === 'a7' ? 'decision' : undefined)
+    renderCard(collapsedProps())
+    const names = () =>
+      [...container.querySelectorAll('.sidebar-session-list .session-name')].map((el) => el.textContent)
+
+    // 折叠态：最新 4 条补足阈值 + 豁免的 a7
+    expect(names()).toEqual(['acp-0', 'acp-1', 'acp-2', 'acp-3', 'acp-7'])
+
+    // 展开：隐藏行追加在切换行下方，豁免行位置不动
+    clickToggle()
+    expect(names()).toEqual(['acp-0', 'acp-1', 'acp-2', 'acp-3', 'acp-7', 'acp-4', 'acp-5', 'acp-6'])
+  })
+
   it('不超过阈值时不渲染切换行', () => {
     renderCard(collapsedProps({ sessions: acpSessions.slice(0, 5) }))
 

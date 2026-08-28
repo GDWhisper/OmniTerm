@@ -1257,20 +1257,21 @@ body.fm-dragging * {
   color: var(--text-primary);
 }
 
-/* ACP 会话折叠切换行（「展开更多 / 收起」）——与 noSessions 提示同规格的可点击行 */
+/* ACP 会话折叠切换行（「展开更多 / 收起」）——可见/隐藏行的接缝，需醒目可点 */
 .sidebar-session-more-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px;
-  margin-top: 1px;
+  padding: 4px 6px;
+  margin-top: 2px;
   cursor: pointer;
-  font-size: 11px;
-  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 .sidebar-session-more-toggle:hover {
-  color: var(--accent);
+  background: var(--bg-elevated);
 }
 
 .sidebar-session-item .session-name {

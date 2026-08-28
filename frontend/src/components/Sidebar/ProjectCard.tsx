@@ -181,12 +181,14 @@ export function ProjectCard(props: {
 
               // ACP 会话超阈值折叠（终端会话不受影响）。列表按 created_at DESC
               // 排序，补足阈值时天然保留最新的；豁免位留给激活/需注意力/等待决策的
-              // 会话，折叠后不丢关键信息。
+              // 会话，折叠后不丢关键信息。列表被切成「可见行 + 切换行 + 隐藏行」，
+              // 展开时隐藏行从切换行下方就地追加——而不是插回原序中间，
+              // 新行出现在用户点击处，收起/展开的语义与视觉一致。
               const acpSessions = wtSessions.filter((s) => s.runtime_kind === 'acp')
-              const acpCollapsed =
-                acpSessions.length > MAX_COLLAPSED_ACP_SESSIONS && !acpExpanded.has(wt.id)
+              const acpOverLimit = acpSessions.length > MAX_COLLAPSED_ACP_SESSIONS
+              const acpCollapsed = acpOverLimit && !acpExpanded.has(wt.id)
               const visibleAcpIds = new Set<string>()
-              if (acpCollapsed) {
+              if (acpOverLimit) {
                 for (const s of acpSessions) {
                   if (
                     s.id === props.activeSessionId ||
@@ -201,10 +203,145 @@ export function ProjectCard(props: {
                   visibleAcpIds.add(s.id)
                 }
               }
-              const hiddenAcpCount = acpSessions.length - visibleAcpIds.size
-              const renderedSessions = acpCollapsed
+              const renderedSessions = acpOverLimit
                 ? wtSessions.filter((s) => s.runtime_kind !== 'acp' || visibleAcpIds.has(s.id))
                 : wtSessions
+              const hiddenAcpSessions = acpOverLimit
+                ? acpSessions.filter((s) => !visibleAcpIds.has(s.id))
+                : []
+
+              const renderSessionRow = (s: Session) => {
+                const isSessionActive = props.activeSessionId === s.id
+                const sessionKey = s.id
+                const attnReason = attention.reasonFor(sessionKey)
+                // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
+                // 状态点/tooltip 两类会话表现一致
+                const activity =
+                  s.runtime_kind === 'acp'
+                    ? props.acpActivityFor(s.id)
+                    : s.agent_state === 'waiting'
+                      ? 'waiting'
+                      : s.agent_state === 'running' || s.is_active
+                        ? 'running'
+                        : undefined
+                const dotColor = attnReason
+                  ? attnReason === 'decision'
+                    ? 'var(--warning)'
+                    : attnReason === 'error'
+                      ? 'var(--danger)'
+                      : 'var(--success)'
+                  : activity === 'waiting'
+                    ? 'var(--warning)'
+                    : activity === 'running'
+                      ? 'var(--accent)'
+                      : 'var(--text-faint)'
+                return (
+                  <div
+                    key={s.id}
+                    className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
+                    onClick={() => {
+                      activateSession(s.id)
+                      attention.setActive(sessionKey)
+                    }}
+                  >
+                    {/* ACP kind badge — 绝对定位叠加在左侧 28px 缩进槽，不占行内布局；
+                        绿字=进程驻留（未释放），灰字=已释放 */}
+                    {s.runtime_kind === 'acp' && (
+                      <span
+                        className="status-badge-3d font-pixel"
+                        style={{
+                          position: 'absolute',
+                          left: -22,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          padding: '1px 3px',
+                          background: 'var(--wood-shadow, #3A2E1F)',
+                          fontSize: 8,
+                          lineHeight: '10px',
+                          color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
+                        }}
+                        title={
+                          s.acp_process_alive
+                            ? t('sidebar.acpRunning')
+                            : t('sidebar.acpReleased')
+                        }
+                      >
+                        A
+                      </span>
+                    )}
+                    {/* Running indicator dot */}
+                    <div
+                      className="flex-shrink-0"
+                      style={{
+                        width: 6,
+                        height: 6,
+                        background: dotColor,
+                      }}
+                      title={
+                        activity === 'waiting'
+                          ? t('sidebar.agentWaiting')
+                          : undefined
+                      }
+                    />
+                    <span className="session-name">
+                      {s.name || s.tmux_session_name}
+                    </span>
+                    {/* Attention badge */}
+                    {attnReason && (
+                      <span
+                        className="session-attn animate-pulse"
+                        style={{
+                          color: attnReason === 'decision'
+                            ? 'var(--warning)'
+                            : attnReason === 'error'
+                              ? 'var(--danger)'
+                              : 'var(--success)',
+                        }}
+                        title={
+                          attnReason === 'decision' ? t('sidebar.attnDecision') :
+                          attnReason === 'error' ? t('sidebar.attnError') : t('sidebar.attnDone')
+                        }
+                      >
+                        {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
+                      </span>
+                    )}
+                    {/* Release 按钮仅在进程驻留时可用——已释放会话无可释放对象 */}
+                    {s.runtime_kind === 'acp' && s.acp_process_alive && (
+                      <ReleaseButton
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          props.onReleaseRequest(s)
+                        }}
+                      />
+                    )}
+                    {/* 归档仅对 ACP 会话开放（终端会话无历史可冷藏） */}
+                    {s.runtime_kind === 'acp' && (
+                      <ArchiveButton
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          props.onArchiveRequest(s)
+                        }}
+                      />
+                    )}
+                    <EditButton
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        props.onRename({ type: 'session', id: s.id, name: s.name || '' })
+                      }}
+                    />
+                    <DeleteButton
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        props.onDeleteSession({
+                          type: 'session',
+                          id: s.id,
+                          name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
+                        })
+                      }}
+                    />
+                  </div>
+                )
+              }
 
               return (
                 <div key={wt.id} className={`sidebar-wt-slot ${isWtActive ? 'active' : ''}`}>
@@ -264,154 +401,24 @@ export function ProjectCard(props: {
                   {/* Sessions inline under active worktree */}
                   {isWtExpanded && (
                     <div className="sidebar-session-list">
-                      {renderedSessions.map((s) => {
-                        const isSessionActive = props.activeSessionId === s.id
-                        const sessionKey = s.id
-                        const attnReason = attention.reasonFor(sessionKey)
-                        // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
-                        // 状态点/tooltip 两类会话表现一致
-                        const activity =
-                          s.runtime_kind === 'acp'
-                            ? props.acpActivityFor(s.id)
-                            : s.agent_state === 'waiting'
-                              ? 'waiting'
-                              : s.agent_state === 'running' || s.is_active
-                                ? 'running'
-                                : undefined
-                        const dotColor = attnReason
-                          ? attnReason === 'decision'
-                            ? 'var(--warning)'
-                            : attnReason === 'error'
-                              ? 'var(--danger)'
-                              : 'var(--success)'
-                          : activity === 'waiting'
-                            ? 'var(--warning)'
-                            : activity === 'running'
-                              ? 'var(--accent)'
-                              : 'var(--text-faint)'
-                        return (
-                          <div
-                            key={s.id}
-                            className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
-                            onClick={() => {
-                              activateSession(s.id)
-                              attention.setActive(sessionKey)
-                            }}
-                          >
-                            {/* ACP kind badge — 绝对定位叠加在左侧 28px 缩进槽，不占行内布局；
-                                绿字=进程驻留（未释放），灰字=已释放 */}
-                            {s.runtime_kind === 'acp' && (
-                              <span
-                                className="status-badge-3d font-pixel"
-                                style={{
-                                  position: 'absolute',
-                                  left: -22,
-                                  top: '50%',
-                                  transform: 'translateY(-50%)',
-                                  padding: '1px 3px',
-                                  background: 'var(--wood-shadow, #3A2E1F)',
-                                  fontSize: 8,
-                                  lineHeight: '10px',
-                                  color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
-                                }}
-                                title={
-                                  s.acp_process_alive
-                                    ? t('sidebar.acpRunning')
-                                    : t('sidebar.acpReleased')
-                                }
-                              >
-                                A
-                              </span>
-                            )}
-                            {/* Running indicator dot */}
-                            <div
-                              className="flex-shrink-0"
-                              style={{
-                                width: 6,
-                                height: 6,
-                                background: dotColor,
-                              }}
-                              title={
-                                activity === 'waiting'
-                                  ? t('sidebar.agentWaiting')
-                                  : undefined
-                              }
-                            />
-                            <span className="session-name">
-                              {s.name || s.tmux_session_name}
-                            </span>
-                            {/* Attention badge */}
-                            {attnReason && (
-                              <span
-                                className="session-attn animate-pulse"
-                                style={{
-                                  color: attnReason === 'decision'
-                                    ? 'var(--warning)'
-                                    : attnReason === 'error'
-                                      ? 'var(--danger)'
-                                      : 'var(--success)',
-                                }}
-                                title={
-                                  attnReason === 'decision' ? t('sidebar.attnDecision') :
-                                  attnReason === 'error' ? t('sidebar.attnError') : t('sidebar.attnDone')
-                                }
-                              >
-                                {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
-                              </span>
-                            )}
-                            {/* Release 按钮仅在进程驻留时可用——已释放会话无可释放对象 */}
-                            {s.runtime_kind === 'acp' && s.acp_process_alive && (
-                              <ReleaseButton
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  props.onReleaseRequest(s)
-                                }}
-                              />
-                            )}
-                            {/* 归档仅对 ACP 会话开放（终端会话无历史可冷藏） */}
-                            {s.runtime_kind === 'acp' && (
-                              <ArchiveButton
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  props.onArchiveRequest(s)
-                                }}
-                              />
-                            )}
-                            <EditButton
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                props.onRename({ type: 'session', id: s.id, name: s.name || '' })
-                              }}
-                            />
-                            <DeleteButton
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                props.onDeleteSession({
-                                  type: 'session',
-                                  id: s.id,
-                                  name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
-                                })
-                              }}
-                            />
-                          </div>
-                        )
-                      })}
+                      {renderedSessions.map(renderSessionRow)}
 
-                      {/* ACP 会话折叠切换行：仅在确有隐藏行（或已展开可收回）时出现 */}
-                      {acpSessions.length > MAX_COLLAPSED_ACP_SESSIONS &&
-                        (hiddenAcpCount > 0 || acpExpanded.has(wt.id)) && (
-                          <div
-                            className="sidebar-session-more-toggle"
-                            onClick={() => toggleAcpExpanded(wt.id)}
-                          >
-                            <span>{acpCollapsed ? '▼' : '▲'}</span>
-                            <span>
-                              {acpCollapsed
-                                ? t('sidebar.showMoreSessions', { count: hiddenAcpCount })
-                                : t('sidebar.collapseSessions')}
-                            </span>
-                          </div>
-                        )}
+                      {/* 折叠切换行——可见行与隐藏行之间的接缝：
+                          展开时隐藏行就从此行下方追加，收起时从此行下方消失 */}
+                      {hiddenAcpSessions.length > 0 && (
+                        <div
+                          className="sidebar-session-more-toggle"
+                          onClick={() => toggleAcpExpanded(wt.id)}
+                        >
+                          <span>{acpCollapsed ? '▼' : '▲'}</span>
+                          <span>
+                            {acpCollapsed
+                              ? t('sidebar.showMoreSessions', { count: hiddenAcpSessions.length })
+                              : t('sidebar.collapseSessions')}
+                          </span>
+                        </div>
+                      )}
+                      {!acpCollapsed && hiddenAcpSessions.map(renderSessionRow)}
 
                       {wtSessions.length === 0 && (
                         <div className="px-1 py-1" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
