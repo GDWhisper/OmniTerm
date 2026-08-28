@@ -710,6 +710,8 @@ mod tests {
         assert!(cmd.contains("stop --db \"/data/my db/omniterm.db\""), "{cmd}");
         assert!(cmd.contains("--jwt-secret <redacted>"), "{cmd}");
         assert!(!cmd.contains("sup3r-secret"), "{cmd}");
-        assert!(cmd.starts_with("omniterm stop && omniterm start -d"), "{cmd}");
+        // e7c7f36 起 stop 段忠实携带 --db（防止 stop 后 start 用默认库），
+        // 断言同步为新行为（原 starts_with("omniterm stop && ...") 已过期）。
+        assert!(cmd.starts_with("omniterm stop --db"), "{cmd}");
     }
 }
