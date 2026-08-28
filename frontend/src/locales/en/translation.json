@@ -88,6 +88,8 @@
   "sidebar.gitInitConfirm": "Initialize & Continue",
   "sidebar.loading": "Loading...",
   "sidebar.noSessions": "No sessions",
+  "sidebar.showMoreSessions": "Show more (+{{count}})",
+  "sidebar.collapseSessions": "Collapse",
   "sidebar.expandAllSessions.off": "Session expansion: focused worktree only (click to expand all)",
   "sidebar.expandAllSessions.on": "Session expansion: all worktrees with sessions (click for focused only)",
   "settings.title": "Settings",

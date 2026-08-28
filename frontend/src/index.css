@@ -1257,6 +1257,22 @@ body.fm-dragging * {
   color: var(--text-primary);
 }
 
+/* ACP 会话折叠切换行（「展开更多 / 收起」）——与 noSessions 提示同规格的可点击行 */
+.sidebar-session-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  margin-top: 1px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.sidebar-session-more-toggle:hover {
+  color: var(--accent);
+}
+
 .sidebar-session-item .session-name {
   flex: 1;
   min-width: 0;

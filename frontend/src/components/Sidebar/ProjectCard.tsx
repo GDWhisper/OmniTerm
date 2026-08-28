@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
@@ -11,6 +12,10 @@ import { EditButton, DeleteButton, ReleaseButton, ArchiveButton } from './RowAct
 import type { RenameTarget } from './RenameDialog'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { DeleteWorktreeTarget } from './DeleteWorktreeDialog'
+
+// 单个 worktree 下 ACP 会话的默认可见数，超出折叠为「展开更多」。
+// 仅约束 ACP 会话——终端会话数量少且是常驻操作对象，永不折叠。
+const MAX_COLLAPSED_ACP_SESSIONS = 5
 
 export function ProjectCard(props: {
   project: Project
@@ -37,6 +42,18 @@ export function ProjectCard(props: {
   const attention = useAttention()
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const activateSession = useAppStore((s) => s.activateSession)
+
+  // 哪些 worktree 的 ACP 会话列表被手动展开（默认折叠到阈值）。组件本地状态，
+  // 刷新后回到折叠态——折叠是密度优化，不是用户需要持久化的信息。
+  const [acpExpanded, setAcpExpanded] = useState<Set<string>>(new Set())
+
+  const toggleAcpExpanded = (wtId: string) =>
+    setAcpExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(wtId)) next.delete(wtId)
+      else next.add(wtId)
+      return next
+    })
 
   // undefined = 尚未加载（显示 loading），[] = 已加载但为空
   const wtLoaded = props.worktrees !== undefined
@@ -162,6 +179,33 @@ export function ProjectCard(props: {
               const wtAgg = aggregateStatus(wtSessions, attention.reasonFor, props.acpActivityFor)
               const isWtExpanded = isWtActive || (props.expandAllSessions && wtSessions.length > 0)
 
+              // ACP 会话超阈值折叠（终端会话不受影响）。列表按 created_at DESC
+              // 排序，补足阈值时天然保留最新的；豁免位留给激活/需注意力/等待决策的
+              // 会话，折叠后不丢关键信息。
+              const acpSessions = wtSessions.filter((s) => s.runtime_kind === 'acp')
+              const acpCollapsed =
+                acpSessions.length > MAX_COLLAPSED_ACP_SESSIONS && !acpExpanded.has(wt.id)
+              const visibleAcpIds = new Set<string>()
+              if (acpCollapsed) {
+                for (const s of acpSessions) {
+                  if (
+                    s.id === props.activeSessionId ||
+                    attention.reasonFor(s.id) ||
+                    props.acpActivityFor(s.id) === 'waiting'
+                  ) {
+                    visibleAcpIds.add(s.id)
+                  }
+                }
+                for (const s of acpSessions) {
+                  if (visibleAcpIds.size >= MAX_COLLAPSED_ACP_SESSIONS) break
+                  visibleAcpIds.add(s.id)
+                }
+              }
+              const hiddenAcpCount = acpSessions.length - visibleAcpIds.size
+              const renderedSessions = acpCollapsed
+                ? wtSessions.filter((s) => s.runtime_kind !== 'acp' || visibleAcpIds.has(s.id))
+                : wtSessions
+
               return (
                 <div key={wt.id} className={`sidebar-wt-slot ${isWtActive ? 'active' : ''}`}>
                   {/* Worktree row */}
@@ -220,7 +264,7 @@ export function ProjectCard(props: {
                   {/* Sessions inline under active worktree */}
                   {isWtExpanded && (
                     <div className="sidebar-session-list">
-                      {wtSessions.map((s) => {
+                      {renderedSessions.map((s) => {
                         const isSessionActive = props.activeSessionId === s.id
                         const sessionKey = s.id
                         const attnReason = attention.reasonFor(sessionKey)
@@ -352,6 +396,22 @@ export function ProjectCard(props: {
                           </div>
                         )
                       })}
+
+                      {/* ACP 会话折叠切换行：仅在确有隐藏行（或已展开可收回）时出现 */}
+                      {acpSessions.length > MAX_COLLAPSED_ACP_SESSIONS &&
+                        (hiddenAcpCount > 0 || acpExpanded.has(wt.id)) && (
+                          <div
+                            className="sidebar-session-more-toggle"
+                            onClick={() => toggleAcpExpanded(wt.id)}
+                          >
+                            <span>{acpCollapsed ? '▼' : '▲'}</span>
+                            <span>
+                              {acpCollapsed
+                                ? t('sidebar.showMoreSessions', { count: hiddenAcpCount })
+                                : t('sidebar.collapseSessions')}
+                            </span>
+                          </div>
+                        )}
 
                       {wtSessions.length === 0 && (
                         <div className="px-1 py-1" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
