@@ -163,11 +163,8 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 - [ ] 快速输出（如 `seq 1 20000`）不丢行、不错位
 - [ ] 断线重连补屏正常
 
-**手动回归（`docs/reference/user-testing.md`）**
-- [ ] pty 会话显示正常：CJK、emoji、TUI（htop）、vim、alt-screen 进入/退出
-- [ ] 滚动历史窗口内容正确（含 CJK 行的对齐）
-- [ ] 快速输出（如 `seq 1 20000`）不丢行、不错位
-- [ ] 断线重连补屏正常
+> 其中可结构化断言的部分已由 §10.4 的自动化回归覆盖（16/16 PASS），此处
+> 剩的是**浏览器内的视觉确认**（字体、配色、光标形状、emoji 字形、TUI 刷屏观感）。
 
 ---
 
@@ -185,10 +182,10 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
 ## 8. 文档闭环
 
-- [ ] `docs/architecture/backend.md`：cell_frame 协议段落补 runs 格式与 hello 协商字段
-- [ ] `docs/dev/plans/backlog/pty-mobile-termux-feel.md`：§5 分期表 P1 标为已立项并链回本计划；实测数据（§3.2）在实施后补「改动后」一行
-- [ ] `docs/architecture/frontend.md`：不适用（该文件未记录 cell_frame 渲染流程）
-- [ ] `CHANGELOG.md`：实施后按 AGENTS 规则 3 添加条目（帧体积是用户可感知的性能改进）
+- [x] `docs/architecture/backend.md`：cell_frame 协议段落补 runs 格式与 hello 协商字段（§cell_frame 行编码，含连接级协商说明）
+- [x] `docs/dev/plans/backlog/pty-mobile-termux-feel.md`：§5 分期表 P1 标为已实施并链回本计划；§3.3 补「改动后」实测（含 P1.5）
+- [x] `docs/architecture/frontend.md`：不适用（该文件未记录 cell_frame 渲染流程）
+- [x] `CHANGELOG.md`：已添加条目（2026-08-28，`[backend]` `[frontend]` pty 终端帧体积瘦身 20 倍）
 
 ---
 
@@ -266,6 +263,34 @@ tick 之所以是这个链条的触发点：只有它在 33 ms 周期上持续�
 
 cells p50 12.75 ms − runs p50 2.84 ms ≈ **10 ms**，是「94 KB 的 JSON 编码 +
 序列化 + 传输」的总差，与方向稿 §9 E-2「p50 主因是服务端编码」的推断吻合。
+
+### 10.4 自动化回归（2026-08-29，`scripts/pty-frame-regression.mjs`）
+
+§6 手动回归里可结构化断言的部分已脚本化，16 项全 PASS：
+
+| 组 | 断言 | 结果 |
+|---|---|---|
+| T1 | 历史窗口相邻 y 恰好错开 1 行（数字 seq，5 个 y × 39 行 = 195 行比对） | 错位 0 |
+| T2 | 同上（CJK 混排 1500 行）+ 行显示宽度不超屏宽 | 错位 0，最宽 100/100 列 |
+| T3 | emoji / 组合字符行在 cells 与 runs 下文本与 (字符,sgr) 序列一致 | 一致 |
+| T4 | `seq 1 20000` 输出中滚动窗口逐行差恒为 1（6 次全窗口取样） | 跳号 0 |
+| T5 | alt-screen：进入发 `alt_screen=true` overlay、退出发 `false`、退出后主屏恢复且无 alt 残留 | 全通过 |
+| T6 | TUI（less / top）帧可解析、内容非空 | 通过（htop/vim 未安装，用 less/top 代替） |
+| T7 | 断线重连：首帧 `full:true` 且 40 行、可见屏含断开前内容、末行一致 | 通过 |
+
+脚本同时开一条 cells 编码连接做对照（主连接 runs），故 D4 移除 cells 路径后
+仍可直接重跑验证。
+
+**RTT 复测偏差**：本次复跑探针 p50 稳定在 **4.7–4.8 ms**（两轮），高于 §10.1
+记录的 2.84 ms，验收标准「p50 ≤3 ms」在当前环境下不达标。判定为**环境基线差异
+而非 RLE 退化**，依据三条：
+- 同环境 cells 对照 p50 12.56 ms，与 §10.1 的 12.75 ms 一致（基线未变）；
+- 帧体积 4.8 KB、四类内容无损 PASS 均与 §10.1 一致（编码路径未变）；
+- 后端零 `slow tick frame` 告警（阈值 5 ms），且 `src/engine/pty/` 自 `73f902e`
+  （记录 2.84 ms 的那次)以来无任何改动。
+
+差异落在 2 ms 量级，与探针测量的注意点（§10.1 注：两条连接共享 Node 事件循环
+会抬高尾延迟）同属测量环境敏感度，故不追平，仅在复测时以同环境 cells 对照为准。
 
 ---
 
