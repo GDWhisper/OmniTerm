@@ -83,6 +83,8 @@ export function Terminal() {
     fontSize: effectiveFontSize,
     latchModRef,
     onConsumeLatch: consumeLatch,
+    // 桌面端点击侧栏会话后自动聚焦（移动端会弹软键盘，交由用户点击聚焦）
+    autoFocus: !isMobile,
   })
 
   const hasSession = !!(activeSessionId || activeExternalSession)

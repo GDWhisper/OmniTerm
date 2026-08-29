@@ -66,6 +66,10 @@ interface UseTerminalOptions {
   latchModRef?: React.MutableRefObject<string | null>
   /** Called when a latched modifier has been consumed by keyboard input */
   onConsumeLatch?: () => void
+  /** 终端就绪 / 切换会话后自动聚焦，使用户可直接键入。移动端须传 false：
+   *  聚焦 xterm 隐藏 textarea 会弹起软键盘，遮住刚切过去的终端（见
+   *  utils/terminalInputMode.ts）。 */
+  autoFocus?: boolean
 }
 
 const DARK_TERMINAL_THEME = {
@@ -106,7 +110,7 @@ function translateLatch(latch: string, data: string): string {
   }
 }
 
-export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
+export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch, autoFocus = false }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const attention = useAttention()  // Agent attention context
   // Blur / idle disconnect timeouts (minutes). Read reactively from the store;
@@ -800,6 +804,19 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       connectWs()
     }
   }, [terminalReady, sessionId, externalSessionName, connectWs])
+
+  // Auto-focus on session selection: clicking a sidebar row leaves DOM focus on
+  // that row, so the user has to click the terminal before typing. Runs on the
+  // first init too (`terminalReady` false→true) and repeats after a remount —
+  // `disposeTerminal` resets the flag, so StrictMode's double-mount still ends
+  // with the live instance focused. Same-kind switches (tmux→tmux) keep the
+  // view mounted, hence the `sessionId` dep rather than a mount-only effect.
+  useEffect(() => {
+    if (!autoFocus || !terminalReady) return
+    // No session (empty state) or torn down (blur/idle disconnect) → nothing to focus.
+    if (!(externalSessionName ?? sessionId)) return
+    termRef.current?.focus()
+  }, [autoFocus, terminalReady, sessionId, externalSessionName])
 
   // Live-update font size when store changes
   useEffect(() => {
