@@ -356,7 +356,7 @@ export function Terminal() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'rgba(18, 20, 26, 0.85)',
+            background: 'var(--modal-backdrop)',
             zIndex: 100,
           }}>
             <button

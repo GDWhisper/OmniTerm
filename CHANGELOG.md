@@ -69,6 +69,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-08-30 14:47) `[frontend]` 终端重连遮罩改为半透明：原遮罩写死 `rgba(18, 20, 26, 0.85)`（深色主题 `--bg-base` 的 85%），几乎不透光，断开时看不到下方终端残留画面，浅色主题下也糊成一块深黑。现复用遮罩统一 token `var(--modal-backdrop)`（浅色暖棕 45% / 深色 60%），随主题走并对齐 ui-style-guide §6.2（`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-08-30 12:02) `[api]` `[backend]` `[frontend]` **BREAKING** pty cell_frame 行编码收敛为 RLE 一种：移除过渡期双路径——旧 `cells` 负载（逐 cell 对象）与 `hello` 握手的 `row_encoding` 协商字段一并删除，服务端恒发 `{"runs":[sgr,text,...]}`、前端不再按字段分派。前后端由同一产物发布（dist 编入后端二进制），无跨版本回退路径；缓存住旧前端资源的浏览器需强刷。帧体积与延迟不变（4.8 KB / p50 2.78 ms）（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`src/engine/pty/terminal_ws.rs`、`frontend/src/hooks/useCellFrame.ts`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-27 19:05) `[frontend]` 「在此打开终端」补齐越界目录归属：浏览目录被某个已打开项目覆盖时直接挂到该项目；不被任何项目覆盖时弹窗引导为该目录新建项目（次选挂到当前项目），避免终端误挂不相干项目；启动目录恒为浏览目录（原先界内回退 workspace_root 会开错位置）（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/OpenTerminalDialog.tsx`）
 
