@@ -88,6 +88,21 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub archived_at: Option<String>,
+    // 工作时长累计（仅 ACP 会话会有非零值：tmux/pty 无 prompt turn 语义，恒为 0）。
+    // 口径 = turn 墙钟时长扣除等真人审批；写时增量，见
+    // docs/dev/plans/2026-08-30-acp-work-time.md。恒序列化（不 skip 0）：前端轮询整体
+    // 替换 sessions 对象，缺省会把它读成 undefined 而非 0。
+    #[sqlx(default)]
+    pub work_ms: i64,
+    #[sqlx(default)]
+    pub wait_ms: i64,
+    /// 已定稿的 turn 数（会话内 prompt 次数）。
+    #[sqlx(default)]
+    pub turn_count: i64,
+    /// 最近一次 turn 定稿时刻（RFC3339；NULL = 从未有过 turn）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub last_turn_at: Option<String>,
     // Runtime activity indicator (multiplexer activity tracking, not persisted)
     #[serde(skip_serializing_if = "is_false")]
     #[sqlx(default)]
