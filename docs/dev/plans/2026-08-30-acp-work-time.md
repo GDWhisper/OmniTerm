@@ -1,7 +1,7 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地，偏差见文末「勘误」）
-> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、侧栏会话行/归档行时长 badge（`ProjectCard.tsx` / `ArchivedSessionsSection.tsx`）、`ChatMessage` 耗时显示 任一项前**必读**
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；偏差见文末「勘误」E1–E10）
+> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（= turn 起点），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
 
@@ -43,9 +43,9 @@ mark_prompt_idle()    → wall_ms = now - started
 
 | 级别 | 内容 | 预估 |
 |---|---|---|
-| **P0** | 会话级 `work_ms`/`wait_ms`/`turn_count`/`last_turn_at` 落库 + 消息级 `duration_ms`/`wait_ms`；Sidebar 会话行累计 badge；assistant 消息耗时 | 后端 0.5d + 前端 2h |
+| **P0** | 会话级 `work_ms`/`wait_ms`/`turn_count`/`last_turn_at` 落库 + 消息级 `duration_ms`/`wait_ms`；~~Sidebar 会话行累计 badge~~（已回退，见 E9）；assistant 消息耗时 | 后端 0.5d + 前端 2h |
 | **P0** | **顺带补缺口**：`shutdown()`/`disconnect()` 路径不 finalize 活跃 turn → 手动释放与后端退出时这段时长白丢。补一次 `mark_prompt_idle()` | 含上 |
-| **P1** | 会话行 hover 拆分「工作 / 等待人工」；i18n（zh/en）；单测（pause 深度、exactly-once、空 turn、turn 外审批） | 2h |
+| **P1** | 会话行 hover 拆分「工作 / 等待人工」（改为挂消息耗时行 tooltip，见 E8）；i18n（zh/en）；单测（pause 深度、exactly-once、空 turn、turn 外审批） | 2h |
 | **P2** | 不做（见排除项） | — |
 
 ## 不纳入范围
@@ -139,7 +139,7 @@ ALTER TABLE sessions ADD COLUMN last_turn_at TEXT;          -- RFC3339，NULL = 
 | **1 后端记账** | migration；`TurnState` 加 `started: Instant` / `wait_paused_ms` / `wait_since` / `pending_perm: HashSet`；`begin_turn` 初始化；`begin_wait`/`end_wait`；`finalize_turn` 锁内算 `wall_ms`/`wait_ms` 并发 `WriterCmd::EndTurn { wall_ms, wait_ms, row_id }`（**取代现 `Finalize`**，空 turn 也要记账）；writer 循环做 `UPDATE sessions SET work_ms = work_ms + ? , wait_ms = wait_ms + ?, turn_count = turn_count + 1, last_turn_at = ?` + 有 row_id 才 flush/finalize | `migrations/`、`src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`（`finalize_message` 带 duration/wait） | — |
 | **2 审批扣除 + 缺口** | `client.rs` 三处接 `begin_wait`/`end_wait`（D4 表）；`shutdown()`/`disconnect()` 补 `mark_prompt_idle()`（P0 缺口） | `src/acp/client.rs` | Phase 1 |
 | **3 读路径** | `Session` 模型加 4 字段；`list_sessions`/`list_archived` 返回；`list_messages_page` SELECT + 元组 + JSON | `src/models/session.rs`、`src/api/sessions.rs`、`src/acp/chat_persistence.rs` | Phase 1 |
-| **4 前端呈现** | 时长格式化函数（见下）；Sidebar 会话行 badge + hover 拆分；assistant 消息耗时 + 异常标注；i18n zh/en **→ 实际形态见 E8，格式化函数见 E6** | `frontend/src/utils/formatTime.ts`、`components/Sidebar/ProjectCard.tsx`、`components/Chat/ChatMessage.tsx`、`locales/{zh,en}` | Phase 3 |
+| **4 前端呈现** | 时长格式化函数（见下）；~~Sidebar 会话行 badge + hover 拆分~~；assistant 消息耗时 + 异常标注；i18n zh/en **→ 实际形态见 E8，格式化函数见 E6，侧栏部分已回退见 E9，右缘对齐见 E10** | `frontend/src/utils/formatTime.ts`、~~`components/Sidebar/ProjectCard.tsx`~~（已撤出）、`components/Chat/ChatMessage.tsx`、`locales/{zh,en}` | Phase 3 |
 
 **格式化函数落点**：`frontend/src/utils/formatTime.ts` 现有两个函数都是**钟点**格式化（`formatHoverTime`），无 elapsed 时长格式化 → 新增 `formatElapsed(ms)`：`<60s → "42s"`、`<1h → "42m"`、`≥1h → "2h42m"`；NULL/undefined → `null`（调用方不渲染）。落此文件而非新文件（同族聚合，已有 `formatTime.test.ts`）。（实际导出与档位见 E6。）
 
@@ -158,7 +158,7 @@ ALTER TABLE sessions ADD COLUMN last_turn_at TEXT;          -- RFC3339，NULL = 
 
 前端
 - [x] `tsc -b`（**非** `tsc --noEmit`——根 tsconfig 是 references 空壳，裸 `--noEmit` 不检查任何文件）零新增错误；`pnpm vitest run` 全过（新增 `formatWorkDuration` 边界测：999ms / 42s / 162s / 180s / 1h / null + en 字形 + 四舍五入）
-- [x] Sidebar 会话行显示累计时长；`work_ms = 0` 的历史会话不显示占位 — 真机（headless 浏览器 + dev :9778）：有 turn 的行出 badge `1S` + tooltip「工作 1s · 等待人工 0s · 共 1 轮」，同列三条 `work_ms=0` 的老会话无 badge 无占位
+- [x] ~~Sidebar 会话行显示累计时长~~（**已随 E9 回退**，代码不在此功能上）— 回退前的真机证据（headless 浏览器 + dev :9778）：有 turn 的行出 badge `1S` + tooltip「工作 1s · 等待人工 0s · 共 1 轮」，同列三条 `work_ms=0` 的老会话无 badge 无占位
 - [x] 刷新后消息耗时仍在（读 DB，非内存）— 该会话处于 released 态（「此会话已结束」+ 恢复按钮），全新页面加载仍显示「已工作 1秒」，值只可能来自 `GET /sessions/{id}/messages`
 - [x] 真机回归抓出 E6 的 0/亚秒合档缺陷（`wait_ms=0` 被报成「等待人工 <1s」），已修并补测
 
@@ -168,7 +168,7 @@ ALTER TABLE sessions ADD COLUMN last_turn_at TEXT;          -- RFC3339，NULL = 
 - [ ] 权限请求**不批准**直到 reaper 30 分钟回收 → 该段算 wait 不算 work（且 system 告知消息照旧，见关联计划）（**未跑**：同上，且需 30 分钟窗口）
 - [ ] 会话进程被 idle 回收后再打开继续对话 → 累计不清零（**未跑**：需活跃 agent 会话；增量 SQL 本身有 `accumulate_turn_increments_across_clients` 覆盖）
 - [ ] 后端重启（`./dev.sh restart`）后进行中的 turn 不报错，累计保留（**未跑**：重启会连带杀掉开发环境里在跑的终端会话）
-- [x] 老会话（迁移前）打开：无耗时标注、累计从 0 起，不出现 `NaN`/`0s` 误导显示 — 同列三条 `work_ms=0` 会话无 badge；`durationMs=null` 的行整行不渲染（API 实测该键下发 `null`，见 E3）
+- [x] 老会话（迁移前）打开：无耗时标注、累计从 0 起，不出现 `NaN`/`0s` 误导显示 — `durationMs=null` 的行整行不渲染（API 实测该键下发 `null`，见 E3）；回退前另测得 `work_ms=0` 的会话侧栏无 badge
 
 ## 风险与缓解
 
@@ -212,13 +212,13 @@ D6 的缓解手段是「消息级保留 `stop_reason='InactivityTimeout'` 语义
 ### E6 — 格式化函数不是一个而是三个，且多两档 `0s` / `<1s`
 
 Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的物理约束不同：
-- `formatElapsed(ms)`：侧栏像素 badge 用的紧凑记号，**四档**（计划只写三档）→ `0s`/`<1s`/`42s`/`42m`/`2h42m`。`<1s` 档是补的（亚秒显示 `0s` 会把「干了一小会儿」说成「瞬时干完」），但补的时候把 0 一起吞进了 `<1s` —— 真机回归才发现侧栏 tooltip 对 `wait_ms = 0` 的会话报「等待人工 <1s」，凭空造出一段从没发生过的等待。**0 = 该活动没发生，亚秒 = 发生了但不足一秒，两档必须分开**；`formatWorkDuration` 同规则。之所以单测没拦住：那条用例直接断言了 `formatElapsed(0) === '<1s'`，把 bug 写成了期望值。
-- `formatWorkDuration(ms, locale)`：消息正文用的口语记号，单位字形由 `Intl.NumberFormat(locale, {style:'unit', unitDisplay:'narrow'})` 出（zh → `2分钟42秒`，en → `2m42s`），**不在 i18n 文案里硬编码「分/秒」**（见 AGENTS 禁硬编码）。
-- `formatSessionWork(ms)`：侧栏薄封装（`ms ? … : null`），`work_ms` 为 0/未定义时整格不渲染。
+- `formatElapsed(ms)`（**已随 E9 回退删除**）：侧栏像素 badge 用的紧凑记号，**四档**（计划只写三档）→ `0s`/`<1s`/`42s`/`42m`/`2h42m`。`<1s` 档是补的（亚秒显示 `0s` 会把「干了一小会儿」说成「瞬时干完」），但补的时候把 0 一起吞进了 `<1s` —— 真机回归才发现侧栏 tooltip 对 `wait_ms = 0` 的会话报「等待人工 <1s」，凭空造出一段从没发生过的等待。**0 = 该活动没发生，亚秒 = 发生了但不足一秒，两档必须分开**；`formatWorkDuration` 同规则。之所以单测没拦住：那条用例直接断言了 `formatElapsed(0) === '<1s'`，把 bug 写成了期望值。
+- `formatWorkDuration(ms, locale)`：消息正文用的口语记号（**唯一存活者**），单位字形由 `Intl.NumberFormat(locale, {style:'unit', unitDisplay:'narrow'})` 出（zh → `2分钟42秒`，en → `2m42s`），**不在 i18n 文案里硬编码「分/秒」**（见 AGENTS 禁硬编码）。
+- `formatSessionWork(ms)`（**已随 E9 回退删除**）：侧栏薄封装（`ms ? … : null`），`work_ms` 为 0/未定义时整格不渲染。
 
-### E7 — 归档会话行也展示累计时长
+### E7 — 归档会话行也曾展示累计时长（**已随 E9 回退**）
 
-计划只写「Sidebar 会话行 badge」。`ArchivedSessionsSection.tsx:74` 同样接了 `formatSessionWork`——归档视图正是「这个会话干了多少活」最常被回看的地方，缺它会让归档行的信息密度明显低于活动行。
+计划只写「Sidebar 会话行 badge」。`ArchivedSessionsSection.tsx` 当时同样接了 `formatSessionWork`——理由是归档视图正是「这个会话干了多少活」最常被回看的地方，缺它会让归档行的信息密度明显低于活动行。这条推断没成立：两处一起被 E9 回退。
 
 ### E8 — 消息级呈现形态按设计确认改版（推翻 Phase 4 的「顶部耗时 + 异常标注」）
 
@@ -226,9 +226,29 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 
 | 项 | 计划 | 实际 |
 |---|---|---|
-| 位置 | 标签行 chip（正文上方） | **正文末行**，`<MessageActionBar/>` 之后，右对齐（`alignSelf:'flex-end'`） |
+| 位置 | 标签行 chip（正文上方） | **正文末行**，`<MessageActionBar/>` 之后，右缘贴合气泡（做法见 E10） |
 | 文案 | 紧凑记号 | 口语整句「已工作 2分钟42秒」/ "Worked 2m42s" |
 | 等待人工 | 与工时并列展示 | **退到 tooltip**（进正文会让元信息占两行）；移动端无 hover → 按设计确认**放弃**该信息于移动端呈现 |
 | 流式进行中 | 未明确 | **无占位、不计时**——只呈现最终值。前端自算墙钟必与后端 `work_ms`（含扣除）口径不一致，等于第二套真相（同排除项理由） |
 
 位置稳定性依据：`.chat-msg-actions` 只切 `opacity`（常驻占位），故其下方一行不会跳动。视觉档位沿用 ui-style-guide 元信息规格（`0.769em` / `--text-faint` / `READER_FONT` / `tabular-nums`）。
+
+### E9 — 侧栏累计时长整体回退（Phase 4 的前端一半白做）
+
+会话行 badge + 归档行拼接 + i18n `sidebar.workTimeTooltip` + 两个 formatter（`formatElapsed` / `formatSessionWork`）全部撤除，侧栏字节级回到功能上线前（`git show <原提交> -- <两文件> | git apply -R --3way`，再删孤儿 formatter 与文案键，不留死代码）。
+
+回退理由（设计判断，非缺陷）：① 列表行的信息位属于**状态与名称**，时长挤进去是噪声；② `work_ms` 只在 turn 定稿时增长，列表 3s 轮询里它长时间不动，读起来像「坏掉的假数字」——用户期待的是实时进度，而该列的语义根本不是进度。
+
+**保留不动的部分**：`sessions` 的 4 个累计列与 migration 不回退（撤 migration 属破坏性操作，`list_sessions` 契约也已下发这些键），消息级耗时不依赖它们；`frontend/src/api/client.ts` 的 `Session` 类型字段同理保留（API 契约镜像）。结论：这批列**当前无 UI 消费者**，作写时账目留存，将来接展示零成本。
+
+教训：「数据算得出来」不等于「该占一个展示位」。呈现位的取舍属设计判断，前端应先拿到确认再落笔——本可省掉 3 个文件的返工。
+
+### E10 — 耗时行右缘只能实测，CSS 表达不了「贴气泡右缘」
+
+气泡是内容宽度（`align-self:flex-start` + `max-width:85%`），耗时行是它的**兄弟节点**——`flex-end` / `stretch` 对齐的是父容器（消息列）右缘，不是气泡右缘，实测 `footRight 795.3` vs `bubbleRight 721.2`，甩出 74px。做法：`useLayoutEffect` 量最后一个 `[data-chat-body]` 的 `offsetWidth`，用 `ResizeObserver` 跟随正文重排（图片/表格延后撑宽、响应式换行），行 `width` 设成实测值、`maxWidth` 复用与气泡同一个 `BUBBLE_MAX_WIDTH` 常量（两处百分比各写各的必然错开）。修完 `footRight 721.0` vs `bubbleRight 721.2`，亚像素。
+
+两个坑：
+- `ResizeObserver` 每次 `observe()` 先报一轮 → `setMetaWidth` 必须「同值不 setState」，否则 setState→渲染→observer 回绕成无限循环。
+- 改完布局 effect 后 Fast Refresh **不会**重新挂载带新 hook 的组件，headless 浏览器里量到的仍是旧布局；必须 `location.reload()` 再量（这次差点把「已修好」报成没修好）。
+
+翻盘条件：若气泡改成占满可用宽度、或耗时行挪进气泡内部成为子节点，这段测量即可删除（届时纯 CSS `text-align:right` 就够）。
