@@ -90,6 +90,12 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 （D5）：5s 去抖落盘 ANSI 历史（`~/.omniterm/pty-sessions/<key>/history.ansi`，
 0600）+ 30s 前台 cwd 采样回写 `sessions.last_cwd`；重建时 spawn 于 last_cwd
 并 seed 历史进补屏环与 VT grid（alacritty_terminal）。显式 kill 删历史文件。
+seed 是**字节快照**，可以在任意位置截断，回放后必须补齐尾部语义边界——
+典型是 shell 打完 PS1 等待输入时会话消亡（后端重启、进程被杀），历史停在
+半行 `…$ `（无换行），新 shell 的提示符会接在同一行，重建 N 次就堆 N 个
+（`src/engine/pty/mod.rs::seed_line_break`：已以 `\n` 结尾不补，`\r` 结尾补
+`\n`，其余补 `\r\n`；补的字节同时进补屏环，raw 模式补屏行为一致）。UTF-8
+边界截断是同一类问题的另一面（见 `scrollback.rs` 顶部）。
 
 > **VT 模拟器 = `alacritty_terminal` 0.26（registry 依赖，计划 D8 v5 / Phase 2.5）**：
 > 原 `wezterm-term` 为 git 依赖，使 `cargo package` 失败、阻塞 crates.io 发布
@@ -379,7 +385,7 @@ Lifecycle:
 - **exactly-once**：结算挂在 `finalize_turn` 的 `active: true→false` CAS 上，天然幂等——四条结束路径（正常完成、prompt 出错、cancel 兜底、reaper 超时）都汇聚到 `mark_prompt_idle`，谁先 CAS 谁记账，重复调用不双计。
 - **wait 用深度计数器**（`wait_depth: u32`）而非审批 id 集合：`PermissionManager` 的 `resolve(id)` / `cancel_all` 只给得出 id 的增减时机，而 ACP 的 `Responder` 受 `IntoHandled` 约束取不回 id，按 id 去重要么改 `permission.rs` 要么依赖「同一 turn 内 id 不重复」的假设。配平由 `begin_turn` 归零 + cancel 路径 `end_all_waits()` 兜底。
 - **未闭合的 wait 段截断到定稿时刻**（clamp，不做 `u64` 减法回绕）：reaper 超时或用户直接 cancel 时审批仍挂着，这段等待既不该算工作也不该凭空消失。
-- **前端只呈现、不自算**：`prompt_done` 帧带 `duration{work_ms, wait_ms}`（取值方式与同帧 `row_id` 一致，见「重连续接协议」），耗时在定稿那一刻即显示；刷新后走 `GET /sessions/{id}/messages` 读库。**唯一呈现位**是 assistant 正文末行「已工作 2分钟42秒」（`frontend/src/components/Chat/ChatMessage.tsx`），等待时长挂该行 tooltip；该行右缘由 layout effect 实测最后一个正文块的宽度（气泡按内容收缩，CSS 表达不了跨兄弟节点右对齐），故永不越过气泡右缘。单位字形由 `Intl` unit-narrow 按界面语言给（不在代码里硬编码「分/秒」），未知 → 整行不渲染；**0 与亚秒分档**（0 = 该活动没发生，如从未等过审批；亚秒 = 发生了但不足一秒，收成 `<1秒` 而非 `0秒`）。
+- **前端只呈现、不自算**：`prompt_done` 帧带 `duration{work_ms, wait_ms}`（取值方式与同帧 `row_id` 一致，见「重连续接协议」），耗时在定稿那一刻即显示；刷新后走 `GET /sessions/{id}/messages` 读库。**唯一呈现位**是 assistant 的 hover 动作栏所在行的右端「已工作 2分钟42秒」（`frontend/src/components/Chat/ChatMessage.tsx`，行放不下才由 flex-wrap 另起一行），等待时长挂该行 tooltip；该行右缘由 layout effect 实测最后一个正文块的宽度（气泡按内容收缩，CSS 表达不了跨兄弟节点右对齐），故同行与换行两种形态下都不越过气泡右缘。单位字形由 `Intl` unit-narrow 按界面语言给（不在代码里硬编码「分/秒」），未知 → 整行不渲染；**0 与亚秒分档**（0 = 该活动没发生，如从未等过审批；亚秒 = 发生了但不足一秒，收成 `<1秒` 而非 `0秒`）。
 - **侧栏不显示累计时长**（曾加过会话行 badge + 归档行拼接，已回退）：列表行的信息位属于状态与名称，且 `work_ms` 只在 turn 定稿时刷新，3s 轮询里读起来像「不更新的假数字」。`sessions` 上的累计列因此**当前无 UI 消费者**，作为写时账目留存（消息级耗时不依赖它），接展示时零成本。
 - **§8 多实现差异**：只有 agent 主动发 `session/request_permission` 的审批才计入 `wait_ms`；agent 内部自动通过的确认门（见「Multi-implementation compatibility」的「审批不一定都走 `session/request_permission`」）落在 `work_ms` 内。即 `wait_ms` 的口径是「等**人**在 OmniTerm 里点按钮的时间」，跨实现比较 `work_ms` 须带上这条前提。
 - **已知缺口**：`stop_reason` 只在 `prompt_done` 帧里下发、不入库，reaper 超时定稿的 turn 无法事后标注「非正常结束」，其 `work_ms` 含整段 inactivity 等待。补齐需给 `chat_messages` 加列，本次不做（见 `docs/dev/plans/2026-08-30-acp-work-time.md` 勘误）。

@@ -355,11 +355,19 @@ impl PtyEngine {
         if let Some(seed) = scrollback::load(key)
             && !seed.is_empty()
         {
-            state.out.lock().unwrap().ring.push(&seed);
-            state.vt.lock().unwrap().feed(&seed);
+            // 锁序 out→vt（与 attach 一致）
+            let mut out = state.out.lock().unwrap();
+            let mut vt = state.vt.lock().unwrap();
+            out.ring.push(&seed);
+            vt.feed(&seed);
+            // 历史结尾停在半行时补齐换行，否则新 shell 的提示符接在同一行
+            if let Some(tail) = seed_line_break(&seed) {
+                out.ring.push(tail);
+                vt.feed(tail);
+            }
             // 历史里的查询（DSR 等）产生的应答不回写新 pty：重建即有客户端
             // 即将 attach，由浏览器应答（D8 v5 应答归属）
-            state.vt.lock().unwrap().take_responses();
+            vt.take_responses();
             debug!("pty session rebuilt with {} bytes of history: {key}", seed.len());
         }
 
@@ -458,6 +466,23 @@ fn flush_if_dirty(key: &str, state: &SessionState) {
             state.flushed_seq.store(seq, Ordering::Relaxed);
         }
         Err(e) => warn!("failed to persist pty history for {key}: {e}"),
+    }
+}
+
+/// 重建回放后需要补的换行字节（没有则 `None`）。
+///
+/// 落盘历史是 pty 字节流的忠实快照，结尾常停在**半行**：shell 打印 PS1 后
+/// 等待输入、不带换行，会话恰在此刻消亡（后端重启、进程被杀）就把
+/// `…new-api$ ` 原样留下。重建时新 shell 的 PS1 会接在同一行，实测重建
+/// 三次即堆成 `$ $ $ ` 一整行（屏幕上「只剩一行」）。
+///
+/// 只在结尾不是 LF 时补：已以 `\n` 结尾的历史无需处理；只缺 LF 的（`\r`
+/// 结尾）补 `\n` 即可——多补一个 CR 会把行首内容擦掉。
+fn seed_line_break(seed: &[u8]) -> Option<&'static [u8]> {
+    match seed.last() {
+        None | Some(b'\n') => None,
+        Some(b'\r') => Some(b"\n"),
+        Some(_) => Some(b"\r\n"),
     }
 }
 
@@ -586,6 +611,19 @@ mod tests {
 
     fn engine() -> PtyEngine {
         PtyEngine::new()
+    }
+
+    #[test]
+    fn seed_line_break_only_when_history_ends_mid_line() {
+        // 已以 LF 结尾：历史停在整行，不该补（否则每次重建都多一个空行）
+        assert_eq!(seed_line_break(b"pax@host:~$ ls\r\n"), None);
+        assert_eq!(seed_line_break(b"\n"), None);
+        // 空历史（调用点已拦空，函数本身也守得住）
+        assert_eq!(seed_line_break(b""), None);
+        // 只缺 LF（CR 结尾）：补单个 LF，多补 CR 会擦掉行首
+        assert_eq!(seed_line_break(b"pax@host:~$ ls\r"), Some(b"\n".as_slice()));
+        // 停在半行（shell 打完提示符就消亡）：补 CRLF 把光标推到新行行首
+        assert_eq!(seed_line_break(b"pax@host:~$ "), Some(b"\r\n".as_slice()));
     }
 
     async fn wait_for_output(rx: &mut broadcast::Receiver<Vec<u8>>, needle: &[u8]) -> Vec<u8> {
