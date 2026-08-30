@@ -47,6 +47,9 @@ export interface CellFrame {
   /** alt-screen 激活标记（方案 C D4）：仅 overlay 帧携带；消费方为
    * ViewportController（alt-screen 期间禁用滚轮接管）。 */
   alt_screen?: boolean
+  /** 当前 grid 历史行数。所有帧都携带；消费方为 ViewportController
+   * （把「距底偏移 y」换算成绝对锚点，新输出时按锚点重算 y）。 */
+  history_size?: number
   rows: CellRow[]
 }
 

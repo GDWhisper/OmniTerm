@@ -197,6 +197,8 @@
   "terminal.keyScroll": "SCROLL",
   "terminal.paste": "Paste",
   "terminal.pasteFailed": "Unable to read clipboard",
+  "terminal.newOutput": "New output below",
+  "terminal.backToBottom": "Back to bottom",
   "chat.noSession": "Select or create an ACP session",
   "chat.empty": "No messages yet — type a prompt below to start.",
   "chat.input.placeholder": "Type a prompt… (Enter to send, Shift+Enter for newline)",

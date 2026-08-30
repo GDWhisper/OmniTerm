@@ -12,7 +12,7 @@ import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
 import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
 import { ViewportController } from '../utils/viewportController'
-import { useCellFrame } from './useCellFrame'
+import { useCellFrame, type CellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -27,6 +27,16 @@ let addonsPromise = importAddons()
 /** 方案 C D8：滚轮接管总开关（行为级切换，无中间态可灰度）。置 '0' 关闭
  *  接管（wheel 交回 xterm 默认路径）；其余值/缺省开启。Phase 3 回归后移除。 */
 const VIEWPORT_TAKEOVER_ENABLED = import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT !== '0'
+
+/**
+ * 帧内是否含变化行。30fps 的 tick 帧多数是空 diff 帧（仅光标移动），
+ * 该判据决定历史视口是否需要重拉窗口与提示新输出，避免无谓的窗口请求。
+ * 全帧 / overlay 帧是整屏重绘，`rows` 非空即视为有变化。
+ */
+function hasRowChange(f: CellFrame): boolean {
+  if (f.overlay || f.full) return f.rows.length > 0
+  return (f.row_indices?.length ?? f.rows.length) > 0
+}
 
 /** 当前字号下一行的像素高度（viewport 控制器像素 wheel 换算用）。渲染服务
  *  尺寸首帧前不可用，退回字号×行高比估算。 */
@@ -133,6 +143,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   // 下方 `scrollMode` selector（按 runtimeKind 取源）。
   /** pty：由 ViewportController.onModeChange 驱动（方案 C D3 状态机）。 */
   const [ptyScrollMode, setPtyScrollMode] = useState(false)
+  // pty 历史视口模式下是否有未查看的新输出（驱动「回到底部」提示条）
+  const [ptyNewOutput, setPtyNewOutput] = useState(false)
   /** tmux：由 copy-mode 进入/退出驱动。UI 渲染用；即时真值见 tmuxScrollModeRef。 */
   const [tmuxScrollMode, setTmuxScrollMode] = useState(false)
   /** 对外统一出口（MobileKeyBar 高亮 / 方向键分流 / inputmode 同步都读它）。
@@ -153,6 +165,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       },
       onModeChange: setPtyScrollMode,
       onLiveRestore: requestResync,
+      onNewOutput: setPtyNewOutput,
     })
   }
   const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync)
@@ -266,8 +279,11 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
             }
             // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
             // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。
+            // 被丢弃的实时帧 = 后端有新输出，通知控制器按绝对锚点重拉窗
+            // 口，否则视口会永久停在上翻时刻的快照（新输出完全不可见）。
             const ctl = viewportCtlRef.current
             if (!ctl || ctl.acceptFrame(msg)) enqueueCellFrame(msg)
+            else ctl.notifyLiveOutput(hasRowChange(msg))
             return
           }
           if (msg.type === 'attached') {
@@ -318,6 +334,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     listenerDisposablesRef.current.push(
       term.onData((data) => {
         if (ws.readyState !== WebSocket.OPEN) return
+        // 真实终端语义：输入时光标必须在活动行，故任何按键都把视口拉回
+        // 底部——否则在 TUI 程序（top 等）里滚一下就再也回不去 live。
+        viewportCtlRef.current?.scrollToLive()
         // pty 双终端模拟器架构：查询类序列的应答由后端 VT 统一回写 PTY，
         // 前端 xterm 的自动应答是纯重复，tmux 对迟到重复应答会透传回显
         // （症状：会话切换后屏幕冒出 1;2c1;2c，详见 ptyInputFilter.ts 顶部）。
@@ -1019,6 +1038,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     initTerminal,
     sendData,
     scrollMode,
+    hasNewOutput: runtimeKind === 'pty' ? ptyNewOutput : false,
     sendScrollKeys,
     exitScrollMode,
     reconnect,

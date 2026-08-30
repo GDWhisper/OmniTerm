@@ -24,6 +24,13 @@
  * history_size 钳制后与请求值可能不等，无法可靠判定「帧旧于最新请求」；
  * 故不做按单调性丢弃，改为「响应 y 权威同步 + 有序 WS 保证收敛」——
  * WS 有序 + rAF 合并（单请求在飞）+ 本地 RTT <1ms，乱序窗口实际不存在。
+ *
+ * 绝对锚定（2026-08-30）：`y` 是「距底偏移」，新输出会把内容整体上推，
+ * 同一个 y 指向的行随之后移。若只在滚轮时请求一次，屏幕会永久停在上翻
+ * 时刻的快照、新输出完全不可见（实测：上翻后继续压测 12s 屏幕纹丝不动，
+ * 只有切换会话才恢复）。故记录视口顶行的**绝对锚点** `anchorFromTop`
+ * （距历史顶部的行数），每次收到帧用最新 `history_size` 反算 y
+ * ——用户看到的行保持不变，与真实终端 scrollback 语义一致。
  */
 
 /** 本地窗口偏移上界（行）。与后端 grid scrollback 容量对齐
@@ -38,6 +45,10 @@ export const RESTORE_DELAY_MS = 200
 /** 每次滚轮事件滚动的行数（deltaMode = line / page 之外的像素换算基准
  * 由调用方传入行高）。 */
 const WHEEL_LINES_PER_TICK = 3
+
+/** 新输出触发的窗口重拉节流（ms）。实时帧 30fps 到达，rAF 合并后仍有
+ * 60Hz 请求；历史窗口每帧 ~5KB，长时间停在持续输出的会话里需限速。 */
+const REFRESH_THROTTLE_MS = 100
 
 export interface WheelMetrics {
   /** 当前字号下一行的像素高度（deltaMode = pixel 时换算用）。 */
@@ -54,6 +65,8 @@ export interface ViewportFrameLike {
   viewport?: number
   /** alt-screen 激活标记：仅 overlay 帧携带。 */
   alt_screen?: boolean
+  /** 当前 grid 历史行数（所有帧携带）：绝对锚定换算用。 */
+  history_size?: number
 }
 
 export interface ViewportControllerCallbacks {
@@ -63,14 +76,30 @@ export interface ViewportControllerCallbacks {
   onModeChange: (active: boolean) => void
   /** 恢复 live 时触发一次（调用方发 resync，后端下一帧发全帧）。 */
   onLiveRestore: () => void
+  /** viewport 模式下有未查看的新输出时置真，回底/退出 viewport 时置假
+   * （驱动「回到底部」提示条）。 */
+  onNewOutput: (pending: boolean) => void
 }
 
 export class ViewportController {
   private mode: 'live' | 'viewport' = 'live'
   /** 当前窗口偏移（行，0 = live 屏，向上递增）。 */
   private currentY = 0
+  /** 后端 grid 历史行数（每帧同步；绝对锚定换算的分母）。 */
+  private historySize = 0
+  /** 绝对锚点：视口顶行距历史顶部的行数。`null` = 未锚定（live 态）。 */
+  private anchorFromTop: number | null = null
+  /** 窗口重拉节流定时器（新输出路径的延迟补发）。 */
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  /** 上次窗口重拉发出时刻（节流基准）。 */
+  private lastRefreshAt = 0
+  /** viewport 模式下是否有未查看的新输出（驱动「回到底部」提示条）。 */
+  private newOutputPending = false
   /** rAF 合并窗口内待发送的最新 y（D2：仅发最新，旧请求被覆盖）。 */
   private pendingY: number | null = null
+  /** 本次待发是「新输出重拉」而非滚动：y 可能与上次相同，须绕过去重
+   *  （后端该窗口的内容已被推新，同 y 也要重取）。 */
+  private pendingRefresh = false
   /** 最近一次实际发出的 y（去重：抖动在边界时跳过相同请求）。 */
   private lastSentY: number | null = null
   /** 像素 deltaMode 的小数行累进器（触摸/触控板小步长平滑滚动）。 */
@@ -128,6 +157,7 @@ export class ViewportController {
    */
   acceptFrame(frame: ViewportFrameLike): boolean {
     if (this.disposed) return false
+    if (typeof frame.history_size === 'number') this.historySize = frame.history_size
     if (typeof frame.alt_screen === 'boolean' && frame.alt_screen !== this.altScreen) {
       this.altScreen = frame.alt_screen
       // D4：进入 alt-screen 时强制回底（真实终端行为：alt 屏切换把视口
@@ -141,10 +171,49 @@ export class ViewportController {
       if (frame.viewport > 0 && this.mode === 'live') return false
       // 响应 y 权威同步：后端按实际 history_size 钳制，以响应为准修正
       // 本地 y（仅在无更新请求排队时——pendingY 是更新的用户意图）
-      if (this.pendingY == null) this.currentY = frame.viewport
+      if (this.pendingY == null) {
+        this.currentY = frame.viewport
+        // 钳制同时重锚定：锚点若留在越界值，下次新输出会把 y 反复拉回
+        // 越界位置，与后端钳制值来回跳。
+        this.anchorFromTop = Math.max(0, this.historySize - frame.viewport)
+      }
       return true
     }
     return this.mode === 'live'
+  }
+
+  /**
+   * 实时帧到达（本帧已被 `acceptFrame` 丢弃）且帧内确有行变化——后端有
+   * 新输出。
+   *
+   * 按绝对锚点重算 y 并重拉窗口：`history_size` 未饱和时 y 随历史增长，
+   * 用户看到的行保持不变（真实终端 scrollback 语义）；饱和后 y 被钳住不
+   * 变，但顶部行被挤出、窗口内容仍在变，故同样必须重拉——不重拉就会停在
+   * 上翻时刻的快照，后续输出完全不可见。
+   *
+   * `hasRowChange` 为假（空 diff 帧，仅光标移动）时直接返回：30fps 的
+   * tick 帧多数是空帧，据此避免无谓的窗口重拉。
+   *
+   * 节流窗口内的重拉延迟补发，保证最后一次新输出一定落到屏幕上。
+   */
+  notifyLiveOutput(hasRowChange: boolean): void {
+    if (this.disposed || this.mode !== 'viewport' || !hasRowChange) return
+    this.currentY = this.anchorY()
+    if (!this.newOutputPending) {
+      this.newOutputPending = true
+      this.cb.onNewOutput(true)
+    }
+    // 已有待发重拉：到点时取的是最新 currentY，无需再排一个定时器
+    if (this.refreshTimer != null) return
+    const wait = Math.max(0, REFRESH_THROTTLE_MS - (Date.now() - this.lastRefreshAt))
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      if (this.disposed || this.mode !== 'viewport') return
+      this.lastRefreshAt = Date.now()
+      this.pendingY = this.currentY
+      this.pendingRefresh = true
+      this.scheduleRequest()
+    }, wait)
   }
 
   /** 会话切换 / 重连：无条件回到 live 初态（不发任何请求）。 */
@@ -152,12 +221,16 @@ export class ViewportController {
     const wasActive = this.mode === 'viewport'
     this.cancelRestore()
     this.cancelRaf()
+    this.cancelRefresh()
     this.mode = 'live'
     this.currentY = 0
     this.pendingY = null
+    this.pendingRefresh = false
     this.lastSentY = null
     this.wheelAccumLines = 0
     this.altScreen = false
+    this.anchorFromTop = null
+    this.clearNewOutput()
     if (wasActive) this.cb.onModeChange(false)
   }
 
@@ -166,9 +239,22 @@ export class ViewportController {
     this.disposed = true
     this.cancelRestore()
     this.cancelRaf()
+    this.cancelRefresh()
   }
 
   // ── 内部 ──
+
+  /** 按绝对锚点与最新 history_size 反算窗口偏移。 */
+  private anchorY(): number {
+    if (this.anchorFromTop == null) return this.currentY
+    return Math.min(MAX_VIEWPORT_Y, Math.max(0, this.historySize - this.anchorFromTop))
+  }
+
+  private clearNewOutput(): void {
+    if (!this.newOutputPending) return
+    this.newOutputPending = false
+    this.cb.onNewOutput(false)
+  }
 
   /** deltaMode 三态换算为带符号行数（向下滚动为正），像素模式带累进。 */
   private deltaToLines(deltaY: number, deltaMode: number, m: WheelMetrics): number {
@@ -198,6 +284,8 @@ export class ViewportController {
         this.mode = 'viewport'
         this.cb.onModeChange(true)
       }
+      // 每次改变视口位置都重锚定，之后新输出按此锚点保持看到的行不变
+      this.anchorFromTop = Math.max(0, this.historySize - next)
       this.pendingY = next
       this.scheduleRequest()
       return
@@ -218,8 +306,11 @@ export class ViewportController {
       this.rafId = null
       if (this.disposed) return
       const y = this.pendingY
+      const refresh = this.pendingRefresh
       this.pendingY = null
-      if (y == null || y === this.lastSentY) return
+      this.pendingRefresh = false
+      // 去重只针对滚动路径：重拉是冲着「后端内容已变」去的，同 y 也要发
+      if (y == null || (!refresh && y === this.lastSentY)) return
       this.lastSentY = y
       this.cb.sendRequest(y)
     })
@@ -237,11 +328,15 @@ export class ViewportController {
     const wasActive = this.mode === 'viewport'
     this.cancelRestore()
     this.cancelRaf()
+    this.cancelRefresh()
     this.pendingY = null
+    this.pendingRefresh = false
     this.lastSentY = null
     this.wheelAccumLines = 0
     this.mode = 'live'
     this.currentY = 0
+    this.anchorFromTop = null
+    this.clearNewOutput()
     if (wasActive) this.cb.onModeChange(false)
     if (wasActive) this.cb.onLiveRestore()
   }
@@ -257,6 +352,13 @@ export class ViewportController {
     if (this.rafId != null) {
       cancelAnimationFrame(this.rafId)
       this.rafId = null
+    }
+  }
+
+  private cancelRefresh(): void {
+    if (this.refreshTimer != null) {
+      clearTimeout(this.refreshTimer)
+      this.refreshTimer = null
     }
   }
 }

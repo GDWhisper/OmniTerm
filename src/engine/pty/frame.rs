@@ -35,6 +35,11 @@ pub struct CellFrame {
     /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt_screen: Option<bool>,
+    /// 当前 grid 历史行数（`grid.history_size()`）。所有帧都携带：前端在
+    /// viewport 模式下靠它把「距底偏移 y」换算成绝对锚点，新输出推高历史
+    /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。
+    /// 无此字段前端只能停在上翻时刻的快照（新输出完全不可见）。
+    pub history_size: u32,
     pub rows: Vec<RowData>,
 }
 

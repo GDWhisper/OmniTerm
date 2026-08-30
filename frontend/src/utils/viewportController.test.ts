@@ -50,6 +50,7 @@ function makeController(overrides?: Partial<ViewportControllerCallbacks>) {
     sendRequest: (y) => sent.push(y),
     onModeChange: vi.fn(),
     onLiveRestore: vi.fn(),
+    onNewOutput: vi.fn(),
     ...overrides,
   }
   return { ctl: new ViewportController(cb), sent, cb }
@@ -239,6 +240,92 @@ describe('ViewportController.acceptFrame', () => {
     ctl.handleWheel(wheel(10), METRICS)
     raf.flush()
     expect(sent).toEqual([50, 2])
+  })
+})
+
+// ──────────────────────────────────────────────────────────
+// 绝对锚定（2026-08-30）：新输出不得把视口冻在上翻时刻的快照
+//
+// 回归背景：修复前窗口帧只在滚轮时请求一次，之后实时帧被 acceptFrame
+// 丢弃且无人重拉，屏幕永久停在上翻瞬间的历史内容——用户在压测中途上翻
+// 后，后续 12s 的输出完全不可见，只有切换会话（reset）才恢复。
+// ──────────────────────────────────────────────────────────
+describe('ViewportController 新输出重拉（绝对锚定）', () => {
+  it('历史增长时按锚点重算 y，视口看到的行保持不变', () => {
+    const { ctl, sent, cb } = makeController()
+    ctl.acceptFrame({ history_size: 100 })
+    ctl.handleWheel(wheel(-100), METRICS) // 上翻 10 行 → y=10，锚点距历史顶 90
+    raf.flush()
+    expect(sent).toEqual([10])
+
+    // 后端持续输出：历史涨到 110 行（实时帧在 viewport 模式被丢弃）
+    ctl.acceptFrame({ history_size: 110 })
+    expect(ctl.acceptFrame({})).toBe(false)
+    ctl.notifyLiveOutput(true)
+    timers.fireAll()
+    raf.flush()
+    // 锚点 90 不变 → y = 110 - 90 = 20：用户看到的行仍是同一批
+    expect(sent).toEqual([10, 20])
+    expect(cb.onNewOutput).toHaveBeenCalledWith(true)
+  })
+
+  it('历史饱和（y 钳住不变）时仍重拉——内容仍在变', () => {
+    const { ctl, sent, cb } = makeController()
+    ctl.acceptFrame({ history_size: MAX_VIEWPORT_Y })
+    ctl.handleWheel(wheel(-100), METRICS) // y=10，锚点距历史顶 990
+    raf.flush()
+    expect(sent).toEqual([10])
+    // 历史已达上界：新输出挤掉顶部行，history_size 恒为 1000，锚点换算
+    // 出的 y 仍是 10，但窗口内容已被推新——必须重拉，否则永久冻结。
+    ctl.notifyLiveOutput(true)
+    timers.fireAll()
+    raf.flush()
+    expect(sent).toEqual([10, 10])
+    expect(cb.onNewOutput).toHaveBeenCalledWith(true)
+  })
+
+  it('空 diff 帧（仅光标移动）不重拉、不报新输出', () => {
+    const { ctl, sent, cb } = makeController()
+    ctl.acceptFrame({ history_size: 100 })
+    ctl.handleWheel(wheel(-100), METRICS)
+    raf.flush()
+    ctl.notifyLiveOutput(false)
+    expect(sent).toEqual([10])
+    expect(cb.onNewOutput).not.toHaveBeenCalled()
+    expect(timers.pending()).toBe(0)
+  })
+
+  it('锚点换算结果钳制在 MAX_VIEWPORT_Y 内', () => {
+    const { ctl, sent } = makeController()
+    ctl.acceptFrame({ history_size: 100 })
+    ctl.handleWheel(wheel(-100), METRICS) // y=10，锚点 90
+    raf.flush()
+    ctl.acceptFrame({ history_size: 100 + MAX_VIEWPORT_Y + 500 })
+    ctl.notifyLiveOutput(true)
+    timers.fireAll()
+    raf.flush()
+    expect(sent.at(-1)).toBe(MAX_VIEWPORT_Y)
+  })
+
+  it('live 模式下 notifyLiveOutput 无副作用', () => {
+    const { ctl, sent, cb } = makeController()
+    ctl.acceptFrame({ history_size: 100 })
+    ctl.notifyLiveOutput(true)
+    expect(sent).toEqual([])
+    expect(cb.onNewOutput).not.toHaveBeenCalled()
+  })
+
+  it('回底后清除新输出标志并撤掉待发重拉', () => {
+    const { ctl, cb } = makeController()
+    ctl.acceptFrame({ history_size: 100 })
+    ctl.handleWheel(wheel(-100), METRICS)
+    raf.flush()
+    ctl.acceptFrame({ history_size: 110 })
+    ctl.notifyLiveOutput(true)
+    expect(cb.onNewOutput).toHaveBeenLastCalledWith(true)
+    ctl.scrollToLive()
+    expect(cb.onNewOutput).toHaveBeenLastCalledWith(false)
+    expect(timers.pending()).toBe(0)
   })
 })
 

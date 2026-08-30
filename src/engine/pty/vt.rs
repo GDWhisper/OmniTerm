@@ -553,6 +553,7 @@ impl VtState {
             viewport: None,
             // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
+            history_size: grid.history_size() as u32,
             rows: out_rows,
         };
 
@@ -605,6 +606,7 @@ impl VtState {
             row_indices: None,
             viewport: Some(y),
             alt_screen: None,
+            history_size: grid.history_size() as u32,
             rows: out_rows,
         };
 
@@ -690,6 +692,7 @@ impl VtState {
             row_indices,
             viewport: None,
             alt_screen: None,
+            history_size: grid.history_size() as u32,
             rows: out_rows,
         };
 

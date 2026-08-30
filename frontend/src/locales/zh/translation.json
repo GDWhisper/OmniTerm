@@ -197,6 +197,8 @@
   "terminal.keyScroll": "滚动",
   "terminal.paste": "粘贴",
   "terminal.pasteFailed": "无法读取剪贴板",
+  "terminal.newOutput": "下方有新输出",
+  "terminal.backToBottom": "回到底部",
   "chat.noSession": "请选择或创建一个 ACP 会话",
   "chat.empty": "暂无消息 — 在下方输入提示词开始。",
   "chat.input.placeholder": "输入提示词…（Enter 发送，Shift+Enter 换行）",

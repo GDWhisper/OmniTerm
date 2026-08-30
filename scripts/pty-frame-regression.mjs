@@ -8,14 +8,15 @@
  *
  * 前置：`./dev.sh start`。跑法：`node scripts/pty-frame-regression.mjs`
  *
- * 七组断言：
+ * 八组断言：
  *   T1 滚动历史窗口连续性（相邻 y 恰好错开 1 行 → 不丢行/不错位）
  *   T2 CJK 滚动连续性与行宽一致性（对齐的结构性判据）
  *   T3 emoji / 组合字符：runs 解码与 pty 原始字节流一致
  *   T4 快速输出（seq 1 20000）滚动窗口内数字连续无跳号
  *   T5 alt-screen 进入/退出（overlay 帧 alt_screen 标记 + 主屏恢复）
  *   T6 TUI 程序（less / top）帧可解析、非空、alt_screen 切换
- *   T7 断线重连补屏（重连首帧 full + 内容含断开前标记行）
+ *   T7 history_size：所有帧携带 + 随输出增长 + 上界钳制
+ *   T8 断线重连补屏（重连首帧 full + 内容含断开前标记行）
  *
  * 四个取样陷阱（改动本脚本前先读，否则会误判为 bug）：
  *   1. `clear` 会连 scrollback 一起清 → `history_size()` 归零，之后请求
@@ -309,8 +310,35 @@ try {
   await sleep(300)
 }
 
-// ── T7 断线重连补屏 ──
-console.log('[T7] 断线重连补屏')
+// ── T7 history_size（前端视口绝对锚定的协议基础）──
+console.log('[T7] history_size 字段：帧帧携带 / 随输出增长 / 上界钳制')
+{
+  await clearAndWait()
+  main.reset()
+  await sleep(600)
+  const live = main.frames.filter((f) => f.viewport == null)
+  const withHs = live.filter((f) => typeof f.history_size === 'number')
+  check('实时帧全部携带 history_size', live.length > 0 && withHs.length === live.length,
+    `${withHs.length}/${live.length} 帧携带`)
+
+  send('seq 1 3000\n')
+  await sleep(4000)
+  const hs = main.frames.at(-1)?.history_size
+  // 上界 = VT_SCROLLBACK_LINES（src/engine/pty/vt.rs）= 1000
+  check('history_size 随输出增长并钳在上界 1000', hs === 1000, `history_size=${hs}`)
+
+  // clear 连 scrollback 一起清 → history 归零，y=50 必被钳到 0。钳制后响应
+  // 的 viewport ≠ 请求值，等待条件不能用 viewport(y)（陷阱 1）。
+  await clearAndWait()
+  main.ws.send(JSON.stringify({ type: 'viewport_request', y: 50 }))
+  const f = await main.wait((fr) => fr.viewport != null, 3000)
+  check('history 为空时 y 钳到 0 且响应携带 history_size=0',
+    f?.viewport === 0 && f?.history_size === 0,
+    `viewport=${f?.viewport} history_size=${f?.history_size}`)
+}
+
+// ── T8 断线重连补屏 ──
+console.log('[T8] 断线重连补屏')
 {
   await clearAndWait()
   send('for i in $(seq 1 60); do echo "RECONNECT-LINE-$i"; done\n')
