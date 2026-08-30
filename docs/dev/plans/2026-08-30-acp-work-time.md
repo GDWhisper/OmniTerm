@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；偏差见文末「勘误」E1–E10）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；偏差见文末「勘误」E1–E11）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（= turn 起点），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -226,12 +226,12 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 
 | 项 | 计划 | 实际 |
 |---|---|---|
-| 位置 | 标签行 chip（正文上方） | **正文末行**，`<MessageActionBar/>` 之后，右缘贴合气泡（做法见 E10） |
+| 位置 | 标签行 chip（正文上方） | **hover 动作栏同一行的右端**（先落地为动作栏下方独立行，再按 E11 并入同行），右缘贴合气泡（做法见 E10） |
 | 文案 | 紧凑记号 | 口语整句「已工作 2分钟42秒」/ "Worked 2m42s" |
 | 等待人工 | 与工时并列展示 | **退到 tooltip**（进正文会让元信息占两行）；移动端无 hover → 按设计确认**放弃**该信息于移动端呈现 |
 | 流式进行中 | 未明确 | **无占位、不计时**——只呈现最终值。前端自算墙钟必与后端 `work_ms`（含扣除）口径不一致，等于第二套真相（同排除项理由） |
 
-位置稳定性依据：`.chat-msg-actions` 只切 `opacity`（常驻占位），故其下方一行不会跳动。视觉档位沿用 ui-style-guide 元信息规格（`0.769em` / `--text-faint` / `READER_FONT` / `tabular-nums`）。
+位置稳定性依据：`.chat-msg-actions` 只切 `opacity`（常驻占位），故无论 hover 与否，该行的宽度与耗时文字的位置都不变。视觉档位沿用 ui-style-guide 元信息规格（`0.769em` / `--text-faint` / `READER_FONT` / `tabular-nums`）。
 
 ### E9 — 侧栏累计时长整体回退（Phase 4 的前端一半白做）
 
@@ -252,3 +252,13 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 改完布局 effect 后 Fast Refresh **不会**重新挂载带新 hook 的组件，headless 浏览器里量到的仍是旧布局；必须 `location.reload()` 再量（这次差点把「已修好」报成没修好）。
 
 翻盘条件：若气泡改成占满可用宽度、或耗时行挪进气泡内部成为子节点，这段测量即可删除（届时纯 CSS `text-align:right` 就够）。
+
+### E11 — 耗时并入动作栏同一行，放不下才换行
+
+设计追加要求：不独占一行，而是与 hover 动作栏同行（动作栏靠左、耗时靠右），行宽不够时才另起一行。做法是把两者装进同一个 `flex-wrap` 行容器（`.chat-meta-row`），耗时 `margin-left:auto` 顶到行右缘——**同一套实测宽度下，同行与换行的右缘都是气泡右缘**，E10 的约束自动继承，不需要为换行态另写逻辑。
+
+两个必须显式处理的点：
+- 动作栏 `flex-shrink: 0`：按钮是 inline-block，被压缩时会自己堆成多行（比耗时换行更糟），所以「放不下」必须永远落在耗时这一侧。
+- 行容器按 `workText || visibleActions.length` 条件渲染：`MessageActionBar` 无动作时返回 `null`，无条件渲染会留一个空 div，被列 `gap: 6` 撑成凭空多出的 6px。
+
+真机实测（dev :9778，三条真实消息）：气泡宽 445/478/519px 时耗时与动作栏同行（两者 top 相差 1.2–1.4px），行右缘 721.0/754.0/795.0 vs 气泡右缘 721.2/754.4/795.3；把行宽压到 110px 触发换行，耗时落到第二行且右缘仍等行右缘（386 = 386）。
