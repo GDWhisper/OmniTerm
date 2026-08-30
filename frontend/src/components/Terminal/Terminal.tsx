@@ -72,6 +72,7 @@ export function Terminal() {
     initTerminal,
     sendData,
     scrollMode,
+    hasNewOutput,
     sendScrollKeys,
     exitScrollMode,
     reconnect,
@@ -83,6 +84,8 @@ export function Terminal() {
     fontSize: effectiveFontSize,
     latchModRef,
     onConsumeLatch: consumeLatch,
+    // 桌面端点击侧栏会话后自动聚焦（移动端会弹软键盘，交由用户点击聚焦）
+    autoFocus: !isMobile,
   })
 
   const hasSession = !!(activeSessionId || activeExternalSession)
@@ -347,6 +350,34 @@ export function Terminal() {
             padding: 4 * zoomFactor,
           }}
         />
+        {scrollMode && hasNewOutput && !terminalDisconnected && (
+          <button
+            type="button"
+            className="pixel-press"
+            onClick={() => exitScrollMode?.()}
+            title={t('terminal.backToBottom')}
+            style={{
+              position: 'absolute',
+              right: 16,
+              bottom: 16,
+              zIndex: 90,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '7px 12px',
+              background: 'var(--accent)',
+              color: '#fff',
+              border: '2px solid var(--border-strong)',
+              fontFamily: 'var(--pixel-font)',
+              fontSize: 12,
+              letterSpacing: 'var(--pixel-tracking-md)',
+              cursor: 'pointer',
+            }}
+          >
+            <span aria-hidden="true">↓</span>
+            {t('terminal.newOutput')}
+          </button>
+        )}
         {hasSession && terminalDisconnected && (
           <div style={{
             position: 'absolute',

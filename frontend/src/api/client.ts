@@ -132,6 +132,12 @@ export interface Session {
   agent_nonce?: string
   // Agent process detection (runtime scan, not hook-based)
   agent_detected?: string
+  // ACP turn 记账（sessions 表增量累计）：work_ms = agent 实际工作时长，
+  // 已扣除 wait_ms（等人工审批的挂起时长）；0 = 尚无 turn 定稿。
+  work_ms?: number
+  wait_ms?: number
+  turn_count?: number
+  last_turn_at?: string | null
 }
 
 export interface AgentEnvVar {
@@ -203,7 +209,7 @@ export const api = {
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
   versionCheck: () =>
-    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release'; container: boolean }>('/system/version', { silent: true }),
+    request<{ current: string; latest: string; update_available: boolean; channel: 'npm' | 'cargo' | 'github_release'; container: boolean; restart_command: string }>('/system/version', { silent: true }),
   systemUpdate: () =>
     request<{ status: string; version: string; restart_required: boolean; auto_restart: boolean }>('/system/update', { method: 'POST' }),
 

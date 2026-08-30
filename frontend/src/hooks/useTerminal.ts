@@ -10,7 +10,9 @@ import { READER_FONT } from '../utils/fonts'
 import { syncTextareaInputMode } from '../utils/terminalInputMode'
 import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
-import { useCellFrame } from './useCellFrame'
+import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
+import { ViewportController } from '../utils/viewportController'
+import { useCellFrame, type CellFrame } from './useCellFrame'
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -21,6 +23,32 @@ import { useCellFrame } from './useCellFrame'
 const importAddons = () =>
   Promise.all([import('@xterm/addon-fit'), import('@xterm/addon-web-links')])
 let addonsPromise = importAddons()
+
+/** 方案 C D8：滚轮接管总开关（行为级切换，无中间态可灰度）。置 '0' 关闭
+ *  接管（wheel 交回 xterm 默认路径）；其余值/缺省开启。Phase 3 回归后移除。 */
+const VIEWPORT_TAKEOVER_ENABLED = import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT !== '0'
+
+/**
+ * 帧内是否含变化行。30fps 的 tick 帧多数是空 diff 帧（仅光标移动），
+ * 该判据决定历史视口是否需要重拉窗口与提示新输出，避免无谓的窗口请求。
+ * 全帧 / overlay 帧是整屏重绘，`rows` 非空即视为有变化。
+ */
+function hasRowChange(f: CellFrame): boolean {
+  if (f.overlay || f.full) return f.rows.length > 0
+  return (f.row_indices?.length ?? f.rows.length) > 0
+}
+
+/** 当前字号下一行的像素高度（viewport 控制器像素 wheel 换算用）。渲染服务
+ *  尺寸首帧前不可用，退回字号×行高比估算。 */
+function cellHeightPx(term: Terminal): number {
+  const core = (
+    term as unknown as {
+      _core?: { _renderService?: { dimensions?: { css?: { cell?: { height?: number } } } } }
+    }
+  )._core
+  const h = core?._renderService?.dimensions?.css?.cell?.height
+  return h && h > 0 ? h : (term.options.fontSize ?? 14) * 1.35
+}
 
 async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
   let mods: [typeof import('@xterm/addon-fit'), typeof import('@xterm/addon-web-links')]
@@ -48,6 +76,10 @@ interface UseTerminalOptions {
   latchModRef?: React.MutableRefObject<string | null>
   /** Called when a latched modifier has been consumed by keyboard input */
   onConsumeLatch?: () => void
+  /** 终端就绪 / 切换会话后自动聚焦，使用户可直接键入。移动端须传 false：
+   *  聚焦 xterm 隐藏 textarea 会弹起软键盘，遮住刚切过去的终端（见
+   *  utils/terminalInputMode.ts）。 */
+  autoFocus?: boolean
 }
 
 const DARK_TERMINAL_THEME = {
@@ -88,7 +120,7 @@ function translateLatch(latch: string, data: string): string {
   }
 }
 
-export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch }: UseTerminalOptions) {
+export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontSize = 14, onTitleChange, latchModRef, onConsumeLatch, autoFocus = false }: UseTerminalOptions) {
   const { i18n } = useTranslation()
   const attention = useAttention()  // Agent attention context
   // Blur / idle disconnect timeouts (minutes). Read reactively from the store;
@@ -105,6 +137,37 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       ws.send(JSON.stringify({ type: 'resync' }))
     }
   }, [])
+  // ── 滚动状态：pty 与 tmux 各持一份，互不共享 ──
+  // 两侧语义本就不同（pty = 已滚离 live 底部；tmux = 处于 copy-mode），且
+  // pty 后续改造不得波及 tmux 路径，故不复用同一个 state。对外统一出口见
+  // 下方 `scrollMode` selector（按 runtimeKind 取源）。
+  /** pty：由 ViewportController.onModeChange 驱动（方案 C D3 状态机）。 */
+  const [ptyScrollMode, setPtyScrollMode] = useState(false)
+  // pty 历史视口模式下是否有未查看的新输出（驱动「回到底部」提示条）
+  const [ptyNewOutput, setPtyNewOutput] = useState(false)
+  /** tmux：由 copy-mode 进入/退出驱动。UI 渲染用；即时真值见 tmuxScrollModeRef。 */
+  const [tmuxScrollMode, setTmuxScrollMode] = useState(false)
+  /** 对外统一出口（MobileKeyBar 高亮 / 方向键分流 / inputmode 同步都读它）。
+   *  缺省按 tmux，与 runtimeKindRef 的缺省约定一致（external 会话恒为 tmux）。 */
+  const scrollMode = runtimeKind === 'pty' ? ptyScrollMode : tmuxScrollMode
+  const scrollModeRef = useRef(false)
+  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
+  // 方案 C Phase 2：历史视口控制器（lazy ref；实例跨会话/重连复用，状态由
+  // reset() 归位）。pty 会话滚轮/翻页经它请求后端历史窗口帧。
+  const viewportCtlRef = useRef<ViewportController | null>(null)
+  if (viewportCtlRef.current === null) {
+    viewportCtlRef.current = new ViewportController({
+      sendRequest: (y) => {
+        const ws = wsRef.current
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'viewport_request', y }))
+        }
+      },
+      onModeChange: setPtyScrollMode,
+      onLiveRestore: requestResync,
+      onNewOutput: setPtyNewOutput,
+    })
+  }
   const { enqueue: enqueueCellFrame } = useCellFrame(termRef, requestResync)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const composingRef = useRef(false)
@@ -116,7 +179,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
-  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback)
+  // Track whether tmux is in copy/scroll mode (for touch-scroll fallback).
+  // 即时真值（同一手势内多次 touchmove 需立即读到新值，否则会重复发
+  // Ctrl+B [ 进 copy-mode）；`tmuxScrollMode` 是它的 UI 渲染副本。
   const tmuxScrollModeRef = useRef(false)
   // Track terminal readiness so WS effects re-run after initTerminal creates the terminal.
   const [terminalReady, setTerminalReady] = useState(false)
@@ -134,8 +199,6 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   // creation (e.g., React StrictMode double-mount or rapid session switch).
   // A fresh controller is created for each initTerminal call.
   const abortRef = useRef<AbortController | null>(null)
-  // Mobile scroll mode: when true, arrow keys scroll tmux history instead of sending cursor keys
-  const [scrollMode, setScrollMode] = useState(false)
   // Guards against concurrent terminal (re)creation. After a blur/idle
   // disconnect the term ref is nulled, so `initTerminal`'s `termRef.current`
   // guard can't stop a second (rapid) click from also entering
@@ -146,12 +209,6 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   // Stable ref for the consume-latch callback so connectWs closure is current
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
-  // Mirror scrollMode into a ref so the createTerminal closure (and any
-  // other long-lived callback) can read the current value without being
-  // rebuilt on every state change.  createTerminal has [] deps to keep its
-  // identity stable across renders — we can't add scrollMode there.
-  const scrollModeRef = useRef(false)
-  useEffect(() => { scrollModeRef.current = scrollMode }, [scrollMode])
 
   const connectWs = useCallback(() => {
     const term = termRef.current
@@ -159,12 +216,24 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (!id || !term) return
 
     // Close existing connection
+    const wasConnected = wsRef.current !== null
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.onerror = null
       wsRef.current.close()
       wsRef.current = null
     }
+
+    // Reset terminal immediately on session switch so the old session's
+    // scrollback / SGR state can't bleed into the new session's first
+    // cell_frame.  The onmessage handler also resets on first frame as a
+    // safety net, but that fires AFTER the frame is decoded — too late to
+    // prevent a flash of stale content.
+    if (wasConnected) {
+      termRef.current?.reset()
+    }
+    // 方案 C：会话切换/重连后视口控制器无条件回 live 初态（不发请求）
+    viewportCtlRef.current?.reset()
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const path = externalSessionName
@@ -180,7 +249,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
-      // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）
+      // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。开启后收到的
+      // cell_frame 一律是 runs 行编码（`docs/dev/plans/2026-08-28-pty-frame-rle.md`）。
       ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
     }
 
@@ -207,7 +277,13 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
               sawFirstBinary = true
               termRef.current?.reset()
             }
-            enqueueCellFrame(msg)
+            // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
+            // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。
+            // 被丢弃的实时帧 = 后端有新输出，通知控制器按绝对锚点重拉窗
+            // 口，否则视口会永久停在上翻时刻的快照（新输出完全不可见）。
+            const ctl = viewportCtlRef.current
+            if (!ctl || ctl.acceptFrame(msg)) enqueueCellFrame(msg)
+            else ctl.notifyLiveOutput(hasRowChange(msg))
             return
           }
           if (msg.type === 'attached') {
@@ -258,6 +334,14 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     listenerDisposablesRef.current.push(
       term.onData((data) => {
         if (ws.readyState !== WebSocket.OPEN) return
+        // 真实终端语义：输入时光标必须在活动行，故任何按键都把视口拉回
+        // 底部——否则在 TUI 程序（top 等）里滚一下就再也回不去 live。
+        viewportCtlRef.current?.scrollToLive()
+        // pty 双终端模拟器架构：查询类序列的应答由后端 VT 统一回写 PTY，
+        // 前端 xterm 的自动应答是纯重复，tmux 对迟到重复应答会透传回显
+        // （症状：会话切换后屏幕冒出 1;2c1;2c，详见 ptyInputFilter.ts 顶部）。
+        // tmux/外部会话不过滤 —— 那里前端 xterm 是唯一终端模拟器，应答必需。
+        if (runtimeKindRef.current === 'pty' && isTerminalAutoResponse(data)) return
         // During IME composition, xterm emits intermediate (half-finished)
         // text. Always drop it — whether or not a modifier is latched. The
         // final committed text is re-emitted by xterm via onData AFTER
@@ -295,6 +379,11 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (!keyHandlerAttachedRef.current) {
       keyHandlerAttachedRef.current = true
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
+        // Read the current WS from the ref (not closure) so session-switch
+        // always targets the live connection.
+        const ws = wsRef.current
+        if (!ws || ws.readyState !== WebSocket.OPEN) return true
+
         // Only intercept in modern mode — and only for tmux sessions: the
         // shortcuts inject tmux prefix bytes (\x02...), which a pty session
         // has no concept of (D12 分流).
@@ -314,27 +403,25 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
         // Ctrl+Shift+Right → horizontal split
         if (ctrl && shift && !alt && key === 'ArrowRight') {
-          ws.send(new TextEncoder().encode('\x02%'))
+          wsRef.current?.send(new TextEncoder().encode('\x02%'))
           return false
         }
         // Ctrl+Shift+Down → vertical split
         if (ctrl && shift && !alt && key === 'ArrowDown') {
-          ws.send(new TextEncoder().encode('\x02"'))
+          wsRef.current?.send(new TextEncoder().encode('\x02"'))
           return false
         }
         // Ctrl+Shift+Q → new window
         if (ctrl && shift && !alt && key === 'Q') {
-          ws.send(new TextEncoder().encode('\x02c'))
+          wsRef.current?.send(new TextEncoder().encode('\x02c'))
           return false
         }
         // Ctrl+Shift+X → close pane (send kill-pane + auto-confirm 'y')
         if (ctrl && shift && !alt && key === 'X') {
-          ws.send(new TextEncoder().encode('\x02x'))
+          wsRef.current?.send(new TextEncoder().encode('\x02x'))
           // Auto-confirm the tmux kill-pane prompt
           setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(new TextEncoder().encode('y\n'))
-            }
+            wsRef.current?.send(new TextEncoder().encode('y\n'))
           }, 50)
           return false
         }
@@ -368,13 +455,20 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
    *  truth, not the React `scrollMode` flag, so pagging always works after the
    *  user has toggled scroll on via the UI button.
    *
-   *  pty 会话分流（D12）：无 copy-mode，直接滚动 xterm 本地 scrollback；
-   *  scrollMode 状态由 createTerminal 里的 term.onScroll 按视口位置驱动。 */
+   *  pty 会话分流：pty 无 copy-mode 语义，翻页走 ViewportController.pageScroll
+   *  （后端历史窗口帧）；其滚动状态由 ViewportController.onModeChange 驱动，
+   *  与 tmux 的 tmuxScrollMode / tmuxScrollModeRef 完全无关。 */
   const sendScrollKeys = useCallback((direction: 'up' | 'down') => {
     if (runtimeKindRef.current === 'pty') {
       const term = termRef.current
       if (!term) return
       const page = Math.max(1, term.rows - 1)
+      // 方案 C：WS 可用时翻页走后端历史窗口；离线退回本地 scrollback
+      // 滚动（两者在离线态都无内容可见，仅为行为兜底）。
+      if (wsRef.current?.readyState === WebSocket.OPEN && viewportCtlRef.current) {
+        viewportCtlRef.current.pageScroll(direction === 'up' ? -1 : 1, page)
+        return
+      }
       term.scrollLines(direction === 'up' ? -page : page)
       return
     }
@@ -384,7 +478,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       // tmux prefix is Ctrl+B (0x02), then [ enters copy mode
       ws.send(new TextEncoder().encode('\x02['))
       tmuxScrollModeRef.current = true
-      setScrollMode(true)
+      setTmuxScrollMode(true)
     }
     const key = direction === 'up' ? '\x1b[5~' : '\x1b[6~' // PageUp / PageDown
     ws.send(new TextEncoder().encode(key))
@@ -399,18 +493,17 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
    *  a lone Escape is a no-op in a shell command line. */
   const exitScrollMode = useCallback(() => {
     if (runtimeKindRef.current === 'pty') {
-      // pty 分流：本地 scrollback 无 mode 概念，回到底部即退出；
-      // scrollMode 由 term.onScroll 按视口位置复位。
-      termRef.current?.scrollToBottom()
+      // pty 分流：方案 C，回底 = 恢复 live（控制器触发 resync 全帧重绘）
+      viewportCtlRef.current?.scrollToLive()
       return
     }
     if (!tmuxScrollModeRef.current) {
-      setScrollMode(false)
+      setTmuxScrollMode(false)
       return
     }
     sendData('\x1b')
     tmuxScrollModeRef.current = false
-    setScrollMode(false)
+    setTmuxScrollMode(false)
   }, [sendData])
 
   /** Dispose the current terminal and all associated resources */
@@ -500,6 +593,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
+      // Match the backend VT scrollback (VT_SCROLLBACK_LINES = 1000 in
+      // src/engine/pty/vt.rs) so the xterm scrollback depth equals what
+      // the PTY grid can produce.  Without this, xterm defaults to 1000
+      // anyway — explicit here for clarity and to catch divergences at
+      // review time if the backend constant changes.
+      scrollback: 1000,
     })
 
     const fit = new FitAddon()
@@ -577,16 +676,25 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       syncTextareaInputMode(container, scrollModeRef.current)
     }
 
-    // pty 分流（D12）：无 tmux copy-mode 状态可查，滚动态改由视口位置派生——
-    // 视口不在 scrollback 底部即视为"滚动中"（MobileKeyBar 高亮 + 软键盘抑制
-    // 与 tmux 路径语义一致）。tmux 会话走 tmuxScrollModeRef，不订阅。
-    if (runtimeKindRef.current === 'pty') {
-      listenerDisposablesRef.current.push(
-        term.onScroll(() => {
-          const buf = term.buffer.active
-          setScrollMode(buf.viewportY < buf.baseY)
+    // pty 历史滚动（方案 C D1）：滚轮接管请求后端历史窗口帧，取代 xterm
+    // 本地 scrollback（cell_frame 模式下结构性冻结，见 pty-scroll-handover.md）。
+    // 互斥判定顺序：① tmux/external 会话不接管（冻结路径：xterm scrollback
+    // + touchScroll→tmux copy-mode）；② 鼠标协议激活（vim/htop 等）不接管
+    // ——xterm 6.0.0 中自定义 wheel handler 在鼠标协议路径同样最先执行，
+    // 必须显式放行让鼠标上报发出；③ 其余 pty 场景接管（取消 xterm 默认
+    // 滚动），alt-screen / 离线由控制器内部拒绝（D4）。
+    if (VIEWPORT_TAKEOVER_ENABLED) {
+      term.attachCustomWheelEventHandler((ev: WheelEvent) => {
+        if (runtimeKindRef.current !== 'pty') return true
+        if (term.modes.mouseTrackingMode !== 'none') return true
+        const ctl = viewportCtlRef.current
+        if (!ctl) return true
+        return !ctl.handleWheel(ev, {
+          lineHeightPx: cellHeightPx(term),
+          rows: term.rows,
+          wsOpen: wsRef.current?.readyState === WebSocket.OPEN,
         })
-      )
+      })
     }
 
     // Handle resize — debounced so xterm.js and tmux resize together after
@@ -631,18 +739,26 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     // Mobile touch scroll: vertical finger drags become wheel events so
     // tmux mouse-mode scrolls history (xterm has no native touch scroll).
-    // Only the "view history" direction (wheel up, deltaY < 0) makes tmux
-    // enter copy mode — flip the scroll flag there so the MobileKeyBar「滚动」
-    // button highlight tracks the real tmux state. Scrolling back toward live
-    // output (deltaY > 0) is left alone: tmux's `copy-mode -e` only auto-exits
-    // once the history bottom is reached, which we cannot observe here.
+    //
+    // 物理监听必须唯一（touchmove 只能注册一次）：注册两份会让每个手势派发
+    // 两个 wheel 事件，pty 侧表现为双倍滚动量。故 pty/tmux 共用同一个监听器，
+    // 但在回调入口立即按 runtime 分派到两条互不干涉的处理路径 —— pty 侧的
+    // 滚动逻辑全部在 ViewportController（wheel handler 内接管），这里不维护
+    // 任何状态；tmux 侧只需维护 copy-mode 标志。
     touchScrollCleanupRef.current = attachTouchScroll(container, (deltaY) => {
-      // pty 分流：wheel 直接滚动 xterm 本地 scrollback，无 copy-mode 标志可维护
-      //（scrollMode 由上方 onScroll 订阅驱动）。
-      if (runtimeKindRef.current === 'pty') return
+      if (runtimeKindRef.current === 'pty') {
+        // pty：合成 wheel 已被 ViewportController 接管，无 copy-mode 语义，
+        // 不维护本地状态（滚动状态源在 ViewportController.onModeChange）。
+        return
+      }
+      // tmux：合成 wheel 交回 xterm 默认路径（xterm 本地 scrollback）。
+      // 只在这里维护 copy-mode 标志 —— 仅「查看历史」方向（wheel up，
+      // deltaY < 0）会让 tmux 进 copy mode，翻转标志使 MobileKeyBar「滚动」
+      // 高亮跟随真实 tmux 状态。滚回 live 方向（deltaY > 0）不动：tmux 的
+      // `copy-mode -e` 只在滚到历史底部时自动退出，此处无法观测。
       if (deltaY < 0 && !tmuxScrollModeRef.current) {
         tmuxScrollModeRef.current = true
-        setScrollMode(true)
+        setTmuxScrollMode(true)
       }
     })
 
@@ -690,8 +806,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     // (Layout keys on view kind, not session id) — reset the per-session UI
     // state that the old full remount used to clear. tmux copy-mode state is
     // session-local; the new session starts outside copy mode.
+    //
+    // 只归位 tmux 侧：pty 侧的视口状态由下方 connectWs() 里的
+    // ViewportController.reset() 归位（它会回调 onModeChange(false)）。
+    // 在两侧状态分离后，此处不得写 ptyScrollMode —— 那是控制器的真值。
     tmuxScrollModeRef.current = false
-    setScrollMode(false)
+    setTmuxScrollMode(false)
     connectWs()
   }, [sessionId, externalSessionName, connectWs])
 
@@ -702,6 +822,19 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       connectWs()
     }
   }, [terminalReady, sessionId, externalSessionName, connectWs])
+
+  // Auto-focus on session selection: clicking a sidebar row leaves DOM focus on
+  // that row, so the user has to click the terminal before typing. Runs on the
+  // first init too (`terminalReady` false→true) and repeats after a remount —
+  // `disposeTerminal` resets the flag, so StrictMode's double-mount still ends
+  // with the live instance focused. Same-kind switches (tmux→tmux) keep the
+  // view mounted, hence the `sessionId` dep rather than a mount-only effect.
+  useEffect(() => {
+    if (!autoFocus || !terminalReady) return
+    // No session (empty state) or torn down (blur/idle disconnect) → nothing to focus.
+    if (!(externalSessionName ?? sessionId)) return
+    termRef.current?.focus()
+  }, [autoFocus, terminalReady, sessionId, externalSessionName])
 
   // Live-update font size when store changes
   useEffect(() => {
@@ -905,6 +1038,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     initTerminal,
     sendData,
     scrollMode,
+    hasNewOutput: runtimeKind === 'pty' ? ptyNewOutput : false,
     sendScrollKeys,
     exitScrollMode,
     reconnect,

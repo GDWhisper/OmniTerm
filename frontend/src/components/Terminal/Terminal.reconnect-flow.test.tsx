@@ -24,6 +24,7 @@ vi.mock('@xterm/xterm', () => {
       this.element = el
     }
     loadAddon() {}
+    focus() {}
     write() {}
     writeln() {}
     reset() {}
@@ -41,6 +42,7 @@ vi.mock('@xterm/xterm', () => {
       return { dispose() {} }
     }
     attachCustomKeyEventHandler() {}
+    attachCustomWheelEventHandler() {}
     getSelection() {
       return ''
     }

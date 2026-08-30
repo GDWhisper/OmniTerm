@@ -22,7 +22,7 @@ use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
-use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot};
+use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnTiming};
 use crate::models::agent::Agent;
 
 /// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
@@ -65,6 +65,10 @@ pub enum TurnEndEvent {
         /// 把 cooked `blocks` 精确回写到那一行（见 `chat_persistence::sync_messages`）：
         /// 后端落的是原始帧，体积比 cooked 大两个数量级。
         row_id: Option<String>,
+        /// 本 turn 定稿结算出的时长（工作 / 等真人审批）。`None` = 该 turn 未经
+        /// 累积器定稿（兜底路径），前端不更新耗时。随帧下发使耗时在定稿那一刻就出现，
+        /// 不必等下一次 hydrate。
+        duration: Option<TurnTiming>,
     },
     Error {
         message: String,
@@ -363,8 +367,13 @@ impl AcpClient {
             .on_receive_request(
                 {
                     let pm = pm.clone();
+                    let accumulator = accumulator.clone();
                     async move |request: RequestPermissionRequest, responder, _cx| {
-                        pm.handle_request(request, responder).await
+                        // 登记成功即进入未决态 → 起算「等真人审批」区间（无活跃 turn 时
+                        // begin_wait 自行 no-op，见 TurnAccumulator）。
+                        pm.handle_request(request, responder).await?;
+                        accumulator.begin_wait();
+                        Ok(())
                     }
                 },
                 agent_client_protocol::on_receive_request!(),
@@ -565,6 +574,12 @@ impl AcpClient {
         self.accumulator.turn_row_id()
     }
 
+    /// 上一次定稿结算出的 turn 时长（工作 / 等真人审批）。`mark_prompt_idle()` 之后
+    /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
+    pub fn turn_timing(&self) -> Option<TurnTiming> {
+        self.accumulator.turn_timing()
+    }
+
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
     pub fn notify_turn_end(&self, event: TurnEndEvent) {
         let _ = self.turn_end_tx.send(event);
@@ -585,7 +600,13 @@ impl AcpClient {
     }
 
     pub async fn resolve_permission(&self, id: &str, option_id: &str) -> bool {
-        self.permission_manager.resolve(id, option_id).await
+        let resolved = self.permission_manager.resolve(id, option_id).await;
+        // 只在本次调用真正消费掉未决审批时才结束一段等待计时：`false` 意味着该 id 已被
+        // 其他连接应答过，重复 end_wait 会让等待计数向下漂移（计划 D4）。
+        if resolved {
+            self.accumulator.end_wait();
+        }
+        resolved
     }
 
     pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
@@ -705,6 +726,9 @@ impl AcpClient {
         // ACP 规范：session/cancel 后 MUST 以 Cancelled 应答所有未决权限请求。
         let pm = self.permission_manager.clone();
         tokio::spawn(async move { pm.cancel_all().await });
+        // 未决审批就地全部结束 → 等待区间到此为止。不结的话若 agent 无视 cancel 继续
+        // 干活，那段收尾时间会被算成「等真人」（会话累计虚高、work 虚低）。
+        self.accumulator.end_all_waits();
         let tm = self.terminal_manager.clone();
         tokio::spawn(async move { tm.kill_all().await });
         Ok(())
@@ -792,6 +816,7 @@ impl AcpClient {
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "Cancelled".into(),
                     row_id: client.turn_row_id(),
+                    duration: client.turn_timing(),
                 });
             }
         });
@@ -866,11 +891,6 @@ impl AcpClient {
             Ok(()) => {}
             Err(_) => tracing::warn!("restore_config_prefs timed out after 10s"),
         }
-    }
-
-    /// 定稿进行中的 assistant turn（幂等）。供外部收尾路径显式调用。
-    pub fn finalize_turn(&self) {
-        self.accumulator.finalize_turn();
     }
 
     /// 连接时的进行中 turn 快照，供 WS 层下发 turn_state / turn_snapshot 帧，
@@ -1066,8 +1086,13 @@ impl AcpClient {
             .on_receive_request(
                 {
                     let pm = pm.clone();
+                    let accumulator = accumulator.clone();
                     async move |request: RequestPermissionRequest, responder, _cx| {
-                        pm.handle_request(request, responder).await
+                        // 登记成功即进入未决态 → 起算「等真人审批」区间（无活跃 turn 时
+                        // begin_wait 自行 no-op，见 TurnAccumulator）。
+                        pm.handle_request(request, responder).await?;
+                        accumulator.begin_wait();
+                        Ok(())
                     }
                 },
                 agent_client_protocol::on_receive_request!(),
@@ -1239,6 +1264,10 @@ impl AcpClient {
     pub async fn shutdown(&self) {
         // 先置存活标志 false：即使 teardown 尚未完成，prompt 到达时也应走自动恢复。
         self.alive.store(false, Ordering::Release);
+        // 定稿进行中的 turn：优雅关闭让连接任务以 Ok 返回，crash watcher 的兜底（只在
+        // Err 时定稿）不会触发。不补这一刀，那段时间既不进会话累计、消息行也永远停在
+        // streaming 态（幂等，已在别处定稿时这里是 no-op）。
+        self.mark_prompt_idle();
         self.terminal_manager.kill_all().await;
         // 取出并 drop shutdown_tx → 连接任务的 shutdown_rx 收到 RecvError 后退出。
         // lock().await 安全：shutdown_tx 仅在此处和 disconnect 中被 take，
@@ -1247,9 +1276,11 @@ impl AcpClient {
     }
 
     pub async fn disconnect(self) {
+        self.alive.store(false, Ordering::Release);
+        // 同 shutdown：优雅断开路径不经过 crash watcher，须自行定稿进行中 turn。
+        self.mark_prompt_idle();
         // 回收本会话可能创建的终端子进程（kill_on_drop 依赖 TerminalProcess 被 drop，
         // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
-        self.alive.store(false, Ordering::Release);
         self.terminal_manager.kill_all().await;
         if let Ok(mut guard) = self._shutdown_tx.try_lock() {
             let _ = guard.take();

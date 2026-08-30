@@ -79,7 +79,12 @@ export function attachTouchScroll(container: HTMLElement, onScroll?: (deltaY: nu
     )
   })
   const onStart = (e: TouchEvent) => {
-    wheelTarget = e.target
+    // xterm.js 的 wheel listener 挂在 `this.element`（class="xterm"）上。
+    // 在 Chromium 中，把合成 WheelEvent 派发到触摸 target（通常是 .xterm-screen
+    // 内的子元素）后事件不会冒泡到 .xterm 的 listener，导致 pty viewport 接管
+    // 与 tmux 默认滚动都失效。因此直接把事件派发到 .xterm 元素本身。
+    const xtermEl = container.querySelector('.xterm')
+    wheelTarget = xtermEl ?? e.target
     handlers.onStart(e)
   }
   container.addEventListener('touchstart', onStart, { passive: true })

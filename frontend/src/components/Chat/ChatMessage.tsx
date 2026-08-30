@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useMemo, useState, useCallback } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -7,7 +7,7 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatHoverTime } from '../../utils/formatTime'
+import { formatHoverTime, formatWorkDuration } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -22,6 +22,9 @@ import { IconCopy } from '../FileManager/icons'
 const USER_TEXT_COLLAPSE_LINES = 8
 // 折叠态下展示的最大行数（其余内容隐藏，点击展开后全量显示）。
 const USER_TEXT_PREVIEW_LINES = 8
+// 正文气泡的宽度上限（思考块/工具卡/文本泡/用户泡共用）。贴气泡右缘的元信息行
+// （turn 耗时）必须用同一个值，否则两处百分比各改各的，右缘就错开了。
+const BUBBLE_MAX_WIDTH = '85%'
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -146,7 +149,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   }
 
   return (
-    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth: '85%', fontSize: '0.923em' }}>
+    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH, fontSize: '0.923em' }}>
       <button
         onClick={toggle}
         style={{
@@ -237,7 +240,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
       style={{
         display: 'inline-flex',
         flexDirection: 'column',
-        maxWidth: '85%',
+        maxWidth: BUBBLE_MAX_WIDTH,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
         borderLeft: `2px solid ${statusColor}`,
@@ -327,7 +330,7 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
       data-chat-body="true"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: '85%',
+        maxWidth: BUBBLE_MAX_WIDTH,
         padding: '6px 10px',
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
@@ -358,7 +361,7 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
       className="chat-block"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: '85%',
+        maxWidth: BUBBLE_MAX_WIDTH,
         padding: '8px 12px',
         borderRadius: 8,
         background: 'var(--bg-surface)',
@@ -439,7 +442,7 @@ export interface ChatMessageViewProps {
  * 使历史消息在流式期间跳过重渲染。
  */
 export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const [editing, setEditing] = useState(false)
@@ -493,6 +496,35 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   // hover 时间小字绝对定位：不占布局空间，避免把标识行（右对齐的 USER）挤向左侧。
   // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
   const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
+
+  // turn 工作时长：后端在 turn 定稿时结算，只有 hydrate（读 DB）路径才带回来 ——
+  // 前端不自算实时计时，否则与含审批扣除的后端口径形成第二套真相。
+  // null/undefined（在建消息、迁移前的历史行）→ 整行不渲染，区别于「确实 0 时长」。
+  const workText = formatWorkDuration(message.durationMs, i18n.language)
+  // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
+  // 拿不到，按设计确认放弃该信息于移动端呈现。
+  const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
+  const durationTip = [
+    workText && t('chat.msg.workTime', { dur: workText }),
+    waitText && t('chat.msg.waitTime', { dur: waitText }),
+  ].filter(Boolean).join(' · ')
+  // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
+  // 而这一行是正文块的兄弟节点，CSS 表达不了「和上面某个块右缘对齐」，只能量。
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [metaWidth, setMetaWidth] = useState<number>()
+  useLayoutEffect(() => {
+    const row = rowRef.current
+    if (!row || !workText) return
+    const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
+    const last = bodies[bodies.length - 1]
+    if (!last) return
+    // 同值不 setState：ResizeObserver 每次 observe 先报一轮，回绕成渲染循环没有尽头。
+    const measure = () => setMetaWidth((w) => (w === last.offsetWidth ? w : last.offsetWidth))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(last)
+    return () => ro.disconnect()
+  }, [workText, message.blocks])
 
   const label = (
     <div
@@ -561,7 +593,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
           style={{
             padding: '8px 12px',
             borderRadius: 8,
-            maxWidth: '85%',
+            maxWidth: BUBBLE_MAX_WIDTH,
             minWidth: editing ? '60%' : undefined,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
@@ -672,6 +704,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
   return (
     <div
+      ref={rowRef}
       className="chat-msg-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -690,12 +723,42 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
-      <MessageActionBar
-        actions={visibleActions}
-        ctx={ctx}
-        menu={actionMenu}
-        onCloseMenu={closeActionMenu}
-      />
+      {/* 动作栏 + turn 耗时同一行：动作栏靠左、耗时靠右（marginLeft:auto）。
+          行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
+          某个块的右缘」，只能量），故无论耗时是同行还是被 flex-wrap 挤到下一行，
+          右缘都与气泡右缘重合。动作栏常驻占位（CSS 只切 opacity）且不被压缩，
+          所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。 */}
+      {(workText || visibleActions.length > 0) && (
+        <div
+          className="chat-meta-row"
+          style={{ alignSelf: 'flex-start', width: metaWidth, maxWidth: BUBBLE_MAX_WIDTH }}
+        >
+          <MessageActionBar
+            actions={visibleActions}
+            ctx={ctx}
+            menu={actionMenu}
+            onCloseMenu={closeActionMenu}
+          />
+          {/* null/undefined（在建消息、迁移前的历史行）→ 不渲染，区别于「确实 0 时长」。
+              「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。 */}
+          {workText && (
+            <span
+              style={{
+                marginLeft: 'auto',
+                fontSize: '0.769em',
+                color: 'var(--text-faint)',
+                fontFamily: READER_FONT,
+                letterSpacing: '0.03em',
+                fontVariantNumeric: 'tabular-nums',
+                whiteSpace: 'nowrap',
+              }}
+              title={durationTip}
+            >
+              {t('chat.msg.workTime', { dur: workText })}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 })

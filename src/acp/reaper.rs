@@ -78,6 +78,7 @@ pub async fn run_reaper(
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "InactivityTimeout".into(),
                     row_id: client.turn_row_id(),
+                    duration: client.turn_timing(),
                 });
             }
         }

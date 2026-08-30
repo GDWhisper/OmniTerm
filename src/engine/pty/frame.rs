@@ -25,24 +25,32 @@ pub struct CellFrame {
     /// diff 帧时 `rows` 仅含变化行，`row_indices` 标注各行在原 grid 中的位置。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub row_indices: Option<Vec<usize>>,
+    /// Viewport 窗口帧标记（方案 C Phase 1）：携带本帧展示的历史窗口偏移
+    /// （行，0 = live 屏）。仅 `viewport_request` 的响应帧携带，常规/overlay
+    /// 帧省略——前端据此区分历史帧与实时帧（stale 响应按 y 单调性丢弃）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<u32>,
+    /// alt-screen 激活标记（方案 C Phase 2，D4）：仅 overlay 帧携带（enter/exit
+    /// 都发 overlay，无此标记前端无法区分）。viewport 控制器据此在 alt-screen
+    /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_screen: Option<bool>,
+    /// 当前 grid 历史行数（`grid.history_size()`）。所有帧都携带：前端在
+    /// viewport 模式下靠它把「距底偏移 y」换算成绝对锚点，新输出推高历史
+    /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。
+    /// 无此字段前端只能停在上翻时刻的快照（新输出完全不可见）。
+    pub history_size: u32,
     pub rows: Vec<RowData>,
 }
 
+/// 一行的线格负载：行内 RLE —— 按 sgr 合并连续字符的扁平数组
+/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
+///
+/// 这是 cell_frame 协议的**唯一**行编码：逐 cell 的 `cells` 格式随该计划
+/// P3 的 D4 一并移除，故不存在格式协商（前端无需按字段分派）。
 #[derive(Serialize)]
 pub struct RowData {
-    pub cells: Vec<CellData>,
-}
-
-#[derive(Serialize)]
-pub struct CellData {
-    /// SGR 参数体（不含 \x1b[ 前缀和 m 后缀），空字符串 = 默认样式。
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub sgr: String,
-    /// 单个 Unicode scalar（grapheme cluster 潜在跨 char 边界用 &str 语义）。
-    pub ch: String,
-    /// 宽字符占位位：前端应跳过渲染。
-    #[serde(default)]
-    pub skip: bool,
+    pub runs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -55,36 +63,6 @@ pub struct CursorState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<u8>,
     pub visible: bool,
-}
-
-// ──────────────────────────────────────────────────────────────
-// Row hashing (Phase 3 DiffEngine)
-// ──────────────────────────────────────────────────────────────
-
-/// Row-level fingerprint: FNV-1a 64-bit over visible cells' (char, sgr) pairs.
-/// Unchanged rows produce identical hashes → skipped in diff frames.
-#[inline]
-pub fn hash_row(cells: &[CellData]) -> u64 {
-    let mut h: u64 = 14695981039346656037;
-    for cell in cells {
-        if cell.skip {
-            // Spacer cell: mix in a sentinel so empty spacer disturbs hash differently
-            // from no-cell-at-all (both happen in well-formed grids).
-            h ^= 0x42;
-            h = h.wrapping_mul(1099511628211);
-            continue;
-        }
-        for b in cell.ch.bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(1099511628211);
-        }
-        for b in cell.sgr.bytes() {
-            // Prefix sgr bytes with 0x80 to disambiguate from identical char bytes.
-            h ^= 0x80 | (b as u64);
-            h = h.wrapping_mul(1099511628211);
-        }
-    }
-    h
 }
 
 // ──────────────────────────────────────────────────────────────

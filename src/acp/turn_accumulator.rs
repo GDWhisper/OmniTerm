@@ -29,6 +29,13 @@
 //! Writes are debounced: the fold path only flags dirty and pings a dedicated writer
 //! task, which coalesces bursts (trailing debounce + max-latency cap) so a high chunk
 //! rate maps to a few SQLite writes per second.
+//!
+//! The accumulator is also the **single accounting point for turn work time**: turn
+//! duration (`work_ms`) and permission-wait time (`wait_ms`) are measured here, on the
+//! same `active → false` transition that finalizes the row, so each turn is counted
+//! exactly once. The measurement basis (wall time minus human-approval wait) and the
+//! decision to keep it here rather than in a separate timer live in
+//! `docs/dev/plans/2026-08-30-acp-work-time.md` (D1/D2).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -148,9 +155,25 @@ struct TurnState {
     /// True between `begin_turn` and `finalize_turn`. Gates folding so replay /
     /// idle notifications (which never call `begin_turn`) are ignored.
     active: bool,
+    /// 本 turn 的起点（单调时钟）。只在 `active` 期间被读，`begin_turn` 覆盖写。
+    started: Option<Instant>,
+    /// 本 turn 内**已结束**的审批等待段之和（ms）。`begin_turn` 归零。
+    wait_ms: u64,
+    /// 当前审批等待段的起算时刻；不变式：`is_some() == wait_depth > 0`。
+    wait_since: Option<Instant>,
+    /// 未决权限请求数。用计数而非布尔：agent 可并发发出多个 `session/request_permission`，
+    /// 布尔会被第一个应答提前清零、把后续等待算成工作（计划 D4）。计数由 0 变正时起算
+    /// 一段等待，回到 0 时累加该段。不用 id 集合是因为审批 id 取不出来 ——
+    /// `on_receive_request` 回调的返回类型受 `IntoHandled` 约束，`handle_request` 无法把
+    /// 它生成的 id 交给调用方，改成集合就得动 `PermissionManager` 的 API。
+    wait_depth: u32,
     /// uuid of the in-progress `chat_messages` row. Created lazily on the first
     /// folded frame so a turn that emits nothing leaves no empty bubble.
     row_id: Option<String>,
+    /// 上一次 `finalize_turn` 结算出的时长。与 `row_id` 同生命周期：定稿后仍可读，
+    /// 下一次 `begin_turn` 才清 —— WS 层在 `mark_prompt_idle` 之后要拿它拼 `prompt_done`。
+    /// `None` = 本 client 还没定稿过任何 turn。
+    last_timing: Option<TurnTiming>,
     /// Raw `SessionUpdate` payloads for the active turn, in arrival order. Kept as
     /// pre-serialized [`RawValue`] so the window's byte size is known without
     /// re-formatting and flush only has to copy bytes. Bounded on both axes — frame
@@ -262,7 +285,27 @@ struct Sink {
 
 enum WriterCmd {
     Flush,
-    Finalize,
+    /// turn 已定稿：落该 turn 的时长。无条件发出（不要求 `row_id`）—— 一帧未发的空 turn
+    /// 同样消耗了时间，会话级累计不能因为它缺一格 `turn_count`；`row_id` 只决定消息行
+    /// 那半边写不写。
+    EndTurn(TurnTiming),
+}
+
+/// turn 定稿时刻算好的时长。两个消费者：writer 循环据此落库，WS 层把它随
+/// `prompt_done` 下发（耗时在定稿那一刻就显示，不必等刷新读 DB）。
+///
+/// 跨通道只传**已结算**的 `work_ms`/`wait_ms`（而非墙钟原值）：`wait_ms ≤ wall_ms` 的
+/// clamp 在 `finalize_turn` 锁内做完，接收方就无需再减一次、也就不存在下溢路径。
+#[derive(Debug, Clone, Serialize)]
+pub struct TurnTiming {
+    /// agent 实际工作时长 = `wall_ms - wait_ms`。
+    pub work_ms: u64,
+    /// 其中等真人审批的时长。
+    pub wait_ms: u64,
+    /// 本 turn 的 `chat_messages` 行 id，`None` = 未折叠任何帧的空 turn。
+    /// 不下发：`prompt_done` 帧另有顶层 `row_id` 承载同一个值。
+    #[serde(skip)]
+    pub row_id: Option<String>,
 }
 
 pub struct TurnAccumulator {
@@ -299,7 +342,12 @@ impl TurnAccumulator {
     pub fn begin_turn(&self) {
         if let Ok(mut st) = self.inner.lock() {
             st.active = true;
+            st.started = Some(Instant::now());
+            st.wait_ms = 0;
+            st.wait_since = None;
+            st.wait_depth = 0;
             st.row_id = None;
+            st.last_timing = None;
             st.frames.clear();
             st.frames_bytes = 0;
             st.text.clear();
@@ -362,20 +410,83 @@ impl TurnAccumulator {
         Some(seq)
     }
 
+    /// 一段「等真人审批」开始：权限请求进入未决态。计数 +1，由 0 变正时起算计时。
+    ///
+    /// 无活跃 turn 时 no-op —— 审批可能落在 prompt 区间之外（上一 turn 已定稿），那时它
+    /// 不属于任何 turn 的墙钟，计进去会把等待泄漏到下一个 turn。
+    pub fn begin_wait(&self) {
+        if let Ok(mut st) = self.inner.lock() {
+            if !st.active {
+                return;
+            }
+            st.wait_depth += 1;
+            if st.wait_since.is_none() {
+                st.wait_since = Some(Instant::now());
+            }
+        }
+    }
+
+    /// 一段等待里**有一个**审批得到应答：计数 -1，回到 0 才累加该段等待。
+    ///
+    /// 调用方须只在审批确实被消费时才调用（`PermissionManager::resolve` 返回 `false`
+    /// 表示该 id 早已不在未决表中），否则计数会向下漂移。这里 saturating 而非断言，是
+    /// 宁可少扣一段也不让计数变负 —— 负数会让之后整段等待都不被扣除。
+    pub fn end_wait(&self) {
+        let Ok(mut st) = self.inner.lock() else { return };
+        if !st.active {
+            return;
+        }
+        st.wait_depth = st.wait_depth.saturating_sub(1);
+        if st.wait_depth == 0
+            && let Some(since) = st.wait_since.take()
+        {
+            st.wait_ms += elapsed_ms(since);
+        }
+    }
+
+    /// 未决审批被一次性清空：`session/cancel` 规范要求以 `Cancelled` 应答所有 pending 的
+    /// `session/request_permission`。此刻等待结束，之后 agent 若在收尾则是工作不是等待。
+    pub fn end_all_waits(&self) {
+        let Ok(mut st) = self.inner.lock() else { return };
+        if !st.active {
+            return;
+        }
+        st.wait_depth = 0;
+        if let Some(since) = st.wait_since.take() {
+            st.wait_ms += elapsed_ms(since);
+        }
+    }
+
     /// Close the active turn and finalize its row. Idempotent: a no-op if no turn is
     /// active, so racing callers (send_prompt completion / cancel / crash watcher) are safe.
+    ///
+    /// 时长记账挂在同一个 `active → false` 跃迁上：赢得 CAS 的调用者才发 `EndTurn`，
+    /// 于是每个 turn 恰好被累计一次（多调用方并发定稿不会重复计数）。
     pub fn finalize_turn(&self) {
-        let should_finalize = {
+        let timing = {
             let Ok(mut st) = self.inner.lock() else { return };
             if !st.active {
                 return;
             }
             st.active = false;
-            st.row_id.is_some()
+            let wall_ms = st.started.map_or(0, elapsed_ms);
+            // 定稿时审批可能仍挂着（用户点取消 / reaper 卡死兜底），那一段若不结算就会被
+            // 算成工作 —— 正是扣除等待想消除的失真。截到定稿时刻（计划 D5）。
+            let mut wait_ms = st.wait_ms;
+            if let Some(since) = st.wait_since.take() {
+                wait_ms += elapsed_ms(since);
+            }
+            // 各段等待都落在 turn 内，理论上不会超过墙钟；clamp 兜住舍入误差，让唯一
+            // 一处减法（下一行）恒不下溢。
+            let wait_ms = wait_ms.min(wall_ms);
+            st.wait_depth = 0;
+            st.wait_ms = 0;
+            let timing =
+                TurnTiming { work_ms: wall_ms - wait_ms, wait_ms, row_id: st.row_id.clone() };
+            st.last_timing = Some(timing.clone());
+            timing
         };
-        if should_finalize {
-            self.send_cmd(WriterCmd::Finalize);
-        }
+        self.send_cmd(WriterCmd::EndTurn(timing));
     }
 
     fn send_cmd(&self, cmd: WriterCmd) {
@@ -407,6 +518,13 @@ impl TurnAccumulator {
     /// `begin_turn` clears it), so a turn-end event can still report it.
     pub fn turn_row_id(&self) -> Option<String> {
         self.inner.lock().ok()?.row_id.clone()
+    }
+
+    /// 上一次定稿结算出的时长；`None` = 当前 turn 尚未定稿过（`begin_turn` 已清）或本
+    /// client 从未跑完过一个 turn。与 [`Self::turn_row_id`] 同样活到下一次 `begin_turn`，
+    /// 故 `mark_prompt_idle` 之后立刻读仍能拿到本 turn 的值。
+    pub fn turn_timing(&self) -> Option<TurnTiming> {
+        self.inner.lock().ok()?.last_timing.clone()
     }
 
     /// Snapshot the live turn state for a freshly-connected WS client (reconnect
@@ -464,6 +582,12 @@ impl Default for TurnAccumulator {
     }
 }
 
+/// 距 `since` 已过的毫秒数（单调时钟）。落库的恒为**差值**，`Instant` 本身绝不入库
+/// —— 它跨进程无意义（计划「风险与缓解」）。
+fn elapsed_ms(since: Instant) -> u64 {
+    since.elapsed().as_millis() as u64
+}
+
 /// Extract plain text from an `AgentMessageChunk`'s text content block; None otherwise.
 fn agent_message_text(update: &SessionUpdate) -> Option<&str> {
     if let SessionUpdate::AgentMessageChunk(chunk) = update
@@ -475,7 +599,8 @@ fn agent_message_text(update: &SessionUpdate) -> Option<&str> {
 }
 
 /// Debounce writer: coalesces `Flush` pings into a bounded number of SQLite writes,
-/// and performs the final flush + status finalize on `Finalize`.
+/// and performs the final flush + row finalize + session work-time accumulation on
+/// [`WriterCmd::EndTurn`].
 async fn writer_loop(
     acc: Arc<TurnAccumulator>,
     db: SqlitePool,
@@ -518,13 +643,22 @@ async fn writer_loop(
                     pending_since = Some(Instant::now());
                 }
             }
-            WriterCmd::Finalize => {
+            WriterCmd::EndTurn(t) => {
+                // 定稿前刷完最后的帧，使行内容与时长对应同一个 turn。
                 flush_once(&acc, &db, &session_id).await;
                 pending_since = None;
-                if let Some(snap) = acc.snapshot()
-                    && let Err(e) = chat_persistence::finalize_message(&db, &snap.row_id).await
+                let (work, wait) = (t.work_ms as i64, t.wait_ms as i64);
+                if let Some(row_id) = &t.row_id
+                    && let Err(e) =
+                        chat_persistence::finalize_message(&db, row_id, work, wait).await
                 {
                     tracing::warn!("failed to finalize streaming chat message: {}", e);
+                }
+                // 会话累计无条件写：空 turn 没有消息行，但那段时间确实发生了。
+                if let Err(e) =
+                    chat_persistence::accumulate_turn(&db, &session_id, work, wait).await
+                {
+                    tracing::warn!("failed to accumulate session work time: {}", e);
                 }
             }
         }
@@ -569,6 +703,36 @@ mod tests {
     fn retained_frames(acc: &TurnAccumulator) -> (usize, usize) {
         let st = acc.inner.lock().expect("lock");
         (st.frames.len(), st.frames_bytes)
+    }
+
+    /// 装一条内存命令通道代替真实 sink，捕获发给 writer 的 [`WriterCmd`] 而不触库。
+    /// 返回接收端；测试深度取 64，远超本模块测试产生的命令数。
+    fn capture_cmds(acc: &TurnAccumulator) -> mpsc::Receiver<WriterCmd> {
+        let (tx, rx) = mpsc::channel(64);
+        *acc.sink.lock().expect("sink lock") = Some(Sink { cmd_tx: tx });
+        rx
+    }
+
+    /// 取走通道里已排队的命令，只留下 `EndTurn` 的载荷（每 turn 至多一条）。
+    fn end_turns(rx: &mut mpsc::Receiver<WriterCmd>) -> Vec<(u64, u64, Option<String>)> {
+        let mut out = Vec::new();
+        while let Ok(cmd) = rx.try_recv() {
+            if let WriterCmd::EndTurn(t) = cmd {
+                out.push((t.work_ms, t.wait_ms, t.row_id));
+            }
+        }
+        out
+    }
+
+    /// 直读等待计时的中间态：`(未决审批数, 等待段是否在走, 已累加等待 ms)`。
+    fn wait_state(acc: &TurnAccumulator) -> (u32, bool, u64) {
+        let st = acc.inner.lock().expect("lock");
+        (st.wait_depth, st.wait_since.is_some(), st.wait_ms)
+    }
+
+    /// 等待一段可被毫秒时钟分辨的时间。阈值一律取下限的 6 成，避免调度抖动致脆。
+    fn nap(ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 
     /// Internal text buffers: `(head bytes, tail bytes, omitted chars)`. Asserted
@@ -629,6 +793,25 @@ mod tests {
 
         acc.begin_turn();
         assert_eq!(acc.turn_row_id(), None, "下一 turn 开始才清除");
+    }
+
+    /// 时长载荷的存活契约与 `turn_row_id` 同源：WS 层在 `mark_prompt_idle` **之后**读它
+    /// 拼 `prompt_done` 的 `duration`，前端据此当场显示耗时。
+    #[test]
+    fn timing_is_readable_after_finalize_and_reset_by_next_turn() {
+        let acc = TurnAccumulator::new();
+        assert!(acc.turn_timing().is_none(), "从未定稿过 → None");
+
+        acc.begin_turn();
+        assert!(acc.turn_timing().is_none(), "turn 进行中不得读到上一 turn 的结算值");
+        nap(20);
+        acc.finalize_turn();
+        let t = acc.turn_timing().expect("定稿后 WS 层仍要能读到");
+        assert!(t.work_ms >= 12, "墙钟应记进 work_ms，实得 {}", t.work_ms);
+        assert_eq!(t.wait_ms, 0, "本 turn 没有审批等待");
+
+        acc.begin_turn();
+        assert!(acc.turn_timing().is_none(), "下一 turn 开始才清除");
     }
 
     /// 长 turn 高频帧（thought/tool chunk）不能把 frames 撑成无界：窗口在帧数与字节
@@ -872,5 +1055,134 @@ mod tests {
 
         acc.begin_turn();
         assert_eq!(retained_frames(&acc), (0, 0), "新 turn 应清空帧与字节账");
+    }
+
+    // ---- 工作时长记账（docs/dev/plans/2026-08-30-acp-work-time.md）----
+
+    /// 并发定稿只能记一次账：多个收尾路径（prompt 完成 / cancel 兜底 / reaper /
+    /// 崩溃看护）都会调 `finalize_turn`，若不去重就会把同一 turn 累计多遍。
+    #[test]
+    fn repeated_finalize_turn_emits_exactly_one_end_turn() {
+        let acc = TurnAccumulator::new();
+        let mut rx = capture_cmds(&acc);
+        let sid = SessionId::new("s1");
+
+        acc.begin_turn();
+        acc.fold(&text_chunk(&sid, "hello"));
+        acc.finalize_turn();
+        acc.finalize_turn();
+        acc.finalize_turn();
+
+        let turns = end_turns(&mut rx);
+        assert_eq!(turns.len(), 1, "重复定稿不得重复发记账命令，得到 {turns:?}");
+        assert!(turns[0].2.is_some(), "折叠过帧的 turn 应携带消息行 id");
+    }
+
+    /// 深度模型：并发未决审批下，只应答其中一个时等待**不能**提前结束（布尔标志会错），
+    /// 全部应答完才累加那一段。
+    #[test]
+    fn concurrent_permits_hold_one_wait_segment_until_all_resolve() {
+        let acc = TurnAccumulator::new();
+        acc.begin_turn();
+
+        acc.begin_wait();
+        acc.begin_wait();
+        nap(50);
+        acc.end_wait();
+        let (depth, running, waited) = wait_state(&acc);
+        assert_eq!(depth, 1, "还剩一个未决审批");
+        assert!(running, "仍有未决审批时等待段不得结束");
+        assert_eq!(waited, 0, "集合未清空前不得累加，得到 {waited}");
+
+        acc.end_wait();
+        let (depth, running, waited) = wait_state(&acc);
+        assert_eq!((depth, running), (0, false), "全部应答后等待段应关闭");
+        assert!(waited >= 30, "清空时应累加整段等待，得到 {waited}ms");
+
+        // 多余的 end_wait（例如另一条连接重复应答）不得让计数变负、不得再开新段。
+        acc.end_wait();
+        assert_eq!(wait_state(&acc).0, 0, "计数下溢须被 saturating 挡住");
+    }
+
+    /// 定稿时审批仍挂着（用户点取消 / reaper 卡死兜底的真实时序）：那一段等待必须
+    /// 截到定稿时刻结算，否则会被算成工作时间（计划 D5）。
+    #[test]
+    fn finalize_clips_an_open_wait_segment() {
+        let acc = TurnAccumulator::new();
+        let mut rx = capture_cmds(&acc);
+
+        acc.begin_turn();
+        acc.begin_wait();
+        nap(50);
+        acc.finalize_turn();
+
+        let turns = end_turns(&mut rx);
+        assert_eq!(turns.len(), 1, "一个 turn 只应有一条记账：{turns:?}");
+        let (work, wait, _) = &turns[0];
+        assert!(*wait >= 30, "未决审批那段应截到定稿时刻计入 wait，得到 {wait}ms");
+        // 唯一一处减法在 finalize 锁内且已 clamp，故 work 恒非负、两者相加即墙钟。
+        assert!(*work <= 50, "等待不得反噬工作时长，work={work} wait={wait}");
+        assert!(*work + *wait >= 50, "work + wait 应覆盖整段墙钟（{work} + {wait}）");
+    }
+
+    /// 一帧未发的空 turn（agent 立即报错返回）没有消息行，但那段时间确实发生了 ——
+    /// 记账命令必须照样发出，`row_id` 为 None 让 writer 跳过消息行那半边。
+    #[test]
+    fn empty_turn_is_still_accounted() {
+        let acc = TurnAccumulator::new();
+        let mut rx = capture_cmds(&acc);
+
+        acc.begin_turn();
+        nap(20);
+        acc.finalize_turn();
+
+        let turns = end_turns(&mut rx);
+        assert_eq!(turns.len(), 1, "空 turn 也要记账，得到 {turns:?}");
+        assert_eq!(turns[0].2, None, "未折叠任何帧 → 无消息行 id");
+    }
+
+    /// turn 之外到达的审批（上一 turn 已定稿、agent 自行发起）不得泄漏到下一个 turn
+    /// 的等待账上，否则下一个正常 turn 会被整段算成等待。
+    #[test]
+    fn wait_outside_an_active_turn_is_dropped() {
+        let acc = TurnAccumulator::new();
+        let mut rx = capture_cmds(&acc);
+
+        acc.begin_wait();
+        acc.end_all_waits();
+        assert_eq!(wait_state(&acc), (0, false, 0), "无活跃 turn 时两个动作都应为 no-op");
+
+        acc.begin_turn();
+        nap(20);
+        acc.finalize_turn();
+
+        let turns = end_turns(&mut rx);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].1, 0, "turn 外的审批不得算进本 turn 的等待：{:?}", turns[0]);
+    }
+
+    /// `end_all_waits`（session/cancel 会以 Cancelled 应答全部未决审批）就地结束等待段，
+    /// 之后 agent 的收尾时间算工作而非等待。
+    #[test]
+    fn end_all_waits_closes_an_open_segment_immediately() {
+        let acc = TurnAccumulator::new();
+        let mut rx = capture_cmds(&acc);
+        acc.begin_turn();
+        acc.begin_wait();
+        acc.begin_wait();
+        nap(30);
+        acc.end_all_waits();
+        let (depth, running, waited) = wait_state(&acc);
+        assert_eq!((depth, running), (0, false), "全部取消后不得继续走等待表");
+        assert!(waited >= 18, "取消时刻即该段终点，得到 {waited}ms");
+
+        // 取消后 agent 继续干活的 30ms 必须归工作：若等待表没在取消时结掉，会被算进 wait。
+        nap(30);
+        acc.finalize_turn();
+        let turns = end_turns(&mut rx);
+        assert_eq!(turns.len(), 1, "应恰好一条 EndTurn：{turns:?}");
+        let (work, wait, _) = &turns[0];
+        assert!(*work >= 18, "取消后的收尾应算工作，得到 {work}ms");
+        assert!(*wait < 48, "等待不得把取消后的收尾也算进去，得到 {wait}ms");
     }
 }

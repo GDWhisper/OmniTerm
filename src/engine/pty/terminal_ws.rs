@@ -10,13 +10,23 @@ use portable_pty::PtySize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::AppState;
 use crate::engine::pty::events::SemanticEvent;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
 
 use serde::Deserialize;
+
+/// Viewport 请求通道容量上限（P1 有界）：wheel 高频时旧请求由前端 rAF 合并
+/// （D2），后端仅兜底；队满丢新不阻塞读循环，后续 wheel 请求即覆盖。
+const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
+
+/// 单帧「编码 + 发送」耗时告警阈值。转发循环是单个 `select!`，分支内的
+/// `send().await` 一旦被背压阻塞，其余分支（含 viewport 请求）在此期间得不到
+/// 轮询 —— 这是 30fps 实时帧拖慢滚动响应的机制，留告警防止其悄悄回潮
+/// （`docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
+const SLOW_FRAME_US: u64 = 5_000;
 
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).
 #[derive(Debug, Deserialize)]
@@ -90,6 +100,14 @@ pub async fn handle_pty_terminal(
     // 补屏帧赖以生成的真相源。变尺寸重连由真实 resize 触发内核 SIGWINCH，
     // 全量重绘型程序自然重绘（2026-08-22 实测翻盘，见计划文档切片 B 勘误）。
 
+    // 重连（会话已存在）必须让本连接的首帧是全帧：diff 基线是会话共享的
+    // （VtState 级），断开期间输出照常推进，新连接若从 diff 帧起步，前端
+    // xterm 的画面与后端 grid 的行对齐已经错位（滚动过的行不会补发）。
+    // 代价仅是同会话其他连接多发一帧全帧。
+    if attach.reconnected {
+        attach.state.vt.lock().unwrap().invalidate_diff();
+    }
+
     let (mut ws_tx, mut ws_rx) = ws.split();
 
     let attached_msg = serde_json::to_string(&ServerControl::Attached { session: &key }).unwrap();
@@ -107,6 +125,9 @@ pub async fn handle_pty_terminal(
 
     // === WS binary → PTY stdin（专用写线程，写尽语义见 PtyAttach::write）===
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+    // === 历史视口请求（方案 C Phase 1）：读循环递交 y，转发循环编码响应帧 ===
+    let (viewport_tx, mut viewport_rx) =
+        tokio::sync::mpsc::channel::<u32>(MAX_PENDING_VIEWPORT_REQUESTS);
     let writer_attach = attach.clone();
     let resize_attach = attach.clone();
     let writer_key = key.clone();
@@ -162,8 +183,11 @@ pub async fn handle_pty_terminal(
     let mut rx = attach.rx;
     let mut event_rx = attach.event_rx;
     let mut forward_handle = tokio::spawn(async move {
-        // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
-        let mut ticker: Option<tokio::time::Interval> = None;
+        // 30fps 定时器：cell_frame 模式下驱动编码；raw 模式下只是「唤醒点」
+        // —— 没有它，select! 会在无输出时永久挂起，之后到达的 hello 永远
+        // 不会被 loop 顶部看到，连接会静默停在 raw 模式（重连到空闲会话必现）。
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(33));
+        let mut cell_frame_started = false;
 
         // 编码当前 grid 为 cell_frame JSON。读循环先 feed grid 再广播
         // （out/vt 同锁原子），故收到 raw bytes 时 grid 已是最新，可立即编码。
@@ -173,13 +197,11 @@ pub async fn handle_pty_terminal(
         };
 
         loop {
-            // 懒初始化：前端 hello 握手激活 cell_frame 模式时启动编码定时器
-            if fwd_cfe.load(Ordering::Relaxed) && ticker.is_none() {
-                ticker = Some(tokio::time::interval(std::time::Duration::from_millis(33)));
-                info!("cell_frame encoder started: session={session_id_for_frame}");
-            }
-
-            if let Some(ref mut tick) = ticker {
+            if fwd_cfe.load(Ordering::Relaxed) {
+                if !cell_frame_started {
+                    cell_frame_started = true;
+                    info!("cell_frame encoder started: session={session_id_for_frame}");
+                }
                 // ── Cell-frame 模式：定时器驱动 VT grid 编码 ──
                 tokio::select! {
                     biased;
@@ -211,6 +233,22 @@ pub async fn handle_pty_terminal(
                             }
                         }
                     }
+                    // 历史视口请求：编码 y 窗口帧（y 钳制在 encode 内；实时
+                    // diff 流独立继续，前端在 viewport 模式下自行丢弃实时帧）
+                    viewport_y = viewport_rx.recv() => {
+                        // None = 读循环已结束（唯一 sender 被 drop），与
+                        // agent_rx 同语义退出，避免空转
+                        let Some(y) = viewport_y else { break };
+                        trace!(y, "viewport request served: session={session_id_for_frame}");
+                        let json = {
+                            // encode_viewport_frame 仅需 &self（不动 diff 基线）
+                            let vt_guard = encode_attach.state.vt.lock().unwrap();
+                            vt_guard.encode_viewport_frame(&session_id_for_frame, y)
+                        };
+                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                            break;
+                        }
+                    }
                     // 排干 raw bytes + 立即编码推送：消除最长 33ms 的 tick
                     // 盲区（连按回车时行「攒一批突然出现」的根因）
                     _ = rx.recv() => {
@@ -220,15 +258,21 @@ pub async fn handle_pty_terminal(
                         }
                     }
                     // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）
-                    _ = tick.tick() => {
+                    _ = ticker.tick() => {
+                        let t0 = std::time::Instant::now();
                         let json = encode_now();
-                        if ws_tx.send(Message::Text(json.into())).await.is_err() {
+                        let sent = ws_tx.send(Message::Text(json.into())).await;
+                        let el = t0.elapsed().as_micros() as u64;
+                        if el > SLOW_FRAME_US {
+                            warn!(el, "slow tick frame: loop blocked while sending");
+                        }
+                        if sent.is_err() {
                             break;
                         }
                     }
                 }
             } else {
-                // ── Raw binary 模式（legacy，不变）──
+                // ── Raw binary 模式（legacy）──
                 tokio::select! {
                     out = rx.recv() => match out {
                         Ok(data) => {
@@ -250,6 +294,8 @@ pub async fn handle_pty_terminal(
                             break;
                         }
                     }
+                    // 空转唤醒：让 loop 顶部能看到刚到达的 hello 握手
+                    _ = ticker.tick() => {}
                 }
             }
         }
@@ -294,6 +340,17 @@ pub async fn handle_pty_terminal(
                                 // 前端丢帧后重同步：作废 diff 基线，下一帧发全帧。
                                 // vt 为会话共享，全帧对其他连接同样安全。
                                 resize_attach.state.vt.lock().unwrap().invalidate_diff();
+                            }
+                            ClientControl::ViewportRequest { y } => {
+                                // 方案 C Phase 1：仅 cell_frame 模式有意义（raw
+                                // 模式 xterm 自持 scrollback）。负值锂 0，上界
+                                // 由 encode_viewport_frame 钳到 history_size。
+                                if read_cfe.load(Ordering::Relaxed) {
+                                    let y = y.max(0) as u32;
+                                    if let Err(e) = viewport_tx.try_send(y) {
+                                        debug!(y, "viewport request dropped: {e}");
+                                    }
+                                }
                             }
                         }
                     }

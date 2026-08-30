@@ -157,6 +157,15 @@ export interface SlashCommand {
 
 // --- Message model ---
 
+/**
+ * 一个 turn 定稿结算出的时长，随 WS `prompt_done` 帧下发（`duration` 字段）：
+ * `workMs` = agent 工作时间，`waitMs` = 其中等真人审批的时间。
+ */
+export interface TurnDuration {
+  workMs: number
+  waitMs: number
+}
+
 export interface ChatMessage {
   id: string
   /**
@@ -205,6 +214,15 @@ export interface ChatMessage {
    * fallback would destroy frames a future classifier could interpret.
    */
   rawStored?: boolean
+  /**
+   * 该 turn 的工作时长（ms，已扣除 `waitMs`）。仅由 hydrate 路径（`GET /messages`）
+   * 填充——耗时在 turn 定稿时由后端结算，前端不做实时自算（那会是第二套真相）。
+   * `undefined` = 未知（迁移前的历史行、或本地尚未定稿的在建消息），
+   * 语义上区别于 `0`（确实零时长）。
+   */
+  durationMs?: number | null
+  /** 该 turn 内等真人审批的挂起时长（ms）。同上，`undefined` = 未知。 */
+  waitMs?: number | null
 }
 
 interface ChatSessionState {
@@ -275,7 +293,7 @@ interface ChatActions {
   addUndeliveredMessage: (sessionId: string, text: string) => void
   /** Mark a user message as superseded by an edited resend (F02). */
   markEdited: (sessionId: string, messageId: string) => void
-  markDone: (sessionId: string) => void
+  markDone: (sessionId: string, timing?: TurnDuration) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
   /** Store the next user message in the N=1 queue slot. Trimmed; empty text is a no-op.
@@ -864,11 +882,19 @@ export const useChatStore = create<ChatStore>((set) => ({
       return applyTopLevelActions(base, sessionId, actions)
     }),
 
-  markDone: (sessionId) =>
+  markDone: (sessionId, timing) =>
     set((state) => {
       const current = get(state, sessionId)
       const messages = current.messages.map((m) =>
-        m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
+        m.role === 'assistant' && m.streaming
+          ? {
+              ...m,
+              streaming: false,
+              // 后端定稿即随 prompt_done 下发耗时，让数字当场出现（不等刷新 hydrate）。
+              durationMs: timing?.workMs ?? m.durationMs,
+              waitMs: timing?.waitMs ?? m.waitMs,
+            }
+          : m,
       )
       // 不清 pendingPermissions：turn 结束不代表未决审批失效——审批可能属于仍挂在
       // request_permission 上的更早 turn（后端会持续重放它）。未决审批的权威在

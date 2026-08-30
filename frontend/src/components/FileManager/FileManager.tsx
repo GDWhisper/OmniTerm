@@ -1,14 +1,15 @@
-import { getParentPath } from '../../utils/path'
+import { getParentPath, findCoveringProject } from '../../utils/path'
 import { getInitialDrawerHeight } from '../../utils/drawer'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../../api/client'
+import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -97,6 +98,7 @@ export function FileManager() {
   const setFmManualPath = useAppStore((s) => s.setFmManualPath)
   const resetFmToFollowing = useAppStore((s) => s.resetFmToFollowing)
   const activateSession = useAppStore((s) => s.activateSession)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
   const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
 
@@ -250,6 +252,62 @@ export function FileManager() {
     const d = deleteDialog
     setDeleteDialog(null)
     d?.run()
+  }
+
+  // ── 在此打开终端 ──
+  // 会话必须归属项目（sessions.project_id NOT NULL），按目录归属分三档：
+  // 1. 浏览目录仍在当前工作区内 → 直接挂当前激活项目；
+  // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 挂过去；
+  // 3. 无任何项目覆盖 → 弹窗引导为目录新建项目（次选项：挂到当前项目）。
+  // 启动目录恒为浏览目录 cwd（「在此」语义；不再回退 workspaceRoot）。
+  const [terminalDialogTarget, setTerminalDialogTarget] = useState<OpenTerminalTarget | null>(null)
+
+  const finishOpenTerminal = (session: Session, projectId: string) => {
+    if (projectId !== activeProjectId) setActiveProject(projectId)
+    activateSession(session.id)
+    addToast('success', t('fm.terminalOpened'))
+  }
+
+  const openTerminalInProject = async (projectId: string) => {
+    try {
+      const session = await api.createSession(projectId, cwd, undefined, undefined, 'pty')
+      finishOpenTerminal(session, projectId)
+    } catch {
+      // api client already shows error toast
+    }
+  }
+
+  const handleOpenTerminalHere = () => {
+    if (!cwd) return
+    // 覆盖探测优先：后端 list_files 的 effective-root 兜底（同项目 worktree /
+    // git toplevel）会把浏览到其它项目 git 仓库的目录报成界内（见
+    // resolve_effective_workspace_root），界内快路径在前会挂错项目。
+    const covering = findCoveringProject(cwd, useAppStore.getState().projects)
+    if (covering) {
+      void openTerminalInProject(covering.id)
+      return
+    }
+    if (!isOutsideWorkspace && activeProjectId) {
+      void openTerminalInProject(activeProjectId)
+      return
+    }
+    const { projects, activeProjectId: apid } = useAppStore.getState()
+    const active = projects.find((p) => p.id === apid) ?? null
+    setTerminalDialogTarget({
+      cwd,
+      attachProject: active ? { id: active.id, name: active.name } : null,
+    })
+  }
+
+  const handleTerminalDialogDone = async (session: Session, projectId: string, projectCreated: boolean) => {
+    if (projectCreated) {
+      try {
+        useAppStore.getState().setProjects(await api.listProjects())
+      } catch {
+        // api client already shows error toast；侧栏项目列表下次刷新时补齐
+      }
+    }
+    finishOpenTerminal(session, projectId)
   }
 
   const {
@@ -857,20 +915,11 @@ export function FileManager() {
               <IconHome width={15} height={15} />
             </button>
           )}
-          {/* "在此打开终端" — 在 FM 当前目录下新建 pty 会话 */}
+          {/* "在此打开终端" — 在 FM 当前目录下新建 pty 会话（越界归属处理见 handleOpenTerminalHere） */}
           {fmSource && (
             <button
               className="fm-bc-root"
-              onClick={async () => {
-                if (!cwd || !activeProjectId) return
-                try {
-                  const newSession = await api.createSession(activeProjectId, workspaceRoot || cwd, undefined, undefined, 'pty')
-                  activateSession(newSession.id)
-                  addToast('success', t('fm.terminalOpened'))
-                } catch {
-                  // api client already shows error toast
-                }
-              }}
+              onClick={handleOpenTerminalHere}
               title={t('fm.openTerminalHere')}
             >
               <IconWorkbench width={13} height={13} />
@@ -1189,6 +1238,12 @@ export function FileManager() {
         message={deleteDialog ? t('fm.confirmDelete', { count: deleteDialog.count }) : ''}
         confirmText={t('fm.delete')}
         destructive
+      />
+      {/* 在此打开终端：目录不被任何已打开项目覆盖时的归属引导 */}
+      <OpenTerminalDialog
+        target={terminalDialogTarget}
+        onClose={() => setTerminalDialogTarget(null)}
+        onDone={handleTerminalDialogDone}
       />
 
       {/* File Drawer — slides up from bottom when a file is opened */}

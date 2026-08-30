@@ -20,6 +20,8 @@ interface VersionInfo {
   latest: string
   channel: 'npm' | 'cargo' | 'github_release'
   container: boolean
+  /** 服务端按自身 argv 组装的忠实重启命令（补 -d、带 --db、脱敏 secret） */
+  restart_command: string
 }
 
 type UpdatePhase = 'idle' | 'updating' | 'done'
@@ -30,10 +32,12 @@ export function UpdateBadge() {
   const [open, setOpen] = useState(false)
   // Lifted above the panel so "updated, restart pending" survives close/reopen.
   const [phase, setPhase] = useState<UpdatePhase>('idle')
-  // 后端返回 auto_restart 后，倒计时与断连监测独立于面板开关继续运行
+  // 后端返回 auto_restart 后，倒计时与重启监测独立于面板开关继续运行
   const [autoRestart, setAutoRestart] = useState(false)
   const [countdown, setCountdown] = useState<number | null>(null)
   const [restartFailed, setRestartFailed] = useState(false)
+  // 本次升级的目标版本：重启监测以此比对 health 的 version 字段确认「新版已上线」
+  const [targetVersion, setTargetVersion] = useState<string | null>(null)
 
   useEffect(() => {
     api
@@ -51,9 +55,10 @@ export function UpdateBadge() {
     return () => window.clearTimeout(t)
   }, [phase, autoRestart, countdown])
 
-  // 断连监测：等待「服务不可达 → 恢复」，恢复即整页刷新拿到新版本。
-  // 连续失败只靠 sawDown 标记（重启窗口内每次探测间隔 1s，足够区分抖动）；
-  // 全程未断连（exec 失败）在超时后回到手动重启提示。
+  // 重启监测：轮询 health 的 version 字段，等于目标版本即确认「新版已上线」并刷新。
+  // 版本比对不要求捕捉断连瞬间——远程接入（隧道拆线）、后台标签节流都可能错过
+  // 断连窗口，但只要链路恢复可达就能确认。升级来源是旧版实现（health 无 version
+  // 字段）时回退到「断连 → 恢复」状态机。超时未确认（exec 失败等）落到手动重启提示。
   useEffect(() => {
     if (phase !== 'done' || !autoRestart || countdown === null || countdown > 0) return
     let sawDown = false
@@ -70,10 +75,15 @@ export function UpdateBadge() {
           return
         }
         const res = await fetch('/api/v1/health', { cache: 'no-store' })
-        if (sawDown && res.ok) {
-          window.clearInterval(timer)
-          window.location.reload()
-        } else if (!res.ok) {
+        if (res.ok) {
+          const body = await res.json().catch(() => null)
+          const version = body && typeof body.version === 'string' ? body.version : null
+          const upOnTarget = version !== null ? version === targetVersion : sawDown
+          if (upOnTarget) {
+            window.clearInterval(timer)
+            window.location.reload()
+          }
+        } else {
           sawDown = true
         }
       } catch {
@@ -83,7 +93,7 @@ export function UpdateBadge() {
       }
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [phase, autoRestart, countdown])
+  }, [phase, autoRestart, countdown, targetVersion])
 
   if (!info) return null
 
@@ -104,10 +114,12 @@ export function UpdateBadge() {
           autoRestart={autoRestart}
           countdown={countdown}
           restartFailed={restartFailed}
+          targetVersion={targetVersion}
           setPhase={setPhase}
           setAutoRestart={setAutoRestart}
           setCountdown={setCountdown}
           setRestartFailed={setRestartFailed}
+          setTargetVersion={setTargetVersion}
           onClose={() => setOpen(false)}
         />
       )}
@@ -121,10 +133,12 @@ function UpdatePanel({
   autoRestart,
   countdown,
   restartFailed,
+  targetVersion,
   setPhase,
   setAutoRestart,
   setCountdown,
   setRestartFailed,
+  setTargetVersion,
   onClose,
 }: {
   info: VersionInfo
@@ -132,10 +146,12 @@ function UpdatePanel({
   autoRestart: boolean
   countdown: number | null
   restartFailed: boolean
+  targetVersion: string | null
   setPhase: (p: UpdatePhase) => void
   setAutoRestart: (v: boolean) => void
   setCountdown: (v: number | null) => void
   setRestartFailed: (v: boolean) => void
+  setTargetVersion: (v: string | null) => void
   onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -154,6 +170,7 @@ function UpdatePanel({
         setPhase('done')
         setAutoRestart(r.auto_restart)
         setRestartFailed(false)
+        setTargetVersion(r.version)
         if (r.auto_restart) setCountdown(RESTART_COUNTDOWN)
         addToast('success', t('update.updated', { version: r.version }))
       })
@@ -240,8 +257,10 @@ function UpdatePanel({
               {autoRestart && !restartFailed
                 ? countdown !== null && countdown > 0
                   ? t('update.autoRestarting', { seconds: countdown })
-                  : t('update.restarting')
-                : t('update.restartHint')}
+                  : t('update.restarting', { version: targetVersion ?? info.latest })
+                : restartFailed
+                  ? t('update.restartTimeout', { version: targetVersion ?? info.latest, command: info.restart_command })
+                  : t('update.restartHint', { command: info.restart_command })}
             </div>
           )}
           <a

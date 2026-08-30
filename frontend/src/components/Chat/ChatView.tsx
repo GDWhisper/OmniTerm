@@ -28,6 +28,9 @@ interface StoredMessage {
   createdAt: string
   blocks?: string | null
   status?: string | null
+  /** turn 工作时长 / 等审批时长（ms）；null = 无记录（迁移前的历史行）。 */
+  durationMs?: number | null
+  waitMs?: number | null
 }
 
 /**
@@ -61,6 +64,9 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       createdAt: new Date(m.createdAt).getTime(),
       // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
       streaming: m.status === 'streaming',
+      // 耗时读自 DB：turn 定稿时后端已结算，刷新后仍在（前端不自算）。
+      durationMs: m.durationMs,
+      waitMs: m.waitMs,
     }
   })
 }

@@ -1257,6 +1257,23 @@ body.fm-dragging * {
   color: var(--text-primary);
 }
 
+/* ACP 会话折叠切换行（「展开更多 / 收起」）——可见/隐藏行的接缝，需醒目可点 */
+.sidebar-session-more-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  margin-top: 2px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.sidebar-session-more-toggle:hover {
+  background: var(--bg-elevated);
+}
+
 .sidebar-session-item .session-name {
   flex: 1;
   min-width: 0;
@@ -1922,6 +1939,19 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-msg-row:hover .chat-msg-actions,
 .chat-msg-row:focus-within .chat-msg-actions {
   opacity: 1;
+}
+/* 动作条 + 消息元信息（turn 耗时）共用一行：元信息靠 margin-left:auto 顶到行右缘。
+   放不下时才由 flex-wrap 把它甩到下一行 —— 宽度上限由组件侧实测气泡宽度给出，
+   故两种形态下右缘都与气泡右缘重合。 */
+.chat-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+}
+/* 动作条不参与压缩：按钮被挤成多行比元信息换行更糟 */
+.chat-meta-row > .chat-msg-actions {
+  flex-shrink: 0;
 }
 .chat-msg-action-btn {
   position: relative;

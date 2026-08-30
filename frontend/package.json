@@ -1,14 +1,15 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "0.2.18",
+  "version": "0.2.19",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench": "vitest run --config vitest.bench.config.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

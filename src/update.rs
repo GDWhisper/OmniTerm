@@ -33,6 +33,77 @@ fn strip_daemon_flag(args: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
         .collect()
 }
 
+/// 为前端手动重启提示组装**忠实复现本进程启动形态**的重启命令
+/// （`omniterm stop [--db X] && omniterm start [-d] <原参数...>`）。
+/// 不能盲目提示 `omniterm stop && omniterm start`：自定义参数启动的实例
+/// （`-H 0.0.0.0`、`--db` 等）照抄会丢参——轻则连错库，重则只绑 127.0.0.1
+/// 断掉远程接入。规则：
+/// - daemon 态补 `-d`（exec 自重启会剥离 argv 里的它，但进程仍是 daemon，
+///   提示的命令复制粘贴后须维持后台形态）；
+/// - `stop` 同步携带 `--db`（stop 靠 db 派生的 pid 文件定位进程，缺参会停错）；
+/// - `--jwt-secret` 值脱敏——密钥材料不得经 API 回显；
+/// - 含空白/引号的参数用双引号包裹（sh / cmd / PowerShell 通用）。
+pub(crate) fn restart_command(argv: &[std::ffi::OsString], daemonized: bool) -> String {
+    let bin = argv
+        .first()
+        .map(|a| quote_arg(&a.to_string_lossy()))
+        .unwrap_or_else(|| "omniterm".to_string());
+    // 服务端进程仅由 `start` 拉起；argv[1] 异常时保守地把全部参数当 start 参数回显
+    let tail: &[std::ffi::OsString] = if argv.get(1).is_some_and(|a| a.as_os_str() == "start") {
+        &argv[2..]
+    } else {
+        &argv[argv.len().min(1)..]
+    };
+    let tail = strip_daemon_flag(tail);
+
+    let mut start_args: Vec<String> = Vec::with_capacity(tail.len() + 1);
+    if daemonized {
+        start_args.push("-d".to_string());
+    }
+    let mut stop_db: Option<String> = None;
+    let mut iter = tail.iter();
+    while let Some(arg) = iter.next() {
+        let s = arg.to_string_lossy().into_owned();
+        if s == "--db" {
+            let val = iter.next().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default();
+            stop_db = Some(val.clone());
+            start_args.push(format!("--db {}", quote_arg(&val)));
+            continue;
+        }
+        if let Some(val) = s.strip_prefix("--db=") {
+            stop_db = Some(val.to_string());
+            start_args.push(quote_arg(&s));
+            continue;
+        }
+        if s == "--jwt-secret" {
+            iter.next();
+            start_args.push("--jwt-secret <redacted>".to_string());
+            continue;
+        }
+        if s.starts_with("--jwt-secret=") {
+            start_args.push("--jwt-secret=<redacted>".to_string());
+            continue;
+        }
+        start_args.push(quote_arg(&s));
+    }
+    let stop = match &stop_db {
+        Some(db) => format!("{bin} stop --db {}", quote_arg(db)),
+        None => format!("{bin} stop"),
+    };
+    format!(
+        "{stop} && {bin} start{}",
+        if start_args.is_empty() { String::new() } else { format!(" {}", start_args.join(" ")) }
+    )
+}
+
+fn quote_arg(s: &str) -> String {
+    if s.chars().any(|c| c.is_whitespace() || c == '"') {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
+}
+
 /// 是否运行在容器环境（Docker 等）。容器内自更新替换的二进制在容器重启后会
 /// 还原为镜像旧版，属无效更新——Web 端据此禁用一键升级并提示重新拉取镜像。
 /// 用 `/.dockerenv`（Docker 官方标记）为主判据，cgroup 特征兜底其他运行时
@@ -600,5 +671,47 @@ mod tests {
         // `-d` 只剥离独立 token；`-d` 作为其他参数的值（如 db 路径片段）不得误删
         let args = vec![os("omniterm"), os("start"), os("--db"), os("/data/-d/omniterm.db")];
         assert_eq!(strip_daemon_flag(&args), args);
+    }
+
+    #[test]
+    fn restart_command_faithful_for_daemon_launch() {
+        let argv = vec![os("omniterm"), os("start"), os("-d"), os("-H"), os("0.0.0.0")];
+        assert_eq!(restart_command(&argv, true), "omniterm stop && omniterm start -d -H 0.0.0.0");
+    }
+
+    #[test]
+    fn restart_command_readds_d_for_exec_stripped_daemon() {
+        // exec 自重启后 argv 已无 -d，但进程仍是 daemon，提示命令须补回
+        let argv = vec![os("omniterm"), os("start"), os("-H"), os("0.0.0.0"), os("-p"), os("9077")];
+        assert_eq!(
+            restart_command(&argv, true),
+            "omniterm stop && omniterm start -d -H 0.0.0.0 -p 9077"
+        );
+    }
+
+    #[test]
+    fn restart_command_keeps_foreground_without_d() {
+        let argv = vec![os("omniterm"), os("start"), os("-H"), os("0.0.0.0")];
+        assert_eq!(restart_command(&argv, false), "omniterm stop && omniterm start -H 0.0.0.0");
+    }
+
+    #[test]
+    fn restart_command_carries_db_to_stop_and_redacts_secret() {
+        let argv = vec![
+            os("omniterm"),
+            os("start"),
+            os("-d"),
+            os("--db"),
+            os("/data/my db/omniterm.db"),
+            os("--jwt-secret"),
+            os("sup3r-secret"),
+        ];
+        let cmd = restart_command(&argv, true);
+        assert!(cmd.contains("stop --db \"/data/my db/omniterm.db\""), "{cmd}");
+        assert!(cmd.contains("--jwt-secret <redacted>"), "{cmd}");
+        assert!(!cmd.contains("sup3r-secret"), "{cmd}");
+        // e7c7f36 起 stop 段忠实携带 --db（防止 stop 后 start 用默认库），
+        // 断言同步为新行为（原 starts_with("omniterm stop && ...") 已过期）。
+        assert!(cmd.starts_with("omniterm stop --db"), "{cmd}");
     }
 }

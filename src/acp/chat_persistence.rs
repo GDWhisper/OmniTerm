@@ -103,7 +103,8 @@ pub async fn list_messages_page(
     // Newest-first so the page can be cut from the newest end; reversed to oldest-first
     // before returning. One extra row is fetched to detect "there is an older page".
     let mut rows: Vec<ChatMessageRow> = sqlx::query_as(
-        "SELECT role, text, created_at, id, blocks, status, last_seq FROM chat_messages \
+        "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms \
+         FROM chat_messages \
          WHERE session_id = ? \
            AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) \
          ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -125,8 +126,7 @@ pub async fn list_messages_page(
     let mut bytes = 0usize;
     let mut kept = 0usize;
     for row in &rows {
-        let (_, text, _, _, blocks, _, _) = row;
-        let row_bytes = text.len() + blocks.as_deref().map_or(0, str::len);
+        let row_bytes = row.text.len() + row.blocks.as_deref().map_or(0, str::len);
         if kept > 0 && bytes + row_bytes > max_bytes {
             break;
         }
@@ -138,10 +138,7 @@ pub async fn list_messages_page(
     rows.reverse();
 
     let next_cursor = if more_by_count || more_by_bytes {
-        rows.first().map(|(_, _, created_at, id, _, _, _)| MessageCursor {
-            created_at: created_at.clone(),
-            id: id.clone(),
-        })
+        rows.first().map(|r| MessageCursor { created_at: r.created_at.clone(), id: r.id.clone() })
     } else {
         None
     };
@@ -149,11 +146,28 @@ pub async fn list_messages_page(
     Ok(MessagePage { rows, next_cursor })
 }
 
-/// A persisted chat message row: (role, text, created_at, id, blocks, status, last_seq).
-/// `status` is 'streaming' for an in-progress assistant turn or 'complete' otherwise;
-/// `last_seq` is the monotonic notification sequence folded at the last write (NULL for
-/// legacy / non-streaming rows).
-pub type ChatMessageRow = (String, String, String, String, Option<String>, String, Option<i64>);
+/// A persisted chat message row.
+///
+/// 命名字段而非元组：到这里已有 9 个字段，且 `last_seq`/`duration_ms`/`wait_ms` 同型
+/// （都是 `Option<i64>`），元组解构里把它们写颠倒编译器抓不住，只能靠人眼。
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ChatMessageRow {
+    pub role: String,
+    pub text: String,
+    pub created_at: String,
+    pub id: String,
+    pub blocks: Option<String>,
+    /// 'streaming' for an in-progress assistant turn, 'complete' otherwise.
+    pub status: String,
+    /// The monotonic notification sequence folded at the last write (NULL for legacy /
+    /// non-streaming rows).
+    pub last_seq: Option<i64>,
+    /// 该 turn 的 agent 工作时长（ms，已扣除审批等待）。NULL = 迁移前的历史行 ——
+    /// `chat_messages` 从不记录 turn 结束时刻，老行的时长**不可追溯**，区别于 0。
+    pub duration_ms: Option<i64>,
+    /// 该 turn 内等真人审批的时长（ms）。NULL 同上。
+    pub wait_ms: Option<i64>,
+}
 
 /// Insert-or-update the single in-progress assistant row for a turn. The backend turn
 /// accumulator owns `row_id` (a uuid generated at turn start) and calls this on each
@@ -184,13 +198,51 @@ pub async fn upsert_streaming_message(
     Ok(())
 }
 
-/// Mark an in-progress assistant row as finalized. Called once at turn end (normal
-/// completion, cancel, or crash). Idempotent — a missing/already-complete row is a no-op.
-pub async fn finalize_message(db: &SqlitePool, row_id: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE chat_messages SET status = 'complete' WHERE id = ?")
-        .bind(row_id)
-        .execute(db)
-        .await?;
+/// Mark an in-progress assistant row as finalized and record the turn's duration.
+///
+/// 时长与定稿同一条 UPDATE：`duration_ms`/`wait_ms` 只在 turn 结束那一刻才知道，拆开写
+/// 就存在「行已 complete 但时长缺失」的半成品状态（前端会把它当 0 而非未知）。
+/// Idempotent — a missing/already-complete row is a no-op.
+pub async fn finalize_message(
+    db: &SqlitePool,
+    row_id: &str,
+    duration_ms: i64,
+    wait_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE chat_messages SET status = 'complete', duration_ms = ?, wait_ms = ? WHERE id = ?",
+    )
+    .bind(duration_ms)
+    .bind(wait_ms)
+    .bind(row_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// 把一个已结束 turn 的时长增量累加到会话行上（会话级累计在写时结算，不做读时
+/// `SUM ... GROUP BY` —— 会话列表是轮询接口，理由见
+/// `docs/dev/plans/2026-08-30-acp-work-time.md` D3）。
+///
+/// `work_ms` + `wait_ms` = 该 turn 的墙钟时长。累计落在 `sessions` 行上，与 agent 子进程
+/// 生命周期无关：idle 回收 → restore 出新 client 后继续累加。
+pub async fn accumulate_turn(
+    db: &SqlitePool,
+    session_id: &str,
+    work_ms: i64,
+    wait_ms: i64,
+) -> Result<(), sqlx::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE sessions SET work_ms = work_ms + ?, wait_ms = wait_ms + ?, \
+         turn_count = turn_count + 1, last_turn_at = ? WHERE id = ?",
+    )
+    .bind(work_ms)
+    .bind(wait_ms)
+    .bind(&now)
+    .bind(session_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -358,7 +410,7 @@ mod tests {
     }
 
     fn texts(page: &MessagePage) -> Vec<&str> {
-        page.rows.iter().map(|(_, text, _, _, _, _, _)| text.as_str()).collect()
+        page.rows.iter().map(|r| r.text.as_str()).collect()
     }
 
     #[tokio::test]
@@ -378,8 +430,8 @@ mod tests {
 
         let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
         assert!(
-            page.rows.iter().any(|(role, text, ..)| {
-                role == "system" && text.starts_with("权限请求 30 分钟未获响应")
+            page.rows.iter().any(|r| {
+                r.role == "system" && r.text.starts_with("权限请求 30 分钟未获响应")
             }),
             "hydrate 应能回读 system 消息"
         );
@@ -659,6 +711,54 @@ mod tests {
         sync_messages(&db, SESSION, &[text_entry("", "[\"cooked\"]")]).await.expect("sync");
 
         assert_eq!(row_count(&db).await, 0, "空 text 无 id 无法定位，不得 INSERT 空行");
+    }
+
+    /// 定稿即写时长：消息行与累计必须同一次跃迁落地（拆开写会留下「行已 complete 但
+    /// 时长未知」的半成品，前端会把它当 0 而不是缺失）。
+    #[tokio::test]
+    async fn finalize_message_records_turn_durations_and_reads_back() {
+        let db = fresh_db().await;
+        seed_row(&db, "row-a", "assistant", "OK", "2026-08-10T00:00:01Z").await;
+
+        finalize_message(&db, "row-a", 4200, 800).await.expect("finalize");
+
+        let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
+        let row = page.rows.first().expect("一行");
+        assert_eq!(row.status, "complete");
+        assert_eq!(row.duration_ms, Some(4200));
+        assert_eq!(row.wait_ms, Some(800));
+    }
+
+    /// 迁移前的历史行没有结束时刻记录 → 时长必须是 NULL（未知），不得被读成 0。
+    #[tokio::test]
+    async fn legacy_rows_read_back_with_unknown_duration() {
+        let db = fresh_db().await;
+        seed_row(&db, "row-old", "assistant", "很久以前", "2026-08-10T00:00:01Z").await;
+
+        let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
+        let row = page.rows.first().expect("一行");
+        assert_eq!(row.duration_ms, None, "无记录 ≠ 零耗时");
+        assert_eq!(row.wait_ms, None);
+    }
+
+    /// 会话累计走**增量**：agent 子进程被 idle 回收后 restore 出新 client，第二个 turn
+    /// 的时长必须叠在第一个之上而不是覆盖（计划 D7）。
+    #[tokio::test]
+    async fn accumulate_turn_increments_across_clients() {
+        let db = fresh_db().await;
+
+        accumulate_turn(&db, SESSION, 1000, 200).await.expect("turn 1");
+        accumulate_turn(&db, SESSION, 500, 0).await.expect("turn 2");
+
+        let totals: (i64, i64, i64, Option<String>) = sqlx::query_as(
+            "SELECT work_ms, wait_ms, turn_count, last_turn_at FROM sessions WHERE id = ?",
+        )
+        .bind(SESSION)
+        .fetch_one(&db)
+        .await
+        .expect("fetch totals");
+        assert_eq!((totals.0, totals.1, totals.2), (1500, 200, 2), "两次 turn 应累加");
+        assert!(totals.3.is_some(), "定稿时刻应随最后一次 turn 写入");
     }
 
     #[test]

@@ -10,12 +10,15 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 
+// 允许单测按会话 id 注入 attention 原因（默认无）
+let reasonForImpl: (key: string) => string | undefined = () => undefined
+
 vi.mock('../../hooks/useAttention', () => ({
   useAttention: () => ({
     fire: vi.fn(),
     clearAlert: vi.fn(),
     setActive: vi.fn(),
-    reasonFor: vi.fn(() => undefined),
+    reasonFor: (key: string) => reasonForImpl(key),
   }),
 }))
 
@@ -159,5 +162,129 @@ describe('ProjectCard worktree 展开模式', () => {
     // 聚焦的 feature worktree 有会话列表容器（显示 noSessions 提示）
     expect(container.querySelector('.sidebar-session-list')).toBeTruthy()
     expect(container.textContent).toContain('sidebar.noSessions')
+  })
+})
+
+describe('ProjectCard ACP 会话折叠', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+
+  // 8 个 ACP 会话，按后端返回顺序（created_at DESC，最新在前）
+  const acpSessions = Array.from({ length: 8 }, (_, i) =>
+    makeSession({
+      id: `a${i}`,
+      name: `acp-${i}`,
+      workspace_path: '/repo/main',
+      runtime_kind: 'acp',
+    })
+  )
+
+  beforeEach(() => {
+    reasonForImpl = () => undefined
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    act(() => {
+      root.unmount()
+    })
+    document.body.removeChild(container)
+  })
+
+  function renderCard(props: Parameters<typeof ProjectCard>[0]) {
+    act(() => {
+      root.render(<ProjectCard {...props} />)
+    })
+  }
+
+  function collapsedProps(overrides: Partial<Parameters<typeof ProjectCard>[0]> = {}) {
+    return baseProps({
+      worktrees: [mainWt],
+      sessions: acpSessions,
+      ...overrides,
+    })
+  }
+
+  function clickToggle() {
+    const toggle = container.querySelector('.sidebar-session-more-toggle')
+    expect(toggle).toBeTruthy()
+    act(() => {
+      toggle!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  it('超过 5 个 ACP 会话时折叠：仅渲染最新 5 个 + 切换行', () => {
+    renderCard(collapsedProps())
+
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
+    for (let i = 0; i < 5; i++) expect(container.textContent).toContain(`acp-${i}`)
+    for (let i = 5; i < 8; i++) expect(container.textContent).not.toContain(`acp-${i}`)
+    expect(container.textContent).toContain('sidebar.showMoreSessions')
+  })
+
+  it('终端会话不参与折叠', () => {
+    const tmux1 = makeSession({ id: 't1', name: 'term-1', workspace_path: '/repo/main' })
+    const tmux2 = makeSession({ id: 't2', name: 'term-2', workspace_path: '/repo/main' })
+    renderCard(collapsedProps({ sessions: [...acpSessions, tmux1, tmux2] }))
+
+    // 5 个 ACP + 2 个终端全量
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(7)
+    expect(container.textContent).toContain('term-1')
+    expect(container.textContent).toContain('term-2')
+  })
+
+  it('激活的会话即使排在阈值外也始终露出', () => {
+    renderCard(collapsedProps({ activeSessionId: 'a7' }))
+
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
+    expect(container.textContent).toContain('acp-7')
+  })
+
+  it('等待用户决策（waiting）的会话始终露出', () => {
+    renderCard(collapsedProps({ acpActivityFor: (id: string) => (id === 'a7' ? 'waiting' : undefined) }))
+
+    expect(container.textContent).toContain('acp-7')
+  })
+
+  it('有 attention 的会话始终露出', () => {
+    reasonForImpl = (key: string) => (key === 'a7' ? 'decision' : undefined)
+    renderCard(collapsedProps())
+
+    expect(container.textContent).toContain('acp-7')
+  })
+
+  it('点击切换行展开全部会话，再点击收起', () => {
+    renderCard(collapsedProps())
+
+    clickToggle()
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(8)
+    expect(container.textContent).toContain('sidebar.collapseSessions')
+
+    clickToggle()
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
+    expect(container.textContent).toContain('sidebar.showMoreSessions')
+  })
+
+  it('展开时隐藏行从切换行下方追加，不回插原序中间', () => {
+    reasonForImpl = (key: string) => (key === 'a7' ? 'decision' : undefined)
+    renderCard(collapsedProps())
+    const names = () =>
+      [...container.querySelectorAll('.sidebar-session-list .session-name')].map((el) => el.textContent)
+
+    // 折叠态：最新 4 条补足阈值 + 豁免的 a7
+    expect(names()).toEqual(['acp-0', 'acp-1', 'acp-2', 'acp-3', 'acp-7'])
+
+    // 展开：隐藏行追加在切换行下方，豁免行位置不动
+    clickToggle()
+    expect(names()).toEqual(['acp-0', 'acp-1', 'acp-2', 'acp-3', 'acp-7', 'acp-4', 'acp-5', 'acp-6'])
+  })
+
+  it('不超过阈值时不渲染切换行', () => {
+    renderCard(collapsedProps({ sessions: acpSessions.slice(0, 5) }))
+
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
+    expect(container.querySelector('.sidebar-session-more-toggle')).toBeNull()
   })
 })

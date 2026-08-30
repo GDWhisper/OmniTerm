@@ -223,6 +223,10 @@ async fn create_session(
             agent_id: Some(agent_id),
             last_cwd: None,
             archived_at: None,
+            work_ms: 0,
+            wait_ms: 0,
+            turn_count: 0,
+            last_turn_at: None,
             is_active: true,
             agent_kind: None,
             agent_state: None,
@@ -293,6 +297,10 @@ async fn create_session(
             agent_id: None,
             last_cwd: None,
             archived_at: None,
+            work_ms: 0,
+            wait_ms: 0,
+            turn_count: 0,
+            last_turn_at: None,
             is_active: false,
             agent_kind: None,
             agent_state: None,
@@ -361,6 +369,10 @@ async fn create_session(
         agent_id: None,
         last_cwd: None,
         archived_at: None,
+        work_ms: 0,
+        wait_ms: 0,
+        turn_count: 0,
+        last_turn_at: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
@@ -686,15 +698,20 @@ async fn list_messages(
             let messages: Vec<serde_json::Value> = page
                 .rows
                 .into_iter()
-                .map(|(role, text, created_at, msg_id, blocks, status, last_seq)| {
+                .map(|row| {
                     json!({
-                        "id": msg_id,
-                        "role": role,
-                        "text": text,
-                        "createdAt": created_at,
-                        "blocks": blocks,
-                        "status": status,
-                        "lastSeq": last_seq,
+                        "id": row.id,
+                        "role": row.role,
+                        "text": row.text,
+                        "createdAt": row.created_at,
+                        "blocks": row.blocks,
+                        "status": row.status,
+                        "lastSeq": row.last_seq,
+                        // 该 turn 的工作时长 / 等真人审批时长（ms）。null = 无记录
+                        // （迁移前的历史行，或一帧未发的空 turn），前端据此不渲染，
+                        // 区别于 0。
+                        "durationMs": row.duration_ms,
+                        "waitMs": row.wait_ms,
                     })
                 })
                 .collect();
@@ -915,6 +932,10 @@ async fn adopt_session(
         agent_id: None,
         last_cwd: None,
         archived_at: None,
+        work_ms: 0,
+        wait_ms: 0,
+        turn_count: 0,
+        last_turn_at: None,
         is_active: false,
         agent_kind: None,
         agent_state: None,
