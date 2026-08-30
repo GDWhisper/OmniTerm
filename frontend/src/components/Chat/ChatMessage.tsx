@@ -7,7 +7,7 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatElapsed, formatHoverTime } from '../../utils/formatTime'
+import { formatHoverTime, formatWorkDuration } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -439,7 +439,7 @@ export interface ChatMessageViewProps {
  * 使历史消息在流式期间跳过重渲染。
  */
 export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const [editing, setEditing] = useState(false)
@@ -496,9 +496,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
 
   // turn 工作时长：后端在 turn 定稿时结算，只有 hydrate（读 DB）路径才带回来 ——
   // 前端不自算实时计时，否则与含审批扣除的后端口径形成第二套真相。
-  // null/undefined（在建消息、迁移前的历史行）→ 不渲染，区别于「确实 0 时长」。
-  const workText = formatElapsed(message.durationMs)
-  const waitText = message.waitMs ? formatElapsed(message.waitMs) : null
+  // null/undefined（在建消息、迁移前的历史行）→ 整行不渲染，区别于「确实 0 时长」。
+  const workText = formatWorkDuration(message.durationMs, i18n.language)
+  // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
+  // 拿不到，按设计确认放弃该信息于移动端呈现。
+  const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
     waitText && t('chat.msg.waitTime', { dur: waitText }),
@@ -527,11 +529,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
       </span>
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
-      )}
-      {workText && (
-        <span style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap' }} title={durationTip}>
-          {workText}
-        </span>
       )}
       {hovered && (
         <span
@@ -711,6 +708,24 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
         menu={actionMenu}
         onCloseMenu={closeActionMenu}
       />
+      {/* turn 工作时长：正文最后一行，右对齐（与左对齐的正文块拉开层级，避免被
+          读成正文的一部分）。动作栏常驻占位（CSS 只切 opacity），故本行位置稳定。 */}
+      {workText && (
+        <div
+          style={{
+            alignSelf: 'flex-end',
+            fontSize: '0.769em',
+            color: 'var(--text-faint)',
+            fontFamily: READER_FONT,
+            letterSpacing: '0.03em',
+            fontVariantNumeric: 'tabular-nums',
+            whiteSpace: 'nowrap',
+          }}
+          title={durationTip}
+        >
+          {t('chat.msg.workTime', { dur: workText })}
+        </div>
+      )}
     </div>
   )
 })

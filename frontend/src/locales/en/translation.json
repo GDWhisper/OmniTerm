@@ -226,7 +226,7 @@
   "chat.msg.expand": "expand",
   "chat.msg.collapse": "collapse",
   "chat.msg.openFile": "open in file manager",
-  "chat.msg.workTime": "worked {{dur}}",
+  "chat.msg.workTime": "Worked {{dur}}",
   "chat.msg.waitTime": "waiting on you {{dur}}",
   "chat.msg.regenerate": "regenerate",
   "chat.status.connecting": "connecting…",

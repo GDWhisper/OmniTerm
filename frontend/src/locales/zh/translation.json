@@ -226,7 +226,7 @@
   "chat.msg.expand": "展开",
   "chat.msg.collapse": "收起",
   "chat.msg.openFile": "在文件管理器中打开",
-  "chat.msg.workTime": "工作 {{dur}}",
+  "chat.msg.workTime": "已工作 {{dur}}",
   "chat.msg.waitTime": "等待人工 {{dur}}",
   "chat.msg.regenerate": "重新生成",
   "chat.status.connecting": "连接中…",
