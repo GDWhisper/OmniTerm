@@ -98,3 +98,8 @@
 
 - [x] **设置面板调节自动断连/释放超时** — 设置 → 会话新增三个分钟滑块（值域 1..60）：ACP 空闲回收（默认 5，`GET/PUT /api/v1/settings/acp-idle-recycle` 持久化到后端 settings 表，reaper 运行时热更新）、tmux 失焦断连（默认 10，localStorage `omniterm_blur_disconnect_min`）、tmux 空闲断连（默认 15，`omniterm_idle_disconnect_min`）。
 - [x] **超时值 ≥30 分钟内存占用提醒** — 长超时会让 tmux/ACP 进程长时间驻留内存，设置面板滑块值 ≥30 分钟时显示警告文案。
+
+## 会话工作时长 ✅（2026-08-30 完成）
+
+- [x] **ACP 会话「实际干了多少活」** — 口径 `work_ms = turn 墙钟 − 等真人审批`，后端在 turn 定稿时增量写 `sessions.work_ms/wait_ms/turn_count/last_turn_at`，消息级写 `chat_messages.duration_ms/wait_ms`。呈现：侧栏会话行（含归档行）累计 badge + hover 拆分；assistant 回复正文末行右对齐「已工作 2分钟42秒」，「等待人工」挂 tooltip。设计与偏差见 `docs/dev/plans/2026-08-30-acp-work-time.md`。
+- [x] **已知边界（非缺陷，登记备查）** — ① 迁移前的历史 turn 无结束时刻记录，时长不可追溯（老行 NULL → 不渲染，不回补）；② agent 侧内部确认门（不发 `session/request_permission`，如 omp propose）后端看不见，那段人的思考时间会计入 `work_ms`。

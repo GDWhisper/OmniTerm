@@ -367,6 +367,22 @@ Lifecycle:
 - **带 id 的路径不更新 `text`**：`text` 的权威在后端累积器，前端只拥有 cooked `blocks`。
 - **未命中即跳过**是刻意的：短 turn 可能抢在防抖写之前 sync，此时行还不存在——留在原始帧态可自愈，猜一行更新则是不可逆的错误赋值。
 
+### turn 工作时长记账（`work_ms` / `wait_ms`）
+
+口径是 **agent 实际工作时长**，不是会话存活时长。turn 在 `accumulator.begin_turn()`（`mark_prompt_active`）起表、`finalize_turn()`（`mark_prompt_idle`）停表，结算 `work_ms = wall_ms - wait_ms`；`wait_ms` 为等人工审批的挂起时长（`permission_request` → 用户应答/cancel），**单列、不计入工作**。
+
+| 落点 | 列 | 语义 |
+|---|---|---|
+| `sessions`（migration `20260830_add_work_time.sql`） | `work_ms` / `wait_ms` / `turn_count` / `last_turn_at` | 会话累计，**写时增量**（定稿时 `+=`），列表接口零聚合成本；进程回收/重启不清零 |
+| `chat_messages` | `duration_ms` / `wait_ms` | 单 turn；`NULL` = 未知（迁移前的行、未经累积器定稿的 turn），**与 0 区分** |
+
+- **exactly-once**：结算挂在 `finalize_turn` 的 `active: true→false` CAS 上，天然幂等——四条结束路径（正常完成、prompt 出错、cancel 兜底、reaper 超时）都汇聚到 `mark_prompt_idle`，谁先 CAS 谁记账，重复调用不双计。
+- **wait 用深度计数器**（`wait_depth: u32`）而非审批 id 集合：`PermissionManager` 的 `resolve(id)` / `cancel_all` 只给得出 id 的增减时机，而 ACP 的 `Responder` 受 `IntoHandled` 约束取不回 id，按 id 去重要么改 `permission.rs` 要么依赖「同一 turn 内 id 不重复」的假设。配平由 `begin_turn` 归零 + cancel 路径 `end_all_waits()` 兜底。
+- **未闭合的 wait 段截断到定稿时刻**（clamp，不做 `u64` 减法回绕）：reaper 超时或用户直接 cancel 时审批仍挂着，这段等待既不该算工作也不该凭空消失。
+- **前端只呈现、不自算**：`prompt_done` 帧带 `duration{work_ms, wait_ms}`（取值方式与同帧 `row_id` 一致，见「重连续接协议」），耗时在定稿那一刻即显示；刷新后走 `GET /sessions` / `GET /sessions/{id}/messages` 读库。呈现形态：assistant 正文末行右对齐「已工作 2分钟42秒」（`frontend/src/components/Chat/ChatMessage.tsx`），侧栏累计 badge 悬停看工作/等待/轮次。单位字形由 `Intl` unit-narrow 按界面语言给（不在代码里硬编码「分/秒」），未知 → 整行不渲染，亚秒收成 `<1秒` 而非 `0秒`。
+- **§8 多实现差异**：只有 agent 主动发 `session/request_permission` 的审批才计入 `wait_ms`；agent 内部自动通过的确认门（见「Multi-implementation compatibility」的「审批不一定都走 `session/request_permission`」）落在 `work_ms` 内。即 `wait_ms` 的口径是「等**人**在 OmniTerm 里点按钮的时间」，跨实现比较 `work_ms` 须带上这条前提。
+- **已知缺口**：`stop_reason` 只在 `prompt_done` 帧里下发、不入库，reaper 超时定稿的 turn 无法事后标注「非正常结束」，其 `work_ms` 含整段 inactivity 等待。补齐需给 `chat_messages` 加列，本次不做（见 `docs/dev/plans/2026-08-30-acp-work-time.md` 勘误）。
+
 ### 配置偏好持久化（两层记忆）
 
 底部配置栏（mode/model/thinking/config 选择器）的值**跨进程重启/新会话记忆**，migration `20260804_acp_config_preferences.sql`：
@@ -386,6 +402,8 @@ Lifecycle:
 per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分配，跨 turn 不重置），broadcast 载荷为 `SeqNotification{ seq, notification }`；WS `session_update` 帧带 `seq`（config/commands/replay 帧无 seq）。连接时 supervisor-hit 分支**先 subscribe 再 snapshot**（消除 gap，把重叠窗变为 seq 可解的重复窗）：发 `turn_state{active}`，若 active 再发 `turn_snapshot{row_id, text, blocks, seq}`。前端据此按 `row_id` 收编在建消息、以 `seq` 为水位丢弃重叠重复帧（详见 frontend.md）。
 
 `prompt_done{stop_reason, row_id?}` 同样携带本 turn 的 `row_id`（与 `turn_snapshot.row_id` 同一个值，`None` = 本 turn 未折叠任何帧），供前端把 cooked blocks 精确回写到那一行。三个广播点（正常完成、cancel 兜底、reaper 超时）均经 `AcpClient::turn_row_id()` 取值——专用轻量访问器，**不走 `turn_snapshot()`**（后者克隆全量 `text` 并重新序列化整个帧窗口，为拿一个 id 不值得）。`row_id` 存活到下一次 `begin_turn`，所以定稿后仍可读。
+
+同帧还带 `duration{work_ms, wait_ms}?`（`AcpClient::turn_timing()`）：定稿瞬间结算好的时长，让耗时当场显示而不必等刷新读库。取值时机与存活期与 `row_id` 完全同理（`begin_turn` 才清，故定稿后仍可读；`None` = 该 turn 未经累积器定稿），口径与落库细节见「turn 工作时长记账」。
 
 turn 结束信号（`prompt_done{stop_reason}` / `prompt_error{message}`）经 `AcpClient` 的 `turn_end_tx` broadcast 发给**所有** WS 连接（`spawn_turn_end_task`），与 `session_update`/`crash` 同模式。不能只回发起 prompt 的连接：prompt task 存活期跨 WS 重连，per-connection 通道会把结束帧发进死连接被静默丢弃，重连后的前端永远停留在 running 态。
 
@@ -506,7 +524,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Sessions Table
 
-定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql`。
+定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql` + `20260823_add_sessions_archived_at.sql` + `20260830_add_work_time.sql`。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -522,6 +540,10 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `acp_session_id` | TEXT? | ACP adapter 分配的 session id；tmux/pty session 为 NULL |
 | `agent_id` | TEXT? | 关联的 `agents.id`；仅 `runtime_kind='acp'` 有值 |
 | `last_cwd` | TEXT? | pty 会话前台进程 cwd 的最近采样（30s 回写，D5 重建用）；tmux/acp 为 NULL |
+| `archived_at` | TEXT? | 归档时间；NULL = 未归档 |
+| `work_ms` / `wait_ms` | INTEGER NOT NULL | ACP turn 累计：agent 实际工作时长 / 等人工审批挂起时长。**turn 定稿时增量写入**（非读时聚合，也非会话存活时长）；tmux/pty 会话恒 0 |
+| `turn_count` | INTEGER NOT NULL | 已定稿 turn 数（同一次增量写入） |
+| `last_turn_at` | TEXT? | 最近一次 turn 定稿时刻；随 `list_sessions` 下发，当前无 UI 消费者（记账留档，供排序/展示接入） |
 
 创建 session 时 `runtime_kind` 枚举默认 `Acp`（ACP 阶段推进所致）；
 创建路径显式传 `'tmux'` / `'pty'` 分流到对应引擎。pty 会话惰性 spawn：
