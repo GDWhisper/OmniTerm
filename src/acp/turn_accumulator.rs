@@ -170,6 +170,10 @@ struct TurnState {
     /// uuid of the in-progress `chat_messages` row. Created lazily on the first
     /// folded frame so a turn that emits nothing leaves no empty bubble.
     row_id: Option<String>,
+    /// 上一次 `finalize_turn` 结算出的时长。与 `row_id` 同生命周期：定稿后仍可读，
+    /// 下一次 `begin_turn` 才清 —— WS 层在 `mark_prompt_idle` 之后要拿它拼 `prompt_done`。
+    /// `None` = 本 client 还没定稿过任何 turn。
+    last_timing: Option<TurnTiming>,
     /// Raw `SessionUpdate` payloads for the active turn, in arrival order. Kept as
     /// pre-serialized [`RawValue`] so the window's byte size is known without
     /// re-formatting and flush only has to copy bytes. Bounded on both axes — frame
@@ -287,17 +291,21 @@ enum WriterCmd {
     EndTurn(TurnTiming),
 }
 
-/// turn 定稿时刻算好的时长，交由 writer 落库。
+/// turn 定稿时刻算好的时长。两个消费者：writer 循环据此落库，WS 层把它随
+/// `prompt_done` 下发（耗时在定稿那一刻就显示，不必等刷新读 DB）。
 ///
 /// 跨通道只传**已结算**的 `work_ms`/`wait_ms`（而非墙钟原值）：`wait_ms ≤ wall_ms` 的
 /// clamp 在 `finalize_turn` 锁内做完，接收方就无需再减一次、也就不存在下溢路径。
-struct TurnTiming {
+#[derive(Debug, Clone, Serialize)]
+pub struct TurnTiming {
     /// agent 实际工作时长 = `wall_ms - wait_ms`。
-    work_ms: u64,
+    pub work_ms: u64,
     /// 其中等真人审批的时长。
-    wait_ms: u64,
+    pub wait_ms: u64,
     /// 本 turn 的 `chat_messages` 行 id，`None` = 未折叠任何帧的空 turn。
-    row_id: Option<String>,
+    /// 不下发：`prompt_done` 帧另有顶层 `row_id` 承载同一个值。
+    #[serde(skip)]
+    pub row_id: Option<String>,
 }
 
 pub struct TurnAccumulator {
@@ -339,6 +347,7 @@ impl TurnAccumulator {
             st.wait_since = None;
             st.wait_depth = 0;
             st.row_id = None;
+            st.last_timing = None;
             st.frames.clear();
             st.frames_bytes = 0;
             st.text.clear();
@@ -472,7 +481,10 @@ impl TurnAccumulator {
             let wait_ms = wait_ms.min(wall_ms);
             st.wait_depth = 0;
             st.wait_ms = 0;
-            TurnTiming { work_ms: wall_ms - wait_ms, wait_ms, row_id: st.row_id.clone() }
+            let timing =
+                TurnTiming { work_ms: wall_ms - wait_ms, wait_ms, row_id: st.row_id.clone() };
+            st.last_timing = Some(timing.clone());
+            timing
         };
         self.send_cmd(WriterCmd::EndTurn(timing));
     }
@@ -506,6 +518,13 @@ impl TurnAccumulator {
     /// `begin_turn` clears it), so a turn-end event can still report it.
     pub fn turn_row_id(&self) -> Option<String> {
         self.inner.lock().ok()?.row_id.clone()
+    }
+
+    /// 上一次定稿结算出的时长；`None` = 当前 turn 尚未定稿过（`begin_turn` 已清）或本
+    /// client 从未跑完过一个 turn。与 [`Self::turn_row_id`] 同样活到下一次 `begin_turn`，
+    /// 故 `mark_prompt_idle` 之后立刻读仍能拿到本 turn 的值。
+    pub fn turn_timing(&self) -> Option<TurnTiming> {
+        self.inner.lock().ok()?.last_timing.clone()
     }
 
     /// Snapshot the live turn state for a freshly-connected WS client (reconnect
@@ -774,6 +793,25 @@ mod tests {
 
         acc.begin_turn();
         assert_eq!(acc.turn_row_id(), None, "下一 turn 开始才清除");
+    }
+
+    /// 时长载荷的存活契约与 `turn_row_id` 同源：WS 层在 `mark_prompt_idle` **之后**读它
+    /// 拼 `prompt_done` 的 `duration`，前端据此当场显示耗时。
+    #[test]
+    fn timing_is_readable_after_finalize_and_reset_by_next_turn() {
+        let acc = TurnAccumulator::new();
+        assert!(acc.turn_timing().is_none(), "从未定稿过 → None");
+
+        acc.begin_turn();
+        assert!(acc.turn_timing().is_none(), "turn 进行中不得读到上一 turn 的结算值");
+        nap(20);
+        acc.finalize_turn();
+        let t = acc.turn_timing().expect("定稿后 WS 层仍要能读到");
+        assert!(t.work_ms >= 12, "墙钟应记进 work_ms，实得 {}", t.work_ms);
+        assert_eq!(t.wait_ms, 0, "本 turn 没有审批等待");
+
+        acc.begin_turn();
+        assert!(acc.turn_timing().is_none(), "下一 turn 开始才清除");
     }
 
     /// 长 turn 高频帧（thought/tool chunk）不能把 frames 撑成无界：窗口在帧数与字节

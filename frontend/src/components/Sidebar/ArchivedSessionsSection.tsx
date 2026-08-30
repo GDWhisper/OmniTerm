@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useAgentStore } from '../../stores/agentStore'
+import { formatSessionWork } from '../../utils/formatTime'
 import { IconTrash, IconRefresh } from '../FileManager/icons'
 
 /**
@@ -69,7 +70,8 @@ export function ArchivedSessionsSection(props: {
                     {s.name || s.tmux_session_name}
                   </span>
                   <span className="block truncate" style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 1 }}>
-                    {[agentName, projectName].filter(Boolean).join(' · ')}
+                    {/* 归档会话是只读冷藏，累计工作时长（跨进程回收保留）在此最有意义 */}
+                    {[agentName, projectName, formatSessionWork(s.work_ms)].filter(Boolean).join(' · ')}
                   </span>
                 </div>
 

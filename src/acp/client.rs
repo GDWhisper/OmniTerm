@@ -22,7 +22,7 @@ use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
-use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot};
+use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnTiming};
 use crate::models::agent::Agent;
 
 /// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
@@ -65,6 +65,10 @@ pub enum TurnEndEvent {
         /// 把 cooked `blocks` 精确回写到那一行（见 `chat_persistence::sync_messages`）：
         /// 后端落的是原始帧，体积比 cooked 大两个数量级。
         row_id: Option<String>,
+        /// 本 turn 定稿结算出的时长（工作 / 等真人审批）。`None` = 该 turn 未经
+        /// 累积器定稿（兜底路径），前端不更新耗时。随帧下发使耗时在定稿那一刻就出现，
+        /// 不必等下一次 hydrate。
+        duration: Option<TurnTiming>,
     },
     Error {
         message: String,
@@ -570,6 +574,12 @@ impl AcpClient {
         self.accumulator.turn_row_id()
     }
 
+    /// 上一次定稿结算出的 turn 时长（工作 / 等真人审批）。`mark_prompt_idle()` 之后
+    /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
+    pub fn turn_timing(&self) -> Option<TurnTiming> {
+        self.accumulator.turn_timing()
+    }
+
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
     pub fn notify_turn_end(&self, event: TurnEndEvent) {
         let _ = self.turn_end_tx.send(event);
@@ -806,6 +816,7 @@ impl AcpClient {
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "Cancelled".into(),
                     row_id: client.turn_row_id(),
+                    duration: client.turn_timing(),
                 });
             }
         });

@@ -15,6 +15,7 @@ use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
+use crate::acp::turn_accumulator::TurnTiming;
 use crate::acp::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
 use crate::api::agents::load_agent;
 
@@ -152,6 +153,11 @@ enum AcpServerMessage<'a> {
         /// 无行可回写。与 `turn_snapshot.row_id` 同一个值。
         #[serde(skip_serializing_if = "Option::is_none")]
         row_id: Option<&'a str>,
+        /// 刚结束 turn 的时长（`{ work_ms, wait_ms }`，与 `TurnTiming` 的 serde 输出
+        /// 一致；camel 映射在前端做）。前端据此立刻给该条回复标上耗时，
+        /// 不必等下次 hydrate 读 DB。`None` = 该 turn 未经累积器定稿。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration: Option<&'a TurnTiming>,
     },
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
@@ -263,10 +269,11 @@ async fn spawn_turn_end_task(
             match rx.recv().await {
                 Ok(event) => {
                     let msg = match &event {
-                        TurnEndEvent::Done { stop_reason, row_id } => {
+                        TurnEndEvent::Done { stop_reason, row_id, duration } => {
                             serde_json::to_string(&AcpServerMessage::PromptDone {
                                 stop_reason,
                                 row_id: row_id.as_deref(),
+                                duration: duration.as_ref(),
                             })
                         }
                         TurnEndEvent::Error { message } => {
@@ -482,6 +489,8 @@ async fn dispatch_prompt(
                 // mark_prompt_idle 已定稿本 turn，但 row_id 要到下一次 begin_turn 才清 ——
                 // 此处仍能读到本 turn 的行 id，交给前端做 cooked 回写。
                 row_id: c.turn_row_id(),
+                // 同理，定稿结算出的时长也在此刻读取，随帧下发使耗时立即显示。
+                duration: c.turn_timing(),
             });
         }
         Err(e) => {

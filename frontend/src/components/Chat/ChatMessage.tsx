@@ -7,7 +7,7 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatHoverTime } from '../../utils/formatTime'
+import { formatElapsed, formatHoverTime } from '../../utils/formatTime'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -494,6 +494,16 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
   const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
 
+  // turn 工作时长：后端在 turn 定稿时结算，只有 hydrate（读 DB）路径才带回来 ——
+  // 前端不自算实时计时，否则与含审批扣除的后端口径形成第二套真相。
+  // null/undefined（在建消息、迁移前的历史行）→ 不渲染，区别于「确实 0 时长」。
+  const workText = formatElapsed(message.durationMs)
+  const waitText = message.waitMs ? formatElapsed(message.waitMs) : null
+  const durationTip = [
+    workText && t('chat.msg.workTime', { dur: workText }),
+    waitText && t('chat.msg.waitTime', { dur: waitText }),
+  ].filter(Boolean).join(' · ')
+
   const label = (
     <div
       style={{
@@ -517,6 +527,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
       </span>
       {isUser && message.edited && (
         <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
+      )}
+      {workText && (
+        <span style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap' }} title={durationTip}>
+          {workText}
+        </span>
       )}
       {hovered && (
         <span

@@ -51,6 +51,8 @@ interface ServerFrame {
   /** turn_snapshot: 已累积的纯文本；blocks 为 `{"v":1,"frames":[...]}` 原始帧包裹 JSON。 */
   text?: string
   blocks?: string
+  /** prompt_done: 后端在本 turn 定稿时刻结算的时长（ms）。缺省 = 该 turn 未经累积器定稿。 */
+  duration?: { work_ms: number; wait_ms: number }
 }
 
 // hydrate 落定前需缓冲的帧：这些会改动消息列表，若抢在 GET /messages 之前建消息，
@@ -806,7 +808,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             syncTurnToDb(sid, frame.row_id)
           }
           joinedMidTurn.current = false
-          s.markDone(sid)
+          // duration：后端定稿时刻结算的时长，随帧下发 → 耗时当场出现。
+          s.markDone(
+            sid,
+            frame.duration
+              ? { workMs: frame.duration.work_ms, waitMs: frame.duration.wait_ms }
+              : undefined,
+          )
           // assistant turn 由后端累积器实时落库**原始帧**，前端在此把 cooked blocks
           // 回写到同一行以收敛体积（见 syncTurnToDb）。清空 seq 水位，下一 turn 从零
           // 开始（不做 seq 门控）。
