@@ -22,8 +22,9 @@ describe('formatHoverTime', () => {
 })
 
 describe('formatElapsed', () => {
-  it('亚秒不落 0s', () => {
-    expect(formatElapsed(0)).toBe('<1s')
+  it('0（该活动没发生）与亚秒（发生了但不足一秒）分档', () => {
+    expect(formatElapsed(0)).toBe('0s')
+    expect(formatElapsed(1)).toBe('<1s')
     expect(formatElapsed(999)).toBe('<1s')
   })
 
@@ -63,7 +64,8 @@ describe('formatSessionWork', () => {
 
 describe('formatWorkDuration', () => {
   // 单位字形由 Intl 按 locale 给出，测试显式传 locale 固定断言（运行时缺省跟随界面语言）。
-  it('中文口语格式：亚秒不落 0 秒，整分省秒，小时带分', () => {
+  it('中文口语格式：0 说 0 秒、亚秒不落 0 秒，整分省秒，小时带分', () => {
+    expect(formatWorkDuration(0, 'zh-CN')).toBe('0秒')
     expect(formatWorkDuration(999, 'zh-CN')).toBe('<1秒')
     expect(formatWorkDuration(42_000, 'zh-CN')).toBe('42秒')
     expect(formatWorkDuration(162_000, 'zh-CN')).toBe('2分钟42秒')
