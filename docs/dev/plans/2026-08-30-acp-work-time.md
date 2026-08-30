@@ -158,16 +158,17 @@ ALTER TABLE sessions ADD COLUMN last_turn_at TEXT;          -- RFC3339，NULL = 
 
 前端
 - [x] `tsc -b`（**非** `tsc --noEmit`——根 tsconfig 是 references 空壳，裸 `--noEmit` 不检查任何文件）零新增错误；`pnpm vitest run` 全过（新增 `formatWorkDuration` 边界测：999ms / 42s / 162s / 180s / 1h / null + en 字形 + 四舍五入）
-- [ ] Sidebar 会话行显示累计时长；`work_ms = 0` 的历史会话不显示占位（待浏览器回归）
-- [ ] 刷新后消息耗时仍在（读 DB，非内存）（待浏览器回归）
+- [x] Sidebar 会话行显示累计时长；`work_ms = 0` 的历史会话不显示占位 — 真机（headless 浏览器 + dev :9778）：有 turn 的行出 badge `1S` + tooltip「工作 1s · 等待人工 0s · 共 1 轮」，同列三条 `work_ms=0` 的老会话无 badge 无占位
+- [x] 刷新后消息耗时仍在（读 DB，非内存）— 该会话处于 released 态（「此会话已结束」+ 恢复按钮），全新页面加载仍显示「已工作 1秒」，值只可能来自 `GET /sessions/{id}/messages`
+- [x] 真机回归抓出 E6 的 0/亚秒合档缺陷（`wait_ms=0` 被报成「等待人工 <1s」），已修并补测
 
 边界与真机
-- [ ] 发一个短 prompt → 消息行耗时 ≈ 实际等待秒数，`turn_count` +1
-- [ ] 触发权限请求后放置 2 分钟再批准 → 会话 `wait_ms ≈ 120s`，`work_ms` 不含这段
-- [ ] 权限请求**不批准**直到 reaper 30 分钟回收 → 该段算 wait 不算 work（且 system 告知消息照旧，见关联计划）
-- [ ] 会话进程被 idle 回收后再打开继续对话 → 累计不清零
-- [ ] 后端重启（`./dev.sh restart`）后进行中的 turn 不报错，累计保留
-- [ ] 老会话（迁移前）打开：无耗时标注、累计从 0 起，不出现 `NaN`/`0s` 误导显示
+- [x] 发一个短 prompt → 消息行耗时 ≈ 实际等待秒数，`turn_count` +1 — dev 库一条真实 turn：`sessions.work_ms=1414 / turn_count=1`、`chat_messages.duration_ms=1414`（问候回复，秒级吻合）
+- [ ] 触发权限请求后放置 2 分钟再批准 → 会话 `wait_ms ≈ 120s`，`work_ms` 不含这段（**未跑**：需真发一次 prompt 并挂起审批）
+- [ ] 权限请求**不批准**直到 reaper 30 分钟回收 → 该段算 wait 不算 work（且 system 告知消息照旧，见关联计划）（**未跑**：同上，且需 30 分钟窗口）
+- [ ] 会话进程被 idle 回收后再打开继续对话 → 累计不清零（**未跑**：需活跃 agent 会话；增量 SQL 本身有 `accumulate_turn_increments_across_clients` 覆盖）
+- [ ] 后端重启（`./dev.sh restart`）后进行中的 turn 不报错，累计保留（**未跑**：重启会连带杀掉开发环境里在跑的终端会话）
+- [x] 老会话（迁移前）打开：无耗时标注、累计从 0 起，不出现 `NaN`/`0s` 误导显示 — 同列三条 `work_ms=0` 会话无 badge；`durationMs=null` 的行整行不渲染（API 实测该键下发 `null`，见 E3）
 
 ## 风险与缓解
 
@@ -208,10 +209,10 @@ D6 的缓解手段是「消息级保留 `stop_reason='InactivityTimeout'` 语义
 
 计划把消息耗时完全挂在「hydrate 读 DB」上，实测会退化成「刷新后才出现」。沿用 2026-08-10 计划 `prompt_done.row_id` 的先例：定稿时结算的 `TurnTiming` 经 `AcpClient::turn_timing()`（`client.rs:577`，轻量访问器，不走 `turn_snapshot()`）随帧下发，前端立刻标注。值存活到下一次 `begin_turn`，故定稿后仍可读。跨通道只传**已结算**的 `work_ms`/`wait_ms`（clamp 在 `finalize_turn` 锁内做完），接收方无需再减、不存在下溢路径。
 
-### E6 — 格式化函数不是一个而是三个，且多一档 `<1s`
+### E6 — 格式化函数不是一个而是三个，且多两档 `0s` / `<1s`
 
 Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的物理约束不同：
-- `formatElapsed(ms)`：侧栏像素 badge 用的紧凑记号，**含 `<1s` 档**（计划只写三档，实测亚秒会显示 `0s`，与「确实 0 时长」不可分）→ `<1s`/`42s`/`42m`/`2h42m`。
+- `formatElapsed(ms)`：侧栏像素 badge 用的紧凑记号，**四档**（计划只写三档）→ `0s`/`<1s`/`42s`/`42m`/`2h42m`。`<1s` 档是补的（亚秒显示 `0s` 会把「干了一小会儿」说成「瞬时干完」），但补的时候把 0 一起吞进了 `<1s` —— 真机回归才发现侧栏 tooltip 对 `wait_ms = 0` 的会话报「等待人工 <1s」，凭空造出一段从没发生过的等待。**0 = 该活动没发生，亚秒 = 发生了但不足一秒，两档必须分开**；`formatWorkDuration` 同规则。之所以单测没拦住：那条用例直接断言了 `formatElapsed(0) === '<1s'`，把 bug 写成了期望值。
 - `formatWorkDuration(ms, locale)`：消息正文用的口语记号，单位字形由 `Intl.NumberFormat(locale, {style:'unit', unitDisplay:'narrow'})` 出（zh → `2分钟42秒`，en → `2m42s`），**不在 i18n 文案里硬编码「分/秒」**（见 AGENTS 禁硬编码）。
 - `formatSessionWork(ms)`：侧栏薄封装（`ms ? … : null`），`work_ms` 为 0/未定义时整格不渲染。
 
