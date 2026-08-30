@@ -110,18 +110,26 @@ shrink→expand 非内容中性（上滚一行混入历史残片），nudge 反�
 > `ListenerExt::tap_io` 在 accept 时逐个连接设置（`src/main.rs`）；HTTP 响应同样
 > 受益。相关实测见 `docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2(b)。
 >
-> **cell_frame 行编码（RLE，2026-08-28）**：`rows[]` 每行有两种负载，由**连接级**
-> `hello` 握手协商（`{"t":"hello","supports_cell_frame":true,"row_encoding":"runs"}`
-> → RLE；字段缺失或取其他值 → 逐 cell）：
-> - `cells`：`[{"sgr":"1;32","ch":"x","skip":false}, ...]`（旧格式，默认）
-> - `runs`：行内按 sgr 合并连续字符的扁平数组 `["1;32","text","","more"]`
+> **cell_frame 行编码（RLE，2026-08-28，D4 后为唯一格式）**：`rows[]` 每行是 RLE
+> runs 数组 —— 行内按 sgr 合并连续字符的扁平数组 `["1;32","text","","more"]`。
+> 旧格式 `cells`（逐 cell 对象 `[{"sgr":"1;32","ch":"x","skip":false}, ...]`）已随
+> `2026-08-28-pty-frame-rle.md` D4 移除，故**不存在行编码协商**：`hello` 只需
+> `{"t":"hello","supports_cell_frame":true}`。
 >
-> 二者渲染等价（宽字符占位 cell 在两侧都不产生输出），`runs` 把单帧从 94.4 KB
-> 压到 4.8 KB（19.8×，四类内容实测无损）。**行编码是视图属性而非屏幕状态**：会话
-> 可被多个连接同时 attach，故存在 `terminal_ws.rs`（`Arc<Mutex<RowEncoding>>`）
-> 而非 `VtState`，编码时作为参数传入三个 `encode_*_frame` —— 会话级存放会让后
-> hello 的连接把旧客户端切成它不认的格式。前端按字段存在与否分派，新旧版本任意
-> 组合均可独立回滚。详见 `docs/dev/plans/2026-08-28-pty-frame-rle.md`。
+> runs 把单帧从 94.4 KB 压到 4.8 KB（19.8×）。编码细节（D1/D2/D5）：三种帧
+> （cell/overlay/viewport）共用 `encode_row_static`；宽字符占位 cell 直接跳过、
+> 不切 run；cell 的零宽组合字符（音标、emoji 变体选择符）随主字符一起编码，
+> 否则 `e`+U+0301 退化成 `e`。详见 `docs/dev/plans/2026-08-28-pty-frame-rle.md`。
+>
+> **转发循环的 ticker 常驻（2026-08-30）**：`ticker` 在连接建立时创建，raw 模式的
+> `select!` 里保留 `_ = ticker.tick() => {}` 空分支作为 **hello 握手的唤醒点** ——
+> 否则会话空闲（pty 无输出）时 `select!` 永久挂起，之后到达的 hello 永远不会被
+> loop 顶部看到 → 连接静默停在 raw 模式，`viewport_request` 也不再被消费。
+>
+> **重连必须发全帧（2026-08-30）**：diff 基线在 `VtState`（会话级，多连接共享），
+> 而前端 xterm 的画面在断开期间不推进 —— 新连接若从 diff 帧起步会与后端 grid
+> 行对齐错位。故 attach 到既有会话（`attach.reconnected`）时先
+> `invalidate_diff()`，代价仅是同会话其他连接多发一帧全帧。
 >
 > **历史视口窗口（方案 C Phase 1，2026-08-28）**：cell_frame 模式下前端 xterm
 > scrollback 结构性冻结（根因核查见 `docs/dev/plans/backlog/pty-scroll-handover.md`

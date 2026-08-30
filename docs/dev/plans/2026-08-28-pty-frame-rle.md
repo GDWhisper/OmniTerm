@@ -1,9 +1,10 @@
 # PTY 帧 RLE 编码（pty 移动端手感改造 P1）
 
-> **状态**：P1/P2 已实施（2026-08-28），P3 验证与清理待办。**实施后实测见 §10**——
-> 帧体积 94.4 KB → 4.8 KB（19.8×）、RTT p50 12.75 ms → 2.84 ms、四类内容无损全部
-> PASS。过程中暴露并一并修掉两个独立的延迟源：diff 指纹的每帧 4000 次堆分配
-> （E-7）与 Nagle + Delayed ACK 造成的 ~40 ms 尾延迟（E-8）。
+> **状态**：P1/P2/P3 已实施（P3 于 2026-08-30 完成，**D4 已执行**：cells 路径移除，
+> runs 为唯一行编码）。**实施后实测见 §10** —— 帧体积 94.4 KB → 4.8 KB（19.8×）、
+> RTT p50 12.75 ms → 2.78 ms、四类内容结构自洽全部 PASS。过程中暴露并一并修掉
+> 两个独立的延迟源：diff 指纹的每帧 4000 次堆分配（E-7）与 Nagle + Delayed ACK
+> 造成的 ~40 ms 尾延迟（E-8）；D4 执行期又暴露并修掉三个缺陷，见 §11 E-9/E-10/E-11。
 > **触发条件**：`docs/dev/plans/backlog/pty-mobile-termux-feel.md` §9 E-5 —— 实测确认单帧 94.4 KB 且与滚动步长无关，帧体积是移动端滚动滞后的主因，需先做帧瘦身。
 > **关联**：
 > - `docs/dev/plans/backlog/pty-mobile-termux-feel.md`（方向稿与实测数据，§3.2 / §9）
@@ -53,7 +54,7 @@
 |---|---|
 | 1 | 后端：行编码由「逐 cell 对象」改为「RLE runs」，`encode_row_static` 单点改造（三帧共用） |
 | 2 | 后端：`hello` 握手协商行编码格式，旧客户端继续收 cells 格式 |
-| 3 | 前端：`CellFrame` 类型与 `renderRowCells` 支持 runs 格式解码 |
+| 3 | 前端：`CellFrame` 类型与行渲染支持 runs 格式解码（D4 后为唯一路径） |
 | 4 | 前后端单测 + 探针实测验证 + 手动回归 |
 
 ### 2.2 不纳入（含理由）
@@ -84,21 +85,23 @@
 
 - **翻盘条件**：无（已核实调用链）。
 
-### D3 能力协商：`hello` 扩展 `row_encoding`
+### D3 能力协商：`hello` 扩展 `row_encoding`（**已随 D4 移除**）
 
-```jsonc
-// 客户端 → 服务端（terminal_ws.rs:25-30 ClientHello 扩展）
-{"t":"hello","supports_cell_frame":true,"row_encoding":"runs"}
-```
+协商期（P1/P2）的做法：`hello` 带 `row_encoding:"runs"` → 本连接切 RLE，字段缺失
+回落 cells，行编码按**连接**持有（`Arc<Mutex<RowEncoding>>`，见 E-6）。
 
-- 服务端收到 `row_encoding:"runs"` → `VtState` 切 RLE 模式；字段缺失或为其他值 → cells 模式。
-- **理由**：cell_frame 本身已有 hello 握手（`supports_cell_frame`）这一现成的能力协商点，复用它成本最低，且让前后端可独立提交、独立验证、独立回滚。
-- **否决项**：不协商、直接切（新旧版本错配必然白屏）；协议版本号（比能力字段重）。
-- **翻盘条件**：无。
+**D4 执行后（2026-08-30）该字段与 `RowEncoding` 一并删除**：`hello` 只需
+`{"t":"hello","supports_cell_frame":true}`，cell_frame 一律是 runs。
 
 ### D4 双路径为过渡期脚手架，验收后移除 cells 路径
 
-协商期两套编码并存。**P3 验收通过后删除 cells 编码与前端 cells 解码分支**（参照方案 C D8「开关属过渡期脚手架，验收通过后移除」的处置），不留长期双路径。
+协商期两套编码并存。**P3 验收通过后删除 cells 编码与前端 cells 解码分支**（参照
+方案 C D8「开关属过渡期脚手架，验收通过后移除」的处置），不留长期双路径。
+
+> **已执行（2026-08-30）**，连带改动与取舍见 §11 E-9：后端删 `RowEncoding` /
+> `CellData` / `row_cells`、前端删 `renderRowCells` 与按字段分派、`RowData` 由
+> untagged enum 收敛为 `{ runs }` struct。无损性判据随之迁移（不再有第二种编码
+> 可交叉比对）。
 
 ### D5 宽字符占位 cell：直接跳过（已实测无损）
 
@@ -106,21 +109,27 @@
 
 **已实测**（探针 [D] 组，四类内容逐行模拟渲染比对）：数字 21.6×、彩色 ls 19.5×、源码 21.6×、**CJK 混排 24.2×**，全部 `无损=PASS`。CJK 收益最高正来自占位 cell 被消除。
 
-### D6 前端解码：`renderRowRuns`
+### D6 前端解码：`renderRow`（协商期名 `renderRowRuns`）
 
-`useCellFrame.ts` 新增 `renderRowRuns(runs)`，按 `i += 2` 取 `(sgr, text)`；渲染时 sgr 变化才插入 `reset + SGR`，末尾补 reset。比现有 `renderRowCells` **更快**（同 sgr 的连续字符只切一次样式，而非每字符判断一次）。
+`useCellFrame.ts` 的行渲染按 `i += 2` 取 `(sgr, text)`；渲染时 sgr 变化才插入
+`reset + SGR`，末尾补 reset。比逐 cell 判断**更快**（同 sgr 的连续字符只切一次样式）。
 
-行级分派：`row.runs ? renderRowRuns(row.runs) : renderRowCells(row.cells)`。
+> **D4 后**：协商期曾有 `renderRowRuns` / `renderRowCells` 两个函数与按字段的
+> 行级分派；cells 移除后收敛为单个 `renderRow(runs)`（奇数长度仍记一次 warn）。
 
 ---
 
 ## 4. 多实现差异与降级（AGENTS §8）
 
+> **D4 后无行编码降级**：前后端由同一产物发布（前端 dist 经 `rust-embed` 编入
+> 后端二进制，`src/embedded.rs`），不存在「新前端 + 旧后端」的运行组合，故不留
+> cells 解码分支。浏览器缓存住旧 dist 时旧前端会读不到 `runs` 而显示空行 ——
+> 接受该代价（强刷即恢复），以换取单一编码路径。
+
 | 组合 | 行为 | 保障 |
 |---|---|---|
-| 新前端 + 新后端 | hello 带 `row_encoding:"runs"` → RLE | 主路径 |
-| 旧前端 + 新后端 | hello 无该字段 → cells | 协商降级（D3） |
-| 新前端 + 旧后端 | 帧无 `runs` 字段 → 走 cells 分支 | 前端按字段分派（D6） |
+| 同版本前后端 | hello 开 cell_frame → 一律 runs | 主路径 |
+| 未发 hello（raw 直通前端） | 收原始字节流，无 cell_frame | 既有 raw 路径保留 |
 | tmux 引擎 | raw 直通，无 grid 编码 | 不受影响 |
 | runs 数组长度奇数 | 忽略末尾不完整的对 | 前端防御，不抛异常（S2 不掩盖：记 warn 一次） |
 
@@ -131,8 +140,8 @@
 | Phase | 内容 | 改动文件 | 状态 |
 |---|---|---|---|
 | **P1** | 后端 RLE 编码 + 协商 | `src/engine/pty/frame.rs`（`RowEncoding` + `RowData` 改 enum + runs 编码）、`src/engine/pty/vt.rs`（`encode_row_static` 分派 + 零分配行指纹）、`src/engine/pty/terminal_ws.rs`（hello 解析）、`src/main.rs`（TCP_NODELAY） | ✅ 完成（偏差见 §11 E-6/E-7/E-8） |
-| **P2** | 前端解码与渲染 | `frontend/src/hooks/useCellFrame.ts`（类型 + `renderRowRuns` + 分派）、`frontend/src/hooks/useTerminal.ts`（hello 带 `row_encoding`）、`useCellFrame.test.ts` | ✅ 完成 |
-| **P3** | 验证 + 清理 | 探针复跑、手动回归、移除 cells 路径（D4） | ⏳ 待办：手动回归（§6 末组）未完成；cells 路径按 D4 在回归通过后移除 |
+| **P2** | 前端解码与渲染 | `frontend/src/hooks/useCellFrame.ts`（类型 + 行渲染）、`frontend/src/hooks/useTerminal.ts`（hello 带 `row_encoding`，D4 后移除该字段）、`useCellFrame.test.ts` | ✅ 完成 |
+| **P3** | 验证 + 清理 | 探针复跑、自动化回归、移除 cells 路径（D4） | ✅ 完成（2026-08-30）：自动化回归 17/17、探针复跑达标、cells 路径已移除；剩浏览器内视觉确认（§6 末组） |
 
 P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
@@ -143,28 +152,29 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 **后端**
 - [x] `encode_row_static` 的 runs 编码单测：空行、整行同 sgr、sgr 频繁切换、CJK 宽字符（含占位）、整行单 run、行尾空格
 - [x] 不变式单测：runs 展开后的「字符 → 该字符生效时 sgr」序列 == cells 的同一序列（覆盖 D5）
-- [x] 协商单测：`parse_row_encoding` 仅 `"runs"` 切 RLE，其余（含字段缺失）回落 cells
+- [x] 协商单测：`parse_row_encoding` 仅 `"runs"` 切 RLE，其余（含字段缺失）回落 cells（该单测随 D4 删除）
 - [x] `cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 零新增
 
 **前端**
-- [x] `useCellFrame.test.ts`：`renderRowRuns` 与 `renderRowCells` 对同一行渲染输出等价（模拟 SGR 状态机判据）
+- [x] `useCellFrame.test.ts`：行渲染输出与逐字符渲染的参考实现等价（模拟 SGR 状态机判据；D4 后参考实现不再 `renderRowCells`）
 - [x] 兼容性单测：帧无 `runs` 时回落 cells；`runs` 长度为奇数时不抛异常（warn 一次）
 - [x] `pnpm lint` / `tsc -b` / `pnpm test --run` 零新增失败（顺手修了既有的一处脆弱断言：resync 用例依赖 jsdom 真实时钟累积到 1s，改为固定 `performance.now()`）
 
 **端到端（`node scripts/pty-viewport-probe.mjs`，改动前后对比）**
 - [x] [A] 单帧体积：94.4 KB → **4.8 KB**（目标 ≤6 KB）
-- [x] [A] RTT p50：12.75 ms → **2.84 ms**（目标 ≤3 ms）—— 需连 E-7/E-8 一起才达标，见 §10.2
-- [x] [D] 四类内容（数字 / 彩色 ls / 源码 / CJK）`无损=PASS`
+- [x] [A] RTT p50：12.75 ms → **2.78 ms**（目标 ≤3 ms，2026-08-30 复测）—— 需连 E-7/E-8 一起才达标，见 §10.2
+- [x] [D] 四类内容（数字 / 彩色 ls / 源码 / CJK）帧体积与 runs 结构自洽 PASS
 - [x] [B] 吞吐仍零丢失
 
-**手动回归（`docs/reference/user-testing.md`）** —— P3 待办
+**手动回归（`docs/reference/user-testing.md`）** —— P3 剩余项
 - [ ] pty 会话显示正常：CJK、emoji、TUI（htop）、vim、alt-screen 进入/退出
 - [ ] 滚动历史窗口内容正确（含 CJK 行的对齐）
 - [ ] 快速输出（如 `seq 1 20000`）不丢行、不错位
 - [ ] 断线重连补屏正常
 
-> 其中可结构化断言的部分已由 §10.4 的自动化回归覆盖（16/16 PASS），此处
-> 剩的是**浏览器内的视觉确认**（字体、配色、光标形状、emoji 字形、TUI 刷屏观感）。
+> 其中可结构化断言的部分已由 §10.4 的自动化回归覆盖（**17/17 PASS**，连跑三轮
+> 稳定），此处剩的是**浏览器内的视觉确认**（字体、配色、光标形状、emoji 字形、
+> TUI 刷屏观感）—— 需人工过一遍。
 
 ---
 
@@ -182,7 +192,7 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
 ## 8. 文档闭环
 
-- [x] `docs/architecture/backend.md`：cell_frame 协议段落补 runs 格式与 hello 协商字段（§cell_frame 行编码，含连接级协商说明）
+- [x] `docs/architecture/backend.md`：cell_frame 协议段落改写为「runs 是唯一行编码」（含零宽字符、重连全帧、ticker 唤醒点三条约束）
 - [x] `docs/dev/plans/backlog/pty-mobile-termux-feel.md`：§5 分期表 P1 标为已实施并链回本计划；§3.3 补「改动后」实测（含 P1.5）
 - [x] `docs/architecture/frontend.md`：不适用（该文件未记录 cell_frame 渲染流程）
 - [x] `CHANGELOG.md`：已添加条目（2026-08-28，`[backend]` `[frontend]` pty 终端帧体积瘦身 20 倍）
@@ -222,13 +232,14 @@ P1 与 P2 可并行开发，但端到端验证需两者都就位。
 
 验收标准里的「RTT p50 ≤3 ms」**达标**（2.84 ms）。
 
-无损验证方式同步升级：行编码改为**连接级**后（§11 E-6），探针可对同一会话同时
-开 cells 与 runs 两个连接、对同一 y 各取一帧做逐行 `(字符 → 该字符生效时 sgr)`
-序列比对——不再是设计期的估算，而是服务端真实产出的交叉验证。
+当时的无损验证方式：行编码是**连接级**的（§11 E-6），探针可对同一会话同时开
+cells 与 runs 两个连接、对同一 y 各取一帧做逐行 `(字符 → 该字符生效时 sgr)`
+序列比对——不是设计期的估算，而是服务端真实产出的交叉验证。**D4 后该对照消失**
+（只有 runs），判据迁移见 §11 E-9。
 
 > 两种编码的 RTT 不能在同一轮里对照测：两条连接共享同一个 Node 事件循环，
 > 另一条持续收 30fps 实时帧会把本组的尾延迟抬高一个量级（曾据此得出过错误
-> 结论）。故探针改为一轮只开一条连接，换编码要重跑。
+> 结论）。故探针一轮只开一条连接。
 
 ### 10.2 过程中暴露并修掉的两个独立延迟源
 
@@ -264,33 +275,32 @@ tick 之所以是这个链条的触发点：只有它在 33 ms 周期上持续�
 cells p50 12.75 ms − runs p50 2.84 ms ≈ **10 ms**，是「94 KB 的 JSON 编码 +
 序列化 + 传输」的总差，与方向稿 §9 E-2「p50 主因是服务端编码」的推断吻合。
 
-### 10.4 自动化回归（2026-08-29，`scripts/pty-frame-regression.mjs`）
+### 10.4 自动化回归（`scripts/pty-frame-regression.mjs`）
 
-§6 手动回归里可结构化断言的部分已脚本化，16 项全 PASS：
+§6 手动回归里可结构化断言的部分已脚本化，17 项全 PASS（2026-08-30 连跑三轮稳定）：
 
 | 组 | 断言 | 结果 |
 |---|---|---|
 | T1 | 历史窗口相邻 y 恰好错开 1 行（数字 seq，5 个 y × 39 行 = 195 行比对） | 错位 0 |
 | T2 | 同上（CJK 混排 1500 行）+ 行显示宽度不超屏宽 | 错位 0，最宽 100/100 列 |
-| T3 | emoji / 组合字符行在 cells 与 runs 下文本与 (字符,sgr) 序列一致 | 一致 |
+| T3 | emoji / 组合字符：runs 解码的行文本能在 pty 原始字节流里原样找到（raw 直通连接作独立真相源）+ runs 结构成对且 text 非空 + 组合音标未被吞 | 一致 |
 | T4 | `seq 1 20000` 输出中滚动窗口逐行差恒为 1（6 次全窗口取样） | 跳号 0 |
 | T5 | alt-screen：进入发 `alt_screen=true` overlay、退出发 `false`、退出后主屏恢复且无 alt 残留 | 全通过 |
 | T6 | TUI（less / top）帧可解析、内容非空 | 通过（htop/vim 未安装，用 less/top 代替） |
 | T7 | 断线重连：首帧 `full:true` 且 40 行、可见屏含断开前内容、末行一致 | 通过 |
 
-脚本同时开一条 cells 编码连接做对照（主连接 runs），故 D4 移除 cells 路径后
-仍可直接重跑验证。
+> **T3 的独立真相源如何随 D4 演变**：原本是 cells / runs 双连接交叉比对（§11
+> E-9）；cells 移除后改为 raw 直通连接（不发 hello）的 pty 原始字节流 —— 它比
+> 「另一种编码」更外一层，于是暴露了 cells 与 runs 都漏掉的零宽组合字符缺陷
+> （§11 E-10）。
 
-**RTT 复测偏差**：本次复跑探针 p50 稳定在 **4.7–4.8 ms**（两轮），高于 §10.1
-记录的 2.84 ms，验收标准「p50 ≤3 ms」在当前环境下不达标。判定为**环境基线差异
-而非 RLE 退化**，依据三条：
-- 同环境 cells 对照 p50 12.56 ms，与 §10.1 的 12.75 ms 一致（基线未变）；
-- 帧体积 4.8 KB、四类内容无损 PASS 均与 §10.1 一致（编码路径未变）；
-- 后端零 `slow tick frame` 告警（阈值 5 ms），且 `src/engine/pty/` 自 `73f902e`
-  （记录 2.84 ms 的那次)以来无任何改动。
+**RTT 复测偏差（2026-08-29 那次）**：p50 一度稳定在 4.7–4.8 ms，高于 §10.1 的
+2.84 ms。判定为**环境基线差异而非 RLE 退化**：同环境 cells 对照 p50 12.56 ms 与
+§10.1 一致、帧体积与内容判据一致、后端零 `slow tick frame` 告警。差异落在 2 ms
+量级，属测量环境敏感度。
 
-差异落在 2 ms 量级，与探针测量的注意点（§10.1 注：两条连接共享 Node 事件循环
-会抬高尾延迟）同属测量环境敏感度，故不追平，仅在复测时以同环境 cells 对照为准。
+**2026-08-30（D4 后）复测**：p50 **2.78 ms**、p95 4.01 ms、max 4.34 ms，帧体积
+4.8 KB —— 回到 §10.1 的水平，验收标准「p50 ≤3 ms」达标。
 
 ---
 
@@ -334,3 +344,53 @@ Delayed ACK 叠加后，单次请求-响应的尾延迟暴涨到 ~50 ms。
 改为用 axum 自带的 `ListenerExt::tap_io`（`src/main.rs`）在 accept 时对每个
 连接 `set_nodelay(true)`，跨平台且不新增依赖（axum 官方示例即为此用途）。
 HTTP 响应同样受益。
+
+### E-9 D4 执行：cells 路径移除与判据迁移（2026-08-30）
+
+**移除内容**：`frame::RowEncoding` / `frame::CellData` / `RowData::Cells` /
+`vt::encode_row_cells` / `terminal_ws::parse_row_encoding` /
+`ClientHello::row_encoding` / 连接级 `Arc<Mutex<RowEncoding>>`；前端 `CellData` /
+`renderRowCells` / `renderRow` 的字段分派 / `hello` 的 `row_encoding`。
+`RowData` 由 untagged enum 收敛为 `{ runs: Vec<String> }` struct（线格格式不变）。
+
+**无损性判据迁移**（cells 消失后交叉比对失去对象，改由三层守住）：
+
+| 层 | 判据 |
+|---|---|
+| 后端单测 | `runs_encoding_is_lossless_against_grid`：runs 解码的「字符 → 生效 sgr」序列 == **直接遍历 grid** 的独立参考实现（`grid_seq`） |
+| 前端单测 | `renderRow` 输出 == 逐字符渲染参考实现（`renderPerChar`），经模拟 SGR 状态机比对 |
+| 端到端 | 回归脚本 T3：runs 解码的行文本 == pty 原始字节流（raw 直通连接） |
+
+**版本错配的取舍**：前端 dist 编入后端二进制，同产物发布，故不留 cells 解码
+（§4）。缓存住旧 dist 的浏览器会读到无 `runs` 的行 → 空行，强刷恢复。
+
+**测量脚本一并改造**：`pty-viewport-probe.mjs` 删掉 `ROW_ENCODING` 与双连接对照，
+[D] 组改为「帧体积 + runs 结构自洽」；`pty-frame-regression.mjs` 的 T3 改用 raw
+连接对照。
+
+### E-10 零宽组合字符被丢弃（D4 执行期由 T3 的 raw 对照暴露）
+
+alacritty 把组合音标、emoji 变体选择符之类**零宽**字符存在 cell 的
+`zerowidth` 里（`Cell::zerowidth()`），而编码只取 `cell.c` → `e` + U+0301 显示成
+`e`。cells 与 runs 两种编码都漏它，所以旧的交叉比对测不出来；换成 raw 字节流
+对照后立刻暴露。
+
+修复：`push_cell_text()` 把主字符与零宽字符一起写入 run（常态零分配，不回到
+E-7 之前的每 cell 一次 String 分配）；行指纹 `hash_grid_row` 也混入零宽字符，
+否则组合字符变化不会被 diff 检出（静默错误）。单测
+`runs_keeps_zerowidth_combining_characters` 守这条。
+
+### E-11 重连到空闲会话时 cell_frame 静默不启用（D4 执行期由 T7 暴露）
+
+`forward_handle` 的 ticker 原本是懒初始化：loop 顶部见 `cell_frame_enabled`
+为真才创建。但 loop 主体是单个 `select!`，会话空闲（pty 无输出、无 viewport
+请求）时它**永久挂起**，之后到达的 hello 再无机会被 loop 顶部看到 → 连接停
+在 raw 模式，既不发 cell_frame，也不再消费 `viewport_request`（该分支只存在于
+cell_frame 分支内）。重连到一个空闲会话即必现（T7 时 pass 时 fail）。
+
+修复：ticker 在连接建立时创建，raw 模式的 `select!` 保留
+`_ = ticker.tick() => {}` 空分支作唤醒点（33 ms 一次空转，代价可忽略）。
+
+同一轮还修了 T7 暴露的另一处：新连接 attach 到既有会话时 diff 基线是会话共享
+的，首帧是 diff 而非 full，前端画面与后端 grid 已错位（断开期间的滚动不会
+补发）→ `attach.reconnected` 时先 `invalidate_diff()`。

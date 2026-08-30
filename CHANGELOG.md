@@ -60,6 +60,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-08-30 12:02) `[backend]` 修复重连到空闲 pty 会话后终端无反应：转发循环的编码定时器原本等 `hello` 握手到达后才创建，而循环主体是单个 `select!`，会话空闲（pty 无输出）时会永久挂起，之后到达的握手再无机会被循环顶部看到——连接静默停在 raw 直通模式，既不出画面也不再响应滚动请求（重连、多标签页切回空闲会话时必现）。现定时器在连接建立时创建，raw 分支保留一次空转唤醒。同时修了重连首帧：diff 基线是会话共享的，新连接首帧原为差分帧，而前端画面在断开期间并未推进，二者行对齐已错位，现 attach 到既有会话时先作废基线发全帧（`src/engine/pty/terminal_ws.rs`）
+- (2026-08-30 12:02) `[backend]` 修复组合音标与 emoji 变体选择符在 pty 终端被吞：这类零宽字符由模拟器挂在所属 cell 的 `zerowidth` 上，帧编码只取 cell 主字符，`e` + U+0301 就显示成 `e`。现主字符与零宽字符一并写入 run，行指纹也纳入零宽字符，否则这类变化不会被差分帧检出而留在旧画面。两种行编码此前都漏它，故旧的交叉比对测不出来（`src/engine/pty/vt.rs`）
 - (2026-08-29 18:19) `[frontend]` 修复移动端触摸拖拽滚动完全无效：`touchScroll` 把合成的 `WheelEvent` 派发到了触摸命中的 target（`.xterm-screen` 内的子元素），而 xterm.js 的 wheel listener 挂在 `.xterm` 元素上——Chromium 中该事件不向上冒泡，pty 的 viewport 接管收不到滚动，tmux 会话的默认回滚滚动同样失效（后者自移动端触摸滚动功能落地起即存在）。现改为直接派发到 `.xterm` 元素本身，找不到时回退触摸 target（`frontend/src/utils/touchScroll.ts`）
 - (2026-08-28 00:35) `[frontend]` 修复 pty 会话切换后屏幕冒出 `1;2c1;2c` 字样：tmux attach 时探测设备属性（`ESC[c`），连接初期裸字节窗口期把查询转发到前端，xterm.js 自动应答经 onData 回写 PTY——而应答权本在后端 VT（已回写一份），tmux 收到迟到的第二份后透传给 shell 回显。pty 会话 onData 路径按锚定整串白名单过滤 xterm.js 全部自动应答（DA1/DA2/CPR/DECXCPR/DSR/DECRPM/窗口尺寸/OSC 颜色）；tmux/外部会话不过滤（那里前端是唯一终端模拟器，应答必需）；鼠标上报与 DECRQSS 应答明确放行（`frontend/src/utils/ptyInputFilter.ts`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-27 18:15) `[backend]` `[frontend]` 修复一键升级「自重启静默失败 + 自动刷新假承诺」（实测远程实例升级到新版后进程未换血、页面刷新永远拿旧版）：后端自重启链的 ACP 回收包上 15s 超时（`RELAUNCH_SHUTDOWN_TIMEOUT`），超时记 warn 后照常 exec，杜绝 `shutdown_all` 无界挂起导致 exec 永不执行；前端 UpdateBadge 重启监测从「捕捉断连→恢复」改为按 `/api/v1/health` 的 `version` 字段比对目标版本（不再要求捕捉断连瞬间，SSH 隧道拆线/后台标签节流的远程接入也能确认切换；health 缺 version 的旧实现保留断连-恢复回退）；文案去除「页面将自动刷新」承诺，60s 未确认时显示需手动重启的诚实提示（`src/api/system.rs`、`frontend/src/components/Sidebar/UpdateBadge.tsx`）
@@ -67,6 +69,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-08-30 12:02) `[api]` `[backend]` `[frontend]` **BREAKING** pty cell_frame 行编码收敛为 RLE 一种：移除过渡期双路径——旧 `cells` 负载（逐 cell 对象）与 `hello` 握手的 `row_encoding` 协商字段一并删除，服务端恒发 `{"runs":[sgr,text,...]}`、前端不再按字段分派。前后端由同一产物发布（dist 编入后端二进制），无跨版本回退路径；缓存住旧前端资源的浏览器需强刷。帧体积与延迟不变（4.8 KB / p50 2.78 ms）（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`src/engine/pty/terminal_ws.rs`、`frontend/src/hooks/useCellFrame.ts`、`frontend/src/hooks/useTerminal.ts`）
 - (2026-08-27 19:05) `[frontend]` 「在此打开终端」补齐越界目录归属：浏览目录被某个已打开项目覆盖时直接挂到该项目；不被任何项目覆盖时弹窗引导为该目录新建项目（次选挂到当前项目），避免终端误挂不相干项目；启动目录恒为浏览目录（原先界内回退 workspace_root 会开错位置）（`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/components/FileManager/OpenTerminalDialog.tsx`）
 
 ## [0.2.18] - 2026-08-27
