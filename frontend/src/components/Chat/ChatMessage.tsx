@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useMemo, useState, useCallback } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -22,6 +22,9 @@ import { IconCopy } from '../FileManager/icons'
 const USER_TEXT_COLLAPSE_LINES = 8
 // 折叠态下展示的最大行数（其余内容隐藏，点击展开后全量显示）。
 const USER_TEXT_PREVIEW_LINES = 8
+// 正文气泡的宽度上限。贴气泡右缘的元信息行（turn 耗时）必须用同一个值，
+// 否则两处百分比各改各的，右缘就错开了。
+const BUBBLE_MAX_WIDTH = '85%'
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -358,7 +361,7 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
       className="chat-block"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: '85%',
+        maxWidth: BUBBLE_MAX_WIDTH,
         padding: '8px 12px',
         borderRadius: 8,
         background: 'var(--bg-surface)',
@@ -505,6 +508,23 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
     workText && t('chat.msg.workTime', { dur: workText }),
     waitText && t('chat.msg.waitTime', { dur: waitText }),
   ].filter(Boolean).join(' · ')
+  // 耗时行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），而本行是
+  // 动作栏之后的兄弟节点，CSS 表达不了「和上面某个块右缘对齐」，只能量。
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [metaWidth, setMetaWidth] = useState<number>()
+  useLayoutEffect(() => {
+    const row = rowRef.current
+    if (!row || !workText) return
+    const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
+    const last = bodies[bodies.length - 1]
+    if (!last) return
+    // 同值不 setState：ResizeObserver 每次 observe 先报一轮，回绕成渲染循环没有尽头。
+    const measure = () => setMetaWidth((w) => (w === last.offsetWidth ? w : last.offsetWidth))
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(last)
+    return () => ro.disconnect()
+  }, [workText, message.blocks])
 
   const label = (
     <div
@@ -684,6 +704,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
   return (
     <div
+      ref={rowRef}
       className="chat-msg-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -708,12 +729,17 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
         menu={actionMenu}
         onCloseMenu={closeActionMenu}
       />
-      {/* turn 工作时长：正文最后一行，右对齐（与左对齐的正文块拉开层级，避免被
-          读成正文的一部分）。动作栏常驻占位（CSS 只切 opacity），故本行位置稳定。 */}
+      {/* turn 工作时长：正文最后一行，右对齐且**右缘与气泡右缘重合**（宽度取实测的
+          最后一个正文块宽度；未量到之前退回 BUBBLE_MAX_WIDTH，永不超过气泡列）。
+          与左对齐的正文块拉开层级，避免被读成正文的一部分。动作栏常驻占位（CSS 只切
+          opacity），故本行位置稳定。 */}
       {workText && (
         <div
           style={{
-            alignSelf: 'flex-end',
+            alignSelf: 'flex-start',
+            width: metaWidth,
+            maxWidth: BUBBLE_MAX_WIDTH,
+            textAlign: 'right',
             fontSize: '0.769em',
             color: 'var(--text-faint)',
             fontFamily: READER_FONT,
