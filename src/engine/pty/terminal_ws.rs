@@ -8,14 +8,12 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::PtySize;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::AppState;
 use crate::engine::pty::events::SemanticEvent;
-use crate::engine::pty::frame::RowEncoding;
 use crate::ws::terminal::{ClientControl, ServerControl, TerminalQuery};
 
 use serde::Deserialize;
@@ -35,19 +33,6 @@ const SLOW_FRAME_US: u64 = 5_000;
 struct ClientHello {
     t: String,
     supports_cell_frame: bool,
-    /// 行编码格式（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D3）：
-    /// `"runs"` → 行内 RLE；字段缺失或取其他值 → 逐 cell（旧客户端行为）。
-    #[serde(default)]
-    row_encoding: Option<String>,
-}
-
-/// 解析 `hello.row_encoding`：仅 `"runs"` 切 RLE，其余（含字段缺失）回落
-/// cells —— 旧客户端不发该字段，行为与协商前完全一致（计划 §4 降级表）。
-fn parse_row_encoding(value: Option<&str>) -> RowEncoding {
-    match value {
-        Some("runs") => RowEncoding::Runs,
-        _ => RowEncoding::Cells,
-    }
 }
 
 pub async fn handle_pty_terminal(
@@ -114,6 +99,14 @@ pub async fn handle_pty_terminal(
     // 内容中性——nudge 会把屏幕上滚一行并在顶部混入历史残片，恰好污染
     // 补屏帧赖以生成的真相源。变尺寸重连由真实 resize 触发内核 SIGWINCH，
     // 全量重绘型程序自然重绘（2026-08-22 实测翻盘，见计划文档切片 B 勘误）。
+
+    // 重连（会话已存在）必须让本连接的首帧是全帧：diff 基线是会话共享的
+    // （VtState 级），断开期间输出照常推进，新连接若从 diff 帧起步，前端
+    // xterm 的画面与后端 grid 的行对齐已经错位（滚动过的行不会补发）。
+    // 代价仅是同会话其他连接多发一帧全帧。
+    if attach.reconnected {
+        attach.state.vt.lock().unwrap().invalidate_diff();
+    }
 
     let (mut ws_tx, mut ws_rx) = ws.split();
 
@@ -184,36 +177,31 @@ pub async fn handle_pty_terminal(
     let cell_frame_enabled = Arc::new(AtomicBool::new(false));
     // forward handle 专用克隆（避免 session_id 被 move）
     let fwd_cfe = cell_frame_enabled.clone();
-    // 行编码是**本连接**的 hello 协商结果：会话可被多个连接同时 attach，
-    // 存进共享的 VtState 会互相覆盖，让未协商 runs 的旧客户端收到 runs 帧。
-    let row_encoding = Arc::new(Mutex::new(RowEncoding::default()));
-    let fwd_encoding = Arc::clone(&row_encoding);
     let session_id_for_frame = session_id.clone();
     let encode_attach = attach.clone();
 
     let mut rx = attach.rx;
     let mut event_rx = attach.event_rx;
     let mut forward_handle = tokio::spawn(async move {
-        // Cell-frame 模式：30fps 定时器（懒初始化，hello 握手激活）
-        let mut ticker: Option<tokio::time::Interval> = None;
+        // 30fps 定时器：cell_frame 模式下驱动编码；raw 模式下只是「唤醒点」
+        // —— 没有它，select! 会在无输出时永久挂起，之后到达的 hello 永远
+        // 不会被 loop 顶部看到，连接会静默停在 raw 模式（重连到空闲会话必现）。
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(33));
+        let mut cell_frame_started = false;
 
         // 编码当前 grid 为 cell_frame JSON。读循环先 feed grid 再广播
         // （out/vt 同锁原子），故收到 raw bytes 时 grid 已是最新，可立即编码。
-        // 锁内同步取行编码（瞬时读，不跨 await）。
         let encode_now = || {
-            let encoding = *fwd_encoding.lock().unwrap();
             let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-            vt_guard.encode_cell_frame(&session_id_for_frame, encoding)
+            vt_guard.encode_cell_frame(&session_id_for_frame)
         };
 
         loop {
-            // 懒初始化：前端 hello 握手激活 cell_frame 模式时启动编码定时器
-            if fwd_cfe.load(Ordering::Relaxed) && ticker.is_none() {
-                ticker = Some(tokio::time::interval(std::time::Duration::from_millis(33)));
-                info!("cell_frame encoder started: session={session_id_for_frame}");
-            }
-
-            if let Some(ref mut tick) = ticker {
+            if fwd_cfe.load(Ordering::Relaxed) {
+                if !cell_frame_started {
+                    cell_frame_started = true;
+                    info!("cell_frame encoder started: session={session_id_for_frame}");
+                }
                 // ── Cell-frame 模式：定时器驱动 VT grid 编码 ──
                 tokio::select! {
                     biased;
@@ -234,9 +222,8 @@ pub async fn handle_pty_terminal(
                                 // then drop the guard before the await point to keep the
                                 // spawned future Send.
                                 let json = {
-                                    let encoding = *fwd_encoding.lock().unwrap();
                                     let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame, encoding);
+                                    let json = vt_guard.encode_overlay_frame(&session_id_for_frame);
                                     vt_guard.invalidate_diff();
                                     json
                                 };
@@ -255,9 +242,8 @@ pub async fn handle_pty_terminal(
                         trace!(y, "viewport request served: session={session_id_for_frame}");
                         let json = {
                             // encode_viewport_frame 仅需 &self（不动 diff 基线）
-                            let encoding = *fwd_encoding.lock().unwrap();
                             let vt_guard = encode_attach.state.vt.lock().unwrap();
-                            vt_guard.encode_viewport_frame(&session_id_for_frame, y, encoding)
+                            vt_guard.encode_viewport_frame(&session_id_for_frame, y)
                         };
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                             break;
@@ -272,7 +258,7 @@ pub async fn handle_pty_terminal(
                         }
                     }
                     // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）
-                    _ = tick.tick() => {
+                    _ = ticker.tick() => {
                         let t0 = std::time::Instant::now();
                         let json = encode_now();
                         let sent = ws_tx.send(Message::Text(json.into())).await;
@@ -286,7 +272,7 @@ pub async fn handle_pty_terminal(
                     }
                 }
             } else {
-                // ── Raw binary 模式（legacy，不变）──
+                // ── Raw binary 模式（legacy）──
                 tokio::select! {
                     out = rx.recv() => match out {
                         Ok(data) => {
@@ -308,6 +294,8 @@ pub async fn handle_pty_terminal(
                             break;
                         }
                     }
+                    // 空转唤醒：让 loop 顶部能看到刚到达的 hello 握手
+                    _ = ticker.tick() => {}
                 }
             }
         }
@@ -315,7 +303,6 @@ pub async fn handle_pty_terminal(
 
     // === WS 消息读循环（输入 + resize + ping）===
     let read_cfe = cell_frame_enabled.clone();
-    let read_encoding = Arc::clone(&row_encoding);
     let read_session_id = session_id.clone();
     let mut read_handle = tokio::spawn(async move {
         while let Some(msg) = ws_rx.next().await {
@@ -330,15 +317,8 @@ pub async fn handle_pty_terminal(
                     // Phase 1: cell_frame 能力握手
                     if let Ok(hello) = serde_json::from_str::<ClientHello>(&text) {
                         if hello.t == "hello" && hello.supports_cell_frame {
-                            // 先记录行编码再置位开关：转发循环见开关为真即启动
-                            // 编码定时器，顺序颠倒会让首帧退回 cells 格式。
-                            let encoding = parse_row_encoding(hello.row_encoding.as_deref());
-                            *read_encoding.lock().unwrap() = encoding;
                             read_cfe.store(true, Ordering::Relaxed);
-                            info!(
-                                "cell_frame enabled (row_encoding={:?}): session={}",
-                                encoding, read_session_id
-                            );
+                            info!("cell_frame enabled: session={}", read_session_id);
                         }
                         continue;
                     }
@@ -420,20 +400,4 @@ fn agent_state_frame(
         agent_nonce: snap.agent_nonce.as_deref(),
     })
     .ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 计划 §4 降级表：只有精确的 `"runs"` 切 RLE，其余（含旧客户端的字段缺失）
-    /// 一律回落 cells。
-    #[test]
-    fn row_encoding_negotiation_falls_back_to_cells() {
-        assert_eq!(parse_row_encoding(Some("runs")), RowEncoding::Runs);
-        assert_eq!(parse_row_encoding(Some("cells")), RowEncoding::Cells);
-        assert_eq!(parse_row_encoding(None), RowEncoding::Cells);
-        assert_eq!(parse_row_encoding(Some("")), RowEncoding::Cells);
-        assert_eq!(parse_row_encoding(Some("RUNS")), RowEncoding::Cells);
-    }
 }

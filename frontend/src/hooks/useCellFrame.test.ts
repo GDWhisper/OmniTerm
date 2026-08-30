@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { renderRow, useCellFrame, type CellData, type CellFrame } from './useCellFrame'
+import { renderRow, useCellFrame, type CellFrame } from './useCellFrame'
 
 // Probe-component pattern (no @testing-library/react in deps),
 // following useLongPress.test.ts.
@@ -38,16 +38,36 @@ function fullFrame(marker: string): CellFrame {
     height: 1,
     full: true,
     overlay: false,
-    rows: [{ cells: [
-      { sgr: '', ch: marker },
-      { sgr: '', ch: ' ' },
-    ] }],
+    rows: [{ runs: ['', marker + ' '] }],
   }
 }
 
 // ──────────────────────────────────────────────────────────
-// 行渲染等价性判据（RLE 行编码，2026-08-28-pty-frame-rle.md D5/D6）
+// 行渲染无损性判据（RLE 行编码，2026-08-28-pty-frame-rle.md D5/D6）
 // ──────────────────────────────────────────────────────────
+
+/**
+ * 逐字符渲染的参考实现：runs 展开后按每个字符单独切样式。
+ *
+ * RLE 版省掉了 run 内的冗余样式切换，输出字节不等但渲染等价 —— 故比对的
+ * 是渲染后的 (字符, sgr) 序列而非字节串。
+ */
+function renderPerChar(runs: string[]): string[] {
+  const chunks: string[] = []
+  let prevSgr = ''
+  for (let i = 0; i + 1 < runs.length; i += 2) {
+    for (const ch of runs[i + 1] ?? '') {
+      if ((runs[i] ?? '') !== prevSgr) {
+        chunks.push('\x1b[0m')
+        if (runs[i]) chunks.push(`\x1b[${runs[i]}m`)
+        prevSgr = runs[i] ?? ''
+      }
+      chunks.push(ch)
+    }
+  }
+  chunks.push('\x1b[0m')
+  return chunks
+}
 
 /**
  * 模拟 xterm 的 SGR 状态机，产出「字符 + 该字符生效时 sgr」序列。
@@ -75,52 +95,25 @@ function simulate(ansi: string): string {
 }
 
 describe('renderRow', () => {
-  const cases: Array<{ name: string; cells: CellData[]; runs: string[] }> = [
-    { name: '空行', cells: [], runs: [] },
-    {
-      name: '纯文本（整行同样式）',
-      cells: [
-        { sgr: '', ch: 'a' },
-        { sgr: '', ch: 'b' },
-        { sgr: '', ch: ' ' },
-      ],
-      runs: ['', 'ab '],
-    },
-    {
-      name: '样式切换',
-      cells: [
-        { sgr: '1;32', ch: 'a' },
-        { sgr: '1;32', ch: 'b' },
-        { sgr: '', ch: 'c' },
-      ],
-      runs: ['1;32', 'ab', '', 'c'],
-    },
-    {
-      name: '宽字符占位 cell（D5）',
-      cells: [
-        { sgr: '31', ch: '中' },
-        { sgr: '', ch: '', skip: true },
-        { sgr: '31', ch: '文' },
-        { sgr: '', ch: '', skip: true },
-        { sgr: '', ch: ' ' },
-      ],
-      runs: ['31', '中文', '', ' '],
-    },
+  const cases: Array<{ name: string; runs: string[] }> = [
+    { name: '空行', runs: [] },
+    { name: '纯文本（整行同样式）', runs: ['', 'ab '] },
+    { name: '样式切换', runs: ['1;32', 'ab', '', 'c'] },
+    // 宽字符：占位 cell 已由后端跳过，runs 里只留可见字符（D5）
+    { name: '宽字符混排', runs: ['31', '中文', '', ' '] },
   ]
 
-  it.each(cases)('$name：runs 与 cells 渲染等价', ({ cells, runs }) => {
-    const fromCells = simulate(renderRow({ cells }).join(''))
-    const fromRuns = simulate(renderRow({ runs }).join(''))
-    expect(fromRuns).toBe(fromCells)
+  it.each(cases)('$name：runs 渲染与逐字符渲染等价', ({ runs }) => {
+    expect(simulate(renderRow(runs).join(''))).toBe(simulate(renderPerChar(runs).join('')))
   })
 
-  it('帧无 runs 字段时回落 cells（旧后端 / 未协商）', () => {
-    expect(renderRow({ cells: [{ sgr: '1;32', ch: 'x' }] }).join('')).toContain('x')
+  it('runs 缺失时渲染空行，不抛异常', () => {
+    expect(renderRow(undefined).join('')).toBe('\x1b[0m')
   })
 
   it('runs 长度为奇数时忽略末尾不完整的对，不抛异常', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const chunks = renderRow({ runs: ['1;32', 'ab', ''] })
+    const chunks = renderRow(['1;32', 'ab', ''])
     expect(chunks.join('')).toContain('ab')
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()

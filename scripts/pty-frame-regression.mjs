@@ -11,13 +11,13 @@
  * 七组断言：
  *   T1 滚动历史窗口连续性（相邻 y 恰好错开 1 行 → 不丢行/不错位）
  *   T2 CJK 滚动连续性与行宽一致性（对齐的结构性判据）
- *   T3 emoji / 组合字符：cells 与 runs 解码等价
+ *   T3 emoji / 组合字符：runs 解码与 pty 原始字节流一致
  *   T4 快速输出（seq 1 20000）滚动窗口内数字连续无跳号
  *   T5 alt-screen 进入/退出（overlay 帧 alt_screen 标记 + 主屏恢复）
  *   T6 TUI 程序（less / top）帧可解析、非空、alt_screen 切换
  *   T7 断线重连补屏（重连首帧 full + 内容含断开前标记行）
  *
- * 三个取样陷阱（改动本脚本前先读，否则会误判为 bug）：
+ * 四个取样陷阱（改动本脚本前先读，否则会误判为 bug）：
  *   1. `clear` 会连 scrollback 一起清 → `history_size()` 归零，之后请求
  *      y>0 会被服务端钳制到 0，响应帧的 `viewport` ≠ 请求 y，精确匹配
  *      的等待必然超时。需要历史窗口时，先灌满 history 再取样。
@@ -25,6 +25,8 @@
  *      y=900 之类同样被钳制。样本要 > 1000 行。
  *   3. 命令行本身会被 shell 回显到主屏，含有标记字符串。判定「alt 内容
  *      残留」时必须先剔除回显行，否则必然误报。
+ *   4. T3 的 raw 对照连接只在建立**之后**才收得到输出（attach 不回放
+ *      历史），故必须在发送被测命令之前开好。
  *
  * 依赖：Node ≥ 22（内置 WebSocket / fetch）。
  */
@@ -64,16 +66,36 @@ const sid = await (await fetch(`${BASE}/api/v1/projects/${projects[0].id}/sessio
 })).json().then((r) => r.id)
 console.log(`session=${sid} (${COLS}x${ROWS}) backend=${BASE}\n`)
 
-/** 建立 WS 视图；`rowEncoding` = null 模拟旧客户端（回落 cells）。 */
-async function connect(rowEncoding) {
+/**
+ * 建立 WS 视图。`cellFrame` 为真发 hello 握手（收 cell_frame），为假保持
+ * raw 直通（收原始 pty 字节流 —— 独立真相源，用于 T3 交叉验证）。
+ */
+async function connect(cellFrame = true) {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/api/v1/ws/terminal/${sid}?cols=${COLS}&rows=${ROWS}`)
   await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no })
 
   /** 收到的全部 text 帧（解析后）。 */
   const frames = []
+  /**
+   * raw 直通模式累积的输出字节（cellFrame 模式恒为空）。
+   *
+   * 按 Buffer 累积而非逐帧转字符串：UTF-8 多字节字符（CJK / emoji）可能跨
+   * 帧边界，分段 toString 会解出替换字符。
+   */
+  const rawChunks = []
+  /** 收到的消息总数（含控制帧与 raw 二进制），用于失败时区分「无帧」与「帧不匹配」。 */
+  let msgCount = 0
   const waiters = []
-  ws.onmessage = (ev) => {
-    if (typeof ev.data !== 'string') return
+  /** 前几条 text 消息的原文（含控制帧），失败时用于区分 attach 失败与握手未生效。 */
+  const firstText = []
+  ws.onmessage = async (ev) => {
+    msgCount++
+    if (typeof ev.data === 'string' && firstText.length < 3) firstText.push(ev.data.slice(0, 90))
+    if (typeof ev.data !== 'string') {
+      // Blob 帧：Node 的 WebSocket 对二进制消息给出 Blob。
+      rawChunks.push(Buffer.from(await ev.data.arrayBuffer()))
+      return
+    }
     if (!ev.data.startsWith('{"t":"cell_frame"')) return
     let f
     try { f = JSON.parse(ev.data) } catch { return }
@@ -85,9 +107,7 @@ async function connect(rowEncoding) {
       }
     }
   }
-  const hello = { t: 'hello', supports_cell_frame: true }
-  if (rowEncoding) hello.row_encoding = rowEncoding
-  ws.send(JSON.stringify(hello))
+  if (cellFrame) ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
   ws.send(JSON.stringify({ type: 'resize', cols: COLS, rows: ROWS }))
 
   /** 等满足 match 的下一帧；超时 resolve(null)。 */
@@ -106,23 +126,31 @@ async function connect(rowEncoding) {
   }
   /** 清掉已收帧，返回本次之后的取样起点。 */
   const reset = () => { frames.length = 0 }
-  return { ws, frames, wait, viewport, reset }
+  /** raw 模式下累积的输出文本（剥离 ANSI 后按行拆分）。 */
+  const rawLines = () =>
+    Buffer.concat(rawChunks)
+      .toString('utf8')
+      .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+      .replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+      .replace(/\x1b[()][0-9A-Za-z]/g, '')
+      // 裸 \r（shell 输出前的回车）既不是行尾也不是可显示字符，必须剥掉，
+      // 否则行首残留 \r 与帧解码结果永远不等。
+      .replace(/\r/g, '')
+      .split('\n')
+      .map((l) => l.replace(/\s+$/, ''))
+  return {
+    ws, frames, wait, viewport, reset, rawLines,
+    stats: () => ({ msgs: msgCount, cellFrames: frames.length, firstText }),
+  }
 }
 
-// ── 解码：两种行编码 → 行文本 / (字符,sgr) 序列 ──
-const rowText = (row) =>
-  row.runs
-    ? row.runs.filter((_, i) => i % 2 === 1).join('')
-    : (row.cells ?? []).filter((c) => !c.skip).map((c) => c.ch).join('')
+// ── 解码：runs → 行文本 / (字符,sgr) 序列 ──
+const rowText = (row) => (row.runs ?? []).filter((_, i) => i % 2 === 1).join('')
 const rowTrim = (row) => rowText(row).replace(/\s+$/, '')
-const rowSeq = (row) =>
-  row.runs
-    ? row.runs.filter((_, i) => i % 2 === 1).join('').split('').map((ch) => ch)
-    : (row.cells ?? []).filter((c) => !c.skip).map((c) => c.ch)
+const rowSeq = (row) => rowText(row).split('')
 const rowsText = (f) => f.rows.map(rowTrim)
 
-const main = await connect('runs')
-const legacy = await connect(null) // cells 编码对照连接
+const main = await connect()
 await sleep(1000)
 const send = (s) => main.ws.send(new TextEncoder().encode(s))
 
@@ -162,29 +190,40 @@ await scrollContinuity('CJK 混排', 'for i in $(seq 1 1500); do echo "中文测
   check('CJK 行显示宽度不超屏宽', overflow === 0, `最宽 ${Math.max(...widths)} / ${COLS} 列`)
 }
 
-// ── T3 emoji / 组合字符：cells 与 runs 等价 ──
-console.log('[T3] emoji 与组合字符：两种行编码解码等价')
+// ── T3 emoji / 组合字符：runs 解码与 pty 原始字节流一致 ──
+console.log('[T3] emoji 与组合字符：runs 解码对照 pty 原始字节流')
 {
   await clearAndWait()
-  send('echo "👍🏽 😀 中文 テスト 🎉 e\xcc\x81 combining"\n')
+  // raw 直通连接必须在发送被测命令之前建立：attach 不回放历史，之后建立的
+  // 连接收不到这行输出。
+  const raw = await connect(false)
+  await sleep(300)
+  // 组合音标必须写 `\u0301`（JS 的 `\xcc\x81` 是 U+00CC/U+0081 两个码点，
+  // 不是组合字符 —— 那样测不到零宽字符的保留）。
+  send('echo "EMOJI-RUNS-CHECK 👍🏽 😀 中文 テスト 🎉 e\u0301 combining"\n')
   await sleep(1200)
   // clear 会清 scrollback → history_size 归零，历史窗口 y>0 会被钳到 0，
   // 故此处取 y=0（live 屏）而非历史窗口。
-  const a = await main.viewport(0)
-  const b = await legacy.viewport(0)
-  if (!a || !b) check('emoji 双连接取样', false, '无帧')
-  else {
-    const ta = rowsText(a).filter((s) => s.includes('😀'))
-    const tb = rowsText(b).filter((s) => s.includes('😀'))
-    const runsRow = a.rows.find((r) => rowText(r).includes('😀'))
-    const cellsRow = b.rows.find((r) => rowText(r).includes('😀'))
-    check('emoji 行在两种编码下文本一致',
-      ta.length > 0 && JSON.stringify(ta) === JSON.stringify(tb),
-      ta[0] ? JSON.stringify(ta[0].slice(0, 40)) : '未取到 emoji 行')
-    check('emoji 行 (字符,sgr) 序列等价',
-      !!runsRow && !!cellsRow && rowSeq(runsRow).join('') === rowSeq(cellsRow).join(''),
-      'skipped 占位在两侧均不产生输出')
-  }
+  const f = await main.viewport(0)
+  const MARK = 'EMOJI-RUNS-CHECK'
+  // cell_frame 帧经 WS 即刻到达，raw 字节流经另一条连接、还要等 onmessage
+  // 的 Blob 异步读取，两者没有同步点 —— 轮询等 raw 流出现该行再比对。
+  for (let i = 0; i < 30 && !raw.rawLines().some((l) => l.includes(MARK)); i++) await sleep(100)
+  // raw 流里含 MARK 的行有两条：shell 的命令行回显 + 命令的输出。判据是
+  // 「输出行」能在 raw 流里原样找到（回显行多一个 `echo "` 前缀，不参与匹配）。
+  const fromRaw = raw.rawLines().filter((l) => l.includes(MARK))
+  const fromRuns = rowsText(f ?? { rows: [] }).filter((s) => s.includes(MARK)).at(-1) ?? ''
+  check('emoji 行在 raw 流与 runs 帧下文本一致',
+    fromRuns.length > 0 && fromRaw.includes(fromRuns),
+    `raw ${fromRaw.length} 行匹配，runs=${JSON.stringify(fromRuns.slice(0, 60))}`)
+  const runsRow = (f?.rows ?? []).find((r) => rowText(r).includes(MARK))
+  check('emoji 行 runs 结构合法（成对且 text 段非空）',
+    !!runsRow && runsRow.runs.length % 2 === 0 && runsRow.runs.filter((_, i) => i % 2 === 1).every((t) => t.length > 0),
+    runsRow ? `${runsRow.runs.length / 2} 个 run` : '未取到 emoji 行')
+  check('emoji 行字符数与 raw 行一致（占位 cell 未吞字符）',
+    !!runsRow && rowSeq(runsRow).join('').includes('😀'),
+    runsRow ? `解码 ${rowSeq(runsRow).length} 字符` : '未取到 emoji 行')
+  raw.ws.close()
 }
 
 // ── T4 快速输出不丢行：滚动窗口内数字连续 ──
@@ -281,13 +320,14 @@ console.log('[T7] 断线重连补屏')
   main.ws.close()
   await sleep(800)
 
-  const re = await connect('runs')
+  const re = await connect()
   const first = await re.wait((f) => f.viewport == null && f.full === true, 5000)
   await sleep(600)
+  const reStats = re.stats()
   const reFrame = await re.viewport(0)
   const reText = reFrame ? rowsText(reFrame).join('\n') : ''
   check('重连后收到 full 补屏帧', !!first && first.rows.length === ROWS,
-    first ? `rows=${first.rows.length} full=${first.full}` : '未收到 full 帧')
+    first ? `rows=${first.rows.length} full=${first.full}` : `未收到 full 帧（连接共 ${JSON.stringify(reStats)}）`)
   check('重连后可见屏含断开前内容', reText.includes('RECONNECT-LINE-60') || reText.includes('RECONNECT-LINE-59'),
     reText.split('\n').filter((l) => l.includes('RECONNECT-LINE')).at(-1)?.trim() ?? '未命中')
   check('重连前后末行一致', beforeText.split('\n').at(-1) === reText.split('\n').at(-1),
@@ -295,7 +335,6 @@ console.log('[T7] 断线重连补屏')
   re.ws.close()
 }
 
-legacy.ws.close()
 try { main.ws.close() } catch { /* 已关闭 */ }
 await fetch(`${BASE}/api/v1/sessions/${sid}`, { method: 'DELETE' })
 

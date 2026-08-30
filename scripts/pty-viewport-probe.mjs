@@ -12,12 +12,14 @@
  *   [A] 串行往返 —— 纯净 RTT 与单帧体积
  *   [B] 16ms 间隔连发（模拟 60fps 滑动，不等响应）—— 吞吐与丢请求情况
  *   [C] 帧体积 vs 滚动步长 —— 验证「滚 1 行也传整屏」
- *   [D] 按内容类型的瘦身收益与无损性
+ *   [D] 按内容类型的帧体积与 runs 结构自洽性
  *
- * [A][B][C] 只开一条主连接（编码由 `ROW_ENCODING` 指定，默认 runs）；[D] 对
- * **同一会话**另开一个用另一种编码的连接，同一 y 各取一帧做交叉比对 —— 行
- * 编码是连接级协商的结果，故两个连接可同时存在且互不干扰，无损性由此成为
- * 实测而非估算。
+ * [A][B][C] 只开一条连接：两条连接共享同一个 Node 事件循环，另一条持续收
+ * 30fps 实时帧会把本组的尾延迟抬高一个量级（要对照别的配置就重跑一次）。
+ *
+ * 无损性不在此验证：cell_frame 只有 runs 一种行编码（`2026-08-28-pty-frame-rle.md`
+ * D4 移除了 cells），交叉比对的对象改为后端单测里的 grid 遍历、前端单测里
+ * 的逐字符渲染，以及 `pty-frame-regression.mjs` T3 的 pty 原始字节流。
  *
  * 依赖：Node ≥ 22（内置 WebSocket / fetch）。`DEBUG=1` 可打印前若干条原始消息。
  */
@@ -43,14 +45,6 @@ const ROWS = 40
 /** [D] 低重复内容样本：默认本仓库源码，可经 argv[2] 覆盖。 */
 const SOURCE_SAMPLE = process.argv[2] ?? new URL('../src/main.rs', import.meta.url).pathname
 const DEBUG = process.env.DEBUG === '1'
-/**
- * 主连接的行编码（`ROW_ENCODING=cells` 跑旧格式对照）。
- *
- * [A][B][C] 只开一条连接：两条连接共享同一个 Node 事件循环，另一条持续收
- * 30fps 实时帧会把本组的尾延迟抬高一个量级。要测另一种编码就重跑一次
- * （`ROW_ENCODING=cells node scripts/pty-viewport-probe.mjs`）。
- */
-const ROW_ENCODING = process.env.ROW_ENCODING === 'cells' ? null : 'runs'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const pct = (a, p) => a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))]
@@ -69,18 +63,15 @@ const sid = await (await fetch(`${BASE}/api/v1/projects/${pid}/sessions`, {
 })).json().then((r) => r.id)
 console.log(`session=${sid} (${COLS}x${ROWS}) backend=${BASE}`)
 
-/**
- * 建立到该会话的一个 WS 视图。`rowEncoding` 为 hello 协商的行编码
- * （`null` = 不声明，服务端回落 cells —— 模拟旧客户端）。
- */
-async function connect(rowEncoding) {
+/** 建立到该会话的一个 cell_frame WS 视图。 */
+async function connect() {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/api/v1/ws/terminal/${sid}?cols=${COLS}&rows=${ROWS}`)
   await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no })
 
   const viewportFrames = []
   /**
-   * 是否保留帧原文。仅 [D] 组（跨格式交叉比对）需要 raw；[A][B][C] 只统计
-   * 体积与延迟。开着会累积数 MB 字符串，触发 V8 GC 停顿并污染 RTT 测量
+   * 是否保留帧原文。仅 [D] 组（runs 结构与体积分析）需要 raw；[A][B][C] 只
+   * 统计体积与延迟。开着会累积数 MB 字符串，触发 V8 GC 停顿并污染 RTT 测量
    * （实测：30fps 实时帧下 [A] 的尾延迟有 ~7% 落在 47ms，全是这里的 GC）。
    */
   const state = { keepRaw: false }
@@ -119,9 +110,7 @@ async function connect(rowEncoding) {
   }
 
   // cell_frame 能力握手：不发则 raw 直通，viewport_request 为 no-op
-  const hello = { t: 'hello', supports_cell_frame: true }
-  if (rowEncoding) hello.row_encoding = rowEncoding
-  ws.send(JSON.stringify(hello))
+  ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
   ws.send(JSON.stringify({ type: 'resize', cols: COLS, rows: ROWS }))
 
   /** 等该 y 的响应帧；超时 resolve(null)。 */
@@ -141,7 +130,7 @@ async function connect(rowEncoding) {
   return { ws, viewportFrames, waitViewport, state, liveStats: () => ({ liveFrames, liveBytes }) }
 }
 
-const main = await connect(ROW_ENCODING)
+const main = await connect()
 await sleep(800)
 // 造历史：3000 行输出填满后端 grid scrollback（1000 行）
 main.ws.send(new TextEncoder().encode('seq 1 3000\n'))
@@ -192,7 +181,7 @@ for (const [tag, y] of steps) {
   if (f) sample.push([tag, f.size])
 }
 
-// ── D：按内容类型的瘦身收益 + 无损性（cells / runs 双连接交叉比对）──
+// ── D：按内容类型的帧体积 + runs 结构自洽性 ──
 const CASES = [
   ['数字 seq（高重复）', 'seq 1 2000'],
   ['彩色 ls（中重复）', 'ls --color=always -la /usr/bin | head -1500'],
@@ -209,58 +198,37 @@ async function requestViewport(conn, y) {
 }
 
 /**
- * 无损性判据：逐行比对两种编码解码出的「字符 → 该字符生效时 sgr」序列。
+ * runs 结构自洽判据：每行的 runs 必须是成对的 (sgr, text)，且 text 段非空。
  *
- * 不等价于比对输出字节串 —— runs 会省掉冗余的样式切换，字节不等却渲染等价。
- * 这里直接比对 (char, sgr) 序列，绕开 ANSI 渲染，等价于渲染等价。
+ * 空 text 段意味着编码时把宽字符占位 cell 也切成了 run（D5 回归）——占位
+ * cell 不产生渲染输出，混进来会让同 sgr 的相邻字符被切开。
  */
-function crossEquiv(cellsFrame, runsFrame) {
-  if (cellsFrame.rows.length !== runsFrame.rows.length) return '行数不等'
-  for (let i = 0; i < cellsFrame.rows.length; i++) {
-    if (seqCells(cellsFrame.rows[i].cells) !== seqRuns(runsFrame.rows[i].runs)) return `FAIL@行${i}`
+function structureOf(frame) {
+  for (const [i, row] of frame.rows.entries()) {
+    const runs = row.runs ?? []
+    if (runs.length % 2 !== 0) return `行${i} runs 长度为奇数(${runs.length})`
+    for (let k = 0; k < runs.length; k += 2) {
+      if (typeof runs[k] !== 'string' || typeof runs[k + 1] !== 'string') {
+        return `行${i} 第${k / 2} 个 run 字段非字符串`
+      }
+      if (runs[k + 1].length === 0) return `行${i} 第${k / 2} 个 run 的 text 为空`
+    }
   }
   return 'PASS'
 }
-function seqCells(cells) {
-  const out = []
-  // skip = 宽字符占位：渲染时被跳过，两种编码下都不产生输出
-  for (const c of cells ?? []) if (!c.skip) out.push(c.ch, c.sgr ?? '')
-  return out.join(' ')
-}
-function seqRuns(runs) {
-  const out = []
-  for (let i = 0; i + 1 < (runs ?? []).length; i += 2) {
-    for (const ch of runs[i + 1]) out.push(ch, runs[i])
-  }
-  return out.join(' ')
-}
 
-// [D] 需要帧原文做交叉比对；[A][B][C] 已跑完，此处才打开。
-// 对照连接（另一种行编码）也延到此处建立，避免它在 [A] 期间干扰 RTT 测量。
-const other = await connect(ROW_ENCODING === null ? 'runs' : null)
-await sleep(800)
+// [D] 需要帧原文做结构分析；[A][B][C] 已跑完，此处才打开。
 main.state.keepRaw = true
-other.state.keepRaw = true
 const comp = []
 for (const [label, cmd] of CASES) {
   main.ws.send(new TextEncoder().encode('clear\n'))
   await sleep(400)
   main.ws.send(new TextEncoder().encode(cmd + '\n'))
   await sleep(3000)
-  // 同一 grid、同一 y：两个连接的取样间隔内 shell 已空闲，grid 不变
-  const mainFrame = await requestViewport(main, 300)
-  const otherFrame = await requestViewport(other, 300)
-  if (!mainFrame || !otherFrame) { comp.push([label, 0, 0, 0, '无帧']); continue }
-  const [cellsFrame, runsFrame] =
-    ROW_ENCODING === null ? [mainFrame, otherFrame] : [otherFrame, mainFrame]
-  const gz = zlib.gzipSync(Buffer.from(runsFrame.raw)).length
-  comp.push([
-    label,
-    cellsFrame.size,
-    runsFrame.size,
-    gz,
-    crossEquiv(JSON.parse(cellsFrame.raw), JSON.parse(runsFrame.raw)),
-  ])
+  const frame = await requestViewport(main, 300)
+  if (!frame) { comp.push([label, 0, 0, '无帧']); continue }
+  const gz = zlib.gzipSync(Buffer.from(frame.raw)).length
+  comp.push([label, frame.size, gz, structureOf(JSON.parse(frame.raw))])
 }
 
 const liveAfter = main.liveStats()
@@ -272,18 +240,18 @@ const describeRtt = (m) => {
     + `  最慢: ${slowest.map(([i, v]) => `#${i}=${v.toFixed(0)}ms`).join(' ')}`,
   )
 }
-console.log(`\n[A] 串行往返 n=${rtts.length}/40（行编码=${ROW_ENCODING ?? 'cells'}）`)
+console.log(`\n[A] 串行往返 n=${rtts.length}/40（runs 行编码）`)
 describeRtt(mainRtt)
 console.log(`\n[B] 每 16ms 一个请求（模拟滑动 1 秒）`)
 console.log(`    发出 ${sent.length}  收到 viewport 帧 ${gotYs.length}  丢失/未响应 ${sent.length - gotYs.length}`)
 console.log(`    首/末响应 y = ${gotYs[0]} / ${gotYs.at(-1)}（请求区间 ${sent[0]}..${sent.at(-1)}）`)
 console.log(`\n[C] 帧体积与滚动步长的关系（同一 ${COLS}×${ROWS} 窗口）`)
 for (const [tag, size] of sample) console.log(`    ${tag}: ${(size / 1024).toFixed(1)} KB`)
-console.log(`\n[D] 单帧瘦身收益 + 无损性（${COLS}×${ROWS}，实测 cells → runs 双连接对照）`)
-for (const [label, cellsSize, runsSize, gz, eq] of comp) {
+console.log(`\n[D] 按内容类型的帧体积（${COLS}×${ROWS}，runs 行编码）`)
+for (const [label, size, gz, structure] of comp) {
   console.log(
-    `    ${label}: cells ${(cellsSize / 1024).toFixed(1)} KB → runs ${(runsSize / 1024).toFixed(1)} KB (${(cellsSize / runsSize).toFixed(1)}×)`
-    + ` | runs+gzip ${(gz / 1024).toFixed(2)} KB (${(cellsSize / gz).toFixed(0)}×)  无损=${eq}`,
+    `    ${label}: runs ${(size / 1024).toFixed(1)} KB`
+    + ` | runs+gzip ${(gz / 1024).toFixed(2)} KB (${(size / gz).toFixed(1)}×)  结构=${structure}`,
   )
 }
 const liveFrames = liveAfter.liveFrames - liveBefore.liveFrames
@@ -291,6 +259,5 @@ const liveBytes = liveAfter.liveBytes - liveBefore.liveBytes
 console.log(`\n[对照] 期间实时帧 ${liveFrames} 帧，共 ${(liveBytes / 1024).toFixed(1)} KB（diff 帧，平均 ${(liveBytes / Math.max(1, liveFrames)).toFixed(0)} B）`)
 
 main.ws.close()
-if (other) other.ws.close()
 await fetch(`${BASE}/api/v1/sessions/${sid}`, { method: 'DELETE' })
 console.log('\n临时会话已删除')

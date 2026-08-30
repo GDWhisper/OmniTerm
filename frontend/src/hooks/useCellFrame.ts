@@ -19,24 +19,15 @@ export interface CursorState {
   visible: boolean
 }
 
-export interface CellData {
-  /** SGR 参数体（不含 \x1b[ 前缀和 m 后缀）。空 = 默认样式 */
-  sgr: string
-  /** 单个 Unicode scalar */
-  ch: string
-  /** 宽字符占位位：前端应跳过渲染 */
-  skip?: boolean
-}
-
 /**
- * 一行线格数据。`cells` 与 `runs` 二选一，由后端 `hello` 握手协商的格式决定
- * （`docs/dev/plans/2026-08-28-pty-frame-rle.md` D3/D6）：
- * - `cells`：逐 cell 对象（旧格式 / 未协商时的默认）
- * - `runs`：行内 RLE 扁平数组 `[sgr, text, sgr, text, ...]`
+ * 一行线格数据：行内 RLE 扁平数组 `[sgr, text, sgr, text, ...]`。
+ *
+ * `sgr` 是 SGR 参数体（不含 \x1b[ 前缀和 m 后缀，空串 = 默认样式），`text` 是
+ * 同一 sgr 下的连续字符。宽字符占位 cell 不产生输出（已由后端跳过），故解码
+ * 侧无需处理它（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
  */
 export interface CellRow {
-  cells?: CellData[]
-  runs?: string[]
+  runs: string[]
 }
 
 export interface CellFrame {
@@ -69,53 +60,28 @@ const SGR_RESET = '\x1b[0m'
 let warnedOddRuns = false
 
 /**
- * Render one row into the chunks buffer, dispatching on the negotiated
- * row encoding (`runs` wins when present; `cells` is the legacy fallback).
+ * Render one RLE row into the chunks buffer.
+ *
+ * The caller has already emitted SGR_RESET before this row, so each run
+ * re-establishes its style from a known-clean state. 连续同 sgr 的字符已在
+ * 后端合并，故每 run 只切一次样式。
  *
  * CUP to the target row is done by the caller so that diff frames can
  * EL (erase-to-EOL) before rendering to remove leftover characters.
  */
-export function renderRow(row: CellRow): string[] {
-  // 旧后端不发 runs；长度奇数属协议畸形，忽略末尾不完整的对并告警一次。
-  if (!row.runs) return renderRowCells(row.cells ?? [])
-  if (row.runs.length % 2 !== 0 && !warnedOddRuns) {
+export function renderRow(runs: string[] | undefined): string[] {
+  if (!runs) return [SGR_RESET]
+  // 奇数长度属协议畸形：忽略末尾不完整的 (sgr, text) 对并告警一次。
+  if (runs.length % 2 !== 0 && !warnedOddRuns) {
     warnedOddRuns = true
     console.warn('[cell_frame] odd-length runs array, trailing pair ignored')
   }
-  return renderRowRuns(row.runs)
-}
-
-function renderRowCells(cells: CellData[]): string[] {
-  const chunks: string[] = []
-  let prevSgr = ''
-
-  for (const cell of cells) {
-    if (cell.skip) continue
-    if (cell.sgr !== prevSgr) {
-      chunks.push(SGR_RESET)
-      if (cell.sgr) chunks.push(`\x1b[${cell.sgr}m`)
-      prevSgr = cell.sgr
-    }
-    chunks.push(cell.ch)
-  }
-  chunks.push(SGR_RESET)
-  return chunks
-}
-
-/**
- * Render a RLE row: the caller has already emitted SGR_RESET before this
- * row, so each run re-establishes its style from a known-clean state —
- * equivalent to `renderRowCells` output for the same row.
- *
- * 连续同 sgr 的字符已在后端合并，故每 run 只切一次样式（比逐 cell 判断更快）。
- */
-function renderRowRuns(runs: string[]): string[] {
   const chunks: string[] = []
   for (let i = 0; i + 1 < runs.length; i += 2) {
-    const sgr = runs[i] ?? ''
+    const sgr = runs[i]
     chunks.push(SGR_RESET)
     if (sgr) chunks.push(`\x1b[${sgr}m`)
-    chunks.push(runs[i + 1] ?? '')
+    chunks.push(runs[i + 1])
   }
   chunks.push(SGR_RESET)
   return chunks
@@ -156,7 +122,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
       chunks.push(`\x1b[${r + 1};1H`)
       chunks.push('\x1b[K')
       chunks.push(SGR_RESET)
-      chunks.push(...renderRow(frame.rows[r] ?? {}))
+      chunks.push(...renderRow(frame.rows[r]?.runs))
     }
     term.write(chunks.join(''))
     if (frame.cursor) {
@@ -174,7 +140,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     chunks.push(`\x1b[${rowIdx + 1};1H`)
     chunks.push('\x1b[K')  // Erase to end of line — remove stale chars
     chunks.push(SGR_RESET)
-    chunks.push(...renderRow(frame.rows[i] ?? {}))
+    chunks.push(...renderRow(frame.rows[i]?.runs))
   }
   term.write(chunks.join(''))
   if (frame.cursor) {

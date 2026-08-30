@@ -236,10 +236,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
-      // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。
-      // row_encoding:'runs' 请求行内 RLE 行编码（帧体积降 ~20×）；旧后端忽略
-      // 该字段继续发 cells，前端按字段分派，两侧独立可回滚。
-      ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true, row_encoding: 'runs' }))
+      // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。开启后收到的
+      // cell_frame 一律是 runs 行编码（`docs/dev/plans/2026-08-28-pty-frame-rle.md`）。
+      ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
     }
 
     // Every connection spawns a fresh tmux client whose attach starts with a

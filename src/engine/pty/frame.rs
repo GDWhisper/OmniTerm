@@ -38,37 +38,14 @@ pub struct CellFrame {
     pub rows: Vec<RowData>,
 }
 
-/// 行编码格式（`hello` 握手协商，见 `docs/dev/plans/2026-08-28-pty-frame-rle.md` D3）。
+/// 一行的线格负载：行内 RLE —— 按 sgr 合并连续字符的扁平数组
+/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
 ///
-/// 默认 `Cells`：旧客户端不发 `row_encoding` 字段，行为与协商前一致。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum RowEncoding {
-    /// 逐 cell 对象（现行格式）。
-    #[default]
-    Cells,
-    /// 行内按 sgr 合并连续字符的扁平 runs 数组 `[sgr, text, sgr, text, ...]`。
-    Runs,
-}
-
-/// 一行的线格负载。`Runs` 是 `Cells` 的无损紧凑表示（同一行的两种编码
-/// 渲染等价），前端按字段存在与否分派，无需协商版本。
+/// 这是 cell_frame 协议的**唯一**行编码：逐 cell 的 `cells` 格式随该计划
+/// P3 的 D4 一并移除，故不存在格式协商（前端无需按字段分派）。
 #[derive(Serialize)]
-#[serde(untagged)]
-pub enum RowData {
-    Cells { cells: Vec<CellData> },
-    Runs { runs: Vec<String> },
-}
-
-#[derive(Serialize)]
-pub struct CellData {
-    /// SGR 参数体（不含 \x1b[ 前缀和 m 后缀），空字符串 = 默认样式。
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub sgr: String,
-    /// 单个 Unicode scalar（grapheme cluster 潜在跨 char 边界用 &str 语义）。
-    pub ch: String,
-    /// 宽字符占位位：前端应跳过渲染。
-    #[serde(default)]
-    pub skip: bool,
+pub struct RowData {
+    pub runs: Vec<String>,
 }
 
 #[derive(Serialize)]
