@@ -5,7 +5,6 @@ import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
-import { formatElapsed, formatSessionWork } from '../../utils/formatTime'
 import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
@@ -215,8 +214,6 @@ export function ProjectCard(props: {
                 const isSessionActive = props.activeSessionId === s.id
                 const sessionKey = s.id
                 const attnReason = attention.reasonFor(sessionKey)
-                // 累计工作时长；0/未知 → null（不渲染占位）
-                const workText = formatSessionWork(s.work_ms)
                 // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
                 // 状态点/tooltip 两类会话表现一致
                 const activity =
@@ -289,27 +286,6 @@ export function ProjectCard(props: {
                     <span className="session-name">
                       {s.name || s.tmux_session_name}
                     </span>
-                    {/* ACP 累计工作时长（turn 定稿时后端结算）；从未有定稿 turn 的会话
-                        不渲染占位。hover 拆分「工作 / 等待人工 / 轮数」。 */}
-                    {s.runtime_kind === 'acp' && workText && (
-                      <span
-                        className="status-badge-3d font-pixel flex-shrink-0"
-                        style={{
-                          padding: '1px 3px',
-                          background: 'var(--wood-shadow, #3A2E1F)',
-                          fontSize: 8,
-                          lineHeight: '10px',
-                          color: 'var(--text-faint)',
-                        }}
-                        title={t('sidebar.workTimeTooltip', {
-                          work: workText,
-                          wait: formatElapsed(s.wait_ms ?? 0),
-                          turns: s.turn_count ?? 0,
-                        })}
-                      >
-                        {workText}
-                      </span>
-                    )}
                     {/* Attention badge */}
                     {attnReason && (
                       <span

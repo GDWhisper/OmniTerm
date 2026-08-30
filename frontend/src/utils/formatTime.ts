@@ -17,40 +17,19 @@ export function formatHoverTime(ms: number, now: Date = new Date()): string {
   return `${d.getFullYear()}-${md} ${hm}`
 }
 
-/**
- * turn 工作时长（毫秒）的短格式：`0 → "0s"`、`0<ms<1s → "<1s"`、`<1min → 42s`、
- * `≥1h → 2h42m`。
- * `null/undefined` 表示时长未知（历史行 duration_ms 为 NULL），返回 `null` 让调用方
- * 不渲染 —— 未知不等于 0。0 与亚秒是两件事：0 = 该活动根本没发生（如从未等过审批），
- * 亚秒 = 发生了但不足一秒，故分别给 `0s` 与 `"<1s"`，后者不把「干了一小会儿」说成
- * 「瞬时干完」。
- */
-export function formatElapsed(ms: number | null | undefined): string | null {
-  if (ms === null || ms === undefined) return null
-  if (ms <= 0) return '0s'
-  if (ms < 1000) return '<1s'
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return `${sec}s`
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m`
-  return `${Math.floor(min / 60)}h${min % 60}m`
-}
-
 /** 时长单位按界面语言出字形（zh → 小时/分钟/秒，en → h/m/s），避免硬编码单位。 */
 function unitAmount(value: number, unit: 'hour' | 'minute' | 'second', locale?: string): string {
   return new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'narrow' }).format(value)
 }
 
 /**
- * turn 工作时长的口语格式（assistant 消息底部一行）：`0 → "0秒"`、
+ * turn 工作时长（毫秒）的口语格式（assistant 消息底部一行）：`0 → "0秒"`、
  * `0<ms<1s → "<1秒"`、`<1min → "42秒"`、`<1h → "2分钟42秒"`（整分省秒）、
- * `≥1h → "1小时2分钟"`。
+ * `≥1h → "1小时2分钟"`。单位字形走 `Intl`（缺省回落运行时语言），故 zh/en 各得其所。
  *
- * 与 [`formatElapsed`](#formatElapsed) 的分工：那个是给侧栏像素 badge 用的紧凑记号，
- * 这个是正文里给人读的一行，故单位跟随 `locale`（缺省回落运行时语言）。
- * `null/undefined` = 时长未知（迁移前的历史行、未定稿的在建消息）→ 返回 `null`
- * 让调用方整行不渲染；0 与亚秒分档同 `formatElapsed`（0 = 该活动没发生，
- * 亚秒 = 发生了但不足一秒）。
+ * 三态必须互不混淆：`null/undefined` = 时长未知（迁移前的历史行、未定稿的在建消息）
+ * → 返回 `null` 让调用方整行不渲染；0 = 该活动没发生；亚秒 = 发生了但不足一秒，
+ * 说成 `<1秒` 而非 `0秒`，免得把「干了一小会儿」报成「瞬时干完」。
  */
 export function formatWorkDuration(ms: number | null | undefined, locale?: string): string | null {
   if (ms === null || ms === undefined) return null
@@ -66,14 +45,4 @@ export function formatWorkDuration(ms: number | null | undefined, locale?: strin
       ? unitAmount(minutes, 'minute', locale) + unitAmount(seconds, 'second', locale)
       : unitAmount(minutes, 'minute', locale)
   return unitAmount(seconds, 'second', locale)
-}
-
-/**
- * 会话累计工作时长（`sessions.work_ms`）：0 与未知一样不渲染 —— 会话累计只在 turn
- * 定稿时增长，0 意味着「从无定稿 turn」，而亚秒的少量 turn 会落到 `"<1s"`，
- * 两者不能混为一谈。与消息级的两个 formatter 口径故意不同：那里亚秒仍给记号
- * （`"<1s"` / `"<1秒"`），这里宁可不显示。
- */
-export function formatSessionWork(ms?: number | null): string | null {
-  return ms ? formatElapsed(ms) : null
 }

@@ -54,7 +54,6 @@
   "sidebar.attnDecision": "需要决策",
   "sidebar.attnError": "出错了",
   "sidebar.attnDone": "已完成",
-  "sidebar.workTimeTooltip": "工作 {{work}} · 等待人工 {{wait}} · 共 {{turns}} 轮",
   "sidebar.releaseAgentTitle": "释放智能体进程？",
   "sidebar.confirmReleaseAgent": "智能体正在处理你的请求，确定要释放吗？「{{name}}」将丢失当前进度。",
   "sidebar.release": "释放",

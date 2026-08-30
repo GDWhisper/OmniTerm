@@ -54,7 +54,6 @@
   "sidebar.attnDecision": "Needs decision",
   "sidebar.attnError": "Error",
   "sidebar.attnDone": "Done",
-  "sidebar.workTimeTooltip": "worked {{work}} · waiting on you {{wait}} · {{turns}} turns",
   "sidebar.releaseAgentTitle": "Release agent process?",
   "sidebar.confirmReleaseAgent": "The agent is still processing your request. Are you sure you want to release it? \"{{name}}\" will lose its current work.",
   "sidebar.release": "Release",
