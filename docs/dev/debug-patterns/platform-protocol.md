@@ -1,6 +1,6 @@
 # 构建与协议 — 调试模式
 
-覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败。
+覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持、自替换后 current_exe 失效（/proc/self/exe）。
 
 ---
 
@@ -101,6 +101,17 @@
 
 **案例证据**：
 - 2026-08-11 npm 正式版 `omniterm start` 报 `Address already in use`（os error 98）。根因：用户 shell 是开发实例派生的终端，继承了 dev.sh export 的 `BIND_ADDR=127.0.0.1:9075` / `BACKEND_PORT=9075`，正式版被劫持去绑开发实例已占的端口；`env -u BIND_ADDR -u BACKEND_PORT` 后立即正常启动到 9077。修复：后端 env 全部改 `OMNITERM_*` 前缀并删掉 `BIND_ADDR` 兜底，dev.sh/dev.ps1 改传 `-H/-p/--db`，旧名仅保留启动 warn。
+---
+
+## 模式 10：自替换运行中二进制后重新解析 current_exe() —— Linux 的 /proc/self/exe 失效盲区
+
+**平台-自更新**：Unix 自更新用 rename 覆盖运行中的二进制后，当前进程仍映射**旧 inode**，此时禁止用 `std::env::current_exe()` 重新解析 exec 目标：Linux 上 readlink("/proc/self/exe") 跟随 inode，返回带 ` (deleted)` 后缀的失效路径，exec 报 ENOENT——自动重启静默流产、旧进程继续服务，症状是「承诺了重启却没切换、刷新永远旧版」。正确目标是**替换前**捕获的规范化路径：rename 后该路径恰好指向新二进制。警惕平台掩盖：macOS 的 `_NSGetExecutablePath` 返回启动路径字符串，同名路径替换后已指向新二进制，巧合可用——「开发机（mac）通过、生产（Linux）失效」的不对称只能在目标平台做字节级复现实验抓现行（/tmp 编两个版本小程序：V1 睡眠中被 V2 rename 覆盖，分别 exec `current_exe()` 与捕获路径，一行输出定案），不能靠读代码推断。与 AGENTS.md §8 同族：不得把单一平台的行为当作约定的全部事实。
+
+**适用**：任何 exec 自身完成自更新/热重启的代码；症状「升级成功 + 承诺自动重启但版本不切换」、日志只有孤零零一条 exec 错误。**弯路**：报错是 `No such file or directory`，第一反应去查路径拼写/权限，实际路径字面完全正确——失效的是路径背后的 inode 归属，先 `readlink /proc/<pid>/exe` 看有没有 ` (deleted)` 后缀。
+
+**案例证据**：
+- 2026-08-31 远程 Linux 正式版一键升级提示自动重启却从不切换，刷新仍旧版。根因：`update::relaunch()` 在自替换后重新解析 `current_exe()` 拿到 ` (deleted)` 路径 exec ENOENT（此前一轮修复只堵了 ACP 回收挂起路径，此路径仍在）。修复：`relaunch(exe)` 改用替换前 `current_exe_channel()` 捕获的路径。
+
 ---
 
 ## 未入库记录（无理论，仅存案例）
