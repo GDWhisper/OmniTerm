@@ -457,6 +457,26 @@ Dark background + colored pixel border + pixel font.
 
 Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning), `.toast-info` (accent).
 
+### 7.4 活跃会话行强调（`.session-name-live` + `.activity-pulse`）
+
+侧栏会话行恒定按 `created_at DESC` 排序，**不因活跃状态置顶**——置顶会让行在状态跳变时
+整行跳动，破坏位置稳定性（折叠「展开更多」本就是为了密度）。代价是很老但正在跑的会话
+落在可见区底部，位置本身不携带信息，于是「活着」改由行内强调表达：
+
+| `sessionStatus()` 结果 | 强调 |
+|---|---|
+| `working` / `blocked` | 会话名提亮到 `--text-primary`（加 `.session-name-live`）+ 状态点 `.activity-pulse` 呼吸 |
+| `done` / `none` | 默认 `--text-secondary`，状态点静止 |
+
+- **live 判定只有 `sessionStatus()` 一个真源**（`frontend/src/utils/agentAggregate.ts`），
+  与 worktree 行的聚合徽标共用；禁止在组件里再写一份 `running || waiting` 式的散装判断。
+- 文字提亮与 `.active`（选中行）同色但语义不同（「在跑/待读」vs「选中」），二者可叠加。
+  **不给活跃行加背景色**——会和选中态抢「当前在哪」。
+- 呼吸动画复用既有的 `.activity-pulse`（§11），与 worktree 行 `GitBranchSprite` 同源。
+  状态指示类动效不受「像素动画」开关控制（该开关只管 Mario 式位移/挤压动画，§8）。
+- 折叠豁免（激活 / 需注意力 / waiting 的会话不被收进「展开更多」）解决的是「看不看得到」，
+  本节的强调解决的是「看得出不看得出来它在跑」——两者互补，都要保留。
+
 ---
 
 ## 8. Settings Toggles

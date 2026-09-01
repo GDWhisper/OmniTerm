@@ -1359,6 +1359,12 @@ body.fm-dragging * {
   font-size: 14px;
 }
 
+/* 活跃会话文字提亮一档，与 .active 同色但语义不同（「在跑/待读」vs「选中」）。
+   排序固定 created_at DESC 不动——置顶会让行随状态跳变，见 ui-style-guide §7.4。 */
+.sidebar-session-item .session-name-live {
+  color: var(--text-primary);
+}
+
 .sidebar-session-item .session-attn {
   width: 14px;
   height: 14px;

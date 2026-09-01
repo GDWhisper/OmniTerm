@@ -215,6 +215,12 @@ describe('ProjectCard ACP 会话折叠', () => {
     })
   }
 
+  function nameEl(name: string): Element {
+    const el = [...container.querySelectorAll('.session-name')].find((n) => n.textContent === name)
+    expect(el, `会话行未渲染: ${name}`).toBeTruthy()
+    return el as Element
+  }
+
   it('超过 5 个 ACP 会话时折叠：仅渲染最新 5 个 + 切换行', () => {
     renderCard(collapsedProps())
 
@@ -286,5 +292,53 @@ describe('ProjectCard ACP 会话折叠', () => {
 
     expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
     expect(container.querySelector('.sidebar-session-more-toggle')).toBeNull()
+  })
+
+  // ── 活跃会话的视觉强调（ui-style-guide §7.4）──
+
+  it('running 会话：会话名走 live 变体、状态点呼吸', () => {
+    renderCard(collapsedProps({ acpActivityFor: (id: string) => (id === 'a0' ? 'running' : undefined) }))
+
+    const el = nameEl('acp-0')
+    expect(el.classList.contains('session-name-live')).toBe(true)
+    expect(el.parentElement!.querySelector('.activity-pulse')).toBeTruthy()
+  })
+
+  it('waiting 与需决策（decision）的会话同样走 live 强调', () => {
+    renderCard(collapsedProps({ acpActivityFor: (id: string) => (id === 'a7' ? 'waiting' : undefined) }))
+    expect(nameEl('acp-7').classList.contains('session-name-live')).toBe(true)
+
+    reasonForImpl = (key: string) => (key === 'a6' ? 'decision' : undefined)
+    renderCard(collapsedProps())
+    expect(nameEl('acp-6').classList.contains('session-name-live')).toBe(true)
+  })
+
+  it('空闲会话不加 live 强调', () => {
+    renderCard(collapsedProps())
+
+    const el = nameEl('acp-0')
+    expect(el.classList.contains('session-name-live')).toBe(false)
+    expect(el.parentElement!.querySelector('.activity-pulse')).toBeNull()
+  })
+
+  it('完成未查看（done）不算 live：不加文字提亮与呼吸', () => {
+    reasonForImpl = (key: string) => (key === 'a0' ? 'done' : undefined)
+    renderCard(collapsedProps())
+
+    expect(nameEl('acp-0').classList.contains('session-name-live')).toBe(false)
+  })
+
+  it('终端会话与 ACP 一致：agent_state=running 走 live 强调', () => {
+    const tmuxLive = makeSession({
+      id: 't1',
+      name: 'term-live',
+      workspace_path: '/repo/main',
+      agent_state: 'running',
+    })
+    renderCard(collapsedProps({ sessions: [tmuxLive] }))
+
+    const el = nameEl('term-live')
+    expect(el.classList.contains('session-name-live')).toBe(true)
+    expect(el.parentElement!.querySelector('.activity-pulse')).toBeTruthy()
   })
 })

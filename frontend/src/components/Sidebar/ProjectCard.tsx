@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
-import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
+import { aggregateStatus, sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
@@ -224,6 +224,12 @@ export function ProjectCard(props: {
                       : s.agent_state === 'running' || s.is_active
                         ? 'running'
                         : undefined
+                // 折叠豁免让「活跃但很老」的会话露在可见区底部，位置本身不携带信息。
+                // 排序保持 created_at DESC 不动（置顶会在状态跳变时整行跳动），
+                // 改用文字色阶 + 状态点呼吸把它标出来；live 判定复用 sessionStatus，
+                // 与 worktree 聚合状态同一真源。
+                const status = sessionStatus(s, attnReason, props.acpActivityFor(s.id))
+                const isLive = status === 'working' || status === 'blocked'
                 const dotColor = attnReason
                   ? attnReason === 'decision'
                     ? 'var(--warning)'
@@ -271,7 +277,7 @@ export function ProjectCard(props: {
                     )}
                     {/* Running indicator dot */}
                     <div
-                      className="flex-shrink-0"
+                      className={`flex-shrink-0${isLive ? ' activity-pulse' : ''}`}
                       style={{
                         width: 6,
                         height: 6,
@@ -283,7 +289,7 @@ export function ProjectCard(props: {
                           : undefined
                       }
                     />
-                    <span className="session-name">
+                    <span className={`session-name${isLive ? ' session-name-live' : ''}`}>
                       {s.name || s.tmux_session_name}
                     </span>
                     {/* Attention badge */}
