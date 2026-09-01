@@ -312,6 +312,7 @@
   "drawer.retry": "Retry",
   "drawer.preview": "Preview",
   "drawer.edit": "Edit",
+  "drawer.markdownTooLarge": "Too large to render — showing markdown source (limit: {{max}} lines)",
   "drawer.externallyModified": "Modified externally",
   "drawer.fileDeletedExternally": "File has been deleted externally",
   "drawer.close": "Close",

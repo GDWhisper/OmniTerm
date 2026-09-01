@@ -51,10 +51,13 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-09-02 00:07) `[frontend]` 文件抽屉支持 Markdown 渲染预览：`.md`/`.markdown` 在「预览」模式下整篇渲染（GFM 表格/任务列表、围栏代码高亮、引用块、相对图片、锚点跳转），「编辑」仍是 CodeMirror 源码，二者一键互切。相对图片 `./pic.png` 与子目录图片改写为 `/api/v1/files/download` 走后端读取（外链/`data:` 原样保留），相对链接点击即在抽屉内切换到目标文件（含 `sub/deep.md`）；含 `..` 的相对路径**拒绝折叠**——读接口的绝对 `path` 参数不经 `fs::sanitize_path`，前端是唯一一道边界，不做第二套路径真相。超过 3000 行退回源码视图并在顶栏提示（`drawer.markdownTooLarge`），避免整篇同步解析卡住主线程。渲染核心提取为共享组件 `MarkdownCore`（聊天与抽屉共用，消除复制粘贴），圆角等差异走 props：聊天保持已上线的 6/3，新容器按 UI 规范取 0（`frontend/src/components/Common/MarkdownCore.tsx`、`frontend/src/components/Chat/Markdown.tsx`、`frontend/src/components/FileManager/MarkdownPreview.tsx`、`frontend/src/components/FileManager/filePreviewShared.ts`、`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/index.css`）
 - (2026-09-01 10:56) `[frontend]` 抽屉（文件预览/diff 查看）左上角新增角标，一次拖拽同时调整文件管理器宽度与抽屉高度：向左拖变宽、向上拖变高，方向与左缘竖向拖拽条、顶边高度条完全一致（角标正落在这两条拖拽条的交点上）；宽度钳制走共享的 `clampFileManagerWidth`（[240, innerWidth/2]，与竖向拖拽条同一真源），拖拽中直改面板 DOM 宽度、松手才写 store 与 localStorage，并置 `isResizing` 关掉宽度补间避免滞后于指针；移动端不渲染（走 `MobileLayout`，没有可拖的面板宽度）。附带把抽屉高度持久化从「逐帧写 sessionStorage」改为松手写一次（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/hooks/useDrawerCornerResize.ts`、`frontend/src/utils/layout.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/index.css`）
 
 ### Fixed
 
+- (2026-09-02 00:07) `[frontend]` 修复抽屉文件内容 SSE 刷新无去抖、且编辑模式下会吞掉未保存编辑：agent 连续写同一文件时每个事件都触发一次重取（markdown 预览是整篇重解析，连发代价明显）；更严重的是编辑模式下同样静默重取，连带重置 `editedContent` 并清掉 `modified`——用户还没保存的改动被外部写入覆盖。现合并为 500ms 一次（与图片预览路径共用 `FILE_REFRESH_DEBOUNCE_MS`），且模式在定时器内读 ref 而非闭包：预览模式才刷新，编辑模式只亮「已被外部修改」角标（实测 3 次连发只产生 1 次读请求；编辑态下外部改动后缓冲区内容保留）（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/FileManager/FilePreview.tsx`、`frontend/src/components/FileManager/filePreviewShared.ts`）
+- (2026-09-02 00:07) `[frontend]` 修复编辑期间的外部改动切回预览后看不到：编辑模式下外部变更只标记不刷新，但回到「预览」时没人补刷，抽屉一直停在打开时那份内容，角标长亮却不更新。现切回预览时若无未保存改动补一次重取；有未保存改动则不刷（重取会重置编辑缓冲区），保留角标作为提示（`frontend/src/components/FileManager/FileDrawer.tsx`）
 - (2026-09-01 09:25) `[frontend]` 修复抽屉高度拖拽条在触摸设备（触屏电脑/手机）上完全无法拖动：拖拽状态机只绑定 mouse 事件（触摸屏不派发该事件），且命中区仅 6px 高。现迁移到 Pointer Events（鼠标/触摸通用，含 pointercancel 取消）、拖拽条加 `touch-action: none` 防浏览器抢手势，命中区经负边距扩到 22px（视觉条仍 6px 不变）；高度钳制范围提取为共享 `clampDrawerHeight`（`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/utils/drawer.ts`、`frontend/src/index.css`）
 
 ## [0.2.19] - 2026-08-31

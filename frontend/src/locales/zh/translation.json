@@ -312,6 +312,7 @@
   "drawer.retry": "重试",
   "drawer.preview": "预览",
   "drawer.edit": "编辑",
+  "drawer.markdownTooLarge": "文档过长，已退回源码视图（渲染上限 {{max}} 行）",
   "drawer.externallyModified": "已被外部修改",
   "drawer.fileDeletedExternally": "文件已被外部删除",
   "drawer.close": "关闭",

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
-
-const REFRESH_DEBOUNCE_MS = 500
+import { FILE_REFRESH_DEBOUNCE_MS as REFRESH_DEBOUNCE_MS, buildFileDownloadUrl } from './filePreviewShared'
 
 interface FilePreviewProps {
   /** Absolute file path (used to construct download URL) */
@@ -48,9 +47,7 @@ export function FilePreview({ filePath, sessionId, workspaceId, projectId, fileN
   }, [fileChangeEvent, fileName])
 
   // Build the image URL using the existing download endpoint
-  const imageUrl = sessionId
-    ? `/api/v1/files/download?session=${sessionId}&path=${encodeURIComponent(filePath)}&v=${version}`
-    : `/api/v1/files/download?workspace_id=${workspaceId}&workspace=${projectId}&path=${encodeURIComponent(filePath)}&v=${version}`
+  const imageUrl = buildFileDownloadUrl(filePath, { sessionId, workspaceId, projectId }, version)
 
   if (error) {
     return (
