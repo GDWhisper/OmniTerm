@@ -854,7 +854,7 @@ body.fm-dragging * {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, padding 0.15s ease;
 }
 .drawer-drag-grip::after {
   content: '';
@@ -867,6 +867,48 @@ body.fm-dragging * {
   .drawer-drag-bar:hover .drawer-drag-grip {
     background: var(--accent);
   }
+}
+
+/* DRAWER 左上角角标：一次拖拽同时改文件管理器宽度与抽屉高度。
+   落点是竖向左缘宽度条与横向顶部高度条的交点，故用两条平行 / 斜线（//）握把。
+   角标锚在抽屉容器（DrawerShell 根 div）的 position:absolute 角落——落在
+   标题栏（深棕木纹）内部最左上，与 .drawer-drag-bar 物理分离（不进入高度条
+   与标题栏底部的视觉重叠区，gap ≥ 3px），不再视觉重叠；
+   高对比度（深木纹 + 浅色描边）解决之前压在灰色 grip 背景上几乎看不清的问题。
+   命中区贴标题栏左上角，SVG path 顶到容器边框——既"角标加长触边框"（14px 见方
+   占满左上角）又不挤标题文字（标题栏让位 padding-left）。z-index 4 高于 bar(2)
+   拦截左上 pointerdown。 */
+.drawer-corner-grip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg-base, #FAF2DE);
+  cursor: nwse-resize;
+  touch-action: none;
+  user-select: none;
+  z-index: 4;
+  transition: color 0.15s ease, opacity 0.15s ease;
+  opacity: 0.85;
+}
+.drawer-corner-grip svg {
+  display: block;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .drawer-corner-grip:hover {
+    color: var(--text-bright, #FFFFFF);
+    opacity: 1;
+  }
+}
+/* 角标启用时给标题栏让出左侧空间——避免 // 与 ◆/标题文字挤在一起。
+   10px 原 padding + 16px 让位（2px 边距 + 14px 角标区）。 */
+.has-drawer-corner-grip > .panel-title-bar {
+  padding-left: 26px;
 }
 
 /* ── Table rows ── */

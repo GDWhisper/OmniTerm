@@ -76,9 +76,10 @@ export function GitPanel({ visible }: GitPanelProps) {
   /** Bumped on every completed status fetch; keeps the open file diff live. */
   const [statusTick, setStatusTick] = useState(0)
 
-  useEffect(() => {
-    sessionStorage.setItem('omniterm_git_drawer_height', String(drawerHeight))
-  }, [drawerHeight])
+  // 拖拽松手才落盘：逐帧写 sessionStorage 会在一次拖拽里写上百次
+  const commitDrawerHeight = useCallback((h: number) => {
+    sessionStorage.setItem('omniterm_git_drawer_height', String(h))
+  }, [])
 
   // Reset per-repo UI state when the binding changes
   useEffect(() => {
@@ -400,6 +401,7 @@ export function GitPanel({ visible }: GitPanelProps) {
           onClose={() => setDrawerTarget(null)}
           height={drawerHeight}
           onHeightChange={setDrawerHeight}
+          onHeightCommit={commitDrawerHeight}
           refreshTick={statusTick}
           onOpenInEditor={(absolutePath, repoRoot) => {
             setDrawerTarget(null)
@@ -419,6 +421,7 @@ export function GitPanel({ visible }: GitPanelProps) {
           onClose={() => setEditorTarget(null)}
           height={drawerHeight}
           onHeightChange={setDrawerHeight}
+          onHeightCommit={commitDrawerHeight}
           fileChangeEvent={null}
         />
       )}

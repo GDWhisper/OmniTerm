@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-09-01 10:56) `[frontend]` 抽屉（文件预览/diff 查看）左上角新增角标，一次拖拽同时调整文件管理器宽度与抽屉高度：向左拖变宽、向上拖变高，方向与左缘竖向拖拽条、顶边高度条完全一致（角标正落在这两条拖拽条的交点上）；宽度钳制走共享的 `clampFileManagerWidth`（[240, innerWidth/2]，与竖向拖拽条同一真源），拖拽中直改面板 DOM 宽度、松手才写 store 与 localStorage，并置 `isResizing` 关掉宽度补间避免滞后于指针；移动端不渲染（走 `MobileLayout`，没有可拖的面板宽度）。附带把抽屉高度持久化从「逐帧写 sessionStorage」改为松手写一次（`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/hooks/useDrawerCornerResize.ts`、`frontend/src/utils/layout.ts`、`frontend/src/components/Layout/Layout.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/index.css`）
+
 ### Fixed
 
 - (2026-09-01 09:25) `[frontend]` 修复抽屉高度拖拽条在触摸设备（触屏电脑/手机）上完全无法拖动：拖拽状态机只绑定 mouse 事件（触摸屏不派发该事件），且命中区仅 6px 高。现迁移到 Pointer Events（鼠标/触摸通用，含 pointercancel 取消）、拖拽条加 `touch-action: none` 防浏览器抢手势，命中区经负边距扩到 22px（视觉条仍 6px 不变）；高度钳制范围提取为共享 `clampDrawerHeight`（`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/utils/drawer.ts`、`frontend/src/index.css`）

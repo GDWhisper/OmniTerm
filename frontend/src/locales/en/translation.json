@@ -297,6 +297,7 @@
   "fm.lastModified": "Last Modified",
   "fm.size": "Size",
   "fm.actions": "Actions",
+  "drawer.resizeCorner": "Drag to resize panel width and drawer height",
   "drawer.loadFailed": "Failed to read file",
   "drawer.reloaded": "Reloaded",
   "drawer.unsavedChanges": "File has been modified. Save changes?",

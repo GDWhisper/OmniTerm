@@ -297,6 +297,7 @@
   "fm.lastModified": "修改时间",
   "fm.size": "大小",
   "fm.actions": "操作",
+  "drawer.resizeCorner": "拖动调整面板宽度与抽屉高度",
   "drawer.loadFailed": "读取文件失败",
   "drawer.reloaded": "已重新加载",
   "drawer.unsavedChanges": "文件已修改，是否保存？",

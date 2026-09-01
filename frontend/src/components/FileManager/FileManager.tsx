@@ -355,10 +355,10 @@ export function FileManager() {
     }
   }, [fileChangeEvent, activeSessionId])
 
-  // Save drawer height to sessionStorage
-  useEffect(() => {
-    sessionStorage.setItem('omniterm_drawer_height', String(drawerHeight))
-  }, [drawerHeight])
+  // 拖拽松手才落盘：逐帧写 sessionStorage 会在一次拖拽里写上百次
+  const commitDrawerHeight = useCallback((h: number) => {
+    sessionStorage.setItem('omniterm_drawer_height', String(h))
+  }, [])
 
   // ── Primary fetch effect: triggers on source/mode/path change ──
   // Replaces 3 previously-separate effects (manual mode, following mode, source switch)
@@ -1264,6 +1264,7 @@ export function FileManager() {
           }}
           height={drawerHeight}
           onHeightChange={setDrawerHeight}
+          onHeightCommit={commitDrawerHeight}
           fileChangeEvent={fileChangeEvent}
         />
       )}

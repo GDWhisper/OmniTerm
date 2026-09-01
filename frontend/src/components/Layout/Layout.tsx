@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore, MIN_SIDEBAR_WIDTH, type AppState } from '../../stores/appStore'
 import { Sidebar } from '../Sidebar/Sidebar'
@@ -14,6 +14,7 @@ import { useKeyboardHeight } from '../../hooks/useMediaQuery'
 import { decideSwipeAxis, applyEdgeResistance, resolveSwipeCommit } from '../../utils/swipe'
 import { hapticTap } from '../../utils/haptics'
 import { nextSessionId } from '../../utils/sessionNav'
+import { clampFileManagerWidth } from '../../utils/layout'
 
 /**
  * Pick the right pane for the active session: ChatView for ACP-backed
@@ -62,7 +63,6 @@ function SessionView() {
 }
 
 export function Layout() {
-  const [isDragging, setIsDragging] = useState(false)
   const {
     isMobile,
     sidebarOpen,
@@ -76,20 +76,21 @@ export function Layout() {
     activeSessionId,
     setSidebarWidth,
     setFileManagerWidth,
+    isResizing,
+    setIsResizing,
     crtScanlines,
     uiZoom,
   } = useAppStore()
 
   const layoutRef = useRef<HTMLDivElement>(null)
   const sidebarRef = useRef<HTMLDivElement>(null)
-  const fileManagerRef = useRef<HTMLDivElement>(null)
 
   // Shared drag-teardown: remove all mouse+touch listeners and reset body styles
   const cleanUpDrag = useCallback(() => {
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
-    setIsDragging(false)
-  }, [])
+    setIsResizing(false)
+  }, [setIsResizing])
 
   // Drag resize — direct DOM updates during drag, sync to store on mouseup.
   // Bypasses React re-render on every mousemove for smooth 60fps resize.
@@ -100,7 +101,7 @@ export function Layout() {
       const startX = clientX
       let curWidth = sidebarWidth
       const maxSidebar = Math.floor(window.innerWidth / 3)
-      setIsDragging(true)
+      setIsResizing(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
@@ -126,7 +127,7 @@ export function Layout() {
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidth, setSidebarWidth, cleanUpDrag]
+    [sidebarWidth, setSidebarWidth, setIsResizing, cleanUpDrag]
   )
 
   const handleFileManagerDrag = useCallback(
@@ -135,14 +136,14 @@ export function Layout() {
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const startX = clientX
       let curWidth = fileManagerWidth
-      const maxFileManager = Math.floor(window.innerWidth / 2)
-      setIsDragging(true)
+      setIsResizing(true)
 
       const onMove = (ev: MouseEvent | TouchEvent) => {
         ev.preventDefault()
         const mvX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX
-        curWidth = Math.max(240, Math.min(maxFileManager, fileManagerWidth + startX - mvX))
-        if (fileManagerRef.current) fileManagerRef.current.style.width = `${curWidth}px`
+        curWidth = clampFileManagerWidth(fileManagerWidth + startX - mvX)
+        const el = useAppStore.getState().fileManagerEl
+        if (el) el.style.width = `${curWidth}px`
       }
 
       const onUp = () => {
@@ -162,7 +163,7 @@ export function Layout() {
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [fileManagerWidth, setFileManagerWidth, cleanUpDrag]
+    [fileManagerWidth, setFileManagerWidth, setIsResizing, cleanUpDrag]
   )
 
   return (
@@ -171,10 +172,9 @@ export function Layout() {
           so WS connections survive mobile↔desktop switches. */}
       <AcpConnectionManager />
       {isMobile ? <MobileLayout /> : <DesktopLayout
-        isDragging={isDragging}
+        isResizing={isResizing}
         layoutRef={layoutRef}
         sidebarRef={sidebarRef}
-        fileManagerRef={fileManagerRef}
         sidebarOpen={sidebarOpen}
         sidebarCollapsed={sidebarCollapsed}
         sidebarWidth={sidebarWidth}
@@ -194,10 +194,9 @@ export function Layout() {
 }
 
 interface DesktopLayoutProps {
-  isDragging: boolean
+  isResizing: boolean
   layoutRef: React.RefObject<HTMLDivElement | null>
   sidebarRef: React.RefObject<HTMLDivElement | null>
-  fileManagerRef: React.RefObject<HTMLDivElement | null>
   sidebarOpen: boolean
   sidebarCollapsed: boolean
   sidebarWidth: number
@@ -214,10 +213,9 @@ interface DesktopLayoutProps {
 }
 
 function DesktopLayout({
-  isDragging,
+  isResizing,
   layoutRef,
   sidebarRef,
-  fileManagerRef,
   sidebarOpen,
   sidebarCollapsed,
   sidebarWidth,
@@ -234,6 +232,8 @@ function DesktopLayout({
 }: DesktopLayoutProps) {
   const sessions = useAppStore((s) => s.sessions)
   const activeExternalSession = useAppStore((s) => s.activeExternalSession)
+  // 注册容器节点：角标（DRAWER 子树内）与下方竖向拖拽条都要逐帧改它的宽度
+  const setFileManagerEl = useAppStore((s) => s.setFileManagerEl)
   return (
     <>
       <div
@@ -254,7 +254,7 @@ function DesktopLayout({
                 overflow: 'hidden',
                 background: 'var(--bg-base)',
                 borderRight: '1px solid var(--border-subtle)',
-                transition: isDragging ? 'none' : 'width 0.2s ease',
+                transition: isResizing ? 'none' : 'width 0.2s ease',
               }}
             >
               <Sidebar />
@@ -283,13 +283,13 @@ function DesktopLayout({
 
           {fileManagerOpen && (
             <div
-              ref={fileManagerRef}
+              ref={setFileManagerEl}
               className="flex-shrink-0 overflow-hidden"
               style={{
                 width: fileManagerCollapsed ? 40 : fileManagerWidth,
                 background: 'var(--bg-base)',
                 borderLeft: '1px solid var(--border-subtle)',
-                transition: isDragging ? 'none' : 'width 0.2s ease',
+                transition: isResizing ? 'none' : 'width 0.2s ease',
               }}
             >
               <RightPanel />

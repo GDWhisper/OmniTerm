@@ -43,6 +43,8 @@ interface FileDrawerProps {
   height: number
   /** Called when height changes (drag) */
   onHeightChange: (height: number) => void
+  /** Called once on drag release — caller persists the height here */
+  onHeightCommit?: (height: number) => void
   /** SSE change events — when the current file changes externally */
   fileChangeEvent: FileChangeEvent | null
 }
@@ -57,6 +59,7 @@ export function FileDrawer({
   onPathChange,
   height,
   onHeightChange,
+  onHeightCommit,
   fileChangeEvent,
 }: FileDrawerProps) {
   const { t } = useTranslation()
@@ -236,7 +239,7 @@ export function FileDrawer({
   const byteSize = isText === true ? new TextEncoder().encode(editedContent).length : 0
 
   return (
-    <DrawerShell height={height} onHeightChange={onHeightChange} title="drawer">
+    <DrawerShell height={height} onHeightChange={onHeightChange} onHeightCommit={onHeightCommit} title="drawer">
       {/* Top bar */}
       <div
         style={{

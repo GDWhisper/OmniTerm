@@ -44,13 +44,24 @@
 **约定**：
 
 - 统一用 `<DrawerShell>`（`frontend/src/components/Common/DrawerShell.tsx`）：
-  - props：`height`（受控）、`onHeightChange`（调用方负责持久化）、`title`（`.panel-title-bar` 文案，调用方负责 i18n）、`children`
+  - props：`height`（受控）、`onHeightChange`（逐帧更新受控高度）、`onHeightCommit`（拖拽松手一次，调用方在此落盘）、`title`（`.panel-title-bar` 文案，调用方负责 i18n）、`children`
   - 内部：外层容器（flex column + `--bg-elevated` + borderTop）+ `.panel-title-bar` + 高度拖拽条（`.drawer-drag-bar`/`.drawer-drag-grip`，index.css：视觉 6px，命中区经 padding + 负边距扩到 22px 供触摸）
   - 拖拽逻辑在 `useDrawerResize`（`frontend/src/hooks/useDrawerResize.ts`）：Pointer Events（pointerdown/move/up/cancel，兼容鼠标与触摸；mouse 事件在触摸设备不派发，禁止退回）+ `touch-action: none`；高度钳制走 `clampDrawerHeight`（`utils/drawer.ts`，[120, innerHeight-60] 单一真源）
 - 调用方提供：header 行（标题 + 操作按钮）、内容区（`flex: 1, minHeight: 0`）、可选状态栏
-- 高度持久化由调用方做（FileDrawer → FileManager `omniterm_drawer_height`；GitDrawer → GitPanel `omniterm_git_drawer_height`），hook 只做纯拖拽状态机
+- 高度持久化由调用方做（FileDrawer → FileManager `omniterm_drawer_height`；GitDrawer → GitPanel `omniterm_git_drawer_height`），hook 只做纯拖拽状态机。**只在 `onHeightCommit` 里写 storage**——用 useEffect 监听高度会在一次拖拽里逐帧落盘
 - **默认高度**：无历史记录时取视口高度 50%（`getInitialDrawerHeight`，`frontend/src/utils/drawer.ts`，与拖拽钳制同范围）——点开文件默认占文件管理器一半
 - 禁止复制拖拽逻辑/外层容器样式——新抽屉一律基于 DrawerShell
+
+**左上角角标（corner-grip convention）**：抽屉顶边高度条与面板左缘宽度条的交点处有一个角标，一次拖拽同时改文件管理器宽度与抽屉高度。
+
+- 视觉：`.drawer-corner-grip`（index.css，内嵌两条平行 `/` 斜线 SVG（//）+ `cursor: nwse-resize`，描边色取浅色（深木纹标题栏上的高对比），hover 变最亮；14×14 命中区——刚好占满标题栏内左上角、`//` 顶到边框）
+- **物理位置**：角标不在 `.drawer-drag-bar` 内部——是 `DrawerShell` 根 div 的绝对定位子元素（`top: 0; left: 0`），锚在标题栏最左上角。深棕木纹背景上浅色描边对比度高、清晰可见；不与 `.drawer-drag-grip` 灰色背景条视觉重叠（角标底 ≤ 标题栏底之上 ≥3px，bar.padding 上扩到标题栏底部以上 10px）。`z-index: 4` 高于 bar(2)
+- **不要放回 bar 内部**：22px 高度条已被 `.drawer-drag-grip` 整条浅灰背景占满，角标塞进去必然被压住、几乎看不见；本约定即在解此问题
+- **标题栏让位**：角标启用时（`corner.enabled`），DrawerShell 根 div 加 `has-drawer-corner-grip` 类，`.has-drawer-corner-grip > .panel-title-bar` 把 `padding-left` 撑到 26px（原 10px + 14px 角标区 + 2px 间距），`◆`/标题不再挤在角标上
+- 方向语义与两个独立拖拽条一致：向左 = 面板变宽，向上 = 抽屉变高；宽度钳制走 `clampFileManagerWidth`（`utils/layout.ts`，[240, innerWidth/2]），与 Layout 竖向拖拽条共用同一真源
+- 拖拽中**直改 `fileManagerEl` 的 DOM 宽度**（元素由 Layout 挂载时注册进 `appStore`），松手才 `setFileManagerWidth` + 写 localStorage：角标与竖向条分处不同组件树，逐帧更新 store 会让整棵布局（含终端/聊天）重渲染
+- 拖拽期间置 `appStore.isResizing`，让面板宽度关掉 `transition`（否则补间滞后于指针）
+- 移动端不渲染：走 `MobileLayout` 没有可拖的面板宽度（竖向拖拽条同样不渲染），判定见 `useDrawerCornerResize` 的 `enabled`
 
 **已有案例**：FileDrawer（文件查看/编辑）、GitDrawer（diff/commit 查看）
 

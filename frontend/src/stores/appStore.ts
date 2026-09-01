@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { Project, Workspace, Session } from '../api/client'
 import { toAbsolutePath } from '../utils/path'
+import { clampFileManagerWidth } from '../utils/layout'
 
 // Re-export for convenience
 export type { Project, Workspace, Session }
@@ -61,6 +62,17 @@ export interface AppState {
   rightPanelTab: 'files' | 'git'
   sidebarWidth: number
   fileManagerWidth: number
+  /**
+   * 文件管理器容器 DOM 节点，由 Layout 挂载时注册。
+   *
+   * DRAWER 左上角角标与布局里的竖向拖拽条分处不同子树，角标要逐帧改宽度
+   * 只能直改 DOM —— 走 store 会让整棵布局（含终端/聊天面板）每帧重渲染。
+   */
+  fileManagerEl: HTMLDivElement | null
+  setFileManagerEl: (el: HTMLDivElement | null) => void
+  /** 尺寸拖拽进行中（侧栏/文件管理器竖向拖拽条、DRAWER 角标）：布局据此关掉宽度 transition */
+  isResizing: boolean
+  setIsResizing: (v: boolean) => void
 
   // Terminal
   fontSize: number
@@ -272,7 +284,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 旧版本默认 160 留下的过窄存档值自愈到合法区间
     return Number.isFinite(stored) ? Math.max(MIN_SIDEBAR_WIDTH, stored) : fallback
   })(),
-  fileManagerWidth: parseInt(localStorage.getItem('omniterm_fm_width') || String(Math.max(240, Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)))),
+  // 存档值缺失/损坏时取视口 7/24；钳制复用 clampFileManagerWidth，
+  // 窗口变窄后遗留的超宽存档值会自愈回合法区间（与拖拽共用上下界）。
+  fileManagerWidth: (() => {
+    const fallback = Math.floor((typeof window !== 'undefined' ? window.innerWidth : 1920) * 7 / 24)
+    const stored = parseInt(localStorage.getItem('omniterm_fm_width') ?? '')
+    return clampFileManagerWidth(Number.isFinite(stored) ? stored : fallback)
+  })(),
+  fileManagerEl: null,
+  isResizing: false,
   fontSize: parseInt(localStorage.getItem('omniterm_font_size') || '14'),
   // Read persisted zoom; fall back to default if missing OR corrupted (e.g. a
   // previously-written 'NaN' is truthy and parses to NaN, so the `||` above
@@ -358,6 +378,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
 
   setFileManagerWidth: (w) => set({ fileManagerWidth: w }),
+
+  setFileManagerEl: (el) => set({ fileManagerEl: el }),
+
+  setIsResizing: (v) => set({ isResizing: v }),
 
   setFontSize: (s) => {
     const clamped = Math.max(10, Math.min(24, s))
