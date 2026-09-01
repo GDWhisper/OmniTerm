@@ -835,6 +835,40 @@ body.fm-dragging * {
   box-shadow: none;
 }
 
+/* Drawer 高度拖拽条（DrawerShell）：视觉条仍是 6px（padding 居中），
+   命中区经 padding + 负边距扩到 22px（向上 10px 进标题栏、向下 6px 进内容区），
+   触摸设备才够得着；touch-action: none 阻止浏览器把手势当页面滚动 */
+.drawer-drag-bar {
+  position: relative;
+  z-index: 2;
+  padding: 10px 0 6px;
+  margin: -10px 0 -6px;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+  flex-shrink: 0;
+}
+.drawer-drag-grip {
+  height: 6px;
+  background: var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+.drawer-drag-grip::after {
+  content: '';
+  width: 32px;
+  height: 2px;
+  background: var(--text-dim);
+}
+/* 触摸设备无 hover，且点按后 :hover 会粘滞——限定到有 hover 能力的设备 */
+@media (hover: hover) {
+  .drawer-drag-bar:hover .drawer-drag-grip {
+    background: var(--accent);
+  }
+}
+
 /* ── Table rows ── */
 .fm-row {
   transition: background 0.15s ease;

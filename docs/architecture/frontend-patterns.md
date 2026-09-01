@@ -45,8 +45,8 @@
 
 - 统一用 `<DrawerShell>`（`frontend/src/components/Common/DrawerShell.tsx`）：
   - props：`height`（受控）、`onHeightChange`（调用方负责持久化）、`title`（`.panel-title-bar` 文案，调用方负责 i18n）、`children`
-  - 内部：外层容器（flex column + `--bg-elevated` + borderTop）+ `.panel-title-bar` + 6px 拖拽条
-  - 拖拽逻辑在 `useDrawerResize`（`frontend/src/hooks/useDrawerResize.ts`）：window mousemove/mouseup 生命周期、高度钳制 [120, innerHeight-60]
+  - 内部：外层容器（flex column + `--bg-elevated` + borderTop）+ `.panel-title-bar` + 高度拖拽条（`.drawer-drag-bar`/`.drawer-drag-grip`，index.css：视觉 6px，命中区经 padding + 负边距扩到 22px 供触摸）
+  - 拖拽逻辑在 `useDrawerResize`（`frontend/src/hooks/useDrawerResize.ts`）：Pointer Events（pointerdown/move/up/cancel，兼容鼠标与触摸；mouse 事件在触摸设备不派发，禁止退回）+ `touch-action: none`；高度钳制走 `clampDrawerHeight`（`utils/drawer.ts`，[120, innerHeight-60] 单一真源）
 - 调用方提供：header 行（标题 + 操作按钮）、内容区（`flex: 1, minHeight: 0`）、可选状态栏
 - 高度持久化由调用方做（FileDrawer → FileManager `omniterm_drawer_height`；GitDrawer → GitPanel `omniterm_git_drawer_height`），hook 只做纯拖拽状态机
 - **默认高度**：无历史记录时取视口高度 50%（`getInitialDrawerHeight`，`frontend/src/utils/drawer.ts`，与拖拽钳制同范围）——点开文件默认占文件管理器一半

@@ -35,23 +35,10 @@ export function DrawerShell({ height, onHeightChange, title, children }: DrawerS
         <span>{title}</span>
       </div>
 
-      {/* Drag bar */}
-      <div
-        onMouseDown={handleDragStart}
-        style={{
-          height: 6,
-          cursor: 'ns-resize',
-          background: 'var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          transition: 'background 0.15s ease',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent)' }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--border-subtle)' }}
-      >
-        <div style={{ width: 32, height: 2, borderRadius: 0, background: 'var(--text-dim)' }} />
+      {/* 高度拖拽条：视觉 6px，命中区经负边距扩到 22px（触摸目标），
+          Pointer Events + touch-action: none 见 useDrawerResize / index.css */}
+      <div className="drawer-drag-bar" onPointerDown={handleDragStart}>
+        <div className="drawer-drag-grip" />
       </div>
 
       {children}

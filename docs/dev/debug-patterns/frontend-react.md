@@ -1,6 +1,6 @@
 # React 与前端 — 调试模式
 
-覆盖：key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调、后端权威状态清除、慢速拖动手势误触、写回定位键权威性。
+覆盖：key 重挂载、同步→异步破坏 cleanup、依赖数组对象字面量、mousemove setState 重渲染、三态 loading、高频流聚合、StrictMode 异步回调、后端权威状态清除、慢速拖动手势误触、写回定位键权威性、只绑 mouse 事件的拖拽在触摸端静默全废。
 
 ---
 
@@ -112,3 +112,14 @@
 **案例证据**：
 - 2026-08-18 幽灵行：replay 帧不在 `HYDRATE_GATED_FRAMES` → 刷新后 replay 先于 `GET /messages` 落定到达，store 空 → `commitReplay` 用重建消息（无 dbId）替换 → `replay_end` 全量 `syncToDb` 无 id 文本匹配，而后端累积 `text` 含 tool 流式描述、前端 cook 后为纯文本，语义已漂移 → 匹配失败 INSERT 重复 assistant 行。修复：replay 帧纳入 hydrate 门控（suppress）+ hydrate 落定后 RAW 残留行带 dbId 回写（`storedRawRowToSyncPayload`）。
 - 2026-08-11 同族：后端 `UPDATE ... WHERE role AND text` 无行限定 + text 无唯一性 → 14 行同 text 的 `blocks` 被一次覆盖成 1 份（匹配键不唯一 = 无约束）。修复：payload 带 `id` 精确匹配，无 id 时逐行消费且限定单行。
+
+---
+
+## 模式 11：只绑 mouse 事件的拖拽在触摸设备上静默全废
+
+**React-触摸拖拽**：mouse 系事件（`mousedown`/`mousemove`）在触摸操作时**完全不派发**——拖拽条只绑 `onMouseDown` 时，触摸屏上不是「感应差」而是零响应且静默（无报错无日志，用户以为是交互设计如此）。拖拽/缩放类交互统一走 Pointer Events（`pointerdown` 记起点 + window 级 `pointermove`/`pointerup`/`pointercancel`，按 `pointerId` 配对，多指不接管），并配两件：① 拖拽元素 `touch-action: none`——否则浏览器把手势判为页面滚动直接抢走指针，`preventDefault` 替代不了；② 命中区扩到触摸目标尺寸（≥20px）——视觉条可以仍是几 px，用 padding + 负边距扩命中区而不改布局。`pointercancel` 必须当结束处理（系统手势打断时不发 `pointerup`）。
+
+**适用**：一切拖拽条、列宽/分栏调整、滑块交互。审计手法：grep `onMouseDown` + `cursor: *-resize`，命中而无触摸/pointer 绑定即 bug；`:hover` 高亮限定 `@media (hover: hover)`（触摸端无 hover 且点按后粘滞）。
+
+**案例证据**：
+- 2026-09-01 抽屉高度拖拽条（FileDrawer/GitDrawer 共享的 DrawerShell）触摸完全拖不动：hook 只绑 mousedown/mousemove + 命中区仅 6px。修复：迁移 Pointer Events + `touch-action: none` + 命中区扩到 22px（视觉不变）。

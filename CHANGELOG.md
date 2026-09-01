@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-09-01 09:25) `[frontend]` 修复抽屉高度拖拽条在触摸设备（触屏电脑/手机）上完全无法拖动：拖拽状态机只绑定 mouse 事件（触摸屏不派发该事件），且命中区仅 6px 高。现迁移到 Pointer Events（鼠标/触摸通用，含 pointercancel 取消）、拖拽条加 `touch-action: none` 防浏览器抢手势，命中区经负边距扩到 22px（视觉条仍 6px 不变）；高度钳制范围提取为共享 `clampDrawerHeight`（`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/utils/drawer.ts`、`frontend/src/index.css`）
+
 ## [0.2.19] - 2026-08-31
 
 ### Added
