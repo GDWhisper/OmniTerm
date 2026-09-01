@@ -245,7 +245,7 @@ POST/PUT/DELETE /api/v1/agents[/{id}]
 GET  /api/v1/files (list)
 POST /api/v1/files (upload multipart)
 DELETE /api/v1/files
-GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（相对搜索根，@ 补全用）
+GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（相对搜索根，@ 补全用）；**读接口对绝对 `path` 不做 `fs::sanitize_path`**（跨 worktree 浏览有意为之，实测 `?path=/tmp/x/../../../etc/passwd` 可读），写接口才强制边界——故前端相对路径解析**禁止折叠 `..`**（`filePreviewShared.ts::resolveRelativeRef` 直接拒绝），不在浏览器侧造第二套路径真相
 POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands

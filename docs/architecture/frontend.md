@@ -34,7 +34,7 @@ src/
     ├── Terminal/ — Terminal.tsx
     ├── Chat/ — ChatView.tsx, ChatMessage.tsx, ChatInput.tsx (Phase 4a: ACP session rendering), FileLocationLink.tsx（agent 上报的文件路径 → 点开 FM 抽屉；内部走 `getState()`，不动 ChatMessageView props）, messageActions.ts（气泡动作注册表——copy/quote/edit/regenerate/copyMarkdown 唯一真源，桌面 hover + 移动长按共用，D2）, MessageActionBar.tsx（动作条渲染：按 visible 过滤，桌面 hover 动作条 + 移动 portal 浮动菜单）
     ├── AgentPicker/ — AgentPicker.tsx (Phase 3: <select> for create-session modal)
-    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
+    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, MarkdownPreview.tsx（.md 预览：相对图片/链接改写，渲染核心复用 `Common/MarkdownCore.tsx`）, filePreviewShared.ts（预览策略单一真源：扩展名分类、SSE 去抖常量、行数阈值、相对路径解析、下载 URL 构造）, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
     ├── RightPanel/ — RightPanel.tsx（右栏容器：FILES | GIT 标签、统一标题栏、折叠 rail；两 tab 常挂载 display 切换）
     ├── GitPanel/ — GitPanel.tsx（分支/远端操作 + CHANGES|HISTORY + 底部提交框）, GitDrawer.tsx（diff/commit 抽屉）, DiffView.tsx, diffParser.ts（unified diff 解析）
     ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx（SessionsSection 含三个断连/回收滑块，复用 DisconnectSlider 组件）
@@ -252,6 +252,6 @@ and render rich cards instead of the current text-only fallback.
 - **`utils/proxyUrl.ts::rewriteLocalUrl(raw)`**：匹配 `http(s)://(localhost|127.0.0.1|0.0.0.0):{port}` 或裸 `hostname:port`，返回 `/proxy/{port}/...` 相对 URL；非本机 URL 返回 `null`。端口范围与后端白名单对齐（3000..=65535），黑名单/自身端口由后端 403 兜底。
 - **子域名形态（`setProxyDomain` + `proxy_domain`）**：后端配置 `--proxy-domain` 时，`/system/info` 返回 `proxy_domain`，App 启动时 `setProxyDomain` 缓存到模块级变量；此后 `rewriteLocalUrl` 命中本机 URL 时生成 `{protocol}//{port}.{domain}:{backendPort}/...` 子域名绝对 URL（根治绝对路径 SPA），未配置则回退路径前缀。后端端口 = `import.meta.env.VITE_BACKEND_PORT`（dev 构建注入，`vite.config.ts`）/ `window.location.port`（生产同源，`import.meta.env.PROD` 区分）。
 - **路径前缀形态的绝对路径 SPA 兜底（后端响应体重写）**：路径前缀下目标应用内绝对路径资源/API（`/assets/*`、`/api/*`）会绕过前缀直达 omniterm-host 而 404——后端对 `text/html`/`text/javascript` 响应做字节级前缀重写兜底（见 `docs/architecture/backend.md`「响应体重写与绝对路径 SPA」），局域网纯 IP 场景开箱即用；子域名方案（有域名时）仍为首选。
-- **Chat 接入点**（`components/Chat/Markdown.tsx`）：react-markdown 的 `a` 组件渲染时判断 href 是否本机链接——是则保留原始 href（hover/复制仍是 localhost），`onClick` 里 `e.preventDefault()` + `window.open(rewritten, '_blank', 'noopener')`。
+- **Chat 接入点**（`components/Common/MarkdownCore.tsx` 的 `MarkdownLink`，聊天 `Chat/Markdown.tsx` 与文件抽屉 `FileManager/MarkdownPreview.tsx` 共用同一渲染核心）：react-markdown 的 `a` 组件渲染时判断 href 是否本机链接——是则保留原始 href（hover/复制仍是 localhost），`onClick` 里 `e.preventDefault()` + `window.open(rewritten, '_blank', 'noopener')`。**圆角差异走 props 勿改默认值**：聊天已上线 `codeRadius=6/inlineCodeRadius=3`，新容器按 UI 规范取默认 0。
 - **终端接入点**（`hooks/useTerminal.ts`）：`WebLinksAddon` 构造传 `handler` 回调接管链接点击，`rewriteLocalUrl` 命中则重写、否则默认 `window.open(uri)`。**已知限制**：addon 0.12 内部用 `new URL()` 校验，无法识别无 scheme 的裸 `localhost:3000`（只识别 `http(s)://` 开头），见计划风险表降级。
 - **dev 代理**（`vite.config.ts`）：`/proxy` 前缀透传到后端，`ws: true` 支撑 WS relay（P2）。
