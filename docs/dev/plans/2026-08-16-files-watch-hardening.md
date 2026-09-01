@@ -1,7 +1,7 @@
 # 文件监控有界化与正确性加固（`/files/watch`）
 
-> 状态：**设计稿（2026-08-16）**，ADR-6 已实施；**方向已于勘误 3 变更为 ADR-9（watch 范围收缩为视图范围）**，Phase 0-5 待实施
-> 触发条件：修改 `src/api/files_watch.rs`、`src/fs/mod.rs` 的 ignore 规则（`SKIP_DIRS` / `search_recursive`）、`frontend/src/hooks/useFileWatcher.ts`、`frontend/src/components/FileManager/` 下 `FileManager.tsx` / `FileDrawer.tsx` / `FilePreview.tsx` 的文件变更刷新链路中任一项前**必读**（**先读勘误 3 与 ADR-9**，再看 ADR-1~8 的状态戳 —— 其中 4 条已撤销）
+> 状态：**设计稿（2026-08-16）**，ADR-6 已实施；**方向已于勘误 3 变更为 ADR-9（watch 范围收缩为视图范围）**，Phase 0-5 待实施；**勘误 4（2026-09-02）实测确证：workspace 模式下 watch 根绑的是别的会话的目录，浏览树零事件** —— ADR-9 因此多一条功能理由（原论证纯为性能）
+> 触发条件：修改 `src/api/files_watch.rs`、`src/fs/mod.rs` 的 ignore 规则（`SKIP_DIRS` / `search_recursive`）、`frontend/src/hooks/useFileWatcher.ts`、`frontend/src/components/FileManager/` 下 `FileManager.tsx` / `FileDrawer.tsx` / `FilePreview.tsx` 的文件变更刷新链路中任一项前**必读**（**先读勘误 3、4 与 ADR-9**，再看 ADR-1~8 的状态戳 —— 其中 4 条已撤销）
 > 关联：`docs/architecture/backend.md` §File watcher、`docs/dev/debug-patterns/resource-lifecycle.md` 模式 8（外部注册集无界家族）、`docs/dev/performance-and-safety.md` §P1（无界累积）、`scripts/verify-inotify-fix.sh`
 > 前序修复：commit `188a6b2`（手动递归注册跳过 node_modules）、`fbeb05d` / `9277493`（inotify fd 泄漏）
 
@@ -29,6 +29,11 @@
 > | ADR-3 / ADR-5 / ADR-6 / ADR-7 | 保留 | ADR-6 已实施；ADR-5 兼具正确性与洪峰路径分配削减（新增理由，见其「补充」） |
 >
 > 消解的问题：**1、3、10 由范围收缩消解**（不再有大规模 watch 集合、不再有手动递归、不再有深层子树）；**4 反转为语义对齐**；**7 的刷新放大**在事件天然只来自可见目录后进一步收敛。
+
+> **勘误 4（2026-09-02，markdown 渲染预览实机验证时实测确证）**：
+> 1. **watch 根不只是「过大」，在 workspace 模式下是「错的」**——比本 plan 的前提更严重。`FileManager.tsx:123` 以 `useFileWatcher({ sessionId: activeSessionId })` 绑根，workspace（project/worktree）模式浏览的路径与该会话 cwd 不同时，SSE 连的是**另一个目录**，浏览树一个事件都收不到。实测：workspace 模式浏览 `/tmp/mdprev`，网络日志显示订阅是 `files/watch?session=<别的项目的 ACP 会话>`，在该目录新建/改文件，列表与抽屉全程无反应；只有在被浏览路径下新建会话才对上。Phase 0-5 未实施 ⇒ **这不是回归，是该缺口的首次实证**，且它给 ADR-9 的 `path`/`drawer` 参数补了一条功能理由（原论证纯为性能）。
+> 2. **消费端从 1 个变 2 个**（「不纳入范围」第 2 行的前提已变化）：`FileDrawer` 的 markdown 预览现在吃同一条 SSE，放大代价从「一次列表刷新」变成「一次整篇重解析」。已在抽屉侧补 500ms 去抖（`filePreviewShared.ts::FILE_REFRESH_DEBOUNCE_MS`，与图片预览共用同一常量），实测 3 次连发合并为 1 次读请求。**连带影响「待拍板事项」的 500→200ms 下调**：下调前需把整篇重解析计入预算。
+> 3. **ADR-9 落地时须一并回归抽屉的模式语义**：编辑态收到外部变更只能标记不得重取（重取会重置 `editedContent` 吞掉未保存编辑），且切回预览要补刷（本轮已就地修掉「编辑期外部改动 → 切回预览停在旧内容」的死角，见 `FileDrawer.tsx::switchToPreview`）。视图范围 watch 生效后事件量上升，这两条要重测。
 
 ---
 
@@ -110,9 +115,10 @@ commit `188a6b2` 修复了「含 node_modules 的大项目内存无界增长至 
 | 排除项 | 理由 |
 |---|---|
 | 引入 `ignore` crate 读 `.gitignore` | 需增依赖，且 `.gitignore` 不覆盖所有重目录（`node_modules` 常被 ignore 但 `dist` 未必），并非本问题的充分解。硬上界 + 共享黑名单已覆盖已确证需求。翻盘条件：出现「用户项目含自定义重目录导致反复触顶上限」的真实反馈。**勘误 3：ADR-9 后彻底作废** —— 不再枚举目录树，无需任何 ignore 清单 |
-| watcher 复用池（按 `watch_path` 引用计数 + fan-out） | 实测当前只有一个消费点（`FileManager.tsx:114`；`FileDrawer` 仅 `import type`），inotify 实例上限 128 尚未接近。属「将来可能用到」，按奥卡姆剃刀不做。翻盘条件：新增第二个 watch 消费点，或实测出现 instance 耗尽 |
+| watcher 复用池（按 `watch_path` 引用计数 + fan-out） | 实测当前只有一个消费点（`FileManager.tsx:114`；`FileDrawer` 仅 `import type`），inotify 实例上限 128 尚未接近。属「将来可能用到」，按奥卡姆剃刀不做。翻盘条件：新增第二个 watch 消费点，或实测出现 instance 耗尽。**勘误 4：「只有一个消费点」的前提已不成立**——`FileDrawer` 的 markdown 预览现真实消费同一条流；但仍是**一条 SSE 前端扇出给多组件**，后端 watch 实例数未变，翻盘条件（实例耗尽 / 第二条连接）未到，结论不变 |
 | 升级 notify 到 9.0.0-rc | 当前锁 8.2.0（`Cargo.lock:1828`），上游 9.0.0-rc.4 已发布，但**我未能核实其是否修了 `handle_inotify` 饿死 mio poll**（crates.io API 返回限流错误，未读到 changelog / issue）。不在无证据情况下升 pre-release 依赖。**后续动作**：查 notify issue tracker 确认；若上游确已修，那才是剩下那一半的真正根因修复，届时单独评估。**勘误 3：ADR-9 后该上游缺陷不再可达**（≤2 watch 远离其触发规模），升级动机从「修 bug」降为「常规维护」 |
 | 列表条目数上界（`list_dir` 无 `MAX_ENTRIES`） | 讨论中发现：`list_dir`（`fs/mod.rs:293`）对返回条目数无上限，含十万文件的目录会产出巨大响应体。属**独立于 watch 的既有问题**（手动打开该目录同样触发），不混入本 plan。**后续动作**：登记到 `docs/dev/plans/backlog/`，按 AGENTS §6 单独评估 |
+| 切换文件时静默丢弃未保存编辑（`FileDrawer`） | 勘误 4 同批实测发现：未保存守卫只挂在「关闭」上，缓冲区脏时直接点列表里另一个文件即换 `filePath`，走初始加载分支重置 `modified=false`，编辑内容无确认消失。与 watch 无关（不依赖任何事件即可复现），不混入本 plan。**修法已有共识**：把 `handleClose` 的未保存确认提取为「路径变更前守卫」，与关闭共用同一判定 |
 
 
 ---
