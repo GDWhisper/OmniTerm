@@ -6,7 +6,7 @@ import { IconFolderOpen } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 
 /**
- * Right panel container (ADR-5, docs/dev/plans/2026-07-26-git-panel.md).
+ * Right panel container (ADR-5, docs/dev/plans/archive/2026-07-26-git-panel.md).
  * Owns the FILES | GIT tab state, the unified title bar and the collapsed
  * 40px rail. Both tab contents stay mounted (display toggle) so FileManager
  * keeps its navigation state and GitPanel polling stops when hidden.

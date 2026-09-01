@@ -15,7 +15,7 @@ src/
 │   ├── themeStore.ts    # Zustand: light/dark/system theme + .dark class on <html>
 │   ├── toastStore.ts    # Zustand: toast notifications (auto-dismiss)
 │   ├── agentStore.ts    # Zustand: agent registry (Phase 3 — static catalog, no live state)
-│   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/2026-07-26-git-panel.md）
+│   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/archive/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
 │   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ pty 滚轮接管（方案 C，ViewportController 接线）

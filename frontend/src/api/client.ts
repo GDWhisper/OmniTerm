@@ -541,7 +541,7 @@ export const api = {
     return request<FileEntry[]>(url)
   },
 
-  // ── Git panel (docs/dev/plans/2026-07-26-git-panel.md ADR-2: repo bound
+  // ── Git panel (docs/dev/plans/archive/2026-07-26-git-panel.md ADR-2: repo bound
   //    to session/workspace id only; the backend resolves the repo root) ──
   gitStatus: (bind: GitBind) =>
     request<GitStatus>(`/git/status?${gitBindQuery(bind)}`, { silent: true }),

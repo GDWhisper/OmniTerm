@@ -2347,7 +2347,7 @@ select optgroup option {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Git panel — docs/dev/plans/2026-07-26-git-panel.md ADR-7.
+   Git panel — docs/dev/plans/archive/2026-07-26-git-panel.md ADR-7.
    Top branch/remote row + CHANGES|HISTORY switch + bottom commit box.
    ──────────────────────────────────────────────────────────────────── */
 .git-empty {
