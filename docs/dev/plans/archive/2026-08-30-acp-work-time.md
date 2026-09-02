@@ -1,9 +1,9 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；偏差见文末「勘误」E1–E11）
-> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；偏差见文末「勘误」E1–E12）
+> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
-> 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（= turn 起点），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
+> 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
 
 ## 术语
 
@@ -52,7 +52,7 @@ mark_prompt_idle()    → wall_ms = now - started
 
 - **人在场时长**（前端可见 / WS 连接区间）：需处理标签页隐藏、断网、多端同开去重，且本质是另一个产品问题。选 agent 口径的红利正是全部在后端连接任务上结算，与浏览器状态解耦。
 - **日/周报表、按项目/agent 汇总**：需要按天明细表（`session_work_log`）支撑聚合，当前只有「这个会话跑了多久」的确证需求。见 D3 翻盘条件。
-- **流式 turn 的前端实时跳动计时**：前端自算墙钟必然与后端 `work_ms`（含扣除）口径不一致，等于引入第二套真相。耗时数字统一在定稿后一次性出现。
+- ~~**流式 turn 的前端实时跳动计时**~~ → **已翻盘实施，见 E12**。原否决理由（前端自算墙钟与后端 `work_ms` 口径不一致 = 第二套真相）当时成立，故记录在此：实施后靠「审批挂起冻表 + 同槽位被结算值取代 + 文案标注估算」三条约束把口径偏差压到亚秒级。
 - **tmux / pty 会话计时**：那两类没有 prompt turn 语义（只有 `last_activity` 与屏幕检测），口径不可比，不强行套。
 - **历史数据回补**：`chat_messages` 无结束时刻，任何回补都是造假。老行 `duration_ms` NULL → 前端不显示。
 
@@ -262,3 +262,17 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 行容器按 `workText || visibleActions.length` 条件渲染：`MessageActionBar` 无动作时返回 `null`，无条件渲染会留一个空 div，被列 `gap: 6` 撑成凭空多出的 6px。
 
 真机实测（dev :9778，三条真实消息）：气泡宽 445/478/519px 时耗时与动作栏同行（两者 top 相差 1.2–1.4px），行右缘 721.0/754.0/795.0 vs 气泡右缘 721.2/754.4/795.3；把行宽压到 110px 触发换行，耗时落到第二行且右缘仍等行右缘（386 = 386）。
+
+### E12 — 流式实时计时落地（**翻盘「不纳入范围」第 3 条与 E8 的「定稿后一次性出现」**）
+
+用户追加要求：运行中也在 assistant 气泡底部显示计时器，且不得与乱码特效（`ThinkingIndicator`）干扰重叠。口径边界与实现约束：
+
+- **只渲染、不入库、不参与同步**：本地读数走 `frontend/src/utils/turnClock.ts`（模块级有界表，`MAX_TRACKED_TURNS = 16` 最旧淘汰，守住 AGENTS §P1），后端 `work_ms` 仍是唯一真相源；定稿瞬间同一槽位被结算值取代。文案「工作中」vs「已工作」、色板 `--text-muted` vs `--text-faint`、tooltip 三处标注估算性质，避免读成结算值。
+- **跳动不进 React state**：`ChatMessageView` 靠 memo + message 引用稳定跳过重渲染，每秒 setState 会把整列重画一遍。`LiveWorkElapsed` 用 `setInterval(1000)` 直写 `textContent`（与 `ThinkingIndicator` 的 rAF 同手法，但秒级读数不必逐帧）。渲染门控只用 per-turn 布尔 `isLive`，不在渲染期读外部时钟。
+- **审批挂起冻表**：镜像后端 `work_ms = wall_ms − wait_ms`，`setPermission` / `removePermission` / `reconcilePermissions` 按「未决队列非空」暂停与恢复（多个并发审批只 resolve 一个仍算挂着，对齐 `wait_depth`，见 E1）。无在建 turn 时 `setTurnWaiting` 自身 no-op。
+- **停表路径必须穷举**：`markDone` / `markError` / `markEnded` / `reset` 四类，漏一条就在气泡上留下一个永不落定的数字；`reset`（会话状态整条抹掉）尤其容易忘，`chatStore.test.ts` 的 `turnClock 接线` describe 逐条守住。
+- **E11 的行渲染门控扩到 `workText || isLive || visibleActions.length`**：`messageActions.ts` 五个动作的 `visible` 全部硬排 streaming，流式期 `visibleActions` 为空，不加 `isLive` 就没有行容器，计时器无处可放。量宽 effect 同条件，否则流式期正文增长时不跟量。
+- **锚点真相修正**：重连/刷新接回一个仍在跑的 turn 时，锚点取末尾 streaming 行的 `createdAt` 与此刻的较早者。注意 `created_at` **不是 turn 起点**，而是后端首次防抖 flush 建行的时刻——所以中途接回的读数偏小，这是可接受的保守偏差（宁可少报不虚报），不要误当成精确对齐。表里也没有 turn 起点可用：WS 断连期间后端的 `wait_depth` 变化前端收不到，跨断连的扣除段本就补不回来。
+- **prompt 已发、气泡未生**（agent 首帧之前）：按用户确认只显乱码行、不加计时器——没有气泡就没有「气泡底部」这个位置。
+
+真机实测（dev :9778，`Pi ACP_0830-1527` 会话恢复后连跑两 turn）：首帧前 `.chat-meta-row` 保持 5 条（无新行），气泡出现后第 6 条只含 `工作中 N秒` 且每秒续跳（3→23、9→48 两轮观测）；乱码流同时正常涨档（16→24→36 字符），两者 `getBoundingClientRect` 恒不交叠，消息列 `scrollWidth − clientWidth = 0`（无横向溢出）；定稿当场替换为 `已工作 49秒`（最后一次实时读数 48秒，偏差亚秒级），动作栏回归。测试后已点「释放智能体进程」把会话恢复成 DEAD。

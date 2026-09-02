@@ -1,4 +1,5 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -8,6 +9,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime, formatWorkDuration } from '../../utils/formatTime'
+import { turnElapsedMs } from '../../utils/turnClock'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -25,6 +27,21 @@ const USER_TEXT_PREVIEW_LINES = 8
 // 正文气泡的宽度上限（思考块/工具卡/文本泡/用户泡共用）。贴气泡右缘的元信息行
 // （turn 耗时）必须用同一个值，否则两处百分比各改各的，右缘就错开了。
 const BUBBLE_MAX_WIDTH = '85%'
+
+// 气泡底部元信息文字（turn 结算耗时 / 流式实时计时）共用的规格：两者占据同一槽位，
+// 定稿瞬间从「跳动值」换成「结算值」时只有文案变、字号/字距/数字宽度都不变，才不会
+// 看着像抖了一下。颜色是两者唯一的视觉差（实时态更亮一档），由调用方覆盖。
+const CHAT_META_TEXT_STYLE: CSSProperties = {
+  marginLeft: 'auto',
+  fontSize: '0.769em',
+  fontFamily: READER_FONT,
+  letterSpacing: '0.03em',
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+}
+
+// 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
+const LIVE_TICK_MS = 1_000
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -420,8 +437,45 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
   }
 }
 
+/**
+ * 流式期间的实时工作计时（气泡底部元信息槽位，定稿后被后端结算值取代）。
+ *
+ * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
+ * 一个数字。与 `ChatView` 的 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
+ * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
+ */
+function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
+  const { t, i18n } = useTranslation()
+  const ref = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const draw = () => {
+      const el = ref.current
+      if (!el) return
+      const dur = formatWorkDuration(turnElapsedMs(sessionId), i18n.language)
+      el.textContent = dur ? t('chat.msg.working', { dur }) : ''
+      // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
+      el.style.display = dur ? '' : 'none'
+    }
+    draw()
+    const id = window.setInterval(draw, LIVE_TICK_MS)
+    return () => window.clearInterval(id)
+  }, [sessionId, t, i18n])
+
+  return (
+    <span
+      ref={ref}
+      style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
+      title={t('chat.msg.workingTip')}
+    />
+  )
+}
+
 export interface ChatMessageViewProps {
   message: ChatMessage
+  /** 读取本会话在建 turn 的实时计时（`message.streaming` 期间显示）。缺省时不显示
+   *   计时器——结算耗时仍走 `message.durationMs`，与 sessionId 无关。 */
+  sessionId?: string
   /** F02: resend an edited copy of this user message as a new prompt. */
   onEditResend?: (messageId: string, newText: string) => void
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
@@ -441,7 +495,7 @@ export interface ChatMessageViewProps {
  * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
  * 使历史消息在流式期间跳过重渲染。
  */
-export const ChatMessageView = memo(function ChatMessageView({ message, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
+export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
   const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -497,10 +551,14 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   // user 消息行右对齐，时间放名字左侧（左侧是空白）；assistant 左对齐，放右侧。
   const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
 
-  // turn 工作时长：后端在 turn 定稿时结算，只有 hydrate（读 DB）路径才带回来 ——
-  // 前端不自算实时计时，否则与含审批扣除的后端口径形成第二套真相。
-  // null/undefined（在建消息、迁移前的历史行）→ 整行不渲染，区别于「确实 0 时长」。
+  // turn 工作时长（结算值）：恒由后端在定稿时算出，经 hydrate 或 prompt_done 带回。
+  // 流式期间气泡底部另有一个本地实时读数（utils/turnClock），只渲染、不入库，
+  // 定稿瞬间被这里的结算值原位取代。
+  // null/undefined（在建消息、迁移前的历史行）→ 结算值不渲染，区别于「确实 0 时长」。
   const workText = formatWorkDuration(message.durationMs, i18n.language)
+  // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数每秒变，
+  // 但门控只随 streaming 起落一次，秒级跳动留在定时器直写 DOM 的路径上。
+  const isLive = !!message.streaming && !!sessionId
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
@@ -514,7 +572,9 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
   const [metaWidth, setMetaWidth] = useState<number>()
   useLayoutEffect(() => {
     const row = rowRef.current
-    if (!row || !workText) return
+    // 实时计时同样要量宽：不量则 metaWidth 为空 → 该行按内容收缩，读数贴在气泡**左**缘，
+    // 定稿换成结算值时才跳回右缘（肉眼可见的一次位移）。
+    if (!row || !(workText || isLive)) return
     const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
     const last = bodies[bodies.length - 1]
     if (!last) return
@@ -524,7 +584,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
     const ro = new ResizeObserver(measure)
     ro.observe(last)
     return () => ro.disconnect()
-  }, [workText, message.blocks])
+  }, [workText, isLive, message.blocks])
 
   const label = (
     <div
@@ -728,7 +788,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
           某个块的右缘」，只能量），故无论耗时是同行还是被 flex-wrap 挤到下一行，
           右缘都与气泡右缘重合。动作栏常驻占位（CSS 只切 opacity）且不被压缩，
           所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。 */}
-      {(workText || visibleActions.length > 0) && (
+      {(workText || isLive || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
           style={{ alignSelf: 'flex-start', width: metaWidth, maxWidth: BUBBLE_MAX_WIDTH }}
@@ -739,19 +799,14 @@ export const ChatMessageView = memo(function ChatMessageView({ message, onEditRe
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* null/undefined（在建消息、迁移前的历史行）→ 不渲染，区别于「确实 0 时长」。
+          {/* 流式期间：本地实时估算（每秒跳动，审批挂起时冻住）。结算值一旦到位就让位给
+              它——同一槽位、同一规格，定稿瞬间只换文案不换位。 */}
+          {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
+          {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
               「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。 */}
           {workText && (
             <span
-              style={{
-                marginLeft: 'auto',
-                fontSize: '0.769em',
-                color: 'var(--text-faint)',
-                fontFamily: READER_FONT,
-                letterSpacing: '0.03em',
-                fontVariantNumeric: 'tabular-nums',
-                whiteSpace: 'nowrap',
-              }}
+              style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-faint)' }}
               title={durationTip}
             >
               {t('chat.msg.workTime', { dur: workText })}

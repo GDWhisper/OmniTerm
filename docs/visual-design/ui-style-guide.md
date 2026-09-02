@@ -485,6 +485,19 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
   应用在看不见的行上（running 会话曾因此整行隐藏）。选中行单列是因为它是纯前端概念，
   `sessionStatus()` 读不到。
 
+### 7.5 气泡元信息行（`.chat-meta-row` — 耗时 / hover 动作）
+
+assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时靠右（`margin-left:auto`）。**同一套实测宽度下，同行与换行的右缘都是气泡右缘**——气泡是内容宽度且该行是它的兄弟节点，CSS 表达不了「贴气泡右缘」，只能 `useLayoutEffect` + `ResizeObserver` 量最后一个 `[data-chat-body]` 的 `offsetWidth`（详见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E10/E11）。
+
+| 态 | 文案 | 色板 | 性质 |
+|---|---|---|---|
+| 结算（定稿后） | `已工作 2分钟42秒` | `--text-faint` | 后端 `work_ms`，唯一真相源 |
+| 流式实时 | `工作中 42秒` | `--text-muted`（提亮一档） | 本地估算，tooltip 明示「定稿以后端结算为准」 |
+
+- 两者共用 `CHAT_META_TEXT_STYLE`（`0.769em` + reader 字体 + `tabular-nums` + `nowrap`），**数字必须等宽**，否则每秒跳一位会左右抖。
+- 实时态只在 `message.streaming` 且该会话有在建 turn 时出现；动作栏此时恒空（五个动作的 `visible` 全部硬排 streaming），定稿瞬间同一槽位被结算值替换——**不给两个数字并排的机会**。
+- 动作栏 `flex-shrink: 0`：按钮被压缩时会自己堆成多行（比耗时换行更糟），「放不下」必须永远落在耗时这一侧。
+
 ---
 
 ## 8. Settings Toggles

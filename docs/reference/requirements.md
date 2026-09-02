@@ -101,5 +101,6 @@
 
 ## 会话工作时长 ✅（2026-08-30 完成）
 
-- [x] **ACP 会话「实际干了多少活」** — 口径 `work_ms = turn 墙钟 − 等真人审批`，后端在 turn 定稿时增量写 `sessions.work_ms/wait_ms/turn_count/last_turn_at`，消息级写 `chat_messages.duration_ms/wait_ms`。呈现只一处：assistant 回复的 hover 动作栏同行右端「已工作 2分钟42秒」（放不下才另起一行，右缘始终贴合气泡），「等待人工」挂该行 tooltip；侧栏会话行不显示累计时长（曾实现过 badge，按设计决策回退），`sessions` 上的累计列当前无 UI 消费者，作为写时账目留存。设计与偏差见 `docs/dev/plans/2026-08-30-acp-work-time.md`。
+- [x] **ACP 会话「实际干了多少活」** — 口径 `work_ms = turn 墙钟 − 等真人审批`，后端在 turn 定稿时增量写 `sessions.work_ms/wait_ms/turn_count/last_turn_at`，消息级写 `chat_messages.duration_ms/wait_ms`。呈现只一个槽位：assistant 回复的 hover 动作栏同行右端「已工作 2分钟42秒」（放不下才另起一行，右缘始终贴合气泡），「等待人工」挂该行 tooltip；侧栏会话行不显示累计时长（曾实现过 badge，按设计决策回退），`sessions` 上的累计列当前无 UI 消费者，作为写时账目留存。设计与偏差见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md`。
+- [x] **流式期间实时计时（2026-09-02 追加，翻盘原「不做前端实时跳动」的排除项）** — 同一槽位在 turn 进行中显示「工作中 42秒」，每秒一跳，定稿当场被后端结算值取代。它是本地估算：只渲染、不入库、不参与同步，审批挂起时冻住以贴齐后端口径，文案/色板/tooltip 三处标注估算性质。实现与约束见同一文档 E12。
 - [x] **已知边界（非缺陷，登记备查）** — ① 迁移前的历史 turn 无结束时刻记录，时长不可追溯（老行 NULL → 不渲染，不回补）；② agent 侧内部确认门（不发 `session/request_permission`，如 omp propose）后端看不见，那段人的思考时间会计入 `work_ms`。

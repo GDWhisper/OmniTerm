@@ -227,6 +227,8 @@
   "chat.msg.openFile": "open in file manager",
   "chat.msg.workTime": "Worked {{dur}}",
   "chat.msg.waitTime": "waiting on you {{dur}}",
+  "chat.msg.working": "working {{dur}}",
+  "chat.msg.workingTip": "live local estimate; finalized by the backend on completion",
   "chat.msg.regenerate": "regenerate",
   "chat.status.connecting": "connecting…",
   "chat.status.disconnected": "disconnected",

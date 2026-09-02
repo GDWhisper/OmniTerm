@@ -466,6 +466,7 @@ export function ChatView() {
             <ChatMessageView
               key={m.id}
               message={m}
+              sessionId={activeSessionId ?? undefined}
               agentName={chatState.agentName || fallbackAgentName}
               onEditResend={inputDisabled ? undefined : handleEditResend}
               onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
