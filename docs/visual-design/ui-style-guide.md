@@ -457,6 +457,11 @@ Dark background + colored pixel border + pixel font.
 
 Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning), `.toast-info` (accent).
 
+**消失行为（勿回退）**：每条 toast 自己计时（`TOAST_AUTO_DISMISS_MS`），鼠标 hover 或键盘聚焦期间
+**暂停**倒计时、移开后继续走剩余时间；关闭只走行内 `✕` 按钮，整条 toast **不得**挂 `onClick` 关闭
+——报错信息常常要选中复制，点一下就没了等于无法复制。正文 `select-text` + `overflow-wrap: anywhere`
+（长路径/URL 也要能换行完整显示）。同屏上限 `MAX_TOASTS`，超出丢弃最旧的。
+
 ### 7.4 活跃会话行强调（`.session-name-live` + `.activity-pulse`）
 
 侧栏会话行恒定按 `created_at DESC` 排序，**不因活跃状态置顶**——置顶会让行在状态跳变时
