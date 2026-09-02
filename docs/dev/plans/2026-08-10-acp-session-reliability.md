@@ -2,7 +2,7 @@
 
 > 状态：Phase 0 / Phase 1 / Phase 2 已实施（2026-08-11 起，提交 `2d18fa1` 起）；Phase 3-4 待办
 > 触发条件：修改 `src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx` 中任一项前必读
-> 关联：`docs/reference/chat-history-loading-comparison.md`（三方参考实现对比与实测数据）、`docs/dev/performance-and-safety.md` §P1/§P2/§P5、`docs/architecture/backend.md`（blocks 两态）、`docs/dev/plans/2026-07-28-pty-engine-implementation.md`
+> 关联：`docs/reference/chat-history-loading-comparison.md`（三方参考实现对比与实测数据）、`docs/dev/performance-and-safety.md` §P1/§P2/§P5、`docs/architecture/backend.md`（blocks 两态）、`docs/dev/plans/archive/2026-07-28-pty-engine-implementation.md`
 > 前置认识：**样本量不能当作"极端情况罕见"的证据**。本项目开发库会话数少，是因为维护者不信任 ACP 会话而习惯改用终端——这是不可靠导致的结果，不是"不需要加固"的理由。实测那条 9,150,950 字符的巨行出现在一个**仅 19 条消息**的会话里。
 
 ## 背景
@@ -107,7 +107,7 @@
 | 项 | 内容 |
 |---|---|
 | 改动 | `frontend/src/stores/chatStore.ts`（`SyncMessagePayload` 加 `id`、`messagesToSyncPayload` 填充，:1079-1093）、`src/api/sessions.rs`（`SyncMessage` 加 `id`，:607-613；`sync_messages` 传递，:590-595）、`src/acp/chat_persistence.rs`（`sync_messages` 按 id 优先匹配，:195-235） |
-| 测试 | 后端单测：同一会话两条 text 相同但 id 不同的 assistant 行，sync 后各自 blocks 独立（当前实现会失败——先写测试复现，见 `docs/dev/plans/2026-07-24-quality-gates.md` 的 TDD 约定） |
+| 测试 | 后端单测：同一会话两条 text 相同但 id 不同的 assistant 行，sync 后各自 blocks 独立（当前实现会失败——先写测试复现，见 `docs/dev/plans/archive/2026-07-24-quality-gates.md` 的 TDD 约定） |
 | 验收 | 上述单测通过；`count(DISTINCT blocks)` 与行数一致 |
 
 ### Phase 1（P1）— turn 结束落 cooked ✅ 已实施（2026-08-11，待手动回归）

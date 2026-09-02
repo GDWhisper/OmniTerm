@@ -264,7 +264,7 @@ find / -name "*.conf" 2>/dev/null | head -50
 > 可结构化断言的部分已由 `node scripts/pty-frame-regression.mjs`（17 项）覆盖，
 > 本节只做**浏览器内的视觉确认** —— 字体、配色、光标形状、emoji 字形、宽字符
 > 对齐、TUI 刷屏观感。改动 `src/engine/pty/` 的帧编码或 `useCellFrame.ts` 后
-> 需过一遍（`docs/dev/plans/2026-08-28-pty-frame-rle.md` §6）。
+> 需过一遍（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §6）。
 >
 > 前置：按 §1.2 起服务，创建一个 **pty** 引擎会话（默认即是 pty），浏览器打开
 > 前端（端口见 `.env.local` 的 `FRONTEND_PORT`）。下列命令整段粘进终端执行。

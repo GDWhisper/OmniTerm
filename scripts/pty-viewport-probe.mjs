@@ -3,7 +3,7 @@
  * pty 历史视口帧探针 —— 量「单帧体积 / 请求→响应耗时 / 瘦身收益 / 无损性」。
  *
  * 用途：为 pty 移动端滚动改造（`docs/dev/plans/backlog/pty-mobile-termux-feel.md`
- * §3.2）提供决策数据，并验收 `docs/dev/plans/2026-08-28-pty-frame-rle.md`。
+ * §3.2）提供决策数据，并验收 `docs/dev/plans/archive/2026-08-28-pty-frame-rle.md`。
  * 直连后端 WS（不经浏览器、不经前端），自动创建并删除临时 pty 会话。
  *
  * 前置：`./dev.sh start`（后端已运行）。跑法：`node scripts/pty-viewport-probe.mjs`

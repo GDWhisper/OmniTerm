@@ -326,7 +326,7 @@ function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {
 
 **每个 modal 独立文件、自持表单/提交状态**，主组件只做列表渲染与状态提升——与上节
 Section 拆分原则同构（2026-08-03 `Sidebar.tsx` 拆分确立，实施计划见
-`docs/dev/plans/2026-08-03-sidebar-component-split.md`）：
+`docs/dev/plans/archive/2026-08-03-sidebar-component-split.md`）：
 
 - 每个 modal 独立文件，自持表单字段 / `submitting` / 错误态；同一时刻仅一个弹窗可见可提交，各自持有后并发语义不变
 - `target: T | null`（null = 关闭）或 `open: boolean` prop 作开关，主组件只持有「打开哪一个」，不复述弹窗内部状态

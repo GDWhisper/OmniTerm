@@ -11,7 +11,7 @@
 //! explicitly (`runtime_kind = ?` in the INSERT), so the two defaults are
 //! independent. The end-to-end AcpClient spawn + prompt flow is exercised
 //! by the Chat view integration tests once Phase 5 lands a fake-agent
-//! binary (see docs/dev/plans/2026-07-15-acp-integration-execution.md §6.5
+//! binary (see docs/dev/plans/archive/2026-07-15-acp-integration-execution.md §6.5
 //! P3-19 / §6.9 Phase 4 P4-03).
 
 use sqlx::Row;

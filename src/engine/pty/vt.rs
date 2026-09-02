@@ -1223,7 +1223,7 @@ mod tests {
         assert_eq!(parsed["viewport"], 0, "empty history clamps y to 0");
     }
 
-    // ──── RLE 行编码（docs/dev/plans/2026-08-28-pty-frame-rle.md）────
+    // ──── RLE 行编码（docs/dev/plans/archive/2026-08-28-pty-frame-rle.md）────
 
     /// 从帧 JSON 的一行抽出「可见字符 → 该字符生效时 sgr」序列。
     fn visible_seq(row: &serde_json::Value) -> Vec<(String, String)> {

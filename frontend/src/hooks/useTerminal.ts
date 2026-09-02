@@ -250,7 +250,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       useAppStore.getState().setTerminalDisconnected(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
       // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。开启后收到的
-      // cell_frame 一律是 runs 行编码（`docs/dev/plans/2026-08-28-pty-frame-rle.md`）。
+      // cell_frame 一律是 runs 行编码（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md`）。
       ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
     }
 

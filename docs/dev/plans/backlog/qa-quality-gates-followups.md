@@ -1,6 +1,6 @@
 # 质量门禁后续跟踪项
 
-> 来源：`docs/dev/plans/2026-07-24-quality-gates.md` §2.3 P2 + §3.3
+> 来源：`docs/dev/plans/archive/2026-07-24-quality-gates.md` §2.3 P2 + §3.3
 > 本轮 Phase 1+2 已落地（CI workflow / pre-commit / clippy / rustfmt / cargo-deny / strict / 文档审计）；以下为后续推进项。
 
 | ID | 项目 | 现状 | 触发条件 |

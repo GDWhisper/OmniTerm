@@ -813,8 +813,8 @@ fn main() -> anyhow::Result<()> {
             // 终端是交互式小包流（键盘字节、30fps cell_frame 差分帧、viewport
             // 请求）。开 Nagle 的话，紧随一个大帧发出的小帧要等前一个包的 ACK，
             // 与对端 Delayed ACK（Linux 默认 40ms）叠加后，实测 viewport 请求→
-            // 响应的尾延迟 p95 从 5.4ms 涨到 42ms、max 50ms（`docs/dev/plans/
-            // 2026-08-28-pty-frame-rle.md` §10.2）。HTTP 响应同理受益。
+            // 响应的尾延迟 p95 从 5.4ms 涨到 42ms、max 50ms（见
+            // `docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §10.2）。HTTP 响应同理受益。
             let listener = tokio::net::TcpListener::bind(&bind).await?.tap_io(|stream| {
                 if let Err(e) = stream.set_nodelay(true) {
                     warn!("failed to set TCP_NODELAY on accepted connection: {e}");

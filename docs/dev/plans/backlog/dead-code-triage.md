@@ -1,6 +1,6 @@
 # Dead Code 待核清单
 
-> 来源：质量门禁建设（`docs/dev/plans/2026-07-24-quality-gates.md` Phase 2）
+> 来源：质量门禁建设（`docs/dev/plans/archive/2026-07-24-quality-gates.md` Phase 2）
 > 生成：2026-07-24，`cargo clippy --all-targets` 检出的 15 处 rustc `dead_code` 警告
 > 当前处置：已逐项 `#[allow(dead_code)]`（代码内注释均指向本文件），保留 lint 对**新增**死代码的有效性
 > 目标：逐条判断"删除 / 永久保留并改注释 / 启用接线"，清理后移除对应 allow
@@ -15,7 +15,7 @@
 
 | # | 位置 | 符号 | 初判 | 备注 |
 |---|------|------|------|------|
-| 1 | ~~`src/auth/mod.rs:30`~~ | `verify_token` | **已接线**（2026-07-27） | 由 `require_auth_mw` 中间件 + `/auth/check` 接线，见 `docs/dev/plans/2026-07-27-auth-enforcement.md` | ✅ |
+| 1 | ~~`src/auth/mod.rs:30`~~ | `verify_token` | **已接线**（2026-07-27） | 由 `require_auth_mw` 中间件 + `/auth/check` 接线，见 `docs/dev/plans/archive/2026-07-27-auth-enforcement.md` | ✅ |
 | 2 | `src/auth/mod.rs:72` | `RequireAuth`（axum 提取器） | 有意保留（2026-07-27） | 预留 handler 级鉴权，当前使用 `require_auth_mw` 中间件替代 | 📌 |
 | 3 | `src/fs/mod.rs:139` | `normalize_path` | 仅 `\\`→`/` 辅助 | 无调用方，疑似残留，候选删除 |
 | 4 | `src/models/user.rs:4` | `User`（sqlx 模型） | 无 `FROM_ROW` 查询引用 | 是否有计划中的用户表查询路径 |

@@ -409,7 +409,7 @@ git remote -v
 ### Cargo publish 失败
 
 常见原因：
-- **依赖含 git / path 来源**（已实际发生，2026-08-13）：`cargo package` 报 `all dependencies must have a version requirement specified when packaging. dependency 'X' does not specify a version`。补 `version` 也无用——git 依赖的 crate 未发布到 registry 时，用户 `cargo install` 依旧解析失败。当时因 `wezterm-term`（wezterm 工作区内部 crate，从未发布）中止 v0.2.14 发布、撤回 tag 与已发产物。**规则：新增依赖必须来自 crates.io；选型阶段就要把「能否发布」当硬约束**（本例后续处理见 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` D8 v5）。
+- **依赖含 git / path 来源**（已实际发生，2026-08-13）：`cargo package` 报 `all dependencies must have a version requirement specified when packaging. dependency 'X' does not specify a version`。补 `version` 也无用——git 依赖的 crate 未发布到 registry 时，用户 `cargo install` 依旧解析失败。当时因 `wezterm-term`（wezterm 工作区内部 crate，从未发布）中止 v0.2.14 发布、撤回 tag 与已发产物。**规则：新增依赖必须来自 crates.io；选型阶段就要把「能否发布」当硬约束**（本例后续处理见 `docs/dev/plans/archive/2026-07-28-pty-engine-implementation.md` D8 v5）。
 - 版本号未更新（Cargo.toml 中 version 与已发布版本重复）
 - 依赖问题（运行 `cargo publish --dry-run` 检查）
 - 元数据缺失（Cargo.toml 缺少 `description`、`license`、`include` 等字段）

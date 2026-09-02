@@ -16,7 +16,7 @@
 
 ## useAcpChat.ts — 1223 行（hook，2026-08-23 复核）
 
-- 源自已关闭的 `docs/dev/plans/2026-07-20-acp-quality-gap.md` 附录 A（当时 449 行）
+- 源自已关闭的 `docs/dev/plans/archive/2026-07-20-acp-quality-gap.md` 附录 A（当时 449 行）
 - **触发条件已多次满足仍未拆分**：期间新增过 replay/replay_end 帧、ghost message 门控/hydrate 收敛等协议帧改动，行数涨近 3 倍；WS 生命周期 + 协议解析 + store 分发仍耦合在同一 hook
 - 已有部分缓解：hook 级测试存在（`useAcpChat.ghost/midturn.test.tsx`、`useAcpChat.permission.test.ts`），重构有回归保护
 - 触发条件：下次修改 WS 重连/协议帧/store 分发任一层时，按附录 A 目标结构拆分（orchestrator + useAcpConnection/useAcpProtocol/useAcpDispatch）

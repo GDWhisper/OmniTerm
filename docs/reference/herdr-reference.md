@@ -111,7 +111,7 @@ OmniTerm 用 tmux 做 server 层 + xterm.js 做渲染，架构层不需要照搬
 
 ## 去 tmux / 自管 pty 引擎借鉴（2026-07-28 增补）
 
-> 服务于 `docs/dev/plans/2026-07-28-pty-engine-implementation.md` Phase 1-2。上文检测体系部分不重复，此处聚焦 PTY 管理、VT 模拟、持久化恢复、hook 信道。
+> 服务于 `docs/dev/plans/archive/2026-07-28-pty-engine-implementation.md` Phase 1-2。上文检测体系部分不重复，此处聚焦 PTY 管理、VT 模拟、持久化恢复、hook 信道。
 
 ### 架构验证结论
 

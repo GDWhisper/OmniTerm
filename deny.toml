@@ -1,5 +1,5 @@
 # cargo-deny 配置 — 许可证 + 安全公告审计（CI audit job，阻塞门禁）
-# 见 docs/dev/plans/2026-07-24-quality-gates.md §2.2 T06 / R02
+# 见 docs/dev/plans/archive/2026-07-24-quality-gates.md §2.2 T06 / R02
 # 项目自身许可证: FSL-1.1-MIT（Functional Source License v1.1, MIT fallback）
 
 [graph]

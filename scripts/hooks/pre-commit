@@ -12,7 +12,7 @@
 #   chmod +x scripts/hooks/pre-commit
 # 本次提交跳过: git commit --no-verify
 #
-# 设计依据: docs/dev/plans/2026-07-24-quality-gates.md §3.2
+# 设计依据: docs/dev/plans/archive/2026-07-24-quality-gates.md §3.2
 # 不进 pre-commit 的（放 CI）: cargo test(编译慢)、cargo-deny(网络)、pnpm build。
 
 set -e

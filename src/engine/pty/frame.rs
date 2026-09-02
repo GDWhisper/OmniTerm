@@ -44,7 +44,7 @@ pub struct CellFrame {
 }
 
 /// 一行的线格负载：行内 RLE —— 按 sgr 合并连续字符的扁平数组
-/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
+/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` D1/D5）。
 ///
 /// 这是 cell_frame 协议的**唯一**行编码：逐 cell 的 `cells` 格式随该计划
 /// P3 的 D4 一并移除，故不存在格式协商（前端无需按字段分派）。

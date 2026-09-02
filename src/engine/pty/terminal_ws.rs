@@ -25,7 +25,7 @@ const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 /// 单帧「编码 + 发送」耗时告警阈值。转发循环是单个 `select!`，分支内的
 /// `send().await` 一旦被背压阻塞，其余分支（含 viewport 请求）在此期间得不到
 /// 轮询 —— 这是 30fps 实时帧拖慢滚动响应的机制，留告警防止其悄悄回潮
-/// （`docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
+/// （`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
 const SLOW_FRAME_US: u64 = 5_000;
 
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).

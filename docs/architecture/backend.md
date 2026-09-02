@@ -114,7 +114,7 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > 要等前一个包的 ACK，与对端 Delayed ACK（Linux 默认 40 ms）叠加后，实测 viewport
 > 请求→响应的尾延迟 p95 从 5.4 ms 涨到 42 ms、max 50 ms。经 `axum::serve` 的
 > `ListenerExt::tap_io` 在 accept 时逐个连接设置（`src/main.rs`）；HTTP 响应同样
-> 受益。相关实测见 `docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2(b)。
+> 受益。相关实测见 `docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §10.2(b)。
 >
 > **cell_frame 行编码（RLE，2026-08-28，D4 后为唯一格式）**：`rows[]` 每行是 RLE
 > runs 数组 —— 行内按 sgr 合并连续字符的扁平数组 `["1;32","text","","more"]`。
@@ -125,7 +125,7 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > runs 把单帧从 94.4 KB 压到 4.8 KB（19.8×）。编码细节（D1/D2/D5）：三种帧
 > （cell/overlay/viewport）共用 `encode_row_static`；宽字符占位 cell 直接跳过、
 > 不切 run；cell 的零宽组合字符（音标、emoji 变体选择符）随主字符一起编码，
-> 否则 `e`+U+0301 退化成 `e`。详见 `docs/dev/plans/2026-08-28-pty-frame-rle.md`。
+> 否则 `e`+U+0301 退化成 `e`。详见 `docs/dev/plans/archive/2026-08-28-pty-frame-rle.md`。
 >
 > **转发循环的 ticker 常驻（2026-08-30）**：`ticker` 在连接建立时创建，raw 模式的
 > `select!` 里保留 `_ = ticker.tick() => {}` 空分支作为 **hello 握手的唤醒点** ——

@@ -24,7 +24,7 @@ export interface CursorState {
  *
  * `sgr` 是 SGR 参数体（不含 \x1b[ 前缀和 m 后缀，空串 = 默认样式），`text` 是
  * 同一 sgr 下的连续字符。宽字符占位 cell 不产生输出（已由后端跳过），故解码
- * 侧无需处理它（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
+ * 侧无需处理它（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` D1/D5）。
  */
 export interface CellRow {
   runs: string[]
