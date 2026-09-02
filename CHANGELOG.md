@@ -60,6 +60,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-09-02 10:23) `[frontend]` 修复侧栏折叠豁免漏掉 running 会话：豁免位只覆盖「激活 / 需注意力 / waiting」，一个在后台正在干活的老会话被整行收进「展开更多」——既不会被提亮（§7.4 的 live 强调加在看不见的行上），也完全露不出来。现豁免判定复用 `sessionStatus()`（与状态点、worktree 聚合徽标同一真源），非 `none`（working/blocked/done）一律不折叠；选中行仍单列豁免位（纯前端选中态，`sessionStatus()` 读不到）（`frontend/src/components/Sidebar/ProjectCard.tsx`）
 - (2026-09-02 00:07) `[frontend]` 修复抽屉文件内容 SSE 刷新无去抖、且编辑模式下会吞掉未保存编辑：agent 连续写同一文件时每个事件都触发一次重取（markdown 预览是整篇重解析，连发代价明显）；更严重的是编辑模式下同样静默重取，连带重置 `editedContent` 并清掉 `modified`——用户还没保存的改动被外部写入覆盖。现合并为 500ms 一次（与图片预览路径共用 `FILE_REFRESH_DEBOUNCE_MS`），且模式在定时器内读 ref 而非闭包：预览模式才刷新，编辑模式只亮「已被外部修改」角标（实测 3 次连发只产生 1 次读请求；编辑态下外部改动后缓冲区内容保留）（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/FileManager/FilePreview.tsx`、`frontend/src/components/FileManager/filePreviewShared.ts`）
 - (2026-09-02 00:07) `[frontend]` 修复编辑期间的外部改动切回预览后看不到：编辑模式下外部变更只标记不刷新，但回到「预览」时没人补刷，抽屉一直停在打开时那份内容，角标长亮却不更新。现切回预览时若无未保存改动补一次重取；有未保存改动则不刷（重取会重置编辑缓冲区），保留角标作为提示（`frontend/src/components/FileManager/FileDrawer.tsx`）
 - (2026-09-01 09:25) `[frontend]` 修复抽屉高度拖拽条在触摸设备（触屏电脑/手机）上完全无法拖动：拖拽状态机只绑定 mouse 事件（触摸屏不派发该事件），且命中区仅 6px 高。现迁移到 Pointer Events（鼠标/触摸通用，含 pointercancel 取消）、拖拽条加 `touch-action: none` 防浏览器抢手势，命中区经负边距扩到 22px（视觉条仍 6px 不变）；高度钳制范围提取为共享 `clampDrawerHeight`（`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/utils/drawer.ts`、`frontend/src/index.css`）

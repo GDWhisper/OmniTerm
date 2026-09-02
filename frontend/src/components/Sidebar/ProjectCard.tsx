@@ -180,8 +180,9 @@ export function ProjectCard(props: {
               const isWtExpanded = isWtActive || (props.expandAllSessions && wtSessions.length > 0)
 
               // ACP 会话超阈值折叠（终端会话不受影响）。列表按 created_at DESC
-              // 排序，补足阈值时天然保留最新的；豁免位留给激活/需注意力/等待决策的
-              // 会话，折叠后不丢关键信息。列表被切成「可见行 + 切换行 + 隐藏行」，
+              // 排序，补足阈值时天然保留最新的；豁免位留给「有事在做或要给用户看」的
+              // 会话（运行中 / 等待决策 / 需注意力 / 完成未看），折叠后不丢关键信息。
+              // 列表被切成「可见行 + 切换行 + 隐藏行」，
               // 展开时隐藏行从切换行下方就地追加——而不是插回原序中间，
               // 新行出现在用户点击处，收起/展开的语义与视觉一致。
               const acpSessions = wtSessions.filter((s) => s.runtime_kind === 'acp')
@@ -190,10 +191,12 @@ export function ProjectCard(props: {
               const visibleAcpIds = new Set<string>()
               if (acpOverLimit) {
                 for (const s of acpSessions) {
+                  // 状态判定复用 sessionStatus，与状态点/聚合徽标同一真源，禁止在此重写
+                  // running || waiting 式散装条件。activeSessionId 例外——选中态是前端
+                  // 概念，ACP 会话的 is_active 恒 false，sessionStatus 覆盖不到。
                   if (
                     s.id === props.activeSessionId ||
-                    attention.reasonFor(s.id) ||
-                    props.acpActivityFor(s.id) === 'waiting'
+                    sessionStatus(s, attention.reasonFor(s.id), props.acpActivityFor(s.id)) !== 'none'
                   ) {
                     visibleAcpIds.add(s.id)
                   }

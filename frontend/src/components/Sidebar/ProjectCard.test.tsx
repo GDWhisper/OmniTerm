@@ -254,6 +254,15 @@ describe('ProjectCard ACP 会话折叠', () => {
     expect(container.textContent).toContain('acp-7')
   })
 
+  it('正在运行（running）的会话始终露出', () => {
+    renderCard(collapsedProps({ acpActivityFor: (id: string) => (id === 'a7' ? 'running' : undefined) }))
+
+    // 后台干活的会话不能既不被提亮也藏进折叠区：豁免位让它露出，
+    // 露出后走的是最新 4 条补足阈值 + 豁免的 a7
+    expect(container.textContent).toContain('acp-7')
+    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
+  })
+
   it('有 attention 的会话始终露出', () => {
     reasonForImpl = (key: string) => (key === 'a7' ? 'decision' : undefined)
     renderCard(collapsedProps())
