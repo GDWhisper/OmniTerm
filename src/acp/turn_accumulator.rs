@@ -35,7 +35,7 @@
 //! same `active → false` transition that finalizes the row, so each turn is counted
 //! exactly once. The measurement basis (wall time minus human-approval wait) and the
 //! decision to keep it here rather than in a separate timer live in
-//! `docs/dev/plans/2026-08-30-acp-work-time.md` (D1/D2).
+//! `docs/dev/plans/archive/2026-08-30-acp-work-time.md` (D1/D2).
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -1057,7 +1057,7 @@ mod tests {
         assert_eq!(retained_frames(&acc), (0, 0), "新 turn 应清空帧与字节账");
     }
 
-    // ---- 工作时长记账（docs/dev/plans/2026-08-30-acp-work-time.md）----
+    // ---- 工作时长记账（docs/dev/plans/archive/2026-08-30-acp-work-time.md）----
 
     /// 并发定稿只能记一次账：多个收尾路径（prompt 完成 / cancel 兜底 / reaper /
     /// 崩溃看护）都会调 `finalize_turn`，若不去重就会把同一 turn 累计多遍。
