@@ -44,11 +44,15 @@ export interface CellFrame {
   /** 历史窗口帧标记（方案 C）：本帧展示的历史窗口偏移（行，0 = live 屏）。
    * 仅 viewport_request 的响应帧携带；消费方为 ViewportController。 */
   viewport?: number
+  /** 该窗口首行的内容指纹（十六进制 u64）：ViewportController 下次「保持
+   * 锚点」的重拉原样回传，后端据此把窗口重定位到该行当前的位置（
+   * `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D1/D4）。 */
+  viewport_fp?: string
   /** alt-screen 激活标记（方案 C D4）：仅 overlay 帧携带；消费方为
    * ViewportController（alt-screen 期间禁用滚轮接管）。 */
   alt_screen?: boolean
-  /** 当前 grid 历史行数。所有帧都携带；消费方为 ViewportController
-   * （把「距底偏移 y」换算成绝对锚点，新输出时按锚点重算 y）。 */
+  /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
+   *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
   history_size?: number
   rows: CellRow[]
 }

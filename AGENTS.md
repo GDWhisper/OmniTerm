@@ -108,6 +108,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/dev/plans/2026-08-18-permission-recycle-notice.md` | 修改 `src/acp/reaper.rs`（回收分支）、`src/acp/client.rs`（system 通知通道）、`src/ws/acp.rs`（system_message 帧）、`chat_messages.role` 语义任一项前**必读** | 行为变更、勘误时更新 |
 | `docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md` | 修改 `useAcpChat.ts`（replay 帧门控 / hydrate 收敛）、`chatStore.ts`（sync 路径）、`chat_persistence.rs`（sync_messages 匹配）、`turn_accumulator.rs`（text 语义）前**必读** | Phase 推进、方案实施后更新状态 |
 | `docs/dev/plans/archive/2026-08-30-acp-work-time.md` | 修改 `turn_accumulator.rs`（`WriterCmd` / `finalize_turn` 记账）、`chat_persistence.rs`（`finalize_message` / `ChatMessageRow`）、`client.rs`（审批 pause / shutdown 收尾）、`sessions` 时长列、`ChatMessage` 耗时、`utils/turnClock.ts`（流式实时计时）任一项前**必读** | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
+| `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` | 修改 pty 历史视口锚定相关代码（`utils/viewportController.ts` 的锚点/重拉、`src/engine/pty/vt.rs` 的 `encode_viewport_frame`/`relocate_anchor`、`frame.rs` 与 `ws/terminal.rs` 的 `viewport_request`/`viewport_fp` 字段）前**必读**——「距底偏移 y 不是稳定标识」这条结论是两轮排查的产出，不看方案容易退回按位置换算的老路 | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/reference/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，过一遍其检查点清单（非强制结构，按任务裁剪） | 检查点需调整时更新 |
 | `docs/dev/plans/backlog/qa-quality-gates-followups.md` | 推进质量门禁 P2 项（warn→deny、CI 耗时、`dev.sh check`）时 | P2 项状态变更、dead-code allow 清理 |
 | `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |

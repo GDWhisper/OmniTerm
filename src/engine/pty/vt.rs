@@ -43,6 +43,13 @@ const VT_SCROLLBACK_LINES: usize = 1000;
 const MAX_RESPONSE_ENTRIES: usize = 64;
 /// 应答缓冲字节上限：条目大小由会话内程序决定，只限条目数等于没限。
 const MAX_RESPONSE_BYTES: usize = 8 * 1024;
+
+/// 视口锚点指纹重定位的搜索半径（行）。P1 有界：搜索量与半径成正比，无界
+/// 会让单次 `viewport_request` 的成本随会话历史长度增长。需覆盖「节流周期
+/// （100ms）+ RTT」内后端新产出的行数 —— 半径 512 可支撑 5000 行/秒的输出，
+/// 远超实测的 agent 输出速率；超出则退回按偏移定位（降级不失效）。
+/// 见 `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D3。
+const ANCHOR_SEARCH_RADIUS: usize = 512;
 /// 闭包型应答（颜色/文本区尺寸查询）无预知产物大小，按估值记账。
 const RESPONSE_CLOSURE_EST_BYTES: usize = 32;
 
@@ -551,6 +558,7 @@ impl VtState {
             overlay: true,
             row_indices: None,
             viewport: None,
+            viewport_fp: None,
             // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
             history_size: grid.history_size() as u32,
@@ -570,21 +578,36 @@ impl VtState {
     /// 滚轮接管后前端经 `viewport_request` 请求，取代 xterm 本地 scrollback。
     ///
     /// - `y` 钳制到 `history_size()`（外部输入兜底，负偏移在读循环侧已拦）；
+    /// - **指纹重定位**（`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`
+    ///   D1-D3）：`fp` 是上次服务窗口首行的内容指纹，`y` 只是本次请求的**候选**
+    ///   位置。后端按指纹在 `±ANCHOR_SEARCH_RADIUS` 内由近及远找回该行当前的
+    ///   位置，按新位置出窗口 —— 位置换算全部在持有 grid 真相源的这一侧完成，
+    ///   因此不受帧率/RTT 滞后影响（`y` 是「距底部偏移」，历史增长或淘汰后同一
+    ///   个 y 指向的是更新的内容，前端拿滞后的 `history_size` 反推必然漂移）；
     /// - 帧恒 `full: true` + `viewport: Some(y)`，不触碰 diff 基线
     ///   （实时流独立继续，前端在 viewport 模式下自行丢弃实时帧）；
     /// - `y > 0` 时光标隐藏（历史窗口内无活光标），`y = 0` 携带真实光标
     ///   （回底校准帧与 overlay 帧同语义）。
     ///
     /// 响应体积由构造有界（`rows × cols`，与 overlay 帧同级，PtySize ≤ 1000×1000）。
-    pub fn encode_viewport_frame(&self, session_id: &str, y: u32) -> String {
+    pub fn encode_viewport_frame(&self, session_id: &str, y: u32, fp: Option<u64>) -> String {
         let grid = self.term.grid();
         let rows = self.term.screen_lines();
         let cols = self.term.columns();
-        let y = (y as usize).min(grid.history_size()) as u32;
+        let hs = grid.history_size() as i32;
+        // 窗口顶行的绝对索引（0 = 最旧的一行）；y 是距底部的偏移，先换算再重定位。
+        // 经 i64 钳制：u32::MAX 直接 as i32 会变成 -1。
+        let y = (y as i64).clamp(0, hs as i64) as i32;
+        let top = hs - y;
+        let top = match fp {
+            Some(fp) => Self::relocate_anchor(grid, cols, hs, top, fp),
+            None => top,
+        };
+        let start = top - hs; // Line 起点：≤ 0，负值进入 history
+        let y = (hs - top) as u32; // 重定位后的实际偏移（回传前端权威同步）
 
-        let out_rows: Vec<RowData> = (0..rows)
-            .map(|i| self.encode_row_static(grid, cols, Line(i as i32 - y as i32)))
-            .collect();
+        let out_rows: Vec<RowData> =
+            (0..rows).map(|i| self.encode_row_static(grid, cols, Line(start + i as i32))).collect();
 
         let rc = self.term.renderable_content();
         let cursor = Some(CursorState {
@@ -605,6 +628,8 @@ impl VtState {
             overlay: false,
             row_indices: None,
             viewport: Some(y),
+            // 首行指纹：前端下次「保持锚点」的重拉原样回传（D4）
+            viewport_fp: Some(format!("{:016x}", hash_grid_row(grid, cols, Line(start)))),
             alt_screen: None,
             history_size: grid.history_size() as u32,
             rows: out_rows,
@@ -613,6 +638,37 @@ impl VtState {
         let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
         crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
         json
+    }
+
+    /// 按内容指纹重定位锚点行：在 `abs ± ANCHOR_SEARCH_RADIUS` 内**由近及远**
+    /// 找指纹匹配的绝对行索引，找不到（内容已被淘汰/重写/reflow）则返回原
+    /// `abs` —— 调用方退回按偏移定位，语义等同无指纹的旧行为。
+    ///
+    /// 有界是硬约束（P1）：搜索量与半径成正比，无界会让单请求成本随会话
+    /// 历史长度增长。双向交替覆盖两个方向的位移：淘汰把内容推向更旧的索引
+    /// （`-d`），resize reflow 与 RI（反向换行）会推向更新的索引（`+d`）。
+    fn relocate_anchor(
+        grid: &alacritty_terminal::grid::Grid<Cell>,
+        cols: usize,
+        hs: i32,
+        abs: i32,
+        fp: u64,
+    ) -> i32 {
+        let matches = |cand: i32| {
+            (0..=hs).contains(&cand) && hash_grid_row(grid, cols, Line(cand - hs)) == fp
+        };
+        if matches(abs) {
+            return abs;
+        }
+        let radius = ANCHOR_SEARCH_RADIUS as i32;
+        for d in 1..=radius {
+            for cand in [abs - d, abs + d] {
+                if matches(cand) {
+                    return cand;
+                }
+            }
+        }
+        abs
     }
 
     /// Phase 3: invalidate diff tracker → 下一帧强制全帧（resize / overlay / mode change 后调用）。
@@ -691,6 +747,7 @@ impl VtState {
             overlay,
             row_indices,
             viewport: None,
+            viewport_fp: None,
             alt_screen: None,
             history_size: grid.history_size() as u32,
             rows: out_rows,
@@ -1127,7 +1184,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "regular frame must omit alt_screen");
         let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 0)).unwrap();
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "viewport frame must omit alt_screen");
     }
 
@@ -1146,7 +1203,7 @@ mod tests {
     #[test]
     fn viewport_frame_y0_is_live_screen_with_marker() {
         let v = vt_with_history();
-        let json = v.encode_viewport_frame("ts", 0);
+        let json = v.encode_viewport_frame("ts", 0, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 0, "viewport marker must carry y");
         assert_eq!(parsed["full"], true);
@@ -1170,11 +1227,11 @@ mod tests {
     fn viewport_frame_scrolls_into_history() {
         let v = vt_with_history();
         // 历史 7 行（L0..L6）；y=7 窗口顶 = Line(-7) = L0
-        let json = v.encode_viewport_frame("ts", 7);
+        let json = v.encode_viewport_frame("ts", 7, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(top_row_text(&parsed), "L0");
         // y=5 窗口顶 = Line(-5) = L2
-        let json = v.encode_viewport_frame("ts", 5);
+        let json = v.encode_viewport_frame("ts", 5, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(top_row_text(&parsed), "L2");
     }
@@ -1183,7 +1240,7 @@ mod tests {
     fn viewport_frame_y_clamps_to_history_size() {
         let v = vt_with_history();
         // 超界 y 钳制到 history_size（6），不 panic 且内容与 y=6 相同
-        let json = v.encode_viewport_frame("ts", u32::MAX);
+        let json = v.encode_viewport_frame("ts", u32::MAX, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 7, "y must clamp to history size");
         assert_eq!(top_row_text(&parsed), "L0");
@@ -1192,14 +1249,14 @@ mod tests {
     #[test]
     fn viewport_frame_hides_cursor_above_bottom() {
         let v = vt_with_history();
-        let json = v.encode_viewport_frame("ts", 6);
+        let json = v.encode_viewport_frame("ts", 6, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(
             parsed["cursor"]["visible"].as_bool(),
             Some(false),
             "history window has no live cursor"
         );
-        let json = v.encode_viewport_frame("ts", 0);
+        let json = v.encode_viewport_frame("ts", 0, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["cursor"]["visible"].as_bool(), Some(true));
     }
@@ -1208,7 +1265,7 @@ mod tests {
     fn viewport_frame_does_not_disturb_diff_baseline() {
         let mut v = vt_with_history();
         let _ = v.encode_cell_frame("ts"); // full
-        let _ = v.encode_viewport_frame("ts", 6); // 不触碰 diff 基线
+        let _ = v.encode_viewport_frame("ts", 6, None); // 不触碰 diff 基线
         let json = v.encode_cell_frame("ts"); // 实时流继续 diff
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], false, "viewport encode must not invalidate diff");
@@ -1218,9 +1275,121 @@ mod tests {
     #[test]
     fn viewport_frame_empty_history_clamps_to_zero() {
         let v = vt(24, 80); // 无历史
-        let json = v.encode_viewport_frame("ts", 10);
+        let json = v.encode_viewport_frame("ts", 10, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 0, "empty history clamps y to 0");
+    }
+
+    // ──── 指纹锚点（docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md）────
+
+    /// 窗口顶行整行文本（尾随空白已由编码侧裁剪）。
+    fn top_row_full(parsed: &serde_json::Value) -> String {
+        let runs = parsed["rows"][0]["runs"].as_array().unwrap();
+        (1..runs.len()).step_by(2).map(|i| runs[i].as_str().unwrap()).collect()
+    }
+
+    /// 取回窗口帧的首行指纹（u64）。
+    fn top_row_fp(parsed: &serde_json::Value) -> u64 {
+        let hex = parsed["viewport_fp"].as_str().expect("viewport frame must carry fp");
+        u64::from_str_radix(hex, 16).expect("fp must be hex u64")
+    }
+
+    /// 持续喂入 `from..to` 编号的行。
+    fn feed_lines(v: &mut VtState, from: usize, to: usize) {
+        for i in from..to {
+            v.feed(format!("L{i:05}\r\n").as_bytes());
+        }
+    }
+
+    #[test]
+    fn viewport_frame_carries_top_row_fingerprint() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
+        // 指纹必须能命中自己：同一状态下带 fp 重拉应停在同一行
+        let again: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(top_row_fp(&parsed))))
+                .unwrap();
+        assert_eq!(top_row_full(&again), top_row_full(&parsed));
+        assert_eq!(again["viewport"], parsed["viewport"]);
+    }
+
+    #[test]
+    fn anchor_follows_content_when_history_grows() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
+        let anchored_text = top_row_full(&first);
+        let fp = top_row_fp(&first);
+        let y0 = first["viewport"].as_u64().unwrap() as u32;
+
+        // 继续输出 20 行：历史增长，同一个 y 指向的内容已经变新
+        feed_lines(&mut v, 60, 80);
+        let drifted: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", y0, None)).unwrap();
+        assert_ne!(top_row_full(&drifted), anchored_text, "同一 y 未锚定时应指向新内容");
+
+        // 带指纹重拉：窗口回到同一批内容，且实际 y 随历史增长
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", y0, Some(fp))).unwrap();
+        assert_eq!(top_row_full(&held), anchored_text, "指纹锚定后内容必须不变");
+        assert!(held["viewport"].as_u64().unwrap() > y0 as u64, "历史增长后实际 y 必须前移");
+    }
+
+    #[test]
+    fn anchor_follows_content_across_scrollback_eviction() {
+        let mut v = vt(24, 80);
+        // 超出 scrollback（1000 行）→ 历史饱和，之后每输出一行就淘汰最旧一行
+        feed_lines(&mut v, 0, 1500);
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 100, None)).unwrap();
+        assert_eq!(first["history_size"], 1000, "历史应已饱和");
+        let anchored_text = top_row_full(&first);
+        let fp = top_row_fp(&first);
+
+        // 淘汰 200 行后锚定行仍在缓冲区内（原绝对索引 900 → 700）
+        feed_lines(&mut v, 1500, 1700);
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 100, Some(fp))).unwrap();
+        assert_eq!(top_row_full(&held), anchored_text, "淘汰未触及锚定行时内容必须不变");
+
+        // 再淘汰 900 行 → 锚定行已被淘汰，指纹失配，退回按 y 定位（不 panic）
+        feed_lines(&mut v, 1700, 2600);
+        let gone: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 100, Some(fp))).unwrap();
+        assert_eq!(gone["viewport"], 100, "失配必须退回请求偏移");
+        assert_ne!(top_row_full(&gone), anchored_text);
+    }
+
+    #[test]
+    fn unknown_fingerprint_falls_back_to_requested_offset() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        // 半径内无匹配：按 y 定位，不 panic、不改变语义
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(0xdead_beef))).unwrap();
+        assert_eq!(parsed["viewport"], 10);
+        assert_eq!(
+            top_row_full(&parsed),
+            top_row_full(&serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap()),
+            "失配回退后内容必须与无指纹请求一致"
+        );
+    }
+
+    #[test]
+    fn anchor_search_is_bounded_by_radius() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
+        let fp = top_row_fp(&first);
+        // 位移远超搜索半径（512）→ 不越界寻找，直接退回请求偏移
+        feed_lines(&mut v, 60, 1600);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(fp))).unwrap();
+        assert_eq!(parsed["viewport"], 10, "超出半径必须回退而非继续搜索");
     }
 
     // ──── RLE 行编码（docs/dev/plans/archive/2026-08-28-pty-frame-rle.md）────
@@ -1265,7 +1434,7 @@ mod tests {
     fn rows_of(feed: &[u8]) -> Vec<serde_json::Value> {
         let mut v = vt(6, 20);
         v.feed(feed);
-        let json = v.encode_viewport_frame("ts", 0);
+        let json = v.encode_viewport_frame("ts", 0, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         parsed["rows"].as_array().unwrap().clone()
     }
@@ -1290,7 +1459,7 @@ mod tests {
         for feed in cases {
             let mut v = vt(6, 20);
             v.feed(feed);
-            let json = v.encode_viewport_frame("ts", 0);
+            let json = v.encode_viewport_frame("ts", 0, None);
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             let rows = parsed["rows"].as_array().unwrap();
             for (i, row) in rows.iter().enumerate() {
@@ -1347,7 +1516,7 @@ mod tests {
     fn runs_handles_full_width_row_as_single_run() {
         let mut v = vt(2, 200);
         v.feed(&[b'x'; 200]);
-        let json = v.encode_viewport_frame("ts", 0);
+        let json = v.encode_viewport_frame("ts", 0, None);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let runs = parsed["rows"][0]["runs"].as_array().unwrap();
         assert_eq!(runs.len(), 2, "single-style row must be one run, got {runs:?}");
@@ -1384,7 +1553,7 @@ mod tests {
         for json in [
             v.encode_cell_frame("ts"),
             v.encode_overlay_frame("ts"),
-            v.encode_viewport_frame("ts", 0),
+            v.encode_viewport_frame("ts", 0, None),
         ] {
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert!(parsed["rows"][0]["runs"].is_array(), "all frames must use runs: {parsed}");

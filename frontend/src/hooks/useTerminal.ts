@@ -157,10 +157,10 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const viewportCtlRef = useRef<ViewportController | null>(null)
   if (viewportCtlRef.current === null) {
     viewportCtlRef.current = new ViewportController({
-      sendRequest: (y) => {
+      sendRequest: (y, fp) => {
         const ws = wsRef.current
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'viewport_request', y }))
+          ws.send(JSON.stringify({ type: 'viewport_request', y, fp }))
         }
       },
       onModeChange: setPtyScrollMode,
