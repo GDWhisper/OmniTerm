@@ -30,10 +30,11 @@ let root: ReturnType<typeof createRoot>
 
 function setup() {
   localStorage.removeItem('omniterm_last_terminal_engine')
+  localStorage.removeItem('omniterm_last_acp_agent')
   useAppStore.setState({
     activeProjectId: 'proj-1',
     worktrees: { 'proj-1': [{ id: 'wt-1', project_id: 'proj-1', path: '/tmp/proj', label: 'main', is_main: true, is_git_repo: true, is_git_worktree: false }] },
-    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux', lastTerminalEngine: null,
+    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux', lastTerminalEngine: null, lastAcpAgentId: null,
   })
   useAgentStore.setState({ agents: [{ id: 'agent-1', display_name: 'Claude', command: 'claude', args: [], env: [], created_at: '', updated_at: '' }] })
   useToastStore.setState({ addToast: vi.fn() })
@@ -41,7 +42,7 @@ function setup() {
 
 function renderModal(
   workspaceId = 'wt-1',
-  seed?: { lastTerminalEngine?: 'pty' | 'tmux' | null; multiplexerAvailable?: boolean },
+  seed?: { lastTerminalEngine?: 'pty' | 'tmux' | null; multiplexerAvailable?: boolean; lastAcpAgentId?: string | null },
 ) {
   const reloadSessions = vi.fn().mockResolvedValue(undefined)
   const onClose = vi.fn()
@@ -176,6 +177,61 @@ describe('CreateSessionModal', () => {
     // useEffect fires: acpAgentId → 'agent-1' → Create should be enabled
     const enabledBtns = Array.from(document.body.querySelectorAll('button')).filter((b) => !b.disabled)
     expect(enabledBtns.length).toBeGreaterThanOrEqual(1)
+  })
+
+  // ─── ACP agent 记忆 + 上次选择标记 ───
+
+  const acpSelect = () => document.body.querySelector('select') as HTMLSelectElement
+
+  const openAcp = () => {
+    const acpCard = Array.from(document.body.querySelectorAll('button')).find(
+      (b) => b.textContent?.includes('ACP'),
+    )
+    act(() => acpCard!.click())
+  }
+
+  const twoAgents = [
+    { id: 'agent-1', display_name: 'Claude', command: 'claude', args: [], env: [], created_at: '', updated_at: '' },
+    { id: 'agent-2', display_name: 'Codex', command: 'codex', args: [], env: [], created_at: '', updated_at: '' },
+  ]
+
+  it('remembers the agent of the ACP session just created', async () => {
+    renderModal()
+    openAcp()
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', expect.any(String), undefined, 'acp', 'agent-1')
+    })
+    expect(useAppStore.getState().lastAcpAgentId).toBe('agent-1')
+    expect(localStorage.getItem('omniterm_last_acp_agent')).toBe('agent-1')
+    // ACP 创建不刷新引擎记忆
+    expect(useAppStore.getState().lastTerminalEngine).toBeNull()
+  })
+
+  it('prefers the remembered agent over the first one on reopen', () => {
+    renderModal('wt-1', { lastAcpAgentId: 'agent-2' })
+    act(() => useAgentStore.setState({ agents: twoAgents }))
+    openAcp()
+    expect(acpSelect().value).toBe('agent-2')
+  })
+
+  it('marks the remembered agent option with the last-used suffix', () => {
+    renderModal('wt-1', { lastAcpAgentId: 'agent-2' })
+    act(() => useAgentStore.setState({ agents: twoAgents }))
+    openAcp()
+    const suffix = i18n.t('agentPicker.lastUsedSuffix')
+    const options = Array.from(acpSelect().querySelectorAll('option'))
+    expect(options.find((o) => o.value === 'agent-2')!.textContent).toContain(suffix)
+    expect(options.find((o) => o.value === 'agent-1')!.textContent).not.toContain(suffix)
+  })
+
+  it('falls back to the first agent when the remembered agent no longer exists', () => {
+    renderModal('wt-1', { lastAcpAgentId: 'agent-gone' })
+    openAcp()
+    expect(acpSelect().value).toBe('agent-1')
   })
 
   // ─── API 契约 ───

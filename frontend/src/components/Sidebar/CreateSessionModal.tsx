@@ -82,6 +82,15 @@ function LastUsedBadge() {
   )
 }
 
+/* ACP agent 默认选中：上次成功创建的 agent > 第一个（记忆 id 已被删除时回落） */
+function defaultAcpAgentId(
+  agents: { id: string }[],
+  lastAcpAgentId: string | null,
+): string | null {
+  if (lastAcpAgentId && agents.some((a) => a.id === lastAcpAgentId)) return lastAcpAgentId
+  return agents[0]?.id ?? null
+}
+
 /* ─── Main component ─── */
 
 export function CreateSessionModal(props: {
@@ -98,6 +107,8 @@ export function CreateSessionModal(props: {
   const multiplexer = useAppStore((s) => s.multiplexer)
   const lastTerminalEngine = useAppStore((s) => s.lastTerminalEngine)
   const setLastTerminalEngine = useAppStore((s) => s.setLastTerminalEngine)
+  const lastAcpAgentId = useAppStore((s) => s.lastAcpAgentId)
+  const setLastAcpAgentId = useAppStore((s) => s.setLastAcpAgentId)
   const agents = useAgentStore((s) => s.agents)
 
   const [sessName, setSessName] = useState('')
@@ -112,12 +123,12 @@ export function CreateSessionModal(props: {
     requestedEngine === 'tmux' && !multiplexerAvailable ? 'pty' : requestedEngine
   // ACP agent 选择（仅 category=acp 时生效）
   const [acpAgentId, setAcpAgentId] = useState<string | null>(null)
-  // 切到 ACP 后 agents 到达时自动选中第一个（处理异步加载竞态）
+  // 切到 ACP 后 agents 到达时自动选中（处理异步加载竞态；记忆 id 优先于第一个）
   useEffect(() => {
     if (category === 'acp' && acpAgentId === null && agents.length > 0) {
-      setAcpAgentId(agents[0].id)
+      setAcpAgentId(defaultAcpAgentId(agents, lastAcpAgentId))
     }
-  }, [category, acpAgentId, agents])
+  }, [category, acpAgentId, agents, lastAcpAgentId])
   const [submitting, setSubmitting] = useState(false)
 
   // ─── Reset ───
@@ -167,7 +178,9 @@ export function CreateSessionModal(props: {
         sessionAgentId,
       )
       await props.reloadSessions()
-      setLastTerminalEngine(terminalEngine)
+      // 只记本次实际创建的类别——ACP 创建不该刷新引擎记忆（反之亦然）
+      if (category === 'acp') setLastAcpAgentId(acpAgentId!)
+      else setLastTerminalEngine(terminalEngine)
       activateSession(newSession.id)
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? 'Session created')
       handleClose()
@@ -191,9 +204,9 @@ export function CreateSessionModal(props: {
 
   const selectCategory = (c: Category) => {
     setCategory(c)
-    // 切换到 ACP 时，若尚未选择 agent 且列表有可用项，自动选中第一个
+    // 切换到 ACP 时，若尚未选择 agent 且列表有可用项，按默认优先级选中
     if (c === 'acp' && acpAgentId === null && agents.length > 0) {
-      setAcpAgentId(agents[0].id)
+      setAcpAgentId(defaultAcpAgentId(agents, lastAcpAgentId))
     }
   }
 
@@ -337,6 +350,7 @@ export function CreateSessionModal(props: {
                 <AgentPicker
                   value={acpAgentId}
                   onChange={setAcpAgentId}
+                  lastUsedId={lastAcpAgentId}
                   className={inputClass}
                   style={inputStyle}
                 />

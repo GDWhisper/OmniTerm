@@ -93,6 +93,10 @@ export interface AppState {
    *  yet (never created one), so the modal still falls back to 'pty'. */
   lastTerminalEngine: 'pty' | 'tmux' | null
 
+  /** Agent the user last created an ACP session with. null = no record yet;
+   *  the modal falls back to the first agent when unset or stale. */
+  lastAcpAgentId: string | null
+
   // Disconnect / recycle timeouts (minutes)
   blurDisconnectMin: number
   idleDisconnectMin: number
@@ -202,6 +206,7 @@ export interface AppState {
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
   setLastTerminalEngine: (engine: 'pty' | 'tmux') => void
+  setLastAcpAgentId: (agentId: string) => void
   setBlurDisconnectMin: (n: number) => void
   setIdleDisconnectMin: (n: number) => void
   setAcpIdleRecycleMin: (n: number) => void
@@ -309,6 +314,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const stored = localStorage.getItem('omniterm_last_terminal_engine')
     return stored === 'pty' || stored === 'tmux' ? stored : null
   })(),
+  // agent id 是后端生成的字符串，无法枚举合法值——只挡空串；失效 id 由消费方对照当前列表回落
+  lastAcpAgentId: localStorage.getItem('omniterm_last_acp_agent') || null,
   blurDisconnectMin: readDisconnectMin('omniterm_blur_disconnect_min', DEFAULT_BLUR_DISCONNECT_MIN),
   idleDisconnectMin: readDisconnectMin('omniterm_idle_disconnect_min', DEFAULT_IDLE_DISCONNECT_MIN),
   // Pure in-memory — the backend recycle setting isn't wired up yet.
@@ -417,6 +424,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLastTerminalEngine: (engine) => {
     localStorage.setItem('omniterm_last_terminal_engine', engine)
     set({ lastTerminalEngine: engine })
+  },
+
+  setLastAcpAgentId: (agentId) => {
+    localStorage.setItem('omniterm_last_acp_agent', agentId)
+    set({ lastAcpAgentId: agentId })
   },
 
   setBlurDisconnectMin: (n) => {

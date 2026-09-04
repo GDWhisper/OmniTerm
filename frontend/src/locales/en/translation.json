@@ -415,6 +415,7 @@
   "sidebar.adoptFailed": "Failed to adopt session: {{msg}}",
   "agentPicker.label": "Agents",
   "agentPicker.hint": "Terminal sessions are powered by {{mux}}, AI sessions by ACP.",
+  "agentPicker.lastUsedSuffix": " (LAST USED)",
   "settings.agents.title": "Agents",
   "settings.agents.new": "New",
   "settings.agents.displayName": "Display name",

@@ -415,6 +415,7 @@
   "sidebar.adoptFailed": "接管会话失败：{{msg}}",
   "agentPicker.label": "智能体",
   "agentPicker.hint": "终端会话由 {{mux}} 驱动，AI 会话由 ACP 驱动。",
+  "agentPicker.lastUsedSuffix": "（上次选择）",
   "settings.agents.title": "智能体",
   "settings.agents.new": "新建",
   "settings.agents.displayName": "显示名",
