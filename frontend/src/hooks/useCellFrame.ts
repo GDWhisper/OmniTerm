@@ -4,7 +4,7 @@
 // CellFrame wire format per design §9 + Phase 3 node — JSON via WebSocket Text frame.
 // Frontend receives cell_frame → renderCellFrame writes ANSI to xterm.js.
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
 
 // ──────────────────────────────────────────────────────────
@@ -170,8 +170,8 @@ const RESYNC_THROTTLE_MS = 1000
  *
  * diff 帧相对上一帧的编码基线，**中间帧不可丢弃**——丢掉即永久丢失那次
  * 行变化（症状：连按回车丢行，切换会话经补屏全帧才恢复）。故每个 rAF
- * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时清空队列并请求
- * 后端作废 diff 基线、下一帧发全帧兜底。
+ * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时才清空积压，
+ * 并保证「清空必有重同步在途」（见 armResync / 超限分支注释）。
  *
  * 滚动期的帧丢弃（方案 C D3：viewport 模式下实时帧不渲染）由
  * ViewportController.acceptFrame 在入队前门控，本 hook 不感知滚动状态。
@@ -183,30 +183,84 @@ export function useCellFrame(
   const frameQueue = useRef<CellFrame[]>([])
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
+  const resyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const enqueue = useCallback((frame: CellFrame) => {
-    const q = frameQueue.current
-    if (q.length >= MAX_PENDING_FRAMES) {
-      q.length = 0
-      const now = performance.now()
-      if (now - lastResyncAt.current >= RESYNC_THROTTLE_MS) {
-        lastResyncAt.current = now
-        requestResync?.()
-      }
+  // 卸载时清掉补发定时器，避免卸载后触发 requestResync。
+  useEffect(
+    () => () => {
+      if (resyncTimer.current != null) clearTimeout(resyncTimer.current)
+    },
+    [],
+  )
+
+  /**
+   * 清空积压后的重同步：节流防刷屏（隐藏标签页等场景 rAF 停摆会持续
+   * 超限），但**节流窗口内的清空必须补发**——「清空必有重同步在途」是
+   * 画面自愈的不变式。补发若也被吞，丢失的 diff 帧永久无恢复：后端基线
+   * 已前进不会重发，画面冻结/错位在旧状态，直到切换会话经补屏全帧才
+   * 恢复（TUI 启动错位的根因）。
+   */
+  const armResync = useCallback(() => {
+    if (resyncTimer.current != null) return // 补发已在途，到点必发
+    const now = performance.now()
+    const wait = RESYNC_THROTTLE_MS - (now - lastResyncAt.current)
+    if (wait <= 0) {
+      lastResyncAt.current = now
+      requestResync?.()
       return
     }
-    q.push(frame)
-    if (rafId.current == null) {
-      rafId.current = requestAnimationFrame(() => {
-        rafId.current = null
-        const term = termRef.current
-        const frames = frameQueue.current
-        frameQueue.current = []
-        if (!term) return
-        for (const f of frames) renderCellFrame(term, f)
-      })
-    }
-  }, [termRef, requestResync])
+    resyncTimer.current = setTimeout(() => {
+      resyncTimer.current = null
+      lastResyncAt.current = performance.now()
+      requestResync?.()
+    }, wait)
+  }, [requestResync])
+
+  const enqueue = useCallback(
+    (frame: CellFrame) => {
+      const q = frameQueue.current
+      if (q.length >= MAX_PENDING_FRAMES) {
+        // 渲染跟不上产出。full/overlay 帧自含完整屏幕状态，是积压中唯一的
+        // 自愈锚点：保留**最后一个** full（其后 diff 的基线是它），只丢弃
+        // 它之前的 diff（将被 full 覆盖，丢弃无损）——保留的 full 渲染即
+        // 恢复，本次清空自带重同步，无需请求。
+        let keepFrom = -1
+        for (let i = q.length - 1; i >= 0; i--) {
+          if (q[i].overlay || q[i].full) {
+            keepFrom = i
+            break
+          }
+        }
+        if (keepFrom > 0 && q.length - keepFrom < MAX_PENDING_FRAMES) {
+          // 瘦身有效：丢 full 之前的 diff（将被 full 覆盖），保留 full 及其后。
+          q.splice(0, keepFrom)
+        } else if (keepFrom === 0) {
+          // full 在队首：保留它（下一个渲染批次立即恢复画面），丢弃其后
+          // 的 diff——它们的基线是 full，丢失的增量由重同步全帧覆盖。
+          q.length = 1
+          armResync()
+        } else {
+          // 队列全是 diff：清空并请求后端作废 diff 基线、重发全帧。
+          q.length = 0
+          armResync()
+        }
+      }
+      // 瘦身/清空后当前帧照常入队：diff 帧的中间变化不可丢，丢一帧 =
+      // 永久丢那次行变化（后端基线已前进，不会重发）。
+      q.push(frame)
+      if (rafId.current == null) {
+        rafId.current = requestAnimationFrame(() => {
+          rafId.current = null
+          const term = termRef.current
+          const frames = frameQueue.current
+          frameQueue.current = []
+          if (!term) return
+          for (const f of frames) renderCellFrame(term, f)
+        })
+      }
+    },
+    [termRef, armResync],
+  )
 
   return { enqueue }
 }
