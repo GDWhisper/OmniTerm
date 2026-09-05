@@ -584,6 +584,11 @@ impl VtState {
     ///   位置，按新位置出窗口 —— 位置换算全部在持有 grid 真相源的这一侧完成，
     ///   因此不受帧率/RTT 滞后影响（`y` 是「距底部偏移」，历史增长或淘汰后同一
     ///   个 y 指向的是更新的内容，前端拿滞后的 `history_size` 反推必然漂移）；
+    /// - **`y = 0` 跳过重定位**：y=0 的语义是「回底看 live 屏」（滚回落底 +
+    ///   回底后 200ms 恢复窗口内的锚点重拉）。live 屏顶行（空行/提示符行）
+    ///   与历史行同内容是常态，指纹吸附会把回底校准帧顶成历史窗口，前端
+    ///   `currentY` 被带偏后恢复定时器的 `currentY == 0` 条件失效，视图卡在
+    ///   viewport 模式 —— 故 y=0 恒服务 live 屏；
     /// - 帧恒 `full: true` + `viewport: Some(y)`，不触碰 diff 基线
     ///   （实时流独立继续，前端在 viewport 模式下自行丢弃实时帧）；
     /// - `y > 0` 时光标隐藏（历史窗口内无活光标），`y = 0` 携带真实光标
@@ -600,8 +605,9 @@ impl VtState {
         let y = (y as i64).clamp(0, hs as i64) as i32;
         let top = hs - y;
         let top = match fp {
-            Some(fp) => Self::relocate_anchor(grid, cols, hs, top, fp),
-            None => top,
+            // y=0 = 回底校准，恒服务 live 屏，不做历史吸附（理由见上函数注释）
+            Some(fp) if y > 0 => Self::relocate_anchor(grid, cols, hs, top, fp),
+            _ => top,
         };
         let start = top - hs; // Line 起点：≤ 0，负值进入 history
         let y = (hs - top) as u32; // 重定位后的实际偏移（回传前端权威同步）
@@ -1376,6 +1382,25 @@ mod tests {
             top_row_full(&serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap()),
             "失配回退后内容必须与无指纹请求一致"
         );
+    }
+
+    /// y=0 是「回底看 live 屏」的校准请求，即使携带指纹也不得吸附进历史：
+    /// live 屏顶行（空行/提示符行）与历史行同内容是常态，吸附会把回底帧
+    /// 顶成历史窗口，前端 currentY 被带偏后卡在 viewport 模式（2026-09-04
+    /// TUI 错位排查确认的次级缺陷）。
+    #[test]
+    fn viewport_frame_y0_ignores_fingerprint_even_when_history_matches() {
+        let mut v = vt(6, 20);
+        // 10 个换行 → 5 行进历史且全为空行，live 屏顶行也是空行：指纹必然命中历史
+        for _ in 0..10 {
+            v.feed(b"\r\n");
+        }
+        assert!(v.term.grid().history_size() > 0, "前置：历史里应有空行");
+        let top_fp = hash_grid_row(v.term.grid(), 20, Line(0));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, Some(top_fp))).unwrap();
+        assert_eq!(parsed["viewport"], 0, "y=0 必须恒服务 live 屏，不做指纹重定位");
+        assert_eq!(parsed["cursor"]["visible"], serde_json::Value::Bool(true));
     }
 
     #[test]

@@ -252,6 +252,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。开启后收到的
       // cell_frame 一律是 runs 行编码（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md`）。
       ws.send(JSON.stringify({ t: 'hello', supports_cell_frame: true }))
+      // 连接建立即补发当前尺寸：连接初期容器布局未稳时，onResize 的 resize
+      // 消息可能落在 WS open 之前被 readyState 门禁静默丢弃（pty 下 xterm 与
+      // 后端 grid 行数就此永久分叉——cell_frame 只覆盖顶部 height 行，xterm
+      // 底部多余的行停留旧内容，症状为 TUI 画在输入行上方、底部垫陈旧画面）。
+      // 后端对同尺寸 resize 幂等，重连/会话切换路径同样由此对齐。
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
     }
 
     // Every connection spawns a fresh tmux client whose attach starts with a
@@ -276,6 +282,19 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
             if (!sawFirstBinary) {
               sawFirstBinary = true
               termRef.current?.reset()
+            }
+            // 帧尺寸自愈：帧携带的 grid 高宽与本端 xterm 不一致（resize 消息
+            // 丢失或竞态）时补发当前尺寸，后端 resize 会作废 diff 基线改发
+            // 全帧，双端就此收敛。不补发则帧只覆盖顶部 height 行，xterm 底部
+            // 多余的行永久停留旧内容。同尺寸时后端幂等，误发无副作用。
+            const live = termRef.current
+            if (
+              live &&
+              msg.height != null &&
+              msg.width != null &&
+              (msg.height !== live.rows || msg.width !== live.cols)
+            ) {
+              ws.send(JSON.stringify({ type: 'resize', cols: live.cols, rows: live.rows }))
             }
             // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
             // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。
