@@ -1,4 +1,4 @@
-//! 会话引擎抽象层（见 docs/dev/plans/2026-07-28-pty-engine-implementation.md D9）。
+//! 会话引擎抽象层（见 docs/dev/plans/archive/2026-07-28-pty-engine-implementation.md D9）。
 //!
 //! 按会话 `runtime_kind` 路由到具体引擎；复用器引擎边界目录已冻结，
 //! 引擎之外的代码只经本层的 `SessionEngine` / `EngineRegistry` 访问会话能力。

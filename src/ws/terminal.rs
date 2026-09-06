@@ -24,8 +24,17 @@ pub enum ClientControl {
     /// 历史视口窗口请求（方案 C Phase 1，仅 pty 引擎消费）：滚轮接管后前端
     /// 请求以 `y`（行，0 = live 屏）为顶的历史窗口帧。负值无意义，处理侧
     /// 钳制；上界由 encode_viewport_frame 钳到实际 history_size。
+    ///
+    /// `fp` = 上次服务窗口首行的内容指纹（十六进制 u64）。非空表示「保持
+    /// 锚点」的重拉，后端按它把窗口重定位到该行当前的位置；`None` 表示用户
+    /// 主动滚动，按偏移定位（
+    /// `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D5）。
     #[serde(rename = "viewport_request")]
-    ViewportRequest { y: i32 },
+    ViewportRequest {
+        y: i32,
+        #[serde(default)]
+        fp: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -103,9 +112,22 @@ mod tests {
 
     #[test]
     fn viewport_request_parses() {
+        // 用户主动滚动：无 fp
         let ctrl: ClientControl =
             serde_json::from_str(r#"{"type":"viewport_request","y":42}"#).unwrap();
-        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42 });
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42, fp: None });
+        // 保持锚点的重拉：带十六进制指纹
+        let ctrl: ClientControl =
+            serde_json::from_str(r#"{"type":"viewport_request","y":42,"fp":"00000000deadbeef"}"#)
+                .unwrap();
+        assert_eq!(
+            ctrl,
+            ClientControl::ViewportRequest { y: 42, fp: Some("00000000deadbeef".to_string()) }
+        );
+        // 显式 null（前端未锚定）不得因字段缺失而报错
+        let ctrl: ClientControl =
+            serde_json::from_str(r#"{"type":"viewport_request","y":0,"fp":null}"#).unwrap();
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 0, fp: None });
     }
 
     #[test]

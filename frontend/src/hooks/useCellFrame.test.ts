@@ -42,6 +42,19 @@ function fullFrame(marker: string): CellFrame {
   }
 }
 
+function diffFrame(marker: string): CellFrame {
+  return {
+    t: 'cell_frame',
+    session_id: 's',
+    width: 2,
+    height: 1,
+    full: false,
+    overlay: false,
+    row_indices: [0],
+    rows: [{ runs: ['', marker + ' '] }],
+  }
+}
+
 // ──────────────────────────────────────────────────────────
 // 行渲染无损性判据（RLE 行编码，2026-08-28-pty-frame-rle.md D5/D6）
 // ──────────────────────────────────────────────────────────
@@ -180,7 +193,36 @@ describe('useCellFrame', () => {
     expect(idxB).toBeGreaterThan(idxA)
   })
 
-  it('on queue overflow clears backlog, drops the incoming frame and requests resync', () => {
+  it('on overflow keeps the last full frame (and diffs after it) as the recovery anchor, without resync', () => {
+    const term = new FakeTerminal()
+    const termRef = { current: term as unknown as FakeTerminal }
+    const resync = vi.fn()
+    const hook = mount(termRef, resync)
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => 2000)
+
+    // 60 diffs + 1 full + 60 diffs; the 121st enqueue overflows.
+    act(() => {
+      for (let i = 0; i < 60; i++) hook.enqueue(diffFrame(`d${i} `))
+      hook.enqueue(fullFrame('FULL'))
+      for (let i = 0; i < 60; i++) hook.enqueue(diffFrame(`e${i} `))
+    })
+    // full 帧自含完整状态：保留它即自带恢复，无需请求重同步。
+    expect(resync).not.toHaveBeenCalled()
+    nowSpy.mockRestore()
+
+    // The diffs before the kept full frame were dropped; the full frame and
+    // the diffs after it are rendered in order.
+    act(() => flushRaf())
+    const joined = term.writes.join('|')
+    expect(joined).toContain('FULL')
+    expect(joined).toContain('e59')
+    expect(joined).not.toContain('d59')
+    const idxFull = joined.indexOf('FULL')
+    const idxE59 = joined.indexOf('e59')
+    expect(idxE59).toBeGreaterThan(idxFull)
+  })
+
+  it('on overflow of an all-diff backlog clears it and requests resync', () => {
     const term = new FakeTerminal()
     const termRef = { current: term as unknown as FakeTerminal }
     const resync = vi.fn()
@@ -191,40 +233,71 @@ describe('useCellFrame', () => {
 
     // Never flush rAF → queue grows to the cap; the next enqueue overflows.
     for (let i = 0; i < 121; i++) {
-      act(() => hook.enqueue(fullFrame('X')))
+      act(() => hook.enqueue(diffFrame('X')))
     }
     expect(resync).toHaveBeenCalledTimes(1)
     nowSpy.mockRestore()
 
-    // Overflow cleared the backlog: the rAF render sees nothing queued.
+    // Overflow cleared the backlog; the incoming frame itself is still queued
+    // (a dropped diff loses that row change permanently), so exactly one
+    // frame renders.
     act(() => flushRaf())
-    expect(term.writes.join('')).not.toContain('X')
+    const xCount = term.writes.join('|').split('X ').length - 1
+    expect(xCount).toBe(1)
   })
 
-  it('throttles resync requests to at most one per second', () => {
+  it('on overflow with the full frame at queue head keeps it, drops the diffs after it and resyncs', () => {
     const term = new FakeTerminal()
     const termRef = { current: term as unknown as FakeTerminal }
     const resync = vi.fn()
     const hook = mount(termRef, resync)
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => 2000)
 
-    let now = 1000
-    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
-
-    for (let burst = 0; burst < 3; burst++) {
-      for (let i = 0; i < 121; i++) {
-        act(() => hook.enqueue(fullFrame('X')))
-      }
-      act(() => flushRaf())
-      now += 100 // bursts 100ms apart — inside the throttle window
-    }
-    expect(resync).toHaveBeenCalledTimes(1)
-
-    // Past the throttle window the next overflow resyncs again.
-    now += 1000
-    for (let i = 0; i < 121; i++) {
-      act(() => hook.enqueue(fullFrame('X')))
-    }
-    expect(resync).toHaveBeenCalledTimes(2)
+    // 1 full + 121 diffs: the full sits at index 0, so keeping it and
+    // everything after would not shrink the queue — keep only the full.
+    act(() => {
+      hook.enqueue(fullFrame('FULL'))
+      for (let i = 0; i < 121; i++) hook.enqueue(diffFrame(`d${i} `))
+    })
     nowSpy.mockRestore()
+
+    // 被丢弃的 diff 增量由重同步全帧覆盖，resync 必须在途。
+    expect(resync).toHaveBeenCalledTimes(1)
+    act(() => flushRaf())
+    const joined = term.writes.join('|')
+    expect(joined).toContain('FULL')
+    expect(joined).not.toContain('d117')
+  })
+
+  it('resyncs at most one immediately per second, and schedules a catch-up resync for overflows inside the throttle window', async () => {
+    vi.useFakeTimers()
+    try {
+      const term = new FakeTerminal()
+      const termRef = { current: term as unknown as FakeTerminal }
+      const resync = vi.fn()
+      const hook = mount(termRef, resync)
+
+      let now = 1000
+      const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => now)
+
+      // 窗口内第一次超限：立即 resync。
+      for (let i = 0; i < 121; i++) act(() => hook.enqueue(diffFrame('X')))
+      expect(resync).toHaveBeenCalledTimes(1)
+      act(() => flushRaf())
+
+      // 100ms 后再次超限（节流窗口内）：不立即发，但安排补发——否则这次
+      // 丢帧永久无恢复（TUI 启动错位的根因）。
+      now += 100
+      for (let i = 0; i < 121; i++) act(() => hook.enqueue(diffFrame('Y')))
+      expect(resync).toHaveBeenCalledTimes(1)
+
+      // 补发定时器到点（距首次 resync 1s）后触发。
+      await vi.advanceTimersByTimeAsync(900)
+      expect(resync).toHaveBeenCalledTimes(2)
+
+      nowSpy.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

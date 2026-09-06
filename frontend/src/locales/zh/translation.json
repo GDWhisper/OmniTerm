@@ -227,6 +227,8 @@
   "chat.msg.openFile": "在文件管理器中打开",
   "chat.msg.workTime": "已工作 {{dur}}",
   "chat.msg.waitTime": "等待人工 {{dur}}",
+  "chat.msg.working": "工作中 {{dur}}",
+  "chat.msg.workingTip": "本地实时估算，定稿以后端结算为准",
   "chat.msg.regenerate": "重新生成",
   "chat.status.connecting": "连接中…",
   "chat.status.disconnected": "已断开",
@@ -297,6 +299,7 @@
   "fm.lastModified": "修改时间",
   "fm.size": "大小",
   "fm.actions": "操作",
+  "drawer.resizeCorner": "拖动调整面板宽度与抽屉高度",
   "drawer.loadFailed": "读取文件失败",
   "drawer.reloaded": "已重新加载",
   "drawer.unsavedChanges": "文件已修改，是否保存？",
@@ -311,6 +314,7 @@
   "drawer.retry": "重试",
   "drawer.preview": "预览",
   "drawer.edit": "编辑",
+  "drawer.markdownTooLarge": "文档过长，已退回源码视图（渲染上限 {{max}} 行）",
   "drawer.externallyModified": "已被外部修改",
   "drawer.fileDeletedExternally": "文件已被外部删除",
   "drawer.close": "关闭",
@@ -411,6 +415,7 @@
   "sidebar.adoptFailed": "接管会话失败：{{msg}}",
   "agentPicker.label": "智能体",
   "agentPicker.hint": "终端会话由 {{mux}} 驱动，AI 会话由 ACP 驱动。",
+  "agentPicker.lastUsedSuffix": "（上次选择）",
   "settings.agents.title": "智能体",
   "settings.agents.new": "新建",
   "settings.agents.displayName": "显示名",
@@ -502,5 +507,6 @@
   "chat.msg.copySuccess": "消息已复制",
   "chat.msg.copyFailed": "复制失败",
   "chat.msg.quote": "引用",
-  "chat.msg.copyMarkdown": "复制为 Markdown"
+  "chat.msg.copyMarkdown": "复制为 Markdown",
+  "toast.dismiss": "关闭提示"
 }

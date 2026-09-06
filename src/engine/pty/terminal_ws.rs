@@ -25,7 +25,7 @@ const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 /// 单帧「编码 + 发送」耗时告警阈值。转发循环是单个 `select!`，分支内的
 /// `send().await` 一旦被背压阻塞，其余分支（含 viewport 请求）在此期间得不到
 /// 轮询 —— 这是 30fps 实时帧拖慢滚动响应的机制，留告警防止其悄悄回潮
-/// （`docs/dev/plans/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
+/// （`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
 const SLOW_FRAME_US: u64 = 5_000;
 
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).
@@ -125,9 +125,9 @@ pub async fn handle_pty_terminal(
 
     // === WS binary → PTY stdin（专用写线程，写尽语义见 PtyAttach::write）===
     let (pty_in_tx, mut pty_in_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
-    // === 历史视口请求（方案 C Phase 1）：读循环递交 y，转发循环编码响应帧 ===
+    // === 历史视口请求（方案 C Phase 1）：读循环递交 (y, 锚点指纹)，转发循环编码响应帧 ===
     let (viewport_tx, mut viewport_rx) =
-        tokio::sync::mpsc::channel::<u32>(MAX_PENDING_VIEWPORT_REQUESTS);
+        tokio::sync::mpsc::channel::<(u32, Option<u64>)>(MAX_PENDING_VIEWPORT_REQUESTS);
     let writer_attach = attach.clone();
     let resize_attach = attach.clone();
     let writer_key = key.clone();
@@ -238,12 +238,12 @@ pub async fn handle_pty_terminal(
                     viewport_y = viewport_rx.recv() => {
                         // None = 读循环已结束（唯一 sender 被 drop），与
                         // agent_rx 同语义退出，避免空转
-                        let Some(y) = viewport_y else { break };
+                        let Some((y, fp)) = viewport_y else { break };
                         trace!(y, "viewport request served: session={session_id_for_frame}");
                         let json = {
                             // encode_viewport_frame 仅需 &self（不动 diff 基线）
                             let vt_guard = encode_attach.state.vt.lock().unwrap();
-                            vt_guard.encode_viewport_frame(&session_id_for_frame, y)
+                            vt_guard.encode_viewport_frame(&session_id_for_frame, y, fp)
                         };
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                             break;
@@ -341,13 +341,17 @@ pub async fn handle_pty_terminal(
                                 // vt 为会话共享，全帧对其他连接同样安全。
                                 resize_attach.state.vt.lock().unwrap().invalidate_diff();
                             }
-                            ClientControl::ViewportRequest { y } => {
+                            ClientControl::ViewportRequest { y, fp } => {
                                 // 方案 C Phase 1：仅 cell_frame 模式有意义（raw
-                                // 模式 xterm 自持 scrollback）。负值锂 0，上界
+                                // 模式 xterm 自持 scrollback）。负值钳 0，上界
                                 // 由 encode_viewport_frame 钳到 history_size。
+                                // fp 是上次窗口首行的十六进制指纹：非空 = 保持
+                                // 锚点的重拉，后端按内容重定位窗口；非法 fp 按
+                                // 未锚定处理（降级为按偏移定位，不报错断连）。
                                 if read_cfe.load(Ordering::Relaxed) {
                                     let y = y.max(0) as u32;
-                                    if let Err(e) = viewport_tx.try_send(y) {
+                                    let fp = fp.as_deref().and_then(parse_anchor_fp);
+                                    if let Err(e) = viewport_tx.try_send((y, fp)) {
                                         debug!(y, "viewport request dropped: {e}");
                                     }
                                 }
@@ -380,6 +384,14 @@ pub async fn handle_pty_terminal(
 
     // detach 语义：不杀会话进程，引擎常驻持有（D5/§1.2）
     info!("terminal WS disconnected (pty): session={session_id} — 会话进程保持常驻");
+}
+
+/// 解析 `viewport_request` 的锚点指纹（十六进制 u64）。
+///
+/// 非法输入返回 `None` —— 指纹只是优化锚点精度的提示，解析失败降级为
+/// 「按偏移定位」（旧行为），不应当因此报错或断连。
+fn parse_anchor_fp(fp: &str) -> Option<u64> {
+    u64::from_str_radix(fp, 16).ok()
 }
 
 /// hook 上报 → `agent_state` WS 帧；nonce 与上次相同视为重复，返回 `None`

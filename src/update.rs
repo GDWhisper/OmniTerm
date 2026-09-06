@@ -478,18 +478,25 @@ fn replace_exe(tmp: &Path, exe: &Path) -> Result<()> {
 /// `api/system.rs::run_update`），否则它们会被 init 收养成孤儿。
 ///
 /// 关键机制：
+/// - `exe` 必须是**替换前**捕获的规范化路径（调用方在更新前经
+///   `current_exe_channel()` 取得），不能事后重新解析 `std::env::current_exe()`：
+///   自替换是 rename 覆盖，替换后本进程仍映射旧 inode，Linux 上
+///   readlink("/proc/self/exe") 会带 ` (deleted)` 后缀，exec 必然 ENOENT
+///   （症状：提示自动重启却静默不重启、刷新仍是旧版）；替换前的路径在替换后
+///   恰好指向新二进制，才是正确的 exec 目标。macOS 的 `_NSGetExecutablePath`
+///   返回启动路径字符串、rename 后同名路径已指向新二进制，巧合可用——不得依赖
+///   该平台差异；
 /// - listen socket 由 tokio/mio 以 CLOEXEC 创建，exec 时内核自动关闭，
 ///   新进程 bind 不会 `Address already in use`；
 /// - daemon 模式的 log fd 非 CLOEXEC，exec 后保留，新进程日志继续落同一文件；
 /// - exec 失败时本进程**继续运行旧版本**（不会退出），由调用方记 error 日志，
 ///   前端兜底显示手动重启提示——自重启失败不造成服务中断。
 #[cfg(unix)]
-pub(crate) fn relaunch() -> Result<()> {
+pub(crate) fn relaunch(exe: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
-    let exe = std::env::current_exe().context("failed to locate current executable")?;
     let args = strip_daemon_flag(&std::env::args_os().collect::<Vec<_>>());
-    let mut cmd = std::process::Command::new(&exe);
+    let mut cmd = std::process::Command::new(exe);
     // 保留原始 argv[0]（可能为相对路径/别名），参数从 argv[1] 起
     if let Some(argv0) = args.first() {
         cmd.arg0(argv0);
@@ -500,7 +507,7 @@ pub(crate) fn relaunch() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn relaunch() -> Result<()> {
+pub(crate) fn relaunch(_exe: &Path) -> Result<()> {
     bail!("automatic relaunch is not supported on this platform")
 }
 

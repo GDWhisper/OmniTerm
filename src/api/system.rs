@@ -246,7 +246,10 @@ async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
         Ok(()) => {
             // 更新成功。Unix 上调度延迟自重启：响应先 flush 回前端（见
             // RELAUNCH_DELAY），随后回收 ACP 子进程并 exec 新二进制（PID 不变，
-            // 见 `update::relaunch`）。exec 失败时服务继续跑旧版本，仅留 error
+            // 见 `update::relaunch`）。exec 目标必须用替换前捕获的规范化路径
+            // （rename 覆盖后该路径指向新二进制；事后重解析 current_exe() 在
+            // Linux 上会拿到 " (deleted)" 失效路径，exec ENOENT 静默不重启）。
+            // exec 失败时服务继续跑旧版本，仅留 error
             // 日志，前端倒计时超时后兜底显示手动重启提示。
             #[cfg(unix)]
             let auto_restart = {
@@ -262,7 +265,7 @@ async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                             RELAUNCH_SHUTDOWN_TIMEOUT,
                         );
                     }
-                    if let Err(e) = update::relaunch() {
+                    if let Err(e) = update::relaunch(&exe) {
                         tracing::error!("auto-relaunch failed, restart manually: {e:#}");
                     }
                 });

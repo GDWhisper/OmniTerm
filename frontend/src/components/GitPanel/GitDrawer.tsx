@@ -17,13 +17,15 @@ interface GitDrawerProps {
   onClose: () => void
   height: number
   onHeightChange: (height: number) => void
+  /** Called once on drag release — caller persists the height here */
+  onHeightCommit?: (height: number) => void
   /** Status refresh tick — re-fetches the open file diff when the repo changes. */
   refreshTick: number
   /** Open the file in the shared file editor (FileDrawer) instead of the diff. */
   onOpenInEditor: (absolutePath: string, repoRoot: string | null) => void
 }
 
-export function GitDrawer({ target, bind, onClose, height, onHeightChange, refreshTick, onOpenInEditor }: GitDrawerProps) {
+export function GitDrawer({ target, bind, onClose, height, onHeightChange, onHeightCommit, refreshTick, onOpenInEditor }: GitDrawerProps) {
   const { t } = useTranslation()
   const [diff, setDiff] = useState('')
   const [truncated, setTruncated] = useState(false)
@@ -75,7 +77,7 @@ export function GitDrawer({ target, bind, onClose, height, onHeightChange, refre
     : commit?.short_sha || target.sha.slice(0, 7)
 
   return (
-    <DrawerShell height={height} onHeightChange={onHeightChange} title={target.kind === 'file' ? 'diff' : 'commit'}>
+    <DrawerShell height={height} onHeightChange={onHeightChange} onHeightCommit={onHeightCommit} title={target.kind === 'file' ? 'diff' : 'commit'}>
       {/* Header row */}
       <div
         style={{

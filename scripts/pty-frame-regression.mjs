@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * pty 帧正确性回归 —— 覆盖 `docs/dev/plans/2026-08-28-pty-frame-rle.md` §6
+ * pty 帧正确性回归 —— 覆盖 `docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §6
  * 手动回归 4 项中除「浏览器内视觉观感」外的可断言部分。
  *
  * 用途：改动 cell_frame 帧编码（如 P3 移除 cells 路径）后的正确性回归。

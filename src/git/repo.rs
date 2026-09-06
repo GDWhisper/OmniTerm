@@ -1,4 +1,4 @@
-//! Git repository operations for the GIT panel (ADR: docs/dev/plans/2026-07-26-git-panel.md).
+//! Git repository operations for the GIT panel (ADR: docs/dev/plans/archive/2026-07-26-git-panel.md).
 //! All operations shell out to the git CLI; read ops use `--no-optional-locks`
 //! to avoid contending on `index.lock` with the user's terminal.
 

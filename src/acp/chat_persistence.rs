@@ -222,7 +222,7 @@ pub async fn finalize_message(
 
 /// 把一个已结束 turn 的时长增量累加到会话行上（会话级累计在写时结算，不做读时
 /// `SUM ... GROUP BY` —— 会话列表是轮询接口，理由见
-/// `docs/dev/plans/2026-08-30-acp-work-time.md` D3）。
+/// `docs/dev/plans/archive/2026-08-30-acp-work-time.md` D3）。
 ///
 /// `work_ms` + `wait_ms` = 该 turn 的墙钟时长。累计落在 `sessions` 行上，与 agent 子进程
 /// 生命周期无关：idle 回收 → restore 出新 client 后继续累加。

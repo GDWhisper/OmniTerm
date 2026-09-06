@@ -45,9 +45,9 @@ function stubTimers() {
 }
 
 function makeController(overrides?: Partial<ViewportControllerCallbacks>) {
-  const sent: number[] = []
+  const sent: Array<{ y: number; fp: string | null }> = []
   const cb: ViewportControllerCallbacks = {
-    sendRequest: (y) => sent.push(y),
+    sendRequest: (y, fp) => sent.push({ y, fp }),
     onModeChange: vi.fn(),
     onLiveRestore: vi.fn(),
     onNewOutput: vi.fn(),
@@ -55,6 +55,9 @@ function makeController(overrides?: Partial<ViewportControllerCallbacks>) {
   }
   return { ctl: new ViewportController(cb), sent, cb }
 }
+
+/** 只取已发出请求的 y（多数断言不关心指纹）。 */
+const ys = (sent: Array<{ y: number; fp: string | null }>) => sent.map((s) => s.y)
 
 const METRICS = { lineHeightPx: 10, rows: 24, wsOpen: true }
 const wheel = (deltaY: number, deltaMode = 0) => ({ deltaY, deltaMode })
@@ -88,7 +91,7 @@ describe('ViewportController.handleWheel', () => {
     ctl.handleWheel(wheel(-30), METRICS) // y 9
     expect(raf.pending()).toBe(1) // rAF 合并：只挂一个调度
     raf.flush()
-    expect(sent).toEqual([9]) // 只发最新 y
+    expect(ys(sent)).toEqual([9]) // 只发最新 y
   })
 
   it('skips duplicate request when y unchanged at boundary', () => {
@@ -96,30 +99,30 @@ describe('ViewportController.handleWheel', () => {
     // 直达上界
     ctl.handleWheel(wheel(-(MAX_VIEWPORT_Y + 500) * METRICS.lineHeightPx), METRICS)
     raf.flush()
-    expect(sent).toEqual([MAX_VIEWPORT_Y])
+    expect(ys(sent)).toEqual([MAX_VIEWPORT_Y])
     // 已在上界继续上滚：y 钳住不变则不重发
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
-    expect(sent).toEqual([MAX_VIEWPORT_Y])
+    expect(ys(sent)).toEqual([MAX_VIEWPORT_Y])
   })
 
   it('pixel fractions accumulate across events (trackpad smoothness)', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel(wheel(-5), METRICS) // 0.5 行，累积
-    expect(sent).toEqual([])
+    expect(ys(sent)).toEqual([])
     ctl.handleWheel(wheel(-5), METRICS) // 凑满 1 行
     raf.flush()
-    expect(sent).toEqual([1])
+    expect(ys(sent)).toEqual([1])
   })
 
   it('line deltaMode maps directly, page deltaMode multiplies by rows', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel(wheel(-3, 1), METRICS)
     raf.flush()
-    expect(sent).toEqual([3])
+    expect(ys(sent)).toEqual([3])
     ctl.handleWheel(wheel(-2, 2), METRICS) // 2 页 × 24 行
     raf.flush()
-    expect(sent).toEqual([3, 3 + 48])
+    expect(ys(sent)).toEqual([3, 3 + 48])
   })
 
   it('does not take over in alt-screen or when ws closed (D4/D1)', () => {
@@ -136,7 +139,7 @@ describe('ViewportController.handleWheel', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel(wheel(-(MAX_VIEWPORT_Y + 500) * METRICS.lineHeightPx), METRICS)
     raf.flush()
-    expect(sent).toEqual([MAX_VIEWPORT_Y])
+    expect(ys(sent)).toEqual([MAX_VIEWPORT_Y])
   })
 })
 
@@ -234,98 +237,114 @@ describe('ViewportController.acceptFrame', () => {
     // 会话历史不足：请求 50 行，后端钳到 3 行
     ctl.handleWheel(wheel(-500), METRICS)
     raf.flush()
-    expect(sent).toEqual([50])
+    expect(ys(sent)).toEqual([50])
     ctl.acceptFrame({ viewport: 3 })
     // 再向下滚 1 行：从同步后的 y=3 出发而不是 y=50
     ctl.handleWheel(wheel(10), METRICS)
     raf.flush()
-    expect(sent).toEqual([50, 2])
+    expect(ys(sent)).toEqual([50, 2])
   })
 })
 
 // ──────────────────────────────────────────────────────────
-// 绝对锚定（2026-08-30）：新输出不得把视口冻在上翻时刻的快照
+// 指纹锚定（`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`）
 //
-// 回归背景：修复前窗口帧只在滚轮时请求一次，之后实时帧被 acceptFrame
-// 丢弃且无人重拉，屏幕永久停在上翻瞬间的历史内容——用户在压测中途上翻
-// 后，后续 12s 的输出完全不可见，只有切换会话（reset）才恢复。
+// 回归背景一（2026-08-30）：窗口帧只在滚轮时请求一次，之后实时帧被
+// acceptFrame 丢弃且无人重拉，屏幕永久停在上翻瞬间的历史内容——用户在压测
+// 中途上翻后，后续 12s 的输出完全不可见，只有切换会话（reset）才恢复。
+//
+// 回归背景二（2026-09-03）：改由前端用 `history_size` 反推绝对锚点后仍漂移
+// ——该值取自主线程收到的上一帧（最坏落后 33ms）再叠加 rAF 延迟，每次重拉
+// 都漂 ~0.5 行（实测达输出速率的 28%），历史饱和后更是以 100% 输出速率滑动。
+// 故位置换算整体移交后端：前端只负责「用户滚动不带指纹 / 重拉带指纹」。
 // ──────────────────────────────────────────────────────────
-describe('ViewportController 新输出重拉（绝对锚定）', () => {
-  it('历史增长时按锚点重算 y，视口看到的行保持不变', () => {
+describe('ViewportController 新输出重拉（指纹锚定）', () => {
+  it('用户滚动不带指纹，重拉带指纹（D5 意图区分）', () => {
     const { ctl, sent, cb } = makeController()
-    ctl.acceptFrame({ history_size: 100 })
-    ctl.handleWheel(wheel(-100), METRICS) // 上翻 10 行 → y=10，锚点距历史顶 90
+    ctl.handleWheel(wheel(-100), METRICS) // 上翻 10 行
     raf.flush()
-    expect(sent).toEqual([10])
+    expect(sent[0]).toEqual({ y: 10, fp: null })
 
-    // 后端持续输出：历史涨到 110 行（实时帧在 viewport 模式被丢弃）
-    ctl.acceptFrame({ history_size: 110 })
-    expect(ctl.acceptFrame({})).toBe(false)
+    // 后端回窗口帧，携带首行指纹
+    ctl.acceptFrame({ viewport: 10, viewport_fp: '00000000deadbeef' })
+    // 新输出 → 重拉：y 保持本地值，指纹交给后端做位置换算
     ctl.notifyLiveOutput(true)
     timers.fireAll()
     raf.flush()
-    // 锚点 90 不变 → y = 110 - 90 = 20：用户看到的行仍是同一批
-    expect(sent).toEqual([10, 20])
+    expect(sent.length).toBe(2)
+    expect(sent[1]).toEqual({ y: 10, fp: '00000000deadbeef' })
     expect(cb.onNewOutput).toHaveBeenCalledWith(true)
   })
 
-  it('历史饱和（y 钳住不变）时仍重拉——内容仍在变', () => {
-    const { ctl, sent, cb } = makeController()
-    ctl.acceptFrame({ history_size: MAX_VIEWPORT_Y })
-    ctl.handleWheel(wheel(-100), METRICS) // y=10，锚点距历史顶 990
+  it('后端重定位后的 y 权威同步，后续重拉从新 y 出发', () => {
+    const { ctl, sent } = makeController()
+    ctl.handleWheel(wheel(-100), METRICS) // y=10
     raf.flush()
-    expect(sent).toEqual([10])
-    // 历史已达上界：新输出挤掉顶部行，history_size 恒为 1000，锚点换算
-    // 出的 y 仍是 10，但窗口内容已被推新——必须重拉，否则永久冻结。
+    ctl.acceptFrame({ viewport: 10, viewport_fp: 'aa' })
+    // 历史增长：后端把同一批内容重定位到 y=20
+    ctl.acceptFrame({ viewport: 20, viewport_fp: 'aa' })
     ctl.notifyLiveOutput(true)
     timers.fireAll()
     raf.flush()
-    expect(sent).toEqual([10, 10])
+    expect(sent.at(-1)).toEqual({ y: 20, fp: 'aa' })
+  })
+
+  it('历史饱和（y 不变）时仍重拉——内容仍在变', () => {
+    const { ctl, sent, cb } = makeController()
+    ctl.handleWheel(wheel(-100), METRICS)
+    raf.flush()
+    ctl.acceptFrame({ viewport: 10, viewport_fp: 'bb' })
+    // 历史已达上界：y 恒为 10，但窗口内容已被推新——必须重拉，否则冻结。
+    // 同 y 也能发出，靠 pendingRefresh 绕过去重。
+    ctl.notifyLiveOutput(true)
+    timers.fireAll()
+    raf.flush()
+    expect(ys(sent)).toEqual([10, 10])
+    expect(sent.at(-1)?.fp).toBe('bb')
     expect(cb.onNewOutput).toHaveBeenCalledWith(true)
+  })
+
+  it('用户滚动清锚点：重拉不会把用户拉回刚滚走的位置', () => {
+    const { ctl, sent } = makeController()
+    ctl.handleWheel(wheel(-100), METRICS) // y=10
+    raf.flush()
+    ctl.acceptFrame({ viewport: 10, viewport_fp: 'cc' })
+    ctl.handleWheel(wheel(-100), METRICS) // 再上翻 → y=20，锚点清除
+    raf.flush()
+    expect(sent.at(-1)).toEqual({ y: 20, fp: null })
   })
 
   it('空 diff 帧（仅光标移动）不重拉、不报新输出', () => {
     const { ctl, sent, cb } = makeController()
-    ctl.acceptFrame({ history_size: 100 })
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
     ctl.notifyLiveOutput(false)
-    expect(sent).toEqual([10])
+    expect(ys(sent)).toEqual([10])
     expect(cb.onNewOutput).not.toHaveBeenCalled()
     expect(timers.pending()).toBe(0)
   })
 
-  it('锚点换算结果钳制在 MAX_VIEWPORT_Y 内', () => {
-    const { ctl, sent } = makeController()
-    ctl.acceptFrame({ history_size: 100 })
-    ctl.handleWheel(wheel(-100), METRICS) // y=10，锚点 90
-    raf.flush()
-    ctl.acceptFrame({ history_size: 100 + MAX_VIEWPORT_Y + 500 })
-    ctl.notifyLiveOutput(true)
-    timers.fireAll()
-    raf.flush()
-    expect(sent.at(-1)).toBe(MAX_VIEWPORT_Y)
-  })
-
   it('live 模式下 notifyLiveOutput 无副作用', () => {
     const { ctl, sent, cb } = makeController()
-    ctl.acceptFrame({ history_size: 100 })
     ctl.notifyLiveOutput(true)
-    expect(sent).toEqual([])
+    expect(ys(sent)).toEqual([])
     expect(cb.onNewOutput).not.toHaveBeenCalled()
   })
 
-  it('回底后清除新输出标志并撤掉待发重拉', () => {
-    const { ctl, cb } = makeController()
-    ctl.acceptFrame({ history_size: 100 })
+  it('回底后清除新输出标志、锚点与待发重拉', () => {
+    const { ctl, sent, cb } = makeController()
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
-    ctl.acceptFrame({ history_size: 110 })
+    ctl.acceptFrame({ viewport: 10, viewport_fp: 'dd' })
     ctl.notifyLiveOutput(true)
     expect(cb.onNewOutput).toHaveBeenLastCalledWith(true)
     ctl.scrollToLive()
     expect(cb.onNewOutput).toHaveBeenLastCalledWith(false)
     expect(timers.pending()).toBe(0)
+    // 锚点已清：再次上翻不带旧指纹
+    ctl.handleWheel(wheel(-100), METRICS)
+    raf.flush()
+    expect(sent.at(-1)?.fp).toBeNull()
   })
 })
 
@@ -336,7 +355,7 @@ describe('ViewportController.reset', () => {
     raf.flush()
     ctl.reset()
     expect(ctl.viewportActive).toBe(false)
-    expect(sent).toEqual([10])
+    expect(ys(sent)).toEqual([10])
     expect(cb.onModeChange).toHaveBeenLastCalledWith(false)
     // 重置后实时帧照常渲染
     expect(ctl.acceptFrame({})).toBe(true)
@@ -364,7 +383,7 @@ describe('touch → viewport y 方向契约', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel({ deltaY: -60, deltaMode: 0 }, METRICS)
     raf.flush()
-    expect(sent).toEqual([6])
+    expect(ys(sent)).toEqual([6])
     expect(ctl.viewportActive).toBe(true)
   })
 
@@ -373,20 +392,20 @@ describe('touch → viewport y 方向契约', () => {
     // 先下滑进历史
     ctl.handleWheel({ deltaY: -120, deltaMode: 0 }, METRICS)
     raf.flush()
-    const first = sent[0]
+    const first = sent[0].y
     expect(first).toBeGreaterThan(0)
     // 再上滑
     ctl.handleWheel({ deltaY: 60, deltaMode: 0 }, METRICS)
     raf.flush()
     expect(sent.length).toBe(2)
-    expect(sent[1]).toBeLessThan(first)
+    expect(sent[1].y).toBeLessThan(first)
   })
 
   it('live 底部 deltaY 正应为 no-op（已无更新内容可看）', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel({ deltaY: 30, deltaMode: 0 }, METRICS)
     raf.flush()
-    expect(sent).toEqual([])
+    expect(ys(sent)).toEqual([])
     expect(ctl.viewportActive).toBe(false)
   })
 })

@@ -1,28 +1,25 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { DrawerShell } from '../Common/DrawerShell'
 const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.FileEditor })))
 import { FilePreview } from './FilePreview'
+import { MarkdownPreview } from './MarkdownPreview'
+import {
+  FILE_REFRESH_DEBOUNCE_MS,
+  MAX_MARKDOWN_PREVIEW_LINES,
+  countLines,
+  isImageFile,
+  isMarkdownFile,
+  shouldRenderMarkdown,
+} from './filePreviewShared'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
 import { READER_FONT } from '../../utils/fonts'
 import { isPathOutsideWorkspace, resolveRenamedPath } from '../../utils/path'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import type { FileChangeEvent } from '../../hooks/useFileWatcher'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-
-/** Supported image extensions for preview mode */
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
-
-function getExtension(fileName: string): string {
-  const ext = fileName.split('.').pop()?.toLowerCase() || ''
-  return ext
-}
-
-function isImageFile(fileName: string): boolean {
-  return IMAGE_EXTS.has(getExtension(fileName))
-}
 
 interface FileDrawerProps {
   /** Absolute path of the file to display */
@@ -37,12 +34,14 @@ interface FileDrawerProps {
   workspaceRoot?: string
   /** Called when the drawer should close */
   onClose: () => void
-  /** Called when the open file is renamed externally (SSE rename event) — switch to the new path */
+  /** Called when the drawer should display a different path: 外部改名（SSE rename）跟随，或渲染预览里点击文档内链接 */
   onPathChange?: (newPath: string) => void
   /** Current drawer height in px */
   height: number
   /** Called when height changes (drag) */
   onHeightChange: (height: number) => void
+  /** Called once on drag release — caller persists the height here */
+  onHeightCommit?: (height: number) => void
   /** SSE change events — when the current file changes externally */
   fileChangeEvent: FileChangeEvent | null
 }
@@ -57,6 +56,7 @@ export function FileDrawer({
   onPathChange,
   height,
   onHeightChange,
+  onHeightCommit,
   fileChangeEvent,
 }: FileDrawerProps) {
   const { t } = useTranslation()
@@ -64,6 +64,9 @@ export function FileDrawer({
   const fileName = filePath.split('/').pop() || filePath
 
   const [mode, setMode] = useState<'view' | 'edit'>('view')
+  // SSE 去抖定时器触发时读最新 mode（闭包值已过期 500ms）
+  const modeRef = useRef(mode)
+  modeRef.current = mode
   const [content, setContent] = useState('')
   const [editedContent, setEditedContent] = useState('')
   const [modified, setModified] = useState(false)
@@ -95,6 +98,15 @@ export function FileDrawer({
   // null = 尚未读取（loading / 错误态），false = 已确认非文本。
   const [isText, setIsText] = useState<boolean | null>(null)
   const isSupported = isImage || isText !== false
+
+  // view 模式按 markdown 渲染，edit 模式恒为源码。超过行数上限时退回源码视图
+  // （react-markdown 整篇全量解析、无虚拟滚动，见 MAX_MARKDOWN_PREVIEW_LINES）。
+  const isMarkdown = isMarkdownFile(fileName)
+  const renderMarkdown = useMemo(
+    () => mode === 'view' && shouldRenderMarkdown(fileName, content),
+    [mode, fileName, content],
+  )
+  const markdownTooLarge = isMarkdown && mode === 'view' && !renderMarkdown
 
   // Fetch file content — 非图片文件都尝试按文本读取，是否文本由后端探测
   const fetchContent = useCallback(async () => {
@@ -153,13 +165,18 @@ export function FileDrawer({
       return
     }
 
-    if (mode === 'view') {
-      // Silently refresh in view mode
-      fetchContent()
-    } else {
-      // In edit mode, show warning
-      setExternalChange(true)
-    }
+    // 去抖：agent 连续写同一文件时 SSE 会连发，合并成一次请求 + 一次全量渲染
+    // （markdown 预览是整篇重解析，连发代价明显）。图片路径的 500ms 去抖共用同一常量。
+    const timer = setTimeout(() => {
+      // 模式在定时器里读 ref 而非闭包：500ms 窗口内用户可能已切到 edit，此时静默
+      // fetchContent 会连带重置 editedContent 并清掉 modified —— 等于吞掉未保存的编辑。
+      if (modeRef.current === 'view') {
+        fetchContent()
+      } else {
+        setExternalChange(true)
+      }
+    }, FILE_REFRESH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   }, [fileChangeEvent])
 
   // 实际写文件逻辑（保存与越界确认后共用）
@@ -207,6 +224,14 @@ export function FileDrawer({
     addToast('success', t('drawer.reloaded'))
   }
 
+  // 编辑模式下外部改动只标记不刷新（见 SSE effect 的 modeRef 分支），回到预览时补刷一次，
+  // 否则预览会停在打开文件时的旧内容上。有未保存改动则不刷——fetchContent 会连带重置
+  // editedContent 并清掉 modified，等于吞掉用户的编辑。
+  const switchToPreview = () => {
+    setMode('view')
+    if (externalChange && !modified) fetchContent()
+  }
+
   // Close handler with unsaved changes check
   const handleClose = () => {
     if (modified) {
@@ -231,12 +256,20 @@ export function FileDrawer({
     setModified(newContent !== content)
   }
 
+  // 渲染预览里点相对链接 → 切换抽屉到目标文件。
+  // 必须保持回调身份恒定：调用方传的是行内箭头函数，身份每次父渲染都变，
+  // 而 MarkdownPreview 的 components 依赖它做 memo —— 一变就整篇重新解析。
+  // （与 FileEditor 的 onChangeRef 同一惯例）
+  const pathChangeRef = useRef(onPathChange)
+  pathChangeRef.current = onPathChange
+  const openLinkedFile = useCallback((path: string) => pathChangeRef.current?.(path), [])
+
   // Compute status bar info
-  const lineCount = isText === true ? editedContent.split('\n').length : 0
+  const lineCount = isText === true ? countLines(editedContent) : 0
   const byteSize = isText === true ? new TextEncoder().encode(editedContent).length : 0
 
   return (
-    <DrawerShell height={height} onHeightChange={onHeightChange} title="drawer">
+    <DrawerShell height={height} onHeightChange={onHeightChange} onHeightCommit={onHeightCommit} title="drawer">
       {/* Top bar */}
       <div
         style={{
@@ -288,7 +321,7 @@ export function FileDrawer({
           {isText === true && (
             <>
               <button
-                onClick={() => setMode('view')}
+                onClick={switchToPreview}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -385,6 +418,10 @@ export function FileDrawer({
         </div>
       </div>
 
+      {markdownTooLarge && (
+        <div className="fm-preview-notice">{t('drawer.markdownTooLarge', { max: MAX_MARKDOWN_PREVIEW_LINES })}</div>
+      )}
+
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {!isSupported ? (
@@ -462,6 +499,15 @@ export function FileDrawer({
           </div>
         ) : isImage ? (
           <FilePreview filePath={filePath} sessionId={sessionId} workspaceId={workspaceId} projectId={projectId} fileName={fileName} fileChangeEvent={fileChangeEvent} />
+        ) : renderMarkdown ? (
+          <MarkdownPreview
+            content={content}
+            filePath={filePath}
+            sessionId={sessionId}
+            workspaceId={workspaceId}
+            projectId={projectId}
+            onOpenFile={openLinkedFile}
+          />
         ) : (
           <Suspense
             fallback={(

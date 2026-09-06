@@ -4,7 +4,7 @@
 // CellFrame wire format per design §9 + Phase 3 node — JSON via WebSocket Text frame.
 // Frontend receives cell_frame → renderCellFrame writes ANSI to xterm.js.
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
 
 // ──────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ export interface CursorState {
  *
  * `sgr` 是 SGR 参数体（不含 \x1b[ 前缀和 m 后缀，空串 = 默认样式），`text` 是
  * 同一 sgr 下的连续字符。宽字符占位 cell 不产生输出（已由后端跳过），故解码
- * 侧无需处理它（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
+ * 侧无需处理它（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` D1/D5）。
  */
 export interface CellRow {
   runs: string[]
@@ -44,11 +44,22 @@ export interface CellFrame {
   /** 历史窗口帧标记（方案 C）：本帧展示的历史窗口偏移（行，0 = live 屏）。
    * 仅 viewport_request 的响应帧携带；消费方为 ViewportController。 */
   viewport?: number
+  /** 该窗口首行的内容指纹（十六进制 u64）：ViewportController 下次「保持
+   * 锚点」的重拉原样回传，后端据此把窗口重定位到该行当前的位置（
+   * `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D1/D4）。 */
+  viewport_fp?: string
   /** alt-screen 激活标记（方案 C D4）：仅 overlay 帧携带；消费方为
    * ViewportController（alt-screen 期间禁用滚轮接管）。 */
   alt_screen?: boolean
-  /** 当前 grid 历史行数。所有帧都携带；消费方为 ViewportController
-   * （把「距底偏移 y」换算成绝对锚点，新输出时按锚点重算 y）。 */
+  /** bracketed paste 模式标记（2026-09-06）：所有帧携带，取后端编码时刻
+   * 的 `TermMode::BRACKETED_PASTE`。消费方为 useTerminal——与 xterm 实际
+   * 状态（`term.modes.bracketedPasteMode`）不一致时写 `?2004h/l` 同步
+   * （cell_frame 模式下 raw 流不转发，TUI 的模式序列前端永远收不到，
+   * 不同步则多行粘贴被 TUI 逐行当 Enter 提交）。
+   * `docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
+  bracketed_paste?: boolean
+  /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
+   *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
   history_size?: number
   rows: CellRow[]
 }
@@ -166,8 +177,8 @@ const RESYNC_THROTTLE_MS = 1000
  *
  * diff 帧相对上一帧的编码基线，**中间帧不可丢弃**——丢掉即永久丢失那次
  * 行变化（症状：连按回车丢行，切换会话经补屏全帧才恢复）。故每个 rAF
- * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时清空队列并请求
- * 后端作废 diff 基线、下一帧发全帧兜底。
+ * 按序渲染全部积压帧；仅当积压超过上限（渲染跟不上）时才清空积压，
+ * 并保证「清空必有重同步在途」（见 armResync / 超限分支注释）。
  *
  * 滚动期的帧丢弃（方案 C D3：viewport 模式下实时帧不渲染）由
  * ViewportController.acceptFrame 在入队前门控，本 hook 不感知滚动状态。
@@ -179,30 +190,84 @@ export function useCellFrame(
   const frameQueue = useRef<CellFrame[]>([])
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
+  const resyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const enqueue = useCallback((frame: CellFrame) => {
-    const q = frameQueue.current
-    if (q.length >= MAX_PENDING_FRAMES) {
-      q.length = 0
-      const now = performance.now()
-      if (now - lastResyncAt.current >= RESYNC_THROTTLE_MS) {
-        lastResyncAt.current = now
-        requestResync?.()
-      }
+  // 卸载时清掉补发定时器，避免卸载后触发 requestResync。
+  useEffect(
+    () => () => {
+      if (resyncTimer.current != null) clearTimeout(resyncTimer.current)
+    },
+    [],
+  )
+
+  /**
+   * 清空积压后的重同步：节流防刷屏（隐藏标签页等场景 rAF 停摆会持续
+   * 超限），但**节流窗口内的清空必须补发**——「清空必有重同步在途」是
+   * 画面自愈的不变式。补发若也被吞，丢失的 diff 帧永久无恢复：后端基线
+   * 已前进不会重发，画面冻结/错位在旧状态，直到切换会话经补屏全帧才
+   * 恢复（TUI 启动错位的根因）。
+   */
+  const armResync = useCallback(() => {
+    if (resyncTimer.current != null) return // 补发已在途，到点必发
+    const now = performance.now()
+    const wait = RESYNC_THROTTLE_MS - (now - lastResyncAt.current)
+    if (wait <= 0) {
+      lastResyncAt.current = now
+      requestResync?.()
       return
     }
-    q.push(frame)
-    if (rafId.current == null) {
-      rafId.current = requestAnimationFrame(() => {
-        rafId.current = null
-        const term = termRef.current
-        const frames = frameQueue.current
-        frameQueue.current = []
-        if (!term) return
-        for (const f of frames) renderCellFrame(term, f)
-      })
-    }
-  }, [termRef, requestResync])
+    resyncTimer.current = setTimeout(() => {
+      resyncTimer.current = null
+      lastResyncAt.current = performance.now()
+      requestResync?.()
+    }, wait)
+  }, [requestResync])
+
+  const enqueue = useCallback(
+    (frame: CellFrame) => {
+      const q = frameQueue.current
+      if (q.length >= MAX_PENDING_FRAMES) {
+        // 渲染跟不上产出。full/overlay 帧自含完整屏幕状态，是积压中唯一的
+        // 自愈锚点：保留**最后一个** full（其后 diff 的基线是它），只丢弃
+        // 它之前的 diff（将被 full 覆盖，丢弃无损）——保留的 full 渲染即
+        // 恢复，本次清空自带重同步，无需请求。
+        let keepFrom = -1
+        for (let i = q.length - 1; i >= 0; i--) {
+          if (q[i].overlay || q[i].full) {
+            keepFrom = i
+            break
+          }
+        }
+        if (keepFrom > 0 && q.length - keepFrom < MAX_PENDING_FRAMES) {
+          // 瘦身有效：丢 full 之前的 diff（将被 full 覆盖），保留 full 及其后。
+          q.splice(0, keepFrom)
+        } else if (keepFrom === 0) {
+          // full 在队首：保留它（下一个渲染批次立即恢复画面），丢弃其后
+          // 的 diff——它们的基线是 full，丢失的增量由重同步全帧覆盖。
+          q.length = 1
+          armResync()
+        } else {
+          // 队列全是 diff：清空并请求后端作废 diff 基线、重发全帧。
+          q.length = 0
+          armResync()
+        }
+      }
+      // 瘦身/清空后当前帧照常入队：diff 帧的中间变化不可丢，丢一帧 =
+      // 永久丢那次行变化（后端基线已前进，不会重发）。
+      q.push(frame)
+      if (rafId.current == null) {
+        rafId.current = requestAnimationFrame(() => {
+          rafId.current = null
+          const term = termRef.current
+          const frames = frameQueue.current
+          frameQueue.current = []
+          if (!term) return
+          for (const f of frames) renderCellFrame(term, f)
+        })
+      }
+    },
+    [termRef, armResync],
+  )
 
   return { enqueue }
 }

@@ -27,14 +27,28 @@ pub struct CellFrame {
     pub row_indices: Option<Vec<usize>>,
     /// Viewport 窗口帧标记（方案 C Phase 1）：携带本帧展示的历史窗口偏移
     /// （行，0 = live 屏）。仅 `viewport_request` 的响应帧携带，常规/overlay
-    /// 帧省略——前端据此区分历史帧与实时帧（stale 响应按 y 单调性丢弃）。
+    /// 帧省略——前端据此区分历史帧与实时帧。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<u32>,
+    /// 所服务窗口**首行**的内容指纹（十六进制 u64，
+    /// `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D1/D4）。
+    /// 前端下次重拉时原样回传，后端据此把窗口重定位到该行当前的位置，
+    /// 使「距底部偏移 y」在历史增长/淘汰后仍锚在同一批内容上。
+    /// 走字符串而非 JSON number：u64 超出 JS 安全整数范围。
+    /// 仅窗口帧携带。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewport_fp: Option<String>,
     /// alt-screen 激活标记（方案 C Phase 2，D4）：仅 overlay 帧携带（enter/exit
     /// 都发 overlay，无此标记前端无法区分）。viewport 控制器据此在 alt-screen
     /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt_screen: Option<bool>,
+    /// bracketed paste 模式标记（2026-09-06）：所有帧携带，取编码时刻
+    /// `mode().contains(TermMode::BRACKETED_PASTE)`。前端据此同步 xterm 的
+    /// decPrivateModes——cell_frame 模式下 raw 流不转发，TUI 发的 ?2004h
+    /// 前端永远收不到，不同步则多行粘贴被 TUI 逐行当 Enter 提交。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bracketed_paste: Option<bool>,
     /// 当前 grid 历史行数（`grid.history_size()`）。所有帧都携带：前端在
     /// viewport 模式下靠它把「距底偏移 y」换算成绝对锚点，新输出推高历史
     /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。
@@ -44,7 +58,7 @@ pub struct CellFrame {
 }
 
 /// 一行的线格负载：行内 RLE —— 按 sgr 合并连续字符的扁平数组
-/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/2026-08-28-pty-frame-rle.md` D1/D5）。
+/// `[sgr, text, sgr, text, ...]`（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` D1/D5）。
 ///
 /// 这是 cell_frame 协议的**唯一**行编码：逐 cell 的 `cells` 格式随该计划
 /// P3 的 D4 一并移除，故不存在格式协商（前端无需按字段分派）。

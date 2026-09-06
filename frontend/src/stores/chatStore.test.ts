@@ -9,6 +9,7 @@ import {
   type ChatMessage,
   type ContentBlock,
 } from './chatStore'
+import { clearTurnClock, turnElapsedMs } from '../utils/turnClock'
 
 const QUEUE_PREFIX = 'omniterm_chat_queue:'
 
@@ -626,5 +627,100 @@ describe('pushSystemEvent (后端系统通知：权限超时回收告知)', () =
     useChatStore.getState().pushSystemEvent('s1', '权限请求超时')
     const msgs = useChatStore.getState().states['s1'].messages
     expect(messagesToSyncPayload(msgs)).toEqual([])
+  })
+})
+
+// 流式实时计时的生命周期守卫：计时器必须和 sending / 审批队列严格同生死，
+// 停表路径漏一条就会在气泡上留下一个永不落定的数字（或让条目卡在表里泄漏）。
+describe('turnClock 接线（计时器与 sending / 审批队列同生命周期）', () => {
+  const T0 = 1_700_000_000_000
+  const perm = (id: string) => ({ id, options: [] })
+
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+    clearTurnClock()
+    vi.useFakeTimers({ now: T0 })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    clearTurnClock()
+  })
+
+  it('beginPrompt 起表，markDone 停表', () => {
+    useChatStore.getState().beginPrompt('s1')
+    vi.advanceTimersByTime(5_000)
+    expect(turnElapsedMs('s1')).toBe(5_000)
+    useChatStore.getState().markDone('s1', { workMs: 5_000, waitMs: 0 })
+    expect(turnElapsedMs('s1')).toBeNull()
+  })
+
+  it('markError / markEnded 同样停表', () => {
+    useChatStore.getState().beginPrompt('s1')
+    useChatStore.getState().markError('s1', 'boom')
+    expect(turnElapsedMs('s1')).toBeNull()
+
+    useChatStore.getState().beginPrompt('s2')
+    useChatStore.getState().markEnded('s2')
+    expect(turnElapsedMs('s2')).toBeNull()
+  })
+
+  it('reset 停表（守住表内条目泄漏）', () => {
+    useChatStore.getState().beginPrompt('s1')
+    useChatStore.getState().reset('s1')
+    expect(turnElapsedMs('s1')).toBeNull()
+  })
+
+  it('审批挂起期间冻住，队列见底后从冻结值续跳', () => {
+    useChatStore.getState().beginPrompt('s1')
+    vi.advanceTimersByTime(10_000)
+    useChatStore.getState().setPermission('s1', perm('p1'))
+    vi.advanceTimersByTime(30_000)
+    expect(turnElapsedMs('s1')).toBe(10_000)
+    useChatStore.getState().removePermission('s1', 'p1')
+    vi.advanceTimersByTime(5_000)
+    expect(turnElapsedMs('s1')).toBe(15_000)
+  })
+
+  it('并发审批只 resolve 一个时仍冻住（镜像后端 wait_depth）', () => {
+    useChatStore.getState().beginPrompt('s1')
+    vi.advanceTimersByTime(3_000)
+    useChatStore.getState().setPermission('s1', perm('p1'))
+    useChatStore.getState().setPermission('s1', perm('p2'))
+    useChatStore.getState().removePermission('s1', 'p1')
+    vi.advanceTimersByTime(20_000)
+    expect(turnElapsedMs('s1')).toBe(3_000)
+    useChatStore.getState().removePermission('s1', 'p2')
+    vi.advanceTimersByTime(2_000)
+    expect(turnElapsedMs('s1')).toBe(5_000)
+  })
+
+  it('对账后仍有未决审批时保持冻住', () => {
+    useChatStore.getState().beginPrompt('s1')
+    vi.advanceTimersByTime(4_000)
+    useChatStore.getState().setPermission('s1', perm('p1'))
+    useChatStore.getState().setPermission('s1', perm('p2'))
+    useChatStore.getState().reconcilePermissions('s1', new Set(['p1']))
+    vi.advanceTimersByTime(20_000)
+    expect(turnElapsedMs('s1')).toBe(4_000)
+  })
+
+  it('重连接回半程 turn：锚点取在建行的 createdAt，不从 0 起跳', () => {
+    const streaming: ChatMessage = {
+      id: 'a',
+      role: 'assistant',
+      text: '',
+      blocks: [],
+      createdAt: T0 - 40_000,
+      streaming: true,
+    }
+    useChatStore.getState().hydrate('s1', [streaming], null)
+    useChatStore.getState().beginPrompt('s1')
+    expect(turnElapsedMs('s1')).toBe(40_000)
+  })
+
+  it('无在建 turn 时审批帧 no-op', () => {
+    useChatStore.getState().setPermission('s1', perm('p1'))
+    expect(turnElapsedMs('s1')).toBeNull()
   })
 })

@@ -2,7 +2,7 @@ name: CI
 
 # 质量门禁：push 到 dev/main/preview/debug 时触发。
 # 项目为单人本地 merge 模型无 PR 流程，pull_request 触发仅防御性保留。
-# 设计与分阶段启用见 docs/dev/plans/2026-07-24-quality-gates.md
+# 设计与分阶段启用见 docs/dev/plans/archive/2026-07-24-quality-gates.md
 
 on:
   push:

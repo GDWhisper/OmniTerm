@@ -238,7 +238,7 @@ cmd_start() {
     cleanup_orphans
 
     # 确保 pre-commit hook 生效：core.hooksPath 指向 scripts/hooks
-    # （历史上被设为不存在的 .githooks 导致 hook 失效，见 docs/dev/plans/2026-07-24-quality-gates.md）
+    # （历史上被设为不存在的 .githooks 导致 hook 失效，见 docs/dev/plans/archive/2026-07-24-quality-gates.md）
     _ensure_hooks
 
     # 检查 inotify 资源（EMFILE 常见根因：max_user_instances 耗尽）

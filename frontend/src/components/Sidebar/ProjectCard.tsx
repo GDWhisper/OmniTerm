@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
-import { aggregateStatus, type AcpActivity } from '../../utils/agentAggregate'
+import { aggregateStatus, sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
@@ -180,8 +180,9 @@ export function ProjectCard(props: {
               const isWtExpanded = isWtActive || (props.expandAllSessions && wtSessions.length > 0)
 
               // ACP 会话超阈值折叠（终端会话不受影响）。列表按 created_at DESC
-              // 排序，补足阈值时天然保留最新的；豁免位留给激活/需注意力/等待决策的
-              // 会话，折叠后不丢关键信息。列表被切成「可见行 + 切换行 + 隐藏行」，
+              // 排序，补足阈值时天然保留最新的；豁免位留给「有事在做或要给用户看」的
+              // 会话（运行中 / 等待决策 / 需注意力 / 完成未看），折叠后不丢关键信息。
+              // 列表被切成「可见行 + 切换行 + 隐藏行」，
               // 展开时隐藏行从切换行下方就地追加——而不是插回原序中间，
               // 新行出现在用户点击处，收起/展开的语义与视觉一致。
               const acpSessions = wtSessions.filter((s) => s.runtime_kind === 'acp')
@@ -190,10 +191,12 @@ export function ProjectCard(props: {
               const visibleAcpIds = new Set<string>()
               if (acpOverLimit) {
                 for (const s of acpSessions) {
+                  // 状态判定复用 sessionStatus，与状态点/聚合徽标同一真源，禁止在此重写
+                  // running || waiting 式散装条件。activeSessionId 例外——选中态是前端
+                  // 概念，ACP 会话的 is_active 恒 false，sessionStatus 覆盖不到。
                   if (
                     s.id === props.activeSessionId ||
-                    attention.reasonFor(s.id) ||
-                    props.acpActivityFor(s.id) === 'waiting'
+                    sessionStatus(s, attention.reasonFor(s.id), props.acpActivityFor(s.id)) !== 'none'
                   ) {
                     visibleAcpIds.add(s.id)
                   }
@@ -224,6 +227,12 @@ export function ProjectCard(props: {
                       : s.agent_state === 'running' || s.is_active
                         ? 'running'
                         : undefined
+                // 折叠豁免让「活跃但很老」的会话露在可见区底部，位置本身不携带信息。
+                // 排序保持 created_at DESC 不动（置顶会在状态跳变时整行跳动），
+                // 改用文字色阶 + 状态点呼吸把它标出来；live 判定复用 sessionStatus，
+                // 与 worktree 聚合状态同一真源。
+                const status = sessionStatus(s, attnReason, props.acpActivityFor(s.id))
+                const isLive = status === 'working' || status === 'blocked'
                 const dotColor = attnReason
                   ? attnReason === 'decision'
                     ? 'var(--warning)'
@@ -271,7 +280,7 @@ export function ProjectCard(props: {
                     )}
                     {/* Running indicator dot */}
                     <div
-                      className="flex-shrink-0"
+                      className={`flex-shrink-0${isLive ? ' activity-pulse' : ''}`}
                       style={{
                         width: 6,
                         height: 6,
@@ -283,7 +292,7 @@ export function ProjectCard(props: {
                           : undefined
                       }
                     />
-                    <span className="session-name">
+                    <span className={`session-name${isLive ? ' session-name-live' : ''}`}>
                       {s.name || s.tmux_session_name}
                     </span>
                     {/* Attention badge */}
