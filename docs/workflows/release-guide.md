@@ -381,6 +381,28 @@ Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binar
 - **cannot publish over previously published version**：该版本已发布。`npm-publish` job 已做 `npm view` 幂等跳过，正常不会触发；若手动 `npm publish` 撞车，说明版本号未 bump。
 - **npm 版本号被烧（发布后删除，版本号 immutable）**：v0.2.14 中止发布时 5 个包（主包 + 4 平台包）已发布又删除，`time` 元数据里留下该版本时间戳但 `versions` 里没有——**npm 不允许重发同名版本**，`npm view` 幂等检查对已删版本返回 404 拦不住 publish，CI 报 `Cannot publish over previously published version`。**判定**：`curl https://registry.npmjs.org/@gdwhisper/<pkg> | jq '.time["0.2.14"]'` 有值但 `.versions` 无 → 版本号已烧，必须 bump 新版本号重发（npm 渠道可用 `X.Y.Z-fix` 形式作为独立版本号跳过冲突，但它是 pre-release，`cargo install` 默认不选中）。**教训：中止发布时如需撤回 npm，只能删除「刚发布且 24h 内、且不是唯一版本」的版本，且删除即烧号**——中止发布前先确认 npm 是否已发出，发出则后续只能换版本号。
 
+### Step 10 验证时 npm 平台子包报 404（镜像滞后，非发布失败）
+
+发布后在本机跑 `npm view @gdwhisper/omniterm-<plat>@<ver> version` 或 `npm install -g @gdwhisper/omniterm@<ver>` 报 404 / 主包装上了但平台子包没有，容易误判成「CI 漏发平台包」。**先确认查的是哪个 registry**：开发机 `~/.npmrc` 常指向镜像（如 `registry.npmmirror.com`），镜像对**新发布版本**的同步有分钟到小时级滞后，且各包独立滞后——实测 v0.2.20 出现过主包已同步、4 个平台包 404，且同一平台包多次查询结果在 200/404 间抖动。
+
+**判定（两步，绕开镜像）：**
+
+```bash
+# 1) 直查 npmjs 官方的 per-version 端点，期望全部 200
+for p in linux-x64 linux-arm64 darwin-arm64 win32-x64; do
+  printf "%-14s " "$p"
+  curl -fsSL -m 20 "https://registry.npmjs.org/@gdwhisper%2Fomniterm-$p/<ver>" -o /dev/null -w "HTTP %{http_code}\n"
+done
+# 2) 真装一次：确认平台包被解析、内嵌 binary 报对版本
+cd $(mktemp -d) && npm init -y >/dev/null
+npm install @gdwhisper/omniterm@<ver> --ignore-scripts --registry=https://registry.npmjs.org
+ls node_modules/@gdwhisper/ && ./node_modules/@gdwhisper/omniterm-<本机 plat>/bin/omniterm --version
+```
+
+官方源 200 且 `+ @gdwhisper/omniterm-<plat>@<ver>` 出现在 CI 的 `npm-publish` job 日志里 → 发布已成功，镜像等待同步即可，**不要重跑发布或改版本号**。反之若官方源也 404，才按上方「版本号被烧」/`workflow_dispatch` 补发路径处理。
+
+> 主包的 `optionalDependencies` 是精确锁定，平台包缺失时 npm 会**静默跳过**（optional 语义），只 `added 1 package` 而不报错——所以「装上主包 ≠ 拿到可执行二进制」，验证必须看 `@gdwhisper/` 目录下有没有平台子包。
+
 ### 公共仓 tag 误推送到私有仓
 
 每次推 tag 前先确认 remote：
