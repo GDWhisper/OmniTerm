@@ -47,7 +47,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.20] - 2026-09-07
 
 ### Added
 
@@ -71,6 +71,7 @@ Prefix each entry with the area it affects:
 - (2026-09-02 00:07) `[frontend]` 修复抽屉文件内容 SSE 刷新无去抖、且编辑模式下会吞掉未保存编辑：agent 连续写同一文件时每个事件都触发一次重取（markdown 预览是整篇重解析，连发代价明显）；更严重的是编辑模式下同样静默重取，连带重置 `editedContent` 并清掉 `modified`——用户还没保存的改动被外部写入覆盖。现合并为 500ms 一次（与图片预览路径共用 `FILE_REFRESH_DEBOUNCE_MS`），且模式在定时器内读 ref 而非闭包：预览模式才刷新，编辑模式只亮「已被外部修改」角标（实测 3 次连发只产生 1 次读请求；编辑态下外部改动后缓冲区内容保留）（`frontend/src/components/FileManager/FileDrawer.tsx`、`frontend/src/components/FileManager/FilePreview.tsx`、`frontend/src/components/FileManager/filePreviewShared.ts`）
 - (2026-09-02 00:07) `[frontend]` 修复编辑期间的外部改动切回预览后看不到：编辑模式下外部变更只标记不刷新，但回到「预览」时没人补刷，抽屉一直停在打开时那份内容，角标长亮却不更新。现切回预览时若无未保存改动补一次重取；有未保存改动则不刷（重取会重置编辑缓冲区），保留角标作为提示（`frontend/src/components/FileManager/FileDrawer.tsx`）
 - (2026-09-01 09:25) `[frontend]` 修复抽屉高度拖拽条在触摸设备（触屏电脑/手机）上完全无法拖动：拖拽状态机只绑定 mouse 事件（触摸屏不派发该事件），且命中区仅 6px 高。现迁移到 Pointer Events（鼠标/触摸通用，含 pointercancel 取消）、拖拽条加 `touch-action: none` 防浏览器抢手势，命中区经负边距扩到 22px（视觉条仍 6px 不变）；高度钳制范围提取为共享 `clampDrawerHeight`（`frontend/src/hooks/useDrawerResize.ts`、`frontend/src/components/Common/DrawerShell.tsx`、`frontend/src/utils/drawer.ts`、`frontend/src/index.css`）
+- (2026-08-31 15:23) `[backend]` 修复一键升级后自动重启在 Linux 上静默失败（远程实例升级提示「自动重启」却从不切换、刷新仍是旧版）：自替换是 rename 覆盖运行中的二进制，替换后 `relaunch()` 重新解析 `std::env::current_exe()` 在 Linux 上拿到带 ` (deleted)` 后缀的失效路径，exec 报 ENOENT、旧进程继续服务（macOS 的 `_NSGetExecutablePath` 返回启动路径字符串巧合可用，故本地开发测不出）。现 `update::relaunch()` 改用替换前 `current_exe_channel()` 已捕获的规范化路径——rename 后该路径恰好指向新二进制，exec 换血真正生效，前端的自动重启承诺不再落空（`src/update.rs`、`src/api/system.rs`）
 
 ## [0.2.19] - 2026-08-31
 
@@ -86,7 +87,6 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
-- (2026-08-31 15:23) `[backend]` 修复一键升级后自动重启在 Linux 上静默失败（远程实例升级提示「自动重启」却从不切换、刷新仍是旧版）：自替换是 rename 覆盖运行中的二进制，替换后 `relaunch()` 重新解析 `std::env::current_exe()` 在 Linux 上拿到带 ` (deleted)` 后缀的失效路径，exec 报 ENOENT、旧进程继续服务（macOS 的 `_NSGetExecutablePath` 返回启动路径字符串巧合可用，故本地开发测不出）。现 `update::relaunch()` 改用替换前 `current_exe_channel()` 已捕获的规范化路径——rename 后该路径恰好指向新二进制，exec 换血真正生效，前端的自动重启承诺不再落空（`src/update.rs`、`src/api/system.rs`）
 - (2026-08-30 23:31) `[backend]` 修复 pty 会话重建后提示符堆在同一行（重建 N 次就堆成 `$ $ $ …` 一整行，屏幕上「只剩一行」）：落盘历史是字节快照，shell 打印 PS1 后等待输入、不带换行，会话恰在此刻消亡（后端重启、进程被杀）就把 `…new-api$ ` 原样留下；重建回放后光标停在该提示符末尾，新 shell 的 PS1 直接接在后面。现回放后按结尾字节补齐换行（已以 `\n` 结尾不补，`\r` 结尾补 `\n`，其余补 `\r\n`），补的字节同时进补屏环使 raw 模式行为一致（`src/engine/pty/mod.rs`）
 - (2026-08-30 15:53) `[backend]` `[frontend]` 修复 pty 终端上翻查看历史后画面冻结、新输出完全不可见：窗口帧原先只在滚轮/翻页时请求一次，之后实时帧被 viewport 模式一律丢弃且无人重拉，视口永久停在上翻那一刻的快照——在 `top` 里滚一下鼠标，随后的压测跑 12 秒屏幕纹丝不动，只有切换会话（触发控制器 reset）才恢复。现三处补齐：① 所有 cell_frame 携带 `history_size`，前端按「距历史顶部的绝对行」锚定，新输出推高历史时按锚点重算 y 并重拉窗口，用户看到的行保持不变（真实终端 scrollback 语义）；② 任意键盘输入自动回底——真实终端里光标必须在活动行，此前在 TUI 程序里滚一下就再也回不到实时画面；③ 有未查看的新输出时右下角显示「↓ 下方有新输出」提示条，点击或敲键回底即消失。重拉经「帧内是否有变化行」过滤（30fps tick 帧多数是空帧）并节流到 100ms，空闲会话零额外请求（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/useTerminal.ts`、`frontend/src/components/Terminal/Terminal.tsx`）
 - (2026-08-30 12:02) `[backend]` 修复重连到空闲 pty 会话后终端无反应：转发循环的编码定时器原本等 `hello` 握手到达后才创建，而循环主体是单个 `select!`，会话空闲（pty 无输出）时会永久挂起，之后到达的握手再无机会被循环顶部看到——连接静默停在 raw 直通模式，既不出画面也不再响应滚动请求（重连、多标签页切回空闲会话时必现）。现定时器在连接建立时创建，raw 分支保留一次空转唤醒。同时修了重连首帧：diff 基线是会话共享的，新连接首帧原为差分帧，而前端画面在断开期间并未推进，二者行对齐已错位，现 attach 到既有会话时先作废基线发全帧（`src/engine/pty/terminal_ws.rs`）
