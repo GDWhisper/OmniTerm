@@ -43,6 +43,12 @@ pub struct CellFrame {
     /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alt_screen: Option<bool>,
+    /// bracketed paste 模式标记（2026-09-06）：所有帧携带，取编码时刻
+    /// `mode().contains(TermMode::BRACKETED_PASTE)`。前端据此同步 xterm 的
+    /// decPrivateModes——cell_frame 模式下 raw 流不转发，TUI 发的 ?2004h
+    /// 前端永远收不到，不同步则多行粘贴被 TUI 逐行当 Enter 提交。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bracketed_paste: Option<bool>,
     /// 当前 grid 历史行数（`grid.history_size()`）。所有帧都携带：前端在
     /// viewport 模式下靠它把「距底偏移 y」换算成绝对锚点，新输出推高历史
     /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。

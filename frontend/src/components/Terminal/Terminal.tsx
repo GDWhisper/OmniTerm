@@ -71,6 +71,7 @@ export function Terminal() {
   const {
     initTerminal,
     sendData,
+    pasteText,
     scrollMode,
     hasNewOutput,
     sendScrollKeys,
@@ -98,11 +99,15 @@ export function Terminal() {
     setPasteMenu(null)
     try {
       const text = await navigator.clipboard.readText()
-      if (text && sendData) sendData(text)
+      // 走 xterm paste（非裸 sendData）：获得 `\r?\n→\r` 换行转换，并按
+      // xterm 自身 bracketedPasteMode 包装 `200~/201~`——模式真值由 cell_frame
+      // 的 bracketed_paste 字段同步（useTerminal），多行文本整块进入 TUI
+      // 输入框而非被逐行当 Enter 提交。tmux 会话的换行转换同样受益。
+      if (text && pasteText) pasteText(text)
     } catch {
       useToastStore.getState().addToast('error', t('terminal.pasteFailed'))
     }
-  }, [sendData, t])
+  }, [pasteText, t])
 
   // 长按手势统一走 useLongPress（D3）：终端 paste 菜单与聊天气泡动作菜单共用。
   const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = useLongPress({

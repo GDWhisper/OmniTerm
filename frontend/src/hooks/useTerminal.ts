@@ -296,6 +296,19 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
             ) {
               ws.send(JSON.stringify({ type: 'resize', cols: live.cols, rows: live.rows }))
             }
+            // bracketed paste 模式中继（2026-09-06 D3）：与 xterm 实际值不一致
+            // 才写模式序列（幂等 no-op，不产生写放大）。必须在 acceptFrame 门控
+            // 之前消费——被 viewport 丢弃的实时帧同样携带最新模式真值；会话
+            // 切换 term.reset() 清掉 xterm 模式后首帧即在此自愈。
+            // 注：xterm 6.0 无顶层 bracketedPasteMode，读取走
+            // term.modes.bracketedPasteMode（IModes，DECSET 解析态）。
+            if (
+              live &&
+              msg.bracketed_paste != null &&
+              live.modes.bracketedPasteMode !== msg.bracketed_paste
+            ) {
+              live.write(msg.bracketed_paste ? '\x1b[?2004h' : '\x1b[?2004l')
+            }
             // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
             // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。
             // 被丢弃的实时帧 = 后端有新输出，通知控制器按绝对锚点重拉窗
@@ -459,6 +472,15 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(new TextEncoder().encode(data))
     }
+  }, [])
+
+  /** Paste text through xterm（2026-09-06 D4）：xterm 内部自带
+   *  `\r?\n→\r` 换行转换，并按自身 `bracketedPasteMode` 包装 `200~/201~`
+   *  （模式真值由 cell_frame 的 bracketed_paste 字段同步，见上方 onmessage）。
+   *  移动端长按粘贴必须走它而非裸 sendData——裸发既丢换行转换也丢包装，
+   *  多行文本会被 TUI 逐行当 Enter 提交（tmux 会话的 shell 同样受益）。 */
+  const pasteText = useCallback((text: string) => {
+    termRef.current?.paste(text)
   }, [])
 
   // Register sendData in the app store so cross-component features (e.g.
@@ -1056,6 +1078,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     connectWs,
     initTerminal,
     sendData,
+    pasteText,
     scrollMode,
     hasNewOutput: runtimeKind === 'pty' ? ptyNewOutput : false,
     sendScrollKeys,

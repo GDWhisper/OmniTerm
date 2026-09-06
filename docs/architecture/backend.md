@@ -156,6 +156,17 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 >
 > 注意：`y` 是**相对底部**的偏移，新输出会把内容整体上推，同一个 y 指向的
 > 行随之后移。这是前端必须做锚定换算（而非缓存 y）的根本原因。
+>
+> **`bracketed_paste` 字段（2026-09-06）**：**所有** cell_frame 都携带
+> `bracketed_paste: bool`，取编码时刻的 `mode().contains(TermMode::BRACKETED_PASTE)`。
+> cell_frame 模式下 raw 流不转发，TUI 发的 `?2004h/l` 前端永远收不到——不同步
+> 则 xterm 的 `bracketedPasteMode` 恒 false，桌面端 Ctrl+V 不加 `200~/201~`
+> 包装裸发，多行文本被 Ink 系 TUI 逐行当 Enter 提交。前端消费：与
+> `term.modes.bracketedPasteMode` 不一致时写 `?2004h/l`（幂等 no-op，在
+> `acceptFrame` 门控之前消费——被 viewport 丢弃的帧同样携带最新真值；会话
+> 切换 reset 后首帧自愈）。注意 xterm 6.0 无顶层 `bracketedPasteMode`，读取
+> 走 `term.modes.bracketedPasteMode`。帧体积代价约 20 字节/帧，可忽略。
+> （`docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md`）
 
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 

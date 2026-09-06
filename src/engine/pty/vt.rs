@@ -561,6 +561,7 @@ impl VtState {
             viewport_fp: None,
             // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
+            bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
             rows: out_rows,
         };
@@ -637,6 +638,7 @@ impl VtState {
             // 首行指纹：前端下次「保持锚点」的重拉原样回传（D4）
             viewport_fp: Some(format!("{:016x}", hash_grid_row(grid, cols, Line(start)))),
             alt_screen: None,
+            bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
             rows: out_rows,
         };
@@ -755,6 +757,7 @@ impl VtState {
             viewport: None,
             viewport_fp: None,
             alt_screen: None,
+            bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
             rows: out_rows,
         };
@@ -1192,6 +1195,50 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "viewport frame must omit alt_screen");
+    }
+
+    // ──── bracketed paste 模式中继（2026-09-06，D2：所有帧携带）────
+
+    #[test]
+    fn frame_carries_bracketed_paste_flag() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?2004h"); // Ink 系 TUI 启动时开启 bracketed paste
+        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        assert_eq!(
+            parsed["bracketed_paste"], true,
+            "frame after ?2004h must carry bracketed_paste=true"
+        );
+
+        v.feed(b"\x1b[?2004l"); // 关闭
+        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        assert_eq!(
+            parsed["bracketed_paste"], false,
+            "frame after ?2004l must carry bracketed_paste=false"
+        );
+    }
+
+    #[test]
+    fn overlay_frame_carries_bracketed_paste_flag() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?2004h");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
+        assert_eq!(
+            parsed["bracketed_paste"], true,
+            "overlay frame must carry bracketed_paste=true"
+        );
+    }
+
+    #[test]
+    fn viewport_frame_carries_bracketed_paste_flag() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?2004h");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
+        assert_eq!(
+            parsed["bracketed_paste"], true,
+            "viewport frame must carry bracketed_paste=true"
+        );
     }
 
     // ──── 方案 C Phase 1: encode_viewport_frame ────

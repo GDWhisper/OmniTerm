@@ -1,6 +1,6 @@
 # pty 会话多行粘贴变多次发送 — bracketed paste 模式中继
 
-> 状态：进行中（2026-09-06 排查完成，方案已确认，**尚未动代码**）
+> 状态：已实施（2026-09-06，含勘误见 §2/§D3；手动回归 §4 第 10 条待用户执行）
 > 触发条件：用户报告「pty 终端在 agent 的 TUI 输入框内复制多行内容时直接变成分段、多次发送，而不是完整的一块」
 > 关联：`docs/dev/debug-patterns/terminal-pty.md` 模式 9（双终端模拟器家族）；`docs/architecture/backend.md` cell_frame 字段登记区
 
@@ -10,9 +10,10 @@
 |------|------|
 | 根因排查 + 方案设计（用户已确认「实施」） | ✅ 完成，即本文档 |
 | 本计划文档 + CLAUDE.md 文档索引登记 | ✅ 完成 |
-| 代码实现 | ❌ 未开始（§4 清单第 1-7 条为权威任务列表，按序执行） |
-| 验证（cargo test / tsc / lint / 帧回归脚本 / 手动粘贴回归） | ❌ 未开始（§4 第 8-10 条） |
-| 文档闭环 + 提交 | ❌ 未开始（§5、§4 第 11 条） |
+| 代码实现（§4 第 1-7 条） | ✅ 完成（2026-09-06；第 5 条实际访问路径为 `term.modes.bracketedPasteMode`，见 §2 勘误） |
+| 自动化验证（cargo test / tsc / lint / 帧回归脚本） | ✅ 完成（§4 第 8-9 条：工作区 391 测试 + 新增 3 项、tsc/lint 零新增、帧回归 20/20） |
+| 手动粘贴回归（§4 第 10 条，已登记 `user-testing.md` §4.7） | ❌ 待用户执行（移动端/多行文本需真人与真机） |
+| 文档闭环 + 提交 | ✅ 完成（2026-09-06 提交；手动回归发现问题另行修复） |
 
 排查会话里建的任务跟踪器（#2 后端 / #3 前端 / #1 验证闭环）不跨会话存活，接手以 §4 清单为准，不必重建跟踪器。
 
@@ -40,7 +41,7 @@
 | alt_screen 先例 | overlay 帧已按 `mode().contains(TermMode::ALT_SCREEN)` 携带标记，结构完全同型可抄 | `vt.rs:563` |
 | 大段粘贴写入安全 | `PtyAttach::write` 是循环写尽（EAGAIN/0 显式报错），单帧几百 KB 无截断风险 | `pty/mod.rs:236` |
 | xterm 公开 API | `term.paste(data)` 存在（typings:1275），内部自带 `\r?\n→\r` 转换 + 按自身 `bracketedPasteMode` 包装（bundle 核实） | `@xterm/xterm` typings |
-| xterm 模式读取 | `term.bracketedPasteMode`（boolean，只读，typings:1919）——同步逻辑用「与 xterm 实际值对比」可自愈 | 同上 |
+| xterm 模式读取 | `term.bracketedPasteMode`（boolean，只读，typings:1919）——同步逻辑用「与 xterm 实际值对比」可自愈。**勘误（实施时发现）**： typings:1919 行号正确但该属性在 `IModes` 接口上，实际访问路径为 `term.modes.bracketedPasteMode`（Terminal 类 typings:863 暴露 `modes: IModes`）；顶层无此属性，tsc 即拦截。不影响 D3 设计，只改访问路径 | 同上 |
 | CellFrame 构造点 | 仅 `vt.rs` 三处（`encode_frame_body` / `encode_overlay_frame` / `encode_viewport_frame`），无散落构造 | rg 核实 |
 | 自动应答过滤器 | `ptyInputFilter.ts` 白名单形态均为完整应答串（`^…$`），**不会**误伤 `ESC[200~` 粘贴包，无需改动 | rg 核实 |
 
@@ -95,11 +96,14 @@
 
 5. `frontend/src/hooks/useTerminal.ts` — `ws.onmessage` 的 `msg.t === 'cell_frame'` 分支（~281 行）在 `ctl.acceptFrame` 判定**之前**消费（无论帧是否被 viewport 门控丢弃，模式真值都要同步——被丢弃的实时帧同样携带最新模式）：
    ```ts
-   if (msg.bracketed_paste != null) {
-     const live = termRef.current
-     if (live && live.bracketedPasteMode !== msg.bracketed_paste) {
-       live.write(msg.bracketed_paste ? '\x1b[?2004h' : '\x1b[?2004l')
-     }
+   // 实际形态（勘误见 §2）：live 复用分支内已有的帧尺寸自愈声明；
+   // xterm 6.0 顶层无 bracketedPasteMode，经 term.modes（IModes）读取。
+   if (
+     live &&
+     msg.bracketed_paste != null &&
+     live.modes.bracketedPasteMode !== msg.bracketed_paste
+   ) {
+     live.write(msg.bracketed_paste ? '\x1b[?2004h' : '\x1b[?2004l')
    }
    ```
 6. `useTerminal.ts` — 暴露粘贴出口。在 `sendData` 附近加：
