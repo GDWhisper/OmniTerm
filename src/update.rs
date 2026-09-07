@@ -44,9 +44,14 @@ fn strip_daemon_flag(args: &[std::ffi::OsString]) -> Vec<std::ffi::OsString> {
 /// - `--jwt-secret` 值脱敏——密钥材料不得经 API 回显；
 /// - 含空白/引号的参数用双引号包裹（sh / cmd / PowerShell 通用）。
 pub(crate) fn restart_command(argv: &[std::ffi::OsString], daemonized: bool) -> String {
+    // npm 渠道的 argv[0] 是 node_modules 深处的原生二进制绝对路径，升级
+    // （npm 把旧包目录 retire+delete）后随时可能失效。提示命令面向用户 shell
+    // 回显，这类路径一律归一为 PATH 上的全局 shim `omniterm`，保证复制粘贴可用。
     let bin = argv
         .first()
-        .map(|a| quote_arg(&a.to_string_lossy()))
+        .map(|a| a.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .map(|s| if s.contains("node_modules") { "omniterm".to_string() } else { quote_arg(&s) })
         .unwrap_or_else(|| "omniterm".to_string());
     // 服务端进程仅由 `start` 拉起；argv[1] 异常时保守地把全部参数当 start 参数回显
     let tail: &[std::ffi::OsString] = if argv.get(1).is_some_and(|a| a.as_os_str() == "start") {
@@ -157,10 +162,13 @@ fn repo_slug() -> &'static str {
 }
 
 pub(crate) fn current_exe_channel() -> Result<(PathBuf, Channel)> {
-    let exe = std::env::current_exe()
-        .context("failed to locate current executable")?
-        .canonicalize()
-        .context("failed to canonicalize executable path")?;
+    let exe = std::env::current_exe().context("failed to locate current executable")?;
+    // npm 升级会把旧包目录 retire 后删除，运行中进程的 /proc/self/exe 此后是
+    // 带 "(deleted)" 后缀的死路径，canonicalize 必然 ENOENT。渠道判定只依赖
+    // 路径组成（node_modules / CARGO_HOME），死路径照样可判——回退原始路径，
+    // 保住 /system/version 的渠道识别与 restart_command 链路（否则一键升级
+    // 入口整个 500，升级徽章消失，用户连重试入口都没有）。
+    let exe = exe.canonicalize().unwrap_or(exe);
     let channel = detect_channel(
         &exe,
         std::env::var_os("CARGO_HOME").map(PathBuf::from).as_deref(),
@@ -502,6 +510,15 @@ pub(crate) fn relaunch(exe: &Path) -> Result<()> {
         cmd.arg0(argv0);
     }
     cmd.args(&args[1..]);
+    // exec 目标必须仍存在：npm retire+delete 或前次升级失败留下的 "(deleted)"
+    // 残局里，捕获路径可能已死——预检把裸 ENOENT 转成可诊断的明确错误
+    // （调用方会直写 stderr，用户能看到明确的 restart manually 指引）。
+    if !exe.exists() {
+        bail!(
+            "exec target {} no longer exists on disk (previous update left a deleted binary); restart manually",
+            exe.display()
+        );
+    }
     let err = cmd.exec();
     Err(err).with_context(|| format!("failed to relaunch {}", exe.display()))
 }
@@ -720,5 +737,22 @@ mod tests {
         // e7c7f36 起 stop 段忠实携带 --db（防止 stop 后 start 用默认库），
         // 断言同步为新行为（原 starts_with("omniterm stop && ...") 已过期）。
         assert!(cmd.starts_with("omniterm stop --db"), "{cmd}");
+    }
+
+    #[test]
+    fn restart_command_uses_global_bin_for_npm_channel() {
+        // npm 渠道 argv[0] 是 node_modules 深处的原生二进制路径，升级后该路径
+        // 会被 retire+delete；提示命令必须归一为 PATH 上的 shim，否则用户照抄
+        // 重启命令必然 no such file
+        let argv = vec![
+            os(
+                "/home/u/.nvm/versions/node/v24.15.0/lib/node_modules/@gdwhisper/omniterm/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm",
+            ),
+            os("start"),
+            os("-d"),
+            os("-H"),
+            os("0.0.0.0"),
+        ];
+        assert_eq!(restart_command(&argv, true), "omniterm stop && omniterm start -d -H 0.0.0.0");
     }
 }

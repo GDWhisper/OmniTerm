@@ -1,6 +1,6 @@
 # 构建与协议 — 调试模式
 
-覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持、自替换后 current_exe 失效（/proc/self/exe）。
+覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持（含 RUST_LOG 日志劫持零日志）、自替换后 current_exe 失效（/proc/self/exe，含 npm reify retire+delete 与 restart_command argv[0] 归一）。
 
 ---
 
@@ -101,6 +101,8 @@
 
 **案例证据**：
 - 2026-08-11 npm 正式版 `omniterm start` 报 `Address already in use`（os error 98）。根因：用户 shell 是开发实例派生的终端，继承了 dev.sh export 的 `BIND_ADDR=127.0.0.1:9075` / `BACKEND_PORT=9075`，正式版被劫持去绑开发实例已占的端口；`env -u BIND_ADDR -u BACKEND_PORT` 后立即正常启动到 9077。修复：后端 env 全部改 `OMNITERM_*` 前缀并删掉 `BIND_ADDR` 兜底，dev.sh/dev.ps1 改传 `-H/-p/--db`，旧名仅保留启动 warn。
+- 2026-09-07 正式版 daemon 日志自启动起零写入（只剩 panic 与启动 banner），一键升级 exec 失败的 error 也消失，排查无从下手。根因：`RUST_LOG` 同为通用名——daemon 从 dev shell 继承了旧仓库双 crate 名 directive `RUST_LOG=omniterm_main=info,omniterm_server=info`，而现行 crate 名是 `omniterm`，EnvFilter 无 catch-all，本 crate 全部日志被过滤。自查手段：`cat /proc/<pid>/environ | tr '\0' '\n' | grep RUST_LOG`。修复：`main.rs` 检测 directive 未覆盖 `omniterm*` 时追加 `omniterm=info` 保底（`rust_log_covers_omniterm`）；自重启链的关键诊断改 `eprintln` 绕过 EnvFilter。**logging 配置的劫持面与端口/数据库一致，只是症状是「没日志」而非「报错」。**
+
 ---
 
 ## 模式 10：自替换运行中二进制后重新解析 current_exe() —— Linux 的 /proc/self/exe 失效盲区
@@ -111,6 +113,7 @@
 
 **案例证据**：
 - 2026-08-31 远程 Linux 正式版一键升级提示自动重启却从不切换，刷新仍旧版。根因：`update::relaunch()` 在自替换后重新解析 `current_exe()` 拿到 ` (deleted)` 路径 exec ENOENT（此前一轮修复只堵了 ACP 回收挂起路径，此路径仍在）。修复：`relaunch(exe)` 改用替换前 `current_exe_channel()` 捕获的路径。
+- 2026-09-07 npm 渠道（v0.2.19）一键升级后自动重启仍静默失败：失败日志被 RUST_LOG 劫持吞掉（见模式 9 第 2 例），证据只能从 `hexdump` 残留里找。根因链：npm 渠道 daemon 的 exe 在 node_modules 包目录里，升级时 npm reify **先 retire（rename）旧包目录、删 retire 目录**（Linux unlink 运行中 exe 成功）——捕获路径随旧 inode 一起消失，exec ENOENT。修复（v0.2.20）：npm 渠道 exec 目标仍取替换前捕获路径——npm 就位新包后**在同一路径重建包目录**，旧包路径恰好指向新二进制；`relaunch()` 加存在性预检把死路径转成明确报错；`current_exe_channel()` canonicalize 失败回退原始路径（死路径仍可判渠道，保住 `/system/version` 的 restart_command 链路）；`restart_command` 把含 `node_modules` 的 argv[0] 归一为 PATH 上的 shim `omniterm`（npm 渠道回显的原生二进制路径升级后必然失效，照抄重启命令会 `no such file`）。**npm reify 的 retire+delete 与 github_release 的 rename-in-place 语义不同：前者旧路径先死后生，后者旧路径直通新二进制——exec 目标规则按渠道分别成立。**
 
 ---
 

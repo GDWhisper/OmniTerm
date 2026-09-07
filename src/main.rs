@@ -531,6 +531,30 @@ fn warn_legacy_env() {
     }
 }
 
+/// 检查 RUST_LOG 是否已包含 omniterm target 的 directive（或全局 level）。
+/// `--debug` 与 RUST_LOG 兜底逻辑都以此为前置：显式配置未覆盖本 crate 时
+/// 追加保底 directive，避免「设置了 RUST_LOG 但写的是别的 crate 名」导致
+/// 整个服务零日志（历史踩坑：dev shell 残留旧 crate 名 directive）。
+#[cfg(any(unix, test))]
+#[cfg_attr(not(test), allow(dead_code))]
+fn rust_log_covers_omniterm(rust_log: Option<&str>) -> bool {
+    let Some(rust_log) = rust_log else {
+        return false;
+    };
+    rust_log.split(',').any(|seg| {
+        let seg = seg.trim();
+        if seg.is_empty() {
+            return false;
+        }
+        // directive 无 `=`：全局 level（trace/debug/info/off/...），覆盖一切 target
+        let Some((target, _)) = seg.split_once('=') else {
+            return true;
+        };
+        let target = target.trim();
+        target == "omniterm" || target.starts_with("omniterm::") || target.starts_with("omniterm-")
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse CLI synchronously *before* initializing the tokio runtime,
     // so daemonization can fork safely.
@@ -567,11 +591,23 @@ fn main() -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
+        // EnvFilter 无 catch-all：RUST_LOG 显式设置但不覆盖本 crate（实测：
+        // 开发 shell 残留的旧 crate 名 directive 自 daemon 继承，正式版整个
+        // 零日志）时，未设置的兜底 `omniterm=info` 不生效。这里在显式过滤
+        // 之上强制保底：本 crate 至少 info 可见，其余 target 尊重用户配置。
         let filter = if debug_logging {
             // --debug 显式开启：覆盖 RUST_LOG 中 omniterm 级别的设置，但保留其他 target 的 directive
             EnvFilter::from_default_env().add_directive("omniterm=debug".parse()?)
-        } else {
+        } else if rust_log_covers_omniterm(std::env::var("RUST_LOG").ok().as_deref()) {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("omniterm=info"))
+        } else {
+            // RUST_LOG 显式设置但不覆盖本 crate（实测：开发 shell 残留的旧 crate 名
+            // directive 自 daemon 继承，正式版整个零日志）时，追加兜底 directive：
+            // 本 crate 至少 info 可见，其余 target 尊重用户配置（显式 off 的全局
+            // 静音会被此兜底顶起，属预期取舍——自重启失败等 error 必须可见）。
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("omniterm=info"))
+                .add_directive("omniterm=info".parse()?)
         };
         tracing_subscriber::fmt().with_env_filter(filter).init();
 
@@ -923,7 +959,7 @@ fn acp_idle_recycle_secs_from_setting(setting_min: Option<&str>) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::acp_idle_recycle_secs_from_setting;
+    use super::{acp_idle_recycle_secs_from_setting, rust_log_covers_omniterm};
     use crate::acp::reaper::IDLE_RECYCLE_SECS;
 
     #[test]
@@ -944,5 +980,23 @@ mod tests {
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("5")), 300);
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("30")), 1800);
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("  10  ")), 600);
+    }
+
+    #[test]
+    fn rust_log_covering_omniterm_skips_floor() {
+        assert!(rust_log_covers_omniterm(Some("omniterm=debug")));
+        assert!(rust_log_covers_omniterm(Some("warn,omniterm=info")));
+        assert!(rust_log_covers_omniterm(Some("omniterm::engine=debug,sqlx=warn")));
+        assert!(rust_log_covers_omniterm(Some("info"))); // 全局 level 覆盖一切 target
+    }
+
+    #[test]
+    fn rust_log_without_omniterm_target_gets_floor() {
+        // 实锤劫持案例：旧仓库双 crate 名 directive（dev shell 残留继承）
+        assert!(!rust_log_covers_omniterm(Some("omniterm_main=info,omniterm_server=info")));
+        assert!(!rust_log_covers_omniterm(Some("sqlx=warn,tower_http=info")));
+        assert!(!rust_log_covers_omniterm(Some(""))); // 无任何 directive 视为未覆盖
+        // RUST_LOG 未设置：兜底逻辑本就该生效，此处视为未覆盖
+        assert!(!rust_log_covers_omniterm(None));
     }
 }
