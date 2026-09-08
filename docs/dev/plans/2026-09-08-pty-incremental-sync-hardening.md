@@ -82,6 +82,8 @@ PTY 输出 → 后端 VT grid（真相源）→ 每连接独立编码（33ms tic
 
 ### Phase 1 — C1（前端，独立可先行）
 
+> 状态：✅ 已实施（2026-09-08，commit 97dd0ec）。单测 4 例（error/exit 触发；connected/attached、onclose/onerror 不触发）覆盖计划两用例并细化了「首帧前/流死后」的边界；测试经 FakeTerminal/FakeWebSocket probe 模式，onerror 用例刻意保持 readyState=OPEN 以证明路径本身不调 requestResync 而非被守卫挡住。
+
 | 产出 | 文件 |
 |------|------|
 | error/exit writeln 后 `requestResync()`（readyState 守卫） | `frontend/src/hooks/useTerminal.ts` |
