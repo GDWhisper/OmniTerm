@@ -167,6 +167,20 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > 切换 reset 后首帧自愈）。注意 xterm 6.0 无顶层 `bracketedPasteMode`，读取
 > 走 `term.modes.bracketedPasteMode`。帧体积代价约 20 字节/帧，可忽略。
 > （`docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md`）
+>
+> **`seq` 字段 + 周期全帧对账（2026-09-08）**：`CellFrame.seq: Option<u64>` 仅
+> **live 编码路径**（`encode_cell_frame`）携带，计数器 `VtState.frame_seq`
+> 会话级单调递增、重连不清零（会话重建/后端重启归零 → 前端检出断链主动
+> resync，自愈无害）；viewport/overlay 帧不占 diff 基线，省略该字段，前端
+> 对无 seq 帧跳过检测。前端校验 `seq == lastSeq + 1`，断链（并发连接偷
+> diff 基线的直接信号）即发 `resync`。配套 **周期全帧对账**：转发循环 per
+> 连接计时（`FULL_FRAME_INTERVAL_MS=1000`，仅 30fps tick 分支消费），距上次
+> 全帧超隔即 `encode_cell_frame(force_full=true)`——内部作废 diff 基线再走
+> 正常编码路径，基线推进语义与自然全帧一致；全帧走 CUP+EL 逐行重画（无
+> `\x1b[2J`，不动 scrollback）。事件驱动的 rx 编码不强制全帧。两者把「无
+> 校准的增量镜像」的不变式升级为被守护属性：失配可检测（seq）+ 可见上界
+> ≤1s（周期全帧）。实测带宽 ~9.7KB/s（30fps 空 diff + 1s 全帧）。
+> （`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`）
 
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 

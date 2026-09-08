@@ -108,6 +108,12 @@ PTY 输出 → 后端 VT grid（真相源）→ 每连接独立编码（33ms tic
 
 ### Phase 3 — 实测验证
 
+> 状态：✅ 自动化项全部通过（2026-09-09）。
+> - **回归**：`scripts/pty-frame-regression.mjs` 20/20；`cargo test --workspace` 全绿；`pnpm build`（含 tsc）、fmt/clippy -D warnings 零新增。
+> - **故障注入**（探针 node 直连同一会话 3s 偷基线）：探针视角 seq 断链 90 处（前端 30fps 与探针交替消耗会话级计数器，A2 语义实证）；前端检出断链发出 resync 4 次（1s 节流限频符合设计）；周期全帧 3 个（A1 兜底活跃）；随后 `seq 1 200` 输出画面收敛——37 条纯数字行全部完整、seq 200 在屏，无错位残留。
+> - **带宽**：30fps 空 diff + 1s 全帧实测 ~9.7KB/s，≤10KB/s 达标（紧，若未来空 diff 帧变大需回看 A1 翻盘条件）。
+> - **勘误**：① 直连探针 WS 路径必须带 `/api/v1` 前缀（`/api/v1/ws/terminal/{sid}`），裸 `/ws/terminal/` 404 且无任何报错帧，症状是「探针 0 帧无异常」；② 验收标准「100 行/秒持续输出无可感知闪烁」为人工观感项，headless 无法评估，留给 user-testing 手动回归。
+
 - 故障注入验收：复现期用第二个 WS 探针连同一会话偷基线，前端应在 1 个周期内自愈（修复前永久错位直到切换）。
 - 回归：`scripts/pty-frame-regression.mjs`、`cargo test --workspace`、`pnpm build`（含 tsc）、`cargo fmt + clippy -D warnings`。
 

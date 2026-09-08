@@ -47,6 +47,16 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- (2026-09-09 00:30) `[backend]` `[frontend]` pty 增量同步加固：周期全帧对账 + 帧序号断链检测。稳态运行中 diff 帧的正确性依赖无人校验的不变式「基线推进序列 ≡ 前端渲染历史」，任何一次性扰动（丢帧 / diff 基线被并发连接消费 / 后端重启）都造成不自愈的错位，直到切换会话才恢复。现 cell_frame live 帧携带 `seq`（`VtState` 会话级单调递增，重连不清零；viewport/overlay 帧不占基线、省略该字段），前端入队校验连续性，断链（基线被偷的直接信号）即主动发 `resync`；转发循环 per 连接每 1s 强制下一帧全帧（CUP+EL 逐行重画，不动 scrollback），一切失配的可见时间上界压到 ≤1s。实测空闲带宽 ~9.7KB/s；故障注入（第二连接偷基线）下前端断链检出 → resync → 画面收敛无残留（`src/engine/pty/frame.rs`、`src/engine/pty/vt.rs`、`src/engine/pty/terminal_ws.rs`、`frontend/src/hooks/useCellFrame.ts`，方案见 `docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`）
+
+### Fixed
+
+- (2026-09-09 00:30) `[frontend]` 修复 pty 会话 mid-stream 出现 error/exit 状态行后画面残留一行偏移：状态行经 `writeln` 直写 xterm（绕过帧有序队列），可能触发换行滚动，而 diff 帧不重画未变化行——偏移永久保持。现直写后立即发 `resync`（自带 readyState 守卫），一次全帧重画抵消滚动副作用；首帧前写入的 connected/attached 与流死后写入的断连提示无需处理（`frontend/src/hooks/useTerminal.ts`）
+
 ## [0.2.20] - 2026-09-07
 
 ### Added
