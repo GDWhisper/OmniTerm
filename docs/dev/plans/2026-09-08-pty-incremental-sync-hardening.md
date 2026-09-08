@@ -91,6 +91,14 @@ PTY 输出 → 后端 VT grid（真相源）→ 每连接独立编码（33ms tic
 
 ### Phase 2 — A（后端协议 → 前端检测）
 
+> 状态：✅ 已实施（2026-09-08，commit 9987430）。
+> - **force_full 实现**：`encode_frame_body` 内先 `diff_engine.invalidate()` 再走正常路径——`full = is_untracked()` 自然为 true、全行编码、基线随后推进到当前 grid，与自然全帧语义完全一致（单测 `force_full_emits_all_rows_and_keeps_baseline_semantics` 守护）。
+> - **force_full 触发点**：仅 30fps tick 分支（per 连接 `last_full_at`）；事件驱动的 rx 编码不强制，保持低延迟语义。首个全帧出现在连接后 ~1s（首帧本就 untracked 全帧）。
+> - **seq 语义**：`VtState.frame_seq` 每次调用 `encode_cell_frame` 递增（wrapping_add，u64 溢出 ~190 亿年）；viewport/overlay 构造点显式 `seq: None`，单测 `seq_increments_on_live_frames_and_skips_viewport_overlay` 守护「不占 seq」。
+> - **前端**：`lastSeq` ref 置于 `useCellFrame`；首帧（lastSeq 为 null）直接接受；无 seq 帧不校验也不推进 lastSeq。
+> - **实施偏差**：`useTerminal.ts` 零改动——`CellFrame` 类型唯一定义在 `useCellFrame.ts`（useTerminal 仅 re-import），计划表格中「useTerminal.ts（类型）」无需执行。
+> - **已知无害误报**：切换会话 / 会话进程退出后重建 / 后端重启时，前端 `lastSeq` 残留旧值 → 首帧检出断链 → 一次 armResync（1s 节流限频）→ 全帧收敛，代价 ~5KB。重连（会话存活）场景计数器不清零、无误报。
+
 | 产出 | 文件 |
 |------|------|
 | `VtState` 增 `frame_seq` 计数器；`encode_cell_frame(force_full)` 签名调整并盖 `seq` | `src/engine/pty/vt.rs`、`frame.rs`（`CellFrame.seq`） |
