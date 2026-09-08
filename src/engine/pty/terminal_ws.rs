@@ -28,6 +28,15 @@ const MAX_PENDING_VIEWPORT_REQUESTS: usize = 4;
 /// （`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md` §10.2 / §11 E-7）。
 const SLOW_FRAME_US: u64 = 5_000;
 
+/// 周期性全帧对账间隔（2026-09-08 增量同步加固 A1，per 连接计时）：距上次
+/// 全帧超过该间隔即强制下一帧 `full: true`。稳态运行中 diff 帧的正确性依赖
+/// 「基线推进序列 ≡ 前端渲染历史」这一不变式，而前端原本无法发现自己失配
+/// ——周期全帧把一切失配（丢帧/基线被并发连接消费/后端重启 seq 归零）的
+/// 可见时间上界压到 ≤1s。全帧自含幂等（RLE 后 ~5KB，1s 一次 ≈ 40kbps），
+/// 走 CUP+EL 逐行重画路径（无 `\x1b[2J`，不动 scrollback，无闪烁）。
+/// 否决帧数驱动：低速输出时 N 帧跨度不可控，时间驱动上界恒定。
+const FULL_FRAME_INTERVAL_MS: u64 = 1000;
+
 /// Cell-frame capability handshake from frontend (§4.2 hello frame).
 #[derive(Debug, Deserialize)]
 struct ClientHello {
@@ -189,11 +198,15 @@ pub async fn handle_pty_terminal(
         let mut ticker = tokio::time::interval(std::time::Duration::from_millis(33));
         let mut cell_frame_started = false;
 
+        // 周期全帧计时（A1）：per 连接（本 task 局部），连接建立即为起点。
+        // 仅 tick 分支消费——事件驱动的 rx 编码不强制全帧，保持其低延迟语义。
+        let mut last_full_at = std::time::Instant::now();
+
         // 编码当前 grid 为 cell_frame JSON。读循环先 feed grid 再广播
         // （out/vt 同锁原子），故收到 raw bytes 时 grid 已是最新，可立即编码。
-        let encode_now = || {
+        let encode_now = |force_full: bool| {
             let mut vt_guard = encode_attach.state.vt.lock().unwrap();
-            vt_guard.encode_cell_frame(&session_id_for_frame)
+            vt_guard.encode_cell_frame(&session_id_for_frame, force_full)
         };
 
         loop {
@@ -252,15 +265,22 @@ pub async fn handle_pty_terminal(
                     // 排干 raw bytes + 立即编码推送：消除最长 33ms 的 tick
                     // 盲区（连按回车时行「攒一批突然出现」的根因）
                     _ = rx.recv() => {
-                        let json = encode_now();
+                        let json = encode_now(false);
                         if ws_tx.send(Message::Text(json.into())).await.is_err() {
                             break;
                         }
                     }
-                    // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）
+                    // 30fps tick：兜底（无变化时是空 diff 帧，前端无副作用）；
+                    // 周期对账（A1）：距上次全帧超 FULL_FRAME_INTERVAL_MS 即
+                    // 强制本帧全帧，编码内部作废 diff 基线后按全帧推进。
                     _ = ticker.tick() => {
+                        let force_full = last_full_at.elapsed()
+                            >= std::time::Duration::from_millis(FULL_FRAME_INTERVAL_MS);
+                        if force_full {
+                            last_full_at = std::time::Instant::now();
+                        }
                         let t0 = std::time::Instant::now();
-                        let json = encode_now();
+                        let json = encode_now(force_full);
                         let sent = ws_tx.send(Message::Text(json.into())).await;
                         let el = t0.elapsed().as_micros() as u64;
                         if el > SLOW_FRAME_US {

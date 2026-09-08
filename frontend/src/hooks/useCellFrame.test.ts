@@ -141,6 +141,11 @@ function flushRaf(): void {
   q.forEach((cb) => cb())
 }
 
+/** 带 seq 的 diff 帧（A2 连续性校验用）。 */
+function seqFrame(n: number, marker = 'S '): CellFrame {
+  return { ...diffFrame(marker), seq: n }
+}
+
 describe('useCellFrame', () => {
   let root: Root
   let container: HTMLDivElement
@@ -299,5 +304,81 @@ describe('useCellFrame', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // ──────────────────────────────────────────────────────
+  // A2（2026-09-08 增量同步加固）：seq 连续性校验
+  // ──────────────────────────────────────────────────────
+
+  /** 固定 performance.now（armResync 节流窗口判断依赖它；jsdom 时钟起点
+   *  浮动，不固定则断言依赖环境快慢）。 */
+  function pinNow() {
+    return vi.spyOn(performance, 'now').mockImplementation(() => 2000)
+  }
+
+  it('seq 连续帧不触发 resync', () => {
+    const term = new FakeTerminal()
+    const termRef = { current: term as unknown as FakeTerminal }
+    const resync = vi.fn()
+    const hook = mount(termRef, resync)
+    const nowSpy = pinNow()
+
+    act(() => {
+      hook.enqueue(seqFrame(1))
+      hook.enqueue(seqFrame(2))
+      hook.enqueue(seqFrame(3))
+    })
+    expect(resync).not.toHaveBeenCalled()
+    nowSpy.mockRestore()
+  })
+
+  it('seq 断链触发 armResync（立即一次，节流窗口内不重复）', () => {
+    const term = new FakeTerminal()
+    const termRef = { current: term as unknown as FakeTerminal }
+    const resync = vi.fn()
+    const hook = mount(termRef, resync)
+    const nowSpy = pinNow()
+
+    act(() => {
+      hook.enqueue(seqFrame(1))
+      hook.enqueue(seqFrame(3)) // seq 2 被并发连接偷走 → 断链
+    })
+    expect(resync).toHaveBeenCalledTimes(1)
+
+    // 断链后的帧继续入队（全帧在途覆盖），同一窗口内再次断链不重复触发
+    act(() => {
+      hook.enqueue(seqFrame(5))
+    })
+    expect(resync).toHaveBeenCalledTimes(1)
+    nowSpy.mockRestore()
+  })
+
+  it('无 seq 帧跳过检测：不触发校验也不推进 lastSeq', () => {
+    const term = new FakeTerminal()
+    const termRef = { current: term as unknown as FakeTerminal }
+    const resync = vi.fn()
+    const hook = mount(termRef, resync)
+    const nowSpy = pinNow()
+
+    act(() => {
+      hook.enqueue(seqFrame(1))
+      hook.enqueue(fullFrame('VP')) // viewport/overlay：无 seq 字段
+      hook.enqueue(seqFrame(2)) // 相对最近 live 帧仍连续
+    })
+    expect(resync).not.toHaveBeenCalled()
+    nowSpy.mockRestore()
+  })
+
+  it('首帧（lastSeq 未建立）直接接受，无论 seq 值', () => {
+    const term = new FakeTerminal()
+    const termRef = { current: term as unknown as FakeTerminal }
+    const resync = vi.fn()
+    const hook = mount(termRef, resync)
+    const nowSpy = pinNow()
+
+    // 后端重启归零/切换会话后首帧带任意 seq 都不算断链
+    act(() => hook.enqueue(seqFrame(42)))
+    expect(resync).not.toHaveBeenCalled()
+    nowSpy.mockRestore()
   })
 })

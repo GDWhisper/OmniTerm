@@ -54,6 +54,13 @@ pub struct CellFrame {
     /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。
     /// 无此字段前端只能停在上翻时刻的快照（新输出完全不可见）。
     pub history_size: u32,
+    /// 帧序号（2026-09-08 增量同步加固 A2）：仅 live 编码路径
+    /// `encode_cell_frame` 携带，会话级（`VtState`）单调递增、重连不清零。
+    /// 前端校验 `seq == lastSeq + 1`，断链（并发连接偷 diff 基线的直接
+    /// 信号、后端重启归零）即主动 resync。viewport/overlay 帧不占 diff
+    /// 基线、无断链语义，省略此字段——前端对无 seq 帧跳过检测。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
     pub rows: Vec<RowData>,
 }
 

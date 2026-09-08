@@ -61,6 +61,11 @@ export interface CellFrame {
   /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
    *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
   history_size?: number
+  /** 帧序号（2026-09-08 增量同步加固 A2）：仅 live 编码帧携带，会话级
+   * 单调递增。入队时校验 `seq == lastSeq + 1`，断链（并发连接偷 diff 基线、
+   * 后端重启归零）即主动 resync。viewport/overlay 帧省略此字段——无 seq
+   * 帧不占 diff 基线，跳过检测（不校验、不推进 lastSeq）。 */
+  seq?: number
   rows: CellRow[]
 }
 
@@ -191,6 +196,8 @@ export function useCellFrame(
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
   const resyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 最近一帧的 seq（A2）：null = 尚未见过带 seq 的帧（首帧直接接受）。 */
+  const lastSeq = useRef<number | null>(null)
 
   // 卸载时清掉补发定时器，避免卸载后触发 requestResync。
   useEffect(
@@ -225,6 +232,17 @@ export function useCellFrame(
 
   const enqueue = useCallback(
     (frame: CellFrame) => {
+      // seq 连续性校验（A2）：断链 ≡ diff 基线被并发连接消费（缺陷 1 的
+      // 直接信号）或后端重启归零，随后 diff 帧不可信 → 主动 resync 请求
+      // 全帧。复用 armResync 的节流 + 补发定时器，天然限频。无 seq 帧
+      // （viewport/overlay）不占 diff 基线，跳过检测且不推进 lastSeq，
+      // 保持与最近 live 帧的连续性判断。首帧（lastSeq 为 null）直接接受。
+      if (frame.seq != null) {
+        if (lastSeq.current != null && frame.seq !== lastSeq.current + 1) {
+          armResync()
+        }
+        lastSeq.current = frame.seq
+      }
       const q = frameQueue.current
       if (q.length >= MAX_PENDING_FRAMES) {
         // 渲染跟不上产出。full/overlay 帧自含完整屏幕状态，是积压中唯一的
