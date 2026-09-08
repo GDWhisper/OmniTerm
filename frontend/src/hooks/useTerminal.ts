@@ -322,8 +322,13 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
             termRef.current?.writeln(`\x1b[36m[${i18n.t('terminal.status.attached', { session: msg.session })}]\x1b[0m`)
           } else if (msg.type === 'error') {
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.error', { msg: msg.message })}]\x1b[0m`)
+            // C1（2026-09-08 pty-incremental-sync-hardening）：mid-stream 直写
+            // 状态行可能触发换行滚动，而 diff 帧不会重画未变化行 → 永久错位。
+            // 一次全帧重同步抵消滚动副作用（requestResync 自带 readyState 守卫）。
+            requestResync()
           } else if (msg.type === 'exit') {
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.exited', { code: msg.code })}]\x1b[0m`)
+            requestResync()
           } else if (msg.type === 'agent_state') {
             // Fire attention notification on state transitions
             if (!sessionId) return
