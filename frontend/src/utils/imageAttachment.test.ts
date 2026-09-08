@@ -2,11 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   processImageFile,
   dataUrlToAttachment,
-  approxBase64Bytes,
-  isAcceptedImageMime,
+  isImageMime,
+  imageSrc,
   extractImageFiles,
   ImageAttachmentError,
-  MAX_IMAGE_BYTES,
 } from './imageAttachment'
 
 // 1x1 transparent PNG
@@ -17,15 +16,17 @@ function pngFile(bytes: Uint8Array<ArrayBuffer>, name = 'a.png'): File {
   return new File([bytes], name, { type: 'image/png' })
 }
 
-describe('isAcceptedImageMime', () => {
-  it('accepts png/jpeg/webp/gif and rejects others', () => {
-    expect(isAcceptedImageMime('image/png')).toBe(true)
-    expect(isAcceptedImageMime('image/jpeg')).toBe(true)
-    expect(isAcceptedImageMime('image/webp')).toBe(true)
-    expect(isAcceptedImageMime('image/gif')).toBe(true)
-    expect(isAcceptedImageMime('image/svg+xml')).toBe(false)
-    expect(isAcceptedImageMime('application/pdf')).toBe(false)
-    expect(isAcceptedImageMime('')).toBe(false)
+describe('isImageMime', () => {
+  it('accepts anything under image/* and rejects the rest', () => {
+    // 管道原则：只判断「是不是图片」，不判断 agent 会不会接受。
+    expect(isImageMime('image/png')).toBe(true)
+    expect(isImageMime('image/jpeg')).toBe(true)
+    expect(isImageMime('image/webp')).toBe(true)
+    expect(isImageMime('image/gif')).toBe(true)
+    expect(isImageMime('image/svg+xml')).toBe(true)
+    expect(isImageMime('application/pdf')).toBe(false)
+    expect(isImageMime('text/plain')).toBe(false)
+    expect(isImageMime('')).toBe(false)
   })
 })
 
@@ -45,33 +46,33 @@ describe('dataUrlToAttachment', () => {
   })
 })
 
-describe('approxBase64Bytes', () => {
-  it('estimates decoded size at 3/4 of base64 length', () => {
-    expect(approxBase64Bytes('')).toBe(0)
-    expect(approxBase64Bytes('AAAA')).toBe(3)
-    expect(approxBase64Bytes(TINY_PNG_BASE64)).toBe(Math.floor(TINY_PNG_BASE64.length * 0.75))
+describe('imageSrc', () => {
+  it('prefers the thumbnail so a 240px bubble does not decode the full image', () => {
+    const att = { mimeType: 'image/png', data: TINY_PNG_BASE64, thumb: { data: 'THUMB', mimeType: 'image/jpeg' } }
+    expect(imageSrc(att)).toBe('data:image/jpeg;base64,THUMB')
+  })
+
+  it('falls back to the original when there is no thumbnail', () => {
+    const att = { mimeType: 'image/png', data: TINY_PNG_BASE64 }
+    expect(imageSrc(att)).toBe(`data:image/png;base64,${TINY_PNG_BASE64}`)
   })
 })
 
 describe('processImageFile', () => {
-  it('rejects unsupported mime types', async () => {
-    const file = new File([new Uint8Array(10)], 'a.svg', { type: 'image/svg+xml' })
-    await expect(processImageFile(file)).rejects.toMatchObject({ code: 'unsupported_type' })
+  it('rejects anything that is not an image', async () => {
+    const file = new File([new Uint8Array(10)], 'a.pdf', { type: 'application/pdf' })
+    await expect(processImageFile(file)).rejects.toMatchObject({ code: 'not_image' })
     await expect(processImageFile(file)).rejects.toBeInstanceOf(ImageAttachmentError)
   })
 
-  it('passes a small png through unchanged (no re-encode)', async () => {
+  it('passes the original bytes through unchanged (no re-encode, no size cap)', async () => {
     const raw = Uint8Array.from(atob(TINY_PNG_BASE64), (c) => c.charCodeAt(0))
     const att = await processImageFile(pngFile(raw))
     expect(att.mimeType).toBe('image/png')
     expect(att.data).toBe(TINY_PNG_BASE64)
     expect(att.id).toBeTruthy()
-  })
-
-  it('rejects images still over the 5MB hard limit', async () => {
-    // jsdom 无 createImageBitmap，降采样路径回退到原样直传，> 5MB 必拒。
-    const big = pngFile(new Uint8Array(MAX_IMAGE_BYTES + 1024 * 1024))
-    await expect(processImageFile(big)).rejects.toMatchObject({ code: 'too_large' })
+    // jsdom 无 createImageBitmap，缩略图生成失败 → 缺省，后端回退存原图。
+    expect(att.thumb).toBeUndefined()
   })
 })
 
@@ -79,7 +80,7 @@ describe('extractImageFiles', () => {
   const makeItem = (kind: string, type: string, file: File | null) =>
     ({ kind, type, getAsFile: () => file }) as unknown as DataTransferItem
 
-  it('returns only accepted image files', () => {
+  it('returns only image files', () => {
     const png = pngFile(new Uint8Array(4))
     const items = [
       makeItem('file', 'image/png', png),

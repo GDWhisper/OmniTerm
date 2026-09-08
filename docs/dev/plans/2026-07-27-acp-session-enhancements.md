@@ -71,9 +71,20 @@ ACP 协议无"编辑历史消息"概念，实际语义：
 ### 3.3 F03 图片附件 — base64 内联
 
 - ACP `ContentBlock::Image` 支持 base64 data URI，无需文件上传 API
-- 限制：单张 ≤ 5MB，单次 prompt ≤ 3 张（防止 WS 帧过大）
 - 粘贴（`onPaste` clipboardData）+ 拖拽（`onDrop`）两种入口
 - 预览缩略图显示在输入框上方，可逐张移除
+
+> **勘误（2026-09-08）：内容层限制已全部移除。** 原先的「单张 ≤5MB、单次 ≤3 张、
+> >1MB 静默降采样、MIME 白名单」属于替用户和 agent 做决定——OmniTerm 只做管道，用户
+> 发多大、发几张由用户定，agent 接不接受由 agent 报（ACP 只声明 `promptCapabilities.image`
+> 布尔能力，没有数量/体积语义）。现状：
+> - **转发给 agent 的始终是原图**（`src/acp/client.rs`），不做任何重编码。
+> - 唯一的门禁是管道自身口径：后端按整条帧体积卡 `MAX_PROMPT_FRAME_BYTES`（12MiB，
+>   贴 tungstenite 默认 16MiB `max_frame_size`），超限回 `message_too_large` 错误。
+>   拦它是因为超限会让 tungstenite 直接关连接，而不是因为图片「应该」多大。
+> - **落库只存缩略图**（前端 canvas 生成，长边 480 的 JPEG）：历史气泡显示尺寸只有
+>   240×200，存原图会让 2MB/页的分页预算被一张图吃满、并让浏览器为它解码整张位图。
+>   原图不落盘，历史消息因此无法还原原始分辨率（用户本地文件仍在）。
 
 ### 3.4 F04 @ 引用 — 渐进式
 
@@ -161,6 +172,6 @@ ACP 协议无"编辑历史消息"概念，实际语义：
 | 风险 | 影响 | 缓解 |
 |------|------|------|
 | 各 agent permission request 的 `tool_input` 格式不统一 | F01 diff 预览可能部分 agent 无数据 | 降级为纯文本 banner（现状），逐 vendor 适配 |
-| 图片 base64 导致 WS 帧过大 | 连接断开或延迟 | 前端压缩 + 5MB 硬限 + 3 张上限 |
+| 图片 base64 导致 WS 帧过大 | 连接断开或延迟 | 后端按整条帧体积卡 12MiB（贴 tungstenite 16MiB `max_frame_size`）并显式报 `message_too_large`；不再前端压缩、也不限张数（见 §3.3 勘误） |
 | `git stash create` 在 dirty worktree 上的行为 | 检查点可能包含用户未提交的改动 | 文档说明 + 仅 stash create（不改工作区） |
 | 重新生成与 N=1 队列的竞态 | 队列消息可能在 regenerate 期间被 drain | regenerate 期间暂停 queue drain，完成后再恢复 |

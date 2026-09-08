@@ -38,7 +38,19 @@ const CANCEL_TURN_FALLBACK_SECS: u64 = 15;
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Deserialize)]
 pub struct ImageInput {
-    /// Base64 编码的图片数据（不含 data URI 前缀）。
+    /// Base64 编码的图片数据（不含 data URI 前缀）。转发给 agent 的就是这份。
+    pub data: String,
+    pub mime_type: String,
+    /// 同一张图的缩略图：只用于落库与历史渲染，不参与转发。
+    /// 缺省（直连 WS 的客户端）时后端回退存原图。
+    #[serde(default)]
+    pub thumb: Option<ImageThumb>,
+}
+
+/// [`ImageInput`] 附带的缩略图。mime 由生成方决定（前端 canvas 编码为 JPEG），
+/// 接收方不做假设。
+#[derive(Debug, Deserialize)]
+pub struct ImageThumb {
     pub data: String,
     pub mime_type: String,
 }

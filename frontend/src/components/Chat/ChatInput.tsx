@@ -10,7 +10,7 @@ import {
   processImageFile,
   extractImageFiles,
   ImageAttachmentError,
-  MAX_IMAGE_ATTACHMENTS,
+  imageSrc,
   type ImageAttachment,
 } from '../../utils/imageAttachment'
 
@@ -259,26 +259,15 @@ export function ChatInput({
   const addImageFiles = async (files: File[]) => {
     if (!imageSupported || disabled || files.length === 0) return
     for (const file of files) {
-      let full = false
-      setAttachments((prev) => {
-        full = prev.length >= MAX_IMAGE_ATTACHMENTS
-        return prev
-      })
-      if (full) {
-        showAttachError(t('chat.input.attachTooMany', { max: MAX_IMAGE_ATTACHMENTS }))
-        return
-      }
       try {
         const attachment = await processImageFile(file)
-        setAttachments((prev) =>
-          prev.length >= MAX_IMAGE_ATTACHMENTS ? prev : [...prev, attachment],
-        )
+        setAttachments((prev) => [...prev, attachment])
       } catch (err) {
-        if (err instanceof ImageAttachmentError && err.code === 'too_large') {
-          showAttachError(t('chat.input.attachTooLarge'))
-        } else {
-          showAttachError(t('chat.input.attachUnsupported'))
-        }
+        showAttachError(
+          err instanceof ImageAttachmentError && err.code === 'read_failed'
+            ? t('chat.input.attachReadFailed')
+            : t('chat.input.attachUnsupported'),
+        )
       }
     }
   }
@@ -486,7 +475,7 @@ export function ChatInput({
               }}
             >
               <img
-                src={`data:${att.mimeType};base64,${att.data}`}
+                src={imageSrc(att)}
                 alt=""
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               />

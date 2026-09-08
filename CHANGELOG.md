@@ -58,6 +58,8 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-09-08 20:54) `[frontend]` `[backend]` ACP 图片附件去掉全部内容层限制：不再限「单次 3 张 / 单张 ≤5MB / MIME 白名单」，也不再对 >1MB 的原图静默降采样重编码——OmniTerm 只做管道，发几张、发多大由用户决定，agent 接不接受由 agent 自己报（ACP 只在 `promptCapabilities.image` 声明是否支持，没有数量或体积语义）。转发给 agent 的始终是用户选的原图，一个字节不改。唯一的门禁换成管道自身口径：后端按整条帧体积卡 `MAX_PROMPT_FRAME_BYTES`（12MiB，贴 tungstenite 默认 16MiB `max_frame_size`），超限回 `message_too_large` 明确报错；此前超限的表现是 tungstenite 直接关连接，用户只看到掉线。体积上限也因此不再替 agent 操心（比如照抄某家模型 5MB 的单图限制）（`frontend/src/utils/imageAttachment.ts`、`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/locales/{zh,en}/translation.json`、`src/ws/acp.rs`，决策勘误见 `docs/dev/plans/2026-07-27-acp-session-enhancements.md` §3.3）
+- (2026-09-08 20:54) `[frontend]` `[backend]` 图片落库与气泡/预览渲染改只存缩略图（前端 canvas 生成，长边 480 的 JPEG，约 30~40KB）：此前库里存的是整张原图 base64，一张手机照片就让 2MB/页的历史分页预算只翻得出一条消息；更浪费的是气泡显示尺寸只有 240×200（输入框预览只有 56×56），却要让浏览器解码整张位图（4000×3000 ≈ 46MB 常驻）。现在落库与渲染统一走缩略图，原图只在转发那一刻存在于内存。前端 hydrate 后回写 cooked blocks 时也只写缩略图（`toPersistedBlocks`）——否则同步会把原图再塞回库里，优化被绕过。无缩略图（直连 WS 的客户端、历史旧数据）回退原图。代价：历史消息无法还原原始分辨率，且 GIF 缩略图只有首帧（`frontend/src/utils/imageAttachment.ts`、`frontend/src/components/Chat/{ChatInput,ChatMessage}.tsx`、`frontend/src/stores/chatStore.ts`、`src/ws/acp.rs`、`src/acp/client.rs`）
 - (2026-09-02 01:11) `[frontend]` 侧栏活跃会话加行内强调：ACP 会话超 5 个折叠后，很老但正在跑的会话靠豁免位露在可见区底部，位置本身不携带信息、6px 状态点抓不住视线。现按 `sessionStatus()`（与 worktree 聚合徽标同一真源）判定 `working`/`blocked`，会话名提亮到 `--text-primary`（`.session-name-live`）并让状态点复用 `.activity-pulse` 呼吸；`done` 与空闲行不变，不加背景色以免与选中态抢「当前在哪」。**排序仍固定 `created_at DESC` 不置顶**——置顶会让行随状态跳变，整行跳动（规范见 ui-style-guide §7.4）（`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/index.css`）
 
 ### Fixed

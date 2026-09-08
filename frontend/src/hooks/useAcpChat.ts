@@ -1168,12 +1168,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       type: 'image' as const,
       mimeType: img.mimeType,
       data: img.data,
+      thumb: img.thumb,
     }))
     s.addUserMessage(sid, trimmed, imageBlocks)
     try {
       const frame: Record<string, unknown> = { type: 'prompt', text: trimmed }
       if (hasImages) {
-        frame.images = images.map((img) => ({ data: img.data, mime_type: img.mimeType }))
+        frame.images = images.map((img) => ({
+          data: img.data,
+          mime_type: img.mimeType,
+          // 缩略图只用于落库/历史渲染，转发给 agent 的仍是原图。
+          ...(img.thumb
+            ? { thumb: { data: img.thumb.data, mime_type: img.thumb.mimeType } }
+            : {}),
+        }))
       }
       ws.send(JSON.stringify(frame))
       // 用户已回到本会话继续输入 → 知晓最新状况，清除旧通知（done/error/decision）。

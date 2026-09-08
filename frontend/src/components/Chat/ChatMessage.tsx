@@ -19,6 +19,7 @@ import { hapticTap } from '../../utils/haptics'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { IconCopy } from '../FileManager/icons'
+import { imageSrc } from '../../utils/imageAttachment'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -720,7 +721,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                     {images.map((img, i) => (
                       <img
                         key={i}
-                        src={`data:${img.mimeType};base64,${img.data}`}
+                        src={imageSrc(img)}
                         alt=""
                         style={{
                           maxWidth: 240,
