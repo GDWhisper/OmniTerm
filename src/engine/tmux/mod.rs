@@ -57,17 +57,32 @@ pub fn check_multiplexer() -> Result<()> {
 
 /// Build a tmux client command with SSH 会话泄漏变量已移除的环境。
 ///
-/// tmux server 从 SSH 会话启动时 global env 含 SSH_CONNECTION 等；client 连接
-/// 时 tmux 的 `update-environment`（默认列表含 SSH_CONNECTION）用 client 环境更新
-/// session env，client 无该变量则 unset——故所有 tmux client 一律不带 SSH 泄漏
-/// 变量，新 session 的 pane 才不会被 CLI 误判为 SSH 会话（见
-/// pty_io::SSH_LEAK_ENV_VARS 根因注释）。SSH_CLIENT/SSH_TTY 不在默认 update
-/// 列表，由 `new_session` 创建后显式 unset 兜底。
+/// tmux server 从 SSH 会话启动时 global env 含 SSH 变量；client 连接时 tmux 的
+/// `update-environment`（默认列表含 SSH_CONNECTION）用 client 环境更新 session
+/// env，client 无该变量则 unset——故所有 tmux client 一律不带 SSH 泄漏变量。
+/// SSH_CLIENT/SSH_TTY 不在默认 update 列表：初始 pane 由 `new_session` 的
+/// STRIPPED_PANE_CMD 在命令源头剥离，session env 由 set-environment 兜底
+/// （见 pty_io::SSH_LEAK_ENV_VARS 根因注释）。
 fn tmux_cmd() -> Command {
     let mut cmd = Command::new("tmux");
     strip_ssh_leak_env_async(&mut cmd);
     cmd
 }
+
+/// 初始 pane 启动命令包装（unix）：tmux 的 `update-environment` 默认列表只含
+/// SSH_CONNECTION，SSH_CLIENT/SSH_TTY 会随 server env 残留进 pane——agy 等 CLI
+/// 见**任一** SSH_* 变量即判定 SSH 会话（实测 2026-09-08：仅剩 SSH_CLIENT 也走
+/// file-based token storage）。`set-environment -u` 只影响后续新建 pane，初始
+/// pane 必须在命令源头剥离：`env -u` 清变量后 exec `$SHELL`（交互 shell，与
+/// tmux 默认 pane 命令行为一致；`${SHELL:-/bin/sh}` 兜底）。
+#[cfg(unix)]
+const STRIPPED_PANE_CMD: &str =
+    "exec env -u SSH_CLIENT -u SSH_CONNECTION -u SSH_TTY \"${SHELL:-/bin/sh}\"";
+
+/// Windows（psmux）不注入 pane 命令包装：Windows 无 GNU `env -u` 语义，psmux
+/// 的 shell-command 行为未验证，保持原样（Windows SSH 泄漏场景少见，不做）。
+#[cfg(windows)]
+const STRIPPED_PANE_CMD: &str = "";
 
 /// Create a new detached tmux session with an optional startup command.
 ///
@@ -80,20 +95,20 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
     use crate::engine::tmux::agent_hooks;
 
     // 1. Create the tmux session (plain shell)
-    let output = tmux_cmd()
-        .args(["new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50"])
-        .output()
-        .await?;
+    // 初始 pane 经 STRIPPED_PANE_CMD 包装启动（unix），源头剥离 SSH 泄漏变量。
+    let mut new_args = vec!["new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50"];
+    #[cfg(unix)]
+    new_args.push(STRIPPED_PANE_CMD);
+    let output = tmux_cmd().args(&new_args).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("tmux new-session failed: {}", stderr));
     }
 
-    // 清 session 环境里的 SSH 泄漏变量（SSH_CONNECTION 已由 client 侧的
-    // update-environment unset；SSH_CLIENT/SSH_TTY 不在默认 update 列表、会随
-    // server env 残留进初始 pane——显式 unset 保证后续 split-window/new-window
-    // 新建的 pane 也干净）。fail-silent：session 刚创建，失败仅影响新 pane。
+    // 清 session 环境里的 SSH 泄漏变量（初始 pane 已由 STRIPPED_PANE_CMD 剥离，
+    // 这里保证后续 split-window/new-window 新建的 pane 同样干净）。
+    // fail-silent：session 刚创建，失败仅影响后续新 pane。
     for var in SSH_LEAK_ENV_VARS {
         let _ = tmux_cmd().args(["set-environment", "-t", name, "-u", var]).output().await;
     }
