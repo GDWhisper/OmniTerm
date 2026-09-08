@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, RwLock, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
@@ -35,7 +35,7 @@ impl ControlModeClient {
     pub async fn new(session_name: impl Into<String>) -> Result<Self> {
         let session_name = session_name.into();
 
-        let mut child = Command::new("tmux")
+        let mut child = super::tmux_cmd()
             .args(["-C", "attach-session", "-t", &session_name])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

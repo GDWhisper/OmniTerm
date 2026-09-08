@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 use crate::agent::state::AgentSnapshot;
 use crate::engine::EngineSessionInfo;
+use crate::engine::pty_io::{SSH_LEAK_ENV_VARS, strip_ssh_leak_env_async};
 
 pub use engine::TmuxEngine;
 
@@ -54,6 +55,20 @@ pub fn check_multiplexer() -> Result<()> {
     }
 }
 
+/// Build a tmux client command with SSH 会话泄漏变量已移除的环境。
+///
+/// tmux server 从 SSH 会话启动时 global env 含 SSH_CONNECTION 等；client 连接
+/// 时 tmux 的 `update-environment`（默认列表含 SSH_CONNECTION）用 client 环境更新
+/// session env，client 无该变量则 unset——故所有 tmux client 一律不带 SSH 泄漏
+/// 变量，新 session 的 pane 才不会被 CLI 误判为 SSH 会话（见
+/// pty_io::SSH_LEAK_ENV_VARS 根因注释）。SSH_CLIENT/SSH_TTY 不在默认 update
+/// 列表，由 `new_session` 创建后显式 unset 兜底。
+fn tmux_cmd() -> Command {
+    let mut cmd = Command::new("tmux");
+    strip_ssh_leak_env_async(&mut cmd);
+    cmd
+}
+
 /// Create a new detached tmux session with an optional startup command.
 ///
 /// If `command` is provided and detected as a supported agent CLI, the command
@@ -65,7 +80,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
     use crate::engine::tmux::agent_hooks;
 
     // 1. Create the tmux session (plain shell)
-    let output = Command::new("tmux")
+    let output = tmux_cmd()
         .args(["new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50"])
         .output()
         .await?;
@@ -75,9 +90,16 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
         return Err(anyhow!("tmux new-session failed: {}", stderr));
     }
 
+    // 清 session 环境里的 SSH 泄漏变量（SSH_CONNECTION 已由 client 侧的
+    // update-environment unset；SSH_CLIENT/SSH_TTY 不在默认 update 列表、会随
+    // server env 残留进初始 pane——显式 unset 保证后续 split-window/new-window
+    // 新建的 pane 也干净）。fail-silent：session 刚创建，失败仅影响新 pane。
+    for var in SSH_LEAK_ENV_VARS {
+        let _ = tmux_cmd().args(["set-environment", "-t", name, "-u", var]).output().await;
+    }
+
     // 2. Enable mouse support
-    let mouse_out =
-        Command::new("tmux").args(["set-option", "-t", name, "mouse", "on"]).output().await?;
+    let mouse_out = tmux_cmd().args(["set-option", "-t", name, "mouse", "on"]).output().await?;
     if !mouse_out.status.success() {
         warn!(
             "failed to enable mouse for session {}: {}",
@@ -92,7 +114,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
         if let Some(kind) = crate::agent::cli::detect_agent_kind(cmd) {
             // Initialize agent option before launching agent
             let initial_value = agent_hooks::initial_agent_option_value(kind);
-            let opt_out = Command::new("tmux")
+            let opt_out = tmux_cmd()
                 .args(["set-option", "-t", name, "@omniterm_agent", &initial_value])
                 .output()
                 .await?;
@@ -126,7 +148,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
 
 /// Kill a tmux session.
 pub async fn kill_session(name: &str) -> Result<()> {
-    let output = Command::new("tmux").args(["kill-session", "-t", name]).output().await?;
+    let output = tmux_cmd().args(["kill-session", "-t", name]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -143,7 +165,7 @@ pub async fn kill_session(name: &str) -> Result<()> {
 /// and re-joined from remaining parts after the fixed fields — this handles names
 /// that contain `|` characters.
 pub async fn list_sessions() -> Result<Vec<EngineSessionInfo>> {
-    let output = Command::new("tmux")
+    let output = tmux_cmd()
         .args([
             "list-sessions",
             "-F",
@@ -220,7 +242,7 @@ pub async fn list_sessions() -> Result<Vec<EngineSessionInfo>> {
 
 /// Check if a tmux session exists.
 pub async fn session_exists(name: &str) -> bool {
-    Command::new("tmux")
+    tmux_cmd()
         .args(["has-session", "-t", name])
         .output()
         .await
@@ -230,8 +252,7 @@ pub async fn session_exists(name: &str) -> bool {
 
 /// Send keys to a tmux session (useful for automation).
 pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
-    let output =
-        Command::new("tmux").args(["send-keys", "-t", session, keys, "Enter"]).output().await?;
+    let output = tmux_cmd().args(["send-keys", "-t", session, keys, "Enter"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -243,7 +264,7 @@ pub async fn send_keys(session: &str, keys: &str) -> Result<()> {
 
 /// Get the current working directory of a tmux pane.
 pub async fn pane_cwd(session: &str) -> Result<String> {
-    let output = Command::new("tmux")
+    let output = tmux_cmd()
         .args(["display-message", "-t", session, "-p", "#{pane_current_path}"])
         .output()
         .await?;
@@ -262,7 +283,7 @@ pub async fn pane_cwd(session: &str) -> Result<String> {
 
 /// Capture the current visible screen of a tmux pane (no scrollback).
 pub async fn capture_screen(session: &str) -> Result<String> {
-    let output = Command::new("tmux").args(["capture-pane", "-t", session, "-p"]).output().await?;
+    let output = tmux_cmd().args(["capture-pane", "-t", session, "-p"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -276,10 +297,8 @@ pub async fn capture_screen(session: &str) -> Result<String> {
 ///
 /// Returns `None` if the option is not set or empty.
 pub async fn get_session_agent_option(session_name: &str) -> Result<Option<AgentSnapshot>> {
-    let output = Command::new("tmux")
-        .args(["show-options", "-t", session_name, "@omniterm_agent"])
-        .output()
-        .await?;
+    let output =
+        tmux_cmd().args(["show-options", "-t", session_name, "@omniterm_agent"]).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -300,7 +319,7 @@ pub async fn get_session_agent_option(session_name: &str) -> Result<Option<Agent
 /// Read the global tmux `mouse` option (`-g`).
 /// Returns `true` if mouse mode is enabled, `false` if disabled.
 pub async fn get_mouse_option() -> Result<bool> {
-    let output = Command::new("tmux").args(["show-options", "-g", "mouse"]).output().await?;
+    let output = tmux_cmd().args(["show-options", "-g", "mouse"]).output().await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Output format: "mouse on\n" or "mouse off\n"
     Ok(stdout.trim().ends_with("on"))
@@ -309,7 +328,7 @@ pub async fn get_mouse_option() -> Result<bool> {
 /// Set the global tmux `mouse` option (`-g`).
 pub async fn set_mouse_option(enabled: bool) -> Result<()> {
     let value = if enabled { "on" } else { "off" };
-    let output = Command::new("tmux").args(["set-option", "-g", "mouse", value]).output().await?;
+    let output = tmux_cmd().args(["set-option", "-g", "mouse", value]).output().await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow!("tmux set mouse failed: {}", stderr.trim()));

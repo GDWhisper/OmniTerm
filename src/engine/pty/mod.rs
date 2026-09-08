@@ -309,6 +309,9 @@ impl PtyEngine {
     fn spawn_session(&self, key: &str, cwd: &str, size: PtySize) -> Result<Arc<SessionState>> {
         let mut cmd = CommandBuilder::new(if cfg!(windows) { "cmd.exe" } else { "bash" });
         cmd.cwd(cwd);
+        // 本地会话不让 SSH 泄漏变量误导 CLI（agy 等按 SSH_CONNECTION 切换行为），
+        // 其余 env 正常继承（见 pty_io::strip_ssh_leak_env_builder 注释）。
+        crate::engine::pty_io::strip_ssh_leak_env_builder(&mut cmd);
         // VERIFIED 2026-08-12: TERM 固定 xterm-256color（herdr TERM 策略），
         // 见 docs/reference/herdr-reference.md「可移植边角处理」。
         cmd.env("TERM", "xterm-256color");
