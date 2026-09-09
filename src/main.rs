@@ -535,8 +535,6 @@ fn warn_legacy_env() {
 /// `--debug` 与 RUST_LOG 兜底逻辑都以此为前置：显式配置未覆盖本 crate 时
 /// 追加保底 directive，避免「设置了 RUST_LOG 但写的是别的 crate 名」导致
 /// 整个服务零日志（历史踩坑：dev shell 残留旧 crate 名 directive）。
-#[cfg(any(unix, test))]
-#[cfg_attr(not(test), allow(dead_code))]
 fn rust_log_covers_omniterm(rust_log: Option<&str>) -> bool {
     let Some(rust_log) = rust_log else {
         return false;

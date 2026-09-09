@@ -96,9 +96,20 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
 
     // 1. Create the tmux session (plain shell)
     // 初始 pane 经 STRIPPED_PANE_CMD 包装启动（unix），源头剥离 SSH 泄漏变量。
-    let mut new_args = vec!["new-session", "-d", "-s", name, "-c", cwd, "-x", "200", "-y", "50"];
-    #[cfg(unix)]
-    new_args.push(STRIPPED_PANE_CMD);
+    let new_args = vec![
+        "new-session",
+        "-d",
+        "-s",
+        name,
+        "-c",
+        cwd,
+        "-x",
+        "200",
+        "-y",
+        "50",
+        #[cfg(unix)]
+        STRIPPED_PANE_CMD,
+    ];
     let output = tmux_cmd().args(&new_args).output().await?;
 
     if !output.status.success() {
