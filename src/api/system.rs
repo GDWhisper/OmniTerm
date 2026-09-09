@@ -187,7 +187,7 @@ async fn version_check() -> (StatusCode, Json<Value>) {
     )
 }
 
-async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
     let Ok(_guard) = UPDATE_LOCK.try_lock() else {
         return (StatusCode::CONFLICT, Json(json!({ "error": "update already in progress" })));
     };
@@ -253,7 +253,7 @@ async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
             // 日志，前端倒计时超时后兜底显示手动重启提示。
             #[cfg(unix)]
             let auto_restart = {
-                let supervisor = state.acp_supervisor.clone();
+                let supervisor = _state.acp_supervisor.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(RELAUNCH_DELAY).await;
                     if tokio::time::timeout(RELAUNCH_SHUTDOWN_TIMEOUT, supervisor.shutdown_all())
