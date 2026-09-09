@@ -2,7 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { Terminal } from '@xterm/xterm'
 import { useTerminal } from './useTerminal'
+
+// vi.mock 工厂里的 FakeTerminal 带 static instances 收集器；类型层 import 到的
+// 仍是真实 @xterm/xterm 类型（mock 只在运行时生效），故此处按测试视角收窄。
+const FakeTerminalCtor = Terminal as unknown as {
+  instances: Array<{ unicode: { activeVersion: string } }>
+}
 
 // Probe-component pattern (no @testing-library/react in deps),
 // following useCellFrame.test.ts.
@@ -13,11 +20,17 @@ import { useTerminal } from './useTerminal'
 
 vi.mock('@xterm/xterm', () => {
   class FakeTerminal {
+    static instances: FakeTerminal[] = []
+    constructor() {
+      FakeTerminal.instances.push(this)
+    }
     cols = 80
     rows = 24
     options: { fontSize?: number } = {}
     modes = { bracketedPasteMode: false, mouseTrackingMode: 'none' as const }
     writes: string[] = []
+    // Unicode11Addon 激活宽表用（useTerminal.createTerminal，2026-09-09）
+    unicode = { activeVersion: '' }
     write(data: string | Uint8Array): void {
       this.writes.push(String(data))
     }
@@ -237,4 +250,13 @@ describe('useTerminal 状态行 resync（C1：mid-stream 直写后强制重同�
     act(() => ws.__close())
     expect(sentResync(ws)).toBe(false)
   })
-})
+
+  it('unicode11 宽表已激活（像素方块 logo 列宽对齐的前提）', async () => {
+    FakeTerminalCtor.instances = []
+    await mountAndConnect()
+    const term = FakeTerminalCtor.instances.at(-1)
+    expect(term).toBeDefined()
+    // 后端 alacritty 按 Unicode 11+ 宽表布局 grid；前端不激活 '11' 则
+    // ⬛🟥 等方块 emoji 少占 1 列，像素 logo 整体压扁错位。
+    expect(term!.unicode.activeVersion).toBe('11')
+  })})
