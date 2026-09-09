@@ -255,8 +255,18 @@ fn hash_grid_row(grid: &alacritty_terminal::grid::Grid<Cell>, cols: usize, line:
 /// 零宽字符（组合音标、emoji 变体选择符等）渲染时不占列，但必须与主字符
 /// 一起写入，否则 `e` + U+0301 退化成 `e`。常态（无零宽）零分配 —— 只有
 /// 命中零宽时才 push 额外字符，不回到 E-7 之前每 cell 一次 String 分配。
+///
+/// TAB cell 归一化（2026-09-09）：TUI 输出含 `\t` 的缩进时 alacritty 把它
+/// 存为普通 cell（渲染语义 = 占 1 列的空白），而 xterm.js 收到 `\t` 会解释
+/// 为 HT 跳位（跳到 8 列对齐的 tab stop）——该行整体右移 0~7 列、行尾内容
+/// 被推挤 wrap 到下一行，症状为「同一行延迟刷新其他数据后 logo 两行变形」
+/// （Antigravity CLI 实证）。编码侧统一成空格，对齐 grid 的渲染语义。
 fn push_cell_text(out: &mut String, cell: &Cell) {
-    out.push(cell.c);
+    if cell.c == '\t' {
+        out.push(' ');
+    } else {
+        out.push(cell.c);
+    }
     if let Some(zw) = cell.zerowidth() {
         out.extend(zw.iter().copied());
     }
@@ -496,6 +506,9 @@ impl VtState {
                     }
                     cur = *st;
                 }
+                // TAB cell 归一化：与 push_cell_text 同理（见其注释），
+                // xterm 侧会把 `\t` 解释为 HT 跳位而非 1 列空白。
+                let ch = if *ch == '\t' { ' ' } else { *ch };
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
@@ -1149,6 +1162,28 @@ mod tests {
         let rows = parsed["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "one row in diff");
         assert!(rows[0]["runs"][1].as_str().unwrap().starts_with("changed"));
+    }
+
+    /// TAB cell 归一化（2026-09-09 Antigravity logo 变形案例）：
+    /// TUI 缩进含 `\t` 时 alacritty 把它存为普通 cell（渲染 = 1 列空白），
+    /// 但 xterm.js 会把 `\t` 解释为 HT 跳位 → 该行右移 + 行尾 wrap，
+    /// 两行变形。编码必须把 TAB cell 归一为空格，runs 里不得出现 `\t`。
+    #[test]
+    fn tab_cells_are_normalized_to_spaces_in_frame_and_screen() {
+        let mut v = vt(24, 80);
+        v.feed(b"  \t x"); // TUI 缩进形态：2 空格 + TAB + 1 空格 + 内容
+        let json = v.encode_cell_frame("test-session", false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let runs = parsed["rows"][0]["runs"].as_array().unwrap();
+        let text: String =
+            runs.iter().skip(1).step_by(2).map(|s| s.as_str().unwrap_or_default()).collect();
+        assert!(!text.contains('\t'), "runs must not contain raw TAB: {text:?}");
+        assert!(text.contains('x'), "content must survive normalization: {text:?}");
+
+        // 补屏路径（render_screen）同样不得透出原始 TAB
+        let screen = v.render_screen();
+        let screen_str = String::from_utf8(screen).expect("utf8");
+        assert!(!screen_str.contains('\t'), "render_screen must not emit raw TAB");
     }
 
     #[test]
