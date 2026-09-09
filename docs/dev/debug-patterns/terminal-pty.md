@@ -97,6 +97,7 @@
 - 2026-08-25 pty 连按回车前端丢行（切换会话才补全）。根因：事件驱动编码（模式 7 修复）让帧率突破 30fps 后，前端 rAF latest-wins 开始真正丢 diff 帧。修复：前端改有界有序队列按序全渲染 + 超限发 `resync` 控制帧、后端作废 diff 基线下发全帧；浏览器实测连按 100 次回车可见屏 30/30 行无缺行，resync 后 41ms 收到全帧。
 - 2026-09-04 pty 跑 codebuddy TUI 画在输入行上方、shell 回显残留底部（或整屏冻结在旧画面），切换会话恢复。根因：有序队列超限清空把积压中的 overlay/全帧一并清掉，且 1s 节流窗口内的再次超限不再发 resync——丢失的「清屏帧」永久无补偿，TUI 后续 diff 帧只画自己触碰的行，shell 行不被擦除。修复：超限时保留最后一个 full/overlay 帧为自愈锚点（keepFrom 策略），节流窗口内的清空安排补发定时器保证「清空必有重同步在途」；rAF 停摆 8s + TUI 启动实测修复前永久冻结、修复后正常显示且全帧补齐。
 - 2026-09-08 pty 症状家族第六次复发（运行中画面错位/延迟，切换会话恢复），前五轮各堵一个漏水口后仍由新扰动源触发。结构性结论即本条规律：稳态无周期全帧、无帧序号，失配不可检测也不自愈。修复：`CellFrame.seq`（`VtState` 会话级计数，仅 live 路径携带）+ 前端断链校验主动 resync + 1s 周期全帧对账（A1+A2）；mid-stream error/exit 状态行直写后强制 resync（C1，直写绕过有序队列的滚动副作用无重画补偿——同一不变式的另一处违反）。故障注入实证：第二条连接偷基线期间探针视角 seq 断链 90 处，前端 3s 内发 resync 4 次（节流限频），画面最终收敛无残留（计划：`2026-09-08-pty-incremental-sync-hardening.md`）。
+- 2026-09-09 A1 周期全帧上线后新症状：打字间歇/状态栏更新时光标闪跳终端右下角。根因是**兜底机制自身的衍生缺陷**：渲染 rows 必然 CUP（全帧逐行 CUP 到底行），渲染后 xterm 光标停在重画终点；而 cursor 字段被后端去重（基线 = 上次编码值），「光标未变」的帧省略该字段，污染得不到纠正直到下一次光标实际变化。教训：**字段省略（去重）优化的基线必须是客户端可观测状态，而非上次编码值**——凡渲染动作有副作用（移动光标/改样式），省略字段就必须配恢复，或改为「带副作用的帧不省略该字段」。修复：前端 applyCursor 按 Terminal 实例学习最近一次显式 cursor，帧缺 cursor 且渲染了行时回写（viewport 历史窗口帧不学习）。
 
 ---
 
@@ -191,5 +192,10 @@ blur 断连重连、以及 88x48→80x24→88x48、2x1、1000x48 的极端尺寸
 
 **案例证据**：
 - 2026-09-04 pty 会话在屏底启动 codebuddy，画面「TUI 在输入行上方、底部垫上次会话的退出文本与提示符」。tmux 对照排除 TUI 自身行为与后端 grid（alacritty 处理正确）后，定位为 xterm 与后端行数分叉（帧尺寸自愈验证：外部强缩后端到 20 行，浏览器 1 帧内拉回 48）。修复：open 补发尺寸 + 帧尺寸自愈（`useTerminal.ts`）+ y=0 跳过指纹重定位（见模式 10 勘误）。
+
+**终端-列宽契约**：几何契约不止行数——**每个字符占几列**也是双端各自独立计算的。cell_frame 编码跳过宽字符占位 cell（只发主字符），前端按自己的宽度表重放列宽；xterm.js 默认宽度表停留在 Unicode 6（⬛⬜🟥🟩 等方块 emoji 在 Unicode 9-12 才定为 Wide，默认按 1 列），而后端 alacritty 的 unicode-width 按 Unicode 15 给 2 列——每个此类字符偏移 1 列，**从第一个宽字符起逐字符累积**，「像素方格」logo（方块 emoji 构成）整体压扁错位。判定签名：ASCII 区域完好、错位从特定字符开始且越靠右越歪；同一内容在 tmux（或参考模拟器）下正常。修法：两端宽度表同源——前端加载 Unicode11Addon 并 `term.unicode.activeVersion = '11'`（proposed API，须 `allowProposedApi: true`），在首帧写入前生效。注意此契约只在「帧编码跳过占位 cell」的架构下成立：若帧按 cell 逐列传输则宽度表差异被占位 cell 掩盖，切换传输格式时契约责任随之转移。
+
+**案例证据（续）**：
+- 2026-09-09 pty 会话跑像素方块 logo（⬛🟥 构成）整体压扁、后续内容水平错位。headless 探针实证：xterm 默认表下 `⬛` 写入 buffer 占 1 列（X 落 col 1），unicode11 激活后占 2 列（X 落 col 2），与后端 grid 对齐。修复：`useTerminal.ts` 加载 Unicode11Addon（`@xterm/addon-unicode11@0.9.0`，与 xterm 6.0 同批发布）；回归测试 `useTerminal.unicode11.test.ts`（真实 xterm 断言 ⬛🟥=2 列、▀▄█ 与 CJK 不回归）。
 
 **模式 10 追补（同次排查）——回底校准请求不得做指纹重定位**：y=0 的语义是「回底看 live 屏」，但 live 屏顶行（空行/提示符行）与历史行同内容是常态，`relocate_anchor` 会把 y=0 的回底帧吸附成历史窗口，前端 `currentY` 被带偏后恢复定时器的 `currentY == 0` 条件失效 → 卡在 viewport 模式。修正：`encode_viewport_frame` 对 y=0 跳过重定位，恒服务 live 屏（回归测试 `viewport_frame_y0_ignores_fingerprint_even_when_history_matches`）。

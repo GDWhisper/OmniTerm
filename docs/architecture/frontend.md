@@ -18,8 +18,8 @@ src/
 │   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/archive/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
-│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ pty 滚轮接管（方案 C，ViewportController 接线）+ mid-stream error/exit 状态行直写后强制 resync（2026-09-08 增量同步加固 C1）
-│   ├── useCellFrame.ts  # pty cell_frame 解码渲染：rAF 有界有序队列（超限 keepFrom 锚点 + resync 节流补发）+ seq 连续性校验（2026-09-08 A2：断链即 armResync；无 seq 帧跳过）
+│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ pty 滚轮接管（方案 C，ViewportController 接线）+ mid-stream error/exit 状态行直写后强制 resync（2026-09-08 增量同步加固 C1）+ Unicode11Addon 激活 '11' 宽表（2026-09-09：xterm 默认表停留 Unicode 6，与后端 alacritty unicode-width 的 2 列布局不一致致像素方块 logo 压扁；proposed API 需 allowProposedApi）
+│   ├── useCellFrame.ts  # pty cell_frame 解码渲染：rAF 有界有序队列（超限 keepFrom 锚点 + resync 节流补发）+ seq 连续性校验（2026-09-08 A2：断链即 armResync；无 seq 帧跳过）+ applyCursor 光标污染恢复（2026-09-09：渲染 rows 的 CUP 把光标带到重画终点，帧缺 cursor 字段（后端去重省略）时回写 WeakMap 学习的最近显式 cursor；viewport>0 历史窗口帧不学习）
 │   ├── useLongPress.ts  # 移动端长按手势（500ms + 位移取消），终端 paste 菜单与聊天气泡动作菜单共用（D3）
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
