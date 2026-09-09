@@ -115,6 +115,41 @@ function renderCursor(term: Terminal, cursor?: CursorState): void {
   term.write(cursor.visible ? '\x1b[?25h' : '\x1b[?25l')
 }
 
+/**
+ * 每个 terminal 最近一次学到的真实光标位置（后端帧显式携带 cursor 时更新）。
+ * WeakMap 按 term 实例隔离，会话销毁后自动可回收。
+ */
+const lastCursorByTerm = new WeakMap<Terminal, CursorState>()
+
+/**
+ * 帧渲染后的光标落位。
+ *
+ * 渲染行内容必然伴随 CUP（全帧逐行 CUP 到 `height` 行；diff 帧 CUP 到各
+ * 变化行），渲染结束时 xterm 光标停在**重画终点**而非真实光标处 —— 全帧
+ * 终点即底行行尾（右下角）。后端对 cursor 做去重（与上次编码值相同则
+ * 省略字段），因此「带 rows 但不带 cursor」的帧是常态：不回写的话，光标
+ * 每次全帧/diff 渲染后都会停在重画终点，直到下一次光标实际变化才恢复
+ * （症状：打字间歇/状态栏更新时光标闪跳右下角）。
+ *
+ * - 帧显式携带 cursor：以其为准；同时学习（viewport 历史窗口帧的光标
+ *   不是 live 光标，不学习；`viewport === 0` 的回底校准帧携带的就是真实
+ *   光标，学习）。
+ * - 帧缺 cursor 且本帧渲染了行：回写上次学习的位置，抵消渲染污染。
+ *   全帧必然渲染行（循环执行即污染）；diff 帧仅在 `row_indices` 非空时。
+ */
+function applyCursor(term: Terminal, frame: CellFrame, renderedRows: boolean): void {
+  if (frame.cursor) {
+    renderCursor(term, frame.cursor)
+    if (frame.viewport == null || frame.viewport === 0) {
+      lastCursorByTerm.set(term, frame.cursor)
+    }
+    return
+  }
+  if (!renderedRows) return
+  const last = lastCursorByTerm.get(term)
+  if (last) renderCursor(term, last)
+}
+
 // ──────────────────────────────────────────────────────────
 // Main renderer
 // ──────────────────────────────────────────────────────────
@@ -144,9 +179,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
       chunks.push(...renderRow(frame.rows[r]?.runs))
     }
     term.write(chunks.join(''))
-    if (frame.cursor) {
-      renderCursor(term, frame.cursor)
-    }
+    applyCursor(term, frame, true)
     return
   }
 
@@ -162,9 +195,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     chunks.push(...renderRow(frame.rows[i]?.runs))
   }
   term.write(chunks.join(''))
-  if (frame.cursor) {
-    renderCursor(term, frame.cursor)
-  }
+  applyCursor(term, frame, indices.length > 0)
 }
 
 // ──────────────────────────────────────────────────────────

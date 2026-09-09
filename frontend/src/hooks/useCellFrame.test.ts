@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { renderRow, useCellFrame, type CellFrame } from './useCellFrame'
+import { renderRow, renderCellFrame, useCellFrame, type CellFrame } from './useCellFrame'
 
 // Probe-component pattern (no @testing-library/react in deps),
 // following useLongPress.test.ts.
@@ -380,5 +380,98 @@ describe('useCellFrame', () => {
     act(() => hook.enqueue(seqFrame(42)))
     expect(resync).not.toHaveBeenCalled()
     nowSpy.mockRestore()
+  })
+})
+
+// ──────────────────────────────────────────────────────────
+// applyCursor：行渲染污染后的光标恢复（2026-09-09）
+//
+// 渲染行内容必然 CUP 到重画终点（全帧 = 底行 = 右下角）；后端 cursor 去重
+// 使「带 rows 但缺 cursor」成为常态帧，缺恢复则光标停在重画终点直到下次
+// 光标实际变化（症状：打字间歇光标闪跳右下角）。
+// ──────────────────────────────────────────────────────────
+
+describe('applyCursor 光标恢复', () => {
+  function cursorAt(row: number, col: number): NonNullable<CellFrame['cursor']> {
+    return { row, col, visible: true }
+  }
+
+  /** 学习光标 (5,10) 后再渲染一个缺 cursor 的全帧，返回写入串。 */
+  function renderFullWithoutCursor(cursor: NonNullable<CellFrame['cursor']> | null): string {
+    const term = new FakeTerminal()
+    const learned = fullFrame('LEARN')
+    if (cursor) learned.cursor = cursor
+    renderCellFrame(
+      term as unknown as import('@xterm/xterm').Terminal,
+      learned,
+    )
+    const plain = fullFrame('PLAIN')
+    renderCellFrame(term as unknown as import('@xterm/xterm').Terminal, plain)
+    return term.writes.join('|')
+  }
+
+  it('全帧缺 cursor：渲染后回写上次学习的光标位置', () => {
+    const joined = renderFullWithoutCursor(cursorAt(5, 10))
+    // renderCursor 对 CUP 与 DECTCEM 分次 write，join 后有分隔符，逐段断言。
+    expect(joined).toContain('\x1b[5;10H')
+    // PLAIN 全帧渲染到 height=1 行，若不恢复光标会停在 (1, 内容尾)。
+    const restored = joined.lastIndexOf('\x1b[5;10H')
+    expect(restored).toBeGreaterThan(joined.lastIndexOf('PLAIN'))
+  })
+
+  it('缺 cursor 全帧且从未学过光标：不回写（避免瞎定位）', () => {
+    const joined = renderFullWithoutCursor(null)
+    expect(joined).not.toContain('\x1b[5;10H')
+  })
+
+  it('diff 帧缺 cursor 且有变化行：同样回写', () => {
+    const term = new FakeTerminal()
+    const T = term as unknown as import('@xterm/xterm').Terminal
+    const learned = { ...diffFrame('L'), cursor: cursorAt(3, 7) }
+    renderCellFrame(T, learned)
+    renderCellFrame(T, diffFrame('D'))
+    const joined = term.writes.join('|')
+    expect(joined.indexOf('\x1b[3;7H')).toBeGreaterThan(joined.indexOf('L'))
+  })
+
+  it('空 diff 帧缺 cursor：无行渲染无污染，不回写', () => {
+    const term = new FakeTerminal()
+    const T = term as unknown as import('@xterm/xterm').Terminal
+    renderCellFrame(T, { ...diffFrame('L'), cursor: cursorAt(3, 7) })
+    const empty: CellFrame = { ...diffFrame('E'), row_indices: [], rows: [] }
+    renderCellFrame(T, empty)
+    const afterEmpty = term.writes.join('|').slice(term.writes.join('|').indexOf('E'))
+    expect(afterEmpty).not.toContain('\x1b[3;7H')
+  })
+
+  it('viewport 历史窗口帧的光标不学习（非 live 光标）', () => {
+    const term = new FakeTerminal()
+    const T = term as unknown as import('@xterm/xterm').Terminal
+    renderCellFrame(T, { ...fullFrame('L'), cursor: cursorAt(5, 10) })
+    const vp: CellFrame = {
+      ...fullFrame('VP'),
+      viewport: 12,
+      cursor: cursorAt(1, 1),
+    }
+    renderCellFrame(T, vp)
+    renderCellFrame(T, fullFrame('PLAIN'))
+    // 恢复应回到 live 光标 (5,10) 而非历史窗口假光标 (1,1)。
+    const restored = term.writes.join('|').lastIndexOf('\x1b[5;10H')
+    expect(restored).toBeGreaterThan(term.writes.join('|').lastIndexOf('VP'))
+  })
+
+  it('viewport=0 回底校准帧携带真实光标，学习', () => {
+    const term = new FakeTerminal()
+    const T = term as unknown as import('@xterm/xterm').Terminal
+    const calib: CellFrame = {
+      ...fullFrame('C'),
+      viewport: 0,
+      cursor: cursorAt(2, 3),
+    }
+    renderCellFrame(T, calib)
+    renderCellFrame(T, fullFrame('PLAIN'))
+    expect(term.writes.join('|').lastIndexOf('\x1b[2;3H')).toBeGreaterThan(
+      term.writes.join('|').lastIndexOf('PLAIN'),
+    )
   })
 })
