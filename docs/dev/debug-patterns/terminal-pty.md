@@ -198,4 +198,9 @@ blur 断连重连、以及 88x48→80x24→88x48、2x1、1000x48 的极端尺寸
 **案例证据（续）**：
 - 2026-09-09 pty 会话跑像素方块 logo（⬛🟥 构成）整体压扁、后续内容水平错位。headless 探针实证：xterm 默认表下 `⬛` 写入 buffer 占 1 列（X 落 col 1），unicode11 激活后占 2 列（X 落 col 2），与后端 grid 对齐。修复：`useTerminal.ts` 加载 Unicode11Addon（`@xterm/addon-unicode11@0.9.0`，与 xterm 6.0 同批发布）；回归测试 `useTerminal.unicode11.test.ts`（真实 xterm 断言 ⬛🟥=2 列、▀▄█ 与 CJK 不回归）。
 
+**终端-cell 语义契约**：几何之外，**cell 内容本身的渲染语义**也须两端一致——最典型的是 TAB：alacritty 把 TUI 输出的 `\t` 存为普通 grid cell（渲染语义 = 1 列空白，无论该 cell 落在哪一列）；而 xterm.js 把写入的 `\t` 解释为 HT 跳位（跳到 8 列对齐的 tab stop，宽度 0~7 列不定）。cell_frame 编码原样透出 `\t` 后，同一 cell 序列在两端的渲染列布局不同。判定签名：**同一行初画正确、后续被 TUI 重写后该行整体右移 + 行尾内容 wrap 掉到下一行（两行变形）**——触发条件是该行重写时带了 `\t` 缩进（如 TUI 延迟填充状态数据）。修法：编码侧归一化（`push_cell_text`/`render_screen` 把 TAB cell 输出为空格），维持「前端按 cell 序列 1:1 重放 = 后端 grid 视角」的不变式；单测 `tab_cells_are_normalized_to_spaces_in_frame_and_screen` 守护两条编码路径。
+
+**案例证据（续）**：
+- 2026-09-09 pty 会话跑 Antigravity CLI，logo 初画正确；账号信息延迟加载重写 logo 行后，该行 logo 方块整体右移、行尾推挤下一行——两行变形。探针对比变形前后帧：该行前导从 `(20,20,20,20)` 变 `(20,20,9,20)`（0x09 = 原始 TAB 进入 runs）。修复归一化后重跑 15s 抓帧 1656 个 text 段 0 命中 TAB，延迟填充帧前导与初态一致，浏览器截图 logo 完好。
+
 **模式 10 追补（同次排查）——回底校准请求不得做指纹重定位**：y=0 的语义是「回底看 live 屏」，但 live 屏顶行（空行/提示符行）与历史行同内容是常态，`relocate_anchor` 会把 y=0 的回底帧吸附成历史窗口，前端 `currentY` 被带偏后恢复定时器的 `currentY == 0` 条件失效 → 卡在 viewport 模式。修正：`encode_viewport_frame` 对 y=0 跳过重定位，恒服务 live 屏（回归测试 `viewport_frame_y0_ignores_fingerprint_even_when_history_matches`）。

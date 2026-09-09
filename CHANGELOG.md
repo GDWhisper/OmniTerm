@@ -56,6 +56,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-09-09 16:40) `[backend]` 修复 TUI（Antigravity CLI 等）延迟刷新状态数据后 logo/版面两行变形错位：TUI 重写行输出的 `\t` 缩进被 alacritty 存为普通 grid cell（渲染 = 1 列空白），cell_frame/补屏编码原样透出后 xterm.js 把 `\t` 解释为 HT 跳位（0~7 列），该行整体右移、行尾内容 wrap 到下一行。编码侧把 TAB cell 归一化为空格，维持前端按 cell 序列 1:1 重放（`src/engine/pty/vt.rs`）
 - (2026-09-09 15:35) `[frontend]` 修复 pty 会话像素方块 logo（⬛⬜🟥🟩 等方块 emoji 构成）整体压扁错位：xterm.js 默认宽度表停留在 Unicode 6（此类字符按 1 列），后端 alacritty 按 Unicode 15 给 2 列且 cell_frame 编码跳过宽字符占位 cell，每个方块偏移 1 列、从第一个方块起逐字符累积。现加载 Unicode11Addon 并在首帧前激活 `'11'` 宽表，前端列宽与后端 grid 对齐（`frontend/src/hooks/useTerminal.ts`）
 - (2026-09-09 15:35) `[frontend]` 修复 pty 会话光标在打字间歇/状态栏更新后闪跳终端右下角：渲染帧行内容后 xterm 光标停在重画终点（全帧即底行行尾），而 cursor 字段被去重省略、污染得不到纠正。现按 terminal 实例学习最近一次显式 cursor，帧缺 cursor 且渲染了行时回写，抵消渲染污染（`frontend/src/hooks/useCellFrame.ts`）
 - (2026-09-09 00:30) `[frontend]` 修复 pty 会话 mid-stream 出现 error/exit 状态行后画面残留一行偏移：状态行经 `writeln` 直写 xterm（绕过帧有序队列），可能触发换行滚动，而 diff 帧不重画未变化行——偏移永久保持。现直写后立即发 `resync`（自带 readyState 守卫），一次全帧重画抵消滚动副作用；首帧前写入的 connected/attached 与流死后写入的断连提示无需处理（`frontend/src/hooks/useTerminal.ts`）
