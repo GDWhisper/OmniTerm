@@ -5,7 +5,7 @@ import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
-import { IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
+import { IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
 import { EditButton, DeleteButton, ReleaseButton, ArchiveButton } from './RowActionButtons'
@@ -146,7 +146,7 @@ export function ProjectCard(props: {
               e.currentTarget.style.background = 'transparent'
             }}
           >
-            <IconPlus width={14} height={14} />
+            <IconGitBranch width={14} height={14} />
           </button>
           <EditButton
             onClick={(e) => {
