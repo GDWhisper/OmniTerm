@@ -260,13 +260,17 @@ async fn run_update(State(state): State<AppState>) -> (StatusCode, Json<Value>) 
                         .await
                         .is_err()
                     {
-                        tracing::warn!(
-                            "ACP shutdown exceeded {:?}, relaunching anyway; stale agent children may linger",
-                            RELAUNCH_SHUTDOWN_TIMEOUT,
+                        // 自重启链的失败诊断一律 eprintln 直写 stderr，不走
+                        // tracing：tracing 受继承 RUST_LOG 过滤（main.rs 已兜底
+                        // omniterm=info，但用户显式 RUST_LOG=off 时保底不生效），
+                        // 而自重启失败必须保证可见——daemon 模式 stderr 即日志
+                        // 文件，前台模式直达终端。见 debug-patterns 模式 9/10。
+                        eprintln!(
+                            "omniterm-update: ACP shutdown exceeded {RELAUNCH_SHUTDOWN_TIMEOUT:?}, relaunching anyway; stale agent children may linger"
                         );
                     }
                     if let Err(e) = update::relaunch(&exe) {
-                        tracing::error!("auto-relaunch failed, restart manually: {e:#}");
+                        eprintln!("omniterm-update: auto-relaunch failed, restart manually: {e:#}");
                     }
                 });
                 true

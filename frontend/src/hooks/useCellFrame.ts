@@ -61,6 +61,11 @@ export interface CellFrame {
   /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
    *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
   history_size?: number
+  /** 帧序号（2026-09-08 增量同步加固 A2）：仅 live 编码帧携带，会话级
+   * 单调递增。入队时校验 `seq == lastSeq + 1`，断链（并发连接偷 diff 基线、
+   * 后端重启归零）即主动 resync。viewport/overlay 帧省略此字段——无 seq
+   * 帧不占 diff 基线，跳过检测（不校验、不推进 lastSeq）。 */
+  seq?: number
   rows: CellRow[]
 }
 
@@ -110,6 +115,41 @@ function renderCursor(term: Terminal, cursor?: CursorState): void {
   term.write(cursor.visible ? '\x1b[?25h' : '\x1b[?25l')
 }
 
+/**
+ * 每个 terminal 最近一次学到的真实光标位置（后端帧显式携带 cursor 时更新）。
+ * WeakMap 按 term 实例隔离，会话销毁后自动可回收。
+ */
+const lastCursorByTerm = new WeakMap<Terminal, CursorState>()
+
+/**
+ * 帧渲染后的光标落位。
+ *
+ * 渲染行内容必然伴随 CUP（全帧逐行 CUP 到 `height` 行；diff 帧 CUP 到各
+ * 变化行），渲染结束时 xterm 光标停在**重画终点**而非真实光标处 —— 全帧
+ * 终点即底行行尾（右下角）。后端对 cursor 做去重（与上次编码值相同则
+ * 省略字段），因此「带 rows 但不带 cursor」的帧是常态：不回写的话，光标
+ * 每次全帧/diff 渲染后都会停在重画终点，直到下一次光标实际变化才恢复
+ * （症状：打字间歇/状态栏更新时光标闪跳右下角）。
+ *
+ * - 帧显式携带 cursor：以其为准；同时学习（viewport 历史窗口帧的光标
+ *   不是 live 光标，不学习；`viewport === 0` 的回底校准帧携带的就是真实
+ *   光标，学习）。
+ * - 帧缺 cursor 且本帧渲染了行：回写上次学习的位置，抵消渲染污染。
+ *   全帧必然渲染行（循环执行即污染）；diff 帧仅在 `row_indices` 非空时。
+ */
+function applyCursor(term: Terminal, frame: CellFrame, renderedRows: boolean): void {
+  if (frame.cursor) {
+    renderCursor(term, frame.cursor)
+    if (frame.viewport == null || frame.viewport === 0) {
+      lastCursorByTerm.set(term, frame.cursor)
+    }
+    return
+  }
+  if (!renderedRows) return
+  const last = lastCursorByTerm.get(term)
+  if (last) renderCursor(term, last)
+}
+
 // ──────────────────────────────────────────────────────────
 // Main renderer
 // ──────────────────────────────────────────────────────────
@@ -139,9 +179,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
       chunks.push(...renderRow(frame.rows[r]?.runs))
     }
     term.write(chunks.join(''))
-    if (frame.cursor) {
-      renderCursor(term, frame.cursor)
-    }
+    applyCursor(term, frame, true)
     return
   }
 
@@ -157,9 +195,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     chunks.push(...renderRow(frame.rows[i]?.runs))
   }
   term.write(chunks.join(''))
-  if (frame.cursor) {
-    renderCursor(term, frame.cursor)
-  }
+  applyCursor(term, frame, indices.length > 0)
 }
 
 // ──────────────────────────────────────────────────────────
@@ -191,6 +227,8 @@ export function useCellFrame(
   const rafId = useRef<number | null>(null)
   const lastResyncAt = useRef(0)
   const resyncTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 最近一帧的 seq（A2）：null = 尚未见过带 seq 的帧（首帧直接接受）。 */
+  const lastSeq = useRef<number | null>(null)
 
   // 卸载时清掉补发定时器，避免卸载后触发 requestResync。
   useEffect(
@@ -225,6 +263,17 @@ export function useCellFrame(
 
   const enqueue = useCallback(
     (frame: CellFrame) => {
+      // seq 连续性校验（A2）：断链 ≡ diff 基线被并发连接消费（缺陷 1 的
+      // 直接信号）或后端重启归零，随后 diff 帧不可信 → 主动 resync 请求
+      // 全帧。复用 armResync 的节流 + 补发定时器，天然限频。无 seq 帧
+      // （viewport/overlay）不占 diff 基线，跳过检测且不推进 lastSeq，
+      // 保持与最近 live 帧的连续性判断。首帧（lastSeq 为 null）直接接受。
+      if (frame.seq != null) {
+        if (lastSeq.current != null && frame.seq !== lastSeq.current + 1) {
+          armResync()
+        }
+        lastSeq.current = frame.seq
+      }
       const q = frameQueue.current
       if (q.length >= MAX_PENDING_FRAMES) {
         // 渲染跟不上产出。full/overlay 帧自含完整屏幕状态，是积压中唯一的

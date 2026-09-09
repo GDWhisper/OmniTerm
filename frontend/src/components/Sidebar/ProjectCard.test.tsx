@@ -163,6 +163,20 @@ describe('ProjectCard worktree 展开模式', () => {
     expect(container.querySelector('.sidebar-session-list')).toBeTruthy()
     expect(container.textContent).toContain('sidebar.noSessions')
   })
+
+  it('点击创建 worktree 按钮触发 onOpenCreateWorktree 且图标为分支样式', () => {
+    const onOpenCreateWorktree = vi.fn()
+    renderCard(baseProps({ onOpenCreateWorktree }))
+
+    const createWtBtn = container.querySelector('button[title="sidebar.createWorktree"]') as HTMLButtonElement
+    expect(createWtBtn).toBeTruthy()
+    const svg = createWtBtn.querySelector('svg')
+    expect(svg).toBeTruthy()
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 24 24')
+
+    createWtBtn.click()
+    expect(onOpenCreateWorktree).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('ProjectCard ACP 会话折叠', () => {

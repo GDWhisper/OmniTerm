@@ -16,6 +16,8 @@ vi.mock('@xterm/xterm', () => {
     rows = 24
     options: Record<string, unknown> = {}
     element: HTMLElement | null = null
+    // Unicode11Addon 激活宽表用（useTerminal.createTerminal，2026-09-09）
+    unicode = { activeVersion: '' }
     open(container: HTMLElement) {
       const el = document.createElement('div')
       el.className = 'xterm'

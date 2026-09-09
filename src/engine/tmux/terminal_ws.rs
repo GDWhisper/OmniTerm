@@ -9,6 +9,10 @@ use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
+#[cfg(windows)]
+use crate::engine::pty_io::strip_ssh_leak_env_async;
+use crate::engine::pty_io::strip_ssh_leak_env_builder;
+
 use crate::AppState;
 use crate::engine::pty_io;
 use crate::models::session::RuntimeKind;
@@ -27,6 +31,9 @@ const TMUX_ESCAPE_TIME_MS: &str = "10";
 #[cfg(unix)]
 fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("tmux");
+    // 本地 attach 客户端不携带 SSH 泄漏变量（update-environment 会把
+    // SSH_CONNECTION 从 session env unset，见 tmux::tmux_cmd 注释）。
+    strip_ssh_leak_env_builder(&mut cmd);
     cmd.args([
         "set-option",
         "-s",
@@ -52,6 +59,7 @@ fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
 #[cfg(windows)]
 fn build_tmux_attach_cmd(tmux_name: &str, cwd: &str) -> CommandBuilder {
     let mut cmd = CommandBuilder::new("tmux");
+    strip_ssh_leak_env_builder(&mut cmd);
     cmd.args(["new-session", "-A", "-s", tmux_name]);
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
@@ -76,11 +84,9 @@ pub(crate) async fn apply_escape_time_workaround() {
     if APPLIED.load(Ordering::Relaxed) {
         return;
     }
-    match tokio::process::Command::new("tmux")
-        .args(["set-option", "-s", "escape-time", TMUX_ESCAPE_TIME_MS])
-        .output()
-        .await
-    {
+    let mut escape_cmd = tokio::process::Command::new("tmux");
+    strip_ssh_leak_env_async(&mut escape_cmd);
+    match escape_cmd.args(["set-option", "-s", "escape-time", TMUX_ESCAPE_TIME_MS]).output().await {
         Ok(out) if out.status.success() => {
             APPLIED.store(true, Ordering::Relaxed);
         }

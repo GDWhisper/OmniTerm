@@ -21,7 +21,11 @@ import { useCellFrame, type CellFrame } from './useCellFrame'
 // while keeping createTerminal synchronous (no yield window for CSS
 // transitions / font swaps to change the container size mid-init).
 const importAddons = () =>
-  Promise.all([import('@xterm/addon-fit'), import('@xterm/addon-web-links')])
+  Promise.all([
+    import('@xterm/addon-fit'),
+    import('@xterm/addon-web-links'),
+    import('@xterm/addon-unicode11'),
+  ])
 let addonsPromise = importAddons()
 
 /** 方案 C D8：滚轮接管总开关（行为级切换，无中间态可灰度）。置 '0' 关闭
@@ -50,8 +54,14 @@ function cellHeightPx(term: Terminal): number {
   return h && h > 0 ? h : (term.options.fontSize ?? 14) * 1.35
 }
 
-async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon]> {
-  let mods: [typeof import('@xterm/addon-fit'), typeof import('@xterm/addon-web-links')]
+async function loadAddons(): Promise<
+  [typeof FitAddon, typeof import('@xterm/addon-web-links').WebLinksAddon, typeof import('@xterm/addon-unicode11').Unicode11Addon]
+> {
+  let mods: [
+    typeof import('@xterm/addon-fit'),
+    typeof import('@xterm/addon-web-links'),
+    typeof import('@xterm/addon-unicode11'),
+  ]
   try {
     mods = await addonsPromise
   } catch {
@@ -60,8 +70,8 @@ async function loadAddons(): Promise<[typeof FitAddon, typeof import('@xterm/add
     addonsPromise = importAddons()
     mods = await addonsPromise
   }
-  const [{ FitAddon }, { WebLinksAddon }] = mods
-  return [FitAddon, WebLinksAddon]
+  const [{ FitAddon }, { WebLinksAddon }, { Unicode11Addon }] = mods
+  return [FitAddon, WebLinksAddon, Unicode11Addon]
 }
 
 interface UseTerminalOptions {
@@ -322,8 +332,13 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
             termRef.current?.writeln(`\x1b[36m[${i18n.t('terminal.status.attached', { session: msg.session })}]\x1b[0m`)
           } else if (msg.type === 'error') {
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.error', { msg: msg.message })}]\x1b[0m`)
+            // C1（2026-09-08 pty-incremental-sync-hardening）：mid-stream 直写
+            // 状态行可能触发换行滚动，而 diff 帧不会重画未变化行 → 永久错位。
+            // 一次全帧重同步抵消滚动副作用（requestResync 自带 readyState 守卫）。
+            requestResync()
           } else if (msg.type === 'exit') {
             termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.exited', { code: msg.code })}]\x1b[0m`)
+            requestResync()
           } else if (msg.type === 'agent_state') {
             // Fire attention notification on state transitions
             if (!sessionId) return
@@ -621,7 +636,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
    * before doing any DOM/ref work. Without this, StrictMode calls term.open()
    * twice on the same container, corrupting xterm internal state. */
   const createTerminal = useCallback(async (container: HTMLDivElement, signal: AbortSignal) => {
-    const [FitAddon, WebLinksAddon] = await loadAddons()
+    const [FitAddon, WebLinksAddon, Unicode11Addon] = await loadAddons()
 
     // StrictMode guard: if cleanup aborted the signal while we were awaiting
     // addons, bail out before touching the DOM or refs.
@@ -634,6 +649,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       fontSize: fontSizeRef.current,
       fontFamily: READER_FONT,
       theme: DARK_TERMINAL_THEME,
+      // Unicode11Addon 注册宽表走的是 proposed API（unicode.register），
+      // 必须开启否则 loadAddon 直接抛错、终端初始化失败。
+      allowProposedApi: true,
       // Match the backend VT scrollback (VT_SCROLLBACK_LINES = 1000 in
       // src/engine/pty/vt.rs) so the xterm scrollback depth equals what
       // the PTY grid can produce.  Without this, xterm defaults to 1000
@@ -654,6 +672,14 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     term.loadAddon(fit)
     term.loadAddon(webLinks)
+    // Unicode 11 宽表（2026-09-09）：xterm 默认宽表停留在 Unicode 6，
+    // ⬛⬜🟥🟩 等方块 emoji 按 1 列渲染，而后端 alacritty 的 unicode-width
+    // 按 2 列布局 grid —— cell_frame 编码跳过宽字符占位 cell 后，前端每
+    // 个方块少占 1 列，「像素方格」logo 从第一个方块起整体压扁错位。激活
+    // '11' 宽表使前端列宽与后端对齐。须在首帧写入前生效，此处即 open 前。
+    const unicode11 = new Unicode11Addon()
+    term.loadAddon(unicode11)
+    term.unicode.activeVersion = '11'
     term.open(container)
 
     // Mobile fit correction. FitAddon measures the container's border-box

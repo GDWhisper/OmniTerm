@@ -19,8 +19,15 @@ use crate::acp::turn_accumulator::TurnTiming;
 use crate::acp::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
 use crate::api::agents::load_agent;
 
-/// 单次 prompt 图片附件上限（与前端 ChatInput 的限制一致，防止 WS 帧过大）。
-const MAX_PROMPT_IMAGES: usize = 3;
+/// 单条客户端帧的体积上限。这是管道自身的口径，不是内容判断：tungstenite 默认
+/// `max_frame_size` 为 16MiB，超限会直接关掉连接（不是报错），所以在入口显式拦
+/// 一道并给出可读错误。图片 base64 内联在帧里，是唯一能把帧撑大的东西。
+const MAX_PROMPT_FRAME_BYTES: usize = 12 * 1024 * 1024;
+
+/// 字节数 → MiB，仅用于错误文案。
+fn mib(bytes: usize) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}
 /// 单次 prompt 的 `@` 文件引用上限。
 const MAX_AT_REFERENCES: usize = 8;
 /// 单个 `@` 引用文件注入内容上限（超出截断）。
@@ -817,18 +824,23 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        // 管道口径：让 tungstenite 撞上它会直接关连接，先拦下来给可读错误。
+                        if text.len() > MAX_PROMPT_FRAME_BYTES {
+                            let msg = serde_json::to_string(&AcpServerMessage::Error {
+                                code: Some("message_too_large"),
+                                message: &format!(
+                                    "message too large ({:.1} MiB); the WebSocket pipe holds {:.1} MiB",
+                                    mib(text.len()),
+                                    mib(MAX_PROMPT_FRAME_BYTES),
+                                ),
+                            })
+                            .unwrap_or_default();
+                            let _ = ws_tx.send(Message::Text(msg.into())).await;
+                            continue;
+                        }
+
                         match serde_json::from_str::<AcpClientMessage>(&text) {
                             Ok(AcpClientMessage::Prompt { text: prompt_text, images }) => {
-                                // 附件校验：前端已限制，这里兜底（直连 WS 的客户端）。
-                                // 数量校验与 agent 能力无关，先于恢复流程执行。
-                                if images.len() > MAX_PROMPT_IMAGES {
-                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
-                                        message: &format!("too many images (max {})", MAX_PROMPT_IMAGES),
-                                    }).unwrap_or_default();
-                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
-                                    continue;
-                                }
-
                                 // 有图时把结构化 blocks 一并落库（text + image），
                                 // 刷新后 hydrate 能还原缩略图；纯文本保持 NULL 现状。
                                 let blocks_json = if images.is_empty() {
@@ -841,10 +853,17 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }));
                                     }
                                     for img in &images {
+                                        // 只落缩略图：历史气泡的显示尺寸是 240×200，存原图会让
+                                        // 分页预算和首屏为一张图付出上百倍体积（一页只翻得出
+                                        // 一条消息）。无缩略图时回退原图（直连 WS 的客户端）。
+                                        let (data, mime_type) = match &img.thumb {
+                                            Some(t) => (t.data.as_str(), t.mime_type.as_str()),
+                                            None => (img.data.as_str(), img.mime_type.as_str()),
+                                        };
                                         arr.push(serde_json::json!({
                                             "type": "image",
-                                            "mimeType": img.mime_type,
-                                            "data": img.data,
+                                            "mimeType": mime_type,
+                                            "data": data,
                                         }));
                                     }
                                     serde_json::to_string(&arr).ok()

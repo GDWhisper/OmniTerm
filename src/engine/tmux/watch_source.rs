@@ -1,7 +1,5 @@
 //! 引擎侧屏幕检测枚举源：一次 `list-panes -a` 拿全部会话的活动 pane。
 
-use tokio::process::Command;
-
 /// -F 字段分隔符。不能用控制字符（tmux 会把格式串里的非打印字节
 /// 八进制转义为字面 `\037` 输出）；':' 安全：会话名禁止含 ':'（
 /// session_check_name 会替换为 '_'），中间字段均为数字，自由文本的
@@ -20,8 +18,7 @@ pub async fn list_active_panes() -> Vec<PaneInfo> {
         "#{{session_name}}{s}#{{window_active}}{s}#{{pane_active}}{s}#{{pane_pid}}{s}#{{window_activity}}{s}#{{pane_title}}",
         s = FIELD_SEP
     );
-    let output = match Command::new("tmux").args(["list-panes", "-a", "-F", &format]).output().await
-    {
+    let output = match super::tmux_cmd().args(["list-panes", "-a", "-F", &format]).output().await {
         Ok(o) if o.status.success() => o,
         _ => return vec![],
     };

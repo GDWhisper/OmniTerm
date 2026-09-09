@@ -103,6 +103,7 @@ fi
 if [ -d "frontend" ] && command -v pnpm &> /dev/null; then
   echo "🔍 前端编译验证..."
   cd frontend
+  pnpm install --silent
   if ! pnpm build 2>&1 | tail -10; then
     echo "❌ 前端编译失败，请修复后重试"
     cd ..

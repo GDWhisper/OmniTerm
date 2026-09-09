@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { useGitStore } from './gitStore'
 import { beginTurn, endTurn, setTurnWaiting } from '../utils/turnClock'
+import type { ImageThumb } from '../utils/imageAttachment'
 
 // --- Content block types (Phase 7 structured rendering) ---
 
@@ -74,6 +75,8 @@ export interface ImageBlock {
   mimeType: string
   /** Base64 数据（不含 data URI 前缀）。 */
   data: string
+  /** 缩略图（落库/渲染用）；无则渲染原图（旧数据或后端回退存了原图）。 */
+  thumb?: ImageThumb
 }
 
 export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock
@@ -1184,6 +1187,22 @@ export interface SyncMessagePayload {
  *   inserts nothing; without one it falls back to text matching. Passing a
  *   local id would match no row and silently drop the write.
  */
+/**
+ * 落库形态的 blocks：图片只保留缩略图。
+ *
+ * 原图不进库——历史气泡的显示尺寸只有 240×200，存原图会让分页预算和首屏为一张图
+ * 付出上百倍体积。后端落库同样只存缩略图（见 src/ws/acp.rs），这里保证前端回写
+ * （hydrate 后的 cooked blocks）不会把原图再塞回去。
+ */
+function toPersistedBlocks(blocks: readonly ContentBlock[]): ContentBlock[] {
+  return blocks.map((b) => {
+    if (b.type !== 'image') return b
+    return b.thumb
+      ? { type: 'image', mimeType: b.thumb.mimeType, data: b.thumb.data }
+      : { type: 'image', mimeType: b.mimeType, data: b.data }
+  })
+}
+
 export function messagesToSyncPayload(
   messages: readonly ChatMessage[],
 ): SyncMessagePayload[] {
@@ -1196,7 +1215,7 @@ export function messagesToSyncPayload(
       entry.id = m.dbId
     }
     if (m.blocks.length) {
-      entry.blocks = JSON.stringify(m.blocks)
+      entry.blocks = JSON.stringify(toPersistedBlocks(m.blocks))
     }
     payload.push(entry)
   }
@@ -1251,5 +1270,10 @@ export function storedRawRowToSyncPayload(m: ChatMessage): SyncMessagePayload | 
   if (!m.rawStored || !m.dbId) return null
   if (m.streaming) return null
   if (m.blocks.length === 0) return null
-  return { id: m.dbId, role: m.role, text: m.text, blocks: JSON.stringify(m.blocks) }
+  return {
+    id: m.dbId,
+    role: m.role,
+    text: m.text,
+    blocks: JSON.stringify(toPersistedBlocks(m.blocks)),
+  }
 }

@@ -255,8 +255,18 @@ fn hash_grid_row(grid: &alacritty_terminal::grid::Grid<Cell>, cols: usize, line:
 /// 零宽字符（组合音标、emoji 变体选择符等）渲染时不占列，但必须与主字符
 /// 一起写入，否则 `e` + U+0301 退化成 `e`。常态（无零宽）零分配 —— 只有
 /// 命中零宽时才 push 额外字符，不回到 E-7 之前每 cell 一次 String 分配。
+///
+/// TAB cell 归一化（2026-09-09）：TUI 输出含 `\t` 的缩进时 alacritty 把它
+/// 存为普通 cell（渲染语义 = 占 1 列的空白），而 xterm.js 收到 `\t` 会解释
+/// 为 HT 跳位（跳到 8 列对齐的 tab stop）——该行整体右移 0~7 列、行尾内容
+/// 被推挤 wrap 到下一行，症状为「同一行延迟刷新其他数据后 logo 两行变形」
+/// （Antigravity CLI 实证）。编码侧统一成空格，对齐 grid 的渲染语义。
 fn push_cell_text(out: &mut String, cell: &Cell) {
-    out.push(cell.c);
+    if cell.c == '\t' {
+        out.push(' ');
+    } else {
+        out.push(cell.c);
+    }
     if let Some(zw) = cell.zerowidth() {
         out.extend(zw.iter().copied());
     }
@@ -340,6 +350,11 @@ pub struct VtState {
     diff_engine: DiffEngine,
     /// Phase 3: last encoded cursor state — omit cursor field when unchanged (reduce flicker).
     last_cursor: Mutex<Option<(i32, u16, u8, bool)>>,
+    /// 帧序号（2026-09-08 增量同步加固 A2）：仅 live 编码路径递增并盖章到
+    /// `CellFrame.seq`。会话级（`VtState` 与会话同生命周期）：重连不清零
+    /// （前端连续性保持，不误报）；会话重建/后端重启归零 → 前端检出断链
+    /// 主动 resync，自愈无害。u64 + wrapping：以 30fps 计溢出周期 ~190 亿年。
+    frame_seq: u64,
 }
 
 impl VtState {
@@ -363,6 +378,7 @@ impl VtState {
             cols: cols as u16,
             diff_engine: DiffEngine::with_rows(rows),
             last_cursor: Mutex::new(None),
+            frame_seq: 0,
         }
     }
 
@@ -490,6 +506,9 @@ impl VtState {
                     }
                     cur = *st;
                 }
+                // TAB cell 归一化：与 push_cell_text 同理（见其注释），
+                // xterm 侧会把 `\t` 解释为 HT 跳位而非 1 列空白。
+                let ch = if *ch == '\t' { ' ' } else { *ch };
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
@@ -520,12 +539,22 @@ impl VtState {
     /// 首次调用（或 `invalidate_diff()` 后）输出全帧，后续调用输出 diff 帧
     /// （仅包含变化行），减少 JSON 序列化开销。
     ///
+    /// `force_full`（2026-09-08 增量同步加固 A1）：转发循环按
+    /// `FULL_FRAME_INTERVAL_MS` 周期传 `true`，强制本帧为全帧——对一切失配
+    /// 源（丢帧/基线被并发连接消费/后端重启）通吃的周期对账兜底。实现为
+    /// 先 invalidate diff 基线再走正常编码路径，基线推进语义与全帧一致。
+    ///
     /// 每行是 RLE runs 数组：`[sgr, text, sgr, text, ...]`（sgr 为 SGR 参数体，
     /// 不含 \x1b[ 前缀与 m 后缀；text 为同 sgr 的连续字符，含其零宽组合字符）。
     /// 宽字符占位 cell 不产生输出。输出 JSON 供 WebSocket Text 帧传输（§4.2），
     /// 前端 renderCellFrame 直接消费。
-    pub fn encode_cell_frame(&mut self, session_id: &str) -> String {
-        self.encode_frame_body(session_id, false)
+    ///
+    /// seq 盖章（A2）：本函数是唯一的 live 编码路径，每次调用递增会话级
+    /// `frame_seq` 并写入 `CellFrame.seq`；viewport/overlay 路径不经过此处。
+    pub fn encode_cell_frame(&mut self, session_id: &str, force_full: bool) -> String {
+        self.frame_seq = self.frame_seq.wrapping_add(1);
+        let seq = self.frame_seq;
+        self.encode_frame_body(session_id, false, Some(seq), force_full)
     }
 
     /// Phase 2 overlay 帧：前端收到后先清屏再完整重绘当前 grid，
@@ -563,6 +592,8 @@ impl VtState {
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
+            // overlay 不占 diff 基线，无 seq 语义（A2：仅 live 路径携带）
+            seq: None,
             rows: out_rows,
         };
 
@@ -640,6 +671,8 @@ impl VtState {
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
+            // viewport 帧不占 diff 基线，无 seq 语义（A2：仅 live 路径携带）
+            seq: None,
             rows: out_rows,
         };
 
@@ -693,7 +726,17 @@ impl VtState {
     }
 
     /// Encode body (shared full/diff logic). Needs &mut for diff_engine updates.
-    fn encode_frame_body(&mut self, session_id: &str, overlay: bool) -> String {
+    ///
+    /// `seq`：live 路径传入（overlay 恒 `None`）；`force_full` 为 true 时先
+    /// 作废 diff 基线，使本帧携带全部行——基线随后由 `changed_rows_from`
+    /// 推进到当前 grid，语义与自然全帧完全一致。
+    fn encode_frame_body(
+        &mut self,
+        session_id: &str,
+        overlay: bool,
+        seq: Option<u64>,
+        force_full: bool,
+    ) -> String {
         use crate::engine::pty::frame::{CellFrame, RowData};
 
         let grid = self.term.grid();
@@ -702,6 +745,9 @@ impl VtState {
 
         // Probe untracked state BEFORE mutating the hash table — the first encode
         // after construction or `invalidate_diff()` must be a full frame.
+        if force_full {
+            self.diff_engine.invalidate();
+        }
         let full = self.diff_engine.is_untracked();
 
         // Compute row hashes first (immutable borrow of grid, 无分配)
@@ -759,6 +805,7 @@ impl VtState {
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
+            seq,
             rows: out_rows,
         };
 
@@ -1023,7 +1070,7 @@ mod tests {
     #[test]
     fn encode_cell_frame_produces_valid_json() {
         let mut v = vt(24, 80);
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["t"], "cell_frame");
         assert_eq!(parsed["session_id"], "test-session");
@@ -1039,7 +1086,7 @@ mod tests {
     fn encode_cell_frame_includes_sgr_for_styled_runs() {
         let mut v = vt(24, 80);
         v.feed(b"\x1b[1;31mRED\x1b[0m");
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         let runs = parsed["rows"][0]["runs"].as_array().unwrap();
         // First run: "RED" with bold+red SGR
@@ -1056,7 +1103,7 @@ mod tests {
     fn encode_cell_frame_merges_wide_chars_into_one_run() {
         let mut v = vt(24, 80);
         v.feed("你好".as_bytes()); // each CJK char occupies 2 cells
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         let runs = parsed["rows"][0]["runs"].as_array().unwrap();
         assert_eq!(runs[0].as_str(), Some(""), "unstyled row starts with the default run");
@@ -1066,7 +1113,7 @@ mod tests {
     #[test]
     fn encode_cell_frame_empty_screen_is_one_blank_run() {
         let mut v = vt(24, 80);
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         let rows = parsed["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 24);
@@ -1082,7 +1129,7 @@ mod tests {
     #[test]
     fn first_cell_frame_is_full() {
         let mut v = vt(24, 80);
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], true, "first frame must be full");
         assert!(parsed["row_indices"].is_null(), "full frame must not have row_indices");
@@ -1092,8 +1139,8 @@ mod tests {
     fn unchanged_second_frame_is_diff() {
         let mut v = vt(24, 80);
         v.feed(b"stable\r\n");
-        let _ = v.encode_cell_frame("test-session"); // first = full
-        let json = v.encode_cell_frame("test-session"); // second = diff
+        let _ = v.encode_cell_frame("test-session", false); // first = full
+        let json = v.encode_cell_frame("test-session", false); // second = diff
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], false, "unchanged second frame should be diff");
         assert!(parsed.get("row_indices").is_some(), "diff frame must have row_indices");
@@ -1105,9 +1152,9 @@ mod tests {
     fn changed_row_appears_in_row_indices() {
         let mut v = vt(24, 80);
         v.feed(b"stable\r\n"); // fills row 1 (0-indexed)
-        let _ = v.encode_cell_frame("test-session"); // first = full
+        let _ = v.encode_cell_frame("test-session", false); // first = full
         v.feed(b"\x1b[5;1Hchanged"); // change row 4 (1-indexed = 0-indexed 4)
-        let json = v.encode_cell_frame("test-session");
+        let json = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], false);
         let indices = parsed["row_indices"].as_array().unwrap();
@@ -1117,15 +1164,37 @@ mod tests {
         assert!(rows[0]["runs"][1].as_str().unwrap().starts_with("changed"));
     }
 
+    /// TAB cell 归一化（2026-09-09 Antigravity logo 变形案例）：
+    /// TUI 缩进含 `\t` 时 alacritty 把它存为普通 cell（渲染 = 1 列空白），
+    /// 但 xterm.js 会把 `\t` 解释为 HT 跳位 → 该行右移 + 行尾 wrap，
+    /// 两行变形。编码必须把 TAB cell 归一为空格，runs 里不得出现 `\t`。
+    #[test]
+    fn tab_cells_are_normalized_to_spaces_in_frame_and_screen() {
+        let mut v = vt(24, 80);
+        v.feed(b"  \t x"); // TUI 缩进形态：2 空格 + TAB + 1 空格 + 内容
+        let json = v.encode_cell_frame("test-session", false);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let runs = parsed["rows"][0]["runs"].as_array().unwrap();
+        let text: String =
+            runs.iter().skip(1).step_by(2).map(|s| s.as_str().unwrap_or_default()).collect();
+        assert!(!text.contains('\t'), "runs must not contain raw TAB: {text:?}");
+        assert!(text.contains('x'), "content must survive normalization: {text:?}");
+
+        // 补屏路径（render_screen）同样不得透出原始 TAB
+        let screen = v.render_screen();
+        let screen_str = String::from_utf8(screen).expect("utf8");
+        assert!(!screen_str.contains('\t'), "render_screen must not emit raw TAB");
+    }
+
     #[test]
     fn cursor_omitted_when_unchanged() {
         let mut v = vt(24, 80);
         v.feed(b"hello");
-        let json1 = v.encode_cell_frame("test-session");
+        let json1 = v.encode_cell_frame("test-session", false);
         let parsed: serde_json::Value = serde_json::from_str(&json1).expect("must be valid JSON");
         assert!(parsed["cursor"].is_object(), "first frame must include cursor");
-        let _ = v.encode_cell_frame("test-session"); // second = diff, cursor unchanged
-        let json2 = v.encode_cell_frame("test-session");
+        let _ = v.encode_cell_frame("test-session", false); // second = diff, cursor unchanged
+        let json2 = v.encode_cell_frame("test-session", false);
         // Re-feed same content; diff frame will report no changed rows
         // Cursor should be omitted because position/shape didn't change
         let parsed2: serde_json::Value = serde_json::from_str(&json2).expect("must be valid JSON");
@@ -1137,10 +1206,10 @@ mod tests {
     fn invalidate_diff_forces_next_frame_full() {
         let mut v = vt(24, 80);
         v.feed(b"a\r\n");
-        let _ = v.encode_cell_frame("ts"); // full
-        let _ = v.encode_cell_frame("ts"); // diff (unchanged)
+        let _ = v.encode_cell_frame("ts", false); // full
+        let _ = v.encode_cell_frame("ts", false); // diff (unchanged)
         v.invalidate_diff(); // force full
-        let json = v.encode_cell_frame("ts");
+        let json = v.encode_cell_frame("ts", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], true, "after invalidate_diff must be full");
         assert!(parsed["row_indices"].is_null());
@@ -1149,11 +1218,11 @@ mod tests {
     #[test]
     fn diff_engine_resizes_on_vt_resize() {
         let mut v = vt(24, 80);
-        let _ = v.encode_cell_frame("ts"); // full at 24 rows
-        let _ = v.encode_cell_frame("ts"); // diff
+        let _ = v.encode_cell_frame("ts", false); // full at 24 rows
+        let _ = v.encode_cell_frame("ts", false); // diff
         v.resize(40, 80);
         // Next frame: prev hashes resized to 40 None entries → all rows reported changed → full
-        let json = v.encode_cell_frame("ts");
+        let json = v.encode_cell_frame("ts", false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], true, "after resize must be full");
         assert_eq!(parsed["height"], 40);
@@ -1169,6 +1238,52 @@ mod tests {
         assert_eq!(parsed["full"], true);
         let cursor = parsed["cursor"].as_object().unwrap();
         assert!(cursor.get("shape").is_some(), "overlay cursor must include shape");
+    }
+
+    // ──── 2026-09-08 增量同步加固 A1/A2：force_full 周期对账 + 帧序号 ────
+
+    /// A2：seq 仅 live 编码路径携带且单调递增；viewport/overlay 帧省略该
+    /// 字段且不消耗序号（后续 live 帧 seq 连续无跳跃）。
+    #[test]
+    fn seq_increments_on_live_frames_and_skips_viewport_overlay() {
+        let mut v = vt(24, 80);
+        let f1: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(f1["seq"], 1, "first live frame seq = 1");
+        let f2: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(f2["seq"], 2, "seq increments per live encode");
+
+        let vp: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
+        assert!(vp.get("seq").is_none(), "viewport frame must omit seq");
+        let ov: serde_json::Value = serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
+        assert!(ov.get("seq").is_none(), "overlay frame must omit seq");
+
+        let f3: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(f3["seq"], 3, "viewport/overlay must not consume seq numbers");
+    }
+
+    /// A1：force_full 在 diff 基线已跟踪且无变化时仍输出全帧（全部行），
+    /// 且基线推进语义与自然全帧一致——紧随的常规编码恢复为空 diff。
+    #[test]
+    fn force_full_emits_all_rows_and_keeps_baseline_semantics() {
+        let mut v = vt(24, 80);
+        v.feed(b"stable\r\n");
+        let _ = v.encode_cell_frame("ts", false); // full
+        let _ = v.encode_cell_frame("ts", false); // diff (unchanged), baseline tracked
+
+        let f: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts", true)).unwrap();
+        assert_eq!(f["full"], true, "force_full must produce a full frame");
+        assert!(f["row_indices"].is_null(), "full frame must not have row_indices");
+        let rows = f["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 24, "full frame must carry every screen row");
+
+        let d: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(d["full"], false, "frame after force_full returns to diff");
+        let indices = d["row_indices"].as_array().unwrap();
+        assert!(indices.is_empty(), "baseline after force_full must match current grid");
     }
 
     // ──── 方案 C Phase 2: alt_screen 标记（D4）────
@@ -1190,7 +1305,8 @@ mod tests {
     #[test]
     fn regular_frames_omit_alt_screen_field() {
         let mut v = vt(24, 80);
-        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "regular frame must omit alt_screen");
         let parsed: serde_json::Value =
             serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
@@ -1203,14 +1319,16 @@ mod tests {
     fn frame_carries_bracketed_paste_flag() {
         let mut v = vt(24, 80);
         v.feed(b"\x1b[?2004h"); // Ink 系 TUI 启动时开启 bracketed paste
-        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
         assert_eq!(
             parsed["bracketed_paste"], true,
             "frame after ?2004h must carry bracketed_paste=true"
         );
 
         v.feed(b"\x1b[?2004l"); // 关闭
-        let parsed: serde_json::Value = serde_json::from_str(&v.encode_cell_frame("ts")).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
         assert_eq!(
             parsed["bracketed_paste"], false,
             "frame after ?2004l must carry bracketed_paste=false"
@@ -1317,9 +1435,9 @@ mod tests {
     #[test]
     fn viewport_frame_does_not_disturb_diff_baseline() {
         let mut v = vt_with_history();
-        let _ = v.encode_cell_frame("ts"); // full
+        let _ = v.encode_cell_frame("ts", false); // full
         let _ = v.encode_viewport_frame("ts", 6, None); // 不触碰 diff 基线
-        let json = v.encode_cell_frame("ts"); // 实时流继续 diff
+        let json = v.encode_cell_frame("ts", false); // 实时流继续 diff
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], false, "viewport encode must not invalidate diff");
         assert!(parsed["row_indices"].as_array().unwrap().is_empty());
@@ -1623,7 +1741,7 @@ mod tests {
         let mut v = vt(6, 20);
         v.feed(b"abc\r\n");
         for json in [
-            v.encode_cell_frame("ts"),
+            v.encode_cell_frame("ts", false),
             v.encode_overlay_frame("ts"),
             v.encode_viewport_frame("ts", 0, None),
         ] {
