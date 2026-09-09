@@ -80,6 +80,12 @@ vi.mock('@xterm/addon-web-links', () => ({
   },
 }))
 
+vi.mock('@xterm/addon-unicode11', () => ({
+  Unicode11Addon: class {
+    dispose(): void {}
+  },
+}))
+
 vi.mock('./useAttention', () => ({
   useAttention: () => ({ fire: () => {}, clearAlert: () => {} }),
 }))
@@ -192,6 +198,9 @@ describe('useTerminal 状态行 resync（C1：mid-stream 直写后强制重同�
     document.body.appendChild(container)
     await act(async () => {
       hook.initTerminal(container)
+      for (let i = 0; i < 50 && FakeWebSocket.instances.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 5))
+      }
     })
     // terminalReady → auto-connect effect 已跑，wsRef 持有最新实例
     const ws = FakeWebSocket.instances.at(-1)
