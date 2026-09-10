@@ -263,6 +263,8 @@
   "chat.replaying": "正在恢复会话记录…",
   "chat.loadingHistory": "正在加载更早的记录…",
   "chat.replay.empty": "恢复未返回历史记录，已保留本地消息",
+  "chat.newContent": "下方有新内容",
+  "chat.jumpToBottom": "回到底部",
   "fm.loadFailed": "加载文件列表失败",
   "fm.uploadComplete": "上传完成",
   "fm.uploadFailed": "上传失败",

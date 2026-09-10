@@ -263,6 +263,8 @@
   "chat.replaying": "Restoring session history…",
   "chat.loadingHistory": "Loading earlier messages…",
   "chat.replay.empty": "Restore returned no history; local messages kept",
+  "chat.newContent": "New content below",
+  "chat.jumpToBottom": "Back to bottom",
   "fm.loadFailed": "Failed to load file list",
   "fm.uploadComplete": "Upload complete",
   "fm.uploadFailed": "Upload failed",
