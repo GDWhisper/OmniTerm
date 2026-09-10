@@ -201,6 +201,7 @@
   "chat.noSession": "Select or create an ACP session",
   "chat.empty": "No messages yet — type a prompt below to start.",
   "chat.input.placeholder": "Type a prompt… (Enter to send, Shift+Enter for newline)",
+  "chat.input.placeholderMobile": "Type a prompt…",
   "chat.input.send": "Send",
   "chat.input.cancel": "Cancel",
   "chat.input.queue": "Queue",

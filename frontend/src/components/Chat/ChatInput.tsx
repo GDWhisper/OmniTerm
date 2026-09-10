@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { useChatStore, readQueuedFromStorageForSession, type SlashCommand } from '../../stores/chatStore'
+import { useAppStore } from '../../stores/appStore'
 import { getDraft, saveDraft, deleteDraft } from '../../utils/chatDraft'
 import { api, type FileEntry } from '../../api/client'
 import { findAtToken, replaceAtToken, type AtToken } from '../../utils/atReference'
@@ -57,6 +58,8 @@ export function ChatInput({
   imageSupported = false,
 }: ChatInputProps) {
   const { t } = useTranslation()
+  // 移动端无物理键盘：水印里的 Enter/Shift+Enter 提示是桌面专属操作，换成中性文案。
+  const isMobile = useAppStore((s) => s.isMobile)
   const [text, setText] = useState(() => getDraft(sessionId) || '')
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -760,7 +763,7 @@ export function ChatInput({
           onBlur={() => setAtToken(null)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={t('chat.input.placeholder')}
+          placeholder={t(isMobile ? 'chat.input.placeholderMobile' : 'chat.input.placeholder')}
           disabled={disabled}
           rows={1}
           style={{
