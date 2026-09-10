@@ -178,6 +178,17 @@ describe('chatStore — queued follow-up actions', () => {
       ])
       expect(useChatStore.getState().states['s1'].mode).toBe('plan')
     })
+
+    it('preserves capability flags (not replayed by the agent)', () => {
+      useChatStore.getState().setImageSupported('s1', true)
+      useChatStore.getState().setEmbeddedContextSupported('s1', true)
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+      ])
+      const state = useChatStore.getState().states['s1']
+      expect(state.imageSupported).toBe(true)
+      expect(state.embeddedContextSupported).toBe(true)
+    })
   })
 
   describe('history pagination (上拉加载更早历史)', () => {
@@ -294,6 +305,42 @@ describe('chatStore — queued follow-up actions', () => {
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(true)
       useChatStore.getState().setImageSupported('s1', false)
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(false)
+    })
+  })
+
+  describe('file attachments', () => {
+    it('addUserMessage stores file blocks after image blocks', () => {
+      useChatStore.getState().addUserMessage(
+        's1',
+        'see these',
+        [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }],
+        [{ type: 'file', name: 'a.pdf', mimeType: 'application/pdf', size: 12 }],
+      )
+      const msg = useChatStore.getState().states['s1'].messages[0]
+      expect(msg.blocks).toEqual([
+        { type: 'text', text: 'see these' },
+        { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+        { type: 'file', name: 'a.pdf', mimeType: 'application/pdf', size: 12 },
+      ])
+    })
+
+    it('addUserMessage with only files keeps no empty text block', () => {
+      useChatStore.getState().addUserMessage('s1', '', undefined, [
+        { type: 'file', name: 'a.bin', mimeType: 'application/octet-stream', size: 0 },
+      ])
+      const msg = useChatStore.getState().states['s1'].messages[0]
+      expect(msg.blocks).toEqual([
+        { type: 'file', name: 'a.bin', mimeType: 'application/octet-stream', size: 0 },
+      ])
+    })
+
+    it('setEmbeddedContextSupported flips the capability flag', () => {
+      useChatStore.getState().addUserMessage('s1', 'x')
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBeUndefined()
+      useChatStore.getState().setEmbeddedContextSupported('s1', true)
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBe(true)
+      useChatStore.getState().setEmbeddedContextSupported('s1', false)
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBe(false)
     })
   })
 

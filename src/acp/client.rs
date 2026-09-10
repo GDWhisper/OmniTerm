@@ -5,13 +5,14 @@ use std::time::{Duration, Instant};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ConfigOptionUpdate, ContentBlock, CreateTerminalRequest, EmbeddedResource,
-    EmbeddedResourceResource, ImageContent, InitializeRequest, KillTerminalRequest,
-    LoadSessionRequest, NewSessionRequest, PromptRequest, PromptResponse, ReadTextFileRequest,
-    ReadTextFileResponse, ReleaseTerminalRequest, RequestPermissionRequest, SessionConfigId,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionValue, SessionId,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, TextContent,
-    TextResourceContents, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
+    BlobResourceContents, CancelNotification, ConfigOptionUpdate, ContentBlock,
+    CreateTerminalRequest, EmbeddedResource, EmbeddedResourceResource, ImageContent,
+    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
+    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent, TextResourceContents, WaitForTerminalExitRequest,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use serde::Deserialize;
@@ -55,6 +56,23 @@ pub struct ImageThumb {
     pub mime_type: String,
 }
 
+/// 前端随 prompt 附带的普通文件附件（base64 内联，映射为
+/// `ContentBlock::Resource(BlobResourceContents)`）。
+///
+/// 与图片同款的管道原则：不做张数/体积/MIME 白名单，唯一门禁是 WS 帧口径；
+/// 落库只存元数据（name/mime/size），内容不落盘——历史气泡只需文件名 chip。
+#[derive(Debug, Deserialize)]
+pub struct FileInput {
+    /// 文件名（前端 `File.name`，仅 basename）。
+    pub name: String,
+    pub mime_type: String,
+    /// 原始字节数（前端 `File.size`）；仅用于落库元数据展示。
+    #[serde(default)]
+    pub size: u64,
+    /// Base64 编码的文件内容（不含 data URI 前缀）。转发给 agent 的就是这份。
+    pub data: String,
+}
+
 /// `@path` 引用解析出的文件内容（映射为 `ContentBlock::Resource`，
 /// agent 不支持 embeddedContext 时降级内联进 text block）。
 #[derive(Debug)]
@@ -64,6 +82,62 @@ pub struct ResourceInput {
     /// 用户输入的原始 `@` 相对路径（内联降级时的标题）。
     pub label: String,
     pub text: String,
+}
+
+/// 组装 prompt 的 content blocks。顺序：Text → Image → Resource(Text, @path)
+/// → Resource(Blob, 附件文件)。
+///
+/// 无正文且无附件时不塞空 Text block（部分实现可能拒绝空文本，§8 保守处理）。
+/// `inline_resources` 为真表示 agent 不支持 embeddedContext，@path 文本资源已被
+/// 内联进 `text`，不再产出 Resource 块；附件 blob 不走此降级（调用前已按能力拒绝）。
+fn build_prompt_blocks(
+    text: &str,
+    images: Vec<ImageInput>,
+    resources: Vec<ResourceInput>,
+    files: Vec<FileInput>,
+    inline_resources: bool,
+) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+    if !text.is_empty() || (images.is_empty() && files.is_empty()) {
+        blocks.push(ContentBlock::Text(TextContent::new(text)));
+    }
+    for img in images {
+        blocks.push(ContentBlock::Image(ImageContent::new(img.data, img.mime_type)));
+    }
+    if !inline_resources {
+        for r in resources {
+            blocks.push(ContentBlock::Resource(EmbeddedResource::new(
+                EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
+                    r.text, r.uri,
+                )),
+            )));
+        }
+    }
+    for f in files {
+        blocks.push(ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::BlobResourceContents(
+                BlobResourceContents::new(f.data, file_uri(&f.name)).mime_type(f.mime_type),
+            ),
+        )));
+    }
+    blocks
+}
+
+/// 附件文件的名义 URI：系统 picker 不提供真实路径，blob 已自包含内容，URI 仅作
+/// 展示/标识（agent 应消费内联 blob，不应按 URI 读盘）。做最小 percent-encode
+/// 保证 URI 结构合法——这几个字符会破坏 URI 语法，其余（含非 ASCII）原样保留。
+fn file_uri(name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            ' ' => encoded.push_str("%20"),
+            '%' => encoded.push_str("%25"),
+            '#' => encoded.push_str("%23"),
+            '?' => encoded.push_str("%3F"),
+            _ => encoded.push(ch),
+        }
+    }
+    format!("file:///{}", encoded)
 }
 
 /// turn 结束事件（正常完成 / 出错）。经 broadcast 发给所有 WS 连接：
@@ -697,8 +771,11 @@ impl AcpClient {
         text: &str,
         images: Vec<ImageInput>,
         resources: Vec<ResourceInput>,
+        files: Vec<FileInput>,
     ) -> Result<PromptResponse, AcpError> {
         // 不支持 embeddedContext 的 agent：@ 引用文件内容内联进 text（§8 多实现兼容）。
+        // 附件文件不参与此降级：WS 层已按能力拒绝带 files 的 prompt，能走到这里
+        // 就说明 agent 声明了 embeddedContext。
         let inline_resources = !self.supports_embedded_context && !resources.is_empty();
         let text = if inline_resources {
             let mut t = text.to_string();
@@ -710,23 +787,7 @@ impl AcpClient {
             text.to_string()
         };
 
-        // 纯图片消息不塞空 text block（部分实现可能拒绝空文本，§8 保守处理）。
-        let mut blocks = Vec::new();
-        if !text.is_empty() || images.is_empty() {
-            blocks.push(ContentBlock::Text(TextContent::new(text)));
-        }
-        for img in images {
-            blocks.push(ContentBlock::Image(ImageContent::new(img.data, img.mime_type)));
-        }
-        if !inline_resources {
-            for r in resources {
-                blocks.push(ContentBlock::Resource(EmbeddedResource::new(
-                    EmbeddedResourceResource::TextResourceContents(TextResourceContents::new(
-                        r.text, r.uri,
-                    )),
-                )));
-            }
-        }
+        let blocks = build_prompt_blocks(&text, images, resources, files, inline_resources);
         self.connection
             .send_request(PromptRequest::new(self.session_id.clone(), blocks))
             .block_task()
@@ -752,6 +813,12 @@ impl AcpClient {
 
     pub fn supports_image(&self) -> bool {
         self.supports_image
+    }
+
+    /// `promptCapabilities.embeddedContext`：是否接受 `ContentBlock::Resource`
+    /// （@path 文本引用与文件附件的 blob 形态共用此门控）。
+    pub fn supports_embedded_context(&self) -> bool {
+        self.supports_embedded_context
     }
 
     /// ACP 连接是否仍可发送请求（agent 子进程存活且未被释放）。
@@ -1306,6 +1373,110 @@ impl AcpClient {
 mod tests {
     use super::*;
     use std::process::Stdio;
+
+    // ── build_prompt_blocks / file_uri：prompt 内容块组装 ──────────────
+
+    fn img(data: &str) -> ImageInput {
+        ImageInput { data: data.into(), mime_type: "image/png".into(), thumb: None }
+    }
+
+    fn file(name: &str, data: &str) -> FileInput {
+        FileInput {
+            name: name.into(),
+            mime_type: "application/pdf".into(),
+            size: 3,
+            data: data.into(),
+        }
+    }
+
+    fn at_resource(label: &str) -> ResourceInput {
+        ResourceInput {
+            uri: format!("file:///w/{}", label),
+            label: label.into(),
+            text: "fn main() {}".into(),
+        }
+    }
+
+    #[test]
+    fn prompt_blocks_text_only_has_single_text_block() {
+        let blocks = build_prompt_blocks("hi", vec![], vec![], vec![], false);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], ContentBlock::Text(_)));
+    }
+
+    #[test]
+    fn prompt_blocks_empty_prompt_without_attachments_keeps_empty_text_block() {
+        // 历史行为不变：无任何附件时始终有 Text block（哪怕空文本）
+        let blocks = build_prompt_blocks("", vec![], vec![], vec![], false);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], ContentBlock::Text(_)));
+    }
+
+    #[test]
+    fn prompt_blocks_image_only_omits_empty_text_block() {
+        let blocks = build_prompt_blocks("", vec![img("AAA")], vec![], vec![], false);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], ContentBlock::Image(_)));
+    }
+
+    #[test]
+    fn prompt_blocks_file_only_omits_empty_text_block() {
+        let blocks = build_prompt_blocks("", vec![], vec![], vec![file("a.pdf", "AAA")], false);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], ContentBlock::Resource(_)));
+    }
+
+    #[test]
+    fn prompt_blocks_order_text_image_text_resource_blob() {
+        let blocks = build_prompt_blocks(
+            "hi",
+            vec![img("IMG")],
+            vec![at_resource("a.rs")],
+            vec![file("d.pdf", "PDF")],
+            false,
+        );
+        assert_eq!(blocks.len(), 4);
+        assert!(matches!(blocks[0], ContentBlock::Text(_)));
+        assert!(matches!(blocks[1], ContentBlock::Image(_)));
+        assert!(matches!(blocks[2], ContentBlock::Resource(_)));
+        assert!(matches!(blocks[3], ContentBlock::Resource(_)));
+    }
+
+    #[test]
+    fn prompt_blocks_file_maps_to_blob_resource_with_mime_and_uri() {
+        let blocks =
+            build_prompt_blocks("", vec![], vec![], vec![file("my file.pdf", "PDFDATA")], false);
+        let blob = match &blocks[0] {
+            ContentBlock::Resource(res) => match &res.resource {
+                EmbeddedResourceResource::BlobResourceContents(b) => b,
+                _ => panic!("expected blob resource contents"),
+            },
+            _ => panic!("expected resource block"),
+        };
+        assert_eq!(blob.blob, "PDFDATA");
+        assert_eq!(blob.mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(blob.uri, "file:///my%20file.pdf");
+    }
+
+    #[test]
+    fn prompt_blocks_inlines_at_resources_when_embedded_unsupported() {
+        // 回归保护：不支持 embeddedContext 时 @path 文本资源内联进 text 且不产出
+        // Resource 块；附件文件不走此降级（WS 层已按能力拒绝，不会传到这里）。
+        let inlined = "see\n\n--- @a.rs ---\n```\nfn main() {}\n```";
+        let blocks = build_prompt_blocks(inlined, vec![], vec![at_resource("a.rs")], vec![], true);
+        assert_eq!(blocks.len(), 1);
+        let ContentBlock::Text(t) = &blocks[0] else {
+            panic!("expected text block");
+        };
+        assert!(t.text.contains("@a.rs"));
+    }
+
+    #[test]
+    fn file_uri_percent_encodes_uri_breakers() {
+        assert_eq!(file_uri("a b#c?d%e.pdf"), "file:///a%20b%23c%3Fd%25e.pdf");
+        // 非 ASCII 原样保留：名义 URI 仅供标识，agent 应消费内联 blob
+        assert_eq!(file_uri("报告.pdf"), "file:///报告.pdf");
+    }
 
     // ── sh_quote：POSIX shell 单引号转义 ────────────────────────────────
 

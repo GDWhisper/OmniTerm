@@ -79,7 +79,17 @@ export interface ImageBlock {
   thumb?: ImageThumb
 }
 
-export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock
+// 文件附件：用户消息的普通文件（对应 ACP `ContentBlock::Resource` 的 blob 形态）。
+// 只保留元数据——文件内容不落库（历史气泡只需文件名 chip），与图片只落缩略图同理。
+export interface FileBlock {
+  type: 'file'
+  name: string
+  mimeType: string
+  /** 原始字节数，chip 展示用。 */
+  size: number
+}
+
+export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock | FileBlock
 
 // --- Agent terminal activity (from ACP `terminal/create`) ---
 // Surfaces commands the agent runs in background terminals so they aren't silent.
@@ -269,6 +279,12 @@ interface ChatSessionState {
    * undefined = 尚未收到声明，UI 按不支持处理（保守降级）。
    */
   imageSupported?: boolean
+  /**
+   * agent 是否声明 `promptCapabilities.embeddedContext`（后端 capabilities 帧下发）。
+   * 文件附件的门控（@path 引用共用此能力，但那条链在缺失时降级内联）。undefined =
+   * 尚未收到声明，UI 按不支持处理（保守降级）。
+   */
+  embeddedContextSupported?: boolean
   /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
   agentName?: string
   /**
@@ -294,7 +310,7 @@ interface ChatActions {
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
-  addUserMessage: (sessionId: string, text: string, images?: ImageBlock[]) => void
+  addUserMessage: (sessionId: string, text: string, images?: ImageBlock[], files?: FileBlock[]) => void
   /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
@@ -354,6 +370,8 @@ interface ChatActions {
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
   setImageSupported: (sessionId: string, supported: boolean) => void
+  /** 记录 agent 是否支持 embeddedContext（文件附件门控，后端 capabilities 帧）。 */
+  setEmbeddedContextSupported: (sessionId: string, supported: boolean) => void
   /** 设置当前会话 agent 的显示名（后端 capabilities 帧下发）。 */
   setAgentName: (sessionId: string, name: string) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
@@ -794,14 +812,15 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages })
     }),
 
-  addUserMessage: (sessionId, text, images) =>
+  addUserMessage: (sessionId, text, images, files) =>
     set((state) => {
       const current = get(state, sessionId)
-      // 纯图片消息不塞空 text block（渲染与落库都无意义）。
-      const blocks: ContentBlock[] = text !== '' || !images?.length
+      // 纯附件消息不塞空 text block（渲染与落库都无意义）。
+      const blocks: ContentBlock[] = text !== '' || (!images?.length && !files?.length)
         ? [{ type: 'text' as const, text }]
         : []
       if (images) blocks.push(...images)
+      if (files) blocks.push(...files)
       return patch(state, sessionId, {
         messages: [
           ...current.messages,
@@ -887,13 +906,15 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (messages.length === 0) return state
       const prev = state.states[sessionId]
       // 从空白状态重建（等价旧「reset + 重放」语义），但保留连接期已到达的
-      // capabilities 信息（imageSupported/agentName 不随重放下发）。
+      // capabilities 信息（imageSupported/embeddedContextSupported/agentName
+      // 不随重放下发）。
       const cleared = { ...state.states }
       delete cleared[sessionId]
       removeQueuedFromStorage(sessionId)
       const base = patch({ ...state, states: cleared }, sessionId, {
         messages,
         imageSupported: prev?.imageSupported,
+        embeddedContextSupported: prev?.embeddedContextSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
         // 重放是 agent 侧的完整历史，重建后已无「更早一页」可取；显式置 null
@@ -1104,6 +1125,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setImageSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { imageSupported: supported })),
+
+  setEmbeddedContextSupported: (sessionId, supported) =>
+    set((state) => patch(state, sessionId, { embeddedContextSupported: supported })),
 
   setAgentName: (sessionId, name) =>
     set((state) => patch(state, sessionId, { agentName: name })),

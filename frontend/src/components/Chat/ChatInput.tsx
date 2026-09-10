@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { READER_FONT } from '../../utils/fonts'
 import { OverlayScroll } from '../Common/OverlayScroll'
@@ -14,11 +14,15 @@ import {
   imageSrc,
   type ImageAttachment,
 } from '../../utils/imageAttachment'
+import { processFile, formatFileSize, type FileAttachment } from '../../utils/fileAttachment'
+import { hapticTap } from '../../utils/haptics'
+import { IconFile, IconPlus } from '../FileManager/icons'
+import { ChatAttachDrawer } from './ChatAttachDrawer'
 
 interface ChatInputProps {
   sessionId: string
   disabled: boolean
-  onSend: (text: string, images?: ImageAttachment[]) => void
+  onSend: (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => void
   onCancel: () => void
   /** Clicked when the user taps ✕ on the queued-message chip above the input. */
   onCancelQueued: () => void
@@ -33,8 +37,10 @@ interface ChatInputProps {
   /** N=1 single-slot queued message buffer; rendered as a chip above the textarea. */
   queuedMessage: string | null
   commands?: SlashCommand[]
-  /** Agent 是否声明支持 image prompt capability（§8：未声明则隐藏附件入口）。 */
+  /** Agent 是否声明支持 image prompt capability（§8：未声明则置灰相册卡片）。 */
   imageSupported?: boolean
+  /** Agent 是否声明支持 embeddedContext（§8：未声明则置灰文件卡片）。 */
+  fileSupported?: boolean
 }
 
 const QUEUE_PREVIEW_CHARS = 40
@@ -44,6 +50,15 @@ const INPUT_ROW_HEIGHT = 36
 const MAX_AT_RESULTS = 20
 /** @ 补全搜索防抖间隔。 */
 const AT_SEARCH_DEBOUNCE_MS = 200
+/** 隐藏文件选择器：离屏但可点击（`display:none` 会让部分移动端浏览器拒绝程序化 click）。 */
+const HIDDEN_INPUT_STYLE: React.CSSProperties = {
+  position: 'fixed',
+  left: -9999,
+  top: 0,
+  width: 1,
+  height: 1,
+  opacity: 0,
+}
 
 export function ChatInput({
   sessionId,
@@ -56,6 +71,7 @@ export function ChatInput({
   queuedMessage,
   commands = [],
   imageSupported = false,
+  fileSupported = false,
 }: ChatInputProps) {
   const { t } = useTranslation()
   // 移动端无物理键盘：水印里的 Enter/Shift+Enter 提示是桌面专属操作，换成中性文案。
@@ -64,7 +80,9 @@ export function ChatInput({
   const [showCommands, setShowCommands] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
+  const [files, setFiles] = useState<FileAttachment[]>([])
   const [attachError, setAttachError] = useState<string | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
   // @ 文件补全：光标处的 @token / Esc 关闭标记 / 搜索结果
   const [atToken, setAtToken] = useState<AtToken | null>(null)
   const [atDismissedStart, setAtDismissedStart] = useState<number | null>(null)
@@ -76,6 +94,8 @@ export function ChatInput({
   const fileItemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const atCursorRef = useRef(0)
   const attachErrorTimerRef = useRef<number | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   // D7「引用到输入框」通道：动作写入 pendingInsert，本组件按 sessionId 消费。
   // 订阅而非 getState：挂载时若已有未消费值（跨会话切换），effect 能读到。
@@ -106,6 +126,8 @@ export function ChatInput({
       prevSessionIdRef.current = sessionId
       setText(getDraft(sessionId))
       setAttachments([])
+      setFiles([])
+      setDrawerOpen(false)
       setAttachError(null)
       setAtToken(null)
       setAtDismissedStart(null)
@@ -236,10 +258,11 @@ export function ChatInput({
     }
   }
 
-  const canSend = !disabled && !sending && (text.trim().length > 0 || attachments.length > 0)
+  const hasAttachments = attachments.length > 0 || files.length > 0
+  const canSend = !disabled && !sending && (text.trim().length > 0 || hasAttachments)
   // N=1 约束：队列满时 Queue 按钮 disabled，强制用户先 ✕。
   // 附件只支持 idle 直发（queuedMessage 是纯 string 槽），带附件时禁止入队。
-  const canQueue = !disabled && sending && !queuedMessage && text.trim().length > 0 && attachments.length === 0
+  const canQueue = !disabled && sending && !queuedMessage && text.trim().length > 0 && !hasAttachments
   const previewText = queuedMessage
     ? queuedMessage.length > QUEUE_PREVIEW_CHARS
       ? queuedMessage.slice(0, QUEUE_PREVIEW_CHARS) + '…'
@@ -259,9 +282,9 @@ export function ChatInput({
     if (attachErrorTimerRef.current !== null) window.clearTimeout(attachErrorTimerRef.current)
   }, [])
 
-  const addImageFiles = async (files: File[]) => {
-    if (!imageSupported || disabled || files.length === 0) return
-    for (const file of files) {
+  const addImageFiles = async (picked: File[]) => {
+    if (!imageSupported || disabled || picked.length === 0) return
+    for (const file of picked) {
       try {
         const attachment = await processImageFile(file)
         setAttachments((prev) => [...prev, attachment])
@@ -273,6 +296,29 @@ export function ChatInput({
         )
       }
     }
+  }
+
+  // 管道原则：不按 MIME/体积过滤，选中什么就发什么；读取失败只影响该文件本身。
+  const addFiles = async (picked: File[]) => {
+    if (!fileSupported || disabled || picked.length === 0) return
+    for (const file of picked) {
+      try {
+        const attachment = await processFile(file)
+        setFiles((prev) => [...prev, attachment])
+      } catch {
+        showAttachError(t('chat.input.attachReadFailed'))
+      }
+    }
+  }
+
+  const closeDrawer = useCallback(() => setDrawerOpen(false), [])
+
+  // 打开抽屉前先 blur：移动端收起软键盘（避免 sheet 与键盘争位），桌面端同时
+  // 关闭可能开着的斜杠命令 / @ 补全浮层（它们挂在 textarea 的 blur 上）。
+  const toggleDrawer = () => {
+    hapticTap()
+    textareaRef.current?.blur()
+    setDrawerOpen((v) => !v)
   }
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -302,10 +348,19 @@ export function ChatInput({
     setAttachments((prev) => prev.filter((a) => a.id !== id))
   }
 
+  const removeFile = (id: string) => {
+    setFiles((prev) => prev.filter((f) => f.id !== id))
+  }
+
   const doSend = () => {
-    onSend(text, attachments.length > 0 ? attachments : undefined)
+    onSend(
+      text,
+      attachments.length > 0 ? attachments : undefined,
+      files.length > 0 ? files : undefined,
+    )
     setText('')
     setAttachments([])
+    setFiles([])
     deleteDraft(sessionId)
     setShowCommands(false)
     setAtToken(null)
@@ -502,6 +557,78 @@ export function ChatInput({
                   cursor: 'pointer',
                   fontFamily: 'inherit',
                 }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 6,
+            marginBottom: 6,
+            flexWrap: 'wrap',
+          }}
+        >
+          {files.map((f) => (
+            <div
+              key={f.id}
+              title={f.name}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                maxWidth: 240,
+                height: 32,
+                padding: '0 4px 0 8px',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 4,
+                background: 'var(--bg-elevated)',
+                fontFamily: READER_FONT,
+                fontSize: 12,
+                color: 'var(--text-primary)',
+                flexShrink: 0,
+              }}
+            >
+              <IconFile
+                width={14}
+                height={14}
+                style={{ flexShrink: 0, color: 'var(--text-faint)' }}
+              />
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  minWidth: 0,
+                }}
+              >
+                {f.name}
+              </span>
+              <span style={{ color: 'var(--text-faint)', fontSize: 10, flexShrink: 0 }}>
+                {formatFileSize(f.size)}
+              </span>
+              <button
+                onClick={() => removeFile(f.id)}
+                title={t('chat.input.attachRemoveFile')}
+                aria-label={t('chat.input.attachRemoveFile')}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-faint)',
+                  cursor: 'pointer',
+                  padding: '0 4px',
+                  height: '100%',
+                  fontSize: 12,
+                  lineHeight: 1,
+                  fontFamily: 'inherit',
+                  flexShrink: 0,
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--danger, #FF7B72)' }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-faint)' }}
               >
                 ✕
               </button>
@@ -771,6 +898,33 @@ export function ChatInput({
             opacity: disabled ? 0.6 : 1,
           }}
         />
+        {(imageSupported || fileSupported) && (
+          <button
+            type="button"
+            data-toggle="chat-attach"
+            onClick={toggleDrawer}
+            disabled={disabled}
+            className="pixel-press"
+            title={t('chat.input.attachOpen')}
+            aria-label={t('chat.input.attachOpen')}
+            aria-expanded={drawerOpen}
+            style={{
+              ...buttonBase,
+              width: INPUT_ROW_HEIGHT,
+              padding: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: drawerOpen ? 'var(--accent)' : 'var(--bg-elevated)',
+              color: drawerOpen ? '#fff' : 'var(--text-primary)',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              opacity: disabled ? 0.6 : 1,
+              flexShrink: 0,
+            }}
+          >
+            <IconPlus width={16} height={16} />
+          </button>
+        )}
         {sending ? (
           <>
             <button
@@ -791,7 +945,7 @@ export function ChatInput({
               title={
                 queuedMessage
                   ? t('chat.input.queueFullTitle')
-                  : attachments.length > 0
+                  : hasAttachments
                     ? t('chat.input.attachNoQueue')
                     : !text.trim()
                       ? t('chat.input.queueEmptyTitle')
@@ -823,6 +977,43 @@ export function ChatInput({
           </button>
         )}
       </div>
+      {/* 隐藏的系统选择器：相册（image/*）与文件（任意类型）。离屏而非 `display:none`
+          ——部分移动端浏览器不允许对 display:none 的 input 触发程序化 click()。 */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(e) => {
+          void addImageFiles(Array.from(e.target.files ?? []))
+          // 清空 value：同一文件再次选中也要触发 change。
+          e.target.value = ''
+        }}
+        style={HIDDEN_INPUT_STYLE}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={(e) => {
+          void addFiles(Array.from(e.target.files ?? []))
+          e.target.value = ''
+        }}
+        style={HIDDEN_INPUT_STYLE}
+      />
+      {drawerOpen && (
+        <ChatAttachDrawer
+          onClose={closeDrawer}
+          onSelectAlbum={() => imageInputRef.current?.click()}
+          onSelectFile={() => fileInputRef.current?.click()}
+          albumSupported={imageSupported}
+          fileSupported={fileSupported}
+        />
+      )}
     </div>
   )
 }

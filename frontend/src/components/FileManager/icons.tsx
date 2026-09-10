@@ -38,6 +38,16 @@ export function IconFile(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconPhoto(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2" y="3" width="12" height="10" rx="1" />
+      <circle cx="5.5" cy="6.5" r="1.25" />
+      <path d="M2.5 11.5l3-2.75 2.5 2.25 2-1.75 3.5 3" />
+    </svg>
+  )
+}
+
 export function IconFilePlus(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

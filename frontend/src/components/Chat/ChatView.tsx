@@ -8,6 +8,7 @@ import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import type { ImageAttachment } from '../../utils/imageAttachment'
+import type { FileAttachment } from '../../utils/fileAttachment'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
@@ -226,13 +227,13 @@ export function ChatView() {
   })
 
   const handleSend = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+    (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
       // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
       // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
       // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
       // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
-      // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃 images 是预期行为
-      // ——ChatInput 已在带附件时禁用 Queue，此路径不会带 images 进入。
+      // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃附件是预期行为
+      // ——ChatInput 已在带附件时禁用 Queue，此路径不会带附件进入。
       // 从 store 读 sending（而非闭包 chatState），保证回调引用稳定供 ChatMessageView
       // memo 命中，语义不变：两者都是调用时刻的当前状态。
       if (!activeSessionId) return
@@ -241,7 +242,7 @@ export function ChatView() {
         s.enqueueMessage(activeSessionId, text)
         return
       }
-      sendPrompt(text, images)
+      sendPrompt(text, images, files)
       // Re-stick so the user's own message is visible + next chunk scrolls in.
       setAutoStick(true)
     },
@@ -589,6 +590,7 @@ export function ChatView() {
           onSendNow={handleSendNowQueued}
           commands={chatState.commands}
           imageSupported={chatState.imageSupported}
+          fileSupported={chatState.embeddedContextSupported}
         />
       </div>
 

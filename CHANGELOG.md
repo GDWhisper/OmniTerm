@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [0.2.21] - 2026-09-09
 
+### Added
+
+- (2026-09-10 22:52) `[frontend]` `[backend]` `[api]` ACP 聊天输入框新增「+」附件抽屉（移动端 bottom sheet / 桌面锚定浮层）：此前移动端没有任何附件入口——图片只能靠粘贴/拖拽（手机上没有拖拽），普通文件更是完全没有通路。现在「+」弹出「相册」「文件」两张卡片，分别打开系统图片选择器与文件选择器；选中的内容进入输入框附件区（图片缩略图 / 文件 chip 带文件名与大小，逐个可移除），随消息发送。文件走与图片同款的 base64 内联管道（映射 ACP `ContentBlock::Resource` 的 blob 形态，名义 `file:///{name}` URI、内容由 blob 自包含），不做张数/体积/MIME 内容层限制——唯一门禁仍是 WS 帧口径 12MiB，超限显式报 `message_too_large`。落库只存元数据（文件名/MIME/大小），历史气泡还原文件名 chip，与图片只落缩略图同理。能力门控（§8）：capabilities 帧新增 `embedded_context`（来源 initialize 的 `promptCapabilities.embeddedContext`），未声明时「文件」卡片置灰（副文案说明原因）且后端二次校验拒绝带 files 的 prompt；图片/文件两者都不支持时不渲染「+」。带附件消息仍禁止入队（N=1 队列槽是纯 string）。顺带把 `readAsDataUrl` 从 imageAttachment 抽出共享（`frontend/src/utils/readFile.ts`），修正 backend.md 中一处处已过时的「图片 ≤3 张」描述（`src/acp/{client,mod}.rs`、`src/ws/acp.rs`、`frontend/src/components/Chat/{ChatAttachDrawer,ChatInput,ChatView,ChatMessage}.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/utils/{fileAttachment,readFile,imageAttachment}.ts`、`frontend/src/stores/{chatStore,acpConnectionStore}.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/locales/{zh,en}/translation.json`）
+
 ### Changed
 
 - (2026-09-09 14:50) `[frontend]` 侧栏项目卡片上「创建 worktree」操作按钮图标由加号（`IconPlus`）改为 Git 分支样式（`IconGitBranch`），使仓库级「新建 worktree/分支」与 worktree 行级「新建会话（+）」在视觉语义上明确区分（`frontend/src/components/Sidebar/ProjectCard.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/components/Icons/GitBranchIcon.tsx`）

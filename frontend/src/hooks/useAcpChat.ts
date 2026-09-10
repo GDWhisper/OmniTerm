@@ -3,6 +3,7 @@ import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToS
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
+import type { FileAttachment } from '../utils/fileAttachment'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -12,7 +13,7 @@ interface UseAcpChatOptions {
 
 interface UseAcpChatResult {
   connectionState: AcpConnectionState
-  sendPrompt: (text: string, images?: ImageAttachment[]) => void
+  sendPrompt: (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => void
   cancel: () => void
   restore: () => void
   respondPermission: (id: string, optionId: string) => void
@@ -38,6 +39,8 @@ interface ServerFrame {
   status?: string
   exit_code?: number | null
   image?: boolean
+  /** capabilities: agent 是否声明 promptCapabilities.embeddedContext（文件附件门控）。 */
+  embedded_context?: boolean
   agent_name?: string
   /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
   label?: string
@@ -967,6 +970,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           if (typeof frame.image === 'boolean') {
             useChatStore.getState().setImageSupported(sid, frame.image)
           }
+          // 文件附件门控（promptCapabilities.embeddedContext）
+          if (typeof frame.embedded_context === 'boolean') {
+            useChatStore.getState().setEmbeddedContextSupported(sid, frame.embedded_context)
+          }
           // 聊天气泡显示 agent 身份：后端下发所用 agent 的 display_name
           if (typeof frame.agent_name === 'string') {
             useChatStore.getState().setAgentName(sid, frame.agent_name)
@@ -1156,13 +1163,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     if (handler) for (const f of buffered) handler(f)
   }, [hydrated, postSync])
 
-  const sendPrompt = useCallback((text: string, images?: ImageAttachment[]) => {
+  const sendPrompt = useCallback((text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
     const ws = wsRef.current
     const sid = sessionIdRef.current
     const trimmed = text.trim()
     const hasImages = !!images && images.length > 0
-    // 纯图片消息（无文字）合法：粘贴截图直接发送。
-    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages)) return
+    const hasFiles = !!files && files.length > 0
+    // 纯附件消息（无文字）合法：粘贴截图 / 只发一个文件直接发送。
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages && !hasFiles))
+      return
     const s = useChatStore.getState()
     const imageBlocks = images?.map((img) => ({
       type: 'image' as const,
@@ -1170,7 +1179,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       data: img.data,
       thumb: img.thumb,
     }))
-    s.addUserMessage(sid, trimmed, imageBlocks)
+    const fileBlocks = files?.map((f) => ({
+      type: 'file' as const,
+      name: f.name,
+      mimeType: f.mimeType,
+      size: f.size,
+    }))
+    s.addUserMessage(sid, trimmed, imageBlocks, fileBlocks)
     try {
       const frame: Record<string, unknown> = { type: 'prompt', text: trimmed }
       if (hasImages) {
@@ -1181,6 +1196,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           ...(img.thumb
             ? { thumb: { data: img.thumb.data, mime_type: img.thumb.mimeType } }
             : {}),
+        }))
+      }
+      if (hasFiles) {
+        frame.files = files.map((f) => ({
+          name: f.name,
+          mime_type: f.mimeType,
+          size: f.size,
+          data: f.data,
         }))
       }
       ws.send(JSON.stringify(frame))

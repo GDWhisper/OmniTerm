@@ -31,7 +31,7 @@ function AcpSlot({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     register(sessionId, {
       connectionState,
-      sendPrompt: (t, images) => sendRef.current(t, images),
+      sendPrompt: (t, images, files) => sendRef.current(t, images, files),
       cancel: () => cancelRef.current(),
       restore: () => restoreRef.current(),
       respondPermission: (id, optionId) => permRef.current(id, optionId),

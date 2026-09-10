@@ -20,6 +20,8 @@ import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { IconCopy } from '../FileManager/icons'
 import { imageSrc } from '../../utils/imageAttachment'
+import { formatFileSize } from '../../utils/fileAttachment'
+import { IconFile } from '../FileManager/icons'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -715,7 +717,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               <CollapsibleUserText text={message.text} />
               {(() => {
                 const images = message.blocks.filter((b) => b.type === 'image')
-                if (images.length === 0) return null
+                const files = message.blocks.filter((b) => b.type === 'file')
+                if (images.length === 0 && files.length === 0) return null
                 return (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: message.text ? 6 : 0 }}>
                     {images.map((img, i) => (
@@ -731,6 +734,45 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                           display: 'block',
                         }}
                       />
+                    ))}
+                    {/* 文件只落元数据：历史里以文件名 chip 还原「当时发了什么」，内容不可回看 */}
+                    {files.map((f, i) => (
+                      <span
+                        key={i}
+                        title={f.name}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          maxWidth: 240,
+                          padding: '4px 8px',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 4,
+                          background: 'var(--bg-base)',
+                          fontFamily: READER_FONT,
+                          fontSize: 12,
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        <IconFile
+                          width={14}
+                          height={14}
+                          style={{ flexShrink: 0, color: 'var(--text-faint)' }}
+                        />
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            minWidth: 0,
+                          }}
+                        >
+                          {f.name}
+                        </span>
+                        <span style={{ color: 'var(--text-faint)', fontSize: 10, flexShrink: 0 }}>
+                          {formatFileSize(f.size)}
+                        </span>
+                      </span>
                     ))}
                   </div>
                 )
