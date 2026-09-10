@@ -22,7 +22,6 @@ function ConfigDropdown({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const ref = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -32,13 +31,23 @@ function ConfigDropdown({
         setSearch('')
       }
     }
+    // 搜索框不自动聚焦（移动端聚焦会立刻弹软键盘挡住选项列表），Esc 因此在
+    // document 层兜底：有搜索词先清空，无搜索词才关闭。
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (search) {
+        setSearch('')
+      } else {
+        setOpen(false)
+      }
+    }
     document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
-
-  useEffect(() => {
-    if (open) inputRef.current?.focus()
-  }, [open])
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, search])
 
   const current = option.options.find((o) => o.value === option.currentValue)
   const label = CATEGORY_LABELS[option.category] ?? option.name
@@ -90,19 +99,9 @@ function ConfigDropdown({
           {showSearch && (
             <div style={{ padding: '4px 6px 2px' }}>
               <input
-                ref={inputRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') {
-                    if (search) {
-                      setSearch('')
-                    } else {
-                      setOpen(false)
-                    }
-                  }
-                }}
                 style={{
                   width: '100%',
                   padding: '4px 6px',
