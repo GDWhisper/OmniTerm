@@ -4,6 +4,7 @@ import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
+import { addOutputChars } from '../utils/turnClock'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -772,6 +773,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             break
           }
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
+          // 输出字符计数（tps 估算）：只统计本端真正消费的流式正文/思考帧。
+          // 历史重放（上面两个 `isReplaying` 分支 break 掉）与 seq 去重丢弃的帧都不计，
+          // 与 turnClock 的 turn 门控一致——重放不产生 prompt 起点，也不该有 tps。
+          if (action.kind === 'appendText' || action.kind === 'appendThought') {
+            addOutputChars(sid, action.text.length)
+          }
           // ALL actions → live buffer, flushed once per rAF frame via
           // applyReplayBatch (single set() call = one re-render per frame).
           switch (action.kind) {

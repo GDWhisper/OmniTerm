@@ -508,17 +508,20 @@ Variant classes: `.toast-error` (danger border/text), `.toast-warning` (warning)
   应用在看不见的行上（running 会话曾因此整行隐藏）。选中行单列是因为它是纯前端概念，
   `sessionStatus()` 读不到。
 
-### 7.5 气泡元信息行（`.chat-meta-row` — 耗时 / hover 动作）
+### 7.5 气泡元信息行（`.chat-meta-row` — 耗时 / tps / hover 动作）
 
-assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时靠右（`margin-left:auto`）。**同一套实测宽度下，同行与换行的右缘都是气泡右缘**——气泡是内容宽度且该行是它的兄弟节点，CSS 表达不了「贴气泡右缘」，只能 `useLayoutEffect` + `ResizeObserver` 量最后一个 `[data-chat-body]` 的 `offsetWidth`（详见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E10/E11）。
+assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps 靠右（`margin-left:auto`）。**同一套实测宽度下，同行与换行的右缘都是气泡右缘**——气泡是内容宽度且该行是它的兄弟节点，CSS 表达不了「贴气泡右缘」，只能 `useLayoutEffect` + `ResizeObserver` 量最后一个 `[data-chat-body]` 的 `offsetWidth`（详见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E10/E11）。
+
+**对齐随状态切换（勿回退成恒定右侧）**：流式期动作栏恒空、实时读数**靠左**；定稿后动作栏回归左侧、结算值顶到**右侧**。左右只在定稿瞬间变一次，流式全程停在同一侧——这是为了消除「流式中读数在右侧、结束后又换一组数字」造成的左右横跳观感。
 
 | 态 | 文案 | 色板 | 性质 |
 |---|---|---|---|
-| 结算（定稿后） | `已工作 2分钟42秒` | `--text-faint` | 后端 `work_ms`，唯一真相源 |
-| 流式实时 | `工作中 42秒` | `--text-muted`（提亮一档） | 本地估算，tooltip 明示「定稿以后端结算为准」 |
+| 结算（定稿后） | `已工作 2分钟42秒 · 12.3 t/s` | `--text-faint` | 后端 `work_ms`（唯一真相源）+ 定稿 tps 快照 |
+| 流式实时 | `工作中 42秒 · 12.3 t/s` | `--text-muted`（提亮一档） | 本地估算，tooltip 明示「定稿以后端结算为准」 |
 
-- 两者共用 `CHAT_META_TEXT_STYLE`（`0.769em` + reader 字体 + `tabular-nums` + `nowrap`），**数字必须等宽**，否则每秒跳一位会左右抖。
+- 两者共用 `CHAT_META_TEXT_STYLE`（`0.769em` + reader 字体 + `tabular-nums` + `nowrap`），**数字必须等宽**，否则每秒跳一位会左右抖。右侧对齐的 `marginLeft:auto` 单列为 `CHAT_META_RIGHT`，只加在结算值上。
 - 实时态只在 `message.streaming` 且该会话有在建 turn 时出现；动作栏此时恒空（五个动作的 `visible` 全部硬排 streaming），定稿瞬间同一槽位被结算值替换——**不给两个数字并排的机会**。
+- **tps 是估算值**（ACP `usage_update` 只有上下文配额，无输出 token 字段）：口径 = 本 turn 输出字符数 ÷ 4 ÷ 工作时长，工作时长与计时同一来源（已扣审批挂起）。界面**只出数字**（`12.3 t/s`），「估算」只在 tooltip 里说明。流式读数走 `utils/turnClock` 的定时器直写 DOM；定稿后取 `endTurn` 冻结的快照，只挂在最后一条 assistant 消息上（快照按会话存，不按消息）。
 - 动作栏 `flex-shrink: 0`：按钮被压缩时会自己堆成多行（比耗时换行更糟），「放不下」必须永远落在耗时这一侧。
 
 ---

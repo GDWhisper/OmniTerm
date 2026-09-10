@@ -251,6 +251,8 @@
   "chat.msg.waitTime": "waiting on you {{dur}}",
   "chat.msg.working": "working {{dur}}",
   "chat.msg.workingTip": "live local estimate; finalized by the backend on completion",
+  "chat.msg.tps": "{{tps}} t/s",
+  "chat.msg.tpsTip": "output rate estimated as characters output ÷ 4 ÷ work time; rough guide only",
   "chat.msg.regenerate": "regenerate",
   "chat.status.connecting": "connecting…",
   "chat.status.disconnected": "disconnected",
