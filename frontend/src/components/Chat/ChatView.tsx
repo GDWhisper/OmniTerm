@@ -8,6 +8,7 @@ import { useChatShortcuts } from '../../hooks/useChatShortcuts'
 import { ChatMessageView } from './ChatMessage'
 import { ChatInput } from './ChatInput'
 import type { ImageAttachment } from '../../utils/imageAttachment'
+import type { FileAttachment } from '../../utils/fileAttachment'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
@@ -16,6 +17,7 @@ import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper } from '../../hooks/useAcpChat'
+import { chatTailSignature, shouldShowJumpToBottom } from '../../utils/chatScroll'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -120,10 +122,16 @@ export function ChatView() {
   const chatState = useChatStore(selectChatState(activeSessionId))
   const isReplaying = chatState.replaying
 
+  const isMobile = useAppStore((s) => s.isMobile)
+
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
+  // 「回到底部」提示条：离开底部时的末条内容指纹基线 + 是否有新内容到达。
+  const seenTailSignatureRef = useRef<string | null>(null)
+  const [hasNewContent, setHasNewContent] = useState(false)
+  const tailSignature = useMemo(() => chatTailSignature(chatState.messages), [chatState.messages])
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
@@ -207,6 +215,16 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight
   }, [chatState.messages, autoStick])
 
+  // 「回到底部」提示条的显隐。贴底时把末条内容指纹记为已读基线；用户上翻后指纹
+  // 变化（新消息 / 流式增长 / 工具块状态推进）即置位，滚回底部自动清位。判定逻辑
+  // 抽在 utils/chatScroll.ts（纯函数，可单测）；头部前插更早历史不改末条，不误报。
+  useEffect(() => {
+    if (autoStick) seenTailSignatureRef.current = tailSignature
+    setHasNewContent(
+      shouldShowJumpToBottom(autoStick, tailSignature, seenTailSignatureRef.current),
+    )
+  }, [autoStick, tailSignature])
+
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
@@ -218,6 +236,16 @@ export function ChatView() {
     if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
   }
 
+  // 点提示条：立即滚到底并恢复自动跟随；基线由 autoStick effect 复位，提示条随隐。
+  const handleJumpToBottom = () => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+    setAutoStick(true)
+    setHasNewContent(false)
+  }
+
+  const showJumpToBottom = !autoStick && hasNewContent
+
   // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode 等）。
   // 必须置于所有提前 return 之前，遵守 React Hooks 调用顺序规则。
   const onKeyDown = useChatShortcuts({
@@ -226,13 +254,13 @@ export function ChatView() {
   })
 
   const handleSend = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+    (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
       // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
       // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
       // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
       // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
-      // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃 images 是预期行为
-      // ——ChatInput 已在带附件时禁用 Queue，此路径不会带 images 进入。
+      // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃附件是预期行为
+      // ——ChatInput 已在带附件时禁用 Queue，此路径不会带附件进入。
       // 从 store 读 sending（而非闭包 chatState），保证回调引用稳定供 ChatMessageView
       // memo 命中，语义不变：两者都是调用时刻的当前状态。
       if (!activeSessionId) return
@@ -241,7 +269,7 @@ export function ChatView() {
         s.enqueueMessage(activeSessionId, text)
         return
       }
-      sendPrompt(text, images)
+      sendPrompt(text, images, files)
       // Re-stick so the user's own message is visible + next chunk scrolls in.
       setAutoStick(true)
     },
@@ -433,96 +461,144 @@ export function ChatView() {
         </div>
       )}
 
-      <OverlayScroll
-        ref={scrollRef}
-        onScroll={handleScroll}
-        style={{ flex: 1, minHeight: 0 }}
-        contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
+      <div
+        style={{
+          position: 'relative',
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
       >
-        {chatState.loadingHistory && (
-          <div className="chat-replay-indicator">
-            <span className="replay-spinner" />
-            <span>{t('chat.loadingHistory')}</span>
-          </div>
-        )}
-        {chatState.messages.length === 0 && (
-          <div
+        <OverlayScroll
+          ref={scrollRef}
+          onScroll={handleScroll}
+          style={{ flex: 1, minHeight: 0 }}
+          contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
+        >
+          {chatState.loadingHistory && (
+            <div className="chat-replay-indicator">
+              <span className="replay-spinner" />
+              <span>{t('chat.loadingHistory')}</span>
+            </div>
+          )}
+          {chatState.messages.length === 0 && (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-faint)',
+                fontSize: '1em',
+                padding: 16,
+              }}
+            >
+              {t('chat.empty')}
+            </div>
+          )}
+          {(() => {
+            const lastAssistantId = [...chatState.messages].reverse().find((m) => m.role === 'assistant')?.id
+            return chatState.messages.map((m) => (
+              <ChatMessageView
+                key={m.id}
+                message={m}
+                sessionId={activeSessionId ?? undefined}
+                agentName={chatState.agentName || fallbackAgentName}
+                onEditResend={inputDisabled ? undefined : handleEditResend}
+                onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
+                onCopyMessage={handleCopyMessage}
+                onQuoteMessage={handleQuoteMessage}
+                isLastAssistant={m.id === lastAssistantId}
+              />
+            ))
+          })()}
+          {chatState.sending && <ThinkingIndicator />}
+          {isReplaying && (
+            <div className="chat-replay-indicator">
+              <span className="replay-spinner" />
+              <span>{t('chat.replaying')}</span>
+            </div>
+          )}
+          {chatState.terminalEvents.map((ev) => (
+            <div
+              key={ev.id}
+              style={{
+                margin: '2px 12px',
+                padding: '4px 10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: '0.923em',
+                fontFamily: 'var(--reader-font, monospace)',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid var(--border-subtle)',
+                borderLeft: '2px solid var(--accent)',
+                borderRadius: 4,
+                color: 'var(--text-muted)',
+              }}
+            >
+              <span style={{ color: 'var(--accent)' }}>▸</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {ev.command} {ev.args.join(' ')}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0,
+                  color:
+                    ev.status === 'exited'
+                      ? ev.exit_code === 0
+                        ? 'var(--success, #3fb950)'
+                        : 'var(--danger, #FF7B72)'
+                      : 'var(--text-faint)',
+                }}
+              >
+                {ev.status === 'exited'
+                  ? `exit ${ev.exit_code ?? '?'}`
+                  : 'running…'}
+              </span>
+            </div>
+          ))}
+        </OverlayScroll>
+
+        {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
+            的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端加大触摸目标。 */}
+        {showJumpToBottom && (
+          <button
+            type="button"
+            className="pixel-press"
+            onClick={handleJumpToBottom}
+            title={t('chat.jumpToBottom')}
+            aria-label={t('chat.jumpToBottom')}
             style={{
-              flex: 1,
+              position: 'absolute',
+              bottom: 12,
+              left: 0,
+              right: 0,
+              width: 'fit-content',
+              margin: '0 auto',
+              zIndex: 20,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: 'var(--text-faint)',
-              fontSize: '1em',
-              padding: 16,
+              gap: 6,
+              padding: isMobile ? '10px 18px' : '7px 14px',
+              minHeight: isMobile ? 44 : 0,
+              background: 'var(--accent)',
+              color: '#fff',
+              border: '2px solid var(--border-strong)',
+              fontFamily: 'var(--pixel-font)',
+              fontSize: 12,
+              letterSpacing: 'var(--pixel-tracking-md)',
+              whiteSpace: 'nowrap',
+              cursor: 'pointer',
             }}
           >
-            {t('chat.empty')}
-          </div>
+            <span aria-hidden="true">↓</span>
+            {t('chat.newContent')}
+          </button>
         )}
-        {(() => {
-          const lastAssistantId = [...chatState.messages].reverse().find((m) => m.role === 'assistant')?.id
-          return chatState.messages.map((m) => (
-            <ChatMessageView
-              key={m.id}
-              message={m}
-              sessionId={activeSessionId ?? undefined}
-              agentName={chatState.agentName || fallbackAgentName}
-              onEditResend={inputDisabled ? undefined : handleEditResend}
-              onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
-              onCopyMessage={handleCopyMessage}
-              onQuoteMessage={handleQuoteMessage}
-              isLastAssistant={m.id === lastAssistantId}
-            />
-          ))
-        })()}
-        {chatState.sending && <ThinkingIndicator />}
-        {isReplaying && (
-          <div className="chat-replay-indicator">
-            <span className="replay-spinner" />
-            <span>{t('chat.replaying')}</span>
-          </div>
-        )}
-        {chatState.terminalEvents.map((ev) => (
-          <div
-            key={ev.id}
-            style={{
-              margin: '2px 12px',
-              padding: '4px 10px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              fontSize: '0.923em',
-              fontFamily: 'var(--reader-font, monospace)',
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid var(--border-subtle)',
-              borderLeft: '2px solid var(--accent)',
-              borderRadius: 4,
-              color: 'var(--text-muted)',
-            }}
-          >
-            <span style={{ color: 'var(--accent)' }}>▸</span>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {ev.command} {ev.args.join(' ')}
-            </span>
-            <span
-              style={{
-                flexShrink: 0,
-                color:
-                  ev.status === 'exited'
-                    ? ev.exit_code === 0
-                      ? 'var(--success, #3fb950)'
-                      : 'var(--danger, #FF7B72)'
-                    : 'var(--text-faint)',
-              }}
-            >
-              {ev.status === 'exited'
-                ? `exit ${ev.exit_code ?? '?'}`
-                : 'running…'}
-            </span>
-          </div>
-        ))}
-      </OverlayScroll>
+      </div>
 
       {chatState.pendingPermissions[0] && (
         <div style={{ flexShrink: 0 }}>
@@ -589,6 +665,7 @@ export function ChatView() {
           onSendNow={handleSendNowQueued}
           commands={chatState.commands}
           imageSupported={chatState.imageSupported}
+          fileSupported={chatState.embeddedContextSupported}
         />
       </div>
 

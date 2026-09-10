@@ -7,6 +7,8 @@
 // 唯一的额外产物是缩略图：只用于落库与预览/气泡渲染。这些地方显示尺寸只有几十
 // 到几百 px，没必要让浏览器为它解码整张原图的位图（4000×3000 的照片 ≈ 46MB）。
 
+import { readAsDataUrl } from './readFile'
+
 export interface ImageAttachment {
   /** 本地唯一 id，供缩略图列表 key/移除用。 */
   id: string
@@ -63,14 +65,6 @@ export function imageSrc(image: {
   return `data:${src.mimeType};base64,${src.data}`
 }
 
-function readAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
-    reader.readAsDataURL(blob)
-  })
-}
 
 function drawToJpeg(source: ImageBitmap, maxDimension: number, quality: number): string | null {
   const scale = Math.min(1, maxDimension / Math.max(source.width, source.height))

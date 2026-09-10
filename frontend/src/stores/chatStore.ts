@@ -79,7 +79,17 @@ export interface ImageBlock {
   thumb?: ImageThumb
 }
 
-export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock
+// 文件附件：用户消息的普通文件（对应 ACP `ContentBlock::Resource` 的 blob 形态）。
+// 只保留元数据——文件内容不落库（历史气泡只需文件名 chip），与图片只落缩略图同理。
+export interface FileBlock {
+  type: 'file'
+  name: string
+  mimeType: string
+  /** 原始字节数，chip 展示用。 */
+  size: number
+}
+
+export type ContentBlock = TextBlock | ThoughtBlock | ToolCallBlock | PlanBlock | TodoBlock | SystemBlock | ImageBlock | FileBlock
 
 // --- Agent terminal activity (from ACP `terminal/create`) ---
 // Surfaces commands the agent runs in background terminals so they aren't silent.
@@ -269,6 +279,12 @@ interface ChatSessionState {
    * undefined = 尚未收到声明，UI 按不支持处理（保守降级）。
    */
   imageSupported?: boolean
+  /**
+   * agent 是否声明 `promptCapabilities.embeddedContext`（后端 capabilities 帧下发）。
+   * 文件附件的门控（@path 引用共用此能力，但那条链在缺失时降级内联）。undefined =
+   * 尚未收到声明，UI 按不支持处理（保守降级）。
+   */
+  embeddedContextSupported?: boolean
   /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
   agentName?: string
   /**
@@ -294,7 +310,7 @@ interface ChatActions {
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
   pushSystemEvent: (sessionId: string, label: string) => void
-  addUserMessage: (sessionId: string, text: string, images?: ImageBlock[]) => void
+  addUserMessage: (sessionId: string, text: string, images?: ImageBlock[], files?: FileBlock[]) => void
   /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
@@ -354,6 +370,8 @@ interface ChatActions {
   setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
   /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
   setImageSupported: (sessionId: string, supported: boolean) => void
+  /** 记录 agent 是否支持 embeddedContext（文件附件门控，后端 capabilities 帧）。 */
+  setEmbeddedContextSupported: (sessionId: string, supported: boolean) => void
   /** 设置当前会话 agent 的显示名（后端 capabilities 帧下发）。 */
   setAgentName: (sessionId: string, name: string) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
@@ -456,6 +474,80 @@ const turnAnchorMs = (state: ChatStoreState, sessionId: string): number => {
   return last && last.role === 'assistant' && last.streaming ? Math.min(now, last.createdAt) : now
 }
 
+/** 流式 prose（正文/思考）块类型；它们之间可跨类型累积，见 appendProseBlock。 */
+type ProseKind = 'text' | 'thought'
+
+/**
+ * 把一段流式正文（text）或思考（thought）追加进当前消息的 blocks。
+ *
+ * 合并策略是「同一 prose 区域内按类型累积」，**不是**「只与紧邻块合并」：
+ * 部分 ACP 实现（实测 codebuddy）把同一 turn 的 reasoning 与 message 两条逻辑流
+ * 按 token 粒度交错下发——`agent_thought_chunk` 与 `agent_message_chunk` 逐词交替，
+ * 且两条流共用同一 `messageId`。只跟紧邻块比较时，一段连续思考会被切成成百上千个
+ * 「◆ thinking」块（tps 越高交错越密，用户报告的现象），并在中间夹出大量短正文块。
+ * 按类型累积后，一段思考 = 一个 thinking 块（现有调用方的 append 路径共用本函数，
+ * 保证 live / replay / hydrate 三条路径渲染一致）。
+ *
+ * prose 区域 = 连续的 text/thought 块；遇到 tool_call / plan / todo / system / image
+ * 等结构化块即终止。**跨区域不合并**：工具调用前后的推理是彼此独立的段落，合并会
+ * 打乱「想→做→想」的转录顺序（差异只针对已确证的这类交错，见 AGENTS.md 工程准则 8）。
+ *
+ * 空串/纯空白 chunk：区域内已有同类块则照常追加（保留流式正文里的空格与换行）；
+ * 没有同类块承接时丢弃——追加空串本就是 no-op，独立成块只会渲染成空气泡，并把
+ * 前后思考切断（这正是「思考被分段」的另一条成因）。
+ *
+ * 返回同一数组引用表示「无变化」（调用方据此做整体 no-op）。
+ */
+const appendProseBlock = (blocks: ContentBlock[], kind: ProseKind, chunk: string): ContentBlock[] => {
+  let idx = blocks.length - 1
+  while (idx >= 0) {
+    const b = blocks[idx]
+    if (b.type !== 'text' && b.type !== 'thought') break
+    if (b.type === kind) {
+      const merged = [...blocks]
+      merged[idx] = { ...b, text: b.text + chunk }
+      return merged
+    }
+    idx--
+  }
+  if (chunk.trim() === '') return blocks
+  return [...blocks, { type: kind, text: chunk }]
+}
+
+/**
+ * 把一段流式正文/思考追加到消息列表末尾的在建 assistant 消息（`streaming`），
+ * 没有则新建一条。合并语义见 appendProseBlock；结果与 `appendChunk` /
+ * `appendThought` 单块 action 完全一致，三个入口共用，避免策略漂移。
+ */
+const appendProseToMessages = (
+  messages: ChatMessage[],
+  kind: ProseKind,
+  chunk: string,
+): ChatMessage[] => {
+  if (chunk === '') return messages
+  const next = [...messages]
+  const last = next[next.length - 1]
+  if (last && last.role === 'assistant' && last.streaming) {
+    const blocks = appendProseBlock(last.blocks, kind, chunk)
+    if (blocks === last.blocks) return messages
+    next[next.length - 1] = kind === 'text'
+      ? { ...last, text: last.text + chunk, blocks }
+      : { ...last, blocks }
+    return next
+  }
+  const blocks = appendProseBlock([], kind, chunk)
+  if (blocks.length === 0) return messages
+  next.push({
+    id: genId(),
+    role: 'assistant',
+    text: kind === 'text' ? chunk : '',
+    blocks,
+    createdAt: Date.now(),
+    streaming: true,
+  })
+  return next
+}
+
 /**
  * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
  * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
@@ -466,50 +558,13 @@ const applyActionsToMessages = (
   messages: ChatMessage[],
   actions: SessionUpdateAction[],
 ): ChatMessage[] => {
-  const next = [...messages]
+  // 浅拷贝一次兜底：非 prose 分支就地改 `next`，prose 分支则整段替换为新数组。
+  let next = [...messages]
   for (const action of actions) {
     if (action.kind === 'appendText') {
-      const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'text') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + action.text }
-        } else {
-          blocks.push({ type: 'text', text: action.text })
-        }
-        next[next.length - 1] = { ...last, text: last.text + action.text, blocks }
-      } else {
-        next.push({
-          id: genId(),
-          role: 'assistant',
-          text: action.text,
-          blocks: [{ type: 'text', text: action.text }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      next = appendProseToMessages(next, 'text', action.text)
     } else if (action.kind === 'appendThought') {
-      const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'thought') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + action.text }
-        } else {
-          blocks.push({ type: 'thought', text: action.text })
-        }
-        next[next.length - 1] = { ...last, blocks }
-      } else {
-        next.push({
-          id: genId(),
-          role: 'assistant',
-          text: '',
-          blocks: [{ type: 'thought', text: action.text }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      next = appendProseToMessages(next, 'thought', action.text)
     } else if (action.kind === 'upsertTool') {
       // ADR-4: 编辑类工具完成 → 提示 git 面板刷新
       if (action.status === 'completed') {
@@ -649,58 +704,16 @@ export const useChatStore = create<ChatStore>((set) => ({
   appendChunk: (sessionId, chunk) =>
     set((state) => {
       const current = get(state, sessionId)
-      const messages = [...current.messages]
-      const last = messages[messages.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'text') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + chunk }
-        } else {
-          blocks.push({ type: 'text', text: chunk })
-        }
-        messages[messages.length - 1] = {
-          ...last,
-          text: last.text + chunk,
-          blocks,
-        }
-      } else {
-        messages.push({
-          id: genId(),
-          role: 'assistant',
-          text: chunk,
-          blocks: [{ type: 'text', text: chunk }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      const messages = appendProseToMessages(current.messages, 'text', chunk)
+      if (messages === current.messages) return state
       return patch(state, sessionId, { messages })
     }),
 
   appendThought: (sessionId, chunk) =>
     set((state) => {
       const current = get(state, sessionId)
-      const messages = [...current.messages]
-      const last = messages[messages.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'thought') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + chunk }
-        } else {
-          blocks.push({ type: 'thought', text: chunk })
-        }
-        messages[messages.length - 1] = { ...last, blocks }
-      } else {
-        messages.push({
-          id: genId(),
-          role: 'assistant',
-          text: '',
-          blocks: [{ type: 'thought', text: chunk }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      const messages = appendProseToMessages(current.messages, 'thought', chunk)
+      if (messages === current.messages) return state
       return patch(state, sessionId, { messages })
     }),
 
@@ -794,14 +807,15 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages })
     }),
 
-  addUserMessage: (sessionId, text, images) =>
+  addUserMessage: (sessionId, text, images, files) =>
     set((state) => {
       const current = get(state, sessionId)
-      // 纯图片消息不塞空 text block（渲染与落库都无意义）。
-      const blocks: ContentBlock[] = text !== '' || !images?.length
+      // 纯附件消息不塞空 text block（渲染与落库都无意义）。
+      const blocks: ContentBlock[] = text !== '' || (!images?.length && !files?.length)
         ? [{ type: 'text' as const, text }]
         : []
       if (images) blocks.push(...images)
+      if (files) blocks.push(...files)
       return patch(state, sessionId, {
         messages: [
           ...current.messages,
@@ -887,13 +901,15 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (messages.length === 0) return state
       const prev = state.states[sessionId]
       // 从空白状态重建（等价旧「reset + 重放」语义），但保留连接期已到达的
-      // capabilities 信息（imageSupported/agentName 不随重放下发）。
+      // capabilities 信息（imageSupported/embeddedContextSupported/agentName
+      // 不随重放下发）。
       const cleared = { ...state.states }
       delete cleared[sessionId]
       removeQueuedFromStorage(sessionId)
       const base = patch({ ...state, states: cleared }, sessionId, {
         messages,
         imageSupported: prev?.imageSupported,
+        embeddedContextSupported: prev?.embeddedContextSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
         // 重放是 agent 侧的完整历史，重建后已无「更早一页」可取；显式置 null
@@ -1104,6 +1120,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setImageSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { imageSupported: supported })),
+
+  setEmbeddedContextSupported: (sessionId, supported) =>
+    set((state) => patch(state, sessionId, { embeddedContextSupported: supported })),
 
   setAgentName: (sessionId, name) =>
     set((state) => patch(state, sessionId, { agentName: name })),

@@ -16,12 +16,12 @@ use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
 use crate::acp::turn_accumulator::TurnTiming;
-use crate::acp::{AcpClient, ImageInput, ResourceInput, TurnEndEvent};
+use crate::acp::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEndEvent};
 use crate::api::agents::load_agent;
 
 /// 单条客户端帧的体积上限。这是管道自身的口径，不是内容判断：tungstenite 默认
 /// `max_frame_size` 为 16MiB，超限会直接关掉连接（不是报错），所以在入口显式拦
-/// 一道并给出可读错误。图片 base64 内联在帧里，是唯一能把帧撑大的东西。
+/// 一道并给出可读错误。图片与附件文件都 base64 内联在帧里，是把帧撑大的东西。
 const MAX_PROMPT_FRAME_BYTES: usize = 12 * 1024 * 1024;
 
 /// 字节数 → MiB，仅用于错误文案。
@@ -124,6 +124,10 @@ enum AcpClientMessage {
         /// 图片附件（可选，旧前端不带此字段）。
         #[serde(default)]
         images: Vec<ImageInput>,
+        /// 普通文件附件（可选，旧前端不带此字段）。与 images 同为内联转发，
+        /// 需 agent 声明 `promptCapabilities.embeddedContext`。
+        #[serde(default)]
+        files: Vec<FileInput>,
     },
     #[serde(rename = "cancel")]
     Cancel,
@@ -196,11 +200,13 @@ enum AcpServerMessage<'a> {
     /// 里的 banner 是断连窗口过期项（错过了 permission_resolved 广播），应清除。
     #[serde(rename = "permissions_synced")]
     PermissionsSynced,
-    /// agent 能力声明（当前仅 prompt 图片能力），client 就绪时推送，
-    /// 前端据此显示/隐藏附件入口。`agent_name` 为当前会话所用 agent 的
+    /// agent 能力声明（prompt 图片 / 嵌入上下文），client 就绪时推送，
+    /// 前端据此显示/隐藏/置灰附件入口。`agent_name` 为当前会话所用 agent 的
     /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
+    /// `embedded_context` = `promptCapabilities.embeddedContext`（文件附件与
+    /// @path 引用共用此门控）。
     #[serde(rename = "capabilities")]
-    Capabilities { image: bool, agent_name: String },
+    Capabilities { image: bool, embedded_context: bool, agent_name: String },
     /// 连接时下发当前是否有进行中的 assistant turn。`active:false` 时前端定稿
     /// 任何残留的 streaming 消息（turn 在 WS 断开期间已结束的兜底）。
     #[serde(rename = "turn_state")]
@@ -482,11 +488,12 @@ async fn dispatch_prompt(
     text: String,
     images: Vec<ImageInput>,
     resources: Vec<ResourceInput>,
+    files: Vec<FileInput>,
 ) {
     // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中），并开启累积器
     // turn 门控；assistant 回复由累积器实时防抖落库（见 turn_accumulator）。
     c.mark_prompt_active();
-    match c.send_prompt(&text, images, resources).await {
+    match c.send_prompt(&text, images, resources, files).await {
         Ok(resp) => {
             // mark_prompt_idle 内部定稿累积器进行中的 turn。
             c.mark_prompt_idle();
@@ -590,6 +597,7 @@ async fn restore_acp_session(
 
     let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
         image: new_client.supports_image(),
+        embedded_context: new_client.supports_embedded_context(),
         agent_name: agent_display_name,
     })
     .unwrap_or_default();
@@ -772,6 +780,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             let agent_name = query_agent_name(&state.db, &session_id).await;
             let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                 image: c.supports_image(),
+                embedded_context: c.supports_embedded_context(),
                 agent_name,
             })
             .unwrap_or_default();
@@ -840,10 +849,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                         }
 
                         match serde_json::from_str::<AcpClientMessage>(&text) {
-                            Ok(AcpClientMessage::Prompt { text: prompt_text, images }) => {
-                                // 有图时把结构化 blocks 一并落库（text + image），
-                                // 刷新后 hydrate 能还原缩略图；纯文本保持 NULL 现状。
-                                let blocks_json = if images.is_empty() {
+                            Ok(AcpClientMessage::Prompt { text: prompt_text, images, files }) => {
+                                // 带附件时把结构化 blocks 一并落库（text + image + file），
+                                // 刷新后 hydrate 能还原缩略图/文件 chip；纯文本保持 NULL 现状。
+                                let blocks_json = if images.is_empty() && files.is_empty() {
                                     None
                                 } else {
                                     let mut arr = Vec::new();
@@ -864,6 +873,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                             "type": "image",
                                             "mimeType": mime_type,
                                             "data": data,
+                                        }));
+                                    }
+                                    for f in &files {
+                                        // 文件只落元数据（名/mime/大小）：内容可达成百 MiB，
+                                        // 历史气泡只需文件名 chip 定位「当时发了什么」。
+                                        arr.push(serde_json::json!({
+                                            "type": "file",
+                                            "name": f.name,
+                                            "mimeType": f.mime_type,
+                                            "size": f.size,
                                         }));
                                     }
                                     serde_json::to_string(&arr).ok()
@@ -911,6 +930,16 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     continue;
                                 }
 
+                                // 文件附件需 embeddedContext 能力（§8 多实现兼容：
+                                // 未声明时前端已置灰入口，这里兜底拒绝直连 WS 的请求）。
+                                if !files.is_empty() && !live.supports_embedded_context() {
+                                    let msg = serde_json::to_string(&AcpServerMessage::PromptError {
+                                        message: "agent does not support file attachments (embedded context)",
+                                    }).unwrap_or_default();
+                                    let _ = ws_tx.send(Message::Text(msg.into())).await;
+                                    continue;
+                                }
+
                                 if let Some(handle) = replay_handle {
                                     // 自动恢复路径：历史重放尚未完成。等重放结束
                                     // （agent 就绪、前端对账完成）再发送 prompt，避免
@@ -923,8 +952,14 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                     tokio::spawn(async move {
                                         match handle.await {
                                             Ok(Ok(())) => {
-                                                dispatch_prompt(c, prompt_text, images, resources)
-                                                    .await;
+                                                dispatch_prompt(
+                                                    c,
+                                                    prompt_text,
+                                                    images,
+                                                    resources,
+                                                    files,
+                                                )
+                                                .await;
                                             }
                                             Ok(Err(_)) => {} // load_failed 帧已由 replay 任务发送
                                             Err(e) => {
@@ -941,7 +976,13 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         }
                                     });
                                 } else {
-                                    tokio::spawn(dispatch_prompt(live, prompt_text, images, resources));
+                                    tokio::spawn(dispatch_prompt(
+                                        live,
+                                        prompt_text,
+                                        images,
+                                        resources,
+                                        files,
+                                    ));
                                 }
                             }
                             Ok(AcpClientMessage::Cancel) => {
@@ -1072,7 +1113,48 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_at_paths;
+    use super::{AcpClientMessage, extract_at_paths};
+
+    // ── AcpClientMessage::Prompt 反序列化（§8 向后兼容） ──────────────
+
+    #[test]
+    fn prompt_frame_without_files_deserializes_empty_files() {
+        // 旧前端帧不带 images/files 字段：两者都应缺省为空，不报错。
+        let msg: AcpClientMessage =
+            serde_json::from_str(r#"{"type":"prompt","text":"hi"}"#).unwrap();
+        let AcpClientMessage::Prompt { text, images, files } = msg else {
+            panic!("expected prompt");
+        };
+        assert_eq!(text, "hi");
+        assert!(images.is_empty());
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn prompt_frame_with_files_parses_metadata() {
+        let raw = r#"{"type":"prompt","text":"see","files":[{"name":"a.pdf","mime_type":"application/pdf","size":12,"data":"AAA"}]}"#;
+        let msg: AcpClientMessage = serde_json::from_str(raw).unwrap();
+        let AcpClientMessage::Prompt { files, .. } = msg else {
+            panic!("expected prompt");
+        };
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].name, "a.pdf");
+        assert_eq!(files[0].mime_type, "application/pdf");
+        assert_eq!(files[0].size, 12);
+        assert_eq!(files[0].data, "AAA");
+    }
+
+    #[test]
+    fn prompt_frame_file_size_and_data_default_gracefully() {
+        // size 可选（直连 WS 的客户端可能不带）；空文件 payload 允许为空串。
+        let raw = r#"{"type":"prompt","text":"","files":[{"name":"a.bin","mime_type":"application/octet-stream","data":""}]}"#;
+        let msg: AcpClientMessage = serde_json::from_str(raw).unwrap();
+        let AcpClientMessage::Prompt { files, .. } = msg else {
+            panic!("expected prompt");
+        };
+        assert_eq!(files[0].size, 0);
+        assert_eq!(files[0].data, "");
+    }
 
     #[test]
     fn extracts_basic_paths() {

@@ -38,6 +38,16 @@ export function IconFile(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconPhoto(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2" y="3" width="12" height="10" rx="1" />
+      <circle cx="5.5" cy="6.5" r="1.25" />
+      <path d="M2.5 11.5l3-2.75 2.5 2.25 2-1.75 3.5 3" />
+    </svg>
+  )
+}
+
 export function IconFilePlus(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
@@ -246,4 +256,18 @@ export function IconGitBranch(props: SVGProps<SVGSVGElement>) {
   )
 }
 export { IconGitBranch as IconBranch }
+
+/** 批量操作：双行勾选列表（Sidebar 会话右键/长按菜单入口）。 */
+export function IconListChecks(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="2" y="2.5" width="5" height="5" />
+      <path d="M3.25 5l1.25 1.25L6.25 3.75" />
+      <line x1="9.5" y1="5" x2="14" y2="5" />
+      <rect x="2" y="8.5" width="5" height="5" />
+      <path d="M3.25 11l1.25 1.25L6.25 9.75" />
+      <line x1="9.5" y1="11" x2="14" y2="11" />
+    </svg>
+  )
+}
 

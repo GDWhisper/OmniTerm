@@ -8,8 +8,8 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatHoverTime, formatWorkDuration } from '../../utils/formatTime'
-import { turnElapsedMs } from '../../utils/turnClock'
+import { formatHoverTime, formatTps, formatWorkDuration } from '../../utils/formatTime'
+import { finalTps, turnElapsedMs, turnTps } from '../../utils/turnClock'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -20,6 +20,8 @@ import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { IconCopy } from '../FileManager/icons'
 import { imageSrc } from '../../utils/imageAttachment'
+import { formatFileSize } from '../../utils/fileAttachment'
+import { IconFile } from '../FileManager/icons'
 
 // 用户输入（已发送）正文超过此行数时默认折叠，提供展开/收起。
 const USER_TEXT_COLLAPSE_LINES = 8
@@ -29,17 +31,22 @@ const USER_TEXT_PREVIEW_LINES = 8
 // （turn 耗时）必须用同一个值，否则两处百分比各改各的，右缘就错开了。
 const BUBBLE_MAX_WIDTH = '85%'
 
-// 气泡底部元信息文字（turn 结算耗时 / 流式实时计时）共用的规格：两者占据同一槽位，
+// 气泡底部元信息文字（turn 结算耗时 / 流式实时计时与 tps）共用的规格：两者占据同一槽位，
 // 定稿瞬间从「跳动值」换成「结算值」时只有文案变、字号/字距/数字宽度都不变，才不会
 // 看着像抖了一下。颜色是两者唯一的视觉差（实时态更亮一档），由调用方覆盖。
+//
+// **不含 `marginLeft:auto`**——左右对齐是状态相关的：流式期动作栏恒空、读数**靠左**；
+// 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
 const CHAT_META_TEXT_STYLE: CSSProperties = {
-  marginLeft: 'auto',
   fontSize: '0.769em',
   fontFamily: READER_FONT,
   letterSpacing: '0.03em',
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
 }
+
+// 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
+const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto' }
 
 // 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
 const LIVE_TICK_MS = 1_000
@@ -439,11 +446,15 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
 }
 
 /**
- * 流式期间的实时工作计时（气泡底部元信息槽位，定稿后被后端结算值取代）。
+ * 流式期间的实时工作计时 + tps（气泡底部元信息槽位，定稿后被后端结算值取代）。
  *
  * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
  * 一个数字。与 `ChatView` 的 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
  * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
+ *
+ * tps 与计时同源（`utils/turnClock` 同一张表），故读数共享同一次 tick、不会各跳各的。
+ * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
+ * 定稿后整行才交给右侧的结算值（见渲染处）。
  */
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
@@ -454,9 +465,17 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
       const el = ref.current
       if (!el) return
       const dur = formatWorkDuration(turnElapsedMs(sessionId), i18n.language)
-      el.textContent = dur ? t('chat.msg.working', { dur }) : ''
-      // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
-      el.style.display = dur ? '' : 'none'
+      if (!dur) {
+        // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
+        el.textContent = ''
+        el.style.display = 'none'
+        return
+      }
+      const rate = formatTps(turnTps(sessionId))
+      el.textContent = rate
+        ? `${t('chat.msg.working', { dur })} · ${t('chat.msg.tps', { tps: rate })}`
+        : t('chat.msg.working', { dur })
+      el.style.display = ''
     }
     draw()
     const id = window.setInterval(draw, LIVE_TICK_MS)
@@ -467,7 +486,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
     <span
       ref={ref}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
-      title={t('chat.msg.workingTip')}
+      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.tpsTip')}`}
     />
   )
 }
@@ -563,9 +582,15 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
+  // 定稿后的最终 tps：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
+  // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
+  const settledTps =
+    !isLive && workText && isLastAssistant && sessionId ? formatTps(finalTps(sessionId)) : null
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
+    settledTps && t('chat.msg.tps', { tps: settledTps }),
     waitText && t('chat.msg.waitTime', { dur: waitText }),
+    settledTps && t('chat.msg.tpsTip'),
   ].filter(Boolean).join(' · ')
   // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
   // 而这一行是正文块的兄弟节点，CSS 表达不了「和上面某个块右缘对齐」，只能量。
@@ -715,7 +740,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               <CollapsibleUserText text={message.text} />
               {(() => {
                 const images = message.blocks.filter((b) => b.type === 'image')
-                if (images.length === 0) return null
+                const files = message.blocks.filter((b) => b.type === 'file')
+                if (images.length === 0 && files.length === 0) return null
                 return (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: message.text ? 6 : 0 }}>
                     {images.map((img, i) => (
@@ -731,6 +757,45 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                           display: 'block',
                         }}
                       />
+                    ))}
+                    {/* 文件只落元数据：历史里以文件名 chip 还原「当时发了什么」，内容不可回看 */}
+                    {files.map((f, i) => (
+                      <span
+                        key={i}
+                        title={f.name}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          maxWidth: 240,
+                          padding: '4px 8px',
+                          border: '1px solid var(--border-subtle)',
+                          borderRadius: 4,
+                          background: 'var(--bg-base)',
+                          fontFamily: READER_FONT,
+                          fontSize: 12,
+                          color: 'var(--text-primary)',
+                        }}
+                      >
+                        <IconFile
+                          width={14}
+                          height={14}
+                          style={{ flexShrink: 0, color: 'var(--text-faint)' }}
+                        />
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            minWidth: 0,
+                          }}
+                        >
+                          {f.name}
+                        </span>
+                        <span style={{ color: 'var(--text-faint)', fontSize: 10, flexShrink: 0 }}>
+                          {formatFileSize(f.size)}
+                        </span>
+                      </span>
                     ))}
                   </div>
                 )
@@ -784,7 +849,9 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
-      {/* 动作栏 + turn 耗时同一行：动作栏靠左、耗时靠右（marginLeft:auto）。
+      {/* 动作栏 + turn 耗时（含 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
+          · 流式期：动作栏恒空（五个动作的 visible 硬排 streaming），实时读数**靠左**；
+          · 定稿后：动作栏回归左侧，结算值用 `marginLeft:auto` 顶到**右侧**。
           行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
           某个块的右缘」，只能量），故无论耗时是同行还是被 flex-wrap 挤到下一行，
           右缘都与气泡右缘重合。动作栏常驻占位（CSS 只切 opacity）且不被压缩，
@@ -800,17 +867,20 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* 流式期间：本地实时估算（每秒跳动，审批挂起时冻住）。结算值一旦到位就让位给
-              它——同一槽位、同一规格，定稿瞬间只换文案不换位。 */}
+          {/* 流式期间：本地实时估算（计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
+              到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
+              流式全程停在同一侧，不会来回横跳。 */}
           {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
           {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
-              「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。 */}
+              「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
+              `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}
           {workText && (
             <span
-              style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-faint)' }}
+              style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
               title={durationTip}
             >
               {t('chat.msg.workTime', { dur: workText })}
+              {settledTps && ` · ${t('chat.msg.tps', { tps: settledTps })}`}
             </span>
           )}
         </div>

@@ -94,6 +94,10 @@ function baseProps(overrides: Partial<Parameters<typeof ProjectCard>[0]>): Param
     onReleaseRequest: vi.fn(),
     onArchiveRequest: vi.fn(),
     expandAllSessions: false,
+    selectionMode: false,
+    selectedIds: new Set<string>(),
+    onToggleSessionSelection: vi.fn(),
+    onSessionContextMenu: vi.fn(),
     ...overrides,
   }
 }
@@ -176,6 +180,44 @@ describe('ProjectCard worktree 展开模式', () => {
 
     createWtBtn.click()
     expect(onOpenCreateWorktree).toHaveBeenCalledTimes(1)
+  })
+
+  it('会话行右键经 SessionRow 上报锚点（透传 onSessionContextMenu）', () => {
+    const onSessionContextMenu = vi.fn()
+    renderCard(baseProps({ onSessionContextMenu }))
+
+    const row = container.querySelector('.sidebar-session-item') as HTMLElement
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 50 })
+    act(() => {
+      row.dispatchEvent(ev)
+    })
+
+    expect(ev.defaultPrevented).toBe(true)
+    expect(onSessionContextMenu).toHaveBeenCalledTimes(1)
+    const [session, point] = onSessionContextMenu.mock.calls[0]
+    expect(session.name).toBe('session-main')
+    expect(point).toEqual({ x: 30, y: 50 })
+  })
+
+  it('选择模式下会话行渲染勾选框并上报 toggle 而非激活', () => {
+    const onToggleSessionSelection = vi.fn()
+    renderCard(
+      baseProps({
+        selectionMode: true,
+        selectedIds: new Set(['sm']),
+        onToggleSessionSelection,
+      }),
+    )
+
+    const row = container.querySelector('.sidebar-session-item') as HTMLElement
+    const checkbox = row.querySelector('input.fm-checkbox') as HTMLInputElement
+    expect(checkbox).toBeTruthy()
+    expect(checkbox.checked).toBe(true)
+
+    act(() => {
+      row.click()
+    })
+    expect(onToggleSessionSelection).toHaveBeenCalledWith('sm')
   })
 })
 

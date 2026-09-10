@@ -46,3 +46,13 @@ export function formatWorkDuration(ms: number | null | undefined, locale?: strin
       : unitAmount(minutes, 'minute', locale)
   return unitAmount(seconds, 'second', locale)
 }
+
+/**
+ * tps（tokens/s）读数：一位小数（`12.35 → "12.3"`）。只出数字，单位字形由
+ * i18n 文案提供（`chat.msg.tps`），不在此硬编码 "t/s"。非有限值/非正数 → `null`，
+ * 调用方整段不渲染（与 `formatWorkDuration` 的三态语义一致）。
+ */
+export function formatTps(tps: number | null | undefined): string | null {
+  if (tps === null || tps === undefined || !Number.isFinite(tps) || tps <= 0) return null
+  return tps.toFixed(1)
+}

@@ -5,9 +5,11 @@ import {
   messagesToSyncPayload,
   turnToSyncPayload,
   storedRawRowToSyncPayload,
+  buildReplayMessages,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
   type ContentBlock,
+  type SessionUpdateAction,
 } from './chatStore'
 import { clearTurnClock, turnElapsedMs } from '../utils/turnClock'
 
@@ -178,6 +180,17 @@ describe('chatStore — queued follow-up actions', () => {
       ])
       expect(useChatStore.getState().states['s1'].mode).toBe('plan')
     })
+
+    it('preserves capability flags (not replayed by the agent)', () => {
+      useChatStore.getState().setImageSupported('s1', true)
+      useChatStore.getState().setEmbeddedContextSupported('s1', true)
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+      ])
+      const state = useChatStore.getState().states['s1']
+      expect(state.imageSupported).toBe(true)
+      expect(state.embeddedContextSupported).toBe(true)
+    })
   })
 
   describe('history pagination (上拉加载更早历史)', () => {
@@ -294,6 +307,42 @@ describe('chatStore — queued follow-up actions', () => {
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(true)
       useChatStore.getState().setImageSupported('s1', false)
       expect(useChatStore.getState().states['s1'].imageSupported).toBe(false)
+    })
+  })
+
+  describe('file attachments', () => {
+    it('addUserMessage stores file blocks after image blocks', () => {
+      useChatStore.getState().addUserMessage(
+        's1',
+        'see these',
+        [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }],
+        [{ type: 'file', name: 'a.pdf', mimeType: 'application/pdf', size: 12 }],
+      )
+      const msg = useChatStore.getState().states['s1'].messages[0]
+      expect(msg.blocks).toEqual([
+        { type: 'text', text: 'see these' },
+        { type: 'image', mimeType: 'image/png', data: 'AAAA' },
+        { type: 'file', name: 'a.pdf', mimeType: 'application/pdf', size: 12 },
+      ])
+    })
+
+    it('addUserMessage with only files keeps no empty text block', () => {
+      useChatStore.getState().addUserMessage('s1', '', undefined, [
+        { type: 'file', name: 'a.bin', mimeType: 'application/octet-stream', size: 0 },
+      ])
+      const msg = useChatStore.getState().states['s1'].messages[0]
+      expect(msg.blocks).toEqual([
+        { type: 'file', name: 'a.bin', mimeType: 'application/octet-stream', size: 0 },
+      ])
+    })
+
+    it('setEmbeddedContextSupported flips the capability flag', () => {
+      useChatStore.getState().addUserMessage('s1', 'x')
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBeUndefined()
+      useChatStore.getState().setEmbeddedContextSupported('s1', true)
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBe(true)
+      useChatStore.getState().setEmbeddedContextSupported('s1', false)
+      expect(useChatStore.getState().states['s1'].embeddedContextSupported).toBe(false)
     })
   })
 
@@ -722,5 +771,135 @@ describe('turnClock 接线（计时器与 sending / 审批队列同生命周期�
   it('无在建 turn 时审批帧 no-op', () => {
     useChatStore.getState().setPermission('s1', perm('p1'))
     expect(turnElapsedMs('s1')).toBeNull()
+  })
+})
+
+// 流式 prose 合并策略：修复「同一次 agent 思考被切成多个 ◆ thinking 折叠块」。
+//
+// 实测 codebuddy（ACP 实现之一）把同一 turn 的 reasoning（agent_thought_chunk）与
+// message（agent_message_chunk）两条逻辑流按 token 粒度交错下发，且两条流共用同一
+// messageId。旧策略「只与紧邻块合并」会把一段连续思考切成成百上千个 thinking 块
+// （tps 越高交错越密，故用户观察「高输出速度时更明显」）。
+//
+// 新策略：同一 prose 区域（连续 text/thought 块）内按类型累积；tool_call/plan 等
+// 结构化块终止区域，工具前后的推理各自成块（保留「想→做→想」的转录顺序）。
+describe('流式 prose 块合并（thought 分段修复）', () => {
+  const T = (text: string): SessionUpdateAction => ({ kind: 'appendThought', text })
+  const M = (text: string): SessionUpdateAction => ({ kind: 'appendText', text })
+  const TOOL = (id: string): SessionUpdateAction => ({ kind: 'upsertTool', toolCallId: id })
+
+  const asTypes = (blocks: ContentBlock[]) => blocks.map((b) => b.type)
+  const textAt = (blocks: ContentBlock[], i: number) => (blocks[i] as { text: string }).text
+
+  const replayBlocks = (actions: SessionUpdateAction[]): ContentBlock[] =>
+    buildReplayMessages(actions).flatMap((m) => m.blocks)
+
+  const liveState = (actions: SessionUpdateAction[]) => {
+    useChatStore.setState({ states: {} })
+    useChatStore.getState().applyReplayBatch('s1', actions)
+    return useChatStore.getState().states['s1']
+  }
+
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('thought,thought → 单块累积', () => {
+    const blocks = replayBlocks([T('思考'), T('续写')])
+    expect(asTypes(blocks)).toEqual(['thought'])
+    expect(textAt(blocks, 0)).toBe('思考续写')
+  })
+
+  it('thought,空 text,thought → 空块不落地，仍是单块（假设 A/D）', () => {
+    const blocks = replayBlocks([T('思考'), M(''), T('续写')])
+    expect(asTypes(blocks)).toEqual(['thought'])
+    expect(textAt(blocks, 0)).toBe('思考续写')
+  })
+
+  it('thought,纯空白 text,thought → 空白块被丢弃，不切断思考', () => {
+    const blocks = replayBlocks([T('思考'), M(' '), M('\n'), T('续写')])
+    expect(asTypes(blocks)).toEqual(['thought'])
+    expect(textAt(blocks, 0)).toBe('思考续写')
+  })
+
+  it('thought,text,thought（无工具分隔）→ 合并为 1 思考 + 1 正文，而非 2 个思考块', () => {
+    const blocks = replayBlocks([T('思考一'), M('中间正文'), T('思考二')])
+    expect(asTypes(blocks)).toEqual(['thought', 'text'])
+    expect(textAt(blocks, 0)).toBe('思考一思考二')
+    expect(textAt(blocks, 1)).toBe('中间正文')
+  })
+
+  it('回归：token 粒度交错的 reasoning/正文流只产出一个 thinking 块', () => {
+    // 复刻实测帧序列：thought 与 message 片段逐词交替（同一 prose 区域，无工具）
+    const actions: SessionUpdateAction[] = [
+      T('I now have '), M('现在读取'), T('all the info'), M('关键区域的'),
+      T(' needed. Let me'), M('实现细节：'), T(' also check the'), M(' Sidebar 的'),
+      T(' precedent'), M(' releaseSessionNow'),
+    ]
+    const blocks = replayBlocks(actions)
+    expect(asTypes(blocks)).toEqual(['thought', 'text'])
+    expect(textAt(blocks, 0)).toBe('I now have all the info needed. Let me also check the precedent')
+    expect(textAt(blocks, 1)).toBe('现在读取关键区域的实现细节： Sidebar 的 releaseSessionNow')
+  })
+
+  it('thought,tool,thought → 工具分隔的两个推理段各自成块（区域不跨工具合并）', () => {
+    const blocks = replayBlocks([T('想一'), TOOL('t1'), T('想二')])
+    expect(asTypes(blocks)).toEqual(['thought', 'tool_call', 'thought'])
+    expect(textAt(blocks, 0)).toBe('想一')
+    expect(textAt(blocks, 2)).toBe('想二')
+  })
+
+  it('工具前后各成一段：顺序与块数都稳定', () => {
+    const blocks = replayBlocks([
+      T('a'), M('x'), TOOL('t1'),
+      T('b'), M('y'), TOOL('t2'),
+    ])
+    expect(asTypes(blocks)).toEqual([
+      'thought', 'text', 'tool_call',
+      'thought', 'text', 'tool_call',
+    ])
+    expect(textAt(blocks, 0)).toBe('a')
+    expect(textAt(blocks, 3)).toBe('b')
+  })
+
+  it('live 分帧提交与一次性 replay 结果一致（rAF 批边界不影响合并）', () => {
+    const actions = [T('一'), M('x'), T('二'), M('y'), T('三')]
+    const expected = replayBlocks(actions)
+    useChatStore.setState({ states: {} })
+    // 模拟每 rAF 一批，分批提交
+    useChatStore.getState().applyReplayBatch('s1', actions.slice(0, 2))
+    useChatStore.getState().applyReplayBatch('s1', actions.slice(2, 3))
+    useChatStore.getState().applyReplayBatch('s1', actions.slice(3))
+    const live = useChatStore.getState().states['s1'].messages.flatMap((m) => m.blocks)
+    expect(live).toEqual(expected)
+    expect(asTypes(live)).toEqual(['thought', 'text'])
+  })
+
+  it('appendChunk / appendThought 单块 action 走同一合并策略', () => {
+    useChatStore.getState().appendThought('s1', 'a')
+    useChatStore.getState().appendChunk('s1', 'x')
+    useChatStore.getState().appendThought('s1', 'b')
+    const msg = useChatStore.getState().states['s1'].messages[0]
+    expect(msg.blocks.map((b) => b.type)).toEqual(['thought', 'text'])
+    // 思考不进正文累加器，只累积思考块
+    expect(msg.text).toBe('x')
+    expect((msg.blocks[0] as { text: string }).text).toBe('ab')
+  })
+
+  it('空 / 纯空白 chunk 不新建消息、不产空块', () => {
+    const s = useChatStore.getState()
+    s.appendChunk('s1', '')
+    s.appendChunk('s1', '   \n')
+    s.appendThought('s1', '')
+    expect(useChatStore.getState().states['s1']).toBeUndefined()
+  })
+
+  it('正文累加器 message.text 仍只累积 text chunk', () => {
+    const st = liveState([T('t1'), M('a'), T('t2'), M('b')])
+    const msg = st.messages[0]
+    expect(msg.text).toBe('ab')
+    expect(msg.blocks.map((b) => b.type)).toEqual(['thought', 'text'])
+    expect((msg.blocks[0] as { text: string }).text).toBe('t1t2')
+    expect((msg.blocks[1] as { text: string }).text).toBe('ab')
   })
 })
