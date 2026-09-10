@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatHoverTime, formatWorkDuration } from './formatTime'
+import { formatHoverTime, formatTps, formatWorkDuration } from './formatTime'
 
 // 用本地时区构造 Date（new Date(y, m, d, h, min)），断言在任何时区下都成立。
 describe('formatHoverTime', () => {
@@ -48,5 +48,22 @@ describe('formatWorkDuration', () => {
   it('未知时长返回 null（整行不渲染，区别于 0）', () => {
     expect(formatWorkDuration(null, 'zh-CN')).toBeNull()
     expect(formatWorkDuration(undefined, 'zh-CN')).toBeNull()
+  })
+})
+
+describe('formatTps', () => {
+  it('保留一位小数', () => {
+    expect(formatTps(12.34)).toBe('12.3')
+    expect(formatTps(0.05)).toBe('0.1')
+    expect(formatTps(123.4)).toBe('123.4')
+  })
+
+  it('无有效读数返回 null（调用方整段不渲染）', () => {
+    expect(formatTps(null)).toBeNull()
+    expect(formatTps(undefined)).toBeNull()
+    expect(formatTps(0)).toBeNull()
+    expect(formatTps(-1)).toBeNull()
+    expect(formatTps(Number.NaN)).toBeNull()
+    expect(formatTps(Number.POSITIVE_INFINITY)).toBeNull()
   })
 })

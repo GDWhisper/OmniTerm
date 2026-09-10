@@ -251,6 +251,8 @@
   "chat.msg.waitTime": "等待人工 {{dur}}",
   "chat.msg.working": "工作中 {{dur}}",
   "chat.msg.workingTip": "本地实时估算，定稿以后端结算为准",
+  "chat.msg.tps": "{{tps}} t/s",
+  "chat.msg.tpsTip": "输出速度按本回合输出字符数 ÷ 4 ÷ 工作时长估算，仅供参考",
   "chat.msg.regenerate": "重新生成",
   "chat.status.connecting": "连接中…",
   "chat.status.disconnected": "已断开",

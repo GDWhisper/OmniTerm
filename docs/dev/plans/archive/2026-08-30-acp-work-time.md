@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；偏差见文末「勘误」E1–E12）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；偏差见文末「勘误」E1–E13）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -276,3 +276,14 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - **prompt 已发、气泡未生**（agent 首帧之前）：按用户确认只显乱码行、不加计时器——没有气泡就没有「气泡底部」这个位置。
 
 真机实测（dev :9778，`Pi ACP_0830-1527` 会话恢复后连跑两 turn）：首帧前 `.chat-meta-row` 保持 5 条（无新行），气泡出现后第 6 条只含 `工作中 N秒` 且每秒续跳（3→23、9→48 两轮观测）；乱码流同时正常涨档（16→24→36 字符），两者 `getBoundingClientRect` 恒不交叠，消息列 `scrollWidth − clientWidth = 0`（无横向溢出）；定稿当场替换为 `已工作 49秒`（最后一次实时读数 48秒，偏差亚秒级），动作栏回归。测试后已点「释放智能体进程」把会话恢复成 DEAD。
+
+### E13 — 追加 tps（token/s）估算与元信息行对齐切换（2026-09-10）
+
+用户在 E12 基础上追加两点，均落在同一 `chat.meta-row` 槽位：
+
+- **tps 显示**：流式期显实时读数、定稿后显最终值。ACP 侧核查确认**无任何原生 output token 字段**——`usage_update` 只有 `used`/`size`/`cost`（上下文配额，见 `docs/reference/acp-protocol-reference.md` §6.7），后端 `src/acp/` 无 token 记账，前端 `setUsage` 也只喂 `ConfigToolbar` 的配额条。故按用户拍板用估算：`tps = 本 turn 输出字符数 / 4 / 工作时长(秒)`。
+- **口径复用**：工作时长直接取 `utils/turnClock.ts` 的 `turnElapsedMs`（已扣审批挂起），不另造第二套。新增 `addOutputChars`（在 `useAcpChat.ts` 的 `dispatchFrame` 对 `appendText`/`appendThought` 两条 live 路径累加，历史重放与 seq 去重丢弃的帧不计）、`turnTps`（实时）、`computeTps`（纯函数，边界 0 字符 / 0 时长 → `null`）。
+- **最终值保留**：`endTurn` 删条目前先把 tps 快照进有界表 `finalTpsBySession`（同 `MAX_TRACKED_TURNS` 淘汰），`finalTps(sessionId)` 读取。0 输出定稿把快照**清空**（不是保留旧值——快照按会话存，保留会错配到新消息行）。
+- **呈现**：界面只出数字（`12.3 t/s`），「估算」只写进 tooltip（`chat.msg.tpsTip`）。定稿值只挂在最后一条 assistant 消息（`isLastAssistant`），避免旧消息重渲染时读到新 turn 的快照。
+- **对齐切换**：`CHAT_META_TEXT_STYLE` 移除恒定的 `marginLeft:auto`，拆出 `CHAT_META_RIGHT` 只加在结算值上。流式期动作栏恒空（五动作硬排 streaming）→ 实时读数靠左；定稿后动作栏回归左侧、结算值顶右。左右只在定稿瞬间变一次，流式全程停同侧。
+- **仍不入库**：tps 只渲染，刷新即失（历史行无字符数可算），与 E12 的本地估算同性质。
