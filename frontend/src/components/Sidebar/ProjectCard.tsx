@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
@@ -8,7 +8,9 @@ import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
-import { EditButton, DeleteButton, ReleaseButton, ArchiveButton } from './RowActionButtons'
+import { DeleteButton, EditButton } from './RowActionButtons'
+import { SessionRow } from './SessionRow'
+import type { ContextMenuPoint } from './SessionContextMenu'
 import type { RenameTarget } from './RenameDialog'
 import type { DeleteTarget } from './DeleteConfirmDialog'
 import type { DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -37,11 +39,29 @@ export function ProjectCard(props: {
   onDeleteSession: (target: DeleteTarget) => void
   onReleaseRequest: (session: Session) => void
   onArchiveRequest: (session: Session) => void
+  /** 批量选择模式：会话行显示勾选框、点击改为切换选中（不激活会话）。 */
+  selectionMode: boolean
+  /** 选择模式下已选中的会话 id 集。 */
+  selectedIds: Set<string>
+  onToggleSessionSelection: (sessionId: string) => void
+  onSessionContextMenu: (session: Session, point: ContextMenuPoint) => void
 }) {
   const { t } = useTranslation()
   const attention = useAttention()
   const pixelAnimationsEnabled = useAppStore((s) => s.pixelAnimationsEnabled)
   const activateSession = useAppStore((s) => s.activateSession)
+  const isMobile = useAppStore((s) => s.isMobile)
+
+  // 会话激活 = activateSession + 清除该会话 attention 提醒（原内联 click 逻辑）。
+  // useCallback + 稳定的 attention.setActive 保证 SessionRow 的 memo 契约。
+  const setAttentionActive = attention.setActive
+  const handleActivateSession = useCallback(
+    (sessionId: string) => {
+      activateSession(sessionId)
+      setAttentionActive(sessionId)
+    },
+    [activateSession, setAttentionActive],
+  )
 
   // 哪些 worktree 的 ACP 会话列表被手动展开（默认折叠到阈值）。组件本地状态，
   // 刷新后回到折叠态——折叠是密度优化，不是用户需要持久化的信息。
@@ -214,11 +234,9 @@ export function ProjectCard(props: {
                 : []
 
               const renderSessionRow = (s: Session) => {
-                const isSessionActive = props.activeSessionId === s.id
-                const sessionKey = s.id
-                const attnReason = attention.reasonFor(sessionKey)
                 // tmux 的 agent_state 与 ACP 的 chatStore 派生状态归一，
-                // 状态点/tooltip 两类会话表现一致
+                // 状态点/tooltip 两类会话表现一致。折叠豁免判定（上方 visibleAcpIds）
+                // 与行内 live 强调（SessionRow）复用同一 sessionStatus 真源。
                 const activity =
                   s.runtime_kind === 'acp'
                     ? props.acpActivityFor(s.id)
@@ -227,128 +245,23 @@ export function ProjectCard(props: {
                       : s.agent_state === 'running' || s.is_active
                         ? 'running'
                         : undefined
-                // 折叠豁免让「活跃但很老」的会话露在可见区底部，位置本身不携带信息。
-                // 排序保持 created_at DESC 不动（置顶会在状态跳变时整行跳动），
-                // 改用文字色阶 + 状态点呼吸把它标出来；live 判定复用 sessionStatus，
-                // 与 worktree 聚合状态同一真源。
-                const status = sessionStatus(s, attnReason, props.acpActivityFor(s.id))
-                const isLive = status === 'working' || status === 'blocked'
-                const dotColor = attnReason
-                  ? attnReason === 'decision'
-                    ? 'var(--warning)'
-                    : attnReason === 'error'
-                      ? 'var(--danger)'
-                      : 'var(--success)'
-                  : activity === 'waiting'
-                    ? 'var(--warning)'
-                    : activity === 'running'
-                      ? 'var(--accent)'
-                      : 'var(--text-faint)'
                 return (
-                  <div
+                  <SessionRow
                     key={s.id}
-                    className={`sidebar-session-item ${isSessionActive ? 'active' : ''}`}
-                    onClick={() => {
-                      activateSession(s.id)
-                      attention.setActive(sessionKey)
-                    }}
-                  >
-                    {/* ACP kind badge — 绝对定位叠加在左侧 28px 缩进槽，不占行内布局；
-                        绿字=进程驻留（未释放），灰字=已释放 */}
-                    {s.runtime_kind === 'acp' && (
-                      <span
-                        className="status-badge-3d font-pixel"
-                        style={{
-                          position: 'absolute',
-                          left: -22,
-                          top: '50%',
-                          transform: 'translateY(-50%)',
-                          padding: '1px 3px',
-                          background: 'var(--wood-shadow, #3A2E1F)',
-                          fontSize: 8,
-                          lineHeight: '10px',
-                          color: s.acp_process_alive ? '#7EE787' : 'var(--text-faint)',
-                        }}
-                        title={
-                          s.acp_process_alive
-                            ? t('sidebar.acpRunning')
-                            : t('sidebar.acpReleased')
-                        }
-                      >
-                        A
-                      </span>
-                    )}
-                    {/* Running indicator dot */}
-                    <div
-                      className={`flex-shrink-0${isLive ? ' activity-pulse' : ''}`}
-                      style={{
-                        width: 6,
-                        height: 6,
-                        background: dotColor,
-                      }}
-                      title={
-                        activity === 'waiting'
-                          ? t('sidebar.agentWaiting')
-                          : undefined
-                      }
-                    />
-                    <span className={`session-name${isLive ? ' session-name-live' : ''}`}>
-                      {s.name || s.tmux_session_name}
-                    </span>
-                    {/* Attention badge */}
-                    {attnReason && (
-                      <span
-                        className="session-attn animate-pulse"
-                        style={{
-                          color: attnReason === 'decision'
-                            ? 'var(--warning)'
-                            : attnReason === 'error'
-                              ? 'var(--danger)'
-                              : 'var(--success)',
-                        }}
-                        title={
-                          attnReason === 'decision' ? t('sidebar.attnDecision') :
-                          attnReason === 'error' ? t('sidebar.attnError') : t('sidebar.attnDone')
-                        }
-                      >
-                        {attnReason === 'decision' ? '⏳' : attnReason === 'error' ? '⚠' : '✓'}
-                      </span>
-                    )}
-                    {/* Release 按钮仅在进程驻留时可用——已释放会话无可释放对象 */}
-                    {s.runtime_kind === 'acp' && s.acp_process_alive && (
-                      <ReleaseButton
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          props.onReleaseRequest(s)
-                        }}
-                      />
-                    )}
-                    {/* 归档仅对 ACP 会话开放（终端会话无历史可冷藏） */}
-                    {s.runtime_kind === 'acp' && (
-                      <ArchiveButton
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          props.onArchiveRequest(s)
-                        }}
-                      />
-                    )}
-                    <EditButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        props.onRename({ type: 'session', id: s.id, name: s.name || '' })
-                      }}
-                    />
-                    <DeleteButton
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        props.onDeleteSession({
-                          type: 'session',
-                          id: s.id,
-                          name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
-                        })
-                      }}
-                    />
-                  </div>
+                    session={s}
+                    isActive={props.activeSessionId === s.id}
+                    attnReason={attention.reasonFor(s.id)}
+                    activity={activity}
+                    selectionMode={props.selectionMode}
+                    isSelected={props.selectedIds.has(s.id)}
+                    isMobile={isMobile}
+                    onActivate={handleActivateSession}
+                    onToggleSelect={props.onToggleSessionSelection}
+                    onContextMenu={props.onSessionContextMenu}
+                    onReleaseRequest={props.onReleaseRequest}
+                    onArchiveRequest={props.onArchiveRequest}
+                    onDeleteRequest={props.onDeleteSession}
+                  />
                 )
               }
 

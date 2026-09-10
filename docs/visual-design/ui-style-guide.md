@@ -407,6 +407,29 @@ Rules:
 | `<select>` / 文本输入 | `border-radius: 0`，边框 `var(--border-strong)` |
 | checkbox / radio | 允许原生 + `accentColor` 主题化（深度定制收益低，暂不强制） |
 
+### 6.3 上下文菜单（右键 / 长按）与批量操作栏
+
+**上下文菜单**（Sidebar 会话行，`SessionContextMenu.tsx`）：
+
+| 元素 | 规格 |
+|------|------|
+| 容器 | `.pixel-float`（§6.1）+ `--bg-elevated`；`padding: 4px 0`，`min-width: 160px` |
+| 条目 | `.context-menu-item`：reader 字体 13px，`padding: 9px 14px`，图标 14px（§13.1 线性图标） |
+| 条目 hover / focus | 背景 `var(--accent-10)`，文字 `var(--accent)` |
+| 定位 | 锚点坐标 + 视口 clamp（右/下缘各留 4px）；移动端长按取触点坐标 |
+| 关闭 | 全屏遮罩点击/触摸、Esc、执行动作后（遮罩与菜单自身 `contextmenu` 也 preventDefault） |
+
+**批量操作栏**（选择模式下替换底部状态栏，`BatchActionBar.tsx`）：
+
+| 元素 | 规格 |
+|------|------|
+| 容器 | 与常规状态栏同一 `.absolute bottom-0` 定位与 padding，`border-top: 1px solid var(--border-subtle)` |
+| 已选计数 | `.font-pixel` 11px + `var(--pixel-tracking-sm)`，`--text-secondary`，`nowrap` |
+| 操作按钮 | 小号文本按钮走 `.pixel-press`（§6.1）；`padding: 3px 7px`、11px；默认 `--bg-elevated` + 1px `--border-strong` |
+| 危险按钮（删除） | 边框/文字 `var(--danger)`，hover 背景 `var(--danger-12)` |
+| 禁用 | `opacity: 0.45` + `cursor: not-allowed`（`.pixel-press:disabled` 无阴影） |
+| 取消 | 24×24 图标按钮（`IconX`），样式与行内 action 按钮一致 |
+
 ---
 
 ## 7. Game UI Elements

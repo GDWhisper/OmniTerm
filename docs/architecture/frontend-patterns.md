@@ -131,6 +131,43 @@
 **代价**：`visible` 的边界条件集中后，迁移旧内联动作时若漏掉一条会回归
 （注册表文件的 JSDoc 已列边界清单，验收测试覆盖 memo 契约不被破坏）。
 
+## 会话行上下文菜单与批量选择态 (context-menu convention)
+
+**适用场景**：列表行的动作菜单需要同时服务桌面（右键）与移动端（长按），
+且菜单里存在「进入多选模式」这类必须提升到列表容器的一级动作。
+（纯 hover 动作条不适用——那是 `MessageActionBar` 的形态。）
+
+**约定**（实现见 `frontend/src/components/Sidebar/SessionContextMenu.tsx` /
+`SessionRow.tsx` / `BatchActionBar.tsx` / `BatchSessionDialog.tsx`，计划
+`docs/dev/plans/2026-09-10-sidebar-session-context-menu.md`）：
+
+- **触发归一**：行组件（`SessionRow`）同时绑定 `onContextMenu`（`preventDefault`）
+  与 `useLongPress`（`disabled: !isMobile || selectionMode`），两者共用同一菜单组件；
+  长按回调带 `hapticTap()`。
+- **长按后补发 click 必须抑制**：浏览器在 touchend 后向 touchstart 目标补发一次
+  click，带 onClick 的行会因此误触发（ChatMessage 的长按先例没有 onClick，未覆盖
+  此坑）。用时间戳抑制（`Date.now() - longPressAtRef < 700`），不要用布尔标志——
+  未补发的分支会把下一次正常点击吞掉。
+- **菜单状态提升到列表容器**（Sidebar），菜单是**单实例 portal**（`.pixel-float` +
+  全屏遮罩 + Esc + 视口 clamp）；行组件只上报 `(session, point)`。理由：菜单里的
+  一级动作（进入批量选择并预选当前行）要改容器级状态，行内状态表达不了。
+- **选择模式语义切换**：`selectionMode` 为 true 时行点击从「激活」改为「切换勾选」，
+  行首渲染 checkbox（复用 `.fm-checkbox`），行内 action 按钮**条件不渲染**
+  （`.row-action` 在 `pointer: coarse` 下恒显，不能靠 opacity 隐藏）。
+- **memo 契约**：行组件 `memo` + 父级回调 `useCallback` 稳定 + 选中态传**每行布尔值**
+  （`isSelected`）而非整个 `Set`——Set 换引用会让所有行失效，布尔值只让变化的行重渲染。
+- **批量执行**：确认弹窗复用 `ConfirmDialog`（`pre-line` 多行文案承载跳过项提醒，
+  另起一行）；串行 `for` 执行、单条失败继续（错误 toast 归 api client），结束统一
+  刷新 + 汇总 toast + 退出选择模式；执行期间 `onClose` 守卫为 no-op 防误关。
+
+**已有案例**：Sidebar 会话行 —— 菜单「批量操作 / 重命名」，批量归档·释放进程·删除。
+
+**收益**：新增行级动作 = 菜单加一项，两套触发（右键 / 长按）零改动。
+**代价**：状态提升 + memo 契约要求回调稳定；新增回调忘了 `useCallback` 会静默
+拖慢列表（每勾选一次全列表重渲染）。
+
+---
+
 ## Sidebar 底部按钮弹出面板 (sidebar-popup convention)
 
 **适用场景**：Sidebar 底部状态栏新增按钮 → 点击弹出 fixed 面板。

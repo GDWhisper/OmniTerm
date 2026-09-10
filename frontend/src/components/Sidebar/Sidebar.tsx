@@ -25,6 +25,9 @@ import { CreateProjectModal } from './CreateProjectModal'
 import { CreateWorktreeModal } from './CreateWorktreeModal'
 import { ExternalSessionsSection } from './ExternalSessionsSection'
 import { ArchivedSessionsSection } from './ArchivedSessionsSection'
+import { SessionContextMenu, type ContextMenuPoint, type SessionContextMenuState } from './SessionContextMenu'
+import { BatchActionBar } from './BatchActionBar'
+import { BatchSessionDialog, type BatchAction, type BatchTarget } from './BatchSessionDialog'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import type { Session } from '../../api/client'
 import { SidebarBottomButton } from './RowActionButtons'
@@ -99,6 +102,14 @@ export function Sidebar() {
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
+  // 会话右键/长按菜单 + 批量选择模式（Sidebar 局部 UI 态，见计划文档 D5）：
+  // - contextMenu：单一菜单实例的锚点与目标会话
+  // - selectionMode / selectedSessionIds：批量选择开关与勾选集
+  // - batchTarget：批量确认弹窗的动作与目标会话
+  const [contextMenu, setContextMenu] = useState<SessionContextMenuState | null>(null)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set())
+  const [batchTarget, setBatchTarget] = useState<BatchTarget | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<DeleteTarget | null>(null)
   const [confirmRelease, setConfirmRelease] = useState<ReleaseTarget | null>(null)
   // 归档确认（仅在 agent 进程驻留时弹出；null = 关闭）
@@ -471,6 +482,57 @@ export function Sidebar() {
     }
   }
 
+  // ── 会话右键/长按菜单 + 批量选择模式回调 ──
+  // handleSessionContextMenu / handleToggleSessionSelection 直传 SessionRow，
+  // 必须稳定引用（SessionRow 是 memo 组件，见 SessionRow.tsx 顶部注释）。
+  const handleSessionContextMenu = useCallback((session: Session, point: ContextMenuPoint) => {
+    setContextMenu({ session, x: point.x, y: point.y })
+  }, [])
+
+  const handleToggleSessionSelection = useCallback((sessionId: string) => {
+    setSelectedSessionIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(sessionId)) next.delete(sessionId)
+      else next.add(sessionId)
+      return next
+    })
+  }, [])
+
+  // 菜单「批量操作」：进入选择模式并预选该会话（右键/长按的那一行）
+  const handleEnterBatchMode = useCallback((session: Session) => {
+    setSelectionMode(true)
+    setSelectedSessionIds(new Set([session.id]))
+  }, [])
+
+  // 菜单「重命名」：复用 RenameDialog（入口从行内铅笔按钮迁移至此）
+  const handleRenameSession = useCallback((session: Session) => {
+    setRenameTarget({ type: 'session', id: session.id, name: session.name || '' })
+  }, [])
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), [])
+  const closeBatchDialog = useCallback(() => setBatchTarget(null), [])
+
+  const handleExitBatchMode = useCallback(() => {
+    setSelectionMode(false)
+    setSelectedSessionIds(new Set())
+  }, [])
+
+  // 批量执行完成：退出选择模式并刷新两个列表（归档区块同步）
+  const handleBatchDone = useCallback(async () => {
+    setSelectionMode(false)
+    setSelectedSessionIds(new Set())
+    await Promise.all([loadSessions(), loadArchived()])
+  }, [loadSessions, loadArchived])
+
+  // 选择集对应的会话对象（计数与批量目标都以此为准，避免选中集与列表脱节）
+  const selectedSessionList = Object.values(sessions).flat().filter((s) => selectedSessionIds.has(s.id))
+  // 归档/释放仅对 ACP 会话有效；release 对已释放会话幂等（见计划 D6），无需按 alive 过滤
+  const selectedAcpCount = selectedSessionList.filter((s) => s.runtime_kind === 'acp').length
+
+  const handleBatchAction = (action: BatchAction) => {
+    setBatchTarget({ action, sessions: selectedSessionList })
+  }
+
   if (sidebarCollapsed) {
     return (
       <div
@@ -671,6 +733,10 @@ export function Sidebar() {
                 else releaseSessionNow(s.id)
               }}
               onArchiveRequest={requestArchive}
+              selectionMode={selectionMode}
+              selectedIds={selectedSessionIds}
+              onToggleSessionSelection={handleToggleSessionSelection}
+              onSessionContextMenu={handleSessionContextMenu}
             />
           ))
         )}
@@ -693,7 +759,16 @@ export function Sidebar() {
         />
       </div>
 
-      {/* Bottom status bar */}
+      {/* Bottom bar — 批量选择模式下替换为操作栏（保持同一 absolute 定位节点） */}
+      {selectionMode ? (
+        <BatchActionBar
+          selectedCount={selectedSessionList.length}
+          archivableCount={selectedAcpCount}
+          releasableCount={selectedAcpCount}
+          onAction={handleBatchAction}
+          onCancel={handleExitBatchMode}
+        />
+      ) : (
       <div
         className="absolute bottom-0 left-0 right-0 px-3.5 py-3 flex items-center justify-between"
         style={{ borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-base)' }}
@@ -764,6 +839,7 @@ export function Sidebar() {
           </a>
         </div>
       </div>
+      )}
 
       {/* ── Create Project Modal ── */}
       <CreateProjectModal
@@ -853,6 +929,21 @@ export function Sidebar() {
           loadProjects()
           loadSessions()
         }}
+      />
+
+      {/* ── 会话右键（桌面）/ 长按（移动端）上下文菜单 ── */}
+      <SessionContextMenu
+        menu={contextMenu}
+        onClose={closeContextMenu}
+        onBatchMode={handleEnterBatchMode}
+        onRename={handleRenameSession}
+      />
+
+      {/* ── 批量操作确认弹窗（归档 / 释放进程 / 删除）── */}
+      <BatchSessionDialog
+        target={batchTarget}
+        onClose={closeBatchDialog}
+        onDone={handleBatchDone}
       />
     </div>
   )

@@ -16,12 +16,16 @@ vi.mock('../../api/client', () => ({
     systemInfo: vi.fn().mockResolvedValue({ home_dir: '/home/user' }),
     multiplexerStatus: vi.fn().mockResolvedValue({ available: true }),
     listDuplicates: vi.fn().mockResolvedValue([]),
+    listArchivedSessions: vi.fn().mockResolvedValue([]),
     createSession: vi.fn(),
     createWorktree: vi.fn(),
     listBranches: vi.fn(),
     initGit: vi.fn(),
     listDirs: vi.fn().mockResolvedValue({ files: [] }),
     pathExists: vi.fn().mockResolvedValue({ exists: true }),
+    archiveSession: vi.fn().mockResolvedValue({ ok: true }),
+    releaseSession: vi.fn().mockResolvedValue({ ok: true }),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
     versionCheck: vi.fn().mockResolvedValue({ current: '0.1.9', latest: '0.1.9', update_available: false, channel: 'github_release' }),
   },
   ApiError: class ApiError extends Error {
@@ -402,5 +406,174 @@ describe('Sidebar handleCreateSession', () => {
     })
     // Original (invalid) path is surfaced in the dialog
     expect(document.body.textContent).toContain(broken.path)
+  })
+})
+
+describe('Sidebar 批量操作', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+
+  const acpSession = {
+    id: 'acp-1',
+    project_id: 'proj-1',
+    workspace_path: '/home/user/test-project',
+    tmux_session_name: 'omni-acp-1',
+    name: 'acp-session',
+    runtime_kind: 'acp' as const,
+    acp_process_alive: true,
+    hook_enabled: false,
+    created_at: '2026-01-02T00:00:00Z',
+  }
+  const termSession = {
+    id: 'term-1',
+    project_id: 'proj-1',
+    workspace_path: '/home/user/test-project',
+    tmux_session_name: 'omni-term-1',
+    name: 'term-session',
+    runtime_kind: 'tmux' as const,
+    hook_enabled: false,
+    created_at: '2026-01-01T00:00:00Z',
+  }
+
+  beforeEach(async () => {
+    localStorage.clear()
+    vi.clearAllMocks()
+
+    const { api } = await import('../../api/client')
+    vi.mocked(api.listProjects).mockResolvedValue([fakeProject])
+    vi.mocked(api.listWorktrees).mockResolvedValue([fakeWorkspace])
+    vi.mocked(api.listSessions).mockResolvedValue([acpSession, termSession])
+    vi.mocked(api.listArchivedSessions).mockResolvedValue([])
+    vi.mocked(api.archiveSession).mockResolvedValue({ ok: true })
+    vi.mocked(api.releaseSession).mockResolvedValue({ ok: true })
+    vi.mocked(api.deleteSession).mockResolvedValue(undefined)
+
+    // expandAllSessions=true：含会话的项目自动展开，会话行无需手动点击
+    useAppStore.setState({
+      projects: [fakeProject],
+      worktrees: { [fakeProject.id]: [fakeWorkspace] },
+      sessions: {},
+      activeProjectId: fakeProject.id,
+      activeWorkspaceId: fakeWorkspace.id,
+      activeSessionId: null,
+      activeExternalSession: null,
+      sidebarCollapsed: false,
+      connected: true,
+      workspaceSessionMemory: {},
+      expandAllSessions: true,
+    })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    root.unmount()
+    document.body.removeChild(container)
+    localStorage.clear()
+  })
+
+  async function renderSidebar() {
+    i18n.changeLanguage('en')
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.sidebar-session-item').length).toBe(2)
+    })
+  }
+
+  function sessionRow(name: string): HTMLElement {
+    const nameEl = [...container.querySelectorAll('.session-name')].find((n) => n.textContent === name)
+    expect(nameEl, `会话行未渲染: ${name}`).toBeTruthy()
+    return nameEl!.closest('.sidebar-session-item') as HTMLElement
+  }
+
+  async function openContextMenu(name: string) {
+    sessionRow(name).dispatchEvent(
+      new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 20, clientY: 30 }),
+    )
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('.context-menu-item')).toBeTruthy()
+    })
+  }
+
+  async function clickMenuItem(label: string) {
+    let btn: Element | undefined
+    await vi.waitFor(() => {
+      btn = [...document.body.querySelectorAll('.context-menu-item')].find(
+        (b) => b.textContent === label,
+      )
+      expect(btn, `菜单项未渲染: ${label}`).toBeTruthy()
+    })
+    ;(btn as HTMLElement).click()
+  }
+
+  function batchButton(label: string): HTMLButtonElement {
+    const btn = [...container.querySelectorAll('button')].find((b) => b.textContent === label)
+    expect(btn, `批量按钮未渲染: ${label}`).toBeTruthy()
+    return btn as HTMLButtonElement
+  }
+
+  it('右键 → 批量操作 → 混选归档：弹窗提示跳过终端，仅对 ACP 调 API', async () => {
+    await renderSidebar()
+
+    // 右键 ACP 会话行 → 菜单
+    await openContextMenu('acp-session')
+    await clickMenuItem('Batch Actions')
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('1 selected')
+    })
+
+    // 选择模式下点击终端行 = 切换选中（不激活会话）
+    sessionRow('term-session').click()
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('2 selected')
+    })
+
+    const archiveBtn = batchButton('Archive')
+    expect(archiveBtn.disabled).toBe(false)
+    archiveBtn.click()
+
+    // 混合选择：弹窗另起一行提示终端会话将被跳过
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('1 terminal session(s) do not support this action')
+    })
+
+    const modal = document.body.querySelector('.corner-nails') as HTMLElement
+    expect(modal).toBeTruthy()
+    const confirmBtn = [...modal.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Archive',
+    ) as HTMLButtonElement
+    expect(confirmBtn).toBeTruthy()
+    confirmBtn.click()
+
+    await vi.waitFor(() => {
+      expect(api.archiveSession).toHaveBeenCalledWith('acp-1')
+    })
+    expect(api.archiveSession).toHaveBeenCalledTimes(1)
+    expect(api.deleteSession).not.toHaveBeenCalled()
+
+    // 执行完成自动退出选择模式（操作栏让位回连接状态栏）
+    await vi.waitFor(() => {
+      expect(container.textContent).not.toContain('2 selected')
+    })
+  })
+
+  it('全终端选择时归档/释放按钮禁用，删除可用', async () => {
+    await renderSidebar()
+
+    await openContextMenu('term-session')
+    await clickMenuItem('Batch Actions')
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain('1 selected')
+    })
+
+    expect(batchButton('Archive').disabled).toBe(true)
+    expect(batchButton('Release').disabled).toBe(true)
+    expect(batchButton('Delete').disabled).toBe(false)
   })
 })

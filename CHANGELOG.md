@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- (2026-09-10 23:29) `[frontend]` 侧栏会话行新增右键（桌面）/ 长按（移动端）上下文菜单：菜单含「批量操作」与「重命名」，行内铅笔按钮移除、重命名入口统一收敛到菜单。「批量操作」进入多选模式（终端与 ACP 会话可混选），底部状态栏切换为操作栏，支持批量**归档 / 释放进程 / 删除**，三者均二次确认；终端会话没有归档与释放语义，混合选择时确认弹窗另起一行提示跳过数量，可执行数为 0 时对应按钮禁用。批量执行串行进行、单条失败不中断，结束后刷新列表并退出选择模式；释放/归档/删除逐条复刻单条链路的活跃态清理（`markEnded` / `setActiveSession(null)` / `workspaceSessionMemory`）。长按后抬手会补发 click，已做抑制避免误激活会话（`frontend/src/components/Sidebar/{Sidebar,ProjectCard,SessionRow,SessionContextMenu,BatchActionBar,BatchSessionDialog}.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/{zh,en}/translation.json`）
+
 ## [0.2.21] - 2026-09-09
 
 ### Added
