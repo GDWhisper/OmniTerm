@@ -474,6 +474,80 @@ const turnAnchorMs = (state: ChatStoreState, sessionId: string): number => {
   return last && last.role === 'assistant' && last.streaming ? Math.min(now, last.createdAt) : now
 }
 
+/** 流式 prose（正文/思考）块类型；它们之间可跨类型累积，见 appendProseBlock。 */
+type ProseKind = 'text' | 'thought'
+
+/**
+ * 把一段流式正文（text）或思考（thought）追加进当前消息的 blocks。
+ *
+ * 合并策略是「同一 prose 区域内按类型累积」，**不是**「只与紧邻块合并」：
+ * 部分 ACP 实现（实测 codebuddy）把同一 turn 的 reasoning 与 message 两条逻辑流
+ * 按 token 粒度交错下发——`agent_thought_chunk` 与 `agent_message_chunk` 逐词交替，
+ * 且两条流共用同一 `messageId`。只跟紧邻块比较时，一段连续思考会被切成成百上千个
+ * 「◆ thinking」块（tps 越高交错越密，用户报告的现象），并在中间夹出大量短正文块。
+ * 按类型累积后，一段思考 = 一个 thinking 块（现有调用方的 append 路径共用本函数，
+ * 保证 live / replay / hydrate 三条路径渲染一致）。
+ *
+ * prose 区域 = 连续的 text/thought 块；遇到 tool_call / plan / todo / system / image
+ * 等结构化块即终止。**跨区域不合并**：工具调用前后的推理是彼此独立的段落，合并会
+ * 打乱「想→做→想」的转录顺序（差异只针对已确证的这类交错，见 AGENTS.md 工程准则 8）。
+ *
+ * 空串/纯空白 chunk：区域内已有同类块则照常追加（保留流式正文里的空格与换行）；
+ * 没有同类块承接时丢弃——追加空串本就是 no-op，独立成块只会渲染成空气泡，并把
+ * 前后思考切断（这正是「思考被分段」的另一条成因）。
+ *
+ * 返回同一数组引用表示「无变化」（调用方据此做整体 no-op）。
+ */
+const appendProseBlock = (blocks: ContentBlock[], kind: ProseKind, chunk: string): ContentBlock[] => {
+  let idx = blocks.length - 1
+  while (idx >= 0) {
+    const b = blocks[idx]
+    if (b.type !== 'text' && b.type !== 'thought') break
+    if (b.type === kind) {
+      const merged = [...blocks]
+      merged[idx] = { ...b, text: b.text + chunk }
+      return merged
+    }
+    idx--
+  }
+  if (chunk.trim() === '') return blocks
+  return [...blocks, { type: kind, text: chunk }]
+}
+
+/**
+ * 把一段流式正文/思考追加到消息列表末尾的在建 assistant 消息（`streaming`），
+ * 没有则新建一条。合并语义见 appendProseBlock；结果与 `appendChunk` /
+ * `appendThought` 单块 action 完全一致，三个入口共用，避免策略漂移。
+ */
+const appendProseToMessages = (
+  messages: ChatMessage[],
+  kind: ProseKind,
+  chunk: string,
+): ChatMessage[] => {
+  if (chunk === '') return messages
+  const next = [...messages]
+  const last = next[next.length - 1]
+  if (last && last.role === 'assistant' && last.streaming) {
+    const blocks = appendProseBlock(last.blocks, kind, chunk)
+    if (blocks === last.blocks) return messages
+    next[next.length - 1] = kind === 'text'
+      ? { ...last, text: last.text + chunk, blocks }
+      : { ...last, blocks }
+    return next
+  }
+  const blocks = appendProseBlock([], kind, chunk)
+  if (blocks.length === 0) return messages
+  next.push({
+    id: genId(),
+    role: 'assistant',
+    text: kind === 'text' ? chunk : '',
+    blocks,
+    createdAt: Date.now(),
+    streaming: true,
+  })
+  return next
+}
+
 /**
  * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
  * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
@@ -484,50 +558,13 @@ const applyActionsToMessages = (
   messages: ChatMessage[],
   actions: SessionUpdateAction[],
 ): ChatMessage[] => {
-  const next = [...messages]
+  // 浅拷贝一次兜底：非 prose 分支就地改 `next`，prose 分支则整段替换为新数组。
+  let next = [...messages]
   for (const action of actions) {
     if (action.kind === 'appendText') {
-      const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'text') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + action.text }
-        } else {
-          blocks.push({ type: 'text', text: action.text })
-        }
-        next[next.length - 1] = { ...last, text: last.text + action.text, blocks }
-      } else {
-        next.push({
-          id: genId(),
-          role: 'assistant',
-          text: action.text,
-          blocks: [{ type: 'text', text: action.text }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      next = appendProseToMessages(next, 'text', action.text)
     } else if (action.kind === 'appendThought') {
-      const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'thought') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + action.text }
-        } else {
-          blocks.push({ type: 'thought', text: action.text })
-        }
-        next[next.length - 1] = { ...last, blocks }
-      } else {
-        next.push({
-          id: genId(),
-          role: 'assistant',
-          text: '',
-          blocks: [{ type: 'thought', text: action.text }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      next = appendProseToMessages(next, 'thought', action.text)
     } else if (action.kind === 'upsertTool') {
       // ADR-4: 编辑类工具完成 → 提示 git 面板刷新
       if (action.status === 'completed') {
@@ -667,58 +704,16 @@ export const useChatStore = create<ChatStore>((set) => ({
   appendChunk: (sessionId, chunk) =>
     set((state) => {
       const current = get(state, sessionId)
-      const messages = [...current.messages]
-      const last = messages[messages.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'text') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + chunk }
-        } else {
-          blocks.push({ type: 'text', text: chunk })
-        }
-        messages[messages.length - 1] = {
-          ...last,
-          text: last.text + chunk,
-          blocks,
-        }
-      } else {
-        messages.push({
-          id: genId(),
-          role: 'assistant',
-          text: chunk,
-          blocks: [{ type: 'text', text: chunk }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      const messages = appendProseToMessages(current.messages, 'text', chunk)
+      if (messages === current.messages) return state
       return patch(state, sessionId, { messages })
     }),
 
   appendThought: (sessionId, chunk) =>
     set((state) => {
       const current = get(state, sessionId)
-      const messages = [...current.messages]
-      const last = messages[messages.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
-        const blocks = [...last.blocks]
-        const lastBlock = blocks[blocks.length - 1]
-        if (lastBlock && lastBlock.type === 'thought') {
-          blocks[blocks.length - 1] = { ...lastBlock, text: lastBlock.text + chunk }
-        } else {
-          blocks.push({ type: 'thought', text: chunk })
-        }
-        messages[messages.length - 1] = { ...last, blocks }
-      } else {
-        messages.push({
-          id: genId(),
-          role: 'assistant',
-          text: '',
-          blocks: [{ type: 'thought', text: chunk }],
-          createdAt: Date.now(),
-          streaming: true,
-        })
-      }
+      const messages = appendProseToMessages(current.messages, 'thought', chunk)
+      if (messages === current.messages) return state
       return patch(state, sessionId, { messages })
     }),
 
