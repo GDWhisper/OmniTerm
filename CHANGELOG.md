@@ -51,7 +51,13 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-09-11 00:02) `[frontend]` ACP 消息元信息行新增 tps（token/s）读数：流式期间与「工作中」计时同行实时跳动，turn 定稿后换成该轮平均 tps 与结算耗时并列。ACP 协议无输出 token 数据源（`usage_update` 只是上下文配额 used/size/cost），按「输出字符数/4 ÷ 工作时长」估算，界面只显示数字，估算口径写在 hover tooltip；字符累加挂在 live 帧分类处（重放与 seq 去重丢弃的帧不计），计时/统计仍走模块级 turnClock 直写 DOM，不进 React state（`frontend/src/utils/{turnClock,formatTime}.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/locales/{zh,en}/translation.json`）
+- (2026-09-11 00:02) `[frontend]` 聊天区新增底部居中置底提示条：用户上翻离开底部后一旦有新内容（新消息/流式扩写/工具状态推进）即显示，点击回底并恢复自动跟随；信号取末条消息内容指纹而非消息条数（上拉加载历史不误报）与 streaming 标志（收尾翻标志不误报）。桌面与移动端同形态（像素风硬角胶囊、触摸目标 44px），浮于消息区底缘、不遮挡输入区，随布局收缩不被软键盘盖住（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/utils/chatScroll.ts`、`frontend/src/locales/{zh,en}/translation.json`）
 - (2026-09-10 23:29) `[frontend]` 侧栏会话行新增右键（桌面）/ 长按（移动端）上下文菜单：菜单含「批量操作」与「重命名」，行内铅笔按钮移除、重命名入口统一收敛到菜单。「批量操作」进入多选模式（终端与 ACP 会话可混选），底部状态栏切换为操作栏，支持批量**归档 / 释放进程 / 删除**，三者均二次确认；终端会话没有归档与释放语义，混合选择时确认弹窗另起一行提示跳过数量，可执行数为 0 时对应按钮禁用。批量执行串行进行、单条失败不中断，结束后刷新列表并退出选择模式；释放/归档/删除逐条复刻单条链路的活跃态清理（`markEnded` / `setActiveSession(null)` / `workspaceSessionMemory`）。长按后抬手会补发 click，已做抑制避免误激活会话（`frontend/src/components/Sidebar/{Sidebar,ProjectCard,SessionRow,SessionContextMenu,BatchActionBar,BatchSessionDialog}.tsx`、`frontend/src/components/FileManager/icons.tsx`、`frontend/src/index.css`、`frontend/src/locales/{zh,en}/translation.json`）
+
+### Fixed
+
+- (2026-09-11 00:02) `[frontend]` 修复 ACP 思考流被切成多个「◆ thinking」折叠块：部分 ACP agent（实测 codebuddy）按 token 粒度交错下发思考与正文两条流，旧合并逻辑只比较紧邻块，中间任何一个异类块（含空 text 帧）都会让思考另起新块——高输出速度下每秒交错数十次，一段思考碎成十几个块。现抽 `appendProseBlock` 按「同一 prose 区域内累积」合并：向后查找同类块累积（结构化块终止区域、不跨工具合并），空/纯空白 chunk 无同类承接时丢弃；live/replay/hydrate 三入口共用一实现（`frontend/src/stores/chatStore.ts`）
 
 ## [0.2.21] - 2026-09-09
 
