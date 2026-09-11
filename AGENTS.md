@@ -90,6 +90,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/architecture/frontend-patterns.md` | 决定组件结构、复用已有前端架构模式时；**新加状态栏按钮 / sidebar 弹出面板前必读** | 新增前端架构模式 entry、记录已有约定 |
 | `docs/workflows/agent-edit-manual.md` | 接具体修改任务（加命令/改配置/修 bug/加翻译）时，搜目标组件列文件 | 新增「有特殊维护约定的组件」entry、记录修改路径 |
 | `docs/workflows/integration-checklist.md` | 集成新的 spawn 抽象（subprocess / container / FFI）**或**给已有枚举新增变体（`runtime_kind` / `agent_kind` / `project_type`）前**必读** | 新增踩坑案例 / 补检查项 |
+| `docs/workflows/subagent-code-review.md` | 用户要求「用子代理 / 子 agent 审查代码」「review 一下」「复查这段改动」，或实现完成后要一次独立于实现者的评审时**必读**——含可粘贴的审查提示词模板与项目专用审查清单（裸派子代理 = 漏检全部项目红线） | 新增审查维度、调整提示词模板或输出格式 |
 | `docs/workflows/branch-workflows.md` | 执行 git 分支操作（merge、rebase、cherry-pick）、操作多 worktree、执行 sync-main.sh 同步 | 分支策略变更、新增分支类型、安全守则调整 |
 | `docs/workflows/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
 | `docs/workflows/release-guide.md` | 执行正式发布（同步 main、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整、sync-main.sh 黑名单调整 |
