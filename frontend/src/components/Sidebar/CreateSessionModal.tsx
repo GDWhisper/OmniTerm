@@ -305,21 +305,7 @@ export function CreateSessionModal(props: {
                   引擎
                 </label>
                 <div className="flex gap-2">
-                  {/* PTY 引擎卡 */}
-                  <SelectionCard
-                    selected={terminalEngine === 'pty'}
-                    onClick={() => setEngineChoice('pty')}
-                    corner={lastTerminalEngine === 'pty' ? <LastUsedBadge /> : undefined}
-                  >
-                    <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                      {t('sidebar.sessionTypePtyLabel')} <BetaBadge />
-                    </span>
-                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-                      {t('sidebar.sessionTypePtyHint')}
-                    </span>
-                  </SelectionCard>
-
-                  {/* Tmux 引擎卡 */}
+                  {/* Tmux 引擎卡 —— 稳定实现放首位；PTY 仍在 beta，排后 */}
                   <SelectionCard
                     selected={terminalEngine === 'tmux'}
                     onClick={() => {
@@ -335,6 +321,20 @@ export function CreateSessionModal(props: {
                       {multiplexerAvailable
                         ? t('sidebar.sessionTypeTmuxHint')
                         : t('sidebar.muxUnavailable', { mux: multiplexer })}
+                    </span>
+                  </SelectionCard>
+
+                  {/* PTY 引擎卡 */}
+                  <SelectionCard
+                    selected={terminalEngine === 'pty'}
+                    onClick={() => setEngineChoice('pty')}
+                    corner={lastTerminalEngine === 'pty' ? <LastUsedBadge /> : undefined}
+                  >
+                    <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {t('sidebar.sessionTypePtyLabel')} <BetaBadge />
+                    </span>
+                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+                      {t('sidebar.sessionTypePtyHint')}
                     </span>
                   </SelectionCard>
                 </div>
