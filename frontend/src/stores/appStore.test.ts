@@ -259,6 +259,38 @@ describe('appStore disconnect timeout initial values', () => {
   })
 })
 
+describe('appStore default terminal engine', () => {
+  it('defaults to tmux when nothing is stored (pty is still beta)', async () => {
+    localStorage.clear()
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().defaultTerminalEngine).toBe('tmux')
+  })
+
+  it('inherits the legacy last-used engine so existing users keep their choice', async () => {
+    localStorage.clear()
+    localStorage.setItem('omniterm_last_terminal_engine', 'pty')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().defaultTerminalEngine).toBe('pty')
+  })
+
+  it('self-heals a corrupt stored engine to the default', async () => {
+    localStorage.clear()
+    localStorage.setItem('omniterm_default_terminal_engine', 'screen')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().defaultTerminalEngine).toBe('tmux')
+  })
+
+  it('setDefaultTerminalEngine writes state and the new key', () => {
+    localStorage.clear()
+    useAppStore.getState().setDefaultTerminalEngine('pty')
+    expect(useAppStore.getState().defaultTerminalEngine).toBe('pty')
+    expect(localStorage.getItem('omniterm_default_terminal_engine')).toBe('pty')
+  })
+})
+
 describe('appStore expandAllSessions', () => {
 
   beforeEach(() => {

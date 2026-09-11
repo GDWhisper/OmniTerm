@@ -24,11 +24,12 @@ src/
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
 │   ├── useFileWatcher.ts # SSE file watcher for live directory updates
 │   ├── useAcpChat.ts    # Phase 4a: ACP WS lifecycle → chatStore actions
-│   └── useStickScroll.ts # 流式内容滚动锚定（stick-to-bottom）：默认钉底、上翻解除、滚回恢复（ChatMessage thinking/工具块）
+│   ├── useStickScroll.ts # 流式内容滚动锚定（stick-to-bottom）：默认钉底、上翻解除、滚回恢复（ChatMessage thinking/工具块）
+│   └── useTerminalEngine.ts # 默认终端引擎× 宿主复用器可用性 → 实际引擎（「在此打开终端」等无点选环节的入口共用，勿各自读 multiplexerAvailable）
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, viewportController.ts pty 历史视口状态机（方案 C：live/viewport 模式、wheel 接管、rAF 合并、alt-screen 互斥）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, turnClock.ts 在建 turn 实时计时表（按 sessionId 分列、审批挂起冻表、`MAX_TRACKED_TURNS` 有界；刻意不进 zustand——每秒跳动的读数直写 DOM，渲染门控只依赖已有的 `sending`，见 `plans/archive/2026-08-30-acp-work-time.md` E12；本 turn 输出字符计数与 tps 估算同表扩展：`addOutputChars`/`turnTps`（流式实时）与 `finalTps`（定稿快照，0 输出清旧值防错配新消息行））, chatScroll.ts 聊天置底提示条显示判定纯函数（末条消息内容指纹 `chatTailSignature`：上翻离开底部后有内容增长即提示；不含消息条数——上拉历史前插不误报，不含 streaming 标志——markDone 翻标志不误报）, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, viewportController.ts pty 历史视口状态机（方案 C：live/viewport 模式、wheel 接管、rAF 合并、alt-screen 互斥）, swipe.ts 移动端滑动切 tab 手势判定, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, turnClock.ts 在建 turn 实时计时表（按 sessionId 分列、审批挂起冻表、`MAX_TRACKED_TURNS` 有界；刻意不进 zustand——每秒跳动的读数直写 DOM，渲染门控只依赖已有的 `sending`，见 `plans/archive/2026-08-30-acp-work-time.md` E12；本 turn 输出字符计数与 tps 估算同表扩展：`addOutputChars`/`turnTps`（流式实时）与 `finalTps`（定稿快照，0 输出清旧值防错配新消息行））, chatScroll.ts 聊天置底提示条显示判定纯函数（末条消息内容指纹 `chatTailSignature`：上翻离开底部后有内容增长即提示；不含消息条数——上拉历史前插不误报，不含 streaming 标志——markDone 翻标志不误报）, terminalEngine.ts 终端引擎偏好单一真源（默认 tmux、存档白名单解析、旧「上次使用」键一次性继承、`resolveTerminalEngine` 把缺复用器的回落收敛到一处）, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Sidebar/ — Sidebar.tsx（列表渲染+状态提升+右键菜单/批量选择态；行数已超 800 行约定，待拆分）、ProjectCard.tsx（项目树渲染）、SessionRow.tsx（会话行：单击激活 / 选择模式勾选；桌面右键与移动长按触发菜单；含长按后补发 click 抑制）、SessionContextMenu.tsx（portal 上下文菜单：批量操作 / 重命名）、BatchActionBar.tsx（选择模式底部操作栏：已选计数 + 归档/释放/删除/取消）、BatchSessionDialog.tsx（批量操作二次确认 + 串行执行 + 终端跳过语义）、Create{Project,Session,Worktree}Modal.tsx、Rename/Delete{Confirm,Worktree}/ReleaseConfirm/RepairPath 对话框、ExternalSessionsSection.tsx（外部会话轮询+adopt；无右键/长按——行以 tmux name 为键、非 DB id）、ArchivedSessionsSection.tsx（已归档 ACP 会话全局折叠区块——点击只读查看历史/取消归档/删除；无右键/长按，保持只读与主列表的差异；数据存 appStore.archivedSessions，SessionView 与 ChatView 据此兜底解析归档态活跃会话）、DuplicateProjectsDialog.tsx、UpdateBadge.tsx、RowActionButtons.tsx（含 SidebarBottomButton）、sidebarModalStyles.ts、useAgentAttentionPolling.ts
@@ -140,11 +141,27 @@ tmux 与 pty 会话共用 Terminal 组件与 WS 路由，但交互语义按引�
 - 引擎间切换会话时 `Layout::sessionViewKey` 以 runtime_kind 为 key，
   跨引擎切换强制重挂载（pty 的 onScroll 订阅在创建期注册）。
 
-创建入口：`CreateSessionModal` 无 agent 时显示引擎选择器（pty 默认 /
-tmux 可选）；选了 agent 则隐藏（ACP 会话）。tmux 选项由
+创建入口：`CreateSessionModal` 无 agent 时显示引擎选择器（卡位序 tmux 在前、pty 居后带 BETA 角标；初始高亮 = 默认引擎，见下节）；选了 agent 则隐藏（ACP 会话）。tmux 选项由
 `appStore.multiplexerAvailable`（Sidebar 挂载时探测 `/system/multiplexer`，
 503/异常 → false）门控禁用。同一标志也门控 Sidebar external 会话区块
 的渲染与轮询（external 是 tmux 专属能力，D6）。
+
+### 默认终端引擎（设置 → 终端）
+
+pty 引擎仍在 beta 期，因此「新建终端会话用什么引擎」提到为可调设置，而不是写死
+在弹窗与文件管理器里。单一真源在 `utils/terminalEngine.ts`：
+
+| 项 | 值 |
+|---|---|
+| store 字段 | `appStore.defaultTerminalEngine`（`'pty' \| 'tmux'`） |
+| 持久化 | localStorage `omniterm_default_terminal_engine`；新键缺失时一次性继承旧键 `omniterm_last_terminal_engine`（原「记住上次引擎」功能已收编进本设置），两者均非法/缺失 → `tmux` |
+| 入口 | Settings → 终端 `DefaultEngineSection`（两按钮，pty 带 `BetaBadge`；宿主无复用器时 tmux 按钮禁用并提示） |
+| 消费方 | `CreateSessionModal`（初始高亮）、`FileManager` 与 `OpenTerminalDialog` 的「在此打开终端」（经 `useTerminalEngine`） |
+
+两条语义约束：
+
+- **弹窗内显式点选才写回默认值**。未点选 = 沿用现有默认；因宿主缺复用器而落到 pty 不写回——那是环境限制不是用户意图，否则会静默改掉设置里的 tmux 偏好（原「记忆上次引擎」写法如此，收编后不再沿用）。
+- **回落判定不得抄副本**。三处消费点统一走 `resolveTerminalEngine(pref, multiplexerAvailable)` / `useTerminalEngine()`，否则会出现弹窗开 tmux、FM 开 pty 的分裂。
 
 The dispatcher lives in `components/Layout/Layout.tsx::SessionView` — it
 reads `activeSession.runtime_kind` and renders the matching view. Both

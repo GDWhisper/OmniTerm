@@ -536,8 +536,13 @@ assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps �
 | Pixel Animations | `pixelAnimationsEnabled` | `false` | Mario-style bump/stomp/coin/starman animations (Phase 2) |
 | Sound | `soundEnabled` | `false` | 8-bit sound effects (Phase 2) |
 | CRT Scanlines | `crtScanlines` | `false` | CRT scanline overlay (Phase 2) |
+| Default Terminal Engine | `omniterm_default_terminal_engine` | `tmux` | 新建终端会话与「在此打开终端」的引擎（pty 仍在 beta，故 tmux 兜底） |
 
 Pixel UI and pixel fonts are always active (no toggle).
+
+### 默认引擎选项行（Settings → 终端）
+
+双按钮行复用 `settingsStyles.ts` 的 `btnBase` / `btnActive`（与主题/语言选择行同款，12px / padding `5px 8px` / `flex-1`），顺序恒定：**tmux 在左、pty 在右**，pty 选项尾接共享 `BetaBadge`。不可选态（宿主探测无复用器时的 tmux 项）：`opacity: 0.5` + `cursor: not-allowed`，不绑 hover 态，并在行下方用 `sidebar.muxUnavailable` 文案说明原因——与创建会话弹窗的引擎卡同一门控、同一措词，勿各写一套。
 
 ---
 

@@ -143,3 +143,75 @@ describe('Settings disconnect slider i18n keys', () => {
     expect(zhWarn).toMatch(/内存|资源/)
   })
 })
+
+describe('Settings default terminal engine', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  const clickTerminalTab = () => {
+    const tab = Array.from(container.querySelectorAll<HTMLButtonElement>('.settings-tab')).find(
+      (b) => (b.textContent || '').trim() === 'TERMINAL' || (b.textContent || '').trim() === '终端',
+    )
+    expect(tab).toBeTruthy()
+    act(() => {
+      tab!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+  }
+
+  const engineButton = (engine: 'pty' | 'tmux') =>
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      (b.textContent || '').trim().startsWith(engine),
+    )
+
+  beforeEach(() => {
+    localStorage.clear()
+    useAppStore.setState({ defaultTerminalEngine: 'tmux', multiplexerAvailable: true, multiplexer: 'tmux' })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    mountSettings(root)
+    clickTerminalTab()
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    document.body.removeChild(container)
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('offers both engines with tmux first (pty is still beta)', () => {
+    const labels = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .map((b) => (b.textContent || '').trim())
+      .filter((x) => x === 'tmux' || x.startsWith('pty'))
+    expect(labels[0]).toBe('tmux')
+    expect(labels[1].startsWith('pty')).toBe(true)
+    expect(container.textContent).toContain('BETA')
+  })
+
+  it('persists the picked engine to localStorage via the store setter', () => {
+    act(() => engineButton('pty')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(useAppStore.getState().defaultTerminalEngine).toBe('pty')
+    expect(localStorage.getItem('omniterm_default_terminal_engine')).toBe('pty')
+  })
+
+  it('disables the tmux option and explains why when the host has no multiplexer', () => {
+    act(() => {
+      useAppStore.setState({ multiplexerAvailable: false })
+    })
+    expect(engineButton('tmux')!.disabled).toBe(true)
+    expect(container.textContent).toContain(i18n.t('sidebar.muxUnavailable', { mux: 'tmux' }))
+  })
+
+  it('defines the engine keys in both en and zh', () => {
+    const enMap = en as Record<string, string>
+    const zhMap = zh as Record<string, string>
+    for (const k of ['settings.defaultEngine', 'settings.defaultEngineHint']) {
+      expect(enMap[k]).toBeTruthy()
+      expect(zhMap[k]).toBeTruthy()
+    }
+    // 两处都要点明 pty 还在 beta，否则设置项看不出为何默认 tmux
+    expect(enMap['settings.defaultEngineHint']).toMatch(/beta/i)
+    expect(zhMap['settings.defaultEngineHint']).toContain('beta')
+  })
+})

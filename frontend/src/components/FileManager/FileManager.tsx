@@ -6,6 +6,7 @@ import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
+import { useTerminalEngine } from '../../hooks/useTerminalEngine'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
@@ -101,6 +102,8 @@ export function FileManager() {
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
   const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
+  // 「在此打开终端」用的引擎：设置 → 终端的默认引擎按宿主复用器可用性收敛
+  const terminalEngine = useTerminalEngine()
 
   // Workspace drawer state (local since fmSessionStates is session-keyed)
   const [workspaceDrawerPath, setWorkspaceDrawerPath] = useState<string | null>(null)
@@ -270,7 +273,7 @@ export function FileManager() {
 
   const openTerminalInProject = async (projectId: string) => {
     try {
-      const session = await api.createSession(projectId, cwd, undefined, undefined, 'pty')
+      const session = await api.createSession(projectId, cwd, undefined, undefined, terminalEngine)
       finishOpenTerminal(session, projectId)
     } catch {
       // api client already shows error toast
@@ -915,7 +918,7 @@ export function FileManager() {
               <IconHome width={15} height={15} />
             </button>
           )}
-          {/* "在此打开终端" — 在 FM 当前目录下新建 pty 会话（越界归属处理见 handleOpenTerminalHere） */}
+          {/* "在此打开终端" — 在 FM 当前目录下按默认引擎新建会话（越界归属处理见 handleOpenTerminalHere） */}
           {fmSource && (
             <button
               className="fm-bc-root"

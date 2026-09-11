@@ -188,7 +188,8 @@ describe('Sidebar handleCreateSession', () => {
         fakeWorkspace.path,
         'my-test-session',
         undefined,
-        'pty',
+        // 未点选引擎 → 按设置的默认引擎（tmux）创建，见 utils/terminalEngine
+        'tmux',
         undefined,
       )
     })
@@ -249,7 +250,8 @@ describe('Sidebar handleCreateSession', () => {
         fakeWorkspace.path,
         undefined,
         undefined,
-        'pty',
+        // 同上：默认引擎 tmux
+        'tmux',
         undefined,
       )
     })

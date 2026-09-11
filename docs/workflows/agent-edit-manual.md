@@ -45,6 +45,8 @@ Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修�
 
 **加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。断连/回收类分钟滑块复用 `DisconnectSlider`（值域 1..60、`WARNING_THRESHOLD_MIN=30` 触发内存警告，见 `Settings.tsx` 顶部常量）；若需后端持久化（如 ACP 空闲回收走 `api.setAcpIdleRecycle`）→ `client.ts` 加 API 函数 + 后端 `src/api/settings.rs` 加路由（挂 `require_auth_mw` 保护组）。
 
+**默认终端引擎（`DefaultEngineSection`）是跨文件设置，改它先看真源**：值定义/解析/回落全在 `frontend/src/utils/terminalEngine.ts`（无 React）+ `frontend/src/hooks/useTerminalEngine.ts`（store × 宿主可用性），消费方为 `Settings.tsx`、`Sidebar/CreateSessionModal.tsx`、`FileManager/FileManager.tsx`、`FileManager/OpenTerminalDialog.tsx` 四处。新增引擎选项只改 `TERMINAL_ENGINES`；**切勿在组件里再写一份 `multiplexerAvailable` 判定戒硬编码 `'pty'`**（历史上「在此打开终端」写死 pty 就是脱离默认值的成因），视觉规格见 `docs/visual-design/ui-style-guide.md` §8。
+
 **复制为新弹窗**：见 `docs/architecture/frontend-patterns.md`：
 - 简单单 section 走「Sidebar 底部按钮弹出面板」契约
 - 多分类 / 固定尺寸的游戏风格面板走「状态栏游戏风格面板模板」（以 Settings 为 reference）
