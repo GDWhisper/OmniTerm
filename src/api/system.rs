@@ -7,6 +7,8 @@ use axum::{
 use semver::Version;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -23,6 +25,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/tmux/mouse", get(get_mouse_mode).post(set_mouse_mode))
         .route("/system/version", get(version_check))
         .route("/system/update", post(run_update))
+        .route("/system/restart", post(run_restart))
 }
 
 #[derive(Deserialize)]
@@ -138,6 +141,9 @@ struct CacheEntry {
 
 static VERSION_CACHE: Mutex<Option<CacheEntry>> = Mutex::const_new(None);
 static UPDATE_LOCK: Mutex<()> = Mutex::const_new(());
+static RELAUNCH_TARGET: Mutex<Option<PathBuf>> = Mutex::const_new(None);
+static PENDING_RESTART: AtomicBool = AtomicBool::new(false);
+static TARGET_VERSION: Mutex<Option<String>> = Mutex::const_new(None);
 
 /// 持锁查询 latest 版本：命中 TTL 内缓存直接返回，否则打 GitHub API 并回填。
 async fn cached_latest() -> Result<Version, String> {
@@ -169,6 +175,8 @@ async fn version_check() -> (StatusCode, Json<Value>) {
         Ok(cur) => latest > cur,
         Err(_) => false,
     };
+    let pending_restart = PENDING_RESTART.load(Ordering::Relaxed);
+    let target_version = TARGET_VERSION.lock().await.clone();
     (
         StatusCode::OK,
         Json(json!({
@@ -183,6 +191,9 @@ async fn version_check() -> (StatusCode, Json<Value>) {
                 &std::env::args_os().collect::<Vec<_>>(),
                 crate::DAEMONIZED.load(std::sync::atomic::Ordering::Relaxed),
             ),
+            "pending_restart": pending_restart,
+            "target_version": target_version,
+            "restart_supported": cfg!(unix),
         })),
     )
 }
@@ -195,6 +206,24 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
     // 容器内自更新不持久（容器重启还原镜像），Web 端直接拒绝并提示重新拉取镜像
     if update::in_container() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "container_environment" })));
+    }
+
+    if PENDING_RESTART.load(Ordering::Relaxed) {
+        let ver = TARGET_VERSION
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "status": "updated",
+                "version": ver,
+                "restart_required": true,
+                "restart_supported": cfg!(unix),
+                "auto_restart": false,
+            })),
+        );
     }
 
     let current = match Version::parse(env!("CARGO_PKG_VERSION")) {
@@ -244,40 +273,16 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
 
     match result {
         Ok(()) => {
-            // 更新成功。Unix 上调度延迟自重启：响应先 flush 回前端（见
-            // RELAUNCH_DELAY），随后回收 ACP 子进程并 exec 新二进制（PID 不变，
-            // 见 `update::relaunch`）。exec 目标必须用替换前捕获的规范化路径
-            // （rename 覆盖后该路径指向新二进制；事后重解析 current_exe() 在
-            // Linux 上会拿到 " (deleted)" 失效路径，exec ENOENT 静默不重启）。
-            // exec 失败时服务继续跑旧版本，仅留 error
-            // 日志，前端倒计时超时后兜底显示手动重启提示。
+            // 更新成功。记录待重启状态、目标版本以及捕获的可执行文件路径。
+            // 重启时机选择权交给用户（前端提供手动重启按钮），不自动调度自重启。
+            *RELAUNCH_TARGET.lock().await = Some(exe);
+            PENDING_RESTART.store(true, Ordering::Relaxed);
+            *TARGET_VERSION.lock().await = Some(release.version.to_string());
+
             #[cfg(unix)]
-            let auto_restart = {
-                let supervisor = _state.acp_supervisor.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(RELAUNCH_DELAY).await;
-                    if tokio::time::timeout(RELAUNCH_SHUTDOWN_TIMEOUT, supervisor.shutdown_all())
-                        .await
-                        .is_err()
-                    {
-                        // 自重启链的失败诊断一律 eprintln 直写 stderr，不走
-                        // tracing：tracing 受继承 RUST_LOG 过滤（main.rs 已兜底
-                        // omniterm=info，但用户显式 RUST_LOG=off 时保底不生效），
-                        // 而自重启失败必须保证可见——daemon 模式 stderr 即日志
-                        // 文件，前台模式直达终端。见 debug-patterns 模式 9/10。
-                        eprintln!(
-                            "omniterm-update: ACP shutdown exceeded {RELAUNCH_SHUTDOWN_TIMEOUT:?}, relaunching anyway; stale agent children may linger"
-                        );
-                    }
-                    if let Err(e) = update::relaunch(&exe) {
-                        eprintln!("omniterm-update: auto-relaunch failed, restart manually: {e:#}");
-                    }
-                });
-                true
-            };
-            // Windows 无 exec 等价物（stop 亦不支持），保持手动重启提示
+            let restart_supported = true;
             #[cfg(not(unix))]
-            let auto_restart = false;
+            let restart_supported = false;
 
             (
                 StatusCode::OK,
@@ -285,10 +290,64 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
                     "status": "updated",
                     "version": release.version.to_string(),
                     "restart_required": true,
-                    "auto_restart": auto_restart,
+                    "restart_supported": restart_supported,
+                    "auto_restart": false,
                 })),
             )
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{e:#}") }))),
+    }
+}
+
+async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let Ok(guard) = UPDATE_LOCK.try_lock() else {
+        return (StatusCode::CONFLICT, Json(json!({ "error": "update already in progress" })));
+    };
+
+    #[cfg(unix)]
+    {
+        let target = RELAUNCH_TARGET.lock().await;
+        let exe = match target.as_ref() {
+            Some(p) => p.clone(),
+            None => match update::current_exe_channel() {
+                Ok((p, _)) => p,
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": e.to_string() })),
+                    );
+                }
+            },
+        };
+
+        let supervisor = state.acp_supervisor.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            tokio::time::sleep(RELAUNCH_DELAY).await;
+            if tokio::time::timeout(RELAUNCH_SHUTDOWN_TIMEOUT, supervisor.shutdown_all())
+                .await
+                .is_err()
+            {
+                eprintln!(
+                    "omniterm-update: ACP shutdown exceeded {RELAUNCH_SHUTDOWN_TIMEOUT:?}, relaunching anyway; stale agent children may linger"
+                );
+            }
+            if let Err(e) = update::relaunch(&exe) {
+                eprintln!("omniterm-update: manual-relaunch failed, restart manually: {e:#}");
+            }
+        });
+
+        (StatusCode::OK, Json(json!({ "status": "restarting" })))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = state;
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "unsupported_platform",
+                "message": "automatic restart is not supported on this platform"
+            })),
+        )
     }
 }

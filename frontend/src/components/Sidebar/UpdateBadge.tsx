@@ -9,19 +9,20 @@ import { GAP } from '../constants/popup'
 import { GITHUB_REPO_URL } from '../../version'
 
 const POPUP_WIDTH = 280
-// 倒计时秒数：与后端 RELAUNCH_DELAY 对齐（更新响应返回后 3s 触发 exec）
-const RESTART_COUNTDOWN = 3
-// 倒计时结束后等待「断连→恢复」的兜底窗口：超过仍未见断连视为自动重启失败，
-// 回到手动重启提示（exec 失败时旧进程仍在服务，页面不会断连）
+// 等待「断连→恢复」的兜底窗口：超过仍未见断连或版本未变视为重启超时，回到手动重启提示
 const RESTART_WATCH_TIMEOUT_MS = 60_000
 
 interface VersionInfo {
   current: string
   latest: string
+  update_available: boolean
   channel: 'npm' | 'cargo' | 'github_release'
   container: boolean
   /** 服务端按自身 argv 组装的忠实重启命令（补 -d、带 --db、脱敏 secret） */
   restart_command: string
+  pending_restart?: boolean
+  target_version?: string | null
+  restart_supported?: boolean
 }
 
 type UpdatePhase = 'idle' | 'updating' | 'done'
@@ -32,9 +33,7 @@ export function UpdateBadge() {
   const [open, setOpen] = useState(false)
   // Lifted above the panel so "updated, restart pending" survives close/reopen.
   const [phase, setPhase] = useState<UpdatePhase>('idle')
-  // 后端返回 auto_restart 后，倒计时与重启监测独立于面板开关继续运行
-  const [autoRestart, setAutoRestart] = useState(false)
-  const [countdown, setCountdown] = useState<number | null>(null)
+  const [restarting, setRestarting] = useState(false)
   const [restartFailed, setRestartFailed] = useState(false)
   // 本次升级的目标版本：重启监测以此比对 health 的 version 字段确认「新版已上线」
   const [targetVersion, setTargetVersion] = useState<string | null>(null)
@@ -43,24 +42,23 @@ export function UpdateBadge() {
     api
       .versionCheck()
       .then((r) => {
-        if (r.update_available) setInfo(r)
+        if (r.update_available || r.pending_restart) {
+          setInfo(r)
+          if (r.pending_restart) {
+            setPhase('done')
+            setTargetVersion(r.target_version ?? r.latest)
+          }
+        }
       })
       .catch(() => {})
   }, [])
-
-  // 倒计时递减：归零后进入断连监测阶段
-  useEffect(() => {
-    if (phase !== 'done' || !autoRestart || countdown === null || countdown <= 0) return
-    const t = window.setTimeout(() => setCountdown(countdown - 1), 1000)
-    return () => window.clearTimeout(t)
-  }, [phase, autoRestart, countdown])
 
   // 重启监测：轮询 health 的 version 字段，等于目标版本即确认「新版已上线」并刷新。
   // 版本比对不要求捕捉断连瞬间——远程接入（隧道拆线）、后台标签节流都可能错过
   // 断连窗口，但只要链路恢复可达就能确认。升级来源是旧版实现（health 无 version
   // 字段）时回退到「断连 → 恢复」状态机。超时未确认（exec 失败等）落到手动重启提示。
   useEffect(() => {
-    if (phase !== 'done' || !autoRestart || countdown === null || countdown > 0) return
+    if (!restarting) return
     let sawDown = false
     let elapsed = 0
     let inFlight = false
@@ -72,6 +70,7 @@ export function UpdateBadge() {
         if (elapsed > RESTART_WATCH_TIMEOUT_MS) {
           window.clearInterval(timer)
           setRestartFailed(true)
+          setRestarting(false)
           return
         }
         const res = await fetch('/api/v1/health', { cache: 'no-store' })
@@ -93,31 +92,38 @@ export function UpdateBadge() {
       }
     }, 1000)
     return () => window.clearInterval(timer)
-  }, [phase, autoRestart, countdown, targetVersion])
+  }, [restarting, targetVersion])
 
-  if (!info) return null
+  const isPendingRestart = phase === 'done' || Boolean(info?.pending_restart)
+
+  if (!info || (!info.update_available && !isPendingRestart)) return null
 
   return (
     <>
       <button
         data-toggle="update-badge"
-        className="update-badge"
-        title={t('update.badgeTooltip', { version: info.latest })}
+        className={`update-badge${isPendingRestart ? ' reboot-badge' : ''}${restarting ? ' is-restarting' : ''}`}
+        title={
+          isPendingRestart
+            ? restarting
+              ? t('update.restarting', { version: targetVersion ?? info.target_version ?? info.latest })
+              : t('update.rebootBadgeTooltip', { version: targetVersion ?? info.target_version ?? info.latest })
+            : t('update.badgeTooltip', { version: info.latest })
+        }
         onClick={() => setOpen((v) => !v)}
       >
-        {t('update.badge')}
+        {isPendingRestart ? t('update.rebootBadge') : t('update.badge')}
       </button>
       {open && (
         <UpdatePanel
           info={info}
           phase={phase}
-          autoRestart={autoRestart}
-          countdown={countdown}
+          restarting={restarting}
           restartFailed={restartFailed}
           targetVersion={targetVersion}
+          isPendingRestart={isPendingRestart}
           setPhase={setPhase}
-          setAutoRestart={setAutoRestart}
-          setCountdown={setCountdown}
+          setRestarting={setRestarting}
           setRestartFailed={setRestartFailed}
           setTargetVersion={setTargetVersion}
           onClose={() => setOpen(false)}
@@ -130,26 +136,24 @@ export function UpdateBadge() {
 function UpdatePanel({
   info,
   phase,
-  autoRestart,
-  countdown,
+  restarting,
   restartFailed,
   targetVersion,
+  isPendingRestart,
   setPhase,
-  setAutoRestart,
-  setCountdown,
+  setRestarting,
   setRestartFailed,
   setTargetVersion,
   onClose,
 }: {
   info: VersionInfo
   phase: UpdatePhase
-  autoRestart: boolean
-  countdown: number | null
+  restarting: boolean
   restartFailed: boolean
   targetVersion: string | null
+  isPendingRestart: boolean
   setPhase: (p: UpdatePhase) => void
-  setAutoRestart: (v: boolean) => void
-  setCountdown: (v: number | null) => void
+  setRestarting: (v: boolean) => void
   setRestartFailed: (v: boolean) => void
   setTargetVersion: (v: string | null) => void
   onClose: () => void
@@ -168,19 +172,36 @@ function UpdatePanel({
       .systemUpdate()
       .then((r) => {
         setPhase('done')
-        setAutoRestart(r.auto_restart)
         setRestartFailed(false)
         setTargetVersion(r.version)
-        if (r.auto_restart) setCountdown(RESTART_COUNTDOWN)
         addToast('success', t('update.updated', { version: r.version }))
       })
       .catch((e) => {
         setPhase('idle')
-        if (e instanceof ApiError && e.body && typeof e.body === 'object' && 'error' in e.body && (e.body as { error: string }).error === 'container_environment') {
+        if (
+          e instanceof ApiError &&
+          e.body &&
+          typeof e.body === 'object' &&
+          'error' in e.body &&
+          (e.body as { error: string }).error === 'container_environment'
+        ) {
           addToast('error', t('update.dockerHint'))
         }
       })
   }
+
+  const doRestart = () => {
+    setRestarting(true)
+    setRestartFailed(false)
+    api
+      .systemRestart()
+      .catch((e) => {
+        setRestarting(false)
+        addToast('error', e instanceof Error ? e.message : String(e))
+      })
+  }
+
+  const restartSupported = !info.container && info.restart_supported !== false
 
   // Portal to body: inside the mobile pane strip, `position: fixed` would
   // resolve against the strip's transform containing block and overflow the
@@ -208,7 +229,7 @@ function UpdatePanel({
     >
       <div className="panel-title-bar">
         <span>◆</span>
-        <span>{t('update.title')}</span>
+        <span>{isPendingRestart ? t('update.titleReboot') : t('update.title')}</span>
       </div>
       <OverlayScroll style={{ flex: 1, minHeight: 0 }} contentStyle={{ flex: '0 0 auto' }}>
         <div
@@ -224,45 +245,90 @@ function UpdatePanel({
           <div style={{ fontFamily: 'var(--pixel-font-static)', letterSpacing: 'var(--pixel-tracking-sm)' }}>
             <span style={{ color: 'var(--text-secondary)' }}>v{info.current}</span>
             <span style={{ color: 'var(--text-faint)' }}> → </span>
-            <span style={{ color: 'var(--success)', fontWeight: 700 }}>v{info.latest}</span>
+            <span style={{ color: 'var(--success)', fontWeight: 700 }}>
+              v{targetVersion ?? info.target_version ?? info.latest}
+            </span>
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            {t('update.commandHint')}{' '}
-            <code
-              style={{
-                background: 'var(--bg-code-inline)',
-                color: 'var(--text-primary)',
-                padding: '2px 6px',
-                borderRadius: 2,
-                userSelect: 'all',
-              }}
-            >
-              omniterm update
-            </code>
-          </div>
-          {info.container && phase !== 'done' && (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('update.dockerHint')}</div>
+
+          {!isPendingRestart && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {t('update.commandHint')}{' '}
+                <code
+                  style={{
+                    background: 'var(--bg-code-inline)',
+                    color: 'var(--text-primary)',
+                    padding: '2px 6px',
+                    borderRadius: 2,
+                    userSelect: 'all',
+                  }}
+                >
+                  omniterm update
+                </code>
+              </div>
+              {info.container && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('update.dockerHint')}</div>
+              )}
+              {info.channel !== 'cargo' && !info.container && (
+                <button
+                  className="btn-pixel btn-pixel-primary"
+                  disabled={phase === 'updating'}
+                  onClick={doUpdate}
+                >
+                  {phase === 'updating' ? t('update.updating') : t('update.updateNow')}
+                </button>
+              )}
+            </>
           )}
-          {info.channel !== 'cargo' && phase !== 'done' && !info.container && (
-            <button
-              className="btn-pixel btn-pixel-primary"
-              disabled={phase === 'updating'}
-              onClick={doUpdate}
-            >
-              {phase === 'updating' ? t('update.updating') : t('update.updateNow')}
-            </button>
+
+          {isPendingRestart && (
+            <>
+              <div style={{ fontSize: 12, color: 'var(--text-primary)' }}>
+                {t('update.readyToRestart', { version: targetVersion ?? info.target_version ?? info.latest })}
+              </div>
+
+              {restartSupported ? (
+                <>
+                  {restarting ? (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--success)' }}>
+                        {t('update.restarting', { version: targetVersion ?? info.target_version ?? info.latest })}
+                      </div>
+                      <button className="btn-pixel btn-pixel-primary" disabled>
+                        {t('update.restartingBtn')}
+                      </button>
+                    </>
+                  ) : restartFailed ? (
+                    <>
+                      <div style={{ fontSize: 12, color: 'var(--danger)' }}>
+                        {t('update.restartTimeout', {
+                          version: targetVersion ?? info.target_version ?? info.latest,
+                          command: info.restart_command,
+                        })}
+                      </div>
+                      <button className="btn-pixel btn-pixel-primary" onClick={doRestart}>
+                        {t('update.restartNow')}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn-pixel btn-pixel-primary" onClick={doRestart}>
+                        {t('update.restartNow')}
+                      </button>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                        {t('update.restartHint', { command: info.restart_command })}
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {t('update.restartHint', { command: info.restart_command })}
+                </div>
+              )}
+            </>
           )}
-          {phase === 'done' && (
-            <div style={{ fontSize: 12, color: 'var(--success)' }}>
-              {autoRestart && !restartFailed
-                ? countdown !== null && countdown > 0
-                  ? t('update.autoRestarting', { seconds: countdown })
-                  : t('update.restarting', { version: targetVersion ?? info.latest })
-                : restartFailed
-                  ? t('update.restartTimeout', { version: targetVersion ?? info.latest, command: info.restart_command })
-                  : t('update.restartHint', { command: info.restart_command })}
-            </div>
-          )}
+
           <a
             href={`${GITHUB_REPO_URL}/releases/latest`}
             target="_blank"

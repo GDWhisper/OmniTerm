@@ -1517,6 +1517,15 @@ body.fm-dragging * {
   transform: translate(2px, 2px);
   box-shadow: none;
 }
+.update-badge.reboot-badge {
+  background: var(--accent, #58A6FF);
+  color: #FAF2DE;
+  box-shadow: 2px 2px 0 var(--wood-shadow, #3A2E1F);
+}
+.update-badge.reboot-badge.is-restarting {
+  opacity: 0.8;
+  cursor: wait;
+}
 
 /* ────────────────────────────────────────────────────────────────────
    Game-style buttons — Primary / Secondary / Accent / Danger
