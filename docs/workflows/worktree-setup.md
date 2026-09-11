@@ -36,15 +36,25 @@ cp branch.config.example .env.local
 
 `branch.config.example` 缺失时直接创建 `.env.local`（参考其他 worktree 的 `.env.local` 和 `docs/workflows/branch-workflows.md` 表）。
 
-### 前端依赖安装：`pnpm` 必须带 `--ignore-workspace`
+### 前端依赖安装：仓库根 `pnpm install`（2026-09-12 起有仓库级 workspace）
 
 ```bash
-cd frontend && pnpm install --ignore-workspace
+pnpm install    # 仓库根执行，无需任何额外参数
 ```
 
-**不带这个参数会误操作你的 home workspace。** `~/` 下存在 `pnpm-workspace.yaml` + `package.json`（全局 CLI 工具的安装位置），pnpm 会从 `frontend/` 向上递归找到它并当作 workspace root；而本项目并不在其 `packages` 列表里，于是：本项目的依赖一个也不装，却会按 home 的 lockfile 重排 `~/node_modules`（实测输出过 `-69` 个包的移除）。
+仓库根的 `pnpm-workspace.yaml`（packages: frontend）把 workspace 锚定在本仓库内，pnpm 从任何子目录向上找 workspace 都会**先命中这里**，够不着 `~/` 的全局工具 workspace。node_modules 布局为「根 `node_modules/.pnpm` 虚拟 store + `frontend/node_modules` 符号链接」，包文件经全局内容寻址 store 硬链接共享，多 worktree 不重复占磁盘。
 
-另外两个已踩过的坑：
+**历史坑（仅未同步 2026-09-12 提交的老 worktree 仍适用）**：`~/` 下存在 `pnpm-workspace.yaml` + `package.json`（全局 CLI 工具 pi 系列的安装位置），仓库没有自己的 workspace 文件时 pnpm 会向上递归命中它并当作 workspace root——本项目的依赖一个也不装，却按 home 的 lockfile 重排 `~/node_modules`（实测输出过 `-69` 个包的移除）；pnpm ≥12 还会在跑脚本前的自动依赖校验里直接报 `ERR_PNPM_IGNORED_BUILDS`（ignored builds 从警告升级为硬错误），`dev.sh` 拉前端即失败。老 worktree 装依赖仍需 `cd frontend && pnpm install --ignore-workspace`。
+
+**老 worktree 迁移到 workspace 布局（合并本提交后一次性）**：
+
+```bash
+git pull                        # 拿到根 pnpm-workspace.yaml 与移到根的 pnpm-lock.yaml
+rm -rf frontend/node_modules    # 旧布局的虚拟 store 由根级取代，先清掉免交互确认
+pnpm install                    # 仓库根执行；只重建硬链接不重新下载（约 4s）
+```
+
+其他已踩过的坑：
 
 - **`pnpm` 报 `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`**：切换安装模式时它要重建 `node_modules` 但无法交互确认。先 `mv node_modules node_modules.bak` 再装（比 `CI=true` 直接 rm 可逆）；**备份目录不在 `.gitignore` 里**，装完记得删，否则 `git add -A` 会把它整个提交进去。
 - **验证类型检查只能用 `pnpm exec tsc -b`**：根 `tsconfig.json` 是 references 空壳，裸 `tsc --noEmit` 不检查任何文件、总是假绿（同 `scripts/hooks/pre-commit:23-24`）。写验证命令时也别把它接管道，`$?` 拿到的是末端（如 `tail`）的退出码。

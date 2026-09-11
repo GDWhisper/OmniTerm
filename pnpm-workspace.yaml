@@ -1,0 +1,14 @@
+# pnpm workspace 根锚定在本仓库：pnpm 从 frontend/ 向上找 workspace 时最先命中
+# 这里，够不着 ~/ 的全局工具 workspace（历史坑：误按 home lockfile 重排 ~/node_modules、
+# pnpm 12 run 前校验报 ERR_PNPM_IGNORED_BUILDS，见 docs/workflows/worktree-setup.md）。
+# frontend 是仓库唯一的 JS 包。
+packages:
+  - frontend
+
+# 三个依赖的构建脚本被跳过是长期现状（均来自 @oh-my-pi/pi-coding-agent →
+# @huggingface/transformers 链，浏览器构建用不到原生绑定）。显式登记，
+# 否则 pnpm ≥12 在 install 时把「有构建脚本未批准」从警告升级为硬报错。
+ignoredBuiltDependencies:
+  - onnxruntime-node
+  - protobufjs
+  - sharp

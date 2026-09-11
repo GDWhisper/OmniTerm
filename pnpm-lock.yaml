@@ -6,7 +6,7 @@ settings:
 
 importers:
 
-  .:
+  frontend:
     dependencies:
       '@codemirror/commands':
         specifier: ^6.10.3
