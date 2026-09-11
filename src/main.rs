@@ -134,6 +134,11 @@ struct StartArgs {
     /// large uploads to the target dev server (e.g. `--proxy-max-body 104857600`).
     #[arg(long, env = "OMNITERM_PROXY_MAX_BODY")]
     proxy_max_body: Option<usize>,
+
+    /// Max total request body size in bytes for file uploads via the file manager
+    /// (default 200 MiB; e.g. `--max-upload-body 524288000`).
+    #[arg(long, env = "OMNITERM_MAX_UPLOAD_BODY")]
+    max_upload_body: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -154,6 +159,9 @@ pub struct AppState {
     pub acp_supervisor: acp::AcpSupervisor,
     /// 端口转发反向代理状态：reqwest 客户端单例 + 自身监听端口（防回环）。
     pub proxy: proxy::ProxyState,
+    /// 文件上传请求体总量上限（字节），files 路由的 DefaultBodyLimit 与
+    /// 流式写入的落盘中止阈值共用此值（见 api::files::MAX_UPLOAD_BODY_DEFAULT）。
+    pub max_upload_body: usize,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -793,6 +801,7 @@ fn main() -> anyhow::Result<()> {
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
                 },
+                max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
             };
 
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，

@@ -286,6 +286,8 @@ ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy
 
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
 
+**上传（POST /api/v1/files）**：multipart 字段流式写盘（`fs::write_file_stream`），不整文件进内存；先写同目录隐藏临时文件 `.{文件名}.omniterm-upload-{uuid}.tmp`（点前缀使 files_watch 忽略），全部完成才 rename 到目标——失败（超限/读错/写错）删临时文件、**已有目标文件保持原样**，与旧「整体读入成功才写盘」语义对齐。单请求内容总量受 `--max-upload-body`/`OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，`AppState.max_upload_body`）约束，超限返回 413 + 文案 `upload exceeds max size … (aborted at …)`；axum 层限额 = 该值 +1MiB 封装余量，保证超限先由应用层计数触发（否则 multipart 解析层只吐含混的 parse error）。
+
 ## File watcher（`src/api/files_watch.rs`）
 
 `GET /api/v1/files/watch`（SSE）实时推送工作区目录变更。inotify（Linux）递归 watch：
@@ -492,6 +494,7 @@ start options:
       --reset-auth        Delete all users before startup [env: OMNITERM_RESET_AUTH]
   -d, --daemonize         Run in background (Unix only; errors on Windows), logs appended to ~/.omniterm/<binary>.log; the parent process blocks until the daemon binds the port — on success it prints "OmniTerm vX.Y.Z started in the background — http://host:port (PID)", on failure (port in use / DB unreachable) it prints the error to the terminal and exits non-zero, never silently "succeeding"
       --debug             Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
+      --max-upload-body <BYTES>  Max total request body size for file uploads in bytes (default 200 MiB) [env: OMNITERM_MAX_UPLOAD_BODY]
 
 stop / status / reset-auth options:
       --db <DB>           Database connection (used to locate the PID file) [env: OMNITERM_DB]
@@ -530,6 +533,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
 | `OMNITERM_HOST` | `127.0.0.1` | 监听地址（等价 `-H`）；Docker 传 `0.0.0.0` 全网暴露 |
 | `OMNITERM_PORT` | `9077` | 监听端口（等价 `-p`） |
+| `OMNITERM_MAX_UPLOAD_BODY` | `209715200`（200 MiB） | 文件上传请求体总量上限，字节（等价 `--max-upload-body`）。files 路由的 `DefaultBodyLimit` 与流式写入的落盘中止阈值共用；超限返回 413 + 明确文案。axum 层限额额外 +1MiB multipart 封装余量，保证超限先由应用层计数触发 |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
 
 **只认 `OMNITERM_*` 前缀**：通用名 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 已全部弃用且**不再读取**（启动时若检测到会 warn 提示改名）。原因：这些名字会被继承的环境意外命中——开发实例派生的终端里启动 npm 正式版会被 `BIND_ADDR=127.0.0.1:<dev port>` 劫持（报 `Address already in use`），而 `DATABASE_URL` 是用户自己项目里极常见的变量（指向 Postgres 等），会让 omniterm 连错库。部署层改用 `OMNITERM_HOST` + `OMNITERM_PORT`（docker）或命令行参数（dev.sh）。

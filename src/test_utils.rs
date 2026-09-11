@@ -36,6 +36,7 @@ pub async fn test_state() -> AppState {
             base_host: None,
             max_request_body: crate::proxy::MAX_REQUEST_BODY,
         },
+        max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,
         db,
     }
 }

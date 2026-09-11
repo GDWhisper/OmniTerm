@@ -62,6 +62,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-09-11 23:30) `[frontend]` `[backend]` `[api]` 修复文件管理器上传超过 2MB 的文件必败且报错误导人：上传请求体一直顶着 axum 默认 2MB 上限（mp4 等大文件全数命中），后端把超限解析失败映射成含混的 400 `read failed`，前端更是在逐文件报错的同时无条件弹「上传完成」成功提示。现上传改 multipart 流式写盘——先写同目录隐藏临时文件、全部完成才原子改名到目标，失败清理临时文件不留残段、已有文件保持原样，内存占用不再与单文件体积成正比；请求体上限提为可配置 `--max-upload-body` / `OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，axum 层加 1MiB 封装余量保证应用层先触发），超限返回 413 与明确文案；前端 toast 透出后端错误原文，仅全部成功才报「上传完成」，拖放与按钮两条上传链路收敛为同一实现（`src/api/files.rs`、`src/api/mod.rs`、`src/fs/mod.rs`、`src/main.rs`、`frontend/src/api/client.ts`、`frontend/src/components/FileManager/FileManager.tsx`）
 - (2026-09-11 00:02) `[frontend]` 修复 ACP 思考流被切成多个「◆ thinking」折叠块：部分 ACP agent（实测 codebuddy）按 token 粒度交错下发思考与正文两条流，旧合并逻辑只比较紧邻块，中间任何一个异类块（含空 text 帧）都会让思考另起新块——高输出速度下每秒交错数十次，一段思考碎成十几个块。现抽 `appendProseBlock` 按「同一 prose 区域内累积」合并：向后查找同类块累积（结构化块终止区域、不跨工具合并），空/纯空白 chunk 无同类承接时丢弃；live/replay/hydrate 三入口共用一实现（`frontend/src/stores/chatStore.ts`）
 - (2026-09-10 20:17) `[frontend]` ACP 配置下拉菜单搜索框不再自动获得焦点（避免移动端或弹窗打开时意外唤起输入法 / 抢焦点），Esc 按键由 document 事件兜底关闭（`frontend/src/components/Chat/ConfigToolbar.tsx`）
 - (2026-09-10 20:03) `[frontend]` 移动端 ACP 输入框水印去掉桌面键位提示（如 Enter 发送 / Shift+Enter 换行），移动端显示更精简的输入占位提示（`frontend/src/components/Chat/ChatInput.tsx`、`frontend/src/locales/{zh,en}/translation.json`）

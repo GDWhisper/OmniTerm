@@ -600,34 +600,41 @@ export function FileManager() {
   const handleDragOver = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(true) }
   const handleDragLeave = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(false) }
 
+  // 拖放与上传按钮共用的批量上传：逐文件报错；全部成功才算「上传完成」。
+  const runFileUpload = async (files: File[]) => {
+    if (!fmSource) return
+    let failed = 0
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      try {
+        await api.uploadFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          file,
+          allowEscape: isOutsideWorkspace ? true : undefined,
+        })
+      } catch (err: unknown) {
+        failed++
+        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
+      }
+    }
+    if (failed === 0) {
+      addToast('success', t('fm.uploadComplete'))
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
+    }
+    fetchFiles()
+  }
+
   const handleDrop = (e: DragEvent) => {
     if (isFileDragActive) return
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
-    if (!droppedFiles?.length || !fmSource) return
-    const runUpload = async () => {
-      for (let i = 0; i < droppedFiles.length; i++) {
-        const file = droppedFiles[i]
-        try {
-          await api.uploadFile2({
-            session: fmSource.type === 'session' ? fmSource.id : undefined,
-            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-            projectId: activeProjectId ?? undefined,
-            path: cwd,
-            file,
-            allowEscape: isOutsideWorkspace ? true : undefined,
-          })
-        } catch (err: unknown) {
-          addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
-        }
-      }
-      addToast('success', t('fm.uploadComplete'))
-      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-      fetchFiles()
-    }
-    gateWrite(runUpload)
+    if (!droppedFiles?.length) return
+    gateWrite(() => runFileUpload(Array.from(droppedFiles)))
   }
 
   const startRename = () => {
@@ -716,29 +723,9 @@ export function FileManager() {
     input.multiple = true
     input.onchange = () => {
       if (!input.files?.length) return
-      // 快照 File 列表：runUpload 可能被挂起到确认弹窗之后才执行
+      // 快照 File 列表：上传可能被挂起到确认弹窗之后才执行
       const files = Array.from(input.files)
-      const runUpload = async () => {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i]
-          try {
-            await api.uploadFile2({
-              session: fmSource.type === 'session' ? fmSource.id : undefined,
-              workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-              projectId: activeProjectId ?? undefined,
-              path: cwd,
-              file,
-              allowEscape: isOutsideWorkspace ? true : undefined,
-            })
-          } catch (err: unknown) {
-            addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
-          }
-        }
-        addToast('success', t('fm.uploadComplete'))
-        import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-        fetchFiles()
-      }
-      gateWrite(runUpload)
+      gateWrite(() => runFileUpload(files))
     }
     input.click()
   }

@@ -462,6 +462,8 @@ export const api = {
     if (params.allowEscape) url += `&allow_escape=true`
     return request(url, { method: 'DELETE' })
   },
+  // 上传走 fetch 而非 request()：multipart 不能带 request() 的 JSON Content-Type。
+  // 非 2xx 时提取后端 error 字段（如 413 的「文件过大」），调用方 toast 直接可用。
   uploadFile2: (params: { session?: string; workspaceId?: string; projectId?: string; path: string; file: File; allowEscape?: boolean }) => {
     const form = new FormData()
     form.append('file', params.file)
@@ -470,8 +472,11 @@ export const api = {
     if (params.workspaceId) url += `&workspace_id=${params.workspaceId}`
     if (params.projectId) url += `&workspace=${params.projectId}`
     if (params.allowEscape) url += `&allow_escape=true`
-    return fetch(url, { method: 'POST', body: form }).then((r) => {
-      if (!r.ok) throw new Error(`Upload failed: ${r.status}`)
+    return fetch(url, { method: 'POST', body: form }).then(async (r) => {
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}))
+        throw new ApiError(r.status, body, body.error || `Upload failed: ${r.status}`)
+      }
       return r.json()
     })
   },
