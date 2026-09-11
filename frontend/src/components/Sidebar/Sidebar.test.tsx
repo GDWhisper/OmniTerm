@@ -381,7 +381,9 @@ describe('Sidebar handleCreateSession', () => {
   })
 
   it('项目路径失效时显示修复按钮，点击打开 RepairPathDialog', async () => {
-    i18n.changeLanguage('en')
+    // changeLanguage 是异步的：不 await 首帧仍可能按旧语言渲染，全套并发下
+    // waitFor(项目名，数据不依赖语言) 先成功，而翻译 title 尚未上屏，查询即落空
+    await i18n.changeLanguage('en')
     const { api } = await import('../../api/client')
     const broken = { ...fakeProject, path_valid: false }
     vi.mocked(api.listProjects).mockResolvedValue([broken])
@@ -397,10 +399,15 @@ describe('Sidebar handleCreateSession', () => {
       expect(container.textContent).toContain(broken.name)
     })
 
-    // Repair button (⚠) is shown only for invalid paths
-    const repairBtn = container.querySelector('button[title*="Project path missing"]') as HTMLElement
-    expect(repairBtn).toBeTruthy()
-    repairBtn!.click()
+    // Repair button (⚠) is shown only for invalid paths. waitFor 不能只等项目名：
+    // beforeEach 预置的 store 项目与 broken 同名，首帧即命中而 listProjects 尚未
+    // 返回，修复按钮那时还没渲染（全套并发下稳定复现）。直接等按钮本身。
+    const repairBtn = await vi.waitFor(() => {
+      const btn = container.querySelector('button[title*="Project path missing"]')
+      expect(btn).toBeTruthy()
+      return btn as HTMLElement
+    })
+    repairBtn.click()
 
     // RepairPathDialog opens (portaled to document.body) with the repair title
     await vi.waitFor(() => {

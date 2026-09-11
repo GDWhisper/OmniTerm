@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
@@ -80,12 +81,20 @@ describe('ConfirmDialog', () => {
     expect(onConfirmWithChecked).toHaveBeenCalledWith(false)
   })
 
+  // 受控复选框：act 外 click 会让 setChecked 进并发调度，box.checked 何时回写
+  // DOM 纯看时机，全套并发下 waitFor 也可能等不到——必须 act 包裹同步落定
+  async function checkBox(box: HTMLInputElement) {
+    await act(async () => {
+      box.click()
+    })
+  }
+
   it('passes checked=true to onConfirmWithChecked after checking the box', async () => {
     const onConfirmWithChecked = vi.fn()
     await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' })
     const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
-    box.click()
-    await vi.waitFor(() => expect(box.checked).toBe(true))
+    await checkBox(box)
+    expect(box.checked).toBe(true)
     clickButtonByText('OK')
     expect(onConfirmWithChecked).toHaveBeenCalledWith(true)
   })
@@ -95,16 +104,16 @@ describe('ConfirmDialog', () => {
     const props = { open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' }
     await render(props)
     const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
-    box.click()
-    await vi.waitFor(() => expect(box.checked).toBe(true))
+    await checkBox(box)
+    expect(box.checked).toBe(true)
     // Close → reopen；每次重新查询节点（React 会重建 portal DOM）
     await render({ ...props, open: false })
     await vi.waitFor(() => expect(document.body.querySelector('input[type=checkbox]')).toBeNull())
     await render(props)
     const reopened = () => document.body.querySelector('input[type=checkbox]') as HTMLInputElement
     await vi.waitFor(() => expect(reopened().checked).toBe(false))
-    reopened().click()
-    await vi.waitFor(() => expect(reopened().checked).toBe(true))
+    await checkBox(reopened())
+    expect(reopened().checked).toBe(true)
     clickButtonByText('OK')
     expect(onConfirmWithChecked).toHaveBeenCalledWith(true)
   })
