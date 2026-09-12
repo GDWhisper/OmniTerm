@@ -28,8 +28,9 @@ const CHAT_MSG_FLASH_MS = 1500
 const CHAT_PROMPT_CARD_TOP_PX = 12
 /** 跳转让位：气泡顶缘与卡片底缘之间再留的呼吸距离。 */
 const CHAT_JUMP_TOP_GAP_PX = 8
-/** 目标气泡与消息区视口的垂直重叠达到该值即视为「用户已看到」，收起悬浮卡片。 */
-const CHAT_PROMPT_VISIBLE_OVERLAP_PX = 24
+/** 气泡底缘升到距消息区顶缘该值以内即视为「已滚出顶缘」（那一段残条本来就被
+ *   悬浮卡片盖住），视同「用户正在阅读这条消息之后的内容」，显示卡片。 */
+const CHAT_PROMPT_ABOVE_SLACK_PX = 24
 
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
@@ -140,9 +141,10 @@ export function ChatView() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const flashTimerRef = useRef<number | null>(null)
   const flashRafRef = useRef<number | null>(null)
-  // 目标气泡（最近一次用户输入）是否在消息区视口内：在视口内收起悬浮卡片，
-  // 滚离后重现（用户正看着这条消息时，常驻悬浮只会挡内容）。
-  const [lastPromptInView, setLastPromptInView] = useState(false)
+  // 目标气泡（最近一次用户输入）是否已升出消息区视口顶缘：升出（用户正在阅读
+  // 这条消息之后的回复）才显示悬浮卡片；在视口内、或用户上翻越过它进入更早
+  // 历史（气泡沉到视口下方），都收起——常驻悬浮只会挡内容。
+  const [lastPromptAbove, setLastPromptAbove] = useState(false)
   // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
   const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
@@ -249,19 +251,24 @@ export function ChatView() {
     ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
     : ''
 
-  // 目标气泡是否已在消息区视口内（垂直重叠 ≥ CHAT_PROMPT_VISIBLE_OVERLAP_PX 视为
-  // 「用户已看到」）。用户正看着这条消息时卡片就该消失——悬浮常驻反而挡内容。
+  // 气泡相对消息区视口的位置三分，卡片只在第三种形态显示：
+  // · 视口内（与视口有重叠）→ 收起——用户正看着这条消息；
+  // · 沉到视口下方 → 收起——用户已上翻越过它、正在浏览更早的历史（多轮会话
+  //   才有此形态），指向最新输入的卡片在这里只是挡内容的常驻物；
+  // · 升到视口上方（底缘越过顶缘，含 ≤ CHAT_PROMPT_ABOVE_SLACK_PX 的顶缘残条
+  //   ——那一段本来就被卡片盖住）→ 显示——用户正在阅读这条消息之后的回复，
+  //   卡片作为「你最后问了什么」的参照，点击跳回该气泡。
   // useCallback 仅为给下方 effect 当稳定依赖（hooks 规则 3-b），测量本身很轻。
-  const measureLastPromptInView = useCallback(() => {
+  const isLastPromptAboveViewport = useCallback(() => {
     const el = scrollRef.current
     if (!el || !lastUserMessage) return false
     const bubble = el.querySelector<HTMLElement>(
       `[data-chat-msg-id="${lastUserMessage.id}"]`,
     )
     if (!bubble) return false
-    const b = bubble.getBoundingClientRect()
-    const c = el.getBoundingClientRect()
-    return Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top) >= CHAT_PROMPT_VISIBLE_OVERLAP_PX
+    return (
+      bubble.getBoundingClientRect().bottom <= el.getBoundingClientRect().top + CHAT_PROMPT_ABOVE_SLACK_PX
+    )
   }, [lastUserMessage])
 
   const handleScroll = () => {
@@ -269,7 +276,7 @@ export function ChatView() {
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
     setAutoStick(atBottom)
-    setLastPromptInView(measureLastPromptInView())
+    setLastPromptAbove(isLastPromptAboveViewport())
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
     const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
@@ -295,13 +302,13 @@ export function ChatView() {
   // 显隐在绘制前落定（layout effect + RO 渲染步回调），卡片不会闪现一帧再消失；
   // 同值 setState 被 React 合并，不会成环。
   useLayoutEffect(() => {
-    setLastPromptInView(measureLastPromptInView())
+    setLastPromptAbove(isLastPromptAboveViewport())
     const el = scrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setLastPromptInView(measureLastPromptInView()))
+    const ro = new ResizeObserver(() => setLastPromptAbove(isLastPromptAboveViewport()))
     ro.observe(el)
     return () => ro.disconnect()
-  }, [measureLastPromptInView])
+  }, [isLastPromptAboveViewport])
 
   // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
   // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
@@ -660,8 +667,9 @@ export function ChatView() {
         {/* 「上次输入」悬浮卡片：消息区顶部居中悬浮、不占布局（与「回到底部」
             提示条同一套浮层手法），单行展示最近一次已送达的用户输入——不占满
             顶部（fit-content + 限宽），超宽 ellipsis，完整内容经 title hover 查看；
-            点击跳转聚焦到那个气泡。目标气泡在视口内或尚无用户输入时不渲染。 */}
-        {lastUserMessage && !lastPromptInView && (
+            点击跳回那个气泡。仅当气泡升出视口顶缘（用户正在阅读其后的回复）时
+            渲染；在视口内、或上翻越过它进入更早历史时收起。 */}
+        {lastUserMessage && lastPromptAbove && (
           <button
             type="button"
             ref={lastPromptCardRef}

@@ -11,9 +11,10 @@ import {
 } from './ChatView.testUtils'
 
 // 「上次输入」悬浮卡片：消息区顶部居中悬浮，单行展示最近一次已送达的用户输入，
-// 点击跳转聚焦到那个气泡（accent 描边 + ring 闪烁）。undelivered（断连留痕，
+// 点击跳回那个气泡（accent 描边 + ring 闪烁）。undelivered（断连留痕，
 // 从未真正发往 agent）不算一次输入——不作为展示内容，也不作为跳转目标。
-// 目标气泡在视口内时卡片收起，滚离视口后重现。
+// 显隐三分：气泡在视口内、或用户上翻越过它进入更早历史（气泡沉到视口下方）
+// 都收起；仅当气泡升出视口顶缘（用户正在阅读它之后的回复）时显示。
 
 let container: HTMLDivElement
 let root: Root
@@ -72,10 +73,10 @@ describe('ChatView last-prompt card', () => {
     expect(container.querySelector('[data-chat-msg-id="m3"] .chat-msg-flash')).toBeNull()
   })
 
-  it('hides while the target bubble is in view and reappears once it scrolls out', () => {
+  it('shows only while the bubble is above the viewport, hides in view and below it', () => {
     seedChatMessages([userMsg('m1', 'first question'), assistantMsg('m2', 'answer')])
     renderView()
-    // jsdom 默认零矩形：气泡与视口重叠 0 < 24px → 视为不可见 → 卡片显示
+    // jsdom 默认零矩形：气泡底缘 0 ≤ 视口顶 0 + 24px 容差 → 视为「已滚出顶缘」→ 显示
     expect(lastPromptCard()).toBeTruthy()
 
     // mock 后其余元素（含滚动容器）统一按 0..600 视口处理，气泡矩形由用例给定。
@@ -105,13 +106,18 @@ describe('ChatView last-prompt card', () => {
       })
     }
     try {
-      // 气泡完全在视口内（重叠 50px ≥ 24）→ 卡片收起
+      // 气泡完全在视口内（10..60）→ 收起
       rectsFor({ top: 10, bottom: 60 })
       fireScroll()
       expect(lastPromptCard()).toBeNull()
 
-      // 气泡几乎滚出视口底（仅 5px 重叠 < 24）→ 卡片重现
-      rectsFor({ top: 595, bottom: 645 })
+      // 气泡整个沉到视口下方（700..750，用户上翻越过它、正在浏览更早历史）→ 收起
+      rectsFor({ top: 700, bottom: 750 })
+      fireScroll()
+      expect(lastPromptCard()).toBeNull()
+
+      // 气泡升出视口顶缘（-200..-50，用户正在阅读它之后的回复）→ 显示
+      rectsFor({ top: -200, bottom: -50 })
       fireScroll()
       expect(lastPromptCard()).toBeTruthy()
     } finally {
