@@ -2060,10 +2060,20 @@ input[type="range"]:active::-webkit-slider-thumb {
   animation: replay-spin 0.7s linear infinite;
 }
 
-/* 「上次输入」条（ChatView 顶部）：点击跳转聚焦到最近一次用户输入的气泡。
-   条目式 hover，同上下文菜单条目规范（ui-style-guide §6.3）：accent-10 底。 */
-.chat-last-prompt-strip:hover {
-  background: var(--accent-10);
+/* 「上次输入」悬浮卡片（ChatView 消息区顶部居中）：浮层本体走 .pixel-float
+   （2px 边框 + 4px 硬阴影），本类补交互态——hover 提亮一档、按压按 §6 硬阴影
+   位移约定（浮层不直接叠 .pixel-press，其 2px 阴影会按文件顺序压掉浮层的 4px）。 */
+.chat-last-prompt-card {
+  cursor: pointer;
+  background: var(--bg-elevated);
+  transition: background 0.1s steps(2);
+}
+.chat-last-prompt-card:hover {
+  background: var(--bg-surface);
+}
+.chat-last-prompt-card:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。

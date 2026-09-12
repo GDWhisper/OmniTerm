@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-- (2026-09-12 23:58) `[frontend]` ACP 会话新增「上次输入」条：消息区顶部常驻展示最近一次已送达的用户输入（单行截断，多行压平，纯附件显示占位），上翻长历史后一眼可见自己最后问了什么；点击跳转把该消息气泡滚到消息区顶缘并短暂 accent 描边 + ring 闪烁聚焦（重复点击动画重放，auto-stick 随滚动位置自然解除）。断连留痕的 undelivered 消息从未真正发往 agent，不算一次输入，不作展示与跳转目标；会话尚无用户输入时不渲染。消息行加 `data-chat-msg-id` 锚点、`ChatMessageView` 加 `highlighted` prop（仅目标气泡为 true，memo 浅比较不受影响）（`frontend/src/components/Chat/{ChatView,ChatMessage}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{zh,en}/translation.json`）
+- (2026-09-12 23:58) `[frontend]` ACP 会话新增「上次输入」悬浮卡片：消息区顶部居中悬浮（pixel-float 浮层 + hover 提亮 + 硬阴影按压反馈，不占布局），展示最近一次已送达的用户输入（最多两行截断，多行压平，纯附件显示占位），上翻长历史后一眼可见自己最后问了什么；点击跳转把该消息气泡滚到卡片下方并短暂 accent 描边 + ring 闪烁聚焦（重复点击动画重放，auto-stick 随滚动位置自然解除）。断连留痕的 undelivered 消息从未真正发往 agent，不算一次输入，不作展示与跳转目标；会话尚无用户输入时不渲染。消息行加 `data-chat-msg-id` 锚点、`ChatMessageView` 加 `highlighted` prop（仅目标气泡为 true，memo 浅比较不受影响）（`frontend/src/components/Chat/{ChatView,ChatMessage}.tsx`、`frontend/src/index.css`、`frontend/src/locales/{zh,en}/translation.json`）
 - (2026-09-12 16:12) `[frontend]` 文件管理器「在此打开终端」新增二次确认弹窗：此前目录已有归属项目（路径前缀探测命中其它项目、或在当前激活项目工作区内）时静默直开，用户不知道会话会挂到哪个项目、用什么引擎。现该情形先弹确认框，告知「将在现有项目『xx』下打开终端」并显示实际生效的引擎（默认引擎按宿主复用器可用性收敛后的值，缺复用器时如实显示 pty）与更改方法（设置 → 终端 → 默认引擎），确认后才创建会话；目录无归属时原有的新建项目引导弹窗补上同一引擎信息行，不再叠加第二层确认。引擎展示名的 i18n 映射在设置面板、创建会话弹窗与 FM 两弹窗共四处出现，抽为 `terminalEngineLabel` 共享函数（`frontend/src/components/FileManager/{OpenTerminalConfirmDialog,FileManager,OpenTerminalDialog}.tsx`、`frontend/src/components/{Settings/Settings,Sidebar/CreateSessionModal}.tsx`、`frontend/src/utils/terminalEngine.ts`、`frontend/src/locales/{zh,en}/translation.json`）
 
 ### Fixed

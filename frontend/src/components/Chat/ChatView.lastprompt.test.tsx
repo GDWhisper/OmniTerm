@@ -9,9 +9,9 @@ import type { ChatMessage } from '../../stores/chatStore'
 import type { Session } from '../../api/client'
 import '../../i18n'
 
-// 「上次输入」条：顶部常驻展示最近一次已送达的用户输入，点击跳转聚焦到那个
-// 气泡（accent 描边 + ring 闪烁）。undelivered（断连留痕，从未真正发往 agent）
-// 不算一次输入——不作为展示内容，也不作为跳转目标。
+// 「上次输入」悬浮卡片：消息区顶部居中悬浮，展示最近一次已送达的用户输入，
+// 点击跳转聚焦到那个气泡（accent 描边 + ring 闪烁）。undelivered（断连留痕，
+// 从未真正发往 agent）不算一次输入——不作为展示内容，也不作为跳转目标。
 
 const SESSION_ID = 's1'
 
@@ -63,11 +63,11 @@ function renderView() {
   act(() => root.render(<ChatView />))
 }
 
-function lastPromptStrip() {
-  return container.querySelector<HTMLButtonElement>('.chat-last-prompt-strip')
+function lastPromptCard() {
+  return container.querySelector<HTMLButtonElement>('.chat-last-prompt-card')
 }
 
-describe('ChatView last-prompt strip', () => {
+describe('ChatView last-prompt card', () => {
   it('shows the most recent delivered user message, not the undelivered trail', () => {
     seedMessages([
       userMsg('m1', 'first question'),
@@ -75,16 +75,16 @@ describe('ChatView last-prompt strip', () => {
       userMsg('m3', 'lost message', { undelivered: true }),
     ])
     renderView()
-    const strip = lastPromptStrip()
-    expect(strip).toBeTruthy()
-    expect(strip!.textContent).toContain('first question')
-    expect(strip!.textContent).not.toContain('lost message')
+    const card = lastPromptCard()
+    expect(card).toBeTruthy()
+    expect(card!.textContent).toContain('first question')
+    expect(card!.textContent).not.toContain('lost message')
   })
 
-  it('renders no strip when there is no user message', () => {
+  it('renders no card when there is no user message', () => {
     seedMessages([assistantMsg('m2', 'answer')])
     renderView()
-    expect(lastPromptStrip()).toBeNull()
+    expect(lastPromptCard()).toBeNull()
   })
 
   it('flashes the target bubble on click and skips the undelivered trail', () => {
@@ -94,7 +94,7 @@ describe('ChatView last-prompt strip', () => {
       userMsg('m3', 'lost message', { undelivered: true }),
     ])
     renderView()
-    act(() => lastPromptStrip()!.click())
+    act(() => lastPromptCard()!.click())
     // 闪烁 class 落在目标气泡（data-chat-body 容器）上；留痕气泡不闪。
     expect(container.querySelector('[data-chat-msg-id="m1"] .chat-msg-flash')).toBeTruthy()
     expect(container.querySelector('[data-chat-msg-id="m3"] .chat-msg-flash')).toBeNull()

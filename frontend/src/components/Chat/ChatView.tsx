@@ -25,7 +25,9 @@ const TOP_LOAD_THRESHOLD_PX = 200
 /** 「上次输入」条跳转聚焦：目标气泡 ring 闪烁时长（与 index.css 的
  *   .chat-msg-flash 动画时长一致，到期摘 class）。 */
 const CHAT_MSG_FLASH_MS = 1500
-/** 跳转后目标气泡顶部与消息区顶缘的距离。 */
+/** 「上次输入」悬浮卡片距消息区顶缘的偏移（卡片定位与跳转让位共用）。 */
+const CHAT_PROMPT_CARD_TOP_PX = 12
+/** 跳转让位：气泡顶缘与卡片底缘之间再留的呼吸距离。 */
 const CHAT_JUMP_TOP_GAP_PX = 8
 
 /** `GET /messages` 响应里的单条消息。 */
@@ -137,6 +139,8 @@ export function ChatView() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const flashTimerRef = useRef<number | null>(null)
   const flashRafRef = useRef<number | null>(null)
+  // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
+  const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
   // 「回到底部」提示条：离开底部时的末条内容指纹基线 + 是否有新内容到达。
@@ -275,7 +279,8 @@ export function ChatView() {
     ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
     : ''
 
-  // 跳转聚焦「上次输入」：滚动让目标气泡贴近消息区顶缘，再短暂 accent 描边闪烁。
+  // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
+  // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
   // 高亮经 highlighted prop 传入 ChatMessageView（memo 浅比较，仅目标气泡重渲染）。
   // 同一目标已在闪烁中再点一次时，先摘 class、下一帧重挂，CSS 动画得以重放。
   // id 来源为前端 genId（uuid / msg-<数字>）与后端 uuid 行 id，均不含选择器
@@ -287,8 +292,11 @@ export function ChatView() {
       `[data-chat-msg-id="${lastUserMessage.id}"]`,
     )
     if (!bubble) return
+    const cardH = lastPromptCardRef.current?.offsetHeight ?? 0
     el.scrollTop +=
-      bubble.getBoundingClientRect().top - el.getBoundingClientRect().top - CHAT_JUMP_TOP_GAP_PX
+      bubble.getBoundingClientRect().top -
+      el.getBoundingClientRect().top -
+      (CHAT_PROMPT_CARD_TOP_PX + cardH + CHAT_JUMP_TOP_GAP_PX)
     if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
     if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
     const armFlash = () => {
@@ -524,58 +532,6 @@ export function ChatView() {
         </div>
       )}
 
-      {/* 「上次输入」条：常驻展示最近一次已送达的用户输入，点击跳转聚焦到那个
-          气泡（滚到消息区顶缘 + accent 描边闪烁）。尚无用户输入时不渲染。 */}
-      {lastUserMessage && (
-        <button
-          type="button"
-          className="chat-last-prompt-strip"
-          onClick={handleJumpToLastPrompt}
-          title={lastPromptPreview}
-          style={{
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            width: '100%',
-            padding: isMobile ? '9px 12px' : '5px 12px',
-            background: 'var(--bg-elevated)',
-            border: 'none',
-            borderBottom: '1px solid var(--border-subtle)',
-            cursor: 'pointer',
-            textAlign: 'left',
-            fontFamily: READER_FONT,
-          }}
-        >
-          <span
-            style={{
-              flexShrink: 0,
-              color: 'var(--accent)',
-              fontFamily: 'var(--pixel-font)',
-              fontSize: 11,
-              letterSpacing: 'var(--pixel-tracking-sm)',
-              textTransform: 'uppercase',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            ◆ {t('chat.lastPrompt')}
-          </span>
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              fontSize: 12,
-              color: 'var(--text-secondary)',
-            }}
-          >
-            {lastPromptPreview}
-          </span>
-        </button>
-      )}
-
       <div
         style={{
           position: 'relative',
@@ -676,6 +632,64 @@ export function ChatView() {
             </div>
           ))}
         </OverlayScroll>
+
+        {/* 「上次输入」悬浮卡片：消息区顶部居中悬浮、不占布局（与「回到底部」
+            提示条同一套浮层手法），展示最近一次已送达的用户输入；点击跳转聚焦到
+            那个气泡（滚到卡片下方 + accent 描边闪烁）。尚无用户输入时不渲染。 */}
+        {lastUserMessage && (
+          <button
+            type="button"
+            ref={lastPromptCardRef}
+            className="chat-last-prompt-card pixel-float"
+            onClick={handleJumpToLastPrompt}
+            title={lastPromptPreview}
+            aria-label={`${t('chat.lastPrompt')}：${lastPromptPreview}`}
+            style={{
+              position: 'absolute',
+              top: CHAT_PROMPT_CARD_TOP_PX,
+              left: 0,
+              right: 0,
+              width: 'fit-content',
+              maxWidth: 'min(520px, calc(100% - 24px))',
+              margin: '0 auto',
+              zIndex: 20,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              gap: 3,
+              padding: isMobile ? '8px 14px' : '6px 12px',
+              textAlign: 'left',
+              fontFamily: READER_FONT,
+            }}
+          >
+            <span
+              style={{
+                color: 'var(--accent)',
+                fontFamily: 'var(--pixel-font)',
+                fontSize: 10,
+                letterSpacing: 'var(--pixel-tracking-sm)',
+                textTransform: 'uppercase',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              ◆ {t('chat.lastPrompt')}
+            </span>
+            <span
+              style={{
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+                wordBreak: 'break-word',
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {lastPromptPreview}
+            </span>
+          </button>
+        )}
 
         {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
             的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端加大触摸目标。 */}
