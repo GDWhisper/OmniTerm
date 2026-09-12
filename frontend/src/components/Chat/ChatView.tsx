@@ -29,6 +29,8 @@ const CHAT_MSG_FLASH_MS = 1500
 const CHAT_PROMPT_CARD_TOP_PX = 12
 /** 跳转让位：气泡顶缘与卡片底缘之间再留的呼吸距离。 */
 const CHAT_JUMP_TOP_GAP_PX = 8
+/** 目标气泡与消息区视口的垂直重叠达到该值即视为「用户已看到」，收起悬浮卡片。 */
+const CHAT_PROMPT_VISIBLE_OVERLAP_PX = 24
 
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
@@ -139,6 +141,9 @@ export function ChatView() {
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const flashTimerRef = useRef<number | null>(null)
   const flashRafRef = useRef<number | null>(null)
+  // 目标气泡（最近一次用户输入）是否在消息区视口内：在视口内收起悬浮卡片，
+  // 滚离后重现（用户正看着这条消息时，常驻悬浮只会挡内容）。
+  const [lastPromptInView, setLastPromptInView] = useState(false)
   // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
   const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
@@ -248,11 +253,38 @@ export function ChatView() {
     )
   }, [autoStick, tailSignature])
 
+  // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
+  // 是断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
+  const lastUserMessage = [...chatState.messages].reverse().find(
+    (m) => m.role === 'user' && !m.undelivered,
+  )
+  // 卡片预览：压平空白成单行（超宽由 ellipsis 截断，完整内容经 title hover 查看）；
+  // 纯附件消息（无正文）给占位文案。
+  const lastPromptPreview = lastUserMessage
+    ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
+    : ''
+
+  // 目标气泡是否已在消息区视口内（垂直重叠 ≥ CHAT_PROMPT_VISIBLE_OVERLAP_PX 视为
+  // 「用户已看到」）。用户正看着这条消息时卡片就该消失——悬浮常驻反而挡内容。
+  // useCallback 仅为给下方 effect 当稳定依赖（hooks 规则 3-b），测量本身很轻。
+  const measureLastPromptInView = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !lastUserMessage) return false
+    const bubble = el.querySelector<HTMLElement>(
+      `[data-chat-msg-id="${lastUserMessage.id}"]`,
+    )
+    if (!bubble) return false
+    const b = bubble.getBoundingClientRect()
+    const c = el.getBoundingClientRect()
+    return Math.min(b.bottom, c.bottom) - Math.max(b.top, c.top) >= CHAT_PROMPT_VISIBLE_OVERLAP_PX
+  }, [lastUserMessage])
+
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
     setAutoStick(atBottom)
+    setLastPromptInView(measureLastPromptInView())
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
     const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
@@ -269,15 +301,21 @@ export function ChatView() {
 
   const showJumpToBottom = !autoStick && hasNewContent
 
-  // 最近一次用户输入（已送达）：「上次输入」条的展示与跳转目标。undelivered 是
-  // 断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
-  const lastUserMessage = [...chatState.messages].reverse().find(
-    (m) => m.role === 'user' && !m.undelivered,
-  )
-  // 条内预览：压平空白成单行（超宽由 ellipsis 截断）；纯附件消息（无正文）给占位文案。
-  const lastPromptPreview = lastUserMessage
-    ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
-    : ''
+  // 气泡可见性决定卡片显隐。测量依赖滚动位置与 DOM 布局，两者都不进 React state，
+  // 三条重测路径各管一摊：
+  // · 滚动 → handleScroll（上面）；
+  // · 消息/目标变化 → 本 effect deps；
+  // · 容器尺寸变化（拖面板宽度 / 窗口 resize，既不滚动也不改消息）→ ResizeObserver。
+  // 显隐在绘制前落定（layout effect + RO 渲染步回调），卡片不会闪现一帧再消失；
+  // 同值 setState 被 React 合并，不会成环。
+  useLayoutEffect(() => {
+    setLastPromptInView(measureLastPromptInView())
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setLastPromptInView(measureLastPromptInView()))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measureLastPromptInView])
 
   // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
   // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
@@ -634,9 +672,10 @@ export function ChatView() {
         </OverlayScroll>
 
         {/* 「上次输入」悬浮卡片：消息区顶部居中悬浮、不占布局（与「回到底部」
-            提示条同一套浮层手法），展示最近一次已送达的用户输入；点击跳转聚焦到
-            那个气泡（滚到卡片下方 + accent 描边闪烁）。尚无用户输入时不渲染。 */}
-        {lastUserMessage && (
+            提示条同一套浮层手法），单行展示最近一次已送达的用户输入——不占满
+            顶部（fit-content + 限宽），超宽 ellipsis，完整内容经 title hover 查看；
+            点击跳转聚焦到那个气泡。目标气泡在视口内或尚无用户输入时不渲染。 */}
+        {lastUserMessage && !lastPromptInView && (
           <button
             type="button"
             ref={lastPromptCardRef}
@@ -650,37 +689,21 @@ export function ChatView() {
               left: 0,
               right: 0,
               width: 'fit-content',
-              maxWidth: 'min(520px, calc(100% - 24px))',
+              maxWidth: isMobile ? '88%' : '60%',
               margin: '0 auto',
               zIndex: 20,
               display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 3,
-              padding: isMobile ? '8px 14px' : '6px 12px',
+              padding: isMobile ? '7px 12px' : '4px 12px',
               textAlign: 'left',
               fontFamily: READER_FONT,
             }}
           >
             <span
               style={{
-                color: 'var(--accent)',
-                fontFamily: 'var(--pixel-font)',
-                fontSize: 10,
-                letterSpacing: 'var(--pixel-tracking-sm)',
-                textTransform: 'uppercase',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              ◆ {t('chat.lastPrompt')}
-            </span>
-            <span
-              style={{
-                display: '-webkit-box',
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: 'vertical',
+                minWidth: 0,
                 overflow: 'hidden',
-                wordBreak: 'break-word',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
                 fontSize: 12,
                 lineHeight: 1.5,
                 color: 'var(--text-secondary)',

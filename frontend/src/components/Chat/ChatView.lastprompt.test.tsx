@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatView } from './ChatView'
@@ -9,9 +9,10 @@ import type { ChatMessage } from '../../stores/chatStore'
 import type { Session } from '../../api/client'
 import '../../i18n'
 
-// 「上次输入」悬浮卡片：消息区顶部居中悬浮，展示最近一次已送达的用户输入，
+// 「上次输入」悬浮卡片：消息区顶部居中悬浮，单行展示最近一次已送达的用户输入，
 // 点击跳转聚焦到那个气泡（accent 描边 + ring 闪烁）。undelivered（断连留痕，
 // 从未真正发往 agent）不算一次输入——不作为展示内容，也不作为跳转目标。
+// 目标气泡在视口内时卡片收起，滚离视口后重现。
 
 const SESSION_ID = 's1'
 
@@ -98,5 +99,52 @@ describe('ChatView last-prompt card', () => {
     // 闪烁 class 落在目标气泡（data-chat-body 容器）上；留痕气泡不闪。
     expect(container.querySelector('[data-chat-msg-id="m1"] .chat-msg-flash')).toBeTruthy()
     expect(container.querySelector('[data-chat-msg-id="m3"] .chat-msg-flash')).toBeNull()
+  })
+
+  it('hides while the target bubble is in view and reappears once it scrolls out', () => {
+    seedMessages([userMsg('m1', 'first question'), assistantMsg('m2', 'answer')])
+    renderView()
+    // jsdom 默认零矩形：气泡与视口重叠 0 < 24px → 视为不可见 → 卡片显示
+    expect(lastPromptCard()).toBeTruthy()
+
+    // mock 后其余元素（含滚动容器）统一按 0..600 视口处理，气泡矩形由用例给定。
+    // 重测走真实路径：在滚动容器（.overlay-scroll-content，即 scrollRef 指向的
+    // 元素）上派发 scroll 事件，由 handleScroll 内的重测驱动显隐。
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+    const rectsFor = (bubble: { top: number; bottom: number } | null) =>
+      spy.mockImplementation(function (this: HTMLElement) {
+        const base = {
+          x: 0, y: 0, left: 0, right: 0, width: 100, height: 0, top: 0, bottom: 0,
+          toJSON: () => ({}),
+        }
+        if (bubble && this.hasAttribute('data-chat-msg-id')) {
+          return {
+            ...base,
+            top: bubble.top,
+            bottom: bubble.bottom,
+            y: bubble.top,
+            height: bubble.bottom - bubble.top,
+          }
+        }
+        return { ...base, bottom: 600, height: 600 }
+      })
+    const fireScroll = () => {
+      act(() => {
+        container.querySelector('.overlay-scroll-content')!.dispatchEvent(new Event('scroll'))
+      })
+    }
+    try {
+      // 气泡完全在视口内（重叠 50px ≥ 24）→ 卡片收起
+      rectsFor({ top: 10, bottom: 60 })
+      fireScroll()
+      expect(lastPromptCard()).toBeNull()
+
+      // 气泡几乎滚出视口底（仅 5px 重叠 < 24）→ 卡片重现
+      rectsFor({ top: 595, bottom: 645 })
+      fireScroll()
+      expect(lastPromptCard()).toBeTruthy()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
