@@ -17,7 +17,6 @@ import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper } from '../../hooks/useAcpChat'
-import { chatTailSignature, shouldShowJumpToBottom } from '../../utils/chatScroll'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -148,10 +147,6 @@ export function ChatView() {
   const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
-  // 「回到底部」提示条：离开底部时的末条内容指纹基线 + 是否有新内容到达。
-  const seenTailSignatureRef = useRef<string | null>(null)
-  const [hasNewContent, setHasNewContent] = useState(false)
-  const tailSignature = useMemo(() => chatTailSignature(chatState.messages), [chatState.messages])
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
@@ -243,16 +238,6 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight
   }, [chatState.messages, autoStick])
 
-  // 「回到底部」提示条的显隐。贴底时把末条内容指纹记为已读基线；用户上翻后指纹
-  // 变化（新消息 / 流式增长 / 工具块状态推进）即置位，滚回底部自动清位。判定逻辑
-  // 抽在 utils/chatScroll.ts（纯函数，可单测）；头部前插更早历史不改末条，不误报。
-  useEffect(() => {
-    if (autoStick) seenTailSignatureRef.current = tailSignature
-    setHasNewContent(
-      shouldShowJumpToBottom(autoStick, tailSignature, seenTailSignatureRef.current),
-    )
-  }, [autoStick, tailSignature])
-
   // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
   // 是断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
   const lastUserMessage = [...chatState.messages].reverse().find(
@@ -291,15 +276,16 @@ export function ChatView() {
     if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
   }
 
-  // 点提示条：立即滚到底并恢复自动跟随；基线由 autoStick effect 复位，提示条随隐。
+  // 点提示条：立即滚到底并恢复自动跟随，提示条随隐。
   const handleJumpToBottom = () => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
     setAutoStick(true)
-    setHasNewContent(false)
   }
 
-  const showJumpToBottom = !autoStick && hasNewContent
+  // 离开底部即显示（内容不足一屏不会滚出底部，恒隐）：既是流式期间的「有新输出」
+  // 入口，也是会话结束/空闲时回看历史的回底入口——不依赖尾部是否有新内容到达。
+  const showJumpToBottom = !autoStick
 
   // 气泡可见性决定卡片显隐。测量依赖滚动位置与 DOM 布局，两者都不进 React state，
   // 三条重测路径各管一摊：
@@ -719,7 +705,7 @@ export function ChatView() {
         {showJumpToBottom && (
           <button
             type="button"
-            className="pixel-press"
+            className="chat-jump-bottom pixel-press"
             onClick={handleJumpToBottom}
             title={t('chat.jumpToBottom')}
             aria-label={t('chat.jumpToBottom')}
@@ -748,7 +734,7 @@ export function ChatView() {
             }}
           >
             <span aria-hidden="true">↓</span>
-            {t('chat.newContent')}
+            {t('chat.jumpToBottom')}
           </button>
         )}
       </div>

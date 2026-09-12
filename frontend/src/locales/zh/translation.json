@@ -266,7 +266,6 @@
   "chat.replaying": "正在恢复会话记录…",
   "chat.loadingHistory": "正在加载更早的记录…",
   "chat.replay.empty": "恢复未返回历史记录，已保留本地消息",
-  "chat.newContent": "下方有新内容",
   "chat.jumpToBottom": "回到底部",
   "chat.lastPrompt": "上次输入",
   "chat.lastPromptAttachment": "[附件]",
