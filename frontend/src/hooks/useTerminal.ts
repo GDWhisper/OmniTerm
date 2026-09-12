@@ -13,6 +13,11 @@ import { rewriteLocalUrl } from '../utils/proxyUrl'
 import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
 import { ViewportController } from '../utils/viewportController'
 import { useCellFrame, type CellFrame } from './useCellFrame'
+// [TERMDBG] 临时诊断埋点（打字延迟排查用，排查完删除）
+import { termDebug } from '../utils/termDebug'
+
+/** [TERMDBG] 是否开启临时埋点（仅 DEV）。 */
+const TERMDBG = import.meta.env.DEV
 
 // Eagerly preload xterm addons at module level. The dynamic imports start
 // fetching immediately when this module is evaluated, so by the time
@@ -289,6 +294,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         try {
           const msg = JSON.parse(e.data)
           if (msg.t === 'cell_frame') {
+            // [TERMDBG] 临时埋点：帧到达 + 按键→含变化帧的回显延迟（排查完删除）
+            if (TERMDBG)
+              termDebug.noteFrame(
+                e.data.length,
+                !!msg.full || !!msg.overlay || (msg.row_indices?.length ?? 0) > 0,
+              )
             if (!sawFirstBinary) {
               sawFirstBinary = true
               termRef.current?.reset()
@@ -380,6 +391,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     // before sending.
     listenerDisposablesRef.current.push(
       term.onData((data) => {
+        if (TERMDBG) termDebug.noteKey()
         if (ws.readyState !== WebSocket.OPEN) return
         // 真实终端语义：输入时光标必须在活动行，故任何按键都把视口拉回
         // 底部——否则在 TUI 程序（top 等）里滚一下就再也回不去 live。
@@ -681,6 +693,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     term.loadAddon(unicode11)
     term.unicode.activeVersion = '11'
     term.open(container)
+    // [TERMDBG] 临时埋点：挂在 xterm 写入队列上（排查完删除）
+    if (TERMDBG) termDebug.attachTerm(term)
 
     // Mobile fit correction. FitAddon measures the container's border-box
     // (padding included, never subtracted) and always reserves the desktop

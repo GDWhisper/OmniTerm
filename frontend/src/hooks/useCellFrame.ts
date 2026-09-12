@@ -6,6 +6,11 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+// [TERMDBG] 临时诊断埋点（打字延迟排查用，排查完删除）
+import { termDebug } from '../utils/termDebug'
+
+/** [TERMDBG] 是否开启临时埋点（仅 DEV）。 */
+const TERMDBG = import.meta.env.DEV
 
 // ──────────────────────────────────────────────────────────
 // Wire format types (§9.2, Phase 3 additions)
@@ -178,6 +183,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
       chunks.push(SGR_RESET)
       chunks.push(...renderRow(frame.rows[r]?.runs))
     }
+    if (TERMDBG) termDebug.noteWrite()
     term.write(chunks.join(''))
     applyCursor(term, frame, true)
     return
@@ -194,6 +200,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     chunks.push(SGR_RESET)
     chunks.push(...renderRow(frame.rows[i]?.runs))
   }
+  if (TERMDBG) termDebug.noteWrite()
   term.write(chunks.join(''))
   applyCursor(term, frame, indices.length > 0)
 }
@@ -303,6 +310,7 @@ export function useCellFrame(
       }
       // 瘦身/清空后当前帧照常入队：diff 帧的中间变化不可丢，丢一帧 =
       // 永久丢那次行变化（后端基线已前进，不会重发）。
+      if (TERMDBG) termDebug.stamp(frame)
       q.push(frame)
       if (rafId.current == null) {
         rafId.current = requestAnimationFrame(() => {
@@ -311,7 +319,16 @@ export function useCellFrame(
           const frames = frameQueue.current
           frameQueue.current = []
           if (!term) return
-          for (const f of frames) renderCellFrame(term, f)
+          for (const f of frames) {
+            if (TERMDBG) {
+              const arrivedAt = (f as { __t?: number }).__t
+              termDebug.noteFrameRender(
+                arrivedAt ? performance.now() - arrivedAt : 0,
+                frames.length,
+              )
+            }
+            renderCellFrame(term, f)
+          }
         })
       }
     },

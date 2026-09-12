@@ -329,8 +329,19 @@ pub async fn handle_pty_terminal(
             match msg {
                 #[allow(clippy::collapsible_match)]
                 Ok(Message::Binary(data)) => {
+                    // [TERMDBG] 临时诊断：输入通道排队耗时（写线程被 pty 写阻塞时，
+                    // 队列满会让这里 await 变长，直接反映「输入卡住」）
+                    let t0 = std::time::Instant::now();
                     if pty_in_tx.send(data.to_vec()).await.is_err() {
                         break;
+                    }
+                    let el = t0.elapsed().as_micros() as u64;
+                    if el > 5_000 {
+                        warn!(
+                            el,
+                            len = data.len(),
+                            "TERMDBG slow input enqueue: session={read_session_id}"
+                        );
                     }
                 }
                 Ok(Message::Text(text)) => {
