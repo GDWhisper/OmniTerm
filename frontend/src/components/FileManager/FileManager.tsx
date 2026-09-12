@@ -11,6 +11,7 @@ import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
+import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './OpenTerminalConfirmDialog'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -259,11 +260,14 @@ export function FileManager() {
 
   // ── 在此打开终端 ──
   // 会话必须归属项目（sessions.project_id NOT NULL），按目录归属分三档：
-  // 1. 浏览目录仍在当前工作区内 → 直接挂当前激活项目；
-  // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 挂过去；
+  // 1. 浏览目录仍在当前工作区内 → 确认后挂当前激活项目；
+  // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 确认后挂过去；
   // 3. 无任何项目覆盖 → 弹窗引导为目录新建项目（次选项：挂到当前项目）。
+  // 前两档曾有静默直开，现经 OpenTerminalConfirmDialog 二次确认（告知归属项目、
+  // 生效引擎及更改入口）；第三档 OpenTerminalDialog 自身即承担告知与确认。
   // 启动目录恒为浏览目录 cwd（「在此」语义；不再回退 workspaceRoot）。
   const [terminalDialogTarget, setTerminalDialogTarget] = useState<OpenTerminalTarget | null>(null)
+  const [terminalConfirmTarget, setTerminalConfirmTarget] = useState<OpenTerminalConfirmTarget | null>(null)
 
   const finishOpenTerminal = (session: Session, projectId: string) => {
     if (projectId !== activeProjectId) setActiveProject(projectId)
@@ -280,6 +284,11 @@ export function FileManager() {
     }
   }
 
+  const handleTerminalConfirm = (projectId: string) => {
+    setTerminalConfirmTarget(null)
+    void openTerminalInProject(projectId)
+  }
+
   const handleOpenTerminalHere = () => {
     if (!cwd) return
     // 覆盖探测优先：后端 list_files 的 effective-root 兜底（同项目 worktree /
@@ -287,11 +296,16 @@ export function FileManager() {
     // resolve_effective_workspace_root），界内快路径在前会挂错项目。
     const covering = findCoveringProject(cwd, useAppStore.getState().projects)
     if (covering) {
-      void openTerminalInProject(covering.id)
+      setTerminalConfirmTarget({ projectId: covering.id, projectName: covering.name, cwd })
       return
     }
     if (!isOutsideWorkspace && activeProjectId) {
-      void openTerminalInProject(activeProjectId)
+      const active = useAppStore.getState().projects.find((p) => p.id === activeProjectId)
+      setTerminalConfirmTarget({
+        projectId: activeProjectId,
+        projectName: active?.name ?? t('fm.openTerminalConfirm.currentProject'),
+        cwd,
+      })
       return
     }
     const { projects, activeProjectId: apid } = useAppStore.getState()
@@ -1228,6 +1242,12 @@ export function FileManager() {
         message={deleteDialog ? t('fm.confirmDelete', { count: deleteDialog.count }) : ''}
         confirmText={t('fm.delete')}
         destructive
+      />
+      {/* 在此打开终端：目录有归属项目（覆盖探测/当前激活）时的二次确认 */}
+      <OpenTerminalConfirmDialog
+        target={terminalConfirmTarget}
+        onClose={() => setTerminalConfirmTarget(null)}
+        onConfirm={handleTerminalConfirm}
       />
       {/* 在此打开终端：目录不被任何已打开项目覆盖时的归属引导 */}
       <OpenTerminalDialog

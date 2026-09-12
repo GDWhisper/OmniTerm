@@ -55,3 +55,12 @@ export function resolveTerminalEngine(
 ): TerminalEngine {
   return preferred === 'tmux' && !multiplexerAvailable ? 'pty' : preferred
 }
+
+/** 引擎展示名（i18n）。设置面板、创建会话弹窗与 FM「在此打开终端」的弹窗共用，
+ *  勿再各写一份 `sessionTypeTmuxLabel`/`sessionTypePtyLabel` 三元映射。 */
+export function terminalEngineLabel(
+  engine: TerminalEngine,
+  t: (key: string) => string,
+): string {
+  return t(engine === 'tmux' ? 'sidebar.sessionTypeTmuxLabel' : 'sidebar.sessionTypePtyLabel')
+}

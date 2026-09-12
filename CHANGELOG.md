@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-09-12 16:12) `[frontend]` 文件管理器「在此打开终端」新增二次确认弹窗：此前目录已有归属项目（路径前缀探测命中其它项目、或在当前激活项目工作区内）时静默直开，用户不知道会话会挂到哪个项目、用什么引擎。现该情形先弹确认框，告知「将在现有项目『xx』下打开终端」并显示实际生效的引擎（默认引擎按宿主复用器可用性收敛后的值，缺复用器时如实显示 pty）与更改方法（设置 → 终端 → 默认引擎），确认后才创建会话；目录无归属时原有的新建项目引导弹窗补上同一引擎信息行，不再叠加第二层确认。引擎展示名的 i18n 映射在设置面板、创建会话弹窗与 FM 两弹窗共四处出现，抽为 `terminalEngineLabel` 共享函数（`frontend/src/components/FileManager/{OpenTerminalConfirmDialog,FileManager,OpenTerminalDialog}.tsx`、`frontend/src/components/{Settings/Settings,Sidebar/CreateSessionModal}.tsx`、`frontend/src/utils/terminalEngine.ts`、`frontend/src/locales/{zh,en}/translation.json`）
+
 ### Fixed
 
 - (2026-09-12 14:51) `[backend]` `[frontend]` `[api]` 修复 pty 上翻看历史时视口被"吸"回 live：输出流式期间每 100ms 的保锚重拉按首行内容指纹重定位，而锚点行多半是重复内容（空行/框线/分隔线，agent 输出常态）——滞后 y 反推的搜索起点落在真锚点靠 live 一侧，周期 p < 2k 时必先命中更新的内容副本，用户滚动位置被系统性擦除（空行带滑移、分隔线棘轮，五组探针实证；此前六轮修复的验收全用唯一行内容故未发现）。删除指纹重定位机制（`relocate_anchor`/`ANCHOR_SEARCH_RADIUS`/`parse_anchor_fp`/`viewport_fp` 全链路），改后端有状态锚：`VtState.viewport_anchor` 持窗口顶行绝对行索引，滚动请求存锚、保锚刷新直接按锚出窗（刷新路径不再有任何"重新决定位置"的步骤），历史饱和期由前后帧行哈希相关做滚移检测同步锚（重叠区判等 ≥3/4、静态屏跳过防误调），y=0 回底/resize/alt-screen 清锚、锚行淘汰钳 0 续供、后端重启回退按 y。协议 `viewport_request` 的 `fp: string|null` 改为 `refresh: bool`（`serde(default)` 缺省 false=滚动语义，旧前端缓存请求降级不断连）；前端 `ViewportController` 删除全部锚点簿记，仅保留响应 y 权威同步（`src/engine/pty/vt.rs`、`src/engine/pty/{frame,terminal_ws}.rs`、`src/ws/terminal.rs`、`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/{useTerminal,useCellFrame}.ts`）

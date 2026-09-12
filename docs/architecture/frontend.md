@@ -36,7 +36,7 @@ src/
     ├── Terminal/ — Terminal.tsx
     ├── Chat/ — ChatView.tsx, ChatMessage.tsx, ChatInput.tsx (Phase 4a: ACP session rendering), FileLocationLink.tsx（agent 上报的文件路径 → 点开 FM 抽屉；内部走 `getState()`，不动 ChatMessageView props）, messageActions.ts（气泡动作注册表——copy/quote/edit/regenerate/copyMarkdown 唯一真源，桌面 hover + 移动长按共用，D2）, MessageActionBar.tsx（动作条渲染：按 visible 过滤，桌面 hover 动作条 + 移动 portal 浮动菜单）
     ├── AgentPicker/ — AgentPicker.tsx (Phase 3: <select> for create-session modal)
-    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, MarkdownPreview.tsx（.md 预览：相对图片/链接改写，渲染核心复用 `Common/MarkdownCore.tsx`）, filePreviewShared.ts（预览策略单一真源：扩展名分类、SSE 去抖常量、行数阈值、相对路径解析、下载 URL 构造）, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
+    ├── FileManager/ — FileManager.tsx, FileDrawer.tsx, FileEditor.tsx, FilePreview.tsx, MarkdownPreview.tsx（.md 预览：相对图片/链接改写，渲染核心复用 `Common/MarkdownCore.tsx`）, filePreviewShared.ts（预览策略单一真源：扩展名分类、SSE 去抖常量、行数阈值、相对路径解析、下载 URL 构造）, OpenTerminalDialog.tsx（「在此打开终端」目录无归属项目时的创建引导）, OpenTerminalConfirmDialog.tsx（目录有归属项目时的二次确认：告知归属项目、生效引擎及更改入口）, icons.tsx（纯内容组件，标题栏/折叠归 RightPanel）
     ├── RightPanel/ — RightPanel.tsx（右栏容器：FILES | GIT 标签、统一标题栏、折叠 rail；两 tab 常挂载 display 切换）
     ├── GitPanel/ — GitPanel.tsx（分支/远端操作 + CHANGES|HISTORY + 底部提交框）, GitDrawer.tsx（diff/commit 抽屉）, DiffView.tsx, diffParser.ts（unified diff 解析）
     ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx（SessionsSection 含三个断连/回收滑块，复用 DisconnectSlider 组件）
@@ -158,7 +158,7 @@ pty 引擎仍在 beta 期，因此「新建终端会话用什么引擎」提到�
 | store 字段 | `appStore.defaultTerminalEngine`（`'pty' \| 'tmux'`） |
 | 持久化 | localStorage `omniterm_default_terminal_engine`；新键缺失时一次性继承旧键 `omniterm_last_terminal_engine`（原「记住上次引擎」功能已收编进本设置），两者均非法/缺失 → `tmux` |
 | 入口 | Settings → 终端 `DefaultEngineSection`（两按钮，pty 带 `BetaBadge`；宿主无复用器时 tmux 按钮禁用并提示） |
-| 消费方 | `CreateSessionModal`（初始高亮）、`FileManager` 与 `OpenTerminalDialog` 的「在此打开终端」（经 `useTerminalEngine`） |
+| 消费方 | `CreateSessionModal`（初始高亮）、`FileManager` 与 `OpenTerminalDialog`/`OpenTerminalConfirmDialog` 的「在此打开终端」（经 `useTerminalEngine`）；引擎展示名统一走 `terminalEngineLabel`（勿再散落 `sessionTypeTmux/PtyLabel` 三元映射） |
 
 两条语义约束：
 

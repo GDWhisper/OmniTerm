@@ -11,7 +11,7 @@ import { BetaBadge } from '../Common/BetaBadge'
 import { TerminalIcon } from '../Icons/TerminalIcon'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { READER_FONT } from '../../utils/fonts'
-import { resolveTerminalEngine, type TerminalEngine } from '../../utils/terminalEngine'
+import { resolveTerminalEngine, terminalEngineLabel, type TerminalEngine } from '../../utils/terminalEngine'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 
 /* ─── Types ─── */
@@ -244,7 +244,7 @@ export function CreateSessionModal(props: {
                     className="block text-[10px] truncate"
                     style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}
                   >
-                    命令行终端 · {t(terminalEngine === 'tmux' ? 'sidebar.sessionTypeTmuxLabel' : 'sidebar.sessionTypePtyLabel')}
+                    命令行终端 · {terminalEngineLabel(terminalEngine, t)}
                   </span>
                 </div>
               </div>

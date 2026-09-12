@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN } from '../../stores/appStore'
-import { TERMINAL_ENGINES, type TerminalEngine } from '../../utils/terminalEngine'
+import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
 import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
@@ -397,9 +397,6 @@ function DefaultEngineSection() {
   const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
   const multiplexer = useAppStore((s) => s.multiplexer)
 
-  const engineLabel = (engine: TerminalEngine) =>
-    engine === 'tmux' ? t('sidebar.sessionTypeTmuxLabel') : t('sidebar.sessionTypePtyLabel')
-
   return (
     <section className="space-y-2">
       <SectionTitle>{t('settings.defaultEngine')}</SectionTitle>
@@ -423,7 +420,7 @@ function DefaultEngineSection() {
               onMouseEnter={disabled ? undefined : btnHover}
               onMouseLeave={disabled ? undefined : (e) => btnLeave(e, isActive)}
             >
-              {engineLabel(engine)}
+              {terminalEngineLabel(engine, t)}
               {engine === 'pty' && <>&nbsp;<BetaBadge /></>}
             </button>
           )
