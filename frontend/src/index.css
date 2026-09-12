@@ -2060,6 +2060,26 @@ input[type="range"]:active::-webkit-slider-thumb {
   animation: replay-spin 0.7s linear infinite;
 }
 
+/* 「上次输入」条（ChatView 顶部）：点击跳转聚焦到最近一次用户输入的气泡。
+   条目式 hover，同上下文菜单条目规范（ui-style-guide §6.3）：accent-10 底。 */
+.chat-last-prompt-strip:hover {
+  background: var(--accent-10);
+}
+
+/* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
+   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。 */
+@keyframes chat-msg-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.chat-msg-flash {
+  animation: chat-msg-flash 1.5s ease-out forwards;
+}
+
 /* 消息级 hover 操作（编辑 / 重新生成）：默认隐藏，悬停消息行时淡入 */
 .chat-msg-row .chat-msg-actions {
   opacity: 0;

@@ -508,6 +508,9 @@ export interface ChatMessageViewProps {
   /** agent 气泡显示名（capabilities 帧下发；未连接/已释放时 ChatView 用会话关联的
    *   agents.display_name 兜底）；两者都缺失时回退 "agent"。 */
   agentName?: string
+  /** 「上次输入」条跳转聚焦的闪烁态：目标气泡 accent 描边 + ring 动画。
+   *   仅目标消息为 true、其余恒 false/缺省，memo 浅比较不受影响。 */
+  highlighted?: boolean
 }
 
 /**
@@ -515,7 +518,7 @@ export interface ChatMessageViewProps {
  * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
  * 使历史消息在流式期间跳过重渲染。
  */
-export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
+export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName, highlighted }: ChatMessageViewProps) {
   const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
@@ -664,6 +667,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     return (
       <div
         className="chat-msg-row"
+        data-chat-msg-id={message.id}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onTouchStart={onTouchStart}
@@ -676,6 +680,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
         <div
           // data-chat-body: 长按正文保留系统文本选择，不弹动作菜单（D3）
           data-chat-body="true"
+          // 「上次输入」条跳转聚焦：accent 描边 + ring 闪烁动画（index.css）。
+          className={highlighted ? 'chat-msg-flash' : undefined}
           style={{
             padding: '8px 12px',
             borderRadius: 8,
@@ -685,7 +691,9 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
             border: message.undelivered
               ? '1px dashed var(--danger, #FF7B72)'
-              : '1px solid var(--accent-14)',
+              : highlighted
+                ? '1px solid var(--accent)'
+                : '1px solid var(--accent-14)',
             fontFamily: READER_FONT,
             fontSize: '1em',
             lineHeight: 1.5,
@@ -832,6 +840,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     <div
       ref={rowRef}
       className="chat-msg-row"
+      data-chat-msg-id={message.id}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onTouchStart={onTouchStart}

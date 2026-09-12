@@ -22,6 +22,12 @@ import { chatTailSignature, shouldShowJumpToBottom } from '../../utils/chatScrol
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
 
+/** 「上次输入」条跳转聚焦：目标气泡 ring 闪烁时长（与 index.css 的
+ *   .chat-msg-flash 动画时长一致，到期摘 class）。 */
+const CHAT_MSG_FLASH_MS = 1500
+/** 跳转后目标气泡顶部与消息区顶缘的距离。 */
+const CHAT_JUMP_TOP_GAP_PX = 8
+
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
   id: string
@@ -126,6 +132,11 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+  // 「上次输入」跳转聚焦：高亮中的消息 id（目标气泡 accent 描边 + ring 闪烁，
+  // 经 highlighted prop 传给 ChatMessageView）。
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const flashRafRef = useRef<number | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
   // 「回到底部」提示条：离开底部时的末条内容指纹基线 + 是否有新内容到达。
@@ -138,6 +149,14 @@ export function ChatView() {
     // 没有 capabilities 帧（未连接），agentName 缺失时用它回退，避免显示 "agent"。
     if (!loaded) loadAgents()
   }, [loaded, loadAgents])
+
+  useEffect(() => {
+    // 卸载（切会话重挂载）时清掉闪烁计时与待挂的 rAF，避免向已卸载组件 setState。
+    return () => {
+      if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+      if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -245,6 +264,50 @@ export function ChatView() {
   }
 
   const showJumpToBottom = !autoStick && hasNewContent
+
+  // 最近一次用户输入（已送达）：「上次输入」条的展示与跳转目标。undelivered 是
+  // 断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
+  const lastUserMessage = [...chatState.messages].reverse().find(
+    (m) => m.role === 'user' && !m.undelivered,
+  )
+  // 条内预览：压平空白成单行（超宽由 ellipsis 截断）；纯附件消息（无正文）给占位文案。
+  const lastPromptPreview = lastUserMessage
+    ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
+    : ''
+
+  // 跳转聚焦「上次输入」：滚动让目标气泡贴近消息区顶缘，再短暂 accent 描边闪烁。
+  // 高亮经 highlighted prop 传入 ChatMessageView（memo 浅比较，仅目标气泡重渲染）。
+  // 同一目标已在闪烁中再点一次时，先摘 class、下一帧重挂，CSS 动画得以重放。
+  // id 来源为前端 genId（uuid / msg-<数字>）与后端 uuid 行 id，均不含选择器
+  // 元字符，属性选择器无需转义（CSS.escape 在 jsdom 测试环境不可用）。
+  const handleJumpToLastPrompt = () => {
+    const el = scrollRef.current
+    if (!el || !lastUserMessage) return
+    const bubble = el.querySelector<HTMLElement>(
+      `[data-chat-msg-id="${lastUserMessage.id}"]`,
+    )
+    if (!bubble) return
+    el.scrollTop +=
+      bubble.getBoundingClientRect().top - el.getBoundingClientRect().top - CHAT_JUMP_TOP_GAP_PX
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    const armFlash = () => {
+      setHighlightedMessageId(lastUserMessage.id)
+      flashTimerRef.current = window.setTimeout(() => {
+        setHighlightedMessageId(null)
+        flashTimerRef.current = null
+      }, CHAT_MSG_FLASH_MS)
+    }
+    if (highlightedMessageId === lastUserMessage.id) {
+      setHighlightedMessageId(null)
+      flashRafRef.current = window.requestAnimationFrame(() => {
+        flashRafRef.current = null
+        armFlash()
+      })
+    } else {
+      armFlash()
+    }
+  }
 
   // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode 等）。
   // 必须置于所有提前 return 之前，遵守 React Hooks 调用顺序规则。
@@ -461,6 +524,58 @@ export function ChatView() {
         </div>
       )}
 
+      {/* 「上次输入」条：常驻展示最近一次已送达的用户输入，点击跳转聚焦到那个
+          气泡（滚到消息区顶缘 + accent 描边闪烁）。尚无用户输入时不渲染。 */}
+      {lastUserMessage && (
+        <button
+          type="button"
+          className="chat-last-prompt-strip"
+          onClick={handleJumpToLastPrompt}
+          title={lastPromptPreview}
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            width: '100%',
+            padding: isMobile ? '9px 12px' : '5px 12px',
+            background: 'var(--bg-elevated)',
+            border: 'none',
+            borderBottom: '1px solid var(--border-subtle)',
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontFamily: READER_FONT,
+          }}
+        >
+          <span
+            style={{
+              flexShrink: 0,
+              color: 'var(--accent)',
+              fontFamily: 'var(--pixel-font)',
+              fontSize: 11,
+              letterSpacing: 'var(--pixel-tracking-sm)',
+              textTransform: 'uppercase',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            ◆ {t('chat.lastPrompt')}
+          </span>
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 12,
+              color: 'var(--text-secondary)',
+            }}
+          >
+            {lastPromptPreview}
+          </span>
+        </button>
+      )}
+
       <div
         style={{
           position: 'relative',
@@ -510,6 +625,7 @@ export function ChatView() {
                 onCopyMessage={handleCopyMessage}
                 onQuoteMessage={handleQuoteMessage}
                 isLastAssistant={m.id === lastAssistantId}
+                highlighted={m.id === highlightedMessageId}
               />
             ))
           })()}
