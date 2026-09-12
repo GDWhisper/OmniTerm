@@ -68,6 +68,11 @@ describe('OpenTerminalConfirmDialog', () => {
     expect(document.body.textContent).toContain('将在现有项目「OmniTerm」下打开终端')
     expect(document.body.textContent).toContain(target.cwd)
     expect(document.body.textContent).toContain('引擎：tmux')
+    // 引擎名提亮强调（--text-primary，非交互文字强调约定；accent 只给交互元素）
+    const engineSpan = Array.from(document.body.querySelectorAll('p span'))
+      .find((s): s is HTMLElement => s.textContent === 'tmux')
+    expect(engineSpan).toBeTruthy()
+    expect(engineSpan!.style.color).toBe('var(--text-primary)')
   })
 
   it('shows the fallback engine when host lacks the multiplexer', async () => {

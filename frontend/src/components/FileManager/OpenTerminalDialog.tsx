@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError, type Session } from '../../api/client'
 import { useTerminalEngine } from '../../hooks/useTerminalEngine'
-import { terminalEngineLabel } from '../../utils/terminalEngine'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { inputClass, inputStyle } from '../Sidebar/sidebarModalStyles'
+import { EngineHintLine } from './EngineHintLine'
 
 export interface OpenTerminalTarget {
   /** FM 当前浏览目录——既是新终端启动目录，也是新建项目的根。 */
@@ -119,11 +119,7 @@ export function OpenTerminalDialog(props: {
           >
             {target.cwd}
           </div>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
-            {t('fm.openTerminalDialog.engineHint', {
-              engine: terminalEngineLabel(terminalEngine, t),
-            })}
-          </p>
+          <EngineHintLine />
           <div>
             <label
               className="block text-xs font-medium mb-1.5"

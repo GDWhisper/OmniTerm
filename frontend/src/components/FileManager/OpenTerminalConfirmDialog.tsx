@@ -1,8 +1,7 @@
 import { useTranslation } from 'react-i18next'
-import { useTerminalEngine } from '../../hooks/useTerminalEngine'
-import { terminalEngineLabel } from '../../utils/terminalEngine'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
+import { EngineHintLine } from './EngineHintLine'
 
 export interface OpenTerminalConfirmTarget {
   /** 会话将挂入的项目（覆盖探测命中或当前激活项目）。 */
@@ -25,7 +24,6 @@ export function OpenTerminalConfirmDialog(props: {
   onConfirm: (projectId: string) => void
 }) {
   const { t } = useTranslation()
-  const terminalEngine = useTerminalEngine()
   const target = props.target
   return (
     <Modal
@@ -51,11 +49,7 @@ export function OpenTerminalConfirmDialog(props: {
           >
             {target.cwd}
           </div>
-          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
-            {t('fm.openTerminalDialog.engineHint', {
-              engine: terminalEngineLabel(terminalEngine, t),
-            })}
-          </p>
+          <EngineHintLine />
           <div className="flex justify-end gap-2 pt-1 flex-wrap">
             <PixelButton variant="secondary" onClick={props.onClose}>
               {t('sidebar.cancel')}
