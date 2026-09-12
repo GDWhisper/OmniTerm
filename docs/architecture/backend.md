@@ -149,13 +149,16 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 >
 > **`history_size` 字段（2026-08-30）**：**所有** cell_frame（live / overlay /
 > viewport）都携带 `history_size: u32`，取编码时刻的 `grid.history_size()`。
-> 前端 ViewportController 靠它把「距底偏移 y」换算成绝对锚点，在新输出推高
-> 历史时按锚点重算 y；缺此字段前端只能停在上翻时刻的快照，后续输出完全不
-> 可见（实测：在 `top` 里滚一下 → 之后压测 12s 屏幕纹丝不动）。帧体积代价
+> 前端用它把滚动像素量映射为请求 y 并钳制本地窗口上界（与后端 scrollback
+> 容量对齐）；锚定的位置换算已不在此处——见下方 2026-09-12 有状态锚条目。
+> 缺此字段前端只能停在上翻时刻的快照，后续输出完全
+> 不可见（实测：在 `top` 里滚一下 → 之后压测 12s 屏幕纹丝不动）。帧体积代价
 > 约 15 字节/帧，可忽略。
 >
 > 注意：`y` 是**相对底部**的偏移，新输出会把内容整体上推，同一个 y 指向的
-> 行随之后移。这是前端必须做锚定换算（而非缓存 y）的根本原因。
+> 行随之后移——「距底偏移 y 不是稳定标识」。锚定换算因此必须由持有 grid
+> 真相源的一侧完成（现行方案：后端 `VtState` 有状态锚，见 2026-09-12 条目；
+> 前端不再做任何位置推算）。
 >
 > **`bracketed_paste` 字段（2026-09-06）**：**所有** cell_frame 都携带
 > `bracketed_paste: bool`，取编码时刻的 `mode().contains(TermMode::BRACKETED_PASTE)`。
@@ -181,6 +184,23 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > 校准的增量镜像」的不变式升级为被守护属性：失配可检测（seq）+ 可见上界
 > ≤1s（周期全帧）。实测带宽 ~9.7KB/s（30fps 空 diff + 1s 全帧）。
 > （`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`）
+>
+> **历史视口有状态锚（2026-09-12）**：`viewport_request` 协议从 `{y, fp}` 改为
+> `{y, refresh: bool}`（`#[serde(default)]` 缺省 false = 滚动语义，旧前端缓存
+> 请求降级按偏移定位、不断连；09-03 的指纹字段 `viewport_fp` 一并删除）。位置
+> 记忆驻后端 `VtState.viewport_anchor: Option<i32>`（窗口顶行**绝对行索引**，
+> 0 = 最旧一行，hs = live 屏顶）：滚动请求（`refresh=false`）按
+> `top = hs − y` 定位并存锚；输出触发的保锚重拉（`refresh=true`）**直接按存储
+> 锚出窗、忽略 y**——刷新路径不存在「重新决定位置」的步骤（指纹重定位在周期
+> 性内容 p<2k 时必棘轮/滑移，实证见
+> `docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`）。饱和期（hs 恒
+> 1000）锚随淘汰同步：live 编码路径复用每帧行哈希与上帧基线做相关检测
+> （重叠区判等 ≥3/4、重叠下限 rows/4、静态屏跳过），命中则锚前移 s 行；miss
+> 不调整（有界缓滑移，无棘轮）。锚失效路径：y=0 回底 / resize reflow /
+> AltScreenEnter 清锚；锚行淘汰钳 0 续供（贴住最旧可用行随淘汰滑动 = 真实
+> 终端语义）；锚缺失（后端重启后首个刷新）回退按请求 y 定位。失效与命中/
+> miss 均有单测；`encode_viewport_frame` 因此为 `&mut self`（转发循环是
+> viewport 请求唯一消费者，锁无争用）。
 
 **双引擎行为差异表（AGENTS §8——前端不得以单一引擎行为推断另一引擎）**：
 
@@ -194,7 +214,7 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 | VT 应答（DSR/DA） | tmux server 自己应答，无此概念 | 按是否有客户端订阅二选一：attach 时浏览器应答 / detach 时服务端应答 |
 | 外部会话收养 | 支持（D6 冻结能力） | 无对应物 |
 | 补屏 | tmux `new-session -A` 原生 | raw 尾回放（scrollback+模式态）+ 清可见屏 + VT grid 整帧重渲染（`render_screen`，带 SGR 样式与光标复位）；无 nudge |
-| 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | 后端视口供给（方案 C）：滚轮/翻页 → 前端 `viewport_request {y}` → `encode_viewport_frame` 整屏全帧（y 钳制到 grid scrollback 1000 行）；xterm 本地 scrollback 在 cell_frame 模式下结构性冻结，滚动状态在前端 `ViewportController`（live/viewport 状态机）；alt-screen 与鼠标协议激活期间交回 xterm 默认路径；直接拖选复制，无任何注入字节 |
+| 前端滚动/复制交互（D12） | copy-mode 字节注入（prefix+`[`）+ Shift 拖选复制 + modern 键位注入 prefix | 后端视口供给（方案 C）：滚轮/翻页 → 前端 `viewport_request {y, refresh}`（滚动 `refresh=false` 存锚 / 输出重拉 `refresh=true` 按锚出窗，2026-09-12 有状态锚）→ `encode_viewport_frame` 整屏全帧（y 钳制到 grid scrollback 1000 行）；xterm 本地 scrollback 在 cell_frame 模式下结构性冻结，滚动状态在前端 `ViewportController`（live/viewport 状态机）；alt-screen 与鼠标协议激活期间交回 xterm 默认路径；直接拖选复制，无任何注入字节 |
 | 创建入口（Phase 4） | 创建会话弹窗引擎选择器可选项（multiplexer 不可用时禁用），长期维护态 | 同选择器默认选中项 |
 
 ## pty hook 信道（D7，Phase 3）

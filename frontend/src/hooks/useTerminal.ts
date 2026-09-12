@@ -172,10 +172,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const viewportCtlRef = useRef<ViewportController | null>(null)
   if (viewportCtlRef.current === null) {
     viewportCtlRef.current = new ViewportController({
-      sendRequest: (y, fp) => {
+      sendRequest: (y, refresh) => {
         const ws = wsRef.current
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'viewport_request', y, fp }))
+          // refresh = true 是输出触发的保锚重拉：后端按存储锚出窗、忽略 y
+          // （有状态锚 2026-09-12 D1/D2）
+          ws.send(JSON.stringify({ type: 'viewport_request', y, refresh }))
         }
       },
       onModeChange: setPtyScrollMode,

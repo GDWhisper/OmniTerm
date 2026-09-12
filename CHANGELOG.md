@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-09-12 14:51) `[backend]` `[frontend]` `[api]` 修复 pty 上翻看历史时视口被"吸"回 live：输出流式期间每 100ms 的保锚重拉按首行内容指纹重定位，而锚点行多半是重复内容（空行/框线/分隔线，agent 输出常态）——滞后 y 反推的搜索起点落在真锚点靠 live 一侧，周期 p < 2k 时必先命中更新的内容副本，用户滚动位置被系统性擦除（空行带滑移、分隔线棘轮，五组探针实证；此前六轮修复的验收全用唯一行内容故未发现）。删除指纹重定位机制（`relocate_anchor`/`ANCHOR_SEARCH_RADIUS`/`parse_anchor_fp`/`viewport_fp` 全链路），改后端有状态锚：`VtState.viewport_anchor` 持窗口顶行绝对行索引，滚动请求存锚、保锚刷新直接按锚出窗（刷新路径不再有任何"重新决定位置"的步骤），历史饱和期由前后帧行哈希相关做滚移检测同步锚（重叠区判等 ≥3/4、静态屏跳过防误调），y=0 回底/resize/alt-screen 清锚、锚行淘汰钳 0 续供、后端重启回退按 y。协议 `viewport_request` 的 `fp: string|null` 改为 `refresh: bool`（`serde(default)` 缺省 false=滚动语义，旧前端缓存请求降级不断连）；前端 `ViewportController` 删除全部锚点簿记，仅保留响应 y 权威同步（`src/engine/pty/vt.rs`、`src/engine/pty/{frame,terminal_ws}.rs`、`src/ws/terminal.rs`、`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/{useTerminal,useCellFrame}.ts`）
+
 ## [0.2.22] - 2026-09-11
 
 ### Added

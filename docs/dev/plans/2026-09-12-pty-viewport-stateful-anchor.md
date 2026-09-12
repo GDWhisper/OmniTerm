@@ -1,6 +1,6 @@
 # pty 历史视口锚定修复：删除指纹重定位，改后端有状态锚 + 滚移检测
 
-> 状态：设计稿（2026-09-12，根因已实证，待实施）
+> 状态：已实施（2026-09-12，P0-P2 完成；自动化验收全绿——探针实机回归与浏览器手动回归待 dev 后端运行新二进制后执行，见验收清单）
 > 触发条件：用户持续报告「pty 上翻看历史时，上面有一部分内容像锁住，只能翻滚下屏一点点内容」；tmux 路径无此问题；pi / codebuddy / gemini CLI 等 agent 上均复现（输出流式进行时）。
 > 关联：`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`（指纹锚定，本计划**取代其 D1-D5 机制**，其「y 不是稳定标识」结论仍是本设计前提）、`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`（A1/A2 与本计划正交，不得回归）、`docs/dev/debug-patterns/terminal-pty.md` 模式 10/12、`docs/dev/performance-and-safety.md`（§P1/P2/P6，编码热路径改动前必读）
 > 探针脚本（诊断证据，gitignored，实施时升级为正式回归）：`.dev/viewport-suction-probe.mjs`、`.dev/viewport-suction-final.mjs`
@@ -177,13 +177,20 @@
 
 ## 验收标准
 
-- [ ] 五形态探针回归（唯一 / 空行 p=3 / 分隔线 p=11 含副本 / 分隔线 p=11 不含副本 / 空行 p=2）连续 8 轮 drift == 新增行数（±1），窗口首行内容保持，y 轨迹无递减
-- [ ] `relocate_anchor` / `ANCHOR_SEARCH_RADIUS` / `parse_anchor_fp` / `viewport_fp` 全链路删除，前后端无 fp 残留引用（rg 验证）
-- [ ] y=0 回底、resize、alt-screen、锚淘汰钳 0、后端重启回退五条失效路径单测覆盖
-- [ ] 饱和期滚移检测：相关命中调整正确；全重绘 miss 不调整且可观测（debug 日志）
-- [ ] `pty-frame-regression.mjs` 20/20；`cargo test --workspace` 全绿；`pnpm build` 通过；fmt/clippy -D warnings 零新增
-- [ ] 浏览器手动回归：输出流式期间上翻锚定不动、可继续上滚、回底链路正常
-- [ ] Phase 4 文档闭环完成
+- [ ] 五形态探针回归（唯一 / 空行 p=3 / 分隔线 p=11 含副本 / 分隔线 p=11 不含副本 / 空行 p=2）连续 8 轮 drift == 新增行数（±1），窗口首行内容保持，y 轨迹无递减（`scripts/pty-viewport-anchor-regression.mjs`，需 dev 后端运行新二进制）
+- [x] `relocate_anchor` / `ANCHOR_SEARCH_RADIUS` / `parse_anchor_fp` / `viewport_fp` 全链路删除，前后端无 fp 残留引用（rg 验证，2026-09-12）
+- [x] y=0 回底、resize、alt-screen、锚淘汰钳 0、后端重启回退五条失效路径单测覆盖（`scroll_to_y0_clears_anchor` / `resize_clears_anchor` / `alt_screen_enter_clears_anchor` / `anchor_clamps_to_zero_when_anchor_line_evicted` / `refresh_without_anchor_falls_back_to_requested_y`）
+- [x] 饱和期滚移检测：相关命中调整正确；全重绘 miss 不调整且可观测（debug 日志）（`anchor_follows_screen_scroll_when_history_saturated` / `anchor_holds_when_full_screen_redraw_misses_detection`）
+- [x] `cargo test --workspace` 全绿；`pnpm build` 通过；fmt/clippy -D warnings 零新增（2026-09-12）；`pty-frame-regression.mjs` 20/20 与前端 638 测试同属提交前自动检查，实机项待后端新二进制
+- [ ] 浏览器手动回归：输出流式期间上翻锚定不动、可继续上滚、回底链路正常（`docs/reference/user-testing.md` §4.6 V11/V12）
+- [x] Phase 4 文档闭环完成（2026-09-12）
+
+## 实施勘误（2026-09-12，实施时定稿的偏差）
+
+- **D3 检测参数收紧**：s 的搜索上界从计划的 `rows−1` 收紧为 `rows − rows/4`（重叠区下限 `min_overlap = rows/4`）——排除大 s 端「一两次巧合判等即达标」的弱证据区，突发超过 ~3/4 屏高时放弃检测（滑移有界）。阈值公式同计划（重叠区 × 3/4，另加 `.max(1)` 防零）。
+- **D3 基线失配跳过**：实现以「`prev_hashes.len() == row_hashes.len() && prev_hs == hs && 屏幕有变化`」为检测前提（计划第 4 条 `hs < prev_hs` 不发生的场景由长度失配统一覆盖）；屏幕哈希与上帧**完全一致**的帧直接跳过——垂直同构内容（空行带）在无滚移时也会自相关，不设此闸会按帧误调（单测 `scroll_detection_skips_unchanged_screen`）。
+- **D6 观测语义**：`AnchorAdjust::{Adjusted, Miss, Inactive}` 三态；命中与 miss 均打 `tracing::debug!`，但仅在与上帧状态迁移时打（30fps 连续同态不刷屏），比计划的「miss 才打」多覆盖了命中侧观测。
+- `prev_history_size` 落为 `i32`（计划写 `u32`；与 `history_size()` 的 i32 运算对齐，免转换）。
 
 ## 风险与降级
 
