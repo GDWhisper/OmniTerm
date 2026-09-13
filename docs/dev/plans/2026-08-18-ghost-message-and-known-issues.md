@@ -2,7 +2,7 @@
 
 > 状态：P0 已实施（2026-08-18）；P1/P2 待办（运维层，另立）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`、`src/acp/chat_persistence.rs`、`src/acp/reaper.rs`、`src/acp/client.rs`、`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx` 中任一项前必读
-> 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（Phase 1 勘误预测的 text 语义漂移在此文档中实测复现）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（同次排查的已修复项）、`docs/architecture/backend.md`（blocks 两态 / sync_messages 匹配语义）
+> 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（Phase 1 勘误预测的 text 语义漂移在此文档中实测复现）、`docs/dev/plans/archive/2026-08-18-permission-recycle-notice.md`（同次排查的已修复项）、`docs/architecture/backend.md`（blocks 两态 / sync_messages 匹配语义）
 > 来源：正式版会话 codebuddy_0818-1141 排查（2026-08-18），全部问题有正式库 `omniterm.db` 实测证据
 
 ## 问题清单

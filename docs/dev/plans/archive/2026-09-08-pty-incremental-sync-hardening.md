@@ -1,6 +1,6 @@
 # PTY 增量同步加固：周期对账 + 帧序号 + 状态行入队（A+C）
 
-> 状态：设计稿（2026-09-08）
+> 状态：已实施（2026-09-08，A1/A2/C1 落地于 `97dd0ec`/`9987430`；2026-09-09 自动化验收全绿。人工观感项「100 行/秒闪烁录屏对照」登记 `docs/reference/user-testing.md` §4.8 待执行，不影响归档）
 > 触发条件：用户持续报告「pty 运行中画面错位/延迟显示，切换终端/会话回来后恢复正常」。结构性分析（见背景）结论：症状家族已修六轮仍复发，根因不在单个漏洞，而在「无校准的增量镜像」架构——本次按建议先落地 A+C 止血。
 > 关联：`docs/dev/debug-patterns/terminal-pty.md` 模式 7/8/10/12、`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`（视口锚定，已实施）、`docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`（方案 D，长期方向）、`docs/dev/performance-and-safety.md` §P1（有界缓冲红线）
 
@@ -126,14 +126,14 @@ PTY 输出 → 后端 VT grid（真相源）→ 每连接独立编码（33ms tic
 
 ## 验收标准
 
-- [ ] 故障注入（探针偷基线）下，画面 ≤1s 自愈，无需切换会话（修复前永久错位）
-- [ ] seq 断链 → 前端 1 帧内发出 resync，收到全帧后收敛（实测记录断链→全帧延迟）
-- [ ] mid-stream error/exit 后画面无一行偏移残留
-- [ ] 1s 周期全帧在 100 行/秒持续输出下无可感知闪烁（录屏对照）
-- [ ] 带宽：空闲会话 1s 全帧 + 空 diff 总量 ≤ 10KB/s
-- [ ] viewport/overlay/首帧前路径回归通过，scrollback 不受全帧影响（无 `\x1b[2J`）
-- [ ] 两端单测覆盖（后端 force_full/seq；前端断链 resync/缺 seq 跳过）；fmt/clippy/tsc 零新增
-- [ ] Phase 4 文档闭环完成
+- [x] 故障注入（探针偷基线）下，画面 ≤1s 自愈，无需切换会话（2026-09-09 实测：断链检出 → resync → 收敛无残留，见 Phase 3）
+- [x] seq 断链 → 前端 1 帧内发出 resync，收到全帧后收敛（实测 resync 4 次、1s 节流限频符合设计）
+- [x] mid-stream error/exit 后画面无一行偏移残留（C1 单测 4 例；故障注入收敛无残留）
+- [ ] 1s 周期全帧在 100 行/秒持续输出下无可感知闪烁（录屏对照）——人工观感项，登记 user-testing §4.8
+- [x] 带宽：空闲会话 1s 全帧 + 空 diff 总量 ≤ 10KB/s（实测 ~9.7KB/s）
+- [x] viewport/overlay/首帧前路径回归通过，scrollback 不受全帧影响（`pty-frame-regression.mjs` 20/20；viewport 帧不占 seq 单测覆盖）
+- [x] 两端单测覆盖（后端 force_full/seq；前端断链 resync/缺 seq 跳过）；fmt/clippy/tsc 零新增（2026-09-09 全绿）
+- [x] Phase 4 文档闭环完成（模式 8 追补、backend/frontend.md、user-testing §4.8、CHANGELOG）
 
 ## 风险与降级
 

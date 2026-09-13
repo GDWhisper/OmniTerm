@@ -139,7 +139,7 @@
 
 **约定**（实现见 `frontend/src/components/Sidebar/SessionContextMenu.tsx` /
 `SessionRow.tsx` / `BatchActionBar.tsx` / `BatchSessionDialog.tsx`，计划
-`docs/dev/plans/2026-09-10-sidebar-session-context-menu.md`）：
+`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`）：
 
 - **触发归一**：行组件（`SessionRow`）同时绑定 `onContextMenu`（`preventDefault`）
   与 `useLongPress`（`disabled: !isMobile || selectionMode`），两者共用同一菜单组件；

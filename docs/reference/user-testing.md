@@ -1132,7 +1132,7 @@ FRONTEND_DIR=frontend/dist
 
 ## 17. ACP 聊天附件（「+」抽屉，2026-09-10）
 
-> 前置：可用 agent（§11）。设计决策见 `docs/dev/plans/2026-09-10-chat-file-attachments.md`。
+> 前置：可用 agent（§11）。设计决策见 `docs/dev/plans/archive/2026-09-10-chat-file-attachments.md`。
 
 ### 17.1 入口与抽屉形态
 
@@ -1176,7 +1176,7 @@ FRONTEND_DIR=frontend/dist
 
 ## 18. Sidebar 会话上下文菜单与批量操作（2026-09-10）
 
-> 设计决策见 `docs/dev/plans/2026-09-10-sidebar-session-context-menu.md`。
+> 设计决策见 `docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`。
 
 ### 18.1 上下文菜单入口
 

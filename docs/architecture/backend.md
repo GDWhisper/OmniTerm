@@ -169,7 +169,7 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > `acceptFrame` 门控之前消费——被 viewport 丢弃的帧同样携带最新真值；会话
 > 切换 reset 后首帧自愈）。注意 xterm 6.0 无顶层 `bracketedPasteMode`，读取
 > 走 `term.modes.bracketedPasteMode`。帧体积代价约 20 字节/帧，可忽略。
-> （`docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md`）
+> （`docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md`）
 >
 > **`seq` 字段 + 周期全帧对账（2026-09-08）**：`CellFrame.seq: Option<u64>` 仅
 > **live 编码路径**（`encode_cell_frame`）携带，计数器 `VtState.frame_seq`
@@ -183,7 +183,7 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > `\x1b[2J`，不动 scrollback）。事件驱动的 rx 编码不强制全帧。两者把「无
 > 校准的增量镜像」的不变式升级为被守护属性：失配可检测（seq）+ 可见上界
 > ≤1s（周期全帧）。实测带宽 ~9.7KB/s（30fps 空 diff + 1s 全帧）。
-> （`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`）
+> （`docs/dev/plans/archive/2026-09-08-pty-incremental-sync-hardening.md`）
 >
 > **历史视口有状态锚（2026-09-12）**：`viewport_request` 协议从 `{y, fp}` 改为
 > `{y, refresh: bool}`（`#[serde(default)]` 缺省 false = 滚动语义，旧前端缓存
@@ -370,7 +370,7 @@ Lifecycle:
 2. `AcpClient::spawn_and_connect` builds an `AcpAgent` transport (`KEY=VALUE` env prefix + command + args), runs `Client::builder().connect_with(transport, closure)`. Inside the closure it sends `InitializeRequest` + `NewSessionRequest`, clones the `ConnectionTo<Agent>` (which is `Clone` — channel senders) out via a oneshot, then waits on a shutdown oneshot.
 3. Handlers registered on the builder:
    - `session/update` notification → broadcast via `session_update_tx` to all WS subscribers.
-   - `request_permission` → `PermissionManager` 登记 pending 并经 WS 推 `permission_request` 帧给前端 banner，由用户点击 `permission_response` 应答。**无超时自动应答**（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）；`session/cancel` 时 `AcpClient::cancel` 调 `cancel_all()` 以 `Cancelled` 应答全部 pending（规范 MUST）；WS 重连时重放 pending 事件恢复 banner；审批解决（用户应答 / cancel_all）时经 `resolved_tx` broadcast 推 `permission_resolved{id}` 帧给所有连接——审批可能由其他标签页/设备应答，各连接据此即时清除对应 banner；无人应答的兜底回收由 reaper 负责（30 分钟 cancel + disconnect），**回收前先写入并广播一条 `role='system'` 的消息告知用户回收原因**（权限弹窗只推给对应会话的 WS 客户端，用户切走即看不到，agent 会静默消失——见 `docs/dev/plans/2026-08-18-permission-recycle-notice.md`）。
+   - `request_permission` → `PermissionManager` 登记 pending 并经 WS 推 `permission_request` 帧给前端 banner，由用户点击 `permission_response` 应答。**无超时自动应答**（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）；`session/cancel` 时 `AcpClient::cancel` 调 `cancel_all()` 以 `Cancelled` 应答全部 pending（规范 MUST）；WS 重连时重放 pending 事件恢复 banner；审批解决（用户应答 / cancel_all）时经 `resolved_tx` broadcast 推 `permission_resolved{id}` 帧给所有连接——审批可能由其他标签页/设备应答，各连接据此即时清除对应 banner；无人应答的兜底回收由 reaper 负责（30 分钟 cancel + disconnect），**回收前先写入并广播一条 `role='system'` 的消息告知用户回收原因**（权限弹窗只推给对应会话的 WS 客户端，用户切走即看不到，agent 会静默消失——见 `docs/dev/plans/archive/2026-08-18-permission-recycle-notice.md`）。
    - `terminal/{create,output,wait_for_exit,kill,release}` → `AcpTerminalManager` spawns `tokio::process::Command` children and monitors them with `tokio::select!` racing child exit vs an mpsc kill channel.
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
 4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?,"files":[{name,mime_type,size,data}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images` / `files` 是可选 base64 内联附件，遵循管道原则：不限张数/体积/MIME，唯一门禁是整条帧体积 `MAX_PROMPT_FRAME_BYTES`（12MiB，超限回 `message_too_large`）。内容块顺序 Text → Image → Resource(Text, @path) → Resource(Blob, files)：`images` 映射 `ContentBlock::Image`，`files` 映射 `ContentBlock::Resource(BlobResourceContents)`（名义 `file:///{name}` URI，内容由 base64 blob 自包含，agent 不应按 URI 读盘）。用户消息落库的 blocks JSON 只存渲染等价物——图片存缩略图、文件存元数据（name/mimeType/size）、不存原图与文件内容（刷新后 hydrate 还原缩略图与文件名 chip）。服务端推送 `{"type":"capabilities","image":bool,"embedded_context":bool,"agent_name":string}` 帧（client 就绪/restore 时），后两者来自 initialize 捕获的 `promptCapabilities.image` / `.embeddedContext`（§8：agent 未声明则前端置灰对应附件卡片、后端二次校验拒绝带该附件的 prompt；两者都未声明时前端不渲染附件入口）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。文件附件**不**走内联降级——二进制无文本形态可降级，未声明该能力时在 WS 层直接拒绝（错误文案 "agent does not support file attachments (embedded context)"）。

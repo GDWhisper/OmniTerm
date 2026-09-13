@@ -2,7 +2,7 @@
 
 > 状态：已实施（2026-09-12，P0-P2 完成；自动化验收全绿——探针实机回归与浏览器手动回归待 dev 后端运行新二进制后执行，见验收清单）
 > 触发条件：用户持续报告「pty 上翻看历史时，上面有一部分内容像锁住，只能翻滚下屏一点点内容」；tmux 路径无此问题；pi / codebuddy / gemini CLI 等 agent 上均复现（输出流式进行时）。
-> 关联：`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`（指纹锚定，本计划**取代其 D1-D5 机制**，其「y 不是稳定标识」结论仍是本设计前提）、`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`（A1/A2 与本计划正交，不得回归）、`docs/dev/debug-patterns/terminal-pty.md` 模式 10/12、`docs/dev/performance-and-safety.md`（§P1/P2/P6，编码热路径改动前必读）
+> 关联：`docs/dev/plans/archive/2026-09-03-pty-viewport-fingerprint-anchor.md`（指纹锚定，本计划**取代其 D1-D5 机制**，其「y 不是稳定标识」结论仍是本设计前提）、`docs/dev/plans/archive/2026-09-08-pty-incremental-sync-hardening.md`（A1/A2 与本计划正交，不得回归）、`docs/dev/debug-patterns/terminal-pty.md` 模式 10/12、`docs/dev/performance-and-safety.md`（§P1/P2/P6，编码热路径改动前必读）
 > 探针脚本（诊断证据，gitignored，实施时升级为正式回归）：`.dev/viewport-suction-probe.mjs`、`.dev/viewport-suction-final.mjs`
 
 ## 背景：根因（已实证，非推断）
@@ -132,8 +132,8 @@
 ### Phase 0 — 前置阅读（实施前必做）
 
 - 本文件全文（根因与翻盘记录）。
-- `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`（被取代机制的原始决策，Phase 4 要写勘误）。
-- `docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md`（A1/A2 语义，不得回归）。
+- `docs/dev/plans/archive/2026-09-03-pty-viewport-fingerprint-anchor.md`（被取代机制的原始决策，Phase 4 要写勘误）。
+- `docs/dev/plans/archive/2026-09-08-pty-incremental-sync-hardening.md`（A1/A2 语义，不得回归）。
 - `docs/dev/performance-and-safety.md` §P1/P2/P6（编码热路径 + 检测器缓冲约束）。
 - `docs/dev/debug-patterns/terminal-pty.md` 模式 10（含 y=0 勘误）与模式 12。
 
@@ -168,7 +168,7 @@
 ### Phase 4 — 文档闭环
 
 - `docs/dev/debug-patterns/terminal-pty.md` 模式 10 追补规律：「内容指纹重定位在周期性内容上必然棘轮/滑移——重定位型锚点必须有位置记忆或唯一性保证」+ 本案证据；y=0 勘误标注由本修复整体承接。
-- `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` 就地加「勘误」块：D1-D5 机制被本计划取代（指纹重定位对周期内容失效，2026-09-12 实证）。
+- `docs/dev/plans/archive/2026-09-03-pty-viewport-fingerprint-anchor.md` 就地加「勘误」块：D1-D5 机制被本计划取代（指纹重定位对周期内容失效，2026-09-12 实证）。
 - `docs/architecture/backend.md`：viewport_request 协议字段变更、VtState 锚与滚移检测。
 - `docs/architecture/frontend.md`：ViewportController 请求意图链路变更。
 - `docs/reference/user-testing.md`：新增「输出流式期间上翻历史」回归用例 + 旧前端缓存降级已知限制。
@@ -210,5 +210,5 @@
 | 2 | 周期内容棘轮/滑移（根因） | 同上 v2/v3 + `.dev/viewport-suction-final.mjs` v4：−5/轮、内容前移、burst 无副本仍触发 |
 | 3 | 搜索起点滞后偏差 + 双向就近命中 | `vt.rs:634-643`（top = hs − y）、`vt.rs:691-713`（双向 for d in [abs−d, abs+d]） |
 | 4 | 前端刷新 100ms 节流 + 响应 y 权威同步擦除用户位置 | `viewportController.ts:211-229`（REFRESH_THROTTLE_MS）、`viewportController.ts:186-189`（acceptFrame 同步） |
-| 5 | 09-03 验收用唯一内容 + 「视觉等价无害」错误假设 | `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` 风险表与实测记录 |
-| 6 | 07-30 起六轮修复史与症状家族 | `docs/dev/debug-patterns/terminal-pty.md` 模式 7/8/10/12、`docs/dev/plans/2026-09-08-pty-incremental-sync-hardening.md` 背景 |
+| 5 | 09-03 验收用唯一内容 + 「视觉等价无害」错误假设 | `docs/dev/plans/archive/2026-09-03-pty-viewport-fingerprint-anchor.md` 风险表与实测记录 |
+| 6 | 07-30 起六轮修复史与症状家族 | `docs/dev/debug-patterns/terminal-pty.md` 模式 7/8/10/12、`docs/dev/plans/archive/2026-09-08-pty-incremental-sync-hardening.md` 背景 |

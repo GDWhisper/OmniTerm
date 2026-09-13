@@ -57,7 +57,7 @@ export interface CellFrame {
    * 状态（`term.modes.bracketedPasteMode`）不一致时写 `?2004h/l` 同步
    * （cell_frame 模式下 raw 流不转发，TUI 的模式序列前端永远收不到，
    * 不同步则多行粘贴被 TUI 逐行当 Enter 提交）。
-   * `docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
+   * `docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
   bracketed_paste?: boolean
   /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
    *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */

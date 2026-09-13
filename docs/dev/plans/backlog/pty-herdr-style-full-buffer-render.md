@@ -142,7 +142,7 @@ xterm.js 的文本选择仍正常工作——它操作的是**当前渲染在屏
    > 恒定，`y`（距底偏移）这个量无法表达「期间新产出了几行」** —— 实测饱和
    > 后视图以 100% 输出速率滑动。结论：`y` 不是稳定标识，位置换算必须放在
    > 持有 grid 真相源的一侧。现行实现见
-   > `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`（请求带窗口
+   > `docs/dev/plans/archive/2026-09-03-pty-viewport-fingerprint-anchor.md`（请求带窗口
    > 首行指纹，后端有界搜索重定位）。用户可观测的语义未变，仍是此处第 2 条
    > 的「绝对锚定、不弹底」。
 3. 选择（Shift+拖拽）在 scrollback 中正常工作
