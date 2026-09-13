@@ -96,6 +96,45 @@ const SESSION_UPDATE_ADAPTERS: ReadonlyArray<{
   },
 ]
 
+/** ACP configOptions 元素 → 前端 ConfigOption（select 拍平 / boolean 双态 / 兼容
+ *  current_value 与 currentValue 两种序列化）。
+ *  live 帧（ConfigOptionUpdate 通知）与 hydrate 快照（GET /messages 的 configOptions
+ *  字段）共用同一解析，保证已结束会话与活会话的配置栏渲染一致（§7 单一真源）。 */
+export function parseConfigOptions(raw: unknown): ConfigOption[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+    .map((o) => {
+      const type = o['type']
+      const isBoolean = type === 'boolean' || type === 'Boolean'
+      const currentValue = String(o['current_value'] ?? o['currentValue'] ?? '')
+      let opts: { value: string; name: string }[]
+      if (isBoolean) {
+        opts = [
+          { value: 'true', name: 'On' },
+          { value: 'false', name: 'Off' },
+        ]
+      } else {
+        const rawOpts = o['options']
+        opts = Array.isArray(rawOpts)
+          ? rawOpts
+              .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
+              .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
+          : []
+      }
+      const category = typeof o['category'] === 'string' ? o['category'] : 'other'
+      const normalizedValue = isBoolean ? String(currentValue === 'true') : currentValue
+      return {
+        id: String(o['id'] ?? ''),
+        name: String(o['name'] ?? ''),
+        category,
+        currentValue: normalizedValue,
+        options: opts,
+      }
+    })
+    .filter((o) => o.id && o.options.length > 0)
+}
+
 function snakeToPascal(s: string): string {
   return s
     .split('_')
@@ -474,38 +513,7 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     const inner = getVariantInner(obj, variant) ?? obj
     const rawOptions = inner['config_options'] ?? inner['configOptions']
     if (Array.isArray(rawOptions)) {
-      const options: ConfigOption[] = rawOptions
-        .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
-        .map((o) => {
-          const type = o['type']
-          const isBoolean = type === 'boolean' || type === 'Boolean'
-          const currentValue = String(o['current_value'] ?? o['currentValue'] ?? '')
-          let opts: { value: string; name: string }[]
-          if (isBoolean) {
-            opts = [
-              { value: 'true', name: 'On' },
-              { value: 'false', name: 'Off' },
-            ]
-          } else {
-            const rawOpts = o['options']
-            opts = Array.isArray(rawOpts)
-              ? rawOpts
-                  .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
-                  .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
-              : []
-          }
-          const category = typeof o['category'] === 'string' ? o['category'] : 'other'
-          const normalizedValue = isBoolean ? String(currentValue === 'true') : currentValue
-          return {
-            id: String(o['id'] ?? ''),
-            name: String(o['name'] ?? ''),
-            category,
-            currentValue: normalizedValue,
-            options: opts,
-          }
-        })
-        .filter((o) => o.id && o.options.length > 0)
-      return { kind: 'setConfigOptions', options }
+      return { kind: 'setConfigOptions', options: parseConfigOptions(rawOptions) }
     }
     return { kind: 'drop' }
   }

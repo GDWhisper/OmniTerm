@@ -100,6 +100,57 @@ pub async fn clear_agent_prefs(db: &SqlitePool, agent_id: &str) -> Result<(), sq
     Ok(())
 }
 
+/// 快照体积上限。正常 configOptions 数组几 KB 内；超限视为异常 agent 行为，
+/// 跳过持久化（只影响已结束会话的只读展示，活会话不受影响）。防无界写入（P1 红线）。
+pub const MAX_CONFIG_SNAPSHOT_BYTES: usize = 64 * 1024;
+
+/// 持久化最后一次已知的完整配置选项快照（ACP §12.5 全量状态语义：每次整体覆盖）。
+/// 空集合跳过——快照只增不删，空集多见于未绑定句柄 / agent 未返回配置的中间态，
+/// 覆写会抹掉上次已知状态。失败仅 warn，不阻断配置生效。
+pub async fn persist_config_snapshot(handle: &ConfigPrefsHandle, options: &[SessionConfigOption]) {
+    if options.is_empty() {
+        return;
+    }
+    let Ok(json) = serde_json::to_string(options) else {
+        tracing::warn!("serialize config options snapshot failed");
+        return;
+    };
+    if json.len() > MAX_CONFIG_SNAPSHOT_BYTES {
+        tracing::warn!(size = json.len(), "config options snapshot exceeds cap; skipping persist");
+        return;
+    }
+    if let Err(e) = sqlx::query("UPDATE sessions SET config_options_json = ? WHERE id = ?")
+        .bind(&json)
+        .bind(&handle.db_session_id)
+        .execute(&handle.db)
+        .await
+    {
+        tracing::warn!("save config options snapshot failed: {}", e);
+    }
+}
+
+/// 读取快照，反序列化回 ACP 类型后以 JSON Value 返回。逐元素解析、跳过无效项
+/// （镜像 crate `VecSkipError` 的宽松语义，§8：schema 漂移的旧元素不阻断其余项）。
+/// `None` = 未持久化过 / 反序列化失败，调用方按「无快照」处理。
+pub async fn load_config_snapshot(db: &SqlitePool, session_id: &str) -> Option<serde_json::Value> {
+    let row = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT config_options_json FROM sessions WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()?;
+    let json = row.0?;
+    let values: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let opts: Vec<SessionConfigOption> =
+        values.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+    if opts.is_empty() {
+        return None;
+    }
+    serde_json::to_value(&opts).ok()
+}
+
 /// 校验恢复值是否合法（§8 多实现兼容：以 agent 当前下发的配置集合为准）：
 /// - Boolean：值必须为 `"true"` / `"false"`。
 /// - Select：扁平化 `Ungrouped` / `Grouped` 两种形态匹配 `value`；
@@ -374,5 +425,73 @@ mod tests {
 
         clear_agent_prefs(&pool, "agent1").await.unwrap();
         assert!(list_agent_prefs(&pool, "agent1").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn config_snapshot_roundtrip_overwrite_and_skip_empty() {
+        let pool = test_pool().await;
+        let handle = ConfigPrefsHandle {
+            db: pool.clone(),
+            db_session_id: "s1".into(),
+            agent_id: "agent1".into(),
+        };
+
+        // 空集合跳过：不写（避免中间态抹掉上次已知快照）。
+        persist_config_snapshot(&handle, &[]).await;
+        assert_eq!(load_config_snapshot(&pool, "s1").await, None);
+
+        // 写入 → 读回与序列化形态一致。
+        let opts = vec![select_option("model", "Model", "claude", &["claude", "gpt"])];
+        persist_config_snapshot(&handle, &opts).await;
+        assert_eq!(
+            load_config_snapshot(&pool, "s1").await,
+            Some(serde_json::to_value(&opts).unwrap())
+        );
+
+        // §12.5 全量覆盖语义：agent 推送新状态后读回新快照。
+        let updated = vec![select_option("model", "Model", "gpt", &["claude", "gpt"])];
+        persist_config_snapshot(&handle, &updated).await;
+        assert_eq!(
+            load_config_snapshot(&pool, "s1").await,
+            Some(serde_json::to_value(&updated).unwrap())
+        );
+
+        // 会话隔离：s2 无快照。
+        assert_eq!(load_config_snapshot(&pool, "s2").await, None);
+    }
+
+    #[tokio::test]
+    async fn config_snapshot_load_skips_invalid_elements() {
+        let pool = test_pool().await;
+        let handle = ConfigPrefsHandle {
+            db: pool.clone(),
+            db_session_id: "s1".into(),
+            agent_id: "agent1".into(),
+        };
+        let opts = vec![select_option("model", "Model", "claude", &["claude", "gpt"])];
+        persist_config_snapshot(&handle, &opts).await;
+
+        // 手工混入非法元素（schema 漂移 / 脏数据）：读取时跳过该元素，不阻断有效项。
+        let mut values = serde_json::to_value(&opts).unwrap();
+        values.as_array_mut().unwrap().push(serde_json::json!("garbage"));
+        sqlx::query("UPDATE sessions SET config_options_json = ? WHERE id = ?")
+            .bind(values.to_string())
+            .bind("s1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_config_snapshot(&pool, "s1").await,
+            Some(serde_json::to_value(&opts).unwrap())
+        );
+
+        // 全部无效 → 按无快照处理。
+        sqlx::query("UPDATE sessions SET config_options_json = ? WHERE id = ?")
+            .bind(r#"["garbage"]"#)
+            .bind("s1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(load_config_snapshot(&pool, "s1").await, None);
     }
 }

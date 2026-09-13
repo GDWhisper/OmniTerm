@@ -8,6 +8,7 @@ import {
   buildReplayMessages,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
+  type ConfigOption,
   type ContentBlock,
   type SessionUpdateAction,
 } from './chatStore'
@@ -901,5 +902,49 @@ describe('流式 prose 块合并（thought 分段修复）', () => {
     expect(msg.blocks.map((b) => b.type)).toEqual(['thought', 'text'])
     expect((msg.blocks[0] as { text: string }).text).toBe('t1t2')
     expect((msg.blocks[1] as { text: string }).text).toBe('ab')
+  })
+})
+
+// 已结束会话的配置快照：hydrate 注入最后已知 configOptions 并置灰只读；
+// 任一 live/replay 配置帧（applyReplayBatch → applyTopLevelActions）解除只读。
+describe('config snapshot (ended-session readonly toolbar)', () => {
+  const MODEL_OPTION: ConfigOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    currentValue: 'm1',
+    options: [
+      { value: 'm1', name: 'm1' },
+      { value: 'm2', name: 'm2' },
+    ],
+  }
+
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('setConfigSnapshot(true) stores options and marks readonly', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], true)
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([MODEL_OPTION])
+    expect(st.configReadOnly).toBe(true)
+  })
+
+  it('setConfigSnapshot(false) injects values without readonly (live-session refresh)', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], false)
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([MODEL_OPTION])
+    expect(st.configReadOnly).toBe(false)
+  })
+
+  it('live config frame via applyReplayBatch overwrites snapshot and clears readonly', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], true)
+    const updated: ConfigOption = { ...MODEL_OPTION, currentValue: 'm2' }
+    useChatStore
+      .getState()
+      .applyReplayBatch('s1', [{ kind: 'setConfigOptions', options: [updated] }])
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([updated])
+    expect(st.configReadOnly).toBe(false)
   })
 })

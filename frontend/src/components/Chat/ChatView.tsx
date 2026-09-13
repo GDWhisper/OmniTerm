@@ -16,7 +16,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
-import { decodeStoredBlocks, isRawFrameWrapper } from '../../hooks/useAcpChat'
+import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -180,7 +180,16 @@ export function ChatView() {
     fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (cancelled || !data?.messages?.length) return
+        if (cancelled) return
+        // 配置快照注入（需在放行 preHydrateBuffer 之前）：已结束会话由 /messages
+        // 下发最后已知 configOptions，配置栏置灰只读展示；活会话（agentLive）刷新
+        // 时同样注入以消除空窗，但不置灰——随后的 live/replay 配置帧会覆盖并接管。
+        if (Array.isArray(data?.configOptions)) {
+          useChatStore
+            .getState()
+            .setConfigSnapshot(sid, parseConfigOptions(data.configOptions), data.agentLive !== true)
+        }
+        if (!data?.messages?.length) return
         useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
       })
       .catch(() => {})
@@ -821,6 +830,7 @@ export function ChatView() {
           configOptions={chatState.configOptions}
           usage={chatState.usage}
           onSetConfigOption={setConfigOption}
+          readOnly={chatState.configReadOnly === true || chatState.sessionEnded}
         />
       </div>
 

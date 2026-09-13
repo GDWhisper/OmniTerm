@@ -452,6 +452,7 @@ Lifecycle:
 - **恢复时机**（`AcpClient::restore_config_prefs`）：读 agent 偏好 + 会话级 → 合并（会话级覆盖）→ 逐项 `set_config_option`。**必须在 `initial_config_options` 缓存已填充后调用**——create 路径 `spawn_and_connect` 已走 `NewSession` 可立即恢复；load 路径 `spawn_and_load` 缓存恒为空（不发送 NewSession），须等 `load_session` 返回（缓存被 `LoadSessionResponse.config_options` 回填）后再恢复。恢复广播的 `ConfigOptionUpdate` 经 replay staging 在 `ReplayEnd` 时落位，前端零改动。整体 10s 超时，单项目失败 warn 跳过。
 - **删除清理**：SQLx 默认开启 `foreign_keys`（`ON DELETE CASCADE` 生效），`delete_session` / `delete_project` / `delete_agent` 的显式 `clear_*` 为防御性兜底。
 - **§8 多实现差异**：restore 只匹配 agent **当前**仍提供的 `config_id`（缓存过滤，agent 已移除项自动跳过）；`validate_config_value` 校验值合法性——Boolean 限定 `"true"/"false"`，Select 扁平化 Ungrouped/Grouped 匹配，**options 为空放行**（不因信息缺失阻断恢复）。agent 不在 NewSession/LoadSession 响应返回 `config_options` 时（如 opencode 的 load 响应），restore 自动跳过（缓存空无法过滤、也不盲发）——该边界下配置栏本就可能为空，属已知能力边界。
+- **配置快照（已结束会话只读展示）**：`sessions.config_options_json`（migration `20260913_add_config_options_snapshot.sql`）存**最后一次已知的完整 `configOptions`**（ACP §12.5 全量状态语义，整体覆盖写）。写入收口在 `config_prefs::persist_config_snapshot`（空集合跳过——防中间态抹掉上次状态；64KB 上限防无界写入），调用点：`attach_config_prefs` 绑定后（覆盖 create 路径的 session/new 选项）、`load_session` 回填、`set_config_option` 响应、agent 主动推送的 `ConfigOptionUpdate`（两个构造器共用通知闭包 `on_agent_notification`，闭包体提取自原先两份逐行重复的副本）。读路径：`GET /messages` 响应附 `configOptions`（逐元素宽松解析、无效项跳过，镜像 crate `VecSkipError` 语义）+ `agentLive`（supervisor 中有无活 client）；前端据此在已结束会话置灰只读展示配置栏（`configReadOnly`，见 frontend.md），任一 live/replay 配置帧到达即解除。`set_config_option` 对无活 client 是静默 no-op（`ws/acp.rs` 的 `if let Some(ref c)`），故前端禁用交互是必选项而非可选优化。
 
 ### 重连续接协议（seq + turn_snapshot / turn_state）
 
@@ -582,7 +583,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Sessions Table
 
-定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql` + `20260823_add_sessions_archived_at.sql` + `20260830_add_work_time.sql`。
+定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql` + `20260823_add_sessions_archived_at.sql` + `20260830_add_work_time.sql` + `20260913_add_config_options_snapshot.sql`。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -602,6 +603,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `work_ms` / `wait_ms` | INTEGER NOT NULL | ACP turn 累计：agent 实际工作时长 / 等人工审批挂起时长。**turn 定稿时增量写入**（非读时聚合，也非会话存活时长）；tmux/pty 会话恒 0。当前无 UI 消费者（侧栏 badge 已回退，见「turn 工作时长记账」） |
 | `turn_count` | INTEGER NOT NULL | 已定稿 turn 数（同一次增量写入）；消费者情况同上 |
 | `last_turn_at` | TEXT? | 最近一次 turn 定稿时刻；随 `list_sessions` 下发，当前无 UI 消费者（记账留档，供排序/展示接入） |
+| `config_options_json` | TEXT? | 最后一次已知的完整 `configOptions` 快照（ACP 序列化形态），已结束会话经 `GET /messages` 下发供配置栏置灰只读展示；NULL = 从未收到过配置。随 sessions 行删除自然清理 |
 
 创建 session 时 `runtime_kind` 枚举默认 `Acp`（ACP 阶段推进所致）；
 创建路径显式传 `'tmux'` / `'pty'` 分流到对应引擎。pty 会话惰性 spawn：

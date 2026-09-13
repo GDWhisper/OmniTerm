@@ -201,7 +201,7 @@ async fn create_session(
         // 绑定配置偏好持久化并同步恢复：agent 全局偏好（+ 本会话历史覆盖）在
         // spawn 后立即下发，WS 连接时 initial_config_notification 缓存已是恢复值，
         // 前端新建会话即可看到用户上次的配置。内部带 10s 超时，不阻塞会话注册。
-        acp_client.attach_config_prefs(state.db.clone(), id.clone(), agent_id.clone());
+        acp_client.attach_config_prefs(state.db.clone(), id.clone(), agent_id.clone()).await;
         acp_client.restore_config_prefs().await;
         state.acp_supervisor.insert(id.clone(), acp_client).await;
         info!(
@@ -716,12 +716,19 @@ async fn list_messages(
                 })
                 .collect();
             let next_cursor = page.next_cursor.map(|c| c.encode());
+            // 最后一次已知的配置选项快照 + 会话是否仍有活 agent：前端据此在已结束
+            // 会话里置灰只读展示配置栏（活会话的配置栏照常由 WS 配置帧驱动）。
+            let config_options =
+                crate::acp::config_prefs::load_config_snapshot(&state.db, &id).await;
+            let agent_live = state.acp_supervisor.get(&id).await.is_some();
             (
                 StatusCode::OK,
                 Json(json!({
                     "messages": messages,
                     "hasMore": next_cursor.is_some(),
                     "nextCursor": next_cursor,
+                    "configOptions": config_options,
+                    "agentLive": agent_live,
                 })),
             )
         }

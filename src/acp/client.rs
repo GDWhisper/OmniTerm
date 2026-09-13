@@ -213,9 +213,11 @@ pub struct AcpClient {
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 配置偏好持久化句柄（`attach_config_prefs` 绑定）。仅在实际会话注册点
     /// （create-session / load restore）设置；能力探针不绑定 → 写入与恢复 no-op。
-    /// 用 `std::sync::Mutex<Option<_>>`：使用时 lock 克隆 handle、立即 drop guard
-    /// 再 await，避免跨 await 持 std MutexGuard 破坏 Send（replay task 是 tokio::spawn）。
-    config_prefs: Mutex<Option<config_prefs::ConfigPrefsHandle>>,
+    /// `Arc` 包裹是让 agent 通知闭包（构造早于本 struct）也能对 §12.5 的
+    /// `ConfigOptionUpdate` 推送落快照。用 `std::sync::Mutex<Option<_>>`：
+    /// 使用时 lock 克隆 handle、立即 drop guard 再 await，避免跨 await 持 std
+    /// MutexGuard 破坏 Send（replay task 是 tokio::spawn）。
+    config_prefs: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
@@ -352,6 +354,40 @@ fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path)
     vec!["-c".to_string(), shell_script]
 }
 
+/// 两个构造器（session/new 与 spawn_and_load）共用的 agent 通知处理：活动刷新、
+/// turn 累积、命令通知缓存、配置快照落库、广播。提取自两份逐行相同的闭包体——
+/// 新增跨构造器的通知行为时只改这里，勿再复制。
+async fn on_agent_notification(
+    activity: &Arc<Mutex<ActivityState>>,
+    accumulator: &Arc<TurnAccumulator>,
+    commands_notif: &Arc<Mutex<Option<SessionNotification>>>,
+    config_prefs_slot: &Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
+    tx: &broadcast::Sender<SeqNotification>,
+    notification: SessionNotification,
+) -> Result<(), agent_client_protocol::Error> {
+    // 收到任意 agent 通知即视为有活动，刷新最后活动时间
+    if let Ok(mut st) = activity.lock() {
+        st.last_activity = Instant::now();
+    }
+    // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
+    // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
+    // fold 返回该帧的 seq（turn 内单调，非 turn 帧为 None），随广播下发供重连对账。
+    let seq = accumulator.fold(&notification);
+    if matches!(notification.update, SessionUpdate::AvailableCommandsUpdate(_))
+        && let Ok(mut guard) = commands_notif.lock()
+    {
+        *guard = Some(notification.clone());
+    }
+    // §12.5：agent 主动推送的完整配置状态同步落快照（如 rate limit 降级模型），
+    // 否则已结束会话的只读展示会停在旧值。探针会话未绑定句柄 → no-op。
+    if let SessionUpdate::ConfigOptionUpdate(u) = &notification.update
+        && let Some(handle) = config_prefs_slot.lock().ok().and_then(|g| g.clone())
+    {
+        config_prefs::persist_config_snapshot(&handle, &u.config_options).await;
+    }
+    handler::handle_session_update(tx, SeqNotification { seq, notification })
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(
         agent: Agent,
@@ -419,6 +455,8 @@ impl AcpClient {
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
         let accumulator = Arc::new(TurnAccumulator::new());
+        let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
+            Arc::new(Mutex::new(None));
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -429,23 +467,17 @@ impl AcpClient {
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
                     let accumulator = accumulator.clone();
+                    let config_prefs_slot = config_prefs_slot.clone();
                     async move |notification: SessionNotification, _cx| {
-                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
-                        if let Ok(mut st) = activity.lock() {
-                            st.last_activity = Instant::now();
-                        }
-                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
-                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
-                        // fold 返回该帧的 seq（turn 内单调，非 turn 帧为 None），随广播下发供重连对账。
-                        let seq = accumulator.fold(&notification);
-                        if matches!(
-                            notification.update,
-                            SessionUpdate::AvailableCommandsUpdate(_)
+                        on_agent_notification(
+                            &activity,
+                            &accumulator,
+                            &commands_notif,
+                            &config_prefs_slot,
+                            &tx,
+                            notification,
                         )
-                            && let Ok(mut guard) = commands_notif.lock() {
-                                *guard = Some(notification.clone());
-                            }
-                        handler::handle_session_update(&tx, SeqNotification { seq, notification })
+                        .await
                     }
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -625,7 +657,7 @@ impl AcpClient {
             available_commands_notif: commands_notif,
             activity,
             accumulator,
-            config_prefs: Mutex::new(None),
+            config_prefs: config_prefs_slot,
             alive: AtomicBool::new(true),
         })
     }
@@ -728,16 +760,23 @@ impl AcpClient {
         // Agents return the updated option set in the response; not all of
         // them also push a ConfigOptionUpdate notification (codebuddy does,
         // ccb/opencode don't), so synthesize one to keep the UI in sync.
-        if !resp.config_options.is_empty() {
+        let new_opts = resp.config_options;
+        if !new_opts.is_empty() {
             if let Ok(mut guard) = self.initial_config_options.lock() {
-                *guard = resp.config_options.clone();
+                *guard = new_opts.clone();
             }
             let notification = SessionNotification::new(
                 self.session_id.clone(),
-                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(resp.config_options)),
+                SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(new_opts.clone())),
             );
             // 合成的 config 更新不属于任何 turn，seq 为 None（前端无条件应用）。
             let _ = self.session_update_tx.send(SeqNotification { seq: None, notification });
+        }
+        // 快照落库：已结束会话的配置栏按此只读展示（restore_config_prefs 复用本
+        // 方法逐项写回偏好值，快照随之收敛到用户上次所见）。空集合在
+        // persist_config_snapshot 内跳过，缓存与快照均保持原值。
+        if let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) {
+            config_prefs::persist_config_snapshot(&handle, &new_opts).await;
         }
         // 配置变更持久化：只记用户主动 set（restore 路径调用本方法写回相同值，幂等）。
         // 失败仅 warn，不阻断 agent 配置生效。
@@ -909,7 +948,10 @@ impl AcpClient {
 
     /// 绑定配置偏好持久化句柄。仅在真实会话注册点调用（create-session /
     /// load_session restore）；能力探针不调用 → 写入与恢复均为 no-op。
-    pub fn attach_config_prefs(
+    /// 绑定后立即把当前 `initial_config_options` 落快照：create 路径在 attach 前
+    /// session/new 响应里的配置无处落库；load 路径此时缓存恒空（跳过），由
+    /// `load_session` / `set_config_option` / agent 推送后续覆盖。
+    pub async fn attach_config_prefs(
         &self,
         db: sqlx::SqlitePool,
         db_session_id: String,
@@ -917,6 +959,10 @@ impl AcpClient {
     ) {
         if let Ok(mut guard) = self.config_prefs.lock() {
             *guard = Some(config_prefs::ConfigPrefsHandle { db, db_session_id, agent_id });
+        }
+        let opts = self.initial_config_options.lock().ok().map(|g| g.clone()).unwrap_or_default();
+        if let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) {
+            config_prefs::persist_config_snapshot(&handle, &opts).await;
         }
     }
 
@@ -1034,6 +1080,9 @@ impl AcpClient {
             if let Ok(mut guard) = self.initial_config_options.lock() {
                 *guard = opts.clone();
             }
+            if let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) {
+                config_prefs::persist_config_snapshot(&handle, &opts).await;
+            }
             let notification = SessionNotification::new(
                 self.session_id.clone(),
                 SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(opts)),
@@ -1131,6 +1180,8 @@ impl AcpClient {
         let activity = Arc::new(Mutex::new(ActivityState::new()));
         let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
         let accumulator = Arc::new(TurnAccumulator::new());
+        let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
+            Arc::new(Mutex::new(None));
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -1141,23 +1192,17 @@ impl AcpClient {
                     let activity = activity.clone();
                     let commands_notif = commands_notif.clone();
                     let accumulator = accumulator.clone();
+                    let config_prefs_slot = config_prefs_slot.clone();
                     async move |notification: SessionNotification, _cx| {
-                        // 收到任意 agent 通知即视为有活动，刷新最后活动时间
-                        if let Ok(mut st) = activity.lock() {
-                            st.last_activity = Instant::now();
-                        }
-                        // 后端权威累积：把进行中 turn 的原始帧防抖落库（仅在 turn active 时生效，
-                        // 重放帧无 turn 门控故自动忽略）。运行在 ACP 连接任务上，与 WS 存活无关。
-                        // fold 返回该帧的 seq（turn 内单调，非 turn 帧为 None），随广播下发供重连对账。
-                        let seq = accumulator.fold(&notification);
-                        if matches!(
-                            notification.update,
-                            SessionUpdate::AvailableCommandsUpdate(_)
+                        on_agent_notification(
+                            &activity,
+                            &accumulator,
+                            &commands_notif,
+                            &config_prefs_slot,
+                            &tx,
+                            notification,
                         )
-                            && let Ok(mut guard) = commands_notif.lock() {
-                                *guard = Some(notification.clone());
-                            }
-                        handler::handle_session_update(&tx, SeqNotification { seq, notification })
+                        .await
                     }
                 },
                 agent_client_protocol::on_receive_notification!(),
@@ -1332,7 +1377,7 @@ impl AcpClient {
             available_commands_notif: commands_notif,
             activity,
             accumulator,
-            config_prefs: Mutex::new(None),
+            config_prefs: config_prefs_slot,
             alive: AtomicBool::new(true),
         })
     }

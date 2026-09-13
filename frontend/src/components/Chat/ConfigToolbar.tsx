@@ -15,9 +15,11 @@ const CATEGORY_ORDER = ['mode', 'model', 'thought_level', 'model_config']
 function ConfigDropdown({
   option,
   onSelect,
+  readOnly = false,
 }: {
   option: ConfigOption
   onSelect: (configId: string, value: string) => void
+  readOnly?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -60,6 +62,7 @@ function ConfigDropdown({
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
+        disabled={readOnly}
         onClick={() => setOpen(!open)}
         style={{
           display: 'flex',
@@ -72,7 +75,7 @@ function ConfigDropdown({
           border: '1px solid var(--border-subtle)',
           borderRadius: 4,
           color: 'var(--text-secondary)',
-          cursor: 'pointer',
+          cursor: readOnly ? 'not-allowed' : 'pointer',
           whiteSpace: 'nowrap',
         }}
       >
@@ -278,10 +281,14 @@ export function ConfigToolbar({
   configOptions,
   usage,
   onSetConfigOption,
+  readOnly = false,
 }: {
   configOptions: ConfigOption[]
   usage: Record<string, unknown> | null
   onSetConfigOption: (configId: string, value: string) => void
+  /** 只读置灰态：configOptions 来自已结束会话的快照（无活 agent），仅作展示。
+   *  样式与活跃态一致、整体 opacity 0.5（ui-style-guide Disabled 约定）。 */
+  readOnly?: boolean
 }) {
   if (configOptions.length === 0 && !usage) return null
 
@@ -293,6 +300,7 @@ export function ConfigToolbar({
 
   return (
     <div
+      title={readOnly ? 'Session ended — showing last known config' : undefined}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -301,10 +309,11 @@ export function ConfigToolbar({
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
         flexWrap: 'wrap',
+        opacity: readOnly ? 0.5 : 1,
       }}
     >
       {sorted.map((opt) => (
-        <ConfigDropdown key={opt.id} option={opt} onSelect={onSetConfigOption} />
+        <ConfigDropdown key={opt.id} option={opt} onSelect={onSetConfigOption} readOnly={readOnly} />
       ))}
       {usage && (
         <div style={{ marginLeft: 'auto' }}>

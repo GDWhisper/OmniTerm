@@ -29,7 +29,7 @@ afterEach(() => {
   container.remove()
 })
 
-function render() {
+function render(opts?: { readOnly?: boolean }) {
   const onSetConfigOption = vi.fn()
   act(() => {
     root.render(
@@ -37,6 +37,7 @@ function render() {
         configOptions={[MODEL_OPTION]}
         usage={null}
         onSetConfigOption={onSetConfigOption}
+        readOnly={opts?.readOnly}
       />,
     )
   })
@@ -76,5 +77,35 @@ describe('ConfigToolbar dropdown', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
     expect(searchInput()).toBeNull()
+  })
+})
+
+// 已结束会话的配置快照：只读置灰（样式与活跃一致、整体 opacity 0.5），
+// 下拉按钮 disabled，点击不触发 onSelect、不弹选项列表。
+describe('ConfigToolbar readOnly', () => {
+  it('disables dropdowns and does not open the option list on click', () => {
+    const { onSetConfigOption } = render({ readOnly: true })
+
+    const trigger = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('model-0'),
+    )
+    expect(trigger, 'model trigger button').toBeTruthy()
+    expect(trigger!.disabled).toBe(true)
+
+    act(() => {
+      trigger!.click()
+    })
+    expect(onSetConfigOption).not.toHaveBeenCalled()
+    // 未弹出选项列表（disabled 按钮不触发 open state）。
+    expect(searchInput()).toBeNull()
+    expect(container.querySelector('button')!.textContent).not.toContain('model-1')
+  })
+
+  it('stays interactive when readOnly is false', () => {
+    render()
+    const trigger = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('model-0'),
+    )
+    expect(trigger!.disabled).toBe(false)
   })
 })
