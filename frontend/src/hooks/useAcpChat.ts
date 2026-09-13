@@ -832,7 +832,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // Drain queued follow-up: 用户在 agent 忙碌期按回车存到 chatStore.queuedMessage
           // 的下一条消息在 agent 跑完这一轮后自动发出。N=1 语义：只有一条可排队，发完即清空。
           // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
-          // （避免 TDZ + 闭包陈旧值）。见 docs/adr/0001-acp-queue-drain-location.md。
+          // （避免 TDZ + 闭包陈旧值）。见 docs/architecture/adr/0001-acp-queue-drain-location.md。
           {
             const fresh = useChatStore.getState()
             const queued = fresh.states[sid]?.queuedMessage

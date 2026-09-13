@@ -1309,7 +1309,7 @@ mod tests {
         assert_eq!(RewriteKind::Js.max_bytes(), REWRITE_JS_MAX);
     }
 
-    // ── P0 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+    // ── P0 修复（2026-08-15，见 docs/dev/reverse-proxy-fixes-report.md）──
 
     #[test]
     fn rewrite_html_prefixes_base_tag() {
@@ -1395,7 +1395,7 @@ mod tests {
         assert_eq!(strip_port("[::1]"), "::1");
     }
 
-    // ── P1 修复（2026-08-15，见 docs/reverse-proxy-fixes-report.md）──
+    // ── P1 修复（2026-08-15，见 docs/dev/reverse-proxy-fixes-report.md）──
 
     #[test]
     fn rewrite_allowed_for_encoding_accepts_none_and_identity() {

@@ -225,7 +225,7 @@ User affordances (N=1 + auto-drain semantics):
   card in the stream and can decide whether to retype.
 
 The drain location rationale is recorded in
-`docs/adr/0001-acp-queue-drain-location.md`. Domain glossary lives in
+`docs/architecture/adr/0001-acp-queue-drain-location.md`. Domain glossary lives in
 `CONTEXT.md`.
 
 ### Session update parsing

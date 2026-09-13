@@ -7,7 +7,6 @@ echo "=== 文档索引完整性检查 ==="
 missing=0
 while IFS='|' read -r _ doc trigger _; do
   doc=$(echo "$doc" | xargs)
-  [[ "$doc" != \`docs/* ]] && continue
   doc="${doc//\`/}"
   if [[ ! -f "$doc" ]]; then
     echo "❌ 缺失: $doc"
@@ -16,7 +15,7 @@ while IFS='|' read -r _ doc trigger _; do
     echo "⚠️  未跟踪: $doc (存在但未 git add)"
     missing=1
   fi
-done < <(sed -n '/^| `docs\//,/^$/p' AGENTS.md | head -n -1)
+done < <(sed -n '/^| `/p' AGENTS.md)
 
 if [[ $missing -eq 0 ]]; then
   echo "✅ 全部通过"

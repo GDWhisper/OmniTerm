@@ -18,7 +18,7 @@ Web 版 tmux/pty 终端管理器，一个浏览器标签页观察并驱动多个
 cargo test --workspace                    # Rust 全量测试
 cargo test <名称> -- --exact              # 单个测试；跑 tests/ 下某个集成测试加 --test <文件>
 cd frontend && pnpm lint                  # ESLint
-cd frontend && pnpm test --run <过滤>     # vitest 单测（不带 --run 进 watch 模式）；性能基准单独用 pnpm bench，不进 test
+cd frontend && pnpm test <过滤>           # vitest 单测（package.json 已是 vitest run，直接跑）；性能基准单独用 pnpm bench，不进 test
 cd frontend && pnpm build                 # 构建，含 typecheck
 cd frontend && pnpm exec tsc -b           # 前端 typecheck
 cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
@@ -29,7 +29,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 
 - **fresh clone 必须先构建前端**（`cd frontend && pnpm install && pnpm build`），否则任何 `cargo check/test` 被 `build.rs` 拦下（`src/embedded.rs` RustEmbed 要求 `frontend/dist/index.html` 编译期存在）。
 - **cargo test 需要 tmux 二进制**（tmux control-mode 测试）。
-- **前端 typecheck 必须 `tsc -b`**：根 tsconfig 是 references 空壳，裸 `tsc --noEmit` 不检查任何文件，类型错误会漏网。
+- **前端 typecheck 必须 `tsc -b`**：`frontend/tsconfig.json` 是 references 空壳，裸 `tsc --noEmit` 不检查任何文件，类型错误会漏网。
 - pre-commit hook（`scripts/hooks/pre-commit`）自动跑 fmt/clippy/tsc/lint/前端测试；`dev.sh start` 会自动把 `core.hooksPath` 指到 `scripts/hooks`，勿改回 `.githooks`（历史上因此失效过）。
 
 ## 核心规则
@@ -67,7 +67,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 - 禁止跳过 pre-commit（`--no-verify`）绕过检查；检查失败先修根因。
 - 禁止提交 `.env.local`、密钥、token；`.gitignore` 覆盖的产物不入仓。
 - 文档必须按分类放入 `docs/` 子目录（architecture / workflows / dev / reference / visual-design），根目录不放；新文档若对应「改某处代码前必读」，须登记到下方文档索引（`check-doc-index.sh` 校验）。
-- 分支/发布操作（merge、sync-main.sh、打 tag）先读 `docs/workflows/branch-workflows.md` 与 `release-guide.md`；main 分支不含本文件与 `docs/`（sync 黑名单）。
+- 分支/发布操作（merge、sync-main.sh、打 tag）先读 `docs/workflows/branch-workflows.md` 与 `release-guide.md`；main 同步必须走 sync-main.sh，禁止直接 merge；main 分支不含本文件与 `docs/`（sync 黑名单）。
 
 ## 测试约定
 
@@ -116,7 +116,6 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md` | 修改 Sidebar 会话行（`ProjectCard.tsx` 的 `SessionRow`、`SessionContextMenu.tsx`、`BatchActionBar.tsx`、`BatchSessionDialog.tsx`：右键/长按菜单、批量选择模式、归档/释放/删除跳过语义）前**必读**——D1-D7 决策（含长按补发 click 抑制、释放池幂等依据）在此 | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/reference/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，过一遍其检查点清单（非强制结构，按任务裁剪） | 检查点需调整时更新 |
 | `docs/dev/plans/backlog/qa-quality-gates-followups.md` | 推进质量门禁 P2 项（warn→deny、CI 耗时、`dev.sh check`）时 | P2 项状态变更、dead-code allow 清理 |
-| `PROGRESS.md` | 了解项目整体进展、架构决策背景 | 完成一个完整阶段（如 Phase N）后更新里程碑 |
 | `CHANGELOG.md` | 查看面向用户的版本变更历史 | 有实质性的新功能/修复/重构/破坏性变更后**必须添加条目**（核心规则 2） |
 
 ## 有意为之的「反常」点（勿顺手修正）

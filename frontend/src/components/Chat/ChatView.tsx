@@ -358,7 +358,7 @@ export function ChatView() {
   const handleSend = useCallback(
     (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
       // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
-      // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
+      // 详见 docs/architecture/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
       // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
       // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
       // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃附件是预期行为
