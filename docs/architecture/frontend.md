@@ -18,7 +18,7 @@ src/
 │   ├── gitStore.ts      # Zustand: git panel status/branches + mutate 串行化 + refreshHint（设计见 docs/dev/plans/archive/2026-07-26-git-panel.md）
 │   └── chatStore.ts     # Zustand: per-session chat state (Phase 4a — state-only; WS in useAcpChat)
 ├── hooks/
-│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ pty 滚轮接管（方案 C，ViewportController 接线）+ mid-stream error/exit 状态行直写后强制 resync（2026-09-08 增量同步加固 C1）+ Unicode11Addon 激活 '11' 宽表（2026-09-09：xterm 默认表停留 Unicode 6，与后端 alacritty unicode-width 的 2 列布局不一致致像素方块 logo 压扁；proposed API 需 allowProposedApi）
+│   ├── useTerminal.ts   # xterm.js + WebSocket + IME composition + live font size + blur/idle 断连定时器（分钟可配）+ 自动重连引擎（「聚焦页面才重连」：意外断开/拆除后在页面可见时指数退避自愈，见下方断连小节）+ pty 滚轮接管（方案 C，ViewportController 接线）+ mid-stream error/exit 状态行直写后强制 resync（2026-09-08 增量同步加固 C1）+ Unicode11Addon 激活 '11' 宽表（2026-09-09：xterm 默认表停留 Unicode 6，与后端 alacritty unicode-width 的 2 列布局不一致致像素方块 logo 压扁；proposed API 需 allowProposedApi）
 │   ├── useCellFrame.ts  # pty cell_frame 解码渲染：rAF 有界有序队列（超限 keepFrom 锚点 + resync 节流补发）+ seq 连续性校验（2026-09-08 A2：断链即 armResync；无 seq 帧跳过）+ applyCursor 光标污染恢复（2026-09-09：渲染 rows 的 CUP 把光标带到重画终点，帧缺 cursor 字段（后端去重省略）时回写 WeakMap 学习的最近显式 cursor；viewport>0 历史窗口帧不学习）
 │   ├── useLongPress.ts  # 移动端长按手势（500ms + 位移取消），终端 paste 菜单、聊天气泡动作菜单与 Sidebar 会话行菜单共用（D3）
 │   ├── useMediaQuery.ts # Mobile breakpoint detection + useKeyboardHeight/useIsLandscape
@@ -110,6 +110,16 @@ src/
 - **store 层**（`appStore.ts`）：导出 `MIN_DISCONNECT_MIN=1` / `MAX_DISCONNECT_MIN=60`；三个字段各有 setter，`blurDisconnectMin`/`idleDisconnectMin` 从 localStorage 读取并 clamp 到值域（非法回退默认），`acpIdleRecycleMin` 为纯内存（不跨重启）。
 - **消费方**（`useTerminal.ts`）：删除 `BLUR_DISCONNECT_DELAY_MS`/`IDLE_DISCONNECT_DELAY_MS` 常量，blur/idle 断连定时器改从 store 读分钟值 ×60_000；acpIdleRecycleMin 仅在前端渲染（后端 reaper 消费秒级阈值，见 backend.md Settings 表）。
 - **滑块组件**（`Settings.tsx`）：`DisconnectSlider` 为共享 range 滑块（title/hint/warning 三文案 + value/onChange/onCommit），三个用例复用同一组件；ACP 滑块 onCommit 调 `api.setAcpIdleRecycle(n)` 持久化。
+
+### 终端自动重连引擎（useTerminal，2026-09-14）
+
+「聚焦页面才重连」：blur/idle 主动拆除的省资源语义不变，但断连不再要求手动点击——引擎在页面可见时自愈。节奏与门控对齐 useAcpChat 的自动重连（指数退避 `min(1000×2^n, 30s)`，onopen 归零）：
+
+- **调度面**：① ws `onclose`（onerror 不重复调度）与 ② `createTerminal` 失败（initTerminal catch）→ 页面可见时布退避定时器；③ 用户回来信号（`visibilitychange`→visible / `window focus` / 任意活动事件——空闲拆除全程无可见性变化，靠活动事件收口）→ 立即尝试一次并把退避计数归零。
+- **隐藏门控**：页面隐藏时不调度、到期定时器直接跳过（隐藏期间不计入退避），回可见由 ③ 接管。引擎函数经 ref/store 取值保持稳定身份（被 mousemove 等高频事件与长寿命 WS 闭包引用），`reconnect` 经 `reconnectRef` 晚绑定。
+- **廉价路径**：意外断开时 xterm 仍存活（termRef 非空），重连走 `connectWs` 复用实例；teardown 态（termRef 空）走整端重建并置 `skipAutoFocusRef` 跳过一次 autoFocus（防抢聊天面板焦点），init 失败在引擎路径不弹 toast（`announceFailure: false`）。connectWs 入口 / disposeTerminal / effect cleanup 三处取消排队重试。
+- **Terminal.tsx 挂载 effect 的 `terminalDisconnected` 刻意不进依赖数组**（body 条件仍读它）：flag 翻转 true 时若触发 cleanup 会把刚断开的 xterm/WS 连带拆毁，自动重试随之被取消——「不自动重建」由 body 条件保证。
+- **遮罩语义**：`autoReconnecting`（引擎在管）时遮罩显示「正在自动重连…」状态行（`role="status"`，固定浅色——遮罩底色不随主题翻转），「重连」按钮保留为立即手动兜底。
 - **API client**（`client.ts`）：`getAcpIdleRecycle()` / `setAcpIdleRecycle(minutes)` 对应后端 `GET/PUT /api/v1/settings/acp-idle-recycle`。
 
 ## ACP Chat View (Phase 4a)

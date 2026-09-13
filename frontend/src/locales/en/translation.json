@@ -201,6 +201,8 @@
   "terminal.hint": "Use the sidebar to get started",
   "terminal.status.connected": "Connected",
   "terminal.status.disconnected": "Disconnected",
+  "terminal.status.reconnecting": "Reconnecting…",
+  "terminal.reconnect": "Reconnect",
   "terminal.status.connectionError": "Connection error",
   "terminal.status.initFailed": "Terminal initialization failed, please retry",
   "terminal.status.attached": "Attached to {{session}}",

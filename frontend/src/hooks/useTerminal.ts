@@ -79,6 +79,13 @@ async function loadAddons(): Promise<
   return [FitAddon, WebLinksAddon, Unicode11Addon]
 }
 
+/** reconnect 的可选行为开关（引擎自动重试路径与用户手动点击共用入口）。 */
+interface ReconnectOptions {
+  /** false = 引擎自动重试：失败不弹 toast（退避循环会反复失败，弹了是噪声）。
+   *  缺省 true = 用户手动触发或首次挂载，失败要给出可见反馈。 */
+  announceFailure?: boolean
+}
+
 interface UseTerminalOptions {
   sessionId: string | null
   externalSessionName?: string | null
@@ -212,6 +219,20 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   useEffect(() => {
     lastActivityRef.current = Date.now()
   }, [])
+  // ── 自动重连引擎状态（「聚焦页面才重连」）──
+  // 退避定时器与计数：计数在 ws.onopen 成功或用户回来（kick）时归零，每次
+  // 调度 +1，封顶 30s；页面隐藏期间不调度也不消耗（回可见重新起一轮）。
+  const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoRetryCountRef = useRef(0)
+  // 引擎函数定义在 reconnect 之前（connectWs 的 onclose 要调用），经 ref 晚
+  // 绑定 reconnect 的最新身份——定时器/事件触发时才读，render 期赋值与
+  // consumeLatchRef 同款模式。
+  const reconnectRef = useRef<((container?: HTMLDivElement | null, opts?: ReconnectOptions) => void) | null>(null)
+  // 引擎触发的整端重建（teardown 回归，termRef 为空）跳过一次自动聚焦：
+  // 用户常在聊天面板等其他区域操作时被 kick 回来，焦点被终端抢走会打断输入。
+  const skipAutoFocusRef = useRef(false)
+  // true = 引擎正在管理重试（遮罩显示「正在自动重连」而非纯手动按钮）
+  const [autoReconnecting, setAutoReconnecting] = useState(false)
   // AbortController for createTerminal — abort on cleanup to cancel in-flight
   // creation (e.g., React StrictMode double-mount or rapid session switch).
   // A fresh controller is created for each initTerminal call.
@@ -227,10 +248,74 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const consumeLatchRef = useRef(onConsumeLatch)
   consumeLatchRef.current = onConsumeLatch
 
+  // ── 自动重连引擎 ──
+  // 「聚焦页面才重连」：页面隐藏时不发任何重连尝试（含已到期的退避定时器，
+  // 到期时发现隐藏直接跳过），页面回来（visibilitychange→visible / window
+  // focus / 任意用户活动事件）立即尝试一次并重置退避。既有 blur/idle 主动
+  // 拆除逻辑不变——省资源窗口照常生效，拆除后由本引擎在用户回来时自愈，
+  // 遮罩按钮保留为手动兜底。意外断开（ws onclose / init 失败）在页面可见时
+  // 按指数退避自动重试（1→2→4→…→cap 30s，同 useAcpChat 节奏）。
+  //
+  // 引擎函数全部经 ref / store 取值、无响应式依赖，保持稳定身份——它们被
+  // 高频事件（mousemove 等）和长寿命 WS 闭包引用，身份抖动会让 effect 反复
+  // 重挂、旧连接闭包持有过期调度器。
+
+  /** 立即发起一次引擎重连（退避定时器到期 / 用户回来共用）。teardown 态
+   *  （termRef 为空）走整端重建并跳过一次自动聚焦。 */
+  const autoReconnectNow = useCallback(() => {
+    if (!termRef.current) skipAutoFocusRef.current = true
+    reconnectRef.current?.(undefined, { announceFailure: false })
+  }, [])
+
+  const cancelAutoRetry = useCallback(() => {
+    if (autoRetryTimerRef.current) {
+      clearTimeout(autoRetryTimerRef.current)
+      autoRetryTimerRef.current = null
+    }
+  }, [])
+
+  /** 退避重试调度（ws onclose / createTerminal 失败路径）。已有重试排队或
+   *  页面隐藏时不调度（隐藏期间的断连由用户回来时的 kick 接管）。 */
+  const scheduleAutoRetry = useCallback(() => {
+    if (autoRetryTimerRef.current) return
+    if (document.hidden) return
+    const store = useAppStore.getState()
+    if (!(store.activeExternalSession ?? store.activeSessionId)) return
+    const delay = Math.min(1000 * 2 ** autoRetryCountRef.current, 30_000)
+    autoRetryCountRef.current += 1
+    setAutoReconnecting(true)
+    autoRetryTimerRef.current = setTimeout(() => {
+      autoRetryTimerRef.current = null
+      if (document.hidden) return
+      autoReconnectNow()
+    }, delay)
+  }, [autoReconnectNow])
+
+  /** 用户回来（页面变可见 / 窗口聚焦 / 任意活动事件）时的重连尝试。挂在
+   *  mousemove 等高频事件上：连接健康或已有尝试在途时必须廉价 no-op，
+   *  绝不能扰动健康连接（reconnect 会拆掉现存连接重建）。 */
+  const attemptAutoReconnect = useCallback(() => {
+    const store = useAppStore.getState()
+    if (!store.terminalDisconnected) return
+    if (!(store.activeExternalSession ?? store.activeSessionId)) return
+    if (document.hidden) return
+    if (autoRetryTimerRef.current) return
+    if (initializingRef.current) return
+    const ws = wsRef.current
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return
+    // 用户回来 = 新一轮退避（隐藏/离开期间积累的计数不作数）
+    autoRetryCountRef.current = 0
+    setAutoReconnecting(true)
+    autoReconnectNow()
+  }, [autoReconnectNow])
+
   const connectWs = useCallback(() => {
     const term = termRef.current
     const id = externalSessionName ?? sessionId
     if (!id || !term) return
+
+    // 新连接使一切排队的自动重试作废（会话切换 / 手动重连 / 引擎自身发起）。
+    cancelAutoRetry()
 
     // Close existing connection
     const wasConnected = wsRef.current !== null
@@ -265,6 +350,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     ws.onopen = () => {
       useAppStore.getState().setConnected(true)
       useAppStore.getState().setTerminalDisconnected(false)
+      // 连上了：退避循环结束，计数归零（下次断开从 1s 重新爬）。
+      autoRetryCountRef.current = 0
+      setAutoReconnecting(false)
       termRef.current?.writeln(`\x1b[32m[${i18n.t('terminal.status.connected')}]\x1b[0m`)
       // Phase 1: 声明 cell_frame 支持（§4.2 hello 握手）。开启后收到的
       // cell_frame 一律是 runs 行编码（`docs/dev/plans/archive/2026-08-28-pty-frame-rle.md`）。
@@ -375,6 +463,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       useAppStore.getState().setTerminalDisconnected(true)
       tmuxScrollModeRef.current = false
       termRef.current?.writeln(`\x1b[31m[${i18n.t('terminal.status.disconnected')}]\x1b[0m`)
+      // 非主动拆除（onclose 引用还在才会走到）→ 页面可见时按退避自动重试。
+      scheduleAutoRetry()
     }
 
     ws.onerror = () => {
@@ -493,7 +583,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     sessionIdRef.current = sessionId
     externalSessionRef.current = externalSessionName ?? null
-  }, [sessionId, externalSessionName])
+  }, [sessionId, externalSessionName, cancelAutoRetry, scheduleAutoRetry])
 
   /** Send raw data to the terminal's WebSocket if connected */
   const sendData = useCallback((data: string) => {
@@ -611,6 +701,10 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
       clearTimeout(idleTimerRef.current)
       idleTimerRef.current = null
     }
+    // 主动拆除（blur/idle 断连、卸载、会话切换）不是自动重连的场景：清掉
+    // 排队中的重试与「正在重连」指示，用户回来后由 kick 重新评估。
+    cancelAutoRetry()
+    setAutoReconnecting(false)
     if (wsRef.current) {
       wsRef.current.onclose = null
       wsRef.current.onerror = null
@@ -625,7 +719,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     sessionIdRef.current = null
     setTerminalReady(false)
     initializingRef.current = false
-  }, [])
+  }, [cancelAutoRetry])
 
   // Ref to supply the current font size to createTerminal without making
   // it a reactive dependency (avoids destroying the terminal on every
@@ -739,7 +833,6 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     termRef.current = term
     fitRef.current = fit
-    containerRef.current = container
 
     if (onTitleChange) {
       term.onTitleChange(onTitleChange)
@@ -850,13 +943,16 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   }, [onTitleChange])
 
   // Initialize terminal once (when container becomes available)
-  const initTerminal = useCallback((container: HTMLDivElement) => {
+  const initTerminal = useCallback((container: HTMLDivElement, opts?: ReconnectOptions) => {
     if (termRef.current) return
     // Already (re)creating — a second concurrent call (rapid click, StrictMode
     // double-invoke, re-render) must not start another createTerminal, or it
     // would open() on the same container twice and corrupt the instance.
     if (initializingRef.current) return
     initializingRef.current = true
+    // 记下容器：引擎自动重连路径不带 container 参数，首次 init 失败后
+    // containerRef 里必须有活容器可用（此前只在 createTerminal 成功时落值）。
+    containerRef.current = container
 
     // Create a fresh AbortController for this init cycle. disposeTerminal
     // aborts the previous one (if any) before we get here.
@@ -868,7 +964,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         // Keep the overlay up so the user can retry, and surface the failure
         // instead of silently swallowing it (looks like a dead button).
         useAppStore.getState().setTerminalDisconnected(true)
-        useToastStore.getState().addToast('error', i18n.t('terminal.status.initFailed'))
+        skipAutoFocusRef.current = false
+        if (opts?.announceFailure !== false) {
+          useToastStore.getState().addToast('error', i18n.t('terminal.status.initFailed'))
+        }
+        // 页面可见时按退避自动重试（引擎路径）；手动重连失败同样受益。
+        scheduleAutoRetry()
       })
       .finally(() => {
         initializingRef.current = false
@@ -877,7 +978,28 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     return () => {
       disposeTerminal()
     }
-  }, [createTerminal, disposeTerminal])
+  }, [createTerminal, disposeTerminal, scheduleAutoRetry])
+
+  /** 手动重连（遮罩按钮）与引擎自动重连共用入口。termRef 还活着（意外断开，
+   *  xterm 未拆）走廉价 WS 重连；teardown 态（blur/idle 拆除）走整端重建。
+   *  引擎路径经 opts 关闭失败 toast，并依赖 containerRef 回退取容器。 */
+  const reconnect = useCallback((container?: HTMLDivElement | null, opts?: ReconnectOptions) => {
+    const id = externalSessionName ?? sessionId
+    if (!id) return
+
+    if (termRef.current) {
+      connectWs()
+      return
+    }
+    // containerRef is set at initTerminal entry (before createTerminal), so it
+    // still points at the live panel div even when the first init failed.
+    const target = container ?? containerRef.current
+    if (target) {
+      initTerminal(target, opts)
+    }
+  }, [sessionId, externalSessionName, connectWs, initTerminal])
+  // 引擎晚绑定（见 reconnectRef 声明处注释）
+  reconnectRef.current = reconnect
 
   // Connect WS when terminal is ready and session changes
   useEffect(() => {
@@ -916,6 +1038,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     if (!autoFocus || !terminalReady) return
     // No session (empty state) or torn down (blur/idle disconnect) → nothing to focus.
     if (!(externalSessionName ?? sessionId)) return
+    // 引擎触发的整端重建消费掉跳过标记：用户在其他区域（如聊天面板）操作时
+    // 被自动重连拉起，焦点不得被终端抢走。手动按钮路径不置位，照常聚焦。
+    if (skipAutoFocusRef.current) {
+      skipAutoFocusRef.current = false
+      return
+    }
     termRef.current?.focus()
   }, [autoFocus, terminalReady, sessionId, externalSessionName])
 
@@ -999,6 +1127,8 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         clearBlurTimer()
         isFocusedRef.current = true
         resetIdleTimer()
+        // 页面回来：teardown 态 / 隐藏期间掉线的终端在此自愈。
+        attemptAutoReconnect()
       }
     }
 
@@ -1007,6 +1137,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         clearBlurTimer()
         isFocusedRef.current = true
         resetIdleTimer()
+        // 双屏场景：标签一直可见但焦点在别的窗口，blur 计时到点拆了终端；
+        // 焦点切回来即视为「用户回来了」。
+        attemptAutoReconnect()
       }
     }
 
@@ -1047,8 +1180,12 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         clearTimeout(idleTimerRef.current)
         idleTimerRef.current = null
       }
+      // 卸载 / 会话切换：取消排队中的自动重试并熄掉「正在重连」指示
+      //（新会话由自己的连接生命周期接管）。
+      cancelAutoRetry()
+      setAutoReconnecting(false)
     }
-  }, [sessionId, externalSessionName, disposeTerminal])
+  }, [sessionId, externalSessionName, disposeTerminal, attemptAutoReconnect, cancelAutoRetry])
 
   // Track user activity to reset the idle disconnect timer.  Any meaningful
   // interaction (mouse move, key press, scroll, touch, click) resets the
@@ -1064,6 +1201,9 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
 
     const onActivity = () => {
       lastActivityRef.current = Date.now()
+      // 空闲拆除（页面全程可见、无 visibility/focus 变化）后的自愈入口：
+      // 用户回来了（任何输入活动）即重连。连接健康时是廉价 no-op。
+      attemptAutoReconnect()
       // If the tab is focused and we have an idle timer, reset it so the
       // idle countdown starts from now.
       if (isFocusedRef.current && document.hasFocus() && idleTimerRef.current) {
@@ -1086,24 +1226,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
         document.removeEventListener(event, onActivity)
       })
     }
-  }, [sessionId, externalSessionName, disposeTerminal])
-
-  const reconnect = useCallback((container?: HTMLDivElement | null) => {
-    const id = externalSessionName ?? sessionId
-    if (!id) return
-
-    if (termRef.current) {
-      connectWs()
-      return
-    }
-    // containerRef is only set once createTerminal succeeds — fall back to
-    // the caller-provided live container so reconnect still works when the
-    // very first init failed (e.g. addon chunk 404).
-    const target = container ?? containerRef.current
-    if (target) {
-      initTerminal(target)
-    }
-  }, [sessionId, externalSessionName, connectWs, initTerminal])
+  }, [sessionId, externalSessionName, disposeTerminal, attemptAutoReconnect])
 
   /** Refocus the xterm textarea so the soft keyboard stays open.
    *  Used after a modifier latch in MobileKeyBar — the user tapped Ctrl/Shift/Alt
@@ -1127,5 +1250,7 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     exitScrollMode,
     reconnect,
     refocusTextarea,
+    /** 引擎正在管理自动重试（遮罩显示「正在自动重连」而非纯手动按钮） */
+    autoReconnecting,
   }
 }

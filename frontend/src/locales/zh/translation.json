@@ -201,6 +201,8 @@
   "terminal.hint": "使用左侧边栏开始",
   "terminal.status.connected": "已连接",
   "terminal.status.disconnected": "连接断开",
+  "terminal.status.reconnecting": "正在自动重连…",
+  "terminal.reconnect": "重连",
   "terminal.status.connectionError": "连接错误",
   "terminal.status.initFailed": "终端初始化失败，请重试",
   "terminal.status.attached": "已附加到 {{session}}",
