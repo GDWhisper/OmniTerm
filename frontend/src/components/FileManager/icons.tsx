@@ -77,6 +77,15 @@ export function IconArrowUp(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function IconArrowDown(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <line x1="8" y1="3" x2="8" y2="13" />
+      <polyline points="4,9 8,13 12,9" />
+    </svg>
+  )
+}
+
 export function IconRefresh(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

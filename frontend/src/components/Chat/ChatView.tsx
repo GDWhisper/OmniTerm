@@ -13,6 +13,7 @@ import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
 import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
+import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
@@ -718,7 +719,8 @@ export function ChatView() {
         )}
 
         {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
-            的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端加大触摸目标。 */}
+            的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端单图标 36px
+            方钮，文案只保留在 aria-label/title。 */}
         {showJumpToBottom && (
           <button
             type="button"
@@ -731,15 +733,15 @@ export function ChatView() {
               bottom: 12,
               left: 0,
               right: 0,
-              width: 'fit-content',
+              width: isMobile ? 36 : 'fit-content',
+              height: isMobile ? 36 : undefined,
               margin: '0 auto',
               zIndex: 20,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 6,
-              padding: isMobile ? '10px 18px' : '7px 14px',
-              minHeight: isMobile ? 44 : 0,
+              padding: isMobile ? 0 : '7px 14px',
               background: 'var(--accent)',
               color: '#fff',
               border: '2px solid var(--border-strong)',
@@ -750,8 +752,8 @@ export function ChatView() {
               cursor: 'pointer',
             }}
           >
-            <span aria-hidden="true">↓</span>
-            {t('chat.jumpToBottom')}
+            <IconArrowDown width={isMobile ? 16 : 12} height={isMobile ? 16 : 12} aria-hidden="true" />
+            {!isMobile && t('chat.jumpToBottom')}
           </button>
         )}
       </div>

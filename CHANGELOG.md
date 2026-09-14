@@ -58,6 +58,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-09-14 12:18) `[frontend]` ACP 聊天「回到底部」按钮移动端改单图标小方钮：原「↓ 回到底部」文字条在手机上占地过宽（44px 高、百余 px 宽），改为 36×36 单图标方钮，文案保留在 aria-label/title 不损可达性；箭头表示法从文本字形 `↓` 统一为共享库 `IconArrowDown`（镜像既有 IconArrowUp），消除像素字体开关与平台字体回退导致的字形渲染差异，桌面端文字按钮布局不变（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/components/FileManager/icons.tsx`）
 - (2026-09-13 01:05) `[frontend]` 聊天「回到底部」按钮改离底即显：原实现以末条消息内容指纹为门控，仅当上翻期间尾部有新内容（新消息/流式扩写/工具状态推进）才出现，会话结束或空闲时上翻回看历史没有任何回底入口；现离开底部即显示、滚回底部（含点击按钮）即隐藏，流式输出与会话结束行为一致，可见文案从「下方有新内容」改「回到底部」。末条指纹判定随门控整体移除（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/utils/chatScroll.ts` 及其测试删除、`frontend/src/locales/{zh,en}/translation.json`）
 
 ### Fixed
