@@ -260,7 +260,7 @@ pub async fn proxy_host_mw(
 
     // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
     // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。
-    let token = crate::auth::extract_token(&request);
+    let token = crate::auth::extract_token(&request, &state.token_cookie);
     if let Err(status) = crate::auth::verify_request(&state, token.as_deref()).await {
         return status.into_response();
     }
@@ -754,14 +754,31 @@ fn request_client_ip(request: &Request) -> Option<IpAddr> {
     request.extensions().get::<ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip())
 }
 
-/// 从 `Cookie` 头剥离 `omniterm_token=...` 项（D2 cookie 隔离）。
+/// cookie 名是否属于 OmniTerm 的 auth token——含各实例的后缀变体
+/// （`omniterm_token` / `omniterm_token_dev` / `omniterm_token_preview` …）。
+/// 剥离时必须覆盖全部变体：同 host 下浏览器会把多个实例的 cookie 一起带上，
+/// 只剥自身键位会把别的实例的 JWT 泄漏给上游目标服务。
+fn is_omniterm_token_cookie(name: &str) -> bool {
+    match name.strip_prefix(crate::TOKEN_COOKIE_BASE) {
+        Some(rest) => rest.is_empty() || rest.starts_with('_'),
+        None => false,
+    }
+}
+
+/// 从 `Cookie` 头剥离 OmniTerm 自己的 token cookie（D2 cookie 隔离）。
 /// 剥离后为空则返回 `None`（整头丢弃）。
 fn strip_omniterm_token(value: &HeaderValue) -> Option<HeaderValue> {
     let s = value.to_str().ok()?;
     let kept: Vec<&str> = s
         .split(';')
         .map(str::trim)
-        .filter(|p| !p.is_empty() && !p.starts_with("omniterm_token="))
+        .filter(|p| {
+            if p.is_empty() {
+                return false;
+            }
+            let name = p.split('=').next().unwrap_or("").trim();
+            !is_omniterm_token_cookie(name)
+        })
         .collect();
     if kept.is_empty() {
         return None;
@@ -1028,6 +1045,22 @@ mod tests {
         assert_eq!(out.to_str().unwrap(), "a=1; b=2");
         let only = HeaderValue::from_static("omniterm_token=x");
         assert!(strip_omniterm_token(&only).is_none());
+    }
+
+    #[test]
+    fn strip_omniterm_token_covers_instance_variants() {
+        // 同 host 下浏览器会把各实例的 cookie 一起带上，全部键位都要剥离，
+        // 否则别的实例（dev/preview）的 JWT 会泄漏给上游目标服务。
+        let mixed = HeaderValue::from_static("a=1; omniterm_token=x; omniterm_token_dev=y; b=2");
+        assert_eq!(strip_omniterm_token(&mixed).unwrap().to_str().unwrap(), "a=1; b=2");
+        let dev_only = HeaderValue::from_static("omniterm_token_dev=y");
+        assert!(strip_omniterm_token(&dev_only).is_none());
+        // 仅前缀相似、并非 token 键位的 cookie 必须原样保留
+        let similar = HeaderValue::from_static("omniterm_tokenish=keep");
+        assert_eq!(
+            strip_omniterm_token(&similar).unwrap().to_str().unwrap(),
+            "omniterm_tokenish=keep"
+        );
     }
 
     #[test]

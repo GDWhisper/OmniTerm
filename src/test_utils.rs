@@ -24,6 +24,7 @@ pub async fn test_state() -> AppState {
     sqlx::migrate!("./migrations").run(&db).await.expect("run migrations");
     AppState {
         jwt_secret: "test-secret".into(),
+        token_cookie: crate::TOKEN_COOKIE_BASE.to_string(),
         api_keys: HashMap::new(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),

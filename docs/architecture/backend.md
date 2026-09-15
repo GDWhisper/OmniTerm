@@ -323,7 +323,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 `/proxy/{port}/{*path}` 把浏览器请求转发到宿主机 `127.0.0.1:{port}`，让机器 A 的浏览器经跑在机器 B 上的 OmniTerm 访问 B 的 localhost 服务（如 dev server）。设计见 `docs/dev/plans/2026-08-13-port-forward-proxy.md`（D1-D6）。
 
 - **路由**：单一通配符 `/proxy/{*path}`（不拆 `{port}` + `{*rest}` 两条——axum 0.8 的 `{*rest}` 不匹配空剩余），handler 从通配符首个路径段解析端口，剩余路径取 `OriginalUri` 未解码原始路径（`strip_prefix("/proxy/{port}")`）。
-- **安全边界（D2）**：目标 IP 永远硬编码 `127.0.0.1`，绝不从 path/header/query 解析地址。端口白名单 `3000..=65535` − 黑名单常量表（3306/5432/6379/27017/11211 + Consul 8500-8503 + ES 9200-9300）− 自身监听端口（`args.port` 经 `AppState.proxy.self_port` 注入，防回环）。路由挂 `require_auth_mw`（auth 开启时）；转发前剥离 `omniterm_token` cookie。
+- **安全边界（D2）**：目标 IP 永远硬编码 `127.0.0.1`，绝不从 path/header/query 解析地址。端口白名单 `3000..=65535` − 黑名单常量表（3306/5432/6379/27017/11211 + Consul 8500-8503 + ES 9200-9300）− 自身监听端口（`args.port` 经 `AppState.proxy.self_port` 注入，防回环）。路由挂 `require_auth_mw`（auth 开启时）；转发前按前缀谓词剥离**全部实例变体**的 token cookie（`omniterm_token` / `omniterm_token_dev` / …，见「认证与鉴权」的实例隔离——只剥自身键位会把同 host 下别的实例的 JWT 泄漏给上游）。
 - **有界性（D5）**：请求体 `to_bytes` 上限默认 2MB（与 axum DefaultBodyLimit 一致），经 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY`（`ProxyState.max_request_body`）可调大以支持大文件上传；响应 `Response::chunk()` + `unfold` 流式回写不 collect；WS 每方向 `mpsc(64)` 有界，满则拒新数据 + warn。
 - **Header 重写（D6）**：请求侧 Host→`127.0.0.1:{port}`、剥离 hop-by-hop、剥离 **Accept-Encoding**（防上游返回 gzip 压缩体——reqwest 未启用自动解压，压缩字节经重写转码会被破坏，浏览器 `ERR_CONTENT_DECODING_FAILED`；强制明文 + 回环传输压缩收益可忽略）、WS 握手 Origin→`http://127.0.0.1:{port}`、Cookie 剥离 token；响应侧丢弃 Content-Length 改 chunked、`Set-Cookie` 剥离 `Domain=localhost` 并补 `/proxy/{port}` Path 前缀、`Location` 相对化（绝对路径/本机 URL→`/proxy/{port}/x`，外部 URL 不动）。
 - **`X-Forwarded-*`（2026-08-15 补全，D6 声明但此前未实现）**：请求转发前补 `X-Forwarded-For`（已有链则逗号追加客户端 IP，无则新建；客户端 IP 经 `ConnectInfo` 从请求 extensions 提取，纯函数签名带 `client_ip: Option<IpAddr>`）、`X-Forwarded-Proto`（缺失补 `http`）、`X-Forwarded-Host`（缺失取**原始** Host，即浏览器访问的 Host，而非重写后的 `127.0.0.1:{port}`）。**已有值保留不覆盖**——外层 nginx 等可能已带 `https`/真实 Host，覆盖会误导上游（见「多实现差异」）。
@@ -335,7 +335,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 
 - **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。
 - **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。**WS 入口统一做 Origin 校验（CSWSH 防御，2026-08-15）**：浏览器发起的 WS 必带 Origin，`dispatch_proxy` 中提取 Origin 与请求 Host（均忽略端口）比对，跨站页面（evil.com）Origin 的 host 不同 → 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
-- **鉴权 cookie 跨子域名**：登录/登出的 `omniterm_token` cookie 在启用子域名且 base 为合法带点域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；**base 为 IP / localhost / 无点单标签域名时不设 Domain（host-only）**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（2026-08-15 防御，参考 code-server `getCookieDomain`）；未启用子域名时维持 host-only。
+- **鉴权 cookie 跨子域名**：登录/登出的 token cookie 在启用子域名且 base 为合法带点域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；**base 为 IP / localhost / 无点单标签域名时不设 Domain（host-only）**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（2026-08-15 防御，参考 code-server `getCookieDomain`）；未启用子域名时维持 host-only。
 - **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
 - **DNS 部署（用户侧，非代码）**：局域网 IP 无法子域名（`3000.192.168.5.216` 非法），需用户配置可通配符解析的域名指向 OmniTerm 机器，三选一：局域网 DNS（dnsmasq/pihole `address=/.{base}/{IP}`）、公网 DNS（wildcard A 记录）、hosts 文件（逐端口加）。未配 DNS 则子域名不生效、路径前缀兜底。
 
@@ -511,7 +511,7 @@ Commands:
 start options:
   -p, --port <PORT>       Listen port (default: 9077; dev.sh 各 worktree 经 -p 传 9777 [dev] / 9075 [preview]) [env: OMNITERM_PORT]
       --db <DB>           Database connection string [env: OMNITERM_DB]
-      --jwt-secret <KEY>  JWT signing key [env: OMNITERM_JWT_SECRET] (auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
+      --jwt-secret <KEY>  JWT signing key [env: OMNITERM_JWT_SECRET] (auto-generates a random per-instance key under ~/.omniterm/ if unset)
       --auth-enabled      Force password verification [env: OMNITERM_AUTH_ENABLED] (accepts 1/0/true/false; DB value used if unset)
       --reset-auth        Delete all users before startup [env: OMNITERM_RESET_AUTH]
   -d, --daemonize         Run in background (Unix only; errors on Windows), logs appended to ~/.omniterm/<binary>.log; the parent process blocks until the daemon binds the port — on success it prints "OmniTerm vX.Y.Z started in the background — http://host:port (PID)", on failure (port in use / DB unreachable) it prints the error to the terminal and exits non-zero, never silently "succeeding"
@@ -551,7 +551,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OMNITERM_DB` | 开发构建（debug / `target/` 下产物）`~/.omniterm/omniterm-dev.db`；release 正式安装按 argv0 推导（`~/.omniterm/<binary>.db`） | SQLite connection string（等价 `--db`）。开发构建固定走 `omniterm-dev`，杜绝 dev/preview 的 `target/debug/omniterm` 裸跑（无 `--db`）因 Cargo.toml name 统一而静默连正式版库（历史事故 20260812 / 20260823） |
-| `OMNITERM_JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
+| `OMNITERM_JWT_SECRET` | 无默认值；缺省时自动生成随机密钥并持久化到 `~/.omniterm/jwt_secret[_<实例后缀>]`（0600，后缀取自生效 db 的文件名，见「认证与鉴权」实例隔离） | JWT signing secret。不设公开默认值——可预测的密钥等于无鉴权 |
 | `OMNITERM_AUTH_ENABLED` | 未设置时用 DB 值（`settings.auth_enabled`） | 强制密码验证开关（`1/0/true/false`），覆盖 DB 设置并写回。Docker/公网部署应显式设 1 |
 | `OMNITERM_HOST` | `127.0.0.1` | 监听地址（等价 `-H`）；Docker 传 `0.0.0.0` 全网暴露 |
 | `OMNITERM_PORT` | `9077` | 监听端口（等价 `-p`） |
@@ -564,8 +564,9 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 单用户（admin）密码认证，无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
 
+- **实例隔离（cookie 名 + JWT 密钥，2026-09-15）**：实例身份取自**实际生效的 db** 文件名 stem（`instance_id`：`--db`/`OMNITERM_DB`/默认值 → `omniterm` / `omniterm-dev` / `omniterm-preview`），再经 `instance_suffix` 剥掉 `omniterm` 前缀得到后缀，派生出两样东西——cookie 名（`token_cookie_name`：正式版 `omniterm_token`，dev `omniterm_token_dev`）与 JWT 密钥文件名（`jwt_secret_file_name`：`jwt_secret` / `jwt_secret_dev`，均落 `~/.omniterm/`）。**必要性**：浏览器 cookie **不区分端口**，同 host 下 dev(127.0.0.1:9777) 与正式版(0.0.0.0:9077) 共用 `omniterm_token` 时后登录者会覆盖前者，又因当时共用同一签名密钥，被覆盖方仅因 `token_version` 不匹配而 401 → 症状是「dev 登录导致正式版自动登出」（反之 `ver` 巧合相等即串号登录）。正式版后缀为空 ⇒ **沿用无后缀历史名**，老用户登录态不失效；Docker 用卷内 `omniterm.db`，同样不受影响。dev/preview 升级后各需重新登录一次。**新增实例只需给 db 起不同文件名**，无需改代码。相关：`AppState.token_cookie`（读 cookie 的唯一来源，`auth::extract_token` 用它精确匹配 `<name>=`，故 `omniterm_token` 不会误读 `omniterm_token_dev`）；代理剥离侧则按 `is_omniterm_token_cookie` 前缀谓词剥离**全部实例变体**（`omniterm_token[_*]`），避免同 host 下别的实例 JWT 泄漏给上游目标服务。
 - **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `OMNITERM_HOST=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
-- **密钥**：`OMNITERM_JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并持久化到 `~/.omniterm/jwt_secret`（0600）；容器/多实例场景建议显式设置 `OMNITERM_JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
+- **密钥**：`OMNITERM_JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并按实例持久化到 `~/.omniterm/jwt_secret[_<实例后缀>]`（0600，见上条「实例隔离」）；容器/多实例场景建议显式设置 `OMNITERM_JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
 - **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
 - **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。
 - 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。

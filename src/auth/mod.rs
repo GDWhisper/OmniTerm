@@ -62,11 +62,17 @@ pub async fn verify_token_for_state(
     Ok(claims)
 }
 
-pub fn extract_token(req: &AxumRequest) -> Option<String> {
+/// 从请求提取本实例的 token：优先 `Cookie: <cookie_name>=...`，其次
+/// `Authorization: Bearer ...`。`cookie_name` 由 `AppState.token_cookie` 提供
+/// （按 db 实例加后缀），同一 host 下不同实例的 cookie 互不误读。
+pub fn extract_token(req: &AxumRequest, cookie_name: &str) -> Option<String> {
     if let Some(cookie) = req.headers().get("cookie").and_then(|v| v.to_str().ok()) {
         for pair in cookie.split(';') {
             let pair = pair.trim();
-            if let Some(value) = pair.strip_prefix("omniterm_token=") {
+            // 精确匹配 `<name>=`，故 `omniterm_token` 不会误读 `omniterm_token_dev`。
+            if let Some(rest) = pair.strip_prefix(cookie_name)
+                && let Some(value) = rest.strip_prefix('=')
+            {
                 return Some(value.to_string());
             }
         }
@@ -107,7 +113,7 @@ pub async fn require_auth_mw(
     request: AxumRequest,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let token = extract_token(&request);
+    let token = extract_token(&request, &state.token_cookie);
     verify_request(&state, token.as_deref()).await?;
     Ok(next.run(request).await)
 }

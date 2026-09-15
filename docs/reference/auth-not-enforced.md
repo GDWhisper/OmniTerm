@@ -24,7 +24,8 @@
   - public：`/auth/setup`、`/auth/login`、`/auth/logout`、`/auth/check`（及 health 等）
   - protected：其余全部业务路由 + 三个 WS 路由（`/ws/terminal/*`、`/ws/terminal/external/*`、`/ws/acp/*`），经 `route_layer(middleware::from_fn_with_state(require_auth_mw))` 统一保护
   - WS 握手同样走中间件（请求头携带 cookie），无需 handler 内单独校验
-- **`/auth/check`**（`src/api/auth.rs`）：真实校验 `omniterm_token` cookie，返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`（同时返回 `needs_setup`，供设置页决定「开启密码验证」是弹新建密码表单还是验证既有密码）。
+- **`/auth/check`**（`src/api/auth.rs`）：真实校验本实例的 token cookie（名取自 `AppState.token_cookie`），返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`（同时返回 `needs_setup`，供设置页决定「开启密码验证」是弹新建密码表单还是验证既有密码）。
+- **cookie 名与 JWT 密钥按实例隔离**（`src/main.rs` 的 `instance_id` / `instance_suffix` / `token_cookie_name` / `jwt_secret_file_name`）：实例身份取自生效 db 的文件名 stem，正式版得 `omniterm_token` + `~/.omniterm/jwt_secret`（历史名不变），dev/preview 得 `omniterm_token_dev` + `jwt_secret_dev` 等。**浏览器 cookie 不区分端口**，同 host 上并存多个实例（如本机 dev 9777 与正式版 9077）时必须各写各的键位——否则后登录者覆盖前者的 cookie，被覆盖方因 `token_version` 不匹配而 401，表现为「一边登录、另一边自动登出」；两者再共用签名密钥时，`ver` 巧合相等即串号登录。
 - **登录限流** `LoginGuard`（`src/auth/rate_limit.rs`）：滑动窗口，单 IP 5 次失败 / 5 分钟触发 429，成功登录重置。
 - **启动安全**：监听非回环地址且 auth 关闭时打印高危警告（`src/main.rs`）；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
 
@@ -49,9 +50,9 @@
 
 ## 相关文件
 
-- `src/auth/mod.rs` — `create_token` / `verify_token` / `require_auth_mw` / `extract_token`
+- `src/auth/mod.rs` — `create_token` / `verify_token` / `require_auth_mw` / `extract_token`（按 `AppState.token_cookie` 精确匹配键位）
 - `src/auth/rate_limit.rs` — `LoginGuard` 登录限流
 - `src/api/auth.rs` — `setup` / `login` / `logout` / `check` / `protected_routes`
 - `src/api/mod.rs` — 路由注册与 `require_auth_mw` 挂载
-- `src/main.rs` — `auth_enabled` 初始化与启动警告
+- `src/main.rs` — `auth_enabled` 初始化与启动警告；`instance_id` / `instance_suffix` / `token_cookie_name` / `jwt_secret_file_name`（cookie 名与密钥的实例隔离派生）
 - `frontend/src/components/Auth/AuthPage.tsx`、`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/api/client.ts`
