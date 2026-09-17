@@ -275,6 +275,10 @@ and render rich cards instead of the current text-only fallback.
   **为什么按 `row_id` 而不是文本匹配**：后端一个 turn 一行，前端本 turn 可能不止一条消息；且文本相等这个不变式易漂移（丢帧、cancel 补发帧、拆分粒度），对不上就会 INSERT 重复行。`ChatMessage.dbId` 承载「已知的真 DB 行 id」（hydrate 行 / `turn_snapshot` 的 `row_id`），本地 `genId()` 的消息不填——谎报会静默命中零行。
   **纯工具调用 turn 的 `text` 为空**（后端只累积 `AgentMessageChunk`），却恰好是 blocks 最肥的一类，所以后端的空 text 跳过守卫只作用于文本匹配路径。
 
+### ACP 本地输出与工具耗时估算
+
+`utils/turnClock.ts` 保持工作时长包含工具执行、扣审批的口径；tps 独立按本连接观测字符数 / 4 /（观测工作 − 可识别纯工具并集）估算。工具与生成重叠保守保留在分母；并行工具时长不累加，审批重叠只扣一次。live 接线在 seq/replay 门控之后，快照重开观测窗且仅恢复明确 `in_progress`（卡片缺省 `running` 不当执行证据），不伪造离线统计。消息底部同时显示「工具约」与「估算 t/s」。本地值仍不持久化；上限与状态边界见工作时长计划 E14。
+
 
 ## localhost 链接重写（端口转发代理 P3）
 

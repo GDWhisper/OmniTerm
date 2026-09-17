@@ -9,7 +9,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime, formatTps, formatWorkDuration } from '../../utils/formatTime'
-import { finalTps, turnElapsedMs, turnTps } from '../../utils/turnClock'
+import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -42,11 +42,14 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
   fontFamily: READER_FONT,
   letterSpacing: '0.03em',
   fontVariantNumeric: 'tabular-nums',
-  whiteSpace: 'nowrap',
+  whiteSpace: 'normal',
+  minWidth: 0,
+  maxWidth: '100%',
+  overflowWrap: 'anywhere',
 }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
-const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto' }
+const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', textAlign: 'right' }
 
 // 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
 const LIVE_TICK_MS = 1_000
@@ -446,13 +449,13 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
 }
 
 /**
- * 流式期间的实时工作计时 + tps（气泡底部元信息槽位，定稿后被后端结算值取代）。
+ * 流式期间的实时工作计时、工具耗时与 tps（气泡底部元信息槽位，定稿后被结算值取代）。
  *
  * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
  * 一个数字。与 `ChatView` 的 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
  * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
  *
- * tps 与计时同源（`utils/turnClock` 同一张表），故读数共享同一次 tick、不会各跳各的。
+ * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  */
@@ -464,17 +467,21 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
     const draw = () => {
       const el = ref.current
       if (!el) return
-      const dur = formatWorkDuration(turnElapsedMs(sessionId), i18n.language)
+      const now = Date.now()
+      const dur = formatWorkDuration(turnElapsedMs(sessionId, now), i18n.language)
       if (!dur) {
         // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
         el.textContent = ''
         el.style.display = 'none'
         return
       }
-      const rate = formatTps(turnTps(sessionId))
-      el.textContent = rate
-        ? `${t('chat.msg.working', { dur })} · ${t('chat.msg.tps', { tps: rate })}`
-        : t('chat.msg.working', { dur })
+      const toolMs = turnToolElapsedMs(sessionId, now)
+      const toolDur = toolMs != null && toolMs > 0 ? formatWorkDuration(toolMs, i18n.language) : null
+      const rate = formatTps(turnTps(sessionId, now))
+      let text = t('chat.msg.working', { dur })
+      if (toolDur) text += ` · ${t('chat.msg.toolTime', { dur: toolDur })}`
+      if (rate) text += ` · ${t('chat.msg.tps', { tps: rate })}`
+      el.textContent = text
       el.style.display = ''
     }
     draw()
@@ -486,7 +493,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
     <span
       ref={ref}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
-      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.tpsTip')}`}
+      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.toolTimeTip')} · ${t('chat.msg.tpsTip')}`}
     />
   )
 }
@@ -585,14 +592,20 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
-  // 定稿后的最终 tps：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
+  // 定稿后的本地估算：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
   // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
-  const settledTps =
-    !isLive && workText && isLastAssistant && sessionId ? formatTps(finalTps(sessionId)) : null
+  const settledSessionId = !isLive && workText && isLastAssistant && sessionId ? sessionId : null
+  const settledTps = settledSessionId ? formatTps(finalTps(settledSessionId)) : null
+  const settledToolMs = settledSessionId ? finalToolElapsedMs(settledSessionId) : null
+  const settledToolText = settledToolMs != null && settledToolMs > 0
+    ? formatWorkDuration(settledToolMs, i18n.language)
+    : null
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
+    settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),
     settledTps && t('chat.msg.tps', { tps: settledTps }),
     waitText && t('chat.msg.waitTime', { dur: waitText }),
+    settledToolText && t('chat.msg.toolTimeTip'),
     settledTps && t('chat.msg.tpsTip'),
   ].filter(Boolean).join(' · ')
   // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
@@ -858,7 +871,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
-      {/* 动作栏 + turn 耗时（含 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
+      {/* 动作栏 + turn 耗时（含工具耗时与 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
           · 流式期：动作栏恒空（五个动作的 visible 硬排 streaming），实时读数**靠左**；
           · 定稿后：动作栏回归左侧，结算值用 `marginLeft:auto` 顶到**右侧**。
           行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
@@ -876,7 +889,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* 流式期间：本地实时估算（计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
+          {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
               到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
           {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
@@ -889,6 +902,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               title={durationTip}
             >
               {t('chat.msg.workTime', { dur: workText })}
+              {settledToolText && ` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}
               {settledTps && ` · ${t('chat.msg.tps', { tps: settledTps })}`}
             </span>
           )}

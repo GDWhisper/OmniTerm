@@ -4,7 +4,7 @@ import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
-import { addOutputChars } from '../utils/turnClock'
+import { addOutputChars, resumeTurnClock, setTurnWaiting, updateTurnTool } from '../utils/turnClock'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -786,6 +786,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 与 turnClock 的 turn 门控一致——重放不产生 prompt 起点，也不该有 tps。
           if (action.kind === 'appendText' || action.kind === 'appendThought') {
             addOutputChars(sid, action.text.length)
+          } else if (action.kind === 'upsertTool') {
+            updateTurnTool(sid, action.toolCallId, action.status)
           }
           // ALL actions → live buffer, flushed once per rAF frame via
           // applyReplayBatch (single set() call = one re-render per frame).
@@ -1009,6 +1011,17 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             text: frame.text ?? '',
             blocks,
           })
+          // 快照只有状态没有事件时间：重开观测窗，不把旧文本除以后续时长。
+          // 只从此刻跟踪明确仍在执行的工具，不推算离线期间耗时。
+          const at = Date.now()
+          resumeTurnClock(sid, at)
+          setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0, at)
+          for (const block of blocks) {
+            // 卡片缺省状态会被补成 running，不能拿该显示兜底当作执行证据。
+            if (block.type === 'tool_call' && String(block.status) === 'in_progress') {
+              updateTurnTool(sid, block.toolCallId, 'in_progress', at)
+            }
+          }
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
           break
         }
@@ -1020,6 +1033,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           } else if (frame.active === true) {
             // 重连到进行中 turn：置 sending 以显示思考指示器。
             s.beginPrompt(sid)
+            resumeTurnClock(sid)
+            setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0)
           }
           break
         default:
