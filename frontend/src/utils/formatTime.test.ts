@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatHoverTime, formatTps, formatWorkDuration } from './formatTime'
+import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from './formatTime'
 
 // 用本地时区构造 Date（new Date(y, m, d, h, min)），断言在任何时区下都成立。
 describe('formatHoverTime', () => {
@@ -65,5 +65,20 @@ describe('formatTps', () => {
     expect(formatTps(-1)).toBeNull()
     expect(formatTps(Number.NaN)).toBeNull()
     expect(formatTps(Number.POSITIVE_INFINITY)).toBeNull()
+  })
+})
+
+describe('formatToolDuration', () => {
+  it('有观测时长时走工作时长同一套分档', () => {
+    expect(formatToolDuration(42_000, 'zh-CN')).toBe('42秒')
+    expect(formatToolDuration(162_000, 'en')).toBe('2m42s')
+  })
+
+  it('未知与 0 都不渲染（0 = 本窗口没观测到工具）', () => {
+    expect(formatToolDuration(null, 'zh-CN')).toBeNull()
+    expect(formatToolDuration(undefined, 'zh-CN')).toBeNull()
+    expect(formatToolDuration(0, 'zh-CN')).toBeNull()
+    expect(formatToolDuration(-1, 'zh-CN')).toBeNull()
+    expect(formatToolDuration(Number.NaN, 'zh-CN')).toBeNull()
   })
 })

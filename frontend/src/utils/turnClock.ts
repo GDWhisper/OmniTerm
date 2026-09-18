@@ -94,13 +94,15 @@ export function resumeTurnClock(sessionId: string, at: number = Date.now()): voi
 
 /** 冻结同一时刻的工具与速度估算，再停表；重复结束不覆盖已经冻结的值。 */
 export function endTurn(sessionId: string, at: number = Date.now()): void {
-  if (turns.has(sessionId)) {
-    rememberBounded(finalBySession, sessionId, {
-      tps: turnTps(sessionId, at),
-      toolMs: turnToolElapsedMs(sessionId, at),
-    })
-    turns.delete(sessionId)
-  }
+  const turn = turns.get(sessionId)
+  if (!turn) return
+  const tps = turnTps(sessionId, at)
+  const toolMs = turnToolElapsedMs(sessionId, at)
+  // 两项同时为 null 只可能是本窗口估算已失效：不留占位条目挤占上限，
+  // 让 `finalTps`/`finalToolElapsedMs` 对「无读数」与「无快照」保持同一结果。
+  if (tps === null && toolMs === null) finalBySession.delete(sessionId)
+  else rememberBounded(finalBySession, sessionId, { tps, toolMs })
+  turns.delete(sessionId)
 }
 
 /** 审批队列非空即挂起，重复同态幂等；turn 外的审批不跨轮泄漏。 */
@@ -123,6 +125,15 @@ export function updateTurnTool(sessionId: string, id: string, status?: string, a
   if (status === 'in_progress' || status === 'running') {
     if (turn.activeTools.has(id)) return
     if (!id || id.length > MAX_TURN_TOOL_ID_LENGTH || turn.activeTools.size >= MAX_ACTIVE_TURN_TOOLS) {
+      // 丢弃一条活跃工具后并集不再完整，本窗口估算整体作废（见 E14）；
+      // 读数会静默消失，故留一条 DEV 诊断便于定位是哪条边界被踩到。
+      if (import.meta.env.DEV) {
+        console.debug('[turnClock] tool tracking overflow, estimates invalidated', {
+          sessionId,
+          activeToolCount: turn.activeTools.size,
+          idLength: id.length,
+        })
+      }
       turn.estimatesValid = false
       turn.activeTools.clear()
       turn.toolSinceWorkMs = null

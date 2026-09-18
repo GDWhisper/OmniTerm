@@ -8,7 +8,7 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatHoverTime, formatTps, formatWorkDuration } from '../../utils/formatTime'
+import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from '../../utils/formatTime'
 import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
@@ -475,8 +475,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
         el.style.display = 'none'
         return
       }
-      const toolMs = turnToolElapsedMs(sessionId, now)
-      const toolDur = toolMs != null && toolMs > 0 ? formatWorkDuration(toolMs, i18n.language) : null
+      const toolDur = formatToolDuration(turnToolElapsedMs(sessionId, now), i18n.language)
       const rate = formatTps(turnTps(sessionId, now))
       let text = t('chat.msg.working', { dur })
       if (toolDur) text += ` · ${t('chat.msg.toolTime', { dur: toolDur })}`
@@ -596,9 +595,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
   const settledSessionId = !isLive && workText && isLastAssistant && sessionId ? sessionId : null
   const settledTps = settledSessionId ? formatTps(finalTps(settledSessionId)) : null
-  const settledToolMs = settledSessionId ? finalToolElapsedMs(settledSessionId) : null
-  const settledToolText = settledToolMs != null && settledToolMs > 0
-    ? formatWorkDuration(settledToolMs, i18n.language)
+  const settledToolText = settledSessionId
+    ? formatToolDuration(finalToolElapsedMs(settledSessionId), i18n.language)
     : null
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),

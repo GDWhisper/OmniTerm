@@ -143,6 +143,21 @@ describe('turnClock tps 估算', () => {
     expect(finalTps('s1')).toBe(10) // 80/4/2
   })
 
+  it('重复 endTurn 不覆盖已冻结的快照', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 80)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    updateTurnTool('s1', 'a', 'completed', 2_000)
+    endTurn('s1', 2_000)
+    // 工作时长 2s、其中纯工具 1s → 80/4/1s = 20 t/s；工具耗时 1s
+    expect(finalTps('s1')).toBe(20)
+    expect(finalToolElapsedMs('s1')).toBe(1_000)
+
+    endTurn('s1', 9_000) // 无在建 turn：第二次结束是 no-op，不覆盖上面的冻结值
+    expect(finalTps('s1')).toBe(20)
+    expect(finalToolElapsedMs('s1')).toBe(1_000)
+  })
+
   it('本轮 0 输出定稿会把上一 turn 的快照清掉，不把旧值错配到新消息', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 40)
@@ -162,6 +177,23 @@ describe('turnClock tps 估算', () => {
     }
     expect(finalTps('s0')).toBeNull()
     expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(10)
+  })
+
+  it('估算失效的 turn 不留空快照占位，不把别的会话的真实快照挤出上限', () => {
+    for (let i = 0; i < MAX_TRACKED_TURNS; i++) {
+      beginTurn(`s${i}`, 0)
+      addOutputChars(`s${i}`, 40)
+      endTurn(`s${i}`, 1_000)
+    }
+    expect(finalTps('s0')).toBe(10)
+
+    // 工具数溢出 → 本窗口估算整体失效，定稿时两项都无读数
+    beginTurn('bad', 0)
+    for (let i = 0; i <= MAX_ACTIVE_TURN_TOOLS; i++) updateTurnTool('bad', `t${i}`, 'in_progress', 1_000)
+    endTurn('bad', 2_000)
+    expect(finalTps('bad')).toBeNull()
+    expect(finalToolElapsedMs('bad')).toBeNull()
+    expect(finalTps('s0')).toBe(10) // s0 仍是最旧的真实快照，未被占位条目挤掉
   })
 })
 
