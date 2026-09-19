@@ -264,23 +264,6 @@ describe('chatStore — queued follow-up actions', () => {
     })
   })
 
-  describe('markEdited (F02)', () => {
-    it('marks the targeted user message as edited', () => {
-      useChatStore.getState().addUserMessage('s1', 'original')
-      const msg = useChatStore.getState().states['s1'].messages[0]
-      useChatStore.getState().markEdited('s1', msg.id)
-      expect(useChatStore.getState().states['s1'].messages[0].edited).toBe(true)
-    })
-
-    it('does not touch assistant messages or unknown ids', () => {
-      useChatStore.getState().addUserMessage('s1', 'u1')
-      useChatStore.getState().appendChunk('s1', 'assistant reply')
-      useChatStore.getState().markEdited('s1', 'nonexistent-id')
-      const msgs = useChatStore.getState().states['s1'].messages
-      expect(msgs.every((m) => !m.edited)).toBe(true)
-    })
-  })
-
   describe('image attachments (F03)', () => {
     it('addUserMessage stores image blocks after the text block', () => {
       useChatStore.getState().addUserMessage('s1', 'look at this', [

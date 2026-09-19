@@ -502,8 +502,6 @@ export interface ChatMessageViewProps {
   /** 读取本会话在建 turn 的实时计时（`message.streaming` 期间显示）。缺省时不显示
    *   计时器——结算耗时仍走 `message.durationMs`，与 sessionId 无关。 */
   sessionId?: string
-  /** F02: resend an edited copy of this user message as a new prompt. */
-  onEditResend?: (messageId: string, newText: string) => void
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   /** D4: 复制正文（toast 文案由 ChatView 注入，本地化文案各异）。 */
@@ -524,36 +522,27 @@ export interface ChatMessageViewProps {
  * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
  * 使历史消息在流式期间跳过重渲染。
  */
-export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName, highlighted }: ChatMessageViewProps) {
+export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName, highlighted }: ChatMessageViewProps) {
   const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
   // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
   const [hovered, setHovered] = useState(false)
   // 移动端长按动作菜单锚点（D3）
   const [actionMenu, setActionMenu] = useState<ActionMenuPosition | null>(null)
   const isMobile = useAppStore((s) => s.isMobile)
 
-  // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调，
-  // startEdit 是组件内部编辑态入口。全部 useCallback/稳定引用，不破坏 memo 契约。
-  const startEdit = useCallback(() => {
-    setDraft(message.text)
-    setEditing(true)
-  }, [message.text])
-
+  // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调。
+  // 全部 useCallback/稳定引用，不破坏 memo 契约。
   const handlers = useMemo<MessageActionHandlers>(
     () => ({
       copyMessage: onCopyMessage ?? (() => {}),
       quoteMessage: onQuoteMessage ?? (() => {}),
-      startEdit,
       regenerate: onRegenerate ?? (() => {}),
-      // 会话未连接/已结束时 ChatView 不注入这些回调 → 对应动作隐藏
-      canEdit: !!onEditResend,
+      // 会话未连接/已结束时 ChatView 不注入 onRegenerate → 动作隐藏
       canRegenerate: !!onRegenerate,
     }),
-    [onCopyMessage, onQuoteMessage, startEdit, onRegenerate, onEditResend],
+    [onCopyMessage, onQuoteMessage, onRegenerate],
   )
 
   const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers, agentName }
@@ -647,9 +636,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       >
         {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       </span>
-      {isUser && message.edited && (
-        <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
-      )}
       {hovered && (
         <span
           style={{
@@ -666,13 +652,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       )}
     </div>
   )
-
-  const submitEdit = () => {
-    const trimmed = draft.trim()
-    if (!trimmed || !onEditResend) return
-    setEditing(false)
-    onEditResend(message.id, trimmed)
-  }
 
   if (isUser) {
     return (
@@ -697,7 +676,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             padding: '8px 12px',
             borderRadius: 8,
             maxWidth: BUBBLE_MAX_WIDTH,
-            minWidth: editing ? '60%' : undefined,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
             border: message.undelivered
@@ -725,37 +703,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               ⚠ {t('chat.input.message.undelivered')}
             </div>
           )}
-          {editing ? (
-            <textarea
-              className="overlay-scroll-content"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  submitEdit()
-                } else if (e.key === 'Escape') {
-                  setEditing(false)
-                }
-              }}
-              autoFocus
-              rows={Math.min(6, Math.max(2, draft.split('\n').length))}
-              style={{
-                width: '100%',
-                background: 'var(--bg-base)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 4,
-                color: 'var(--text-primary)',
-                fontFamily: 'inherit',
-                fontSize: 'inherit',
-                lineHeight: 'inherit',
-                padding: '4px 6px',
-                resize: 'vertical',
-                outline: 'none',
-              }}
-            />
-          ) : (
-            <>
+          <>
+
               <CollapsibleUserText text={message.text} />
               {(() => {
                 const images = message.blocks.filter((b) => b.type === 'image')
@@ -819,26 +768,14 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                   </div>
                 )
               })()}
-            </>
-          )}
+          </>
         </div>
-        {editing ? (
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="chat-msg-action-btn" style={{ color: 'var(--accent)' }} onClick={submitEdit}>
-              ⏎ {t('chat.msg.editSend')}
-            </button>
-            <button className="chat-msg-action-btn" onClick={() => setEditing(false)}>
-              ✕ {t('chat.msg.editCancel')}
-            </button>
-          </div>
-        ) : (
-          <MessageActionBar
-            actions={visibleActions}
-            ctx={ctx}
-            menu={actionMenu}
-            onCloseMenu={closeActionMenu}
-          />
-        )}
+        <MessageActionBar
+          actions={visibleActions}
+          ctx={ctx}
+          menu={actionMenu}
+          onCloseMenu={closeActionMenu}
+        />
       </div>
     )
   }

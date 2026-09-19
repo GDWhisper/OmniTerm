@@ -388,17 +388,6 @@ export function ChatView() {
     [activeSessionId, sendPrompt],
   )
 
-  // F02 编辑重发：原消息标 edited，编辑稿作为全新 prompt 走 handleSend
-  // （sending 时自动进 N=1 队列，无需特判）。ACP 无编辑历史语义，见计划 §3.2。
-  const handleEditResend = useCallback(
-    (messageId: string, newText: string) => {
-      if (!activeSessionId) return
-      useChatStore.getState().markEdited(activeSessionId, messageId)
-      handleSend(newText)
-    },
-    [activeSessionId, handleSend],
-  )
-
   // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
   // sending 时走 enqueue+cancel（同 Send Now 的 drain 路径，天然规避与队列的竞态）。
   const handleRegenerate = useCallback(() => {
@@ -617,7 +606,6 @@ export function ChatView() {
                 message={m}
                 sessionId={activeSessionId ?? undefined}
                 agentName={chatState.agentName || fallbackAgentName}
-                onEditResend={inputDisabled ? undefined : handleEditResend}
                 onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
                 onCopyMessage={handleCopyMessage}
                 onQuoteMessage={handleQuoteMessage}

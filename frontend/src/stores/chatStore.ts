@@ -212,13 +212,6 @@ export interface ChatMessage {
    */
   undelivered?: boolean
   /**
-   * True when the user re-sent an edited copy of this message (F02). ACP has
-   * no "edit history" concept — the original stays in place with this marker
-   * and the edited text goes out as a brand-new prompt. In-memory only (not
-   * persisted; lost on refresh, which is acceptable since both messages are).
-   */
-  edited?: boolean
-  /**
    * True when this row's `blocks` came from the backend accumulator's raw-frame
    * wrapper (`{"v":1,"frames":[...]}`) and decoded to a non-empty structure.
    * Set only by the hydrate conversion (`ChatView.toChatMessages`); used by
@@ -322,8 +315,6 @@ interface ChatActions {
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
   addUndeliveredMessage: (sessionId: string, text: string) => void
-  /** Mark a user message as superseded by an edited resend (F02). */
-  markEdited: (sessionId: string, messageId: string) => void
   markDone: (sessionId: string, timing?: TurnDuration) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
@@ -861,15 +852,6 @@ export const useChatStore = create<ChatStore>((set) => ({
           },
         ],
       })
-    }),
-
-  markEdited: (sessionId, messageId) =>
-    set((state) => {
-      const current = get(state, sessionId)
-      const messages = current.messages.map((m) =>
-        m.id === messageId && m.role === 'user' && !m.edited ? { ...m, edited: true } : m,
-      )
-      return patch(state, sessionId, { messages })
     }),
 
   enqueueMessage: (sessionId, text) =>

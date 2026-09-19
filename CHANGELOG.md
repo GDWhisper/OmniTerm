@@ -67,6 +67,10 @@ Prefix each entry with the area it affects:
 - (2026-09-15 14:50) `[backend]` `[api]` 修复同机多实例（dev 与正式版）登录互相踢下线：auth cookie 名与 JWT 签名密钥此前对所有实例相同，而浏览器 cookie **不区分端口**——本机 dev(`127.0.0.1:9777`) 与正式版(`0.0.0.0:9077`) 共用 `omniterm_token`，在 dev 登录会覆盖正式版那份 cookie，正式版因 `token_version` 不匹配判 401 而「自动登出」（反向同理；两者 `ver` 恰好相等时更会直接串号登录）。现按生效 db 的文件名派生实例后缀（`src/main.rs::instance_id`/`instance_suffix`），cookie 名与密钥文件一并隔离：dev 用 `omniterm_token_dev` + `~/.omniterm/jwt_secret_dev`，正式版与 Docker 沿用历史名（老用户登录态不失效）；`AppState.token_cookie` 成为读写 token cookie 的唯一来源，代理剥离侧改按前缀谓词剥离**全部实例变体**（`omniterm_token[_*]`），避免同 host 下别的实例的 JWT 泄漏给上游目标服务。dev/preview 升级后各需重新登录一次（`src/main.rs`、`src/auth/mod.rs`、`src/api/auth.rs`、`src/proxy/mod.rs`）
 - (2026-09-12 14:51) `[backend]` `[frontend]` `[api]` 修复 pty 上翻看历史时视口被"吸"回 live：输出流式期间每 100ms 的保锚重拉按首行内容指纹重定位，而锚点行多半是重复内容（空行/框线/分隔线，agent 输出常态）——滞后 y 反推的搜索起点落在真锚点靠 live 一侧，周期 p < 2k 时必先命中更新的内容副本，用户滚动位置被系统性擦除（空行带滑移、分隔线棘轮，五组探针实证；此前六轮修复的验收全用唯一行内容故未发现）。删除指纹重定位机制（`relocate_anchor`/`ANCHOR_SEARCH_RADIUS`/`parse_anchor_fp`/`viewport_fp` 全链路），改后端有状态锚：`VtState.viewport_anchor` 持窗口顶行绝对行索引，滚动请求存锚、保锚刷新直接按锚出窗（刷新路径不再有任何"重新决定位置"的步骤），历史饱和期由前后帧行哈希相关做滚移检测同步锚（重叠区判等 ≥3/4、静态屏跳过防误调），y=0 回底/resize/alt-screen 清锚、锚行淘汰钳 0 续供、后端重启回退按 y。协议 `viewport_request` 的 `fp: string|null` 改为 `refresh: bool`（`serde(default)` 缺省 false=滚动语义，旧前端缓存请求降级不断连）；前端 `ViewportController` 删除全部锚点簿记，仅保留响应 y 权威同步（`src/engine/pty/vt.rs`、`src/engine/pty/{frame,terminal_ws}.rs`、`src/ws/terminal.rs`、`frontend/src/utils/viewportController.ts`、`frontend/src/hooks/{useTerminal,useCellFrame}.ts`）
 
+### Removed
+
+- (2026-09-19 18:10) `[frontend]` 移除 ACP 聊天 user 气泡的「编辑重发」入口：ACP 协议无编辑/回滚 agent 历史的方法，该功能实为「原消息标已编辑 + 编辑稿追加为新 prompt」，移动端用户普遍误读为真重发（期望替换原消息），为避免误解删除入口而非改造语义（真重发协议上不可达）。连带删除 ChatMessage 编辑态（textarea/提交按钮/「已编辑」徽标）、`handleEditResend`、chatStore `markEdited` 与 `edited` 字段、`chat.msg.edit*` 文案与 edit 动作项；基于原文追问仍可用「引用到输入框」（`frontend/src/components/Chat/{ChatMessage,ChatView,messageActions}.tsx`、`frontend/src/stores/chatStore.ts`、`frontend/src/locales/{zh,en}/translation.json`）
+
 ## [0.2.22] - 2026-09-11
 
 ### Added
