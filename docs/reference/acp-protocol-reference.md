@@ -615,21 +615,25 @@ idle 状态转换结束前台工作时 MUST 包含 stopReason：
 
 **取证入口**（宿主日志只显示「turn 被定稿」，病因在 agent 侧）：`~/.codebuddy/logs/<YYYY-MM-DD>/<项目>__<hash>.log`（搜 `[Interruption]` / `[ToolCallError` / `Prompt refused`）与 `~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl` 末尾记录。
 
-**已知实现缺陷（上游 codebuddy，非本项目、与宿主和链路无关——裸 CLI 同样复现）**：codebuddy 在**派发前**用 `shell-quote@1.8.3` 扫描整条 Bash 命令做子命令抽取，凡出现 `${<非合法 shell 变量名>}` 即抛 `Bad substitution: <标识符前缀>`；异常发生在批量派发阶段 → **该批工具调用一个都不执行、turn 直接失败**（ACP 侧收敛为 `stopReason=refusal`；交互式 CLI 侧打印错误并结束本轮），且命令原文不会进任何日志（连 `[BashTool] execute start` 都没打，只能定性、无法还原原文）。
+**已知实现缺陷（上游 codebuddy，非本项目、与宿主和链路无关——裸 CLI 同样复现）**：codebuddy 在**派发前**用 `shell-quote@1.8.3` 解析 Bash 命令（该库不支持 heredoc 语义），凡出现 `${<非合法 shell 变量名>}` 即抛 `Bad substitution: <标识符前缀>`；异常从批量派发路径逸出（同一 bundle 里 shell-quote 抽取策略自身有 `catch{return null}` 兜底，此处没有）→ **携带违规命令的那次工具调用不执行**（同批其他调用仍可能执行；命令原文连 `[BashTool] execute start` 都没打，只能定性、无法还原原文），随后整个 run 被判定失败（`RUN_FAILED` + `willRetry=false`）→ **turn 直接结束，后续步骤不再进行**（ACP 侧收敛为 `stopReason=refusal`；交互式 CLI 侧打印错误并结束本轮）。
 
-触发面与规避（实测 `shell-quote@1.8.3`）：
+触发面：真 shell 语义 vs 解析器实测
 
-| 写法 | 结果 |
-|------|------|
-| heredoc 正文（分隔符加不加引号都一样） | ❌ 抛错——解析器不实现 heredoc 语义，正文按普通文本扫描 |
-| 未加引号的 `${…}` | ❌ 抛错 |
-| 双引号内 / 单引号内 / `\$` 转义 / 注释内 | ✅ 通过 |
+| 写法 | 真 shell（bash） | shell-quote 解析器 |
+|------|-----------------|-------------------|
+| `<<'EOF'`（引号分隔符）+ `${JS 表达式}` | ✅ 合法，正文原样输出 | ❌ 抛错 —— **误判** |
+| `<<EOF`（无引号）+ `${JS 表达式}` | ❌ bad substitution | ❌ 抛错 |
+| `<<EOF` + `${合法名}` | ✅ 展开为空串 | ✅ 通过 |
+| 未引号 `${JS 表达式}` | ❌ bad substitution | ❌ 抛错 |
+| 双引号内 / 单引号内 / `\$` 转义 / 注释内 | ✅ | ✅ |
+
+即：**误判发生在「引号分隔符 heredoc」这一合法写法上**（最常用的多行文本承载方式）；其余情形 shell 自身也报错，解析器「拒绝」不算错，但失败模式仍不合格（错误信息只有截断的标识符、命令不落日志、整个 run 被判失败）。
 
 报错名字 = `${` 之后到第一个非法字符（空格、`(` 等）为止的标识符前缀：`${crypto.createHmac(…)}` → `crypto.createHmac`，`${createHmac(…)}` → `createHmac`，`${JS 表达式}` → `JS`，`${}` → `${}`。
 
-**对使用者的硬规则**：命令里要出现 `${…}` 字面量时**禁止用 heredoc 承载**（最易踩且无保护）——改用引号包裹、`\$` 转义，或把内容写进文件后命令里只引用路径（如 `git commit -F <file>`）。
+**对使用者的硬规则**：命令里要出现 `${…}` 字面量时**禁止用 heredoc 承载**（解析器不区分分隔符是否加引号）——改用引号包裹、`\$` 转义，或把内容写进文件后命令里只引用路径（如 `git commit -F <file>`）。
 
-复现：`require('shell-quote').parse('echo ' + '$' + '{Date.now()}')`。命中记录：2026-09-10 14:36（`Date.now`）、2026-09-19 10:04（`createHmac`，正式库 ACP 会话，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）、2026-09-19 11:14（`${}`）与 17:55（`JS`，本仓交互式 CLI 会话，`git commit` 因之整批未执行）。
+复现：`require('shell-quote').parse('echo ' + '$' + '{Date.now()}')`。命中记录：2026-09-10 14:36（`Date.now`）、2026-09-19 10:04（`createHmac`，正式库 ACP 会话，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）、2026-09-19 11:14（`${}`）与 17:55（`JS`，本仓交互式 CLI 会话，heredoc 提交信息命中，该次 `git commit` 未执行）。
 
 ---
 
