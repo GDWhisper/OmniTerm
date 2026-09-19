@@ -73,6 +73,7 @@ export function CreateSessionModal(props: {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const isMobile = useAppStore((s) => s.isMobile)
   const worktrees = useAppStore((s) => s.worktrees)
   const activateSession = useAppStore((s) => s.activateSession)
   const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
@@ -206,7 +207,7 @@ export function CreateSessionModal(props: {
             onChange={(e) => setSessName(e.target.value)}
             onKeyDown={handleSessKeyDown}
             placeholder="dev-server"
-            autoFocus
+            autoFocus={!isMobile}
             className={inputClass}
             style={inputStyle}
             onFocus={(e) => {
