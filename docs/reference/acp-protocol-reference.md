@@ -600,6 +600,37 @@ idle 状态转换结束前台工作时 MUST 包含 stopReason：
 
 自定义 stopReason MUST 以 `_` 开头。
 
+#### 实现差异与宿主兜底（AGENTS.md §8）
+
+`refusal` 在规范里只是「Agent 拒绝继续」，**不承诺失败原因会随消息流下发**。实测 codebuddy 2.155.0（2026-09-19，正式库会话 `codebuddy_0919-0946`）：
+
+| 观测点 | codebuddy 实测行为 |
+|--------|-------------------|
+| 触发 | agent 侧工具批次执行异常（本例：Bash 命令解析抛 `Bad substitution: createHmac`），非用户取消、非网络错误 |
+| ACP 应答 | `session/prompt` 正常返回、`stopReason=refusal`；内部错误码 `rpcCode=-32603 / category=internal` **只进它自己的日志**，不走 JSON-RPC error |
+| 消息流 | **不保证**下发任何 `agent_message_chunk`；失败文案只存在于它自己的会话记录（`status:"incomplete"` + `providerData.error`） |
+| 同一实现的另一形态 | `cancelled`（用户中断）：agent 侧把 `Interrupted by user` 作为 assistant 文本追加，会随消息流下发 |
+
+因此宿主对 `end_turn` 之外的**所有** stopReason（`refusal` / `max_tokens` / `max_turn_requests` / `_` 前缀自定义值）都不得当作正常完成——至少要在 UI 留痕并落库，否则表现为「turn 静默定稿、无任何错误」（本项目 0.2.22 即此状态，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）。
+
+**取证入口**（宿主日志只显示「turn 被定稿」，病因在 agent 侧）：`~/.codebuddy/logs/<YYYY-MM-DD>/<项目>__<hash>.log`（搜 `[Interruption]` / `[ToolCallError` / `Prompt refused`）与 `~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl` 末尾记录。
+
+**已知实现缺陷（上游 codebuddy，非本项目、与宿主和链路无关——裸 CLI 同样复现）**：codebuddy 在**派发前**用 `shell-quote@1.8.3` 扫描整条 Bash 命令做子命令抽取，凡出现 `${<非合法 shell 变量名>}` 即抛 `Bad substitution: <标识符前缀>`；异常发生在批量派发阶段 → **该批工具调用一个都不执行、turn 直接失败**（ACP 侧收敛为 `stopReason=refusal`；交互式 CLI 侧打印错误并结束本轮），且命令原文不会进任何日志（连 `[BashTool] execute start` 都没打，只能定性、无法还原原文）。
+
+触发面与规避（实测 `shell-quote@1.8.3`）：
+
+| 写法 | 结果 |
+|------|------|
+| heredoc 正文（分隔符加不加引号都一样） | ❌ 抛错——解析器不实现 heredoc 语义，正文按普通文本扫描 |
+| 未加引号的 `${…}` | ❌ 抛错 |
+| 双引号内 / 单引号内 / `\$` 转义 / 注释内 | ✅ 通过 |
+
+报错名字 = `${` 之后到第一个非法字符（空格、`(` 等）为止的标识符前缀：`${crypto.createHmac(…)}` → `crypto.createHmac`，`${createHmac(…)}` → `createHmac`，`${JS 表达式}` → `JS`，`${}` → `${}`。
+
+**对使用者的硬规则**：命令里要出现 `${…}` 字面量时**禁止用 heredoc 承载**（最易踩且无保护）——改用引号包裹、`\$` 转义，或把内容写进文件后命令里只引用路径（如 `git commit -F <file>`）。
+
+复现：`require('shell-quote').parse('echo ' + '$' + '{Date.now()}')`。命中记录：2026-09-10 14:36（`Date.now`）、2026-09-19 10:04（`createHmac`，正式库 ACP 会话，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）、2026-09-19 11:14（`${}`）与 17:55（`JS`，本仓交互式 CLI 会话，`git commit` 因之整批未执行）。
+
 ---
 
 ## 7. 消息内容类型
