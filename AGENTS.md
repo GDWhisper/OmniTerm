@@ -118,6 +118,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md` | 修改 WS 保活/心跳（`src/ws/terminal.rs` 的 `ClientControl::Ping`/`ServerControl::Pong`、`src/ws/acp.rs`、`src/engine/*/terminal_ws.rs` 读写循环、前端连接保活与重连），或准备调整 cloudflared/反代超时前**必读**——「ACP WS 释放态寿命稳定 125.2s、终端 WS 寿命离散、两端均无心跳、前提未确证须先跑 Phase 0 四格探针」的实测数据与判定表在此 | Phase 0 结论回写、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/reference/PLAN-TEMPLATE.md` | 在 `docs/dev/plans/` 下新建实施/设计计划文档前，过一遍其检查点清单（非强制结构，按任务裁剪） | 检查点需调整时更新 |
 | `docs/dev/plans/backlog/qa-quality-gates-followups.md` | 推进质量门禁 P2 项（warn→deny、CI 耗时、`dev.sh check`）时 | P2 项状态变更、dead-code allow 清理 |
+| `docs/dev/plans/backlog/debug-patterns-terminal-split.md` | 需要往 `docs/dev/debug-patterns/terminal-pty.md` 新增规律前（该文件已超 30KB 体积上限，**先拆再加**）、或推进 debug-patterns 领域拆分时 | 拆分实施后更新状态、触发条件变更时更新 |
 | `CHANGELOG.md` | 查看面向用户的版本变更历史 | 有实质性的新功能/修复/重构/破坏性变更后**必须添加条目**（核心规则 2） |
 
 ## 有意为之的「反常」点（勿顺手修正）
