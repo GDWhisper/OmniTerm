@@ -347,6 +347,22 @@ mod tests {
         assert!(output.status.success(), "failed to create tmux session: {:?}", output);
     }
 
+    /// 送一次输入到测试会话，返回是否在 `wait` 内观测到活跃。
+    async fn poke_input(
+        client: &ControlModeClient,
+        name: &str,
+        timeout: Duration,
+        wait: Duration,
+    ) -> bool {
+        let output = Command::new("tmux")
+            .args(["send-keys", "-t", name, "echo hello", "Enter"])
+            .output()
+            .await
+            .expect("send-keys should succeed");
+        assert!(output.status.success(), "send-keys should succeed: {output:?}");
+        wait_for_active(client, timeout, true, wait).await
+    }
+
     /// 有界轮询等待 `is_active(timeout)` 达到 `want`。
     ///
     /// 替代固定 sleep + 立即断言：`%output` 的到达时机取决于 pane 进程与 tmux
@@ -390,19 +406,16 @@ mod tests {
             "session without any output should be inactive"
         );
 
-        // Send output to the session.
-        let output = Command::new("tmux")
-            .args(["send-keys", "-t", &name, "echo hello", "Enter"])
-            .output()
-            .await
-            .expect("send-keys should succeed");
-        assert!(output.status.success());
-
-        // 产生输出后进入活跃态（cat 回显经 pty 到 tmux，延迟取决于调度，故轮询而非定时）。
-        assert!(
-            wait_for_active(&client, timeout, true, Duration::from_secs(5)).await,
-            "session should be active after producing output"
-        );
+        // 产生输出后进入活跃态。**不能只送一次**：control-mode 只转发 attach 之后的
+        // 输出（attach 不回放屏幕内容），而握手（`%session-changed`）可能晚于第一次
+        // send-keys，早于握手产生的回显就永远不会被转发——实测未等握手即送键时 7/30
+        // 丢失（等 300ms 后送键 0/30）。故在预算内有界重试送键，直到观测到活跃。
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let mut observed = false;
+        while !observed && Instant::now() < deadline {
+            observed = poke_input(&client, &name, timeout, Duration::from_millis(500)).await;
+        }
+        assert!(observed, "session should be active after producing output");
 
         // 静默超过 timeout 后转为不活跃（预算 = timeout + 余量）。
         assert!(
