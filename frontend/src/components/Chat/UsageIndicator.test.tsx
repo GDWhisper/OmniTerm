@@ -34,7 +34,7 @@ function detail(): HTMLElement | null {
 
 describe('UsageIndicator', () => {
   it('renders ring + percentage + cost', () => {
-    render({ used: 50_000, size: 200_000, cost: { amount: 0.1234 } })
+    render({ used: 50_000, size: 200_000, cost: { amount: 0.1234, currency: 'USD' } })
 
     expect(container.textContent).toContain('25%')
     expect(container.textContent).toContain('$0.1234')
@@ -73,10 +73,43 @@ describe('UsageIndicator', () => {
   })
 
   it('keeps the cost-only case renderable (no percentage)', () => {
-    render({ cost: { amount: 1 } })
+    render({ cost: { amount: 1, currency: 'USD' } })
     const badge = container.querySelector('.title-bar-badge')
     expect(badge).toBeTruthy()
     expect(container.textContent).toContain('$1.0000')
     expect(container.querySelector('svg')).toBeNull()
+  })
+})
+
+// 费用数值由 agent 上报，符号按它给的 currency 映射；未命中不硬拼 `$`
+// （曾把 CNY 金额显示成美元）。
+describe('UsageIndicator cost currency', () => {
+  function costText(usage: Record<string, unknown>): string {
+    render(usage)
+    const badge = container.querySelector('.title-bar-badge')!
+    return badge.textContent ?? ''
+  }
+
+  it('maps USD to $', () => {
+    expect(costText({ cost: { amount: 0.045, currency: 'USD' } })).toContain('$0.0450')
+  })
+
+  it('maps CNY/JPY to ¥ (not $)', () => {
+    expect(costText({ cost: { amount: 0.045, currency: 'CNY' } })).toContain('¥0.0450')
+    expect(costText({ cost: { amount: 0.045, currency: 'JPY' } })).toContain('¥0.0450')
+  })
+
+  it('accepts lowercase currency codes', () => {
+    expect(costText({ cost: { amount: 0.045, currency: 'cny' } })).toContain('¥0.0450')
+  })
+
+  it('falls back to the ISO code for unmapped currencies', () => {
+    expect(costText({ cost: { amount: 0.045, currency: 'CHF' } })).toContain('CHF 0.0450')
+  })
+
+  it('shows a bare amount when the agent omits currency', () => {
+    const text = costText({ cost: { amount: 0.045 } })
+    expect(text).toContain('0.0450')
+    expect(text).not.toContain('$')
   })
 })

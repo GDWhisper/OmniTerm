@@ -4,6 +4,36 @@ import { READER_FONT } from '../../utils/fonts'
 const RING_SIZE = 15
 const RING_STROKE = 2.5
 
+/** 货币 ISO 4217 代码 → 显示符号。只覆盖常见币种。
+ *
+ * 未命中（或 agent 没给 currency）时不硬拼符号：此前恒显示 `$`，agent 报
+ * CNY 时会把人民币金额挂成美元，属错误信息。未命中改为「代码 + 数值」
+ * （如 `CHF 0.0450`），没有代码时只显示数值。 */
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  USD: '$',
+  CNY: '¥',
+  RMB: '¥',
+  JPY: '¥',
+  EUR: '€',
+  GBP: '£',
+  HKD: 'HK$',
+  KRW: '₩',
+  INR: '₹',
+  RUB: '₽',
+  TRY: '₺',
+  AUD: 'A$',
+  CAD: 'C$',
+  BRL: 'R$',
+}
+
+function formatCost(amount: number, currency: unknown): string {
+  const value = amount.toFixed(4)
+  if (typeof currency !== 'string' || currency.length === 0) return value
+  const code = currency.toUpperCase()
+  const symbol = CURRENCY_SYMBOLS[code]
+  return symbol ? `${symbol}${value}` : `${code} ${value}`
+}
+
 function formatTokens(n: number): string {
   const fmt = (v: number) => {
     const rounded = Math.round(v * 10) / 10
@@ -75,11 +105,14 @@ export function UsageIndicator({
   const size = typeof usage['size'] === 'number' ? usage['size'] : null
   const pct = used !== null && size !== null && size > 0 ? (used / size) * 100 : null
   const costObj = usage['cost']
-  const cost = costObj && typeof costObj === 'object' && typeof (costObj as Record<string, unknown>)['amount'] === 'number'
-    ? (costObj as Record<string, unknown>)['amount'] as number
-    : null
+  const costAmount =
+    costObj && typeof costObj === 'object' && typeof (costObj as Record<string, unknown>)['amount'] === 'number'
+      ? ((costObj as Record<string, unknown>)['amount'] as number)
+      : null
+  const costCurrency =
+    costObj && typeof costObj === 'object' ? (costObj as Record<string, unknown>)['currency'] : undefined
 
-  if (pct === null && cost === null) return null
+  if (pct === null && costAmount === null) return null
 
   return (
     <span
@@ -105,7 +138,7 @@ export function UsageIndicator({
           {Math.round(pct)}%
         </span>
       )}
-      {cost !== null && !compact && <span style={{ opacity: 0.75 }}>${cost.toFixed(4)}</span>}
+      {costAmount !== null && !compact && <span style={{ opacity: 0.75 }}>{formatCost(costAmount, costCurrency)}</span>}
       {used !== null && size !== null && (
         <span
           className="pixel-float"
