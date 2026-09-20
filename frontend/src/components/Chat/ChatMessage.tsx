@@ -8,8 +8,8 @@ import { useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
-import { formatHoverTime, formatTps, formatWorkDuration } from '../../utils/formatTime'
-import { finalTps, turnElapsedMs, turnTps } from '../../utils/turnClock'
+import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from '../../utils/formatTime'
+import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -42,11 +42,14 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
   fontFamily: READER_FONT,
   letterSpacing: '0.03em',
   fontVariantNumeric: 'tabular-nums',
-  whiteSpace: 'nowrap',
+  whiteSpace: 'normal',
+  minWidth: 0,
+  maxWidth: '100%',
+  overflowWrap: 'anywhere',
 }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
-const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto' }
+const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', textAlign: 'right' }
 
 // 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
 const LIVE_TICK_MS = 1_000
@@ -446,13 +449,13 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
 }
 
 /**
- * 流式期间的实时工作计时 + tps（气泡底部元信息槽位，定稿后被后端结算值取代）。
+ * 流式期间的实时工作计时、工具耗时与 tps（气泡底部元信息槽位，定稿后被结算值取代）。
  *
  * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
  * 一个数字。与 `ChatView` 的 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
  * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
  *
- * tps 与计时同源（`utils/turnClock` 同一张表），故读数共享同一次 tick、不会各跳各的。
+ * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  */
@@ -464,17 +467,20 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
     const draw = () => {
       const el = ref.current
       if (!el) return
-      const dur = formatWorkDuration(turnElapsedMs(sessionId), i18n.language)
+      const now = Date.now()
+      const dur = formatWorkDuration(turnElapsedMs(sessionId, now), i18n.language)
       if (!dur) {
         // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
         el.textContent = ''
         el.style.display = 'none'
         return
       }
-      const rate = formatTps(turnTps(sessionId))
-      el.textContent = rate
-        ? `${t('chat.msg.working', { dur })} · ${t('chat.msg.tps', { tps: rate })}`
-        : t('chat.msg.working', { dur })
+      const toolDur = formatToolDuration(turnToolElapsedMs(sessionId, now), i18n.language)
+      const rate = formatTps(turnTps(sessionId, now))
+      let text = t('chat.msg.working', { dur })
+      if (toolDur) text += ` · ${t('chat.msg.toolTime', { dur: toolDur })}`
+      if (rate) text += ` · ${t('chat.msg.tps', { tps: rate })}`
+      el.textContent = text
       el.style.display = ''
     }
     draw()
@@ -486,7 +492,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
     <span
       ref={ref}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
-      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.tpsTip')}`}
+      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.toolTimeTip')} · ${t('chat.msg.tpsTip')}`}
     />
   )
 }
@@ -496,8 +502,6 @@ export interface ChatMessageViewProps {
   /** 读取本会话在建 turn 的实时计时（`message.streaming` 期间显示）。缺省时不显示
    *   计时器——结算耗时仍走 `message.durationMs`，与 sessionId 无关。 */
   sessionId?: string
-  /** F02: resend an edited copy of this user message as a new prompt. */
-  onEditResend?: (messageId: string, newText: string) => void
   /** F02: regenerate — re-send the last user prompt (only offered on the last assistant message). */
   onRegenerate?: () => void
   /** D4: 复制正文（toast 文案由 ChatView 注入，本地化文案各异）。 */
@@ -508,6 +512,9 @@ export interface ChatMessageViewProps {
   /** agent 气泡显示名（capabilities 帧下发；未连接/已释放时 ChatView 用会话关联的
    *   agents.display_name 兜底）；两者都缺失时回退 "agent"。 */
   agentName?: string
+  /** 「上次输入」条跳转聚焦的闪烁态：目标气泡 accent 描边 + ring 动画。
+   *   仅目标消息为 true、其余恒 false/缺省，memo 浅比较不受影响。 */
+  highlighted?: boolean
 }
 
 /**
@@ -515,36 +522,27 @@ export interface ChatMessageViewProps {
  * 保持稳定（store 只替换在建 streaming 消息），配合 ChatView 稳定的回调引用，
  * 使历史消息在流式期间跳过重渲染。
  */
-export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onEditResend, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName }: ChatMessageViewProps) {
+export const ChatMessageView = memo(function ChatMessageView({ message, sessionId, onRegenerate, onCopyMessage, onQuoteMessage, isLastAssistant, agentName, highlighted }: ChatMessageViewProps) {
   const { t, i18n } = useTranslation()
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
   // hover 时在 label 行旁显示时间小字（替代原生 title tooltip，移动端无 hover 不显示）
   const [hovered, setHovered] = useState(false)
   // 移动端长按动作菜单锚点（D3）
   const [actionMenu, setActionMenu] = useState<ActionMenuPosition | null>(null)
   const isMobile = useAppStore((s) => s.isMobile)
 
-  // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调，
-  // startEdit 是组件内部编辑态入口。全部 useCallback/稳定引用，不破坏 memo 契约。
-  const startEdit = useCallback(() => {
-    setDraft(message.text)
-    setEditing(true)
-  }, [message.text])
-
+  // 组装动作 handlers（D2）：copy/quote/regenerate 由 ChatView 注入稳定回调。
+  // 全部 useCallback/稳定引用，不破坏 memo 契约。
   const handlers = useMemo<MessageActionHandlers>(
     () => ({
       copyMessage: onCopyMessage ?? (() => {}),
       quoteMessage: onQuoteMessage ?? (() => {}),
-      startEdit,
       regenerate: onRegenerate ?? (() => {}),
-      // 会话未连接/已结束时 ChatView 不注入这些回调 → 对应动作隐藏
-      canEdit: !!onEditResend,
+      // 会话未连接/已结束时 ChatView 不注入 onRegenerate → 动作隐藏
       canRegenerate: !!onRegenerate,
     }),
-    [onCopyMessage, onQuoteMessage, startEdit, onRegenerate, onEditResend],
+    [onCopyMessage, onQuoteMessage, onRegenerate],
   )
 
   const ctx: MessageActionContext = { message, isLastAssistant: !!isLastAssistant, handlers, agentName }
@@ -582,14 +580,19 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
-  // 定稿后的最终 tps：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
+  // 定稿后的本地估算：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
   // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
-  const settledTps =
-    !isLive && workText && isLastAssistant && sessionId ? formatTps(finalTps(sessionId)) : null
+  const settledSessionId = !isLive && workText && isLastAssistant && sessionId ? sessionId : null
+  const settledTps = settledSessionId ? formatTps(finalTps(settledSessionId)) : null
+  const settledToolText = settledSessionId
+    ? formatToolDuration(finalToolElapsedMs(settledSessionId), i18n.language)
+    : null
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
+    settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),
     settledTps && t('chat.msg.tps', { tps: settledTps }),
     waitText && t('chat.msg.waitTime', { dur: waitText }),
+    settledToolText && t('chat.msg.toolTimeTip'),
     settledTps && t('chat.msg.tpsTip'),
   ].filter(Boolean).join(' · ')
   // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
@@ -633,9 +636,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       >
         {isUser ? 'USER' : isSystem ? 'SYSTEM' : (agentName && agentName.length > 0 ? agentName : 'agent')}
       </span>
-      {isUser && message.edited && (
-        <span style={{ marginLeft: 6, fontStyle: 'italic' }}>({t('chat.msg.edited')})</span>
-      )}
       {hovered && (
         <span
           style={{
@@ -653,17 +653,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     </div>
   )
 
-  const submitEdit = () => {
-    const trimmed = draft.trim()
-    if (!trimmed || !onEditResend) return
-    setEditing(false)
-    onEditResend(message.id, trimmed)
-  }
-
   if (isUser) {
     return (
       <div
         className="chat-msg-row"
+        data-chat-msg-id={message.id}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onTouchStart={onTouchStart}
@@ -676,16 +670,19 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
         <div
           // data-chat-body: 长按正文保留系统文本选择，不弹动作菜单（D3）
           data-chat-body="true"
+          // 「上次输入」条跳转聚焦：accent 描边 + ring 闪烁动画（index.css）。
+          className={highlighted ? 'chat-msg-flash' : undefined}
           style={{
             padding: '8px 12px',
             borderRadius: 8,
             maxWidth: BUBBLE_MAX_WIDTH,
-            minWidth: editing ? '60%' : undefined,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
             border: message.undelivered
               ? '1px dashed var(--danger, #FF7B72)'
-              : '1px solid var(--accent-14)',
+              : highlighted
+                ? '1px solid var(--accent)'
+                : '1px solid var(--accent-14)',
             fontFamily: READER_FONT,
             fontSize: '1em',
             lineHeight: 1.5,
@@ -706,37 +703,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               ⚠ {t('chat.input.message.undelivered')}
             </div>
           )}
-          {editing ? (
-            <textarea
-              className="overlay-scroll-content"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  submitEdit()
-                } else if (e.key === 'Escape') {
-                  setEditing(false)
-                }
-              }}
-              autoFocus
-              rows={Math.min(6, Math.max(2, draft.split('\n').length))}
-              style={{
-                width: '100%',
-                background: 'var(--bg-base)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 4,
-                color: 'var(--text-primary)',
-                fontFamily: 'inherit',
-                fontSize: 'inherit',
-                lineHeight: 'inherit',
-                padding: '4px 6px',
-                resize: 'vertical',
-                outline: 'none',
-              }}
-            />
-          ) : (
-            <>
+          <>
+
               <CollapsibleUserText text={message.text} />
               {(() => {
                 const images = message.blocks.filter((b) => b.type === 'image')
@@ -800,26 +768,14 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                   </div>
                 )
               })()}
-            </>
-          )}
+          </>
         </div>
-        {editing ? (
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="chat-msg-action-btn" style={{ color: 'var(--accent)' }} onClick={submitEdit}>
-              ⏎ {t('chat.msg.editSend')}
-            </button>
-            <button className="chat-msg-action-btn" onClick={() => setEditing(false)}>
-              ✕ {t('chat.msg.editCancel')}
-            </button>
-          </div>
-        ) : (
-          <MessageActionBar
-            actions={visibleActions}
-            ctx={ctx}
-            menu={actionMenu}
-            onCloseMenu={closeActionMenu}
-          />
-        )}
+        <MessageActionBar
+          actions={visibleActions}
+          ctx={ctx}
+          menu={actionMenu}
+          onCloseMenu={closeActionMenu}
+        />
       </div>
     )
   }
@@ -832,6 +788,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     <div
       ref={rowRef}
       className="chat-msg-row"
+      data-chat-msg-id={message.id}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onTouchStart={onTouchStart}
@@ -849,7 +806,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       {label}
       {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
-      {/* 动作栏 + turn 耗时（含 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
+      {/* 动作栏 + turn 耗时（含工具耗时与 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
           · 流式期：动作栏恒空（五个动作的 visible 硬排 streaming），实时读数**靠左**；
           · 定稿后：动作栏回归左侧，结算值用 `marginLeft:auto` 顶到**右侧**。
           行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
@@ -867,7 +824,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* 流式期间：本地实时估算（计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
+          {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
               到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
           {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
@@ -880,6 +837,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               title={durationTip}
             >
               {t('chat.msg.workTime', { dur: workText })}
+              {settledToolText && ` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}
               {settledTps && ` · ${t('chat.msg.tps', { tps: settledTps })}`}
             </span>
           )}

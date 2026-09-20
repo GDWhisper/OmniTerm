@@ -4,7 +4,7 @@ import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
-import { addOutputChars } from '../utils/turnClock'
+import { addOutputChars, resumeTurnClock, setTurnWaiting, updateTurnTool } from '../utils/turnClock'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -95,6 +95,45 @@ const SESSION_UPDATE_ADAPTERS: ReadonlyArray<{
     },
   },
 ]
+
+/** ACP configOptions 元素 → 前端 ConfigOption（select 拍平 / boolean 双态 / 兼容
+ *  current_value 与 currentValue 两种序列化）。
+ *  live 帧（ConfigOptionUpdate 通知）与 hydrate 快照（GET /messages 的 configOptions
+ *  字段）共用同一解析，保证已结束会话与活会话的配置栏渲染一致（§7 单一真源）。 */
+export function parseConfigOptions(raw: unknown): ConfigOption[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+    .map((o) => {
+      const type = o['type']
+      const isBoolean = type === 'boolean' || type === 'Boolean'
+      const currentValue = String(o['current_value'] ?? o['currentValue'] ?? '')
+      let opts: { value: string; name: string }[]
+      if (isBoolean) {
+        opts = [
+          { value: 'true', name: 'On' },
+          { value: 'false', name: 'Off' },
+        ]
+      } else {
+        const rawOpts = o['options']
+        opts = Array.isArray(rawOpts)
+          ? rawOpts
+              .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
+              .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
+          : []
+      }
+      const category = typeof o['category'] === 'string' ? o['category'] : 'other'
+      const normalizedValue = isBoolean ? String(currentValue === 'true') : currentValue
+      return {
+        id: String(o['id'] ?? ''),
+        name: String(o['name'] ?? ''),
+        category,
+        currentValue: normalizedValue,
+        options: opts,
+      }
+    })
+    .filter((o) => o.id && o.options.length > 0)
+}
 
 function snakeToPascal(s: string): string {
   return s
@@ -474,38 +513,7 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     const inner = getVariantInner(obj, variant) ?? obj
     const rawOptions = inner['config_options'] ?? inner['configOptions']
     if (Array.isArray(rawOptions)) {
-      const options: ConfigOption[] = rawOptions
-        .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
-        .map((o) => {
-          const type = o['type']
-          const isBoolean = type === 'boolean' || type === 'Boolean'
-          const currentValue = String(o['current_value'] ?? o['currentValue'] ?? '')
-          let opts: { value: string; name: string }[]
-          if (isBoolean) {
-            opts = [
-              { value: 'true', name: 'On' },
-              { value: 'false', name: 'Off' },
-            ]
-          } else {
-            const rawOpts = o['options']
-            opts = Array.isArray(rawOpts)
-              ? rawOpts
-                  .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
-                  .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
-              : []
-          }
-          const category = typeof o['category'] === 'string' ? o['category'] : 'other'
-          const normalizedValue = isBoolean ? String(currentValue === 'true') : currentValue
-          return {
-            id: String(o['id'] ?? ''),
-            name: String(o['name'] ?? ''),
-            category,
-            currentValue: normalizedValue,
-            options: opts,
-          }
-        })
-        .filter((o) => o.id && o.options.length > 0)
-      return { kind: 'setConfigOptions', options }
+      return { kind: 'setConfigOptions', options: parseConfigOptions(rawOptions) }
     }
     return { kind: 'drop' }
   }
@@ -778,6 +786,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 与 turnClock 的 turn 门控一致——重放不产生 prompt 起点，也不该有 tps。
           if (action.kind === 'appendText' || action.kind === 'appendThought') {
             addOutputChars(sid, action.text.length)
+          } else if (action.kind === 'upsertTool') {
+            updateTurnTool(sid, action.toolCallId, action.status)
           }
           // ALL actions → live buffer, flushed once per rAF frame via
           // applyReplayBatch (single set() call = one re-render per frame).
@@ -832,7 +842,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // Drain queued follow-up: 用户在 agent 忙碌期按回车存到 chatStore.queuedMessage
           // 的下一条消息在 agent 跑完这一轮后自动发出。N=1 语义：只有一条可排队，发完即清空。
           // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
-          // （避免 TDZ + 闭包陈旧值）。见 docs/adr/0001-acp-queue-drain-location.md。
+          // （避免 TDZ + 闭包陈旧值）。见 docs/architecture/adr/0001-acp-queue-drain-location.md。
           {
             const fresh = useChatStore.getState()
             const queued = fresh.states[sid]?.queuedMessage
@@ -1001,6 +1011,17 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             text: frame.text ?? '',
             blocks,
           })
+          // 快照只有状态没有事件时间：重开观测窗，不把旧文本除以后续时长。
+          // 只从此刻跟踪明确仍在执行的工具，不推算离线期间耗时。
+          const at = Date.now()
+          resumeTurnClock(sid, at)
+          setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0, at)
+          for (const block of blocks) {
+            // 卡片缺省状态会被补成 running，不能拿该显示兜底当作执行证据。
+            if (block.type === 'tool_call' && String(block.status) === 'in_progress') {
+              updateTurnTool(sid, block.toolCallId, 'in_progress', at)
+            }
+          }
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
           break
         }
@@ -1012,6 +1033,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           } else if (frame.active === true) {
             // 重连到进行中 turn：置 sending 以显示思考指示器。
             s.beginPrompt(sid)
+            resumeTurnClock(sid)
+            setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0)
           }
           break
         default:

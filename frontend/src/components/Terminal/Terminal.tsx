@@ -78,6 +78,7 @@ export function Terminal() {
     exitScrollMode,
     reconnect,
     refocusTextarea,
+    autoReconnecting,
   } = useTerminal({
     sessionId: activeSessionId,
     externalSessionName: activeExternalSession,
@@ -125,16 +126,18 @@ export function Terminal() {
   // Initialize terminal on mount or when transitioning from empty state → active session.
   // Session switches (A→B) keep hasSession === true so the effect does not fire —
   // useTerminal handles WS reconnection internally.
-  // When terminalDisconnected is true the terminal was torn down (blur/idle
-  // disconnect or ws drop) — we must NOT auto-recreate it here, otherwise the
-  // reconnect overlay would be immediately replaced. The user reconnects via
-  // the overlay button, which calls initTerminal/connectWs explicitly.
+  // `terminalDisconnected` 刻意不进依赖数组（body 条件仍读它）：它翻转 true 时
+  // 若触发本 effect，cleanup 会把刚断开的 xterm/WS 连带拆毁——自动重连引擎
+  // 布好的退避重试随之被取消，廉价 WS 重连路径（termRef 存活）也永不可达。
+  // 「flag=true 不得自动重建」由 body 条件保证；显式拆除仍由 blur/idle 定时器
+  // 与卸载清理直接调用 disposeTerminal 完成。
   useEffect(() => {
     if (hasSession && containerRef.current && !terminalDisconnected) {
       const cleanup = initTerminal(containerRef.current)
       return cleanup
     }
-  }, [hasSession, terminalDisconnected, initTerminal])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- terminalDisconnected 只作 body 门控；进 deps 会在断连瞬间误触 dispose（见上）
+  }, [hasSession, initTerminal])
 
   const handleKey = (name: string) => {
     if (!sendData) return
@@ -388,11 +391,21 @@ export function Terminal() {
             position: 'absolute',
             inset: 0,
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
+            gap: 12,
             background: 'rgba(18, 20, 26, 0.85)',
             zIndex: 100,
           }}>
+            {autoReconnecting && (
+              // 遮罩底色固定深色（与终端背景同源，不随主题翻转），提示文字
+              // 不能用主题 token（light 主题下是深棕，深底上不可读），取
+              // xterm 前景色的半透明。
+              <div role="status" style={{ fontSize: 13, color: 'rgba(209, 213, 219, 0.75)' }}>
+                {t('terminal.status.reconnecting')}
+              </div>
+            )}
             <button
               onClick={() => reconnect(containerRef.current)}
               style={{
@@ -406,7 +419,7 @@ export function Terminal() {
                 fontWeight: 500,
               }}
             >
-              重连
+              {t('terminal.reconnect')}
             </button>
           </div>
         )}

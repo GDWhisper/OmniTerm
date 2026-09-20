@@ -2,6 +2,11 @@ import { create } from 'zustand'
 import type { Project, Workspace, Session } from '../api/client'
 import { toAbsolutePath } from '../utils/path'
 import { clampFileManagerWidth } from '../utils/layout'
+import {
+  ENGINE_PREF_STORAGE_KEY,
+  readTerminalEnginePref,
+  type TerminalEngine,
+} from '../utils/terminalEngine'
 
 // Re-export for convenience
 export type { Project, Workspace, Session }
@@ -89,9 +94,9 @@ export interface AppState {
   // Terminal behavior
   autoCopySelect: boolean
 
-  /** Engine the user last created a terminal session with. null = no record
-   *  yet (never created one), so the modal still falls back to 'pty'. */
-  lastTerminalEngine: 'pty' | 'tmux' | null
+  /** 终端会话的默认引擎（设置 → 终端可调，弹窗内显式点选也会写回）。
+   *  实际生效值还需过 `resolveTerminalEngine` 收敛宿主复用器可用性。 */
+  defaultTerminalEngine: TerminalEngine
 
   /** Agent the user last created an ACP session with. null = no record yet;
    *  the modal falls back to the first agent when unset or stale. */
@@ -205,7 +210,7 @@ export interface AppState {
   setChatFontSize: (s: number) => void
   setKeybindingMode: (mode: 'tmux' | 'modern') => void
   setAutoCopySelect: (v: boolean) => void
-  setLastTerminalEngine: (engine: 'pty' | 'tmux') => void
+  setDefaultTerminalEngine: (engine: TerminalEngine) => void
   setLastAcpAgentId: (agentId: string) => void
   setBlurDisconnectMin: (n: number) => void
   setIdleDisconnectMin: (n: number) => void
@@ -309,11 +314,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   chatFontSize: parseInt(localStorage.getItem('omniterm_chat_font_size') || '13'),
   keybindingMode: (localStorage.getItem('omniterm_keybinding_mode') as 'tmux' | 'modern') || 'tmux',
   autoCopySelect: localStorage.getItem('omniterm_auto_copy_select') !== 'false',
-  // 只认合法字面量——存档值损坏时回落 null（无记录），避免脏值被当成引擎提交
-  lastTerminalEngine: (() => {
-    const stored = localStorage.getItem('omniterm_last_terminal_engine')
-    return stored === 'pty' || stored === 'tmux' ? stored : null
-  })(),
+  // 只认白名单字面量，新键缺失时继承旧「上次使用」键，都未命中则用默认引擎
+  defaultTerminalEngine: readTerminalEnginePref(),
   // agent id 是后端生成的字符串，无法枚举合法值——只挡空串；失效 id 由消费方对照当前列表回落
   lastAcpAgentId: localStorage.getItem('omniterm_last_acp_agent') || null,
   blurDisconnectMin: readDisconnectMin('omniterm_blur_disconnect_min', DEFAULT_BLUR_DISCONNECT_MIN),
@@ -421,9 +423,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ autoCopySelect: v })
   },
 
-  setLastTerminalEngine: (engine) => {
-    localStorage.setItem('omniterm_last_terminal_engine', engine)
-    set({ lastTerminalEngine: engine })
+  setDefaultTerminalEngine: (engine) => {
+    localStorage.setItem(ENGINE_PREF_STORAGE_KEY, engine)
+    set({ defaultTerminalEngine: engine })
   },
 
   setLastAcpAgentId: (agentId) => {

@@ -30,14 +30,6 @@ pub struct CellFrame {
     /// 帧省略——前端据此区分历史帧与实时帧。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<u32>,
-    /// 所服务窗口**首行**的内容指纹（十六进制 u64，
-    /// `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D1/D4）。
-    /// 前端下次重拉时原样回传，后端据此把窗口重定位到该行当前的位置，
-    /// 使「距底部偏移 y」在历史增长/淘汰后仍锚在同一批内容上。
-    /// 走字符串而非 JSON number：u64 超出 JS 安全整数范围。
-    /// 仅窗口帧携带。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub viewport_fp: Option<String>,
     /// alt-screen 激活标记（方案 C Phase 2，D4）：仅 overlay 帧携带（enter/exit
     /// 都发 overlay，无此标记前端无法区分）。viewport 控制器据此在 alt-screen
     /// 期间禁用滚轮接管、并把 wheel 交回 xterm 默认路径。

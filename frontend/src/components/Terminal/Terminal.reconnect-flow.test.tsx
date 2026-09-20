@@ -1,95 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
-import { I18nextProvider } from 'react-i18next'
+import type { Root } from 'react-dom/client'
+import {
+  FakeWebSocket,
+  mountTerminal,
+  unmountTerminal,
+  dropConnection,
+  findReconnectButton,
+} from './Terminal.testUtils'
 import i18n from '../../i18n'
-import { Terminal } from './Terminal'
 import { useAppStore } from '../../stores/appStore'
-import { AttentionProvider } from '../Attention/AttentionProvider'
 
-// Mock xterm so terminal creation is deterministic in jsdom (real xterm
-// needs canvas). The fake appends a `.xterm` element to the container it
-// was opened on, so tests can assert WHICH container hosts the terminal.
-vi.mock('@xterm/xterm', () => {
-  class FakeXterm {
-    cols = 80
-    rows = 24
-    options: Record<string, unknown> = {}
-    element: HTMLElement | null = null
-    // Unicode11Addon 激活宽表用（useTerminal.createTerminal，2026-09-09）
-    unicode = { activeVersion: '' }
-    open(container: HTMLElement) {
-      const el = document.createElement('div')
-      el.className = 'xterm'
-      el.appendChild(document.createElement('textarea'))
-      container.appendChild(el)
-      this.element = el
-    }
-    loadAddon() {}
-    focus() {}
-    write() {}
-    writeln() {}
-    reset() {}
-    dispose() {
-      this.element?.remove()
-      this.element = null
-    }
-    onData() {
-      return { dispose() {} }
-    }
-    onResize() {
-      return { dispose() {} }
-    }
-    onTitleChange() {
-      return { dispose() {} }
-    }
-    attachCustomKeyEventHandler() {}
-    attachCustomWheelEventHandler() {}
-    getSelection() {
-      return ''
-    }
-  }
-  return { Terminal: FakeXterm }
-})
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: class {
-    fit() {}
-    // proposeDimensions is a public API of the real addon-fit; the
-    // terminal hook overrides it on mobile (see useTerminal.ts), so the
-    // fake must provide it for that override to be installed safely.
-    proposeDimensions() {
-      return { cols: 80, rows: 24 }
-    }
-  }
-}))
-vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class {} }))
-
-class FakeWebSocket {
-  static CONNECTING = 0
-  static OPEN = 1
-  static CLOSING = 2
-  static CLOSED = 3
-  static instances: FakeWebSocket[] = []
-  url: string
-  binaryType = 'blob'
-  readyState = FakeWebSocket.CONNECTING
-  onopen: (() => void) | null = null
-  onclose: (() => void) | null = null
-  onerror: (() => void) | null = null
-  onmessage: ((e: { data: unknown }) => void) | null = null
-  constructor(url: string) {
-    this.url = url
-    FakeWebSocket.instances.push(this)
-  }
-  send() {}
-  close() {
-    this.readyState = FakeWebSocket.CLOSED
-  }
-}
-
-function findReconnectButton(host: HTMLElement) {
-  return Array.from(host.querySelectorAll('button')).find((b) => b.textContent === '重连')
-}
+// xterm / addon 的 jsdom mock 与 FakeWebSocket 都在 Terminal.testUtils.tsx
+//（reconnect-flow 与 autoReconnect 测试共用脚手架，勿在此重复声明）。
 
 describe('Terminal reconnect flow', () => {
   let host: HTMLElement
@@ -106,43 +29,13 @@ describe('Terminal reconnect flow', () => {
       terminalDisconnected: false,
       connected: true,
     })
-    host = document.createElement('div')
-    Object.defineProperty(host, 'clientWidth', { value: 800, configurable: true })
-    Object.defineProperty(host, 'clientHeight', { value: 600, configurable: true })
-    document.body.appendChild(host)
-    root = createRoot(host)
-    await act(async () => {
-      root.render(
-        <I18nextProvider i18n={i18n}>
-          <AttentionProvider>
-            <Terminal />
-          </AttentionProvider>
-        </I18nextProvider>
-      )
-    })
-    // flush async createTerminal → terminalReady → auto connectWs
-    await act(async () => {})
+    ;({ host, root } = await mountTerminal())
   })
 
   afterEach(() => {
-    act(() => {
-      root.unmount()
-    })
-    document.body.innerHTML = ''
+    unmountTerminal(root)
     vi.unstubAllGlobals()
   })
-
-  /** Simulate an established connection dropping (idle/network). */
-  async function dropConnection(ws: FakeWebSocket) {
-    await act(async () => {
-      ws.readyState = FakeWebSocket.OPEN
-      ws.onopen?.()
-    })
-    await act(async () => {
-      ws.readyState = FakeWebSocket.CLOSED
-      ws.onclose?.()
-    })
-  }
 
   async function clickReconnect() {
     const btn = findReconnectButton(host)

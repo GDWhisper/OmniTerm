@@ -11,12 +11,12 @@ import { BetaBadge } from '../Common/BetaBadge'
 import { TerminalIcon } from '../Icons/TerminalIcon'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { READER_FONT } from '../../utils/fonts'
+import { resolveTerminalEngine, terminalEngineLabel, type TerminalEngine } from '../../utils/terminalEngine'
 import { inputClass, inputStyle } from './sidebarModalStyles'
 
 /* ─── Types ─── */
 
 type Category = 'terminal' | 'acp'
-type TerminalEngine = 'pty' | 'tmux'
 
 /* ─── Unstyled card (selection + expandable, no theme tokens) ─── */
 
@@ -24,13 +24,11 @@ function SelectionCard({
   selected,
   onClick,
   disabled,
-  corner,
   children,
 }: {
   selected: boolean
   onClick: () => void
   disabled?: boolean
-  corner?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -52,33 +50,7 @@ function SelectionCard({
       }}
     >
       {children}
-      {corner}
     </button>
-  )
-}
-
-/* 「上次选择」角标 — 卡片右上角的不可按状态指示器，视觉遵循 ui-style-guide §4.1
-   （深棕黑底 + inset 立体高光，无 border / 无 outer shadow）。 */
-function LastUsedBadge() {
-  const { t } = useTranslation()
-  return (
-    <span
-      className="status-badge-3d"
-      style={{
-        position: 'absolute',
-        top: 2,
-        right: 2,
-        padding: '1px 6px',
-        background: 'var(--wood-shadow, #3A2E1F)',
-        color: 'var(--accent-bright)',
-        fontSize: 9,
-        lineHeight: '14px',
-        letterSpacing: 'var(--pixel-tracking-sm)',
-        pointerEvents: 'none',
-      }}
-    >
-      {t('sidebar.lastUsed')}
-    </span>
   )
 }
 
@@ -101,12 +73,13 @@ export function CreateSessionModal(props: {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const isMobile = useAppStore((s) => s.isMobile)
   const worktrees = useAppStore((s) => s.worktrees)
   const activateSession = useAppStore((s) => s.activateSession)
   const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
   const multiplexer = useAppStore((s) => s.multiplexer)
-  const lastTerminalEngine = useAppStore((s) => s.lastTerminalEngine)
-  const setLastTerminalEngine = useAppStore((s) => s.setLastTerminalEngine)
+  const defaultTerminalEngine = useAppStore((s) => s.defaultTerminalEngine)
+  const setDefaultTerminalEngine = useAppStore((s) => s.setDefaultTerminalEngine)
   const lastAcpAgentId = useAppStore((s) => s.lastAcpAgentId)
   const setLastAcpAgentId = useAppStore((s) => s.setLastAcpAgentId)
   const agents = useAgentStore((s) => s.agents)
@@ -114,13 +87,14 @@ export function CreateSessionModal(props: {
   const [sessName, setSessName] = useState('')
   // 会话大类：terminal (默认) | acp
   const [category, setCategory] = useState<Category>('terminal')
-  // Terminal 子引擎在本弹窗内的点选（null = 未点选，沿用记忆值）
+  // Terminal 子引擎在本弹窗内的点选（null = 未点选，沿用默认引擎）
   const [engineChoice, setEngineChoice] = useState<TerminalEngine | null>(null)
-  // 优先级：本次点选 > 上次成功创建的引擎 > pty
-  const requestedEngine = engineChoice ?? lastTerminalEngine ?? 'pty'
-  // tmux 探测不可用的宿主上该卡不可选，记住的 'tmux' 也不能把它点亮
-  const terminalEngine: TerminalEngine =
-    requestedEngine === 'tmux' && !multiplexerAvailable ? 'pty' : requestedEngine
+  // 优先级：本次点选 > 默认引擎（设置 → 终端）。两者同一个值，不另设「上次使用」记忆
+  // 一层；宿主无复用器时期望值不可兑现，走共享回落收敛。
+  const terminalEngine = resolveTerminalEngine(
+    engineChoice ?? defaultTerminalEngine,
+    multiplexerAvailable,
+  )
   // ACP agent 选择（仅 category=acp 时生效）
   const [acpAgentId, setAcpAgentId] = useState<string | null>(null)
   // 切到 ACP 后 agents 到达时自动选中（处理异步加载竞态；记忆 id 优先于第一个）
@@ -178,9 +152,11 @@ export function CreateSessionModal(props: {
         sessionAgentId,
       )
       await props.reloadSessions()
-      // 只记本次实际创建的类别——ACP 创建不该刷新引擎记忆（反之亦然）
+      // 只记本次实际创建的类别——ACP 创建不该刷新引擎默认（反之亦然）。
+      // 引擎只在用户本会话显式点选时写入：未点选 = 沿用现有默认，而回落到 pty
+      // （宿主缺复用器）不是用户意图，不该把设置里的 tmux 偏好静默改掉。
       if (category === 'acp') setLastAcpAgentId(acpAgentId!)
-      else setLastTerminalEngine(terminalEngine)
+      else if (engineChoice) setDefaultTerminalEngine(engineChoice)
       activateSession(newSession.id)
       addToast('success', t('sidebar.sessionCreated', { name: sessName.trim() || t('sidebar.unnamed') }) ?? 'Session created')
       handleClose()
@@ -231,7 +207,7 @@ export function CreateSessionModal(props: {
             onChange={(e) => setSessName(e.target.value)}
             onKeyDown={handleSessKeyDown}
             placeholder="dev-server"
-            autoFocus
+            autoFocus={!isMobile}
             className={inputClass}
             style={inputStyle}
             onFocus={(e) => {
@@ -269,7 +245,7 @@ export function CreateSessionModal(props: {
                     className="block text-[10px] truncate"
                     style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}
                   >
-                    命令行终端 · {t(terminalEngine === 'tmux' ? 'sidebar.sessionTypeTmuxLabel' : 'sidebar.sessionTypePtyLabel')}
+                    命令行终端 · {terminalEngineLabel(terminalEngine, t)}
                   </span>
                 </div>
               </div>
@@ -305,28 +281,13 @@ export function CreateSessionModal(props: {
                   引擎
                 </label>
                 <div className="flex gap-2">
-                  {/* PTY 引擎卡 */}
-                  <SelectionCard
-                    selected={terminalEngine === 'pty'}
-                    onClick={() => setEngineChoice('pty')}
-                    corner={lastTerminalEngine === 'pty' ? <LastUsedBadge /> : undefined}
-                  >
-                    <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-                      {t('sidebar.sessionTypePtyLabel')} <BetaBadge />
-                    </span>
-                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
-                      {t('sidebar.sessionTypePtyHint')}
-                    </span>
-                  </SelectionCard>
-
-                  {/* Tmux 引擎卡 */}
+                  {/* Tmux 引擎卡 —— 稳定实现放首位；PTY 仍在 beta，排后 */}
                   <SelectionCard
                     selected={terminalEngine === 'tmux'}
                     onClick={() => {
                       if (multiplexerAvailable) setEngineChoice('tmux')
                     }}
                     disabled={!multiplexerAvailable}
-                    corner={lastTerminalEngine === 'tmux' ? <LastUsedBadge /> : undefined}
                   >
                     <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
                       {t('sidebar.sessionTypeTmuxLabel')}
@@ -335,6 +296,19 @@ export function CreateSessionModal(props: {
                       {multiplexerAvailable
                         ? t('sidebar.sessionTypeTmuxHint')
                         : t('sidebar.muxUnavailable', { mux: multiplexer })}
+                    </span>
+                  </SelectionCard>
+
+                  {/* PTY 引擎卡 */}
+                  <SelectionCard
+                    selected={terminalEngine === 'pty'}
+                    onClick={() => setEngineChoice('pty')}
+                  >
+                    <span className="block text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                      {t('sidebar.sessionTypePtyLabel')} <BetaBadge />
+                    </span>
+                    <span className="block text-[10px] mt-0.5" style={{ color: 'var(--text-secondary)', fontFamily: READER_FONT }}>
+                      {t('sidebar.sessionTypePtyHint')}
                     </span>
                   </SelectionCard>
                 </div>

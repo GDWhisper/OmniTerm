@@ -31,7 +31,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::frame::{CellFrame, CursorState, DiffEngine, RowData, decscusr_code};
 
@@ -44,12 +44,6 @@ const MAX_RESPONSE_ENTRIES: usize = 64;
 /// 应答缓冲字节上限：条目大小由会话内程序决定，只限条目数等于没限。
 const MAX_RESPONSE_BYTES: usize = 8 * 1024;
 
-/// 视口锚点指纹重定位的搜索半径（行）。P1 有界：搜索量与半径成正比，无界
-/// 会让单次 `viewport_request` 的成本随会话历史长度增长。需覆盖「节流周期
-/// （100ms）+ RTT」内后端新产出的行数 —— 半径 512 可支撑 5000 行/秒的输出，
-/// 远超实测的 agent 输出速率；超出则退回按偏移定位（降级不失效）。
-/// 见 `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D3。
-const ANCHOR_SEARCH_RADIUS: usize = 512;
 /// 闭包型应答（颜色/文本区尺寸查询）无预知产物大小，按估值记账。
 const RESPONSE_CLOSURE_EST_BYTES: usize = 32;
 
@@ -340,6 +334,18 @@ pub fn color_sgr(c: Color, foreground: bool) -> String {
     }
 }
 
+/// 单帧滚移检测的结果（D6 观测用）。
+enum AnchorAdjust {
+    /// 命中滚移签名，锚前移 `shift` 行；`clamped_to_zero` = 本次调整把锚从
+    /// >0 钳到 0（锚定行已全部被淘汰）。
+    Adjusted { shift: usize, clamped_to_zero: bool },
+    /// 屏幕有变化但无滚移签名（全屏重绘 TUI / scroll region / 突发 > 可检
+    /// 窗口）：不调整——有界缓滑移，无棘轮。
+    Miss,
+    /// 本帧未参与检测（未锚定 / 屏幕无变化 / 基线长度失配 / 未饱和增长）。
+    Inactive,
+}
+
 pub struct VtState {
     term: Term<VtEventListener>,
     processor: Processor,
@@ -355,6 +361,21 @@ pub struct VtState {
     /// （前端连续性保持，不误报）；会话重建/后端重启归零 → 前端检出断链
     /// 主动 resync，自愈无害。u64 + wrapping：以 30fps 计溢出周期 ~190 亿年。
     frame_seq: u64,
+    /// 历史视口有状态锚（2026-09-12 视口锚定修复 D1）：viewport 窗口顶行的
+    /// **绝对行索引**（0 = 最旧一行，hs = live 屏顶）。滚动请求写入，保锚
+    /// 刷新（`refresh = true`）直接按它出窗——位置记忆驻留在持有 grid 真相
+    /// 源的一侧，刷新路径不存在「重新决定位置」的步骤（指纹重定位在周期性
+    /// 内容上必然棘轮/滑移，已实证删除）。`None` = 未锚定（回底/resize/
+    /// alt-screen 进入/后端重启后的初态）。
+    viewport_anchor: Option<i32>,
+    /// 滚移检测基线（D3）：上一 live 帧的屏幕行哈希（rows 大小，有界）。
+    /// resize 清空（长度失配即跳过检测一帧）。
+    prev_screen_hashes: Vec<u64>,
+    /// 滚移检测基线（D3）：上一 live 帧编码时的 `history_size`。
+    prev_history_size: i32,
+    /// 滚移检测上一次打点状态（D6 观测：仅在命中↔未命中迁移时发 debug 日志，
+    /// 避免 30fps 刷屏；`None` = 尚无打点或上次帧未参与检测）。
+    scroll_detect_last_hit: Option<bool>,
 }
 
 impl VtState {
@@ -379,6 +400,10 @@ impl VtState {
             diff_engine: DiffEngine::with_rows(rows),
             last_cursor: Mutex::new(None),
             frame_seq: 0,
+            viewport_anchor: None,
+            prev_screen_hashes: Vec::new(),
+            prev_history_size: 0,
+            scroll_detect_last_hit: None,
         }
     }
 
@@ -435,6 +460,12 @@ impl VtState {
         if let Ok(mut lc) = self.last_cursor.lock() {
             lc.take();
         }
+        // 清视口锚（2026-09-12 D4）：reflow 改变行内容与位置，位置锚失配，
+        // 沿用 09-03 已声明的降级（清锚后刷新请求回退按 y 定位）。滚移检测
+        // 基线一并作废——长度失配的基线参与相关只会产生伪命中。
+        self.viewport_anchor = None;
+        self.prev_screen_hashes.clear();
+        self.prev_history_size = 0;
     }
 
     /// 可见屏纯文本（tmux `capture-pane -p` 等价语义：活动屏、不带转义）。
@@ -587,7 +618,6 @@ impl VtState {
             overlay: true,
             row_indices: None,
             viewport: None,
-            viewport_fp: None,
             // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
@@ -610,39 +640,50 @@ impl VtState {
     /// 滚轮接管后前端经 `viewport_request` 请求，取代 xterm 本地 scrollback。
     ///
     /// - `y` 钳制到 `history_size()`（外部输入兜底，负偏移在读循环侧已拦）；
-    /// - **指纹重定位**（`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`
-    ///   D1-D3）：`fp` 是上次服务窗口首行的内容指纹，`y` 只是本次请求的**候选**
-    ///   位置。后端按指纹在 `±ANCHOR_SEARCH_RADIUS` 内由近及远找回该行当前的
-    ///   位置，按新位置出窗口 —— 位置换算全部在持有 grid 真相源的这一侧完成，
-    ///   因此不受帧率/RTT 滞后影响（`y` 是「距底部偏移」，历史增长或淘汰后同一
-    ///   个 y 指向的是更新的内容，前端拿滞后的 `history_size` 反推必然漂移）；
-    /// - **`y = 0` 跳过重定位**：y=0 的语义是「回底看 live 屏」（滚回落底 +
-    ///   回底后 200ms 恢复窗口内的锚点重拉）。live 屏顶行（空行/提示符行）
-    ///   与历史行同内容是常态，指纹吸附会把回底校准帧顶成历史窗口，前端
-    ///   `currentY` 被带偏后恢复定时器的 `currentY == 0` 条件失效，视图卡在
-    ///   viewport 模式 —— 故 y=0 恒服务 live 屏；
-    /// - 帧恒 `full: true` + `viewport: Some(y)`，不触碰 diff 基线
-    ///   （实时流独立继续，前端在 viewport 模式下自行丢弃实时帧）；
+    /// - **有状态锚**（`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`
+    ///   D1，取代 09-03 的指纹重定位——指纹在周期性内容（空行/框线/分隔线）上
+    ///   必然棘轮/滑移，见该计划根因实证）：`refresh = false`（用户滚动意图）
+    ///   按 `top = hs - y` 定位并**存锚**；`refresh = true`（输出触发的保锚
+    ///   重拉）**直接按存储锚出窗、完全忽略请求 y**——刷新路径不存在任何
+    ///   「重新决定位置」的步骤。锚的失效与降级（D4）：
+    ///   `y = 0` 清锚（回底 = 放弃历史位置，09-03 勘误的 y=0 语义由此自然
+    ///   承接）；锚被淘汰（abs ≤ 0）钳 0 续供（贴住最旧可用行随淘汰滑动 =
+    ///   真实终端语义）；锚 `None`（后端重启/清锚后的首个刷新）回退按请求
+    ///   `y` 定位，降级不失效。resize / alt-screen 进入另行清锚；
+    /// - 帧恒 `full: true` + `viewport: Some(y)`（实际服务的偏移，前端权威
+    ///   同步），不触碰 diff 基线（实时流独立继续，前端在 viewport 模式下
+    ///   自行丢弃实时帧）；
     /// - `y > 0` 时光标隐藏（历史窗口内无活光标），`y = 0` 携带真实光标
     ///   （回底校准帧与 overlay 帧同语义）。
     ///
     /// 响应体积由构造有界（`rows × cols`，与 overlay 帧同级，PtySize ≤ 1000×1000）。
-    pub fn encode_viewport_frame(&self, session_id: &str, y: u32, fp: Option<u64>) -> String {
-        let grid = self.term.grid();
+    pub fn encode_viewport_frame(&mut self, session_id: &str, y: u32, refresh: bool) -> String {
+        let hs = self.term.grid().history_size() as i32;
         let rows = self.term.screen_lines();
         let cols = self.term.columns();
-        let hs = grid.history_size() as i32;
-        // 窗口顶行的绝对索引（0 = 最旧的一行）；y 是距底部的偏移，先换算再重定位。
         // 经 i64 钳制：u32::MAX 直接 as i32 会变成 -1。
         let y = (y as i64).clamp(0, hs as i64) as i32;
-        let top = hs - y;
-        let top = match fp {
-            // y=0 = 回底校准，恒服务 live 屏，不做历史吸附（理由见上函数注释）
-            Some(fp) if y > 0 => Self::relocate_anchor(grid, cols, hs, top, fp),
-            _ => top,
+        // 窗口顶行的绝对索引（0 = 最旧的一行，hs = live 屏顶）。先定位/存取
+        // 锚，再借 grid 编码——存锚需要 &mut self，不能与 grid 借用交叠。
+        let top = if refresh {
+            match self.viewport_anchor {
+                // 锚行被淘汰（abs ≤ 0）→ 钳 0 续供；防御性钳上界
+                Some(anchor) => anchor.clamp(0, hs),
+                // 无锚降级（后端重启/清锚后的首个刷新）：按请求 y 定位
+                None => hs - y,
+            }
+        } else {
+            let anchor = hs - y;
+            if y == 0 {
+                self.viewport_anchor = None;
+            } else {
+                self.viewport_anchor = Some(anchor);
+            }
+            anchor
         };
+        let grid = self.term.grid();
         let start = top - hs; // Line 起点：≤ 0，负值进入 history
-        let y = (hs - top) as u32; // 重定位后的实际偏移（回传前端权威同步）
+        let y = (hs - top) as u32; // 实际服务的偏移（回传前端权威同步）
 
         let out_rows: Vec<RowData> =
             (0..rows).map(|i| self.encode_row_static(grid, cols, Line(start + i as i32))).collect();
@@ -666,8 +707,6 @@ impl VtState {
             overlay: false,
             row_indices: None,
             viewport: Some(y),
-            // 首行指纹：前端下次「保持锚点」的重拉原样回传（D4）
-            viewport_fp: Some(format!("{:016x}", hash_grid_row(grid, cols, Line(start)))),
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
@@ -681,35 +720,77 @@ impl VtState {
         json
     }
 
-    /// 按内容指纹重定位锚点行：在 `abs ± ANCHOR_SEARCH_RADIUS` 内**由近及远**
-    /// 找指纹匹配的绝对行索引，找不到（内容已被淘汰/重写/reflow）则返回原
-    /// `abs` —— 调用方退回按偏移定位，语义等同无指纹的旧行为。
+    /// 清除视口锚（D4 失效路径：alt-screen 进入由转发循环在 overlay 前调用；
+    /// resize 在 [`VtState::resize`] 内直接清）。
+    pub fn clear_viewport_anchor(&mut self) {
+        self.viewport_anchor = None;
+    }
+
+    /// 饱和期滚移检测（2026-09-12 计划 D3，唯一新增机制；关联字段语义见
+    /// `VtState` 字段注释）。
     ///
-    /// 有界是硬约束（P1）：搜索量与半径成正比，无界会让单请求成本随会话
-    /// 历史长度增长。双向交替覆盖两个方向的位移：淘汰把内容推向更旧的索引
-    /// （`-d`），resize reflow 与 RI（反向换行）会推向更新的索引（`+d`）。
-    fn relocate_anchor(
-        grid: &alacritty_terminal::grid::Grid<Cell>,
-        cols: usize,
+    /// 锚定内容在历史未饱和期绝对索引天然不动（输出滚动时行号减小、hs 增大，
+    /// 恒等抵消），无需检测；**饱和后**（hs 恒 = `VT_SCROLLBACK_LINES`，本
+    /// 仓库常态）内容绝对索引每滚一行减 1，锚必须随屏幕内容同步前移，否则
+    /// 视口随淘汰滑动。检测复用本帧既有的行哈希与上一帧基线做相关：屏幕
+    /// 内容整体上移 s 行的签名是 `row[i - s] == prev[i]` 对绝大多数 i 成立；
+    /// 按 s 升序取首个达标者（重叠区按行判等 ≥ 3/4），命中则锚同步 `- = s`。
+    ///
+    /// 误调防线（该方向的危害不对称：误调凭空制造漂移，miss 只是有界缓滑移）：
+    /// - 屏幕哈希与上帧完全一致（纯光标移动的空帧、静态屏）直接跳过——垂直
+    ///   同构内容（空行带）在无滚移时也会自相关，不设此闸会按帧误调；
+    /// - 重叠区下限 `rows / 4` 行：排除大 s 端「一两次巧合判等即达标」的弱
+    ///   证据区（突发超过 ~3/4 屏高时放弃检测，滑移有界）。
+    ///
+    /// 基线每帧无条件推进（含未锚定帧与跳过帧），保证下次检测总有新鲜基线。
+    fn adjust_anchor_for_scroll(
+        anchor: &mut Option<i32>,
+        prev_hashes: &mut Vec<u64>,
+        prev_hs: &mut i32,
+        row_hashes: &[u64],
         hs: i32,
-        abs: i32,
-        fp: u64,
-    ) -> i32 {
-        let matches = |cand: i32| {
-            (0..=hs).contains(&cand) && hash_grid_row(grid, cols, Line(cand - hs)) == fp
-        };
-        if matches(abs) {
-            return abs;
-        }
-        let radius = ANCHOR_SEARCH_RADIUS as i32;
-        for d in 1..=radius {
-            for cand in [abs - d, abs + d] {
-                if matches(cand) {
-                    return cand;
+    ) -> AnchorAdjust {
+        let outcome = if prev_hashes.len() == row_hashes.len()
+            && *prev_hs == hs
+            && row_hashes != prev_hashes.as_slice()
+        {
+            let rows = row_hashes.len();
+            let min_overlap = rows / 4;
+            let mut hit = None;
+            for s in 1..=rows.saturating_sub(min_overlap) {
+                let overlap = rows - s;
+                let threshold = (overlap * 3 / 4).max(1);
+                let mut matched = 0usize;
+                for i in s..rows {
+                    if row_hashes[i - s] == prev_hashes[i] {
+                        matched += 1;
+                    }
+                }
+                if matched >= threshold {
+                    hit = Some(s);
+                    break;
                 }
             }
-        }
-        abs
+            match hit {
+                Some(s) => {
+                    if let Some(a) = anchor.as_mut() {
+                        let clamped = *a > 0 && *a - s as i32 <= 0;
+                        *a = (*a - s as i32).max(0);
+                        AnchorAdjust::Adjusted { shift: s, clamped_to_zero: clamped }
+                    } else {
+                        // 未锚定不调整，但命中本身不打 Miss（无后果）
+                        AnchorAdjust::Inactive
+                    }
+                }
+                None => AnchorAdjust::Miss,
+            }
+        } else {
+            AnchorAdjust::Inactive
+        };
+        // 基线无条件推进（比较基线必须持续前进）
+        *prev_hashes = row_hashes.to_vec();
+        *prev_hs = hs;
+        outcome
     }
 
     /// Phase 3: invalidate diff tracker → 下一帧强制全帧（resize / overlay / mode change 后调用）。
@@ -759,6 +840,34 @@ impl VtState {
         // Diff-engine comparison (mutable borrow of diff_engine)
         let changed_indices = self.diff_engine.changed_rows_from(&row_hashes);
 
+        // 饱和期滚移检测（2026-09-12 D3）：历史饱和后内容绝对索引随每行输出
+        // 递减，视口锚必须随屏幕内容同步前移。基线（prev_screen_hashes /
+        // prev_history_size）在本函数内每帧无条件推进。字段级借用，不与
+        // grid 借用交叠。
+        let hs = grid.history_size() as i32;
+        let outcome = Self::adjust_anchor_for_scroll(
+            &mut self.viewport_anchor,
+            &mut self.prev_screen_hashes,
+            &mut self.prev_history_size,
+            &row_hashes,
+            hs,
+        );
+        // D6 观测：仅命中↔未命中迁移时打点，30fps 连续 miss/hit 不刷屏
+        if !matches!(outcome, AnchorAdjust::Inactive) {
+            let hit = matches!(outcome, AnchorAdjust::Adjusted { .. });
+            if self.scroll_detect_last_hit != Some(hit) {
+                self.scroll_detect_last_hit = Some(hit);
+                if let AnchorAdjust::Adjusted { shift, clamped_to_zero } = outcome {
+                    debug!(
+                        session = session_id,
+                        shift, clamped_to_zero, "viewport anchor adjusted for scroll"
+                    );
+                } else {
+                    debug!(session = session_id, "viewport scroll detect miss — anchor held");
+                }
+            }
+        }
+
         // Build row data only for changed rows
         let out_rows: Vec<RowData> = changed_indices
             .iter()
@@ -801,7 +910,6 @@ impl VtState {
             overlay,
             row_indices,
             viewport: None,
-            viewport_fp: None,
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
             history_size: grid.history_size() as u32,
@@ -1255,7 +1363,7 @@ mod tests {
         assert_eq!(f2["seq"], 2, "seq increments per live encode");
 
         let vp: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, false)).unwrap();
         assert!(vp.get("seq").is_none(), "viewport frame must omit seq");
         let ov: serde_json::Value = serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
         assert!(ov.get("seq").is_none(), "overlay frame must omit seq");
@@ -1309,7 +1417,7 @@ mod tests {
             serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "regular frame must omit alt_screen");
         let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, false)).unwrap();
         assert!(parsed.get("alt_screen").is_none(), "viewport frame must omit alt_screen");
     }
 
@@ -1352,7 +1460,7 @@ mod tests {
         let mut v = vt(24, 80);
         v.feed(b"\x1b[?2004h");
         let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 0, None)).unwrap();
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, false)).unwrap();
         assert_eq!(
             parsed["bracketed_paste"], true,
             "viewport frame must carry bracketed_paste=true"
@@ -1373,8 +1481,8 @@ mod tests {
 
     #[test]
     fn viewport_frame_y0_is_live_screen_with_marker() {
-        let v = vt_with_history();
-        let json = v.encode_viewport_frame("ts", 0, None);
+        let mut v = vt_with_history();
+        let json = v.encode_viewport_frame("ts", 0, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 0, "viewport marker must carry y");
         assert_eq!(parsed["full"], true);
@@ -1396,22 +1504,22 @@ mod tests {
 
     #[test]
     fn viewport_frame_scrolls_into_history() {
-        let v = vt_with_history();
+        let mut v = vt_with_history();
         // 历史 7 行（L0..L6）；y=7 窗口顶 = Line(-7) = L0
-        let json = v.encode_viewport_frame("ts", 7, None);
+        let json = v.encode_viewport_frame("ts", 7, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(top_row_text(&parsed), "L0");
         // y=5 窗口顶 = Line(-5) = L2
-        let json = v.encode_viewport_frame("ts", 5, None);
+        let json = v.encode_viewport_frame("ts", 5, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(top_row_text(&parsed), "L2");
     }
 
     #[test]
     fn viewport_frame_y_clamps_to_history_size() {
-        let v = vt_with_history();
+        let mut v = vt_with_history();
         // 超界 y 钳制到 history_size（6），不 panic 且内容与 y=6 相同
-        let json = v.encode_viewport_frame("ts", u32::MAX, None);
+        let json = v.encode_viewport_frame("ts", u32::MAX, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 7, "y must clamp to history size");
         assert_eq!(top_row_text(&parsed), "L0");
@@ -1419,15 +1527,15 @@ mod tests {
 
     #[test]
     fn viewport_frame_hides_cursor_above_bottom() {
-        let v = vt_with_history();
-        let json = v.encode_viewport_frame("ts", 6, None);
+        let mut v = vt_with_history();
+        let json = v.encode_viewport_frame("ts", 6, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(
             parsed["cursor"]["visible"].as_bool(),
             Some(false),
             "history window has no live cursor"
         );
-        let json = v.encode_viewport_frame("ts", 0, None);
+        let json = v.encode_viewport_frame("ts", 0, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["cursor"]["visible"].as_bool(), Some(true));
     }
@@ -1436,7 +1544,7 @@ mod tests {
     fn viewport_frame_does_not_disturb_diff_baseline() {
         let mut v = vt_with_history();
         let _ = v.encode_cell_frame("ts", false); // full
-        let _ = v.encode_viewport_frame("ts", 6, None); // 不触碰 diff 基线
+        let _ = v.encode_viewport_frame("ts", 6, false); // 不触碰 diff 基线
         let json = v.encode_cell_frame("ts", false); // 实时流继续 diff
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["full"], false, "viewport encode must not invalidate diff");
@@ -1445,24 +1553,20 @@ mod tests {
 
     #[test]
     fn viewport_frame_empty_history_clamps_to_zero() {
-        let v = vt(24, 80); // 无历史
-        let json = v.encode_viewport_frame("ts", 10, None);
+        let mut v = vt(24, 80); // 无历史
+        let json = v.encode_viewport_frame("ts", 10, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("must be valid JSON");
         assert_eq!(parsed["viewport"], 0, "empty history clamps y to 0");
     }
 
-    // ──── 指纹锚点（docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md）────
+    // ──── 有状态锚 + 饱和期滚移检测（docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md）────
+    // 取代 09-03 指纹锚定的用例组：指纹重定位在周期性内容（空行/框线/分隔线）
+    // 上必然棘轮/滑移（该计划根因实证），位置记忆改驻后端 `VtState`。
 
     /// 窗口顶行整行文本（尾随空白已由编码侧裁剪）。
     fn top_row_full(parsed: &serde_json::Value) -> String {
         let runs = parsed["rows"][0]["runs"].as_array().unwrap();
         (1..runs.len()).step_by(2).map(|i| runs[i].as_str().unwrap()).collect()
-    }
-
-    /// 取回窗口帧的首行指纹（u64）。
-    fn top_row_fp(parsed: &serde_json::Value) -> u64 {
-        let hex = parsed["viewport_fp"].as_str().expect("viewport frame must carry fp");
-        u64::from_str_radix(hex, 16).expect("fp must be hex u64")
     }
 
     /// 持续喂入 `from..to` 编号的行。
@@ -1472,114 +1576,183 @@ mod tests {
         }
     }
 
+    /// 核心回归（旧指纹机制在此场景棘轮/滑移，见 2026-09-12 计划探针证据表）：
+    /// 锚定在周期性内容（空行）上，输出流式进行期间保锚刷新仍停在同一批内容。
     #[test]
-    fn viewport_frame_carries_top_row_fingerprint() {
+    fn scroll_request_stores_anchor_and_refresh_serves_it() {
         let mut v = vt(24, 80);
-        feed_lines(&mut v, 0, 60);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
-        // 指纹必须能命中自己：同一状态下带 fp 重拉应停在同一行
-        let again: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(top_row_fp(&parsed))))
-                .unwrap();
-        assert_eq!(top_row_full(&again), top_row_full(&parsed));
-        assert_eq!(again["viewport"], parsed["viewport"]);
-    }
-
-    #[test]
-    fn anchor_follows_content_when_history_grows() {
-        let mut v = vt(24, 80);
-        feed_lines(&mut v, 0, 60);
+        feed_lines(&mut v, 0, 50);
+        for _ in 0..40 {
+            v.feed(b"\r\n"); // 空行带推进历史（尾部 16 行空行已入历史，屏幕全空）
+        }
+        // 用户滚动 y=5 → 窗口顶落在历史空行带内，存锚
         let first: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
-        let anchored_text = top_row_full(&first);
-        let fp = top_row_fp(&first);
-        let y0 = first["viewport"].as_u64().unwrap() as u32;
+            serde_json::from_str(&v.encode_viewport_frame("ts", 5, false)).unwrap();
+        let anchored = top_row_full(&first);
+        assert!(anchored.trim().is_empty(), "前置：锚点行应为空行（周期性内容）");
 
-        // 继续输出 20 行：历史增长，同一个 y 指向的内容已经变新
-        feed_lines(&mut v, 60, 80);
-        let drifted: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", y0, None)).unwrap();
-        assert_ne!(top_row_full(&drifted), anchored_text, "同一 y 未锚定时应指向新内容");
-
-        // 带指纹重拉：窗口回到同一批内容，且实际 y 随历史增长
+        // 输出继续（含空行副本，历史增长），锚为绝对索引天然不动
+        for i in 50..70 {
+            v.feed(format!("L{i:05}\r\n\r\n").as_bytes());
+        }
+        // 保锚刷新：忽略请求 y（传 0 证明），仍停在同一批内容
         let held: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", y0, Some(fp))).unwrap();
-        assert_eq!(top_row_full(&held), anchored_text, "指纹锚定后内容必须不变");
-        assert!(held["viewport"].as_u64().unwrap() > y0 as u64, "历史增长后实际 y 必须前移");
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(top_row_full(&held), anchored, "保锚刷新必须停在同一批内容");
+        assert!(held["viewport"].as_u64().unwrap() > 5, "历史增长后实际 y 必须前移");
     }
 
     #[test]
-    fn anchor_follows_content_across_scrollback_eviction() {
-        let mut v = vt(24, 80);
-        // 超出 scrollback（1000 行）→ 历史饱和，之后每输出一行就淘汰最旧一行
-        feed_lines(&mut v, 0, 1500);
-        let first: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 100, None)).unwrap();
-        assert_eq!(first["history_size"], 1000, "历史应已饱和");
-        let anchored_text = top_row_full(&first);
-        let fp = top_row_fp(&first);
-
-        // 淘汰 200 行后锚定行仍在缓冲区内（原绝对索引 900 → 700）
-        feed_lines(&mut v, 1500, 1700);
-        let held: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 100, Some(fp))).unwrap();
-        assert_eq!(top_row_full(&held), anchored_text, "淘汰未触及锚定行时内容必须不变");
-
-        // 再淘汰 900 行 → 锚定行已被淘汰，指纹失配，退回按 y 定位（不 panic）
-        feed_lines(&mut v, 1700, 2600);
-        let gone: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 100, Some(fp))).unwrap();
-        assert_eq!(gone["viewport"], 100, "失配必须退回请求偏移");
-        assert_ne!(top_row_full(&gone), anchored_text);
-    }
-
-    #[test]
-    fn unknown_fingerprint_falls_back_to_requested_offset() {
+    fn refresh_without_anchor_falls_back_to_requested_y() {
         let mut v = vt(24, 80);
         feed_lines(&mut v, 0, 60);
-        // 半径内无匹配：按 y 定位，不 panic、不改变语义
+        // 未滚动过（锚 None，后端重启/清锚后的首个刷新）：降级按请求 y 定位
         let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(0xdead_beef))).unwrap();
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, true)).unwrap();
         assert_eq!(parsed["viewport"], 10);
         assert_eq!(
             top_row_full(&parsed),
-            top_row_full(&serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap()),
-            "失配回退后内容必须与无指纹请求一致"
+            top_row_full(&serde_json::from_str(&v.encode_viewport_frame("ts", 10, false)).unwrap()),
+            "无锚回退后内容必须与滚动请求一致"
         );
     }
 
-    /// y=0 是「回底看 live 屏」的校准请求，即使携带指纹也不得吸附进历史：
-    /// live 屏顶行（空行/提示符行）与历史行同内容是常态，吸附会把回底帧
-    /// 顶成历史窗口，前端 currentY 被带偏后卡在 viewport 模式（2026-09-04
-    /// TUI 错位排查确认的次级缺陷）。
     #[test]
-    fn viewport_frame_y0_ignores_fingerprint_even_when_history_matches() {
-        let mut v = vt(6, 20);
-        // 10 个换行 → 5 行进历史且全为空行，live 屏顶行也是空行：指纹必然命中历史
-        for _ in 0..10 {
-            v.feed(b"\r\n");
-        }
-        assert!(v.term.grid().history_size() > 0, "前置：历史里应有空行");
-        let top_fp = hash_grid_row(v.term.grid(), 20, Line(0));
-        let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 0, Some(top_fp))).unwrap();
-        assert_eq!(parsed["viewport"], 0, "y=0 必须恒服务 live 屏，不做指纹重定位");
-        assert_eq!(parsed["cursor"]["visible"], serde_json::Value::Bool(true));
+    fn anchor_stable_while_history_grows_unsaturated() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60); // hs = 36，未饱和
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 10, false)).unwrap();
+        let anchored = top_row_full(&first);
+        feed_lines(&mut v, 60, 80); // +20 行
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(top_row_full(&held), anchored, "未饱和期绝对索引稳定，锚不动");
+        assert_eq!(held["viewport"], 30, "y 随新增行数前移（20 行）");
     }
 
     #[test]
-    fn anchor_search_is_bounded_by_radius() {
+    fn anchor_follows_screen_scroll_when_history_saturated() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100); // 饱和（hs = 1000）
+        let _ = v.encode_cell_frame("ts", false); // 建立滚移检测基线
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 50, false)).unwrap();
+        let anchored = top_row_full(&first);
+
+        // 逐行输出 + 逐帧 live 编码：每行触发 s=1 检测命中，锚同步前移
+        for i in 1100..1130 {
+            v.feed(format!("L{i:05}\r\n").as_bytes());
+            let _ = v.encode_cell_frame("ts", false);
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(top_row_full(&held), anchored, "饱和淘汰期锚定内容必须不变");
+        assert_eq!(held["viewport"], 80, "锚随 30 行淘汰前移（950 → 920），y = 1000 - 920");
+    }
+
+    #[test]
+    fn anchor_clamps_to_zero_when_anchor_line_evicted() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100);
+        let _ = v.encode_cell_frame("ts", false);
+        // y = 1000 - 2 → 锚 = 2（贴近最旧端）
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 998, false)).unwrap();
+        assert_eq!(first["viewport"], 998);
+        for i in 1100..1105 {
+            v.feed(format!("L{i:05}\r\n").as_bytes());
+            let _ = v.encode_cell_frame("ts", false); // 锚 2 → 1 → 0（钳 0 续供）
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(held["viewport"], 1000, "锚钳 0 → 视口贴住最旧可用行");
+        // 贴住的内容 = 此刻最旧可用行（abs 0，随淘汰滑动 = 真实终端语义）
+        let oldest: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 1000, false)).unwrap();
+        assert_eq!(top_row_full(&held), top_row_full(&oldest));
+    }
+
+    #[test]
+    fn anchor_holds_when_full_screen_redraw_misses_detection() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100);
+        let _ = v.encode_cell_frame("ts", false);
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 50, false)).unwrap();
+        let anchored = top_row_full(&first);
+        // 全屏重绘（无净滚动）：绝对定位原地重写全部行，无滚移签名
+        for r in 0..24 {
+            v.feed(format!("\x1b[{};1Hredraw-{r}\x1b[K", r + 1).as_bytes());
+        }
+        let _ = v.encode_cell_frame("ts", false); // 检测 miss → 锚不动
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(held["viewport"], 50, "miss 不调整——有界缓滑移，无棘轮");
+        assert_eq!(top_row_full(&held), anchored, "历史行未被重写，内容不变");
+    }
+
+    #[test]
+    fn scroll_detection_skips_unchanged_screen() {
+        // 垂直同构屏（全空行）+ 无输出：屏幕哈希与上帧一致必须直接跳过检测，
+        // 否则空行自相关会按帧把锚误调向最旧端（30fps 下即滑移事故）。
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100); // 饱和
+        for _ in 0..100 {
+            v.feed(b"\r\n"); // 空行刷屏
+        }
+        let _ = v.encode_cell_frame("ts", false); // 基线 = 全空屏
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 50, false)).unwrap();
+        assert_eq!(first["viewport"], 50);
+        for _ in 0..5 {
+            let _ = v.encode_cell_frame("ts", false); // 30fps 空帧（无输出）
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(held["viewport"], 50, "静态屏不得被滚移检测误调");
+    }
+
+    #[test]
+    fn scroll_to_y0_clears_anchor() {
         let mut v = vt(24, 80);
         feed_lines(&mut v, 0, 60);
-        let first: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, None)).unwrap();
-        let fp = top_row_fp(&first);
-        // 位移远超搜索半径（512）→ 不越界寻找，直接退回请求偏移
-        feed_lines(&mut v, 60, 1600);
-        let parsed: serde_json::Value =
-            serde_json::from_str(&v.encode_viewport_frame("ts", 10, Some(fp))).unwrap();
-        assert_eq!(parsed["viewport"], 10, "超出半径必须回退而非继续搜索");
+        let _ = v.encode_viewport_frame("ts", 10, false); // 存锚（abs 26）
+        feed_lines(&mut v, 60, 80);
+        let _ = v.encode_viewport_frame("ts", 0, false); // 回底 → 清锚
+        feed_lines(&mut v, 80, 90); // +10，hs = 66
+        // 清锚后的刷新回退按请求 y 定位；若旧锚未清会服务 abs 26（y = 40）
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 5, true)).unwrap();
+        assert_eq!(held["viewport"], 5, "y=0 已清锚：刷新按请求 y 定位");
+        assert_eq!(
+            top_row_full(&held),
+            top_row_full(&serde_json::from_str(&v.encode_viewport_frame("ts", 5, false)).unwrap()),
+            "清锚后刷新内容与同 y 滚动请求一致"
+        );
+    }
+
+    #[test]
+    fn resize_clears_anchor() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        let _ = v.encode_viewport_frame("ts", 10, false);
+        v.resize(30, 100); // reflow：位置锚失配（09-03 已声明降级）
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 5, true)).unwrap();
+        assert_eq!(held["viewport"], 5, "resize 清锚：刷新回退按请求 y");
+    }
+
+    #[test]
+    fn alt_screen_enter_clears_anchor() {
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 60);
+        let _ = v.encode_viewport_frame("ts", 10, false);
+        v.clear_viewport_anchor(); // 转发循环在 AltScreenEnter overlay 前调用
+        feed_lines(&mut v, 60, 80);
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 5, true)).unwrap();
+        assert_eq!(held["viewport"], 5, "alt-screen 进入清锚：刷新回退按请求 y");
     }
 
     // ──── RLE 行编码（docs/dev/plans/archive/2026-08-28-pty-frame-rle.md）────
@@ -1624,7 +1797,7 @@ mod tests {
     fn rows_of(feed: &[u8]) -> Vec<serde_json::Value> {
         let mut v = vt(6, 20);
         v.feed(feed);
-        let json = v.encode_viewport_frame("ts", 0, None);
+        let json = v.encode_viewport_frame("ts", 0, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         parsed["rows"].as_array().unwrap().clone()
     }
@@ -1649,7 +1822,7 @@ mod tests {
         for feed in cases {
             let mut v = vt(6, 20);
             v.feed(feed);
-            let json = v.encode_viewport_frame("ts", 0, None);
+            let json = v.encode_viewport_frame("ts", 0, false);
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             let rows = parsed["rows"].as_array().unwrap();
             for (i, row) in rows.iter().enumerate() {
@@ -1706,7 +1879,7 @@ mod tests {
     fn runs_handles_full_width_row_as_single_run() {
         let mut v = vt(2, 200);
         v.feed(&[b'x'; 200]);
-        let json = v.encode_viewport_frame("ts", 0, None);
+        let json = v.encode_viewport_frame("ts", 0, false);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let runs = parsed["rows"][0]["runs"].as_array().unwrap();
         assert_eq!(runs.len(), 2, "single-style row must be one run, got {runs:?}");
@@ -1743,7 +1916,7 @@ mod tests {
         for json in [
             v.encode_cell_frame("ts", false),
             v.encode_overlay_frame("ts"),
-            v.encode_viewport_frame("ts", 0, None),
+            v.encode_viewport_frame("ts", 0, false),
         ] {
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert!(parsed["rows"][0]["runs"].is_array(), "all frames must use runs: {parsed}");

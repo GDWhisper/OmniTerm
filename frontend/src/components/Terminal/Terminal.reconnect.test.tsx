@@ -36,7 +36,8 @@ describe('Terminal reconnect overlay', () => {
     await vi.waitFor(() => {
       const button = container.querySelector('button')
       expect(button).toBeTruthy()
-      expect(button?.textContent).toBe('重连')
+      // 按钮文案已 i18n 化（曾硬编码中文），en 语言下断言取 i18n 真值。
+      expect(button?.textContent).toBe(i18n.t('terminal.reconnect'))
     })
 
     root.unmount()
@@ -70,7 +71,7 @@ describe('Terminal reconnect overlay', () => {
     await vi.waitFor(() => {
       const button = container.querySelector('button')
       expect(button).toBeTruthy()
-      expect(button?.textContent).toBe('重连')
+      expect(button?.textContent).toBe(i18n.t('terminal.reconnect'))
     })
 
     root.unmount()

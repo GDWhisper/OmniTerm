@@ -89,6 +89,7 @@ mod tests {
         sqlx::migrate!("./migrations").run(&db).await.expect("run migrations");
         AppState {
             jwt_secret: "test-secret".into(),
+            token_cookie: crate::TOKEN_COOKIE_BASE.to_string(),
             api_keys: HashMap::new(),
             auth_enabled: Arc::new(AtomicBool::new(false)),
             acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
@@ -101,6 +102,7 @@ mod tests {
                 base_host: None,
                 max_request_body: crate::proxy::MAX_REQUEST_BODY,
             },
+            max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,
             db,
         }
     }

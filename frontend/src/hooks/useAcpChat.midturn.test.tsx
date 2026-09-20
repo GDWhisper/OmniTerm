@@ -5,6 +5,7 @@ import { useAcpChat, decodeStoredBlocks } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore } from '../stores/chatStore'
+import { clearTurnClock, finalTps, turnTps } from '../utils/turnClock'
 
 // 流式中刷新丢早期正文的修复测试：
 // B —— 后端帧窗口从头部驱逐（turn_accumulator.rs MAX_BLOCKS_BYTES），RAW 帧包裹解码时
@@ -100,6 +101,7 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     useChatStore.setState({ states: {} })
+    clearTurnClock()
     fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -111,6 +113,8 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     })
     root = null
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    clearTurnClock()
   })
 
   const mount = () => {
@@ -132,6 +136,39 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
       ws.onmessage?.({ data: JSON.stringify(frame) })
     })
   }
+
+  it('excludes live tool time and restarts observation after a snapshot without counting replayed output', () => {
+    let now = 1_700_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+      useChatStore.getState().setHydrated('s1', true)
+      useChatStore.getState().beginPrompt('s1')
+    })
+    now += 1_000
+    send(ws, { type: 'session_update', seq: 1, data: { update: chunkFrame('x'.repeat(400)) } })
+    send(ws, { type: 'session_update', seq: 2, data: { update: {
+      ToolCall: { toolCallId: 'tool-a', status: 'in_progress' },
+    } } })
+    now += 10_000
+    expect(turnTps('s1')).toBe(100)
+    send(ws, { type: 'turn_snapshot', row_id: 'row-live', text: 'old output', seq: 10,
+      blocks: JSON.stringify({ v: 1, frames: [
+        chunkFrame('old output'), { ToolCall: { toolCallId: 'tool-a', status: 'in_progress' } },
+      ] }),
+    })
+    expect(turnTps('s1')).toBeNull()
+    now += 5_000
+    send(ws, { type: 'session_update', seq: 11, data: { update: {
+      ToolCallUpdate: { toolCallId: 'tool-a', status: 'completed' },
+    } } })
+    now += 1_000
+    send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('x'.repeat(400)) } })
+    send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('duplicate') } })
+    send(ws, { type: 'prompt_done', row_id: 'row-live' })
+    expect(finalTps('s1')).toBe(100)
+  })
 
   it('turn_snapshot restores evicted prose and suppresses the cooked write-back', () => {
     const ws = mount()

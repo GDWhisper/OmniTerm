@@ -56,3 +56,13 @@ export function formatTps(tps: number | null | undefined): string | null {
   if (tps === null || tps === undefined || !Number.isFinite(tps) || tps <= 0) return null
   return tps.toFixed(1)
 }
+
+/**
+ * 工具耗时的三态封装：`null/undefined/≤0` → `null`（未知与「没观测到工具」都整段不渲染），
+ * 否则走 `formatWorkDuration`。与 `formatTps` 同模式——「三态 → 渲染与否」的判断只在这里一份，
+ * 调用方不各自内联（实时读数与定稿读数两个调用点共用）。
+ */
+export function formatToolDuration(ms: number | null | undefined, locale?: string): string | null {
+  if (ms === null || ms === undefined || !(ms > 0)) return null
+  return formatWorkDuration(ms, locale)
+}

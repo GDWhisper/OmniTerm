@@ -8,6 +8,7 @@ import {
   buildReplayMessages,
   MAX_PENDING_PERMISSIONS,
   type ChatMessage,
+  type ConfigOption,
   type ContentBlock,
   type SessionUpdateAction,
 } from './chatStore'
@@ -191,6 +192,25 @@ describe('chatStore — queued follow-up actions', () => {
       expect(state.imageSupported).toBe(true)
       expect(state.embeddedContextSupported).toBe(true)
     })
+
+    // usage 由 agent 按 turn 推送、不随重放下发：不保留就会在每次重放后消失
+    // （用户观感「时有时无」），与 capability flags 同一处理。
+    it('preserves usage across the rebuild (pushed per turn, not replayed)', () => {
+      useChatStore.getState().setUsage('s1', { used: 1234, size: 200000 })
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+      ])
+      expect(useChatStore.getState().states['s1'].usage).toEqual({ used: 1234, size: 200000 })
+    })
+
+    it('lets a replayed usage frame override the preserved value', () => {
+      useChatStore.getState().setUsage('s1', { used: 1, size: 200000 })
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+        { kind: 'setUsage', usage: { used: 2, size: 200000 } },
+      ])
+      expect(useChatStore.getState().states['s1'].usage).toEqual({ used: 2, size: 200000 })
+    })
   })
 
   describe('history pagination (上拉加载更早历史)', () => {
@@ -260,23 +280,6 @@ describe('chatStore — queued follow-up actions', () => {
 
     it('readQueuedFromStorageForSession returns null when absent', () => {
       expect(readQueuedFromStorageForSession('missing')).toBeNull()
-    })
-  })
-
-  describe('markEdited (F02)', () => {
-    it('marks the targeted user message as edited', () => {
-      useChatStore.getState().addUserMessage('s1', 'original')
-      const msg = useChatStore.getState().states['s1'].messages[0]
-      useChatStore.getState().markEdited('s1', msg.id)
-      expect(useChatStore.getState().states['s1'].messages[0].edited).toBe(true)
-    })
-
-    it('does not touch assistant messages or unknown ids', () => {
-      useChatStore.getState().addUserMessage('s1', 'u1')
-      useChatStore.getState().appendChunk('s1', 'assistant reply')
-      useChatStore.getState().markEdited('s1', 'nonexistent-id')
-      const msgs = useChatStore.getState().states['s1'].messages
-      expect(msgs.every((m) => !m.edited)).toBe(true)
     })
   })
 
@@ -901,5 +904,49 @@ describe('流式 prose 块合并（thought 分段修复）', () => {
     expect(msg.blocks.map((b) => b.type)).toEqual(['thought', 'text'])
     expect((msg.blocks[0] as { text: string }).text).toBe('t1t2')
     expect((msg.blocks[1] as { text: string }).text).toBe('ab')
+  })
+})
+
+// 已结束会话的配置快照：hydrate 注入最后已知 configOptions 并置灰只读；
+// 任一 live/replay 配置帧（applyReplayBatch → applyTopLevelActions）解除只读。
+describe('config snapshot (ended-session readonly toolbar)', () => {
+  const MODEL_OPTION: ConfigOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    currentValue: 'm1',
+    options: [
+      { value: 'm1', name: 'm1' },
+      { value: 'm2', name: 'm2' },
+    ],
+  }
+
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+  })
+
+  it('setConfigSnapshot(true) stores options and marks readonly', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], true)
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([MODEL_OPTION])
+    expect(st.configReadOnly).toBe(true)
+  })
+
+  it('setConfigSnapshot(false) injects values without readonly (live-session refresh)', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], false)
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([MODEL_OPTION])
+    expect(st.configReadOnly).toBe(false)
+  })
+
+  it('live config frame via applyReplayBatch overwrites snapshot and clears readonly', () => {
+    useChatStore.getState().setConfigSnapshot('s1', [MODEL_OPTION], true)
+    const updated: ConfigOption = { ...MODEL_OPTION, currentValue: 'm2' }
+    useChatStore
+      .getState()
+      .applyReplayBatch('s1', [{ kind: 'setConfigOptions', options: [updated] }])
+    const st = useChatStore.getState().states['s1']
+    expect(st.configOptions).toEqual([updated])
+    expect(st.configReadOnly).toBe(false)
   })
 })

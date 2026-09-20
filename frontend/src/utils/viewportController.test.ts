@@ -45,9 +45,9 @@ function stubTimers() {
 }
 
 function makeController(overrides?: Partial<ViewportControllerCallbacks>) {
-  const sent: Array<{ y: number; fp: string | null }> = []
+  const sent: Array<{ y: number; refresh: boolean }> = []
   const cb: ViewportControllerCallbacks = {
-    sendRequest: (y, fp) => sent.push({ y, fp }),
+    sendRequest: (y, refresh) => sent.push({ y, refresh }),
     onModeChange: vi.fn(),
     onLiveRestore: vi.fn(),
     onNewOutput: vi.fn(),
@@ -56,8 +56,8 @@ function makeController(overrides?: Partial<ViewportControllerCallbacks>) {
   return { ctl: new ViewportController(cb), sent, cb }
 }
 
-/** 只取已发出请求的 y（多数断言不关心指纹）。 */
-const ys = (sent: Array<{ y: number; fp: string | null }>) => sent.map((s) => s.y)
+/** 只取已发出请求的 y（多数断言不关心意图位）。 */
+const ys = (sent: Array<{ y: number; refresh: boolean }>) => sent.map((s) => s.y)
 
 const METRICS = { lineHeightPx: 10, rows: 24, wsOpen: true }
 const wheel = (deltaY: number, deltaMode = 0) => ({ deltaY, deltaMode })
@@ -247,71 +247,71 @@ describe('ViewportController.acceptFrame', () => {
 })
 
 // ──────────────────────────────────────────────────────────
-// 指纹锚定（`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`）
+// 新输出重拉（后端有状态锚，`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`）
 //
 // 回归背景一（2026-08-30）：窗口帧只在滚轮时请求一次，之后实时帧被
 // acceptFrame 丢弃且无人重拉，屏幕永久停在上翻瞬间的历史内容——用户在压测
 // 中途上翻后，后续 12s 的输出完全不可见，只有切换会话（reset）才恢复。
 //
-// 回归背景二（2026-09-03）：改由前端用 `history_size` 反推绝对锚点后仍漂移
-// ——该值取自主线程收到的上一帧（最坏落后 33ms）再叠加 rAF 延迟，每次重拉
-// 都漂 ~0.5 行（实测达输出速率的 28%），历史饱和后更是以 100% 输出速率滑动。
-// 故位置换算整体移交后端：前端只负责「用户滚动不带指纹 / 重拉带指纹」。
+// 回归背景二（2026-09-03）：位置换算移交后端（指纹重定位）后，在周期性内容
+// （空行/框线/分隔线）上反而棘轮/滑移——重定位从滞后的 y 起步必然先命中
+// 更新的内容副本，用户滚动位置被系统性擦除（2026-09-12 五组探针实证）。
+// 故删除重定位，位置记忆驻后端 VtState（有状态锚）；前端只负责把两种
+// 请求意图显式分开：滚动 refresh=false / 重拉 refresh=true。
 // ──────────────────────────────────────────────────────────
-describe('ViewportController 新输出重拉（指纹锚定）', () => {
-  it('用户滚动不带指纹，重拉带指纹（D5 意图区分）', () => {
+describe('ViewportController 新输出重拉（后端有状态锚）', () => {
+  it('用户滚动发 refresh=false，重拉发 refresh=true（D2 意图显式化）', () => {
     const { ctl, sent, cb } = makeController()
     ctl.handleWheel(wheel(-100), METRICS) // 上翻 10 行
     raf.flush()
-    expect(sent[0]).toEqual({ y: 10, fp: null })
+    expect(sent[0]).toEqual({ y: 10, refresh: false })
 
-    // 后端回窗口帧，携带首行指纹
-    ctl.acceptFrame({ viewport: 10, viewport_fp: '00000000deadbeef' })
-    // 新输出 → 重拉：y 保持本地值，指纹交给后端做位置换算
+    // 后端回窗口帧 → 新输出触发重拉：后端按存储锚出窗，y 仅作降级回退
+    ctl.acceptFrame({ viewport: 10 })
     ctl.notifyLiveOutput(true)
     timers.fireAll()
     raf.flush()
     expect(sent.length).toBe(2)
-    expect(sent[1]).toEqual({ y: 10, fp: '00000000deadbeef' })
+    expect(sent[1]).toEqual({ y: 10, refresh: true })
     expect(cb.onNewOutput).toHaveBeenCalledWith(true)
   })
 
-  it('后端重定位后的 y 权威同步，后续重拉从新 y 出发', () => {
+  it('后端权威 y 同步，后续重拉从新 y 出发', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel(wheel(-100), METRICS) // y=10
     raf.flush()
-    ctl.acceptFrame({ viewport: 10, viewport_fp: 'aa' })
-    // 历史增长：后端把同一批内容重定位到 y=20
-    ctl.acceptFrame({ viewport: 20, viewport_fp: 'aa' })
+    ctl.acceptFrame({ viewport: 10 })
+    // 历史增长/淘汰：后端按锚出窗后回传实际 y=20
+    ctl.acceptFrame({ viewport: 20 })
     ctl.notifyLiveOutput(true)
     timers.fireAll()
     raf.flush()
-    expect(sent.at(-1)).toEqual({ y: 20, fp: 'aa' })
+    expect(sent.at(-1)).toEqual({ y: 20, refresh: true })
   })
 
   it('历史饱和（y 不变）时仍重拉——内容仍在变', () => {
     const { ctl, sent, cb } = makeController()
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
-    ctl.acceptFrame({ viewport: 10, viewport_fp: 'bb' })
+    ctl.acceptFrame({ viewport: 10 })
     // 历史已达上界：y 恒为 10，但窗口内容已被推新——必须重拉，否则冻结。
     // 同 y 也能发出，靠 pendingRefresh 绕过去重。
     ctl.notifyLiveOutput(true)
     timers.fireAll()
     raf.flush()
     expect(ys(sent)).toEqual([10, 10])
-    expect(sent.at(-1)?.fp).toBe('bb')
+    expect(sent.at(-1)?.refresh).toBe(true)
     expect(cb.onNewOutput).toHaveBeenCalledWith(true)
   })
 
-  it('用户滚动清锚点：重拉不会把用户拉回刚滚走的位置', () => {
+  it('用户滚动发 refresh=false：不会把用户拉回刚滚走的位置', () => {
     const { ctl, sent } = makeController()
     ctl.handleWheel(wheel(-100), METRICS) // y=10
     raf.flush()
-    ctl.acceptFrame({ viewport: 10, viewport_fp: 'cc' })
-    ctl.handleWheel(wheel(-100), METRICS) // 再上翻 → y=20，锚点清除
+    ctl.acceptFrame({ viewport: 10 })
+    ctl.handleWheel(wheel(-100), METRICS) // 再上翻 → y=20，滚动语义
     raf.flush()
-    expect(sent.at(-1)).toEqual({ y: 20, fp: null })
+    expect(sent.at(-1)).toEqual({ y: 20, refresh: false })
   })
 
   it('空 diff 帧（仅光标移动）不重拉、不报新输出', () => {
@@ -331,20 +331,20 @@ describe('ViewportController 新输出重拉（指纹锚定）', () => {
     expect(cb.onNewOutput).not.toHaveBeenCalled()
   })
 
-  it('回底后清除新输出标志、锚点与待发重拉', () => {
+  it('回底后清除新输出标志与待发重拉', () => {
     const { ctl, sent, cb } = makeController()
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
-    ctl.acceptFrame({ viewport: 10, viewport_fp: 'dd' })
+    ctl.acceptFrame({ viewport: 10 })
     ctl.notifyLiveOutput(true)
     expect(cb.onNewOutput).toHaveBeenLastCalledWith(true)
     ctl.scrollToLive()
     expect(cb.onNewOutput).toHaveBeenLastCalledWith(false)
     expect(timers.pending()).toBe(0)
-    // 锚点已清：再次上翻不带旧指纹
+    // 回底 = y=0 滚动请求（后端清锚）；再次上翻是干净的滚动语义
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
-    expect(sent.at(-1)?.fp).toBeNull()
+    expect(sent.at(-1)).toEqual({ y: 10, refresh: false })
   })
 })
 

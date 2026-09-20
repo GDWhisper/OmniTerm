@@ -212,13 +212,6 @@ export interface ChatMessage {
    */
   undelivered?: boolean
   /**
-   * True when the user re-sent an edited copy of this message (F02). ACP has
-   * no "edit history" concept — the original stays in place with this marker
-   * and the edited text goes out as a brand-new prompt. In-memory only (not
-   * persisted; lost on refresh, which is acceptable since both messages are).
-   */
-  edited?: boolean
-  /**
    * True when this row's `blocks` came from the backend accumulator's raw-frame
    * wrapper (`{"v":1,"frames":[...]}`) and decoded to a non-empty structure.
    * Set only by the hydrate conversion (`ChatView.toChatMessages`); used by
@@ -261,6 +254,13 @@ interface ChatSessionState {
   usage: Record<string, unknown> | null
   commands: SlashCommand[]
   configOptions: ConfigOption[]
+  /**
+   * 配置栏置灰只读标志：true = 当前 configOptions 来自 hydrate 注入的快照
+   * （GET /messages 下发，会话已结束无活 agent），仅作展示、不可交互。
+   * 解除的唯一路径是后续任一 live/replay 的 setConfigOptions 配置帧
+   * （applyTopLevelActions 合并时一并置 false）——恢复会话后配置栏自动点亮。
+   */
+  configReadOnly?: boolean
   terminalEvents: TerminalActivity[]
   /** 当前待办列表看板数据（独立于 messages，固定在输入框上方展示）。 */
   todos: TodoEntry[]
@@ -315,8 +315,6 @@ interface ChatActions {
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
   addUndeliveredMessage: (sessionId: string, text: string) => void
-  /** Mark a user message as superseded by an edited resend (F02). */
-  markEdited: (sessionId: string, messageId: string) => void
   markDone: (sessionId: string, timing?: TurnDuration) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
@@ -367,7 +365,14 @@ interface ChatActions {
   commitReplay: (sessionId: string, actions: SessionUpdateAction[]) => void
   setUsage: (sessionId: string, usage: Record<string, unknown>) => void
   setCommands: (sessionId: string, commands: SlashCommand[]) => void
-  setConfigOptions: (sessionId: string, options: ConfigOption[]) => void
+  /**
+   * 注入 hydrate 快照（GET /messages 的 configOptions 字段）：已结束会话的
+   * 最后已知配置状态。readOnly=true 时配置栏置灰只读；活会话刷新（agentLive）
+   * 也注入值以消除配置栏空窗，但不置灰。live/replay 配置帧经
+   * applyTopLevelActions 覆盖时自动解除只读，无独立 setConfigOptions setter
+   * （防绕过不变式；原零调用的独立 setter 已删，live 路径一直走 applyReplayBatch）。
+   */
+  setConfigSnapshot: (sessionId: string, options: ConfigOption[], readOnly: boolean) => void
   /** F03: 记录 agent 是否支持图片 prompt（后端 capabilities 帧）。 */
   setImageSupported: (sessionId: string, supported: boolean) => void
   /** 记录 agent 是否支持 embeddedContext（文件附件门控，后端 capabilities 帧）。 */
@@ -689,7 +694,8 @@ const applyTopLevelActions = (
     } else if (action.kind === 'setCommands') {
       next = patch(next, sessionId, { commands: action.commands })
     } else if (action.kind === 'setConfigOptions') {
-      next = patch(next, sessionId, { configOptions: action.options })
+      // live/replay 配置帧是权威来源：覆盖值的同时解除快照只读态。
+      next = patch(next, sessionId, { configOptions: action.options, configReadOnly: false })
     } else if (action.kind === 'setTodos') {
       next = patch(next, sessionId, { todos: action.entries, todosTitle: action.title })
     }
@@ -848,15 +854,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       })
     }),
 
-  markEdited: (sessionId, messageId) =>
-    set((state) => {
-      const current = get(state, sessionId)
-      const messages = current.messages.map((m) =>
-        m.id === messageId && m.role === 'user' && !m.edited ? { ...m, edited: true } : m,
-      )
-      return patch(state, sessionId, { messages })
-    }),
-
   enqueueMessage: (sessionId, text) =>
     set((state) => {
       const trimmed = text.trim()
@@ -912,6 +909,11 @@ export const useChatStore = create<ChatStore>((set) => ({
         embeddedContextSupported: prev?.embeddedContextSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
+        // usage 与上面几项同类：agent 按 turn 推送、不随 session/load 重放。
+        // 不保留的话每次重放（恢复进程 / 重连 / 刷新后拉历史）都把用量圆环抹掉，
+        // 直到下一个 turn 才重新出现（用户观感「时有时无」）。重放帧真带了
+        // usage 更新时，下面的 applyTopLevelActions 会用新值覆盖这里的旧值。
+        usage: prev?.usage,
         // 重放是 agent 侧的完整历史，重建后已无「更早一页」可取；显式置 null
         // 而非靠 delete 后的 undefined，以免误读为遗漏。
         historyCursor: null,
@@ -1115,9 +1117,6 @@ export const useChatStore = create<ChatStore>((set) => ({
   setCommands: (sessionId, commands) =>
     set((state) => patch(state, sessionId, { commands })),
 
-  setConfigOptions: (sessionId, options) =>
-    set((state) => patch(state, sessionId, { configOptions: options })),
-
   setImageSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { imageSupported: supported })),
 
@@ -1135,6 +1134,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       )
       return patch(state, sessionId, { configOptions })
     }),
+
+  setConfigSnapshot: (sessionId, options, readOnly) =>
+    set((state) => patch(state, sessionId, { configOptions: options, configReadOnly: readOnly })),
 
   upsertTerminalActivity: (sessionId, event) =>
     set((state) => {

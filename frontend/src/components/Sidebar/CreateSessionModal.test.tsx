@@ -29,12 +29,13 @@ let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 
 function setup() {
+  localStorage.removeItem('omniterm_default_terminal_engine')
   localStorage.removeItem('omniterm_last_terminal_engine')
   localStorage.removeItem('omniterm_last_acp_agent')
   useAppStore.setState({
     activeProjectId: 'proj-1',
     worktrees: { 'proj-1': [{ id: 'wt-1', project_id: 'proj-1', path: '/tmp/proj', label: 'main', is_main: true, is_git_repo: true, is_git_worktree: false }] },
-    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux', lastTerminalEngine: null, lastAcpAgentId: null,
+    sessions: {}, activateSession: vi.fn(), multiplexerAvailable: true, multiplexer: 'tmux', defaultTerminalEngine: 'tmux', lastAcpAgentId: null,
   })
   useAgentStore.setState({ agents: [{ id: 'agent-1', display_name: 'Claude', command: 'claude', args: [], env: [], created_at: '', updated_at: '' }] })
   useToastStore.setState({ addToast: vi.fn() })
@@ -42,7 +43,7 @@ function setup() {
 
 function renderModal(
   workspaceId = 'wt-1',
-  seed?: { lastTerminalEngine?: 'pty' | 'tmux' | null; multiplexerAvailable?: boolean; lastAcpAgentId?: string | null },
+  seed?: { defaultTerminalEngine?: 'pty' | 'tmux'; multiplexerAvailable?: boolean; lastAcpAgentId?: string | null },
 ) {
   const reloadSessions = vi.fn().mockResolvedValue(undefined)
   const onClose = vi.fn()
@@ -107,36 +108,26 @@ describe('CreateSessionModal', () => {
     expect(document.body.textContent).toContain('BETA')
   })
 
-  // ─── 引擎记忆 + 上次选择角标 ───
+  // ─── 默认引擎（设置 → 终端）决定初始高亮 ───
 
   const engineCard = (engine: 'pty' | 'tmux') =>
     Array.from(document.body.querySelectorAll('button')).find((b) =>
       b.textContent?.startsWith(engine),
     )
 
-  it('remembers the engine of the session just created', async () => {
+  /** 卡片是否点亮看选中态边框——jsdom 不保留 `var()` 属性，改读内联 style 文本。 */
+  const engineCardSelected = (engine: 'pty' | 'tmux') =>
+    (engineCard(engine)!.getAttribute('style') ?? '').includes('2px solid var(--accent)')
+
+  it('preselects the configured default engine', () => {
+    renderModal('wt-1', { defaultTerminalEngine: 'pty' })
+    expect(engineCardSelected('pty')).toBe(true)
+    expect(engineCardSelected('tmux')).toBe(false)
+  })
+
+  it('writing back the engine only happens on an explicit pick', async () => {
     renderModal()
-    act(() => engineCard('tmux')!.click())
-    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
-    await act(async () => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-    })
-    await vi.waitFor(() => {
-      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'tmux', undefined)
-    })
-    expect(useAppStore.getState().lastTerminalEngine).toBe('tmux')
-    expect(localStorage.getItem('omniterm_last_terminal_engine')).toBe('tmux')
-  })
-
-  it('marks the remembered engine card with a last-used badge on reopen', () => {
-    renderModal('wt-1', { lastTerminalEngine: 'tmux' })
-    const label = i18n.t('sidebar.lastUsed')
-    expect(engineCard('tmux')!.textContent).toContain(label)
-    expect(engineCard('pty')!.textContent).not.toContain(label)
-  })
-
-  it('falls back to pty when the remembered tmux host has no multiplexer', async () => {
-    renderModal('wt-1', { lastTerminalEngine: 'tmux', multiplexerAvailable: false })
+    act(() => engineCard('pty')!.click())
     const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
@@ -144,6 +135,24 @@ describe('CreateSessionModal', () => {
     await vi.waitFor(() => {
       expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'pty', undefined)
     })
+    expect(useAppStore.getState().defaultTerminalEngine).toBe('pty')
+    expect(localStorage.getItem('omniterm_default_terminal_engine')).toBe('pty')
+  })
+
+  it('keeps a tmux preference when the host has no multiplexer', async () => {
+    // 回落 pty 是宿主限制而非用户意图，创建后不该把设置里的 tmux 静默改掉
+    renderModal('wt-1', { defaultTerminalEngine: 'tmux', multiplexerAvailable: false })
+    expect(engineCard('tmux')!.disabled).toBe(true)
+    expect(engineCardSelected('pty')).toBe(true)
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'pty', undefined)
+    })
+    expect(useAppStore.getState().defaultTerminalEngine).toBe('tmux')
+    expect(localStorage.getItem('omniterm_default_terminal_engine')).toBeNull()
   })
 
   // ─── ACP 选择 ───
@@ -207,8 +216,8 @@ describe('CreateSessionModal', () => {
     })
     expect(useAppStore.getState().lastAcpAgentId).toBe('agent-1')
     expect(localStorage.getItem('omniterm_last_acp_agent')).toBe('agent-1')
-    // ACP 创建不刷新引擎记忆
-    expect(useAppStore.getState().lastTerminalEngine).toBeNull()
+    // ACP 创建不刷新默认引擎
+    expect(useAppStore.getState().defaultTerminalEngine).toBe('tmux')
   })
 
   it('prefers the remembered agent over the first one on reopen', () => {
@@ -241,7 +250,7 @@ describe('CreateSessionModal', () => {
     expect(api.createSession).not.toHaveBeenCalled()
   })
 
-  it('calls api.createSession with correct args for default pty terminal session', async () => {
+  it('calls api.createSession with correct args for a default terminal session', async () => {
     renderModal()
     // Simulate Enter key which triggers handleCreateSession
     const input = document.body.querySelector('input[type="text"]') as HTMLInputElement | null
@@ -250,7 +259,7 @@ describe('CreateSessionModal', () => {
       input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     await vi.waitFor(() => {
-      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'pty', undefined)
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'tmux', undefined)
     })
   })
 })

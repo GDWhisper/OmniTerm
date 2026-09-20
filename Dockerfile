@@ -1,10 +1,15 @@
 # -- Build frontend --
 FROM node:22-alpine AS frontend
 WORKDIR /app
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+# 与仓库一致的 workspace 结构（根 manifest + frontend/ 子包）：根 pnpm-lock.yaml 的
+# importer 路径才能对上，即使 --no-frozen-lockfile 也按锁版本解析、不漂移。
+# Cargo.toml 是前端版本号唯一真相源（vite.config.ts 读上一级，无回退），必须随拷。
+# 宿主 node_modules/frontend/dist 由 .dockerignore 排除，容器内安装是 alpine 原生的。
+COPY Cargo.toml pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY frontend/package.json ./frontend/
 RUN corepack enable && pnpm install --no-frozen-lockfile
-COPY frontend/ ./
-RUN pnpm build
+COPY frontend/ ./frontend/
+RUN cd frontend && pnpm build
 
 # -- Build backend --
 FROM rust:1.87-bookworm AS backend
@@ -12,7 +17,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY migrations/ migrations/
-COPY --from=frontend /app/dist ./frontend/dist
+COPY --from=frontend /app/frontend/dist ./frontend/dist
 RUN cargo build --release
 
 # -- Runtime --
@@ -28,7 +33,7 @@ ARG DOCKER_PORT=9077
 
 WORKDIR /app
 COPY --from=backend /app/target/release/omniterm ./
-COPY --from=frontend /app/dist ./frontend/dist
+COPY --from=frontend /app/frontend/dist ./frontend/dist
 
 ENV OMNITERM_HOST=0.0.0.0
 ENV OMNITERM_PORT=${DOCKER_PORT}

@@ -6,10 +6,12 @@ import { api, type Session } from '../../api/client'
 import { useToastStore } from '../../stores/toastStore'
 import { useAppStore } from '../../stores/appStore'
 import { useFileWatcher } from '../../hooks/useFileWatcher'
+import { useTerminalEngine } from '../../hooks/useTerminalEngine'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
 import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
+import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './OpenTerminalConfirmDialog'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -101,6 +103,8 @@ export function FileManager() {
   const setActiveProject = useAppStore((s) => s.setActiveProject)
   const setFmDrawerPath = useAppStore((s) => s.setFmDrawerPath)
   const closeFmDrawer = useAppStore((s) => s.closeFmDrawer)
+  // 「在此打开终端」用的引擎：设置 → 终端的默认引擎按宿主复用器可用性收敛
+  const terminalEngine = useTerminalEngine()
 
   // Workspace drawer state (local since fmSessionStates is session-keyed)
   const [workspaceDrawerPath, setWorkspaceDrawerPath] = useState<string | null>(null)
@@ -256,11 +260,14 @@ export function FileManager() {
 
   // ── 在此打开终端 ──
   // 会话必须归属项目（sessions.project_id NOT NULL），按目录归属分三档：
-  // 1. 浏览目录仍在当前工作区内 → 直接挂当前激活项目；
-  // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 挂过去；
+  // 1. 浏览目录仍在当前工作区内 → 确认后挂当前激活项目；
+  // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 确认后挂过去；
   // 3. 无任何项目覆盖 → 弹窗引导为目录新建项目（次选项：挂到当前项目）。
+  // 前两档曾有静默直开，现经 OpenTerminalConfirmDialog 二次确认（告知归属项目、
+  // 生效引擎及更改入口）；第三档 OpenTerminalDialog 自身即承担告知与确认。
   // 启动目录恒为浏览目录 cwd（「在此」语义；不再回退 workspaceRoot）。
   const [terminalDialogTarget, setTerminalDialogTarget] = useState<OpenTerminalTarget | null>(null)
+  const [terminalConfirmTarget, setTerminalConfirmTarget] = useState<OpenTerminalConfirmTarget | null>(null)
 
   const finishOpenTerminal = (session: Session, projectId: string) => {
     if (projectId !== activeProjectId) setActiveProject(projectId)
@@ -270,11 +277,16 @@ export function FileManager() {
 
   const openTerminalInProject = async (projectId: string) => {
     try {
-      const session = await api.createSession(projectId, cwd, undefined, undefined, 'pty')
+      const session = await api.createSession(projectId, cwd, undefined, undefined, terminalEngine)
       finishOpenTerminal(session, projectId)
     } catch {
       // api client already shows error toast
     }
+  }
+
+  const handleTerminalConfirm = (projectId: string) => {
+    setTerminalConfirmTarget(null)
+    void openTerminalInProject(projectId)
   }
 
   const handleOpenTerminalHere = () => {
@@ -284,11 +296,16 @@ export function FileManager() {
     // resolve_effective_workspace_root），界内快路径在前会挂错项目。
     const covering = findCoveringProject(cwd, useAppStore.getState().projects)
     if (covering) {
-      void openTerminalInProject(covering.id)
+      setTerminalConfirmTarget({ projectId: covering.id, projectName: covering.name, cwd })
       return
     }
     if (!isOutsideWorkspace && activeProjectId) {
-      void openTerminalInProject(activeProjectId)
+      const active = useAppStore.getState().projects.find((p) => p.id === activeProjectId)
+      setTerminalConfirmTarget({
+        projectId: activeProjectId,
+        projectName: active?.name ?? t('fm.openTerminalConfirm.currentProject'),
+        cwd,
+      })
       return
     }
     const { projects, activeProjectId: apid } = useAppStore.getState()
@@ -597,34 +614,41 @@ export function FileManager() {
   const handleDragOver = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(true) }
   const handleDragLeave = (e: DragEvent) => { if (isFileDragActive) return; e.preventDefault(); e.stopPropagation(); setDragOver(false) }
 
+  // 拖放与上传按钮共用的批量上传：逐文件报错；全部成功才算「上传完成」。
+  const runFileUpload = async (files: File[]) => {
+    if (!fmSource) return
+    let failed = 0
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      try {
+        await api.uploadFile2({
+          session: fmSource.type === 'session' ? fmSource.id : undefined,
+          workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
+          projectId: activeProjectId ?? undefined,
+          path: cwd,
+          file,
+          allowEscape: isOutsideWorkspace ? true : undefined,
+        })
+      } catch (err: unknown) {
+        failed++
+        addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
+      }
+    }
+    if (failed === 0) {
+      addToast('success', t('fm.uploadComplete'))
+      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
+    }
+    fetchFiles()
+  }
+
   const handleDrop = (e: DragEvent) => {
     if (isFileDragActive) return
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = e.dataTransfer?.files
-    if (!droppedFiles?.length || !fmSource) return
-    const runUpload = async () => {
-      for (let i = 0; i < droppedFiles.length; i++) {
-        const file = droppedFiles[i]
-        try {
-          await api.uploadFile2({
-            session: fmSource.type === 'session' ? fmSource.id : undefined,
-            workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-            projectId: activeProjectId ?? undefined,
-            path: cwd,
-            file,
-            allowEscape: isOutsideWorkspace ? true : undefined,
-          })
-        } catch (err: unknown) {
-          addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
-        }
-      }
-      addToast('success', t('fm.uploadComplete'))
-      import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-      fetchFiles()
-    }
-    gateWrite(runUpload)
+    if (!droppedFiles?.length) return
+    gateWrite(() => runFileUpload(Array.from(droppedFiles)))
   }
 
   const startRename = () => {
@@ -713,29 +737,9 @@ export function FileManager() {
     input.multiple = true
     input.onchange = () => {
       if (!input.files?.length) return
-      // 快照 File 列表：runUpload 可能被挂起到确认弹窗之后才执行
+      // 快照 File 列表：上传可能被挂起到确认弹窗之后才执行
       const files = Array.from(input.files)
-      const runUpload = async () => {
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i]
-          try {
-            await api.uploadFile2({
-              session: fmSource.type === 'session' ? fmSource.id : undefined,
-              workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
-              projectId: activeProjectId ?? undefined,
-              path: cwd,
-              file,
-              allowEscape: isOutsideWorkspace ? true : undefined,
-            })
-          } catch (err: unknown) {
-            addToast('error', t('fm.uploadFileFailed', { name: file.name, msg: err instanceof Error ? err.message : String(err) }))
-          }
-        }
-        addToast('success', t('fm.uploadComplete'))
-        import('../../utils/audioFeedback').then(m => m.play8BitSound('coin'))
-        fetchFiles()
-      }
-      gateWrite(runUpload)
+      gateWrite(() => runFileUpload(files))
     }
     input.click()
   }
@@ -915,7 +919,7 @@ export function FileManager() {
               <IconHome width={15} height={15} />
             </button>
           )}
-          {/* "在此打开终端" — 在 FM 当前目录下新建 pty 会话（越界归属处理见 handleOpenTerminalHere） */}
+          {/* "在此打开终端" — 在 FM 当前目录下按默认引擎新建会话（越界归属处理见 handleOpenTerminalHere） */}
           {fmSource && (
             <button
               className="fm-bc-root"
@@ -1238,6 +1242,12 @@ export function FileManager() {
         message={deleteDialog ? t('fm.confirmDelete', { count: deleteDialog.count }) : ''}
         confirmText={t('fm.delete')}
         destructive
+      />
+      {/* 在此打开终端：目录有归属项目（覆盖探测/当前激活）时的二次确认 */}
+      <OpenTerminalConfirmDialog
+        target={terminalConfirmTarget}
+        onClose={() => setTerminalConfirmTarget(null)}
+        onConfirm={handleTerminalConfirm}
       />
       {/* 在此打开终端：目录不被任何已打开项目覆盖时的归属引导 */}
       <OpenTerminalDialog

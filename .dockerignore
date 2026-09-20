@@ -1,0 +1,9 @@
+# 构建上下文瘦身 + 防宿主产物污染镜像内的依赖安装/前端构建：
+# 宿主 node_modules 是 glibc 原生结构，拷进 alpine（musl）容器只会坏；
+# frontend/dist 必须由容器内构建新鲜产出，不吃宿主残留。
+node_modules/
+frontend/node_modules/
+frontend/dist/
+target/
+.dev/
+.git/

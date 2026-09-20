@@ -21,6 +21,7 @@ BLACKLIST=(
   ".superpowers"
   ".pi"
   ".qoder"
+  ".zcode"
   "AGENTS.md"
   "CLAUDE.md"
   "PROGRESS.md"

@@ -25,19 +25,17 @@
  * 故不做按单调性丢弃，改为「响应 y 权威同步 + 有序 WS 保证收敛」——
  * WS 有序 + rAF 合并（单请求在飞）+ 本地 RTT <1ms，乱序窗口实际不存在。
  *
- * 绝对锚定（`docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md`）：
- * `y` 是「距底偏移」，新输出会把内容整体上推，同一个 y 指向的行随之后移。
- * 若只在滚轮时请求一次，屏幕会永久停在上翻时刻的快照、新输出完全不可见
- * （实测：上翻后继续压测 12s 屏幕纹丝不动，只有切换会话才恢复）。
+ * 锚定（`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md` D1，取代
+ * 09-03 的内容指纹锚定）：后端 `VtState` 持有视口锚（窗口顶行的**绝对行索引**）
+ * 作为位置记忆——滚动请求写入锚，输出触发的重拉直接按锚出窗，饱和淘汰期由
+ * 后端滚移检测同步锚。位置换算全部在持有 grid 真相源的一侧完成，前端不做
+ * 任何推算。此前的两版方案均已实证废弃：前端用 `history_size` 反推锚点受
+ * 帧率/RTT 滞后影响每轮漂移（实测达输出速率 28%）；内容指纹重定位在周期性
+ * 内容（空行/框线/分隔线）上必然棘轮/滑移。
  *
- * 锚定靠**窗口首行的内容指纹**而非位置推算（`anchorFp`）：重拉时把上次响应
- * 的指纹原样回传，后端在持有 grid 真相源的一侧按指纹把窗口重定位到该行当前
- * 的位置，回传实际 y。位置换算因此不受帧率/RTT 滞后影响——早期版本由前端用
- * `history_size` 反推锚点，而该值取自主线程收到的上一帧（最坏落后 33ms）再
- * 叠加 rAF 延迟，每次重拉都漂 ~0.5 行（实测漂移达输出速率的 28%）。
- *
- * 两种请求意图必须区分（D5）：用户滚动 → 不带指纹，按偏移定位；新输出重拉
- * → 带指纹，保持锚点。混用会让后端把用户刚滚到的位置又拉回旧锚点。
+ * 两种请求意图必须显式区分（D2）：用户滚动 → `refresh = false`（按 y 定位
+ * 并存锚）；新输出重拉 → `refresh = true`（后端按存储锚出窗，请求 y 仅作
+ * 无锚降级回退）。混用会让后端把用户刚滚到的位置又拉回旧锚点。
  */
 
 /** 本地窗口偏移上界（行）。与后端 grid scrollback 容量对齐
@@ -72,17 +70,15 @@ export interface ViewportFrameLike {
   viewport?: number
   /** alt-screen 激活标记：仅 overlay 帧携带。 */
   alt_screen?: boolean
-  /** 本帧窗口**首行**的内容指纹（十六进制 u64）。仅窗口帧携带；下次「保持
-   * 锚点」的重拉原样回传，后端据此把窗口重定位到该行当前的位置。 */
-  viewport_fp?: string
 }
 
 export interface ViewportControllerCallbacks {
   /**
-   * 发送 `viewport_request { y, fp }`（调用方保证 WS 打开时才真正发送）。
-   * `fp` 为 null 表示用户主动滚动（按偏移定位），否则是「保持锚点」的重拉。
+   * 发送 `viewport_request { y, refresh }`（调用方保证 WS 打开时才真正发送）。
+   * `refresh = false` 用户主动滚动（后端按 y 定位并存锚）；`true` = 新输出
+   * 触发的保锚重拉（后端按存储锚出窗，y 仅作无锚降级回退）。
    */
-  sendRequest: (y: number, fp: string | null) => void
+  sendRequest: (y: number, refresh: boolean) => void
   /** viewport 模式启停（驱动 MobileKeyBar 高亮 + 软键盘抑制）。 */
   onModeChange: (active: boolean) => void
   /** 恢复 live 时触发一次（调用方发 resync，后端下一帧发全帧）。 */
@@ -96,9 +92,6 @@ export class ViewportController {
   private mode: 'live' | 'viewport' = 'live'
   /** 当前窗口偏移（行，0 = live 屏，向上递增）。 */
   private currentY = 0
-  /** 当前锚点：上次服务窗口首行的内容指纹。`null` = 未锚定（用户刚滚动、
-   * 尚未收到窗口帧）。位置换算由后端按该指纹完成，前端不做推算。 */
-  private anchorFp: string | null = null
   /** 窗口重拉节流定时器（新输出路径的延迟补发）。 */
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   /** 上次窗口重拉发出时刻（节流基准）。 */
@@ -107,10 +100,9 @@ export class ViewportController {
   private newOutputPending = false
   /** rAF 合并窗口内待发送的最新 y（D2：仅发最新，旧请求被覆盖）。 */
   private pendingY: number | null = null
-  /** 待发请求携带的锚点指纹（`pendingY` 的配对值：用户滚动恒为 null）。 */
-  private pendingFp: string | null = null
   /** 本次待发是「新输出重拉」而非滚动：y 可能与上次相同，须绕过去重
-   *  （后端该窗口的内容已被推新，同 y 也要重取）。 */
+   *  （后端该窗口的内容已被推新，同 y 也要重取）；后端按存储锚出窗，
+   *  请求 y 仅在锚缺失（后端重启/清锚）时作降级回退。 */
   private pendingRefresh = false
   /** 最近一次实际发出的 y（去重：抖动在边界时跳过相同请求）。 */
   private lastSentY: number | null = null
@@ -180,12 +172,10 @@ export class ViewportController {
       // （y > 0），丢弃以免覆盖刚恢复的实时屏；y = 0 窗口帧即 live 屏，
       // 渲染无害（像素与实时全帧一致）。
       if (frame.viewport > 0 && this.mode === 'live') return false
-      // 响应 y 权威同步：后端按实际 history_size 钳制、并按锚点指纹重定位，
-      // 以响应为准修正本地 y 与锚点（仅在无更新请求排队时——pendingY 是更
-      // 新的用户意图）
+      // 响应 y 权威同步：后端按实际 history_size 钳制并按有状态锚出窗，以
+      // 响应为准修正本地 y（仅在无更新请求排队时——pendingY 是更新的用户意图）
       if (this.pendingY == null) {
         this.currentY = frame.viewport
-        this.anchorFp = frame.viewport_fp ?? null
       }
       return true
     }
@@ -196,12 +186,10 @@ export class ViewportController {
    * 实时帧到达（本帧已被 `acceptFrame` 丢弃）且帧内确有行变化——后端有
    * 新输出。
    *
-   * 重拉窗口时**原样带上当前锚点指纹**，由后端把窗口重定位到该行当前的
-   * 位置：历史增长时实际 y 随之前移、历史饱和后 y 被钳住，两种情形用户
-   * 看到的行都不变（真实终端 scrollback 语义）。前端不参与位置换算。
-   *
-   * 锚定行被淘汰（超出后端搜索半径）或内容被程序重写时指纹失配，后端退回
-   * 按请求的 y 定位——降级为「随输出滑动」，不冻结也不报错。
+   * 重拉以 `refresh = true` 表明「保持锚点」意图：后端按其存储的视口锚
+   * （窗口顶行绝对索引）出窗——历史增长时实际 y 随之前移、历史饱和后由
+   * 后端滚移检测同步锚，两种情形用户看到的行都不变（真实终端 scrollback
+   * 语义）。前端不参与位置换算。
    *
    * `hasRowChange` 为假（空 diff 帧，仅光标移动）时直接返回：30fps 的
    * tick 帧多数是空帧，据此避免无谓的窗口重拉。
@@ -214,7 +202,7 @@ export class ViewportController {
       this.newOutputPending = true
       this.cb.onNewOutput(true)
     }
-    // 已有待发重拉：到点时取的是最新锚点，无需再排一个定时器
+    // 已有待发重拉：到点时取的是最新 y，无需再排一个定时器
     if (this.refreshTimer != null) return
     const wait = Math.max(0, REFRESH_THROTTLE_MS - (Date.now() - this.lastRefreshAt))
     this.refreshTimer = setTimeout(() => {
@@ -222,7 +210,6 @@ export class ViewportController {
       if (this.disposed || this.mode !== 'viewport') return
       this.lastRefreshAt = Date.now()
       this.pendingY = this.currentY
-      this.pendingFp = this.anchorFp
       this.pendingRefresh = true
       this.scheduleRequest()
     }, wait)
@@ -237,12 +224,10 @@ export class ViewportController {
     this.mode = 'live'
     this.currentY = 0
     this.pendingY = null
-    this.pendingFp = null
     this.pendingRefresh = false
     this.lastSentY = null
     this.wheelAccumLines = 0
     this.altScreen = false
-    this.anchorFp = null
     this.clearNewOutput()
     if (wasActive) this.cb.onModeChange(false)
   }
@@ -291,10 +276,9 @@ export class ViewportController {
         this.mode = 'viewport'
         this.cb.onModeChange(true)
       }
-      // 用户主动改变视口位置：清除锚点，本次请求按偏移定位（D5）
-      this.anchorFp = null
+      // 用户主动改变视口位置：refresh=false = 滚动意图，后端按 y 定位并存锚
       this.pendingY = next
-      this.pendingFp = null
+      this.pendingRefresh = false
       this.scheduleRequest()
       return
     }
@@ -302,7 +286,7 @@ export class ViewportController {
     // 的 resync 全帧随后到达（两者像素一致，先到先绘）。
     if (this.mode === 'viewport') {
       this.pendingY = 0
-      this.pendingFp = null
+      this.pendingRefresh = false
       this.scheduleRequest()
     }
     if (immediateRestore) this.restoreLive()
@@ -315,15 +299,13 @@ export class ViewportController {
       this.rafId = null
       if (this.disposed) return
       const y = this.pendingY
-      const fp = this.pendingFp
       const refresh = this.pendingRefresh
       this.pendingY = null
-      this.pendingFp = null
       this.pendingRefresh = false
       // 去重只针对滚动路径：重拉是冲着「后端内容已变」去的，同 y 也要发
       if (y == null || (!refresh && y === this.lastSentY)) return
       this.lastSentY = y
-      this.cb.sendRequest(y, fp)
+      this.cb.sendRequest(y, refresh)
     })
   }
 
@@ -341,13 +323,11 @@ export class ViewportController {
     this.cancelRaf()
     this.cancelRefresh()
     this.pendingY = null
-    this.pendingFp = null
     this.pendingRefresh = false
     this.lastSentY = null
     this.wheelAccumLines = 0
     this.mode = 'live'
     this.currentY = 0
-    this.anchorFp = null
     this.clearNewOutput()
     if (wasActive) this.cb.onModeChange(false)
     if (wasActive) this.cb.onLiveRestore()

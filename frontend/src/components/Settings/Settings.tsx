@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN } from '../../stores/appStore'
+import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
+import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
@@ -382,6 +384,60 @@ function LanguageSection() {
   )
 }
 
+/**
+ * 默认终端引擎。与创建会话弹窗的初始高亮、「在此打开终端」共用同一个值
+ * （`appStore.defaultTerminalEngine`，单一真源见 `utils/terminalEngine.ts`）；
+ * 弹窗内显式点选也会写回这里，因此不再叠第二层「上次使用」优先级。
+ * pty 仍在 beta 期，选项带角标；宿主探测无复用器时 tmux 选项不可选并说明原因。
+ */
+function DefaultEngineSection() {
+  const { t } = useTranslation()
+  const defaultTerminalEngine = useAppStore((s) => s.defaultTerminalEngine)
+  const setDefaultTerminalEngine = useAppStore((s) => s.setDefaultTerminalEngine)
+  const multiplexerAvailable = useAppStore((s) => s.multiplexerAvailable)
+  const multiplexer = useAppStore((s) => s.multiplexer)
+
+  return (
+    <section className="space-y-2">
+      <SectionTitle>{t('settings.defaultEngine')}</SectionTitle>
+      <div className="flex gap-1.5">
+        {TERMINAL_ENGINES.map((engine) => {
+          const isActive = defaultTerminalEngine === engine
+          const disabled = engine === 'tmux' && !multiplexerAvailable
+          return (
+            <button
+              key={engine}
+              type="button"
+              disabled={disabled}
+              onClick={() => setDefaultTerminalEngine(engine)}
+              className="flex-1 flex items-center justify-center"
+              style={{
+                ...(isActive ? btnActive : btnBase),
+                fontSize: 12,
+                padding: '5px 8px',
+                ...(disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}),
+              }}
+              onMouseEnter={disabled ? undefined : btnHover}
+              onMouseLeave={disabled ? undefined : (e) => btnLeave(e, isActive)}
+            >
+              {terminalEngineLabel(engine, t)}
+              {engine === 'pty' && <>&nbsp;<BetaBadge /></>}
+            </button>
+          )
+        })}
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+        {t('settings.defaultEngineHint')}
+      </p>
+      {!multiplexerAvailable && (
+        <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+          {t('sidebar.muxUnavailable', { mux: multiplexer })}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function AutoCopySection() {
   const autoCopySelect = useAppStore((s) => s.autoCopySelect)
   const setAutoCopySelect = useAppStore((s) => s.setAutoCopySelect)
@@ -703,7 +759,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'terminal',
     labelKey: 'settings.category.terminal',
-    sections: [AutoCopySection, TmuxMouseSection],
+    sections: [DefaultEngineSection, AutoCopySection, TmuxMouseSection],
   },
   {
     id: 'sessions',

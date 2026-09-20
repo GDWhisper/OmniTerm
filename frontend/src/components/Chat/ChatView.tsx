@@ -11,16 +11,28 @@ import type { ImageAttachment } from '../../utils/imageAttachment'
 import type { FileAttachment } from '../../utils/fileAttachment'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
+import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
+import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
-import { decodeStoredBlocks, isRawFrameWrapper } from '../../hooks/useAcpChat'
-import { chatTailSignature, shouldShowJumpToBottom } from '../../utils/chatScroll'
+import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
+
+/** 「上次输入」条跳转聚焦：目标气泡 ring 闪烁时长（与 index.css 的
+ *   .chat-msg-flash 动画时长一致，到期摘 class）。 */
+const CHAT_MSG_FLASH_MS = 1500
+/** 「上次输入」悬浮卡片距消息区顶缘的偏移（卡片定位与跳转让位共用）。 */
+const CHAT_PROMPT_CARD_TOP_PX = 12
+/** 跳转让位：气泡顶缘与卡片底缘之间再留的呼吸距离。 */
+const CHAT_JUMP_TOP_GAP_PX = 8
+/** 气泡底缘升到距消息区顶缘该值以内即视为「已滚出顶缘」（那一段残条本来就被
+ *   悬浮卡片盖住），视同「用户正在阅读这条消息之后的内容」，显示卡片。 */
+const CHAT_PROMPT_ABOVE_SLACK_PX = 24
 
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
@@ -126,18 +138,33 @@ export function ChatView() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [autoStick, setAutoStick] = useState(true)
+  // 「上次输入」跳转聚焦：高亮中的消息 id（目标气泡 accent 描边 + ring 闪烁，
+  // 经 highlighted prop 传给 ChatMessageView）。
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const flashRafRef = useRef<number | null>(null)
+  // 目标气泡（最近一次用户输入）是否已升出消息区视口顶缘：升出（用户正在阅读
+  // 这条消息之后的回复）才显示悬浮卡片；在视口内、或用户上翻越过它进入更早
+  // 历史（气泡沉到视口下方），都收起——常驻悬浮只会挡内容。
+  const [lastPromptAbove, setLastPromptAbove] = useState(false)
+  // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
+  const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
-  // 「回到底部」提示条：离开底部时的末条内容指纹基线 + 是否有新内容到达。
-  const seenTailSignatureRef = useRef<string | null>(null)
-  const [hasNewContent, setHasNewContent] = useState(false)
-  const tailSignature = useMemo(() => chatTailSignature(chatState.messages), [chatState.messages])
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
     // 没有 capabilities 帧（未连接），agentName 缺失时用它回退，避免显示 "agent"。
     if (!loaded) loadAgents()
   }, [loaded, loadAgents])
+
+  useEffect(() => {
+    // 卸载（切会话重挂载）时清掉闪烁计时与待挂的 rAF，避免向已卸载组件 setState。
+    return () => {
+      if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+      if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!activeSessionId) return
@@ -155,7 +182,16 @@ export function ChatView() {
     fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (cancelled || !data?.messages?.length) return
+        if (cancelled) return
+        // 配置快照注入（需在放行 preHydrateBuffer 之前）：已结束会话由 /messages
+        // 下发最后已知 configOptions，配置栏置灰只读展示；活会话（agentLive）刷新
+        // 时同样注入以消除空窗，但不置灰——随后的 live/replay 配置帧会覆盖并接管。
+        if (Array.isArray(data?.configOptions)) {
+          useChatStore
+            .getState()
+            .setConfigSnapshot(sid, parseConfigOptions(data.configOptions), data.agentLive !== true)
+        }
+        if (!data?.messages?.length) return
         useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
       })
       .catch(() => {})
@@ -215,36 +251,113 @@ export function ChatView() {
     el.scrollTop = el.scrollHeight
   }, [chatState.messages, autoStick])
 
-  // 「回到底部」提示条的显隐。贴底时把末条内容指纹记为已读基线；用户上翻后指纹
-  // 变化（新消息 / 流式增长 / 工具块状态推进）即置位，滚回底部自动清位。判定逻辑
-  // 抽在 utils/chatScroll.ts（纯函数，可单测）；头部前插更早历史不改末条，不误报。
-  useEffect(() => {
-    if (autoStick) seenTailSignatureRef.current = tailSignature
-    setHasNewContent(
-      shouldShowJumpToBottom(autoStick, tailSignature, seenTailSignatureRef.current),
+  // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
+  // 是断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
+  const lastUserMessage = [...chatState.messages].reverse().find(
+    (m) => m.role === 'user' && !m.undelivered,
+  )
+  // 卡片预览：压平空白成单行（超宽由 ellipsis 截断，完整内容经 title hover 查看）；
+  // 纯附件消息（无正文）给占位文案。
+  const lastPromptPreview = lastUserMessage
+    ? lastUserMessage.text.replace(/\s+/g, ' ').trim() || t('chat.lastPromptAttachment')
+    : ''
+
+  // 气泡相对消息区视口的位置三分，卡片只在第三种形态显示：
+  // · 视口内（与视口有重叠）→ 收起——用户正看着这条消息；
+  // · 沉到视口下方 → 收起——用户已上翻越过它、正在浏览更早的历史（多轮会话
+  //   才有此形态），指向最新输入的卡片在这里只是挡内容的常驻物；
+  // · 升到视口上方（底缘越过顶缘，含 ≤ CHAT_PROMPT_ABOVE_SLACK_PX 的顶缘残条
+  //   ——那一段本来就被卡片盖住）→ 显示——用户正在阅读这条消息之后的回复，
+  //   卡片作为「你最后问了什么」的参照，点击跳回该气泡。
+  // useCallback 仅为给下方 effect 当稳定依赖（hooks 规则 3-b），测量本身很轻。
+  const isLastPromptAboveViewport = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !lastUserMessage) return false
+    const bubble = el.querySelector<HTMLElement>(
+      `[data-chat-msg-id="${lastUserMessage.id}"]`,
     )
-  }, [autoStick, tailSignature])
+    if (!bubble) return false
+    return (
+      bubble.getBoundingClientRect().bottom <= el.getBoundingClientRect().top + CHAT_PROMPT_ABOVE_SLACK_PX
+    )
+  }, [lastUserMessage])
 
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
     setAutoStick(atBottom)
+    setLastPromptAbove(isLastPromptAboveViewport())
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
     const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
     if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
   }
 
-  // 点提示条：立即滚到底并恢复自动跟随；基线由 autoStick effect 复位，提示条随隐。
+  // 点提示条：立即滚到底并恢复自动跟随，提示条随隐。
   const handleJumpToBottom = () => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
     setAutoStick(true)
-    setHasNewContent(false)
   }
 
-  const showJumpToBottom = !autoStick && hasNewContent
+  // 离开底部即显示（内容不足一屏不会滚出底部，恒隐）：既是流式期间的「有新输出」
+  // 入口，也是会话结束/空闲时回看历史的回底入口——不依赖尾部是否有新内容到达。
+  const showJumpToBottom = !autoStick
+
+  // 气泡可见性决定卡片显隐。测量依赖滚动位置与 DOM 布局，两者都不进 React state，
+  // 三条重测路径各管一摊：
+  // · 滚动 → handleScroll（上面）；
+  // · 消息/目标变化 → 本 effect deps；
+  // · 容器尺寸变化（拖面板宽度 / 窗口 resize，既不滚动也不改消息）→ ResizeObserver。
+  // 显隐在绘制前落定（layout effect + RO 渲染步回调），卡片不会闪现一帧再消失；
+  // 同值 setState 被 React 合并，不会成环。
+  useLayoutEffect(() => {
+    setLastPromptAbove(isLastPromptAboveViewport())
+    const el = scrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setLastPromptAbove(isLastPromptAboveViewport()))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [isLastPromptAboveViewport])
+
+  // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
+  // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
+  // 高亮经 highlighted prop 传入 ChatMessageView（memo 浅比较，仅目标气泡重渲染）。
+  // 同一目标已在闪烁中再点一次时，先摘 class、下一帧重挂，CSS 动画得以重放。
+  // id 来源为前端 genId（uuid / msg-<数字>）与后端 uuid 行 id，均不含选择器
+  // 元字符，属性选择器无需转义（CSS.escape 在 jsdom 测试环境不可用）。
+  const handleJumpToLastPrompt = () => {
+    const el = scrollRef.current
+    if (!el || !lastUserMessage) return
+    const bubble = el.querySelector<HTMLElement>(
+      `[data-chat-msg-id="${lastUserMessage.id}"]`,
+    )
+    if (!bubble) return
+    const cardH = lastPromptCardRef.current?.offsetHeight ?? 0
+    el.scrollTop +=
+      bubble.getBoundingClientRect().top -
+      el.getBoundingClientRect().top -
+      (CHAT_PROMPT_CARD_TOP_PX + cardH + CHAT_JUMP_TOP_GAP_PX)
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    const armFlash = () => {
+      setHighlightedMessageId(lastUserMessage.id)
+      flashTimerRef.current = window.setTimeout(() => {
+        setHighlightedMessageId(null)
+        flashTimerRef.current = null
+      }, CHAT_MSG_FLASH_MS)
+    }
+    if (highlightedMessageId === lastUserMessage.id) {
+      setHighlightedMessageId(null)
+      flashRafRef.current = window.requestAnimationFrame(() => {
+        flashRafRef.current = null
+        armFlash()
+      })
+    } else {
+      armFlash()
+    }
+  }
 
   // ACP 会话窗口键盘快捷键集中管理（Shift+Tab 切换 mode 等）。
   // 必须置于所有提前 return 之前，遵守 React Hooks 调用顺序规则。
@@ -256,7 +369,7 @@ export function ChatView() {
   const handleSend = useCallback(
     (text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
       // busy 时不直接发送，而是排队：agent 跑完这一轮 (prompt_done) 后 useAcpChat 自动 drain。
-      // 详见 docs/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
+      // 详见 docs/architecture/adr/0001-acp-queue-drain-location.md。N=1 约束：队列满时 ChatInput
       // 里的 Queue 按钮已 disabled，这里是 belt-and-suspenders 兜底（理论上进入这里的
       // 路径只走 idle 态；busy 走 enqueue 路径不调用 handleSend）。
       // 附件仅支持 idle 直发（队列槽是纯 string），busy 入队时丢弃附件是预期行为
@@ -274,17 +387,6 @@ export function ChatView() {
       setAutoStick(true)
     },
     [activeSessionId, sendPrompt],
-  )
-
-  // F02 编辑重发：原消息标 edited，编辑稿作为全新 prompt 走 handleSend
-  // （sending 时自动进 N=1 队列，无需特判）。ACP 无编辑历史语义，见计划 §3.2。
-  const handleEditResend = useCallback(
-    (messageId: string, newText: string) => {
-      if (!activeSessionId) return
-      useChatStore.getState().markEdited(activeSessionId, messageId)
-      handleSend(newText)
-    },
-    [activeSessionId, handleSend],
   )
 
   // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
@@ -426,6 +528,10 @@ export function ChatView() {
           </span>
         )}
         <span className="title-bar-spacer" />
+        {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
+            配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
+            只有圆环的配置栏。 */}
+        {chatState.usage && <UsageIndicator usage={chatState.usage} compact={isMobile} />}
         {titleChip}
       </div>
 
@@ -505,11 +611,11 @@ export function ChatView() {
                 message={m}
                 sessionId={activeSessionId ?? undefined}
                 agentName={chatState.agentName || fallbackAgentName}
-                onEditResend={inputDisabled ? undefined : handleEditResend}
                 onRegenerate={inputDisabled || chatState.sending ? undefined : handleRegenerate}
                 onCopyMessage={handleCopyMessage}
                 onQuoteMessage={handleQuoteMessage}
                 isLastAssistant={m.id === lastAssistantId}
+                highlighted={m.id === highlightedMessageId}
               />
             ))
           })()}
@@ -561,12 +667,57 @@ export function ChatView() {
           ))}
         </OverlayScroll>
 
+        {/* 「上次输入」悬浮卡片：消息区顶部居中悬浮、不占布局（与「回到底部」
+            提示条同一套浮层手法），单行展示最近一次已送达的用户输入——不占满
+            顶部（fit-content + 限宽），超宽 ellipsis，完整内容经 title hover 查看；
+            点击跳回那个气泡。仅当气泡升出视口顶缘（用户正在阅读其后的回复）时
+            渲染；在视口内、或上翻越过它进入更早历史时收起。 */}
+        {lastUserMessage && lastPromptAbove && (
+          <button
+            type="button"
+            ref={lastPromptCardRef}
+            className="chat-last-prompt-card pixel-float"
+            onClick={handleJumpToLastPrompt}
+            title={lastPromptPreview}
+            aria-label={`${t('chat.lastPrompt')}：${lastPromptPreview}`}
+            style={{
+              position: 'absolute',
+              top: CHAT_PROMPT_CARD_TOP_PX,
+              left: 0,
+              right: 0,
+              width: 'fit-content',
+              maxWidth: isMobile ? '88%' : '60%',
+              margin: '0 auto',
+              zIndex: 20,
+              display: 'flex',
+              padding: isMobile ? '7px 12px' : '4px 12px',
+              textAlign: 'left',
+              fontFamily: READER_FONT,
+            }}
+          >
+            <span
+              style={{
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {lastPromptPreview}
+            </span>
+          </button>
+        )}
+
         {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
-            的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端加大触摸目标。 */}
+            的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端单图标 36px
+            方钮，文案只保留在 aria-label/title。 */}
         {showJumpToBottom && (
           <button
             type="button"
-            className="pixel-press"
+            className="chat-jump-bottom pixel-press"
             onClick={handleJumpToBottom}
             title={t('chat.jumpToBottom')}
             aria-label={t('chat.jumpToBottom')}
@@ -575,15 +726,15 @@ export function ChatView() {
               bottom: 12,
               left: 0,
               right: 0,
-              width: 'fit-content',
+              width: isMobile ? 36 : 'fit-content',
+              height: isMobile ? 36 : undefined,
               margin: '0 auto',
               zIndex: 20,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 6,
-              padding: isMobile ? '10px 18px' : '7px 14px',
-              minHeight: isMobile ? 44 : 0,
+              padding: isMobile ? 0 : '7px 14px',
               background: 'var(--accent)',
               color: '#fff',
               border: '2px solid var(--border-strong)',
@@ -594,8 +745,8 @@ export function ChatView() {
               cursor: 'pointer',
             }}
           >
-            <span aria-hidden="true">↓</span>
-            {t('chat.newContent')}
+            <IconArrowDown width={isMobile ? 16 : 12} height={isMobile ? 16 : 12} aria-hidden="true" />
+            {!isMobile && t('chat.jumpToBottom')}
           </button>
         )}
       </div>
@@ -672,8 +823,8 @@ export function ChatView() {
       <div style={{ flexShrink: 0 }}>
         <ConfigToolbar
           configOptions={chatState.configOptions}
-          usage={chatState.usage}
           onSetConfigOption={setConfigOption}
+          readOnly={chatState.configReadOnly === true || chatState.sessionEnded}
         />
       </div>
 

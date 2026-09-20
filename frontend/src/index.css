@@ -1517,6 +1517,15 @@ body.fm-dragging * {
   transform: translate(2px, 2px);
   box-shadow: none;
 }
+.update-badge.reboot-badge {
+  background: var(--accent, #58A6FF);
+  color: #FAF2DE;
+  box-shadow: 2px 2px 0 var(--wood-shadow, #3A2E1F);
+}
+.update-badge.reboot-badge.is-restarting {
+  opacity: 0.8;
+  cursor: wait;
+}
 
 /* ────────────────────────────────────────────────────────────────────
    Game-style buttons — Primary / Secondary / Accent / Danger
@@ -2049,6 +2058,36 @@ input[type="range"]:active::-webkit-slider-thumb {
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: replay-spin 0.7s linear infinite;
+}
+
+/* 「上次输入」悬浮卡片（ChatView 消息区顶部居中）：浮层本体走 .pixel-float
+   （2px 边框 + 4px 硬阴影），本类补交互态——hover 提亮一档、按压按 §6 硬阴影
+   位移约定（浮层不直接叠 .pixel-press，其 2px 阴影会按文件顺序压掉浮层的 4px）。 */
+.chat-last-prompt-card {
+  cursor: pointer;
+  background: var(--bg-elevated);
+  transition: background 0.1s steps(2);
+}
+.chat-last-prompt-card:hover {
+  background: var(--bg-surface);
+}
+.chat-last-prompt-card:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+
+/* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
+   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。 */
+@keyframes chat-msg-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+.chat-msg-flash {
+  animation: chat-msg-flash 1.5s ease-out forwards;
 }
 
 /* 消息级 hover 操作（编辑 / 重新生成）：默认隐藏，悬停消息行时淡入 */

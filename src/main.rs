@@ -93,7 +93,7 @@ struct StartArgs {
     #[arg(long, env = "OMNITERM_DB")]
     db: Option<String>,
 
-    /// JWT signing key (no public default; auto-generates a random key persisted to ~/.omniterm/jwt_secret if unset)
+    /// JWT signing key (no public default; auto-generates a random per-instance key under ~/.omniterm/ if unset)
     #[arg(long, env = "OMNITERM_JWT_SECRET")]
     jwt_secret: Option<String>,
 
@@ -134,12 +134,20 @@ struct StartArgs {
     /// large uploads to the target dev server (e.g. `--proxy-max-body 104857600`).
     #[arg(long, env = "OMNITERM_PROXY_MAX_BODY")]
     proxy_max_body: Option<usize>,
+
+    /// Max total request body size in bytes for file uploads via the file manager
+    /// (default 200 MiB; e.g. `--max-upload-body 524288000`).
+    #[arg(long, env = "OMNITERM_MAX_UPLOAD_BODY")]
+    max_upload_body: Option<usize>,
 }
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::SqlitePool,
     pub jwt_secret: String,
+    /// 本实例的 auth cookie 名（按 db 实例加后缀，见 [`token_cookie_name`]）：
+    /// 读写 token 一律用它，避免同 host 下不同实例互相覆盖 cookie。
+    pub token_cookie: String,
     /// API keys for ACP agent models (SENSENOVA_API_KEY, STEPFUN_API_KEY, AMD_API_KEY).
     /// Loaded from `~/.omniterm/api_keys.toml` at startup, injected into ACP agent subprocess env.
     pub api_keys: HashMap<String, String>,
@@ -154,6 +162,9 @@ pub struct AppState {
     pub acp_supervisor: acp::AcpSupervisor,
     /// 端口转发反向代理状态：reqwest 客户端单例 + 自身监听端口（防回环）。
     pub proxy: proxy::ProxyState,
+    /// 文件上传请求体总量上限（字节），files 路由的 DefaultBodyLimit 与
+    /// 流式写入的落盘中止阈值共用此值（见 api::files::MAX_UPLOAD_BODY_DEFAULT）。
+    pub max_upload_body: usize,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -177,10 +188,14 @@ async fn embedded_static_handler(uri: axum::http::Uri) -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "Not Found").into_response()
 }
 
-fn pid_path(db_url: &str) -> String {
+/// 从 db 连接串提取 sqlite 文件路径（`sqlite:<path>?<query>` → `<path>`）。
+fn db_file_path(db_url: &str) -> &str {
     let path = db_url.strip_prefix("sqlite:").unwrap_or(db_url);
-    let path = path.split('?').next().unwrap_or("");
-    format!("{}.pid", path)
+    path.split('?').next().unwrap_or("")
+}
+
+fn pid_path(db_url: &str) -> String {
+    format!("{}.pid", db_file_path(db_url))
 }
 
 /// 进程是否为 `start -d` daemon 形态（daemon 子进程置位）。exec 自重启会剥离
@@ -257,6 +272,65 @@ fn default_db_url() -> String {
     format!("sqlite:{}?mode=rwc", dir.join(format!("{}.db", default_db_stem())).display())
 }
 
+/// 实例名统一前缀：cookie 名与 JWT 密钥文件名都以它起头。
+const INSTANCE_PREFIX: &str = "omniterm";
+/// Auth cookie 基础名（正式版历史名，勿改——老用户登录态挂在它上面）。
+pub const TOKEN_COOKIE_BASE: &str = "omniterm_token";
+/// JWT 密钥基础文件名（正式版历史名，勿改）。
+const JWT_SECRET_FILE_BASE: &str = "jwt_secret";
+
+/// 实例标识：由**实际生效的 db**（`--db` / `OMNITERM_DB` / 默认值）的文件名 stem
+/// 推导（`omniterm` / `omniterm-dev` / `omniterm-preview`）。
+///
+/// 「一个 db = 一个实例」是既有约定（dev.sh 用 `BRANCH_BINARY_NAME` 拼 db 路径，
+/// docker-compose 用卷内 `omniterm.db`），auth cookie 名与 JWT 密钥据此隔离。
+/// 必要性：浏览器 cookie **不区分端口**，同一 host 下 dev(127.0.0.1:9777) 与正式版
+/// (0.0.0.0:9077) 若共用 `omniterm_token`，后登录者会覆盖前者的 cookie；若两者
+/// 又共用同一签名密钥，被覆盖的那一方只会因 `token_version` 不匹配而 401，
+/// 表现为「一边登录、另一边自动登出」（反之若 ver 巧合相等则直接串号登录）。
+fn instance_id(db_url: &str) -> String {
+    let path = db_file_path(db_url);
+    if path.is_empty() || path.contains(":memory:") {
+        return default_db_stem();
+    }
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(default_db_stem)
+}
+
+/// 实例后缀：剥掉（可选的）`omniterm` 前缀，并清洗为 cookie 名 / 文件名安全字符。
+/// 正式版（db 名 `omniterm`）得到**空串** ⇒ 沿用无后缀历史名，已登录用户不掉线；
+/// dev / preview 各得 `dev` / `preview`；不含前缀的自定义 db 名整体保留。
+fn instance_suffix(instance: &str) -> String {
+    let rest = instance.strip_prefix(INSTANCE_PREFIX).unwrap_or(instance);
+    rest.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// 本实例的 auth cookie 名：`omniterm_token`（正式版）/ `omniterm_token_dev`（dev）。
+fn token_cookie_name(suffix: &str) -> String {
+    if suffix.is_empty() {
+        TOKEN_COOKIE_BASE.to_string()
+    } else {
+        format!("{TOKEN_COOKIE_BASE}_{suffix}")
+    }
+}
+
+/// 本实例的 JWT 密钥文件名：`jwt_secret`（正式版）/ `jwt_secret_dev`（dev）。
+fn jwt_secret_file_name(suffix: &str) -> String {
+    if suffix.is_empty() {
+        JWT_SECRET_FILE_BASE.to_string()
+    } else {
+        format!("{JWT_SECRET_FILE_BASE}_{suffix}")
+    }
+}
+
 /// Lenient bool parser for `--auth-enabled` / `OMNITERM_AUTH_ENABLED`:
 /// clap's built-in bool parser rejects "1"/"0", which is what docker-compose
 /// and shell scripts naturally pass.
@@ -270,12 +344,16 @@ fn parse_bool_flag(s: &str) -> Result<bool, String> {
 
 /// Resolve the JWT signing secret:
 /// - explicit `--jwt-secret` / `JWT_SECRET` wins;
-/// - otherwise load `~/.omniterm/jwt_secret` (0600), generating and
-///   persisting a fresh random secret on first run.
+/// - otherwise load `~/.omniterm/<jwt_secret_file_name(suffix)>` (0600),
+///   generating and persisting a fresh random secret on first run.
+///
+/// 密钥**按实例隔离**（suffix 来自 [`instance_suffix`]）：不同实例共用同一密钥时，
+/// 一方签发的 token 在另一方签名校验会通过，只剩 `token_version` 兜底——两者巧合
+/// 相等即串号登录。正式版 suffix 为空，仍读历史的 `~/.omniterm/jwt_secret`。
 ///
 /// There is deliberately no public default value: a predictable secret is
 /// equivalent to no authentication (an attacker can forge admin tokens).
-fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
+fn resolve_jwt_secret(explicit: Option<String>, suffix: &str) -> anyhow::Result<String> {
     if let Some(s) = explicit {
         if s.trim().is_empty() {
             anyhow::bail!("JWT_SECRET must not be empty");
@@ -285,7 +363,7 @@ fn resolve_jwt_secret(explicit: Option<String>) -> anyhow::Result<String> {
 
     let dir = omniterm_data_dir();
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join("jwt_secret");
+    let path = dir.join(jwt_secret_file_name(suffix));
     let path = path.to_string_lossy().into_owned();
 
     if let Ok(existing) = std::fs::read_to_string(&path) {
@@ -697,7 +775,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Start(args) => {
             let db_url = args.db.unwrap_or_else(default_db_url);
-            let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone())?;
+            // 实例身份取自实际生效的 db（见 instance_id）：cookie 名与 jwt 密钥据此隔离。
+            let suffix = instance_suffix(&instance_id(&db_url));
+            let jwt_secret = resolve_jwt_secret(args.jwt_secret.clone(), &suffix)?;
 
             let db = SqlitePoolOptions::new().max_connections(5).connect(&db_url).await?;
 
@@ -781,6 +861,7 @@ fn main() -> anyhow::Result<()> {
             let state = AppState {
                 db,
                 jwt_secret,
+                token_cookie: token_cookie_name(&suffix),
                 api_keys: resolve_api_keys(),
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
                 acp_idle_recycle_secs,
@@ -793,6 +874,7 @@ fn main() -> anyhow::Result<()> {
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
                 },
+                max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
             };
 
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，
@@ -957,8 +1039,46 @@ fn acp_idle_recycle_secs_from_setting(setting_min: Option<&str>) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{acp_idle_recycle_secs_from_setting, rust_log_covers_omniterm};
+    use super::{
+        acp_idle_recycle_secs_from_setting, default_db_stem, instance_id, instance_suffix,
+        jwt_secret_file_name, rust_log_covers_omniterm, token_cookie_name,
+    };
     use crate::acp::reaper::IDLE_RECYCLE_SECS;
+
+    #[test]
+    fn instance_suffix_separates_dev_from_release() {
+        // 正式版（db 名 omniterm）沿用无后缀历史名：已登录用户不掉线
+        assert_eq!(instance_suffix("omniterm"), "");
+        assert_eq!(token_cookie_name(""), "omniterm_token");
+        assert_eq!(jwt_secret_file_name(""), "jwt_secret");
+        // 各分支实例各得独立后缀：cookie 键位与密钥文件都不再冲突
+        assert_eq!(instance_suffix("omniterm-dev"), "dev");
+        assert_eq!(token_cookie_name("dev"), "omniterm_token_dev");
+        assert_eq!(jwt_secret_file_name("dev"), "jwt_secret_dev");
+        assert_eq!(instance_suffix("omniterm-preview"), "preview");
+        // 不含前缀的自定义 db 名整体保留，并清洗为文件名安全字符
+        assert_eq!(instance_suffix("my db"), "my_db");
+    }
+
+    #[test]
+    fn instance_id_follows_effective_db() {
+        // dev.sh 显式传 --db：实例取自实际生效的库（能区分同仓库不同 worktree），
+        // 而非「是否开发构建」——后者对所有 debug 二进制都返回同一个名字。
+        assert_eq!(
+            instance_id("sqlite:/home/pax/.omniterm/omniterm-dev.db?mode=rwc"),
+            "omniterm-dev"
+        );
+        assert_eq!(
+            instance_id("sqlite:/home/pax/.omniterm/omniterm-preview.db?mode=rwc"),
+            "omniterm-preview"
+        );
+        // docker-compose 的卷内库名不变 ⇒ 沿用历史 cookie 名与密钥文件
+        let docker = "sqlite:/app/data/omniterm.db?mode=rwc";
+        assert_eq!(instance_id(docker), "omniterm");
+        assert_eq!(instance_suffix(&instance_id(docker)), "");
+        // 无文件路径的库（内存库）回退默认实例名
+        assert_eq!(instance_id("sqlite::memory:"), default_db_stem());
+    }
 
     #[test]
     fn missing_setting_falls_back_to_default() {

@@ -6,6 +6,11 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import type { Terminal } from '@xterm/xterm'
+// [TERMDBG] 临时诊断埋点（打字延迟排查用，排查完删除）
+import { termDebug } from '../utils/termDebug'
+
+/** [TERMDBG] 是否开启临时埋点（仅 DEV）。 */
+const TERMDBG = import.meta.env.DEV
 
 // ──────────────────────────────────────────────────────────
 // Wire format types (§9.2, Phase 3 additions)
@@ -44,10 +49,6 @@ export interface CellFrame {
   /** 历史窗口帧标记（方案 C）：本帧展示的历史窗口偏移（行，0 = live 屏）。
    * 仅 viewport_request 的响应帧携带；消费方为 ViewportController。 */
   viewport?: number
-  /** 该窗口首行的内容指纹（十六进制 u64）：ViewportController 下次「保持
-   * 锚点」的重拉原样回传，后端据此把窗口重定位到该行当前的位置（
-   * `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D1/D4）。 */
-  viewport_fp?: string
   /** alt-screen 激活标记（方案 C D4）：仅 overlay 帧携带；消费方为
    * ViewportController（alt-screen 期间禁用滚轮接管）。 */
   alt_screen?: boolean
@@ -56,7 +57,7 @@ export interface CellFrame {
    * 状态（`term.modes.bracketedPasteMode`）不一致时写 `?2004h/l` 同步
    * （cell_frame 模式下 raw 流不转发，TUI 的模式序列前端永远收不到，
    * 不同步则多行粘贴被 TUI 逐行当 Enter 提交）。
-   * `docs/dev/plans/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
+   * `docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
   bracketed_paste?: boolean
   /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
    *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
@@ -178,6 +179,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
       chunks.push(SGR_RESET)
       chunks.push(...renderRow(frame.rows[r]?.runs))
     }
+    if (TERMDBG) termDebug.noteWrite()
     term.write(chunks.join(''))
     applyCursor(term, frame, true)
     return
@@ -194,6 +196,7 @@ export function renderCellFrame(term: Terminal, frame: CellFrame): void {
     chunks.push(SGR_RESET)
     chunks.push(...renderRow(frame.rows[i]?.runs))
   }
+  if (TERMDBG) termDebug.noteWrite()
   term.write(chunks.join(''))
   applyCursor(term, frame, indices.length > 0)
 }
@@ -303,6 +306,7 @@ export function useCellFrame(
       }
       // 瘦身/清空后当前帧照常入队：diff 帧的中间变化不可丢，丢一帧 =
       // 永久丢那次行变化（后端基线已前进，不会重发）。
+      if (TERMDBG) termDebug.stamp(frame)
       q.push(frame)
       if (rafId.current == null) {
         rafId.current = requestAnimationFrame(() => {
@@ -311,7 +315,16 @@ export function useCellFrame(
           const frames = frameQueue.current
           frameQueue.current = []
           if (!term) return
-          for (const f of frames) renderCellFrame(term, f)
+          for (const f of frames) {
+            if (TERMDBG) {
+              const arrivedAt = (f as { __t?: number }).__t
+              termDebug.noteFrameRender(
+                arrivedAt ? performance.now() - arrivedAt : 0,
+                frames.length,
+              )
+            }
+            renderCellFrame(term, f)
+          }
         })
       }
     },

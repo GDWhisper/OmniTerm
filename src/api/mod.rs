@@ -30,7 +30,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(sessions::routes())
         .merge(settings::routes())
         .merge(hooks::routes())
-        .merge(files::routes())
+        .merge(files::routes(state.max_upload_body))
         .merge(files_watch::routes())
         .merge(git::routes())
         .merge(agents::routes())

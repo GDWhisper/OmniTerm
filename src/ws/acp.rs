@@ -575,7 +575,7 @@ async fn restore_acp_session(
     // restore 出的新 client 绑定持久化：后续用户 prompt 的 assistant 回复由
     // 累积器实时防抖落库。
     new_client.attach_persistence(db.clone(), sid.to_string());
-    new_client.attach_config_prefs(db.clone(), sid.to_string(), agent_id);
+    new_client.attach_config_prefs(db.clone(), sid.to_string(), agent_id).await;
 
     let perm_rx = new_client.permission_subscribe();
     spawn_permission_task(perm_rx, notify_tx.clone()).await;

@@ -25,15 +25,17 @@ pub enum ClientControl {
     /// 请求以 `y`（行，0 = live 屏）为顶的历史窗口帧。负值无意义，处理侧
     /// 钳制；上界由 encode_viewport_frame 钳到实际 history_size。
     ///
-    /// `fp` = 上次服务窗口首行的内容指纹（十六进制 u64）。非空表示「保持
-    /// 锚点」的重拉，后端按它把窗口重定位到该行当前的位置；`None` 表示用户
-    /// 主动滚动，按偏移定位（
-    /// `docs/dev/plans/2026-09-03-pty-viewport-fingerprint-anchor.md` D5）。
+    /// `refresh`（2026-09-12 有状态锚 D2，取代 09-03 的 fp 字段）：`false` =
+    /// 用户主动滚动，按 y 定位并存锚；`true` = 输出触发的保锚重拉，后端直接
+    /// 按存储锚出窗、忽略 y（锚缺失时回退按 y 定位，降级不断连）。
+    /// `serde(default)` 缺省 false = 滚动语义：旧前端缓存发出的刷新请求降级
+    /// 为按偏移定位（滑移），与 09-08 A2 的 Option 降级惯例一致。
+    /// 见 `docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md` D1/D2。
     #[serde(rename = "viewport_request")]
     ViewportRequest {
         y: i32,
         #[serde(default)]
-        fp: Option<String>,
+        refresh: bool,
     },
 }
 
@@ -112,22 +114,18 @@ mod tests {
 
     #[test]
     fn viewport_request_parses() {
-        // 用户主动滚动：无 fp
+        // 用户主动滚动：refresh 缺省 = false（滚动语义）
         let ctrl: ClientControl =
             serde_json::from_str(r#"{"type":"viewport_request","y":42}"#).unwrap();
-        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42, fp: None });
-        // 保持锚点的重拉：带十六进制指纹
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42, refresh: false });
+        // 输出触发的保锚重拉：显式 refresh = true
         let ctrl: ClientControl =
-            serde_json::from_str(r#"{"type":"viewport_request","y":42,"fp":"00000000deadbeef"}"#)
-                .unwrap();
-        assert_eq!(
-            ctrl,
-            ClientControl::ViewportRequest { y: 42, fp: Some("00000000deadbeef".to_string()) }
-        );
-        // 显式 null（前端未锚定）不得因字段缺失而报错
+            serde_json::from_str(r#"{"type":"viewport_request","y":42,"refresh":true}"#).unwrap();
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 42, refresh: true });
+        // 显式 false 与缺省等价
         let ctrl: ClientControl =
-            serde_json::from_str(r#"{"type":"viewport_request","y":0,"fp":null}"#).unwrap();
-        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 0, fp: None });
+            serde_json::from_str(r#"{"type":"viewport_request","y":0,"refresh":false}"#).unwrap();
+        assert_eq!(ctrl, ClientControl::ViewportRequest { y: 0, refresh: false });
     }
 
     #[test]

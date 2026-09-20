@@ -36,6 +36,9 @@ Thumbs.db
 # Pi（本地 AI 工具配置，mirror of .qoder/，sync-main 黑名单排除）
 .pi/
 
+# Zcode（本地 AI 工具配置，sync-main 黑名单排除）
+.zcode/
+
 # Playwright CLI temporary output (local debugging)
 .playwright-cli/
 

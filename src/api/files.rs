@@ -2,20 +2,30 @@ use anyhow::anyhow;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Multipart, Query, State},
+    extract::{DefaultBodyLimit, Multipart, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::error;
 
 use crate::AppState;
-use crate::fs;
+use crate::fs::{self, StreamWriteError};
 use crate::models::session::RuntimeKind;
 
-pub fn routes() -> Router<AppState> {
+/// 文件上传请求体默认上限：200 MiB。
+/// 经 `--max-upload-body` / `OMNITERM_MAX_UPLOAD_BODY` 覆盖（字节）。
+pub const MAX_UPLOAD_BODY_DEFAULT: usize = 200 * 1024 * 1024;
+
+/// multipart 封装开销（边界/字段头）余量：axum 层限额比内容限额高此值，
+/// 保证超限先由我们自己的流式计数触发，返回带明确文案的 413，
+/// 而不是在 multipart 解析层变成含混的解析错误。
+const UPLOAD_BODY_LIMIT_MARGIN: usize = 1024 * 1024;
+
+pub fn routes(max_upload_body: usize) -> Router<AppState> {
     Router::new()
         .route("/files", get(list_files).post(upload_file).delete(delete_file))
         .route("/files/download", get(download_file))
@@ -26,6 +36,7 @@ pub fn routes() -> Router<AppState> {
         .route("/files/move", post(move_files))
         .route("/files/copy", post(copy_files))
         .route("/files/search", get(search_files))
+        .layer(DefaultBodyLimit::max(max_upload_body.saturating_add(UPLOAD_BODY_LIMIT_MARGIN)))
 }
 
 #[derive(Deserialize)]
@@ -475,6 +486,19 @@ async fn list_files(
     }
 }
 
+/// Bytes → 人类可读大小（错误文案用）。
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 async fn upload_file(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
@@ -497,18 +521,23 @@ async fn upload_file(
         );
     };
 
+    let max_total = state.max_upload_body as u64;
+    let mut request_total: u64 = 0;
     let mut uploaded = Vec::new();
 
-    while let Some(field) = multipart.next_field().await.unwrap_or(None) {
-        let file_name = field.file_name().unwrap_or("upload").to_string();
-
-        let data = match field.bytes().await {
-            Ok(d) => d,
+    loop {
+        let field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
             Err(e) => {
-                error!("failed to read upload data: {}", e);
-                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "read failed" })));
+                error!("failed to read multipart upload request: {}", e);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("read upload request failed: {e}") })),
+                );
             }
         };
+        let file_name = field.file_name().unwrap_or("upload").to_string();
 
         // For session mode with absolute rel_path, use it as-is
         let target_path = if rel_path.is_empty() || rel_path == "." {
@@ -518,20 +547,46 @@ async fn upload_file(
             format!("{}/{}", rel_path.trim_end_matches('/'), file_name)
         };
 
-        if let Err(e) = if allow_escape {
-            fs::write_file_allow_escape(&base, &target_path, &data).await
-        } else {
-            fs::write_file(&base, &target_path, &data).await
-        } {
-            error!("upload write failed: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })));
+        // 单请求总量受 max_upload_body 约束：逐文件只给剩余额度，
+        // 超限由流式写入在落盘过程中中止（413），已写入部分不留残文件。
+        let remaining = max_total.saturating_sub(request_total);
+        let mut chunks = Box::pin(field.map(|r| r.map_err(anyhow::Error::from)));
+        match fs::write_file_stream(&base, &target_path, allow_escape, remaining, &mut chunks).await
+        {
+            Ok(size) => {
+                request_total += size;
+                uploaded.push(json!({
+                    "name": file_name,
+                    "path": target_path,
+                    "size": size,
+                }));
+            }
+            Err(StreamWriteError::TooLarge { .. }) => {
+                error!(
+                    "upload aborted at `{}`: request exceeds max upload body {} bytes",
+                    file_name, max_total
+                );
+                return (
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    Json(json!({ "error": format!(
+                        "upload exceeds max size {} (aborted at `{}`)",
+                        format_size(max_total),
+                        file_name
+                    ) })),
+                );
+            }
+            Err(e) => {
+                error!("upload `{}` failed: {}", file_name, e);
+                let status = match &e {
+                    StreamWriteError::Path(_) | StreamWriteError::Read(_) => {
+                        StatusCode::BAD_REQUEST
+                    }
+                    StreamWriteError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                    StreamWriteError::TooLarge { .. } => unreachable!("handled above"),
+                };
+                return (status, Json(json!({ "error": e.to_string() })));
+            }
         }
-
-        uploaded.push(json!({
-            "name": file_name,
-            "path": target_path,
-            "size": data.len(),
-        }));
     }
 
     (StatusCode::OK, Json(json!(uploaded)))

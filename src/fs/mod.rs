@@ -17,11 +17,13 @@
 //! public API surface were rewritten for OmniTerm's needs.
 
 use anyhow::{Result, anyhow};
+use futures_util::{Stream, StreamExt};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::fs;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use uuid::Uuid;
 
 const MAX_SUBPATHS_COUNT: u64 = 1000;
 
@@ -454,6 +456,123 @@ async fn write_file_impl(
     Ok(())
 }
 
+/// [`write_file_stream`] 的失败原因。除 `TooLarge` 需调用方映射为 413 并展示
+/// 上限外，其余变体与常规写失败同等对待。
+#[derive(Debug)]
+pub enum StreamWriteError {
+    /// 内容字节总量超过调用方给定的 `max_bytes`（临时文件已清理，原文件未动）。
+    TooLarge { limit: u64 },
+    /// 路径校验失败（穿越/越界等，调用方应映射为 4xx）。
+    Path(anyhow::Error),
+    /// 读取上游数据流失败（如 multipart 解析中断）。
+    Read(anyhow::Error),
+    /// 磁盘写入失败。
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for StreamWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamWriteError::TooLarge { limit } => {
+                write!(f, "content exceeds max size of {limit} bytes")
+            }
+            StreamWriteError::Path(e) => write!(f, "{e:#}"),
+            StreamWriteError::Read(e) => write!(f, "read stream failed: {e:#}"),
+            StreamWriteError::Io(e) => write!(f, "write file failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for StreamWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StreamWriteError::Path(e) | StreamWriteError::Read(e) => Some(e.as_ref()),
+            StreamWriteError::Io(e) => Some(e),
+            StreamWriteError::TooLarge { .. } => None,
+        }
+    }
+}
+
+/// Stream chunks into `rel_path` without buffering the whole content in memory.
+///
+/// 写入先落到同目录的隐藏临时文件（`.{文件名}.omniterm-upload-{uuid}.tmp`，
+/// 点前缀使 files_watch 的事件过滤忽略它），全部写完且未超限才原子 rename 到
+/// 目标路径——失败（超限/读错/写错）时删除临时文件，**目标路径的已有文件保持
+/// 原样**，与 [`write_file`]「整体读入成功才落盘」的语义对齐。
+///
+/// `max_bytes` 限制的是内容字节总量（不含任何封装开销），超限即中止。
+/// Returns the number of bytes written.
+pub async fn write_file_stream<S, T>(
+    base: &Path,
+    rel_path: &str,
+    allow_escape: bool,
+    max_bytes: u64,
+    stream: &mut S,
+) -> Result<u64, StreamWriteError>
+where
+    S: Stream<Item = anyhow::Result<T>> + Unpin,
+    T: AsRef<[u8]>,
+{
+    let target = sanitize_new(base, rel_path, allow_escape).map_err(StreamWriteError::Path)?;
+
+    let Some(parent) = target.parent() else {
+        return Err(StreamWriteError::Path(anyhow!("path has no parent: {}", target.display())));
+    };
+    fs::create_dir_all(parent).await.map_err(StreamWriteError::Io)?;
+
+    let file_name = target.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+        StreamWriteError::Path(anyhow!("invalid file name: {}", target.display()))
+    })?;
+    let temp = parent.join(format!(".{file_name}.omniterm-upload-{}.tmp", Uuid::new_v4()));
+
+    let written = match stream_to_file(&temp, max_bytes, stream).await {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = fs::remove_file(&temp).await;
+            return Err(e);
+        }
+    };
+
+    // std::fs::rename 在 Windows 上目标已存在时会失败，先移除旧文件。
+    #[cfg(windows)]
+    if fs::try_exists(&target).await.unwrap_or(false) {
+        fs::remove_file(&target).await.map_err(StreamWriteError::Io)?;
+    }
+    if let Err(e) = fs::rename(&temp, &target).await {
+        let _ = fs::remove_file(&temp).await;
+        return Err(StreamWriteError::Io(e));
+    }
+    Ok(written)
+}
+
+/// 把数据流写入单个文件并执行总量校验。由 [`write_file_stream`] 调用，
+/// 失败时的临时文件清理在外层统一处理。
+async fn stream_to_file<S, T>(
+    path: &Path,
+    max_bytes: u64,
+    stream: &mut S,
+) -> Result<u64, StreamWriteError>
+where
+    S: Stream<Item = anyhow::Result<T>> + Unpin,
+    T: AsRef<[u8]>,
+{
+    let mut file = fs::File::create(path).await.map_err(StreamWriteError::Io)?;
+    let mut total: u64 = 0;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(StreamWriteError::Read)?;
+        let chunk = chunk.as_ref();
+        if total + chunk.len() as u64 > max_bytes {
+            return Err(StreamWriteError::TooLarge { limit: max_bytes });
+        }
+        file.write_all(chunk).await.map_err(StreamWriteError::Io)?;
+        total += chunk.len() as u64;
+    }
+
+    file.flush().await.map_err(StreamWriteError::Io)?;
+    Ok(total)
+}
+
 /// Create a directory (and parents).
 pub async fn create_dir(base: &Path, rel_path: &str) -> Result<()> {
     create_dir_impl(base, rel_path, false).await
@@ -756,6 +875,86 @@ mod tests {
         // allow_escape：允许创建 base 之外的路径
         let target = sanitize_path_new_allow_escape(&base, "../outside/newfile").unwrap();
         assert_eq!(target, outside.join("newfile"));
+    }
+
+    /// 构造 write_file_stream 夹具：返回 (base, dir 内项数快照)。
+    /// `chunks` 为 Err 项时模拟上游读取失败。
+    type TestChunk = anyhow::Result<Vec<u8>>;
+
+    fn stream_fixture(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!("omniterm_fs_stream_{tag}"));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    fn dir_entries(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[tokio::test]
+    async fn test_write_file_stream_writes_chunks_and_creates_parents() {
+        let base = stream_fixture("ok");
+        let mut stream = futures_util::stream::iter(vec![
+            Ok(b"hello ".to_vec()) as TestChunk,
+            Ok(b"world".to_vec()),
+        ]);
+        let n = write_file_stream(&base, "sub/a.txt", false, 100, &mut stream).await.unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(fs::read(base.join("sub/a.txt")).unwrap(), b"hello world");
+        // 成功后不留临时文件
+        assert_eq!(dir_entries(&base.join("sub")), vec!["a.txt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_write_file_stream_overwrites_existing_target() {
+        let base = stream_fixture("overwrite");
+        fs::write(base.join("a.txt"), b"old").unwrap();
+        let mut stream = futures_util::stream::iter(vec![Ok(b"new".to_vec()) as TestChunk]);
+        write_file_stream(&base, "a.txt", false, 100, &mut stream).await.unwrap();
+        assert_eq!(fs::read(base.join("a.txt")).unwrap(), b"new");
+    }
+
+    #[tokio::test]
+    async fn test_write_file_stream_too_large_keeps_target_and_cleans_temp() {
+        let base = stream_fixture("too_large");
+        fs::write(base.join("a.txt"), b"previous").unwrap();
+        let mut stream = futures_util::stream::iter(vec![
+            Ok(vec![0u8; 6]) as TestChunk,
+            Ok(vec![0u8; 6]), // 总量 12 > limit 10
+        ]);
+        let err = write_file_stream(&base, "a.txt", false, 10, &mut stream).await.unwrap_err();
+        assert!(matches!(err, StreamWriteError::TooLarge { limit: 10 }));
+        // 原文件保持原样，临时文件已清理
+        assert_eq!(fs::read(base.join("a.txt")).unwrap(), b"previous");
+        assert_eq!(dir_entries(&base), vec!["a.txt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_write_file_stream_read_error_cleans_up() {
+        let base = stream_fixture("read_err");
+        let mut stream = futures_util::stream::iter(vec![
+            Ok(b"partial".to_vec()) as TestChunk,
+            Err(anyhow!("upstream aborted")),
+        ]);
+        let err = write_file_stream(&base, "a.txt", false, 100, &mut stream).await.unwrap_err();
+        assert!(matches!(err, StreamWriteError::Read(_)));
+        assert!(dir_entries(&base).is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_write_file_stream_rejects_traversal() {
+        let base = stream_fixture("traversal");
+        let mut stream = futures_util::stream::iter(Vec::<TestChunk>::new());
+        let err =
+            write_file_stream(&base, "../escape.txt", false, 100, &mut stream).await.unwrap_err();
+        assert!(matches!(err, StreamWriteError::Path(_)));
+        assert!(dir_entries(&base).is_empty());
     }
 
     /// 回归：多层缺失目录必须按原始顺序拼接（曾因 tail 漏 .rev() 变成 a/c/b）。

@@ -94,6 +94,34 @@ describe('api allowEscape passthrough', () => {
     expect(lastUrl(calls)).toBe('/api/v1/files?path=d&workspace_id=w1&allow_escape=true')
   })
 
+  it('uploadFile2: surfaces backend error message (413 too large)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 413,
+      json: async () => ({ error: 'upload exceeds max size 200.0 MB (aborted at `a.mp4`)' }),
+    }) as unknown as Response))
+    const file = new File(['x'], 'a.mp4', { type: 'video/mp4' })
+
+    await expect(api.uploadFile2({ path: '', workspaceId: 'w1', file })).rejects.toMatchObject({
+      status: 413,
+      message: 'upload exceeds max size 200.0 MB (aborted at `a.mp4`)',
+    })
+  })
+
+  it('uploadFile2: falls back to status line when error body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => { throw new Error('not json') },
+    }) as unknown as Response))
+    const file = new File(['x'], 'a.txt', { type: 'text/plain' })
+
+    await expect(api.uploadFile2({ path: '', workspaceId: 'w1', file })).rejects.toMatchObject({
+      status: 500,
+      message: 'Upload failed: 500',
+    })
+  })
+
   it('listFiles2 return type exposes workspace_root', async () => {
     const calls = mockFetch()
     const data = await api.listFiles2({ workspaceId: 'w1' })

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, ApiError, type Session } from '../../api/client'
+import { useTerminalEngine } from '../../hooks/useTerminalEngine'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { inputClass, inputStyle } from '../Sidebar/sidebarModalStyles'
+import { EngineHintLine } from './EngineHintLine'
 
 export interface OpenTerminalTarget {
   /** FM 当前浏览目录——既是新终端启动目录，也是新建项目的根。 */
@@ -25,6 +27,8 @@ export function OpenTerminalDialog(props: {
   onDone: (session: Session, projectId: string, projectCreated: boolean) => void
 }) {
   const { t } = useTranslation()
+  // 与「在此打开终端」快路径同一默认引擎（宿主缺复用器时回落 pty）
+  const terminalEngine = useTerminalEngine()
   const [name, setName] = useState('')
   const [submitting, setSubmitting] = useState<'create' | 'attach' | null>(null)
 
@@ -64,7 +68,7 @@ export function OpenTerminalDialog(props: {
           throw e
         }
       }
-      const session = await api.createSession(projectId, target.cwd, undefined, undefined, 'pty')
+      const session = await api.createSession(projectId, target.cwd, undefined, undefined, terminalEngine)
       props.onDone(session, projectId, created)
       props.onClose()
     } catch {
@@ -84,7 +88,7 @@ export function OpenTerminalDialog(props: {
         target.cwd,
         undefined,
         undefined,
-        'pty',
+        terminalEngine,
       )
       props.onDone(session, target.attachProject.id, false)
       props.onClose()
@@ -115,6 +119,7 @@ export function OpenTerminalDialog(props: {
           >
             {target.cwd}
           </div>
+          <EngineHintLine />
           <div>
             <label
               className="block text-xs font-medium mb-1.5"

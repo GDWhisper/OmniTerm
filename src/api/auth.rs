@@ -45,12 +45,13 @@ fn should_set_cookie_domain(domain: &str) -> bool {
     d.contains('.')
 }
 
-/// 构造登录/签发的 `omniterm_token` cookie。`domain` 为子域名代理 base
-/// （`Some("omniterm.lan")`）时给 cookie 加 `Domain=omniterm.lan`，使 `{port}.{base}`
-/// 子域名也能携带该 cookie 通过鉴权；`None` 或 base 为 IP/localhost/无点域名时
-/// 维持 host-only（现状 + P0-4.7 防御）。
-fn token_cookie(token: &str, domain: Option<&str>) -> String {
-    let builder = Cookie::build(("omniterm_token", token))
+/// 构造登录/签发的 token cookie。`cookie_name` 来自 `AppState.token_cookie`
+/// （按 db 实例加后缀）：同一 host 下不同实例（browser cookie 不区分端口）各写各的
+/// 键位，互不覆盖。`domain` 为子域名代理 base（`Some("omniterm.lan")`）时给 cookie
+/// 加 `Domain=omniterm.lan`，使 `{port}.{base}` 子域名也能携带该 cookie 通过鉴权；
+/// `None` 或 base 为 IP/localhost/无点域名时维持 host-only（现状 + P0-4.7 防御）。
+fn token_cookie(cookie_name: &str, token: &str, domain: Option<&str>) -> String {
+    let builder = Cookie::build((cookie_name, token))
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
@@ -62,11 +63,9 @@ fn token_cookie(token: &str, domain: Option<&str>) -> String {
     .to_string()
 }
 
-fn clear_cookie(domain: Option<&str>) -> String {
-    let builder = Cookie::build(("omniterm_token", ""))
-        .path("/")
-        .http_only(true)
-        .max_age(time::Duration::ZERO);
+fn clear_cookie(cookie_name: &str, domain: Option<&str>) -> String {
+    let builder =
+        Cookie::build((cookie_name, "")).path("/").http_only(true).max_age(time::Duration::ZERO);
     match domain {
         Some(d) if should_set_cookie_domain(d) => builder.domain(d),
         _ => builder,
@@ -116,7 +115,7 @@ async fn setup(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let token = auth::create_token(&state.jwt_secret, ver)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = token_cookie(&token, state.proxy.base_host.as_deref());
+    let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
 
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
@@ -149,7 +148,7 @@ async fn login(
 
     let token = auth::create_token(&state.jwt_secret, ver)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = token_cookie(&token, state.proxy.base_host.as_deref());
+    let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
 
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
@@ -162,7 +161,7 @@ async fn logout(State(state): State<AppState>) -> Result<impl IntoResponse, Stat
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = clear_cookie(state.proxy.base_host.as_deref());
+    let cookie = clear_cookie(&state.token_cookie, state.proxy.base_host.as_deref());
     Ok((AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
 
@@ -246,7 +245,7 @@ async fn check(State(state): State<AppState>, jar: CookieJar) -> impl IntoRespon
         );
     }
 
-    let token = jar.get("omniterm_token").map(|c| c.value().to_string());
+    let token = jar.get(&state.token_cookie).map(|c| c.value().to_string());
 
     let authenticated = match token.as_deref() {
         Some(t) => auth::verify_token_for_state(&state.db, &state.jwt_secret, t).await.is_ok(),
@@ -274,9 +273,9 @@ mod tests {
     fn set_cookie_no_domain_for_ip_or_localhost_base() {
         // 浏览器拒绝 Domain=IP / Domain=localhost（必须含点），host-only 才生效
         for bad in ["192.168.5.216", "[::1]", "localhost", "omniterm"] {
-            let c = token_cookie("tok", Some(bad));
+            let c = token_cookie("omniterm_token", "tok", Some(bad));
             assert!(!c.to_lowercase().contains("domain="), "base={bad} cookie={c}");
-            let c2 = clear_cookie(Some(bad));
+            let c2 = clear_cookie("omniterm_token", Some(bad));
             assert!(!c2.to_lowercase().contains("domain="), "clear base={bad} cookie={c2}");
         }
     }
@@ -284,13 +283,26 @@ mod tests {
     #[test]
     fn set_cookie_keeps_domain_for_dotted_base() {
         // 合法带点域名：保留 Domain，子域名可携带
-        let c = token_cookie("tok", Some("omniterm.lan"));
+        let c = token_cookie("omniterm_token", "tok", Some("omniterm.lan"));
         assert!(c.to_lowercase().contains("domain=omniterm.lan"), "cookie={c}");
-        let c2 = clear_cookie(Some("omniterm.lan"));
+        let c2 = clear_cookie("omniterm_token", Some("omniterm.lan"));
         assert!(c2.to_lowercase().contains("domain=omniterm.lan"), "cookie={c2}");
         // 多级域名同样保留
-        let c3 = token_cookie("tok", Some("omniterm.example.com"));
+        let c3 = token_cookie("omniterm_token", "tok", Some("omniterm.example.com"));
         assert!(c3.to_lowercase().contains("domain=omniterm.example.com"), "cookie={c3}");
+    }
+
+    #[test]
+    fn set_cookie_uses_instance_scoped_name() {
+        // dev 实例写自己的键位：同 host（浏览器不区分端口）下不与正式版互相覆盖
+        let dev = crate::token_cookie_name("dev");
+        assert_eq!(dev, "omniterm_token_dev");
+        let c = token_cookie(&dev, "tok", None);
+        assert!(c.starts_with("omniterm_token_dev=tok"), "cookie={c}");
+        // 正式版沿用历史名（老用户登录态不失效）
+        let prod = crate::token_cookie_name("");
+        assert_eq!(prod, "omniterm_token");
+        assert!(token_cookie(&prod, "tok", None).starts_with("omniterm_token=tok"));
     }
 
     #[test]

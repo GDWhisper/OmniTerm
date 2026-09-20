@@ -9,6 +9,7 @@ vi.mock('../../api/client', () => ({
   api: {
     versionCheck: vi.fn(),
     systemUpdate: vi.fn(),
+    systemRestart: vi.fn(),
   },
   ApiError: class ApiError extends Error {
     status: number
@@ -82,7 +83,10 @@ describe('UpdateBadge 重启监测', () => {
       status: 'updated',
       version: '0.2.18',
       restart_required: true,
-      auto_restart: true,
+      auto_restart: false,
+    })
+    vi.mocked(api.systemRestart).mockResolvedValue({
+      status: 'restarting',
     })
 
     container = document.createElement('div')
@@ -122,13 +126,52 @@ describe('UpdateBadge 重启监测', () => {
     })
   }
 
-  it('health 返回目标版本 → 整页刷新（无需捕捉断连）', async () => {
+  async function triggerUpdateAndClickRestart() {
     await triggerUpdate()
+    await realTick()
+    await vi.waitFor(() => {
+      const hasRestartBtn = Array.from(document.body.querySelectorAll('button')).some(
+        (b) => b.textContent?.trim() === 'Restart Now',
+      )
+      expect(hasRestartBtn).toBe(true)
+    })
+    clickButtonByText('Restart Now')
+    await vi.waitFor(() => {
+      expect(api.systemRestart).toHaveBeenCalled()
+    })
+  }
+
+  it('升级后不自动重启，显示手动重启按钮；关闭弹窗后标题上显示 REBOOT 徽标', async () => {
+    await triggerUpdate()
+    // 不自动 reload，时间推进亦不触发
+    await advanceClock(5000)
+    expect(reload).not.toHaveBeenCalled()
+    // 面板内出现手动重启按钮
+    expect(Array.from(document.body.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Restart Now')).toBe(true)
+    // 关闭面板（再次点击 badge）
+    const badge = document.body.querySelector<HTMLElement>('.update-badge')!
+    badge.click()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('.pixel-float')).toBeNull()
+    })
+    // 标题旧版本旁显示 REBOOT 徽标
+    expect(badge.classList.contains('reboot-badge')).toBe(true)
+    expect(badge.textContent?.trim()).toBe('REBOOT')
+    // 再次点击 REBOOT 徽标，重新弹出带手动重启按钮的面板
+    badge.click()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('.pixel-float')).toBeTruthy()
+      expect(Array.from(document.body.querySelectorAll('button')).some((b) => b.textContent?.trim() === 'Restart Now')).toBe(true)
+    })
+  })
+
+  it('点击「立即重启」且 health 返回目标版本 → 整页刷新', async () => {
+    await triggerUpdateAndClickRestart()
     const fetchMock = vi.fn(async () => healthOk({ status: 'ok', version: '0.2.18' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    // 倒计时 3 拍结束后，第 1 拍探测即命中版本 → reload
-    await advanceClock(4500)
+    // 第 1 拍探测即命中版本 → reload
+    await advanceClock(1500)
     expect(reload).toHaveBeenCalledTimes(1)
     // 命中后清除定时器，不再继续探测
     const calls = fetchMock.mock.calls.length
@@ -136,11 +179,11 @@ describe('UpdateBadge 重启监测', () => {
     expect(fetchMock.mock.calls.length).toBe(calls)
   })
 
-  it('health 持续返回旧版本 → 超时显示诚实提示', async () => {
-    await triggerUpdate()
+  it('点击「立即重启」且 health 持续返回旧版本 → 超时显示诚实提示', async () => {
+    await triggerUpdateAndClickRestart()
     vi.stubGlobal('fetch', vi.fn(async () => healthOk({ status: 'ok', version: '0.2.17' })))
 
-    // 倒计时 3s + 60s 探测窗口（第 61 拍判超时）
+    // 60s 探测窗口（第 61 拍判超时）
     await advanceClock(65_000)
     expect(reload).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('has not switched to v0.2.18')
@@ -149,7 +192,7 @@ describe('UpdateBadge 重启监测', () => {
   })
 
   it('旧实现 health 无 version 字段 → 回退到断连→恢复触发刷新', async () => {
-    await triggerUpdate()
+    await triggerUpdateAndClickRestart()
     let polls = 0
     vi.stubGlobal(
       'fetch',
@@ -161,7 +204,33 @@ describe('UpdateBadge 重启监测', () => {
       }),
     )
 
-    await advanceClock(6500)
+    await advanceClock(3500)
     expect(reload).toHaveBeenCalledTimes(1)
+  })
+
+  it('服务端已处于 pending_restart 状态时挂载 → 直接渲染 REBOOT 徽标', async () => {
+    root.unmount()
+    vi.mocked(api.versionCheck).mockResolvedValue({
+      update_available: true,
+      current: '0.2.17',
+      latest: '0.2.18',
+      channel: 'github_release',
+      container: false,
+      restart_command: 'omniterm stop && omniterm start',
+      pending_restart: true,
+      target_version: '0.2.18',
+    })
+    root = createRoot(container)
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <UpdateBadge />
+      </I18nextProvider>,
+    )
+    await vi.waitFor(() => {
+      const badge = document.body.querySelector('.update-badge')
+      expect(badge).toBeTruthy()
+      expect(badge?.classList.contains('reboot-badge')).toBe(true)
+      expect(badge?.textContent?.trim()).toBe('REBOOT')
+    })
   })
 })

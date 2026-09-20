@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   MAX_TRACKED_TURNS,
+  MAX_ACTIVE_TURN_TOOLS,
+  MAX_TURN_TOOL_ID_LENGTH,
   addOutputChars,
   beginTurn,
   clearTurnClock,
   computeTps,
   endTurn,
   finalTps,
+  finalToolElapsedMs,
+  resumeTurnClock,
   setTurnWaiting,
   trackedTurnCount,
   turnElapsedMs,
+  turnToolElapsedMs,
   turnTps,
+  updateTurnTool,
 } from './turnClock'
 
 // 时间全部由调用方注入，不用 fake timers：计时器本身只认传进去的 epoch。
@@ -89,6 +95,10 @@ describe('turnClock tps 估算', () => {
     expect(computeTps(40, 0)).toBeNull()
     expect(computeTps(40, -100)).toBeNull()
     expect(computeTps(Number.NaN, 1_000)).toBeNull()
+    expect(computeTps(Number.POSITIVE_INFINITY, 1_000)).toBeNull()
+    expect(computeTps(40, Number.POSITIVE_INFINITY)).toBeNull()
+    expect(computeTps(40, Number.NaN)).toBeNull()
+    expect(computeTps(Number.MAX_VALUE, Number.MIN_VALUE)).toBeNull()
   })
 
   it('computeTps：char/4/(ms/1000) 的换算', () => {
@@ -133,6 +143,21 @@ describe('turnClock tps 估算', () => {
     expect(finalTps('s1')).toBe(10) // 80/4/2
   })
 
+  it('重复 endTurn 不覆盖已冻结的快照', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 80)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    updateTurnTool('s1', 'a', 'completed', 2_000)
+    endTurn('s1', 2_000)
+    // 工作时长 2s、其中纯工具 1s → 80/4/1s = 20 t/s；工具耗时 1s
+    expect(finalTps('s1')).toBe(20)
+    expect(finalToolElapsedMs('s1')).toBe(1_000)
+
+    endTurn('s1', 9_000) // 无在建 turn：第二次结束是 no-op，不覆盖上面的冻结值
+    expect(finalTps('s1')).toBe(20)
+    expect(finalToolElapsedMs('s1')).toBe(1_000)
+  })
+
   it('本轮 0 输出定稿会把上一 turn 的快照清掉，不把旧值错配到新消息', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 40)
@@ -152,5 +177,193 @@ describe('turnClock tps 估算', () => {
     }
     expect(finalTps('s0')).toBeNull()
     expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(10)
+  })
+
+  it('估算失效的 turn 不留空快照占位，不把别的会话的真实快照挤出上限', () => {
+    for (let i = 0; i < MAX_TRACKED_TURNS; i++) {
+      beginTurn(`s${i}`, 0)
+      addOutputChars(`s${i}`, 40)
+      endTurn(`s${i}`, 1_000)
+    }
+    expect(finalTps('s0')).toBe(10)
+
+    // 工具数溢出 → 本窗口估算整体失效，定稿时两项都无读数
+    beginTurn('bad', 0)
+    for (let i = 0; i <= MAX_ACTIVE_TURN_TOOLS; i++) updateTurnTool('bad', `t${i}`, 'in_progress', 1_000)
+    endTurn('bad', 2_000)
+    expect(finalTps('bad')).toBeNull()
+    expect(finalToolElapsedMs('bad')).toBeNull()
+    expect(finalTps('s0')).toBe(10) // s0 仍是最旧的真实快照，未被占位条目挤掉
+  })
+})
+
+describe('turnClock observed tool intervals', () => {
+  beforeEach(() => clearTurnClock())
+
+  it('keeps 10s of tools in work but out of the 1s generation denominator', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    expect(turnElapsedMs('s1', 11_000)).toBe(11_000)
+    expect(turnToolElapsedMs('s1', 11_000)).toBe(10_000)
+    expect(turnTps('s1', 11_000)).toBe(100)
+    endTurn('s1', 11_000)
+    expect(turnToolElapsedMs('s1', 12_000)).toBeNull()
+    expect(finalToolElapsedMs('s1')).toBe(10_000)
+    expect(finalTps('s1')).toBe(100)
+  })
+
+  it('counts overlapping parallel tools once and closes the union only after the last tool', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    updateTurnTool('s1', 'b', 'running', 2_000)
+    updateTurnTool('s1', 'a', 'in_progress', 3_000)
+    updateTurnTool('s1', 'a', 'completed', 4_000)
+    updateTurnTool('s1', 'a', 'completed', 5_000)
+    expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
+    updateTurnTool('s1', 'b', 'failed', 7_000)
+    expect(turnToolElapsedMs('s1', 8_000)).toBe(6_000)
+    expect(turnTps('s1', 8_000)).toBe(50)
+  })
+
+  it('subtracts approval overlap once from work and tool union, including open approval at finalization', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    setTurnWaiting('s1', true, 2_000)
+    updateTurnTool('s1', 'b', 'in_progress', 3_000)
+    updateTurnTool('s1', 'a', 'completed', 4_000)
+    setTurnWaiting('s1', false, 5_000)
+    setTurnWaiting('s1', true, 7_000)
+    expect(turnElapsedMs('s1', 10_000)).toBe(4_000)
+    expect(turnToolElapsedMs('s1', 10_000)).toBe(3_000)
+    expect(turnTps('s1', 10_000)).toBe(100)
+    endTurn('s1', 10_000)
+    expect(finalToolElapsedMs('s1')).toBe(3_000)
+    expect(finalTps('s1')).toBe(100)
+  })
+
+  it('requires explicit execution status and preserves it across partial updates', () => {
+    updateTurnTool('s1', 'outside', 'in_progress', 0)
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', undefined, 1_000)
+    updateTurnTool('s1', 'b', 'pending', 1_000)
+    updateTurnTool('s1', 'c', 'unknown', 1_000)
+    expect(turnToolElapsedMs('s1', 3_000)).toBe(0)
+    updateTurnTool('s1', 'a', 'in_progress', 3_000)
+    updateTurnTool('s1', 'a', undefined, 4_000)
+    expect(turnToolElapsedMs('s1', 5_000)).toBe(2_000)
+    updateTurnTool('s1', 'a', 'pending', 5_000)
+    updateTurnTool('s1', 'a', undefined, 6_000)
+    expect(turnToolElapsedMs('s1', 7_000)).toBe(2_000)
+    expect(turnTps('s1', 7_000)).toBe(20)
+  })
+
+  it('restores the entire open tool overlap to generation when prose arrives, until all tools close', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    setTurnWaiting('s1', true, 2_000)
+    setTurnWaiting('s1', false, 4_000)
+    expect(turnTps('s1', 5_000)).toBe(100)
+    addOutputChars('s1', 400, 5_000)
+    expect(turnTps('s1', 5_000)).toBeCloseTo(200 / 3)
+    updateTurnTool('s1', 'b', 'in_progress', 6_000)
+    updateTurnTool('s1', 'a', 'completed', 7_000)
+    updateTurnTool('s1', 'b', 'completed', 8_000)
+    updateTurnTool('s1', 'c', 'in_progress', 9_000)
+    endTurn('s1', 11_000)
+    expect(finalToolElapsedMs('s1')).toBe(7_000)
+    expect(finalTps('s1')).toBeCloseTo(200 / 7)
+  })
+
+  it('has no rate for tool-only or zero-generation turns and ignores non-finite character samples', () => {
+    beginTurn('s1', 0)
+    updateTurnTool('s1', 'a', 'in_progress', 0)
+    addOutputChars('s1', Number.POSITIVE_INFINITY, 500)
+    expect(turnTps('s1', 1_000)).toBeNull()
+    endTurn('s1', 1_000)
+    expect(finalTps('s1')).toBeNull()
+    expect(finalToolElapsedMs('s1')).toBe(1_000)
+    beginTurn('s1', 2_000)
+    addOutputChars('s1', 400, 2_000)
+    expect(turnTps('s1', 2_000)).toBeNull()
+    expect(finalToolElapsedMs('s1')).toBeNull()
+  })
+
+  it('resumes only the local observation window while preserving work and an open approval', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    setTurnWaiting('s1', true, 2_000)
+    resumeTurnClock('s1', 10_000)
+    expect(turnTps('s1', 10_000)).toBeNull()
+    expect(turnToolElapsedMs('s1', 10_000)).toBe(0)
+    setTurnWaiting('s1', false, 11_000)
+    addOutputChars('s1', 400, 12_000)
+    updateTurnTool('s1', 'a', undefined, 12_000)
+    updateTurnTool('s1', 'b', 'in_progress', 12_000)
+    expect(turnElapsedMs('s1', 14_000)).toBe(5_000)
+    expect(turnToolElapsedMs('s1', 14_000)).toBe(2_000)
+    expect(turnTps('s1', 14_000)).toBe(100)
+    endTurn('s1', 14_000)
+    expect(finalTps('s1')).toBe(100)
+    expect(finalToolElapsedMs('s1')).toBe(2_000)
+    resumeTurnClock('missing', 14_000)
+    expect(turnElapsedMs('missing', 15_000)).toBeNull()
+  })
+
+  it('invalidates estimates on active-ID overflow without disturbing work, and resume recovers', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    for (let i = 0; i < MAX_ACTIVE_TURN_TOOLS; i++) {
+      updateTurnTool('s1', `tool-${i}`, 'in_progress', 1_000)
+    }
+    expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
+    updateTurnTool('s1', 'overflow', 'in_progress', 2_000)
+    expect(turnElapsedMs('s1', 3_000)).toBe(3_000)
+    expect(turnToolElapsedMs('s1', 3_000)).toBeNull()
+    expect(turnTps('s1', 3_000)).toBeNull()
+    resumeTurnClock('s1', 3_000)
+    addOutputChars('s1', 400, 4_000)
+    expect(turnTps('s1', 4_000)).toBe(100)
+  })
+
+  it('bounds ID size and never finalizes a truncated tracking window as a valid estimate', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'x'.repeat(MAX_TURN_TOOL_ID_LENGTH + 1), 'in_progress', 1_000)
+    endTurn('s1', 2_000)
+    expect(finalTps('s1')).toBeNull()
+    expect(finalToolElapsedMs('s1')).toBeNull()
+  })
+
+  it('releases completed IDs so sequential tools do not exhaust active tracking', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    for (let i = 0; i <= MAX_ACTIVE_TURN_TOOLS; i++) {
+      updateTurnTool('s1', `tool-${i}`, 'in_progress', 1_000 + i)
+      updateTurnTool('s1', `tool-${i}`, 'completed', 1_001 + i)
+    }
+    expect(turnTps('s1', 1_001 + MAX_ACTIVE_TURN_TOOLS)).toBe(100)
+  })
+
+  it('bounds tool snapshots with rates and clears both on a new turn', () => {
+    for (let i = 0; i <= MAX_TRACKED_TURNS; i++) {
+      beginTurn(`s${i}`, 0)
+      addOutputChars(`s${i}`, 400, 1_000)
+      updateTurnTool(`s${i}`, 'a', 'in_progress', 1_000)
+      endTurn(`s${i}`, 2_000)
+    }
+    expect(finalToolElapsedMs('s0')).toBeNull()
+    expect(finalTps('s0')).toBeNull()
+    expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(1_000)
+    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(100)
+    beginTurn(`s${MAX_TRACKED_TURNS}`, 3_000)
+    endTurn(`s${MAX_TRACKED_TURNS}`, 4_000)
+    expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(0)
+    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBeNull()
   })
 })
