@@ -192,6 +192,25 @@ describe('chatStore — queued follow-up actions', () => {
       expect(state.imageSupported).toBe(true)
       expect(state.embeddedContextSupported).toBe(true)
     })
+
+    // usage 由 agent 按 turn 推送、不随重放下发：不保留就会在每次重放后消失
+    // （用户观感「时有时无」），与 capability flags 同一处理。
+    it('preserves usage across the rebuild (pushed per turn, not replayed)', () => {
+      useChatStore.getState().setUsage('s1', { used: 1234, size: 200000 })
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+      ])
+      expect(useChatStore.getState().states['s1'].usage).toEqual({ used: 1234, size: 200000 })
+    })
+
+    it('lets a replayed usage frame override the preserved value', () => {
+      useChatStore.getState().setUsage('s1', { used: 1, size: 200000 })
+      useChatStore.getState().commitReplay('s1', [
+        { kind: 'addUserMessage', text: 'replayed user' },
+        { kind: 'setUsage', usage: { used: 2, size: 200000 } },
+      ])
+      expect(useChatStore.getState().states['s1'].usage).toEqual({ used: 2, size: 200000 })
+    })
   })
 
   describe('history pagination (上拉加载更早历史)', () => {

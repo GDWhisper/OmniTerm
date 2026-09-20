@@ -909,6 +909,11 @@ export const useChatStore = create<ChatStore>((set) => ({
         embeddedContextSupported: prev?.embeddedContextSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
+        // usage 与上面几项同类：agent 按 turn 推送、不随 session/load 重放。
+        // 不保留的话每次重放（恢复进程 / 重连 / 刷新后拉历史）都把用量圆环抹掉，
+        // 直到下一个 turn 才重新出现（用户观感「时有时无」）。重放帧真带了
+        // usage 更新时，下面的 applyTopLevelActions 会用新值覆盖这里的旧值。
+        usage: prev?.usage,
         // 重放是 agent 侧的完整历史，重建后已无「更早一页」可取；显式置 null
         // 而非靠 delete 后的 undefined，以免误读为遗漏。
         historyCursor: null,

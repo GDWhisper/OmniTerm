@@ -11,6 +11,7 @@ import type { ImageAttachment } from '../../utils/imageAttachment'
 import type { FileAttachment } from '../../utils/fileAttachment'
 import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
+import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { IconArrowDown } from '../FileManager/icons'
@@ -527,6 +528,10 @@ export function ChatView() {
           </span>
         )}
         <span className="title-bar-spacer" />
+        {/* 用量是会话级状态（上下文占用 / 费用），与 LIVE/DEAD 徽章同类；放在
+            配置控制区会既挤占窄屏又把「只报用量不发配置」的 agent 渲染成一条
+            只有圆环的配置栏。 */}
+        {chatState.usage && <UsageIndicator usage={chatState.usage} compact={isMobile} />}
         {titleChip}
       </div>
 
@@ -818,7 +823,6 @@ export function ChatView() {
       <div style={{ flexShrink: 0 }}>
         <ConfigToolbar
           configOptions={chatState.configOptions}
-          usage={chatState.usage}
           onSetConfigOption={setConfigOption}
           readOnly={chatState.configReadOnly === true || chatState.sessionEnded}
         />

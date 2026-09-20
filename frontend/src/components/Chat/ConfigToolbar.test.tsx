@@ -43,7 +43,6 @@ function render(opts?: {
     root.render(
       <ConfigToolbar
         configOptions={opts?.options ?? [MODEL_OPTION]}
-        usage={null}
         onSetConfigOption={onSetConfigOption}
         readOnly={opts?.readOnly}
       />,

@@ -238,130 +238,6 @@ function ConfigDropdown({
   )
 }
 
-const RING_SIZE = 15
-const RING_STROKE = 2.5
-
-function formatTokens(n: number): string {
-  const fmt = (v: number) => {
-    const rounded = Math.round(v * 10) / 10
-    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
-  }
-  if (n >= 1e6) return `${fmt(n / 1e6)}M`
-  if (n >= 1e3) return `${fmt(n / 1e3)}k`
-  return String(n)
-}
-
-function UsageRing({ pct }: { pct: number }) {
-  const r = (RING_SIZE - RING_STROKE) / 2
-  const c = 2 * Math.PI * r
-  const clamped = Math.min(100, Math.max(0, pct))
-  return (
-    <svg
-      width={RING_SIZE}
-      height={RING_SIZE}
-      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
-      style={{ transform: 'rotate(-90deg)', display: 'block' }}
-      aria-hidden="true"
-    >
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={r}
-        fill="none"
-        stroke="var(--bg-surface)"
-        strokeWidth={RING_STROKE}
-      />
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={r}
-        fill="none"
-        stroke={pct > 80 ? 'var(--danger, #FF7B72)' : 'var(--accent)'}
-        strokeWidth={RING_STROKE}
-        strokeLinecap="round"
-        strokeDasharray={c}
-        strokeDashoffset={c * (1 - clamped / 100)}
-        style={{ transition: 'stroke-dashoffset 0.4s ease, stroke 0.4s ease' }}
-      />
-    </svg>
-  )
-}
-
-function UsageIndicator({
-  usage,
-  compact = false,
-}: {
-  usage: Record<string, unknown>
-  /** 移动端紧凑态：只留圆环 + 百分比，费用文本让位给配置值（见下方注释）。 */
-  compact?: boolean
-}) {
-  const [hover, setHover] = useState(false)
-  const used = typeof usage['used'] === 'number' ? usage['used'] : null
-  const size = typeof usage['size'] === 'number' ? usage['size'] : null
-  const pct = used !== null && size !== null && size > 0 ? (used / size) * 100 : null
-  const costObj = usage['cost']
-  const cost = costObj && typeof costObj === 'object' && typeof (costObj as Record<string, unknown>)['amount'] === 'number'
-    ? (costObj as Record<string, unknown>)['amount'] as number
-    : null
-
-  if (pct === null && cost === null) return null
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 10,
-        color: 'var(--text-faint)',
-        fontFamily: READER_FONT,
-      }}
-    >
-      {pct !== null && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span
-            style={{ position: 'relative', display: 'inline-flex', padding: 2 }}
-            onMouseEnter={() => setHover(true)}
-            onMouseLeave={() => setHover(false)}
-          >
-            <UsageRing pct={pct} />
-            {used !== null && size !== null && (
-              <span
-                className="pixel-float"
-                style={{
-                  position: 'absolute',
-                  bottom: '100%',
-                  left: '50%',
-                  marginBottom: 6,
-                  padding: '3px 8px',
-                  fontSize: 11,
-                  whiteSpace: 'nowrap',
-                  background: 'var(--bg-elevated)',
-                  color: 'var(--text-primary)',
-                  opacity: hover ? 1 : 0,
-                  transform: hover
-                    ? 'translateX(-50%) translateY(0)'
-                    : 'translateX(-50%) translateY(3px)',
-                  transition: 'opacity 0.15s ease, transform 0.15s ease',
-                  pointerEvents: 'none',
-                  zIndex: 100,
-                }}
-              >
-                {formatTokens(used)} / {formatTokens(size)}
-              </span>
-            )}
-          </span>
-          {Math.round(pct)}%
-        </span>
-      )}
-      {/* 移动端只留圆环 + 百分比：费用文本约 40px，会把三个配置值的可用宽度
-          各吃掉十几 px（窄屏上 360px 实测值被压到 5 个字符），代价大于收益。
-          桌面端保持完整展示。 */}
-      {cost !== null && !compact && <span>${cost.toFixed(4)}</span>}
-    </div>
-  )
-}
-
 /** 「高级」收纳入口（仅移动端渲染）。数字角标让用户不点开也知道里面有货。 */
 function AdvancedTrigger({
   count,
@@ -623,12 +499,10 @@ function AdvancedRow({
 
 export function ConfigToolbar({
   configOptions,
-  usage,
   onSetConfigOption,
   readOnly = false,
 }: {
   configOptions: ConfigOption[]
-  usage: Record<string, unknown> | null
   onSetConfigOption: (configId: string, value: string) => void
   /** 只读置灰态：configOptions 来自已结束会话的快照（无活 agent），仅作展示。
    *  样式与活跃态一致、整体 opacity 0.5（ui-style-guide Disabled 约定）。 */
@@ -637,7 +511,7 @@ export function ConfigToolbar({
   const { t } = useTranslation()
   const isMobile = useAppStore((s) => s.isMobile)
 
-  if (configOptions.length === 0 && !usage) return null
+  if (configOptions.length === 0) return null
 
   const sorted = [...configOptions].sort((a, b) => {
     const ai = CATEGORY_ORDER.indexOf(a.category)
@@ -678,19 +552,6 @@ export function ConfigToolbar({
       ))}
       {showAdvanced && (
         <AdvancedMenu options={advanced} onSelect={onSetConfigOption} disabled={readOnly} />
-      )}
-      {usage && (
-        <div
-          style={{
-            marginLeft: 'auto',
-            // 单行约束下允许用量指示被压缩/裁切，避免它把配置项挤出屏幕。
-            flexShrink: isMobile ? 1 : 0,
-            minWidth: isMobile ? 0 : undefined,
-            overflow: isMobile ? 'hidden' : undefined,
-          }}
-        >
-          <UsageIndicator usage={usage} compact={isMobile} />
-        </div>
       )}
     </div>
   )
