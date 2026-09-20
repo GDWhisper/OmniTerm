@@ -42,16 +42,26 @@ GDWhisper/OmniTerm-dev (私有)              GDWhisper/OmniTerm (公共)
 
 ```
 正确顺序：
-  Step 1~4  →  bump / changelog / sync / release-notes 推送
-  Step 5    →  git tag + 推送（触发 release.yml CI）
-  ↓ 等待 release.yml 全绿（含 backend matrix 多平台编译 + frontend + docker）
+  Step 1~4  →  bump / changelog / sync / preflight（本地）
+  Step 5    →  用户确认
+  Step 6    →  生成 release-notes 并 push public main ← 触发 ci.yml(push main)
+  ↓ 等 ci.yml(push main) 全绿 ← tag 之前唯一的拦截点，此时修 CI 代价最小
+  Step 7    →  git tag + 推送 ← 触发 release.yml CI
+  ↓ 等待 release.yml 全绿（含 backend matrix 多平台编译 + frontend + docker + npm-publish）
   Step 8    →  cargo publish --allow-dirty   ← 仅在此之后执行
   Step 10   →  验证
 
-错误顺序（本次 0.2.0 踩坑）：
+错误顺序（0.2.0 踩坑）：
   ✗ tag 推送后立刻 cargo publish，此时 release.yml 仍在跑 / ci.yml 已红
   → 不可逆的 crate 已上线，但 GitHub Release 可能失败，造成「crates 有、GitHub 没有」的不一致
+
+错误顺序（0.2.23 踩坑）：
+  ✗ push main 与 push tag 紧邻执行 → ci.yml 的红灯在 tag 已推、Release 已建、npm/Docker 已自动发布之后才暴露
+  → 修 CI 需要新提交，与已推送的 tag 冲突：改 tag 会让已发布产物与 tag 内容不一致，删 tag 会把 Release 打成 draft
+  → 红线：**push main 之后必须等 ci.yml 绿，再打 tag**
 ```
+
+**更早的门禁**：`ci.yml` 的触发分支含 `dev`（`branches: [dev, main, preview, debug]`），发版前先 `git push origin dev` 并等 `ci.yml(dev)` 全绿——在 dev 上拦截红灯，比在 main 上发现后重做一轮 sync + push public 便宜得多。
 
 **判定「CI 完全通过」的标准：**
 - `gh run list --branch main` 中本次 tag 对应的 `Release` (release.yml) run 全部 job 绿
@@ -81,10 +91,14 @@ git add -A && git commit -m "chore: bump to 0.2.0"
 
 ### Step 2：同步 dev → main
 
-使用 sync 脚本自动排除开发文档：
+**在 main worktree 执行**（脚本会自检，误在 dev worktree 执行直接退出并提示路径）：
 
 ```bash
-# 在 dev worktree 执行
+cd /home/pax/coding/OmniTerm   # main worktree
+
+# 前置：dev 必须已推送到 origin，否则脚本报「dev 分支有未推送的提交」并退出
+git -C /home/pax/coding/OmniTerm-dev push origin dev
+
 ./scripts/sync-main.sh "release: v0.2.0"
 ```
 
@@ -106,25 +120,13 @@ sync-main.sh 会自动运行：
 - 后端：`cargo check`
 - 前端：`pnpm build`
 
-#### Windows 验证（手动）
+#### Windows 验证（默认交 CI 矩阵，无需手动）
 
-**Linux 无法交叉编译 Windows MSVC 目标**，需要在 Windows 上验证：
+`release.yml` 的 `backend (windows-latest, x86_64-pc-windows-msvc)` job 会真实执行 `cargo build --release --target x86_64-pc-windows-msvc`，**编译级验证已由 CI 覆盖**——Linux 侧不预跑不构成盲区，改动不涉 Windows 专有路径时可跳过（跳过需用户确认）。
 
-```powershell
-# 在 Windows 上 clone 公开仓
-git clone https://github.com/GDWhisper/OmniTerm.git
-cd OmniTerm
-git checkout main
+仅当改动触及 Windows **专有代码路径**时才需要本地/用户机验证：`#[cfg(windows)]` 分支、spawn/进程与信号 API、路径与 `PATHEXT` 语义、CRLF 字节契约（这类问题编译能过、运行必错）。
 
-# 验证编译
-cargo check
-```
-
-**验证流程：**
-1. 用户在 Windows 上执行 `cargo check`
-2. 用户将结果告知 agent（成功/失败 + 错误信息）
-3. 如果失败，agent 修复后重新 sync + 推送
-4. 用户再次验证，直到通过
+验证流程（需要时）：用户在 Windows 上 clone 公开仓 → `git checkout main` → `cargo check`；失败则 agent 修复后重新 sync + 推送再验，直到通过。
 
 **注意：禁止在编译失败时打 tag 推送，否则会触发失败的 CI 并浪费资源。**
 
@@ -209,7 +211,8 @@ cargo check
    git commit -m "docs: release notes for vX.Y.Z"
    git push public main:main
    ```
-4. 再执行 Step 7 打 tag（tag 触发 CI，CI 读取已推送的 `release-notes.md`）
+4. **等 `ci.yml(push main)` 全绿**（`gh run list --branch main` 找对应 run；这一步是打 tag 前唯一的常规拦截点，红灯时 tag 还没打，修完重推即可）。
+5. 再执行 Step 7 打 tag（tag 触发 CI，CI 读取已推送的 `release-notes.md`）
 
 > 模板结构见 `.github/release-notes-template.md`，仅定骨架，内容由发布 agent 总结。
 
@@ -403,6 +406,19 @@ ls node_modules/@gdwhisper/ && ./node_modules/@gdwhisper/omniterm-<本机 plat>/
 
 > 主包的 `optionalDependencies` 是精确锁定，平台包缺失时 npm 会**静默跳过**（optional 语义），只 `added 1 package` 而不报错——所以「装上主包 ≠ 拿到可执行二进制」，验证必须看 `@gdwhisper/` 目录下有没有平台子包。
 
+### ci.yml 红灯但 tag 已推送（新公告 / flaky 测试）
+
+`audit`（cargo-deny）会因**新发布的 RUSTSEC 公告**突然红灯，`rust` 会因**既有 flaky 测试**偶发红灯——两者都可能在 tag 推送后才暴露。按三步处置：
+
+1. **定性质**（三条缺一不可）：红灯文件是否在本版 `git log v<上一版本>..main` 内（不在 → 非本版引入）；本地全量 `cargo test --workspace` 是否通过；重跑是否同点失败。全部指向外部公告 / flaky，才可考虑继续发布。
+2. **查渠道是否已落地**：`gh run view <release-run-id> --json jobs`——`github-release` 一旦 success，`npm-publish` 与 `docker` 会紧接着自动执行，**npm 与 Docker 已经发出**。
+3. **决策（必须经用户确认）**：
+   - 新公告 → 修法只有 `cargo update -p <crate>` 升到修复版，或短期在 `deny.toml` 的 `[advisories]` ignore 登记 id（附理由注释）。两者都是新提交，与已推送 tag 冲突。
+   - 跳过 crates.io 会造成渠道不一致（v0.2.17 教训：GitHub 与 npm 已发、crates 漏发）；而 `cargo install` 默认不读 `Cargo.lock`，用户侧会解析到已修复的传递依赖版本 → **通常选「照发 crates.io + 下一版修依赖」**。
+   - flaky → 必须修测试根因（见 `docs/dev/debug-patterns/investigation.md` 手法 11「测试-时序耦合」），**不得用加长 sleep 掩盖**。
+
+**禁止**：为让 CI 变绿而修改/移动已推送的 tag（已发布产物会与 tag 内容不一致）；删除远端 tag（Release 会转 draft，见下节）。
+
 ### 公共仓 tag 误推送到私有仓
 
 每次推 tag 前先确认 remote：
@@ -467,6 +483,13 @@ git remote -v
 - 发布前用 `git log v<上一版本>..dev --oneline` 取得**权威的本次改动清单**，不依赖 CHANGELOG 里的 `[Unreleased]`
 - 以该清单重写顶部 `[X.Y.Z] - YYYY-MM-DD` 条目，删除陈旧的 `[Unreleased]` 堆积块
 - 落实「每次发版即时归档」习惯：发版时把 `[Unreleased]` 的内容移到对应版本号下，避免再次堆积
+- **反方向同样会漏（0.2.23 实测）**：发版后才写下的条目若被**追加进已发布的 `## [X.Y.Z]` 段**（而不是新起 `[Unreleased]`），照 CHANGELOG 总结 Release notes 就会漏掉这些用户可见改动。发布前固定校验「已发布版本段与该 tag 的 CHANGELOG 逐字一致」：
+
+  ```bash
+  sed -n '/^## \[0.2.22\]/,/^## \[0.2.21\]/p' CHANGELOG.md > /tmp/cur-sec.md
+  git show v0.2.22:CHANGELOG.md | sed -n '/^## \[0.2.22\]/,/^## \[0.2.21\]/p' > /tmp/rel-sec.md
+  diff /tmp/cur-sec.md /tmp/rel-sec.md   # 期望无输出；有差异 = 有发版后追加到旧版本段的条目
+  ```
 
 ### crates.io 前端资源未入库（`--allow-dirty`）
 
