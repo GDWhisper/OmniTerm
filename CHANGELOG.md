@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- (2026-09-21 00:40) `[infra]` 升级 `rustls` 0.23.43 → 0.23.45（连带 `rustls-webpki` 0.103.13 → 0.103.15），修复 RUSTSEC-2026-0285（TLS 1.3 握手消息会在错误状态下被接受，中危；握手转写仍被认证，网络位置攻击者无法篡改或完成握手）。该公告出现在 v0.2.23 发布当天，使 ci.yml 的 audit 门禁（`cargo deny check advisories`）在 push main 后红灯，与本次发布内容无关（`Cargo.lock`）
+
 ## [0.2.23] - 2026-09-20
 
 ### Added

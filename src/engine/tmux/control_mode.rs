@@ -334,13 +334,39 @@ mod tests {
     use tokio::process::Command;
     use uuid::Uuid;
 
-    async fn create_test_tmux_session(name: &str) {
-        let output = Command::new("tmux")
-            .args(["new-session", "-d", "-s", name])
-            .output()
-            .await
-            .expect("tmux should be available");
+    /// 建测试用 tmux 会话。`pane_cmd` 为 `Some` 时用该命令替代默认 shell——
+    /// 默认 shell 会在 attach 后异步打印提示符（实测本机 ~440ms、CI 更快），
+    /// 落进「初始不活跃」断言窗口就成了与机器速度相关的 flaky。
+    async fn create_test_tmux_session(name: &str, pane_cmd: Option<&str>) {
+        let mut args: Vec<&str> = vec!["new-session", "-d", "-s", name];
+        if let Some(cmd) = pane_cmd {
+            args.push(cmd);
+        }
+        let output =
+            Command::new("tmux").args(&args).output().await.expect("tmux should be available");
         assert!(output.status.success(), "failed to create tmux session: {:?}", output);
+    }
+
+    /// 有界轮询等待 `is_active(timeout)` 达到 `want`。
+    ///
+    /// 替代固定 sleep + 立即断言：`%output` 的到达时机取决于 pane 进程与 tmux
+    /// 调度，固定睡眠在慢/快机器上必然出现窗口错配。
+    async fn wait_for_active(
+        client: &ControlModeClient,
+        timeout: Duration,
+        want: bool,
+        budget: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            if client.is_active(timeout).await == want {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
     }
 
     async fn kill_test_tmux_session(name: &str) {
@@ -350,16 +376,19 @@ mod tests {
     #[tokio::test]
     async fn control_mode_client_detects_output_and_timeout() {
         let name = format!("omniterm_test_active_{}", Uuid::new_v4());
-        create_test_tmux_session(&name).await;
+        // pane 用 cat：不产生启动输出，只把输入回显出去（送 send-keys 必得 %output）。
+        create_test_tmux_session(&name, Some("cat")).await;
 
         let client = ControlModeClient::new(&name).await.expect("client should start");
         client.listen().await.expect("listener should start");
 
         let timeout = Duration::from_secs(2);
 
-        // Initially inactive.
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(!client.is_active(timeout).await);
+        // 无输出即不活跃；预算给足 timeout，attach 期若有残留事件也会自然过期。
+        assert!(
+            wait_for_active(&client, timeout, false, Duration::from_secs(5)).await,
+            "session without any output should be inactive"
+        );
 
         // Send output to the session.
         let output = Command::new("tmux")
@@ -369,13 +398,17 @@ mod tests {
             .expect("send-keys should succeed");
         assert!(output.status.success());
 
-        // Allow time for the %output event to be read.
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(client.is_active(timeout).await);
+        // 产生输出后进入活跃态（cat 回显经 pty 到 tmux，延迟取决于调度，故轮询而非定时）。
+        assert!(
+            wait_for_active(&client, timeout, true, Duration::from_secs(5)).await,
+            "session should be active after producing output"
+        );
 
-        // Wait past the timeout.
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        assert!(!client.is_active(timeout).await);
+        // 静默超过 timeout 后转为不活跃（预算 = timeout + 余量）。
+        assert!(
+            wait_for_active(&client, timeout, false, timeout + Duration::from_secs(3)).await,
+            "session should become inactive after the activity timeout"
+        );
 
         client.stop().await;
         kill_test_tmux_session(&name).await;
@@ -384,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn control_mode_client_cleans_up_child() {
         let name = format!("omniterm_test_cleanup_{}", Uuid::new_v4());
-        create_test_tmux_session(&name).await;
+        create_test_tmux_session(&name, None).await;
 
         let client = ControlModeClient::new(&name).await.expect("client should start");
         client.listen().await.expect("listener should start");
