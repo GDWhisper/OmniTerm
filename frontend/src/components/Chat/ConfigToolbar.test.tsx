@@ -282,4 +282,22 @@ describe('ConfigToolbar mobile overflow', () => {
     expect(findButton('Mode:')).toBeTruthy()
     expect(findButton('Brave Mode')).toBeUndefined()
   })
+
+  // jsdom 不做布局，单行保证只能靠样式契约守住：nowrap + 可收缩（min-width:0）。
+  // 历史上正是漏了 min-width:0（弹性子项默认 auto、当前值 nowrap）导致 360px
+  // 下四个控件换行成两行——这里把那条契约钉成断言。
+  it('pins the single-row style contract (nowrap + shrinkable triggers)', () => {
+    render({ mobile: true, options: OVERFLOW_OPTIONS })
+
+    const row = container.firstElementChild as HTMLElement
+    expect(row.style.flexWrap).toBe('nowrap')
+
+    const trigger = findButton('Ask') as HTMLButtonElement
+    expect(trigger.style.minWidth).toBe('0px')
+    expect(trigger.style.width).toBe('100%')
+
+    // 桌面端不钉单行（保持原有 wrap 行为）
+    render({ mobile: false, options: OVERFLOW_OPTIONS })
+    expect((container.firstElementChild as HTMLElement).style.flexWrap).toBe('wrap')
+  })
 })

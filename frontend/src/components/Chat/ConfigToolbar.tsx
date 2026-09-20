@@ -111,10 +111,13 @@ function ConfigDropdown({
       ref={ref}
       style={{
         position: 'relative',
-        // 紧凑态允许压缩：值名再长也先保证「高级」按钮不被挤出屏幕。
-        flexShrink: compact ? 1 : 0,
-        minWidth: 0,
-        maxWidth: compact ? 148 : undefined,
+        // 紧凑态等分剩余宽度（flex-basis 0）：三个行内项各拿一份，最长的值名
+        // 截断最多，短值（Ask/Off）不被牺牲。若用默认的按基准宽度比例收缩，
+        // 长模型名会把「Always Ask」这类短值一起拖到截断。
+        // 注意 min-width 必须显式 0：弹性子项默认 min-width:auto，而当前值
+        // nowrap，不给 0 按钮拒绝收缩、整行只能换行（实测 360px 换两行）。
+        flex: compact ? '1 1 0' : undefined,
+        minWidth: compact ? 0 : undefined,
       }}
     >
       <button
@@ -124,10 +127,13 @@ function ConfigDropdown({
           display: 'flex',
           alignItems: 'center',
           gap: 4,
-          padding: compact ? '0 8px' : '2px 8px',
+          padding: compact ? '0 6px' : '2px 8px',
           height: compact ? MOBILE_CONTROL_HEIGHT : undefined,
+          // 填满外层容器：外层被 flex 压窄后按钮必须跟着窄，ellipsis 才有机会生效。
+          width: compact ? '100%' : undefined,
+          minWidth: compact ? 0 : undefined,
           maxWidth: '100%',
-          fontSize: 11,
+          fontSize: compact ? 10 : 11,
           fontFamily: READER_FONT,
           background: open ? 'var(--bg-surface)' : 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',
@@ -281,7 +287,14 @@ function UsageRing({ pct }: { pct: number }) {
   )
 }
 
-function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
+function UsageIndicator({
+  usage,
+  compact = false,
+}: {
+  usage: Record<string, unknown>
+  /** 移动端紧凑态：只留圆环 + 百分比，费用文本让位给配置值（见下方注释）。 */
+  compact?: boolean
+}) {
   const [hover, setHover] = useState(false)
   const used = typeof usage['used'] === 'number' ? usage['used'] : null
   const size = typeof usage['size'] === 'number' ? usage['size'] : null
@@ -341,7 +354,10 @@ function UsageIndicator({ usage }: { usage: Record<string, unknown> }) {
           {Math.round(pct)}%
         </span>
       )}
-      {cost !== null && <span>${cost.toFixed(4)}</span>}
+      {/* 移动端只留圆环 + 百分比：费用文本约 40px，会把三个配置值的可用宽度
+          各吃掉十几 px（窄屏上 360px 实测值被压到 5 个字符），代价大于收益。
+          桌面端保持完整展示。 */}
+      {cost !== null && !compact && <span>${cost.toFixed(4)}</span>}
     </div>
   )
 }
@@ -639,11 +655,13 @@ export function ConfigToolbar({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        // 移动端禁止换行：宁可截断也要单行（换行会叠出第二行挤占聊天视口，
+        // 这正是收纳要解决的问题）。桌面端保持 wrap 原行为。
+        flexWrap: isMobile ? 'nowrap' : 'wrap',
+        gap: isMobile ? 4 : 6,
         padding: '4px 12px',
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-base)',
-        flexWrap: 'wrap',
         opacity: readOnly ? 0.5 : 1,
         // 高级面板的定位锚：面板绝对定位于配置栏上方并与配置栏等宽。
         position: 'relative',
@@ -662,8 +680,16 @@ export function ConfigToolbar({
         <AdvancedMenu options={advanced} onSelect={onSetConfigOption} disabled={readOnly} />
       )}
       {usage && (
-        <div style={{ marginLeft: 'auto' }}>
-          <UsageIndicator usage={usage} />
+        <div
+          style={{
+            marginLeft: 'auto',
+            // 单行约束下允许用量指示被压缩/裁切，避免它把配置项挤出屏幕。
+            flexShrink: isMobile ? 1 : 0,
+            minWidth: isMobile ? 0 : undefined,
+            overflow: isMobile ? 'hidden' : undefined,
+          }}
+        >
+          <UsageIndicator usage={usage} compact={isMobile} />
         </div>
       )}
     </div>
