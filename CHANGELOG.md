@@ -58,6 +58,7 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-09-14 16:40) `[frontend]` ACP 移动端底部配置栏收纳：窄屏下 agent 下发的配置项（权限模式/模型/思考等级/模型参数等）超过 3 个时 flex-wrap 会叠成 2~3 行、挤占聊天视口约 50~70px。现仅移动端切分——行内只保留 权限模式 > 模型 > 思考等级 三项（按类别优先级、每类至多第一个，agent 未下发的类别自动缺席；只发非这三类的会话提升排序第一项兜底，避免只剩一个空入口），其余全部收进「高级 N」面板（N 为收纳数量，不点开也知道里面有货）。面板锚在配置栏上方、木纹标题栏 + 关闭按钮 + 统一滚动容器（最大高度 320px），每项一行「名称 + 当前值」、点行就地展开选项列表（不用二级浮层，规避选项列表嵌进滚动面板被裁切/二级滚动），点选即生效并收起该行；关闭契约与既有配置下拉一致（外部点击 / Esc），两者互斥。配置项 ≤3 个时不出现收纳按钮；已结束（置灰）会话的收纳按钮随其他按钮一同 disabled。顺带移动端紧凑化：行内按钮去掉类别前缀、当前值超宽省略、触摸目标提到 30px（原约 20px），360px 窄屏稳定单行；桌面端渲染路径不变（不切分、整行展示）。只读快照 tooltip 的硬编码英文本地化（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/locales/{zh,en}/translation.json`、`docs/reference/user-testing.md`）
 - (2026-09-14 12:18) `[frontend]` ACP 聊天「回到底部」按钮移动端改单图标小方钮：原「↓ 回到底部」文字条在手机上占地过宽（44px 高、百余 px 宽），改为 36×36 单图标方钮，文案保留在 aria-label/title 不损可达性；箭头表示法从文本字形 `↓` 统一为共享库 `IconArrowDown`（镜像既有 IconArrowUp），消除像素字体开关与平台字体回退导致的字形渲染差异，桌面端文字按钮布局不变（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/components/FileManager/icons.tsx`）
 - (2026-09-13 01:05) `[frontend]` 聊天「回到底部」按钮改离底即显：原实现以末条消息内容指纹为门控，仅当上翻期间尾部有新内容（新消息/流式扩写/工具状态推进）才出现，会话结束或空闲时上翻回看历史没有任何回底入口；现离开底部即显示、滚回底部（含点击按钮）即隐藏，流式输出与会话结束行为一致，可见文案从「下方有新内容」改「回到底部」。末条指纹判定随门控整体移除（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/utils/chatScroll.ts` 及其测试删除、`frontend/src/locales/{zh,en}/translation.json`）
 
