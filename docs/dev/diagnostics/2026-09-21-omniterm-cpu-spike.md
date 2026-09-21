@@ -1,5 +1,7 @@
 # CPU 占用排查记录：omniterm 后端 vs 内部 agent（2026-09-21 15:00–16:30）
 
+> **2026-09-21 修复指向**：止血方案已按 `docs/dev/plans/2026-09-21-acp-agent-connection-cpu-spin.md` 实施 Phase 1（P0）——omniterm 侧 killpg 杀 agent 进程组 + 共享构造核重构；精确触发条件（crate 内部 pidfd 等待路径的 poll/wake 交错）仍未钉死，Phase 2 fake agent 回归测试负责固化时序并向上游提 issue。
+>
 > **2026-09-21 16:30 更新**：用户定位到具体会话并用「释放/重连」稳定复现，尖峰被现场抓获
 > （152%），根因锁定到 ACP agent 连接层的子进程监管循环。下文保留首轮排查过程，
 > 「二轮：现场抓获」为最终结论。

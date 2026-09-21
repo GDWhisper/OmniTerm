@@ -1,7 +1,8 @@
 # ACP agent 连接层子进程等待空转：CPU 尖峰修复计划
 
-> 状态：设计稿（2026-09-21；同日经一轮实现前评审，D1/D3/D4、范围表、验收、风险表、闭环已按评审结论修订，修订处以「2026-09-21 评审」标注）
-> 触发条件：修改 `src/acp/client.rs`（`AcpClient::shutdown` / `disconnect` / 连接任务生命周期）、`src/api/sessions.rs`（release/archive 路径）、`src/acp/supervisor.rs`，或排查「恢复 ACP 会话后后端 CPU 飙高」问题前**必读**
+> 状态：**Phase 1（P0 止血）已实施**（2026-09-21 代码落地 + 单测/clippy/fmt 通过；手动复现验证待用户在 dev 环境执行）。Phase 2（P1 观测+回归测试）与 Phase 3（P2 治理）未开始。
+> 修订记录：设计稿 → 同日一轮实现前评审（D1/D3/D4、范围表、验收、风险表、闭环，修订处标「2026-09-21 评审」）→ 同日 Phase 1 实施（实施偏差见「Phase 1 实施记录（勘误）」）。
+> 触发条件：修改 `src/acp/client.rs`（`AcpClient::shutdown` / `disconnect` / 连接任务生命周期）、`src/acp/agent_proc.rs`（pid 捕获 / killpg）、`src/api/sessions.rs`（release/archive 路径）、`src/acp/supervisor.rs`，或排查「恢复 ACP 会话后后端 CPU 飙高」问题前**必读**
 > 关联：
 > - `docs/dev/diagnostics/2026-09-21-omniterm-cpu-spike.md`（**完整证据链，本文的排查基础，先读它**）
 > - `docs/dev/plans/2026-09-19-acp-failure-visibility.md`（turn 结束语义；本计划不改消息语义但共用 dispatch_prompt 周边代码，改动前对照）
@@ -107,6 +108,18 @@
 
 **总原则**：修复不依赖 agent 合作——kill 是 OS 级操作，与 agent 实现无关。
 
+## Phase 1 实施记录（勘误，2026-09-21）
+
+代码已落地，与设计稿的差异与补充如下（后续会话直接采信，勿重复推导）：
+
+1. **新模块 `src/acp/agent_proc.rs`**：pid 自报文件（`new_pid_file` / `read_and_clear_pid_file` / `remove_pid_file`）、wrapper 构造（`sh_quote` / `wrap_agent_with_cwd` 从 `client.rs` 迁入并新增 `pid_file` 参数）、`/proc` 扫描兜底（`snapshot_direct_children` / `capture_agent_pid` / `resolve_child_pid`，仅 Linux）、进程组击杀（`kill_agent_process_group` + 归属校验 `should_kill_group`）。D1/D2 的实现与单测都在该模块，`client.rs` 只负责接线。
+2. **272 行重复的处置：抽公共核**（而非两处同步改）。`spawn_with_session(agent, cwd, api_keys, mode: SessionMode)` 是唯一实现，`spawn_and_connect` / `spawn_and_load` 塌缩为各自 6 行的薄封装；两条构造路径的差异收敛为 `SessionMode::New | Load(String)` 一个枚举（session/new vs 复用 `acp_session_id`）。
+3. **归属校验比设计稿更细**（防误杀与覆盖 wrapper 场景兼得）：`should_kill_group(pid) = is_direct_child(pid) || (!pid_alive(pid) && process_group_alive(pid))`。即 pid 仍是直接子进程（含僵尸，`exec` 后同 pid）→ 杀；直接子进程已退出（npx leader 退而孙进程活）但进程组仍非空 → 也杀（与 crate `ChildGuard::drop` 同口径）；pid 活着但已不是直接子进程 → 判为 pid 复用，跳过并 WARN。非 Linux Unix 无 `/proc` 校验，直接 killpg（同 crate 口径）。
+4. **设计稿外新增的一处必要决策**：crate 的 `finish_child_exit` 对非零退出状态返回 `Err`（源码实证：`acp_agent.rs`，agent 被 SIGKILL → "Process exited with signal 9"）。因此 killpg 之后连接任务必然以 `Err` 结束，若照原样广播，每次 release/delete/archive/reaper 都会给前端推一条假崩溃 `prompt_error`。处置：`spawn_crash_watcher` 复用共享的 `alive: Arc<AtomicBool>`（shutdown/disconnect 先置 false）——`alive=false` 时的 `Err` 判定为主动关闭的预期收尾，静默不广播、不定稿；`alive=true` 的 `Err` 才是真崩溃（广播 + `finalize_turn` 不变）。`is_cancelled()` 过滤按计划无条件落地。
+5. **P2-3（探针超时泄漏）未在 Phase 1 顺带解决**：pid 在连接建成后（`conn_rx`）才捕获，`test_agent` 的 15s 超时分支拿不到 client 也就拿不到 pid；按计划预案列 backlog。超时分支的 pid 文件已 best-effort 清理。
+6. **Phase 1 未做**：`session_id` 日志归属（P1-1）、fake agent 回归测试（P1-2/D5）、上游调查与版本声明修正（P2-1）、僵尸子进程（P2-2）。
+7. **单测覆盖**（`agent_proc.rs`，24 个）：wrapper 字符串构造（含 pid 自报插入位置）、pid 文件有界读/读后即删/非法内容、**端到端证明 wrapper 自报 pid == exec 后 agent pid**（`child.id()` 相等断言）、cwd 端到端回归（从 `client.rs` 随迁）、`/proc` diff 单/多 pid（cwd 消歧）、killpg 击杀直接子进程（幂等）、**leader 退出后 killpg 带走孙进程**、死 pid 不误杀、`None` pid 降级不 panic。
+
 ## 实施分期
 
 | Phase | 产出 | 主要改动 | 依赖 |
@@ -119,14 +132,14 @@
 
 ## 验收标准
 
-- [ ] 恢复目标会话后：CPU 不再无限持续高位（止血生效）；若空转仍被触发，释放后**立即**归零且无 agent 进程残留（`pgrep` 验证，含孙进程）
-- [ ] 回归测试（fake agent）：agent 退出后连接任务限时结束；shutdown 后进程组被 kill
-- [ ] 正常链路无回归：恢复 → 发消息 → turn 正常定稿落库 → 释放，全链路行为与修复前一致（`mark_prompt_idle` 时序不被 kill 破坏）
-- [ ] **全部**释放路径行为一致（修复在 `shutdown()`/`disconnect()` 内部则自动覆盖，但仍需逐点抽查）：`release`（`sessions.rs` release_session）、`archive` 与 `delete_session`（`cleanup_session_runtime`）、reaper 空闲回收（`reaper.rs`）、`shutdown_all`（`supervisor.rs`，服务退出）、restore 三条清理（`ws/acp.rs`：不支持 load 时、旧 client 回收、load 失败回收）、探针（`agents.rs` test_agent / test_agent_raw）
-- [ ] create 路径（`spawn_and_connect`，非仅 `spawn_and_load`）同样捕获 pid 并杀进程——防 272 行重复只改一处
-- [ ] pid 获取降级路径有 WARN 日志（非 Linux / pid 文件缺失或非法 / 扫描无果），不静默退化为修复前现状
-- [ ] `cargo test --workspace`、`cargo clippy -- -D warnings`、`cargo fmt` 通过；本计划无前端改动
-- [ ] CHANGELOG.md 增条目（核心规则 2：实质性修复）
+- [ ] 恢复目标会话后：CPU 不再无限持续高位（止血生效）；若空转仍被触发，释放后**立即**归零且无 agent 进程残留（`pgrep` 验证，含孙进程）——**待用户在 dev 环境手动复现验证**（代码已就绪）
+- [ ] 回归测试（fake agent）：agent 退出后连接任务限时结束；shutdown 后进程组被 kill——Phase 2（P1-2/D5）
+- [ ] 正常链路无回归：恢复 → 发消息 → turn 正常定稿落库 → 释放，全链路行为与修复前一致（`mark_prompt_idle` 时序不被 kill 破坏）——**待用户手动回归**
+- [ ] **全部**释放路径行为一致：修复在 `shutdown()`/`disconnect()` 内部，代码层面已自动覆盖 `release`（`sessions.rs`）、`archive`/`delete_session`（`cleanup_session_runtime`）、reaper 空闲回收（`reaper.rs`）、`shutdown_all`（`supervisor.rs`）、restore 三条清理（`ws/acp.rs`）、探针成功路径（`agents.rs` `disconnect`）；**逐点抽查待用户手动**。已知缺口：探针 15s 超时分支泄漏（P2-3，列 backlog）
+- [x] create 路径（`spawn_and_connect`，非仅 `spawn_and_load`）同样捕获 pid 并杀进程——抽公共核 `spawn_with_session` 后天然覆盖两条构造路径（勘误 2）
+- [x] pid 获取降级路径有 WARN 日志（非 Linux / pid 文件缺失或非法 / 扫描无果 / 归属校验未通过），不静默退化为修复前现状
+- [x] `cargo test --workspace`（459+8+2 通过）、`cargo clippy --workspace --all-targets -- -D warnings` 通过；`cargo fmt --all` 见提交；本计划无前端改动
+- [ ] CHANGELOG.md 增条目（核心规则 2：实质性修复）——随本次实施提交补齐
 
 ## 风险与降级
 
@@ -141,13 +154,15 @@
 
 ## 文档闭环
 
-实施完成后需更新：
+Phase 1 已完成项（2026-09-21）：
 
-1. 本计划状态 → `已实施`（若分 Phase 合入，就地记录各 Phase 偏差「勘误」块）
-2. `docs/dev/diagnostics/2026-09-21-omniterm-cpu-spike.md` 标注修复指向本计划
-3. `AGENTS.md` 文档索引：新增本计划行（本文即「改 `client.rs` 释放路径前必读」）；**无条件**同步 `docs/architecture/backend.md`——其 ACP 小节当前写着 `shutdown`「强制 kill 子进程」的虚假声明，与修复后真实语义不符，须改写为「kill 进程组 + signal」并说明 kill 是主路径、abort 不杀进程；同时修正三处同源错误注释：`sessions.rs` release/delete 的「shutdown 强制杀进程」、`reaper.rs` 回收路径的「shutdown … 子进程被 kill」
-4. `CHANGELOG.md`：实质性修复条目
-5. `./scripts/check-doc-index.sh` 校验通过
+1. 本计划状态 → Phase 1 已实施 + 就地「Phase 1 实施记录（勘误）」块（上方）
+2. `docs/dev/diagnostics/2026-09-21-omniterm-cpu-spike.md` 已标注修复指向本计划
+3. `AGENTS.md` 文档索引已有本计划行；`docs/architecture/backend.md` ACP 小节已改写为「killpg 主路径 + signal 优雅收尾 + abort 不杀进程」的真实语义；三处同源虚假注释已修（`sessions.rs` cleanup/release 两处、`reaper.rs` 回收路径一处）
+4. `CHANGELOG.md` 已增条目（见当次提交）
+5. `./scripts/check-doc-index.sh` 已通过
+
+Phase 2/3 待办：fake agent 回归测试落地后回填 D5 状态；上游调查结论回填 P2-1；僵尸子进程根因回填 P2-2。
 
 ## 交接说明（给接手会话）
 
@@ -161,7 +176,7 @@
 **未解决/未知**：
 
 - 空转的精确触发条件（crate 内部 pidfd 等待路径的 poll/wake 交错）——Phase 2 的 fake agent 测试若复现，可据此向上游提 issue；若不复现，说明还有未识别的时序变量。
-- wrapper `$$` pid 文件方案尚未经真实 agent 验证（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立）——Phase 1 第一件事。
+- wrapper `$$` pid 文件方案：单测已证明 wrapper 自报 pid == exec 后 agent pid（`agent_proc.rs::wrapped_subprocess_reports_own_pid_via_file`），但**尚未经真实 agent 验证**（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立——leader 退出而孙进程存活的 killpg 路径已有单测覆盖）——仍需 dev 环境跑真实 agent 确认。
 - 上游是否已有修复版本：诊断时 crates.io 网络不通，未验证。Phase 3 第一件事。
 - 僵尸子进程根因（P2-2）：未排查。
 

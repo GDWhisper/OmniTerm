@@ -398,13 +398,15 @@ pub async fn run_reaper(
                     // 先取消卡住的权限请求，避免 agent 永久阻塞
                     let _ = client.cancel();
                 }
-                // 强制回收：即使仍有 WS 连接持有 Arc 引用也立即 kill 子进程。
+                // 强制回收：即使仍有 WS 连接持有 Arc 引用也主动 teardown 并 killpg
+                // 杀 agent 进程组（D2）。
                 // 旧实现依赖 `Arc::try_unwrap` 在引用归零后自然 drop 再杀进程，但
                 // WS handler 持 `Option<Arc<AcpClient>>` 时引用永远不会归零 → 进程
                 // 存活、可继续对话，而 supervisor 已移除该 session，`list_sessions`
                 // 报 `acp_process_alive=false`，Sidebar 显示「已释放」与实际进程存活
                 // 不一致，且进程脱离 reaper 管辖后无限驻留。`shutdown` 走 shared
-                // reference 触发连接任务退出 → 子进程被 kill，WS 随之断开。
+                // reference 触发连接任务退出 + omniterm 侧 killpg 杀进程组，
+                // WS 随之断开。详见 acp::agent_proc。
                 client.shutdown().await;
             }
         }
