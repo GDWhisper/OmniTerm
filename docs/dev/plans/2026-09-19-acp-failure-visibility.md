@@ -96,7 +96,7 @@
 |------|------|
 | 判定口径过宽导致噪音（把 `max_tokens` 之类当成失败） | D1 白名单 + P2 之前不弹窗、只留痕 |
 | system 消息与 assistant 行排序错位 | 实现时在 `created_at` 上显式串行并在测试中断言顺序 |
-| 未知 stopReason 文案无 i18n key | 沿用 reaper 的 `PERMISSION_TIMEOUT_NOTICE` 约定：未命中 key 原样显示 |
+| 未知 stopReason 文案无 i18n key | 沿用 reaper system 消息约定（2026-09-21 起为 `label` 存 i18n key + `detail` 结构化载荷）：未命中 key 原样显示 |
 
 ## 文档闭环
 

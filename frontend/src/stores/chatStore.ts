@@ -67,6 +67,29 @@ export interface TodoBlock {
 export interface SystemBlock {
   type: 'system'
   label: string
+  /** 可选结构化详情（权限超时行动说明"错过了什么"）：缺失时按纯文案渲染
+   *  （2026-08-18 起的历史 system 行只有 label）。 */
+  detail?: SystemBlockDetail
+}
+
+/** system 消息的结构化详情（后端 reaper 权限超时行动下发，前端本地化渲染）。 */
+export interface SystemBlockDetail {
+  /** 超时时长（分钟）。 */
+  minutes?: number
+  /** 触发审批的工具名/标题。 */
+  tool?: string
+  /** 工具类型（execute / read / edit …）。 */
+  kind?: string
+  /** 请求内容预览（后端已截断）。 */
+  content?: string
+  /** 内容预览被省略的字符数（0/缺失 = 未截断）。 */
+  content_omitted?: number
+  /** 当时的可选项标签（协议原序）。 */
+  options?: string[]
+  /** auto 模式自动选中的选项标签；abort 模式缺失。 */
+  selected?: string
+  /** 同期处理但未展开详情的其他未决审批数。 */
+  extra?: number
 }
 
 // F03 图片附件：用户消息内联 base64 图片（对应 ACP `ContentBlock::Image`）。
@@ -143,7 +166,7 @@ export type SessionUpdateAction =
   | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
   | { kind: 'addUserMessage'; text: string; messageId?: string }
-  | { kind: 'pushSystem'; label: string }
+  | { kind: 'pushSystem'; label: string; detail?: SystemBlockDetail }
   | { kind: 'drop' }
 
 // --- Config options (mode / model / thinking level selectors) ---
@@ -309,7 +332,7 @@ interface ChatActions {
   upsertToolCall: (sessionId: string, entry: ToolCallUpdate) => void
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
-  pushSystemEvent: (sessionId: string, label: string) => void
+  pushSystemEvent: (sessionId: string, label: string, detail?: SystemBlockDetail) => void
   addUserMessage: (sessionId: string, text: string, images?: ImageBlock[], files?: FileBlock[]) => void
   /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
    *  Renders as a normal user message with `undelivered: true` so the user can see what
@@ -665,7 +688,7 @@ const applyActionsToMessages = (
         id: genId(),
         role: 'system',
         text: `[${action.label}]`,
-        blocks: [{ type: 'system', label: action.label }],
+        blocks: [{ type: 'system', label: action.label, detail: action.detail }],
         createdAt: Date.now(),
       })
     }
@@ -797,7 +820,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages, todos: entries, todosTitle: title })
     }),
 
-  pushSystemEvent: (sessionId, label) =>
+  pushSystemEvent: (sessionId, label, detail) =>
     set((state) => {
       const current = get(state, sessionId)
       const messages = [
@@ -806,7 +829,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           id: genId(),
           role: 'system' as const,
           text: `[${label}]`,
-          blocks: [{ type: 'system' as const, label }],
+          blocks: [{ type: 'system' as const, label, detail }],
           createdAt: Date.now(),
         },
       ]

@@ -161,6 +161,17 @@ pub enum TurnEndEvent {
     },
 }
 
+/// 后端主动产生的系统通知载荷（当前唯一产生者是 reaper 的权限超时行动）。
+///
+/// `label` 是 i18n key（前端命中才翻译，未命中原样显示——2026-08-18 起的
+/// 历史数据是中文原文，靠该回退保持可读）；`detail` 是可选结构化详情，
+/// 让前端能本地化地渲染"错过了什么"（请求工具/内容预览/可选项/实际动作）。
+#[derive(Debug, Clone)]
+pub struct SystemNotice {
+    pub label: String,
+    pub detail: Option<serde_json::Value>,
+}
+
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
 ///
 /// ACP v1 协议（所有当前对接的 agent 均协商 protocolVersion:1）没有官方
@@ -194,7 +205,7 @@ pub struct AcpClient {
     crash_tx: broadcast::Sender<String>,
     /// 后端主动产生的系统通知（如权限超时回收告知），广播给所有 WS 连接，
     /// 由 WS 层转成 `system_message` 帧显示在聊天流里。
-    system_notice_tx: broadcast::Sender<String>,
+    system_notice_tx: broadcast::Sender<SystemNotice>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
     /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
@@ -434,7 +445,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
-        let (system_notice_tx, _) = broadcast::channel::<String>(8);
+        let (system_notice_tx, _) = broadcast::channel::<SystemNotice>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -672,7 +683,7 @@ impl AcpClient {
     }
 
     /// 订阅后端主动产生的系统通知（权限超时回收等，与 agent 崩溃无关）。
-    pub fn system_notice_subscribe(&self) -> broadcast::Receiver<String> {
+    pub fn system_notice_subscribe(&self) -> broadcast::Receiver<SystemNotice> {
         self.system_notice_tx.subscribe()
     }
 
@@ -704,8 +715,8 @@ impl AcpClient {
     }
 
     /// 广播后端主动产生的系统通知（权限超时回收告知等；无订阅者时静默丢弃）。
-    pub fn notify_system_message(&self, label: String) {
-        let _ = self.system_notice_tx.send(label);
+    pub fn notify_system_message(&self, notice: SystemNotice) {
+        let _ = self.system_notice_tx.send(notice);
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -1159,7 +1170,7 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
-        let (system_notice_tx, _) = broadcast::channel::<String>(8);
+        let (system_notice_tx, _) = broadcast::channel::<SystemNotice>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

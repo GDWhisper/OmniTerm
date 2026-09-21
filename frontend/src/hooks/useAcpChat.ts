@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -45,6 +45,8 @@ interface ServerFrame {
   agent_name?: string
   /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
   label?: string
+  /** system_message: 可选结构化详情（权限超时行动说明"错过了什么"）。 */
+  detail?: SystemBlockDetail
   /** session_update: turn 内单调 seq（config/commands/重放帧无此字段），用于重连去重。 */
   seq?: number
   /** turn_state: 连接时是否有进行中的 assistant turn。 */
@@ -876,7 +878,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 后端主动产生的系统通知（权限超时回收告知等）：以 system 消息显示在聊天流。
           // 断线期间产生的通知已由后端落库，hydrate 补上；此帧只服务在线连接。
           if (frame.label) {
-            useChatStore.getState().pushSystemEvent(sid, frame.label)
+            useChatStore.getState().pushSystemEvent(sid, frame.label, frame.detail)
           }
           break
         case 'error':

@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-09-21 18:30) `[acp]` 权限请求超时行为可配（设置 → 会话「权限请求超时」）：一直等待（不取消、不回收、不强制作废回合，banner 挂到用户回来）/ 自动推进（超时到点自动代替用户应答全部未决审批让 agent 继续，选项挑选优先级 allow_always → allow_once → reject_once → reject_always → 首个，用户拍板；不杀会话）/ 超时中止（默认，原 30 分钟 cancel + kill 行为不变）；共用分钟滑块（默认 30，值域 1..60，后端 `GET/PUT /api/v1/settings/permission-timeout` 持久化 + reaper 运行时热更新）。三种模式到点行动都在聊天流落一条**带详情的 system 消息**——请求的工具名/类型、内容预览（截断 400 字符并标注省略量）、当时的完整可选项、自动模式实际选中项、超时时长——修复「回来后不知道自己错过了什么选项」；消息载荷结构化（`label` i18n key + `detail`），中英本地化渲染，2026-08-18 起的历史中文告知原样显示。顺带修复 ACP 空闲回收设置的启动回填缺口（`getAcpIdleRecycle` 定义后从未被调用，刷新后面板重置为默认值）（`src/acp/reaper.rs`、`src/acp/permission.rs`、`src/api/settings.rs`、`src/main.rs`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`）
+
 ### Changed
 
 - (2026-09-21 00:40) `[infra]` 升级 `rustls` 0.23.43 → 0.23.45（连带 `rustls-webpki` 0.103.13 → 0.103.15），修复 RUSTSEC-2026-0285（TLS 1.3 握手消息会在错误状态下被接受，中危；握手转写仍被认证，网络位置攻击者无法篡改或完成握手）。该公告出现在 v0.2.23 发布当天，使 ci.yml 的 audit 门禁（`cargo deny check advisories`）在 push main 后红灯，与本次发布内容无关（`Cargo.lock`）

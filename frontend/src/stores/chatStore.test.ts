@@ -680,6 +680,33 @@ describe('pushSystemEvent (后端系统通知：权限超时回收告知)', () =
     const msgs = useChatStore.getState().states['s1'].messages
     expect(messagesToSyncPayload(msgs)).toEqual([])
   })
+
+  it('carries structured detail when present (permission-timeout "what you missed")', () => {
+    useChatStore.getState().hydrate('s1', [], null)
+    useChatStore.getState().pushSystemEvent('s1', 'system.permTimeout.abort', {
+      minutes: 30,
+      tool: 'Bash',
+      kind: 'execute',
+      content: 'git push origin main',
+      content_omitted: 12,
+      options: ['允许一次', '总是允许', '拒绝'],
+    })
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs[0].blocks).toEqual([
+      {
+        type: 'system',
+        label: 'system.permTimeout.abort',
+        detail: {
+          minutes: 30,
+          tool: 'Bash',
+          kind: 'execute',
+          content: 'git push origin main',
+          content_omitted: 12,
+          options: ['允许一次', '总是允许', '拒绝'],
+        },
+      },
+    ])
+  })
 })
 
 // 流式实时计时的生命周期守卫：计时器必须和 sending / 审批队列严格同生死，

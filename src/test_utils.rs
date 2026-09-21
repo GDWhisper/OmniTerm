@@ -28,6 +28,7 @@ pub async fn test_state() -> AppState {
         api_keys: HashMap::new(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
+        acp_perm_timeout: Arc::new(crate::acp::reaper::PermissionTimeoutConfig::default()),
         login_guard: LoginGuard::new(),
         engines: EngineRegistry::new(db.clone(), 9777),
         acp_supervisor: AcpSupervisor::default(),

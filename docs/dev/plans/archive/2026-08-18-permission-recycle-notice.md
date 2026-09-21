@@ -47,3 +47,9 @@
 - `CHANGELOG.md` ✅（Fixed 条目）
 - `docs/architecture/backend.md` ✅（permission 回收行为 + blocks 两态补 system 行）
 - 本文件即为计划文档
+
+---
+
+## 勘误（2026-09-21）
+
+「安全策略不变（30 分钟 cancel + kill）」与「为什么不做自动 Allow」两条决策被后续计划**部分翻盘**：`docs/dev/plans/2026-09-21-permission-timeout-modes.md` 把权限超时行为提为设置项三模式（abort 默认不变 / auto 超时自动应答 / wait 一直等待），其中 auto 模式即显式选择下的自动 Allow（选项挑选优先级 allow_always → allow_once，见该计划 D2）。翻盘依据：用户反馈"回来后不知道自己错过了什么选项"——需要 ① 超时行为可配置 ② 告知消息带请求详情。本计划的产出（system 消息落库 + 广播通道、blocks system 行）全部保留并被复用：告知链路不变，载荷从纯文案升级为 `label`（i18n key）+ `detail`（结构化详情）；`PERMISSION_TIMEOUT_NOTICE` 常量被 reaper 的 notice builder 取代（abort 文案默认分钟数=30 时逐字一致）。「不做 sidebar 横幅 / 浏览器 Notification」仍然有效。

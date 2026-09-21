@@ -173,9 +173,14 @@ enum AcpServerMessage<'a> {
     #[serde(rename = "prompt_error")]
     PromptError { message: &'a str },
     /// 后端主动产生的系统通知（如权限超时回收告知）：在聊天流里以 system
-    /// 消息显示，与 agent 崩溃（`prompt_error`）语义区分。
+    /// 消息显示，与 agent 崩溃（`prompt_error`）语义区分。`detail` 为可选
+    /// 结构化详情（权限超时行动说明"错过了什么"，见 `SystemNotice`）。
     #[serde(rename = "system_message")]
-    SystemMessage { label: &'a str },
+    SystemMessage {
+        label: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<&'a serde_json::Value>,
+    },
     #[serde(rename = "terminal_activity")]
     TerminalActivity {
         id: String,
@@ -342,16 +347,18 @@ async fn spawn_crash_task(
 /// 转发后端主动产生的系统通知（权限超时回收告知等）：收到即作为
 /// `system_message` 帧推给前端，在聊天流里显示（与崩溃的 `prompt_error` 区分）。
 async fn spawn_system_notice_task(
-    mut rx: tokio::sync::broadcast::Receiver<String>,
+    mut rx: tokio::sync::broadcast::Receiver<crate::acp::client::SystemNotice>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(label) => {
-                    let msg =
-                        serde_json::to_string(&AcpServerMessage::SystemMessage { label: &label })
-                            .unwrap_or_default();
+                Ok(notice) => {
+                    let msg = serde_json::to_string(&AcpServerMessage::SystemMessage {
+                        label: &notice.label,
+                        detail: notice.detail.as_ref(),
+                    })
+                    .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
                         break;
                     }
