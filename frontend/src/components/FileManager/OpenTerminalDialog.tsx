@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ApiError, type Session } from '../../api/client'
+import { api, type Session } from '../../api/client'
 import { useTerminalEngine } from '../../hooks/useTerminalEngine'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { inputClass, inputStyle } from '../Sidebar/sidebarModalStyles'
+import { createProjectForDir, projectNameFromPath } from './openTerminal'
 import { EngineHintLine } from './EngineHintLine'
 
 export interface OpenTerminalTarget {
@@ -20,6 +21,8 @@ export interface OpenTerminalTarget {
  * 时改挂覆盖项目——同仓库 worktree 覆盖前端前缀探测看不到，后端权威）；
  * 次路径 = 挂到当前激活项目（会话以孤儿身份显示在其主 worktree 下）。
  * 自持表单/提交状态（同 Sidebar modal 契约），FM 只持有打开目标与收尾回调。
+ * 创建项目/会话的共享步骤在 `openTerminal.ts`，与 OpenTerminalConfirmDialog
+ * 的「创建新项目并打开终端」备选同一份实现。
  */
 export function OpenTerminalDialog(props: {
   target: OpenTerminalTarget | null
@@ -35,7 +38,7 @@ export function OpenTerminalDialog(props: {
   // 打开时预填项目名 = 目录 basename（'/' 等无 basename 时回退整个路径）
   useEffect(() => {
     if (props.target) {
-      setName(props.target.cwd.split('/').filter(Boolean).pop() ?? props.target.cwd)
+      setName(projectNameFromPath(props.target.cwd))
       setSubmitting(null)
     }
   }, [props.target])
@@ -50,24 +53,9 @@ export function OpenTerminalDialog(props: {
     if (!target || !name.trim() || submitting) return
     setSubmitting('create')
     try {
-      let projectId: string
-      let created = true
-      try {
-        projectId = (await api.createProject({ name: name.trim(), path: target.cwd })).id
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 409) {
-          const body = e.body as Record<string, unknown> | undefined
-          const covering =
-            body?.error === 'already_covered'
-              ? (body.covering_project as { id: string } | undefined)
-              : undefined
-          if (!covering) throw e
-          projectId = covering.id
-          created = false
-        } else {
-          throw e
-        }
-      }
+      // 409 already_covered 的回退（同仓库 worktree 前端前缀探测看不到）在
+      // createProjectForDir 内统一处理，与确认弹窗的创建备选同一份逻辑。
+      const { projectId, created } = await createProjectForDir(target.cwd, name.trim())
       const session = await api.createSession(projectId, target.cwd, undefined, undefined, terminalEngine)
       props.onDone(session, projectId, created)
       props.onClose()

@@ -114,3 +114,17 @@ export function findCoveringProject<T extends { path: string }>(
   }
   return best
 }
+
+/**
+ * 在已加载项目中找出根路径与 `dir` **完全相等**的项目（尾随斜杠先归一）。
+ * 覆盖判断见 `findCoveringProject`（含子目录）；本函数只答「这个路径本身
+ * 是不是某个项目的根」——「在此打开终端」确认弹窗据此判断是否需要
+ * 「创建新项目并打开终端」入口：路径已是项目根时，打开终端即挂该项目。
+ */
+export function findExactProject<T extends { path: string }>(
+  dir: string,
+  projects: readonly T[],
+): T | undefined {
+  const target = dir.replace(/\/+$/, '') || '/'
+  return projects.find((p) => (p.path.replace(/\/+$/, '') || '/') === target)
+}

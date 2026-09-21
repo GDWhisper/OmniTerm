@@ -10,6 +10,12 @@ export interface OpenTerminalConfirmTarget {
   projectName: string
   /** FM 当前浏览目录 = 新终端的启动目录。 */
   cwd: string
+  /**
+   * 展示路径在侧栏没有同根项目时为 true——显示「创建新项目并打开终端」
+   * 备选项（以该目录为根新建项目）。路径本身已是某项目根时为 false：
+   * 打开终端即挂该项目，无需新建。
+   */
+  canCreateProject: boolean
 }
 
 /**
@@ -17,11 +23,16 @@ export interface OpenTerminalConfirmTarget {
  * 二次确认：告知将挂入哪个项目 + 实际生效的引擎（默认引擎按宿主复用器可用性
  * 收敛，见 useTerminalEngine）及其更改入口。确认后由 FileManager 发起创建；
  * 目录无归属项目时不走本弹窗（OpenTerminalDialog 引导新建/挂载已承担告知职责）。
+ *
+ * 备选路径「创建新项目并打开终端」：展示目录在侧栏无同根项目时出现，
+ * 点后由 FileManager 以该目录为根新建项目并在其下开终端（后端 409
+ * already_covered 时回退到本项目，见 `openTerminal.ts`）。
  */
 export function OpenTerminalConfirmDialog(props: {
   target: OpenTerminalConfirmTarget | null
   onClose: () => void
   onConfirm: (projectId: string) => void
+  onCreateProject: () => void
 }) {
   const { t } = useTranslation()
   const target = props.target
@@ -54,6 +65,11 @@ export function OpenTerminalConfirmDialog(props: {
             <PixelButton variant="secondary" onClick={props.onClose}>
               {t('sidebar.cancel')}
             </PixelButton>
+            {target.canCreateProject && (
+              <PixelButton variant="secondary" onClick={props.onCreateProject}>
+                {t('fm.openTerminalConfirm.createProject')}
+              </PixelButton>
+            )}
             <PixelButton
               variant="accent"
               onClick={() => props.onConfirm(target.projectId)}

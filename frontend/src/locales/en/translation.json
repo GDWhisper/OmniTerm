@@ -335,6 +335,7 @@
   "fm.terminalOpened": "Terminal opened in this directory",
   "fm.openTerminalConfirm.message": "A terminal will be opened under the existing project \"{{name}}\".",
   "fm.openTerminalConfirm.open": "Open Terminal",
+  "fm.openTerminalConfirm.createProject": "Create new project & open",
   "fm.openTerminalConfirm.currentProject": "the current project",
   "fm.openTerminalDialog.enginePrefix": "Engine: ",
   "fm.openTerminalDialog.engineSuffix": " — change it in Settings → TERMINAL → Default Engine.",

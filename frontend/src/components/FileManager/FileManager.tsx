@@ -1,4 +1,4 @@
-import { getParentPath, findCoveringProject } from '../../utils/path'
+import { getParentPath, findCoveringProject, findExactProject } from '../../utils/path'
 import { getInitialDrawerHeight } from '../../utils/drawer'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -12,6 +12,7 @@ import { copyText } from '../../utils/clipboard'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
 import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './OpenTerminalConfirmDialog'
+import { createProjectForDir, projectNameFromPath } from './openTerminal'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { triggerBump } from '../../utils/pixelAnimations'
@@ -264,7 +265,9 @@ export function FileManager() {
   // 2. 越界但某个已打开项目覆盖该目录（前缀探测，含未激活项目）→ 确认后挂过去；
   // 3. 无任何项目覆盖 → 弹窗引导为目录新建项目（次选项：挂到当前项目）。
   // 前两档曾有静默直开，现经 OpenTerminalConfirmDialog 二次确认（告知归属项目、
-  // 生效引擎及更改入口）；第三档 OpenTerminalDialog 自身即承担告知与确认。
+  // 生效引擎及更改入口；展示路径在侧栏无同根项目时另有「创建新项目并打开终端」
+  // 备选，见 handleTerminalConfirmCreate）；第三档 OpenTerminalDialog 自身即承担
+  // 告知与确认。
   // 启动目录恒为浏览目录 cwd（「在此」语义；不再回退 workspaceRoot）。
   const [terminalDialogTarget, setTerminalDialogTarget] = useState<OpenTerminalTarget | null>(null)
   const [terminalConfirmTarget, setTerminalConfirmTarget] = useState<OpenTerminalConfirmTarget | null>(null)
@@ -291,25 +294,29 @@ export function FileManager() {
 
   const handleOpenTerminalHere = () => {
     if (!cwd) return
+    const { projects } = useAppStore.getState()
     // 覆盖探测优先：后端 list_files 的 effective-root 兜底（同项目 worktree /
     // git toplevel）会把浏览到其它项目 git 仓库的目录报成界内（见
     // resolve_effective_workspace_root），界内快路径在前会挂错项目。
-    const covering = findCoveringProject(cwd, useAppStore.getState().projects)
+    const covering = findCoveringProject(cwd, projects)
+    // 「创建新项目」备选只在展示路径无同根项目时出现——路径本身已是某项目
+    // 根时，打开终端即挂该项目，新建只会造重复项。
+    const canCreateProject = !findExactProject(cwd, projects)
     if (covering) {
-      setTerminalConfirmTarget({ projectId: covering.id, projectName: covering.name, cwd })
+      setTerminalConfirmTarget({ projectId: covering.id, projectName: covering.name, cwd, canCreateProject })
       return
     }
     if (!isOutsideWorkspace && activeProjectId) {
-      const active = useAppStore.getState().projects.find((p) => p.id === activeProjectId)
+      const active = projects.find((p) => p.id === activeProjectId)
       setTerminalConfirmTarget({
         projectId: activeProjectId,
         projectName: active?.name ?? t('fm.openTerminalConfirm.currentProject'),
         cwd,
+        canCreateProject,
       })
       return
     }
-    const { projects, activeProjectId: apid } = useAppStore.getState()
-    const active = projects.find((p) => p.id === apid) ?? null
+    const active = projects.find((p) => p.id === activeProjectId) ?? null
     setTerminalDialogTarget({
       cwd,
       attachProject: active ? { id: active.id, name: active.name } : null,
@@ -325,6 +332,26 @@ export function FileManager() {
       }
     }
     finishOpenTerminal(session, projectId)
+  }
+
+  // 「创建新项目并打开终端」（确认弹窗备选）：以展示目录为根新建项目并在其下
+  // 开终端，创建步骤与 OpenTerminalDialog 主路径共用 openTerminal.ts；后端 409
+  // already_covered（前端前缀探测看不到的同仓库 worktree）时 createProjectForDir
+  // 回退到归属项目，此时等价于主按钮「打开终端」。
+  const handleTerminalConfirmCreate = async () => {
+    const target = terminalConfirmTarget
+    if (!target) return
+    setTerminalConfirmTarget(null)
+    try {
+      const { projectId, created } = await createProjectForDir(
+        target.cwd,
+        projectNameFromPath(target.cwd),
+      )
+      const session = await api.createSession(projectId, target.cwd, undefined, undefined, terminalEngine)
+      handleTerminalDialogDone(session, projectId, created)
+    } catch {
+      // api client already shows error toast
+    }
   }
 
   const {
@@ -1248,6 +1275,7 @@ export function FileManager() {
         target={terminalConfirmTarget}
         onClose={() => setTerminalConfirmTarget(null)}
         onConfirm={handleTerminalConfirm}
+        onCreateProject={handleTerminalConfirmCreate}
       />
       {/* 在此打开终端：目录不被任何已打开项目覆盖时的归属引导 */}
       <OpenTerminalDialog

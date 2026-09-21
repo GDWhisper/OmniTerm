@@ -335,6 +335,7 @@
   "fm.terminalOpened": "已在此目录打开终端",
   "fm.openTerminalConfirm.message": "将在现有项目「{{name}}」下打开终端。",
   "fm.openTerminalConfirm.open": "打开终端",
+  "fm.openTerminalConfirm.createProject": "创建新项目并打开终端",
   "fm.openTerminalConfirm.currentProject": "当前项目",
   "fm.openTerminalDialog.enginePrefix": "引擎：",
   "fm.openTerminalDialog.engineSuffix": "，可在 设置 → 终端 → 默认引擎 中更改。",
