@@ -1,8 +1,8 @@
 # ACP agent 连接层子进程等待空转：CPU 尖峰修复计划
 
-> 状态：**Phase 1（P0 止血）已实施**（2026-09-21 代码落地 + 单测/clippy/fmt 通过；手动复现验证待用户在 dev 环境执行）。Phase 2（P1 观测+回归测试）与 Phase 3（P2 治理）未开始。
-> 修订记录：设计稿 → 同日一轮实现前评审（D1/D3/D4、范围表、验收、风险表、闭环，修订处标「2026-09-21 评审」）→ 同日 Phase 1 实施（实施偏差见「Phase 1 实施记录（勘误）」）。
-> 触发条件：修改 `src/acp/client.rs`（`AcpClient::shutdown` / `disconnect` / 连接任务生命周期）、`src/acp/agent_proc.rs`（pid 捕获 / killpg）、`src/api/sessions.rs`（release/archive 路径）、`src/acp/supervisor.rs`，或排查「恢复 ACP 会话后后端 CPU 飙高」问题前**必读**
+> 状态：**Phase 1（P0 止血）与 Phase 2（P1 观测+回归测试）已实施**（2026-09-21 代码落地 + 单测/clippy/fmt 通过；手动复现验证待用户在 dev 环境执行）。Phase 3（P2 治理）未开始（依赖联网环境）。
+> 修订记录：设计稿 → 同日一轮实现前评审（D1/D3/D4、范围表、验收、风险表、闭环，修订处标「2026-09-21 评审」）→ 同日 Phase 1 实施（偏差见「Phase 1 实施记录（勘误）」）→ 同日 Phase 2 实施（偏差与新发现的 crate 行为见「Phase 2 实施记录（勘误）」）。
+> 触发条件：修改 `src/acp/client.rs`（`AcpClient::shutdown` / `disconnect` / 连接任务生命周期）、`src/acp/agent_proc.rs`（pid 捕获 / killpg）、`src/acp/fake_agent_tests.rs`（fake agent 时序）、`src/api/sessions.rs`（release/archive 路径）、`src/acp/supervisor.rs`，或排查「恢复 ACP 会话后后端 CPU 飙高」问题前**必读**
 > 关联：
 > - `docs/dev/diagnostics/2026-09-21-omniterm-cpu-spike.md`（**完整证据链，本文的排查基础，先读它**）
 > - `docs/dev/plans/2026-09-19-acp-failure-visibility.md`（turn 结束语义；本计划不改消息语义但共用 dispatch_prompt 周边代码，改动前对照）
@@ -38,8 +38,8 @@
 |--------|-----|------|------|
 | P0-1 | 释放即杀进程 | shutdown/disconnect 直接杀 agent 进程组 | 不等优雅路径；kill 使 `try_wait` 立即返回，从根上打破空转 |
 | P0-2 | 连接任务可终止 | 留存 `JoinHandle`，shutdown 时 signal + abort 兜底 + crash watcher 区分 `is_cancelled()` | 限制（2026-09-21 评审已核实）：`ChildGuard` 归 crate 内部 task_actor 所有，abort 杀不了进程组，仅本地清理；kill 才是主路径 |
-| P1-1 | 日志可归因 | ACP 连接/重放/通知日志补 `session_id` | 本次排查直接受害（多会话并发时 replay 无法归因） |
-| P1-2 | 回归测试 | 假 agent 固化「响应后退出」时序 | 断言连接任务限时结束 + shutdown 杀进程；同时作为上游 bug 复现脚本 |
+| P1-1 | 日志可归因 | ACP 连接/重放/通知日志补 `session_id` | 本次排查直接受害（多会话并发时 replay 无法归因）**✅ 已实施（Phase 2）** |
+| P1-2 | 回归测试 | 假 agent 固化「响应后退出」时序 | 断言连接任务限时结束 + shutdown 杀进程；同时作为上游 bug 复现脚本 **✅ 已实施（Phase 2，形态有偏差见 Phase 2 实施记录）** |
 | P2-1 | 依赖治理 | 查上游修复/升级 + 修正版本声明 | `Cargo.toml` 写 `agent-client-protocol = "1.2"` 但 lock 解析到 1.3.0，声明与实际不符 |
 | P2-2 | 僵尸子进程 | tmux client 子进程回收调查 | 11 个 defunct 最久 10 天；与本次 CPU 无关，独立根因 |
 | P2-3 | 探针超时泄漏 | `test_agent` / `test_agent_raw` 15s 超时分支无 client 句柄，agent 进程必泄漏（既有缺陷） | 超时即 WARN 留痕；Phase 1 若 pid 登记采用「spawn 前登记」形态可顺带清理，否则列 backlog |
@@ -95,6 +95,7 @@
 - **决策**：fake agent 用 shell/node 脚本实现最小 JSON-RPC：响应 `initialize` 与 `session/load`，然后**退出**（或转静默后退出），驱动真实连接 actor 时序。断言：① agent 退出后连接任务在限定时间内结束；② shutdown 后进程组无残留。
 - **理由**：纯静默 agent 已证不触发（测试会假绿）；「响应过再退出」是现场真实时序。
 - **否决项**：只断言"CPU 不高"——CI 上不可靠；用超时断言替代。
+- **勘误（2026-09-21 Phase 2 实施）**：① 「响应后零延迟退出」形态不可用——撞 crate 内部 select 竞态直接让 spawn 失败（见 Phase 2 实施记录）；② 断言 ① 改写为「agent 死于 handshake 时 spawn 限时失败 / 死于 prompt 在途时请求快速失败」——实测 agent 死亡不会结束连接任务（parks on shutdown_rx）；③ 断言 ② 保留并强化为 750ms 判别式（区分新旧 teardown 路径）。复现脚本属性保留但注明：本测试**不复现**上游 pidfd 空转。
 
 ## 多实现差异与降级（AGENTS.md §8）
 
@@ -120,6 +121,24 @@
 6. **Phase 1 未做**：`session_id` 日志归属（P1-1）、fake agent 回归测试（P1-2/D5）、上游调查与版本声明修正（P2-1）、僵尸子进程（P2-2）。
 7. **单测覆盖**（`agent_proc.rs`，24 个）：wrapper 字符串构造（含 pid 自报插入位置）、pid 文件有界读/读后即删/非法内容、**端到端证明 wrapper 自报 pid == exec 后 agent pid**（`child.id()` 相等断言）、cwd 端到端回归（从 `client.rs` 随迁）、`/proc` diff 单/多 pid（cwd 消歧）、killpg 击杀直接子进程（幂等）、**leader 退出后 killpg 带走孙进程**、死 pid 不误杀、`None` pid 降级不 panic。
 
+## Phase 2 实施记录（勘误，2026-09-21）
+
+### P1-1 日志可归因（已实施）
+
+- 7 个 per-connection 转发任务（`spawn_notify_task` / `spawn_turn_end_task` / `spawn_crash_task` / `spawn_system_notice_task` / `spawn_terminal_task` / `spawn_permission_task` / `spawn_permission_resolved_task`，`src/ws/acp.rs`）全部增加 `session_id` 参数并注入 warn/debug 日志字段；replay 任务的 6 条日志（load 完成、配置偏好恢复、subscriber/drain lagged、replay_end、notify 接管）补 `restore_sid`。多会话并发时 replay 可归因。
+- 顺带修复 `src/ws/acp.rs` 5 处存量 UTF-8 损坏（`�?` 替换字符，来自 8522875，其中 1047 行是用户可见错误文案「配置项 {} 设置失败」；损坏文本从未随正式版发布——所在功能仍在 [Unreleased]，故不记 CHANGELOG）。
+
+### P1-2 fake agent 回归测试（已实施，`src/acp/fake_agent_tests.rs`，6 用例）
+
+- 形态与 D5 的偏差：**不做「响应后零延迟退出」**——实测该时序会撞上 crate 内部 `select(protocol, child_wait)` 的既有竞态（child_wait 抢先 → 协议 future 被 drop → 未决 session/new 请求报错 → `spawn_and_connect` 直接失败），与 omniterm 无关，不值得在测试里固化。fake agent 改用 4 种模式：`handshake`（initialize 后即崩）、`crash`（prompt 在途时崩）、`exit`（无流量，哨兵放行后退出）、`live` / `group`（驻留 / 带孙进程驻留）。
+- **实施中实测出的 crate 行为（重要，后续会话直接采信，勿重复排查）**：
+  1. **请求 id 是 UUID 字符串**（`RequestId::Str(uuid::Uuid::new_v4())`），fake agent / 未来复现脚本的响应必须原文回抄字符串 id（非数字）。
+  2. **agent 死亡不会结束连接任务、也不产生崩溃广播**：setup 完成后内层闭包 parks 在 `shutdown_rx` 上；crate 的 `run_until_connection_close` 在 background（EOF 关闭链）先完成时 `foreground.await`，pidfd 检出的 child_wait 分支不再被轮询。任务要等 shutdown 的 signal 才结束（返回 Ok）。因此 `crash_subscribe` 的崩溃广播实际只在 **setup 阶段**（initialize/session/new 在途）触发，而那时 client 尚未构造、无人订阅——Phase 1 的「alive=false 静默分支」对该路径是防御性设计，实际不可达。
+  3. **`is_alive()` 对已崩溃 agent 误报存活**（同根因：incoming 永不关闭）。生产实际靠 `send_request` 报 "connection is no longer running" 兜底（mid-prompt 用例实测 prompt 快速失败）。该误报在测试里被显式 pin 住（升级 crate 时若翻转应主动复查 `is_alive` 判定与 backend.md 描述）。
+  4. agent 被 SIGKILL 后先变僵尸（async-process reaper 收割前 `kill(pid,0)` 仍成功），测试判死须读 `/proc/<pid>/stat` 的 state。
+- 回归防线的判别式：`shutdown_kills_live_agent_process_group_promptly` 用 **750ms** 断言——killpg 在 `shutdown()` 返回前已发出，而旧实现要等 crate 优雅路径的 `SHUTDOWN_GRACE_PERIOD`（=1s）后才借 `ChildGuard::drop` 击杀；删掉 D2/D3 的 killpg 该测试立刻转红。
+- 测试串行化：与 `agent_proc::tests` 共用 `spawn_test_lock`（tokio Mutex，防并发 spawn 污染 `/proc` diff）。
+
 ## 实施分期
 
 | Phase | 产出 | 主要改动 | 依赖 |
@@ -130,10 +149,12 @@
 
 每 Phase 可独立提交与验证；Phase 3 的依赖调查不阻塞 1/2 合入。
 
+**进度**：Phase 1、2 已实施（2026-09-21，各自的实施记录见上方勘误节）；Phase 1/2 的手动复现与回归验证待用户在 dev 环境执行；Phase 3 未开始。
+
 ## 验收标准
 
 - [ ] 恢复目标会话后：CPU 不再无限持续高位（止血生效）；若空转仍被触发，释放后**立即**归零且无 agent 进程残留（`pgrep` 验证，含孙进程）——**待用户在 dev 环境手动复现验证**（代码已就绪）
-- [ ] 回归测试（fake agent）：agent 退出后连接任务限时结束；shutdown 后进程组被 kill——Phase 2（P1-2/D5）
+- [x] 回归测试（fake agent）：`src/acp/fake_agent_tests.rs` 6 用例——agent 死于 handshake 时 spawn 限时失败、死于 prompt 在途时请求快速失败、无流量退出后 shutdown 干净、shutdown 对存活 agent 限时击杀（750ms 判别式）、进程组击杀覆盖孙进程、create/restore 两路径 pid 捕获（Phase 2 实施，注意「连接任务结束」断言因 crate 行为改写，见 Phase 2 实施记录）
 - [ ] 正常链路无回归：恢复 → 发消息 → turn 正常定稿落库 → 释放，全链路行为与修复前一致（`mark_prompt_idle` 时序不被 kill 破坏）——**待用户手动回归**
 - [ ] **全部**释放路径行为一致：修复在 `shutdown()`/`disconnect()` 内部，代码层面已自动覆盖 `release`（`sessions.rs`）、`archive`/`delete_session`（`cleanup_session_runtime`）、reaper 空闲回收（`reaper.rs`）、`shutdown_all`（`supervisor.rs`）、restore 三条清理（`ws/acp.rs`）、探针成功路径（`agents.rs` `disconnect`）；**逐点抽查待用户手动**。已知缺口：探针 15s 超时分支泄漏（P2-3，列 backlog）
 - [x] create 路径（`spawn_and_connect`，非仅 `spawn_and_load`）同样捕获 pid 并杀进程——抽公共核 `spawn_with_session` 后天然覆盖两条构造路径（勘误 2）
@@ -175,10 +196,12 @@ Phase 2/3 待办：fake agent 回归测试落地后回填 D5 状态；上游调�
 
 **未解决/未知**：
 
-- 空转的精确触发条件（crate 内部 pidfd 等待路径的 poll/wake 交错）——Phase 2 的 fake agent 测试若复现，可据此向上游提 issue；若不复现，说明还有未识别的时序变量。
-- wrapper `$$` pid 文件方案：单测已证明 wrapper 自报 pid == exec 后 agent pid（`agent_proc.rs::wrapped_subprocess_reports_own_pid_via_file`），但**尚未经真实 agent 验证**（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立——leader 退出而孙进程存活的 killpg 路径已有单测覆盖）——仍需 dev 环境跑真实 agent 确认。
+- 空转的精确触发条件（crate 内部 pidfd 等待路径的 poll/wake 交错）——`fake_agent_tests` 的 6 个用例均**不复现**（它们钉的是 omniterm 侧契约）；向上游提 issue 的素材已备齐：wire 契约（UUID 字符串 id）、`agent-client-protocol` 1.3.0 版本、诊断文档的 gdb 栈与 perf 计数。Phase 3 第一件事（联网后）。
+- wrapper `$$` pid 文件方案：单测已证明 wrapper 自报 pid == exec 后 agent pid（`agent_proc.rs::wrapped_subprocess_reports_own_pid_via_file`），fake agent e2e 也走通；但**尚未经真实 agent 验证**（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立——leader 退出而孙进程存活的 killpg 路径已有单测覆盖）——仍需 dev 环境跑真实 agent 确认。
 - 上游是否已有修复版本：诊断时 crates.io 网络不通，未验证。Phase 3 第一件事。
 - 僵尸子进程根因（P2-2）：未排查。
+- 探针 15s 超时泄漏（P2-3）：列 backlog（pid 在连接建成后才捕获，超时分支拿不到）。
+- crate 三个既有行为（Pin 在测试里，升级 crate 时主动复查）：agent 死亡不结束连接任务 / 无崩溃广播（setup 后）；`is_alive()` 对已崩溃 agent 误报存活；agent 响应后零延迟退出会让 `spawn_and_connect` 失败（select 竞态）。
 
 **现场状态**：
 

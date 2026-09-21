@@ -759,6 +759,12 @@ impl AcpClient {
         self.accumulator.turn_row_id()
     }
 
+    /// agent 子进程 pid（D1 捕获）。`None` = 捕获失败（降级路径，agent_proc 内
+    /// 已 WARN）。供诊断与回归测试观测（如断言 shutdown 后进程组无残留）。
+    pub fn agent_pid(&self) -> Option<u32> {
+        *self.agent_pid.lock().unwrap()
+    }
+
     /// 上一次定稿结算出的 turn 时长（工作 / 等真人审批）。`mark_prompt_idle()` 之后
     /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
     pub fn turn_timing(&self) -> Option<TurnTiming> {
@@ -1208,7 +1214,9 @@ impl AcpClient {
         // 的优雅收尾。注意 kill 会让 crate 的 finish_child_exit 返回
         // "exited with signal 9" Err——连接任务随之以 Err 结束，但 alive 已置
         // false，crash watcher 据此判定为主动关闭、静默不广播（见 spawn_crash_watcher）。
-        agent_proc::kill_agent_process_group(*self.agent_pid.lock().unwrap());
+        let pid = self.agent_pid();
+        tracing::debug!(?pid, "ACP shutdown: kill agent 进程组（D2），随后发优雅关闭信号");
+        agent_proc::kill_agent_process_group(pid);
         // 取出并 drop shutdown_tx → 连接任务的 shutdown_rx 收到 RecvError 后退出。
         // lock().await 安全：shutdown_tx 仅在此处和 disconnect 中被 take，
         // 且调用方不会跨 await 持有此锁。
@@ -1232,7 +1240,9 @@ impl AcpClient {
         self.terminal_manager.kill_all().await;
         // D2/D3：与 shutdown 同口径——先 killpg 再 signal（探针与 WS 层的释放
         // 路径，语义一致，差异仅在 self 被消费）。
-        agent_proc::kill_agent_process_group(*self.agent_pid.lock().unwrap());
+        let pid = self.agent_pid();
+        tracing::debug!(?pid, "ACP disconnect: kill agent 进程组（D2），随后发优雅关闭信号");
+        agent_proc::kill_agent_process_group(pid);
         if let Ok(mut guard) = self._shutdown_tx.try_lock() {
             let _ = guard.take();
         }

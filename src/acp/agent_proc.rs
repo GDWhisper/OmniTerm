@@ -334,20 +334,36 @@ pub fn kill_agent_process_group(pid: Option<u32>) {
     }
 }
 
+/// 串行化「spawn 子进程 + /proc diff」类测试的进程级互斥锁：cargo test 同一
+/// 二进制内多线程并行，别的用例 spawn 的子进程会污染 diff 集合（并发归属本就是
+/// 生产风险点，测试里必须先排除）。crate 内测试模块共用（`agent_proc::tests`
+/// 与 `fake_agent_tests` 的 agent spawn 互相污染）。
+///
+/// 用 tokio Mutex：async 测试（`fake_agent_tests`）需要跨 await 持有本锁，
+/// std Mutex 的 guard 跨 await 持有可能取消不安全且触发 clippy
+/// `await_holding_lock`。poisoned 时取回 inner 继续跑，不让一个用例的 panic
+/// 拖垮后续全部。
+#[cfg(all(test, target_os = "linux"))]
+static SPAWN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 同步测试上下文取锁（`agent_proc::tests` 的 `#[test]` 用例）。
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn spawn_test_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    SPAWN_TEST_LOCK.blocking_lock()
+}
+
+/// async 测试上下文取锁（`fake_agent_tests` 的 `#[tokio::test]` 用例）。
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) async fn spawn_test_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
+    SPAWN_TEST_LOCK.lock().await
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    use super::spawn_test_lock;
     use super::*;
     use std::process::{Command, Stdio};
     use std::time::Duration;
-
-    /// 串行化「spawn 子进程 + /proc diff」类测试：cargo test 同一二进制内多
-    /// 线程并行，别的测试 spawn 的子进程会污染 diff 集合（并发归属本就是
-    /// 生产风险点，测试里必须先排除）。poisoned 时取回 inner 继续跑，
-    /// 不让一个用例的 panic 拖垮后续全部。
-    static SPAWN_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    fn spawn_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        SPAWN_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
 
     fn unique_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

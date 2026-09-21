@@ -236,9 +236,11 @@ async fn forward_session_update(
 }
 
 async fn spawn_notify_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<crate::acp::handler::SeqNotification>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -250,22 +252,25 @@ async fn spawn_notify_task(
                     })
                     .unwrap_or_default();
                     tracing::debug!(
+                        session_id = %session_id,
                         "ACP notify task: forwarding session_update seq={:?}",
                         seq_notif.seq
                     );
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
-                        tracing::warn!("ACP notify task: notify_tx closed (WS gone), exiting");
+                        tracing::warn!(session_id = %session_id, "ACP notify task: notify_tx closed (WS gone), exiting");
                         break;
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP notify task: session_update broadcast closed (client dropped), exiting"
                     );
                     break;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP WS subscriber lagged by {} messages; dropped stale updates",
                         n
                     );
@@ -279,9 +284,11 @@ async fn spawn_notify_task(
 /// 使所有连接（含 prompt 进行中断线重连的新连接）都能收到结束信号；
 /// 旧实现只发给发起 prompt 的连接，重连后前端永远停留在 running 态。
 async fn spawn_turn_end_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<TurnEndEvent>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -306,6 +313,7 @@ async fn spawn_turn_end_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP turn-end subscriber lagged by {} messages; dropped stale events",
                         n
                     );
@@ -316,11 +324,13 @@ async fn spawn_turn_end_task(
 }
 
 /// 转发 agent 进程崩溃错误：收到即作为 `prompt_error` 帧推给前端，
-/// 使用户能看到崩溃原因而非仅连接断开�?
+/// 使用户能看到崩溃原因而非仅连接断开。
 async fn spawn_crash_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<String>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -335,6 +345,7 @@ async fn spawn_crash_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP crash-event subscriber lagged by {} messages; dropped stale events",
                         n
                     );
@@ -347,9 +358,11 @@ async fn spawn_crash_task(
 /// 转发后端主动产生的系统通知（权限超时回收告知等）：收到即作为
 /// `system_message` 帧推给前端，在聊天流里显示（与崩溃的 `prompt_error` 区分）。
 async fn spawn_system_notice_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<crate::acp::client::SystemNotice>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -366,6 +379,7 @@ async fn spawn_system_notice_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP system-notice subscriber lagged by {} messages; dropped stale notices",
                         n
                     );
@@ -378,9 +392,11 @@ async fn spawn_system_notice_task(
 /// 转发 agent 终端命令生命周期事件：创建/退出转为 `terminal_activity` 帧，
 /// 使前端能感知 agent 在后台执行的命令（否则完全不可见）。
 async fn spawn_terminal_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<TerminalActivity>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -408,6 +424,7 @@ async fn spawn_terminal_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP terminal-event subscriber lagged by {} messages; dropped stale events",
                         n
                     );
@@ -418,9 +435,11 @@ async fn spawn_terminal_task(
 }
 
 async fn spawn_permission_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<PermissionRequestEvent>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -437,6 +456,7 @@ async fn spawn_permission_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP permission-event subscriber lagged by {} messages; dropped stale events",
                         n
                     );
@@ -449,9 +469,11 @@ async fn spawn_permission_task(
 /// 转发审批解决事件为 `permission_resolved` 帧：审批可能由其他标签页/设备
 /// 应答（resolve）或经 session cancel 批量取消，所有连接都要即时清除 banner。
 async fn spawn_permission_resolved_task(
+    session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<String>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
+    let session_id = session_id.to_string();
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -466,6 +488,7 @@ async fn spawn_permission_resolved_task(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
+                        session_id = %session_id,
                         "ACP permission-resolved subscriber lagged by {} messages; dropped stale events",
                         n
                     );
@@ -585,21 +608,25 @@ async fn restore_acp_session(
     new_client.attach_config_prefs(db.clone(), sid.to_string(), agent_id).await;
 
     let perm_rx = new_client.permission_subscribe();
-    spawn_permission_task(perm_rx, notify_tx.clone()).await;
-    spawn_permission_resolved_task(new_client.permission_resolved_subscribe(), notify_tx.clone())
-        .await;
+    spawn_permission_task(sid, perm_rx, notify_tx.clone()).await;
+    spawn_permission_resolved_task(
+        sid,
+        new_client.permission_resolved_subscribe(),
+        notify_tx.clone(),
+    )
+    .await;
     // 新 client 无未决审批：发标记帧让前端清掉旧 client 遗留的陈旧 banner
     // （旧进程已回收，其审批随之失效，但前端可能错过了 resolved 广播）。
     let synced = serde_json::to_string(&AcpServerMessage::PermissionsSynced).unwrap_or_default();
     let _ = notify_tx.send(Message::Text(synced.into())).await;
     let crash_rx = new_client.crash_subscribe();
-    spawn_crash_task(crash_rx, notify_tx.clone()).await;
+    spawn_crash_task(sid, crash_rx, notify_tx.clone()).await;
     let system_notice_rx = new_client.system_notice_subscribe();
-    spawn_system_notice_task(system_notice_rx, notify_tx.clone()).await;
+    spawn_system_notice_task(sid, system_notice_rx, notify_tx.clone()).await;
     let turn_end_rx = new_client.turn_end_subscribe();
-    spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
+    spawn_turn_end_task(sid, turn_end_rx, notify_tx.clone()).await;
     let term_rx = new_client.terminal_event_subscribe();
-    spawn_terminal_task(term_rx, notify_tx.clone()).await;
+    spawn_terminal_task(sid, term_rx, notify_tx.clone()).await;
     *client = Some(new_client.clone());
 
     let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
@@ -639,7 +666,7 @@ async fn restore_acp_session(
                         let _ = forward_session_update(&tx, &notif).await;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("ACP replay subscriber lagged by {} messages; dropped frames", n);
+                        tracing::warn!(session_id = %restore_sid, "ACP replay subscriber lagged by {} messages; dropped frames", n);
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         break (&mut load_fut).await;
@@ -649,7 +676,7 @@ async fn restore_acp_session(
         };
         let load_err: Option<String> =
             result.as_ref().err().map(|e| format!("session/load failed: {}", e));
-        tracing::info!("ACP replay task: load_session done, ok={}", load_err.is_none());
+        tracing::info!(session_id = %restore_sid, "ACP replay task: load_session done, ok={}", load_err.is_none());
         // 恢复配置偏好：必须在 load_session 返回后（缓存已填充）、排空缓冲前调用。
         // restore 发出的 ConfigOptionUpdate 广播会进 replay_rx → 前端 staging，
         // ReplayEnd 的 commitReplay 时恢复值覆盖重放默认值，配置栏最终显示用户
@@ -657,7 +684,7 @@ async fn restore_acp_session(
         if load_err.is_none() {
             task_client.restore_config_prefs().await;
         }
-        tracing::info!("ACP replay task: restore_config_prefs done");
+        tracing::info!(session_id = %restore_sid, "ACP replay task: restore_config_prefs done");
         // load_session 返回即 agent 已推完全部历史。排空缓冲余量后经 notify_tx
         // 发 replay_end——notify_tx 为 FIFO，故 replay_end 必在最后一条重放帧之后
         // 到达前端（前端据此即时 sync 即可）。
@@ -670,7 +697,7 @@ async fn restore_acp_session(
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
                     // 不中断：后续 try_recv 仍能取到缓冲里保留的帧。
-                    tracing::warn!("ACP replay drain lagged by {} messages; dropped frames", n);
+                    tracing::warn!(session_id = %restore_sid, "ACP replay drain lagged by {} messages; dropped frames", n);
                 }
                 Err(_) => break, // Empty / Closed
             }
@@ -684,10 +711,10 @@ async fn restore_acp_session(
             .unwrap_or_default(),
         };
         let _ = tx.send(Message::Text(msg.into())).await;
-        tracing::info!("ACP replay task: replay_end sent, moving replay_rx into notify task");
+        tracing::info!(session_id = %restore_sid, "ACP replay task: replay_end sent, moving replay_rx into notify task");
         // 复用 replay_rx 接管实时帧，避免重新订阅在排空与订阅之间产生丢帧窗口。
-        spawn_notify_task(replay_rx, tx.clone()).await;
-        tracing::info!("ACP replay task: notify task spawned, replay task finishing");
+        spawn_notify_task(&restore_sid, replay_rx, tx.clone()).await;
+        tracing::info!(session_id = %restore_sid, "ACP replay task: notify task spawned, replay task finishing");
         match load_err {
             None => Ok(()),
             Some(e) => {
@@ -743,11 +770,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 .unwrap_or_default();
                 let _ = notify_tx.send(Message::Text(snap_msg.into())).await;
             }
-            spawn_notify_task(rx, notify_tx.clone()).await;
+            spawn_notify_task(&session_id, rx, notify_tx.clone()).await;
             let perm_rx = c.permission_subscribe();
-            spawn_permission_task(perm_rx, notify_tx.clone()).await;
-            spawn_permission_resolved_task(c.permission_resolved_subscribe(), notify_tx.clone())
-                .await;
+            spawn_permission_task(&session_id, perm_rx, notify_tx.clone()).await;
+            spawn_permission_resolved_task(
+                &session_id,
+                c.permission_resolved_subscribe(),
+                notify_tx.clone(),
+            )
+            .await;
             // broadcast 无历史：重放连接前已挂起的审批请求，恢复前端 banner
             // （审批不再超时自动应答，可能跨 WS 重连长期未决）。
             for event in c.pending_permission_events().await {
@@ -764,12 +795,12 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                 serde_json::to_string(&AcpServerMessage::PermissionsSynced).unwrap_or_default();
             let _ = notify_tx.send(Message::Text(synced.into())).await;
             let crash_rx = c.crash_subscribe();
-            spawn_crash_task(crash_rx, notify_tx.clone()).await;
+            spawn_crash_task(&session_id, crash_rx, notify_tx.clone()).await;
             let system_notice_rx = c.system_notice_subscribe();
-            spawn_system_notice_task(system_notice_rx, notify_tx.clone()).await;
-            spawn_turn_end_task(turn_end_rx, notify_tx.clone()).await;
+            spawn_system_notice_task(&session_id, system_notice_rx, notify_tx.clone()).await;
+            spawn_turn_end_task(&session_id, turn_end_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
-            spawn_terminal_task(term_rx, notify_tx.clone()).await;
+            spawn_terminal_task(&session_id, term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
                 let data = serde_json::to_value(&notif).unwrap_or_default();
                 let msg =
@@ -820,10 +851,10 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
         }
     };
 
-    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动�?
-    // 替代前端�? acp_process_alive 的轮询）�?
+    // 订阅进程存活事件，向本连接转发对应会话的 process_alive 帧（事件驱动地
+    // 替代前端对 acp_process_alive 的轮询）。
     let mut proc_rx = state.acp_supervisor.process_event_subscribe();
-    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）�?
+    // 连接建立即发一帧初始存活状态，作初始同步（broadcast 无历史，防止错过连接前事件）。
     let _ = notify_tx
         .send(Message::Text(
             serde_json::to_string(&AcpServerMessage::ProcessAlive { alive: client.is_some() })
@@ -1044,7 +1075,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                             Ok(AcpClientMessage::SetConfigOption { config_id, value }) => {
                                 if let Some(ref c) = client
                                     && let Err(e) = c.set_config_option(&config_id, &value).await {
-                                        let err_msg = format!("配置�? {} 设置失败: {}", config_id, e);
+                                        let err_msg = format!("配置项 {} 设置失败: {}", config_id, e);
                                         let msg = serde_json::to_string(&AcpServerMessage::Error {
                                             code: Some("config_option_failed"),
                                             message: &err_msg,

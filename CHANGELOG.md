@@ -51,10 +51,12 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-09-21 22:40) `[backend]` fake agent 回归测试（`src/acp/fake_agent_tests.rs`，6 用例）：最小 JSON-RPC agent（sh 实现，复刻 crate 1.3.0 wire 契约——UUID 字符串请求 id、`jsonrpc:2.0` 换行帧）驱动真实 ACP 连接时序，钉住 omniterm 侧 teardown 契约：agent 死于握手期时 spawn 限时失败（不挂死）、死于 turn 进行中时在途 prompt 快速失败（死连接的实时失败语义）、无流量退出后 shutdown 干净收尾、**shutdown 对存活 agent 750ms 内完成进程组击杀**（killpg 在 shutdown 返回前已发出；旧实现要等 crate 优雅路径 1s 宽限期后才借 `ChildGuard::drop` 击杀——删掉 killpg 测试即转红）、进程组击杀同时带走 wrapper launcher 孙进程、create/restore 两条构造路径 pid 捕获端到端。测试同时固化了三个 crate 既有行为（升级 crate 时主动复查）：agent 死亡不结束连接任务、`is_alive()` 对已崩溃 agent 误报存活、agent 响应后零延迟退出会使 spawn 失败（`src/acp/fake_agent_tests.rs`、`src/acp/agent_proc.rs`）
 - (2026-09-21 18:30) `[acp]` 权限请求超时行为可配（设置 → 会话「权限请求超时」）：一直等待（不取消、不回收、不强制作废回合，banner 挂到用户回来）/ 自动推进（超时到点自动代替用户应答全部未决审批让 agent 继续，选项挑选优先级 allow_always → allow_once → reject_once → reject_always → 首个，用户拍板；不杀会话）/ 超时中止（默认，原 30 分钟 cancel + kill 行为不变）；共用分钟滑块（默认 30，值域 1..60，后端 `GET/PUT /api/v1/settings/permission-timeout` 持久化 + reaper 运行时热更新）。三种模式到点行动都在聊天流落一条**带详情的 system 消息**——请求的工具名/类型、内容预览（截断 400 字符并标注省略量）、当时的完整可选项、自动模式实际选中项、超时时长——修复「回来后不知道自己错过了什么选项」；消息载荷结构化（`label` i18n key + `detail`），中英本地化渲染，2026-08-18 起的历史中文告知原样显示。顺带修复 ACP 空闲回收设置的启动回填缺口（`getAcpIdleRecycle` 定义后从未被调用，刷新后面板重置为默认值）（`src/acp/reaper.rs`、`src/acp/permission.rs`、`src/api/settings.rs`、`src/main.rs`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/stores/appStore.ts`、`frontend/src/App.tsx`、`frontend/src/components/Chat/ChatMessage.tsx`）
 
 ### Changed
 
+- (2026-09-21 22:40) `[backend]` ACP WS 全部 per-connection 转发任务与 replay 任务日志补 `session_id` 归属（7 个 `spawn_*` 任务函数各 warn/debug + replay 任务 6 条 info/warn）：多会话并发时 replay / 丢帧 / 关闭原因可归因到具体会话，修掉本次 CPU 尖峰排查中「replay 无法归因」的直接受害项。顺带修复 `src/ws/acp.rs` 5 处存量 UTF-8 损坏（`�?` 替换字符，含用户可见的「配置项 {} 设置失败」错误文案；损坏文本所在功能尚未发布）（`src/ws/acp.rs`）
 - (2026-09-21 00:40) `[infra]` 升级 `rustls` 0.23.43 → 0.23.45（连带 `rustls-webpki` 0.103.13 → 0.103.15），修复 RUSTSEC-2026-0285（TLS 1.3 握手消息会在错误状态下被接受，中危；握手转写仍被认证，网络位置攻击者无法篡改或完成握手）。该公告出现在 v0.2.23 发布当天，使 ci.yml 的 audit 门禁（`cargo deny check advisories`）在 push main 后红灯，与本次发布内容无关（`Cargo.lock`）
 
 ### Fixed
