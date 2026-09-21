@@ -50,6 +50,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::acp::agent_proc;
 use crate::acp::agent_proc::spawn_test_lock_async;
 use crate::acp::client::AcpClient;
 use crate::models::agent::{Agent, AgentEnvVar};
@@ -71,6 +72,9 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 /// 最小 JSON-RPC fake agent（test-only，勿用于生产路径）。
 ///
 /// 行为由 env 驱动（经 `agent.env` 注入，随 wrapper 的 all_args 前缀传入）：
+/// - `FAKE_MODE=hang`：**不响应 initialize**（`exec sleep` 驻留）——模拟坏二进制 /
+///   npx 冷启动超过探针 15s 预算的时序，用于 P2-3 回归（spawn 超时后 agent 进程
+///   必须被回收，不得泄漏）；
 /// - `FAKE_MODE=handshake`：响应 initialize 后**立刻退出**（exit 3，session/new
 ///   永远等不到响应）——建模「agent 死于握手期」，`spawn_and_connect` 必须限时
 ///   失败而不是挂死；
@@ -89,6 +93,11 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 const FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 # test-only fake ACP agent（计划 D5）。响应 initialize（声明 loadSession，restore
 # 路径也要能建连）与 session/new，之后按 FAKE_MODE 行动。
+# hang 模式：模拟永不完成握手的 agent（坏二进制 / npx 冷启动超过探针 15s
+# 预算）——不读不响应，驻留到被 kill（P2-3 回归测试的目标时序）。
+if [ "$FAKE_MODE" = "hang" ]; then
+  exec sleep @LIFETIME@
+fi
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
@@ -452,6 +461,53 @@ async fn restore_path_captures_pid_and_shutdown_kills_agent() {
     assert!(
         wait_until(|| proc_reaped(pid), REAP_TIMEOUT).await,
         "restore 路径 agent 死亡后未被回收（僵尸残留）"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 6. spawn 握手期超时不得泄漏 agent 进程（P2-3 回归防线）──────────────
+
+#[tokio::test]
+async fn spawn_timeout_during_handshake_does_not_leak_agent_process() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("hang");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    // P2-3：探针（test_agent/test_agent_raw 的 15s 超时）会在 handshake 期间
+    // drop 掉 spawn future。修复前（Phase 1 之前）没有任何机制终止连接任务，
+    // 闭包卡在 initialize 等待里出不来——shutdown_tx 虽随外层 future 释放，
+    // 但闭包还没走到 shutdown_rx.await，连接任务带着 agent 进程（含孙进程）
+    // 永远驻留。现在由 Phase 1 D4 兜底：abort_tx 随外层 future 释放 → crash
+    // watcher abort 连接任务 → crate 的 ChildGuard::drop killpg 进程组。
+    // pid 自报文件由任务内的 PidFileCleanup 守卫统一清理（agent_proc.rs）。
+    let children_before = agent_proc::snapshot_direct_children();
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        AcpClient::spawn_and_connect(
+            agent_for(&script, "hang", &dir),
+            workspace.clone(),
+            &HashMap::new(),
+        ),
+    )
+    .await;
+    assert!(result.is_err(), "hang agent 必须让 spawn 限时失败而不是挂死");
+
+    // 测试锁下无并发 spawn 污染，diff 即本用例的 hang agent。
+    let pid = agent_proc::resolve_child_pid(&children_before, &workspace)
+        .expect("应能 diff 出 hang agent 的 pid");
+    assert!(proc_alive(pid), "spawn 超时前 agent 必须还在跑（否则测了个空）");
+    // abort 连接任务 → crate 连接 future 被 drop → ChildGuard::drop killpg。
+    // 4s 上界覆盖 abort 传播与调度抖动。
+    assert!(
+        wait_until(|| proc_dead(pid), Duration::from_secs(4)).await,
+        "spawn 超时（调用方消失）后 agent 进程泄漏（P2-3 回归）"
+    );
+    assert!(
+        wait_until(|| proc_reaped(pid), REAP_TIMEOUT).await,
+        "hang agent 死亡后未被回收（僵尸残留）"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

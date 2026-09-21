@@ -44,7 +44,7 @@
 | P1-2 | 回归测试 | 假 agent 固化「响应后退出」时序 | 断言连接任务限时结束 + shutdown 杀进程；同时作为上游 bug 复现脚本 **✅ 已实施（Phase 2，形态有偏差见 Phase 2 实施记录）** |
 | P2-1 | 依赖治理 | 查上游修复/升级 + 修正版本声明 | `Cargo.toml` 写 `agent-client-protocol = "1.2"` 但 lock 解析到 1.3.0，声明与实际不符 **✅ 已实施（Phase 3）：根因确认 = futures 0.3.33 FuturesUnordered waker bug，已升 0.3.34 + 声明对齐；ACP 2.x 升级另行决策（见 Phase 3 实施记录）** |
 | P2-2 | 僵尸子进程 | tmux client 子进程回收调查 | 11 个 defunct 最久 10 天；与本次 CPU 无关，独立根因 |
-| P2-3 | 探针超时泄漏 | `test_agent` / `test_agent_raw` 15s 超时分支无 client 句柄，agent 进程必泄漏（既有缺陷） | 超时即 WARN 留痕；Phase 1 若 pid 登记采用「spawn 前登记」形态可顺带清理，否则列 backlog |
+| P2-3 | 探针超时泄漏 | `test_agent` / `test_agent_raw` 15s 超时分支无 client 句柄，agent 进程必泄漏（既有缺陷） | 超时即 WARN 留痕；Phase 1 若 pid 登记采用「spawn 前登记」形态可顺带清理，否则列 backlog **✅ 已解决（2026-09-22）：进程泄漏由 Phase 1 D4 abort 兜底覆盖，pid 文件泄漏由 PidFileCleanup 守卫解决，见 Phase 3 实施记录** |
 
 ### 不纳入范围（含理由）
 
@@ -162,6 +162,17 @@
 - `Cargo.lock`：futures 全家 0.3.33 → 0.3.34（`cargo update -p futures --precise 0.3.34`）。
 - 验证：`cargo test --workspace` 465+8+2 全过（含 fake agent 6 用例——Phase 2 固化的 crate 行为 pin 在 0.3.34 下依然成立，waker 修复不改变 select 结构结局）、clippy/fmt 通过。
 
+### P2-3 探针超时泄漏（已解决，2026-09-22）
+
+问题：`test_agent` / `test_agent_raw` 的 15s 超时会 drop 掉 `spawn_and_connect` 的外层 future。修复前的泄漏链：外层 drop 只释放 `shutdown_tx`，而连接闭包还卡在 initialize 等待里——没走到 `shutdown_rx.await`，连接任务带着 agent 进程（含孙进程）永远驻留（crate 的 `ChildGuard` 要等连接结束才 drop，自然也 killpg 不了）。
+
+调查中的两个反转（都经实验验证，勿只凭推理）：
+
+1. **进程泄漏其实已被 Phase 1 的 D4 abort 兜底覆盖**：外层 future 释放 `abort_tx` → crash watcher 的 `select!` 收到 `RecvError` → `connection_task.abort()` → 连接 future 被 drop → crate `ChildGuard::drop` killpg。实验方法：临时让 caller_rx 永不 resolve（模拟没有该机制），回归测试依然通过。
+2. **曾按「调用方消失」设计过 caller_rx select 方案，已回退**：它与 abort 机制竞态（两者在 outer drop 时同时触发），只多贡献一个 pid 文件清理，收益不确定且引入非确定性，按奥卡姆剃刀移除。
+
+最终修复（真正的剩余缺口只有 pid 自报文件）：`agent_proc::PidFileCleanup` RAII 守卫随连接任务终结（返回 / abort / panic）删除 pid 文件，幂等；成功路径 `capture_agent_pid` 读后即删，Drop 为 no-op。回归测试 `spawn_timeout_during_handshake_does_not_leak_agent_process`（fake agent hang 模式：永不响应 initialize）钉住「spawn 超时后 agent 进程限时回收」。两个探针路由的超时分支补 WARN 留痕（agent_id / agent_command）。
+
 ### 决策记录
 
 - **ACP SDK 1.3.0 → 2.x 升级：本轮不做**。理由：① 根因修复只需 futures 补丁级 bump，升级 2.x 对空转无增量收益（2.0 本来就不复现）；② 2.0.0 是破坏性大版本（`Channel`/`TransportFrame`、JSON-RPC 角色化 API、handler 注册改为 matcher、MCP-over-ACP 改 schema-native 类型、`AcpAgentConfig` 取代 `from_args` 用法），`src/acp/client.rs` 的 builder/handler 链路需实打实移植，属「重大框架升级」（工程准则 1 须用户决策）；③ 2.x 的收益（schema 1.8、stable session restore builders #347、stderr drain 修复 #365）与当前需求不匹配。**若未来要升**：迁移面 = client.rs 的 builder+handler 注册 + handler.rs 全模块 + supervisor 探针构造，预计单独一个计划；升级收益最大的是 `load_session` 稳定 builder（可替换 restore_acp_session 里的手工负载）。
@@ -184,7 +195,7 @@
 - [x] 恢复目标会话后：CPU 不再无限持续高位（止血生效）；若空转仍被触发，释放后**立即**归零且无 agent 进程残留（`pgrep` 验证，含孙进程）——**2026-09-22 用户 dev 环境手动验证初步通过**
 - [x] 回归测试（fake agent）：`src/acp/fake_agent_tests.rs` 6 用例——agent 死于 handshake 时 spawn 限时失败、死于 prompt 在途时请求快速失败、无流量退出后 shutdown 干净、shutdown 对存活 agent 限时击杀（750ms 判别式）、进程组击杀覆盖孙进程、create/restore 两路径 pid 捕获（Phase 2 实施，注意「连接任务结束」断言因 crate 行为改写，见 Phase 2 实施记录）
 - [x] 正常链路无回归：恢复 → 发消息 → turn 正常定稿落库 → 释放，全链路行为与修复前一致（`mark_prompt_idle` 时序不被 kill 破坏）——**2026-09-22 用户手动验证初步通过**（核心链路；真实 npm wrapper launcher 场景的孙进程击杀有单测覆盖，日常使用继续观察）
-- [x] **全部**释放路径行为一致：修复在 `shutdown()`/`disconnect()` 内部，代码层面已自动覆盖 `release`（`sessions.rs`）、`archive`/`delete_session`（`cleanup_session_runtime`）、reaper 空闲回收（`reaper.rs`）、`shutdown_all`（`supervisor.rs`）、restore 三条清理（`ws/acp.rs`）、探针成功路径（`agents.rs` `disconnect`）；用户验证时已覆盖 release 主路径，其余路径代码同源。已知缺口：探针 15s 超时分支泄漏（P2-3，见 Phase 3）
+- [x] **全部**释放路径行为一致：修复在 `shutdown()`/`disconnect()` 内部，代码层面已自动覆盖 `release`（`sessions.rs`）、`archive`/`delete_session`（`cleanup_session_runtime`）、reaper 空闲回收（`reaper.rs`）、`shutdown_all`（`supervisor.rs`）、restore 三条清理（`ws/acp.rs`）、探针成功路径（`agents.rs` `disconnect`）；用户验证时已覆盖 release 主路径，其余路径代码同源。（原缺口「探针 15s 超时分支泄漏」已于 2026-09-22 解决，见 Phase 3 实施记录 P2-3 节。）
 - [x] create 路径（`spawn_and_connect`，非仅 `spawn_and_load`）同样捕获 pid 并杀进程——抽公共核 `spawn_with_session` 后天然覆盖两条构造路径（勘误 2）
 - [x] pid 获取降级路径有 WARN 日志（非 Linux / pid 文件缺失或非法 / 扫描无果 / 归属校验未通过），不静默退化为修复前现状
 - [x] `cargo test --workspace`（465+8+2 通过）、`cargo clippy --workspace --all-targets -- -D warnings` 通过；`cargo fmt --all` 见提交；本计划无前端改动
@@ -228,7 +239,7 @@ Phase 2/3 待办：fake agent 回归测试落地后回填 D5 状态；上游调�
 - wrapper `$$` pid 文件方案：单测与 fake agent e2e 已证明自报 pid == exec 后 agent pid（`agent_proc.rs::wrapped_subprocess_reports_own_pid_via_file`），fake agent e2e 也走通；但**尚未经真实 agent 验证**（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立——leader 退出而孙进程存活的 killpg 路径已有单测覆盖）——仍需 dev 环境跑真实 agent 确认。
 - ~~上游是否已有修复版本~~ **2026-09-22 已确认**：futures 0.3.34（已升）；ACP 2.x 亦有结构性规避但升级收益不匹配，另行决策（见 Phase 3 实施记录决策）。
 - 僵尸子进程根因（P2-2）：未排查。
-- 探针 15s 超时泄漏（P2-3）：列 backlog（pid 在连接建成后才捕获，超时分支拿不到）。
+- ~~探针 15s 超时泄漏（P2-3）~~ **2026-09-22 已解决**：进程泄漏由 Phase 1 D4 abort 兜底覆盖（实验实证），pid 文件由 PidFileCleanup 守卫清理；回归测试已钉。
 - crate 三个既有行为（Pin 在测试里，升级 crate 时主动复查）：agent 死亡不结束连接任务 / 无崩溃广播（setup 后）；`is_alive()` 对已崩溃 agent 误报存活；agent 响应后零延迟退出会让 `spawn_and_connect` 失败（select 竞态）。
 
 **现场状态**：

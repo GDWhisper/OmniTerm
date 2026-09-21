@@ -624,7 +624,17 @@ impl AcpClient {
         #[cfg(unix)]
         let children_before = agent_proc::snapshot_direct_children();
 
+        // P2-3：pid 自报文件的 RAII 清理守卫（随任务终结删除，幂等）。覆盖外层
+        // future 被 drop 的路径——探针 15s 超时时 abort_tx 随之释放，crash
+        // watcher abort 连接任务（Phase 1 D4 兜底），crate 的 ChildGuard::drop
+        // killpg 进程组，闭包侧代码来不及清理 pid 文件；由本守卫在任务结束
+        // （返回/abort/panic）时统一删除，避免 /tmp 累积。成功路径
+        // capture_agent_pid 读后即删，Drop 为 no-op。
+        #[cfg(unix)]
+        let pid_file_cleanup = agent_proc::PidFileCleanup::new(pid_file.clone());
+
         let connection_task = tokio::spawn(async move {
+            let _pid_file_cleanup = pid_file_cleanup;
             builder
                 .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
                     let init_resp = cx

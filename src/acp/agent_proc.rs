@@ -91,6 +91,31 @@ pub fn remove_pid_file(path: &Path) {
     }
 }
 
+/// pid 自报文件的 RAII 清理守卫（P2-3）：Drop 时删除文件（幂等）。
+///
+/// 存在的理由：连接任务的终结路径不止「正常读完」一种——探针 15s 超时会 drop
+/// 掉外层 spawn future，`abort_tx` 随之释放、crash watcher abort 连接任务
+/// （Phase 1 D4 兜底，crate 的 `ChildGuard::drop` 负责 killpg 进程组），闭包
+/// 侧代码（含外层 future 的 `conn_rx` Err 分支）都来不及跑。由本守卫在任务
+/// 结束（返回 / abort / panic）时统一收尾。成功路径上 `capture_agent_pid`
+/// 读后即删，Drop 为 no-op。
+#[cfg(unix)]
+pub(crate) struct PidFileCleanup(PathBuf);
+
+#[cfg(unix)]
+impl PidFileCleanup {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PidFileCleanup {
+    fn drop(&mut self) {
+        remove_pid_file(&self.0);
+    }
+}
+
 /// 读取并删除 pid 自报文件。有界读取（32 字节）：内容由 wrapper 的 `echo $$`
 /// 产生，正常仅几字节；有界防止异常内容把整文件读进内存（§P1 外部输入）。
 #[cfg(unix)]
