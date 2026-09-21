@@ -8,6 +8,9 @@ import {
   setupChatViewStores,
   resetChatViewStores,
   seedChatMessages,
+  chatScrollEl,
+  mockScrollMetrics,
+  fireScroll,
 } from './ChatView.testUtils'
 
 // 「回到底部」按钮：离开消息区底部即显示——不要求尾部有新内容到达（流式期间与
@@ -38,34 +41,8 @@ function jumpButton() {
   return container.querySelector<HTMLButtonElement>('.chat-jump-bottom')
 }
 
-/** 把滚动容器度量 mock 成给定状态（实例属性遮蔽 jsdom 原生访问器）。 */
-function mockScrollMetrics(
-  el: HTMLElement,
-  metrics: { scrollTop: number; clientHeight: number; scrollHeight: number },
-) {
-  let top = metrics.scrollTop
-  Object.defineProperty(el, 'scrollTop', {
-    configurable: true,
-    get: () => top,
-    set: (v: number) => {
-      top = v
-    },
-  })
-  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => metrics.clientHeight })
-  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => metrics.scrollHeight })
-  return {
-    getTop: () => top,
-    setTop: (v: number) => {
-      top = v
-    },
-  }
-}
-
-function fireScroll() {
-  act(() => {
-    // .overlay-scroll-content 即 scrollRef 指向的消息滚动容器。
-    container.querySelector('.overlay-scroll-content')!.dispatchEvent(new Event('scroll'))
-  })
+function fireScrollEvent() {
+  act(() => fireScroll(container))
 }
 
 describe('ChatView jump-to-bottom button', () => {
@@ -75,31 +52,36 @@ describe('ChatView jump-to-bottom button', () => {
     renderView()
     expect(jumpButton()).toBeNull()
 
-    const el = container.querySelector<HTMLElement>('.overlay-scroll-content')!
-    mockScrollMetrics(el, { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
-    fireScroll()
+    mockScrollMetrics(chatScrollEl(container), { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
+    fireScrollEvent()
     expect(jumpButton()).toBeTruthy()
   })
 
   it('hides once back at the bottom', () => {
     seedChatMessages([userMsg('m1', 'question'), assistantMsg('m2', 'answer')])
     renderView()
-    const el = container.querySelector<HTMLElement>('.overlay-scroll-content')!
-    const m = mockScrollMetrics(el, { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
-    fireScroll()
+    const m = mockScrollMetrics(chatScrollEl(container), {
+      scrollTop: 0,
+      clientHeight: 600,
+      scrollHeight: 2000,
+    })
+    fireScrollEvent()
     expect(jumpButton()).toBeTruthy()
 
     m.setTop(2000 - 600)
-    fireScroll()
+    fireScrollEvent()
     expect(jumpButton()).toBeNull()
   })
 
   it('jumps to the bottom and hides on click', () => {
     seedChatMessages([userMsg('m1', 'question'), assistantMsg('m2', 'answer')])
     renderView()
-    const el = container.querySelector<HTMLElement>('.overlay-scroll-content')!
-    const m = mockScrollMetrics(el, { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
-    fireScroll()
+    const m = mockScrollMetrics(chatScrollEl(container), {
+      scrollTop: 0,
+      clientHeight: 600,
+      scrollHeight: 2000,
+    })
+    fireScrollEvent()
     expect(jumpButton()).toBeTruthy()
 
     act(() => jumpButton()!.click())

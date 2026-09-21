@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 - (2026-09-21 00:40) `[infra]` 升级 `rustls` 0.23.43 → 0.23.45（连带 `rustls-webpki` 0.103.13 → 0.103.15），修复 RUSTSEC-2026-0285（TLS 1.3 握手消息会在错误状态下被接受，中危；握手转写仍被认证，网络位置攻击者无法篡改或完成握手）。该公告出现在 v0.2.23 发布当天，使 ci.yml 的 audit 门禁（`cargo deny check advisories`）在 push main 后红灯，与本次发布内容无关（`Cargo.lock`）
 
+### Fixed
+
+- (2026-09-21 08:40) `[frontend]` 修复移动端 ACP 会话「切到 sidebar/files 再切回就丢贴底、此后流式输出也不再跟随」：贴底态只在 scroll 事件里重算，而容器尺寸变化（键盘收放、todo 看板/权限条/输入区长高）既不触发 scroll、浏览器也只在滚动容器可见时才替我们保住底缘——三面板同挂在一条 300% strip 上，聊天面板离屏时收缩实测底缘直接掉下去且全程无事件，`autoStick` 却仍是 true，于是视口停在半空、「回到底部」按钮也不显示，用户只能手滚（手滚停在离底 >24px 就永久解除跟随）。补两条重钉路径：滚动内容高度的全部来源（消息、思考指示、重放指示、终端事件、历史加载指示）进贴底 effect deps，容器尺寸变化经 ResizeObserver 重钉；用户已上翻时两条路径都不干预（`frontend/src/components/Chat/ChatView.tsx`）
+
 ## [0.2.23] - 2026-09-20
 
 ### Added

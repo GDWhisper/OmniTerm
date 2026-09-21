@@ -1,6 +1,6 @@
 # 布局与 CSS — 调试模式
 
-覆盖：flex 三件套、共享 CSS 类隐性契约、visual viewport 三层模型、containing block、RTL bidi 隔离、table-layout、white-space、底部不可见分层排查清单。
+覆盖：flex 三件套、共享 CSS 类隐性契约、visual viewport 三层模型、containing block、RTL bidi 隔离、table-layout、white-space、流式锚定态靠事件维护必失配（离屏容器不保住底缘）、底部不可见分层排查清单。
 
 ---
 
@@ -89,10 +89,15 @@
 
 **流式锚定标准三件套**：默认跟随（stick 初值 true）→ 用户上翻即解除（onScroll 按 `scrollHeight - scrollTop - clientHeight < 阈值` 判定）→ 滚回底部自动恢复。渲染帧级更新用 `useLayoutEffect` 而非 `useEffect`（绘制前钉住，零闪烁）。
 
-**适用**：流式输出 + 嵌套滚动窗口；先确认报的是哪条滚动条（外层 vs 块内）。
+**布局-锚定状态靠事件维护必失配**：把底缘推远的**不只是滚动**。容器尺寸变化（键盘收放、兄弟区块长高把滚动区压矮）与滚动内容长高（新增指示条/事件行）都不改「滚动位置」，因此**不保证发 scroll 事件**；而锚定态若只在 scroll 事件里推导，就会出现「状态说在跟随、视口却停在半空」，且解除/恢复都挂在同一事件上 → 也没有「回到底部」入口，用户只能手滚（手滚若停在离底 >阈值 处即永久解除跟随）。两条推论：① 锚定态的所有「内容高度来源」必须是重钉路径的显式依赖，新增条件渲染 = 新增依赖（漏登记 = 静默失跟）；② 容器尺寸变化必须单独重钉（`ResizeObserver`），但**只对「跟随中」生效**，用户已上翻时不得夺回阅读位置。
+
+**布局-离屏滚动容器不会保住底缘**：浏览器的滚动锚定/底缘保持只在滚动容器**可见**时生效（实测 Chromium：可见时容器收缩会把 `scrollTop` 推到新底缘并发事件；同一容器被 `translateX` 移出视口后收缩，`scrollTop` 不动、gap 直接等于收缩量、**全程零事件**）。凡「多面板同挂一条滑动 strip、只 translate 不卸载」的移动端布局，离屏面板的滚动几何都会静默失真——这类「切走再切回」的症状，先怀疑离屏期间发生的布局变化，而不是切换动作本身。
+
+**适用**：流式输出 + 嵌套滚动窗口；先确认报的是哪条滚动条（外层 vs 块内）。多面板 strip / tab 保活的移动端布局尤其。
 
 **案例证据**：
 - 2026-07-31 ACP thinking 块大量流式更新时块内滚动条不贴底，最新思考内容在折叠线以下。修复：ThoughtBlockView 加 scrollRef + stickRef + onScroll + useLayoutEffect（仅 streaming 且 stick 时 `scrollTop = scrollHeight`），展开时恢复 stick。
+- 2026-09-21 移动端 ACP 聊天「切到 sidebar 再切回就没追底、此后流式也不跟随」：聊天面板离屏期间，todo 看板/权限条/输入区长高把消息区压矮，底缘掉下去且无任何事件，`autoStick` 仍 true（回底按钮也不显示）。修复：滚动内容高度来源全量进贴底 effect deps + 容器尺寸变化经 ResizeObserver 重钉（两条路径均以 `autoStick` 门控）。
 
 ---
 
