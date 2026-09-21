@@ -433,6 +433,7 @@ Lifecycle:
 | `chat_messages` | `duration_ms` / `wait_ms` | 单 turn；`NULL` = 未知（迁移前的行、未经累积器定稿的 turn），**与 0 区分** |
 
 - **exactly-once**：结算挂在 `finalize_turn` 的 `active: true→false` CAS 上，天然幂等——四条结束路径（正常完成、prompt 出错、cancel 兜底、reaper 超时）都汇聚到 `mark_prompt_idle`，谁先 CAS 谁记账，重复调用不双计。
+- **EndTurn 可靠投递**（2026-09-21 修复，回归 `end_turn_is_delivered_when_the_flush_signal_channel_is_saturated`）：定稿命令走 `Sink::end_tx` 独立无界通道，不与可丢的 `Flush` 防抖信号共享余量——高帧率折叠能在 writer 一次 SQLite 写内塞满 256 深度信号通道，`try_send` 届时静默失败会同时丢会话级记账与消息行定稿（行停在 `streaming`）。writer 死亡时 `send` 失败记 WARN 而非静默；writer 侧 `biased` 优先消费该通道（避免 `cmd_rx` 先关闭的 `None` 抢先 break 丢掉缓冲），定稿时顺带清空已排队的 `Flush` 信号避免一次内容相同的冗余写。
 - **wait 用深度计数器**（`wait_depth: u32`）而非审批 id 集合：`PermissionManager` 的 `resolve(id)` / `cancel_all` 只给得出 id 的增减时机，而 ACP 的 `Responder` 受 `IntoHandled` 约束取不回 id，按 id 去重要么改 `permission.rs` 要么依赖「同一 turn 内 id 不重复」的假设。配平由 `begin_turn` 归零 + cancel 路径 `end_all_waits()` 兜底。
 - **未闭合的 wait 段截断到定稿时刻**（clamp，不做 `u64` 减法回绕）：reaper 超时或用户直接 cancel 时审批仍挂着，这段等待既不该算工作也不该凭空消失。
 - **结算值只由后端算**：`prompt_done` 帧带 `duration{work_ms, wait_ms}`（取值方式与同帧 `row_id` 一致，见「重连续接协议」），耗时在定稿那一刻即显示；刷新后走 `GET /sessions/{id}/messages` 读库。**唯一结算呈现位**是 assistant 的 hover 动作栏所在行的右端「已工作 2分钟42秒」（`frontend/src/components/Chat/ChatMessage.tsx`，行放不下才由 flex-wrap 另起一行），等待时长挂该行 tooltip；该行右缘由 layout effect 实测最后一个正文块的宽度（气泡按内容收缩，CSS 表达不了跨兄弟节点右对齐），故同行与换行两种形态下都不越过气泡右缘。单位字形由 `Intl` unit-narrow 按界面语言给（不在代码里硬编码「分/秒」），未知 → 整行不渲染；**0 与亚秒分档**（0 = 该活动没发生，如从未等过审批；亚秒 = 发生了但不足一秒，收成 `<1秒` 而非 `0秒`）。

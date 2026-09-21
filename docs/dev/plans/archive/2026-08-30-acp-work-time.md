@@ -326,3 +326,15 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 对**从不发显式 `in_progress`/`running`** 的 agent（实测某实现连发 36 个无 status 的 `tool_call_update` 后跟一个 `completed`），工具时长仍记 0。协议 §8.3 规定 status 缺省为 `pending`，现行保守 rule 有协议依据；若要把这类实现计入，须先确证「无 status 的 content 更新 == 执行中」，再定兜底口径（本次未动）。
 - 仍开放的工具并集在重连时丢弃，工具跨越重连点的已执行段不可恢复；要精确计量须让后端给转发的 `session_update` 帧带到达时刻并透出到快照卡片，属协议扩展，本次未做。
 - 三项读数仍不入库、刷新即失（E13/E14 口径不变）。
+
+### E16 — `EndTurn` 可靠投递：定稿命令不再与可丢的 `Flush` 信号共用通道（2026-09-21）
+
+来源：用户要求对计时改动做安全/性能复查。复查发现 Phase 1 引入的 `WriterCmd::EndTurn` 与 `Flush` 共用 `WRITER_CHANNEL_CAPACITY=256` 有界通道且统一 `try_send`。`Flush` 可丢有防抖合并语义兜底（`send_cmd` 注释已论证），但 `EndTurn` 是**非幂等的定稿跃迁**：信号通道被高帧率折叠塞满时（writer 卡在一次 `flush_once` 的 SQLite 写内；模块文档自述长 turn「tens of thousands」帧，万级帧率下约 25ms 停滞即可填满 256 深度）`try_send` 静默失败——该 turn 的会话级记账（`turn_count`/`work_ms`/`wait_ms`）与消息行定稿（`finalize_message`，行永久停在 `streaming`）同时丢失且无日志，而 UI 仍显示耗时（`turn_timing` 读发送前就写好的 `last_timing`），DB 与界面静默分叉。`shutdown`/`disconnect`/cancel 兜底/reaper 四条定稿路径全部经此投递，无第二条兜底路径。
+
+修复（`src/acp/turn_accumulator.rs`）：
+
+- `Sink` 增 `end_tx`（`mpsc::unbounded_channel`），`EndTurn` 经 `send_end_turn` 可靠投递；`send` 只在 writer 已消失（sink 被替换 / client 释放）时失败并记 WARN，不再静默。无界符合 §P1：条目速率 = turn 速率（人工发起），writer 存活时积压量 ≈ 停滞时长 ÷ turn 间隔 × 百字节级载荷；writer 死亡则通道关闭。
+- writer 侧 `next_cmd` 用 `tokio::select!` + `biased` 优先消费 EndTurn 通道：两条通道 sender 同生命周期（同一个 `Sink`），若非优先，先关闭的 `cmd_rx` 返回 `None` 会抢先 break，把缓冲里的 EndTurn 丢在死通道。
+- `EndTurn` 分支顺手 `try_recv` 清空已排队的 `Flush` 信号：它们要的「写一次」由紧随的 `flush_once` 完成（快照取活状态，是其超集），留着只会让定稿后再触发一次内容相同的冗余写。
+
+**测试**：回归 `end_turn_is_delivered_when_the_flush_signal_channel_is_saturated`——容量 2 的信号通道 + 8 帧折叠 + `probe.try_send` 断言饱和前置条件，钉住「信号通道塞满时 EndTurn 仍恰好送达一次」；已在旧行为（`cmd_tx.try_send`）下验证失败（红），修复后通过（绿）。同批 5 个既有计时测试随 `capture_cmds`/`end_turns` 助手迁移到双通道形态，全绿。
