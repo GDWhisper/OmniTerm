@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；偏差见文末「勘误」E1–E13）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；偏差见文末「勘误」E1–E15）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -296,3 +296,32 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 重连/快照重新开本地观测窗，旧输出不进新分子、离线时间不进新分母；快照卡片缺省 `running` 是显示兜底，不是执行证据，仅恢复明确 `in_progress` 工具。重连前工具累计未知，不虚构整轮耗时。
 - 消息底部新增「工具约 N秒」，速度显式「估算 N t/s」，流式/定稿同行呈现；0/未知工具不显示。两项仍不入库，刷新不回补，最终快照只挂最后 assistant 行。新 turn 清空旧快照避免错配。
 - 活跃工具限 256 个、每 ID 限 1024 UTF-16 单元；超限清理 ID 并令本窗口估算失效，下一轮/重连重采样。会话/最终快照仍限 16 条。测试覆盖并发、审批、输出重叠、缺省状态、重连与限界。
+
+### E15 — 三项读数缺陷修复：工具时长跨重连保留、tps 工具期封口、元信息行防拆行（2026-09-21）
+
+用户报告同一 `chat.meta-row` 槽位三个现象：① 工具几乎没有统计；② 单位换行不跟随数字；③ 工具调用期间 tok/s 逐渐跌落，要求「工具调用期间暂停时间直到下次流式吐字」。三项均为前端本地估算缺陷，后端结算与持久化零改动。
+
+**根因（按现象）**
+
+| 现象 | 根因 | 位置 |
+|---|---|---|
+| ① 工具时长≈0 | `beginTurn` 新建条目 + `resumeTurnClock` 把 `toolMs`/`pureToolMs` 归零。移动端关一次浏览器必触发一次重连，整轮已观测工具时长被抹平；工具跨越重连点时，重连前已执行的那段也永久测不到（离线帧只以 cooked 快照形态回来，`completed` 不重放） | `turnClock.ts` `resumeTurnClock` / `chatStore.ts` `beginPrompt` |
+| ② 单位换行 | 读数是**单个文本节点**，`CHAT_META_TEXT_STYLE` 为 `whiteSpace:normal` + `overflowWrap:anywhere`。中文无空格 → 浏览器在数字与单位之间断行。实测断点：「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」 | `ChatMessage.tsx` `CHAT_META_TEXT_STYLE` / `LiveWorkElapsed` |
+| ③ tps 跌落 | `generationElapsedMs` 只扣「工具窗口内零输出」的工具段（`turn.toolHasOutput ? 0 : openToolMs`）。工具执行期间一旦流出 thought/text，整段开放并集回到分母，分母随工具执行持续增长 → 观感「模型越跑越慢」 | `turnClock.ts` `generationElapsedMs` |
+
+**修复**
+
+- **跨重连保留工具段**：`resumeTurnClock` 不再清零 `toolMs`/`pureToolMs`，只丢弃仍开放的并集（离线段无法归因给工具还是别的，维持 E14「不虚构」口径）。新增 `pureToolMsAtObs` 基线：`generationElapsedMs = (工作时长 − observationWorkMs) − (pureToolMs − pureToolMsAtObs + 开放并集内可扣段)`，保证「分子分母同窗口」的同时旧工具段不被重复扣、也不会把分母扣成负数。
+- **工具期封口（对应用户要求的「暂停到下次流式吐字」）**：工具并集内**首次**出现输出时，把「工具起点 → 该输出到达时刻」封口为纯工具时间（`toolPureOpenMs`），生成计时钟到此暂停；封口之后仍在工具内的区间重新走时（那段确实是模型在产出）。整段零输出的工具窗口仍全额计工具时间。展示口径 `turnToolElapsedMs` 仍是完整并集（含封口后的执行段），封口只影响分母。
+- **元信息行拆段**：工作 / 工具 / 速度三个读数各自一个 `white-space:nowrap` span，容器沿用既有 `flex-wrap` 承接段间换行。实时路径拆段是 DOM 结构而非文本，一次建好、每 tick 只改 `textContent`，不新增分配、不引入每秒 setState（E12 约束不变）；定稿路径同步拆段。`CHAT_META_RIGHT` 的 `textAlign` 改 `justifyContent`（拆段后 textAlign 对 flex 子项无效）。
+
+**测试**
+
+- `turnClock.test.ts`：原 `restores the entire open tool overlap to generation when prose arrives` 把缺陷断言成了期望值（与 E6 的 `<1s` 同型教训），改写为 `pauses the generation clock at the first prose inside a tool union, then resumes`；新增 `keeps tool time observed before a reconnect instead of wiping it` 覆盖跨重连保留与基线不重复扣。
+- 新增 `ChatMessage.metarow.test.tsx`：jsdom 不做布局，故不断言真实换行结果，而是断言「每个读数各自一个 nowrap 段、段内 label 与 value 不分离」这一结构不变量（换行只发生在段间的充分条件），流式路径用冻结时钟拿确定值。
+
+**仍未解决（已知限制，翻盘条件不变）**
+
+- 对**从不发显式 `in_progress`/`running`** 的 agent（实测某实现连发 36 个无 status 的 `tool_call_update` 后跟一个 `completed`），工具时长仍记 0。协议 §8.3 规定 status 缺省为 `pending`，现行保守 rule 有协议依据；若要把这类实现计入，须先确证「无 status 的 content 更新 == 执行中」，再定兜底口径（本次未动）。
+- 仍开放的工具并集在重连时丢弃，工具跨越重连点的已执行段不可恢复；要精确计量须让后端给转发的 `session_update` 帧带到达时刻并透出到快照卡片，属协议扩展，本次未做。
+- 三项读数仍不入库、刷新即失（E13/E14 口径不变）。

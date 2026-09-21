@@ -261,22 +261,48 @@ describe('turnClock observed tool intervals', () => {
     expect(turnTps('s1', 7_000)).toBe(20)
   })
 
-  it('restores the entire open tool overlap to generation when prose arrives, until all tools close', () => {
+  it('pauses the generation clock at the first prose inside a tool union, then resumes', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
     setTurnWaiting('s1', false, 4_000)
+    // 工具窗口内还没有输出：整段开放并集都算工具时间，分母冻在 1s，速度不随工具执行跌落。
     expect(turnTps('s1', 5_000)).toBe(100)
+    expect(turnTps('s1', 6_000)).toBe(100)
+    // 首次输出到达：把「工具起点 → 此刻」封口为纯工具时间（2s），分母到此暂停；
+    // 多出来的 400 字符暂时不花时间，故读数上跳。封口之后重新走时。
     addOutputChars('s1', 400, 5_000)
-    expect(turnTps('s1', 5_000)).toBeCloseTo(200 / 3)
+    expect(turnTps('s1', 5_000)).toBe(200)
+    expect(turnTps('s1', 6_000)).toBe(100)
     updateTurnTool('s1', 'b', 'in_progress', 6_000)
     updateTurnTool('s1', 'a', 'completed', 7_000)
     updateTurnTool('s1', 'b', 'completed', 8_000)
     updateTurnTool('s1', 'c', 'in_progress', 9_000)
     endTurn('s1', 11_000)
+    // 展示口径仍是完整并集（7s），封口只影响分母：800/4 ÷ 5s。
     expect(finalToolElapsedMs('s1')).toBe(7_000)
-    expect(finalTps('s1')).toBeCloseTo(200 / 7)
+    expect(finalTps('s1')).toBe(40)
+  })
+
+  it('keeps tool time observed before a reconnect instead of wiping it', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    updateTurnTool('s1', 'a', 'completed', 6_000)
+    expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
+    // 移动端关一次浏览器再回来：观测窗重开，但已闭合的 5s 工具时间是真实观测，不能抹掉。
+    resumeTurnClock('s1', 10_000)
+    expect(turnToolElapsedMs('s1', 10_000)).toBe(5_000)
+    // 旧工具段已由基线排除，不会从新窗口的分母里再扣一次（否则分母被扣成负数）。
+    expect(turnTps('s1', 10_000)).toBeNull()
+    addOutputChars('s1', 400, 12_000)
+    // 新窗口 2s 内 400 字符 → 100 token ÷ 2s；旧工具段不参与本窗口分母。
+    expect(turnTps('s1', 12_000)).toBe(50)
+    expect(turnElapsedMs('s1', 12_000)).toBe(12_000)
+    endTurn('s1', 12_000)
+    expect(finalToolElapsedMs('s1')).toBe(5_000)
+    expect(finalTps('s1')).toBe(50)
   })
 
   it('has no rate for tool-only or zero-generation turns and ignores non-finite character samples', () => {
