@@ -12,7 +12,6 @@
 |------|----------|------|
 | `~/coding/OmniTerm-dev` | `dev` | 开发前沿 |
 | `~/coding/OmniTerm-preview` | `preview` | 私人稳定分支（日常工具） |
-| `~/coding/OmniTerm-debug` | `debug` | 紧急修复 |
 | `~/coding/OmniTerm` | `main` | 发布分支（非 worktree，仅用于 sync 发布） |
 
 ## 新 Worktree 初始化
