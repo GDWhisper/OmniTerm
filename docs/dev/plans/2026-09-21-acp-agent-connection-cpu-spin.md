@@ -187,8 +187,65 @@
 
 ### 决策记录
 
-- **ACP SDK 1.3.0 → 2.x 升级：本轮不做**。理由：① 根因修复只需 futures 补丁级 bump，升级 2.x 对空转无增量收益（2.0 本来就不复现）；② 2.0.0 是破坏性大版本（`Channel`/`TransportFrame`、JSON-RPC 角色化 API、handler 注册改为 matcher、MCP-over-ACP 改 schema-native 类型、`AcpAgentConfig` 取代 `from_args` 用法），`src/acp/client.rs` 的 builder/handler 链路需实打实移植，属「重大框架升级」（工程准则 1 须用户决策）；③ 2.x 的收益（schema 1.8、stable session restore builders #347、stderr drain 修复 #365）与当前需求不匹配。**若未来要升**：迁移面 = client.rs 的 builder+handler 注册 + handler.rs 全模块 + supervisor 探针构造，预计单独一个计划；升级收益最大的是 `load_session` 稳定 builder（可替换 restore_acp_session 里的手工负载）。
+- **ACP SDK 1.3.0 → 2.x 升级：本轮不做**（完整迁移评估清单见文末「ACP SDK 1.3.0 → 2.x 迁移评估」：47 个 v1 类型机械 diff + 稳定路径同型论证 + 3 个行为风险项，预计改动 ≤20 行但风险项 1 需一天实测；暂缓，清单供将来复用）。理由：① 根因修复只需 futures 补丁级 bump，升级 2.x 对空转无增量收益（2.0 本来就不复现）；② 2.0.0 是破坏性大版本（`Channel`/`TransportFrame`、JSON-RPC 角色化 API、handler 注册改为 matcher、MCP-over-ACP 改 schema-native 类型、`AcpAgentConfig` 取代 `from_args` 用法），`src/acp/client.rs` 的 builder/handler 链路需实打实移植，属「重大框架升级」（工程准则 1 须用户决策）；③ 2.x 的收益（schema 1.8、stable session restore builders #347、stderr drain 修复 #365）与当前需求不匹配。**若未来要升**：迁移面 = client.rs 的 builder+handler 注册 + handler.rs 全模块 + supervisor 探针构造，预计单独一个计划；升级收益最大的是 `load_session` 稳定 builder（可替换 restore_acp_session 里的手工负载）。
 - **Phase 1 的 killpg 止血不因根因修复而回退**：两层防线正交——0.3.34 修「连接层不再空转」，killpg 修「teardown 不依赖 crate 内部路径健康」。且 0.3.34 仅覆盖该 waker bug，不排除连接层存在其他卡死形态。
+
+## ACP SDK 1.3.0 → 2.x 迁移评估（2026-09-22，用户要求先出清单）
+
+**结论先行**：迁移面比预期小得多——omniterm 只用了 SDK 的**稳定 v1 表面**，而 2.0 明确保持该表面不变（release notes 原话：「keeps the stable ACP v1 wire schema unchanged while making coordinated breaking changes to the Rust SDK APIs」）。逐项核对后，**预计代码改动集中在 `src/acp/client.rs` 一个文件、量级 ≤20 行**，且有 3 个行为差异风险项需实测确认。收益侧对「CPU 空转」零增量（根因已由 futures 0.3.34 修复），故本轮结论仍是**暂缓**，登记此清单供将来决策。
+
+### 证据来源
+
+上游 2.0 migration guide（`md/migration_v2.0.md`）、2.2.0 release notes、main 分支源码（`lib.rs`/`jsonrpc.rs`/`acp_agent.rs`/`role/acp.rs`/`session.rs`）、schema 1.9.0 crate 包（2.x 实际依赖）、与现锁 schema 1.4.0 的逐类型 diff。
+
+### API 面逐项核对（我们用 → 2.0 状态）
+
+| 我们用法（位置） | 2.0 状态 | 结论 |
+|---|---|---|
+| `AcpAgent::from_args(Vec<String>)`（client.rs:448） | 存在且签名不变（guide 明文「`from_args` construction are unchanged」） | 无需改 |
+| `Client.builder().name("omniterm")`（client.rs:482） | `role/acp.rs:74` `impl Client::builder()`；`jsonrpc.rs:1209` `Builder::name` | 无需改 |
+| `on_receive_notification!(...)` × 1 / `on_receive_request!(...)` × 8（client.rs:485-617） | `jsonrpc.rs:1494/1569` 签名在；`session.rs` 文档示例仍用该宏 | 无需改（见下方「第三参类型」） |
+| handler 闭包第三参 `_cx`（全部 9 个 handler 均不使用） | stable v1 路径 `Context = RawConnectionContext`，其 `Connection<Counterpart> = ConnectionTo<Counterpart>`（`jsonrpc.rs:670-679`） | **同型**，无需改 |
+| `connect_with(transport, move \|cx: ConnectionTo<AcpAgentRole>\| ...)`（client.rs:627） | `jsonrpc.rs:1871` 同形；stable 路径 main_fn 收 `ConnectionTo` | 无需改 |
+| `cx.send_request(...).block_task().await`（client.rs:631/644/903） | `jsonrpc.rs:3310` + `block_task`（`jsonrpc.rs:5965`） | 无需改 |
+| `cx.send_notification(...)` / `connection.is_incoming_closed()`（client.rs:910/944） | `jsonrpc.rs:3330/3234` | 无需改 |
+| `Error::internal_error().data(...)`（client.rs:411/691 等） | `lib.rs:163` 从 `schema::v1` 再导出 | 无需改 |
+| `schema::v1::` 全部类型（6 个文件共 121 行 SDK 相关） | 见下方类型 diff | 47 个中 45 同构、2 增变 |
+| `AcpAgent` 子进程 spawn 的 `process_group(0)` | `acp_agent.rs:278` 仍在（`ChildGuard` drop killpg 同款） | Phase 1 的 wrapper pid 捕获 + killpg 假设继续成立 |
+| `RequestId::Str(uuid)` wire 契约（fake_agent_tests 依赖） | `jsonrpc.rs:4089` 同款 | 回归测试无需改 |
+
+### 类型兼容性（机械 diff，非人肉判断）
+
+对**我们实际导入的 47 个 v1 类型**，用脚本提取 schema 1.4.0（现锁）与 1.9.0（2.x 依赖）的定义体（去 doc/属性后按字段名与变体名比对）：
+
+- **45 个完全同构**（字段、变体、构造器签名逐一致；`InitializeRequest::new`/`NewSessionRequest::new(cwd)`/`PromptRequest::new(sid, blocks)`/`LoadSessionRequest::new(sid, cwd)`/`CancelNotification::new(sid)` 均已单独核对同形）
+- `CancelNotification`：diff 落在 **doctest 示例 JSON 文本**，真实结构同构（提取器误报）
+- `SessionUpdate`：**新增 3 个变体** `Notice` / `CompactionUpdate` / `CompactionSummaryChunk`（schema 1.5-1.7 累积）。我们对 `SessionUpdate` 的全部用法是 `matches!`/`if let`（client.rs:363/370、turn_accumulator.rs:629），无穷尽匹配，且该枚举本就 `#[non_exhaustive]` → 增变安全
+
+### 需要改动的文件
+
+| 文件 | 改动 | 预估行数 |
+|---|---|---|
+| `Cargo.toml` | `agent-client-protocol = "1.3"` → `"2"`（schema 连带升 1.9.x，lock 一并） | 1 |
+| `src/acp/client.rs` | 导入与调用点核对后预计**零改动**；真实成本是编译期迭代（`Builder` 泛型参数从 3 个变 5 个 `Builder<Host, Handler, Runner, Close, Context>`，我们只用到稳定默认值，类型推断应自动消化） | 0-20 |
+| `src/acp/{config_prefs,handler,permission,terminal,turn_accumulator}.rs` | 纯 schema v1 类型使用，机械核对已通过 | 0 |
+| `src/acp/agent_proc.rs`、`src/acp/fake_agent_tests.rs` | 进程组/wire 契约均不变 | 0 |
+
+### 行为差异风险项（迁移后必须实测，按风险排序）
+
+1. **【最高】响应回调的有序派发现已被强制**（guide：「Response callbacks enforce ordered dispatch」——1.x 文档声称但实现未强制，2.0 强制）。我们的通知 handler `on_agent_notification` 在派发循环内 `await` 了一次 SQLite 写（`config_prefs::persist_config_snapshot`，client.rs:373）。若 1.x 实际未强制串行，2.0 后高帧率会话（09-19 失败可见性计划语境：agent 高频推送）的吞吐模型会变。**验证手段**：dev 环境高帧率会话下观察延迟/掉帧；若劣化，把落库移出派发循环（spawn + 通道）。这不是死锁风险（等待的是 DB 而非入站流量），但是性能回归风险。
+2. **env 重复键语义**：1.3.0 `from_args` 收集 env 到 `Vec<EnvVariable>`（`acp_agent.rs:762-767`），2.0 改 `BTreeMap`（后者同名键后者覆盖）。agent 配置里 env 数组有重复键时行为不同。**验证手段**：grep  agents 表数据的重复键 / 加单测。
+3. **`SentRequest::map` 放宽输出类型**：纯增，无影响（我们未用 `map`）。
+
+### 工作量与路径估计
+
+- 代码 + 编译 + 单测：1-2 小时（预期改动极小，主要是编译迭代与 fake_agent 回归）
+- 风险项 1 的实测与可能的 handler 重构：0.5-1 天（ contingent ）
+- 手动 dev 回归：按 `docs/reference/user-testing.md` 全过一遍
+
+### 建议
+
+**暂缓升级**，理由：① 根因已修（futures 0.3.34），升级对已闭环的问题零增量；② 真实收益（schema 1.8 特性、2.1 的 stable session restore builder——可替换 `restore_acp_session` 的手工负载）与当前需求不匹配；③ 风险项 1 需要一天量级的实测，性价比不划算。若将来要升：本清单的证据与核对方法（脚本 diff + 稳定路径同型论证）可直接复用，从 `Cargo.toml` 改一行开始。
 
 ## 实施分期
 
