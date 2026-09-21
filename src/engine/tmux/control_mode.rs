@@ -5,27 +5,57 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout};
-use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{Mutex, RwLock, oneshot, watch};
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Default activity window: a session stays active for 2 seconds after the last
 /// `%output` event from tmux control mode.
 pub const DEFAULT_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// `stop()` 等 reaper 记账退出码的有界上界。SIGKILL 后进程必退，2s 只为
+/// 兜住调度抖动，不会成为常规耗时。
+const EXIT_CODE_WAIT: Duration = Duration::from_secs(2);
+
+/// 信号致死时代替退出码的哨兵值：Unix 退出码取 waitpid 状态高 8 位
+/// （0..=255），-1 不可能是真实退出码，故可无歧义表示「已退出、无退出码」。
+#[cfg(unix)]
+const EXITED_WITHOUT_CODE: i32 = -1;
+
 /// A single tmux control-mode connection for one session.
 ///
 /// Spawns `tmux -C attach-session -t <session>` and asynchronously parses
 /// `%output` events to track the most recent pane output time.
+///
+/// # 子进程生命周期（P2-2，2026-09-22 修复）
+///
+/// `Child` 句柄的唯一所有者是构造时 spawn 的常驻收割任务（见
+/// [`reap_child`]）：它 `wait()` 到进程退出，**无论死因**（自然退出 / SIGHUP /
+/// kill / 客户端被 drop 后的孤儿），corpse 都恰好被收割一次。
+///
+/// 修复前的结构缺口：句柄存在 `self.child` 里，只有 `stop()` 会 `wait()`。而
+/// tmux 会话被外部 kill（或 tmux server 退出）时，`tmux -C attach-session`
+/// 子进程**自行退出**，此时没有任何调用方会 `stop()`——句柄滞留在
+/// [`SessionActivityMonitor`] 的 map 里直到该会话被重新 track，进程在
+/// `/proc` 留僵尸（现场实测 10 个 `defunct tmux: client`、最久 10 天，父进程
+/// 均为后端本体）。`Drop` 同样只 `start_kill()` 不 `wait()`，补刀无济于事。
 pub struct ControlModeClient {
     session_name: String,
     last_output_at: Arc<Mutex<Option<Instant>>>,
     stdout: Mutex<Option<BufReader<ChildStdout>>>,
-    child: Mutex<Option<Child>>,
     stdin: Mutex<Option<ChildStdin>>,
+    /// 子进程 pid（kill 指令与诊断用；句柄已交托 reaper 任务）。
+    child_pid: Option<u32>,
+    /// reaper 写入的子进程退出观测：`None` = 尚未退出；`Some(code)` = 已退出
+    /// （信号致死 = [`EXITED_WITHOUT_CODE`]，无退出码）。`is_alive` 与 `stop`
+    /// 日志读它。
+    exit_code: Mutex<watch::Receiver<Option<i32>>>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// 强杀指令（`stop`/`Drop` → reaper 执行 `start_kill`）。句柄归 reaper
+    /// 所有，故 kill 也只能经它转发，保证「发过 kill 的进程必被 wait」。
+    kill_tx: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 impl ControlModeClient {
@@ -34,9 +64,18 @@ impl ControlModeClient {
     /// The reader task is not started until [`Self::listen`] is called.
     pub async fn new(session_name: impl Into<String>) -> Result<Self> {
         let session_name = session_name.into();
+        let mut cmd = super::tmux_cmd();
+        cmd.args(["-C", "attach-session", "-t", &session_name]);
+        Self::spawn_client(session_name, cmd).await
+    }
 
-        let mut child = super::tmux_cmd()
-            .args(["-C", "attach-session", "-t", &session_name])
+    /// 实际构造逻辑，命令由调用方注入。
+    ///
+    /// 生产入口只有 [`Self::new`]（tmux 控制连接）；测试注入假 tmux 客户端
+    /// 驱动**同一段**子进程生命周期代码（spawn / 收割 / kill 时序），使
+    /// P2-2 的回归不依赖 tmux server。新增子进程行为只改这里，勿再复制。
+    async fn spawn_client(session_name: String, mut cmd: Command) -> Result<Self> {
+        let mut child = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -55,24 +94,32 @@ impl ControlModeClient {
         // Capture stderr so we can diagnose unexpected child exits.
         tokio::spawn(stderr_reader(session_name.clone(), stderr));
 
+        let child_pid = child.id();
+        let (exit_code_tx, exit_code_rx) = watch::channel(None);
+        let (kill_tx, kill_rx) = oneshot::channel::<()>();
+        // 常驻收割任务：Child 句柄唯一所有者，wait 到进程退出（见结构体文档
+        // 的 P2-2 说明）。退出码经 watch 广播给 is_alive / stop。
+        tokio::spawn(reap_child(session_name.clone(), child, kill_rx, exit_code_tx));
+
         debug!("started tmux control mode client for session {}", session_name);
 
         Ok(Self {
             session_name,
             last_output_at: Arc::new(Mutex::new(None)),
             stdout: Mutex::new(Some(BufReader::new(stdout))),
-            child: Mutex::new(Some(child)),
             stdin: Mutex::new(Some(stdin)),
+            child_pid,
+            exit_code: Mutex::new(exit_code_rx),
             reader_handle: Mutex::new(None),
             shutdown_tx: Mutex::new(None),
+            kill_tx: Mutex::new(Some(kill_tx)),
         })
     }
 
     /// Return the underlying OS process id, if available.
     #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
     pub async fn pid(&self) -> Option<u32> {
-        let guard = self.child.lock().await;
-        guard.as_ref()?.id()
+        self.child_pid
     }
 
     /// Start the async reader task that watches for `%output` events.
@@ -95,10 +142,19 @@ impl ControlModeClient {
         Ok(())
     }
 
-    /// Return `true` if the reader task is still running.
+    /// 连接是否存活：读循环在跑**且**子进程未退出。
+    ///
+    /// 两个信号任一即死：stdout EOF（读循环结束）或 reaper 记账退出。据此
+    /// [`SessionActivityMonitor::ensure_session`] 才会重建死连接。
     pub async fn is_alive(&self) -> bool {
-        let guard = self.reader_handle.lock().await;
-        guard.as_ref().is_some_and(|handle| !handle.is_finished())
+        let reader_alive = {
+            let guard = self.reader_handle.lock().await;
+            guard.as_ref().is_some_and(|handle| !handle.is_finished())
+        };
+        if !reader_alive {
+            return false;
+        }
+        self.exit_code.lock().await.borrow().is_none()
     }
 
     /// Return `true` if the session has produced output within `timeout`.
@@ -111,6 +167,10 @@ impl ControlModeClient {
     }
 
     /// Gracefully stop the control mode connection and reap the child process.
+    ///
+    /// 顺序：读循环退出信号 → 关 stdin（tmux client 干净退出）→ 经 reaper
+    /// 兜底强杀 → 等读循环结束 → 等 reaper 记账退出码（有界）。返回时子进程
+    /// 已退出且被收割（`PidfdReaper`/僵尸都不会残留）。
     pub async fn stop(&self) {
         // Signal the reader to exit.
         if let Some(tx) = {
@@ -126,48 +186,43 @@ impl ControlModeClient {
             let _ = guard.take();
         }
 
-        // Kill and reap the child process.
-        let child_opt = {
-            let mut guard = self.child.lock().await;
+        // Backstop kill: forwarded to the reaper, which owns the Child handle.
+        if let Some(tx) = {
+            let mut guard = self.kill_tx.lock().await;
             guard.take()
-        };
-
-        if let Some(mut child) = child_opt {
-            if let Err(e) = child.start_kill() {
-                warn!(
-                    "failed to kill tmux control mode process for session {}: {}",
-                    self.session_name, e
-                );
-            }
-            match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
-                Ok(Ok(status)) => debug!(
-                    "tmux control mode process for session {} exited with {}",
-                    self.session_name, status
-                ),
-                Ok(Err(e)) => debug!(
-                    "tmux control mode process for session {} wait error: {}",
-                    self.session_name, e
-                ),
-                Err(_) => debug!(
-                    "tmux control mode process for session {} did not exit in time",
-                    self.session_name
-                ),
-            }
+        } {
+            let _ = tx.send(());
         }
 
-        let handle_opt = {
+        // Wait for the reader to finish (its stdout EOF means the child is gone).
+        let handle = {
             let mut guard = self.reader_handle.lock().await;
             guard.take()
         };
-
-        if let Some(handle) = handle_opt {
+        if let Some(handle) = handle {
             let _ = handle.await;
         }
+
+        // Wait (bounded) for the reaper to record the exit code. Registration
+        // happens right after the kernel reaps the corpse, so once it lands the
+        // process is fully gone from /proc.
+        {
+            let mut rx = self.exit_code.lock().await;
+            let _ = tokio::time::timeout(EXIT_CODE_WAIT, rx.changed()).await;
+        }
+        let exit_code = *self.exit_code.lock().await.borrow();
+        debug!(
+            "tmux control mode process for session {} exited with {:?}",
+            self.session_name, exit_code
+        );
     }
 }
 
 impl Drop for ControlModeClient {
     fn drop(&mut self) {
+        // 与 `stop` 同口径但无 await：信号发齐即返回，收割由常驻 reaper 任务
+        // 负责（它独占 Child 句柄，进程退出必被 wait）。Drop 里既不能也不
+        // 需要同步 wait——修复前「只 start_kill 不 wait」正是僵尸来源之一。
         if let Ok(mut guard) = self.shutdown_tx.try_lock()
             && let Some(tx) = guard.take()
         {
@@ -178,10 +233,53 @@ impl Drop for ControlModeClient {
             let _ = guard.take();
         }
 
-        if let Ok(mut guard) = self.child.try_lock()
-            && let Some(mut child) = guard.take()
+        if let Ok(mut guard) = self.kill_tx.try_lock()
+            && let Some(tx) = guard.take()
         {
-            let _ = child.start_kill();
+            let _ = tx.send(());
+        }
+    }
+}
+
+/// 常驻收割任务（`Child` 句柄唯一所有者，P2-2 修复的核心）。
+///
+/// `wait()` 到子进程退出——自然退出、SIGHUP、`stop`/`Drop` 的强杀都汇到这
+/// 一条路径，故 corpse 恰好被收割一次；`kill_rx` 到点时先 `start_kill`
+/// 再等。退出码写入 `exit_code`（`is_alive` / `stop` 日志读）。
+///
+/// 修复前句柄存在 `ControlModeClient.child` 里、只有 `stop()` 会 wait：
+/// tmux 会话被外部 kill 时控制连接子进程自行退出而无人 `stop`，僵尸滞留
+/// `/proc` 直到会话被重新 track（现场 10 个、最久 10 天）。
+async fn reap_child(
+    session_name: String,
+    mut child: Child,
+    mut kill_rx: oneshot::Receiver<()>,
+    exit_code: watch::Sender<Option<i32>>,
+) {
+    let result = tokio::select! {
+        status = child.wait() => status,
+        _ = &mut kill_rx => {
+            // stop/Drop 的兜底强杀。进程已退出时 kill 报 ESRCH 之类的错误，
+            // 忽略——下面的 wait 无论如何都会收尾。
+            if let Err(e) = child.start_kill() {
+                debug!(
+                    "failed to kill tmux control mode process for session {}: {}",
+                    session_name, e
+                );
+            }
+            child.wait().await
+        }
+    };
+    match result {
+        Ok(status) => {
+            // 信号致死（如 SIGKILL）没有退出码，记 EXITED_WITHOUT_CODE 哨兵。
+            let code = status.code().unwrap_or(EXITED_WITHOUT_CODE);
+            let _ = exit_code.send(Some(code));
+            debug!("tmux control mode process for session {} exited with {}", session_name, status);
+        }
+        Err(e) => {
+            let _ = exit_code.send(Some(EXITED_WITHOUT_CODE));
+            debug!("tmux control mode process for session {} wait error: {}", session_name, e);
         }
     }
 }
@@ -387,6 +485,96 @@ mod tests {
 
     async fn kill_test_tmux_session(name: &str) {
         let _ = Command::new("tmux").args(["kill-session", "-t", name]).output().await;
+    }
+
+    /// 假 tmux 控制客户端：与 `tmux -C attach-session` 走同一段 spawn/收割/
+    /// kill 生命周期代码（`ControlModeClient::spawn_client` 注入命令）。
+    ///
+    /// 存在的理由：本环境（容器无 devpts，`/dev/pts` 为空）tmux server 起不来，
+    /// 依赖真实 tmux 的既有测试在此不可跑；而 P2-2 的回归钉的是**子进程
+    /// 收割时序**，与对端是不是真 tmux 无关。
+    fn fake_tmux_client(script: &str) -> Command {
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg(script);
+        cmd
+    }
+
+    /// 轮询 `/proc/<pid>` 直到进程被完全收割（条目消失）。
+    async fn wait_reaped(pid: u32, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        loop {
+            // 僵尸也留在 /proc（状态 Z），故「条目消失」才是已收割的精确信号。
+            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            } else {
+                return true;
+            }
+        }
+    }
+
+    /// P2-2 回归（核心反馈环）：子进程**自行退出**时必须被收割。
+    ///
+    /// 现场形态：tmux 会话被外部 kill（或 server 退出）→ `tmux -C attach-session`
+    /// 子进程随之退出，而 omniterm 侧没有任何调用方会 `stop()`——句柄滞留在
+    /// `SessionActivityMonitor` map 里，进程在 /proc 留僵尸（实测 10 个
+    /// `defunct tmux: client`、最久 10 天）。修复 = 常驻 reap 任务独占句柄
+    /// 并 wait，死因无关。
+    ///
+    /// 本用例**不调用 stop()**，钉的正是「无人 stop」这条路径。
+    #[tokio::test]
+    async fn control_mode_child_is_reaped_after_natural_death() {
+        let name = format!("omniterm_test_reap_{}", Uuid::new_v4());
+        // 0.3s 后自行退出（留窗口保证 spawn 后断言存活的确定性），退出码 7。
+        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 0.3; exit 7"))
+            .await
+            .expect("client should start");
+        client.listen().await.expect("listener should start");
+
+        let pid = client.pid().await.expect("client should have a pid");
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists(), "spawn 后子进程应在跑");
+
+        // 不 stop、不 kill：等它自己退出。此后 /proc/<pid> 必须消失（被收割）。
+        assert!(
+            wait_reaped(pid, Duration::from_secs(5)).await,
+            "control mode 子进程 {pid} 已自行退出但未被收割（僵尸残留，P2-2 回归）"
+        );
+        // reaper 的退出码记账也应已落。
+        assert_eq!(*client.exit_code.lock().await.borrow(), Some(7), "reaper 应记录到退出码 7");
+        assert!(!client.is_alive().await, "子进程退出后 is_alive 应为 false");
+    }
+
+    /// P2-2 回归（stop 路径）：`stop()` 对驻留客户端必须杀且收割，
+    /// 返回时 `/proc/<pid>` 已消失（无僵尸）。
+    #[tokio::test]
+    async fn control_mode_stop_kills_and_reaps_child() {
+        let name = format!("omniterm_test_stop_{}", Uuid::new_v4());
+        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"))
+            .await
+            .expect("client should start");
+        client.listen().await.expect("listener should start");
+
+        let pid = client.pid().await.expect("client should have a pid");
+        assert!(std::path::Path::new(&format!("/proc/{pid}")).exists(), "stop 前子进程应在跑");
+
+        // 超时包一层：若 kill 路由退化（没人发信号），stop 会挂在等读循环上，
+        // 这里把它转成明确失败而不是挂死整个测试套件。
+        tokio::time::timeout(Duration::from_secs(10), client.stop())
+            .await
+            .expect("stop 不应挂死（子进程未被杀死？）");
+
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "stop 返回后子进程应已退出且被收割（无僵尸）"
+        );
+        // SIGKILL 致死无退出码：记 EXITED_WITHOUT_CODE 哨兵。
+        assert_eq!(
+            *client.exit_code.lock().await.borrow(),
+            Some(EXITED_WITHOUT_CODE),
+            "SIGKILL 致死时退出码应为哨兵值"
+        );
     }
 
     #[tokio::test]

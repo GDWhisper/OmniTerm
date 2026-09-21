@@ -1,6 +1,6 @@
 # ACP agent 连接层子进程等待空转：CPU 尖峰修复计划
 
-> 状态：**Phase 1（P0 止血）、Phase 2（P1 观测+回归测试）、Phase 3-P2-1（根因修复）已实施**（用户手动验证初步通过 2026-09-22；futures 0.3.34 根因修复已落地，待 dev 环境实测最终确认）。剩余：P2-2 僵尸子进程（独立根因）、P2-3 探针超时泄漏（backlog）、ACP 2.x 升级（另行决策）。
+> 状态：**Phase 1（P0 止血）、Phase 2（P1 观测+回归测试）、Phase 3-P2-1（根因修复）已实施**（用户手动验证初步通过 2026-09-22；futures 0.3.34 根因修复已落地，待 dev 环境实测最终确认）。剩余：ACP 2.x 升级（重大框架升级，另行决策）。P2-1/P2-2/P2-3 均已闭环。
 > 修订记录：设计稿 → 同日一轮实现前评审（D1/D3/D4、范围表、验收、风险表、闭环，修订处标「2026-09-21 评审」）→ 同日 Phase 1 实施（偏差见「Phase 1 实施记录（勘误）」）→ 同日 Phase 2 实施（偏差与新发现的 crate 行为见「Phase 2 实施记录（勘误）」）。→ 次日 Phase 3 实施（P2-1 上游调查结论与依赖升级见「Phase 3 实施记录」）。
 > 触发条件：修改 `src/acp/client.rs`（`AcpClient::shutdown` / `disconnect` / 连接任务生命周期）、`src/acp/agent_proc.rs`（pid 捕获 / killpg）、`src/acp/fake_agent_tests.rs`（fake agent 时序）、`src/api/sessions.rs`（release/archive 路径）、`src/acp/supervisor.rs`，或排查「恢复 ACP 会话后后端 CPU 飙高」问题前**必读**
 > 关联：
@@ -43,7 +43,7 @@
 | P1-1 | 日志可归因 | ACP 连接/重放/通知日志补 `session_id` | 本次排查直接受害（多会话并发时 replay 无法归因）**✅ 已实施（Phase 2）** |
 | P1-2 | 回归测试 | 假 agent 固化「响应后退出」时序 | 断言连接任务限时结束 + shutdown 杀进程；同时作为上游 bug 复现脚本 **✅ 已实施（Phase 2，形态有偏差见 Phase 2 实施记录）** |
 | P2-1 | 依赖治理 | 查上游修复/升级 + 修正版本声明 | `Cargo.toml` 写 `agent-client-protocol = "1.2"` 但 lock 解析到 1.3.0，声明与实际不符 **✅ 已实施（Phase 3）：根因确认 = futures 0.3.33 FuturesUnordered waker bug，已升 0.3.34 + 声明对齐；ACP 2.x 升级另行决策（见 Phase 3 实施记录）** |
-| P2-2 | 僵尸子进程 | tmux client 子进程回收调查 | 11 个 defunct 最久 10 天；与本次 CPU 无关，独立根因 |
+| P2-2 | 僵尸子进程 | tmux client 子进程回收调查 | 11 个 defunct 最久 10 天；与本次 CPU 无关，独立根因 **✅ 已解决（2026-09-22）：唯一结构缺口 = tmux 控制客户端句柄无人 wait，已修为常驻收割任务 + 回归测试，见 Phase 3 实施记录** |
 | P2-3 | 探针超时泄漏 | `test_agent` / `test_agent_raw` 15s 超时分支无 client 句柄，agent 进程必泄漏（既有缺陷） | 超时即 WARN 留痕；Phase 1 若 pid 登记采用「spawn 前登记」形态可顺带清理，否则列 backlog **✅ 已解决（2026-09-22）：进程泄漏由 Phase 1 D4 abort 兜底覆盖，pid 文件泄漏由 PidFileCleanup 守卫解决，见 Phase 3 实施记录** |
 
 ### 不纳入范围（含理由）
@@ -173,6 +173,18 @@
 
 最终修复（真正的剩余缺口只有 pid 自报文件）：`agent_proc::PidFileCleanup` RAII 守卫随连接任务终结（返回 / abort / panic）删除 pid 文件，幂等；成功路径 `capture_agent_pid` 读后即删，Drop 为 no-op。回归测试 `spawn_timeout_during_handshake_does_not_leak_agent_process`（fake agent hang 模式：永不响应 initialize）钉住「spawn 超时后 agent 进程限时回收」。两个探针路由的超时分支补 WARN 留痕（agent_id / agent_command）。
 
+### P2-2 僵尸子进程（已解决，2026-09-22）
+
+**现场证据**（diagnostic 文档）：10 个 `defunct tmux: client` + 1 个 bash，最久 10 天，父进程均为后端本体。
+
+**根因（代码级定位）**：`ControlModeClient`（`src/engine/tmux/control_mode.rs`，`tmux -C attach-session` 控制连接，每条 tmux 终端 WS 经 `track_session → SessionActivityMonitor::ensure_session` 建一个）的 `Child` 句柄存在 `self.child` 里，**只有 `stop()` 会 `wait()`**。而 tmux 会话被外部 kill（或 tmux server 退出）时控制连接子进程**自行退出**，此时没有任何调用方会 `stop()`——句柄滞留在 `SessionActivityMonitor` 的 map 里直到该会话被重新 track，进程在 `/proc` 留僵尸。`Drop` 同样只 `start_kill()` 不 `wait()`（tokio 的 `Child` drop 不收割，`PidfdReaper` 兜底只在 `wait()` future 被 drop 时触发），补刀无济于事。已验证 tokio 1.53.1 源码确认该语义。
+
+**修复**：`Child` 句柄的唯一所有者改为构造时 spawn 的**常驻收割任务**（`reap_child`）：`select!(child.wait(), kill_rx)` → 无论死因（自然退出 / SIGHUP / `stop`/`Drop` 的强杀 / 被 drop 后的孤儿）都恰好 `wait()` 一次；退出码经 watch 通道供 `is_alive`/`stop` 日志读。`stop`/`Drop` 只发信号（shutdown + 关 stdin + kill 转发），不再持有句柄——与 pty 引擎 `spawn_blocking(child.wait())`、`acp/terminal.rs` 的 wait 任务、ACP agent 的 killpg 对齐为同一模式。
+
+**回归测试（RED 已验证）**：新增 `spawn_client` 命令注入接缝（生产入口仍只有 `new()`），用假 tmux 客户端驱动同一段生命周期代码——本环境容器无 devpts（`/dev/pts` 空）tmux server 起不来，依赖真实 tmux 的既有两个测试在此本就失败（已用改前代码复证 0/2 同错）。两个新用例：① 子进程自行退出后 `/proc/<pid>` 必须消失（钉「无人 stop」路径，此前 5s 超时红）；② `stop()` 对驻留客户端杀且收割（带 10s 防挂死超时）。RED 验证方法：临时把 reap_child 改为 `mem::forget(child)`（模拟修复前无人 wait），两用例均以「僵尸残留」精确症状转红。
+
+**全库审计结论**（同族缺陷排查）：pty 引擎会话、tmux 终端 WS attach client、ACP agent 进程、ACP terminal 命令四条 spawn 路径均有 wait/reap；tmux 控制客户端是唯一结构缺口。诊断里的 `bash ×1` 未复现于任何现存代码路径，判定为 10 天前旧版本的遗留僵尸（当前无可达路径）。
+
 ### 决策记录
 
 - **ACP SDK 1.3.0 → 2.x 升级：本轮不做**。理由：① 根因修复只需 futures 补丁级 bump，升级 2.x 对空转无增量收益（2.0 本来就不复现）；② 2.0.0 是破坏性大版本（`Channel`/`TransportFrame`、JSON-RPC 角色化 API、handler 注册改为 matcher、MCP-over-ACP 改 schema-native 类型、`AcpAgentConfig` 取代 `from_args` 用法），`src/acp/client.rs` 的 builder/handler 链路需实打实移植，属「重大框架升级」（工程准则 1 须用户决策）；③ 2.x 的收益（schema 1.8、stable session restore builders #347、stderr drain 修复 #365）与当前需求不匹配。**若未来要升**：迁移面 = client.rs 的 builder+handler 注册 + handler.rs 全模块 + supervisor 探针构造，预计单独一个计划；升级收益最大的是 `load_session` 稳定 builder（可替换 restore_acp_session 里的手工负载）。
@@ -238,7 +250,7 @@ Phase 2/3 待办：fake agent 回归测试落地后回填 D5 状态；上游调�
 - ~~空转的精确触发条件~~ **2026-09-22 已确认**：futures 0.3.33 `FuturesUnordered` waker 身份 bug（futures-rs#3032，0.3.34 修复），上游四格验证 + 隔离复现器实证；已升 0.3.34。issue 上报不再需要（上游已闭环 #254）。
 - wrapper `$$` pid 文件方案：单测与 fake agent e2e 已证明自报 pid == exec 后 agent pid（`agent_proc.rs::wrapped_subprocess_reports_own_pid_via_file`），fake agent e2e 也走通；但**尚未经真实 agent 验证**（含 npm 包 wrapper launcher 场景下 pid 归属是否仍成立——leader 退出而孙进程存活的 killpg 路径已有单测覆盖）——仍需 dev 环境跑真实 agent 确认。
 - ~~上游是否已有修复版本~~ **2026-09-22 已确认**：futures 0.3.34（已升）；ACP 2.x 亦有结构性规避但升级收益不匹配，另行决策（见 Phase 3 实施记录决策）。
-- 僵尸子进程根因（P2-2）：未排查。
+- ~~僵尸子进程根因（P2-2）~~ **2026-09-22 已解决**：tmux 控制客户端句柄无人 wait（自然死亡路径），已修为常驻收割任务 + 回归测试；全库 spawn 路径审计完毕，仅此一处结构缺口。
 - ~~探针 15s 超时泄漏（P2-3）~~ **2026-09-22 已解决**：进程泄漏由 Phase 1 D4 abort 兜底覆盖（实验实证），pid 文件由 PidFileCleanup 守卫清理；回归测试已钉。
 - crate 三个既有行为（Pin 在测试里，升级 crate 时主动复查）：agent 死亡不结束连接任务 / 无崩溃广播（setup 后）；`is_alive()` 对已崩溃 agent 误报存活；agent 响应后零延迟退出会让 `spawn_and_connect` 失败（select 竞态）。
 
