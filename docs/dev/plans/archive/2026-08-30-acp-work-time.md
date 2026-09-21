@@ -319,6 +319,7 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 
 - `turnClock.test.ts`：原 `restores the entire open tool overlap to generation when prose arrives` 把缺陷断言成了期望值（与 E6 的 `<1s` 同型教训），改写为 `pauses the generation clock at the first prose inside a tool union, then resumes`；新增 `keeps tool time observed before a reconnect instead of wiping it` 覆盖跨重连保留与基线不重复扣。
 - 新增 `ChatMessage.metarow.test.tsx`：jsdom 不做布局，故不断言真实换行结果，而是断言「每个读数各自一个 nowrap 段、段内 label 与 value 不分离」这一结构不变量（换行只发生在段间的充分条件），流式路径用冻结时钟拿确定值。
+- **审批挂起冻表专项**（用户追加提出「等用户回应期间 t/s 也该暂停」）：该行为自 E12 起就已成立——分母全部由 `workElapsedMs` 派生，而它在挂起期间冻结，故 tps 与工具并集跨度一起不动；本次改动（封口逻辑）理论上可能破坏它，补 3 条回归钉住：`turnClock.test.ts` 的「挂起期间读数一动不动 + 解除后从冻结点续走」与「挂起与工具并集同时冻住、挂起段不计入工具也不白送生成时间」，`chatStore.test.ts` 的 store 级 tps 冻表（帧 → setPermission → setTurnWaiting → turnClock 全链路）。
 
 **仍未解决（已知限制，翻盘条件不变）**
 

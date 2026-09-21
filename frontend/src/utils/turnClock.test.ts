@@ -134,6 +134,38 @@ describe('turnClock tps 估算', () => {
     expect(turnTps('s1', 5_000)).toBe(10)
   })
 
+  it('审批挂起期间速度读数一动不动，解除后从冻结点继续走时', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    setTurnWaiting('s1', true, 2_000)
+    // 冻结点取挂起那一刻的工作坐标（2s），此后分母不再增长。
+    expect(turnTps('s1', 2_000)).toBe(50)
+    // 挂 5 分钟：读数必须完全不动，不能随真人思考时间缓慢跌落。
+    expect(turnTps('s1', 300_000)).toBe(50)
+    setTurnWaiting('s1', false, 302_000)
+    // 解除后工作时钟从冻结点续走（302−300=2s），不是从 0 重新起算。
+    expect(turnTps('s1', 302_000)).toBe(50)
+    expect(turnTps('s1', 304_000)).toBe(25)
+  })
+
+  it('审批挂起与工具并集同时冻住，挂起段不计入工具也不白送生成时间', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    setTurnWaiting('s1', true, 2_000)
+    // 工具并集跨度也冻在挂起那一刻（1s），不随等待增长；该 1s 已从分母扣除，故读数是 100。
+    expect(turnToolElapsedMs('s1', 120_000)).toBe(1_000)
+    expect(turnTps('s1', 120_000)).toBe(100)
+    // 挂起期间到达的输出：封口点取冻结的工作坐标，不把等待算成生成时间。
+    addOutputChars('s1', 400, 60_000)
+    expect(turnTps('s1', 60_000)).toBe(200)
+    setTurnWaiting('s1', false, 122_000)
+    // 挂起的那 120s 不计入工具并集，分子分母都不含它。
+    expect(turnElapsedMs('s1', 122_000)).toBe(2_000)
+    expect(turnToolElapsedMs('s1', 122_000)).toBe(1_000)
+    expect(turnTps('s1', 122_000)).toBe(200)
+  })
+
   it('endTurn 冻结最终值：turnTps/turnElapsedMs 归 null，finalTps 保留', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 80)

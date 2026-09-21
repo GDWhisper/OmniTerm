@@ -12,7 +12,7 @@ import {
   type ContentBlock,
   type SessionUpdateAction,
 } from './chatStore'
-import { clearTurnClock, turnElapsedMs } from '../utils/turnClock'
+import { addOutputChars, clearTurnClock, turnElapsedMs, turnTps } from '../utils/turnClock'
 
 const QUEUE_PREFIX = 'omniterm_chat_queue:'
 
@@ -732,6 +732,21 @@ describe('turnClock 接线（计时器与 sending / 审批队列同生命周期�
     useChatStore.getState().removePermission('s1', 'p1')
     vi.advanceTimersByTime(5_000)
     expect(turnElapsedMs('s1')).toBe(15_000)
+  })
+
+  it('审批挂起期间 t/s 读数同样冻住（等真人回应不算生成时间）', () => {
+    useChatStore.getState().beginPrompt('s1')
+    vi.advanceTimersByTime(1_000)
+    addOutputChars('s1', 400)
+    expect(turnTps('s1')).toBe(100)
+    useChatStore.getState().setPermission('s1', perm('p1'))
+    vi.advanceTimersByTime(120_000)
+    // 等用户审批的 2 分钟完全不进分母：读数一动不动，不随思考时间缓慢跌落。
+    expect(turnTps('s1')).toBe(100)
+    useChatStore.getState().removePermission('s1', 'p1')
+    vi.advanceTimersByTime(3_000)
+    // 解除后从冻结点续走：工作 4s → 400/4/4。
+    expect(turnTps('s1')).toBe(25)
   })
 
   it('并发审批只 resolve 一个时仍冻住（镜像后端 wait_depth）', () => {
