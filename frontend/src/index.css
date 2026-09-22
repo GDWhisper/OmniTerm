@@ -164,6 +164,7 @@
   --danger-12: rgba(200, 90, 58, 0.12);
   --success: #5A8F3A;
   --warning: #D4A05A;
+  --warning-12: rgba(212, 160, 90, 0.12);
   --wood-dark: #8B5A2B;
   --wood-shadow: #3A2E1F;
   /* Inset 3D rim shades for dark wood-shadow status badges — top/left dark
@@ -212,6 +213,7 @@
   --success: #7EE787;
   /* warning — soft amber orange */
   --warning: #FFA657;
+  --warning-12: rgba(255, 166, 87, 0.12);
   /* pixel hard shadow */
   --pixel-shadow: #090A0D;
   /* scrollbar */

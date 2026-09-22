@@ -568,5 +568,15 @@
   "chat.msg.copyFailed": "复制失败",
   "chat.msg.quote": "引用",
   "chat.msg.copyMarkdown": "复制为 Markdown",
-  "toast.dismiss": "关闭提示"
+  "toast.dismiss": "关闭提示",
+  "tmuxHealth.deafTitle": "检测到 tmux server 假死（聋 server）",
+  "tmuxHealth.deafBody": "新的 tmux 命令全部报「server exited unexpectedly」，不会自行恢复。重建将强制结束假死的 server 并拉起新的——旧 server 中的 tmux 会话会丢失。",
+  "tmuxHealth.rebuild": "重建 tmux server",
+  "tmuxHealth.rebuilding": "重建中…",
+  "tmuxHealth.rebuildSuccess": "tmux server 已重建",
+  "tmuxHealth.rebuildNotDeaf": "tmux server 已恢复，无需重建",
+  "tmuxHealth.rebuildRunning": "重建进行中",
+  "tmuxHealth.rebuildFailed": "重建 tmux server 失败",
+  "tmuxHealth.orphanRisk": "已堆积 {{count}} 个孤儿 tmux 控制客户端（警戒线 {{threshold}}）——这是 tmux server「一 SIGTERM 就假死」高危状态的先兆。",
+  "tmuxHealth.otherHint": "tmux 健康探测出现未知失败，暂不自动处理。"
 }

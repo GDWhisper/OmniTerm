@@ -568,5 +568,15 @@
   "chat.msg.copyFailed": "Copy failed",
   "chat.msg.quote": "quote",
   "chat.msg.copyMarkdown": "copy as Markdown",
-  "toast.dismiss": "Dismiss notification"
+  "toast.dismiss": "Dismiss notification",
+  "tmuxHealth.deafTitle": "Deaf tmux server detected",
+  "tmuxHealth.deafBody": "New tmux commands all fail with \"server exited unexpectedly\" and will not recover on their own. Rebuilding force-kills the frozen server and starts a fresh one — tmux sessions inside the old server are lost.",
+  "tmuxHealth.rebuild": "Rebuild tmux server",
+  "tmuxHealth.rebuilding": "Rebuilding…",
+  "tmuxHealth.rebuildSuccess": "tmux server rebuilt",
+  "tmuxHealth.rebuildNotDeaf": "tmux server has recovered — no rebuild needed",
+  "tmuxHealth.rebuildRunning": "Rebuild already in progress",
+  "tmuxHealth.rebuildFailed": "Failed to rebuild tmux server",
+  "tmuxHealth.orphanRisk": "{{count}} orphan tmux control clients are piling up (warning threshold {{threshold}}) — a precursor sign that the tmux server may freeze on the next SIGTERM.",
+  "tmuxHealth.otherHint": "tmux health probe hit an unknown failure; no automatic action is taken."
 }
