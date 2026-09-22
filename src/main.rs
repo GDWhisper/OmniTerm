@@ -732,6 +732,24 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("Server is not running (stale PID file removed).");
                 std::process::exit(1);
             }
+            // 发信号前归属校验（P1-3，封 stale pidfile + PID 复用误杀盲区，见
+            // docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md §3.2）。谓词
+            // 真源 process_identity::pidfile_pid_is_omniterm（dev.sh 的 pidfile kill
+            // 有 bash 镜像实现，改一处须同步另一处）。身份只读一次，校验结果贯穿
+            // SIGTERM → 轮询 → SIGKILL 升级链全程（其间身份不会变，勿重复读）。
+            let ident = crate::process_identity::process_identity(pid as u32);
+            if ident.is_none() {
+                // 身份读不到（进程已消亡）⇒ 走既有 stale 路径，行为不变
+                let _ = std::fs::remove_file(&pid_file);
+                eprintln!("Server is not running (stale PID file removed).");
+                std::process::exit(1);
+            }
+            if !crate::process_identity::pidfile_pid_is_omniterm(ident.as_ref()) {
+                // 不过校验 ⇒ 不发任何信号，按 stale 处理（删除 pid 文件）后退出
+                eprintln!("PID {} 不是 omniterm 进程（疑似 PID 复用），未发送信号", pid);
+                let _ = std::fs::remove_file(&pid_file);
+                std::process::exit(1);
+            }
             #[cfg(windows)]
             {
                 eprintln!("stop is not supported on Windows");

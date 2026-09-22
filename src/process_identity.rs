@@ -53,11 +53,28 @@ pub fn argv_has_prefix(argv: &[String], prefix: &[&str]) -> bool {
 }
 
 /// `argv[0]` 的文件名部分（`/usr/bin/omniterm` → `omniterm`；Windows 剥 `.exe`）。
-#[allow(dead_code)] // 待接线：P1-3 pidfile kill 归属校验（见 docs/dev/plans/backlog/dead-code-triage.md）
 pub fn argv0_basename(argv: &[String]) -> Option<&str> {
     let argv0 = argv.first()?;
     let base = argv0.rsplit(['/', '\\']).next().unwrap_or(argv0);
     Some(base.strip_suffix(".exe").unwrap_or(base))
+}
+
+/// pidfile kill 归属校验的 argv[0] 基名前缀：`omniterm` 及 worktree/分支变体
+/// （`omniterm-dev` 等）同属本进程族；`.exe` 已由 [`argv0_basename`] 剥除。
+const PIDFILE_OWNER_BASENAME_PREFIX: &str = "omniterm";
+
+/// pidfile kill 语义的归属谓词：pidfile 记录的 pid 当前是否确为 omniterm 进程
+/// （消费方：`main.rs` `Commands::Stop`；`dev.sh` 的 pidfile kill 有 bash 镜像
+/// 实现——按「记录 comm 比对」通吃 node/cargo 子壳等角色，与本谓词同为 kill 前
+/// 防 PID 复用误杀的归属校验，**改一处须同步另一处**）。
+///
+/// 结构化基名判断（[`argv0_basename`] + 前缀），拒绝子串匹配整个 cmdline——
+/// `vim omniterm.md` 之类不得命中。身份读不到（`None`）按不通过处理
+/// （fail-closed：无法确认归属即不发信号，调用方按 stale 路径收尾）。
+pub fn pidfile_pid_is_omniterm(ident: Option<&ProcessIdentity>) -> bool {
+    ident
+        .and_then(|id| argv0_basename(&id.argv))
+        .is_some_and(|base| base.starts_with(PIDFILE_OWNER_BASENAME_PREFIX))
 }
 
 /// 进程是否仍存活（僵尸也算存活——未被收割前 pid 还在）。EPERM = 存在但无权限。
@@ -284,6 +301,46 @@ mod tests {
         assert_eq!(argv0_basename(&p("C:\\bin\\omniterm.exe")), Some("omniterm"));
         assert_eq!(argv0_basename(&p("omniterm")), Some("omniterm"));
         assert_eq!(argv0_basename(&[]), None);
+    }
+
+    fn ident_with_argv(argv: &[&str]) -> ProcessIdentity {
+        ProcessIdentity {
+            pid: 4242,
+            ppid: 1,
+            start_key: "start-key".to_string(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// pidfile kill 归属谓词：omniterm 家族（含 `.exe` 剥除、绝对路径基名、
+    /// worktree 变体）通过。
+    #[test]
+    fn pidfile_predicate_accepts_omniterm_family() {
+        assert!(pidfile_pid_is_omniterm(Some(&ident_with_argv(&["omniterm"]))));
+        assert!(
+            pidfile_pid_is_omniterm(Some(&ident_with_argv(&["omniterm.exe", "stop"]))),
+            "Windows .exe 后缀剥除后仍命中"
+        );
+        assert!(
+            pidfile_pid_is_omniterm(Some(&ident_with_argv(&["/usr/bin/omniterm", "-p", "9075"]))),
+            "绝对路径按基名命中"
+        );
+        assert!(
+            pidfile_pid_is_omniterm(Some(&ident_with_argv(&["omniterm-dev", "start"]))),
+            "worktree 变体基名前缀命中"
+        );
+    }
+
+    /// 非 omniterm 进程、空 argv 与读不到身份一律拒绝（fail-closed，不发信号）。
+    #[test]
+    fn pidfile_predicate_rejects_others_and_unreadable() {
+        assert!(
+            !pidfile_pid_is_omniterm(Some(&ident_with_argv(&["vim", "omniterm.md"]))),
+            "子串陷阱：vim 打开 omniterm.md 不得命中（结构化基名判断）"
+        );
+        assert!(!pidfile_pid_is_omniterm(Some(&ident_with_argv(&["tmux", "new"]))));
+        assert!(!pidfile_pid_is_omniterm(Some(&ident_with_argv(&[]))), "空 argv 不通过");
+        assert!(!pidfile_pid_is_omniterm(None), "身份读不到（进程已消亡）不通过");
     }
 
     /// 真进程自证：自身身份可读，ppid/start_key 非空，argv[0] 以测试二进制名结尾。
