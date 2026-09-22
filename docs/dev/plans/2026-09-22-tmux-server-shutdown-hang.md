@@ -275,3 +275,121 @@ journalctl --since "2026-09-21 20:00" --until "2026-09-22 01:00" | grep tmux-spa
 ## 12. 附录 B：本次恢复动作记录（已完成，勿重复执行）
 
 09-22 00:21 对 PID 14747 `SIGKILL`（SIGTERM 无效——它已在退出流程里卡死）；28 个孤儿客户端随 server 死亡全部自然退出；验证 tmux 自动清理 stale socket 并重建 server（create/list/kill session 全通过）；tmuxes API 端到端验证（GET 200 → POST 201 → DELETE 204）；清除 5 个确认无服务的残留 socket（`mansio-*`、`sshleak*`）。遗留：5 个僵尸进程待 omniterm（106111）退出时回收，无害。
+
+## 13. 附录 C：tmux 上游 issue 草稿（P2-1）
+
+> 状态：**草稿，尚未提交**至 tmux/tmux（P2-1 落地时整段复制正文提交）。
+> 证据出处：本文 §2 / §3 / §11（附录 A）实证记录，无外部来源。
+> **源码引用经事故分析核对（tmux 3.4）**——两轮校验（源码核对 + 独立子代理审查）；代码块内注释为本文作者标注、非上游原文注释（issue 正文中以英文标注呈现并声明）。
+> 「Known unknown」一节照 §3.3「机制断点」原话转写为英文 open question，未添加任何结论。（**2026-09-22 更新**：该 open question 已取 tmux 3.4 `control.c`/`client.c` 真源逐字核对**定论**，正文对应小节改写为 Resolved；唯 `server_send_exit` 是否直发 MSG_SHUTDOWN 一点仍如实标注为推断/待核。）
+> 措辞约束：SIGTERM 投递来源/方式未确证（§3.2），正文只写 "a SIGTERM"，**不得**写成 kill-server。
+
+**拟用标题（Suggested title）**：
+
+```
+Shutdown hangs indefinitely when a control-mode client's output becomes undeliverable: server_client_check_exit() waits on control_all_done() with no timeout
+```
+
+**正文（以下内容可整体复制为 issue body）**：
+
+---
+
+### Summary
+
+On tmux 3.4 (Linux), after the server receives SIGTERM it enters a normal shutdown (`server_send_exit()` destroys all sessions), but shutdown then freezes indefinitely as soon as **any** control-mode (`tmux -C`) client has undeliverable pending output — e.g. the read end of the pipe behind the client's stdout fd disappears when the client's parent process dies: `server_client_check_exit()` only drops a `CLIENT_CONTROL` client once `control_all_done()` is true, once delivery has failed `control_all_done()` can never become true again (a closed loop — see Analysis), and there is **no timeout**. Because `server_loop()`'s exit condition (which includes `TAILQ_EMPTY(&clients)`) can then never be satisfied, the process never exits, while `server_exit=1` is already set — so `server_accept()` accepts and immediately closes every new connection and **all** new tmux commands fail with `server exited unexpectedly` (a half-dead "deaf server": the socket is up, the event loop is alive, and nobody can use it). We observed this frozen for the full ~18 minutes of our incident (00:03:22 → 00:21:12) with zero progress before we resorted to SIGKILL. With no timeout in the gate, the wait is unbounded.
+
+### Steps to reproduce
+
+Minimal shape, abstracted from our incident's diagnostic commands (see Additional evidence; we did not run a clean-room scripted repro — the mechanism below is established from tmux 3.4 source, see Analysis and the resolved question):
+
+1. Start a server with a session: `tmux new-session -d -s s1 'sleep 3600'`
+2. Start one or more control-mode clients on it with their stdout attached to a pipe whose read end you control (`tmux -C attach-session -t s1 > <pipe>`) — then make at least one client's pending output **undeliverable** by removing the read end of that pipe (e.g. kill the process that reads the client's stdout) while the server still has output queued for it. In our incident this happened to orphaned `tmux -C` clients whose parent process had died (Linux does not kill children on parent death). **A single such client is enough to freeze shutdown (N = 1 suffices).**
+3. Send SIGTERM to the server process.
+4. Observe:
+   - all sessions/panes are destroyed within 1–2 s (`server_send_exit()` runs to completion);
+   - the server process never exits — in our incident it stayed in `poll()` for ~18 minutes;
+   - `tmux ls` fails every time, within a few ms, with `server exited unexpectedly` (stable: every attempt, ≤5 ms in our measurements);
+   - a raw probe of the server's socket connects successfully and then receives EOF immediately (accept-then-close, not ECONNREFUSED):
+
+     ```sh
+     python3 -c "import os,socket;s=socket.socket(socket.AF_UNIX);s.connect('/tmp/tmux-%d/default'%os.getuid());print(s.recv(100))"
+     ```
+
+### Expected behavior
+
+Shutdown completes: the server waits a **bounded** time for control clients to flush their pending output, then force-drops them (discarding whatever remains), so `server_loop()` returns and the process exits — instead of letting one wedged client block the exit path forever.
+
+### Actual behavior
+
+Shutdown hangs indefinitely (we observed the full ~18 minutes until we gave up; nothing in the code path suggests it would ever stop). `server_loop()` / `proc_loop` never return. Meanwhile `server_exit=1` makes the server reject every new command with `server exited unexpectedly`, so a live server is unusable and appears as a persistent outage. At that point SIGTERM is useless (the process is already wedged inside its exit path); only SIGKILL recovers it, after which tmux cleans up the stale socket itself and the next command auto-spawns a fresh server.
+
+### Analysis
+
+Source quotes below were verified against tmux 3.4 during our incident analysis (源码引用经事故分析核对（tmux 3.4）); they are abridged to the relevant branches, and comments in the code blocks are our annotations, not upstream comments.
+
+1. **Why every new command fails (`server_exit=1` half-dead state).** `server.c`, `server_accept()`:
+
+   ```c
+   if (server_exit) {
+       close(newfd);   /* accept, then immediately close */
+       return;
+   }
+   ```
+
+   `server_exit` is set to 1 by the SIGINT/SIGTERM branch of `server_signal()`. The connect-ok-then-EOF signature we observed can only come from this branch (a crashed server would give ECONNREFUSED at connect time). Together with the journal's record of sessions being destroyed en masse, this pins the SIGTERM arrival time (in our incident: 00:03:22). `server_send_exit()` marks all clients `CLIENT_EXIT` and destroys all sessions — **that part completes**: all 14 panes died within 1–2 s of the signal.
+
+2. **Why the process never exits (`control_all_done()` gate has no timeout).** `server-client.c`, `server_client_check_exit()`:
+
+   ```c
+   if (c->flags & CLIENT_CONTROL) {
+       control_discard(c);
+       if (!control_all_done(c))
+           return;      /* pending output not flushed: never EXITED, never dropped */
+   }
+   ```
+
+   Shutdown chain: `server_send_exit()` (done) → the event loop keeps running, but each control client is only dropped once `control_all_done()` becomes true → for a client whose output delivery has failed (EPIPE once the pipe's read end is gone), that never happens (see item 4) → the `clients` list never empties → `server_loop()`'s exit condition (server.c, includes `TAILQ_EMPTY(&clients)`) never holds → `proc_loop` never returns → the process sits in `poll()` forever while `server_exit=1` closes every new connection on accept. Our observations match exactly: the event loop was alive (new connections were being accepted-then-closed), and none of 28 stuck clients dropped in 18 minutes. **A single control client with undeliverable pending output freezes the entire server's shutdown, with no timeout.**
+
+3. **pty timing (included for clarity).** `window.c`, `window_pane_destroy()` synchronously `close(wp->fd)`, i.e. pty masters are closed at session-destroy time (verified against tmux 3.4 source). We mention this only because our own first write-up of this incident wrongly guessed that surviving pane processes exited "when the server was killed and the pty master closed" — that mechanism does not hold; the real trigger for their later exit is unestablished on our side.
+
+4. **Why a wedged control client can never be dropped — the closed loop (tmux 3.4 `control.c` / `client.c`, checked line-by-line, 2026-09-22).**（勘误括注：incident report §3.3 及本稿早期的「客户端停止 drain」/"stops draining" 表述不准确——the client never drains its output at all, since it hands its stdout fd to the server at identify time；准确机制是「管道读端消失 → EPIPE 后未清缓冲被 `control_all_done()` 无限追认」。）First, the output data path never crosses the client process: `client.c`, `client_send_identify()` does `dup(STDOUT_FILENO)` → `proc_send(MSG_IDENTIFY_STDOUT, fd, …)`, and `control.c`, `control_start()` sets `cs->write_event = bufferevent_new(c->out_fd, …)` — the server writes control output **directly to that fd** (in our incident: the pipe into our session manager). The pieces:
+
+   - `control.c`, `control_all_done()` is `TAILQ_EMPTY(&cs->all_blocks)` **and** `EVBUFFER_LENGTH(cs->write_event->output) == 0` — the pending block queue *and* the write buffer must both be empty.
+   - `control.c`, `control_error_callback()` (error callback of both the read and the write bufferevent) only does `c->flags |= CLIENT_EXIT;` — it clears **neither** `all_blocks` **nor** `write_event->output`.
+   - `control.c`, `control_discard()` (called from `server_client_check_exit()`) only frees per-pane blocks and stops the read event — it also touches neither. The single cleanup point, `control_stop()`, runs at client teardown — exactly the step that is blocked by `control_all_done()`.
+   - ⇒ once the pipe's read end is gone, later server writes get EPIPE → the error callback sets `CLIENT_EXIT` only → the undelivered bytes in `all_blocks` / the write buffer can never be cleared → `control_all_done()` is false **forever** → `server_client_check_exit()` `return`s forever → the client is never dropped → `server_loop()` never returns. It is a closed loop: no reachable code path clears those buffers after a delivery failure.
+   - The freeze is independent of the client **process** being alive: if the control client process itself dies, the socket error callback likewise only sets `CLIENT_EXIT`, so the leftover `client` struct with its uncleared output buffer still blocks shutdown. What wedges the exit path is a buffer-holding `client` struct, not a live process.
+   - The existing safety valve does not fire when it is most needed: `control_check_age()`'s `CONTROL_MAXIMUM_AGE` (300000 ms) "too far behind" auto-exit is driven only by pane output callbacks (`control_write_output` / `control_write_pending`) — during shutdown, sessions/panes are destroyed first (item 1), so the valve is never triggered in exactly the situation it would cover.
+
+### Resolved: the client-side mechanism (formerly an open question; tmux 3.4 source checked line-by-line, 2026-09-22)
+
+The question as originally framed — *why does the `tmux -C` client stop draining but not exit after its parent dies?* — rested on a wrong premise (our earlier "stops draining" wording; see the erratum note in Analysis item 4): **the client process is not on the output data path at all** — it hands its stdout fd to the server at identify time (`client_send_identify()`), and the server writes to that fd directly (`control_start()`). With that corrected, both halves of the question are explained from source:
+
+- **Source-verified (checked line-by-line against tmux 3.4 `control.c` / `client.c`, 2026-09-22)**: (a) *why pending output is never accounted as flushed* — the closed loop in Analysis item 4: `control_error_callback()` and `control_discard()` clear neither `all_blocks` nor `write_event->output`, and the only cleanup point (`control_stop()`) is the very step blocked by `control_all_done()`; (b) *why the client process lingers* — `client.c`, `client_main()`'s main loop is `proc_loop()` waiting for server messages, and the client exits on teardown notifications (MSG_EXIT / MSG_SHUTDOWN via `client_dispatch_wait` / `client_dispatch_attached`); with the server's teardown stuck, those never arrive. This matches our observation (client processes still alive 18 minutes later).
+- **Inference, not line-checked (stated honestly, not over-asserted)**: whether `server_send_exit()` ever attempts to broadcast MSG_SHUTDOWN directly has **not** been checked against `server.c` line-by-line. We leave that one point open-but-immaterial: whatever that path does, the closed loop in Analysis item 4 keeps shutdown frozen.
+
+### Suggested fix
+
+Any fix must break the closed loop in Analysis item 4 — i.e. give the shutdown path a way to clear (or stop waiting on) `all_blocks` + `cs->write_event->output` for a client whose delivery has failed. In decreasing order of directness:
+
+1. **Bounded wait in `server_client_check_exit()` (primary suggestion)**: during shutdown, wait a bounded time for `control_all_done()`, then force-teardown the client through `control_stop()` (the only path that frees `all_blocks` and the write bufferevent) / drop it, discarding any remaining pending output. Discarding is safe here: delivery has already failed (EPIPE), the sessions are already destroyed, and the recipient side is gone — those bytes cannot reach anyone.
+2. **Clear the buffers on delivery failure**: let `control_error_callback()` (or the `server_exit` branch of `server_client_check_exit()`) drop `all_blocks` and `cs->write_event->output` once the output side is known dead, so `control_all_done()` can become true naturally. (Scope this to shutdown / permanent delivery failure, so a transient write error cannot silently lose live output.)
+3. **Make the existing safety valve fire during shutdown**: `control_check_age()`'s `CONTROL_MAXIMUM_AGE` "too far behind" auto-exit is currently driven only by pane output callbacks, which are gone by the time sessions are destroyed — exactly when it is needed. Drive it from the shutdown path as well.
+
+A server-wide shutdown deadline in `server_loop()` would fix the symptom regardless of which of the above is chosen. The essential property: `control_all_done()` must not be able to block shutdown unboundedly.
+
+### Additional evidence
+
+Incident journal timeline (local time, 2026-09-22; tmux 3.4, server up ~8 weeks):
+
+- **00:03:22** — a SIGTERM arrives (**delivery method/source not established** — we deliberately say "a SIGTERM", not "kill-server"; we had no audit tooling to tell how it was delivered). 14 pane scopes are consumed within 1–2 s = all sessions destroyed by `server_send_exit()`.
+- **The wedged clients**: 28 orphaned `tmux -C attach-session` clients, all PPID=1 (their parent process had crashed), attached to 22 old sessions, accumulated over ~4.5 weeks of parent crashes (each crash left a few behind). None of them dropped in 18 minutes.
+- **Natural control group**: the 7–8 control clients that still had an active reader (our session manager was reading their output) all exited cleanly after the signal — none remained at the 00:14 census (<11 min after the signal; we did not measure their exact exit times). Everything still hanging 18 minutes in was an orphan with nobody left reading the pipe behind its stdout fd. This strongly localizes the freeze to the clients whose output delivery had failed.
+- **00:21:12** — SIGKILL (SIGTERM was already useless — the process was wedged in its exit path). tmux then auto-cleaned the stale socket, the next command auto-spawned a fresh server, and the full chain recovered (session create/list/kill all passed; an HTTP API on top verified end-to-end: 200/201/204).
+- **Failure stability**: `server exited unexpectedly` reproduced on **every** attempt, within 5 ms; the socket probe's connect→immediate-EOF likewise. The process was not crashed during the freeze: it sat in `poll()`, single-threaded, ~64 MB RSS, no crash records.
+
+### Workaround / backup (our side)
+
+On our side (OmniTerm, a tmux/pty session manager) we are landing two mitigations so this cannot accumulate again: (1) `PR_SET_PDEATHSIG` on the `tmux -C` client processes we spawn, so parent death kills them at the kernel level; (2) startup reconciliation that kills stale orphan control clients (with PID-reuse-safe predicates: structured argv match on `["tmux", "-C"]`, changed ppid, unchanged `/proc/<pid>/stat` starttime), preventing orphan accumulation in the first place. If upstream declines to fix this, we will evaluate proactively `kill -9`-ing orphan control clients after a bounded timeout on our side — but once the anti-accumulation measures above land, that need should disappear on its own.
+
+> **Upstream status（checked 2026-09-22，tinyfish 检索）**：queries `tmux server shutdown hang control client control_all_done never exits` / `github tmux control_all_done OR server exited unexpectedly shutdown stuck issue` 只命中无关 issue（#2376 / #4200 / #3007 崩溃类、#3905 机器关机挂起、#4151 OOM），**未发现本缺陷已有 issue**（非重复）；master / 3.5+ 是否已修**未能核**（CHANGES 抓取失败），如实标注为「未核」。
