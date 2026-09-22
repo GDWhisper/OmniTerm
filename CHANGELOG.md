@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-09-22 23:39) `[frontend]` 修复文件管理器在 `/home`（或任意一级目录）无法继续向上翻：① 「上一级」↑ 按钮在一级目录静默失效——`getParentPath('/home')` 把「一级目录」误当「没有父目录」返回空串，实际其父目录是文件系统根 `/`（仅 `/` 本身无父目录），现修正语义，↑ 到 `/home` 可继续上翻到 `/`；② 面包屑开头的 `/` 原是不可点击的分隔符，现改为可点击的根段（点击跳转 `/`，也可作拖放目标），`cwd === '/'` 时面包屑不再空白而是显示根段。顺带把散落 6 处的路径拼接（`cwd ? \`${cwd}/${name}\` : name`，在根目录下会拼出 `//` 双斜杠）收敛为 `joinPath` 单一真源，新增根目录/一级目录回归用例（`frontend/src/utils/path.ts`、`frontend/src/components/FileManager/FileManager.tsx`、`frontend/src/utils/path.test.ts`）
+
 - (2026-09-22 21:00) `[backend]` `[frontend]` `[api]` tmux server 假死防护成套落地（2026-09-22 事故：tmux server 被历史残留的失控 tmux 控制连接冻结成「半死」——所有新 tmux 命令报 `server exited unexpectedly`，需人工强杀才能恢复，无人值守下无限期持续）：① 崩溃兜底——后端无论以何种方式消亡（崩溃/被强杀），其遗留的 tmux 控制连接子进程由内核自动结束，不再无人认领地堆积（Linux；其它平台由启动对账兜底）；② 启动对账——后端每次启动扫描并清掉历史实例残留的失控 tmux 控制连接（发信号前严格校验目标进程身份，PID 已被复用时安全跳过、绝不误杀）；③ `omniterm stop` 与 `dev.sh` 停止服务发信号前补进程归属校验，封掉「PID 被复用时误杀无关进程」的盲区；④ 假死检测与一键重建——后端周期探测 tmux server 健康（连续 3 次确认假死才告警，防抖动误报），前端顶部出现告警横幅与「重建 tmux server」按钮，点击即自动恢复（重建前再次确认确实假死才动手，绝不误杀健康 server；**重建会强制结束假死的 server，其中的 tmux 会话会丢失**，横幅文案已明示）；⑤ 孤儿 tmux 控制连接堆积监控——超过警戒线时提示「tmux server 已进入一 SIGTERM 就假死的高危状态」的先兆警告（`src/process_identity.rs`、`src/engine/tmux/{control_mode,client_registry}.rs`、`src/health/`、`src/api/tmux_health.rs`、`src/main.rs`、`dev.sh`、`frontend/src/components/TmuxHealthAlert/`）
 
 ## [0.2.24] - 2026-09-22

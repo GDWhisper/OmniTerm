@@ -7,9 +7,10 @@
  * Return the parent directory of `path`, or '' if `path` is root or empty.
  *
  * - ''  /  '/'  → '' (root has no parent)
- * - '/a'         → ''
+ * - '/a'         → '/'  (first-level dir's parent is the filesystem root, not "nothing")
  * - '/a/b'       → '/a'
  * - '/a/b/'      → '/a'
+ * - 'a'          → ''   (bare relative segment has nothing above it)
  * - 'a/b'        → 'a'  (relative paths work too)
  * - 'G:/Codes'   → 'G:/' (Windows drive root stays rooted; bare 'G:' is drive-relative)
  * - 'G:/'        → ''  (drive root has no parent)
@@ -19,8 +20,24 @@ export function getParentPath(path: string): string {
   const trimmed = path.endsWith('/') ? path.slice(0, -1) : path
   if (/^[A-Za-z]:$/.test(trimmed)) return ''
   const idx = trimmed.lastIndexOf('/')
-  const parent = idx <= 0 ? '' : trimmed.slice(0, idx)
+  if (idx < 0) return '' // bare relative segment ('a') has no parent
+  // idx === 0 → first-level dir ('/a'); its parent is the filesystem root '/'
+  const parent = idx === 0 ? '/' : trimmed.slice(0, idx)
   return /^[A-Za-z]:$/.test(parent) ? parent + '/' : parent
+}
+
+/**
+ * 拼接目录与条目名为完整路径（文件浏览 UI 的单一真源，勿在组件里再写
+ * `dir ? \`${dir}/${name}\` : name`——根目录 '/' 会拼出 '//' 双斜杠）。
+ *
+ * - `joinPath('/a', 'b')`  → '/a/b'
+ * - `joinPath('/', 'b')`   → '/b'（根目录不产生 '//'）
+ * - `joinPath('G:/', 'b')` → 'G:/b'
+ * - `joinPath('', 'b')`    → 'b'
+ */
+export function joinPath(dir: string, name: string): string {
+  if (!dir) return name
+  return dir.endsWith('/') ? dir + name : `${dir}/${name}`
 }
 
 /** POSIX `/…` 或 Windows `C:/…` 视为绝对路径（分隔符已归一为 `/`）。 */
