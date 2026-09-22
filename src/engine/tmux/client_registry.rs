@@ -161,8 +161,8 @@ impl ClientRegistry {
         Self { inner: Arc::new(Inner { path, entries: Mutex::new(Vec::new()), born_at }) }
     }
 
-    /// 登记文件路径（诊断/测试用）。
-    #[allow(dead_code)] // 待接线：P1-2 孤儿监控诊断输出（见 docs/dev/plans/backlog/dead-code-triage.md）
+    /// 登记文件路径（诊断/测试读口）。
+    #[allow(dead_code)] // 仅测试/诊断用，生产代码暂无消费方（见 docs/dev/plans/backlog/dead-code-triage.md）
     pub fn path(&self) -> &Path {
         &self.inner.path
     }

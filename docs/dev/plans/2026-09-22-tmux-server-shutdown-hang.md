@@ -129,7 +129,7 @@ if (c->flags & CLIENT_CONTROL) {
 ### P0-2 启动对账：pidfile 登记 + 清理上一实例残留（载体见 D2）
 
 - 登记载体：`~/.omniterm/` 下 pidfile 类登记文件，命名 `<BRANCH_BINARY_NAME>-<instance-pid>.clients`，tmp + rename 原子写；启动时扫描本 stem 下**全部**登记文件（覆盖上一实例与其他实例残留），优雅退出时删除自己的文件；其登记进程全部消亡的孤儿文件超期回收。不落 DB（D2 否决项）。
-- 登记内容：每个 control 客户端 `(pid, spawn_ppid, /proc/<pid>/stat starttime)` 三元组 + 目标 session。
+- 登记内容：每个 control 客户端 `(pid, spawn_ppid, /proc/<pid>/stat starttime)` 三元组 + 目标 session。（已实施：starttime 落为平台抽象 `start_key`——Linux=stat starttime tick / 其余 Unix=ps lstart 文本 / Windows=sysinfo start_time 秒，见实施勘误 ㉖）
 - 启动对账 kill 谓词（**与 `src/acp/agent_proc.rs:333-345` `should_kill_group` 抽共享真源**，工程准则 7①——同型「防 PID 复用误杀」校验 ≥2 处）：
   - `/proc/<pid>/cmdline` **argv 结构化相等** `argv[0..2] == ["tmux", "-C"]`（拒绝子串匹配，防 `vim 'tmux -C.md'` 之类误配）；
   - 当前 ppid **≠ spawn_ppid**（替代「PPID=1」判据——孤儿可能被 subreaper 收养而非 init，PPID=1 判据会漏杀）；
@@ -406,7 +406,7 @@ On our side (OmniTerm, a tmux/pty session manager) we are landing two mitigation
 
 ## 实施勘误（2026-09-22 实施批次）
 
-> 实施 = 五笔提交：`8abd676`（P0-1/P0-2）、`221d0c7`（附录 C 机制定论）、`ef2c96c`（前端告警）、`9963c66`（P1-3）、`8e5b711`（P1-1/P1-2）。编号 ①–㉕ 收录全部「原文 → 实际 + 理由」偏差（㉕ 为编排方终审补录）；标注「已就地修正」的条目其正文措辞已在上文同步改写。
+> 实施 = 五笔提交：`8abd676`（P0-1/P0-2）、`221d0c7`（附录 C 机制定论）、`ef2c96c`（前端告警）、`9963c66`（P1-3）、`8e5b711`（P1-1/P1-2）。编号 ①–㉖ 收录全部「原文 → 实际 + 理由」偏差（㉕㉖ 为编排方终审/收尾补录）；标注「已就地修正」的条目其正文措辞已在上文同步改写。
 
 ### A. 编排方实测（kernel 7.0）
 
@@ -450,3 +450,4 @@ On our side (OmniTerm, a tmux/pty session manager) we are landing two mitigation
 ### F. 编排方终审补录
 
 25. **㉕ 孤儿堆积前端提示不走 chat system 消息通道**：原文 §5 P1-2「前端提示复用既有 system 消息通道」→ 实际为 `tracing::warn` + `GET /tmux/health` 的 `orphan_count` 字段 + 前端 `TmuxHealthAlert` 全局横幅提示；**没有写 `chat_messages` system 行**。理由：system 消息是 ACP **会话级**聊天行，全局孤儿告警无会话归属，硬写入任一会话会造成跨会话刷屏与归属误导；全局横幅（App 级浮层）才是与「全局先兆指标」匹配的呈现位。（已就地修正 §5 P1-2）
+26. **㉖ `start_key` 为平台抽象而非纯 `/proc` starttime**：原文 §5 P0-2 登记三元组写死「`/proc/<pid>/stat starttime`」→ 实现为平台抽象 `start_key`（Linux = stat starttime tick，实测口径；其余 Unix = `ps -o lstart=` 文本；Windows = `sysinfo` start_time 秒级，后两者未实测）——语义不变（PID 复用检测的「启动时刻」硬标识），属实现扩展而非证伪；平台差异已入 `docs/architecture/backend.md` 多实现/平台差异表。（已就地修正 §5 P0-2 括注）
