@@ -1,23 +1,23 @@
 # tmux server 假死事故：SIGTERM 后被孤儿 control 客户端无限期冻结关闭流程
 
-> 状态：事故报告 + 修复方案（2026-09-22）
-> 触发条件：修改 `src/engine/tmux/control_mode.rs`（`ControlModeClient` 的 spawn / `stop()` / `Drop`）、`src/engine/tmux/terminal_ws.rs`、`src/engine/tmux/engine.rs` / `mod.rs` 的 tmux 子进程生命周期管理，或排查「tmux 命令报 `server exited unexpectedly` / tmux server 假死 / `tmux -C` 孤儿客户端堆积」前**必读**
-> 关联：`docs/dev/debug-patterns/resource-lifecycle.md` 模式 10（父死不杀子）、`docs/dev/plans/2026-09-21-acp-agent-connection-cpu-spin.md`（同类「优雅关闭路径走不到」的结构性缺陷）、commit `344750f`（tmux 控制连接子进程退出后留僵尸——Child 句柄改常驻收割任务，P2-2，只解决「收割」不解决「孤儿」）
-> 来源：2026-09-22 凌晨 tmux server（PID 14747，07-28 启动，已运行 55 天）对所有新 tmux 命令返回 `server exited unexpectedly`，tmuxes 服务（node 进程，8970 端口）`GET /api/targets/local/sessions` 返回 502。当日 00:21 已通过 SIGKILL + 清理 stale socket 恢复，本文为根因报告与修复方案。
+> 状态：设计稿（事故报告 + 修复方案，2026-09-22；同日经独立子代理审查后全文修订，勘误见 §10）
+> 触发条件：修改 `src/engine/tmux/control_mode.rs`（`ControlModeClient` 的 spawn / `stop()` / `Drop`）、`src/engine/tmux/terminal_ws.rs`、`src/engine/tmux/engine.rs` / `mod.rs` 的 tmux 子进程生命周期管理、本方案落地的健康/监控模块，或排查「tmux 命令报 `server exited unexpectedly` / tmux server 假死 / `tmux -C` 孤儿客户端堆积」前**必读**
+> 关联：`docs/dev/debug-patterns/resource-lifecycle.md` 模式 10（父死不杀子）、`docs/dev/plans/2026-09-21-acp-agent-connection-cpu-spin.md`（同类「优雅关闭路径走不到」的结构性缺陷）、commit `344750f`（tmux 控制连接子进程退出后留僵尸——Child 句柄改常驻收割任务，P2-2，只解决「收割」不解决「孤儿」）、`src/acp/agent_proc.rs` `should_kill_group`（kill 前 pid 归属校验先例，P0-2 与之抽共享真源）、`docs/architecture/backend.md`（tmux 引擎冻结边界）、`docs/reference/auth-not-enforced.md`（P1-1 自愈 API 鉴权教训）
+> 来源：2026-09-22 凌晨 tmux server（PID 14747，07-28 启动，已运行约 8 周）对所有新 tmux 命令返回 `server exited unexpectedly`，tmuxes 服务（node 进程，8970 端口）`GET /api/targets/local/sessions` 返回 502。当日 00:21 已通过 SIGKILL + 清理 stale socket 恢复，本文为根因报告与修复方案。
 
 ## 0. 结论（TL;DR）
 
 1. **不是 tmux 崩溃**：无段错误 / 无 core / 无 OOM，进程在 `poll()` 中正常存活 18 分钟。
-2. **触发是一次外部 SIGTERM（00:03:22）**：tmux 正常进入关闭流程，所有 session 在 1-2 秒内被销毁。
+2. **触发是一次 SIGTERM（00:03:22，投递方式/来源未确证，见 §3.2）**：tmux 正常进入关闭流程，所有 session 在 1-2 秒内被销毁。（注：`tmux kill-server` 本质也是 server 自体 SIGTERM，journal 证据无法区分投递方式。）
 3. **冻结是 tmux 侧缺陷**：`server_client_check_exit()` 要求 control 客户端 `control_all_done()`（待写输出全部刷完）才允许 drop；对停止 drain 的 control 客户端**没有超时**。28 个客户端一个都掉不了 → `server_loop()` 永远不返回 1 → server 永远退不掉，但 `server_exit=1` 已置位 → 进入「半死」：**accept 新连接后立即 close**，所有新 tmux 命令必败。
-4. **积因是 omniterm 侧缺陷**：omniterm 实例崩溃（非优雅退出）时，其 `tmux -C` 子进程按 Linux 语义**不会**被杀死（无 PDEATHSIG），`ControlModeClient::stop()`/`Drop` 的清理只覆盖优雅路径。六周里多个 omniterm 实例崩塌，积下 **28 个 PPID=1 的孤儿 control 客户端**（挂在 22 个旧 session 上），它们正是卡死关闭流程的元凶。
-5. 信号来源**未能确证也不必再追**：omniterm / tmuxes 源码、crontab、shell history 均已排除（见 §3.2）。剩下的可能是人工 `tmux kill-server` 或 pane 内 agent 执行——非交互执行不留痕。若复发，先用 eBPF/auditd 捕获再谈。
+4. **积因是 omniterm 侧缺陷**：omniterm 实例崩溃（非优雅退出）时，其 `tmux -C` 子进程按 Linux 语义**不会**被杀死（无 PDEATHSIG），`ControlModeClient::stop()`/`Drop` 的清理只覆盖优雅路径。约 4.5 周（08-10~09-11）里多个 omniterm 实例崩塌，积下 **28 个 PPID=1 的孤儿 control 客户端**（挂在 22 个旧 session 上），它们正是卡死关闭流程的元凶。
+5. 信号来源**未能确证也不必再追**：omniterm / tmuxes 源码、crontab、shell history 均已排除（见 §3.2，含未排除的盲区声明）。剩下的可能是人工 `tmux kill-server` 或 pane 内 agent 执行——非交互执行不留痕。若复发，先用 eBPF/auditd 捕获再谈。
 
 ## 1. 环境
 
 | 组件 | 事实 |
 |------|------|
-| tmux | 3.4（`/usr/bin/tmux`），server PID 14747，2026-07-28 启动，socket `/tmp/tmux-1000/default` |
+| tmux | 3.4（`/usr/bin/tmux`），server PID 14747，2026-07-28 启动（至事发约 56 天），socket `/tmp/tmux-1000/default` |
 | omniterm（事发时唯一在跑） | dev 实例 PID 22659（`target/debug`，09-21 23:07:06 启动，连 `omniterm-dev.db`） |
 | omniterm（npm 版） | PID 106111，09-22 00:12:16 启动（事发后才起，其 tmux 客户端一连即被关，全部变僵尸） |
 | tmuxes 服务 | node 进程 PID 1725，8970 端口；本身健康，仅因底层 tmux server 假死而 502（**受害者，非根因**） |
@@ -30,7 +30,7 @@
 | 09-21 22:55–23:02 | tmux pane 正常批量启动（旧 omniterm 实例在铺 agent 终端） | journal `Started tmux-spawn-*.scope - tmux child pane NNNN launched by process 14747` |
 | 09-21 23:07:06 | dev omniterm（22659）启动 | `ps lstart` |
 | 09-21 23:48 | 最后一个 agent 会话创建（`oh-my-pi_0921-2348`） | `omniterm-dev.db` sessions 表 |
-| **09-22 00:03:22–23** | **14 个 pane scope 在 1-2 秒内集中 `Consumed` = `server_send_exit()` 执行 = SIGTERM 到达** | journal（server  healthy 时 pane 生死是分散的，集中死亡只可能是主动销毁） |
+| **09-22 00:03:22–23** | **14 个 pane scope 在 1-2 秒内集中 `Consumed` = `server_send_exit()` 执行 = SIGTERM 到达** | journal（server healthy 时 pane 生死是分散的，集中死亡只可能是主动销毁） |
 | 09-22 00:12:16 | npm omniterm 启动，随即生成的 tmux 客户端全部立刻死亡（僵尸）——server 已聋 | `ps`（5 个 `[tmux: client] <defunct>`，父 106111） |
 | 09-22 00:14–00:21 | 排查期：`tmux ls` 稳定 5ms 内失败 `server exited unexpectedly`；socket 探针 connect 成功后 0.00s 收到 EOF | 见附录 A |
 | 09-22 00:21:12 | 手动 SIGKILL 14747；3 个抗住 SIGHUP 的孤儿 pane（各 17h CPU、9GB 内存峰值）随之退出 | journal（scope `Consumed`） |
@@ -38,7 +38,7 @@
 
 ## 3. 根因链
 
-### 3.1 触发：一次外部 SIGTERM（00:03:22）
+### 3.1 触发：一次 SIGTERM（00:03:22，来源未确证）
 
 tmux 3.4 `server.c` 的 `server_accept()` 有一个明确分支：
 
@@ -49,7 +49,7 @@ if (server_exit) {
 }
 ```
 
-`server_exit` 只由 `server_signal()` 的 SIGINT/SIGTERM 分支置 1。观测到的「连上即 EOF」**只能**由这个分支产生——崩溃的 server 会让 connect 得到 ECONNREFUSED，而不是 accept-then-EOF。配合 journal 的集中销毁记录，SIGTERM 到达时间可确定到 **00:03:22**。
+`server_exit` 只由 `server_signal()` 的 SIGINT/SIGTERM 分支置 1。观测到的「连上即 EOF」**只能**由这个分支产生——崩溃的 server 会让 connect 得到 ECONNREFUSED，而不是 accept-then-EOF。配合 journal 的集中销毁记录，SIGTERM 到达时间可确定到 **00:03:22**。（投递方式不可区分：`tmux kill-server` 的实现就是 `kill(getpid(), SIGTERM)` 自杀，与外部 `kill -TERM 14747` 观测等价。）
 
 同时排除「tmux 自身崩溃」：进程 18 分钟里一直在 `poll()`（`wchan: poll_schedule_timeout`）、RSS 64MB、单线程、无任何 dmesg/journal 崩溃记录。
 
@@ -57,11 +57,18 @@ if (server_exit) {
 
 已逐一排除：
 
-- **omniterm**：`~/coding/OmniTerm` 全量检索，唯一的 `libc::kill(pid, SIGTERM)`（`src/main.rs:739`）打的是自己 PID file 里的 omniterm server；对 tmux 只有 `tmux kill-session`（单会话，不碰 server）、对 `-C` 子进程 `start_kill()`、对 pty 子进程 SIGHUP→SIGTERM→SIGKILL。**没有任何代码路径向 tmux server 发信号。**
+- **omniterm**：`~/coding/OmniTerm` 全量检索，静态书写唯一的 `kill(pid, SIGTERM)` 调用点是 `src/main.rs:743`（打的是自己 PID file 里的 omniterm server；同函数 :754 另有 `kill(pid, SIGKILL)`，pty 升级链 `src/engine/pty_io.rs` 另经变量发 SIGTERM→SIGKILL）；对 tmux 只有 `tmux kill-session`（单会话，不碰 server）、对 `-C` 子进程 `start_kill()`。其余信号站点：`src/acp/agent_proc.rs:372`（`kill(-(pid), SIGKILL)` 杀 agent 进程组）、`src/engine/tmux/terminal_ws.rs:513/779`（对 tmux attach 客户端 SIGHUP）——**全部信号站点均以自身子进程/进程组或 pidfile PID 为对象，无一以 tmux server 为目标。**
 - **tmuxes 服务**：源码无 `kill-server`。
 - **crontab / bash history**：无记录。
 
-剩余可能：人工执行 `tmux kill-server`，或 pane 内的 agent 执行（非交互 shell 不留 history）。**在没有 auditd / eBPF 的事后环境下无法进一步归因，继续排查是浪费**——本次要修的是「SIGTERM 之后为什么会聋 18 分钟」，不是「谁发的 SIGTERM」。若复发，先上捕获手段再谈归因。
+**排除法盲区（明示，不装作已排除）**：
+
+- **pidfile PID 复用**：`src/main.rs:722-756` 的 `Stop` 与 `dev.sh` 均按记录 PID 直接 kill、无 cmdline 归属校验——pidfile 陈旧 + PID 复用时，SIGTERM 完全可能落到 tmux server 头上。此盲区需 cmdline 校验才能证伪，作为 P1-3 顺手收紧。
+- **systemd user 单元/定时器**：未核查（journal 只被用于 pane 生死回放）。
+
+剩余可能：人工执行 `tmux kill-server`，或 pane 内的 agent 执行（非交互 shell 不留 history），或上述盲区。**在没有 auditd / eBPF 的事后环境下无法进一步归因，继续排查是浪费**——本次要修的是「SIGTERM 之后为什么会聋 18 分钟」，不是「谁发的 SIGTERM」。若复发，先上捕获手段再谈归因。
+
+> **取证前提注记**：§3.2 的排除论证以「omniterm 没有任何向 tmux server 发信号的路径」为前提。P1-1 内建自愈（D3）落地后该前提对新版本**永久失效**——未来同类归因须先排除 omniterm 自愈动作（自愈动作必须留结构化日志，作为替代取证线索）。
 
 ### 3.3 冻结：tmux 关闭流程对卡死的 control 客户端无超时（tmux 侧缺陷）
 
@@ -75,82 +82,178 @@ if (c->flags & CLIENT_CONTROL) {
 }
 ```
 
-关闭链路：`server_send_exit()` 把全部客户端标记 `CLIENT_EXIT` 并销毁 session（**这一步完成了**——00:03:23 时 pane 已死光）→ 事件循环持续运行，但每个 control 客户端都要等 `control_all_done()` 才被 drop → `clients` 列表永不空 → `server_loop()` 的退出条件（含 `TAILQ_EMPTY(&clients)`）永不满足 → `proc_loop` 永不返回 → 进程在 poll 里**永久挂机**，而 `server_exit=1` 让所有新连接 accept 即 close。
+关闭链路：`server_send_exit()` 把全部客户端标记 `CLIENT_EXIT` 并销毁 session（**这一步完成了**——00:03:23 时 14 个 pane 当即死亡）→ 事件循环持续运行，但每个 control 客户端都要等 `control_all_done()` 才被 drop → `clients` 列表永不空 → `server_loop()` 的退出条件（含 `TAILQ_EMPTY(&clients)`）永不满足 → `proc_loop` 永不返回 → 进程在 poll 里**永久挂机**，而 `server_exit=1` 让所有新连接 accept 即 close。
 
 观测完全吻合：事件循环活着（否则新连接不会被 accept 再关），28 个客户端 18 分钟一个未掉。**任何一个停止 drain 的 control 客户端就能冻结整个 server 的关闭，且没有超时。**
 
-次要观察：session 销毁只发 SIGHUP，不升级 SIGKILL——3 个 pane 进程抗住 SIGHUP 作为孤儿又活了 18 分钟（直至 server 被杀、pty master 关闭才退出）。
+次要观察：session 销毁只发 SIGHUP，不升级 SIGKILL——3 个 pane 进程抗住 SIGHUP 作为孤儿又活了 18 分钟（00:21 才退出）。注意 tmux 在 `window_pane_destroy` 里**同步** `close(wp->fd)`（pty master 00:03:23 即已关闭，经 tmux 3.4 源码核对），这 3 个进程 00:21 才退出的**真实触发未确证（不确定）**——本文早期版本曾括注「直至 server 被杀、pty master 关闭才退出」，与源码不符，已勘误（§10）。
 
-### 3.4 积因：omniterm 崩溃路径不收尸，六周积 28 个孤儿 control 客户端（omniterm 侧缺陷）
+**机制断点（标注未解）**：父进程死亡后 `tmux -C` 子进程为何停止 drain 而不退出——stdout 管道读端随父进程消失后写入应得 EPIPE，客户端侧滞留机制未核（不确定）。server 侧 `control_all_done()` 永假是观测实锤，逻辑链够用，但客户端侧机制待对照 tmux `client.c` 补齐（并入 P2-1 上游 issue 证据）。
+
+### 3.4 积因：omniterm 崩溃路径不收尸，约 4.5 周积 28 个孤儿 control 客户端（omniterm 侧缺陷）
 
 00:14 清点：**28 个 `tmux -C attach-session` 客户端，全部 PPID=1**（原始父进程已死，被 init 收养），启动时间跨度 08-10 至 09-11，分别挂在 **22 个不同的旧 `lt_*` session** 上。它们是历次 omniterm 实例崩塌的遗留：
 
 - Linux 父进程死亡**不会**杀子（无 PDEATHSIG 语义）；
-- omniterm 的清理只写在优雅路径上——`ControlModeClient::stop()`（`src/engine/tmux/control_mode.rs:114-166`：关 stdin → `start_kill()` → `wait()` 回收）和 `Drop`（:169-186）。进程级崩溃 / SIGKILL / panic-abort 时这些根本不执行；
-- 每次崩塌留几个，六周积出 28 个。注意 commit `344750f` 解决的是「子进程退出后留僵尸」（收割），**不解决「父崩子留」**，两者互补。
+- omniterm 的清理只写在优雅路径上——`ControlModeClient::stop()`（`src/engine/tmux/control_mode.rs:176-220`：关 stdin → 经 reaper 转发强杀 → 有界等退出码回收；344750f 之前的旧实现是「关 stdin → `start_kill()` → `wait()`」，即旧 :114-166）和 `Drop`（:223-244，旧 :169-186）。进程级崩溃 / SIGKILL / panic-abort 时这些根本不执行；
+- 每次崩塌留几个，约 4.5 周积出 28 个。注意 commit `344750f` 解决的是「子进程退出后留僵尸」（收割），**不解决「父崩子留」**，两者互补。
 
 ### 3.5 天然实验：有 reader 的客户端全部按时退出
 
-事发时 omniterm（22659）自己持有约 7-8 个活客户端（用户侧 UI 观测；其 dev 库有 11 个活跃 ACP 会话，量级吻合）。这些客户端的输出有人读（omniterm 的 `reader_loop`），SIGTERM 后**几秒内就干净退出了**——00:14 清点时 PPID=22659 的客户端一个不剩。**每一个有活跃 reader 的都退了；18 分钟后仍挂着的全部是无主孤儿。** 这基本锁定卡死关闭流程的就是 §3.4 的积奴，排除其他嫌疑。
+事发时 omniterm（22659）自己持有约 7-8 个活客户端（用户侧 UI 观测；无独立佐证——dev 库的 ACP 会话数**不能**作量级佐证：ACP 会话不经 `track_session`，不产生任何 `tmux -C` 客户端，与 control 客户端不是同一总体）。这些客户端的输出有人读（omniterm 的 `reader_loop`），SIGTERM 后全部干净退出——00:14 清点时 PPID=22659 的客户端一个不剩（退出时间上界为 00:14 清点，即 <11 分钟；「几秒内」的说法超出证据强度，已勘误）。**每一个有活跃 reader 的都退了；18 分钟后仍挂着的全部是无主孤儿。** 这基本锁定卡死关闭流程的就是 §3.4 的积奴，排除其他嫌疑。（清点口径注：22659 构建自 344750f 之前，其死客户端经 `ensure_session → stop()` 惰性收割；npm 版 106111 的 5 个僵尸是客户端**进程**已死未收割，与「连接存活」是两回事。）
 
 ## 4. 影响面
 
 - 09-22 00:03:22–00:21（约 18 分钟）：所有新 tmux 命令失败（`server exited unexpectedly`）；tmuxes 服务会话列表/创建/删除全 502。
-- 所有 session 在 00:03:22 即已销毁（pane 进程被杀），但 omniterm UI 在重连前仍显示这些终端——**UI 显示 ≠ 后端存活**。
+- 所有 session 在 00:03:22 即已销毁（14 个 pane 进程当即死亡，3 个 SIGHUP 幸存进程至 00:21 才退出），但 omniterm UI 在重连前仍显示这些终端——**UI 显示 ≠ 后端存活**。
 - 恢复需人工介入（SIGKILL + 清 stale socket）；若无人值守，聋 server 会**无限期**持续。
 - 复发条件现成：只要 omniterm 再崩溃几次攒下新的孤儿，任何一次对 tmux server 的 SIGTERM（或任何触发 `server_exit` 的路径）都会重演。
 
 ## 5. 修复方案（omniterm 侧）
 
-### P0-1 崩溃兜底：给 `tmux -C` 子进程设置 PDEATHSIG
+> 落点约束：P0-1/P0-2/P1-3 按「致命 bug 修复」豁免进 `src/engine/tmux/`（冻结边界「只修致命 bug 不加功能」，`docs/architecture/backend.md`）；P1-1/P1-2 的探测与统计**落引擎无关的健康/监控模块**，不解冻 engine/tmux（决策见 D4）。实施分期：P0-1、P0-2 可并行先行（无依赖）；P1-1 依赖 P0 落地后的谓词/分类函数复用；P1-3 独立小项。预估（粗估）：P0-1 约 0.5 人日、P0-2 约 1 人日、P1-1 约 1.5 人日（含前端）、P1-2 约 0.5 人日、P1-3 约 0.5 人日。
 
-- spawn `tmux -C`（及评估 pty 子进程）时经 `CommandExt::pre_exec` 调 `prctl(PR_SET_PDEATHSIG, SIGKILL)`：父进程死亡时**内核直接杀子**，覆盖 panic/abort/SIGKILL 等 `Drop` 到不了的路径。
-- 两个已知坑必须处理：① PDEATHSIG 在父**线程**死亡时触发，spawn 必须发生在长寿命线程上（或 `pre_exec` 内复查 `getppid()` 已变则自行退出）；② 被子仍需被收割——与 `344750f` 的常驻收割任务兼容，不冲突。
-- 改动文件：`src/engine/tmux/control_mode.rs`（spawn 点）；`src/engine/pty` 的 spawn 路径评估后同办。
+### P0-1 崩溃兜底：`tmux -C` 子进程设置 PDEATHSIG（仅 Linux，不含 pty 路径——D1）
 
-### P0-2 启动对账：登记 + 清理上一实例的残留
+- spawn `tmux -C` 时经 `cmd.as_std_mut()` + `std::os::unix::process::CommandExt::pre_exec` 调 `prctl(PR_SET_PDEATHSIG, SIGKILL)`：父进程死亡时**内核直接杀子**，覆盖 panic/abort/SIGKILL 等 `Drop` 到不了的路径。pre_exec 闭包必须 async-signal-safe（`prctl`/`getppid` 均安全）。
+- 三个坑，其中前两条是**并列硬约束，不是二选一**：
+  1. PDEATHSIG 在**创建该子进程的线程**终止时触发——spawn 必须在 tokio worker 线程同步执行、**禁止包 `spawn_blocking`**（阻塞池线程空闲约 10s 退役，会误杀活得好好的客户端），spawn 点留 VERIFIED 注释（`docs/workflows/integration-checklist.md` A.2）；
+  2. `pre_exec` 内 `getppid()` 复查（已变则自行退出）单列，只覆盖 fork→prctl 之间的父**进程**死亡竞态，**不能替代**约束 1；
+  3. 平台边界：`prctl(2)` 仅 Linux——`#[cfg(target_os = "linux")]` 门控，macOS/Windows 无等价机制，由 P0-2 启动对账兜底（覆盖率差异见风险表，沉淀进 `docs/architecture/backend.md`，工程准则 8）。
+- **pty 子进程不做 PDEATHSIG（D1 决策）**：pty 直接子进程是用户 shell、agent 是其子孙；父死时 pty master 全关本就触发 pty(7)「SIGHUP 到前台进程组」的可捕获挂断，SIGKILL 同办等于把可收尾挂断升级为不可捕获强杀；且 `portable_pty::CommandBuilder`（`src/engine/pty/session.rs:42-47`）无 `pre_exec` 钩子，按现状 API 不可行。
+- 被子仍需被收割——与 `344750f` 的常驻收割任务兼容（PDEATHSIG 只在父进程/线程死亡时触发，此时 reap 任务已随进程消亡；存活期子进程被杀仍由 `reap_child` 的 `select!(child.wait(), …)` 恰好收割一次），不冲突。
+- 改动文件：`src/engine/tmux/control_mode.rs`（`spawn_client`，把 pre_exec 放进假客户端测试 seam 内，让测试同样覆盖）。
 
-- 新增有界登记表（DB 表或 `~/.omniterm/` 下 pidfile，二选一，勿双写）：记录本实例 spawn 的每个 control 客户端 PID + 目标 session。
-- 启动时对账：对每个登记项，若进程仍活着且 **PPID=1**（孤儿）且 `/proc/<pid>/cmdline` 仍匹配 `tmux -C`（防 PID 复用误杀），则 kill。优雅退出时正常注销登记项。
-- 登记表天然有界（实例寿命内增删），但需按 AGENTS §6 显式上限 + 单测。
+### P0-2 启动对账：pidfile 登记 + 清理上一实例残留（载体见 D2）
 
-### P1-1 聋 server 检测与自愈
+- 登记载体：`~/.omniterm/` 下 pidfile 类登记文件，命名 `<BRANCH_BINARY_NAME>-<instance-pid>.clients`，tmp + rename 原子写；启动时扫描本 stem 下**全部**登记文件（覆盖上一实例与其他实例残留），优雅退出时删除自己的文件；其登记进程全部消亡的孤儿文件超期回收。不落 DB（D2 否决项）。
+- 登记内容：每个 control 客户端 `(pid, spawn_ppid, /proc/<pid>/stat starttime)` 三元组 + 目标 session。
+- 启动对账 kill 谓词（**与 `src/acp/agent_proc.rs:333-345` `should_kill_group` 抽共享真源**，工程准则 7①——同型「防 PID 复用误杀」校验 ≥2 处）：
+  - `/proc/<pid>/cmdline` **argv 结构化相等** `argv[0..2] == ["tmux", "-C"]`（拒绝子串匹配，防 `vim 'tmux -C.md'` 之类误配）；
+  - 当前 ppid **≠ spawn_ppid**（替代「PPID=1」判据——孤儿可能被 subreaper 收养而非 init，PPID=1 判据会漏杀）；
+  - `/proc/<pid>/stat` starttime 未变（PID 复用检测）。
+  - kill 走 `pidfd_open` + `pidfd_send_signal`（内核级免疫 PID 复用，收口 check-then-kill 的 TOCTOU）；非 Linux 回退 `kill(2)` + 谓词复查。
+- 登记表上限（P1 三问显式回答）：
+  - **上限**：`MAX_TRACKED_CLIENTS` 命名常量（数值实施时定，禁散落魔法数字）；
+  - **超限策略**：先清已死条目，仍超限则拒登新 spawn 并 `tracing::warn` 降级（父死场景已由 P0-1 兜底，登记缺失不构成泄漏）；
+  - **守上限的单测**：构造超上限登记，断言长度恰为上限且超限项被拒（验收 §9）。
+- 增删对称性（审查指出的累积点）：`SessionActivityMonitor::ensure_session`（`src/engine/tmux/control_mode.rs:370-398`）死连接重建路径在替换登记条目时**先注销旧条目**，注销不只挂 `stop`/优雅退出——否则实例内死条目滞留累积。
+- 「优雅退出时注销」挂**显式 shutdown 路径**而非 `Drop`（axum 关闭是否 drop `AppState` 未验证，见风险表）；即便注销失败，启动对账天然幂等，可重复收敛。
 
-- 健康探测：周期 `tmux list-sessions`（或直连 socket 探测）。**两种失败语义必须区分**：`no server running` = 正常空态（首条命令会自动拉起新 server）；`server exited unexpectedly` / connect 成功后立即 EOF = **聋 server**（P1 的事故签名）。
-- 连续 N 次聋签名 → 前端告警 + 提供「重建 tmux server」动作：SIGKILL 假死 server → 删 stale socket → 下一条命令自动重建。恢复动作必须幂等。
+### P1-1 聋 server 检测与自愈（探测/分类落引擎无关模块，D4；自愈归属见 D3）
 
-### P1-2 孤儿堆积监控
+- 健康探测：周期探针（`DEAF_PROBE_INTERVAL` / `DEAF_CONFIRM_COUNT` 命名常量），可与既有 `agent/watch.rs` 的周期 tmux 观测合并评估，避免再造一条周期 spawn 链（工程准则 4/7①）。
+- **失败语义四态分类**，独立分类函数（`Healthy / NoServer / Deaf / Other`）：
+  - `no server running` = `NoServer`（正常空态，首条命令自动拉起新 server）；
+  - `server exited unexpectedly` 或 connect 成功后立即 EOF = `Deaf`（本次事故签名）；
+  - EACCES / socket 属主冲突 / tmux 缺失 / psmux 等其余失败 = `Other`，**一律不触发自愈**（误分类的尾部风险是 SIGKILL 健康 server、毁掉全部 tmux 会话与运行中 agent）。
+  - 同步收窄 `src/engine/tmux/mod.rs:208` 的空 stdout 兜底：stderr 含聋签名时**不得**归「无会话」（现 `list_sessions` 会把聋签名吞成空态，探测若复用此路径即 S2 吞异常）。
+  - 多实现差异显式写明并沉淀 `docs/architecture/backend.md`：psmux 空 stdout 即当无会话（`mod.rs:207` 注）、Windows 行为（未验证，标注「不确定」）。
+- 自愈动作（omniterm 内建，D3）流程钉死：
+  1. 连续 `DEAF_CONFIRM_COUNT` 次 `Deaf` → 前端告警 + 「重建 tmux server」按钮；
+  2. 后端处理：**重探针确认聋签名仍成立**（含签名时间新鲜度，防陈旧状态触发）→ **单飞互斥**（并发触发只执行一次）→ **socket inode 反查 server PID**（deaf server 不响应 `display-message`：`/proc/<pid>/fd` → `socket:[inode]` 与监听 socket 反查）→ SIGKILL → 删 stale socket → 下一条命令自动重建。
+- 幂等论证：步骤 2 的「重探针 + 单飞」保证并发双击/多标签重复触发不会命中已自动重建的**健康新 server**；动作全程结构化日志（供 §3.2 类归因——取证前提已被本动作破坏，日志是替代线索）。
+- 若做成 API 端点必须挂 `require_auth_mw`（S4/S5，参照 `docs/reference/auth-not-enforced.md` 教训）。
+- 术语：**聋 server（deaf server）**= `server_exit=1` 且事件循环存活、accept 后立即 close 的半死态（P2-1 上游 issue 复用同一措辞）。
 
-- 启动时（或周期）统计 PPID=1 且 socket 归属本机 tmux server 的 `tmux -C` 客户端数量，超阈值记日志/告警——这是 tmux server 进入「一 SIGTERM 就假死」高危状态的先兆指标。
+### P1-2 孤儿堆积监控（引擎无关模块，D4）
+
+- 周期统计满足「当前 ppid ≠ spawn_ppid ∧ argv 结构化匹配 `tmux -C`」（**与 P0-2 同一谓词真源**）且 socket 归属本机 tmux server（`/proc/<pid>/fd` → `socket:[inode]` 与 server 监听 socket 反查）的客户端数量。
+- 超 `ORPHAN_WARN_THRESHOLD` 命名常量记 `tracing::warn`（前端提示复用既有 system 消息通道）——这是 tmux server 进入「一 SIGTERM 就假死」高危状态的先兆指标。
+
+### P1-3 pidfile kill 归属校验统一（小项）
+
+- `src/main.rs:722-756` 的 `Stop` 与 `dev.sh` 的 pidfile kill 补 cmdline 归属校验（与 P0-2 同一谓词真源），封掉 §3.2 的 PID 复用盲区。
 
 ### P2-1 tmux 上游
 
-- 向 tmux 提 issue：control 客户端停止 drain 时 `control_all_done()` 无超时导致 shutdown 永久挂起（3.4 仍存在）；建议有界等待后强制 drop。可附本例完整证据（journal 时间线 + 源码路径）。
+- 向 tmux 提 issue：control 客户端停止 drain 时 `control_all_done()` 无超时导致 shutdown 永久挂起（3.4 仍存在）；建议有界等待后强制 drop。可附本例完整证据（journal 时间线 + 源码路径 + §3.3「机制断点」待核项）。
 - 记录备用规避：若上游不接受，评估 omniterm 侧对孤儿客户端超时后主动 `kill -9`（P0-1/0-2 落地后此需求应自然消失）。
 
-## 6. 明确不做的事
+## 6. 设计决策（ADR）
 
-- **不给 omniterm 加任何向 tmux server 发信号的逻辑**（现状没有，勿开先例）。
+### D1 pty 子进程不做 PDEATHSIG，保留 pty(7) SIGHUP 收尾（用户拍板 2026-09-22）
+
+- **决策**：PDEATHSIG 只落 `tmux -C` 路径；pty（用户 shell/agent）不动。
+- **理由**：① `portable_pty::CommandBuilder` 无 `pre_exec`，按现状 API 不可行；② 父死时 pty master 全关触发 pty(7) 可捕获 SIGHUP，用户 shell/agent 有收尾机会，SIGKILL 会剥夺之；③ pty 场景的「孤儿」由 SIGHUP 语义自然覆盖大半。
+- **否决项**：改造 pty spawn 绕过 portable_pty 加 SIGKILL（产品语义损失 + 改动面大）。
+- **翻盘条件**：确证 SIGHUP-ignoring 的 pty 孤儿真实堆积（P1-2 监控可见），且用户拍板「父死强杀用户终端」的产品语义。
+
+### D2 登记表载体 = `~/.omniterm/` pidfile 类登记文件（用户拍板 2026-09-22）
+
+- **决策**：按 `<BRANCH_BINARY_NAME>-<instance-pid>.clients` 命名、tmp+rename 原子写，启动扫描 stem 下全部文件。
+- **理由**：DB 按 `--db` 实例隔离（配置统一管理），只能对账「同分支库上一实例」的残留——本次事故主体 28 个孤儿横跨多个实例，DB 对账**覆盖不到**；pidfile 可跨实例共享扫描，对账覆盖面匹配真实问题。
+- **否决项**：DB 表（跨实例残留永远不进对账范围，只能靠 P1-2 监控兜底；另引 migrations 义务）。
+- **翻盘条件**：并发实例互不误伤/孤儿文件回收在实施中被证明不可靠（参照 `resource-lifecycle.md` 模式 9 的 PID 文件教训），或登记量超过文件可承载规模（`MAX_TRACKED_CLIENTS` 上限内不会）。
+
+### D3 自愈动作内建于 omniterm（用户拍板 2026-09-22，推翻审查者「脚本+告警」建议）
+
+- **决策**：P1-1 做成 omniterm 内建动作（前端按钮 + 后端 API），按 §5 流程钉死。
+- **理由**：无人值守场景下聋 server 无限期持续（§4），检测与恢复必须同闭环才能自愈；手动脚本在无人值守下等于没有。
+- **否决项**：`scripts/` 手动脚本 + omniterm 告警（与「勿开先例」措辞最自洽，但用户体验断裂、无人值守不可用）——**§6 第一条据此收窄**，并接受 §3.2 取证前提对新版本失效（用结构化日志补位）。
+- **翻盘条件**：出现**一次**「自愈动作误杀健康 server」事故 → 立即降级为脚本 + 告警（D3 翻盘），并复盘分类函数为何失守。
+
+### D4 P1-1/P1-2 探测与统计落引擎无关的健康/监控模块（用户拍板 2026-09-22）
+
+- **决策**：`docs/architecture/backend.md` 的 tmux 引擎冻结边界（「只修致命 bug 不加功能」）不解冻；P0-1/P0-2/P1-3 按致命 bug 豁免进 `src/engine/tmux/`，P1-1 探测/分类与 P1-2 监控落引擎无关模块（复用引擎抽象出口，不改引擎行为）。
+- **理由**：冻结边界是既有架构约定（工程准则 3），本次没有解冻的必要——探测/统计不需要引擎内部新功能。
+- **否决项**：直接在 `src/engine/tmux/` 内加健康探测与监控功能（违反冻结约定）。
+- **翻盘条件**：健康模块与 engine/tmux 耦合被证明无法避免（如分类必须读引擎内部状态）→ 按工程准则 1① 请示解冻并留痕。
+
+## 7. 风险与降级
+
+| 风险 | 缓解 | 兜底 | 翻盘条件 |
+|------|------|------|----------|
+| PDEATHSIG 线程误触发（spawn 线程退出杀掉活客户端） | P0-1 硬约束 1（禁 `spawn_blocking` + VERIFIED 注释） | §9 反向断言「线程死亡不误杀」守门 | 出现误杀即回退 PDEATHSIG，P0-2 升主防线 |
+| 非 Linux 无 PDEATHSIG | P0-2 启动对账为主防线 | P1-2 孤儿监控可观测堆积 | —（平台差异写入 backend.md） |
+| 自愈误杀健康 server | 四态分类 + `Other` 不动作 + 重探针 + 单飞互斥 | 「健康 server 不得被命中」验收用例 | 出现一次即降级脚本（D3 翻盘） |
+| 登记表 kill 误杀（PID 复用） | pidfd + 三元组谓词 + argv 结构化相等 | 与 `agent_proc` 共享真源单测 | — |
+| 登记表超限拒登 | 超限先清死条目 + WARN 降级 | 父死场景由 P0-1 兜底，登记缺失不泄漏 | — |
+| 优雅退出注销不可靠（axum 关闭是否 drop `AppState` 未验证） | 注销挂显式 shutdown 路径 | 启动对账天然幂等、可重复收敛 | — |
+| 客户端停止 drain 而不退出的机制未核（不确定） | P2-1 上游 issue 附证据追根因 | P1-1 自愈覆盖症状（聋 server 可恢复） | — |
+
+## 8. 明确不做的事
+
+- **除 P1-1 自愈动作显式点名的 SIGKILL（仅限重探针确认的聋 server）外，不新增任何向 tmux server 发信号的路径**（现状没有，勿开先例；该例外对 §3.2 取证前提的影响见该节注记）。
+- **不给 pty 子进程加 PDEATHSIG**（D1）。
 - **不继续追查 SIGTERM 来源**（§3.2：无审计条件下不可证，复发时先上 eBPF/auditd）。
 - **不改 tmuxes 服务**（独立项目，本次只是受害者）。
-- **不手动清理 `/tmp/tmux-*` 残留 socket** 作为常规方案——那是症状清理；对账（P0-2）与自愈（P1-1）落地后不再需要。
+- **不把计划外手动清理 `/tmp/tmux-*` 残留 socket 当常规方案**——那是症状清理；对账（P0-2）与自愈（P1-1）落地后不再需要。
 
-## 7. 验收标准
+## 9. 验收标准
 
-- [ ] 集成测试（`tests/`）：spawn 受 omniterm 管理的 `tmux -C` 子进程 → SIGKILL 父进程（或等价模拟父线程死亡）→ 断言子进程在约定时限内消失（PDEATHSIG 生效）；被测子进程的收割仍由既有任务完成，不引入新僵尸。
-- [ ] 集成测试：登记表记录 spawn 的 PID；启动对账能杀掉 PPID=1 且 cmdline 匹配的残留；PID 已被复用的条目被安全跳过（不误杀）。
-- [ ] 单测：聋 server 签名与正常空态的区分（`server exited unexpectedly` ≠ `no server running`）。
+- [ ] PDEATHSIG 生效（集成/单测，沿 `#[cfg(test)]` + 假客户端 seam——`spawn_client` 是私有，`tests/` 走公有 `new()` 需真 tmux server，形态对齐 `344750f` 先例）：spawn 受管理的 `tmux -C` 子进程 → SIGKILL 父进程 → 子进程在约定时限内消失；**OS 真值断言** `/proc/<pid>/status` 的 `PDeathSig: 9` 字段（integration-checklist A.1，不只看死活）。
+- [ ] **反向断言（PDEATHSIG 线程误触发）**：spawn 线程退出而进程存活 → 子进程必须存活（起独立线程 spawn 后 join，观察子进程）。
+- [ ] 收割不回归：被测子进程仍由既有常驻收割任务恰好回收，不引入新僵尸。
+- [ ] 登记表：记录 spawn 的 PID 三元组；启动对账杀掉谓词全通过的残留；starttime 已变（PID 复用）的条目被安全跳过不误杀；**超限用例**（构造超 `MAX_TRACKED_CLIENTS` 登记，断言长度恰为上限 + 超限项被拒 + WARN）。
+- [ ] 单测：四态分类（`server exited unexpectedly` ≠ `no server running` ≠ `Other`）；`src/engine/tmux/mod.rs:208` 空 stdout 兜底收窄（stderr 含聋签名不得归空态）。
+- [ ] 自愈动作：「健康 server 不得被命中」防护用例；并发触发单飞用例（第二次动作不命中已重建的新 server）。
+- [ ] 前端：告警 + 「重建 tmux server」按钮功能回归；实施时过 `frontend-patterns` / `ui-style-guide` / i18n 双 locale（P1-1 含 UI）。
 - [ ] 手动回归：`docs/reference/user-testing.md` 补一条「假死检测 + 重建 server」流程。
+- [ ] spawn 点 VERIFIED 注释（integration-checklist A.2）。
 - [ ] `cargo fmt/clippy`、`tsc -b`、前端 lint/test 零新增警告；pre-commit 通过。
-- [ ] 实施后按惯例在 `CHANGELOG.md` 补条目（属实质性修复），并把 Phase 进展/偏差就地以「勘误」块回写本文。
+- [ ] 实施后按惯例在 `CHANGELOG.md` 补条目（属实质性修复），并把 Phase 进展/偏差就地以「勘误」块回写本文；文档闭环：`docs/architecture/backend.md` 补 spawn 生命周期（PDEATHSIG 行为）、平台/psmux 多实现差异表、健康/监控新模块条目（若届时改选 DB 表载体，则 `migrations/` 新文件按「新增即登记」处理——D2 已否决，默认无）。
 
-## 8. 附录 A：关键证据与诊断命令（复现检测用）
+## 10. 审查勘误（2026-09-22 独立子代理审查产出，已就地修正）
+
+1. `control_mode.rs` 行号/行为描述按 `344750f` 后现状更正（旧 :114-166 / :169-186 → 现 `stop()` :176-220 / `Drop` :223-244；行为「关 stdin → `start_kill()` → `wait()`」→「关 stdin → 经 reaper 转发强杀 → 有界等退出码」）。原文引用的是 344750f 之前的实现，入库时即失效。
+2. `src/main.rs:739` → **:743**（书写时即错）；「唯一的 `libc::kill(pid, SIGTERM)`」断言收窄为「静态书写唯一的 `kill(pid, SIGTERM)` 调用点」并补枚举 `agent_proc.rs:372` killpg、`terminal_ws.rs:513/779` SIGHUP、`pty_io.rs` 升级链。结论不变。
+3. §3.3/§4 的「pane 已死光」「3 个 pane 直至 server 被杀、pty master 关闭才退出」机制括注经 tmux 3.4 源码核对**不成立**（`window_pane_destroy` 同步 `close(wp->fd)`，master 00:03:23 即关）——3 个幸存进程 00:21 退出的真实触发标注「未确证（不确定）」。
+4. §3.5「11 个活跃 ACP 会话，量级吻合」系类别错配（ACP 会话不经 `track_session`，不产生 `tmux -C` 客户端），已删；「几秒内就干净退出」超出证据强度，改为「退出时间上界为 00:14 清点」。
+5. 附录 A 探针命令引号错误（`\$` 导致 python 收到字面 `$(id -u)`）修正；「正常 server 会先发版本行」与 tmux 握手方向不符，判据改为「立即 EOF = 聋 server；阻塞无输出 = 正常」。
+6. 时间口径统一：「六周」→「约 4.5 周（08-10~09-11 的积累期）」；「55 天」→「约 8 周（至事发约 56 天）」。`docs/dev/debug-patterns/resource-lifecycle.md` 模式 10 案例行同步。
+7. §6「不向 tmux server 发信号」与 P1-1 自愈的自相矛盾按 D3 收窄解决（自愈 SIGKILL 为唯一显式例外）。
+8. §3.2 补排除法盲区声明（pidfile PID 复用、systemd user 单元）；「外部 SIGTERM」措辞改「一次 SIGTERM（来源/投递方式未确证）」——`tmux kill-server` 本质是 server 自体 SIGTERM。
+9. PDEATHSIG 平台缺环（Linux-only）与坑①「`getppid()` 复查不能替代长寿命线程约束」补入 P0-1；登记表 P1 三问、kill 谓词三元组/pidfd、验收反向断言等按审查 major 补入 §5/§7/§9。
+
+## 11. 附录 A：关键证据与诊断命令（复现检测用）
 
 ```bash
 # 1) 聋 server 签名：新客户端连上即被关（5ms 内失败，稳定复现）
 tmux ls                       # → server exited unexpectedly
-# 探针：connect 成功后立即收到 EOF（正常 server 会先发版本行）
-python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('/tmp/tmux-\$(id -u)/default');print(s.recv(100))"
+# 探针：connect 成功后立即 EOF = 聋 server；阻塞无输出 = 正常
+# （tmux 握手由客户端先发，server 不主动发版本行）
+python3 -c "import os,socket;s=socket.socket(socket.AF_UNIX);s.connect('/tmp/tmux-%d/default'%os.getuid());print(s.recv(100))"
 
 # 2) 区分「进程死了」与「进程半死」：fds 里 LISTEN + 一堆 ESTAB，但新连接被拒
 ls -la /tmp/tmux-$(id -u)/    # socket 文件在
@@ -166,8 +269,9 @@ journalctl --since "2026-09-21 20:00" --until "2026-09-22 01:00" | grep tmux-spa
 # server.c:            server_accept() 的 if (server_exit) close(newfd)
 # server.c:            server_send_exit() / server_loop() 退出条件含 TAILQ_EMPTY(&clients)
 # server-client.c:     server_client_check_exit() 的 control_all_done() 无超时
+# window.c:            window_pane_destroy() 同步 close(wp->fd)（pty master 随销毁即关）
 ```
 
-## 附录 B：本次恢复动作记录（已完成，勿重复执行）
+## 12. 附录 B：本次恢复动作记录（已完成，勿重复执行）
 
 09-22 00:21 对 PID 14747 `SIGKILL`（SIGTERM 无效——它已在退出流程里卡死）；28 个孤儿客户端随 server 死亡全部自然退出；验证 tmux 自动清理 stale socket 并重建 server（create/list/kill session 全通过）；tmuxes API 端到端验证（GET 200 → POST 201 → DELETE 204）；清除 5 个确认无服务的残留 socket（`mansio-*`、`sshleak*`）。遗留：5 个僵尸进程待 omniterm（106111）退出时回收，无害。

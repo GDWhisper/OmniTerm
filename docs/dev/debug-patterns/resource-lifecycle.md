@@ -138,5 +138,5 @@
 **适用**：任何 spawn 子进程且子进程持有跨进程/网络资源的代码（终端会话、SSH/ACP 连接、代理）；改子进程清理路径前，先问「父进程被 SIGKILL 时这条路径还在吗」。
 
 **案例证据**：
-- 2026-09-22 tmux server 假死事故：omniterm 多实例崩塌留下 28 个 PPID=1 的 `tmux -C` 孤儿（六周积累，挂 22 个旧 session），tmux 3.4 关闭时 `control_all_done()` 无超时 → 一个 SIGTERM 后 server 聋了 18 分钟。完整证据链与修复方案见 `docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md`。
+- 2026-09-22 tmux server 假死事故：omniterm 多实例崩塌留下 28 个 PPID=1 的 `tmux -C` 孤儿（约 4.5 周积累，挂 22 个旧 session），tmux 3.4 关闭时 `control_all_done()` 无超时 → 一个 SIGTERM 后 server 聋了 18 分钟。完整证据链与修复方案见 `docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md`。
 - 同族对照：commit `344750f`（tmux 控制连接子进程退出后留僵尸）只加收割不防父殇；`2026-09-21-acp-agent-connection-cpu-spin.md` 的「优雅关闭走不到」是同一病根在 ACP 侧的投影。
