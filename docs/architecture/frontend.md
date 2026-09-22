@@ -41,6 +41,7 @@ src/
     ├── GitPanel/ — GitPanel.tsx（分支/远端操作 + CHANGES|HISTORY + 底部提交框）, GitDrawer.tsx（diff/commit 抽屉）, DiffView.tsx, diffParser.ts（unified diff 解析）
     ├── Settings/ — Settings.tsx, SettingsPopup.tsx, AgentSettings.tsx（PermissionTimeoutSection 权限超时三态 + SessionsSection 四个分钟滑块，共用 DisconnectSlider 组件）
     ├── TmuxCheatsheet/ — TmuxCheatsheet.tsx (render), TmuxCheatsheetPopup.tsx (popup), data.ts (command list, single source of truth — 增/删/改命令改本文件 + 两个 translation.json；维护指引见 data.ts 顶部 JSDoc)
+    ├── TmuxHealthAlert/ — TmuxHealthAlert.tsx（tmux server 聋 server 全局告警横幅 + 「重建 tmux server」按钮 + 孤儿控制客户端堆积提示；自持 10s `GET /tmux/health` 轮询（inFlight 防重入 + cleanup 清定时器），App 级浮层学 `ToastContainer` 挂载先例，桌面/移动/侧栏折叠均可见；四态消费见组件头注释——deaf 且连续确认 ≥3 才告警，重建 409 两分支文案与防双击见 `TmuxHealthAlert.test.tsx`）、TmuxHealthAlert.test.tsx
     ├── Icons/ — GitBranchIcon.tsx, KeyboardIcon.tsx
     ├── Modal/ — Modal.tsx, ConfirmDialog.tsx
     └── Toast/ — Toast.tsx
@@ -96,6 +97,11 @@ src/
 
 > 此规则与工程准则"禁 Copy-Paste"（必须提取）和"奥卡姆剃刀"（不过度抽象）协同 ——
 > 重复代码必须提取，但形式由以上条件决定；单一组件内的 Hook 级逻辑不必急于抽出。
+
+## 测试约定
+
+- 前端测试与源码同目录（`*.test.tsx` / `*.test.ts`，vitest + jsdom，入口 `frontend/src/test/setup.ts`）。
+- **假时钟 helper 的共享真源在 `frontend/src/test/timers.ts`**（`realTick` / `advanceClock`，UpdateBadge.test 与 TmuxHealthAlert.test 同用）：React 19 调度器走 MessageChannel，fake timers 每推进一拍后必须让真实宏任务队列转一圈才能完成重渲染——两份拷贝会各自漂移，新增定时器/轮询测试一律 import 这份，勿本地复制。
 
 ## 断连 / 空闲回收超时 + 权限请求超时（可配置）
 

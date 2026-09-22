@@ -31,7 +31,8 @@ src/
 │   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 分钟
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
-│   └── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
+│   ├── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
+│   └── tmux_health.rs    # GET /api/v1/tmux/health + POST /api/v1/tmux/rebuild — tmux server 健康快照与内建自愈「重建 tmux server」（受保护；HTTP 契约逐字固定，见「聋 server 健康/自愈/孤儿监控」）
 ├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP 转发 + P2 WS relay）
@@ -40,7 +41,10 @@ src/
 ├── engine/               # 会话引擎抽象层（D9）：SessionEngine trait + EngineRegistry 按 runtime_kind 路由
 │   ├── mod.rs            # SessionEngine trait / EngineRegistry / EngineSessionInfo / WatchTarget / WS attach 分发
 │   ├── pty_io.rs         # [platform] PTY 写 + 进程清理（引擎公共件）：write_pty, kill_session_process, kill_process_escalating
-│   ├── tmux/             # 冻结引擎边界（只修致命 bug 不加功能）：tmux 命令门面 / control mode / hook 注入 / pane 枚举 / attach WS
+│   ├── tmux/             # 冻结引擎边界（只修致命 bug 不加功能；P0-1/P0-2/P1-3 按致命 bug 豁免）：tmux 命令门面 / control mode / hook 注入 / pane 枚举 / attach WS
+│   │   ├── control_mode.rs # tmux -C 控制连接 ControlModeClient：spawn（PDEATHSIG + 长寿命 spawn 线程边界）/ stop() / Drop + 常驻收割任务 + 登记挂接
+│   │   ├── client_registry.rs # tmux -C 客户端登记表（~/.omniterm/<实例>-<pid>.clients，MAX_TRACKED_CLIENTS=256）+ 启动对账杀孤儿（pidfd + 三元组谓词）
+│   │   └── engine.rs / mod.rs / terminal_ws.rs / agent_hooks.rs / watch_source.rs # 门面 / pane 枚举 / attach WS / hook 注入 / watch 源
 │   └── pty/              # 自管 pty 引擎（Phase 2）：常驻会话 map + 补屏环 + alacritty_terminal VT grid
 │       ├── mod.rs        # PtyEngine（SessionEngine 实现）：spawn/读循环/广播订阅/去抖落盘/cwd 采样回写后台任务
 │       ├── agent_events.rs # hook 信道状态库（D7）：会话 token 注册表 + 上报 KV（有界）+ watch 门铃 + HookAuthority 新鲜度窗口
@@ -62,6 +66,8 @@ src/
 ├── git/
 │   ├── mod.rs            # Git worktree discovery
 │   └── repo.rs           # Git panel service: status(porcelain v2)/diff/log/show/branches/stage/unstage/commit/discard/checkout/push/pull/fetch via git CLI subprocess (no git2)
+├── health/               # 引擎无关 tmux server 健康模块（P1-1/P1-2，ADR D4 不解冻引擎）：classify 四态分类纯函数 / probe 30s 探针 / heal 内建自愈「重建 tmux server」/ orphan 孤儿堆积监控 / test_support 测试 fixture（仅 cfg(test)）
+├── process_identity.rs   # [platform] 进程身份真源：pid/ppid/start_key/argv 四元组 + 防 PID 复用误杀谓词（argv 结构化相等，拒绝子串匹配）+ pidfd kill；消费方 agent_proc / client_registry / main.rs Stop / dev.sh 镜像 / health/*
 ├── ws/
 │   ├── mod.rs
 │   ├── terminal.rs       # 终端 WS 入口：共享协议类型（ClientControl/ServerControl）+ 按 runtime_kind 分发到 engine/*/terminal_ws
@@ -301,6 +307,8 @@ GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / w
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min；附 container/pending_restart 标记）
 POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400；成功后标记待重启）
 POST /api/v1/system/restart           # 手动重启（Unix 调度 ACP 回收并 exec 新二进制替换）
+GET  /api/v1/tmux/health              # tmux server 健康快照（受保护）：{state: healthy|no_server|deaf|other, consecutive_deaf, last_deaf_at, orphan_count, orphan_warn_threshold, probe_interval_secs}——聋 server 检测 + 孤儿监控，见「聋 server 健康/自愈/孤儿监控」
+POST /api/v1/tmux/rebuild             # 内建自愈「重建 tmux server」（受保护）：200 {ok, server_pid, socket_removed, detail}；409 {error: not_deaf|heal_in_progress}；500 {error: <原因>}——重探针 + 单飞保证幂等，非聋拒绝执行
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
 POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
 ANY  /proxy/{port}/{*path}           # 端口转发反向代理（与 /api/v1 平级挂载，D1 禁止套进 /api/v1）；见「Port-forward proxy」小节
@@ -626,6 +634,53 @@ resolve-or-create。Phase 4 将把前端创建入口默认翻转为 `'pty'`。
 **psmux 链式命令行为差异（Windows，踩坑）**：Windows 上 tmux 由 psmux 平替（winget 安装同时提供 `tmux.exe`/`psmux.exe`/`pmux.exe` 三个别名，`-V` 均输出 `tmux 3.3.6`，无法在运行时靠 binary 名或版本号区分实现）。真 tmux 的 `;` 链式多命令执行完后照常进入交互 attach；**psmux 一旦命令行含多条命令就进入一次性命令模式，执行完直接 exit 0，不 attach**——终端只剩 "attached" 提示、无 shell 输出。因此 `build_tmux_attach_cmd` 按平台 cfg 拆分：windows 版只跑纯 `new-session -A -s <name>`（create-or-attach 语义 psmux 支持正常），escape-time 改由 attach 前单独一次性 `tmux set-option -s escape-time 10` 设置（fail-silent；一次性 psmux 命令实测 ~40ms，故 fire-and-forget 不阻塞 attach，且成功一次后用进程内 AtomicBool 缓存跳过——escape-time 是 server 级持久选项）。另：psmux attach 时会先发 DSR 光标探针 `\x1b[6n` 并等待终端回复（xterm.js 会自动回 `\x1b[1;1R`），在非交互管道下 attach 类命令只打印版本号即退出，诊断时必须走真实 ConPTY 链路。
 
 **Windows 会话切换延迟基线**：每次切换 = 新建 WS + 重新 spawn psmux client。实测分解：ConPTY openpty ~8ms、spawn ~26ms、attach 首字节 ~18ms、DSR 探针往返 + 全屏重绘 ~45-140ms，合计 ~100-200ms（Linux+tmux 全链路 <10ms，故 `[已连接]` 横幅在 Linux 上瞬间被重绘覆盖无感知，Windows 上可见短暂停留）。这部分是 Windows 进程创建 + psmux 重绘的固有成本，进一步优化需要保活 client/连接池（属 pty-engine 计划 Phase 5 范围，不在 tmux 冻结代码内做）。
+
+## tmux control-mode 子进程生命周期与假死防护（2026-09-22）
+
+背景事故与修复计划：`docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md`（实施偏差见其「实施勘误」章）。落点约束：P0-1/P0-2/P1-3 按「致命 bug 修复」豁免进 `src/engine/tmux/`；探测/分类/自愈/监控落引擎无关的 `src/health/`（ADR D4，冻结边界不解冻）。
+
+### control-mode 子进程生命周期（PDEATHSIG + spawn 线程边界）
+
+每个 tmux 终端 WS 的活动监控连接 spawn 一个 `tmux -C attach-session` 子进程（`ControlModeClient::spawn_client`，`src/engine/tmux/control_mode.rs`）：
+
+- **PDEATHSIG（Linux）**：spawn 前 `pre_exec` 挂 `prctl(PR_SET_PDEATHSIG, SIGKILL)` + `getppid()` 复查（fork→prctl 竞态窗口内父已亡则 `_exit(1)`）——父进程死亡（崩溃 / panic-abort / SIGKILL）时**内核直接杀子**，覆盖 `stop()`/`Drop` 到不了的路径。pre_exec 闭包 async-signal-safe。
+- **fork/exec 固定在长寿命 spawn 线程 `omniterm-tmux-spawn`**（`control_mode.rs::spawn_thread`）：PDEATHSIG 语义跨内核有差异——本机 kernel 7.0 实测**进程退出**触发，man prctl / kernel.org #43300 / dotnet/runtime#96470 记载按**创建线程**终止触发；spawn 边界钉在不随调用方消亡的线程上，「线程死亡不误杀」是结构保证而非纪律约定。**禁止**包 `spawn_blocking`（阻塞池线程空闲 ~10s 退役，会在按线程触发的内核上误杀活客户端）。spawn 点留 VERIFIED 注释（integration-checklist A.1/A.2）。
+- **注册/注销挂 spawn / reap / stop 三路径**：spawn 成功即登记；常驻收割任务（`reap_child`，`Child` 句柄唯一所有者，P2-2）观测到子进程退出即注销；`stop()` 收尾注销（覆盖 `ensure_session` 死连接重建的替换路径）。按 pid 幂等，实例内死条目不滞留。
+- **pty 子进程不做 PDEATHSIG（D1）**：父死时 pty master 全关触发 pty(7) 可捕获 SIGHUP，保留用户 shell/agent 收尾机会；SIGKILL 会把可收尾挂断升级为不可捕获强杀。
+- 与常驻收割任务兼容：PDEATHSIG 只在父进程/线程死亡时触发；存活期子进程被杀/自退仍由收割任务恰好 `wait` 一次，不产生新僵尸。
+
+### 登记表与启动对账（`engine/tmux/client_registry.rs`）
+
+- 登记载体：`~/.omniterm/<实例>-<pid>.clients`（tmp+rename 原子写；实例 = 生效 db stem，即 dev.sh 的 `BRANCH_BINARY_NAME`）；启动扫描该目录下**全部**登记文件（覆盖上一实例与跨实例残留，D2），优雅退出删自己的文件（挂显式 shutdown 路径、不挂 Drop），孤儿登记文件超期回收（内容已空 ∧ 文件名实例 pid 已死 ∧ ≥300s）。不落 DB。
+- 登记内容 `(pid, spawn_ppid, start_key, session)`；**上限 `MAX_TRACKED_CLIENTS=256`**（session 名 ≤255 字节 UTF-8 边界截断，文件总量有界）。超限策略：先清已死条目，仍满则拒登新 spawn + WARN 降级——父死兜底是 PDEATHSIG，登记缺失不构成泄漏。
+- 启动对账 kill 谓词（`is_orphaned_tracked_client`，与 `process_identity` 共享真源）：argv 结构化 `["tmux","-C"]`（逐元素前缀相等，拒绝子串匹配——`vim 'tmux -C.md'` 不命中）∧ 当前 ppid ≠ spawn_ppid（**不用「PPID=1」**——孤儿可能被 subreaper 收养）∧ start_key 未变（PID 复用检测；变了安全跳过不误杀）。击杀走 pidfd SIGKILL（内核级免疫 PID 复用，收口 check-then-kill 的 TOCTOU）；非 Linux 回退 `kill(2)` + 谓词复查。
+
+### 聋 server 健康 / 自愈 / 孤儿监控（`src/health/`）
+
+「聋 server（deaf server）」= `server_exit=1` 且事件循环存活、accept 后立即 close 的半死态（所有新 tmux 命令报 `server exited unexpectedly`，无人值守下无限期持续）。
+
+- **四态分类**（`classify.rs` 纯函数，判定唯一真源）：`Healthy / NoServer / Deaf / Other`。只有 `Deaf` 允许触发自愈；`Other`（EACCES / socket 属主冲突 / tmux 缺失 / psmux 等其余失败）一律不动——误分类的尾部风险是 SIGKILL 健康 server、毁掉全部会话。**签名只判 stderr**：stdout 是会话列表数据通道，会话名可含签名串，stdout 子串匹配会把健康 server 误判成聋（自愈误杀入口）。
+- **30s 探针**（`probe.rs`，`DEAF_PROBE_INTERVAL=30s`）：`tmux list-sessions` + 失败可疑时 socket 探针复核（connect 后立即 EOF = Deaf 签名；阻塞无输出 = 正常——握手由客户端先发；拒绝/文件不存在 = NoServer；其余 = Inconclusive 不作自愈依据）。连续 `DEAF_CONFIRM_COUNT=3` 次 Deaf 才告警立哨，此后第 3/6/9… 次复告（持续聋不能只留一条告警沉进日志海）。
+- **内建自愈「重建 tmux server」**（`heal.rs`，ADR D3）流程（顺序即安全顺序）：**单飞锁（try_lock 失败立即 409 `heal_in_progress`）→ 当场重探针确认仍聋（否则 409 `not_deaf`）→ `/proc/net/unix` St=01 LISTEN 行反查 socket inode（同 Path 的 St=03 已连接行必须过滤）→ 扫 `/proc/<pid>/fd` 找 `socket:[inode]` 属主 + `readlink /proc/<pid>/exe` 基名 == `tmux` 复核身份（cmdline 会被 setproctitle 改写，只认 exe）→ SIGKILL → 删 stale socket** → 下一条 tmux 命令自动重建（tmux 自身行为）。找不到属主 / 身份复核不过 / inode 多属主（>1 个 exe==tmux）一律**放弃击杀**（绝不猜 PID）；删 socket 失败不回滚击杀（200 + `socket_removed:false`）。幂等论证：单飞 + 重探针保证并发双击/多标签重复触发不会命中已自动重建的健康新 server。全程结构化 info 日志——自愈是 omniterm 唯一向 tmux server 发信号的路径（计划 §8 例外），日志是事后取证唯一线索。
+- **孤儿堆积监控**（`orphan.rs`，P1-2 先兆指标）：已登记条目走同一孤儿谓词（argv 结构化 ∧ ppid≠spawn_ppid ∧ start_key 未变）；未登记进程走近似谓词（argv 结构化 ∧ ppid==1）——**subreaper 盲区**如实注明（被 subreaper 收养的未登记孤儿会漏计，只少计不误计；计划原文要求的「socket 归属反查」实测不可实现，`/proc/net/unix` 已连接客户端侧条目无 Path）。`ORPHAN_WARN_THRESHOLD=5`，超阈值**且较上轮增长**才 WARN（防刷屏）。
+- **状态语义**：`consecutive_deaf`（非 Deaf 清零，饱和封顶 `CONSECUTIVE_DEAF_CAP=u32::MAX` 不回绕）承担「进行中」；`last_deaf_at` = 最后一次判聋时刻、恢复后粘滞保留（历史标记）。
+- 判定纯函数落 `health/classify.rs`，`engine/tmux/mod.rs::list_sessions` 反向依赖 `health::classify`——叶子工具层依赖（与 `process_identity` 同模式），未解冻冻结边界。周期任务刻意**不与** `agent/watch.rs`（1s）合流（评估结论见计划实施勘误 ⑱）。
+
+### tmux `list_sessions` 失败语义收窄（S2 禁吞异常）
+
+`engine/tmux/mod.rs::list_sessions` 失败分支判定真源 = `health::classify::classify_list_sessions_failure`（只查 stderr）：stderr 含聋签名 ⇒ 上抛 Err（**不再吞成空态**——旧判据「no server running ∨ stdout 为空 ⇒ 无会话」恰好被聋 server 命中，正是事故的 S2 吞异常点）；stderr 含 `no server running` ⇒ 空态；**空 stdout 且无签名 ⇒ 空态**（保留的 psmux 多实现行为，见下表）；其余 ⇒ Err。注意与四态分类的分工：探针侧「失败 + 空 stdout 无签名」归 `Other`（可被 socket 探针实锤升级），`EmptyStdout` 只存在于 `list-sessions` 空态收窄这一个函数。
+
+### 多实现/平台差异表（AGENTS §8）
+
+| 维度 | 差异 | 兜底 |
+|---|---|---|
+| PDEATHSIG | `prctl(2)` 仅 Linux；macOS/Windows 无等价物 | 启动对账（登记表）兜底清孤儿；孤儿监控可观测堆积 |
+| PDEATHSIG 触发语义 | kernel 7.0 实测 = 进程退出触发；man prctl / kernel.org #43300 / dotnet/runtime#96470 = 创建线程触发，跨内核不可依赖 | fork/exec 固定长寿命 spawn 线程 `omniterm-tmux-spawn`，两种语义下均安全 |
+| 进程身份来源 | Linux `/proc`（stat + cmdline，实测口径）/ 其余 Unix `ps -o pid=,ppid=,lstart=,args=`（`args=` 丢失 argv 边界，弱匹配；macOS 未实测）/ Windows `sysinfo`（start_time 秒级；未实测） | 身份读不到一律 fail-closed（不发信号 / 跳过击杀 / 视为未运行） |
+| socket 健康探针 | Windows（psmux）无 unix domain socket 路径语义 | 探针降级 `Inconclusive` + 一次性 WARN，不作自愈依据 |
+| heal inode 反查 | `/proc/net/unix` + `/proc/<pid>/fd` 仅 Linux；macOS/Windows 不可用 | WARN + 500 **拒绝击杀**（不猜 PID）——已知限制见 `docs/reference/user-testing.md` §19 |
+| `list-sessions` 空 stdout | psmux/Windows 可能以非零退出 + 空 stdout 表示无会话（Windows 行为未验证，标注「不确定」） | 判定真源保留 `EmptyStdout` 空态；聋签名仍压过它 |
+| `TMUX_TMPDIR` 与 socket 解析 | **未确证**：tmux(1) 文档口径说 `<TMUX_TMPDIR\|/tmp>/tmux-<uid>/default`；本机 tmux 3.4 实测疑似忽略该变量 | 按文档口径实现 env 覆盖；路径推错最坏退化为 socket 探针证据缺失（`Inconclusive`/`NoServer`），分类主判据是 stderr 签名，不会把非聋判成聋 |
 
 
 ## Agent 屏幕状态检测（agent_watch / agent_detect）

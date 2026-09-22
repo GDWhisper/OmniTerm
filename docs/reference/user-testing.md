@@ -831,6 +831,7 @@ FRONTEND_DIR=frontend/dist
 | T35 | 键盘收起恢复 | 软键盘收起 | 布局恢复全屏，无底部裁切/残留偏移 |
 | T36 | 横屏键盘隐藏 KeyBar（resizes-content 回归） | 横屏 + 弹出软键盘 | MobileKeyBar 自动隐藏（keyboardOpen 收缩检测双端生效） |
 | T37 | pty 帧渲染视觉确认 | 跑 §4.6 的 V1–V11 命令组 | 颜色/宽字符/emoji/组合音标/行尾空格/TUI/滚动/重连/上翻不冻结全部观感正常 |
+| T38 | tmux 假死检测 + 重建 | 跑 §19（mock health 为 deaf×3 → 点「重建 tmux server」） | 告警横幅 + 按钮出现；成功 toast + 告警收敛；409 两分支文案正确 |
 
 ---
 
@@ -1281,6 +1282,60 @@ FRONTEND_DIR=frontend/dist
 | 勾选当前正在查看的会话执行任一操作 | 操作后主视图切回空态，无残留请求错误 |
 | 执行过程中按 Esc / 点弹窗外 | 弹窗不关闭（防误触），直到执行完成 |
 | 操作完成后 | 列表刷新、选择模式退出；归档操作同步「已归档」区块 |
+
+---
+
+## 19. tmux server 假死检测 + 重建（2026-09-22）
+
+> 触发条件：改动 `src/health/`、`src/api/tmux_health.rs`、`frontend/src/components/TmuxHealthAlert/` 后，或排查「tmux 命令报 `server exited unexpectedly`」之后。
+>
+> ⚠ **安全护栏**：任何制造/模拟聋态的实验**只允许在私有 socket 上做**（如 `tmux -L omniterm_test_$$`），**禁止拿默认 socket（`/tmp/tmux-<uid>/default`）做实验**——误动默认 socket 上的真实 tmux server 会一次性丢掉全部 tmux 会话（实现期已有一次同类疑似误杀事故，见计划实施勘误 ㉔）。仅验证告警 UI 路径时用**前端 mock** 即可，不碰真实 tmux。
+
+**A. 告警横幅 + 重建按钮（前端 mock，推荐）**
+
+把 `GET /api/v1/tmux/health` mock 为 `{"state":"deaf","consecutive_deaf":3,"last_deaf_at":…,"orphan_count":0,"orphan_warn_threshold":5,"probe_interval_secs":30}`（fixture 可参照 `TmuxHealthAlert.test.tsx`）。
+
+**验证点：**
+- [ ] 页面顶部出现全局告警横幅（⚠ + 「检测到 tmux server 假死（聋 server）」）+「重建 tmux server」按钮，桌面/移动/侧栏折叠态均可见
+- [ ] 横幅正文明示告知：重建将强制结束假死的 server，**旧 server 中的 tmux 会话会丢失**
+- [ ] `consecutive_deaf` 为 1 或 2 时**不告警**——连续 3 次 Deaf 才告警（防单次探测抖动误报）
+- [ ] `state=other` 只显示轻量提示、无重建按钮；`healthy` / `no_server` 完全静默
+
+**B. 点重建：成功路径（mock `POST /tmux/rebuild` 200 `{ok:true,…}`）**
+
+1. 点击「重建 tmux server」
+
+**验证点：**
+- [ ] 按钮变「重建中…」并禁用（防双击连发）
+- [ ] 成功 toast「tmux server 已重建」；health 立即刷新（不等下一轮 10s 轮询），mock 恢复 healthy 后横幅自动消失
+
+**C. 409 / 500 分支文案**
+
+| mock 返回 | 预期 |
+|------|------|
+| 409 `{"error":"not_deaf"}` | info toast「tmux server 已恢复，无需重建」+ 刷新 health，**不自动重试**（下一发可能命中健康新 server） |
+| 409 `{"error":"heal_in_progress"}` | info toast「重建进行中」，不重试轰炸 |
+| 500（含其它网络失败） | error toast「重建 tmux server 失败: <error 串>」 |
+
+**D. 孤儿堆积提示（可选）**
+
+- [ ] mock `orphan_count > orphan_warn_threshold` → 横幅出现风险提示行（含计数与警戒线），**无操作按钮**；与 deaf 告警可同屏
+- [ ] `orphan_count == orphan_warn_threshold` → 不提示（严格大于才提示）
+
+**E. 真实自愈链路（仅确认真实聋态后执行；护栏见本节顶部）**
+
+真实聋态判据：`tmux ls` 稳定在数毫秒内报 `server exited unexpectedly`，且 socket 探针 connect 成功后**立即 EOF**（诊断命令见 `docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md` 附录 A）。确认后点「重建 tmux server」：
+
+- [ ] toast 成功；下一条 tmux 命令自动拉起新 server（`tmux ls` 恢复正常；旧 server 的会话全部消失——横幅已提前告知，属预期）
+- [ ] 若 server 在点击前已自行恢复 → 409「tmux server 已恢复，无需重建」，不误杀健康新 server
+
+**已知限制（本用例相关）：**
+
+| 限制 | 表现 | 说明 |
+|------|------|------|
+| macOS/Windows 自愈拒绝击杀降级 | 点重建返回 500（后端 WARN 留痕），不杀任何进程 | 无 `/proc` 的平台做不了 socket inode 归属反查，保守放弃击杀（绝不猜 PID）；告警横幅照常出现 |
+| Windows socket 探针降级 | 健康探测的 socket 复核恒 `Inconclusive` | psmux 无 unix socket 路径语义，仅命令失败语义可用 |
+| `last_deaf_at` / `probe_interval_secs` 已入类型暂无 UI 展示 | 界面不显示 | 仅 `GET /api/v1/tmux/health` 可见（见计划实施勘误 ㉓） |
 
 ---
 
