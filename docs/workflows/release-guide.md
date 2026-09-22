@@ -419,6 +419,8 @@ ls node_modules/@gdwhisper/ && ./node_modules/@gdwhisper/omniterm-<本机 plat>/
 
 **禁止**：为让 CI 变绿而修改/移动已推送的 tag（已发布产物会与 tag 内容不一致）；删除远端 tag（Release 会转 draft，见下节）。
 
+**唯一例外（2026-09-22 v0.2.24 勘误）**：tag 推出后发现**阻塞性构建失败**（实例：`agent_proc` 的 pid 捕获门控写 `unix && linux` 而调用点门控是 `unix`，macOS job 必然 E0425；本地/CI 全是 Linux 从未暴露），且修复必须改 tag 内容时——若 **Release 未创建、npm/Docker 未发布、crates.io 未 publish**（`github-release` 之前失败即零产物），上述两条禁令的理由（产物与 tag 不一致、Release 转 draft）均不成立，**经用户确认**可删除并重推同名 tag。零产物之外的任何情形仍一律禁止。前置教训：判断 release run 结论**勿用 `gh run watch ... | tail` 的管道退出码**（tail 恒 0，会把 failure 当成功，本次实测）——用 `gh run view <id> --json conclusion` 或先落文件再判 `$?`。
+
 ### 公共仓 tag 误推送到私有仓
 
 每次推 tag 前先确认 remote：
