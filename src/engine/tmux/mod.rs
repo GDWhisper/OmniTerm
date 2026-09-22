@@ -1,4 +1,5 @@
 pub mod agent_hooks;
+pub mod client_registry;
 pub mod control_mode;
 pub mod engine;
 pub mod terminal_ws;

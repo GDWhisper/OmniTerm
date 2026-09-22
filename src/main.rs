@@ -8,6 +8,7 @@ mod fs;
 mod git;
 mod models;
 mod presets;
+mod process_identity;
 mod proxy;
 
 mod update;
@@ -227,7 +228,7 @@ fn binary_name() -> String {
 
 /// OmniTerm 用户数据目录 `~/.omniterm`（HOME/USERPROFILE 缺失时回退 `.`，与既有约定一致）。
 /// db、jwt_secret、daemon 日志统一落盘于此，避免数据与日志分家。
-fn omniterm_data_dir() -> PathBuf {
+pub(crate) fn omniterm_data_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".into());
@@ -878,6 +879,20 @@ fn main() -> anyhow::Result<()> {
 
             let pid_file = pid_path(&db_url);
 
+            // P0-2 启动对账（docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md）：
+            // ① 控制客户端登记表挂到本实例（`<stem>-<pid>.clients`，stem 即实例
+            // 身份 = dev.sh 的 BRANCH_BINARY_NAME）；② 扫描**全部**登记文件，杀掉
+            // 上一实例/跨实例崩塌残留的 tmux -C 孤儿客户端（pidfd + 三元组谓词，
+            // 见 `engine/tmux/client_registry.rs`）。
+            let client_registry = engine::tmux::client_registry::init_global(
+                &instance_id(&db_url),
+                std::process::id(),
+            );
+            let reconcile_report = engine::tmux::client_registry::reconcile_all();
+            if reconcile_report != Default::default() {
+                info!(?reconcile_report, "启动对账完成：清理 tmux -C 孤儿控制客户端");
+            }
+
             // 端口转发反向代理客户端：连接超时 5s（连接拒绝/超时快速失败），
             // 不设整体读超时——SSE/长连接/大文件下载需要长生命周期（D5）。
             let proxy_client = reqwest::Client::builder()
@@ -1022,6 +1037,7 @@ fn main() -> anyhow::Result<()> {
             // 随后 axum 进入优雅关闭。注意：SIGKILL / panic / 崩溃来不及运行，
             // 这类场景产生的孤儿仍需下次启动时由用户手动清理或恢复。
             let shutdown_supervisor = state.acp_supervisor.clone();
+            let shutdown_registry = client_registry.clone();
             let shutdown_signal = {
                 let shutdown_pid = pid_file.clone();
                 async move {
@@ -1042,6 +1058,10 @@ fn main() -> anyhow::Result<()> {
                     }
                     info!("shutdown signal received, recycling ACP agent subprocesses");
                     shutdown_supervisor.shutdown_all().await;
+                    // P0-2 优雅退出注销：删本实例的登记文件（显式 shutdown 路径，
+                    // 不挂 Drop——axum 关闭是否 drop AppState 未验证；漏删也会被
+                    // 下次启动对账幂等收敛）。
+                    shutdown_registry.remove_file();
                     let _ = std::fs::remove_file(&shutdown_pid);
                 }
             };

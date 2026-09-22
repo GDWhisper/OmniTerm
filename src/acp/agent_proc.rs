@@ -299,28 +299,23 @@ fn select_new_child_pid(new_pids: &[u32], workspace: &Path) -> Option<u32> {
 // 进程组击杀（D2）
 // ---------------------------------------------------------------------------
 
-/// pid 是否仍是 omniterm 的直接子进程（读 `/proc/<pid>/stat` 第 4 字段 ppid）。
+/// pid 是否仍是 omniterm 的直接子进程（ppid == 本进程）。
 /// agent 经 `exec` 后同 pid 仍是直接子进程；已退出并被 reap 后读不到 → false。
+///
+/// ppid 读取走 [`crate::process_identity`] 共享真源（AGENTS 工程准则 7①：与
+/// tmux 控制客户端登记表对账、pidfile kill 校验同型「防 PID 复用误杀」判断，
+/// 勿再各自解析 `/proc/<pid>/stat`）。
 #[cfg(all(unix, target_os = "linux"))]
 fn is_direct_child(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
-    // comm 字段可能含空格/括号，先 rsplit 到最后一个 ')' 再按空白切分；
-    // 其后第 1 个字段是 state，第 2 个是 ppid（与 agent/process.rs 同口径）。
-    let Some(after_comm) = stat.rsplit_once(')') else {
-        return false;
-    };
-    after_comm.1.split_whitespace().nth(1).and_then(|ppid| ppid.parse::<u32>().ok())
-        == Some(std::process::id())
+    crate::process_identity::process_identity(pid)
+        .is_some_and(|ident| ident.ppid == std::process::id())
 }
 
 /// 进程是否仍存活（僵尸也算存活——未被收割前 pid 还在）。
 /// EPERM 表示进程存在但无权限发信号，同样视为存活。
 #[cfg(all(unix, target_os = "linux"))]
 fn pid_alive(pid: u32) -> bool {
-    let r = unsafe { libc::kill(pid as i32, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    crate::process_identity::pid_alive(pid)
 }
 
 /// 进程组是否仍有成员（`kill(-pgid, 0)`：ESRCH = 组已空）。
