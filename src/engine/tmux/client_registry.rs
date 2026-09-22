@@ -198,8 +198,7 @@ impl ClientRegistry {
         }
     }
 
-    /// 当前登记快照（孤儿监控/诊断读口）。
-    #[allow(dead_code)] // 待接线：P1-2 孤儿监控（见 docs/dev/plans/backlog/dead-code-triage.md）
+    /// 当前登记快照（P1-2 孤儿监控读口，`health/orphan.rs` 消费）。
     pub fn entries(&self) -> Vec<ClientEntry> {
         self.inner.entries.lock().expect("登记表锁中毒").clone()
     }

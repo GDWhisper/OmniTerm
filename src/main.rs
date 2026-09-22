@@ -6,6 +6,7 @@ mod embedded;
 mod engine;
 mod fs;
 mod git;
+mod health;
 mod models;
 mod presets;
 mod process_identity;
@@ -941,6 +942,11 @@ fn main() -> anyhow::Result<()> {
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，
             // 识别 Claude/Codex/Qoder 的 Running/Waiting/Idle 状态（herdr 借鉴，见 docs/reference/herdr-reference.md）。
             agent::watch::spawn(state.engines.watcher().clone(), state.engines.clone());
+
+            // P1-1/P1-2（docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md）：
+            // 聋 server 检测 + 内建自愈 + 孤儿堆积监控（引擎无关健康模块，ADR D4）。
+            health::init_global();
+            health::spawn_monitor();
 
             // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
             // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。idle 阈值经

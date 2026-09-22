@@ -11,6 +11,7 @@ pub mod sessions;
 pub mod settings;
 pub mod system;
 pub mod targets;
+pub mod tmux_health;
 
 use crate::AppState;
 use crate::ws;
@@ -34,6 +35,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(files_watch::routes())
         .merge(git::routes())
         .merge(agents::routes())
+        .merge(tmux_health::routes())
         .route("/ws/terminal/{session_id}", axum::routing::get(ws::ws_terminal_handler))
         .route(
             "/ws/terminal/external/{tmux_name}",

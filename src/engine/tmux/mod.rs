@@ -204,12 +204,21 @@ pub async fn list_sessions() -> Result<Vec<EngineSessionInfo>> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout_str = String::from_utf8_lossy(&output.stdout);
-        // "no server running" or empty output means no sessions — not an error.
-        // psmux on Windows may exit non-zero with empty stdout when no sessions exist.
-        if stderr.contains("no server running") || stdout_str.trim().is_empty() {
-            return Ok(vec![]);
-        }
-        return Err(anyhow!("tmux list-sessions failed: {}", stderr));
+        // 空态收窄（判定真源 `crate::health::classify::classify_list_sessions_failure`，
+        // S2 禁吞异常）：stderr 含聋签名（"server exited unexpectedly"）必须上抛
+        // Err（携带 stderr，供上层分类为 Deaf）——旧判据「no server running ∨ stdout
+        // 为空 ⇒ 无会话」会把聋 server 吞成空态；`no server running` ⇒ 空态；
+        // 「stdout 为空且无签名」⇒ 空态（**保留**的多实现差异，工程准则 8：
+        // psmux/Windows 可能以非零退出 + 空 stdout 表示无会话；Windows 行为未
+        // 验证，标注「不确定」）；其余 ⇒ Err。
+        return match crate::health::classify::classify_list_sessions_failure(&stdout_str, &stderr) {
+            crate::health::classify::ListSessionsFailure::Deaf
+            | crate::health::classify::ListSessionsFailure::Other => {
+                Err(anyhow!("tmux list-sessions failed: {}", stderr))
+            }
+            crate::health::classify::ListSessionsFailure::NoServer
+            | crate::health::classify::ListSessionsFailure::EmptyStdout => Ok(vec![]),
+        };
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
