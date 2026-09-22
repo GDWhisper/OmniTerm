@@ -300,7 +300,9 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
 }
 
 async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let Ok(guard) = UPDATE_LOCK.try_lock() else {
+    // 仅 unix 分支在 spawn 的任务里移动持有此锁（防重启竞态），Windows 分支
+    // 不使用——下划线命名让无锁分支不产生 unused 警告（发版 Windows job 实测）。
+    let Ok(_guard) = UPDATE_LOCK.try_lock() else {
         return (StatusCode::CONFLICT, Json(json!({ "error": "update already in progress" })));
     };
 
@@ -322,7 +324,7 @@ async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>)
 
         let supervisor = state.acp_supervisor.clone();
         tokio::spawn(async move {
-            let _guard = guard;
+            let _guard = _guard;
             tokio::time::sleep(RELAUNCH_DELAY).await;
             if tokio::time::timeout(RELAUNCH_SHUTDOWN_TIMEOUT, supervisor.shutdown_all())
                 .await
