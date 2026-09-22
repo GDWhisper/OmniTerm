@@ -28,7 +28,10 @@
 //!
 //! Writes are debounced: the fold path only flags dirty and pings a dedicated writer
 //! task, which coalesces bursts (trailing debounce + max-latency cap) so a high chunk
-//! rate maps to a few SQLite writes per second.
+//! rate maps to a few SQLite writes per second. The one command that must never be
+//! coalesced away — [`WriterCmd::EndTurn`], the non-idempotent finalize transition —
+//! travels a separate unbounded channel ([`Sink::end_tx`]) so a saturated signal queue
+//! can never silently drop it.
 //!
 //! The accumulator is also the **single accounting point for turn work time**: turn
 //! duration (`work_ms`) and permission-wait time (`wait_ms`) are measured here, on the
@@ -280,14 +283,30 @@ impl BoundedText {
 /// DB destination for persistence. Absent until [`TurnAccumulator::attach_persistence`]
 /// — capability-probe clients never attach, so their folds are in-memory no-ops.
 struct Sink {
+    /// `Flush` 信号通道（有界、可丢）：writer 只需知道"有活没干"，满队列本身就是
+    /// 待办信号，丢一个 ping 无损——防抖语义本来就会合并。
     cmd_tx: mpsc::Sender<WriterCmd>,
+    /// `EndTurn` 专用通道（无界、可靠）。定稿跃迁**不是**可合并信号：丢了就同时丢
+    /// 会话级记账（`turn_count`/`work_ms`/`wait_ms`）与消息行定稿（行永久停在
+    /// `streaming`），且无日志——UI 侧仍显示耗时（`turn_timing` 读发送前就写好的
+    /// `last_timing`），DB 与界面静默分叉。故不共享 `cmd_tx` 的余量：高帧率折叠能在
+    /// writer 一次 DB 写内塞满 `WRITER_CHANNEL_CAPACITY`，`try_send` 届时静默失败
+    /// （2026-09-21 审查发现的缺口，回归测试钉住）。
+    ///
+    /// 无界在此是安全的（§P1）：条目速率 = turn 速率（人工发起），writer 存活时积压量
+    /// ≈ 停滞时长 ÷ turn 间隔 × 定稿载荷（百字节级）；writer 死亡则通道关闭，`send`
+    /// 返回 Err 并记 WARN——不会无限增长，也不会静默。
+    end_tx: mpsc::UnboundedSender<WriterCmd>,
 }
 
 enum WriterCmd {
+    /// 防抖信号：只表达"该写了"。满队列时可丢——队列里已有待办信号，防抖语义
+    /// 本来就会合并（`send_cmd` 的 try_send 注释）。
     Flush,
-    /// turn 已定稿：落该 turn 的时长。无条件发出（不要求 `row_id`）—— 一帧未发的空 turn
-    /// 同样消耗了时间，会话级累计不能因为它缺一格 `turn_count`；`row_id` 只决定消息行
-    /// 那半边写不写。
+    /// turn 已定稿：落该 turn 的时长。经 [`Sink::end_tx`] **可靠投递**（可丢的
+    /// `Flush` 信号通道不承载它），不要求 `row_id` —— 一帧未发的空 turn 同样消耗了
+    /// 时间，会话级累计不能因为它缺一格 `turn_count`；`row_id` 只决定消息行那半边
+    /// 写不写。
     EndTurn(TurnTiming),
 }
 
@@ -331,11 +350,12 @@ impl TurnAccumulator {
     /// call replaces the sink and spawns a new writer (not expected in practice).
     pub fn attach_persistence(self: &Arc<Self>, db: SqlitePool, db_session_id: String) {
         let (cmd_tx, cmd_rx) = mpsc::channel(WRITER_CHANNEL_CAPACITY);
+        let (end_tx, end_rx) = mpsc::unbounded_channel();
         if let Ok(mut guard) = self.sink.lock() {
-            *guard = Some(Sink { cmd_tx });
+            *guard = Some(Sink { cmd_tx, end_tx });
         }
         let acc = self.clone();
-        tokio::spawn(writer_loop(acc, db, db_session_id, cmd_rx));
+        tokio::spawn(writer_loop(acc, db, db_session_id, cmd_rx, end_rx));
     }
 
     /// Open a new turn. Resets per-turn state; `seq` stays monotonic.
@@ -486,9 +506,11 @@ impl TurnAccumulator {
             st.last_timing = Some(timing.clone());
             timing
         };
-        self.send_cmd(WriterCmd::EndTurn(timing));
+        self.send_end_turn(timing);
     }
 
+    /// `Flush` 信号：best-effort。writer 只需知道有活没干，满队列本身就是待办信号
+    /// （防抖语义合并），通道关闭（sink 被替换 / client 已释放）则无需再写。
     fn send_cmd(&self, cmd: WriterCmd) {
         if let Ok(guard) = self.sink.lock()
             && let Some(sink) = guard.as_ref()
@@ -496,6 +518,20 @@ impl TurnAccumulator {
             // try_send: the writer only needs to know work is pending; a full queue
             // already has a pending signal, and a closed queue means no sink.
             let _ = sink.cmd_tx.try_send(cmd);
+        }
+    }
+
+    /// `EndTurn` 定稿跃迁：可靠投递。无界通道的 `send` 只在 writer 已消失时失败，
+    /// 此时必须留痕——定稿命令被静默丢弃会同时丢掉会话级记账与消息行定稿，而 UI 仍
+    /// 显示耗时（`turn_timing` 读发送前就写好的 `last_timing`），形成 DB 与界面静默
+    /// 分叉。曾经它与 `Flush` 共用一条 `try_send` 通道，信号通道被高帧率折叠塞满时
+    /// 被静默丢弃（2026-09-21 审查发现，回归测试钉住）。
+    fn send_end_turn(&self, timing: TurnTiming) {
+        if let Ok(guard) = self.sink.lock()
+            && let Some(sink) = guard.as_ref()
+            && let Err(e) = sink.end_tx.send(WriterCmd::EndTurn(timing))
+        {
+            tracing::warn!("turn EndTurn 无法送达（writer 已退出）: {}", e);
         }
     }
 
@@ -598,6 +634,20 @@ fn agent_message_text(update: &SessionUpdate) -> Option<&str> {
     None
 }
 
+/// 取下一条 writer 命令。`biased` 且 `end_rx` 优先：两条通道的 sender 同生命周期
+/// （同一个 `Sink`），但无界通道里可能还有缓冲的 `EndTurn` 未消费——若让先关闭的
+/// `cmd_rx` 返回 `None` 抢先结束循环，那条定稿命令就被丢在死通道里了。
+async fn next_cmd(
+    cmd_rx: &mut mpsc::Receiver<WriterCmd>,
+    end_rx: &mut mpsc::UnboundedReceiver<WriterCmd>,
+) -> Option<WriterCmd> {
+    tokio::select! {
+        biased;
+        end = end_rx.recv() => end,
+        flush = cmd_rx.recv() => flush,
+    }
+}
+
 /// Debounce writer: coalesces `Flush` pings into a bounded number of SQLite writes,
 /// and performs the final flush + row finalize + session work-time accumulation on
 /// [`WriterCmd::EndTurn`].
@@ -606,6 +656,7 @@ async fn writer_loop(
     db: SqlitePool,
     session_id: String,
     mut cmd_rx: mpsc::Receiver<WriterCmd>,
+    mut end_rx: mpsc::UnboundedReceiver<WriterCmd>,
 ) {
     // Instant of the first un-flushed fold in the current pending window.
     let mut pending_since: Option<Instant> = None;
@@ -620,7 +671,7 @@ async fn writer_loop(
             } else {
                 DEBOUNCE.min(MAX_LATENCY - elapsed)
             };
-            match tokio::time::timeout(wait, cmd_rx.recv()).await {
+            match tokio::time::timeout(wait, next_cmd(&mut cmd_rx, &mut end_rx)).await {
                 Err(_elapsed) => {
                     // Debounce window elapsed with pending work → write once.
                     flush_once(&acc, &db, &session_id).await;
@@ -631,7 +682,7 @@ async fn writer_loop(
                 Ok(Some(c)) => c,
             }
         } else {
-            match cmd_rx.recv().await {
+            match next_cmd(&mut cmd_rx, &mut end_rx).await {
                 Some(c) => c,
                 None => break,
             }
@@ -645,6 +696,10 @@ async fn writer_loop(
             }
             WriterCmd::EndTurn(t) => {
                 // 定稿前刷完最后的帧，使行内容与时长对应同一个 turn。
+                // 顺手消费已排队的 Flush 信号：它们要的"写一次"由下面这次 flush_once
+                // 完成（快照取的是活状态，是其超集），留着只会让定稿后再触发一次内容
+                // 相同的冗余写。
+                while cmd_rx.try_recv().is_ok() {}
                 flush_once(&acc, &db, &session_id).await;
                 pending_since = None;
                 let (work, wait) = (t.work_ms as i64, t.wait_ms as i64);
@@ -705,16 +760,19 @@ mod tests {
         (st.frames.len(), st.frames_bytes)
     }
 
-    /// 装一条内存命令通道代替真实 sink，捕获发给 writer 的 [`WriterCmd`] 而不触库。
-    /// 返回接收端；测试深度取 64，远超本模块测试产生的命令数。
-    fn capture_cmds(acc: &TurnAccumulator) -> mpsc::Receiver<WriterCmd> {
+    /// 装内存命令通道代替真实 sink，捕获发给 writer 的命令而不触库。返回
+    /// `(Flush 信号通道, EndTurn 通道)`；测试深度取 64，远超本模块测试产生的命令数。
+    fn capture_cmds(
+        acc: &TurnAccumulator,
+    ) -> (mpsc::Receiver<WriterCmd>, mpsc::UnboundedReceiver<WriterCmd>) {
         let (tx, rx) = mpsc::channel(64);
-        *acc.sink.lock().expect("sink lock") = Some(Sink { cmd_tx: tx });
-        rx
+        let (end_tx, end_rx) = mpsc::unbounded_channel();
+        *acc.sink.lock().expect("sink lock") = Some(Sink { cmd_tx: tx, end_tx });
+        (rx, end_rx)
     }
 
-    /// 取走通道里已排队的命令，只留下 `EndTurn` 的载荷（每 turn 至多一条）。
-    fn end_turns(rx: &mut mpsc::Receiver<WriterCmd>) -> Vec<(u64, u64, Option<String>)> {
+    /// 取走 EndTurn 通道里已排队的命令，只留下载荷（每 turn 至多一条）。
+    fn end_turns(rx: &mut mpsc::UnboundedReceiver<WriterCmd>) -> Vec<(u64, u64, Option<String>)> {
         let mut out = Vec::new();
         while let Ok(cmd) = rx.try_recv() {
             if let WriterCmd::EndTurn(t) = cmd {
@@ -1064,7 +1122,7 @@ mod tests {
     #[test]
     fn repeated_finalize_turn_emits_exactly_one_end_turn() {
         let acc = TurnAccumulator::new();
-        let mut rx = capture_cmds(&acc);
+        let (_flush_rx, mut end_rx) = capture_cmds(&acc);
         let sid = SessionId::new("s1");
 
         acc.begin_turn();
@@ -1073,7 +1131,7 @@ mod tests {
         acc.finalize_turn();
         acc.finalize_turn();
 
-        let turns = end_turns(&mut rx);
+        let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "重复定稿不得重复发记账命令，得到 {turns:?}");
         assert!(turns[0].2.is_some(), "折叠过帧的 turn 应携带消息行 id");
     }
@@ -1109,14 +1167,14 @@ mod tests {
     #[test]
     fn finalize_clips_an_open_wait_segment() {
         let acc = TurnAccumulator::new();
-        let mut rx = capture_cmds(&acc);
+        let (_flush_rx, mut end_rx) = capture_cmds(&acc);
 
         acc.begin_turn();
         acc.begin_wait();
         nap(50);
         acc.finalize_turn();
 
-        let turns = end_turns(&mut rx);
+        let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "一个 turn 只应有一条记账：{turns:?}");
         let (work, wait, _) = &turns[0];
         assert!(*wait >= 30, "未决审批那段应截到定稿时刻计入 wait，得到 {wait}ms");
@@ -1130,13 +1188,13 @@ mod tests {
     #[test]
     fn empty_turn_is_still_accounted() {
         let acc = TurnAccumulator::new();
-        let mut rx = capture_cmds(&acc);
+        let (_flush_rx, mut end_rx) = capture_cmds(&acc);
 
         acc.begin_turn();
         nap(20);
         acc.finalize_turn();
 
-        let turns = end_turns(&mut rx);
+        let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "空 turn 也要记账，得到 {turns:?}");
         assert_eq!(turns[0].2, None, "未折叠任何帧 → 无消息行 id");
     }
@@ -1146,7 +1204,7 @@ mod tests {
     #[test]
     fn wait_outside_an_active_turn_is_dropped() {
         let acc = TurnAccumulator::new();
-        let mut rx = capture_cmds(&acc);
+        let (_flush_rx, mut end_rx) = capture_cmds(&acc);
 
         acc.begin_wait();
         acc.end_all_waits();
@@ -1156,7 +1214,7 @@ mod tests {
         nap(20);
         acc.finalize_turn();
 
-        let turns = end_turns(&mut rx);
+        let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].1, 0, "turn 外的审批不得算进本 turn 的等待：{:?}", turns[0]);
     }
@@ -1166,7 +1224,7 @@ mod tests {
     #[test]
     fn end_all_waits_closes_an_open_segment_immediately() {
         let acc = TurnAccumulator::new();
-        let mut rx = capture_cmds(&acc);
+        let (_flush_rx, mut end_rx) = capture_cmds(&acc);
         acc.begin_turn();
         acc.begin_wait();
         acc.begin_wait();
@@ -1179,10 +1237,43 @@ mod tests {
         // 取消后 agent 继续干活的 30ms 必须归工作：若等待表没在取消时结掉，会被算进 wait。
         nap(30);
         acc.finalize_turn();
-        let turns = end_turns(&mut rx);
+        let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "应恰好一条 EndTurn：{turns:?}");
         let (work, wait, _) = &turns[0];
         assert!(*work >= 18, "取消后的收尾应算工作，得到 {work}ms");
         assert!(*wait < 48, "等待不得把取消后的收尾也算进去，得到 {wait}ms");
+    }
+
+    /// 回归（2026-09-21 审查发现）：`EndTurn` 曾与 `Flush` 信号共用一条 `try_send`
+    /// 通道。信号通道被高帧率折叠塞满时（writer 卡在一次 DB 写内，万级帧率下 25ms
+    /// 即可填满 256 深度），定稿命令被**静默丢弃**——会话级记账（`turn_count` /
+    /// `work_ms` / `wait_ms`）与消息行定稿（`finalize_message`，行永久停在
+    /// `streaming`）同时丢失，且无日志；UI 却照显示耗时（`turn_timing` 读发送前就
+    /// 写好的 `last_timing`），DB 与界面静默分叉。定稿跃迁必须走独立可靠通道，
+    /// 不依赖信号通道余量。
+    #[test]
+    fn end_turn_is_delivered_when_the_flush_signal_channel_is_saturated() {
+        let acc = TurnAccumulator::new();
+        let sid = SessionId::new("s1");
+        // 容量 2 的信号通道：折叠几帧即满，复现"writer 卡在 DB 写内、ping 积压"现场。
+        let (flush_tx, _flush_rx) = mpsc::channel(2);
+        let probe = flush_tx.clone();
+        let (end_tx, mut end_rx) = mpsc::unbounded_channel();
+        *acc.sink.lock().expect("sink lock") = Some(Sink { cmd_tx: flush_tx, end_tx });
+
+        acc.begin_turn();
+        for i in 0..8 {
+            acc.fold(&text_chunk(&sid, format!("chunk {i}")));
+        }
+        assert!(
+            probe.try_send(WriterCmd::Flush).is_err(),
+            "前置条件：Flush 信号通道应已被折叠 ping 塞满"
+        );
+
+        acc.finalize_turn();
+
+        let turns = end_turns(&mut end_rx);
+        assert_eq!(turns.len(), 1, "信号通道饱和时 EndTurn 仍须恰好送达一次：{turns:?}");
+        assert!(turns[0].2.is_some(), "折叠过帧的 turn 应携带消息行 id");
     }
 }

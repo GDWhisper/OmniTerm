@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Project, Workspace, Session } from '../api/client'
+import type { PermissionTimeoutMode, Project, Session, Workspace } from '../api/client'
 import { toAbsolutePath } from '../utils/path'
 import { clampFileManagerWidth } from '../utils/layout'
 import {
@@ -18,13 +18,16 @@ export const DEFAULT_UI_ZOOM = 100
 export const MIN_SIDEBAR_WIDTH = 200
 export const DEFAULT_SIDEBAR_WIDTH = 256
 
-// Disconnect / recycle timeouts (minutes). Persisted via localStorage for
-// blur & idle; acp recycle is in-memory only (backend API lands separately).
+// Disconnect / recycle timeouts (minutes). blur & idle persist via localStorage;
+// acp recycle & permission timeout persist in the backend settings table
+// (App bootstraps both via GET on startup; PUT hot-updates the backend).
 export const MIN_DISCONNECT_MIN = 1
 export const MAX_DISCONNECT_MIN = 60
 export const DEFAULT_BLUR_DISCONNECT_MIN = 10
 export const DEFAULT_IDLE_DISCONNECT_MIN = 15
 export const DEFAULT_ACP_IDLE_RECYCLE_MIN = 5
+/** 权限请求超时时长默认分钟数（与后端 REQUIRES_ACTION_RECYCLE_SECS/60 一致）。 */
+export const DEFAULT_PERM_TIMEOUT_MIN = 30
 
 /** Clamp a disconnect timeout (minutes) into the supported range. */
 function clampDisconnectMin(n: number): number {
@@ -106,6 +109,9 @@ export interface AppState {
   blurDisconnectMin: number
   idleDisconnectMin: number
   acpIdleRecycleMin: number
+  // 权限请求超时（后端 settings 表为真相源，store 仅持当前值供面板渲染）
+  permTimeoutMode: PermissionTimeoutMode
+  permTimeoutMin: number
 
   // Data
   projects: Project[]
@@ -215,6 +221,8 @@ export interface AppState {
   setBlurDisconnectMin: (n: number) => void
   setIdleDisconnectMin: (n: number) => void
   setAcpIdleRecycleMin: (n: number) => void
+  setPermTimeoutMode: (mode: PermissionTimeoutMode) => void
+  setPermTimeoutMin: (n: number) => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
@@ -320,8 +328,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   lastAcpAgentId: localStorage.getItem('omniterm_last_acp_agent') || null,
   blurDisconnectMin: readDisconnectMin('omniterm_blur_disconnect_min', DEFAULT_BLUR_DISCONNECT_MIN),
   idleDisconnectMin: readDisconnectMin('omniterm_idle_disconnect_min', DEFAULT_IDLE_DISCONNECT_MIN),
-  // Pure in-memory — the backend recycle setting isn't wired up yet.
+  // In-memory mirror of the backend setting (App bootstrap GETs the persisted
+  // value; no localStorage — the settings table is the source of truth).
   acpIdleRecycleMin: DEFAULT_ACP_IDLE_RECYCLE_MIN,
+  permTimeoutMode: 'abort' as PermissionTimeoutMode,
+  permTimeoutMin: DEFAULT_PERM_TIMEOUT_MIN,
   terminalSendData: null as ((data: string) => void) | null,
 
   projects: [],
@@ -448,6 +459,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   // In-memory only — no localStorage write.
   setAcpIdleRecycleMin: (n) => {
     set({ acpIdleRecycleMin: clampDisconnectMin(n) })
+  },
+
+  // 权限请求超时：后端持久化 + 热更新，store 只作面板镜像（App 启动时 GET 回填）。
+  setPermTimeoutMode: (mode) => {
+    set({ permTimeoutMode: mode })
+  },
+
+  setPermTimeoutMin: (n) => {
+    set({ permTimeoutMin: clampDisconnectMin(n) })
   },
 
   setExpandThinking: (v) => {

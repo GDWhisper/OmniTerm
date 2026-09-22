@@ -156,6 +156,10 @@ pub struct AppState {
     /// ACP 静默待命回收阈值（秒），由 settings 表 `acp_idle_recycle_min` 注入，
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// 权限请求超时配置（模式 + 秒级阈值），由 settings 表
+    /// `acp_perm_timeout_mode` / `acp_perm_timeout_min` 注入，reaper 每个 tick
+    /// 动态读取（运行时热更新）。
+    pub acp_perm_timeout: std::sync::Arc<acp::reaper::PermissionTimeoutConfig>,
     pub login_guard: auth::LoginGuard,
     /// 会话引擎注册表（D9）：持有复用器引擎 + agent 屏幕检测注册表。
     pub engines: engine::EngineRegistry,
@@ -849,6 +853,29 @@ fn main() -> anyhow::Result<()> {
                 acp_idle_recycle_secs,
             ));
 
+            // 权限请求超时配置：模式白名单校验（非法值回退 abort），分钟解析
+            // 失败回退 30 分钟——DB 无配置时行为与硬编码时代完全一致。
+            let acp_perm_timeout = std::sync::Arc::new(
+                acp::reaper::PermissionTimeoutConfig::new(
+                    permission_timeout_mode_from_setting(
+                        sqlx::query_scalar::<_, String>(
+                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_mode'",
+                        )
+                        .fetch_optional(&db)
+                        .await?
+                        .as_deref(),
+                    ),
+                    permission_timeout_secs_from_setting(
+                        sqlx::query_scalar::<_, String>(
+                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_min'",
+                        )
+                        .fetch_optional(&db)
+                        .await?
+                        .as_deref(),
+                    ),
+                ),
+            );
+
             let pid_file = pid_path(&db_url);
 
             // 端口转发反向代理客户端：连接超时 5s（连接拒绝/超时快速失败），
@@ -865,6 +892,7 @@ fn main() -> anyhow::Result<()> {
                 api_keys: resolve_api_keys(),
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
                 acp_idle_recycle_secs,
+                acp_perm_timeout,
                 login_guard: auth::LoginGuard::new(),
                 engines,
                 acp_supervisor: acp::AcpSupervisor::default(),
@@ -886,9 +914,16 @@ fn main() -> anyhow::Result<()> {
             // `state.acp_idle_recycle_secs` 注入（settings 表可运行时热更新）。
             let reaper_supervisor = state.acp_supervisor.clone();
             let reaper_idle_secs = state.acp_idle_recycle_secs.clone();
+            let reaper_perm_timeout = state.acp_perm_timeout.clone();
             let reaper_db = state.db.clone();
             tokio::spawn(async move {
-                acp::reaper::run_reaper(reaper_supervisor, reaper_db, reaper_idle_secs).await;
+                acp::reaper::run_reaper(
+                    reaper_supervisor,
+                    reaper_db,
+                    reaper_idle_secs,
+                    reaper_perm_timeout,
+                )
+                .await;
             });
             let frontend_dir =
                 std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
@@ -1037,13 +1072,34 @@ fn acp_idle_recycle_secs_from_setting(setting_min: Option<&str>) -> u64 {
     }
 }
 
+/// 解析 `settings` 表中权限请求超时模式。记录缺失或非白名单值（解析失败）时
+/// 回退到默认 `abort`（2026-08-18 起的安全策略）。抽成纯函数便于单测。
+fn permission_timeout_mode_from_setting(
+    setting: Option<&str>,
+) -> acp::reaper::PermissionTimeoutMode {
+    setting.and_then(acp::reaper::PermissionTimeoutMode::from_str_opt).unwrap_or_default()
+}
+
+/// 解析 `settings` 表中权限请求超时时长（分钟→秒）。记录缺失或非数字（解析
+/// 失败）时回退到 reaper 默认 1800 秒，保证 DB 无该 key 时行为与硬编码常量
+/// 时代完全一致。抽成纯函数便于单测。
+fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
+    match setting_min.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(min) => min.saturating_mul(60),
+        None => acp::reaper::REQUIRES_ACTION_RECYCLE_SECS,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         acp_idle_recycle_secs_from_setting, default_db_stem, instance_id, instance_suffix,
-        jwt_secret_file_name, rust_log_covers_omniterm, token_cookie_name,
+        jwt_secret_file_name, permission_timeout_mode_from_setting,
+        permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
     };
-    use crate::acp::reaper::IDLE_RECYCLE_SECS;
+    use crate::acp::reaper::{
+        IDLE_RECYCLE_SECS, PermissionTimeoutMode, REQUIRES_ACTION_RECYCLE_SECS,
+    };
 
     #[test]
     fn instance_suffix_separates_dev_from_release() {
@@ -1098,6 +1154,34 @@ mod tests {
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("5")), 300);
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("30")), 1800);
         assert_eq!(acp_idle_recycle_secs_from_setting(Some("  10  ")), 600);
+    }
+
+    #[test]
+    fn permission_timeout_mode_from_setting_falls_back_to_abort() {
+        assert_eq!(permission_timeout_mode_from_setting(None), PermissionTimeoutMode::Abort);
+        // 非法值（含大小写不符）回退默认，与白名单校验同一口径。
+        for bad in ["", "abc", "Abort", "AUTO"] {
+            assert_eq!(
+                permission_timeout_mode_from_setting(Some(bad)),
+                PermissionTimeoutMode::Abort,
+                "bad mode: {bad:?}"
+            );
+        }
+        assert_eq!(
+            permission_timeout_mode_from_setting(Some(" auto ")),
+            PermissionTimeoutMode::Auto
+        );
+        assert_eq!(permission_timeout_mode_from_setting(Some("wait")), PermissionTimeoutMode::Wait);
+    }
+
+    #[test]
+    fn permission_timeout_secs_from_setting_converts_and_falls_back() {
+        assert_eq!(permission_timeout_secs_from_setting(None), REQUIRES_ACTION_RECYCLE_SECS);
+        assert_eq!(permission_timeout_secs_from_setting(Some("abc")), REQUIRES_ACTION_RECYCLE_SECS);
+        assert_eq!(permission_timeout_secs_from_setting(Some("")), REQUIRES_ACTION_RECYCLE_SECS);
+        assert_eq!(permission_timeout_secs_from_setting(Some("1")), 60);
+        assert_eq!(permission_timeout_secs_from_setting(Some("30")), 1800);
+        assert_eq!(permission_timeout_secs_from_setting(Some(" 45 ")), 2700);
     }
 
     #[test]

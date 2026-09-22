@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock } from '../../stores/chatStore'
+import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
 import { useStickScroll } from '../../hooks/useStickScroll'
 import { useLongPress } from '../../hooks/useLongPress'
@@ -37,6 +37,10 @@ const BUBBLE_MAX_WIDTH = '85%'
 //
 // **不含 `marginLeft:auto`**——左右对齐是状态相关的：流式期动作栏恒空、读数**靠左**；
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
+// **换行只能发生在「工作 / 工具 / 速度」三个读数之间，绝不能发生在读数内部**——
+// 中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器在数字与单位之间
+// 断行（实测「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」三处都被拆开，
+// 2026-09-21 用户报告）。故三个读数各自一个 nowrap 段，容器 flex-wrap 承接段间换行。
 const CHAT_META_TEXT_STYLE: CSSProperties = {
   fontSize: '0.769em',
   fontFamily: READER_FONT,
@@ -46,10 +50,16 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
   minWidth: 0,
   maxWidth: '100%',
   overflowWrap: 'anywhere',
+  display: 'inline-flex',
+  flexWrap: 'wrap',
 }
 
+// 单个读数（一段完整语义，如「工具约 12秒」）：段内禁止断行，数字与单位永不分离。
+const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
+
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
-const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', textAlign: 'right' }
+// 拆段后 textAlign 对 flex 子项无效，右缘改由 justify-content 表达。
+const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', justifyContent: 'flex-end' }
 
 // 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
 const LIVE_TICK_MS = 1_000
@@ -408,13 +418,64 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
   )
 }
 
-/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。 */
-function SystemBlockView({ label }: { label: string }) {
+/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
+ *  detail 存在时（后端权限超时行动）在文案下附结构化详情：请求工具、内容预览、
+ *  当时的可选项、自动模式实际选中项——用户回来不错过自己错过了什么。 */
+function SystemBlockView({ label, detail }: { label: string; detail?: SystemBlockDetail }) {
   const { t } = useTranslation()
+  const text = t(label, {
+    defaultValue: label,
+    minutes: detail?.minutes ?? '',
+    selected: detail?.selected ?? '',
+    options: detail?.options?.join(' / ') ?? '',
+    count: detail?.extra ?? 0,
+  })
+  const toolDisplay =
+    detail?.tool && detail.kind && detail.tool !== detail.kind
+      ? `${detail.tool}（${detail.kind}）`
+      : (detail?.tool ?? detail?.kind)
   return (
-    <span style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em' }}>
-      [{t(label, { defaultValue: label })}]
-    </span>
+    <div style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em', maxWidth: '100%' }}>
+      <span>[{text}]</span>
+      {detail && (
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {toolDisplay && (
+            <span>
+              ▸ {t('system.permTimeout.requestTool', { tool: toolDisplay, defaultValue: '▸ 请求：{{tool}}' })}
+            </span>
+          )}
+          {detail.content && (
+            <pre
+              style={{
+                margin: 0,
+                padding: '4px 6px',
+                background: 'var(--bg-base)',
+                borderRadius: 4,
+                fontSize: '0.92em',
+                overflow: 'auto',
+                maxHeight: 120,
+                whiteSpace: 'pre-wrap',
+                color: 'var(--text-muted)',
+              }}
+            >
+              {detail.content}
+              {!!detail.content_omitted &&
+                ` ${t('system.permTimeout.contentOmitted', { count: detail.content_omitted, defaultValue: '…（已省略 {{count}} 字符）' })}`}
+            </pre>
+          )}
+          {!!detail.options?.length && (
+            <span>
+              {t('system.permTimeout.options', { options: detail.options.join(' / '), defaultValue: '可选项：{{options}}' })}
+            </span>
+          )}
+          {!!detail.extra && (
+            <span>
+              {t('system.permTimeout.extra', { count: detail.extra, defaultValue: '另有 {{count}} 项审批一并处理' })}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -441,7 +502,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
     case 'system':
-      return <SystemBlockView key={idx} label={block.label} />
+      return <SystemBlockView key={idx} label={block.label} detail={block.detail} />
     case 'image':
       // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
       return null
@@ -458,30 +519,42 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
  * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
+ *
+ * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每 tick
+ * 只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
+ * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
  */
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
-  const ref = useRef<HTMLSpanElement>(null)
+  const workRef = useRef<HTMLSpanElement>(null)
+  const toolRef = useRef<HTMLSpanElement>(null)
+  const tpsRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
-    const draw = () => {
-      const el = ref.current
+    // 写一段：空值整段撤掉（display:none），flex 不留空位、分隔符也跟着消失。
+    // 同值不写：display 也参与比较，保证首次调用就把空段显式撤掉（0 宽 flex 项不留痕）。
+    const write = (el: HTMLSpanElement | null, text: string) => {
       if (!el) return
+      const shown = text ? '' : 'none'
+      if (el.textContent === text && el.style.display === shown) return
+      el.textContent = text
+      el.style.display = shown
+    }
+    const draw = () => {
       const now = Date.now()
       const dur = formatWorkDuration(turnElapsedMs(sessionId, now), i18n.language)
       if (!dur) {
         // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
-        el.textContent = ''
-        el.style.display = 'none'
+        write(workRef.current, '')
+        write(toolRef.current, '')
+        write(tpsRef.current, '')
         return
       }
       const toolDur = formatToolDuration(turnToolElapsedMs(sessionId, now), i18n.language)
       const rate = formatTps(turnTps(sessionId, now))
-      let text = t('chat.msg.working', { dur })
-      if (toolDur) text += ` · ${t('chat.msg.toolTime', { dur: toolDur })}`
-      if (rate) text += ` · ${t('chat.msg.tps', { tps: rate })}`
-      el.textContent = text
-      el.style.display = ''
+      write(workRef.current, t('chat.msg.working', { dur }))
+      write(toolRef.current, toolDur ? ` · ${t('chat.msg.toolTime', { dur: toolDur })}` : '')
+      write(tpsRef.current, rate ? ` · ${t('chat.msg.tps', { tps: rate })}` : '')
     }
     draw()
     const id = window.setInterval(draw, LIVE_TICK_MS)
@@ -490,10 +563,13 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
 
   return (
     <span
-      ref={ref}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
       title={`${t('chat.msg.workingTip')} · ${t('chat.msg.toolTimeTip')} · ${t('chat.msg.tpsTip')}`}
-    />
+    >
+      <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
+      <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />
+      <span ref={tpsRef} style={CHAT_META_SEGMENT_STYLE} />
+    </span>
   )
 }
 
@@ -836,9 +912,13 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
               style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
               title={durationTip}
             >
-              {t('chat.msg.workTime', { dur: workText })}
-              {settledToolText && ` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}
-              {settledTps && ` · ${t('chat.msg.tps', { tps: settledTps })}`}
+              {/* 三个读数各一个 nowrap 段：换行只发生在段间，数字不与单位分离
+                  （同 LiveWorkElapsed，见 CHAT_META_TEXT_STYLE）。 */}
+              <span style={CHAT_META_SEGMENT_STYLE}>{t('chat.msg.workTime', { dur: workText })}</span>
+              {settledToolText && (
+                <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}</span>
+              )}
+              {settledTps && <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.tps', { tps: settledTps })}`}</span>}
             </span>
           )}
         </div>

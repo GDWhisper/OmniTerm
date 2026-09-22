@@ -33,6 +33,9 @@ const CHAT_JUMP_TOP_GAP_PX = 8
 /** 气泡底缘升到距消息区顶缘该值以内即视为「已滚出顶缘」（那一段残条本来就被
  *   悬浮卡片盖住），视同「用户正在阅读这条消息之后的内容」，显示卡片。 */
 const CHAT_PROMPT_ABOVE_SLACK_PX = 24
+/** 距消息区底缘多少像素内仍算「贴底」（留余量，iOS 惯性滚动与亚像素取整不会把
+ *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
+const CHAT_STICK_THRESHOLD_PX = 24
 
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
@@ -137,7 +140,20 @@ export function ChatView() {
   const isMobile = useAppStore((s) => s.isMobile)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const [autoStick, setAutoStick] = useState(true)
+  const [autoStick, setAutoStickState] = useState(true)
+  // 贴底态既是渲染依据（「回到底部」按钮显隐），又要被下方 ResizeObserver 回调读到；
+  // 回调不能因为订阅了 state 而每次变化重建 observer（hooks 规则 3-b），故 ref 与
+  // state 由同一个写入口同步，读 ref 即读当前贴底态。
+  const autoStickRef = useRef(true)
+  const setAutoStick = useCallback((v: boolean) => {
+    autoStickRef.current = v
+    setAutoStickState(v)
+  }, [])
+  /** 贴底动作的唯一实现（幂等：已在底部时是空操作）。 */
+  const pinToBottom = useCallback(() => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
   // 「上次输入」跳转聚焦：高亮中的消息 id（目标气泡 accent 描边 + ring 闪烁，
   // 经 highlighted prop 传给 ChatMessageView）。
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
@@ -243,13 +259,23 @@ export function ChatView() {
     if (delta !== 0) el.scrollTop += delta
   }, [chatState.messages])
 
-  // Re-stick whenever a new chunk/message lands while autoStick is on.
+  // 跟随中，内容一变就把底缘钉回来。deps 必须覆盖「滚动内容高度的全部来源」，而不是
+  // 只有消息本体：思考指示（sending）、重放指示（replaying）、终端事件、更早历史加载
+  // 指示都会让内容长高而不改 messages——deps 漏掉任何一项，跟随都会在没有任何 scroll
+  // 事件的情况下静默失效（autoStick 仍是 true，视口却停在半空，连「回到底部」按钮都
+  // 不显示）。新增滚动内容内的条件渲染时必须同步登记到这里。
   useEffect(() => {
     if (!autoStick) return
-    const el = scrollRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-  }, [chatState.messages, autoStick])
+    pinToBottom()
+  }, [
+    chatState.messages,
+    chatState.sending,
+    chatState.loadingHistory,
+    chatState.terminalEvents,
+    isReplaying,
+    autoStick,
+    pinToBottom,
+  ])
 
   // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
   // 是断连留痕、从未真正发往 agent，不算一次输入，也不作为跳转目标。
@@ -285,7 +311,7 @@ export function ChatView() {
   const handleScroll = () => {
     const el = scrollRef.current
     if (!el) return
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_STICK_THRESHOLD_PX
     setAutoStick(atBottom)
     setLastPromptAbove(isLastPromptAboveViewport())
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
@@ -296,8 +322,7 @@ export function ChatView() {
 
   // 点提示条：立即滚到底并恢复自动跟随，提示条随隐。
   const handleJumpToBottom = () => {
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    pinToBottom()
     setAutoStick(true)
   }
 
@@ -309,17 +334,27 @@ export function ChatView() {
   // 三条重测路径各管一摊：
   // · 滚动 → handleScroll（上面）；
   // · 消息/目标变化 → 本 effect deps；
-  // · 容器尺寸变化（拖面板宽度 / 窗口 resize，既不滚动也不改消息）→ ResizeObserver。
+  // · 容器尺寸变化（拖面板宽度 / 窗口 resize / 键盘收放 / todo 看板与输入区长高，
+  //   既不滚动也不改消息）→ ResizeObserver。
   // 显隐在绘制前落定（layout effect + RO 渲染步回调），卡片不会闪现一帧再消失；
-  // 同值 setState 被 React 合并，不会成环。
+  // 同值 setState 被 React 合并，不会成环。同一个 RO 回调还负责贴底态的容器侧重钉
+  // （见下方注释与 docs/dev/debug-patterns/layout-visual.md 模式 8）。
   useLayoutEffect(() => {
     setLastPromptAbove(isLastPromptAboveViewport())
     const el = scrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setLastPromptAbove(isLastPromptAboveViewport()))
+    const ro = new ResizeObserver(() => {
+      setLastPromptAbove(isLastPromptAboveViewport())
+      // 容器尺寸变化不触发 scroll 事件，而浏览器只在滚动容器可见时才替我们保住底缘
+      // ——移动端三面板同挂在一条 300% 宽 strip 上，聊天面板离屏（切到 sidebar/files）
+      // 时 todo 看板 / 权限条 / 输入区长高把消息区压矮，底缘会直接掉下去且全程无事件，
+      // 贴底态却仍是 true（连「回到底部」按钮都不显示），切回来即「没追底」。跟随中
+      // 就在这里自己重钉；用户已上翻（autoStick=false）时不动，阅读位置不受影响。
+      if (autoStickRef.current) pinToBottom()
+    })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [isLastPromptAboveViewport])
+  }, [isLastPromptAboveViewport, pinToBottom])
 
   // 跳转聚焦「上次输入」：滚动让目标气泡落到悬浮卡片下方（卡片悬浮在消息区顶缘，
   // 不让位会正好盖住目标），再短暂 accent 描边闪烁。
@@ -386,7 +421,7 @@ export function ChatView() {
       // Re-stick so the user's own message is visible + next chunk scrolls in.
       setAutoStick(true)
     },
-    [activeSessionId, sendPrompt],
+    [activeSessionId, sendPrompt, setAutoStick],
   )
 
   // F02 重新生成：取最后一条用户消息重发，assistant 回复追加不替换。
@@ -404,7 +439,7 @@ export function ChatView() {
     }
     sendPrompt(lastUser.text)
     setAutoStick(true)
-  }, [activeSessionId, sendPrompt, cancel])
+  }, [activeSessionId, sendPrompt, cancel, setAutoStick])
 
   // D4 复制正文：统一走 utils/clipboard.ts，成功/失败各一条 toast。
   // getState-action 约定：不订阅 store，保持回调引用稳定供 ChatMessageView memo 命中。

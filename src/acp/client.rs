@@ -19,6 +19,7 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::acp::agent_proc;
 use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
@@ -161,6 +162,17 @@ pub enum TurnEndEvent {
     },
 }
 
+/// 后端主动产生的系统通知载荷（当前唯一产生者是 reaper 的权限超时行动）。
+///
+/// `label` 是 i18n key（前端命中才翻译，未命中原样显示——2026-08-18 起的
+/// 历史数据是中文原文，靠该回退保持可读）；`detail` 是可选结构化详情，
+/// 让前端能本地化地渲染"错过了什么"（请求工具/内容预览/可选项/实际动作）。
+#[derive(Debug, Clone)]
+pub struct SystemNotice {
+    pub label: String,
+    pub detail: Option<serde_json::Value>,
+}
+
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
 ///
 /// ACP v1 协议（所有当前对接的 agent 均协商 protocolVersion:1）没有官方
@@ -194,7 +206,7 @@ pub struct AcpClient {
     crash_tx: broadcast::Sender<String>,
     /// 后端主动产生的系统通知（如权限超时回收告知），广播给所有 WS 连接，
     /// 由 WS 层转成 `system_message` 帧显示在聊天流里。
-    system_notice_tx: broadcast::Sender<String>,
+    system_notice_tx: broadcast::Sender<SystemNotice>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
     /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
@@ -223,29 +235,78 @@ pub struct AcpClient {
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
     /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
     accumulator: Arc<TurnAccumulator>,
+    /// agent 子进程 pid（D1 捕获，见 [`agent_proc`]）。`None` = 捕获失败
+    /// （降级路径，已 WARN 留痕），释放时退化为仅优雅信号（修复前现状）。
+    /// killpg 前仍校验 pid 归属（防 pid 复用误杀），见
+    /// [`agent_proc::kill_agent_process_group`]。
+    agent_pid: Mutex<Option<u32>>,
+    /// 连接任务 abort 指令（D4）：shutdown/disconnect 时 send，crash watcher
+    /// 收到后 abort 句柄并静默返回。只发送不读取，故 `_` 前缀（同 `_shutdown_tx`）。
+    /// 注意 abort 杀不了 agent 进程——`ChildGuard` 归 crate 内部 task_actor
+    /// 所有，abort 外层 connection task 不会 drop 它；abort 仅本地资源清理，
+    /// 杀进程靠 `agent_pid` 的 killpg（D2）。
+    _abort_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// 显式存活标志：`shutdown()` / `disconnect()` 时置 false。
     ///
     /// **不能用 `is_incoming_closed()` 单测判定死连接**：reaper 主动 `shutdown`
     /// 是让连接任务退出（`shutdown_rx.await` 返回），incoming 传输不读 EOF，
     /// `is_incoming_closed()` 保持 false，但 `send_request` 已报 "connection is
     /// no longer running"。`is_alive()` 因此必须组合本标志 + incoming-closed。
-    alive: AtomicBool,
+    ///
+    /// `Arc` 包裹是为了让 `spawn_crash_watcher`（构造早于本 struct）也能读：
+    /// 主动关闭期间的连接任务结束（D2 killpg 使 crate 的 `finish_child_exit`
+    /// 返回 "exited with signal 9" 类 Err）是**预期行为**，据此与真崩溃区分，
+    /// 不向前端误广播 `prompt_error`。
+    alive: Arc<AtomicBool>,
 }
 
 /// 看护 agent 连接任务：若其因 agent 进程崩溃/异常退出而返回 `Err`，
 /// 通过 `crash_tx` 广播错误原因，供 WS 层即时透传给前端（否则该错误仅被
 /// `disconnect` 中的 `let _ =` 丢弃，用户看不到崩溃原因）。
+///
+/// `abort_rx` 收到 shutdown/disconnect 的指令时 abort 连接任务并**静默返回**：
+/// 取消是主动行为，不是崩溃——不广播、不定稿。`JoinError` 的 `Cancelled` 与
+/// panic/真错误同走 `Err` 分支，不区分就会 100% 误报（2026-09-21 评审核实，
+/// 见计划 D4），故无条件过滤。
+///
+/// abort 只做本地资源清理：`ChildGuard` 归 crate 内部 task_actor 所有，abort
+/// 外层 connection task 不会 drop 它、杀不了 agent 进程（杀进程靠 D2 killpg）。
+///
+/// `alive` 为 false 说明关闭流程已启动（shutdown/disconnect 置位）：此时
+/// 连接任务无论以何姿势结束都是预期——尤其 D2 killpg 会让 crate 的
+/// `finish_child_exit` 返回 "exited with signal 9" 类 Err——静默处理，
+/// 不广播、不定稿（`mark_prompt_idle` 已定稿）。
 fn spawn_crash_watcher(
     connection_task: JoinHandle<Result<(), AcpError>>,
+    abort_rx: oneshot::Receiver<()>,
     crash_tx: broadcast::Sender<String>,
     accumulator: Arc<TurnAccumulator>,
+    alive: Arc<AtomicBool>,
 ) {
     tokio::spawn(async move {
-        if let Err(e) = connection_task.await {
-            // 进程崩溃也算 turn 结束：定稿进行中的 assistant 行（幂等），
-            // 使已折叠的部分内容不丢，且不会永远停留在 streaming 状态。
-            accumulator.finalize_turn();
-            let _ = crash_tx.send(format!("{}", e));
+        // Pin 住以便 select! 内按引用 poll，abort 分支仍能拿回句柄。
+        let mut connection_task = Box::pin(connection_task);
+        tokio::select! {
+            joined = connection_task.as_mut() => {
+                // Cancelled = 别处 abort 了本任务（当前无此路径，防御性保留）；
+                // alive=false = 主动关闭期间，Err 是预期收尾（D2 killpg 的
+                // signal 9 即走此路）；两者都静默。
+                if let Err(e) = joined
+                    && !e.is_cancelled()
+                    && alive.load(Ordering::Acquire)
+                {
+                    // 进程崩溃也算 turn 结束：定稿进行中的 assistant 行（幂等），
+                    // 使已折叠的部分内容不丢，且不会永远停留在 streaming 状态。
+                    accumulator.finalize_turn();
+                    let _ = crash_tx.send(format!("{}", e));
+                }
+            }
+            _ = abort_rx => {
+                // shutdown 指令：signal 之后置的兜底。正常路径连接任务多已
+                // 自行结束，abort 为 no-op；卡死路径下 killpg 已先打破循环，
+                // 这里负责让 omniterm 侧 future 不再悬挂。
+                connection_task.abort();
+            }
         }
     });
 }
@@ -277,82 +338,8 @@ fn resolve_fs_path(base: &Path, requested: &Path) -> Result<PathBuf, String> {
 }
 
 // ---------------------------------------------------------------------------
-// POSIX cwd 修复：ACP spawn_process 不设 current_dir
-//
-// agent-client-protocol 的 AcpAgent::spawn_process 不提供 current_dir 参数，
-// 也不调用 Command::current_dir()，导致 agent 子进程 OS cwd = 后端进程 cwd。
-// 实测 PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
-// 但 session workspace 应是 /home/pax/home。
-//
-// 这两个函数构建一个 shell wrapper 来显式 cd 到 workspace 再 exec agent 进程，
-// 使得 agent 进程看到正确的 workspace cwd。
+// POSIX cwd 修复 + agent pid 自报：见 `acp::agent_proc`（wrap_agent_with_cwd）
 // ---------------------------------------------------------------------------
-
-/// POSIX shell 单引号转义。
-///
-/// 将字符串安全嵌入 `sh -c '...'` 的单引号片段中：
-/// - 空串 → `''`
-/// - 不含单引号 → 原样包裹在单引号内
-/// - 含单引号 → 按 POSIX 模式 `'...'\''...'` 分段转义
-///
-/// 实测 PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
-/// session workspace 应是 /home/pax/home —— 根因是 agent 进程缺少 workspace cwd。
-#[cfg(unix)]
-fn sh_quote(s: &str) -> String {
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    if !s.contains('\'') {
-        return format!("'{s}'");
-    }
-    // 含单引号：分段拼接  '...'\''...'
-    let mut quoted = String::new();
-    quoted.push('\'');
-    for ch in s.chars() {
-        if ch == '\'' {
-            // 结束当前单引号段、插入转义单引号、重新开始单引号段
-            quoted.push_str("'\\''");
-        } else {
-            quoted.push(ch);
-        }
-    }
-    quoted.push('\'');
-    quoted
-}
-
-/// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd。
-///
-/// POSIX-only; ACP 暂不支持 Windows。
-///
-/// 返回 `["-c", "cd <workspace> && exec <agent_cmd> <arg1> <arg2> ..."]`，
-/// 调用方应将其附加到 `/bin/sh`（或 `sh`）之后：
-///
-/// ```ignore
-/// let mut cmd = std::process::Command::new("/bin/sh");
-/// cmd.args(wrap_agent_with_cwd(&cmd_path, &args, &workspace));
-/// ```
-///
-/// 使用 `exec` 替换 shell 进程，确保：
-/// - agent 进程直接接收信号（不会因 shell 而屏蔽/延迟）
-/// - 进程组清理工作正常
-/// - 额外 shell 进程不会残留
-///
-/// 所有动态值均通过 [`sh_quote`] 安全转义，防止 shell 注入。
-///
-/// # 实测证据
-///
-/// PID 1838360 的 /proc/PID/cwd -> /home/pax/coding/OmniTerm-dev，
-/// 但 session workspace 应是 /home/pax/home。根因是 ACP 的
-/// AcpAgent::spawn_process 不设 current_dir，此 wrapper 在
-/// agent 进程启动前先 cd 到 workspace_path。
-#[cfg(unix)]
-fn wrap_agent_with_cwd(agent_cmd: &str, agent_args: &[String], workspace: &Path) -> Vec<String> {
-    let cd_cmd =
-        format!("cd {} && exec {}", sh_quote(&workspace.to_string_lossy()), sh_quote(agent_cmd));
-    // 用 fold 避免预分配：每个 arg 单独 sh_quote，空格分隔拼入 shell 脚本
-    let shell_script = agent_args.iter().fold(cd_cmd, |acc, arg| acc + " " + &sh_quote(arg));
-    vec!["-c".to_string(), shell_script]
-}
 
 /// 两个构造器（session/new 与 spawn_and_load）共用的 agent 通知处理：活动刷新、
 /// turn 累积、命令通知缓存、配置快照落库、广播。提取自两份逐行相同的闭包体——
@@ -388,11 +375,34 @@ async fn on_agent_notification(
     handler::handle_session_update(tx, SeqNotification { seq, notification })
 }
 
+/// 两个构造器的会话建立差异：create 走 `session/new`（响应带 config_options），
+/// restore 复用既有 `acp_session_id`（不发起新会话）。见
+/// [`AcpClient::spawn_with_session`]。
+enum SessionMode {
+    New,
+    Load(String),
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(
         agent: Agent,
         cwd: PathBuf,
         api_keys: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, AcpError> {
+        Self::spawn_with_session(agent, cwd, api_keys, SessionMode::New).await
+    }
+
+    /// 两个构造器（session/new 与 restore）共用的 agent 连接建立骨架：命令解析、
+    /// env 注入、cwd/pid wrapper、builder 组装、spawn、crash watcher、
+    /// `conn_rx` 汇聚、D1 pid 捕获。
+    ///
+    /// 提取自 272 行逐字重复（仅 `SessionMode` 之差，2026-09-21 评审实测
+    /// diff）——新增跨构造器行为只改这里，勿再复制（工程准则 6）。
+    async fn spawn_with_session(
+        agent: Agent,
+        cwd: PathBuf,
+        api_keys: &std::collections::HashMap<String, String>,
+        mode: SessionMode,
     ) -> Result<Self, AcpError> {
         let resolved_cmd = match agent.npm_package.as_deref() {
             Some(_) => {
@@ -418,12 +428,17 @@ impl AcpClient {
                 all_args.push(format!("{}={}", key, value));
             }
         }
-        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
-        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
-        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
+        // 包装 agent 命令为 `sh -c "cd <workspace> && echo $$ > <pid 文件> && exec <cmd> <args>"`：
+        // cd 让 agent 子进程的 OS cwd 落在 session workspace（AcpAgent::spawn_process
+        // 不设 current_dir），pid 自报供释放时 killpg（D1）。详见 agent_proc。
+        // POSIX-only 路径。
         #[cfg(unix)]
-        let (cmd, args) =
-            ("/bin/sh".to_string(), wrap_agent_with_cwd(&resolved_cmd, &agent.args, &cwd));
+        let pid_file = agent_proc::new_pid_file();
+        #[cfg(unix)]
+        let (cmd, args) = (
+            "/bin/sh".to_string(),
+            agent_proc::wrap_agent_with_cwd(&resolved_cmd, &agent.args, &cwd, Some(&pid_file)),
+        );
         #[cfg(not(unix))]
         let (cmd, args) = (resolved_cmd, agent.args.clone());
 
@@ -434,10 +449,12 @@ impl AcpClient {
 
         let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         let (crash_tx, _) = broadcast::channel::<String>(16);
-        let (system_notice_tx, _) = broadcast::channel::<String>(8);
+        let (system_notice_tx, _) = broadcast::channel::<SystemNotice>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
         let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        // D4：连接任务 abort 指令（shutdown/disconnect → crash watcher）。
+        let (abort_tx, abort_rx) = oneshot::channel::<()>();
         let (conn_tx, conn_rx) = oneshot::channel::<(
             ConnectionTo<AcpAgentRole>,
             SessionId,
@@ -457,6 +474,10 @@ impl AcpClient {
         let accumulator = Arc::new(TurnAccumulator::new());
         let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
             Arc::new(Mutex::new(None));
+        // crash watcher 需要读存活标志以区分「主动关闭期间的预期结束」与真崩溃
+        // （D2 killpg 让 crate 的 finish_child_exit 返回 signal 9 Err，见
+        // spawn_crash_watcher）。
+        let alive = Arc::new(AtomicBool::new(true));
 
         let builder = agent_client_protocol::Client
             .builder()
@@ -595,7 +616,25 @@ impl AcpClient {
                 agent_client_protocol::on_receive_request!(),
             );
 
+        // D1 兜底扫描的 workspace 匹配基准（cwd 随后被移进连接闭包，这里留一份）
+        #[cfg(unix)]
+        let scan_workspace = cwd.clone();
+        // D1 兜底扫描基线：crate 在 connect_with 内部才 spawn 子进程，快照紧贴
+        // spawn 点取；diff 出的新 pid 在并发 spawn 时按 cwd 消歧（见 agent_proc）。
+        #[cfg(unix)]
+        let children_before = agent_proc::snapshot_direct_children();
+
+        // P2-3：pid 自报文件的 RAII 清理守卫（随任务终结删除，幂等）。覆盖外层
+        // future 被 drop 的路径——探针 15s 超时时 abort_tx 随之释放，crash
+        // watcher abort 连接任务（Phase 1 D4 兜底），crate 的 ChildGuard::drop
+        // killpg 进程组，闭包侧代码来不及清理 pid 文件；由本守卫在任务结束
+        // （返回/abort/panic）时统一删除，避免 /tmp 累积。成功路径
+        // capture_agent_pid 读后即删，Drop 为 no-op。
+        #[cfg(unix)]
+        let pid_file_cleanup = agent_proc::PidFileCleanup::new(pid_file.clone());
+
         let connection_task = tokio::spawn(async move {
+            let _pid_file_cleanup = pid_file_cleanup;
             builder
                 .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
                     let init_resp = cx
@@ -607,12 +646,21 @@ impl AcpClient {
                     let supports_embedded =
                         init_resp.agent_capabilities.prompt_capabilities.embedded_context;
 
-                    let session_resp =
-                        cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
-
-                    let config_options = session_resp.config_options.clone().unwrap_or_default();
-
-                    let session_id = session_resp.session_id;
+                    // 两个构造器的唯一差异：create 走 session/new（响应带
+                    // config_options），restore 复用既有 acp_session_id。
+                    let (session_id, config_options) = match mode {
+                        SessionMode::New => {
+                            let session_resp =
+                                cx.send_request(NewSessionRequest::new(cwd)).block_task().await?;
+                            (
+                                session_resp.session_id,
+                                session_resp.config_options.clone().unwrap_or_default(),
+                            )
+                        }
+                        SessionMode::Load(acp_session_id) => {
+                            (SessionId::new(acp_session_id.as_str()), Vec::new())
+                        }
+                    };
                     let _ = conn_tx.send((
                         cx.clone(),
                         session_id,
@@ -628,7 +676,13 @@ impl AcpClient {
                 .await
         });
 
-        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
+        spawn_crash_watcher(
+            connection_task,
+            abort_rx,
+            crash_tx.clone(),
+            accumulator.clone(),
+            alive.clone(),
+        );
 
         let (
             connection,
@@ -637,13 +691,35 @@ impl AcpClient {
             supports_image,
             supports_embedded_context,
             initial_config_options,
-        ) = conn_rx.await.map_err(|_| AcpError::internal_error())?;
+        ) = match conn_rx.await {
+            Ok(parts) => parts,
+            Err(_) => {
+                // agent 已 spawn 但连接未建成（initialize 失败/超时）：清理 pid
+                // 自报文件避免 /tmp 累积；进程由 crate 侧 teardown 回收。
+                #[cfg(unix)]
+                agent_proc::remove_pid_file(&pid_file);
+                return Err(AcpError::internal_error());
+            }
+        };
+
+        // D1：捕获 agent pid（wrapper 自报为主，/proc diff 兜底）。None = 降级
+        // 路径，失败原因已在 agent_proc 内 WARN；释放时退化为仅 signal。
+        #[cfg(unix)]
+        let agent_pid = agent_proc::capture_agent_pid(&pid_file, &children_before, &scan_workspace);
+        #[cfg(not(unix))]
+        let agent_pid: Option<u32> = {
+            tracing::warn!(
+                "非 Unix 平台：ACP agent pid 不可得（无 wrapper 自报与 /proc 扫描），释放时仅发优雅关闭信号"
+            );
+            None
+        };
 
         Ok(AcpClient {
             connection,
             session_id,
             session_update_tx,
             _shutdown_tx: Mutex::new(Some(shutdown_tx)),
+            _abort_tx: Mutex::new(Some(abort_tx)),
             crash_tx,
             system_notice_tx,
             terminal_event_tx,
@@ -658,7 +734,8 @@ impl AcpClient {
             activity,
             accumulator,
             config_prefs: config_prefs_slot,
-            alive: AtomicBool::new(true),
+            alive,
+            agent_pid: Mutex::new(agent_pid),
         })
     }
 
@@ -672,7 +749,7 @@ impl AcpClient {
     }
 
     /// 订阅后端主动产生的系统通知（权限超时回收等，与 agent 崩溃无关）。
-    pub fn system_notice_subscribe(&self) -> broadcast::Receiver<String> {
+    pub fn system_notice_subscribe(&self) -> broadcast::Receiver<SystemNotice> {
         self.system_notice_tx.subscribe()
     }
 
@@ -692,6 +769,12 @@ impl AcpClient {
         self.accumulator.turn_row_id()
     }
 
+    /// agent 子进程 pid（D1 捕获）。`None` = 捕获失败（降级路径，agent_proc 内
+    /// 已 WARN）。供诊断与回归测试观测（如断言 shutdown 后进程组无残留）。
+    pub fn agent_pid(&self) -> Option<u32> {
+        *self.agent_pid.lock().unwrap()
+    }
+
     /// 上一次定稿结算出的 turn 时长（工作 / 等真人审批）。`mark_prompt_idle()` 之后
     /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
     pub fn turn_timing(&self) -> Option<TurnTiming> {
@@ -704,8 +787,8 @@ impl AcpClient {
     }
 
     /// 广播后端主动产生的系统通知（权限超时回收告知等；无订阅者时静默丢弃）。
-    pub fn notify_system_message(&self, label: String) {
-        let _ = self.system_notice_tx.send(label);
+    pub fn notify_system_message(&self, notice: SystemNotice) {
+        let _ = self.system_notice_tx.send(notice);
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {
@@ -1120,266 +1203,7 @@ impl AcpClient {
         acp_session_id: String,
         api_keys: &std::collections::HashMap<String, String>,
     ) -> Result<Self, AcpError> {
-        let resolved_cmd = match agent.npm_package.as_deref() {
-            Some(_) => {
-                crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
-                    .await
-                    .map_err(|e| AcpError::internal_error().data(e))?
-                    .to_string_lossy()
-                    .to_string()
-            }
-            None => agent.command.clone(),
-        };
-
-        let mut all_args: Vec<String> = Vec::new();
-        // agent.env（DB 配置）显式指定
-        for env_var in &agent.env {
-            all_args.push(format!("{}={}", env_var.key, env_var.value));
-        }
-        // 注入全局 API key（~/.omniterm/api_keys.toml / 环境变量配置的模型 key）
-        // agent.env 中显式配置的 key 优先，不覆盖
-        for (key, value) in api_keys {
-            if !agent.env.iter().any(|e| e.key == *key) {
-                all_args.push(format!("{}={}", key, value));
-            }
-        }
-        // 包装 agent 命令为 `sh -c "cd <workspace> && exec <cmd> <args>"`，
-        // 让 agent 子进程的 OS cwd 落在 session 的 workspace_path 上
-        // （详见 wrap_agent_with_cwd 的 doc）。POSIX-only 路径。
-        #[cfg(unix)]
-        let (cmd, args) =
-            ("/bin/sh".to_string(), wrap_agent_with_cwd(&resolved_cmd, &agent.args, &cwd));
-        #[cfg(not(unix))]
-        let (cmd, args) = (resolved_cmd, agent.args.clone());
-
-        all_args.push(cmd);
-        all_args.extend(args);
-
-        let transport = AcpAgent::from_args(all_args)?;
-
-        let (session_update_tx, _) = broadcast::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
-        let (crash_tx, _) = broadcast::channel::<String>(16);
-        let (system_notice_tx, _) = broadcast::channel::<String>(8);
-        let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
-        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-        let (conn_tx, conn_rx) = oneshot::channel::<(
-            ConnectionTo<AcpAgentRole>,
-            SessionId,
-            bool,
-            bool,
-            bool,
-            Vec<SessionConfigOption>,
-        )>();
-
-        let notif_tx = session_update_tx.clone();
-        let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
-        let tm = terminal_manager.clone();
-        let permission_manager = Arc::new(PermissionManager::new());
-        let pm = permission_manager.clone();
-        let activity = Arc::new(Mutex::new(ActivityState::new()));
-        let commands_notif: Arc<Mutex<Option<SessionNotification>>> = Arc::new(Mutex::new(None));
-        let accumulator = Arc::new(TurnAccumulator::new());
-        let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
-            Arc::new(Mutex::new(None));
-
-        let builder = agent_client_protocol::Client
-            .builder()
-            .name("omniterm")
-            .on_receive_notification(
-                {
-                    let tx = notif_tx.clone();
-                    let activity = activity.clone();
-                    let commands_notif = commands_notif.clone();
-                    let accumulator = accumulator.clone();
-                    let config_prefs_slot = config_prefs_slot.clone();
-                    async move |notification: SessionNotification, _cx| {
-                        on_agent_notification(
-                            &activity,
-                            &accumulator,
-                            &commands_notif,
-                            &config_prefs_slot,
-                            &tx,
-                            notification,
-                        )
-                        .await
-                    }
-                },
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_request(
-                {
-                    let pm = pm.clone();
-                    let accumulator = accumulator.clone();
-                    async move |request: RequestPermissionRequest, responder, _cx| {
-                        // 登记成功即进入未决态 → 起算「等真人审批」区间（无活跃 turn 时
-                        // begin_wait 自行 no-op，见 TurnAccumulator）。
-                        pm.handle_request(request, responder).await?;
-                        accumulator.begin_wait();
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let read_cwd = cwd.clone();
-                    async move |request: ReadTextFileRequest, responder, _cx| {
-                        let path = match resolve_fs_path(&read_cwd, &request.path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                let _ = responder.respond_with_internal_error(e);
-                                return Ok(());
-                            }
-                        };
-                        match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => {
-                                let _ = responder.respond(ReadTextFileResponse::new(content));
-                            }
-                            Err(e) => {
-                                let _ = responder
-                                    .respond_with_internal_error(format!("read failed: {}", e));
-                            }
-                        }
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let write_cwd = cwd.clone();
-                    async move |request: WriteTextFileRequest, responder, _cx| {
-                        let path = match resolve_fs_path(&write_cwd, &request.path) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                let _ = responder.respond_with_internal_error(e);
-                                return Ok(());
-                            }
-                        };
-                        if let Some(parent) = path.parent() {
-                            let _ = tokio::fs::create_dir_all(parent).await;
-                        }
-                        match tokio::fs::write(&path, &request.content).await {
-                            Ok(()) => {
-                                let _ = responder.respond(WriteTextFileResponse::new());
-                            }
-                            Err(e) => {
-                                let _ = responder
-                                    .respond_with_internal_error(format!("write failed: {}", e));
-                            }
-                        }
-                        Ok(())
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: CreateTerminalRequest, responder, _cx| {
-                        tm.handle_create(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: agent_client_protocol::schema::v1::TerminalOutputRequest, responder, _cx| {
-                        tm.handle_output(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: KillTerminalRequest, responder, _cx| {
-                        tm.handle_kill(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: ReleaseTerminalRequest, responder, _cx| {
-                        tm.handle_release(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .on_receive_request(
-                {
-                    let tm = tm.clone();
-                    async move |request: WaitForTerminalExitRequest, responder, _cx| {
-                        tm.handle_wait_for_exit(request, responder).await
-                    }
-                },
-                agent_client_protocol::on_receive_request!(),
-            );
-
-        let connection_task = tokio::spawn(async move {
-            builder
-                .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {
-                    let init_resp = cx
-                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                        .block_task()
-                        .await?;
-                    let supports_load = init_resp.agent_capabilities.load_session;
-                    let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
-                    let supports_embedded =
-                        init_resp.agent_capabilities.prompt_capabilities.embedded_context;
-
-                    let session_id = SessionId::new(acp_session_id.as_str());
-                    let _ = conn_tx.send((
-                        cx.clone(),
-                        session_id,
-                        supports_load,
-                        supports_image,
-                        supports_embedded,
-                        Vec::new(),
-                    ));
-
-                    let _ = shutdown_rx.await;
-                    Ok(())
-                })
-                .await
-        });
-
-        spawn_crash_watcher(connection_task, crash_tx.clone(), accumulator.clone());
-
-        let (
-            connection,
-            session_id,
-            supports_load_session,
-            supports_image,
-            supports_embedded_context,
-            initial_config_options,
-        ) = conn_rx.await.map_err(|_| AcpError::internal_error())?;
-
-        Ok(AcpClient {
-            connection,
-            session_id,
-            session_update_tx,
-            _shutdown_tx: Mutex::new(Some(shutdown_tx)),
-            crash_tx,
-            system_notice_tx,
-            terminal_event_tx,
-            turn_end_tx,
-            terminal_manager,
-            permission_manager,
-            supports_load_session,
-            supports_image,
-            supports_embedded_context,
-            initial_config_options: Arc::new(Mutex::new(initial_config_options)),
-            available_commands_notif: commands_notif,
-            activity,
-            accumulator,
-            config_prefs: config_prefs_slot,
-            alive: AtomicBool::new(true),
-        })
+        Self::spawn_with_session(agent, cwd, api_keys, SessionMode::Load(acp_session_id)).await
     }
 
     /// 通过 shared reference 回收所有子进程并通知连接任务退出。
@@ -1393,10 +1217,28 @@ impl AcpClient {
         // streaming 态（幂等，已在别处定稿时这里是 no-op）。
         self.mark_prompt_idle();
         self.terminal_manager.kill_all().await;
+        // D3 顺序链：killpg 插在优雅收尾之后、signal 之前。kill 让 crate 内部
+        // pidfd 等待路径的 try_wait 立即返回退出状态，从根上打破连接 poll 空转
+        // （2026-09-21 CPU 尖峰止血，见 agent_proc 模块文档）；正常路径 agent
+        // 本就在 signal 后退出，kill 为 no-op（ESRCH 忽略 → 幂等），不破坏上面
+        // 的优雅收尾。注意 kill 会让 crate 的 finish_child_exit 返回
+        // "exited with signal 9" Err——连接任务随之以 Err 结束，但 alive 已置
+        // false，crash watcher 据此判定为主动关闭、静默不广播（见 spawn_crash_watcher）。
+        let pid = self.agent_pid();
+        tracing::debug!(?pid, "ACP shutdown: kill agent 进程组（D2），随后发优雅关闭信号");
+        agent_proc::kill_agent_process_group(pid);
         // 取出并 drop shutdown_tx → 连接任务的 shutdown_rx 收到 RecvError 后退出。
         // lock().await 安全：shutdown_tx 仅在此处和 disconnect 中被 take，
         // 且调用方不会跨 await 持有此锁。
         let _ = self._shutdown_tx.lock().unwrap().take();
+        // D4：signal 之后置的 abort 兜底。abort 只做本地资源清理（杀不了 agent
+        // 进程，ChildGuard 归 crate 内部 task_actor 所有），正常路径下连接任务
+        // 多已自行结束、abort_rx 随 watcher 退出被 drop，send 失败静默。
+        if let Ok(mut guard) = self._abort_tx.lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(());
+        }
     }
 
     pub async fn disconnect(self) {
@@ -1406,8 +1248,18 @@ impl AcpClient {
         // 回收本会话可能创建的终端子进程（kill_on_drop 依赖 TerminalProcess 被 drop，
         // 但 spawned 的 wait task 持有 Child 句柄，需显式 kill_all 通知其退出）。
         self.terminal_manager.kill_all().await;
+        // D2/D3：与 shutdown 同口径——先 killpg 再 signal（探针与 WS 层的释放
+        // 路径，语义一致，差异仅在 self 被消费）。
+        let pid = self.agent_pid();
+        tracing::debug!(?pid, "ACP disconnect: kill agent 进程组（D2），随后发优雅关闭信号");
+        agent_proc::kill_agent_process_group(pid);
         if let Ok(mut guard) = self._shutdown_tx.try_lock() {
             let _ = guard.take();
+        }
+        if let Ok(mut guard) = self._abort_tx.try_lock()
+            && let Some(tx) = guard.take()
+        {
+            let _ = tx.send(());
         }
         // 注意：agent 连接任务句柄已移交给 `spawn_crash_watcher`，由其负责在
         // 连接异常退出时广播错误；此处不再 `await`，仅触发优雅关闭。
@@ -1417,7 +1269,6 @@ impl AcpClient {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::process::Stdio;
 
     // ── build_prompt_blocks / file_uri：prompt 内容块组装 ──────────────
 
@@ -1521,172 +1372,5 @@ mod tests {
         assert_eq!(file_uri("a b#c?d%e.pdf"), "file:///a%20b%23c%3Fd%25e.pdf");
         // 非 ASCII 原样保留：名义 URI 仅供标识，agent 应消费内联 blob
         assert_eq!(file_uri("报告.pdf"), "file:///报告.pdf");
-    }
-
-    // ── sh_quote：POSIX shell 单引号转义 ────────────────────────────────
-
-    #[test]
-    fn sh_quote_empty_string() {
-        assert_eq!(sh_quote(""), "''");
-    }
-
-    #[test]
-    fn sh_quote_plain_path() {
-        assert_eq!(sh_quote("/home/user/project"), "'/home/user/project'");
-    }
-
-    #[test]
-    fn sh_quote_no_special_chars_passes_through() {
-        // 不含单引号 → 直接单引号包裹
-        assert_eq!(sh_quote("hello world"), "'hello world'");
-        assert_eq!(sh_quote("--acp"), "'--acp'");
-    }
-
-    #[test]
-    fn sh_quote_with_single_quote_splits_segments() {
-        // POSIX 转义规则：'foo'bar' → 'foo'\''bar'
-        assert_eq!(sh_quote("foo'bar"), "'foo'\\''bar'");
-    }
-
-    #[test]
-    fn sh_quote_only_single_quote() {
-        // 极端情况：只有单引号
-        // 实现逻辑：开单引号 → 对 `'` 字符插入 '然后转义'再开单引号 → 关单引号
-        // 输入 `'` → `' '' \' '' '` 收敛为 `''\'''`
-        // shell 解析：`''`(空) + `\'` (literal `'`) + `''`(空) = `'` ✓
-        assert_eq!(sh_quote("'"), "''\\'''");
-    }
-
-    #[test]
-    fn sh_quote_does_not_inject_shell_metacharacters() {
-        // 含 `;` `&&` `$()` 都不应让 sh 误解析：单引号包裹下全部字面化
-        let dangerous = "a; rm -rf /; $(echo bad); `id`";
-        let quoted = sh_quote(dangerous);
-        assert_eq!(quoted, format!("'{dangerous}'"));
-    }
-
-    // ── wrap_agent_with_cwd：shell wrapper 构造 ────────────────────────
-
-    #[test]
-    fn wrap_returns_cd_then_exec_form() {
-        let args =
-            wrap_agent_with_cwd("codebuddy", &["--acp".into()], Path::new("/home/user/project"));
-        assert_eq!(args.len(), 2);
-        assert_eq!(args[0], "-c");
-        // cd 必须是 cd '/home/user/project' && exec 'codebuddy' '--acp'
-        assert_eq!(args[1], "cd '/home/user/project' && exec 'codebuddy' '--acp'");
-    }
-
-    #[test]
-    fn wrap_escapes_workspace_with_spaces_and_quotes() {
-        let workspace = Path::new("/home/user/it's a 'project'");
-        let args = wrap_agent_with_cwd("agent", &[], workspace);
-        // workspace 路径里同时含空格和单引号，单引号必须被 '\\'' 分段转义
-        assert!(args[1].contains("'/home/user/it'\\''s a '\\''project'\\'''"));
-    }
-
-    #[test]
-    fn wrap_with_no_args_emits_cd_exec_only() {
-        let args = wrap_agent_with_cwd("/usr/bin/myagent", &[], Path::new("/tmp"));
-        assert_eq!(args[1], "cd '/tmp' && exec '/usr/bin/myagent'");
-    }
-
-    // ── 端到端：spawn 出来的子进程 cwd 必须等于 session workspace ────────
-
-    /// 模拟 AcpClient::spawn_and_connect 的 all_args 构造路径，spawn
-    /// `pwd` 进程并断言 stdout 等于 session workspace。这是
-    /// `/proc/<pid>/cwd` 行为的端到端回归——单测 `wrap_agent_with_cwd`
-    /// 只验证字符串拼接，不验证执行时 cwd 真的切到目标。
-    #[tokio::test]
-    async fn wrapped_subprocess_has_session_workspace_as_cwd() {
-        // 用 tmp 子目录作为目标 workspace，避免依赖具体路径
-        let workspace = std::env::temp_dir().join(format!(
-            "omniterm-cwd-test-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace");
-        let workspace_str = workspace.to_string_lossy().to_string();
-
-        // 模拟 spawn_and_connect 中的 wrapper 构造：
-        // AcpAgent::from_args 接受 ["-c", <script>]，前面是 sh 路径
-        // 实际行为：从 all_args[0] 解析命令（/bin/sh），all_args[1..] 作为参数
-        let wrapped = wrap_agent_with_cwd("pwd", &[], &workspace);
-
-        // 直接 spawn sh，验证子进程 cwd。捕获 stdout，期望 pwd 输出 workspace_str
-        let output = std::process::Command::new("/bin/sh")
-            .args(&wrapped)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .expect("spawn sh");
-        assert!(
-            output.status.success(),
-            "sh exited with {}: stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(
-            stdout, workspace_str,
-            "subprocess cwd was {stdout:?}, expected {workspace_str:?} — wrap_agent_with_cwd \
-             is not actually changing the OS cwd. This is the regression \
-             the fix targets: agent-client-protocol's AcpAgent::spawn_process \
-             does NOT call Command::current_dir, so the spawned agent runs \
-             in the backend's cwd rather than the session's workspace_path."
-        );
-
-        // cleanup
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    /// 验证 wrap + sh 的 path-with-spaces 端到端：workspace 路径含空格时，
-    /// `cd` 仍能正确切换、pwd 输出仍等于 workspace。
-    #[tokio::test]
-    async fn wrapped_subprocess_workspaces_with_spaces() {
-        let parent = std::env::temp_dir();
-        let workspace = parent.join(format!(
-            "omniterm cwd test {}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&workspace).expect("create temp workspace with space");
-        let workspace_str = workspace.to_string_lossy().to_string();
-        assert!(
-            workspace_str.contains(' '),
-            "test setup must use a workspace with spaces; got {workspace_str}"
-        );
-
-        let wrapped = wrap_agent_with_cwd("pwd", &[], &workspace);
-        let output = std::process::Command::new("/bin/sh")
-            .args(&wrapped)
-            .stdout(Stdio::piped())
-            .output()
-            .expect("spawn sh");
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(
-            stdout, workspace_str,
-            "subprocess cwd with spaces-in-path didn't survive sh -c wrap"
-        );
-
-        let _ = std::fs::remove_dir_all(&workspace);
-    }
-
-    /// 验证 exec 替换 shell：子进程 PID 不同于 wrapper 自身。
-    /// 若 shell 没被 exec 替换，会出现一个常驻 shell 子进程被 OOM-killer 抓到。
-    /// （这是间接证据——若 build 输出 `exit_signal` 不是 0，则说明进程异常。）
-    #[tokio::test]
-    async fn wrapped_subprocess_exits_normally() {
-        let workspace = std::env::temp_dir().join("omniterm-exec-test");
-        let _ = std::fs::create_dir_all(&workspace);
-
-        let wrapped = wrap_agent_with_cwd("true", &[], &workspace);
-        let output =
-            std::process::Command::new("/bin/sh").args(&wrapped).output().expect("spawn sh");
-        assert!(output.status.success(), "wrapped exit != 0");
-        // exec 替换后无残留 shell 进程——这里只断言正常退出，不强求 PID 不同
-        // （exec 替换行为由 shell 保证，不应在测试中过度约束）
-
-        let _ = std::fs::remove_dir_all(&workspace);
     }
 }

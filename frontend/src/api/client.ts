@@ -3,6 +3,11 @@ import { useAppStore } from '../stores/appStore'
 
 const BASE = '/api/v1'
 
+/** 权限请求超时行为模式（后端 settings 表 `acp_perm_timeout_mode` 白名单值）：
+ *  `wait` 一直等待；`auto` 超时自动代替用户应答让 agent 继续；`abort` 超时取消
+ *  请求并回收会话（默认，2026-08-18 起的安全策略）。 */
+export type PermissionTimeoutMode = 'wait' | 'auto' | 'abort'
+
 /**
  * Error thrown by `request` for non-2xx responses. Carries the HTTP status
  * and the parsed JSON body so callers can react to specific codes
@@ -247,6 +252,14 @@ export const api = {
     request<{ minutes: number }>('/settings/acp-idle-recycle', {
       method: 'PUT',
       body: JSON.stringify({ minutes }),
+    }),
+  /** 权限请求超时配置：模式（wait/auto/abort）+ 超时时长（分钟）。 */
+  getPermissionTimeout: () =>
+    request<{ mode: PermissionTimeoutMode; minutes: number }>('/settings/permission-timeout'),
+  setPermissionTimeout: (mode: PermissionTimeoutMode, minutes: number) =>
+    request<{ mode: PermissionTimeoutMode; minutes: number }>('/settings/permission-timeout', {
+      method: 'PUT',
+      body: JSON.stringify({ mode, minutes }),
     }),
 
   // Auth — public endpoints where a 401/409 is a business error (wrong

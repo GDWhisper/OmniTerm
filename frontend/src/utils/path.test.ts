@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject } from './path'
+import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -170,5 +170,35 @@ describe('findCoveringProject', () => {
   it('returns undefined when nothing covers', () => {
     expect(findCoveringProject('/tmp/scratch', projects)).toBeUndefined()
     expect(findCoveringProject('/tmp/scratch', [])).toBeUndefined()
+  })
+})
+
+describe('findExactProject', () => {
+  const projects = [
+    { id: 'p-home', path: '/home/user' },
+    { id: 'p-proj', path: '/home/user/proj' },
+  ]
+
+  it('matches only the project whose root equals the dir', () => {
+    expect(findExactProject('/home/user/proj', projects)?.id).toBe('p-proj')
+    expect(findExactProject('/home/user', projects)?.id).toBe('p-home')
+  })
+
+  it('does not match a child directory (that is covering, not exact)', () => {
+    expect(findExactProject('/home/user/proj/src', projects)).toBeUndefined()
+  })
+
+  it('does not match a sibling prefix (boundary check)', () => {
+    expect(findExactProject('/home/ab', projects)).toBeUndefined()
+  })
+
+  it('normalizes trailing slashes on both sides', () => {
+    expect(findExactProject('/data/', [{ id: 'p', path: '/data' }])?.id).toBe('p')
+    expect(findExactProject('/data', [{ id: 'p', path: '/data/' }])?.id).toBe('p')
+  })
+
+  it('matches the root project for root dirs', () => {
+    expect(findExactProject('/', [{ id: 'p', path: '/' }])?.id).toBe('p')
+    expect(findExactProject('/', projects)).toBeUndefined()
   })
 })

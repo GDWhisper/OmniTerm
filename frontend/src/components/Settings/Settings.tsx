@@ -5,6 +5,7 @@ import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN } 
 import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
 import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
+import type { PermissionTimeoutMode } from '../../api/client'
 import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
@@ -53,6 +54,13 @@ const languages = [
   { value: 'en', label: 'En' },
 ]
 
+/** 权限请求超时行为模式选项（顺序即面板展示顺序；abort 为默认安全策略）。 */
+const PERM_TIMEOUT_MODES: { value: PermissionTimeoutMode; labelKey: string; hintKey: string }[] = [
+  { value: 'wait', labelKey: 'settings.permTimeoutWait', hintKey: 'settings.permTimeoutWaitHint' },
+  { value: 'auto', labelKey: 'settings.permTimeoutAuto', hintKey: 'settings.permTimeoutAutoHint' },
+  { value: 'abort', labelKey: 'settings.permTimeoutAbort', hintKey: 'settings.permTimeoutAbortHint' },
+]
+
 /** Minutes above which an over-long disconnect/recycle timeout is flagged. */
 const WARNING_THRESHOLD_MIN = 30
 
@@ -66,10 +74,15 @@ interface DisconnectSliderProps {
   onChange: (n: number) => void
   /** Optional fire-and-forget side effect (e.g. persisting to the backend). */
   onCommit?: (n: number) => void
+  /** 警告触发线（严格大于 `warnAboveMin` 才显示）。缺省回退
+   *  `WARNING_THRESHOLD_MIN`（>= 即警告，适配默认值远低于 30 的滑块）。 */
+  warnAboveMin?: number
 }
 
-function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCommit }: DisconnectSliderProps) {
+function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCommit, warnAboveMin }: DisconnectSliderProps) {
   const { t } = useTranslation()
+  const warn =
+    warnAboveMin === undefined ? value >= WARNING_THRESHOLD_MIN : value > warnAboveMin
   return (
     <section className="space-y-2">
       <SectionTitle>{t(titleKey)}</SectionTitle>
@@ -91,7 +104,7 @@ function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCo
         className="w-full"
       />
       <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(hintKey)}</p>
-      {value >= WARNING_THRESHOLD_MIN && (
+      {warn && (
         <p style={{ fontSize: 11, color: 'var(--warning)', lineHeight: 1.5 }}>{t(warningKey)}</p>
       )}
     </section>
@@ -677,6 +690,64 @@ function SessionsSection() {
   )
 }
 
+function PermissionTimeoutSection() {
+  const { t } = useTranslation()
+  const mode = useAppStore((s) => s.permTimeoutMode)
+  const minutes = useAppStore((s) => s.permTimeoutMin)
+  const active = PERM_TIMEOUT_MODES.find((m) => m.value === mode) ?? PERM_TIMEOUT_MODES[2]
+
+  // 模式与时长同一设置：任一侧改动都整体 PUT（后端白名单校验 + 热更新）。
+  const commit = (nextMode: PermissionTimeoutMode, nextMin: number) => {
+    useAppStore.getState().setPermTimeoutMode(nextMode)
+    useAppStore.getState().setPermTimeoutMin(nextMin)
+    api.setPermissionTimeout(nextMode, nextMin).catch(() => {})
+  }
+
+  return (
+    <>
+      <section className="space-y-2">
+        <SectionTitle>{t('settings.permTimeout')}</SectionTitle>
+        <div className="flex gap-1.5">
+          {PERM_TIMEOUT_MODES.map((m) => {
+            const isActive = m.value === mode
+            return (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => commit(m.value, minutes)}
+                className="flex-1 flex items-center justify-center"
+                style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
+                onMouseEnter={btnHover}
+                onMouseLeave={(e) => btnLeave(e, isActive)}
+              >
+                {t(m.labelKey)}
+              </button>
+            )
+          })}
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t(active.hintKey)}</p>
+        {mode === 'auto' && (
+          <p style={{ fontSize: 11, color: 'var(--warning)', lineHeight: 1.5 }}>
+            {t('settings.permTimeoutAutoWarning')}
+          </p>
+        )}
+      </section>
+      {mode !== 'wait' && (
+        <DisconnectSlider
+          titleKey="settings.permTimeoutMinutes"
+          hintKey="settings.permTimeoutMinutesHint"
+          warningKey="settings.permTimeoutMinutesWarning"
+          value={minutes}
+          onChange={(n) => useAppStore.getState().setPermTimeoutMin(n)}
+          onCommit={(n) => commit(mode, n)}
+          // 默认 30 分钟即历史行为，只有调得比默认更长才提醒内存驻留。
+          warnAboveMin={WARNING_THRESHOLD_MIN}
+        />
+      )}
+    </>
+  )
+}
+
 function CrtSection() {
   const crtScanlines = useAppStore((s) => s.crtScanlines)
   const setCrtScanlines = useAppStore((s) => s.setCrtScanlines)
@@ -764,7 +835,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'sessions',
     labelKey: 'settings.category.sessions',
-    sections: [SessionsSection],
+    sections: [PermissionTimeoutSection, SessionsSection],
   },
   {
     id: 'language',

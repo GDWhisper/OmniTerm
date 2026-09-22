@@ -425,9 +425,12 @@ pub async fn cleanup_session_runtime(
     match runtime_kind {
         "acp" => {
             if let Some(client) = state.acp_supervisor.dispose(session_id).await {
-                // shutdown 走 shared reference 立即杀子进程，不依赖 Arc 引用归零：
+                // shutdown 走 shared reference 主动 teardown，不依赖 Arc 引用归零：
                 // WS handler 持 `Arc<AcpClient>` 时 try_unwrap 永远失败，旧写法会
                 // 留下孤儿进程（删了 DB 行/释放了注册，进程却还在跑）。
+                // teardown 内含 killpg 杀 agent 进程组（D2，2026-09-21 CPU 尖峰
+                // 修复）：连接 poll 卡死时 crate 内部 ChildGuard 的 killpg 永远
+                // 走不到，须由 omniterm 侧直接击杀。详见 acp::agent_proc。
                 client.shutdown().await;
             }
         }
@@ -504,8 +507,9 @@ async fn release_session(
     match runtime_kind.as_deref() {
         Some("acp") => {
             if let Some(client) = state.acp_supervisor.dispose(&id).await {
-                // 同上：shutdown 强制杀进程，否则聚焦该会话时 WS handler 持有的
-                // Arc 引用会让进程残留，Sidebar 却显示已释放（与实际进程存活脱节）。
+                // 同上：shutdown 的 teardown 含 killpg 杀 agent 进程组（D2），
+                // 否则聚焦该会话时 WS handler 持有的 Arc 引用会让进程残留，
+                // Sidebar 却显示已释放（与实际进程存活脱节）。
                 client.shutdown().await;
             }
             (StatusCode::OK, Json(json!({ "ok": true })))

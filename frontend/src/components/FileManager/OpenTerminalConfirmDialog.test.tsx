@@ -10,6 +10,8 @@ import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './Ope
  * 引擎行断言依赖 appStore 的 defaultTerminalEngine × multiplexerAvailable
  * （useTerminalEngine 的收敛语义）：展示的必须是收敛后的实际引擎，
  * 宿主缺复用器时即使默认引擎是 tmux 也要显示 pty。
+ * 「创建新项目并打开终端」备选的显隐由 target.canCreateProject 决定——
+ * 展示路径在侧栏无同根项目（findExactProject 未命中）才出现。
  */
 describe('OpenTerminalConfirmDialog', () => {
   let container: HTMLDivElement
@@ -19,6 +21,7 @@ describe('OpenTerminalConfirmDialog', () => {
     projectId: 'p1',
     projectName: 'OmniTerm',
     cwd: '/home/pax/coding/OmniTerm-dev',
+    canCreateProject: true,
   }
 
   beforeAll(async () => {
@@ -59,12 +62,12 @@ describe('OpenTerminalConfirmDialog', () => {
   }
 
   it('renders nothing when closed', async () => {
-    await render({ target: null, onClose: () => {}, onConfirm: () => {} })
+    await render({ target: null, onClose: () => {}, onConfirm: () => {}, onCreateProject: () => {} })
     expect(document.body.textContent).not.toContain('OmniTerm')
   })
 
   it('shows project name, cwd and resolved engine', async () => {
-    await render({ target, onClose: () => {}, onConfirm: () => {} })
+    await render({ target, onClose: () => {}, onConfirm: () => {}, onCreateProject: () => {} })
     expect(document.body.textContent).toContain('将在现有项目「OmniTerm」下打开终端')
     expect(document.body.textContent).toContain(target.cwd)
     expect(document.body.textContent).toContain('引擎：tmux')
@@ -77,17 +80,37 @@ describe('OpenTerminalConfirmDialog', () => {
 
   it('shows the fallback engine when host lacks the multiplexer', async () => {
     useAppStore.setState({ defaultTerminalEngine: 'tmux', multiplexerAvailable: false })
-    await render({ target, onClose: () => {}, onConfirm: () => {} })
+    await render({ target, onClose: () => {}, onConfirm: () => {}, onCreateProject: () => {} })
     expect(document.body.textContent).toContain('引擎：pty')
   })
 
   it('confirm passes projectId and cancel closes', async () => {
     const onConfirm = vi.fn()
     const onClose = vi.fn()
-    await render({ target, onClose, onConfirm })
+    await render({ target, onClose, onConfirm, onCreateProject: () => {} })
     clickButtonByText('打开终端')
     expect(onConfirm).toHaveBeenCalledWith('p1')
     clickButtonByText('取消')
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers create-project when the shown path has no same-root project', async () => {
+    const onCreateProject = vi.fn()
+    await render({ target, onClose: () => {}, onConfirm: () => {}, onCreateProject })
+    clickButtonByText('创建新项目并打开终端')
+    expect(onCreateProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides create-project when the shown path is already a project root', async () => {
+    await render({
+      target: { ...target, canCreateProject: false },
+      onClose: () => {},
+      onConfirm: () => {},
+      onCreateProject: () => {},
+    })
+    const labels = Array.from(document.body.querySelectorAll('button')).map((b) => b.textContent?.trim())
+    expect(labels).not.toContain('创建新项目并打开终端')
+    // 主路径不受影响
+    expect(labels).toContain('打开终端')
   })
 })

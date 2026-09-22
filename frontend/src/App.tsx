@@ -70,6 +70,21 @@ function App() {
     api.systemInfo().then((res) => setProxyDomain(res.proxy_domain ?? null)).catch(() => {})
   }, [])
 
+  useEffect(() => {
+    // 后端持久化的回收/超时设置：启动时回填 store（settings 表是真相源，
+    // 刷新后滑块必须显示持久值而非默认值）。失败静默——store 已有默认值，
+    // 面板打开时用户仍可改动并 PUT。
+    api.getAcpIdleRecycle()
+      .then((res) => useAppStore.getState().setAcpIdleRecycleMin(res.minutes))
+      .catch(() => {})
+    api.getPermissionTimeout()
+      .then((res) => {
+        useAppStore.getState().setPermTimeoutMode(res.mode)
+        useAppStore.getState().setPermTimeoutMin(res.minutes)
+      })
+      .catch(() => {})
+  }, [])
+
   if (authState === 'loading') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg-base)' }}>

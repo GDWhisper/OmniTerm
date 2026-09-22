@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::acp::AcpClient;
 use crate::models::agent::{Agent, AgentEnvVar, CreateAgent, UpdateAgent};
+use tracing;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -232,6 +233,15 @@ async fn test_agent(State(state): State<AppState>, Path(id): Path<String>) -> im
             (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
         }
         Err(_) => {
+            // 超时即握手未完成：外层 spawn future 被 drop → abort_tx 释放 →
+            // crash watcher abort 连接任务 → crate 的 ChildGuard::drop killpg
+            // 进程组（Phase 1 D4 兜底，P2-3；此时无 AcpClient 句柄，omniterm
+            // 侧 killpg 够不着，由 crate teardown 收尾）。pid 自报文件由任务内
+            // 的 PidFileCleanup 守卫清理。此处 WARN 留痕便于关联现场。
+            tracing::warn!(
+                agent_id = %id,
+                "agent 连接测试超时（15s）：agent 未完成 ACP 握手，已回收其进程组（crate teardown）"
+            );
             (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
         }
     }
@@ -252,6 +262,8 @@ async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
     };
 
     let cwd = std::env::temp_dir();
+    // 超时 WARN 留痕用：agent 随后被 move 进 spawn_and_connect。
+    let agent_label = agent.command.clone();
     match tokio::time::timeout(
         Duration::from_secs(15),
         AcpClient::spawn_and_connect(agent, cwd, &std::collections::HashMap::new()),
@@ -266,6 +278,12 @@ async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
             (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("connection failed: {}", e) })))
         }
         Err(_) => {
+            // 同 test_agent：握手超时 → abort_tx 释放 → watcher abort → crate
+            // ChildGuard::drop killpg 进程组（P2-3）。留痕。
+            tracing::warn!(
+                agent_command = %agent_label,
+                "agent 连接测试（raw）超时（15s）：agent 未完成 ACP 握手，已回收其进程组（crate teardown）"
+            );
             (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
         }
     }
