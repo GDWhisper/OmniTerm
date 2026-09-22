@@ -30,8 +30,11 @@
 //! 非 Linux 的 Unix（macOS）pid 文件主路径仍可用，但无 `/proc` 归属校验，
 //! killpg 与 crate `ChildGuard::drop` 同口径直接执行。
 
+#[cfg(unix)]
 use std::collections::HashSet;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -206,10 +209,12 @@ pub fn snapshot_direct_children() -> HashSet<u32> {
     set
 }
 
-/// 连接建成后捕获 agent pid（D1）：主路径读 wrapper 自报文件；缺失/非法时
-/// （workspace 不可用致 `cd` 失败等）回退 spawn 前后直接子进程 diff。两者都
-/// 失败返回 `None`——调用方降级为仅 signal（修复前现状），失败原因已 WARN。
-#[cfg(all(unix, target_os = "linux"))]
+/// 连接建成后捕获 agent pid（D1）：主路径读 wrapper 自报文件（平台无关，
+/// POSIX `echo $$` + 读文件）；缺失/非法时（workspace 不可用致 `cd` 失败等）
+/// 回退 spawn 前后直接子进程 diff——**仅 Linux 可用**（`/proc` 专属），非
+/// Linux Unix（macOS）无自报即放弃。两者都失败返回 `None`——调用方降级为
+/// 仅 signal（修复前现状），失败原因已 WARN。
+#[cfg(unix)]
 pub fn capture_agent_pid(
     pid_file: &Path,
     children_before: &HashSet<u32>,
@@ -218,19 +223,41 @@ pub fn capture_agent_pid(
     if let Some(pid) = read_and_clear_pid_file(pid_file) {
         return Some(pid);
     }
-    tracing::debug!("ACP pid 自报文件缺失或非法，回退 /proc 直接子进程扫描");
-    resolve_child_pid(children_before, workspace)
+    tracing::debug!("ACP pid 自报文件缺失或非法，回退直接子进程扫描");
+    // 兜底扫描分平台：/proc diff 是 Linux 专属，与 kill_agent_process_group
+    // 的非 Linux Unix 分支同口径——无自报即放弃，由调用方 WARN 降级为仅信号。
+    #[cfg(target_os = "linux")]
+    let fallback = resolve_child_pid(children_before, workspace);
+    #[cfg(not(target_os = "linux"))]
+    let fallback = {
+        let _ = (children_before, workspace);
+        tracing::warn!("非 Linux Unix 无 /proc 直接子进程扫描且 pid 自报缺失，放弃 pid 捕获");
+        None
+    };
+    fallback
 }
 
-/// spawn 前后 diff 直接子进程，取本次 spawn 的 agent pid。
-///
-/// 单个新 pid 直接返回；多个（restore + create + 探针并发 spawn）按
-/// `/proc/<pid>/cwd` 匹配 workspace 消歧；仍不唯一则放弃（`None`）——误杀
-/// 风险不可接受，宁缺勿滥（降级路径由调用方 WARN 兜底）。
+/// spawn 前后 diff 直接子进程，取本次 spawn 的 agent pid。决策逻辑见
+/// [`select_new_child_pid`]（与 /proc 读取分离以便确定性单测）。
 #[cfg(all(unix, target_os = "linux"))]
 pub fn resolve_child_pid(children_before: &HashSet<u32>, workspace: &Path) -> Option<u32> {
     let new_pids: Vec<u32> =
         snapshot_direct_children().difference(children_before).copied().collect();
+    select_new_child_pid(&new_pids, workspace)
+}
+
+/// 从 diff 出的新增 pid 中选出本次 spawn 的 agent：
+///
+/// 单个新 pid 直接返回；多个（restore + create + 探针并发 spawn）按
+/// `/proc/<pid>/cwd` 匹配 workspace 消歧；仍不唯一或为空则放弃（`None`）——
+/// 误杀风险不可接受，宁缺勿滥（降级路径由调用方 WARN 兜底）。
+///
+/// 单独成函数的原因：空集/单元素快路径若以「spawn 一个子进程再断言独占」的
+/// 集成形态测试，隐含假设「测试期间同一二进制内无任何其它用例 spawn 子进程」，
+/// 而套件并未提供该保证（实测与 control_mode 假 tmux 客户端测试并发时 diff
+/// 集合被污染而偶发红灯）。决策逻辑纯化后可对伪造 pid 列表做确定性断言。
+#[cfg(all(unix, target_os = "linux"))]
+fn select_new_child_pid(new_pids: &[u32], workspace: &Path) -> Option<u32> {
     if new_pids.is_empty() {
         tracing::warn!("spawn 前后直接子进程 diff 为空，agent pid 捕获失败");
         return None;
@@ -652,18 +679,44 @@ mod tests {
         let _ = child.wait();
     }
 
+    /// 快路径（单个新 pid 直接归属）：纯决策单测，不 spawn、不依赖进程全局
+    /// 互斥——原 `resolve_child_pid_single_new_child` 集成形态隐含「测试期间
+    /// 全二进制无人 spawn 子进程」的假设，实测与 control_mode 假 tmux 客户端
+    /// 测试并发时 diff 集合被污染（≥2 个新 pid 且无一 cwd 匹配 temp_dir）
+    /// 而偶发红灯（2026-09-22 v0.2.24 发版 CI）。单元素分支不读 /proc，
+    /// 伪造 pid 即可确定性断言。
     #[cfg(target_os = "linux")]
     #[test]
-    fn resolve_child_pid_single_new_child() {
-        let _guard = spawn_test_lock();
+    fn select_single_new_pid_fast_path() {
+        assert_eq!(select_new_child_pid(&[424242], &std::env::temp_dir()), Some(424242));
+    }
+
+    /// 空 diff → 放弃（宁缺勿滥）：同上，纯决策单测替代集成形态
+    /// （原 `resolve_child_pid_no_new_child_yields_none` 的快照窗口内任何
+    /// 并发 spawn 都会把它打红）。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn select_empty_new_pids_yields_none() {
+        assert_eq!(select_new_child_pid(&[], &std::env::temp_dir()), None);
+    }
+
+    /// 端到端（snapshot + diff + 选择）：断言「能找回本次 spawn 的子进程」
+    /// 而非「集合里只有它」。子进程落在唯一 cwd 目录下，即使其它用例并发
+    /// spawn 污染 diff 集合，也无论走单元素快路径还是 cwd 消歧路径，结果
+    /// 都确定是本子进程——对污染免疫，不再依赖全局互斥。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn resolve_child_pid_finds_spawned_child_among_strangers() {
+        let dir = unique_dir("resolve-single");
         let before = snapshot_direct_children();
-        let mut child = Command::new("sleep").arg("5").spawn().expect("spawn sleep");
+        let mut child =
+            Command::new("sleep").arg("5").current_dir(&dir).spawn().expect("spawn sleep");
         assert!(wait_until_registered(child.id()));
-        let resolved =
-            resolve_child_pid(&before, &std::env::temp_dir()).expect("单个新 pid 应直接归属");
+        let resolved = resolve_child_pid(&before, &dir).expect("应归属到本子进程");
         assert_eq!(resolved, child.id());
         let _ = child.kill();
         let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(target_os = "linux")]
@@ -685,14 +738,6 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir_a);
         let _ = std::fs::remove_dir_all(&dir_b);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn resolve_child_pid_no_new_child_yields_none() {
-        let _guard = spawn_test_lock();
-        let before = snapshot_direct_children();
-        assert_eq!(resolve_child_pid(&before, &std::env::temp_dir()), None);
     }
 
     // ── 进程组击杀（D2）────────────────────────────────────────────────
