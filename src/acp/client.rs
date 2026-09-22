@@ -640,6 +640,8 @@ impl AcpClient {
         let pid_file_cleanup = agent_proc::PidFileCleanup::new(pid_file.clone());
 
         let connection_task = tokio::spawn(async move {
+            // 守卫绑定是 cfg(unix) 的，此引用必须同门控（Windows 上绑定不存在）。
+            #[cfg(unix)]
             let _pid_file_cleanup = pid_file_cleanup;
             builder
                 .connect_with(transport, move |cx: ConnectionTo<AcpAgentRole>| async move {

@@ -20,7 +20,9 @@ const EXIT_CODE_WAIT: Duration = Duration::from_secs(2);
 
 /// 信号致死时代替退出码的哨兵值：Unix 退出码取 waitpid 状态高 8 位
 /// （0..=255），-1 不可能是真实退出码，故可无歧义表示「已退出、无退出码」。
-#[cfg(unix)]
+/// Windows 上 `ExitStatus::code()` 对异常终止同样返回 `None`，哨兵语义一致。
+/// 平台中立——reap/stop 记账路径是无条件编译的，勿加平台门控（v0.2.24 发版
+/// Windows job 实测：门控 unix 使 `reap_child` E0425）。
 const EXITED_WITHOUT_CODE: i32 = -1;
 
 /// A single tmux control-mode connection for one session.
