@@ -621,8 +621,14 @@ impl AcpClient {
         let scan_workspace = cwd.clone();
         // D1 兜底扫描基线：crate 在 connect_with 内部才 spawn 子进程，快照紧贴
         // spawn 点取；diff 出的新 pid 在并发 spawn 时按 cwd 消歧（见 agent_proc）。
-        #[cfg(unix)]
+        // /proc 快照是 Linux 专属——此前门控写成 `#[cfg(unix)]` 而实现是
+        // `unix && linux`，macOS（unix 非 linux）直接 E0425 编不过（v0.2.24
+        // 发版 macOS job 实测）。非 Linux Unix 无扫描兜底，传空基线仅供
+        // capture_agent_pid 签名（其 pid 自报主路径不受影响）。
+        #[cfg(target_os = "linux")]
         let children_before = agent_proc::snapshot_direct_children();
+        #[cfg(all(unix, not(target_os = "linux")))]
+        let children_before = std::collections::HashSet::new();
 
         // P2-3：pid 自报文件的 RAII 清理守卫（随任务终结删除，幂等）。覆盖外层
         // future 被 drop 的路径——探针 15s 超时时 abort_tx 随之释放，crash
