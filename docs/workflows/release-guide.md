@@ -371,7 +371,13 @@ CI 中 `pnpm/action-setup@v4` 的 `version` 字段缺失。确认 `.github/workf
 
 ### CI Docker 失败：`cargo build --release` OOM
 
-Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binary。Dockerfile 在 CI 中使用 `Dockerfile.release`（仅 13 行，只 COPY 不编译）。
+Docker 不再从源码编译，改为复用 CI 已构建的 `linux-x86_64` binary。Dockerfile 在 CI 中使用 `Dockerfile.release`（只 COPY 不编译）。
+
+### Docker 镜像启动报 `GLIBC_2.39 not found`（基础镜像 glibc 低于构建端）
+
+**根因**：`Dockerfile.release` 只 COPY CI 构建的 binary，镜像能跑的前提是**基础镜像 glibc ≥ 构建 runner glibc**。CI linux-x86_64 曾在 ubuntu-latest（24.04，glibc 2.39）构建而基础镜像是 debian bookworm（2.36），v0.2.24/v0.2.25 的镜像启动即崩。**v0.2.25 已修**：基础镜像换 `ubuntu:24.04` + runner 钉 `ubuntu-24.04`（两者成对，升级勿只改一边；`ubuntu-latest` 2026-10-19 迁 26 后不钉会复发）。
+
+**排查手法**：宿主上 `readelf --version-info <binary> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1` 取二进制 glibc 门槛，与 `docker run --rm <image> ldd --version` 对比。判定镜像坏没坏：`docker run --rm <image> ./omniterm --version`（镜像 CMD 是 `./omniterm start`，直接传 `--version` 会覆盖 CMD 而报 docker CLI 错）。
 
 ### npm publish 403：`You do not have permission to publish "omniterm"`
 

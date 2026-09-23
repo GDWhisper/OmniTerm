@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-09-23 18:45) `[infra]` 修复 Docker 镜像（ghcr）自 v0.2.24 起启动即崩 `GLIBC_2.39 not found`：CI 在 ubuntu-24.04（glibc 2.39）构建 linux binary，`Dockerfile.release` 基础镜像却是 debian bookworm（glibc 2.36），运行时库低于二进制链接门槛。基础镜像换 `ubuntu:24.04` 与构建端对齐，同时把 `release.yml` 产出 linux-x86_64 的 runner 从 `ubuntu-latest` 钉到 `ubuntu-24.04`——该标签 2026-10-19 起迁移到 Ubuntu 26（glibc 2.41），不钉会静默抬高 glibc 门槛再次打碎镜像（v0.2.25 的 ghcr tag 已用修复后镜像热覆盖，本地以真实 release binary 复验 `--version` 与服务启动均正常）（`Dockerfile.release`、`.github/workflows/release.yml`）
+
 ## [0.2.25] - 2026-09-23
 
 ### Fixed

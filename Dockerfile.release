@@ -1,5 +1,9 @@
 # -- Runtime only (CI pre-builds binary + frontend) --
-FROM debian:bookworm-slim
+# 基础镜像 glibc 必须 >= release.yml 中 linux-x86_64 构建 runner 的 glibc：
+# binary 在 ubuntu-24.04 构建会链接到 GLIBC_2.39，bookworm（2.36）跑不起来
+# （v0.2.24/v0.2.25 实测 `GLIBC_2.39 not found`）。两者同步升级，勿只改一边。
+# 注意 Ubuntu 官方镜像无 -slim 变体，别写成 ubuntu:24.04-slim（不存在）。
+FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
