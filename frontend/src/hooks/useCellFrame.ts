@@ -35,6 +35,15 @@ export interface CellRow {
   runs: string[]
 }
 
+/** 鼠标上报跟踪模式（wire，2026-09-23）：none=关闭 / press=DECSET 1000 /
+ *  drag=DECSET 1002 / motion=DECSET 1003。与后端 `TermMode::MOUSE_REPORT_*`
+ *  对应（alacritty 使三者互斥）。 */
+export type MouseMode = 'none' | 'press' | 'drag' | 'motion'
+
+/** 鼠标上报编码（wire，2026-09-23）：default=X10 风格 / utf8=DECSET 1005 /
+ *  sgr=DECSET 1006。 */
+export type MouseEncoding = 'default' | 'utf8' | 'sgr'
+
 export interface CellFrame {
   t: string
   session_id: string
@@ -59,6 +68,17 @@ export interface CellFrame {
    * 不同步则多行粘贴被 TUI 逐行当 Enter 提交）。
    * `docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md` D2/D3。 */
   bracketed_paste?: boolean
+  /** 鼠标上报模式真值（2026-09-23）：所有帧携带，取后端编码时刻的
+   * `TermMode::MOUSE_REPORT_CLICK/DRAG/MOTION`。与 `bracketed_paste` 同型——
+   * cell_frame 模式下 raw 流不转发，TUI 的鼠标上报 DECSET 到不了 xterm，
+   * `term.modes.mouseTrackingMode` 恒 'none' 时 useTerminal 的 wheel 放行
+   * 分支永不触发、xterm 也不生成 SGR 鼠标上报（opencode 类 TUI 滚轮完全失效
+   * 的根因）。消费方为 useTerminal——与 xterm 解析态不一致时写 DECSET 同步。
+   * `docs/dev/debug-patterns/terminal-pty.md` 模式 9 家族第三例。 */
+  mouse_mode?: MouseMode
+  /** 鼠标上报编码（2026-09-23）：所有帧携带，与 `mouse_mode` 同批中继
+   * （同 bracketed_paste 形态），取 `TermMode::UTF8_MOUSE/SGR_MOUSE`。 */
+  mouse_encoding?: MouseEncoding
   /** 当前 grid 历史行数。所有帧都携带，`scripts/pty-frame-regression.mjs`
    *  T7 守护其「帧帧携带 / 随输出增长 / 上界钳制」契约（诊断与回归判据）。 */
   history_size?: number

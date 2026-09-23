@@ -110,6 +110,7 @@
 **案例证据**：
 - 2026-08-28 pty 会话多次切换后冒出 `1;2c1;2c1;2c`（每次切换泄漏一次）。根因：tmux attach 在连接初期裸字节窗口期发 DA1 查询，前端 xterm.js 经 onData 自动应答回写 PTY，与后端 VT 已回写的应答形成重复。修复：pty 会话 onData 按白名单过滤 xterm.js 全部自动应答（tmux/外部会话不过滤——那里前端是唯一终端模拟器）。
 - 2026-09-06 pty 会话在 Ink 系 TUI 输入框内粘贴多行文本被逐行当 Enter 提交。同家族第二例：受影响的不是查询应答而是**输入语义模式**——TUI 发的 `?2004h`（bracketed paste）被 cell_frame 架构吞掉（raw 流只排干不转发），前端 xterm 的 `bracketedPasteMode` 恒 false，桌面 Ctrl+V 不加 `200~/201~` 包装裸发；移动端长按粘贴更是完全绕过 xterm 直发，连换行转换都没有。修复：模式经 cell_frame 的 `bracketed_paste` 字段中继（所有帧携带），前端与 `term.modes.bracketedPasteMode` 不一致时写回序列同步；移动端改走 xterm `paste()`（`docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md`）。教训升级：**双模拟器架构下，凡影响输入语义的模式状态都必须后端中继**，否则前端侧的输入预处理（粘贴包装/换行转换）按错误前提工作。
+- 2026-09-23 pty 会话跑 opencode 等开启鼠标上报的 TUI，滚轮完全失效（tmux 会话正常；opencode 启动字节实测发 `?1000/?1002/?1003/?1006h` + `?1049h`）。同家族第三例：中继缺口在鼠标上报模式——被 cell_frame 吞掉后前端 xterm `mouseTrackingMode` 恒 `none`，wheel 放行分支永不触发、xterm 也不生成 SGR 上报，TUI 收不到滚轮事件。修复：`mouse_mode`/`mouse_encoding` 全帧中继（同 bracketed_paste 形态），前端写 DECSET 同步 xterm 解析态；注意 encoding 无读口（`IModes` 不暴露），用「最后写入值」记账、tracking 可观测态兜自愈。
 
 ---
 

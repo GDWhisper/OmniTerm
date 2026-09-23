@@ -33,7 +33,9 @@ use alacritty_terminal::term::{Config as TermConfig, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use tracing::{debug, warn};
 
-use super::frame::{CellFrame, CursorState, DiffEngine, RowData, decscusr_code};
+use super::frame::{
+    CellFrame, CursorState, DiffEngine, RowData, decscusr_code, mouse_encoding_str, mouse_mode_str,
+};
 
 /// VT scrollback 行数上限（P1 有界：grid 内存 ≈ 行数 × 列数 × 单元开销，
 /// 1000 行 × 200 列 ≈ 数 MB 量级/会话）。
@@ -621,6 +623,8 @@ impl VtState {
             // D4：enter/exit 都发 overlay，前端靠此标记区分 alt-screen 状态
             alt_screen: Some(self.mode().contains(TermMode::ALT_SCREEN)),
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
+            mouse_mode: Some(mouse_mode_str(self.mode())),
+            mouse_encoding: Some(mouse_encoding_str(self.mode())),
             history_size: grid.history_size() as u32,
             // overlay 不占 diff 基线，无 seq 语义（A2：仅 live 路径携带）
             seq: None,
@@ -709,6 +713,8 @@ impl VtState {
             viewport: Some(y),
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
+            mouse_mode: Some(mouse_mode_str(self.mode())),
+            mouse_encoding: Some(mouse_encoding_str(self.mode())),
             history_size: grid.history_size() as u32,
             // viewport 帧不占 diff 基线，无 seq 语义（A2：仅 live 路径携带）
             seq: None,
@@ -912,6 +918,8 @@ impl VtState {
             viewport: None,
             alt_screen: None,
             bracketed_paste: Some(self.mode().contains(TermMode::BRACKETED_PASTE)),
+            mouse_mode: Some(mouse_mode_str(self.mode())),
+            mouse_encoding: Some(mouse_encoding_str(self.mode())),
             history_size: grid.history_size() as u32,
             seq,
             rows: out_rows,
@@ -1464,6 +1472,81 @@ mod tests {
         assert_eq!(
             parsed["bracketed_paste"], true,
             "viewport frame must carry bracketed_paste=true"
+        );
+    }
+
+    // ──── 鼠标上报模式中继（2026-09-23，模式 9 家族第三例）────
+
+    #[test]
+    fn frame_carries_mouse_mode_fields() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?1000h\x1b[?1006h"); // TUI 开启点击跟踪 + SGR 编码
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(parsed["mouse_mode"], "press", "frame after ?1000h must carry mouse_mode=press");
+        assert_eq!(
+            parsed["mouse_encoding"], "sgr",
+            "frame after ?1006h must carry mouse_encoding=sgr"
+        );
+
+        v.feed(b"\x1b[?1002h"); // 升级按钮事件跟踪（1000/1002/1003 互斥）
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(parsed["mouse_mode"], "drag", "frame after ?1002h must carry mouse_mode=drag");
+
+        v.feed(b"\x1b[?1003h"); // 升级任意移动跟踪
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(
+            parsed["mouse_mode"], "motion",
+            "frame after ?1003h must carry mouse_mode=motion"
+        );
+
+        v.feed(b"\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1006l"); // 全部关闭
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(
+            parsed["mouse_mode"], "none",
+            "frame after DECSET resets must carry mouse_mode=none"
+        );
+        assert_eq!(
+            parsed["mouse_encoding"], "default",
+            "frame after ?1006l must carry mouse_encoding=default"
+        );
+
+        v.feed(b"\x1b[?1005h"); // 编码切换覆盖：utf8（1005）
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_cell_frame("ts", false)).unwrap();
+        assert_eq!(
+            parsed["mouse_encoding"], "utf8",
+            "frame after ?1005h must carry mouse_encoding=utf8"
+        );
+    }
+
+    #[test]
+    fn overlay_frame_carries_mouse_mode_fields() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?1003h\x1b[?1005h");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_overlay_frame("ts")).unwrap();
+        assert_eq!(parsed["mouse_mode"], "motion", "overlay frame must carry mouse_mode=motion");
+        assert_eq!(
+            parsed["mouse_encoding"], "utf8",
+            "overlay frame must carry mouse_encoding=utf8"
+        );
+    }
+
+    /// 历史窗口帧同样携带——模式真值与会话态相关，与视口位置无关。
+    #[test]
+    fn viewport_frame_carries_mouse_mode_fields() {
+        let mut v = vt(24, 80);
+        v.feed(b"\x1b[?1003h\x1b[?1005h");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("s", 0, false)).unwrap();
+        assert_eq!(parsed["mouse_mode"], "motion", "viewport frame must carry mouse_mode=motion");
+        assert_eq!(
+            parsed["mouse_encoding"], "utf8",
+            "viewport frame must carry mouse_encoding=utf8"
         );
     }
 

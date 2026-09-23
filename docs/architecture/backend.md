@@ -177,6 +177,27 @@ seed 是**字节快照**，可以在任意位置截断，回放后必须补齐�
 > 走 `term.modes.bracketedPasteMode`。帧体积代价约 20 字节/帧，可忽略。
 > （`docs/dev/plans/archive/2026-09-06-pty-bracketed-paste-relay.md`）
 >
+> **`mouse_mode` / `mouse_encoding` 字段（2026-09-23）**：**所有** cell_frame 都携带
+> `mouse_mode: "none"|"press"|"drag"|"motion"`（鼠标上报跟踪模式 = DECSET
+> 1000/1002/1003，取自 `TermMode::MOUSE_REPORT_CLICK/MOUSE_DRAG/MOUSE_MOTION`，
+> alacritty 使三者互斥）与 `mouse_encoding: "default"|"utf8"|"sgr"`（上报编码 =
+> 无扩展/DECSET 1005/1006，`TermMode::UTF8_MOUSE/SGR_MOUSE`）。与 `bracketed_paste`
+> 同族（`docs/dev/debug-patterns/terminal-pty.md` 模式 9 第三例）：TUI 的鼠标上报
+> DECSET 被 cell_frame 吞掉后前端 `term.modes.mouseTrackingMode` 恒 `'none'`，
+> wheel 的鼠标协议放行分支永不触发、xterm 也不生成 SGR 鼠标上报——opencode 等
+> TUI 的内部视口滚轮完全失效（tmux 路径 raw 直通无此问题）。前端消费：与
+> `term.modes.mouseTrackingMode`（可读）及本地记录的最后写入 encoding（xterm 6.0
+> `IModes` 无 encoding 读口）不一致时向 xterm 写 DECSET 同步（全量 reset + 按需
+> set），在 `acceptFrame` 门控**之前**消费；wheel 放行分支随之自动激活。自愈：
+> `term.reset()` 后 tracking 回 `'none'`，desired ≠ `'none'` 时条件即触发整段重写
+> （含 encoding），无需在 reset 处清 ref。**多实现边界（准则 8）**：alacritty 0.26
+> 不跟踪 DECSET 9（X10）与 1015（urxvt 编码），出现时按「未开启」降级；focus
+> 上报（`?1004`）同族但暂无症状未中继。**反向差异（xterm 6.0 消费侧）**：xterm
+> 不支持 DECSET 1005（`?1005h` 被其忽略，wire 值 `utf8` 到不了 xterm，编码复位
+> `?1006l` 可用）；xterm 对 `?9/?1000/?1002/?1003l` 一律复位为 NONE，而 alacritty
+> 只移除对应位——TUI 用非常规关闭序列时两端真值短暂分叉，前端按下一帧后端真值
+> 写回即收敛。帧体积代价约 50 字节/帧（45–51B，30fps ≈ 1.5KB/s），可忽略。
+>
 > **`seq` 字段 + 周期全帧对账（2026-09-08）**：`CellFrame.seq: Option<u64>` 仅
 > **live 编码路径**（`encode_cell_frame`）携带，计数器 `VtState.frame_seq`
 > 会话级单调递增、重连不清零（会话重建/后端重启归零 → 前端检出断链主动

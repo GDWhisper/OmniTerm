@@ -160,7 +160,7 @@ tmux 与 pty 会话共用 Terminal 组件与 WS 路由，但交互语义按引�
   `VITE_TERMINAL_SCROLLBACK_VIEWPORT`，详见计划文档 Phase 2 勘误）；
   `scrollMode`（MobileKeyBar 高亮 + 软键盘抑制复用）由控制器的
   viewport 模式启停回调驱动（`y > 0` 即滚动中）；modern 键位拦截直接
-  放行；无 mouse mode，直接拖选即复制（autoCopySelect 机制共用）。
+  放行；鼠标上报模式经 cell_frame `mouse_mode`/`mouse_encoding` 中继同步 xterm 解析态（2026-09-23，同步生效后上述「鼠标协议激活」放行分支即生效、wheel 走 xterm 鼠标上报），TUI 未开启鼠标上报时直接拖选即复制（autoCopySelect 机制共用）。
 - 引擎间切换会话时 `Layout::sessionViewKey` 以 runtime_kind 为 key，
   跨引擎切换强制重挂载（pty 的 onScroll 订阅在创建期注册）。
 
