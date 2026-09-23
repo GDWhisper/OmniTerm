@@ -149,10 +149,25 @@ export function ChatView() {
     autoStickRef.current = v
     setAutoStickState(v)
   }, [])
+  /**
+   * 最近一次钉底后的 scrollTop 锚点（null = 尚未钉过底）。
+   *
+   * 解除贴底态不能只看几何间距：scroll 事件只在帧边界派发，而钉底发生在 DOM 提交
+   * 之后——两者之间任何**非 React 来源**的布局变化（图片解码完成、字体替换、定时器
+   * 直写 DOM……）都会让这次事件读到 ≥ 阈值的间距，把「跟随中」误判成「用户上翻」并
+   * **永久**解除跟随（此后流式也不跟随、回底按钮还得用户自己点）。真实 Chromium 实测：
+   * 钉底后 6ms 内容长高 120px，随后为那次钉底派发的 scroll 事件读到 gap=120 即解除。
+   * 记下锚点后，只有把视口移到锚点**之上**才算上翻意图。
+   */
+  const pinnedTopRef = useRef<number | null>(null)
   /** 贴底动作的唯一实现（幂等：已在底部时是空操作）。 */
   const pinToBottom = useCallback(() => {
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    // 读回实际位置：浏览器会把 scrollTop 夹到 max，写入值不等于落点。内容不足一屏
+    // 时钉底是空操作（scrollTop 恒 0），这种锚点没有区分力，不记。
+    if (el.scrollHeight > el.clientHeight) pinnedTopRef.current = el.scrollTop
   }, [])
   // 「上次输入」跳转聚焦：高亮中的消息 id（目标气泡 accent 描边 + ring 闪烁，
   // 经 highlighted prop 传给 ChatMessageView）。
@@ -259,12 +274,15 @@ export function ChatView() {
     if (delta !== 0) el.scrollTop += delta
   }, [chatState.messages])
 
-  // 跟随中，内容一变就把底缘钉回来。deps 必须覆盖「滚动内容高度的全部来源」，而不是
+  // 跟随中，内容一变就把底缘钉回来。用 layout effect（绘制前）而非 passive effect：
+  // 后者要等浏览器把「提交后跑 effect」的任务排进下一轮，在 DOM 已长高、scrollTop 还
+  // 没钉的窗口里一旦派发 scroll 事件就会被读成「用户上翻」；内层 thinking/工具容器一直
+  // 用 useLayoutEffect 钉底也是这个道理。deps 必须覆盖「滚动内容高度的全部来源」，而不是
   // 只有消息本体：思考指示（sending）、重放指示（replaying）、终端事件、更早历史加载
   // 指示都会让内容长高而不改 messages——deps 漏掉任何一项，跟随都会在没有任何 scroll
   // 事件的情况下静默失效（autoStick 仍是 true，视口却停在半空，连「回到底部」按钮都
   // 不显示）。新增滚动内容内的条件渲染时必须同步登记到这里。
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!autoStick) return
     pinToBottom()
   }, [
@@ -312,7 +330,24 @@ export function ChatView() {
     const el = scrollRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < CHAT_STICK_THRESHOLD_PX
-    setAutoStick(atBottom)
+    if (atBottom) {
+      // 贴底（含用户滚回底部）：把锚点同步到实际位置——内容变矮时浏览器会夹紧
+      // scrollTop，旧锚点会停在更大的值上，令下面的「是否上翻」比较失真。
+      pinnedTopRef.current = el.scrollTop
+      setAutoStick(true)
+    } else if (
+      autoStickRef.current &&
+      pinnedTopRef.current !== null &&
+      el.scrollTop >= pinnedTopRef.current
+    ) {
+      // 跟随中，且视口没有移到锚点之上 → 这次 scroll 事件不是上翻意图，而是钉底之后
+      // 内容又长高（或容器又变矮）被延迟观察到的结果（见 pinnedTopRef 注释）。补钉一次
+      // 并保持跟随：按间距判定会让贴底态在无任何用户操作时被永久解除。
+      pinToBottom()
+    } else {
+      // 视口移到了锚点之上（或本就不在跟随）：用户上翻，解除跟随并保留阅读位置。
+      setAutoStick(false)
+    }
     setLastPromptAbove(isLastPromptAboveViewport())
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。

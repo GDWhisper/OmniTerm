@@ -68,7 +68,7 @@ describe('ChatView stick-to-bottom across layout changes', () => {
     metrics.setClientHeight(300)
     act(() => roSpy.fire(el))
 
-    expect(metrics.getTop()).toBe(2000)
+    expect(metrics.getTop()).toBe(1700)
     expect(jumpButton()).toBeNull()
   })
 
@@ -91,7 +91,41 @@ describe('ChatView stick-to-bottom across layout changes', () => {
     metrics.setScrollHeight(2160)
     act(() => useChatStore.getState().setReplaying(SESSION_ID, true))
 
-    expect(metrics.getTop()).toBe(2160)
+    expect(metrics.getTop()).toBe(1560)
     expect(jumpButton()).toBeNull()
+  })
+
+  // 贴底态的解除判定不能只看间距：scroll 事件在帧边界派发，钉底在 DOM 提交之后，
+  // 两者之间任何非 React 来源的布局变化（图片解码完成、字体替换、定时器直写 DOM）
+  // 都会让那次事件读到 ≥ 阈值的间距。真实 Chromium 实测（2026-09-23）：钉底后 6ms
+  // 内容长高 120px，随后为钉底派发的 scroll 事件读到 gap=120，贴底态即被解除，此后
+  // 流式全程不再跟随、回底按钮还得用户自己点。锚点（pinnedTopRef）就是为此而记。
+  it('钉底后内容长高（非 React 来源）再收到 scroll 事件时保持跟随并补钉', () => {
+    const { metrics } = seedAtBottom()
+    // 先制造一次真实钉底，锚点落在新底缘 1560（等价浏览器钉底后的实际 scrollTop）。
+    metrics.setScrollHeight(2160)
+    act(() => useChatStore.getState().setReplaying(SESSION_ID, true))
+    expect(metrics.getTop()).toBe(1560)
+
+    // 图片解码完成：内容又长高 120px，滚动位置不动、也没有 scroll 事件；随后为上一次
+    // 钉底补发的 scroll 事件在帧边界到达，读到 gap=120。
+    metrics.setScrollHeight(2280)
+    act(() => fireScroll(container))
+
+    expect(jumpButton()).toBeNull()
+    expect(metrics.getTop()).toBe(1680)
+  })
+
+  it('用户真上翻（视口移到锚点之上）时照常解除跟随且不夺回位置', () => {
+    const { metrics } = seedAtBottom()
+    metrics.setScrollHeight(2160)
+    act(() => useChatStore.getState().setReplaying(SESSION_ID, true))
+    expect(metrics.getTop()).toBe(1560)
+
+    metrics.setTop(1200)
+    act(() => fireScroll(container))
+
+    expect(jumpButton()).toBeTruthy()
+    expect(metrics.getTop()).toBe(1200)
   })
 })

@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-09-23 18:52) `[frontend]` 修复 ACP 会话「流式输出期间没做任何操作却脱离追底」：贴底态的解除判定只看几何间距，而 scroll 事件只在帧边界派发、钉底发生在 DOM 提交之后——两者之间任何非 React 来源的布局变化（用户消息里的图片附件解码完成、字体替换、定时器直写 DOM）都会让那次事件读到 ≥ 阈值的间距，把「跟随中」误判成「用户上翻」并**永久**解除跟随（此后整轮输出都不跟随，且因 `autoStick` 已为 false，回底按钮得用户自己点）。真实 Chromium 复现：钉底后 6ms 内容长高 120px，随后为那次钉底派发的 scroll 事件读到 gap=120 即解除，整轮 gap 一路累积到数千像素。现钉底时记下实际落点（`pinnedTopRef`，浏览器夹紧后的真值；内容不足一屏时不记），`handleScroll` 只在视口移到锚点**之上**时才解除，否则补钉一次并保持跟随；贴底 effect 同时由 `useEffect` 改 `useLayoutEffect`（与提交同帧钉住，消灭「DOM 已长高而 scrollTop 未钉」的无主窗口，与内层 thinking/工具容器约定一致）。测试脚手架 `mockScrollMetrics` 的 `scrollTop` 写入补上浏览器夹紧语义（写入 `scrollHeight` 的落点是底缘），新增「钉底后内容长高（非 React 来源）不得解除跟随并补钉」「用户真上翻照常解除且不夺回阅读位置」两条回归用例（`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/components/Chat/ChatView.testUtils.ts`、`frontend/src/components/Chat/ChatView.stick.test.tsx`）
 - (2026-09-23 18:45) `[infra]` 修复 Docker 镜像（ghcr）自 v0.2.24 起启动即崩 `GLIBC_2.39 not found`：CI 在 ubuntu-24.04（glibc 2.39）构建 linux binary，`Dockerfile.release` 基础镜像却是 debian bookworm（glibc 2.36），运行时库低于二进制链接门槛。基础镜像换 `ubuntu:24.04` 与构建端对齐，同时把 `release.yml` 产出 linux-x86_64 的 runner 从 `ubuntu-latest` 钉到 `ubuntu-24.04`——该标签 2026-10-19 起迁移到 Ubuntu 26（glibc 2.41），不钉会静默抬高 glibc 门槛再次打碎镜像（v0.2.25 的 ghcr tag 已用修复后镜像热覆盖，本地以真实 release binary 复验 `--version` 与服务启动均正常）（`Dockerfile.release`、`.github/workflows/release.yml`）
 
 ## [0.2.25] - 2026-09-23
