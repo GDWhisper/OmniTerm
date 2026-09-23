@@ -440,7 +440,7 @@ cell_frame 只有 runs 一种行编码（旧的 `cells` 格式与 `hello.row_enc
 
 > 与 V11 的差别：V11 压测行内容全唯一，指纹/位置机制都能过；本用例让锚点行
 > 落在**重复内容**（空行/分隔线）上——此前六轮修复全部逃逸的场景（指纹重定位
-> 在周期内容上必棘轮/滑移，见 `docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`）。
+> 在周期内容上必棘轮/滑移，见 `docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md`）。
 
 1. 跑周期性内容输出：`for i in $(seq 1 800); do echo; echo "────── 第 $i 段 ──────"; done`（空行 + 分隔线交替；或直接观察任一 Ink 系 agent 流式输出）
 2. 输出进行中用滚轮上翻数屏，让窗口顶行停在**空行或分隔线**上
@@ -1363,7 +1363,7 @@ FRONTEND_DIR=frontend/dist
 
 **E. 真实自愈链路（仅确认真实聋态后执行；护栏见本节顶部）**
 
-真实聋态判据：`tmux ls` 稳定在数毫秒内报 `server exited unexpectedly`，且 socket 探针 connect 成功后**立即 EOF**（诊断命令见 `docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md` 附录 A）。确认后点「重建 tmux server」：
+真实聋态判据：`tmux ls` 稳定在数毫秒内报 `server exited unexpectedly`，且 socket 探针 connect 成功后**立即 EOF**（诊断命令见 `docs/dev/plans/archive/2026-09-22-tmux-server-shutdown-hang.md` 附录 A）。确认后点「重建 tmux server」：
 
 - [ ] toast 成功；下一条 tmux 命令自动拉起新 server（`tmux ls` 恢复正常；旧 server 的会话全部消失——横幅已提前告知，属预期）
 - [ ] 若 server 在点击前已自行恢复 → 409「tmux server 已恢复，无需重建」，不误杀健康新 server

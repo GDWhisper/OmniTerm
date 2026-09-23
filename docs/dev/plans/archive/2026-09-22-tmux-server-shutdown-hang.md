@@ -2,7 +2,7 @@
 
 > 状态：**已实施**（2026-09-22 实施批次五笔提交：`8abd676` P0-1/P0-2 + 登记表、`221d0c7` 附录 C 机制定论、`ef2c96c` 前端告警、`9963c66` P1-3、`8e5b711` P1-1/P1-2 后端 health；P2-1 上游 issue **仅草稿**入附录 C、尚未提交。设计稿阶段同日经独立子代理审查后全文修订（勘误见 §10），实施偏差见文末「## 实施勘误（2026-09-22 实施批次）」）
 > 触发条件：修改 `src/engine/tmux/control_mode.rs`（`ControlModeClient` 的 spawn / `stop()` / `Drop`）、`src/engine/tmux/terminal_ws.rs`、`src/engine/tmux/engine.rs` / `mod.rs` 的 tmux 子进程生命周期管理、本方案落地的健康/监控模块，或排查「tmux 命令报 `server exited unexpectedly` / tmux server 假死 / `tmux -C` 孤儿客户端堆积」前**必读**
-> 关联：`docs/dev/debug-patterns/resource-lifecycle.md` 模式 10（父死不杀子）、`docs/dev/plans/2026-09-21-acp-agent-connection-cpu-spin.md`（同类「优雅关闭路径走不到」的结构性缺陷）、commit `344750f`（tmux 控制连接子进程退出后留僵尸——Child 句柄改常驻收割任务，P2-2，只解决「收割」不解决「孤儿」）、`src/acp/agent_proc.rs` `should_kill_group`（kill 前 pid 归属校验先例，P0-2 与之抽共享真源）、`docs/architecture/backend.md`（tmux 引擎冻结边界）、`docs/reference/auth-not-enforced.md`（P1-1 自愈 API 鉴权教训）
+> 关联：`docs/dev/debug-patterns/resource-lifecycle.md` 模式 10（父死不杀子）、`docs/dev/plans/archive/2026-09-21-acp-agent-connection-cpu-spin.md`（同类「优雅关闭路径走不到」的结构性缺陷）、commit `344750f`（tmux 控制连接子进程退出后留僵尸——Child 句柄改常驻收割任务，P2-2，只解决「收割」不解决「孤儿」）、`src/acp/agent_proc.rs` `should_kill_group`（kill 前 pid 归属校验先例，P0-2 与之抽共享真源）、`docs/architecture/backend.md`（tmux 引擎冻结边界）、`docs/reference/auth-not-enforced.md`（P1-1 自愈 API 鉴权教训）
 > 来源：2026-09-22 凌晨 tmux server（PID 14747，07-28 启动，已运行约 8 周）对所有新 tmux 命令返回 `server exited unexpectedly`，tmuxes 服务（node 进程，8970 端口）`GET /api/targets/local/sessions` 返回 502。当日 00:21 已通过 SIGKILL + 清理 stale socket 恢复，本文为根因报告与修复方案。
 
 ## 0. 结论（TL;DR）

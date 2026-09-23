@@ -82,7 +82,7 @@
 
 ## 实施分期（触发后执行）
 
-- **Phase 1 · 快照与清单**：导出当前 19 条 bold 条目的标题清单与 12 个 `## 模式 N` 的映射表（作为零丢失基线）；收集全部引用点（实测当前 7 处：`debug-guide.md` 索引、`platform-protocol.md`、`2026-09-12-pty-viewport-stateful-anchor.md` 及 4 份归档计划）。
+- **Phase 1 · 快照与清单**：导出当前 19 条 bold 条目的标题清单与 12 个 `## 模式 N` 的映射表（作为零丢失基线）；收集全部引用点（实测当前 7 处：`debug-guide.md` 索引、`platform-protocol.md`、`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md` 及 4 份归档计划）。
 - **Phase 2 · 搬移**：按 D1/D2 落位，新建文件头写「本文件包含模式 X/Y/Z（原 terminal-pty.md 拆分）」；保留 `terminal-pty.md` 作为薄入口或直接改名（取决于 D2 结果），被拆出条目原位置留一行指向新文件的引用。
 - **Phase 3 · 索引改造**：`debug-guide.md` 领域索引把 1 行拆成对应多行，**每行关键词必须含该文件全部条目的症状词**（索引行是唯一入口，缺词即检索不到）；跑 `./scripts/check-doc-index.sh`。
 - **Phase 4 · 引用修正与复核**：更新 Phase 1 收集的引用点；按验收清单核对。

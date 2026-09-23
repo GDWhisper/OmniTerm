@@ -146,7 +146,7 @@
 ## 勘误（2026-09-12，机制整体被取代）
 
 **D1-D5（指纹重定位）已删除**，由后端有状态锚 + 饱和期滚移检测取代
-（`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`，含五组周期性内容
+（`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md`，含五组周期性内容
 探针实证）。两处关键判断被推翻：
 
 - **D3「重复行误匹配 → 视觉等价，无害」在连续刷新下不成立**（本次推翻的是
