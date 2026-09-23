@@ -50,13 +50,85 @@ section() { echo -e "\n${BOLD}── $* ──${NC}\n"; }
 divider() { echo -e "${CYAN}──────────────────────────────────────────────────${NC}"; }
 
 # ── 辅助函数 ──
+
+# ── pid 文件（格式 "<pid> <comm>"，comm = 写入时刻的进程基名）──
+# kill 前把 pid 当前 comm 与记录值比对，防 stale pid 文件 + PID 复用误杀
+# （2026-09-22 tmux server 假死事故 §3.2 盲区，P1-3）。旧格式（裸 pid、无第二
+# 字段）只兼容读取：is_running 仅做存活判断，kill 侧无记录值无法校验归属 ⇒
+# 不发信号（fail-closed），只清理 pid 文件。
+#
+# bash 镜像实现，与 src/process_identity.rs 的 pidfile kill 归属校验谓词语义
+# 一致（kill 前确认「目标还是不是当年那个进程」），改一处须同步另一处。
+# 按「记录值比对」通吃 node（前端）/ omniterm、cargo 子壳（后端）等角色。
+
+# 进程当前 comm 基名：Linux 取 /proc/<pid>/cmdline 首个 NUL 段的基名；无 /proc
+# 的平台回退 ps。读不到输出空串（调用方按「无法确认归属」处理）。
+proc_comm() {
+    local pid="$1" comm=""
+    if [[ -r "/proc/$pid/cmdline" ]]; then
+        IFS= read -r -d '' comm < "/proc/$pid/cmdline" 2>/dev/null || true
+        comm="${comm##*/}"
+    elif command -v ps >/dev/null 2>&1; then
+        comm=$(ps -p "$pid" -o comm= 2>/dev/null | head -n 1) || true
+        comm="${comm##*/}"
+    fi
+    printf '%s' "$comm"
+}
+
+# 写 pid 文件: "<pid> <当时的 comm>"。
+# comm 采样须等 fork→exec 窗口落定：实测同一 pid 的 comm 会从子壳 bash 漂移到
+# exec 后的 cargo/node，/proc/<pid>/cmdline 也有短暂读空窗口（即时捕获 3/30 为空、
+# 1/3 为未落定的 bash）。有界等待落定 + 空值重试；超限仍为空 ⇒ 记录空值，kill
+# 侧按「无记录值」fail-closed（不发信号）。
+COMM_SETTLE_INTERVAL=0.1
+COMM_SETTLE_ATTEMPTS=5
+
+write_pidfile() {
+    local pid_file="$1" pid="$2" comm="" attempt
+    for ((attempt = 0; attempt < COMM_SETTLE_ATTEMPTS; attempt++)); do
+        sleep "$COMM_SETTLE_INTERVAL"
+        comm=$(proc_comm "$pid")
+        [[ -n "$comm" ]] && break
+    done
+    echo "$pid $comm" > "$pid_file"
+}
+
+# pid 文件第一字段（旧格式即整行）；文件缺失/为空输出空串。
+pidfile_pid() {
+    local pid_file="$1" pid=""
+    if [[ -f "$pid_file" ]]; then
+        read -r pid _ < "$pid_file" 2>/dev/null || true
+    fi
+    printf '%s' "$pid"
+}
+
+# pid 文件第二字段（记录的 comm）；旧格式无第二字段输出空串。
+pidfile_comm() {
+    local pid_file="$1" pid="" comm=""
+    if [[ -f "$pid_file" ]]; then
+        read -r pid comm < "$pid_file" 2>/dev/null || true
+    fi
+    printf '%s' "$comm"
+}
+
 is_running() {
     local pid_file="$1"
     if [[ -f "$pid_file" ]]; then
-        local pid
-        pid=$(cat "$pid_file")
-        if kill -0 "$pid" 2>/dev/null; then
-            return 0
+        local pid recorded
+        pid=$(pidfile_pid "$pid_file")
+        recorded=$(pidfile_comm "$pid_file")
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            # 新格式带 comm 记录：比对归属，PID 复用 ⇒ 视为未运行；
+            # 旧格式（无第二字段）只做存活判断（向后兼容）。
+            if [[ -z "$recorded" ]]; then
+                return 0
+            fi
+            local current
+            current=$(proc_comm "$pid")
+            if [[ "$current" == "$recorded" ]]; then
+                return 0
+            fi
+            warn "PID $pid 归属校验失败（记录 '$recorded'，当前 '${current:-<空>}'），疑似 PID 复用"
         fi
         rm -f "$pid_file"
     fi
@@ -95,8 +167,23 @@ wait_port() {
 kill_by_pid() {
     local pid_file="$1" name="$2" port="${3:-}"
     if is_running "$pid_file"; then
-        local pid
-        pid=$(cat "$pid_file")
+        local pid recorded current
+        pid=$(pidfile_pid "$pid_file")
+        recorded=$(pidfile_comm "$pid_file")
+        current=$(proc_comm "$pid")
+        # kill 前归属校验（与 is_running 同一谓词，此处为发信号时点的最终裁决）：
+        # 旧格式无记录值无法校验、或 comm 与记录不一致（PID 复用）⇒ 一律不发信号
+        # （fail-closed，含 kill -- -$pid 的进程组放大面），只清理 pid 文件。
+        if [[ -z "$recorded" ]]; then
+            warn "$name PID $pid: 旧格式 pid 文件无 comm 记录，无法做归属校验，未发送信号；清理 pid 文件"
+            rm -f "$pid_file"
+            return 1
+        fi
+        if [[ "$current" != "$recorded" ]]; then
+            warn "$name PID $pid 归属校验失败（记录 '$recorded'，当前 '${current:-<空>}'），疑似 PID 复用，未发送信号；清理 pid 文件"
+            rm -f "$pid_file"
+            return 1
+        fi
         info "停止 $name (PID $pid) ..."
         kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
         local waited=0
@@ -141,7 +228,7 @@ pid_by_port() {
 cleanup_orphans() {
     local protected_pids=()
     local p
-    for p in $(cat "$BACKEND_PID" 2>/dev/null) $(cat "$FRONTEND_PID" 2>/dev/null); do
+    for p in $(pidfile_pid "$BACKEND_PID") $(pidfile_pid "$FRONTEND_PID"); do
         [[ -n "$p" ]] && protected_pids+=("$p")
     done
     for port in $BACKEND_PORT $FRONTEND_PORT; do
@@ -273,12 +360,12 @@ cmd_start() {
         # 环境变量形式会让正式版 omniterm 在这些终端里被开发配置劫持
         cargo run -- start -H 127.0.0.1 -p "$BACKEND_PORT" --db "$DEV_DATABASE_URL"
     ) > "$BACKEND_LOG" 2>&1 &
-    echo $! > "$BACKEND_PID"
+    write_pidfile "$BACKEND_PID" "$!"
 
     if wait_port "$BACKEND_PORT" 60; then
-        pid_by_port "$BACKEND_PORT" > "$BACKEND_PID"
+        write_pidfile "$BACKEND_PID" "$(pid_by_port "$BACKEND_PORT")"
         local bpid
-        bpid=$(cat "$BACKEND_PID")
+        bpid=$(pidfile_pid "$BACKEND_PID")
         ok "后端已就绪  PID=$bpid  →  http://localhost:$BACKEND_PORT"
     else
         err "后端启动失败，最后 20 行日志:"
@@ -306,12 +393,12 @@ cmd_start() {
         fi
         stdbuf -oL -eL pnpm dev
     ) > "$FRONTEND_LOG" 2>&1 &
-    echo $! > "$FRONTEND_PID"
+    write_pidfile "$FRONTEND_PID" "$!"
 
     if wait_port "$FRONTEND_PORT" 60; then
-        pid_by_port "$FRONTEND_PORT" > "$FRONTEND_PID"
+        write_pidfile "$FRONTEND_PID" "$(pid_by_port "$FRONTEND_PORT")"
         local fpid
-        fpid=$(cat "$FRONTEND_PID")
+        fpid=$(pidfile_pid "$FRONTEND_PID")
         ok "前端已就绪  PID=$fpid  →  http://localhost:$FRONTEND_PORT"
     else
         err "前端启动失败，最后 20 行日志:"
@@ -403,7 +490,7 @@ cmd_status() {
     # 后端
     if is_running "$BACKEND_PID"; then
         local bpid
-        bpid=$(cat "$BACKEND_PID")
+        bpid=$(pidfile_pid "$BACKEND_PID")
         echo -e "  后端 :$BACKEND_PORT  ${GREEN}● 运行中${NC}  PID=$bpid"
     elif port_listening "$BACKEND_PORT"; then
         local bpid
@@ -416,7 +503,7 @@ cmd_status() {
     # 前端
     if is_running "$FRONTEND_PID"; then
         local fpid
-        fpid=$(cat "$FRONTEND_PID")
+        fpid=$(pidfile_pid "$FRONTEND_PID")
         echo -e "  前端 :$FRONTEND_PORT  ${GREEN}● 运行中${NC}  PID=$fpid"
     elif port_listening "$FRONTEND_PORT"; then
         local fpid

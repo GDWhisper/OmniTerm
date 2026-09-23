@@ -1,17 +1,21 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject } from './path'
+import { getParentPath, joinPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
     expect(getParentPath('')).toBe('')
     expect(getParentPath('/')).toBe('')
-    expect(getParentPath('/a')).toBe('')
   })
 
   it('handles unix paths', () => {
+    // First-level dir's parent is the filesystem root, not "nothing"
+    expect(getParentPath('/a')).toBe('/')
+    expect(getParentPath('/home')).toBe('/')
     expect(getParentPath('/a/b')).toBe('/a')
     expect(getParentPath('/a/b/')).toBe('/a')
     expect(getParentPath('a/b')).toBe('a')
+    // Bare relative segment has nothing above it
+    expect(getParentPath('a')).toBe('')
   })
 
   it('handles windows drive paths', () => {
@@ -21,6 +25,24 @@ describe('getParentPath', () => {
     // Drive root has no parent
     expect(getParentPath('G:/')).toBe('')
     expect(getParentPath('G:')).toBe('')
+  })
+})
+
+describe('joinPath', () => {
+  it('joins dir and name with a single slash', () => {
+    expect(joinPath('/a', 'b')).toBe('/a/b')
+    expect(joinPath('/home/pax', 'coding')).toBe('/home/pax/coding')
+    expect(joinPath('', 'b')).toBe('b')
+  })
+
+  it('does not produce a double slash at the filesystem root', () => {
+    expect(joinPath('/', 'home')).toBe('/home')
+    expect(joinPath('/', 'bin')).toBe('/bin')
+  })
+
+  it('keeps windows drive roots rooted without doubling the slash', () => {
+    expect(joinPath('G:/', 'Codes')).toBe('G:/Codes')
+    expect(joinPath('G:/Codes', 'ot')).toBe('G:/Codes/ot')
   })
 })
 

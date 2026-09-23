@@ -6,8 +6,10 @@ mod embedded;
 mod engine;
 mod fs;
 mod git;
+mod health;
 mod models;
 mod presets;
+mod process_identity;
 mod proxy;
 
 mod update;
@@ -227,7 +229,7 @@ fn binary_name() -> String {
 
 /// OmniTerm 用户数据目录 `~/.omniterm`（HOME/USERPROFILE 缺失时回退 `.`，与既有约定一致）。
 /// db、jwt_secret、daemon 日志统一落盘于此，避免数据与日志分家。
-fn omniterm_data_dir() -> PathBuf {
+pub(crate) fn omniterm_data_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".into());
@@ -731,6 +733,24 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("Server is not running (stale PID file removed).");
                 std::process::exit(1);
             }
+            // 发信号前归属校验（P1-3，封 stale pidfile + PID 复用误杀盲区，见
+            // docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md §3.2）。谓词
+            // 真源 process_identity::pidfile_pid_is_omniterm（dev.sh 的 pidfile kill
+            // 有 bash 镜像实现，改一处须同步另一处）。身份只读一次，校验结果贯穿
+            // SIGTERM → 轮询 → SIGKILL 升级链全程（其间身份不会变，勿重复读）。
+            let ident = crate::process_identity::process_identity(pid as u32);
+            if ident.is_none() {
+                // 身份读不到（进程已消亡）⇒ 走既有 stale 路径，行为不变
+                let _ = std::fs::remove_file(&pid_file);
+                eprintln!("Server is not running (stale PID file removed).");
+                std::process::exit(1);
+            }
+            if !crate::process_identity::pidfile_pid_is_omniterm(ident.as_ref()) {
+                // 不过校验 ⇒ 不发任何信号，按 stale 处理（删除 pid 文件）后退出
+                eprintln!("PID {} 不是 omniterm 进程（疑似 PID 复用），未发送信号", pid);
+                let _ = std::fs::remove_file(&pid_file);
+                std::process::exit(1);
+            }
             #[cfg(windows)]
             {
                 eprintln!("stop is not supported on Windows");
@@ -878,6 +898,20 @@ fn main() -> anyhow::Result<()> {
 
             let pid_file = pid_path(&db_url);
 
+            // P0-2 启动对账（docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md）：
+            // ① 控制客户端登记表挂到本实例（`<stem>-<pid>.clients`，stem 即实例
+            // 身份 = dev.sh 的 BRANCH_BINARY_NAME）；② 扫描**全部**登记文件，杀掉
+            // 上一实例/跨实例崩塌残留的 tmux -C 孤儿客户端（pidfd + 三元组谓词，
+            // 见 `engine/tmux/client_registry.rs`）。
+            let client_registry = engine::tmux::client_registry::init_global(
+                &instance_id(&db_url),
+                std::process::id(),
+            );
+            let reconcile_report = engine::tmux::client_registry::reconcile_all();
+            if reconcile_report != Default::default() {
+                info!(?reconcile_report, "启动对账完成：清理 tmux -C 孤儿控制客户端");
+            }
+
             // 端口转发反向代理客户端：连接超时 5s（连接拒绝/超时快速失败），
             // 不设整体读超时——SSE/长连接/大文件下载需要长生命周期（D5）。
             let proxy_client = reqwest::Client::builder()
@@ -908,6 +942,11 @@ fn main() -> anyhow::Result<()> {
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，
             // 识别 Claude/Codex/Qoder 的 Running/Waiting/Idle 状态（herdr 借鉴，见 docs/reference/herdr-reference.md）。
             agent::watch::spawn(state.engines.watcher().clone(), state.engines.clone());
+
+            // P1-1/P1-2（docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md）：
+            // 聋 server 检测 + 内建自愈 + 孤儿堆积监控（引擎无关健康模块，ADR D4）。
+            health::init_global();
+            health::spawn_monitor();
 
             // 启动 ACP 空闲回收看护任务：静默待命超时的 codebuddy --acp 进程会被自动回收，
             // 释放内存（活跃工作中 / 有未决权限的进程不会被回收）。idle 阈值经
@@ -1022,6 +1061,7 @@ fn main() -> anyhow::Result<()> {
             // 随后 axum 进入优雅关闭。注意：SIGKILL / panic / 崩溃来不及运行，
             // 这类场景产生的孤儿仍需下次启动时由用户手动清理或恢复。
             let shutdown_supervisor = state.acp_supervisor.clone();
+            let shutdown_registry = client_registry.clone();
             let shutdown_signal = {
                 let shutdown_pid = pid_file.clone();
                 async move {
@@ -1042,6 +1082,10 @@ fn main() -> anyhow::Result<()> {
                     }
                     info!("shutdown signal received, recycling ACP agent subprocesses");
                     shutdown_supervisor.shutdown_all().await;
+                    // P0-2 优雅退出注销：删本实例的登记文件（显式 shutdown 路径，
+                    // 不挂 Drop——axum 关闭是否 drop AppState 未验证；漏删也会被
+                    // 下次启动对账幂等收敛）。
+                    shutdown_registry.remove_file();
                     let _ = std::fs::remove_file(&shutdown_pid);
                 }
             };

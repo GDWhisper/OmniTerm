@@ -14,6 +14,19 @@ export class FakeXterm {
   disposed = false
   // Unicode11Addon 激活宽表用（useTerminal.createTerminal，2026-09-09）
   unicode = { activeVersion: '' }
+  // DECSET 解析态读口（cell_frame 模式中继的比对源，2026-09-23）：测试手动
+  // 置值模拟「xterm 解析已生效」（真实翻转由 useTerminal.mouseSync.test.ts
+  // 的真实 xterm 契约测试锁定）。
+  modes = {
+    bracketedPasteMode: false,
+    mouseTrackingMode: 'none' as 'none' | 'vt200' | 'drag' | 'any',
+  }
+  /** write 调用记录（mouse_mode 同步串/幂等断言用，2026-09-23）。
+   *  测试替身无上限 push：每次用例前清空、生命周期即单测运行期，P1 无界
+   *  缓冲红线针对生产路径的累积，此处不适用（评审 nit 备注）。 */
+  writes: string[] = []
+  /** attachCustomWheelEventHandler 注册的 handler（滚轮放行断言用）。 */
+  wheelHandler: ((ev: WheelEvent) => unknown) | null = null
   constructor() {
     FakeXterm.instances.push(this)
   }
@@ -29,7 +42,9 @@ export class FakeXterm {
   focus() {
     this.focusCount += 1
   }
-  write() {}
+  write(data: string | Uint8Array) {
+    this.writes.push(String(data))
+  }
   writeln() {}
   reset() {}
   dispose() {
@@ -47,7 +62,9 @@ export class FakeXterm {
     return { dispose() {} }
   }
   attachCustomKeyEventHandler() {}
-  attachCustomWheelEventHandler() {}
+  attachCustomWheelEventHandler(handler: (ev: WheelEvent) => unknown) {
+    this.wheelHandler = handler
+  }
   getSelection() {
     return ''
   }

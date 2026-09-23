@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Layout } from './components/Layout/Layout'
 import { ToastContainer } from './components/Toast/Toast'
+import { TmuxHealthAlert } from './components/TmuxHealthAlert/TmuxHealthAlert'
 import { AttentionProvider } from './components/Attention/AttentionProvider'
 import { AuthPage } from './components/Auth/AuthPage'
 import { useMobileDetection } from './hooks/useMediaQuery'
@@ -105,6 +106,9 @@ function App() {
   return (
     <AttentionProvider>
       <Layout />
+      {/* tmux server 健康告警全局浮层（聋 server 重建入口 + 孤儿堆积提示），
+          挂 App 级与 ToastContainer 同层：桌面/移动/侧栏折叠均可见 */}
+      <TmuxHealthAlert />
       <ToastContainer />
     </AttentionProvider>
   )

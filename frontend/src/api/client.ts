@@ -184,6 +184,34 @@ export interface UpdateAgent {
   npm_package?: string | null
 }
 
+/** GET /tmux/health — tmux server 健康快照（聋 server 探测 + 孤儿客户端监控，
+ *  计划 docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md P1-1/P1-2）。 */
+export interface TmuxHealth {
+  /** 四态分类：healthy / no_server（正常空态）/ deaf（聋 server 半死态）/
+   *  other（未知失败，后端不自动处理、前端不触发自愈 UI）。 */
+  state: 'healthy' | 'no_server' | 'deaf' | 'other'
+  /** 连续确认聋签名的探测次数（后端 DEAF_CONFIRM_COUNT 连续确认阈值 = 3）。 */
+  consecutive_deaf: number
+  /** 最近一次确认聋签名的时间（RFC3339），从未发生为 null。 */
+  last_deaf_at: string | null
+  /** 孤儿 tmux control 客户端数量（「一 SIGTERM 就假死」高危先兆）。 */
+  orphan_count: number
+  /** 孤儿堆积告警阈值（orphan_count 超过它才提示）。 */
+  orphan_warn_threshold: number
+  /** 后端健康探测周期（秒）。 */
+  probe_interval_secs: number
+}
+
+/** POST /tmux/rebuild — 内建自愈：重探针确认聋 → 单飞互斥 → SIGKILL stale
+ *  server → 删 stale socket，下一条命令自动拉起新 server。 */
+export interface TmuxRebuildResult {
+  ok: boolean
+  /** 重建后的新 server PID（如可得）。 */
+  server_pid: number | null
+  socket_removed: boolean
+  detail: string
+}
+
 export interface ExternalSession {
   name: string
   attached: boolean
@@ -244,6 +272,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
+
+  // tmux server health / rebuild（聋 server 自愈，P1-1）。两者均 silent：
+  // 健康轮询是常态动作，不得每 10s 弹错误 toast；rebuild 的成败提示由
+  // TmuxHealthAlert 按 i18n 键自行映射（409 not_deaf / heal_in_progress 是
+  // 业务结果而非异常，后端 error 串不直接展示）。
+  tmuxHealth: () => request<TmuxHealth>('/tmux/health', { silent: true }),
+  tmuxRebuild: () =>
+    request<TmuxRebuildResult>('/tmux/rebuild', { method: 'POST', silent: true }),
 
   // Settings
   getAcpIdleRecycle: () =>

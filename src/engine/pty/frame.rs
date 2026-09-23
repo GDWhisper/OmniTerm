@@ -3,6 +3,7 @@
 //! Phase 1: full-frame JSON encoding via `VtState::encode_cell_frame`.
 //! Phase 3: `DiffEngine` for row-level diff (hash → skip unchanged rows).
 
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::CursorShape;
 use serde::Serialize;
 
@@ -41,6 +42,25 @@ pub struct CellFrame {
     /// 前端永远收不到，不同步则多行粘贴被 TUI 逐行当 Enter 提交。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bracketed_paste: Option<bool>,
+    /// 鼠标上报跟踪模式（2026-09-23）：所有帧携带，取编码时刻
+    /// `mouse_mode_str(mode())`——`none`/`press`/`drag`/`motion` 对应
+    /// DECSET 关闭/1000/1002/1003。cell_frame 模式下 raw 流不转发，TUI 发的
+    /// 鼠标上报 DECSET 前端永远收不到，不同步则 xterm `mouseTrackingMode`
+    /// 恒 `none`，wheel 不编成鼠标上报发给 TUI——opencode 等 TUI 滚轮完全
+    /// 失效。与 `bracketed_paste` 同族（模式 9 家族第三例，见
+    /// `docs/dev/debug-patterns/terminal-pty.md`）。**多实现边界（AGENTS §8）**：
+    /// alacritty 0.26 不跟踪 DECSET 9（X10）与 1015（urxvt 编码），出现时按
+    /// 「未开启」降级（`none`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_mode: Option<&'static str>,
+    /// 鼠标上报编码（2026-09-23）：所有帧携带，取编码时刻
+    /// `mouse_encoding_str(mode())`——`default`/`utf8`（DECSET 1005）/`sgr`
+    /// （DECSET 1006），后设覆盖前设。前端按此向 xterm 写 DECSET 同步编码
+    /// （xterm 6.0 `IModes` 无 encoding 读口，前端按最后写入值记账）。
+    /// DECSET 9/1015 未被 alacritty 跟踪，同按「未开启」降级（见
+    /// `mouse_mode`）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_encoding: Option<&'static str>,
     /// 当前 grid 历史行数（`grid.history_size()`）。所有帧都携带：前端在
     /// viewport 模式下靠它把「距底偏移 y」换算成绝对锚点，新输出推高历史
     /// 时按锚点重算 y，使用户看到的行保持不变（真实终端 scrollback 语义）。
@@ -167,5 +187,29 @@ pub fn decscusr_code(shape: CursorShape) -> u8 {
         CursorShape::Beam => 5,
         CursorShape::Hidden => 0,
         CursorShape::HollowBlock => 0,
+    }
+}
+
+/// 鼠标跟踪模式 → wire 值（TermMode 三位互斥，见 alacritty set_private_mode）。
+pub fn mouse_mode_str(mode: TermMode) -> &'static str {
+    if mode.contains(TermMode::MOUSE_MOTION) {
+        "motion"
+    } else if mode.contains(TermMode::MOUSE_DRAG) {
+        "drag"
+    } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+        "press"
+    } else {
+        "none"
+    }
+}
+
+/// 鼠标上报编码 → wire 值（SGR/UTF8 后设覆盖前设）。
+pub fn mouse_encoding_str(mode: TermMode) -> &'static str {
+    if mode.contains(TermMode::SGR_MOUSE) {
+        "sgr"
+    } else if mode.contains(TermMode::UTF8_MOUSE) {
+        "utf8"
+    } else {
+        "default"
     }
 }

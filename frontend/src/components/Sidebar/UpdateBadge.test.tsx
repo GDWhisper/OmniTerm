@@ -4,6 +4,7 @@ import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
 import { UpdateBadge } from './UpdateBadge'
 import { api } from '../../api/client'
+import { advanceClock, realTick } from '../../test/timers'
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -35,23 +36,8 @@ function healthOk(body: unknown) {
   return { ok: true, json: async () => body } as Response
 }
 
-// React 19 调度器用 MessageChannel 排空渲染工作，fake timers 不拦截它：
-// 每推进一个时钟片段后必须让真实宏任务队列转一圈，setState 才会完成重渲染，
-// 组件续排的下一个 setTimeout/setInterval 才会落进已推进的假时钟里。
-function realTick(): Promise<void> {
-  return new Promise((resolve) => {
-    const { port1, port2 } = new MessageChannel()
-    port2.onmessage = () => resolve()
-    port1.postMessage(null)
-  })
-}
-
-async function advanceClock(ms: number) {
-  for (let elapsed = 0; elapsed < ms; elapsed += 1000) {
-    await vi.advanceTimersByTimeAsync(1000)
-    await realTick()
-  }
-}
+// 假时钟 + React 19 渲染配套（realTick/advanceClock）已提为共享真源，
+// TmuxHealthAlert 轮询测试复用同一份（机制说明见 src/test/timers.ts）。
 
 describe('UpdateBadge 重启监测', () => {
   let container: HTMLDivElement

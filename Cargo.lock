@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "omniterm"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "agent-client-protocol",
  "alacritty_terminal",

@@ -12,7 +12,7 @@ import { attachTouchScroll } from '../utils/touchScroll'
 import { rewriteLocalUrl } from '../utils/proxyUrl'
 import { isTerminalAutoResponse } from '../utils/ptyInputFilter'
 import { ViewportController } from '../utils/viewportController'
-import { useCellFrame, type CellFrame } from './useCellFrame'
+import { useCellFrame, type CellFrame, type MouseMode, type MouseEncoding } from './useCellFrame'
 // [TERMDBG] 临时诊断埋点（打字延迟排查用，排查完删除）
 import { termDebug } from '../utils/termDebug'
 
@@ -57,6 +57,58 @@ function cellHeightPx(term: Terminal): number {
   )._core
   const h = core?._renderService?.dimensions?.css?.cell?.height
   return h && h > 0 ? h : (term.options.fontSize ?? 14) * 1.35
+}
+
+/** wire mouse_mode → xterm IModes.mouseTrackingMode 值。键即 mouse_mode
+ *  运行期白名单单一真源（isMouseMode 查它）。 */
+const XTERM_TRACKING = { none: 'none', press: 'vt200', drag: 'drag', motion: 'any' } as const
+
+/** 鼠标上报全量复位段（固定顺序）：tracking（9/1000/1002/1003）+
+ *  encoding（1005/1006/1015）。 */
+const MOUSE_RESET_SEQ = '\x1b[?9l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'
+
+/** wire mouse_mode → tracking set 序列（none=无 set，空串拼接无副作用）。
+ *  `Record<MouseMode, string>` 键须与 MouseMode 全等：新增 wire 取值漏登记
+ *  即编译错——序列生成不散落 if/else，协议取值表数据驱动。 */
+const MOUSE_TRACKING_SET: Record<MouseMode, string> = {
+  none: '',
+  press: '\x1b[?1000h',
+  drag: '\x1b[?1002h',
+  motion: '\x1b[?1003h',
+}
+
+/** wire mouse_encoding → 上报编码 set 序列（default=无 set）。键即
+ *  mouse_encoding 运行期白名单单一真源（isMouseEncoding 查它）；
+ *  `Record<MouseEncoding, string>` 同样保证 wire 取值全覆盖（漏登记编译错）。 */
+const MOUSE_ENCODING_SET: Record<MouseEncoding, string> = {
+  default: '',
+  utf8: '\x1b[?1005h',
+  sgr: '\x1b[?1006h',
+}
+
+/** 运行期白名单（performance-and-safety.md S1：枚举外部输入显式类型化 +
+ *  白名单校验）。WS JSON 是外部输入，`as` 只是编译期断言——未知取值若放行，
+ *  `XTERM_TRACKING[bogus]` 索引出 undefined 会让比对恒真、每帧全量 reset
+ *  写放大并把 TUI 的鼠标跟踪静默复位。声明为 `keyof typeof XTERM_TRACKING`
+ *  使「检查集」与「收窄型」按构造一致：XTERM_TRACKING 多出 MouseMode 之外
+ *  的键时 mouseModeSyncSeq 入参处即编译错；MouseMode 多出键时守卫在运行期
+ *  拒绝、显式跳过同步（安全降级）。 */
+function isMouseMode(v: unknown): v is keyof typeof XTERM_TRACKING {
+  return typeof v === 'string' && Object.hasOwn(XTERM_TRACKING, v)
+}
+
+function isMouseEncoding(v: unknown): v is MouseEncoding {
+  return typeof v === 'string' && Object.hasOwn(MOUSE_ENCODING_SET, v)
+}
+
+/** 生成把 xterm decPrivateModes 同步到 (mode, encoding) 的写入序列。
+ *  写法=先全量 reset（9/1000/1002/1003 + 1005/1006/1015）再按需 set。
+ *  - tracking set：press=`?1000h`，drag=`?1002h`，motion=`?1003h`，none=无
+ *    （MOUSE_TRACKING_SET）
+ *  - encoding set：utf8=`?1005h`，sgr=`?1006h`，default=无（MOUSE_ENCODING_SET）
+ *  - 序列形态（固定顺序）：MOUSE_RESET_SEQ + tracking set + encoding set */
+export function mouseModeSyncSeq(mode: MouseMode, encoding: MouseEncoding): string {
+  return MOUSE_RESET_SEQ + MOUSE_TRACKING_SET[mode] + MOUSE_ENCODING_SET[encoding]
 }
 
 async function loadAddons(): Promise<
@@ -203,6 +255,10 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
   const mouseUpHandlerRef = useRef<(() => void) | null>(null)
   const touchScrollCleanupRef = useRef<(() => void) | null>(null)
   const keyHandlerAttachedRef = useRef(false)
+  // 鼠标上报 encoding 的「最后写入值」记账（2026-09-23）：xterm 6.0 IModes
+  // 不暴露鼠标编码态（无读口），比对只能靠本地 ref——消费点见 onmessage 的
+  // mouse_mode 同步块。
+  const lastMouseEncRef = useRef<MouseEncoding | null>(null)
   // Track whether tmux is in copy/scroll mode (for touch-scroll fallback).
   // 即时真值（同一手势内多次 touchmove 需立即读到新值，否则会重复发
   // Ctrl+B [ 进 copy-mode）；`tmuxScrollMode` 是它的 UI 渲染副本。
@@ -419,6 +475,39 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
               live.modes.bracketedPasteMode !== msg.bracketed_paste
             ) {
               live.write(msg.bracketed_paste ? '\x1b[?2004h' : '\x1b[?2004l')
+            }
+            // 鼠标上报模式中继（2026-09-23，模式 9 家族第三例）：与
+            // bracketed_paste 同型——cell_frame 架构下 raw 流不转发，TUI 的
+            // 鼠标上报 DECSET 到不了 xterm，mouseTrackingMode 恒 'none' 时
+            // wheel 放行分支永不触发、xterm 也不生成 SGR 鼠标上报（opencode
+            // 类 TUI 滚轮完全失效根因）。必须在 acceptFrame 门控之前消费：
+            // 被 viewport 丢弃的实时帧同样携带最新模式真值；会话切换
+            // term.reset() 后首帧即在此自愈。
+            // - 运行期白名单（performance-and-safety.md S1）：WS JSON 是外部
+            //   输入，mouse_mode / mouse_encoding 任一非白名单取值 → 整体
+            //   跳过本次同步（与「旧后端缺字段」同款显式回退），非法值绝不
+            //   进入比对与序列生成。
+            // - encoding 无读口：xterm 6.0 IModes 不暴露鼠标编码态，故用
+            //   lastMouseEncRef 记「最后写入值」参与比对。
+            // - 自愈论证：reset() 后 mouseTrackingMode 回 'none'——desired ≠
+            //   'none' 时条件即触发、整段重写（含 encoding），无需在 reset 处
+            //   清 ref；desired == 'none' 时无上报可发、encoding 陈设无害，
+            //   TUI 下次开启跟踪时条件再触发。
+            // - 已知边界：alacritty 0.26 不跟踪 DECSET 9（X10）/1015（urxvt
+            //   编码），wire 值不会出现 x10/urxvt；reset 串仍带 ?9l/?1015l
+            //   是防御性复位（无害，见 mouseModeSyncSeq）。
+            if (live && msg.mouse_mode != null) {
+              const wantMode: unknown = msg.mouse_mode
+              const wantEnc: unknown = msg.mouse_encoding ?? 'default'
+              if (isMouseMode(wantMode) && isMouseEncoding(wantEnc)) {
+                if (
+                  live.modes.mouseTrackingMode !== XTERM_TRACKING[wantMode] ||
+                  lastMouseEncRef.current !== wantEnc
+                ) {
+                  live.write(mouseModeSyncSeq(wantMode, wantEnc))
+                  lastMouseEncRef.current = wantEnc
+                }
+              }
             }
             // 方案 C D3：viewport 模式下实时帧由控制器门控丢弃；alt_screen
             // 标记（D4）也在 acceptFrame 内消费——即使帧被丢弃状态仍同步。

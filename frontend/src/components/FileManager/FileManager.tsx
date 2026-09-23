@@ -1,4 +1,4 @@
-import { getParentPath, findCoveringProject, findExactProject } from '../../utils/path'
+import { getParentPath, joinPath, findCoveringProject, findExactProject } from '../../utils/path'
 import { getInitialDrawerHeight } from '../../utils/drawer'
 import { useState, useEffect, useRef, useCallback, useMemo, type KeyboardEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -499,13 +499,13 @@ export function FileManager() {
   const handleRowClick = (entry: FileEntry, e?: React.MouseEvent) => {
     if (suppressClick.current) return
     if (editingName) return
-    const fullPath = cwd ? `${cwd}/${entry.name}` : entry.name
+    const fullPath = joinPath(cwd, entry.name)
     const idx = files.indexOf(entry)
 
     if (e?.shiftKey && selectAnchor.current >= 0) {
       const start = Math.min(selectAnchor.current, idx)
       const end = Math.max(selectAnchor.current, idx)
-      const range = files.slice(start, end + 1).map((f) => cwd ? `${cwd}/${f.name}` : f.name)
+      const range = files.slice(start, end + 1).map((f) => joinPath(cwd, f.name))
       setSelected(new Set(range))
       return
     }
@@ -634,7 +634,7 @@ export function FileManager() {
       }
     } else if (e.key === 'a' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault()
-      setSelected(new Set(files.map((f) => cwd ? `${cwd}/${f.name}` : f.name)))
+      setSelected(new Set(files.map((f) => joinPath(cwd, f.name))))
     }
   }
 
@@ -852,7 +852,7 @@ export function FileManager() {
     if (checked.size === files.length) {
       setChecked(new Set())
     } else {
-      setChecked(new Set(files.map((f) => (cwd ? `${cwd}/${f.name}` : f.name))))
+      setChecked(new Set(files.map((f) => joinPath(cwd, f.name))))
     }
   }
 
@@ -889,7 +889,7 @@ export function FileManager() {
             allowEscape: isOutsideWorkspace ? true : undefined,
           })
         } else {
-          const fullPath = cwd ? `${cwd}/${name}` : name
+          const fullPath = joinPath(cwd, name)
           await api.writeFile2({
             session: fmSource.type === 'session' ? fmSource.id : undefined,
             workspaceId: fmSource.type === 'workspace' ? fmSource.id : undefined,
@@ -914,6 +914,8 @@ export function FileManager() {
   // alignment (right) and clip side (left), never reverses LTR character flow.
   // Windows drive-letter paths ("G:/Codes") have no leading '/'; prepending one
   // would both display "/G:/Codes" and break navigation (not absolute on Windows).
+  // POSIX root is rendered as a clickable leading "/" segment in the JSX below
+  // (navigates to '/', so browsing can continue above e.g. /home).
   const isWinPath = /^[A-Za-z]:/.test(cwd)
   const bcSegments = cwd.split('/').filter(Boolean)
   const bcItems = bcSegments.map((s, i) => {
@@ -1065,9 +1067,21 @@ export function FileManager() {
             style={{ direction: bcOverflow ? 'rtl' : 'ltr', flex: 1, minWidth: 0 }}
             title={cwd}
           >
+            {/* POSIX root segment: clickable leading "/" → navigate to '/' (also renders at cwd === '/'); Windows drive segment already is the root. Must stay first in DOM order to display before the segments. */}
+            {!isWinPath && (
+              <span
+                key="bc-root"
+                className={`fm-bc-seg ${dropTarget === '/' ? 'fm-bc-seg-drop' : ''}`}
+                data-drop-path="/"
+                onClick={(e) => { e.stopPropagation(); navigateTo('/') }}
+              >/
+              </span>
+            )}
             {bcItems.flatMap((item, i) => [
-              // No separator before the drive segment on Windows ("G:/Codes", not "/G:/Codes")
-              ...(isWinPath && i === 0 ? [] : [<span key={`sep-${item.path}`} className="fm-bc-sep">/</span>]),
+              // No separator before the first segment: on Windows it is the drive
+              // ("G:/Codes", not "/G:/Codes"); on POSIX the root "/" segment above
+              // already renders the leading slash.
+              ...(i === 0 ? [] : [<span key={`sep-${item.path}`} className="fm-bc-sep">/</span>]),
               <span key={item.path} className={`fm-bc-seg ${dropTarget === item.path ? 'fm-bc-seg-drop' : ''}`} data-drop-path={item.path} onClick={(e) => { e.stopPropagation(); navigateTo(item.path); }}>{item.name}</span>
             ])}
           </div>
@@ -1151,7 +1165,7 @@ export function FileManager() {
               </thead>
               <tbody>
                 {files.map((f) => {
-                  const fullPath = cwd ? `${cwd}/${f.name}` : f.name
+                  const fullPath = joinPath(cwd, f.name)
                   const isDir = f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)

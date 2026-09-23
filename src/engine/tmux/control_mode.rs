@@ -10,6 +10,9 @@ use tokio::sync::{Mutex, RwLock, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+use super::client_registry::{self, ClientRegistry};
+use crate::process_identity;
+
 /// Default activity window: a session stays active for 2 seconds after the last
 /// `%output` event from tmux control mode.
 pub const DEFAULT_ACTIVITY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -58,6 +61,8 @@ pub struct ControlModeClient {
     /// 强杀指令（`stop`/`Drop` → reaper 执行 `start_kill`）。句柄归 reaper
     /// 所有，故 kill 也只能经它转发，保证「发过 kill 的进程必被 wait」。
     kill_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// P0-2 登记表句柄（未初始化时 `None`，不登记——见 `client_registry`）。
+    registry: Option<ClientRegistry>,
 }
 
 impl ControlModeClient {
@@ -68,7 +73,7 @@ impl ControlModeClient {
         let session_name = session_name.into();
         let mut cmd = super::tmux_cmd();
         cmd.args(["-C", "attach-session", "-t", &session_name]);
-        Self::spawn_client(session_name, cmd).await
+        Self::spawn_client(session_name, cmd, client_registry::global()).await
     }
 
     /// 实际构造逻辑，命令由调用方注入。
@@ -76,15 +81,37 @@ impl ControlModeClient {
     /// 生产入口只有 [`Self::new`]（tmux 控制连接）；测试注入假 tmux 客户端
     /// 驱动**同一段**子进程生命周期代码（spawn / 收割 / kill 时序），使
     /// P2-2 的回归不依赖 tmux server。新增子进程行为只改这里，勿再复制。
-    async fn spawn_client(session_name: String, mut cmd: Command) -> Result<Self> {
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                anyhow!("failed to spawn tmux control mode for session {}: {}", session_name, e)
-            })?;
+    ///
+    /// # PDEATHSIG（P0-1）与 spawn 线程边界
+    ///
+    /// VERIFIED 2026-09-22（docs/workflows/integration-checklist.md §A.1/A.2，
+    /// 计划 `docs/dev/plans/2026-09-22-tmux-server-shutdown-hang.md` §5 P0-1）：
+    /// - `prctl(PR_SET_PDEATHSIG, SIGKILL)` 生效性已真进程 e2e 验证：父进程被
+    ///   SIGKILL 后子进程秒级消失（回归 `pdeathsig_kills_child_when_parent_process_dies`）；
+    ///   `/proc/<pid>/status` 的 `PDeathSig` 字段受内核配置门控（本机 7.0.0
+    ///   未导出），字段存在时回归断言其值 = 9，缺失时以行为断言为 OS 真值；
+    /// - 内核语义差异（实测 kernel 7.0.0 + man prctl / kernel.org #43300 /
+    ///   dotnet/runtime#96470 对照）：本内核为**进程**退出触发；文档与历史 issue
+    ///   记载为**创建线程**终止触发——跨内核版本不可依赖。故 fork/exec 固定发生在
+    ///   [`spawn_thread`] 持有的长寿命线程上，与调用方线程生命周期解耦，
+    ///   「线程死亡不误杀」成为结构保证（回归
+    ///   `pdeathsig_child_survives_spawning_thread_exit`）；
+    /// - **禁止**把本函数包进 `spawn_blocking` 或任何短寿线程（阻塞池线程空闲
+    ///   ~10s 退役；在按线程触发的内核上会误杀活得好好的客户端）；
+    /// - `pre_exec` 内 `getppid()` 复查只覆盖 fork→prctl 之间的父**进程**死亡
+    ///   竞态，不能替代上面的线程边界。
+    async fn spawn_client(
+        session_name: String,
+        mut cmd: Command,
+        registry: Option<ClientRegistry>,
+    ) -> Result<Self> {
+        // P0-1：父死杀子（仅 Linux；D1 决策 pty 路径不做，见 apply_pdeathsig）。
+        apply_pdeathsig(&mut cmd);
+
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = spawn_thread::spawn(cmd).await.map_err(|e| {
+            anyhow!("failed to spawn tmux control mode for session {}: {}", session_name, e)
+        })?;
 
         let stdin =
             child.stdin.take().ok_or_else(|| anyhow!("tmux control mode stdin not available"))?;
@@ -97,11 +124,34 @@ impl ControlModeClient {
         tokio::spawn(stderr_reader(session_name.clone(), stderr));
 
         let child_pid = child.id();
+
+        // P0-2 登记：(pid, spawn_ppid, start_key, session) 入登记表供启动对账。
+        // 超限拒登的 WARN 在 register 内记（父死兜底是 PDEATHSIG，不构成泄漏）。
+        if let (Some(reg), Some(pid)) = (&registry, child_pid) {
+            let start_key = process_identity::process_identity(pid)
+                .map(|ident| ident.start_key)
+                .unwrap_or_default();
+            let _ = reg.register(client_registry::ClientEntry::new(
+                pid,
+                std::process::id(),
+                start_key,
+                &session_name,
+            ));
+        }
+
         let (exit_code_tx, exit_code_rx) = watch::channel(None);
         let (kill_tx, kill_rx) = oneshot::channel::<()>();
         // 常驻收割任务：Child 句柄唯一所有者，wait 到进程退出（见结构体文档
-        // 的 P2-2 说明）。退出码经 watch 广播给 is_alive / stop。
-        tokio::spawn(reap_child(session_name.clone(), child, kill_rx, exit_code_tx));
+        // 的 P2-2 说明）。退出码经 watch 广播给 is_alive / stop；观测到退出即
+        // 注销登记（P0-2 增删对称之一）。
+        tokio::spawn(reap_child(
+            session_name.clone(),
+            child,
+            kill_rx,
+            exit_code_tx,
+            registry.clone(),
+            child_pid,
+        ));
 
         debug!("started tmux control mode client for session {}", session_name);
 
@@ -115,6 +165,7 @@ impl ControlModeClient {
             reader_handle: Mutex::new(None),
             shutdown_tx: Mutex::new(None),
             kill_tx: Mutex::new(Some(kill_tx)),
+            registry,
         })
     }
 
@@ -217,6 +268,13 @@ impl ControlModeClient {
             "tmux control mode process for session {} exited with {:?}",
             self.session_name, exit_code
         );
+
+        // P0-2 注销（增删对称之二）：ensure_session 死连接重建的替换路径在
+        // 此收尾——注销不只挂优雅退出，否则实例内死条目滞留累积。按 pid
+        // 幂等，与 reap 侧注销可重复执行。
+        if let (Some(reg), Some(pid)) = (&self.registry, self.child_pid) {
+            reg.deregister(pid);
+        }
     }
 }
 
@@ -243,6 +301,95 @@ impl Drop for ControlModeClient {
     }
 }
 
+/// P0-1：给 `tmux -C` 子进程挂 PDEATHSIG（SIGKILL）——父进程死亡时内核直接
+/// 杀子，覆盖 panic / abort / SIGKILL 等 `Drop`/`stop()` 到不了的崩溃路径
+/// （计划 P0-1；D1 决策：pty 子进程**不做**，保留 pty(7) SIGHUP 收尾）。
+///
+/// 平台边界：`prctl(2)` 仅 Linux——macOS/Windows 无等价机制，由 P0-2 启动对账
+/// 兜底（覆盖率差异见 `docs/architecture/backend.md` 平台差异表，AGENTS §8）。
+///
+/// pre_exec 闭包 async-signal-safe：`prctl` / `getppid` / `_exit` 均安全。
+/// `getppid()` 复查只覆盖 fork→prctl 之间的父**进程**死亡竞态（彼时 PDEATHSIG
+/// 已无从投递，只能自行退出），**不能替代** spawn 线程边界（见 [`spawn_thread`]）。
+#[cfg(target_os = "linux")]
+fn apply_pdeathsig(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let expected_ppid = std::process::id();
+    unsafe {
+        cmd.as_std_mut().pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() as u32 != expected_ppid {
+                // fork→prctl 竞态窗口内父已亡（被收养），PDEATHSIG 无从投递。
+                libc::_exit(1);
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_pdeathsig(_cmd: &mut Command) {
+    // 非 Linux 无 PDEATHSIG 等价物（D1 平台边界）：由 P0-2 启动对账兜底。
+}
+
+/// `tmux -C` 子进程 fork/exec 的固定发生地（P0-1 的线程语义隔离边界）。
+///
+/// PDEATHSIG 在**部分内核**上于「创建该子进程的线程」终止时触发（man prctl 与
+/// kernel.org #43300、dotnet/runtime#96470 均按此记载），tokio 阻塞池线程退役
+/// （空闲 ~10s）或任何短寿线程都会误杀活得好好的客户端；kernel 7.0 实测为进程
+/// 退出触发，但跨版本不可依赖。故所有 `tmux -C` 子进程固定由本模块持有的
+/// **长寿命线程** fork/exec，与调用方线程（tokio worker / 测试线程 / 未来任何
+/// 短寿线程）的生命周期解耦——「线程死亡不误杀」因此是结构保证而非纪律约定
+/// （§9 反向断言 `pdeathsig_child_survives_spawning_thread_exit` 守门）。
+mod spawn_thread {
+    use std::sync::mpsc;
+    use std::sync::{Mutex, OnceLock};
+
+    use tokio::process::{Child, Command};
+    use tokio::runtime::Handle;
+    use tokio::sync::oneshot;
+
+    struct Job {
+        cmd: Command,
+        handle: Handle,
+        reply: oneshot::Sender<std::io::Result<Child>>,
+    }
+
+    static SPAWN_TX: OnceLock<Mutex<mpsc::Sender<Job>>> = OnceLock::new();
+
+    fn spawn_tx() -> &'static Mutex<mpsc::Sender<Job>> {
+        SPAWN_TX.get_or_init(|| {
+            let (tx, rx) = mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .name("omniterm-tmux-spawn".into())
+                .spawn(move || {
+                    while let Ok(mut job) = rx.recv() {
+                        // tokio 的 Child 包装（管道 PollEvented 注册）需要运行时
+                        // 上下文：把调用方的 Handle 带进本线程 enter 后再 spawn。
+                        let _enter = job.handle.enter();
+                        let _ = job.reply.send(job.cmd.spawn());
+                    }
+                })
+                .expect("failed to start omniterm-tmux-spawn thread");
+            Mutex::new(tx)
+        })
+    }
+
+    /// 在长寿命 spawn 线程上执行 `cmd.spawn()`（见模块注）。
+    pub async fn spawn(cmd: Command) -> std::io::Result<Child> {
+        let (reply, rx) = oneshot::channel();
+        let job = Job { cmd, handle: Handle::current(), reply };
+        spawn_tx()
+            .lock()
+            .expect("tmux spawn 线程通道锁中毒")
+            .send(job)
+            .map_err(|_| std::io::Error::other("omniterm-tmux-spawn 线程已退出"))?;
+        rx.await.map_err(|_| std::io::Error::other("omniterm-tmux-spawn 线程未应答"))?
+    }
+}
+
 /// 常驻收割任务（`Child` 句柄唯一所有者，P2-2 修复的核心）。
 ///
 /// `wait()` 到子进程退出——自然退出、SIGHUP、`stop`/`Drop` 的强杀都汇到这
@@ -257,6 +404,8 @@ async fn reap_child(
     mut child: Child,
     mut kill_rx: oneshot::Receiver<()>,
     exit_code: watch::Sender<Option<i32>>,
+    registry: Option<ClientRegistry>,
+    child_pid: Option<u32>,
 ) {
     let result = tokio::select! {
         status = child.wait() => status,
@@ -283,6 +432,12 @@ async fn reap_child(
             let _ = exit_code.send(Some(EXITED_WITHOUT_CODE));
             debug!("tmux control mode process for session {} wait error: {}", session_name, e);
         }
+    }
+
+    // P0-2 注销（增删对称之一）：观测到子进程退出即注销登记——覆盖自然死亡 /
+    // Drop 强杀，不依赖调用方走 `stop()`。按 pid 幂等。
+    if let (Some(reg), Some(pid)) = (&registry, child_pid) {
+        reg.deregister(pid);
     }
 }
 
@@ -530,9 +685,10 @@ mod tests {
     async fn control_mode_child_is_reaped_after_natural_death() {
         let name = format!("omniterm_test_reap_{}", Uuid::new_v4());
         // 0.3s 后自行退出（留窗口保证 spawn 后断言存活的确定性），退出码 7。
-        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 0.3; exit 7"))
-            .await
-            .expect("client should start");
+        let client =
+            ControlModeClient::spawn_client(name, fake_tmux_client("sleep 0.3; exit 7"), None)
+                .await
+                .expect("client should start");
         client.listen().await.expect("listener should start");
 
         let pid = client.pid().await.expect("client should have a pid");
@@ -553,7 +709,7 @@ mod tests {
     #[tokio::test]
     async fn control_mode_stop_kills_and_reaps_child() {
         let name = format!("omniterm_test_stop_{}", Uuid::new_v4());
-        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"))
+        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"), None)
             .await
             .expect("client should start");
         client.listen().await.expect("listener should start");
@@ -635,5 +791,159 @@ mod tests {
         assert!(!std::path::Path::new(&format!("/proc/{}", pid)).exists());
 
         kill_test_tmux_session(&name).await;
+    }
+
+    // ── P0-1 PDEATHSIG 回归（计划 §9 验收） ──────────────────────────────
+
+    /// §9 OS 真值断言：`/proc/<pid>/status` 的 `PDeathSig` 字段必须为 9(SIGKILL)。
+    ///
+    /// 字段受内核配置门控（实测本机 kernel 7.0.0 未导出）——存在则断言其值，
+    /// 缺失则跳过字段断言；无论字段在否，行为 OS 真值由
+    /// `pdeathsig_kills_child_when_parent_process_dies` 无条件覆盖。
+    #[tokio::test]
+    async fn pdeathsig_os_truth_pdeathsig_field_is_sigkill() {
+        let name = format!("omniterm_test_pdeathsig_field_{}", Uuid::new_v4());
+        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"), None)
+            .await
+            .expect("client should start");
+        let pid = client.pid().await.expect("pid");
+
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).expect("read status");
+        match status.lines().find(|line| line.starts_with("PDeathSig")) {
+            Some(line) => {
+                assert_eq!(
+                    line.split_whitespace().nth(1),
+                    Some("9"),
+                    "PDeathSig 必须为 SIGKILL(9)：{line}"
+                );
+            }
+            None => {
+                eprintln!(
+                    "[skip] 本内核未导出 /proc/<pid>/status PDeathSig 字段，跳过字段断言（行为断言仍覆盖）"
+                );
+            }
+        }
+        client.stop().await;
+    }
+
+    /// §9：spawn 受管理的 `tmux -C` 子进程 → SIGKILL 父进程 → 子进程在约定时限
+    /// 内消失（PDEATHSIG 的行为 OS 真值，真进程 e2e）。
+    ///
+    /// 父进程 = 重新拉起的本测试二进制（helper 模式，见
+    /// `pdeathsig_helper_parent`）：它经 `spawn_client` 生出子进程并回报 pid 后
+    /// 长睡，本用例 SIGKILL 之，观察子进程随之消失。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pdeathsig_kills_child_when_parent_process_dies() {
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut helper = Command::new(exe)
+            .args([
+                // libtest 的 --exact 按**全名**匹配（模块路径前缀必须带上）。
+                "engine::tmux::control_mode::tests::pdeathsig_helper_parent",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn helper parent");
+
+        // 有界读取 helper 回报的子进程 pid。libtest 的 `test <name> ... ` 前缀
+        // 与 println! 共线，须按子串取值而非 strip_prefix。
+        let mut reader = BufReader::new(helper.stdout.take().expect("helper stdout"));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut child_pid: Option<u32> = None;
+        while Instant::now() < deadline && child_pid.is_none() {
+            let mut line = String::new();
+            match tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => {
+                    child_pid = line
+                        .split("PDEATHSIG_CHILD_PID=")
+                        .nth(1)
+                        .and_then(|p| p.trim().parse().ok());
+                }
+                Ok(Err(_)) | Err(_) => continue,
+            }
+        }
+        let child_pid = child_pid.expect("helper 应回报 PDEATHSIG_CHILD_PID=<pid>");
+        assert!(
+            std::path::Path::new(&format!("/proc/{child_pid}")).exists(),
+            "helper 存活期间子进程应在跑"
+        );
+
+        // SIGKILL 父进程 → PDEATHSIG 必须让子进程在约定时限内消失。
+        let _ = helper.kill().await;
+        let _ = helper.wait().await;
+        assert!(
+            wait_reaped(child_pid, Duration::from_secs(10)).await,
+            "父进程被 SIGKILL 后 PDEATHSIG 子进程应消失（{child_pid} 残留）"
+        );
+    }
+
+    /// [`pdeathsig_kills_child_when_parent_process_dies`] 的 helper（**勿直接
+    /// 跑**）：`#[ignore]` 保护，只被外层用例以 `--ignored --exact` 重新拉起。
+    /// 起受管理的假 `tmux -C` 子进程，回报 pid 后长睡，等外层 SIGKILL。
+    #[tokio::test]
+    #[ignore = "helper: 仅由 pdeathsig_kills_child_when_parent_process_dies 以 --ignored --exact 拉起"]
+    async fn pdeathsig_helper_parent() {
+        let client = ControlModeClient::spawn_client(
+            "omniterm_test_pdeathsig_helper".to_string(),
+            fake_tmux_client("sleep 300"),
+            None,
+        )
+        .await
+        .expect("client should start");
+        let pid = client.pid().await.expect("pid");
+        println!("PDEATHSIG_CHILD_PID={pid}");
+        tokio::time::sleep(Duration::from_secs(300)).await;
+    }
+
+    /// §9 反向断言（PDEATHSIG 线程误触发）：起独立线程 spawn 后 join——创建
+    /// 线程退出而进程存活 → 子进程必须存活。
+    ///
+    /// 钉住 [`spawn_thread`] 的结构不变式：fork/exec 不发生在随调用方消亡的
+    /// 线程上（在按创建线程触发 PDEATHSIG 的内核上，直接 spawn 实现过不了本
+    /// 用例）。详见 `spawn_client` 的 VERIFIED 注。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pdeathsig_child_survives_spawning_thread_exit() {
+        let name = format!("omniterm_test_reverse_{}", Uuid::new_v4());
+        let runtime = tokio::runtime::Handle::current();
+        let client = std::thread::spawn(move || {
+            runtime.block_on(async move {
+                ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"), None).await
+            })
+        })
+        .join()
+        .expect("独立 spawn 线程应正常结束")
+        .expect("client should start");
+        let pid = client.pid().await.expect("pid");
+
+        // 创建线程已死（join 返回）；给内核触发窗口后子进程必须仍存活。
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "创建线程退出而进程存活，子进程被误杀（PDEATHSIG 线程误触发回归）"
+        );
+        client.stop().await;
+    }
+
+    /// 收割不回归（§9）：PDEATHSIG 子进程仍由常驻收割任务恰好回收，stop() 返回
+    /// 时 `/proc/<pid>` 已消失、无新僵尸（与 `control_mode_stop_kills_and_reaps_child`
+    /// 同口径，但子进程带 PDEATHSIG 标记——死因无关收割路径不因 PDEATHSIG 破坏）。
+    #[tokio::test]
+    async fn pdeathsig_child_is_still_reaped_exactly_once() {
+        let name = format!("omniterm_test_pdeathsig_reap_{}", Uuid::new_v4());
+        let client = ControlModeClient::spawn_client(name, fake_tmux_client("sleep 30"), None)
+            .await
+            .expect("client should start");
+        let pid = client.pid().await.expect("pid");
+
+        tokio::time::timeout(Duration::from_secs(10), client.stop()).await.expect("stop 不应挂死");
+        assert!(
+            wait_reaped(pid, Duration::from_secs(5)).await,
+            "PDEATHSIG 子进程必须被收割（无僵尸）"
+        );
     }
 }
