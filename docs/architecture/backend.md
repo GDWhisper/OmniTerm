@@ -469,7 +469,7 @@ Lifecycle:
 - **流式期另有前端本地实时估算**（2026-09-02 追加，翻盘原「前端不自算实时计时」的排除项）：同一槽位在 turn 进行中跳「工作中 N秒」，`prompt_done` 一到即被结算值原位取代。它住在 `frontend/src/utils/turnClock.ts`（模块级有界表，按 sessionId 分列，审批挂起期间冻住以贴齐 `work_ms = 墙钟 − 等真人`），**不入库、不参与同步、不进 React state**，故后端口径未受影响；代价是跨 WS 断连的审批段补不回来、以及重连接回半程 turn 时锚点取建行时刻而偏小。详见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E12。
 - **侧栏不显示累计时长**（曾加过会话行 badge + 归档行拼接，已回退）：列表行的信息位属于状态与名称，且 `work_ms` 只在 turn 定稿时刷新，3s 轮询里读起来像「不更新的假数字」。`sessions` 上的累计列因此**当前无 UI 消费者**，作为写时账目留存（消息级耗时不依赖它），接展示时零成本。
 - **§8 多实现差异**：只有 agent 主动发 `session/request_permission` 的审批才计入 `wait_ms`；agent 内部自动通过的确认门（见「Multi-implementation compatibility」的「审批不一定都走 `session/request_permission`」）落在 `work_ms` 内。即 `wait_ms` 的口径是「等**人**在 OmniTerm 里点按钮的时间」，跨实现比较 `work_ms` 须带上这条前提。
-- **已知缺口**：`stop_reason` 只在 `prompt_done` 帧里下发、不入库，reaper 超时定稿的 turn 无法事后标注「非正常结束」，其 `work_ms` 含整段 inactivity 等待。补齐需给 `chat_messages` 加列，本次不做（见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` 勘误）。
+- **已知缺口**：`stop_reason` 现在除 `prompt_done` 帧外**也入库存档**——非正常结束由后端写一条 `role='system'` 的 `chat_messages` 行（含协议原文，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` D2），刷新/切设备后可读。仍存的是另一半：reaper 合成的两个终态（`InactivityTimeout`、cancel 兜底的 `Cancelled`）**刻意不写留痕**——它们是宿主侧观测到的合成原因而非协议回的 stopReason，报 error 语义会造成「有错误提示、无任何解释文案」（`src/acp/reaper.rs` / `src/acp/client.rs` 的调用点有注释说明取舍），其 `work_ms` 含整段 inactivity 等待。改法见上述计划。
 
 ### 配置偏好持久化（两层记忆）
 
@@ -490,7 +490,9 @@ Lifecycle:
 
 per-client 单调 `seq`（`handler::handle_session_update` 在累积器锁内分配，跨 turn 不重置），broadcast 载荷为 `SeqNotification{ seq, notification }`；WS `session_update` 帧带 `seq`（config/commands/replay 帧无 seq）。连接时 supervisor-hit 分支**先 subscribe 再 snapshot**（消除 gap，把重叠窗变为 seq 可解的重复窗）：发 `turn_state{active}`，若 active 再发 `turn_snapshot{row_id, text, blocks, seq}`。前端据此按 `row_id` 收编在建消息、以 `seq` 为水位丢弃重叠重复帧（详见 frontend.md）。
 
-`prompt_done{stop_reason, row_id?}` 同样携带本 turn 的 `row_id`（与 `turn_snapshot.row_id` 同一个值，`None` = 本 turn 未折叠任何帧），供前端把 cooked blocks 精确回写到那一行。三个广播点（正常完成、cancel 兜底、reaper 超时）均经 `AcpClient::turn_row_id()` 取值——专用轻量访问器，**不走 `turn_snapshot()`**（后者克隆全量 `text` 并重新序列化整个帧窗口，为拿一个 id 不值得）。`row_id` 存活到下一次 `begin_turn`，所以定稿后仍可读。
+`prompt_done{stop_reason, row_id?, abnormal?}` 同样携带本 turn 的 `row_id`（另有 D1 的 `abnormal` 布尔量，见下）（与 `turn_snapshot.row_id` 同一个值，`None` = 本 turn 未折叠任何帧），供前端把 cooked blocks 精确回写到那一行。三个广播点（正常完成、cancel 兜底、reaper 超时）均经 `AcpClient::turn_row_id()` 取值——专用轻量访问器，**不走 `turn_snapshot()`**（后者克隆全量 `text` 并重新序列化整个帧窗口，为拿一个 id 不值得）。`row_id` 存活到下一次 `begin_turn`，所以定稿后仍可读。
+
+`abnormal`：本轮是否为**非正常结束**（`false` 时字段整个省略，故旧前端无感）。stopReason 的白名单判定（`end_turn`/`max_tokens`/`max_turn_requests` 为正常、`cancelled` 单独类目、其余含未来未知值一律非正常）**只在后端做一次**并经此字段下发——同一判断散在前后两端必然漂移，而漏判的代价是「turn 静默定稿、无任何失败痕迹」。`cancelled` 亦属非正常但它是用户主动行为、不算错误，故为 `false`，其留痕走 system 消息的单独文案。非正常结束时后端另写一条 `role='system'` 的 `chat_messages` 行（i18n key + 协议原文）并广播 `system_message`，故刷新/切设备后仍可见；留痕与 `turn_accumulator::finalize_turn` 同样按 prompt 世代幂等（只写一条）。详见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` D1-D3。
 
 同帧还带 `duration{work_ms, wait_ms}?`（`AcpClient::turn_timing()`）：定稿瞬间结算好的时长，让耗时当场显示而不必等刷新读库。取值时机与存活期与 `row_id` 完全同理（`begin_turn` 才清，故定稿后仍可读；`None` = 该 turn 未经累积器定稿），口径与落库细节见「turn 工作时长记账」。
 

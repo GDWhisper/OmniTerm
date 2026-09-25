@@ -597,6 +597,13 @@ const SYSTEM_LABEL_TURN_FAILED_CANCELLED: &str = "system.turnFailed.cancelled";
 
 /// system 消息的 i18n key（label 列）：其他非正常原因（含未来未知值）。
 /// 文案经 `{{reason}}` 插值带出协议原文，未知值不吞（AGENTS.md §8）。
+///
+/// **不可达直到 crate 升级**：当前锁定的 agent-client-protocol-schema 1.4.0 里 v1
+/// `StopReason` 是闭枚举（5 个单位变体、无 `Other`），未知值在反序列化阶段就失败并
+/// 走 `TurnEndEvent::Error`，到不了这里。升级到带 `Other(String)` 的 schema 后：
+/// ① 先补一条 `(Abnormal, Other)` 的用例（现有
+/// `unknown_variant_is_unreachable_today_documented` 断言会随之转红，即是提醒）；
+/// ② 确认 `stop_reason_wire` 对 `Other` 产出 `_` 前缀的自定义 wire 形态。
 const SYSTEM_LABEL_TURN_FAILED_OTHER: &str = "system.turnFailed.other";
 
 /// 非正常/取消结束的留痕文案。label 是 i18n key（前端命中才翻译，未命中原样显示），

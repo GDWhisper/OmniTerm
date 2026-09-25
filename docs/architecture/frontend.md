@@ -281,7 +281,7 @@ and render rich cards instead of the current text-only fallback.
   | 触发 | 发什么 | 定位键 | 为什么 |
   |---|---|---|---|
   | `prompt_done`（每 turn） | `turnToSyncPayload` 只发**本 turn 一条** | `frame.row_id`（后端行 id） | 全量重写会随会话增长变成 O(m²) 写放大；本 turn 消息靠 `streaming` 标记界定，故**必须在 `markDone` 之前**调用（它会清掉该标记）。**中途加入的 turn 跳过**：收到过 `turn_snapshot`（`joinedMidTurn`）说明本端 blocks 只有帧窗口残片，回写会把早期正文缺失固化进 DB——此时保留后端原始帧行（text 列完整，渲染走前缀恢复） |
-  | `replay_end`（手动 restore） | `syncToDb` 发全量 `messagesToSyncPayload` | 无 id → 后端文本匹配 | 累积器不持久化重放帧，重放重建的历史只活在内存，需整份写回；手动恢复罕见，全量可接受 |
+   | `replay_end`（手动 restore） | `alignReplaySyncPayload` 发**带 id 的对齐载荷** | 位置 + 角色 + 文本**前缀**守卫 | 手动恢复刻意不 suppress（DB 快照可能缺 thought/tool 块，必须让重放覆盖），故 `commitReplay` 必然从空白重建 store、hydrate 行的 dbId 全部丢失 → 全量无 id 载荷会被后端文本匹配判失配而 INSERT 重复 assistant 行（幽灵行家族的手动恢复入口，2026-09-19 计划 P1）。故在 `replay_start`（早于 `commitReplay`、与 `replay_end` 同在 `HYDRATE_GATED_FRAMES` 故 hydrate 必已落定）快照基线，把重放消息按「同角色 + 基线 text 是重放 text 的前缀」认回既有行。**指针只在命中时推进** ⇒ 已配对基线下标严格递增（更晚的重放消息不可能配到更早的行）+ 一行只被消费一次 ⇒ 误 UPDATE 不可能。失配一律降级为无 id（= 今天的文本匹配/INSERT），降级粒度是单条消息；整场扫描另有总量预算 `MAX_ALIGN_COMPARISONS`，超限整场降级为全量无 id 写回并 warn（不弹 UI） |
   | **hydrate 落定**（每会话一次） | `storedRawRowToSyncPayload` 只发 RAW 残留行 | `dbId`（hydrate 行的真行 id） | RAW 残留（turn 结束时前端 WS 不在线，`prompt_done` 未送达）停在原始帧包裹态，体积比 cooked 大两个数量级；hydrate 已把包裹解码成 cooked blocks，带 id 回写 → UPDATE 不 INSERT。streaming 行跳过（后端累积器仍在写，`prompt_done` 正常路径接管）。`rawStored` 标记由 `ChatView.toChatMessages` 在 hydrate 时设置（解码失败/为空的 RAW 行不标记——回写纯文本兜底会覆盖不可识别帧） |
 
   **为什么按 `row_id` 而不是文本匹配**：后端一个 turn 一行，前端本 turn 可能不止一条消息；且文本相等这个不变式易漂移（丢帧、cancel 补发帧、拆分粒度），对不上就会 INSERT 重复行。`ChatMessage.dbId` 承载「已知的真 DB 行 id」（hydrate 行 / `turn_snapshot` 的 `row_id`），本地 `genId()` 的消息不填——谎报会静默命中零行。
