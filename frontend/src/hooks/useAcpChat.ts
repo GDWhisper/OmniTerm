@@ -1020,8 +1020,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               // 全量 syncToDb 发的就是无 id 载荷，后端按 (session, role, text) 匹配
               // 必然失配（重放 text 与累积器 text 语义已漂移）→ INSERT 重复 assistant
               // 行（2026-09-19 计划 P1 的事故形态）。
-              // 降级路径：非手动恢复 / 基线为空 / 对齐结果为空 → 原样全量写回，
-              // 行为与今天完全一致（这正是翻盘条件要保留的兜底）。
+              // 降级路径：非手动恢复 / 基线为空 / 对齐结果为空 / 整场扫描超出总量预算
+              // → 原样全量写回，行为与今天完全一致（这正是翻盘条件要保留的兜底）。
               // 不用 break/else 提前收尾：无论走哪条写回路径，下面
               // setReplaying(false) 与 clearEnded(sid) 都必须照旧执行。
               const alignedSync =
@@ -1034,6 +1034,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               if (alignedSync.length > 0) {
                 postSync(sid, alignedSync)
               } else {
+                // 走到这里只有两种可能：非手动恢复/基线为空（根本没试过对齐），或
+                // 对齐整场被总量预算降级（`degraded`）。后者是 D4 翻盘条件的真实
+                // 触发：各实现的 session/load 重放与累积器行无法稳定对齐时，宁可
+                // 全量无 id 写回（最坏 = 今天的 INSERT 重复行，可发现可删），也不
+                // 让半截对齐产物写进 DB。仅记一行 warn 供真实环境回填取证，
+                // 不弹 UI——恢复成功与否与对齐成功与否是两件事，用户视角下这次
+                // 恢复已经完成（内容都在内存里）。
+                if ((alignedSync as { degraded?: boolean }).degraded) {
+                  console.warn(
+                    `[acp] manual restore alignment degraded (total comparison budget spent); fell back to full id-less sync for session ${sid}`,
+                  )
+                }
                 syncToDb()
               }
             } else {

@@ -701,7 +701,14 @@ async fn notice_turn_end_if_abnormal(
     // prompt-stale 定稿与 `send_prompt` 返回是两个并存的收尾者，重连重放也可能让
     // 帧序重来）。重复执行会向用户展示两条相同的失败提示，故按世代去重；键取
     // prompt 世代而非 turn 行 id，覆盖「本 turn 未折叠任何帧」（row_id 为 None）。
-    if !c.claim_turn_end_notice(c.prompt_generation()) {
+    //
+    // 必须用 `claim_turn_end_notice_for_current_turn` 而不是
+    // `claim_turn_end_notice(c.prompt_generation())` 两步：后者先读世代再传给另一个
+    // 方法 claim，两步之间不持同一把锁。并发发 prompt 时 `mark_prompt_active` 会推进
+    // 世代，先读者可能读到**新**世代并去消耗新世代的留痕权，导致前一轮的留痕被静默
+    // 吞掉（正是本计划要修的「turn 静默结束、无任何提示」）。新方法在 `AcpClient`
+    // 内部锁内取世代后完成比较 + 赋值，不留这个窗口。
+    if !c.claim_turn_end_notice_for_current_turn() {
         return class;
     }
     persist_and_broadcast_turn_end_notice(db, session_id, c, &notice).await;
