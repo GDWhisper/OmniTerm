@@ -1399,7 +1399,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 //    replay_start（整份覆盖）与 abortReplay/replay_end（整份清空），生命周期严格包在
 //    一次重放内，不可能无界增长。**但消费它的操作需要**：只读扫描在全失配时是
 //    O(replay × baseline)，上游分页上限只界住输入不界住这次计算，故扫描本身另有显式
-//    预算 `ALIGN_SCAN_BUDGET`（chatStore，与 `MESSAGES_PAGE_MAX_LIMIT` 同量级）。
+//    预算 `ALIGN_SCAN_BUDGET`（chatStore，取值 = 后端默认页大小；与
+//    `MESSAGES_PAGE_MAX_LIMIT` 无直接关系）。
 // 3. **用什么测试守住**：`useAcpChat.alignreplay.test.tsx` 的两条集成用例：
 //    「恢复失败后基线被清空」（abortReplay 路径，失败的下一次恢复不按陈旧基线对齐）
 //    与「空基线时退化为既有全量写回」（基线为空不会被当成可对齐输入）。
