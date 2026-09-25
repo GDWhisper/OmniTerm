@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, alignReplaySyncPayload, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail, type ChatMessage } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -639,6 +639,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 重放 staging 缓冲：重放帧全部攒在这里（不进渲染态），replay_end 时非空才
   // 原子提交（双缓冲）。重放失败/为空时丢弃，现有消息不受影响。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
+  // 手动恢复（`session/load`）重放开始前的**基线快照**：hydrate 已有 dbId 的 DB 行。
+  // 手动恢复时 suppressReplay 恒为 false（DB 快照可能缺 thought/tool 块，必须让重放
+  // 覆盖），replay_end 必走 commitReplay —— store 被从空白重建，hydrate 行的 dbId 全部
+  // 丢失，随后的全量 syncToDb 只能发无 id 载荷，后端文本匹配因语义漂移必然失配 →
+  // INSERT 重复 assistant 行（2026-09-19 计划 D4 / P1）。此快照让 replay_end 能把
+  // 重放消息按 dbId 认回已在库里的行（见 alignReplaySyncPayload）。
+  //
+  // 为什么在这里快照而不是别处：replay_start 早于任何重放内容帧到达，此时 store 仍是
+  // hydrate 的权威历史（commitReplay 尚未执行）；且 replay_start/replay_end 都在
+  // HYDRATE_GATED_FRAMES 里，hydrate 必先落定，保证这里读到的就是带 dbId 的行。
+  // ref 自身的边界见文件末尾「基线 ref 的有界性（P1）」；对齐扫描的显式预算
+  // （ALIGN_SCAN_BUDGET）在 chatStore，与后端分页上限同量级。
+  const manualReplayBaseline = useRef<ChatMessage[]>([])
   // 实时流式缓冲：文本/thinking chunk 高频到达时，攒进同一动画帧一次性提交，
   // 把「每 chunk 一次重渲染」降为「每帧最多一次」——IDE 文本流应有的朴素节流，
   // 非特效：输出速度不变，只是合并提交。工具/plan/权限等结构性 action 仍即时生效。
@@ -682,12 +695,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 两个调用点：① 后端以 error 帧代替 replay_end（load_failed）；② 重放期间 WS
   // 断开——replay_end 只会发进已死的旧连接，若不复位，重连后 isReplaying 仍为
   // true，所有 live 帧被无限期攒进 staging 永不提交，聊天界面冻结。
+  // 基线快照一并清掉：失败的恢复不得把陈旧 baseline 泄漏给下一次成功恢复——
+  // 那样下一次会把重放消息按上一轮的 dbId 对齐，UPDATE 到语义无关的行上。
   const abortReplay = useCallback((sid: string) => {
     if (!isReplaying.current) return
     isReplaying.current = false
     suppressReplay.current = false
     isManualRestore.current = false
     replayBuffer.current = []
+    manualReplayBaseline.current = []
     useChatStore.getState().setReplaying(sid, false)
   }, [])
 
@@ -948,6 +964,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           isReplaying.current = true
           replayBuffer.current = []
           const msgs = s.states[sid]?.messages
+          // 手动恢复前快照 hydrate 的权威行：此刻 commitReplay 还没执行，store 仍是
+          // 带 dbId 的 DB 历史。快照在 suppressReplay 判定**之前**取，与判定结果无关
+          // —— 非手动恢复（连接即重放）时此处取到的快照在 replay_end 不会被用到
+          // （那边按 wasManual 分支），失败恢复的清理见 abortReplay。
+          manualReplayBaseline.current =
+            isManualRestore.current && msgs ? [...msgs] : []
           // 手动 restore 必须走完整重放（DB hydrate 的旧快照不完整）。
           suppressReplay.current = !isManualRestore.current && !!(msgs && msgs.length > 0)
           if (!suppressReplay.current) {
@@ -965,11 +987,35 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           isManualRestore.current = false
           const staged = replayBuffer.current
           replayBuffer.current = []
+          // 基线快照只用一次：无论走哪条分支，本次恢复的对账到此结束。
+          const baseline = manualReplayBaseline.current
+          manualReplayBaseline.current = []
           if (!wasSuppressed) {
             if (buildReplayMessages(staged).length > 0) {
               useChatStore.getState().commitReplay(sid, staged)
               // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
-              syncToDb()
+              //
+              // 手动恢复且拿到过基线时，改走**带 dbId 的对齐写回**：commitReplay 已把
+              // store 从空白重建，hydrate 行的 dbId 全部丢失；不重新认回这些行的话，
+              // 全量 syncToDb 发的就是无 id 载荷，后端按 (session, role, text) 匹配
+              // 必然失配（重放 text 与累积器 text 语义已漂移）→ INSERT 重复 assistant
+              // 行（2026-09-19 计划 P1 的事故形态）。
+              // 降级路径：非手动恢复 / 基线为空 / 对齐结果为空 → 原样全量写回，
+              // 行为与今天完全一致（这正是翻盘条件要保留的兜底）。
+              // 不用 break/else 提前收尾：无论走哪条写回路径，下面
+              // setReplaying(false) 与 clearEnded(sid) 都必须照旧执行。
+              const alignedSync =
+                wasManual && baseline.length > 0
+                  ? alignReplaySyncPayload(
+                      useChatStore.getState().states[sid]?.messages ?? [],
+                      baseline,
+                    )
+                  : []
+              if (alignedSync.length > 0) {
+                postSync(sid, alignedSync)
+              } else {
+                syncToDb()
+              }
             } else {
               // 空重放：session/load 是否重放历史为 agent 可选行为，保留现有消息，
               // 仅应用状态同步帧；手动恢复时提示用户历史未返回。
@@ -1336,3 +1382,26 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
   return { connectionState, sendPrompt, cancel, restore, respondPermission, setConfigOption }
 }
+
+// --- 基线 ref 的有界性（docs/dev/performance-and-safety.md §P1）---
+//
+// `manualReplayBaseline` 是「每会话一条、单次恢复有效」的数组，按红线三问回答：
+//
+// 1. **上限是什么**：不复刻第二套数字上限，直接复用 store 自身 messages 的上界——
+//    `GET /messages` 的 hydrate 页由后端按条数 + 字节**双预算**切页
+//    （`MESSAGES_PAGE_MAX_LIMIT` / `MESSAGES_PAGE_MAX_BYTES`），用户上拉才前插更多页，
+//    而 baseline 只在「hydrate 已落定后用户点恢复」这一刻存在，取的就是那一刻已加载
+//    的那些行。即上限 = 后端分页预算 × 用户已加载页数，与 store.messages 严格同源。
+//    **刻意不加独立 cap**：再写一个 `MAX_BASELINE = N` 会与后端的页预算分叉（一个变
+//    另一个不变时，cap 要么提前截断对齐窗口、要么形同虚设），且这里的消息对象是引用
+//    拷贝（`[...msgs]`），不额外持有 blocks 副本，内存成本就是 store 已付出的那一份。
+// 2. **超限怎么办**：ref 自身不需要超限策略——它不是持续 push 的累积结构，写入点只有
+//    replay_start（整份覆盖）与 abortReplay/replay_end（整份清空），生命周期严格包在
+//    一次重放内，不可能无界增长。**但消费它的操作需要**：只读扫描在全失配时是
+//    O(replay × baseline)，上游分页上限只界住输入不界住这次计算，故扫描本身另有显式
+//    预算 `ALIGN_SCAN_BUDGET`（chatStore，与 `MESSAGES_PAGE_MAX_LIMIT` 同量级）。
+// 3. **用什么测试守住**：`useAcpChat.alignreplay.test.tsx` 的两条集成用例：
+//    「恢复失败后基线被清空」（abortReplay 路径，失败的下一次恢复不按陈旧基线对齐）
+//    与「空基线时退化为既有全量写回」（基线为空不会被当成可对齐输入）。
+//    纯函数侧另由 `chatStore.alignreplay.test.ts` 守住「失配降级为无 id」这条安全边界
+//    （含后缀形态的重放仍能对齐、同一基线行不被消费两次、漂移态受扫描预算封顶）。

@@ -431,6 +431,36 @@ const EMPTY: ChatSessionState = {
 const QUEUE_STORAGE_PREFIX = 'omniterm_chat_queue:'
 const queueStorageKey = (sessionId: string) => `${QUEUE_STORAGE_PREFIX}${sessionId}`
 
+/**
+ * `alignReplaySyncPayload` 单条重放消息最多检查的基线行数。
+ *
+ * ## 为什么需要它
+ *
+ * 对齐扫描是「只读不提交」的（见该函数 doc-comment 的安全说明）：失配时指针不动，
+ * 于是**全失配**这一退路径上每条重放消息都要重扫剩余基线 —— O(replay × baseline) 次
+ * `startsWith`，每次还在多 KB 文本上跑。上游的 `MESSAGES_PAGE_MAX_LIMIT`（=500）只
+ * 界住**输入**（单页行数），不界住**这次操作**：用户上拉加载过 P 页历史后
+ * `store.messages` 可达 500·P 行，一次恢复要在主线程上同步扫完它们 —— 正是 D4 翻盘
+ * 条件预料的「各实现重放与累积器行无法稳定对齐」那种多实现漂移场景，也是用户最需要
+ * UI 有响应的时刻（罕见的手动操作 + 正在等他看到结果）。
+ *
+ * ## 取值的依据
+ *
+ * 与后端单页行数上限 `MESSAGES_PAGE_MAX_LIMIT`（500）同量级、取其 1/5：
+ * 正常情况下一次恢复的基线就是**一页** hydrate 行（≤500 行），而 1:1 对齐的回合每条
+ * 消息只检查 ~1 个候选（第一个候选即命中）—— 100 是「单页正常会话绝不被截断」与
+ * 「漂移态不至于拖垮主线程」之间的一个宽裕中点。两个数字刻意同源：未来的读者不必
+ * 猜测它们是无关的两套 cap（若把后端页上限调大，这里应同步重新评估）。
+ *
+ * ## 这是安全阀，不是正确性机制
+ *
+ * 预算耗尽 = 该条消息放弃搜索、降级为**不带 id**（既有且已被测试固化的行为）。
+ * 它不改变任何一条**本该命中**的消息能否命中：命中候选排在前面时（正常形态）根本
+ * 接近不了 100。故预算只能让「本来就会失配的消息早点失配」，不可能把本来能对齐的
+ * 行判成失配——除非同一角色下连续 100 行都不是它，那已属于上述漂移退路径。
+ */
+const ALIGN_SCAN_BUDGET = 100
+
 /** Best-effort sessionStorage read — swallows quota / private-mode errors. */
 function readQueuedFromStorage(sessionId: string): string | null {
   try {
@@ -1262,6 +1292,112 @@ export function messagesToSyncPayload(
     if (m.dbId) {
       entry.id = m.dbId
     }
+    if (m.blocks.length) {
+      entry.blocks = JSON.stringify(toPersistedBlocks(m.blocks))
+    }
+    payload.push(entry)
+  }
+  return payload
+}
+
+/**
+ * 手动恢复（`session/load`）重放落定后，把重放消息按**位置 + 角色 + 文本前缀**与
+ * hydrate 时的 DB 行对齐，命中则带该行真实 dbId 写回（后端 id 路径只 UPDATE
+ * blocks、不 INSERT），失配则不带 id 走后端既有文本匹配/INSERT 路径。
+ *
+ * ## 为什么需要它（2026-09-19 计划 D4）
+ *
+ * 手动恢复时 `useAcpChat` 刻意把 `suppressReplay` 置 false（DB hydrate 快照可能缺
+ * thought/tool 块，必须让重放覆盖），于是 `replay_end` 必然 `commitReplay`：从空白
+ * 重建 store，hydrate 行的 dbId 全部丢弃 → `syncToDb` 发出的是**无 id** 载荷 →
+ * 后端按 `(session, role, text)` 逐条文本匹配。而重放重建的 text 与累积器行的 text
+ * 语义已漂移（后端累积 tool 流式描述段、前端 cook 时把工具内容收进 tool 块，见
+ * 2026-08-18 幽灵行根因 3）→ 匹配失败 → INSERT 重复 assistant 行（事故证据：
+ * 03:09:21 新增 `5200e835` / `bbd3e319`，136 cooked blocks vs 原行 2 块）。
+ * 本函数把「已在 DB 里的那些行」重新认出来，让这次的写回按 id 精确命中。
+ *
+ * ## 为什么必须加前缀守卫（而不是纯位置对齐）
+ *
+ * 纯位置对齐（第 i 条重放 ↔ 第 i 条基线）在重放与 DB 行**错位**时会把 cooked
+ * blocks UPDATE 到**错误的行**上——那是静默数据 corruption（用户看到另一轮的回复被
+ * 替换，且不可恢复）；而今天的无 id 行为 worst case 只是 INSERT 一条重复行
+ * （可发现、用户可删会话）。**用可恢复的污染换不可恢复的损坏是不划算的**，故对齐
+ * 必须附带一条能自证的匹配判据。
+ *
+ * 选用 `startsWith` 作判据：重放是权威的完整历史，DB 基线行则可能因后端帧窗口从
+ * 头部驱逐而只剩后缀、或被 `MAX_TEXT_BYTES` 头尾折叠，其 text 是重放 text 的**前缀
+ * 或相等**。这是唯一一个「结构性成立、且无法靠巧合命中」的判据——错位的行文本不同，
+ * 前缀关系几乎不可能偶然成立。**不做空白归一化**：归一化会把 `"a b"` 与 `"a  b"`
+ * 也算成匹配，扩大误命中面（宁缺勿错：失配退化成今天的 INSERT）。
+ *
+ * 因此失配（守卫不通过 / 基线耗尽）时**故意不带 id**，让这一条消息退化成
+ * `messagesToSyncPayload` 的既有行为（无 id → 文本匹配 → INSERT）。降级粒度是
+ * **单条消息**而不是整个会话：今天整个会话全量降级，本函数只在真正无法自证的那几条
+ * 上降级。
+ *
+ * ## 为什么扫描只读不提交（安全不变量的核心）
+ *
+ * 基线指针有两种推进时机，选错任一条都会破坏「误 UPDATE 不可能」：
+ *
+ * - **命中时提交**（本实现）：指针只在守卫通过的那一行上 +1。于是任意两条命中消息
+ *   `i < j` 配对的基线行下标严格递增 —— 配对**保持原有顺序**，一条重放消息永远不可能
+ *   配到「已配对行之前」的基线行上。这正是「纯位置对齐会 UPDATE 错行」所要的性质。
+ * - **失配时也提交**（更直觉但错误）：一次失败的搜索会把行吃掉，后面本该命中的消息
+ *   因此永远够不着对应行 —— 一次漂移让整份载荷跟着降级，等于回到今天的全量退化，
+ *   本函数的收益归零。
+ *
+ * 失配时只读不提交的代价是**重复扫描**：最坏情况每条重放消息都要重扫剩余基线
+ * —— O(replay × baseline) 次 `startsWith`（每次还在多 KB 文本上跑）。上游的分页
+ * 上限只界住**输入**（单页行数），不界住这次**操作**：用户上拉加载过 P 页后基线可达
+ * 500·P 行，全失配时全部同步扫完会长时间卡住主线程。故用 `ALIGN_SCAN_BUDGET`
+ * 给单条消息的候选检查数设了显式预算（详见该常量注释）：耗尽即把该条降级为无 id，
+ * 不中断整体对齐。
+ */
+export function alignReplaySyncPayload(
+  replay: readonly ChatMessage[],
+  baseline: readonly ChatMessage[],
+): SyncMessagePayload[] {
+  const payload: SyncMessagePayload[] = []
+  // 基线指针单调前移、**只在命中时前移**：保证配对保持原有顺序（见上方安全说明）。
+  let cursor = 0
+  for (const m of replay) {
+    // 与 messagesToSyncPayload 同一过滤规则：system 行后端自己写、前端从不回写；
+    // undelivered 只活在内存。
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    if (m.undelivered) continue
+
+    // 只读扫描：从 cursor 往后找第一条「守卫通过」的基线行，**不移动 cursor**。
+    // 推过的是「不可能对应」的行——角色不同（重放比 DB 少一轮/多一个 system 行造成的
+    // 错位靠这个重新对齐）、undelivered 不参与同步、以及守卫不通过的行。
+    // 找不到就整条降级：cursor 原地不动，下一条重放消息仍能配到同一个基线行。
+    //
+    // 扫描预算（ALIGN_SCAN_BUDGET）：每条消息单独计数，耗尽即放弃该条搜索并降级
+    // 为无 id —— **不中断整体对齐、不抛异常**（其余消息照常尝试）。命中是提前 break，
+    // 故正常 1:1 形态下计数器只到 1，预算永远不会被碰到。
+    let matched: ChatMessage | null = null
+    let examined = 0
+    for (let i = cursor; i < baseline.length && examined < ALIGN_SCAN_BUDGET; i++) {
+      const row = baseline[i]
+      examined += 1
+      if (row.role !== m.role) continue
+      if (row.undelivered) continue
+      // 守卫：基线 text 是重放 text 的前缀（含相等）。
+      // 空文本是退化情形——`''` 是一切字符串的前缀，不构成自证，只允许与同样为空的
+      // 重放文本精确相等（纯工具调用 turn 两侧 text 都为空）；否则这条基线行匹配任何
+      // 消息，等于没有守卫。
+      const guard = row.text.length > 0 ? m.text.startsWith(row.text) : m.text.length === 0
+      if (!guard) continue
+      matched = row
+      // 提交指针 = 命中行下标 + 1：该行已被本次配对消费，不再参与后续配对
+      // （否则两条相同文本的重放消息会把同一个 DB 行 UPDATE 两次）。
+      cursor = i + 1
+      break
+    }
+
+    const entry: SyncMessagePayload = { role: m.role, text: m.text }
+    // 只有守卫通过的基线性才附 dbId；dbId 缺失（本地 genId 行）同样不附：
+    // 谎报 id 只会静默命中零行。
+    if (matched && matched.dbId) entry.id = matched.dbId
     if (m.blocks.length) {
       entry.blocks = JSON.stringify(toPersistedBlocks(m.blocks))
     }
