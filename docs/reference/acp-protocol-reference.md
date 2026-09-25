@@ -613,7 +613,7 @@ idle 状态转换结束前台工作时 MUST 包含 stopReason：
 
 因此宿主对 `end_turn` 之外的**所有** stopReason（`refusal` / `max_tokens` / `max_turn_requests` / `_` 前缀自定义值）都不得当作正常完成——至少要在 UI 留痕并落库，否则表现为「turn 静默定稿、无任何错误」（本项目 0.2.22 即此状态，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）。
 
-**宿主现状（2026-09-23 起 = 已留痕，0.2.26）**：OmniTerm 按白名单判定 `stopReason`——`end_turn` / `max_tokens` / `max_turn_requests` 为正常（不留痕），`cancelled` 单独文案（不算错误），其余含未来新增值一律按非正常。非正常结束时由后端写入一条 `role='system'` 的 `chat_messages` 行（内含 i18n key 与协议原文 `stopReason`）并广播 `system_message` 帧，刷新/切设备后 hydrate 仍可见；同时 `prompt_done` 帧下发 `abnormal` 布尔量让前端把通知与回合状态切到错误语义。判定只在后端做一次，前端不得自行解析 `stopReason` 分类（同一判断散在两处必然漂移）。已知残留：`system_notice_tx` 是普通 broadcast（无补发），而前端 hydrate 每会话只跑一次，故 WS 离线期间产生的 system 通知要整页刷新后才可见——见上述计划文档的「勘误」块。
+**宿主现状（2026-09-26 起 = 已留痕，0.2.26）**：OmniTerm 按白名单判定 `stopReason`——`end_turn` / `max_tokens` / `max_turn_requests` 为正常（不留痕），`cancelled` 单独文案（不算错误），其余含未来新增值一律按非正常。非正常结束时由后端写入一条 `role='system'` 的 `chat_messages` 行（内含 i18n key 与协议原文 `stopReason`）并广播 `system_message` 帧，刷新/切设备后 hydrate 仍可见；同时 `prompt_done` 帧下发 `abnormal` 布尔量让前端把通知与回合状态切到错误语义。判定只在后端做一次，前端不得自行解析 `stopReason` 分类（同一判断散在两处必然漂移）。已知残留：`system_notice_tx` 是普通 broadcast（无补发），而前端 hydrate 每会话只跑一次，故 WS 离线期间产生的 system 通知要整页刷新后才可见——见上述计划文档的「勘误」块。
 
 **取证入口**（宿主日志只显示「turn 被定稿」，病因在 agent 侧）：`~/.codebuddy/logs/<YYYY-MM-DD>/<项目>__<hash>.log`（搜 `[Interruption]` / `[ToolCallError` / `Prompt refused`）与 `~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl` 末尾记录。
 

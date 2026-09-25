@@ -1,6 +1,6 @@
 # ACP 失败可见化与恢复重放收敛
 
-> 状态：实施完成（2026-09-19 设计稿；2026-09-23 Phase 1-4 全部落地并入 dev）
+> 状态：实施完成（2026-09-19 设计稿；2026-09-26 Phase 1-4 全部落地并入 dev）
 > 触发条件：修改 `src/ws/acp.rs`（`dispatch_prompt` / turn 结束呈现）、`src/acp/turn_accumulator.rs`（定稿状态语义）、`src/acp/chat_persistence.rs`（`sync_messages` 匹配）、`frontend/src/hooks/useAcpChat.ts`（`prompt_done` / `replay_end` 分支）前**必读**
 > 关联：`docs/reference/acp-protocol-reference.md` §6.8（stopReason 与实现差异）、`docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md`（幽灵行 P0 方案 A/B，本计划是其在「手动恢复」入口的补漏）、`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 落库与 sync 语义）
 > 来源：正式库会话 `codebuddy_0919-0946`（`0c7ec3ec-df7b-4ec6-b228-6ceb0e9a0e23`）2026-09-19 排查；证据全部取自 `~/.omniterm/omniterm.db`、`~/.omniterm/omniterm.log`、`~/.codebuddy/logs/2026-09-19/*.log` 与 `~/.codebuddy/projects/home-pax-coding-OmniTerm-dev/01a0b757-ae8b-7b48-959c-867f8950d404.jsonl`
@@ -65,7 +65,7 @@
 - **否决项**：a) 手动恢复不再写库（丢重放带来的 blocks 补全，且刷新即丢）；c) 先删该会话 assistant 行再重建（破坏性、且离线期新 turn 有被误删风险）。
 - **翻盘条件**：若各实现的 `session/load` 重放长度/顺序与累积器行无法稳定对齐（多实现差异），退化为 a 并在 UI 明示「本次恢复仅在内存展示」。
 
-#### D4 实施记录（2026-09-23 落地）
+#### D4 实施记录（2026-09-26 落地）
 
 **为什么 b 方案需要先取基线快照才能工作**：`commitReplay` 是从空白重建 store 的，hydrate 行的
 `dbId` 在这一步全部丢失——所以在 `replay_end` 里「按 id 写回」需要一个**早于**那次重建的
@@ -141,7 +141,7 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 | system 消息与 assistant 行排序错位 | 实现时在 `created_at` 上显式串行并在测试中断言顺序 |
 | 未知 stopReason 文案无 i18n key | 沿用 reaper system 消息约定（2026-09-21 起为 `label` 存 i18n key + `detail` 结构化载荷）：未命中 key 原样显示 |
 
-### 勘误（2026-09-23 Phase 1-3 实施后）
+### 勘误（2026-09-26 Phase 1-4 实施后）
 
 **P0-2 仅完成「落库」半，前端补发半未实现——离线期间若不刷新页面，失败提示在当前标签页不可见。**
 
@@ -160,6 +160,15 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
   或单独拉一次增量。**建议单独立项**，勿塞进本计划收尾。
 - 已由 `frontend/src/hooks/useAcpChat.turnfailure.test.tsx` 固化为两个可达形态
   （在线失败只见 live frame / 离线+刷新只见 hydrate 行）与一条残余说明（重连不重 hydrate）。
+
+**手动恢复会丢掉历史 system 通知的可见性（D4 已知残留，非本次回归）。**
+
+- `commitReplay` 从空白重建 store，历史 `system` 行（权限超时告知 / 上一次的失败提示）不从
+  重放帧里回来，而 DB 里仍在。故手动恢复后到下次整页刷新前，这些历史提示在 UI 上不可见。
+- 基线 `0eea50d` 的 `commitReplay` 即此语义，D4 未改它（D4 只改「写回 DB 的载荷带不带 id」）。
+  用户可能误以为「提示被清掉了」，故如实记录在此与 `user-testing.md` §12.7。
+- 若要修：让 `commitReplay` 保留非重放来源的 system 行，或恢复后补拉一次。属 D4 之外的 UI 取舍，
+  本计划不做。
 
 ## 文档闭环
 

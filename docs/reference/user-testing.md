@@ -1005,7 +1005,7 @@ FRONTEND_DIR=frontend/dist
 | 贴底跟随中全程不做任何滚动，直到本轮输出结束 | 全程贴底、回底按钮始终不出现（含工具调用/思考块插入） |
 | 已上翻读历史（按钮已显示）时切到 sidebar/files 再切回、或键盘收放 | 阅读位置不动、按钮仍在（重钉不干预非跟随态） |
 
-### 12.7 agent 侧失败可见化（非正常 stopReason 留痕，2026-09-23）
+### 12.7 agent 侧失败可见化（非正常 stopReason 留痕，2026-09-26）
 
 > 背景：协议在 `session/prompt` 正常返回（非 JSON-RPC error）时也可能表示失败——`end_turn` 之外的终态（本例 agent 侧工具批次异常）只存在于 agent 自己的日志。修复前 OmniTerm 把该 turn 定稿为 complete，聊天流里没有任何失败痕迹。现按协议白名单判定并在聊天流落一条 system 消息。构造方式见协议参考 §6.8：heredoc 里写 `${<上文标识符>}` 即可稳定复现（**必须用 `<<'EOF'` 引号分隔符**——真 shell 合法而 codebuddy 的派发前解析器会误判，从而稳定触发）。
 
