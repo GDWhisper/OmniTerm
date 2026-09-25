@@ -13,6 +13,11 @@ i18n
       en: { translation: en },
     },
     fallbackLng: 'en',
+    // 探测范围白名单（performance-remaining-tiers.md 3.1 方案 B）：项目只有
+    // 2 个 locale，detector 不必对 navigator 全量语言列表做资源匹配；
+    // nonExplicitSupportedLngs 把 zh-CN / en-US 归一化到 zh / en。
+    supportedLngs: ['en', 'zh'],
+    nonExplicitSupportedLngs: true,
     detection: {
       order: ['localStorage', 'navigator'],
       lookupLocalStorage: 'omniterm_locale',
