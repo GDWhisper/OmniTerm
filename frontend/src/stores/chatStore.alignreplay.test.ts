@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { alignReplaySyncPayload, type ChatMessage, type ContentBlock } from './chatStore'
+import {
+  alignReplaySyncPayload,
+  type ChatMessage,
+  type ContentBlock,
+  type SyncMessagePayload,
+} from './chatStore'
 
 // 手动恢复重放的 id 对齐（docs/dev/plans/2026-09-19-acp-failure-visibility.md D4 / P1）。
 //
@@ -30,13 +35,24 @@ const entry = (over: { id?: string; role: string; text: string; blocks?: Content
   ...(over.blocks && over.blocks.length ? { blocks: JSON.stringify(over.blocks) } : {}),
 })
 
+/**
+ * 调 `alignReplaySyncPayload` 并只取载荷 —— 绝大多数用例只关心 id 对齐结果。
+ * 返回值是「数组本体 + 不可枚举的 `degraded` 属性」，取数组本体即与改动前同形
+ * （`toEqual` / `JSON.stringify` 都看不见那个属性）。超限信号（`degraded`）由文末
+ * 专门的 describe 直接调原函数断言，不经此 helper。
+ */
+const align = (
+  replay: readonly ChatMessage[],
+  baseline: readonly ChatMessage[],
+): SyncMessagePayload[] => alignReplaySyncPayload(replay, baseline)
+
 describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
   it('attaches the baseline dbId when the same-role row text is a prefix of the replay text', () => {
     // 事故形态：DB 行的 text 是被 MAX_TEXT_BYTES 折叠/窗口驱逐后的前缀，重放是完整历史。
     // 前缀命中 → 带 id → 后端 UPDATE 该行 blocks，不 INSERT。
     const baseline = [mk({ role: 'assistant', text: 'install the dep', dbId: 'row-1' })]
     const replay = [mk({ role: 'assistant', text: 'install the dep\nnow run the tests' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     expect(payload[0].id).toBe('row-1')
     expect(payload[0].text).toBe('install the dep\nnow run the tests')
@@ -47,7 +63,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
   it('attaches the dbId on an exact text match too (prefix includes equality)', () => {
     const baseline = [mk({ role: 'user', text: 'fix the build', dbId: 'row-u' })]
     const replay = [mk({ role: 'user', text: 'fix the build' })]
-    expect(alignReplaySyncPayload(replay, baseline)).toEqual([
+    expect(align(replay, baseline)).toEqual([
       entry({ id: 'row-u', role: 'user', text: 'fix the build', blocks: replay[0].blocks }),
     ])
   })
@@ -57,7 +73,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
     // 兜底路径，必须是单条粒度而不是整份载荷。
     const baseline = [mk({ role: 'assistant', text: 'totally unrelated text', dbId: 'row-1' })]
     const replay = [mk({ role: 'assistant', text: 'the actual reply' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     expect(payload[0]).not.toHaveProperty('id')
   })
@@ -70,7 +86,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'assistant', text: 'a1' }),
       mk({ role: 'user', text: 'q2' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.text)).toEqual(['q1', 'a1', 'q2'])
     expect(payload[0].id).toBe('row-1')
     expect(payload[1]).not.toHaveProperty('id')
@@ -85,7 +101,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'assistant', text: 'older reply', dbId: 'row-1' }),
     ]
     const replay = [mk({ role: 'assistant', text: 'older reply and more' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     // 第一行 user 与 assistant 角色不符 → 不消耗；第二行命中。
     expect(payload[0].id).toBe('row-1')
@@ -94,7 +110,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
   it('attaches no id when the roles differ at the same position', () => {
     const baseline = [mk({ role: 'user', text: 'hello', dbId: 'row-1' })]
     const replay = [mk({ role: 'assistant', text: 'hello there' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     expect(payload[0]).not.toHaveProperty('id')
   })
@@ -107,7 +123,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'user', text: 'hi', undelivered: true }),
       mk({ role: 'assistant', text: 'hi back' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.role)).toEqual(['assistant'])
     expect(payload[0]).not.toHaveProperty('id')
   })
@@ -124,7 +140,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'user', text: 'q' }),
       mk({ role: 'assistant', text: 'a prefix extended' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.text)).toEqual(['q', 'a prefix extended'])
     expect(payload[0].id).toBe('row-1')
     expect(payload[1].id).toBe('row-2')
@@ -133,7 +149,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
   it('does not attach a baseline row that itself has no dbId (a local id matches no row)', () => {
     const baseline = [mk({ role: 'assistant', text: 'same text' })]
     const replay = [mk({ role: 'assistant', text: 'same text extended' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     expect(payload[0]).not.toHaveProperty('id')
   })
@@ -143,7 +159,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
     // 失配退化成今天的 INSERT，比误 UPDATE 一行更可接受。
     const baseline = [mk({ role: 'assistant', text: 'a  b', dbId: 'row-1' })]
     const replay = [mk({ role: 'assistant', text: 'a b' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload[0]).not.toHaveProperty('id')
   })
 
@@ -160,7 +176,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'user', text: 'q2' }),
       mk({ role: 'assistant', text: 'a2 partial + tool blocks' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.id)).toEqual(['row-1', 'row-2', 'row-3', 'row-4'])
   })
 
@@ -176,7 +192,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'assistant', text: 'replayed text' }),
       mk({ role: 'user', text: 'q2' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.id)).toEqual(['row-1', undefined, 'row-3'])
     expect(payload[1]).not.toHaveProperty('id')
   })
@@ -189,20 +205,20 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
       mk({ role: 'assistant', text: 'same one' }),
       mk({ role: 'assistant', text: 'same two' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload[0].id).toBe('row-1')
     expect(payload[1]).not.toHaveProperty('id')
   })
 
   it('returns an empty payload for an empty replay', () => {
-    expect(alignReplaySyncPayload([], [mk({ role: 'user', text: 'x', dbId: 'row-1' })])).toEqual([])
-    expect(alignReplaySyncPayload([], [])).toEqual([])
+    expect(align([], [mk({ role: 'user', text: 'x', dbId: 'row-1' })])).toEqual([])
+    expect(align([], [])).toEqual([])
   })
 
   it('omits the blocks key when a message has no blocks (matches messagesToSyncPayload)', () => {
     const baseline = [mk({ role: 'user', text: 'q', dbId: 'row-1', blocks: [] })]
     const replay = [mk({ role: 'user', text: 'q', blocks: [] })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload[0]).toEqual({ id: 'row-1', role: 'user', text: 'q' })
     expect(payload[0]).not.toHaveProperty('blocks')
   })
@@ -212,7 +228,7 @@ describe('alignReplaySyncPayload — 带守卫的位置对齐', () => {
     // 前缀，是必然的误命中 → 跳过它，让该条消息降级为 INSERT。
     const baseline = [mk({ role: 'assistant', text: '', dbId: 'row-1', blocks: [] })]
     const replay = [mk({ role: 'assistant', text: 'anything' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload[0]).not.toHaveProperty('id')
   })
 })
@@ -237,7 +253,7 @@ describe('alignReplaySyncPayload — 边界形态（指针推进策略）', () =
       mk({ role: 'user', text: 'q2' }),
       mk({ role: 'assistant', text: 'a2' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload.map((p) => p.id)).toEqual(['u2', 'a2'])
   })
 
@@ -250,7 +266,7 @@ describe('alignReplaySyncPayload — 边界形态（指针推进策略）', () =
       mk({ role: 'assistant', text: 'same one' }),
       mk({ role: 'assistant', text: 'same two' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload[0].id).toBe('row-1')
     expect(payload[1]).not.toHaveProperty('id')
     expect(payload.filter((p) => p.id === 'row-1')).toHaveLength(1)
@@ -268,7 +284,7 @@ describe('alignReplaySyncPayload — 边界形态（指针推进策略）', () =
       mk({ role: 'assistant', text: 'OK' }),
       mk({ role: 'assistant', text: 'OK' }),
     ]
-    expect(alignReplaySyncPayload(replay, baseline).map((p) => p.id)).toEqual(['row-1', 'row-2'])
+    expect(align(replay, baseline).map((p) => p.id)).toEqual(['row-1', 'row-2'])
   })
 
   it('a longer replay never matches an earlier row than an already-matched one (ordering invariant)', () => {
@@ -286,7 +302,7 @@ describe('alignReplaySyncPayload — 边界形态（指针推进策略）', () =
       mk({ role: 'assistant', text: 'unrelated drift' }),
       mk({ role: 'user', text: 'second question' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     // 第 1 条失配：扫过 u1（角色不符）、a1（守卫不通过）、u2（角色不符）→ 无命中，
     // cursor 原地不动。
     expect(payload[0]).not.toHaveProperty('id')
@@ -317,14 +333,14 @@ describe('alignReplaySyncPayload — 扫描预算（性能安全阀）', () => {
       mk({ role: 'assistant', text: 'the real target', dbId: 'row-target' }),
     ]
     const replay = [mk({ role: 'assistant', text: 'the real target plus more' })]
-    expect(alignReplaySyncPayload(replay, baseline)[0]).not.toHaveProperty('id')
+    expect(align(replay, baseline)[0]).not.toHaveProperty('id')
   })
 
   it('degrades to no-id past the scan budget instead of scanning the whole baseline', () => {
     // 远超预算的漂移基线 → 该条消息早失配（不扫完 1000 行），且失配形态是「无 id」。
     const baseline = driftRows(1000, 'bl')
     const replay = [mk({ role: 'assistant', text: 'replay text that matches nothing' })]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(1)
     expect(payload[0]).not.toHaveProperty('id')
   })
@@ -335,7 +351,7 @@ describe('alignReplaySyncPayload — 扫描预算（性能安全阀）', () => {
     const baseline = driftRows(1000, 'bl')
     baseline[50] = mk({ role: 'assistant', text: 'the real target', dbId: 'row-target' })
     const replay = [mk({ role: 'assistant', text: 'the real target plus more' })]
-    expect(alignReplaySyncPayload(replay, baseline)[0].id).toBe('row-target')
+    expect(align(replay, baseline)[0].id).toBe('row-target')
   })
 
   it('the budget is per message — later messages get their own full search', () => {
@@ -352,7 +368,7 @@ describe('alignReplaySyncPayload — 扫描预算（性能安全阀）', () => {
       mk({ role: 'user', text: 'the right question' }),
       mk({ role: 'assistant', text: 'the right answer' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     // 第 1 条：预算内的候选全是 assistant 且文本不构成前缀 → 耗尽 → 无 id。
     expect(payload[0]).not.toHaveProperty('id')
     // 第 2/3 条：各自独立搜索，越过前面的漂移行命中真实行。
@@ -369,7 +385,7 @@ describe('alignReplaySyncPayload — 扫描预算（性能安全阀）', () => {
       mk({ role: 'assistant', text: 'matches nothing two' }),
       mk({ role: 'assistant', text: 'matches nothing three' }),
     ]
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(3)
     expect(payload.map((p) => p.id)).toEqual([undefined, undefined, undefined])
   })
@@ -381,8 +397,124 @@ describe('alignReplaySyncPayload — 扫描预算（性能安全阀）', () => {
       mk({ role: 'assistant', text: `turn ${i}`, dbId: `row-${i}` }),
     )
     const replay = baseline.map((row) => mk({ role: 'assistant', text: `${row.text} plus replayed blocks` }))
-    const payload = alignReplaySyncPayload(replay, baseline)
+    const payload = align(replay, baseline)
     expect(payload).toHaveLength(100)
     expect(payload.every((p) => p.id?.startsWith('row-'))).toBe(true)
+  })
+})
+
+// ── 整场总量预算 MAX_ALIGN_COMPARISONS（§P1：上限维度必须匹配真实增长维度）──
+//
+// 单条预算（ALIGN_SCAN_BUDGET）只界住「一次扫描的宽度」，界不住扫描的**次数**：
+// 总量 = 重放条数 × 每条预算 × 文本长度，而**重放条数这一维完全没有上限** ——
+// `session/load` 重放完整历史，与后端分页预算无关。独立审查实测（全 assistant
+// 历史 + 4.8KB 公共前缀）：replay=1000 → 主线程冻结 1404ms；5000 条 → 3498ms。
+//
+// 超限策略：**整场降级**为不带任何 id 的全量写回（= messagesToSyncPayload 的既有
+// 行为），由挂在返回值上的 `degraded` 标志显式表达 —— 不是「返回空数组」那条碰巧
+// 的路径（user/assistant 消息只要有一条就产生 entry，纯失配不会让载荷为空）。
+//
+// 本 describe 的用例**直接调原函数**（不经上面的 align helper），因为要断的正是
+// `degraded` 这个信号本身。
+
+describe('alignReplaySyncPayload — 整场总量预算（性能安全阀）', () => {
+  /** 同角色、文本互不为前缀的基线行（全失配形态：每条候选都要被逐个推过）。 */
+  const driftRows = (n: number, tag: string) =>
+    Array.from(
+      { length: n },
+      (_, i) => mk({ role: 'assistant', text: `${tag} #${i} drifting further away`, dbId: `${tag}-${i}` }),
+    )
+
+  it('degrades the whole session (no ids at all) once the total comparison budget is spent', () => {
+    // 总量超限的直接断言：replay 远大于 MAX_ALIGN_COMPARISONS / ALIGN_SCAN_BUDGET，
+    // 于是「单条预算内永远失配」被重复到总量耗尽。期待 degraded 置位 + 空载荷
+    // （调用方据此回落 syncToDb() = messagesToSyncPayload 的既有全量写回行为）。
+    const baseline = driftRows(2000, 'bl')
+    const replay = Array.from({ length: 60 }, (_, i) =>
+      mk({ role: 'assistant', text: `replay #${i} matches nothing at all` }),
+    )
+    const result = alignReplaySyncPayload(replay, baseline)
+    expect(result.degraded).toBe(true)
+    // 空载荷 = 「不带任何 id」。降级必须连一个 id 都不剩：留着几条 id 载荷会让
+    // 调用方以为这场对齐部分有效。
+    expect(result).toEqual([])
+    // 显式断「没有任何 id」，不探内部计数器：即便将来降级形态改成别的表达，这条仍成立。
+    expect(result.some((p) => p.id !== undefined)).toBe(false)
+  })
+
+  it('the degraded signal is observable without relying on the payload being empty by chance', () => {
+    // 对照上一条：**未**超限时 degraded 必须为 false，即使载荷因为别的原因为空
+    // （空 replay）。证明 degraded 是独立信号，不是「空数组」的同义词。
+    expect(alignReplaySyncPayload([], []).degraded).toBe(false)
+    // 单条消息 + 短基线：总量远未耗尽。
+    expect(
+      alignReplaySyncPayload([mk({ role: 'assistant', text: 'x' })], driftRows(50, 'bl')).degraded,
+    ).toBe(false)
+  })
+
+  it('a total budget that is spent leaves no id-carrying entry behind (id-free write-back)', () => {
+    // 上一条的语义加强版：即使被降级前已经有若干消息成功带上 id，超限后整份载荷
+    // 也必须是「无 id 全集」——因为调用方要走的是全量写回，混入 id 会造成
+    // 「部分 id + 部分无 id」的第三种形态（后端 id 路径与文本匹配路径混用）。
+    const baseline = [
+      // 前 30 条可命中（重放与基线 1:1，文本互相构成前缀）。
+      ...Array.from({ length: 30 }, (_, i) =>
+        mk({ role: 'assistant', text: `ok ${i}`, dbId: `row-${i}` }),
+      ),
+      // 之后 2000 条全失配漂移行，把总量吃光。
+      ...driftRows(2000, 'drift'),
+    ]
+    const replay = [
+      ...Array.from({ length: 30 }, (_, i) => mk({ role: 'assistant', text: `ok ${i} extended` })),
+      ...Array.from({ length: 60 }, (_, i) => mk({ role: 'assistant', text: `sink #${i} nothing` })),
+    ]
+    const result = alignReplaySyncPayload(replay, baseline)
+    expect(result.degraded).toBe(true)
+    expect(result).toEqual([])
+    expect(result.every((p) => p.id === undefined)).toBe(true)
+  })
+
+  it('a normal-sized session never trips the total budget even when every message mismatches', () => {
+    // 反向保护：总量预算不得把「正常规模的病态形态」也一刀切掉。30 条重放 × 100
+    // 条单条预算 = 3000 次比较，全部花在失配上仍不到 5000 —— 即总量预算的阈值在
+    // 「真实会话重放规模」之上，只拦真正无底的重放条数。
+    const baseline = driftRows(100, 'bl')
+    const replay = Array.from({ length: 30 }, (_, i) =>
+      mk({ role: 'assistant', text: `small session mismatch #${i}` }),
+    )
+    const result = alignReplaySyncPayload(replay, baseline)
+    expect(result.degraded).toBe(false)
+    // 未降级 → 载荷即既有语义：每条都在，全部无 id（单条预算内失配）。
+    expect(result).toHaveLength(30)
+    expect(result.every((p) => p.id === undefined)).toBe(true)
+  })
+
+  it('the budget is per whole alignment: a second call starts from a fresh total', () => {
+    // 总量预算是**每次调用**的局部状态（函数体内的 let），不是模块级累积：
+    // 同一份病态输入连续调两次，两次的结果必须一致（都没有跨调用泄漏预算）。
+    const baseline = driftRows(2000, 'bl')
+    const replay = Array.from({ length: 60 }, (_, i) =>
+      mk({ role: 'assistant', text: `replay #${i} matches nothing at all` }),
+    )
+    const first = alignReplaySyncPayload(replay, baseline)
+    const second = alignReplaySyncPayload(replay, baseline)
+    expect(first.degraded).toBe(true)
+    expect(second.degraded).toBe(true)
+    expect(second).toEqual(first)
+    // `degraded` 只是附在数组上的属性，不改变载荷自身的序列化形态。
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first))
+  })
+
+  it('the degraded flag does not leak into the JSON POST body (array identity preserved)', () => {
+    // 调用方 `postSync` 序列化的是载荷数组本体；`degraded` 必须只活在内存里，
+    // 不进请求体。这样调用点无需任何改动即可继续工作（越界文件的硬约束）。
+    const result = alignReplaySyncPayload(
+      Array.from({ length: 60 }, (_, i) => mk({ role: 'assistant', text: `replay #${i} nothing` })),
+      driftRows(2000, 'bl'),
+    )
+    expect(result.degraded).toBe(true)
+    expect(JSON.parse(JSON.stringify({ messages: result }))).toEqual({ messages: [] })
+    // 长度语义与改动前一致：`alignedSync.length > 0` 分支自然落到 else（syncToDb）。
+    expect(result.length).toBe(0)
   })
 })
