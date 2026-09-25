@@ -1,6 +1,6 @@
 # ACP 失败可见化与恢复重放收敛
 
-> 状态：实施中（2026-09-19 设计稿；2026-09-23 Phase 1-3 已落地并入 dev，Phase 4 实施中）
+> 状态：实施完成（2026-09-19 设计稿；2026-09-23 Phase 1-4 全部落地并入 dev）
 > 触发条件：修改 `src/ws/acp.rs`（`dispatch_prompt` / turn 结束呈现）、`src/acp/turn_accumulator.rs`（定稿状态语义）、`src/acp/chat_persistence.rs`（`sync_messages` 匹配）、`frontend/src/hooks/useAcpChat.ts`（`prompt_done` / `replay_end` 分支）前**必读**
 > 关联：`docs/reference/acp-protocol-reference.md` §6.8（stopReason 与实现差异）、`docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md`（幽灵行 P0 方案 A/B，本计划是其在「手动恢复」入口的补漏）、`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 落库与 sync 语义）
 > 来源：正式库会话 `codebuddy_0919-0946`（`0c7ec3ec-df7b-4ec6-b228-6ceb0e9a0e23`）2026-09-19 排查；证据全部取自 `~/.omniterm/omniterm.db`、`~/.omniterm/omniterm.log`、`~/.codebuddy/logs/2026-09-19/*.log` 与 `~/.codebuddy/projects/home-pax-coding-OmniTerm-dev/01a0b757-ae8b-7b48-959c-867f8950d404.jsonl`
@@ -128,7 +128,7 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 - [x] 手动回归：`docs/reference/user-testing.md` §12.7 / T39（用可稳定复现的 `${expr}` heredoc 命令构造，见协议参考 §6.8）。
 - [x] 质量门禁：`cargo clippy -D warnings`（0 警告）/ `tsc -b`（干净）/ `pnpm lint`（18 个改动前既有告警，0 新增）。
 - [ ] 正式库核对：新发生的非正常结束在 `chat_messages` 中留下 `role='system'` 行，且不再出现「turn 定稿但无任何提示」。**需在真实环境跑一次 §12.7 后回填。**
-- [ ] P1 验收：手动恢复不再产生重复行（Phase 4 实施中）。
+- [x] P1 验收：手动恢复不再产生重复行 —— `useAcpChat.alignreplay.test.tsx` 断言对齐载荷带既有行 id；「后端确实不再 INSERT」需真实库手动回归回填。
 
 ## 风险与降级
 
