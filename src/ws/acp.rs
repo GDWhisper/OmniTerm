@@ -1641,12 +1641,16 @@ mod tests {
 mod notice_tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use agent_client_protocol::schema::v1::StopReason;
     use sqlx::sqlite::SqlitePoolOptions;
 
-    use super::{StopEndClass, build_turn_end_notice, notice_turn_end_if_abnormal};
+    use super::{
+        SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass, TurnEndEvent, build_turn_end_notice,
+        dispatch_prompt, notice_turn_end_if_abnormal, stop_reason_wire,
+    };
     use crate::acp::agent_proc::spawn_test_lock_async;
     use crate::acp::chat_persistence::{insert_message, list_messages_page};
     use crate::acp::client::AcpClient;
@@ -1656,6 +1660,11 @@ mod notice_tests {
     /// 活的 `AcpClient`（广播通道 + 世代计数器），prompt 一个都不发。
     const SESSION: &str = "s-notice";
     const AGENT_ID: &str = "a-notice";
+
+    /// `drive_dispatch_prompt` 等 turn 结束帧的上限。本地 fake agent 的一次往返是
+    /// 毫秒级，10s 只用于把「帧根本没发」的回归转成失败而不是挂死（AGENTS.md：
+    /// 坏输入不得让 CI 挂死）。
+    const DISPATCH_EVENT_TIMEOUT: Duration = Duration::from_secs(10);
 
     const FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 # test-only fake ACP agent：只响应 initialize + session/new 后常驻（stdin 保持
@@ -1669,6 +1678,50 @@ while IFS= read -r line; do
     *'"method":"session/new"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
       printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"notice-session"}}\n' "$id"
+      ;;
+  esac
+done
+exit 0
+"#;
+
+    /// **驱动 `dispatch_prompt` 本体**用的 fake agent 脚本。
+    ///
+    /// 与上面的 [`FAKE_AGENT_SCRIPT`] 只差 `session/prompt` 这一段：先推一条
+    /// agent 文本 chunk（真实 agent 必然如此，否则根本不存在正文行），再回一个
+    /// 真实的 `stopReason`。没有它，`dispatch_prompt` 的 `Ok(resp)` 分支
+    /// （`mark_prompt_idle` → 留痕 → `notify_turn_end`）在测试里**零覆盖** ——
+    /// 既有 5 个留痕用例全都直接调 `notice_turn_end_if_abnormal`，把这条链路
+    /// 整个绕开了（把留痕调用换成 `classify_stop_reason(...)`、或把 `abnormal`
+    /// 写死 `false`，全量测试仍 537 全绿 —— 这正是本次评审的 Blocker）。
+    ///
+    /// `STOP_REASON` 经 env 注入（`@STOP_REASON@` 占位），让同一份脚本同时驱动
+    /// 「refusal → 留痕」与「end_turn → 不留痕」两个对照，不必复制两份脚本。
+    /// 响应必须回抄请求 id：crate 的 `RequestId` 是 UUID 字符串，错配即挂死。
+    ///
+    /// 为什么本地新建而不是改 `acp::fake_agent_tests` 的共享脚本：那份脚本按
+    /// `FAKE_MODE` 分支、**没有任何 `session/prompt` 的成功响应路径**，且被 P2-3
+    /// 回归（spawn 超时不得泄漏进程）与 D2 进程组测试依赖；往共享脚本加行为有
+    /// 破坏其他用例的风险，收益却只是少一份 test-only 常量。
+    const DISPATCH_FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
+# test-only fake ACP agent：握手 + 对 session/prompt 推一条正文 chunk 后，
+# 回注 env 指定的 stopReason。
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{}}}}\n' "$id"
+      ;;
+    *'"method":"session/new"'*)
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"dispatch-session"}}\n' "$id"
+      ;;
+    *'"method":"session/prompt"'*)
+      # 先推正文：让累积器在本 turn 内真的开一行（row_id 有值、定稿会写库），
+      # 这样才能测到「真有一次 agent 回复且它被定稿落库」，而不是只测一个空
+      # turn 的收尾。notification 没有 id 字段（JSON-RPC 通知），不回抄。
+      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"正文一句话"}}}}\n'
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"@STOP_REASON@"}}\n' "$id"
       ;;
   esac
 done
@@ -1770,6 +1823,96 @@ exit 0
         .await
         .expect("spawn 超时：fake agent 未响应握手")
         .expect("spawn_and_connect 失败")
+    }
+
+    /// 起一个**会应答 `session/prompt`** 的 fake client（`Arc` 包裹：`dispatch_prompt`
+    /// 的签名要它，与两个生产调用点一致），并把持久化挂上。
+    ///
+    /// 与 [`live_client`] 的差别就是脚本：drive 测试要驱动 `dispatch_prompt` 本体
+    /// （它内部真的发 `send_prompt`），agent 必须回一个 `stopReason`，否则
+    /// `dispatch_prompt` 会永远挂在 `send_prompt` 上。`stop_reason` 以协议 wire
+    /// 形态（snake_case）经 env 注入，由脚本内插进响应。
+    ///
+    /// 为什么 `db` 由调用方传进来：`dispatch_prompt` 只把 pool 当写入目标，与
+    /// client 完全解耦；测试侧需要同一个 pool 既喂给它、又用来断言 DB，所以由
+    /// 测试先 `fresh_db()` 建好再传入（`fresh_db` 的 `max_connections(1)` 保证
+    /// 同一进程内看到的是同一个内存库）。
+    ///
+    /// `attach_persistence` 必须调（真实注册点同款，见 `api/sessions.rs`）：
+    /// `mark_prompt_idle` 的定稿（正文行 + 会话累计账）经它送达 writer 循环，
+    /// 不挂就与真实链路的时序不符 —— 本 turn 的 assistant 行将根本不存在，
+    /// 测到的是一个空 turn 的收尾。
+    async fn dispatch_client(
+        dir: &Path,
+        stop_reason: &str,
+        db: sqlx::SqlitePool,
+    ) -> Arc<AcpClient> {
+        let script = dir.join("dispatch-agent.sh");
+        std::fs::write(&script, DISPATCH_FAKE_AGENT_SCRIPT.replace("@STOP_REASON@", stop_reason))
+            .expect("write dispatch fake agent script");
+        let workspace = dir.join("ws");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        // 脚本用 sed 解析请求 id，PATH 必须覆盖它（找不到 sed 即静默不回响应）。
+        let env = vec![
+            AgentEnvVar { key: "STOP_REASON".into(), value: stop_reason.to_string() },
+            AgentEnvVar { key: "PATH".into(), value: "/usr/bin:/bin".into() },
+        ];
+        let agent = Agent {
+            id: AGENT_ID.into(),
+            display_name: "Fake Dispatch Agent".into(),
+            command: "/bin/sh".into(),
+            args: vec![script.to_string_lossy().to_string()],
+            env,
+            npm_package: None,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let client = tokio::time::timeout(
+            Duration::from_secs(15),
+            AcpClient::spawn_and_connect(agent, workspace, &HashMap::new()),
+        )
+        .await
+        .expect("spawn 超时：fake agent 未响应握手")
+        .expect("spawn_and_connect 失败");
+        client.attach_persistence(db, SESSION.to_string());
+        Arc::new(client)
+    }
+
+    /// 驱动一次真实的 `dispatch_prompt`，返回它广播出去的 turn 结束事件。
+    ///
+    /// 参数形状照抄两个生产调用点（「连接本就可活：即时发送」与「自动恢复后延迟
+    /// 发送」）：`Arc<AcpClient>` + pool + session_id + 四个 prompt 载荷。这里
+    /// 只发纯文本，images / resources / files 传空 —— 本测试关注的是 turn 收尾
+    /// 链路，不是附件。
+    ///
+    /// 返回 `Err` 而不是 panic：让调用方能对「正常收尾」与「根本没发帧」给不同
+    /// 的失败信息（后者是链路断了，必须让人看出是没广播而不是断言写错）。
+    async fn drive_dispatch_prompt(
+        client: &Arc<AcpClient>,
+        db: &sqlx::SqlitePool,
+        text: &str,
+    ) -> Result<TurnEndEvent, String> {
+        let mut rx = client.turn_end_subscribe();
+        // 必须先订阅再驱动：broadcast 不补历史，晚一步订阅就是永久收不到。
+        dispatch_prompt(
+            Arc::clone(client),
+            db.clone(),
+            SESSION.to_string(),
+            text.to_string(),
+            vec![],
+            vec![],
+            vec![],
+        )
+        .await;
+        // 留一个短超时兜住「帧根本没发」这种回归，避免测试挂死而不是失败。
+        // 10s 远大于本地 fake agent 的一次往返（毫秒级），只用于防死等。
+        match tokio::time::timeout(DISPATCH_EVENT_TIMEOUT, rx.recv()).await {
+            Ok(Ok(event)) => Ok(event),
+            Ok(Err(e)) => Err(format!("turn_end 广播接收失败: {e}")),
+            Err(_) => {
+                Err(format!("dispatch_prompt 未在 {DISPATCH_EVENT_TIMEOUT:?} 内广播 turn 结束事件"))
+            }
+        }
     }
 
     /// `end_turn` / `max_tokens` / `max_turn_requests` → 一条 system 行都不写。
@@ -1907,6 +2050,131 @@ exit 0
         assert_eq!(client.prompt_generation(), 2, "世代应递增");
         notice_turn_end_if_abnormal(&client, &db, SESSION, &StopReason::Refusal).await;
         assert_eq!(system_count(&db).await, 2, "第二个失败 turn 必须也有提示");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 断言 refusal 留痕行的三要素，复用同一组判断（避免在两处复制 JSON 解析）。
+    fn assert_refusal_notice_row(role: &str, text: &str, blocks: Option<&str>) {
+        assert_eq!(role, "system", "必须是 role='system' 行（D2 载体）");
+        assert!(text.contains("拒绝"), "refusal 文案，得到: {text}");
+        let blocks = blocks.expect("system 行必须带 blocks");
+        let parsed: serde_json::Value = serde_json::from_str(blocks).expect("blocks 是 JSON 数组");
+        let block = &parsed[0];
+        assert_eq!(block["type"], "system", "前端按 type='system' 分发渲染");
+        assert_eq!(
+            block["label"], SYSTEM_LABEL_TURN_FAILED_REFUSAL,
+            "i18n key 必须在 blocks 里（前端命中才翻译，未命中原样显示）"
+        );
+        assert_eq!(
+            block["detail"]["stop_reason"], "refusal",
+            "detail 带协议原文（{{reason}} 插值）"
+        );
+        // text 与文案构造器同源：改文案只应改一处（AGENTS.md 工程准则 7①）。
+        assert_eq!(
+            text,
+            &build_turn_end_notice(&StopReason::Refusal, StopEndClass::Abnormal)
+                .expect("refusal 必须留痕")
+                .text
+        );
+    }
+
+    // ── 真链路：驱动 dispatch_prompt 本体（评审 Blocker 的防线） ────────────
+    //
+    // 上面 5 个用例全都**直接调** `notice_turn_end_if_abnormal`，绕开了
+    // `dispatch_prompt`。变异测试证明那条链路零覆盖：把留痕调用换成
+    // `classify_stop_reason(...)`（不落库、不广播）、或把
+    // `abnormal: class == StopEndClass::Abnormal` 写成 `abnormal: false`，
+    // `cargo test --workspace` 仍 537 全绿。
+    //
+    // 下面两例从真实入口驱动（`mark_prompt_active` → `send_prompt` →
+    // `mark_prompt_idle` → 留痕 → `notify_turn_end`），把两个变异都钉成红色：
+    // - `dispatch_prompt_*` 的 system 行断言 → 击穿「留痕调用被删/被换成 classify」；
+    // - `TurnEndEvent::Done` 的 `abnormal: true` 断言 → 击穿「abnormal 写死 false」。
+    //
+    // 注意 `only_abnormal_class_maps_to_frame_abnormal` 自称护栏却只是
+    // `assert_eq!(class == StopEndClass::Abnormal, expected)` 的重述 —— 它重述
+    // 的是**表达式本身**，与 `dispatch_prompt` 里那处填写无关，故不起护栏作用。
+    // 真正的护栏必须走完「stopReason 从 agent 回来」到「前端字段下发」的全链路。
+
+    /// refusal 走真实 `dispatch_prompt`：落且只落一条 system 行（label / detail /
+    /// 文案都对），且 `prompt_done` 帧带 `abnormal: true`。
+    ///
+    /// 这是本 Blocker 的主防线：两个变异（删留痕 / 写死 abnormal）都会让它转红。
+    ///
+    /// **不断言行序的原因（诚实记录）**：`dispatch_prompt` 的注释声称「先
+    /// `mark_prompt_idle` 再留痕 ⇒ `created_at` 严格晚于正文行」，但在**真实链路**
+    /// 上这个不变量并不成立 —— 正文行由 `turn_accumulator` 的后台 writer 经防抖
+    /// 写入，而留痕在 `dispatch_prompt` 的前台 await 里写，两者是竞态：实测 20 次
+    /// 全部是 system 行**先**落（早约 90µs），因为 `EndTurn` 命令要把 writer 从
+    /// 250ms 防抖等待里唤醒。既有 `persisted_row_carries_role_label_and_stop_reason_detail`
+    /// 之所以能断言顺序，是因为它自己 `insert_message` 播下的 user 行确实是同步先写的。
+    /// 故本测试只按 role 筛行，不断言两行的相对顺序（那会把「顺序碰巧如此」钉成
+    /// 不变成量，是个 flaky 断言）。D3 的「正文 → 失败提示」渲染顺序依赖前端按
+    /// 消息类型分列，不依赖这两行的 `created_at` 先后。
+    #[tokio::test]
+    async fn dispatch_prompt_refusal_persists_notice_and_marks_abnormal() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-refusal");
+        let client =
+            dispatch_client(&dir, &stop_reason_wire(&StopReason::Refusal), db.clone()).await;
+
+        let event = drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        // 断言 2：turn_end_tx 收到的 Done 帧带 abnormal: true（前端 error 语义的
+        // 唯一输入）。写成 abnormal: false 时本断言即红。
+        match event {
+            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+                // stop_reason 仍是既有 Debug 形态（前端 cancel 判定读它，勿改格式）。
+                assert_eq!(stop_reason, "Refusal", "stop_reason 用 Debug 形态下发");
+                assert!(abnormal, "refusal 是 Abnormal，prompt_done.abnormal 必须为 true");
+            }
+            other => panic!("refusal 必须走 Done 帧，得到: {other:?}"),
+        }
+
+        // 断言 1：DB 里有且仅有一条 system 行，三要素正确（留痕被删或被换成
+        // 只判不写的 `classify_stop_reason` 时，system_count 断言即红）。
+        let all = rows(&db).await;
+        let notice: Vec<_> = all.iter().filter(|(role, _, _)| role == "system").collect();
+        assert_eq!(notice.len(), 1, "refusal 必须只留一条痕，得到 {} 行: {all:?}", all.len());
+        assert_refusal_notice_row(&notice[0].0, &notice[0].1, notice[0].2.as_deref());
+        assert_eq!(system_count(&db).await, 1, "system 行必须恰好一条");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 对照：`end_turn` 走真实 `dispatch_prompt` 时**不写** system 行，且
+    /// `abnormal` 为 false。
+    ///
+    /// 这是判定口径过宽（把正常结束也当失败 = 噪音）在**真实链路**上的防线。
+    /// 既有 `normal_stop_reasons_write_no_system_row` 只覆盖了直接调
+    /// `notice_turn_end_if_abnormal` 的形状，漏掉了 `dispatch_prompt` 里
+    /// 「Normal 时恰好什么都不做」这一分支本身。
+    #[tokio::test]
+    async fn dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-end-turn");
+        let client =
+            dispatch_client(&dir, &stop_reason_wire(&StopReason::EndTurn), db.clone()).await;
+
+        let event = drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        match event {
+            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+                assert_eq!(stop_reason, "EndTurn");
+                assert!(!abnormal, "end_turn 是白名单正常值，不得标成错误");
+            }
+            other => panic!("end_turn 必须走 Done 帧，得到: {other:?}"),
+        }
+        assert_eq!(system_count(&db).await, 0, "正常结束不得留 system 行（噪音）");
 
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
