@@ -14,6 +14,36 @@ import { useChatStore, type ChatMessage } from '../stores/chatStore'
 //     P0-2 的既有残余（广播无补发），本文件只固化现状，不在本次改动范围内。
 // 无 @testing-library/react：react-dom 手动渲染 + 可控 MockWebSocket 驱动帧序。
 
+// live 缓冲靠 rAF 合帧提交。假时钟不驱动 rAF，这里把回调挂到全局、由测试
+// 手动 flush（等价「下一帧」）——与 useAcpChat.alignreplay.test.tsx 同一手法。
+const RAF_CB_KEY = '__turnFailureRaf'
+
+// flush 的迭代上限，只为「永不无限循环」：一次 flush 至多再排一次 rAF，8 已是
+// 极大余量（与 alignreplay 测试同一量级）。
+const RAF_FLUSH_MAX_ITERATIONS = 8
+
+const setupRafHold = () => {
+  vi.stubGlobal('requestAnimationFrame', (cb: () => void) => {
+    ;(globalThis as Record<string, unknown>)[RAF_CB_KEY] = cb
+    return 1
+  })
+  vi.stubGlobal('cancelAnimationFrame', () => {})
+}
+
+/** 把排队的 rAF 回调跑完：模拟浏览器每帧触发一次 flushLiveBuffer。 */
+const flushRaf = () => {
+  act(() => {
+    const g = globalThis as Record<string, unknown>
+    let guard = 0
+    while (g[RAF_CB_KEY] && guard < RAF_FLUSH_MAX_ITERATIONS) {
+      const cb = g[RAF_CB_KEY] as () => void
+      g[RAF_CB_KEY] = null
+      cb()
+      guard += 1
+    }
+  })
+}
+
 class MockWebSocket {
   static OPEN = 1
   static instances: MockWebSocket[] = []
@@ -236,6 +266,9 @@ describe('turn failure — the visible notice comes from the system_message fram
     fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('WebSocket', MockWebSocket)
+    // 持住 rAF：本文件的测试要能区分「已提交进 store」与「还压在 liveBuffer」，
+    // 真实浏览器此处由帧调度决定（16ms 量级），故必须让 flush 可被手动控制。
+    setupRafHold()
     vi.mocked(fakeAttention.fire).mockClear()
   })
 
@@ -375,5 +408,93 @@ describe('turn failure — the visible notice comes from the system_message fram
     ])
     // 在线期间不会再触发任何 /messages 请求（hydrate 每会话一次）
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('/messages'))).toHaveLength(0)
+  })
+
+  it('failure notice never renders before the prose it describes (rAF held)', () => {
+    // 直播渲染顺序（计划 D3 注意点 / 「风险与缓解」第 2 条要求而漏断的那半）：
+    // 后端 `system_notice` 与 `session_update` 是两条独立 broadcast、两个独立 tokio
+    // task 各自 mpsc 进同一 notify_tx，跨通道顺序无保证——system 帧完全可能**先于**
+    // 本 turn 的 prompt_done 抵达（中间还夹一次 insert_message 往返）。而 prose 要等
+    // flushLiveBuffer 的 rAF 才进 store，若 system_message 分支直接 append，提示就会
+    // 插到它所描述的那段正文之前：prompt_done 随后的 flush 才把 prose 补到它后面。
+    // 依赖 DB 的 created_at 排序在这里救不了：错误只发生在前端直播路径，库里
+    // assistant 行早在流式期就落库（assistant → system 的顺序在库层面一直是对的）。
+    // 故此处持住 rAF，让 prose 停在 liveBuffer，按 prompt_done **之前**收到 system
+    // 帧的时序驱动——这正是审查探针复现出的坏顺序形态。
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+    })
+    settleHydrate([mkMsg({ role: 'user', id: 'u1', text: 'q1' })])
+
+    // turn_state 与流式 chunk 先进 liveBuffer（rAF 未触发 → 尚未进 store）
+    send(ws, { type: 'turn_state', active: true })
+    send(ws, {
+      type: 'session_update',
+      data: { update: { AgentMessageChunk: { content: { Text: { text: 'early answer' } } } } },
+    })
+    send(ws, {
+      type: 'session_update',
+      data: { update: { AgentMessageChunk: { content: { Text: { text: ' and the tail' } } } } },
+    })
+    // 此刻 prose 仍未提交
+    expect(useChatStore.getState().states['s1'].messages).toHaveLength(1)
+
+    // system 帧先于 prompt_done 到达（后端两路广播无序）
+    send(ws, {
+      type: 'system_message',
+      label: 'system.turnFailed.refusal',
+      detail: { stop_reason: 'refusal' },
+    })
+    send(ws, { type: 'prompt_done', stop_reason: 'refusal', abnormal: true, row_id: 'row-1' })
+
+    const messages = useChatStore.getState().states['s1'].messages
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant', 'system'])
+    // 正文完整（两个 chunk 都落地，无丢字），system 行携正确 detail
+    const assistant = messages[1]
+    expect(assistant.text).toBe('early answer and the tail')
+    expect(messages[2].blocks).toEqual([
+      { type: 'system', label: 'system.turnFailed.refusal', detail: { stop_reason: 'refusal' } },
+    ])
+    // rAF 里没有任何残留提交：顺序完全由帧到达序决定，与帧调度无关
+    flushRaf()
+    expect(useChatStore.getState().states['s1'].messages.map((m) => m.role)).toEqual([
+      'user',
+      'assistant',
+      'system',
+    ])
+  })
+
+  it('prompt_error finalizes the prose it describes instead of splitting a second bubble', () => {
+    // 同一根因在 prompt_error 分支的另一副面孔（顺序问题之外更刺眼的一帧）：
+    // turn 终态帧若不先 flush liveBuffer，markError 会把「此刻 store 里最后一条
+    // assistant」finalize，而流式 prose 还压在 rAF 里 → flush 时无处可挂，
+    // appendProseToMessages 只能新建一条 assistant 行。结果是正文被切成两个气泡，
+    // 且新那条停在 streaming=true 出永久「思考中」残影（本分支无后续 markDone 兜底）。
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+    })
+    settleHydrate([mkMsg({ role: 'user', id: 'u1', text: 'q1' })])
+    send(ws, { type: 'turn_state', active: true })
+    send(ws, {
+      type: 'session_update',
+      data: { update: { AgentMessageChunk: { content: { Text: { text: 'partial prose' } } } } },
+    })
+    // prose 仍未提交（rAF 持住）时 turn 即告失败
+    expect(useChatStore.getState().states['s1'].messages).toHaveLength(1)
+    send(ws, { type: 'prompt_error', message: 'boom' })
+
+    const messages = useChatStore.getState().states['s1'].messages
+    // 只有一条 assistant 行，且已收尾（不残留 streaming），正文完整
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(messages[1].text).toBe('partial prose')
+    expect(messages[1].streaming).toBe(false)
+    expect(useChatStore.getState().states['s1'].sending).toBe(false)
+    expect(useChatStore.getState().states['s1'].error).toBe('boom')
+    // rAF 里无残留：终态帧已同步排空 liveBuffer
+    flushRaf()
+    const after = useChatStore.getState().states['s1'].messages
+    expect(after.map((m) => m.role)).toEqual(['user', 'assistant'])
   })
 })

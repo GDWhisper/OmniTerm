@@ -930,6 +930,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           break
         case 'prompt_error':
+          // 先 flush 再报错，与 prompt_done / system_message 两个分支同一出发点：
+          // turn 终态帧必须先把 liveBuffer 里已到的流式 prose 同步提交，再改 turn
+          // 状态。否则 markError 会把「此刻 store 里最后一条 assistant」finalize，
+          // 而 prose 还压在 rAF 里——flush 时 last.streaming 已为 false，prose 无处
+          // 可挂，appendProseToMessages 只能新建一条 assistant 行：既分裂成两个气泡，
+          // 又留下一条永远 streaming 的「思考中」残影（本分支无后续 markDone 兜底）。
+          // 迟到 chunk（prompt_error 之后才到）无法由此收敛，与 prompt_done 同样
+          // 暴露，属通道级时序问题，不在本次范围内。
+          flushLiveBuffer()
           s.markError(sid, frame.message ?? 'prompt failed')
           // 与 tmux 链路的 attention_reason=error 表现一致
           attention.fire(sid, sid, 'error')
@@ -937,7 +946,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'system_message':
           // 后端主动产生的系统通知（权限超时回收告知等）：以 system 消息显示在聊天流。
           // 断线期间产生的通知已由后端落库，hydrate 补上；此帧只服务在线连接。
+          //
+          // 先 flush 再 push：后端 system_notice 与 session_update 是两条独立
+          // broadcast + 两个独立 tokio task，各自 mpsc 进同一个 notify_tx，跨通道
+          // 顺序无保证（中间还夹一次 insert_message 往返）——system 帧完全可能先于
+          // 本 turn 的 prompt_done 抵达。而流式 prose 要等 flushLiveBuffer 的 rAF
+          // 才进 store，若此处直接 append，失败提示就会插在它所描述的那段正文之前
+          // （随后 prompt_done 的 flush 才把 prose 补到它后面）。DB 侧顺序一直是对的
+          // （assistant 行早在流式期落库），错的只是前端这条直播渲染路径。故先把
+          // 已到的 prose 同步提交进 store，再 append 本提示，渲染顺序即「正文 →
+          // 失败提示」，与两路广播的到达先后无关。
           if (frame.label) {
+            flushLiveBuffer()
             useChatStore.getState().pushSystemEvent(sid, frame.label, frame.detail)
           }
           break
