@@ -1,6 +1,6 @@
 # 移动端 scroll mode 进入 copy mode 后无法翻页
 
-> **状态**：待修复（与 `b950cf1` 无关，是 pre-existing 基础设施 bug）。
+> **状态**：待修复（与 `b950cf1` 无关，是 pre-existing 基础设施 bug）。**2026-09-26 标注**：架构前提已部分过时——pty/tmux 滚动链路已分离（`af3f2c1`），pty 会话的历史滚动已由方案 C（viewport 接管，见 `pty-herdr-style-full-buffer-render.md`）接管；本 bug 现仅影响 tmux 会话的移动端 scroll mode 翻页，降为低优先级遗留，方案 1（REST + send-keys 绕开 PTY）思路仍有效。
 > **复现概率**：100%（iOS Safari + Android Chrome 移动端均触发）。
 > **影响范围**：移动端 MobileKeyBar 的 ↑/↓/PgUp/PgDn 在 scroll mode 下完全失效。
 > **推荐方案**：见文末"方案 1"，改动面最小、绕开故障层最彻底。

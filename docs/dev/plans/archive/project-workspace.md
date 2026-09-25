@@ -1,6 +1,6 @@
 # Proposal: Project → Workspace (Git Worktree) 三级架构
 
-> **状态**: Draft  
+> **状态**: ✅ 已实现并归档（Project→Worktree→Session 三级模型已随 `migrations/20260625_workspace_to_project.sql` 与 `src/api/projects.rs` 落地；2026-09-26 核对归档，本文仅作历史决策记录）  
 > **日期**: 2026-06-25  
 > **范围**: 后端数据模型重构 + git worktree 发现 + 前端 Sidebar 三级树
 

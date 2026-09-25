@@ -102,7 +102,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/reference/auth-not-enforced.md` | 修改鉴权/认证相关代码（auth 路由、`require_auth_mw`、登录限流、前端登录 UI）、部署公网前的安全评审 | 鉴权架构变更、安全机制启用/关闭逻辑调整 |
 | `docs/reference/references.md` | 需要查看外部参考实现或 License 合规规则 | 新增参考仓库、License 规则变更 |
 | `docs/reference/chat-history-loading-comparison.md` | 调整聊天历史加载策略（分页阈值、触顶加载、前插锚点、正文限界）前读 | 新增参考实现对比、本项目阈值变更 |
-| `docs/dev/plans/2026-07-30-ui-polish.md` | 修改侧栏宽度/行布局、Modal 体系、文件表格列宽、像素控件（range/toast/badge）前参考其 ADR（D1-D7） | ADR 决策被推翻或翻盘条件触发时更新状态 |
+| `docs/dev/plans/archive/2026-07-30-ui-polish.md` | 修改侧栏宽度/行布局、Modal 体系、文件表格列宽、像素控件（range/toast/badge）前参考其 ADR（D1-D7） | ADR 决策被推翻或翻盘条件触发时更新状态 |
 | `docs/dev/plans/2026-08-10-acp-session-reliability.md` | 修改 `turn_accumulator.rs` / `chat_persistence.rs` / `useAcpChat.ts` / `ChatView.tsx` 任一项前**必读** | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/plans/2026-08-13-port-forward-proxy.md` | 修改 `src/proxy/`、`src/api/mod.rs`（路由挂载）、`src/main.rs`（`AppState`）、`frontend/vite.config.ts`（代理）、`frontend/src/utils/proxyUrl.ts`、终端/聊天链接重写逻辑任一项前**必读** | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |
 | `docs/dev/plans/2026-08-16-files-watch-hardening.md` | 修改 `src/api/files_watch.rs`、`src/fs/mod.rs` 的 ignore 规则、`frontend/src/hooks/useFileWatcher.ts`、`FileManager.tsx` 文件变更刷新链路任一项前**必读** | Phase 推进、决策翻盘、实施偏差（就地加「勘误」块） |

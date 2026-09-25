@@ -2,7 +2,7 @@
 
 > **状态**：根因已定位（2026-08-28 静态核查，见 §零）。出路为方案 C。
 > **最后修改**：2026-08-28 根因核查
-> **关联文档**：`docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B，**已撤销**）
+> **关联文档**：`docs/dev/plans/archive/pty-cell-frame-viewport-scroll.md`（方案 B，**已撤销**）
 > `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`（方案 C，**唯一自洽出路，已确认前提**）
 
 ---
@@ -145,7 +145,7 @@ PTY 终端的鼠标滚轮**概率性失效**——用户向上滚动查看历史
 |------|---------|------|
 | `frontend/src/hooks/useCellFrame.ts` | `isFull` 分支去掉 ESC[2J，添加 `scrollModeRef` + `pendingFullRef` | 行为正确但效果存疑 |
 | `frontend/src/hooks/useTerminal.ts` | `scrollModeRef` 提前声明、切换时 `term.reset()`、键盘处理器读 `wsRef.current` | 已合并 |
-| `docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md` | 方案 B 记录 | 待实施 |
+| `docs/dev/plans/archive/pty-cell-frame-viewport-scroll.md` | 方案 B 记录 | 待实施 |
 | `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md` | 方案 C 记录 | 待实施 |
 
 ---

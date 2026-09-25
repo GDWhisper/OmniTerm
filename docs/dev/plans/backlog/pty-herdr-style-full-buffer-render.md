@@ -4,7 +4,7 @@
 > **进度**：Phase 1 ✅（2026-08-28：`encode_viewport_frame` + `viewport_request` 控制帧 + 有界通道，前后端协议字段 `viewport: y` 已定型；前端未消费，行为无变化）。Phase 2 ✅（2026-08-28：前端 `ViewportController` + `attachCustomWheelEventHandler` 接管 + D3 状态机 + D4 alt-screen 互斥 + 单测 17 例；实施偏差见下方「Phase 2 实施勘误」）。Phase 3：开关移除 ✅（2026-09-26：`VITE_TERMINAL_SCROLLBACK_VIEWPORT` define 与 `useTerminal` 条件分支删除，接管成为唯一路径——缺省开启态自 2026-08-28 起已实机运行一个月且 `.env.local` 从未置 0，移除无行为变化；若手动回归翻盘可从 git 恢复开关）；**手动回归验收仍待做**（`user-testing.md` §4.6 V11/V12 浏览器用例；自动化项 `pty-frame-regression.mjs` / `pty-viewport-anchor-regression.mjs` 与 09-12 计划共享，见其验收清单）。
 > **触发条件**：重新评估终端滚动架构、或前端渲染层改造时参考。
 > **关联**：`docs/dev/plans/2026-08-13-port-forward-proxy.md`（协议设计）、
-> `docs/dev/plans/backlog/pty-cell-frame-viewport-scroll.md`（方案 B，已撤销）。
+> `docs/dev/plans/archive/pty-cell-frame-viewport-scroll.md`（方案 B，已撤销）。
 
 ## 背景
 
