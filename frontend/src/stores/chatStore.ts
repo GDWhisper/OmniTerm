@@ -72,8 +72,12 @@ export interface SystemBlock {
   detail?: SystemBlockDetail
 }
 
-/** system 消息的结构化详情（后端 reaper 权限超时行动下发，前端本地化渲染）。 */
+/** system 消息的结构化详情（后端 reaper 权限超时行动 / turn 非正常结束判定下发，前端本地化渲染）。
+ *  turn 失败载荷只有 `stop_reason`（协议 snake_case 原值），渲染侧据此区分要不要展开权限详情区。 */
 export interface SystemBlockDetail {
+  /** 本轮结束的协议原值（refusal / cancelled / end_turn / `_`前缀自定义值…），
+   *  未知值原样透出（AGENTS.md §8）——`system.turnFailed.*` 文案经 {{reason}} 插值引用。 */
+  stop_reason?: string
   /** 超时时长（分钟）。 */
   minutes?: number
   /** 触发审批的工具名/标题。 */

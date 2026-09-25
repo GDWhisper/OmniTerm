@@ -98,6 +98,26 @@
 | system 消息与 assistant 行排序错位 | 实现时在 `created_at` 上显式串行并在测试中断言顺序 |
 | 未知 stopReason 文案无 i18n key | 沿用 reaper system 消息约定（2026-09-21 起为 `label` 存 i18n key + `detail` 结构化载荷）：未命中 key 原样显示 |
 
+### 勘误（2026-09-23 Phase 1-3 实施后）
+
+**P0-2 仅完成「落库」半，前端补发半未实现——离线期间若不刷新页面，失败提示在当前标签页不可见。**
+
+- 现象：WS 离线期间发生的非正常结束，后端已把 `role='system'` 行写进 `chat_messages`（D2），
+  但 `system_notice_tx` / `turn_end_tx` 都是普通 broadcast（无历史、无补发），前台 frontend
+  在重连后**不会**重新 hydrate，因此看不到这条提示，直到用户整页刷新。
+- 根因是两条既有机制叠加（均非本计划引入）：① `ChatView.tsx:210` 的 `if (states[sid]?.hydrated) return`
+  守卫使 `GET /messages` 每会话只跑一次，而 `chatStore` 无持久化 ⇒ 重连（无 remount）时
+  `hydrated` 仍为 true；② `useAcpChat` 的 `hydratedRef.current` 只在 effect 里写 true、无任何
+  一处写 false（`setHydrated(false)` 在 `src/` 下零调用）。
+- **同一缺口影响已上线的权限超时告知**（`src/acp/reaper.rs:230` insert_message + `:239`
+  notify_system_message，DB 与广播同源）。即「离线期间错过的 system 通知」是通道级问题，
+  不限 turn 失败这一类。
+- 补法需在后端（超出本计划 Phase 1-3 的前端边界）：给 system notice 加游标/补发机制
+  （如连接时下发「上次未见的最新 N 条 system 行」），前端接 `connect()` 复位 `hydratedRef`
+  或单独拉一次增量。**建议单独立项**，勿塞进本计划收尾。
+- 已由 `frontend/src/hooks/useAcpChat.turnfailure.test.tsx` 固化为两个可达形态
+  （在线失败只见 live frame / 离线+刷新只见 hydrate 行）与一条残余说明（重连不重 hydrate）。
+
 ## 文档闭环
 
 - `docs/reference/acp-protocol-reference.md` §6.8：本计划落地后把「宿主现状（静默）」更新为「已留痕」。

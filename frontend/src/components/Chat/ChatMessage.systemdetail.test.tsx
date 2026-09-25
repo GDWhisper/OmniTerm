@@ -42,6 +42,14 @@ function render(message: ChatMessage) {
   })
 }
 
+/** 切 locale 再渲染：每次切换都包在 act 里，避免离开 act 的重渲染告警。 */
+async function renderIn(message: ChatMessage, lang: string) {
+  await act(async () => {
+    await i18n.changeLanguage(lang)
+  })
+  render(message)
+}
+
 describe('SystemBlockView permission-timeout notice', () => {
   it('interpolates the i18n label and renders the structured detail', () => {
     render(
@@ -98,5 +106,71 @@ describe('SystemBlockView permission-timeout notice', () => {
     expect(text).toContain('系统已自动取消该请求并回收会话')
     // 无 detail 时不渲染详情区。
     expect(text).not.toContain('可选项：')
+  })
+
+  it('renders the turn-failure refusal notice in both locales', async () => {
+    const expectations: Record<string, string> = {
+      zh: '这一轮未正常完成：agent 拒绝继续（stopReason=refusal）。',
+      en: 'This turn did not complete: the agent refused to continue (stopReason=refusal).',
+    }
+    for (const lang of ['zh', 'en']) {
+      await renderIn(
+        systemMessage({
+          blocks: [{ type: 'system', label: 'system.turnFailed.refusal', detail: { stop_reason: 'refusal' } }],
+        }),
+        lang,
+      )
+      const text = container.textContent ?? ''
+      expect(text).toContain(expectations[lang])
+      expect(text).not.toContain('system.turnFailed.refusal')
+    }
+  })
+
+  it('interpolates the unknown stopReason raw value for system.turnFailed.other', async () => {
+    const expectations: Record<string, string> = {
+      zh: '这一轮以非正常原因结束（stopReason=_vendor_reason）。',
+      en: 'This turn ended abnormally (stopReason=_vendor_reason).',
+    }
+    for (const lang of ['zh', 'en']) {
+      await renderIn(
+        systemMessage({
+          blocks: [{ type: 'system', label: 'system.turnFailed.other', detail: { stop_reason: '_vendor_reason' } }],
+        }),
+        lang,
+      )
+      const text = container.textContent ?? ''
+      // AGENTS.md §8：未知协议值必须原样可见，不得吞掉或替换成泛化文案。
+      expect(text).toContain(expectations[lang])
+      expect(text).not.toContain('system.turnFailed.other')
+    }
+  })
+
+  it('renders only the one line for a {stop_reason}-only detail (no empty permission wrapper)', () => {
+    render(systemMessage({
+      blocks: [{ type: 'system', label: 'system.turnFailed.cancelled', detail: { stop_reason: 'cancelled' } }],
+    }))
+    const text = container.textContent ?? ''
+    expect(text).toContain('这一轮已被取消（stopReason=cancelled）。')
+    // 权限类详情行一个都不该出现（空 wrapper 回归）。
+    expect(text).not.toContain('请求：')
+    expect(text).not.toContain('可选项：')
+    expect(text).not.toContain('另有')
+    // 该 notice 不产生任何 <pre> 内容预览节点。
+    expect(container.querySelectorAll('pre')).toHaveLength(0)
+  })
+
+  it('keeps rendering the permission detail block when permission fields are present', () => {
+    // 同一 SystemBlockDetail 类型上的 turn-failure 字段不得挤掉权限详情区。
+    render(systemMessage({
+      blocks: [{
+        type: 'system',
+        label: 'system.permTimeout.abort',
+        detail: { stop_reason: 'refusal', minutes: 30, tool: 'Bash', options: ['允许一次'] },
+      }],
+    }))
+    const text = container.textContent ?? ''
+    expect(text).toContain('权限请求 30 分钟未获响应')
+    expect(text).toContain('请求：Bash')
+    expect(text).toContain('可选项：允许一次')
   })
 })

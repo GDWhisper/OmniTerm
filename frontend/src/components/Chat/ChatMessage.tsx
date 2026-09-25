@@ -420,7 +420,12 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
 
 /** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
  *  detail 存在时（后端权限超时行动）在文案下附结构化详情：请求工具、内容预览、
- *  当时的可选项、自动模式实际选中项——用户回来不错过自己错过了什么。 */
+ *  当时的可选项、自动模式实际选中项——用户回来不错过自己错过了什么。
+ *
+ *  label 同时承载「turn 非正常结束」（`system.turnFailed.*`，stopReason 未知值的原始值经
+ *  `{{reason}}` 插值原样透出，AGENTS.md §8：未知协议值必须可见，不得吞掉）；这类 detail
+ *  只有 `{stop_reason}`，与权限超时载荷共用 SystemBlockDetail 类型但不渲染详情区——
+ *  详情区按「有权限类信息可展示」门控，否则 turn 失败提示会挂一个空壳子。 */
 function SystemBlockView({ label, detail }: { label: string; detail?: SystemBlockDetail }) {
   const { t } = useTranslation()
   const text = t(label, {
@@ -429,15 +434,21 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
     selected: detail?.selected ?? '',
     options: detail?.options?.join(' / ') ?? '',
     count: detail?.extra ?? 0,
+    // turn 失败（system.turnFailed.*）：stopReason 未知值经由 {{reason}} 插值原样显示。
+    // 其他 label 不引用该参数，多余参数无害。
+    reason: detail?.stop_reason ?? '',
   })
   const toolDisplay =
     detail?.tool && detail.kind && detail.tool !== detail.kind
       ? `${detail.tool}（${detail.kind}）`
       : (detail?.tool ?? detail?.kind)
+  // 权限超时告知的详情区（工具/内容/选项/省略量）：只有这类载荷才需要展开。
+  // `{stop_reason}` 之类的纯终态载荷不渲染，避免空 wrapper。
+  const hasPermissionDetail = !!(toolDisplay || detail?.content || detail?.options?.length || detail?.extra)
   return (
     <div style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em', maxWidth: '100%' }}>
       <span>[{text}]</span>
-      {detail && (
+      {detail && hasPermissionDetail && (
         <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {toolDisplay && (
             <span>

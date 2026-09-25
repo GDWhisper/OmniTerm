@@ -30,7 +30,20 @@ interface ServerFrame {
   type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message'
   code?: string
   data?: SessionUpdateFrame
+  /** prompt_done: 协议原始 stopReason 快照（诊断用；正常与否由 abnormal 表达）。 */
   stop_reason?: string
+  /** prompt_done: 本轮是否为非正常结束（后端按 D1 白名单判定后下发）。
+   *
+   *  白名单（end_turn / max_tokens / max_turn_requests）与「未知值一律按非正常」的
+   *  判定**只在后端做**，前端不得读 stop_reason 自行分类：同一判断散在两处必然漂移
+   *  （漏掉 `_` 前缀自定义值即本次事故的静默失败）。后端以 `skip_serializing_if` 省略
+   *  false 值，故此处按 `frame.abnormal === true` 判定。
+   *
+   *  cancelled 属于非正常结束（D1），后端单独走 `system.turnFailed.cancelled` 文案、
+   *  不算错误；前端 attention 侧另有一条 cancel 字面量判定**优先于**本字段——
+   *  取消是用户自己的动作，即使被标成 abnormal 也不该响错误提示。
+   *  判定顺序：queued 续发 > cancel > abnormal > done。 */
+  abnormal?: boolean
   message?: string
   id?: string
   request?: Record<string, unknown>
@@ -846,6 +859,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
           // （避免 TDZ + 闭包陈旧值）。见 docs/architecture/adr/0001-acp-queue-drain-location.md。
           {
+            // 判定顺序：queued 续发 > cancel > abnormal > done。
+            //
+            // **queued 续发优先并让整条链空转**（本 turn 结束时刚好有一条排队消息要发）：
+            // 排队续发意味着新 turn 立刻开始，此刻**不** fire 任何 attention。这是
+            // HEAD 起就有的既有行为（见 git show HEAD 的同一分支：`if (queued…) {…
+            // attention.clearAlert(sid); fresh.beginPrompt(sid) } else if (!cancel) fire
+            // 'done'`），本次只把 else 链从「done / 无」扩成「error / done / 无」，
+            // 未改动 queued 分支本身——非正常结束 + 有排队消息时不 fire error 是**保留
+            // 的既有缺口，不是本次引入的回归**：失败的可见痕迹仍由后端 system_message
+            // 落库并广播（D2），attention 只是第二信号。
+            // （另一处现实约束：queued 分支成功时会调 attention.clearAlert(sid)，
+            //  若想在此补 fire('error') 必须排到 clearAlert 之前才不会被自己清掉。）
             const fresh = useChatStore.getState()
             const queued = fresh.states[sid]?.queuedMessage
             if (queued && queued.trim()) {
@@ -862,9 +887,28 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
               }
-            } else if (!frame.stop_reason?.toLowerCase().includes('cancel')) {
-              // 与 tmux 链路表现一致（Sidebar 在 running→idle 转换 fire 'done'）；
-              // 用户主动取消不算完成，排队续发意味着 agent 还没歇。
+            } else if (frame.stop_reason?.toLowerCase().includes('cancel')) {
+              // 用户主动取消：abnormal 也可能为 true（D1 把 cancelled 归入非正常），
+              // 但取消是**用户自己的动作**，不该按错误打扰。故 cancel 判定优先于
+              // abnormal：既保住了无 abnormal 字段的旧后端表现，也挡住了"取消却响
+              // 错误提示音"。
+              //
+              // 两者靠 D1 的白名单判定天然不冲突：后端对 cancelled 单独走
+              // system.turnFailed.cancelled 文案（不按错误语义处理），abnormal 字段
+              // 本就是给"错误语义"用的；此处再挡一层是为防后端某天把 cancelled 也标成
+              // abnormal 时前端静默误报。
+            } else if (frame.abnormal === true) {
+              // 非正常结束（refusal / `_` 前缀自定义值 / 无法识别的值，判定口径见
+              // D1）：与 prompt_error 一致走 attention 的 error 语义——错误提示音 +
+              // 左侧错误态，用户侧一眼看出这一轮没成。
+              //
+              // 这里**不**再自己渲染失败提示：后端已把 system 消息落库并广播
+              // （`system_message` frame → SystemBlockView），那是唯一载体。前端
+              // 若在此补一条提示，hydrate 后会与库里的记录重复成两条气泡
+              // （离线失败尤其明显：prompt_done 根本没送达，提示只该来自库里那条）。
+              attention.fire(sid, sid, 'error')
+            } else {
+              // 与 tmux 链路表现一致（Sidebar 在 running→idle 转换 fire 'done'）。
               attention.fire(sid, sid, 'done')
             }
           }
