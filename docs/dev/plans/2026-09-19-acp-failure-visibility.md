@@ -1,6 +1,6 @@
 # ACP 失败可见化与恢复重放收敛
 
-> 状态：设计稿（2026-09-19）
+> 状态：实施中（2026-09-19 设计稿；2026-09-23 Phase 1-3 已落地并入 dev，Phase 4 实施中）
 > 触发条件：修改 `src/ws/acp.rs`（`dispatch_prompt` / turn 结束呈现）、`src/acp/turn_accumulator.rs`（定稿状态语义）、`src/acp/chat_persistence.rs`（`sync_messages` 匹配）、`frontend/src/hooks/useAcpChat.ts`（`prompt_done` / `replay_end` 分支）前**必读**
 > 关联：`docs/reference/acp-protocol-reference.md` §6.8（stopReason 与实现差异）、`docs/dev/plans/2026-08-18-ghost-message-and-known-issues.md`（幽灵行 P0 方案 A/B，本计划是其在「手动恢复」入口的补漏）、`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 落库与 sync 语义）
 > 来源：正式库会话 `codebuddy_0919-0946`（`0c7ec3ec-df7b-4ec6-b228-6ceb0e9a0e23`）2026-09-19 排查；证据全部取自 `~/.omniterm/omniterm.db`、`~/.omniterm/omniterm.log`、`~/.codebuddy/logs/2026-09-19/*.log` 与 `~/.codebuddy/projects/home-pax-coding-OmniTerm-dev/01a0b757-ae8b-7b48-959c-867f8950d404.jsonl`
@@ -83,12 +83,13 @@
 
 ## 验收标准
 
-- [ ] 后端单测：`end_turn` 不写入 system 消息；`refusal` / 未知值写入且只写一条（重复定稿不重复写）。
-- [ ] 前端单测：`prompt_done{stop_reason:'refusal'}` 呈现失败提示且 `attention` 走 error（不复用 done）。
-- [ ] 前端集成测试：失败发生时 WS 离线 → 重连 hydrate 后失败提示仍可见（覆盖 P0-2）。
-- [ ] 手动回归：`docs/reference/user-testing.md` 增补「agent 侧失败可见」用例（用可稳定复现的 `${expr}` Bash 命令构造，见协议参考 §6.8）。
-- [ ] 质量门禁：`cargo clippy -D warnings` / `tsc -b` / `pnpm lint` 零新增告警。
-- [ ] 正式库核对：新发生的非正常结束在 `chat_messages` 中留下 `role='system'` 行，且不再出现「turn 定稿但无任何提示」。
+- [x] 后端单测：`end_turn` 不写入 system 消息；`refusal` / 未知值写入且只写一条（重复定稿不重复写）——`ws::acp::notice_tests::{normal_stop_reasons_write_no_system_row, refusal_writes_exactly_one_row_even_when_repeated_for_same_turn, next_generation_gets_its_own_notice}`。
+- [x] 前端单测：`prompt_done{stop_reason:'refusal'}` 呈现失败提示且 `attention` 走 error（不复用 done）——`useAcpChat.turnfailure.test.tsx`（提示由后端 `system_message` 帧承载，前端不自行合成）。
+- [x] 前端集成测试：失败发生时 WS 离线 → 重连 hydrate 后失败提示仍可见（覆盖 P0-2）——已覆盖「离线 + 刷新」与「在线」两种可达时序；「仅重连不刷新」的残余见文末勘误。
+- [x] 手动回归：`docs/reference/user-testing.md` §12.7 / T39（用可稳定复现的 `${expr}` heredoc 命令构造，见协议参考 §6.8）。
+- [x] 质量门禁：`cargo clippy -D warnings`（0 警告）/ `tsc -b`（干净）/ `pnpm lint`（18 个改动前既有告警，0 新增）。
+- [ ] 正式库核对：新发生的非正常结束在 `chat_messages` 中留下 `role='system'` 行，且不再出现「turn 定稿但无任何提示」。**需在真实环境跑一次 §12.7 后回填。**
+- [ ] P1 验收：手动恢复不再产生重复行（Phase 4 实施中）。
 
 ## 风险与降级
 
