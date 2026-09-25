@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use crate::engine::pty_io::write_pty;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum PtyError {
     Open(String),
     Spawn(String),

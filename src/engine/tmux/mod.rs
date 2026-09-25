@@ -142,7 +142,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
             // Initialize agent option before launching agent
             let initial_value = agent_hooks::initial_agent_option_value(kind);
             let opt_out = tmux_cmd()
-                .args(["set-option", "-t", name, "@omniterm_agent", &initial_value])
+                .args(["set-option", "-t", name, crate::agent::state::AGENT_OPTION, &initial_value])
                 .output()
                 .await?;
             if !opt_out.status.success() {
@@ -333,8 +333,10 @@ pub async fn capture_screen(session: &str) -> Result<String> {
 ///
 /// Returns `None` if the option is not set or empty.
 pub async fn get_session_agent_option(session_name: &str) -> Result<Option<AgentSnapshot>> {
-    let output =
-        tmux_cmd().args(["show-options", "-t", session_name, "@omniterm_agent"]).output().await?;
+    let output = tmux_cmd()
+        .args(["show-options", "-t", session_name, crate::agent::state::AGENT_OPTION])
+        .output()
+        .await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

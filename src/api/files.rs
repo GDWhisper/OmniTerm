@@ -1512,7 +1512,6 @@ mod handler_tests {
 mod zip_tests {
     use super::zip_directory;
     use std::io::Read;
-    use std::path::Path;
 
     #[test]
     fn packs_directory_into_valid_zip() {
@@ -1553,7 +1552,4 @@ mod zip_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[allow(dead_code)]
-    fn _assert_path(_: &Path) {}
 }

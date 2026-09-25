@@ -162,7 +162,7 @@ impl ClientRegistry {
     }
 
     /// 登记文件路径（诊断/测试读口）。
-    #[allow(dead_code)] // 仅测试/诊断用，生产代码暂无消费方（见 docs/dev/plans/backlog/dead-code-triage.md）
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.inner.path
     }

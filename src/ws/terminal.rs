@@ -41,15 +41,21 @@ pub enum ClientControl {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
 pub enum ServerControl<'a> {
     #[serde(rename = "attached")]
     Attached { session: &'a str },
+    /// 预留：WS 心跳应答。接线归 `docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`
+    /// Phase 1（Phase 0 四格探针出结论前不实现，见其纪律节）。
     #[serde(rename = "pong")]
+    #[allow(dead_code)]
     Pong,
     #[serde(rename = "error")]
     Error { message: &'a str },
+    /// 已知缺口：前端 useTerminal 已处理 `exit` 帧（按退出码渲染状态行），
+    /// 后端从未构造——子进程退出目前仅以 WS 关闭 + 断线重连呈现。是否接线
+    /// 见 `docs/dev/plans/backlog/dead-code-triage.md` #15。
     #[serde(rename = "exit")]
+    #[allow(dead_code)]
     Exit { code: Option<i32> },
     #[serde(rename = "agent_state")]
     AgentState {
