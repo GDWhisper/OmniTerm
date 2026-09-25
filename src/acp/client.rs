@@ -156,6 +156,17 @@ pub enum TurnEndEvent {
         /// 累积器定稿（兜底路径），前端不更新耗时。随帧下发使耗时在定稿那一刻就出现，
         /// 不必等下一次 hydrate。
         duration: Option<TurnTiming>,
+        /// 非正常结束（error 语义；cancelled 不算错误故为 false）。
+        ///
+        /// 计划 `2026-09-19-acp-failure-visibility` D1：协议合法值 ≠ 成功语义。
+        /// stopReason 的白名单判定（`end_turn`/`max_tokens`/`max_turn_requests` 为
+        /// 正常，其余含未知值一律非正常）**只在后端做一次**并在此字段下发，前端
+        /// 不得读 `stop_reason` 自行分类（AGENTS.md 工程准则 7①：同一判断出现在
+        /// 两处必然漂移，漏掉 `_` 前缀自定义值即本次事故的静默失败）。
+        ///
+        /// `true` = error 语义（refusal / 未知值），前端据此走错误态；`cancelled` 是
+        /// 用户主动行为，单独文案、不算错误，故为 `false`。
+        abnormal: bool,
     },
     Error {
         message: String,
@@ -232,6 +243,23 @@ pub struct AcpClient {
     config_prefs: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+    /// turn 非正常结束留痕的世代守卫（计划 2026-09-19 D1/D2「只写一条」）。
+    ///
+    /// turn 结束路径上有两个可能同时作用于同一 turn 的收尾者：reaper 的
+    /// `is_prompt_stale` 强制定稿（`run_reaper` → `mark_prompt_idle` + 广播结束帧）
+    /// 与 `dispatch_prompt` 里 `send_prompt` 的正常返回。后者会写留痕，而前者
+    /// 可能已经把同一 turn 定稿过；更实际的重复来源是**收尾被重放/并发触发两次**
+    /// （同一 prompt 的 `Ok(resp)` 分支被走到两遍、或调用方重试）。留痕是
+    /// **写库 + 广播**的副作用，重复执行会向用户展示两条相同的失败提示，故需与
+    /// `accumulator::finalize_turn` 同样幂等。
+    ///
+    /// 键取 [`ActivityState::prompt_generation`] 而非 turn 行 id：一次 prompt 即
+    /// 一个世代（`mark_prompt_active` 递增），而**没有折叠任何帧**的 turn（row_id
+    /// 为 `None`，如 agent 一声不响就 refusal）同样需要去重，用行 id 会漏掉这类。
+    ///
+    /// `Option<u64>`：`None` = 迄今未写过任何留痕。不用 `AtomicU64` + 0 初值，是
+    /// 因为世代 0 是合法值（首个 prompt 前），无法与「未写过」区分。
+    last_noticed_generation: Mutex<Option<u64>>,
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
     /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
     accumulator: Arc<TurnAccumulator>,
@@ -740,6 +768,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            last_noticed_generation: Mutex::new(None),
             accumulator,
             config_prefs: config_prefs_slot,
             alive,
@@ -787,6 +816,36 @@ impl AcpClient {
     /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
     pub fn turn_timing(&self) -> Option<TurnTiming> {
         self.accumulator.turn_timing()
+    }
+
+    /// 当前进行中的 prompt 世代。每次 `mark_prompt_active` 递增，故「一次 prompt =
+    /// 一个世代」，可作为 turn 的稳定标识（见 `last_noticed_generation`）。
+    pub fn prompt_generation(&self) -> u64 {
+        // 锁中毒时退化为 0 而非 panic：本值只用于去重键，中毒说明其他地方已 panic，
+        // 为一个只读访问器再崩一次没有收益。
+        self.activity.lock().map(|st| st.prompt_generation).unwrap_or(0)
+    }
+
+    /// 领取本世代的留痕权：同一世代只允许一个调用方通过（幂等「只写一条」）。
+    ///
+    /// 返回 `true` = 本次调用方赢得了留痕权，应继续写库 + 广播；`false` = 本世代
+    /// 已留过痕，调用方必须跳过（重复定稿 / 双终结者竞态的场景）。
+    ///
+    /// **持锁期间不 await**：临界区只做一次比较与一次赋值，调用方在拿到结果后才去
+    /// 写库。std Mutex 的 guard 跨 await 会破坏 `Send`（本方法的所有调用方都在
+    /// `tokio::spawn` 的任务里），并让一个慢 DB 阻塞所有读活跃度的路径。
+    pub fn claim_turn_end_notice(&self, generation: u64) -> bool {
+        // `if let Ok(mut g)` 而非 `.unwrap()`：锁中毒（其他持有者 panic）时按
+        // 「不写」处理——宁缺勿滥，重复留痕比漏一条更难解释。
+        if let Ok(mut g) = self.last_noticed_generation.lock() {
+            if *g == Some(generation) {
+                return false;
+            }
+            *g = Some(generation);
+        } else {
+            return false;
+        }
+        true
     }
 
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
@@ -1022,10 +1081,16 @@ impl AcpClient {
                     CANCEL_TURN_FALLBACK_SECS
                 );
                 client.mark_prompt_idle();
+                // `abnormal: false`：本路径是**合成的非协议原因**（agent 无视 cancel
+                // 时的兜底定稿），并不是协议回了非正常 stopReason；且此处不写留痕
+                // system 消息（计划 D3 之外），若报 error 语义就会出现「有错误提示、
+                // 无任何解释文案」。保持既有行为：前端只按 `stop_reason == Cancelled`
+                // 走取消文案。
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "Cancelled".into(),
                     row_id: client.turn_row_id(),
                     duration: client.turn_timing(),
+                    abnormal: false,
                 });
             }
         });
