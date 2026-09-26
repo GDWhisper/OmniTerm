@@ -37,10 +37,12 @@ use axum::response::{IntoResponse, Response};
 /// 返回的响应体文案与代理入口逐字一致（`src/proxy/mod.rs` 的 403 分支），
 /// 便于按同一关键词检索两边日志。
 pub fn enforce_ws_origin(headers: &HeaderMap) -> Option<Response> {
-    let host = host_from_header_map(headers)?;
-    // `ORIGIN` 是单值头（http crate 声明为 `(Origin, ORIGIN, b"origin")`），
-    // `get` 取第一个值。**不得**改成"任一值与 Host 匹配即放行"——那会让攻击者
-    // 把合法值排在恶意值前面绕过。见 `enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site`。
+    let host = host_from_headers(headers)?;
+    // http crate 的 HeaderMap 对 ORIGIN 这类声明过的头仍可 `append` 出多值
+    // （`append` 不看单值声明，只有 `insert` 才去重），`get` 取**首值**。
+    // 安全性依赖「取首值后与 Host 比对」，而非「HeaderMap 保证单值」——
+    // 故**不得**改成「任一值与 Host 匹配即放行」，否则攻击者把合法值排在
+    // 恶意值前面即可绕过。见 `enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site`。
     let origin = headers.get(header::ORIGIN)?;
     if origin_matches_host(origin, host) {
         return None;
@@ -49,8 +51,13 @@ pub fn enforce_ws_origin(headers: &HeaderMap) -> Option<Response> {
     Some((StatusCode::FORBIDDEN, "origin not allowed").into_response())
 }
 
-/// `Host` 头文本；缺失或非 ASCII 可见字符时 `None`（放行路径）。
-fn host_from_header_map(headers: &HeaderMap) -> Option<&str> {
+/// `Host` 头文本；缺失或非 UTF-8 时 `None`（放行路径）。
+///
+/// proxy 侧另有一个取 `&Request` 的 [`crate::proxy::host_from_request`] 薄包装
+/// （它持 `&Request` 是为 WS/HTTP 分流上下文，见 2026-08-13 计划勘误⑤：
+/// 共享函数不能持 `&Request` 跨 await）。**Host 的取值语义以此处为真源**，
+/// 若将来要支持 `X-Forwarded-Host`，两处必须同步改——它们守卫同一道攻击面。
+pub fn host_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::HOST).and_then(|v| v.to_str().ok())
 }
 
@@ -212,13 +219,13 @@ mod tests {
 
     #[test]
     fn enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site() {
-        // `ORIGIN` 在 http crate 里声明为单值头（`(Origin, ORIGIN, b"origin")`）：
-        // `HeaderMap::get` 只取**第一个**值，重复写入不会像 `append` 那样形成多值序列。
-        // 这里显式钉住该语义——把恶意值排在第一位的请求必须被拒；
-        // 若未来误改成遍历全部值（`any` 风格），攻击者把合法值排在前面即可绕过。
+        // http crate 的 HeaderMap 对 ORIGIN 可 `append` 出多值，`get` 取**首值**。
+        // 这里钉住语义：恶意值排在第一位必须被拒。若未来误改成遍历全部值取
+        // 「任一匹配即放行」，攻击者把合法值排在前面即可绕过。
         let mut h = HeaderMap::new();
         h.insert(header::HOST, HeaderValue::from_static("127.0.0.1:9077"));
-        h.insert(header::ORIGIN, HeaderValue::from_static("http://evil.com"));
+        h.append(header::ORIGIN, HeaderValue::from_static("http://evil.com"));
+        h.append(header::ORIGIN, HeaderValue::from_static("http://127.0.0.1:9077"));
         assert!(enforce_ws_origin(&h).is_some());
     }
 
@@ -234,11 +241,21 @@ mod tests {
     }
 
     #[test]
-    fn enforce_ws_origin_allows_non_utf8_host() {
-        // 无 Host（Host 是单值头，无法 append 出多值）→ 放行路径；
-        // 非浏览器客户端不会带畸形 Host，此态只可能来自非浏览器流量。
+    fn enforce_ws_origin_allows_when_host_header_absent() {
+        // 无 Host 头 → 放行。HTTP/1.1 规定 Host 必带，缺失即非浏览器流量。
         let mut h = HeaderMap::new();
         h.append(header::ORIGIN, HeaderValue::from_static("http://127.0.0.1:9077"));
+        assert!(enforce_ws_origin(&h).is_none());
+    }
+
+    #[test]
+    fn enforce_ws_origin_allows_when_host_is_non_utf8() {
+        // 非 UTF-8 Host：`to_str()` 失败 → `host_from_headers` 返回 None → 放行。
+        // 浏览器只会发 ASCII Host，此态只可能来自非浏览器流量（它们本来也无 Origin
+        // 或已被「无 Origin 放行」覆盖），故按放行处理而非拒绝。
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, HeaderValue::from_bytes(b"\xff\xfe").unwrap());
+        h.insert(header::ORIGIN, HeaderValue::from_static("http://127.0.0.1:9077"));
         assert!(enforce_ws_origin(&h).is_none());
     }
 }

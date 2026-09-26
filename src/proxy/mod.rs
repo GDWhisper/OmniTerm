@@ -201,8 +201,13 @@ pub fn parse_proxy_host(host: &str, base: &str) -> Option<u16> {
     prefix.parse::<u16>().ok()
 }
 
+/// 从请求取 `Host` 头文本。**取值语义的真源是 `ws::origin_guard::host_from_headers`**
+/// （AGENTS.md §7①：同一判断不得有两份实现——两处守卫的是同一道 CSWSH 攻击面）。
+/// 此处保留 `&Request` 形态仅因 proxy 的 WS/HTTP 分流上下文持有 `Request`；
+/// 见 2026-08-13 计划勘误⑤：共享函数不能持 `&Request` 跨 await。
+/// 若将来要支持 `X-Forwarded-Host`，必须与真源同步改。
 fn host_from_request(request: &Request) -> Option<&str> {
-    request.headers().get(header::HOST).and_then(|v| v.to_str().ok())
+    crate::ws::host_from_headers(request.headers())
 }
 
 fn is_ws_upgrade(request: &Request) -> bool {
@@ -258,6 +263,13 @@ pub async fn proxy_host_mw(
 
     if is_ws_upgrade(&request) {
         let (mut parts, _body) = request.into_parts();
+        // Origin 校验（CSWSH 防御）：本分支绕过 `dispatch_proxy`，必须**在此单独校验**，
+        // 否则 `--proxy-domain` 子域形态下 `{port}.{base}` 的 WS 入口完全没有 Origin
+        // 关卡（其余三主入口与路径前缀 `/proxy/{port}` 都已校验）。与它们共用同一真源
+        // `crate::ws::enforce_ws_origin`——它正好吃 `&HeaderMap`，而 headers 就在 `parts` 上。
+        if let Some(rejected) = crate::ws::enforce_ws_origin(&parts.headers) {
+            return rejected;
+        }
         return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
             Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone(), client_ip).await,
             Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),

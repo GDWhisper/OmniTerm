@@ -167,3 +167,22 @@
 **回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 565 单测 + 8 + 2 集成全绿。
 
 **验收勾销**：`cargo test origin` ✅（20 个）/ 三入口 + 代理入口真实握手 10/10 ✅ / 真实 Chromium 同源放行 + 跨 host 拦截 ✅ / 裸握手回归不受影响 ✅ / `--daemonize` 路径一致生效 ✅。
+
+### Phase 2 独立审查与修复记录（2026-09-26）
+
+按 `docs/workflows/subagent-code-review.md` 派**独立审查子代理**（另起会话、只读、对抗性立场，要求其证伪实现方主张）。结论 **request changes：1 blocker + 3 major + 2 minor**。逐条处置如下：
+
+| # | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| 1 | **blocker** | **子域名代理 WS relay 路径完全无 Origin 校验**：`proxy_host_mw` 的 `is_ws_upgrade` 分支直接调 `ws::relay`，绕过 `dispatch_proxy` 的校验。经逐字节对比确认为**既有缺口**（`c3d22be` 起就存在），非本轮回归；但本轮文档宣称「四入口全部经它校验」**失实**——这正是本仓历史事故「安全机制实现后未接入链路」的同型 | **已修**：在 `proxy_host_mw` WS 分支内、`ws::relay` 之前补 `enforce_ws_origin(&parts.headers)`。**并经真实子域名握手实测**（起 `--proxy-domain omniterm.lan` 实例）：同源 101 / 无 Origin 101 / 跨站 403 / 跨 host 403，HTTP 非 WS 不回归（200），warn 留痕。**另做反向取证**：`git stash` 构建修复前二进制重跑同一探针 → 跨站 Origin 得 **101**（缺口确实存在），修复后为 403 |
+| 2 | major | `strip_port` 对无方括号裸 IPv6（`::1` / `2001:db8::1`）会切空/切错，文档「IPv6 正确剥端口」易被过度推广 | 审查确认**威胁模型内不可利用**（浏览器发握手必带方括号，WHATWG URL 规范强制；手工构造客户端本来也无 Origin）。**已收窄宣称**：backend.md 增加「IPv6 形态边界」块，说明只保证方括号形态、为何不特殊处理（避免改变 proxy 既有行为） |
+| 3 | major | `host_from_request`（proxy，取 `&Request`）与 `host_from_header_map`（origin_guard）是同一判断的两份实现，守卫同一攻击面 | **已修**：后者提为 `pub host_from_headers` 作为真源，proxy 侧改为薄 wrapper 调它，并互相注释指向。`&Request` 形态保留的理由见 2026-08-13 计划勘误⑤ |
+| 4 | major | `backend.md` source tree 被本轮 diff 改坏：`fs/mod.rs` 行与 `git/` 行拼成一行（丢换行） | **已修**：补回换行 |
+| 5 | minor | 实现方摘要称 `cargo test origin` 17 个，实际 20 个（后续 commit 补了 3 个）——派发摘要滞后于 HEAD | 已在计划文档统一订正为实际值；后续派审查以 `git diff <base>..HEAD` 为准 |
+| 6 | minor | 测试名 `enforce_ws_origin_allows_non_utf8_host` 与所测内容不符（该用例只有 ORIGIN、无 HOST，走的是「无 Host 放行」路径，`to_str()` 失败分支根本没被执行） | **已修**：拆成两条——改名 `enforce_ws_origin_allows_when_host_header_absent`，并新增 `enforce_ws_origin_allows_when_host_is_non_utf8` 用 `HeaderValue::from_bytes(b"\xff")` 真实命中 `to_str()` Err 分支 |
+
+**审查额外纠正的一处机制误述（已回写代码与文档）**：我方注释称「ORIGIN 是单值头」。审查者查 http-1.5.0 与 hyper-1.11 源码证明——HeaderMap 对**声明过的头仍可 `append` 出多值**（`append` 不看单值声明，只有 `insert` 才去重），`get` 取首值才是真实行为。测试结论（安全）正确，但注释机制描述会误导维护者以为 HeaderMap 层面保证了单值。已改为准确表述，并把该语义连同「不得改成任一值匹配即放行」的警告写进 backend.md。
+
+**本条记录的教训（写入 backend.md 收敛点处）**：**判据共享 ≠ 调用点覆盖**。前四个入口收敛后我曾据「函数已入共享模块」宣称「四入口全覆盖」，漏掉了绕过 `dispatch_proxy` 的子域名分支。安全加固要在**每条**到达 `on_upgrade`/`relay` 的路径上逐一确认调用点。
+
+**修复后回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 566 单测 + 8 + 2 集成全绿（`cargo test origin` 21 个）。

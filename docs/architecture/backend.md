@@ -62,7 +62,8 @@ src/
 │   ├── cli.rs            # agent CLI 识别（命令行模式匹配）
 │   ├── process.rs        # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
 │   └── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
-├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search├── git/
+├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
+├── git/
 │   ├── mod.rs            # Git worktree discovery
 │   └── repo.rs           # Git panel service: status(porcelain v2)/diff/log/show/branches/stage/unstage/commit/discard/checkout/push/pull/fetch via git CLI subprocess (no git2)
 ├── health/               # 引擎无关 tmux server 健康模块（P1-1/P1-2，ADR D4 不解冻引擎）：classify 四态分类纯函数 / probe 30s 探针 / heal 内建自愈「重建 tmux server」/ orphan 孤儿堆积监控 / test_support 测试 fixture（仅 cfg(test)）
@@ -345,16 +346,23 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 
 **威胁**：用户在浏览器登录 OmniTerm 后访问恶意网页 evil.com，evil.com 的 JS 可对 OmniTerm 的 WS 入口发起 `new WebSocket(...)` 握手。浏览器自动携带已登录 cookie，而 **`SameSite=Lax` 不防 WS 握手**（它只挡跨站 POST 表单类导航），恶意页面因此能借受害者会话驱动终端 / 提交 agent prompt。**WS 握手也不吃 CORS 的同源赦免**——所以这条防线既独立于 cookie 策略，也独立于 `CorsLayer`（CORS 收紧见 `docs/dev/plans/2026-09-26-security-hardening-batch.md` D3，两条防线不得互相替代）。
 
-**判据与收敛点**：`src/ws/origin_guard.rs` 是**唯一真源**（`enforce_ws_origin(&HeaderMap)` 入口级 predicate + `origin_matches_host(&HeaderValue, &str)` 纯函数）。四个入口全部经它校验，在 `on_upgrade` **之前**做出决定：
+**判据与收敛点**：`src/ws/origin_guard.rs` 是**唯一真源**（`enforce_ws_origin(&HeaderMap)` 入口级 predicate + `origin_matches_host(&HeaderValue, &str)` 纯函数）。**五个** WS 入口全部经它校验，在 `on_upgrade` **之前**做出决定：
 
 | 入口 | 位置 | 形态 |
 |---|---|---|
 | 终端 WS | `src/ws/terminal.rs::ws_terminal_handler` | `HeaderMap` extractor + `enforce_ws_origin` |
 | 外部会话接管 WS | `src/ws/terminal.rs::ws_external_terminal_handler` | 同上（此入口无需 DB 记录，风险更高） |
 | ACP WS | `src/ws/acp.rs::ws_acp_handler` | 同上（可驱动 agent 执行任意 prompt） |
-| 代理 WS relay | `src/proxy/mod.rs::dispatch_proxy` | 因需先判 WS 再分流，沿用 let-chain 调 `crate::ws::origin_matches_host` |
+| 代理 WS relay（路径前缀 `/proxy/{port}`） | `src/proxy/mod.rs::dispatch_proxy` | 因需先判 WS 再分流，沿用 let-chain 调 `crate::ws::origin_matches_host` |
+| 代理 WS relay（子域名 `{port}.{base_host}`） | `src/proxy/mod.rs::proxy_host_mw` | 该分支**绕过** `dispatch_proxy`，故在分支内单独调 `enforce_ws_origin(&parts.headers)` |
 
-规则：**Origin 的 host（忽略端口）与请求 Host（忽略端口）不一致 → `403 origin not allowed`**（大小写不敏感，IPv6 字面量 `[::1]:8080` 正确剥端口）。畸形 Origin（无 scheme / 空 host 段）= 拒绝，**不因解析失败而放行**。两条显式放行：**无 `Origin`**——浏览器对 WS 握手必带 Origin，无 Origin 即非浏览器客户端；一律拒绝会打死 `scripts/pty-*-regression.mjs`、`tests/agent_hook_integration.rs` 的裸握手回归与移动端调试工具。**无 `Host`**——HTTP/1.1 规定必带，缺失即非浏览器流量。
+> **收敛教训（2026-09-26 独立审查捕获）**：前四个入口收敛后曾宣称「四入口已全覆盖」，但子域名分支因绕过 `dispatch_proxy` 而遗漏——**判据共享 ≠ 调用点覆盖**。同一份加固要在**每条**到达 `on_upgrade`/`relay` 的路径上逐一确认调用点，不能因函数入了共享模块就认为调用面已闭环。
+
+规则：**Origin 的 host（忽略端口）与请求 Host（忽略端口）不一致 → `403 origin not allowed`**（大小写不敏感）。畸形 Origin（无 scheme / 空 host 段）= 拒绝，**不因解析失败而放行**。两条显式放行：**无 `Origin`**——浏览器对 WS 握手必带 Origin，无 Origin 即非浏览器客户端；一律拒绝会打死 `scripts/pty-*-regression.mjs`、`tests/agent_hook_integration.rs` 的裸握手回归与移动端调试工具。**无 `Host`**——HTTP/1.1 规定必带，缺失即非浏览器流量。
+
+> **IPv6 形态边界（§8，勿过度推广）**：带方括号的字面量（`[::1]:8080`、`http://[::1]:9077`）正确剥端口并有单测。**无方括号的裸 IPv6**（`::1`、`2001:db8::1`）会被 `split(':')` 切成空串/错段 —— 前者判拒绝、后者可能误放行。威胁模型内不可利用：浏览器发握手时 Origin/Host **都会**带方括号（WHATWG URL 规范强制），攻击者无法让受害者浏览器发出无方括号的 IPv6 Origin。该形态仅可能来自手工构造的客户端（它们本来也无 Origin → 已放行）。不特殊处理的理由：避免改变 proxy 侧既有行为。
+
+**多值 `Origin` 的语义（§8，注释易误读处）**：http crate 的 `HeaderMap` 对**声明过的头仍可 `append` 出多值**（`append` 不看单值声明，只有 `insert` 才去重），`get` 取**首值**。安全性依赖「取首值后与 Host 比对」而非「HeaderMap 保证单值」。故判定**不得**改成「任一值与 Host 匹配即放行」——那会让攻击者把合法值排在恶意值前面绕过（`enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site` 钉住此语义）。
 
 **为什么不用静态 Origin 白名单**：代理子域形态（`{port}.{base_host}`）下 host 随被代理端口动态变化，白名单无法枚举；host 一致性比对天然覆盖，且不需要新增配置项。翻盘条件：若未来前端部署域与 API 域分离且**非**子域同 host 模式，改回显式白名单（须四处入口同改，沉淀进 `.env.local`）。
 
