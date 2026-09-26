@@ -103,7 +103,7 @@
 
 - [x] `cargo test enforce_listen_auth`（四格真值表全过）
 - [x] `cargo test origin`（WS 校验：同源/跨站/无 Origin）
-- [x] `cargo test cors`（CORS：同源/跨站/无 Origin/白名单/预检，predicate 12 + layer 9）
+- [x] `cargo test cors`（CORS：同源/跨站/无 Origin/白名单/预检/上限边界，predicate 17 + layer 9）
 - [ ] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）
 - [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
 - [ ] 手动：非回环 bind + auth 关闭时启动失败且错误信息可见（前台 + `--daemonize` 两路）
@@ -202,7 +202,7 @@
 | Origin host ↔ Host host | 放行 | 复用 **WS 入口同一份 `origin_matches_host`**（§7① 同一判断不复制），忽略端口、大小写不敏感；天然覆盖代理子域形态 |
 | 逐字命中白名单 | 放行 | nginx 默认改写 `Host` 时唯一活路 |
 
-**单测 21 个**（`cargo test cors`，12 predicate + 9 layer 级）。layer 级测试起真实 `CorsLayer` 打真实请求——**只测谓词不足以证明行为**：「无 Origin 放行」来自框架而非我们的代码，必须打层才看得到。
+**单测 26 个**（`cargo test cors`，17 predicate + 9 layer 级）。layer 级测试起真实 `CorsLayer` 打真实请求——**只测谓词不足以证明行为**：「无 Origin 放行」来自框架而非我们的代码，必须打层才看得到。
 
 **一个被单测逮到的实现缺口**：`AllowMethods` / `AllowHeaders` 默认为 `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，白名单部署下带 `content-type` 的 POST（全部 JSON 接口）会被浏览器拦在预检上。**dev 同源永不 preflight，手动验证发现不了**——纯靠 `cors_layer_preflight_answers_allowed_methods_and_headers` 这条测试兜住。补 `GET/POST/PUT/PATCH/DELETE` + `content-type`/`authorization`（方法集由 `src/api/*.rs` 注册的 handler 形态枚举而来）。
 
@@ -211,19 +211,38 @@
 2. nginx 改写 Host + **不**配白名单 → 无 ACAO（拒绝）✅
 3. nginx `Host $host` + 浏览器真同源 → 放行（不回归）✅
 4. 配了白名单但 Origin 不在其中 → 拒绝（并集语义：白名单是「额外允许」不是全放开）✅
-5. 跨源预检 → 空；同源预检 → 方法/header/max-age 齐全 ✅
+5. 跨源预检 → 空；同源预检 → 方法/header 齐全且**不发** `Access-Control-Max-Age` ✅
 6. WS 403 / 101 与 `/proxy/` 200 不受影响 ✅
 另：dev 环境 `./dev.sh restart` 后 curl 200、vite proxy 200、同源带 Origin 200+ACAO、跨站带 Origin 200 无 ACAO。
 
 ### 实施偏差与勘察补充（就地记录）
 
-1. **`max_age` 设 0**（计划未提）：让白名单变更后浏览器立即按新结果判定，排障时行为可预测。本服务没有「每会话重复 preflight」的成本。
+1. **`max_age` 不设**（计划未提）：曾写 `.max_age(MaxAge::exact(Duration::ZERO))`，审查发现**这并不「关掉预检缓存」**——`Exact(Some(0))` 照样发 `Access-Control-Max-Age: 0` 头（tower-http 0.6.11 `max_age.rs`），唯一不发的办法是保持默认 `Exact(None)` 即不调用 `.max_age()`。已改为不调用 + `cors_layer_preflight_omits_max_age` 钉住「头不存在」。语义意图不变：白名单变更后浏览器不得按旧预检结果继续放行。
 2. **不开 `allow_credentials`**（计划未提）：本项目凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，须先过预检，而预检已由同源/白名单分支放行）。保持 off 顺带让 `ensure_usable_cors_rules` 的组合断言不可能被触发（credentials + `Any` 会在 `poll_ready` panic）。
 3. **入口策略分叉须沉淀（AGENTS §8）**：同为「Origin host ↔ Host host」判据，**缺 `Host` 时 WS 放行、CORS 拒绝**。判定函数共享，入口策略刻意不共享——理由已写进 `backend.md`，勿「顺手统一」。
 4. **前端确认真零跨源调用**：全相对路径（`api/client.ts` `BASE='/api/v1'`、`useAcpChat.ts` 用 `window.location.host`、`useFileWatcher.ts` SSE 相对），`frontend/src` 内 `http(s)://` 命中全是 GitHub 链接/i18n/测试夹具；唯一跨形态是 `proxyUrl.ts` 子域绝对 URL（`window.open` 导航，非 fetch，且被 `proxy_host_mw` 先拦）。唯一非简单 Content-Type 是 multipart 上传 → 已被 `allow_headers: content-type` 覆盖。
 5. **`/proxy/{port}` 路径前缀流量确实穿过 CorsLayer**（与子域流量不同）：跨源 fetch 打它现在被拒——这是收紧目的（信息面收窄），不是回归。
-6. **顺手补 Phase 1 遗留文档欠账**：`--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH` 自落地起就未登记进 `backend.md` CLI 块与 env 表，本轮同表改动一并补齐（连同 `--proxy-domain` / `--proxy-max-body`）。
+6. **顺手补 Phase 1 遗留文档欠账（超出本轮必要范围，显式披露）**：`--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH` 自 Phase 1 落地起就未登记进 `backend.md` CLI 块与 env 表，本轮同表改动一并补齐。同时补上的还有 `--proxy-domain` / `OMNITERM_PROXY_DOMAIN` 与 `--proxy-max-body` / `OMNITERM_PROXY_MAX_BODY`（同样是先前落地未登记项）。**这三项不是本 Phase 的新功能**，只是同一张表的文档欠账清偿；若评审要求 CORS commit 只含 CORS 改动，可将这三行拆到独立 `docs:` commit。
 
-**验收勾销**：`cargo test cors` ✅（21 个）/ 反代两态实测 ✅ / 同源放行不回归 ✅ / dev 不打断 ✅ / clippy+fmt+全量 587 单测 ✅。
+**验收勾销**：`cargo test cors` ✅（26 个）/ 反代两态实测 ✅ / 同源放行不回归 ✅ / dev 不打断 ✅ / clippy+fmt+全量 592 单测 ✅。
 
-**文档闭环待办**（本轮已做）：`backend.md`（新增「CORS 策略」小节 + CLI/env 登记）、`auth-not-enforced.md`（CSWSH 段后补 CORS 段 + 影响表行 + 相关文件）、`CHANGELOG.md`（`[security]`/`[api]` 条目，含反代白名单影响面）。**另需更新**：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 的 S3 状态仍标「未落地」。
+> **独立审查后追加（2026-09-26）**：审查结论 request changes（2 blocker + 2 major + 2 minor），逐条处置见下方审查表。
+
+**文档闭环待办**（本轮已做）：`backend.md`（新增「CORS 策略」小节 + CLI/env 登记）、`auth-not-enforced.md`（CSWSH 段后补 CORS 段 + 影响表行 + 相关文件）、`CHANGELOG.md`（`[security]`/`[api]` 条目，含反代白名单影响面）、`archive/2026-09-01-improvement-directions.md` 的 S3 状态改「已落地」。
+
+### Phase 3 独立审查与修复记录（2026-09-26）
+
+按 `docs/workflows/subagent-code-review.md` 派**独立审查子代理**（另起会话、只读、对抗性立场，审 `git diff 699a3cb..561f3c4` 并要求其逐条证伪实现方的 7 项安全主张）。结论 **request changes：2 blocker + 2 major + 2 minor**。逐条核实后处置如下：
+
+| # | 级别 | 问题 | 核实 | 处置 |
+|---|---|---|---|---|
+| 1 | **blocker** | `parse_allowed_origins` 的超长条目 warn 用 `&entry[..MAX_ORIGIN_BYTES]` 做字节切片——多字节字符跨第 256 字节时**启动即 panic**（§P1 明确要求按字符边界切） | **已实证**：用 `rustc` 单独构造「19 ASCII + 79 个三字节汉字（270 字节）」输入，报 `byte index 256 is not a char boundary` | **已修**：改 `entry.chars().take(MAX_ORIGIN_BYTES).collect::<String>()`，并补 `parse_allowlist_drops_multibyte_overlong_entry_without_panic` 回归（现象即 panic，测试必须能在修复前转红）+ `parse_allowlist_keeps_multibyte_entry_within_limit`（上限管字节数不管字符数，勿误丢合法条目） |
+| 2 | **blocker** | `MAX_ORIGIN_ENTRIES` 上限检查在 `push` **之后**执行 ⇒ 恰好 32 条的合法配置也触发「超出上限、保留前 32 条」warn，谎报超限且宣称的丢弃策略与代码实际行为不符（§P1：超限策略必须与宣称一致） | 属实：`out.len() >= N` 在 push 后判，第 32 条 push 完即命中 | **已修**：上限检查移到循环体顶部（空段 `continue` 之后）。补 `parse_allowlist_exact_cap_is_not_over_limit`（恰好 N 条不误报）+ `parse_allowlist_over_cap_keeps_exactly_first_n`（超限时逐条核对保留的恰是前 N 条） |
+| 3 | major | `max_age(MaxAge::exact(Duration::ZERO))` **并不关掉预检缓存**——`Exact(Some(0))` 照样发 `Access-Control-Max-Age: 0` 头（查 tower-http 0.6.11 `max_age.rs` 证实）；代码注释、backend.md、本计划偏差 1 三处都写了错机制，且无测试支撑该宣称 | 属实，读源码 `to_header` 的 `Exact(v) => v.clone()?` 确认 | **已修**：删掉 `.max_age(...)`（不发头的唯一办法是保持默认 `Exact(None)`）+ 同步改三处文字 + 补 `cors_layer_preflight_omits_max_age` 断言头不存在。**顺带删掉因此变为未使用的 `MaxAge` import** |
+| 4 | major | CLI/env 表把 `--insecure-no-auth` / `--proxy-domain` / `--proxy-max-body` 三个**先前已落地**项与新的 `--cors-allowed-origins` 并列写出，形似「本 Phase 新功能」（协议 §3.1 未披露的范围蔓延；虽是正确的文档欠账清偿） | 属实：Phase 1 的 flag 自落地起就未登记 | 保留补登记（有价值），但在**计划偏差 6 与本条**显式披露「这三项不是本 Phase 新功能，只是文档欠账清偿，可拆独立 `docs:` commit」 |
+| 5 | minor | 文档称「不做规范化」未提及 `HeaderValue::from_str` 会**静默拒绝**含控制字符的条目 | 属实（`from_str` 对控制字符返回 Err） | 已在 `parse_allowed_origins` 文档补一条说明 |
+| 6 | minor | `allow_credentials` 的理由写「跨源简单请求带不了自定义头」是非因果（Authorization 是非简单头 ⇒ 跨源 Bearer 必先 preflight；真正保证是谓词门控 preflight） | 表述确实不精确，结论不变 | 已改为准确表述（谓词门控 + 顺带避开 `ensure_usable_cors_rules` 的 panic 组合） |
+
+**审查确认为真的事实**（读源码逐条比对，非只看我方摘要）：① 不 break 任何合法调用方（前端全相对路径、零 `res.headers` 读取、零 `credentials:`、下载是 `a.download` 导航式、scripts/tests 不发 Origin）；② 三规则并集且白名单是**加法**（不涉及 Host 的字节比对，两条 true 分支独立返回）；③ 复用 `origin_matches_host` 安全——**缺 Host 时 WS 放行 / CORS 拒绝的分歧是有意且已按 AGENTS §8 沉淀进 backend.md**；④ 测试脚手架真实（`tower::Layer::layer` + `oneshot`/`block_on` 走的是 `Cors::<S>::call`，正是「无 Origin ⇒ predicate 不被调用」的所在，非空测试）；`decide()` 构造真实 `axum::http::Request` 后调同一个 `origin_is_allowed`，非重复实现；⑤ 预检覆盖前端实际方法/头（GET/POST/PUT/PATCH/DELETE + content-type + multipart）；⑥ 层序与 `Vary` 宣称正确，方向**只收窄未放宽**（`*` 条目永远匹配不上浏览器 Origin）。
+
+**审查未能验证项（不可视为已完成）**：B1 的 panic 我方已用 `rustc` 单独复证、修复后单测能转红；`cargo test cors`/全量绿由我方实跑（26 / 592）；**反代与移动端真机实测仍未做**（无 nginx、无真机，`Host` 头模拟不等价于真实链路），继续留在待办。

@@ -75,7 +75,10 @@ pub const MAX_ORIGIN_BYTES: usize = 256;
 ///
 /// **不做 scheme 补全 / 大小写规范化**：CORS 的 `Origin` 头按字节比对，
 /// 规范化只会造成「配了 `HTTP://X` 以为能匹配」的错配。配置必须写浏览器
-/// 地址栏里的那个完整 origin（含 scheme 与端口）。
+/// 地址栏里的那个完整 origin（含 scheme 与端口）。另注意
+/// `HeaderValue::from_str` 会**静默拒绝**含控制字符（含 `\0`、`\r\n`、非
+/// ASCII 控制码）的条目并走 warn 分支——不属于「规范化」，但同样让
+/// 「以为配上了」的条目失效。
 pub fn parse_allowed_origins(raw: &str) -> Vec<HeaderValue> {
     let mut out: Vec<HeaderValue> = Vec::new();
     for entry in raw.split(',') {
@@ -83,12 +86,26 @@ pub fn parse_allowed_origins(raw: &str) -> Vec<HeaderValue> {
         if entry.is_empty() {
             continue;
         }
+        // 上限检查放在 push 之前：否则恰好 N 条的合法配置会误报「超出」，
+        // 且 warn 里声称的「保留前 N 条、丢弃尾条」与代码实际行为不符
+        // （§P1：超限策略必须与宣称一致，且要有边界单测兜住）。
+        if out.len() >= MAX_ORIGIN_ENTRIES {
+            tracing::warn!(
+                "cors allowed origins exceeded {} entries, keeping the first {} entries",
+                MAX_ORIGIN_ENTRIES,
+                MAX_ORIGIN_ENTRIES
+            );
+            break;
+        }
         if entry.len() > MAX_ORIGIN_BYTES {
+            // 按字符边界截断：直接 `&entry[..MAX_ORIGIN_BYTES]` 在多字节字符
+            // 跨第 256 字节时会 panic（§P1 明确要求按字符边界切）。
+            let clipped: String = entry.chars().take(MAX_ORIGIN_BYTES).collect();
             tracing::warn!(
                 "cors allowed origin too long ({} bytes > {}), dropped: {}...",
                 entry.len(),
                 MAX_ORIGIN_BYTES,
-                &entry[..MAX_ORIGIN_BYTES.min(entry.len())]
+                clipped
             );
             continue;
         }
@@ -98,13 +115,6 @@ pub fn parse_allowed_origins(raw: &str) -> Vec<HeaderValue> {
             }
         } else {
             tracing::warn!("cors allowed origin is not a valid header value, dropped: {entry}");
-        }
-        if out.len() >= MAX_ORIGIN_ENTRIES {
-            tracing::warn!(
-                "cors allowed origins exceeded {} entries, keeping the first ones",
-                MAX_ORIGIN_ENTRIES
-            );
-            break;
         }
     }
     out
@@ -220,6 +230,57 @@ mod tests {
         let out = parse_allowed_origins(&raw);
         assert_eq!(out.len(), MAX_ORIGIN_ENTRIES);
         assert_eq!(out[0], "https://0.example.com");
+    }
+
+    #[test]
+    fn parse_allowlist_exact_cap_is_not_over_limit() {
+        // 恰好 N 条的合法配置**不得**被当成超限（否则 warn 谎报「超出」且宣称
+        // 丢弃尾条，与 §P1「超限策略必须与宣称一致」冲突）。
+        let raw: String = (0..MAX_ORIGIN_ENTRIES)
+            .map(|i| format!("https://{i}.example.com"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let out = parse_allowed_origins(&raw);
+        assert_eq!(out.len(), MAX_ORIGIN_ENTRIES);
+        assert_eq!(
+            out[MAX_ORIGIN_ENTRIES - 1],
+            format!("https://{}.example.com", MAX_ORIGIN_ENTRIES - 1)
+        );
+    }
+
+    #[test]
+    fn parse_allowlist_over_cap_keeps_exactly_first_n() {
+        // 超限时保留的必须是**前 N 条**，不多不少（含「多出条目被丢弃」的语义）。
+        let raw: String = (0..MAX_ORIGIN_ENTRIES + 3)
+            .map(|i| format!("https://{i}.example.com"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let out = parse_allowed_origins(&raw);
+        assert_eq!(out.len(), MAX_ORIGIN_ENTRIES);
+        for (i, v) in out.iter().enumerate() {
+            assert_eq!(v.to_str().unwrap(), format!("https://{i}.example.com"));
+        }
+    }
+
+    #[test]
+    fn parse_allowlist_drops_multibyte_overlong_entry_without_panic() {
+        // §P1 字符边界：超长条目含多字节字符（每个 3 字节）跨第 256 字节时，
+        // 直接 `&entry[..256]` 会 panic（已用 `rustc` 单独复证）。这里钉住
+        // 解析函数本身不 panic 且该条目被丢弃。
+        let long = format!("http://x.example.com/{}", "中".repeat(90)); // 270 字节
+        assert!(long.len() > MAX_ORIGIN_BYTES);
+        let out = parse_allowed_origins(&long);
+        assert!(out.is_empty(), "超长多字节条目必须被丢弃: {out:?}");
+    }
+
+    #[test]
+    fn parse_allowlist_keeps_multibyte_entry_within_limit() {
+        // 边界内（≤256 字节）的多字节条目本身合法（UTF-8 的 HeaderValue），
+        // 不应被误丢——上限管的是字节数而非字符数。
+        let ok = format!("http://x.example.com/{}", "中".repeat(50)); // 150 字节
+        assert!(ok.len() <= MAX_ORIGIN_BYTES);
+        let out = parse_allowed_origins(&ok);
+        assert_eq!(out.len(), 1);
     }
 
     #[test]

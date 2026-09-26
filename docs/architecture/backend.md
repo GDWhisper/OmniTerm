@@ -387,7 +387,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 
 **`X-Forwarded-Host` 不作判据**：`CorsLayer` 不读它，且客户端可伪造——不校验反代链路就信任它等于把白名单拱手让给攻击者。
 
-**方法集与 header 集显式列白**（不再 `Any`）：方法 = `GET/POST/PUT/PATCH/DELETE`（由 `src/api/*.rs` 注册的 handler 形态枚举而来），header = `content-type`/`authorization`。**不能省**：`AllowMethods`/`AllowHeaders` 默认 `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，跨源部署下带 `content-type` 的 POST（全部 JSON 接口）会被浏览器拦在预检上。`max_age` 设 0：让白名单变更后浏览器立即按新结果判定（排障时行为可预测）。**不设 `allow_credentials`**：本项目凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，须先过预检，而预检已由上述两条放行），保持 off 也让 `ensure_usable_cors_rules` 的组合断言不可能被触发。
+**方法集与 header 集显式列白**（不再 `Any`）：方法 = `GET/POST/PUT/PATCH/DELETE`（由 `src/api/*.rs` 注册的 handler 形态枚举而来），header = `content-type`/`authorization`。**不能省**：`AllowMethods`/`AllowHeaders` 默认 `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，跨源部署下带 `content-type` 的 POST（全部 JSON 接口）会被浏览器拦在预检上。**不设 `max_age`**（注意：`MaxAge::exact(Duration::ZERO)` 并不「关掉缓存」，它照样发 `Access-Control-Max-Age: 0` 头；唯一不发的办法是保持默认不调用 `.max_age()`）——让白名单变更后浏览器立即按新预检结果判定，排障时行为可预测。**不设 `allow_credentials`**：本项目凭据是 cookie（同源自动携带）或 `Authorization: Bearer`；跨源要带 Bearer 必须先过预检，而预检本身已被同源/白名单分支放行，故收益为零；保持 off 顺带让 `ensure_usable_cors_rules` 的组合断言（credentials 不能与 `Any` 的 header/method/origin/expose 并存，否则 `poll_ready` panic）不可能被触发。
 
 **入口策略分叉（AGENTS §8，勿「顺手统一」）**：同为「Origin host ↔ Host host」判据，**缺 `Host` 时 WS 入口放行、CORS 入口拒绝**。理由不同、不可共用：WS 侧（`origin_guard.rs`）无 Host 的请求只可能是非浏览器畸形流量，放行不扩大攻击面；CORS 侧无 Host 却带 Origin 的请求**无法证明同源**，而 CORS 本就是浏览器侧的读取权管制，按拒绝处理才不出现「无 Host 就放行」的缺口。判定函数 `origin_matches_host` 已共享，**入口策略刻意不共享**。
 

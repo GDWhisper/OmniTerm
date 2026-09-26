@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
-use tower_http::cors::{AllowOrigin, CorsLayer, MaxAge};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -1168,10 +1168,12 @@ fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
 /// 放进纯函数的理由：判定的三条分支必须可穷举单测（仿 `enforce_listen_auth`），
 /// 而 tower-http 的 builder 只有在真实请求经过时才暴露行为。
 ///
-/// **不**设 `allow_credentials(true)`：凭据模式要求 origin 非 `*`，且本项目的会话
-/// 凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，
-/// 必须先过 preflight；白名单场景下已由同源/白名单分支放行）。保持 off 让
-/// `ensure_usable_cors_rules` 的组合断言不可能被触发。
+/// **不**设 `allow_credentials(true)`：本项目凭据是 cookie（同源自动携带）或
+/// `Authorization: Bearer`。开 credentials 还要求 origin 非 `*`——我们的谓词
+/// 已保证这点，但它会把 `ensure_usable_cors_rules` 的组合断言（credentials
+/// 不能与 `Any` 的 header/method/origin/expose 并存，否则 `poll_ready` panic）
+/// 拉进可能触发的范围，而收益为零：跨源要带 Bearer 必须先过预检，预检本身
+/// 已被同源/白名单分支放行。保持 off 让该断言不可能被触发。
 fn build_cors_layer(cors_allowed_origins: Option<&str>) -> CorsLayer {
     let allowed: std::sync::Arc<[HeaderValue]> =
         ws::cors_policy::parse_allowed_origins(cors_allowed_origins.unwrap_or("")).into();
@@ -1191,10 +1193,13 @@ fn build_cors_layer(cors_allowed_origins: Option<&str>) -> CorsLayer {
         // allowed_methods_and_headers` 钉住这一点）。代理路由是 `routing::any`，
         // 但其流量被最外层 `proxy_host_mw` 拦在 CorsLayer 之前，不经过本层。
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
-        // 预检缓存关掉：本服务的 CORS 形态（同源 + 少数配了白名单的部署）
-        // 没有「每次会话重复 preflight」的成本，而 max-age > 0 会让浏览器
-        // 在白名单变更后仍按旧结果放行一段时间，排障时更难理解。
-        .max_age(MaxAge::exact(std::time::Duration::ZERO))
+    // **不设 max_age**：`MaxAge::exact(ZERO)` 并不「关掉缓存」——它照样
+    // 发 `Access-Control-Max-Age: 0` 头（tower-http 0.6.11 `max_age.rs`
+    // 的 `Exact(Some(0))` 仍产出头）。真正不发头的方式就是保持默认
+    // `MaxAge::default()`（`Exact(None)`），即本处不调用 `.max_age()`。
+    // 语义上：max-age > 0 会让浏览器在白名单变更后仍按旧预检结果放行，
+    // 排障时难理解；不设则每次 preflight，而本服务的白名单部署本就是
+    // 少数场景，成本可忽略（`cors_layer_preflight_omits_max_age` 钉住）。
 }
 
 /// 启动期 fail-closed 校验：监听非回环地址 + 鉴权关闭时拒绝启动，除非显式
@@ -1582,6 +1587,30 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_preflight_omits_max_age() {
+        // **不发** `Access-Control-Max-Age`（而非发 0）：`MaxAge::exact(ZERO)`
+        // 照样产出该头（tower-http 0.6.11 `max_age.rs` 的 `Exact(Some(0))`），
+        // 唯一不发的办法就是保持默认、不调用 `.max_age()`。不发的理由：白名单
+        // 变更后浏览器不得按旧的预检结果继续放行，排障时行为才可预测。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_MAX_AGE), None);
     }
 
     /// 错误信息必须给出补救动作（开启 auth 或加逃生门），否则用户无法自救。
