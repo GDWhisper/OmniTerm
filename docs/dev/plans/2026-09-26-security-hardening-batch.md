@@ -104,7 +104,8 @@
 - [x] `cargo test enforce_listen_auth`（四格真值表全过）
 - [x] `cargo test origin`（WS 校验：同源/跨站/无 Origin）
 - [x] `cargo test cors`（CORS：同源/跨站/无 Origin/白名单/预检/上限边界，predicate 17 + layer 9）
-- [x] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）——23 个，含并发 1100 次写入仍恰好收敛到上限- [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
+- [x] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）——24 个，含并发 1100 次写入上界不被击穿（`<=` 上限，非 `==`，见 Phase 4 记录）
+- [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
 - [ ] 手动：非回环 bind + auth 关闭时启动失败且错误信息可见（前台 + `--daemonize` 两路）
 - [x] 手动（Phase 3 新增，勘察 D3 校正 6）：nginx `proxy_set_header Host $host` 反代后跨源被拒；显式配 origin 后放行；同源放行不回归（embedded 形态 + 移动端真机）——反代两态用 `Host` 头等价模拟实测通过；embedded 形态见下条；**移动端真机未测**（无真机，列入后续手动回归）
 - [ ] `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
@@ -276,13 +277,14 @@
 5. **顺手清偿一处既有重复**（局部改善范围）：`src/api/settings.rs` 的 `tests::test_state()` 是 `src/test_utils.rs::test_state()` 的逐字重复（17 行样板），且后者注释本就写着「可后续迁移过来」。已改为转发——`AppState` 新增字段（本轮加了 `audited_ports`）时只改一处，否则两处同改必漏一处。
 6. **insert 与 prune 不是同一事务**（初版注释曾误称"同一事务"）：修剪按「当前总数 − 上限」实时计算删除量，与插入顺序无关地收敛回上限，故无需事务。此论断有并发测试实证（见下），非口头声明。
 7. **前端选 `auth` tab 而非新建 tab**：审计是安全语义，与 `AuthSection` 同域；`Settings` 的 `CATEGORIES` 已覆盖 8 个 tab，再加一个会稀释「安全」相关项的聚集度。区块自带 `max-height: 240px` 滚动——桌面设置弹窗仅 33vh 高，不自带约束会撑破容器。
+8. **并发上限断言从 `==` 改为 `<=`（`d49a71f`，自查发现）**：初版断言「并发 1100 次写入后**恰好** 1000 条」，实测单独跑稳定过、整批跑偶发失败。根因是两路修剪的删除区间重叠会把末尾多裁一条（999）；安全性质仅是「上界不被击穿」，「恰好等于上限」并不由并发性保证。**把偶发成立的性质写成必然断言 = 制造 flaky**。已改为 `<= 1000` + `> 950`（证明修剪确曾发生），并连跑 5 轮 22/22、3 轮全量 616/616 验证稳定。
 
-**单测 23 个**（`cargo test audit`：`src/api/audit.rs` 21 + `src/proxy/mod.rs` 的 `PortAuditLog` 2）。DB 级有界测试含：
+**单测 24 个**（`cargo test audit`：`src/api/audit.rs` 22 + `src/proxy/mod.rs` 的 `PortAuditLog` 2）。DB 级有界测试含：
 - 条目上限**恰好**收敛到 1000（不是"不超过"，是枚举核对保留的恰是最新那批、最老一条恰为第 21 条）
 - 未超限时一条不删（常态零 DELETE）
 - `MAX_AUDIT_ROWS - 1` 条时不触发修剪
 - detail 超限落库的必是截断版且带 `"__omitted_chars__":N`
-- **并发 1100 次写入（4 连接池、2 writer task）后条目数仍恰好 1000** —— 这条钉住偏差 6：不用事务也不击穿上界
+- **并发 1100 次写入（4 连接池、2 writer task）后条目数不超上限**（`<=` 1000 且确曾修剪） —— 这条钉住偏差 6：不用事务也不击穿上界。**注意断言是 `<=` 而非 `==`**：初版写 `== MAX_AUDIT_ROWS`，实测「单独跑稳定过、整批跑偶发失败」——两路修剪的删除区间重叠会把末尾多裁一条（999），而安全性质只是「不击穿」，「恰好等于上限」并不由并发性保证。写成 `==` 等于造了一台时序机器（flaky），已改为正确不变式（`d49a71f`）
 - 空 `target` 合法落库（列 NOT NULL 但空串是合法值）
 - `scope` 无绑定时为 NULL
 
@@ -308,7 +310,7 @@
 
 **第 12 个验证（安全边界，单独做）**：直接 `DROP TABLE audit_log` 后写文件 → **仍返回 200**，日志留 `WARN omniterm::api::audit: audit write failed (业务响应不受影响，但该操作未留痕)` ⇒ 偏差 3 的两个性质同时实证：业务不因审计故障失败、且不静默吞错。
 
-**回归与文档闭环**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` **615 单测** + 8 + 2 集成全绿（592 → 615）；`cargo test audit` 23 个；前端 `tsc -b` / `pnpm lint`（0 error，新增文件零 warning）/ `pnpm test` **803 全过**（798 → 803）；`./scripts/check-doc-index.sh` ✅。文档：`backend.md`（Source Tree + API Endpoints + 新增「安全审计日志（S5）」小节，含 proxy 特殊性与 §P1 双上限）、`src/test_utils.rs` 注释订正、两 locale 各 +11 key、本记录、CHANGELOG 待补（见下）。
+**回归与文档闭环**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` **616 单测** + 8 + 2 集成全绿（592 → 616，连跑 3 轮稳定）；`cargo test audit` 24 个；前端 `tsc -b` / `pnpm lint`（0 error，新增文件零 warning）/ `pnpm test` **803 全过**（798 → 803）；`./scripts/check-doc-index.sh` ✅。文档：`backend.md`（Source Tree + API Endpoints + 新增「安全审计日志（S5）」小节，含 proxy 特殊性与 §P1 双上限）、`src/test_utils.rs` 注释订正、两 locale 各 +11 key、本记录、CHANGELOG（已补 `Added` 条目）。
 
 **验收勾销**：`cargo test audit` ✅（23 个）/ 条目上限 + 截断守恒 + 并发不击穿 ✅ / proxy 去重与拒绝不入表 ✅ / 审计故障不阻断业务 ✅ / agent 敏感值不落库 ✅ / 读写口联调 ✅。
 
