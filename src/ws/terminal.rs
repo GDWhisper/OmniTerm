@@ -4,6 +4,7 @@
 
 use axum::{
     extract::{Path, Query, State, WebSocketUpgrade},
+    http::HeaderMap,
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -75,12 +76,20 @@ pub struct TerminalQuery {
 
 /// WebSocket upgrade handler for terminal connections.
 /// Accepts optional `cols` and `rows` query params for initial PTY size.
+///
+/// CSWSH 防御（`enforce_ws_origin`，见 `ws::origin_guard`）：在 `on_upgrade`
+/// 之前校验 Origin 与 Host 一致性，跨站页面（evil.com 借受害者已登录 cookie
+/// 发起握手）403 拒绝；无 Origin / 无 Host 的**非浏览器**客户端放行。
 pub async fn ws_terminal_handler(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
     Query(query): Query<TerminalQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Some(rejected) = crate::ws::enforce_ws_origin(&headers) {
+        return rejected;
+    }
     ws.on_upgrade(move |socket| async move {
         let runtime_kind: Option<(String,)> =
             sqlx::query_as("SELECT runtime_kind FROM sessions WHERE id = ?")
@@ -103,12 +112,19 @@ pub async fn ws_terminal_handler(
 
 /// WebSocket upgrade handler for external (not-yet-adopted) sessions.
 /// Connects directly to the multiplexer session by name, without requiring a DB record.
+///
+/// 同样必须做 Origin 校验——本入口甚至不需要 DB 记录即可接管 tmux 会话，
+/// 是 CSWSH 风险更高的面。
 pub async fn ws_external_terminal_handler(
     ws: WebSocketUpgrade,
     Path(session_name): Path<String>,
     Query(query): Query<TerminalQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Some(rejected) = crate::ws::enforce_ws_origin(&headers) {
+        return rejected;
+    }
     ws.on_upgrade(move |socket| {
         crate::engine::run_external_terminal_session(socket, session_name, query, state)
     })

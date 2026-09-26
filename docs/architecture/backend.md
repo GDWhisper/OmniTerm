@@ -62,17 +62,17 @@ src/
 │   ├── cli.rs            # agent CLI 识别（命令行模式匹配）
 │   ├── process.rs        # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
 │   └── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
-├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
-├── git/
+├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search├── git/
 │   ├── mod.rs            # Git worktree discovery
 │   └── repo.rs           # Git panel service: status(porcelain v2)/diff/log/show/branches/stage/unstage/commit/discard/checkout/push/pull/fetch via git CLI subprocess (no git2)
 ├── health/               # 引擎无关 tmux server 健康模块（P1-1/P1-2，ADR D4 不解冻引擎）：classify 四态分类纯函数 / probe 30s 探针 / heal 内建自愈「重建 tmux server」/ orphan 孤儿堆积监控 / test_support 测试 fixture（仅 cfg(test)）
 ├── process_identity.rs   # [platform] 进程身份真源：pid/ppid/start_key/argv 四元组 + 防 PID 复用误杀谓词（argv 结构化相等，拒绝子串匹配）+ pidfd kill；消费方 agent_proc / client_registry / main.rs Stop / dev.sh 镜像 / health/*
 ├── ws/
-│   ├── mod.rs
+│   ├── mod.rs            # WS 入口挂载声明 + **CSWSH 校验收敛点**（`enforce_ws_origin` / `origin_matches_host`，见「WS Origin 校验」）
+│   ├── origin_guard.rs   # CSWSH 防御：Origin host ↔ Host 一致性判定（纯函数 + 入口级 predicate），三主 WS 入口与 proxy 共用唯一真源
 │   ├── terminal.rs       # 终端 WS 入口：共享协议类型（ClientControl/ServerControl）+ 按 runtime_kind 分发到 engine/*/terminal_ws
 │   └── acp.rs            # WebSocket ACP bridge: session_update broadcast ↔ WS, prompt/cancel commands
-├── utils/path.rs         # Path security: sanitize_path
+├── utils/mod.rs          # 空壳死模块（1 字节，全仓零调用；`sanitize_path` 实际在 `fs/mod.rs:54`，不在本目录）——待清理
 └── workspaces.rs         # Workspace operations
 ```
 
@@ -323,6 +323,7 @@ GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（�
 POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands
+WS   /api/v1/ws/terminal/external/{tmux_name}  # 外部（未收养）会话接管；无需 DB 记录
 GET  /api/v1/files/watch (SSE)   # 实时目录变更推送；watch 树**手动递归注册**（跳过 node_modules/.git/target/隐藏目录，见「File watcher」小节）
 GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min；附 container/pending_restart 标记）
@@ -339,6 +340,25 @@ ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
 
 **上传（POST /api/v1/files）**：multipart 字段流式写盘（`fs::write_file_stream`），不整文件进内存；先写同目录隐藏临时文件 `.{文件名}.omniterm-upload-{uuid}.tmp`（点前缀使 files_watch 忽略），全部完成才 rename 到目标——失败（超限/读错/写错）删临时文件、**已有目标文件保持原样**，与旧「整体读入成功才写盘」语义对齐。单请求内容总量受 `--max-upload-body`/`OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，`AppState.max_upload_body`）约束，超限返回 413 + 文案 `upload exceeds max size … (aborted at …)`；axum 层限额 = 该值 +1MiB 封装余量，保证超限先由应用层计数触发（否则 multipart 解析层只吐含混的 parse error）。
+
+## WS Origin 校验（CSWSH 防御，收敛点）
+
+**威胁**：用户在浏览器登录 OmniTerm 后访问恶意网页 evil.com，evil.com 的 JS 可对 OmniTerm 的 WS 入口发起 `new WebSocket(...)` 握手。浏览器自动携带已登录 cookie，而 **`SameSite=Lax` 不防 WS 握手**（它只挡跨站 POST 表单类导航），恶意页面因此能借受害者会话驱动终端 / 提交 agent prompt。**WS 握手也不吃 CORS 的同源赦免**——所以这条防线既独立于 cookie 策略，也独立于 `CorsLayer`（CORS 收紧见 `docs/dev/plans/2026-09-26-security-hardening-batch.md` D3，两条防线不得互相替代）。
+
+**判据与收敛点**：`src/ws/origin_guard.rs` 是**唯一真源**（`enforce_ws_origin(&HeaderMap)` 入口级 predicate + `origin_matches_host(&HeaderValue, &str)` 纯函数）。四个入口全部经它校验，在 `on_upgrade` **之前**做出决定：
+
+| 入口 | 位置 | 形态 |
+|---|---|---|
+| 终端 WS | `src/ws/terminal.rs::ws_terminal_handler` | `HeaderMap` extractor + `enforce_ws_origin` |
+| 外部会话接管 WS | `src/ws/terminal.rs::ws_external_terminal_handler` | 同上（此入口无需 DB 记录，风险更高） |
+| ACP WS | `src/ws/acp.rs::ws_acp_handler` | 同上（可驱动 agent 执行任意 prompt） |
+| 代理 WS relay | `src/proxy/mod.rs::dispatch_proxy` | 因需先判 WS 再分流，沿用 let-chain 调 `crate::ws::origin_matches_host` |
+
+规则：**Origin 的 host（忽略端口）与请求 Host（忽略端口）不一致 → `403 origin not allowed`**（大小写不敏感，IPv6 字面量 `[::1]:8080` 正确剥端口）。畸形 Origin（无 scheme / 空 host 段）= 拒绝，**不因解析失败而放行**。两条显式放行：**无 `Origin`**——浏览器对 WS 握手必带 Origin，无 Origin 即非浏览器客户端；一律拒绝会打死 `scripts/pty-*-regression.mjs`、`tests/agent_hook_integration.rs` 的裸握手回归与移动端调试工具。**无 `Host`**——HTTP/1.1 规定必带，缺失即非浏览器流量。
+
+**为什么不用静态 Origin 白名单**：代理子域形态（`{port}.{base_host}`）下 host 随被代理端口动态变化，白名单无法枚举；host 一致性比对天然覆盖，且不需要新增配置项。翻盘条件：若未来前端部署域与 API 域分离且**非**子域同 host 模式，改回显式白名单（须四处入口同改，沉淀进 `.env.local`）。
+
+**多实现边界（§8）**：curl / Node 22 `WebSocket` / 原生 WS 客户端均不发 Origin，已实测仍走升级路径（101）；浏览器三种形态（同源、同源不同端口、代理子域同 host）均放行。参考 code-server `ensureOrigin`。
 
 ## File watcher（`src/api/files_watch.rs`）
 
@@ -365,7 +385,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 路径前缀无法代理**绝对路径资源**的 SPA（Vite `/@vite/client`、Next.js `/_next/*` 会绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404）。配置 `--proxy-domain <base>`（env `OMNITERM_PROXY_DOMAIN`）后启用子域名方案：
 
 - **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。
-- **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。**WS 入口统一做 Origin 校验（CSWSH 防御，2026-08-15）**：浏览器发起的 WS 必带 Origin，`dispatch_proxy` 中提取 Origin 与请求 Host（均忽略端口）比对，跨站页面（evil.com）Origin 的 host 不同 → 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
+- **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。**WS 入口统一做 Origin 校验（CSWSH 防御，2026-08-15 起覆盖代理入口；2026-09-26 起收敛为四入口唯一真源，见「WS Origin 校验」小节）**：浏览器发起的 WS 必带 Origin，Origin 的 host 与请求 Host（均忽略端口）不一致即 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
 - **鉴权 cookie 跨子域名**：登录/登出的 token cookie 在启用子域名且 base 为合法带点域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；**base 为 IP / localhost / 无点单标签域名时不设 Domain（host-only）**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（2026-08-15 防御，参考 code-server `getCookieDomain`）；未启用子域名时维持 host-only。
 - **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
 - **DNS 部署（用户侧，非代码）**：局域网 IP 无法子域名（`3000.192.168.5.216` 非法），需用户配置可通配符解析的域名指向 OmniTerm 机器，三选一：局域网 DNS（dnsmasq/pihole `address=/.{base}/{IP}`）、公网 DNS（wildcard A 记录）、hosts 文件（逐端口加）。未配 DNS 则子域名不生效、路径前缀兜底。
@@ -388,7 +408,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 | 绝对路径资源 | Vite（`/@vite/client`、`/src/main.tsx`）、Next.js（`/_next/...`）用绝对路径，绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404 | 路径前缀下 **HTML/JS 响应体重写兜底**（HTML 属性 + JS `/api/` 字面量加前缀，见上）；**子域名方案（`{port}.{base}`）根治**——浏览器对绝对路径的解析天然落到子域名 Host 上（D1 翻盘已实施，见上）；两者适用场景不同：子域名需可通配符解析域名，重写兜底覆盖局域网纯 IP |
 | JS 运行时动态拼接路径 | 部分 SPA 用 `"/api" + id` 拼接、服务端返回 URL、axios 封装函数内拼 baseURL | 响应体重写覆盖不到，属已知限制（见上小节「边界」）；子域名方案不受此限 |
 | WS 子协议 | Vite HMR 用 `vite-hmr`；Socket.IO 自定义；graphql-ws 用 `graphql-transport-ws` | 透传 `Sec-WebSocket-Protocol`，不假设不硬编码 |
-| Origin 校验 | 部分 dev server（webpack-dev-server 等）严格校验 Origin；Vite 较宽松 | WS 握手统一重写 Origin 为 `http://127.0.0.1:{port}` 兜底；**入口侧另做 CSWSH 防御**——Origin 的 host 与请求 Host 不一致的 WS 拒绝（见「子域名 Host 路由」） |
+| Origin 校验 | 部分 dev server（webpack-dev-server 等）严格校验 Origin；Vite 较宽松 | WS 握手统一重写 Origin 为 `http://127.0.0.1:{port}` 兜底；**入口侧另做 CSWSH 防御**——Origin 的 host 与请求 Host 不一致的 WS 拒绝（2026-09-26 起四入口收敛为唯一真源，见「WS Origin 校验」） |
 | `X-Forwarded-*` | 上游可能是外层 nginx/其他反代，已带 `X-Forwarded-Proto: https`、`X-Forwarded-For` 链、真实 `X-Forwarded-Host`；也可能完全没带 | **已有值保留不覆盖**（覆盖会误导上游丢失真实协议/客户端链），缺失才按 OmniTerm 侧值补齐（`Proto: http`、`Host: 原始 Host`、`For: 连接对端 IP`） |
 | Cookie 域 | 目标服务可能 `Set-Cookie` 带 `Domain=localhost` 或绝对 `Path` | 响应侧统一重写（D6）；OmniTerm 自身登录 cookie 的 `Domain` 仅对合法带点 base 设置（IP/localhost 保持 host-only，见「子域名 Host 路由」） |
 

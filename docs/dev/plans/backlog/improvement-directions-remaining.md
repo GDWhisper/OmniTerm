@@ -3,6 +3,7 @@
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审
 > 安全项 S1/S2'/S3/S5/S6 已拆为实施计划 `docs/dev/plans/2026-09-26-security-hardening-batch.md`，不在本文件重复。
 > 本文件跟踪**未落地的功能/体验方向**；每项均经 2026-09-26 逐项源码复审确认「未落地」。
+> 2026-09-26 更新：该计划 Phase 1（S1）、Phase 2（S2'）已实施落地。
 
 ## 跟踪表
 
@@ -20,6 +21,7 @@
 | X10 | **F2 project 级权限策略分层** | F2 的**超时策略形态已落地**（`src/acp/permission.rs` `pick_auto_option` + abort/auto/wait，见 `docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md`），但「按项目配置只读放行/写操作人工/高危强制」的策略分层未做 | 审批疲劳的真实反馈；依赖 `session/request_permission` 各实现的 options 语义差异调研（AGENTS §8） |
 | X11 | **settings 读写共享助手重构（前置 Refactor）** | `src/api/settings.rs` **无共享 helper**：每 key 一对 handler（读 `:54 get_acp_idle_recycle`、`:98 get_permission_timeout`；写 `:74 set_acp_idle_recycle`、`:127 set_permission_timeout`），多 key 样例 `:138-151`；另 `src/main.rs:845/865/882/890` 一份启动期读取。同型样板 ≥4 处 | 触发工程准则 §7 信号①；X01（webhook key）与 X09（usage 记账 key）都会撞上，**建议作为两者的前置 commit 先做**，否则违反反 copy-paste 红线 |
 | X12 | **工程准则 §8 差异沉淀补课** | F1/F2 已落地实现据复审确认有兜底，但 ACP usage/权限相关字段的**多实现差异未沉淀**到 `docs/architecture/backend.md`（准则 8 的显式要求） | 下次动 ACP 层代码前顺手补；或 X09/X10 启动时作为第一步 |
+| X13 | **清理死模块 `src/utils/`** | **Phase 2（S2'）实施时发现**（2026-09-26）：`src/utils/mod.rs` 仅 1 个字节（空），`src/utils/` 下无其它文件，全仓 `crate::utils` **零调用点**；而 `docs/architecture/backend.md:75` 声称 `src/utils/path.rs` 承载 `sanitize_path`，实际位置在 `src/fs/mod.rs:54`——文档描述与代码事实不符。`mod utils;` 仍声明在 `src/main.rs:16` | 死代码红线（禁死代码）+ 文档失真，一并清：删 `src/utils/` 目录与 `mod utils;` 声明，删 backend.md:75 的幽灵条目（本轮已将其实时改为「空壳死模块待清理」），确认无 `utils::` 路径引用后收尾 |
 
 ## 已关闭 / 不重复跟踪
 

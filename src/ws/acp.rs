@@ -6,6 +6,7 @@ use axum::{
         Path, State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
+    http::HeaderMap,
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -107,11 +108,17 @@ async fn resolve_at_references(
     out
 }
 
+/// ACP WS 入口。CSWSH 防御见 `enforce_ws_origin`——ACP 入口能驱动 agent
+/// 执行任意 prompt，跨站劫持后果比终端更重，故同样在升级前校验。
 pub async fn ws_acp_handler(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Some(rejected) = crate::ws::enforce_ws_origin(&headers) {
+        return rejected;
+    }
     info!("ACP WS upgrade request: session_id={}", session_id);
     ws.on_upgrade(move |socket| handle_acp_ws(socket, session_id, state))
 }

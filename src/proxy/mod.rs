@@ -155,12 +155,17 @@ async fn dispatch_proxy(
 
     // WS 分流（P2）：`Some` 说明带 `Upgrade: websocket` 握手头。
     if let Some(ws) = upgrade {
-        // Origin 校验（CSWSH 防御，P0-4.6）：浏览器发起的 WS 必带 Origin，其 host
-        // 必须与请求 Host 一致；跨站页面（如 evil.com 的 iframe）Origin 的 host 不同，
-        // 拒绝。无 Origin（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        // Origin 校验（CSWSH 防御，P0-4.6）：判定逻辑与三个主 WS 入口
+        // **共享同一真源** `crate::ws::origin_matches_host`（AGENTS.md §7①——
+        // 同一判断散在 ≥2 处必然漂移，这正是原 S2'「半落地」的根因）。
+        // 浏览器发起的 WS 必带 Origin，其 host 必须与请求 Host 一致；跨站
+        // 页面（如 evil.com 的 iframe）Origin 的 host 不同，拒绝。无 Origin /
+        // 无 Host（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        // 未直接用入口级 `enforce_ws_origin(&HeaderMap)`：此处须先经
+        // `is_ws_upgrade` 判定再分流，且 let-chain 形态可少一次 HeaderMap 拷贝。
         if let Some(host) = host_from_request(&request)
             && let Some(origin) = request.headers().get(header::ORIGIN)
-            && !origin_matches_host(origin, host)
+            && !crate::ws::origin_matches_host(origin, host)
         {
             tracing::warn!("ws proxy origin rejected (port {}): {:?}", port, origin);
             return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
@@ -169,30 +174,6 @@ async fn dispatch_proxy(
     }
 
     forward_http(state, port, uri, request, client_ip).await
-}
-
-/// WS Origin 校验：Origin 的 host（忽略端口）与请求 Host（忽略端口）比对。
-/// `Origin: http://3000.omniterm.lan:9777` 与 Host `3000.omniterm.lan:9777` → 匹配。
-/// 解析失败 / host 为空 → 拒绝（防御畸形 Origin）。纯函数，便于单测。
-fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
-    let Ok(o) = origin.to_str() else {
-        return false;
-    };
-    let Some(authority) = o.split_once("://").map(|(_, rest)| rest) else {
-        return false;
-    };
-    let origin_host = authority.split(['/', '?', '#']).next().unwrap_or("");
-    let origin_host = strip_port(origin_host);
-    let host = strip_port(host);
-    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
-}
-
-/// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
-fn strip_port(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix('[') {
-        return rest.split_once(']').map(|(h, _)| h).unwrap_or(rest);
-    }
-    s.split(':').next().unwrap_or(s)
 }
 
 /// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
@@ -1397,35 +1378,6 @@ mod tests {
         assert_eq!(rewrite_location(&v3, 3000).to_str().unwrap(), "/proxy/3000/");
         let v4 = HeaderValue::from_static("https://0.0.0.0:3000/y");
         assert_eq!(rewrite_location(&v4, 3000).to_str().unwrap(), "/proxy/3000/y");
-    }
-
-    #[test]
-    fn ws_origin_matches_subdomain_host() {
-        // 同源 WS 握手：Origin host 与 Host（均忽略端口）一致 → 放行
-        let o = HeaderValue::from_static("http://3000.omniterm.lan:9777");
-        assert!(origin_matches_host(&o, "3000.omniterm.lan:9777"));
-        let o2 = HeaderValue::from_static("https://3000.omniterm.lan");
-        assert!(origin_matches_host(&o2, "3000.omniterm.lan"));
-    }
-
-    #[test]
-    fn ws_origin_rejects_cross_site() {
-        // 跨站页面（evil.com）发起 WS → host 不同 → 拒绝
-        let o = HeaderValue::from_static("https://evil.com");
-        assert!(!origin_matches_host(&o, "3000.omniterm.lan"));
-        // 畸形 Origin（无 scheme）→ 拒绝
-        let o2 = HeaderValue::from_static("3000.omniterm.lan");
-        assert!(!origin_matches_host(&o2, "3000.omniterm.lan"));
-    }
-
-    #[test]
-    fn strip_port_keeps_ipv6_literal() {
-        assert_eq!(strip_port("3000.omniterm.lan:9777"), "3000.omniterm.lan");
-        assert_eq!(strip_port("192.168.5.216:9077"), "192.168.5.216");
-        assert_eq!(strip_port("3000.omniterm.lan"), "3000.omniterm.lan");
-        // IPv6：方括号内地址整体保留
-        assert_eq!(strip_port("[::1]:8080"), "::1");
-        assert_eq!(strip_port("[::1]"), "::1");
     }
 
     // ── P1 修复（2026-08-15，见 docs/dev/reverse-proxy-fixes-report.md）──
