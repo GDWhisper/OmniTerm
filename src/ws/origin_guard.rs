@@ -38,6 +38,9 @@ use axum::response::{IntoResponse, Response};
 /// 便于按同一关键词检索两边日志。
 pub fn enforce_ws_origin(headers: &HeaderMap) -> Option<Response> {
     let host = host_from_header_map(headers)?;
+    // `ORIGIN` 是单值头（http crate 声明为 `(Origin, ORIGIN, b"origin")`），
+    // `get` 取第一个值。**不得**改成"任一值与 Host 匹配即放行"——那会让攻击者
+    // 把合法值排在恶意值前面绕过。见 `enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site`。
     let origin = headers.get(header::ORIGIN)?;
     if origin_matches_host(origin, host) {
         return None;
@@ -205,5 +208,37 @@ mod tests {
         // Origin 带路径/query（畸形但合法头值）时只取 authority 比对
         let o = HeaderValue::from_static("http://evil.com/x?y=1");
         assert!(!origin_matches_host(&o, "omniterm.lan"));
+    }
+
+    #[test]
+    fn enforce_ws_origin_rejects_when_first_of_multiple_values_is_cross_site() {
+        // `ORIGIN` 在 http crate 里声明为单值头（`(Origin, ORIGIN, b"origin")`）：
+        // `HeaderMap::get` 只取**第一个**值，重复写入不会像 `append` 那样形成多值序列。
+        // 这里显式钉住该语义——把恶意值排在第一位的请求必须被拒；
+        // 若未来误改成遍历全部值（`any` 风格），攻击者把合法值排在前面即可绕过。
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, HeaderValue::from_static("127.0.0.1:9077"));
+        h.insert(header::ORIGIN, HeaderValue::from_static("http://evil.com"));
+        assert!(enforce_ws_origin(&h).is_some());
+    }
+
+    #[test]
+    fn enforce_ws_origin_rejects_non_utf8_origin() {
+        // `HeaderValue::to_str()` 对非 UTF-8 返回 Err → `origin_matches_host` 判 false → 拒绝。
+        // 不能因"解析不了"而放行——畸形/构造性头值正是要防的东西。
+        let mut h = HeaderMap::new();
+        h.insert(header::HOST, HeaderValue::from_static("127.0.0.1:9077"));
+        // 注意：ORIGIN 是单值头，append 后 get 取第一个
+        h.append(header::ORIGIN, HeaderValue::from_bytes(b"\xff\xfe").unwrap());
+        assert!(enforce_ws_origin(&h).is_some());
+    }
+
+    #[test]
+    fn enforce_ws_origin_allows_non_utf8_host() {
+        // 无 Host（Host 是单值头，无法 append 出多值）→ 放行路径；
+        // 非浏览器客户端不会带畸形 Host，此态只可能来自非浏览器流量。
+        let mut h = HeaderMap::new();
+        h.append(header::ORIGIN, HeaderValue::from_static("http://127.0.0.1:9077"));
+        assert!(enforce_ws_origin(&h).is_none());
     }
 }
