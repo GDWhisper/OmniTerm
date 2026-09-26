@@ -10,6 +10,7 @@ import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
 import { AuthSection } from './AuthSection'
+import { AuditLogSection } from './AuditLogSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { SectionTitle, ToggleRow } from './toggleRow'
 import { btnBase } from './settingsStyles'
@@ -825,7 +826,7 @@ const CATEGORIES: Category[] = [
   {
     id: 'auth',
     labelKey: 'settings.category.auth',
-    sections: [AuthSection],
+    sections: [AuthSection, AuditLogSection],
   },
   {
     id: 'terminal',

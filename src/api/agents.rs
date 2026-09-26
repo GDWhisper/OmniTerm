@@ -1,11 +1,12 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
 };
 use serde_json::json;
+use std::net::SocketAddr;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -76,6 +77,7 @@ async fn get_agent(State(state): State<AppState>, Path(id): Path<String>) -> imp
 
 async fn create_agent(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<CreateAgent>,
 ) -> impl IntoResponse {
     let id = req.id.unwrap_or_else(|| Uuid::new_v4().to_string());
@@ -102,6 +104,24 @@ async fn create_agent(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() })));
     }
 
+    // 审计（S5）：agent 配置决定后续每条会话会 spawn 什么进程、注入什么
+    // 环境变量（可能含密钥名），改动它是「未来所有会话的行为」变更，必留痕。
+    // detail 记命令与 env 的**键名**（不含值——§S3 敏感数据不落库）。
+    let ctx = crate::api::audit::AuditContext::from_ip(Some(addr.ip()), Some("agents".into()));
+    let detail = json!({
+        "command": req.command.clone(),
+        "env_keys": req.env.iter().map(|e| e.key.clone()).collect::<Vec<_>>(),
+    })
+    .to_string();
+    crate::api::audit::record(
+        &state.db,
+        &ctx,
+        crate::api::audit::AuditAction::AgentCreate,
+        &id,
+        Some(&detail),
+    )
+    .await;
+
     let agent = Agent {
         id,
         display_name: req.display_name,
@@ -118,6 +138,7 @@ async fn create_agent(
 
 async fn update_agent(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(id): Path<String>,
     Json(req): Json<UpdateAgent>,
 ) -> impl IntoResponse {
@@ -132,20 +153,29 @@ async fn update_agent(
     };
     let mut current = existing.into_agent();
 
+    // 被这次请求实际改动的字段名（None 的字段不动）——审计要答的是
+    // 「改了什么」，不是「最终值是什么」，后者可从当前 agents 行反推。
+    let mut changed: Vec<&str> = Vec::new();
+
     if let Some(v) = req.display_name {
         current.display_name = v;
+        changed.push("display_name");
     }
     if let Some(v) = req.command {
         current.command = v;
+        changed.push("command");
     }
     if let Some(v) = req.args {
         current.args = v;
+        changed.push("args");
     }
     if let Some(v) = req.env {
         current.env = v;
+        changed.push("env");
     }
     if let Some(v) = req.npm_package {
         current.npm_package = v;
+        changed.push("npm_package");
     }
     current.updated_at = chrono::Utc::now().to_rfc3339();
 
@@ -166,10 +196,31 @@ async fn update_agent(
     .await
     .unwrap();
 
+    // 审计（S5）：同上，agent 配置变更是「未来所有会话的行为」变更。
+    // detail 只记字段名与 env 键名，不记值（§S3）。
+    let ctx = crate::api::audit::AuditContext::from_ip(Some(addr.ip()), Some("agents".into()));
+    let detail = json!({
+        "changed": changed,
+        "env_keys": current.env.iter().map(|e| e.key.clone()).collect::<Vec<_>>(),
+    })
+    .to_string();
+    crate::api::audit::record(
+        &state.db,
+        &ctx,
+        crate::api::audit::AuditAction::AgentUpdate,
+        &id,
+        Some(&detail),
+    )
+    .await;
+
     (StatusCode::OK, Json(json!(current)))
 }
 
-async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+async fn delete_agent(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
     // Check if any sessions reference this agent
     let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE agent_id = ?")
         .bind(&id)
@@ -195,6 +246,19 @@ async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> 
 
     // 清理该 agent 的全局配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
     let _ = crate::acp::config_prefs::clear_agent_prefs(&state.db, &id).await;
+
+    // 审计（S5）：删除 agent 配置会让所有引用它的会话失去 spawn 依据。
+    // 上面 session_count>0 的 409 守卫挡住了在用时删除，故能走到这里的
+    // 都是「已无会话引用」的删除——这条边界本身也值得留痕。
+    let ctx = crate::api::audit::AuditContext::from_ip(Some(addr.ip()), Some("agents".into()));
+    crate::api::audit::record(
+        &state.db,
+        &ctx,
+        crate::api::audit::AuditAction::AgentDelete,
+        &id,
+        None,
+    )
+    .await;
 
     (StatusCode::OK, Json(json!({ "ok": true })))
 }

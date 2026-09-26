@@ -2832,6 +2832,67 @@ select optgroup option {
   background: var(--accent-10);
 }
 
+/* ── 安全审计日志（Settings 只读区块）── */
+
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+}
+
+.audit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--reader-font);
+}
+.audit-row:last-child {
+  border-bottom: none;
+}
+
+.audit-action {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.audit-target {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.audit-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-faint);
+  font-family: var(--reader-font);
+  font-size: 13px;
+  text-align: center;
+}
+
 /* ── Diff drawer ── */
 .git-drawer-message {
   display: flex;

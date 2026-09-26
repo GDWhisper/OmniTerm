@@ -8,6 +8,35 @@ const BASE = '/api/v1'
  *  请求并回收会话（默认，2026-08-18 起的安全策略）。 */
 export type PermissionTimeoutMode = 'wait' | 'auto' | 'abort'
 
+/** 审计动作枚举（后端 `api::audit::AuditAction::as_str`）。**协议稳定值**，
+ *  改名等于改协议；新增动作须后端先落地再在此追加。 */
+export type AuditActionName =
+  | 'file_write'
+  | 'file_delete'
+  | 'file_upload'
+  | 'git_push'
+  | 'agent_create'
+  | 'agent_update'
+  | 'agent_delete'
+  | 'proxy_access'
+
+/** 一条审计记录（后端 `audit_log` 行，读口返回形态）。 */
+export interface AuditEntry {
+  id: number
+  /** 身份标识，形如 `admin@192.168.1.7`；取不到来源 IP 时为 `admin@-`。 */
+  actor: string
+  action: AuditActionName
+  /** 动作对象：文件路径 / agent id / 端口号。 */
+  target: string
+  /** 绑定范围：`session:<id>` / `workspace:<id>` / `project:<id>` /
+   *  `repo:<root>` / `proxy_port:<port>` / `agents`；无绑定时为 null。 */
+  scope: string | null
+  /** 附加细节 JSON 文本（字段名、allow_escape 标志等），可能已被后端按
+   *  字节上限截断并追加 `"__omitted_chars__":N`；无细节时为 null。 */
+  detail_json: string | null
+  created_at: string
+}
+
 /**
  * Error thrown by `request` for non-2xx responses. Carries the HTTP status
  * and the parsed JSON body so callers can react to specific codes
@@ -297,6 +326,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode, minutes }),
     }),
+  /** 安全审计日志（只读）：最近若干条敏感操作留痕（文件写/删/上传、git push、
+   *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。 */
+  getAuditLog: (limit?: number) =>
+    request<{ entries: AuditEntry[] }>(`/settings/audit-log${limit ? `?limit=${limit}` : ''}`),
 
   // Auth — public endpoints where a 401/409 is a business error (wrong
   // password / user already exists), never an expired session, so the

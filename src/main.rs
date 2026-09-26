@@ -956,6 +956,9 @@ fn main() -> anyhow::Result<()> {
                     self_port: args.port,
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
+                    audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
+                        proxy::PortAuditLog::default(),
+                    )),
                 },
                 max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
             };

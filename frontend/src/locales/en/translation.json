@@ -581,5 +581,16 @@
   "tmuxHealth.rebuildRunning": "Rebuild already in progress",
   "tmuxHealth.rebuildFailed": "Failed to rebuild tmux server",
   "tmuxHealth.orphanRisk": "{{count}} orphan tmux control clients are piling up (warning threshold {{threshold}}) — a precursor sign that the tmux server may freeze on the next SIGTERM.",
-  "tmuxHealth.otherHint": "tmux health probe hit an unknown failure; no automatic action is taken."
+  "tmuxHealth.otherHint": "tmux health probe hit an unknown failure; no automatic action is taken.",
+  "settings.auditLog": "Security audit log",
+  "settings.auditLogHint": "Recent high-risk operations: file write/delete/upload, git push, agent config changes, and first access to a proxy port. Read-only; the oldest entries roll off automatically.",
+  "settings.auditLogEmpty": "No audit records",
+  "settings.auditLog.action.fileWrite": "File write",
+  "settings.auditLog.action.fileDelete": "File delete",
+  "settings.auditLog.action.fileUpload": "File upload",
+  "settings.auditLog.action.gitPush": "Git push",
+  "settings.auditLog.action.agentCreate": "Agent created",
+  "settings.auditLog.action.agentUpdate": "Agent updated",
+  "settings.auditLog.action.agentDelete": "Agent deleted",
+  "settings.auditLog.action.proxyAccess": "Proxy port first access"
 }

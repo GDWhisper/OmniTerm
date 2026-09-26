@@ -581,5 +581,16 @@
   "tmuxHealth.rebuildRunning": "重建进行中",
   "tmuxHealth.rebuildFailed": "重建 tmux server 失败",
   "tmuxHealth.orphanRisk": "已堆积 {{count}} 个孤儿 tmux 控制客户端（警戒线 {{threshold}}）——这是 tmux server「一 SIGTERM 就假死」高危状态的先兆。",
-  "tmuxHealth.otherHint": "tmux 健康探测出现未知失败，暂不自动处理。"
+  "tmuxHealth.otherHint": "tmux 健康探测出现未知失败，暂不自动处理。",
+  "settings.auditLog": "安全审计日志",
+  "settings.auditLogHint": "最近的高危操作留痕：文件写入/删除/上传、git push、agent 配置变更、代理端口首次被访问。只读；超出上限的旧记录由后端自动滚动清理。",
+  "settings.auditLogEmpty": "暂无审计记录",
+  "settings.auditLog.action.fileWrite": "文件写入",
+  "settings.auditLog.action.fileDelete": "文件删除",
+  "settings.auditLog.action.fileUpload": "文件上传",
+  "settings.auditLog.action.gitPush": "Git 推送",
+  "settings.auditLog.action.agentCreate": "新增 agent",
+  "settings.auditLog.action.agentUpdate": "修改 agent",
+  "settings.auditLog.action.agentDelete": "删除 agent",
+  "settings.auditLog.action.proxyAccess": "代理端口首访"
 }
