@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-09-26 16:30) **BREAKING** `[security]` 非回环监听 + 密码验证关闭时，后端由「打印高危警告」改为「拒绝启动」——此前警告极易被忽略，等于默认裸奔：误配 `0.0.0.0` 且未开 auth 时，任何能访问该端口的人可完全控制本机。现 fail-closed 拒绝启动并给出补救动作（开 auth 或显式逃生门 `--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH`）。**影响**：依赖「无鉴权 + 非回环监听」的既有部署脚本启动将失败（含 `--daemonize` 路径，错误经 daemon 管道回传终端且 rc=1），需补逃生门或开启 auth；回环监听（默认 `127.0.0.1`）与已开 auth 的部署不受影响。纯函数 `enforce_listen_auth` 有四格真值表单测（`src/main.rs`）
+
 ### Fixed
 
 - (2026-09-26 03:00) `[acp]` 修复 ACP 会话「agent 侧失败但聊天流毫无痕迹」：协议在 `session/prompt` 正常返回（非 JSON-RPC error）时也可能表示失败，`refusal` 之类的终态只存在于 agent 自己的日志，而 OmniTerm 把该 turn 照常定稿为 complete——用户侧看到的就是「运行中断」，无错误提示、无重试入口（正式库会话 `codebuddy_0919-0946` 16m29s 的 turn 即此形态，agent 侧 `Bad substitution: createHmac` 逸出批量派发路径）。现按协议白名单判定 stopReason：`end_turn` / `max_tokens` / `max_turn_requests` 为正常（不留痕），`cancelled` 单独文案（不算错误），其余含未来新增值一律按非正常；非正常结束由后端写入一条 `role='system'` 的 `chat_messages` 行（含 i18n key 与协议原文）并广播，刷新/切设备后 hydrate 仍可见，`prompt_done` 同时下发 `abnormal` 让前端把通知切到错误语义（判定只在后端做一次，前端不再自行解析 stop_reason）。已知残留：WS 离线期间产生的该提示要整页刷新后才可见（仅重连不重新拉取历史），同一条限制也影响权限超时告知 (`src/ws/acp.rs`、`src/acp/client.rs`、`src/acp/reaper.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`)

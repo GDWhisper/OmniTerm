@@ -1,6 +1,6 @@
 # 安全加固批次：fail-closed 监听 / WS Origin 收敛 / CORS 收紧 / 审计日志 / 端点限流
 
-> 状态：设计稿（2026-09-26；Phase 1–5 待实施）
+> 状态：**Phase 1 已实施（2026-09-26）**；Phase 2–5 待实施
 > 触发条件：修改 `src/main.rs`（启动校验 / CORS layer）、`src/ws/terminal.rs` 与 `src/ws/acp.rs`（WS 入口）、`src/api/mod.rs`（路由挂载）、`src/api/files.rs` / `src/api/git.rs`（审计与限流触点）、新增审计表 migration 前**必读**
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审——该盘点的安全项 S1/S3/S5/S6 未落地、S2 半落地，本计划承接剩余部分
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状表，本计划落地后须回写）、`docs/architecture/backend.md`（分层约定）、`docs/dev/performance-and-safety.md` §P1（审计表上限）、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固与 Origin 先例）
@@ -109,3 +109,23 @@
 | D4 审计表写放大影响热路径 | 写入点只选「低频高危」动作（push/force、写删、配置变更、开端口），读操作不审计；单条 detail 有字节上限 |
 
 实施后须更新：`docs/reference/auth-not-enforced.md`（回写现状表，S1/S3 落地状态）、`docs/architecture/backend.md`（WS Origin 校验收敛点、审计表结构、`--insecure-no-auth` CLI 新参数）、`CHANGELOG.md`（D1 属破坏性启动行为变更）。
+
+---
+
+## Phase 1 实施记录（2026-09-26）
+
+**产出**：`src/main.rs` 新增 `--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH` flag + 纯函数 `enforce_listen_auth(listen_host, auth_enabled, insecure_no_auth)`；原 `tracing::warn!` 块替换为 fail-closed 校验。
+
+**单测**（4 个，`cargo test enforce_listen_auth`）：四格真值表穷举（回环 5 种宿主 × 非回环 5 种宿主 × auth/escape hatch 组合）、逃生门独立性、未知 host fail-closed、错误信息含补救动作。
+
+**实测六场景**（全通过）：`0.0.0.0`+auth关→rc=1 拒绝；`0.0.0.0`+auth关+逃生门→正常监听；`0.0.0.0+auth开→正常监听；默认 127.0.0.1→正常监听；`--daemonize`+拒绝组合→rc=1 且错误回传父进程；`--daemonize`+逃生门→后台启动成功。
+
+### 实施偏差（就地记录，遵循 PLAN-TEMPLATE 纪律 3）
+
+1. **回环集合扩充**：除计划预期的 `127.0.0.1|localhost|::1|[::1]` 外，补入 `0:0:0:0:0:0:0:1`（`::1` 的未压缩展开形式，`bind` 字符串不经规范化，该形态此前会被误判为非回环而误拒）。未知/带端口写法按非回环 fail-closed。
+2. **校验点位置（时序 bug，实测捕获）**：初版把校验放在 `daemon_notify_ready` 之后，`--daemonize` 路径实测 rc=0 并打印「started in the background」，但后台进程其实已在校验处退出——**父进程拿到假成功信号**。已移至 `daemon_notify_ready` 之前（bind 之后：端口被占仍由 bind 报错，两者不重叠）。
+3. **PID 文件先于校验写入**（未改）：PID 文件在 bind 成功后就写入，故拒绝启动时会留下一个指向已退出进程的 stale PID 文件。评估为可接受：`stop` 走的是「进程是否存活」判定而非 PID 文件存在性，且改动它会影响端口占用/DB 失败这两条既有路径的语义。若后续发现 stop 误判再处理。
+
+**回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 550 单测 + 8 + 2 集成全绿（新增 4 个测试）。
+
+**验收勾销**：`cargo test enforce_listen_auth` ✅ / clippy ✅ / 非回环拒绝两路可见 ✅。

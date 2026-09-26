@@ -110,6 +110,18 @@ struct StartArgs {
     )]
     auth_enabled: Option<bool>,
 
+    /// Explicitly accept the risk of listening on a non-loopback address with password verification
+    /// disabled: without it, startup is refused (fail-closed). Intended for isolated networks where
+    /// you deliberately run unauthenticated and control who can reach the port.
+    #[arg(
+        long,
+        env = "OMNITERM_INSECURE_NO_AUTH",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool_flag,
+    )]
+    insecure_no_auth: Option<bool>,
+
     /// Listen address (default 127.0.0.1; set 0.0.0.0 to listen on all interfaces)
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
     host: String,
@@ -1020,6 +1032,18 @@ fn main() -> anyhow::Result<()> {
             }
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
+            // 非回环监听 + 鉴权关闭 = 全网裸奔：拒绝启动，除非显式 `--insecure-no-auth`。
+            // 纯函数见 enforce_listen_auth（四格真值表有单测）；bail! 经 async 块上抛到
+            // main() 的错误处理：前台直接打到 stderr；--daemonize 路径由 daemon_notify_fail
+            // 回传父进程并 exit(1)（该路径 stderr 已重定向到日志）。
+            //
+            // 位置必须在 daemon_notify_ready 之前：否则 daemon 模式会先向父进程报「启动成功」、
+            // 再在校验处退出，父进程拿到假成功信号（实测该时序 bug：rc=0 而进程根本没起来）。
+            // 放在 bind 之后而非之前：监听地址要等 bind 才知道是否可绑，且端口被占时由 bind
+            // 自己报错（更准确），两者不重叠。
+            let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
+            enforce_listen_auth(listen_host, auth_enabled, args.insecure_no_auth.unwrap_or(false))?;
+
             // daemon 模式：通知父进程启动成功，并附带监听地址/PID 由父进程打印到终端
             // （前台模式 pipe 为 None，no-op，启动提示走下面的 dev/prod 分支）。
             daemon_notify_ready(
@@ -1031,17 +1055,6 @@ fn main() -> anyhow::Result<()> {
                     std::process::id()
                 ),
             );
-
-            // 非回环监听 = 全网暴露，鉴权关闭时必须醒目告警。
-            let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
-            let is_loopback = matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
-            if !auth_enabled && !is_loopback {
-                tracing::warn!(
-                    "密码验证已关闭且监听非回环地址 {} — 任何能访问该端口的人都可完全控制本机。\
-                     请在设置中开启密码验证，或设置环境变量 OMNITERM_AUTH_ENABLED=1。",
-                    listen_host
-                );
-            }
 
             // ── 启动提示 ──────────────────────────────────────────────
             // dev 模式：详细日志（分支、版本、端口）
@@ -1134,11 +1147,43 @@ fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
     }
 }
 
+/// 启动期 fail-closed 校验：监听非回环地址 + 鉴权关闭时拒绝启动，除非显式
+/// 逃生门 `--insecure-no-auth`。
+///
+/// 真值表（`Ok` = 允许启动，`Err` = 拒绝）：
+///
+/// | listen_host | auth_enabled | insecure_no_auth | 结果 |
+/// |-------------|--------------|------------------|------|
+/// | 127.0.0.1 / ::1 | false | false | Ok（仅本机可达，无暴露面） |
+/// | 0.0.0.0 等 | true  | false | Ok（有鉴权保护） |
+/// | 0.0.0.0 等 | false | true  | Ok（用户显式接受裸奔风险） |
+/// | 0.0.0.0 等 | false | false | **Err**（默认拒绝） |
+///
+/// 回环判定与启动处同一套 `matches!` 集合；不认识的 host 一律按非回环处理
+/// （fail-closed：误判为回环 = 静默暴露，比误拒更危险）。
+fn enforce_listen_auth(
+    listen_host: &str,
+    auth_enabled: bool,
+    insecure_no_auth: bool,
+) -> anyhow::Result<()> {
+    let is_loopback =
+        matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0:0:0:0:0:0:0:1");
+    if auth_enabled || insecure_no_auth || is_loopback {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "监听非回环地址 {} 且密码验证已关闭——任何能访问该端口的人都可完全控制本机。\
+         请开启密码验证（设置页，或 --auth-enabled=1 / OMNITERM_AUTH_ENABLED=1），\
+         或确认风险后显式加 --insecure-no-auth。",
+        listen_host
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        acp_idle_recycle_secs_from_setting, default_db_stem, instance_id, instance_suffix,
-        jwt_secret_file_name, permission_timeout_mode_from_setting,
+        acp_idle_recycle_secs_from_setting, default_db_stem, enforce_listen_auth, instance_id,
+        instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
         permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
@@ -1244,5 +1289,63 @@ mod tests {
         assert!(!rust_log_covers_omniterm(Some(""))); // 无任何 directive 视为未覆盖
         // RUST_LOG 未设置：兜底逻辑本就该生效，此处视为未覆盖
         assert!(!rust_log_covers_omniterm(None));
+    }
+
+    /// 四格真值表穷举：非回环 + auth 关 + 无逃生门 = 唯一拒绝组合。
+    #[test]
+    fn enforce_listen_auth_truth_table() {
+        // 仅本机可达：无暴露面，一律放行（含 auth 关 + 无逃生门）
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]", "0:0:0:0:0:0:0:1"] {
+            assert!(
+                enforce_listen_auth(host, false, false).is_ok(),
+                "loopback {host} without auth must be allowed"
+            );
+        }
+        // 非回环（IPv4 全网卡 / IPv6 any / 具体 LAN IP）
+        for host in ["0.0.0.0", "::", "[::]", "192.168.1.10", "term-dev.tokitoken.com"] {
+            // 有鉴权 → 放行
+            assert!(
+                enforce_listen_auth(host, true, false).is_ok(),
+                "non-loopback {host} with auth must be allowed"
+            );
+            // 显式逃生门 → 放行
+            assert!(
+                enforce_listen_auth(host, false, true).is_ok(),
+                "non-loopback {host} with escape hatch must be allowed"
+            );
+            // 默认组合 → 拒绝
+            assert!(
+                enforce_listen_auth(host, false, false).is_err(),
+                "non-loopback {host} without auth must be refused"
+            );
+        }
+    }
+
+    /// 逃生门不能在有鉴权时被滥用，也不能反向掩盖（常识护栏）。
+    #[test]
+    fn enforce_listen_auth_requires_escape_only_when_needed() {
+        // 回环 + 显式逃生门：Ok（无害），且不得因逃生门改变 loopback 判定
+        assert!(enforce_listen_auth("127.0.0.1", false, true).is_ok());
+        // 非回环 + auth 开 + 逃生门：Ok（逃生门不覆盖 auth，两者独立）
+        assert!(enforce_listen_auth("0.0.0.0", true, true).is_ok());
+    }
+
+    /// 未知/畸形 host 一律按非回环处理（fail-closed：误判为回环 = 静默暴露）。
+    #[test]
+    fn enforce_listen_auth_unknown_host_fails_closed() {
+        assert!(enforce_listen_auth("", false, false).is_err());
+        assert!(enforce_listen_auth("example.invalid", false, false).is_err());
+        // 带端口写法不应进入本函数（调用方已 split_once 剥离），但仍须按非回环
+        assert!(enforce_listen_auth("0.0.0.0:9077", false, false).is_err());
+    }
+
+    /// 错误信息必须给出补救动作（开启 auth 或加逃生门），否则用户无法自救。
+    #[test]
+    fn enforce_listen_auth_error_mentions_remedies() {
+        let err =
+            enforce_listen_auth("0.0.0.0", false, false).expect_err("must refuse").to_string();
+        assert!(err.contains("--auth-enabled"), "{err}");
+        assert!(err.contains("--insecure-no-auth"), "{err}");
+        assert!(err.contains("0.0.0.0"), "{err}");
     }
 }

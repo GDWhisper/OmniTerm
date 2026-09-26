@@ -27,7 +27,7 @@
 - **`/auth/check`**（`src/api/auth.rs`）：真实校验本实例的 token cookie（名取自 `AppState.token_cookie`），返回 `{ authenticated, auth_enabled, needs_setup? }`；未启用时返回 `authenticated: true, auth_enabled: false`（同时返回 `needs_setup`，供设置页决定「开启密码验证」是弹新建密码表单还是验证既有密码）。
 - **cookie 名与 JWT 密钥按实例隔离**（`src/main.rs` 的 `instance_id` / `instance_suffix` / `token_cookie_name` / `jwt_secret_file_name`）：实例身份取自生效 db 的文件名 stem，正式版得 `omniterm_token` + `~/.omniterm/jwt_secret`（历史名不变），dev/preview 得 `omniterm_token_dev` + `jwt_secret_dev` 等。**浏览器 cookie 不区分端口**，同 host 上并存多个实例（如本机 dev 9777 与正式版 9077）时必须各写各的键位——否则后登录者覆盖前者的 cookie，被覆盖方因 `token_version` 不匹配而 401，表现为「一边登录、另一边自动登出」；两者再共用签名密钥时，`ver` 巧合相等即串号登录。
 - **登录限流** `LoginGuard`（`src/auth/rate_limit.rs`）：滑动窗口，单 IP 5 次失败 / 5 分钟触发 429，成功登录重置。
-- **启动安全**：监听非回环地址且 auth 关闭时打印高危警告（`src/main.rs`）；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
+- **启动安全**：监听非回环地址且 auth 关闭时**拒绝启动**（fail-closed，2026-09-26 起；`src/main.rs` `enforce_listen_auth` 四格真值表单测），显式逃生门 `--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH`。此前仅打印高危警告（极易被忽略 = 默认裸奔），已升级为强制力；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
 
 ### 前端
 
@@ -44,9 +44,9 @@
 | 前端登录 UI | ✅ AuthPage / AuthSection / App 集成 |
 | token 校验 | ✅ 从 state 读 jwt_secret，无 fallback bug |
 | 登录防爆破 | ✅ LoginGuard 限流 |
-| 高危暴露预警 | ✅ 非回环 + auth 关闭时启动警告 |
+| 高危暴露预警 | ✅ 非回环 + auth 关闭时**拒绝启动**（fail-closed，2026-09-26；逃生门 `--insecure-no-auth`） |
 
-**注意**：`settings.auth_enabled` 默认关闭（本地开发便利）。部署到公网/不可信网络前必须开启密码验证（设置页开关，或 `OMNITERM_AUTH_ENABLED=1`）。
+**注意**：`settings.auth_enabled` 默认关闭（本地开发便利）。部署到公网/不可信网络前必须开启密码验证（设置页开关，或 `OMNITERM_AUTH_ENABLED=1`）。若确需在可信内网以无鉴权方式监听非回环地址，2026-09-26 起必须显式传 `--insecure-no-auth`，否则后端拒绝启动。
 
 ## 相关文件
 
