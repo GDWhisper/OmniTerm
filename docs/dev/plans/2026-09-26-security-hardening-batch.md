@@ -1,6 +1,6 @@
 # 安全加固批次：fail-closed 监听 / WS Origin 收敛 / CORS 收紧 / 审计日志 / 端点限流
 
-> 状态：**Phase 1–3 已实施（2026-09-26）**；Phase 4–5 待实施
+> 状态：**Phase 1–4 已实施（2026-09-26）**；Phase 5（S6 限流评估）待实施
 > 触发条件：修改 `src/main.rs`（启动校验 / CORS layer）、`src/ws/terminal.rs` 与 `src/ws/acp.rs`（WS 入口）、`src/api/mod.rs`（路由挂载）、`src/api/files.rs` / `src/api/git.rs`（审计与限流触点）、新增审计表 migration 前**必读**
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审——该盘点的安全项 S1/S3/S5/S6 未落地、S2 半落地，本计划承接剩余部分
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状表，本计划落地后须回写）、`docs/architecture/backend.md`（分层约定）、`docs/dev/performance-and-safety.md` §P1（审计表上限）、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固与 Origin 先例）
@@ -104,8 +104,7 @@
 - [x] `cargo test enforce_listen_auth`（四格真值表全过）
 - [x] `cargo test origin`（WS 校验：同源/跨站/无 Origin）
 - [x] `cargo test cors`（CORS：同源/跨站/无 Origin/白名单/预检/上限边界，predicate 17 + layer 9）
-- [ ] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）
-- [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
+- [x] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）——23 个，含并发 1100 次写入仍恰好收敛到上限- [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
 - [ ] 手动：非回环 bind + auth 关闭时启动失败且错误信息可见（前台 + `--daemonize` 两路）
 - [x] 手动（Phase 3 新增，勘察 D3 校正 6）：nginx `proxy_set_header Host $host` 反代后跨源被拒；显式配 origin 后放行；同源放行不回归（embedded 形态 + 移动端真机）——反代两态用 `Host` 头等价模拟实测通过；embedded 形态见下条；**移动端真机未测**（无真机，列入后续手动回归）
 - [ ] `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
@@ -246,3 +245,71 @@
 **审查确认为真的事实**（读源码逐条比对，非只看我方摘要）：① 不 break 任何合法调用方（前端全相对路径、零 `res.headers` 读取、零 `credentials:`、下载是 `a.download` 导航式、scripts/tests 不发 Origin）；② 三规则并集且白名单是**加法**（不涉及 Host 的字节比对，两条 true 分支独立返回）；③ 复用 `origin_matches_host` 安全——**缺 Host 时 WS 放行 / CORS 拒绝的分歧是有意且已按 AGENTS §8 沉淀进 backend.md**；④ 测试脚手架真实（`tower::Layer::layer` + `oneshot`/`block_on` 走的是 `Cors::<S>::call`，正是「无 Origin ⇒ predicate 不被调用」的所在，非空测试）；`decide()` 构造真实 `axum::http::Request` 后调同一个 `origin_is_allowed`，非重复实现；⑤ 预检覆盖前端实际方法/头（GET/POST/PUT/PATCH/DELETE + content-type + multipart）；⑥ 层序与 `Vary` 宣称正确，方向**只收窄未放宽**（`*` 条目永远匹配不上浏览器 Origin）。
 
 **审查未能验证项（不可视为已完成）**：B1 的 panic 我方已用 `rustc` 单独复证、修复后单测能转红；`cargo test cors`/全量绿由我方实跑（26 / 592）；**反代与移动端真机实测仍未做**（无 nginx、无真机，`Host` 头模拟不等价于真实链路），继续留在待办。
+
+---
+
+## Phase 4 实施记录（2026-09-26）
+
+**产出**：新 migration `migrations/20260926_add_audit_log.sql`（**新增文件，未改任何已有 migration**）+ 新模块 `src/api/audit.rs`（写入收敛点）+ 只读路由 `GET /api/v1/settings/audit-log` + 前端 `Settings` 的 `auth` tab 新增只读区块 `AuditLogSection`。
+
+**写入点全部收敛为 `audit::record` 一个函数**（AGENTS §7①，禁止各 handler 各写各的）：
+
+| 动作 | 触点 | target | scope | detail |
+|---|---|---|---|---|
+| `file_write` / `file_delete` / `file_upload` | `src/api/files.rs` write/delete/upload | 相对/绝对路径 | `session:` / `workspace:` / `project:` | `{allow_escape}`；upload 另带文件名单与计数 |
+| `git_push` | `src/api/git.rs:234` | repo 根 | `repo:<root>` | 无 |
+| `agent_create` / `agent_update` / `agent_delete` | `src/api/agents.rs:77/119/172` | agent id | `agents` | 命令 + **env 键名**（不含值，§S3）；update 记改动的字段名 |
+
+**「强推是否需单独分流」的计划存疑点已确认（否）**：`src/git/repo.rs:513-529` 的 `push` 只发 `push` 与 `push --set-upstream origin HEAD`，**从不带 `--force`**，故不存在独立的「强推」动作，无需分流。
+
+**proxy 的特殊性（计划 D4 已预告，实施时确认）**：代理**没有「开通」原子事件**——`/proxy/{*path}` 是 catch-all，任何端口首次被访问即打通。故只能记「端口**首次**访问」，并为此在 `ProxyState` 新增有界登记表 `PortAuditLog`（`HashSet<u16>` 去重 + `VecDeque<u16>` 保序，上限 `MAX_TRACKED_PROXY_PORTS=4096`）。**不做这个去重的话，反代流量的每一次请求都会写一条审计行 = 写放大**（§P1）。登记表放在白名单校验**之后**：被拒绝的端口不进表（它们的拒绝路径已有自己的 warn，且探测型请求不该污染审计）。
+
+**actor 为什么带 IP**：OmniTerm 是单人工具，JWT `Claims.sub` 恒为硬编码 `"admin"`（`src/auth/mod.rs:28`），且 `require_auth_mw` 只返回 `Result<(), StatusCode>`、**不把身份塞进 extensions**（全仓零处从 extensions 取 Claims）。单写 actor 等于每条记录都一样，回答不了「谁动的」——**区分度只能来自来源 IP**（多设备/误操作/被入侵三种场景的差别全在这里）。取不到 IP 时如实写 `admin@-`，**不虚构**（反代背后 `ConnectInfo` 给的是反代地址）。参照既有先例 `src/api/auth.rs` 的 `ConnectInfo<SocketAddr>` 取法，`src/main.rs` 早已挂 `into_make_service_with_connect_info`，故**零中间件改动**。
+
+### 实施偏差（就地记录，遵循 PLAN-TEMPLATE 纪律 3）
+
+1. **`scope` 列是实施时新增的**（计划 D4 的列清单里没有）：算出绑定范围却不落库等于白算，「对哪个会话/工作区动手」是追查时的第一问。与 `target` 分开存的原因是**路径会变、id 不变**（worktree 移动、session cwd 漂移）。
+2. **只记成功操作**（计划未明确）：所有写入点都在业务成功之后调用。失败操作没有改变系统状态，且在每条错误分支再插一次调用极易漏。翻盘条件：若将来要审失败尝试，应作为独立 `*_failed` 动作**统一**加，不得只加在部分写入点——那会让「没记录」变成歧义信号。
+3. **审计写失败不阻断业务**（§S2 边界）：失败只 `tracing::warn!` 并返回，业务响应照常。理由：审计是观测手段，若它故障就升级为功能故障，会诱导调用方绕过审计。也不 `Result::ok()` 静默吞掉——warn 就是留给运维的痕迹。
+4. **agent detail 只记 env 键名不记值**（§S3）：`{"command":…,"env_keys":[…]}`
+（实测：请求里 `env:[{"key":"SECRET_TOKEN","value":"topsecret"}]`，落库 detail 只含 `"SECRET_TOKEN"`，值未入库）。update 记**被改动的字段名**而非最终值——后者可从当前 agents 行反推。
+5. **顺手清偿一处既有重复**（局部改善范围）：`src/api/settings.rs` 的 `tests::test_state()` 是 `src/test_utils.rs::test_state()` 的逐字重复（17 行样板），且后者注释本就写着「可后续迁移过来」。已改为转发——`AppState` 新增字段（本轮加了 `audited_ports`）时只改一处，否则两处同改必漏一处。
+6. **insert 与 prune 不是同一事务**（初版注释曾误称"同一事务"）：修剪按「当前总数 − 上限」实时计算删除量，与插入顺序无关地收敛回上限，故无需事务。此论断有并发测试实证（见下），非口头声明。
+7. **前端选 `auth` tab 而非新建 tab**：审计是安全语义，与 `AuthSection` 同域；`Settings` 的 `CATEGORIES` 已覆盖 8 个 tab，再加一个会稀释「安全」相关项的聚集度。区块自带 `max-height: 240px` 滚动——桌面设置弹窗仅 33vh 高，不自带约束会撑破容器。
+
+**单测 23 个**（`cargo test audit`：`src/api/audit.rs` 21 + `src/proxy/mod.rs` 的 `PortAuditLog` 2）。DB 级有界测试含：
+- 条目上限**恰好**收敛到 1000（不是"不超过"，是枚举核对保留的恰是最新那批、最老一条恰为第 21 条）
+- 未超限时一条不删（常态零 DELETE）
+- `MAX_AUDIT_ROWS - 1` 条时不触发修剪
+- detail 超限落库的必是截断版且带 `"__omitted_chars__":N`
+- **并发 1100 次写入（4 连接池、2 writer task）后条目数仍恰好 1000** —— 这条钉住偏差 6：不用事务也不击穿上界
+- 空 `target` 合法落库（列 NOT NULL 但空串是合法值）
+- `scope` 无绑定时为 NULL
+
+**两条 §P1 双上限 + 守恒断言**：`target` 1024B / `detail` 2048B，均按字符边界切 + 显式标注省略量，单测断言 `保留量 + 声称省略量 == 输入量`。写守恒断言时踩到一个**测试自身的坑**并记下：最初的断言用 `out.chars().filter(|c| *c=='a').count()` 数保留量，把标注里的 `trunc**a**ted` 也数了进去 ⇒ 得到 1126 vs 输入 1124 的假失败。改为 `rsplit_once(PREFIX)` 取出保留段后再数才正确——**截断标注文案里的字符会污染守恒断言**，写这类断言必须先分离标注段。
+
+**前端 5 个测试**（`AuditLogSection.test.tsx`，仿 `UpdateBadge.test.tsx` 的 `vi.mock` 模式）：逐行渲染且顺序不重排、空态、**未知 action 回落原始串**（后端比前端新时不渲染 "undefined" 也不静默丢行）、请求失败退化为空态不崩、读口必须带 limit（60）。
+
+**实测十一场景**（独立实例 `--port 19880 --db sqlite:///tmp/p4-audit.db`，跑完已停、产物已清、端口已释放）：
+
+| # | 操作 | 结果 |
+|---|---|---|
+| 1 | migration 建立 `audit_log` | 7 列 + `idx_audit_log_created` 齐备，初始 0 行 |
+| 2 | 写文件（`workspace=p1`） | 200，落 `file_write`，`actor=admin@127.0.0.1`、`scope=project:p1`、`detail={"allow_escape":false}` |
+| 3 | **越界写**（`allow_escape=true`，`../p4ws/esc.txt`） | 200，落 `file_write`，`detail={"allow_escape":true}` ← 关键区分可见 |
+| 4 | 删文件 | 200，落 `file_delete` |
+| 5 | `GET /settings/audit-log` | 新→旧三行齐全 |
+| 6 | `?limit=99999` / `?limit=0` | 收敛到 200 硬顶 / 收敛为 1（不报错、不返回空） |
+| 7 | agent 增/改/删 | 3 条全落；**env 值 `topsecret` 未入库，只落键名 `SECRET_TOKEN`** |
+| 8 | git push **失败**（无 remote） | 422，**不落审计**（符合「只记成功」） |
+| 9 | git push 成功 | 200，落 `git_push`，`target`/`scope` 均为 repo 根 |
+| 10 | proxy 3 次请求同一端口 | 3×200 但**只落 1 条** ← 去重生效，无写放大 |
+| 11 | proxy 打黑名单 3306 / 低端口 22 / 自身端口 | 3×403，**均不落审计**（白名单校验在前，不进登记表） |
+
+**第 12 个验证（安全边界，单独做）**：直接 `DROP TABLE audit_log` 后写文件 → **仍返回 200**，日志留 `WARN omniterm::api::audit: audit write failed (业务响应不受影响，但该操作未留痕)` ⇒ 偏差 3 的两个性质同时实证：业务不因审计故障失败、且不静默吞错。
+
+**回归与文档闭环**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` **615 单测** + 8 + 2 集成全绿（592 → 615）；`cargo test audit` 23 个；前端 `tsc -b` / `pnpm lint`（0 error，新增文件零 warning）/ `pnpm test` **803 全过**（798 → 803）；`./scripts/check-doc-index.sh` ✅。文档：`backend.md`（Source Tree + API Endpoints + 新增「安全审计日志（S5）」小节，含 proxy 特殊性与 §P1 双上限）、`src/test_utils.rs` 注释订正、两 locale 各 +11 key、本记录、CHANGELOG 待补（见下）。
+
+**验收勾销**：`cargo test audit` ✅（23 个）/ 条目上限 + 截断守恒 + 并发不击穿 ✅ / proxy 去重与拒绝不入表 ✅ / 审计故障不阻断业务 ✅ / agent 敏感值不落库 ✅ / 读写口联调 ✅。
+
+**仍未完成（不可视为已验证）**：① 反代真实链路（无 nginx，`Host` 头模拟不等价）；② 移动端真机；③ 前端区块只在 typecheck+单测层面验证，**未在真实浏览器里看过渲染结果**（需 `./dev.sh restart` 后人眼确认一屏）。

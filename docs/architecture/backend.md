@@ -28,7 +28,8 @@ src/
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
 │   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (TmuxEngine) | 'pty' (PtyEngine, lazy spawn) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
-│   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 分钟
+│   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 分钟；GET /api/v1/settings/audit-log — 安全审计日志只读入口（受保护；?limit= 收敛，见「安全审计日志（S5）」）
+│   ├── audit.rs          # 安全审计日志（S5）：敏感操作的写入收敛点 audit::record + 滚动有界（MAX_AUDIT_ROWS/MAX_AUDIT_DETAIL_BYTES）+ 只读入口 list_recent；表结构见「安全审计日志（S5）」
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
 │   ├── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
@@ -301,6 +302,7 @@ GET  /api/v1/settings/acp-idle-recycle  # 读 ACP 空闲回收阈值（分钟；
 PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，值域 1..=60，越界 400）——受保护
 GET  /api/v1/settings/permission-timeout  # 读权限请求超时配置 {mode, minutes}（无记录/非法回退 abort + 30）——受保护
 PUT  /api/v1/settings/permission-timeout  # 写权限请求超时配置（mode 白名单 abort/auto/wait，minutes 1..=60，越界 400；upsert 两 key + 热更新）——受保护
+GET  /api/v1/settings/audit-log           # 读安全审计日志最近 N 条（新→旧）——受保护；`?limit=` 收敛而非拒绝：缺省 50、硬顶 200、非正数收敛为 1；见「安全审计日志（S5）」
 GET  /api/v1/projects        # 响应每项含 path_valid：list_projects 实时计算项目路径是否仍存在（src/api/projects.rs），供前端标记失效项目
 POST /api/v1/projects
 DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
@@ -396,6 +398,65 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 **边界声明（勿合并）**：CORS 收紧**不能**替代 WS Origin 校验——WebSocket 握手不受 CORS 约束，CSWSH 面仍由 `origin_guard.rs` 独立防御（两条防线）。另注意 CORS 是「**读取权**」防线而非「执行权」防线：跨源简单请求在服务器端**照样执行**，只是浏览器把响应藏起来不让 JS 读（故不能把收紧 CORS 当作 CSRF 防护）。写操作的实际兜底是另一条链：auth 开启时 `SameSite=Lax` 让跨站 fetch 带不上 cookie ⇒ 401；auth 关闭时由 S1（非回环监听 + auth 关闭拒绝启动）收口——**不要**因为「CORS 收紧了」就以为写操作被保护。
 
 **验收实测**（起独立实例 `--cors-allowed-origins` + `Host` 头模拟 nginx 两种模式）：① nginx 默认改写 Host + 配白名单 → 放行；② nginx 改写 Host + 不配白名单 → 无 ACAO（拒绝）；③ `proxy_set_header Host $host` + 浏览器真同源 → 放行（不回归）；④ 配了白名单但 Origin 不在其中 → 拒绝（并集语义：白名单是「额外允许」不是「全放开」）；⑤ 跨源预检 → 空；⑥ WS 403/101 与 `/proxy/` 200 不受影响（它们在 CorsLayer 外或另有防线）。
+
+## 安全审计日志（S5）
+
+`src/api/audit.rs`（migration `20260926_add_audit_log.sql`）：敏感操作的 who-did-what-when 落痕。设计见 `docs/dev/plans/2026-09-26-security-hardening-batch.md` D4。
+
+**为什么单独一张表**：两条候选方案都否决——① 塞 `settings` 表的 JSON 大列：表是为 KV 配置设计的，审计是**只追加**的时序数据，混在一起既无界也难查（`WHERE key='audit'` 每次整列读出再解析）；② 只打 `tracing` 日志：日志轮转与保留期不在我们手里（`RUST_LOG` 可被过滤、stdout 重定向可断、daemon 重建即丢），用户出事后**查不到**。独立表才能提供「受保护的只读入口」——这也是 S5 相对 S2'（WS Origin）不同的地方：它不只是实现侧防线，还要给用户一个可查的台账。
+
+**表结构**（`audit_log`，索引 `idx_audit_log_created(created_at DESC, id DESC)`）：
+
+| 列 | 类型 | 语义 |
+|---|---|---|
+| `id` | INTEGER PK AUTOINCREMENT | 单调；读序与淘汰轴的真相源（见 §P1） |
+| `actor` | TEXT NOT NULL | 调用者身份 + 来源 IP，形如 `admin@192.168.1.7`；取不到 IP 时 `admin@-`（**不虚构** 127.0.0.1 之类的假值） |
+| `action` | TEXT NOT NULL | 稳定动作枚举（`AuditAction::as_str`，snake_case），**不是自由文本**——UI 按它分类筛选，overload 自由文本等于破坏筛选 |
+| `target` | TEXT NOT NULL | 作用对象（路径 / agent id / 端口），上限 `MAX_AUDIT_TARGET_BYTES` |
+| `scope` | TEXT? | 显式绑定范围（`session:<id>` / `workspace:<id>` / `project:<path>` / `repo:<root>` / `proxy_port:<port>` / `agents`）；NULL = 该请求无显式绑定 |
+| `detail_json` | TEXT? | 结构化附加上下文（文件名清单、`allow_escape` 标志等）；NULL = 无。上限 `MAX_AUDIT_DETAIL_BYTES` |
+| `created_at` | TEXT NOT NULL | RFC3339 UTC，与其余 `*_at` 列一致 |
+
+**`actor` 为什么必须带 IP**：OmniTerm 是单人工具，JWT `sub` 恒为 `"admin"`（`auth::create_token`），只写身份标识等于每条记录都一样，回答不了「谁动的」。**区分度只能来自来源 IP + scope**：多设备登录、误操作、被入侵三种场景下 `admin@192.168.1.7` 与 `admin@<外网IP>` 的区别就是全部信息量；scope 进一步回答「对哪个会话/工作区动手」。files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会漂移，id 才是稳定标识（`files.rs::scope_from_query`，三个绑定都没有时不记——`workspace=default` 的隐式路径是兜底分支而非显式绑定）；且路径已经进 `target`，scope 再放一遍是冗余。git push 是例外：repo 根本身即 target，scope 用同一值。
+
+**写入点清单与收敛（AGENTS §7①）**：全部敏感操作经 **`audit::record` 这一个函数**落库，**禁止任何 handler 自己拼 SQL**——同一写入逻辑散在 ≥2 处必然漂移，这正是历史上「安全机制实现后未接入链路」的根因。
+
+| 写入点 | 位置 | action | scope |
+|---|---|---|---|
+| 文件写 | `api/files.rs::write_file` | `file_write` | `scope_from_query` |
+| 文件删 | `api/files.rs::delete_file` | `file_delete` | 同上 |
+| 文件上传 | `api/files.rs::upload`（一个请求多文件记**一条**） | `file_upload` | 同上 |
+| git push | `api/git.rs::git_push` | `git_push` | `repo:<root>` |
+| agent 增/改/删 | `api/agents.rs` 三个 handler | `agent_create` / `agent_update` / `agent_delete` | `agents` |
+| 代理端口首访 | `proxy/mod.rs::dispatch_proxy` | `proxy_access` | `proxy_port:<port>` |
+
+**读操作刻意不审**：热路径（list/read/search）每次请求都写一条是纯写放大，且「谁看过什么」对事后追查的增量价值远低于「谁改了什么」。
+
+**proxy 的特殊性（无原子开通事件）**：其余动作都有确定的「开通」语义（handler 成功返回），代理没有——`/proxy/{port}` 是 catch-all，任何被白名单放行的端口**首次被访问即打通**，没有独立的「开启端口」调用可供插桩。故审计只能记「端口首次被访问」，用 `ProxyState::audited_ports`（`PortAuditLog`：`HashSet` 去重 + `VecDeque` 记序）**按端口去重**——不做这个去重的话，反代流量（一个 dev server 的每次请求都过 catch-all）每次请求都写一条 audit 行 = 写放大（§P1）。`insert` 返回 `true` 才落库。**登记表有界**：`MAX_TRACKED_PROXY_PORTS=4096`（白名单范围 3000..=65535 共 62536 个，4096 覆盖任何真实形态且把内存钉在 KB 级），超限淘汰最早登记者；被淘汰端口再访问会被当成「首次」补记一条——这是「有界内存」与「不漏记」之间取前者（内存无界是 §P1 红线，重复一条只是噪音）。**白名单校验在前、登记在后**：被 `is_port_allowed` 拒绝的端口不进登记表（拒绝路径已有自己的 warn，且 no_upstream 类的反复探测不该污染审计）。
+
+**agent detail 只记 env 键名不记值（§S3 敏感数据不落库）**：env 是 `KEY=VALUE` 形式，value 可能含密钥。detail 记 `{"command":…, "env_keys":[…]}`——只留键名。同理，agent 配置决定后续每条会话 spawn 什么进程、注入什么环境，改动它是「未来所有会话的行为」变更，故三个动作全审。
+
+**§P1 双上限**（只限一端等于没限：上限维度必须匹配真实增长维度）：
+
+| 维度 | 常量 | 超限策略 |
+|---|---|---|
+| 条目数 | `MAX_AUDIT_ROWS=1000` | 每次插入后滚动删最旧（按 `id` 升序删超出量） |
+| 单条 `detail_json` 字节数 | `MAX_AUDIT_DETAIL_BYTES=2048` | 按**字符边界**截断 + **显式追加**可解析省略字段 `,"__omitted_chars__":N}` |
+| 单条 `target` 字节数 | `MAX_AUDIT_TARGET_BYTES=1024` | 按字符边界截断 + 尾部标注 `…(truncated N chars omitted)` |
+
+- **修剪放在插入之后**，删除量按「当前总数 − 上限」算：先删后插在并发两路同时到上限时会各删一次再各插一条 ⇒ 超出上限一个并发数；放在插入后且删除量与插入顺序无关，收敛回上限。常态零成本——未超限时 query 直接返回不 DELETE。
+- **按 `id` 删而非 `created_at`**：同一秒内多条记录的 `created_at` 相同，按它删会不确定地漏删/多删。读序同样用 `ORDER BY id DESC`（索引 `(created_at DESC, id DESC)` 只作同秒并列时的确定性 tiebreaker）。
+- **静默截断是禁止的**：截断必须让下游能区分「本来就短」与「被剔了」——故省略量一律显式落库，且截断按字符边界切（字节索引切在多字节字符中间即 panic，与 `scrollback.rs`/`turn_accumulator` 同一类教训）。
+- 取 1000 条的依据：本表只收低频高危动作，正常使用一年远达不到此量（1k × ~300B ≈ 300KB）；真到量说明使用模式异常，那时该看的是「为什么」而不是把上限调大。
+
+**读口有界（§P5：无界数据源的每个出口都要限）**：`GET /api/v1/settings/audit-log`（受保护）经 `effective_read_limit` 收敛 `?limit=`——缺省 50（`DEFAULT_AUDIT_READ_LIMIT`）、硬顶 200（`MAX_AUDIT_READ_LIMIT`）、**非正数收敛为 1**（不得变成「返回空」也不得 panic）。收敛而非拒绝：读口无副作用，超限请求不该报错。
+
+**两条边界决策**：
+
+1. **只记成功操作**：全部写入点只在业务操作成功之后调 `record`。失败的操作没有改变系统状态，「谁试过但没成功」对事后追查的增量价值低于它的复杂度（每个 handler 的错误分支都要再插一次调用，极易漏）。翻盘条件：若将来要审失败尝试，应作为**独立动作**（`*_failed`）统一加，**不要**在部分写入点加、部分不加——那会让「没记录」变成歧义信号（到底是没试还是试了失败？）。
+2. **审计写失败只 warn 不阻断业务（§S2 边界）**：`record` 写库失败 `tracing::warn!` 后返回，**不向上传播**——调用方不得因为审计失败就改变业务响应。审计是观测手段，让「查不到痕迹」升级为「功能不可用」会诱导调用方绕过审计（去掉那次调用）。也不 `Result::ok()` 静默吞掉：warn 就是留给运维的痕迹（§S2：要么上抛到有意义的边界，要么记日志 + 显式降级，不掩盖根因）。
+
+**不提供删除/清空接口**：入口只有读，清理只由 `MAX_AUDIT_ROWS` 滚动负责。加「清空日志」API 等于给攻击者（或误操作）一个销毁痕迹的入口。
 
 ## File watcher（`src/api/files_watch.rs`）
 

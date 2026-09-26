@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-09-26 23:50) `[security]` `[api]` 新增安全审计日志：文件写入/删除/上传、git push、agent 配置增删改、代理端口首次被访问现在都会在 `audit_log` 表留痕，回答「谁在何时动了什么」（多设备/误操作/被入侵后追查）。读取口为只读的 `GET /api/v1/settings/audit-log`（`?limit=` 缺省 50、硬顶 200），前端在设置的「鉴权」页新增只读区块。actor 形如 `admin@192.168.1.7`——本工具是单用户模型（JWT 身份恒为 `admin`），区分度来自来源 IP 与绑定的会话/工作区，故一并落库。**代理端口没有「开通」原子事件**（`/proxy/{port}` 是 catch-all，任何端口首次被访问即打通），故该动作按端口去重只记首次访问，否则反代流量的每次请求都会写一条。表有界：滚动保留最近 1000 条，单条 detail 超 2048 字节按字符边界截断并显式标注省略量（agent 配置的 detail 只记 env **键名**不记值）。读操作刻意不审计（写放大会拖累热路径）（`src/api/audit.rs`、`migrations/20260926_add_audit_log.sql`、`src/api/files.rs`、`src/api/git.rs`、`src/api/agents.rs`、`src/proxy/mod.rs`、`frontend/src/components/Settings/AuditLogSection.tsx`）
+
 ### Changed
 
 - (2026-09-26 21:30) `[security]` `[api]` CORS 由「全放开」收紧为「默认仅同源 + 显式 origin 白名单」：此前 `CorsLayer::permissive()` 对所有来源回 `Access-Control-Allow-Origin: *`（不含 credentials，故跨源请求带不了 cookie），任何站点都能**读到**接口返回值——包括 `/auth/check`、`/system/info`（泄露 `proxy_domain`）等无鉴权可读的信息面。现改为：无 `Origin` 放行（非浏览器客户端不在同源策略管辖内）、**Origin host 与请求 Host 一致**放行（复用 WS 入口同一份 `origin_matches_host` 判据，同时天然覆盖代理子域形态）、逐字命中 `--cors-allowed-origins` / `OMNITERM_CORS_ALLOWED_ORIGINS` 放行（上限 32 条 × 256 字节；反代改写 `Host` 时唯一活路）。方法与 header 集同步显式列白（`GET/POST/PUT/PATCH/DELETE` + `content-type`/`authorization`）——`AllowMethods`/`AllowHeaders` 默认为空，不列则跨源预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，带 `content-type` 的 POST 会被浏览器拦在预检上。**同源访问（含 dev 的 vite proxy 与内嵌前端形态）零影响**，实测确认；**影响面**：反代部署若未显式配白名单（nginx 默认 `proxy_set_header Host $proxy_host` 会改写 Host，使同源判定必然失败），前端跨源请求将读不到响应，需在 `.env.local` 配 `OMNITERM_CORS_ALLOWED_ORIGINS`。预检响应**不发** `Access-Control-Max-Age`（注意 `MaxAge::exact(0)` 并不关缓存、照样发该头），让白名单变更后浏览器立即按新结果判定。另注意 CORS 收紧**不能**替代 WS Origin 校验（WS 握手不受 CORS 约束，两条独立防线），也不是 CSRF 防护（跨源简单请求在服务端照样执行）（`src/ws/cors_policy.rs`、`src/main.rs`）
