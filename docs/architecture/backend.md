@@ -417,7 +417,13 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 | `detail_json` | TEXT? | 结构化附加上下文（文件名清单、`allow_escape` 标志等）；NULL = 无。上限 `MAX_AUDIT_DETAIL_BYTES` |
 | `created_at` | TEXT NOT NULL | RFC3339 UTC，与其余 `*_at` 列一致 |
 
-**`actor` 为什么必须带 IP**：OmniTerm 是单人工具，JWT `sub` 恒为 `"admin"`（`auth::create_token`），只写身份标识等于每条记录都一样，回答不了「谁动的」。**区分度只能来自来源 IP + scope**：多设备登录、误操作、被入侵三种场景下 `admin@192.168.1.7` 与 `admin@<外网IP>` 的区别就是全部信息量；scope 进一步回答「对哪个会话/工作区动手」。files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会漂移，id 才是稳定标识（`files.rs::scope_from_query`，三个绑定都没有时不记——`workspace=default` 的隐式路径是兜底分支而非显式绑定）；且路径已经进 `target`，scope 再放一遍是冗余。git push 是例外：repo 根本身即 target，scope 用同一值。
+**`idx_audit_log_created` 不是读口的索引**（2026-09-27 独立审查指出原注释误导）：读口 `GET /settings/audit-log` 是 `ORDER BY id DESC`——`id` 即插入序即新近度，SQLite 用普通 rowid 扫就满足，不走该索引。它服务的是**排查路径**「T1 到 T2 之间发生了什么」，那时 `created_at` 是唯一可用的键。保留它，但别以为删掉不影响读口。同理，读序与淘汰轴一律以 `id` 为准而非 `created_at`：同一秒内多条记录的 `created_at` 相同，它不是全序。
+
+**`actor` 为什么带 IP**：OmniTerm 是单人工具，JWT `sub` 恒为 `"admin"`（`auth::create_token`），只写身份标识等于每条记录都一样，回答不了「谁动的」。故 actor = `admin@<来源 IP>`：**直接暴露**（无反代）时，多设备登录 / 误操作 / 被入侵三种场景下 `admin@192.168.1.7` 与 `admin@<外网IP>` 的区别就是全部信息量；scope 进一步回答「对哪个会话/工作区动手」。
+
+**重要边界（勿夸大）**：**反代部署下 actor 的区分度归零**。`ConnectInfo` 给的是**直连对端**——经过 nginx/Caddy 时它是反代容器/进程的地址，所有客户端看起来同一个 IP，actor 退化为常量。真实客户端 IP 只在 `X-Forwarded-For` 里，而 OmniTerm 全链路（含 `src/proxy/` 的 `X-Forwarded-For` **写出**侧）**没有任何一处读它**。这是刻意的不信任：XFF 可被客户端伪造，读它等于把审计的「谁」交给可伪造的头。要恢复反代下的区分度，须由反代层保证「XFF 只由可信代理追加」并有额外校验，属独立方案，未实施。
+
+files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会漂移，id 才是稳定标识（`files.rs::scope_from_query`，三个绑定都没有时不记——`workspace=default` 的隐式路径是兜底分支而非显式绑定）；且路径已经进 `target`，scope 再放一遍是冗余。git push 是例外：repo 根本身即 target，scope 用同一值。
 
 **写入点清单与收敛（AGENTS §7①）**：全部敏感操作经 **`audit::record` 这一个函数**落库，**禁止任何 handler 自己拼 SQL**——同一写入逻辑散在 ≥2 处必然漂移，这正是历史上「安全机制实现后未接入链路」的根因。
 
@@ -434,7 +440,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 
 **proxy 的特殊性（无原子开通事件）**：其余动作都有确定的「开通」语义（handler 成功返回），代理没有——`/proxy/{port}` 是 catch-all，任何被白名单放行的端口**首次被访问即打通**，没有独立的「开启端口」调用可供插桩。故审计只能记「端口首次被访问」，用 `ProxyState::audited_ports`（`PortAuditLog`：`HashSet` 去重 + `VecDeque` 记序）**按端口去重**——不做这个去重的话，反代流量（一个 dev server 的每次请求都过 catch-all）每次请求都写一条 audit 行 = 写放大（§P1）。`insert` 返回 `true` 才落库。**登记表有界**：`MAX_TRACKED_PROXY_PORTS=4096`（白名单范围 3000..=65535 共 62536 个，4096 覆盖任何真实形态且把内存钉在 KB 级），超限淘汰最早登记者；被淘汰端口再访问会被当成「首次」补记一条——这是「有界内存」与「不漏记」之间取前者（内存无界是 §P1 红线，重复一条只是噪音）。**白名单校验在前、登记在后**：被 `is_port_allowed` 拒绝的端口不进登记表（拒绝路径已有自己的 warn，且 no_upstream 类的反复探测不该污染审计）。
 
-**agent detail 只记 env 键名不记值（§S3 敏感数据不落库）**：env 是 `KEY=VALUE` 形式，value 可能含密钥。detail 记 `{"command":…, "env_keys":[…]}`——只留键名。同理，agent 配置决定后续每条会话 spawn 什么进程、注入什么环境，改动它是「未来所有会话的行为」变更，故三个动作全审。
+**agent detail 只记 env 键名不记值（§S3）**：env 是 `KEY=VALUE` 形式，value 可能含密钥，detail 只留 `{"command":…, "env_keys":[…]}` 的键名。**但不要把这句读成「detail 绝不会含凭据」**：`command` 是自由文本、原样落库，`agent --token=sk-…` 这类形态会把凭据写进 detail。这是刻意不做的通用掩码——单人工具自己输入自己看，为它加 flag 值脱敏属过度设计；若将来 agent 配置支持共享/导入，必须补掩码。同理，agent 配置决定后续每条会话 spawn 什么进程、注入什么环境，改动它是「未来所有会话的行为」变更，故三个动作全审。
 
 **§P1 双上限**（只限一端等于没限：上限维度必须匹配真实增长维度）：
 

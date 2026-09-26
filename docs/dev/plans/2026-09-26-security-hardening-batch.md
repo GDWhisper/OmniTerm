@@ -117,7 +117,7 @@
 |------|------|
 | D1 上线后有人依赖「裸奔启动」的自动化脚本突然失败 | 逃生门 `--insecure-no-auth` + 启动错误文案写清补救动作；这是刻意破坏性变更，须进 CHANGELOG |
 | D3 收紧打断 dev / 反代 / 移动端访问 | Phase 3 先跑通 dev 与子域代理两条真实路径再合入；`.env.local` 可配 origin 集合兜底 |
-| D4 审计表写放大影响热路径 | 写入点只选「低频高危」动作（push/force、写删、配置变更、开端口），读操作不审计；单条 detail 有字节上限 |
+| D4 审计表写放大影响热路径 | 写入点只选「低频高危」动作（push/force、写删、配置变更、开端口），读操作不审计；单条 detail 有字节上限。**但「低频」不等于「无感」**：release 实测文件写入 median 7.44ms（无审计 1.29ms），审计净开销 6.2ms = 基线 5.8 倍。已把修剪从「COUNT + DELETE」两次往返合为一条 SQL（`0bce47d`），median 降至 3.90ms、净开销 2.6ms。仍保留每次写入都修剪，因为「每 N 次才修剪」会让条目数越过上限——上限是安全性质，不做交易 |
 
 实施后须更新：`docs/reference/auth-not-enforced.md`（回写现状表，S1/S3 落地状态）、`docs/architecture/backend.md`（WS Origin 校验收敛点、审计表结构、`--insecure-no-auth` CLI 新参数）、`CHANGELOG.md`（D1 属破坏性启动行为变更）。
 
@@ -315,3 +315,29 @@
 **验收勾销**：`cargo test audit` ✅（23 个）/ 条目上限 + 截断守恒 + 并发不击穿 ✅ / proxy 去重与拒绝不入表 ✅ / 审计故障不阻断业务 ✅ / agent 敏感值不落库 ✅ / 读写口联调 ✅。
 
 **仍未完成（不可视为已验证）**：① 反代真实链路（无 nginx，`Host` 头模拟不等价）；② 移动端真机；③ 前端区块只在 typecheck+单测层面验证，**未在真实浏览器里看过渲染结果**（需 `./dev.sh restart` 后人眼确认一屏）。
+
+---
+
+## Phase 4 独立审查与修复记录（2026-09-27）
+
+按 `docs/workflows/subagent-code-review.md` 派**独立审查子代理**（另起会话、只读、对抗性立场，审 `git diff aca5d8d..HEAD` 并要求其逐条证伪实现方的 10 项主张 + 8 个额外核查点）。该次运行曾中断一次、恢复后给出完整结论。逐条处置：
+
+| # | 级别 | 问题 | 核实 | 处置 |
+|---|---|---|---|---|
+| 1 | **major** | `truncate_detail` 只裁 kept、**不给尾部省略标记预留空间** ⇒ `detail_json` 恒定超限 23–27B（常量声称 2048，实测 2071/2075/2072B）。与 `truncate_field`（有预留）不一致——抄了自己一半的模式 | **已实证**：`rustc` 探针三种输入全部超限 | **已修**（`541a22b`）：抽出 `truncate_with_suffix`，两函数共用**迭代到不动点**（每轮用上轮 omitted 构造标注、按其真实长度重预算）。标注长度随位数浮动，预估必错 |
+| 2 | major（并发项） | 同上那条的**测试也不会红**：`truncate_detail_cuts_multibyte_without_panic` 原断言 `len > MAX \|\| ends_with('}')`，超限时左支为真 ⇒ 恒过，正是装饰性断言 | 属实 | **已修**：改为三条不变量（必被截断 / 含标记仍 ≤ 上限 / 省略标记可读）。**并验证防护力**：临时还原修复前实现，3 条测试转红 |
+| 3 | minor | `target` 在 omitted ≥ 10000 时仍超 1B（`OMISSION_TAG_BYTES` 按 4 位数字预估） | 属实（实测 1025B） | **已修**：同批改为迭代收敛，不再预估位数。新增 5 档省略量位数回归 |
+| 4 | minor | `scope` 列无字节上限（`target`/`detail` 都有） | 属实。调用方 sid/wid 多已解析到 DB 实体故实际有界，但「靠调用方偶然」正是 §P1 反对的 | **已修**：加 `MAX_AUDIT_SCOPE_BYTES=512`，`record` 入口处统一截断三列 + 回归测试 |
+| 5 | minor | 读审计失败时 toast 与空态双重提示（`request()` 非 silent 会弹 toast，`AuditLogSection` 又 `.catch` 设空态） | 属实 | **已修**（`24eab23`）：`getAuditLog` 默认 `silent: true`。测试从「断言 mock 收到的参数」移到 `client.test.ts` 用 stub fetch 测真实行为（原写法测的是 mock 自身） |
+| 6 | minor | 「任何 detail 都不会把凭据落库」主张过强：`command` 是自由文本原样落库，`--token=sk-…` 形态会落凭据 | 属实（非新暴露面，但主张夸大） | **已收回措辞**：backend.md 与代码注释均写明 env 只记键名、command 不掩码及其理由（单人工具；若配置可共享/导入必须补） |
+| 7 | minor | 「actor 带 IP ⇒ 可追查」在反代部署下区分度归零（`ConnectInfo` 是反代地址，XFF 全链路无人读） | 属实，且是代码结构必然 | **已收回措辞 + 写明理由**：backend.md 新增「重要边界（勿夸大）」段，说明为何刻意不读 XFF（可伪造）及恢复区分度需什么前提 |
+
+**审查确认为真的事实**（10 项主张逐条核）：写入点确已全部收敛为 `record`（全仓 `INSERT/DELETE FROM audit_log` 仅命中 audit.rs）；只记成功（含已文档化的 upload 部分成功边界）；字符边界 + 显式标注 + 守恒成立；`PortAuditLog` 有界且被拒端口不入表（403 在 `lock()/insert()` 之前）；读口确在鉴权链路上（`settings.rs:40` → `api/mod.rs:32/:45`）；前端零硬编码 token 违规、两 locale 各 +11 key 且既有 key 零改动；**测试未被削弱**，且它独立推导出我漏掉的一条——`sqlite::memory:` 在 sqlx 源码里置 `shared_cache=true`，故 4 连接池确为共享同一内存库、并发是真并发；`test_state` 转发经逐字段比对**无 settings 特有初始化丢失**。
+
+**对两个取舍的裁决（审查者独立结论，与实现方一致）**：① **触发器修剪不采用是正确的**——收益仅约再省 1.3ms（在感知阈值以下），代价是上限值形成 migration 触发器体与 Rust 常量的双真相，且 migrations「勿改已有文件」意味着将来调一次上限 = 新写一个 migration 而非改一个常量，两处漂移无任何机制能发现。全仓零触发器先例只是佐证而非主因。② **拒绝「每 N 次才修剪」正确**：「上限」在此是安全不变式而非性能参数，允许瞬时 cap+N 会让读口与任何将来导出都须按更大规模设计。异步化是唯一该做的后续方向，但需单独论证「退出丢最后几条」。
+
+**审查指出的一处注释与事实不符（已订正到正确位置）**：migration 里 `idx_audit_log_created` 的注释声称服务读序，实际读口是 `ORDER BY id DESC`、走 `SCAN audit_log` 未用该索引；它真正服务的是「T1 到 T2 之间发生了什么」这类按时间排查的路径。订正说明放进 `backend.md`。
+
+**实现方在此过程中踩了一次红线，记入教训**：我最初的「订正」是直接改 migration 文件里的注释 ⇒ sqlx 报 `migration 20260926 was previously applied but has been modified`，**dev 环境启动失败**。这正是 AGENTS.md「新增即登记，**勿改已有 migration**」红线的机制（migration 内容有 checksum，已应用的库改一个字节就拒不启动），已逐字回滚恢复。**更正注释属于文档，放 `backend.md`，永远不要放进 migration 文件**——哪怕那个文件是自己本 Phase 刚加的、还没发布。
+
+**审查未能验证项（不可视为已完成）**：① 我方的延迟数字（7.44 → 3.90ms）审查者**未独立复现**（其探针被 fsync 与未封顶表污染），但确证了成本结构（3 RT→2 RT 恰省 1/3，与降幅自洽）与根因（本仓未配 `journal_mode`，每事务固定开销主导）；② `pnpm lint` 18 条 warning 是否全部落在既有文件，未逐条核；③ 仓内**既有**测试是否还有第三处「偶发写成必然」，只核了本 Phase 触及的两个文件；④ 真实浏览器渲染与反代真实链路仍未测（actor 退化是代码结构必然推出，非实测）。

@@ -107,6 +107,9 @@ async fn create_agent(
     // 审计（S5）：agent 配置决定后续每条会话会 spawn 什么进程、注入什么
     // 环境变量（可能含密钥名），改动它是「未来所有会话的行为」变更，必留痕。
     // detail 记命令与 env 的**键名**（不含值——§S3 敏感数据不落库）。
+    // 注意边界：command 是自由文本、原样落库，`--token=sk-…` 这类形态会把
+    // 凭据写进 detail。单人工具自选自输，不做通用 flag 掩码（过度设计）；
+    // 若将来 agent 配置可共享/导入，必须补。
     let ctx = crate::api::audit::AuditContext::from_ip(Some(addr.ip()), Some("agents".into()));
     let detail = json!({
         "command": req.command.clone(),

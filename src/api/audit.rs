@@ -90,6 +90,13 @@ pub const MAX_AUDIT_DETAIL_BYTES: usize = 2048;
 /// 仍须有界——路径长度由用户输入决定（§P1 外部输入）。
 pub const MAX_AUDIT_TARGET_BYTES: usize = 1024;
 
+/// `scope` 列的字节上限（§P1：`target`/`detail` 都截断，scope 不能是漏网的那列）。
+///
+/// 走到 [`record`] 的 session/workspace id 通常已成功解析到 DB 实体（因而
+/// 事实上很短），`repo:<root>` 则是文件系统路径、可以很长。不显式设上限
+/// 就等于把「scope 一定短」寄托在调用方的偶然行为上——正是 §P1 反对的。
+pub const MAX_AUDIT_SCOPE_BYTES: usize = 512;
+
 /// 动作枚举。**不是自由文本**：UI 按此分类筛选，故必须稳定。
 ///
 /// 新增动作时同步 `backend.md` 的「安全审计日志」表与前端分类（如有）。
@@ -195,10 +202,11 @@ pub fn effective_read_limit(limit: Option<i64>) -> i64 {
 ///
 /// # 截断策略（§P1）
 ///
+/// 三列各有上限，全部在 [`record`] 入口处收敛——调用方传什么都行：
+///
 /// * `target` 超 [`MAX_AUDIT_TARGET_BYTES`]：保留前 N 字节（按字符边界）+ 尾部标注。
 /// * `detail` 超 [`MAX_AUDIT_DETAIL_BYTES`]：保留并显式写入省略字符数。
-///   截断后的 detail 形如 `{原 JSON}{"omitted_chars":N}` 前的省略标记，
-///   由 [`truncate_detail`] 生成，下游可据此判断内容是否完整。
+/// * `scope` 超 [`MAX_AUDIT_SCOPE_BYTES`]：同 `target` 的处理。
 pub async fn record(
     pool: &SqlitePool,
     ctx: &AuditContext,
@@ -208,8 +216,11 @@ pub async fn record(
 ) {
     let target = truncate_field(target, MAX_AUDIT_TARGET_BYTES);
     let detail = detail.map(|d| truncate_detail(d, MAX_AUDIT_DETAIL_BYTES));
+    let scope = ctx.scope.as_deref().map(|s| truncate_field(s, MAX_AUDIT_SCOPE_BYTES));
 
-    if let Err(e) = insert_audit(pool, ctx, action, &target, detail.as_deref()).await {
+    if let Err(e) =
+        insert_audit(pool, &ctx.actor, action, &target, scope.as_deref(), detail.as_deref()).await
+    {
         tracing::warn!(
             action = action.as_str(),
             actor = %ctx.actor,
@@ -223,6 +234,9 @@ pub async fn record(
 
 /// INSERT 一条审计行（修剪由调用方 [`record`] 在成功后另行执行）。
 ///
+/// 这里收到的每个字段都**已被 [`record`] 按 §P1 截断过**——本函数只负责落库，
+/// 不再做任何长度处理（截断逻辑集中在入口，避免两处策略漂移）。
+///
 /// 插入与修剪是**两次独立 SQL，不在同一事务里**。正确性不依赖事务：
 /// 修剪按「当前总数 − 上限」实时计算删除量（见 [`prune_old_rows`]，现算于
 /// 子查询内），与插入顺序无关地收敛回上限。即便两路并发同时把表推到上限，
@@ -233,9 +247,10 @@ pub async fn record(
 /// 若将来要求「插入与修剪严格原子」，改成事务是加强项而非修当前缺陷。
 async fn insert_audit(
     pool: &SqlitePool,
-    ctx: &AuditContext,
+    actor: &str,
     action: AuditAction,
     target: &str,
+    scope: Option<&str>,
     detail: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -243,10 +258,10 @@ async fn insert_audit(
         "INSERT INTO audit_log (actor, action, target, scope, detail_json, created_at) \
          VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .bind(&ctx.actor)
+    .bind(actor)
     .bind(action.as_str())
     .bind(target)
-    .bind(ctx.scope.as_deref())
+    .bind(scope)
     .bind(detail)
     .bind(&now)
     .execute(pool)
@@ -675,6 +690,26 @@ mod tests {
         record(&db, &unbound, AuditAction::FileWrite, "/tmp/x", None).await;
         let rows = list_recent(&db, 1).await.expect("list");
         assert_eq!(rows[0].scope, None);
+    }
+
+    #[tokio::test]
+    async fn oversized_scope_is_truncated_before_insert() {
+        // I-4 回归：scope 也必须有界（target/detail 都截断，不能漏掉这一列）。
+        // repo:<root> 是文件系统路径，可以任意长。
+        let db = test_db().await;
+        let long_scope = format!("repo:{}", "/very/long/path/".repeat(200));
+        assert!(long_scope.len() > MAX_AUDIT_SCOPE_BYTES);
+        let ctx =
+            AuditContext::from_ip(Some("10.0.0.9".parse().unwrap()), Some(long_scope.clone()));
+        record(&db, &ctx, AuditAction::GitPush, "/tmp/repo", None).await;
+
+        let rows = list_recent(&db, 1).await.expect("list");
+        let stored = rows[0].scope.as_deref().expect("scope");
+        assert!(
+            stored.len() <= MAX_AUDIT_SCOPE_BYTES,
+            "scope 落库值 {}B 超过上限 {MAX_AUDIT_SCOPE_BYTES}B",
+            stored.len()
+        );
     }
 
     /// 多文件上传「部分成功」（第 N 个超限）时已落盘文件不留痕——这是
