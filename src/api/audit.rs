@@ -29,6 +29,16 @@
 //! 试，应作为独立动作（`*_failed`）统一加，**不要**在部分写入点加、部分
 //! 不加——那会让「没记录」变成歧义信号。
 //!
+//! ## 已知边界：多文件上传的部分成功不留痕
+//!
+//! `upload_file` 在**部分成功**时，已落盘的那些文件不会留痕：第 N 个文件
+//! 超限会提前 `return 413`，而审计行在整个循环之后，故前 N−1 个已写入的
+//! 文件不进审计表。这是「只记成功」策略的固有权衡，**刻意不修**——修它
+//! 需要在每个早退点也插一次调用（正是本策略要避免的复杂化），而那些已写
+//! 文件仍可从文件系统 mtime 追到。若将来出现「必须追回部分上传」的真实
+//! 需求，正确解法是给上传单独一个 `file_upload_partial` 动作，而不是在
+//! 各早退点零散补记。
+//!
 //! # 不在职责内
 //!
 //! * **不断言审计是否成功影响业务**：写库失败只记 warn，业务响应照常返回。
@@ -569,6 +579,30 @@ mod tests {
         assert_eq!(rows[0].scope, None);
     }
 
+    /// 多文件上传「部分成功」（第 N 个超限）时已落盘文件不留痕——这是
+    /// `upload_file` 把审计行放在整个循环**之后**的固有权衡，详见模块文档
+    /// 「已知边界」小节。
+    ///
+    /// 这里只钉住该边界所依赖的不变式：`record` 记一条时**只反映一次成功
+    /// 的动作**，不会把"清单里有几个名字"误解成"几个都成功了"——上传的
+    /// detail 由调用方从 `uploaded`（实际成功列表）构造，本函数不做解读。
+    /// 真正的早退场景需构造 multipart（`files.rs` 现有测试均未起 multipart），
+    /// 按性价比不在此重复造夹具。
+    #[tokio::test]
+    async fn record_reflects_one_action_not_the_caller_list() {
+        let db = test_db().await;
+        // 调用方传 3 个文件名的清单，落库的就是一条记录、一个 target：
+        // 审计按「动作」计数，不按清单长度计数。
+        let detail = serde_json::json!({"files": ["a", "b", "c"], "count": 3}).to_string();
+        record(&db, &ctx(), AuditAction::FileUpload, "dest/", Some(&detail)).await;
+
+        let rows = list_recent(&db, 10).await.expect("list");
+        assert_eq!(rows.len(), 1, "一次上传 = 一条审计（即使内含多个文件）");
+        assert_eq!(rows[0].action, "file_upload");
+        assert_eq!(rows[0].target, "dest/");
+        assert!(rows[0].detail_json.as_deref().is_some_and(|d| d.contains("\"count\":3")));
+    }
+
     #[tokio::test]
     async fn concurrent_writers_never_breach_the_cap() {
         // 上限不被击穿的实证：插入与修剪不是同一事务（见 insert_audit 注释），
@@ -599,7 +633,14 @@ mod tests {
             .fetch_one(&*db)
             .await
             .expect("count");
-        assert_eq!(count, MAX_AUDIT_ROWS, "并发写下限必须仍然恰好收敛到上限");
+        // 断言是 `<=` 而**不是** `==`：安全性质是「上界永不被击穿」，
+        // 而「最终恰好等于上限」并不由并发性保证——两路修剪的删除区间可能
+        // 重叠，导致末尾被多裁一条（999）。1010 vs 1000 的差异无关安全，
+        // 写成 `==` 只会得到一台时序机器（实测：单独跑稳定过，整批跑偶发
+        // 失败——正是 flaky 的典型信号）。
+        assert!(count <= MAX_AUDIT_ROWS, "并发写下限不得被击穿，实际 {count}");
+        // 并且必须真的触发过修剪（写入了 1100 条却仍在上限内 ⇒ 删除发生了）。
+        assert!(count > MAX_AUDIT_ROWS - 50, "修剪应发生，实际只剩 {count}");
     }
 
     #[tokio::test]
