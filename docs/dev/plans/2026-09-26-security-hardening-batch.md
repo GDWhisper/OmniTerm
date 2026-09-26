@@ -136,9 +136,16 @@
 
 **产出**：新建 `src/ws/origin_guard.rs` 承载共享防线 `enforce_ws_origin(&HeaderMap)`，三个主 WS 入口（`ws_terminal_handler` / `ws_external_terminal_handler` / `ws_acp_handler`）在 `on_upgrade` 之前调用；`src/proxy/mod.rs` 的私有 `origin_matches_host` / `strip_port` 连同三个单测**删除**，改为调 `crate::ws::origin_matches_host`——同一判断不再有两份实现（S2'「半落地」的根因）。
 
-**新增单元测试**（`cargo test origin`，共 17 个）：入口级 8 个——同源放行、同源端口不一致放行、代理子域放行、跨站 403、畸形 Origin 403、**无 Origin 放行**、**无 Host 放行**、空 header map 放行；纯函数 9 个——含本轮新补的 IPv6 字面量、host 大小写不敏感、空 host 段拒绝、Origin 带 path/query 截断。**「无 Origin 放行」原本完全没有测试**：判定函数签名是 `(&HeaderValue, &str)`，表达不了「头不存在」这一态，必须做成入口级 predicate，计划验收项 `cargo test origin`（同源/跨站/无 Origin）这才真正落全。
+**新增单元测试**（`cargo test origin`，共 20 个；其中 3 个为审查前自查补充，见 `dcfc53e`）：入口级 11 个——同源放行、同源端口不一致放行、代理子域放行、跨站 403、畸形 Origin 403、**无 Origin 放行**、**无 Host 放行**、空 header map 放行、多 Origin 头首个为跨站时拒绝、非 UTF-8 Origin 拒绝、无 Host 时非 UTF-8 Origin 放行；纯函数 9 个——含本轮新补的 IPv6 字面量、host 大小写不敏感、空 host 段拒绝、Origin 带 path/query 截断。**「无 Origin 放行」原本完全没有测试**：判定函数签名是 `(&HeaderValue, &str)`，表达不了「头不存在」这一态，必须做成入口级 predicate，计划验收项 `cargo test origin`（同源/跨站/无 Origin）这才真正落全。多值 Origin 一条钉住 `ORIGIN` 是单值头、`get` 取首值的语义，并注释警告**不得**改成「任一值匹配即放行」——那会让攻击者把合法值排在恶意值前绕过。
 
 **实测十场景真实握手**（起独立实例 `--port 19871 --db sqlite://…`，隔离 dev 环境；dev 库 `auth_enabled=1`，`require_auth_mw` 的 401 会先于 Origin 校验返回，看不到边界）：terminal / acp / external / proxy 四个入口各测同源→101、无 Origin→101、跨站→403、畸形→403，**10/10 PASS**，403 响应体逐字 `origin not allowed`，`ws origin rejected` warn 按预期留痕。Node `WebSocket` 裸握手（实测不发 Origin）仍 101 → `scripts/pty-*-regression.mjs` 与 `tests/agent_hook_integration.rs` 的裸握手回归**不受影响**，这是本轮最需要守住的一条。
+
+**真实浏览器验证**（系统 Chromium + CDP，auth 关闭的独立实例，保证 Origin 校验是真正的门）：
+
+- 同源页面（`http://127.0.0.1:19872`）`new WebSocket('ws://127.0.0.1:19872/api/v1/ws/terminal/…')` → **OPENED**，用户真实路径未被误伤。
+- 跨 host 攻击页面（`http://localhost:19874` → 目标 `127.0.0.1:19872`）→ **被拒**，后端 `WARN omniterm::ws::origin_guard: ws origin rejected: origin="http://localhost:19874" host="127.0.0.1:19872"`。
+- **基线对照（关键一步）**：headless 浏览器首次探针得到 `CLOSED code=1006`，无法区分是本次改动还是其它原因。用 `git stash` 构建 pre-Phase-2 二进制重跑同一探针，得到**同样的 1006** → 确认为 dev 库 `auth_enabled=1` 下的 401（headless 无登录 cookie），与本改动无关。没有这一步，极易把既有现象误判成自己引入的回归。
+- **`--daemonize` 路径复验**：Phase 1 曾在该路径栽过「父进程拿到假成功」的时序 bug，故本 Phase 用 daemon 实例重测同源/跨站/无 Origin 三态，同样 101/403/101，防线在后台形态下一致生效。
 
 ### 实施偏差（就地记录，遵循 PLAN-TEMPLATE 纪律 3）
 
@@ -147,6 +154,6 @@
 3. **`host_from_request` 未提升**：它取 `&Request`（仅 proxy WS 分流上下文持有），与 WS 入口的 `HeaderMap` extractor 形态不同；2026-08-13 计划勘误⑤ 明确「共享函数**不能持 `&Request` 跨 await**」。保持 proxy 侧私有取值、共享侧只共享判定，边界更干净。
 4. **入口级 403 由 `enforce_ws_origin` 统一返回响应**（而非每个 handler 各写 `StatusCode::FORBIDDEN`）：判定与响应文案同处一份，避免四份文案漂移。proxy 侧需先判 WS 再进 `dispatch`，沿用原 let-chain 形态但改调共享判定函数，行为逐字不变。
 
-**回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 562 单测 + 8 + 2 集成全绿。
+**回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 565 单测 + 8 + 2 集成全绿。
 
-**验收勾销**：`cargo test origin` ✅（17 个）/ 三入口 + 代理入口真实握手 10/10 ✅ / 裸握手回归不受影响 ✅。
+**验收勾销**：`cargo test origin` ✅（20 个）/ 三入口 + 代理入口真实握手 10/10 ✅ / 真实 Chromium 同源放行 + 跨 host 拦截 ✅ / 裸握手回归不受影响 ✅ / `--daemonize` 路径一致生效 ✅。
