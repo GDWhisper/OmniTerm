@@ -1,6 +1,7 @@
 # OmniTerm 改进方向全景（功能 × 安全）
 
-> 状态：设计稿 / 方向性方案（2026-09-01）——**本文只做方向选型与优先级排序，不构成实施承诺**；任何方向落地前须另起独立实施计划。
+> 状态：**已归档 · 方向盘点（2026-09-01 建，2026-09-26 复审修订）**——本文只做方向选型与优先级排序，**不构成实施承诺**；任何方向落地前须另起独立实施计划。
+> 复审结论（2026-09-26）：S2/S4/F1/F2 四项已落地（链接触见下），安全缺口 S1/S3/S5/S6 与体验向 F3/F4/F5/D1/D4/D5 **仍未落地、依旧有效**，已拆分为 `docs/dev/plans/2026-09-26-2026-09-26-security-hardening-batch.md`（实施计划）与 `docs/dev/plans/backlog/improvement-directions-remaining.md`（backlog 跟踪）。
 > 触发条件：用户要求基于领域知识盘点改进方向。
 > 关联：`docs/reference/requirements.md`（已有需求）、`docs/dev/plans/backlog/`（既有积压）、`docs/reference/auth-not-enforced.md`、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固）。
 
@@ -25,9 +26,9 @@
 | # | 方向 | 要点 | 依据 |
 |---|------|------|------|
 | S1 | **非回环监听默认拒绝启动（fail-closed）** | 监听非 127.0.0.1 且 `auth_enabled=0` 时，从「打印警告」升级为「拒绝启动，除非显式 `--insecure-no-auth`」。现状是警告极易被忽略，等于默认裸奔 | auth-not-enforced.md 自述「部署公网前必须开启」，但机制上没有任何强制力；这是当前最高危单点 |
-| S2 | **WS Origin 校验（CSWSH 防护）** | 主终端/ACP 三个 WS 入口补 Origin 白名单比对，与代理子域名已有逻辑收敛为同一个共享校验函数 | 代理入口已有先例，主入口没有——同一判断两处不一致正是工程准则 §7① 要抽共享函数的场景 |
+| S2 | **WS Origin 校验（CSWSH 防护）** | ~~主终端/ACP 三个 WS 入口补 Origin 白名单比对~~ **✅ 已落地 2026-09-26 复审：仅代理入口** | 落地范围：`src/proxy/mod.rs:158-187` 的 `origin_matches_host()`（host 一致性比对 + 畸形 Origin 拒绝 + 单测），服务于 `/proxy/{port}/ws` 子路径。**未落地**：`src/api/mod.rs:39-44` 的三个主 WS 入口（`ws_terminal_handler` / `ws_external_terminal_handler` / `ws_acp_handler`）仍无 Origin 校验——收敛为同一共享函数的目标只完成一半，剩余部分归 `2026-09-26-security-hardening-batch.md` |
 | S3 | **收紧 CORS + 最小化 CSRF 面** | `CorsLayer::permissive()` 改为从 `.env.local` 读取的 Origin 白名单；变更类请求评估加 Origin/Referer 断言 | 当前依赖 SameSite=Lax 单点防御，浏览器策略一旦变化即失效 |
-| S4 | **自更新完整性校验** | 一键更新下载产物校验签名或至少 sha256 摘要比对，失败拒绝替换二进制 | 无校验的自更新 = 供应链攻击面；「自动重启」链路已通，补校验是纯收益 |
+| S4 | **自更新完整性校验** | ~~一键更新下载产物校验签名或至少 sha256 摘要比对~~ **✅ 已落地** | `src/update.rs:445` `verify_digest()` 校验 `sha256:` 摘要（未知算法/不匹配均拒绝），`src/update.rs:415-418` 接入下载链路；无摘要发布时不静默放行。单测覆盖三条分支 |
 | S5 | **敏感操作审计日志** | git push/强推、文件写/删、agent 配置变更、代理端口开通写入有界审计表（或结构化日志），设置页可查 | port-forward 计划 P4 已列「审计日志」待办，本项把它推广为全局约定；也是多设备使用时的「谁动了我的会话」答案 |
 | S6 | **业务端点分级限流** | 文件上传/下载、git 操作、agent 配置测试等重端点加粗粒度限流（复用 `LoginGuard` 的滑动窗口原语） | 现有限流只覆盖登录面；auth 关闭场景下这些端点是资源与数据双重暴露口 |
 
@@ -37,8 +38,8 @@
 
 | # | 方向 | 要点 | 依据 |
 |---|------|------|------|
-| F1 | **Token/成本记账面板** | 从 ACP session_update 的 usage 信息累积每会话/每项目/每日的 token 与估算成本，会话行与设置页呈现 | 工时记账（`work_ms`）已打通「turn 级增量写库」的管道，usage 记账是同一模式的第二次复用；AI agent 用户最痛的盲区就是「这会话烧了多少钱」 |
-| F2 | **审批策略分级（降低审批疲劳）** | 按项目配置权限策略：只读命令自动放行 / 写操作仍人工审批 / 高危（push/rm）强制审批；复用 `session/request_permission` 的 `options` 语义 | Claude Code 的 permission modes（plan/accept-edits/auto）已验证该交互；OmniTerm 已有审批横幅 + 回收通知链路，补的是「策略层」而非「通道层」 |
+| F1 | **Token/成本记账面板** | ~~从 ACP session_update 的 usage 信息累积每会话/每项目/每日的 token 与估算成本~~ **✅ 已落地（呈现层）** | `frontend/src/components/Chat/UsageIndicator.tsx`：token 数 + 成本展示（多币种 ISO 4217 符号映射，未命中币种回退「代码+数值」）+ 上下文占用环；通道 `chatStore.ts` 的 `setUsage`。**注意边界**：当前是会话内实时呈现，未做每项目/每日的持久化累积与汇总面板——若要汇总记账另起计划 |
+| F2 | **审批策略分级（降低审批疲劳）** | ~~按项目配置权限策略：只读自动放行/写操作人工审批/高危强制审批~~ **✅ 已落地（超时策略形态）** | `src/acp/permission.rs:121-127` `pick_auto_option` + abort/auto/wait 三模式（2026-09-21 用户拍板 allow_always→allow_once 优先级），见 `docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md`。**注意边界**：落地形态是「超时自动处置策略」而非「按项目分级的权限策略」；若要做 project 级策略分层，另起计划 |
 | F3 | **任务状态通知落地** | requirements 中 ⚪ 通知功能的具体化：turn 结束/异常退出/长时间无输出 → 浏览器 Notification API + 可选 webhook（URL 配置走 settings 表） | 检测方式可先简后繁：ACP turn 状态天然有界事件；pty 侧用「输出静默时长 + 进程存活」双信号，不做 CPU 监控 |
 | F4 | **聊天历史全文搜索 + 导出** | SQLite FTS5 索引 chat_messages，聊天面板顶部搜索；单会话导出 Markdown | 会话归档已落地，归档后的检索是其自然续作；FTS5 是 SQLite 内建模块，无新依赖 |
 | F5 | **命令面板（Ctrl+K）** | 全局快速跳转：项目/会话/文件/动作；纯前端，数据从既有 store 派生 | 多会话舰队场景下鼠标点树的成本随会话数线性上涨；此类面板是低成本高感知的效率杠杆 |
@@ -62,6 +63,8 @@
 
 ## 3. 建议推进顺序与理由
 
+> 以下为 2026-09-01 原始建议；2026-09-26 复审后的实际顺序以 `docs/dev/plans/2026-09-26-security-hardening-batch.md` 与 `docs/dev/plans/backlog/improvement-directions-remaining.md` 为准。
+
 1. **S1 + S2 + S4**（一个安全批次）：三者都是「小改动、大信任收益」，且互不耦合。S1 消灭默认裸奔，S2/S4 堵住两个具体攻击面。预计合计 < 1 周。
 2. **F1（成本记账）**：管道已被工时记账验证过，是「确定性最高」的新功能，且直接命中产品定位。
 3. **F3（通知）+ F2（审批策略）**：构成「少盯屏也能管舰队」的组合拳；F2 依赖对多实现 `request_permission` 行为的逐一确认（工程准则 §8），需要先做实现差异调研。
@@ -78,3 +81,29 @@
 - 每个落地方向另起独立实施计划（`docs/dev/plans/YYYY-MM-DD-*.md`）。
 - S 系落地后回写 `docs/reference/auth-not-enforced.md` 现状表；F 系需求确认后登记 `docs/reference/requirements.md`（该文件仅人工明确要求时更新）。
 - 功能性落地须补 `CHANGELOG.md` 条目；`docs/dev/plans/backlog/` 中与本文重叠项（Windows、rmux）不重复登记。
+
+## 6. 复审记录（2026-09-26）
+
+| 方向 | 复审结论 | 证据 / 去向 |
+|---|---|---|
+| S1 fail-closed | ❌ 未落地，依旧有效 | `src/main.rs:1035-1043` 仍仅 `tracing::warn!`；无 `--insecure-no-auth` flag → 归入 2026-09-26-security-hardening-batch Phase 1 |
+| S2 WS Origin | ⚠️ 半落地 | 代理入口已落地 `src/proxy/mod.rs:158-187`；三个主 WS 入口（`src/api/mod.rs:39-44`）无校验 → 归入 2026-09-26-security-hardening-batch Phase 2（收敛为共享校验函数） |
+| S3 CORS 收紧 | ❌ 未落地，依旧有效 | `src/main.rs:987` 仍 `CorsLayer::permissive()` → 2026-09-26-security-hardening-batch Phase 3 |
+| S4 自更新校验 | ✅ 已落地 | `src/update.rs:445` `verify_digest()` + 三条单测 |
+| S5 审计日志 | ❌ 未落地，依旧有效 | 无审计表/结构化日志 → 2026-09-26-security-hardening-batch Phase 4 |
+| S6 端点限流 | ❌ 未落地，依旧有效 | 仅登录面 `src/auth/rate_limit.rs` `LoginGuard` → 2026-09-26-security-hardening-batch Phase 5（价值待评估，端点可能已在 auth 保护下） |
+| F1 成本记账 | ✅ 已落地（呈现层） | `frontend/src/components/Chat/UsageIndicator.tsx` + `chatStore.ts` `setUsage`；汇总面板模式未做 |
+| F2 审批策略 | ✅ 已落地（超时策略形态） | `src/acp/permission.rs:121-127`；project 级分层未做 |
+| F3 通知 | ❌ 未落地 | 无 Notification API / webhook → backlog |
+| F4 FTS 搜索+导出 | ❌ 未落地 | 无 FTS 索引、无导出 → backlog |
+| F5 命令面板 | ❌ 未落地 | 无 Ctrl+K 面板 → backlog |
+| D1 HTTPS | ❌ 未落地 | 无 TLS/ACME 依赖 → backlog |
+| D2 部署标准化 | ⚠️ 半落地 | 已有 `docker-compose.yml`；反代示例与文档未系统化 → backlog |
+| D3 备份/恢复 | ❌ 未落地 | 无 `VACUUM INTO` 导出 → backlog |
+| D4 亮色终端 | ❌ 未落地 | 终端配色未联动主题 → backlog |
+| D5 内联编辑 | ❌ 未落地 | FileManager 无编辑态 → backlog |
+| D6 rmux 双引擎 | ⏸ 维持 | `docs/reference/requirements.md:82-86` 待办未动，不重复登记 |
+| D7 Windows daemon | ⏸ 维持 | `docs/reference/requirements.md:90-94` 待办未动，不重复登记 |
+| D8 移动端 | ⏸ 部分承接 | 已有 `docs/dev/plans/backlog/pty-mobile-termux-feel.md`，不重复展开 |
+
+**复审方法**：逐项 grep/read 源码与 migration 验证，不采信本文原始描述。工程准则 §8 相关项（F1/F2 的 ACP 字段差异）在复审中确认为「已落地的实现有兜底」，但沉淀工作仍缺，见 backlog。
