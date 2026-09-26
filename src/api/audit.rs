@@ -296,25 +296,19 @@ pub async fn list_recent(pool: &SqlitePool, limit: i64) -> Result<Vec<AuditEntry
 
 /// 把字段截到 `max_bytes` 并按字符边界切，尾部标注省略量。
 ///
-/// 返回的串**一定**是合法 UTF-8：`char_indices` 只会停在字符起点。
-/// 标注形如 `…（已省略 N 字符）`——与 turn_accumulator 的中段折叠标记风格
-/// 一致，读的人一看就知道内容被截过、截了多少。
+/// 返回的串**一定**是合法 UTF-8：只在字符起点切。
+/// 标注形如 `…(truncated N chars omitted)`，与 turn_accumulator 的中段折叠
+/// 标记风格一致，读的人一看就知道内容被截过、截了多少。
+///
+/// **上限包含标注本身**。标注长度随省略量位数变化（4 位与 7 位差 3 字节），
+/// 无法预估预留值 ⇒ 交给[`truncate_with_suffix`]迭代到不动点。
 fn truncate_field(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
     }
-    let mut kept = String::with_capacity(max_bytes);
-    let mut omitted = 0usize;
-    for ch in s.chars() {
-        // 预留尾部标注的字节空间，避免「截完再标注又把上限破掉」。
-        if kept.len() + ch.len_utf8() > max_bytes.saturating_sub(OMISSION_TAG_BYTES) {
-            omitted += 1;
-            continue;
-        }
-        kept.push(ch);
-    }
-    // omitted 统计的是「被跳过的字符数」；串尾被跳过的字符可能不止 omitted 个
-    // 已计入，但标签里的 N 需与真实省略量一致——上面 continue 时已逐个计入。
+    let (kept, omitted) = truncate_with_suffix(s, max_bytes, |n| {
+        format!("{OMISSION_TAG_PREFIX}{n}{OMISSION_TAG_SUFFIX}")
+    });
     format!("{kept}{OMISSION_TAG_PREFIX}{omitted}{OMISSION_TAG_SUFFIX}")
 }
 
@@ -323,35 +317,70 @@ fn truncate_field(s: &str, max_bytes: usize) -> String {
 /// detail 是 JSON 文本。**不能**往里塞中文标签（会让它不再是合法 JSON），
 /// 也不能简单丢弃后半段就完事——那样下游无法区分「本来就到此结束」与「被
 /// 剔了」。策略：保留头部片段，随后追加一个**独立可解析**的省略字段
-/// `,"__omitted_chars__":N}`，使结果**始终**是合法 JSON 的一部分：
+/// `,"__omitted_chars__":N}`：
 ///
 /// * 保留段恰好在字段边界结束 ⇒ 结果就是合法 JSON；
 /// * 保留段落在 JSON 中间 ⇒ 结果是「被截断的 JSON 片段 + 省略字段」，
 ///   读口按文本展示，不承诺可 parse（但省略量仍然显式可读）。
 ///
 /// 省略量按**字符数**计（与[`truncate_field`]一致），守恒断言见单测。
+/// 同样迭代到不动点 ⇒ **上限含省略标记**：修复前只裁 kept、不给标记留空间，
+/// detail 恒定超限 23–27 字节（2026-09-27 独立审查发现）。
 fn truncate_detail(detail: &str, max_bytes: usize) -> String {
     if detail.len() <= max_bytes {
         return detail.to_string();
     }
-    let mut kept = String::with_capacity(max_bytes);
+    let (kept, omitted) =
+        truncate_with_suffix(detail, max_bytes, |n| format!(",\"__omitted_chars__\":{n}}}"));
+    format!("{kept},\"__omitted_chars__\":{omitted}}}")
+}
+
+/// 截断到「保留段 + 标注」总体不超过 `max_bytes`。
+///
+/// `suffix_of` 给出标注构造方式（不同字段格式不同：`target` 用人读标签，
+/// `detail` 用可解析 JSON 字段），本函数只负责迭代收敛：
+/// 每轮用上一轮的 `omitted` 构造标注、按其**真实**长度重算预算。
+/// `omitted` 单调不减 ⇒ 必然收敛（`take_chars_within` 的 omitted 是预算的
+/// 单调不增函数，与 suffix 长度的单调性合成一个递减迭代）。
+fn truncate_with_suffix(
+    s: &str,
+    max_bytes: usize,
+    suffix_of: impl Fn(usize) -> String,
+) -> (String, usize) {
+    // 种子：先按整个上限数一遍，得到一个 omitted 初值（标注至少占几个字节）。
+    let (_, mut omitted) = take_chars_within(s, max_bytes);
+    let kept = loop {
+        let budget = max_bytes.saturating_sub(suffix_of(omitted).len());
+        let (k, o) = take_chars_within(s, budget);
+        if o == omitted {
+            break k;
+        }
+        omitted = o;
+    };
+    (kept, omitted)
+}
+
+/// 按字符边界从 `s` 头部取尽量多的字符，使结果**字节数 ≤ `budget`**。
+///
+/// 返回 `(保留串, 省略字符数)`；两者满足 `保留字符数 + 省略字符数 ==
+/// s.chars().count()`（守恒，§P1 要求）。
+fn take_chars_within(s: &str, budget: usize) -> (String, usize) {
+    let mut kept = String::with_capacity(budget.min(s.len()));
     let mut omitted = 0usize;
-    for ch in detail.chars() {
-        if kept.len() + ch.len_utf8() > max_bytes {
+    for ch in s.chars() {
+        if kept.len() + ch.len_utf8() > budget {
             omitted += 1;
         } else {
             kept.push(ch);
         }
     }
-    format!("{kept},\"__omitted_chars__\":{omitted}}}")
+    (kept, omitted)
 }
 
-/// `truncate_field` 尾部标注的前缀（含省略号）。
+/// [`truncate_field`] 尾部标注的前缀（含省略号）。格式的真源，测试亦引用。
 const OMISSION_TAG_PREFIX: &str = "…(truncated ";
-/// `truncate_field` 尾部标注的后缀。
+/// [`truncate_field`] 尾部标注的后缀。
 const OMISSION_TAG_SUFFIX: &str = " chars omitted)";
-/// 尾部标注自身的长度：截断时必须给它留位置，否则标注会把字段顶回超限。
-const OMISSION_TAG_BYTES: usize = OMISSION_TAG_PREFIX.len() + OMISSION_TAG_SUFFIX.len() + 4;
 
 #[cfg(test)]
 mod tests {
@@ -422,7 +451,7 @@ mod tests {
 
     #[test]
     fn truncate_detail_reports_exact_omitted_chars() {
-        // 守恒（§P1）：detail 的省略量必须与实际丢弃的字符数一致。
+        // 守恒（§P1）：省略量必须与实际丢弃的字符数一致。
         let input = "b".repeat(MAX_AUDIT_DETAIL_BYTES + 37);
         let out = truncate_detail(&input, MAX_AUDIT_DETAIL_BYTES);
         let kept = out.chars().filter(|c| *c == 'b').count();
@@ -431,8 +460,12 @@ mod tests {
             .next()
             .and_then(|tail| tail.trim_end_matches('}').parse().ok())
             .expect("省略字段应可解析");
-        assert_eq!(kept + omitted, input.len());
-        assert_eq!(omitted, 37);
+        // 只断言守恒，**不断言具体数字**：省略量 = 输入 - 保留，而保留段要给
+        // 省略标记让位（标记自身长度又依赖省略量位数）⇒ 具体值随标记长度浮动。
+        // 修复前此处写死 37（那时光知道「输入比上限多 37」，不知道标记要占位）。
+        assert_eq!(kept + omitted, input.len(), "截断必须守恒");
+        assert!(omitted >= 37, "至少要丢掉超出上限的那 37 个，实际 {omitted}");
+        assert!(out.len() <= MAX_AUDIT_DETAIL_BYTES, "含标记也不得超上限");
     }
 
     #[test]
@@ -440,14 +473,59 @@ mod tests {
         // 复现 Phase 3 blocker B1 的同型：字节索引切在字符中间即 panic。
         let input = "中".repeat(MAX_AUDIT_DETAIL_BYTES / 3 + 50);
         let out = truncate_detail(&input, MAX_AUDIT_DETAIL_BYTES);
-        assert!(!out.is_empty());
-        assert!(out.len() > MAX_AUDIT_DETAIL_BYTES || out.ends_with('}'));
+        // 三条不变量，缺一不可：
+        // ① 必须被截断（输出远小于输入）；
+        assert!(out.len() < input.len(), "超限输入必须被截断");
+        // ② 截断后必须仍在上限内——**含**尾部省略标记。原断言写的是
+        //    `len > MAX || ends_with('}')`，超限时左支为真 ⇒ 恒过，
+        //    正是装饰性断言（2026-09-27 独立审查发现，见修复记录）。
+        assert!(
+            out.len() <= MAX_AUDIT_DETAIL_BYTES,
+            "截断后（含省略标记）不得超上限：实际 {} > {}",
+            out.len(),
+            MAX_AUDIT_DETAIL_BYTES
+        );
+        // ③ 省略标记必须在，且读得出省略量。
+        assert!(out.contains("\"__omitted_chars__\":"), "got: {out}");
     }
 
     #[test]
     fn truncate_detail_keeps_short_values_verbatim() {
         let d = r#"{"path":"x"}"#;
         assert_eq!(truncate_detail(d, MAX_AUDIT_DETAIL_BYTES), d);
+    }
+
+    #[test]
+    fn truncate_detail_stays_within_limit_for_ascii_multibyte_and_huge() {
+        // I-1 回归：detail 的上限必须**含**省略标记。修复前恒定超限 23–27B。
+        for (name, input) in [
+            ("just over", "a".repeat(MAX_AUDIT_DETAIL_BYTES + 1)),
+            ("way over", "a".repeat(MAX_AUDIT_DETAIL_BYTES * 50)),
+            ("multibyte", "中".repeat(MAX_AUDIT_DETAIL_BYTES)),
+            ("multibyte just over", "中".repeat(MAX_AUDIT_DETAIL_BYTES / 3 + 1)),
+        ] {
+            let out = truncate_detail(&input, MAX_AUDIT_DETAIL_BYTES);
+            assert!(
+                out.len() <= MAX_AUDIT_DETAIL_BYTES,
+                "{name}: 输出 {}B 超过上限 {MAX_AUDIT_DETAIL_BYTES}B",
+                out.len()
+            );
+        }
+    }
+
+    #[test]
+    fn truncate_field_stays_within_limit_across_omitted_digit_counts() {
+        // I-2 回归：省略量的位数不定（4 位 / 5 位 / 7 位），标注长度随之变化。
+        // 修复前按「4 位」预留，omitted ≥ 10000 时 target 仍超 1 字节。
+        for extra in [1usize, 100, 5_000, 20_000, 100_000] {
+            let input = "b".repeat(MAX_AUDIT_TARGET_BYTES + extra);
+            let out = truncate_field(&input, MAX_AUDIT_TARGET_BYTES);
+            assert!(
+                out.len() <= MAX_AUDIT_TARGET_BYTES,
+                "extra={extra}: 输出 {}B 超过上限 {MAX_AUDIT_TARGET_BYTES}B",
+                out.len()
+            );
+        }
     }
 
     // ── 动作枚举稳定性 ──
