@@ -71,6 +71,7 @@ src/
 ├── ws/
 │   ├── mod.rs            # WS 入口挂载声明 + **CSWSH 校验收敛点**（`enforce_ws_origin` / `origin_matches_host`，见「WS Origin 校验」）
 │   ├── origin_guard.rs   # CSWSH 防御：Origin host ↔ Host 一致性判定（纯函数 + 入口级 predicate），三主 WS 入口与 proxy 共用唯一真源
+│   ├── cors_policy.rs    # CORS 判据真源：同源/白名单/无 Origin 三规则（复用 origin_matches_host）+ 白名单解析上限，见「CORS 策略」
 │   ├── terminal.rs       # 终端 WS 入口：共享协议类型（ClientControl/ServerControl）+ 按 runtime_kind 分发到 engine/*/terminal_ws
 │   └── acp.rs            # WebSocket ACP bridge: session_update broadcast ↔ WS, prompt/cancel commands
 ├── utils/mod.rs          # 空壳死模块（1 字节，全仓零调用；`sanitize_path` 实际在 `fs/mod.rs:54`，不在本目录）——待清理
@@ -344,7 +345,7 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 
 ## WS Origin 校验（CSWSH 防御，收敛点）
 
-**威胁**：用户在浏览器登录 OmniTerm 后访问恶意网页 evil.com，evil.com 的 JS 可对 OmniTerm 的 WS 入口发起 `new WebSocket(...)` 握手。浏览器自动携带已登录 cookie，而 **`SameSite=Lax` 不防 WS 握手**（它只挡跨站 POST 表单类导航），恶意页面因此能借受害者会话驱动终端 / 提交 agent prompt。**WS 握手也不吃 CORS 的同源赦免**——所以这条防线既独立于 cookie 策略，也独立于 `CorsLayer`（CORS 收紧见 `docs/dev/plans/2026-09-26-security-hardening-batch.md` D3，两条防线不得互相替代）。
+**威胁**：用户在浏览器登录 OmniTerm 后访问恶意网页 evil.com，evil.com 的 JS 可对 OmniTerm 的 WS 入口发起 `new WebSocket(...)` 握手。浏览器自动携带已登录 cookie，而 **`SameSite=Lax` 不防 WS 握手**（它只挡跨站 POST 表单类导航），恶意页面因此能借受害者会话驱动终端 / 提交 agent prompt。**WS 握手也不吃 CORS 的同源赦免**——所以这条防线既独立于 cookie 策略，也独立于 `CorsLayer`（CORS 收紧见本文「CORS 策略」小节，两条防线不得互相替代）。
 
 **判据与收敛点**：`src/ws/origin_guard.rs` 是**唯一真源**（`enforce_ws_origin(&HeaderMap)` 入口级 predicate + `origin_matches_host(&HeaderValue, &str)` 纯函数）。**五个** WS 入口全部经它校验，在 `on_upgrade` **之前**做出决定：
 
@@ -367,6 +368,34 @@ git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26
 **为什么不用静态 Origin 白名单**：代理子域形态（`{port}.{base_host}`）下 host 随被代理端口动态变化，白名单无法枚举；host 一致性比对天然覆盖，且不需要新增配置项。翻盘条件：若未来前端部署域与 API 域分离且**非**子域同 host 模式，改回显式白名单（须四处入口同改，沉淀进 `.env.local`）。
 
 **多实现边界（§8）**：curl / Node 22 `WebSocket` / 原生 WS 客户端均不发 Origin，已实测仍走升级路径（101）；浏览器三种形态（同源、同源不同端口、代理子域同 host）均放行。参考 code-server `ensureOrigin`。
+
+## CORS 策略（默认仅同源 + 显式白名单）
+
+**威胁**：恶意网页 evil.com 在用户浏览器里对 OmniTerm 发 `fetch`/XHR。`CorsLayer::permissive()` 对所有来源回 `Access-Control-Allow-Origin: *`（**不含 credentials**，故跨源请求带不了 cookie，读到的也只是无凭据信息面——`/auth/check`、`/system/info`（泄露 `proxy_domain`）等）。收紧后跨源读不到任何响应。
+
+**层序**（`src/main.rs` app 组装处，「后加的先执行」）：`proxy_host_mw`（仅 `base_host` 配置时，最外层）→ TraceLayer → **CorsLayer** → Router/fallback。即 CORS 层包住全部 OmniTerm 自身端点（`/api/v1/*` 与 fallback 静态文件），但**不包**子域反代流量（子域流量被 `proxy_host_mw` 先拦走）。
+
+**判据真源**：`src/ws/cors_policy.rs`。`build_cors_layer()`（`src/main.rs`，纯函数便于穷举单测）用 `AllowOrigin::predicate` 一次实现三条规则的并集——tower-http 无法直接并集两种策略，但一个 predicate 闭包可以：
+
+| 规则 | 判据 | 说明 |
+|---|---|---|
+| 无 `Origin` | 放行 | **框架保证**而非我们的谓词：`AllowOrigin::to_future` 是 `origin.filter(...)`，Origin 缺失时 predicate 压根不被调用。curl/脚本/原生客户端不在浏览器同源策略管辖内 |
+| Origin host ↔ Host host 一致 | 放行 | 复用 **`crate::ws::origin_matches_host`**（WS 入口同一份判据，忽略端口、大小写不敏感）。同时天然覆盖**代理子域形态**（`{port}.{base_host}` 下前端与 API 同 host） |
+| 逐字命中 `OMNITERM_CORS_ALLOWED_ORIGINS` | 放行 | **反代部署唯一活路**：nginx 默认 `proxy_set_header Host $proxy_host` 把 Host 改成上游名 ⇒ 同源判定必失败，必须显式声明「我的前端域是 X」 |
+
+**配置**：`--cors-allowed-origins` / `OMNITERM_CORS_ALLOWED_ORIGINS`（逗号分隔完整 origin，如 `https://term.example.com,http://192.168.1.10:9778`）。**逐字写浏览器地址栏里的那个 origin，含 scheme 与端口**——不做 scheme 补全、不改大小写、不补默认端口（CORS 按字节比对）。上限 `MAX_ORIGIN_ENTRIES=32` 条、单条 `MAX_ORIGIN_BYTES=256` 字节，超限 warn 并保留/丢弃（§P1：解析是一次性的，不是累积结构，但超限几乎必是配置错误，静默丢弃尾条会让「配了却没生效」难排查）。空段跳过、去重保序。**不推导、不兜底**：dev.sh 只传 `-p` 不 export `BACKEND_PORT`，dev 不传 `--proxy-domain` ⇒ 后端推不出前端域，缺省即「仅同源」，**不得写死域名兜底**。
+
+**`X-Forwarded-Host` 不作判据**：`CorsLayer` 不读它，且客户端可伪造——不校验反代链路就信任它等于把白名单拱手让给攻击者。
+
+**方法集与 header 集显式列白**（不再 `Any`）：方法 = `GET/POST/PUT/PATCH/DELETE`（由 `src/api/*.rs` 注册的 handler 形态枚举而来），header = `content-type`/`authorization`。**不能省**：`AllowMethods`/`AllowHeaders` 默认 `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，跨源部署下带 `content-type` 的 POST（全部 JSON 接口）会被浏览器拦在预检上。`max_age` 设 0：让白名单变更后浏览器立即按新结果判定（排障时行为可预测）。**不设 `allow_credentials`**：本项目凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，须先过预检，而预检已由上述两条放行），保持 off 也让 `ensure_usable_cors_rules` 的组合断言不可能被触发。
+
+**入口策略分叉（AGENTS §8，勿「顺手统一」）**：同为「Origin host ↔ Host host」判据，**缺 `Host` 时 WS 入口放行、CORS 入口拒绝**。理由不同、不可共用：WS 侧（`origin_guard.rs`）无 Host 的请求只可能是非浏览器畸形流量，放行不扩大攻击面；CORS 侧无 Host 却带 Origin 的请求**无法证明同源**，而 CORS 本就是浏览器侧的读取权管制，按拒绝处理才不出现「无 Host 就放行」的缺口。判定函数 `origin_matches_host` 已共享，**入口策略刻意不共享**。
+
+**反代/缓存注意**：`Vary: Origin` 由 CorsLayer 无条件加上（收紧前是恒定 `Access-Control-Allow-Origin: *`，收紧后变成条件头）⇒ 若 OmniTerm 前面还挂着 CDN / nginx 缓存，必须让缓存尊重 `Vary: Origin`，否则会把「给 origin A 的响应」缓存后吐给 origin B（造成误拒或误放）。白名单**逐字字节匹配，不补 scheme 不改端口** ⇒ 非标端口部署（`https://x.com:8443`）必须把端口写进配置；配错时后端**零 warn**，用户只看到浏览器 CORS 报错，故排查先确认配置值与浏览器地址栏逐字一致。
+
+**边界声明（勿合并）**：CORS 收紧**不能**替代 WS Origin 校验——WebSocket 握手不受 CORS 约束，CSWSH 面仍由 `origin_guard.rs` 独立防御（两条防线）。另注意 CORS 是「**读取权**」防线而非「执行权」防线：跨源简单请求在服务器端**照样执行**，只是浏览器把响应藏起来不让 JS 读（故不能把收紧 CORS 当作 CSRF 防护）。写操作的实际兜底是另一条链：auth 开启时 `SameSite=Lax` 让跨站 fetch 带不上 cookie ⇒ 401；auth 关闭时由 S1（非回环监听 + auth 关闭拒绝启动）收口——**不要**因为「CORS 收紧了」就以为写操作被保护。
+
+**验收实测**（起独立实例 `--cors-allowed-origins` + `Host` 头模拟 nginx 两种模式）：① nginx 默认改写 Host + 配白名单 → 放行；② nginx 改写 Host + 不配白名单 → 无 ACAO（拒绝）；③ `proxy_set_header Host $host` + 浏览器真同源 → 放行（不回归）；④ 配了白名单但 Origin 不在其中 → 拒绝（并集语义：白名单是「额外允许」不是「全放开」）；⑤ 跨源预检 → 空；⑥ WS 403/101 与 `/proxy/` 200 不受影响（它们在 CorsLayer 外或另有防线）。
 
 ## File watcher（`src/api/files_watch.rs`）
 
@@ -579,6 +608,10 @@ start options:
   -d, --daemonize         Run in background (Unix only; errors on Windows), logs appended to ~/.omniterm/<binary>.log; the parent process blocks until the daemon binds the port — on success it prints "OmniTerm vX.Y.Z started in the background — http://host:port (PID)", on failure (port in use / DB unreachable) it prints the error to the terminal and exits non-zero, never silently "succeeding"
       --debug             Force omniterm debug logging (equivalent to RUST_LOG=omniterm=debug, takes precedence over the omniterm level in RUST_LOG)
       --max-upload-body <BYTES>  Max total request body size for file uploads in bytes (default 200 MiB) [env: OMNITERM_MAX_UPLOAD_BODY]
+      --cors-allowed-origins <ORIGINS>  Extra browser origins allowed to read the API cross-origin (comma-separated full origins, max 32 entries × 256 bytes; unset = same-origin only). Required when a reverse proxy rewrites `Host`; see "CORS 策略" [env: OMNITERM_CORS_ALLOWED_ORIGINS]
+      --insecure-no-auth  Accept the risk of non-loopback listening with auth disabled (otherwise startup is refused) [env: OMNITERM_INSECURE_NO_AUTH]
+      --proxy-domain <DOMAIN>  Base domain for subdomain reverse proxy (e.g. `omniterm.lan`) [env: OMNITERM_PROXY_DOMAIN]
+      --proxy-max-body <BYTES>  Max request body size in bytes for the reverse proxy (default 2 MiB) [env: OMNITERM_PROXY_MAX_BODY]
 
 stop / status / reset-auth options:
       --db <DB>           Database connection (used to locate the PID file) [env: OMNITERM_DB]
@@ -618,6 +651,10 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `OMNITERM_HOST` | `127.0.0.1` | 监听地址（等价 `-H`）；Docker 传 `0.0.0.0` 全网暴露 |
 | `OMNITERM_PORT` | `9077` | 监听端口（等价 `-p`） |
 | `OMNITERM_MAX_UPLOAD_BODY` | `209715200`（200 MiB） | 文件上传请求体总量上限，字节（等价 `--max-upload-body`）。files 路由的 `DefaultBodyLimit` 与流式写入的落盘中止阈值共用；超限返回 413 + 明确文案。axum 层限额额外 +1MiB multipart 封装余量，保证超限先由应用层计数触发 |
+| `OMNITERM_CORS_ALLOWED_ORIGINS` | 未设置（= 仅同源） | 允许跨源读取 API 的额外 origin 白名单（等价 `--cors-allowed-origins`）。逗号分隔完整 origin；上限 32 条 / 单条 256 字节，超限 warn 后保留前 N 条或丢弃该条。**同源请求始终放行、无需配置**；仅在反代改写 `Host`（nginx 默认 `proxy_set_header Host $proxy_host`）或前后端不同 host 部署时才需要。不做 scheme 补全与大小写规范化（CORS 按字节比对）。见「CORS 策略」 |
+| `OMNITERM_INSECURE_NO_AUTH` | 未设置（= 拒绝启动） | 非回环监听 + auth 关闭时的显式逃生门（等价 `--insecure-no-auth`，`1/0/true/false`）。不设则 `enforce_listen_auth` fail-closed 拒绝启动，见「Auth 安全模型」 |
+| `OMNITERM_PROXY_DOMAIN` | 未设置（= 无子域名路由） | 子域名反代基础域（等价 `--proxy-domain`），见「Port-forward proxy」 |
+| `OMNITERM_PROXY_MAX_BODY` | `2097152`（2 MiB） | 反代请求体上限，字节（等价 `--proxy-max-body`），见「Port-forward proxy」 |
 | `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
 
 **只认 `OMNITERM_*` 前缀**：通用名 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 已全部弃用且**不再读取**（启动时若检测到会 warn 提示改名）。原因：这些名字会被继承的环境意外命中——开发实例派生的终端里启动 npm 正式版会被 `BIND_ADDR=127.0.0.1:<dev port>` 劫持（报 `Address already in use`），而 `DATABASE_URL` 是用户自己项目里极常见的变量（指向 Postgres 等），会让 omniterm 连错库。部署层改用 `OMNITERM_HOST` + `OMNITERM_PORT`（docker）或命令行参数（dev.sh）。

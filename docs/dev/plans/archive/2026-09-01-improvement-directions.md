@@ -1,7 +1,8 @@
 # OmniTerm 改进方向全景（功能 × 安全）
 
 > 状态：**已归档 · 方向盘点（2026-09-01 建，2026-09-26 复审修订）**——本文只做方向选型与优先级排序，**不构成实施承诺**；任何方向落地前须另起独立实施计划。
-> 复审结论（2026-09-26）：S2/S4/F1/F2 四项已落地（链接触见下），安全缺口 S1/S3/S5/S6 与体验向 F3/F4/F5/D1/D4/D5 **仍未落地、依旧有效**，已拆分为 `docs/dev/plans/2026-09-26-2026-09-26-security-hardening-batch.md`（实施计划）与 `docs/dev/plans/backlog/improvement-directions-remaining.md`（backlog 跟踪）。
+> 复审结论（2026-09-26）：S2/S4/F1/F2 四项已落地（链接触见下），安全缺口 S1/S3/S5/S6 与体验向 F3/F4/F5/D1/D4/D5 **仍未落地、依旧有效**，已拆分为 `docs/dev/plans/2026-09-26-security-hardening-batch.md`（实施计划）与 `docs/dev/plans/backlog/improvement-directions-remaining.md`（backlog 跟踪）。
+> **追记（2026-09-26，Phase 1–3 落地）**：S1 / S2' / S3 三项已实施完毕（fail-closed 启动、WS Origin 校验收敛、CORS 收紧），本表中相应状态以「落地状态」小节为准；S5 / S6 与体验向各项仍未落地。
 > 触发条件：用户要求基于领域知识盘点改进方向。
 > 关联：`docs/reference/requirements.md`（已有需求）、`docs/dev/plans/backlog/`（既有积压）、`docs/reference/auth-not-enforced.md`、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固）。
 
@@ -88,7 +89,7 @@
 |---|---|---|
 | S1 fail-closed | ❌ 未落地，依旧有效 | `src/main.rs:1035-1043` 仍仅 `tracing::warn!`；无 `--insecure-no-auth` flag → 归入 2026-09-26-security-hardening-batch Phase 1 |
 | S2 WS Origin | ⚠️ 半落地 | 代理入口已落地 `src/proxy/mod.rs:158-187`；三个主 WS 入口（`src/api/mod.rs:39-44`）无校验 → 归入 2026-09-26-security-hardening-batch Phase 2（收敛为共享校验函数） |
-| S3 CORS 收紧 | ❌ 未落地，依旧有效 | `src/main.rs:987` 仍 `CorsLayer::permissive()` → 2026-09-26-security-hardening-batch Phase 3 |
+| S3 CORS 收紧 | ✅ 已落地（2026-09-26，`security-hardening-batch` Phase 3） | `permissive()` → 默认仅同源 + 显式 origin 白名单（`OMNITERM_CORS_ALLOWED_ORIGINS`），判据真源 `src/ws/cors_policy.rs`；原「从 `.env.local` 派生白名单」的方案因端口推导不可行改为显式配置，且未做变更类请求的 Origin/Referer 断言（CSRF 侧由 `SameSite=Lax` + S1 fail-closed 兜底，理由见 Phase 3 实施记录） |
 | S4 自更新校验 | ✅ 已落地 | `src/update.rs:445` `verify_digest()` + 三条单测 |
 | S5 审计日志 | ❌ 未落地，依旧有效 | 无审计表/结构化日志 → 2026-09-26-security-hardening-batch Phase 4 |
 | S6 端点限流 | ❌ 未落地，依旧有效 | 仅登录面 `src/auth/rate_limit.rs` `LoginGuard` → 2026-09-26-security-hardening-batch Phase 5（价值待评估，端点可能已在 auth 保护下） |

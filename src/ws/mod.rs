@@ -1,4 +1,5 @@
 pub mod acp;
+pub mod cors_policy;
 pub mod origin_guard;
 pub mod terminal;
 

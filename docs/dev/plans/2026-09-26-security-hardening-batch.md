@@ -1,6 +1,6 @@
 # 安全加固批次：fail-closed 监听 / WS Origin 收敛 / CORS 收紧 / 审计日志 / 端点限流
 
-> 状态：**Phase 1–2 已实施（2026-09-26）**；Phase 3–5 待实施
+> 状态：**Phase 1–3 已实施（2026-09-26）**；Phase 4–5 待实施
 > 触发条件：修改 `src/main.rs`（启动校验 / CORS layer）、`src/ws/terminal.rs` 与 `src/ws/acp.rs`（WS 入口）、`src/api/mod.rs`（路由挂载）、`src/api/files.rs` / `src/api/git.rs`（审计与限流触点）、新增审计表 migration 前**必读**
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审——该盘点的安全项 S1/S3/S5/S6 未落地、S2 半落地，本计划承接剩余部分
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状表，本计划落地后须回写）、`docs/architecture/backend.md`（分层约定）、`docs/dev/performance-and-safety.md` §P1（审计表上限）、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固与 Origin 先例）
@@ -103,10 +103,11 @@
 
 - [x] `cargo test enforce_listen_auth`（四格真值表全过）
 - [x] `cargo test origin`（WS 校验：同源/跨站/无 Origin）
+- [x] `cargo test cors`（CORS：同源/跨站/无 Origin/白名单/预检，predicate 12 + layer 9）
 - [ ] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）
-- [ ] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
+- [x] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
 - [ ] 手动：非回环 bind + auth 关闭时启动失败且错误信息可见（前台 + `--daemonize` 两路）
-- [ ] 手动（Phase 3 新增，勘察 D3 校正 6）：nginx `proxy_set_header Host $host` 反代后跨源被拒；显式配 origin 后放行；同源放行不回归（embedded 形态 + 移动端真机）
+- [x] 手动（Phase 3 新增，勘察 D3 校正 6）：nginx `proxy_set_header Host $host` 反代后跨源被拒；显式配 origin 后放行；同源放行不回归（embedded 形态 + 移动端真机）——反代两态用 `Host` 头等价模拟实测通过；embedded 形态见下条；**移动端真机未测**（无真机，列入后续手动回归）
 - [ ] `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
 - [ ] 前端无改动项（Phase 4 的 settings 读口除外，需 `tsc -b`）
 
@@ -186,3 +187,43 @@
 **本条记录的教训（写入 backend.md 收敛点处）**：**判据共享 ≠ 调用点覆盖**。前四个入口收敛后我曾据「函数已入共享模块」宣称「四入口全覆盖」，漏掉了绕过 `dispatch_proxy` 的子域名分支。安全加固要在**每条**到达 `on_upgrade`/`relay` 的路径上逐一确认调用点。
 
 **修复后回归**：`cargo fmt` / `clippy -D warnings` 零问题；`cargo test --workspace` 566 单测 + 8 + 2 集成全绿（`cargo test origin` 21 个）。
+
+---
+
+## Phase 3 实施记录（2026-09-26）
+
+**产出**：`CorsLayer::permissive()` 替换为 `build_cors_layer()`（`src/main.rs` 纯函数，便于穷举单测）；判据真源落 `src/ws/cors_policy.rs`；新增 `--cors-allowed-origins` / `OMNITERM_CORS_ALLOWED_ORIGINS`。层序不变（`proxy_host_mw`[仅 base_host] → TraceLayer → **CorsLayer** → Router/fallback）——CORS 层包住全部自身端点但不包子域反代流量。
+
+**三条规则并集**（`AllowOrigin::predicate` 一个闭包实现，tower-http 无法直接并集两种策略）：
+
+| 规则 | 判据 | 性质 |
+|---|---|---|
+| 无 `Origin` | 放行 | **框架保证**：`AllowOrigin::to_future` 是 `origin.filter(...)`，Origin 缺失时 predicate 不被调用。非浏览器客户端不在同源策略管辖内 |
+| Origin host ↔ Host host | 放行 | 复用 **WS 入口同一份 `origin_matches_host`**（§7① 同一判断不复制），忽略端口、大小写不敏感；天然覆盖代理子域形态 |
+| 逐字命中白名单 | 放行 | nginx 默认改写 `Host` 时唯一活路 |
+
+**单测 21 个**（`cargo test cors`，12 predicate + 9 layer 级）。layer 级测试起真实 `CorsLayer` 打真实请求——**只测谓词不足以证明行为**：「无 Origin 放行」来自框架而非我们的代码，必须打层才看得到。
+
+**一个被单测逮到的实现缺口**：`AllowMethods` / `AllowHeaders` 默认为 `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`/`-Headers`，白名单部署下带 `content-type` 的 POST（全部 JSON 接口）会被浏览器拦在预检上。**dev 同源永不 preflight，手动验证发现不了**——纯靠 `cors_layer_preflight_answers_allowed_methods_and_headers` 这条测试兜住。补 `GET/POST/PUT/PATCH/DELETE` + `content-type`/`authorization`（方法集由 `src/api/*.rs` 注册的 handler 形态枚举而来）。
+
+**实测六场景**（独立实例，`Host` 头模拟 nginx 两态 + dev 环境三态）：
+1. nginx 默认 `Host $proxy_host` + 配白名单 → `access-control-allow-origin` 回显 ✅
+2. nginx 改写 Host + **不**配白名单 → 无 ACAO（拒绝）✅
+3. nginx `Host $host` + 浏览器真同源 → 放行（不回归）✅
+4. 配了白名单但 Origin 不在其中 → 拒绝（并集语义：白名单是「额外允许」不是全放开）✅
+5. 跨源预检 → 空；同源预检 → 方法/header/max-age 齐全 ✅
+6. WS 403 / 101 与 `/proxy/` 200 不受影响 ✅
+另：dev 环境 `./dev.sh restart` 后 curl 200、vite proxy 200、同源带 Origin 200+ACAO、跨站带 Origin 200 无 ACAO。
+
+### 实施偏差与勘察补充（就地记录）
+
+1. **`max_age` 设 0**（计划未提）：让白名单变更后浏览器立即按新结果判定，排障时行为可预测。本服务没有「每会话重复 preflight」的成本。
+2. **不开 `allow_credentials`**（计划未提）：本项目凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，须先过预检，而预检已由同源/白名单分支放行）。保持 off 顺带让 `ensure_usable_cors_rules` 的组合断言不可能被触发（credentials + `Any` 会在 `poll_ready` panic）。
+3. **入口策略分叉须沉淀（AGENTS §8）**：同为「Origin host ↔ Host host」判据，**缺 `Host` 时 WS 放行、CORS 拒绝**。判定函数共享，入口策略刻意不共享——理由已写进 `backend.md`，勿「顺手统一」。
+4. **前端确认真零跨源调用**：全相对路径（`api/client.ts` `BASE='/api/v1'`、`useAcpChat.ts` 用 `window.location.host`、`useFileWatcher.ts` SSE 相对），`frontend/src` 内 `http(s)://` 命中全是 GitHub 链接/i18n/测试夹具；唯一跨形态是 `proxyUrl.ts` 子域绝对 URL（`window.open` 导航，非 fetch，且被 `proxy_host_mw` 先拦）。唯一非简单 Content-Type 是 multipart 上传 → 已被 `allow_headers: content-type` 覆盖。
+5. **`/proxy/{port}` 路径前缀流量确实穿过 CorsLayer**（与子域流量不同）：跨源 fetch 打它现在被拒——这是收紧目的（信息面收窄），不是回归。
+6. **顺手补 Phase 1 遗留文档欠账**：`--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH` 自落地起就未登记进 `backend.md` CLI 块与 env 表，本轮同表改动一并补齐（连同 `--proxy-domain` / `--proxy-max-body`）。
+
+**验收勾销**：`cargo test cors` ✅（21 个）/ 反代两态实测 ✅ / 同源放行不回归 ✅ / dev 不打断 ✅ / clippy+fmt+全量 587 单测 ✅。
+
+**文档闭环待办**（本轮已做）：`backend.md`（新增「CORS 策略」小节 + CLI/env 登记）、`auth-not-enforced.md`（CSWSH 段后补 CORS 段 + 影响表行 + 相关文件）、`CHANGELOG.md`（`[security]`/`[api]` 条目，含反代白名单影响面）。**另需更新**：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 的 S3 状态仍标「未落地」。

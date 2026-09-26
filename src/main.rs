@@ -23,7 +23,7 @@ mod test_utils;
 use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::serve::ListenerExt;
@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer, MaxAge};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -153,6 +153,15 @@ struct StartArgs {
     /// (default 200 MiB; e.g. `--max-upload-body 524288000`).
     #[arg(long, env = "OMNITERM_MAX_UPLOAD_BODY")]
     max_upload_body: Option<usize>,
+
+    /// Extra browser origins allowed to read the API cross-origin (comma-separated,
+    /// e.g. `https://term.example.com,http://192.168.1.10:9778`). Same-origin requests
+    /// are always allowed without configuring this. Needed when a reverse proxy rewrites
+    /// `Host` (nginx default `proxy_set_header Host $proxy_host`), where the browser's
+    /// `Origin` no longer matches the `Host` OmniTerm sees. Unset = same-origin only.
+    /// Maximum 32 entries, each up to 256 bytes; no derivation, no built-in fallback.
+    #[arg(long, env = "OMNITERM_CORS_ALLOWED_ORIGINS")]
+    cors_allowed_origins: Option<String>,
 }
 
 #[derive(Clone)]
@@ -996,7 +1005,9 @@ fn main() -> anyhow::Result<()> {
                 app.fallback(embedded_static_handler)
             };
 
-            let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
+            let app = app
+                .layer(build_cors_layer(args.cors_allowed_origins.as_deref()))
+                .layer(TraceLayer::new_for_http());
 
             // 子域名代理：仅配置 base_host 时挂最外层 Host 路由中间件。
             // layer 顺序「后加的先执行」，加在 CorsLayer/TraceLayer 之后 = 最外层，
@@ -1147,6 +1158,45 @@ fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
     }
 }
 
+/// 构造 CORS 层：默认仅同源 + 显式 origin 白名单（S3）。
+///
+/// 取代此前的 `CorsLayer::permissive()`（对所有来源回 `Access-Control-Allow-Origin: *`）。
+/// 三条允许规则与判据真源见 [`crate::ws::cors_policy`]，其中**「无 `Origin` 一律放行」
+/// 是框架保证而非谓词功劳**（`AllowOrigin::to_future` 的 `origin.filter(...)`
+/// 在 Origin 缺失时不调用 predicate），谓词实际只决定「有 Origin 时放不放」。
+///
+/// 放进纯函数的理由：判定的三条分支必须可穷举单测（仿 `enforce_listen_auth`），
+/// 而 tower-http 的 builder 只有在真实请求经过时才暴露行为。
+///
+/// **不**设 `allow_credentials(true)`：凭据模式要求 origin 非 `*`，且本项目的会话
+/// 凭据是 cookie（同源自动携带）或 `Authorization: Bearer`（跨源简单请求带不了自定义头，
+/// 必须先过 preflight；白名单场景下已由同源/白名单分支放行）。保持 off 让
+/// `ensure_usable_cors_rules` 的组合断言不可能被触发。
+fn build_cors_layer(cors_allowed_origins: Option<&str>) -> CorsLayer {
+    let allowed: std::sync::Arc<[HeaderValue]> =
+        ws::cors_policy::parse_allowed_origins(cors_allowed_origins.unwrap_or("")).into();
+    ws::cors_policy::log_cors_policy(&allowed);
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, parts| {
+            ws::cors_policy::origin_is_allowed(origin, parts, &allowed)
+        }))
+        // 显式列出本前端实际用到的 header：`content-type`（JSON 请求体）与
+        // `authorization`（Bearer）。不用 `AllowHeaders::any()`——那会把
+        // preflight 对所有自定义头放行，正是本轮要收窄的面。
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        // 方法集 = 本服务实际注册的（GET/POST/PUT/PATCH/DELETE，由 src/api/*.rs
+        // 的 handler 形态枚举而来）。**不能省**：`AllowMethods` 默认
+        // `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`，跨源部署下
+        // 非简单方法的请求会被浏览器拦在预检上（`cors_layer_preflight_answers_
+        // allowed_methods_and_headers` 钉住这一点）。代理路由是 `routing::any`，
+        // 但其流量被最外层 `proxy_host_mw` 拦在 CorsLayer 之前，不经过本层。
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+        // 预检缓存关掉：本服务的 CORS 形态（同源 + 少数配了白名单的部署）
+        // 没有「每次会话重复 preflight」的成本，而 max-age > 0 会让浏览器
+        // 在白名单变更后仍按旧结果放行一段时间，排障时更难理解。
+        .max_age(MaxAge::exact(std::time::Duration::ZERO))
+}
+
 /// 启动期 fail-closed 校验：监听非回环地址 + 鉴权关闭时拒绝启动，除非显式
 /// 逃生门 `--insecure-no-auth`。
 ///
@@ -1182,13 +1232,17 @@ fn enforce_listen_auth(
 #[cfg(test)]
 mod tests {
     use super::{
-        acp_idle_recycle_secs_from_setting, default_db_stem, enforce_listen_auth, instance_id,
-        instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
+        acp_idle_recycle_secs_from_setting, build_cors_layer, default_db_stem, enforce_listen_auth,
+        instance_id, instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
         permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
         IDLE_RECYCLE_SECS, PermissionTimeoutMode, REQUIRES_ACTION_RECYCLE_SECS,
     };
+    use axum::body::Body;
+    use axum::http::{HeaderMap, HeaderValue, header};
+    use tower::ServiceExt;
+    use tower_http::cors::CorsLayer;
 
     #[test]
     fn instance_suffix_separates_dev_from_release() {
@@ -1337,6 +1391,197 @@ mod tests {
         assert!(enforce_listen_auth("example.invalid", false, false).is_err());
         // 带端口写法不应进入本函数（调用方已 split_once 剥离），但仍须按非回环
         assert!(enforce_listen_auth("0.0.0.0:9077", false, false).is_err());
+    }
+
+    /// CORS 层真值表：无 Origin 放行 / 同源放行 / 跨源拒 / 白名单放行。
+    ///
+    /// 只测 [`ws::cors_policy::origin_is_allowed`] 的谓词不足以证明层的行为：
+    /// tower-http 的 `AllowOrigin::to_future` 在**请求没有 Origin 头时压根不调用
+    /// predicate**（`origin.filter(...)`），这条「无 Origin 一律放行」的保证来自
+    /// 框架而非我们的代码。故这里起真实 layer 打真实请求。
+    fn cors_headers(layer: &CorsLayer, req: axum::http::Request<Body>) -> HeaderMap {
+        let inner = tower::service_fn(|_req: axum::http::Request<Body>| async {
+            Ok::<_, std::convert::Infallible>(axum::response::Response::new(Body::empty()))
+        });
+        let resp = tower::Layer::layer(layer, inner).oneshot(req);
+        let resp =
+            tokio::runtime::Builder::new_current_thread().build().expect("rt").block_on(resp);
+        resp.expect("infallible").headers().clone()
+    }
+
+    #[test]
+    fn cors_layer_allows_same_origin() {
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "http://127.0.0.1:9077")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://127.0.0.1:9077"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_allows_same_origin_different_port() {
+        // 端口与 host 一致性判定无关（同 WS 入口口径）：https 反代后前端
+        // 443、后端 9777 的情形仍算同源。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm.lan:9777")
+                .header(header::ORIGIN, "https://omniterm.lan")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://omniterm.lan"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_allows_proxy_subdomain_origin() {
+        // 代理子域形态（{port}.{base_host}）：Origin 与 Host 同 host。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "3000.omniterm.lan:9777")
+                .header(header::ORIGIN, "http://3000.omniterm.lan:9777")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://3000.omniterm.lan:9777"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_rejects_cross_site() {
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "https://evil.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        // 不回 Allow-Origin ⇒ 浏览器读不到响应（请求本身仍执行，这是 CORS 的
+        // 边界：它是「读取权」防线，不是「执行权」防线）。
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_allows_whitelisted_origin_with_mismatched_host() {
+        // nginx 默认 `proxy_set_header Host $proxy_host`：浏览器 Origin 是
+        // term.example.com，而后端看到的 Host 是上游名 ⇒ 同源判定必失败，
+        // 白名单是唯一活路。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_still_rejects_unlisted_origin_when_allowlist_set() {
+        // 配了白名单不能顺带放开别的来源（并集语义：白名单是「额外允许」）。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://other.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_allows_request_without_origin() {
+        // **框架保证而非我们的谓词**：`AllowOrigin::to_future` 在 Origin 缺失时
+        // 直接返回 None，predicate 不被调用。这里钉住该行为——若未来误换成
+        // 自己写的 middleware 判定，无 Origin 的 curl/脚本会被打死。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        // 无 Origin ⇒ 无 Allow-Origin 头，但请求照常通过（inner service 被调用）。
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_preflight_answers_allowed_methods_and_headers() {
+        // preflight 必须真的回答，否则前端带 content-type 的 POST（全部 JSON
+        // 接口）在跨源白名单部署下会被浏览器拦在预检上。
+        //
+        // 注意断言的是**整个配置集的字面值**而非预检请求里请求的那个值：
+        // `AllowMethods`/`AllowHeaders` 用 `Const`（非 `mirror_request`）时返回
+        // 配置集全量，这是有意为之——预检回答「服务支持什么」而非「你要什么」，
+        // 浏览器自行判断自己那个请求是否落在集合内。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_METHODS),
+            Some(&HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE"))
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_HEADERS),
+            Some(&HeaderValue::from_static("content-type,authorization"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_preflight_rejects_cross_site() {
+        // 跨源 preflight 也必须被拒：否则攻击页面能凭预检成功推断「该 origin 被
+        // 允许」，且浏览器后续请求同样拿不到放行头。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "https://evil.com")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
     }
 
     /// 错误信息必须给出补救动作（开启 auth 或加逃生门），否则用户无法自救。
