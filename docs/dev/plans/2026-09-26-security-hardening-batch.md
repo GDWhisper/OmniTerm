@@ -54,11 +54,20 @@
 
 ### D3 CORS 收紧：默认仅同源，白名单从 `.env.local` 派生
 
-- **决策**：`CorsLayer::permissive()`（`src/main.rs:987`，最外层、生产与 dev 同一条路径、无 dev_mode 分支）替换为「默认仅同源；允许集合从 `.env.local` 派生（`FRONTEND_PORT` / `DOMAIN` 组合）+ 代理子域 `{port}.{base_host}` 通配」。`tower-http` 的 `cors` feature 已在 `Cargo.toml:20` → 不引入新依赖。
-- **dev 路径已实测确认（2026-09-26）**：dev 前端 `:9076`、后端 `:9075`，但 `/api` 与 `/proxy` 均走 vite proxy 同源中转（`frontend/vite.config.ts:30-46`，`ws: true`）→ **dev 期不产生跨端口 CORS 请求**，收紧不打断 `dev.sh` 与 WS 链路。真正产生跨源请求的是：直连后端端口、移动端真机/局域网 IP、代理子域形态（`docs/architecture/frontend.md:300` `setProxyDomain`）。
+- **决策**：`CorsLayer::permissive()`（`src/main.rs:999`，生产与 dev 同一条路径、无 dev_mode 分支；层顺序为 `proxy_host_mw`(仅 base_host 配置时，最外层) → TraceLayer → **CorsLayer** → Router/fallback，即 CORS 层包住全部 OmniTerm 自身端点但**不包**子域反代流量）替换为「默认仅同源；允许集合从 `.env.local` 派生 + 显式 origin 白名单」。`tower-http` 的 `cors` feature 已在 `Cargo.toml:22`（`tower-http 0.6.11`）→ 不引入新依赖。
+- **dev 路径已实测确认（2026-09-26）**：dev 前端与后端端口不同，但 `/api` 与 `/proxy` 均走 vite proxy 同源中转（`frontend/vite.config.ts:34-46`，`ws: true`），且前端**全部网络调用为相对路径**（`frontend/src/api/client.ts:4` `BASE = '/api/v1'`、`useTerminal.ts:394` WS 相对路径、`useAcpChat.ts:766` 用 `window.location.host`、`useFileWatcher.ts:57` SSE 相对路径）→ **dev 期不产生跨端口 CORS 请求**，收紧不打断 `dev.sh` 与 WS 链路。
 - **边界声明（勿合并）**：CORS 收紧**不能**替代 S2 —— WebSocket 握手不受 CORS 约束，CSWSH 面必须由 Phase 2 的 WS Origin 校验独立防。S3 与 S2 是两条独立防线。
-- **否决项**：① 白名单硬编码端口/域名（违反配置统一管理红线——端口名已在 AGENTS.md 点名禁硬编码）；② 仅加注释不动代码。
+- **否决项**：① 白名单硬编码端口/域名（违反配置统一管理红线——端口名已在 AGENTS.md 点名禁硬编码）；② 仅加注释不动代码；③ 后端直读 `.env.local` 文件（违反「后端只认 `OMNITERM_*` env 或 CLI 参数」红线，且 release 二进制工作目录不可控）。
 - **翻盘条件**：若未来前端与 API 非子域同 host 部署，白名单须显式包含该集合并沉淀进 `.env.local` 注释。
+
+#### D3 实施前勘察校正（2026-09-26，读 tower-http 0.6.11 源码 + 全前端请求面）
+
+1. **原 D3 的「代理子域 `{port}.{base_host}` 通配」在当前拓扑下是死配置**：子域流量被最外层 `proxy_host_mw`（`src/proxy/mod.rs:240`，先于 CorsLayer）拦截，**根本不到 CorsLayer**。该通配唯一真实用途是「将来前端部署在子域而 API 在别的 host」，保留但须注明当前不可达。
+2. **`X-Forwarded-Host` 不能作主判据**：CorsLayer 不读它，OmniTerm 自身也不读（全仓仅 proxy 转发侧出现）；且它可被客户端伪造——不校验反代链路就信任它 = 把白名单拱手让给攻击者。这也解释了 Phase 2 为何不用它。
+3. **反代部署是唯一真实风险面，可能硬打破**：nginx 默认 `proxy_set_header Host $proxy_host` 会把 Host 改成上游名 ⇒ omniterm 看到 `Host: omniterm:9777`，而浏览器 `Origin: https://example.com` ⇒ 同源判定失败被拒。须用户显式 `proxy_set_header Host $host;` 才不打破（有 `X-Forwarded-Host` 也没用，CorsLayer 不读）。兼容优先级：**① 显式 origin 白名单（首选，`.env.local` 派生）② 「Origin host == Host host」predicate 与白名单取并集（次选，闭包内同时实现两判据——tower-http 无法直接并集两种策略，但一个 `predicate` 闭包可以）③ X-Forwarded-Host 仅作可选信任项且默认关闭**。
+4. **风险等级比预期低（一条重要事实）**：`permissive()` 不含 credentials ⇒ 现状下 `Access-Control-Allow-Origin: *` 且无 `Access-Control-Allow-Credentials` ⇒ 浏览器跨源请求**本来就带不了 cookie**。故 S3 不是「从能用到不能用」的断裂，而是「从对任何人可读到只对同源可读」；对 cookie 鉴权行为的改变为零。（同时说明现状对无自定义头的跨站简单请求防护薄弱，收紧确实缩小攻击面。）
+5. **端口推导不可行**：`dev.sh:361` 只以 CLI 参数传 `-p`，**不 export `BACKEND_PORT`**，后端读不到 `FRONTEND_PORT`；`DOMAIN` 虽 export 但 dev 不传 `--proxy-domain`（`src/main.rs:144-145` 字段存在、dev.sh 无传入链）⇒ dev 环境 `base_host = None`、`proxy_host_mw` 不挂。白名单**不能**靠推算，必须显式新变量（如 `OMNITERM_CORS_ALLOWED_ORIGINS`），fallback 为「空集合 / 仅同源」，**不得写死域名兜底**。
+6. **验收清单需补**（本文「实施分期」表 Phase 3 行）：nginx `proxy_set_header Host $host` 反代后跨源被拒 / 显式配 origin 后放行两态实测；同源放行不回归（embedded 形态 + 移动端）。单测放 `src/main.rs` `#[cfg(test)]`（CORS 构造成纯函数，仿 `enforce_listen_auth` 穷举）；`strip_port` 可按 §7① 从 `src/ws/origin_guard.rs` 提升共享。
 
 ### D4 审计日志：独立有界表 + 写入点收敛，不做 JSON 大列
 
@@ -86,7 +95,7 @@
 |--------|------|------|------|
 | 1 | `src/main.rs`：新增 `insecure_no_auth` 字段 + `enforce_listen_auth()` 纯函数 + `#[cfg(test)]` 真值表单测 | 裸奔路径关闭；`cargo test` 覆盖四格 | 无 |
 | 2 | 共享校验函数提升 + 三个主 WS 入口接线 + 单测（同源放行/跨站拒/无 Origin 放行） | CSWSH 面收敛为单一真源 | Phase 1 无依赖，可并行 |
-| 3 | `src/main.rs` CORS 构造替换 + dev 路径实测（cors 请求从 dev 前端发出） + 单测 | CORS 不再 permissive | 依赖 dev 环境验证 |
+| 3 | `src/main.rs` CORS 构造替换为纯函数 `build_cors_layer(...)`（默认同源 predicate + `OMNITERM_*` 显式 origin 白名单取并集）+ 单测穷举 + 反代两态实测 | CORS 不再 permissive | 依赖 dev 环境验证 + 反代形态实测 |
 | 4 | migration + 审计函数 + files/git/agents/proxy 写入点接线 + 上限单测 + settings 读口 | 敏感操作可查、有界 | 无强依赖，宜在 Phase 1 后 |
 | 5 | 评估报告（先出结论）→ 若成立再泛化限流 | 或限流落地，或明确关闭并记录 | Phase 1 改变前提，须在其后 |
 
@@ -97,6 +106,7 @@
 - [ ] `cargo test audit`（条目上限 + detail 字节上限 + 截断守恒断言）
 - [ ] 手动：`./dev.sh restart` 后 dev 环境可正常访问（CORS 未打断）
 - [ ] 手动：非回环 bind + auth 关闭时启动失败且错误信息可见（前台 + `--daemonize` 两路）
+- [ ] 手动（Phase 3 新增，勘察 D3 校正 6）：nginx `proxy_set_header Host $host` 反代后跨源被拒；显式配 origin 后放行；同源放行不回归（embedded 形态 + 移动端真机）
 - [ ] `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
 - [ ] 前端无改动项（Phase 4 的 settings 读口除外，需 `tsc -b`）
 
