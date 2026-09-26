@@ -33,7 +33,9 @@ export function AuditLogSection() {
 
   useEffect(() => {
     let alive = true
-    // 失败静默：读不到审计不阻塞设置面板其余部分（request() 已会弹错误 toast）。
+    // 失败静默退化为空态：读不到审计不阻塞设置面板其余部分。
+    // API 层已 silent（不再弹全局 error toast）——否则用户会同时看到 toast
+    // 和「暂无审计记录」两处重复提示。
     api
       .getAuditLog(PAGE_SIZE)
       .then((res) => {

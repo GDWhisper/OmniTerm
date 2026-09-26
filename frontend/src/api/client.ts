@@ -327,9 +327,15 @@ export const api = {
       body: JSON.stringify({ mode, minutes }),
     }),
   /** 安全审计日志（只读）：最近若干条敏感操作留痕（文件写/删/上传、git push、
-   *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。 */
-  getAuditLog: (limit?: number) =>
-    request<{ entries: AuditEntry[] }>(`/settings/audit-log${limit ? `?limit=${limit}` : ''}`),
+   *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。
+   *
+   *  默认 `silent`：读不到审计时调用方自行降级为空态，不该再抢一个全局 error
+   *  toast——否则用户同时看到 toast 和「暂无审计记录」两处重复提示。 */
+  getAuditLog: (limit?: number, opts?: { silent?: boolean }) =>
+    request<{ entries: AuditEntry[] }>(
+      `/settings/audit-log${limit ? `?limit=${limit}` : ''}`,
+      { silent: opts?.silent ?? true },
+    ),
 
   // Auth — public endpoints where a 401/409 is a business error (wrong
   // password / user already exists), never an expired session, so the

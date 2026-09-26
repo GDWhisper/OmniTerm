@@ -131,3 +131,46 @@ describe('api allowEscape passthrough', () => {
     expect(lastUrl(calls)).toBe('/api/v1/files?path=&workspace_id=w1')
   })
 })
+
+describe('api.getAuditLog (安全审计日志读口)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('passes the limit as a query param', async () => {
+    const calls = mockFetch()
+    await api.getAuditLog(60)
+    expect(lastUrl(calls)).toBe('/api/v1/settings/audit-log?limit=60')
+  })
+
+  it('omits the query entirely when no limit is given', async () => {
+    const calls = mockFetch()
+    await api.getAuditLog()
+    expect(lastUrl(calls)).toBe('/api/v1/settings/audit-log')
+  })
+
+  it('fetches silently by default so a failed read does not double-report', async () => {
+    // 默认 silent：调用方（AuditLogSection）自行降级为空态，不再由 request()
+    // 弹全局 error toast——否则用户同时看到 toast 和「暂无审计记录」。
+    // 注意 silent 是 request() 的内部选项，不出现在 fetch init 上，故这里
+    // 断言「不弹 toast」这一可观测结果。
+    const addToast = vi.fn()
+    vi.doMock('../stores/toastStore', () => ({
+      useToastStore: { getState: () => ({ addToast }) },
+    }))
+    vi.resetModules()
+    const { api: freshApi } = await import('./client')
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'boom' }),
+    }) as unknown as Response))
+
+    await expect(freshApi.getAuditLog()).rejects.toMatchObject({ status: 500 })
+    expect(addToast).not.toHaveBeenCalled()
+
+    vi.doUnmock('../stores/toastStore')
+    vi.resetModules()
+  })
+})

@@ -110,6 +110,6 @@ describe('AuditLogSection（安全审计日志只读区块）', () => {
     // 读口必须带 limit，否则可能拉全表
     vi.mocked(api.getAuditLog).mockResolvedValue({ entries: [] })
     await mount()
-    expect(vi.mocked(api.getAuditLog)).toHaveBeenCalledWith(60)
+    expect(vi.mocked(api.getAuditLog).mock.calls[0][0]).toBe(60)
   })
 })
