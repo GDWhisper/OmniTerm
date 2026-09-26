@@ -1,8 +1,8 @@
 # OmniTerm 改进方向全景（功能 × 安全）
 
 > 状态：**已归档 · 方向盘点（2026-09-01 建，2026-09-26 复审修订）**——本文只做方向选型与优先级排序，**不构成实施承诺**；任何方向落地前须另起独立实施计划。
-> 复审结论（2026-09-26）：S2/S4/F1/F2 四项已落地（链接触见下），安全缺口 S1/S3/S5/S6 与体验向 F3/F4/F5/D1/D4/D5 **仍未落地、依旧有效**，已拆分为 `docs/dev/plans/2026-09-26-security-hardening-batch.md`（实施计划）与 `docs/dev/plans/backlog/improvement-directions-remaining.md`（backlog 跟踪）。
-> **追记（2026-09-26，Phase 1–3 落地）**：S1 / S2' / S3 三项已实施完毕（fail-closed 启动、WS Origin 校验收敛、CORS 收紧），本表中相应状态以「落地状态」小节为准；S5 / S6 与体验向各项仍未落地。
+> 复审结论（2026-09-26）：S2/S4/F1/F2 四项已落地（链接触见下）；安全缺口 S1/S3/S5 与体验向 F3/F4/F5/D1/D4/D5 初判「仍未落地、依旧有效」，已拆分为 `docs/dev/plans/2026-09-26-security-hardening-batch.md`（实施计划）与 `docs/dev/plans/backlog/improvement-directions-remaining.md`（backlog 跟踪）。**S1/S3/S5 随后在同日 Phase 1/3/4 实施完毕**（见下方追记与「落地状态」小节），唯独 S6 仍在评估中。
+> **追记（2026-09-26，Phase 1–4 落地）**：S1 / S2' / S3 / S5 四项已实施完毕（fail-closed 启动、WS Origin 校验收敛、CORS 收紧、安全审计日志），本表中相应状态以「落地状态」小节为准；S6 与体验向各项仍未落地。
 > 触发条件：用户要求基于领域知识盘点改进方向。
 > 关联：`docs/reference/requirements.md`（已有需求）、`docs/dev/plans/backlog/`（既有积压）、`docs/reference/auth-not-enforced.md`、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固）。
 
@@ -91,7 +91,7 @@
 | S2 WS Origin | ⚠️ 半落地 | 代理入口已落地 `src/proxy/mod.rs:158-187`；三个主 WS 入口（`src/api/mod.rs:39-44`）无校验 → 归入 2026-09-26-security-hardening-batch Phase 2（收敛为共享校验函数） |
 | S3 CORS 收紧 | ✅ 已落地（2026-09-26，`security-hardening-batch` Phase 3） | `permissive()` → 默认仅同源 + 显式 origin 白名单（`OMNITERM_CORS_ALLOWED_ORIGINS`），判据真源 `src/ws/cors_policy.rs`；原「从 `.env.local` 派生白名单」的方案因端口推导不可行改为显式配置，且未做变更类请求的 Origin/Referer 断言（CSRF 侧由 `SameSite=Lax` + S1 fail-closed 兜底，理由见 Phase 3 实施记录） |
 | S4 自更新校验 | ✅ 已落地 | `src/update.rs:445` `verify_digest()` + 三条单测 |
-| S5 审计日志 | ❌ 未落地，依旧有效 | 无审计表/结构化日志 → 2026-09-26-security-hardening-batch Phase 4 |
+| S5 审计日志 | ✅ 已落地（2026-09-26，`security-hardening-batch` Phase 4） | 独立有界表 `audit_log`（滚动 1000 条）+ 写入收敛为 `api::audit::record` 一个函数；覆盖文件写/删/上传、git push、agent 配置增删改、代理端口首次访问；读口 `GET /settings/audit-log` + 设置页只读区块。与原设想的两处偏差：① actor 带来源 IP（JWT `sub` 恒为 `admin`，单写身份无区分度）；② 代理端口**没有「开通」原子事件**（catch-all），改为按端口去重记「首次访问」 |
 | S6 端点限流 | ❌ 未落地，依旧有效 | 仅登录面 `src/auth/rate_limit.rs` `LoginGuard` → 2026-09-26-security-hardening-batch Phase 5（价值待评估，端点可能已在 auth 保护下） |
 | F1 成本记账 | ✅ 已落地（呈现层） | `frontend/src/components/Chat/UsageIndicator.tsx` + `chatStore.ts` `setUsage`；汇总面板模式未做 |
 | F2 审批策略 | ✅ 已落地（超时策略形态） | `src/acp/permission.rs:121-127`；project 级分层未做 |
