@@ -32,15 +32,20 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: [domain, 'localhost'],
     proxy: {
+      // 两条代理都必须 `changeOrigin: false`（保持浏览器原样的 Host 头）：
+      // 后端 WS 入口的 CSWSH 防护按「Origin 的 host == 请求 Host」判定
+      // （src/ws/origin_guard.rs），改写 Host 会把一切非 localhost 访问
+      // （局域网 IP / DOMAIN 域名）误判成跨站 → 全部 WS 403，终端/聊天
+      // 只能停在重连。反代部署同理：Host 必须原样透传（`Host $host`）。
       '/api': {
         target: `http://localhost:${backendPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
       // 端口转发反向代理（P2/P3）：/proxy 前缀透传到后端；ws:true 支撑 WS relay。
       '/proxy': {
         target: `http://localhost:${backendPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
     },

@@ -395,3 +395,24 @@
 - [ ] 缺陷 C（X16，`agent_events` 入口测试）—— 未开始
 - [ ] `cargo clippy` / `cargo test` 零新增 —— **本 Phase 无代码改动，不适用**（评估为纯文档）
 - [ ] 前端无改动项 —— 不适用
+
+---
+
+## 勘误（2026-09-27）：dev 下 Vite 代理改写 Host，非 localhost 访问全部 WS 403
+
+**现象**：从局域网 IP（`http://192.168.5.216:9778`）打开 dev 前端后，终端（pty/tmux）与 ACP 聊天全部停在重连。后端日志每 ~31s 一条
+`WARN omniterm::ws::origin_guard: ws origin rejected: origin="http://192.168.5.216:9778" host=localhost:9777`
+（31s ≈ 前端退避上限 30s + 握手开销，`useTerminal.ts:336`，即一个陷在重试循环里的终端）。
+
+**根因**：`frontend/vite.config.ts` 的 `/api` 与 `/proxy` 两条代理都写了 `changeOrigin: true`，Vite 把转发请求的 `Host` 改写成目标 `localhost:9777`，而浏览器 `Origin` 仍是页面来源 → Phase 2 的 `enforce_ws_origin`（Origin host == Host host）必然判跨站。**与部署反代同型**：nginx 默认 `proxy_set_header Host $proxy_host` 同样打死 WS——Phase 3 的 CORS 白名单只给 HTTP 读取权留了逃生门，WS 判据**无白名单**。
+
+**修复**：两条代理改 `changeOrigin: false`（保持浏览器原样 Host），并在 `vite.config.ts` 就地注释「不得改回」及理由。
+
+**验证（真实链路）**：
+- curl 经 Vite 代理五种 Origin：LAN 同源 101 / 域名同源 101 / localhost 同源 101 / `evil.com` 403 / 畸形（无 scheme）403。
+- HTTP 非回归：`/api/v1/health` 带 LAN Host 与域名 Host 均 200；`/proxy/{port}` 路径同源 101、跨站 403；ACP WS 同源 101。
+- 真实 Chromium（页面即 `http://192.168.5.216:9778`）：`new WebSocket('ws://192.168.5.216:9778/api/v1/ws/terminal/external/<隔离 tmux 会话>')` → OPEN，收到 `attached` 与 3 帧；探针 tmux 会话已清理。
+
+**为什么 Phase 2 验收漏掉**：验收只测了直连后端的同源（`127.0.0.1:19872`）、跨 host 与裸握手，**没有一条走 `dev.sh` 的真实前端路径**（浏览器 → Vite 9778 → 代理 → 后端），而变更恰好切在这条路径中间。教训与 Phase 2 审查「判据共享 ≠ 调用点覆盖」同族：**安全判据的验收必须覆盖真实用户链路（含开发代理）——代理层对请求头的改写属于判据的输入面**。
+
+**回归防线**：`dev.sh` 无自动浏览器回归，常驻防堵 = `vite.config.ts` 注释 + 本记录；再动 vite 代理配置须复跑上面的五态 curl 矩阵。
