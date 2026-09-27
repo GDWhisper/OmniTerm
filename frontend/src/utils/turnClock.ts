@@ -5,9 +5,9 @@
  * 工作 = 墙钟 − 审批挂起（见工作时长计划 E12）。速度只使用本连接观察到的
  * 输出 / 解码窗口时长，按 4 字符 ≈ 1 token 折算。工具时间取并行执行区间的并集，
  * 仍包含在工作时长里。工具并集内**首次出现输出的那一刻**把「工具起点 → 此刻」
- * 封口为纯工具时间：生成计时钟从此处暂停，直到下次流式吐字；封口之后的区间仍在
- * 工具内，但算生成时间（那段确实是模型在产出）。整段都没有输出的工具窗口则全额
- * 计为工具时间。
+ * 封口为纯工具时间，此后的区间两个读数（tps 分母与「工具约 N秒」）都归生成：
+ *  模型一吐字就是在产出，thinking 期间工具不再计时（E18 翻盘 E14/E15 的
+ * 「展示含封口后执行段」口径）。整段都没有输出的工具窗口则全额计为工具时间。
  * 解码窗口从本观察窗**首个输出**起算：首字前的等待（prompt 处理 / 长思考，
  * 没有任何输出）不进分母——否则首字延迟越长读数越被摊薄（E17 对齐
  * deepseek-harness 的 decode-only 口径）。首输出瞬间窗口长度为 0 → 读数 null。
@@ -22,10 +22,8 @@ interface LiveTurn {
   outputChars: number
   activeTools: Set<string>
   toolSinceWorkMs: number | null
-  /** 已闭合的工具并集时长（展示值；开放并集的当前跨度另算，见 `turnToolElapsedMs`）。 */
-  toolMs: number
-  /** 已闭合的工具并集时长里「可算纯工具」的那部分；跨重连保留，配合
-   *  `pureToolMsAtFirst` 基线只扣首字之后新闭合的段。 */
+  /** 已闭合且**封口**的工具并集时长：既是「工具约 N秒」的展示值，也是 tps 分母
+   *  的扣除源。封口 = 工具并集内首次出现输出——那一刻起同一区间归生成，两边一致。 */
   pureToolMs: number
   /** 本窗口首个输出出现时的工作坐标；null = 还没吐字，没有可测的解码窗口。 */
   firstOutputWorkMs: number | null
@@ -63,7 +61,8 @@ function workElapsedMs(turn: LiveTurn, now: number): number {
   return Math.max(0, now - turn.startedAt - turn.pausedMs - waiting)
 }
 
-/** 开放工具并集的完整跨度（展示口径：含封口之后仍在执行的那段）。 */
+/** 开放工具并集的完整跨度（封口点与基线的计算源；展示口径用的是封口段，见
+ *  `pureOpenToolMs` / `turnToolElapsedMs`）。 */
 function openToolMs(turn: LiveTurn, now: number): number {
   return turn.toolSinceWorkMs === null ? 0 : Math.max(0, workElapsedMs(turn, now) - turn.toolSinceWorkMs)
 }
@@ -95,7 +94,7 @@ export function beginTurn(sessionId: string, startedAt: number = Date.now()): vo
   finalBySession.delete(sessionId)
   rememberBounded(turns, sessionId, {
     startedAt, pausedMs: 0, waitSince: null, outputChars: 0,
-    activeTools: new Set<string>(), toolSinceWorkMs: null, toolMs: 0, pureToolMs: 0,
+    activeTools: new Set<string>(), toolSinceWorkMs: null, pureToolMs: 0,
     firstOutputWorkMs: null, pureToolMsAtFirst: 0, toolPureOpenMs: 0, toolHasOutput: false, estimatesValid: true,
   })
 }
@@ -174,7 +173,6 @@ export function updateTurnTool(sessionId: string, id: string, status?: string, a
     }
     turn.activeTools.add(id)
   } else if (turn.activeTools.delete(id) && turn.activeTools.size === 0) {
-    turn.toolMs += openToolMs(turn, at)
     turn.pureToolMs += pureOpenToolMs(turn, at)
     turn.toolSinceWorkMs = null
     turn.toolPureOpenMs = 0
@@ -188,12 +186,14 @@ export function turnElapsedMs(sessionId: string, now: number = Date.now()): numb
   return turn ? workElapsedMs(turn, now) : null
 }
 
-/** 本连接观测到的工具并集时长（扣审批，跨重连累计；仍在执行的并集算到 now）。
+/** 可归因于工具的时长（扣审批，跨重连累计）：已闭合的封口段 + 仍在执行的开放
+ *  并集里**尚未出现输出**的那段。并集内一旦开始流式输出，计时即停在封口点——
+ *   thinking / 正文流出期间工具不计时（E18：与 tps 分母同一归因口径）。
  *  null = 无 turn / 采样失效，0 = 尚未观察到执行。 */
 export function turnToolElapsedMs(sessionId: string, now: number = Date.now()): number | null {
   const turn = turns.get(sessionId)
   if (!turn || !turn.estimatesValid) return null
-  const elapsed = turn.toolMs + openToolMs(turn, now)
+  const elapsed = turn.pureToolMs + pureOpenToolMs(turn, now)
   return Number.isFinite(elapsed) ? elapsed : null
 }
 

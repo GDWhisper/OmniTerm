@@ -71,7 +71,8 @@ describe('ChatMessageView meta row line breaking', () => {
     // 「工作中 5分钟33秒」整段不断行：5分钟 与 33秒 之间没有断点。
     expect(segments[0].textContent).toBe('已工作 5分钟33秒')
     // 工具与速度各占一段，段内的 label 与 value 不分离。
-    expect(segments[1].textContent).toBe(' · 工具约 11秒')
+    // 工具计时停在封口点（4s 首次输出）：[1s,4s] 才算工具，thinking 区间不计。
+    expect(segments[1].textContent).toBe(' · 工具约 3秒')
     // 解码窗口 [4s,12s] 去掉封口的 3s 纯工具 → 400/4 ÷ 8s。
     expect(segments[2].textContent).toBe(' · 估算 12.5 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
@@ -101,7 +102,7 @@ describe('ChatMessageView meta row line breaking', () => {
     beginTurn('s3', 0)
     addOutputChars('s3', 800, 1_000)
     updateTurnTool('s3', 'a', 'in_progress', 1_000)
-    // 首字在工具并集内：把 [1s,2s] 封口为纯工具，解码窗口 [1s,3s] 去掉该段剩 1s。
+    // 首字在工具并集内：把 [1s,2s] 封口，工具计时与解码窗口都从这里分开计。
     addOutputChars('s3', 800, 2_000)
     act(() => {
       root.render(
@@ -115,7 +116,7 @@ describe('ChatMessageView meta row line breaking', () => {
     const segments = readingSegments()
     expect(segments.length).toBe(3)
     expect(segments[0].textContent).toBe('工作中 3秒')
-    expect(segments[1].textContent).toBe(' · 工具约 2秒')
+    expect(segments[1].textContent).toBe(' · 工具约 1秒')
     expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
     vi.useRealTimers()

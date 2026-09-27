@@ -253,6 +253,21 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'a', 'completed', 6_000)
     // 封口后的并集内生成 [4s,6s] 留在分母 → 300 token ÷ 2s
     expect(turnTps('s1', 6_000)).toBe(150)
+    // 展示同样只算封口段 [1s,4s]，封口后的执行重叠段归生成
+    expect(turnToolElapsedMs('s1', 6_000)).toBe(3_000)
+  })
+
+  it('stops tool timing at the seal: prose or thought inside a union freezes the clock', () => {
+    beginTurn('s1', 0)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
+    // 工具执行期间模型开始思考/说话（2026-09-27 用户报告：thinking 期间工具也在计时）：
+    // 计时停在封口点，之后无论思考流多久都不再累加。
+    addOutputChars('s1', 400, 2_000)
+    expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
+    expect(turnToolElapsedMs('s1', 12_000)).toBe(1_000)
+    updateTurnTool('s1', 'a', 'completed', 13_000)
+    expect(turnToolElapsedMs('s1', 13_000)).toBe(1_000)
   })
 
   it('keeps 10s of tools in work and yields no rate while no prose follows the first delta', () => {
@@ -342,9 +357,8 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'b', 'completed', 8_000)
     updateTurnTool('s1', 'c', 'in_progress', 9_000)
     endTurn('s1', 11_000)
-    // 展示口径仍是完整并集（7s），封口只影响分母：解码窗口 9−1=8s 去掉闭合纯工具 2s
-    // 与开放并集 2s，剩 4s → 800/4 ÷ 4s。
-    expect(finalToolElapsedMs('s1')).toBe(7_000)
+    // 展示口径已是封口段（E18）：闭合并集只计封口的 2s + 开放并集 c 的 2s。
+    expect(finalToolElapsedMs('s1')).toBe(4_000)
     expect(finalTps('s1')).toBe(50)
   })
 

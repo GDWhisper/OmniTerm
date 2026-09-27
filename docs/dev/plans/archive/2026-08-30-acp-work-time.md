@@ -358,3 +358,11 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 首字前的窗口时间含首发那批字符的生产时间，锚点之后只由后续流式输出摊——与 dsh 把首 token 计入解码窗同等乐观，偏差相同方向。
 
 **测试**：`turnClock.test.ts` 全量改算新契约（原有窗口起点口径的期望值逐条重算；新增「首字前的等待不进分母」与「首个输出落在工具并集内：封口段不进分母」两条），三个连带测试文件（`ChatMessage.metarow.test.tsx`、`useAcpChat.midturn.test.tsx`、`chatStore.test.ts`）的 tps 期望随新口径更新，均先在新代码下复现红/绿差异后定值。全量 `pnpm test`（808 例）与 `tsc -b`、`lint` 通过。
+
+### E18 — 工具计时也在封口处停表：翻盘 E14/E15 的「展示含封口后执行段」（2026-09-27）
+
+来源：用户报告「有时 thinking 过程中，工具也在计时」。根因是 E14/E15 的展示口径：`turnToolElapsedMs` 走完整并集（`toolMs` 累计全跨度 + 开放并集当前跨度），而封口只作用于 tps 分母。于是工具并集内模型一流式输出（思考或正文），「工具约 N秒」继续随思考时长上涨——两个读数对同一区间给出相反归因（tps 算生成、工具算执行），观感上工具计时器在 thinking 期间空跑。agent 侧 in_progress 后继续流式解说、或并行工具晚到 completed 时该现象必现。
+
+**修复**（`frontend/src/utils/turnClock.ts`）：`turnToolElapsedMs` 改走封口段口径 `pureToolMs + pureOpenToolMs`——已闭合并集只累计到首字封口点，开放并集只算「尚未出现输出」的那段；模型一吐字，工具计时即停。与 E17 后 tps 分母同一归因口径（同一区间不可既算工具又算生成）。`LiveTurn.toolMs`（全跨度累计）随之删除，`openToolMs` 收缩为封口/基线的计算源，不再进展示。残余边界：封口点取自输出实际到达时刻，[工具起点, 首个输出] 内模型的构思时间无法与执行区分，仍计工具；工具完成后、并集已关闭，之后的 thinking 本来就不计工具（不变）。
+
+**测试**：新增 `stops tool timing at the seal: prose or thought inside a union freezes the clock`（用户报告形态的回归：并集内输出后计时冻结，12s 思考不涨、completed 不补）；`pauses the generation clock…` 与 straddle 用例补工具展示断言（封口段 2s / 3s，非全跨度 7s / 5s）；`ChatMessage.metarow.test.tsx` 两条期望随新口径改算（「工具约 11秒」→3秒、「工具约 2秒」→1秒）。
