@@ -78,10 +78,14 @@ const WINDOW: Duration = Duration::from_secs(300);
 /// and container networks.
 ///
 /// Worst-case memory is MB-level, **measured** rather than estimated: on a live
-/// instance one tracked IP costs about 1.4 kB (key `String` + two `Instant`s +
+/// instance one tracked IP costs about 200 B (key `String` + two `Instant`s +
 /// the bounded `failures` vec + HashMap overhead), so a full table lands near
-/// 6 MB. Verified by driving distinct loopback source IPs through `/auth/login`
-/// on a throwaway instance and sampling `VmRSS`.
+/// 0.8 MB. Measured by driving 2000 distinct loopback source IPs through
+/// `/auth/login` on a throwaway instance and sampling `VmRSS` (linear tail:
+/// 121 B/key; whole run: 200 B/key — VmRSS lags because the allocator reuses
+/// freed pages, so treat these as an upper bound). This matches the structural
+/// estimate for `HashMap<String, Entry>` (~100 B/entry: 24 B `String` header +
+/// heap + 40 B `Entry` + bucket overhead), which is the tighter check.
 ///
 /// The ratio to `MAX_FAILURES` matters far more than the absolute value:
 /// eviction only ever discards entries whose timestamps are already worthless,
