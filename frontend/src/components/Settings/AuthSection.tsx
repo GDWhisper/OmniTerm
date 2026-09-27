@@ -5,15 +5,7 @@ import { useAppStore } from '../../stores/appStore'
 import { READER_FONT } from '../../utils/fonts'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
-import { ToggleRow } from './toggleRow'
-
-const sectionTitleStyle: React.CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  fontWeight: 500,
-  textTransform: 'uppercase',
-  letterSpacing: '0.5px',
-}
+import { ToggleRow, SectionTitle } from './toggleRow'
 
 const inputStyle: React.CSSProperties = {
   fontFamily: READER_FONT,
@@ -210,7 +202,7 @@ export function AuthSection() {
       {authEnabled && (
         <>
           {/* ── Logout ── */}
-          <h3 style={sectionTitleStyle}>{t('auth.loggedIn')}</h3>
+          <SectionTitle>{t('auth.loggedIn')}</SectionTitle>
           <button
             onClick={handleLogout}
             style={{ ...btnStyle, color: 'var(--danger)' }}
@@ -219,7 +211,7 @@ export function AuthSection() {
           </button>
 
           {/* ── Change password ── */}
-          <h3 style={{ ...sectionTitleStyle, marginTop: 16 }}>{t('auth.changePassword')}</h3>
+          <SectionTitle style={{ marginTop: 16 }}>{t('auth.changePassword')}</SectionTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <input
               type="password"

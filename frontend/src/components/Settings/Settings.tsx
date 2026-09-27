@@ -489,9 +489,7 @@ function TmuxMouseSection() {
 
   return (
     <section className="space-y-2">
-      <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-        {t('settings.tmuxMouse')}
-      </h3>
+      <SectionTitle>{t('settings.tmuxMouse')}</SectionTitle>
       <button
         onClick={handleToggle}
         style={{

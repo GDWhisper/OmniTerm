@@ -652,6 +652,7 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | 阴影 | `2px 2px 0 var(--pixel-shadow)` | 低于 `.pixel-float` 的 `4px 4px 0` 一档；多卡叠加不发闷 |
 | Border radius | `0` | 全局硬角 |
 | Padding | `8px 10px` | — |
+| 卡内小节标题 | 11px / `fontWeight: 700` / UPPERCASE / `letter-spacing: 0.5px` / `--text-muted` | 单一真源为 `Settings/toggleRow.tsx` 的 `SectionTitle`，各 section 一律复用它，勿另写 h3 样式 |
 | 内容区间距 | `gap: 10px`（原 18px） | 卡片自带 8px 上下 padding，视觉间距仍约 26px |
 
 `.settings-content > section { margin: 0 }` 是这条规则的前身，已合并进卡片规则。

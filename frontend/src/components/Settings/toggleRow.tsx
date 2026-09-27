@@ -7,15 +7,14 @@ import { btnBase } from './settingsStyles'
 const sectionTitleStyle: React.CSSProperties = {
   color: 'var(--text-muted)',
   fontSize: 11,
-  fontWeight: 500,
+  fontWeight: 700,
   textTransform: 'uppercase',
   letterSpacing: '0.5px',
 }
 
-export function SectionTitle({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation()
-  void t
-  return <h3 style={sectionTitleStyle}>{children}</h3>
+/** 卡片内的小节标题（唯一真源：加粗 / 字号 / 字距只在这里改）。 */
+export function SectionTitle({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <h3 style={style ? { ...sectionTitleStyle, ...style } : sectionTitleStyle}>{children}</h3>
 }
 
 /* ── Reusable toggle row (label + ON/OFF button + hint) ── */
