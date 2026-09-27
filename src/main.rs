@@ -176,6 +176,9 @@ pub struct AppState {
     pub api_keys: HashMap<String, String>,
     /// Password-verification master switch (mirrors `settings.auth_enabled`).
     pub auth_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 本地访问是否同样要求密码验证（mirrors `settings.local_auth_required`，D4）。
+    /// 仅当 `auth_enabled` 开启时生效：`false` = 本地回环形态免密、远程防线不变。
+    pub local_auth_required: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// ACP 静默待命回收阈值（秒），由 settings 表 `acp_idle_recycle_min` 注入，
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -862,23 +865,35 @@ fn main() -> anyhow::Result<()> {
             // Password-verification master switch: DB is the source of truth;
             // `OMNITERM_AUTH_ENABLED` (CLI/env) overrides and writes back so the
             // UI and the running flag never diverge.
-            let mut auth_enabled = sqlx::query_scalar::<_, String>(
-                "SELECT value FROM settings WHERE key = 'auth_enabled'",
-            )
-            .fetch_optional(&db)
-            .await?
-            .map(|v| v == "1")
-            .unwrap_or(false);
+            let mut auth_enabled =
+                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+                    .bind(auth::SETTING_AUTH_ENABLED)
+                    .fetch_optional(&db)
+                    .await?
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
             if let Some(forced) = args.auth_enabled {
                 auth_enabled = forced;
                 sqlx::query(
-                    "INSERT INTO settings (key, value) VALUES ('auth_enabled', ?) \
+                    "INSERT INTO settings (key, value) VALUES (?, ?) \
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 )
+                .bind(auth::SETTING_AUTH_ENABLED)
                 .bind(if forced { "1" } else { "0" })
                 .execute(&db)
                 .await?;
             }
+
+            // 本地免密开关（D4）：DB 是唯一真相源，缺失默认 true（本地也要求密码，
+            // 不静默弱化既有部署的姿态）。仅字面量 "0" 关闭；"1" 之外的脏值按 true
+            // fail-closed 处理。
+            let local_auth_required =
+                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+                    .bind(auth::SETTING_LOCAL_AUTH_REQUIRED)
+                    .fetch_optional(&db)
+                    .await?
+                    .map(|v| v != "0")
+                    .unwrap_or(true);
 
             // ACP 静默待命回收阈值（分钟）：DB 是唯一真相源，记录缺失/解析失败
             // 回退到 reaper 默认 300 秒（与硬编码时代行为完全一致）。
@@ -946,6 +961,9 @@ fn main() -> anyhow::Result<()> {
                 token_cookie: token_cookie_name(&suffix),
                 api_keys: resolve_api_keys(),
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
+                local_auth_required: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                    local_auth_required,
+                )),
                 acp_idle_recycle_secs,
                 acp_perm_timeout,
                 login_guard: auth::LoginGuard::new(),
@@ -1217,15 +1235,15 @@ fn build_cors_layer(cors_allowed_origins: Option<&str>) -> CorsLayer {
 /// | 0.0.0.0 等 | false | true  | Ok（用户显式接受裸奔风险） |
 /// | 0.0.0.0 等 | false | false | **Err**（默认拒绝） |
 ///
-/// 回环判定与启动处同一套 `matches!` 集合；不认识的 host 一律按非回环处理
+/// 回环判定收敛为 `auth::local_access::is_loopback_host`（2026-09-27 计划 D3：
+/// 与本地免密判据同一函数，不许两份实现）；不认识的 host 一律按非回环处理
 /// （fail-closed：误判为回环 = 静默暴露，比误拒更危险）。
 fn enforce_listen_auth(
     listen_host: &str,
     auth_enabled: bool,
     insecure_no_auth: bool,
 ) -> anyhow::Result<()> {
-    let is_loopback =
-        matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]" | "0:0:0:0:0:0:0:1");
+    let is_loopback = auth::local_access::is_loopback_host(listen_host);
     if auth_enabled || insecure_no_auth || is_loopback {
         return Ok(());
     }

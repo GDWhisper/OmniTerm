@@ -28,6 +28,8 @@ pub async fn test_state() -> AppState {
         token_cookie: crate::TOKEN_COOKIE_BASE.to_string(),
         api_keys: HashMap::new(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
+        // 默认安全姿态：本地访问同样要求密码（与启动读取的缺失默认值一致，D4）。
+        local_auth_required: Arc::new(AtomicBool::new(true)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
         acp_perm_timeout: Arc::new(crate::acp::reaper::PermissionTimeoutConfig::default()),
         login_guard: LoginGuard::new(),

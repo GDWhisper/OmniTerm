@@ -22,7 +22,7 @@ src/
 │   ├── mod.rs            # Route registration, state wiring
 │   ├── health.rs         # GET /api/v1/health
 │   ├── agent_events.rs   # POST /api/v1/internal/agent-event — pty hook 上报端点（回环 + 会话 token，不走 JWT；见「pty hook 信道」）
-│   ├── auth.rs           # POST /api/v1/auth/setup|login|logout|settings|change-password, GET /auth/check
+│   ├── auth.rs           # POST /api/v1/auth/setup|login|logout|change-password|change-username、GET|POST /api/v1/auth/settings、GET /auth/check
 │   ├── targets.rs        # CRUD /api/v1/targets
 │   ├── projects.rs       # CRUD /api/v1/projects
 │   ├── agents.rs         # CRUD /api/v1/agents (ACP-capable agent process configs)
@@ -34,7 +34,8 @@ src/
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
 │   ├── git.rs            # /api/v1/git/* — git panel API, binds repo via resolve_base_from_query (ADR-2)
 │   └── tmux_health.rs    # GET /api/v1/tmux/health + POST /api/v1/tmux/rebuild — tmux server 健康快照与内建自愈「重建 tmux server」（受保护；HTTP 契约逐字固定，见「聋 server 健康/自愈/孤儿监控」）
-├── auth/mod.rs           # JWT token creation/verification（含 token_version 吊销校验）、require_auth_mw 中间件、登录限流 LoginGuard
+├── auth/mod.rs           # JWT token creation/verification（sub = 用户名，含 token_version 吊销校验）、verify_request（auth 总开关 → 本地免密 → token 三序判定）、require_auth_mw 中间件、normalize_username、登录限流 LoginGuard
+├── auth/local_access.rs  # 本地免密判据（D3）：is_local_request 四条件纯函数 + is_loopback_host（与 main.rs::enforce_listen_auth 收敛共用）
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
 ├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP 转发 + P2 WS relay）
 │   ├── mod.rs            # ProxyState（reqwest client + self_port + base_host）、routes、proxy_handler（WS/HTTP 分流）、proxy_host_mw（子域名 Host 路由）、parse_proxy_host、端口白名单、header 重写纯函数 + 单测
@@ -294,10 +295,12 @@ pty 会话内 agent CLI 的生命周期状态经**本地 HTTP 回调**上报（t
 ```
 GET  /api/v1/health
 POST /api/v1/internal/agent-event?token=<会话专属 token>   # pty hook 上报（回环 + token 双重校验，不走 JWT；body = kind:state:reason:event:nonce 五段串，见「pty hook 信道」）
-POST /api/v1/auth/setup|login|logout
-GET  /api/v1/auth/check
-POST /api/v1/auth/settings     # 密码验证总开关（受保护）
-POST /api/v1/auth/change-password  # 受保护（需登录 + 当前密码）
+POST /api/v1/auth/setup|login|logout      # setup/login 可带 username（缺省/空白 → "admin"）
+GET  /api/v1/auth/check                    # 本地免密命中时 {authenticated:true, local_bypass:true}（不返回用户名）
+GET  /api/v1/auth/settings                 # 读两个开关 + username（无用户行 → null）——受保护
+POST /api/v1/auth/settings                 # 部分更新 {auth_enabled?, local_auth_required?}（两项都缺 → 400）——受保护
+POST /api/v1/auth/change-password          # 受保护（需登录 + 当前密码）
+POST /api/v1/auth/change-username          # 受保护（需当前密码；改名 + token_version+1 撤销旧 token）
 GET  /api/v1/settings/acp-idle-recycle  # 读 ACP 空闲回收阈值（分钟；settings 表无记录/非数字回退 5）——受保护
 PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，值域 1..=60，越界 400）——受保护
 GET  /api/v1/settings/permission-timeout  # 读权限请求超时配置 {mode, minutes}（无记录/非法回退 abort + 30）——受保护
@@ -488,7 +491,7 @@ files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会�
 
 路径前缀无法代理**绝对路径资源**的 SPA（Vite `/@vite/client`、Next.js `/_next/*` 会绕过 `/proxy/{port}/` 前缀直达 omniterm-host 而 404）。配置 `--proxy-domain <base>`（env `OMNITERM_PROXY_DOMAIN`）后启用子域名方案：
 
-- **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。
+- **入口**：最外层 middleware `proxy_host_mw`（仅 `base_host` 配置时挂载，先于 CorsLayer/TraceLayer/Router/fallback），`parse_proxy_host` 精确匹配 `{纯数字}.{base}`（可带 `:{listen_port}` 后缀，大小写不敏感，IPv6 字面量 `[::1]:8080` 按 `]` 结尾判别不误剥端口），命中即代理、否则放行。端口白名单 + 鉴权（`verify_request`，同样提取 `ConnectInfo` 传入本地免密判据）与路径前缀入口完全等价——**子域名不走路由层 `require_auth_mw`，须在 middleware 内显式鉴权**，否则 auth 开启时成开放代理。子域 Host 恒为 `{port}.{base}`（非回环字面量）→ 永不命中本地免密，只认 token。
 - **WS**：middleware 内 `is_ws_upgrade` 判头 + `WebSocketUpgrade::from_request_parts` 手动提取（middleware 无法用 extractor），复用 `ws::relay`。**WS 入口统一做 Origin 校验（CSWSH 防御，2026-08-15 起覆盖代理入口；2026-09-26 起收敛为四入口唯一真源，见「WS Origin 校验」小节）**：浏览器发起的 WS 必带 Origin，Origin 的 host 与请求 Host（均忽略端口）不一致即 403；无 Origin（curl/原生 WS 等非浏览器）放行——CSWSH 只能由浏览器触发。参考 code-server `ensureOrigin`。**relay 收尾发送 Close 帧（2026-08-15）**：任一侧结束（EOF/Close）时 abort 读侧后，写侧收到队列 channel 关闭会把残留的 Close 帧发完再自然退出（有界 2s 超时兜底），上游/客户端不再干等连接超时；此前直接 abort 写侧导致 Close 来不及发出。
 - **鉴权 cookie 跨子域名**：登录/登出的 token cookie 在启用子域名且 base 为合法带点域名时加 `Domain={base}`（`src/api/auth.rs::token_cookie/clear_cookie`），使 `{port}.{base}` 子域名能携带 cookie 通过鉴权；**base 为 IP / localhost / 无点单标签域名时不设 Domain（host-only）**——浏览器规范要求 `Domain` 必须含点，`Domain=192.168.5.216` 会被直接拒绝导致子域名鉴权永久失效（2026-08-15 防御，参考 code-server `getCookieDomain`）；未启用子域名时维持 host-only。
 - **前端**：`/system/info` 返回 `proxy_domain`，前端 `rewriteLocalUrl` 据此生成 `{port}.{base}` 子域名 URL（见 `docs/architecture/frontend.md`）。
@@ -728,14 +731,16 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Auth 安全模型
 
-单用户（admin）密码认证，无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
+单账号密码认证（用户名可自定义，默认 `admin`，见下「用户名」），无状态 JWT（HS256，90 天）经 HttpOnly + SameSite=Lax cookie 传递。
 
 - **实例隔离（cookie 名 + JWT 密钥，2026-09-15）**：实例身份取自**实际生效的 db** 文件名 stem（`instance_id`：`--db`/`OMNITERM_DB`/默认值 → `omniterm` / `omniterm-dev` / `omniterm-preview`），再经 `instance_suffix` 剥掉 `omniterm` 前缀得到后缀，派生出两样东西——cookie 名（`token_cookie_name`：正式版 `omniterm_token`，dev `omniterm_token_dev`）与 JWT 密钥文件名（`jwt_secret_file_name`：`jwt_secret` / `jwt_secret_dev`，均落 `~/.omniterm/`）。**必要性**：浏览器 cookie **不区分端口**，同 host 下 dev(127.0.0.1:9777) 与正式版(0.0.0.0:9077) 共用 `omniterm_token` 时后登录者会覆盖前者，又因当时共用同一签名密钥，被覆盖方仅因 `token_version` 不匹配而 401 → 症状是「dev 登录导致正式版自动登出」（反之 `ver` 巧合相等即串号登录）。正式版后缀为空 ⇒ **沿用无后缀历史名**，老用户登录态不失效；Docker 用卷内 `omniterm.db`，同样不受影响。dev/preview 升级后各需重新登录一次。**新增实例只需给 db 起不同文件名**，无需改代码。相关：`AppState.token_cookie`（读 cookie 的唯一来源，`auth::extract_token` 用它精确匹配 `<name>=`，故 `omniterm_token` 不会误读 `omniterm_token_dev`）；代理剥离侧则按 `is_omniterm_token_cookie` 前缀谓词剥离**全部实例变体**（`omniterm_token[_*]`），避免同 host 下别的实例 JWT 泄漏给上游目标服务。
-- **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `OMNITERM_HOST=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
+- **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `OMNITERM_HOST=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」**拒绝启动**（fail-closed，2026-09-26 起；显式逃生门 `--insecure-no-auth`，见 `docs/reference/auth-not-enforced.md`）。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`GET|POST /auth/settings`（受保护；POST 为部分更新），本地免密另见下条。
 - **密钥**：`OMNITERM_JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并按实例持久化到 `~/.omniterm/jwt_secret[_<实例后缀>]`（0600，见上条「实例隔离」）；容器/多实例场景建议显式设置 `OMNITERM_JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
-- **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
-- **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。**按 IP 记录表有界**：tracked IP 上限 `MAX_TRACKED_IPS`（4096，单人产品 + NAT/VPN 冗余量；实测每 key 约 200 B ⇒ 满表约 0.8 MB），超限按 `last_seen` 淘汰最旧（读路径也刷新 `last_seen`，故是 LRU 而非插入序）；`is_blocked` 纯查询不插 key。淘汰的代价仅限「该 IP 已滑出 5 分钟窗口的时间戳」，不削弱防爆破（真正的速率上限由 bcrypt cost 10 决定）。三个 handler 中前两个是 public，`change-password` 虽在 protected 组，但 `auth_enabled=0` 时 `verify_request` 全放行 ⇒ 三者均无 token 可达。
-- 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。
+- **本地免密开关（`settings.local_auth_required`，2026-09-27）**：默认 `"1"`（本地也要求密码，不静默弱化既有部署）。置 `"0"` 后仅当 `auth_enabled` 开启时生效——`verify_request` 三序判定：auth 总开关关 → 全放行；否则本地免密开关关且 `auth::local_access::is_local_request` 命中 → 放行；否则验 token。判据四条件全真（对端回环 + Host 回环字面量 + Origin 缺失或回环 + 无 `x-forwarded-for`/`x-forwarded-host`/`x-real-ip`/`forwarded`），`peer` 取自 `ConnectInfo`（缺失 → fail-closed 不放行）。Host/Origin 解析复用 `ws::origin_guard`（`origin_host` 纯函数，唯一实现），`is_loopback_host` 与 `enforce_listen_auth` 收敛共用。开关 API：`GET|POST /auth/settings`（部分更新，两项都缺 400）；**无新增 CLI/env**（开关只走 DB + 设置页，`main.rs` 启动读取时缺失/脏值按 `'1'` fail-closed）。威胁模型（同机反代 / Vite 代理 / CSRF / SSH 隧道边界）见 `docs/reference/auth-not-enforced.md`。
+- **用户名（`users.username`，2026-09-27）**：migration `20260927_add_username.sql` 只加列（默认 `'admin'`，老库自动获得）；`normalize_username` 为唯一规范化真源（trim 后 1..=32 字符、禁控制字符，setup/change-username 共用）。JWT `sub` 写用户名，但**校验不比对 `sub`**——撤销仍由 `ver` 承担（改名 `token_version + 1`）。老 API 调用方不传 `username` 按 `admin` 比对，行为与「仅密码」等价。
+- **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出、改密与改名均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
+- **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`、`/auth/change-username`（后两者的 current_password 验证是等价暴力面）。成功登录/改密/改名清零窗口。**按 IP 记录表有界**：tracked IP 上限 `MAX_TRACKED_IPS`（4096，单人产品 + NAT/VPN 冗余量；实测每 key 约 200 B ⇒ 满表约 0.8 MB），超限按 `last_seen` 淘汰最旧（读路径也刷新 `last_seen`，故是 LRU 而非插入序）；`is_blocked` 纯查询不插 key。淘汰的代价仅限「该 IP 已滑出 5 分钟窗口的时间戳」，不削弱防爆破（真正的速率上限由 bcrypt cost 10 决定）。四个 handler 中前两个是 public，后两个虽在 protected 组，但 `auth_enabled=0` 时 `verify_request` 全放行 ⇒ 四者均无 token 可达。
+- 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；用户名不匹配同样计入失败并走同一 1s 延迟；密码 bcrypt cost 10 存储，不落日志。
 
 ## Settings 表
 
@@ -744,6 +749,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | key | 语义 | 消费方 |
 |-----|------|--------|
 | `auth_enabled` | 密码验证总开关（`'1'`/`'0'`） | `main.rs` 启动注入 `AppState.auth_enabled`；`POST /auth/settings` 切换 |
+| `local_auth_required` | 本地访问是否同样要求密码（`'1'`/`'0'`，缺失/脏值按 `'1'` fail-closed；默认 `'1'`） | `main.rs` 启动注入 `AppState.local_auth_required`（仅 `auth_enabled` 开启时生效）；`POST /auth/settings` 切换；判据见 `auth::local_access` |
 | `acp_idle_recycle_min` | ACP 空闲回收阈值（分钟，值域 1..=60） | `main.rs` 启动解析（缺失/非数字回退 `IDLE_RECYCLE_SECS`=300s）注入 `AppState.acp_idle_recycle_secs: Arc<AtomicU64>`；`src/acp/reaper.rs` 每个 tick 动态 `load`（运行时热更新） |
 | `acp_perm_timeout_mode` | 权限请求超时模式（白名单 abort/auto/wait） | `main.rs` 启动解析（缺失/非法回退 abort）与 `acp_perm_timeout_min`（分钟，缺失/非数字回退 1800s）一起注入 `AppState.acp_perm_timeout: Arc<PermissionTimeoutConfig>`（AtomicU8 模式 + AtomicU64 秒）；reaper 每个 tick `snapshot()`（运行时热更新） |
 

@@ -141,10 +141,11 @@ impl AuditAction {
 ///
 /// # actor 为什么带 IP
 ///
-/// OmniTerm 是单人工具，JWT `sub` 恒为 `"admin"`（见 `auth::create_token`），
-/// 单写 actor 等于每条记录都一样，回答不了「谁动的」。**区分度来自来源 IP**：
-/// 多设备/误操作/被入侵三种场景下，`admin@192.168.1.7` 与 `admin@<外网IP>`
-/// 的区别就是全部信息量。scope 进一步区分「对哪个会话/工作区动手」。
+/// OmniTerm 是单人工具：`users.username` 是**单账号的可改展示名**（2026-09-27
+/// 起支持自定义，见 `api::auth::change_username`），写进 actor 既无区分度、
+/// 又会因改名让历史记录的前缀漂移，故 actor 前缀固定为 `admin`。
+/// **区分度来自来源 IP**：多设备/误操作/被入侵三种场景下，`admin@192.168.1.7`
+/// 与 `admin@<外网IP>` 的区别就是全部信息量。scope 进一步区分「对哪个会话/工作区动手」。
 #[derive(Debug, Clone, Default)]
 pub struct AuditContext {
     /// 身份标识，形如 `admin@192.168.1.7`；取不到 IP 时为 `admin@-`。

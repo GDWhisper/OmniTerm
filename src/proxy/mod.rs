@@ -30,7 +30,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;
 
@@ -314,9 +314,13 @@ pub async fn proxy_host_mw(
     }
 
     // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
-    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。
+    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。子域 Host 恒为
+    // `{port}.{base}`（非回环字面量）→ 永远不命中本地免密，无需专门排除。
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ci| ci.0);
     let token = crate::auth::extract_token(&request, &state.token_cookie);
-    if let Err(status) = crate::auth::verify_request(&state, token.as_deref()).await {
+    if let Err(status) =
+        crate::auth::verify_request(&state, token.as_deref(), request.headers(), peer).await
+    {
         return status.into_response();
     }
 
@@ -1521,6 +1525,36 @@ mod tests {
         // 被淘汰的最早端口再访问会被当成首次（有界内存 > 不漏记，见 PortAuditLog 注释）。
         assert!(log.insert(3000), "被淘汰的端口重新访问算首次");
         assert_eq!(log.len(), MAX_TRACKED_PROXY_PORTS, "重新登记不得让表增长");
+    }
+
+    /// 调用点覆盖（子域名形态）：`proxy_host_mw` 必须把 `ConnectInfo` 与 `&HeaderMap`
+    /// 真实传入 `verify_request`，且子域 Host 恒非回环字面量 → **永不**命中本地免密。
+    /// 本测试在鉴权层就返回 401，不触达上游，故无需 mock 目标服务。
+    #[tokio::test]
+    async fn proxy_host_mw_rejects_unauthenticated_subdomain_even_with_local_bypass_on() {
+        use axum::middleware;
+        use std::sync::atomic::Ordering;
+        use tower::ServiceExt;
+
+        let mut state = crate::test_utils::test_state().await;
+        state.auth_enabled.store(true, Ordering::Relaxed);
+        state.local_auth_required.store(false, Ordering::Relaxed);
+        state.proxy.base_host = Some("omniterm.lan".into());
+
+        let app = Router::new()
+            .route("/", any(|| async { "upstream" }))
+            .route_layer(middleware::from_fn_with_state(state.clone(), proxy_host_mw))
+            .with_state(state.clone());
+
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .header("host", "3000.omniterm.lan")
+            .extension(ConnectInfo(std::net::SocketAddr::new("127.0.0.1".parse().unwrap(), 40000)))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.expect("infallible");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     // ── 进程内集成测试（mock 目标服务 + proxy 全链路）──────────────

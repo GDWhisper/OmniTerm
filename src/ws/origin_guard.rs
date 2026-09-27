@@ -61,22 +61,29 @@ pub fn host_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::HOST).and_then(|v| v.to_str().ok())
 }
 
+/// 从 `Origin` 头值提取 host 部分：去端口，并截断 `/:?#` 之后的路径/query/fragment。
+/// 非 UTF-8 / 无 `scheme://` / host 段为空 → `None`（调用方按拒绝处理）。
+///
+/// [`origin_matches_host`] 与 `crate::auth::local_access::is_local_request` 的条件 3
+/// 共用本函数——**Origin 解析只有这一份**（AGENTS §7①）。
+pub fn origin_host(origin: &HeaderValue) -> Option<&str> {
+    let o = origin.to_str().ok()?;
+    let authority = o.split_once("://").map(|(_, rest)| rest)?;
+    let host = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let host = strip_port(host);
+    (!host.is_empty()).then_some(host)
+}
+
 /// WS Origin 校验：Origin 的 host（忽略端口）与请求 Host（忽略端口）比对。
 /// `Origin: http://3000.omniterm.lan:9777` 与 Host `3000.omniterm.lan:9777` → 匹配。
 /// 解析失败 / host 为空 → 拒绝（防御畸形 Origin）。纯函数，便于单测。
 ///
 /// 本函数同时代理入口 `ws::relay` 前的 CSWSH 校验使用，是**唯一真源**。
 pub fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
-    let Ok(o) = origin.to_str() else {
-        return false;
-    };
-    let Some(authority) = o.split_once("://").map(|(_, rest)| rest) else {
-        return false;
-    };
-    let origin_host = authority.split(['/', '?', '#']).next().unwrap_or("");
-    let origin_host = strip_port(origin_host);
-    let host = strip_port(host);
-    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
+    match origin_host(origin) {
+        Some(origin_host) => origin_host.eq_ignore_ascii_case(strip_port(host)),
+        None => false,
+    }
 }
 
 /// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
