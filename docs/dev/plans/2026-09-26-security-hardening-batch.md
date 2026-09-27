@@ -1,6 +1,6 @@
 # 安全加固批次：fail-closed 监听 / WS Origin 收敛 / CORS 收紧 / 审计日志 / 端点限流
 
-> 状态：**Phase 1–4 已实施（2026-09-26）**；Phase 5（S6 限流评估）待实施
+> 状态：**Phase 1–4 已实施（2026-09-26）；Phase 5 已评估并判定关闭（2026-09-27，不实施限流）**
 > 触发条件：修改 `src/main.rs`（启动校验 / CORS layer）、`src/ws/terminal.rs` 与 `src/ws/acp.rs`（WS 入口）、`src/api/mod.rs`（路由挂载）、`src/api/files.rs` / `src/api/git.rs`（审计与限流触点）、新增审计表 migration 前**必读**
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审——该盘点的安全项 S1/S3/S5/S6 未落地、S2 半落地，本计划承接剩余部分
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状表，本计划落地后须回写）、`docs/architecture/backend.md`（分层约定）、`docs/dev/performance-and-safety.md` §P1（审计表上限）、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固与 Origin 先例）
@@ -15,7 +15,7 @@
 | S2' | 主 WS 入口无 Origin 校验 | `src/api/mod.rs:39-44` 三个入口（`ws_terminal_handler` / `ws_external_terminal_handler` / `ws_acp_handler`）不做校验；代理入口 `src/proxy/mod.rs:158-187` 已有 `origin_matches_host` 但未收敛复用 | 恶意网页可跨站建立 WS（CSWSH），借受害者的已登录会话驱动终端/agent |
 | S3 | CORS 全放开 + 无 CSRF 断言 | `src/main.rs:987` `CorsLayer::permissive()` | 当前仅依赖 SameSite=Lax 单点防御，浏览器策略变化即失效 |
 | S5 | 敏感操作无审计 | git push（`src/api/git.rs:234`）、文件写/删/上传（`src/api/files.rs:805/595/502`）、agent 配置变更（`src/api/agents.rs:77/119/172`）均无留痕；代理入口无「开通」原子事件可插（`src/proxy/mod.rs:124` catch-all） | 多设备/误操作/被入侵后无法回答「谁动了什么」；port-forward 计划 P4 的审计待办一直未做 |
-| S6 | 重端点无限流 | `src/auth/rate_limit.rs` `LoginGuard` 只覆盖登录面（IP+失败计次语义） | **已确认 files/git/agents/settings/sessions 全在 `require_auth_mw` 保护下**（`src/api/mod.rs:26-45`）；真正无保护的是 `proxy::routes()`（`:51`，与 `/api/v1` 平级）与 `agent_events`（public 组，靠回环+会话 token） |
+| S6 | 重端点无限流 | `src/auth/rate_limit.rs` `LoginGuard` 只覆盖登录面（IP+失败计次语义） | **已确认 files/git/agents/settings/sessions 全在 `require_auth_mw` 保护下**（`src/api/mod.rs:26-45`）；`proxy::routes()` 另在 `src/proxy/mod.rs:174` 自带一层 `require_auth_mw`（不经 `api/mod.rs:46`，故本表原文「无保护」不准确，2026-09-27 Phase 5 评估订正）；`agent_events` 在 public 组，边界 = 回环 + 会话专属 token |
 
 分级口径沿用原盘点：**P0 = 信任基座**。S1 是其中仍存在的**最高危单点**（原盘点判断，复审确认未变）。
 
@@ -85,9 +85,9 @@
 
 - **决策**：Phase 5 第一步是评估而非编码。**已确认的路由拓扑（2026-09-26）**：`src/api/mod.rs:24` 为 public 组（仅 `health` / `auth` / `agent_events`）；`:26-45` protected 组含 13 组路由 + 3 条 WS，第 45 行挂 `require_auth_mw`（本体 `src/auth/mod.rs:111-119`）→ `files`(:34) / `git`(:36) / `agents`(:37) / `settings`(:32) / `sessions`(:31) **全部在 auth 保护下**。两个例外：① `agent_events::routes()` 在 public 组（边界 = 回环 + 会话专属 token，已有 `MAX_HOOK_BODY_BYTES=1024` / `MAX_HOOK_ENTRIES=256` 有界）；② `proxy::routes()` 与 `/api/v1` 平级、**不经过 auth 中间件**（`:51`）。
 - **原语可用性纠正（重要）**：`src/auth/rate_limit.rs:10-44` 的 `LoginGuard` 是 **IP 维度 + 失败计次**语义（`is_blocked`/`record_failure`/`record_success`），**不适配**「上传频次」这类纯计数限速。所谓「复用」必须落到实处为**抽共享 `SlidingWindow` 结构**（ip/session_id → 窗口内时间戳），LoginGuard 与业务端点各自组合它。IP 取法参照 `src/api/auth.rs:79/98/120`（`ConnectInfo<SocketAddr>`，`main.rs:1093` 已挂 `into_make_service_with_connect_info`）。
-- **结论路径**：若评估判定「auth 已开 + 端点已保护 + 无单用户重客户端滥用面」，本 Phase 直接关闭并在此记录，不硬做；唯一明确候选是 **`/proxy/{*path}` 转发路径**（无 auth 保护），但它是通用反代而非业务端点，限流策略需单独设计（否则会限死正常转发）。
+- **结论路径**：若评估判定「auth 已开 + 端点已保护 + 无单用户重客户端滥用面」，本 Phase 直接关闭并在此记录，不硬做。~~唯一明确候选是 `/proxy/{*path}` 转发路径（无 auth 保护）~~ —— **2026-09-27 评估订正：该候选不成立**。proxy 在 `src/proxy/mod.rs:174` 自带一层 `route_layer(require_auth_mw)`，子域形态在 `:316-321` 显式调 `verify_request`；即两个 proxy 形态都已有 auth 门，不存在「无保护的候选端点」。原判断只看了「不经 `api/mod.rs:46`」这半句就下了「无保护」的结论，是读漏了一层挂载。
 - **否决项**：为「计划完整性」而实施无实际收益的限流（反模式）；把 `LoginGuard` 硬套到上传计数（语义错配）。
-- **翻盘条件**：发现 auth 开启下仍存在单用户重客户端滥用（如移动端重连风暴、批量脚本），再按共享 `SlidingWindow` 落地分级限流。
+- **翻盘条件**：发现 auth 开启下仍存在单用户重客户端滥用（如移动端重连风暴、批量脚本），再按共享 `SlidingWindow` 落地分级限流。**2026-09-27 评估结论：不翻盘，本 Phase 关闭**——见文末「Phase 5 评估报告」，其中另立项三个不该用限流解决的缺陷（`LoginGuard` 无界 map / ACP slot 泄漏 / agent_events 入口无测试）。
 
 ## 实施分期
 
@@ -98,7 +98,6 @@
 | 3 | `src/main.rs` CORS 构造替换为纯函数 `build_cors_layer(...)`（默认同源 predicate + `OMNITERM_*` 显式 origin 白名单取并集）+ 单测穷举 + 反代两态实测 | CORS 不再 permissive | 依赖 dev 环境验证 + 反代形态实测 |
 | 4 | migration + 审计函数 + files/git/agents/proxy 写入点接线 + 上限单测 + settings 读口 | 敏感操作可查、有界 | 无强依赖，宜在 Phase 1 后 |
 | 5 | 评估报告（先出结论）→ 若成立再泛化限流 | 或限流落地，或明确关闭并记录 | Phase 1 改变前提，须在其后 |
-
 ## 验收标准 / 验证清单
 
 - [x] `cargo test enforce_listen_auth`（四格真值表全过）
@@ -341,3 +340,55 @@
 **实现方在此过程中踩了一次红线，记入教训**：我最初的「订正」是直接改 migration 文件里的注释 ⇒ sqlx 报 `migration 20260926 was previously applied but has been modified`，**dev 环境启动失败**。这正是 AGENTS.md「新增即登记，**勿改已有 migration**」红线的机制（migration 内容有 checksum，已应用的库改一个字节就拒不启动），已逐字回滚恢复。**更正注释属于文档，放 `backend.md`，永远不要放进 migration 文件**——哪怕那个文件是自己本 Phase 刚加的、还没发布。
 
 **审查未能验证项（不可视为已完成）**：① 我方的延迟数字（7.44 → 3.90ms）审查者**未独立复现**（其探针被 fsync 与未封顶表污染），但确证了成本结构（3 RT→2 RT 恰省 1/3，与降幅自洽）与根因（本仓未配 `journal_mode`，每事务固定开销主导）；② `pnpm lint` 18 条 warning 是否全部落在既有文件，未逐条核；③ 仓内**既有**测试是否还有第三处「偶发写成必然」，只核了本 Phase 触及的两个文件；④ 真实浏览器渲染与反代真实链路仍未测（actor 退化是代码结构必然推出，非实测）。
+
+---
+
+## Phase 5 评估报告（S6 端点限流，2026-09-27）
+
+**结论：本 Phase 关闭，不实施限流。** 依据计划 D5 的结论路径逐条核对后，两个前提均不再成立，且本次评估发现的三个真实缺陷都不该用限流解决。
+
+### 一、计划 D5 的两处前提被推翻
+
+| D5 原文结论 | 勘察结果 | 证据 |
+|---|---|---|
+| 「`proxy::routes()` 与 `/api/v1` 平级、**不经过 auth 中间件**」⇒ 唯一明确候选是 `/proxy/{*path}` | 字面成立（确不经 `src/api/mod.rs:46` 那层），**但「proxy 无 auth 保护」不成立**：proxy 在自己的 `routes()` 里挂了一次 `require_auth_mw` | `src/proxy/mod.rs:174` `.route_layer(middleware::from_fn_with_state(state, require_auth_mw))` |
+| 同上，子域形态未说明 | 子域 `{port}.{base_host}` 的鉴权在 `proxy_host_mw` 内**显式调用** `verify_request`，且该 middleware 仅配 `--proxy-domain` 时挂载 | `src/proxy/mod.rs:316-321`；挂载点 `src/main.rs:1018-1022` |
+
+⇒ **「唯一明确候选」不存在了**：两个 proxy 形态都已有 auth 门。剩下的业务端点全部在 `require_auth_mw` 之下（`src/api/mod.rs:46`），Phase 2/4 的改动未移动 public/protected 分界（Origin 校验加在 handler 内、audit-log 加进既有 protected 组）。
+
+### 二、「auth 保护下」的前提条件本身是开关
+
+`verify_request`（`src/auth/mod.rs:99-109`）第一句就是 `if !state.auth_enabled.load(Relaxed) { return Ok(()) }`——**`auth_enabled=0` 时 protected 组等于匿名全开**。所以「端点已受保护」只在用户主动开启密码后成立。这不影响限流决策（见下），但意味着**任何依赖 auth 的防护都有同一个开关**，评估时不能把它当作恒定事实。
+
+### 三、真实滥用面：实测只有一条，且已归因前端
+
+唯一的实证是 2026-09-21 诊断记录的**单浏览器**终端 WS 重连：~20 次/分钟、持续一天多、累计 1100+ 次（`docs/dev/diagnostics/2026-09-21-omniterm-cpu-spike.md:65-67`）。该记录同时明确**排除了**它是 CPU 尖峰的根因（真因是 futures/pidfd busy loop，`wait4` 31.5 万/s）。
+
+前端请求面勘察（`接口 → 触发 → 正常/最坏频率`）：正常态 HTTP 轮询仅 5 条链、合计约 **0.93 req/s**；WS 重连为 `1→2→4→8→16→30s` 指数退避封顶 ⇒ 稳态 **0.033 次/秒**；**HTTP 层零自动重试**；批量会话归档/释放/删除、多文件上传/删除**全部串行**；SSE 事件有 500ms 防抖。**没有任何「卡顿/慢/请求多」的手动测试记录**（`user-testing.md` 已知限制 9 条全是视觉/协议/缓存问题）。
+
+### 四、为什么仍不实施限流
+
+1. **计划自己的否决项正命中本情形**：「为计划完整性而实施无实际收益的限流（反模式）」。0.93 req/s 的轮询面 + 串行化的写操作 + 零 HTTP 重试，**不存在可被限流挡住的真实滥用**——限了也只是给正常使用添失败模式（误杀）、并引入新的有界状态要维护。
+2. **原语语义错配仍未解决**：`LoginGuard` 是 IP + 失败计次（`src/auth/rate_limit.rs:27-46`），不是频次计数。要实施就得抽共享 `SlidingWindow`——那是一个**新原语 + 新有界状态 + N 个调用点接线 + 单测**的完整工程，为一个已判定无收益的目标付出，属纯负债。
+3. **单用户工具没有「限流」要解决的那个问题**：限流保护的是共享资源免受多租户/匿名洪水。本工具的部署形态是「一个管理员 + 自己的 agent」，且非回环监听已被 Phase 1 fail-closed 收紧。
+
+### 五、评估中发现的三个真实缺陷（都不该用限流解决，另行立项）
+
+| # | 缺陷 | 严重度 | 为什么限流解决不了 | 处置 |
+|---|---|---|---|---|
+| A | **`LoginGuard` 的 `HashMap<String, Vec<Instant>>` 无 key 上限、无后台清扫**（§P1 无界累积）。更糟的是 `is_blocked` 内部就是 `entry(ip).or_default()` ⇒ **只读检查也会插入新 key**；攻击者从大量出口 IP 各打一次 `/auth/login`（public 组，`src/api/auth.rs:79` 调 `check_rate_limit`）即可让它无限增长。实测 100 万 IP ⇒ 100 万 key（约 30MB+，未计 Vec 分配） | **major**（远程可达、单 IP NAT 下不可利用，但 §P1 要求不依赖外部条件的有界性） | 限流**正是**要往这个 map 里写更多 key 的结构，加限流只会放大它 | **建议修**：加 key 数上限 + 超限淘汰最旧（仿 `proxy::PortAuditLog` 的成熟形态），或改用「计数 + 全局上限」。属独立小修，不属本 Phase |
+| B | **ACP slot 单调累积，永不释放**：`AcpConnectionManager` 的 `activatedRef` 只 `add` 不 `delete`，`[...activatedRef.current].map(AcpSlot)` 使**每访问过一个 ACP 会话就永久多一条 `/ws/acp/<id>` 长连接 + 一条退避重连循环**。这是前端唯一的「N × 重连」放大器，也是 09-21 那次 1100+ 次重连最可能的机制解释 | **major**（前端资源泄漏；后端一抖动时 N 条退避重连同时打） | 这是连接生命周期管理缺陷，不是请求速率问题；限流只会把「泄漏的连接」变成「重连失败」 | **建议修**：slot 应随会话失效/卸载释放（或按 LRU 封顶）。属前端修复 |
+| C | **`agent_events` 的 handler 入口分支无测试**：`MAX_HOOK_BODY_BYTES`（1024）/ 回环 403 / 未知 token 401 三条守卫在 `src/api/agent_events.rs:49-61`，但既有 2 个单测只覆盖 payload 解析，**没有一条打这些入口分支** | minor（有界性由 `MAX_HOOK_ENTRIES` 的单测守住，缺的是入口回归） | 与限流无关 | **建议补**：handler 级 403/413/401 三条测试 |
+
+### 六、翻盘条件（保持有效，触发即重启本 Phase）
+
+按 D5 原文记录，并补一条本次评估新增的判据：**发现 auth 开启下仍存在单用户重客户端滥用**——具体包括 ① 移动端真机实测出重连风暴（移动端三个 pane 同时挂载，轮询不会因切 tab 停止，是最可能的触发场景，目前**未测**）；② 修复缺陷 B 后仍观测到异常重连频率；③ 出现批量脚本证据。届时按共享 `SlidingWindow` 落地分级限流，且**必须与缺陷 A 的修复一起做**（否则限流本身会成为新的无界累积）。
+
+### 七、验收勾销
+
+- [x] 评估报告产出（本小节）
+- [x] D5 两处前提被推翻的证据链（proxy 两层 auth 的实际位置）
+- [x] 「无单用户重客户端滥用面」的正面证据（前端请求面全表 + HTTP 零重试 + 写操作串行）
+- [x] 三个新缺陷已立项并标注各自应有的修法（A major / B major / C minor）
+- [ ] `cargo clippy` / `cargo test` 零新增 —— **本 Phase 无代码改动，不适用**（评估为纯文档）
+- [ ] 前端无改动项 —— 不适用

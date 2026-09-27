@@ -92,7 +92,7 @@
 | S3 CORS 收紧 | ✅ 已落地（2026-09-26，`security-hardening-batch` Phase 3） | `permissive()` → 默认仅同源 + 显式 origin 白名单（`OMNITERM_CORS_ALLOWED_ORIGINS`），判据真源 `src/ws/cors_policy.rs`；原「从 `.env.local` 派生白名单」的方案因端口推导不可行改为显式配置，且未做变更类请求的 Origin/Referer 断言（CSRF 侧由 `SameSite=Lax` + S1 fail-closed 兜底，理由见 Phase 3 实施记录） |
 | S4 自更新校验 | ✅ 已落地 | `src/update.rs:445` `verify_digest()` + 三条单测 |
 | S5 审计日志 | ✅ 已落地（2026-09-26，`security-hardening-batch` Phase 4） | 独立有界表 `audit_log`（滚动 1000 条）+ 写入收敛为 `api::audit::record` 一个函数；覆盖文件写/删/上传、git push、agent 配置增删改、代理端口首次访问；读口 `GET /settings/audit-log` + 设置页只读区块。与原设想的两处偏差：① actor 带来源 IP（JWT `sub` 恒为 `admin`，单写身份无区分度）；② 代理端口**没有「开通」原子事件**（catch-all），改为按端口去重记「首次访问」 |
-| S6 端点限流 | ❌ 未落地，依旧有效 | 仅登录面 `src/auth/rate_limit.rs` `LoginGuard` → 2026-09-26-security-hardening-batch Phase 5（价值待评估，端点可能已在 auth 保护下） |
+| S6 端点限流 | ⛔ 已评估，判定不实施（2026-09-27，`security-hardening-batch` Phase 5） | 原需求「重端点加限流」的前提被推翻：业务端点全在 `require_auth_mw` 之下，两个 proxy 形态也各有 auth 门（`src/proxy/mod.rs:174` 自带一层、`:316-321` 子域显式校验）。实测滥用面仅一条——单浏览器 WS 重连 ~20 次/分（已归因前端连接管理，非后端 CPU 根因）；前端 HTTP 层零自动重试、批量写操作全串行、正常态轮询合计仅 ~0.93 req/s。为无收益的目标抽共享 `SlidingWindow` 属纯负债。**但评估另发现三个真实缺陷**（`LoginGuard` map 无界 / ACP slot 泄漏 / agent_events 入口无测试），已登记 `improvement-directions-remaining.md` |
 | F1 成本记账 | ✅ 已落地（呈现层） | `frontend/src/components/Chat/UsageIndicator.tsx` + `chatStore.ts` `setUsage`；汇总面板模式未做 |
 | F2 审批策略 | ✅ 已落地（超时策略形态） | `src/acp/permission.rs:121-127`；project 级分层未做 |
 | F3 通知 | ❌ 未落地 | 无 Notification API / webhook → backlog |
