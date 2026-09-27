@@ -329,6 +329,8 @@
   "fm.expand": "Expand file manager",
   "fm.rename": "Rename",
   "fm.delete": "Delete",
+  "fm.edit": "Edit content",
+  "fm.editTooLarge": "File too large ({{size}}) — download and edit locally",
   "fm.copyPath": "Copy absolute path",
   "fm.copyPathSuccess": "Path copied",
   "fm.copyPathFailed": "Failed to copy path",

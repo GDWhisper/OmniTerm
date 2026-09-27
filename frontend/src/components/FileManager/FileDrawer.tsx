@@ -44,6 +44,15 @@ interface FileDrawerProps {
   onHeightCommit?: (height: number) => void
   /** SSE change events — when the current file changes externally */
   fileChangeEvent: FileChangeEvent | null
+  /**
+   * 打开时进入的模式。缺省 `'view'`（单击行预览的既有行为）。
+   *
+   * 这是「打开意图」而非受控 state：用户仍可在抽屉顶栏随时切预览/编辑。
+   * 换文件时（filePath 变化）抽屉回到**本次**的打开意图，而不是无条件回
+   * view——否则从 A 文件编辑中通过列表点开 B 文件的「编辑」按钮，会被重置
+   * 成预览态，丢失那次点击的意图。
+   */
+  initialMode?: 'view' | 'edit'
 }
 
 export function FileDrawer({
@@ -58,12 +67,17 @@ export function FileDrawer({
   onHeightChange,
   onHeightCommit,
   fileChangeEvent,
+  initialMode = 'view',
 }: FileDrawerProps) {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
   const fileName = filePath.split('/').pop() || filePath
 
-  const [mode, setMode] = useState<'view' | 'edit'>('view')
+  const [mode, setMode] = useState<'view' | 'edit'>(initialMode)
+  // 打开意图的最新值：换文件的 effect 里要读它，但不能把它放进依赖数组
+  // （那样每次父组件重渲染都会重置模式，用户手切的预览/编辑会被打掉）。
+  const initialModeRef = useRef(initialMode)
+  initialModeRef.current = initialMode
   // SSE 去抖定时器触发时读最新 mode（闭包值已过期 500ms）
   const modeRef = useRef(mode)
   modeRef.current = mode
@@ -132,15 +146,25 @@ export function FileDrawer({
     }
   }, [sessionId, workspaceId, projectId, filePath, isImage])
 
-  // Initial load
+  // Initial load / file switch. 回到本次打开意图（见 initialMode 注释），
+  // 依赖数组刻意不含 initialMode：那是「重新加载」而不是「切模式」。
   useEffect(() => {
     setIsText(null)
     fetchContent()
-    setMode('view')
+    setMode(initialModeRef.current)
     setModified(false)
     setExternalChange(false)
     loadedRef.current = false
   }, [filePath, sessionId, workspaceId, projectId])
+
+  // 打开意图变化时同步模式（不重新拉内容、不清编辑状态）。
+  // 需要它是因为 FileManager 复用同一组件实例：先点行预览（view）、
+  // 再点同一文件的「编辑」按钮时 filePath 没变，上面那个 effect 不会跑，
+  // 抽屉会停留在预览态——那次点击的意图就丢了。
+  // 用户也能在抽屉顶栏随时手动切模式，这里只在外来意图变化时纠正。
+  useEffect(() => {
+    setMode(initialMode)
+  }, [initialMode])
 
   // Handle SSE change events for the current file
   useEffect(() => {

@@ -23,6 +23,25 @@ export const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', '
 /** 按 markdown 渲染的扩展名 —— 与 FileEditor 的 langLoaders 口径保持一致 */
 export const MARKDOWN_EXTS = new Set(['md', 'markdown'])
 
+/**
+ * 行内编辑入口的字节上限。CodeMirror 一次性把全文载入内存并建装饰树，
+ * 大文件会明显卡顿（与 MAX_MARKDOWN_PREVIEW_LINES 同一类「入口侧容量」判据）。
+ * 注意这不影响后端写入口：`write_file` 与上传共用 ≈200MiB body limit。
+ * 取 1MiB 覆盖绝大多数配置文件/脚本，超过的建议用终端编辑器。
+ */
+export const MAX_INLINE_EDIT_BYTES = 1024 * 1024
+
+/**
+ * 该文件是否提供行内编辑入口（FileManager 行内按钮的显隐判据）。
+ * - 目录不给：`size` 对目录的语义是条目数而非字节，没有「内容」可编辑
+ * - `size` 未知（null）时放行：与「非文本由后端探测」同一保守取向，
+ *   真不能编辑时由 FileDrawer 兜底提示，不在入口处预先拒绝
+ */
+export function canInlineEdit(size: number | null, pathType: string): boolean {
+  if (pathType === 'Dir' || pathType === 'SymlinkDir') return false
+  return size === null || size <= MAX_INLINE_EDIT_BYTES
+}
+
 export function getExtension(fileName: string): string {
   return fileName.split('.').pop()?.toLowerCase() || ''
 }

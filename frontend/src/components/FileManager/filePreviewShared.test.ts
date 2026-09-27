@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { getParentPath } from '../../utils/path'
 import {
+  MAX_INLINE_EDIT_BYTES,
   MAX_MARKDOWN_PREVIEW_LINES,
   buildFileDownloadUrl,
+  canInlineEdit,
   countLines,
   isImageFile,
   isMarkdownFile,
@@ -119,5 +121,41 @@ describe('slugifyHeading', () => {
 
   it('纯符号标题退化成空串（不会产生假锚点）', () => {
     expect(slugifyHeading('---')).toBe('')
+  })
+})
+
+describe('canInlineEdit（行内编辑入口判据）', () => {
+  const K = 1024
+
+  it('普通文件在阈值内给入口', () => {
+    expect(canInlineEdit(500 * K, 'File')).toBe(true)
+  })
+
+  it('恰好等于阈值仍给入口（<= 而非 <）', () => {
+    expect(canInlineEdit(MAX_INLINE_EDIT_BYTES, 'File')).toBe(true)
+  })
+
+  it('超过 1 字节即不给入口', () => {
+    expect(canInlineEdit(MAX_INLINE_EDIT_BYTES + 1, 'File')).toBe(false)
+  })
+
+  it('软链接文件与普通文件同判据', () => {
+    expect(canInlineEdit(10, 'SymlinkFile')).toBe(true)
+    expect(canInlineEdit(MAX_INLINE_EDIT_BYTES + 1, 'SymlinkFile')).toBe(false)
+  })
+
+  it('目录一律不给入口（size 对目录是条目数不是字节）', () => {
+    expect(canInlineEdit(0, 'Dir')).toBe(false)
+    expect(canInlineEdit(3, 'Dir')).toBe(false)
+    expect(canInlineEdit(3, 'SymlinkDir')).toBe(false)
+  })
+
+  it('size 未知时放行——保守姿态，不能编辑由 FileDrawer 兜底', () => {
+    expect(canInlineEdit(null, 'File')).toBe(true)
+    expect(canInlineEdit(null, 'SymlinkFile')).toBe(true)
+  })
+
+  it('空文件给入口', () => {
+    expect(canInlineEdit(0, 'File')).toBe(true)
   })
 })

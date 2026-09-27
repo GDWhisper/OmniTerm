@@ -940,8 +940,8 @@ body.fm-dragging * {
 
 /* Actions cell — flex centers the 3 action icons (copy / rename / delete) */
 .fm-td-actions-cell {
-  width: 104px;
-  min-width: 104px;
+  width: 132px;
+  min-width: 132px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1025,6 +1025,15 @@ body.fm-dragging * {
 .fm-act-icon-danger:hover {
   background: var(--danger-12);
   color: var(--danger);
+}
+/* 不可用入口（如超过 MAX_INLINE_EDIT_BYTES 的文件）：视觉退让 + 不吃点击，
+   与 .btn-pixel:disabled 同一取向（ui-style-guide §6）。 */
+.fm-act-icon-disabled,
+.fm-act-icon-disabled:hover {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: transparent;
+  color: var(--text-faint);
 }
 
 /* ── Inline edit input ── */

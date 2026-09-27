@@ -329,6 +329,8 @@
   "fm.expand": "展开文件管理器",
   "fm.rename": "重命名",
   "fm.delete": "删除",
+  "fm.edit": "编辑内容",
+  "fm.editTooLarge": "文件较大（{{size}}），请下载后本地编辑",
   "fm.copyPath": "复制绝对路径",
   "fm.copyPathSuccess": "已复制路径",
   "fm.copyPathFailed": "复制路径失败",

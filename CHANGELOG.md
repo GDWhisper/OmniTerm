@@ -51,6 +51,8 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-09-27 16:50) `[frontend]` 文件管理器新增「编辑内容」行内入口：此前想改配置文件只能「下载 → 本地改 → 上传」或另开终端 vim。表格行新增编辑图标（与「重命名」的铅笔图标区分），session 模式下点击即以编辑态打开底部抽屉，保存走既有链路（`api.writeFile2` + 越界确认 + SSE 去抖后自动刷新表格大小/时间列），**没有新造 dirty/保存状态机**。入口按字节数设限：超过 1 MiB 不提供入口（CodeMirror 一次性载入全文并建装饰树，大文件明显卡顿），该行渲染为退让图标 + title 说明；目录与 size 未知时的判据集中在 `filePreviewShared.ts`（与预览策略同一真源）。顺带补齐一处结构性缺口：抽屉的「打开模式」此前只存在于 store 里却无人消费（mode 是组件内部 state，且换文件时恒被重置为预览），现由 `initialMode` prop 贯通——包括「先预览、再点同一文件编辑」时路径未变、只有意图变化的路径（`frontend/src/components/FileManager/FileManager.tsx`、`FileDrawer.tsx`、`filePreviewShared.ts`）
+
 - (2026-09-26 23:50) `[security]` `[api]` 新增安全审计日志：文件写入/删除/上传、git push、agent 配置增删改、代理端口首次被访问现在都会在 `audit_log` 表留痕，回答「谁在何时动了什么」（多设备/误操作/被入侵后追查）。读取口为只读的 `GET /api/v1/settings/audit-log`（`?limit=` 缺省 50、硬顶 200），前端在设置的「鉴权」页新增只读区块。actor 形如 `admin@192.168.1.7`——本工具是单用户模型（JWT 身份恒为 `admin`），区分度来自来源 IP 与绑定的会话/工作区，故一并落库。**代理端口没有「开通」原子事件**（`/proxy/{port}` 是 catch-all，任何端口首次被访问即打通），故该动作按端口去重只记首次访问，否则反代流量的每次请求都会写一条。表有界：滚动保留最近 1000 条，单条 detail 超 2048 字节按字符边界截断并显式标注省略量（agent 配置的 detail 只记 env **键名**不记值）。读操作刻意不审计（写放大会拖累热路径）（`src/api/audit.rs`、`migrations/20260926_add_audit_log.sql`、`src/api/files.rs`、`src/api/git.rs`、`src/api/agents.rs`、`src/proxy/mod.rs`、`frontend/src/components/Settings/AuditLogSection.tsx`）
 
 ### Changed
