@@ -111,9 +111,12 @@
 
 **适用**：任何 exec 自身完成自更新/热重启的代码；症状「升级成功 + 承诺自动重启但版本不切换」、日志只有孤零零一条 exec 错误。**弯路**：报错是 `No such file or directory`，第一反应去查路径拼写/权限，实际路径字面完全正确——失效的是路径背后的 inode 归属，先 `readlink /proc/<pid>/exe` 看有没有 ` (deleted)` 后缀。
 
+**推论（retire 型 vs rename-in-place 型）**：「替换前捕获的路径替换后直通新二进制」只对 **github_release 的 rename-in-place** 恒成立；**npm reify 的 retire 是「旧路径先死、原路径重生」**——capture 时进程已被 retire 过（前一次升级/手动 `npm install` 后没重启就再升级），`/proc/self/exe` 已是 staging 死路径，canonicalize ENOENT 后连 ` (deleted)` 字面后缀一起带回，npm 把新包装回原路径也救不活它。修法不是放弃捕获路径，而是按 staging 命名形状（`node_modules` 树内 `.owner-<hash>` 组件替换回 `owner`）把死路径复活为 live 安装路径，capture 与 exec 前各复活一道，复活不了再报错——平台/包管理器语义差异（AGENTS §8）再次表现为「同一份代码在不同 install 历史上行为不同」。
+
 **案例证据**：
 - 2026-08-31 远程 Linux 正式版一键升级提示自动重启却从不切换，刷新仍旧版。根因：`update::relaunch()` 在自替换后重新解析 `current_exe()` 拿到 ` (deleted)` 路径 exec ENOENT（此前一轮修复只堵了 ACP 回收挂起路径，此路径仍在）。修复：`relaunch(exe)` 改用替换前 `current_exe_channel()` 捕获的路径。
 - 2026-09-07 npm 渠道（v0.2.19）一键升级后自动重启仍静默失败：失败日志被 RUST_LOG 劫持吞掉（见模式 9 第 2 例），证据只能从 `hexdump` 残留里找。根因链：npm 渠道 daemon 的 exe 在 node_modules 包目录里，升级时 npm reify **先 retire（rename）旧包目录、删 retire 目录**（Linux unlink 运行中 exe 成功）——捕获路径随旧 inode 一起消失，exec ENOENT。修复（v0.2.20）：npm 渠道 exec 目标仍取替换前捕获路径——npm 就位新包后**在同一路径重建包目录**，旧包路径恰好指向新二进制；`relaunch()` 加存在性预检把死路径转成明确报错；`current_exe_channel()` canonicalize 失败回退原始路径（死路径仍可判渠道，保住 `/system/version` 的 restart_command 链路）；`restart_command` 把含 `node_modules` 的 argv[0] 归一为 PATH 上的 shim `omniterm`（npm 渠道回显的原生二进制路径升级后必然失效，照抄重启命令会 `no such file`）。**npm reify 的 retire+delete 与 github_release 的 rename-in-place 语义不同：前者旧路径先死后生，后者旧路径直通新二进制——exec 目标规则按渠道分别成立。**
+- 2026-09-27 正式版 v0.2.25 连点两次「立即重启」都不切换（daemon 日志两条 `manual-relaunch failed`，exec 目标 `…/@gdwhisper/.omniterm-K1Ah91fh/…/bin/omniterm (deleted)`）：进程中至少经历过一次「升级后未重启」，capture 时 `/proc/self/exe` 已是 retire staging 死路径——v0.2.20 的「取替换前捕获路径」在这一形态下拿到的是死路径。修复：`revive_dead_exe` 按 staging 形状复活（`src/update.rs`，4 单测），捕获与 exec 前各一道。
 
 ---
 
