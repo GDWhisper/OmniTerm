@@ -338,3 +338,23 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - `EndTurn` 分支顺手 `try_recv` 清空已排队的 `Flush` 信号：它们要的「写一次」由紧随的 `flush_once` 完成（快照取活状态，是其超集），留着只会让定稿后再触发一次内容相同的冗余写。
 
 **测试**：回归 `end_turn_is_delivered_when_the_flush_signal_channel_is_saturated`——容量 2 的信号通道 + 8 帧折叠 + `probe.try_send` 断言饱和前置条件，钉住「信号通道塞满时 EndTurn 仍恰好送达一次」；已在旧行为（`cmd_tx.try_send`）下验证失败（红），修复后通过（绿）。同批 5 个既有计时测试随 `capture_cmds`/`end_turns` 助手迁移到双通道形态，全绿。
+
+### E17 — tps 分母改为解码窗口：从本窗口首个输出起算（2026-09-27）
+
+来源：用户调研 deepseek-harness（`research/deepseek-harness`）的吞吐口径后拍板借鉴。其 `assistantStepReading`（`packages/client/ui-chat/src/client/contract/turn-metrics.ts`）把每个 assistant step 切成 `ttftMs = firstToken − stepStart` 与 `decodeMs = completed − firstToken`，tps 只摊解码段（`StatsPills.tsx` `decodeTokens / (decodeMs/1000)`），分子是 provider 上报的 `usage.outputTokens`。我方 ACP `usage_update` 无输出 token 字段（E13 已确证），分子仍为「本连接观测字符 ÷ 4」；可借的只有分母口径。
+
+**根因**：E14/E15 的分母锚在**观测窗起点**（`observationWorkMs`，begin=0 / resume=当前工作坐标）。首字前的等待零输出却全额计入 → 首字越慢读数越虚低（reasoning 长思考尤甚）；反向在一小段首字紧跟整轮工具的场景里，首字前的窗口被算成生成时间，读数虚高挂住（E15 测试 `keeps 10s of tools…` 的 100 t/s 即此类虚高）。
+
+**修复**（`frontend/src/utils/turnClock.ts`，纯前端、不入库、不参与同步）：
+
+- 新增首输出锚点 `firstOutputWorkMs`（工作坐标）与纯工具基线 `pureToolMsAtFirst`，删除 `observationWorkMs` / `pureToolMsAtObs` 与 `generationElapsedMs`，替换为 `decodeElapsedMs` = `workElapsedMs(now) − firstOutputWorkMs − max(0, pureToolMs − pureToolMsAtFirst) − pureOpenToolMs(now)`。
+- 锚点在 `addOutputChars` 首次收到输出时落定；基线同刻含「当前开放并集到此为止」的整段（该事件即刻封口的那段——它发生在首字之前，属工具时间），封口段随基线排除、不被扣两次。首字之后新开又闭合的并集照常进 `pureToolMs − 基线`。
+- `resumeTurnClock` 随之不再需要 `at` 参数（窗口重开与新锚点解耦）；观测窗重开时输出归零、锚点重置、关闭的工具段跨重连保留三项均不变。`useAcpChat.ts` 调用点同步去参。
+
+**边界（有意接受）**：
+
+- 首字当刻解码窗口长度 0 → 读数 `null`（对应 dsh 的 `durationTooShort`），不摊薄也不虚构；
+- 首字之后整个窗口都落在工具并集内且无后续输出（首发一小段即整轮跑工具）→ `null`，工具读数照常显示；
+- 首字前的窗口时间含首发那批字符的生产时间，锚点之后只由后续流式输出摊——与 dsh 把首 token 计入解码窗同等乐观，偏差相同方向。
+
+**测试**：`turnClock.test.ts` 全量改算新契约（原有窗口起点口径的期望值逐条重算；新增「首字前的等待不进分母」与「首个输出落在工具并集内：封口段不进分母」两条），三个连带测试文件（`ChatMessage.metarow.test.tsx`、`useAcpChat.midturn.test.tsx`、`chatStore.test.ts`）的 tps 期望随新口径更新，均先在新代码下复现红/绿差异后定值。全量 `pnpm test`（808 例）与 `tsc -b`、`lint` 通过。

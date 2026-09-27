@@ -1138,7 +1138,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 快照只有状态没有事件时间：重开观测窗，不把旧文本除以后续时长。
           // 只从此刻跟踪明确仍在执行的工具，不推算离线期间耗时。
           const at = Date.now()
-          resumeTurnClock(sid, at)
+          resumeTurnClock(sid)
           setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0, at)
           for (const block of blocks) {
             // 卡片缺省状态会被补成 running，不能拿该显示兜底当作执行证据。

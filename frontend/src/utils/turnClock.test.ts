@@ -115,22 +115,23 @@ describe('turnClock tps 估算', () => {
     addOutputChars('s1', 40) // 无 turn → 丢弃
     beginTurn('s1', 0)
     expect(turnTps('s1', 1_000)).toBeNull() // 还没有任何输出
-    addOutputChars('s1', 40)
-    expect(turnTps('s1', 1_000)).toBe(10)
-    addOutputChars('s1', 40)
-    expect(turnTps('s1', 2_000)).toBe(10)
+    addOutputChars('s1', 40, 1_000)
+    // 首个输出瞬间解码窗口长度 0 → 无可测速率（首字延迟不计入分母）
+    expect(turnTps('s1', 1_000)).toBeNull()
+    addOutputChars('s1', 40, 2_000)
+    expect(turnTps('s1', 2_000)).toBe(20) // 80/4 摊在 1s 解码窗口
     // 非正数 / NaN 会污染估算，直接丢弃
     addOutputChars('s1', 0)
     addOutputChars('s1', -5)
     addOutputChars('s1', Number.NaN)
-    expect(turnTps('s1', 2_000)).toBe(10)
+    expect(turnTps('s1', 2_000)).toBe(20)
   })
 
   it('实时读数同样扣除审批挂起时长（与 turnElapsedMs 同口径）', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 40)
+    addOutputChars('s1', 40, 0)
     setTurnWaiting('s1', true, 1_000)
-    // 1000→5000 挂起，工作实际只有 1s → 10 t/s
+    // 1000→5000 挂起，解码窗口只剩 1s → 10 t/s
     expect(turnTps('s1', 5_000)).toBe(10)
   })
 
@@ -138,19 +139,20 @@ describe('turnClock tps 估算', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
     setTurnWaiting('s1', true, 2_000)
-    // 冻结点取挂起那一刻的工作坐标（2s），此后分母不再增长。
-    expect(turnTps('s1', 2_000)).toBe(50)
+    // 冻结点取挂起那一刻的工作坐标（2s），解码窗口此后不再增长。
+    expect(turnTps('s1', 2_000)).toBe(100)
     // 挂 5 分钟：读数必须完全不动，不能随真人思考时间缓慢跌落。
-    expect(turnTps('s1', 300_000)).toBe(50)
+    expect(turnTps('s1', 300_000)).toBe(100)
     setTurnWaiting('s1', false, 302_000)
     // 解除后工作时钟从冻结点续走（302−300=2s），不是从 0 重新起算。
-    expect(turnTps('s1', 302_000)).toBe(50)
-    expect(turnTps('s1', 304_000)).toBe(25)
+    expect(turnTps('s1', 302_000)).toBe(100)
+    // 首字锚点在 1s：1s 等待不进分母，读数按解码窗口 3s 走。
+    expect(turnTps('s1', 304_000)).toBe(400 / 4 / 3)
   })
 
   it('审批挂起与工具并集同时冻住，挂起段不计入工具也不白送生成时间', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 400, 1_000)
+    addOutputChars('s1', 400, 0)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
     // 工具并集跨度也冻在挂起那一刻（1s），不随等待增长；该 1s 已从分母扣除，故读数是 100。
@@ -166,9 +168,19 @@ describe('turnClock tps 估算', () => {
     expect(turnTps('s1', 122_000)).toBe(200)
   })
 
+  it('首字前的等待不进分母：解码窗口从首个输出起算', () => {
+    beginTurn('s1', 0)
+    // 模型 8s 后才吐第一个字：这段时间零输出，计入只会摊薄读数（对齐 dsh decode-only）。
+    addOutputChars('s1', 1_200, 8_000)
+    expect(turnTps('s1', 8_000)).toBeNull() // 锚点即此刻，窗口长度 0
+    addOutputChars('s1', 1_200, 9_000)
+    // 1s 解码窗口内 2_400 字符 → 600 token ÷ 1s（8s 首字延迟被排除）
+    expect(turnTps('s1', 9_000)).toBe(600)
+  })
+
   it('endTurn 冻结最终值：turnTps/turnElapsedMs 归 null，finalTps 保留', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 80)
+    addOutputChars('s1', 80, 0)
     endTurn('s1', 2_000)
     expect(turnTps('s1', 3_000)).toBeNull()
     expect(turnElapsedMs('s1', 3_000)).toBeNull()
@@ -177,7 +189,7 @@ describe('turnClock tps 估算', () => {
 
   it('重复 endTurn 不覆盖已冻结的快照', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 80)
+    addOutputChars('s1', 80, 0)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     updateTurnTool('s1', 'a', 'completed', 2_000)
     endTurn('s1', 2_000)
@@ -192,7 +204,7 @@ describe('turnClock tps 估算', () => {
 
   it('本轮 0 输出定稿会把上一 turn 的快照清掉，不把旧值错配到新消息', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 40)
+    addOutputChars('s1', 40, 0)
     endTurn('s1', 1_000)
     expect(finalTps('s1')).toBe(10)
 
@@ -204,7 +216,7 @@ describe('turnClock tps 估算', () => {
   it('finalTps 快照同样有界：超过上限丢最旧条目', () => {
     for (let i = 0; i <= MAX_TRACKED_TURNS; i++) {
       beginTurn(`s${i}`, 0)
-      addOutputChars(`s${i}`, 40)
+      addOutputChars(`s${i}`, 40, 0)
       endTurn(`s${i}`, 1_000)
     }
     expect(finalTps('s0')).toBeNull()
@@ -214,7 +226,7 @@ describe('turnClock tps 估算', () => {
   it('估算失效的 turn 不留空快照占位，不把别的会话的真实快照挤出上限', () => {
     for (let i = 0; i < MAX_TRACKED_TURNS; i++) {
       beginTurn(`s${i}`, 0)
-      addOutputChars(`s${i}`, 40)
+      addOutputChars(`s${i}`, 40, 0)
       endTurn(`s${i}`, 1_000)
     }
     expect(finalTps('s0')).toBe(10)
@@ -232,17 +244,30 @@ describe('turnClock tps 估算', () => {
 describe('turnClock observed tool intervals', () => {
   beforeEach(() => clearTurnClock())
 
-  it('keeps 10s of tools in work but out of the 1s generation denominator', () => {
+  it('首个输出落在工具并集内：封口前的工具段不进解码分母', () => {
+    beginTurn('s1', 0)
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    // 工具执行 3s 后模型开始说话：锚点落在 4s，[1s,4s] 封口为纯工具
+    addOutputChars('s1', 1_200, 4_000)
+    expect(turnTps('s1', 4_000)).toBeNull() // 零长度窗口，不把工具时间算成生成
+    updateTurnTool('s1', 'a', 'completed', 6_000)
+    // 封口后的并集内生成 [4s,6s] 留在分母 → 300 token ÷ 2s
+    expect(turnTps('s1', 6_000)).toBe(150)
+  })
+
+  it('keeps 10s of tools in work and yields no rate while no prose follows the first delta', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     expect(turnElapsedMs('s1', 11_000)).toBe(11_000)
     expect(turnToolElapsedMs('s1', 11_000)).toBe(10_000)
-    expect(turnTps('s1', 11_000)).toBe(100)
+    // 首字之后整个解码窗口都落在工具并集内、且无后续输出：
+    // 首字前的 1s 不进分母，该段也不再计入 → 无可测速率，宁可 null 不虚报。
+    expect(turnTps('s1', 11_000)).toBeNull()
     endTurn('s1', 11_000)
     expect(turnToolElapsedMs('s1', 12_000)).toBeNull()
     expect(finalToolElapsedMs('s1')).toBe(10_000)
-    expect(finalTps('s1')).toBe(100)
+    expect(finalTps('s1')).toBeNull()
   })
 
   it('counts overlapping parallel tools once and closes the union only after the last tool', () => {
@@ -256,7 +281,8 @@ describe('turnClock observed tool intervals', () => {
     expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
     updateTurnTool('s1', 'b', 'failed', 7_000)
     expect(turnToolElapsedMs('s1', 8_000)).toBe(6_000)
-    expect(turnTps('s1', 8_000)).toBe(50)
+    // 首字锚点 1s；解码窗口 [1s,8s] 去掉 6s 纯工具并集，剩 1s → 100
+    expect(turnTps('s1', 8_000)).toBe(100)
   })
 
   it('subtracts approval overlap once from work and tool union, including open approval at finalization', () => {
@@ -270,10 +296,11 @@ describe('turnClock observed tool intervals', () => {
     setTurnWaiting('s1', true, 7_000)
     expect(turnElapsedMs('s1', 10_000)).toBe(4_000)
     expect(turnToolElapsedMs('s1', 10_000)).toBe(3_000)
-    expect(turnTps('s1', 10_000)).toBe(100)
+    // 首字锚点 1s，解码窗口 [1s,4s] 全部落在工具并集内 → 无可测速率
+    expect(turnTps('s1', 10_000)).toBeNull()
     endTurn('s1', 10_000)
     expect(finalToolElapsedMs('s1')).toBe(3_000)
-    expect(finalTps('s1')).toBe(100)
+    expect(finalTps('s1')).toBeNull()
   })
 
   it('requires explicit execution status and preserves it across partial updates', () => {
@@ -290,7 +317,8 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'a', 'pending', 5_000)
     updateTurnTool('s1', 'a', undefined, 6_000)
     expect(turnToolElapsedMs('s1', 7_000)).toBe(2_000)
-    expect(turnTps('s1', 7_000)).toBe(20)
+    // 首字锚点 1s；解码窗口 [1s,7s] 去掉 2s 工具，剩 4s → 25
+    expect(turnTps('s1', 7_000)).toBe(25)
   })
 
   it('pauses the generation clock at the first prose inside a tool union, then resumes', () => {
@@ -299,22 +327,25 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
     setTurnWaiting('s1', false, 4_000)
-    // 工具窗口内还没有输出：整段开放并集都算工具时间，分母冻在 1s，速度不随工具执行跌落。
-    expect(turnTps('s1', 5_000)).toBe(100)
-    expect(turnTps('s1', 6_000)).toBe(100)
-    // 首次输出到达：把「工具起点 → 此刻」封口为纯工具时间（2s），分母到此暂停；
-    // 多出来的 400 字符暂时不花时间，故读数上跳。封口之后重新走时。
+    // 首字之后的窗口整段落在工具并集内且无后续输出：无解码时长 → null，
+    // 速度不随工具执行跌落入分母、也不拿首字前的 1s 虚报。
+    expect(turnTps('s1', 5_000)).toBeNull()
+    expect(turnTps('s1', 6_000)).toBeNull()
+    // 首次输出到达：把「工具起点 → 此刻」封口为纯工具时间（3s 工作坐标内的 2s），
+    // 解码零点仍是 1s；封口之后重新走时。此刻窗口仍为 0 → null。
     addOutputChars('s1', 400, 5_000)
-    expect(turnTps('s1', 5_000)).toBe(200)
-    expect(turnTps('s1', 6_000)).toBe(100)
+    expect(turnTps('s1', 5_000)).toBeNull()
+    // 解码窗口 [1s,6s] 去掉封口的 2s，剩 1s → 800/4/1
+    expect(turnTps('s1', 6_000)).toBe(200)
     updateTurnTool('s1', 'b', 'in_progress', 6_000)
     updateTurnTool('s1', 'a', 'completed', 7_000)
     updateTurnTool('s1', 'b', 'completed', 8_000)
     updateTurnTool('s1', 'c', 'in_progress', 9_000)
     endTurn('s1', 11_000)
-    // 展示口径仍是完整并集（7s），封口只影响分母：800/4 ÷ 5s。
+    // 展示口径仍是完整并集（7s），封口只影响分母：解码窗口 9−1=8s 去掉闭合纯工具 2s
+    // 与开放并集 2s，剩 4s → 800/4 ÷ 4s。
     expect(finalToolElapsedMs('s1')).toBe(7_000)
-    expect(finalTps('s1')).toBe(40)
+    expect(finalTps('s1')).toBe(50)
   })
 
   it('keeps tool time observed before a reconnect instead of wiping it', () => {
@@ -324,17 +355,19 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'a', 'completed', 6_000)
     expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
     // 移动端关一次浏览器再回来：观测窗重开，但已闭合的 5s 工具时间是真实观测，不能抹掉。
-    resumeTurnClock('s1', 10_000)
+    resumeTurnClock('s1')
     expect(turnToolElapsedMs('s1', 10_000)).toBe(5_000)
-    // 旧工具段已由基线排除，不会从新窗口的分母里再扣一次（否则分母被扣成负数）。
     expect(turnTps('s1', 10_000)).toBeNull()
     addOutputChars('s1', 400, 12_000)
-    // 新窗口 2s 内 400 字符 → 100 token ÷ 2s；旧工具段不参与本窗口分母。
-    expect(turnTps('s1', 12_000)).toBe(50)
-    expect(turnElapsedMs('s1', 12_000)).toBe(12_000)
-    endTurn('s1', 12_000)
+    // 新窗口首个输出即锚点：窗口长度 0 → null，不把重连前的等待算成生成时间。
+    expect(turnTps('s1', 12_000)).toBeNull()
+    addOutputChars('s1', 400, 14_000)
+    // 新窗口 2s 内 800 字符 → 200 token ÷ 2s；旧工具段已由锚点基线排除，不重复扣。
+    expect(turnTps('s1', 14_000)).toBe(100)
+    expect(turnElapsedMs('s1', 14_000)).toBe(14_000)
+    endTurn('s1', 14_000)
     expect(finalToolElapsedMs('s1')).toBe(5_000)
-    expect(finalTps('s1')).toBe(50)
+    expect(finalTps('s1')).toBe(100)
   })
 
   it('has no rate for tool-only or zero-generation turns and ignores non-finite character samples', () => {
@@ -356,7 +389,7 @@ describe('turnClock observed tool intervals', () => {
     addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
-    resumeTurnClock('s1', 10_000)
+    resumeTurnClock('s1')
     expect(turnTps('s1', 10_000)).toBeNull()
     expect(turnToolElapsedMs('s1', 10_000)).toBe(0)
     setTurnWaiting('s1', false, 11_000)
@@ -365,11 +398,12 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'b', 'in_progress', 12_000)
     expect(turnElapsedMs('s1', 14_000)).toBe(5_000)
     expect(turnToolElapsedMs('s1', 14_000)).toBe(2_000)
-    expect(turnTps('s1', 14_000)).toBe(100)
+    // 首字锚点 3s（工作坐标）；[3s,5s] 整段在新开的工具并集内 → 无解码时长
+    expect(turnTps('s1', 14_000)).toBeNull()
     endTurn('s1', 14_000)
-    expect(finalTps('s1')).toBe(100)
+    expect(finalTps('s1')).toBeNull()
     expect(finalToolElapsedMs('s1')).toBe(2_000)
-    resumeTurnClock('missing', 14_000)
+    resumeTurnClock('missing')
     expect(turnElapsedMs('missing', 15_000)).toBeNull()
   })
 
@@ -384,9 +418,12 @@ describe('turnClock observed tool intervals', () => {
     expect(turnElapsedMs('s1', 3_000)).toBe(3_000)
     expect(turnToolElapsedMs('s1', 3_000)).toBeNull()
     expect(turnTps('s1', 3_000)).toBeNull()
-    resumeTurnClock('s1', 3_000)
+    resumeTurnClock('s1')
     addOutputChars('s1', 400, 4_000)
-    expect(turnTps('s1', 4_000)).toBe(100)
+    // 锚点即首输出：此刻窗口长度 0 → null；下一秒才有可测解码窗口
+    expect(turnTps('s1', 4_000)).toBeNull()
+    addOutputChars('s1', 400, 5_000)
+    expect(turnTps('s1', 5_000)).toBe(200)
   })
 
   it('bounds ID size and never finalizes a truncated tracking window as a valid estimate', () => {
@@ -405,7 +442,9 @@ describe('turnClock observed tool intervals', () => {
       updateTurnTool('s1', `tool-${i}`, 'in_progress', 1_000 + i)
       updateTurnTool('s1', `tool-${i}`, 'completed', 1_001 + i)
     }
-    expect(turnTps('s1', 1_001 + MAX_ACTIVE_TURN_TOOLS)).toBe(100)
+    // 估算仍有效：解码窗口 [1s,3.257s] 去掉 257ms 工具段，剩 2s → 1_600/4 ÷ 2s
+    addOutputChars('s1', 1_200, 2_257)
+    expect(turnTps('s1', 3_257)).toBe(200)
   })
 
   it('bounds tool snapshots with rates and clears both on a new turn', () => {
@@ -418,7 +457,8 @@ describe('turnClock observed tool intervals', () => {
     expect(finalToolElapsedMs('s0')).toBeNull()
     expect(finalTps('s0')).toBeNull()
     expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(1_000)
-    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(100)
+    // 首字之后窗口整段在工具内 → 无解码速率，快照 tps 为 null 但工具读数保留
+    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBeNull()
     beginTurn(`s${MAX_TRACKED_TURNS}`, 3_000)
     endTurn(`s${MAX_TRACKED_TURNS}`, 4_000)
     expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(0)

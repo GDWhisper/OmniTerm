@@ -764,16 +764,18 @@ describe('turnClock 接线（计时器与 sending / 审批队列同生命周期�
   it('审批挂起期间 t/s 读数同样冻住（等真人回应不算生成时间）', () => {
     useChatStore.getState().beginPrompt('s1')
     vi.advanceTimersByTime(1_000)
-    addOutputChars('s1', 400)
-    expect(turnTps('s1')).toBe(100)
+    addOutputChars('s1', 1_200)
+    expect(turnTps('s1')).toBeNull() // 首字瞬间无解码时长
+    vi.advanceTimersByTime(3_000)
+    expect(turnTps('s1')).toBe(100) // 解码窗口 3s，1_200 字符 → 300 token ÷ 3s
     useChatStore.getState().setPermission('s1', perm('p1'))
     vi.advanceTimersByTime(120_000)
     // 等用户审批的 2 分钟完全不进分母：读数一动不动，不随思考时间缓慢跌落。
     expect(turnTps('s1')).toBe(100)
     useChatStore.getState().removePermission('s1', 'p1')
     vi.advanceTimersByTime(3_000)
-    // 解除后从冻结点续走：工作 4s → 400/4/4。
-    expect(turnTps('s1')).toBe(25)
+    // 解除后从冻结点续走：解码窗口 6s → 300 token ÷ 6s。
+    expect(turnTps('s1')).toBe(50)
   })
 
   it('并发审批只 resolve 一个时仍冻住（镜像后端 wait_depth）', () => {

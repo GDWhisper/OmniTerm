@@ -53,8 +53,8 @@ describe('ChatMessageView meta row line breaking', () => {
   it('splits the settled reading into nowrap segments so a unit never leaves its number', () => {
     // 结算值来自 turnClock 的定稿快照（finalTps / finalToolElapsedMs）。
     beginTurn('s1', 0)
-    addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    addOutputChars('s1', 400, 4_000)
     updateTurnTool('s1', 'a', 'completed', 12_000)
     endTurn('s1', 12_000)
     act(() => {
@@ -72,7 +72,8 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments[0].textContent).toBe('已工作 5分钟33秒')
     // 工具与速度各占一段，段内的 label 与 value 不分离。
     expect(segments[1].textContent).toBe(' · 工具约 11秒')
-    expect(segments[2].textContent).toBe(' · 估算 100.0 t/s')
+    // 解码窗口 [4s,12s] 去掉封口的 3s 纯工具 → 400/4 ÷ 8s。
+    expect(segments[2].textContent).toBe(' · 估算 12.5 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
   })
 
@@ -100,6 +101,8 @@ describe('ChatMessageView meta row line breaking', () => {
     beginTurn('s3', 0)
     addOutputChars('s3', 800, 1_000)
     updateTurnTool('s3', 'a', 'in_progress', 1_000)
+    // 首字在工具并集内：把 [1s,2s] 封口为纯工具，解码窗口 [1s,3s] 去掉该段剩 1s。
+    addOutputChars('s3', 800, 2_000)
     act(() => {
       root.render(
         <ChatMessageView
@@ -113,7 +116,7 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments.length).toBe(3)
     expect(segments[0].textContent).toBe('工作中 3秒')
     expect(segments[1].textContent).toBe(' · 工具约 2秒')
-    expect(segments[2].textContent).toBe(' · 估算 200.0 t/s')
+    expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
     vi.useRealTimers()
   })
