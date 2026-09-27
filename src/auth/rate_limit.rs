@@ -39,6 +39,12 @@ pub struct LoginGuard {
 /// recently interesting" rather than "first ever inserted": a client that
 /// keeps knocking while blocked keeps its entry alive, while an entry left
 /// behind by an attacker who already went away is the first to go.
+///
+/// Refresh-on-read is *not* a squeeze-out vector: an IP with no entry cannot be
+/// refreshed at all (`is_blocked` never inserts), and an attacker who already
+/// failed wants their entry **evicted** — eviction clears a failure count that
+/// is about to block them. So keeping the most recently failing IP alive is the
+/// correct direction, not the exploitable one.
 struct Entry {
     /// Failure timestamps inside the current window. Pruned on touch, so this
     /// holds at most [`MAX_FAILURES`] + 1 elements.
@@ -133,6 +139,9 @@ fn cap_tracked_ips(map: &mut HashMap<String, Entry>) {
     if map.len() <= MAX_TRACKED_IPS {
         return;
     }
+    // Least-recently-*seen*: `last_seen` is refreshed on reads too, so "oldest"
+    // means "least recently interesting", not "first ever inserted". Evicting by
+    // key order or by iterator order would drop an arbitrary entry instead.
     let Some(oldest) = map.iter().min_by_key(|(_, entry)| entry.last_seen).map(|(k, _)| k.clone())
     else {
         return;
@@ -255,60 +264,83 @@ mod tests {
     /// is guaranteed present when the stamping runs.
     #[test]
     fn cap_evicts_least_recently_seen_first() {
-        let base = Instant::now();
+        // A moment in the *past*, so synthetic stamps derived from it stay
+        // older than any real `Instant::now()` the guard takes later (the
+        // newcomer carries a natural `now` until the restamp below).
+        let base = Instant::now() - Duration::from_secs(10);
         let g = LoginGuard::new();
-        // Fill *to* the cap so no eviction happens during the fill, then the
-        // single insert below is what crosses it.
+
+        // Fill *to* the cap: keys `…0000`..`…4095`, equal digit width so
+        // lexicographic order equals numeric order — a key-ordered eviction
+        // would drop `…0000`, which this policy must protect.
         for i in 0..MAX_TRACKED_IPS {
             g.record_failure(&format!("10.0.0.{:04}", i));
         }
-        // Stamp recency so it increases with fill order, then push one key far
-        // into the future. The future-stamped key is the one an LRU policy must
-        // protect, and — being the lexicographically smallest key of the fill
-        // set under equal digit width — the first thing a key-ordered eviction
-        // would drop, so the two policies disagree on it.
-        {
+
+        /// Restamp every entry so that recency is a strict function of the key's
+        /// numeric tail, with `…0000` and `…9999` pushed far into the future.
+        ///
+        /// Stamping must be by key value, never by `enumerate()`: a HashMap
+        /// iterates in seed-dependent order, so an `enumerate()` ladder hands the
+        /// floor to whichever entry the iteration happens to visit first — the
+        /// very entry a `map.keys().next()` eviction also picks, which made the
+        /// test blind to that mutation (it survived an earlier run).
+        ///
+        /// `…9999` is restamped too: `record_failure` stamps its own entry with
+        /// a real `now`, which is *older* than every synthetic stamp and would
+        /// therefore make the newcomer the eviction victim by accident.
+        fn restamp(g: &LoginGuard, base: Instant) {
             let mut map = g.inner.lock().unwrap();
-            for (i, (_, entry)) in map.iter_mut().enumerate() {
-                entry.last_seen = base + Duration::from_micros(i as u64);
+            for (k, entry) in map.iter_mut() {
+                let n: u64 =
+                    k.rsplit('.').next().and_then(|t| t.parse().ok()).expect("fill key parses");
+                entry.last_seen = match k.as_str() {
+                    // Protected by intent: neither an LRU nor a key-ordered
+                    // policy may drop these two.
+                    "10.0.0.0000" | "10.0.0.9999" => base + Duration::from_secs(3600),
+                    // All remaining keys stay strictly older than the newcomer's
+                    // natural `now`, and `…0001` is the oldest of them all.
+                    _ => base + Duration::from_millis(n),
+                };
             }
-            map.get_mut("10.0.0.0000").unwrap().last_seen = base + Duration::from_secs(3600);
         }
-        // Snapshot the recency floor *before* the overflowing insert decides
-        // who goes, so the assertion below can check the policy itself rather
-        // than guess which key it happened to pick.
+
+        restamp(&g, base);
+
         let floor = {
             let map = g.inner.lock().unwrap();
             map.values().map(|e| e.last_seen).min().unwrap()
         };
-        let victim_candidates: Vec<String> = {
+        let keys_before: std::collections::HashSet<String> = {
             let map = g.inner.lock().unwrap();
-            map.iter().filter(|(_, e)| e.last_seen == floor).map(|(k, _)| k.clone()).collect()
+            map.keys().cloned().collect()
         };
-        g.record_failure("10.0.0.9999"); // overflow by one
+
+        g.record_failure("10.0.0.9999"); // one over the cap
+        restamp(&g, base); // keep the newcomer's synthetic stamp (see above)
 
         let map = g.inner.lock().unwrap();
         assert_eq!(map.len(), MAX_TRACKED_IPS, "cap must be re-established exactly");
         assert!(map.contains_key("10.0.0.0000"), "protected IP was evicted");
         assert!(map.contains_key("10.0.0.9999"), "the newly inserted IP must survive");
 
-        // The policy invariant, not a key coincidence: the entry that actually
-        // disappeared is exactly the one that was least recently seen. Under
-        // any `last_seen`-independent policy (key order, FIFO on a shuffled
-        // map, LIFO) the dropped key is a different one more often than not,
-        // and under "no eviction" the length assertion above already fails.
-        let survivors: std::collections::HashSet<&String> = map.keys().collect();
-        let evicted: Vec<&String> =
-            victim_candidates.iter().filter(|k| !survivors.contains(k)).collect();
-        assert_eq!(
-            evicted.len(),
-            1,
-            "the only evicted entry must be a least-recently-seen one; evicted={evicted:?}"
-        );
-        // The victim carried the floor timestamp, never the future-stamped one.
-        assert_ne!(floor, base + Duration::from_secs(3600));
-    }
+        let gone: Vec<&String> =
+            keys_before.iter().filter(|k| !map.contains_key(k.as_str())).collect();
+        assert_eq!(gone.len(), 1, "exactly one entry may be evicted; gone={gone:?}");
 
+        // If the survivor holding the oldest recency is newer than the floor
+        // measured before the overflow, then the entry that left was the floor
+        // entry — i.e. eviction is LRU and not key-ordered, insertion-ordered,
+        // iteration-ordered or random. A candidate-list approach cannot make
+        // this check: it is blind to an eviction that hit some *other* entry,
+        // which is exactly what a wrong policy does.
+        let min_surviving = map.values().map(|e| e.last_seen).min().unwrap();
+        assert!(
+            min_surviving > floor,
+            "the evicted entry must have been the least recently seen one: \
+             surviving minimum {min_surviving:?} should be newer than floor {floor:?}"
+        );
+    }
     /// Reads must refresh recency, otherwise the eviction policy can only ever
     /// see first-insertion order and a client being probed while blocked would
     /// be evicted as if it had gone away. This is what makes the policy LRU
