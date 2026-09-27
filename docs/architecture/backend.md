@@ -734,7 +734,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 - **密码验证总开关（`settings.auth_enabled`）**：**全新安装默认关闭**（免密码直接使用）；用户在 设置 → 认证 自行开启（首次开启要求设置密码）。**升级保护**：已有密码用户的部署在迁移后自动置 1，绝不静默降级；**Docker 部署默认 1**（`docker-compose.yml` 显式 `OMNITERM_AUTH_ENABLED=1`，因为 `OMNITERM_HOST=0.0.0.0` 全网暴露）。`OMNITERM_AUTH_ENABLED` 环境变量可强制覆盖并写回 DB。启动时若「鉴权关闭 + 非回环监听」输出醒目警告。关闭状态下 `require_auth_mw` 直接放行、`/auth/check` 返回 `authenticated: true`，前端不显示登录页；开启状态恢复完整鉴权。开关 API：`POST /auth/settings`（受保护）。
 - **密钥**：`OMNITERM_JWT_SECRET` 无公开默认值。缺省时启动流程生成 256-bit 随机密钥并按实例持久化到 `~/.omniterm/jwt_secret[_<实例后缀>]`（0600，见上条「实例隔离」）；容器/多实例场景建议显式设置 `OMNITERM_JWT_SECRET`（自动生成的文件随容器重建丢失，届时需重新登录）。
 - **token 吊销（`users.token_version`）**：JWT claims 携带 `ver`，验证时（`auth::verify_token_for_state`）与 `users.token_version` 比对。登出与改密均递增版本号 → 所有旧 token 立即失效。升级到本机制后所有存量 token 失效一次，需重新登录。
-- **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。
+- **登录限流（`auth::LoginGuard`，`src/auth/rate_limit.rs`）**：IP 维度滑动窗口（5 次失败 / 5 分钟），超限返回 429 且不再执行 bcrypt。覆盖 `/auth/setup`、`/auth/login`、`/auth/change-password`（后者的 current_password 验证是等价暴力面）。成功登录/改密清零窗口。**按 IP 记录表有界**：tracked IP 上限 `MAX_TRACKED_IPS`（4096，单人产品 + NAT/VPN 冗余量），超限按 `last_seen` 淘汰最旧（读路径也刷新 `last_seen`，故是 LRU 而非插入序）；`is_blocked` 纯查询不插 key。淘汰的代价仅限「该 IP 已滑出 5 分钟窗口的时间戳」，不削弱防爆破（真正的速率上限由 bcrypt cost 10 决定）。三个 handler 中前两个是 public，`change-password` 虽在 protected 组，但 `auth_enabled=0` 时 `verify_request` 全放行 ⇒ 三者均无 token 可达。
 - 登录失败与无用户均 sleep 1s（响应时间一致防枚举）；密码 bcrypt cost 10 存储，不落日志。
 
 ## Settings 表
