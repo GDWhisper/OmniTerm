@@ -302,8 +302,9 @@ ChatMessageView memo 失效」），流式渲染期表现为每帧全量重渲�
 
 ```tsx
 const CATEGORIES: Category[] = [
-  { id: 'appearance', labelKey: '...', sections: [ThemeSection, ...] },
-  { id: 'mobile',     labelKey: '...', sections: [...], mobileOnly: true },
+  // groups 的每个子数组 = 一张卡片（语义分组），同组内的 section 同卡
+  { id: 'appearance', labelKey: '...', groups: [[ThemeSection], [UiZoomSection, FontSizeSection]] },
+  { id: 'mobile',     labelKey: '...', groups: [[...]], mobileOnly: true },
 ]
 
 function <Feature>() {
@@ -315,7 +316,11 @@ function <Feature>() {
     <div className="settings-layout">
       <nav className="settings-tabs">...tabs...</nav>
       <div className="settings-content">
-        {active.sections.map((S, i) => <S key={i} />)}
+        {active.groups.map((group, i) => (
+          <div className="settings-card" key={i}>
+            {group.map((S, j) => <S key={j} />)}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -345,11 +350,13 @@ function <Feature>() {
 - 每个 section 独立 `useAppStore` 切片订阅，toggle 只重渲对应 section
 - 添加新 section 不动其他 section
 - 公共 UI（如开关按钮组）抽为 `ToggleRow` 复用，消除复制代码
-- **每个 section 的根节点是 `<section>`：内容区（`.settings-content`）用子选择器
-  把它渲染为一张悬浮卡片**（视觉规格见 [ui-style-guide §12](../visual-design/ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)）。
-  section 直接挂在内容区下即成卡，**无需额外包裹层或类名**；返回 fragment 的
-  section 组（如 `SessionsSection`）其各个 `<section>` 同样各自成卡。嵌套在卡片
-  内部的 section（如 `AuthSection` 里的 `ToggleRow`）因不是直接子节点而保持平铺。
+- **每个 section 的根节点是 `<section>`，卡片边界由 `CATEGORIES[].groups` 决定**：
+  同组内的 section 渲染进同一张悬浮卡片（`.settings-card` 包裹层），
+  视觉规格见 [ui-style-guide §12](../visual-design/ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)。
+  **分组按语义定，不按 section 数量**——同类设置（如 UI 缩放 + 终端字号 + 聊天字号）
+  并成一卡，避免「一 section 一卡」在大 tab 里铺出卡海。section 自身不感知分组，
+  因此并组不新增 i18n key、不改 section 结构；拆组同理，只动 `groups`。
+  嵌套在卡片内部的 section（如 `AuthSection` 里的 `ToggleRow`）不受影响。
 
 ```tsx
 function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {

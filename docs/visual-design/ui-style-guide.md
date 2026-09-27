@@ -639,23 +639,36 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | Active tab 文字 | `#FAF2DE` | `#E6DFD0` |
 | Tab rail 右边框 | `var(--wood-shadow)` = `#3A2E1F` | `#090A0D` |
 
-### 内容区子分类卡片（`.settings-content > section`）
+### 内容区子分类卡片（`.settings-card`）
 
-内容区（`.settings-content`）内的**每个 `<section>` 自动渲染为一张悬浮卡片**，
-把同一 tab 下原本平铺贴底的子分类在视觉上分开。CSS 子选择器是唯一真源
-（`index.css`），新增 section 无需在组件里加类名。
+内容区（`.settings-content`）内的每个子分类渲染为一张悬浮卡片，把原本平铺贴底的
+设置行在视觉上分开。**卡片边界 = 语义分组**：`Settings.tsx` 的 `CATEGORIES[].groups`
+决定哪些 section 同卡（同组 = 同一类设置，如「显示尺寸」= UI 缩放 + 终端字号 + 聊天字号），
+渲染成 `.settings-card` 包裹层（`display:flex; flex-direction:column; gap:12px`）。
+分组只改卡片边界，不改 section 自身结构，**不新增 i18n key**——每行仍用各自的
+`SectionTitle`。兜底选择器 `.settings-content > section` 让漏包分组的裸 section
+也照样成卡。
 
 | 属性 | 值 | 说明 |
 |------|-----|------|
-| 背景 | `var(--bg-base)` | 亮色比弹窗 `--bg-elevated` 更亮（浮起），暗色更深。**不用 `--bg-surface`**——卡内输入框与滑块轨道同为 `--bg-surface`，同色会与卡底糊成一片 |
+| 背景 | `var(--bg-base)` | 亮色比弹窗 `--bg-elevated` 更亮（浮起），暗色更深。**不用 `var(--bg-surface)`**——卡内输入框与滑块轨道同为 `--bg-surface`，同色会与卡底糊成一片 |
 | 边框 | `1px solid var(--border-strong)` | 比弹窗 `.pixel-float` 的 2px 低一档，形成层级 |
 | 阴影 | `2px 2px 0 var(--pixel-shadow)` | 低于 `.pixel-float` 的 `4px 4px 0` 一档；多卡叠加不发闷 |
 | Border radius | `0` | 全局硬角 |
 | Padding | `8px 10px` | — |
+| 同卡内 section 间距 | `gap: 12px` | section 自身的 `space-y-*` 只管卡内排版 |
 | 卡内小节标题 | 11px / `fontWeight: 700` / UPPERCASE / `letter-spacing: 0.5px` / `--text-muted` | 单一真源为 `Settings/toggleRow.tsx` 的 `SectionTitle`，各 section 一律复用它，勿另写 h3 样式 |
 | 内容区间距 | `gap: 10px`（原 18px） | 卡片自带 8px 上下 padding，视觉间距仍约 26px |
 
-`.settings-content > section { margin: 0 }` 是这条规则的前身，已合并进卡片规则。
+#### 暗色说明文字的局部提亮（勿删）
+
+暗色下卡底 `--bg-base`（`#12141A`）比弹窗底更暗，沿用面板级 `--text-faint`
+（`#484F58`）时 hint / 单位 / 关于文案只有 **2.2:1**，实测几乎看不清。因此在
+`.dark .settings-content` 内局部把该 token 覆盖为 `#787F8B`（**4.56:1**，过 WCAG AA），
+只影响设置内容区，不动全局 token。
+
+提亮后设置内容区的文字层级：数值 `--text-primary` 12.5:1 > 小节标题 `--text-muted`
+6.0:1 > 说明 `--text-faint` 4.56:1。改动此值后需重新实测三档对比度。
 
 ### 滚动条（OverlayScroll 原生主题化）
 

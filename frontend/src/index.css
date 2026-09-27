@@ -1750,12 +1750,12 @@ body.parchment-texture {
   flex-direction: column;
   gap: 10px;
 }
-/* 每个子分类 = 一张悬浮卡片。内容区的直接子节点恒为各 section（含
-   ToggleRow / DisconnectSlider 及 fragment 展开后的 section），故用子选择器
-   一次性覆盖全部 tab——新增 section 自动成卡，无需在组件里加 class。
-   AuthSection 内部嵌套的 ToggleRow 不是直接子节点，天然留在卡片内。
-   规格见 ui-style-guide §12：背景取 --bg-base 而非 --bg-surface，否则卡内
-   输入框与滑块轨道（同为 --bg-surface）会与卡底糊成一片。 */
+/* 语义分组 = 一张悬浮卡片。CATEGORIES 的 `groups` 决定哪些 section 同卡
+   （见 Settings.tsx），渲染成 `.settings-card` 包裹层。视觉规格见
+   ui-style-guide §12：背景取 --bg-base 而非 --bg-surface，否则卡内输入框与
+   滑块轨道（同为 --bg-surface）会与卡底糊成一片。
+   兜底选择器：万一有 section 直接挂在内容区下（漏包分组），也照样成卡。 */
+.settings-card,
 .settings-content > section {
   margin: 0;
   background: var(--bg-base);
@@ -1764,6 +1764,18 @@ body.parchment-texture {
   box-shadow: 2px 2px 0 var(--pixel-shadow);
   padding: 8px 10px;
 }
+/* 同卡内多个 section 之间留白（section 自身的 space-y-* 只管卡内排版）。 */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 暗色下卡底（--bg-base #12141A）比弹窗底更暗，沿用面板级 --text-faint
+   （#484F58）时说明文字只有 2.2:1，实测几乎看不清。在设置内容区内局部提亮到
+   ~4.6:1（WCAG AA），只影响本区域消费该 token 的 hint / 单位 / 关于文案，
+   不动全局 token。 */
+.dark .settings-content { --text-faint: #787F8B; }
 
 /* Dark theme: the wood tone becomes dark graphite, but the active-tab
    treatment still reads as "selected" thanks to the accent left border. */
