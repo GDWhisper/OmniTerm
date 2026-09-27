@@ -938,7 +938,7 @@ body.fm-dragging * {
   text-overflow: ellipsis;
 }
 
-/* Actions cell — flex centers the 3 action icons (copy / rename / delete) */
+/* Actions cell — flex centers the row action icons (copy / edit / rename / delete; edit 与超阈值退让图标按行二选一) */
 .fm-td-actions-cell {
   width: 132px;
   min-width: 132px;
@@ -1027,7 +1027,8 @@ body.fm-dragging * {
   color: var(--danger);
 }
 /* 不可用入口（如超过 MAX_INLINE_EDIT_BYTES 的文件）：视觉退让 + 不吃点击，
-   与 .btn-pixel:disabled 同一取向（ui-style-guide §6）。 */
+   取值与 ui-style-guide §3.2 PixelButton 的 Disabled 行逐字一致（opacity 0.5 / not-allowed）。
+   span 元素无法使用原生 :disabled 伪类，故用 class 表达。 */
 .fm-act-icon-disabled,
 .fm-act-icon-disabled:hover {
   opacity: 0.5;

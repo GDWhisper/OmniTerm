@@ -13,9 +13,9 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
 import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './OpenTerminalConfirmDialog'
 import { createProjectForDir, projectNameFromPath } from './openTerminal'
-import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconEdit, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
+import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconFileEdit, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
-import { canInlineEdit } from './filePreviewShared'
+import { canInlineEdit, isDirEntry } from './filePreviewShared'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
@@ -1178,7 +1178,7 @@ export function FileManager() {
               <tbody>
                 {files.map((f) => {
                   const fullPath = joinPath(cwd, f.name)
-                  const isDir = f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
+                  const isDir = isDirEntry(f.path_type)
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
                   const isChecked = checked.has(fullPath)
@@ -1235,24 +1235,30 @@ export function FileManager() {
                         >
                           <IconCopy />
                         </span>
-                        {/* 行内编辑入口：只对可编辑行渲染。图标用 IconEdit 而非 rename 的
-                            IconPencil（后者语义是改文件名，此处是改文件内容）。 */}
-                        {canInlineEdit(f.size, f.path_type) && (
+                        {/* 行内编辑入口。三态：
+                            - 可编辑 → 可点图标
+                            - 文件但超 MAX_INLINE_EDIT_BYTES → 退让图标 + 说明为何不可用
+                            - 目录 → 不渲染（目录没有「内容」可编辑，其 size 语义是条目数；
+                              若渲染禁用态会用「文件较大」解释一个不是文件的行，事实错误）
+                            图标用 IconFileEdit（文档+铅笔）而非 rename 的 IconPencil：
+                            语义不同（改内容 vs 改文件名），且两者形态必须可分辨
+                            ——相邻按钮同形会让用户只能靠 tooltip 区分。 */}
+                        {!isDir && canInlineEdit(f.size, f.path_type) && (
                           <span
                             className="fm-act-icon"
                             title={t('fm.edit')}
                             onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); handleEditFile(fullPath) }}
                           >
-                            <IconEdit />
+                            <IconFileEdit />
                           </span>
                         )}
-                        {!canInlineEdit(f.size, f.path_type) && (
+                        {!isDir && !canInlineEdit(f.size, f.path_type) && (
                           <span
                             className="fm-act-icon fm-act-icon-disabled"
                             title={t('fm.editTooLarge', { size: formatSize(f.size) })}
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <IconEdit />
+                            <IconFileEdit />
                           </span>
                         )}
                         <span

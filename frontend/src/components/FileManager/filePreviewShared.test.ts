@@ -5,6 +5,7 @@ import {
   MAX_MARKDOWN_PREVIEW_LINES,
   buildFileDownloadUrl,
   canInlineEdit,
+  isDirEntry,
   countLines,
   isImageFile,
   isMarkdownFile,
@@ -157,5 +158,22 @@ describe('canInlineEdit（行内编辑入口判据）', () => {
 
   it('空文件给入口', () => {
     expect(canInlineEdit(0, 'File')).toBe(true)
+  })
+})
+
+describe('isDirEntry（目录判据单一真源）', () => {
+  it('目录与软链接目录都算目录', () => {
+    expect(isDirEntry('Dir')).toBe(true)
+    expect(isDirEntry('SymlinkDir')).toBe(true)
+  })
+
+  it('文件与软链接文件不算目录', () => {
+    expect(isDirEntry('File')).toBe(false)
+    expect(isDirEntry('SymlinkFile')).toBe(false)
+  })
+
+  it('未知 path_type 按非目录处理（不因拼写差异把文件当目录藏掉入口）', () => {
+    expect(isDirEntry('')).toBe(false)
+    expect(isDirEntry('dir')).toBe(false)
   })
 })
