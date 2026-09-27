@@ -639,6 +639,23 @@ All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard 
 | Active tab 文字 | `#FAF2DE` | `#E6DFD0` |
 | Tab rail 右边框 | `var(--wood-shadow)` = `#3A2E1F` | `#090A0D` |
 
+### 内容区子分类卡片（`.settings-content > section`）
+
+内容区（`.settings-content`）内的**每个 `<section>` 自动渲染为一张悬浮卡片**，
+把同一 tab 下原本平铺贴底的子分类在视觉上分开。CSS 子选择器是唯一真源
+（`index.css`），新增 section 无需在组件里加类名。
+
+| 属性 | 值 | 说明 |
+|------|-----|------|
+| 背景 | `var(--bg-base)` | 亮色比弹窗 `--bg-elevated` 更亮（浮起），暗色更深。**不用 `--bg-surface`**——卡内输入框与滑块轨道同为 `--bg-surface`，同色会与卡底糊成一片 |
+| 边框 | `1px solid var(--border-strong)` | 比弹窗 `.pixel-float` 的 2px 低一档，形成层级 |
+| 阴影 | `2px 2px 0 var(--pixel-shadow)` | 低于 `.pixel-float` 的 `4px 4px 0` 一档；多卡叠加不发闷 |
+| Border radius | `0` | 全局硬角 |
+| Padding | `8px 10px` | — |
+| 内容区间距 | `gap: 10px`（原 18px） | 卡片自带 8px 上下 padding，视觉间距仍约 26px |
+
+`.settings-content > section { margin: 0 }` 是这条规则的前身，已合并进卡片规则。
+
 ### 滚动条（OverlayScroll 原生主题化）
 
 所有纵向滚动区域统一用 `<OverlayScroll>` 组件：保留**原生滚动条**并做主题化

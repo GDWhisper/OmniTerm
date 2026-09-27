@@ -345,6 +345,11 @@ function <Feature>() {
 - 每个 section 独立 `useAppStore` 切片订阅，toggle 只重渲对应 section
 - 添加新 section 不动其他 section
 - 公共 UI（如开关按钮组）抽为 `ToggleRow` 复用，消除复制代码
+- **每个 section 的根节点是 `<section>`：内容区（`.settings-content`）用子选择器
+  把它渲染为一张悬浮卡片**（视觉规格见 [ui-style-guide §12](../visual-design/ui-style-guide.md#12-status-bar-popup--尺寸与视觉规格)）。
+  section 直接挂在内容区下即成卡，**无需额外包裹层或类名**；返回 fragment 的
+  section 组（如 `SessionsSection`）其各个 `<section>` 同样各自成卡。嵌套在卡片
+  内部的 section（如 `AuthSection` 里的 `ToggleRow`）因不是直接子节点而保持平铺。
 
 ```tsx
 function ToggleRow({ labelKey, hintKey, value, onToggle }: ToggleRowProps) {

@@ -1748,9 +1748,22 @@ body.parchment-texture {
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 10px;
 }
-.settings-content > section { margin: 0; }
+/* 每个子分类 = 一张悬浮卡片。内容区的直接子节点恒为各 section（含
+   ToggleRow / DisconnectSlider 及 fragment 展开后的 section），故用子选择器
+   一次性覆盖全部 tab——新增 section 自动成卡，无需在组件里加 class。
+   AuthSection 内部嵌套的 ToggleRow 不是直接子节点，天然留在卡片内。
+   规格见 ui-style-guide §12：背景取 --bg-base 而非 --bg-surface，否则卡内
+   输入框与滑块轨道（同为 --bg-surface）会与卡底糊成一片。 */
+.settings-content > section {
+  margin: 0;
+  background: var(--bg-base);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--pixel-shadow);
+  padding: 8px 10px;
+}
 
 /* Dark theme: the wood tone becomes dark graphite, but the active-tab
    treatment still reads as "selected" thanks to the accent left border. */
