@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../../api/client'
+import { api, DEFAULT_USERNAME, type AuthSettings } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
+import { useToastStore } from '../../stores/toastStore'
 import { READER_FONT } from '../../utils/fonts'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
@@ -39,6 +40,14 @@ export function AuthSection() {
   const [confirmPw, setConfirmPw] = useState('')
   const [msg, setMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
   const [loading, setLoading] = useState(false)
+
+  /** `GET /auth/settings` mirror; null = not loaded yet (failed read degrades
+   *  silently to the master-switch-only panel, see the fetch effect). */
+  const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null)
+  const [localAuthRequired, setLocalAuthRequired] = useState(true)
+  const [usernamePw, setUsernamePw] = useState('')
+  const [newUsername, setNewUsername] = useState('')
+  const [changingUsername, setChangingUsername] = useState(false)
 
   // Master-switch modals
   const [disableOpen, setDisableOpen] = useState(false)
@@ -94,6 +103,55 @@ export function AuthSection() {
     }
   }
 
+  /** Local-access verification: off = loopback (127.0.0.1 / localhost) gets in
+   *  without a password, remote access is unchanged. Backend validates the
+   *  request is genuinely loopback (D3), so this switch only relaxes the local
+   *  path. */
+  const handleToggleLocalAuth = async () => {
+    const next = !localAuthRequired
+    setMsg(null)
+    try {
+      await api.setAuthSettings({ local_auth_required: next })
+      setLocalAuthRequired(next)
+    } catch {
+      setMsg({ type: 'err', text: t('auth.localAuthUpdateFailed') })
+    }
+  }
+
+  const handleChangeUsername = async () => {
+    setMsg(null)
+    const next = newUsername.trim()
+
+    if (!usernamePw || !next) {
+      setMsg({ type: 'err', text: t('auth.fillAllFields') })
+      return
+    }
+
+    setChangingUsername(true)
+    try {
+      await api.changeUsername(usernamePw, next)
+      // Renaming bumps token_version server-side: every session is revoked, so
+      // drop the local one too. The toast lives at App level and survives the
+      // switch to the login page, telling the user why they must sign in.
+      useToastStore.getState().addToast('success', t('auth.usernameChanged'))
+      setUsernamePw('')
+      setNewUsername('')
+      await api.logout().catch(() => {})
+      setAuthState('unauthenticated')
+    } catch (err) {
+      const status = (err as { status?: number })?.status
+      if (status === 401) {
+        setMsg({ type: 'err', text: t('auth.wrongPassword') })
+      } else if (status === 400) {
+        setMsg({ type: 'err', text: t('auth.invalidUsername') })
+      } else {
+        setMsg({ type: 'err', text: t('auth.changeUsernameFailed') })
+      }
+    } finally {
+      setChangingUsername(false)
+    }
+  }
+
   /** Toggle pressed: enabling goes through a password form (set-up or verify), disabling through a confirm modal. */
   const handleToggle = async () => {
     if (authEnabled) {
@@ -121,7 +179,7 @@ export function AuthSection() {
   const handleConfirmDisable = async () => {
     setSwitchBusy(true)
     try {
-      await api.setAuthSettings(false)
+      await api.setAuthSettings({ auth_enabled: false })
       setAuthEnabled(false)
       setDisableOpen(false)
     } catch {
@@ -132,7 +190,7 @@ export function AuthSection() {
     }
   }
 
-  /** Enable when no password exists yet: create the user, flip the switch, then sign the user out so they log in with the new password. */
+  /** Enable when no password exists yet: create the user (default username), flip the switch, then sign the user out so they log in with the new password. */
   const handleSetupEnable = async () => {
     setSetupMsg(null)
     if (setupPw.length < 4) {
@@ -145,8 +203,8 @@ export function AuthSection() {
     }
     setSwitchBusy(true)
     try {
-      await api.setup(setupPw) // creates the user + issues a session cookie
-      await api.setAuthSettings(true) // flip the master switch
+      await api.setup(DEFAULT_USERNAME, setupPw) // creates the user + issues a session cookie
+      await api.setAuthSettings({ auth_enabled: true }) // flip the master switch
       setAuthEnabled(true)
       setSetupOpen(false)
       setSetupPw('')
@@ -171,8 +229,12 @@ export function AuthSection() {
     }
     setSwitchBusy(true)
     try {
-      await api.login(setupPw) // verify the current password → new session cookie
-      await api.setAuthSettings(true) // flip the master switch
+      // Login now needs the credential pair. The settings endpoint is open
+      // while the master switch is off (auth disabled ⇒ all routes pass), so
+      // read the account name first; fall back to the default on failure.
+      const settings = await api.getAuthSettings().catch(() => null)
+      await api.login(settings?.username ?? DEFAULT_USERNAME, setupPw) // verify the current password → new session cookie
+      await api.setAuthSettings({ auth_enabled: true }) // flip the master switch
       setAuthEnabled(true)
       setSetupOpen(false)
       setSetupPw('')
@@ -187,6 +249,27 @@ export function AuthSection() {
       setSwitchBusy(false)
     }
   }
+
+  // Keep the local-access switch + username display in sync with the backend
+  // (they only mean anything while the master switch is on). A failed read
+  // degrades silently: the other sections stay usable, no error toast.
+  useEffect(() => {
+    if (!authEnabled) {
+      setAuthSettings(null)
+      return
+    }
+    let cancelled = false
+    api.getAuthSettings()
+      .then((res) => {
+        if (cancelled) return
+        setAuthSettings(res)
+        setLocalAuthRequired(res.local_auth_required)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [authEnabled])
 
   return (
     <section className="space-y-2">
@@ -209,6 +292,56 @@ export function AuthSection() {
           >
             {t('auth.logout')}
           </button>
+
+          {/* ── Local-access verification (only meaningful with the master switch on) ── */}
+          {authSettings && (
+            <ToggleRow
+              labelKey="auth.localAuth"
+              hintKey={localAuthRequired ? 'auth.localAuthHintOn' : 'auth.localAuthHintOff'}
+              value={localAuthRequired}
+              onToggle={handleToggleLocalAuth}
+              dangerHint={!localAuthRequired}
+            />
+          )}
+
+          {/* ── Username: current value + rename form ── */}
+          <SectionTitle style={{ marginTop: 16 }}>{t('auth.username')}</SectionTitle>
+          {authSettings && (
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {authSettings.username ?? t('auth.usernameNotSet')}
+            </p>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <input
+              id="auth-change-username-pw"
+              type="password"
+              placeholder={t('auth.currentPassword')}
+              value={usernamePw}
+              onChange={(e) => setUsernamePw(e.target.value)}
+              style={inputStyle}
+              autoComplete="current-password"
+            />
+            <input
+              id="auth-change-username-new"
+              type="text"
+              placeholder={t('auth.newUsername')}
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              style={inputStyle}
+              autoComplete="username"
+            />
+            <button
+              onClick={handleChangeUsername}
+              disabled={changingUsername}
+              style={{
+                ...btnStyle,
+                color: changingUsername ? 'var(--text-dim)' : 'var(--accent)',
+                borderColor: changingUsername ? 'var(--border)' : 'var(--accent)',
+              }}
+            >
+              {changingUsername ? '…' : t('auth.changeUsername')}
+            </button>
+          </div>
 
           {/* ── Change password ── */}
           <SectionTitle style={{ marginTop: 16 }}>{t('auth.changePassword')}</SectionTitle>

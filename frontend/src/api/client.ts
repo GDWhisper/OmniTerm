@@ -254,6 +254,18 @@ export interface ExternalSession {
   agent_nonce?: string
 }
 
+/** `GET /auth/settings` — master switch + local-access verification mirror +
+ *  the account's current username (`null` when no user row exists yet). */
+export interface AuthSettings {
+  auth_enabled: boolean
+  local_auth_required: boolean
+  username: string | null
+}
+
+/** Default account username. Backend-authoritative (D1): a missing / empty /
+ *  whitespace-only username on setup or login falls back to this value. */
+export const DEFAULT_USERNAME = 'admin'
+
 export const api = {
   // Health
   health: () => request<{ status: string }>('/health'),
@@ -340,16 +352,32 @@ export const api = {
   // Auth — public endpoints where a 401/409 is a business error (wrong
   // password / user already exists), never an expired session, so the
   // caller must handle it locally without triggering the logout redirect.
-  setup: (password: string) =>
-    request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
-  login: (password: string) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
+  // Username is the single account's custom label (default `admin`, backend
+  // authoritative for normalization); it is required on screen, and the
+  // backend falls back to `admin` when omitted by scripts.
+  setup: (username: string, password: string) =>
+    request('/auth/setup', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
+  login: (username: string, password: string) =>
+    request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean }>('/auth/check'),
-  setAuthSettings: (authEnabled: boolean) =>
-    request('/auth/settings', { method: 'POST', body: JSON.stringify({ auth_enabled: authEnabled }) }),
+  /** `local_bypass` = the request hit the loopback bypass (only when local
+   *  verification is disabled); absent/false otherwise. */
+  check: () =>
+    request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean; local_bypass?: boolean }>('/auth/check'),
+  /** Auth settings mirror: master switch + local-access verification + the
+   *  account's current username (`null` when no user row exists yet). */
+  getAuthSettings: () =>
+    request<AuthSettings>('/auth/settings'),
+  /** Partial update — omitted fields keep their stored value (backend 400s
+   *  when both are missing). */
+  setAuthSettings: (update: { auth_enabled?: boolean; local_auth_required?: boolean }) =>
+    request('/auth/settings', { method: 'POST', body: JSON.stringify(update) }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }), noAuthRedirect: true }),
+  /** Renames the account and bumps the token version server-side (all old
+   *  sessions are revoked) — the caller must re-enter the login flow. */
+  changeUsername: (currentPassword: string, newUsername: string) =>
+    request('/auth/change-username', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_username: newUsername }), noAuthRedirect: true }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),

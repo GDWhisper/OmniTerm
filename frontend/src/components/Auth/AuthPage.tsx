@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../../api/client'
+import { api, DEFAULT_USERNAME } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { READER_FONT } from '../../utils/fonts'
 import { PixelButton } from '../PixelUI/PixelButton'
@@ -12,6 +12,9 @@ interface Props {
 export function AuthPage({ needsSetup }: Props) {
   const { t } = useTranslation()
   const setAuthState = useAppStore((s) => s.setAuthState)
+  // Setup prefills the backend's default username (`admin`, D1); login leaves
+  // it empty with a placeholder hint so existing installs know what to type.
+  const [username, setUsername] = useState(needsSetup ? DEFAULT_USERNAME : '')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -19,17 +22,18 @@ export function AuthPage({ needsSetup }: Props) {
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      if (!password || submitting) return
+      const name = username.trim()
+      if (!name || !password || submitting) return
 
       setSubmitting(true)
       setError('')
 
       try {
         if (needsSetup) {
-          await api.setup(password)
+          await api.setup(name, password)
           setAuthState('authenticated')
         } else {
-          await api.login(password)
+          await api.login(name, password)
           setAuthState('authenticated')
         }
       } catch (err: unknown) {
@@ -39,7 +43,7 @@ export function AuthPage({ needsSetup }: Props) {
         setSubmitting(false)
       }
     },
-    [password, submitting, needsSetup, setAuthState, t],
+    [username, password, submitting, needsSetup, setAuthState, t],
   )
 
   const title = needsSetup ? t('auth.setPassword') : t('auth.login')
@@ -53,13 +57,30 @@ export function AuthPage({ needsSetup }: Props) {
           <span style={{ fontFamily: READER_FONT, fontSize: 12 }}>{title}</span>
         </div>
         <form onSubmit={onSubmit} style={formStyle}>
+          <label style={labelStyle} htmlFor="auth-username">
+            {t('auth.username')}
+          </label>
+          <input
+            id="auth-username"
+            type="text"
+            autoFocus={!needsSetup}
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value)
+              setError('')
+            }}
+            placeholder={needsSetup ? undefined : t('auth.usernamePlaceholderDefault')}
+            style={inputStyle}
+            disabled={submitting}
+            autoComplete="username"
+          />
           <label style={labelStyle} htmlFor="auth-password">
             {t('auth.password')}
           </label>
           <input
             id="auth-password"
             type="password"
-            autoFocus
+            autoFocus={needsSetup}
             value={password}
             onChange={(e) => {
               setPassword(e.target.value)
@@ -73,7 +94,7 @@ export function AuthPage({ needsSetup }: Props) {
           <PixelButton
             variant="primary"
             type="submit"
-            disabled={!password || submitting}
+            disabled={!username.trim() || !password || submitting}
             style={{ marginTop: 4 }}
           >
             {submitting ? '...' : title}
