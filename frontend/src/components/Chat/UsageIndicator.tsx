@@ -1,9 +1,6 @@
 import { useState } from 'react'
 import { READER_FONT } from '../../utils/fonts'
 
-const RING_SIZE = 15
-const RING_STROKE = 2.5
-
 /** 货币 ISO 4217 代码 → 显示符号。只覆盖常见币种。
  *
  * 未命中（或 agent 没给 currency）时不硬拼符号：此前恒显示 `$`，agent 报
@@ -44,53 +41,14 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-/** 上下文占用圆环。配色针对深棕木底徽章（`.title-bar-badge`）：轨道用半透明
- *  黑、进度用米色，超 80% 换浅红——原配置栏的 `--bg-surface`/`--accent` 在
- *  木底上对比度不足。 */
-function UsageRing({ pct }: { pct: number }) {
-  const r = (RING_SIZE - RING_STROKE) / 2
-  const c = 2 * Math.PI * r
-  const clamped = Math.min(100, Math.max(0, pct))
-  return (
-    <svg
-      width={RING_SIZE}
-      height={RING_SIZE}
-      viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
-      style={{ transform: 'rotate(-90deg)', display: 'block' }}
-      aria-hidden="true"
-    >
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={r}
-        fill="none"
-        stroke="rgba(0,0,0,0.35)"
-        strokeWidth={RING_STROKE}
-      />
-      <circle
-        cx={RING_SIZE / 2}
-        cy={RING_SIZE / 2}
-        r={r}
-        fill="none"
-        stroke={pct > 80 ? '#FF9E94' : '#FAF2DE'}
-        strokeWidth={RING_STROKE}
-        strokeLinecap="round"
-        strokeDasharray={c}
-        strokeDashoffset={c * (1 - clamped / 100)}
-        style={{ transition: 'stroke-dashoffset 0.4s ease, stroke 0.4s ease' }}
-      />
-    </svg>
-  )
-}
-
 /**
- * 会话用量指示（上下文占用圆环 + 百分比 + 费用），渲染在聊天面板标题栏的状态
+ * 会话用量指示（上下文占用百分比 + 费用），渲染在聊天面板标题栏的状态
  * 徽章位（LIVE/DEAD 旁边）——用量是会话级状态，不属于底部的配置控制区。
  *
  * 木底外观依赖外层 `.panel-title-bar`（选择器 `.panel-title-bar
  * .title-bar-badge` 才生效），因此本组件只在标题栏内使用。
  *
- * `compact`（移动端）：只留圆环 + 百分比。费用文本约 40px，在 360px 宽的标题栏
+ * `compact`（移动端）：只留百分比。费用文本约 40px，在 360px 宽的标题栏
  * 里会把模式徽章和 LIVE 徽章挤变形，代价大于收益；桌面端展示完整。
  */
 export function UsageIndicator({
@@ -133,10 +91,7 @@ export function UsageIndicator({
       onMouseLeave={() => setHover(false)}
     >
       {pct !== null && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <UsageRing pct={pct} />
-          {Math.round(pct)}%
-        </span>
+        <span style={{ color: pct >= 80 ? '#FF9E94' : pct >= 50 ? '#F4D58D' : undefined }}>{Math.round(pct)}%</span>
       )}
       {costAmount !== null && !compact && <span style={{ opacity: 0.75 }}>{formatCost(costAmount, costCurrency)}</span>}
       {used !== null && size !== null && (
