@@ -1,6 +1,6 @@
 # 安全加固批次：fail-closed 监听 / WS Origin 收敛 / CORS 收紧 / 审计日志 / 端点限流
 
-> 状态：**Phase 1–4 已实施（2026-09-26）；Phase 5 已评估并判定关闭（2026-09-27，不实施限流）**
+> 状态：**Phase 1–4 已实施（2026-09-26）；Phase 5 已评估并判定关闭（2026-09-27，不实施限流）。评估中立项的缺陷 A（`LoginGuard` 无界 map）已修复并经真机验证（2026-09-27，`fb9cc78`/`d96546e`，立项号 X14）；缺陷 B（ACP slot 泄漏，X15）、缺陷 C（`agent_events` 入口无测试，X16）仍在 `docs/dev/plans/backlog/improvement-directions-remaining.md`**
 > 触发条件：修改 `src/main.rs`（启动校验 / CORS layer）、`src/ws/terminal.rs` 与 `src/ws/acp.rs`（WS 入口）、`src/api/mod.rs`（路由挂载）、`src/api/files.rs` / `src/api/git.rs`（审计与限流触点）、新增审计表 migration 前**必读**
 > 来源：`docs/dev/plans/archive/2026-09-01-improvement-directions.md` 2026-09-26 复审——该盘点的安全项 S1/S3/S5/S6 未落地、S2 半落地，本计划承接剩余部分
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状表，本计划落地后须回写）、`docs/architecture/backend.md`（分层约定）、`docs/dev/performance-and-safety.md` §P1（审计表上限）、`docs/dev/plans/2026-08-13-port-forward-proxy.md`（P4 安全加固与 Origin 先例）
@@ -376,9 +376,9 @@
 
 | # | 缺陷 | 严重度 | 为什么限流解决不了 | 处置 |
 |---|---|---|---|---|
-| A | **`LoginGuard` 的 `HashMap<String, Vec<Instant>>` 无 key 上限、无后台清扫**（§P1 无界累积）。更糟的是 `is_blocked` 内部就是 `entry(ip).or_default()` ⇒ **只读检查也会插入新 key**；攻击者从大量出口 IP 各打一次 `/auth/login`（public 组，`src/api/auth.rs:79` 调 `check_rate_limit`）即可让它无限增长。实测 100 万 IP ⇒ 100 万 key（约 30MB+，未计 Vec 分配） | **major**（远程可达、单 IP NAT 下不可利用，但 §P1 要求不依赖外部条件的有界性） | 限流**正是**要往这个 map 里写更多 key 的结构，加限流只会放大它 | **建议修**：加 key 数上限 + 超限淘汰最旧（仿 `proxy::PortAuditLog` 的成熟形态），或改用「计数 + 全局上限」。属独立小修，不属本 Phase |
-| B | **ACP slot 单调累积，永不释放**：`AcpConnectionManager` 的 `activatedRef` 只 `add` 不 `delete`，`[...activatedRef.current].map(AcpSlot)` 使**每访问过一个 ACP 会话就永久多一条 `/ws/acp/<id>` 长连接 + 一条退避重连循环**。这是前端唯一的「N × 重连」放大器，也是 09-21 那次 1100+ 次重连最可能的机制解释 | **major**（前端资源泄漏；后端一抖动时 N 条退避重连同时打） | 这是连接生命周期管理缺陷，不是请求速率问题；限流只会把「泄漏的连接」变成「重连失败」 | **建议修**：slot 应随会话失效/卸载释放（或按 LRU 封顶）。属前端修复 |
-| C | **`agent_events` 的 handler 入口分支无测试**：`MAX_HOOK_BODY_BYTES`（1024）/ 回环 403 / 未知 token 401 三条守卫在 `src/api/agent_events.rs:49-61`，但既有 2 个单测只覆盖 payload 解析，**没有一条打这些入口分支** | minor（有界性由 `MAX_HOOK_ENTRIES` 的单测守住，缺的是入口回归） | 与限流无关 | **建议补**：handler 级 403/413/401 三条测试 |
+| A | **`LoginGuard` 的 `HashMap<String, Vec<Instant>>` 无 key 上限、无后台清扫**（§P1 无界累积）。更糟的是 `is_blocked` 内部就是 `entry(ip).or_default()` ⇒ **只读检查也会插入新 key**；攻击者从大量出口 IP 各打一次 `/auth/login`（public 组，`src/api/auth.rs:79` 调 `check_rate_limit`）即可让它无限增长。实测 100 万 IP ⇒ 100 万 key（约 30MB+，未计 Vec 分配） | **major**（远程可达、单 IP NAT 下不可利用，但 §P1 要求不依赖外部条件的有界性） | 限流**正是**要往这个 map 里写更多 key 的结构，加限流只会放大它 | **已修复（2026-09-27，`fb9cc78` + `d96546e`，即 X14）**：改 `HashMap<String, Entry{failures, last_seen}>`，`MAX_TRACKED_IPS=4096` 超限按 `last_seen` LRU 淘汰（读路径也刷新 recency），`is_blocked` 改 `get_mut` 不再插 key。7 条单测，用 7 种错误实现逐一变异验证转红。**真机验证通过**：只读路径 1000 IP 的 RSS 增长为 0、5 次失败后第 6 次 429、窗口过期后恢复且重新计数、跨 IP 独立、灌 2000 IP 后 cap 生效且被淘汰 IP 重打仍正确 429。满表约 0.8 MB（每 key 约 200 B，实测与结构估算互证） |
+| B | **ACP slot 单调累积，永不释放**：`AcpConnectionManager` 的 `activatedRef` 只 `add` 不 `delete`，`[...activatedRef.current].map(AcpSlot)` 使**每访问过一个 ACP 会话就永久多一条 `/ws/acp/<id>` 长连接 + 一条退避重连循环**。这是前端唯一的「N × 重连」放大器，也是 09-21 那次 1100+ 次重连最可能的机制解释 | **major**（前端资源泄漏；后端一抖动时 N 条退避重连同时打） | 这是连接生命周期管理缺陷，不是请求速率问题；限流只会把「泄漏的连接」变成「重连失败」 | **未修（立项 X15，优先级 0）**：`frontend/src/components/Chat/AcpConnectionManager.tsx:53-68`。修法见 backlog：slot 随会话失效（archive/delete/release）从 set 移除，或按 LRU 封顶活跃 slot 数。**勿在后端加限流兜** |
+| C | **`agent_events` 的 handler 入口分支无测试**：`MAX_HOOK_BODY_BYTES`（1024）/ 回环 403 / 未知 token 401 三条守卫在 `src/api/agent_events.rs:49-61`，但既有 2 个单测只覆盖 payload 解析，**没有一条打这些入口分支** | minor（有界性由 `MAX_HOOK_ENTRIES` 的单测守住，缺的是入口回归） | 与限流无关 | **未修（立项 X16）**：补 handler 级 403 / 413 / 401 三条测试；顺手确认 403 分支的 IP 取自 `ConnectInfo` 而非 `X-Forwarded-For`（防伪造） |
 
 ### 六、翻盘条件（保持有效，触发即重启本 Phase）
 
@@ -390,5 +390,8 @@
 - [x] D5 两处前提被推翻的证据链（proxy 两层 auth 的实际位置）
 - [x] 「无单用户重客户端滥用面」的正面证据（前端请求面全表 + HTTP 零重试 + 写操作串行）
 - [x] 三个新缺陷已立项并标注各自应有的修法（A major / B major / C minor）
+- [x] **缺陷 A 修复闭环**（2026-09-27）：`LoginGuard` 有界化 + LRU 淘汰 + 只读不插 key；7 条单测经 7 种错误实现变异验证转红；真机复验 5 项行为全部符合
+- [ ] 缺陷 B（X15，ACP slot 泄漏）修复 —— 前端，优先级 0，未开始
+- [ ] 缺陷 C（X16，`agent_events` 入口测试）—— 未开始
 - [ ] `cargo clippy` / `cargo test` 零新增 —— **本 Phase 无代码改动，不适用**（评估为纯文档）
 - [ ] 前端无改动项 —— 不适用
