@@ -561,10 +561,12 @@ cmd_logs() {
 # ── 命令: test ──
 # 跑 cargo test 并注入本 worktree 的实例库与端口，让「测试连哪个库」不再靠猜
 # （docs/dev/performance-and-safety.md §S6、debug-patterns 模式 11）。注入只作用于
-# 本次命令的子进程，不 export 到调用方 shell；若调用方已显式设 DATABASE_URL 则优先
-# （与测试代码自身的解析优先级一致）。库/端口同源配对使集成测试不会因错配而假绿。
+# 本次命令的子进程，不 export 到调用方 shell；调用方显式传入的 `DATABASE_URL` /
+# `OMNITERM_TEST_PORT` 均优先（与测试代码自身的解析优先级一致）。库/端口同源配对
+# 使集成测试不会因错配而假绿。
 cmd_test() {
     local db_url="${DATABASE_URL:-$DEV_DATABASE_URL}"
+    local test_port="${OMNITERM_TEST_PORT:-$BACKEND_PORT}"
     local args=("$@")
     if [[ ${#args[@]} -eq 0 ]]; then
         args=(--workspace)
@@ -574,7 +576,7 @@ cmd_test() {
     info "OmniTerm 测试（cargo test）"
     divider
     info "库    : $db_url"
-    info "端口  : OMNITERM_TEST_PORT=$BACKEND_PORT（与库同源配对）"
+    info "端口  : OMNITERM_TEST_PORT=$test_port（与库同源配对）"
     info "参数  : ${args[*]}"
     if [[ ! -f "$PROJECT_DIR/frontend/dist/index.html" ]]; then
         warn "frontend/dist 缺失——build.rs 会要求先构建前端（cd frontend && pnpm install && pnpm build）"
@@ -584,7 +586,7 @@ cmd_test() {
     (
         cd "$PROJECT_DIR"
         . "$HOME/.cargo/env"
-        DATABASE_URL="$db_url" OMNITERM_TEST_PORT="$BACKEND_PORT" cargo test "${args[@]}"
+        DATABASE_URL="$db_url" OMNITERM_TEST_PORT="$test_port" cargo test "${args[@]}"
     )
 }
 
