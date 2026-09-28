@@ -366,10 +366,15 @@ pub async fn run_reaper(
                     PROMPT_STALE_SECS
                 );
                 client.mark_prompt_idle();
+                // `abnormal: false`：同样是**合成的非协议原因**（宿主侧观测到的
+                // prompt 卡死定稿，不是协议回了非正常 stopReason）；且本路径不写留痕
+                // system 消息（计划 D3 之外），error 语义会造成「错误提示但无解释」。
+                // 保持既有行为不变。
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "InactivityTimeout".into(),
                     row_id: client.turn_row_id(),
                     duration: client.turn_timing(),
+                    abnormal: false,
                 });
             }
         }

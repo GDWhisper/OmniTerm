@@ -117,7 +117,9 @@ pub struct AgentSnapshot {
 }
 
 /// The session option name used to store agent state.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+///
+/// 例外：tmux format 串内的 `#{@omniterm_agent}` 令牌（`engine/tmux/mod.rs`
+/// list-sessions `-F`）受 tmux format 语法限制保持字面量，改名时需同步。
 pub const AGENT_OPTION: &str = "@omniterm_agent";
 
 /// Parse a `@omniterm_agent` value string into an `AgentSnapshot`.
@@ -160,7 +162,8 @@ pub fn parse_agent_value(value: &str) -> Option<AgentSnapshot> {
 /// Format an `AgentSnapshot` into the `@omniterm_agent` value string.
 ///
 /// All fields are sanitized via `clean_token()` to prevent shell injection.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+#[allow(dead_code)] // 保留（triage #8）：五段格式的 Rust 权威编码器；生产写侧在 tmux
+// hook shell 模板（`engine/tmux/agent_hooks.rs`），round-trip 测试以本函数定义格式契约
 pub fn agent_value(snapshot: &AgentSnapshot) -> String {
     format!(
         "{}:{}:{}:{}:{}",
@@ -176,7 +179,8 @@ pub fn agent_value(snapshot: &AgentSnapshot) -> String {
 ///
 /// Whitespace and characters outside `[A-Za-z0-9_.-]` are replaced with `_`.
 /// This prevents shell injection and ensures the value is safe for `set-option` transport.
-#[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+#[allow(dead_code)] // 保留（triage #9）：`agent_value` 依赖它，且 agent_hooks 测试以它
+// 校验 shell 写侧的等价清洗行为；cfg(test) 会反过来破坏非测试构建里的 agent_value
 pub fn clean_token(s: &str) -> String {
     s.chars()
         .map(

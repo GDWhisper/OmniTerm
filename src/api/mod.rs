@@ -1,5 +1,6 @@
 pub mod agent_events;
 pub mod agents;
+pub mod audit;
 pub mod auth;
 pub mod files;
 pub mod files_watch;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # OmniTerm 启动脚本（所有分支通用）
-# 用法: ./dev.sh {start|stop|restart|status|logs}
+# 用法: ./dev.sh {start|stop|restart|status|logs|test}
 
 set -euo pipefail
 
@@ -558,6 +558,38 @@ cmd_logs() {
     esac
 }
 
+# ── 命令: test ──
+# 跑 cargo test 并注入本 worktree 的实例库与端口，让「测试连哪个库」不再靠猜
+# （docs/dev/performance-and-safety.md §S6、debug-patterns 模式 11）。注入只作用于
+# 本次命令的子进程，不 export 到调用方 shell；调用方显式传入的 `DATABASE_URL` /
+# `OMNITERM_TEST_PORT` 均优先（与测试代码自身的解析优先级一致）。库/端口同源配对
+# 使集成测试不会因错配而假绿。
+cmd_test() {
+    local db_url="${DATABASE_URL:-$DEV_DATABASE_URL}"
+    local test_port="${OMNITERM_TEST_PORT:-$BACKEND_PORT}"
+    local args=("$@")
+    if [[ ${#args[@]} -eq 0 ]]; then
+        args=(--workspace)
+    fi
+
+    echo ""
+    info "OmniTerm 测试（cargo test）"
+    divider
+    info "库    : $db_url"
+    info "端口  : OMNITERM_TEST_PORT=$test_port（与库同源配对）"
+    info "参数  : ${args[*]}"
+    if [[ ! -f "$PROJECT_DIR/frontend/dist/index.html" ]]; then
+        warn "frontend/dist 缺失——build.rs 会要求先构建前端（cd frontend && pnpm install && pnpm build）"
+    fi
+    divider
+
+    (
+        cd "$PROJECT_DIR"
+        . "$HOME/.cargo/env"
+        DATABASE_URL="$db_url" OMNITERM_TEST_PORT="$test_port" cargo test "${args[@]}"
+    )
+}
+
 # ── inotify 资源检查 ──
 _check_inotify_limits() {
     local instances_file="/proc/sys/fs/inotify/max_user_instances"
@@ -638,6 +670,9 @@ case "${1:-}" in
     logs)
         cmd_logs "${2:-both}"
         ;;
+    test)
+        cmd_test "${@:2}"
+        ;;
     -h|--help|help)
         echo ""
         echo "OmniTerm 启动脚本（所有分支通用）"
@@ -650,6 +685,7 @@ case "${1:-}" in
         echo "  restart   重启所有服务（含 Vite 缓存清理）"
         echo "  status    查看运行状态"
         echo "  logs      实时查看日志 (可选: backend | frontend)"
+        echo "  test      跑 Rust 测试（注入本 worktree 实例库与端口；默认 --workspace）"
         echo ""
         echo "端口:  后端 :$BACKEND_PORT / 前端 :$FRONTEND_PORT"
         echo "配置:  在 .env.local 中覆盖 BACKEND_PORT / FRONTEND_PORT"
@@ -657,7 +693,7 @@ case "${1:-}" in
         ;;
     *)
         err "未知命令: ${1:-}"
-        echo "  用法: ./dev.sh {start|stop|restart|status|logs}"
+        echo "  用法: ./dev.sh {start|stop|restart|status|logs|test}"
         echo "  帮助: ./dev.sh --help"
         exit 1
         ;;

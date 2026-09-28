@@ -161,14 +161,63 @@ fn repo_slug() -> &'static str {
     env!("CARGO_PKG_REPOSITORY").trim_start_matches("https://github.com/")
 }
 
+/// Linux `/proc/self/exe` 对已 unlink/rename 走的文件带字面 ` (deleted)` 后缀，
+/// `std::env::current_exe()` 原样带回、不剥离。Windows 无此后缀（剥离是无害空操作）。
+const DELETED_SUFFIX: &str = " (deleted)";
+
+/// 把「运行中二进制已被 npm reify retire」造成的死路径复活为 **live 安装路径**。
+///
+/// npm 升级时 reify 先把旧包目录 rename 成 `.omniterm-<hash>` 之类的 staging 目录
+/// （retire），新包就位后删掉 staging——运行中的进程 /proc/self/exe 因此指向
+/// `staging (deleted)` 死路径，exec 必 ENOENT。npm 同时在**原路径重建包目录**，
+/// 故 live 路径 = 把 staging 组件替换回其宿主目录名（`.omniterm-K1Ah91fh`
+/// → `omniterm`）。复活结果必须真实存在，否则返回 None（调用方保持原死路径，
+/// 渠道判定只依赖路径组成，不受影响）。
+/// 非 npm 形态的死路径（未 retire 的单纯删除、github_release rename-in-place）
+/// 不匹配 staging 形状，原样返回 None，由 `relaunch` 的存在性预检报错。
+fn revive_dead_exe(exe: &Path) -> Option<PathBuf> {
+    let raw = exe.to_string_lossy();
+    let trimmed = raw.strip_suffix(DELETED_SUFFIX).unwrap_or(&raw);
+    let candidate = Path::new(trimmed);
+    if candidate.exists() {
+        return Some(candidate.to_path_buf());
+    }
+    let comps: Vec<std::ffi::OsString> =
+        candidate.components().map(|c| c.as_os_str().to_owned()).collect();
+    // npm 渠道守卫：retire staging 只可能出现在 node_modules 安装树内
+    if !comps.iter().any(|c| c == "node_modules") {
+        return None;
+    }
+    for (i, comp) in comps.iter().enumerate() {
+        // staging 形状：`.` + 宿主名 + `-` + hash（npm reify retire 命名）
+        let name = comp.to_string_lossy();
+        let Some(rest) = name.strip_prefix('.') else { continue };
+        let Some(dash) = rest.rfind('-') else { continue };
+        let owner = &rest[..dash];
+        if owner.is_empty() || owner.contains('.') || owner.contains('/') {
+            continue;
+        }
+        let mut revived = PathBuf::new();
+        for (j, c) in comps.iter().enumerate() {
+            revived.push(if j == i { std::ffi::OsStr::new(owner) } else { c.as_os_str() });
+        }
+        if revived.exists() {
+            return Some(revived);
+        }
+    }
+    None
+}
+
 pub(crate) fn current_exe_channel() -> Result<(PathBuf, Channel)> {
     let exe = std::env::current_exe().context("failed to locate current executable")?;
     // npm 升级会把旧包目录 retire 后删除，运行中进程的 /proc/self/exe 此后是
     // 带 "(deleted)" 后缀的死路径，canonicalize 必然 ENOENT。渠道判定只依赖
-    // 路径组成（node_modules / CARGO_HOME），死路径照样可判——回退原始路径，
-    // 保住 /system/version 的渠道识别与 restart_command 链路（否则一键升级
-    // 入口整个 500，升级徽章消失，用户连重试入口都没有）。
-    let exe = exe.canonicalize().unwrap_or(exe);
+    // 路径组成（node_modules / CARGO_HOME），死路径照样可判——但 exec 自重启
+    // 等真实文件访问必须拿到 live 路径：先尝试按 npm retire staging 形状复活
+    // （同一路径已被 npm 重建为新包），复活不了才回退原始路径，保住
+    // /system/version 的渠道识别与 restart_command 链路（否则一键升级
+    // 入口整个 500，升级徽标消失，用户连重试入口都没有）。
+    let exe = exe.canonicalize().unwrap_or_else(|_| revive_dead_exe(&exe).unwrap_or(exe));
     let channel = detect_channel(
         &exe,
         std::env::var_os("CARGO_HOME").map(PathBuf::from).as_deref(),
@@ -493,7 +542,8 @@ fn replace_exe(tmp: &Path, exe: &Path) -> Result<()> {
 ///   （症状：提示自动重启却静默不重启、刷新仍是旧版）；替换前的路径在替换后
 ///   恰好指向新二进制，才是正确的 exec 目标。macOS 的 `_NSGetExecutablePath`
 ///   返回启动路径字符串、rename 后同名路径已指向新二进制，巧合可用——不得依赖
-///   该平台差异；
+///   该平台差异。npm 渠道的例外在 `revive_dead_exe`：进程被 npm retire 过后
+///   捕获路径是 staging 死路径，按 staging 形状复活为 npm 重建后的 live 路径；
 /// - listen socket 由 tokio/mio 以 CLOEXEC 创建，exec 时内核自动关闭，
 ///   新进程 bind 不会 `Address already in use`；
 /// - daemon 模式的 log fd 非 CLOEXEC，exec 后保留，新进程日志继续落同一文件；
@@ -504,7 +554,11 @@ pub(crate) fn relaunch(exe: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
 
     let args = strip_daemon_flag(&std::env::args_os().collect::<Vec<_>>());
-    let mut cmd = std::process::Command::new(exe);
+    // exec 前最后一道复活：调用方传入的目标可能是**上一次**升级时捕获的死路径
+    // （进程曾被 npm retire 过、未重启又升了一次级），按 staging 形状还原成
+    // npm 当前安装位置的 live 路径。无法复活时保持死路径，由下面的预检报错。
+    let exe = revive_dead_exe(exe).unwrap_or_else(|| exe.to_path_buf());
+    let mut cmd = std::process::Command::new(&exe);
     // 保留原始 argv[0]（可能为相对路径/别名），参数从 argv[1] 起
     if let Some(argv0) = args.first() {
         cmd.arg0(argv0);
@@ -754,5 +808,80 @@ mod tests {
             os("0.0.0.0"),
         ];
         assert_eq!(restart_command(&argv, true), "omniterm stop && omniterm start -d -H 0.0.0.0");
+    }
+
+    /// 按真实 npm 安装树建一份 layout：live 包在 `<root>/@gdwhisper/omniterm/...`，
+    /// retire staging 在 `<root>/@gdwhisper/.omniterm-<hash>/...`（只建目录不建文件，
+    /// 模拟 reify retire 后删 staging 的运行中二进制死路径）。
+    fn npm_layout(root: &Path) -> (PathBuf, PathBuf) {
+        let live = root
+            .join("@gdwhisper/omniterm/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm");
+        let staging = root.join(
+            "@gdwhisper/.omniterm-K1Ah91fh/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm",
+        );
+        // live：wrapper 包 + 平台包二进制
+        std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+        std::fs::write(&live, b"native-binary").unwrap();
+        // staging：仅目录（真实场景里文件已被 npm 删除）
+        std::fs::create_dir_all(staging.parent().unwrap()).unwrap();
+        (live, staging)
+    }
+
+    #[test]
+    fn revive_maps_npm_retire_staging_back_to_live_install() {
+        let dir = std::env::temp_dir().join(format!(
+            "omniterm-revive-staging-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let (live, staging) = npm_layout(&dir);
+        // /proc/self/exe 对已删文件带字面 " (deleted)" 后缀（Linux）
+        let dead = format!("{} (deleted)", staging.display());
+        assert_eq!(revive_dead_exe(Path::new(&dead)).as_deref(), Some(live.as_path()));
+        // 无后缀的 staging 路径同样复活（Windows retire 无后缀）
+        assert_eq!(revive_dead_exe(&staging).as_deref(), Some(live.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revive_strips_deleted_suffix_when_file_still_exists() {
+        let dir = std::env::temp_dir().join(format!(
+            "omniterm-revive-live-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let (live, _) = npm_layout(&dir);
+        let dead = format!("{} (deleted)", live.display());
+        assert_eq!(revive_dead_exe(Path::new(&dead)).as_deref(), Some(live.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revive_none_when_live_install_missing() {
+        let dir = std::env::temp_dir().join(format!(
+            "omniterm-revive-missing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let staging = dir.join(
+            "@gdwhisper/.omniterm-K1Ah91fh/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm",
+        );
+        std::fs::create_dir_all(staging.parent().unwrap()).unwrap();
+        // live 位置不存在（npm 未重建）→ 复活不了，保持死路径由预检报错
+        assert_eq!(revive_dead_exe(&staging), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revive_none_for_non_npm_and_plain_hidden_dirs() {
+        // 非 node_modules 路径（github_release rename-in-place）不匹配
+        assert_eq!(revive_dead_exe(Path::new("/tmp/gone/omniterm (deleted)")), None);
+        // node_modules 内但非 staging 形状的隐藏目录（.config / .cache）不得误判
+        assert_eq!(
+            revive_dead_exe(Path::new(
+                "/root/node_modules/.config/omniterm-linux-x64/bin/omniterm"
+            )),
+            None
+        );
     }
 }

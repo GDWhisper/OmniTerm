@@ -85,7 +85,8 @@ describe('ChatView jump-to-bottom button', () => {
     expect(jumpButton()).toBeTruthy()
 
     act(() => jumpButton()!.click())
-    expect(m.getTop()).toBe(2000)
+    // 钉底写入 scrollTop = scrollHeight，浏览器夹紧到 max（2000 - 600）。
+    expect(m.getTop()).toBe(1400)
     expect(jumpButton()).toBeNull()
   })
 })

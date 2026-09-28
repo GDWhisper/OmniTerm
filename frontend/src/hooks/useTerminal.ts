@@ -33,10 +33,6 @@ const importAddons = () =>
   ])
 let addonsPromise = importAddons()
 
-/** 方案 C D8：滚轮接管总开关（行为级切换，无中间态可灰度）。置 '0' 关闭
- *  接管（wheel 交回 xterm 默认路径）；其余值/缺省开启。Phase 3 回归后移除。 */
-const VIEWPORT_TAKEOVER_ENABLED = import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT !== '0'
-
 /**
  * 帧内是否含变化行。30fps 的 tick 帧多数是空 diff 帧（仅光标移动），
  * 该判据决定历史视口是否需要重拉窗口与提示新输出，避免无谓的窗口请求。
@@ -948,19 +944,17 @@ export function useTerminal({ sessionId, externalSessionName, runtimeKind, fontS
     // ——xterm 6.0.0 中自定义 wheel handler 在鼠标协议路径同样最先执行，
     // 必须显式放行让鼠标上报发出；③ 其余 pty 场景接管（取消 xterm 默认
     // 滚动），alt-screen / 离线由控制器内部拒绝（D4）。
-    if (VIEWPORT_TAKEOVER_ENABLED) {
-      term.attachCustomWheelEventHandler((ev: WheelEvent) => {
-        if (runtimeKindRef.current !== 'pty') return true
-        if (term.modes.mouseTrackingMode !== 'none') return true
-        const ctl = viewportCtlRef.current
-        if (!ctl) return true
-        return !ctl.handleWheel(ev, {
-          lineHeightPx: cellHeightPx(term),
-          rows: term.rows,
-          wsOpen: wsRef.current?.readyState === WebSocket.OPEN,
-        })
+    term.attachCustomWheelEventHandler((ev: WheelEvent) => {
+      if (runtimeKindRef.current !== 'pty') return true
+      if (term.modes.mouseTrackingMode !== 'none') return true
+      const ctl = viewportCtlRef.current
+      if (!ctl) return true
+      return !ctl.handleWheel(ev, {
+        lineHeightPx: cellHeightPx(term),
+        rows: term.rows,
+        wsOpen: wsRef.current?.readyState === WebSocket.OPEN,
       })
-    }
+    })
 
     // Handle resize — debounced so xterm.js and tmux resize together after
     // layout stabilizes. Without debounce, fit.fit() changes xterm dimensions

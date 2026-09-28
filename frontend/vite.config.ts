@@ -9,8 +9,6 @@ import { resolve } from 'node:path'
 const backendPort = process.env.BACKEND_PORT || '9075'
 const frontendPort = process.env.FRONTEND_PORT || '9076'
 const domain = process.env.DOMAIN || 'localhost'
-// 方案 C D8：pty 滚轮接管开关（.env.local 可置 0 关闭；缺省开启）
-const viewportTakeover = process.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT || '1'
 
 // 版本号唯一真相源 = Cargo.toml（git 跟踪，随分支 merge 同步）
 // 不再依赖 .env.local 的 BRANCH_VERSION，避免各 worktree 版本号失同步
@@ -28,23 +26,26 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(branchVersion),
     // 后端端口（子域名代理 URL 生成用；dev 前后端分离时前端不知道后端端口，构建时注入）
     'import.meta.env.VITE_BACKEND_PORT': JSON.stringify(backendPort),
-    // pty 滚轮接管开关（方案 C D8，详见 viewportController.ts 顶部注释）
-    'import.meta.env.VITE_TERMINAL_SCROLLBACK_VIEWPORT': JSON.stringify(viewportTakeover),
   },
   server: {
     port: Number(frontendPort),
     host: '0.0.0.0',
     allowedHosts: [domain, 'localhost'],
     proxy: {
+      // 两条代理都必须 `changeOrigin: false`（保持浏览器原样的 Host 头）：
+      // 后端 WS 入口的 CSWSH 防护按「Origin 的 host == 请求 Host」判定
+      // （src/ws/origin_guard.rs），改写 Host 会把一切非 localhost 访问
+      // （局域网 IP / DOMAIN 域名）误判成跨站 → 全部 WS 403，终端/聊天
+      // 只能停在重连。反代部署同理：Host 必须原样透传（`Host $host`）。
       '/api': {
         target: `http://localhost:${backendPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
       // 端口转发反向代理（P2/P3）：/proxy 前缀透传到后端；ws:true 支撑 WS relay。
       '/proxy': {
         target: `http://localhost:${backendPort}`,
-        changeOrigin: true,
+        changeOrigin: false,
         ws: true,
       },
     },

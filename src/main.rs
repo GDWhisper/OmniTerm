@@ -23,7 +23,7 @@ mod test_utils;
 use anyhow::Context;
 use axum::Router;
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::serve::ListenerExt;
@@ -34,7 +34,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use tokio::signal::unix::{self, SignalKind};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
@@ -110,6 +110,18 @@ struct StartArgs {
     )]
     auth_enabled: Option<bool>,
 
+    /// Explicitly accept the risk of listening on a non-loopback address with password verification
+    /// disabled: without it, startup is refused (fail-closed). Intended for isolated networks where
+    /// you deliberately run unauthenticated and control who can reach the port.
+    #[arg(
+        long,
+        env = "OMNITERM_INSECURE_NO_AUTH",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        value_parser = parse_bool_flag,
+    )]
+    insecure_no_auth: Option<bool>,
+
     /// Listen address (default 127.0.0.1; set 0.0.0.0 to listen on all interfaces)
     #[arg(short = 'H', long, env = "OMNITERM_HOST", default_value = "127.0.0.1")]
     host: String,
@@ -141,6 +153,15 @@ struct StartArgs {
     /// (default 200 MiB; e.g. `--max-upload-body 524288000`).
     #[arg(long, env = "OMNITERM_MAX_UPLOAD_BODY")]
     max_upload_body: Option<usize>,
+
+    /// Extra browser origins allowed to read the API cross-origin (comma-separated,
+    /// e.g. `https://term.example.com,http://192.168.1.10:9778`). Same-origin requests
+    /// are always allowed without configuring this. Needed when a reverse proxy rewrites
+    /// `Host` (nginx default `proxy_set_header Host $proxy_host`), where the browser's
+    /// `Origin` no longer matches the `Host` OmniTerm sees. Unset = same-origin only.
+    /// Maximum 32 entries, each up to 256 bytes; no derivation, no built-in fallback.
+    #[arg(long, env = "OMNITERM_CORS_ALLOWED_ORIGINS")]
+    cors_allowed_origins: Option<String>,
 }
 
 #[derive(Clone)]
@@ -155,6 +176,9 @@ pub struct AppState {
     pub api_keys: HashMap<String, String>,
     /// Password-verification master switch (mirrors `settings.auth_enabled`).
     pub auth_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// 本地访问是否同样要求密码验证（mirrors `settings.local_auth_required`，D4）。
+    /// 仅当 `auth_enabled` 开启时生效：`false` = 本地回环形态免密、远程防线不变。
+    pub local_auth_required: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// ACP 静默待命回收阈值（秒），由 settings 表 `acp_idle_recycle_min` 注入，
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -841,23 +865,35 @@ fn main() -> anyhow::Result<()> {
             // Password-verification master switch: DB is the source of truth;
             // `OMNITERM_AUTH_ENABLED` (CLI/env) overrides and writes back so the
             // UI and the running flag never diverge.
-            let mut auth_enabled = sqlx::query_scalar::<_, String>(
-                "SELECT value FROM settings WHERE key = 'auth_enabled'",
-            )
-            .fetch_optional(&db)
-            .await?
-            .map(|v| v == "1")
-            .unwrap_or(false);
+            let mut auth_enabled =
+                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+                    .bind(auth::SETTING_AUTH_ENABLED)
+                    .fetch_optional(&db)
+                    .await?
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
             if let Some(forced) = args.auth_enabled {
                 auth_enabled = forced;
                 sqlx::query(
-                    "INSERT INTO settings (key, value) VALUES ('auth_enabled', ?) \
+                    "INSERT INTO settings (key, value) VALUES (?, ?) \
                      ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 )
+                .bind(auth::SETTING_AUTH_ENABLED)
                 .bind(if forced { "1" } else { "0" })
                 .execute(&db)
                 .await?;
             }
+
+            // 本地免密开关（D4）：DB 是唯一真相源，缺失默认 true（本地也要求密码，
+            // 不静默弱化既有部署的姿态）。仅字面量 "0" 关闭；"1" 之外的脏值按 true
+            // fail-closed 处理。
+            let local_auth_required =
+                sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+                    .bind(auth::SETTING_LOCAL_AUTH_REQUIRED)
+                    .fetch_optional(&db)
+                    .await?
+                    .map(|v| v != "0")
+                    .unwrap_or(true);
 
             // ACP 静默待命回收阈值（分钟）：DB 是唯一真相源，记录缺失/解析失败
             // 回退到 reaper 默认 300 秒（与硬编码时代行为完全一致）。
@@ -925,6 +961,9 @@ fn main() -> anyhow::Result<()> {
                 token_cookie: token_cookie_name(&suffix),
                 api_keys: resolve_api_keys(),
                 auth_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(auth_enabled)),
+                local_auth_required: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                    local_auth_required,
+                )),
                 acp_idle_recycle_secs,
                 acp_perm_timeout,
                 login_guard: auth::LoginGuard::new(),
@@ -935,6 +974,9 @@ fn main() -> anyhow::Result<()> {
                     self_port: args.port,
                     base_host: args.proxy_domain.clone(),
                     max_request_body: args.proxy_max_body.unwrap_or(proxy::MAX_REQUEST_BODY),
+                    audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
+                        proxy::PortAuditLog::default(),
+                    )),
                 },
                 max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
             };
@@ -984,7 +1026,9 @@ fn main() -> anyhow::Result<()> {
                 app.fallback(embedded_static_handler)
             };
 
-            let app = app.layer(CorsLayer::permissive()).layer(TraceLayer::new_for_http());
+            let app = app
+                .layer(build_cors_layer(args.cors_allowed_origins.as_deref()))
+                .layer(TraceLayer::new_for_http());
 
             // 子域名代理：仅配置 base_host 时挂最外层 Host 路由中间件。
             // layer 顺序「后加的先执行」，加在 CorsLayer/TraceLayer 之后 = 最外层，
@@ -1020,6 +1064,18 @@ fn main() -> anyhow::Result<()> {
             }
             std::fs::write(&pid_file, std::process::id().to_string())?;
 
+            // 非回环监听 + 鉴权关闭 = 全网裸奔：拒绝启动，除非显式 `--insecure-no-auth`。
+            // 纯函数见 enforce_listen_auth（四格真值表有单测）；bail! 经 async 块上抛到
+            // main() 的错误处理：前台直接打到 stderr；--daemonize 路径由 daemon_notify_fail
+            // 回传父进程并 exit(1)（该路径 stderr 已重定向到日志）。
+            //
+            // 位置必须在 daemon_notify_ready 之前：否则 daemon 模式会先向父进程报「启动成功」、
+            // 再在校验处退出，父进程拿到假成功信号（实测该时序 bug：rc=0 而进程根本没起来）。
+            // 放在 bind 之后而非之前：监听地址要等 bind 才知道是否可绑，且端口被占时由 bind
+            // 自己报错（更准确），两者不重叠。
+            let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
+            enforce_listen_auth(listen_host, auth_enabled, args.insecure_no_auth.unwrap_or(false))?;
+
             // daemon 模式：通知父进程启动成功，并附带监听地址/PID 由父进程打印到终端
             // （前台模式 pipe 为 None，no-op，启动提示走下面的 dev/prod 分支）。
             daemon_notify_ready(
@@ -1031,17 +1087,6 @@ fn main() -> anyhow::Result<()> {
                     std::process::id()
                 ),
             );
-
-            // 非回环监听 = 全网暴露，鉴权关闭时必须醒目告警。
-            let listen_host = bind.split_once(':').map(|(h, _)| h).unwrap_or(&bind);
-            let is_loopback = matches!(listen_host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
-            if !auth_enabled && !is_loopback {
-                tracing::warn!(
-                    "密码验证已关闭且监听非回环地址 {} — 任何能访问该端口的人都可完全控制本机。\
-                     请在设置中开启密码验证，或设置环境变量 OMNITERM_AUTH_ENABLED=1。",
-                    listen_host
-                );
-            }
 
             // ── 启动提示 ──────────────────────────────────────────────
             // dev 模式：详细日志（分支、版本、端口）
@@ -1134,16 +1179,96 @@ fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
     }
 }
 
+/// 构造 CORS 层：默认仅同源 + 显式 origin 白名单（S3）。
+///
+/// 取代此前的 `CorsLayer::permissive()`（对所有来源回 `Access-Control-Allow-Origin: *`）。
+/// 三条允许规则与判据真源见 [`crate::ws::cors_policy`]，其中**「无 `Origin` 一律放行」
+/// 是框架保证而非谓词功劳**（`AllowOrigin::to_future` 的 `origin.filter(...)`
+/// 在 Origin 缺失时不调用 predicate），谓词实际只决定「有 Origin 时放不放」。
+///
+/// 放进纯函数的理由：判定的三条分支必须可穷举单测（仿 `enforce_listen_auth`），
+/// 而 tower-http 的 builder 只有在真实请求经过时才暴露行为。
+///
+/// **不**设 `allow_credentials(true)`：本项目凭据是 cookie（同源自动携带）或
+/// `Authorization: Bearer`。开 credentials 还要求 origin 非 `*`——我们的谓词
+/// 已保证这点，但它会把 `ensure_usable_cors_rules` 的组合断言（credentials
+/// 不能与 `Any` 的 header/method/origin/expose 并存，否则 `poll_ready` panic）
+/// 拉进可能触发的范围，而收益为零：跨源要带 Bearer 必须先过预检，预检本身
+/// 已被同源/白名单分支放行。保持 off 让该断言不可能被触发。
+fn build_cors_layer(cors_allowed_origins: Option<&str>) -> CorsLayer {
+    let allowed: std::sync::Arc<[HeaderValue]> =
+        ws::cors_policy::parse_allowed_origins(cors_allowed_origins.unwrap_or("")).into();
+    ws::cors_policy::log_cors_policy(&allowed);
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, parts| {
+            ws::cors_policy::origin_is_allowed(origin, parts, &allowed)
+        }))
+        // 显式列出本前端实际用到的 header：`content-type`（JSON 请求体）与
+        // `authorization`（Bearer）。不用 `AllowHeaders::any()`——那会把
+        // preflight 对所有自定义头放行，正是本轮要收窄的面。
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        // 方法集 = 本服务实际注册的（GET/POST/PUT/PATCH/DELETE，由 src/api/*.rs
+        // 的 handler 形态枚举而来）。**不能省**：`AllowMethods` 默认
+        // `Const(None)` ⇒ 预检拿不到 `Access-Control-Allow-Methods`，跨源部署下
+        // 非简单方法的请求会被浏览器拦在预检上（`cors_layer_preflight_answers_
+        // allowed_methods_and_headers` 钉住这一点）。代理路由是 `routing::any`，
+        // 但其流量被最外层 `proxy_host_mw` 拦在 CorsLayer 之前，不经过本层。
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE])
+    // **不设 max_age**：`MaxAge::exact(ZERO)` 并不「关掉缓存」——它照样
+    // 发 `Access-Control-Max-Age: 0` 头（tower-http 0.6.11 `max_age.rs`
+    // 的 `Exact(Some(0))` 仍产出头）。真正不发头的方式就是保持默认
+    // `MaxAge::default()`（`Exact(None)`），即本处不调用 `.max_age()`。
+    // 语义上：max-age > 0 会让浏览器在白名单变更后仍按旧预检结果放行，
+    // 排障时难理解；不设则每次 preflight，而本服务的白名单部署本就是
+    // 少数场景，成本可忽略（`cors_layer_preflight_omits_max_age` 钉住）。
+}
+
+/// 启动期 fail-closed 校验：监听非回环地址 + 鉴权关闭时拒绝启动，除非显式
+/// 逃生门 `--insecure-no-auth`。
+///
+/// 真值表（`Ok` = 允许启动，`Err` = 拒绝）：
+///
+/// | listen_host | auth_enabled | insecure_no_auth | 结果 |
+/// |-------------|--------------|------------------|------|
+/// | 127.0.0.1 / ::1 | false | false | Ok（仅本机可达，无暴露面） |
+/// | 0.0.0.0 等 | true  | false | Ok（有鉴权保护） |
+/// | 0.0.0.0 等 | false | true  | Ok（用户显式接受裸奔风险） |
+/// | 0.0.0.0 等 | false | false | **Err**（默认拒绝） |
+///
+/// 回环判定收敛为 `auth::local_access::is_loopback_host`（2026-09-27 计划 D3：
+/// 与本地免密判据同一函数，不许两份实现）；不认识的 host 一律按非回环处理
+/// （fail-closed：误判为回环 = 静默暴露，比误拒更危险）。
+fn enforce_listen_auth(
+    listen_host: &str,
+    auth_enabled: bool,
+    insecure_no_auth: bool,
+) -> anyhow::Result<()> {
+    let is_loopback = auth::local_access::is_loopback_host(listen_host);
+    if auth_enabled || insecure_no_auth || is_loopback {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "监听非回环地址 {} 且密码验证已关闭——任何能访问该端口的人都可完全控制本机。\
+         请开启密码验证（设置页，或 --auth-enabled=1 / OMNITERM_AUTH_ENABLED=1），\
+         或确认风险后显式加 --insecure-no-auth。",
+        listen_host
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        acp_idle_recycle_secs_from_setting, default_db_stem, instance_id, instance_suffix,
-        jwt_secret_file_name, permission_timeout_mode_from_setting,
+        acp_idle_recycle_secs_from_setting, build_cors_layer, default_db_stem, enforce_listen_auth,
+        instance_id, instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
         permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
         IDLE_RECYCLE_SECS, PermissionTimeoutMode, REQUIRES_ACTION_RECYCLE_SECS,
     };
+    use axum::body::Body;
+    use axum::http::{HeaderMap, HeaderValue, header};
+    use tower::ServiceExt;
+    use tower_http::cors::CorsLayer;
 
     #[test]
     fn instance_suffix_separates_dev_from_release() {
@@ -1244,5 +1369,278 @@ mod tests {
         assert!(!rust_log_covers_omniterm(Some(""))); // 无任何 directive 视为未覆盖
         // RUST_LOG 未设置：兜底逻辑本就该生效，此处视为未覆盖
         assert!(!rust_log_covers_omniterm(None));
+    }
+
+    /// 四格真值表穷举：非回环 + auth 关 + 无逃生门 = 唯一拒绝组合。
+    #[test]
+    fn enforce_listen_auth_truth_table() {
+        // 仅本机可达：无暴露面，一律放行（含 auth 关 + 无逃生门）
+        for host in ["127.0.0.1", "localhost", "::1", "[::1]", "0:0:0:0:0:0:0:1"] {
+            assert!(
+                enforce_listen_auth(host, false, false).is_ok(),
+                "loopback {host} without auth must be allowed"
+            );
+        }
+        // 非回环（IPv4 全网卡 / IPv6 any / 具体 LAN IP）
+        for host in ["0.0.0.0", "::", "[::]", "192.168.1.10", "term-dev.tokitoken.com"] {
+            // 有鉴权 → 放行
+            assert!(
+                enforce_listen_auth(host, true, false).is_ok(),
+                "non-loopback {host} with auth must be allowed"
+            );
+            // 显式逃生门 → 放行
+            assert!(
+                enforce_listen_auth(host, false, true).is_ok(),
+                "non-loopback {host} with escape hatch must be allowed"
+            );
+            // 默认组合 → 拒绝
+            assert!(
+                enforce_listen_auth(host, false, false).is_err(),
+                "non-loopback {host} without auth must be refused"
+            );
+        }
+    }
+
+    /// 逃生门不能在有鉴权时被滥用，也不能反向掩盖（常识护栏）。
+    #[test]
+    fn enforce_listen_auth_requires_escape_only_when_needed() {
+        // 回环 + 显式逃生门：Ok（无害），且不得因逃生门改变 loopback 判定
+        assert!(enforce_listen_auth("127.0.0.1", false, true).is_ok());
+        // 非回环 + auth 开 + 逃生门：Ok（逃生门不覆盖 auth，两者独立）
+        assert!(enforce_listen_auth("0.0.0.0", true, true).is_ok());
+    }
+
+    /// 未知/畸形 host 一律按非回环处理（fail-closed：误判为回环 = 静默暴露）。
+    #[test]
+    fn enforce_listen_auth_unknown_host_fails_closed() {
+        assert!(enforce_listen_auth("", false, false).is_err());
+        assert!(enforce_listen_auth("example.invalid", false, false).is_err());
+        // 带端口写法不应进入本函数（调用方已 split_once 剥离），但仍须按非回环
+        assert!(enforce_listen_auth("0.0.0.0:9077", false, false).is_err());
+    }
+
+    /// CORS 层真值表：无 Origin 放行 / 同源放行 / 跨源拒 / 白名单放行。
+    ///
+    /// 只测 [`ws::cors_policy::origin_is_allowed`] 的谓词不足以证明层的行为：
+    /// tower-http 的 `AllowOrigin::to_future` 在**请求没有 Origin 头时压根不调用
+    /// predicate**（`origin.filter(...)`），这条「无 Origin 一律放行」的保证来自
+    /// 框架而非我们的代码。故这里起真实 layer 打真实请求。
+    fn cors_headers(layer: &CorsLayer, req: axum::http::Request<Body>) -> HeaderMap {
+        let inner = tower::service_fn(|_req: axum::http::Request<Body>| async {
+            Ok::<_, std::convert::Infallible>(axum::response::Response::new(Body::empty()))
+        });
+        let resp = tower::Layer::layer(layer, inner).oneshot(req);
+        let resp =
+            tokio::runtime::Builder::new_current_thread().build().expect("rt").block_on(resp);
+        resp.expect("infallible").headers().clone()
+    }
+
+    #[test]
+    fn cors_layer_allows_same_origin() {
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "http://127.0.0.1:9077")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://127.0.0.1:9077"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_allows_same_origin_different_port() {
+        // 端口与 host 一致性判定无关（同 WS 入口口径）：https 反代后前端
+        // 443、后端 9777 的情形仍算同源。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm.lan:9777")
+                .header(header::ORIGIN, "https://omniterm.lan")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://omniterm.lan"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_allows_proxy_subdomain_origin() {
+        // 代理子域形态（{port}.{base_host}）：Origin 与 Host 同 host。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "3000.omniterm.lan:9777")
+                .header(header::ORIGIN, "http://3000.omniterm.lan:9777")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("http://3000.omniterm.lan:9777"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_rejects_cross_site() {
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "https://evil.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        // 不回 Allow-Origin ⇒ 浏览器读不到响应（请求本身仍执行，这是 CORS 的
+        // 边界：它是「读取权」防线，不是「执行权」防线）。
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_allows_whitelisted_origin_with_mismatched_host() {
+        // nginx 默认 `proxy_set_header Host $proxy_host`：浏览器 Origin 是
+        // term.example.com，而后端看到的 Host 是上游名 ⇒ 同源判定必失败，
+        // 白名单是唯一活路。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_still_rejects_unlisted_origin_when_allowlist_set() {
+        // 配了白名单不能顺带放开别的来源（并集语义：白名单是「额外允许」）。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://other.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_allows_request_without_origin() {
+        // **框架保证而非我们的谓词**：`AllowOrigin::to_future` 在 Origin 缺失时
+        // 直接返回 None，predicate 不被调用。这里钉住该行为——若未来误换成
+        // 自己写的 middleware 判定，无 Origin 的 curl/脚本会被打死。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .header(header::HOST, "127.0.0.1:9077")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        // 无 Origin ⇒ 无 Allow-Origin 头，但请求照常通过（inner service 被调用）。
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_preflight_answers_allowed_methods_and_headers() {
+        // preflight 必须真的回答，否则前端带 content-type 的 POST（全部 JSON
+        // 接口）在跨源白名单部署下会被浏览器拦在预检上。
+        //
+        // 注意断言的是**整个配置集的字面值**而非预检请求里请求的那个值：
+        // `AllowMethods`/`AllowHeaders` 用 `Const`（非 `mirror_request`）时返回
+        // 配置集全量，这是有意为之——预检回答「服务支持什么」而非「你要什么」，
+        // 浏览器自行判断自己那个请求是否落在集合内。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_METHODS),
+            Some(&HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE"))
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_HEADERS),
+            Some(&HeaderValue::from_static("content-type,authorization"))
+        );
+    }
+
+    #[test]
+    fn cors_layer_preflight_rejects_cross_site() {
+        // 跨源 preflight 也必须被拒：否则攻击页面能凭预检成功推断「该 origin 被
+        // 允许」，且浏览器后续请求同样拿不到放行头。
+        let layer = build_cors_layer(None);
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "127.0.0.1:9077")
+                .header(header::ORIGIN, "https://evil.com")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN), None);
+    }
+
+    #[test]
+    fn cors_layer_preflight_omits_max_age() {
+        // **不发** `Access-Control-Max-Age`（而非发 0）：`MaxAge::exact(ZERO)`
+        // 照样产出该头（tower-http 0.6.11 `max_age.rs` 的 `Exact(Some(0))`），
+        // 唯一不发的办法就是保持默认、不调用 `.max_age()`。不发的理由：白名单
+        // 变更后浏览器不得按旧的预检结果继续放行，排障时行为才可预测。
+        let layer = build_cors_layer(Some("https://term.example.com"));
+        let h = cors_headers(
+            &layer,
+            axum::http::Request::builder()
+                .method("OPTIONS")
+                .header(header::HOST, "omniterm:9777")
+                .header(header::ORIGIN, "https://term.example.com")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        );
+        assert_eq!(
+            h.get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://term.example.com"))
+        );
+        assert_eq!(h.get(header::ACCESS_CONTROL_MAX_AGE), None);
+    }
+
+    /// 错误信息必须给出补救动作（开启 auth 或加逃生门），否则用户无法自救。
+    #[test]
+    fn enforce_listen_auth_error_mentions_remedies() {
+        let err =
+            enforce_listen_auth("0.0.0.0", false, false).expect_err("must refuse").to_string();
+        assert!(err.contains("--auth-enabled"), "{err}");
+        assert!(err.contains("--insecure-no-auth"), "{err}");
+        assert!(err.contains("0.0.0.0"), "{err}");
     }
 }

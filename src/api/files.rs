@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Query, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Query, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -13,8 +13,10 @@ use serde_json::json;
 use tracing::error;
 
 use crate::AppState;
+use crate::api::audit;
 use crate::fs::{self, StreamWriteError};
 use crate::models::session::RuntimeKind;
+use std::net::SocketAddr;
 
 /// 文件上传请求体默认上限：200 MiB。
 /// 经 `--max-upload-body` / `OMNITERM_MAX_UPLOAD_BODY` 覆盖（字节）。
@@ -318,6 +320,23 @@ async fn resolve_workspace_root(
     wts.into_iter().find(|w| w.id == workspace_id).map(|w| w.path)
 }
 
+/// 审计范围标识：把请求绑定的会话/工作区/项目 id 收敛成一个可读字符串。
+///
+/// 不选「Base 路径」而选 id：路径会变的（worktree 移动、session cwd 漂移），
+/// id 才是稳定标识；且路径已经进了 `target`，scope 再放一遍是冗余。
+/// 三个都没有时返回 `None`（`workspace=default` 的隐式项目路径不记——
+/// 那是兜底分支而非显式绑定）。
+fn scope_from_query(q: &FileQuery) -> Option<String> {
+    if let Some(sid) = q.session.as_deref() {
+        Some(format!("session:{sid}"))
+    } else {
+        q.workspace_id
+            .as_deref()
+            .map(|wid| format!("workspace:{wid}"))
+            .or_else(|| q.workspace.as_deref().map(|p| format!("project:{p}")))
+    }
+}
+
 async fn list_files(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
@@ -502,6 +521,7 @@ fn format_size(bytes: u64) -> String {
 async fn upload_file(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
     let rel_path = q.path.as_deref().unwrap_or("");
@@ -589,12 +609,27 @@ async fn upload_file(
         }
     }
 
+    // 审计（S5）：一个请求含多个文件时记一条，detail 列文件名清单。
+    // 只在成功后落库，见 api::audit 模块文档的「只记成功操作」。
+    if !uploaded.is_empty() {
+        let ctx = audit::AuditContext::from_ip(Some(addr.ip()), scope_from_query(&q));
+        let detail = json!({
+            "files": uploaded.iter().filter_map(|e| e.get("name")).collect::<Vec<_>>(),
+            "count": uploaded.len(),
+            "allow_escape": allow_escape,
+        })
+        .to_string();
+        audit::record(&state.db, &ctx, audit::AuditAction::FileUpload, rel_path, Some(&detail))
+            .await;
+    }
+
     (StatusCode::OK, Json(json!(uploaded)))
 }
 
 async fn delete_file(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     let Some(path_str) = q.path.as_deref() else {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path required" })));
@@ -623,7 +658,15 @@ async fn delete_file(
     };
 
     match result {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(()) => {
+            // 审计（S5）：删除是不可逆高危操作，必留痕。detail 记录是否越过
+            // 工作区边界（allow_escape）——事后追查时这是关键区分。
+            let ctx = audit::AuditContext::from_ip(Some(addr.ip()), scope_from_query(&q));
+            let detail = json!({ "allow_escape": allow_escape }).to_string();
+            audit::record(&state.db, &ctx, audit::AuditAction::FileDelete, path_str, Some(&detail))
+                .await;
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
         Err(e) => {
             error!("delete failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -805,6 +848,7 @@ async fn read_file(State(state): State<AppState>, Query(q): Query<FileQuery>) ->
 async fn write_file(
     State(state): State<AppState>,
     Query(q): Query<FileQuery>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(req): Json<WriteRequest>,
 ) -> impl IntoResponse {
     let Some(path_str) = q.path.as_deref() else {
@@ -841,7 +885,16 @@ async fn write_file(
     };
 
     match result {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))),
+        Ok(()) => {
+            // 审计（S5）：写入成功才留痕（见 api::audit「只记成功操作」）。
+            // 三个分支（绝对路径 / allow_escape / 受限）合并记一条，detail 用
+            // 同一个 allow_escape 标志区分——路径本身已在 target 里。
+            let ctx = audit::AuditContext::from_ip(Some(addr.ip()), scope_from_query(&q));
+            let detail = json!({ "allow_escape": allow_escape }).to_string();
+            audit::record(&state.db, &ctx, audit::AuditAction::FileWrite, path_str, Some(&detail))
+                .await;
+            (StatusCode::OK, Json(json!({ "ok": true })))
+        }
         Err(e) => {
             error!("write_file failed: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
@@ -1114,6 +1167,12 @@ mod handler_tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// 测试用的连接信息：handler 现在带 `ConnectInfo`（审计 actor 取来源 IP），
+    /// 直接调 handler 的测试须显式提供。地址本身不影响被测行为（只进审计）。
+    const TEST_CONNECT_INFO: ConnectInfo<SocketAddr> = ConnectInfo(SocketAddr::V4(
+        std::net::SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, 12345),
+    ));
+
     #[tokio::test]
     async fn delete_file_escape_rejected_by_default_allowed_with_flag() {
         let state = test_state().await;
@@ -1122,18 +1181,24 @@ mod handler_tests {
         std::fs::write(&target, b"x").unwrap();
 
         // 未传 allow_escape：越界删除被拒绝（500），文件保留
-        let res =
-            delete_file(State(state.clone()), Query(session_query("../outside/victim.txt", None)))
-                .await
-                .into_response();
+        let res = delete_file(
+            State(state.clone()),
+            Query(session_query("../outside/victim.txt", None)),
+            TEST_CONNECT_INFO,
+        )
+        .await
+        .into_response();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(target.exists());
 
         // allow_escape=true：越界删除成功
-        let res =
-            delete_file(State(state), Query(session_query("../outside/victim.txt", Some(true))))
-                .await
-                .into_response();
+        let res = delete_file(
+            State(state),
+            Query(session_query("../outside/victim.txt", Some(true))),
+            TEST_CONNECT_INFO,
+        )
+        .await
+        .into_response();
         assert_eq!(res.status(), StatusCode::OK);
         assert!(!target.exists());
     }
@@ -1146,6 +1211,7 @@ mod handler_tests {
         let res = write_file(
             State(state.clone()),
             Query(session_query("../outside/w.txt", None)),
+            TEST_CONNECT_INFO,
             Json(WriteRequest { content: "hi".into() }),
         )
         .await
@@ -1156,6 +1222,7 @@ mod handler_tests {
         let res = write_file(
             State(state),
             Query(session_query("../outside/w.txt", Some(true))),
+            TEST_CONNECT_INFO,
             Json(WriteRequest { content: "hello".into() }),
         )
         .await
@@ -1512,7 +1579,6 @@ mod handler_tests {
 mod zip_tests {
     use super::zip_directory;
     use std::io::Read;
-    use std::path::Path;
 
     #[test]
     fn packs_directory_into_valid_zip() {
@@ -1553,7 +1619,4 @@ mod zip_tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-    #[allow(dead_code)]
-    fn _assert_path(_: &Path) {}
 }

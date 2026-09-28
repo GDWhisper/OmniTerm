@@ -72,8 +72,12 @@ export interface SystemBlock {
   detail?: SystemBlockDetail
 }
 
-/** system 消息的结构化详情（后端 reaper 权限超时行动下发，前端本地化渲染）。 */
+/** system 消息的结构化详情（后端 reaper 权限超时行动 / turn 非正常结束判定下发，前端本地化渲染）。
+ *  turn 失败载荷只有 `stop_reason`（协议 snake_case 原值），渲染侧据此区分要不要展开权限详情区。 */
 export interface SystemBlockDetail {
+  /** 本轮结束的协议原值（refusal / cancelled / end_turn / `_`前缀自定义值…），
+   *  未知值原样透出（AGENTS.md §8）——`system.turnFailed.*` 文案经 {{reason}} 插值引用。 */
+  stop_reason?: string
   /** 超时时长（分钟）。 */
   minutes?: number
   /** 触发审批的工具名/标题。 */
@@ -426,6 +430,141 @@ const EMPTY: ChatSessionState = {
 
 const QUEUE_STORAGE_PREFIX = 'omniterm_chat_queue:'
 const queueStorageKey = (sessionId: string) => `${QUEUE_STORAGE_PREFIX}${sessionId}`
+
+/**
+ * `alignReplaySyncPayload` 单条重放消息最多检查的基线行数。
+ *
+ * ## 为什么需要它
+ *
+ * 对齐扫描是「只读不提交」的（见该函数 doc-comment 的安全说明）：失配时指针不动，
+ * 于是**全失配**这一退路径上每条重放消息都要重扫剩余基线 —— O(replay × baseline) 次
+ * `startsWith`，每次还在多 KB 文本上跑。上游的分页预算只界住**输入**（单页行数），
+ * 不界住**这次操作**：用户上拉加载过 P 页历史后 `store.messages` 可达 100·P 行，一次
+ * 恢复要在主线程上同步扫完它们 —— 正是 D4 翻盘条件预料的「各实现重放与累积器行无法
+ * 稳定对齐」那种多实现漂移场景，也是用户最需要 UI 有响应的时刻（罕见的手动操作 +
+ * 正在等他看到结果）。
+ *
+ * ## 取值的依据
+ *
+ * 等于后端**默认**每页行数 `MESSAGES_PAGE_DEFAULT_LIMIT`（=100）：前端拉 `/messages`
+ * 刻意不传 limit（`ChatView.tsx`：页大小与字节预算由后端守），故一次恢复的基线通常
+ * 就是一页 hydrate 行（≈100 行）。而 1:1 对齐的回合每条消息只检查 ~1 个候选（第一个
+ * 候选即命中，命中即 `break`、`examined` 每条重新计数）—— 所以 100 是「单页正常会话
+ * 绝不被截断」与「漂移态不至于拖垮主线程」之间的一个宽裕中点。
+ *
+ * 它与 `MESSAGES_PAGE_MAX_LIMIT`（=500，客户端自选 limit 的硬上限）**无直接关系**：
+ * 两者不同源，真正的同源量是后端默认页大小。若后端改默认页大小，这里应同步重估。
+ *
+ * ## 这是安全阀，不是正确性机制
+ *
+ * 预算耗尽 = 该条消息放弃搜索、降级为**不带 id**（既有且已被测试固化的行为）。
+ * 它不改变任何一条**本该命中**的消息能否命中：`examined` 每条消息重新计数、命中即
+ * break，故 1:1 形态下计数器恒为 1，与基线总量、用户上拉过多少页**完全无关**
+ * （实测 150 轮 / 300 条完全对齐的多页重放：300 条全部命中，无一条被预算砍掉）。
+ * 预算只让「本来就会连续失配的消息早点失配」——除非同一角色下连续 100 行都不是它，
+ * 那已属于上述漂移退路径。
+ */
+const ALIGN_SCAN_BUDGET = 100
+
+/**
+ * `alignReplaySyncPayload` **整场**扫描的候选检查总量上限（`MAX_ALIGN_COMPARISONS`
+ * = `replay × baseline × 文本长度` 这个积里，唯一还没被界住的那一维）。
+ *
+ * ## 为什么 ALIGN_SCAN_BUDGET 不够（上限维度必须匹配真实增长维度，§P1 三问 1）
+ *
+ * 单条预算只压住「一次扫描」的宽度，压不住扫描的**次数**：总量 = 重放条数 × 每条预算
+ * × 每次比较的文本长度。三个乘数中：
+ * - 每条预算由 `ALIGN_SCAN_BUDGET` 界住（100）；
+ * - 文本长度由 `MAX_TEXT_BYTES` / 分页字节预算间接界住（KB 量级）；
+ * - **重放条数完全无上限** —— `session/load` 重放的是**完整历史**，与后端分页预算
+ *   无关：用户上拉加载过 P 页历史后，基线有 100·P 行，而重放条数同样可达 100·P。
+ *   全失配（同一角色连续都不是它）时，两者相乘就是几十万次同步 `startsWith`，
+ *   全部卡在主线程上。
+ *
+ * 独立审查实测（2026-09，agent 不重放 user prompt 时 DB 即纯 assistant 行 + 4.8KB
+ * 公共前缀）：replay=1000 → **1404ms** 冻结；4KB 共享前缀 × 5000 条 → **3498ms**。
+ * 而「正常漂移形态」（文本短、不共享前缀）只要 3ms —— 也就是说只测后者的测量看
+ * 不出问题，但用户在长会话上做的是同一次手动恢复：**冻结秒级 = 界面无响应**。
+ *
+ * ## 取值依据
+ *
+ * 5000。三条约束的交集：
+ * 1. **正常会话永远摸不到**：1:1 对齐时每条消息第一个候选即命中即 break，总量 ≈ 重放
+ *    条数（每条只花 1 次比较）。5000 条比较覆盖 ≈5000 条重放消息，远超任何真实会话的
+ *    单次恢复规模（一条重放消息 = DB 里一行，前端 100·P 行的基线对应同样量级的重放，
+ *    而 hydrate 首屏就已是 100 行）。
+ * 2. **病态形态仍可感知地快**：候选检查是 `startsWith`，最坏情况下每次在 KB 级文本上
+ *    跑。5000 次 × 数 KB ≈ 30-140ms 量级的同步开销，是「用户点了一次恢复、顿一下」而
+ *    不是「界面冻结数秒」。
+ * 3. **与 `ALIGN_SCAN_BUDGET` 的关系**：它是这个常量的「条数维度」补全 —— 100 是宽度、
+ *    这里是总量，两者共同给出 `O(min(重放, 5000) × min(基线, 100))` 的有界工作量。
+ *    不写成 `ALIGN_SCAN_BUDGET × N`：那样只是在两个常数间再造一个派生常数，看不出
+ *    「它界住的是总量」这层意图。
+ *
+ * ## 超限策略：**整场降级**，不是单条降级
+ *
+ * 总量耗尽即**放弃整场对齐**，降级为「不带任何 id 的全量写回」——也就是
+ * `messagesToSyncPayload` 的既有行为（无 id → 后端文本匹配 → INSERT）。选择整场而不是
+ * 单条降级：走到这里说明这场重放的形状已经病态（全失配 × 大体量），此时继续逐条对齐
+ * 只会让每条都带上「碰巧通过守卫」的 id，收益低而风险高（守卫是对的，但病态形态下
+ * 副产品不可预期）；而全量无 id 写回是今天已存在、已被两条集成测试固化的路径，最坏
+ * 结果只是可能 INSERT 重复行（可发现、用户可删会话），绝不是不可恢复的数据损坏。
+ *
+ * ## 信号怎么传给调用方：**挂在载荷数组上的 `degraded` 布尔属性**
+ *
+ * `alignReplaySyncPayload` 返回的仍是 `SyncMessagePayload[]`（**不改返回类型**，
+ * 调用方 `useAcpChat.ts:1009` 的 `alignedSync.length > 0` 分支因此不用动），另加一个
+ * 同对象的布尔属性 `degraded`：`true` = 总量超限、已整场降级。
+ *
+ * 为什么不用「返回空数组」表达降级：那条路径在本函数里几乎不可达 —— user/assistant
+ * 消息只要有一条就产生一个 entry，纯失配不会让载荷为空（`alignedSync.length === 0`
+ * 只在 replay 本身为空时成立，而那由外层 `buildReplayMessages(...).length > 0` 门控
+ * 先拦掉了）。把降级编码成空数组 = 依赖一条碰巧的路径，超限时调用方无法与「对齐结果
+ * 为空」区分，只能静默落到别的分支。显式属性让调用方能区分两者（且将来要接这个信号
+ * 时不必再改返回类型），测试也能直接断言超限语义而不断言内部计数器。
+ *
+ * 挂在数组上而不是 `{ payload, degraded }`：调用方现在读到的是一个数组字面量，
+ * `JSON.stringify({ messages })` 与 `[...]` 展开都只看到数组自身，行为与改动前逐字节
+ * 一致（已由下方既有用例与 hook 集成测试固化）。代价是这个属性不参与结构化类型检查 ——
+ * 故用模块私有类型 `AlignedSyncPayload` 收口，让超限信号的读点只有一处。
+ */
+const MAX_ALIGN_COMPARISONS = 5000
+
+/**
+ * `alignReplaySyncPayload` 的返回类型：**载荷数组本体 + 一个 `degraded` 只读属性**。
+ *
+ * 为什么信号挂在数组上而不是返回 `{ payload, degraded }`：
+ * 1. 调用方 `useAcpChat.ts:1009` 读的是 `alignedSync.length`，`postSync` 序列化的是
+ *    数组本身。保持「返回数组」让调用点与请求体逐字节不变。
+ * 2. 超限信号**不能省略**：调用方必须能区分「对齐结果为空」与「总量超限、整场降级」，
+ *    否则只能依赖「失配恰好让载荷为空」这条几乎不可达的路径（§P1 三问 2）。
+ *
+ * 为什么用**不可枚举**属性（`Object.defineProperty` 而非直接赋值）：可枚举的附加属性
+ * 会被 `toEqual` / `JSON.stringify` / `Object.keys` 全部看见，把既有「载荷逐字节不变」
+ * 的断言打破。不可枚举属性对这三者透明（`Object.keys` 只有 `'0','1',…`），于是数据面
+ * 与信号面彻底分离：数组照旧是载荷，`degraded` 只是给读点的旁路标记。
+ *
+ * 模块私有：超限信号的读点应当收敛（将来要按 `degraded` 走显式降级时），不 export
+ * 以免扩散成「谁都能读一个藏在数组上的属性」的隐式契约。类型上 `&
+ * { readonly degraded: boolean }` 让把返回值当普通数组用的地方仍拿到数组语义。
+ */
+type AlignedSyncPayload = SyncMessagePayload[] & { readonly degraded: boolean }
+
+/**
+ * 在载荷数组上挂 `degraded` 标志并返回。抽成函数是为了「挂标志」只有一处实现
+ * （工程准则 7①），且调用点读作 `withDegradedFlag(payload, false)` 时意图自明。
+ *
+ * `enumerable: false` 是整个设计的关键，理由见 [`AlignedSyncPayload`]。
+ */
+function withDegradedFlag(payload: SyncMessagePayload[], degraded: boolean): AlignedSyncPayload {
+  Object.defineProperty(payload, 'degraded', {
+    value: degraded,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  })
+  return payload as AlignedSyncPayload
+}
 
 /** Best-effort sessionStorage read — swallows quota / private-mode errors. */
 function readQueuedFromStorage(sessionId: string): string | null {
@@ -1264,6 +1403,158 @@ export function messagesToSyncPayload(
     payload.push(entry)
   }
   return payload
+}
+
+/**
+ * 手动恢复（`session/load`）重放落定后，把重放消息按**位置 + 角色 + 文本前缀**与
+ * hydrate 时的 DB 行对齐，命中则带该行真实 dbId 写回（后端 id 路径只 UPDATE
+ * blocks、不 INSERT），失配则不带 id 走后端既有文本匹配/INSERT 路径。
+ *
+ * ## 为什么需要它（2026-09-19 计划 D4）
+ *
+ * 手动恢复时 `useAcpChat` 刻意把 `suppressReplay` 置 false（DB hydrate 快照可能缺
+ * thought/tool 块，必须让重放覆盖），于是 `replay_end` 必然 `commitReplay`：从空白
+ * 重建 store，hydrate 行的 dbId 全部丢弃 → `syncToDb` 发出的是**无 id** 载荷 →
+ * 后端按 `(session, role, text)` 逐条文本匹配。而重放重建的 text 与累积器行的 text
+ * 语义已漂移（后端累积 tool 流式描述段、前端 cook 时把工具内容收进 tool 块，见
+ * 2026-08-18 幽灵行根因 3）→ 匹配失败 → INSERT 重复 assistant 行（事故证据：
+ * 03:09:21 新增 `5200e835` / `bbd3e319`，136 cooked blocks vs 原行 2 块）。
+ * 本函数把「已在 DB 里的那些行」重新认出来，让这次的写回按 id 精确命中。
+ *
+ * ## 为什么必须加前缀守卫（而不是纯位置对齐）
+ *
+ * 纯位置对齐（第 i 条重放 ↔ 第 i 条基线）在重放与 DB 行**错位**时会把 cooked
+ * blocks UPDATE 到**错误的行**上——那是静默数据 corruption（用户看到另一轮的回复被
+ * 替换，且不可恢复）；而今天的无 id 行为 worst case 只是 INSERT 一条重复行
+ * （可发现、用户可删会话）。**用可恢复的污染换不可恢复的损坏是不划算的**，故对齐
+ * 必须附带一条能自证的匹配判据。
+ *
+ * 选用 `startsWith` 作判据：重放是权威的完整历史，DB 基线行则可能因后端帧窗口从
+ * 头部驱逐而只剩后缀、或被 `MAX_TEXT_BYTES` 头尾折叠，其 text 是重放 text 的**前缀
+ * 或相等**。这是唯一一个「结构性成立、且无法靠巧合命中」的判据——错位的行文本不同，
+ * 前缀关系几乎不可能偶然成立。**不做空白归一化**：归一化会把 `"a b"` 与 `"a  b"`
+ * 也算成匹配，扩大误命中面（宁缺勿错：失配退化成今天的 INSERT）。
+ *
+ * 因此失配（守卫不通过 / 基线耗尽）时**故意不带 id**，让这一条消息退化成
+ * `messagesToSyncPayload` 的既有行为（无 id → 文本匹配 → INSERT）。降级粒度是
+ * **单条消息**而不是整个会话：今天整个会话全量降级，本函数只在真正无法自证的那几条
+ * 上降级。
+ *
+ * ## 为什么扫描只读不提交（安全不变量的核心）
+ *
+ * 基线指针有两种推进时机，选错任一条都会破坏「误 UPDATE 不可能」：
+ *
+ * - **命中时提交**（本实现）：指针只在守卫通过的那一行上 +1。于是任意两条命中消息
+ *   `i < j` 配对的基线行下标严格递增 —— 配对**保持原有顺序**，一条重放消息永远不可能
+ *   配到「已配对行之前」的基线行上。这正是「纯位置对齐会 UPDATE 错行」所要的性质。
+ * - **失配时也提交**（更直觉但错误）：一次失败的搜索会把行吃掉，后面本该命中的消息
+ *   因此永远够不着对应行 —— 一次漂移让整份载荷跟着降级，等于回到今天的全量退化，
+ *   本函数的收益归零。
+ *
+ * 失配时只读不提交的代价是**重复扫描**：最坏情况每条重放消息都要重扫剩余基线
+ * —— O(replay × baseline) 次 `startsWith`（每次还在多 KB 文本上跑）。上游的分页
+ * 上限只界住**输入**（单页行数），不界住这次**操作**：用户上拉加载过 P 页后基线可达
+ * 500·P 行，全失配时全部同步扫完会长时间卡住主线程。故有**两道**显式预算：
+ *
+ * 1. `ALIGN_SCAN_BUDGET`（单条宽度）：单条消息的候选检查数，耗尽即把**该条**降级为
+ *    无 id，不中断整体对齐（详见该常量注释）。
+ * 2. `MAX_ALIGN_COMPARISONS`（整场总量）：`replay × baseline × 文本长度` 这个积里
+ *    **重放条数这一维完全没有上限**（`session/load` 重放完整历史，与后端分页预算无关）。
+ *    实测全 assistant 历史 + 4.8KB 公共前缀：replay=1000 冻结 1404ms、5000 条冻结
+ *    3498ms。总量耗尽即**整场降级**为无 id 写回，见该常量注释。
+ *
+ * ## 返回值：数组 + 不可枚举的 `degraded` 属性（超限信号）
+ *
+ * 返回的仍是 `SyncMessagePayload[]`（**调用方 `useAcpChat.ts:1009` 的
+ * `alignedSync.length > 0` 分支因此无需改动**），另在同一个数组对象上以**不可枚举**
+ * 属性挂布尔 `degraded`（类型与设计理由见模块私有 [`AlignedSyncPayload`]）：
+ * `true` = 总量预算耗尽、已整场降级为不带任何 id 的全量写回。
+ *
+ * 不可枚举是关键：它对 `toEqual` / `JSON.stringify` / `Object.keys` 透明，所以载荷的
+ * 数据面（含既有 37 条测试的断言）逐字节不变，只有显式读 `degraded` 的地方能看到信号。
+ *
+ * 为什么不把降级编码成「返回空数组」：那条路径在本函数里几乎不可达 —— 只要有一条
+ * user/assistant 重放消息就有一个 entry，纯失配不会让载荷为空（`alignedSync.length
+ * === 0` 只在 replay 本身为空时成立，而那由外层 `buildReplayMessages(...).length > 0`
+ * 先拦掉了）。依赖它等于依赖一条碰巧的路径，且调用方无法区分「对齐结果为空」与
+ * 「超限放弃」。显式属性是 §P1 三问 2 要求的超限策略在接口上的落点。
+ *
+ **适用范围**：仅供手动恢复（`session/load`）重放落定后的**一次性对账**使用
+ * （当前唯一调用点 `useAcpChat.ts` 的 `replay_end` 手动分支）。它的输入契约是
+ * 「重放消息 + 同一会话、同一时刻的 DB 基线快照」，**不要**拿去 hydrate /
+ * loadOlderHistory / 每 turn 的写回路径——那三处的对齐口径与这里不同（hydrate 按
+ * 行 id 直接写、每 turn 按 `row_id` 写那一行），用错会把 id 语义与文本匹配混在
+ * 一起，产生第三种不可预期行为。
+ */
+export function alignReplaySyncPayload(
+  replay: readonly ChatMessage[],
+  baseline: readonly ChatMessage[],
+): AlignedSyncPayload {
+  const payload: SyncMessagePayload[] = []
+  // 基线指针单调前移、**只在命中时前移**：保证配对保持原有顺序（见上方安全说明）。
+  let cursor = 0
+  // 整场扫描的剩余总量预算（MAX_ALIGN_COMPARISONS）。**先查后减**：耗尽即降级必须
+  // 发生在本条消息的任何一次比较之前，否则超限后仍会为该条多扫几个候选。
+  let comparisonsLeft = MAX_ALIGN_COMPARISONS
+  for (const m of replay) {
+    // 与 messagesToSyncPayload 同一过滤规则：system 行后端自己写、前端从不回写；
+    // undelivered 只活在内存。
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    if (m.undelivered) continue
+
+    // 只读扫描：从 cursor 往后找第一条「守卫通过」的基线行，**不移动 cursor**。
+    // 推过的是「不可能对应」的行——角色不同（重放比 DB 少一轮/多一个 system 行造成的
+    // 错位靠这个重新对齐）、undelivered 不参与同步、以及守卫不通过的行。
+    // 找不到就整条降级：cursor 原地不动，下一条重放消息仍能配到同一个基线行。
+    //
+    // 扫描预算（ALIGN_SCAN_BUDGET）：每条消息单独计数，耗尽即放弃该条搜索并降级
+    // 为无 id —— **不中断整体对齐、不抛异常**（其余消息照常尝试）。命中是提前 break，
+    // 故正常 1:1 形态下计数器只到 1，预算永远不会被碰到。
+    //
+    // 总量预算（MAX_ALIGN_COMPARISONS）：整场共享，在进入本条扫描前检查。耗尽即
+    // **整场降级**并立刻返回，不再为后续消息做任何比较。
+    let matched: ChatMessage | null = null
+    let examined = 0
+    for (let i = cursor; i < baseline.length && examined < ALIGN_SCAN_BUDGET; i++) {
+      if (comparisonsLeft <= 0) {
+        // 病态形态（全失配 × 大体量重放）：继续扫只会把主线程冻结得更久。整场降级
+        // 为无 id 写回 = `messagesToSyncPayload` 的既有行为；连已产出的 entry 一并
+        // 丢弃（返回**空**数组），是为了不让「部分 id + 部分无 id」的混合形态流到
+        // 调用方 —— 后端 id 路径与文本匹配路径混用会产生第三种不可预期行为。
+        // `degraded: true` 是显式信号，调用方据此与「对齐结果为空」区分开。
+        return withDegradedFlag([], true)
+      }
+      comparisonsLeft -= 1
+      const row = baseline[i]
+      examined += 1
+      if (row.role !== m.role) continue
+      if (row.undelivered) continue
+      // 守卫：基线 text 是重放 text 的前缀（含相等）。
+      // 空文本是退化情形——`''` 是一切字符串的前缀，不构成自证，只允许与同样为空的
+      // 重放文本精确相等（纯工具调用 turn 两侧 text 都为空）；否则这条基线行匹配任何
+      // 消息，等于没有守卫。
+      const guard = row.text.length > 0 ? m.text.startsWith(row.text) : m.text.length === 0
+      if (!guard) continue
+      matched = row
+      // 提交指针 = 命中行下标 + 1：该行已被本次配对消费，不再参与后续配对
+      // （否则两条相同文本的重放消息会把同一个 DB 行 UPDATE 两次）。
+      cursor = i + 1
+      break
+    }
+
+    const entry: SyncMessagePayload = { role: m.role, text: m.text }
+    // 只有守卫通过的基线性才附 dbId；dbId 缺失（本地 genId 行）同样不附：
+    // 谎报 id 只会静默命中零行。
+    if (matched && matched.dbId) entry.id = matched.dbId
+    if (m.blocks.length) {
+      entry.blocks = JSON.stringify(toPersistedBlocks(m.blocks))
+    }
+    payload.push(entry)
+  }
+  // 正常收尾：显式挂上 `degraded: false`，让「未降级」也是一个可断言的信号（而不是
+  // 靠 `undefined` 与 `false` 的巧合相等 —— 将来若有人在这里忘了赋值，读点的
+  // `degraded === true` 会静默变成真值判断）。
+  return withDegradedFlag(payload, false)
 }
 
 /**

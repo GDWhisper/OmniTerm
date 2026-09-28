@@ -13,8 +13,9 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { OpenTerminalDialog, type OpenTerminalTarget } from './OpenTerminalDialog'
 import { OpenTerminalConfirmDialog, type OpenTerminalConfirmTarget } from './OpenTerminalConfirmDialog'
 import { createProjectForDir, projectNameFromPath } from './openTerminal'
-import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
+import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconFileEdit, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
+import { canInlineEdit, isDirEntry } from './filePreviewShared'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
@@ -38,7 +39,7 @@ const SortIndicator = ({ col, sortKey, sortDesc }: { col: SortKey; sortKey: Sort
   ) : null
 
 // 文件表格固定列宽（px）——name 列在容器内自适应剩余宽度（D5）
-const FM_COL = { mtime: 140, size: 100, actions: 104, minName: 140 } as const
+const FM_COL = { mtime: 140, size: 100, actions: 132, minName: 140 } as const
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
@@ -757,6 +758,17 @@ export function FileManager() {
     addToast(ok ? 'success' : 'error', ok ? t('fm.copyPathSuccess') : t('fm.copyPathFailed'))
   }
 
+  // 「编辑」：与单击行开抽屉完全同一条链路，仅把模式换成 edit。
+  // 写盘本身发生在 FileDrawer 内部（runSave → api.writeFile2，带越界确认），
+  // 故此处不需要 gateWrite——那是「入口本身触发写操作」时才用的闸。
+  // workspace 模式（无 session）的 drawer 无 mode 伴随，只开抽屉，
+  // 用户可在抽屉顶栏手点「编辑」（已知不对称，见 initialMode 注释）。
+  const handleEditFile = (fullPath: string) => {
+    if (activeSessionId) setFmDrawerPath(activeSessionId, fullPath, 'edit')
+    else if (activeWorkspaceId) setWorkspaceDrawerPath(fullPath)
+    else addToast('error', t('fm.selectSessionFirst'))
+  }
+
   const handleUpload = () => {
     if (!fmSource) return
     const input = document.createElement('input')
@@ -1125,7 +1137,7 @@ export function FileManager() {
                 <col ref={(el) => { colRefs.current.name = el }} style={{ width: colWidths.name }} />
                 <col ref={(el) => { colRefs.current.mtime = el }} style={{ width: colWidths.mtime }} />
                 <col ref={(el) => { colRefs.current.size = el }} style={{ width: colWidths.size }} />
-                <col style={{ width: 104 }} />
+                <col style={{ width: FM_COL.actions }} />
               </colgroup>
               <thead>
                 <tr>
@@ -1166,7 +1178,7 @@ export function FileManager() {
               <tbody>
                 {files.map((f) => {
                   const fullPath = joinPath(cwd, f.name)
-                  const isDir = f.path_type === 'Dir' || f.path_type === 'SymlinkDir'
+                  const isDir = isDirEntry(f.path_type)
                   const isEditing = editingName === fullPath
                   const isSel = selected.has(fullPath)
                   const isChecked = checked.has(fullPath)
@@ -1223,6 +1235,32 @@ export function FileManager() {
                         >
                           <IconCopy />
                         </span>
+                        {/* 行内编辑入口。三态：
+                            - 可编辑 → 可点图标
+                            - 文件但超 MAX_INLINE_EDIT_BYTES → 退让图标 + 说明为何不可用
+                            - 目录 → 不渲染（目录没有「内容」可编辑，其 size 语义是条目数；
+                              若渲染禁用态会用「文件较大」解释一个不是文件的行，事实错误）
+                            图标用 IconFileEdit（文档+铅笔）而非 rename 的 IconPencil：
+                            语义不同（改内容 vs 改文件名），且两者形态必须可分辨
+                            ——相邻按钮同形会让用户只能靠 tooltip 区分。 */}
+                        {!isDir && canInlineEdit(f.size, f.path_type) && (
+                          <span
+                            className="fm-act-icon"
+                            title={t('fm.edit')}
+                            onClick={(e) => { e.stopPropagation(); setSelected(new Set([fullPath])); handleEditFile(fullPath) }}
+                          >
+                            <IconFileEdit />
+                          </span>
+                        )}
+                        {!isDir && !canInlineEdit(f.size, f.path_type) && (
+                          <span
+                            className="fm-act-icon fm-act-icon-disabled"
+                            title={t('fm.editTooLarge', { size: formatSize(f.size) })}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <IconFileEdit />
+                          </span>
+                        )}
                         <span
                           className="fm-act-icon"
                           title={t('fm.rename')}
@@ -1318,6 +1356,7 @@ export function FileManager() {
           onHeightChange={setDrawerHeight}
           onHeightCommit={commitDrawerHeight}
           fileChangeEvent={fileChangeEvent}
+          initialMode={activeSessionId ? fmState.drawerMode : undefined}
         />
       )}
     </div>

@@ -170,7 +170,7 @@ impl ControlModeClient {
     }
 
     /// Return the underlying OS process id, if available.
-    #[allow(dead_code)] // 待核：遗留/未接线/仅测试用，见 docs/dev/plans/backlog/dead-code-triage.md
+    #[cfg(test)]
     pub async fn pid(&self) -> Option<u32> {
         self.child_pid
     }
@@ -574,13 +574,11 @@ impl SessionActivityMonitor {
     }
 }
 
-#[allow(dead_code)]
+// Send/Sync 编译期断言：const 内直接调用 const fn，类型不再满足即编译错。
 const _: () = {
-    fn assert_send_sync<T: Send + Sync>() {}
-    fn _assert() {
-        assert_send_sync::<ControlModeClient>();
-        assert_send_sync::<SessionActivityMonitor>();
-    }
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ControlModeClient>();
+    assert_send_sync::<SessionActivityMonitor>();
 };
 
 #[cfg(test)]

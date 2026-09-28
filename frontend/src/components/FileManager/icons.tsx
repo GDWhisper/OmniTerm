@@ -218,6 +218,33 @@ export function IconEdit(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+/**
+ * 编辑文件**内容**：文档轮廓 + 折角 + 一支小铅笔。
+ *
+ * 与 `IconPencil` / `IconEdit` 刻意保持可分辨——那两者是同一支裸铅笔
+ * （`IconEdit` 仅多一条 2px 斜线，在 16px 网格下约 1.1px，几乎不可见），
+ * 而文件行的「编辑内容」与「重命名」是相邻按钮，同形会让用户只能靠
+ * tooltip 区分（已由视觉核对实测确认）。文档矩形提供轮廓级区分。
+ *
+ * 构图约束（16×16 网格，stroke-width 1.5）：铅笔做小、置于文档右下角外侧，
+ * 不与文档的内容行争空间——第一版把铅笔压在文档内部，16px 下糊成一片。
+ */
+export function IconFileEdit(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      {/* 文档轮廓 + 折角 */}
+      <path d="M9 2.5H4.75A1.25 1.25 0 003.5 3.75v8.5a1.25 1.25 0 001.25 1.25h6.5a1.25 1.25 0 001.25-1.25V6L9 2.5z" />
+      <path d="M8.9 2.7V6h3.3" />
+      {/* 内容行（两行即可，第三行的视觉重量留给铅笔） */}
+      <path d="M5.4 8.4h3.2" />
+      <path d="M5.4 10.6h2" />
+      {/* 铅笔：缩小并外移到右下角，笔尖指向文档 */}
+      <path d="M10.4 10.9l3-1.1.7.7-2.4 2.4-1.5.2z" />
+      <path d="M12 9.8l.7.7" />
+    </svg>
+  )
+}
+
 export function IconX(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

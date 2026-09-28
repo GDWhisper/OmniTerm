@@ -156,6 +156,17 @@ pub enum TurnEndEvent {
         /// 累积器定稿（兜底路径），前端不更新耗时。随帧下发使耗时在定稿那一刻就出现，
         /// 不必等下一次 hydrate。
         duration: Option<TurnTiming>,
+        /// 非正常结束（error 语义；cancelled 不算错误故为 false）。
+        ///
+        /// 计划 `2026-09-19-acp-failure-visibility` D1：协议合法值 ≠ 成功语义。
+        /// stopReason 的白名单判定（`end_turn`/`max_tokens`/`max_turn_requests` 为
+        /// 正常，其余含未知值一律非正常）**只在后端做一次**并在此字段下发，前端
+        /// 不得读 `stop_reason` 自行分类（AGENTS.md 工程准则 7①：同一判断出现在
+        /// 两处必然漂移，漏掉 `_` 前缀自定义值即本次事故的静默失败）。
+        ///
+        /// `true` = error 语义（refusal / 未知值），前端据此走错误态；`cancelled` 是
+        /// 用户主动行为，单独文案、不算错误，故为 `false`。
+        abnormal: bool,
     },
     Error {
         message: String,
@@ -196,6 +207,33 @@ impl ActivityState {
     }
 }
 
+/// 「按世代领取留痕权」的单一实现（[`AcpClient::claim_turn_end_notice`] 与
+/// [`AcpClient::claim_turn_end_notice_for_current_turn`] 共用，工程准则 7①：同一判定
+/// 只应有一处实现）。
+///
+/// 判定 = **比较 + 赋值在同一把锁内完成**，这才是幂等的来源。调用方若把「取世代」与
+/// 「调用本函数」拆成两步（旧写法），两步之间就留下 TOCTOU 窗口：另一个连接在间隙里
+/// `mark_prompt_active()` 推进世代，旧调用方便拿着**新**世代来 claim，把新一轮的留痕
+/// 权消耗掉 → 那一轮失败无任何提示。
+///
+/// ## 中毒语义：取回数据继续判定（宁重复，不吞）
+///
+/// `into_inner()` 不 panic：poison 只标记「曾有持有者 panic」，数据本身仍一致。取舍：
+/// 留痕承载「这一轮为什么失败」，吞掉它等于重演本家族要修的事故形态（turn 静默结束、
+/// 无任何提示）；而放行的代价只是可能重复写一条相同的失败提示（可发现、可删会话），
+/// 与「全量无 id 写回」同属可恢复污染。**宁要可恢复的重复，不要不可见的沉默。**
+fn claim_notice_for_generation(noticed: &Mutex<Option<u64>>, generation: u64) -> bool {
+    let mut noticed = match noticed.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if *noticed == Some(generation) {
+        return false;
+    }
+    *noticed = Some(generation);
+    true
+}
+
 pub struct AcpClient {
     connection: ConnectionTo<AcpAgentRole>,
     session_id: SessionId,
@@ -232,6 +270,32 @@ pub struct AcpClient {
     config_prefs: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
+    /// turn 非正常结束留痕的世代守卫（计划 2026-09-19 D1/D2「只写一条」）。
+    ///
+    /// turn 结束路径上有两个可能同时作用于同一 turn 的收尾者：reaper 的
+    /// `is_prompt_stale` 强制定稿（`run_reaper` → `mark_prompt_idle` + 广播结束帧）
+    /// 与 `dispatch_prompt` 里 `send_prompt` 的正常返回。后者会写留痕，而前者
+    /// 可能已经把同一 turn 定稿过；更实际的重复来源是**收尾被重放/并发触发两次**
+    /// （同一 prompt 的 `Ok(resp)` 分支被走到两遍、或调用方重试）。留痕是
+    /// **写库 + 广播**的副作用，重复执行会向用户展示两条相同的失败提示，故需与
+    /// `accumulator::finalize_turn` 同样幂等。
+    ///
+    /// 键取 [`ActivityState::prompt_generation`] 而非 turn 行 id：一次 prompt 即
+    /// 一个世代（`mark_prompt_active` 递增），而**没有折叠任何帧**的 turn（row_id
+    /// 为 `None`，如 agent 一声不响就 refusal）同样需要去重，用行 id 会漏掉这类。
+    ///
+    /// `Option<u64>`：`None` = 迄今未写过任何留痕。不用 `AtomicU64` + 0 初值，是
+    /// 因为世代 0 是合法值（首个 prompt 前），无法与「未写过」区分。
+    ///
+    /// **锁中毒语义（2026-09 评审后改）**：读侧（[`AcpClient::claim_turn_end_notice`] /
+    /// [`AcpClient::claim_turn_end_notice_for_current_turn`）在锁中毒时**取回数据继续
+    /// 判定**，而不是按「不写」处理。理由：留痕承载「这一轮为什么失败」，吞掉它等于
+    /// 重演本次要修的事故形态（turn 静默结束、无任何提示）；中毒只说明某处曾 panic，
+    /// 数据本身仍一致。放行的代价是**可能重复写一条相同提示**（可发现、可删会话），
+    /// 与「全量无 id 写回」同属可恢复污染 —— 宁要可恢复的重复，不要不可见的沉默。
+    /// 唯一的中毒风险是数据错乱时的误放行，而判定键是单调递增的世代，重复也局限于
+    /// 同一世代的一条。
+    last_noticed_generation: Mutex<Option<u64>>,
     /// 后端权威的进行中 turn 累积器：把流式 session/update 帧防抖落库，
     /// 使刷新/切设备/弱网不再丢失进行中的 assistant 回复（见 turn_accumulator）。
     accumulator: Arc<TurnAccumulator>,
@@ -740,6 +804,7 @@ impl AcpClient {
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
+            last_noticed_generation: Mutex::new(None),
             accumulator,
             config_prefs: config_prefs_slot,
             alive,
@@ -787,6 +852,64 @@ impl AcpClient {
     /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
     pub fn turn_timing(&self) -> Option<TurnTiming> {
         self.accumulator.turn_timing()
+    }
+
+    /// 当前进行中的 prompt 世代。每次 `mark_prompt_active` 递增，故「一次 prompt =
+    /// 一个世代」，可作为 turn 的稳定标识（见 `last_noticed_generation`）。
+    ///
+    /// **不要与 [`Self::claim_turn_end_notice_for_current_turn`] 拆成两步调用**：
+    /// 「读世代」与「按世代 claim」之间不持同一把锁时是 TOCTOU —— 另一个连接在此
+    /// 间隙 `mark_prompt_active()` 推进世代，本调用方就会拿**新**世代去 claim，而
+    /// 新世代对应的留痕权可能已被消耗/即将被消耗 → 本轮的留痕被永久吞掉（正是
+    /// 「这一轮失败无任何提示」的事故形态）。要「对当前 turn 留痕」就一次调用到位。
+    pub fn prompt_generation(&self) -> u64 {
+        // 锁中毒时退化为 0 而非 panic：本值只用于去重键，中毒说明其他地方已 panic，
+        // 为一个只读访问器再崩一次没有收益。
+        self.activity.lock().map(|st| st.prompt_generation).unwrap_or(0)
+    }
+
+    /// 领取**当前世代**的留痕权：同一世代只允许一个调用方通过（幂等「只写一条」）。
+    ///
+    /// 等价于 `claim_turn_end_notice(prompt_generation())`，但**取世代 + 比较 + 赋值
+    /// 在同一次持锁中完成**，消除了两步调用之间的 TOCTOU 窗口（见
+    /// [`Self::prompt_generation`] 的警告与下方锁顺序说明）。这是生产路径应当使用的
+    /// 入口；[`Self::claim_turn_end_notice`] 保留给「世代由调用方自己掌握」的场景
+    /// （测试、以及将来需要按历史世代补留痕的调用方）。
+    ///
+    /// 返回 `true` = 本次调用方赢得了留痕权，应继续写库 + 广播；`false` = 本世代
+    /// 已留过痕（或锁中毒），调用方必须跳过。
+    ///
+    /// ## 锁顺序（防死锁）
+    ///
+    /// 临界区内要碰两把不同的锁：`activity`（取世代）与 `last_noticed_generation`
+    /// （比较 + 写入去重键）。全仓固定顺序为 **`activity` → `last_noticed_generation`**，
+    /// 即先取 `activity` 的世代值，再按序加第二把锁。死锁需要「两个线程以相反顺序
+    /// 各持一把锁并等待对方」；既然本方法是仓库内**唯一**同时握持这两把锁的地方，
+    /// 且顺序固定，第二把锁的等待不可能形成环。
+    ///
+    /// 之所以不采用「只锁 `last_noticed_generation`、另用原子量读世代」：世代由
+    /// `mark_prompt_active` 在 `activity` 临界区内 `wrapping_add(1)` 维护，把它拆成
+    /// 第二份状态就要同时改两处写入点，反而制造新的不一致面。
+    ///
+    /// **持锁期间不 await**：临界区只做一次读、一次比较与一次赋值，调用方在拿到结果
+    /// 后才去写库。std Mutex 的 guard 跨 await 会破坏 `Send`（所有调用方都在
+    /// `tokio::spawn` 的任务里），并让一个慢 DB 阻塞所有读活跃度的路径。
+    pub fn claim_turn_end_notice_for_current_turn(&self) -> bool {
+        // 第一步：在 `activity` 锁内取世代。锁 poisoning 时取回数据继续（见
+        // `claim_notice_for_generation` 的中毒语义说明），与 `prompt_generation()`
+        // 的「不 panic」口径一致。
+        let generation = match self.activity.lock() {
+            Ok(st) => st.prompt_generation,
+            Err(poisoned) => poisoned.into_inner().prompt_generation,
+        };
+        // 第二步：**`activity` 锁已在此释放**，再按固定顺序取第二把锁并完成比较 +
+        // 赋值。之所以可以先放掉第一把：上面拿到的是世代的值拷贝，此后
+        // `mark_prompt_active` 再递增也改不到它；而「本世代是否已留痕」只依赖这个
+        // 拷贝与 `last_noticed_generation`，两者在第二步里被同一把锁覆盖，故
+        // 判定 + 写入依然原子。gap 里发生的新 prompt 属于**新世代**，由它自己的
+        // 调用方去 claim —— 这正是消除 TOCTOU 的关键：旧写法让旧调用方拿到新世代，
+        // 于是新旧两轮抢同一个留痕权。
+        claim_notice_for_generation(&self.last_noticed_generation, generation)
     }
 
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
@@ -1022,10 +1145,16 @@ impl AcpClient {
                     CANCEL_TURN_FALLBACK_SECS
                 );
                 client.mark_prompt_idle();
+                // `abnormal: false`：本路径是**合成的非协议原因**（agent 无视 cancel
+                // 时的兜底定稿），并不是协议回了非正常 stopReason；且此处不写留痕
+                // system 消息（计划 D3 之外），若报 error 语义就会出现「有错误提示、
+                // 无任何解释文案」。保持既有行为：前端只按 `stop_reason == Cancelled`
+                // 走取消文案。
                 client.notify_turn_end(TurnEndEvent::Done {
                     stop_reason: "Cancelled".into(),
                     row_id: client.turn_row_id(),
                     duration: client.turn_timing(),
+                    abnormal: false,
                 });
             }
         });
@@ -1380,5 +1509,154 @@ mod tests {
         assert_eq!(file_uri("a b#c?d%e.pdf"), "file:///a%20b%23c%3Fd%25e.pdf");
         // 非 ASCII 原样保留：名义 URI 仅供标识，agent 应消费内联 blob
         assert_eq!(file_uri("报告.pdf"), "file:///报告.pdf");
+    }
+
+    // ── claim_notice_for_generation：留痕权的世代去重（2026-09 TOCTOU 修复）──
+    //
+    // 直接测抽出来的自由函数而不是 `AcpClient` 方法：构造一个 `AcpClient` 需要 spawn
+    // 真 agent 子进程（见 `acp::fake_agent_tests`），而这里要守的纯粹是「比较 + 赋值
+    // 在同一把锁内」这条不变式 —— 与连接、DB、广播都无关。
+    //
+    // 为什么值得单测：这是「只写一条」的唯一实现，两个公开方法都走它。它的回归形态
+    // 是把比较与赋值拆开（或丢掉 `Some(generation)` 里的世代），后果是同一轮失败向用户
+    // 展示两条相同提示，或新一轮的提示被上一轮的守卫吞掉。
+
+    #[test]
+    fn claim_notice_first_call_for_a_generation_wins() {
+        let noticed = Mutex::new(None);
+        assert!(claim_notice_for_generation(&noticed, 1), "首个世代必然赢得留痕权");
+    }
+
+    #[test]
+    fn claim_notice_same_generation_is_deduplicated() {
+        // 「只写一条」的核心：同一世代重复 claim 必须被拦下。
+        let noticed = Mutex::new(None);
+        assert!(claim_notice_for_generation(&noticed, 7));
+        assert!(!claim_notice_for_generation(&noticed, 7), "同世代第二次必须被拦");
+        assert!(!claim_notice_for_generation(&noticed, 7), "第三次同样被拦");
+        assert_eq!(*noticed.lock().unwrap(), Some(7));
+    }
+
+    #[test]
+    fn claim_notice_next_generation_gets_its_own_slot() {
+        // 世代是滚动的：新 prompt = 新世代，守卫不得把新一轮的失败提示吞掉。
+        let noticed = Mutex::new(None);
+        assert!(claim_notice_for_generation(&noticed, 1));
+        assert!(!claim_notice_for_generation(&noticed, 1));
+        assert!(claim_notice_for_generation(&noticed, 2), "新世代必须重新赢得留痕权");
+        assert!(!claim_notice_for_generation(&noticed, 2));
+        assert_eq!(*noticed.lock().unwrap(), Some(2));
+    }
+
+    #[test]
+    fn claim_notice_generation_zero_is_a_real_generation_not_sentinel() {
+        // 世代 0 是合法值（首个 prompt 之前）——`Option` 的存在意义就是把「未写过」
+        // 与「写过世代 0」区分开。若实现退化成 `0 = 未写过`，这条会红。
+        let noticed = Mutex::new(None);
+        assert!(claim_notice_for_generation(&noticed, 0), "世代 0 也应当赢得留痕权");
+        assert!(!claim_notice_for_generation(&noticed, 0), "世代 0 的重复 claim 同样被拦");
+        assert_eq!(*noticed.lock().unwrap(), Some(0));
+    }
+
+    #[test]
+    fn claim_notice_poisoned_lock_still_grants_rather_than_silently_dropping() {
+        // 中毒语义（2026-09 改）：取回数据继续判定，而不是「宁缺勿滥」地 return false。
+        // 留痕是「这一轮为什么失败」的唯一载体，吞掉它等于重演事故形态（turn 静默结束、
+        // 无任何提示）；放行的代价只是可能重复一条相同提示（可发现、可删会话）。
+        let noticed = Mutex::new(None);
+        // 制造 poison：持锁期间 panic。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = noticed.lock().unwrap();
+            panic!("poison the lock on purpose");
+        }));
+        assert!(noticed.is_poisoned(), "前提：锁已被毒化");
+        assert!(claim_notice_for_generation(&noticed, 3), "中毒也必须继续判定（宁重复，不吞）");
+        assert!(!claim_notice_for_generation(&noticed, 3), "中毒下去重仍然有效");
+    }
+
+    #[test]
+    fn claim_notice_concurrent_callers_yield_exactly_one_winner_per_generation() {
+        // 并发下的「只写一条」：同一世代 N 个线程同时 claim，赢家必须恰好一个。
+        // 这守的是「比较 + 赋值在同一把锁内」——拆成两步就会出现两个赢家。
+        use std::sync::Barrier;
+        const CALLERS: usize = 32;
+        let noticed = std::sync::Arc::new(Mutex::new(None));
+        let barrier = std::sync::Arc::new(Barrier::new(CALLERS));
+        let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(CALLERS);
+        for _ in 0..CALLERS {
+            let noticed = std::sync::Arc::clone(&noticed);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let winners = std::sync::Arc::clone(&winners);
+            handles.push(std::thread::spawn(move || {
+                // 全部线程在屏障前集结，尽量同时进入临界区。
+                barrier.wait();
+                if claim_notice_for_generation(&noticed, 42) {
+                    winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread must not panic");
+        }
+        assert_eq!(
+            winners.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "同一世代的并发 claim 必须恰好一个赢家"
+        );
+        assert_eq!(*noticed.lock().unwrap(), Some(42));
+    }
+
+    #[test]
+    fn claim_for_current_turn_lock_order_is_deadlock_free_under_contention() {
+        // 新方法 `claim_turn_end_notice_for_current_turn` 的锁顺序：
+        // activity（取世代，取完即放）→ last_noticed_generation（比较 + 赋值）。
+        // 这条测试用线程并发复现该顺序，证明它不会死锁（成环需要相反顺序的握持）。
+        //
+        // 为什么在纯函数侧测：`AcpClient` 要 spawn 真 agent 才能构造，而这里守的
+        // 是「两把锁的获取顺序」这一结构性质，与连接无关。
+        use std::sync::Barrier;
+        const THREADS: usize = 16;
+        let activity = std::sync::Arc::new(Mutex::new(ActivityState::new()));
+        let noticed = std::sync::Arc::new(Mutex::new(None));
+        let barrier = std::sync::Arc::new(Barrier::new(THREADS));
+        let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(THREADS);
+        for i in 0..THREADS {
+            let activity = std::sync::Arc::clone(&activity);
+            let noticed = std::sync::Arc::clone(&noticed);
+            let barrier = std::sync::Arc::clone(&barrier);
+            let winners = std::sync::Arc::clone(&winners);
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                // 与生产方法同构：先锁 activity 读世代，**放掉之后**再锁第二把。
+                let generation = {
+                    let st = activity.lock().unwrap();
+                    st.prompt_generation + i as u64
+                };
+                if claim_notice_for_generation(&noticed, generation) {
+                    winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }));
+        }
+        // 若锁顺序成环，这里会永久挂起而不是失败 —— 用 try_join 兜底转成失败，
+        // 避免 CI 挂死（AGENTS.md：坏输入不得让 CI 挂死）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        for (idx, h) in handles.into_iter().enumerate() {
+            while !h.is_finished() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "线程 {idx} 超过 30s 未结束 —— 锁顺序疑似成环（死锁）"
+                );
+                std::thread::yield_now();
+            }
+            h.join().expect("worker thread must not panic");
+        }
+        // 每个线程用互不相同的世代，故人人都是赢家（本测试断言的是不死锁，不是去重）。
+        assert_eq!(
+            winners.load(std::sync::atomic::Ordering::SeqCst),
+            THREADS,
+            "不同世代各自赢得留痕权（顺序正确时无一被吞）"
+        );
     }
 }

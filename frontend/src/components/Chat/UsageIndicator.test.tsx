@@ -38,8 +38,8 @@ describe('UsageIndicator', () => {
 
     expect(container.textContent).toContain('25%')
     expect(container.textContent).toContain('$0.1234')
-    // 圆环是 SVG；明细（used / size）常驻 DOM 但默认透明
-    expect(container.querySelector('svg')).toBeTruthy()
+    // 圆环已移除；明细（used / size）常驻 DOM 但默认透明
+    expect(container.querySelector('svg')).toBeNull()
     expect(detail()!.style.opacity).toBe('0')
   })
 
@@ -62,6 +62,20 @@ describe('UsageIndicator', () => {
     })
     expect(detail()!.style.opacity).toBe('1')
     expect(detail()!.textContent).toBe('50k / 200k')
+  })
+
+  it('colors the percentage by occupancy (normal / yellow / red)', () => {
+    function pctColor(used: number, size: number): string | null {
+      render({ used, size })
+      const span = container.querySelector('.title-bar-badge')!.children[0] as HTMLElement
+      return span.style.color || null
+    }
+    // 25% → 默认色（无内联 color）
+    expect(pctColor(50_000, 200_000)).toBeNull()
+    // 60% → 黄
+    expect(pctColor(60_000, 100_000)).toBe('rgb(244, 213, 141)')
+    // 90% → 红
+    expect(pctColor(90_000, 100_000)).toBe('rgb(255, 158, 148)')
   })
 
   it('renders nothing when there is neither usage nor cost', () => {

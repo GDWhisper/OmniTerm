@@ -65,6 +65,12 @@ export function chatScrollEl(host: HTMLElement): HTMLElement {
  * 布局，scrollHeight/clientHeight 恒为 0，贴底判定只能靠显式 mock 驱动）。
  * `setClientHeight` / `setScrollHeight` 单独改视口高度与内容高度，用来模拟
  * 「容器收缩」或「内容长高但滚动位置不动、也没有 scroll 事件」这类布局变化。
+ *
+ * `scrollTop` 写入按浏览器语义**夹紧到 [0, scrollHeight - clientHeight]**：真实
+ * 浏览器里 `el.scrollTop = el.scrollHeight` 的落点是底缘而非写入值，不夹紧会让
+ * 「钉底后实际停在哪」与真实行为不符（贴底判定与锚点比较都读这个值）。尺寸变化
+ * （setClientHeight / setScrollHeight）**不**夹紧——离屏容器收缩时浏览器不会替
+ * 我们保住底缘，那正是 ResizeObserver 重钉要覆盖的形态。
  */
 export function mockScrollMetrics(
   el: HTMLElement,
@@ -77,7 +83,7 @@ export function mockScrollMetrics(
     configurable: true,
     get: () => top,
     set: (v: number) => {
-      top = v
+      top = Math.min(Math.max(0, v), Math.max(0, scroll - client))
     },
   })
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => client })

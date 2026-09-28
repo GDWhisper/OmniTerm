@@ -46,7 +46,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          # 钉版本：linux binary 的 glibc 下限由这里决定，须与 Dockerfile.release
+          # 基础镜像同步（ubuntu-latest 将于 2026-10 迁 26/glibc 2.41，裸用会静默抬高
+          # 二进制 glibc 门槛并再次打碎 Docker 镜像与旧发行版用户）
+          - os: ubuntu-24.04
             platform: linux-x86_64
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm

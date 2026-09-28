@@ -30,7 +30,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
 use std::sync::OnceLock;
 
@@ -103,7 +103,7 @@ pub fn is_port_allowed(port: u16, self_port: u16) -> bool {
     port != self_port
 }
 
-/// 代理模块状态：reqwest 客户端单例 + 自身监听端口。
+/// 代理模块状态：reqwest 客户端单例 + 自身监听端口 + 审计首访登记。
 #[derive(Clone)]
 pub struct ProxyState {
     pub client: reqwest::Client,
@@ -114,6 +114,55 @@ pub struct ProxyState {
     /// 请求体上限（默认 `MAX_REQUEST_BODY` = 2MB）。由 `--proxy-max-body` /
     /// `OMNITERM_PROXY_MAX_BODY` 注入（见 main.rs），供大文件上传场景调大。
     pub max_request_body: usize,
+    /// 已记过审计的端口集合（S5）。代理**没有「开通」原子事件**——
+    /// `dispatch_proxy` 是 catch-all，任何端口首次被访问即打通，故审计只能
+    /// 插在入口处按「首次出现的端口记一条」记。不做这个去重的话，
+    /// 反代流量的每一次请求都会写一条 audit 行（写放大，§P1）。
+    ///
+    /// 有界：上限 `MAX_TRACKED_PROXY_PORTS`，超限淘汰最早登记者。端口号只有
+    /// 65535 个且白名单范围是 3000..=65535，理论上限远小于此，故该淘汰
+    /// 路径正常不可达，仅作防御（§P1：兜底路径不会因为叫兜底就不增长）。
+    pub audited_ports: std::sync::Arc<std::sync::Mutex<PortAuditLog>>,
+}
+
+/// 已审计端口登记表（`ProxyState::audited_ports` 的内部实现）。
+///
+/// `insert` 返回 `true` 表示这是该端口**首次**被访问（调用方应记审计），
+/// 之后同一端口重复访问返回 `false`（不再重复记录）。
+#[derive(Default)]
+pub struct PortAuditLog {
+    seen: std::collections::HashSet<u16>,
+    /// 登记顺序（仅用于同容量淘汰）：VecDeque 已足够，端口去重由 `seen` 负责。
+    order: std::collections::VecDeque<u16>,
+}
+
+/// 已审计端口登记表容量上限（§P1）：白名单端口范围 3000..=65535 共 62536 个，
+/// 取 4096 足以覆盖任何真实使用形态，同时把内存占用钉死在 KB 级。
+pub const MAX_TRACKED_PROXY_PORTS: usize = 4096;
+
+impl PortAuditLog {
+    /// 登记一次访问尝试。首次访问返回 `true`（应记审计）。
+    pub fn insert(&mut self, port: u16) -> bool {
+        if !self.seen.insert(port) {
+            return false;
+        }
+        self.order.push_back(port);
+        if self.order.len() > MAX_TRACKED_PROXY_PORTS {
+            // 淘汰最早登记者。被淘汰的端口若再被访问会被当成「首次」重新记
+            // 一条——这是在「有界内存」与「不漏记」之间的取舍，取前者
+            // （内存无界是 §P1 红线，重复一条审计只是噪音）。
+            if let Some(old) = self.order.pop_front() {
+                self.seen.remove(&old);
+            }
+        }
+        true
+    }
+
+    /// 当前登记的端口数（单测用）。
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
 }
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -151,16 +200,41 @@ async fn dispatch_proxy(
         return (StatusCode::FORBIDDEN, "port not allowed").into_response();
     }
 
+    // 审计（S5）：代理无「开通」原子事件，catch-all 下首次访问即打通，
+    // 故在此按端口去重记一条。放在白名单校验**之后**——被拒绝的端口
+    // 不进登记表（它们的拒绝路径已有自己的 warn，且 no_upstream 类的
+    // 反复探测不该污染审计）。
     let client_ip = request_client_ip(&request);
+    let first_access = {
+        let mut log = state.proxy.audited_ports.lock().unwrap_or_else(|e| e.into_inner());
+        log.insert(port)
+    };
+    if first_access {
+        let ctx =
+            crate::api::audit::AuditContext::from_ip(client_ip, Some(format!("proxy_port:{port}")));
+        crate::api::audit::record(
+            &state.db,
+            &ctx,
+            crate::api::audit::AuditAction::ProxyAccess,
+            &port.to_string(),
+            None,
+        )
+        .await;
+    }
 
     // WS 分流（P2）：`Some` 说明带 `Upgrade: websocket` 握手头。
     if let Some(ws) = upgrade {
-        // Origin 校验（CSWSH 防御，P0-4.6）：浏览器发起的 WS 必带 Origin，其 host
-        // 必须与请求 Host 一致；跨站页面（如 evil.com 的 iframe）Origin 的 host 不同，
-        // 拒绝。无 Origin（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        // Origin 校验（CSWSH 防御，P0-4.6）：判定逻辑与三个主 WS 入口
+        // **共享同一真源** `crate::ws::origin_matches_host`（AGENTS.md §7①——
+        // 同一判断散在 ≥2 处必然漂移，这正是原 S2'「半落地」的根因）。
+        // 浏览器发起的 WS 必带 Origin，其 host 必须与请求 Host 一致；跨站
+        // 页面（如 evil.com 的 iframe）Origin 的 host 不同，拒绝。无 Origin /
+        // 无 Host（curl/原生 WS 等非浏览器客户端）放行——CSWSH 只能由浏览器触发。
+        // 未直接用入口级 `enforce_ws_origin(&HeaderMap)`：此处须先经
+        // `is_ws_upgrade` 判定再分流，且 let-chain 形态可少一次 HeaderMap 拷贝。
         if let Some(host) = host_from_request(&request)
             && let Some(origin) = request.headers().get(header::ORIGIN)
-            && !origin_matches_host(origin, host)
+            && !crate::ws::origin_matches_host(origin, host)
         {
             tracing::warn!("ws proxy origin rejected (port {}): {:?}", port, origin);
             return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
@@ -169,30 +243,6 @@ async fn dispatch_proxy(
     }
 
     forward_http(state, port, uri, request, client_ip).await
-}
-
-/// WS Origin 校验：Origin 的 host（忽略端口）与请求 Host（忽略端口）比对。
-/// `Origin: http://3000.omniterm.lan:9777` 与 Host `3000.omniterm.lan:9777` → 匹配。
-/// 解析失败 / host 为空 → 拒绝（防御畸形 Origin）。纯函数，便于单测。
-fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
-    let Ok(o) = origin.to_str() else {
-        return false;
-    };
-    let Some(authority) = o.split_once("://").map(|(_, rest)| rest) else {
-        return false;
-    };
-    let origin_host = authority.split(['/', '?', '#']).next().unwrap_or("");
-    let origin_host = strip_port(origin_host);
-    let host = strip_port(host);
-    !origin_host.is_empty() && origin_host.eq_ignore_ascii_case(host)
-}
-
-/// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
-fn strip_port(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix('[') {
-        return rest.split_once(']').map(|(h, _)| h).unwrap_or(rest);
-    }
-    s.split(':').next().unwrap_or(s)
 }
 
 /// 从 Host 头解析子域名端口：精确匹配 `"{port}.{base}"`（可带 `:{listen_port}` 后缀）。
@@ -220,8 +270,13 @@ pub fn parse_proxy_host(host: &str, base: &str) -> Option<u16> {
     prefix.parse::<u16>().ok()
 }
 
+/// 从请求取 `Host` 头文本。**取值语义的真源是 `ws::origin_guard::host_from_headers`**
+/// （AGENTS.md §7①：同一判断不得有两份实现——两处守卫的是同一道 CSWSH 攻击面）。
+/// 此处保留 `&Request` 形态仅因 proxy 的 WS/HTTP 分流上下文持有 `Request`；
+/// 见 2026-08-13 计划勘误⑤：共享函数不能持 `&Request` 跨 await。
+/// 若将来要支持 `X-Forwarded-Host`，必须与真源同步改。
 fn host_from_request(request: &Request) -> Option<&str> {
-    request.headers().get(header::HOST).and_then(|v| v.to_str().ok())
+    crate::ws::host_from_headers(request.headers())
 }
 
 fn is_ws_upgrade(request: &Request) -> bool {
@@ -259,9 +314,13 @@ pub async fn proxy_host_mw(
     }
 
     // 鉴权：子域名入口是 middleware，不走路由层 `require_auth_mw`，必须显式校验——
-    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。
+    // 否则 auth 开启时 `{port}.{base}` 成开放代理（§S4/S5）。子域 Host 恒为
+    // `{port}.{base}`（非回环字面量）→ 永远不命中本地免密，无需专门排除。
+    let peer = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ci| ci.0);
     let token = crate::auth::extract_token(&request, &state.token_cookie);
-    if let Err(status) = crate::auth::verify_request(&state, token.as_deref()).await {
+    if let Err(status) =
+        crate::auth::verify_request(&state, token.as_deref(), request.headers(), peer).await
+    {
         return status.into_response();
     }
 
@@ -277,6 +336,13 @@ pub async fn proxy_host_mw(
 
     if is_ws_upgrade(&request) {
         let (mut parts, _body) = request.into_parts();
+        // Origin 校验（CSWSH 防御）：本分支绕过 `dispatch_proxy`，必须**在此单独校验**，
+        // 否则 `--proxy-domain` 子域形态下 `{port}.{base}` 的 WS 入口完全没有 Origin
+        // 关卡（其余三主入口与路径前缀 `/proxy/{port}` 都已校验）。与它们共用同一真源
+        // `crate::ws::enforce_ws_origin`——它正好吃 `&HeaderMap`，而 headers 就在 `parts` 上。
+        if let Some(rejected) = crate::ws::enforce_ws_origin(&parts.headers) {
+            return rejected;
+        }
         return match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
             Ok(ws) => ws::relay(ws, port, &normalized, parts.headers.clone(), client_ip).await,
             Err(_) => (StatusCode::BAD_REQUEST, "invalid websocket upgrade").into_response(),
@@ -1399,35 +1465,6 @@ mod tests {
         assert_eq!(rewrite_location(&v4, 3000).to_str().unwrap(), "/proxy/3000/y");
     }
 
-    #[test]
-    fn ws_origin_matches_subdomain_host() {
-        // 同源 WS 握手：Origin host 与 Host（均忽略端口）一致 → 放行
-        let o = HeaderValue::from_static("http://3000.omniterm.lan:9777");
-        assert!(origin_matches_host(&o, "3000.omniterm.lan:9777"));
-        let o2 = HeaderValue::from_static("https://3000.omniterm.lan");
-        assert!(origin_matches_host(&o2, "3000.omniterm.lan"));
-    }
-
-    #[test]
-    fn ws_origin_rejects_cross_site() {
-        // 跨站页面（evil.com）发起 WS → host 不同 → 拒绝
-        let o = HeaderValue::from_static("https://evil.com");
-        assert!(!origin_matches_host(&o, "3000.omniterm.lan"));
-        // 畸形 Origin（无 scheme）→ 拒绝
-        let o2 = HeaderValue::from_static("3000.omniterm.lan");
-        assert!(!origin_matches_host(&o2, "3000.omniterm.lan"));
-    }
-
-    #[test]
-    fn strip_port_keeps_ipv6_literal() {
-        assert_eq!(strip_port("3000.omniterm.lan:9777"), "3000.omniterm.lan");
-        assert_eq!(strip_port("192.168.5.216:9077"), "192.168.5.216");
-        assert_eq!(strip_port("3000.omniterm.lan"), "3000.omniterm.lan");
-        // IPv6：方括号内地址整体保留
-        assert_eq!(strip_port("[::1]:8080"), "::1");
-        assert_eq!(strip_port("[::1]"), "::1");
-    }
-
     // ── P1 修复（2026-08-15，见 docs/dev/reverse-proxy-fixes-report.md）──
 
     #[test]
@@ -1463,6 +1500,61 @@ mod tests {
     fn max_request_body_default_is_two_mib() {
         // 未配置时默认 2MiB（与 axum DefaultBodyLimit 一致），可经 ProxyState 覆盖
         assert_eq!(MAX_REQUEST_BODY, 2 * 1024 * 1024);
+    }
+
+    // ── 审计端口登记表（S5，§P1） ──
+
+    #[test]
+    fn port_audit_log_records_only_first_access() {
+        let mut log = PortAuditLog::default();
+        assert!(log.insert(3000), "首次访问须返回 true（应记审计）");
+        assert!(!log.insert(3000), "重复访问不得再记");
+        assert!(!log.insert(3000), "第三次也不行");
+        assert!(log.insert(3001), "另一端口仍是首次");
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn port_audit_log_stays_within_cap() {
+        // §P1：登记表必须有界。写 cap + 100 个端口后恰为 cap 个（超限淘汰最早）。
+        let mut log = PortAuditLog::default();
+        for port in 3000..(3000 + MAX_TRACKED_PROXY_PORTS as u16 + 100) {
+            assert!(log.insert(port), "每个端口都是首次");
+        }
+        assert_eq!(log.len(), MAX_TRACKED_PROXY_PORTS, "登记数须恰为上限");
+        // 被淘汰的最早端口再访问会被当成首次（有界内存 > 不漏记，见 PortAuditLog 注释）。
+        assert!(log.insert(3000), "被淘汰的端口重新访问算首次");
+        assert_eq!(log.len(), MAX_TRACKED_PROXY_PORTS, "重新登记不得让表增长");
+    }
+
+    /// 调用点覆盖（子域名形态）：`proxy_host_mw` 必须把 `ConnectInfo` 与 `&HeaderMap`
+    /// 真实传入 `verify_request`，且子域 Host 恒非回环字面量 → **永不**命中本地免密。
+    /// 本测试在鉴权层就返回 401，不触达上游，故无需 mock 目标服务。
+    #[tokio::test]
+    async fn proxy_host_mw_rejects_unauthenticated_subdomain_even_with_local_bypass_on() {
+        use axum::middleware;
+        use std::sync::atomic::Ordering;
+        use tower::ServiceExt;
+
+        let mut state = crate::test_utils::test_state().await;
+        state.auth_enabled.store(true, Ordering::Relaxed);
+        state.local_auth_required.store(false, Ordering::Relaxed);
+        state.proxy.base_host = Some("omniterm.lan".into());
+
+        let app = Router::new()
+            .route("/", any(|| async { "upstream" }))
+            .route_layer(middleware::from_fn_with_state(state.clone(), proxy_host_mw))
+            .with_state(state.clone());
+
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .header("host", "3000.omniterm.lan")
+            .extension(ConnectInfo(std::net::SocketAddr::new("127.0.0.1".parse().unwrap(), 40000)))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.expect("infallible");
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     // ── 进程内集成测试（mock 目标服务 + proxy 全链路）──────────────

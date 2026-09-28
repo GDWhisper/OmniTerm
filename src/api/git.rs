@@ -1,12 +1,13 @@
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
 
 use crate::AppState;
 use crate::api::files::resolve_base_from_query;
@@ -231,10 +232,33 @@ async fn git_create_branch(State(state): State<AppState>, Json(b): Json<RepoBody
     }
 }
 
-async fn git_push(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+async fn git_push(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(b): Json<RepoBody>,
+) -> Response {
     let root = bind_repo!(state, b);
     match repo::push(&root).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Ok(()) => {
+            // 审计（S5）：push 是把本地改动送出机器的动作，必须有痕。
+            // 计划 D4 的存疑点「强推是否需单独分流」在此确认为**否**：
+            // `repo::push` 只发 `push` 与 `push --set-upstream origin HEAD`
+            // （src/git/repo.rs:513-529），从不带 --force，故不存在独立的
+            // 「强推」动作可分流。repo 根本身即 target，scope 用同一值。
+            let ctx = crate::api::audit::AuditContext::from_ip(
+                Some(addr.ip()),
+                Some(format!("repo:{root}")),
+            );
+            crate::api::audit::record(
+                &state.db,
+                &ctx,
+                crate::api::audit::AuditAction::GitPush,
+                &root,
+                None,
+            )
+            .await;
+            (StatusCode::OK, Json(json!({ "ok": true }))).into_response()
+        }
         Err(e) => git_error_response(e),
     }
 }

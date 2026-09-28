@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail } from '../stores/chatStore'
+import { useChatStore, messagesToSyncPayload, turnToSyncPayload, storedRawRowToSyncPayload, buildReplayMessages, alignReplaySyncPayload, type PlanEntry, type ConfigOption, type SlashCommand, type SessionUpdateAction, type PendingPermission, type ContentBlock, type SyncMessagePayload, type SystemBlockDetail, type ChatMessage } from '../stores/chatStore'
 import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
@@ -30,7 +30,20 @@ interface ServerFrame {
   type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message'
   code?: string
   data?: SessionUpdateFrame
+  /** prompt_done: 协议原始 stopReason 快照（诊断用；正常与否由 abnormal 表达）。 */
   stop_reason?: string
+  /** prompt_done: 本轮是否为非正常结束（后端按 D1 白名单判定后下发）。
+   *
+   *  白名单（end_turn / max_tokens / max_turn_requests）与「未知值一律按非正常」的
+   *  判定**只在后端做**，前端不得读 stop_reason 自行分类：同一判断散在两处必然漂移
+   *  （漏掉 `_` 前缀自定义值即本次事故的静默失败）。后端以 `skip_serializing_if` 省略
+   *  false 值，故此处按 `frame.abnormal === true` 判定。
+   *
+   *  cancelled 属于非正常结束（D1），后端单独走 `system.turnFailed.cancelled` 文案、
+   *  不算错误；前端 attention 侧另有一条 cancel 字面量判定**优先于**本字段——
+   *  取消是用户自己的动作，即使被标成 abnormal 也不该响错误提示。
+   *  判定顺序：queued 续发 > cancel > abnormal > done。 */
+  abnormal?: boolean
   message?: string
   id?: string
   request?: Record<string, unknown>
@@ -626,6 +639,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 重放 staging 缓冲：重放帧全部攒在这里（不进渲染态），replay_end 时非空才
   // 原子提交（双缓冲）。重放失败/为空时丢弃，现有消息不受影响。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
+  // 手动恢复（`session/load`）重放开始前的**基线快照**：hydrate 已有 dbId 的 DB 行。
+  // 手动恢复时 suppressReplay 恒为 false（DB 快照可能缺 thought/tool 块，必须让重放
+  // 覆盖），replay_end 必走 commitReplay —— store 被从空白重建，hydrate 行的 dbId 全部
+  // 丢失，随后的全量 syncToDb 只能发无 id 载荷，后端文本匹配因语义漂移必然失配 →
+  // INSERT 重复 assistant 行（2026-09-19 计划 D4 / P1）。此快照让 replay_end 能把
+  // 重放消息按 dbId 认回已在库里的行（见 alignReplaySyncPayload）。
+  //
+  // 为什么在这里快照而不是别处：replay_start 早于任何重放内容帧到达，此时 store 仍是
+  // hydrate 的权威历史（commitReplay 尚未执行）；且 replay_start/replay_end 都在
+  // HYDRATE_GATED_FRAMES 里，hydrate 必先落定，保证这里读到的就是带 dbId 的行。
+  // ref 自身的边界见文件末尾「基线 ref 的有界性（P1）」；对齐扫描的显式预算
+  // （ALIGN_SCAN_BUDGET）在 chatStore，与后端分页上限同量级。
+  const manualReplayBaseline = useRef<ChatMessage[]>([])
   // 实时流式缓冲：文本/thinking chunk 高频到达时，攒进同一动画帧一次性提交，
   // 把「每 chunk 一次重渲染」降为「每帧最多一次」——IDE 文本流应有的朴素节流，
   // 非特效：输出速度不变，只是合并提交。工具/plan/权限等结构性 action 仍即时生效。
@@ -669,12 +695,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 两个调用点：① 后端以 error 帧代替 replay_end（load_failed）；② 重放期间 WS
   // 断开——replay_end 只会发进已死的旧连接，若不复位，重连后 isReplaying 仍为
   // true，所有 live 帧被无限期攒进 staging 永不提交，聊天界面冻结。
+  // 基线快照一并清掉：失败的恢复不得把陈旧 baseline 泄漏给下一次成功恢复——
+  // 那样下一次会把重放消息按上一轮的 dbId 对齐，UPDATE 到语义无关的行上。
   const abortReplay = useCallback((sid: string) => {
     if (!isReplaying.current) return
     isReplaying.current = false
     suppressReplay.current = false
     isManualRestore.current = false
     replayBuffer.current = []
+    manualReplayBaseline.current = []
     useChatStore.getState().setReplaying(sid, false)
   }, [])
 
@@ -846,6 +875,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 与 useChatStore.addUserMessage/sendPrompt 等价的内联逻辑：避免调用 useCallback
           // （避免 TDZ + 闭包陈旧值）。见 docs/architecture/adr/0001-acp-queue-drain-location.md。
           {
+            // 判定顺序：queued 续发 > cancel > abnormal > done。
+            //
+            // **queued 续发优先并让整条链空转**（本 turn 结束时刚好有一条排队消息要发）：
+            // 排队续发意味着新 turn 立刻开始，此刻**不** fire 任何 attention。这是
+            // HEAD 起就有的既有行为（见 git show HEAD 的同一分支：`if (queued…) {…
+            // attention.clearAlert(sid); fresh.beginPrompt(sid) } else if (!cancel) fire
+            // 'done'`），本次只把 else 链从「done / 无」扩成「error / done / 无」，
+            // 未改动 queued 分支本身——非正常结束 + 有排队消息时不 fire error 是**保留
+            // 的既有缺口，不是本次引入的回归**：失败的可见痕迹仍由后端 system_message
+            // 落库并广播（D2），attention 只是第二信号。
+            // （另一处现实约束：queued 分支成功时会调 attention.clearAlert(sid)，
+            //  若想在此补 fire('error') 必须排到 clearAlert 之前才不会被自己清掉。）
             const fresh = useChatStore.getState()
             const queued = fresh.states[sid]?.queuedMessage
             if (queued && queued.trim()) {
@@ -862,14 +903,42 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
               }
-            } else if (!frame.stop_reason?.toLowerCase().includes('cancel')) {
-              // 与 tmux 链路表现一致（Sidebar 在 running→idle 转换 fire 'done'）；
-              // 用户主动取消不算完成，排队续发意味着 agent 还没歇。
+            } else if (frame.stop_reason?.toLowerCase().includes('cancel')) {
+              // 用户主动取消：abnormal 也可能为 true（D1 把 cancelled 归入非正常），
+              // 但取消是**用户自己的动作**，不该按错误打扰。故 cancel 判定优先于
+              // abnormal：既保住了无 abnormal 字段的旧后端表现，也挡住了"取消却响
+              // 错误提示音"。
+              //
+              // 两者靠 D1 的白名单判定天然不冲突：后端对 cancelled 单独走
+              // system.turnFailed.cancelled 文案（不按错误语义处理），abnormal 字段
+              // 本就是给"错误语义"用的；此处再挡一层是为防后端某天把 cancelled 也标成
+              // abnormal 时前端静默误报。
+            } else if (frame.abnormal === true) {
+              // 非正常结束（refusal / `_` 前缀自定义值 / 无法识别的值，判定口径见
+              // D1）：与 prompt_error 一致走 attention 的 error 语义——错误提示音 +
+              // 左侧错误态，用户侧一眼看出这一轮没成。
+              //
+              // 这里**不**再自己渲染失败提示：后端已把 system 消息落库并广播
+              // （`system_message` frame → SystemBlockView），那是唯一载体。前端
+              // 若在此补一条提示，hydrate 后会与库里的记录重复成两条气泡
+              // （离线失败尤其明显：prompt_done 根本没送达，提示只该来自库里那条）。
+              attention.fire(sid, sid, 'error')
+            } else {
+              // 与 tmux 链路表现一致（Sidebar 在 running→idle 转换 fire 'done'）。
               attention.fire(sid, sid, 'done')
             }
           }
           break
         case 'prompt_error':
+          // 先 flush 再报错，与 prompt_done / system_message 两个分支同一出发点：
+          // turn 终态帧必须先把 liveBuffer 里已到的流式 prose 同步提交，再改 turn
+          // 状态。否则 markError 会把「此刻 store 里最后一条 assistant」finalize，
+          // 而 prose 还压在 rAF 里——flush 时 last.streaming 已为 false，prose 无处
+          // 可挂，appendProseToMessages 只能新建一条 assistant 行：既分裂成两个气泡，
+          // 又留下一条永远 streaming 的「思考中」残影（本分支无后续 markDone 兜底）。
+          // 迟到 chunk（prompt_error 之后才到）无法由此收敛，与 prompt_done 同样
+          // 暴露，属通道级时序问题，不在本次范围内。
+          flushLiveBuffer()
           s.markError(sid, frame.message ?? 'prompt failed')
           // 与 tmux 链路的 attention_reason=error 表现一致
           attention.fire(sid, sid, 'error')
@@ -877,7 +946,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'system_message':
           // 后端主动产生的系统通知（权限超时回收告知等）：以 system 消息显示在聊天流。
           // 断线期间产生的通知已由后端落库，hydrate 补上；此帧只服务在线连接。
+          //
+          // 先 flush 再 push：后端 system_notice 与 session_update 是两条独立
+          // broadcast + 两个独立 tokio task，各自 mpsc 进同一个 notify_tx，跨通道
+          // 顺序无保证（中间还夹一次 insert_message 往返）——system 帧完全可能先于
+          // 本 turn 的 prompt_done 抵达。而流式 prose 要等 flushLiveBuffer 的 rAF
+          // 才进 store，若此处直接 append，失败提示就会插在它所描述的那段正文之前
+          // （随后 prompt_done 的 flush 才把 prose 补到它后面）。DB 侧顺序一直是对的
+          // （assistant 行早在流式期落库），错的只是前端这条直播渲染路径。故先把
+          // 已到的 prose 同步提交进 store，再 append 本提示，渲染顺序即「正文 →
+          // 失败提示」，与两路广播的到达先后无关。
           if (frame.label) {
+            flushLiveBuffer()
             useChatStore.getState().pushSystemEvent(sid, frame.label, frame.detail)
           }
           break
@@ -904,6 +984,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           isReplaying.current = true
           replayBuffer.current = []
           const msgs = s.states[sid]?.messages
+          // 手动恢复前快照 hydrate 的权威行：此刻 commitReplay 还没执行，store 仍是
+          // 带 dbId 的 DB 历史。快照在 suppressReplay 判定**之前**取，与判定结果无关
+          // —— 非手动恢复（连接即重放）时此处取到的快照在 replay_end 不会被用到
+          // （那边按 wasManual 分支），失败恢复的清理见 abortReplay。
+          manualReplayBaseline.current =
+            isManualRestore.current && msgs ? [...msgs] : []
           // 手动 restore 必须走完整重放（DB hydrate 的旧快照不完整）。
           suppressReplay.current = !isManualRestore.current && !!(msgs && msgs.length > 0)
           if (!suppressReplay.current) {
@@ -921,11 +1007,47 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           isManualRestore.current = false
           const staged = replayBuffer.current
           replayBuffer.current = []
+          // 基线快照只用一次：无论走哪条分支，本次恢复的对账到此结束。
+          const baseline = manualReplayBaseline.current
+          manualReplayBaseline.current = []
           if (!wasSuppressed) {
             if (buildReplayMessages(staged).length > 0) {
               useChatStore.getState().commitReplay(sid, staged)
               // 重放历史只活在内存 store，刷新即丢 —— 写回 DB。
-              syncToDb()
+              //
+              // 手动恢复且拿到过基线时，改走**带 dbId 的对齐写回**：commitReplay 已把
+              // store 从空白重建，hydrate 行的 dbId 全部丢失；不重新认回这些行的话，
+              // 全量 syncToDb 发的就是无 id 载荷，后端按 (session, role, text) 匹配
+              // 必然失配（重放 text 与累积器 text 语义已漂移）→ INSERT 重复 assistant
+              // 行（2026-09-19 计划 P1 的事故形态）。
+              // 降级路径：非手动恢复 / 基线为空 / 对齐结果为空 / 整场扫描超出总量预算
+              // → 原样全量写回，行为与今天完全一致（这正是翻盘条件要保留的兜底）。
+              // 不用 break/else 提前收尾：无论走哪条写回路径，下面
+              // setReplaying(false) 与 clearEnded(sid) 都必须照旧执行。
+              const alignedSync =
+                wasManual && baseline.length > 0
+                  ? alignReplaySyncPayload(
+                      useChatStore.getState().states[sid]?.messages ?? [],
+                      baseline,
+                    )
+                  : []
+              if (alignedSync.length > 0) {
+                postSync(sid, alignedSync)
+              } else {
+                // 走到这里只有两种可能：非手动恢复/基线为空（根本没试过对齐），或
+                // 对齐整场被总量预算降级（`degraded`）。后者是 D4 翻盘条件的真实
+                // 触发：各实现的 session/load 重放与累积器行无法稳定对齐时，宁可
+                // 全量无 id 写回（最坏 = 今天的 INSERT 重复行，可发现可删），也不
+                // 让半截对齐产物写进 DB。仅记一行 warn 供真实环境回填取证，
+                // 不弹 UI——恢复成功与否与对齐成功与否是两件事，用户视角下这次
+                // 恢复已经完成（内容都在内存里）。
+                if ((alignedSync as { degraded?: boolean }).degraded) {
+                  console.warn(
+                    `[acp] manual restore alignment degraded (total comparison budget spent); fell back to full id-less sync for session ${sid}`,
+                  )
+                }
+                syncToDb()
+              }
             } else {
               // 空重放：session/load 是否重放历史为 agent 可选行为，保留现有消息，
               // 仅应用状态同步帧；手动恢复时提示用户历史未返回。
@@ -1016,7 +1138,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 快照只有状态没有事件时间：重开观测窗，不把旧文本除以后续时长。
           // 只从此刻跟踪明确仍在执行的工具，不推算离线期间耗时。
           const at = Date.now()
-          resumeTurnClock(sid, at)
+          resumeTurnClock(sid)
           setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0, at)
           for (const block of blocks) {
             // 卡片缺省状态会被补成 running，不能拿该显示兜底当作执行证据。
@@ -1292,3 +1414,27 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
 
   return { connectionState, sendPrompt, cancel, restore, respondPermission, setConfigOption }
 }
+
+// --- 基线 ref 的有界性（docs/dev/performance-and-safety.md §P1）---
+//
+// `manualReplayBaseline` 是「每会话一条、单次恢复有效」的数组，按红线三问回答：
+//
+// 1. **上限是什么**：不复刻第二套数字上限，直接复用 store 自身 messages 的上界——
+//    `GET /messages` 的 hydrate 页由后端按条数 + 字节**双预算**切页
+//    （`MESSAGES_PAGE_MAX_LIMIT` / `MESSAGES_PAGE_MAX_BYTES`），用户上拉才前插更多页，
+//    而 baseline 只在「hydrate 已落定后用户点恢复」这一刻存在，取的就是那一刻已加载
+//    的那些行。即上限 = 后端分页预算 × 用户已加载页数，与 store.messages 严格同源。
+//    **刻意不加独立 cap**：再写一个 `MAX_BASELINE = N` 会与后端的页预算分叉（一个变
+//    另一个不变时，cap 要么提前截断对齐窗口、要么形同虚设），且这里的消息对象是引用
+//    拷贝（`[...msgs]`），不额外持有 blocks 副本，内存成本就是 store 已付出的那一份。
+// 2. **超限怎么办**：ref 自身不需要超限策略——它不是持续 push 的累积结构，写入点只有
+//    replay_start（整份覆盖）与 abortReplay/replay_end（整份清空），生命周期严格包在
+//    一次重放内，不可能无界增长。**但消费它的操作需要**：只读扫描在全失配时是
+//    O(replay × baseline)，上游分页上限只界住输入不界住这次计算，故扫描本身另有显式
+//    预算 `ALIGN_SCAN_BUDGET`（chatStore，取值 = 后端默认页大小；与
+//    `MESSAGES_PAGE_MAX_LIMIT` 无直接关系）。
+// 3. **用什么测试守住**：`useAcpChat.alignreplay.test.tsx` 的两条集成用例：
+//    「恢复失败后基线被清空」（abortReplay 路径，失败的下一次恢复不按陈旧基线对齐）
+//    与「空基线时退化为既有全量写回」（基线为空不会被当成可对齐输入）。
+//    纯函数侧另由 `chatStore.alignreplay.test.ts` 守住「失配降级为无 id」这条安全边界
+//    （含后缀形态的重放仍能对齐、同一基线行不被消费两次、漂移态受扫描预算封顶）。

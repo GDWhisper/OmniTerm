@@ -152,7 +152,8 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
       ToolCall: { toolCallId: 'tool-a', status: 'in_progress' },
     } } })
     now += 10_000
-    expect(turnTps('s1')).toBe(100)
+    // 首字锚点在 1s；[1s,11s] 全在工具并集内且无后续输出 → 无可测解码窗口
+    expect(turnTps('s1')).toBeNull()
     send(ws, { type: 'turn_snapshot', row_id: 'row-live', text: 'old output', seq: 10,
       blocks: JSON.stringify({ v: 1, frames: [
         chunkFrame('old output'), { ToolCall: { toolCallId: 'tool-a', status: 'in_progress' } },
@@ -166,8 +167,13 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     now += 1_000
     send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('x'.repeat(400)) } })
     send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('duplicate') } })
+    now += 1_000
+    send(ws, { type: 'session_update', seq: 13, data: { update: chunkFrame('x'.repeat(400)) } })
+    // 快照重放文本不进分子（只计入 live 帧的 800 字符），观测窗在快照处重开：
+    // 锚点落在 seq 12（17s 工作坐标），解码窗口 1s → 200 token ÷ 1s。
+    expect(turnTps('s1')).toBe(200)
     send(ws, { type: 'prompt_done', row_id: 'row-live' })
-    expect(finalTps('s1')).toBe(100)
+    expect(finalTps('s1')).toBe(200)
   })
 
   it('turn_snapshot restores evicted prose and suppresses the cooked write-back', () => {

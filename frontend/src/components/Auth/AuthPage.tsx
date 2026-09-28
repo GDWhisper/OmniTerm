@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api } from '../../api/client'
+import { api, DEFAULT_USERNAME } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { READER_FONT } from '../../utils/fonts'
 import { PixelButton } from '../PixelUI/PixelButton'
@@ -9,9 +9,18 @@ interface Props {
   needsSetup: boolean
 }
 
+/** 后端 `normalize_username` 的字符数上限（按 Unicode 码点计，非 UTF-16 码元）。 */
+const MAX_USERNAME_CHARS = 32
+/** Cc 类控制字符（C0 + DEL + C1），与后端 `char::is_control()` 同一集合。 */
+// eslint-disable-next-line no-control-regex -- 判据就是要匹配控制字符本身
+const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f-\u009f]/
+
 export function AuthPage({ needsSetup }: Props) {
   const { t } = useTranslation()
   const setAuthState = useAppStore((s) => s.setAuthState)
+  // Setup prefills the backend's default username (`admin`, D1); login leaves
+  // it empty with a placeholder hint so existing installs know what to type.
+  const [username, setUsername] = useState(needsSetup ? DEFAULT_USERNAME : '')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -19,27 +28,46 @@ export function AuthPage({ needsSetup }: Props) {
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      if (!password || submitting) return
+      const name = username.trim()
+      if (!name || !password || submitting) return
+
+      // 与后端 normalize_username 同一契约（1..=32 码点、禁控制字符）：本地先拦，
+      // 免得明知 400 还打一次请求。空/全空白走上面的守卫（按钮同为 disabled），
+      // 不按非法报错——后端 setup 对空串回退 admin，是兼容契约。
+      if (Array.from(name).length > MAX_USERNAME_CHARS || CONTROL_CHARS_RE.test(name)) {
+        setError(t('auth.invalidUsername'))
+        return
+      }
 
       setSubmitting(true)
       setError('')
 
       try {
         if (needsSetup) {
-          await api.setup(password)
+          await api.setup(name, password)
           setAuthState('authenticated')
         } else {
-          await api.login(password)
+          await api.login(name, password)
           setAuthState('authenticated')
         }
       } catch (err: unknown) {
+        // 按状态码映射（与 AuthSection 的 400/401 处理一致）：用户名非法的**裸 400**
+        //（无 JSON body）不能退化成「密码错误」；409（另一标签页已完成 setup）、
+        // 5xx、无 status 的网络异常同样不能，它们不是密码问题。
+        const status = (err as { status?: number })?.status
         const body = (err as { body?: { error?: string } })?.body
-        setError(body?.error || t('auth.wrongPassword'))
+        if (status === 400) {
+          setError(t('auth.invalidUsername'))
+        } else if (status === 401) {
+          setError(body?.error || t('auth.wrongPassword'))
+        } else {
+          setError(body?.error || t('auth.loginFailed'))
+        }
       } finally {
         setSubmitting(false)
       }
     },
-    [password, submitting, needsSetup, setAuthState, t],
+    [username, password, submitting, needsSetup, setAuthState, t],
   )
 
   const title = needsSetup ? t('auth.setPassword') : t('auth.login')
@@ -53,13 +81,30 @@ export function AuthPage({ needsSetup }: Props) {
           <span style={{ fontFamily: READER_FONT, fontSize: 12 }}>{title}</span>
         </div>
         <form onSubmit={onSubmit} style={formStyle}>
+          <label style={labelStyle} htmlFor="auth-username">
+            {t('auth.username')}
+          </label>
+          <input
+            id="auth-username"
+            type="text"
+            autoFocus={!needsSetup}
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value)
+              setError('')
+            }}
+            placeholder={needsSetup ? undefined : t('auth.usernamePlaceholderDefault')}
+            style={inputStyle}
+            disabled={submitting}
+            autoComplete="username"
+          />
           <label style={labelStyle} htmlFor="auth-password">
             {t('auth.password')}
           </label>
           <input
             id="auth-password"
             type="password"
-            autoFocus
+            autoFocus={needsSetup}
             value={password}
             onChange={(e) => {
               setPassword(e.target.value)
@@ -73,7 +118,7 @@ export function AuthPage({ needsSetup }: Props) {
           <PixelButton
             variant="primary"
             type="submit"
-            disabled={!password || submitting}
+            disabled={!username.trim() || !password || submitting}
             style={{ marginTop: 4 }}
           >
             {submitting ? '...' : title}

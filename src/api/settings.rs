@@ -1,3 +1,4 @@
+use axum::extract::Query;
 use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use serde::Deserialize;
 use serde_json::json;
@@ -36,6 +37,7 @@ pub fn routes() -> Router<AppState> {
             "/settings/permission-timeout",
             get(get_permission_timeout).put(set_permission_timeout),
         )
+        .route("/settings/audit-log", get(get_audit_log))
 }
 
 #[derive(Deserialize)]
@@ -154,45 +156,32 @@ async fn set_permission_timeout(
     Ok(Json(json!({ "mode": mode.as_str(), "minutes": req.minutes })))
 }
 
+/// 读取安全审计日志（只读最近 N 条，新→旧）。
+///
+/// 只读、无写入口：清理只由 `audit_log` 表的滚动删除负责（`api::audit`）。
+/// 传 `?limit=N` 可调整条数，但**收敛**到硬顶而非拒绝（读口无副作用，
+/// 超限请求不该报错，见 `audit::effective_read_limit` 的纯函数单测）。
+async fn get_audit_log(
+    State(state): State<AppState>,
+    Query(q): Query<crate::api::audit::AuditLogQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let limit = crate::api::audit::effective_read_limit(q.limit);
+    let entries = crate::api::audit::list_recent(&state.db, limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::AcpSupervisor;
-    use crate::acp::reaper::{PermissionTimeoutConfig, PermissionTimeoutMode};
-    use crate::auth::LoginGuard;
-    use crate::engine::EngineRegistry;
-    use crate::proxy::ProxyState;
-    use sqlx::sqlite::SqlitePoolOptions;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicU64};
+    use crate::acp::reaper::PermissionTimeoutMode;
 
+    /// 内存 sqlite + 全部迁移的 `AppState`。直接复用
+    /// `crate::test_utils::test_state`（两者原为逐字重复的 17 行样板，
+    /// AppState 新增字段时只改那一处）。
     async fn test_state() -> AppState {
-        let db = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("in-memory sqlite pool");
-        sqlx::migrate!("./migrations").run(&db).await.expect("run migrations");
-        AppState {
-            jwt_secret: "test-secret".into(),
-            token_cookie: crate::TOKEN_COOKIE_BASE.to_string(),
-            api_keys: HashMap::new(),
-            auth_enabled: Arc::new(AtomicBool::new(false)),
-            acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
-            acp_perm_timeout: Arc::new(PermissionTimeoutConfig::default()),
-            login_guard: LoginGuard::new(),
-            engines: EngineRegistry::new(db.clone(), 9777),
-            acp_supervisor: AcpSupervisor::default(),
-            proxy: ProxyState {
-                client: reqwest::Client::new(),
-                self_port: 9777,
-                base_host: None,
-                max_request_body: crate::proxy::MAX_REQUEST_BODY,
-            },
-            max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,
-            db,
-        }
+        crate::test_utils::test_state().await
     }
 
     async fn db_value(db: &sqlx::SqlitePool) -> Option<String> {

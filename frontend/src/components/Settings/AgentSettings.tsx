@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAgentStore, type Agent } from '../../stores/agentStore'
 import type { AgentEnvVar, CreateAgent, UpdateAgent } from '../../api/client'
 import { AGENT_PRESETS } from './presets'
+import { SectionTitle } from './toggleRow'
 import { READER_FONT } from '../../utils/fonts'
 import { BetaBadge } from '../Common/BetaBadge'
 
@@ -221,18 +222,10 @@ export function AgentSettings() {
 
   return (
     <section className="space-y-3">
-      <h3
-        style={{
-          color: 'var(--text-muted)',
-          fontSize: 11,
-          fontWeight: 500,
-          textTransform: 'uppercase',
-          letterSpacing: '0.5px',
-        }}
-      >
+      <SectionTitle>
         {t('settings.agents.title')}{' '}
         <BetaBadge />
-      </h3>
+      </SectionTitle>
 
       <div className="flex flex-wrap gap-1.5">
         {agents.map((a) => (

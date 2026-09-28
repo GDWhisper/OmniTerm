@@ -1,8 +1,9 @@
 //! 共享测试工具（仅 `#[cfg(test)]` 编译）。
 //!
 //! 各 API 模块的 handler 测试复用同一个「内存 sqlite + 全部迁移」的
-//! `AppState` 构造，避免逐模块复制 17 行初始化代码（settings.rs 的
-//! `tests::test_state` 与之同构，可后续迁移过来）。
+//! `AppState` 构造，避免逐模块复制 17 行初始化代码。`settings.rs` 的
+//! `tests::test_state` 也已迁移为对本函数的转发（原先逐字重复），
+//! `AppState` 新增字段时只改这一处。
 
 use crate::AppState;
 use crate::acp::AcpSupervisor;
@@ -27,6 +28,8 @@ pub async fn test_state() -> AppState {
         token_cookie: crate::TOKEN_COOKIE_BASE.to_string(),
         api_keys: HashMap::new(),
         auth_enabled: Arc::new(AtomicBool::new(false)),
+        // 默认安全姿态：本地访问同样要求密码（与启动读取的缺失默认值一致，D4）。
+        local_auth_required: Arc::new(AtomicBool::new(true)),
         acp_idle_recycle_secs: Arc::new(AtomicU64::new(300)),
         acp_perm_timeout: Arc::new(crate::acp::reaper::PermissionTimeoutConfig::default()),
         login_guard: LoginGuard::new(),
@@ -37,6 +40,9 @@ pub async fn test_state() -> AppState {
             self_port: 9777,
             base_host: None,
             max_request_body: crate::proxy::MAX_REQUEST_BODY,
+            audited_ports: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::proxy::PortAuditLog::default(),
+            )),
         },
         max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,
         db,

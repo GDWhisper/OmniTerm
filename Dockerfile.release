@@ -1,5 +1,9 @@
 # -- Runtime only (CI pre-builds binary + frontend) --
-FROM debian:bookworm-slim
+# 基础镜像 glibc 必须 >= release.yml 中 linux-x86_64 构建 runner 的 glibc：
+# binary 在 ubuntu-24.04 构建会链接到 GLIBC_2.39，bookworm（2.36）跑不起来
+# （v0.2.24/v0.2.25 实测 `GLIBC_2.39 not found`）。两者同步升级，勿只改一边。
+# 注意 Ubuntu 官方镜像无 -slim 变体，别写成 ubuntu:24.04-slim（不存在）。
+FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tmux && rm -rf /var/lib/apt/lists/*
 
@@ -10,6 +14,11 @@ COPY frontend-dist ./frontend/dist
 ENV OMNITERM_HOST=0.0.0.0
 ENV OMNITERM_PORT=9077
 ENV FRONTEND_DIR=frontend/dist
+# 容器默认全网监听（0.0.0.0），而 auth 关闭时后端会 fail-closed 拒绝启动
+# （见 src/main.rs enforce_listen_auth）。这里默认开鉴权，与 docker-compose.yml
+# 的 OMNITERM_AUTH_ENABLED=${OMNITERM_AUTH_ENABLED:-1} 口径一致；可信内网确需
+# 无鉴权时以 -e OMNITERM_AUTH_ENABLED=0 运行，并自行承担暴露风险。
+ENV OMNITERM_AUTH_ENABLED=1
 EXPOSE 9077
 
 CMD ["./omniterm", "start"]

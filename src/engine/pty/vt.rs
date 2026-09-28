@@ -631,12 +631,7 @@ impl VtState {
             rows: out_rows,
         };
 
-        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
-
-        // Force next periodic frame to be full since rendering context changed.
-        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
-
-        json
+        serde_json::to_string(&frame).expect("CellFrame serialization must not fail")
     }
 
     /// 历史视口窗口帧（方案 C Phase 1，`pty-herdr-style-full-buffer-render.md`）：
@@ -721,9 +716,7 @@ impl VtState {
             rows: out_rows,
         };
 
-        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
-        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
-        json
+        serde_json::to_string(&frame).expect("CellFrame serialization must not fail")
     }
 
     /// 清除视口锚（D4 失效路径：alt-screen 进入由转发循环在 overlay 前调用；
@@ -925,12 +918,7 @@ impl VtState {
             rows: out_rows,
         };
 
-        let json = serde_json::to_string(&frame).expect("CellFrame serialization must not fail");
-
-        // Phase 3: record frame size for metrics
-        crate::engine::pty::metrics::record_cell_frame_bytes(json.len());
-
-        json
+        serde_json::to_string(&frame).expect("CellFrame serialization must not fail")
     }
 
     /// Encode one row as RowData (no lock needed - caller holds grid ref).

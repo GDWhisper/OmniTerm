@@ -8,6 +8,35 @@ const BASE = '/api/v1'
  *  请求并回收会话（默认，2026-08-18 起的安全策略）。 */
 export type PermissionTimeoutMode = 'wait' | 'auto' | 'abort'
 
+/** 审计动作枚举（后端 `api::audit::AuditAction::as_str`）。**协议稳定值**，
+ *  改名等于改协议；新增动作须后端先落地再在此追加。 */
+export type AuditActionName =
+  | 'file_write'
+  | 'file_delete'
+  | 'file_upload'
+  | 'git_push'
+  | 'agent_create'
+  | 'agent_update'
+  | 'agent_delete'
+  | 'proxy_access'
+
+/** 一条审计记录（后端 `audit_log` 行，读口返回形态）。 */
+export interface AuditEntry {
+  id: number
+  /** 身份标识，形如 `admin@192.168.1.7`；取不到来源 IP 时为 `admin@-`。 */
+  actor: string
+  action: AuditActionName
+  /** 动作对象：文件路径 / agent id / 端口号。 */
+  target: string
+  /** 绑定范围：`session:<id>` / `workspace:<id>` / `project:<id>` /
+   *  `repo:<root>` / `proxy_port:<port>` / `agents`；无绑定时为 null。 */
+  scope: string | null
+  /** 附加细节 JSON 文本（字段名、allow_escape 标志等），可能已被后端按
+   *  字节上限截断并追加 `"__omitted_chars__":N`；无细节时为 null。 */
+  detail_json: string | null
+  created_at: string
+}
+
 /**
  * Error thrown by `request` for non-2xx responses. Carries the HTTP status
  * and the parsed JSON body so callers can react to specific codes
@@ -225,6 +254,18 @@ export interface ExternalSession {
   agent_nonce?: string
 }
 
+/** `GET /auth/settings` — master switch + local-access verification mirror +
+ *  the account's current username (`null` when no user row exists yet). */
+export interface AuthSettings {
+  auth_enabled: boolean
+  local_auth_required: boolean
+  username: string | null
+}
+
+/** Default account username. Backend-authoritative (D1): a missing / empty /
+ *  whitespace-only username on setup or login falls back to this value. */
+export const DEFAULT_USERNAME = 'admin'
+
 export const api = {
   // Health
   health: () => request<{ status: string }>('/health'),
@@ -297,20 +338,46 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mode, minutes }),
     }),
+  /** 安全审计日志（只读）：最近若干条敏感操作留痕（文件写/删/上传、git push、
+   *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。
+   *
+   *  默认 `silent`：读不到审计时调用方自行降级为空态，不该再抢一个全局 error
+   *  toast——否则用户同时看到 toast 和「暂无审计记录」两处重复提示。 */
+  getAuditLog: (limit?: number, opts?: { silent?: boolean }) =>
+    request<{ entries: AuditEntry[] }>(
+      `/settings/audit-log${limit ? `?limit=${limit}` : ''}`,
+      { silent: opts?.silent ?? true },
+    ),
 
   // Auth — public endpoints where a 401/409 is a business error (wrong
   // password / user already exists), never an expired session, so the
   // caller must handle it locally without triggering the logout redirect.
-  setup: (password: string) =>
-    request('/auth/setup', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
-  login: (password: string) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify({ password }), noAuthRedirect: true }),
+  // Username is the single account's custom label (default `admin`, backend
+  // authoritative for normalization); it is required on screen, and the
+  // backend falls back to `admin` when omitted by scripts.
+  setup: (username: string, password: string) =>
+    request('/auth/setup', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
+  login: (username: string, password: string) =>
+    request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  check: () => request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean }>('/auth/check'),
-  setAuthSettings: (authEnabled: boolean) =>
-    request('/auth/settings', { method: 'POST', body: JSON.stringify({ auth_enabled: authEnabled }) }),
+  /** `local_bypass` = the request hit the loopback bypass (only when local
+   *  verification is disabled); absent/false otherwise. */
+  check: () =>
+    request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean; local_bypass?: boolean }>('/auth/check'),
+  /** Auth settings mirror: master switch + local-access verification + the
+   *  account's current username (`null` when no user row exists yet). */
+  getAuthSettings: () =>
+    request<AuthSettings>('/auth/settings'),
+  /** Partial update — omitted fields keep their stored value (backend 400s
+   *  when both are missing). */
+  setAuthSettings: (update: { auth_enabled?: boolean; local_auth_required?: boolean }) =>
+    request('/auth/settings', { method: 'POST', body: JSON.stringify(update) }),
   changePassword: (currentPassword: string, newPassword: string) =>
     request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }), noAuthRedirect: true }),
+  /** Renames the account and bumps the token version server-side (all old
+   *  sessions are revoked) — the caller must re-enter the login flow. */
+  changeUsername: (currentPassword: string, newUsername: string) =>
+    request('/auth/change-username', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_username: newUsername }), noAuthRedirect: true }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),

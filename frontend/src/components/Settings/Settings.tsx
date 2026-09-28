@@ -10,6 +10,7 @@ import { canFullscreen } from '../../hooks/useImmersive'
 import { READER_FONT } from '../../utils/fonts'
 import { AgentSettings } from './AgentSettings'
 import { AuthSection } from './AuthSection'
+import { AuditLogSection } from './AuditLogSection'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { SectionTitle, ToggleRow } from './toggleRow'
 import { btnBase } from './settingsStyles'
@@ -488,9 +489,7 @@ function TmuxMouseSection() {
 
   return (
     <section className="space-y-2">
-      <h3 style={{ color: 'var(--text-muted)', fontSize: 11, fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-        {t('settings.tmuxMouse')}
-      </h3>
+      <SectionTitle>{t('settings.tmuxMouse')}</SectionTitle>
       <button
         onClick={handleToggle}
         style={{
@@ -636,17 +635,12 @@ function SoundItem({ labelKey, hintKey, value, onToggle, onPreview }: SoundItemP
   )
 }
 
-function SessionsSection() {
+/** 会话内容展示：聊天面板里默认展开什么。 */
+function SessionDisplaySection() {
   const expandThinking = useAppStore(s => s.expandThinking)
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const setExpandThinking = useAppStore(s => s.setExpandThinking)
   const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
-  const acpIdleRecycleMin = useAppStore(s => s.acpIdleRecycleMin)
-  const setAcpIdleRecycleMin = useAppStore(s => s.setAcpIdleRecycleMin)
-  const blurDisconnectMin = useAppStore(s => s.blurDisconnectMin)
-  const setBlurDisconnectMin = useAppStore(s => s.setBlurDisconnectMin)
-  const idleDisconnectMin = useAppStore(s => s.idleDisconnectMin)
-  const setIdleDisconnectMin = useAppStore(s => s.setIdleDisconnectMin)
 
   return (
     <>
@@ -662,6 +656,21 @@ function SessionsSection() {
         value={expandToolCalls}
         onToggle={() => setExpandToolCalls(!expandToolCalls)}
       />
+    </>
+  )
+}
+
+/** 超时断开与回收（ACP 空闲回收 / 终端失焦 / 终端空闲）。 */
+function SessionTimeoutSection() {
+  const acpIdleRecycleMin = useAppStore(s => s.acpIdleRecycleMin)
+  const setAcpIdleRecycleMin = useAppStore(s => s.setAcpIdleRecycleMin)
+  const blurDisconnectMin = useAppStore(s => s.blurDisconnectMin)
+  const setBlurDisconnectMin = useAppStore(s => s.setBlurDisconnectMin)
+  const idleDisconnectMin = useAppStore(s => s.idleDisconnectMin)
+  const setIdleDisconnectMin = useAppStore(s => s.setIdleDisconnectMin)
+
+  return (
+    <>
       <DisconnectSlider
         titleKey="settings.acpIdleRecycle"
         hintKey="settings.acpIdleRecycleHint"
@@ -806,7 +815,10 @@ type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'l
 interface Category {
   id: CategoryId
   labelKey: string
-  sections: SectionComponent[]
+  /** 语义分组：同一子数组里的 section 渲染进同一张悬浮卡片（同组 = 同一类设置，
+   *  如「显示尺寸」「像素特效」）。分组只影响卡片边界，不改变 section 自身结构，
+   *  新增 section 时按语义决定并入哪个组或单起一组。 */
+  groups: SectionComponent[][]
   /** When true, the tab is only shown on mobile viewports. */
   mobileOnly?: boolean
 }
@@ -815,42 +827,47 @@ const CATEGORIES: Category[] = [
   {
     id: 'appearance',
     labelKey: 'settings.category.appearance',
-    sections: [ThemeSection, UiZoomSection, FontSizeSection, ChatFontSizeSection, PixelFontSection, CrtSection, AnimationsSection, ParchmentSection, AboutSection],
+    groups: [
+      [ThemeSection],
+      [UiZoomSection, FontSizeSection, ChatFontSizeSection],
+      [PixelFontSection, CrtSection, AnimationsSection, ParchmentSection],
+      [AboutSection],
+    ],
   },
   {
     id: 'audio',
     labelKey: 'settings.category.audio',
-    sections: [SoundSection],
+    groups: [[SoundSection]],
   },
   {
     id: 'auth',
     labelKey: 'settings.category.auth',
-    sections: [AuthSection],
+    groups: [[AuthSection], [AuditLogSection]],
   },
   {
     id: 'terminal',
     labelKey: 'settings.category.terminal',
-    sections: [DefaultEngineSection, AutoCopySection, TmuxMouseSection],
+    groups: [[DefaultEngineSection], [AutoCopySection, TmuxMouseSection]],
   },
   {
     id: 'sessions',
     labelKey: 'settings.category.sessions',
-    sections: [PermissionTimeoutSection, SessionsSection],
+    groups: [[PermissionTimeoutSection], [SessionDisplaySection], [SessionTimeoutSection]],
   },
   {
     id: 'language',
     labelKey: 'settings.category.language',
-    sections: [LanguageSection],
+    groups: [[LanguageSection]],
   },
   {
     id: 'agents',
     labelKey: 'settings.category.agents',
-    sections: [AgentSettings],
+    groups: [[AgentSettings]],
   },
   {
     id: 'mobile',
     labelKey: 'settings.category.mobile',
-    sections: [MobileGestureSection, MobileHapticSection, ImmersiveSection],
+    groups: [[MobileGestureSection, MobileHapticSection, ImmersiveSection]],
     mobileOnly: true,
   },
 ]
@@ -882,8 +899,12 @@ export function Settings() {
         ))}
       </nav>
       <OverlayScroll style={{ flex: 1, minWidth: 0 }} contentClassName="settings-content">
-        {activeCategory.sections.map((Section, i) => (
-          <Section key={i} />
+        {activeCategory.groups.map((group, i) => (
+          <div className="settings-card" key={i}>
+            {group.map((Section, j) => (
+              <Section key={j} />
+            ))}
+          </div>
         ))}
       </OverlayScroll>
     </div>
