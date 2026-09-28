@@ -127,7 +127,9 @@
 **适用**：多 worktree/多实例共享一个数据目录（`~/.<产品>/<实例>.db`）的项目，尤其测试会建表/迁移的。**弯路**：故障现象是正式版启动报 `migration X was previously applied but is missing`，第一反应查正式版二进制版本、用户手动裸跑、进程串库（历史事故都是这些），实际写入者是一次普通的本地 `cargo test`。取证要对齐"库内 `_sqlx_migrations.installed_on` 时刻"与"各候选进程的启动记录"（构建产物 `.incremental/` 目录 mtime、会话记录里的 `cargo test` 启动时间），而不是只查正式版一侧。
 
 **案例证据**：
-- 2026-09-27 `~/.omniterm/omniterm.db` 被两次写入：09:30:12 来自 dev worktree 的 `cargo test`（应用 20260926），16:51:04 来自 auth worktree 的 `cargo test --workspace`（应用 20260927，测试启动时刻 16:51:00 与落库时刻对齐）。根因：`tests/agent_hook_integration.rs` 在 `DATABASE_URL` 未设时用 `env!("CARGO_PKG_NAME")` 拼回退路径，包名全分支统一为 `omniterm` 后恒等于正式版库。后果：正式版 v0.2.25 无法通过迁移校验、无法启动；回滚两迁移后恢复。修复：回退改为开发库 `omniterm-dev.db`（与 `tests/runtime_kind_matrix.rs` 的既有约定一致）。
+- 2026-09-27 `~/.omniterm/omniterm.db` 被两次写入：09:30:12 来自 dev worktree 的 `cargo test`（应用 20260926），16:51:04 来自 auth worktree 的 `cargo test --workspace`（应用 20260927，测试启动时刻 16:51:00 与落库时刻对齐）。根因：`tests/agent_hook_integration.rs` 在 `DATABASE_URL` 未设时用 `env!("CARGO_PKG_NAME")` 拼回退路径，包名全分支统一为 `omniterm` 后恒等于正式版库。后果：正式版 v0.2.25 无法通过迁移校验、无法启动；回滚两迁移后恢复。
+- **修复经三轮才收敛（教训：堵住一个通道 ≠ 堵住这一类）**：① `533e4de` 回退改 `omniterm-dev.db`——堵住正式版库，但**分支 worktree** 跑测试会把该分支迁移集写进 dev 库（dev 实例在合入该迁移前 VersionMissing 拒启）；② `073fafa` 回退改为 `DATABASE_URL` → `./.env.local` 的 `BRANCH_BINARY_NAME`（与 `dev.sh` 同真源：在哪个 worktree 跑就写哪个实例库；库名 sanitize 仅 `[A-Za-z0-9_-]`）→ 皆无则 **SKIP**，不再回退任何固定真实库；③ `917389b` 端口与库**同源配对**（`OMNITERM_TEST_PORT` → `.env.local` 的 `BACKEND_PORT` → 9777）+ WS 响应分级 + `BRANCH_BINARY_NAME=omniterm`（正式版 stem）一律 SKIP 的保险。
+- **第二个坑：环境错配会让断言恒真假绿**。端口仍写死 9777 时，session 行写 auth 库、握手打到读 dev 库的实例 → 服务端只回 `session not found`、不 attach pane → 「pane 不得出现 0x04」的断言恒真。且该错误帧是 101 升级**之后**下发的，单读握手头根本看不出来。**规律：测试的库与端口必须同源配对；环境不满足前提时必须带原因显式 SKIP，绝不静默通过——不会变红的测试比没有测试更危险。**（CI 无实例时该测试显式 SKIP 属预期语义。）
 
 ---
 
