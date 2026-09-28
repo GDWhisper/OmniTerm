@@ -18,19 +18,21 @@
 //! # 运行方式
 //!
 //! ```bash
-//! # 1) 启动 dev server（如未运行）
+//! # 1) 启动开发实例（如未运行）
 //! ./dev.sh start
 //!
-//! # 2) 单独跑这个测试
-//! cargo test --test runtime_kind_matrix -- --ignored
+//! # 2) 单独跑这个测试（注入本 worktree 实例库与端口，库/端口同源配对）
+//! ./dev.sh test --test runtime_kind_matrix -- --ignored
 //!
 //! # 3) 跑全部（包括 ignored）
-//! cargo test -- --include-ignored
+//! ./dev.sh test -- --include-ignored
 //! ```
 //!
 //! # 为什么 #[ignore]
 //!
-//! - 依赖运行中的 dev server（默认 :9777）
+//! - 依赖运行中的**本 worktree 实例**（库与端口经 `tests/common` 与 `.env.local`
+//!   同源解析，不再硬编码 dev 实例 —— 那是 2026-09-27 迁移事故的同族隐患，
+//!   见 `docs/dev/debug-patterns/platform-protocol.md` 模式 11）
 //! - 创建真实 session（即使测试结束会清理，中断可能残留）
 //! - 慢（每个 case 一次 HTTP round-trip + 一次 sqlite3 查表）
 //! - 日常 `cargo test` 跑 71 个单测已经够，不要让"按需深度验证"污染日常反馈
@@ -52,15 +54,13 @@
 
 use std::process::Command;
 
-/// 端口。OMNITERM_TEST_PORT 可覆盖，默认 9777（与 .env.local 一致）。
-fn test_port() -> String {
-    std::env::var("OMNITERM_TEST_PORT").unwrap_or_else(|_| "9777".into())
-}
+mod common;
 
 fn api_url(path: &str) -> String {
-    // 所有 OmniTerm v1 端点都在 /api/v1 前缀下
+    // 所有 OmniTerm v1 端点都在 /api/v1 前缀下；端口经 tests/common 与 .env.local
+    // 同源解析（OMNITERM_TEST_PORT 可覆盖），与 db_path 配对使用。
     let p = if path.starts_with('/') { path } else { "/" };
-    format!("http://localhost:{}/api/v1{}", test_port(), p)
+    format!("http://localhost:{}/api/v1{}", common::resolve_test_port(), p)
 }
 
 /// 跑 shell 命令并返回 stdout（trim）。
@@ -72,26 +72,32 @@ fn cmd_output(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// 找到 omniterm.db 路径。优先用 DATABASE_URL，fallback 到 ~/.omniterm/omniterm-dev.db
-/// （开发构建无 --db 时默认连的开发库，与 dev server 的 BRANCH_BINARY_NAME 一致）。
-fn db_path() -> String {
-    if let Ok(url) = std::env::var("DATABASE_URL") {
-        // strip "sqlite:" prefix and "?mode=rwc" suffix
-        let p = url.strip_prefix("sqlite:").unwrap_or(&url).split('?').next().unwrap_or(&url);
-        return p.to_string();
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    format!("{home}/.omniterm/omniterm-dev.db")
+/// sqlite3 查询（trim）。带 busy timeout：6 个 case 并发跑、共用同一实例库，
+/// 无 timeout 时并发写会直接 `database is locked` → 前置建 project 失败 → SKIP。
+fn sqlite3_query(db: &str, sql: &str) -> Option<String> {
+    cmd_output("sqlite3", &["-cmd", ".timeout 5000", db, sql])
+}
+
+/// 测试要连的实例库文件路径（供 `sqlite3` 命令用）：经 `tests/common` 与 `dev.sh`
+/// 同源解析（`DATABASE_URL` → `./.env.local` 的 `BRANCH_BINARY_NAME`，含 sanitize
+/// 与正式版 stem 保险）。**不再回退固定 dev 库**——分支 worktree 会把该分支迁移集
+/// 写进 dev 库（模式 11）；无法确定时 `None`，调用方带原因 SKIP。
+fn db_path() -> Option<String> {
+    common::resolve_test_db_url().map(|url| common::db_file_path(&url))
 }
 
 /// 创建/获取一个测试用 project。返回 project_id。
 /// workspace_path 用 /tmp 下独立目录避免污染真实项目。
 fn ensure_test_project(name: &str, workspace: &str) -> Option<String> {
-    let db = db_path();
+    let db = db_path()?;
 
     // 查已存在
-    let existing =
-        cmd_output("sqlite3", &[&db, &format!("SELECT id FROM projects WHERE name='{name}'")])?;
+    let Some(existing) =
+        sqlite3_query(&db, &format!("SELECT id FROM projects WHERE name='{name}'"))
+    else {
+        eprintln!("SKIP: cannot query projects table in {db}");
+        return None;
+    };
     if !existing.is_empty() {
         return Some(existing);
     }
@@ -101,8 +107,12 @@ fn ensure_test_project(name: &str, workspace: &str) -> Option<String> {
     let sql = format!(
         "INSERT INTO projects (id, name, path, created_at) VALUES ('{new_id}', '{name}', '{workspace}', datetime('now'))"
     );
-    let out = Command::new("sqlite3").args([&db, &sql]).output().ok()?;
+    let out = Command::new("sqlite3").args(["-cmd", ".timeout 5000", &db, &sql]).output().ok()?;
     if !out.status.success() {
+        eprintln!(
+            "SKIP: cannot insert project row: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
         return None;
     }
     Some(new_id)
@@ -117,12 +127,20 @@ fn uuid_v4() -> String {
 /// 找一个 ACP-capable agent（args 含 '--acp' 或 'acp'）。
 /// `agents` 表没有 runtime_kind 列，靠 args 里的 'acp' 字符串判别。
 fn first_acp_agent_id() -> Option<String> {
-    let db = db_path();
-    let stdout = cmd_output(
-        "sqlite3",
-        &[&db, "SELECT id FROM agents WHERE args LIKE '%acp%' OR args LIKE '%--acp%' LIMIT 1"],
-    )?;
-    if stdout.is_empty() { None } else { Some(stdout) }
+    let db = db_path()?;
+    let Some(stdout) = sqlite3_query(
+        &db,
+        "SELECT id FROM agents WHERE args LIKE '%acp%' OR args LIKE '%--acp%' LIMIT 1",
+    ) else {
+        eprintln!("SKIP: cannot query agents table in {db}");
+        return None;
+    };
+    if stdout.is_empty() {
+        eprintln!("SKIP: no ACP-capable agent registered in agents table");
+        None
+    } else {
+        Some(stdout)
+    }
 }
 
 /// 调后端 API，返回 (http_code, body)。auth 用现成 session。
@@ -186,7 +204,7 @@ fn auth_check() -> bool {
 }
 
 fn db_exists() -> bool {
-    std::path::Path::new(&db_path()).exists()
+    db_path().map(|p| std::path::Path::new(&p).exists()).unwrap_or(false)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -194,8 +212,13 @@ fn db_exists() -> bool {
 // ═══════════════════════════════════════════════════════════════
 
 fn preflight() -> Option<&'static str> {
+    if db_path().is_none() {
+        return Some(
+            "cannot resolve test db (no DATABASE_URL / .env.local BRANCH_BINARY_NAME; run via ./dev.sh test)",
+        );
+    }
     if !db_exists() {
-        return Some("omniterm.db not found");
+        return Some("test db not found (start the instance first: ./dev.sh start)");
     }
     if !auth_check() {
         return Some("dev server not authenticated (run auth/setup first)");
@@ -296,11 +319,17 @@ async fn acp_session_file_endpoint_nested_path() {
     std::fs::create_dir_all(&nested).ok();
     let project_id = match ensure_test_project("matrix_nested", &workspace) {
         Some(p) => p,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
     let agent_id = match first_acp_agent_id() {
         Some(a) => a,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
 
     let body = format!(
@@ -308,7 +337,10 @@ async fn acp_session_file_endpoint_nested_path() {
     );
     let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
         Some(r) => r,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
     if code != 201 {
         eprintln!("SKIP: session create returned {code}: {body}");
@@ -351,11 +383,17 @@ async fn invalid_runtime_kind_is_rejected_not_silently_accepted() {
     std::fs::create_dir_all(&workspace).ok();
     let project_id = match ensure_test_project("matrix_invalid", &workspace) {
         Some(p) => p,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
     let agent_id = match first_acp_agent_id() {
         Some(a) => a,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
 
     // 故意传非法 runtime_kind
@@ -530,7 +568,10 @@ async fn delete_pty_session_removes_db_row() {
     std::fs::create_dir_all(&workspace).ok();
     let project_id = match ensure_test_project("matrix_ptydel", &workspace) {
         Some(p) => p,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
 
     let body = format!(
@@ -538,7 +579,10 @@ async fn delete_pty_session_removes_db_row() {
     );
     let (code, body) = match http_post(&format!("/projects/{project_id}/sessions"), &body) {
         Some(r) => r,
-        None => return,
+        None => {
+            eprintln!("SKIP: precondition unmet (project / agent / server unavailable)");
+            return;
+        }
     };
     if code != 201 {
         eprintln!("SKIP: session create returned {code}: {body}");
@@ -550,12 +594,13 @@ async fn delete_pty_session_removes_db_row() {
     http_delete(&format!("/sessions/{session_id}"));
 
     // DB 行必须消失（cleanup_session_runtime + delete 一起生效）
-    let db = db_path();
-    let remaining = cmd_output(
-        "sqlite3",
-        &[&db, &format!("SELECT COUNT(*) FROM sessions WHERE id='{session_id}'")],
-    )
-    .unwrap_or_default();
+    let Some(db) = db_path() else {
+        eprintln!("SKIP: cannot resolve test db");
+        return;
+    };
+    let remaining =
+        sqlite3_query(&db, &format!("SELECT COUNT(*) FROM sessions WHERE id='{session_id}'"))
+            .unwrap_or_default();
     assert_eq!(
         remaining.trim(),
         "0",

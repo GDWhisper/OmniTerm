@@ -6,11 +6,13 @@
 //! ```
 //!
 //! [`test_ws_close_does_not_inject_eof_into_pane`] 还需要一个「与测试库配对、
-//! 可匿名握手」的实例：库默认取 `./.env.local` 的 `BRANCH_BINARY_NAME`
-//! （`DATABASE_URL` 可覆盖），端口默认取同一文件的 `BACKEND_PORT`
-//! （`OMNITERM_TEST_PORT` 可覆盖）——两者必须指向同一实例，否则带原因 SKIP。
+//! 可匿名握手」的实例：库与端口经 `tests/common` 与 `./.env.local` 同源解析
+//! （`DATABASE_URL` / `OMNITERM_TEST_PORT` 可覆盖）——两者必须指向同一实例，
+//! 否则带原因 SKIP。
 
 use std::time::Duration;
+
+mod common;
 
 /// ── Helper: create a unique session name ──
 fn unique_session(prefix: &str) -> String {
@@ -49,64 +51,9 @@ async fn cleanup_ws_test(
     }
 }
 
-/// ── Helper: 读取 `./.env.local` 中某个键的值（对齐 shell `source` 语义）──
-///
-/// 容忍 `export KEY=...` 前缀，跳过 `#` 注释行，`trim()` 值，去成对单/双引号；
-/// 重复键**取最后一行**（后者覆盖前者，与 `source` 一致）。键缺失返回 `None`。
-///
-/// 用途：让集成测试与 `dev.sh` 共用同一真源（在哪个 worktree 跑测试就取哪个
-/// worktree 的库名/端口），避免测试连到别的实例。
-fn env_local_value(key: &str) -> Option<String> {
-    let content = std::fs::read_to_string("./.env.local").ok()?;
-    let mut found = None;
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with('#') {
-            continue;
-        }
-        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
-        // `strip_prefix(key)` 紧跟 `=` 才算命中，避免前缀相同的长键误匹配
-        let Some(raw) = line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) else {
-            continue;
-        };
-        let value = raw.trim();
-        // 容忍成对引号包裹（`BRANCH_BINARY_NAME="omniterm-auth"`）
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-            .unwrap_or(value);
-        found = Some(value.to_string());
-    }
-    found
-}
-
-/// ── Helper: 解析集成测试要连的实例库；无法确定时 `None`（调用方 SKIP）──
-///
-/// 优先级：`DATABASE_URL`（CI 用）→ `./.env.local` 的 `BRANCH_BINARY_NAME`
-/// （与 `dev.sh` 同一真源：在哪个 worktree 跑测试就落哪个实例库）。
-/// **不得**回退到任何固定真实库：本测试会执行 `sqlx::migrate!`，把分支的迁移集
-/// 写进别的实例库（尤其正式版库 `omniterm.db`）会让该实例在合入迁移前因 sqlx
-/// `VersionMissing` 拒绝启动——2026-09-27 dev/auth worktree 的两次 `cargo test`
-/// 即把 20260926 / 20260927 应用进正式版库，导致正式版 0.2.25 无法启动。
-fn resolve_test_db_url() -> Option<String> {
-    if let Ok(url) = std::env::var("DATABASE_URL") {
-        return Some(url);
-    }
-    let name = env_local_value("BRANCH_BINARY_NAME")?;
-    // 库名 sanitize：只接受 `[A-Za-z0-9_-]`，防 `.env.local` 塞入 `/` / `..`
-    // 拼出意外路径；不合法视为未找到。
-    let ok =
-        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-    // 保险：`omniterm` 是正式版 stem（release 无 `--db` 时的默认库 `omniterm.db`）。
-    // 与 dev.sh 同真源虽会允许这种配置，但本测试会执行 `sqlx::migrate!`，
-    // 绝不能升级正式版库 —— 视为未找到，让调用方 SKIP 而不是赌一把。
-    if !ok || name == "omniterm" {
-        return None;
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    Some(format!("sqlite:{home}/.omniterm/{name}.db?mode=rwc"))
-}
+// 库/端口解析的共享 helper 在 `tests/common`（唯一真源，与 `dev.sh` 同源）：
+// `common::resolve_test_db_url()` / `common::resolve_test_port()`。禁止在本文件
+// 另写解析：库端口错配或隐式回退真实库的事故教训见 `tests/common/mod.rs` 头注。
 
 // ═══════════════════════════════════════════════════════════════
 // 5.6 WS disconnect → poll task exits (oneshot shutdown test)
@@ -483,7 +430,7 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     // 而本测试会执行 `sqlx::migrate!`，等于拿分支的迁移集去升级正式版库。
     // 2026-09-27 dev/auth worktree 的两次 `cargo test` 即经此路径把 20260926 /
     // 20260927 应用到正式版库，导致正式版 0.2.25 迁移校验失败无法启动。
-    let Some(db_url) = resolve_test_db_url() else {
+    let Some(db_url) = common::resolve_test_db_url() else {
         eprintln!(
             "SKIP: 无法确定实例库（未设 DATABASE_URL，且 ./.env.local 无 BRANCH_BINARY_NAME 或值为正式版 stem `omniterm`）；请用 ./dev.sh 环境或显式设置 DATABASE_URL"
         );
@@ -549,14 +496,13 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     tokio::time::sleep(Duration::from_millis(800)).await;
 
     // 4. Connect to the WS endpoint of the instance that owns the db above and
-    //    disconnect. 端口与库同源：OMNITERM_TEST_PORT → ./.env.local 的
-    //    BACKEND_PORT → 9777（最终兼容；正常本机路径由前两者决定）。
-    let port = std::env::var("OMNITERM_TEST_PORT")
-        .ok()
-        .or_else(|| env_local_value("BACKEND_PORT"))
-        .unwrap_or_else(|| "9777".into());
-    let port: u16 = port.parse().unwrap_or_else(|_| {
-        panic!("端口 `{port}` 不是合法 u16（来源 OMNITERM_TEST_PORT / .env.local BACKEND_PORT）")
+    //    disconnect. 端口与库同源（tests/common::resolve_test_port：OMNITERM_TEST_PORT
+    //    → ./.env.local 的 BACKEND_PORT → 9777 最终兼容）。
+    let port_raw = common::resolve_test_port();
+    let port: u16 = port_raw.parse().unwrap_or_else(|_| {
+        panic!(
+            "端口 `{port_raw}` 不是合法 u16（来源 OMNITERM_TEST_PORT / .env.local BACKEND_PORT）"
+        )
     });
     let _url = format!("ws://localhost:{port}/api/v1/ws/terminal/{session_id}?cols=80&rows=24");
     let connected =
