@@ -278,6 +278,28 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
+    /// 接线级 fail-closed：`ConnectInfo` 缺失（未注入 extensions，等价于非常规接入
+    /// / 测试脚手架）时本地免密不得放行——即使 Host 是回环形态。
+    #[tokio::test]
+    async fn middleware_local_bypass_fails_closed_without_connect_info() {
+        use axum::{Router, middleware, routing::get};
+        use tower::ServiceExt;
+
+        let state = state(true, false).await;
+        let app = Router::new()
+            .route("/protected", get(|| async { "ok" }))
+            .route_layer(middleware::from_fn_with_state(state.clone(), require_auth_mw))
+            .with_state(state.clone());
+
+        let request = axum::http::Request::builder()
+            .uri("/protected")
+            .header("host", "127.0.0.1:18777")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(request).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
     #[tokio::test]
     async fn valid_token_passes_even_remotely() {
         // 远程形态带合法 token → 放行（本地免密只是额外放行路径，不影响 token 路径）

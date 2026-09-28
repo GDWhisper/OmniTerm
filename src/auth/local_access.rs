@@ -246,6 +246,9 @@ mod tests {
             "127.0.0.1.evil.com",
             "localhost.evil.com",
             "http://127.0.0.1",
+            // 畸形方括号串：strip_port 原样返回 → parse 失败 → 非回环（不得截出 ::1）
+            "[::1]@evil.com",
+            "[::1]:80@evil.com",
         ] {
             assert!(!is_loopback_host(host), "host={host} must NOT be loopback");
         }
@@ -280,5 +283,13 @@ mod tests {
     fn peer_unspecified_is_not_loopback() {
         // 0.0.0.0 对端（非回环）不放行；显式钉住 is_loopback 语义
         assert!(!is_local_request(&loopback_headers(), peer("0.0.0.0")));
+    }
+
+    #[test]
+    fn v4_mapped_peer_is_not_loopback_fail_closed() {
+        // 刻意 fail-closed：std `IpAddr::is_loopback` 只认 `::1`（不识别 v4-mapped），
+        // `--host ::` 双栈绑定时内核可能给出 `::ffff:127.0.0.1` 形态的对端 → 判非回环。
+        // 方向安全（少放行一次免密，不会误放），边界由 auth-not-enforced.md 记录。
+        assert!(!is_local_request(&loopback_headers(), peer("::ffff:127.0.0.1")));
     }
 }

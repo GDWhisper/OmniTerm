@@ -87,11 +87,20 @@ pub fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
 }
 
 /// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
+///
+/// 方括号形态只接受 `[v6]` 与 `[v6]:port`（port 非空且全为数字）；畸形方括号串
+/// （如 `[::1]@evil.com` / `[::1]:80@evil.com`）**原样返回**，由调用方按解析失败
+/// 处理（`parse::<IpAddr>()` 不通过 → 非回环 / 不匹配），不得截出括号内地址。
 pub fn strip_port(s: &str) -> &str {
-    if let Some(rest) = s.strip_prefix('[') {
-        return rest.split_once(']').map(|(h, _)| h).unwrap_or(rest);
-    }
-    s.split(':').next().unwrap_or(s)
+    let Some(rest) = s.strip_prefix('[') else {
+        return s.split(':').next().unwrap_or(s);
+    };
+    let Some((host, tail)) = rest.split_once(']') else { return s };
+    let port_ok = match tail.strip_prefix(':') {
+        Some(port) => !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()),
+        None => tail.is_empty(),
+    };
+    if port_ok { host } else { s }
 }
 
 #[cfg(test)]
@@ -191,6 +200,19 @@ mod tests {
         assert_eq!(strip_port("192.168.5.216:9077"), "192.168.5.216");
         assert_eq!(strip_port("3000.omniterm.lan"), "3000.omniterm.lan");
         // IPv6：方括号内地址整体保留
+        assert_eq!(strip_port("[::1]:8080"), "::1");
+        assert_eq!(strip_port("[::1]"), "::1");
+    }
+
+    #[test]
+    fn strip_port_rejects_garbage_after_bracket() {
+        // 畸形方括号串原样返回（调用方 parse::<IpAddr>() 失败 → 非回环 / 不匹配）。
+        // 不得截出方括号内地址——否则 `[::1]@evil.com` 会被 is_loopback_host 误判回环。
+        assert_eq!(strip_port("[::1]@evil.com"), "[::1]@evil.com");
+        assert_eq!(strip_port("[::1]:80@evil.com"), "[::1]:80@evil.com");
+        // 无右括号（畸形）同样原样返回
+        assert_eq!(strip_port("[::1"), "[::1");
+        // 合法形态不受影响
         assert_eq!(strip_port("[::1]:8080"), "::1");
         assert_eq!(strip_port("[::1]"), "::1");
     }
