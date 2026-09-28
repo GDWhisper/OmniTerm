@@ -51,14 +51,18 @@ export function AuthPage({ needsSetup }: Props) {
           setAuthState('authenticated')
         }
       } catch (err: unknown) {
-        // 用户名非法时后端返回的是**裸 400**（无 JSON body）：必须按状态码映射，
-        // 否则会退化成「密码错误」误导用户（与 AuthSection 的处理一致）。
-        if ((err as { status?: number })?.status === 400) {
-          setError(t('auth.invalidUsername'))
-          return
-        }
+        // 按状态码映射（与 AuthSection 的 400/401 处理一致）：用户名非法的**裸 400**
+        //（无 JSON body）不能退化成「密码错误」；409（另一标签页已完成 setup）、
+        // 5xx、无 status 的网络异常同样不能，它们不是密码问题。
+        const status = (err as { status?: number })?.status
         const body = (err as { body?: { error?: string } })?.body
-        setError(body?.error || t('auth.wrongPassword'))
+        if (status === 400) {
+          setError(t('auth.invalidUsername'))
+        } else if (status === 401) {
+          setError(body?.error || t('auth.wrongPassword'))
+        } else {
+          setError(body?.error || t('auth.loginFailed'))
+        }
       } finally {
         setSubmitting(false)
       }

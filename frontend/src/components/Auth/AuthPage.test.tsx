@@ -199,6 +199,20 @@ describe('AuthPage username field', () => {
     expect(submitButton().disabled).toBe(false)
   })
 
+  it('reports a bare 409 (other tab already ran setup) as a generic login failure', async () => {
+    vi.mocked(api.setup).mockRejectedValue({ status: 409 })
+    await mount(true)
+
+    setInputValue(usernameInput(), 'alice')
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.loginFailed'))
+    expect(container.textContent).not.toContain(i18n.t('auth.wrongPassword'))
+    expect(useAppStore.getState().authState).toBe('unauthenticated')
+    expect(submitButton().disabled).toBe(false)
+  })
+
   it('defines the username copy in both en and zh', async () => {
     const { default: en } = await import('../../locales/en/translation.json')
     const { default: zh } = await import('../../locales/zh/translation.json')

@@ -525,6 +525,7 @@
   "auth.login": "LOGIN",
   "auth.password": "Password",
   "auth.wrongPassword": "Wrong password",
+  "auth.loginFailed": "Login failed",
   "auth.loggedIn": "LOGGED IN",
   "auth.logout": "LOGOUT",
   "auth.changePassword": "CHANGE PASSWORD",
