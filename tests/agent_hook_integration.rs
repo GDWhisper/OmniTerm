@@ -30,6 +30,41 @@ fn cleanup(name: &str) {
     let _ = std::process::Command::new("tmux").args(["kill-session", "-t", name]).output();
 }
 
+/// ── Helper: 解析集成测试要连的实例库；无法确定时 `None`（调用方 SKIP）──
+///
+/// 优先级：`DATABASE_URL`（CI 用）→ `./.env.local` 的 `BRANCH_BINARY_NAME`
+/// （与 `dev.sh` 同一真源：在哪个 worktree 跑测试就落哪个实例库）。
+/// **不得**回退到任何固定真实库：本测试会执行 `sqlx::migrate!`，把分支的迁移集
+/// 写进别的实例库（尤其正式版库 `omniterm.db`）会让该实例在合入迁移前因 sqlx
+/// `VersionMissing` 拒绝启动——2026-09-27 dev/auth worktree 的两次 `cargo test`
+/// 即把 20260926 / 20260927 应用进正式版库，导致正式版 0.2.25 无法启动。
+fn resolve_test_db_url() -> Option<String> {
+    if let Ok(url) = std::env::var("DATABASE_URL") {
+        return Some(url);
+    }
+    let env_local = std::fs::read_to_string("./.env.local").ok()?;
+    let name = env_local.lines().find_map(|line| {
+        let line = line.trim();
+        if line.starts_with('#') {
+            return None;
+        }
+        let value = line.strip_prefix("BRANCH_BINARY_NAME=")?.trim();
+        // 容忍成对引号包裹（`BRANCH_BINARY_NAME="omniterm-auth"`）
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        // 库名 sanitize：只接受 `[A-Za-z0-9_-]`，防 `.env.local` 塞入 `/` / `..`
+        // 拼出意外路径；不合法视为未找到。
+        let ok = !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        ok.then(|| value.to_string())
+    })?;
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    Some(format!("sqlite:{home}/.omniterm/{name}.db?mode=rwc"))
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 5.6 WS disconnect → poll task exits (oneshot shutdown test)
 // ═══════════════════════════════════════════════════════════════
@@ -394,17 +429,23 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
 
     // 2. Persist a session row so the WS handler accepts the id.
     //
-    // 优先 DATABASE_URL（CI 用）。回退**只能**用开发库 `~/.omniterm/omniterm-dev.db`
-    // （与 dev server 的 BRANCH_BINARY_NAME 一致，同 tests/runtime_kind_matrix.rs）。
+    // 库来源见 resolve_test_db_url：优先 DATABASE_URL（CI 用）；否则从
+    // ./.env.local 读 BRANCH_BINARY_NAME（与 dev.sh 同一真源，保证在哪个
+    // worktree 跑测试就用哪个实例库，且不会把本分支的迁移集写进 dev 的库）；
+    // 两者皆无 → SKIP，而不是落任何真实库。
     // 禁止按 `env!("CARGO_PKG_NAME")` 推导回退路径：包名全分支统一为 `omniterm`
     // （AGENTS.md §配置统一管理），推导结果就是 `~/.omniterm/omniterm.db` —— **正式版库**，
     // 而本测试会执行 `sqlx::migrate!`，等于拿分支的迁移集去升级正式版库。
     // 2026-09-27 dev/auth worktree 的两次 `cargo test` 即经此路径把 20260926 /
     // 20260927 应用到正式版库，导致正式版 0.2.25 迁移校验失败无法启动。
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("sqlite:{home}/.omniterm/omniterm-dev.db?mode=rwc")
-    });
+    let Some(db_url) = resolve_test_db_url() else {
+        eprintln!(
+            "SKIP: 无法确定实例库（未设 DATABASE_URL 且 ./.env.local 无 BRANCH_BINARY_NAME）；请用 ./dev.sh 环境或显式设置 DATABASE_URL"
+        );
+        cleanup(&name);
+        return;
+    };
+    eprintln!("using db {db_url}");
     let pool = sqlx::SqlitePool::connect(&db_url).await.ok();
     if pool.is_none() {
         eprintln!("SKIP: cannot connect to db");
@@ -418,7 +459,7 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
         cleanup(&name);
         return;
     }
-    // Find or create an omniterm-dev project (matches the dev server's DB)
+    // Find or create a project row (外键目标；库已由上方解析确定，不再假定是 dev 库)
     let project_id: String = sqlx::query_scalar::<_, String>(
         "SELECT id FROM projects WHERE path LIKE '%OmniTerm%' LIMIT 1",
     )
