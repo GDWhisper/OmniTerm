@@ -393,9 +393,17 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     }
 
     // 2. Persist a session row so the WS handler accepts the id.
+    //
+    // 优先 DATABASE_URL（CI 用）。回退**只能**用开发库 `~/.omniterm/omniterm-dev.db`
+    // （与 dev server 的 BRANCH_BINARY_NAME 一致，同 tests/runtime_kind_matrix.rs）。
+    // 禁止按 `env!("CARGO_PKG_NAME")` 推导回退路径：包名全分支统一为 `omniterm`
+    // （AGENTS.md §配置统一管理），推导结果就是 `~/.omniterm/omniterm.db` —— **正式版库**，
+    // 而本测试会执行 `sqlx::migrate!`，等于拿分支的迁移集去升级正式版库。
+    // 2026-09-27 dev/auth worktree 的两次 `cargo test` 即经此路径把 20260926 /
+    // 20260927 应用到正式版库，导致正式版 0.2.25 迁移校验失败无法启动。
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        format!("sqlite:{home}/.omniterm/{}.db?mode=rwc", env!("CARGO_PKG_NAME"))
+        format!("sqlite:{home}/.omniterm/omniterm-dev.db?mode=rwc")
     });
     let pool = sqlx::SqlitePool::connect(&db_url).await.ok();
     if pool.is_none() {
