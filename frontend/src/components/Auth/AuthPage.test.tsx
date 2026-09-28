@@ -130,6 +130,75 @@ describe('AuthPage username field', () => {
     expect(useAppStore.getState().authState).toBe('unauthenticated')
   })
 
+  it('rejects an over-long username locally without calling the API', async () => {
+    await mount(true)
+
+    setInputValue(usernameInput(), 'a'.repeat(33))
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.invalidUsername'))
+    expect(api.setup).not.toHaveBeenCalled()
+    expect(useAppStore.getState().authState).toBe('unauthenticated')
+  })
+
+  it('sends usernames at the 32-character boundary (counted in code points, like the backend)', async () => {
+    vi.mocked(api.setup).mockResolvedValue(undefined)
+    await mount(true)
+
+    const asciiMax = 'a'.repeat(32)
+    setInputValue(usernameInput(), asciiMax)
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+    expect(api.setup).toHaveBeenCalledWith(asciiMax, 'pw1234')
+
+    // 32 个 emoji = 64 个 UTF-16 码元但只有 32 个码点：后端 chars().count() 判合法
+    const emojiMax = '🚀'.repeat(32)
+    setInputValue(usernameInput(), emojiMax)
+    await submit()
+    expect(api.setup).toHaveBeenLastCalledWith(emojiMax, 'pw1234')
+  })
+
+  // jsdom（与浏览器同规）对 <input type="text"> 做 value sanitization，会把 \n 剥掉，
+  // 换行永远到不了组件状态；用能存活的控制字符（\t / C0）覆盖同一预校验分支。
+  it('rejects a username containing a tab locally', async () => {
+    await mount(true)
+
+    setInputValue(usernameInput(), 'bad\tname')
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.invalidUsername'))
+    expect(api.setup).not.toHaveBeenCalled()
+  })
+
+  it('rejects a username containing a C0 control character locally', async () => {
+    await mount(true)
+
+    setInputValue(usernameInput(), 'bad\u0001name')
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.invalidUsername'))
+    expect(api.setup).not.toHaveBeenCalled()
+  })
+
+  it('maps the bare 400 from setup to the invalid-username message', async () => {
+    vi.mocked(api.setup).mockRejectedValue({ status: 400 })
+    await mount(true)
+
+    setInputValue(usernameInput(), 'alice')
+    setInputValue(passwordInput(), 'pw1234')
+    await submit()
+
+    expect(api.setup).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain(i18n.t('auth.invalidUsername'))
+    expect(container.textContent).not.toContain(i18n.t('auth.wrongPassword'))
+    expect(useAppStore.getState().authState).toBe('unauthenticated')
+    // catch 里的提前 return 不能吞掉 finally 的 submitting 复位
+    expect(submitButton().disabled).toBe(false)
+  })
+
   it('defines the username copy in both en and zh', async () => {
     const { default: en } = await import('../../locales/en/translation.json')
     const { default: zh } = await import('../../locales/zh/translation.json')
