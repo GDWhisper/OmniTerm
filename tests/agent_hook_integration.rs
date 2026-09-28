@@ -4,6 +4,11 @@
 //! ```bash
 //! cargo test --test agent_hook_integration -- --nocapture
 //! ```
+//!
+//! [`test_ws_close_does_not_inject_eof_into_pane`] 还需要一个「与测试库配对、
+//! 可匿名握手」的实例：库默认取 `./.env.local` 的 `BRANCH_BINARY_NAME`
+//! （`DATABASE_URL` 可覆盖），端口默认取同一文件的 `BACKEND_PORT`
+//! （`OMNITERM_TEST_PORT` 可覆盖）——两者必须指向同一实例，否则带原因 SKIP。
 
 use std::time::Duration;
 
@@ -30,6 +35,52 @@ fn cleanup(name: &str) {
     let _ = std::process::Command::new("tmux").args(["kill-session", "-t", name]).output();
 }
 
+/// ── Helper: WS 测试收尾（kill tmux 会话 / 删测试 session 行 / 删临时文件）──
+async fn cleanup_ws_test(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+    name: &str,
+    tmp_files: &[&str],
+) {
+    cleanup(name);
+    let _ = sqlx::query("DELETE FROM sessions WHERE id = ?").bind(session_id).execute(pool).await;
+    for path in tmp_files {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// ── Helper: 读取 `./.env.local` 中某个键的值（对齐 shell `source` 语义）──
+///
+/// 容忍 `export KEY=...` 前缀，跳过 `#` 注释行，`trim()` 值，去成对单/双引号；
+/// 重复键**取最后一行**（后者覆盖前者，与 `source` 一致）。键缺失返回 `None`。
+///
+/// 用途：让集成测试与 `dev.sh` 共用同一真源（在哪个 worktree 跑测试就取哪个
+/// worktree 的库名/端口），避免测试连到别的实例。
+fn env_local_value(key: &str) -> Option<String> {
+    let content = std::fs::read_to_string("./.env.local").ok()?;
+    let mut found = None;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        // `strip_prefix(key)` 紧跟 `=` 才算命中，避免前缀相同的长键误匹配
+        let Some(raw) = line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')) else {
+            continue;
+        };
+        let value = raw.trim();
+        // 容忍成对引号包裹（`BRANCH_BINARY_NAME="omniterm-auth"`）
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        found = Some(value.to_string());
+    }
+    found
+}
+
 /// ── Helper: 解析集成测试要连的实例库；无法确定时 `None`（调用方 SKIP）──
 ///
 /// 优先级：`DATABASE_URL`（CI 用）→ `./.env.local` 的 `BRANCH_BINARY_NAME`
@@ -42,25 +93,17 @@ fn resolve_test_db_url() -> Option<String> {
     if let Ok(url) = std::env::var("DATABASE_URL") {
         return Some(url);
     }
-    let env_local = std::fs::read_to_string("./.env.local").ok()?;
-    let name = env_local.lines().find_map(|line| {
-        let line = line.trim();
-        if line.starts_with('#') {
-            return None;
-        }
-        let value = line.strip_prefix("BRANCH_BINARY_NAME=")?.trim();
-        // 容忍成对引号包裹（`BRANCH_BINARY_NAME="omniterm-auth"`）
-        let value = value
-            .strip_prefix('"')
-            .and_then(|v| v.strip_suffix('"'))
-            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-            .unwrap_or(value);
-        // 库名 sanitize：只接受 `[A-Za-z0-9_-]`，防 `.env.local` 塞入 `/` / `..`
-        // 拼出意外路径；不合法视为未找到。
-        let ok = !value.is_empty()
-            && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        ok.then(|| value.to_string())
-    })?;
+    let name = env_local_value("BRANCH_BINARY_NAME")?;
+    // 库名 sanitize：只接受 `[A-Za-z0-9_-]`，防 `.env.local` 塞入 `/` / `..`
+    // 拼出意外路径；不合法视为未找到。
+    let ok =
+        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    // 保险：`omniterm` 是正式版 stem（release 无 `--db` 时的默认库 `omniterm.db`）。
+    // 与 dev.sh 同真源虽会允许这种配置，但本测试会执行 `sqlx::migrate!`，
+    // 绝不能升级正式版库 —— 视为未找到，让调用方 SKIP 而不是赌一把。
+    if !ok || name == "omniterm" {
+        return None;
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     Some(format!("sqlite:{home}/.omniterm/{name}.db?mode=rwc"))
 }
@@ -432,6 +475,8 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     // 库来源见 resolve_test_db_url：优先 DATABASE_URL（CI 用）；否则从
     // ./.env.local 读 BRANCH_BINARY_NAME（与 dev.sh 同一真源，保证在哪个
     // worktree 跑测试就用哪个实例库，且不会把本分支的迁移集写进 dev 的库）；
+    // 端口沿用同一文件（见步骤 4，OMNITERM_TEST_PORT 可覆盖）——两者必须指向
+    // 同一实例，否则会话行写进 A 库、握手打到读 B 库的实例，断言会假绿。
     // 两者皆无 → SKIP，而不是落任何真实库。
     // 禁止按 `env!("CARGO_PKG_NAME")` 推导回退路径：包名全分支统一为 `omniterm`
     // （AGENTS.md §配置统一管理），推导结果就是 `~/.omniterm/omniterm.db` —— **正式版库**，
@@ -440,7 +485,7 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     // 20260927 应用到正式版库，导致正式版 0.2.25 迁移校验失败无法启动。
     let Some(db_url) = resolve_test_db_url() else {
         eprintln!(
-            "SKIP: 无法确定实例库（未设 DATABASE_URL 且 ./.env.local 无 BRANCH_BINARY_NAME）；请用 ./dev.sh 环境或显式设置 DATABASE_URL"
+            "SKIP: 无法确定实例库（未设 DATABASE_URL，且 ./.env.local 无 BRANCH_BINARY_NAME 或值为正式版 stem `omniterm`）；请用 ./dev.sh 环境或显式设置 DATABASE_URL"
         );
         cleanup(&name);
         return;
@@ -503,27 +548,29 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
     let _ = tmux(&["send-keys", "-t", &name, &format!("python3 {}", reader_path), "Enter"]);
     tokio::time::sleep(Duration::from_millis(800)).await;
 
-    // 4. Connect to the running dev server's WS endpoint and disconnect.
-    let port = std::env::var("OMNITERM_TEST_PORT").unwrap_or_else(|_| "9777".into());
-    let _url = format!("ws://localhost:{}/api/v1/ws/terminal/{}?cols=80&rows=24", port, session_id);
-    // We need the websockets crate; if unavailable, skip the network half
-    // and rely on the structural test below.
-    let connected = std::net::TcpStream::connect(("localhost", port.parse().unwrap()))
-        .map(|_| true)
-        .unwrap_or(false);
+    // 4. Connect to the WS endpoint of the instance that owns the db above and
+    //    disconnect. 端口与库同源：OMNITERM_TEST_PORT → ./.env.local 的
+    //    BACKEND_PORT → 9777（最终兼容；正常本机路径由前两者决定）。
+    let port = std::env::var("OMNITERM_TEST_PORT")
+        .ok()
+        .or_else(|| env_local_value("BACKEND_PORT"))
+        .unwrap_or_else(|| "9777".into());
+    let port: u16 = port.parse().unwrap_or_else(|_| {
+        panic!("端口 `{port}` 不是合法 u16（来源 OMNITERM_TEST_PORT / .env.local BACKEND_PORT）")
+    });
+    let _url = format!("ws://localhost:{port}/api/v1/ws/terminal/{session_id}?cols=80&rows=24");
+    let connected =
+        std::net::TcpStream::connect(("localhost", port)).map(|_| true).unwrap_or(false);
     if !connected {
-        eprintln!("SKIP: dev server not reachable on :{}", port);
-        cleanup(&name);
-        let _ =
-            sqlx::query("DELETE FROM sessions WHERE id = ?").bind(&session_id).execute(&pool).await;
+        eprintln!("SKIP: 实例未监听 :{port}（db={db_url}）——先用 ./dev.sh 启动本 worktree 实例");
+        cleanup_ws_test(&pool, &session_id, &name, &[&log_path, &reader_path]).await;
         return;
     }
 
     // Use a tiny raw WS handshake so we don't add a new dep just for tests.
-    // The dev server's WS endpoint doesn't require auth, so the bare upgrade
-    // request is enough to trigger our handler.
+    // 该实例可匿名握手时，裸升级请求即可触发 handler。
     use std::io::Read;
-    let mut stream = std::net::TcpStream::connect(("localhost", port.parse().unwrap())).unwrap();
+    let mut stream = std::net::TcpStream::connect(("localhost", port)).unwrap();
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let req = format!(
         "GET /api/v1/ws/terminal/{}?cols=80&rows=24 HTTP/1.1\r\n\
@@ -535,11 +582,49 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
         session_id, port
     );
     stream.write_all(req.as_bytes()).unwrap();
-    // Drain the upgrade response, then close. We don't need to send a
-    // real frame — the bug we care about is the leak on close, not on
-    // data forwarding (that's covered by other integration tests).
+    // 读取握手响应并分级（不得丢掉响应文本，否则会静默假绿）：
+    //  - `session not found` → 库/端口错配：对端实例不认识库里的会话行，只下发
+    //    错误帧、不 attach pane，断言「无 0x04」恒真。注意该错误是**升级之后**
+    //    以 WS 文本帧下发的（`ServerControl::Error`，见 engine/tmux/terminal_ws.rs），
+    //    所以 101 后需补读一小段才能看到它；
+    //  - 101 → 真实升级路径，继续下方断言（不变）；
+    //  - 401 → 实例要求鉴权（本机开关开启 / 无 cookie），裸握手进不了 handler；
+    //  - 无响应 / 超时 / 畸形 → 无法完成测试前提。
+    // 后三类属「本机环境不满足该测试的前提（需要与库配对、可匿名握手的实例）」，
+    // 故 SKIP；但绝不静默通过：必须留下带原因的 SKIP 文本，断言只在 101 生效。
     let mut buf = [0u8; 4096];
-    let _ = stream.read(&mut buf);
+    let n = stream.read(&mut buf).unwrap_or(0);
+    let mut resp = String::from_utf8_lossy(&buf[..n]).to_string();
+    // 只在确认升级成功（状态行 101）后补读：错误帧紧随 101，读到它才能识别错配
+    let status = resp.lines().next().unwrap_or("").trim();
+    if status.starts_with("HTTP/") && status.contains("101") {
+        stream.set_read_timeout(Some(Duration::from_millis(400))).ok();
+        let mut extra = [0u8; 4096];
+        if let Ok(n) = stream.read(&mut extra) {
+            resp.push_str(&String::from_utf8_lossy(&extra[..n]));
+        }
+    }
+    // 状态行按 HTTP 语义判定（避免 `content-length: 101` 之类误命中）
+    let status = resp.lines().next().unwrap_or("").trim();
+    let upgraded = status.starts_with("HTTP/") && status.contains("101");
+    let unauthorized = status.starts_with("HTTP/") && status.contains("401");
+    let skip_reason = if resp.contains("session not found") {
+        Some("库与端口错配：该实例不认识库里的会话行（端口与库须同源配对）".to_string())
+    } else if upgraded {
+        None
+    } else if unauthorized {
+        Some("实例要求鉴权（401），裸握手被拒".to_string())
+    } else if resp.trim().is_empty() {
+        Some("握手无响应（读超时 / 连接被立即关闭）".to_string())
+    } else {
+        let head: String = resp.chars().take(60).collect();
+        Some(format!("握手响应非预期：{head:?}"))
+    };
+    if let Some(reason) = skip_reason {
+        eprintln!("SKIP: {reason}（port={port}, db={db_url}）");
+        cleanup_ws_test(&pool, &session_id, &name, &[&log_path, &reader_path]).await;
+        return;
+    }
     // Build a masked close frame: FIN+close(0x88), masked(0x80), len=0
     let close_frame = vec![0x88, 0x80];
     let _ = stream.write_all(&close_frame);
@@ -561,9 +646,6 @@ async fn test_ws_close_does_not_inject_eof_into_pane() {
         log
     );
 
-    cleanup(&name);
-    let _ = sqlx::query("DELETE FROM sessions WHERE id = ?").bind(&session_id).execute(&pool).await;
-    let _ = std::fs::remove_file(&log_path);
-    let _ = std::fs::remove_file(&reader_path);
+    cleanup_ws_test(&pool, &session_id, &name, &[&log_path, &reader_path]).await;
     eprintln!("✓ no EOF/Ctrl+D leak test passed");
 }
