@@ -1,6 +1,6 @@
 # 账号登录增强（用户名）+ 本地免密访问（区分回环与远程）
 
-> 状态：已实施（2026-09-27，待独立审查与真机验证）
+> 状态：**已完成**（2026-09-27 实施；2026-09-28 完成两轮独立审查 + 真机/UI 验证，T1/T3 意见全部处置；待合并回 dev 并清理临时 worktree）
 > 触发条件：修改 `src/api/auth.rs`、`src/auth/*`、`src/main.rs` 的 auth 初始化、`users` 表结构、`frontend/src/components/Auth/*`、`frontend/src/components/Settings/AuthSection.tsx` 任一项前**必读**
 > 关联：`docs/reference/auth-not-enforced.md`（鉴权现状，实施后回写）、`docs/dev/plans/2026-09-26-security-hardening-batch.md`（S1 fail-closed 与 D1/D3 判据先例）、`docs/dev/performance-and-safety.md` §S1-S5、`docs/workflows/subagent-code-review.md`
 > 需求来源：用户 2026-09-27（① 账号登录增强，新增用户名；② 区分本地 127.0.0.1 与远程接入的校验，设置面板新增本地校验开关，关闭时本地免密、远程防线不变）
@@ -84,8 +84,8 @@
 - **实测证据（2026-09-28，dev 实例 :18777 + Vite :18778，`changeOrigin:false`）**：
   - `curl -H 'Host: 127.0.0.1:18777' http://192.168.5.216:18778/api/v1/system/info` → **200（穿透）**；同目标不带伪造 Host → 401。
   - dev 后端只监听 `127.0.0.1`，**Vite 是 dev 的唯一 LAN 入口**，故该穿透在 LAN 可达时真实成立。
-- **受影响形态**（透传 Host + 不注入转发头）：Vite dev 代理（本仓刻意 `changeOrigin:false` 以保 WS Origin 一致，**勿改回**）、nginx `proxy_set_header Host $http_host`、Caddy 默认行为、裸 TCP 转发（`socat`）、`ssh -R` 等。
-- **不受影响**：浏览器直连或经任意代理（浏览器无法伪造 Host）✓；直连后端（对端非回环，条件 1 挡）✓；规范化 Host 或注入转发头的代理（条件 4 生效）✓；代理子域形态（Host 恒为域名）✓。
+- **受影响形态**（透传 Host + 不注入转发头）：Vite dev 代理（本仓刻意 `changeOrigin:false` 以保 WS Origin 一致，**勿改回**）、nginx `proxy_set_header Host $http_host`、裸 TCP 转发（`socat`）、`ssh -R` 等。
+- **不受影响**：浏览器直连或经任意代理（浏览器无法伪造 Host）✓；直连后端（对端非回环，条件 1 挡）✓；**规范化 Host 为域名的代理**（条件 2 判非回环 → 挡）✓；**注入转发头的代理**（条件 4 → 挡；Caddy 默认即注入 `X-Forwarded-For` / `-Host` / `-Proto`，属此类，**不在受影响清单**）✓；代理子域形态（Host 恒为域名）✓。
 
 **两类勘误同源的本质（必须披露，不可宣称已完全防住）**：条件 1 在「同机代理」形态下恒真（对端 = 代理），此时本机浏览器与远程流量在应用层的全部区分信号只有 `Host` / `Origin` / 转发头——三者都可能被「代理配置 + 客户端自定头」的组合抹平。当三条同时被抹平（`Host` 回环 + `Origin` 缺失或回环 + 无转发头）时**不可区分**：
 
@@ -244,7 +244,23 @@ pub async fn verify_request(
 - **前端 UI 端到端（Playwright + 真实后端，9/9 PASS）**：默认姿态本机打开显示登录页（用户名输入框在）→ API 关闭本地校验后**刷新即免密进入主界面** → 重新打开后刷新**回到登录页** → 表单用户名登录链路易用；无页面级 JS 报错。
 - **老库升级验证**：取 preview 库**只读拷贝**（无 `username` 列的 18 迁移状态）用本分支二进制启动 → 迁移 `20260927` 应用成功、既有用户自动获得 `username='admin'`、服务正常启动（health 200）。
 
-**尚未完成**：独立子代理审查（T1 + 加挂 B/D/E，进行中）及其意见处置；审查通过后合并回 dev 并清理临时 worktree。
+### T1 独立审查与处置（2026-09-28）
+
+- **审查**：独立只读子代理（T1 模板 + 安全/前端/测试加挂），结论 **request changes**（无 blocker；2 major / 6 minor / 7 suggestions），每条附 `file:line` 证据。
+- **major 1（`Host` 客户端可控的信任前提）**：审查者证伪了计划与 user-testing 中「Vite dev 的 LAN 访问仍要求密码」的绝对结论；编排**实测确认**穿透（`curl -H 'Host: 127.0.0.1:18777' http://192.168.5.216:18778/api/v1/system/info` → 200；不带伪造 Host → 401）。处置：D3 勘误二扩写（信任前提 + 实测证据 + 受影响/不受影响形态清单）、威胁模型第 1/2 条加勘误标记与限定、`user-testing.md` 边界表与 `auth-not-enforced.md` 同步；**代码不改**（拓扑本质限制：给 Vite 加 `xfwd` 会让本机经 Vite 的免密同时失效，代价与收益不匹配）。
+- **major 2（测试库回退写 dev 库）**：审查者指出回退固定 `omniterm-dev.db` 会在分支 worktree 把本分支迁移集写进 dev 库（可致 dev 实例在合入迁移前拒启）。处置：`tests/agent_hook_integration.rs` 新增 `resolve_test_db_url`（`DATABASE_URL` → `./.env.local` 的 `BRANCH_BINARY_NAME`（sanitize 仅 `[A-Za-z0-9_-]`）→ 皆无则 SKIP），**不再回退任何固定真实库**。
+- **minor / suggestion 处置**：AuthPage 400 状态码映射 + 按码点预校验（`de80286`）；`strip_port` 方括号串收紧为 `[v6]`/`[v6]:数字`（`6a44dfd`）；补 Router 级 fail-closed 与 v4-mapped 单测（`6a44dfd`）；「免密=信任本机全部进程」边界记录（`3b0face`）；AGENTS 索引触发条件补 `src/proxy/mod.rs` / `src/ws/origin_guard.rs`；`runtime_kind_matrix` 的库/端口硬编码登记 backlog R10。未采纳的建议项（`upsert_setting` 4 处副本收敛、前端「本机免密中」提示、`PROXY_FORWARD_HEADERS` 变体扩充、按钮样式去重）记录为后续项，不阻塞。
+- **修复提交**：`6a44dfd`（strip_port + 测试加固）、`073fafa`（测试库解析）、`de80286`（AuthPage）、`3b0face`（文档）。
+- **T3 独立复查（新派独立实例，因框架自动命名冲突无法 resume 原审查者，已附第一轮完整问题清单）**：结论 **approve with comments**——核对后确认 T1 的 2 major 均已实质处置（勘误二文档质量与测试库修复均经其独立读码核对），6 minor + 7 suggestions 逐条落地；同时新提出 4 项问题 + 3 项建议，已全部处置：
+  - **N2（唯一影响回归网可信度）**：`agent_hook_integration.rs` 端口仍默认 9777 与新解析出的本 worktree 实例库错配 → WS 回归半段静默假绿（`session not found` 是升级后帧，原实现只读握手头）。修复：端口与库同源（`OMNITERM_TEST_PORT` → `.env.local` 的 `BACKEND_PORT` → 9777），WS 响应分级（仅 101 且非错配才走断言，其余带原因 SKIP）。**经错配复现实验证**：`OMNITERM_TEST_PORT=9777` 时显式输出「库与端口错配」SKIP（原实现此处 101 假绿）。
+  - **N1（事实错误）**：「Caddy 默认」被错误列入「透传 Host 且不注入转发头」的受影响形态——Caddy 默认注入 `X-Forwarded-For`/`-Host`/`-Proto`，条件 4 命中、**不受影响**。三份文档已修正。
+  - **N3/N4（注释与实现不符）**：`local_access.rs` 模块注释残留被勘误一证伪的表述（条件 4 挡 nginx 默认形态）→ 按勘误一/二订正；`strip_port` 注释「只接受 `[v6]`」与实现不符（括号内容原样保留）→ 注释与两份文档改为准确表述。
+  - **S1/S2（测试解析加固）**：`env_local_value` 对齐 shell `source` 语义（`export ` 前缀、重复键取最后一行）；新增保险——`BRANCH_BINARY_NAME=omniterm`（正式版 stem）一律 SKIP，杜绝测试升级正式版库。
+  - **S6（前端）**：AuthPage 非 400/401 的错误（如 setup 竞态裸 409）不再误显示「密码错误」，改映射 `auth.loginFailed`（新增双 locale 键 + 测试）。
+  - **S3/S7 记录在案**：未采纳四项与 `main.rs` 的括号 IPv6 bind 误拒（预存在）登记 backlog R11/R12（见 `docs/dev/plans/backlog/qa-quality-gates-followups.md`）。
+  - **未再派第三轮独立复查**：本轮新问题均为 minor/文档级，由编排逐条核对修复 diff + 复跑全量门禁 + 错配场景实证；唯一实质代码改动（N2 的测试分级）以「修复者复现错配 + 编排复跑」双重验证。
+
+**最终门禁（编排复跑，T3 处置后）**：后端 `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` 零告警；`DATABASE_URL=临时库 cargo test --workspace` = bin 668（667 passed / 1 ignored 预存在）+ `agent_hook_integration` 8 + `runtime_kind_matrix` 6 ignored（预存在）+ `runtime_kind_migration` 2，**0 failed**。前端 `tsc -b` OK / `lint` 0 error（18 既有 warning）/ `pnpm test` **847** passed（841 → T1 处置 +5 → T3 处置 +1）。真机 API 矩阵 48/48 与 UI 端到端 9/9 在 T1 之前完成；T3 处置为文档、注释与测试基建，**无生产行为变更**（唯一实质测试改动 N2 已由「修复者错配复现 + 编排复跑」双重验证）。
 
 ## 相关文件（新增/改动一览）
 

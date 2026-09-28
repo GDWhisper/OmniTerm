@@ -88,9 +88,11 @@ pub fn origin_matches_host(origin: &HeaderValue, host: &str) -> bool {
 
 /// 剥离 `:port` 后缀；IPv6 字面量（`[::1]:8080`）整体保留方括号内地址。
 ///
-/// 方括号形态只接受 `[v6]` 与 `[v6]:port`（port 非空且全为数字）；畸形方括号串
-/// （如 `[::1]@evil.com` / `[::1]:80@evil.com`）**原样返回**，由调用方按解析失败
-/// 处理（`parse::<IpAddr>()` 不通过 → 非回环 / 不匹配），不得截出括号内地址。
+/// 方括号形态只校验 `]` **之后**为 `:数字`（非空且全为数字）或空串；`]` 之后出现
+/// 其它内容（如 `[::1]@evil.com` / `[::1]:80@evil.com`）或无 `]`（`[::1`）时**原样
+/// 返回**，由调用方按解析失败处理（`parse::<IpAddr>()` 不通过 → 非回环 / 不匹配），
+/// 不得截出括号内地址。括号**内容**不做 IPv6 校验（`[localhost]` 同样按字面量返回，
+/// 由调用方判定）。
 pub fn strip_port(s: &str) -> &str {
     let Some(rest) = s.strip_prefix('[') else {
         return s.split(':').next().unwrap_or(s);

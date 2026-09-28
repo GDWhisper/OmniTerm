@@ -4,12 +4,14 @@
 //! 即不放行）。四条缺一不可，全部有真实穿透路径：
 //!
 //! 1. **TCP 对端回环** —— 挡住直接远程连接。
-//! 2. **`Host` 是回环字面量** —— 挡住同机反代（nginx `proxy_pass` 后对端也是
-//!    127.0.0.1）与 dev Vite 代理（LAN 用户经 Vite 转发，对端同样是回环）。
+//! 2. **`Host` 是回环字面量** —— 挡住同机反代与 dev Vite 代理（对端均为回环）。
+//!    信任前提：`Host` 是客户端可控头，仅对浏览器或「规范化 Host / 注入转发头」
+//!    的中间层可靠；透传 Host 且不注入转发头时客户端可伪造（计划 D3 勘误二）。
 //! 3. **`Origin` 缺失或回环** —— 免密后不再有 cookie，跨站请求（CSRF）只能靠
 //!    Origin 判定挡；已知边界：无 Origin 的顶层导航/非浏览器客户端不受此约束。
-//! 4. **无代理转发头** —— 挡住「反代把 Host 改写成上游回环地址」（nginx 默认
-//!    `proxy_set_header Host $proxy_host` 的形态）。
+//! 4. **无代理转发头** —— 挡住显式注入转发头（XFF/XFH/X-Real-IP/Forwarded）的代理；
+//!    nginx **默认**不注入任何转发头，故挡不住「Host 被改写为上游回环地址」
+//!    （`proxy_set_header Host $proxy_host`）形态，见计划 D3 勘误一。
 //!
 //! Host/Origin 的 host 提取复用 [`crate::ws::origin_guard`]（唯一真源，不另写解析）；
 //! 「字符串是否回环宿主」与 `main.rs::enforce_listen_auth` 收敛为同一函数
@@ -197,8 +199,8 @@ mod tests {
 
     #[test]
     fn rejects_proxy_forward_headers() {
-        // 反代把 Host 改写成上游回环地址（nginx 默认 proxy_set_header Host $proxy_host）
-        // 时，仅靠条件 2 会误放行——条件 4 逐一挡住四种转发头
+        // 显式注入转发头的代理（如 Caddy 默认注入 X-Forwarded-For/-Host/-Proto，
+        // nginx 需显式配置）：Host 即使被判为回环，条件 4 也逐一挡住四种转发头
         for name in PROXY_FORWARD_HEADERS {
             let mut h = loopback_headers();
             h.insert(

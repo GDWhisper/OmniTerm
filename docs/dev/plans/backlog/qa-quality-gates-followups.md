@@ -15,6 +15,8 @@
 | R08 | `AcpClient` 协议交互层测试 | client.rs 已涨至 1433 行，现有 12 个测试仅覆盖 `sh_quote`/`wrap` 子进程包装；prompt/cancel/disconnect 链路无回归保护。原计划的 FakeConnection 方案因 crate API 演进需按当前 schema 重写 | 改动 client.rs 连接/发送/取消路径时 |
 | R09 | WS ACP 帧主路径集成测试 | ws/acp.rs 现有 6 个测试仅覆盖 @ 引用解析；帧编解码/replay 门控/重连去重主路径未覆盖 | 新增帧类型或修改帧协议字段时 |
 | R10 | `tests/runtime_kind_matrix.rs` 库/端口硬编码 | `db_path()` 仍回退固定 `~/.omniterm/omniterm-dev.db`、`test_port()` 默认 `9777`；6 个测试全 `#[ignore]`，日常 `cargo test` 不跑且**不执行 migrate**（无迁移超前风险） | 显式 `--ignored` 在非 dev worktree 跑时会「对 9777 上的实例发 HTTP、却读写 dev 库」。建议抽 `tests/common` 复用 `tests/agent_hook_integration.rs::resolve_test_db_url` 的 `./.env.local` 解析（2026-09-28 审查发现，未修） |
+| R11 | T3 复查未采纳/顺带发现项（2026-09-28，auth 用户名+本地免密批次） | ① `upsert_setting` 同一 SQL 在 `src/api/auth.rs` / `src/api/settings.rs` / `src/main.rs` 共 4 处副本，可收敛为 settings 域共享 upsert；② 免密命中时前端已收到 `local_bypass:true` 但无人消费，设置页可加「本机免密中」轻提示；③ `PROXY_FORWARD_HEADERS` 可扩常见变体（`x-client-ip` 等）或维持现状（计划翻盘条件已记录误伤取舍）；④ `AuthSection` 按钮样式条件表达式两处重复；⑤ 「未采纳四项」原只记在计划正文（archive 后易失），本条为迁移落点 | 各自触碰对应文件时顺带处理；⑤ 已闭环 |
+| R12 | `src/main.rs:1076` bind 解析对括号 IPv6 的 call-site 缺陷（预存在） | `bind.split_once(':')` 对 `-H '[::1]'`（bind=`[::1]:port`）取出 `"["` → `enforce_listen_auth` 判非回环 → auth 关闭时**误拒启动**（fail-closed，无安全问题）；并使「`is_loopback_host` 与 `enforce_listen_auth` 收敛共用」（计划 D3 / `backend.md`）在括号形态下名不副实 | 先确认 `-H [::1]` 是否属受支持输入形态；若是，改为把完整 bind 串交给 `is_loopback_host` 或正确剥方括号（2026-09-28 T3 复查发现，未修） |
 
 ## R06 详情：前端 `vi.waitFor` 测试间歇失败
 
