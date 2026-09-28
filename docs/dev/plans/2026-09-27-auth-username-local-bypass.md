@@ -63,8 +63,8 @@
 | 4 | 无代理转发头 | 不存在 `x-forwarded-for` / `x-forwarded-host` / `x-real-ip` / `forwarded`（任一存在 → false） |
 
 - **威胁模型（为什么四条缺一不可，全部有真实穿透路径）**：
-  1. **同机反代穿透（最重要）**：nginx `proxy_pass http://127.0.0.1:9777` 时后端看到对端 = `127.0.0.1`，仅凭条件 1 会让**公网用户全部免密**。条件 2 挡住「Host 被改写为域名」（`proxy_set_header Host $host`）；条件 4 挡住「Host 被改写为上游回环地址」——这正是 nginx **默认** `proxy_set_header Host $proxy_host` 的形态（Host 变成 `127.0.0.1:9777`）。
-  2. **dev Vite 代理穿透**：dev 下浏览器请求经 Vite（同机）转发，后端一律看到对端 `127.0.0.1`——含局域网用户（`http://192.168.5.216:18778`）。条件 2 用 Host 判据挡住（LAN Host 非回环字面量），使「LAN 访问 dev 前端」仍要求密码。
+  1. **同机反代穿透（最重要）**：nginx `proxy_pass http://127.0.0.1:9777` 时后端看到对端 = `127.0.0.1`，仅凭条件 1 会让**公网用户全部免密**。条件 2 挡住「Host 被改写为域名」（`proxy_set_header Host $host`）；「Host 被改写为上游回环地址」（nginx **默认** `proxy_set_header Host $proxy_host`，Host 变成 `127.0.0.1:9777`）**挡不住**——⚠️ 原稿称条件 4 能挡该形态，实为错误，见下方 D3 勘误一。
+  2. **dev Vite 代理穿透**：dev 下浏览器请求经 Vite（同机）转发，后端一律看到对端 `127.0.0.1`——含局域网用户（`http://192.168.5.216:18778`）。条件 2 用 Host 判据挡住**浏览器**形态（浏览器发出的 LAN Host 非回环字面量），使「浏览器从 LAN 访问 dev 前端」仍要求密码；**能自定义 `Host` 的非浏览器客户端（curl/脚本）可伪造回环 Host 命中免密**（2026-09-28 实测，见勘误二）。
   3. **恶意网页 CSRF**：免密后不需要 cookie，`SameSite=Lax` 不再提供保护。条件 3 挡住浏览器发起的跨站请求（`Origin: https://evil.com`）。**已知边界**：无 Origin 的顶层导航 / 非浏览器客户端（curl）不受条件 3 约束——那属「能连到回环的人本来就能访问本机服务」，接受并记录。
   4. **SSH 隧道**：`ssh -L 18778:localhost:18778 host` 后浏览器访问 localhost，四条全真 → 免密。判定为**可接受**（隧道由用户本人建立，语义上是「本机用户」）；记录为已知边界。
 - **生效范围（调用点清单，缺一处 = 缺口）**：
@@ -75,21 +75,31 @@
 - **否决项**：① 仅凭对端 IP（反代 / Vite 双重穿透）；② 信任 `X-Forwarded-For` 判客户端地址（可伪造，红线）；③ 要求 Host 端口 == 后端端口（dev Vite 跨端口会误伤本机用户）；④ 静态 Origin 白名单（回环形态动态、无法枚举，且回环字面量判定已覆盖）。
 - **翻盘条件**：出现无法用 Host/Origin 表达的接入形态（如 unix socket / 自定义 mTLS）时，在同一纯函数内补条件并穷举单测；若条件 4 的启发式误伤真实用户（如本机透明代理注入 XFF），评估改为「仅当条件 2/3 无法判定时才参考」并记录。
 
-#### D3 勘误（2026-09-27，实施时由后端子代理指出，编排确认属实）
+#### D3 勘误（勘误一 2026-09-27 实施时由后端子代理指出；勘误二 2026-09-28 由独立审查发现、编排实测确认）
 
-**原文论据有误**：初稿称条件 4（无代理转发头）能挡「nginx 默认 `proxy_set_header Host $proxy_host`」形态。实际 **nginx 默认不注入任何转发头**（默认只重写 `Host` 与 `Connection`；`X-Forwarded-For` / `X-Real-IP` 均需显式配置才出现），故该形态下条件 4 不生效。
+**勘误一（条件 4 挡不住 nginx 默认形态）**：初稿称条件 4（无代理转发头）能挡「nginx 默认 `proxy_set_header Host $proxy_host`」形态。实际 **nginx 默认不注入任何转发头**（默认只重写 `Host` 与 `Connection`；`X-Forwarded-For` / `X-Real-IP` 均需显式配置才出现），故该形态下条件 4 不生效。
 
-**真实边界（必须披露，不可宣称已完全防住）**：同机反代 + 把 Host 改写为**回环地址**（nginx 默认 `$proxy_host` 恰为 `127.0.0.1:<upstream_port>`）+ **未注入任何转发头**时，远程流量在应用层与「本机浏览器直连」**不可区分**：
+**勘误二（条件 2 的信任前提：`Host` 是客户端可控头）**：条件 2 只在两种前提之一下可靠——① 客户端是**浏览器**（无法在 URL 之外自定义 `Host`）；② 中间层规范化 `Host` 或注入转发头（后者由条件 4 兜底）。**当流量经「原样透传客户端 `Host` 且不注入转发头」的同机代理**时，任何能自定 `Host` 的客户端（curl / 脚本）把 `Host` 伪造成 `127.0.0.1[:port]` 即可命中免密。
 
-- 带 `Origin` 的请求（同源 POST/PUT/DELETE、WS 握手、SSE）仍被条件 3 挡住；
-- **无 `Origin` 的同源 GET 与顶层导航会命中免密**（浏览器导航与同源 GET 不发 `Origin`），即远程浏览器可完整免密进入。
+- **实测证据（2026-09-28，dev 实例 :18777 + Vite :18778，`changeOrigin:false`）**：
+  - `curl -H 'Host: 127.0.0.1:18777' http://192.168.5.216:18778/api/v1/system/info` → **200（穿透）**；同目标不带伪造 Host → 401。
+  - dev 后端只监听 `127.0.0.1`，**Vite 是 dev 的唯一 LAN 入口**，故该穿透在 LAN 可达时真实成立。
+- **受影响形态**（透传 Host + 不注入转发头）：Vite dev 代理（本仓刻意 `changeOrigin:false` 以保 WS Origin 一致，**勿改回**）、nginx `proxy_set_header Host $http_host`、Caddy 默认行为、裸 TCP 转发（`socat`）、`ssh -R` 等。
+- **不受影响**：浏览器直连或经任意代理（浏览器无法伪造 Host）✓；直连后端（对端非回环，条件 1 挡）✓；规范化 Host 或注入转发头的代理（条件 4 生效）✓；代理子域形态（Host 恒为域名）✓。
 
-这是**拓扑的本质限制**，不是实现缺陷：应用层没有任何信号能区分「本机浏览器」与「同机反代的转发」。可行的缓解（择一即可关闭攻击面）：
+**两类勘误同源的本质（必须披露，不可宣称已完全防住）**：条件 1 在「同机代理」形态下恒真（对端 = 代理），此时本机浏览器与远程流量在应用层的全部区分信号只有 `Host` / `Origin` / 转发头——三者都可能被「代理配置 + 客户端自定头」的组合抹平。当三条同时被抹平（`Host` 回环 + `Origin` 缺失或回环 + 无转发头）时**不可区分**：
+
+- 带非回环 `Origin` 的请求（同源 POST/PUT/DELETE、WS 握手、SSE）仍被条件 3 挡住；
+- **无 `Origin` 的同源 GET 与顶层导航会命中免密**；非浏览器客户端（curl）本就不受条件 3 约束。
+
+**缓解（择一即可关闭攻击面）**：
 
 1. 让代理注入转发头（`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` 等，属反代标准配置）→ 条件 4 生效；
-2. 不在反代部署上开启本地免密（开关默认关闭 = 保持校验，用户主动承担风险才开启）。
+2. 不在「LAN / 公网可达 + 中间层透传 Host」的部署上关闭本地校验开关（开关默认开启 = 保持校验，用户主动承担风险才关闭）。
 
-**处置**：判据保持四条件不变（对直连 LAN、cloudflared、子域形态、Vite dev 的 LAN 访问、配置了转发头的反代均正确）；UI 关闭态 hint 追加**反代提示文案**（本机运行反代时须确认注入转发头）；`auth-not-enforced.md` 同步记录；审核子代理独立复核该结论。
+**处置（2026-09-28 修订）**：判据保持四条件不变——对**浏览器**直连、**浏览器**经 Vite 的 LAN 访问、cloudflared（注入转发头）、子域形态、规范化 Host 或注入转发头的反代均正确；上述「透传 Host + 无转发头 + 自定 Host 客户端」组合不成立，属拓扑本质限制（应用层无信号可辨），已同步 `auth-not-enforced.md` 与 `user-testing.md` 边界表。UI 关闭态 hint 已含反代提示文案。**不**给 Vite 加 `xfwd:true`：那会让本机经 Vite 的免密也失效（等于 dev 下关掉该开关的便利），代价与收益不匹配。
+
+**另一处已知边界（2026-09-28 审查补充）**：本地免密命中即视为已认证，故**本机任何进程/账号**（含免密进入的浏览器）可在不知道密码的情况下 `POST /auth/settings {auth_enabled:false}` 关掉总开关——等于「本地免密 = 信任本机所有进程与账号」，含关闭远程防线的能力。单人自用机器上不构成新能力（本机用户本就掌握 DB 与进程），多用户 / `~/.omniterm` 受限权限机器上需自行评估；如需收口属后续独立项（注意与「auth 关闭时全放行」的现状语义冲突，需单独立项）。
 
 ### D4 开关语义与默认值：`local_auth_required` 默认 `"1"`（本地也校验，不搞默认弱化）
 
@@ -170,15 +180,17 @@ pub async fn verify_request(
 
 ## 验收标准 / 验证清单
 
-- [ ] `cargo test local_access`：四条件穷举 + Host/Origin 形态全过
-- [ ] `cargo test`（workspace 全量）：含既有 auth / enforce_listen_auth 测试零回归
-- [ ] `cargo fmt --all` / `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
-- [ ] 前端 `pnpm exec tsc -b` / `pnpm lint` / `pnpm test` 全绿；新增组件测试覆盖用户名提交与开关切换
-- [ ] 真机（独立实例，隔离端口 + 独立 db）：`Host: 127.0.0.1` 无 token → 200（免密）；`Host: 192.168.x.x` → 401；带 `X-Forwarded-For` → 401；`Origin: https://evil.com` → 401；`local_auth_required=1` 时本地 → 401
-- [ ] WS 链路：本地免密可完成握手与数据帧；远程形态 401
-- [ ] 用户名：setup 自定义 → 用新用户名登录成功 / 用 `admin` 失败；不传用户名回退 `admin`；改用户名后旧 token 401
-- [ ] 独立子代理审查（T1 + 加挂 B/D/E）通过（blocker/major 全部处置）
-- [ ] 文档回写：auth-not-enforced.md / backend.md / frontend.md / AGENTS.md 索引 / CHANGELOG.md / user-testing.md
+> 勾选与证据：编排 2026-09-28 在临时 worktree 独立复核（见文末「Phase 4 复核记录」）。
+
+- [x] `cargo test local_access`：四条件穷举 + Host/Origin 形态全过
+- [x] `cargo test`（workspace 全量）：含既有 auth / enforce_listen_auth 测试零回归
+- [x] `cargo fmt --all` / `cargo clippy --quiet --workspace --all-targets -- -D warnings` 零新增
+- [x] 前端 `pnpm exec tsc -b` / `pnpm lint` / `pnpm test` 全绿；新增组件测试覆盖用户名提交与开关切换
+- [x] 真机（独立实例，隔离端口 + 独立 db）：`Host: 127.0.0.1` 无 token → 200（免密）；`Host: 192.168.x.x` → 401；带 `X-Forwarded-For` → 401；`Origin: https://evil.com` → 401；`local_auth_required=1` 时本地 → 401
+- [x] WS 链路：本地免密可完成握手与数据帧；远程形态 401
+- [x] 用户名：setup 自定义 → 用新用户名登录成功 / 用 `admin` 失败；不传用户名回退 `admin`；改用户名后旧 token 401
+- [ ] 独立子代理审查（T1 + 加挂 B/D/E）通过（blocker/major 全部处置）——进行中
+- [x] 文档回写：auth-not-enforced.md / backend.md / frontend.md / AGENTS.md 索引 / CHANGELOG.md / user-testing.md
 
 ## 风险与文档闭环
 
@@ -220,3 +232,22 @@ pub async fn verify_request(
 **门禁（子代理各自实跑）**：
 - 后端：`cargo fmt --all -- --check` OK；`cargo clippy --quiet --workspace --all-targets -- -D warnings` 零告警；`cargo test --workspace` = bin 664 passed / 0 failed（1 ignored 预存在）+ 集成 8 + 2 passed；定向：`local_access` 14、`auth::tests` 11、`api::auth::tests` 9、`enforce_listen_auth` 4（断言未动）、proxy 调用点 1。
 - 前端：`pnpm exec tsc -b` exit 0；`pnpm lint` 0 error（18 warning 全为既有文件）；`pnpm test` 80 文件 / 841 用例全绿（新增 11）。
+
+## Phase 4 复核记录（编排，2026-09-28）
+
+编排在临时 worktree 上独立重跑全部门禁并补真机链路验证（全部通过，证据如下）：
+
+- **后端门禁（编排复跑）**：`cargo fmt --all -- --check` OK；`cargo clippy --workspace --all-targets -- -D warnings` 零告警；`cargo test --workspace` = bin 664 passed + `agent_hook_integration` 8 passed + `runtime_kind_migration` 2 passed（`runtime_kind_matrix` 6 ignored 为预存在），0 failed。
+- **测试库写入隔离实测**：跑测试前/后 `~/.omniterm/{omniterm,omniterm-dev,omniterm-phase2,omniterm-preview}.db` 的 md5 完全一致（零写入真实库）；测试写入 `DATABASE_URL` 指定的临时库。**本次验证全程使用 `DATABASE_URL=sqlite:/tmp/omniterm-auth-verify.db?mode=rwc`**，避免重演 2026-09-27 的迁移误升级事故。
+- **前端门禁（编排复跑）**：`pnpm exec tsc -b` OK；`pnpm lint` 0 error / 18 warning（逐文件核实：全部为既有文件，不含本次改动文件）；`pnpm test` 80 文件 / 841 用例全过。
+- **真机 API 矩阵（独立实例 :18777 + 独立库 `~/.omniterm/omniterm-auth.db`，2026-09-28）**：48/48 PASS——本机免密 6 形态（`127.0.0.1` / `localhost` / `LOCALHOST` / `127.0.0.2` / `[::1]` / 回环 Origin）全放行；远程与穿透 15 形态（LAN IP / 域名 / Host 缺失 / `localhost.evil.com` / XFF / XFH / X-Real-IP / Forwarded / evil Origin / `Origin: null` / 畸形 Origin / 组合）全部 401；WS 握手本地 101 / 远程与带 XFF 401；用户名语义 4 例；改用户名撤销旧 token + 新名可登录；开关重开本机恢复 401；部分更新不互扰；`/auth/check` 返回 `local_bypass: true`；终态恢复默认姿态。
+- **前端 UI 端到端（Playwright + 真实后端，9/9 PASS）**：默认姿态本机打开显示登录页（用户名输入框在）→ API 关闭本地校验后**刷新即免密进入主界面** → 重新打开后刷新**回到登录页** → 表单用户名登录链路易用；无页面级 JS 报错。
+- **老库升级验证**：取 preview 库**只读拷贝**（无 `username` 列的 18 迁移状态）用本分支二进制启动 → 迁移 `20260927` 应用成功、既有用户自动获得 `username='admin'`、服务正常启动（health 200）。
+
+**尚未完成**：独立子代理审查（T1 + 加挂 B/D/E，进行中）及其意见处置；审查通过后合并回 dev 并清理临时 worktree。
+
+## 相关文件（新增/改动一览）
+
+- 后端：`migrations/20260927_add_username.sql`（新增）、`src/auth/local_access.rs`（新增）、`src/auth/mod.rs`、`src/api/auth.rs`、`src/models/user.rs`、`src/main.rs`、`src/proxy/mod.rs`、`src/ws/origin_guard.rs`、`src/api/audit.rs`（注释订正）、`src/test_utils.rs`
+- 前端：`frontend/src/api/client.ts`、`frontend/src/components/Auth/AuthPage.tsx`、`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/locales/{en,zh}/translation.json`、两个组件测试
+- 文档：本计划、`docs/reference/auth-not-enforced.md`、`docs/architecture/{backend,frontend}.md`、`AGENTS.md`、`CHANGELOG.md`、`docs/reference/user-testing.md`（§20）、`tests/agent_hook_integration.rs`（库回退修复，等价 dev `533e4de`）

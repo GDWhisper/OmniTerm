@@ -14,6 +14,7 @@
 | R07 | ACP 后端零测试模块补测：`supervisor.rs` / `terminal.rs` / `permission.rs` | 三模块共 ~430 行仍零测试。源自已关闭的 `2026-07-20-acp-quality-gap.md` T02/T03/T04，任务描述按当前架构改写 | 下次修改对应模块时顺带补测；或 `agent-client-protocol` crate 大版本升级前集中补 |
 | R08 | `AcpClient` 协议交互层测试 | client.rs 已涨至 1433 行，现有 12 个测试仅覆盖 `sh_quote`/`wrap` 子进程包装；prompt/cancel/disconnect 链路无回归保护。原计划的 FakeConnection 方案因 crate API 演进需按当前 schema 重写 | 改动 client.rs 连接/发送/取消路径时 |
 | R09 | WS ACP 帧主路径集成测试 | ws/acp.rs 现有 6 个测试仅覆盖 @ 引用解析；帧编解码/replay 门控/重连去重主路径未覆盖 | 新增帧类型或修改帧协议字段时 |
+| R10 | `tests/runtime_kind_matrix.rs` 库/端口硬编码 | `db_path()` 仍回退固定 `~/.omniterm/omniterm-dev.db`、`test_port()` 默认 `9777`；6 个测试全 `#[ignore]`，日常 `cargo test` 不跑且**不执行 migrate**（无迁移超前风险） | 显式 `--ignored` 在非 dev worktree 跑时会「对 9777 上的实例发 HTTP、却读写 dev 库」。建议抽 `tests/common` 复用 `tests/agent_hook_integration.rs::resolve_test_db_url` 的 `./.env.local` 解析（2026-09-28 审查发现，未修） |
 
 ## R06 详情：前端 `vi.waitFor` 测试间歇失败
 
