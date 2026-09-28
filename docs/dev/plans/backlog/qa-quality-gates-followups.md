@@ -8,7 +8,7 @@
 | R01 | clippy warn → deny 升级 | `[lints.clippy] correctness/suspicious/style/complexity/perf = warn`，CI/pre-commit 以 `-D warnings` 兜底 | 清理 `docs/dev/plans/backlog/dead-code-triage.md` 全部 allow 后，按组逐级升 `deny` |
 | R02 | `cargo-deny` 许可证合规 | ✅ 已完成（2026-07-29）：CI 实跑核对，advisories/bans/sources 均绿；唯一 license 报错为 webpki-roots 的 `CDLA-Permissive-2.0`，已加入 allow；删除未命中的 `MPL-2.0` / `OpenSSL` 死条目；audit job 移除 `continue-on-error` 改为阻塞门禁（pnpm audit 保留 step 级不阻塞） | — |
 | R03 | PR CI 总耗时优化 | clippy+test+lint+build 单机串行 | 首次落地以正确性优先；实测若 >8min 引入 `Swatinem/rust-cache`（已加）+ 并行矩阵 / 拆 job |
-| R04 | `dev.sh check` / `dev.sh test` 一键质量门禁 | 尚未实现 | 视开发者反馈，按计划附录 A 实现 `check_quality()` 子命令；`test` 变体应注入本 worktree 实例库的 `DATABASE_URL`（同 `dev.sh` 的库推导）后再跑 `cargo test`，把「猜库」负担从开发者手里拿走（S6 红线 / debug-patterns 模式 11） |
+| R04 | `dev.sh check` 一键质量门禁 | `dev.sh test` 子命令已实现（2026-09-28：注入本 worktree 实例库与端口同源后跑 `cargo test`，默认 `--workspace`；错误前提显式 SKIP）；`check`（fmt/clippy/test/lint 一次跑全）尚未实现 | 视开发者反馈，按计划附录 A 实现 `check_quality()` 子命令 |
 | R05 | dead-code 清零 | ✅ 15 项全部判定（2026-09-26，含清单外补录 6 项）：删除 6、接线 2、cfg(test) 2、改写 1、保留 3、历史演进中已消失 3。剩余 allow 均为有意保留（协议预留 `Pong`/`Exit`、写侧契约 `agent_value`/`clean_token`、bench 二进制），清单见 `dead-code-triage.md` | R01 升 deny 前需对剩余 5 处 allow 做最终决策（各自消除条件见 triage「升级路径」） |
 | R06 | 前端 `vi.waitFor` 测试间歇失败（flaky） | 见下方专节 | 再次出现时抓住失败详情，或 CI 出现随机红灯 |
 | R07 | ACP 后端零测试模块补测：`supervisor.rs` / `terminal.rs` / `permission.rs` | 三模块共 ~430 行仍零测试。源自已关闭的 `2026-07-20-acp-quality-gap.md` T02/T03/T04，任务描述按当前架构改写 | 下次修改对应模块时顺带补测；或 `agent-client-protocol` crate 大版本升级前集中补 |

@@ -15,7 +15,8 @@ Web 版 tmux/pty 终端管理器，一个浏览器标签页观察并驱动多个
 
 ```bash
 ./dev.sh start|restart|stop|status|logs   # 开发环境唯一入口（禁止直接 cargo run / target 二进制）
-cargo test --workspace                    # Rust 全量测试
+./dev.sh test [cargo test 参数]           # Rust 测试（自动注入本 worktree 实例库与端口；默认 --workspace）
+cargo test --workspace                    # Rust 全量测试（裸跑等价，库目标由测试自身解析，见测试约定）
 cargo test <名称> -- --exact              # 单个测试；跑 tests/ 下某个集成测试加 --test <文件>
 cd frontend && pnpm lint                  # ESLint
 cd frontend && pnpm test <过滤>           # vitest 单测（package.json 已是 vitest run，直接跑）；性能基准单独用 pnpm bench，不进 test
@@ -72,7 +73,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 ## 测试约定
 
 - Rust 单测随源码（`#[cfg(test)]`），集成测试在 `tests/`（spawn 抽象/运行时矩阵相关新增变体前必读 `docs/workflows/integration-checklist.md`）；tmux control-mode 测试依赖 tmux 二进制。
-- **测试的库/端口目标必须显式或同源**：会执行 `sqlx::migrate!` 或写库的测试，目标只能来自 `DATABASE_URL` 或 `./.env.local` 的 `BRANCH_BINARY_NAME`/`BACKEND_PORT`（与 `dev.sh` 同源），**禁止回退任何固定真实库**（`omniterm.db` / `omniterm-dev.db` 等）；环境不满足前提时**带原因显式 SKIP**，不得静默通过。违反后果：`cargo test` 把分支迁移集写进正式版/他人实例库（2026-09-27 事故）、或库端口错配致断言恒真假绿——见 `docs/dev/debug-patterns/platform-protocol.md` 模式 11。
+- **测试的库/端口目标必须显式或同源**：会执行 `sqlx::migrate!` 或写库的测试，目标只能来自 `DATABASE_URL` 或 `./.env.local` 的 `BRANCH_BINARY_NAME`/`BACKEND_PORT`（与 `dev.sh` 同源），**禁止回退任何固定真实库**（`omniterm.db` / `omniterm-dev.db` 等）；环境不满足前提时**带原因显式 SKIP**，不得静默通过。常规用法：`./dev.sh test [参数]`（自动完成上述注入，库与端口同源配对）。违反后果：`cargo test` 把分支迁移集写进正式版/他人实例库（2026-09-27 事故）、或库端口错配致断言恒真假绿——见 `docs/dev/debug-patterns/platform-protocol.md` 模式 11。
 - 前端测试与源码同目录（`*.test.ts`，vitest + jsdom，入口 `frontend/src/test/setup.ts`）；性能基准在 `vitest.bench.config.ts`，已移出 `pnpm test`（避免 pre-commit 随机失败）。
 - 手动回归用例见 `docs/reference/user-testing.md`；pty 帧渲染有自动化回归脚本 `scripts/pty-frame-regression.mjs`；pty 视口锚定有 `scripts/pty-viewport-anchor-regression.mjs`（五形态周期内容 × 8 轮，需 dev 后端运行新二进制）。
 
