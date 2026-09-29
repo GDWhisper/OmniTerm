@@ -1006,20 +1006,22 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await;
             });
-            let frontend_dir =
-                std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
+            // ── 前端服务 ─────────────────────────────────────────────
+            // 文件系统前端仅在显式 FRONTEND_DIR 或 debug 构建时启用（见
+            // fs_frontend_source），目录不存在时回退内嵌资源。
+            let fs_frontend = fs_frontend_source(
+                std::env::var("FRONTEND_DIR").ok(),
+                cfg!(debug_assertions),
+            )
+            .filter(|dir| Path::new(dir).is_dir());
+            let dev_mode = fs_frontend.is_some();
 
             let app = Router::new().merge(api::routes(state.clone()));
 
-            // Serve frontend: filesystem in dev mode, embedded in release mode
-            // ── 前端服务 ─────────────────────────────────────────────
-            // 检测运行模式：前端目录存在 = dev 模式（前后端分离），否则 = 生产模式（内嵌前端）
-            let dev_mode = Path::new(&frontend_dir).is_dir();
-
-            let app = if dev_mode {
-                let static_service = ServeDir::new(&frontend_dir)
-                    .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
-                tracing::info!("Serving frontend from {}", frontend_dir);
+            let app = if let Some(dir) = &fs_frontend {
+                let static_service = ServeDir::new(dir)
+                    .not_found_service(ServeFile::new(format!("{}/index.html", dir)));
+                tracing::info!("Serving frontend from {}", dir);
                 app.fallback_service(static_service)
             } else {
                 tracing::debug!("Serving from embedded assets");
@@ -1255,12 +1257,24 @@ fn enforce_listen_auth(
     )
 }
 
+/// 解析文件系统前端来源：显式设置 `FRONTEND_DIR` 优先（Docker 镜像以 ENV 注入；
+/// release 二进制亦可自定义前端根），仅 **debug 构建**回退默认相对路径
+/// `frontend/dist`（dev.sh 的 cwd=worktree + `pnpm build` 产物）。
+///
+/// release 二进制不做隐式回退：否则正式版在含 `frontend/dist` 的源码目录启动时
+/// 会静默改用本地旧 dist，页面版本号/内容与二进制不符（2026-09-29 实测：正式版
+/// 更新到 0.2.26 后页面仍显示 0.2.25）。
+fn fs_frontend_source(explicit: Option<String>, debug_build: bool) -> Option<String> {
+    explicit.or_else(|| debug_build.then(|| "frontend/dist".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         acp_idle_recycle_secs_from_setting, build_cors_layer, default_db_stem, enforce_listen_auth,
-        instance_id, instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
-        permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
+        fs_frontend_source, instance_id, instance_suffix, jwt_secret_file_name,
+        permission_timeout_mode_from_setting, permission_timeout_secs_from_setting,
+        rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
         IDLE_RECYCLE_SECS, PermissionTimeoutMode, REQUIRES_ACTION_RECYCLE_SECS,
@@ -1303,6 +1317,24 @@ mod tests {
         assert_eq!(instance_suffix(&instance_id(docker)), "");
         // 无文件路径的库（内存库）回退默认实例名
         assert_eq!(instance_id("sqlite::memory:"), default_db_stem());
+    }
+
+    #[test]
+    fn fs_frontend_requires_explicit_dir_in_release_builds() {
+        // release 二进制不做隐式回退：否则正式版在源码目录启动时会静默服务
+        // 本地旧 dist（2026-09-29：更新到 0.2.26 后页面仍显示 0.2.25 的根因）
+        assert_eq!(fs_frontend_source(None, false), None);
+        // 显式 FRONTEND_DIR 优先（Docker 镜像 ENV；release 亦可自定义前端根）
+        assert_eq!(
+            fs_frontend_source(Some("/srv/frontend".into()), false).as_deref(),
+            Some("/srv/frontend")
+        );
+        // debug 构建（dev.sh）回退默认相对路径；显式值仍然优先
+        assert_eq!(fs_frontend_source(None, true).as_deref(), Some("frontend/dist"));
+        assert_eq!(
+            fs_frontend_source(Some("custom/dist".into()), true).as_deref(),
+            Some("custom/dist")
+        );
     }
 
     #[test]

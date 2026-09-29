@@ -725,7 +725,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `OMNITERM_INSECURE_NO_AUTH` | 未设置（= 拒绝启动） | 非回环监听 + auth 关闭时的显式逃生门（等价 `--insecure-no-auth`，`1/0/true/false`）。不设则 `enforce_listen_auth` fail-closed 拒绝启动，见「Auth 安全模型」 |
 | `OMNITERM_PROXY_DOMAIN` | 未设置（= 无子域名路由） | 子域名反代基础域（等价 `--proxy-domain`），见「Port-forward proxy」 |
 | `OMNITERM_PROXY_MAX_BODY` | `2097152`（2 MiB） | 反代请求体上限，字节（等价 `--proxy-max-body`），见「Port-forward proxy」 |
-| `FRONTEND_DIR` | `frontend/dist` | Static files dir; falls back to embedded |
+| `FRONTEND_DIR` | release 构建未设置（= 内嵌前端）；debug 构建 `frontend/dist` | 前端静态文件目录。文件系统前端仅在**显式设置本变量**（Docker 以 ENV 注入；release 亦可自定义前端根）或 **debug 构建**（dev.sh 的 cwd=worktree + `pnpm build` 产物）时启用，目录不存在时回退内嵌资源。release 二进制不做隐式回退——防正式版在含 `frontend/dist` 的目录启动时静默服务本地旧 dist（2026-09-29：更新并重启后页面版本号仍是旧版；版本号是构建期注入 JS bundle 的常量，强刷无效）（`src/main.rs` 的 `fs_frontend_source`） |
 
 **只认 `OMNITERM_*` 前缀**：通用名 `BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET` 已全部弃用且**不再读取**（启动时若检测到会 warn 提示改名）。原因：这些名字会被继承的环境意外命中——开发实例派生的终端里启动 npm 正式版会被 `BIND_ADDR=127.0.0.1:<dev port>` 劫持（报 `Address already in use`），而 `DATABASE_URL` 是用户自己项目里极常见的变量（指向 Postgres 等），会让 omniterm 连错库。部署层改用 `OMNITERM_HOST` + `OMNITERM_PORT`（docker）或命令行参数（dev.sh）。
 

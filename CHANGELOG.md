@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-09-29 16:25) `[backend]` `[infra]` 修复 release 二进制在含 `frontend/dist` 的目录启动时静默改用文件系统前端、导致「一键更新并重启后页面版本号仍是旧版」：此前文件系统前端来源默认取**相对 cwd** 的 `frontend/dist` 且只看目录是否存在——正式版在源码目录启动即命中，服务的是本地旧 dist（页面版本号/内容与二进制不符；版本号是构建期写死进 JS bundle 的常量，而「重启」是 exec 自重启不改 cwd，强刷拉到的仍是同一份旧文件，故均无效）。现文件系统前端仅在**显式设置 `FRONTEND_DIR`**（Docker 镜像以 ENV 注入；release 亦可自定义前端根）或 **debug 构建**（dev.sh 的 cwd=worktree + `pnpm build` 产物）时启用，目录不存在时回退内嵌；release 二进制一律使用内嵌前端（`src/main.rs` 的 `fs_frontend_source`）
+
 ## [0.2.26] - 2026-09-28
 
 ### Added
