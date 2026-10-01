@@ -596,7 +596,7 @@ Game UI elements adapt when `.dark` is present:
 | Class | Effect | Duration |
 |---|---|---|
 | `.dialogue-toast` entrance | Fade + 8px Y shift | 0.3s steps(3) |
-| `.chat-last-prompt-card.is-scrolling` | 用户滑动消息区时「上次输入」卡片淡出至 0.35（静止后恢复） | 0.15s ease-out |
+| `.chat-last-prompt-card.is-scrolling` / `.chat-jump-bottom.is-scrolling` | 用户滑动消息区时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）淡出至 `--chat-scroll-dim-opacity` 0.35（静止后恢复） | 0.15s ease-out（`--chat-scroll-dim-transition`） |
 
 All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard UI still use `ease-out`.
 

@@ -35,9 +35,10 @@ const CHAT_JUMP_TOP_GAP_PX = 8
 const CHAT_PROMPT_ABOVE_SLACK_PX = 24
 /** 手势（wheel / touchmove）与 scroll 事件之间的最长间隔：惯性滚动里手指早已
  *  离开屏幕而 scroll 事件仍在派发，这段窗口内的 scroll 仍算「用户在滑」。 */
-const CHAT_PROMPT_GESTURE_LINGER_MS = 600
-/** 最后一次 scroll 事件后多久视为「滑动停止」，卡片恢复不透明。 */
-const CHAT_PROMPT_DIM_IDLE_MS = 180
+const CHAT_GESTURE_LINGER_MS = 600
+/** 最后一次 scroll 事件后多久视为「滑动停止」，消息区两个悬浮件（「上次输入」
+ *  卡片 / 「回到底部」按钮）恢复不透明。 */
+const CHAT_DIM_IDLE_MS = 180
 /** 距消息区底缘多少像素内仍算「贴底」（留余量，iOS 惯性滚动与亚像素取整不会把
  *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
 const CHAT_STICK_THRESHOLD_PX = 24
@@ -185,13 +186,14 @@ export function ChatView() {
   const [lastPromptAbove, setLastPromptAbove] = useState(false)
   // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
   const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
-  // 用户滑动消息区时卡片淡出（配套 index.css 的 .is-scrolling）：state 供
-  // className，定时器 ref 供「滑动停止后恢复」与卸载清理，手势时间戳 ref 是
-  // 「这次 scroll 是不是用户在滑」的判据——流式贴底的自动钉底也派发 scroll，
-  // 但那是内容在动，卡片必须保持可读。
-  const [promptCardDimmed, setPromptCardDimmed] = useState(false)
-  const promptDimTimerRef = useRef<number | null>(null)
-  const lastPromptGestureAtRef = useRef(0)
+  // 用户滑动消息区时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）淡出
+  // （配套 index.css 的 .is-scrolling 与滑动淡出 token）：state 供 className，
+  // 定时器 ref 供「滑动停止后恢复」与卸载清理，手势时间戳 ref 是「这次 scroll
+  // 是不是用户在滑」的判据——流式贴底的自动钉底也派发 scroll，但那是内容在动，
+  // 浮层在这里必须保持可读。
+  const [overlaysDimmed, setOverlaysDimmed] = useState(false)
+  const dimTimerRef = useRef<number | null>(null)
+  const lastGestureAtRef = useRef(0)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
 
@@ -206,7 +208,7 @@ export function ChatView() {
     return () => {
       if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
       if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
-      if (promptDimTimerRef.current !== null) window.clearTimeout(promptDimTimerRef.current)
+      if (dimTimerRef.current !== null) window.clearTimeout(dimTimerRef.current)
     }
   }, [])
 
@@ -362,18 +364,18 @@ export function ChatView() {
       setAutoStick(false)
     }
     setLastPromptAbove(isLastPromptAboveViewport())
-    // 用户滑动中把「上次输入」卡片淡出（index.css 的 .is-scrolling）：卡片悬浮在
-    // 消息区顶缘，滑动时会盖住从它下面滑过的正文，淡出让出阅读带；静止
-    // CHAT_PROMPT_DIM_IDLE_MS 后恢复，点击跳转不受影响。只放大手势窗口内的
-    // scroll——流式期间的自动钉底同样派发 scroll，但那是内容在动、用户在读，
-    // 卡片在这里必须保持可读。
-    if (Date.now() - lastPromptGestureAtRef.current <= CHAT_PROMPT_GESTURE_LINGER_MS) {
-      if (promptDimTimerRef.current !== null) window.clearTimeout(promptDimTimerRef.current)
-      promptDimTimerRef.current = window.setTimeout(() => {
-        promptDimTimerRef.current = null
-        setPromptCardDimmed(false)
-      }, CHAT_PROMPT_DIM_IDLE_MS)
-      setPromptCardDimmed(true)
+    // 用户滑动中把消息区两个悬浮件淡出（index.css 的 .is-scrolling）：它们悬浮在
+    // 消息区顶/底缘，滑动时会盖住从下面滑过的正文，淡出让出阅读带；静止
+    // CHAT_DIM_IDLE_MS 后恢复，点击跳转不受影响。只放大手势窗口内的 scroll——
+    // 流式期间的自动钉底同样派发 scroll，但那是内容在动、用户在读，浮层在这里
+    // 必须保持可读。
+    if (Date.now() - lastGestureAtRef.current <= CHAT_GESTURE_LINGER_MS) {
+      if (dimTimerRef.current !== null) window.clearTimeout(dimTimerRef.current)
+      dimTimerRef.current = window.setTimeout(() => {
+        dimTimerRef.current = null
+        setOverlaysDimmed(false)
+      }, CHAT_DIM_IDLE_MS)
+      setOverlaysDimmed(true)
     }
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
@@ -382,13 +384,13 @@ export function ChatView() {
   }
 
   // 用户滑动手势的记录点（wheel / 触摸拖动）：必须与 scroll 事件解耦——scroll
-  // 事件分不清「用户在滑」和「流式内容长高被贴底钉回」，卡片淡出只认前者。
+  // 事件分不清「用户在滑」和「流式内容长高被贴底钉回」，悬浮件淡出只认前者。
   // passive：只读时间戳，不拦截默认滚动。
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
     const markGesture = () => {
-      lastPromptGestureAtRef.current = Date.now()
+      lastGestureAtRef.current = Date.now()
     }
     el.addEventListener('wheel', markGesture, { passive: true })
     el.addEventListener('touchmove', markGesture, { passive: true })
@@ -790,7 +792,7 @@ export function ChatView() {
           <button
             type="button"
             ref={lastPromptCardRef}
-            className={`chat-last-prompt-card pixel-float${promptCardDimmed ? ' is-scrolling' : ''}`}
+            className={`chat-last-prompt-card pixel-float${overlaysDimmed ? ' is-scrolling' : ''}`}
             onClick={handleJumpToLastPrompt}
             title={lastPromptPreview}
             aria-label={`${t('chat.lastPrompt')}：${lastPromptPreview}`}
@@ -827,11 +829,12 @@ export function ChatView() {
 
         {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
             的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端单图标 36px
-            方钮，文案只保留在 aria-label/title。 */}
+            方钮，文案只保留在 aria-label/title。用户滑动消息区时与「上次输入」卡片
+            同挂 is-scrolling 淡出（同一 state 驱动，静止后恢复，见 handleScroll）。 */}
         {showJumpToBottom && (
           <button
             type="button"
-            className="chat-jump-bottom pixel-press"
+            className={`chat-jump-bottom pixel-press${overlaysDimmed ? ' is-scrolling' : ''}`}
             onClick={handleJumpToBottom}
             title={t('chat.jumpToBottom')}
             aria-label={t('chat.jumpToBottom')}

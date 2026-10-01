@@ -281,6 +281,10 @@ body.pixel-font-on {
 :root {
   --sidebar-width: 200px;
   --filemanager-width: 300px;
+  /* 消息区滑动时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）共用的淡出档位：
+     不透明度与过渡时长各一个 token，两处消费同源，避免硬编码漂移。 */
+  --chat-scroll-dim-opacity: 0.35;
+  --chat-scroll-dim-transition: 0.15s ease-out;
 }
 
 * {
@@ -2103,7 +2107,7 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-last-prompt-card {
   cursor: pointer;
   background: var(--bg-elevated);
-  transition: background 0.1s steps(2), opacity 0.15s ease-out;
+  transition: background 0.1s steps(2), opacity var(--chat-scroll-dim-transition);
 }
 .chat-last-prompt-card:hover {
   background: var(--bg-surface);
@@ -2115,9 +2119,18 @@ input[type="range"]:active::-webkit-slider-thumb {
 /* 用户滑动消息区时淡出（class 由 ChatView handleScroll 挂摘）：卡片是浮层，滑动中
    会盖住从它下面滑过的正文，淡出让出阅读带；停止滑动约 0.2s 后恢复可读。
    opacity 走连续 ease-out，与 background 的 steps(2) 像素离散过渡刻意不同档——
-   淡入淡出是模拟光线变化，离散步进会读成闪烁。 */
+   淡入淡出是模拟光线变化，离散步进会读成闪烁。与「回到底部」按钮共用淡出 token。 */
 .chat-last-prompt-card.is-scrolling {
-  opacity: 0.35;
+  opacity: var(--chat-scroll-dim-opacity);
+}
+
+/* 「回到底部」提示条（ChatView 消息区底部居中；其余视觉为 inline，本类只补与
+   「上次输入」卡片共用的滑动淡出档位——class 由 ChatView handleScroll 挂摘）。 */
+.chat-jump-bottom {
+  transition: opacity var(--chat-scroll-dim-transition);
+}
+.chat-jump-bottom.is-scrolling {
+  opacity: var(--chat-scroll-dim-opacity);
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
