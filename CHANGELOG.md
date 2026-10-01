@@ -52,6 +52,7 @@ Prefix each entry with the area it affects:
 ### Changed
 
 - (2026-10-01 02:40) `[backend]` ACP Rust SDK 升级 `agent-client-protocol` 1.3.0 → **2.2.0**（连带 schema 1.4.0 → 1.9.1；ACP **wire 协议仍为 v1**，未启用 unstable 的 v2，现存 agent 全部照常协商 `protocolVersion:1`）。迁移**零源码改动**（升级前评估预计 ≤20 行，实际 0：2.0 明确保持稳定 v1 表面，仅 Rust SDK 侧 API 破坏性变更且均未被本仓使用）。三项行为差异逐项取证并留档（计划 D3/D4/D5）：① 2.0 新增的「响应回调强制有序派发」只作用于 ordered response callbacks，本仓全部请求走 `block_task().await`，且通知派发在 1.3/2.2 均为入站循环内 inline await（串行语义两版一致）→ 不适用；② `from_args` 的 env 重复键由 `Vec` 改 `BTreeMap`，但最终子进程环境两版一致（同名后键覆盖），以端到端测试 pin；③ `SentRequest::map` 为纯增，未使用。补测 backlog R07/R08（fake agent 用例 6 → 16）：prompt 正常链路（流式通知带 seq + 累积器正文折叠）、`session/cancel` 到达 agent 且 prompt 以 cancelled 返回、权限请求 resolve 与 cancel 对未决审批的 `Cancelled` 应答（规范 MUST）、shutdown 后 `is_alive` 即时翻转与发送快速失败、disconnect 杀进程、`terminal/*` 四连（create→wait_for_exit→output→release）与 kill 路径、重复 env 键语义、`AcpSupervisor` 生命周期与 `shutdown_all`；fake agent 公共设施抽到 `src/acp/test_support.rs`（`Cargo.toml`、`Cargo.lock`、`src/acp/test_support.rs`、`src/acp/fake_agent_tests.rs`、`src/acp/supervisor.rs`）
+- (2026-10-01 02:45) `[frontend]` ACP 聊天「上次输入」悬浮卡片在用户滑动消息区时淡出（0.35 不透明度 + 0.15s ease-out，停止滑动约 0.2s 后恢复）：卡片悬浮在消息区顶缘，滑动时会盖住从它下面滑过的正文，淡出让出阅读带、静止后恢复可读可点。淡出只认用户手势（wheel / 触摸拖动）——流式期间的自动贴底钉底同样派发 scroll 事件，但那是内容在动、用户在读，卡片不随之反复闪烁（手势窗口 600ms 覆盖松手后的惯性滚动）。挂摘逻辑见 `ChatView.tsx` 的 `handleScroll`，样式见 `index.css` 的 `.chat-last-prompt-card.is-scrolling`，动效档位登记 ui-style-guide §11，手动回归用例见 user-testing.md §12.4
 
 ### Fixed
 

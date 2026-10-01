@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatView } from './ChatView'
+import { advanceClock } from '../../test/timers'
 import {
   userMsg,
   assistantMsg,
@@ -122,6 +123,38 @@ describe('ChatView last-prompt card', () => {
       expect(lastPromptCard()).toBeTruthy()
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  it('dims while the user scrolls and restores once scrolling stops', async () => {
+    // 恢复定时器是真实 180ms，用假时钟推进（advanceClock 每拍让 React 完成渲染，
+    // 共享真源 src/test/timers.ts）。
+    vi.useFakeTimers()
+    try {
+      seedChatMessages([userMsg('m1', 'first question'), assistantMsg('m2', 'answer')])
+      renderView()
+      expect(lastPromptCard()).toBeTruthy()
+
+      // 无手势的 scroll 不淡出：流式贴底的自动钉底同样派发 scroll，但那是内容在
+      // 动、用户在读，卡片在这里必须保持可读。
+      act(() => {
+        container.querySelector('.overlay-scroll-content')!.dispatchEvent(new Event('scroll'))
+      })
+      expect(lastPromptCard()!.className).not.toContain('is-scrolling')
+
+      // wheel 手势之后的 scroll 才淡出。
+      act(() => {
+        const scroller = container.querySelector('.overlay-scroll-content')!
+        scroller.dispatchEvent(new Event('wheel'))
+        scroller.dispatchEvent(new Event('scroll'))
+      })
+      expect(lastPromptCard()!.className).toContain('is-scrolling')
+
+      // 静止超过恢复窗口后恢复不透明。
+      await advanceClock(1000)
+      expect(lastPromptCard()!.className).not.toContain('is-scrolling')
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

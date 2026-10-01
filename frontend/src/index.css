@@ -2103,7 +2103,7 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-last-prompt-card {
   cursor: pointer;
   background: var(--bg-elevated);
-  transition: background 0.1s steps(2);
+  transition: background 0.1s steps(2), opacity 0.15s ease-out;
 }
 .chat-last-prompt-card:hover {
   background: var(--bg-surface);
@@ -2111,6 +2111,13 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-last-prompt-card:active {
   transform: translate(2px, 2px);
   box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+/* 用户滑动消息区时淡出（class 由 ChatView handleScroll 挂摘）：卡片是浮层，滑动中
+   会盖住从它下面滑过的正文，淡出让出阅读带；停止滑动约 0.2s 后恢复可读。
+   opacity 走连续 ease-out，与 background 的 steps(2) 像素离散过渡刻意不同档——
+   淡入淡出是模拟光线变化，离散步进会读成闪烁。 */
+.chat-last-prompt-card.is-scrolling {
+  opacity: 0.35;
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
