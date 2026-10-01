@@ -106,22 +106,23 @@ src/
 
 ## 断连 / 空闲回收超时 + 权限请求超时（可配置）
 
-设置 → 会话（`Settings.tsx`）四个 range 滑块 + 一组三态模式按钮把超时类设置提为可调（滑块值域 1..60 分钟，`WARNING_THRESHOLD_MIN=30`）：
+设置 → 会话（`Settings.tsx`）四个 range 滑块 + 一组三态模式按钮把超时类设置提为可调（三个断连/回收滑块值域 1..60 分钟、`WARNING_THRESHOLD_MIN=30`；权限超时滑块走秒制档位，见下）：
 
 | 设置 | store 字段 | 默认 | 持久化 |
 |------|-----------|------|--------|
-| 权限请求超时模式 | `permTimeoutMode`（wait/auto/abort） | abort | 后端 settings 表（`PUT /api/v1/settings/permission-timeout`），点击模式按钮整体 PUT `{mode, minutes}` |
-| 权限请求超时（分钟） | `permTimeoutMin` | 30 | 同上；wait 模式下滑块隐藏（该模式无超时） |
+| 权限请求超时模式 | `permTimeoutMode`（wait/auto/abort） | abort | 后端 settings 表（`PUT /api/v1/settings/permission-timeout`），点击模式按钮整体 PUT `{mode, seconds}` |
+| 权限请求超时（秒） | `permTimeoutSecs` | 1800 | 同上；wait 模式下滑块隐藏（该模式无超时）；「总是」档仅 auto 模式可用 |
 | ACP 空闲回收 | `acpIdleRecycleMin` | 5 | 后端 settings 表（`PUT /api/v1/settings/acp-idle-recycle`），onChange 调 `api.setAcpIdleRecycle` |
 | tmux 失焦断连 | `blurDisconnectMin` | 10 | localStorage `omniterm_blur_disconnect_min` |
 | tmux 空闲断连 | `idleDisconnectMin` | 15 | localStorage `omniterm_idle_disconnect_min` |
 
-- **权限超时 UI**（`Settings.tsx` 的 `PermissionTimeoutSection`，排在 SessionsSection 前）：三模式按钮行复用主题/引擎选择同款 `btnBase`/`btnActive`；auto 模式常驻一条无人值守风险警告（`--warning` 色）；当前模式的 hint 文案随选中态切换。模式与时长是同一设置，任一侧改动都整体 PUT（后端白名单校验 + 热更新）。
-- **store 层**（`appStore.ts`）：导出 `MIN_DISCONNECT_MIN=1` / `MAX_DISCONNECT_MIN=60`；`permTimeoutMin` 与三个分钟滑块共用 `clampDisconnectMin`。`acpIdleRecycleMin`/`permTimeout*` 为后端设置的内存镜像（App 启动时 GET 回填，无 localStorage）。
+- **权限超时 UI**（`Settings.tsx` 的 `PermissionTimeoutSection`，排在 SessionsSection 前）：三模式按钮行复用主题/引擎选择同款 `btnBase`/`btnActive`；auto 模式常驻一条无人值守风险警告（`--warning` 色）；当前模式的 hint 文案随选中态切换。模式与时长是同一设置，任一侧改动都整体 PUT（后端白名单校验 + 热更新）。**时长滑块是秒制档位**（`PERM_TIMEOUT_STEP_SECS=30` 步进，上限 `MAX_PERM_TIMEOUT_SECS=3600`）：最左档 `0`「总是」只对 auto 有语义（有请求即自动放行、不等待），故只在 auto 模式把 `min` 放到 0，其余模式从 30 秒起——从 auto 切走时按时长下限夹回（`clampPermTimeoutSecs`），避免面板停在拖不到且语义无效的值上。
+- **store 层**（`appStore.ts`）：导出 `MIN_DISCONNECT_MIN=1` / `MAX_DISCONNECT_MIN=60`；权限超时另导出 `PERM_TIMEOUT_NEVER_SECS=0` / `PERM_TIMEOUT_STEP_SECS=30` / `MAX_PERM_TIMEOUT_SECS=3600` 与 `clampPermTimeoutSecs`（吸附到 30 秒档；非分钟滑块，共用 `clampDisconnectMin`）。`acpIdleRecycleMin`/`permTimeout*` 为后端设置的内存镜像（App 启动时 GET 回填，无 localStorage）。
 - **启动回填**（`App.tsx`）：`api.getAcpIdleRecycle()` / `api.getPermissionTimeout()` 在挂载时拉取持久值写入 store——刷新后面板显示后端真相源而非默认值（修复了 `getAcpIdleRecycle` 定义后从未被调用的缺口）。
 - **消费方**（`useTerminal.ts`）：删除 `BLUR_DISCONNECT_DELAY_MS`/`IDLE_DISCONNECT_DELAY_MS` 常量，blur/idle 断连定时器改从 store 读分钟值 ×60_000；acpIdleRecycleMin/permTimeout* 仅在前端渲染（后端 reaper 消费，见 backend.md Settings 表与权限超时计划）。
-- **滑块组件**（`Settings.tsx`）：`DisconnectSlider` 为共享 range 滑块（title/hint/warning 三文案 + value/onChange/onCommit），四个用例复用同一组件；ACP 与权限超时滑块 onCommit 调对应 API 持久化。警告触发线默认 `value >= 30`；权限超时滑块传 `warnAboveMin={30}`（默认 30 分钟即历史行为，只有调得更长才提醒内存驻留）。
-- **权限超时告知渲染**（`ChatMessage.tsx` 的 `SystemBlockView`）：后端下发的 system 消息可带 `detail`（工具名/类型、内容预览、可选项、自动选中项、超时分钟），命中 i18n key（`system.permTimeout.*`）时本地化渲染，未命中原样显示（2026-08-18 起的历史中文数据）。帧链路：reaper → `SystemNotice{label, detail}` → WS `system_message{label, detail}` → `pushSystemEvent(sid, label, detail)`。
+- **滑块组件**（`Settings.tsx`）：`DisconnectSlider` 为共享 range 滑块（title/hint/warning 三文案 + value/onChange/onCommit + 可选 `min`/`max`/`step`/`renderValue` 覆盖档位与数值展示），四个用例复用同一组件；ACP 与权限超时滑块 onCommit 调对应 API 持久化。警告触发线默认 `value >= 30`；权限超时滑块传 `warnAboveMin={30 * 60}`（秒制，默认 30 分钟即历史行为，只有调得更长才提醒内存驻留）。
+- **时长文案口径**（`utils/permTimeout.ts`，面板与聊天共用同一真源）：`permTimeoutSeconds` 从 detail 取秒（历史 `minutes × 60` 回退）、`permTimeoutDuration` 按「整分钟报分钟、其余报秒」产出 i18n key + 数字、`permTimeoutNoticeLabel` 在「总是」档（秒=0）把 auto 告知换成无等待句式 `system.permTimeout.autoAlways`。新增档位或改口径只改这一个文件。
+- **权限超时告知渲染**（`ChatMessage.tsx` 的 `SystemBlockView`）：后端下发的 system 消息可带 `detail`（工具名/类型、内容预览、可选项、自动选中项、超时秒数），命中 i18n key（`system.permTimeout.*`）时本地化渲染，未命中原样显示（2026-08-18 起的历史中文数据）。帧链路：reaper → `SystemNotice{label, detail}` → WS `system_message{label, detail}` → `pushSystemEvent(sid, label, detail)`。
 
 ### 终端自动重连引擎（useTerminal，2026-09-14）
 
@@ -132,7 +133,7 @@ src/
 - **廉价路径**：意外断开时 xterm 仍存活（termRef 非空），重连走 `connectWs` 复用实例；teardown 态（termRef 空）走整端重建并置 `skipAutoFocusRef` 跳过一次 autoFocus（防抢聊天面板焦点），init 失败在引擎路径不弹 toast（`announceFailure: false`）。connectWs 入口 / disposeTerminal / effect cleanup 三处取消排队重试。
 - **Terminal.tsx 挂载 effect 的 `terminalDisconnected` 刻意不进依赖数组**（body 条件仍读它）：flag 翻转 true 时若触发 cleanup 会把刚断开的 xterm/WS 连带拆毁，自动重试随之被取消——「不自动重建」由 body 条件保证。
 - **遮罩语义**：`autoReconnecting`（引擎在管）时遮罩显示「正在自动重连…」状态行（`role="status"`，固定浅色——遮罩底色不随主题翻转），「重连」按钮保留为立即手动兜底。
-- **API client**（`client.ts`）：`getAcpIdleRecycle()` / `setAcpIdleRecycle(minutes)` 对应后端 `GET/PUT /api/v1/settings/acp-idle-recycle`；`getPermissionTimeout()` / `setPermissionTimeout(mode, minutes)` 对应 `GET/PUT /api/v1/settings/permission-timeout`。
+- **API client**（`client.ts`）：`getAcpIdleRecycle()` / `setAcpIdleRecycle(minutes)` 对应后端 `GET/PUT /api/v1/settings/acp-idle-recycle`；`getPermissionTimeout()` / `setPermissionTimeout(mode, seconds)` 对应 `GET/PUT /api/v1/settings/permission-timeout`（时长单位为秒，`0` = 「总是」档）。
 
 ## ACP Chat View (Phase 4a)
 

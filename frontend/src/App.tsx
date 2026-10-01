@@ -81,7 +81,7 @@ function App() {
     api.getPermissionTimeout()
       .then((res) => {
         useAppStore.getState().setPermTimeoutMode(res.mode)
-        useAppStore.getState().setPermTimeoutMin(res.minutes)
+        useAppStore.getState().setPermTimeoutSecs(res.seconds)
       })
       .catch(() => {})
   }, [])

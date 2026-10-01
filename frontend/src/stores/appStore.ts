@@ -26,12 +26,30 @@ export const MAX_DISCONNECT_MIN = 60
 export const DEFAULT_BLUR_DISCONNECT_MIN = 10
 export const DEFAULT_IDLE_DISCONNECT_MIN = 15
 export const DEFAULT_ACP_IDLE_RECYCLE_MIN = 5
-/** 权限请求超时时长默认分钟数（与后端 REQUIRES_ACTION_RECYCLE_SECS/60 一致）。 */
-export const DEFAULT_PERM_TIMEOUT_MIN = 30
+
+// 权限请求超时时长（秒）。滑块全程 30 秒一档，最左档「总是」（不等待）只对自动
+// 推进模式有语义（请求一出现即自动应答），故仅 auto 模式露出该档，其余模式从
+// 30 秒起。档位值与后端 `acp::reaper::is_valid_perm_timeout_secs` 同源同值。
+export const PERM_TIMEOUT_NEVER_SECS = 0
+export const PERM_TIMEOUT_STEP_SECS = 30
+export const MAX_PERM_TIMEOUT_SECS = 3600
+/** 权限请求超时时长默认秒数（与后端 DEFAULT_PERM_TIMEOUT_SECS 一致 = 30 分钟）。 */
+export const DEFAULT_PERM_TIMEOUT_SECS = 1800
 
 /** Clamp a disconnect timeout (minutes) into the supported range. */
 function clampDisconnectMin(n: number): number {
   return Math.max(MIN_DISCONNECT_MIN, Math.min(MAX_DISCONNECT_MIN, n))
+}
+
+/**
+ * Snap a permission timeout (seconds) onto a slider notch: 「总是」档（0）原样
+ * 保留，其余吸附到最近的 30 秒档并夹在上限内。非有限值回退默认（防滑块外的脏值）。
+ */
+export function clampPermTimeoutSecs(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_PERM_TIMEOUT_SECS
+  if (n <= PERM_TIMEOUT_NEVER_SECS) return PERM_TIMEOUT_NEVER_SECS
+  const snapped = Math.round(n / PERM_TIMEOUT_STEP_SECS) * PERM_TIMEOUT_STEP_SECS
+  return Math.min(MAX_PERM_TIMEOUT_SECS, snapped)
 }
 
 /**
@@ -110,8 +128,9 @@ export interface AppState {
   idleDisconnectMin: number
   acpIdleRecycleMin: number
   // 权限请求超时（后端 settings 表为真相源，store 仅持当前值供面板渲染）
+  // 时长单位是秒（`acp_perm_timeout_secs`）：0 = 「总是」档，见 PERM_TIMEOUT_NEVER_SECS。
   permTimeoutMode: PermissionTimeoutMode
-  permTimeoutMin: number
+  permTimeoutSecs: number
 
   // Data
   projects: Project[]
@@ -222,7 +241,7 @@ export interface AppState {
   setIdleDisconnectMin: (n: number) => void
   setAcpIdleRecycleMin: (n: number) => void
   setPermTimeoutMode: (mode: PermissionTimeoutMode) => void
-  setPermTimeoutMin: (n: number) => void
+  setPermTimeoutSecs: (n: number) => void
   setProjects: (p: Project[]) => void
   setWorktrees: (projectId: string, ws: Workspace[]) => void
   setSessions: (projectId: string, sessions: Session[]) => void
@@ -332,7 +351,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // value; no localStorage — the settings table is the source of truth).
   acpIdleRecycleMin: DEFAULT_ACP_IDLE_RECYCLE_MIN,
   permTimeoutMode: 'abort' as PermissionTimeoutMode,
-  permTimeoutMin: DEFAULT_PERM_TIMEOUT_MIN,
+  permTimeoutSecs: DEFAULT_PERM_TIMEOUT_SECS,
   terminalSendData: null as ((data: string) => void) | null,
 
   projects: [],
@@ -466,8 +485,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ permTimeoutMode: mode })
   },
 
-  setPermTimeoutMin: (n) => {
-    set({ permTimeoutMin: clampDisconnectMin(n) })
+  setPermTimeoutSecs: (n) => {
+    set({ permTimeoutSecs: clampPermTimeoutSecs(n) })
   },
 
   setExpandThinking: (v) => {

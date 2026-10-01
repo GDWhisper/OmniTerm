@@ -183,8 +183,9 @@ pub struct AppState {
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// 权限请求超时配置（模式 + 秒级阈值），由 settings 表
-    /// `acp_perm_timeout_mode` / `acp_perm_timeout_min` 注入，reaper 每个 tick
-    /// 动态读取（运行时热更新）。
+    /// `acp_perm_timeout_mode` / `acp_perm_timeout_secs`（旧分钟键
+    /// `acp_perm_timeout_min` 兼容回退）注入，reaper 每个 tick 动态读取
+    /// （运行时热更新）。阈值为 0 = 「总是」档，语义见 `acp::reaper`。
     pub acp_perm_timeout: std::sync::Arc<acp::reaper::PermissionTimeoutConfig>,
     pub login_guard: auth::LoginGuard,
     /// 会话引擎注册表（D9）：持有复用器引擎 + agent 屏幕检测注册表。
@@ -921,7 +922,13 @@ fn main() -> anyhow::Result<()> {
                         .await?
                         .as_deref(),
                     ),
-                    permission_timeout_secs_from_setting(
+                    permission_timeout_secs_from_settings(
+                        sqlx::query_scalar::<_, String>(
+                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_secs'",
+                        )
+                        .fetch_optional(&db)
+                        .await?
+                        .as_deref(),
                         sqlx::query_scalar::<_, String>(
                             "SELECT value FROM settings WHERE key = 'acp_perm_timeout_min'",
                         )
@@ -1171,14 +1178,14 @@ fn permission_timeout_mode_from_setting(
     setting.and_then(acp::reaper::PermissionTimeoutMode::from_str_opt).unwrap_or_default()
 }
 
-/// 解析 `settings` 表中权限请求超时时长（分钟→秒）。记录缺失或非数字（解析
-/// 失败）时回退到 reaper 默认 1800 秒，保证 DB 无该 key 时行为与硬编码常量
-/// 时代完全一致。抽成纯函数便于单测。
-fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
-    match setting_min.and_then(|v| v.trim().parse::<u64>().ok()) {
-        Some(min) => min.saturating_mul(60),
-        None => acp::reaper::REQUIRES_ACTION_RECYCLE_SECS,
-    }
+/// 解析 `settings` 表中权限请求超时时长（秒）。新 key `acp_perm_timeout_secs`
+/// 优先；缺失/非档位值时回退 2026-10-01 前的分钟制 key `acp_perm_timeout_min`；
+/// 都拿不到才回退默认 1800 秒，保证 DB 无该 key 时行为与硬编码常量时代完全一致。
+/// 抽成纯函数便于单测（档位规则本身见 `acp::reaper::is_valid_perm_timeout_secs`）。
+fn permission_timeout_secs_from_settings(secs: Option<&str>, legacy_min: Option<&str>) -> u64 {
+    acp::reaper::perm_timeout_secs_from_setting(secs)
+        .or_else(|| acp::reaper::perm_timeout_secs_from_legacy_min(legacy_min))
+        .unwrap_or(acp::reaper::DEFAULT_PERM_TIMEOUT_SECS)
 }
 
 /// 构造 CORS 层：默认仅同源 + 显式 origin 白名单（S3）。
@@ -1273,7 +1280,7 @@ mod tests {
     use super::{
         acp_idle_recycle_secs_from_setting, build_cors_layer, default_db_stem, enforce_listen_auth,
         fs_frontend_source, instance_id, instance_suffix, jwt_secret_file_name,
-        permission_timeout_mode_from_setting, permission_timeout_secs_from_setting,
+        permission_timeout_mode_from_setting, permission_timeout_secs_from_settings,
         rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
@@ -1376,13 +1383,23 @@ mod tests {
     }
 
     #[test]
-    fn permission_timeout_secs_from_setting_converts_and_falls_back() {
-        assert_eq!(permission_timeout_secs_from_setting(None), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("abc")), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("")), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("1")), 60);
-        assert_eq!(permission_timeout_secs_from_setting(Some("30")), 1800);
-        assert_eq!(permission_timeout_secs_from_setting(Some(" 45 ")), 2700);
+    fn permission_timeout_secs_from_settings_falls_back_to_legacy_minutes_then_default() {
+        // 新 key 生效（「总是」档 = 0 也是合法档位，不是「缺失」）。
+        assert_eq!(permission_timeout_secs_from_settings(Some("0"), Some("45")), 0);
+        assert_eq!(permission_timeout_secs_from_settings(Some(" 30 "), Some("45")), 30);
+        // 新 key 缺失 → 回退分钟制旧记录（存量用户改过的超时不丢）。
+        assert_eq!(permission_timeout_secs_from_settings(None, Some("45")), 2700);
+        assert_eq!(permission_timeout_secs_from_settings(Some("abc"), Some(" 1 ")), 60);
+        // 新 key 是非档位值（45 秒 / 越上限）→ 同样走兼容回退。
+        assert_eq!(permission_timeout_secs_from_settings(Some("45"), Some("30")), 1800);
+        assert_eq!(permission_timeout_secs_from_settings(Some("3630"), None), 1800);
+        // 两边都拿不到 → 默认 30 分钟（= 硬编码时代行为）。
+        for (secs, min) in [(None, None), (Some(""), None), (None, Some("abc"))] {
+            assert_eq!(
+                permission_timeout_secs_from_settings(secs, min),
+                REQUIRES_ACTION_RECYCLE_SECS
+            );
+        }
     }
 
     #[test]

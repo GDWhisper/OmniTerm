@@ -78,7 +78,10 @@ export interface SystemBlockDetail {
   /** 本轮结束的协议原值（refusal / cancelled / end_turn / `_`前缀自定义值…），
    *  未知值原样透出（AGENTS.md §8）——`system.turnFailed.*` 文案经 {{reason}} 插值引用。 */
   stop_reason?: string
-  /** 超时时长（分钟）。 */
+  /** 超时时长（秒；2026-10-01 起的后端载荷，0 = 「总是」档）。 */
+  seconds?: number
+  /** 超时时长（分钟）。只存在于 2026-10-01 之前写入的历史行，渲染时按
+   *  minutes × 60 回退成秒（见 `utils/permTimeout.ts`）；新写入不再产出此字段。 */
   minutes?: number
   /** 触发审批的工具名/标题。 */
   tool?: string

@@ -330,13 +330,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ minutes }),
     }),
-  /** 权限请求超时配置：模式（wait/auto/abort）+ 超时时长（分钟）。 */
+  /** 权限请求超时配置：模式（wait/auto/abort）+ 超时时长（秒）。
+   *  `seconds = 0` 是「总是」档（面板滑块最左档），含义随模式而变，见
+   *  `stores/appStore.ts` 的 `PERM_TIMEOUT_NEVER_SECS`。 */
   getPermissionTimeout: () =>
-    request<{ mode: PermissionTimeoutMode; minutes: number }>('/settings/permission-timeout'),
-  setPermissionTimeout: (mode: PermissionTimeoutMode, minutes: number) =>
-    request<{ mode: PermissionTimeoutMode; minutes: number }>('/settings/permission-timeout', {
+    request<{ mode: PermissionTimeoutMode; seconds: number }>('/settings/permission-timeout'),
+  setPermissionTimeout: (mode: PermissionTimeoutMode, seconds: number) =>
+    request<{ mode: PermissionTimeoutMode; seconds: number }>('/settings/permission-timeout', {
       method: 'PUT',
-      body: JSON.stringify({ mode, minutes }),
+      body: JSON.stringify({ mode, seconds }),
     }),
   /** 安全审计日志（只读）：最近若干条敏感操作留痕（文件写/删/上传、git push、
    *  agent 配置变更、代理端口首次被访问）。后端对 limit 收敛（缺省 50、硬顶 200）。

@@ -67,7 +67,7 @@ describe('Settings sessions disconnect sliders', () => {
       blurDisconnectMin: 10,
       idleDisconnectMin: 15,
       permTimeoutMode: 'abort',
-      permTimeoutMin: 30,
+      permTimeoutSecs: 1800,
     })
     container = document.createElement('div')
     document.body.appendChild(container)
@@ -83,15 +83,17 @@ describe('Settings sessions disconnect sliders', () => {
     localStorage.clear()
   })
 
-  it('renders four sliders in sessions with defaults 30 / 5 / 10 / 15', () => {
+  it('renders four sliders in sessions with defaults 30min / 5 / 10 / 15', () => {
     // 顺序：权限请求超时（PermissionTimeoutSection 在前）→ ACP 空闲回收 → 失焦 → 空闲。
+    // 权限超时走秒制档位（默认 1800s = 30 分钟）。
     const r = ranges(container)
     expect(r.length).toBe(4)
-    expect(r.map((x) => x.value)).toEqual(['30', '5', '10', '15'])
+    expect(r.map((x) => x.value)).toEqual(['1800', '5', '10', '15'])
   })
 
-  it('bounds every slider to 1..60 with step 1', () => {
-    for (const input of ranges(container)) {
+  it('bounds the minute sliders to 1..60 with step 1', () => {
+    // 权限超时滑块另有秒制档位（见下方 describe），此处只管三个分钟滑块。
+    for (const input of ranges(container).slice(1)) {
       expect(input.min).toBe('1')
       expect(input.max).toBe('60')
       expect(input.step).toBe('1')
@@ -156,11 +158,15 @@ const PERM_TIMEOUT_KEYS = [
   'settings.permTimeoutAutoWarning',
   'settings.permTimeoutAbort',
   'settings.permTimeoutAbortHint',
-  'settings.permTimeoutMinutes',
-  'settings.permTimeoutMinutesHint',
-  'settings.permTimeoutMinutesWarning',
+  'settings.permTimeoutDuration',
+  'settings.permTimeoutDurationHint',
+  'settings.permTimeoutDurationWarning',
+  'settings.permTimeoutAlways',
   'system.permTimeout.abort',
   'system.permTimeout.auto',
+  'system.permTimeout.autoAlways',
+  'system.permTimeout.durationMin',
+  'system.permTimeout.durationSec',
   'system.permTimeout.requestTool',
   'system.permTimeout.contentOmitted',
   'system.permTimeout.options',
@@ -179,7 +185,7 @@ describe('Settings permission timeout', () => {
 
   beforeEach(() => {
     localStorage.clear()
-    useAppStore.setState({ permTimeoutMode: 'abort', permTimeoutMin: 30 })
+    useAppStore.setState({ permTimeoutMode: 'abort', permTimeoutSecs: 1800 })
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -208,14 +214,14 @@ describe('Settings permission timeout', () => {
   })
 
   it('switching mode persists via api.setPermissionTimeout and updates the store', async () => {
-    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'auto', minutes: 30 })
+    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'auto', seconds: 1800 })
     const btn = modeButton(['自动推进', 'Auto-Advance'])!
     act(() => {
       btn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
     expect(useAppStore.getState().permTimeoutMode).toBe('auto')
     await vi.waitFor(() => {
-      expect(spy).toHaveBeenCalledWith('auto', 30)
+      expect(spy).toHaveBeenCalledWith('auto', 1800)
     })
     // 选中态按钮样式与未选中不同（active 用 --accent 边框）。
     expect(btn.style.borderColor).toBe('var(--accent)')
@@ -238,25 +244,97 @@ describe('Settings permission timeout', () => {
     expect(container.textContent).toContain(warning)
   })
 
-  it('moving the slider persists mode and minutes together', async () => {
-    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'auto', minutes: 45 })
+  it('moving the slider persists mode and seconds together', async () => {
+    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'auto', seconds: 2700 })
     act(() => {
       useAppStore.setState({ permTimeoutMode: 'auto' })
     })
-    setRangeValue(ranges(container)[0], 45)
-    expect(useAppStore.getState().permTimeoutMin).toBe(45)
+    setRangeValue(ranges(container)[0], 2700)
+    expect(useAppStore.getState().permTimeoutSecs).toBe(2700)
     await vi.waitFor(() => {
-      expect(spy).toHaveBeenCalledWith('auto', 45)
+      expect(spy).toHaveBeenCalledWith('auto', 2700)
     })
   })
 
   it('warns only above the 30-minute default (default itself stays quiet)', () => {
-    const warning = i18n.t('settings.permTimeoutMinutesWarning')
+    const warning = i18n.t('settings.permTimeoutDurationWarning')
     expect(container.textContent).not.toContain(warning)
     act(() => {
-      useAppStore.setState({ permTimeoutMin: 45 })
+      useAppStore.setState({ permTimeoutSecs: 45 * 60 })
     })
     expect(container.textContent).toContain(warning)
+  })
+
+  // ── 「总是」/ 30 秒两个新增档位（2026-10-01）──
+
+  it('offers the never notch only in auto mode, stepped by 30s', () => {
+    const slider = ranges(container)[0]
+    // abort：30s..1h（没有「总是」——该档只对自动放行有意义）
+    expect(slider.min).toBe('30')
+    expect(slider.max).toBe('3600')
+    expect(slider.step).toBe('30')
+    act(() => {
+      useAppStore.setState({ permTimeoutMode: 'auto' })
+    })
+    // auto：最左档 0 =「总是」
+    expect(ranges(container)[0].min).toBe('0')
+  })
+
+  it('labels the notches 总是 / 30 秒 / 30 分钟', () => {
+    const always = i18n.t('settings.permTimeoutAlways')
+    act(() => {
+      useAppStore.setState({ permTimeoutMode: 'auto', permTimeoutSecs: 0 })
+    })
+    expect(container.textContent).toContain(always)
+    act(() => {
+      useAppStore.setState({ permTimeoutSecs: 30 })
+    })
+    expect(container.textContent).toContain(i18n.t('system.permTimeout.durationSec', { value: 30 }))
+    act(() => {
+      useAppStore.setState({ permTimeoutSecs: 1800 })
+    })
+    expect(container.textContent).toContain(i18n.t('system.permTimeout.durationMin', { value: 30 }))
+  })
+
+  it('persists the always notch as seconds=0 in auto mode', async () => {
+    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'auto', seconds: 0 })
+    act(() => {
+      useAppStore.setState({ permTimeoutMode: 'auto', permTimeoutSecs: 1800 })
+    })
+    setRangeValue(ranges(container)[0], 0)
+    expect(useAppStore.getState().permTimeoutSecs).toBe(0)
+    await vi.waitFor(() => {
+      expect(spy).toHaveBeenCalledWith('auto', 0)
+    })
+  })
+
+  it('snaps the duration back to 30s when leaving auto mode with 总是 selected', () => {
+    const spy = vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'abort', seconds: 30 })
+    act(() => {
+      useAppStore.setState({ permTimeoutMode: 'auto', permTimeoutSecs: 0 })
+    })
+    act(() => {
+      modeButton(['超时中止', 'Abort'])!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    // abort 下滑块下限是 30s：面板不能停在一个拖不到、语义也无效的值上。
+    expect(useAppStore.getState().permTimeoutSecs).toBe(30)
+    expect(spy).toHaveBeenCalledWith('abort', 30)
+  })
+
+  it('keeps the duration across a wait round-trip (wait hides the slider)', () => {
+    vi.spyOn(api, 'setPermissionTimeout').mockResolvedValue({ mode: 'wait', seconds: 30 })
+    act(() => {
+      useAppStore.setState({ permTimeoutMode: 'auto', permTimeoutSecs: 30 })
+    })
+    act(() => {
+      modeButton(['一直等待', 'Wait'])!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(useAppStore.getState().permTimeoutSecs).toBe(30)
+    expect(ranges(container).length).toBe(3)
+    act(() => {
+      modeButton(['自动推进', 'Auto-Advance'])!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    expect(useAppStore.getState().permTimeoutSecs).toBe(30)
   })
 
   it('defines every permission-timeout key in both en and zh', () => {
@@ -266,9 +344,15 @@ describe('Settings permission timeout', () => {
       expect(enMap[k], k).toBeTruthy()
       expect(zhMap[k], k).toBeTruthy()
     }
-    // 两条 system 文案必须带插值变量，否则前端渲染出光板句子。
-    expect(enMap['system.permTimeout.abort']).toContain('{{minutes}}')
+    // 三条 system 文案必须带插值变量，否则前端渲染出光板句子。
+    expect(enMap['system.permTimeout.abort']).toContain('{{duration}}')
     expect(zhMap['system.permTimeout.auto']).toContain('{{selected}}')
+    expect(zhMap['system.permTimeout.autoAlways']).toContain('{{selected}}')
+    // 时长单位文案由 permTimeoutDuration() 选取，两种单位都要有词条。
+    for (const k of ['system.permTimeout.durationMin', 'system.permTimeout.durationSec']) {
+      expect(enMap[k]).toContain('{{value}}')
+      expect(zhMap[k]).toContain('{{value}}')
+    }
   })
 })
 

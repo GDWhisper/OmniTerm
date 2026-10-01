@@ -35,7 +35,7 @@
 
 Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修复已落地：外层 `overflow:hidden` + 显式 `height` 裁切 `borderRadius` 圆弧，内层 `overflowY:auto` 滚动。**
 
-- `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关 / 会话 section（`PermissionTimeoutSection` 权限超时三态模式行 + `SessionsSection` 四个 `DisconnectSlider` 分钟滑块）。改这里动设置项
+- `frontend/src/components/Settings/Settings.tsx` — **纯内容**：theme / language / fontSize / 开关 / 会话 section（`PermissionTimeoutSection` 权限超时三态模式行 + 秒制时长滑块 + `SessionTimeoutSection` 三个分钟 `DisconnectSlider`）。改这里动设置项
 - `frontend/src/components/Settings/AgentSettings.tsx` + `frontend/src/components/Settings/presets.ts` — **agent 预设**：增/改预设只动 `presets.ts`（维护指引见其文件头 JSDoc），`AgentSettings.tsx` 一般不改；同时改两个 translation.json 的 `settings.agents.preset.*` key
 - `frontend/src/components/Settings/SettingsPopup.tsx` — **弹出层骨架**：定位、滚动、关闭逻辑。一般不改；改这里意味着动弹出行为。从 `../constants/popup` import 定位常量
 - `frontend/src/components/constants/popup.ts` — 移动端定位常量（`MOBILE_NAV_HEIGHT`、`SIDEBAR_BOTTOM_BAR_HEIGHT`、`MOBILE_STATUS_BAR_RESERVE`、`GAP`），SettingsPopup 与 TmuxCheatsheetPopup 共享
@@ -43,7 +43,7 @@ Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修�
 - `frontend/src/components/Layout/Layout.tsx` — 触发按钮 `data-toggle="settings"` + Desktop/Mobile 双路径条件渲染 `<SettingsPopup />`
 - `frontend/src/locales/{en,zh}/translation.json` — 改这里：增/删/改 `settings.*` i18n key
 
-**加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。断连/回收类分钟滑块复用 `DisconnectSlider`（值域 1..60、`WARNING_THRESHOLD_MIN=30` 触发内存警告，见 `Settings.tsx` 顶部常量）；若需后端持久化（如 ACP 空闲回收走 `api.setAcpIdleRecycle`）→ `client.ts` 加 API 函数 + 后端 `src/api/settings.rs` 加路由（挂 `require_auth_mw` 保护组）。
+**加一个设置项的标准路径**：`Settings.tsx` 加 section（参考现有 `theme` / `fontSize` / `autoCopySelect` 结构）+ 两个 translation.json 加 key。如需新 store 状态 → `appStore.ts`。断连/回收类分钟滑块复用 `DisconnectSlider`（值域 1..60、`WARNING_THRESHOLD_MIN=30` 触发内存警告，见 `Settings.tsx` 顶部常量）；非分钟粒度的滑块（如权限超时的 30 秒步进 + 「总是」档）用同一组件的 `min`/`max`/`step`/`renderValue` 覆盖，并把单位口径收进 `utils/` 里的纯函数——时长文案目前真源是 `utils/permTimeout.ts`（面板与聊天告知消息共用，改档位只改它）；若需后端持久化（如 ACP 空闲回收走 `api.setAcpIdleRecycle`）→ `client.ts` 加 API 函数 + 后端 `src/api/settings.rs` 加路由（挂 `require_auth_mw` 保护组）。
 
 **默认终端引擎（`DefaultEngineSection`）是跨文件设置，改它先看真源**：值定义/解析/回落全在 `frontend/src/utils/terminalEngine.ts`（无 React）+ `frontend/src/hooks/useTerminalEngine.ts`（store × 宿主可用性），消费方为 `Settings.tsx`、`Sidebar/CreateSessionModal.tsx`、`FileManager/FileManager.tsx`、`FileManager/OpenTerminalDialog.tsx`、`FileManager/OpenTerminalConfirmDialog.tsx` 五处。新增引擎选项只改 `TERMINAL_ENGINES`；**切勿在组件里再写一份 `multiplexerAvailable` 判定或硬编码 `'pty'`**（历史上「在此打开终端」写死 pty 就是脱离默认值的成因），引擎展示名统一走 `terminalEngineLabel`，视觉规格见 `docs/visual-design/ui-style-guide.md` §8。
 

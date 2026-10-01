@@ -100,6 +100,51 @@ describe('SystemBlockView permission-timeout notice', () => {
     expect(text).toContain('Options: Allow Once / Always Allow / Reject')
   })
 
+  it('renders the seconds-based payload and the legacy minutes payload alike', () => {
+    // 2026-10-01 起后端 detail 走秒制（30 秒档不能被折成「0 分钟」）。
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.permTimeout.abort',
+            detail: { seconds: 30, tool: 'Bash' },
+          },
+        ],
+      }),
+    )
+    expect(container.textContent).toContain('权限请求 30 秒未获响应')
+    // 历史行只有 minutes：按 ×60 回退后仍显示分钟。
+    act(() => root.unmount())
+    root = createRoot(container)
+    render(
+      systemMessage({
+        blocks: [{ type: 'system', label: 'system.permTimeout.abort', detail: { minutes: 30 } }],
+      }),
+    )
+    expect(container.textContent).toContain('权限请求 30 分钟未获响应')
+  })
+
+  it('drops the waiting clause for the 总是 notch in auto mode', async () => {
+    await i18n.changeLanguage('en')
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.permTimeout.auto',
+            detail: { seconds: 0, tool: 'Edit', selected: 'Always Allow' },
+          },
+        ],
+      }),
+    )
+    const text = container.textContent ?? ''
+    // 「总是」= 未等待应答，句式里不能出现时长，也不能出现「0 秒」。
+    expect(text).toContain('no waiting')
+    expect(text).toContain('Always Allow')
+    expect(text).not.toContain('0s')
+  })
+
   it('falls back to the raw label for legacy rows without detail', () => {
     render(systemMessage({ blocks: [{ type: 'system', label: '权限请求 30 分钟未获响应，系统已自动取消该请求并回收会话（agent 已终止）。可重新打开会话继续。' }] }))
     const text = container.textContent ?? ''

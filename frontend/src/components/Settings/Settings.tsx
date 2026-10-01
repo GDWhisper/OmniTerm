@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
-import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN } from '../../stores/appStore'
+import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN, PERM_TIMEOUT_NEVER_SECS, PERM_TIMEOUT_STEP_SECS, MAX_PERM_TIMEOUT_SECS, clampPermTimeoutSecs } from '../../stores/appStore'
 import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
+import { permTimeoutDuration } from '../../utils/permTimeout'
 import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
 import type { PermissionTimeoutMode } from '../../api/client'
@@ -78,24 +79,36 @@ interface DisconnectSliderProps {
   /** 警告触发线（严格大于 `warnAboveMin` 才显示）。缺省回退
    *  `WARNING_THRESHOLD_MIN`（>= 即警告，适配默认值远低于 30 的滑块）。 */
   warnAboveMin?: number
+  /** 档位下限 / 上限 / 步进，缺省 1..60 步进 1（分钟制滑块）。权限超时滑块走
+   *  秒制档位（30 秒粒度、上限 1 小时、最左档 `min=0` 即「总是」）。 */
+  min?: number
+  max?: number
+  step?: number
+  /** 大号数值的展示；缺省 `值 + settings.minutesUnit`。权限超时滑块的「秒」档与
+   *  「总是」档文案各不相同，传入自定义渲染（口径与告知消息共用 `utils/permTimeout.ts`）。 */
+  renderValue?: (value: number) => React.ReactNode
 }
 
-function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCommit, warnAboveMin }: DisconnectSliderProps) {
+function DisconnectSlider({ titleKey, hintKey, warningKey, value, onChange, onCommit, warnAboveMin, min = MIN_DISCONNECT_MIN, max = MAX_DISCONNECT_MIN, step = 1, renderValue }: DisconnectSliderProps) {
   const { t } = useTranslation()
   const warn =
     warnAboveMin === undefined ? value >= WARNING_THRESHOLD_MIN : value > warnAboveMin
   return (
     <section className="space-y-2">
       <SectionTitle>{t(titleKey)}</SectionTitle>
-      <div className="flex items-baseline gap-1">
-        <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>{value}</span>
-        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('settings.minutesUnit')}</span>
-      </div>
+      {renderValue ? (
+        renderValue(value)
+      ) : (
+        <div className="flex items-baseline gap-1">
+          <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>{value}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('settings.minutesUnit')}</span>
+        </div>
+      )}
       <input
         type="range"
-        min={MIN_DISCONNECT_MIN}
-        max={MAX_DISCONNECT_MIN}
-        step={1}
+        min={min}
+        max={max}
+        step={step}
         value={value}
         onChange={(e) => {
           const n = Number(e.target.value)
@@ -699,17 +712,29 @@ function SessionTimeoutSection() {
   )
 }
 
+/** 权限超时时长档位文案：「总是」/「30 秒」/「30 分钟」——口径与聊天里的超时
+ *  告知消息共用 `utils/permTimeout.ts`（整分钟报分钟，其余报秒），面板与聊天
+ *  不会各说各话。 */
+function permTimeoutValueLabel(secs: number, t: (key: string, opts?: Record<string, unknown>) => string) {
+  const d = permTimeoutDuration(secs)
+  return d ? t(d.key, { value: d.value }) : t('settings.permTimeoutAlways')
+}
+
 function PermissionTimeoutSection() {
   const { t } = useTranslation()
   const mode = useAppStore((s) => s.permTimeoutMode)
-  const minutes = useAppStore((s) => s.permTimeoutMin)
+  const secs = useAppStore((s) => s.permTimeoutSecs)
   const active = PERM_TIMEOUT_MODES.find((m) => m.value === mode) ?? PERM_TIMEOUT_MODES[2]
 
+  // 「总是」档只对自动推进有意义（有请求即自动放行，不等待）：auto 模式露出最左
+  // 档，abort/wait 从 30 秒起——从 auto（0）切到 abort 时把越界值夹回最近的可用档。
+  const minSecs = mode === 'auto' ? PERM_TIMEOUT_NEVER_SECS : PERM_TIMEOUT_STEP_SECS
+
   // 模式与时长同一设置：任一侧改动都整体 PUT（后端白名单校验 + 热更新）。
-  const commit = (nextMode: PermissionTimeoutMode, nextMin: number) => {
+  const commit = (nextMode: PermissionTimeoutMode, nextSecs: number) => {
     useAppStore.getState().setPermTimeoutMode(nextMode)
-    useAppStore.getState().setPermTimeoutMin(nextMin)
-    api.setPermissionTimeout(nextMode, nextMin).catch(() => {})
+    useAppStore.getState().setPermTimeoutSecs(nextSecs)
+    api.setPermissionTimeout(nextMode, nextSecs).catch(() => {})
   }
 
   return (
@@ -723,7 +748,12 @@ function PermissionTimeoutSection() {
               <button
                 key={m.value}
                 type="button"
-                onClick={() => commit(m.value, minutes)}
+                onClick={() => {
+                  // 「总是」档只在 auto 下有语义：从 auto 切走时把时长夹回最近的可用档
+                  // （滑块下限同步抬到 30 秒，避免面板显示一个拖不到的值）。
+                  const floor = m.value === 'auto' ? PERM_TIMEOUT_NEVER_SECS : PERM_TIMEOUT_STEP_SECS
+                  commit(m.value, clampPermTimeoutSecs(Math.max(secs, floor)))
+                }}
                 className="flex-1 flex items-center justify-center"
                 style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
                 onMouseEnter={btnHover}
@@ -743,14 +773,22 @@ function PermissionTimeoutSection() {
       </section>
       {mode !== 'wait' && (
         <DisconnectSlider
-          titleKey="settings.permTimeoutMinutes"
-          hintKey="settings.permTimeoutMinutesHint"
-          warningKey="settings.permTimeoutMinutesWarning"
-          value={minutes}
-          onChange={(n) => useAppStore.getState().setPermTimeoutMin(n)}
+          titleKey="settings.permTimeoutDuration"
+          hintKey="settings.permTimeoutDurationHint"
+          warningKey="settings.permTimeoutDurationWarning"
+          value={secs}
+          min={minSecs}
+          max={MAX_PERM_TIMEOUT_SECS}
+          step={PERM_TIMEOUT_STEP_SECS}
+          renderValue={(v) => (
+            <span style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>
+              {permTimeoutValueLabel(v, t)}
+            </span>
+          )}
+          onChange={(n) => useAppStore.getState().setPermTimeoutSecs(n)}
           onCommit={(n) => commit(mode, n)}
           // 默认 30 分钟即历史行为，只有调得比默认更长才提醒内存驻留。
-          warnAboveMin={WARNING_THRESHOLD_MIN}
+          warnAboveMin={WARNING_THRESHOLD_MIN * 60}
         />
       )}
     </>

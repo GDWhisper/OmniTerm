@@ -86,3 +86,17 @@ Phase 3 测试与文档：Rust 21 项新单测（选项优先级/摘要/配置/�
 - `docs/workflows/agent-edit-manual.md` ✅（Settings entry：三滑块 → 四滑块 + 模式行）
 - `docs/reference/requirements.md` ✅（自动断连/回收超时可调条目标注权限超时）
 - `AGENTS.md` 文档索引 ✅（本文件登记行）
+
+## 勘误：时长改秒制 + 新增「总是」/30 秒档（2026-10-01）
+
+**D3（时长共用，分钟制 1..60）被用户要求翻盘**：面板滑块要「总是」和「30 秒」两个档位。落地取舍：
+
+- **单位换秒**（settings `acp_perm_timeout_min` → `acp_perm_timeout_secs`，API 字段 `{mode, minutes}` → `{mode, seconds}`）。理由：30 秒在分钟制里无法表达；reaper 本来就按秒判定（`AtomicU64`），换算只发生在边界一处。存量 DB 兼容——GET / 启动解析在新键缺失时回退读旧分钟键，PUT 时删除旧键；旧键不再产出。
+- **档位表**（`acp::reaper::is_valid_perm_timeout_secs` 为单一真源，前后端同值）：`0` 或 ≤3600 的 30 秒倍数。滑块全程 30 秒一档（`PERM_TIMEOUT_STEP_SECS=30`），未做「只有 30 秒特殊、其余仍按分钟」的刻度映射——那会让 30 秒与 1 分钟挤在左端几乎无法分辨。
+- **`0` = 「总是」，语义随模式而变**（用户拍板：「只在自动推进模式下生效，总是——指自动放行，不等待」）：
+  - `auto`：视为立刻到点，有未决请求即 `auto_advance_permissions`（不等用户）；
+  - `abort` / `wait`：**没有触发点 = 永不超时**，且与 `wait` 同样跳过 prompt-stale 定稿——否则「等审批」的回合会被 10 分钟 prompt-stale 误判卡死并广播结束（与 D1 拒绝在 wait 下保留 prompt-stale 是同一个竞态）。
+  - 面板只在 auto 模式把滑块下限放到 0，其余模式从 30 秒起；从 auto（0）切走时按时长下限夹回 30 秒，避免停在拖不到且语义无效的值上。用户要「不中止」仍用 `wait` 模式。
+- **告知载荷**：`detail.minutes` → `detail.seconds`；文案口径统一为「整分钟报分钟、其余报秒」（与后端 `format_perm_duration` 同规则），30 秒档不再显示成「0 分钟」。历史行只有 `minutes`，前端按 ×60 回退（`utils/permTimeout.ts`，单测覆盖）。auto + 「总是」档另给一句无等待文案 `system.permTimeout.autoAlways`（沿用「N 秒未获响应」会自相矛盾）。
+- **翻盘条件**：若将来要把「总是」扩展为 abort 模式的「永不中止」（等价 wait），则面板下限应对所有模式放开到 0，本条「只在 auto 露出」的前端约束即可撤掉——后端语义已经支持，无需再改 reaper。
+
