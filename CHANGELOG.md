@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-01 02:40) `[backend]` ACP Rust SDK 升级 `agent-client-protocol` 1.3.0 → **2.2.0**（连带 schema 1.4.0 → 1.9.1；ACP **wire 协议仍为 v1**，未启用 unstable 的 v2，现存 agent 全部照常协商 `protocolVersion:1`）。迁移**零源码改动**（升级前评估预计 ≤20 行，实际 0：2.0 明确保持稳定 v1 表面，仅 Rust SDK 侧 API 破坏性变更且均未被本仓使用）。三项行为差异逐项取证并留档（计划 D3/D4/D5）：① 2.0 新增的「响应回调强制有序派发」只作用于 ordered response callbacks，本仓全部请求走 `block_task().await`，且通知派发在 1.3/2.2 均为入站循环内 inline await（串行语义两版一致）→ 不适用；② `from_args` 的 env 重复键由 `Vec` 改 `BTreeMap`，但最终子进程环境两版一致（同名后键覆盖），以端到端测试 pin；③ `SentRequest::map` 为纯增，未使用。补测 backlog R07/R08（fake agent 用例 6 → 16）：prompt 正常链路（流式通知带 seq + 累积器正文折叠）、`session/cancel` 到达 agent 且 prompt 以 cancelled 返回、权限请求 resolve 与 cancel 对未决审批的 `Cancelled` 应答（规范 MUST）、shutdown 后 `is_alive` 即时翻转与发送快速失败、disconnect 杀进程、`terminal/*` 四连（create→wait_for_exit→output→release）与 kill 路径、重复 env 键语义、`AcpSupervisor` 生命周期与 `shutdown_all`；fake agent 公共设施抽到 `src/acp/test_support.rs`（`Cargo.toml`、`Cargo.lock`、`src/acp/test_support.rs`、`src/acp/fake_agent_tests.rs`、`src/acp/supervisor.rs`）
+
 ### Fixed
 
 - (2026-09-29 16:25) `[backend]` `[infra]` 修复 release 二进制在含 `frontend/dist` 的目录启动时静默改用文件系统前端、导致「一键更新并重启后页面版本号仍是旧版」：此前文件系统前端来源默认取**相对 cwd** 的 `frontend/dist` 且只看目录是否存在——正式版在源码目录启动即命中，服务的是本地旧 dist（页面版本号/内容与二进制不符；版本号是构建期写死进 JS bundle 的常量，而「重启」是 exec 自重启不改 cwd，强刷拉到的仍是同一份旧文件，故均无效）。现文件系统前端仅在**显式设置 `FRONTEND_DIR`**（Docker 镜像以 ENV 注入；release 亦可自定义前端根）或 **debug 构建**（dev.sh 的 cwd=worktree + `pnpm build` 产物）时启用，目录不存在时回退内嵌；release 二进制一律使用内嵌前端（`src/main.rs` 的 `fs_frontend_source`）

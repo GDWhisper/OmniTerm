@@ -554,8 +554,8 @@ enum StopEndClass {
 /// 加 `_` 兜底臂是为 crate 升级到带 `Other(String)` 的 schema 预留（AGENTS.md §8：
 /// 不得把单一实现的行为当作约定的全部事实）。
 ///
-/// **覆盖面说明（诚实记录，勿伪造测试）**：截至 agent-client-protocol-schema 1.4.0
-/// （本仓 `Cargo.toml` 锁定版本），`StopReason` 只有五个单位变体，**`_` 兜底臂
+/// **覆盖面说明（诚实记录，勿伪造测试）**：截至 agent-client-protocol-schema 1.9.1
+/// （2026-10-01 SDK 升级后本仓锁定版本，SDK 2.2.0），`StopReason` 仍只有五个单位变体，**`_` 兜底臂
 /// 今天不可达**——unknown/`_` 前缀值在 JSON 反序列化阶段即失败，直接走
 /// `dispatch_prompt` 的 `Err` 分支（`TurnEndEvent::Error`），到不了本函数。
 /// 故本仓的单测只能覆盖五个已存在变体；兜底臂的价值在于未来 crate 升级时
@@ -605,7 +605,7 @@ const SYSTEM_LABEL_TURN_FAILED_CANCELLED: &str = "system.turnFailed.cancelled";
 /// system 消息的 i18n key（label 列）：其他非正常原因（含未来未知值）。
 /// 文案经 `{{reason}}` 插值带出协议原文，未知值不吞（AGENTS.md §8）。
 ///
-/// **不可达直到 crate 升级**：当前锁定的 agent-client-protocol-schema 1.4.0 里 v1
+/// **不可达直到 crate 升级**：当前锁定的 agent-client-protocol-schema 1.9.1 里 v1
 /// `StopReason` 是闭枚举（5 个单位变体、无 `Other`），未知值在反序列化阶段就失败并
 /// 走 `TurnEndEvent::Error`，到不了这里。升级到带 `Other(String)` 的 schema 后：
 /// ① 先补一条 `(Abnormal, Other)` 的用例（现有

@@ -43,7 +43,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 clap = { version = "4", features = ["derive", "env"] }
 rust-embed = "8"
 which = "7"
-agent-client-protocol = "1.3"
+agent-client-protocol = "2"
 regex = "1"
 toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

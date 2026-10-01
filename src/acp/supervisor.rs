@@ -73,3 +73,90 @@ impl AcpSupervisor {
         }
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::acp::agent_proc::spawn_test_lock_async;
+    use crate::acp::test_support::{
+        KILL_TIMEOUT, agent_for, proc_dead, proc_reaped, spawn_connect, unique_dir, wait_until,
+        write_fake_agent,
+    };
+
+    /// 注册/查询/快照/释放全链路 + 进程存活事件广播（前端指示灯的事件驱动源）。
+    #[tokio::test]
+    async fn insert_get_snapshot_dispose_broadcasts_lifecycle_events() {
+        let _guard = spawn_test_lock_async().await;
+        let dir = unique_dir("sup-lifecycle");
+        let workspace = dir.join("ws");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let script = write_fake_agent(&dir);
+
+        let client = Arc::new(spawn_connect(agent_for(&script, "live", &dir), workspace).await);
+        let sup = AcpSupervisor::default();
+        let mut events = sup.process_event_subscribe();
+
+        sup.insert("s1".to_string(), client.clone()).await;
+        let got = sup.get("s1").await.expect("insert 后 get 应命中");
+        assert!(Arc::ptr_eq(&got, &client), "get 应返回同一 client 实例");
+        let snap = sup.snapshot().await;
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].0, "s1");
+
+        let ev = events.try_recv().expect("insert 应广播 alive=true 事件");
+        assert_eq!(ev.session_id, "s1");
+        assert!(ev.alive);
+
+        let removed = sup.dispose("s1").await;
+        assert!(removed.is_some(), "dispose 应返回被移除的 client");
+        assert!(sup.get("s1").await.is_none(), "dispose 后 get 应为 None");
+        assert!(sup.snapshot().await.is_empty(), "dispose 后快照应为空");
+
+        let ev = events.try_recv().expect("dispose 应广播 alive=false 事件");
+        assert_eq!(ev.session_id, "s1");
+        assert!(!ev.alive);
+
+        // 释放不存在的项不得广播（否则前端会收到幻觉会话的灯灭事件）。
+        assert!(sup.dispose("s1").await.is_none());
+        assert!(events.try_recv().is_err(), "dispose 未命中不应广播事件");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// shutdown_all：排空注册表并杀掉全部 agent 进程（后端重启/手动重启路径）。
+    #[tokio::test]
+    async fn shutdown_all_drains_clients_and_kills_agents() {
+        let _guard = spawn_test_lock_async().await;
+        let dir = unique_dir("sup-shutdown");
+        let workspace = dir.join("ws");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let script = write_fake_agent(&dir);
+
+        let sup = AcpSupervisor::default();
+        let mut pids = Vec::new();
+        for id in ["a", "b"] {
+            let client =
+                Arc::new(spawn_connect(agent_for(&script, "live", &dir), workspace.clone()).await);
+            pids.push(client.agent_pid().expect("D1：live 模式必须捕获 pid"));
+            sup.insert(id.to_string(), client).await;
+        }
+        assert_eq!(sup.snapshot().await.len(), 2);
+
+        sup.shutdown_all().await;
+
+        assert!(sup.snapshot().await.is_empty(), "shutdown_all 后注册表应排空");
+        for pid in pids {
+            assert!(
+                wait_until(|| proc_dead(pid), KILL_TIMEOUT).await,
+                "shutdown_all 后 pid {pid} 未在 {KILL_TIMEOUT:?} 内死亡"
+            );
+            assert!(
+                wait_until(|| proc_reaped(pid), crate::acp::test_support::REAP_TIMEOUT).await,
+                "shutdown_all 后 pid {pid} 未被回收（僵尸残留）"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
