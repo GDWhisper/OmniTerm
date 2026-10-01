@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, storedRawRowToSyncPayload, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
@@ -19,6 +19,7 @@ import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
+import { postSyncPayload } from '../../utils/syncMessages'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -249,6 +250,71 @@ export function ChatView() {
       cancelled = true
     }
   }, [activeSessionId])
+
+  // 聚焦/可见性恢复补拉：本页面生命周期内该会话 WS 断过（`needsCatchUp`）时，
+  // 拉一次 DB 最新页合并进 store。根因：后端广播走 tokio broadcast、无补发语义，
+  // 断连窗口内落库的内容不会随重连回到前端；而 hydrate 每页面生命周期只跑一次、
+  // `load_session` 只走手动「恢复会话」——旧行为下用户要等手动恢复或刷新页面才
+  // 看到最新消息。合并规则（跳过 streaming 行 / 同 dbId DB 权威 / user echo
+  // 去重 / 前缀对账）见 chatStore.mergeLatestMessages 与
+  // docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D3。
+  //
+  // 触发点两个，共用 catchUpIfNeeded：挂载（切会话重挂载——socket 可能在别的
+  // 会话展示期间断过，标记仍在）与 visibilitychange→visible / window focus
+  // （后者覆盖双屏「标签可见但焦点在别窗」，与 useTerminal 可见性口径一致）。
+  // 守卫：hydrated（不抢跑首屏 hydrate 与 preHydrateBuffer）、!replaying（手动
+  // 重放自带全量历史，合并与其打架）、in-flight 去重。失败保留标记，下次重试。
+  const catchUpInFlightRef = useRef(false)
+  const catchUpIfNeeded = useCallback(async () => {
+    const sid = activeSessionId
+    if (!sid || catchUpInFlightRef.current) return
+    const st = useChatStore.getState().states[sid]
+    if (!st?.hydrated || st.replaying || !st.needsCatchUp) return
+    catchUpInFlightRef.current = true
+    try {
+      const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
+      // 不 ok 也保留标记：下次聚焦/挂载重试，不打扰用户。
+      if (!r.ok) return
+      const data = await r.json().catch(() => null)
+      const merged = toChatMessages(
+        Array.isArray(data?.messages) ? (data.messages as StoredMessage[]) : [],
+      )
+      useChatStore.getState().mergeLatestMessages(sid, merged)
+      // RAW 残留收敛（2026-08-18 方案 B 同源）：turn 在断连期间结束 ⇒ prompt_done
+      // 无人接收 ⇒ 该行停在原始帧态（体积大两个数量级）。合并进来的完整行若
+      // rawStored，带 dbId 回写——后端 id 路径只 UPDATE blocks 不 INSERT，不产
+      // 幽灵行。失败容错与 hook 内同路径一致（.catch 静默，下次 hydrate 仍收敛）。
+      postSyncPayload(
+        sid,
+        merged.flatMap((m) => {
+          const entry = storedRawRowToSyncPayload(m)
+          return entry ? [entry] : []
+        }),
+      )
+      useChatStore.getState().setNeedsCatchUp(sid, false)
+    } catch {
+      // 网络异常：保留标记。
+    } finally {
+      catchUpInFlightRef.current = false
+    }
+  }, [activeSessionId])
+
+  useEffect(() => {
+    void catchUpIfNeeded()
+  }, [catchUpIfNeeded])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) void catchUpIfNeeded()
+    }
+    const onFocus = () => void catchUpIfNeeded()
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [catchUpIfNeeded])
 
   // 上拉加载更早的一页历史。首屏只取最近一页（后端按条数 + 字节双预算切页），
   // 用户滚到顶部才继续向前取——绝大多数切换只关心最新那批记录。
