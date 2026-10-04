@@ -57,6 +57,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-04 17:43) `[frontend]` ACP 流式读数：工具执行期间的静默时间不再计入 tps 分母，修复「工具跑多久，估算速度就摊多薄」——此前工具并集内只封存「首次输出之前」的段，agent 把过渡文本/思考与工具 `in_progress` 同批下发（或工具间过渡语晚到）时，之后的静默执行段（可达数十秒）全部留在解码分母里，读数虚低。现并集内只有「输出活动窗口」（并集内首次输出 → 末次输出）归生成，两读同口径：末次输出之后工具计时恢复走（模型在等工具）、tps 分母冻结不随工具执行下跌，工具结束、模型再次吐字后分母恢复增长；模型连续思考/流式输出期间工具表照旧停表、输出间隔被认领为生成（中途修正）。代价是工具并集内单次输出后即静默的窗口无可测生成跨度，读数显示 `null` 而非虚报（`frontend/src/utils/turnClock.ts`，口径修订与边界见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E19）
 - (2026-10-01 07:45) `[frontend]` ACP 会话聚焦回来后不再停在旧消息：agent 活跃中长期失焦（切标签/切窗口）后，断连窗口内后端已落库的消息不会随 WS 重连回到前端（广播帧无补发，hydrate 每页面生命周期只跑一次、`session/load` 只走手动「恢复会话」），用户回来看到旧对话，须手动恢复或刷新页面才最新。现「发生过断连」的会话在聚焦/可见性恢复（或切回该会话）时自动补拉 `GET /messages` 最新一页并按 dbId 合并（DB 权威；跳过进行中 turn 的行、user 回显去重、被中断的半截 turn 按精确前缀补齐），失败保留标记下次重试。合并路径只读消息列表，不触发任何全量写回。设计与取舍见 `docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md`（`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-09-29 16:25) `[backend]` `[infra]` 修复 release 二进制在含 `frontend/dist` 的目录启动时静默改用文件系统前端、导致「一键更新并重启后页面版本号仍是旧版」：此前文件系统前端来源默认取**相对 cwd** 的 `frontend/dist` 且只看目录是否存在——正式版在源码目录启动即命中，服务的是本地旧 dist（页面版本号/内容与二进制不符；版本号是构建期写死进 JS bundle 的常量，而「重启」是 exec 自重启不改 cwd，强刷拉到的仍是同一份旧文件，故均无效）。现文件系统前端仅在**显式设置 `FRONTEND_DIR`**（Docker 镜像以 ENV 注入；release 亦可自定义前端根）或 **debug 构建**（dev.sh 的 cwd=worktree + `pnpm build` 产物）时启用，目录不存在时回退内嵌；release 二进制一律使用内嵌前端（`src/main.rs` 的 `fs_frontend_source`）
 

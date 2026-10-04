@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；偏差见文末「勘误」E1–E15）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；偏差见文末「勘误」E1–E19）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -366,3 +366,23 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 **修复**（`frontend/src/utils/turnClock.ts`）：`turnToolElapsedMs` 改走封口段口径 `pureToolMs + pureOpenToolMs`——已闭合并集只累计到首字封口点，开放并集只算「尚未出现输出」的那段；模型一吐字，工具计时即停。与 E17 后 tps 分母同一归因口径（同一区间不可既算工具又算生成）。`LiveTurn.toolMs`（全跨度累计）随之删除，`openToolMs` 收缩为封口/基线的计算源，不再进展示。残余边界：封口点取自输出实际到达时刻，[工具起点, 首个输出] 内模型的构思时间无法与执行区分，仍计工具；工具完成后、并集已关闭，之后的 thinking 本来就不计工具（不变）。
 
 **测试**：新增 `stops tool timing at the seal: prose or thought inside a union freezes the clock`（用户报告形态的回归：并集内输出后计时冻结，12s 思考不涨、completed 不补）；`pauses the generation clock…` 与 straddle 用例补工具展示断言（封口段 2s / 3s，非全跨度 7s / 5s）；`ChatMessage.metarow.test.tsx` 两条期望随新口径改算（「工具约 11秒」→3秒、「工具约 2秒」→1秒）。
+
+### E19 — 工具并集的静默段也归工具：翻盘 E15/E18 的「单次封口」（2026-10-04）
+
+来源：用户报告「acp 会话，调用工具期间还是被算进 token 里面了，导致数据偏低」。根因是 E15 的单次封口只封「并集起点 → 并集内**首次**输出」：agent 把过渡文本/思考与 `in_progress` 同批下发（或工具间过渡语晚到）时，首次输出之后工具真正的静默执行段（可达数十秒）全部留在 tps 分母里——工具跑多久读数就摊多薄；E18 把展示也改成同一封口段，两个读数同时偏小。E15 写的「封口之后仍在工具内的区间确实是模型在产出」不成立：输出一次之后模型通常就去等工具了。
+
+**修复**（`frontend/src/utils/turnClock.ts`）：把「输出活动是生成的证据」做彻底——并集内每次输出推进 `lastOutputWorkMs` 锚点，非生成段 = 首段（并集起点 → 并集内首次输出，`toolHeadMs`）+ 尾段（末次输出 → now/并集关闭，`openTailMs`），两读同口径：
+
+- `turnToolElapsedMs` = `pureToolMs + toolHeadMs + openTailMs`：工具并集内只有「输出活动窗口」`[并集内首次输出, 末次输出]` 归生成（2026-09-27 用户报告「thinking 期间工具不该计时」在连续思考流下依旧成立——每个 chunk 前移锚点，尾段≈0）；
+- tps 分母的开放并集净扣除 = `max(0, head + tail − openBaselineMs)`，`openBaselineMs` 是首字时刻的并集快照（已计入 `pureToolMsAtFirst`），并集关闭时随固化清零；
+- 实时观感：末次输出之后工具表恢复走（模型在等工具，这段是真实执行）、tps 分母冻结不随工具执行下跌；新输出到达时 `[旧末字, 新输出]` 段被认领为生成（中途修正，分母回补一次）。
+- 字段变更：新增 `openBaselineMs` / `toolHeadMs` / `toolHasHead` / `lastOutputWorkMs`，移除 `toolPureOpenMs` / `toolHasOutput`；`openToolMs` 收缩为「并集全跨度」计算源。
+
+**边界（有意接受）**：
+
+- 并集内单次输出后即静默（首发一小段即整轮跑工具）→ 窗口内无生成跨度，读数 `null`，工具读数照常——宁可 null 不虚报（同 E17）；
+- 分母回补会让读数在新输出到达时跳变一次，这是「无法区分生成慢与等待工具」下取最新证据的策略；
+- 仍依赖 agent 下发显式 `in_progress`/`running` 状态（E15 已知边界①不变）；
+- 首段取「并集起点 → 并集内首次输出」而非输出生成的第一刻，构思时间无法与执行区分，仍计工具（E18 残余边界不变）。
+
+**测试**：`turnClock.test.ts` 三条旧封口语义用例按新契约重算（`首个输出落在工具并集内` tps 150→null、工具 3s→5s；`stops tool timing at the seal` 拆为「连续思考流冻结」与「末次输出后的静默段归工具」两条；`pauses…` finalTps 50→200、工具 4s→7s），新增用户报告形态回归 `excludes a long silent tool execution from the rate, resuming after the tool ends`；`ChatMessage.metarow.test.tsx` 两条期望随新口径重设。全量 `pnpm test`（886 例）、`tsc -b`、`lint`（0 error）通过。
