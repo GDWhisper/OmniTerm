@@ -524,6 +524,21 @@ assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps �
 - **tps 与工具耗时显式标注估算**：字符数 ÷ 4 ÷（观测工作时长 − 可识别纯工具并集）；并行工具取并集，审批只扣一次，工具期间有正文/思考则保守保留生成时间。工具 0/未知不渲染；即使无正文输出仍可显示已观测工具耗时。重连重开观测窗，不追溯离线时间，两者不持久化，快照仍只挂最后 assistant 行。详细口径见工作时长计划 E14。
 - 动作栏 `flex-shrink: 0`：按钮被压缩时会自己堆成多行（比耗时换行更糟），「放不下」必须永远落在耗时这一侧。
 
+### 7.6 气泡内 markdown 排版（`.chat-markdown`）
+
+assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规则**（`frontend/src/index.css` 的 `.chat-markdown`）——Tailwind Preflight 全局 `* { margin:0; padding:0 }` + `ol,ul,menu { list-style:none }` 会抹掉 UA 默认排版，没有规则时段落/标题/列表零间距、无列表符号（曾导致 agent 长输出「挤成一团」，2026-10-04 修复）。与文件抽屉预览 `.file-markdown` 同源不同档：
+
+| 元素 | 规格 |
+|---|---|
+| 段落 `p` | `margin: 0 0 8px` |
+| 标题 `h1`–`h6` | 1.25em → 0.92em 分级，上 10–12px / 下 4–6px，`h5`/`h6` 降为 `--text-secondary`；压住 UA 2em/1.5em（气泡上限 85% 宽撑不下） |
+| 列表 `ul`/`ol` | 恢复符号（`disc`/`decimal`）+ `padding-left: 1.4em`，`li` 各 2px；GFM 任务列表 checkbox 复用 `accent-color: var(--accent)` |
+| 引用 `blockquote` | 左 2px `--wood-dark` 边线 + 10px 缩进，`--text-secondary` |
+| `hr` | 1px `--border-subtle` 分隔线（Preflight 会把 hr 压成 0 高） |
+| 首/尾子元素 | `> :first-child` / `> :last-child` 外边距归零——气泡 padding 已是边界留白，不叠双重 |
+
+间距整体比 `.file-markdown` 紧一档（气泡窄、密度优先）。**流式期仍是 pre-wrap 纯文本降级**（未闭合语法下每帧全量解析的代价），排版规则只对定稿渲染生效；代码块圆角/配色走 MarkdownCore 的 props 与 Prism oneDark，不在此节。
+
 ---
 
 ## 8. Settings Toggles
