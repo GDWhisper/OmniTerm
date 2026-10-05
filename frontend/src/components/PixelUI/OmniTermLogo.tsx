@@ -31,21 +31,17 @@ export const OmniTermLogo: FC<OmniTermLogoProps> = ({ size = 48, className }) =>
         "embedded" in the logo-title-bar's bottom border in both themes.
         The logo-title-bar is a fixed-color branding element, so the frame
         is fixed too. */}
-    <rect x="1" y="1" width="14" height="2" fill="#3A2E1F" />
-    <rect x="1" y="11" width="14" height="2" fill="#3A2E1F" />
-    <rect x="1" y="1" width="2" height="12" fill="#3A2E1F" />
-    <rect x="13" y="1" width="2" height="12" fill="#3A2E1F" />
+    <rect x="1" y="2" width="14" height="2" fill="#3A2E1F" />
+    <rect x="1" y="12" width="14" height="2" fill="#3A2E1F" />
+    <rect x="1" y="2" width="2" height="12" fill="#3A2E1F" />
+    <rect x="13" y="2" width="2" height="12" fill="#3A2E1F" />
     {/* screen */}
-    <rect x="3" y="3" width="10" height="8" fill="#12141A" />
+    <rect x="3" y="4" width="10" height="8" fill="#12141A" />
     {/* > prompt (green) */}
-    <rect x="4" y="5" width="2" height="1" fill="#7EE787" />
-    <rect x="5" y="6" width="1" height="1" fill="#7EE787" />
-    <rect x="4" y="7" width="2" height="1" fill="#7EE787" />
+    <rect x="4" y="6" width="2" height="1" fill="#7EE787" />
+    <rect x="5" y="7" width="1" height="1" fill="#7EE787" />
+    <rect x="4" y="8" width="2" height="1" fill="#7EE787" />
     {/* _ cursor (blue) */}
-    <rect x="7" y="8" width="4" height="1" fill="#58A6FF" />
-    {/* stand */}
-    <rect x="7" y="13" width="2" height="1" fill="#3A2E1F" />
-    {/* base */}
-    <rect x="5" y="14" width="6" height="1" fill="#3A2E1F" />
+    <rect x="7" y="9" width="4" height="1" fill="#58A6FF" />
   </svg>
 )
