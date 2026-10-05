@@ -53,10 +53,12 @@ describe('ChatMessageView meta row line breaking', () => {
   it('splits the settled reading into nowrap segments so a unit never leaves its number', () => {
     // 结算值来自 turnClock 的定稿快照（finalTps / finalToolElapsedMs）。
     beginTurn('s1', 0)
-    updateTurnTool('s1', 'a', 'in_progress', 1_000)
-    addOutputChars('s1', 400, 4_000)
-    updateTurnTool('s1', 'a', 'completed', 12_000)
-    endTurn('s1', 12_000)
+    addOutputChars('s1', 400, 1_000)
+    updateTurnTool('s1', 'a', 'in_progress', 2_000)
+    addOutputChars('s1', 400, 3_000)
+    updateTurnTool('s1', 'a', 'completed', 5_000)
+    addOutputChars('s1', 400, 8_000)
+    endTurn('s1', 8_000)
     act(() => {
       root.render(
         <ChatMessageView
@@ -71,10 +73,10 @@ describe('ChatMessageView meta row line breaking', () => {
     // 「工作中 5分钟33秒」整段不断行：5分钟 与 33秒 之间没有断点。
     expect(segments[0].textContent).toBe('已工作 5分钟33秒')
     // 工具与速度各占一段，段内的 label 与 value 不分离。
-    // 工具计时停在封口点（4s 首次输出）：[1s,4s] 才算工具，thinking 区间不计。
+    // 工具计时（E19 口径）=[2s,5s] 全段：首段 [2s,3s] 与静默尾段 [3s,5s] 都非生成。
     expect(segments[1].textContent).toBe(' · 工具约 3秒')
-    // 解码窗口 [4s,12s] 去掉封口的 3s 纯工具 → 400/4 ÷ 8s。
-    expect(segments[2].textContent).toBe(' · 估算 12.5 t/s')
+    // 解码窗口 [1s,8s] 去掉工具 3s → 300 token ÷ 4s。
+    expect(segments[2].textContent).toBe(' · 估算 75.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
   })
 
@@ -98,12 +100,12 @@ describe('ChatMessageView meta row line breaking', () => {
   it('splits the live reading the same way while streaming', () => {
     // 实时读数用 Date.now() 采样，故冻结时钟拿确定值（注入的 at 与采样时刻同源）。
     vi.useFakeTimers()
-    vi.setSystemTime(3_000)
+    vi.setSystemTime(6_000)
     beginTurn('s3', 0)
     addOutputChars('s3', 800, 1_000)
-    updateTurnTool('s3', 'a', 'in_progress', 1_000)
-    // 首字在工具并集内：把 [1s,2s] 封口，工具计时与解码窗口都从这里分开计。
-    addOutputChars('s3', 800, 2_000)
+    addOutputChars('s3', 800, 3_000)
+    // 工具在末次输出同刻开始且此后无输出：整段开放并集都归工具（首段为空、尾段全程）。
+    updateTurnTool('s3', 'a', 'in_progress', 3_000)
     act(() => {
       root.render(
         <ChatMessageView
@@ -115,9 +117,9 @@ describe('ChatMessageView meta row line breaking', () => {
     })
     const segments = readingSegments()
     expect(segments.length).toBe(3)
-    expect(segments[0].textContent).toBe('工作中 3秒')
-    expect(segments[1].textContent).toBe(' · 工具约 1秒')
-    expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
+    expect(segments[0].textContent).toBe('工作中 6秒')
+    expect(segments[1].textContent).toBe(' · 工具约 3秒')
+    expect(segments[2].textContent).toBe(' · 估算 200.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
     vi.useRealTimers()
   })

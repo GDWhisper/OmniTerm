@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, storedRawRowToSyncPayload, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
@@ -19,6 +19,7 @@ import { READER_FONT } from '../../utils/fonts'
 import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
+import { postSyncPayload } from '../../utils/syncMessages'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -33,9 +34,30 @@ const CHAT_JUMP_TOP_GAP_PX = 8
 /** 气泡底缘升到距消息区顶缘该值以内即视为「已滚出顶缘」（那一段残条本来就被
  *   悬浮卡片盖住），视同「用户正在阅读这条消息之后的内容」，显示卡片。 */
 const CHAT_PROMPT_ABOVE_SLACK_PX = 24
+/** 手势（wheel / touchmove）与 scroll 事件之间的最长间隔：惯性滚动里手指早已
+ *  离开屏幕而 scroll 事件仍在派发，这段窗口内的 scroll 仍算「用户在滑」。 */
+const CHAT_GESTURE_LINGER_MS = 600
+/** 最后一次 scroll 事件后多久视为「滑动停止」，消息区两个悬浮件（「上次输入」
+ *  卡片 / 「回到底部」按钮）恢复不透明。 */
+const CHAT_DIM_IDLE_MS = 180
 /** 距消息区底缘多少像素内仍算「贴底」（留余量，iOS 惯性滚动与亚像素取整不会把
  *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
 const CHAT_STICK_THRESHOLD_PX = 24
+
+/**
+ * 移动端「离开 ≥ 该时长后回来」即补拉的阈值（E1 兜底）。
+ *
+ * 依据：移动端切后台后 OS/浏览器冻结页面 JS，ACP WS 的断开信号（服务端 ~125s
+ * idle 重置 / 承载网 RST，见 2026-09-19-ws-idle-disconnect-heartbeat.md 实测）
+ * 产生于冻结期内——WebKit 类浏览器对冻结页**不补派** onclose（事件不排队、
+ * readyState 直推 CLOSED），Chromium 类最迟恢复到可见后才派发。两种形态都让
+ * 「onclose → needsCatchUp」这一触发条件失配（迟到晚于 visibilitychange，或永
+ * 不到达），store 停在旧页直到手动刷新。桌面端 JS 不冻结、onclose 可靠，故 E1
+ * 只对 `appStore.isMobile` 生效，不回归「只有真断连才刷」的省流量口径。
+ * 取值只需覆盖任何一次真实离开（3s），远小于已知断连窗口，代价是回来时一次
+ * 幂等 `GET /messages`。
+ */
+const RESUME_CATCH_UP_GRACE_MS = 3_000
 
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
@@ -180,6 +202,14 @@ export function ChatView() {
   const [lastPromptAbove, setLastPromptAbove] = useState(false)
   // 「上次输入」悬浮卡片本体：跳转让位需要按卡片实际高度把目标气泡滚到卡片下方。
   const lastPromptCardRef = useRef<HTMLButtonElement | null>(null)
+  // 用户滑动消息区时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）淡出
+  // （配套 index.css 的 .is-scrolling 与滑动淡出 token）：state 供 className，
+  // 定时器 ref 供「滑动停止后恢复」与卸载清理，手势时间戳 ref 是「这次 scroll
+  // 是不是用户在滑」的判据——流式贴底的自动钉底也派发 scroll，但那是内容在动，
+  // 浮层在这里必须保持可读。
+  const [overlaysDimmed, setOverlaysDimmed] = useState(false)
+  const dimTimerRef = useRef<number | null>(null)
+  const lastGestureAtRef = useRef(0)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
   const prependAnchorRef = useRef<number | null>(null)
 
@@ -194,6 +224,7 @@ export function ChatView() {
     return () => {
       if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
       if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+      if (dimTimerRef.current !== null) window.clearTimeout(dimTimerRef.current)
     }
   }, [])
 
@@ -234,6 +265,135 @@ export function ChatView() {
       cancelled = true
     }
   }, [activeSessionId])
+
+  // 聚焦/可见性恢复补拉：本页面生命周期内该会话 WS 断过（`needsCatchUp`）时，
+  // 拉一次 DB 最新页合并进 store。根因：后端广播走 tokio broadcast、无补发语义，
+  // 断连窗口内落库的内容不会随重连回到前端；而 hydrate 每页面生命周期只跑一次、
+  // `load_session` 只走手动「恢复会话」——旧行为下用户要等手动恢复或刷新页面才
+  // 看到最新消息。合并规则（跳过 streaming 行 / 同 dbId DB 权威 / user echo
+  // 去重 / 前缀对账）见 chatStore.mergeLatestMessages 与
+  // docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D3。
+  //
+  // 触发点三类（勘误后），共用 catchUpIfNeeded：① 挂载（切会话重挂载——socket
+  // 可能在别的会话展示期间断过，标记仍在）；② visibilitychange→visible /
+  // window focus（后者覆盖双屏「标签可见但焦点在别窗」，与 useTerminal 可见性
+  // 口径一致）；③ 2026-10-04 勘误新增的两条兜底——移动端离开够久后回来强制
+  // 置标记补拉（E1）、断连标记在可见态被迟到置位时由 store 跃变直接驱动
+  // （E2）。理由：原实现只认「onclose 置标记 + 聚焦」，而移动端切后台冻结
+  // 页面 JS 后 onclose 信号不可靠（见上方 RESUME_CATCH_UP_GRACE_MS 注释）。
+  // 守卫：hydrated（不抢跑首屏 hydrate 与 preHydrateBuffer）、!replaying（手动
+  // 重放自带全量历史，合并与其打架）、in-flight 去重。失败保留标记，下次重试。
+  const catchUpInFlightRef = useRef(false)
+  /** visibilitychange→hidden 的时刻（null = 未隐藏过 / 已被恢复消费）。 */
+  const hiddenAtRef = useRef<number | null>(null)
+  const catchUpIfNeeded = useCallback(async () => {
+    const sid = activeSessionId
+    if (!sid || catchUpInFlightRef.current) return
+    const st = useChatStore.getState().states[sid]
+    if (!st?.hydrated || st.replaying || !st.needsCatchUp) return
+    catchUpInFlightRef.current = true
+    try {
+      const r = await fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages`)
+      // 不 ok 也保留标记：下次聚焦/挂载重试，不打扰用户。
+      if (!r.ok) return
+      const data = await r.json().catch(() => null)
+      const merged = toChatMessages(
+        Array.isArray(data?.messages) ? (data.messages as StoredMessage[]) : [],
+      )
+      useChatStore.getState().mergeLatestMessages(sid, merged)
+      // RAW 残留收敛（2026-08-18 方案 B 同源）：turn 在断连期间结束 ⇒ prompt_done
+      // 无人接收 ⇒ 该行停在原始帧态（体积大两个数量级）。合并进来的完整行若
+      // rawStored，带 dbId 回写——后端 id 路径只 UPDATE blocks 不 INSERT，不产
+      // 幽灵行。失败容错与 hook 内同路径一致（.catch 静默，下次 hydrate 仍收敛）。
+      postSyncPayload(
+        sid,
+        merged.flatMap((m) => {
+          const entry = storedRawRowToSyncPayload(m)
+          return entry ? [entry] : []
+        }),
+      )
+      useChatStore.getState().setNeedsCatchUp(sid, false)
+    } catch {
+      // 网络异常：保留标记。
+    } finally {
+      catchUpInFlightRef.current = false
+    }
+  }, [activeSessionId])
+
+  /**
+   * E1：移动端「离开够久后回来」的恢复兜底。冻结期内断连信号（onclose）不可
+   * 靠——迟到（晚于 visibilitychange 派发）或缺失（WebKit 类不补派）。这里不
+   * 试图区分，直接按「页面真的离开过 ≥ 阈值 + 移动端」置标记，随后的
+   * catchUpIfNeeded 走与正常断连完全相同的合并路径（幂等；桌面端 JS 不冻结，
+   * 信号可靠，不受本兜底影响）。
+   * appStore.isMobile 与 hiddenAtRef 都经 getState()/ref 读取而不作依赖——
+   * 免得媒体查询翻转或每次隐藏都重建下方监听。
+   */
+  const forceResumeCatchUp = useCallback(() => {
+    const sid = activeSessionId
+    if (!sid || document.hidden) return
+    const awayMs = hiddenAtRef.current !== null ? Date.now() - hiddenAtRef.current : 0
+    if (awayMs < RESUME_CATCH_UP_GRACE_MS) return
+    hiddenAtRef.current = null
+    if (!useAppStore.getState().isMobile) return
+    useChatStore.getState().setNeedsCatchUp(sid, true)
+    if (import.meta.env.DEV) {
+      console.debug('[ACP catch-up] resume fallback after', awayMs, 'ms hidden')
+    }
+  }, [activeSessionId])
+
+  useEffect(() => {
+    void catchUpIfNeeded()
+  }, [catchUpIfNeeded])
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.hidden) {
+        // 记下离开时刻：移动端冻结从这一刻起算，恢复时按 E1 兜底补拉。
+        hiddenAtRef.current = Date.now()
+        return
+      }
+      forceResumeCatchUp()
+      void catchUpIfNeeded()
+    }
+    // 窗口聚焦（页面本就可见、焦点从别窗回来）没有 hidden→visible 迁移，
+    // hiddenAtRef 为 null ⇒ E1 不触发，只走既有标记路径。
+    const onFocus = () => {
+      void catchUpIfNeeded()
+    }
+    // bfcache / 标签恢复（iOS 切 app 回来的常见形态）：冻结期内 socket 被对端
+    // 重置且页面不补派 onclose；persisted 恢复同样按 E1 兜底，不等 visibility。
+    const onPageShow = (e: Event) => {
+      if ((e as PageTransitionEvent).persisted) forceResumeCatchUp()
+      void catchUpIfNeeded()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [catchUpIfNeeded, forceResumeCatchUp])
+
+  /**
+   * E2：断连标记在「页面已可见」态才由 false→true 时立即补拉一次。
+   * 两种来路：移动端恢复后浏览器补派的迟到 onclose（标记置位时 visibility
+   * 事件早已消费完，不会再有一次「聚焦」）；桌面可见态意外断开。原实现只等
+   * 「用户下一次失焦回来」，缺失该事件时 store 永久陈旧——与不置标记同效。
+   * 经 store subscribe 而非响应式订阅：补拉本身会 clear/保留标记，useSync
+   * 订阅这条自反路径会自触发。
+   */
+  useEffect(() => {
+    const sid = activeSessionId
+    if (!sid) return
+    return useChatStore.subscribe((s, p) => {
+      const now = s.states[sid]?.needsCatchUp === true
+      const was = p.states[sid]?.needsCatchUp === true
+      if (now && !was && !document.hidden) void catchUpIfNeeded()
+    })
+  }, [activeSessionId, catchUpIfNeeded])
 
   // 上拉加载更早的一页历史。首屏只取最近一页（后端按条数 + 字节双预算切页），
   // 用户滚到顶部才继续向前取——绝大多数切换只关心最新那批记录。
@@ -349,11 +509,41 @@ export function ChatView() {
       setAutoStick(false)
     }
     setLastPromptAbove(isLastPromptAboveViewport())
+    // 用户滑动中把消息区两个悬浮件淡出（index.css 的 .is-scrolling）：它们悬浮在
+    // 消息区顶/底缘，滑动时会盖住从下面滑过的正文，淡出让出阅读带；静止
+    // CHAT_DIM_IDLE_MS 后恢复，点击跳转不受影响。只放大手势窗口内的 scroll——
+    // 流式期间的自动钉底同样派发 scroll，但那是内容在动、用户在读，浮层在这里
+    // 必须保持可读。
+    if (Date.now() - lastGestureAtRef.current <= CHAT_GESTURE_LINGER_MS) {
+      if (dimTimerRef.current !== null) window.clearTimeout(dimTimerRef.current)
+      dimTimerRef.current = window.setTimeout(() => {
+        dimTimerRef.current = null
+        setOverlaysDimmed(false)
+      }, CHAT_DIM_IDLE_MS)
+      setOverlaysDimmed(true)
+    }
     // 触顶加载更早历史。要求容器真的可滚动：内容不足一屏时 scrollTop 恒为 0，
     // 否则会在 autoStick 仍为 true 的状态下自动拉取并被贴底逻辑拽回底部。
     const scrollable = el.scrollHeight > el.clientHeight + TOP_LOAD_THRESHOLD_PX
     if (scrollable && el.scrollTop < TOP_LOAD_THRESHOLD_PX) void loadOlderHistory()
   }
+
+  // 用户滑动手势的记录点（wheel / 触摸拖动）：必须与 scroll 事件解耦——scroll
+  // 事件分不清「用户在滑」和「流式内容长高被贴底钉回」，悬浮件淡出只认前者。
+  // passive：只读时间戳，不拦截默认滚动。
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const markGesture = () => {
+      lastGestureAtRef.current = Date.now()
+    }
+    el.addEventListener('wheel', markGesture, { passive: true })
+    el.addEventListener('touchmove', markGesture, { passive: true })
+    return () => {
+      el.removeEventListener('wheel', markGesture)
+      el.removeEventListener('touchmove', markGesture)
+    }
+  }, [])
 
   // 点提示条：立即滚到底并恢复自动跟随，提示条随隐。
   const handleJumpToBottom = () => {
@@ -741,12 +931,13 @@ export function ChatView() {
             提示条同一套浮层手法），单行展示最近一次已送达的用户输入——不占满
             顶部（fit-content + 限宽），超宽 ellipsis，完整内容经 title hover 查看；
             点击跳回那个气泡。仅当气泡升出视口顶缘（用户正在阅读其后的回复）时
-            渲染；在视口内、或上翻越过它进入更早历史时收起。 */}
+            渲染；在视口内、或上翻越过它进入更早历史时收起。用户滑动消息区时
+            挂 is-scrolling 淡出，静止后恢复（见 handleScroll 与 index.css）。 */}
         {lastUserMessage && lastPromptAbove && (
           <button
             type="button"
             ref={lastPromptCardRef}
-            className="chat-last-prompt-card pixel-float"
+            className={`chat-last-prompt-card pixel-float${overlaysDimmed ? ' is-scrolling' : ''}`}
             onClick={handleJumpToLastPrompt}
             title={lastPromptPreview}
             aria-label={`${t('chat.lastPrompt')}：${lastPromptPreview}`}
@@ -783,11 +974,12 @@ export function ChatView() {
 
         {/* 「回到底部」提示条：贴住消息区底缘、水平居中，浮在输入区之上（是消息区
             的绝对定位子元素，键盘弹起时随布局收缩，不会被遮挡）。移动端单图标 36px
-            方钮，文案只保留在 aria-label/title。 */}
+            方钮，文案只保留在 aria-label/title。用户滑动消息区时与「上次输入」卡片
+            同挂 is-scrolling 淡出（同一 state 驱动，静止后恢复，见 handleScroll）。 */}
         {showJumpToBottom && (
           <button
             type="button"
-            className="chat-jump-bottom pixel-press"
+            className={`chat-jump-bottom pixel-press${overlaysDimmed ? ' is-scrolling' : ''}`}
             onClick={handleJumpToBottom}
             title={t('chat.jumpToBottom')}
             aria-label={t('chat.jumpToBottom')}

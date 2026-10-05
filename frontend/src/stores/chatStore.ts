@@ -78,7 +78,10 @@ export interface SystemBlockDetail {
   /** 本轮结束的协议原值（refusal / cancelled / end_turn / `_`前缀自定义值…），
    *  未知值原样透出（AGENTS.md §8）——`system.turnFailed.*` 文案经 {{reason}} 插值引用。 */
   stop_reason?: string
-  /** 超时时长（分钟）。 */
+  /** 超时时长（秒；2026-10-01 起的后端载荷，0 = 「总是」档）。 */
+  seconds?: number
+  /** 超时时长（分钟）。只存在于 2026-10-01 之前写入的历史行，渲染时按
+   *  minutes × 60 回退成秒（见 `utils/permTimeout.ts`）；新写入不再产出此字段。 */
   minutes?: number
   /** 触发审批的工具名/标题。 */
   tool?: string
@@ -320,6 +323,14 @@ interface ChatSessionState {
    */
   hydrated?: boolean
   /**
+   * 本页面生命周期内该会话发生过 WS 断连（广播帧无补发，store 可能已陈旧）。
+   * useAcpChat 在 onclose（非主动拆除）时置 true；ChatView 在聚焦/可见性恢复
+   * （或挂载）时据此决定是否补拉最新一页合并，成功后置 false。chatStore 无
+   * persist，刷新即清零——而刷新本身会重新 hydrate，语义自洽。
+   * 规则与取舍见 docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D1。
+   */
+  needsCatchUp?: boolean
+  /**
    * 历史分页游标（后端 `nextCursor`）：指向比已加载的最旧一条更早的那页。
    * `null`/`undefined` = 已到历史开头，不再上拉加载。唯一信号源，不另存 hasMore。
    */
@@ -342,7 +353,7 @@ interface ChatActions {
    *  Renders as a normal user message with `undelivered: true` so the user can see what
    *  they tried to send. Not persisted to DB; cleared on session remount. */
   addUndeliveredMessage: (sessionId: string, text: string) => void
-  markDone: (sessionId: string, timing?: TurnDuration) => void
+  markDone: (sessionId: string, timing?: TurnDuration, rowId?: string) => void
   markError: (sessionId: string, message: string) => void
   beginPrompt: (sessionId: string) => void
   /** Store the next user message in the N=1 queue slot. Trimmed; empty text is a no-op.
@@ -368,6 +379,12 @@ interface ChatActions {
   ) => void
   /** 置会话 hydrate 落定标志：ChatView 的 GET /messages 落定后调用，放行 useAcpChat 缓冲。 */
   setHydrated: (sessionId: string, hydrated: boolean) => void
+  /** 断连标记：本页面生命周期内该会话 WS 断过（广播无补发，store 可能陈旧）。
+   *  ChatView 聚焦/可见性恢复时据此补拉最新一页；useAcpChat onclose 置位。 */
+  setNeedsCatchUp: (sessionId: string, needs: boolean) => void
+  /** 聚焦/断连恢复后把 GET /messages 最新一页合并进 store（DB 权威；只读消息
+   *  列表，不触发任何回写）。合并规则见 mergeLatestMessages 实现注释。 */
+  mergeLatestMessages: (sessionId: string, messages: ChatMessage[]) => void
   /** 重连续接：用进行中 turn 的快照（已解码 blocks）按 rowId 替换/收编在建 assistant
    *  消息，无匹配则收编末尾 streaming assistant，再无则追加。置 streaming 供 live 帧续接。 */
   applyTurnSnapshot: (
@@ -713,6 +730,27 @@ const appendProseToMessages = (
     streaming: true,
   })
   return next
+}
+
+/**
+ * 从消息列表尾部向前扫最后一个 TodoBlock，作为看板数据。hydrate 与聚焦补拉合并
+ * （mergeLatestMessages）共用同一扫描，避免两份「看板真相源」漂移。
+ * 语义：只认 assistant 行、跳过 entries 为空的 todo 块（空块不构成有效看板）。
+ */
+const scanTodoBoard = (
+  messages: readonly ChatMessage[],
+): { todos: TodoEntry[]; todosTitle: string | undefined } => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role !== 'assistant' || !m.blocks) continue
+    for (let j = m.blocks.length - 1; j >= 0; j--) {
+      const b = m.blocks[j]
+      if (b.type === 'todo' && b.entries.length > 0) {
+        return { todos: b.entries, todosTitle: b.title }
+      }
+    }
+  }
+  return { todos: [], todosTitle: undefined }
 }
 
 /**
@@ -1083,7 +1121,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return applyTopLevelActions(base, sessionId, actions)
     }),
 
-  markDone: (sessionId, timing) =>
+  markDone: (sessionId, timing, rowId) =>
     set((state) => {
       const current = get(state, sessionId)
       const messages = current.messages.map((m) =>
@@ -1091,6 +1129,11 @@ export const useChatStore = create<ChatStore>((set) => ({
           ? {
               ...m,
               streaming: false,
+              // prompt_done 携带本 turn 的行 id：定稿即落到消息上，此后聚焦补拉的
+              // DB 合并（mergeLatestMessages）才能按 dbId 精确命中这一行，而不是
+              // 靠文本猜测（同 text assistant 行可合法多条，见 2026-08-10 Phase 0）。
+              // 不传 rowId（turn_state(false) 等路径）时保留原值，绝不清零。
+              ...(rowId ? { dbId: rowId } : {}),
               // 后端定稿即随 prompt_done 下发耗时，让数字当场出现（不等刷新 hydrate）。
               durationMs: timing?.workMs ?? m.durationMs,
               waitMs: timing?.waitMs ?? m.waitMs,
@@ -1134,23 +1177,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const current = get(state, sessionId)
       if (current.messages.length > 0 || current.replaying) return state
-      // 扫描最后一条消息，提取最后一个 TodoBlock 作为看板数据
-      let todos: TodoEntry[] = []
-      let todosTitle: string | undefined
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i]
-        if (m.role === 'assistant' && m.blocks) {
-          for (let j = m.blocks.length - 1; j >= 0; j--) {
-            const b = m.blocks[j]
-            if (b.type === 'todo') {
-              todos = b.entries
-              todosTitle = b.title
-              break
-            }
-          }
-          if (todos.length > 0) break
-        }
-      }
+      const { todos, todosTitle } = scanTodoBoard(messages)
       return patch(state, sessionId, { messages, todos, todosTitle, historyCursor })
     }),
 
@@ -1171,6 +1198,63 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setHydrated: (sessionId, hydrated) =>
     set((state) => patch(state, sessionId, { hydrated })),
+
+  setNeedsCatchUp: (sessionId, needs) =>
+    set((state) => patch(state, sessionId, { needsCatchUp: needs })),
+
+  mergeLatestMessages: (sessionId, messages) =>
+    set((state) => {
+      const current = get(state, sessionId)
+      if (messages.length === 0) return state
+      // 聚焦补拉的 DB 最新页合并。五条规则（含理由与翻盘条件）见
+      // docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D3；此处只陈述不变量：
+      //
+      // 1. streaming 行跳过——进行中 turn 归 live 路径（turn_snapshot / live 帧）
+      //    所有；DB 那份是防抖中的原始帧，覆盖它既丢 live cooked 结构又与后续帧打架。
+      // 2. dbId 命中 → 原位替换（DB 权威）。markDone 现已把 prompt_done 的 row_id
+      //    落到消息 dbId，健康连接结束的 turn 全走这条，不靠文本猜身份。
+      // 3. user 行与尾部「无 dbId 的 optimistic echo」text 全等 → 替换（不新增气泡）。
+      //    用户 echo 只在发送成功后产生，与后端行一一对应，text 全等安全。
+      // 4. assistant 行与尾部「无 dbId 的半截消息」精确前缀 → 替换（补上断连期间
+      //    跑完的那半轮）。前缀失配 → 按 createdAt 插入为新消息：宁添不缺（丢整轮
+      //    正文比多一个气泡更糟；与 prependEvictedProse 的「宁缺勿错」取向相反，
+      //    那条丢的是已渲染前缀，这条丢的是全部内容）。
+      // 5. 其余行按 createdAt 顺序插入。本路径不回写（RAW 收敛由调用方另行处理）。
+      const merged: ChatMessage[] = [...current.messages]
+      let changed = false
+      for (const m of messages) {
+        if (m.streaming) continue
+        const byDbId = m.dbId ? merged.findIndex((x) => x.dbId === m.dbId) : -1
+        if (byDbId >= 0) {
+          merged[byDbId] = m
+          changed = true
+          continue
+        }
+        const tailIdx = merged.length - 1
+        const tail = merged[tailIdx]
+        if (
+          tail &&
+          !tail.dbId &&
+          !tail.undelivered &&
+          tail.role === m.role &&
+          ((m.role === 'user' && tail.text === m.text) ||
+            (m.role === 'assistant' && tail.text.length > 0 && m.text.startsWith(tail.text)))
+        ) {
+          merged[tailIdx] = m
+          changed = true
+          continue
+        }
+        // createdAt 顺序插入：live 自建消息的 createdAt 是本地时钟，与 DB 行同源
+        // （都取自写入时刻），故插入点即「第一条更新消息」之前。
+        let pos = merged.findIndex((x) => x.createdAt > m.createdAt)
+        if (pos < 0) pos = merged.length
+        merged.splice(pos, 0, m)
+        changed = true
+      }
+      if (!changed) return state
+      const { todos, todosTitle } = scanTodoBoard(merged)
+      return patch(state, sessionId, { messages: merged, todos, todosTitle })
+    }),
 
   applyTurnSnapshot: (sessionId, { rowId, text, blocks }) =>
     set((state) => {

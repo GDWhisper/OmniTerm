@@ -2,12 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { ChatView } from './ChatView'
+import { advanceClock } from '../../test/timers'
 import {
   userMsg,
   assistantMsg,
   setupChatViewStores,
   resetChatViewStores,
   seedChatMessages,
+  chatScrollEl,
+  mockScrollMetrics,
+  fireScroll,
 } from './ChatView.testUtils'
 
 // 「上次输入」悬浮卡片：消息区顶部居中悬浮，单行展示最近一次已送达的用户输入，
@@ -122,6 +126,45 @@ describe('ChatView last-prompt card', () => {
       expect(lastPromptCard()).toBeTruthy()
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  it('dims both scroll overlays while the user scrolls and restores after', async () => {
+    // 「上次输入」卡片与「回到底部」按钮共用一套滑动淡出（同一 state 驱动两个
+    // className），故一处用例同时钉两个消费方；机制出生在 ChatView 滚动路径，
+    // 用例随卡片测试落在这里。恢复定时器是真实 180ms，用假时钟推进
+    // （advanceClock 每拍让 React 完成渲染，共享真源 src/test/timers.ts）。
+    vi.useFakeTimers()
+    try {
+      seedChatMessages([userMsg('m1', 'first question'), assistantMsg('m2', 'answer')])
+      renderView()
+      // 离底（scrollTop 0 / 视口 600 / 内容 2000）才渲染「回到底部」按钮；
+      // 卡片在 jsdom 零矩形下默认显示。
+      mockScrollMetrics(chatScrollEl(container), { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
+      act(() => fireScroll(container))
+      expect(lastPromptCard()).toBeTruthy()
+      expect(container.querySelector('.chat-jump-bottom')).toBeTruthy()
+
+      // 无手势的 scroll 不淡出：流式贴底的自动钉底同样派发 scroll，但那是内容在
+      // 动、用户在读，浮层在这里必须保持可读。
+      expect(lastPromptCard()!.className).not.toContain('is-scrolling')
+      expect(container.querySelector<HTMLElement>('.chat-jump-bottom')!.className).not.toContain('is-scrolling')
+
+      // wheel 手势之后的 scroll 才淡出——两个浮层同时。
+      act(() => {
+        const scroller = chatScrollEl(container)
+        scroller.dispatchEvent(new Event('wheel'))
+        scroller.dispatchEvent(new Event('scroll'))
+      })
+      expect(lastPromptCard()!.className).toContain('is-scrolling')
+      expect(container.querySelector<HTMLElement>('.chat-jump-bottom')!.className).toContain('is-scrolling')
+
+      // 静止超过恢复窗口后两者都恢复。
+      await advanceClock(1000)
+      expect(lastPromptCard()!.className).not.toContain('is-scrolling')
+      expect(container.querySelector<HTMLElement>('.chat-jump-bottom')!.className).not.toContain('is-scrolling')
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

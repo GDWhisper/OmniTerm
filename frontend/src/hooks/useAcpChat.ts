@@ -5,6 +5,7 @@ import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
 import { addOutputChars, resumeTurnClock, setTurnWaiting, updateTurnTool } from '../utils/turnClock'
+import { postSyncPayload } from '../utils/syncMessages'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -711,17 +712,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 不再合并相邻 assistant——每条消息独立对应一行，与实时 insert_message 粒度一致，
   // 确保 sync_messages 的 (session, role, text) 去重能精确命中并 UPDATE blocks。
   // 过滤规则（undelivered 跳过、只 user/assistant 入库）抽到 chatStore.messagesToSyncPayload
-  // 纯函数里，便于单测。
+  // 纯函数里，便于单测。POST 本体是共享入口 utils/syncMessages.ts（ChatView 的
+  // 聚焦补拉 RAW 收敛也走它），此处只是包一层 useCallback 稳定引用。
   const postSync = useCallback((sid: string, payload: SyncMessagePayload[]) => {
-    if (payload.length === 0) return
-    if (import.meta.env.DEV) {
-      console.debug('[ACP sync]', payload.length, 'msgs,', payload.reduce((n, p) => n + p.text.length, 0), 'chars')
-    }
-    fetch(`/api/v1/sessions/${encodeURIComponent(sid)}/messages/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: payload }),
-    }).catch(() => {})
+    postSyncPayload(sid, payload)
   }, [])
 
   const syncToDb = useCallback(() => {
@@ -860,11 +854,14 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           }
           joinedMidTurn.current = false
           // duration：后端定稿时刻结算的时长，随帧下发 → 耗时当场出现。
+          // row_id：把本 turn 的 DB 行 id 落到定稿消息的 dbId 上，聚焦补拉合并
+          // （mergeLatestMessages）才能按 dbId 精确命中此行而非文本猜测。
           s.markDone(
             sid,
             frame.duration
               ? { workMs: frame.duration.work_ms, waitMs: frame.duration.wait_ms }
               : undefined,
+            frame.row_id,
           )
           // assistant turn 由后端累积器实时落库**原始帧**，前端在此把 cooked blocks
           // 回写到同一行以收敛体积（见 syncTurnToDb）。清空 seq 水位，下一 turn 从零
@@ -1239,6 +1236,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         wsRef.current = null
         const sid = sessionIdRef.current
         if (sid && !unmounted) {
+          // 断连标记（聚焦补拉的触发条件）：broadcast 帧无补发，离线窗口内后端
+          // 落库的内容不会随重连回到 store（hydrate 每页面生命周期只跑一次、
+          // load_session 只走手动恢复）→ 置位让 ChatView 在聚焦/可见性恢复时
+          // 补拉最新一页合并。主动拆除（切会话 / 卸载）由 unmounted 排除。
+          // 规则与取舍见 docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D1。
+          useChatStore.getState().setNeedsCatchUp(sid, true)
           // 重放中断线：replay_end 已不可能到达（发进死连接），终止 staging
           // 防止重连后 live 帧被无限期缓冲（聊天冻结）。
           abortReplay(sid)

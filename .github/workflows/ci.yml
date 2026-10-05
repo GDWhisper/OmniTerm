@@ -64,6 +64,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
+      # logo 派生资产（favicon.svg / PWA 图标）由 omnitermSprite.ts 生成，
+      # 校验提交的产物与源一致（脚本零依赖，只需 node）。
+      - name: Logo assets match source (omnitermSprite.ts)
+        run: node scripts/gen-logo-icons.mjs --check
+
       - run: pnpm install --frozen-lockfile
         working-directory: frontend
       - run: pnpm lint

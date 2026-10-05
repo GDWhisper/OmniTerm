@@ -10,6 +10,7 @@ import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from '../../utils/formatTime'
 import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
+import { PERM_TIMEOUT_NEVER_SECS, permTimeoutDuration, permTimeoutNoticeLabel, permTimeoutSeconds } from '../../utils/permTimeout'
 import { looksLikeDiff } from '../../utils/diff'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
@@ -428,9 +429,13 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
  *  详情区按「有权限类信息可展示」门控，否则 turn 失败提示会挂一个空壳子。 */
 function SystemBlockView({ label, detail }: { label: string; detail?: SystemBlockDetail }) {
   const { t } = useTranslation()
-  const text = t(label, {
+  // 时长口径统一在 utils/permTimeout.ts（秒制 + 历史 minutes 回退 +「总是」档
+  // 换用不带时长的 autoAlways 文案），组件只负责插值。
+  const seconds = permTimeoutSeconds(detail)
+  const duration = permTimeoutDuration(seconds ?? PERM_TIMEOUT_NEVER_SECS)
+  const text = t(permTimeoutNoticeLabel(label, seconds), {
     defaultValue: label,
-    minutes: detail?.minutes ?? '',
+    duration: duration ? t(duration.key, { value: duration.value }) : '',
     selected: detail?.selected ?? '',
     options: detail?.options?.join(' / ') ?? '',
     count: detail?.extra ?? 0,

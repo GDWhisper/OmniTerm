@@ -183,8 +183,9 @@ pub struct AppState {
     /// reaper 每个 tick 动态读取（运行时热更新）。
     pub acp_idle_recycle_secs: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// 权限请求超时配置（模式 + 秒级阈值），由 settings 表
-    /// `acp_perm_timeout_mode` / `acp_perm_timeout_min` 注入，reaper 每个 tick
-    /// 动态读取（运行时热更新）。
+    /// `acp_perm_timeout_mode` / `acp_perm_timeout_secs`（旧分钟键
+    /// `acp_perm_timeout_min` 兼容回退）注入，reaper 每个 tick 动态读取
+    /// （运行时热更新）。阈值为 0 = 「总是」档，语义见 `acp::reaper`。
     pub acp_perm_timeout: std::sync::Arc<acp::reaper::PermissionTimeoutConfig>,
     pub login_guard: auth::LoginGuard,
     /// 会话引擎注册表（D9）：持有复用器引擎 + agent 屏幕检测注册表。
@@ -921,7 +922,13 @@ fn main() -> anyhow::Result<()> {
                         .await?
                         .as_deref(),
                     ),
-                    permission_timeout_secs_from_setting(
+                    permission_timeout_secs_from_settings(
+                        sqlx::query_scalar::<_, String>(
+                            "SELECT value FROM settings WHERE key = 'acp_perm_timeout_secs'",
+                        )
+                        .fetch_optional(&db)
+                        .await?
+                        .as_deref(),
                         sqlx::query_scalar::<_, String>(
                             "SELECT value FROM settings WHERE key = 'acp_perm_timeout_min'",
                         )
@@ -1006,20 +1013,22 @@ fn main() -> anyhow::Result<()> {
                 )
                 .await;
             });
-            let frontend_dir =
-                std::env::var("FRONTEND_DIR").unwrap_or_else(|_| "frontend/dist".into());
+            // ── 前端服务 ─────────────────────────────────────────────
+            // 文件系统前端仅在显式 FRONTEND_DIR 或 debug 构建时启用（见
+            // fs_frontend_source），目录不存在时回退内嵌资源。
+            let fs_frontend = fs_frontend_source(
+                std::env::var("FRONTEND_DIR").ok(),
+                cfg!(debug_assertions),
+            )
+            .filter(|dir| Path::new(dir).is_dir());
+            let dev_mode = fs_frontend.is_some();
 
             let app = Router::new().merge(api::routes(state.clone()));
 
-            // Serve frontend: filesystem in dev mode, embedded in release mode
-            // ── 前端服务 ─────────────────────────────────────────────
-            // 检测运行模式：前端目录存在 = dev 模式（前后端分离），否则 = 生产模式（内嵌前端）
-            let dev_mode = Path::new(&frontend_dir).is_dir();
-
-            let app = if dev_mode {
-                let static_service = ServeDir::new(&frontend_dir)
-                    .not_found_service(ServeFile::new(format!("{}/index.html", frontend_dir)));
-                tracing::info!("Serving frontend from {}", frontend_dir);
+            let app = if let Some(dir) = &fs_frontend {
+                let static_service = ServeDir::new(dir)
+                    .not_found_service(ServeFile::new(format!("{}/index.html", dir)));
+                tracing::info!("Serving frontend from {}", dir);
                 app.fallback_service(static_service)
             } else {
                 tracing::debug!("Serving from embedded assets");
@@ -1169,14 +1178,14 @@ fn permission_timeout_mode_from_setting(
     setting.and_then(acp::reaper::PermissionTimeoutMode::from_str_opt).unwrap_or_default()
 }
 
-/// 解析 `settings` 表中权限请求超时时长（分钟→秒）。记录缺失或非数字（解析
-/// 失败）时回退到 reaper 默认 1800 秒，保证 DB 无该 key 时行为与硬编码常量
-/// 时代完全一致。抽成纯函数便于单测。
-fn permission_timeout_secs_from_setting(setting_min: Option<&str>) -> u64 {
-    match setting_min.and_then(|v| v.trim().parse::<u64>().ok()) {
-        Some(min) => min.saturating_mul(60),
-        None => acp::reaper::REQUIRES_ACTION_RECYCLE_SECS,
-    }
+/// 解析 `settings` 表中权限请求超时时长（秒）。新 key `acp_perm_timeout_secs`
+/// 优先；缺失/非档位值时回退 2026-10-01 前的分钟制 key `acp_perm_timeout_min`；
+/// 都拿不到才回退默认 1800 秒，保证 DB 无该 key 时行为与硬编码常量时代完全一致。
+/// 抽成纯函数便于单测（档位规则本身见 `acp::reaper::is_valid_perm_timeout_secs`）。
+fn permission_timeout_secs_from_settings(secs: Option<&str>, legacy_min: Option<&str>) -> u64 {
+    acp::reaper::perm_timeout_secs_from_setting(secs)
+        .or_else(|| acp::reaper::perm_timeout_secs_from_legacy_min(legacy_min))
+        .unwrap_or(acp::reaper::DEFAULT_PERM_TIMEOUT_SECS)
 }
 
 /// 构造 CORS 层：默认仅同源 + 显式 origin 白名单（S3）。
@@ -1255,12 +1264,24 @@ fn enforce_listen_auth(
     )
 }
 
+/// 解析文件系统前端来源：显式设置 `FRONTEND_DIR` 优先（Docker 镜像以 ENV 注入；
+/// release 二进制亦可自定义前端根），仅 **debug 构建**回退默认相对路径
+/// `frontend/dist`（dev.sh 的 cwd=worktree + `pnpm build` 产物）。
+///
+/// release 二进制不做隐式回退：否则正式版在含 `frontend/dist` 的源码目录启动时
+/// 会静默改用本地旧 dist，页面版本号/内容与二进制不符（2026-09-29 实测：正式版
+/// 更新到 0.2.26 后页面仍显示 0.2.25）。
+fn fs_frontend_source(explicit: Option<String>, debug_build: bool) -> Option<String> {
+    explicit.or_else(|| debug_build.then(|| "frontend/dist".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         acp_idle_recycle_secs_from_setting, build_cors_layer, default_db_stem, enforce_listen_auth,
-        instance_id, instance_suffix, jwt_secret_file_name, permission_timeout_mode_from_setting,
-        permission_timeout_secs_from_setting, rust_log_covers_omniterm, token_cookie_name,
+        fs_frontend_source, instance_id, instance_suffix, jwt_secret_file_name,
+        permission_timeout_mode_from_setting, permission_timeout_secs_from_settings,
+        rust_log_covers_omniterm, token_cookie_name,
     };
     use crate::acp::reaper::{
         IDLE_RECYCLE_SECS, PermissionTimeoutMode, REQUIRES_ACTION_RECYCLE_SECS,
@@ -1306,6 +1327,24 @@ mod tests {
     }
 
     #[test]
+    fn fs_frontend_requires_explicit_dir_in_release_builds() {
+        // release 二进制不做隐式回退：否则正式版在源码目录启动时会静默服务
+        // 本地旧 dist（2026-09-29：更新到 0.2.26 后页面仍显示 0.2.25 的根因）
+        assert_eq!(fs_frontend_source(None, false), None);
+        // 显式 FRONTEND_DIR 优先（Docker 镜像 ENV；release 亦可自定义前端根）
+        assert_eq!(
+            fs_frontend_source(Some("/srv/frontend".into()), false).as_deref(),
+            Some("/srv/frontend")
+        );
+        // debug 构建（dev.sh）回退默认相对路径；显式值仍然优先
+        assert_eq!(fs_frontend_source(None, true).as_deref(), Some("frontend/dist"));
+        assert_eq!(
+            fs_frontend_source(Some("custom/dist".into()), true).as_deref(),
+            Some("custom/dist")
+        );
+    }
+
+    #[test]
     fn missing_setting_falls_back_to_default() {
         assert_eq!(acp_idle_recycle_secs_from_setting(None), IDLE_RECYCLE_SECS);
     }
@@ -1344,13 +1383,23 @@ mod tests {
     }
 
     #[test]
-    fn permission_timeout_secs_from_setting_converts_and_falls_back() {
-        assert_eq!(permission_timeout_secs_from_setting(None), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("abc")), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("")), REQUIRES_ACTION_RECYCLE_SECS);
-        assert_eq!(permission_timeout_secs_from_setting(Some("1")), 60);
-        assert_eq!(permission_timeout_secs_from_setting(Some("30")), 1800);
-        assert_eq!(permission_timeout_secs_from_setting(Some(" 45 ")), 2700);
+    fn permission_timeout_secs_from_settings_falls_back_to_legacy_minutes_then_default() {
+        // 新 key 生效（「总是」档 = 0 也是合法档位，不是「缺失」）。
+        assert_eq!(permission_timeout_secs_from_settings(Some("0"), Some("45")), 0);
+        assert_eq!(permission_timeout_secs_from_settings(Some(" 30 "), Some("45")), 30);
+        // 新 key 缺失 → 回退分钟制旧记录（存量用户改过的超时不丢）。
+        assert_eq!(permission_timeout_secs_from_settings(None, Some("45")), 2700);
+        assert_eq!(permission_timeout_secs_from_settings(Some("abc"), Some(" 1 ")), 60);
+        // 新 key 是非档位值（45 秒 / 越上限）→ 同样走兼容回退。
+        assert_eq!(permission_timeout_secs_from_settings(Some("45"), Some("30")), 1800);
+        assert_eq!(permission_timeout_secs_from_settings(Some("3630"), None), 1800);
+        // 两边都拿不到 → 默认 30 分钟（= 硬编码时代行为）。
+        for (secs, min) in [(None, None), (Some(""), None), (None, Some("abc"))] {
+            assert_eq!(
+                permission_timeout_secs_from_settings(secs, min),
+                REQUIRES_ACTION_RECYCLE_SECS
+            );
+        }
     }
 
     #[test]

@@ -26,6 +26,51 @@ pub const IDLE_RECYCLE_SECS: u64 = 300;
 /// session/cancel 语义，且审批须等真人决策），此为无人应答时的唯一兜底。
 pub const REQUIRES_ACTION_RECYCLE_SECS: u64 = 1800;
 
+/// 权限请求超时时长（settings 表 `acp_perm_timeout_secs`，秒）的档位规则。
+///
+/// 2026-10-01 起时长改用秒制并新增两个档位：面板滑块按 30 秒步进，用户可在
+/// 「总是」（= 不等待）与 30 秒之间取舍。`[PERM_TIMEOUT_NEVER_SECS]` 是特档：
+/// 不表示「马上超时」，而是**没有超时触发点**——语义随模式而定（见
+/// [`run_reaper`] 中的三分支）：
+///
+/// - `auto` + 总是：权限请求一出现就在下一个 tick 自动应答（不等待用户）
+/// - `abort`/`wait` + 总是：没有触发点 = 永不超时（等同一直等待），同时跳过
+///   prompt-stale 定稿，避免把「等审批」的回合误判卡死（与 D1 wait 模式同因）
+pub const PERM_TIMEOUT_NEVER_SECS: u64 = 0;
+/// 滑块步进（秒）：全程 30 秒一档，`0` 与 `30..=3600` 的 30 秒倍数都合法。
+pub const PERM_TIMEOUT_STEP_SECS: u64 = 30;
+/// 滑块上限（秒，1 小时），与分钟制滑块的 60 分钟上限一致。
+pub const MAX_PERM_TIMEOUT_SECS: u64 = 3600;
+/// 兜底默认值（秒），DB 无配置时沿用 2026-08-18 起的 30 分钟。
+pub const DEFAULT_PERM_TIMEOUT_SECS: u64 = REQUIRES_ACTION_RECYCLE_SECS;
+
+/// 时长是否落在允许的档位上（`0` 或 ≤1 小时的 30 秒倍数）。
+pub fn is_valid_perm_timeout_secs(secs: u64) -> bool {
+    secs <= MAX_PERM_TIMEOUT_SECS && secs.is_multiple_of(PERM_TIMEOUT_STEP_SECS)
+}
+
+/// 解析 settings 表中的秒制时长。缺失/非数字/越档位一律 `None`，调用方回退
+/// （见 [`DEFAULT_PERM_TIMEOUT_SECS`]）——非法值不静默改写成别的档位。
+pub fn perm_timeout_secs_from_setting(setting: Option<&str>) -> Option<u64> {
+    let secs = setting.map(str::trim)?.parse::<u64>().ok()?;
+    is_valid_perm_timeout_secs(secs).then_some(secs)
+}
+
+/// 兼容 2026-10-01 之前的分钟制 key（`acp_perm_timeout_min`）：换算成秒后仍要
+/// 过档位校验（旧的整数分钟天然都是 30 秒的倍数）。新 key 一旦写入即以新 key
+/// 为准，本函数只在新 key 缺失时兜底。
+pub fn perm_timeout_secs_from_legacy_min(setting: Option<&str>) -> Option<u64> {
+    let secs = setting.map(str::trim)?.parse::<u64>().ok()?.checked_mul(60)?;
+    is_valid_perm_timeout_secs(secs).then_some(secs)
+}
+
+/// 超时时长折算成中文文案（text 列兜底 / 后端测试断言）。整分钟走「分钟」，
+/// 其余（30 秒档、90 秒…）走「秒」；`0`（「总是」档）返回空串——该档位不是
+/// 「马上超时」，句式由调用方另行选择。
+fn format_perm_duration(secs: u64) -> String {
+    if secs.is_multiple_of(60) { format!("{} 分钟", secs / 60) } else { format!("{secs} 秒") }
+}
+
 /// prompt 卡死兜底阈值（秒）：有进行中 prompt 但久无 agent 通知满 10 分钟，
 /// 强制定稿 turn 并广播结束。兜底不发送 PromptResponse 的 agent（§8 多实现兼容）。
 /// 定稿后下一轮 idle 检查会按常规回收进程。
@@ -161,10 +206,11 @@ fn format_request_line(summary: &PermissionRequestSummary) -> String {
 fn build_perm_notice_abort(
     summaries: &[PermissionRequestSummary],
     extra: usize,
-    minutes: u64,
+    secs: u64,
 ) -> PermissionTimeoutNotice {
     let mut text = format!(
-        "权限请求 {minutes} 分钟未获响应，系统已自动取消该请求并回收会话（agent 已终止）。可重新打开会话继续。"
+        "权限请求 {}未获响应，系统已自动取消该请求并回收会话（agent 已终止）。可重新打开会话继续。",
+        format_perm_duration(secs)
     );
     for s in summaries {
         text.push(' ');
@@ -176,35 +222,45 @@ fn build_perm_notice_abort(
     PermissionTimeoutNotice {
         label: SYSTEM_LABEL_PERM_TIMEOUT_ABORT,
         text,
-        detail: detail_json(summaries.first(), None, minutes, extra),
+        detail: detail_json(summaries.first(), None, secs, extra),
     }
 }
 
 /// 组装「自动推进」告知：代替用户选了哪个选项、原请求是什么。
+///
+/// `secs == 0`（面板「总是」档）表示**没有等待**：文案改用不报时长的句式
+/// （「未获响应」而非「N 秒未获响应」），与 i18n 的 `system.permTimeout.autoAlways`
+/// 一一对应。
 fn build_perm_notice_auto(
     summary: &PermissionRequestSummary,
     selected: &str,
-    minutes: u64,
+    secs: u64,
 ) -> PermissionTimeoutNotice {
-    let mut text =
-        format!("权限请求 {minutes} 分钟未获响应，已按设置自动选择「{selected}」继续执行。");
+    let waited = if secs == PERM_TIMEOUT_NEVER_SECS {
+        "权限请求未获响应".to_string()
+    } else {
+        format!("权限请求 {}未获响应", format_perm_duration(secs))
+    };
+    let mut text = format!("{waited}，已按设置自动选择「{selected}」继续执行。");
     text.push(' ');
     text.push_str(&format_request_line(summary));
     PermissionTimeoutNotice {
         label: SYSTEM_LABEL_PERM_TIMEOUT_AUTO,
         text,
-        detail: detail_json(Some(summary), Some(selected), minutes, 0),
+        detail: detail_json(Some(summary), Some(selected), secs, 0),
     }
 }
 
 fn detail_json(
     summary: Option<&PermissionRequestSummary>,
     selected: Option<&str>,
-    minutes: u64,
+    secs: u64,
     extra: usize,
 ) -> serde_json::Value {
     serde_json::json!({
-        "minutes": minutes,
+        // 秒制时长（前端按 <60s 显示秒、否则显示分钟）。2026-10-01 前的历史行
+        // 只有 `minutes`，前端读不到 seconds 时按 minutes × 60 回退。
+        "seconds": secs,
         "tool": summary.and_then(|s| s.tool.clone()),
         "kind": summary.and_then(|s| s.kind.clone()),
         "content": summary.and_then(|s| s.content.clone()),
@@ -252,7 +308,7 @@ async fn auto_advance_permissions(
     db: &SqlitePool,
     session_id: &str,
     client: &AcpClient,
-    minutes: u64,
+    secs: u64,
 ) -> bool {
     let events = client.pending_permission_events().await;
     let mut resolved = 0usize;
@@ -273,7 +329,7 @@ async fn auto_advance_permissions(
             continue;
         }
         let summary = summarize_permission_request(&event.request);
-        let notice = build_perm_notice_auto(&summary, &selected, minutes);
+        let notice = build_perm_notice_auto(&summary, &selected, secs);
         persist_and_broadcast(db, session_id, client, &notice).await;
     }
     if resolved > MAX_PERM_NOTICE_REQUESTS {
@@ -307,8 +363,9 @@ async fn auto_advance_permissions(
 /// `load`，改动无需重启即可生效；缺省兜底见 [`IDLE_RECYCLE_SECS`]。
 ///
 /// `perm_timeout` 为共享的权限超时配置（模式 + 秒级阈值）：main.rs 从 settings 表
-/// 读取 `acp_perm_timeout_mode` / `acp_perm_timeout_min` 注入，运行时热更新；
-/// 缺省兜底见 [`PermissionTimeoutConfig::default`]。
+/// 读取 `acp_perm_timeout_mode` / `acp_perm_timeout_secs` 注入，运行时热更新；
+/// 缺省兜底见 [`PermissionTimeoutConfig::default`]。阈值 `0` 是「总是」档
+/// （[`PERM_TIMEOUT_NEVER_SECS`]，语义见其文档注释）。
 ///
 /// `db` 用于权限超时行动时写入 system 告知消息（agent 被取消/被自动应答的原因，
 /// 用户刷新会话后仍可见）；idle 回收（用户完全不用）不写。
@@ -333,31 +390,44 @@ pub async fn run_reaper(
                 continue;
             }
             let pending = client.pending_permissions().await;
-            if pending > 0 && client.is_permission_stale(perm_secs).await {
-                match perm_mode {
-                    PermissionTimeoutMode::Wait => {
-                        // 一直等待：权限未决期间不做任何超时动作。回合保持
-                        // \"等审批\"语义，用户回来时 banner 由 pending_events
-                        // 重放恢复（见 ws/acp.rs 连接重放）。
-                    }
-                    PermissionTimeoutMode::Auto => {
-                        if !auto_advance_permissions(&db, &sid, &client, perm_secs / 60).await {
-                            // 一个选项都解析不出来：不能永久挂起，降级为超时中止。
-                            tracing::warn!(
-                                session_id = %sid,
-                                "reaper: auto-advance found no selectable option; falling back to abort"
-                            );
-                            to_reap.push((sid, true));
+            if pending > 0 {
+                // 时长档位语义（`0` = 面板「总是」档，不是「马上超时」）：
+                // - auto：有未决请求即视为到点 → 下一个 tick 自动应答，不等待；
+                // - abort：没有触发点 = 永不超时（用户要「不中止」请用 wait 模式）；
+                // - wait：同 D1，无任何超时动作。
+                let fired = if perm_secs == PERM_TIMEOUT_NEVER_SECS {
+                    perm_mode == PermissionTimeoutMode::Auto
+                } else {
+                    client.is_permission_stale(perm_secs).await
+                };
+                if fired {
+                    match perm_mode {
+                        PermissionTimeoutMode::Wait => {
+                            // 一直等待：权限未决期间不做任何超时动作。回合保持
+                            // \"等审批\"语义，用户回来时 banner 由 pending_events
+                            // 重放恢复（见 ws/acp.rs 连接重放）。
                         }
+                        PermissionTimeoutMode::Auto => {
+                            if !auto_advance_permissions(&db, &sid, &client, perm_secs).await {
+                                // 一个选项都解析不出来：不能永久挂起，降级为超时中止。
+                                tracing::warn!(
+                                    session_id = %sid,
+                                    "reaper: auto-advance found no selectable option; falling back to abort"
+                                );
+                                to_reap.push((sid, true));
+                            }
+                        }
+                        PermissionTimeoutMode::Abort => to_reap.push((sid, true)),
                     }
-                    PermissionTimeoutMode::Abort => to_reap.push((sid, true)),
+                    continue;
                 }
-                continue;
-            }
-            if perm_mode == PermissionTimeoutMode::Wait && pending > 0 {
-                // wait 模式下未超时的未决审批同样跳过 prompt-stale：把\"等审批\"\
-                // 的回合误判为卡死会强制作废并广播结束，与用户随后的应答产生竞态。
-                continue;
+                if perm_secs == PERM_TIMEOUT_NEVER_SECS || perm_mode == PermissionTimeoutMode::Wait
+                {
+                    // 无超时触发点（「总是」档 / wait 模式）的未决审批同样跳过
+                    // prompt-stale：把\"等审批\"的回合误判为卡死会强制作废并广播
+                    // 结束，与用户随后的应答产生竞态。
+                    continue;
+                }
             }
             if client.is_prompt_stale(PROMPT_STALE_SECS) {
                 tracing::warn!(
@@ -397,7 +467,7 @@ pub async fn run_reaper(
                     let notice = build_perm_notice_abort(
                         &summaries,
                         events.len().saturating_sub(MAX_PERM_NOTICE_REQUESTS),
-                        perm_secs / 60,
+                        perm_secs,
                     );
                     persist_and_broadcast(&db, &sid, &client, &notice).await;
                     // 先取消卡住的权限请求，避免 agent 永久阻塞
@@ -458,6 +528,40 @@ mod tests {
         assert_eq!(cfg.snapshot().0, PermissionTimeoutMode::Abort);
     }
 
+    #[test]
+    fn perm_timeout_secs_accepts_only_slider_notches() {
+        for ok in [
+            PERM_TIMEOUT_NEVER_SECS,
+            PERM_TIMEOUT_STEP_SECS,
+            60,
+            DEFAULT_PERM_TIMEOUT_SECS,
+            MAX_PERM_TIMEOUT_SECS,
+        ] {
+            assert!(is_valid_perm_timeout_secs(ok), "should accept {ok}");
+            assert_eq!(perm_timeout_secs_from_setting(Some(&ok.to_string())), Some(ok));
+        }
+        // 非 30 秒倍数 / 越上限 / 非数字 → None（调用方回退默认，不静默改档）。
+        for bad in [1, 45, 59, MAX_PERM_TIMEOUT_SECS + PERM_TIMEOUT_STEP_SECS, u64::MAX] {
+            assert!(!is_valid_perm_timeout_secs(bad), "should reject {bad}");
+        }
+        for bad in [None, Some(""), Some("abc"), Some(" 45 "), Some("-30")] {
+            assert_eq!(perm_timeout_secs_from_setting(bad), None, "bad value: {bad:?}");
+        }
+        // trim 容忍（DB 值可能带空白）。
+        assert_eq!(perm_timeout_secs_from_setting(Some(" 1800 ")), Some(1800));
+    }
+
+    #[test]
+    fn perm_timeout_secs_legacy_minutes_fallback() {
+        // 2026-10-01 前的分钟制记录：新 key 缺失时换算成秒（整数分钟都是 30 秒倍数）。
+        assert_eq!(perm_timeout_secs_from_legacy_min(Some("45")), Some(2700));
+        assert_eq!(perm_timeout_secs_from_legacy_min(Some(" 1 ")), Some(60));
+        // 越档 / 溢出 / 非数字 → None。
+        for bad in [None, Some(""), Some("abc"), Some("61"), Some("18446744073709551615")] {
+            assert_eq!(perm_timeout_secs_from_legacy_min(bad), None, "bad legacy: {bad:?}");
+        }
+    }
+
     fn sample_summary() -> PermissionRequestSummary {
         PermissionRequestSummary {
             tool: Some("Bash".into()),
@@ -470,13 +574,13 @@ mod tests {
 
     #[test]
     fn abort_notice_carries_request_details() {
-        let notice = build_perm_notice_abort(&[sample_summary()], 0, 30);
+        let notice = build_perm_notice_abort(&[sample_summary()], 0, DEFAULT_PERM_TIMEOUT_SECS);
         assert_eq!(notice.label, SYSTEM_LABEL_PERM_TIMEOUT_ABORT);
         assert!(notice.text.contains("30 分钟"), "{}", notice.text);
         assert!(notice.text.contains("git push origin main"), "{}", notice.text);
         assert!(notice.text.contains("可选项：允许一次 / 总是允许 / 拒绝"), "{}", notice.text);
         let detail = &notice.detail;
-        assert_eq!(detail["minutes"], 30);
+        assert_eq!(detail["seconds"], DEFAULT_PERM_TIMEOUT_SECS);
         assert_eq!(detail["tool"], "Bash");
         assert_eq!(detail["options"][1], "总是允许");
         assert_eq!(detail["extra"], 0);
@@ -484,20 +588,52 @@ mod tests {
     }
 
     #[test]
+    fn notice_duration_spells_out_sub_minute_notches() {
+        // 30 秒档：中文兜底文案不能用「0 分钟」，必须报秒。
+        let notice = build_perm_notice_abort(&[sample_summary()], 0, 30);
+        assert!(notice.text.starts_with("权限请求 30 秒未获响应"), "{}", notice.text);
+        assert_eq!(notice.detail["seconds"], 30);
+        // 非整分钟档报秒（90 秒不折成 1.5 分钟——档位本身就是 30 秒粒度）。
+        let notice = build_perm_notice_abort(&[], 0, 90);
+        assert!(notice.text.starts_with("权限请求 90 秒未获响应"), "{}", notice.text);
+        // 整分钟档走分钟。
+        let notice = build_perm_notice_abort(&[], 0, 60);
+        assert!(notice.text.starts_with("权限请求 1 分钟未获响应"), "{}", notice.text);
+    }
+
+    #[test]
+    fn auto_notice_for_never_notch_omits_duration() {
+        // 「总是」档（secs=0）= 不等待：文案不报时长，detail 仍带 seconds=0 供前端判档。
+        let notice = build_perm_notice_auto(&sample_summary(), "总是允许", PERM_TIMEOUT_NEVER_SECS);
+        assert_eq!(notice.label, SYSTEM_LABEL_PERM_TIMEOUT_AUTO);
+        assert!(
+            notice.text.starts_with("权限请求未获响应，已按设置自动选择「总是允许」继续执行。"),
+            "{}",
+            notice.text
+        );
+        assert!(
+            !notice.text.contains("0 分钟") && !notice.text.contains("0 秒"),
+            "{}",
+            notice.text
+        );
+        assert_eq!(notice.detail["seconds"], PERM_TIMEOUT_NEVER_SECS);
+    }
+
+    #[test]
     fn abort_notice_reports_extra_requests() {
-        let notice = build_perm_notice_abort(&[sample_summary()], 3, 30);
+        let notice = build_perm_notice_abort(&[sample_summary()], 3, DEFAULT_PERM_TIMEOUT_SECS);
         assert!(notice.text.contains("另有 3 项审批一并取消"), "{}", notice.text);
         assert_eq!(notice.detail["extra"], 3);
     }
 
     #[test]
     fn auto_notice_names_the_selected_option() {
-        let notice = build_perm_notice_auto(&sample_summary(), "总是允许", 10);
+        let notice = build_perm_notice_auto(&sample_summary(), "总是允许", 600);
         assert_eq!(notice.label, SYSTEM_LABEL_PERM_TIMEOUT_AUTO);
         assert!(notice.text.contains("自动选择「总是允许」"), "{}", notice.text);
         assert!(notice.text.contains("10 分钟"), "{}", notice.text);
         assert_eq!(notice.detail["selected"], "总是允许");
-        assert_eq!(notice.detail["minutes"], 10);
+        assert_eq!(notice.detail["seconds"], 600);
     }
 
     #[test]
@@ -513,7 +649,7 @@ mod tests {
     #[test]
     fn abort_notice_without_summary_still_readable() {
         // 竞态：cancel_all 已清空 pending 才走到回收——文案不残缺。
-        let notice = build_perm_notice_abort(&[], 0, 30);
+        let notice = build_perm_notice_abort(&[], 0, DEFAULT_PERM_TIMEOUT_SECS);
         assert!(notice.text.starts_with("权限请求 30 分钟未获响应"), "{}", notice.text);
         assert!(notice.detail["tool"].is_null());
     }

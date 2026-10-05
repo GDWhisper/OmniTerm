@@ -281,6 +281,10 @@ body.pixel-font-on {
 :root {
   --sidebar-width: 200px;
   --filemanager-width: 300px;
+  /* 消息区滑动时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）共用的淡出档位：
+     不透明度与过渡时长各一个 token，两处消费同源，避免硬编码漂移。 */
+  --chat-scroll-dim-opacity: 0.35;
+  --chat-scroll-dim-transition: 0.15s ease-out;
 }
 
 * {
@@ -1851,6 +1855,62 @@ body.parchment-texture {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Chat — assistant markdown typography (.chat-markdown).
+
+   Tailwind Preflight 全局 `* { margin:0; padding:0 }` 与
+   `ol,ul,menu { list-style:none }` 抹掉 UA 默认排版后，react-markdown 产出的
+   p/h/ul/ol/blockquote 在气泡里零间距、无列表符号，agent 的长输出因此挤成
+   一团。文件抽屉预览侧由 .file-markdown 一套规则兜住（见本文件「文件抽屉
+   markdown 渲染预览」节），聊天侧此前无对应规则——这里补齐。
+   与 .file-markdown 的差异：间距整体紧一档（气泡窄、密度优先），首/尾子元素
+   贴齐气泡 padding，不与 TextBlockView 自带的 8px 12px 叠加成双重留白。
+   ──────────────────────────────────────────────────────────────────── */
+.chat-markdown {
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+/* 首块贴顶、尾块贴底：气泡 padding 已是边界留白 */
+.chat-markdown > :first-child { margin-top: 0; }
+.chat-markdown > :last-child { margin-bottom: 0; }
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-weight: 700;
+  line-height: 1.3;
+}
+/* 标题层级压住 UA 默认 2em/1.5em：气泡上限 85% 宽，撑不下大标题 */
+.chat-markdown h1 { font-size: 1.25em; margin: 12px 0 6px; }
+.chat-markdown h2 { font-size: 1.15em; margin: 12px 0 5px; }
+.chat-markdown h3 { font-size: 1.05em; margin: 10px 0 4px; }
+.chat-markdown h4 { font-size: 1em; margin: 10px 0 4px; }
+.chat-markdown h5,
+.chat-markdown h6 { font-size: 0.92em; margin: 10px 0 4px; color: var(--text-secondary); }
+.chat-markdown p { margin: 0 0 8px; }
+/* 列表符号与缩进被 Preflight 抹掉，显式恢复（嵌套层级同样生效） */
+.chat-markdown ul { list-style: disc outside; margin: 6px 0 8px; padding-left: 1.4em; }
+.chat-markdown ol { list-style: decimal outside; margin: 6px 0 8px; padding-left: 1.4em; }
+.chat-markdown li { margin: 2px 0; }
+/* GFM 任务列表（- [x] / - [ ]）渲染为 disabled checkbox，与文件预览同规则 */
+.chat-markdown li > input[type="checkbox"] { accent-color: var(--accent); margin-right: 4px; }
+.chat-markdown blockquote {
+  margin: 6px 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--wood-dark);
+  color: var(--text-secondary);
+}
+/* Preflight 把 hr 压成 0 高 + 1px currentColor 顶边，显式恢复分隔线 */
+.chat-markdown hr {
+  height: 1px;
+  border: none;
+  background: var(--border-subtle);
+  margin: 12px 0;
+}
+.chat-markdown img { max-width: 100%; }
+
+/* ────────────────────────────────────────────────────────────────────
    Corner nails — gold squares at the 4 corners of floating panels.
    Uses 4 absolutely-positioned ::before/::after + 2 <span> children
    (since CSS only gives us 2 pseudo-elements).
@@ -2103,7 +2163,7 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-last-prompt-card {
   cursor: pointer;
   background: var(--bg-elevated);
-  transition: background 0.1s steps(2);
+  transition: background 0.1s steps(2), opacity var(--chat-scroll-dim-transition);
 }
 .chat-last-prompt-card:hover {
   background: var(--bg-surface);
@@ -2111,6 +2171,22 @@ input[type="range"]:active::-webkit-slider-thumb {
 .chat-last-prompt-card:active {
   transform: translate(2px, 2px);
   box-shadow: 2px 2px 0 var(--pixel-shadow);
+}
+/* 用户滑动消息区时淡出（class 由 ChatView handleScroll 挂摘）：卡片是浮层，滑动中
+   会盖住从它下面滑过的正文，淡出让出阅读带；停止滑动约 0.2s 后恢复可读。
+   opacity 走连续 ease-out，与 background 的 steps(2) 像素离散过渡刻意不同档——
+   淡入淡出是模拟光线变化，离散步进会读成闪烁。与「回到底部」按钮共用淡出 token。 */
+.chat-last-prompt-card.is-scrolling {
+  opacity: var(--chat-scroll-dim-opacity);
+}
+
+/* 「回到底部」提示条（ChatView 消息区底部居中；其余视觉为 inline，本类只补与
+   「上次输入」卡片共用的滑动淡出档位——class 由 ChatView handleScroll 挂摘）。 */
+.chat-jump-bottom {
+  transition: opacity var(--chat-scroll-dim-transition);
+}
+.chat-jump-bottom.is-scrolling {
+  opacity: var(--chat-scroll-dim-opacity);
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。

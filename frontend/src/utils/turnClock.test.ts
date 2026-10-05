@@ -244,30 +244,56 @@ describe('turnClock tps 估算', () => {
 describe('turnClock observed tool intervals', () => {
   beforeEach(() => clearTurnClock())
 
-  it('首个输出落在工具并集内：封口前的工具段不进解码分母', () => {
+  it('excludes a long silent tool execution from the rate, resuming after the tool ends', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000) // 首字
+    updateTurnTool('s1', 'a', 'in_progress', 1_000)
+    // 工具起点后到达的过渡文本（与 in_progress 同批、生成于工具之前）：
+    // 它把首段封在 [1s,1.5s]，此后到工具结束都是静默执行（2026-10-04 用户报告：
+    // 这段曾被留在 tps 分母里，工具跑多久读数就摊多薄）。
+    addOutputChars('s1', 400, 1_500)
+    expect(turnTps('s1', 30_000)).toBeNull() // 窗口内无生成时间，不随工具执行下跌
+    expect(turnToolElapsedMs('s1', 30_000)).toBe(29_000)
+    updateTurnTool('s1', 'a', 'completed', 31_000)
+    expect(turnToolElapsedMs('s1', 31_000)).toBe(30_000)
+    // 工具结束后模型恢复输出：解码窗口 [1s,34s] 去掉 30s 工具 → 450 token ÷ 3s
+    addOutputChars('s1', 1_000, 33_000)
+    expect(turnTps('s1', 34_000)).toBe(150)
+    endTurn('s1', 34_000)
+    expect(finalToolElapsedMs('s1')).toBe(30_000)
+    expect(finalTps('s1')).toBe(150)
+  })
+
+  it('首个输出落在工具并集内：首段与静默执行段都不进解码分母', () => {
     beginTurn('s1', 0)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
-    // 工具执行 3s 后模型开始说话：锚点落在 4s，[1s,4s] 封口为纯工具
+    // 工具执行 3s 后模型开始说话：窗口零点落在 4s，[1s,4s] 封存为首段
     addOutputChars('s1', 1_200, 4_000)
     expect(turnTps('s1', 4_000)).toBeNull() // 零长度窗口，不把工具时间算成生成
     updateTurnTool('s1', 'a', 'completed', 6_000)
-    // 封口后的并集内生成 [4s,6s] 留在分母 → 300 token ÷ 2s
-    expect(turnTps('s1', 6_000)).toBe(150)
-    // 展示同样只算封口段 [1s,4s]，封口后的执行重叠段归生成
-    expect(turnToolElapsedMs('s1', 6_000)).toBe(3_000)
+    // 末次输出之后到并集关闭的 [4s,6s] 是静默执行，归工具：窗口内无生成时间 → null
+    expect(turnTps('s1', 6_000)).toBeNull()
+    // 展示与分母同口径：首段 [1s,4s] + 静默尾段 [4s,6s]
+    expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
   })
 
-  it('stops tool timing at the seal: prose or thought inside a union freezes the clock', () => {
+  it('freezes tool timing while prose keeps streaming, resumes it after the last delta', () => {
     beginTurn('s1', 0)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
     // 工具执行期间模型开始思考/说话（2026-09-27 用户报告：thinking 期间工具也在计时）：
-    // 计时停在封口点，之后无论思考流多久都不再累加。
+    // 每次输出都把「末次输出」前移，尾段始终从最新 chunk 起算 → 思考流期间工具表冻结。
     addOutputChars('s1', 400, 2_000)
     expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
+    addOutputChars('s1', 400, 4_000)
+    expect(turnToolElapsedMs('s1', 4_000)).toBe(1_000)
+    addOutputChars('s1', 400, 12_000)
     expect(turnToolElapsedMs('s1', 12_000)).toBe(1_000)
-    updateTurnTool('s1', 'a', 'completed', 13_000)
-    expect(turnToolElapsedMs('s1', 13_000)).toBe(1_000)
+    // 末次输出之后到并集关闭的 0.5s 没有新的输出证据：静默执行段归工具（E19）
+    updateTurnTool('s1', 'a', 'completed', 12_500)
+    expect(turnToolElapsedMs('s1', 12_500)).toBe(1_500)
+    // 解码分母 = 生成窗口 [2s,12.5s] 去掉闭合并集里的静默 0.5s → 300 token ÷ 10s
+    expect(turnTps('s1', 12_500)).toBe(30)
   })
 
   it('keeps 10s of tools in work and yields no rate while no prose follows the first delta', () => {
@@ -336,7 +362,7 @@ describe('turnClock observed tool intervals', () => {
     expect(turnTps('s1', 7_000)).toBe(25)
   })
 
-  it('pauses the generation clock at the first prose inside a tool union, then resumes', () => {
+  it('pauses the generation clock at prose inside a tool union, and keeps the silent tail as tool time', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
@@ -346,20 +372,21 @@ describe('turnClock observed tool intervals', () => {
     // 速度不随工具执行跌落入分母、也不拿首字前的 1s 虚报。
     expect(turnTps('s1', 5_000)).toBeNull()
     expect(turnTps('s1', 6_000)).toBeNull()
-    // 首次输出到达：把「工具起点 → 此刻」封口为纯工具时间（3s 工作坐标内的 2s），
-    // 解码零点仍是 1s；封口之后重新走时。此刻窗口仍为 0 → null。
+    // 工具内输出到达（工作坐标 3s）：首段 [1s,3s] 封存，尾段自此起算；
+    // 单次输出没有可测的生成跨度 → 仍 null。
     addOutputChars('s1', 400, 5_000)
     expect(turnTps('s1', 5_000)).toBeNull()
-    // 解码窗口 [1s,6s] 去掉封口的 2s，剩 1s → 800/4/1
-    expect(turnTps('s1', 6_000)).toBe(200)
+    expect(turnTps('s1', 6_000)).toBeNull()
     updateTurnTool('s1', 'b', 'in_progress', 6_000)
     updateTurnTool('s1', 'a', 'completed', 7_000)
     updateTurnTool('s1', 'b', 'completed', 8_000)
     updateTurnTool('s1', 'c', 'in_progress', 9_000)
     endTurn('s1', 11_000)
-    // 展示口径已是封口段（E18）：闭合并集只计封口的 2s + 开放并集 c 的 2s。
-    expect(finalToolElapsedMs('s1')).toBe(4_000)
-    expect(finalTps('s1')).toBe(50)
+    // 展示口径（E19 起与分母同归因）：a/b 并集的非生成段 [1s,6s]（工作坐标）
+    // + c 开放并集的 [7s,9s]，共 7s。
+    expect(finalToolElapsedMs('s1')).toBe(7_000)
+    // 解码分母只剩 a/b 关闭到 c 开始之间的 1s（工作坐标 [6s,7s]）→ 800/4 ÷ 1s
+    expect(finalTps('s1')).toBe(200)
   })
 
   it('keeps tool time observed before a reconnect instead of wiping it', () => {
