@@ -49,6 +49,8 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+## [0.2.27] - 2026-10-05
+
 ### Changed
 
 - (2026-10-01 03:10) `[frontend]` `[api]` `[backend]` 设置 → 会话「权限请求超时」时长滑块新增两个档位：最左档**「总是」**与**30 秒**。滑块全程 30 秒一档（上限 1 小时），时长单位由分钟改为秒（settings 表 `acp_perm_timeout_min` → `acp_perm_timeout_secs`，`GET/PUT /api/v1/settings/permission-timeout` 的字段同步为 `{mode, seconds}`；旧分钟键在读取时兼容回退、在 PUT 时清理，存量设置不丢）。「总是」= 没有超时触发点：自动推进模式下权限请求一出现即自动放行（不等待），故该档只在自动推进模式露出，其余模式从 30 秒起，切走时夹回 30 秒。超时告知消息的时长改走秒制并按「整分钟报分钟、其余报秒」显示（30 秒档不会再显示成「0 分钟」），面板滑块与聊天消息共用 `frontend/src/utils/permTimeout.ts` 同一口径

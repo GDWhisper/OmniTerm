@@ -122,9 +122,11 @@ sync-main.sh 会自动运行：
 
 #### Windows 验证（默认交 CI 矩阵，无需手动）
 
-`release.yml` 的 `backend (windows-latest, x86_64-pc-windows-msvc)` job 会真实执行 `cargo build --release --target x86_64-pc-windows-msvc`，**编译级验证已由 CI 覆盖**——Linux 侧不预跑不构成盲区，改动不涉 Windows 专有路径时可跳过（跳过需用户确认）。
+`release.yml` 的 `backend (windows-latest, x86_64-pc-windows-msvc)` job 会真实执行 `cargo build --release --target x86_64-pc-windows-msvc`，**编译级验证已由 CI 覆盖**——Linux 侧不预跑不构成盲区。
 
-仅当改动触及 Windows **专有代码路径**时才需要本地/用户机验证：`#[cfg(windows)]` 分支、spawn/进程与信号 API、路径与 `PATHEXT` 语义、CRLF 字节契约（这类问题编译能过、运行必错）。
+**默认行为（无需用户确认）**：发布操作运行在 Linux 环境时，**默认跳过 Windows 本地验证**，不回退任何 Windows 专有路径假设、也不要求用户在 Windows 上补验；CI 矩阵已覆盖编译级验证。
+
+仅当改动触及 Windows **专有代码路径**时才需要本地/用户机验证：`#[cfg(windows)]` 分支、spawn/进程与信号 API、路径与 `PATHEXT` 语义、CRLF 字节契约（这类问题编译能过、运行必错）。此类改动仍需验证的，属例外情形，需在发布前显式确认验证方式。
 
 验证流程（需要时）：用户在 Windows 上 clone 公开仓 → `git checkout main` → `cargo check`；失败则 agent 修复后重新 sync + 推送再验，直到通过。
 
