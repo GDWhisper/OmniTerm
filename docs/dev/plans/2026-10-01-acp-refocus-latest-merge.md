@@ -115,3 +115,27 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 | `CHANGELOG.md` | feat 条目 |
 | `docs/reference/user-testing.md` | §21 手动回归用例 |
 | 本文件 | 实施偏差就地加「勘误」块 |
+
+---
+
+## 勘误（2026-10-04）：移动端切后台补拉失配，`onclose` 不是可靠先知
+
+**现象**：维护者实测移动端（iOS / Android 浏览器）ACP 会话切后台再回来，聊天总是停在旧内容，必须手动刷新页面才最新；桌面端同链路不复现。用户侧补充判断「可能是失焦断连但客户端没及时收到信号」——取证成立，即此勘误。
+
+**取证**：D1 触发链 = 「`ws.onclose`（非 `unmounted` 拆除）置 `needsCatchUp`」→「聚焦 / 可见性恢复 / 挂载时消费」。该链在桌面成立：切标签/切窗口只置 `visibilityState=hidden`，JS 照常运行，服务端 ~125s idle 重置（`docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md` Phase 0 实测，形态 `ResetWithoutClosingHandshake`）或承载网 RST 产生的 onclose 在隐藏/恢复前后即派发，标记来得及就位再被消费。
+
+移动端切后台由 OS 挂起/冻结页面（timers、rAF、事件派发全停），断开信号**产生于冻结期内**，两种形态都断链：
+
+- **WebKit 类**（iOS Safari / WKWebView）：冻结页不补派 onclose——事件不排队、`readyState` 直推 CLOSED ⇒ 标记**永不置位**，回来也不补拉；
+- **Chromium 类**（Android Chrome）：close 事件入队、待恢复到可见后才派发——若晚于 `visibilitychange` 的派发，标记置位时已无「聚焦 / 可见」事件可再次触发补拉；而重连 `onopen` 刻意不清标记（D1），标记就永久挂起，直到用户再切一次后台/切会话重挂载/刷新。
+
+结论：**断连确实发生，但客户端没有及时（或根本没有）收到 `onclose`**——D1「onclose 是断连的可靠先知」在移动端后台形态下不成立。bfcache 恢复（iOS 切 app 回来的常见形态）更甚：socket 在冻结期被对端重置且不补派事件，`readyState` 仍显示 OPEN。
+
+**修正**（不推翻 D1–D5；只扩触发点，合并规则零变化，后端零改动）：
+
+- **E1**：`ChatView` 在 `visibilitychange→visible` 与 `pageshow{persisted}` 时，若 `appStore.isMobile` 且本次离开 ≥ `RESUME_CATCH_UP_GRACE_MS`（3s），直接置 `needsCatchUp` 并补拉一次。桌面不受影响——桌面 JS 不冻结、onclose 可靠，保持「只有真断连才刷」。3s ≪ 已知断连窗口（~125s），语义即「移动端任何一次真实离开都覆盖」；代价是回来时一次幂等 `GET /messages`，与 hydrate 同路径同解码（合并幂等，单测已固化）。
+- **E2**：`ChatView` 订阅 `chatStore`，标记在**页面可见态**由 false→true 时立即补拉一次，不等用户下一次失焦。收两种来路：移动端恢复后补派的迟到 onclose；桌面可见态意外断开（顺带把桌面从「断开后要等用户离开再回来」改善为即时刷新）。刻意不走响应式选择器订阅——补拉自身也写这个字段（成功清 / 失败留），useSync 级订阅会泡在自反路径上自触发，故用 vanilla `subscribe` 读跃变。
+
+**保留未修（根因在 WS 保活/重连预算，不属本计划）**：ACP WS 仍无心跳、125s 仍被重置（`docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md` Phase 0 尚未收口）；`useAcpChat` 隐藏期间照常排退避重连，不同于 `useTerminal` 已有的「聚焦才重连」省资源口径——移动后台白跑握手的电池账也在该计划里。
+
+**新增接线单测**（`frontend/src/components/Chat/ChatView.catchup.test.tsx` → `ChatView resume catch-up fallbacks (2026-10-04 勘误)`，6 条）：E1 移动端长离开无标记也补拉 / 短离开不补拉 / 桌面长离开不补拉（D1 不回归）/ 兜底失败保留标记 / bfcache `pageshow` 兜底 / E2 可见态迟到标记立即补拉 + 隐藏态置标记不抢跑。

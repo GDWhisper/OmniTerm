@@ -44,6 +44,21 @@ const CHAT_DIM_IDLE_MS = 180
  *  贴底误判成「用户上翻」）。与 `useStickScroll` 的内部阈值同口径。 */
 const CHAT_STICK_THRESHOLD_PX = 24
 
+/**
+ * 移动端「离开 ≥ 该时长后回来」即补拉的阈值（E1 兜底）。
+ *
+ * 依据：移动端切后台后 OS/浏览器冻结页面 JS，ACP WS 的断开信号（服务端 ~125s
+ * idle 重置 / 承载网 RST，见 2026-09-19-ws-idle-disconnect-heartbeat.md 实测）
+ * 产生于冻结期内——WebKit 类浏览器对冻结页**不补派** onclose（事件不排队、
+ * readyState 直推 CLOSED），Chromium 类最迟恢复到可见后才派发。两种形态都让
+ * 「onclose → needsCatchUp」这一触发条件失配（迟到晚于 visibilitychange，或永
+ * 不到达），store 停在旧页直到手动刷新。桌面端 JS 不冻结、onclose 可靠，故 E1
+ * 只对 `appStore.isMobile` 生效，不回归「只有真断连才刷」的省流量口径。
+ * 取值只需覆盖任何一次真实离开（3s），远小于已知断连窗口，代价是回来时一次
+ * 幂等 `GET /messages`。
+ */
+const RESUME_CATCH_UP_GRACE_MS = 3_000
+
 /** `GET /messages` 响应里的单条消息。 */
 interface StoredMessage {
   id: string
@@ -259,12 +274,18 @@ export function ChatView() {
   // 去重 / 前缀对账）见 chatStore.mergeLatestMessages 与
   // docs/dev/plans/2026-10-01-acp-refocus-latest-merge.md D3。
   //
-  // 触发点两个，共用 catchUpIfNeeded：挂载（切会话重挂载——socket 可能在别的
-  // 会话展示期间断过，标记仍在）与 visibilitychange→visible / window focus
-  // （后者覆盖双屏「标签可见但焦点在别窗」，与 useTerminal 可见性口径一致）。
+  // 触发点三类（勘误后），共用 catchUpIfNeeded：① 挂载（切会话重挂载——socket
+  // 可能在别的会话展示期间断过，标记仍在）；② visibilitychange→visible /
+  // window focus（后者覆盖双屏「标签可见但焦点在别窗」，与 useTerminal 可见性
+  // 口径一致）；③ 2026-10-04 勘误新增的两条兜底——移动端离开够久后回来强制
+  // 置标记补拉（E1）、断连标记在可见态被迟到置位时由 store 跃变直接驱动
+  // （E2）。理由：原实现只认「onclose 置标记 + 聚焦」，而移动端切后台冻结
+  // 页面 JS 后 onclose 信号不可靠（见上方 RESUME_CATCH_UP_GRACE_MS 注释）。
   // 守卫：hydrated（不抢跑首屏 hydrate 与 preHydrateBuffer）、!replaying（手动
   // 重放自带全量历史，合并与其打架）、in-flight 去重。失败保留标记，下次重试。
   const catchUpInFlightRef = useRef(false)
+  /** visibilitychange→hidden 的时刻（null = 未隐藏过 / 已被恢复消费）。 */
+  const hiddenAtRef = useRef<number | null>(null)
   const catchUpIfNeeded = useCallback(async () => {
     const sid = activeSessionId
     if (!sid || catchUpInFlightRef.current) return
@@ -299,22 +320,80 @@ export function ChatView() {
     }
   }, [activeSessionId])
 
+  /**
+   * E1：移动端「离开够久后回来」的恢复兜底。冻结期内断连信号（onclose）不可
+   * 靠——迟到（晚于 visibilitychange 派发）或缺失（WebKit 类不补派）。这里不
+   * 试图区分，直接按「页面真的离开过 ≥ 阈值 + 移动端」置标记，随后的
+   * catchUpIfNeeded 走与正常断连完全相同的合并路径（幂等；桌面端 JS 不冻结，
+   * 信号可靠，不受本兜底影响）。
+   * appStore.isMobile 与 hiddenAtRef 都经 getState()/ref 读取而不作依赖——
+   * 免得媒体查询翻转或每次隐藏都重建下方监听。
+   */
+  const forceResumeCatchUp = useCallback(() => {
+    const sid = activeSessionId
+    if (!sid || document.hidden) return
+    const awayMs = hiddenAtRef.current !== null ? Date.now() - hiddenAtRef.current : 0
+    if (awayMs < RESUME_CATCH_UP_GRACE_MS) return
+    hiddenAtRef.current = null
+    if (!useAppStore.getState().isMobile) return
+    useChatStore.getState().setNeedsCatchUp(sid, true)
+    if (import.meta.env.DEV) {
+      console.debug('[ACP catch-up] resume fallback after', awayMs, 'ms hidden')
+    }
+  }, [activeSessionId])
+
   useEffect(() => {
     void catchUpIfNeeded()
   }, [catchUpIfNeeded])
 
   useEffect(() => {
     const onVisible = () => {
-      if (!document.hidden) void catchUpIfNeeded()
+      if (document.hidden) {
+        // 记下离开时刻：移动端冻结从这一刻起算，恢复时按 E1 兜底补拉。
+        hiddenAtRef.current = Date.now()
+        return
+      }
+      forceResumeCatchUp()
+      void catchUpIfNeeded()
     }
-    const onFocus = () => void catchUpIfNeeded()
+    // 窗口聚焦（页面本就可见、焦点从别窗回来）没有 hidden→visible 迁移，
+    // hiddenAtRef 为 null ⇒ E1 不触发，只走既有标记路径。
+    const onFocus = () => {
+      void catchUpIfNeeded()
+    }
+    // bfcache / 标签恢复（iOS 切 app 回来的常见形态）：冻结期内 socket 被对端
+    // 重置且页面不补派 onclose；persisted 恢复同样按 E1 兜底，不等 visibility。
+    const onPageShow = (e: Event) => {
+      if ((e as PageTransitionEvent).persisted) forceResumeCatchUp()
+      void catchUpIfNeeded()
+    }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onFocus)
+    window.addEventListener('pageshow', onPageShow)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onFocus)
+      window.removeEventListener('pageshow', onPageShow)
     }
-  }, [catchUpIfNeeded])
+  }, [catchUpIfNeeded, forceResumeCatchUp])
+
+  /**
+   * E2：断连标记在「页面已可见」态才由 false→true 时立即补拉一次。
+   * 两种来路：移动端恢复后浏览器补派的迟到 onclose（标记置位时 visibility
+   * 事件早已消费完，不会再有一次「聚焦」）；桌面可见态意外断开。原实现只等
+   * 「用户下一次失焦回来」，缺失该事件时 store 永久陈旧——与不置标记同效。
+   * 经 store subscribe 而非响应式订阅：补拉本身会 clear/保留标记，useSync
+   * 订阅这条自反路径会自触发。
+   */
+  useEffect(() => {
+    const sid = activeSessionId
+    if (!sid) return
+    return useChatStore.subscribe((s, p) => {
+      const now = s.states[sid]?.needsCatchUp === true
+      const was = p.states[sid]?.needsCatchUp === true
+      if (now && !was && !document.hidden) void catchUpIfNeeded()
+    })
+  }, [activeSessionId, catchUpIfNeeded])
 
   // 上拉加载更早的一页历史。首屏只取最近一页（后端按条数 + 字节双预算切页），
   // 用户滚到顶部才继续向前取——绝大多数切换只关心最新那批记录。
