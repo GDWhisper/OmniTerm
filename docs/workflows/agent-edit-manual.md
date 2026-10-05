@@ -15,6 +15,7 @@
 |------|---------|
 | [Settings](#settings) | Sidebar 弹出面板模板，移动/桌面双布局，i18n 多 section |
 | [TmuxCheatsheet](#tmuxcheatsheet) | 数据/视图分离 (data.ts + 两个 translation.json) |
+| [OmniTermLogo](#omnitermlogo) | 像素精灵单一真源 + 派生资产靠生成脚本，漏跑会与 favicon/PWA 图标脱节 |
 
 > 看到没有收录的组件？如果它符合下方「收录标准」，按其格式追加 entry。
 
@@ -64,3 +65,16 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 - `frontend/src/locales/zh/translation.json` — 改这里：增/删/改中文 i18n key
 
 **加一条命令的标准路径**：`data.ts` 的 `SECTIONS` 数组加项 + 两个 translation.json 各加一条 `tmuxCheatsheet.<key>`。
+
+---
+
+## OmniTermLogo
+
+侧栏顶部 CRT 像素精灵（同一图形也用于浏览器 favicon 与 PWA 桌面图标）。**像素数据是单一真源，派生资产由脚本生成。**
+
+- `frontend/src/components/PixelUI/omnitermSprite.ts` — **改这里**：像素真源（`OMNITERM_SPRITE` 数组 + `LOGO_COLORS` 调色板），唯一需要手改的文件
+- `frontend/src/components/PixelUI/OmniTermLogo.tsx` — 一般不改；从真源 `map` 出 `<rect>` 的数据驱动渲染层
+- `frontend/public/favicon.svg`、`icon-192.png`、`icon-512.png` — **产物，勿手改**；由生成脚本覆盖
+- `scripts/gen-logo-icons.mjs` — 生成 / 校验脚本（`--check` 供 CI 用，零依赖）
+
+**改 logo 的唯一路径**：编辑 `omnitermSprite.ts` → `node scripts/gen-logo-icons.mjs`（重写 favicon 与两个 PWA 图标）→ 与 `.ts` 一起提交。约束：`omnitermSprite.ts` 不得使用 enum/namespace 等不可剥离语法（生成脚本靠 Node type stripping 直接 import 它）。

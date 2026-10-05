@@ -154,9 +154,11 @@ All `.font-pixel` text is `text-transform: uppercase`.
 
 ### 3.1 OmniTermLogo (`OmniTermLogo` component)
 
-16x16 pixel sprite rendered at integer multiples (48px sidebar, 96px splash, 16px favicon). Composition: dark-brown CRT frame (`#3A2E1F` — **fixed color, NOT theme-aware**, see "Fixed-color branding elements" below), `#12141A` screen, green `>` prompt, blue `_` cursor. Render with `image-rendering: pixelated`.
+16x16 pixel sprite rendered at integer multiples (48px sidebar, 16px favicon). Composition: dark-brown CRT frame (`#3A2E1F` — **fixed color, NOT theme-aware**, see "Fixed-color branding elements" below), `#12141A` screen, green `>` prompt, blue `_` cursor. Render with `image-rendering: pixelated`.
 
-Location: `frontend/src/components/PixelUI/OmniTermLogo.tsx`
+Location: pixel data in `frontend/src/components/PixelUI/omnitermSprite.ts`; rendered by `frontend/src/components/PixelUI/OmniTermLogo.tsx`.
+
+**Single source of truth**: the sprite is defined once in `omnitermSprite.ts` and consumed by both the React component (in-app inline SVG) and `scripts/gen-logo-icons.mjs`, which generates `frontend/public/favicon.svg` and the PWA icons `icon-192.png` / `icon-512.png`. **Edit only `omnitermSprite.ts`, then regenerate with `node scripts/gen-logo-icons.mjs`** — CI runs the same script with `--check` and fails if the committed assets drift from the source.
 
 **Fixed-color branding elements**: The sidebar's `.logo-title-bar` is the brand anchor — it always renders with the wood palette (`--wood-dark` bg + `--wood-shadow` border) regardless of the app's resolved theme. The OmniTermLogo sprite's outer frame is hardcoded `#3A2E1F` (matching `--wood-shadow`) so the CRT looks "embedded" in the bottom border line in BOTH themes. The cream wordmark, gold version text, and CWD button icon are also fixed. Only the surrounding panel-title-bar instances (Projects / Settings section labels) follow the theme.
 
