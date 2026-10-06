@@ -68,11 +68,15 @@ function makeComponents({
       const match = /language-(\w+)/.exec(className || '')
       const codeStr = String(children).replace(/\n$/, '')
       if (match) {
+        // 横向滚动面：超宽 agent 输出在手机上得左右滚看全貌。oneDark 的 pre
+        // 规则自带 overflow:auto，这里补 data-x-scroll 让移动端切屏手势抬手
+        // （index.css 同步放开 touch-action）。
         return (
           <SyntaxHighlighter
             style={oneDark}
             language={match[1]}
             PreTag="div"
+            data-x-scroll=""
             customStyle={{ margin: '8px 0', borderRadius: codeRadius, fontSize: '0.923em' }}
           >
             {codeStr}
@@ -104,7 +108,8 @@ function makeComponents({
     },
     table({ children }) {
       return (
-        <div style={{ overflowX: 'auto', margin: '8px 0' }}>
+        // 宽表同样左右滚看全列：同代码块的横向滚动面标记。
+        <div data-x-scroll="" style={{ overflowX: 'auto', margin: '8px 0' }}>
           <table style={{ borderCollapse: 'collapse', fontSize: '0.923em', width: '100%' }}>
             {children}
           </table>

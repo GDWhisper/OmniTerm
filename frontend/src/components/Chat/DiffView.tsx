@@ -3,8 +3,10 @@ import { READER_FONT } from '../../utils/fonts'
 // 聊天流内联 unified diff 渲染（轻量、无行号；带行号的完整版见 GitPanel/DiffView）。
 export function DiffView({ text }: { text: string }) {
   const lines = text.split('\n')
+  // 横向滚动面：diff 行长，手机上左右滚看全行而不是被判成切屏手势。
   return (
     <pre
+      data-x-scroll=""
       style={{
         margin: 0,
         padding: '6px 8px',
