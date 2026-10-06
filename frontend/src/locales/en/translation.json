@@ -277,7 +277,7 @@
   "chat.msg.toolTime": "tools est. {{dur}}",
   "chat.msg.toolTimeTip": "local estimate of observed tool execution, included in work time; parallel tools count once, excluding protocol-visible approval waits. Reconnecting starts a fresh observation window; estimates are not saved",
   "chat.msg.tps": "est. {{tps}} t/s",
-  "chat.msg.tpsTip": "estimated output rate: observed text and thought characters ÷ 4 ÷ (observed work time minus identifiable pure-tool intervals). Output overlapping tool execution remains in the denominator. Not a precise model generation rate; reconnecting starts a fresh observation window and estimates are not saved",
+  "chat.msg.tpsTip": "estimated output rate: observed text and thought characters ÷ 4 ÷ time the model was actually streaming. Tool execution, approval waits and output pauses are excluded from the denominator, and the reading freezes at the last measured value while paused. Not a precise model generation rate; reconnecting starts a fresh observation window and estimates are not saved",
   "chat.msg.regenerate": "regenerate",
   "chat.status.connecting": "connecting…",
   "chat.status.disconnected": "disconnected",

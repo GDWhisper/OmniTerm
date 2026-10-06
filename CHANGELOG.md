@@ -52,6 +52,7 @@ Prefix each entry with the area it affects:
 ### Added
 
 - (2026-10-06 14:00) `[frontend]` 支持在 ACP 聊天气泡中点击文件路径超链接直接在右侧文件管理器（FileManager）抽屉中打开：拦截非外部网络协议且指向本地文件系统的 Markdown 链接（如 `[main.rs](src/main.rs:24)`、`[plan.md](./docs/plan.md#L10)`），解析并去除行号或锚点后自动唤起对应会话工作区内的文件查看与编辑（`frontend/src/utils/path.ts::parseLocalFilePath`、`frontend/src/components/Chat/Markdown.tsx`）
+- (2026-10-06 15:30) `[frontend]` ACP 消息的 t/s（tps）估算改**白名单口径**：分母只算「模型真正在流式输出」的时段——相邻输出 chunk 间隔不超过 1s 的连续窗口，工具执行、审批等待、模型停顿与 agent 循环空档一律不计，停顿期间读数冻结在最后测得值。用户报告「调用工具期间还是被算进 token 里面、数据偏低」后抓 pi-acp 真实帧回放验证：execute 本身早已正确排除（E19），但相邻工具之间 1.3–2.6s 无任何 thought/text 的空档全留在旧分母里，实测一轮 3 个 bash 工具的读数从流式期间的 ~80 摊到定稿 11.0，改后同帧回放为 ~33。同时 tps 与工具状态彻底解耦：不再依赖 agent 下发显式 `in_progress`/`running`，对不发工具状态的实现（此前已知漏计）跨 agent 一致；「工具约 N秒」读数口径不变（`frontend/src/utils/turnClock.ts`、`frontend/src/locales/{zh,en}/translation.json`，翻盘依据与边界见 `docs/dev/plans/archive/2026-08-30-acp-work-time.md` E20）
 
 ### Fixed
 

@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；偏差见文末「勘误」E1–E19）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；偏差见文末「勘误」E1–E20）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -386,3 +386,22 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 首段取「并集起点 → 并集内首次输出」而非输出生成的第一刻，构思时间无法与执行区分，仍计工具（E18 残余边界不变）。
 
 **测试**：`turnClock.test.ts` 三条旧封口语义用例按新契约重算（`首个输出落在工具并集内` tps 150→null、工具 3s→5s；`stops tool timing at the seal` 拆为「连续思考流冻结」与「末次输出后的静默段归工具」两条；`pauses…` finalTps 50→200、工具 4s→7s），新增用户报告形态回归 `excludes a long silent tool execution from the rate, resuming after the tool ends`；`ChatMessage.metarow.test.tsx` 两条期望随新口径重设。全量 `pnpm test`（886 例）、`tsc -b`、`lint`（0 error）通过。
+
+### E20 — tps 分母翻盘白名单：只认「模型真正在流式输出」的时段（2026-10-06）
+
+来源：用户追问「execute 期间是否也被计入 token 估算」并指定 agent 为 pi。抓 `pi-acp` 真实帧（spawn 走 ACP stdio，3 个连续 `sleep 4` bash 工具 + thought/text，49 帧带时间戳）回放进 `turnClock` 真代码读数，结论分两层：
+
+- **execute 本身已被 E19 正确排除**：三个工具执行窗（各 ~4s）内 tps 读数冻结不动，`updateTurnTool` 对 `tool_execution_update`（status 恒 `in_progress`）早退，并集不破。
+- **但工具之间的 agent 循环空档全留在分母里**：pi 在相邻工具之间 1.3–2.6s 不发任何 thought/text（模型处理工具结果、生成下一步），尾 text 前还有 1.6s 首字延迟。实测读数从 thought 流期间的 ~80 t/s 一路摊到定稿 **11.0**，而真实输出活跃时间只有 ~1.4s。
+
+**根因**：E17 的解码窗只锚在「本 turn 首个输出」，工具并集关闭后没有重新锚定；E19 修掉了并集内的静默执行段，却修不掉并集之间的空档——那段没有工具事件可挂，黑名单天然够不着。更结构性的问题：黑名单要证明「某段时间不是生成」，只能靠 agent 下发显式 `in_progress`/`running`，对不发状态的实现（E15 已知限制①）永远漏。
+
+**修复**（`frontend/src/utils/turnClock.ts`，纯前端、不入库、不参与同步）：tps 分母改**白名单**——只累计「输出活跃时段」：相邻输出 chunk 间隔 ≤ `OUTPUT_GAP_MS`（1s）的连续 burst；工具执行、审批等待、模型停顿、agent 循环空档一律不计。已闭合 burst 保留其测得时长，故停顿期间读数冻结在最后测得值而非消失。
+
+- 字段变更：删 `outputChars` / `firstOutputWorkMs` / `pureToolMsAtFirst` / `openBaselineMs` / `decodeElapsedMs`，新增 `burstFirstAt` / `burstLastAt` / `burstChars` / `streamChars` / `streamMs` 与 `streamTotals()`；`addOutputChars` 不再读工具状态，「末次输出锚点 + 并集首段封存」只为「工具约 N秒」展示保留（E18/E19 口径不动）。
+- **解耦**：tps 不再依赖任何工具事件——`updateTurnTool` 溢出作废（`estimatesValid`）只废工具读数，tps 照常；E15 已知限制①对 tps 失效，跨 agent 一致。
+- 实测同帧回放：定稿读数 11.0 → **~33**（173 字符 ÷ 4 ÷ 1.28s 流式时长）。
+- 开放 burst 的窗口含 ≤1s 容差（末 chunk 后不足 1s 的静默仍计入），上限由阈值本身封顶；定稿前孤立的尾 chunk（如一句 "done"）burst 已闭合 → 不带字符，不稀释也不虚构。
+- 边界（有意接受）：① 整轮只吐一个 chunk 的 agent（不流式、整段一次性下发）读数 `null` 而非被摊薄的数——同 E17「宁 null 不虚报」；② 若某 agent 把输出攒成大批再 flush，白名单会读出虚高（分母只剩 flush 内的瞬间）；pi/claude/codex 均逐 delta 流式（pi 已实测），不触发。
+
+**测试**：`turnClock.test.ts` tps 用例按新契约重写（旧「首字锚点 / 工具扣除 / 封口」语义断言逐条改为 burst 语义），新增 describe `turnClock tps 白名单（E20）` 三条（工具执行与工具间空档冻结、1s 容差、孤立尾 chunk 不带字符）；`ChatMessage.metarow.test.tsx`、`chatStore.test.ts`（审批挂起冻表改为「冻结在最后测得值」）、`useAcpChat.midturn.test.tsx` 期望随新口径重设。全量 `pnpm test`、`tsc -b`、`lint` 通过。

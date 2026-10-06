@@ -761,21 +761,22 @@ describe('turnClock 接线（计时器与 sending / 审批队列同生命周期�
     expect(turnElapsedMs('s1')).toBe(15_000)
   })
 
-  it('审批挂起期间 t/s 读数同样冻住（等真人回应不算生成时间）', () => {
+  it('审批挂起期间 t/s 读数冻在最后测得值（等真人回应不算生成时间）', () => {
     useChatStore.getState().beginPrompt('s1')
     vi.advanceTimersByTime(1_000)
-    addOutputChars('s1', 1_200)
-    expect(turnTps('s1')).toBeNull() // 首字瞬间无解码时长
-    vi.advanceTimersByTime(3_000)
-    expect(turnTps('s1')).toBe(100) // 解码窗口 3s，1_200 字符 → 300 token ÷ 3s
+    addOutputChars('s1', 600)
+    expect(turnTps('s1')).toBeNull() // 单 chunk 瞬间窗口长度 0
+    vi.advanceTimersByTime(1_000)
+    addOutputChars('s1', 600) // burst [1s,2s]：1_200 字符 ÷ 1s
+    expect(turnTps('s1')).toBe(300)
     useChatStore.getState().setPermission('s1', perm('p1'))
     vi.advanceTimersByTime(120_000)
-    // 等用户审批的 2 分钟完全不进分母：读数一动不动，不随思考时间缓慢跌落。
-    expect(turnTps('s1')).toBe(100)
+    // 等用户审批的 2 分钟零输出：burst 早已闭合，读数一动不动，不随思考时间缓慢跌落。
+    expect(turnTps('s1')).toBe(300)
     useChatStore.getState().removePermission('s1', 'p1')
     vi.advanceTimersByTime(3_000)
-    // 解除后从冻结点续走：解码窗口 6s → 300 token ÷ 6s。
-    expect(turnTps('s1')).toBe(50)
+    // 解除后仍无新输出：依旧冻结（白名单不把空窗时间计入分母；旧口径此处跌到 150）。
+    expect(turnTps('s1')).toBe(300)
   })
 
   it('并发审批只 resolve 一个时仍冻住（镜像后端 wait_depth）', () => {

@@ -54,10 +54,12 @@ describe('ChatMessageView meta row line breaking', () => {
     // 结算值来自 turnClock 的定稿快照（finalTps / finalToolElapsedMs）。
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
+    addOutputChars('s1', 400, 1_500) // burst [1s,1.5s]
     updateTurnTool('s1', 'a', 'in_progress', 2_000)
     addOutputChars('s1', 400, 3_000)
+    addOutputChars('s1', 400, 3_500) // burst [3s,3.5s]（仍落在工具并集内）
     updateTurnTool('s1', 'a', 'completed', 5_000)
-    addOutputChars('s1', 400, 8_000)
+    addOutputChars('s1', 400, 8_000) // 定稿前的孤立尾 chunk，不带字符
     endTurn('s1', 8_000)
     act(() => {
       root.render(
@@ -72,11 +74,10 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments.length).toBe(3)
     // 「工作中 5分钟33秒」整段不断行：5分钟 与 33秒 之间没有断点。
     expect(segments[0].textContent).toBe('已工作 5分钟33秒')
-    // 工具与速度各占一段，段内的 label 与 value 不分离。
-    // 工具计时（E19 口径）=[2s,5s] 全段：首段 [2s,3s] 与静默尾段 [3s,5s] 都非生成。
+    // 工具计时（E19 口径）= 首段 [2s,3s] + 静默尾段 [3.5s,5s]，共 2.5s → 3秒。
     expect(segments[1].textContent).toBe(' · 工具约 3秒')
-    // 解码窗口 [1s,8s] 去掉工具 3s → 300 token ÷ 4s。
-    expect(segments[2].textContent).toBe(' · 估算 75.0 t/s')
+    // tps 白名单（E20）：两个 burst 各 800 字符 ÷ 0.5s；工具执行与 4.5s 空档不进分母。
+    expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
   })
 
@@ -103,8 +104,8 @@ describe('ChatMessageView meta row line breaking', () => {
     vi.setSystemTime(6_000)
     beginTurn('s3', 0)
     addOutputChars('s3', 800, 1_000)
-    addOutputChars('s3', 800, 3_000)
-    // 工具在末次输出同刻开始且此后无输出：整段开放并集都归工具（首段为空、尾段全程）。
+    addOutputChars('s3', 800, 2_000) // burst [1s,2s]：1_600 字符
+    // 工具在末次输出之后开始且此后无输出：整段开放并集都归工具（尾段全程）。
     updateTurnTool('s3', 'a', 'in_progress', 3_000)
     act(() => {
       root.render(
@@ -119,7 +120,8 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments.length).toBe(3)
     expect(segments[0].textContent).toBe('工作中 6秒')
     expect(segments[1].textContent).toBe(' · 工具约 3秒')
-    expect(segments[2].textContent).toBe(' · 估算 200.0 t/s')
+    // tps 白名单（E20）：burst [1s,2s] 已闭合，1_600 字符 ÷ 1s；工具执行期读数冻结不动。
+    expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
     vi.useRealTimers()
   })
