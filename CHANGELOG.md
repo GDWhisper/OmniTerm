@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-10-06 07:26) `[backend]` 修复从 codebuddy 会话（或其子进程树）启动的 OmniTerm 里新建 codebuddy ACP 会话永久卡住 / 偶发数分钟才就绪、而其他 agent 正常的问题：宿主进程树继承的 `SERVER__PORT`（父 codebuddy 会话的服务端口）被原样传给新 spawn 的 `codebuddy --acp`，新进程启动期尝试 `listen` 同一端口失败（`EADDRINUSE` 未处理异常）导致 ACP `session/new` 永久挂起（裸探针实测：不清理 120s+ 无响应，只清该项 84ms 成功，干净环境反向注入被占端口 100% 复现）。ACP spawn 的 `sh -c` wrapper 现在会在 `exec` 前 `unset` 泄漏指针变量（`SERVER__PORT` / `CODEBUDDY_SERVICE_PROXY_URL`，`src/acp/agent_proc.rs::SESSION_LEAK_ENV_VARS`，与 `pty_io::SSH_LEAK_ENV_VARS` 同族的派生边界清理）
+
 ## [0.2.27] - 2026-10-05
 
 ### Changed
