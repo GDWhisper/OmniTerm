@@ -379,6 +379,7 @@
   "drawer.preview": "Preview",
   "drawer.edit": "Edit",
   "drawer.markdownTooLarge": "Too large to render — showing markdown source (limit: {{max}} lines)",
+  "drawer.htmlTooLarge": "File too large to render — showing HTML source",
   "drawer.externallyModified": "Modified externally",
   "drawer.fileDeletedExternally": "File has been deleted externally",
   "drawer.close": "Close",

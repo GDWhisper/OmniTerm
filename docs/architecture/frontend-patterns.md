@@ -65,6 +65,36 @@
 
 **已有案例**：FileDrawer（文件查看/编辑）、GitDrawer（diff/commit 查看）
 
+## 外部 HTML 沙箱预览 (sandboxed-html-preview convention)
+
+**适用场景**：渲染**不受信的外部 HTML**（agent 写进工作区的文件、用户上传的
+页面）——典型如 agent 生成对比页/报告，用户在远程开发机上无法本地打开。
+
+**契约**（实现见 `frontend/src/components/FileManager/HtmlPreview.tsx` +
+`filePreviewShared.ts` 的 `rewriteHtmlForPreview`）：
+
+- **iframe srcdoc + `sandbox="allow-scripts"`，永不给 `allow-same-origin`**。
+  内容因此运行在 opaque origin：读不到 OmniTerm 的 localStorage（含 token）、
+  cookie、父页 DOM，也发不出同源 XHR/fetch。给 `allow-scripts` 是因为页面
+  自身脚本是渲染语义的一部分；`allow-forms` / `allow-popups` /
+  `allow-top-navigation` 一律不给。
+- **不做「新标签页打开」入口**：顶层导航没有 opaque origin 保护，页面脚本
+  将获得与应用同源的完整权限（这是本约定最容易被「加个便利按钮」破坏的一条）。
+- **相对引用必须改写**：srcdoc 没有自己的 base URL，`./app.css` 会打到
+  OmniTerm 路由上 404。`rewriteHtmlForPreview` 用 DOMParser 把
+  `src`/`href` 的相对值解析成绝对文件路径，换成 `/api/v1/files/download`
+  的 **inline 模式** URL（`inline=true`：真实 MIME、无 attachment——
+  附件模式下浏览器按 MIME 拒载样式表与脚本），判据与 markdown 内嵌图片
+  同一保守集合（外链/协议相对/锚点/绝对路径/`..` 一律不碰）；`<base>`
+  一律剥掉。
+- **渲染容量上限**：`MAX_HTML_PREVIEW_BYTES`（2 MiB，字节维度——压缩产物
+  可单行无限长，§P1），超限在抽屉顶栏提示并退回源码视图。
+- **出入都在 FileDrawer**：view 模式渲染 / edit 模式源码 / SSE 去抖刷新，
+  与 markdown 预览同一套 mode 语义，不为 HTML 单开状态机。
+
+**已有案例**：FileDrawer 的 `.html`/`.htm` 预览分支（2026-10-06，远程开发
+「agent 生成的 html 打不开」缺口）。
+
 ## 数据/渲染分离 (data.ts convention)
 
 **适用场景**：组件需要渲染一份**纯静态或低频变更**的展示数据

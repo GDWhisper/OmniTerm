@@ -326,7 +326,7 @@ POST/PUT/DELETE /api/v1/agents[/{id}]
 GET  /api/v1/files (list)
 POST /api/v1/files (upload multipart)
 DELETE /api/v1/files
-GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（相对搜索根，@ 补全用）；**读接口对绝对 `path` 不做 `fs::sanitize_path`**（跨 worktree 浏览有意为之，实测 `?path=/tmp/x/../../../etc/passwd` 可读），写接口才强制边界——故前端相对路径解析**禁止折叠 `..`**（`filePreviewShared.ts::resolveRelativeRef` 直接拒绝），不在浏览器侧造第二套路径真相
+GET  /api/v1/files/download|read|search   # search 条目额外带 rel_path（相对搜索根，@ 补全用）；**读接口对绝对 `path` 不做 `fs::sanitize_path`**（跨 worktree 浏览有意为之，实测 `?path=/tmp/x/../../../etc/passwd` 可读），写接口才强制边界——故前端相对路径解析**禁止折叠 `..`**（`filePreviewShared.ts::resolveRelativeRef` 直接拒绝），不在浏览器侧造第二套路径真相。download 支持 `inline=true`：按扩展名返回真实 MIME（css/js/字体等，缺省 octet-stream）+ `X-Content-Type-Options: nosniff`、**不带 attachment**，供 HTML 预览 iframe 加载同目录子资源（附件模式下浏览器按 MIME 拒载样式表/脚本，图片靠嗅探才幸存）；`text/html` 响应另附 `Content-Security-Policy: sandbox`——该端点可被直接导航，沙箱头保证那种打开方式与抽屉内 iframe 预览同权（opaque origin，摸不到应用的 localStorage/cookie）。目录恒打包 zip，`inline` 不改变该语义
 POST /api/v1/files/write|mkdir|rename|move|copy
 WS   /api/v1/ws/terminal/{session_id}  # tmux-backed pane
 WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/cancel commands

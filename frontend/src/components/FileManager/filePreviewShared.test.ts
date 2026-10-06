@@ -1,15 +1,20 @@
 import { describe, it, expect } from 'vitest'
 import { getParentPath } from '../../utils/path'
 import {
+  MAX_HTML_PREVIEW_BYTES,
   MAX_INLINE_EDIT_BYTES,
   MAX_MARKDOWN_PREVIEW_LINES,
   buildFileDownloadUrl,
+  buildFileInlineUrl,
   canInlineEdit,
   isDirEntry,
   countLines,
+  isHtmlFile,
   isImageFile,
   isMarkdownFile,
   resolveRelativeRef,
+  rewriteHtmlForPreview,
+  shouldRenderHtml,
   shouldRenderMarkdown,
   slugifyHeading,
 } from './filePreviewShared'
@@ -71,6 +76,109 @@ describe('扩展名分类', () => {
 
   it('无扩展名文件不误判为 markdown（Makefile 的 ext 会退化成整名）', () => {
     expect(isMarkdownFile('.markdownrc')).toBe(false)
+  })
+
+  it('html/htm 走渲染预览，大小写不敏感', () => {
+    expect(isHtmlFile('page.html')).toBe(true)
+    expect(isHtmlFile('INDEX.HTM')).toBe(true)
+    expect(isHtmlFile('index.xhtml')).toBe(false)
+    expect(isHtmlFile('a.md')).toBe(false)
+  })
+})
+
+describe('shouldRenderHtml（渲染预览判据：扩展名 + 字节上限）', () => {
+  const bytes = (n: number) => 'x'.repeat(n)
+
+  it('上限内的 html 走渲染', () => {
+    expect(shouldRenderHtml('a.html', bytes(MAX_HTML_PREVIEW_BYTES))).toBe(true)
+  })
+
+  it('超过 1 字节即退回源码', () => {
+    expect(shouldRenderHtml('a.html', bytes(MAX_HTML_PREVIEW_BYTES + 1))).toBe(false)
+  })
+
+  it('多字节字符按 UTF-8 字节计（上限维度是字节不是字符数）', () => {
+    // 每字符 3 字节：ceil(MAX/3) 个字符 Unicode 长度不足上限，UTF-8 长度必超
+    const cjk = '中'.repeat(Math.ceil(MAX_HTML_PREVIEW_BYTES / 3))
+    expect(shouldRenderHtml('a.html', cjk)).toBe(false)
+  })
+
+  it('非 html 不参与渲染判定，且不去数字节', () => {
+    expect(shouldRenderHtml('a.rs', bytes(MAX_HTML_PREVIEW_BYTES + 1))).toBe(false)
+  })
+})
+
+describe('rewriteHtmlForPreview（srcdoc 化：相对引用改写 / base 剥离）', () => {
+  const HTML = '/repo/research/page.html'
+  const dl = (p: string) => `/api/v1/files/download?session=s1&path=${encodeURIComponent(p)}&v=0&inline=true`
+
+  it('相对 src/href 改写成 inline download URL（script/css/img，会话作用域）', () => {
+    const html = [
+      '<link rel="stylesheet" href="./style.css">',
+      '<script src="app.js"></script>',
+      '<img src="img/a.png">',
+      '<a href="sub/b.html">b</a>',
+    ].join('')
+    const out = rewriteHtmlForPreview(html, HTML, { sessionId: 's1' })
+    expect(out).toContain(`href="${dl('/repo/research/style.css').replace(/&/g, '&amp;')}"`)
+    expect(out).toContain(`src="${dl('/repo/research/app.js').replace(/&/g, '&amp;')}"`)
+    expect(out).toContain(`src="${dl('/repo/research/img/a.png').replace(/&/g, '&amp;')}"`)
+    expect(out).toContain(`href="${dl('/repo/research/sub/b.html').replace(/&/g, '&amp;')}"`)
+  })
+
+  it('workspace 作用域带 workspace_id 与 workspace 参数', () => {
+    const out = rewriteHtmlForPreview('<img src="a.png">', HTML, { workspaceId: 'w1', projectId: 'p1' })
+    const url = '/api/v1/files/download?workspace_id=w1&workspace=p1&path=%2Frepo%2Fresearch%2Fa.png&v=0&inline=true'
+    expect(out).toContain(`src="${url.replace(/&/g, '&amp;')}"`)
+  })
+
+  it('外链 / 协议相对 / 锚点 / mailto 不改写', () => {
+    const html = [
+      '<a href="https://example.com/x">x</a>',
+      '<a href="//cdn.example.com/a.css">c</a>',
+      '<a href="#top">t</a>',
+      '<a href="mailto:a@b.c">m</a>',
+    ].join('')
+    const out = rewriteHtmlForPreview(html, HTML, { sessionId: 's1' })
+    expect(out).toContain('href="https://example.com/x"')
+    expect(out).toContain('href="//cdn.example.com/a.css"')
+    expect(out).toContain('href="#top"')
+    expect(out).toContain('href="mailto:a@b.c"')
+  })
+
+  it('含 .. 的引用不解析（越界判定权威在后端），保持原样', () => {
+    const out = rewriteHtmlForPreview('<img src="../secret.png">', HTML, { sessionId: 's1' })
+    expect(out).toContain('src="../secret.png"')
+  })
+
+  it('<base href> 一律剥掉——它会改掉整篇的相对解析基准', () => {
+    const out = rewriteHtmlForPreview('<base href="https://evil.example/"><img src="a.png">', HTML, { sessionId: 's1' })
+    expect(out).not.toContain('<base')
+    expect(out).toContain(`src="${dl('/repo/research/a.png').replace(/&/g, '&amp;')}"`)
+  })
+
+  it('补回 doctype——DOMParser 序列化会丢，缺了进 quirks mode', () => {
+    const out = rewriteHtmlForPreview('<html><body><p>x</p></body></html>', HTML, { sessionId: 's1' })
+    expect(out.startsWith('<!DOCTYPE html>')).toBe(true)
+  })
+
+  it('无相对引用的自包含页面原样通过（外链 CDN 不受影响）', () => {
+    const html = '<html><head><link href="https://fonts.googleapis.com/css2?family=X" rel="stylesheet"></head><body>ok</body></html>'
+    expect(rewriteHtmlForPreview(html, HTML, { sessionId: 's1' })).toContain('https://fonts.googleapis.com/css2?family=X')
+  })
+})
+
+describe('buildFileInlineUrl（html 预览子资源专用端点参数）', () => {
+  it('session 作用域带 inline=true', () => {
+    expect(buildFileInlineUrl('/a b.css', { sessionId: 's1' })).toBe(
+      '/api/v1/files/download?session=s1&path=%2Fa%20b.css&v=0&inline=true',
+    )
+  })
+
+  it('workspace 作用域同样带 inline=true', () => {
+    expect(buildFileInlineUrl('/a.css', { workspaceId: 'w1', projectId: 'p1' })).toBe(
+      '/api/v1/files/download?workspace_id=w1&workspace=p1&path=%2Fa.css&v=0&inline=true',
+    )
   })
 })
 

@@ -1,7 +1,9 @@
 /**
  * 文件预览链路的共享件：扩展名分类、下载端点 URL、相对引用解析、刷新去抖与渲染上限。
- * FileDrawer / FilePreview / MarkdownPreview 三处共用，避免端点字符串和策略常量各写一份。
+ * FileDrawer / FilePreview / MarkdownPreview / HtmlPreview 四处共用，避免端点字符串和策略常量各写一份。
  */
+
+import { getParentPath } from '../../utils/path'
 
 /**
  * 预览刷新去抖：agent 连续写同一文件时 SSE 会连发事件，合并成一次请求 + 一次全量重解析。
@@ -18,10 +20,21 @@ export const FILE_REFRESH_DEBOUNCE_MS = 500
 export const MAX_MARKDOWN_PREVIEW_LINES = 3000
 
 /** 支持预览的图片扩展名 */
-export const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
+export const IMAGE_EXTS: Record<string, true> = { png: true, jpg: true, jpeg: true, gif: true, svg: true, webp: true, bmp: true, ico: true }
 
 /** 按 markdown 渲染的扩展名 —— 与 FileEditor 的 langLoaders 口径保持一致 */
-export const MARKDOWN_EXTS = new Set(['md', 'markdown'])
+export const MARKDOWN_EXTS: Record<string, true> = { md: true, markdown: true }
+
+/** 走渲染预览（sandboxed iframe）的扩展名 */
+export const HTML_EXTS: Record<string, true> = { html: true, htm: true }
+
+/**
+ * HTML 渲染预览的字节上限。DOMParser 改写 + innerHTML 序列化会把整篇文档
+ * 在内存里复制一份，srcdoc 再复制一份，超限直接退回源码视图（见
+ * shouldRenderHtml）。上限维度取字节而非行数：单行可以无限长的压缩产物
+ * 同样能撑爆渲染（§P1 上限维度必须匹配真实增长维度）。
+ */
+export const MAX_HTML_PREVIEW_BYTES = 2 * 1024 * 1024
 
 /**
  * 是否目录（含软链接目录）。`FileEntry.path_type` 的目录判据在全文件有 5 处
@@ -57,11 +70,15 @@ export function getExtension(fileName: string): string {
 }
 
 export function isImageFile(fileName: string): boolean {
-  return IMAGE_EXTS.has(getExtension(fileName))
+  return Object.hasOwn(IMAGE_EXTS, getExtension(fileName))
 }
 
 export function isMarkdownFile(fileName: string): boolean {
-  return MARKDOWN_EXTS.has(getExtension(fileName))
+  return Object.hasOwn(MARKDOWN_EXTS, getExtension(fileName))
+}
+
+export function isHtmlFile(fileName: string): boolean {
+  return Object.hasOwn(HTML_EXTS, getExtension(fileName))
 }
 
 /** 行数（与状态栏口径一致：按 \n 计数，尾随换行算作多一行） */
@@ -72,6 +89,56 @@ export function countLines(text: string): number {
 /** 是否走 markdown 渲染视图：扩展名匹配且未超渲染上限 */
 export function shouldRenderMarkdown(fileName: string, content: string): boolean {
   return isMarkdownFile(fileName) && countLines(content) <= MAX_MARKDOWN_PREVIEW_LINES
+}
+
+/**
+ * 是否走 HTML 渲染视图（view 模式下的 iframe 预览）：扩展名匹配且未超字节上限。
+ * 上限判据用字节而非行数——压缩/打包产物可以单行无限长（§P1）。
+ */
+export function shouldRenderHtml(fileName: string, content: string): boolean {
+  return isHtmlFile(fileName) && countUtf8Bytes(content) <= MAX_HTML_PREVIEW_BYTES
+}
+
+/** UTF-8 字节数（与 FileDrawer 状态栏 byteSize 同一口径） */
+function countUtf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length
+}
+
+/** iframe srcdoc 里要改写的 URL 属性。srcset 刻意不收：多候选语法解析成本高于收益，生成的页面极少用 */
+const HTML_URL_ATTRS = ['src', 'href'] as const
+
+/**
+ * 把本地 HTML 改写成可直接进 sandboxed iframe srcdoc 的形式：
+ *
+ * - 相对引用（`./app.css`、`img/a.png`、`main.js`）解析成绝对文件路径，
+ *   换成 `/api/v1/files/download` 的 **inline 模式** URL（`inline=1`：
+ *   真实 MIME、无 attachment）——srcdoc 没有自己的 base URL，相对引用会
+ *   打到 OmniTerm 自己的路由上 404；而附件模式下浏览器按 MIME 拒载
+ *   css/js（图片预览走同一端点不踩坑是因为浏览器对图片嗅探 MIME）。
+ * - `<base href>` 一律剥掉：它会改变整篇文档的相对解析基准，
+ *   与改写后的绝对 URL 语义冲突，也给了内容作者把引用指向站外的口子。
+ * - 外链（http/https/mailto）、协议相对 `//`、锚点、绝对路径引用不碰
+ *   （判据复用 resolveRelativeRef 的保守语义）。
+ *
+ * 安全边界由调用方保证：渲染方必须带 `sandbox="allow-scripts"`
+ * （**不给 allow-same-origin**），内容因此跑在 opaque origin，
+ * 读不到 OmniTerm 的 localStorage / cookie / DOM。
+ */
+export function rewriteHtmlForPreview(html: string, filePath: string, scope: FileScope): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const baseDir = getParentPath(filePath)
+  doc.querySelectorAll('base').forEach((el) => el.remove())
+  doc.querySelectorAll<HTMLElement>('[src],[href]').forEach((el) => {
+    for (const attr of HTML_URL_ATTRS) {
+      const raw = el.getAttribute(attr)
+      if (!raw) continue
+      const abs = resolveRelativeRef(baseDir, raw)
+      if (abs) el.setAttribute(attr, buildFileInlineUrl(abs, scope))
+    }
+  })
+  // DOMParser 序列化会丢 doctype，缺了进 quirks mode，布局/盒模型都变；
+  // 补回来保证预览与浏览器直接打开一致。
+  return `<!DOCTYPE html>\n${doc.documentElement.outerHTML}`
 }
 
 /** 文件读取/下载所归属的 API 作用域（session 模式优先，否则 workspace 模式） */
@@ -90,6 +157,16 @@ export function buildFileDownloadUrl(filePath: string, scope: FileScope, version
   return scope.sessionId
     ? `/api/v1/files/download?session=${scope.sessionId}&path=${encoded}&v=${version}`
     : `/api/v1/files/download?workspace_id=${scope.workspaceId}&workspace=${scope.projectId}&path=${encoded}&v=${version}`
+}
+
+/**
+ * 构造 inline 模式的下载 URL（同一端点加 `inline=1`）：真实 MIME、
+ * 无 `Content-Disposition: attachment`。html 预览的 iframe 子资源
+ * （css/js/字体）必须走这个——附件模式下浏览器按 MIME 拒载样式表与脚本
+ * （图片因嗅探仍可用，故图片/markdown 预览沿用 buildFileDownloadUrl）。
+ */
+export function buildFileInlineUrl(filePath: string, scope: FileScope, version = 0): string {
+  return `${buildFileDownloadUrl(filePath, scope, version)}&inline=true`
 }
 
 /**

@@ -695,6 +695,25 @@ cell_frame 只有 runs 一种行编码（旧的 `cells` 格式与 `hello.row_enc
 - [ ] 目录无归属时仍是引导弹窗（新建项目 / 挂当前项目），弹窗内同样显示引擎信息行，没有叠加第二层确认
 - [ ] 宿主未装 tmux（设置里 tmux 禁用）时，弹窗引擎显示为 pty（实际生效引擎）
 
+### 5.10 本地 HTML 渲染预览（2026-10-06）
+
+> 场景：agent（如 ACP 会话）生成一个自包含 HTML（对比页/报告/原型），用户在远程开发机上无法用本地浏览器打开该文件。修复前 FileManager 只能看源码，`/files/download` 恒返回 `Content-Disposition: attachment`（浏览器必然下载而不渲染），端口转发代理也不适用（静态文件没有在监听的服务）。
+
+1. 在 ACP 会话里让 agent 生成一个 HTML 文件（含外链 CDN 字体的自包含页面即可）
+2. 聊天流里点击该工具调用的文件路径（或到 FileManager 手动浏览到该文件）
+3. 抽屉以预览态打开
+4. 切到「编辑」再切回「预览」
+5. 让 agent 改该 HTML（或手动 `echo` 追加内容），观察预览刷新
+
+**验证点：**
+- [ ] `.html` / `.htm` 预览态为**渲染后的页面**（非源码）：样式生效、外链 CDN 资源加载
+- [ ] 页面内联脚本可执行（如暗色切换按钮生效）——sandbox 带 `allow-scripts`
+- [ ] 若 HTML 引用同目录资源（`./style.css`、`img/a.png`、`main.js`），资源正常加载（相对引用已改写为 download 端点的 inline 模式 URL；样式生效、外链脚本执行）
+- [ ] 页面脚本读不到应用数据：DevTools 里 iframe 内 `localStorage` / `document.cookie` 抛错或为空（opaque origin，sandbox 未给 `allow-same-origin`）
+- [ ] 切「编辑」显示源码，切回「预览」恢复渲染
+- [ ] agent 改写文件后预览在去抖窗口内自动刷新
+- [ ] 超过 2 MiB 的 HTML 显示「文件过大，已退回源码视图」提示条且不渲染
+
 ---
 
 ## 6. 主题与设置

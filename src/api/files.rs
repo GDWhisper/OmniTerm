@@ -52,6 +52,11 @@ struct FileQuery {
     /// 前端写类请求透传（delete/write/mkdir/upload/rename/move/copy）：
     /// 为 true 时允许目标路径逃逸出 workspace 根目录（受信调用方显式请求）。
     allow_escape: Option<bool>,
+    /// `GET /files/download` 专用：为 true 时按扩展名返回真实 MIME 且不带
+    /// `Content-Disposition: attachment`——供 html 预览的 iframe 加载
+    /// css/js/img/字体等同目录子资源（attachment + octet-stream 下浏览器
+    /// 会按 MIME 拒载样式表与脚本，图片因嗅探仍可用）。目录恒打包 zip。
+    inline: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -750,6 +755,13 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "file not found" }))).into_response();
     };
 
+    // inline 模式：真实 MIME + 无 attachment。供 sandboxed iframe（HtmlPreview）
+    // 加载 html 页面的同目录子资源；html 另附 CSP: sandbox，保证该端点被直接
+    // 导航时同样落在 opaque origin，而不是把工作区 html 提成应用同源页面。
+    if q.inline.unwrap_or(false) {
+        return inline_file_response(&full_path, content);
+    }
+
     let file_name = full_path.file_name().unwrap_or_default().to_string_lossy();
 
     Response::builder()
@@ -758,6 +770,51 @@ async fn download_file(State(state): State<AppState>, Query(q): Query<FileQuery>
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", file_name))
         .body(Body::from(content))
         .unwrap()
+}
+
+/// 扩展名 → 响应 MIME（inline 模式）。只收预览链路真会用到的类型，
+/// 其余落 `application/octet-stream`（浏览器对图片仍嗅探，脚本/样式不载）。
+fn content_type_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "txt" => "text/plain; charset=utf-8",
+        "md" | "markdown" => "text/markdown; charset=utf-8",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "xml" => "text/xml; charset=utf-8",
+        "csv" => "text/csv; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// inline 响应构造：`nosniff` 防 MIME 混淆；html 附 `Content-Security-Policy:
+/// sandbox`——该端点可被直接导航（收藏夹 / agent 输出里的裸链接），沙箱头
+/// 让那条路径与文件抽屉 iframe 预览同权（脚本在 opaque origin 运行，
+/// 摸不到应用的 localStorage/cookie），而非提权成应用同源文档。
+fn inline_file_response(full_path: &std::path::Path, content: Vec<u8>) -> Response {
+    let ext = full_path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let mime = content_type_for_ext(&ext);
+
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header("x-content-type-options", "nosniff");
+    if mime.starts_with("text/html") {
+        builder = builder.header("content-security-policy", "sandbox");
+    }
+    builder.body(Body::from(content)).unwrap()
 }
 
 /// Recursively pack `dir` into an in-memory zip archive.
@@ -1146,6 +1203,20 @@ mod handler_tests {
             sort: None,
             order: None,
             allow_escape,
+            inline: None,
+        }
+    }
+
+    fn inline_query(path: &str) -> FileQuery {
+        FileQuery {
+            path: Some(path.to_string()),
+            workspace: None,
+            session: Some("test-session".to_string()),
+            workspace_id: None,
+            sort: None,
+            order: None,
+            allow_escape: None,
+            inline: Some(true),
         }
     }
 
@@ -1159,6 +1230,7 @@ mod handler_tests {
             sort: None,
             order: None,
             allow_escape,
+            inline: None,
         }
     }
 
@@ -1341,6 +1413,81 @@ mod handler_tests {
     }
 
     #[tokio::test]
+    async fn inline_serves_real_mime_without_attachment() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        std::fs::write(base.join("page.css"), b"p{color:red}").unwrap();
+        std::fs::write(base.join("app.js"), b"console.log(1)").unwrap();
+        std::fs::write(base.join("page.html"), b"<h1>x</h1>").unwrap();
+        std::fs::write(base.join("blob.bin"), b"\x00\x01").unwrap();
+
+        for (file, expected) in [
+            ("page.css", "text/css; charset=utf-8"),
+            ("app.js", "text/javascript; charset=utf-8"),
+            ("page.html", "text/html; charset=utf-8"),
+        ] {
+            let res = download_file(State(state.clone()), Query(inline_query(file))).await;
+            assert_eq!(res.status(), StatusCode::OK, "{file}");
+            assert_eq!(res.headers().get(header::CONTENT_TYPE).unwrap(), expected, "{file}");
+            assert!(
+                res.headers().get(header::CONTENT_DISPOSITION).is_none(),
+                "{file} must not carry attachment"
+            );
+            assert_eq!(res.headers().get("x-content-type-options").unwrap(), "nosniff");
+        }
+
+        // html 附 CSP sandbox：直接导航该端点同样落在 opaque origin，
+        // 摸不到应用的 localStorage/cookie（iframe 预览之外的第二道锁）
+        let res = download_file(State(state.clone()), Query(inline_query("page.html"))).await;
+        assert_eq!(res.headers().get("content-security-policy").unwrap(), "sandbox");
+
+        // 非 html 不附 CSP（对子资源响应无意义，不加噪音）
+        let res = download_file(State(state.clone()), Query(inline_query("page.css"))).await;
+        assert!(res.headers().get("content-security-policy").is_none());
+
+        // 未知扩展名落 octet-stream（浏览器对图片仍嗅探，脚本/样式不载——
+        // 与附件模式同一内容协商结果）
+        let res = download_file(State(state), Query(inline_query("blob.bin"))).await;
+        assert_eq!(res.headers().get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn inline_directory_still_packs_zip() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        std::fs::create_dir_all(base.join("adir")).unwrap();
+        std::fs::write(base.join("adir/a.txt"), b"a").unwrap();
+
+        let res = download_file(State(state), Query(inline_query("adir"))).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get(header::CONTENT_TYPE).unwrap(), "application/zip");
+        assert!(
+            res.headers().get(header::CONTENT_DISPOSITION).is_some(),
+            "目录恒为 zip 附件，inline 不改变该语义"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_download_stays_octet_stream_attachment() {
+        let state = test_state().await;
+        let (base, _outside) = fixture_session(&state).await;
+        std::fs::write(base.join("page.css"), b"p{color:red}").unwrap();
+
+        let res = download_file(State(state), Query(session_query("page.css", None))).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
+        assert!(
+            res.headers()
+                .get(header::CONTENT_DISPOSITION)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("attachment;"),
+            "图片/markdown 预览既往返路必须保持附件语义"
+        );
+    }
+
+    #[tokio::test]
     async fn list_files_session_response_includes_workspace_root() {
         let state = test_state().await;
         let (base, _outside) = fixture_session(&state).await;
@@ -1377,6 +1524,7 @@ mod handler_tests {
             sort: None,
             order: None,
             allow_escape: None,
+            inline: None,
         };
         let res = list_files(State(state), Query(q)).await.into_response();
         assert_eq!(res.status(), StatusCode::OK);
