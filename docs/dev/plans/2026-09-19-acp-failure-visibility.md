@@ -170,6 +170,19 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 - 若要修：让 `commitReplay` 保留非重放来源的 system 行，或恢复后补拉一次。属 D4 之外的 UI 取舍，
   本计划不做。
 
+**D1 的 `cancelled` 类目在留痕之前多了一道「本轮是否用户取消」的对账（2026-10-06 补充，非本计划实施偏差）。**
+
+- 现场：用户点聊天队列 chip 的「立即发送」→ 当前 turn 被 cancel（D1 判为 Cancelled，写一条留痕，
+  符合预期）→ `prompt_done` 触发 drain 发出排队消息 → **那条新消息也在 10ms 内被回 `cancelled`**，
+  于是聊天流出现两条相同提示且用户那句话石沉大海。DB 时间线（`system / user / system` 交替、
+  间隔 10ms）是判据：两条留痕分属两个 prompt 世代，不是重复渲染。
+- 根因在 agent 侧（实测 codebuddy 2.161.4 的 cancel 粘滞窗口，见
+  `docs/dev/debug-patterns/platform-protocol.md` 模式 13），但**它暴露的正是 D1 判定口径的盲区**：
+  D1 只回答「这个 stopReason 算不算正常」，而 `cancelled` 的语义还取决于「这一轮是不是用户自己要取消的」。
+  同一份协议值在两个世代上含义不同，只看值不看世代就会把实现缺陷写成「用户主动取消」。
+- 修在留痕**之前**：`send_prompt` 内按 `cancel_requested_generation` 对账，粘滞取消有界重发，
+  因此正常路径下根本不会产生第二条 Cancelled 留痕。D1 的白名单与留痕形态本身不变。
+
 ## 文档闭环
 
 - `docs/reference/acp-protocol-reference.md` §6.8：本计划落地后把「宿主现状（静默）」更新为「已留痕」。

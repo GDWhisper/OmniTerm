@@ -1388,6 +1388,8 @@ Client MUST 在文件不存在时创建它。
 
 ### 15.1 session/cancel（通知）
 
+**多实现行为差异（实测 2026-10-06）**：cancel 的作用域是**发出通知时在途的那个请求**，但部分实现（codebuddy 2.161.4）清理取消状态是异步的——紧随其后（≤250ms）的新 `session/prompt` 会被秒回 `stopReason:"cancelled"`，响应复用**上一轮**的 `requestId` 且不带 `userMessageId`（即这一轮 agent 未执行，用户消息被吞）；间隔 500ms 起正常。宿主侧不得把这种 `cancelled` 当成用户意图（判据用「本世代是否发出过 cancel」的记账，不用延时），见 `docs/dev/debug-patterns/platform-protocol.md` 模式 13。
+
 ```json
 {
   "jsonrpc": "2.0",

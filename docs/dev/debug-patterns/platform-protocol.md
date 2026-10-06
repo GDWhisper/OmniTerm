@@ -1,6 +1,6 @@
 # 构建与协议 — 调试模式
 
-覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持（含 RUST_LOG 日志劫持零日志）、自替换后 current_exe 失效（/proc/self/exe，含 npm reify retire+delete 与 restart_command argv[0] 归一）。
+覆盖：构建期字节契约（.gitattributes/checksum）、批量枚举 per-item 容错、三态布尔序列化、wire-format 抓帧、热路径 spawn 成本、渠道字节差异探针、Windows spawn 裸命令名（PATHEXT）、warn 被读成失败、通用名 env 被进程树继承劫持（含 RUST_LOG 日志劫持零日志）、自替换后 current_exe 失效（/proc/self/exe，含 npm reify retire+delete 与 restart_command argv[0] 归一）、协议终态被上一轮操作污染（cancel 粘滞窗口吞掉下一轮请求）。
 
 ---
 
@@ -146,6 +146,19 @@
 
 **案例证据**：
 - 正式版（npm 渠道）在源码目录启动并更新到新版，重启 + 强刷后页面版本号仍是旧版——旧版本号来自本地旧 dist（构建期写死进 JS bundle 的常量）；根因是前端来源按 cwd 相对路径命中本地 dist；修复为 release 一律内嵌、文件系统来源仅认显式 env 或 debug 构建。
+
+---
+
+## 模式 13：协议终态被上一轮的操作污染 —— 「本轮的 cancelled」要按宿主侧记账对账，别拿响应值猜意图
+
+**协议-多实现**：异步清理状态的实现会让**下一轮**请求复用**上一轮**的操作结果。实测 codebuddy 2.161.4（ACP）：`session/cancel` 之后 0ms / 250ms 内发出的新 `session/prompt` 被秒回 `stopReason:"cancelled"`，且**复用上一轮的 `requestId`、响应不带 `userMessageId`** —— 这一轮 agent 根本没跑，用户消息被静默吞掉；间隔 500ms 起才正常。**规律：判据必须是宿主侧的「本世代我有没有发出过这个操作」，不能是时间**（阈值随机器负载与实现版本漂移，任何固定延时都是下一次复发的伏笔）；也**不能只看响应值**——`cancelled` 是协议合法终态，但它表达的是**上一轮**的意图。与 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` D1 同源的第二种形态：D1 修的是「协议合法值 ≠ 成功」，本例是「协议合法值 ≠ 本轮的用户意图」。
+
+**弯路**：① 症状是「聊天流出现两条相同『已被取消』」，容易先怀疑前端把一条渲染成两条 —— 实际 `chat_messages` 里就是两行独立记录，**按 created_at 排开看角色序列**（`system / user / system` 交替 = 每一轮各留一次痕，第二痕属于那个新 user 行）一步就否掉了前端假设，10ms 的间隔直接指向「新 prompt 秒回终态」；② 第二个念头是给 drain 加固定延时（前端 `prompt_done` 后攒一会儿再发），实测 250ms 仍被吞，属把实现缺陷固化成魔法数字。**取证**：写最小 ndJSON stdio 探针直连 agent（initialize → session/new → prompt → cancel → 立刻再 prompt，扫延时档位），比在宿主里加日志快得多，且能顺带拿到「无 userMessageId / requestId 复用」这类只有 agent 侧才看得见的判别特征。
+
+**适用**：任何「操作 A 的效果溢出到紧随其后的请求 B」的跨进程协议（cancel/abort/reset/close 一类带异步清理的通知 + 同连接上立刻复用）。修复侧的通用形状：给世代计数器配一份「本世代是否被请求过 X」的记录，收到 X 的终态时先对账，不对账则按**有界重试**回退（上限 + 超限后按真实终态留痕，禁止无界）。
+
+**案例证据**：
+- 2026-10-06 codebuddy 会话：用户点聊天队列 chip 的「立即发送」（语义＝打断当前 turn 并发送排队消息）→ 当前流式被取消（预期），但 drain 发出的排队消息 10ms 后被粘滞取消吞掉，用户只能手动重发。修复为 `AcpClient::send_prompt` 按 `cancel_requested_generation` 对账 + 有界重发（`STALE_CANCEL_*`），回归用例见 `src/acp/fake_agent_tests.rs::stale_cancel_after_user_cancel_is_resent_not_swallowed`（fake agent 的 `sticky_cancel` 模式复刻该时序）。
 
 ---
 

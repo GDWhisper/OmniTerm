@@ -75,6 +75,7 @@ fi
 if [ "$FAKE_MODE" = "hang" ]; then
   exec sleep @LIFETIME@
 fi
+prompt_count=0
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
@@ -105,6 +106,19 @@ while IFS= read -r line; do
         crash)
           # agent 在 turn 进行中崩溃——不回响应，直接退出。
           exit 3
+          ;;
+        sticky_cancel)
+          # 建模 codebuddy 的「粘滞取消」（实测 2.161.4）：第 1 轮不答话，等
+          # session/cancel 来回 cancelled；第 2 轮（cancel 之后紧接的新 prompt）秒回
+          # cancelled 且不带 userMessageId——即这一轮 agent 根本没跑，用户消息被吞；
+          # 第 3 轮起才正常 end_turn。宿主须识别第 2 轮不是用户要的取消并重发，
+          # 见 client.rs 的 STALE_CANCEL_* 常量。
+          prompt_count=$((prompt_count + 1))
+          case "$prompt_count" in
+            1) : ;;
+            2) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"cancelled"}}\n' "$prompt_id" ;;
+            *) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id" ;;
+          esac
           ;;
         prompt_ok)
           printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello-from-agent"}}}}\n'

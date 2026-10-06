@@ -11,8 +11,8 @@ use agent_client_protocol::schema::v1::{
     PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
     RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
     SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, TextContent, TextResourceContents, WaitForTerminalExitRequest,
-    WriteTextFileRequest, WriteTextFileResponse,
+    SetSessionConfigOptionRequest, StopReason, TextContent, TextResourceContents,
+    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use serde::Deserialize;
@@ -37,8 +37,20 @@ const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 4096;
 /// （见 [`AcpClient::spawn_cancel_turn_fallback`]）。
 const CANCEL_TURN_FALLBACK_SECS: u64 = 15;
 
+/// 「粘滞取消」重发前的等待毫秒数。部分实现（实测 codebuddy 2.161.4）处理
+/// `session/cancel` 时异步清理取消状态，落在清理窗口内的**下一个** prompt 会被
+/// 秒回 `cancelled`（复用上一轮的 requestId、不生成新 userMessageId），即用户
+/// 刚排队的消息被静默吞掉。实测阈值：0ms 与 250ms 仍被吞，500ms 起正常。
+/// 取 600ms 留余量；不做成「唯一正确延时」，靠 [`Self::STALE_CANCEL_MAX_RETRIES`]
+/// 的次数上限兜底（延时随机器负载漂移）。
+const STALE_CANCEL_RETRY_DELAY_MS: u64 = 600;
+
+/// 粘滞取消的最大重发次数（见 [`STALE_CANCEL_RETRY_DELAY_MS`]）。有界是硬要求：
+/// agent 若持续对这一轮回 `cancelled`，第 N+1 次就按真实终态留痕，不能无限重发。
+const STALE_CANCEL_MAX_RETRIES: u32 = 2;
+
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ImageInput {
     /// Base64 编码的图片数据（不含 data URI 前缀）。转发给 agent 的就是这份。
     pub data: String,
@@ -51,7 +63,7 @@ pub struct ImageInput {
 
 /// [`ImageInput`] 附带的缩略图。mime 由生成方决定（前端 canvas 编码为 JPEG），
 /// 接收方不做假设。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ImageThumb {
     pub data: String,
     pub mime_type: String,
@@ -62,7 +74,7 @@ pub struct ImageThumb {
 ///
 /// 与图片同款的管道原则：不做张数/体积/MIME 白名单，唯一门禁是 WS 帧口径；
 /// 落库只存元数据（name/mime/size），内容不落盘——历史气泡只需文件名 chip。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FileInput {
     /// 文件名（前端 `File.name`，仅 basename）。
     pub name: String,
@@ -76,7 +88,7 @@ pub struct FileInput {
 
 /// `@path` 引用解析出的文件内容（映射为 `ContentBlock::Resource`，
 /// agent 不支持 embeddedContext 时降级内联进 text block）。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResourceInput {
     /// `file://` 绝对路径 URI。
     pub uri: String,
@@ -198,12 +210,22 @@ struct ActivityState {
     /// prompt 世代计数：每次 `mark_prompt_active` 递增。cancel 兜底定时器
     /// 据此识别自己要收尾的那个 turn，避免误杀取消后新发起的 turn。
     prompt_generation: u64,
+    /// 最近一次 `session/cancel` **针对**的 prompt 世代（[`AcpClient::cancel`] 记录）。
+    /// 与 `prompt_generation` 相等 ⇒ 当前这一轮是用户自己取消的；不等 ⇒ 这一轮的
+    /// `cancelled` 不是用户要的（粘滞取消，见 [`STALE_CANCEL_RETRY_DELAY_MS`]）。
+    /// `None` = 本连接从未取消过。
+    cancel_requested_generation: Option<u64>,
     last_activity: Instant,
 }
 
 impl ActivityState {
     fn new() -> Self {
-        Self { active_prompt: false, prompt_generation: 0, last_activity: Instant::now() }
+        Self {
+            active_prompt: false,
+            prompt_generation: 0,
+            cancel_requested_generation: None,
+            last_activity: Instant::now(),
+        }
     }
 }
 
@@ -868,6 +890,28 @@ impl AcpClient {
         self.activity.lock().map(|st| st.prompt_generation).unwrap_or(0)
     }
 
+    /// **当前**进行中的这一轮 prompt 是否是用户主动 cancel 的。
+    ///
+    /// 用途：区分「真取消」与「粘滞取消」。ACP 的 `session/cancel` 语义只作用于
+    /// 发出时那一个在途请求，但部分实现（实测 codebuddy，见
+    /// [`STALE_CANCEL_RETRY_DELAY_MS`]）清理取消状态是异步的，紧随其后的下一个
+    /// prompt 会被秒回 `cancelled`——那一轮用户并没要求取消，消息等于被静默吞掉。
+    /// 协议层判据即「本世代没有对应的 cancel 请求」，与具体实现的时序无关。
+    ///
+    /// 锁中毒时按 `true`（视为用户自己取消）处理：宁可不做重发、保持既有行为，
+    /// 也不要在状态错乱时对同一 prompt 重发两次（重发是**外部可见的重复副作用**，
+    /// 与留痕去重的「宁重复不吞」取舍方向相反——那边多一条提示无害，这边可能让
+    /// agent 把同一句话做两遍）。
+    pub fn cancel_requested_for_current_turn(&self) -> bool {
+        match self.activity.lock() {
+            Ok(st) => st.cancel_requested_generation == Some(st.prompt_generation),
+            Err(poisoned) => {
+                let st = poisoned.into_inner();
+                st.cancel_requested_generation == Some(st.prompt_generation)
+            }
+        }
+    }
+
     /// 领取**当前世代**的留痕权：同一世代只允许一个调用方通过（幂等「只写一条」）。
     ///
     /// 等价于 `claim_turn_end_notice(prompt_generation())`，但**取世代 + 比较 + 赋值
@@ -1040,14 +1084,54 @@ impl AcpClient {
             text.to_string()
         };
 
-        let blocks = build_prompt_blocks(&text, images, resources, files, inline_resources);
-        self.connection
-            .send_request(PromptRequest::new(self.session_id.clone(), blocks))
-            .block_task()
-            .await
+        let mut attempt: u32 = 0;
+        loop {
+            // 每次尝试都从原始附件重建 blocks（重发是低频兜底路径，克隆一份 base64
+            // 的代价相对一次模型往返可忽略）。
+            let blocks = build_prompt_blocks(
+                &text,
+                images.clone(),
+                resources.clone(),
+                files.clone(),
+                inline_resources,
+            );
+            let resp = self
+                .connection
+                .send_request(PromptRequest::new(self.session_id.clone(), blocks))
+                .block_task()
+                .await?;
+
+            // 粘滞取消兜底（§8 多实现兼容）：本世代用户并没请求 cancel，agent 却回了
+            // `cancelled` —— 实测 codebuddy 清理上一轮 cancel 状态是异步的，紧随其后的
+            // prompt（聊天队列的 drain 正是这个时序）会被秒回 cancelled 且**不生成
+            // userMessageId**，即这条用户消息被静默吞掉。等一小会儿原样重发。
+            // 判据用「有没有对应的 cancel 请求」而不是量延时：延时随机器负载漂移，
+            // 250ms 实测仍会被吞。有界：超限后按真实终态返回，交调用方留痕。
+            if resp.stop_reason == StopReason::Cancelled
+                && attempt < STALE_CANCEL_MAX_RETRIES
+                && !self.cancel_requested_for_current_turn()
+            {
+                attempt += 1;
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    attempt,
+                    "agent 对未被 cancel 的 prompt 返回 cancelled（疑似上一轮 cancel 的粘滞窗口），{}ms 后重发",
+                    STALE_CANCEL_RETRY_DELAY_MS
+                );
+                tokio::time::sleep(Duration::from_millis(STALE_CANCEL_RETRY_DELAY_MS)).await;
+                continue;
+            }
+            return Ok(resp);
+        }
     }
 
     pub fn cancel(&self) -> Result<(), AcpError> {
+        // 先记录「用户取消的是哪一轮」再发通知：`send_prompt` 的粘滞取消判定
+        // （[`Self::cancel_requested_for_current_turn`]）可能在通知往返期间就读这个状态，
+        // 顺序反过来会把自己刚发出的 cancel 判成「不是用户要的」。
+        if let Ok(mut st) = self.activity.lock() {
+            st.cancel_requested_generation = Some(st.prompt_generation);
+        }
         self.connection.send_notification(CancelNotification::new(self.session_id.clone()))?;
         // ACP 规范：session/cancel 后 MUST 以 Cancelled 应答所有未决权限请求。
         let pm = self.permission_manager.clone();

@@ -14,7 +14,7 @@
 | 文件 | 体积 | 状态 |
 |------|------|------|
 | `terminal-pty.md` | **35.8KB** | ❌ 超限（本次追加「订阅前的事件不可见」前已 34.7KB） |
-| `platform-protocol.md` | 16.2KB | 正常 |
+| `platform-protocol.md` | **27.7KB** | ⚠️ 逼近上限（2026-10-06 追加模式 13「cancel 粘滞窗口」后；再写一条新规律前须先按触发条件 1 的同族规则先拆再加） |
 | `resource-lifecycle.md` | 15.4KB | 正常 |
 | `frontend-react.md` | 12.2KB | 正常 |
 | `layout-visual.md` | 11.7KB | 正常 |
