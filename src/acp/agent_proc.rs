@@ -38,6 +38,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
+use crate::engine::pty_io::SESSION_LEAK_ENV_VARS;
+#[cfg(unix)]
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -140,25 +142,15 @@ pub fn read_and_clear_pid_file(path: &Path) -> Option<u32> {
     parsed
 }
 
-/// 父会话泄漏变量：从 codebuddy 会话（或其子进程树，如被继承环境启动的 OmniTerm）
-/// 派生的 ACP agent 会继承这些「父会话运行态指针」，必须在 exec 前清除：
-///
-/// - `SERVER__PORT`：codebuddy 服务端口。新进程启动时尝试 `listen` 同一端口，
-///   被父会话占用 → `EADDRINUSE` 未处理异常 → ACP `session/new` 永久挂起
-///   （2026-10-06 实测：不清理时 session/new 120s 无响应；只清此项后 84ms 成功；
-///   干净环境下反向注入被占端口 100% 复现）。
-/// - `CODEBUDDY_SERVICE_PROXY_URL`：指向父会话 hook 服务的内部 URL，不清则新
-///   agent 的 hook 调用被错误路由到父会话（同一注入源的资源指针）。
-///
-/// 只清「会让新进程访问/占用父会话资源」的指针类变量；纯信息类（会话/请求
-/// ID、telemetry BAGGAGE 等）暂无故障证据，暂不清——未来若发现同类故障再登记。
-/// 与 `pty_io::SSH_LEAK_ENV_VARS` 同族（启动链路继承残留，见 platform-protocol
-/// 调试模式 9）。
-pub const SESSION_LEAK_ENV_VARS: [&str; 2] = ["SERVER__PORT", "CODEBUDDY_SERVICE_PROXY_URL"];
-
 /// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd、
 /// （`pid_file` 为 `Some` 时）自报 pid、并清除父会话泄漏变量（见
-/// [`SESSION_LEAK_ENV_VARS`]）。
+/// [`crate::engine::pty_io::SESSION_LEAK_ENV_VARS`]，根因、取舍与实测证据见其
+/// 文档注释）。
+///
+/// ACP agent 进程由 agent-client-protocol crate spawn（`AcpAgent::from_args` +
+/// `connect_with`），omniterm 拿不到其 `Command` 做 `env_remove`，故以 wrapper
+/// 内 `unset` 等效清理——这是 ACP 侧唯一可控的注入点（与 pty/tmux 派生点共用
+/// 同一清单）。
 ///
 /// POSIX-only; ACP 暂不支持 Windows。
 ///
@@ -497,10 +489,12 @@ mod tests {
         );
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-c");
-        // cd && unset <泄漏变量> && exec 'codebuddy' '--acp'
+        // cd && unset <全部泄漏变量> && exec 'codebuddy' '--acp'（清单内容由
+        // pty_io::SESSION_LEAK_ENV_VARS 单一真源 pin）
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
         assert_eq!(
             args[1],
-            "cd '/home/user/project' && unset SERVER__PORT CODEBUDDY_SERVICE_PROXY_URL && exec 'codebuddy' '--acp'"
+            format!("cd '/home/user/project' && {unset} && exec 'codebuddy' '--acp'")
         );
     }
 
@@ -515,10 +509,8 @@ mod tests {
     #[test]
     fn wrap_with_no_args_emits_cd_unset_exec_only() {
         let args = wrap_agent_with_cwd("/usr/bin/myagent", &[], Path::new("/tmp"), None);
-        assert_eq!(
-            args[1],
-            "cd '/tmp' && unset SERVER__PORT CODEBUDDY_SERVICE_PROXY_URL && exec '/usr/bin/myagent'"
-        );
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        assert_eq!(args[1], format!("cd '/tmp' && {unset} && exec '/usr/bin/myagent'"));
     }
 
     #[test]
@@ -531,9 +523,12 @@ mod tests {
         );
         // pid 自报必须夹在 cd 与 exec 之间：cd 失败（workspace 不可用）时不写；
         // unset 必须在 exec 前（agent 启动前环境已洁净）
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
         assert_eq!(
             args[1],
-            "cd '/home/user/project' && echo $$ > '/tmp/omniterm-acp-x.pid' && unset SERVER__PORT CODEBUDDY_SERVICE_PROXY_URL && exec 'codebuddy' '--acp'"
+            format!(
+                "cd '/home/user/project' && echo $$ > '/tmp/omniterm-acp-x.pid' && {unset} && exec 'codebuddy' '--acp'"
+            )
         );
     }
 
@@ -627,15 +622,13 @@ mod tests {
     async fn wrapped_subprocess_strips_session_leak_env() {
         let workspace = unique_dir("envstrip");
         let wrapped = wrap_agent_with_cwd("env", &[], &workspace, None);
-        let output = Command::new("/bin/sh")
-            .args(&wrapped)
-            .env("SERVER__PORT", "59999")
-            .env("CODEBUDDY_SERVICE_PROXY_URL", "http://127.0.0.1:59999/x")
-            .env("OMNITERM_ACP_ENV_KEEP", "1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .expect("spawn sh");
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(&wrapped);
+        for var in SESSION_LEAK_ENV_VARS {
+            cmd.env(var, "leak");
+        }
+        cmd.env("OMNITERM_ACP_ENV_KEEP", "1");
+        let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("spawn sh");
         assert!(
             output.status.success(),
             "sh exited with {}: stderr={}",

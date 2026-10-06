@@ -97,14 +97,14 @@
 
 **部署-配置来源**：进程树继承环境是单向传染的：开发服务器 export 的部署变量会进入它派生的每一个用户终端，用户在这些终端里跑的**同名不同实例**二进制会静默读到开发配置。通用变量名（`BIND_ADDR` / `BACKEND_PORT` / `DATABASE_URL` / `JWT_SECRET`）是这类劫持的必然入口——`DATABASE_URL` 更是用户自己项目里最常见的变量之一。**规律：面向用户分发的二进制，其配置 env 一律加产品前缀（`OMNITERM_*`）；开发/部署脚本给自家后端传配置优先用命令行参数，能不 export 就不 export。**「CLI 优先级高于 env」的补丁不解决问题：用户按默认用法（不带参数）启动时仍被劫持。弃用旧名后加一条启动 warn 提示改名，比静默忽略（数据库路径悄悄换掉）安全。
 
-**派生边界的同族投影**：同一机制还以「宿主 → 派生 agent」方向发作——宿主进程树的会话运行态指针（服务端口、内部服务 URL、会话 ID）会被 spawn 的外部 agent 全盘继承。宿主必须在派生边界显式剥离泄漏变量（与 `pty_io::SSH_LEAK_ENV_VARS` 同族），不能依赖对端容错。
+**派生边界的同族投影**：同一机制还以「宿主 → 派生 agent」方向发作——宿主进程树的会话运行态指针（服务端口、内部服务 URL、网关凭据）会被 spawn 的外部 agent 与派生终端全盘继承。宿主必须在**所有派生点**统一剥离（清理清单收敛为单一真源，勿各自维护），不能依赖对端容错。
 
 **适用**：任何既在开发环境里跑、又对外发布可执行文件的项目；任何 spawn 外部 agent/子进程的宿主。症状是「同一份正式版在 A 终端能起、在 B 终端起不来」或「只有某个 agent 卡、其他 agent 正常」。**弯路**：报错是 `Address already in use`，第一反应是查端口占用/僵尸进程/PID 文件，实际端口值本身来自继承的环境——先 `printenv | grep -E '<全部候选变量名>'` 打印**用户实际 shell** 的环境，再看代码优先级链。
 
 **案例证据**：
 - 2026-08-11 npm 正式版 `omniterm start` 报 `Address already in use`（os error 98）。根因：用户 shell 是开发实例派生的终端，继承了 dev.sh export 的 `BIND_ADDR=127.0.0.1:9075` / `BACKEND_PORT=9075`，正式版被劫持去绑开发实例已占的端口；`env -u BIND_ADDR -u BACKEND_PORT` 后立即正常启动到 9077。修复：后端 env 全部改 `OMNITERM_*` 前缀并删掉 `BIND_ADDR` 兜底，dev.sh/dev.ps1 改传 `-H/-p/--db`，旧名仅保留启动 warn。
 - 2026-09-07 正式版 daemon 日志自启动起零写入（只剩 panic 与启动 banner），一键升级 exec 失败的 error 也消失，排查无从下手。根因：`RUST_LOG` 同为通用名——daemon 从 dev shell 继承了旧仓库双 crate 名 directive `RUST_LOG=omniterm_main=info,omniterm_server=info`，而现行 crate 名是 `omniterm`，EnvFilter 无 catch-all，本 crate 全部日志被过滤。自查手段：`cat /proc/<pid>/environ | tr '\0' '\n' | grep RUST_LOG`。修复：`main.rs` 检测 directive 未覆盖 `omniterm*` 时追加 `omniterm=info` 保底（`rust_log_covers_omniterm`）；自重启链的关键诊断改 `eprintln` 绕过 EnvFilter。**logging 配置的劫持面与端口/数据库一致，只是症状是「没日志」而非「报错」。**
-- 2026-10-06 正式版 OmniTerm（从一个 codebuddy 会话的终端启动）里新建 codebuddy ACP 会话永久卡住（/ 偶发数分钟后才起来），其他 agent 正常。根因：`SERVER__PORT`（父 codebuddy 会话的服务端口）随进程树继承到每个 `codebuddy --acp` 子进程，新进程启动期尝试 `listen` 同端口 → `EADDRINUSE` 未处理异常 → `session/new` 永久挂起（裸探针实测：不清理 120s 无响应 / 只清此项 84ms 成功 / 干净环境注入被占端口 100% 复现）。取证捷径：对端自己的日志（`~/.codebuddy/logs/<date>/*.log`）里有 `unhandledRejection listen EADDRINUSE`，宿主日志完全看不到。修复：ACP spawn wrapper（`agent_proc::wrap_agent_with_cwd`）在 `exec` 前 `unset` 泄漏指针变量（`SESSION_LEAK_ENV_VARS`，含同源的 `CODEBUDDY_SERVICE_PROXY_URL`）。
+- 2026-10-06 正式版 OmniTerm（从一个 codebuddy 会话的终端启动）派生 codebuddy 卡死，两个入口实测：新建 ACP 会话 `session/new` 永久挂起（120s+ 无响应）；OmniTerm 终端里跑 `codebuddy` TUI 空白卡死（对照：干净环境 TUI 正常渲染）。根因：`SERVER__PORT` 等父会话指针变量随进程树继承到每个新 spawn 的 codebuddy 子进程，新进程启动期直接 `listen` 继承端口 → `EADDRINUSE` 未处理异常 → 启动流程中断（裸探针：不清理 120s 无响应 / 只清此项 84ms 成功 / 干净环境注入被占端口 100% 复现）。取证捷径：对端自己的日志（`~/.codebuddy/logs/<date>/*.log`）有 `unhandledRejection listen EADDRINUSE`，宿主日志完全看不到；静态佐证：codebuddy 自身 spawn 子进程时也删同组变量（对端承认不该传子进程，只是没覆盖「宿主继承」入向）。修复：清理清单收敛为 `pty_io::startup_leak_env_vars` 单一真源（SSH 残留 + `SERVER__PORT` / `SERVER__HOST` / `CODEBUDDY_SERVICE_PROXY_URL` / `CODEBUDDY_GATEWAY_AUTH`），覆盖 pty / tmux / ACP 终端 / ACP agent spawn 全部派生点。
 
 ---
 

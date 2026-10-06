@@ -49,9 +49,13 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-06 14:00) `[frontend]` 支持在 ACP 聊天气泡中点击文件路径超链接直接在右侧文件管理器（FileManager）抽屉中打开：拦截非外部网络协议且指向本地文件系统的 Markdown 链接（如 `[main.rs](src/main.rs:24)`、`[plan.md](./docs/plan.md#L10)`），解析并去除行号或锚点后自动唤起对应会话工作区内的文件查看与编辑（`frontend/src/utils/path.ts::parseLocalFilePath`、`frontend/src/components/Chat/Markdown.tsx`）
+
 ### Fixed
 
-- (2026-10-06 07:26) `[backend]` 修复从 codebuddy 会话（或其子进程树）启动的 OmniTerm 里新建 codebuddy ACP 会话永久卡住 / 偶发数分钟才就绪、而其他 agent 正常的问题：宿主进程树继承的 `SERVER__PORT`（父 codebuddy 会话的服务端口）被原样传给新 spawn 的 `codebuddy --acp`，新进程启动期尝试 `listen` 同一端口失败（`EADDRINUSE` 未处理异常）导致 ACP `session/new` 永久挂起（裸探针实测：不清理 120s+ 无响应，只清该项 84ms 成功，干净环境反向注入被占端口 100% 复现）。ACP spawn 的 `sh -c` wrapper 现在会在 `exec` 前 `unset` 泄漏指针变量（`SERVER__PORT` / `CODEBUDDY_SERVICE_PROXY_URL`，`src/acp/agent_proc.rs::SESSION_LEAK_ENV_VARS`，与 `pty_io::SSH_LEAK_ENV_VARS` 同族的派生边界清理）
+- (2026-10-06 07:26) `[backend]` 修复宿主进程树泄漏 codebuddy 父会话运行态变量、导致 OmniTerm 派生的 codebuddy 卡死的问题：从 codebuddy 会话（或其子进程树）启动的 OmniTerm 会把 `SERVER__PORT`（父会话服务端口）等变量继承给新派生的进程，codebuddy 启动期直接 `listen` 继承端口，被占用即 `EADDRINUSE` 未处理异常、启动流程中断。两个实测入口：① 新建 ACP 会话 `session/new` 永久挂起（不清理 120s+ 无响应，只清该项 84ms 成功，干净环境反向注入被占端口 100% 复现）；② OmniTerm 终端里跑 `codebuddy` TUI 空白卡死（污染环境 18s 无渲染，干净环境对照正常渲染）。修复：泄漏变量清理收敛为 `pty_io::startup_leak_env_vars` 单一真源（SSH 会话残留 3 项 + 父会话指针 4 项：`SERVER__PORT` / `SERVER__HOST` / `CODEBUDDY_SERVICE_PROXY_URL` / `CODEBUDDY_GATEWAY_AUTH`，后两项与 codebuddy 自身 spawn 子进程时的删除清单一致），覆盖全部派生点——pty / tmux（含初始 pane 命令源头 `env -u` 与 session env 清理）/ ACP 终端命令 / ACP agent spawn wrapper（crate spawn 拿不到 `Command`，以 `unset` 等效）
 
 ## [0.2.27] - 2026-10-05
 
