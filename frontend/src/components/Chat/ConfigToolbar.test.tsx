@@ -279,7 +279,18 @@ describe('ConfigToolbar mobile overflow', () => {
     expect(findButton('Advanced')).toBeUndefined()
     // 桌面端保留类别前缀（非紧凑态）
     expect(findButton('Mode:')).toBeTruthy()
-    expect(findButton('Brave Mode')).toBeUndefined()
+
+    // 回归：桌面端不得收纳，收纳项必须原样行内渲染。曾按 showAdvanced = isMobile
+    // 只渲染主位三项，导致模型参数/未知类别在 PC 端既不进行内也不进面板、
+    // 直接消失（移动端「高级」里反而看得到）。
+    const config = findButton('Config:')
+    expect(config, 'model_config inline on desktop').toBeTruthy()
+    expect(config!.textContent).toContain('Off') // brave_mode 当前值
+    const weird = findButton('Weird Knob:')
+    expect(weird, 'unknown category inline on desktop').toBeTruthy()
+    expect(weird!.textContent).toContain('A') // something_else 当前值
+    // 5 个配置项 = 5 个触发器，一个都不能少
+    expect(container.querySelectorAll('button')).toHaveLength(5)
   })
 
   // jsdom 不做布局，单行保证只能靠样式契约守住：nowrap + 可收缩（min-width:0）。

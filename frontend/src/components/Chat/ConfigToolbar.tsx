@@ -519,9 +519,12 @@ export function ConfigToolbar({
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
   })
   const { primary, advanced } = splitPrimaryOptions(sorted)
-  // 仅移动端切分；桌面端整行渲染，行为与切分前一致。收纳项为空（配置 ≤3 项
-  // 或全在主位）时不出现「高级」入口。
+  // 仅移动端切分：收纳项为空（配置 ≤3 项或全在主位）时也不出现「高级」入口。
   const showAdvanced = isMobile && advanced.length > 0
+  // 桌面端不收纳：主位 + 收纳项全部行内渲染（wrap 原行为）。少了后半段，
+  // 非 权限/模型/思考 类别（模型参数、布尔开关、未知类别）在桌面端既不进行
+  // 内、也不进面板——配置项直接消失，而移动端却能在「高级」里看到。
+  const inlineOptions = isMobile ? primary : [...primary, ...advanced]
 
   return (
     <div
@@ -541,7 +544,7 @@ export function ConfigToolbar({
         position: 'relative',
       }}
     >
-      {primary.map((opt) => (
+      {inlineOptions.map((opt) => (
         <ConfigDropdown
           key={opt.id}
           option={opt}

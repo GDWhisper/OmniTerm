@@ -56,6 +56,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-06 10:22) `[frontend]` 修复桌面端（PC）底部 ACP 配置栏丢失配置项的问题：移动端「收纳」改造（0.2.23）后，桌面端只渲染 权限/模型/思考 三项主位，其余类别（模型参数、布尔开关、未知类别、同名类别第二项）既不进行内、也不进「高级」面板——配置项在 PC 端直接消失，而同一会话在移动端「高级 N」里反而看得到。修复：桌面端整行渲染全部配置项（wrap 原行为，与 0.2.23 前一致），仅移动端切分收纳；补回归测试钉住「桌面端 5 个配置项 = 5 个触发器」（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/components/Chat/ConfigToolbar.test.tsx`）
 - (2026-10-06 07:26) `[backend]` 修复宿主进程树泄漏 codebuddy 父会话运行态变量、导致 OmniTerm 派生的 codebuddy 卡死的问题：从 codebuddy 会话（或其子进程树）启动的 OmniTerm 会把 `SERVER__PORT`（父会话服务端口）等变量继承给新派生的进程，codebuddy 启动期直接 `listen` 继承端口，被占用即 `EADDRINUSE` 未处理异常、启动流程中断。两个实测入口：① 新建 ACP 会话 `session/new` 永久挂起（不清理 120s+ 无响应，只清该项 84ms 成功，干净环境反向注入被占端口 100% 复现）；② OmniTerm 终端里跑 `codebuddy` TUI 空白卡死（污染环境 18s 无渲染，干净环境对照正常渲染）。修复：泄漏变量清理收敛为 `pty_io::startup_leak_env_vars` 单一真源（SSH 会话残留 3 项 + 父会话指针 4 项：`SERVER__PORT` / `SERVER__HOST` / `CODEBUDDY_SERVICE_PROXY_URL` / `CODEBUDDY_GATEWAY_AUTH`，后两项与 codebuddy 自身 spawn 子进程时的删除清单一致），覆盖全部派生点——pty / tmux（含初始 pane 命令源头 `env -u` 与 session env 清理）/ ACP 终端命令 / ACP agent spawn wrapper（crate spawn 拿不到 `Command`，以 `unset` 等效）
 
 ## [0.2.27] - 2026-10-05
