@@ -268,17 +268,22 @@ ChatMessageView memo 失效」），流式渲染期表现为每帧全量重渲�
 **复合动作放 store**：若该动作要改多个 state 切片（例：打开抽屉同时要
 保证面板 open + 非 collapsed + 切到 files tab），在 store 里做成一个
 原子 action，用单次 `set()` 批量提交，让订阅者最多重渲染一次。参考
-`activateSession` / `switchWorkspace` / `revealFileInDrawer`
+`activateSession` / `switchWorkspace` / `revealPathInFileManager`
 （`frontend/src/stores/appStore.ts`）。散在调用方逐个 set 会导致级联重渲染，
 且逻辑在每个入口重复一遍。
 
 **已有案例**：
 
 - `frontend/src/components/Chat/FileLocationLink.tsx` — ACP 工具调用
-  `locations` 里的文件路径变可点击，点击调 `revealFileInDrawer` 在
-  FileManager 抽屉打开。路径来自协议权威值（`extractLocations`），
-  相对路径由 `toAbsolutePath`（`frontend/src/utils/path.ts`）以 session
-  的 `workspace_path` 为基准归一——agent 子进程 cwd 就是该路径
+  `locations` 里的文件路径变可点击，点击调
+  `revealReportedPath`（`frontend/src/utils/reportedPath.ts`）→
+  `revealPathInFileManager`：**目录**导航 FileManager 列表（`mode:'manual'`
+  + `manualPath`），**文件**在抽屉里只读打开。路径来自协议权威值
+  （`extractLocations`），相对路径由 `toAbsolutePath`
+  （`frontend/src/utils/path.ts`）以 session 的 `workspace_path` 为基准
+  归一——agent 子进程 cwd 就是该路径。目录/文件判定用启发式
+  `looksLikeDirectory`，只在这里一处（与聊天气泡行内代码路径共用）；
+  换判定规则只改 `reportedPath.ts` 这一个调用点
 
 ---
 

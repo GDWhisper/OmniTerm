@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { READER_FONT } from '../../utils/fonts'
+import { inlineCodeBaseStyle } from '../../utils/inlineCodeStyle'
 import { rewriteLocalUrl } from '../../utils/proxyUrl'
 
 /**
@@ -54,6 +55,42 @@ export function MarkdownLink({ href, children }: { href?: string; children?: Rea
   )
 }
 
+/**
+ * 围栏代码块（fenced code block）的渲染。
+ *
+ * 抽成独立导出供「只接管行内 `code` 的容器」复用：react-markdown 的 components
+ * 按 HTML tag 一对一接管，**没有「放行走内、其余交给默认」的语义** —— 同一 `code`
+ * key 的自定义 renderer 返回 `undefined` 时整块代码连同其内容一起消失
+ * （表现为「带代码块的 agent 气泡整条不显示」）。故行内点击增强过的容器必须显式
+ * 调回这里渲染围栏块，而不是回退默认 renderer。
+ */
+export function FencedCodeBlock({
+  className,
+  children,
+  codeRadius,
+}: {
+  className?: string
+  children?: ReactNode
+  codeRadius: number
+}) {
+  const match = /language-(\w+)/.exec(className || '')
+  const codeStr = String(children).replace(/\n$/, '')
+  return (
+    // 横向滚动面：超宽 agent 输出在手机上得左右滚看全貌。oneDark 的 pre
+    // 规则自带 overflow:auto，这里补 data-x-scroll 让移动端切屏手势抬手
+    // （index.css 同步放开 touch-action）。
+    <SyntaxHighlighter
+      style={oneDark}
+      language={match?.[1] ?? 'text'}
+      PreTag="div"
+      data-x-scroll=""
+      customStyle={{ margin: '8px 0', borderRadius: codeRadius, fontSize: '0.923em' }}
+    >
+      {codeStr}
+    </SyntaxHighlighter>
+  )
+}
+
 function makeComponents({
   codeRadius,
   inlineCodeRadius,
@@ -66,35 +103,15 @@ function makeComponents({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     code({ className, children, ...props }: any) {
       const match = /language-(\w+)/.exec(className || '')
-      const codeStr = String(children).replace(/\n$/, '')
       if (match) {
-        // 横向滚动面：超宽 agent 输出在手机上得左右滚看全貌。oneDark 的 pre
-        // 规则自带 overflow:auto，这里补 data-x-scroll 让移动端切屏手势抬手
-        // （index.css 同步放开 touch-action）。
         return (
-          <SyntaxHighlighter
-            style={oneDark}
-            language={match[1]}
-            PreTag="div"
-            data-x-scroll=""
-            customStyle={{ margin: '8px 0', borderRadius: codeRadius, fontSize: '0.923em' }}
-          >
-            {codeStr}
-          </SyntaxHighlighter>
+          <FencedCodeBlock className={className} codeRadius={codeRadius}>
+            {children}
+          </FencedCodeBlock>
         )
       }
       return (
-        <code
-          className={className}
-          style={{
-            background: 'var(--bg-code-inline)',
-            padding: '1px 5px',
-            borderRadius: inlineCodeRadius,
-            fontSize: '0.923em',
-            fontFamily: READER_FONT,
-          }}
-          {...props}
-        >
+        <code className={className} style={inlineCodeBaseStyle(inlineCodeRadius)} {...props}>
           {children}
         </code>
       )

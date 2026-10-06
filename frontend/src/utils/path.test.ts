@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getParentPath, joinPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject } from './path'
+import { getParentPath, joinPath, isPathOutsideWorkspace, resolveRenamedPath, toAbsolutePath, findCoveringProject, findExactProject, parseLocalFilePath, looksLikeDirectory, isLikelyPathString } from './path'
 
 describe('getParentPath', () => {
   it('returns empty for root and empty input', () => {
@@ -224,3 +224,164 @@ describe('findExactProject', () => {
     expect(findExactProject('/', projects)).toBeUndefined()
   })
 })
+
+describe('parseLocalFilePath', () => {
+  it('identifies and cleans relative and absolute file paths', () => {
+    expect(parseLocalFilePath('src/main.rs')).toBe('src/main.rs')
+    expect(parseLocalFilePath('./docs/spec.md')).toBe('./docs/spec.md')
+    expect(parseLocalFilePath('/home/user/project/file.ts')).toBe('/home/user/project/file.ts')
+    expect(parseLocalFilePath('C:/workspace/test.py')).toBe('C:/workspace/test.py')
+  })
+
+  it('strips line numbers (:24, :24:10, :24-30)', () => {
+    expect(parseLocalFilePath('src/main.rs:24')).toBe('src/main.rs')
+    expect(parseLocalFilePath('src/main.rs:24:10')).toBe('src/main.rs')
+    expect(parseLocalFilePath('src/main.rs:24-30')).toBe('src/main.rs')
+    expect(parseLocalFilePath('/home/user/a.ts:100')).toBe('/home/user/a.ts')
+  })
+
+  it('strips hash fragments (#L10, #L10-L20, #heading) and query strings', () => {
+    expect(parseLocalFilePath('docs/plan.md#L10')).toBe('docs/plan.md')
+    expect(parseLocalFilePath('docs/plan.md#L10-L20')).toBe('docs/plan.md')
+    expect(parseLocalFilePath('docs/plan.md#heading')).toBe('docs/plan.md')
+    expect(parseLocalFilePath('docs/plan.md?v=1#L5')).toBe('docs/plan.md')
+  })
+
+  it('decodes uri percent-encoded paths', () => {
+    expect(parseLocalFilePath('my%20documents/notes.md')).toBe('my documents/notes.md')
+  })
+
+  it('rejects external scheme urls and protocol-relative urls', () => {
+    expect(parseLocalFilePath('https://example.com/test.md')).toBeNull()
+    expect(parseLocalFilePath('http://localhost:3000')).toBeNull()
+    expect(parseLocalFilePath('mailto:test@example.com')).toBeNull()
+    expect(parseLocalFilePath('ftp://files/a.txt')).toBeNull()
+    expect(parseLocalFilePath('//cdn.example.com/lib.js')).toBeNull()
+  })
+
+  it('rejects in-page anchors and empty/whitespace strings', () => {
+    expect(parseLocalFilePath('#heading')).toBeNull()
+    expect(parseLocalFilePath('#L24')).toBeNull()
+    expect(parseLocalFilePath('')).toBeNull()
+    expect(parseLocalFilePath('   ')).toBeNull()
+    expect(parseLocalFilePath(undefined)).toBeNull()
+    expect(parseLocalFilePath(null)).toBeNull()
+  })
+})
+
+describe('looksLikeDirectory', () => {
+  it('identifies trailing slashes as directory', () => {
+    expect(looksLikeDirectory('/home/pax/dir/')).toBe(true)
+    expect(looksLikeDirectory('src/components/')).toBe(true)
+  })
+
+  it('identifies paths without file extensions as directory', () => {
+    expect(looksLikeDirectory('/home/pax/coding/OmniTerm-dev')).toBe(true)
+    expect(looksLikeDirectory('frontend/src')).toBe(true)
+    expect(looksLikeDirectory('./docs')).toBe(true)
+  })
+
+  it('identifies paths with extensions or dotfiles as files', () => {
+    expect(looksLikeDirectory('/home/pax/file.txt')).toBe(false)
+    expect(looksLikeDirectory('src/main.rs')).toBe(false)
+    expect(looksLikeDirectory('.gitignore')).toBe(false)
+    expect(looksLikeDirectory('/repo/.env')).toBe(false)
+  })
+
+  it('does not treat extensionless *files* as directories', () => {
+    // 回归：曾把「无扩展名 ⇒ 目录」，导致点 Makefile/Dockerfile/LICENSE 被送去列目录
+    // （后端 read_dir 对文件返回 ENOTDIR → 500 + error toast），本该开抽屉。
+    expect(looksLikeDirectory('Makefile')).toBe(false)
+    expect(looksLikeDirectory('/repo/Makefile')).toBe(false)
+    expect(looksLikeDirectory('Dockerfile')).toBe(false)
+    expect(looksLikeDirectory('LICENSE')).toBe(false)
+    expect(looksLikeDirectory('README')).toBe(false)
+    expect(looksLikeDirectory('CONTRIBUTING')).toBe(false)
+    // 有扩展名的普通文件仍判文件
+    expect(looksLikeDirectory('src/main.rs')).toBe(false)
+    // 目录语义不受影响
+    expect(looksLikeDirectory('/repo/src')).toBe(true)
+  })
+})
+
+describe('isLikelyPathString', () => {
+  it('detects unix and windows absolute paths', () => {
+    expect(isLikelyPathString('/home/pax/coding/OmniTerm-dev')).toBe(true)
+    expect(isLikelyPathString('C:\\Users\\pax\\coding\\app')).toBe(true)
+    expect(isLikelyPathString('C:/Users/pax/coding/app')).toBe(true)
+  })
+
+  it('detects relative paths', () => {
+    expect(isLikelyPathString('./src/main.rs')).toBe(true)
+    expect(isLikelyPathString('../docs/readme.md')).toBe(true)
+    expect(isLikelyPathString('frontend/src/App.tsx')).toBe(true)
+  })
+
+  it('detects extensionless known project directories', () => {
+    expect(isLikelyPathString('src/utils')).toBe(true)
+    expect(isLikelyPathString('docs/plans')).toBe(true)
+    expect(isLikelyPathString('frontend/src')).toBe(true)
+  })
+
+  it('detects trailing-slash directories', () => {
+    // 尾斜杠即目录意图（agent 高频输出「看 `frontend/`」）
+    expect(isLikelyPathString('src/')).toBe(true)
+    expect(isLikelyPathString('frontend/')).toBe(true)
+    expect(isLikelyPathString('docs/')).toBe(true)
+    expect(isLikelyPathString('frontend/src/')).toBe(true)
+    expect(isLikelyPathString('/home/pax/dir/')).toBe(true)
+  })
+
+  it('still applies all guards to trailing-slash strings', () => {
+    // 回归：尾斜杠分支曾排在 scheme / 空格 / 命令词黑名单之前，`and/or/` 这类
+    // 散文组合加个尾斜杠就绕过全部防护，把 MAJOR-1 修掉的假阳性整批复活。
+    for (const s of [
+      'and/or/', 'true/false/', 'he/she/', 'either/or/', 'yes/no/', 'client/server/',
+      'input/output/', 'on/off/', 'TCP/IP/', 'GET/POST/', 'sync/async/', 'read/write/',
+      'up/down/', 'x/y/', 'foo/bar/', 'ui/ux/', 'docs and/or tests/',
+      'const x = a/b/', 'array[i]/2/', 'node dist/index.js/', 'https://example.com/a/',
+    ]) {
+      expect(isLikelyPathString(s), s).toBe(false)
+    }
+  })
+
+  it('rejects web urls, multi-line, or non-paths', () => {
+    expect(isLikelyPathString('https://github.com/foo/bar')).toBe(false)
+    expect(isLikelyPathString('//example.com/a')).toBe(false)
+    expect(isLikelyPathString('hello world')).toBe(false)
+    expect(isLikelyPathString('npm install foo/bar is cool')).toBe(false)
+    expect(isLikelyPathString('console.log("hi")')).toBe(false)
+  })
+
+  it('rejects double-word slash combos (prose, not paths)', () => {
+    // 回归：曾把「任一段非空即路径」，导致 and/or、true/false、TCP/IP、read/write
+    // 全被挂成可点击路径，误点还会弹 read_dir 失败 toast。
+    for (const s of [
+      'and/or', 'true/false', 'he/she', 'either/or', 'yes/no', 'client/server',
+      'input/output', 'on/off', 'TCP/IP', 'GET/POST', 'sync/async', 'read/write',
+      'docs and/or tests', 'foo/bar/baz',
+    ]) {
+      expect(isLikelyPathString(s), s).toBe(false)
+    }
+  })
+
+  it('rejects code fragments that merely contain a slash', () => {
+    for (const s of [
+      'const x = a/b',
+      'array[i]/2',
+      'a{b} / c',
+      "sed -i s/a/b/ f",
+      'let x = p / q',
+      'node dist/index.js',
+      'json.path/to',
+    ]) {
+      expect(isLikelyPathString(s), s).toBe(false)
+    }
+  })
+
+  it('rejects path-like strings that are over the length or space budget', () => {
+    expect(isLikelyPathString(`src/${'a'.repeat(600)}`)).toBe(false)
+    expect(isLikelyPathString('src / a / b / c / d')).toBe(false)
+  })
+})
+

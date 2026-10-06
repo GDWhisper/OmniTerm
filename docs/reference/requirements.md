@@ -23,7 +23,7 @@
 ## 改动记录 ⚪
 
 - [ ] **新增改动记录栏** — 在界面中新增一个「改动记录」面板，记录本次会话中改动过的文件和新增的文件，按时间倒序排列，支持点击文件名直接打开文件预览。
-  - 💡 **打开文件的基础设施已就绪**（2026-08-10）：`revealFileInDrawer`（`frontend/src/stores/appStore.ts`）与 `FileLocationLink`（`frontend/src/components/Chat/FileLocationLink.tsx`）已实现「给一个路径 → 在 FM 抽屉打开并保证抽屉可见」，本需求实现时直接复用，不要另写一套。
+  - 💡 **打开文件的基础设施已就绪**（2026-08-10；2026-10-06 更名为 `revealPathInFileManager`）：`revealPathInFileManager`（`frontend/src/stores/appStore.ts`，经单一入口 `utils/reportedPath.ts` 的 `revealReportedPath`）与 `FileLocationLink`（`frontend/src/components/Chat/FileLocationLink.tsx`）已实现「给一个路径 → 目录则导航 FM 列表 / 文件则在抽屉打开并保证抽屉可见」，本需求实现时直接复用，不要另写一套。
   - 数据来源可复用 ACP 工具调用的 `locations` / diff `path`（见下方 ACP 会话章节 A1）。
 
 ## Sidebar 便条 🔵
@@ -60,18 +60,12 @@
   - 兜底数据已在手上：`useAcpChat.ts` 的 `synthUnifiedDiff` 已解析出 diff 的 `path`，只是没存进 block，并入 `locations` 即可（十来行）。
   - **故意暂缓**：在确认手头 agent 到底给不给之前，这是没有需求证明的抽象（AGENTS §7 奥卡姆剃刀）。**触发条件：实测发现工具卡片展开后无路径行。**
 
-- [ ] **B · 正文 inline code 里的路径可点击** — 🟡 待决策
-  - agent 说「定稿在 \`docs/xxx.md\`」绝大多数用反引号包裹 → 落在 `Markdown.tsx` 的 `code` 渲染器，**不需要碰 remark AST**。
-  - 关键设计：**粗筛 → 验证 → 才渲染成链接**。正则只做候选筛（含 `/` 或已知扩展名、无空格、长度上限），再异步确认文件存在，存在才可点。把「启发式猜测」降级为「提示信号」，误判率趋零。
-  - 打开动作直接复用 A1 的 `revealFileInDrawer`，无需重写。
-  - ⚠️ **需人工拍板的取舍**：存在性校验走哪条路——
-    | 方案 | 成本 | 代价 |
-    |------|------|------|
-    | 复用 `GET /api/v1/files?session=` 列目录 | 0 后端改动 | 一个目录一次请求，须前端缓存 |
-    | 新增 batch exists 端点 | +1 API + `backend.md` 维护 | 更干净，请求可合并 |
-
-    倾向前者（目录列表本身有缓存价值，且不增实体）。
-  - ⚠️ **必须配 session 级缓存 + 并发上限**：否则历史消息一多就是一堆并发请求，触犯 `docs/dev/performance-and-safety.md` 的无界红线。
+- [x] **B · 正文 inline code 里的路径可点击** — ✅ 2026-10-06 完成（含 markdown 链接形态）
+  - agent 说「定稿在 \`docs/xxx.md\`」绝大多数用反引号包裹 → 落在 `Markdown.tsx` 的 `code` 渲染器，**不需要碰 remark AST**；markdown 链接形态（`[plan](docs/plan.md)`）由同一组件的 `a` 渲染器一并接管。
+  - **落地形态与下方计划不同（有意偏离）**：未做「异步存在性校验」，改为**同步启发式 + 从严判定**（`utils/path.ts` 的 `isLikelyPathString` / `looksLikeDirectory`）。理由：① 存在性校验要为每个候选路径在流式/渲染期发请求，而判定发生在渲染函数内，异步化会牵动 react-markdown 的同步渲染契约；② 误判代价已通过判据收紧压到可接受——末段须有扩展名 / 首段须是已知项目目录 / 绝对路径 / 显式 `./` `../` / 尾斜杠目录，双词斜杠组合（`and/or`、`true/false`、`client/server`）与代码片段（`const x = a/b`）一律不判；③ 误点最坏结果是抽屉里显示后端读取错误（可恢复），而误判成目录会强制关掉用户已打开的抽屉并丢浏览位置，故歧义时按文件处理。
+  - **目录路径也能导航**： agent 输出 `` `/home/pax/coding/OmniTerm-dev` `` 这类反引号包裹的目录时，点击在 FM 列表切到该目录（原需求只设想文件，此为用户实测反馈后补的分支）。
+  - 打开动作经单一入口 `utils/reportedPath.ts` 的 `revealReportedPath` → `revealPathInFileManager`（`appStore.ts`），与 A1 的 `locations` 入口共用同一份「判目录/文件 + getState」逻辑，不另写一套。
+  - 手动回归用例见 `docs/reference/user-testing.md` §22。
 
 - [x] **C · 裸文本路径（无反引号）识别** — ❌ 评估后不做（2026-08-10）
   - 需自定义 remark plugin 改 AST，误判面大（散文里的 `and/or`、版本号、URL 片段），而 A+B 已覆盖约 95% 真实场景。属过度设计。
