@@ -174,6 +174,23 @@ export interface Session {
   last_turn_at?: string | null
 }
 
+/**
+ * agent 侧记录清理结果（后端 `agent_side` 字段）。**协议稳定值**：
+ * - `not_requested` — 未勾选（或非 ACP 会话）；
+ * - `deleted` — agent 确认删除（软删/硬删由 agent 实现决定）；
+ * - `skipped` — 请求了但未能删除（agent 未声明能力 / 进程已释放 / RPC 失败）。
+ *
+ * 只有 `deleted` 才能对用户说「agent 侧记录已删除」；`skipped` 必须如实告知
+ * （宁可漏删，不可谎报已删）。
+ */
+export type AgentSideDeleteResult = 'not_requested' | 'deleted' | 'skipped'
+
+export interface DeleteSessionResponse {
+  ok: true
+  /** 后端缺省（旧版本）时不返回：按 `not_requested` 处理。 */
+  agent_side?: AgentSideDeleteResult
+}
+
 export interface AgentEnvVar {
   key: string
   value: string
@@ -443,8 +460,20 @@ export const api = {
     }),
   updateSession: (id: string, data: { name?: string }) =>
     request<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  deleteSession: (id: string) =>
-    request(`/sessions/${id}`, { method: 'DELETE' }),
+  /**
+   * Delete a session (kills its process and drops the DB row).
+   *
+   * `deleteAgentSide` requests that the agent's own copy of the session record
+   * is removed too (`session/delete`). Best-effort and gated on the agent
+   * declaring `sessionCapabilities.delete` **and** still having a live process
+   * — read `agent_side` in the response to tell the user what actually
+   * happened (`deleted` / `skipped` / `not_requested`).
+   */
+  deleteSession: (id: string, opts?: { deleteAgentSide?: boolean }) =>
+    request<DeleteSessionResponse>(
+      `/sessions/${id}${opts?.deleteAgentSide ? '?delete_agent_side=true' : ''}`,
+      { method: 'DELETE' },
+    ),
   /** Release a running ACP agent subprocess without deleting the session record. */
   releaseSession: (id: string) =>
     request(`/sessions/${id}/release`, { method: 'POST' }),

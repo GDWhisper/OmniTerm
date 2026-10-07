@@ -223,13 +223,17 @@ enum AcpServerMessage<'a> {
     /// 里的 banner 是断连窗口过期项（错过了 permission_resolved 广播），应清除。
     #[serde(rename = "permissions_synced")]
     PermissionsSynced,
-    /// agent 能力声明（prompt 图片 / 嵌入上下文），client 就绪时推送，
-    /// 前端据此显示/隐藏/置灰附件入口。`agent_name` 为当前会话所用 agent 的
-    /// `display_name`，用于聊天气泡正确显示 agent 身份（而非硬编码 "agent"）。
+    /// agent 能力声明（prompt 图片 / 嵌入上下文 / 会话删除），client 就绪时推送，
+    /// 前端据此显示/隐藏/置灰附件入口与「同时删除 agent 侧记录」勾选框。
+    /// `agent_name` 为当前会话所用 agent 的 `display_name`，用于聊天气泡正确显示
+    /// agent 身份（而非硬编码 "agent"）。
     /// `embedded_context` = `promptCapabilities.embeddedContext`（文件附件与
     /// @path 引用共用此门控）。
+    /// `agent_delete` = `sessionCapabilities.delete`（存在即支持）：勾选框的唯一
+    /// 实时真源，未收到该帧（本浏览器未连过该会话）时前端按「未知」禁用勾选
+    /// （未知→不删的安全默认，见计划 D3）。
     #[serde(rename = "capabilities")]
-    Capabilities { image: bool, embedded_context: bool, agent_name: String },
+    Capabilities { image: bool, embedded_context: bool, agent_delete: bool, agent_name: String },
     /// 连接时下发当前是否有进行中的 assistant turn。`active:false` 时前端定稿
     /// 任何残留的 streaming 消息（turn 在 WS 断开期间已结束的兜底）。
     #[serde(rename = "turn_state")]
@@ -862,6 +866,7 @@ async fn restore_acp_session(
     let cap_msg = serde_json::to_string(&AcpServerMessage::Capabilities {
         image: new_client.supports_image(),
         embedded_context: new_client.supports_embedded_context(),
+        agent_delete: new_client.supports_delete_session(),
         agent_name: agent_display_name,
     })
     .unwrap_or_default();
@@ -1049,6 +1054,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             let msg = serde_json::to_string(&AcpServerMessage::Capabilities {
                 image: c.supports_image(),
                 embedded_context: c.supports_embedded_context(),
+                agent_delete: c.supports_delete_session(),
                 agent_name,
             })
             .unwrap_or_default();

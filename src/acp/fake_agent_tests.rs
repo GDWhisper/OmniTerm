@@ -37,7 +37,10 @@
 //! 12. **重复 env 键最后一条胜出**（升级计划 D4 的端到端 pin）；
 //! 13. **usage 快照落库**：`usage_update` 通知经 `on_agent_notification` 写
 //!     `sessions.usage_json`（刷新 / 换设备后 `GET /messages` hydrate 的恢复来源，
-//!     通知本身不随 session/load 重放、广播无补发）。
+//!     通知本身不随 session/load 重放、广播无补发）；
+//! 14. **agent 侧记录删除**（2026-10-06）：`sessionCapabilities.delete` 的存在性
+//!     判据（声明 / 未声明两态）+ `session/delete` 的 sessionId 送达与失败上报
+//!     ——「删除会话时顺带抹掉 agent 侧记录」的后端契约。
 //!
 //! **边界（勿过度解读）**：
 //! - 本测试**不复现**上游 crate 的 pidfd 空转（依赖未识别的 poll/wake 交错，
@@ -787,6 +790,85 @@ async fn usage_update_notification_is_persisted() {
     assert_eq!(snap["size"], 200000);
     // 会话隔离：未收到 usage 的会话不受影响。
     assert_eq!(crate::acp::usage::load_usage_snapshot(&db, "s2").await, None);
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 14. agent 侧记录删除：sessionCapabilities.delete + session/delete ────
+
+/// 声明了 `sessionCapabilities.delete` 的 agent：`supports_delete_session()` 为真，
+/// `delete_session()` 把 sessionId 原样送达 agent 并返回 Ok。
+///
+/// 这是「删除会话时顺带抹掉 agent 侧记录」的后端契约（计划 Phase 3）：删的是
+/// **传入的** `acp_session_id`（会话行的值），不是连接自己的 session id。
+#[tokio::test]
+async fn delete_session_rpc_reaches_agent_and_reports_supported() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("delete-ok");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "delete", &dir), workspace).await;
+    assert!(
+        client.supports_delete_session(),
+        "delete 模式的 agent 应声明 sessionCapabilities.delete"
+    );
+
+    tokio::time::timeout(UNWIND_TIMEOUT, client.delete_session("sess-to-delete"))
+        .await
+        .expect("delete_session 未在限时内返回（挂死）")
+        .expect("agent 回空结果时应为 Ok");
+
+    assert!(
+        read_events(&dir).contains("delete sess-to-delete"),
+        "agent 应收到 session/delete 且 sessionId 原样，实际事件日志: {:?}",
+        read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 未声明能力的 agent（与 codebuddy 实测一致）：判据为假——调用方据此跳过 RPC，
+/// 不盲发（`method not found` 与真失败必须能区分，计划 D3）。
+#[tokio::test]
+async fn delete_session_capability_absent_is_reported_false() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("delete-unsupported");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "live", &dir), workspace).await;
+    assert!(
+        !client.supports_delete_session(),
+        "未声明 sessionCapabilities.delete 的 agent 判据必须为假（未知≠支持）"
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// agent 拒删（JSON-RPC 错误）：`delete_session` 返回 Err，调用方据此把响应标成
+/// `agent_side=skipped` 并 WARN 留痕——删除失败不得被吞成成功（用户以为抹掉了
+/// 痕迹、实际还在，是比删除失败更糟的结局）。
+#[tokio::test]
+async fn delete_session_rpc_error_surfaces_as_err() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("delete-fail");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "delete_fail", &dir), workspace).await;
+    assert!(client.supports_delete_session(), "delete_fail 模式同样声明能力（只有 RPC 结果不同）");
+
+    let result = tokio::time::timeout(UNWIND_TIMEOUT, client.delete_session("sess-x"))
+        .await
+        .expect("delete_session 未在限时内返回（挂死）");
+    assert!(result.is_err(), "agent 回 JSON-RPC 错误时 delete_session 必须报错，实际: {result:?}");
 
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

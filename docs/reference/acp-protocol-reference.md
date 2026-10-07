@@ -1581,6 +1581,30 @@ Client MUST 在文件不存在时创建它。
 - 软删除还是硬删除由实现决定
 - 删除活动 session 的行为由实现定义
 
+### 17.3 omniterm 侧接入状态（2026-10-06 实探）
+
+`session/delete` 已接入「删除会话」链路：`DELETE /api/v1/sessions/{id}?delete_agent_side=true`
+在 agent 子进程仍活着时先发 `session/delete` 再 shutdown，响应体 `agent_side` 三态
+（`deleted` / `skipped` / `not_requested`）。能力判据来自 initialize 响应的
+`agentCapabilities.sessionCapabilities.delete`（marker 空结构，存在即支持），经
+`capabilities` WS 帧的 `agent_delete` 下发前端做勾选框门控。`session/list` 尚未接入。
+
+**多实现差异（§8，实测取证，勿把单一实现当约定）**：
+
+| 实现 | `sessionCapabilities` | `session/delete` 实测 | 备注 |
+|------|----------------------|----------------------|------|
+| opencode 2.0.24 | `list`+`delete`+`fork`+`resume`+`close`+`additionalDirectories` | ✅ 0.1s 回 `{}`；删后 `session/list` 中消失；重复删同样回 `{}` | 行为最完整，可作为参考实现 |
+| pi-acp 0.0.34 | `list`+`delete` | ✅ 1.2s 回 `{}`；重复删仍回 `{}` | ⚠️ `session/list` **不列出刚新建的会话**（同 cwd 下 `session/new` 后 list 返回 0 条）——不能拿 list 结果反推 delete 是否生效 |
+| omp 18.7.0 | `list`+`fork`+`resume`+`close`（**无 delete**） | 未调用 | 未声明即不支持 |
+| codebuddy | **完全无 `sessionCapabilities`** | 未调用（不盲发） | 连 `session/list` 也回 `-32601 Method not found` |
+
+结论（写进实现的三条约束）：
+1. **未声明 = 不支持**，不盲发——盲发会让 `method not found` 与真失败混为一谈；
+2. **`session/delete` 成功 ≠ 文件已删**：软删/硬删由实现决定，UI 文案只能说
+   「从 agent 会话列表移除」；
+3. **不能只按 `session/list` 验证删除效果**（pi-acp 反例），单测与回归须以
+   RPC 往返本身（fake agent 事件日志）为准。
+
 ---
 
 ## 18. Client 实现清单
@@ -1596,8 +1620,8 @@ Client MUST 在文件不存在时创建它。
 | `session/resume` | request | ✅ 必须 | 恢复会话 |
 | `session/close` | request | ✅ 必须 | 关闭会话 |
 | `session/prompt` | request | ✅ 必须 | 发送 prompt |
-| `session/list` | request | ✅ 必须 | 列出会话 |
-| `session/delete` | request | 条件 | Agent 声明 session.delete 时 |
+| `session/list` | request | ✅ 必须 | 列出会话（omniterm：**未接入**） |
+| `session/delete` | request | 条件 | Agent 声明 session.delete 时（omniterm：**已接入**——删会话勾选「同时永久删除 agent 侧会话记录」，见 §17.3） |
 | `session/set_config_option` | request | 可选 | 设置配置选项 |
 | `session/cancel` | notification | ✅ 必须 | 取消活动工作 |
 

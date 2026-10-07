@@ -1,8 +1,25 @@
 # ACP 会话历史管理：session/list 发现 · 外部会话载入 · session/delete 清理
 
-> 状态：设计稿（2026-10-04）
+> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 / E3-2 面板内 purge **未实施**
 > 触发条件：补足 omniterm 侧对「agent 侧 ACP 会话历史」的发现 / 读取 / 删除能力（2026-10-04 盘点结论：ACP 11 个 session 命令 omniterm 只用 5 个，`session/list` / `session/delete` 零引用）
-> 关联：`docs/reference/acp-protocol-reference.md`（方法矩阵 :1512-1600）、`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`（菜单 / 批量确认范式）、`docs/architecture/frontend-patterns.md`（sidebar 弹出面板约定）、`docs/dev/plans/archive/2026-10-01-acp-sdk-v2-upgrade.md`（SDK 2.2 + V1 握手背景）
+> 关联：`docs/reference/acp-protocol-reference.md`（§17.3 实探结论）、`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`（菜单 / 批量确认范式）、`docs/architecture/frontend-patterns.md`（sidebar 弹出面板约定）、`docs/dev/plans/archive/2026-10-01-acp-sdk-v2-upgrade.md`（SDK 2.2 + V1 握手背景）
+
+## 0. Phase 0 实探结论（2026-10-06，已完成）
+
+用最小 JSON-RPC 探针直连各 agent 的 `initialize` / `session/list` / `session/delete`：
+
+| agent | `sessionCapabilities` | `session/delete` 行为 |
+|-------|----------------------|----------------------|
+| opencode 2.0.24 | `list`+`delete`+`fork`+`resume`+`close`+`additionalDirectories` | ✅ 0.1s 回 `{}`，删后 list 中消失，重复删仍 `{}` |
+| pi-acp 0.0.34 | `list`+`delete` | ✅ 1.2s 回 `{}`；⚠️ 新建会话不出现在 `session/list`（无法用它验证删除） |
+| omp 18.7.0 | `list`+`fork`+`resume`+`close`（无 delete） | 未调用 |
+| codebuddy（默认 agent） | **无 `sessionCapabilities`** | 未调用；`session/list` 回 `-32601` |
+
+**对 §5 Phase 0 结论的回答**：能力位确实存在且 `session/delete` 真实可用（opencode /
+pi-acp），但**用户的主力 agent codebuddy 未声明** → 勾选框对其恒禁用、删除请求跳过。
+按本文档 §7 预案执行：删除弹窗文案指向手动清理路径，不隐藏功能本身
+（换 opencode/pi-acp 时立刻可用）。Q2 对 codebuddy 未闭环，属 agent 侧能力缺失，
+非 omniterm 可实现范围内的问题。
 
 ## 1. 背景与问题清单
 
@@ -10,9 +27,9 @@
 
 | # | 问题 | 证据 | 严重度 |
 |---|------|------|--------|
-| Q1 | agent 侧历史**读不到**：只能重放 omniterm 亲手创建的会话；外部会话（用户裸 CLI 跑的、别的机器拷来的 `acp_session_id`）既不能枚举也不能载入 | `acp_session_id` 唯一来源是 `create_session` 里 `session/new` 的响应（`src/api/sessions.rs:180`），无任何入口传入既有 id | P0 |
-| Q2 | agent 侧历史**删不掉**：omniterm 删除会话只杀进程 + 删自己库（`chat_messages` 级联），agent 侧文件（codebuddy：`~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl`，见 `acp-protocol-reference.md:618`）永久残留 | `cleanup_session_runtime` acp 分支只 `dispose + shutdown`（`src/api/sessions.rs:427`）；`AcpClient::shutdown()` 不发任何 ACP 方法（`src/acp/client.rs:1349`）；全仓 `DeleteSessionRequest` 零引用 | P0 |
-| Q3 | 无发现入口 | `session/list` 零引用 | P0（Q1 的前置） |
+| Q1 | agent 侧历史**读不到**：只能重放 omniterm 亲手创建的会话；外部会话（用户裸 CLI 跑的、别的机器拷来的 `acp_session_id`）既不能枚举也不能载入 | `acp_session_id` 唯一来源是 `create_session` 里 `session/new` 的响应（`src/api/sessions.rs:180`），无任何入口传入既有 id | P0（**未闭环**） |
+| Q2 | agent 侧历史**删不掉**：omniterm 删除会话只杀进程 + 删自己库（`chat_messages` 级联），agent 侧文件（codebuddy：`~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl`，见 `acp-protocol-reference.md:618`）永久残留 | `cleanup_session_runtime` acp 分支只 `dispose + shutdown`（`src/api/sessions.rs:427`）；`AcpClient::shutdown()` 不发任何 ACP 方法（`src/acp/client.rs:1349`）；全仓 `DeleteSessionRequest` 零引用 | P0 → **已闭环（声明能力的 agent）** |
+| Q3 | 无发现入口 | `session/list` 零引用 | P0（**未闭环**，Q1 的前置） |
 
 **根因**：三个协议命令（`session/list` / `session/delete` / 「绑定既有 id 的会话创建」）从未接入。协议侧已就绪：rust-sdk 2.2.0 的 **v1 schema 即含** `ListSessionsRequest/Response`（`SessionInfo{session_id, cwd, title?, updated_at?}` + `next_cursor` 分页）与 `DeleteSessionRequest`（schema-1.9.1 `v1/agent.rs:1549/1675`），omniterm 的 `ProtocolVersion::V1` 握手（`src/acp/client.rs:713`）可直接调用；删除能力位在 v1 `AgentCapabilities.session_capabilities.delete`（marker 空结构，存在即支持）。
 
@@ -110,6 +127,35 @@
 - `pnpm lint` / `pnpm exec tsc -b` / `pnpm test` / `cargo clippy -D warnings` / `cargo test` 零新增。
 - 文档闭环见 §7。
 
+## 5.1 实施记录（2026-10-06，Phase 0 + Phase 3 + Phase 4 的删除勾选部分）
+
+用户指令：「acp 协议，删除 agent 侧记录，接入，点击 acp 会话删除时，在二次确认弹窗中加入
+红字勾选框：同时永久删除 agent 侧会话记录，前端记忆用户选择」。据此只做 E3-1 全链路
+（后端 delete + 单条/批量删除确认勾选），E1 面板 / E2 载入 / E3-2 面板内 purge 不做。
+
+**与原设计的偏差（就地勘误）**：
+
+| # | 原设计 | 实施 | 原因 |
+|---|--------|------|------|
+| E-1 | 勾选框默认**勾选**（能力已知支持时） | 勾选框默认取**用户上次的选择**，首次（无记录）为**不勾选** | 用户明确要求「前端记忆用户选择」；且这是不可逆的附加删除，首次默认替用户做决定不合适。记忆写入时机 = 确认删除成功之后（中途关闭不算表达偏好） |
+| E-2 | 三态仅按能力（已知支持 / 已知不支持 / 未知） | 增加第 4 个禁用原因：**agent 进程已释放**（`acp_session_alive === false`）—— 没有活连接就发不出 RPC，勾了也必然 `skipped` | 实测：删一个已释放会话时勾选框若可勾选，用户会得到「勾了但没删」的静默失败；禁用 + 「请先恢复会话」才是如实交代。判据优先级：不支持 > 已释放 > 未知（前者恢复进程也救不回来，后两者动作都是「先把进程跑起来」） |
+| E-3 | 勾选框内联在 `DeleteConfirmDialog` | 抽 `Sidebar/agentSideDelete.ts` 共享判据 + `ConfirmDialog` 支持 `checkbox: {label, defaultChecked, danger, disabled, hint}` | 单条与批量删除是同一判据的两个入口，内联两份必然漂移（工程准则 6）；`checkboxLabel: string` 升级为结构化 prop，两个既有调用点（FileManager / FileDrawer）一并迁移 |
+| E-4 | 能力位经 `capabilities` 帧下发即可（D6） | 同设计，另在前端按「未知 = 不可勾选」处理（不再是「禁用 + 不勾选」的软表述，而是判据里的一等分支） | 后端对未知能力不盲发（`method not found` 与真失败无法区分），UI 若可勾选就是谎报「已删」 |
+| E-5 | `cleanup_session_runtime` 收 `delete_agent_side: bool` 参数 | 收 `AgentSideDelete { requested, acp_session_id }` + 返回 `AgentSide` 枚举 | 位置 bool 参数在 4 个调用点靠顺序对齐；返回枚举让「跳过原因」可进响应与日志，且纯函数 `plan_agent_side_delete` 可单测（不依赖活连接） |
+| E-6 | `conn_tx` 传 6 元位置元组 | 改具名 `Handshake` 结构 | 新增能力位就要再加一个 `bool`，位置元组改错顺序编译器不报错 |
+
+**验收结果**（真实链路，dev 实例）：
+- opencode 会话：`DELETE …?delete_agent_side=true` → `{"ok":true,"agent_side":"deleted"}`；
+  `session/list` 复核该 id 已消失（agent 侧真实删除）✅
+- 未勾选（无 query）→ `agent_side:"not_requested"` ✅
+- 进程已释放（先 `POST /release`）→ `agent_side:"skipped"` ✅
+- codebuddy（未声明能力）→ `agent_side:"skipped"` + 后端 INFO 留痕 ✅
+- UI：红字勾选框（`--danger`）渲染、勾选后删除、`localStorage.omniterm_delete_agent_side`
+  记 `true`、**刷新页面后重开弹窗仍默认勾选**、已释放进程的会话勾选框禁用并给出原因 ✅
+
+**未闭环项（留给后续 Phase）**：Q1（`session/list` 发现）、Q3（面板入口）、E3-2（面板内
+purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，omniterm 无法代劳）。
+
 ## 6. 验收标准
 
 - [ ] E1：展开面板拉到真实 agent 会话列表；cwd/title 缺省时降级显示不崩溃；超限显示截断提示
@@ -119,23 +165,30 @@
 - [ ] E3-1：能力已知支持 → 勾选默认开 → 删除后 agent 列表（E1 刷新）中该 id 消失
 - [ ] E3-1：能力未知/不支持 → 勾选禁用 + 说明；删除照常完成（`agent_side:"skipped"`），omniterm 侧记录照删
 - [ ] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
-- [ ] E3-2：purge 未纳管历史 → 确认后行消失；无能力 → 409 + 手动清理路径提示
-- [ ] 批量删除：混合 acp（能力未知）→ 勾选禁用 + 跳过说明，其余会话正常删
-- [ ] §P1：list 双页 + 超 200 条截断有单测；`AgentHistorySection` 无轮询（无 setInterval）
-- [ ] 质量门禁全绿；`./scripts/check-doc-index.sh` 通过
+- [x] E3-1：能力已知支持 → 勾选后删除 → agent 列表（`session/list` 探针）中该 id 消失
+- [x] E3-1：能力未知/不支持/进程已释放 → 勾选禁用 + 说明；删除照常完成（`agent_side:"skipped"`），omniterm 侧记录照删
+- [x] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
+- [x] E3-1：勾选偏好被记住（`localStorage.omniterm_delete_agent_side`），刷新后仍生效；禁用态不写偏好
+- [ ] E3-2：purge 未纳管历史 → 确认后行消失；无能力 → 409 + 手动清理路径提示（**未实施**：依赖 E1 面板）
+- [x] 批量删除：逐条判据——仅对「能力已知支持 + 进程驻留」的会话带 `delete_agent_side=true`；全不可勾时禁用 + 说明
+- [ ] §P1：list 双页 + 超 200 条截断有单测；`AgentHistorySection` 无轮询（**未实施**：Phase 1 不做）
+- [x] 质量门禁全绿；`./scripts/check-doc-index.sh` 通过
 
 ## 7. 风险与文档闭环
 
 | 风险 | 缓解 |
 |--------|------|
-| Phase 0 探明 agent 不支持 `session/delete` | Q2 闭环不了；把面板内 purge 入口对该 agent 隐藏（而非置灰误导），删除弹窗文案指向手动路径；结论回写本文档 |
-| ephemeral spawn 与 reaper / 并发拉取叠加（同 agent 同时多进程） | spawn 不注册 supervisor（不进 reaper 视野）；每次调用独立 15s timeout + 结束必 shutdown；不做单 flight（首版从简，spawn 幂等廉价）——若实测重复拉取频繁再加 per-agent in-flight |
-| 长历史会话 list 慢（agent 侧扫盘） | 15s timeout + 超限截断 + 面板 loading 态 |
-| 用户从面板载入一个**别的 worktree/cwd** 的会话 | create 用当前 worktree 作 `workspace_path`；加载 RPC 的 cwd 用 omniterm 的（`restore_acp_session` 已如此），agent 侧按 id 定位历史——若 agent 严格按 cwd 匹配可能 load 空历史，面板行展示原始 cwd 让用户预判 |
+| Phase 0 探明 agent 不支持 `session/delete` | **已发生**（codebuddy 未声明）：删除弹窗勾选框对其恒禁用并给出「未声明支持…需手动清理」文案，删除照常完成；结论已回写本文档 §0 与 `acp-protocol-reference.md` §17.3 |
+| 勾选框可勾但实际跳过（进程已释放） | 前端把 `acp_process_alive === false` 纳入禁用判据（偏差 E-2），不给「勾了没删」的静默失败 |
+| ephemeral spawn 与 reaper / 并发拉取叠加（同 agent 同时多进程） | spawn 不注册 supervisor（不进 reaper 视野）；每次调用独立 15s timeout + 结束必 shutdown；不做单 flight（首版从简，spawn 幂等廉价）——若实测重复拉取频繁再加 per-agent in-flight（Phase 1 落地时适用） |
+| 长历史会话 list 慢（agent 侧扫盘） | 15s timeout + 超限截断 + 面板 loading 态（Phase 1 落地时适用） |
+| 用户从面板载入一个**别的 worktree/cwd** 的会话 | create 用当前 worktree 作 `workspace_path`；加载 RPC 的 cwd 用 omniterm 的（`restore_acp_session` 已如此），agent 侧按 id 定位历史——若 agent 严格按 cwd 匹配可能 load 空历史，面板行展示原始 cwd 让用户预判（Phase 2 落地时适用） |
+| `session/delete` 成功被当成「文件已删」 | 文案只说「从 agent 会话列表移除」；软删/硬删由实现决定（§17.3 结论 2） |
 
-**文档闭环（实施后）**：
-- `docs/architecture/backend.md`：新路由（list/purge/`delete_agent_side`）、capabilities 帧新字段、`AcpClient` 两方法 + 能力判据；§8 差异按 §4 表沉淀
-- `docs/reference/acp-protocol-reference.md`：方法矩阵补「omniterm 已接 / 未接」状态列（:1592-1600）
-- `AGENTS.md`：登记本计划到文档索引
-- `docs/reference/user-testing.md`：E1/E2/E3 手动用例
-- `CHANGELOG.md`：完成 Phase 1-4 后加条目（设计稿阶段不加）
+**文档闭环（Phase 0 + Phase 3 + Phase 4-E3-1 已完成部分）**：
+- [x] `docs/architecture/backend.md`：`delete_agent_side` 路由语义、capabilities 帧 `agent_delete`、`AcpClient` 两方法 + 能力判据
+- [x] `docs/reference/acp-protocol-reference.md`：§17.3 多实现差异表 + §18.1 方法矩阵「omniterm 已接 / 未接」标注
+- [x] `AGENTS.md`：本计划已在文档索引（2026-10-04 登记）
+- [x] `docs/reference/user-testing.md`：E3-1 手动用例
+- [x] `CHANGELOG.md`：条目（Phase 3 + Phase 4-E3-1 为实质性功能改动）
+- [ ] Phase 1/2/4-E1/E3-2 落地后补：list/purge 路由文档、AgentHistorySection 渲染用例

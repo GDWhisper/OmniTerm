@@ -9,7 +9,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use serde_json::json;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -411,20 +411,60 @@ async fn update_session(
     (StatusCode::OK, Json(json!(session)))
 }
 
+/// agent 侧记录清理的结果语义（`DELETE /sessions/{id}` 响应的 `agent_side` 字段，
+/// **协议稳定值**，改名等于改前端契约）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentSide {
+    /// 未请求（未勾选 / 非 ACP 会话）。
+    NotRequested,
+    /// `session/delete` 已由 agent 确认（RPC 成功；软删还是硬删由实现决定）。
+    Deleted,
+    /// 请求了但未能删除：agent 未声明能力 / 进程已释放无活连接 / RPC 失败。
+    Skipped,
+}
+
+impl AgentSide {
+    fn as_str(self) -> &'static str {
+        match self {
+            AgentSide::NotRequested => "not_requested",
+            AgentSide::Deleted => "deleted",
+            AgentSide::Skipped => "skipped",
+        }
+    }
+}
+
+/// 删除会话时对 agent 侧记录的动作请求（`?delete_agent_side=true`）。
+///
+/// 仅 acp 分支消费；`acp_session_id` 由调用方从会话行读出——**不能**用
+/// `client.session_id()` 代替：会话行才是「用户以为自己在删哪条记录」的真源，
+/// 两者理论上一致，但行数据是删除动作的依据。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AgentSideDelete<'a> {
+    pub requested: bool,
+    pub acp_session_id: Option<&'a str>,
+}
+
 /// 按 `runtime_kind` 清理会话的运行时资源：acp → 释放 supervisor 持有的 agent
 /// 子进程；复用器会话 → 关闭活跃度跟踪并 `kill-session` 杀会话进程。
 ///
 /// 只负责进程/运行时清理，**不删除 DB 记录**——由调用方（`delete_session` /
 /// `delete_project`）负责删库。两处共用，避免清理逻辑漂移。
+///
+/// `agent_side` 仅在 acp 分支生效：请求删除 agent 侧记录时，在 agent 子进程
+/// **仍活着**的窗口内先发 `session/delete` 再 shutdown（进程一没就再也发不出）。
+/// best-effort：RPC 失败只 WARN、不阻断删除（omniterm 侧记录照删，返回值告知
+/// 前端）。
 pub async fn cleanup_session_runtime(
     state: &AppState,
     session_id: &str,
     engine_name: Option<&str>,
     runtime_kind: &str,
-) {
+    agent_side: AgentSideDelete<'_>,
+) -> AgentSide {
     match runtime_kind {
         "acp" => {
             if let Some(client) = state.acp_supervisor.dispose(session_id).await {
+                let outcome = delete_agent_side_record(&client, agent_side).await;
                 // shutdown 走 shared reference 主动 teardown，不依赖 Arc 引用归零：
                 // WS handler 持 `Arc<AcpClient>` 时 try_unwrap 永远失败，旧写法会
                 // 留下孤儿进程（删了 DB 行/释放了注册，进程却还在跑）。
@@ -432,7 +472,18 @@ pub async fn cleanup_session_runtime(
                 // 修复）：连接 poll 卡死时 crate 内部 ChildGuard 的 killpg 永远
                 // 走不到，须由 omniterm 侧直接击杀。详见 acp::agent_proc。
                 client.shutdown().await;
+                return outcome;
             }
+            // 无活连接（已释放 / 被 reaper 回收 / 后端重启后从未恢复）：agent 侧
+            // 删除需要活连接，此处只能跳过并让前端如实告知用户。
+            if agent_side.requested {
+                info!(
+                    session_id = %session_id,
+                    "delete_session: agent 侧删除被跳过（agent 进程未驻留，无活连接可发 session/delete）"
+                );
+                return AgentSide::Skipped;
+            }
+            AgentSide::NotRequested
         }
         "pty" => {
             // 常驻会话由 PtyEngine 持有：显式 kill（三级信号升级），
@@ -442,6 +493,7 @@ pub async fn cleanup_session_runtime(
             {
                 error!("failed to kill pty session {}: {}", name, e);
             }
+            AgentSide::NotRequested
         }
         _ => {
             if let Some(name) = engine_name {
@@ -450,21 +502,94 @@ pub async fn cleanup_session_runtime(
                     error!("failed to kill multiplexer session {}: {}", name, e);
                 }
             }
+            AgentSide::NotRequested
         }
     }
+}
+
+/// agent 侧删除的**前置判据**：给定请求与「该 agent 是否声明了 delete 能力」，
+/// 决定是否发 `session/delete`。抽成纯函数是为了让三条「不发送」分支（未勾选 /
+/// 会话行无 `acp_session_id` / agent 不支持）**不依赖活连接即可单测**——它们
+/// 恰恰是「用户勾了却没删」时最需要区分的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentSidePlan<'a> {
+    /// 未请求（用户没勾选）。
+    NotRequested,
+    /// 请求了但发不了，附跳过原因（进日志与响应）。
+    Skip(&'static str),
+    /// 应发 `session/delete`，携带要删的 agent 侧 session id。
+    Send(&'a str),
+}
+
+fn plan_agent_side_delete<'a>(
+    agent_side: AgentSideDelete<'a>,
+    supports_delete_session: bool,
+) -> AgentSidePlan<'a> {
+    if !agent_side.requested {
+        return AgentSidePlan::NotRequested;
+    }
+    let Some(acp_session_id) = agent_side.acp_session_id.filter(|s| !s.is_empty()) else {
+        return AgentSidePlan::Skip("会话行无 acp_session_id");
+    };
+    // §8 多实现兼容：未声明能力的 agent（实测 codebuddy）不盲发——`method not
+    // found` 与真失败混在一起就无法对用户如实交代。
+    if !supports_delete_session {
+        return AgentSidePlan::Skip("agent 未声明 sessionCapabilities.delete");
+    }
+    AgentSidePlan::Send(acp_session_id)
+}
+
+/// 在**活连接**上执行 agent 侧记录删除（`session/delete`），best-effort。
+///
+/// 三种「不做」各有独立日志，便于事后区分「用户没勾」「agent 不支持」「发失败」。
+async fn delete_agent_side_record(
+    client: &crate::acp::AcpClient,
+    agent_side: AgentSideDelete<'_>,
+) -> AgentSide {
+    match plan_agent_side_delete(agent_side, client.supports_delete_session()) {
+        AgentSidePlan::NotRequested => AgentSide::NotRequested,
+        AgentSidePlan::Skip(reason) => {
+            info!("delete_session: 跳过 agent 侧删除（{}）", reason);
+            AgentSide::Skipped
+        }
+        AgentSidePlan::Send(acp_session_id) => match client.delete_session(acp_session_id).await {
+            Ok(()) => {
+                info!("delete_session: agent 侧记录已删除（{}）", acp_session_id);
+                AgentSide::Deleted
+            }
+            Err(e) => {
+                // 删除是对用户承诺的「痕迹消失」，失败必须留痕（不要吞成 Ok）。
+                warn!(
+                    "delete_session: session/delete 失败（{}），omniterm 侧记录照删：{}",
+                    acp_session_id, e
+                );
+                AgentSide::Skipped
+            }
+        },
+    }
+}
+
+/// `DELETE /sessions/{id}` 的查询参数。`delete_agent_side=true` 时顺带删除
+/// agent 侧会话记录（仅 acp 会话 + agent 声明了 `sessionCapabilities.delete` 时生效）。
+#[derive(Debug, serde::Deserialize)]
+struct DeleteSessionQuery {
+    #[serde(default)]
+    delete_agent_side: bool,
 }
 
 async fn delete_session(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<DeleteSessionQuery>,
 ) -> impl IntoResponse {
-    let row: Option<(Option<String>, String)> =
-        sqlx::query_as("SELECT tmux_session_name, runtime_kind FROM sessions WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten();
+    let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
+        "SELECT tmux_session_name, runtime_kind, acp_session_id FROM sessions WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
 
     let result = sqlx::query("DELETE FROM sessions WHERE id = ?")
         .bind(&id)
@@ -476,14 +601,27 @@ async fn delete_session(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" })));
     }
 
-    if let Some((engine_name, runtime_kind)) = row {
-        cleanup_session_runtime(&state, &id, engine_name.as_deref(), &runtime_kind).await;
+    let mut agent_side = AgentSide::NotRequested;
+    if let Some((engine_name, runtime_kind, acp_session_id)) = row {
+        // agent 侧删除必须在进程还活着时发，故这一段在 cleanup 内完成（删除的
+        // dispose → session/delete → shutdown 顺序不可调换）。
+        agent_side = cleanup_session_runtime(
+            &state,
+            &id,
+            engine_name.as_deref(),
+            &runtime_kind,
+            AgentSideDelete {
+                requested: query.delete_agent_side,
+                acp_session_id: acp_session_id.as_deref(),
+            },
+        )
+        .await;
     }
 
     // 清理会话级配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
     let _ = config_prefs::clear_session_configs(&state.db, &id).await;
 
-    (StatusCode::OK, Json(json!({ "ok": true })))
+    (StatusCode::OK, Json(json!({ "ok": true, "agent_side": agent_side.as_str() })))
 }
 
 /// 手动释放 ACP 会话的后端子进程（codebuddy --acp 等），**不删除会话记录**。
@@ -549,7 +687,9 @@ async fn archive_session(
     }
 
     // 归档即释放：dispose + shutdown supervisor 中驻留的 agent 子进程。
-    cleanup_session_runtime(&state, &id, None, "acp").await;
+    // 归档**不**删 agent 侧记录：聊天记录要保留供只读查看，抹掉 agent 侧历史
+    // 与归档语义相悖（要抹掉应走删除会话 + 勾选）。
+    cleanup_session_runtime(&state, &id, None, "acp", AgentSideDelete::default()).await;
 
     let now = chrono::Utc::now().to_rfc3339();
     match mark_archived(&state.db, &id, Some(&now)).await {
@@ -1073,5 +1213,67 @@ mod archive_tests {
         let pool = fresh_pool().await;
         let affected = mark_archived(&pool, "nope", Some("2026-08-23T00:00:00Z")).await.unwrap();
         assert_eq!(affected, 0, "不存在的会话必须返回 0 行（handler 据此返 404）");
+    }
+}
+
+/// agent 侧删除的判据与响应语义（`DELETE /sessions/{id}?delete_agent_side=`）。
+/// 纯函数 + 枚举映射，无 HTTP / 无进程 / 无活连接。
+#[cfg(test)]
+mod agent_side_delete_tests {
+    use super::{AgentSide, AgentSideDelete, AgentSidePlan, plan_agent_side_delete};
+
+    fn req<'a>(requested: bool, acp_session_id: Option<&'a str>) -> AgentSideDelete<'a> {
+        AgentSideDelete { requested, acp_session_id }
+    }
+
+    #[test]
+    fn not_requested_when_flag_off() {
+        // 未勾选：即便 agent 支持也不发（默认不删 agent 侧记录，安全默认）。
+        assert_eq!(
+            plan_agent_side_delete(req(false, Some("sess-1")), true),
+            AgentSidePlan::NotRequested
+        );
+        assert_eq!(plan_agent_side_delete(req(false, None), false), AgentSidePlan::NotRequested);
+    }
+
+    #[test]
+    fn sends_acp_session_id_when_supported() {
+        // 删的必须是会话行里的 acp_session_id（用户以为在删的那条记录）。
+        assert_eq!(
+            plan_agent_side_delete(req(true, Some("sess-42")), true),
+            AgentSidePlan::Send("sess-42")
+        );
+    }
+
+    #[test]
+    fn skips_when_agent_lacks_capability() {
+        // §8：codebuddy 一类未声明能力的 agent 不盲发。
+        match plan_agent_side_delete(req(true, Some("sess-42")), false) {
+            AgentSidePlan::Skip(reason) => assert!(reason.contains("sessionCapabilities.delete")),
+            other => panic!("应跳过，实际: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_when_session_row_has_no_acp_session_id() {
+        for missing in [None, Some("")] {
+            match plan_agent_side_delete(req(true, missing), true) {
+                AgentSidePlan::Skip(reason) => assert!(reason.contains("acp_session_id")),
+                other => panic!("应跳过（{missing:?}），实际: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn response_values_are_stable_protocol_strings() {
+        // 前端按这三个字面量分流文案，改名等于改协议。
+        assert_eq!(AgentSide::NotRequested.as_str(), "not_requested");
+        assert_eq!(AgentSide::Deleted.as_str(), "deleted");
+        assert_eq!(AgentSide::Skipped.as_str(), "skipped");
+    }
+
+    #[test]
+    fn default_request_is_not_requested() {
+        assert!(!AgentSideDelete::default().requested, "缺省必须是「不删 agent 侧」");
     }
 }

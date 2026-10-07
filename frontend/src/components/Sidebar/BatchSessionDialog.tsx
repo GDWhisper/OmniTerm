@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, type Session } from '../../api/client'
+import { api, type AgentSideDeleteResult, type Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
+import { readDeleteAgentSidePref, writeDeleteAgentSidePref } from '../../utils/deleteAgentSidePref'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
+import { buildAgentSideDeleteCheckbox, shouldRequestAgentSideDelete } from './agentSideDelete'
 
 export type BatchAction = 'archive' | 'release' | 'delete'
 
@@ -21,6 +23,9 @@ export interface BatchTarget {
  * - 串行执行、单条失败继续（错误 toast 由 api client 自动弹出），结束按成功
  *   数汇总；副作用逐条复刻单条路径（活跃会话清理 / markEnded /
  *   workspaceSessionMemory），见 DeleteConfirmDialog / releaseSessionNow。
+ * - 批量删除额外带「同时永久删除 agent 侧会话记录」勾选框：**逐条**判据（能力
+ *   已知支持且进程驻留才带 `delete_agent_side=true`），所以混合选择也不会对
+ *   不满足条件的会话盲发。
  * - `submitting` 期间 onClose 守卫为 no-op：Modal 的 Esc / 遮罩 / ✕ 都走这里，
  *   防止执行中关闭弹窗。
  */
@@ -37,6 +42,9 @@ export function BatchSessionDialog(props: {
   const setActiveSession = useAppStore((s) => s.setActiveSession)
   const workspaceSessionMemory = useAppStore((s) => s.workspaceSessionMemory)
   const clearWorkspaceSession = useAppStore((s) => s.clearWorkspaceSession)
+  // 每个会话的能力位（capabilities 帧写入）；整对象订阅后按键取用。
+  // 选择器返回 states 引用：帧到达时必然变化，够用且不额外分配。
+  const chatStates = useChatStore((s) => s.states)
   const [submitting, setSubmitting] = useState(false)
 
   const target = props.target
@@ -45,6 +53,21 @@ export function BatchSessionDialog(props: {
   // 归档 / 释放池 = ACP 会话（release 对已释放会话幂等返回 200，无需按 alive 过滤）
   const pool = action === 'delete' ? sessions : sessions.filter((s) => s.runtime_kind === 'acp')
   const skipped = sessions.length - pool.length
+
+  // agent 侧删除勾选框：仅批量删除出现，且仅当选中项含 ACP 会话
+  const { checkbox, eligibleIds } =
+    action === 'delete'
+      ? buildAgentSideDeleteCheckbox({
+          candidates: pool.map((s) => ({
+            id: s.id,
+            runtime_kind: s.runtime_kind,
+            acp_process_alive: s.acp_process_alive,
+          })),
+          capabilityOf: (id) => chatStates[id]?.agentDeleteSupported,
+          defaultChecked: readDeleteAgentSidePref(),
+          t,
+        })
+      : { checkbox: undefined, eligibleIds: new Set<string>() }
 
   const title =
     action === 'archive'
@@ -65,7 +88,7 @@ export function BatchSessionDialog(props: {
       ? `${baseMessage}\n${t('sidebar.batchSkipUnsupported', { count: skipped })}`
       : baseMessage
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (agentSideChecked: boolean) => {
     if (!target) return
     setSubmitting(true)
     const ids = new Set(pool.map((s) => s.id))
@@ -75,6 +98,9 @@ export function BatchSessionDialog(props: {
       setActiveSession(null)
     }
     let succeeded = 0
+    // agent 侧删除的如实交代：deleted / skipped 分开计数（不可把跳过报成已删）
+    let agentSideDeleted = 0
+    let agentSideSkipped = 0
     // 串行执行：避免 SQLite 写竞争与批量杀进程竞态（对齐 DuplicateProjectsDialog 先例）
     for (const session of pool) {
       try {
@@ -86,7 +112,18 @@ export function BatchSessionDialog(props: {
           // 释放活跃会话：立即标记结束，使 ChatView 即时显示「恢复会话」
           if (session.id === activeSessionId) useChatStore.getState().markEnded(session.id)
         } else {
-          await api.deleteSession(session.id)
+          const deleteAgentSide = shouldRequestAgentSideDelete(
+            eligibleIds,
+            session.id,
+            agentSideChecked,
+          )
+          const res: { agent_side?: AgentSideDeleteResult } = await api.deleteSession(session.id, {
+            deleteAgentSide,
+          })
+          if (deleteAgentSide) {
+            if (res?.agent_side === 'deleted') agentSideDeleted += 1
+            else agentSideSkipped += 1
+          }
           for (const wsId of Object.keys(workspaceSessionMemory)) {
             if (workspaceSessionMemory[wsId] === session.id) clearWorkspaceSession(wsId)
           }
@@ -96,8 +133,18 @@ export function BatchSessionDialog(props: {
         // 单条失败继续执行；错误 toast 由 api client 自动弹出
       }
     }
+    // 记住用户的选择：仅在勾选框可用时（禁用态是系统限制，不是用户表达）
+    if (action === 'delete' && checkbox && !checkbox.disabled) {
+      writeDeleteAgentSidePref(agentSideChecked)
+    }
     if (succeeded > 0) {
       addToast('success', t('sidebar.batchDone', { count: succeeded }) ?? `Processed ${succeeded} session(s)`)
+      if (agentSideDeleted > 0) {
+        addToast('success', t('sidebar.agentSideDeletedCount', { count: agentSideDeleted }))
+      }
+      if (agentSideSkipped > 0) {
+        addToast('warning', t('sidebar.agentSideSkippedCount', { count: agentSideSkipped }))
+      }
       await props.onDone()
     }
     setSubmitting(false)
@@ -110,9 +157,11 @@ export function BatchSessionDialog(props: {
       onClose={() => {
         if (!submitting) props.onClose()
       }}
-      onConfirm={handleConfirm}
+      onConfirm={() => void handleConfirm(false)}
+      onConfirmWithChecked={checkbox ? (checked: boolean) => void handleConfirm(checked) : undefined}
       title={title}
       message={message}
+      checkbox={checkbox}
       confirmText={action === 'release' ? t('sidebar.batchRelease') : action === 'archive' ? t('sidebar.archive') : t('sidebar.delete')}
       destructive={action === 'delete'}
       loading={submitting}

@@ -56,6 +56,9 @@ interface ServerFrame {
   image?: boolean
   /** capabilities: agent 是否声明 promptCapabilities.embeddedContext（文件附件门控）。 */
   embedded_context?: boolean
+  /** capabilities: agent 是否声明 sessionCapabilities.delete（删除时能否抹掉 agent
+   *  侧记录；`false` = 已知不支持，字段缺失 = 未知——两者 UI 都禁用勾选，文案不同）。 */
+  agent_delete?: boolean
   agent_name?: string
   /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
   label?: string
@@ -1119,6 +1122,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 文件附件门控（promptCapabilities.embeddedContext）
           if (typeof frame.embedded_context === 'boolean') {
             useChatStore.getState().setEmbeddedContextSupported(sid, frame.embedded_context)
+          }
+          // 删除确认弹窗「同时永久删除 agent 侧会话记录」的能力门控
+          // （sessionCapabilities.delete，存在即支持）。
+          if (typeof frame.agent_delete === 'boolean') {
+            useChatStore.getState().setAgentDeleteSupported(sid, frame.agent_delete)
           }
           // 聊天气泡显示 agent 身份：后端下发所用 agent 的 display_name
           if (typeof frame.agent_name === 'string') {

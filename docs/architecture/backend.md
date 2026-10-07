@@ -316,8 +316,8 @@ POST /api/v1/projects/{pid}/git-init    # git init + 初始提交（前端确认
 GET  /api/v1/projects/{pid}/branches
 GET  /api/v1/projects/{pid}/sessions
 POST /api/v1/projects/{pid}/sessions
-PATCH/DELETE /api/v1/sessions/{id}
-POST /api/v1/sessions/{id}/archive|unarchive  # 归档（仅 acp，非 acp 返 400）：dispose+shutdown agent 进程 + 打 archived_at 标记 / 清除标记；归档会话从 GET /projects/{pid}/sessions 消失、chat_messages 保留
+PATCH/DELETE /api/v1/sessions/{id}     # DELETE 可带 ?delete_agent_side=true（见下方「agent 侧记录删除」）
+POST /api/v1/sessions/{id}/archive|unarchive  # 归档（仅 acp，非 acp 返 400）：dispose+shutdown agent 进程 + 打 archived_at 标记 / 清除标记；归档会话从 GET /projects/{pid}/sessions 消失、chat_messages 保留；**不删 agent 侧记录**（归档要保留历史供只读查看）
 GET  /api/v1/sessions/archived          # 全部归档会话（跨项目，纯 DB 读，无引擎状态富化——进程必然已释放）
 GET  /api/v1/sessions/{id}/hook-status
 POST /api/v1/sessions/{id}/hook-enable|hook-disable
@@ -531,8 +531,48 @@ Lifecycle:
    - `request_permission` → `PermissionManager` 登记 pending 并经 WS 推 `permission_request` 帧给前端 banner，由用户点击 `permission_response` 应答。**默认无超时自动应答**（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）；`session/cancel` 时 `AcpClient::cancel` 调 `cancel_all()` 以 `Cancelled` 应答全部 pending（规范 MUST）；WS 重连时重放 pending 事件恢复 banner；审批解决（用户应答 / cancel_all）时经 `resolved_tx` broadcast 推 `permission_resolved{id}` 帧给所有连接——审批可能由其他标签页/设备应答，各连接据此即时清除对应 banner。**无人应答的超时行为由 settings 表 `acp_perm_timeout_mode` 配置（2026-09-21 起，见 `docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md`）**：`abort`（默认，原安全策略）= 超时 cancel + disconnect，回收前写入并广播一条 `role='system'` 的消息告知用户回收原因与请求详情；`auto` = 超时由 `permission.rs::pick_auto_option`（优先级 allow_always → allow_once → reject_once → reject_always → 首个）代替用户应答全部 pending（不 cancel、不杀会话），每笔一条带详情（工具/内容预览/可选项/选中项）的 system 消息；`wait` = 永不超时（权限未决期间连 prompt-stale 定稿也跳过，回合保持等审批语义）。权限弹窗只推给对应会话的 WS 客户端，用户切走即看不到——三种模式到点行动都会落库 + 广播 system 消息兜底（断线期间由 hydrate 补上）。时长档位自 2026-10-01 起为秒制（0=「总是」、30 秒步进至 1 小时），`0` 的语义随模式而变，见下段 API 说明。
    - `terminal/{create,output,wait_for_exit,kill,release}` → `AcpTerminalManager` spawns `tokio::process::Command` children and monitors them with `tokio::select!` racing child exit vs an mpsc kill channel.
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
-4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?,"files":[{name,mime_type,size,data}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images` / `files` 是可选 base64 内联附件，遵循管道原则：不限张数/体积/MIME，唯一门禁是整条帧体积 `MAX_PROMPT_FRAME_BYTES`（12MiB，超限回 `message_too_large`）。内容块顺序 Text → Image → Resource(Text, @path) → Resource(Blob, files)：`images` 映射 `ContentBlock::Image`，`files` 映射 `ContentBlock::Resource(BlobResourceContents)`（名义 `file:///{name}` URI，内容由 base64 blob 自包含，agent 不应按 URI 读盘）。用户消息落库的 blocks JSON 只存渲染等价物——图片存缩略图、文件存元数据（name/mimeType/size）、不存原图与文件内容（刷新后 hydrate 还原缩略图与文件名 chip）。服务端推送 `{"type":"capabilities","image":bool,"embedded_context":bool,"agent_name":string}` 帧（client 就绪/restore 时），后两者来自 initialize 捕获的 `promptCapabilities.image` / `.embeddedContext`（§8：agent 未声明则前端置灰对应附件卡片、后端二次校验拒绝带该附件的 prompt；两者都未声明时前端不渲染附件入口）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。文件附件**不**走内联降级——二进制无文本形态可降级，未声明该能力时在 WS 层直接拒绝（错误文案 "agent does not support file attachments (embedded context)"）。
+4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?,"files":[{name,mime_type,size,data}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`. Prompt `images` / `files` 是可选 base64 内联附件，遵循管道原则：不限张数/体积/MIME，唯一门禁是整条帧体积 `MAX_PROMPT_FRAME_BYTES`（12MiB，超限回 `message_too_large`）。内容块顺序 Text → Image → Resource(Text, @path) → Resource(Blob, files)：`images` 映射 `ContentBlock::Image`，`files` 映射 `ContentBlock::Resource(BlobResourceContents)`（名义 `file:///{name}` URI，内容由 base64 blob 自包含，agent 不应按 URI 读盘）。用户消息落库的 blocks JSON 只存渲染等价物——图片存缩略图、文件存元数据（name/mimeType/size）、不存原图与文件内容（刷新后 hydrate 还原缩略图与文件名 chip）。服务端推送 `{"type":"capabilities","image":bool,"embedded_context":bool,"agent_delete":bool,"agent_name":string}` 帧（client 就绪/restore 时），后三者来自 initialize 捕获的 `promptCapabilities.image` / `.embeddedContext` / `agentCapabilities.sessionCapabilities.delete`（§8：agent 未声明则前端置灰对应附件卡片、后端二次校验拒绝带该附件的 prompt；两者都未声明时前端不渲染附件入口。`agent_delete` 是「删除会话时顺带抹掉 agent 侧记录」勾选框的门控，见下方「agent 侧记录删除」）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。文件附件**不**走内联降级——二进制无文本形态可降级，未声明该能力时在 WS 层直接拒绝（错误文案 "agent does not support file attachments (embedded context)"）。
 5. `DELETE /sessions/{id}` on an ACP session calls `supervisor.dispose` + `AcpClient::shutdown`（shared reference 主动 teardown，不依赖 Arc 引用归零——WS handler 持引用时 `disconnect` 无法消费 self）。teardown 顺序：`alive=false` → `mark_prompt_idle` → 终端子进程回收 → **killpg 杀 agent 进程组** → 优雅 signal → abort 兜底。killpg 是主路径、signal 是优雅收尾：`agent-client-protocol` 不把子进程句柄交给调用方，杀进程原本只依赖 crate 内部 task_actor 结束后 `ChildGuard::drop` 的 killpg，而连接 poll 卡死时该路径永远走不到（2026-09-21 CPU 尖峰事故，见 `docs/dev/plans/archive/2026-09-21-acp-agent-connection-cpu-spin.md`）。pid 由 spawn 时的 wrapper `echo $$ > <pid 文件>` 自报（`/proc` diff 兜底），进程组击杀与 abort 的实现见 `src/acp/agent_proc.rs`；abort 连接任务只做本地清理——`ChildGuard` 归 crate task_actor 所有，abort 杀不了 agent 进程。
+
+#### agent 侧记录删除（`?delete_agent_side=true`）
+
+`DELETE /api/v1/sessions/{id}?delete_agent_side=true` 在删 omniterm 会话的同时，请求 agent
+删除**它自己那份**会话记录（ACP `session/delete`）。响应体带 `agent_side` 三态（**协议稳定
+值**，改名等于改前端契约）：
+
+| 值 | 含义 |
+|----|------|
+| `not_requested` | 未带 query（或非 acp 会话）——什么都没做 |
+| `deleted` | agent 确认删除（RPC 成功；**软删还是硬删由实现决定**，不等于文件已删） |
+| `skipped` | 请求了但没删成：agent 未声明能力 / 进程已释放无活连接 / RPC 失败（WARN 留痕） |
+
+链路与三条硬约束：
+
+1. **顺序不可换**：`cleanup_session_runtime` 的 acp 分支内完成
+   `dispose → session/delete → shutdown`。RPC 必须在 agent 子进程**还活着**的窗口内发，
+   进程一没就再也发不出；这也是「先 shutdown 再删」这类改法会静默失效的原因。
+2. **能力 gate，不盲发**：判据是 initialize 响应里
+   `agentCapabilities.sessionCapabilities.delete` 的存在性（marker 空结构，存在即支持），
+   由 `AcpClient::supports_delete_session()` 持有并随 `capabilities` 帧下发前端。未声明的
+   agent（实测 codebuddy 连 `session/list` 都回 `-32601`）一律跳过——盲发会让
+   `method not found` 与真失败混为一谈，无法对用户如实交代。**不落库**：agent 配置可改、
+   版本可升，缓存的能力列会撒谎（计划 D3）。
+3. **best-effort，不阻断删除**：RPC 失败只 WARN，omniterm 侧记录照删，结果如实回报给
+   前端（`skipped` 必须展示「未能删除」而非「已删除」——宁可漏删，不可谎报已删）。
+
+判据逻辑抽成纯函数 `plan_agent_side_delete(requested, supports_delete_session)`
+（`src/api/sessions.rs`），三条「不发送」分支（未勾选 / 会话行无 `acp_session_id` /
+agent 不支持）不依赖活连接即可单测。多实现行为差异（opencode / pi-acp / omp / codebuddy
+的实测对比，含「pi-acp 的 `session/list` 不列新建会话，不能拿它验证删除」这一反例）沉淀在
+`docs/reference/acp-protocol-reference.md` §17.3。
+
+前端「同时永久删除 agent 侧会话记录」勾选框（`ConfirmDialog` 的危险型 checkbox）三态判据
+见 `frontend/src/components/Sidebar/agentSideDelete.ts`：**只有「能力已知支持」且「进程在
+驻留」才可勾选**，未知与不支持一律禁用并给出原因；用户的选择记在
+`localStorage.omniterm_delete_agent_side`（首次默认不勾选——不可逆的附加删除不替用户决定），
+仅在删除成功后写入。项目级联删除**不**代发（一次删整项目属于可能误删的大动作，
+见计划 §2「不做」）；归档也**不**代发（归档要保留历史供只读查看）。
+
 6. `DELETE /projects/{id}` 先取该项目下全部 session 的 `id`/`tmux_session_name`/`runtime_kind`，逐个调用 `api::sessions::cleanup_session_runtime`（acp → dispose + `shutdown`；tmux → `activity_monitor.remove_session` + `tmux::kill_session`），再删 `sessions`/`projects` 行——**删库不等于杀进程**，直接 `DELETE FROM sessions` 会让 psmux/tmux 会话与 agent 子进程残留（2026-08-04 修复）。`reaper` 空闲回收与手动 `release` 同样走 dispose + `shutdown`，保证 supervisor 移除与进程死亡同步（Sidebar `acp_process_alive` 才不会与实际进程存活脱节）。
 
 ### 流式消息后端权威持久化（turn accumulator）

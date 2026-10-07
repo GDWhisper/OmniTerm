@@ -63,6 +63,11 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 ///   的创建/输出/等待退出/释放；
 /// - `FAKE_MODE=termkill`：收到 prompt 后 create（`sleep 30`）→ kill →
 ///   wait_for_exit，覆盖 kill 路径（被杀进程无 exit_code）；
+/// - `FAKE_MODE=delete` / `delete_fail`：initialize **声明**
+///   `sessionCapabilities.delete`（其余模式不声明——与 codebuddy 实测一致，
+///   覆盖能力 gate 的反面）；前者对 `session/delete` 回空结果，后者回 JSON-RPC
+///   错误，两条路径都把收到的 sessionId 记入事件日志（`delete <id>`）——
+///   覆盖「agent 侧记录删除」的成功与失败分支；
 /// - 任意模式启动时若 `FAKE_DUP` / `FAKE_DUP_FILE` 同时存在，把 `$FAKE_DUP`
 ///   写入文件——钉「重复 env 键最后一条胜出」语义（计划 D4）。
 ///
@@ -83,7 +88,14 @@ while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
-      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{}}}}\n' "$id"
+      # sessionCapabilities.delete 是 marker 空结构（存在即支持 session/delete）。
+      # 默认**不声明**（与 codebuddy 一致），只有 delete/delete_fail 模式声明——
+      # 两条初始化响应路径都要覆盖能力 gate 的正反两面。
+      case "$FAKE_MODE" in
+        delete|delete_fail) sess_caps='"sessionCapabilities":{"delete":{}},' ;;
+        *) sess_caps='' ;;
+      esac
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{%s"loadSession":true,"promptCapabilities":{}}}}\n' "$id" "$sess_caps"
       # handshake 模式：响应 initialize 后立刻崩溃（session/new 永远等不到
       # 响应）——建模「agent 死于握手期」，spawn 必须限时失败而不是挂死。
       if [ "$FAKE_MODE" = "handshake" ]; then
@@ -100,6 +112,20 @@ while IFS= read -r line; do
       if [ "$FAKE_MODE" = "exit" ]; then
         while [ ! -f "$FAKE_EXIT_FILE" ]; do sleep 1; done
         exit 3
+      fi
+      ;;
+    *'"method":"session/delete"'*)
+      # agent 侧记录删除（sessionCapabilities.delete）：把收到的 sessionId 记入
+      # 事件日志（测试端据此断言「删的是哪一条」），并回空结果（协议规定对不存在
+      # 的会话 SHOULD 静默成功）。delete_fail 模式改为回 JSON-RPC 错误，覆盖
+      # 「agent 拒删」这一失败分支。
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      del_sid=$(printf '%s' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
+      log_event "delete $del_sid"
+      if [ "$FAKE_MODE" = "delete_fail" ]; then
+        printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32603,"message":"boom"}}\n' "$id"
+      else
+        printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
       fi
       ;;
     *'"method":"session/prompt"'*)

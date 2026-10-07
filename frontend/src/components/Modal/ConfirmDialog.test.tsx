@@ -68,7 +68,7 @@ describe('ConfirmDialog', () => {
   })
 
   it('renders checkbox when checkboxLabel provided', async () => {
-    await render({ open: true, onClose: () => {}, onConfirmWithChecked: () => {}, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' })
+    await render({ open: true, onClose: () => {}, onConfirmWithChecked: () => {}, title: 'T', message: 'M', checkbox: { label: 'Skip' }, confirmText: 'OK' })
     const box = document.body.querySelector('input[type=checkbox]')
     expect(box).toBeTruthy()
     expect(document.body.textContent).toContain('Skip')
@@ -76,7 +76,7 @@ describe('ConfirmDialog', () => {
 
   it('passes checked=false to onConfirmWithChecked when unchecked', async () => {
     const onConfirmWithChecked = vi.fn()
-    await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' })
+    await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkbox: { label: 'Skip' }, confirmText: 'OK' })
     clickButtonByText('OK')
     expect(onConfirmWithChecked).toHaveBeenCalledWith(false)
   })
@@ -91,7 +91,7 @@ describe('ConfirmDialog', () => {
 
   it('passes checked=true to onConfirmWithChecked after checking the box', async () => {
     const onConfirmWithChecked = vi.fn()
-    await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' })
+    await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkbox: { label: 'Skip' }, confirmText: 'OK' })
     const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
     await checkBox(box)
     expect(box.checked).toBe(true)
@@ -101,7 +101,7 @@ describe('ConfirmDialog', () => {
 
   it('resets the checkbox to unchecked on reopen', async () => {
     const onConfirmWithChecked = vi.fn()
-    const props = { open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkboxLabel: 'Skip', confirmText: 'OK' }
+    const props = { open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkbox: { label: 'Skip' }, confirmText: 'OK' }
     await render(props)
     const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
     await checkBox(box)
@@ -116,5 +116,53 @@ describe('ConfirmDialog', () => {
     expect(reopened().checked).toBe(true)
     clickButtonByText('OK')
     expect(onConfirmWithChecked).toHaveBeenCalledWith(true)
+  })
+
+  // ── 危险型勾选框（默认值 / 禁用态）——「同时永久删除 agent 侧会话记录」用 ──
+
+  it('starts checked when defaultChecked is set (remembered user choice)', async () => {
+    const onConfirmWithChecked = vi.fn()
+    await render({ open: true, onClose: () => {}, onConfirmWithChecked, title: 'T', message: 'M', checkbox: { label: 'Purge', defaultChecked: true, danger: true }, confirmText: 'OK' })
+    const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
+    expect(box.checked).toBe(true)
+    clickButtonByText('OK')
+    expect(onConfirmWithChecked).toHaveBeenCalledWith(true)
+  })
+
+  it('reapplies defaultChecked on reopen (preference survives close)', async () => {
+    const props = { open: true, onClose: () => {}, onConfirmWithChecked: () => {}, title: 'T', message: 'M', checkbox: { label: 'Purge', defaultChecked: true }, confirmText: 'OK' }
+    await render(props)
+    const box = () => document.body.querySelector('input[type=checkbox]') as HTMLInputElement
+    expect(box().checked).toBe(true)
+    await render({ ...props, open: false })
+    await vi.waitFor(() => expect(document.body.querySelector('input[type=checkbox]')).toBeNull())
+    await render(props)
+    await vi.waitFor(() => expect(box().checked).toBe(true))
+  })
+
+  it('forces unchecked and reports false when the checkbox is disabled', async () => {
+    const onConfirmWithChecked = vi.fn()
+    await render({
+      open: true,
+      onClose: () => {},
+      onConfirmWithChecked,
+      title: 'T',
+      message: 'M',
+      // 能力未知：默认值被记住为 true，但禁用态必须恒未勾选——
+      // 否则用户会以为勾了、而后端其实会跳过
+      checkbox: { label: 'Purge', defaultChecked: true, disabled: true, hint: 'agent 未确认支持' },
+      confirmText: 'OK',
+    })
+    const box = document.body.querySelector('input[type=checkbox]') as HTMLInputElement
+    expect(box.disabled).toBe(true)
+    expect(box.checked).toBe(false)
+    expect(document.body.textContent).toContain('agent 未确认支持')
+    clickButtonByText('OK')
+    expect(onConfirmWithChecked).toHaveBeenCalledWith(false)
+  })
+
+  it('renders hint text for enabled checkboxes too (consequence notice)', async () => {
+    await render({ open: true, onClose: () => {}, onConfirmWithChecked: () => {}, title: 'T', message: 'M', checkbox: { label: 'Purge', danger: true, hint: '不可恢复' }, confirmText: 'OK' })
+    expect(document.body.textContent).toContain('不可恢复')
   })
 })

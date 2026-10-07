@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     BlobResourceContents, CancelNotification, ConfigOptionUpdate, ContentBlock,
-    CreateTerminalRequest, EmbeddedResource, EmbeddedResourceResource, ImageContent,
-    InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
-    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    RequestPermissionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
+    CreateTerminalRequest, DeleteSessionRequest, EmbeddedResource, EmbeddedResourceResource,
+    ImageContent, InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest,
+    PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
+    ReleaseTerminalRequest, RequestPermissionRequest, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, StopReason, TextContent, TextResourceContents,
     WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
@@ -282,6 +282,11 @@ pub struct AcpClient {
     /// `promptCapabilities.embeddedContext`：是否接受 `ContentBlock::Resource`；
     /// 不支持时 @ 引用降级为内联 text（§8 多实现兼容）。
     supports_embedded_context: bool,
+    /// `sessionCapabilities.delete`（marker 空结构，存在即支持）：
+    /// 删除 omniterm 会话时能否顺带发 `session/delete` 抹掉 agent 侧记录。
+    /// 未声明的 agent（实测 codebuddy）不发——盲发会把 method-not-found
+    /// 与真失败混为一谈（计划 D3）。
+    supports_delete_session: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 配置偏好持久化句柄（`attach_config_prefs` 绑定）。仅在实际会话注册点
@@ -478,6 +483,24 @@ enum SessionMode {
     Load(String),
 }
 
+/// `spawn_with_session` 内层连接闭包 → 外层的握手结果。
+///
+/// 具名字段取代此前的 6 元位置元组：新增一个能力位（`sessionCapabilities.delete`）
+/// 就要再加一个 `bool`，位置元组在调用点靠顺序对齐、改错顺序编译器不报错
+/// （工程准则 6/7：字段集持续扩展 → 用具名结构而非散落的位置参数）。
+struct Handshake {
+    connection: ConnectionTo<AcpAgentRole>,
+    session_id: SessionId,
+    supports_load_session: bool,
+    supports_image: bool,
+    supports_embedded_context: bool,
+    /// `agentCapabilities.sessionCapabilities.delete` 的存在性（marker 空结构，
+    /// 存在即支持）。缺失 = 不支持 `session/delete`（§8 多实现兼容：codebuddy
+    /// 未声明，opencode / pi-acp 声明）。
+    supports_delete_session: bool,
+    initial_config_options: Vec<SessionConfigOption>,
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(
         agent: Agent,
@@ -550,14 +573,7 @@ impl AcpClient {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         // D4：连接任务 abort 指令（shutdown/disconnect → crash watcher）。
         let (abort_tx, abort_rx) = oneshot::channel::<()>();
-        let (conn_tx, conn_rx) = oneshot::channel::<(
-            ConnectionTo<AcpAgentRole>,
-            SessionId,
-            bool,
-            bool,
-            bool,
-            Vec<SessionConfigOption>,
-        )>();
+        let (conn_tx, conn_rx) = oneshot::channel::<Handshake>();
 
         let notif_tx = session_update_tx.clone();
         let terminal_manager = Arc::new(AcpTerminalManager::new(terminal_event_tx.clone()));
@@ -748,6 +764,11 @@ impl AcpClient {
                     let supports_image = init_resp.agent_capabilities.prompt_capabilities.image;
                     let supports_embedded =
                         init_resp.agent_capabilities.prompt_capabilities.embedded_context;
+                    // `sessionCapabilities.delete` 是 marker 空结构：`Some` = 声明支持
+                    // `session/delete`，`None`/缺失 = 不支持。只在 initialize 现场判一次，
+                    // 不落库（agent 配置可改、版本可升，缓存会撒谎，见计划 D3）。
+                    let supports_delete_session =
+                        init_resp.agent_capabilities.session_capabilities.delete.is_some();
 
                     // 两个构造器的唯一差异：create 走 session/new（响应带
                     // config_options），restore 复用既有 acp_session_id。
@@ -764,14 +785,15 @@ impl AcpClient {
                             (SessionId::new(acp_session_id.as_str()), Vec::new())
                         }
                     };
-                    let _ = conn_tx.send((
-                        cx.clone(),
+                    let _ = conn_tx.send(Handshake {
+                        connection: cx.clone(),
                         session_id,
-                        supports_load,
+                        supports_load_session: supports_load,
                         supports_image,
-                        supports_embedded,
-                        config_options,
-                    ));
+                        supports_embedded_context: supports_embedded,
+                        supports_delete_session,
+                        initial_config_options: config_options,
+                    });
 
                     let _ = shutdown_rx.await;
                     Ok(())
@@ -787,14 +809,15 @@ impl AcpClient {
             alive.clone(),
         );
 
-        let (
+        let Handshake {
             connection,
             session_id,
             supports_load_session,
             supports_image,
             supports_embedded_context,
+            supports_delete_session,
             initial_config_options,
-        ) = match conn_rx.await {
+        } = match conn_rx.await {
             Ok(parts) => parts,
             Err(_) => {
                 // agent 已 spawn 但连接未建成（initialize 失败/超时）：清理 pid
@@ -832,6 +855,7 @@ impl AcpClient {
             supports_load_session,
             supports_image,
             supports_embedded_context,
+            supports_delete_session,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
@@ -1165,6 +1189,25 @@ impl AcpClient {
     /// （@path 文本引用与文件附件的 blob 形态共用此门控）。
     pub fn supports_embedded_context(&self) -> bool {
         self.supports_embedded_context
+    }
+
+    /// `agentCapabilities.sessionCapabilities.delete` 是否声明（存在即支持）。
+    /// 删除会话时是否顺带抹掉 agent 侧记录的唯一判据（主动删除与 UI 三态共用）。
+    pub fn supports_delete_session(&self) -> bool {
+        self.supports_delete_session
+    }
+
+    /// 请 agent 删除本连接所绑会话在 **agent 侧**的记录（`session/delete`）。
+    ///
+    /// 能力未声明时调用方不得调用（本方法不自行 gate，便于调用方把
+    /// 「不支持」与「调用失败」分成两种结果）；协议规定删除不存在的会话
+    /// SHOULD 静默成功，故重复删除不报错。
+    pub async fn delete_session(&self, acp_session_id: &str) -> Result<(), AcpError> {
+        self.connection
+            .send_request(DeleteSessionRequest::new(SessionId::new(acp_session_id)))
+            .block_task()
+            .await
+            .map(|_resp| ())
     }
 
     /// ACP 连接是否仍可发送请求（agent 子进程存活且未被释放）。

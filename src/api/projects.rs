@@ -224,11 +224,14 @@ async fn delete_project(
     .unwrap();
 
     for (session_id, engine_name, runtime_kind) in sessions {
+        // 项目级联删除**不**代发 agent 侧 session/delete：一次删掉整项目的历史
+        // 属于可能误删的大动作，不替用户做不可逆决定（计划 §2「不做」）。
         crate::api::sessions::cleanup_session_runtime(
             &state,
             &session_id,
             engine_name.as_deref(),
             &runtime_kind,
+            crate::api::sessions::AgentSideDelete::default(),
         )
         .await;
         // 清理该会话的配置偏好行（foreign_keys 级联本会覆盖，这里显式清理兜底）。
