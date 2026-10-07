@@ -10,9 +10,12 @@ pub mod reaper;
 pub mod resolve;
 pub mod supervisor;
 pub mod terminal;
+#[cfg(test)]
+mod test_db;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod test_support;
 pub mod turn_accumulator;
+pub mod usage;
 
 pub use client::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEndEvent};
 pub use supervisor::AcpSupervisor;

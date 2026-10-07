@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 
 use crate::agent::state::AgentSnapshot;
 use crate::engine::EngineSessionInfo;
-use crate::engine::pty_io::{SSH_LEAK_ENV_VARS, strip_ssh_leak_env_async};
+use crate::engine::pty_io::{startup_leak_env_vars, strip_leak_env_async};
 
 pub use engine::TmuxEngine;
 
@@ -56,34 +56,47 @@ pub fn check_multiplexer() -> Result<()> {
     }
 }
 
-/// Build a tmux client command with SSH 会话泄漏变量已移除的环境。
+/// Build a tmux client command with 启动链路泄漏变量（SSH 会话残留 + 父会话运行态
+/// 指针，见 `pty_io::startup_leak_env_vars`）已移除的环境。
 ///
-/// tmux server 从 SSH 会话启动时 global env 含 SSH 变量；client 连接时 tmux 的
+/// tmux server 从被污染环境启动时 global env 含这些变量；client 连接时 tmux 的
 /// `update-environment`（默认列表含 SSH_CONNECTION）用 client 环境更新 session
-/// env，client 无该变量则 unset——故所有 tmux client 一律不带 SSH 泄漏变量。
-/// SSH_CLIENT/SSH_TTY 不在默认 update 列表：初始 pane 由 `new_session` 的
-/// STRIPPED_PANE_CMD 在命令源头剥离，session env 由 set-environment 兜底
-/// （见 pty_io::SSH_LEAK_ENV_VARS 根因注释）。
+/// env，client 无该变量则 unset——故所有 tmux client 一律不带泄漏变量。
+/// 其余变量不在默认 update 列表：初始 pane 由 `stripped_pane_cmd()` 在命令源头
+/// 剥离，session env 由 set-environment 兜底（见 pty_io 根因注释）。
 fn tmux_cmd() -> Command {
     let mut cmd = Command::new("tmux");
-    strip_ssh_leak_env_async(&mut cmd);
+    strip_leak_env_async(&mut cmd);
     cmd
 }
 
 /// 初始 pane 启动命令包装（unix）：tmux 的 `update-environment` 默认列表只含
-/// SSH_CONNECTION，SSH_CLIENT/SSH_TTY 会随 server env 残留进 pane——agy 等 CLI
-/// 见**任一** SSH_* 变量即判定 SSH 会话（实测 2026-09-08：仅剩 SSH_CLIENT 也走
-/// file-based token storage）。`set-environment -u` 只影响后续新建 pane，初始
-/// pane 必须在命令源头剥离：`env -u` 清变量后 exec `$SHELL`（交互 shell，与
-/// tmux 默认 pane 命令行为一致；`${SHELL:-/bin/sh}` 兜底）。
+/// SSH_CONNECTION，`SSH_CLIENT`/`SSH_TTY` 与父会话运行态指针变量（`SERVER__PORT`
+/// 等）会随 server env 残留进 pane——agy 等 CLI 见**任一** SSH_* 变量即判定 SSH
+/// 会话（实测 2026-09-08：仅剩 SSH_CLIENT 也走 file-based token storage）；
+/// codebuddy 读到残留 `SERVER__PORT` 会在已占端口上 `listen` 失败并中断启动
+/// （2026-10-06 实测：污染环境 TUI 空白卡死，干净环境对照正常渲染）。
+/// `set-environment -u` 只影响后续新建 pane，初始 pane 必须在命令源头剥离：
+/// `env -u` 清**全部**启动链路泄漏变量（`startup_leak_env_vars` 单一真源）后
+/// exec `$SHELL`（交互 shell，与 tmux 默认 pane 命令行为一致；`${SHELL:-/bin/sh}`
+/// 兜底）。
 #[cfg(unix)]
-const STRIPPED_PANE_CMD: &str =
-    "exec env -u SSH_CLIENT -u SSH_CONNECTION -u SSH_TTY \"${SHELL:-/bin/sh}\"";
+fn stripped_pane_cmd() -> String {
+    let mut cmd = String::from("exec env");
+    for var in startup_leak_env_vars() {
+        cmd.push_str(" -u ");
+        cmd.push_str(var);
+    }
+    cmd.push_str(" \"${SHELL:-/bin/sh}\"");
+    cmd
+}
 
 /// Windows（psmux）不注入 pane 命令包装：Windows 无 GNU `env -u` 语义，psmux
 /// 的 shell-command 行为未验证，保持原样（Windows SSH 泄漏场景少见，不做）。
 #[cfg(windows)]
-const STRIPPED_PANE_CMD: &str = "";
+fn stripped_pane_cmd() -> String {
+    String::new()
+}
 
 /// Create a new detached tmux session with an optional startup command.
 ///
@@ -96,7 +109,10 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
     use crate::engine::tmux::agent_hooks;
 
     // 1. Create the tmux session (plain shell)
-    // 初始 pane 经 STRIPPED_PANE_CMD 包装启动（unix），源头剥离 SSH 泄漏变量。
+    // 初始 pane 经 stripped_pane_cmd() 包装启动（unix），源头剥离全部启动链路
+    // 泄漏变量。
+    #[cfg(unix)]
+    let stripped_pane = stripped_pane_cmd();
     let new_args = vec![
         "new-session",
         "-d",
@@ -109,7 +125,7 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
         "-y",
         "50",
         #[cfg(unix)]
-        STRIPPED_PANE_CMD,
+        stripped_pane.as_str(),
     ];
     let output = tmux_cmd().args(&new_args).output().await?;
 
@@ -118,10 +134,10 @@ pub async fn new_session(name: &str, cwd: &str, command: Option<&str>) -> Result
         return Err(anyhow!("tmux new-session failed: {}", stderr));
     }
 
-    // 清 session 环境里的 SSH 泄漏变量（初始 pane 已由 STRIPPED_PANE_CMD 剥离，
-    // 这里保证后续 split-window/new-window 新建的 pane 同样干净）。
+    // 清 session 环境里的启动链路泄漏变量（初始 pane 已由 stripped_pane_cmd()
+    // 剥离，这里保证后续 split-window/new-window 新建的 pane 同样干净）。
     // fail-silent：session 刚创建，失败仅影响后续新 pane。
-    for var in SSH_LEAK_ENV_VARS {
+    for var in startup_leak_env_vars() {
         let _ = tmux_cmd().args(["set-environment", "-t", name, "-u", var]).output().await;
     }
 

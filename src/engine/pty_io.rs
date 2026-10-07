@@ -11,16 +11,43 @@ use std::io;
 /// 一律移除（2026-09-08 实测验证：见 internal 排查记录）。
 pub const SSH_LEAK_ENV_VARS: [&str; 3] = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"];
 
-/// 从 tokio `Command` 移除 SSH 会话泄漏变量。
-pub fn strip_ssh_leak_env_async(cmd: &mut tokio::process::Command) {
-    for var in SSH_LEAK_ENV_VARS {
+/// 父会话运行态指针泄漏变量：宿主进程树从 codebuddy 会话派生时（OmniTerm 后端在
+/// codebuddy 终端里启动、或从这类 OmniTerm 派生的任何子进程/终端）会一路继承这些
+/// 变量；新进程读到「父会话已占用的服务端口/内部服务 URL」后误当自己的配置：
+///
+/// - `SERVER__PORT` / `SERVER__HOST`：codebuddy 服务监听目标。新进程启动期直接
+///   `listen` 继承来的端口，被父会话占用 → `EADDRINUSE` 未处理异常 → 启动流程
+///   中断（2026-10-06 实测两种入口：`codebuddy --acp` 的 `session/new` 永久挂起
+///   ——不清理 120s+ 无响应 / 只清此项 84ms 成功 / 反向注入被占端口 100% 复现；
+///   `codebuddy` TUI 空白卡死——污染环境 18s 无渲染，干净环境对照正常渲染）。
+/// - `CODEBUDDY_SERVICE_PROXY_URL`：指向父会话 hook 服务的内部 URL，不清则新
+///   agent 的 hook 调用被错误路由到父会话。
+/// - `CODEBUDDY_GATEWAY_AUTH`：网关认证材料，泄漏进派生进程是凭据扩散（安全面）。
+///
+/// 这四项与 codebuddy 自身 spawn 子进程时删除的清单一致（其 bundle `spawnInner`
+/// 删 `SERVER__PORT`/`SERVER__HOST`/`CODEBUDDY_GATEWAY_AUTH`——对端承认这些不该
+/// 传子进程，只是没覆盖「宿主继承」入向）。只清「会让新进程访问/占用父会话资源」
+/// 的指针类变量；纯信息类（会话/请求 ID、telemetry BAGGAGE 等）暂无故障证据，
+/// 暂不清——未来若发现同类故障再登记。
+pub const SESSION_LEAK_ENV_VARS: [&str; 4] =
+    ["SERVER__PORT", "SERVER__HOST", "CODEBUDDY_SERVICE_PROXY_URL", "CODEBUDDY_GATEWAY_AUTH"];
+
+/// 全部启动链路泄漏变量（SSH 会话残留 + 父会话运行态指针）的单一真源。
+/// 新增派生点清理、构造 `env -u` 命令串时一律以它为准（勿各自维护清单）。
+pub fn startup_leak_env_vars() -> impl Iterator<Item = &'static str> {
+    SSH_LEAK_ENV_VARS.into_iter().chain(SESSION_LEAK_ENV_VARS)
+}
+
+/// 从 tokio `Command` 移除全部启动链路泄漏变量。
+pub fn strip_leak_env_async(cmd: &mut tokio::process::Command) {
+    for var in startup_leak_env_vars() {
         cmd.env_remove(var);
     }
 }
 
-/// 从 portable_pty `CommandBuilder` 移除 SSH 会话泄漏变量。
-pub fn strip_ssh_leak_env_builder(cmd: &mut portable_pty::CommandBuilder) {
-    for var in SSH_LEAK_ENV_VARS {
+/// 从 portable_pty `CommandBuilder` 移除全部启动链路泄漏变量。
+pub fn strip_leak_env_builder(cmd: &mut portable_pty::CommandBuilder) {
+    for var in startup_leak_env_vars() {
         cmd.env_remove(var);
     }
 }
@@ -124,26 +151,43 @@ pub fn kill_process_escalating(pid: u32) {
 mod tests {
     use super::*;
 
-    /// 两个 strip 函数（tokio Command / portable_pty builder）都要移除 SSH 泄漏
-    /// 变量，且不影响其他显式设置的变量。
+    /// 清单内容 pin：泄漏变量集合的增删都必须是有意为之（每项对应一个实证
+    /// 故障面，理由见各常量文档注释），此断言让「无声改清单」在测试期转红。
+    #[test]
+    fn leak_env_var_lists_are_pinned() {
+        assert_eq!(SSH_LEAK_ENV_VARS, ["SSH_CLIENT", "SSH_CONNECTION", "SSH_TTY"]);
+        assert_eq!(
+            SESSION_LEAK_ENV_VARS,
+            [
+                "SERVER__PORT",
+                "SERVER__HOST",
+                "CODEBUDDY_SERVICE_PROXY_URL",
+                "CODEBUDDY_GATEWAY_AUTH"
+            ]
+        );
+    }
+
+    /// 两个 strip 函数（tokio Command / portable_pty builder）都要移除全部启动
+    /// 链路泄漏变量（SSH 会话残留 + 父会话运行态指针），且不影响其他显式设置的
+    /// 变量。
     #[tokio::test]
-    async fn tokio_command_strips_ssh_leak_vars() {
+    async fn tokio_command_strips_leak_vars() {
         // env_clear 隔离父进程环境（本机测试进程可能自带 SSH_CONNECTION），
         // spawn `env` 验证子进程实际环境里没有泄漏变量。
         let mut cmd = tokio::process::Command::new("/usr/bin/env");
         cmd.env_clear();
-        for var in SSH_LEAK_ENV_VARS {
+        for var in startup_leak_env_vars() {
             cmd.env(var, "leak");
         }
         cmd.env("OMNITERM_KEEP", "1");
 
-        strip_ssh_leak_env_async(&mut cmd);
+        strip_leak_env_async(&mut cmd);
 
         let out = cmd.output().await.expect("env 应可执行");
         assert!(out.status.success());
         let lines: Vec<String> =
             String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
-        for var in SSH_LEAK_ENV_VARS {
+        for var in startup_leak_env_vars() {
             assert!(
                 !lines.iter().any(|l| l.starts_with(&format!("{var}="))),
                 "{var} 不应出现在 spawn 进程环境里"
@@ -153,16 +197,16 @@ mod tests {
     }
 
     #[test]
-    fn builder_strips_ssh_leak_vars() {
+    fn builder_strips_leak_vars() {
         let mut cmd = portable_pty::CommandBuilder::new("true");
-        for var in SSH_LEAK_ENV_VARS {
+        for var in startup_leak_env_vars() {
             cmd.env(var, "leak");
         }
         cmd.env("OMNITERM_SESSION_ID", "s1");
 
-        strip_ssh_leak_env_builder(&mut cmd);
+        strip_leak_env_builder(&mut cmd);
 
-        for var in SSH_LEAK_ENV_VARS {
+        for var in startup_leak_env_vars() {
             assert!(cmd.get_env(var).is_none(), "{var} 不应留在 CommandBuilder 环境里");
         }
         assert_eq!(cmd.get_env("OMNITERM_SESSION_ID"), Some(std::ffi::OsStr::new("s1")));

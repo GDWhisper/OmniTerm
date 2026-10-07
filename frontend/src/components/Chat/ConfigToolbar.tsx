@@ -126,7 +126,6 @@ function ConfigDropdown({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 4,
           padding: compact ? '0 6px' : '2px 8px',
           height: compact ? MOBILE_CONTROL_HEIGHT : undefined,
           // 填满外层容器：外层被 flex 压窄后按钮必须跟着窄，ellipsis 才有机会生效。
@@ -143,21 +142,60 @@ function ConfigDropdown({
           whiteSpace: compact ? undefined : 'nowrap',
         }}
       >
-        {!compact && <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{label}:</span>}
+        {/* 内容块：宽度取自然宽（max-content）但不超过按钮，auto 外边距在有剩余
+            空间时吸收并居中；装不下时被 max-width 限制、从左侧起排，内部照常
+            右截断——纯 CSS 表达「空间充足居中 / 不足右截断」，无需 JS 测量。
+            minWidth: 0 让弹性子项能收缩到内容宽以下（否则 min-width:auto 拒绝收缩）。 */}
         <span
           style={{
-            fontWeight: 600,
-            color: 'var(--text-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            width: 'max-content',
+            maxWidth: '100%',
             minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            margin: '0 auto',
           }}
         >
-          {current?.name ?? option.currentValue}
-        </span>
-        <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
-          {open ? '▾' : '▴'}
+          {!compact && (
+            <span style={{ color: 'var(--text-faint)', fontSize: 10, flexShrink: 0 }}>
+              {label}:
+            </span>
+          )}
+          {/* 当前值 = name + description（如模型消耗倍率）：同名选项在关闭态也能区分。
+              description 收缩优先级更高（flexShrink 2），窄屏上先截断倍率保住模型名。 */}
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0 }}>
+            <span
+              style={{
+                fontWeight: 600,
+                color: 'var(--text-primary)',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {current?.name ?? option.currentValue}
+            </span>
+            {current?.description && (
+              <span
+                style={{
+                  fontSize: 9,
+                  color: 'var(--text-faint)',
+                  flexShrink: 2,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {current.description}
+              </span>
+            )}
+          </span>
+          <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
+            {open ? '▾' : '▴'}
+          </span>
         </span>
       </button>
       {open && (
@@ -195,31 +233,46 @@ function ConfigDropdown({
               />
             </div>
           )}
-          {filtered.map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => {
-                onSelect(option.id, opt.value)
-                setOpen(false)
-                setSearch('')
-              }}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '5px 10px',
-                fontSize: 11,
-                fontFamily: READER_FONT,
-                border: 'none',
-                background: opt.value === option.currentValue ? 'var(--accent-14)' : 'transparent',
-                color: opt.value === option.currentValue ? 'var(--accent)' : 'var(--text-secondary)',
-                cursor: 'pointer',
-                fontWeight: opt.value === option.currentValue ? 600 : 400,
-              }}
-            >
-              {opt.name}
-            </button>
-          ))}
+          {filtered.map((opt) => {
+            const selected = opt.value === option.currentValue
+            return (
+              <button
+                key={opt.value}
+                onClick={() => {
+                  onSelect(option.id, opt.value)
+                  setOpen(false)
+                  setSearch('')
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '5px 10px',
+                  fontSize: 11,
+                  fontFamily: READER_FONT,
+                  border: 'none',
+                  background: selected ? 'var(--accent-14)' : 'transparent',
+                  color: selected ? 'var(--accent)' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: selected ? 600 : 400,
+                }}
+              >
+                <span style={{ display: 'block' }}>{opt.name}</span>
+                {opt.description && (
+                  <span
+                    style={{
+                      display: 'block',
+                      fontSize: 10,
+                      fontWeight: 400,
+                      color: 'var(--text-faint)',
+                    }}
+                  >
+                    {opt.description}
+                  </span>
+                )}
+              </button>
+            )
+          })}
           {search && filtered.length === 0 && (
             <div
               style={{
@@ -445,19 +498,35 @@ function AdvancedRow({
         }}
       >
         <span style={{ fontSize: 11, color: 'var(--text-faint)', flexShrink: 0 }}>{label}</span>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--text-primary)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {current?.name ?? option.currentValue}
+        <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, flex: 1, minWidth: 0 }}>
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {current?.name ?? option.currentValue}
+          </span>
+          {current?.description && (
+            <span
+              style={{
+                fontSize: 10,
+                color: 'var(--text-faint)',
+                flexShrink: 2,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {current.description}
+            </span>
+          )}
         </span>
         <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
           {expanded ? '▴' : '▾'}
@@ -489,7 +558,19 @@ function AdvancedRow({
                 cursor: 'pointer',
               }}
             >
-              {opt.name}
+              <span style={{ display: 'block' }}>{opt.name}</span>
+              {opt.description && (
+                <span
+                  style={{
+                    display: 'block',
+                    fontSize: 10,
+                    fontWeight: 400,
+                    color: 'var(--text-faint)',
+                  }}
+                >
+                  {opt.description}
+                </span>
+              )}
             </button>
           )
         })}
@@ -519,9 +600,12 @@ export function ConfigToolbar({
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
   })
   const { primary, advanced } = splitPrimaryOptions(sorted)
-  // 仅移动端切分；桌面端整行渲染，行为与切分前一致。收纳项为空（配置 ≤3 项
-  // 或全在主位）时不出现「高级」入口。
+  // 仅移动端切分：收纳项为空（配置 ≤3 项或全在主位）时也不出现「高级」入口。
   const showAdvanced = isMobile && advanced.length > 0
+  // 桌面端不收纳：主位 + 收纳项全部行内渲染（wrap 原行为）。少了后半段，
+  // 非 权限/模型/思考 类别（模型参数、布尔开关、未知类别）在桌面端既不进行
+  // 内、也不进面板——配置项直接消失，而移动端却能在「高级」里看到。
+  const inlineOptions = isMobile ? primary : [...primary, ...advanced]
 
   return (
     <div
@@ -541,7 +625,7 @@ export function ConfigToolbar({
         position: 'relative',
       }}
     >
-      {primary.map((opt) => (
+      {inlineOptions.map((opt) => (
         <ConfigDropdown
           key={opt.id}
           option={opt}

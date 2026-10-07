@@ -259,6 +259,14 @@ export interface AppState {
    * picks a session (clicking the sidebar, just-created session, etc.)
    * — sites that need side-effects (e.g. attention notifications) can
    * call those *after* this returns.
+   *
+   * Exception: an ARCHIVED session (present in `archivedSessions`) is a
+   * read-only history view — only `activeSessionId` is set in memory. The
+   * persisted slots (`omniterm_active_session` localStorage key +
+   * `workspaceSessionMemory`) stay untouched so browsing archived history
+   * can't displace the session the user actually works in; those slots are
+   * claimed only when the session is back in the default list (after
+   * manual unarchive) and activated from there.
    */
   activateSession: (sessionId: string) => void
   setConnected: (v: boolean) => void
@@ -296,16 +304,11 @@ export interface AppState {
   resetFmToFollowing: (sessionId: string) => void
   setFmDrawerPath: (sessionId: string, path: string | null, mode?: 'view' | 'edit') => void
   /**
-   * Open a file reported from outside the FileManager (e.g. an ACP tool call's
-   * `locations`) in the drawer, making the drawer actually visible in one
-   * atomic update: panel open, un-collapsed, on the `files` tab (and on the
-   * `files` pane on mobile). `reportedPath` may be relative to the session's
-   * workspace root; it is resolved via [`toAbsolutePath`].
-   *
-   * Batched into a single `set()` (same rationale as `activateSession`) so
-   * subscribers re-render at most once instead of four times.
+   * Open a file or navigate to a directory reported from outside the FileManager.
+   * If `isDirectory` is true, navigates the FileManager list to `reportedPath`.
+   * Otherwise opens the file in the drawer.
    */
-  revealFileInDrawer: (sessionId: string, reportedPath: string) => void
+  revealPathInFileManager: (sessionId: string, reportedPath: string, isDirectory?: boolean) => void
   closeFmDrawer: (sessionId: string) => void
 }
 
@@ -557,7 +560,19 @@ export const useAppStore = create<AppState>((set, get) => ({
    * (legacy contract).
    */
   activateSession: (sessionId) => {
-    const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory } = get()
+    const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory, archivedSessions } = get()
+
+    // 归档会话 = 只读查看历史（Sidebar「已归档」区块）。查看不得抢占持久化位：
+    // 不写 omniterm_active_session（刷新后恢复位）、不写 workspaceSessionMemory
+    // （worktree 的「回到上次会话」位）。否则用户一个个查看归档历史时，每点一行
+    // 就把当前 worktree 的会话记忆改写/擦除（prune effect 发现记忆指向已归档行会
+    // 直接清除），刷新后真正在用的会话也恢复不出来。只有会话经「取消归档」回到
+    // 默认列表后被正常激活，才写这些位。
+    if (archivedSessions.some((s) => s.id === sessionId)) {
+      set({ activeExternalSession: null, activeSessionId: sessionId })
+      return
+    }
+
     localStorage.setItem('omniterm_active_session', sessionId)
 
     // Resolve the owning project + worktree from loaded session data. The
@@ -762,34 +777,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     })),
 
-  revealFileInDrawer: (sessionId, reportedPath) => {
+  revealPathInFileManager: (sessionId, reportedPath, isDirectory = false) => {
     const s = get()
     const session = Object.values(s.sessions)
       .flat()
       .find((x) => x.id === sessionId)
     const abs = toAbsolutePath(reportedPath, session?.workspace_path)
-    // 空路径无可打开之物；不要把 drawer 置为 '' 造一个必失败的抽屉
     if (!abs) return
 
     localStorage.setItem('omniterm_right_panel_tab', 'files')
     if (s.isMobile) localStorage.setItem('omniterm_mobile_last_tab', 'files')
 
+    const currentFm = s.fmSessionStates[sessionId] ?? DEFAULT_FM_SESSION_STATE
+
     set({
       fileManagerOpen: true,
       fileManagerCollapsed: false,
       rightPanelTab: 'files',
-      // 桌面端 activeTab 不参与布局，不动它（避免污染移动端记忆）
       ...(s.isMobile ? { activeTab: 'files' as const, mobileLastTab: 'files' } : {}),
       fmSessionStates: {
         ...s.fmSessionStates,
-        [sessionId]: {
-          // 这可能是本会话的首个 FM entry（用户从未打开过面板），
-          // 必须铺齐默认值，不能只展开 undefined 留下缺字段的半成品 entry。
-          ...DEFAULT_FM_SESSION_STATE,
-          ...s.fmSessionStates[sessionId],
-          drawerPath: abs,
-          drawerMode: 'view' as const,
-        },
+        [sessionId]: isDirectory
+          ? {
+              ...currentFm,
+              mode: 'manual',
+              manualPath: abs,
+              drawerPath: null,
+            }
+          : {
+              ...currentFm,
+              drawerPath: abs,
+              drawerMode: 'view' as const,
+            },
       },
     })
   },

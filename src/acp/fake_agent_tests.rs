@@ -25,14 +25,19 @@
 //! 7. **prompt 正常链路**（R08，2026-10-01）：agent 流式 `session/update` +
 //!    `end_turn` 应答 → 广播带 seq、累积器正文折叠正确；
 //! 8. **cancel 链路**（R08）：`session/cancel` 通知到达 agent，prompt 以
-//!    `cancelled` 返回；
+//!    `cancelled` 返回；**粘滞取消重发**（2026-10-06）：cancel 之后紧接的新 prompt
+//!    被 agent 秒回 `cancelled`（实测 codebuddy 的异步清理窗口）→ `send_prompt` 按
+//!    「本世代没有 cancel 请求」判定并有界重发，用户主动取消的那一轮不重发；
 //! 9. **权限往返**（R07，`PermissionManager`）：`resolve` 选中项送达 agent 且
 //!    resolved 广播；`cancel` 对未决审批以 `Cancelled` 应答（规范 MUST）；
 //! 10. **shutdown/disconnect 语义**（R08）：shutdown 后 `is_alive()` 立即 false
 //!     且发送快速失败；disconnect 消费 self 同样杀进程；
 //! 11. **terminal 往返**（R07，`AcpTerminalManager`）：create→wait_for_exit→
 //!     output→release 全链路 + 事件广播；kill 路径退出状态无 exit_code；
-//! 12. **重复 env 键最后一条胜出**（升级计划 D4 的端到端 pin）。
+//! 12. **重复 env 键最后一条胜出**（升级计划 D4 的端到端 pin）；
+//! 13. **usage 快照落库**：`usage_update` 通知经 `on_agent_notification` 写
+//!     `sessions.usage_json`（刷新 / 换设备后 `GET /messages` hydrate 的恢复来源，
+//!     通知本身不随 session/load 重放、广播无补发）。
 //!
 //! **边界（勿过度解读）**：
 //! - 本测试**不复现**上游 crate 的 pidfd 空转（依赖未识别的 poll/wake 交错，
@@ -427,6 +432,66 @@ async fn cancel_notification_reaches_agent_and_prompt_ends_cancelled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ── 8b. 粘滞取消：cancel 后紧接的新 prompt 被秒回 cancelled → 须透明重发 ────
+
+/// 复现 2026-10-06 现场：用户点聊天队列 chip 的「立即发送」→ 后端 cancel 当前 turn
+/// → `prompt_done` 触发 drain 发出排队消息 → 新 prompt 落在 agent 清理取消状态的
+/// 窗口里，被秒回 `cancelled` **且不生成 userMessageId**（实测 codebuddy 2.161.4：
+/// 0ms / 250ms 必现，500ms 起正常），用户那条消息静默丢失。
+/// 判据是「本世代没有对应的 cancel 请求」，与具体实现的时序无关。
+#[tokio::test]
+async fn stale_cancel_after_user_cancel_is_resent_not_swallowed() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("stale-cancel");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+    let prompts = || read_events(&dir).lines().filter(|l| l.trim() == "prompt").count();
+
+    let client = spawn_connect(agent_for(&script, "sticky_cancel", &dir), workspace).await;
+
+    // 第 1 轮：用户主动 cancel → 合法 cancelled，**不得**重发（否则用户停不下来）。
+    client.mark_prompt_active();
+    let prompt_fut = client.send_prompt("turn1", vec![], vec![], vec![]);
+    let cancel_when_delivered = async {
+        assert!(
+            wait_for_event(&dir, "prompt", UNWIND_TIMEOUT).await,
+            "agent 未在限时内收到 prompt：{}",
+            read_events(&dir)
+        );
+        client.cancel().expect("session/cancel 通知应发送成功");
+    };
+    let (resp, ()) = tokio::join!(prompt_fut, cancel_when_delivered);
+    let resp = resp.expect("第 1 轮应以 cancelled 正常返回");
+    assert_eq!(resp.stop_reason, StopReason::Cancelled);
+    client.mark_prompt_idle();
+    assert_eq!(prompts(), 1, "用户自己取消的这一轮不该被重发：{}", read_events(&dir));
+
+    // 第 2 轮：drain 紧接着发（新世代、无 cancel 请求）→ agent 粘滞秒回 cancelled
+    // → 宿主重发一次并拿到 end_turn，agent 侧累计收到 3 次 prompt。
+    client.mark_prompt_active();
+    let resp2 =
+        tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("turn2", vec![], vec![], vec![]))
+            .await
+            .expect("send_prompt 未在限时内返回（挂死）")
+            .expect("重发后 prompt 应正常返回");
+    client.mark_prompt_idle();
+    assert_eq!(
+        resp2.stop_reason,
+        StopReason::EndTurn,
+        "粘滞取消须被重发吞掉，不得把 cancelled 上报给用户"
+    );
+    assert_eq!(
+        prompts(),
+        3,
+        "第 2 轮应恰好重发一次（受 STALE_CANCEL_MAX_RETRIES 约束）：{}",
+        read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── 9. 权限往返（R07：PermissionManager 经真实连接）─────────────────────
 
 #[tokio::test]
@@ -685,6 +750,43 @@ async fn duplicate_env_keys_last_value_wins() {
         .await
         .expect("fake agent 未落盘 FAKE_DUP（脚本未生效？）");
     assert_eq!(value, "second", "重复 env 键必须最后一条胜出（计划 D4 pin）");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 13. usage 快照落库：usage_update 通知 → sessions.usage_json ──────────
+
+#[tokio::test]
+async fn usage_update_notification_is_persisted() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("usage");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "usage", &dir), workspace).await;
+    // 生产路径：会话注册点先 attach_config_prefs（usage 落库与配置快照共用该
+    // 句柄）；未绑定时落库为 no-op（能力探针会话不写库）。
+    let db = crate::acp::test_db::test_pool().await;
+    client.attach_config_prefs(db.clone(), "s1".to_string(), "agent1".to_string()).await;
+
+    client.mark_prompt_active();
+    tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt 正常链路应返回 Ok");
+    client.mark_prompt_idle();
+
+    // 通知在 send_prompt 返回前已被内联派发（通知派发串行，同第 7 节论证），
+    // 落库分支已 await 完成——直接断言，无需轮询。
+    let snap = crate::acp::usage::load_usage_snapshot(&db, "s1")
+        .await
+        .expect("usage_update 应已落库（on_agent_notification 接线）");
+    assert_eq!(snap["used"], 1234);
+    assert_eq!(snap["size"], 200000);
+    // 会话隔离：未收到 usage 的会话不受影响。
+    assert_eq!(crate::acp::usage::load_usage_snapshot(&db, "s2").await, None);
 
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

@@ -39,6 +39,7 @@ describe('appStore.activateSession', () => {
       activeExternalSession: null,
       activeWorkspaceId: null,
       workspaceSessionMemory: {},
+      archivedSessions: [],
     })
   })
   afterEach(() => {
@@ -97,6 +98,38 @@ describe('appStore.activateSession', () => {
     const mem = useAppStore.getState().workspaceSessionMemory
     expect(mem['ws-1']).toBe('sess-old')
     expect(mem['ws-2']).toBe('sess-2')
+  })
+
+  it('viewing an archived session does not claim the persisted slots', () => {
+    // 归档会话 = 只读查看历史（Sidebar「已归档」区块）：只切 activeSessionId，
+    // omniterm_active_session（刷新恢复位）与 workspaceSessionMemory
+    // （worktree「回到上次会话」位）必须原样保留。回归：曾有点击即全写，
+    // 用户一个个查看归档历史时把在用的会话记忆改写，随后被 prune effect
+    // 清除，刷新后真正在用的会话也恢复不出来。
+    useAppStore.setState({
+      activeWorkspaceId: 'ws-1',
+      activeSessionId: 'sess-working',
+      workspaceSessionMemory: { 'ws-1': 'sess-working' },
+      archivedSessions: [{ id: 'arch-1' }] as never,
+    })
+    localStorage.setItem('omniterm_active_session', 'sess-working')
+    useAppStore.getState().activateSession('arch-1')
+    const s = useAppStore.getState()
+    expect(s.activeSessionId).toBe('arch-1')
+    expect(s.activeExternalSession).toBeNull()
+    expect(localStorage.getItem('omniterm_active_session')).toBe('sess-working')
+    expect(s.workspaceSessionMemory['ws-1']).toBe('sess-working')
+  })
+
+  it('activating a session back from archive claims the slots again', () => {
+    // 取消归档回到默认列表后，激活即恢复完整写位语义（刷新恢复 + worktree 记忆）。
+    useAppStore.setState({
+      activeWorkspaceId: 'ws-1',
+      archivedSessions: [],
+    })
+    useAppStore.getState().activateSession('sess-1')
+    expect(localStorage.getItem('omniterm_active_session')).toBe('sess-1')
+    expect(useAppStore.getState().workspaceSessionMemory['ws-1']).toBe('sess-1')
   })
 
   it('activates the owning project + worktree of a loaded session', () => {
@@ -323,7 +356,7 @@ describe('appStore expandAllSessions', () => {
   })
 })
 
-describe('appStore.revealFileInDrawer', () => {
+describe('appStore.revealPathInFileManager', () => {
   const SESSIONS = {
     'proj-1': [{ id: 'sess-1', workspace_path: '/repo/wt-1' }],
   } as never
@@ -346,17 +379,17 @@ describe('appStore.revealFileInDrawer', () => {
   })
 
   it('resolves a relative path against the session workspace root', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', 'docs/plan.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'docs/plan.md')
     expect(useAppStore.getState().fmSessionStates['sess-1'].drawerPath).toBe('/repo/wt-1/docs/plan.md')
   })
 
   it('keeps an absolute path as reported', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', '/repo/wt-1/docs/plan.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', '/repo/wt-1/docs/plan.md')
     expect(useAppStore.getState().fmSessionStates['sess-1'].drawerPath).toBe('/repo/wt-1/docs/plan.md')
   })
 
   it('makes the drawer reachable: panel open, un-collapsed, on the files tab', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     const s = useAppStore.getState()
     expect(s.fileManagerOpen).toBe(true)
     expect(s.fileManagerCollapsed).toBe(false)
@@ -365,7 +398,7 @@ describe('appStore.revealFileInDrawer', () => {
   })
 
   it('opens in view mode', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     expect(useAppStore.getState().fmSessionStates['sess-1'].drawerMode).toBe('view')
   })
 
@@ -373,7 +406,7 @@ describe('appStore.revealFileInDrawer', () => {
     // 用户从未打开过面板时直接从聊天点文件：entry 不能缺 mode/manualPath，
     // 否则 FileManager 的 following/manual 分支拿到 undefined。
     expect(useAppStore.getState().fmSessionStates['sess-1']).toBeUndefined()
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     const entry = useAppStore.getState().fmSessionStates['sess-1']
     expect(entry.mode).toBe('following')
     expect(entry.manualPath).toBeNull()
@@ -385,7 +418,7 @@ describe('appStore.revealFileInDrawer', () => {
         'sess-1': { mode: 'manual', manualPath: '/repo/wt-1/src', drawerPath: null, drawerMode: 'view' },
       },
     })
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     const entry = useAppStore.getState().fmSessionStates['sess-1']
     expect(entry.mode).toBe('manual')
     expect(entry.manualPath).toBe('/repo/wt-1/src')
@@ -398,32 +431,42 @@ describe('appStore.revealFileInDrawer', () => {
         'sess-other': { mode: 'manual', manualPath: '/x', drawerPath: '/x/y.md', drawerMode: 'edit' },
       },
     })
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     expect(useAppStore.getState().fmSessionStates['sess-other'].drawerPath).toBe('/x/y.md')
   })
 
   it('switches to the files pane on mobile only', () => {
     useAppStore.setState({ isMobile: true })
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     expect(useAppStore.getState().activeTab).toBe('files')
     expect(localStorage.getItem('omniterm_mobile_last_tab')).toBe('files')
   })
 
   it('does not touch activeTab on desktop', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', 'a.md')
+    useAppStore.getState().revealPathInFileManager('sess-1', 'a.md')
     expect(useAppStore.getState().activeTab).toBe('terminal')
     expect(localStorage.getItem('omniterm_mobile_last_tab')).toBeNull()
   })
 
   it('is a no-op for a blank path (never opens an empty drawer)', () => {
-    useAppStore.getState().revealFileInDrawer('sess-1', '   ')
+    useAppStore.getState().revealPathInFileManager('sess-1', '   ')
     expect(useAppStore.getState().fmSessionStates['sess-1']).toBeUndefined()
     expect(useAppStore.getState().fileManagerOpen).toBe(false)
   })
 
   it('still opens the reported path when the session is not loaded (no root)', () => {
     // 会话未在 store 中（尚未加载）——不造假基准，原样下去由后端判定
-    useAppStore.getState().revealFileInDrawer('sess-ghost', 'docs/a.md')
+    useAppStore.getState().revealPathInFileManager('sess-ghost', 'docs/a.md')
     expect(useAppStore.getState().fmSessionStates['sess-ghost'].drawerPath).toBe('docs/a.md')
+  })
+
+  it('navigates to directory when revealPathInFileManager is called with isDirectory=true', () => {
+    useAppStore.getState().revealPathInFileManager('sess-1', '/repo/wt-1/src', true)
+    const entry = useAppStore.getState().fmSessionStates['sess-1']
+    expect(entry.mode).toBe('manual')
+    expect(entry.manualPath).toBe('/repo/wt-1/src')
+    expect(entry.drawerPath).toBeNull()
+    expect(useAppStore.getState().fileManagerOpen).toBe(true)
+    expect(useAppStore.getState().rightPanelTab).toBe('files')
   })
 })

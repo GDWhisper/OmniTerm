@@ -168,6 +168,60 @@ describe('mergeLatestMessages — 聚焦补拉的 DB 最新页合并', () => {
     // DB 里没有这条（它从未送达），合并只新增自己的行；echo 去重显式排除 undelivered。
     expect(state().messages.map((m) => m.id)).toEqual(['lost-1', 'row-u'])
   })
+
+  // 2026-10-07 正式版 codebuddy_1007-1314（874a754e）：用户发送后 30s WS 断
+  // （ResetWithoutClosingHandshake，turn 进行中），prompt_done 连同 row_id 一起
+  // 丢失 → store 停在 [user echo(无 dbId), assistant 半截(无 dbId)]；聚焦补拉把
+  // DB 页 [user 行, assistant 行] 合进来。原实现两条无 dbId 规则都只看 store
+  // **尾部一条**——echo 后面永远跟着 assistant，尾部角色对不上 → user 行按
+  // createdAt 插入成新气泡 → 用户消息双显示 + 顺序错乱。修复：候选匹配改为从
+  // 尾部向前的位置无关扫描，命中即原位替换。
+  it('正式版复现：echo 不在尾部（后面跟着无 dbId 半截 assistant）仍去重', () => {
+    seed([
+      mk({ id: 'echo-u', role: 'user', text: 'q', createdAt: 27_553 }),
+      mk({ id: 'live-a', role: 'assistant', text: 'hello wor', createdAt: 28_104 }),
+    ])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('row-u', 'user', 'q', { createdAt: 27_553 + 1 }),
+      row('row-a', 'assistant', 'hello world done', {
+        createdAt: 28_104 + 1,
+        durationMs: 85430,
+      }),
+    ])
+    const msgs = state().messages
+    expect(msgs.map((m) => m.id)).toEqual(['row-u', 'row-a'])
+    expect(msgs[0].dbId).toBe('row-u')
+    expect(msgs[1].durationMs).toBe(85430)
+  })
+
+  it('健康结束的 turn（assistant 带 dbId）后补拉，user echo 仍被 DB 行替换', () => {
+    seed([
+      mk({ id: 'echo-u', role: 'user', text: 'q', createdAt: 10 }),
+      mk({ id: 'a-live', dbId: 'a-live', role: 'assistant', text: 'ans', createdAt: 20 }),
+    ])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('row-u', 'user', 'q', { createdAt: 11 }),
+      row('a-live', 'assistant', 'ans', { createdAt: 21 }),
+    ])
+    const msgs = state().messages
+    expect(msgs.map((m) => m.id)).toEqual(['row-u', 'a-live'])
+  })
+
+  it('多轮场景：旧轮 dbId 行之后的新 echo 同样原位收敛', () => {
+    seed([
+      mk({ id: 'u1', dbId: 'u1', role: 'user', text: 'q1', createdAt: 10 }),
+      mk({ id: 'a1', dbId: 'a1', role: 'assistant', text: 'a1', createdAt: 20 }),
+      mk({ id: 'echo-u2', role: 'user', text: 'q2', createdAt: 30 }),
+      mk({ id: 'live-a2', role: 'assistant', text: 'a2 par', createdAt: 40 }),
+    ])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('u1', 'user', 'q1', { createdAt: 10 }),
+      row('a1', 'assistant', 'a1', { createdAt: 20 }),
+      row('row-u2', 'user', 'q2', { createdAt: 31 }),
+      row('row-a2', 'assistant', 'a2 partial done', { createdAt: 41 }),
+    ])
+    expect(state().messages.map((m) => m.id)).toEqual(['u1', 'a1', 'row-u2', 'row-a2'])
+  })
 })
 
 describe('断连标记与 markDone 的 rowId 落值', () => {

@@ -127,86 +127,94 @@ describe('turnClock tps 估算', () => {
     expect(turnTps('s1', 2_000)).toBe(20)
   })
 
-  it('实时读数同样扣除审批挂起时长（与 turnElapsedMs 同口径）', () => {
+  it('审批挂起期间没有输出即无速率；挂起前后的流式各自成段', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 40, 0)
+    addOutputChars('s1', 40, 500) // burst [0,500]：80 字符 ÷ 0.5s
     setTurnWaiting('s1', true, 1_000)
-    // 1000→5000 挂起，解码窗口只剩 1s → 10 t/s
-    expect(turnTps('s1', 5_000)).toBe(10)
+    // 挂起 4s 零输出：burst 已闭合，读数冻结在测得值（等待不摊薄）
+    expect(turnTps('s1', 5_000)).toBe(40)
+    // 白名单不看工作时钟——审批扣除对 tps 的全部贡献就是「停顿不进分母」
+    expect(turnElapsedMs('s1', 5_000)).toBe(1_000)
   })
 
-  it('审批挂起期间速度读数一动不动，解除后从冻结点继续走时', () => {
+  it('审批挂起期间速率冻结在最后测得值，解除后新输出另起一段', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
+    addOutputChars('s1', 400, 2_000) // burst [1s,2s]：800 字符 ÷ 1s
     setTurnWaiting('s1', true, 2_000)
-    // 冻结点取挂起那一刻的工作坐标（2s），解码窗口此后不再增长。
-    expect(turnTps('s1', 2_000)).toBe(100)
-    // 挂 5 分钟：读数必须完全不动，不能随真人思考时间缓慢跌落。
-    expect(turnTps('s1', 300_000)).toBe(100)
+    // 挂 5 分钟：burst 早已闭合，读数一动不动，不随真人思考时间跌落。
+    expect(turnTps('s1', 300_000)).toBe(200)
     setTurnWaiting('s1', false, 302_000)
-    // 解除后工作时钟从冻结点续走（302−300=2s），不是从 0 重新起算。
-    expect(turnTps('s1', 302_000)).toBe(100)
-    // 首字锚点在 1s：1s 等待不进分母，读数按解码窗口 3s 走。
-    expect(turnTps('s1', 304_000)).toBe(400 / 4 / 3)
+    expect(turnTps('s1', 302_000)).toBe(200)
+    // 解除后模型恢复吐字：间隔远超阈值 → 新开一段，两段字符合计 ÷ 合计时长
+    addOutputChars('s1', 800, 303_000)
+    expect(turnTps('s1', 303_000)).toBe(200) // 新 burst 单 chunk 无可测窗口：仍为旧段读数
+    addOutputChars('s1', 800, 304_000)
+    expect(turnTps('s1', 304_000)).toBe(300) // 2_400 字符 ÷ 2s（两段各 1s）
   })
 
-  it('审批挂起与工具并集同时冻住，挂起段不计入工具也不白送生成时间', () => {
+  it('审批挂起与工具并集同时冻住，挂起段不计入工具；tps 只看输出流', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 0)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
-    // 工具并集跨度也冻在挂起那一刻（1s），不随等待增长；该 1s 已从分母扣除，故读数是 100。
+    // 工具并集跨度也冻在挂起那一刻（1s），不随等待增长。
     expect(turnToolElapsedMs('s1', 120_000)).toBe(1_000)
-    expect(turnTps('s1', 120_000)).toBe(100)
-    // 挂起期间到达的输出：封口点取冻结的工作坐标，不把等待算成生成时间。
+    // 白名单下 tps 不读任何工具/审批状态：唯一的 chunk 没有可测流式窗口 → null。
+    expect(turnTps('s1', 120_000)).toBeNull()
+    // 挂起期间到达的输出：新起一段（与上一 chunk 间隔远超阈值），单 chunk 仍无可测窗口。
     addOutputChars('s1', 400, 60_000)
-    expect(turnTps('s1', 60_000)).toBe(200)
+    expect(turnTps('s1', 60_000)).toBeNull()
     setTurnWaiting('s1', false, 122_000)
     // 挂起的那 120s 不计入工具并集，分子分母都不含它。
     expect(turnElapsedMs('s1', 122_000)).toBe(2_000)
     expect(turnToolElapsedMs('s1', 122_000)).toBe(1_000)
-    expect(turnTps('s1', 122_000)).toBe(200)
+    expect(turnTps('s1', 122_000)).toBeNull()
   })
 
   it('首字前的等待不进分母：解码窗口从首个输出起算', () => {
     beginTurn('s1', 0)
     // 模型 8s 后才吐第一个字：这段时间零输出，计入只会摊薄读数（对齐 dsh decode-only）。
     addOutputChars('s1', 1_200, 8_000)
-    expect(turnTps('s1', 8_000)).toBeNull() // 锚点即此刻，窗口长度 0
+    expect(turnTps('s1', 8_000)).toBeNull() // 单 chunk 无可测窗口
     addOutputChars('s1', 1_200, 9_000)
-    // 1s 解码窗口内 2_400 字符 → 600 token ÷ 1s（8s 首字延迟被排除）
+    // burst [8s,9s] 共 2_400 字符 → 600 token ÷ 1s（8s 首字延迟被排除）
     expect(turnTps('s1', 9_000)).toBe(600)
   })
 
   it('endTurn 冻结最终值：turnTps/turnElapsedMs 归 null，finalTps 保留', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 80, 0)
-    endTurn('s1', 2_000)
+    addOutputChars('s1', 80, 1_000) // burst [0,1s]：160 字符 ÷ 1s
+    endTurn('s1', 1_000)
     expect(turnTps('s1', 3_000)).toBeNull()
     expect(turnElapsedMs('s1', 3_000)).toBeNull()
-    expect(finalTps('s1')).toBe(10) // 80/4/2
+    expect(finalTps('s1')).toBe(40) // 160/4/1
   })
 
   it('重复 endTurn 不覆盖已冻结的快照', () => {
     beginTurn('s1', 0)
-    addOutputChars('s1', 80, 0)
-    updateTurnTool('s1', 'a', 'in_progress', 1_000)
-    updateTurnTool('s1', 'a', 'completed', 2_000)
-    endTurn('s1', 2_000)
-    // 工作时长 2s、其中纯工具 1s → 80/4/1s = 20 t/s；工具耗时 1s
+    addOutputChars('s1', 40, 0)
+    updateTurnTool('s1', 'a', 'in_progress', 500)
+    addOutputChars('s1', 40, 1_000) // burst [0,1s]：80 字符 ÷ 1s
+    updateTurnTool('s1', 'a', 'completed', 1_000)
+    endTurn('s1', 1_000)
+    // 白名单下 tps 与工具互不相干：80/4/1s；工具并集 [0.5s,1s] 单独记 0.5s
     expect(finalTps('s1')).toBe(20)
-    expect(finalToolElapsedMs('s1')).toBe(1_000)
+    expect(finalToolElapsedMs('s1')).toBe(500)
 
     endTurn('s1', 9_000) // 无在建 turn：第二次结束是 no-op，不覆盖上面的冻结值
     expect(finalTps('s1')).toBe(20)
-    expect(finalToolElapsedMs('s1')).toBe(1_000)
+    expect(finalToolElapsedMs('s1')).toBe(500)
   })
 
   it('本轮 0 输出定稿会把上一 turn 的快照清掉，不把旧值错配到新消息', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 40, 0)
+    addOutputChars('s1', 40, 1_000)
     endTurn('s1', 1_000)
-    expect(finalTps('s1')).toBe(10)
+    expect(finalTps('s1')).toBe(20)
 
     beginTurn('s1', 2_000)
     endTurn('s1', 3_000) // 无输出
@@ -217,27 +225,29 @@ describe('turnClock tps 估算', () => {
     for (let i = 0; i <= MAX_TRACKED_TURNS; i++) {
       beginTurn(`s${i}`, 0)
       addOutputChars(`s${i}`, 40, 0)
+      addOutputChars(`s${i}`, 40, 1_000)
       endTurn(`s${i}`, 1_000)
     }
     expect(finalTps('s0')).toBeNull()
-    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(10)
+    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(20)
   })
 
   it('估算失效的 turn 不留空快照占位，不把别的会话的真实快照挤出上限', () => {
     for (let i = 0; i < MAX_TRACKED_TURNS; i++) {
       beginTurn(`s${i}`, 0)
       addOutputChars(`s${i}`, 40, 0)
+      addOutputChars(`s${i}`, 40, 1_000)
       endTurn(`s${i}`, 1_000)
     }
-    expect(finalTps('s0')).toBe(10)
+    expect(finalTps('s0')).toBe(20)
 
-    // 工具数溢出 → 本窗口估算整体失效，定稿时两项都无读数
+    // 工具数溢出 → 工具估算失效；tps 走白名单不受影响，但本 turn 无输出故同为 null
     beginTurn('bad', 0)
     for (let i = 0; i <= MAX_ACTIVE_TURN_TOOLS; i++) updateTurnTool('bad', `t${i}`, 'in_progress', 1_000)
     endTurn('bad', 2_000)
     expect(finalTps('bad')).toBeNull()
     expect(finalToolElapsedMs('bad')).toBeNull()
-    expect(finalTps('s0')).toBe(10) // s0 仍是最旧的真实快照，未被占位条目挤掉
+    expect(finalTps('s0')).toBe(20) // s0 仍是最旧的真实快照，未被占位条目挤掉
   })
 })
 
@@ -248,20 +258,20 @@ describe('turnClock observed tool intervals', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000) // 首字
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
-    // 工具起点后到达的过渡文本（与 in_progress 同批、生成于工具之前）：
-    // 它把首段封在 [1s,1.5s]，此后到工具结束都是静默执行（2026-10-04 用户报告：
-    // 这段曾被留在 tps 分母里，工具跑多久读数就摊多薄）。
+    // 工具起点后到达的过渡文本（与 in_progress 同批、生成于工具之前）。
     addOutputChars('s1', 400, 1_500)
-    expect(turnTps('s1', 30_000)).toBeNull() // 窗口内无生成时间，不随工具执行下跌
+    // 白名单下静默执行根本不进分母：读数冻结在 [1s,1.5s] 测得值（800 字符 ÷ 0.5s），
+    // 不随工具执行下跌（2026-10-04 用户报告的现象结构性消失）。
+    expect(turnTps('s1', 30_000)).toBe(400)
     expect(turnToolElapsedMs('s1', 30_000)).toBe(29_000)
     updateTurnTool('s1', 'a', 'completed', 31_000)
     expect(turnToolElapsedMs('s1', 31_000)).toBe(30_000)
-    // 工具结束后模型恢复输出：解码窗口 [1s,34s] 去掉 30s 工具 → 450 token ÷ 3s
+    // 工具结束后模型恢复输出：新起一段，两段字符合计 ÷ 合计时长
     addOutputChars('s1', 1_000, 33_000)
-    expect(turnTps('s1', 34_000)).toBe(150)
+    expect(turnTps('s1', 34_000)).toBe(300)
     endTurn('s1', 34_000)
     expect(finalToolElapsedMs('s1')).toBe(30_000)
-    expect(finalTps('s1')).toBe(150)
+    expect(finalTps('s1')).toBe(300)
   })
 
   it('首个输出落在工具并集内：首段与静默执行段都不进解码分母', () => {
@@ -285,15 +295,18 @@ describe('turnClock observed tool intervals', () => {
     // 每次输出都把「末次输出」前移，尾段始终从最新 chunk 起算 → 思考流期间工具表冻结。
     addOutputChars('s1', 400, 2_000)
     expect(turnToolElapsedMs('s1', 2_000)).toBe(1_000)
-    addOutputChars('s1', 400, 4_000)
-    expect(turnToolElapsedMs('s1', 4_000)).toBe(1_000)
+    addOutputChars('s1', 400, 2_500)
+    expect(turnToolElapsedMs('s1', 2_500)).toBe(1_000)
+    addOutputChars('s1', 400, 11_500)
+    expect(turnToolElapsedMs('s1', 11_500)).toBe(1_000)
     addOutputChars('s1', 400, 12_000)
     expect(turnToolElapsedMs('s1', 12_000)).toBe(1_000)
-    // 末次输出之后到并集关闭的 0.5s 没有新的输出证据：静默执行段归工具（E19）
-    updateTurnTool('s1', 'a', 'completed', 12_500)
-    expect(turnToolElapsedMs('s1', 12_500)).toBe(1_500)
-    // 解码分母 = 生成窗口 [2s,12.5s] 去掉闭合并集里的静默 0.5s → 300 token ÷ 10s
-    expect(turnTps('s1', 12_500)).toBe(30)
+    // 末次输出之后到并集关闭的 1.5s 没有新的输出证据：静默执行段归工具（E19）
+    updateTurnTool('s1', 'a', 'completed', 13_500)
+    expect(turnToolElapsedMs('s1', 13_500)).toBe(2_500)
+    // tps 白名单：两个 burst 各 800 字符 ÷ 0.5s，中间的 9s 静默不进分母
+    // （旧黑名单口径此处为 30：chunk 间隔全算生成）。
+    expect(turnTps('s1', 13_500)).toBe(400)
   })
 
   it('keeps 10s of tools in work and yields no rate while no prose follows the first delta', () => {
@@ -322,8 +335,9 @@ describe('turnClock observed tool intervals', () => {
     expect(turnToolElapsedMs('s1', 6_000)).toBe(5_000)
     updateTurnTool('s1', 'b', 'failed', 7_000)
     expect(turnToolElapsedMs('s1', 8_000)).toBe(6_000)
-    // 首字锚点 1s；解码窗口 [1s,8s] 去掉 6s 纯工具并集，剩 1s → 100
-    expect(turnTps('s1', 8_000)).toBe(100)
+    // 白名单下 tps 与工具并集完全无涉：本段只有一个 chunk，没有可测流式窗口 → null
+    // （旧黑名单口径此处为 100：窗口 [1s,8s] 去掉 6s 工具）。
+    expect(turnTps('s1', 8_000)).toBeNull()
   })
 
   it('subtracts approval overlap once from work and tool union, including open approval at finalization', () => {
@@ -358,35 +372,36 @@ describe('turnClock observed tool intervals', () => {
     updateTurnTool('s1', 'a', 'pending', 5_000)
     updateTurnTool('s1', 'a', undefined, 6_000)
     expect(turnToolElapsedMs('s1', 7_000)).toBe(2_000)
-    // 首字锚点 1s；解码窗口 [1s,7s] 去掉 2s 工具，剩 4s → 25
-    expect(turnTps('s1', 7_000)).toBe(25)
+    // 白名单下 tps 不读工具状态：单 chunk 无可测流式窗口 → null
+    // （旧黑名单口径此处为 25：窗口 [1s,7s] 去掉 2s 工具）。
+    expect(turnTps('s1', 7_000)).toBeNull()
   })
 
-  it('pauses the generation clock at prose inside a tool union, and keeps the silent tail as tool time', () => {
+  it('keeps the silent tail as tool time while prose lands inside a tool union', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
     updateTurnTool('s1', 'a', 'in_progress', 1_000)
     setTurnWaiting('s1', true, 2_000)
     setTurnWaiting('s1', false, 4_000)
-    // 首字之后的窗口整段落在工具并集内且无后续输出：无解码时长 → null，
-    // 速度不随工具执行跌落入分母、也不拿首字前的 1s 虚报。
+    // 首字之后的窗口整段落在工具并集内且无后续输出：无可测速率。
     expect(turnTps('s1', 5_000)).toBeNull()
     expect(turnTps('s1', 6_000)).toBeNull()
     // 工具内输出到达（工作坐标 3s）：首段 [1s,3s] 封存，尾段自此起算；
-    // 单次输出没有可测的生成跨度 → 仍 null。
+    // 与上一 chunk 间隔 4s 超阈值 → 新起一段。单 chunk 瞬间窗口长度 0 → null。
     addOutputChars('s1', 400, 5_000)
     expect(turnTps('s1', 5_000)).toBeNull()
-    expect(turnTps('s1', 6_000)).toBeNull()
+    // 开放 burst 的窗口含 ≤OUTPUT_GAP_MS 的容差：续看到 6s 时读数 400 字符 ÷ 1s
+    expect(turnTps('s1', 6_000)).toBe(100)
     updateTurnTool('s1', 'b', 'in_progress', 6_000)
     updateTurnTool('s1', 'a', 'completed', 7_000)
     updateTurnTool('s1', 'b', 'completed', 8_000)
     updateTurnTool('s1', 'c', 'in_progress', 9_000)
     endTurn('s1', 11_000)
-    // 展示口径（E19 起与分母同归因）：a/b 并集的非生成段 [1s,6s]（工作坐标）
-    // + c 开放并集的 [7s,9s]，共 7s。
+    // 展示口径（E19）：a/b 并集的非生成段 [1s,6s]（工作坐标）+ c 开放并集的 [7s,9s]，共 7s。
     expect(finalToolElapsedMs('s1')).toBe(7_000)
-    // 解码分母只剩 a/b 关闭到 c 开始之间的 1s（工作坐标 [6s,7s]）→ 800/4 ÷ 1s
-    expect(finalTps('s1')).toBe(200)
+    // 白名单下两个 chunk（1s / 5s）间隔远超阈值、各自单段：无可测流式窗口 → null
+    // （旧黑名单口径此处为 200：把 a/b 关闭到 c 开始之间的 1s 算生成）。
+    expect(finalTps('s1')).toBeNull()
   })
 
   it('keeps tool time observed before a reconnect instead of wiping it', () => {
@@ -400,15 +415,15 @@ describe('turnClock observed tool intervals', () => {
     expect(turnToolElapsedMs('s1', 10_000)).toBe(5_000)
     expect(turnTps('s1', 10_000)).toBeNull()
     addOutputChars('s1', 400, 12_000)
-    // 新窗口首个输出即锚点：窗口长度 0 → null，不把重连前的等待算成生成时间。
+    // 新窗口首个输出：瞬间窗口长度 0 → null，不把重连前的等待算成生成时间。
     expect(turnTps('s1', 12_000)).toBeNull()
-    addOutputChars('s1', 400, 14_000)
-    // 新窗口 2s 内 800 字符 → 200 token ÷ 2s；旧工具段已由锚点基线排除，不重复扣。
-    expect(turnTps('s1', 14_000)).toBe(100)
-    expect(turnElapsedMs('s1', 14_000)).toBe(14_000)
-    endTurn('s1', 14_000)
+    addOutputChars('s1', 400, 13_000)
+    // 新窗口 burst [12s,13s] 800 字符 → 200 token ÷ 1s；工具段与 tps 无涉（E20 解耦）
+    expect(turnTps('s1', 13_000)).toBe(200)
+    expect(turnElapsedMs('s1', 13_000)).toBe(13_000)
+    endTurn('s1', 13_000)
     expect(finalToolElapsedMs('s1')).toBe(5_000)
-    expect(finalTps('s1')).toBe(100)
+    expect(finalTps('s1')).toBe(200)
   })
 
   it('has no rate for tool-only or zero-generation turns and ignores non-finite character samples', () => {
@@ -467,12 +482,15 @@ describe('turnClock observed tool intervals', () => {
     expect(turnTps('s1', 5_000)).toBe(200)
   })
 
-  it('bounds ID size and never finalizes a truncated tracking window as a valid estimate', () => {
+  it('bounds ID size and drops the truncated tool estimate while tps stays measurable', () => {
     beginTurn('s1', 0)
     addOutputChars('s1', 400, 1_000)
+    addOutputChars('s1', 400, 1_500) // burst [1s,1.5s]
     updateTurnTool('s1', 'x'.repeat(MAX_TURN_TOOL_ID_LENGTH + 1), 'in_progress', 1_000)
-    endTurn('s1', 2_000)
-    expect(finalTps('s1')).toBeNull()
+    endTurn('s1', 2_600)
+    // tps 走白名单：800 字符 ÷ 0.5s，不受工具跟踪溃败影响（E20 解耦）
+    expect(finalTps('s1')).toBe(400)
+    // 超长 ID 被丢出并集 → 工具估算作废，宁缺毋滥
     expect(finalToolElapsedMs('s1')).toBeNull()
   })
 
@@ -483,9 +501,9 @@ describe('turnClock observed tool intervals', () => {
       updateTurnTool('s1', `tool-${i}`, 'in_progress', 1_000 + i)
       updateTurnTool('s1', `tool-${i}`, 'completed', 1_001 + i)
     }
-    // 估算仍有效：解码窗口 [1s,3.257s] 去掉 257ms 工具段，剩 2s → 1_600/4 ÷ 2s
-    addOutputChars('s1', 1_200, 2_257)
-    expect(turnTps('s1', 3_257)).toBe(200)
+    // 白名单下工具段完全不进分母：唯一 burst [1s,2s]，1_600 字符 ÷ 1s
+    addOutputChars('s1', 1_200, 2_000)
+    expect(turnTps('s1', 3_257)).toBe(400)
   })
 
   it('bounds tool snapshots with rates and clears both on a new turn', () => {
@@ -493,16 +511,61 @@ describe('turnClock observed tool intervals', () => {
       beginTurn(`s${i}`, 0)
       addOutputChars(`s${i}`, 400, 1_000)
       updateTurnTool(`s${i}`, 'a', 'in_progress', 1_000)
+      addOutputChars(`s${i}`, 400, 2_000)
       endTurn(`s${i}`, 2_000)
     }
     expect(finalToolElapsedMs('s0')).toBeNull()
     expect(finalTps('s0')).toBeNull()
     expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(1_000)
-    // 首字之后窗口整段在工具内 → 无解码速率，快照 tps 为 null 但工具读数保留
-    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBeNull()
+    // burst [1s,2s]：800 字符 ÷ 1s
+    expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBe(200)
     beginTurn(`s${MAX_TRACKED_TURNS}`, 3_000)
     endTurn(`s${MAX_TRACKED_TURNS}`, 4_000)
     expect(finalToolElapsedMs(`s${MAX_TRACKED_TURNS}`)).toBe(0)
     expect(finalTps(`s${MAX_TRACKED_TURNS}`)).toBeNull()
+  })
+})
+
+// tps 白名单口径（E20）：分母只认「连续流式窗口」——工具执行、审批等待、模型
+// 停顿与 agent 循环空档一律排除，读数冻结在最后测得值。以下钉住 pi-acp 实测
+// 形态（2026-10-06 抓帧回放：三个 4s bash 工具间各有 1.3–2.6s 无任何输出，
+// 旧黑名单口径下这些空档全留在分母里，读数从 ~80 摊到 11）。
+describe('turnClock tps 白名单（E20）', () => {
+  beforeEach(() => clearTurnClock())
+
+  it('工具执行与工具间空档都不进分母：读数冻结在最后测得值', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 1_000)
+    addOutputChars('s1', 400, 1_500) // burst [1s,1.5s]：800 字符 ÷ 0.5s
+    updateTurnTool('s1', 'a', 'in_progress', 1_500)
+    // 工具执行 4s（静默）：分母不涨，读数一动不动
+    expect(turnTps('s1', 5_500)).toBe(400)
+    updateTurnTool('s1', 'a', 'completed', 5_500)
+    // 工具完成后又是 2.5s 无输出（agent 循环空档）：依旧不动
+    expect(turnTps('s1', 8_000)).toBe(400)
+    // 恢复吐字：新起一段，两段字符合计 ÷ 合计时长
+    addOutputChars('s1', 400, 8_500)
+    addOutputChars('s1', 400, 9_000)
+    expect(turnTps('s1', 9_000)).toBe(400)
+  })
+
+  it('间隔阈值内的静默仍计入：开放 burst 的窗口含 ≤1s 容差', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 0)
+    addOutputChars('s1', 400, 800) // 同一 burst
+    // 距上一 chunk 900ms，未超阈值 → 开放窗口延长到 now
+    expect(turnTps('s1', 1_700)).toBe(800 / 4 / 1.7)
+    // 超过阈值：闭合在末 chunk，窗口固定 800ms
+    expect(turnTps('s1', 2_000)).toBe(800 / 4 / 0.8)
+  })
+
+  it('定稿前的孤立尾 chunk 不带字符：宁缺毋滥', () => {
+    beginTurn('s1', 0)
+    addOutputChars('s1', 400, 0)
+    addOutputChars('s1', 400, 500) // burst [0,500ms]
+    addOutputChars('s1', 4, 5_000) // 定稿前一句 "done"：与前段间隔远超阈值
+    endTurn('s1', 6_100)
+    // 尾段孤立、burst 已闭合 → 其 4 字符不进分子（不稀释，也不虚构时长）
+    expect(finalTps('s1')).toBe(400) // 800 字符 ÷ 0.5s
   })
 })

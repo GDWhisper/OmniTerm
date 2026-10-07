@@ -38,6 +38,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
+use crate::engine::pty_io::SESSION_LEAK_ENV_VARS;
+#[cfg(unix)]
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -140,12 +142,19 @@ pub fn read_and_clear_pid_file(path: &Path) -> Option<u32> {
     parsed
 }
 
-/// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd，
-/// 并（`pid_file` 为 `Some` 时）自报 pid。
+/// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd、
+/// （`pid_file` 为 `Some` 时）自报 pid、并清除父会话泄漏变量（见
+/// [`crate::engine::pty_io::SESSION_LEAK_ENV_VARS`]，根因、取舍与实测证据见其
+/// 文档注释）。
+///
+/// ACP agent 进程由 agent-client-protocol crate spawn（`AcpAgent::from_args` +
+/// `connect_with`），omniterm 拿不到其 `Command` 做 `env_remove`，故以 wrapper
+/// 内 `unset` 等效清理——这是 ACP 侧唯一可控的注入点（与 pty/tmux 派生点共用
+/// 同一清单）。
 ///
 /// POSIX-only; ACP 暂不支持 Windows。
 ///
-/// 返回 `["-c", "cd <workspace> [&& echo $$ > <pid 文件>] && exec <agent_cmd> <arg1> …>"]`，
+/// 返回 `["-c", "cd <workspace> [&& echo $$ > <pid 文件>] && unset <泄漏变量…> && exec <agent_cmd> <arg1> …>"]`，
 /// 调用方应将其附加到 `/bin/sh` 之后：
 ///
 /// ```ignore
@@ -163,6 +172,9 @@ pub fn read_and_clear_pid_file(path: &Path) -> Option<u32> {
 /// 就是 D2 killpg 的进程组 leader。放在 `cd` 成功之后：workspace 不可用时
 /// 不写文件，调用方据此走 `/proc` 扫描兜底。
 ///
+/// 环境清理放在 `exec` 前（`unset` 对未定义变量是 no-op，POSIX 安全）；变量名
+/// 均为编译期常量，无注入面。
+///
 /// 所有动态值均通过 [`sh_quote`] 安全转义，防止 shell 注入。
 #[cfg(unix)]
 pub fn wrap_agent_with_cwd(
@@ -175,6 +187,7 @@ pub fn wrap_agent_with_cwd(
     if let Some(f) = pid_file {
         script.push_str(&format!("echo $$ > {} && ", sh_quote(&f.to_string_lossy())));
     }
+    script.push_str(&format!("unset {} && ", SESSION_LEAK_ENV_VARS.join(" ")));
     script.push_str(&format!("exec {}", sh_quote(agent_cmd)));
     // 用 fold 避免预分配：每个 arg 单独 sh_quote，空格分隔拼入 shell 脚本
     let shell_script = agent_args.iter().fold(script, |acc, arg| acc + " " + &sh_quote(arg));
@@ -476,8 +489,13 @@ mod tests {
         );
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-c");
-        // cd 必须是 cd '/home/user/project' && exec 'codebuddy' '--acp'
-        assert_eq!(args[1], "cd '/home/user/project' && exec 'codebuddy' '--acp'");
+        // cd && unset <全部泄漏变量> && exec 'codebuddy' '--acp'（清单内容由
+        // pty_io::SESSION_LEAK_ENV_VARS 单一真源 pin）
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        assert_eq!(
+            args[1],
+            format!("cd '/home/user/project' && {unset} && exec 'codebuddy' '--acp'")
+        );
     }
 
     #[test]
@@ -489,9 +507,10 @@ mod tests {
     }
 
     #[test]
-    fn wrap_with_no_args_emits_cd_exec_only() {
+    fn wrap_with_no_args_emits_cd_unset_exec_only() {
         let args = wrap_agent_with_cwd("/usr/bin/myagent", &[], Path::new("/tmp"), None);
-        assert_eq!(args[1], "cd '/tmp' && exec '/usr/bin/myagent'");
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        assert_eq!(args[1], format!("cd '/tmp' && {unset} && exec '/usr/bin/myagent'"));
     }
 
     #[test]
@@ -502,10 +521,14 @@ mod tests {
             Path::new("/home/user/project"),
             Some(Path::new("/tmp/omniterm-acp-x.pid")),
         );
-        // pid 自报必须夹在 cd 与 exec 之间：cd 失败（workspace 不可用）时不写
+        // pid 自报必须夹在 cd 与 exec 之间：cd 失败（workspace 不可用）时不写；
+        // unset 必须在 exec 前（agent 启动前环境已洁净）
+        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
         assert_eq!(
             args[1],
-            "cd '/home/user/project' && echo $$ > '/tmp/omniterm-acp-x.pid' && exec 'codebuddy' '--acp'"
+            format!(
+                "cd '/home/user/project' && echo $$ > '/tmp/omniterm-acp-x.pid' && {unset} && exec 'codebuddy' '--acp'"
+            )
         );
     }
 
@@ -587,6 +610,41 @@ mod tests {
              the fix targets: agent-client-protocol's AcpAgent::spawn_process \
              does NOT call Command::current_dir, so the spawned agent runs \
              in the backend's cwd rather than the session's workspace_path."
+        );
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// 父会话泄漏变量必须被 wrapper 实测清除（`SERVER__PORT` 被父 codebuddy
+    /// 会话占用时，新 agent listen 失败并卡死 session/new，2026-10-06）；
+    /// 同时不得误清其他环境变量。用 `env` 打印子进程真实环境断言——字符串
+    /// 单测只验证脚本形状，覆盖不到 `unset` + `exec` 的组合行为。
+    #[tokio::test]
+    async fn wrapped_subprocess_strips_session_leak_env() {
+        let workspace = unique_dir("envstrip");
+        let wrapped = wrap_agent_with_cwd("env", &[], &workspace, None);
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(&wrapped);
+        for var in SESSION_LEAK_ENV_VARS {
+            cmd.env(var, "leak");
+        }
+        cmd.env("OMNITERM_ACP_ENV_KEEP", "1");
+        let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output().expect("spawn sh");
+        assert!(
+            output.status.success(),
+            "sh exited with {}: stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for leaked in SESSION_LEAK_ENV_VARS {
+            assert!(
+                !stdout.lines().any(|l| l.starts_with(&format!("{leaked}="))),
+                "{leaked} 必须被 wrapper 清除，实际仍在子进程环境中：\n{stdout}"
+            );
+        }
+        assert!(
+            stdout.lines().any(|l| l == "OMNITERM_ACP_ENV_KEEP=1"),
+            "无关变量不得被误清：\n{stdout}"
         );
         let _ = std::fs::remove_dir_all(&workspace);
     }

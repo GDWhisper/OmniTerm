@@ -1911,6 +1911,14 @@ body.parchment-texture {
 .chat-markdown img { max-width: 100%; }
 
 /* ────────────────────────────────────────────────────────────────────
+   Horizontal-scroll surfaces (`data-x-scroll`) — mobile pane-swipe opt-out.
+   Pan gesture goes to the surface, not the MobileLayout strip swipe.
+   ──────────────────────────────────────────────────────────────────── */
+[data-x-scroll] {
+  touch-action: pan-x pan-y;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Corner nails — gold squares at the 4 corners of floating panels.
    Uses 4 absolutely-positioned ::before/::after + 2 <span> children
    (since CSS only gives us 2 pseudo-elements).

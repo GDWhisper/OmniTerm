@@ -2,19 +2,20 @@
  * turnClock — 流式气泡的本地估算；模块级有界表 + 消费方定时直写 DOM，
  * 不进入 React state，不入库、不参与同步。定稿工作时长仍以后端 durationMs 为准。
  *
- * 工作 = 墙钟 − 审批挂起（见工作时长计划 E12）。速度只使用本连接观察到的
- * 输出 / 解码窗口时长，按 4 字符 ≈ 1 token 折算。工具时间取并行执行区间的并集，
- * 仍包含在工作时长里。**输出活动是生成的证据**：工具并集内的时间只有在
- * 「输出活动窗口」（并集内首次输出 → 末次输出）内才归生成；此外的段——并集起点到
- * 首次输出的首段、末次输出之后的尾段——都是模型在等待工具，归工具时间，两个读数
- * （tps 分母与「工具约 N秒」）同口径扣除（E19 翻盘 E15/E18 的单次封口：封口之后的
- * 静默执行段不再留在分母里）。实时上末次输出之后的段即刻按工具计（读数不随工具
- * 执行下跌）；新的输出到达时该段随末次输出前移被认领为生成——中途修正而不是
- * 留到最后。整段都没有输出的工具窗口全额计为工具时间。
- * 解码窗口从本观察窗**首个输出**起算：首字前的等待（prompt 处理 / 长思考，
- * 没有任何输出）不进分母——否则首字延迟越长读数越被摊薄（E17 对齐
- * deepseek-harness 的 decode-only 口径）。首输出瞬间窗口长度为 0 → 读数 null。
- * 重连只重开观测窗（输出归零、开放并集丢弃），已闭合的工具段是真实观测，跨重连保留。
+ * 工作 = 墙钟 − 审批挂起（见工作时长计划 E12），含工具执行。工具时间取并行执行
+ * 区间的并集，供「工具约 N秒」展示；并集内只有「输出活动窗口」归生成，首段与
+ * 静默尾段归工具（口径见 E14/E18/E19）。
+ *
+ * 速度（tps）走**白名单**：分母只累计「输出活跃时段」——相邻输出 chunk 间隔
+ * 不超过 OUTPUT_GAP_MS 的连续流式窗口；工具执行、审批等待、模型停顿与 agent
+ * 循环空档一律不计（E20 翻盘 E14–E19 的黑名单扣除：那条路要证明「某段时间不是
+ * 生成」，只能靠 agent 下发显式 in_progress/running，对不发状态的实现永远漏——
+ * 实测 pi-acp 相邻工具间有数秒无任何输出，黑名单下全部分母里摊薄；白名单只认
+ * 「输出正在流」这一件事，跨 agent 一致，也不依赖任何工具事件）。分子同样只取
+ * 本观测窗的正文与思考字符（重放与 seq 去重丢弃的帧不计）。已闭合的 burst 保留
+ * 其测得时长，故停顿期间读数冻结在最后测得值、不随等待下跌；整轮只有一个 chunk
+ * 时没有可测窗口 → null，宁缺毋滥（同 E17）。
+ * 重连只重开观测窗（输出与 burst 归零、开放并集丢弃），已闭合的工具段跨重连保留。
  * ACP usage_update 无输出 token 字段，因此速度和工具时间都只是本地估算。
  */
 
@@ -22,19 +23,18 @@ interface LiveTurn {
   startedAt: number
   pausedMs: number
   waitSince: number | null
-  outputChars: number
+  /** 当前输出 burst（连续流式段）：首 / 末 chunk 的墙钟时刻与字符数（白名单分母）。 */
+  burstFirstAt: number | null
+  burstLastAt: number
+  burstChars: number
+  /** 已闭合 burst 的字符合计时长合计（tps 分子/分母的存量部分）。 */
+  streamChars: number
+  streamMs: number
   activeTools: Set<string>
   toolSinceWorkMs: number | null
-  /** 已闭合工具并集的「非生成段」累计（首段 + 尾段）：既是「工具约 N秒」的展示值，
-   *  也是 tps 分母的扣除源——两读同一归因。跨重连保留的真实观测。 */
+  /** 已闭合工具并集的「非生成段」累计（首段 + 尾段）：「工具约 N秒」的展示值。
+   *  跨重连保留的真实观测；tps 分母不再读它（E20 白名单口径）。 */
   pureToolMs: number
-  /** 本窗口首个输出出现时的工作坐标；null = 还没吐字，没有可测的解码窗口。 */
-  firstOutputWorkMs: number | null
-  /** 首输出那一刻的已扣纯工具基线：更早的闭合段与同刻开放并集快照都不进新分母。 */
-  pureToolMsAtFirst: number
-  /** 首输出时刻对当时开放并集的整段快照（工作坐标差值）；开放并集关闭时清零。
-   *  它已计入 `pureToolMsAtFirst`，后续开放并集净扣除须减去它避免重复扣。 */
-  openBaselineMs: number
   /** 开放并集的首段：并集起点 → 并集内首次输出；`toolHasHead` 为 false 时无意义。 */
   toolHeadMs: number
   toolHasHead: boolean
@@ -49,6 +49,11 @@ export const MAX_TRACKED_TURNS = 16
 export const MAX_ACTIVE_TURN_TOOLS = 256
 export const MAX_TURN_TOOL_ID_LENGTH = 1024
 const CHARS_PER_TOKEN = 4
+
+/** 相邻输出 chunk 间隔超过该值即视为一次「停顿」：模型停止吐字（工具执行 /
+ *  审批等待 / 思考间隙 / agent 循环空档），停顿段不计入速度分母。实测 pi-acp
+ *  正常流式的 chunk 间隔在数百毫秒内（真实流量最大 ~400ms），1s 留有余量。 */
+const OUTPUT_GAP_MS = 1_000
 
 const turns = new Map<string, LiveTurn>()
 const finalBySession = new Map<string, { tps: number | null; toolMs: number | null }>()
@@ -92,14 +97,21 @@ function openToolDeductMs(turn: LiveTurn, now: number): number {
   return turn.toolHeadMs + openTailMs(turn, now)
 }
 
-/** 解码时长 = 自本窗口首个输出起的工作时长 − 该点之后观测到的纯工具时间
- *  （闭合段 + 开放并集净扣除，首字时刻的开放并集快照已入基线不重复扣）。
- *  无输出（`firstOutputWorkMs === null`）→ 0，读数 null：不摊薄也不虚构。 */
-function decodeElapsedMs(turn: LiveTurn, now: number): number {
-  if (turn.firstOutputWorkMs === null) return 0
-  const closed = Math.max(0, turn.pureToolMs - turn.pureToolMsAtFirst)
-  const open = Math.max(0, openToolDeductMs(turn, now) - turn.openBaselineMs)
-  return Math.max(0, workElapsedMs(turn, now) - turn.firstOutputWorkMs - closed - open)
+/** 输出活跃时长（tps 分母，白名单）= 已闭合 burst 合计 + 当前 burst 至今；
+ *  停顿超过 OUTPUT_GAP_MS 则当前 burst 闭合在末 chunk（其测得时长已入合计，
+ *  读数冻结不随等待下跌）。零长度 burst（整段只有一个 chunk）既不带时长也不带
+ *  字符——没有可测窗口就不虚构（E17 同款取舍）。 */
+function streamTotals(turn: LiveTurn, now: number): { chars: number; ms: number } {
+  let chars = turn.streamChars
+  let ms = turn.streamMs
+  if (turn.burstFirstAt !== null) {
+    const end = now - turn.burstLastAt > OUTPUT_GAP_MS ? turn.burstLastAt : now
+    if (end > turn.burstFirstAt) {
+      chars += turn.burstChars
+      ms += end - turn.burstFirstAt
+    }
+  }
+  return { chars, ms }
 }
 
 /** 无输出 / 无有效时长不渲染，非有限输入或溢出绝不返回 Infinity/NaN。 */
@@ -114,9 +126,9 @@ export function computeTps(outputChars: number, elapsedMs: number): number | nul
 export function beginTurn(sessionId: string, startedAt: number = Date.now()): void {
   finalBySession.delete(sessionId)
   rememberBounded(turns, sessionId, {
-    startedAt, pausedMs: 0, waitSince: null, outputChars: 0,
+    startedAt, pausedMs: 0, waitSince: null,
+    burstFirstAt: null, burstLastAt: 0, burstChars: 0, streamChars: 0, streamMs: 0,
     activeTools: new Set<string>(), toolSinceWorkMs: null, pureToolMs: 0,
-    firstOutputWorkMs: null, pureToolMsAtFirst: 0, openBaselineMs: 0,
     toolHeadMs: 0, toolHasHead: false, lastOutputWorkMs: null, estimatesValid: true,
   })
 }
@@ -129,17 +141,20 @@ export function resumeTurnClock(sessionId: string): void {
   finalBySession.delete(sessionId)
   const turn = turns.get(sessionId)
   if (!turn) return
-  turn.outputChars = 0
+  // 观测窗重开：burst 与累计全部归零（离线帧只以 cooked 快照形态回来，不计入
+  // 分子）；已闭合工具段是真实观测，跨重连保留（E15 修复），只有仍开放的并集
+  // 不可知：离线那段时间无法归因给工具还是别的，丢弃而不虚构（E14 口径不变）。
+  turn.burstFirstAt = null
+  turn.burstLastAt = 0
+  turn.burstChars = 0
+  turn.streamChars = 0
+  turn.streamMs = 0
   turn.activeTools.clear()
   turn.toolSinceWorkMs = null
   turn.toolHeadMs = 0
   turn.toolHasHead = false
   turn.lastOutputWorkMs = null
   turn.estimatesValid = true
-  // 解码窗口随观测窗一起重开：下一次输出重新落锚点；已闭合工具段的基线在该刻重建。
-  turn.firstOutputWorkMs = null
-  turn.pureToolMsAtFirst = 0
-  turn.openBaselineMs = 0
 }
 
 /** 冻结同一时刻的工具与速度估算，再停表；重复结束不覆盖已经冻结的值。 */
@@ -167,15 +182,16 @@ export function setTurnWaiting(sessionId: string, waiting: boolean, at: number =
 }
 
 /** 只有显式执行状态才开始计时；缺省是 partial update，保持此前状态。
- * pending/未知状态不证明执行，不扣后续时间。溢出直接令本窗口估算失效并释放 ID，
- * 不能丢一条活跃工具后继续假装并集完整；下一 turn / resume 才重新采样。 */
+ * pending/未知状态不证明执行，不扣后续时间。溢出直接令**工具**估算失效并释放 ID，
+ * 不能丢一条活跃工具后继续假装并集完整；下一 turn / resume 才重新采样。
+ * tps 走白名单、不读工具状态，故不受失效影响（E20）。 */
 export function updateTurnTool(sessionId: string, id: string, status?: string, at: number = Date.now()): void {
   const turn = turns.get(sessionId)
   if (!turn || !turn.estimatesValid || status === undefined) return
   if (status === 'in_progress' || status === 'running') {
     if (turn.activeTools.has(id)) return
     if (!id || id.length > MAX_TURN_TOOL_ID_LENGTH || turn.activeTools.size >= MAX_ACTIVE_TURN_TOOLS) {
-      // 丢弃一条活跃工具后并集不再完整，本窗口估算整体作废（见 E14）；
+      // 丢弃一条活跃工具后并集不再完整，工具估算整体作废（见 E14）；
       // 读数会静默消失，故留一条 DEV 诊断便于定位是哪条边界被踩到。
       if (import.meta.env.DEV) {
         console.debug('[turnClock] tool tracking overflow, estimates invalidated', {
@@ -189,14 +205,12 @@ export function updateTurnTool(sessionId: string, id: string, status?: string, a
       turn.toolSinceWorkMs = null
       turn.toolHeadMs = 0
       turn.toolHasHead = false
-      turn.openBaselineMs = 0
       return
     }
     if (turn.activeTools.size === 0) {
       turn.toolSinceWorkMs = workElapsedMs(turn, at)
       turn.toolHeadMs = 0
       turn.toolHasHead = false
-      turn.openBaselineMs = 0
     }
     turn.activeTools.add(id)
   } else if (turn.activeTools.delete(id) && turn.activeTools.size === 0) {
@@ -205,7 +219,6 @@ export function updateTurnTool(sessionId: string, id: string, status?: string, a
     turn.toolSinceWorkMs = null
     turn.toolHeadMs = 0
     turn.toolHasHead = false
-    turn.openBaselineMs = 0
   }
 }
 
@@ -226,38 +239,42 @@ export function turnToolElapsedMs(sessionId: string, now: number = Date.now()): 
   return Number.isFinite(elapsed) ? elapsed : null
 }
 
-/** 正文与思考都算输出，turn 外或非法样本不计。每次输出推进「末次输出」锚点：
- *  开放并集的尾段随之前移（[旧末字, 新输出] 被认领为生成），若输出落在开放并集内，
- *  首次输出还固化「并集起点 → 此刻」的首段。同一事件还把解码窗口零点落在 at
- *  （首字前的等待自此不再进分母）；首段发生在零点之前时随基线一起排除，不会扣两次。 */
+/** 正文与思考都算输出，turn 外或非法样本不计。一次调用兼两份职责：
+ *  - tps 白名单记账：间隔 ≤ OUTPUT_GAP_MS 归入当前 burst，超阈值先闭合旧 burst
+ *    （零长度不带字符）再新起一段——中间的静默（工具执行 / 审批 / agent 循环）
+ *    不进任何一边的分母；
+ *  - 推进工具展示的「末次输出」锚点（E18/E19）：开放并集内输出一到，尾段从最新
+ *    chunk 起算；并集内首次输出还固化「并集起点 → 此刻」的首段。
+ *  tps 不依赖工具状态，故工具跟踪溢出（estimatesValid=false）不影响本记账。 */
 export function addOutputChars(sessionId: string, count: number, at: number = Date.now()): void {
   if (!Number.isFinite(count) || count <= 0 || !Number.isFinite(at)) return
   const turn = turns.get(sessionId)
-  if (!turn || !turn.estimatesValid) return
-  turn.outputChars += count
-  if (turn.firstOutputWorkMs === null) {
-    // 首个输出即解码窗口零点：把当前工作坐标落锚，之前的等待不进分母。
-    turn.firstOutputWorkMs = workElapsedMs(turn, at)
-    // 基线含当前开放并集「到此为止」的整段：它发生在首个输出之前，属工具时间。
-    const openSnapshot = turn.activeTools.size > 0 ? openToolMs(turn, at) : 0
-    turn.pureToolMsAtFirst = turn.pureToolMs + openSnapshot
-    // 该快照也是开放并集净扣除的抵扣项；并集关闭时随固化一起失效（清 0）。
-    turn.openBaselineMs = openSnapshot
+  if (!turn) return
+  if (turn.burstFirstAt === null || at - turn.burstLastAt > OUTPUT_GAP_MS) {
+    if (turn.burstFirstAt !== null && turn.burstLastAt > turn.burstFirstAt) {
+      turn.streamChars += turn.burstChars
+      turn.streamMs += turn.burstLastAt - turn.burstFirstAt
+    }
+    turn.burstFirstAt = at
+    turn.burstChars = 0
   }
+  turn.burstChars += count
+  turn.burstLastAt = at
+  turn.lastOutputWorkMs = workElapsedMs(turn, at)
   if (turn.activeTools.size > 0 && !turn.toolHasHead) {
-    // 并集内首次输出：封存首段；此后首段不再增长，生成窗口自此开启。
+    // 并集内首次输出：封存首段；此后首段不再增长（工具展示口径）。
     turn.toolHeadMs = openToolMs(turn, at)
     turn.toolHasHead = true
   }
-  turn.lastOutputWorkMs = workElapsedMs(turn, at)
 }
 
-/** 实时估算 tokens/s；分母 = 自本窗口首个输出起的解码时长（见文件头与 `decodeElapsedMs`）：
- *  首字前的等待与首字之后观测到的纯工具并集都不计入，首字延迟不再摊薄读数。 */
+/** 实时估算 tokens/s；分子 = 本观测窗输出的正文与思考字符，分母 = 输出活跃
+ *  时段（`streamTotals`，白名单：只认连续流式窗口，工具执行 / 审批 / 停顿全排除）。 */
 export function turnTps(sessionId: string, now: number = Date.now()): number | null {
   const turn = turns.get(sessionId)
-  if (!turn || !turn.estimatesValid) return null
-  return computeTps(turn.outputChars, decodeElapsedMs(turn, now))
+  if (!turn) return null
+  const { chars, ms } = streamTotals(turn, now)
+  return computeTps(chars, ms)
 }
 
 export function finalTps(sessionId: string): number | null {

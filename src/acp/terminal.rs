@@ -50,7 +50,7 @@ impl AcpTerminalManager {
         cmd.kill_on_drop(true);
         // 本地子进程不继承 SSH 泄漏变量（agy 等按 SSH_CONNECTION 切换存储后端）；
         // 置于显式 env 之前：agent 显式声明的同名变量仍生效。
-        crate::engine::pty_io::strip_ssh_leak_env_async(&mut cmd);
+        crate::engine::pty_io::strip_leak_env_async(&mut cmd);
 
         for env_var in &request.env {
             cmd.env(&env_var.name, &env_var.value);

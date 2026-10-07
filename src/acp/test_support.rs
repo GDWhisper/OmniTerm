@@ -49,6 +49,9 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 /// - `FAKE_MODE=prompt_ok`：收到 prompt 后先推一条 `agent_message_chunk`
 ///   `session/update`（text 固定 "hello-from-agent"），再以 `end_turn` 应答
 ///   ——覆盖 prompt 正常链路 + 通知广播/累积器折叠；
+/// - `FAKE_MODE=usage`：收到 prompt 后推一条 `usage_update`（used=1234 /
+///   size=200000）再以 `end_turn` 收尾——覆盖 usage 快照落库接线（刷新 / 换设备
+///   后 hydrate 的恢复来源）；
 /// - `FAKE_MODE=cancel`：收到 prompt 后驻留，等 `session/cancel` 通知到达才以
 ///   `cancelled` 应答（同时把 prompt id 记入事件日志）——覆盖 cancel 链路；
 /// - `FAKE_MODE=perm`：收到 prompt 后发 `session/request_permission`（id 固定
@@ -75,6 +78,7 @@ fi
 if [ "$FAKE_MODE" = "hang" ]; then
   exec sleep @LIFETIME@
 fi
+prompt_count=0
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
@@ -106,8 +110,25 @@ while IFS= read -r line; do
           # agent 在 turn 进行中崩溃——不回响应，直接退出。
           exit 3
           ;;
+        sticky_cancel)
+          # 建模 codebuddy 的「粘滞取消」（实测 2.161.4）：第 1 轮不答话，等
+          # session/cancel 来回 cancelled；第 2 轮（cancel 之后紧接的新 prompt）秒回
+          # cancelled 且不带 userMessageId——即这一轮 agent 根本没跑，用户消息被吞；
+          # 第 3 轮起才正常 end_turn。宿主须识别第 2 轮不是用户要的取消并重发，
+          # 见 client.rs 的 STALE_CANCEL_* 常量。
+          prompt_count=$((prompt_count + 1))
+          case "$prompt_count" in
+            1) : ;;
+            2) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"cancelled"}}\n' "$prompt_id" ;;
+            *) printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id" ;;
+          esac
+          ;;
         prompt_ok)
           printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello-from-agent"}}}}\n'
+          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+          ;;
+        usage)
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"usage_update","used":1234,"size":200000}}}\n'
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
           ;;
         perm)

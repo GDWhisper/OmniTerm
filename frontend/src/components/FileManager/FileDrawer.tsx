@@ -5,13 +5,16 @@ import { useToastStore } from '../../stores/toastStore'
 import { DrawerShell } from '../Common/DrawerShell'
 const FileEditor = lazy(() => import('./FileEditor').then((m) => ({ default: m.FileEditor })))
 import { FilePreview } from './FilePreview'
+import { HtmlPreview } from './HtmlPreview'
 import { MarkdownPreview } from './MarkdownPreview'
 import {
   FILE_REFRESH_DEBOUNCE_MS,
   MAX_MARKDOWN_PREVIEW_LINES,
   countLines,
+  isHtmlFile,
   isImageFile,
   isMarkdownFile,
+  shouldRenderHtml,
   shouldRenderMarkdown,
 } from './filePreviewShared'
 import { IconEye, IconEdit, IconX, IconWarning } from './icons'
@@ -121,6 +124,15 @@ export function FileDrawer({
     [mode, fileName, content],
   )
   const markdownTooLarge = isMarkdown && mode === 'view' && !renderMarkdown
+
+  // view 模式按渲染预览 html（sandboxed iframe），edit 模式恒为源码。
+  // 超过字节上限时退回源码视图（见 shouldRenderHtml 的 MAX_HTML_PREVIEW_BYTES）。
+  const isHtml = isHtmlFile(fileName)
+  const renderHtml = useMemo(
+    () => mode === 'view' && shouldRenderHtml(fileName, content),
+    [mode, fileName, content],
+  )
+  const htmlTooLarge = isHtml && mode === 'view' && !renderHtml
 
   // Fetch file content — 非图片文件都尝试按文本读取，是否文本由后端探测
   const fetchContent = useCallback(async () => {
@@ -446,6 +458,8 @@ export function FileDrawer({
         <div className="fm-preview-notice">{t('drawer.markdownTooLarge', { max: MAX_MARKDOWN_PREVIEW_LINES })}</div>
       )}
 
+      {htmlTooLarge && <div className="fm-preview-notice">{t('drawer.htmlTooLarge')}</div>}
+
       {/* Content area */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {!isSupported ? (
@@ -523,6 +537,14 @@ export function FileDrawer({
           </div>
         ) : isImage ? (
           <FilePreview filePath={filePath} sessionId={sessionId} workspaceId={workspaceId} projectId={projectId} fileName={fileName} fileChangeEvent={fileChangeEvent} />
+        ) : renderHtml ? (
+          <HtmlPreview
+            content={content}
+            filePath={filePath}
+            sessionId={sessionId}
+            workspaceId={workspaceId}
+            projectId={projectId}
+          />
         ) : renderMarkdown ? (
           <MarkdownPreview
             content={content}

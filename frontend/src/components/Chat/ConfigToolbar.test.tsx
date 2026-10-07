@@ -279,7 +279,18 @@ describe('ConfigToolbar mobile overflow', () => {
     expect(findButton('Advanced')).toBeUndefined()
     // 桌面端保留类别前缀（非紧凑态）
     expect(findButton('Mode:')).toBeTruthy()
-    expect(findButton('Brave Mode')).toBeUndefined()
+
+    // 回归：桌面端不得收纳，收纳项必须原样行内渲染。曾按 showAdvanced = isMobile
+    // 只渲染主位三项，导致模型参数/未知类别在 PC 端既不进行内也不进面板、
+    // 直接消失（移动端「高级」里反而看得到）。
+    const config = findButton('Config:')
+    expect(config, 'model_config inline on desktop').toBeTruthy()
+    expect(config!.textContent).toContain('Off') // brave_mode 当前值
+    const weird = findButton('Weird Knob:')
+    expect(weird, 'unknown category inline on desktop').toBeTruthy()
+    expect(weird!.textContent).toContain('A') // something_else 当前值
+    // 5 个配置项 = 5 个触发器，一个都不能少
+    expect(container.querySelectorAll('button')).toHaveLength(5)
   })
 
   // jsdom 不做布局，单行保证只能靠样式契约守住：nowrap + 可收缩（min-width:0）。
@@ -298,5 +309,96 @@ describe('ConfigToolbar mobile overflow', () => {
     // 桌面端不钉单行（保持原有 wrap 行为）
     render({ mobile: false, options: OVERFLOW_OPTIONS })
     expect((container.firstElementChild as HTMLElement).style.flexWrap).toBe('wrap')
+  })
+})
+
+// ── 同名选项的 description（模型消耗倍率）必须可见 ──────────────────────
+// ACP 下发的同名模型仅靠 SessionConfigSelectOption.description 区分（实测
+// "Hy3" x0.00 / "Hy3" x0.05 credits）。曾整体丢弃 → 下拉里两项完全一样。
+
+/** 复刻实测数据：name 相同、倍率在 description。 */
+const CREDITS_OPTION: ConfigOption = {
+  id: 'model',
+  name: 'Model',
+  category: 'model',
+  currentValue: 'hy3-x',
+  options: [
+    { value: 'hy3', name: 'Hy3', description: 'x0.00 credits' },
+    { value: 'hy3-x', name: 'Hy3', description: 'x0.05 credits' },
+  ],
+}
+
+describe('ConfigToolbar option descriptions', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
+  })
+
+  it('renders each same-named option with its own description in the dropdown', () => {
+    render({ options: [CREDITS_OPTION] })
+    act(() => {
+      findButton('Hy3')!.click()
+    })
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((b) => b.textContent?.includes('x0.00 credits'))).toBeTruthy()
+    expect(buttons.find((b) => b.textContent?.includes('x0.05 credits'))).toBeTruthy()
+  })
+
+  it('shows the current option description on the trigger', () => {
+    render({ options: [CREDITS_OPTION] })
+
+    const trigger = findButton('Hy3')
+    expect(trigger, 'trigger with current value').toBeTruthy()
+    expect(trigger!.textContent).toContain('x0.05 credits')
+  })
+
+  it('renders descriptions in the mobile Advanced panel option list', () => {
+    const config: ConfigOption = {
+      ...CONFIG_OPTION,
+      options: [
+        { value: 'true', name: 'On', description: 'x2 credits' },
+        { value: 'false', name: 'Off', description: 'x1 credit' },
+      ],
+    }
+    render({ mobile: true, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION, config] })
+
+    act(() => {
+      findButton('Advanced')!.click()
+    })
+    act(() => {
+      findButton('Brave Mode')!.click()
+    })
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((b) => b.textContent?.includes('x2 credits'))).toBeTruthy()
+    expect(buttons.find((b) => b.textContent?.includes('x1 credit'))).toBeTruthy()
+  })
+})
+
+// ── 触发器内容居中 / 右截断契约 ────────────────────────────────────────
+// 期望行为：空间充足（内容窄于按钮）时文字居中；不够时保持左对齐右截断。
+// 实现是纯 CSS 表达（内层内容块 max-content + auto 外边距 + max-width 上限），
+// jsdom 不做布局，只能把样式契约钉成断言；视觉验证见浏览器回归。
+
+describe('ConfigToolbar centered trigger content', () => {
+  it('pins the centered-content contract on the trigger', () => {
+    render({ mobile: true, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+
+    const trigger = findButton('Ask') as HTMLButtonElement
+    const content = trigger.firstElementChild as HTMLElement
+    expect(content, 'inner content block').toBeTruthy()
+    // 自然宽（有富余空间时 auto 外边距吸收并居中）
+    expect(content.style.width).toBe('max-content')
+    // 溢出上限（装不下时从左侧起排，内部 ellipsis 右截断）
+    expect(content.style.maxWidth).toBe('100%')
+    expect(content.style.minWidth).toBe('0px')
+    // React 会把 `margin: 0 auto` 展开为左右 auto
+    expect(content.style.marginLeft).toBe('auto')
+    expect(content.style.marginRight).toBe('auto')
+
+    // 桌面端（带 label 前缀）同样适用同一内容块契约
+    render({ mobile: false, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+    const desktopTrigger = findButton('Mode:') as HTMLButtonElement
+    expect((desktopTrigger.firstElementChild as HTMLElement).style.maxWidth).toBe('100%')
   })
 })

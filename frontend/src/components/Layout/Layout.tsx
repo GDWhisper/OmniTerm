@@ -307,6 +307,19 @@ function DesktopLayout({
 
 const TAB_ORDER: AppState['activeTab'][] = ['sessions', 'terminal', 'files']
 const SWIPE_SETTLE_MS = 160
+/**
+ * 触摸点落在这些面上时，横向手势归目标自身，不触发切屏。
+ *
+ * 切屏手势绑在整个内容 strip 上，而 agent 输出的 markdown 代码块、宽 GFM
+ * 表格、内联 diff 本来就要横滚看长行/全列，终端文本区则是横拖拖选。它们用
+ * `data-x-scroll` 属性声明接管（配套的 `touch-action: pan-x pan-y` 在
+ * index.css——strip 容器是 `pan-y`，不显式放开的话部分浏览器会掐掉横向原生
+ * 滚动），终端沿用 `.xterm` 类。
+ *
+ * 静态判定、不读布局：恰好没有溢出的横向滚动容器（短代码块）也同样抬手——
+ * 与 `.xterm` 豁免一致的取舍：宁可少一次切屏，也不少一次误抢。
+ */
+const PANE_SWIPE_LIFT_SELECTOR = '[data-x-scroll], .xterm'
 // Panes sit side by side in a 300%-wide strip; each pane is 1/3 of the strip
 // (= one viewport). Neighbors stay visible while dragging, so a swipe is one
 // continuous motion instead of "blank gap then content swap".
@@ -382,8 +395,9 @@ function MobileLayout() {
 
   const onSwipeStart = useCallback((e: React.TouchEvent) => {
     if (settlingRef.current) return
-    // Terminal area: horizontal drag is text selection (plan D2/D3).
-    if ((e.target as HTMLElement).closest('.xterm')) return
+    // 横向滚动面（代码块/表格/内联 diff）与终端文本区自己吃掉手势。
+    // 终端是横拖拖选（plan D2/D3），其余面见 PANE_SWIPE_LIFT_SELECTOR 注释。
+    if ((e.target as HTMLElement).closest(PANE_SWIPE_LIFT_SELECTOR)) return
     const touch = e.touches[0]
     dragRef.current = { startX: touch.clientX, startY: touch.clientY, dx: 0, axis: null }
   }, [])
