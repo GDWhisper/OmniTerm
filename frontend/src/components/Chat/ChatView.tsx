@@ -253,6 +253,14 @@ export function ChatView() {
             .getState()
             .setConfigSnapshot(sid, parseConfigOptions(data.configOptions), data.agentLive !== true)
         }
+        // 上下文用量快照注入（同门控）：usage_update 不随 session/load 重放、广播
+        // 无补发，刷新 / 换设备后靠 DB 快照恢复「最后已知」徽章（后端
+        // sessions.usage_json，见 src/acp/usage.rs）；随后的 live/replay usage
+        // 帧走 preHydrateBuffer 按序覆盖。内存已有值（同页生命周期内切换）时不
+        // 注入——此 effect 那时也已早退（hydrated 守卫）。
+        if (data?.usage && typeof data.usage === 'object') {
+          useChatStore.getState().setUsage(sid, data.usage as Record<string, unknown>)
+        }
         if (!data?.messages?.length) return
         useChatStore.getState().hydrate(sid, toChatMessages(data.messages), data.nextCursor ?? null)
       })

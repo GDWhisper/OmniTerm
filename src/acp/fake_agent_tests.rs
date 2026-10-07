@@ -34,7 +34,10 @@
 //!     且发送快速失败；disconnect 消费 self 同样杀进程；
 //! 11. **terminal 往返**（R07，`AcpTerminalManager`）：create→wait_for_exit→
 //!     output→release 全链路 + 事件广播；kill 路径退出状态无 exit_code；
-//! 12. **重复 env 键最后一条胜出**（升级计划 D4 的端到端 pin）。
+//! 12. **重复 env 键最后一条胜出**（升级计划 D4 的端到端 pin）；
+//! 13. **usage 快照落库**：`usage_update` 通知经 `on_agent_notification` 写
+//!     `sessions.usage_json`（刷新 / 换设备后 `GET /messages` hydrate 的恢复来源，
+//!     通知本身不随 session/load 重放、广播无补发）。
 //!
 //! **边界（勿过度解读）**：
 //! - 本测试**不复现**上游 crate 的 pidfd 空转（依赖未识别的 poll/wake 交错，
@@ -747,6 +750,43 @@ async fn duplicate_env_keys_last_value_wins() {
         .await
         .expect("fake agent 未落盘 FAKE_DUP（脚本未生效？）");
     assert_eq!(value, "second", "重复 env 键必须最后一条胜出（计划 D4 pin）");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 13. usage 快照落库：usage_update 通知 → sessions.usage_json ──────────
+
+#[tokio::test]
+async fn usage_update_notification_is_persisted() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("usage");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "usage", &dir), workspace).await;
+    // 生产路径：会话注册点先 attach_config_prefs（usage 落库与配置快照共用该
+    // 句柄）；未绑定时落库为 no-op（能力探针会话不写库）。
+    let db = crate::acp::test_db::test_pool().await;
+    client.attach_config_prefs(db.clone(), "s1".to_string(), "agent1".to_string()).await;
+
+    client.mark_prompt_active();
+    tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt 正常链路应返回 Ok");
+    client.mark_prompt_idle();
+
+    // 通知在 send_prompt 返回前已被内联派发（通知派发串行，同第 7 节论证），
+    // 落库分支已 await 完成——直接断言，无需轮询。
+    let snap = crate::acp::usage::load_usage_snapshot(&db, "s1")
+        .await
+        .expect("usage_update 应已落库（on_agent_notification 接线）");
+    assert_eq!(snap["used"], 1234);
+    assert_eq!(snap["size"], 200000);
+    // 会话隔离：未收到 usage 的会话不受影响。
+    assert_eq!(crate::acp::usage::load_usage_snapshot(&db, "s2").await, None);
 
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);

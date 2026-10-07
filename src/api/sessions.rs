@@ -724,6 +724,9 @@ async fn list_messages(
             // 会话里置灰只读展示配置栏（活会话的配置栏照常由 WS 配置帧驱动）。
             let config_options =
                 crate::acp::config_prefs::load_config_snapshot(&state.db, &id).await;
+            // 上下文用量同快照模式：usage_update 不随 session/load 重放、广播无补发，
+            // 前端刷新 / 换设备后靠这里恢复「最后已知」徽章；实时值由 WS 通知覆盖。
+            let usage = crate::acp::usage::load_usage_snapshot(&state.db, &id).await;
             let agent_live = state.acp_supervisor.get(&id).await.is_some();
             (
                 StatusCode::OK,
@@ -732,6 +735,7 @@ async fn list_messages(
                     "hasMore": next_cursor.is_some(),
                     "nextCursor": next_cursor,
                     "configOptions": config_options,
+                    "usage": usage,
                     "agentLive": agent_live,
                 })),
             )

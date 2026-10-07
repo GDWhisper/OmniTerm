@@ -612,6 +612,7 @@ Lifecycle:
 - **删除清理**：SQLx 默认开启 `foreign_keys`（`ON DELETE CASCADE` 生效），`delete_session` / `delete_project` / `delete_agent` 的显式 `clear_*` 为防御性兜底。
 - **§8 多实现差异**：restore 只匹配 agent **当前**仍提供的 `config_id`（缓存过滤，agent 已移除项自动跳过）；`validate_config_value` 校验值合法性——Boolean 限定 `"true"/"false"`，Select 扁平化 Ungrouped/Grouped 匹配，**options 为空放行**（不因信息缺失阻断恢复）。agent 不在 NewSession/LoadSession 响应返回 `config_options` 时（如 opencode 的 load 响应），restore 自动跳过（缓存空无法过滤、也不盲发）——该边界下配置栏本就可能为空，属已知能力边界。
 - **配置快照（已结束会话只读展示）**：`sessions.config_options_json`（migration `20260913_add_config_options_snapshot.sql`）存**最后一次已知的完整 `configOptions`**（ACP §12.5 全量状态语义，整体覆盖写）。写入收口在 `config_prefs::persist_config_snapshot`（空集合跳过——防中间态抹掉上次状态；64KB 上限防无界写入），调用点：`attach_config_prefs` 绑定后（覆盖 create 路径的 session/new 选项）、`load_session` 回填、`set_config_option` 响应、agent 主动推送的 `ConfigOptionUpdate`（两个构造器共用通知闭包 `on_agent_notification`，闭包体提取自原先两份逐行重复的副本）。读路径：`GET /messages` 响应附 `configOptions`（逐元素宽松解析、无效项跳过，镜像 crate `VecSkipError` 语义）+ `agentLive`（supervisor 中有无活 client）；前端据此在已结束会话置灰只读展示配置栏（`configReadOnly`，见 frontend.md），任一 live/replay 配置帧到达即解除。`set_config_option` 对无活 client 是静默 no-op（`ws/acp.rs` 的 `if let Some(ref c)`），故前端禁用交互是必选项而非可选优化。
+- **上下文用量快照（刷新 / 换设备恢复）**：`sessions.usage_json`（migration `20261007_add_usage_snapshot.sql`）存**最后一次已知的 `usage_update`**（`used` / `size` / `cost`，ACP 序列化形态）。写入收口在 `acp::usage::persist_usage_snapshot`（4KB 上限防无界写入；**同值跳过**——agent 可能在一个 turn 内高频重推相同用量，SQL 层 `WHERE usage_json <> ?` 拦下重复 UPDATE），调用点：`on_agent_notification` 的 `UsageUpdate` 分支（与配置快照共用 `config_prefs` 句柄；探针会话未绑定 → no-op）。读路径：`GET /messages` 响应附 `usage`；前端 hydrate 注入 chatStore（`ChatView` hydrate effect），live/replay usage 帧随后经 preHydrateBuffer 按序覆盖。动机：该通知不随 session/load 重放、广播无补发，纯前端内存状态在页面生命周期结束后即丢失（用量徽章刷新即消失，直到下一个 turn 才回来）。
 
 ### 重连续接协议（seq + turn_snapshot / turn_state）
 
@@ -781,6 +782,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `turn_count` | INTEGER NOT NULL | 已定稿 turn 数（同一次增量写入）；消费者情况同上 |
 | `last_turn_at` | TEXT? | 最近一次 turn 定稿时刻；随 `list_sessions` 下发，当前无 UI 消费者（记账留档，供排序/展示接入） |
 | `config_options_json` | TEXT? | 最后一次已知的完整 `configOptions` 快照（ACP 序列化形态），已结束会话经 `GET /messages` 下发供配置栏置灰只读展示；NULL = 从未收到过配置。随 sessions 行删除自然清理 |
+| `usage_json` | TEXT? | 最后一次已知的 `usage_update` 快照（used/size/cost），刷新 / 换设备后经 `GET /messages` 的 `usage` 字段恢复用量徽章；NULL = 从未收到过 usage 或超限跳过。随 sessions 行删除自然清理 |
 
 创建 session 时 `runtime_kind` 枚举默认 `Acp`（ACP 阶段推进所致）；
 创建路径显式传 `'tmux'` / `'pty'` 分流到对应引擎。pty 会话惰性 spawn：

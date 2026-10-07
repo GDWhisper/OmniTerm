@@ -25,6 +25,7 @@ use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
 use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnTiming};
+use crate::acp::usage;
 use crate::models::agent::Agent;
 
 /// session_update broadcast 容量。重放/实时链路已边生产边消费，此容量仅作为
@@ -457,6 +458,14 @@ async fn on_agent_notification(
         && let Some(handle) = config_prefs_slot.lock().ok().and_then(|g| g.clone())
     {
         config_prefs::persist_config_snapshot(&handle, &u.config_options).await;
+    }
+    // 上下文用量同理由推送落快照：该通知不随 session/load 重放、广播无补发，
+    // 不落库则刷新页面 / 换设备后用量徽章丢失（前端由 GET /messages hydrate
+    // 恢复最后已知值，实时值仍走本通知透传覆盖）。探针会话未绑定句柄 → no-op。
+    if let SessionUpdate::UsageUpdate(u) = &notification.update
+        && let Some(handle) = config_prefs_slot.lock().ok().and_then(|g| g.clone())
+    {
+        usage::persist_usage_snapshot(&handle.db, &handle.db_session_id, u).await;
     }
     handler::handle_session_update(tx, SeqNotification { seq, notification })
 }
