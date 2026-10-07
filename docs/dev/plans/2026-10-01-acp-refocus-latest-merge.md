@@ -139,3 +139,25 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 **保留未修（根因在 WS 保活/重连预算，不属本计划）**：ACP WS 仍无心跳、125s 仍被重置（`docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md` Phase 0 尚未收口）；`useAcpChat` 隐藏期间照常排退避重连，不同于 `useTerminal` 已有的「聚焦才重连」省资源口径——移动后台白跑握手的电池账也在该计划里。
 
 **新增接线单测**（`frontend/src/components/Chat/ChatView.catchup.test.tsx` → `ChatView resume catch-up fallbacks (2026-10-04 勘误)`，6 条）：E1 移动端长离开无标记也补拉 / 短离开不补拉 / 桌面长离开不补拉（D1 不回归）/ 兜底失败保留标记 / bfcache `pageshow` 兜底 / E2 可见态迟到标记立即补拉 + 隐藏态置标记不抢跑。
+
+---
+
+## 勘误（2026-10-07）：无 dbId 候选匹配写死「尾部一条」，补拉把用户回声显示成两条
+
+**现象**：维护者报正式版会话 codebuddy_1007-1314 聊天「气泡序列乱了，我的消息怎么有两条」。
+
+**取证**（正式库 `~/.omniterm/omniterm.db` + `omniterm.log`，session `874a754e-c2e0-4a0e-b694-2581f5ef92fd`）：
+
+1. DB 只有 2 行干净数据（1 user 05:15:27.553 + 1 assistant 05:15:28.104，duration 85.4s）⇒ 重复纯属前端 store，不是落库重复。
+2. 日志：05:15:57（turn 进行中）WS `ResetWithoutClosingHandshake` 断开，05:17:09 重连——`prompt_done`（连同 `row_id`）在断连窗口内被广播丢弃（广播无补发）⇒ 该 assistant 在 store 里**没有 dbId**。
+3. 补拉因此触发（onclose 置 `needsCatchUp`，E2/聚焦消费），`mergeLatestMessages` 收到 DB 页 `[user 行, assistant 行]`，而 store 是 `[user echo(无 dbId), assistant 半截(无 dbId)]`。
+4. 逐行走查原实现：m=user 行时 dbId 未命中 → 候选匹配**只取 `merged[len-1]`（尾部）**，尾部是 assistant，`tail.role === m.role` 不成立 → 落入 `createdAt` 顺序插入 → echo 与 DB user 行**双显示**；插入点 = 第一条 `createdAt` 更大的消息之前，echo 的 `Date.now()` 与后端 `created_at` 的时钟/网络差决定它插在 echo 前还是后 ⇒ 顺序看起来乱。assistant 行同理失配（半截消息不在尾部时），或落入原始帧/cooked 文本语义差异（2026-08-18 家族）插成第二条 assistant。
+
+**根因**（规则缺陷，不是数据问题）：D3 rule 3/4 的候选匹配假设「要对账的 echo/半截消息在 store 尾部」，而**补拉几乎总发生在 turn 结束之后**——echo 后面永远跟着 assistant（健康轮带 dbId、断连轮半截无 dbId），「尾部角色对得上」在真实状态机里几乎永不成立。规则 3/4 的单测也只 seed 了孤身 echo，没覆盖「echo + 后续 assistant」的真实形态。
+
+**修正**（不推翻 D1–D5 与 10-04 勘误；只改合并规则的候选定位，后端零改动）：
+
+- rule 3/4 合并为一条**从尾部向前的位置无关扫描**：无 dbId、非 undelivered、角色相同；user 要求 text 全等，assistant 要求 DB 行 text 以其为精确前缀；命中即**原位替换**（位置即用户已看到的顺序，DB 行只补 dbId 与最终内容）。宁添不缺方向不变：扫不到才按 createdAt 插入。
+- 守卫逐条保留：`undelivered` 仍不被顶掉（它只活内存，DB 里没有对应行）；user 不同文本仍照常插入；assistant 空文本仍不作前缀。
+
+**新增回归单测**（`frontend/src/stores/chatStore.catchup.test.ts`，3 条，修前全红）：正式版形态（echo + 无 dbId 半截 assistant，双规则同时失配）/ 健康轮后补拉（echo + 带 dbId assistant）/ 多轮（旧轮 dbId 行之后的新 echo）。既有 15 条（含 10-01 五规则、10-04 幂等）不回归。

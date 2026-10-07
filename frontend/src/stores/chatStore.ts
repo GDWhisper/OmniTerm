@@ -1213,13 +1213,13 @@ export const useChatStore = create<ChatStore>((set) => ({
       //    所有；DB 那份是防抖中的原始帧，覆盖它既丢 live cooked 结构又与后续帧打架。
       // 2. dbId 命中 → 原位替换（DB 权威）。markDone 现已把 prompt_done 的 row_id
       //    落到消息 dbId，健康连接结束的 turn 全走这条，不靠文本猜身份。
-      // 3. user 行与尾部「无 dbId 的 optimistic echo」text 全等 → 替换（不新增气泡）。
-      //    用户 echo 只在发送成功后产生，与后端行一一对应，text 全等安全。
-      // 4. assistant 行与尾部「无 dbId 的半截消息」精确前缀 → 替换（补上断连期间
-      //    跑完的那半轮）。前缀失配 → 按 createdAt 插入为新消息：宁添不缺（丢整轮
-      //    正文比多一个气泡更糟；与 prependEvictedProse 的「宁缺勿错」取向相反，
-      //    那条丢的是已渲染前缀，这条丢的是全部内容）。
-      // 5. 其余行按 createdAt 顺序插入。本路径不回写（RAW 收敛由调用方另行处理）。
+      // 3. 无 dbId 的候选匹配（user echo / assistant 半截消息）从尾部向前扫描最近
+      //    一条：user 要求 text 全等，assistant 要求 DB 行 text 以其为精确前缀。
+      //    命中即原位替换——位置即用户已看到的顺序，DB 行只补 dbId 与最终内容。
+      //    为什么不能只看尾部：补拉常发生在 turn 结束之后，echo 后面永远跟着
+      //    assistant（健康轮带 dbId、断连轮半截无 dbId），尾部角色永远对不上
+      //    （2026-10-07 正式版 codebuddy_1007-1314：用户气泡重复 + 顺序错乱）。
+      // 4. 其余行按 createdAt 顺序插入。本路径不回写（RAW 收敛由调用方另行处理）。
       const merged: ChatMessage[] = [...current.messages]
       let changed = false
       for (const m of messages) {
@@ -1230,17 +1230,21 @@ export const useChatStore = create<ChatStore>((set) => ({
           changed = true
           continue
         }
-        const tailIdx = merged.length - 1
-        const tail = merged[tailIdx]
-        if (
-          tail &&
-          !tail.dbId &&
-          !tail.undelivered &&
-          tail.role === m.role &&
-          ((m.role === 'user' && tail.text === m.text) ||
-            (m.role === 'assistant' && tail.text.length > 0 && m.text.startsWith(tail.text)))
-        ) {
-          merged[tailIdx] = m
+        let candIdx = -1
+        for (let i = merged.length - 1; i >= 0; i--) {
+          const c = merged[i]
+          if (c.role !== m.role || c.dbId || c.undelivered) continue
+          if (
+            m.role === 'user'
+              ? c.text === m.text
+              : c.text.length > 0 && m.text.startsWith(c.text)
+          ) {
+            candIdx = i
+            break
+          }
+        }
+        if (candIdx >= 0) {
+          merged[candIdx] = m
           changed = true
           continue
         }
