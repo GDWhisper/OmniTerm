@@ -126,7 +126,6 @@ function ConfigDropdown({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 4,
           padding: compact ? '0 6px' : '2px 8px',
           height: compact ? MOBILE_CONTROL_HEIGHT : undefined,
           // 填满外层容器：外层被 flex 压窄后按钮必须跟着窄，ellipsis 才有机会生效。
@@ -143,40 +142,60 @@ function ConfigDropdown({
           whiteSpace: compact ? undefined : 'nowrap',
         }}
       >
-        {!compact && <span style={{ color: 'var(--text-faint)', fontSize: 10 }}>{label}:</span>}
-        {/* 当前值 = name + description（如模型消耗倍率）：同名选项在关闭态也能区分。
-            description 收缩优先级更高（flexShrink 2），窄屏上先截断倍率保住模型名。 */}
-        <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0 }}>
-          <span
-            style={{
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {current?.name ?? option.currentValue}
-          </span>
-          {current?.description && (
+        {/* 内容块：宽度取自然宽（max-content）但不超过按钮，auto 外边距在有剩余
+            空间时吸收并居中；装不下时被 max-width 限制、从左侧起排，内部照常
+            右截断——纯 CSS 表达「空间充足居中 / 不足右截断」，无需 JS 测量。
+            minWidth: 0 让弹性子项能收缩到内容宽以下（否则 min-width:auto 拒绝收缩）。 */}
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            width: 'max-content',
+            maxWidth: '100%',
+            minWidth: 0,
+            margin: '0 auto',
+          }}
+        >
+          {!compact && (
+            <span style={{ color: 'var(--text-faint)', fontSize: 10, flexShrink: 0 }}>
+              {label}:
+            </span>
+          )}
+          {/* 当前值 = name + description（如模型消耗倍率）：同名选项在关闭态也能区分。
+              description 收缩优先级更高（flexShrink 2），窄屏上先截断倍率保住模型名。 */}
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0 }}>
             <span
               style={{
-                fontSize: 9,
-                color: 'var(--text-faint)',
-                flexShrink: 2,
+                fontWeight: 600,
+                color: 'var(--text-primary)',
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
             >
-              {current.description}
+              {current?.name ?? option.currentValue}
             </span>
-          )}
-        </span>
-        <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
-          {open ? '▾' : '▴'}
+            {current?.description && (
+              <span
+                style={{
+                  fontSize: 9,
+                  color: 'var(--text-faint)',
+                  flexShrink: 2,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {current.description}
+              </span>
+            )}
+          </span>
+          <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
+            {open ? '▾' : '▴'}
+          </span>
         </span>
       </button>
       {open && (

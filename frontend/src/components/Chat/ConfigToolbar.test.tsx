@@ -374,3 +374,31 @@ describe('ConfigToolbar option descriptions', () => {
     expect(buttons.find((b) => b.textContent?.includes('x1 credit'))).toBeTruthy()
   })
 })
+
+// ── 触发器内容居中 / 右截断契约 ────────────────────────────────────────
+// 期望行为：空间充足（内容窄于按钮）时文字居中；不够时保持左对齐右截断。
+// 实现是纯 CSS 表达（内层内容块 max-content + auto 外边距 + max-width 上限），
+// jsdom 不做布局，只能把样式契约钉成断言；视觉验证见浏览器回归。
+
+describe('ConfigToolbar centered trigger content', () => {
+  it('pins the centered-content contract on the trigger', () => {
+    render({ mobile: true, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+
+    const trigger = findButton('Ask') as HTMLButtonElement
+    const content = trigger.firstElementChild as HTMLElement
+    expect(content, 'inner content block').toBeTruthy()
+    // 自然宽（有富余空间时 auto 外边距吸收并居中）
+    expect(content.style.width).toBe('max-content')
+    // 溢出上限（装不下时从左侧起排，内部 ellipsis 右截断）
+    expect(content.style.maxWidth).toBe('100%')
+    expect(content.style.minWidth).toBe('0px')
+    // React 会把 `margin: 0 auto` 展开为左右 auto
+    expect(content.style.marginLeft).toBe('auto')
+    expect(content.style.marginRight).toBe('auto')
+
+    // 桌面端（带 label 前缀）同样适用同一内容块契约
+    render({ mobile: false, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION] })
+    const desktopTrigger = findButton('Mode:') as HTMLButtonElement
+    expect((desktopTrigger.firstElementChild as HTMLElement).style.maxWidth).toBe('100%')
+  })
+})
