@@ -312,9 +312,10 @@ describe('ConfigToolbar mobile overflow', () => {
   })
 })
 
-// ── 同名选项的 description（模型消耗倍率）必须可见 ──────────────────────
+// ── 同名选项的 description（模型消耗倍率）：只在展开的选项列表可见 ──────
 // ACP 下发的同名模型仅靠 SessionConfigSelectOption.description 区分（实测
-// "Hy3" x0.00 / "Hy3" x0.05 credits）。曾整体丢弃 → 下拉里两项完全一样。
+// "Hy3" x0.00 / "Hy3" x0.05 credits）。常驻态（配置按钮 / 高级行头）不显示：
+// 行内等分宽度下它永远最先被截断成残句，反而比不显示更糟。
 
 /** 复刻实测数据：name 相同、倍率在 description。 */
 const CREDITS_OPTION: ConfigOption = {
@@ -344,12 +345,12 @@ describe('ConfigToolbar option descriptions', () => {
     expect(buttons.find((b) => b.textContent?.includes('x0.05 credits'))).toBeTruthy()
   })
 
-  it('shows the current option description on the trigger', () => {
+  it('keeps the description off the resident trigger', () => {
     render({ options: [CREDITS_OPTION] })
 
     const trigger = findButton('Hy3')
     expect(trigger, 'trigger with current value').toBeTruthy()
-    expect(trigger!.textContent).toContain('x0.05 credits')
+    expect(trigger!.textContent).not.toContain('x0.05 credits')
   })
 
   it('renders descriptions in the mobile Advanced panel option list', () => {
@@ -372,6 +373,19 @@ describe('ConfigToolbar option descriptions', () => {
     const buttons = Array.from(container.querySelectorAll('button'))
     expect(buttons.find((b) => b.textContent?.includes('x2 credits'))).toBeTruthy()
     expect(buttons.find((b) => b.textContent?.includes('x1 credit'))).toBeTruthy()
+
+    // 行头（「Brave Mode」那一行）自身不带倍率，倍率只在展开的选项行里。
+    expect(findButton('Brave Mode')!.textContent).toContain('Off')
+    expect(findButton('Brave Mode')!.textContent).not.toContain('x1 credit')
+  })
+
+  it('keeps the description off a desktop trigger', () => {
+    render({ options: [CREDITS_OPTION] })
+
+    const trigger = findButton('Model:')
+    expect(trigger, 'desktop trigger with category prefix').toBeTruthy()
+    expect(trigger!.textContent).toContain('Hy3')
+    expect(trigger!.textContent).not.toContain('x0.05 credits')
   })
 })
 

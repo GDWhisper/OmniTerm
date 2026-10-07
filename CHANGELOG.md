@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-07 09:35) `[frontend]` ACP 底部配置栏的常驻态不再显示选项 description：0.2.28 把 agent 下发的选项说明（模型消耗倍率 "x0.05 credits"、sandbox 行为说明）同时渲染进配置按钮与移动端「高级」行头，但行内等分宽度下这段次要文本永远最先被截成残句，还提前挤掉模型名。现只在点开后的选项列表渲染（桌面下拉 + 移动端高级面板展开行），常驻态只显当前值名；代价是同名选项（实测 "Hy3" x0.00 / x0.05）收起态不再可辨，需点开确认。浏览器实测 360px：短值 "Max" 仍按居中契约显示、长值名照常省略号截断，下拉与展开行的 description 完整可见（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/stores/chatStore.ts`，契约断言见 `frontend/src/components/Chat/ConfigToolbar.test.tsx`）
+
 ## [0.2.28] - 2026-10-07
 
 ### Added

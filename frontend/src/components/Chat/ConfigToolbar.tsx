@@ -162,36 +162,19 @@ function ConfigDropdown({
               {label}:
             </span>
           )}
-          {/* 当前值 = name + description（如模型消耗倍率）：同名选项在关闭态也能区分。
-              description 收缩优先级更高（flexShrink 2），窄屏上先截断倍率保住模型名。 */}
-          <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0 }}>
-            <span
-              style={{
-                fontWeight: 600,
-                color: 'var(--text-primary)',
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {current?.name ?? option.currentValue}
-            </span>
-            {current?.description && (
-              <span
-                style={{
-                  fontSize: 9,
-                  color: 'var(--text-faint)',
-                  flexShrink: 2,
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {current.description}
-              </span>
-            )}
+          {/* 常驻态只显当前值名：description（如模型消耗倍率）只在点开后的选项列表里
+              渲染——行内等分宽度时它永远最先被截成残句，反而挤短值名。 */}
+          <span
+            style={{
+              fontWeight: 600,
+              color: 'var(--text-primary)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {current?.name ?? option.currentValue}
           </span>
           <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
             {open ? '▾' : '▴'}
@@ -498,35 +481,20 @@ function AdvancedRow({
         }}
       >
         <span style={{ fontSize: 11, color: 'var(--text-faint)', flexShrink: 0 }}>{label}</span>
-        <span style={{ display: 'flex', alignItems: 'baseline', gap: 4, flex: 1, minWidth: 0 }}>
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {current?.name ?? option.currentValue}
-          </span>
-          {current?.description && (
-            <span
-              style={{
-                fontSize: 10,
-                color: 'var(--text-faint)',
-                flexShrink: 2,
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {current.description}
-            </span>
-          )}
+        {/* 行头同上：只显当前值名，description 归展开后的选项列表 */}
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: 'var(--text-primary)',
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {current?.name ?? option.currentValue}
         </span>
         <span style={{ fontSize: 9, color: 'var(--text-faint)', flexShrink: 0 }}>
           {expanded ? '▴' : '▾'}
