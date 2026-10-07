@@ -48,6 +48,8 @@ Sidebar 底部齿轮按钮 → 弹出设置面板。**移动端双层容器修�
 
 **默认终端引擎（`DefaultEngineSection`）是跨文件设置，改它先看真源**：值定义/解析/回落全在 `frontend/src/utils/terminalEngine.ts`（无 React）+ `frontend/src/hooks/useTerminalEngine.ts`（store × 宿主可用性），消费方为 `Settings.tsx`、`Sidebar/CreateSessionModal.tsx`、`FileManager/FileManager.tsx`、`FileManager/OpenTerminalDialog.tsx`、`FileManager/OpenTerminalConfirmDialog.tsx` 五处。新增引擎选项只改 `TERMINAL_ENGINES`；**切勿在组件里再写一份 `multiplexerAvailable` 判定或硬编码 `'pty'`**（历史上「在此打开终端」写死 pty 就是脱离默认值的成因），引擎展示名统一走 `terminalEngineLabel`，视觉规格见 `docs/visual-design/ui-style-guide.md` §8。
 
+**等待动画（`ThinkingEffectSection`）同样走注册表真源**：ACP 等待指示器（消息流底部状态行）的特效定义 / 白名单 / 存档键 / 帧生成器全在 `frontend/src/utils/thinkingEffects.ts`（选项数组顺序即设置面板按钮顺序），渲染组件为 `frontend/src/components/Chat/ThinkingIndicator.tsx`；新增一个特效只改注册表 + 两个 translation.json 的 `settings.thinkingEffect.<id>` 展示名 key，store / 设置面板 / 组件零改动。总开关关闭 = 指示器整体不渲染；与「像素动效」开关互不联动，勿把两者合并。
+
 **复制为新弹窗**：见 `docs/architecture/frontend-patterns.md`：
 - 简单单 section 走「Sidebar 底部按钮弹出面板」契约
 - 多分类 / 固定尺寸的游戏风格面板走「状态栏游戏风格面板模板」（以 Settings 为 reference）

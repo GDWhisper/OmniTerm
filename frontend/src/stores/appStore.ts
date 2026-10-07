@@ -7,6 +7,12 @@ import {
   readTerminalEnginePref,
   type TerminalEngine,
 } from '../utils/terminalEngine'
+import {
+  THINKING_EFFECT_ENABLED_STORAGE_KEY,
+  THINKING_EFFECT_STORAGE_KEY,
+  readThinkingEffectId,
+  type ThinkingEffectId,
+} from '../utils/thinkingEffects'
 
 // Re-export for convenience
 export type { Project, Workspace, Session }
@@ -205,6 +211,10 @@ export interface AppState {
   tmuxCheatsheetOpen: boolean
   immersiveMode: boolean
   pixelAnimationsEnabled: boolean
+  /** ACP 等待特效（消息流底部等待指示器）总开关，默认开。 */
+  thinkingEffectEnabled: boolean
+  /** 等待特效样式（注册表见 utils/thinkingEffects.ts），默认乱码流。 */
+  thinkingEffectId: ThinkingEffectId
   soundEnabled: boolean
   soundCoinEnabled: boolean
   soundStompEnabled: boolean
@@ -280,6 +290,8 @@ export interface AppState {
   setMobileFontSize: (s: number) => void
   setImmersiveMode: (v: boolean) => void
   setPixelAnimationsEnabled: (v: boolean) => void
+  setThinkingEffectEnabled: (v: boolean) => void
+  setThinkingEffectId: (id: ThinkingEffectId) => void
   setSoundEnabled: (v: boolean) => void
   setSoundCoinEnabled: (v: boolean) => void
   setSoundStompEnabled: (v: boolean) => void
@@ -394,6 +406,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   tmuxCheatsheetOpen: false,
   immersiveMode: false,  // Disabled by default - feature not yet verified
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
+  // 默认开：只有显式存过 'false' 才关闭（与 autoCopySelect / parchmentTexture 同口径）。
+  thinkingEffectEnabled: localStorage.getItem(THINKING_EFFECT_ENABLED_STORAGE_KEY) !== 'false',
+  thinkingEffectId: readThinkingEffectId(),
   soundEnabled: localStorage.getItem('omniterm_sound_enabled') === 'true',
   soundCoinEnabled: localStorage.getItem('omniterm_sound_coin_enabled') !== 'false',
   soundStompEnabled: localStorage.getItem('omniterm_sound_stomp_enabled') !== 'false',
@@ -650,6 +665,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPixelAnimationsEnabled: (v) => {
     localStorage.setItem('omniterm_pixel_animations', String(v))
     set({ pixelAnimationsEnabled: v })
+  },
+  setThinkingEffectEnabled: (v) => {
+    localStorage.setItem(THINKING_EFFECT_ENABLED_STORAGE_KEY, String(v))
+    set({ thinkingEffectEnabled: v })
+  },
+  setThinkingEffectId: (id) => {
+    localStorage.setItem(THINKING_EFFECT_STORAGE_KEY, id)
+    set({ thinkingEffectId: id })
   },
   setSoundEnabled: (v) => {
     localStorage.setItem('omniterm_sound_enabled', String(v))

@@ -427,3 +427,94 @@ describe('Settings default terminal engine', () => {
     expect(zhMap['settings.defaultEngineHint']).toContain('beta')
   })
 })
+
+describe('Settings thinking effect (ACP waiting indicator)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  const EFFECT_IDS = ['scramble', 'spinner', 'braille'] as const
+  const EFFECT_LABELS: Record<(typeof EFFECT_IDS)[number], string[]> = {
+    scramble: ['乱码流', 'Scramble'],
+    spinner: ['经典转圈', 'Spinner'],
+    braille: ['盲文点阵', 'Braille'],
+  }
+
+  /** 按总开关标题（中英随测试环境）定位 ThinkingEffectSection 的开关行。 */
+  const thinkingSection = () =>
+    Array.from(container.querySelectorAll('section')).find((s) =>
+      (s.querySelector('h3')?.textContent || '').includes(i18n.t('settings.thinkingEffect.master')),
+    )
+
+  const masterButton = () => thinkingSection()!.querySelector<HTMLButtonElement>('button')!
+
+  const effectButton = (id: (typeof EFFECT_IDS)[number]) =>
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      EFFECT_LABELS[id].includes((b.textContent || '').trim()),
+    )
+
+  const click = (el: Element) =>
+    act(() => {
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+  beforeEach(() => {
+    localStorage.clear()
+    useAppStore.setState({ thinkingEffectEnabled: true, thinkingEffectId: 'scramble' })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    // appearance 是默认 tab，本 section 无需点击切换即可见。
+    mountSettings(root)
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    document.body.removeChild(container)
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('renders the master switch and all three effects with scramble active by default', () => {
+    expect(thinkingSection()).toBeTruthy()
+    for (const id of EFFECT_IDS) {
+      expect(effectButton(id), id).toBeTruthy()
+    }
+    expect(effectButton('scramble')!.style.borderColor).toBe('var(--accent)')
+    expect(effectButton('spinner')!.style.borderColor).not.toBe('var(--accent)')
+  })
+
+  it('persists the picked effect to the store and localStorage', () => {
+    click(effectButton('braille')!)
+    expect(useAppStore.getState().thinkingEffectId).toBe('braille')
+    expect(localStorage.getItem('omniterm_thinking_effect')).toBe('braille')
+    expect(effectButton('braille')!.style.borderColor).toBe('var(--accent)')
+  })
+
+  it('turning the master switch off persists, disables and dims the effect row', () => {
+    click(masterButton())
+    expect(useAppStore.getState().thinkingEffectEnabled).toBe(false)
+    expect(localStorage.getItem('omniterm_thinking_effect_enabled')).toBe('false')
+    // pointer-events: none 挡不住 jsdom 的 dispatchEvent——可测性与 a11y 依赖 disabled 属性。
+    for (const id of EFFECT_IDS) {
+      expect(effectButton(id)!.disabled, id).toBe(true)
+    }
+    const dim = effectButton('braille')!.closest<HTMLElement>('[style*="opacity"]')!
+    expect(dim.style.opacity).toBe('0.45')
+  })
+
+  it('defines every thinking-effect i18n key in both en and zh', () => {
+    const enMap = en as Record<string, string>
+    const zhMap = zh as Record<string, string>
+    for (const k of [
+      'settings.thinkingEffect.master',
+      'settings.thinkingEffect.masterHint',
+      'settings.thinkingEffect.style',
+      'settings.thinkingEffect.scramble',
+      'settings.thinkingEffect.spinner',
+      'settings.thinkingEffect.braille',
+    ]) {
+      expect(enMap[k], k).toBeTruthy()
+      expect(zhMap[k], k).toBeTruthy()
+    }
+  })
+})

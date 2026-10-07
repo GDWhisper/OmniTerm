@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN, PERM_TIMEOUT_NEVER_SECS, PERM_TIMEOUT_STEP_SECS, MAX_PERM_TIMEOUT_SECS, clampPermTimeoutSecs } from '../../stores/appStore'
 import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
+import { THINKING_EFFECTS } from '../../utils/thinkingEffects'
 import { permTimeoutDuration } from '../../utils/permTimeout'
 import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
@@ -531,6 +532,61 @@ function AnimationsSection() {
   return <ToggleRow labelKey="settings.pixelAnimations" hintKey="settings.pixelAnimationsHint" value={pixelAnimationsEnabled} onToggle={() => setPixelAnimationsEnabled(!pixelAnimationsEnabled)} badge />
 }
 
+/**
+ * ACP 等待特效：总开关 + 样式选择。样式注册表真源在
+ * `utils/thinkingEffects.ts`，特效本体渲染见
+ * `components/Chat/ThinkingIndicator.tsx`。关闭总开关后等待指示器整体不渲染；
+ * 样式选项行在关闭时禁用并视觉降权（与 SoundSection 的子项同一模式）。
+ * 与「像素动效」开关互不联动——等待指示器是状态指示器，不是游戏化装饰。
+ */
+function ThinkingEffectSection() {
+  const { t } = useTranslation()
+  const enabled = useAppStore((s) => s.thinkingEffectEnabled)
+  const setEnabled = useAppStore((s) => s.setThinkingEffectEnabled)
+  const effectId = useAppStore((s) => s.thinkingEffectId)
+  const setEffectId = useAppStore((s) => s.setThinkingEffectId)
+
+  return (
+    <>
+      <ToggleRow
+        labelKey="settings.thinkingEffect.master"
+        hintKey="settings.thinkingEffect.masterHint"
+        value={enabled}
+        onToggle={() => setEnabled(!enabled)}
+      />
+      <div style={{ opacity: enabled ? 1 : 0.45, transition: 'opacity 0.2s ease', pointerEvents: enabled ? 'auto' : 'none' }}>
+        <section className="space-y-2">
+          <SectionTitle>{t('settings.thinkingEffect.style')}</SectionTitle>
+          <div className="flex gap-1.5">
+            {THINKING_EFFECTS.map((effect) => {
+              const isActive = effectId === effect.id
+              return (
+                <button
+                  key={effect.id}
+                  type="button"
+                  disabled={!enabled}
+                  onClick={() => setEffectId(effect.id)}
+                  className="flex-1 flex items-center justify-center"
+                  style={{
+                    ...(isActive ? btnActive : btnBase),
+                    fontSize: 12,
+                    padding: '5px 8px',
+                    cursor: enabled ? undefined : 'not-allowed',
+                  }}
+                  onMouseEnter={enabled ? btnHover : undefined}
+                  onMouseLeave={enabled ? (e) => btnLeave(e, isActive) : undefined}
+                >
+                  {t(effect.labelKey)}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      </div>
+    </>
+  )
+}
+
 function SoundSection() {
   const { t } = useTranslation()
   const soundEnabled = useAppStore((s) => s.soundEnabled)
@@ -869,6 +925,7 @@ const CATEGORIES: Category[] = [
       [ThemeSection],
       [UiZoomSection, FontSizeSection, ChatFontSizeSection],
       [PixelFontSection, CrtSection, AnimationsSection, ParchmentSection],
+      [ThinkingEffectSection],
       [AboutSection],
     ],
   },

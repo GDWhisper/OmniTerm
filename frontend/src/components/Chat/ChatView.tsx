@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useChatStore, selectChatState, storedRawRowToSyncPayload, type ChatMessage } from '../../stores/chatStore'
@@ -13,6 +13,7 @@ import { PermissionBanner } from './PermissionBanner'
 import { ConfigToolbar } from './ConfigToolbar'
 import { UsageIndicator } from './UsageIndicator'
 import { TodoBoard } from './TodoBoard'
+import { ThinkingIndicator } from './ThinkingIndicator'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { IconArrowDown } from '../FileManager/icons'
 import { READER_FONT } from '../../utils/fonts'
@@ -1102,80 +1103,3 @@ export function ChatView() {
     </div>
   )
 }
-
-/**
- * Terminal-style status line shown at the bottom of the message stream for the
- * whole duration the agent is busy (`sending` === true, i.e. from prompt send
- * until `prompt_done`). Mimics a terminal's live last line so long-running
- * agent tasks (tool calls, waiting, thinking) never leave the view silent.
- * Renders a continuously scrambling hex stream ("decoding" noise, matching the
- * FileManager path-bar look) that never locks into readable text.
- *
- * 该动画属于状态指示器本身，与「像素动效」（马里奥弹跳/金币等游戏化特效）
- * 无关——不应被那个默认关闭的开关抑制，故恒为动画。
- */
-const SCRAMBLE_HEX = '0123456789abcdef'
-const SCRAMBLE_LEN = 16
-
-const ThinkingIndicator = memo(function ThinkingIndicator() {
-  const textRef = useRef<HTMLSpanElement | null>(null)
-  const startTimeRef = useRef(0)
-
-  useEffect(() => {
-    startTimeRef.current = Date.now()
-    // 自适应帧率上限：rAF 回调频率本身等于浏览器实际刷新率，无需主动检测。
-    // 高刷屏（>60Hz）压到 60fps 以削减无谓的 layout 抖动；低刷屏跟着屏走。
-    const MAX_FPS = 90
-    let raf = 0
-    let lastDraw = 0
-    let minInterval = 1000 / MAX_FPS
-    let lastTs = 0
-    const tick = (ts: number) => {
-      // 首帧 + 顺带用两次 rAF 间隔推算刷新率（零额外测量成本）。
-      if (lastTs > 0) {
-        const interval = ts - lastTs
-        if (interval > 0 && interval < minInterval) {
-          minInterval = Math.max(1000 / MAX_FPS, 1000 / Math.round(1000 / interval))
-        }
-      }
-      lastTs = ts
-      // 直接写 DOM，不进 React state：避免 thinking 阶段高频 appendThought
-      // 重渲染挤占本动画的帧（setInterval 宏任务会被密集渲染推迟）。rAF 与
-      // 渲染同调度，且本函数零 React 开销，主线程再忙也只占一帧极小成本。
-      if (textRef.current && ts - lastDraw >= minInterval) {
-        lastDraw = ts
-        const elapsed = (Date.now() - startTimeRef.current) / 1000
-        const len = elapsed < 3 ? SCRAMBLE_LEN
-          : elapsed < 10 ? 24
-          : elapsed < 30 ? 36
-          : 54
-        let s = ''
-        for (let i = 0; i < len; i++) s += SCRAMBLE_HEX[(Math.random() * 16) | 0]
-        textRef.current.textContent = s
-      }
-      raf = window.requestAnimationFrame(tick)
-    }
-    raf = window.requestAnimationFrame(tick)
-    return () => window.cancelAnimationFrame(raf)
-  }, [])
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '2px 12px 6px',
-        fontFamily: 'var(--pixel-font-static)',
-        fontSize: '0.923em',
-        lineHeight: '20px',
-        color: 'var(--text-faint)',
-        letterSpacing: 'var(--pixel-tracking-sm)',
-        userSelect: 'none',
-      }}
-    >
-      <span style={{ color: 'var(--accent)', fontWeight: 700 }}>▌</span>
-      <span ref={textRef} style={{ fontFamily: READER_FONT, letterSpacing: 0 }} />
-    </div>
-  )
-})

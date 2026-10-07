@@ -549,14 +549,15 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 
 ## 8. Settings Toggles
 
-7 toggles total, each persisted to localStorage:
+Effect toggles in the Settings panel, each persisted to localStorage（下表只列效果类开关，非全量）：
 
 | Toggle | localStorage key | Default | Controls |
 |---|---|---|---|
 | Parchment Texture | `omniterm_parchment_texture` | `true` | Background dot-matrix texture |
-| Pixel Animations | `pixelAnimationsEnabled` | `false` | Mario-style bump/stomp/coin/starman animations (Phase 2) |
-| Sound | `soundEnabled` | `false` | 8-bit sound effects (Phase 2) |
-| CRT Scanlines | `crtScanlines` | `false` | CRT scanline overlay (Phase 2) |
+| Pixel Animations | `omniterm_pixel_animations` | `false` | Mario-style bump/stomp/coin/starman animations (Phase 2) |
+| Sound | `omniterm_sound_enabled` | `false` | 8-bit sound effects (Phase 2) |
+| CRT Scanlines | `omniterm_crt_scanlines` | `false` | CRT scanline overlay (Phase 2) |
+| Waiting Animation | `omniterm_thinking_effect_enabled` / `omniterm_thinking_effect` | `true` / `scramble` | ACP 等待 agent 输出时消息流底部的状态行动画（乱码流 / 经典转圈 / 盲文点阵），关闭后不渲染；与像素动效互不联动，注册表见 `frontend/src/utils/thinkingEffects.ts` |
 | Default Terminal Engine | `omniterm_default_terminal_engine` | `tmux` | 新建终端会话与「在此打开终端」的引擎（pty 仍在 beta，故 tmux 兜底） |
 
 Pixel UI and pixel fonts are always active (no toggle).
