@@ -230,7 +230,15 @@ jobs:
             if npm view "$name@$VERSION" version >/dev/null 2>&1; then
               echo "⏭️  $name@$VERSION 已发布，跳过"
             else
-              npm publish "./$dir" --access public
+              if ! npm publish "./$dir" --access public 2>publish_err.txt; then
+                if grep -q "previously staged" publish_err.txt; then
+                  echo "🔧 检测到 staged 冲突，移除 staged 版本后重试: $name@$VERSION"
+                  npm unpublish "$name@$VERSION" --force 2>/dev/null || true
+                  npm publish "./$dir" --access public
+                else
+                  echo "❌ $name@$VERSION 发布失败:"; cat publish_err.txt; exit 1
+                fi
+              fi
             fi
           done
 
