@@ -181,6 +181,9 @@ export type SessionUpdateAction =
 export interface ConfigSelectOption {
   value: string
   name: string
+  /** Agent 提供的选项说明（ACP `SessionConfigSelectOption.description`）。
+   *  同名选项的唯一区分信息——如模型消耗倍率 "x0.05 credits"——UI 下拉必须渲染。 */
+  description?: string
 }
 
 export interface ConfigOption {

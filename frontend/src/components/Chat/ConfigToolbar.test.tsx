@@ -311,3 +311,66 @@ describe('ConfigToolbar mobile overflow', () => {
     expect((container.firstElementChild as HTMLElement).style.flexWrap).toBe('wrap')
   })
 })
+
+// ── 同名选项的 description（模型消耗倍率）必须可见 ──────────────────────
+// ACP 下发的同名模型仅靠 SessionConfigSelectOption.description 区分（实测
+// "Hy3" x0.00 / "Hy3" x0.05 credits）。曾整体丢弃 → 下拉里两项完全一样。
+
+/** 复刻实测数据：name 相同、倍率在 description。 */
+const CREDITS_OPTION: ConfigOption = {
+  id: 'model',
+  name: 'Model',
+  category: 'model',
+  currentValue: 'hy3-x',
+  options: [
+    { value: 'hy3', name: 'Hy3', description: 'x0.00 credits' },
+    { value: 'hy3-x', name: 'Hy3', description: 'x0.05 credits' },
+  ],
+}
+
+describe('ConfigToolbar option descriptions', () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('en')
+  })
+
+  it('renders each same-named option with its own description in the dropdown', () => {
+    render({ options: [CREDITS_OPTION] })
+    act(() => {
+      findButton('Hy3')!.click()
+    })
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((b) => b.textContent?.includes('x0.00 credits'))).toBeTruthy()
+    expect(buttons.find((b) => b.textContent?.includes('x0.05 credits'))).toBeTruthy()
+  })
+
+  it('shows the current option description on the trigger', () => {
+    render({ options: [CREDITS_OPTION] })
+
+    const trigger = findButton('Hy3')
+    expect(trigger, 'trigger with current value').toBeTruthy()
+    expect(trigger!.textContent).toContain('x0.05 credits')
+  })
+
+  it('renders descriptions in the mobile Advanced panel option list', () => {
+    const config: ConfigOption = {
+      ...CONFIG_OPTION,
+      options: [
+        { value: 'true', name: 'On', description: 'x2 credits' },
+        { value: 'false', name: 'Off', description: 'x1 credit' },
+      ],
+    }
+    render({ mobile: true, options: [MODE_OPTION, MODEL_OPTION, THOUGHT_OPTION, config] })
+
+    act(() => {
+      findButton('Advanced')!.click()
+    })
+    act(() => {
+      findButton('Brave Mode')!.click()
+    })
+
+    const buttons = Array.from(container.querySelectorAll('button'))
+    expect(buttons.find((b) => b.textContent?.includes('x2 credits'))).toBeTruthy()
+    expect(buttons.find((b) => b.textContent?.includes('x1 credit'))).toBeTruthy()
+  })
+})

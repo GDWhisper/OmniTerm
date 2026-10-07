@@ -135,7 +135,15 @@ export function parseConfigOptions(raw: unknown): ConfigOption[] {
         opts = Array.isArray(rawOpts)
           ? rawOpts
               .filter((op): op is Record<string, unknown> => !!op && typeof op === 'object')
-              .map((op) => ({ value: String(op['value'] ?? ''), name: String(op['name'] ?? op['value'] ?? '') }))
+              .map((op) => {
+                const description = String(op['description'] ?? '')
+                return {
+                  value: String(op['value'] ?? ''),
+                  name: String(op['name'] ?? op['value'] ?? ''),
+                  // description 是可选字段：缺失/空串不落键，与 ACP 的 skip_serializing_none 语义一致
+                  ...(description ? { description } : {}),
+                }
+              })
           : []
       }
       const category = typeof o['category'] === 'string' ? o['category'] : 'other'
