@@ -259,6 +259,14 @@ export interface AppState {
    * picks a session (clicking the sidebar, just-created session, etc.)
    * — sites that need side-effects (e.g. attention notifications) can
    * call those *after* this returns.
+   *
+   * Exception: an ARCHIVED session (present in `archivedSessions`) is a
+   * read-only history view — only `activeSessionId` is set in memory. The
+   * persisted slots (`omniterm_active_session` localStorage key +
+   * `workspaceSessionMemory`) stay untouched so browsing archived history
+   * can't displace the session the user actually works in; those slots are
+   * claimed only when the session is back in the default list (after
+   * manual unarchive) and activated from there.
    */
   activateSession: (sessionId: string) => void
   setConnected: (v: boolean) => void
@@ -552,7 +560,19 @@ export const useAppStore = create<AppState>((set, get) => ({
    * (legacy contract).
    */
   activateSession: (sessionId) => {
-    const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory } = get()
+    const { sessions, worktrees, activeWorkspaceId, workspaceSessionMemory, archivedSessions } = get()
+
+    // 归档会话 = 只读查看历史（Sidebar「已归档」区块）。查看不得抢占持久化位：
+    // 不写 omniterm_active_session（刷新后恢复位）、不写 workspaceSessionMemory
+    // （worktree 的「回到上次会话」位）。否则用户一个个查看归档历史时，每点一行
+    // 就把当前 worktree 的会话记忆改写/擦除（prune effect 发现记忆指向已归档行会
+    // 直接清除），刷新后真正在用的会话也恢复不出来。只有会话经「取消归档」回到
+    // 默认列表后被正常激活，才写这些位。
+    if (archivedSessions.some((s) => s.id === sessionId)) {
+      set({ activeExternalSession: null, activeSessionId: sessionId })
+      return
+    }
+
     localStorage.setItem('omniterm_active_session', sessionId)
 
     // Resolve the owning project + worktree from loaded session data. The

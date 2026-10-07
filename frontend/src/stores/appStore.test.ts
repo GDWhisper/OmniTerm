@@ -39,6 +39,7 @@ describe('appStore.activateSession', () => {
       activeExternalSession: null,
       activeWorkspaceId: null,
       workspaceSessionMemory: {},
+      archivedSessions: [],
     })
   })
   afterEach(() => {
@@ -97,6 +98,38 @@ describe('appStore.activateSession', () => {
     const mem = useAppStore.getState().workspaceSessionMemory
     expect(mem['ws-1']).toBe('sess-old')
     expect(mem['ws-2']).toBe('sess-2')
+  })
+
+  it('viewing an archived session does not claim the persisted slots', () => {
+    // 归档会话 = 只读查看历史（Sidebar「已归档」区块）：只切 activeSessionId，
+    // omniterm_active_session（刷新恢复位）与 workspaceSessionMemory
+    // （worktree「回到上次会话」位）必须原样保留。回归：曾有点击即全写，
+    // 用户一个个查看归档历史时把在用的会话记忆改写，随后被 prune effect
+    // 清除，刷新后真正在用的会话也恢复不出来。
+    useAppStore.setState({
+      activeWorkspaceId: 'ws-1',
+      activeSessionId: 'sess-working',
+      workspaceSessionMemory: { 'ws-1': 'sess-working' },
+      archivedSessions: [{ id: 'arch-1' }] as never,
+    })
+    localStorage.setItem('omniterm_active_session', 'sess-working')
+    useAppStore.getState().activateSession('arch-1')
+    const s = useAppStore.getState()
+    expect(s.activeSessionId).toBe('arch-1')
+    expect(s.activeExternalSession).toBeNull()
+    expect(localStorage.getItem('omniterm_active_session')).toBe('sess-working')
+    expect(s.workspaceSessionMemory['ws-1']).toBe('sess-working')
+  })
+
+  it('activating a session back from archive claims the slots again', () => {
+    // 取消归档回到默认列表后，激活即恢复完整写位语义（刷新恢复 + worktree 记忆）。
+    useAppStore.setState({
+      activeWorkspaceId: 'ws-1',
+      archivedSessions: [],
+    })
+    useAppStore.getState().activateSession('sess-1')
+    expect(localStorage.getItem('omniterm_active_session')).toBe('sess-1')
+    expect(useAppStore.getState().workspaceSessionMemory['ws-1']).toBe('sess-1')
   })
 
   it('activates the owning project + worktree of a loaded session', () => {
