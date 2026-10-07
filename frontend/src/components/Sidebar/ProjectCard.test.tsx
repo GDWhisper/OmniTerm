@@ -297,11 +297,18 @@ describe('ProjectCard ACP 会话折叠', () => {
     expect(container.textContent).toContain('term-2')
   })
 
-  it('激活的会话即使排在阈值外也始终露出', () => {
+  it('激活态不抢占可见位：阈值外会话被点击查看也不换掉更新的行', () => {
+    // 用户需求：在一个个查看旧会话历史时，点击被折叠的旧会话不得把它提升进
+    // 可见区——否则每点一行，最新那条就被挤出折叠区，可见集随点击不断重排，
+    // 浏览顺序被打乱。可见位只由状态豁免（running/waiting/attention/done 未看）
+    // 决定；选中态是纯前端概念，不参与。想看当前行就展开列表。
     renderCard(collapsedProps({ activeSessionId: 'a7' }))
 
-    expect(container.querySelectorAll('.sidebar-session-item').length).toBe(5)
-    expect(container.textContent).toContain('acp-7')
+    // 仍是 created_at DESC 的最新 5 条，acp-4 的位没被 acp-7 抢走
+    expect(
+      [...container.querySelectorAll('.sidebar-session-list .session-name')].map((el) => el.textContent),
+    ).toEqual(['acp-0', 'acp-1', 'acp-2', 'acp-3', 'acp-4'])
+    expect(container.textContent).not.toContain('acp-7')
   })
 
   it('等待用户决策（waiting）的会话始终露出', () => {
