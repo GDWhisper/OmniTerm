@@ -49,6 +49,8 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+## [0.2.28] - 2026-10-07
+
 ### Added
 
 - (2026-10-06 16:50) `[frontend]` `[backend]` `[api]` 文件管理器支持本地 HTML 渲染预览：`.html`/`.htm` 文件在抽屉预览态直接用沙箱 iframe 渲染页面（此前只能看源码；`/files/download` 恒返回 `Content-Disposition: attachment`，浏览器只会下载不会内联渲染，端口转发代理也不适用——静态文件没有在监听的服务）。实测缺口场景：agent 在远程开发机生成自包含对比页（`~/coding/research/pixel-border-compare.html`），用户无法在本地浏览器打开。实现要点：① iframe srcdoc + `sandbox="allow-scripts"` 且**不给** `allow-same-origin` ⇒ 页面脚本跑在 opaque origin，读不到应用 localStorage（token）/cookie/父页 DOM（不做「新标签页打开」入口，顶层导航无此保护）；② 相对引用（`./style.css`、`img/a.png`、`main.js`）经 DOMParser 改写为 `/api/v1/files/download` 的 **inline 模式** URL（外链/协议相对/锚点/绝对路径/`..` 不碰，`<base>` 剥掉）；③ 新增 `inline=true` 查询参数：按扩展名返回真实 MIME + `nosniff`、不带 attachment——附件模式下浏览器按 MIME 拒载样式表与脚本（图片因嗅探幸存，故图片/markdown 预览路径不变），`text/html` 响应另附 `Content-Security-Policy: sandbox`（该端点可被直接导航，沙箱头保证与 iframe 预览同权而非提权成应用同源文档）；④ 超过 2 MiB 退源码视图并提示。与 markdown/图片预览共用 mode 语义与 SSE 去抖刷新（`src/api/files.rs`、`frontend/src/components/FileManager/HtmlPreview.tsx`、`filePreviewShared.ts`、`FileDrawer.tsx`，回归 `src/api/files.rs` inline 用例 + `FileDrawer.htmlPreview.test.tsx`，手动用例 user-testing.md §5.10）
