@@ -49,6 +49,8 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-10-09
+
 ### Added
 
 - (2026-10-07 11:20) `[backend][frontend]` 删除 ACP 会话时可选地抹掉 agent 侧记录：`DELETE /api/v1/sessions/{id}?delete_agent_side=true` 在 agent 子进程仍活着时先发 ACP `session/delete` 再 shutdown（顺序不可换——进程一没就再也发不出），响应体 `agent_side` 三态 `deleted`/`skipped`/`not_requested` 如实回报；能力判据取 initialize 的 `agentCapabilities.sessionCapabilities.delete`（marker 空结构，存在即支持），经 capabilities 帧 `agent_delete` 下发前端，未声明的 agent 一律跳过而不盲发（实测 codebuddy 连 `session/list` 都回 `-32601`，opencode 2.0.24 / pi-acp 0.0.34 声明且实测可用）。删除确认弹窗（单条 + 批量）新增红字勾选框「同时永久删除 agent 侧会话记录」，**只有「能力已知支持」且「agent 进程在驻留」时可勾**（未知 / 不支持 / 已释放一律禁用并给出原因——宁可漏删，不可谎报已删）；用户选择记在 `localStorage.omniterm_delete_agent_side` 并在删除成功后写入，首次默认不勾选（不可逆的附加删除不替用户决定）。项目级联删除与归档均不代发（前者可能误删、后者要保留历史供只读查看）。多实现差异与「`session/delete` 成功 ≠ 文件已删」见 `docs/reference/acp-protocol-reference.md` §17.3（`src/acp/client.rs`、`src/api/sessions.rs`、`src/ws/acp.rs`、`frontend/src/components/Sidebar/DeleteConfirmDialog.tsx`、`BatchSessionDialog.tsx`、`agentSideDelete.ts`、`frontend/src/components/Modal/ConfirmDialog.tsx`）
