@@ -529,7 +529,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
  * 流式期间的实时工作计时、工具耗时与 tps（气泡底部元信息槽位，定稿后被结算值取代）。
  *
  * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
- * 一个数字。与 `ChatView` 的 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
+ * 一个数字。与 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
  * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
  *
  * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。

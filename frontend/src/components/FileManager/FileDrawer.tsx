@@ -644,7 +644,7 @@ export function FileDrawer({
         message={t('drawer.outsideSaveMessage', { path: filePath })}
         confirmText={t('drawer.outsideSaveConfirm')}
         // workspaceRoot 为 undefined（project 模式）时勾选框无意义（markOutsideSkipped 为 no-op），只保留确认
-        checkboxLabel={workspaceRoot ? t('drawer.outsideSkipCheckbox') : undefined}
+        checkbox={workspaceRoot ? { label: t('drawer.outsideSkipCheckbox') } : undefined}
         onConfirmWithChecked={handleOutsideSaveConfirm}
       />
     </DrawerShell>

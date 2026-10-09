@@ -455,7 +455,7 @@ describe('Sidebar 批量操作', () => {
     vi.mocked(api.listArchivedSessions).mockResolvedValue([])
     vi.mocked(api.archiveSession).mockResolvedValue({ ok: true })
     vi.mocked(api.releaseSession).mockResolvedValue({ ok: true })
-    vi.mocked(api.deleteSession).mockResolvedValue(undefined)
+    vi.mocked(api.deleteSession).mockResolvedValue({ ok: true, agent_side: 'not_requested' })
 
     // expandAllSessions=true：含会话的项目自动展开，会话行无需手动点击
     useAppStore.setState({

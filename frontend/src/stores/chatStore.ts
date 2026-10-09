@@ -181,8 +181,9 @@ export type SessionUpdateAction =
 export interface ConfigSelectOption {
   value: string
   name: string
-  /** Agent 提供的选项说明（ACP `SessionConfigSelectOption.description`）。
-   *  同名选项的唯一区分信息——如模型消耗倍率 "x0.05 credits"——UI 下拉必须渲染。 */
+  /** Agent 提供的选项说明（ACP `SessionConfigSelectOption.description`），
+   *  同名选项的唯一区分信息——如模型消耗倍率 "x0.05 credits"。
+   *  只在点开后的选项列表渲染；常驻的配置按钮 / 「高级」行头不显示。 */
   description?: string
 }
 
@@ -318,6 +319,17 @@ interface ChatSessionState {
    * 尚未收到声明，UI 按不支持处理（保守降级）。
    */
   embeddedContextSupported?: boolean
+  /**
+   * agent 是否声明 `sessionCapabilities.delete`（后端 capabilities 帧下发）：
+   * 删除该会话时能否顺带抹掉 agent 侧记录。
+   *
+   * 三态语义（缺一不可，undefined 与 false 必须区分）：
+   * - `true`：已知支持 → 删除确认弹窗可勾选；
+   * - `false`：已知**不支持**（连接过、initialize 明确未声明）→ 勾选框禁用；
+   * - `undefined`：未知（本浏览器从未连过该会话 / 后端重启后未恢复）→ 同样禁用，
+   *   文案按「未确认支持」表述。宁可漏删、不可谎报已删（计划 D3）。
+   */
+  agentDeleteSupported?: boolean
   /** 当前会话所用 agent 的 display_name，用于聊天气泡显示 agent 身份（后端 capabilities 帧下发）。 */
   agentName?: string
   /**
@@ -424,6 +436,8 @@ interface ChatActions {
   setImageSupported: (sessionId: string, supported: boolean) => void
   /** 记录 agent 是否支持 embeddedContext（文件附件门控，后端 capabilities 帧）。 */
   setEmbeddedContextSupported: (sessionId: string, supported: boolean) => void
+  /** 记录 agent 是否声明 `sessionCapabilities.delete`（删除确认勾选框的能力门控）。 */
+  setAgentDeleteSupported: (sessionId: string, supported: boolean) => void
   /** 设置当前会话 agent 的显示名（后端 capabilities 帧下发）。 */
   setAgentName: (sessionId: string, name: string) => void
   patchConfigOptionValue: (sessionId: string, configId: string, value: string) => void
@@ -1101,8 +1115,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (messages.length === 0) return state
       const prev = state.states[sessionId]
       // 从空白状态重建（等价旧「reset + 重放」语义），但保留连接期已到达的
-      // capabilities 信息（imageSupported/embeddedContextSupported/agentName
-      // 不随重放下发）。
+      // capabilities 信息（imageSupported/embeddedContextSupported/
+      // agentDeleteSupported/agentName 不随重放下发）。
       const cleared = { ...state.states }
       delete cleared[sessionId]
       removeQueuedFromStorage(sessionId)
@@ -1110,6 +1124,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         messages,
         imageSupported: prev?.imageSupported,
         embeddedContextSupported: prev?.embeddedContextSupported,
+        agentDeleteSupported: prev?.agentDeleteSupported,
         agentName: prev?.agentName,
         hydrated: prev?.hydrated,
         // usage 与上面几项同类：agent 按 turn 推送、不随 session/load 重放。
@@ -1375,6 +1390,9 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   setEmbeddedContextSupported: (sessionId, supported) =>
     set((state) => patch(state, sessionId, { embeddedContextSupported: supported })),
+
+  setAgentDeleteSupported: (sessionId, supported) =>
+    set((state) => patch(state, sessionId, { agentDeleteSupported: supported })),
 
   setAgentName: (sessionId, name) =>
     set((state) => patch(state, sessionId, { agentName: name })),

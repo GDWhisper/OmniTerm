@@ -49,6 +49,21 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+## [0.2.29] - 2026-10-09
+
+### Added
+
+- (2026-10-07 11:20) `[backend][frontend]` 删除 ACP 会话时可选地抹掉 agent 侧记录：`DELETE /api/v1/sessions/{id}?delete_agent_side=true` 在 agent 子进程仍活着时先发 ACP `session/delete` 再 shutdown（顺序不可换——进程一没就再也发不出），响应体 `agent_side` 三态 `deleted`/`skipped`/`not_requested` 如实回报；能力判据取 initialize 的 `agentCapabilities.sessionCapabilities.delete`（marker 空结构，存在即支持），经 capabilities 帧 `agent_delete` 下发前端，未声明的 agent 一律跳过而不盲发（实测 codebuddy 连 `session/list` 都回 `-32601`，opencode 2.0.24 / pi-acp 0.0.34 声明且实测可用）。删除确认弹窗（单条 + 批量）新增红字勾选框「同时永久删除 agent 侧会话记录」，**只有「能力已知支持」且「agent 进程在驻留」时可勾**（未知 / 不支持 / 已释放一律禁用并给出原因——宁可漏删，不可谎报已删）；用户选择记在 `localStorage.omniterm_delete_agent_side` 并在删除成功后写入，首次默认不勾选（不可逆的附加删除不替用户决定）。项目级联删除与归档均不代发（前者可能误删、后者要保留历史供只读查看）。多实现差异与「`session/delete` 成功 ≠ 文件已删」见 `docs/reference/acp-protocol-reference.md` §17.3（`src/acp/client.rs`、`src/api/sessions.rs`、`src/ws/acp.rs`、`frontend/src/components/Sidebar/DeleteConfirmDialog.tsx`、`BatchSessionDialog.tsx`、`agentSideDelete.ts`、`frontend/src/components/Modal/ConfirmDialog.tsx`）
+- (2026-10-07 16:30) `[frontend]` ACP 等待 agent 输出的状态行动画（消息流底部，原为单一的乱码 hex 流）支持开关与多形态：设置 → 外观新增「等待动画」总开关 + 样式三选一——乱码流（默认，原样保留）/ 经典转圈 `◐◓◑◒` / 盲文点阵 `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`；关闭后指示器整体不渲染，与「像素动效」开关互不联动（状态指示器不是游戏化装饰）。特效收进类型化注册表（选项/白名单/存档键/帧生成器单一真源，新增特效 = 注册表加一条 + 两个 locale key），渲染组件自主从 `ChatView` 迁至 `frontend/src/components/Chat/ThinkingIndicator.tsx`（`frontend/src/utils/thinkingEffects.ts`、`frontend/src/components/Settings/Settings.tsx`、`frontend/src/stores/appStore.ts`，测试：`thinkingEffects.test.ts`、`ThinkingIndicator.test.tsx` 与 Settings/appStore 契约断言）
+
+### Changed
+
+- (2026-10-07 09:35) `[frontend]` ACP 底部配置栏的常驻态不再显示选项 description：0.2.28 把 agent 下发的选项说明（模型消耗倍率 "x0.05 credits"、sandbox 行为说明）同时渲染进配置按钮与移动端「高级」行头，但行内等分宽度下这段次要文本永远最先被截成残句，还提前挤掉模型名。现只在点开后的选项列表渲染（桌面下拉 + 移动端高级面板展开行），常驻态只显当前值名；代价是同名选项（实测 "Hy3" x0.00 / x0.05）收起态不再可辨，需点开确认。浏览器实测 360px：短值 "Max" 仍按居中契约显示、长值名照常省略号截断，下拉与展开行的 description 完整可见（`frontend/src/components/Chat/ConfigToolbar.tsx`、`frontend/src/stores/chatStore.ts`，契约断言见 `frontend/src/components/Chat/ConfigToolbar.test.tsx`）
+
+### Fixed
+
+- (2026-10-09 07:25) `[backend]` `[frontend]` `[api]` 修复 ACP「空气泡」型静默失败在聊天流里毫无痕迹的问题（正式库会话 `Pi ACP_1009-1438`：用户发一句 prompt，150ms 后定稿一条 `text=''` / `duration_ms=400` 的 assistant 行，`blocks` 只剩 `session_info_update` + `usage_update`，无任何提示）。根因三段，**病因不在宿主也不在链路**：① 模型提供方拒供 —— stepfun 对免费档返回 403 `real_name_required`，请求根本没进模型（Pi 会话文件末条 assistant 消息 `content: []`、`usage` 全 0、`stopReason:"error"` + `errorMessage`）；② pi-acp 0.0.34 把它折成**合法的成功终态**：`agent_settled` → `settleTurn()` 的 `cancelRequested ? "cancelled" : "end_turn"`（只看有无取消），`prompt()` 出口同样 `result === "error" ? … : "end_turn"`，`errorMessage` 既不进 JSON-RPC error 也不进消息流；③ 宿主的 stopReason 白名单（0.2.26 的失败可见化）看到 `end_turn` 即判正常、不留痕——只看协议值在这条路径上是结构性盲区。修法按当时预留的翻盘条件**加一条独立观测量**：本轮是否折叠过**可见产出**帧（正文/思考/工具调用及其更新/计划；按 `SessionUpdate` 变体判定，未知变体按「有产出」处理以免把正常 turn 判成失败，`session_info_update`/`usage_update`/用户回声不算；fold 时置位、`begin_turn` 清零、定稿后仍可读，**不看**有界驱逐的帧窗）。白名单值 + 零产出 → 新类目 `Empty`：写一条 `system.turnFailed.empty` 的 `role='system'` 行并广播 `system_message`（zh/en locale 各一条），`prompt_done.abnormal=true` 让通知与回合状态走错误语义；`cancelled` / `refusal` 不改判（已有更准确的专属文案，改判反而丢信息）。残留两条：只留痕、不抑制空气泡本身（抑制要动 `finalize_turn` 的行语义与 hydrate/sync 匹配，收益仅少一行空白）；提供方给出的具体原因仍需查 agent 自己的会话文件（取证入口已补进协议参考 §6.8）。上游缺陷待报：provider error 应映射为非正常终态或至少把 `errorMessage` 作为 chunk 下发（`src/acp/turn_accumulator.rs`、`src/acp/client.rs`、`src/ws/acp.rs`，回归 `acp::turn_accumulator::tests::{visible_output_classification_follows_the_variant_table, bookkeeping_only_turn_reports_no_visible_output, visible_output_latches_once_seen_and_resets_on_begin_turn, visible_output_survives_frame_eviction}` + `ws::acp::tests::{classify_turn_end_narrows_only_the_normal_class, empty_turn_notice_has_its_own_copy_and_wire_reason}` + 真实链路 `ws::acp::notice_tests::{dispatch_prompt_silent_end_turn_notices_empty_and_marks_abnormal, dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal, whitelist_stop_reason_without_output_gets_one_empty_notice}`（fake agent 新增 `@PUSH@` 对照组复刻两种帧序），口径记入 `docs/reference/acp-protocol-reference.md` §6.8 与 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` 勘误）
+
 ## [0.2.28] - 2026-10-07
 
 ### Added

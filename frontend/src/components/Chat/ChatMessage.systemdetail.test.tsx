@@ -190,6 +190,28 @@ describe('SystemBlockView permission-timeout notice', () => {
     }
   })
 
+  it('renders the empty-turn notice for system.turnFailed.empty (zh + en)', async () => {
+    // 2026-10-09 新增类目：agent 把对端失败折成合法 end_turn 且零产出时，
+    // 后端下发该 key —— 前端必须有对应文案，否则用户看到的是原样 key 字符串。
+    const expectations: Record<string, string> = {
+      zh: '这一轮没有任何输出（stopReason=end_turn）：agent 未产出正文或工具调用，可能是对端静默失败，重试或检查 agent 侧配置。',
+      en: 'This turn produced no output at all (stopReason=end_turn): the agent emitted neither text nor tool calls — it may have failed silently. Retry, or check the agent\'s own logs and configuration.',
+    }
+    for (const lang of ['zh', 'en']) {
+      await renderIn(
+        systemMessage({
+          blocks: [{ type: 'system', label: 'system.turnFailed.empty', detail: { stop_reason: 'end_turn' } }],
+        }),
+        lang,
+      )
+      const text = container.textContent ?? ''
+      expect(text).toContain(expectations[lang])
+      expect(text).not.toContain('system.turnFailed.empty')
+      // 只有 {stop_reason} 载荷 → 不渲染权限详情区（与其余 turnFailed 文案一致）。
+      expect(container.querySelectorAll('pre')).toHaveLength(0)
+    }
+  })
+
   it('renders only the one line for a {stop_reason}-only detail (no empty permission wrapper)', () => {
     render(systemMessage({
       blocks: [{ type: 'system', label: 'system.turnFailed.cancelled', detail: { stop_reason: 'cancelled' } }],

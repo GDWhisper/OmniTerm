@@ -1309,7 +1309,7 @@ export function FileManager() {
         onConfirmWithChecked={handleOutsideConfirm}
         title={t('fm.outsideConfirmTitle')}
         message={t('fm.outsideConfirmMessage')}
-        checkboxLabel={t('fm.outsideSkipCheckbox')}
+        checkbox={{ label: t('fm.outsideSkipCheckbox') }}
         confirmText={t('fm.outsideConfirm')}
       />
       {/* 删除确认（非越界，取代原 window.confirm） */}

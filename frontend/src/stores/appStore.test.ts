@@ -470,3 +470,42 @@ describe('appStore.revealPathInFileManager', () => {
     expect(useAppStore.getState().rightPanelTab).toBe('files')
   })
 })
+
+describe('appStore thinking effect (ACP waiting indicator)', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('defaults to enabled + scramble when nothing is stored', async () => {
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().thinkingEffectEnabled).toBe(true)
+    expect(freshStore.getState().thinkingEffectId).toBe('scramble')
+  })
+
+  it('honours a stored off switch and a stored effect choice', async () => {
+    localStorage.setItem('omniterm_thinking_effect_enabled', 'false')
+    localStorage.setItem('omniterm_thinking_effect', 'braille')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().thinkingEffectEnabled).toBe(false)
+    expect(freshStore.getState().thinkingEffectId).toBe('braille')
+  })
+
+  it('self-heals a corrupt stored effect id to scramble', async () => {
+    localStorage.setItem('omniterm_thinking_effect', 'glitch')
+    vi.resetModules()
+    const { useAppStore: freshStore } = await import('./appStore')
+    expect(freshStore.getState().thinkingEffectId).toBe('scramble')
+  })
+
+  it('setters write state and localStorage together', () => {
+    useAppStore.getState().setThinkingEffectEnabled(false)
+    expect(useAppStore.getState().thinkingEffectEnabled).toBe(false)
+    expect(localStorage.getItem('omniterm_thinking_effect_enabled')).toBe('false')
+
+    useAppStore.getState().setThinkingEffectId('spinner')
+    expect(useAppStore.getState().thinkingEffectId).toBe('spinner')
+    expect(localStorage.getItem('omniterm_thinking_effect')).toBe('spinner')
+  })
+})
