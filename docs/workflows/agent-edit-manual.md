@@ -16,6 +16,7 @@
 | [Settings](#settings) | Sidebar 弹出面板模板，移动/桌面双布局，i18n 多 section |
 | [TmuxCheatsheet](#tmuxcheatsheet) | 数据/视图分离 (data.ts + 两个 translation.json) |
 | [OmniTermLogo](#omnitermlogo) | 像素精灵单一真源 + 派生资产靠生成脚本，漏跑会与 favicon/PWA 图标脱节 |
+| [FileDrawer / FileEditor](#filedrawer--fileeditor) | 抽屉文件编辑器：模式意图语义 + CodeMirror 视图生命周期 + 内建搜索（改任一项前必读） |
 
 > 看到没有收录的组件？如果它符合下方「收录标准」，按其格式追加 entry。
 
@@ -80,3 +81,19 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 - `scripts/gen-logo-icons.mjs` — 生成 / 校验脚本（`--check` 供 CI 用，零依赖）
 
 **改 logo 的唯一路径**：编辑 `omnitermSprite.ts` → `node scripts/gen-logo-icons.mjs`（重写 favicon 与两个 PWA 图标）→ 与 `.ts` 一起提交。约束：`omnitermSprite.ts` 不得使用 enum/namespace 等不可剥离语法（生成脚本靠 Node type stripping 直接 import 它）。
+
+---
+
+## FileDrawer / FileEditor
+
+右侧文件管理器的底部抽屉：单击行预览、双击行进目录、行内「编辑」按钮以编辑态打开。**模式意图、CodeMirror 视图生命周期与内建搜索三处有不直观约定。**
+
+- `frontend/src/components/FileManager/FileDrawer.tsx` — **抽屉骨架与模式**：`initialMode` 是「打开意图」而非受控 state（换文件回本次意图、不无条件回 view）；SSE 外部改动 500ms 去抖里读 `modeRef`（编辑态只标记不刷新，否则吞掉未保存编辑）；越界保存先挂起弹确认再带 `allowEscape=true` 重发。顶栏搜索按钮只在 `editorVisible`（源码/编辑态）时渲染，编辑器卸载即收起面板
+- `frontend/src/components/FileManager/FileEditor.tsx` — **CodeMirror 接线**：视图只建/毁一次（文件变更才毁），模式切换走 compartment 原地 reconfigure 并恢复滚动；StrictMode 同文件重跑不毁视图；外部内容变更经 `content` prop 全量 diff 同步。搜索面板（受控 `searchOpen`）+ Ctrl/Cmd+F 容器捕获拦截 + 装饰 StateField 都在此，契约见 frontend-patterns「抽屉文件编辑器内搜索」
+- `frontend/src/components/FileManager/fileSearch.ts` — **改这里**：搜索匹配纯函数（正则非法 / 零长匹配 / `MAX_SEARCH_MATCHES` 截断三条边界）。改匹配语义只动此文件 + `fileSearch.test.ts`
+- `frontend/src/components/FileManager/icons.tsx` — 顶栏/面板图标库（`IconSearch` / `IconArrowUp` / `IconArrowDown` / `IconX` 已被搜索面板复用）
+- `frontend/src/index.css` — `.fm-editor-search*` 面板样式（浮层本体走 `.pixel-float`）
+- `frontend/src/locales/{en,zh}/translation.json` — `drawer.search*` i18n key
+
+**加一个编辑器内搜索能力的标准路径**：`fileSearch.ts` 扩展匹配语义 → `FileEditor.tsx` 面板加控件 → 两个 translation.json 加 key。**不要引 `@codemirror/search`**（见 frontend-patterns 该条约定的取舍记录）。
+

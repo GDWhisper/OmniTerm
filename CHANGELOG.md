@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-09 10:55) `[frontend]` 文件抽屉的源码/编辑视图支持页内搜索：顶栏新增搜索按钮（编辑器内 Ctrl/Cmd+F 同效，浏览器内置查找被拦截——此前只能唤起它：整页搜索、不认折行、焦点还会跑到终端里去）。面板含查询输入、匹配计数（`当前/总数`，超一万条截断显示 `N+`）、上一个/下一个（Enter / Shift+Enter）、区分大小写与正则开关（正则非法时显示「正则无效」并停掉高亮，不报错）；匹配高亮滚动定位，编辑时匹配实时跟随。markdown / html 预览态不显示该按钮——那两态渲染的是 DOM 文本，浏览器自带查找照常可用。实现未引入 `@codemirror/search`（新外部依赖须维护者拍板）：匹配计算收敛为纯函数（`frontend/src/components/FileManager/fileSearch.ts`，正则编译失败 / 零长匹配死循环 / 匹配数无界三条边界在此处理并单测），装饰经 CodeMirror StateField 灌入并复用主题里既有的 `.cm-searchMatch` 两档配色（`frontend/src/components/FileManager/FileEditor.tsx`、`FileDrawer.tsx`、`index.css`）
+
 ### Changed
 
 - (2026-10-09 11:00) `[backend]` `[frontend]` 删除 ACP 会话的 agent 侧记录拆为**两段式**（立即报已删、稍后补报 agent 侧结果）：`DELETE /sessions/{id}?delete_agent_side=true` 不再在请求内临时拉起 agent——进程不驻留时毫秒级返回 `agent_side:"pending"`（实测 4ms，此前同一会话要等 1.08s 且「已删除」toast 被拖到末尾），前端立即 toast「会话已删除」；随后带会话行上下文（`agent_id`/`acp_session_id`/`workspace_path`）补发新增端点 `DELETE /agents/{id}/acp-sessions/{acp_session_id}?cwd=`（临时拉起短命 agent 现场 gate 能力位后补发 `session/delete`，实测 0.84s）并补报结果——失败/缺上下文一律降级 `skipped`（warning「未能删除」，不谎报已删）。批量同口径：第一段汇总「已删除 N」先报，pending 项逐个补发后补报 agent 侧计数。`agent_side` 协议值新增 `pending`；**无服务端状态**（不做 job 表 / 轮询 / 全局推送通道），E3-2 的「面板内 purge」后端原语随此落地（agent 不存在 404 / cwd 非法 400，能力缺失 200+`skipped`）（`src/api/sessions.rs`、`src/api/agents.rs`、`frontend/src/api/client.ts`、`frontend/src/components/Sidebar/{DeleteConfirmDialog,BatchSessionDialog,agentSideDelete,SessionRow,Sidebar}.tsx`，回归 `api::sessions::{pending_agent_side_tests,ephemeral_agent_delete_tests}` + `api::agents::purge_acp_session_tests` + `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx`）

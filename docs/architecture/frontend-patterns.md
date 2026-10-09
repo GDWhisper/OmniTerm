@@ -65,6 +65,45 @@
 
 **已有案例**：FileDrawer（文件查看/编辑）、GitDrawer（diff/commit 查看）
 
+## 抽屉文件编辑器内搜索 (in-editor-search convention)
+
+**适用场景**：CodeMirror 编辑器（`FileEditor.tsx`）内查找文本。浏览器内置
+查找（Ctrl/Cmd+F）在 CM 的 contenteditable 上体验残缺：整页搜索、不认折行、
+焦点会跑到终端里去。本项目用自建面板替代，**不引入 `@codemirror/search`**
+（新外部依赖须维护者拍板；所需能力约 200 行可控代码，且主题里
+`.cm-searchMatch` / `.cm-searchMatch-selected` 两档配色早已备好可直接复用）。
+
+**契约**（实现见 `FileEditor.tsx` + `fileSearch.ts` + `FileDrawer.tsx` 顶栏按钮）：
+
+- **开合状态受控在抽屉层**：`FileDrawer` 持 `searchOpen`，顶栏搜索按钮
+  （`editorVisible` 时才渲染）与 `FileEditor` 的 `searchOpen` /
+  `onSearchOpenChange` 对接；查询串、大小写/正则开关、当前匹配下标自持在
+  `FileEditor`（卸载即重置）。编辑器不可见时（切 markdown/html 预览、图片、
+  加载中、出错、换文件）必须收起——否则再切回来是对着新挂载的编辑器弹空面板。
+- **Ctrl/Cmd+F 在编辑器容器的捕获阶段拦截**（`addEventListener('keydown', …,
+  true)`）：焦点在编辑器或面板输入框里都能拦到；`preventDefault` 必须调，
+  否则浏览器查找条照样弹出。已开着时聚焦并全选输入框，不切换成关闭。
+- **匹配计算是纯函数**（`fileSearch.ts`）：正则必须带 `g`（否则 exec 死循环）、
+  零长匹配手动前移 `lastIndex`、非法正则返回 `invalid` 而非抛错、匹配数
+  `MAX_SEARCH_MATCHES`（10000）截断（§P1 装饰集合无界增长）。
+- **装饰经 StateField + StateEffect 灌入**：匹配区间在 React 侧算好，
+  `Decoration.mark({ class: 'cm-searchMatch' })` 整体替换；文档变更（打字）
+  经 updateListener 自增 `docVersion` 触发重算。滚动定位只在「翻匹配 /
+  查询变化」时做（`scrolledIndexRef` 区分），打字不抢用户光标。
+- **面板是浮层**：`.pixel-float`（§6.1）+ `.fm-editor-search-*`（index.css），
+  覆盖在编辑器右上角；工具栏按钮 `onMouseDown` preventDefault 不抢输入框焦点
+  （Tab 仍可达）。Enter / Shift+Enter 翻匹配，Esc 收起并聚焦回编辑器
+  （编辑器侧 keymap 同步一份，焦点在编辑器里时也能关）。
+- **只覆盖源码/编辑态**：markdown / html 预览是 DOM 文本，浏览器自带查找
+  照常可用，不重复造轮子。
+
+**已有案例**：FileDrawer 顶栏搜索按钮 + FileEditor 搜索面板（2026-10-09）。
+
+**收益**：编辑器内查找有匹配计数、正则、大小写开关；不引新依赖。
+
+**代价**：匹配重算挂在 React effect 上，超大文件首次查询有一次全文档扫描
+（`indexOf` / 正则，MB 级文件毫秒档）；无替换（replace）能力。
+
 ## 外部 HTML 沙箱预览 (sandboxed-html-preview convention)
 
 **适用场景**：渲染**不受信的外部 HTML**（agent 写进工作区的文件、用户上传的
