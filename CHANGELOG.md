@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-09 10:08) `[backend]` `[frontend]` 删除 ACP 会话时勾选「同时永久删除 agent 侧会话记录」不再要求 agent 进程正在驻留：无活连接（已释放 / 被回收 / 后端重启 / 连接已死）时后端**临时拉起一个短命 agent 进程**（不注册 supervisor；spawn 握手与 `session/delete` RPC 各 15s 预算），现场探明 `sessionCapabilities.delete` 后补发删除、随后立即收尾——勾选即承诺，不再给「请先点『恢复会话』再删除」的提示让用户自己跑一趟；前端勾选框的禁用条件同步收敛为唯一一条「该 agent 已知不支持」（能力未知与已释放均可勾选，`AgentSideCandidate` 不再消费 `acp_process_alive`，删除 `deleteAgentSideHintUnknown` / `deleteAgentSideHintReleased` 两条文案）。best-effort 语义不变：任何窗口内失败（配置 / 工作目录缺失、拉起失败或超时、能力未声明、RPC 失败）一律 `agent_side:"skipped"` + WARN 留痕，不阻断 omniterm 侧删除、不谎报已删（`src/api/sessions.rs`、`frontend/src/components/Sidebar/agentSideDelete.ts`、`DeleteConfirmDialog.tsx`、`BatchSessionDialog.tsx`、`SessionRow.tsx`、`Sidebar.tsx`、`frontend/src/locales/{zh,en}/translation.json`，回归 `api::sessions::ephemeral_agent_delete_tests`、`agentSideDelete.test.ts`、`DeleteConfirmDialog.test.tsx`）
+
 ## [0.2.29] - 2026-10-09
 
 ### Added

@@ -9,7 +9,8 @@ import type { DeleteSessionResponse } from '../../api/client'
  * 删除确认弹窗的「同时永久删除 agent 侧会话记录」勾选框（ACP 协议 session/delete
  * 的前端入口）。钉住三件事：
  *
- * 1. 三态判据 → 勾选框可用性（未知/不支持/进程已释放 → 禁用 + 原因）；
+ * 1. 判据 → 勾选框可用性（仅「agent 已知不支持」禁用；能力未知可勾选，后端会
+ *    临时拉起短命 agent 补删）；
  * 2. 勾选 → `deleteSession(id, { deleteAgentSide: true })`，未勾选 → 不带该参数；
  * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用。
  */
@@ -57,7 +58,6 @@ const acpTarget: DeleteTarget = {
   id: 'sess-1',
   name: 'acp session',
   runtimeKind: 'acp',
-  acpProcessAlive: true,
 }
 
 let container: HTMLDivElement
@@ -128,13 +128,17 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     expect(checkboxes()).toHaveLength(0)
   })
 
-  it('disables the checkbox (with reason) when the capability is unknown', () => {
+  it('keeps the checkbox enabled when the capability is unknown (backend probes on demand)', async () => {
     setCapability(undefined)
     render(acpTarget)
     const box = checkboxes()[0]
-    expect(box.disabled).toBe(true)
+    expect(box.disabled).toBe(false)
     expect(box.checked).toBe(false)
-    expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintUnknown')
+    // 勾选后照常请求 agent 侧删除：后端现场拉起短命 agent 探明能力再决定
+    act(() => box.click())
+    clickConfirm()
+    await act(async () => {})
+    expect(deleteSession).toHaveBeenCalledWith('sess-1', { deleteAgentSide: true })
   })
 
   it('disables the checkbox when the agent is known to lack the capability', () => {
@@ -142,13 +146,6 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     render(acpTarget)
     expect(checkboxes()[0].disabled).toBe(true)
     expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintUnsupported')
-  })
-
-  it('disables the checkbox when the agent process has been released', () => {
-    setCapability(true)
-    render({ ...acpTarget, acpProcessAlive: false })
-    expect(checkboxes()[0].disabled).toBe(true)
-    expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintReleased')
   })
 
   it('reports the agent-side outcome truthfully (skipped is not "deleted")', async () => {
@@ -195,7 +192,7 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
 
   it('does not overwrite the remembered choice when the checkbox was disabled', async () => {
     localStorage.setItem('omniterm_delete_agent_side', 'true')
-    setCapability(undefined) // 未知 → 禁用
+    setCapability(false) // 已知不支持 → 禁用
     render(acpTarget)
     clickConfirm()
     await act(async () => {})

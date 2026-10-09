@@ -13,11 +13,10 @@ export interface DeleteTarget {
   id: string
   name: string
   /**
-   * 会话的运行时类型与进程驻留状态（`type === 'session'` 时才有意义）。
-   * 决定是否显示「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
+   * 会话的运行时类型（`type === 'session'` 时才有意义）。决定是否显示
+   * 「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
    */
   runtimeKind?: Session['runtime_kind']
-  acpProcessAlive?: boolean
 }
 
 /**
@@ -26,9 +25,10 @@ export interface DeleteTarget {
  * session triple, workspace session memory) happens here via useAppStore.
  * The Sidebar only supplies the delete target and reload callbacks.
  *
- * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，见
- * `agentSideDelete.ts` 的三态判据）：只有 `agent_side=deleted` 才算真删了，
- * `skipped` 必须如实告知用户（不可谎报已删）。
+ * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，判据见
+ * `agentSideDelete.ts`——仅「agent 已知不支持」禁用；进程未驻留由后端临时
+ * 拉起补删）。只有 `agent_side=deleted` 才算真删了，`skipped` 必须如实告知
+ * 用户（不可谎报已删）。
  */
 export function DeleteConfirmDialog(props: {
   target: DeleteTarget | null          // null = 关闭
@@ -60,7 +60,7 @@ export function DeleteConfirmDialog(props: {
   const { checkbox, eligibleIds } =
     isSession && target?.runtimeKind === 'acp'
       ? buildAgentSideDeleteCheckbox({
-          candidates: [{ id: target.id, runtime_kind: target.runtimeKind, acp_process_alive: target.acpProcessAlive }],
+          candidates: [{ id: target.id, runtime_kind: target.runtimeKind }],
           capabilityOf: () => agentDeleteSupported,
           defaultChecked: readDeleteAgentSidePref(),
           t,

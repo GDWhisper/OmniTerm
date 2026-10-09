@@ -1,6 +1,6 @@
 # ACP 会话历史管理：session/list 发现 · 外部会话载入 · session/delete 清理
 
-> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 / E3-2 面板内 purge **未实施**
+> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 / E3-2 面板内 purge **未实施**；2026-10-09 勘误 E-7/E-8/E-9（§5.2）：无活连接时后端临时拉起 agent 补发删除，推翻偏差 E-2 的「已释放 → 禁用 + 请先恢复会话」
 > 触发条件：补足 omniterm 侧对「agent 侧 ACP 会话历史」的发现 / 读取 / 删除能力（2026-10-04 盘点结论：ACP 11 个 session 命令 omniterm 只用 5 个，`session/list` / `session/delete` 零引用）
 > 关联：`docs/reference/acp-protocol-reference.md`（§17.3 实探结论）、`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`（菜单 / 批量确认范式）、`docs/architecture/frontend-patterns.md`（sidebar 弹出面板约定）、`docs/dev/plans/archive/2026-10-01-acp-sdk-v2-upgrade.md`（SDK 2.2 + V1 握手背景）
 
@@ -156,6 +156,30 @@ pi-acp），但**用户的主力 agent codebuddy 未声明** → 勾选框对其
 **未闭环项（留给后续 Phase）**：Q1（`session/list` 发现）、Q3（面板入口）、E3-2（面板内
 purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，omniterm 无法代劳）。
 
+## 5.2 实施记录（2026-10-09）：删除链路补「临时拉起 agent」兜底
+
+用户指令：「sidebar 删除 agent 侧 acp 会话这个功能，应该帮用户拉起会话删除，而不是给个
+提示让用户自己操作」。据此推翻 §5.1 的偏差 E-2：勾选即承诺，进程不在（reaper 回收 /
+手动 release / 后端重启 / 连接已死）由后端**临时拉起一个短命 agent 进程**补发
+`session/delete`，不再把动作退回给用户。
+
+**勘误（就地记录，覆盖 §5.1 的 E-2/E-3/E-4 相关表述）**：
+
+| # | 原实施（2026-10-06） | 本次（2026-10-09） | 原因 |
+|---|----------------------|--------------------|------|
+| E-7 | 无活连接 → 跳过并让前端提示「请先恢复会话」；能力未知 → 禁用 | `cleanup_session_runtime` acp 分支：无活连接（含连接已死）且 requested 时走 `delete_agent_side_record_via_ephemeral_spawn`——`load_agent` + `spawn_and_connect`（不注册 supervisor；spawn / RPC 各 15s `EPHEMERAL_AGENT_TIMEOUT`）现场 gate 能力位后补发，随后 `disconnect` 收尾；窗口内失败（配置 / 目录缺失、spawn 失败或超时、能力未声明、RPC 失败）一律 best-effort `skipped` + 留痕 | 勾选是对删除结果的承诺；`session/delete` 按 id 生效、不要求是创建该会话的那个进程（opencode / pi-acp 实测）。ephemeral 形态本就是 E3-2 设计的原语，此前只规划给面板内 purge 用 |
+| E-8 | 前端三态：未知 / 不支持 / 已释放 → 一律禁用 + 原因 | 判据收敛为唯一一条：**agent 已知不支持**（`agentDeleteSupported === false`）才禁用；未知与已释放可勾选（后端现场探明）；`AgentSideCandidate` 去掉 `acp_process_alive`，i18n 删除 `deleteAgentSideHintUnknown` / `deleteAgentSideHintReleased` | 前端能力位只用于提前知情，不再承担「决定能不能做」的职责；进程状态与「拉起的 agent 支不支持」都由后端在删除时现场判定 |
+| E-9 | 活连接路径只看 `dispose` 是否拿到 client | 拿到 client 后加 `is_alive()` 判断：连接已死（agent 崩溃 / poll 卡死）时先收尸再落回临时拉起 | 「注册表里有个死句柄」不该成为 skipped 的理由——与 E-7 同一原则 |
+
+**验收（fake agent 真链路 + 单测）**：
+- `api::sessions::ephemeral_agent_delete_tests` 三条全绿：拉起 → `session/delete`
+  （事件日志 `delete sess-ephemeral`）→ `Deleted` 且不注册 supervisor；能力缺失
+  （`live` 模式）→ `Skipped` 且无 delete 事件（不盲发）；缺 agent 配置 / 工作目录 →
+  `Skipped` 且不 spawn ✅
+- 前端 `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx` 更新后全绿 ✅
+- 真实链路手测（已释放的 opencode 会话勾选删除 → agent 侧列表该 id 消失）待跑，
+  用例已更新至 `docs/reference/user-testing.md` §23。
+
 ## 6. 验收标准
 
 - [ ] E1：展开面板拉到真实 agent 会话列表；cwd/title 缺省时降级显示不崩溃；超限显示截断提示
@@ -163,14 +187,15 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - [ ] E2：外部会话载入 → 侧栏出现会话 → 打开点「恢复」→ 历史完整重放且 refresh 后仍在（sync 落库生效）
 - [ ] E2：已纳管 id 重复载入 → 面板点击 = 切换而非重复建会话
 - [ ] E3-1：能力已知支持 → 勾选默认开 → 删除后 agent 列表（E1 刷新）中该 id 消失
-- [ ] E3-1：能力未知/不支持 → 勾选禁用 + 说明；删除照常完成（`agent_side:"skipped"`），omniterm 侧记录照删
+- [x] E3-1：能力未知 → **可勾选**，勾选删除时后端临时拉起探明并补删（2026-10-09 勘误 E-7/E-8，取代原「禁用 + 说明」）
 - [ ] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
 - [x] E3-1：能力已知支持 → 勾选后删除 → agent 列表（`session/list` 探针）中该 id 消失
-- [x] E3-1：能力未知/不支持/进程已释放 → 勾选禁用 + 说明；删除照常完成（`agent_side:"skipped"`），omniterm 侧记录照删
+- [x] E3-1：agent 已知不支持 → 勾选禁用 + 说明（唯一禁用原因）；删除照常完成（`agent_side:"skipped"`），omniterm 侧记录照删
+- [x] E3-1：进程已释放（含归档会话）→ 勾选删除时后端临时拉起补删（2026-10-09 勘误 E-7，取代原「禁用 + 请先恢复会话」）
 - [x] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
 - [x] E3-1：勾选偏好被记住（`localStorage.omniterm_delete_agent_side`），刷新后仍生效；禁用态不写偏好
 - [ ] E3-2：purge 未纳管历史 → 确认后行消失；无能力 → 409 + 手动清理路径提示（**未实施**：依赖 E1 面板）
-- [x] 批量删除：逐条判据——仅对「能力已知支持 + 进程驻留」的会话带 `delete_agent_side=true`；全不可勾时禁用 + 说明
+- [x] 批量删除：逐条判据——仅「agent 已知不支持」的会话不带 `delete_agent_side=true`（进程未驻留由后端临时拉起）；全不可勾时禁用 + 说明
 - [ ] §P1：list 双页 + 超 200 条截断有单测；`AgentHistorySection` 无轮询（**未实施**：Phase 1 不做）
 - [x] 质量门禁全绿；`./scripts/check-doc-index.sh` 通过
 
@@ -179,7 +204,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 | 风险 | 缓解 |
 |--------|------|
 | Phase 0 探明 agent 不支持 `session/delete` | **已发生**（codebuddy 未声明）：删除弹窗勾选框对其恒禁用并给出「未声明支持…需手动清理」文案，删除照常完成；结论已回写本文档 §0 与 `acp-protocol-reference.md` §17.3 |
-| 勾选框可勾但实际跳过（进程已释放） | 前端把 `acp_process_alive === false` 纳入禁用判据（偏差 E-2），不给「勾了没删」的静默失败 |
+| 勾选框可勾但实际跳过（进程已释放） | ~~前端把 `acp_process_alive === false` 纳入禁用判据（偏差 E-2）~~ 已被勘误 E-7/E-8 取代：进程未驻留由后端临时拉起补删；仍失败则 `skipped` + toast 如实告知，不给「勾了没删」的静默失败 |
 | ephemeral spawn 与 reaper / 并发拉取叠加（同 agent 同时多进程） | spawn 不注册 supervisor（不进 reaper 视野）；每次调用独立 15s timeout + 结束必 shutdown；不做单 flight（首版从简，spawn 幂等廉价）——若实测重复拉取频繁再加 per-agent in-flight（Phase 1 落地时适用） |
 | 长历史会话 list 慢（agent 侧扫盘） | 15s timeout + 超限截断 + 面板 loading 态（Phase 1 落地时适用） |
 | 用户从面板载入一个**别的 worktree/cwd** 的会话 | create 用当前 worktree 作 `workspace_path`；加载 RPC 的 cwd 用 omniterm 的（`restore_acp_session` 已如此），agent 侧按 id 定位历史——若 agent 严格按 cwd 匹配可能 load 空历史，面板行展示原始 cwd 让用户预判（Phase 2 落地时适用） |
@@ -191,4 +216,5 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - [x] `AGENTS.md`：本计划已在文档索引（2026-10-04 登记）
 - [x] `docs/reference/user-testing.md`：E3-1 手动用例
 - [x] `CHANGELOG.md`：条目（Phase 3 + Phase 4-E3-1 为实质性功能改动）
+- [x] 2026-10-09 勘误闭环（§5.2）：`backend.md` 临时拉起语义 + 判据更新、协议参考 §17.3、`user-testing.md` §23、CHANGELOG Unreleased
 - [ ] Phase 1/2/4-E1/E3-2 落地后补：list/purge 路由文档、AgentHistorySection 渲染用例

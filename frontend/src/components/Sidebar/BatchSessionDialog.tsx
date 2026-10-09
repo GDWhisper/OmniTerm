@@ -23,9 +23,9 @@ export interface BatchTarget {
  * - 串行执行、单条失败继续（错误 toast 由 api client 自动弹出），结束按成功
  *   数汇总；副作用逐条复刻单条路径（活跃会话清理 / markEnded /
  *   workspaceSessionMemory），见 DeleteConfirmDialog / releaseSessionNow。
- * - 批量删除额外带「同时永久删除 agent 侧会话记录」勾选框：**逐条**判据（能力
- *   已知支持且进程驻留才带 `delete_agent_side=true`），所以混合选择也不会对
- *   不满足条件的会话盲发。
+ * - 批量删除额外带「同时永久删除 agent 侧会话记录」勾选框：**逐条**判据（仅
+ *   「agent 已知不支持」的不带 `delete_agent_side=true`；进程未驻留由后端临时
+ *   拉起补删），所以混合选择也不会对不满足条件的会话盲发。
  * - `submitting` 期间 onClose 守卫为 no-op：Modal 的 Esc / 遮罩 / ✕ 都走这里，
  *   防止执行中关闭弹窗。
  */
@@ -58,11 +58,7 @@ export function BatchSessionDialog(props: {
   const { checkbox, eligibleIds } =
     action === 'delete'
       ? buildAgentSideDeleteCheckbox({
-          candidates: pool.map((s) => ({
-            id: s.id,
-            runtime_kind: s.runtime_kind,
-            acp_process_alive: s.acp_process_alive,
-          })),
+          candidates: pool.map((s) => ({ id: s.id, runtime_kind: s.runtime_kind })),
           capabilityOf: (id) => chatStates[id]?.agentDeleteSupported,
           defaultChecked: readDeleteAgentSidePref(),
           t,

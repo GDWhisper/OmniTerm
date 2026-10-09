@@ -1595,10 +1595,15 @@ Client MUST 在文件不存在时创建它。
 ### 17.3 omniterm 侧接入状态（2026-10-06 实探）
 
 `session/delete` 已接入「删除会话」链路：`DELETE /api/v1/sessions/{id}?delete_agent_side=true`
-在 agent 子进程仍活着时先发 `session/delete` 再 shutdown，响应体 `agent_side` 三态
-（`deleted` / `skipped` / `not_requested`）。能力判据来自 initialize 响应的
+先尝试在 agent 子进程仍活着时发 `session/delete` 再 shutdown；进程未驻留（已释放 /
+回收 / 后端重启 / 连接已死）则临时拉起一个短命 agent 进程（不注册 supervisor，spawn 与
+RPC 各 15s 预算）现场探明能力后补发，随后立即收尾——勾选即承诺，用户不必自己先恢复
+会话（2026-10-09 加，实测 opencode / pi-acp 的 `session/delete` 按 id 生效、不要求是
+创建该会话的那个进程）。响应体 `agent_side` 三态（`deleted` / `skipped` /
+`not_requested`）。能力判据来自 initialize 响应的
 `agentCapabilities.sessionCapabilities.delete`（marker 空结构，存在即支持），经
-`capabilities` WS 帧的 `agent_delete` 下发前端做勾选框门控。`session/list` 尚未接入。
+`capabilities` WS 帧的 `agent_delete` 下发前端做勾选框门控（前端仅对「已知不支持」
+禁用；能力未知与进程已释放可勾选）。`session/list` 尚未接入。
 
 **多实现差异（§8，实测取证，勿把单一实现当约定）**：
 
