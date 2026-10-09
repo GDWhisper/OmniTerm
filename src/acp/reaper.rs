@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use sqlx::sqlite::SqlitePool;
+use tokio::sync::Notify;
 use tokio::time::interval;
 
 use crate::acp::chat_persistence;
@@ -136,13 +137,19 @@ impl PermissionTimeoutMode {
     }
 }
 
-/// 权限超时配置（模式 + 秒级阈值）。原子字段使 reaper 每个 tick 读到最新值
-/// （PUT 路由热更新，无需重启）；`Default` 即 [`PermissionTimeoutMode::Abort`]
-/// + [`REQUIRES_ACTION_RECYCLE_SECS`]，与 DB 无配置时的行为一致。
+/// 权限请求超时配置（模式 + 秒级阈值 + 到达唤醒信号）。原子字段使 reaper 每个
+/// tick 读到最新值（PUT 路由热更新，无需重启）；`Default` 即
+/// [`PermissionTimeoutMode::Abort`] + [`REQUIRES_ACTION_RECYCLE_SECS`]，与 DB
+/// 无配置时的行为一致。
 #[derive(Debug)]
 pub struct PermissionTimeoutConfig {
     mode: AtomicU8,
     secs: AtomicU64,
+    /// 权限请求到达的唤醒信号：ACP 客户端登记请求后调用
+    /// [`Self::notify_perm_request`]，reaper 在 `select!` 里等待它（见
+    /// [`run_reaper`]）——「总是」档（auto + 0 秒）的语义是**到达即应答**，
+    /// 只靠 30 秒 tick 会引入 0~30 秒等待（2026-10-09 用户实测）。
+    wake: Notify,
 }
 
 impl Default for PermissionTimeoutConfig {
@@ -153,7 +160,7 @@ impl Default for PermissionTimeoutConfig {
 
 impl PermissionTimeoutConfig {
     pub fn new(mode: PermissionTimeoutMode, secs: u64) -> Self {
-        Self { mode: AtomicU8::new(mode.as_u8()), secs: AtomicU64::new(secs) }
+        Self { mode: AtomicU8::new(mode.as_u8()), secs: AtomicU64::new(secs), wake: Notify::new() }
     }
 
     /// 读取当前 (模式, 秒级阈值)。
@@ -164,10 +171,24 @@ impl PermissionTimeoutConfig {
         )
     }
 
-    /// 热更新（PUT 路由写入后调用；reaper 下一 tick 即生效）。
+    /// 热更新（PUT 路由写入后调用并随即唤醒，reaper 下一次评估即生效）。
     pub fn store(&self, mode: PermissionTimeoutMode, secs: u64) {
         self.mode.store(mode.as_u8(), Ordering::Relaxed);
         self.secs.store(secs, Ordering::Relaxed);
+    }
+
+    /// 唤醒 reaper 立即做一轮检查（权限请求到达、或配置变更时调用）。
+    ///
+    /// 多跑一轮是幂等的：reaper 的全部触发条件都基于「时间阈值 + 未决数」，
+    /// 提前评估只会更及时，不会让未到期的条件成立（见 [`run_reaper`] 分支注释）。
+    /// 无等待者时 `notify_one` 存下 permit，下一次等待立即返回，不丢唤醒。
+    pub fn notify_perm_request(&self) {
+        self.wake.notify_one();
+    }
+
+    /// 等待下一次权限请求到达（reaper 专用，与定时 ticker 在 `select!` 中并列）。
+    pub async fn wait_perm_request(&self) {
+        self.wake.notified().await;
     }
 }
 
@@ -352,6 +373,11 @@ async fn auto_advance_permissions(
 ///   `Wait` 不做任何动作（含跳过下面的 prompt-stale 定稿）
 /// - prompt 卡死（有进行中 prompt 但久无通知）→ 强制定稿 turn，不杀进程
 ///
+/// 唤醒源有两个（`select!` 并列）：① 定时 tick（[`TICK_SECS`]）——idle/超时/
+/// prompt-stale 都是时间阈值判定，30 秒粒度足够；② 权限请求到达（客户端经
+/// [`PermissionTimeoutConfig::notify_perm_request`] 触发）——「总是」档要求到达即
+/// 应答，等不了 tick。唤醒驱动的一轮检查与 tick 轮完全同构，判定条件不变。
+///
 /// 活跃判定逻辑见 `AcpClient::is_idle_stale` / `is_permission_stale` / `is_prompt_stale`。
 /// 进程所有权在后端，回收即 kill 子进程、释放内存。`shutdown` 走 shared reference，
 /// 即使 WS 连接仍持有 `Arc<AcpClient>` 也会立即触发连接任务退出、杀子进程，保证
@@ -377,7 +403,12 @@ pub async fn run_reaper(
 ) {
     let mut ticker = interval(Duration::from_secs(TICK_SECS));
     loop {
-        ticker.tick().await;
+        // 任一唤醒源到点即跑一轮：定时 tick（时间阈值判定）或权限请求到达
+        // （「总是」档到达即应答；其余模式下多跑一轮结论不变，判定见下方分支）。
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = perm_timeout.wait_perm_request() => {}
+        }
 
         // 1) 快照 + 判定（不在持锁状态下做 async 回收）
         // idle / 权限超时阈值每次判定前动态读取，使运行时改配置即时生效。
@@ -526,6 +557,32 @@ mod tests {
         // 未知编码字节回退 Abort（不 panic）。
         cfg.mode.store(9, Ordering::Relaxed);
         assert_eq!(cfg.snapshot().0, PermissionTimeoutMode::Abort);
+    }
+
+    /// 「到达唤醒」语义：先 notify 后等待不丢唤醒（permit 存留），等待中 notify
+    /// 立即返回——「总是」档的到达即应答靠它，不依赖 30 秒 tick。
+    #[tokio::test]
+    async fn perm_request_notify_wakes_waiter_and_is_not_lost() {
+        let cfg =
+            PermissionTimeoutConfig::new(PermissionTimeoutMode::Auto, PERM_TIMEOUT_NEVER_SECS);
+
+        // ① notify 先于等待：permit 存留，等待立即返回。
+        cfg.notify_perm_request();
+        tokio::time::timeout(Duration::from_secs(1), cfg.wait_perm_request())
+            .await
+            .expect("先行的 notify 不应丢失");
+
+        // ② 等待中 notify：被唤醒。
+        let cfg = Arc::new(cfg);
+        let waiter = {
+            let cfg = Arc::clone(&cfg);
+            tokio::spawn(async move { cfg.wait_perm_request().await })
+        };
+        cfg.notify_perm_request();
+        tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("等待中的 waiter 应被唤醒")
+            .expect("waiter 不应 panic");
     }
 
     #[test]

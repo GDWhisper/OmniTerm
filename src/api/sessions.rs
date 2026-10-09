@@ -200,6 +200,9 @@ async fn create_session(
         // 绑定持久化：assistant 回复由累积器实时防抖落库到本会话行，
         // 使流式中刷新/切设备不再丢失进行中的 turn（见 turn_accumulator）。
         acp_client.attach_persistence(state.db.clone(), id.clone());
+        // 绑定权限超时配置：权限请求到达时唤醒 reaper 立即评估（「总是」档
+        // 到达即应答，不等定时 tick）。
+        acp_client.attach_perm_timeout(state.acp_perm_timeout.clone());
         // 绑定配置偏好持久化并同步恢复：agent 全局偏好（+ 本会话历史覆盖）在
         // spawn 后立即下发，WS 连接时 initial_config_notification 缓存已是恢复值，
         // 前端新建会话即可看到用户上次的配置。内部带 10s 超时，不阻塞会话注册。

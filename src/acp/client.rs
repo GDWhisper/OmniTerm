@@ -23,6 +23,7 @@ use crate::acp::agent_proc;
 use crate::acp::config_prefs;
 use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
+use crate::acp::reaper::PermissionTimeoutConfig;
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
 use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnTiming};
 use crate::acp::usage;
@@ -296,6 +297,11 @@ pub struct AcpClient {
     /// 使用时 lock 克隆 handle、立即 drop guard 再 await，避免跨 await 持 std
     /// MutexGuard 破坏 Send（replay task 是 tokio::spawn）。
     config_prefs: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>>,
+    /// 权限超时配置（`attach_perm_timeout` 绑定，main.rs 注入的共享实例）：
+    /// 权限请求登记后经它唤醒 reaper 立刻检查——「总是」档（auto + 0 秒）语义是
+    /// **到达即应答**，等不了 30 秒 tick。同样仅在实际会话注册点绑定；能力探针
+    /// 不绑定 → 无唤醒，由 reaper 的定时 tick 兜底（探针不产生用户可见的审批）。
+    perm_timeout: Arc<Mutex<Option<Arc<PermissionTimeoutConfig>>>>,
     /// 活跃度跟踪，供空闲回收看护任务（reaper）读取。
     activity: Arc<Mutex<ActivityState>>,
     /// turn 非正常结束留痕的世代守卫（计划 2026-09-19 D1/D2「只写一条」）。
@@ -585,6 +591,10 @@ impl AcpClient {
         let accumulator = Arc::new(TurnAccumulator::new());
         let config_prefs_slot: Arc<Mutex<Option<config_prefs::ConfigPrefsHandle>>> =
             Arc::new(Mutex::new(None));
+        // 权限超时配置槽：请求闭包构造早于本 struct，用槽共享「attach 后」的
+        // 配置实例（与 config_prefs_slot 同一模式）。
+        let perm_timeout_slot: Arc<Mutex<Option<Arc<PermissionTimeoutConfig>>>> =
+            Arc::new(Mutex::new(None));
         // crash watcher 需要读存活标志以区分「主动关闭期间的预期结束」与真崩溃
         // （D2 killpg 让 crate 的 finish_child_exit 返回 signal 9 Err，见
         // spawn_crash_watcher）。
@@ -618,11 +628,20 @@ impl AcpClient {
                 {
                     let pm = pm.clone();
                     let accumulator = accumulator.clone();
+                    let perm_timeout_slot = perm_timeout_slot.clone();
                     async move |request: RequestPermissionRequest, responder, _cx| {
                         // 登记成功即进入未决态 → 起算「等真人审批」区间（无活跃 turn 时
                         // begin_wait 自行 no-op，见 TurnAccumulator）。
                         pm.handle_request(request, responder).await?;
                         accumulator.begin_wait();
+                        // 唤醒 reaper 立刻评估超时策略：「总是」档（auto + 0 秒）要求
+                        // 到达即应答，否则要等下一个 30 秒 tick（用户实测的等待）。
+                        // begin_wait 在前保证 reaper 的 resolve → end_wait 不会先于
+                        // 它执行（等待计时不倒挂）；槽为 None（能力探针）时无唤醒，
+                        // 由 tick 兜底。
+                        if let Some(cfg) = perm_timeout_slot.lock().ok().and_then(|g| g.clone()) {
+                            cfg.notify_perm_request();
+                        }
                         Ok(())
                     }
                 },
@@ -862,6 +881,7 @@ impl AcpClient {
             last_noticed_generation: Mutex::new(None),
             accumulator,
             config_prefs: config_prefs_slot,
+            perm_timeout: perm_timeout_slot,
             alive,
             agent_pid: Mutex::new(agent_pid),
         })
@@ -1326,6 +1346,16 @@ impl AcpClient {
         let opts = self.initial_config_options.lock().ok().map(|g| g.clone()).unwrap_or_default();
         if let Some(handle) = self.config_prefs.lock().ok().and_then(|g| g.clone()) {
             config_prefs::persist_config_snapshot(&handle, &opts).await;
+        }
+    }
+
+    /// 绑定权限超时配置（main.rs 注入的共享实例，`Arc` 同一份——PUT 热更新
+    /// 立即对唤醒后的判定生效）。仅在真实会话注册点调用（create-session /
+    /// load_session restore）；能力探针不调用 → 权限请求到达无唤醒，回退 reaper
+    /// 的定时 tick 兜底。
+    pub fn attach_perm_timeout(&self, perm_timeout: Arc<PermissionTimeoutConfig>) {
+        if let Ok(mut guard) = self.perm_timeout.lock() {
+            *guard = Some(perm_timeout);
         }
     }
 

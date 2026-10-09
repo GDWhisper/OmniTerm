@@ -100,3 +100,17 @@ Phase 3 测试与文档：Rust 21 项新单测（选项优先级/摘要/配置/�
 - **告知载荷**：`detail.minutes` → `detail.seconds`；文案口径统一为「整分钟报分钟、其余报秒」（与后端 `format_perm_duration` 同规则），30 秒档不再显示成「0 分钟」。历史行只有 `minutes`，前端按 ×60 回退（`utils/permTimeout.ts`，单测覆盖）。auto + 「总是」档另给一句无等待文案 `system.permTimeout.autoAlways`（沿用「N 秒未获响应」会自相矛盾）。
 - **翻盘条件**：若将来要把「总是」扩展为 abort 模式的「永不中止」（等价 wait），则面板下限应对所有模式放开到 0，本条「只在 auto 露出」的前端约束即可撤掉——后端语义已经支持，无需再改 reaper。
 
+## 勘误：「总是」档改为权限请求到达唤醒，不等 tick（2026-10-09）
+
+**用户实测缺陷**：设置「自动推进 + 总是」后仍有十几秒等待。根因——上节勘误承诺 `auto + 0`「有未决请求即 `auto_advance_permissions`（不等用户）」，但该判定只在 `run_reaper` 的 30 秒 tick（`TICK_SECS`）上被评估，权限请求到达后实际等 0~30 秒（均值 ~15 秒），与「不等待」语义矛盾。
+
+**修复**（`src/acp/reaper.rs` / `src/acp/client.rs`）：
+
+- `PermissionTimeoutConfig` 增加 `Notify` 唤醒信号（`notify_perm_request` / `wait_perm_request`）；`run_reaper` 主循环改为 `select!`（定时 tick ∥ 到达唤醒），两种唤醒源执行同一轮检查——判定条件完全不变，只是评估时机更快。
+- 触发点在 ACP 权限请求闭包：`handle_request` → `begin_wait` **之后**唤醒（`begin_wait` 在前保证 reaper 的 `resolve → end_wait` 不会倒挂等待计时）。
+- 绑定走 `AcpClient::attach_perm_timeout`（与 `attach_persistence` / `attach_config_prefs` 同模式），仅 create-session / load restore 两个真实注册点调用；能力探针不绑定 → 无唤醒，回退 tick 兜底（探针不产生用户可见审批）。
+- `PUT /api/v1/settings/permission-timeout` 写入后同样唤醒：已有未决审批时切到「总是」档不必等下一个 tick。
+- 唤醒**无条件**触发（不限 auto+0）：多跑一轮是幂等的（全部触发条件基于「时间阈值 + 未决数」，提前评估只会更及时），避免在客户端复制一份「何时该唤醒」的判定造成两处漂移（工程准则 7）。
+- 定时 tick 保留：idle / 非零档权限超时 / prompt-stale 仍是时间阈值制，30 秒粒度足够；D5「久无活动」口径不变（非零档仍按距最后活动计时，唤醒只让它更及时）。
+- 回归防线：`fake_agent_tests::always_auto_mode_answers_permission_on_arrival_not_next_tick`（放过首轮立即 tick 后发请求，断言数秒内自动应答 + 告知广播/落库 + 选中项送达 agent）；`reaper::perm_request_notify_wakes_waiter_and_is_not_lost`（唤醒不丢语义）。
+

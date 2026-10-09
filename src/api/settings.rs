@@ -134,7 +134,8 @@ async fn get_permission_timeout(
 
 /// 写入权限请求超时配置：模式走白名单校验、秒值走档位校验（0 或 30 秒倍数且
 /// ≤ 1 小时），合法则 upsert 两个 settings key、清理分钟制旧 key 并热更新内存配置
-/// （reaper 每个 tick 动态读取）。
+/// （reaper 每个 tick 动态读取），随后唤醒 reaper 立即重新评估——已有未决审批时
+/// 切换到「总是」档不必等下一个 tick 才生效。
 async fn set_permission_timeout(
     State(state): State<AppState>,
     Json(req): Json<SetPermissionTimeoutRequest>,
@@ -168,6 +169,8 @@ async fn set_permission_timeout(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     state.acp_perm_timeout.store(mode, req.seconds);
+    // 唤醒 reaper 立即按新配置重新评估未决请求（多跑一轮幂等，见 reaper 注释）。
+    state.acp_perm_timeout.notify_perm_request();
     Ok(Json(json!({ "mode": mode.as_str(), "seconds": req.seconds })))
 }
 

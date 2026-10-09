@@ -54,6 +54,10 @@ Prefix each entry with the area it affects:
 - (2026-10-09 10:29) `[frontend]` 删除会话（单条 / 批量）不再阻塞界面：确认后弹窗**立即关闭**，删除请求转后台执行，结果（会话已删 / agent 侧 `deleted` / `skipped` 未能删除）完成后由右下角 toast 如实上报——勾选 agent 侧删除时后端可能临时拉起 agent 进程（秒级起步），此前模态内的转圈等待把这段时间成本转嫁给了用户；列表行由完成后的刷新 + 侧栏 3s 轮询收走。批量弹窗同时移除执行中的关闭守卫与 `submitting` 阻断（弹窗已立即关闭，守卫无对象）（`frontend/src/components/Sidebar/DeleteConfirmDialog.tsx`、`BatchSessionDialog.tsx`，不阻塞契约断言见 `DeleteConfirmDialog.test.tsx`）
 - (2026-10-09 10:08) `[backend]` `[frontend]` 删除 ACP 会话时勾选「同时永久删除 agent 侧会话记录」不再要求 agent 进程正在驻留：无活连接（已释放 / 被回收 / 后端重启 / 连接已死）时后端**临时拉起一个短命 agent 进程**（不注册 supervisor；spawn 握手与 `session/delete` RPC 各 15s 预算），现场探明 `sessionCapabilities.delete` 后补发删除、随后立即收尾——勾选即承诺，不再给「请先点『恢复会话』再删除」的提示让用户自己跑一趟；前端勾选框的禁用条件同步收敛为唯一一条「该 agent 已知不支持」（能力未知与已释放均可勾选，`AgentSideCandidate` 不再消费 `acp_process_alive`，删除 `deleteAgentSideHintUnknown` / `deleteAgentSideHintReleased` 两条文案）。best-effort 语义不变：任何窗口内失败（配置 / 工作目录缺失、拉起失败或超时、能力未声明、RPC 失败）一律 `agent_side:"skipped"` + WARN 留痕，不阻断 omniterm 侧删除、不谎报已删（`src/api/sessions.rs`、`frontend/src/components/Sidebar/agentSideDelete.ts`、`DeleteConfirmDialog.tsx`、`BatchSessionDialog.tsx`、`SessionRow.tsx`、`Sidebar.tsx`、`frontend/src/locales/{zh,en}/translation.json`，回归 `api::sessions::ephemeral_agent_delete_tests`、`agentSideDelete.test.ts`、`DeleteConfirmDialog.test.tsx`）
 
+### Fixed
+
+- (2026-10-09 10:34) `[backend]` 权限超时「自动推进 + 总是」档不再有 0~30 秒等待：判定此前只在 reaper 的 30 秒定时 tick 上被评估（用户实测仍有十几秒延迟），现改为权限请求到达即唤醒 reaper 立即评估（`PermissionTimeoutConfig` 的 Notify + `run_reaper` select!；触发在请求登记 → `begin_wait` 之后，无等待者时 permit 存留不丢唤醒）；绑定 `AcpClient::attach_perm_timeout`（create / restore 两个真实注册点，探针不绑定回退 tick），settings PUT 写入后同样唤醒以立即重评已有未决请求。回归 `fake_agent_tests::always_auto_mode_answers_permission_on_arrival_not_next_tick`、`reaper::perm_request_notify_wakes_waiter_and_is_not_lost`（`src/acp/reaper.rs`、`src/acp/client.rs`、`src/api/settings.rs`、`src/ws/acp.rs`）
+
 ## [0.2.29] - 2026-10-09
 
 ### Added

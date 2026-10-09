@@ -40,7 +40,9 @@
 //!     通知本身不随 session/load 重放、广播无补发）；
 //! 14. **agent 侧记录删除**（2026-10-06）：`sessionCapabilities.delete` 的存在性
 //!     判据（声明 / 未声明两态）+ `session/delete` 的 sessionId 送达与失败上报
-//!     ——「删除会话时顺带抹掉 agent 侧记录」的后端契约。
+//!     ——「删除会话时顺带抹掉 agent 侧记录」的后端契约；
+//! 15. **「自动推进 + 总是」到达即应答**（2026-10-09）：权限请求到达唤醒 reaper，
+//!     不等 30 秒 tick 即自动放行——告知消息（广播 + 落库）与选中项送达一并钉住。
 //!
 //! **边界（勿过度解读）**：
 //! - 本测试**不复现**上游 crate 的 pidfd 空转（依赖未识别的 poll/wake 交错，
@@ -69,6 +71,7 @@
 //!   `session/cancel`（通知）/ `session/request_permission` / `terminal/*`。
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate, StopReason};
@@ -76,6 +79,7 @@ use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate, StopReason}
 use crate::acp::agent_proc;
 use crate::acp::agent_proc::spawn_test_lock_async;
 use crate::acp::client::AcpClient;
+use crate::acp::reaper::{PERM_TIMEOUT_NEVER_SECS, PermissionTimeoutConfig, PermissionTimeoutMode};
 use crate::acp::terminal::TerminalActivity;
 use crate::acp::test_support::{
     KILL_TIMEOUT, REAP_TIMEOUT, SPAWN_TIMEOUT, UNWIND_TIMEOUT, agent_for, agent_for_with_env,
@@ -578,6 +582,116 @@ async fn cancel_answers_pending_permission_with_cancelled_outcome() {
     assert_eq!(client.pending_permissions().await, 0, "cancel_all 后未决数应归零");
     client.mark_prompt_idle();
 
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 9b. 「自动推进 + 总是」到达即应答（不等 30 秒 tick）────────────────────
+
+/// 用户实测缺陷（2026-10-09）：「权限超时-自动推进-总是」档位下仍有 ~0-30 秒
+/// 等待——「总是」的到达即应答只在 reaper 的 30 秒 tick 上被评估。修复为
+/// 权限请求到达时唤醒 reaper（`PermissionTimeoutConfig::notify_perm_request`）。
+///
+/// 本用例放过 reaper 首轮立即 tick 后才发 prompt：此后下一次 tick 要等 30 秒，
+/// 若自动应答仍在数秒内完成，只可能来自唤醒链路。同时钉住告知消息（广播 +
+/// 落库）与 agent 侧收到的选中项。
+#[tokio::test]
+async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("perm-always-auto");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let state = crate::test_utils::test_state().await;
+    // 会话行：权限超时告知要落 chat_messages（外键指向 sessions）。
+    sqlx::query(
+        "INSERT INTO projects (id, target_id, name, path, created_at) VALUES ('p1', NULL, 'p', '/tmp', '2026-10-09T00:00:00Z')",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert project");
+    sqlx::query(
+        "INSERT INTO sessions (id, project_id, workspace_path, name, created_at) VALUES ('s-always', 'p1', '/tmp', 'n', '2026-10-09T00:00:00Z')",
+    )
+    .execute(&state.db)
+    .await
+    .expect("insert session");
+
+    let client = Arc::new(spawn_connect(agent_for(&script, "perm", &dir), workspace).await);
+    // 真实注册点的绑定（见 AcpClient::attach_perm_timeout）：「自动推进 + 总是」。
+    let cfg = Arc::new(PermissionTimeoutConfig::new(
+        PermissionTimeoutMode::Auto,
+        PERM_TIMEOUT_NEVER_SECS,
+    ));
+    client.attach_perm_timeout(cfg.clone());
+    state.acp_supervisor.insert("s-always".to_string(), client.clone()).await;
+
+    let reaper = tokio::spawn(crate::acp::reaper::run_reaper(
+        state.acp_supervisor.clone(),
+        state.db.clone(),
+        Arc::new(std::sync::atomic::AtomicU64::new(300)),
+        cfg,
+    ));
+    // 放过首轮立即 tick（tokio interval 首次 tick 立即到点），确保后续应答
+    // 只能来自唤醒链路而不是 tick。
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let mut system_rx = client.system_notice_subscribe();
+    let mut perm_rx = client.permission_subscribe();
+    client.mark_prompt_active();
+    // prompt 必须被并发推进（未 poll 的 future 不会真正发出请求）。
+    let prompt_task = {
+        let client = Arc::clone(&client);
+        tokio::spawn(async move { client.send_prompt("hi", vec![], vec![], vec![]).await })
+    };
+
+    // 请求先登记为未决（此刻距下一次 tick 还有 ~30 秒）。
+    let _ev = tokio::time::timeout(UNWIND_TIMEOUT, perm_rx.recv())
+        .await
+        .expect("等待权限请求事件超时")
+        .expect("权限事件通道关闭");
+
+    // 数秒内必须被自动应答（远小于 30 秒 tick）：超时即说明退回 tick 粒度。
+    let notice = tokio::time::timeout(Duration::from_secs(5), system_rx.recv())
+        .await
+        .expect("「总是」档应在到达后立即自动应答，而不是等下一个 reaper tick")
+        .expect("system 通知通道关闭");
+    assert_eq!(notice.label, crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO);
+    assert_eq!(
+        notice.detail.as_ref().and_then(|d| d["selected"].as_str()),
+        Some("Allow"),
+        "自动应答选中项应为 allow_once（优先于 reject_once）"
+    );
+    assert_eq!(client.pending_permissions().await, 0, "自动应答后未决数应归零");
+
+    // agent 收到的应答是选中项（optionId 原样透传）。
+    assert!(
+        wait_for_event(&dir, "\"optionId\":\"allow\"", UNWIND_TIMEOUT).await,
+        "agent 未收到 Selected 应答：{}",
+        read_events(&dir)
+    );
+    let resp = tokio::time::timeout(UNWIND_TIMEOUT, prompt_task)
+        .await
+        .expect("权限应答后 prompt 应正常收尾")
+        .expect("prompt task 不应 panic")
+        .expect("prompt 应成功返回");
+    assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    client.mark_prompt_idle();
+
+    // 告知消息已落库（刷新后 hydrate 可见）。
+    let (role, blocks): (String, Option<String>) =
+        sqlx::query_as("SELECT role, blocks FROM chat_messages WHERE session_id = 's-always'")
+            .fetch_one(&state.db)
+            .await
+            .expect("权限超时 system 消息应已落库");
+    assert_eq!(role, "system");
+    assert!(
+        blocks.unwrap_or_default().contains(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO),
+        "落库的 system 行应带 i18n label"
+    );
+
+    reaper.abort();
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
