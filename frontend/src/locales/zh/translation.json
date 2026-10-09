@@ -198,6 +198,7 @@
   "system.turnFailed.refusal": "这一轮未正常完成：agent 拒绝继续（stopReason=refusal）。",
   "system.turnFailed.cancelled": "这一轮已被取消（stopReason=cancelled）。",
   "system.turnFailed.other": "这一轮以非正常原因结束（stopReason={{reason}}）。",
+  "system.turnFailed.empty": "这一轮没有任何输出（stopReason={{reason}}）：agent 未产出正文或工具调用，可能是对端静默失败，重试或检查 agent 侧配置。",
   "settings.tmuxBlurDisconnect": "失焦断连（tmux）",
   "settings.tmuxBlurDisconnectHint": "窗口持续失焦超过该分钟数后自动断开终端",
   "settings.tmuxIdleDisconnect": "空闲断连（tmux）",

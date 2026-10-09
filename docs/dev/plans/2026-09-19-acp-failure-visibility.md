@@ -44,7 +44,7 @@
 - **决策**：正常结束 = `end_turn` / `max_tokens` / `max_turn_requests`；`refusal`、`cancelled`、`_` 前缀自定义值、以及**无法识别的值**一律按「非正常结束」留痕（`cancelled` 单独文案，不算错误）。
 - **理由**：AGENTS.md §8 要求可选/未知字段必须显式回退兜底。把未知值当正常 = 静默失败（即本次事故）；把未知值当异常 = 多一条提示，但可发现、可修。
 - **否决项**：只把 `refusal` 列入异常（漏掉 `_` 前缀自定义值与未来新增值，等于把同一个坑留给下一个实现）。
-- **翻盘条件**：若某实现把大量正常结束也标成 `_` 前缀值，导致误报成灾 → 改为「仅 `refusal` + 未知值且 turn 无 assistant 文本」的窄口径。
+- **翻盘条件**：若某实现把大量正常结束也标成 `_` 前缀值，导致误报成灾 → 改为「仅 `refusal` + 未知值且 turn 无 assistant 文本」的窄口径。**2026-10-09：该方向被真实事故命中并落地，但收窄的观测量从「无 assistant 文本」换成「无可见产出帧」（文本为空却有工具卡是正常形态，见下方勘误）。**
 
 ### D2：呈现载体 —— 复用既有 system 消息通道，不污染 assistant 行状态
 
@@ -130,7 +130,7 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 - [x] 前端集成测试：失败发生时 WS 离线 → 重连 hydrate 后失败提示仍可见（覆盖 P0-2）——已覆盖「离线 + 刷新」与「在线」两种可达时序；「仅重连不刷新」的残余见文末勘误。
 - [x] 手动回归：`docs/reference/user-testing.md` §12.7 / T39（用可稳定复现的 `${expr}` heredoc 命令构造，见协议参考 §6.8）。
 - [x] 质量门禁：`cargo clippy -D warnings`（0 警告）/ `tsc -b`（干净）/ `pnpm lint`（18 个改动前既有告警，0 新增）。
-- [ ] 正式库核对：新发生的非正常结束在 `chat_messages` 中留下 `role='system'` 行，且不再出现「turn 定稿但无任何提示」。**需在真实环境跑一次 §12.7 后回填。**
+- [ ] 正式库核对：新发生的非正常结束在 `chat_messages` 中留下 `role='system'` 行，且不再出现「turn 定稿但无任何提示」。**需在真实环境跑一次 §12.7 后回填。** 2026-10-09 补记：这条验收当时被证伪过一次——正式库会话 `Pi ACP_1009-1438` 出现「turn 定稿但无任何提示」，但不是留痕链路坏了，而是 D1 的判定口径漏了「协议值合法 + 零产出」这一形态（见上方勘误，已修）。修后仍未在真实环境复核过，勾选需等新二进制上线后一次实际命中。
 - [x] P1 验收：手动恢复不再产生重复行 —— `useAcpChat.alignreplay.test.tsx` 断言对齐载荷带既有行 id；「后端确实不再 INSERT」需真实库手动回归回填。
 
 ## 风险与降级
@@ -182,6 +182,18 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
   同一份协议值在两个世代上含义不同，只看值不看世代就会把实现缺陷写成「用户主动取消」。
 - 修在留痕**之前**：`send_prompt` 内按 `cancel_requested_generation` 对账，粘滞取消有界重发，
   因此正常路径下根本不会产生第二条 Cancelled 留痕。D1 的白名单与留痕形态本身不变。
+
+**D1 的白名单在 2026-10-09 被第二种形态击穿，已按 D1 预留的翻盘条件收窄（2026-10-09 补，非本计划原实施范围）。**
+
+- 现场：正式库会话 `Pi ACP_1009-1438`（`830eebeb-b282-4b84-bf09-b319d75e9f58`）用户发「看下有什么未发布的改动」，150ms 后定稿一条 `text=''`、`duration_ms=400` 的 assistant 行，`blocks` 只有 `session_info_update(running:true)` + `usage_update` + `session_info_update(running:false)` 三帧 —— 聊天流是一个空气泡加**零提示**，正是本计划要消灭的形态。
+- 根因不在宿主也不在链路：stepfun 提供方返回 403 `real_name_required`（Pi 会话文件 `~/.pi/agent/sessions/.../2026-10-09T06-38-46-431Z_01a11f62-ba9d-77a9-8478-a3700a863be8.jsonl` 末条 assistant 消息 `content: []`、`usage` 全 0、`stopReason:"error"` + `errorMessage`），而 **pi-acp 0.0.34 把它折成合法的 `end_turn`**（`agent_settled` → `settleTurn()` 的 `cancelRequested ? "cancelled" : "end_turn"`；`prompt()` 出口同样 `result === "error" ? … : "end_turn"`）。协议层看不出任何异常，D1 的「按协议值分类」在这条路径上是**结构性盲区**——不是判得太宽或太窄，而是观测量不够。
+- 修复即 D1 的翻盘条件形态（当时写的是「无 assistant 文本」）：判定加一条**独立观测量**「本轮是否折叠过可见产出帧」（正文/思考/工具/计划；`turn_accumulator::output_seen`，按 `SessionUpdate` 变体判定，未知变体按「有产出」以免把正常 turn 判成失败）。白名单值 + 零产出 → 新类目 `StopEndClass::Empty`，走既有 D2 通道留痕（`system.turnFailed.empty`）、`prompt_done.abnormal=true`。`cancelled` / `refusal` 不改判：它们已有更准确的文案，改判反而丢信息。
+- 取舍与残留：
+  - 只留痕、**不抑制空气泡本身**（空的 assistant 行仍在流里）。抑制要动 `finalize_turn` 的行语义与 hydrate/sync 匹配（见 08-18 / 10-01 两份计划的约束），收益仅是少一行空白，代价是把存储语义搅进来。
+  - 「无产出」的依据是累积器的 `output_seen`（fold 时置位、`begin_turn` 清零、`finalize_turn` 不清），**不看 `blocks` 帧窗**：窗口是有界驱逐（08-10 计划 D2），拿它当依据会把长 turn 误判成空。
+  - 帧若晚于定稿才 fold（turn 已 inactive）会被判成空 turn —— 与改动前相比这是「多一条提示」，且那种帧本来也没进聊天流，判定与用户所见一致。
+- 覆盖：`acp::turn_accumulator::tests::{visible_output_classification_follows_the_variant_table, bookkeeping_only_turn_reports_no_visible_output, visible_output_latches_once_seen_and_resets_on_begin_turn, visible_output_survives_frame_eviction}`；`ws::acp::tests::{classify_turn_end_narrows_only_the_normal_class, empty_turn_notice_has_its_own_copy_and_wire_reason, only_abnormal_class_maps_to_frame_abnormal}`；真实链路 `ws::acp::notice_tests::{dispatch_prompt_silent_end_turn_notices_empty_and_marks_abnormal, dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal, whitelist_stop_reason_without_output_gets_one_empty_notice}` —— fake agent 的 `@PUSH@` 对照组分别复刻「有正文」与「只有记账帧」两种帧序。原 `normal_stop_reasons_write_no_system_row` 用例的前提（一个未折叠任何帧的 client）现在正是空 turn 的输入，已改名并改为断言 `Empty`；「正常结束不留痕」的防线移交真实链路的正文对照用例。
+- 上游缺陷（pi-acp，非本项目）：provider error 应映射为 ACP 非正常终态（`refusal` 或 `_` 前缀自定义值），或至少把 `errorMessage` 作为 `agent_message_chunk` 下发；否则宿主永远只能报「什么都没给」而给不出原因。
 
 ## 文档闭环
 

@@ -540,12 +540,25 @@ async fn query_agent_name(db: &sqlx::SqlitePool, session_id: &str) -> String {
 /// （协议合法值 ≠ 成功语义，见计划 2026-09-19 D1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopEndClass {
-    /// 白名单「正常值」：不留痕、不算错，前端按 done 处理。
+    /// 白名单「正常值」且本轮确有可见产出：不留痕、不算错，前端按 done 处理。
     Normal,
     /// 用户主动取消：留痕（单独文案），但**不算错误**。
     Cancelled,
     /// 非正常结束（含一切未知值）：留痕 + error 语义。
     Abnormal,
+    /// 协议回了白名单正常值，但本轮**一个可见产出帧都没有** —— 空气泡。
+    /// 留痕（单独文案）+ error 语义：这是实现的失败被它自己收敛成了合法值，
+    /// 见 [`classify_turn_end`] 与 `docs/reference/acp-protocol-reference.md` §6.8。
+    Empty,
+}
+
+impl StopEndClass {
+    /// 是否给前端下发 `prompt_done.abnormal`（error 语义：红色通知 + 回合错误态）。
+    ///
+    /// `Cancelled` 不是错误（用户自己按的），`Empty` 是（agent 什么都没交）。
+    fn is_error_semantics(self) -> bool {
+        matches!(self, Self::Abnormal | Self::Empty)
+    }
 }
 
 /// D1：白名单「正常值」，其余（含未知）按非正常处理。
@@ -584,6 +597,26 @@ fn classify_stop_reason(r: &StopReason) -> StopEndClass {
     }
 }
 
+/// 宿主对 turn 终态的**最终**判定 = 协议值类目 + 本轮是否有可见产出。
+///
+/// 为什么还要看产出而不只看 stopReason：实现可以把失败收敛成一个合法值。实测
+/// pi-acp 0.0.34 —— 模型提供方返回 403（stepfun 要求实名认证，token 消耗 0、
+/// assistant 消息 `content: []` + `stopReason:"error"` + `errorMessage`），它把
+/// `agent_settled` 无条件解析成 `end_turn`（其 `settleTurn()` 只看「有没有被取消」），
+/// 错误文案只留在它自己的会话文件里，ACP 侧既没有 error 也没有任何内容帧。
+/// 于是聊天流是一个 400ms 的空气泡 + 零提示（正式库会话 `Pi ACP_1009-1438`，
+/// 2026-10-09）。这是计划 2026-09-19 D1「翻盘条件」里预留的窄化方向：
+/// 合法 `end_turn` 且本轮无内容 ⇒ 判非正常。
+///
+/// 只在 `Normal` 上收窄，不动 `Cancelled` / `Abnormal`：那两类已有各自更准确的文案，
+/// 把它们改判成「空 turn」会丢掉信息（取消的一轮无输出是用户按的，不是失败）。
+fn classify_turn_end(r: &StopReason, has_visible_output: bool) -> StopEndClass {
+    match classify_stop_reason(r) {
+        StopEndClass::Normal if !has_visible_output => StopEndClass::Empty,
+        other => other,
+    }
+}
+
 /// 取协议 wire 形态（snake_case，如 `end_turn` / `_custom`），用于 system 消息的 detail
 /// 与文案插值。与 `prompt_done.stop_reason` 的 Debug 形态刻意不同源、各司其职：
 /// detail 面向人读（协议原文），stop_reason 面向既有前端 cancel 判定（勿改其格式）。
@@ -617,6 +650,9 @@ const SYSTEM_LABEL_TURN_FAILED_CANCELLED: &str = "system.turnFailed.cancelled";
 /// ② 确认 `stop_reason_wire` 对 `Other` 产出 `_` 前缀的自定义 wire 形态。
 const SYSTEM_LABEL_TURN_FAILED_OTHER: &str = "system.turnFailed.other";
 
+/// system 消息的 i18n key（label 列）：协议说正常结束，本轮却无任何可见产出。
+const SYSTEM_LABEL_TURN_FAILED_EMPTY: &str = "system.turnFailed.empty";
+
 /// 非正常/取消结束的留痕文案。label 是 i18n key（前端命中才翻译，未命中原样显示），
 /// text 是中文兜底（text 列语义与 2026-08-18 起的 system 行一致），detail 带协议原文。
 struct TurnEndNotice {
@@ -625,14 +661,18 @@ struct TurnEndNotice {
     detail: serde_json::Value,
 }
 
-/// 非正常/取消结束的留痕文案。`Normal` 返回 `None`（正常结束不留痕）。
+/// 非正常/取消/空 turn 结束的留痕文案。`Normal` 返回 `None`（正常结束不留痕）。
 ///
 /// 三条文案都写成一句话并带上 `stopReason=<协议原文>`：让用户在**不查日志**时
 /// 就能判断这一轮失败还是被取消、失败在协议层是什么形态；未知值同样走
 /// [`SYSTEM_LABEL_TURN_FAILED_OTHER`] + `{{reason}}` 插值，绝不吞成通用文案
 /// （吞了就退回本次事故的「无任何痕迹」）。
 ///
-/// 三条分支按**类型**而非 wire 字符串分流：字符串比对会在 `StopReason` 改名时
+/// `Empty` 的文案必须自带「没有任何输出」这层意思并给出下一步（重试 / 查 agent
+/// 侧配置）：它对应的是实现把失败写成合法 `end_turn` 的形态，协议原文本身
+/// （`end_turn`）不携带任何失败信息，用户光看原文推不出问题。
+///
+/// 各条分支按**类型**而非 wire 字符串分流：字符串比对会在 `StopReason` 改名时
 /// 静默失效（改 Debug/serde 形态，文案默默掉到 other 分支）。
 fn build_turn_end_notice(r: &StopReason, class: StopEndClass) -> Option<TurnEndNotice> {
     let wire = stop_reason_wire(r);
@@ -641,6 +681,12 @@ fn build_turn_end_notice(r: &StopReason, class: StopEndClass) -> Option<TurnEndN
         (StopEndClass::Cancelled, _) => {
             (SYSTEM_LABEL_TURN_FAILED_CANCELLED, format!("这一轮已被取消（stopReason={wire}）。"))
         }
+        (StopEndClass::Empty, _) => (
+            SYSTEM_LABEL_TURN_FAILED_EMPTY,
+            format!(
+                "这一轮没有任何输出（stopReason={wire}）：agent 未产出正文或工具调用，可能是对端静默失败，重试或检查 agent 侧配置。"
+            ),
+        ),
         (StopEndClass::Abnormal, StopReason::Refusal) => (
             SYSTEM_LABEL_TURN_FAILED_REFUSAL,
             format!("这一轮未正常完成：agent 拒绝继续（stopReason={wire}）。"),
@@ -697,8 +743,12 @@ async fn persist_and_broadcast_turn_end_notice(
     });
 }
 
-/// D1 + D2 + 幂等的**单一切入点**：按 D1 判定 stopReason，非正常/取消则写一条
-/// system 留痕（落库 + 广播）。返回判定结果，供调用方填 `prompt_done.abnormal`。
+/// D1 + D2 + 幂等的**单一切入点**：按 D1 判定终态（协议值 + 本轮可见产出），
+/// 非正常/取消/空 turn 则写一条 system 留痕（落库 + 广播）。返回判定结果，
+/// 供调用方填 `prompt_done.abnormal`。
+///
+/// 产出位必须在**定稿之后**读（调用方已 `mark_prompt_idle()`）：累积器的
+/// `output_seen` 与 `row_id` 同样活到下一次 `begin_turn`，此刻读到的正是本轮的值。
 ///
 /// 为什么抽成函数：同一判定 + 写库 + 世代去重的序列只应有一处实现（工程准则 7①），
 /// 且这样才能在测试里对**同一世代**连调两次来验证「只写一条」——若这段内联在
@@ -710,9 +760,9 @@ async fn notice_turn_end_if_abnormal(
     session_id: &str,
     stop_reason: &StopReason,
 ) -> StopEndClass {
-    let class = classify_stop_reason(stop_reason);
+    let class = classify_turn_end(stop_reason, c.turn_has_visible_output());
     let Some(notice) = build_turn_end_notice(stop_reason, class) else {
-        // Normal（end_turn / max_tokens / max_turn_requests）：不留痕。
+        // Normal（白名单值且本轮确有产出）：不留痕。
         return class;
     };
     // 世代幂等（只写一条）：同一 turn 的收尾可能被并发/重放触发两遍（reaper 的
@@ -752,8 +802,9 @@ async fn dispatch_prompt(
             // mark_prompt_idle 内部定稿累积器进行中的 turn。
             c.mark_prompt_idle();
             // D1/D3：协议合法值 ≠ 成功语义。白名单外的终态（refusal / 取消 / 未知值）
-            // 必须在聊天流留痕——否则表现为「turn 静默定稿、无任何失败痕迹」。
-            // Normal（end_turn / max_tokens / max_turn_requests）什么都不写。
+            // 必须在聊天流留痕——否则表现为「turn 静默定稿、无任何失败痕迹」；
+            // 白名单内但本轮零可见产出的（实测 pi-acp 把 provider 403 折成 end_turn）
+            // 同样留痕，见 `classify_turn_end`。
             // 必须先 mark_prompt_idle 再留痕（D3 注意点）：created_at 因此严格晚于
             // 正文行，前端渲染顺序即「正文 → 失败提示」。
             let class = notice_turn_end_if_abnormal(&c, &db, &session_id, &resp.stop_reason).await;
@@ -765,10 +816,11 @@ async fn dispatch_prompt(
                 row_id: c.turn_row_id(),
                 // 同理，定稿结算出的时长也在此刻读取，随帧下发使耗时立即显示。
                 duration: c.turn_timing(),
-                // 单一真源：白名单判定只在这里做一次，前端读这个字段走 error 语义，
+                // 单一真源：终态判定只在这里做一次，前端读这个字段走 error 语义，
                 // 不得自行解析 stop_reason（AGENTS.md 工程准则 7①）。cancelled
-                // 不算错误，故为 false（其留痕是上面的 cancelled 文案）。
-                abnormal: class == StopEndClass::Abnormal,
+                // 不算错误，故为 false（其留痕是上面的 cancelled 文案）；
+                // 空 turn 是错误（agent 什么都没交）。
+                abnormal: class.is_error_semantics(),
             });
         }
         Err(e) => {
@@ -1400,8 +1452,9 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
 mod tests {
     use super::{
         AcpClientMessage, AcpServerMessage, SYSTEM_LABEL_TURN_FAILED_CANCELLED,
-        SYSTEM_LABEL_TURN_FAILED_OTHER, SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass,
-        build_turn_end_notice, classify_stop_reason, extract_at_paths, stop_reason_wire,
+        SYSTEM_LABEL_TURN_FAILED_EMPTY, SYSTEM_LABEL_TURN_FAILED_OTHER,
+        SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass, build_turn_end_notice,
+        classify_stop_reason, classify_turn_end, extract_at_paths, stop_reason_wire,
     };
     // 判定口径钉在协议类型上（v1 schema），不构造 wire 字符串。
     use agent_client_protocol::schema::v1::StopReason;
@@ -1590,6 +1643,7 @@ mod tests {
         assert_eq!(SYSTEM_LABEL_TURN_FAILED_REFUSAL, "system.turnFailed.refusal");
         assert_eq!(SYSTEM_LABEL_TURN_FAILED_CANCELLED, "system.turnFailed.cancelled");
         assert_eq!(SYSTEM_LABEL_TURN_FAILED_OTHER, "system.turnFailed.other");
+        assert_eq!(SYSTEM_LABEL_TURN_FAILED_EMPTY, "system.turnFailed.empty");
     }
 
     /// `Other` 分支（`Abnormal` 且非 `Refusal`）今天不可构造，故**不造假测**：
@@ -1640,10 +1694,10 @@ mod tests {
         assert!(bad.contains("\"stop_reason\":\"Refusal\""), "得到: {bad}");
     }
 
-    /// 类目 → `abnormal` 位的映射是前端 error 语义的唯一输入：`Abnormal` ⇒ true，
-    /// `Cancelled` 与 `Normal` ⇒ false（cancelled 是用户主动行为，不算错误）。
+    /// 类目 → `abnormal` 位的映射是前端 error 语义的唯一输入：`Abnormal` / `Empty`
+    /// ⇒ true，`Cancelled` 与 `Normal` ⇒ false（cancelled 是用户主动行为，不算错误）。
     ///
-    /// 复述 `dispatch_prompt` 里的 `abnormal: class == StopEndClass::Abnormal` ——
+    /// 复述 `dispatch_prompt` 里的 `abnormal: class.is_error_semantics()` ——
     /// 该式只出现一次，这里是它的护栏：把 true 放宽到 cancelled 会让前端把正常的
     /// 用户取消也标成错误态（红字 + attention error）。
     #[test]
@@ -1652,9 +1706,61 @@ mod tests {
             (StopEndClass::Normal, false),
             (StopEndClass::Cancelled, false),
             (StopEndClass::Abnormal, true),
+            (StopEndClass::Empty, true),
         ] {
-            assert_eq!(class == StopEndClass::Abnormal, expected, "{class:?} 的映射不符");
+            assert_eq!(class.is_error_semantics(), expected, "{class:?} 的映射不符");
         }
+    }
+
+    // ── 空 turn（协议说正常、实际零产出）判定 ────────────────────────────
+
+    /// 收窄只发生在白名单值上：`refusal` 有它自己的准确文案，`cancelled` 是用户按的，
+    /// 两者都不得因为「本轮没输出」被改判成空 turn（改判会把已有信息换成通用文案）。
+    #[test]
+    fn classify_turn_end_narrows_only_the_normal_class() {
+        for r in [StopReason::EndTurn, StopReason::MaxTokens, StopReason::MaxTurnRequests] {
+            assert_eq!(
+                classify_turn_end(&r, true),
+                StopEndClass::Normal,
+                "{r:?} + 有产出 = 正常（误判成空 turn 就是计划风险表的噪音）"
+            );
+            assert_eq!(
+                classify_turn_end(&r, false),
+                StopEndClass::Empty,
+                "{r:?} + 零产出 = 空 turn"
+            );
+        }
+        for (r, has_output) in [
+            (StopReason::Refusal, true),
+            (StopReason::Refusal, false),
+            (StopReason::Cancelled, true),
+            (StopReason::Cancelled, false),
+        ] {
+            let expected = classify_stop_reason(&r);
+            assert_eq!(
+                classify_turn_end(&r, has_output),
+                expected,
+                "{r:?}（产出={has_output}）应维持协议值类目 {expected:?}，不被空判定改写"
+            );
+        }
+    }
+
+    /// 空 turn 有独立文案与 i18n key：与 refusal（「拒绝继续」）、cancelled（「已取消」）
+    /// 都不同，且 text 里带上协议原文 —— 用户据此知道是「什么都没给」而不是「被拒」。
+    #[test]
+    fn empty_turn_notice_has_its_own_copy_and_wire_reason() {
+        let empty = build_turn_end_notice(&StopReason::EndTurn, StopEndClass::Empty)
+            .expect("空 turn 必须留痕");
+        assert_eq!(empty.label, SYSTEM_LABEL_TURN_FAILED_EMPTY);
+        assert!(empty.text.contains("没有任何输出"), "{}", empty.text);
+        assert!(empty.text.contains("end_turn"), "text 须带协议原文，得到: {}", empty.text);
+        assert_eq!(empty.detail["stop_reason"], "end_turn");
+        let refusal = build_turn_end_notice(&StopReason::Refusal, StopEndClass::Abnormal).unwrap();
+        let cancelled =
+            build_turn_end_notice(&StopReason::Cancelled, StopEndClass::Cancelled).unwrap();
+        assert_ne!(empty.label, refusal.label);
+        assert_ne!(empty.label, cancelled.label);
+        assert_ne!(empty.text, refusal.text);
     }
 }
 
@@ -1675,8 +1781,9 @@ mod notice_tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::{
-        SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass, TurnEndEvent, build_turn_end_notice,
-        dispatch_prompt, notice_turn_end_if_abnormal, stop_reason_wire,
+        SYSTEM_LABEL_TURN_FAILED_EMPTY, SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass,
+        TurnEndEvent, build_turn_end_notice, dispatch_prompt, notice_turn_end_if_abnormal,
+        stop_reason_wire,
     };
     use crate::acp::agent_proc::spawn_test_lock_async;
     use crate::acp::chat_persistence::{insert_message, list_messages_page};
@@ -1713,8 +1820,7 @@ exit 0
 
     /// **驱动 `dispatch_prompt` 本体**用的 fake agent 脚本。
     ///
-    /// 与上面的 [`FAKE_AGENT_SCRIPT`] 只差 `session/prompt` 这一段：先推一条
-    /// agent 文本 chunk（真实 agent 必然如此，否则根本不存在正文行），再回一个
+    /// 与上面的 [`FAKE_AGENT_SCRIPT`] 只差 `session/prompt` 这一段：先推帧，再回一个
     /// 真实的 `stopReason`。没有它，`dispatch_prompt` 的 `Ok(resp)` 分支
     /// （`mark_prompt_idle` → 留痕 → `notify_turn_end`）在测试里**零覆盖** ——
     /// 既有 5 个留痕用例全都直接调 `notice_turn_end_if_abnormal`，把这条链路
@@ -1723,6 +1829,13 @@ exit 0
     ///
     /// `STOP_REASON` 经 env 注入（`@STOP_REASON@` 占位），让同一份脚本同时驱动
     /// 「refusal → 留痕」与「end_turn → 不留痕」两个对照，不必复制两份脚本。
+    ///
+    /// `@PUSH@` 决定 prompt 前推的是哪一类帧，这是**空 turn 判定的对照组**：
+    /// - `prose`：一条 `agent_message_chunk`（正常 turn 的形态）→ 有可见产出。
+    /// - `bookkeeping`：`session_info_update` + `usage_update` —— 照抄正式库会话
+    ///   `Pi ACP_1009-1438` 的 `blocks` 内容（pi-acp 把 provider 403 折成 `end_turn`
+    ///   后剩下的就是这两帧），开得出消息行、却一帧可见产出都没有。
+    ///
     /// 响应必须回抄请求 id：crate 的 `RequestId` 是 UUID 字符串，错配即挂死。
     ///
     /// 为什么本地新建而不是改 `acp::fake_agent_tests` 的共享脚本：那份脚本按
@@ -1730,7 +1843,7 @@ exit 0
     /// 回归（spawn 超时不得泄漏进程）与 D2 进程组测试依赖；往共享脚本加行为有
     /// 破坏其他用例的风险，收益却只是少一份 test-only 常量。
     const DISPATCH_FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
-# test-only fake ACP agent：握手 + 对 session/prompt 推一条正文 chunk 后，
+# test-only fake ACP agent：对 session/prompt 按 PUSH 模式推帧后，
 # 回注 env 指定的 stopReason。
 while IFS= read -r line; do
   case "$line" in
@@ -1743,10 +1856,17 @@ while IFS= read -r line; do
       printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"dispatch-session"}}\n' "$id"
       ;;
     *'"method":"session/prompt"'*)
-      # 先推正文：让累积器在本 turn 内真的开一行（row_id 有值、定稿会写库），
-      # 这样才能测到「真有一次 agent 回复且它被定稿落库」，而不是只测一个空
-      # turn 的收尾。notification 没有 id 字段（JSON-RPC 通知），不回抄。
-      printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"正文一句话"}}}}\n'
+      # notification 没有 id 字段（JSON-RPC 通知），不回抄。
+      if [ "@PUSH@" = "prose" ]; then
+        # 推正文：让累积器在本 turn 内真的开一行（row_id 有值、定稿会写库），
+        # 这样才能测到「真有一次 agent 回复且它被定稿落库」，而不是只测一个空
+        # turn 的收尾。
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"正文一句话"}}}}\n'
+      elif [ "@PUSH@" = "bookkeeping" ]; then
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"session_info_update","_meta":{"piAcp":{"queueDepth":0,"running":true}}}}}\n'
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"usage_update","used":21692,"size":512000}}}\n'
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"dispatch-session","update":{"sessionUpdate":"session_info_update","_meta":{"piAcp":{"queueDepth":0,"running":false}}}}}\n'
+      fi
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
       printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"@STOP_REASON@"}}\n' "$id"
       ;;
@@ -1869,14 +1989,39 @@ exit 0
     /// `mark_prompt_idle` 的定稿（正文行 + 会话累计账）经它送达 writer 循环，
     /// 不挂就与真实链路的时序不符 —— 本 turn 的 assistant 行将根本不存在，
     /// 测到的是一个空 turn 的收尾。
+    /// fake agent 在 `session/prompt` 前推的帧形态（见
+    /// [`DISPATCH_FAKE_AGENT_SCRIPT`] 的 `@PUSH@` 说明）。
+    #[derive(Copy, Clone)]
+    enum Pushed {
+        /// 一条正文 chunk：正常 turn 的形态。
+        Prose,
+        /// 只有 `session_info_update` + `usage_update`：实测空气泡形态。
+        Bookkeeping,
+    }
+
+    impl Pushed {
+        fn as_str(self) -> &'static str {
+            match self {
+                Self::Prose => "prose",
+                Self::Bookkeeping => "bookkeeping",
+            }
+        }
+    }
+
     async fn dispatch_client(
         dir: &Path,
         stop_reason: &str,
+        pushed: Pushed,
         db: sqlx::SqlitePool,
     ) -> Arc<AcpClient> {
         let script = dir.join("dispatch-agent.sh");
-        std::fs::write(&script, DISPATCH_FAKE_AGENT_SCRIPT.replace("@STOP_REASON@", stop_reason))
-            .expect("write dispatch fake agent script");
+        std::fs::write(
+            &script,
+            DISPATCH_FAKE_AGENT_SCRIPT
+                .replace("@STOP_REASON@", stop_reason)
+                .replace("@PUSH@", pushed.as_str()),
+        )
+        .expect("write dispatch fake agent script");
         let workspace = dir.join("ws");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         // 脚本用 sed 解析请求 id，PATH 必须覆盖它（找不到 sed 即静默不回响应）。
@@ -1942,20 +2087,30 @@ exit 0
         }
     }
 
-    /// `end_turn` / `max_tokens` / `max_turn_requests` → 一条 system 行都不写。
+    /// 白名单值 + 本轮零可见产出 = `Empty`（不再是 `Normal`），并留一条痕。
     ///
-    /// 这是判定口径过宽的回归防线：误报会把正常结束也标成失败（计划风险表第一条）。
+    /// 用的是 `live_client`：它的 fake agent 握手后一帧不推，累积器 `output_seen`
+    /// 恒为假 —— 正是空 turn 的判定输入。三个白名单值打在同一个世代上，顺带验证
+    /// 留痕按世代去重（reaper prompt-stale 定稿与 `send_prompt` 返回两个终结者
+    /// 竞态时只能落一条）。
+    ///
+    /// **「正常结束不留痕」的防线不在这里**（本用例的 turn 本来就不正常），由真实
+    /// 链路的 `dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal`（推正文）守。
     #[tokio::test]
-    async fn normal_stop_reasons_write_no_system_row() {
+    async fn whitelist_stop_reason_without_output_gets_one_empty_notice() {
         let _guard = spawn_test_lock_async().await;
         let db = fresh_db().await;
-        let dir = unique_dir("normal");
+        let dir = unique_dir("silent-normal");
         let client = live_client(&dir).await;
+        client.mark_prompt_active();
         for reason in [StopReason::EndTurn, StopReason::MaxTokens, StopReason::MaxTurnRequests] {
             let class = notice_turn_end_if_abnormal(&client, &db, SESSION, &reason).await;
-            assert_eq!(class, StopEndClass::Normal, "{reason:?} 应判为 Normal");
+            assert_eq!(class, StopEndClass::Empty, "{reason:?} + 零产出应判为 Empty");
         }
-        assert_eq!(system_count(&db).await, 0, "白名单正常值不得留 system 行");
+        assert_eq!(system_count(&db).await, 1, "同一世代的重复判定必须去重（只写一条）");
+        let rows = rows(&db).await;
+        assert_eq!(rows[0].0, "system", "留痕走 system 行（D2 载体）");
+        assert!(rows[0].1.contains("没有任何输出"), "文案须说明「什么都没产出」: {}", rows[0].1);
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2145,8 +2300,13 @@ exit 0
         let _guard = spawn_test_lock_async().await;
         let db = fresh_db().await;
         let dir = unique_dir("dispatch-refusal");
-        let client =
-            dispatch_client(&dir, &stop_reason_wire(&StopReason::Refusal), db.clone()).await;
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::Refusal),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
 
         let event = drive_dispatch_prompt(&client, &db, "帮我做件事")
             .await
@@ -2175,20 +2335,30 @@ exit 0
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 对照：`end_turn` 走真实 `dispatch_prompt` 时**不写** system 行，且
-    /// `abnormal` 为 false。
+    /// 对照：`end_turn` **且有正文** 走真实 `dispatch_prompt` 时不写 system 行，
+    /// 且 `abnormal` 为 false。
     ///
     /// 这是判定口径过宽（把正常结束也当失败 = 噪音）在**真实链路**上的防线。
     /// 既有 `normal_stop_reasons_write_no_system_row` 只覆盖了直接调
     /// `notice_turn_end_if_abnormal` 的形状，漏掉了 `dispatch_prompt` 里
     /// 「Normal 时恰好什么都不做」这一分支本身。
+    ///
+    /// `Pushed::Prose` 是本测试的前提条件而不是装饰：可见产出为假时同一份
+    /// `end_turn` 会走 `Empty` 分支留痕（见下方 bookkeeping 对照用例），
+    /// 那条路径反过来由 `system_count == 0` 断言守住 —— 正文帧没在 `session/prompt`
+    /// 响应之前折叠进累积器的话，本测试会红（不是静默通过）。
     #[tokio::test]
     async fn dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal() {
         let _guard = spawn_test_lock_async().await;
         let db = fresh_db().await;
         let dir = unique_dir("dispatch-end-turn");
-        let client =
-            dispatch_client(&dir, &stop_reason_wire(&StopReason::EndTurn), db.clone()).await;
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
 
         let event = drive_dispatch_prompt(&client, &db, "帮我做件事")
             .await
@@ -2202,6 +2372,58 @@ exit 0
             other => panic!("end_turn 必须走 Done 帧，得到: {other:?}"),
         }
         assert_eq!(system_count(&db).await, 0, "正常结束不得留 system 行（噪音）");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **实测事故的回归防线**（正式库会话 `Pi ACP_1009-1438`，2026-10-09）：pi-acp
+    /// 把提供方 403（stepfun 要求实名认证，token 消耗 0）折成合法 `end_turn`，一轮里
+    /// 只有 `session_info_update` + `usage_update` —— 消息行开得出来（UI 上就是一个
+    /// 空气泡），可见产出却为零，改动前聊天流里没有任何提示。
+    ///
+    /// 与上面的正文对照唯一差别就是 `Pushed::Bookkeeping`，两例合起来把「判定必须
+    /// 同时看协议值与本轮产出」钉住：只改回 `classify_stop_reason`（不看产出）本例红，
+    /// 把产出判定放宽成「一律留痕」则正文对照红。
+    #[tokio::test]
+    async fn dispatch_prompt_silent_end_turn_notices_empty_and_marks_abnormal() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-silent");
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Bookkeeping,
+            db.clone(),
+        )
+        .await;
+
+        let event = drive_dispatch_prompt(&client, &db, "看下有什么未发布的改动")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        match event {
+            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+                assert_eq!(stop_reason, "EndTurn", "协议值原样下发，判定不改写它");
+                assert!(abnormal, "空 turn 是失败，prompt_done.abnormal 必须为 true");
+            }
+            other => panic!("空 turn 仍要走 Done 帧，得到: {other:?}"),
+        }
+
+        let all = rows(&db).await;
+        let notice: Vec<_> = all.iter().filter(|(role, _, _)| role == "system").collect();
+        assert_eq!(notice.len(), 1, "空气泡必须留一条痕，得到 {} 行: {all:?}", all.len());
+        let (role, text, blocks) = notice[0];
+        assert_eq!(role.as_str(), "system");
+        assert!(text.contains("没有任何输出"), "{text}");
+        let blocks = blocks.as_deref().expect("system 行必须带 blocks");
+        let parsed: serde_json::Value = serde_json::from_str(blocks).expect("blocks 是 JSON 数组");
+        assert_eq!(parsed[0]["type"], "system");
+        assert_eq!(
+            parsed[0]["label"], SYSTEM_LABEL_TURN_FAILED_EMPTY,
+            "i18n key 必须在 blocks 里（前端命中才翻译）"
+        );
+        assert_eq!(parsed[0]["detail"]["stop_reason"], "end_turn", "detail 带协议原文");
 
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);

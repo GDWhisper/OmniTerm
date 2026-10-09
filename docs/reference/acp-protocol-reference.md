@@ -611,11 +611,22 @@ idle 状态转换结束前台工作时 MUST 包含 stopReason：
 | 消息流 | **不保证**下发任何 `agent_message_chunk`；失败文案只存在于它自己的会话记录（`status:"incomplete"` + `providerData.error`） |
 | 同一实现的另一形态 | `cancelled`（用户中断）：agent 侧把 `Interrupted by user` 作为 assistant 文本追加，会随消息流下发 |
 
+**更恶劣的第二形态：把失败折成合法的成功值**。实测 pi-acp 0.0.34（2026-10-09，正式库会话 `Pi ACP_1009-1438`，会话文件 `~/.pi/agent/sessions/<cwd>/<时间>_<acp_session_id>.jsonl`）：
+
+| 观测点 | pi-acp 实测行为 |
+|--------|----------------|
+| 触发 | 模型提供方拒供 —— HTTP 403 `real_name_required`（stepfun 免费档要求实名认证），assistant 消息 `content: []`、`usage` 全 0（请求根本没进模型）、`stopReason: "error"` + `errorMessage: "403: ..."` |
+| ACP 应答 | `session/prompt` 正常返回 **`stopReason="end_turn"`**。两处折叠点：`agent_settled` → `settleTurn()` 的 `reason = cancelRequested ? "cancelled" : "end_turn"`（只看有无取消）；`prompt()` 出口 `result === "error" ? (wasCancelRequested ? "cancelled" : "end_turn") : result` |
+| 消息流 | 一个 `agent_message_chunk` 都没有。宿主该 turn 的 `blocks` 只剩 `session_info_update(running:true)` + `usage_update` + `session_info_update(running:false)` —— 记账帧会开出消息行，于是 UI 上是一个几百毫秒的**空气泡** |
+| `errorMessage` | 只存在于它自己的会话文件，既不进 JSON-RPC error、也不进消息流 |
+
+**因此仅靠 stopReason 白名单判不出这一类失败**（值合法、内容空）。宿主的判据必须加一条**独立观测量**：本轮是否出现过**可见产出**帧（`agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan`）。
+
 因此宿主对 `end_turn` 之外的**所有** stopReason（`refusal` / `max_tokens` / `max_turn_requests` / `_` 前缀自定义值）都不得当作正常完成——至少要在 UI 留痕并落库，否则表现为「turn 静默定稿、无任何错误」（本项目 0.2.22 即此状态，见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md`）。
 
-**宿主现状（2026-09-26 起 = 已留痕，0.2.26）**：OmniTerm 按白名单判定 `stopReason`——`end_turn` / `max_tokens` / `max_turn_requests` 为正常（不留痕），`cancelled` 单独文案（不算错误），其余含未来新增值一律按非正常。非正常结束时由后端写入一条 `role='system'` 的 `chat_messages` 行（内含 i18n key 与协议原文 `stopReason`）并广播 `system_message` 帧，刷新/切设备后 hydrate 仍可见；同时 `prompt_done` 帧下发 `abnormal` 布尔量让前端把通知与回合状态切到错误语义。判定只在后端做一次，前端不得自行解析 `stopReason` 分类（同一判断散在两处必然漂移）。已知残留：`system_notice_tx` 是普通 broadcast（无补发），而前端 hydrate 每会话只跑一次，故 WS 离线期间产生的 system 通知要整页刷新后才可见——见上述计划文档的「勘误」块。
+**宿主现状（2026-09-26 起 = 已留痕，0.2.26；2026-10-09 起补「空 turn」窄口径）**：OmniTerm 按白名单判定 `stopReason`——`end_turn` / `max_tokens` / `max_turn_requests` 为正常（不留痕），`cancelled` 单独文案（不算错误），其余含未来新增值一律按非正常。**白名单值再叠加一条产出观测**：本轮一个可见产出帧都没有（`turn_accumulator` 的 `output_seen`，按 `SessionUpdate` 变体判定，未知变体按「有产出」以免误判失败）则判为**空 turn**，单独文案 `system.turnFailed.empty`。非正常/空 turn 结束时由后端写入一条 `role='system'` 的 `chat_messages` 行（内含 i18n key 与协议原文 `stopReason`）并广播 `system_message` 帧，刷新/切设备后 hydrate 仍可见；同时 `prompt_done` 帧下发 `abnormal` 布尔量让前端把通知与回合状态切到错误语义（`cancelled` 为 `false`，`empty` 为 `true`）。判定只在后端做一次（`classify_turn_end`），前端不得自行解析 `stopReason` 分类（同一判断散在两处必然漂移）。已知残留：`system_notice_tx` 是普通 broadcast（无补发），而前端 hydrate 每会话只跑一次，故 WS 离线期间产生的 system 通知要整页刷新后才可见——见上述计划文档的「勘误」块。
 
-**取证入口**（宿主日志只显示「turn 被定稿」，病因在 agent 侧）：`~/.codebuddy/logs/<YYYY-MM-DD>/<项目>__<hash>.log`（搜 `[Interruption]` / `[ToolCallError` / `Prompt refused`）与 `~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl` 末尾记录。
+**取证入口**（宿主日志只显示「turn 被定稿」，病因在 agent 侧）：codebuddy —— `~/.codebuddy/logs/<YYYY-MM-DD>/<项目>__<hash>.log`（搜 `[Interruption]` / `[ToolCallError` / `Prompt refused`）与 `~/.codebuddy/projects/<项目>/<acp_session_id>.jsonl` 末尾记录；pi —— `~/.pi/agent/sessions/<cwd 转义名>/*_<acp_session_id>.jsonl` 末条 assistant 消息（`content` / `usage` / `stopReason` / `errorMessage` 四件套即可判定「提供方拒供」还是「agent 自己有输出」）。
 
 **已知实现缺陷（上游 codebuddy，非本项目、与宿主和链路无关——裸 CLI 同样复现）**：codebuddy 在**派发前**用 `shell-quote@1.8.3` 解析 Bash 命令（该库不支持 heredoc 语义），凡出现 `${<非合法 shell 变量名>}` 即抛 `Bad substitution: <标识符前缀>`；异常从批量派发路径逸出（同一 bundle 里 shell-quote 抽取策略自身有 `catch{return null}` 兜底，此处没有）→ **携带违规命令的那次工具调用不执行**（同批其他调用仍可能执行；命令原文连 `[BashTool] execute start` 都没打，只能定性、无法还原原文），随后整个 run 被判定失败（`RUN_FAILED` + `willRetry=false`）→ **turn 直接结束，后续步骤不再进行**（ACP 侧收敛为 `stopReason=refusal`；交互式 CLI 侧打印错误并结束本轮）。
 

@@ -172,7 +172,18 @@ struct TurnState {
     wait_depth: u32,
     /// uuid of the in-progress `chat_messages` row. Created lazily on the first
     /// folded frame so a turn that emits nothing leaves no empty bubble.
+    ///
+    /// 「第一条帧」不等于「第一行可见内容」：`usage_update` / `session_info_update`
+    /// 这类记账帧同样开一行，用户看到的却是一个空气泡。判定「本轮到底有没有产出
+    /// 东西」要用 [`Self::output_seen`]。
     row_id: Option<String>,
+    /// 本 turn 是否折叠过至少一帧**可见产出**（正文 / 思考 / 工具卡 / 计划），
+    /// 见 [`update_is_visible_output`]。`begin_turn` 归零，与 `row_id` 同样活到
+    /// 下一次 `begin_turn` —— turn 结束路径要在 `finalize_turn` 之后仍读得到它。
+    /// 用途：agent 可能把失败收敛成合法的 `stopReason=end_turn`（实测 pi-acp 把
+    /// provider 403 折成 end_turn，见 `docs/reference/acp-protocol-reference.md` §6.8），
+    /// 宿主只能靠「协议说正常但一个可见帧都没有」识别这种静默失败。
+    output_seen: bool,
     /// 上一次 `finalize_turn` 结算出的时长。与 `row_id` 同生命周期：定稿后仍可读，
     /// 下一次 `begin_turn` 才清 —— WS 层在 `mark_prompt_idle` 之后要拿它拼 `prompt_done`。
     /// `None` = 本 client 还没定稿过任何 turn。
@@ -367,6 +378,7 @@ impl TurnAccumulator {
             st.wait_since = None;
             st.wait_depth = 0;
             st.row_id = None;
+            st.output_seen = false;
             st.last_timing = None;
             st.frames.clear();
             st.frames_bytes = 0;
@@ -390,6 +402,10 @@ impl TurnAccumulator {
             st.seq += 1;
             if st.row_id.is_none() {
                 st.row_id = Some(Uuid::new_v4().to_string());
+            }
+            // 记账只在第一次命中时做一次匹配；一旦置真就永久为真（本 turn 内不再判定）。
+            if !st.output_seen {
+                st.output_seen = update_is_visible_output(&notification.update);
             }
             if let Some(text) = agent_message_text(&notification.update) {
                 st.text.push_str(text);
@@ -556,6 +572,21 @@ impl TurnAccumulator {
         self.inner.lock().ok()?.row_id.clone()
     }
 
+    /// 本 turn（或刚定稿的那一轮）是否出现过**可见产出**帧。
+    ///
+    /// 与 [`Self::turn_row_id`] 同生命周期：`finalize_turn` 不清、`begin_turn` 才清，
+    /// 故 turn 结束路径（`mark_prompt_idle` 之后）仍能读到本轮的值。
+    ///
+    /// 锁中毒时按 `true`（视为有产出）处理：这个值唯一的用途是让宿主把「协议说成功、
+    /// 实际什么都没给」的静默失败显式化。中毒说明别处已经 panic，此时宁可少一条提示，
+    /// 也不要给一个正常 turn 挂上错误语义（判定过宽 = 噪音，见计划 2026-09-19 风险表）。
+    pub fn turn_has_visible_output(&self) -> bool {
+        match self.inner.lock() {
+            Ok(st) => st.output_seen,
+            Err(poisoned) => poisoned.into_inner().output_seen,
+        }
+    }
+
     /// 上一次定稿结算出的时长；`None` = 当前 turn 尚未定稿过（`begin_turn` 已清）或本
     /// client 从未跑完过一个 turn。与 [`Self::turn_row_id`] 同样活到下一次 `begin_turn`，
     /// 故 `mark_prompt_idle` 之后立刻读仍能拿到本 turn 的值。
@@ -622,6 +653,39 @@ impl Default for TurnAccumulator {
 /// —— 它跨进程无意义（计划「风险与缓解」）。
 fn elapsed_ms(since: Instant) -> u64 {
     since.elapsed().as_millis() as u64
+}
+
+/// 这条 `SessionUpdate` 是否会在聊天流里呈现成**用户看得见的内容**
+/// （正文 / 思考 / 工具卡 / 计划）。
+///
+/// 用于识别「协议回了正常终态、本轮却什么都没产出」的静默失败：`end_turn` 之类
+/// 合法值不构成成功语义（AGENTS.md §8，实测 pi-acp 0.0.34 把 provider 403 折成
+/// `end_turn`，见 `docs/reference/acp-protocol-reference.md` §6.8）。
+///
+/// 三个集合都**按变体**判定，不看内容长度：`agent_message_chunk` 携空串这种退化
+/// 形态未观测到，为臆测加分支属过度设计（工程准则 7）。
+/// - 可见产出：正文、思考、工具调用与其更新、计划。
+/// - 记账/控制帧：会话元数据、用量、命令表、模式与配置变更、用户消息回声 ——
+///   它们都**不是** agent 的回复，`UserMessageChunk` 只是回声。
+/// - 兜底臂按「有产出」：`SessionUpdate` 是 `#[non_exhaustive]`，未来新增（含
+///   `unstable_*` feature 下的 `plan_update` / advisory）一律先当作可见内容。
+///   方向是刻意的：把未知变体判成「无产出」会让正常 turn 显示失败提示，而误判成
+///   「有产出」只是维持改动前的静默行为 —— 可发现、不制造新噪音。
+fn update_is_visible_output(update: &SessionUpdate) -> bool {
+    match update {
+        SessionUpdate::AgentMessageChunk(_)
+        | SessionUpdate::AgentThoughtChunk(_)
+        | SessionUpdate::ToolCall(_)
+        | SessionUpdate::ToolCallUpdate(_)
+        | SessionUpdate::Plan(_) => true,
+        SessionUpdate::SessionInfoUpdate(_)
+        | SessionUpdate::UsageUpdate(_)
+        | SessionUpdate::AvailableCommandsUpdate(_)
+        | SessionUpdate::CurrentModeUpdate(_)
+        | SessionUpdate::ConfigOptionUpdate(_)
+        | SessionUpdate::UserMessageChunk(_) => false,
+        _ => true,
+    }
 }
 
 /// Extract plain text from an `AgentMessageChunk`'s text content block; None otherwise.
@@ -739,7 +803,10 @@ async fn flush_once(acc: &Arc<TurnAccumulator>, db: &SqlitePool, session_id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{ContentChunk, SessionId, TextContent};
+    use agent_client_protocol::schema::v1::{
+        ConfigOptionUpdate, ContentChunk, Plan, SessionId, SessionInfoUpdate, TextContent,
+        ToolCall, ToolCallUpdate, ToolCallUpdateFields, UsageUpdate,
+    };
     use serde_json::Value;
 
     /// Wrapper overhead of `{"v":1,"frames":[]}` plus the `,` separators between frames.
@@ -1275,5 +1342,120 @@ mod tests {
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "信号通道饱和时 EndTurn 仍须恰好送达一次：{turns:?}");
         assert!(turns[0].2.is_some(), "折叠过帧的 turn 应携带消息行 id");
+    }
+
+    // ── 可见产出判定（空 turn 留痕的输入） ───────────────────────────────
+
+    fn fold_one(update: SessionUpdate) -> bool {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-visible");
+        acc.begin_turn();
+        acc.fold(&SessionNotification::new(sid, update));
+        acc.turn_has_visible_output()
+    }
+
+    /// 变体分类表：正文 / 思考 / 工具（含纯工具 turn，正式库里「有工具卡无正文」
+    /// 是真实形态）/ 计划算可见；记账与控制帧、以及**用户消息回声**不算 ——
+    /// 只回声一次的 turn 对用户同样等于什么都没产出。
+    #[test]
+    fn visible_output_classification_follows_the_variant_table() {
+        assert!(fold_one(SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("想")
+        )))));
+        assert!(fold_one(SessionUpdate::ToolCall(ToolCall::new("t1", "跑命令"))));
+        assert!(fold_one(SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t1",
+            ToolCallUpdateFields::default()
+        ))));
+        assert!(fold_one(SessionUpdate::Plan(Plan::new(vec![]))));
+
+        assert!(!fold_one(SessionUpdate::UsageUpdate(UsageUpdate::new(1, 2))));
+        assert!(!fold_one(SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new())));
+        assert!(!fold_one(SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(vec![]))));
+        assert!(!fold_one(SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+            TextContent::new("用户那句话")
+        )))));
+    }
+
+    /// 实测事故形态（正式库会话 `Pi ACP_1009-1438`）：pi-acp 把 provider 403 折成
+    /// `end_turn`，一轮里只有 running 标志 + 用量两种记账帧。折叠了三帧、开了消息行，
+    /// 可见产出仍为假 —— 单看 `row_id` 会把这种空气泡判成「有内容」。
+    #[test]
+    fn bookkeeping_only_turn_reports_no_visible_output() {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-empty");
+        acc.begin_turn();
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()),
+        ));
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::UsageUpdate(UsageUpdate::new(21692, 512000)),
+        ));
+        acc.fold(&SessionNotification::new(
+            sid,
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()),
+        ));
+
+        assert!(acc.turn_row_id().is_some(), "前置条件：记账帧同样会开出一行（空气泡的来源）");
+        assert!(!acc.turn_has_visible_output(), "只折叠记账帧 → 无可见产出");
+
+        acc.finalize_turn();
+        assert!(!acc.turn_has_visible_output(), "定稿后仍要读得到本 turn 的判定值");
+    }
+
+    /// 一帧可见内容之后，后续全是记账帧也必须为真：判定是「本轮出现过」而非
+    /// 「窗口里现在还有」。
+    #[test]
+    fn visible_output_latches_once_seen_and_resets_on_begin_turn() {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-latch");
+
+        acc.begin_turn();
+        acc.fold(&text_chunk(&sid, "正文"));
+        for _ in 0..5 {
+            acc.fold(&SessionNotification::new(
+                sid.clone(),
+                SessionUpdate::UsageUpdate(UsageUpdate::new(1, 1)),
+            ));
+        }
+        assert!(acc.turn_has_visible_output());
+
+        acc.begin_turn();
+        assert!(
+            !acc.turn_has_visible_output(),
+            "begin_turn 必须清零，否则上一轮的产出会掩盖本轮的空气泡"
+        );
+    }
+
+    /// 帧窗口从头部驱逐后判定不变 —— 窗口是崩溃恢复兜底、不是历史存档
+    /// （见 2026-08-10 计划「未决问题」勘误），拿它当依据会把长 turn 误判成空。
+    #[test]
+    fn visible_output_survives_frame_eviction() {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-evict");
+
+        acc.begin_turn();
+        acc.fold(&text_chunk(&sid, "唯一一句正文"));
+        // 每帧约 40KB，4 帧即触到 MAX_BLOCKS_BYTES 的字节预算 → 旧帧（含那句正文）被驱逐。
+        let fat = "x".repeat(40 * 1024);
+        for _ in 0..8 {
+            acc.fold(&SessionNotification::new(
+                sid.clone(),
+                SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(
+                    TextContent::new(&fat),
+                ))),
+            ));
+        }
+
+        let (len, bytes) = retained_frames(&acc);
+        assert!(len < 8, "前置条件：可见帧应已被字节预算驱逐，窗口仍留 {len} 帧");
+        assert!(bytes <= MAX_BLOCKS_BYTES, "窗口须守字节预算：{bytes} B");
+        assert!(acc.turn_has_visible_output(), "驱逐掉的可见帧不得把判定翻成假");
     }
 }

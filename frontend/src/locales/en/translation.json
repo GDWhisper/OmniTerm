@@ -198,6 +198,7 @@
   "system.turnFailed.refusal": "This turn did not complete: the agent refused to continue (stopReason=refusal).",
   "system.turnFailed.cancelled": "This turn was cancelled (stopReason=cancelled).",
   "system.turnFailed.other": "This turn ended abnormally (stopReason={{reason}}).",
+  "system.turnFailed.empty": "This turn produced no output at all (stopReason={{reason}}): the agent emitted neither text nor tool calls — it may have failed silently. Retry, or check the agent's own logs and configuration.",
   "settings.tmuxBlurDisconnect": "Disconnect on Blur (tmux)",
   "settings.tmuxBlurDisconnectHint": "Disconnect the terminal after this many minutes while the window stays unfocused",
   "settings.tmuxIdleDisconnect": "Disconnect on Idle (tmux)",

@@ -897,6 +897,13 @@ impl AcpClient {
         self.accumulator.turn_row_id()
     }
 
+    /// 本 turn（或刚定稿那一轮）是否折叠过**可见产出**帧（正文 / 思考 / 工具卡 / 计划）。
+    /// turn 结束路径用它识别「协议回正常终态、聊天流里却什么都没有」的静默失败，
+    /// 判定口径见 `turn_accumulator` 的 `turn_has_visible_output`。
+    pub fn turn_has_visible_output(&self) -> bool {
+        self.accumulator.turn_has_visible_output()
+    }
+
     /// agent 子进程 pid（D1 捕获）。`None` = 捕获失败（降级路径，agent_proc 内
     /// 已 WARN）。供诊断与回归测试观测（如断言 shutdown 后进程组无残留）。
     pub fn agent_pid(&self) -> Option<u32> {
