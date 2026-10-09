@@ -71,3 +71,4 @@
 - **实施补记（2026-09-10）**：`BatchActionBar` 的归档/释放禁用按钮额外需要 title 文案说明原因，新增两个 key `sidebar.batchArchiveNoTarget` / `sidebar.batchReleaseNoTarget`（计划 §i18n 只列了禁用行为，未列文案）。
 - **实施补记（2026-09-10）**：新增 `SessionRow.test.tsx`（计划未列）——长按补发 click 抑制、选择模式 toggle、右键坐标属组件级行为，放在组件单测比经过 ProjectCard 更直接；`SessionContextMenu.test.tsx` 按计划新增。
 - **副作用（待跟进）**：`Sidebar.tsx` 因本次新增选择态/菜单态已超 800 行约定（`docs/architecture/frontend.md` 已如实标注「待拆分」），拆分不在本次范围内。
+- **勘误（2026-10-09）**：验收项「执行中弹窗不可被 Esc / 遮罩 / ✕ 关闭」被 `2026-10-04-acp-session-history-management.md` 勘误 E-10 取代——批量弹窗确认后立即关闭、执行转后台，`submitting` 阻断与关闭守卫一并移除（agent 侧删除可能临时拉起 agent，不阻塞界面，结果由右下角 toast 如实上报）。

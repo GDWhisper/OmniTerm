@@ -20,10 +20,15 @@ export interface DeleteTarget {
 }
 
 /**
- * Delete confirmation shared by projects and sessions. Holds its own
- * `submitting` state; store cleanup (clearing the active project/workspace/
- * session triple, workspace session memory) happens here via useAppStore.
- * The Sidebar only supplies the delete target and reload callbacks.
+ * Delete confirmation shared by projects and sessions. Store cleanup (clearing
+ * the active project/workspace/session triple, workspace session memory)
+ * happens here via useAppStore. The Sidebar only supplies the delete target and
+ * reload callbacks.
+ *
+ * **会话删除不阻塞界面**：确认后立即关弹窗，请求在后台执行，结果（含 agent
+ * 侧 `deleted`/`skipped`）由右下角 toast 如实上报——agent 侧删除可能临时拉起
+ * agent 进程，不该把整个界面扣在模态上。项目删除仍走 `submitting` 加载态
+ * （纯本地级联清理，秒级）。
  *
  * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，判据见
  * `agentSideDelete.ts`——仅「agent 已知不支持」禁用；进程未驻留由后端临时
@@ -98,48 +103,51 @@ export function DeleteConfirmDialog(props: {
     }
   }
 
-  const handleDeleteSession = async (checked: boolean) => {
+  const handleDeleteSession = (checked: boolean) => {
     if (!target || target.type !== 'session') return
     const deleteAgentSide = shouldRequestAgentSideDelete(eligibleIds, target.id, checked)
     // 记住用户的选择（勾选与取消都记）：仅在勾选框**可用**时记录——禁用态
     // 是系统的限制而非用户的表达，写进去会把「不支持」固化成偏好。
     const rememberChoice = !!checkbox && !checkbox.disabled
-    setSubmitting(true)
+    // 立即关弹窗、**不等待请求**：agent 侧删除可能需要临时拉起 agent 进程
+    // （秒级起步，超时上限更长），不能把整个界面扣在模态上。执行在后台继续，
+    // 完成后由右下角 toast 如实上报（与 archiveSessionNow 的「先关弹窗、后报
+    // 结果」先例一致）。列表行由完成后的刷新 + 侧栏 3s 轮询收走。
+    props.onClose()
     // Clear active session immediately so FileManager stops requesting
     // files for a session whose tmux process is about to be killed.
     if (activeSessionId === target.id) {
       setActiveSession(null)
     }
-    try {
-      const res = await api.deleteSession(target.id, { deleteAgentSide })
-      // 确认成功后才记住偏好：删除失败时不该固化一个未生效的选择
-      if (rememberChoice) writeDeleteAgentSidePref(checked)
-      await props.reloadSessions()
-      // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
-      await props.onSessionDeleted?.()
-      // Clean workspace session memory for the deleted session
-      for (const wsId of Object.keys(workspaceSessionMemory)) {
-        if (workspaceSessionMemory[wsId] === target.id) {
-          clearWorkspaceSession(wsId)
+    void (async () => {
+      try {
+        const res = await api.deleteSession(target.id, { deleteAgentSide })
+        // 确认成功后才记住偏好：删除失败时不该固化一个未生效的选择
+        if (rememberChoice) writeDeleteAgentSidePref(checked)
+        await props.reloadSessions()
+        // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
+        await props.onSessionDeleted?.()
+        // Clean workspace session memory for the deleted session
+        for (const wsId of Object.keys(workspaceSessionMemory)) {
+          if (workspaceSessionMemory[wsId] === target.id) {
+            clearWorkspaceSession(wsId)
+          }
         }
+        addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
+        reportAgentSide(deleteAgentSide, res?.agent_side)
+      } catch {
+        // api client already shows error toast
       }
-      addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
-      reportAgentSide(deleteAgentSide, res?.agent_side)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-      props.onClose()
-    }
+    })()
   }
 
   return (
     <ConfirmDialog
       open={!!target}
       onClose={props.onClose}
-      onConfirm={target?.type === 'project' ? handleDeleteProject : () => void handleDeleteSession(false)}
+      onConfirm={target?.type === 'project' ? handleDeleteProject : () => handleDeleteSession(false)}
       onConfirmWithChecked={
-        checkbox ? (checked: boolean) => void handleDeleteSession(checked) : undefined
+        checkbox ? (checked: boolean) => handleDeleteSession(checked) : undefined
       }
       title={target?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
       message={

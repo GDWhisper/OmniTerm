@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, type AgentSideDeleteResult, type Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
@@ -26,14 +25,19 @@ export interface BatchTarget {
  * - 批量删除额外带「同时永久删除 agent 侧会话记录」勾选框：**逐条**判据（仅
  *   「agent 已知不支持」的不带 `delete_agent_side=true`；进程未驻留由后端临时
  *   拉起补删），所以混合选择也不会对不满足条件的会话盲发。
- * - `submitting` 期间 onClose 守卫为 no-op：Modal 的 Esc / 遮罩 / ✕ 都走这里，
- *   防止执行中关闭弹窗。
+ * - **不阻塞界面**：确认后立即关弹窗，串行执行在后台继续；每条可能临时拉起
+ *   agent（秒级起步），不能把界面扣在模态上。结束按成功数汇总 toast（含 agent
+ *   侧 deleted/skipped 计数），再退出选择模式并刷新列表。
  */
 export function BatchSessionDialog(props: {
   /** null = 关闭。 */
   target: BatchTarget | null
   onClose: () => void
-  /** 成功执行 ≥1 条后调用：刷新列表并退出选择模式（Sidebar 提供）。 */
+  /**
+   * 退出选择模式并刷新列表（Sidebar 提供）。调两次：确认瞬间先调一次——
+   * 立即退出选择模式，避免执行期间对同一批会话重复下发操作（弹窗已关，
+   * 再点删除会 404 报错）；全部执行完再调一次把列表刷新落定。
+   */
   onDone: () => Promise<void>
 }) {
   const { t } = useTranslation()
@@ -45,7 +49,6 @@ export function BatchSessionDialog(props: {
   // 每个会话的能力位（capabilities 帧写入）；整对象订阅后按键取用。
   // 选择器返回 states 引用：帧到达时必然变化，够用且不额外分配。
   const chatStates = useChatStore((s) => s.states)
-  const [submitting, setSubmitting] = useState(false)
 
   const target = props.target
   const action: BatchAction = target?.action ?? 'archive'
@@ -84,83 +87,86 @@ export function BatchSessionDialog(props: {
       ? `${baseMessage}\n${t('sidebar.batchSkipUnsupported', { count: skipped })}`
       : baseMessage
 
-  const handleConfirm = async (agentSideChecked: boolean) => {
+  const handleConfirm = (agentSideChecked: boolean) => {
     if (!target) return
-    setSubmitting(true)
+    // 立即关弹窗、不等待请求：批量条目可能各自临时拉起 agent（秒级起步），
+    // 串行累加会把界面扣在模态上很久。执行在后台继续，结束按成功数汇总
+    // toast（含 agent 侧 deleted/skipped 计数），并再刷新一次列表落定。
+    props.onClose()
+    // 立即退出选择模式并先刷一次列表：不给「执行期间对同一批再点一次删除」
+    // 留重复提交窗口（行会被 3s 轮询 + 完成刷新收走）。
+    void props.onDone()
     const ids = new Set(pool.map((s) => s.id))
     // 删除前先清活跃会话：停止 FileManager 等对即将被 kill 的会话的请求
     // （与 DeleteConfirmDialog.handleDeleteSession 同一顺序约定）
     if (action === 'delete' && activeSessionId && ids.has(activeSessionId)) {
       setActiveSession(null)
     }
-    let succeeded = 0
-    // agent 侧删除的如实交代：deleted / skipped 分开计数（不可把跳过报成已删）
-    let agentSideDeleted = 0
-    let agentSideSkipped = 0
-    // 串行执行：避免 SQLite 写竞争与批量杀进程竞态（对齐 DuplicateProjectsDialog 先例）
-    for (const session of pool) {
-      try {
-        if (action === 'archive') {
-          await api.archiveSession(session.id)
-          if (session.id === activeSessionId) setActiveSession(null)
-        } else if (action === 'release') {
-          await api.releaseSession(session.id)
-          // 释放活跃会话：立即标记结束，使 ChatView 即时显示「恢复会话」
-          if (session.id === activeSessionId) useChatStore.getState().markEnded(session.id)
-        } else {
-          const deleteAgentSide = shouldRequestAgentSideDelete(
-            eligibleIds,
-            session.id,
-            agentSideChecked,
-          )
-          const res: { agent_side?: AgentSideDeleteResult } = await api.deleteSession(session.id, {
-            deleteAgentSide,
-          })
-          if (deleteAgentSide) {
-            if (res?.agent_side === 'deleted') agentSideDeleted += 1
-            else agentSideSkipped += 1
+    void (async () => {
+      let succeeded = 0
+      // agent 侧删除的如实交代：deleted / skipped 分开计数（不可把跳过报成已删）
+      let agentSideDeleted = 0
+      let agentSideSkipped = 0
+      // 串行执行：避免 SQLite 写竞争与批量杀进程竞态（对齐 DuplicateProjectsDialog 先例）
+      for (const session of pool) {
+        try {
+          if (action === 'archive') {
+            await api.archiveSession(session.id)
+            if (session.id === activeSessionId) setActiveSession(null)
+          } else if (action === 'release') {
+            await api.releaseSession(session.id)
+            // 释放活跃会话：立即标记结束，使 ChatView 即时显示「恢复会话」
+            if (session.id === activeSessionId) useChatStore.getState().markEnded(session.id)
+          } else {
+            const deleteAgentSide = shouldRequestAgentSideDelete(
+              eligibleIds,
+              session.id,
+              agentSideChecked,
+            )
+            const res: { agent_side?: AgentSideDeleteResult } = await api.deleteSession(session.id, {
+              deleteAgentSide,
+            })
+            if (deleteAgentSide) {
+              if (res?.agent_side === 'deleted') agentSideDeleted += 1
+              else agentSideSkipped += 1
+            }
+            for (const wsId of Object.keys(workspaceSessionMemory)) {
+              if (workspaceSessionMemory[wsId] === session.id) clearWorkspaceSession(wsId)
+            }
           }
-          for (const wsId of Object.keys(workspaceSessionMemory)) {
-            if (workspaceSessionMemory[wsId] === session.id) clearWorkspaceSession(wsId)
-          }
+          succeeded += 1
+        } catch {
+          // 单条失败继续执行；错误 toast 由 api client 自动弹出
         }
-        succeeded += 1
-      } catch {
-        // 单条失败继续执行；错误 toast 由 api client 自动弹出
       }
-    }
-    // 记住用户的选择：仅在勾选框可用时（禁用态是系统限制，不是用户表达）
-    if (action === 'delete' && checkbox && !checkbox.disabled) {
-      writeDeleteAgentSidePref(agentSideChecked)
-    }
-    if (succeeded > 0) {
-      addToast('success', t('sidebar.batchDone', { count: succeeded }) ?? `Processed ${succeeded} session(s)`)
-      if (agentSideDeleted > 0) {
-        addToast('success', t('sidebar.agentSideDeletedCount', { count: agentSideDeleted }))
+      // 记住用户的选择：仅在勾选框可用时（禁用态是系统限制，不是用户表达）
+      if (action === 'delete' && checkbox && !checkbox.disabled) {
+        writeDeleteAgentSidePref(agentSideChecked)
       }
-      if (agentSideSkipped > 0) {
-        addToast('warning', t('sidebar.agentSideSkippedCount', { count: agentSideSkipped }))
+      if (succeeded > 0) {
+        addToast('success', t('sidebar.batchDone', { count: succeeded }) ?? `Processed ${succeeded} session(s)`)
+        if (agentSideDeleted > 0) {
+          addToast('success', t('sidebar.agentSideDeletedCount', { count: agentSideDeleted }))
+        }
+        if (agentSideSkipped > 0) {
+          addToast('warning', t('sidebar.agentSideSkippedCount', { count: agentSideSkipped }))
+        }
+        await props.onDone()
       }
-      await props.onDone()
-    }
-    setSubmitting(false)
-    props.onClose()
+    })()
   }
 
   return (
     <ConfirmDialog
       open={!!target}
-      onClose={() => {
-        if (!submitting) props.onClose()
-      }}
-      onConfirm={() => void handleConfirm(false)}
-      onConfirmWithChecked={checkbox ? (checked: boolean) => void handleConfirm(checked) : undefined}
+      onClose={props.onClose}
+      onConfirm={() => handleConfirm(false)}
+      onConfirmWithChecked={checkbox ? (checked: boolean) => handleConfirm(checked) : undefined}
       title={title}
       message={message}
       checkbox={checkbox}
       confirmText={action === 'release' ? t('sidebar.batchRelease') : action === 'archive' ? t('sidebar.archive') : t('sidebar.delete')}
       destructive={action === 'delete'}
-      loading={submitting}
     />
   )
 }

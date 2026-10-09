@@ -12,13 +12,16 @@ import type { DeleteSessionResponse } from '../../api/client'
  * 1. 判据 → 勾选框可用性（仅「agent 已知不支持」禁用；能力未知可勾选，后端会
  *    临时拉起短命 agent 补删）；
  * 2. 勾选 → `deleteSession(id, { deleteAgentSide: true })`，未勾选 → 不带该参数；
- * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用。
+ * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用；
+ * 4. **不阻塞界面**：确认后立即 `onClose`，不等请求返回；结果随后由右下角
+ *    toast 如实上报（agent 侧删除可能临时拉起 agent，秒级起步）。
  */
 
 const deleteSession = vi.fn(
   async (): Promise<DeleteSessionResponse> => ({ ok: true, agent_side: 'deleted' }),
 )
 const addToast = vi.fn()
+const onClose = vi.fn()
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -68,7 +71,7 @@ function render(target: DeleteTarget | null) {
     root.render(
       <DeleteConfirmDialog
         target={target}
-        onClose={vi.fn()}
+        onClose={onClose}
         reloadProjects={vi.fn(async () => {})}
         reloadSessions={vi.fn(async () => {})}
       />,
@@ -99,6 +102,7 @@ beforeEach(() => {
   localStorage.clear()
   deleteSession.mockClear()
   addToast.mockClear()
+  onClose.mockClear()
   useChatStore.setState({ states: {} })
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -146,6 +150,30 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     render(acpTarget)
     expect(checkboxes()[0].disabled).toBe(true)
     expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintUnsupported')
+  })
+
+  it('closes immediately without waiting for the request, then reports the result', async () => {
+    setCapability(true)
+    // 请求悬挂：模拟 agent 侧删除临时拉起 agent 进程（秒级）的窗口
+    let resolveDelete: ((v: DeleteSessionResponse) => void) | undefined
+    deleteSession.mockImplementationOnce(
+      () =>
+        new Promise<DeleteSessionResponse>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    // 弹窗立即关闭、请求仍在途：界面不被模态扣住，也还没有结果 toast
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(deleteSession).toHaveBeenCalledWith('sess-1', { deleteAgentSide: true })
+    expect(addToast).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveDelete?.({ ok: true, agent_side: 'deleted' })
+    })
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.sessionDeleted')
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.agentSideDeleted')
   })
 
   it('reports the agent-side outcome truthfully (skipped is not "deleted")', async () => {

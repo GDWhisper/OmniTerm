@@ -170,13 +170,16 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 | E-7 | 无活连接 → 跳过并让前端提示「请先恢复会话」；能力未知 → 禁用 | `cleanup_session_runtime` acp 分支：无活连接（含连接已死）且 requested 时走 `delete_agent_side_record_via_ephemeral_spawn`——`load_agent` + `spawn_and_connect`（不注册 supervisor；spawn / RPC 各 15s `EPHEMERAL_AGENT_TIMEOUT`）现场 gate 能力位后补发，随后 `disconnect` 收尾；窗口内失败（配置 / 目录缺失、spawn 失败或超时、能力未声明、RPC 失败）一律 best-effort `skipped` + 留痕 | 勾选是对删除结果的承诺；`session/delete` 按 id 生效、不要求是创建该会话的那个进程（opencode / pi-acp 实测）。ephemeral 形态本就是 E3-2 设计的原语，此前只规划给面板内 purge 用 |
 | E-8 | 前端三态：未知 / 不支持 / 已释放 → 一律禁用 + 原因 | 判据收敛为唯一一条：**agent 已知不支持**（`agentDeleteSupported === false`）才禁用；未知与已释放可勾选（后端现场探明）；`AgentSideCandidate` 去掉 `acp_process_alive`，i18n 删除 `deleteAgentSideHintUnknown` / `deleteAgentSideHintReleased` | 前端能力位只用于提前知情，不再承担「决定能不能做」的职责；进程状态与「拉起的 agent 支不支持」都由后端在删除时现场判定 |
 | E-9 | 活连接路径只看 `dispose` 是否拿到 client | 拿到 client 后加 `is_alive()` 判断：连接已死（agent 崩溃 / poll 卡死）时先收尸再落回临时拉起 | 「注册表里有个死句柄」不该成为 skipped 的理由——与 E-7 同一原则 |
+| E-10 | 会话删除（单条 / 批量）在模态内 `await` 请求：agent 侧临时拉起期间弹窗转圈、界面被扣住 | 确认后**立即关弹窗**，请求转后台执行；结果（会话已删 / agent 侧 `deleted` / `skipped`）完成后由右下角 toast 如实上报；列表由完成刷新 + 侧栏 3s 轮询收走。批量同时移除 `submitting` 阻断与「执行中不可关闭」守卫（弹窗已立即关闭，守卫无对象） | 用户指令（2026-10-09）：「删除 agent 侧聊天过程中不要卡用户的前端界面，右下角如实上报即可」——agent 侧删除秒级起步，把等待成本转嫁给用户没有任何收益；`archiveSessionNow` 已有「先关弹窗、后报结果」先例 |
 
 **验收（fake agent 真链路 + 单测）**：
 - `api::sessions::ephemeral_agent_delete_tests` 三条全绿：拉起 → `session/delete`
   （事件日志 `delete sess-ephemeral`）→ `Deleted` 且不注册 supervisor；能力缺失
   （`live` 模式）→ `Skipped` 且无 delete 事件（不盲发）；缺 agent 配置 / 工作目录 →
   `Skipped` 且不 spawn ✅
-- 前端 `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx` 更新后全绿 ✅
+- 前端 `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx` 更新后全绿 ✅；
+  新增「确认后立即 `onClose`、请求在途时无结果 toast、完成后如实上报」用例
+  （勘误 E-10 的不阻塞契约）✅
 - 真实链路（dev 实例，2026-10-09）：建 opencode 会话 → `POST /release` 释放进程（确保走
   临时拉起路径）→ `DELETE /sessions/{id}?delete_agent_side=true` → 响应
   `{"ok":true,"agent_side":"deleted"}`；opencode 侧 `session_v2` 行消失（agent 侧真实
@@ -197,6 +200,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - [x] E3-1：进程已释放（含归档会话）→ 勾选删除时后端临时拉起补删（2026-10-09 勘误 E-7，取代原「禁用 + 请先恢复会话」）
 - [x] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
 - [x] E3-1：勾选偏好被记住（`localStorage.omniterm_delete_agent_side`），刷新后仍生效；禁用态不写偏好
+- [x] E-10：单条 / 批量删除确认后弹窗**立即关闭**、界面不被阻塞；结果由右下角 toast 如实上报（2026-10-09 勘误）
 - [ ] E3-2：purge 未纳管历史 → 确认后行消失；无能力 → 409 + 手动清理路径提示（**未实施**：依赖 E1 面板）
 - [x] 批量删除：逐条判据——仅「agent 已知不支持」的会话不带 `delete_agent_side=true`（进程未驻留由后端临时拉起）；全不可勾时禁用 + 说明
 - [ ] §P1：list 双页 + 超 200 条截断有单测；`AgentHistorySection` 无轮询（**未实施**：Phase 1 不做）
