@@ -465,6 +465,31 @@ git remote -v
 
 如果版本号错误，只能发布新版本修复（无法删除已发布版本）。
 
+### cargo publish 卡在 Uploading（curl 28 / HTTP 408，v0.2.29 实测）
+
+**症状**：打包与构建校验都过（`Packaged 165 files…`、`Finished dev profile`），死在 `Uploading`，两种报错同源：
+
+- `[28] Timeout was reached (Operation too slow. Less than 10 bytes/sec transferred the last 30 seconds)`——cargo 侧的 10B/s 低速门禁先掐断
+- `failed to get a 200 OK response, got 408`，响应头 `server: Heroku` + `via: 1.1 heroku-router`——服务端 router 等不到完整请求体
+
+**重试前先确认「有没有落库」**（决定能不能同号重发）：
+
+```bash
+curl -sS -H "User-Agent: release-check" https://crates.io/api/v1/crates/omniterm/<ver>   # 404 = 未落库
+```
+
+crates.io 与 npm 的关键差别：**上传失败不烧版本号**，同一版本号可无限重试，只有拿到 200 才算发出（npm 是 immutable，见上方「版本号被烧」）。
+
+**排除包侧原因**：`cargo package --allow-dirty` 通过，且 `curl -X PUT --data-binary @<1.5MB样本> https://crates.io/api/v1/crates/new` 几秒内把 body 传完（返回 4xx 但已读完）→ 判定为**本机出口对 cargo 上传连接节流**，不是包内容、不是凭据问题（token 在 `~/.cargo/credentials.toml`，别读别打印）。
+
+**处置顺序**（v0.2.29 第 5 次才成）：
+
+1. **换代理出口节点后必须走代理重试**——直连不吃 Clash 的节点（除非开 TUN）：`https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 no_proxy=localhost,127.0.0.1,::1 cargo publish --allow-dirty`
+2. 同时带 `CARGO_HTTP_MULTIPLEXING=false`（避 h2 复用卡死）+ `CARGO_HTTP_TIMEOUT=600` + `CARGO_HTTP_LOW_SPEED=1`（放宽默认 10B/s 门禁，让慢而持续的上传跑完）
+3. 仍失败就停手报用户，**禁止**为发出去手搓 `PUT /api/v1/crates/new` 的 JSON 元数据——依赖表写错会以不可逆的方式进 crate
+
+**渠道不一致可以留着**：GitHub Release / npm / Docker 由 CI 自动发出，cargo 单独补发不影响已上线渠道（用户 `cargo install` 短暂跳不到新版，取舍见 v0.2.17 教训一节）。
+
 ### main worktree 残留未完成合并（MERGE_HEAD）
 
 `sync-main.sh` 若曾被中断（如编译失败 / 手动 Ctrl-C），main worktree 会留下 `MERGE_HEAD`，导致后续 `git merge --ff-only` 报「尚未结束您的合并」。
