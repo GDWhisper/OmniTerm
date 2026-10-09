@@ -177,8 +177,11 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
   （`live` 模式）→ `Skipped` 且无 delete 事件（不盲发）；缺 agent 配置 / 工作目录 →
   `Skipped` 且不 spawn ✅
 - 前端 `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx` 更新后全绿 ✅
-- 真实链路手测（已释放的 opencode 会话勾选删除 → agent 侧列表该 id 消失）待跑，
-  用例已更新至 `docs/reference/user-testing.md` §23。
+- 真实链路（dev 实例，2026-10-09）：建 opencode 会话 → `POST /release` 释放进程（确保走
+  临时拉起路径）→ `DELETE /sessions/{id}?delete_agent_side=true` → 响应
+  `{"ok":true,"agent_side":"deleted"}`；opencode 侧 `session_v2` 行消失（agent 侧真实
+  删除）、omniterm 行照删、无孤儿 opencode 进程 ✅。UI 侧手动回归用例见
+  `docs/reference/user-testing.md` §23。
 
 ## 6. 验收标准
 
