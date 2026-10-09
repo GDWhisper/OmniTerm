@@ -183,7 +183,7 @@ export interface Session {
  * 只有 `deleted` 才能对用户说「agent 侧记录已删除」；`skipped` 必须如实告知
  * （宁可漏删，不可谎报已删）。
  */
-export type AgentSideDeleteResult = 'not_requested' | 'deleted' | 'skipped'
+export type AgentSideDeleteResult = 'not_requested' | 'deleted' | 'skipped' | 'pending'
 
 export interface DeleteSessionResponse {
   ok: true
@@ -465,13 +465,26 @@ export const api = {
    *
    * `deleteAgentSide` requests that the agent's own copy of the session record
    * is removed too (`session/delete`). Best-effort and gated on the agent
-   * declaring `sessionCapabilities.delete` **and** still having a live process
-   * — read `agent_side` in the response to tell the user what actually
-   * happened (`deleted` / `skipped` / `not_requested`).
+   * declaring `sessionCapabilities.delete` — read `agent_side` in the response
+   * to tell the user what actually happened (`deleted` / `skipped` /
+   * `not_requested` / `pending`)。`pending` = 进程不驻留，后端**不在本请求内**
+   * 临时拉起 agent（秒级），由调用方随后调 {@link deleteAgentAcpSession} 补做
+   * （两段式：立即报已删、稍后补报 agent 侧结果）。
    */
   deleteSession: (id: string, opts?: { deleteAgentSide?: boolean }) =>
     request<DeleteSessionResponse>(
       `/sessions/${id}${opts?.deleteAgentSide ? '?delete_agent_side=true' : ''}`,
+      { method: 'DELETE' },
+    ),
+  /**
+   * 两段式的第二段：临时拉起 agent 进程删除它在 agent 侧的会话记录
+   * （`session/delete`）。`cwd` 取会话行的 `workspace_path`（agent 侧按 cwd
+   * 组织会话历史）。best-effort：能力未声明 / 拉起失败 / RPC 失败都返回
+   * `agent_side:"skipped"`，由调用方如实告知用户。
+   */
+  deleteAgentAcpSession: (agentId: string, acpSessionId: string, cwd: string) =>
+    request<{ ok: true; agent_side: AgentSideDeleteResult }>(
+      `/agents/${agentId}/acp-sessions/${encodeURIComponent(acpSessionId)}?cwd=${encodeURIComponent(cwd)}`,
       { method: 'DELETE' },
     ),
   /** Release a running ACP agent subprocess without deleting the session record. */

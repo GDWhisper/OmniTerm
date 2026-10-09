@@ -323,6 +323,10 @@ GET  /api/v1/sessions/{id}/hook-status
 POST /api/v1/sessions/{id}/hook-enable|hook-disable
 GET  /api/v1/agents                   # CRUD agent process configs
 POST/PUT/DELETE /api/v1/agents[/{id}]
+DELETE /api/v1/agents/{id}/acp-sessions/{acp_session_id}?cwd=<绝对路径>
+                                      # 请求 agent 删除它自己的某条会话记录（session/delete）：
+                                      # 临时拉起短命 agent 现场 gate 能力位后补发（不注册 supervisor）。
+                                      # 「删除会话」两段式的第二段，见下方「agent 侧记录删除」
 GET  /api/v1/files (list)
 POST /api/v1/files (upload multipart)
 DELETE /api/v1/files
@@ -536,25 +540,39 @@ Lifecycle:
 
 #### agent 侧记录删除（`?delete_agent_side=true`）
 
-`DELETE /api/v1/sessions/{id}?delete_agent_side=true` 在删 omniterm 会话的同时，请求 agent
-删除**它自己那份**会话记录（ACP `session/delete`）。响应体带 `agent_side` 三态（**协议稳定
-值**，改名等于改前端契约）：
+请求 agent 删除**它自己那份**会话记录（ACP `session/delete`）。2026-10-09 起为
+**两段式**（立即报已删、稍后补报 agent 侧结果）：`DELETE /sessions/{id}` 只做本地
+清理并在需要临时拉起时立即返回 `pending`，agent 侧由客户端随后调
+`DELETE /agents/{id}/acp-sessions/{acp_session_id}?cwd=<会话 workspace_path>`
+补做并补报——秒级的 spawn 握手不再拖住删会话的响应（实测 opencode：第一段 4ms
+返回 `pending`，第二段 0.84s 返回 `deleted`）。无服务端状态（不做 job 表 / 轮询 /
+推送通道）。
+
+响应体 `agent_side` 四态（**协议稳定值**，改名等于改前端契约）：
 
 | 值 | 含义 |
 |----|------|
 | `not_requested` | 未带 query（或非 acp 会话）——什么都没做 |
 | `deleted` | agent 确认删除（RPC 成功；**软删还是硬删由实现决定**，不等于文件已删） |
 | `skipped` | 请求了但没删成：agent 未声明能力 / 临时拉起失败 / RPC 失败（WARN 留痕） |
+| `pending` | 进程不驻留、本请求内**不做** agent 侧删除——客户端需带会话行上下文补发上述端点（两段式第二段） |
 
 链路（`cleanup_session_runtime` 的 acp 分支）与硬约束：
 
-1. **两条发送路径，顺序不可换**：进程仍驻留 → `dispose → session/delete → shutdown`，
-   RPC 必须在 agent 子进程**还活着**的窗口内发（这也是「先 shutdown 再删」这类改法会
-   静默失效的原因）；进程不驻留（已释放 / 被 reaper 回收 / 后端重启 / 连接已死）→
-   **临时拉起一个短命 agent 进程**补发 `session/delete`（不注册 supervisor，spawn 与
-   RPC 各 15s 预算 `EPHEMERAL_AGENT_TIMEOUT`），随后立即收尾。勾选即承诺——不让用户
-   「先恢复会话再删」地自己跑一趟；`session/delete` 按 id 生效、不要求是创建该会话的
-   那个进程（opencode / pi-acp 实测）。
+1. **顺序与分工不可换**：进程仍驻留 → `dispose → session/delete → shutdown` 就地完成
+   （亚秒级，省一次 spawn），RPC 必须在 agent 子进程**还活着**的窗口内发（这也是
+   「先 shutdown 再删」这类改法会静默失效的原因）；进程不驻留（已释放 / 被 reaper
+   回收 / 后端重启 / 连接已死）→ 本请求返回 `pending`，由第二段端点
+   （`api/agents.rs::purge_agent_acp_session`，复用
+   `api::sessions::delete_agent_side_record_via_ephemeral_spawn`）**临时拉起一个短命
+   agent 进程**补发 `session/delete`（不注册 supervisor，spawn 与 RPC 各 15s 预算
+   `EPHEMERAL_AGENT_TIMEOUT`），随后立即收尾。勾选即承诺——不让用户「先恢复会话再删」
+   地自己跑一趟；`session/delete` 按 id 生效、不要求是创建该会话的那个进程
+   （opencode / pi-acp 实测）。第二段的 `cwd` 与会话创建/恢复同源
+   （`workspace_path`，agent 侧按 cwd 组织会话历史），由前端从会话行带回——行已删，
+   服务端取不到；缺 `agent_id` / `acp_session_id` / `workspace_path` 时前端直接按
+   `skipped` 上报（不请求）。第二段端点的前置错误走 HTTP 码：agent 配置不存在 404、
+   `cwd` 非目录 400；能力/拉起/RPC 失败仍是 200 + `skipped`（best-effort）。
 2. **能力 gate，不盲发**：判据是 initialize 响应里
    `agentCapabilities.sessionCapabilities.delete` 的存在性（marker 空结构，存在即支持），
    由 `AcpClient::supports_delete_session()` 持有并随 `capabilities` 帧下发前端；临时拉起
@@ -567,17 +585,19 @@ Lifecycle:
 
 判据逻辑抽成纯函数 `plan_agent_side_delete(requested, supports_delete_session)`
 （`src/api/sessions.rs`），三条「不发送」分支（未勾选 / 会话行无 `acp_session_id` /
-agent 不支持）不依赖活连接即可单测；临时拉起兜底的前置（缺 `agent_id` / agent 配置
-不存在 / 工作目录不存在）同样跳过并留痕。多实现行为差异（opencode / pi-acp / omp / codebuddy
+agent 不支持）不依赖活连接即可单测；第二段端点的前置错误（agent 不存在 404 / cwd
+非法 400）单测覆盖。多实现行为差异（opencode / pi-acp / omp / codebuddy
 的实测对比，含「pi-acp 的 `session/list` 不列新建会话，不能拿它验证删除」这一反例）沉淀在
 `docs/reference/acp-protocol-reference.md` §17.3。
 
 前端「同时永久删除 agent 侧会话记录」勾选框（`ConfirmDialog` 的危险型 checkbox）判据
 见 `frontend/src/components/Sidebar/agentSideDelete.ts`：**唯一禁用原因是「agent 已知
 不支持」**——能力未知（本浏览器从未连过该会话）与进程已释放都可勾选，后端会现场拉起探明
-并补删（2026-10-09 行为变更，见计划勘误 E-7；旧行为是「未知 / 已释放一律禁用并提示先恢复
-会话」）；用户的选择记在 `localStorage.omniterm_delete_agent_side`（首次默认不勾选——
-不可逆的附加删除不替用户决定），仅在删除成功后写入。项目级联删除**不**代发（一次删整项目
+并补删（2026-10-09 行为变更，见计划勘误 E-7/E-8；旧行为是「未知 / 已释放一律禁用并提示
+先恢复会话」）；用户的选择记在 `localStorage.omniterm_delete_agent_side`（首次默认不勾选
+——不可逆的附加删除不替用户决定），仅在删除成功后写入。删除确认后弹窗**立即关闭**、请求
+转后台（单条与批量，见计划勘误 E-10），`pending` 由 `resolvePendingAgentSide` 补发并补报
+（E-11），失败/缺上下文降级为 `skipped`。项目级联删除**不**代发（一次删整项目
 属于可能误删的大动作，见计划 §2「不做」）；归档也**不**代发（归档要保留历史供只读查看）。
 
 6. `DELETE /projects/{id}` 先取该项目下全部 session 的 `id`/`tmux_session_name`/`runtime_kind`，逐个调用 `api::sessions::cleanup_session_runtime`（acp → dispose + `shutdown`；tmux → `activity_monitor.remove_session` + `tmux::kill_session`），再删 `sessions`/`projects` 行——**删库不等于杀进程**，直接 `DELETE FROM sessions` 会让 psmux/tmux 会话与 agent 子进程残留（2026-08-04 修复）。`reaper` 空闲回收与手动 `release` 同样走 dispose + `shutdown`，保证 supervisor 移除与进程死亡同步（Sidebar `acp_process_alive` 才不会与实际进程存活脱节）。

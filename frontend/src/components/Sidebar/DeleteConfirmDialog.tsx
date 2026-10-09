@@ -6,7 +6,11 @@ import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { readDeleteAgentSidePref, writeDeleteAgentSidePref } from '../../utils/deleteAgentSidePref'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-import { buildAgentSideDeleteCheckbox, shouldRequestAgentSideDelete } from './agentSideDelete'
+import {
+  buildAgentSideDeleteCheckbox,
+  resolvePendingAgentSide,
+  shouldRequestAgentSideDelete,
+} from './agentSideDelete'
 
 export interface DeleteTarget {
   type: 'project' | 'session'
@@ -17,6 +21,14 @@ export interface DeleteTarget {
    * 「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
    */
   runtimeKind?: Session['runtime_kind']
+  /**
+   * ACP 会话的 agent 侧删除上下文：`DELETE /sessions/{id}` 返回 `pending`（进程
+   * 不驻留）时，行已删、后端取不到这些值，由前端带着它们补发 agent 侧删除端点
+   * （两段式的第二段）。非 ACP / 缺省时不影响勾选框可用性。
+   */
+  acpSessionId?: string
+  agentId?: string
+  workspacePath?: string
 }
 
 /**
@@ -124,6 +136,13 @@ export function DeleteConfirmDialog(props: {
         const res = await api.deleteSession(target.id, { deleteAgentSide })
         // 确认成功后才记住偏好：删除失败时不该固化一个未生效的选择
         if (rememberChoice) writeDeleteAgentSidePref(checked)
+        // 立即报「已删除」：agent 侧若为 pending（进程不驻留，后端改由补发端点
+        // 临时拉起），这里不等它——补报与列表刷新并行推进（两段式）。
+        addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
+        const pendingAgentSide =
+          deleteAgentSide && res?.agent_side === 'pending'
+            ? resolvePendingAgentSide(target)
+            : null
         await props.reloadSessions()
         // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
         await props.onSessionDeleted?.()
@@ -133,8 +152,9 @@ export function DeleteConfirmDialog(props: {
             clearWorkspaceSession(wsId)
           }
         }
-        addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
-        reportAgentSide(deleteAgentSide, res?.agent_side)
+        if (deleteAgentSide) {
+          reportAgentSide(true, pendingAgentSide ? await pendingAgentSide : res?.agent_side)
+        }
       } catch {
         // api client already shows error toast
       }

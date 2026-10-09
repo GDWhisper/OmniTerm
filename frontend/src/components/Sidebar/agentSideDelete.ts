@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next'
-import type { Session } from '../../api/client'
+import { api, type AgentSideDeleteResult, type Session } from '../../api/client'
 import type { ConfirmCheckbox } from '../Modal/ConfirmDialog'
 
 /**
@@ -82,4 +82,28 @@ export function shouldRequestAgentSideDelete(
   checked: boolean,
 ): boolean {
   return checked && eligibleIds.has(sessionId)
+}
+
+/**
+ * 两段式的第二段：`DELETE /sessions/{id}` 返回 `pending`（进程不驻留，后端不在
+ * 删除请求内临时拉起 agent）时，带着会话的 `agent_id` / `acp_session_id` /
+ * `workspace_path` 补发 agent 侧删除端点，返回可上报的结果。
+ *
+ * 缺失上下文（理论上不该有——运行期 ACP 会话三个字段齐备）或请求失败一律按
+ * `skipped` 上报：「未能删除」是这里唯一诚实的说法（宁可漏删，不可谎报已删）。
+ */
+export async function resolvePendingAgentSide(target: {
+  agentId?: string
+  acpSessionId?: string
+  workspacePath?: string
+}): Promise<AgentSideDeleteResult> {
+  const { agentId, acpSessionId, workspacePath } = target
+  if (!agentId || !acpSessionId || !workspacePath) return 'skipped'
+  try {
+    const res = await api.deleteAgentAcpSession(agentId, acpSessionId, workspacePath)
+    return res?.agent_side ?? 'skipped'
+  } catch {
+    // 错误 toast 由 api client 弹出；这里只把结果降级为「未能删除」
+    return 'skipped'
+  }
 }

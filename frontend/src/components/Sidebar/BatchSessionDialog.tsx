@@ -5,7 +5,11 @@ import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { readDeleteAgentSidePref, writeDeleteAgentSidePref } from '../../utils/deleteAgentSidePref'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-import { buildAgentSideDeleteCheckbox, shouldRequestAgentSideDelete } from './agentSideDelete'
+import {
+  buildAgentSideDeleteCheckbox,
+  resolvePendingAgentSide,
+  shouldRequestAgentSideDelete,
+} from './agentSideDelete'
 
 export type BatchAction = 'archive' | 'release' | 'delete'
 
@@ -28,6 +32,9 @@ export interface BatchTarget {
  * - **不阻塞界面**：确认后立即关弹窗，串行执行在后台继续；每条可能临时拉起
  *   agent（秒级起步），不能把界面扣在模态上。结束按成功数汇总 toast（含 agent
  *   侧 deleted/skipped 计数），再退出选择模式并刷新列表。
+ * - **两段式**：第一段（`DELETE /sessions/{id}`）返回 `pending` 的会话（进程不
+ *   驻留）在第二段补发 agent 侧删除端点并补报计数——「已删除」先报，agent 侧
+ *   结果稍后如实补报（不让秒级的拉起拖住第一段汇总）。
  */
 export function BatchSessionDialog(props: {
   /** null = 关闭。 */
@@ -107,6 +114,9 @@ export function BatchSessionDialog(props: {
       // agent 侧删除的如实交代：deleted / skipped 分开计数（不可把跳过报成已删）
       let agentSideDeleted = 0
       let agentSideSkipped = 0
+      // 第一段返回 pending 的会话（进程不驻留）：行已删、后端不临时拉起，由第二段
+      // 带着会话行上下文补发 agent 侧删除端点
+      const pendingAgentSide: Session[] = []
       // 串行执行：避免 SQLite 写竞争与批量杀进程竞态（对齐 DuplicateProjectsDialog 先例）
       for (const session of pool) {
         try {
@@ -128,6 +138,7 @@ export function BatchSessionDialog(props: {
             })
             if (deleteAgentSide) {
               if (res?.agent_side === 'deleted') agentSideDeleted += 1
+              else if (res?.agent_side === 'pending') pendingAgentSide.push(session)
               else agentSideSkipped += 1
             }
             for (const wsId of Object.keys(workspaceSessionMemory)) {
@@ -145,12 +156,25 @@ export function BatchSessionDialog(props: {
       }
       if (succeeded > 0) {
         addToast('success', t('sidebar.batchDone', { count: succeeded }) ?? `Processed ${succeeded} session(s)`)
-        if (agentSideDeleted > 0) {
-          addToast('success', t('sidebar.agentSideDeletedCount', { count: agentSideDeleted }))
-        }
-        if (agentSideSkipped > 0) {
-          addToast('warning', t('sidebar.agentSideSkippedCount', { count: agentSideSkipped }))
-        }
+      }
+      // 第二段：补报 agent 侧结果（pending 的逐个临时拉起补删，秒级；第一段的
+      // 「已删除」已报出，不让它等这里）。
+      for (const session of pendingAgentSide) {
+        const outcome = await resolvePendingAgentSide({
+          agentId: session.agent_id,
+          acpSessionId: session.acp_session_id,
+          workspacePath: session.workspace_path,
+        })
+        if (outcome === 'deleted') agentSideDeleted += 1
+        else agentSideSkipped += 1
+      }
+      if (agentSideDeleted > 0) {
+        addToast('success', t('sidebar.agentSideDeletedCount', { count: agentSideDeleted }))
+      }
+      if (agentSideSkipped > 0) {
+        addToast('warning', t('sidebar.agentSideSkippedCount', { count: agentSideSkipped }))
+      }
+      if (succeeded > 0) {
         await props.onDone()
       }
     })()

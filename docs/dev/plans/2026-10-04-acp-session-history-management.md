@@ -1,6 +1,6 @@
 # ACP 会话历史管理：session/list 发现 · 外部会话载入 · session/delete 清理
 
-> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 / E3-2 面板内 purge **未实施**；2026-10-09 勘误 E-7/E-8/E-9（§5.2）：无活连接时后端临时拉起 agent 补发删除，推翻偏差 E-2 的「已释放 → 禁用 + 请先恢复会话」
+> 状态：**Phase 0 + Phase 3（后端 delete）+ Phase 4（前端删除确认勾选）已实施**（2026-10-06）；Phase 1（list）/ Phase 2（adopt）/ E1 面板 **未实施**；E3-2 的**后端端点已落地**（2026-10-09，两段式第二段复用，面板 UI 仍待 E1）；2026-10-09 三条勘误（§5.2）：E-7/E-8/E-9 无活连接由后端临时拉起补删（推翻 E-2 的「已释放 → 禁用」）、E-10 删除不阻塞界面（右下角 toast 上报）、E-11 拆两段式（`pending` + agent 侧删除端点，E-7 的「请求内拉起」被取代）
 > 触发条件：补足 omniterm 侧对「agent 侧 ACP 会话历史」的发现 / 读取 / 删除能力（2026-10-04 盘点结论：ACP 11 个 session 命令 omniterm 只用 5 个，`session/list` / `session/delete` 零引用）
 > 关联：`docs/reference/acp-protocol-reference.md`（§17.3 实探结论）、`docs/dev/plans/archive/2026-09-10-sidebar-session-context-menu.md`（菜单 / 批量确认范式）、`docs/architecture/frontend-patterns.md`（sidebar 弹出面板约定）、`docs/dev/plans/archive/2026-10-01-acp-sdk-v2-upgrade.md`（SDK 2.2 + V1 握手背景）
 
@@ -171,6 +171,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 | E-8 | 前端三态：未知 / 不支持 / 已释放 → 一律禁用 + 原因 | 判据收敛为唯一一条：**agent 已知不支持**（`agentDeleteSupported === false`）才禁用；未知与已释放可勾选（后端现场探明）；`AgentSideCandidate` 去掉 `acp_process_alive`，i18n 删除 `deleteAgentSideHintUnknown` / `deleteAgentSideHintReleased` | 前端能力位只用于提前知情，不再承担「决定能不能做」的职责；进程状态与「拉起的 agent 支不支持」都由后端在删除时现场判定 |
 | E-9 | 活连接路径只看 `dispose` 是否拿到 client | 拿到 client 后加 `is_alive()` 判断：连接已死（agent 崩溃 / poll 卡死）时先收尸再落回临时拉起 | 「注册表里有个死句柄」不该成为 skipped 的理由——与 E-7 同一原则 |
 | E-10 | 会话删除（单条 / 批量）在模态内 `await` 请求：agent 侧临时拉起期间弹窗转圈、界面被扣住 | 确认后**立即关弹窗**，请求转后台执行；结果（会话已删 / agent 侧 `deleted` / `skipped`）完成后由右下角 toast 如实上报；列表由完成刷新 + 侧栏 3s 轮询收走。批量同时移除 `submitting` 阻断与「执行中不可关闭」守卫（弹窗已立即关闭，守卫无对象） | 用户指令（2026-10-09）：「删除 agent 侧聊天过程中不要卡用户的前端界面，右下角如实上报即可」——agent 侧删除秒级起步，把等待成本转嫁给用户没有任何收益；`archiveSessionNow` 已有「先关弹窗、后报结果」先例 |
+| E-11 | E-7 的「无活连接就在删会话请求内临时拉起」：响应最长等 30s（15s spawn + 15s RPC），「已删除」也被拖住 | 拆**两段式**：第一段 `DELETE /sessions/{id}` 不再 spawn，立即返回 `agent_side:"pending"`；前端随即带会话行上下文补发**第二段端点** `DELETE /agents/{id}/acp-sessions/{acp_session_id}?cwd=`（E3-2 原语提前落地）临时拉起补删，结果补报；失败/缺上下文降级 `skipped`。`agent_side` 协议值增 `pending`；`cleanup_session_runtime` / `AgentSideDelete` 回到「只认 `acp_session_id`」 | 用户指令（2026-10-09）「做便宜的」= 评估里的方案 C：无服务端状态（不做 job 表 / 轮询 / 全局推送通道）。实测 opencode：第一段 4ms `pending`、第二段 0.84s `deleted`（对比 E-7 末期单请求 1.08s 且「已删」toast 被拖到末尾）；翻盘条件：出现「关标签页也要完成 agent 侧删除」的强诉求 → 回到服务端后台任务方案（需结果通道） |
 
 **验收（fake agent 真链路 + 单测）**：
 - `api::sessions::ephemeral_agent_delete_tests` 三条全绿：拉起 → `session/delete`
@@ -180,6 +181,12 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - 前端 `agentSideDelete.test.ts` / `DeleteConfirmDialog.test.tsx` 更新后全绿 ✅；
   新增「确认后立即 `onClose`、请求在途时无结果 toast、完成后如实上报」用例
   （勘误 E-10 的不阻塞契约）✅
+- 两段式真实链路（dev 实例，2026-10-09）：opencode 会话 release 后
+  `DELETE /sessions/{id}?delete_agent_side=true` → **4ms** 返回
+  `{"agent_side":"pending"}`；随后
+  `DELETE /agents/preset-opencode/acp-sessions/{sid}?cwd=<ws>` → **0.84s** 返回
+  `{"agent_side":"deleted"}`；opencode `session_v2` 行消失、omniterm 行照删 ✅
+  （对照：E-7 末期单请求口径同一会话 1.08s 且「已删」被拖到末尾）
 - 真实链路（dev 实例，2026-10-09）：建 opencode 会话 → `POST /release` 释放进程（确保走
   临时拉起路径）→ `DELETE /sessions/{id}?delete_agent_side=true` → 响应
   `{"ok":true,"agent_side":"deleted"}`；opencode 侧 `session_v2` 行消失（agent 侧真实
@@ -201,7 +208,8 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - [x] E3-1：勾选删除但 agent RPC 失败 → 删除仍成功、WARN 留痕、toast 说明 agent 侧未删
 - [x] E3-1：勾选偏好被记住（`localStorage.omniterm_delete_agent_side`），刷新后仍生效；禁用态不写偏好
 - [x] E-10：单条 / 批量删除确认后弹窗**立即关闭**、界面不被阻塞；结果由右下角 toast 如实上报（2026-10-09 勘误）
-- [ ] E3-2：purge 未纳管历史 → 确认后行消失；无能力 → 409 + 手动清理路径提示（**未实施**：依赖 E1 面板）
+- [x] E-11：两段式——第一段不 spawn、立即 `pending`；第二段补发端点取 `deleted` / `skipped` 并补报；失败/缺上下文降级 `skipped`（2026-10-09 勘误，实测 4ms / 0.84s）
+- [x] E3-2 后端：`DELETE /agents/{id}/acp-sessions/{acp_session_id}?cwd=`（临时拉起现场 gate + `session/delete`，200 + `deleted`/`skipped`；agent 不存在 404 / cwd 非法 400）——两段式第二段复用（原设计的「无能力 → 409」落地为 200 + `skipped`，由前端如实展示）；面板内 purge 的 UI 仍待 E1 面板
 - [x] 批量删除：逐条判据——仅「agent 已知不支持」的会话不带 `delete_agent_side=true`（进程未驻留由后端临时拉起）；全不可勾时禁用 + 说明
 - [ ] §P1：list 双页 + 超 200 条截断有单测；`AgentHistorySection` 无轮询（**未实施**：Phase 1 不做）
 - [x] 质量门禁全绿；`./scripts/check-doc-index.sh` 通过

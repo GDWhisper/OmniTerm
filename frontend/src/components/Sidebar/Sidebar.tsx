@@ -755,6 +755,9 @@ export function Sidebar() {
               id: s.id,
               name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
               runtimeKind: s.runtime_kind,
+              acpSessionId: s.acp_session_id,
+              agentId: s.agent_id,
+              workspacePath: s.workspace_path,
             })
           }
         />

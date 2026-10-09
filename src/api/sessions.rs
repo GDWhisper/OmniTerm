@@ -426,31 +426,33 @@ pub enum AgentSide {
     Deleted,
     /// 请求了但未能删除：agent 未声明能力 / 临时拉起失败 / RPC 失败。
     Skipped,
+    /// 请求了，但「删会话」请求内**不做** agent 侧删除（进程不驻留、临时拉起
+    /// 要秒级起步）——删除会话本身已立即完成，agent 侧结果由客户端随后调用
+    /// `DELETE /agents/{id}/acp-sessions/{acp_session_id}` 补报（两段式：立即
+    /// 报已删、稍后补报 agent 侧结果）。
+    Pending,
 }
 
 impl AgentSide {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             AgentSide::NotRequested => "not_requested",
             AgentSide::Deleted => "deleted",
             AgentSide::Skipped => "skipped",
+            AgentSide::Pending => "pending",
         }
     }
 }
 
 /// 删除会话时对 agent 侧记录的动作请求（`?delete_agent_side=true`）。
 ///
-/// 仅 acp 分支消费；字段全部由调用方从会话行读出——**不能**用
+/// 仅 acp 分支消费；`acp_session_id` 由调用方从会话行读出——**不能**用
 /// `client.session_id()` 代替：会话行才是「用户以为自己在删哪条记录」的真源，
-/// 两者理论上一致，但行数据是删除动作的依据。`agent_id` / `workspace_path`
-/// 供无活连接时的临时拉起兜底重建 spawn 现场（见
-/// [`delete_agent_side_record_via_ephemeral_spawn`]）。
+/// 两者理论上一致，但行数据是删除动作的依据。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AgentSideDelete<'a> {
     pub requested: bool,
     pub acp_session_id: Option<&'a str>,
-    pub agent_id: Option<&'a str>,
-    pub workspace_path: Option<&'a str>,
 }
 
 /// 按 `runtime_kind` 清理会话的运行时资源：acp → 释放 supervisor 持有的 agent
@@ -459,12 +461,14 @@ pub struct AgentSideDelete<'a> {
 /// 只负责进程/运行时清理，**不删除 DB 记录**——由调用方（`delete_session` /
 /// `delete_project`）负责删库。两处共用，避免清理逻辑漂移。
 ///
-/// `agent_side` 仅在 acp 分支生效：请求删除 agent 侧记录时，优先在**仍活着**的
-/// 子进程上先发 `session/delete` 再 shutdown（省一次 spawn）；进程不驻留
-/// （已释放 / 被回收 / 后端重启 / 连接已死）则临时拉起一个 agent 进程补发，
-/// 不让用户「先恢复会话再删」地多跑一趟（见
-/// [`delete_agent_side_record_via_ephemeral_spawn`]）。best-effort：任何失败只
-/// WARN、不阻断删除（omniterm 侧记录照删，返回值告知前端）。
+/// `agent_side` 仅在 acp 分支生效：请求删除 agent 侧记录且子进程**仍活着**
+/// （连接可用）时，先发 `session/delete` 再 shutdown（省一次 spawn，亚秒级）；
+/// 进程不驻留（已释放 / 被回收 / 后端重启 / 连接已死）则返回
+/// [`AgentSide::Pending`]——**不在本请求内临时拉起 agent**（spawn 握手要秒级
+/// 起步，会把「删会话」的响应一起拖住），由客户端随后调用
+/// `DELETE /agents/{id}/acp-sessions/{acp_session_id}` 补做并补报（两段式）。
+/// best-effort：任何失败只 WARN、不阻断删除（omniterm 侧记录照删，返回值告知
+/// 前端）。
 pub async fn cleanup_session_runtime(
     state: &AppState,
     session_id: &str,
@@ -475,9 +479,9 @@ pub async fn cleanup_session_runtime(
     match runtime_kind {
         "acp" => {
             if let Some(client) = state.acp_supervisor.dispose(session_id).await {
-                // 连接还活着就原地发（省一次 spawn）；连接已死（agent 崩溃 / poll
-                // 卡死）则收尸后落回临时拉起——用户要的是删除结果，而不是「注册表
-                // 里恰好有个死句柄」。
+                // 连接还活着就原地发（亚秒级，省一次 spawn）；连接已死（agent 崩溃 /
+                // poll 卡死）则收尸后交给客户端补做（Pending）——注册表里恰好有个
+                // 死句柄不该让本请求去起新进程。
                 if client.is_alive() {
                     let outcome = delete_agent_side_record(&client, agent_side).await;
                     // shutdown 走 shared reference 主动 teardown，不依赖 Arc 引用归零：
@@ -492,10 +496,12 @@ pub async fn cleanup_session_runtime(
                 client.shutdown().await;
             }
             // 无活连接（已释放 / 被 reaper 回收 / 后端重启后从未恢复 / 连接已死）：
-            // 临时拉起一个 agent 进程补发 `session/delete`——勾选就是「把这条痕迹
-            // 删掉」的承诺，不该因为 omniterm 侧进程恰好不在就退回给用户手动做。
+            // 临时拉起要秒级起步，不能在本请求内做（会把「删会话」的响应一起拖住）。
+            // 返回 pending，由客户端随后调 agent 侧删除端点补做并补报——勾选就是
+            // 「把这条痕迹删掉」的承诺，两段式让用户先拿到「已删除」，agent 侧结果
+            // 稍后如实补报。
             if agent_side.requested {
-                return delete_agent_side_record_via_ephemeral_spawn(state, agent_side).await;
+                return AgentSide::Pending;
             }
             AgentSide::NotRequested
         }
@@ -588,42 +594,28 @@ async fn delete_agent_side_record(
 /// 超时按 best-effort 失败处理（`skipped`），绝不无限等。
 const EPHEMERAL_AGENT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// 无活连接时的兜底：临时拉起 agent 子进程（**不注册 supervisor**，与
-/// `agents.rs` 的连接测试同形态），现场 gate 能力位后补发 `session/delete`，
-/// 随后立刻收尾。
+/// 临时拉起一个 agent 子进程（**不注册 supervisor**，与 `agents.rs` 的连接测试
+/// 同形态），现场 gate 能力位后补发 `session/delete`，随后立刻收尾。
+///
+/// 供 `DELETE /agents/{id}/acp-sessions/{acp_session_id}`（`api::agents`）调用——
+/// 即「删除会话」两段式的第二段：第一段 `DELETE /sessions/{id}` 返回
+/// [`AgentSide::Pending`] 后由客户端补发，避免把秒级的 spawn 握手拖进删会话的
+/// 响应（立即报已删、稍后补报 agent 侧结果）。
 ///
 /// 为什么值得为一次删除起进程：用户勾选的是「把这条痕迹删掉」，进程不在
 /// （reaper 回收 / 手动 release / 后端重启 / 连接已死）只是 omniterm 侧的状态，
 /// 不该让用户「先恢复会话 → 再删」地多跑一趟。`session/delete` 按 id 生效、
 /// 不要求是创建该会话的那个进程（opencode / pi-acp 实测，见协议参考 §17.3）。
 ///
-/// 失败语义与活连接路径一致：spawn 失败 / 超时、会话行缺 `acp_session_id`、
-/// agent 配置或工作目录不存在、能力未声明、RPC 失败——一律 best-effort 跳过
-/// （`skipped`）并留痕，绝不谎报已删，也不阻断 omniterm 侧删除。
-async fn delete_agent_side_record_via_ephemeral_spawn(
+/// 失败语义与活连接路径一致：spawn 失败 / 超时、能力未声明、RPC 失败一律
+/// best-effort 跳过（`skipped`）并留痕，绝不谎报已删。
+pub(crate) async fn delete_agent_side_record_via_ephemeral_spawn(
     state: &AppState,
-    agent_side: AgentSideDelete<'_>,
+    agent: crate::models::agent::Agent,
+    cwd: PathBuf,
+    acp_session_id: &str,
 ) -> AgentSide {
-    if agent_side.acp_session_id.is_none_or(str::is_empty) {
-        info!("delete_session: 跳过 agent 侧删除（会话行无 acp_session_id）");
-        return AgentSide::Skipped;
-    }
-    let Some(agent_id) = agent_side.agent_id.filter(|s| !s.is_empty()) else {
-        info!("delete_session: 跳过 agent 侧删除（会话行无 agent_id）");
-        return AgentSide::Skipped;
-    };
-    let Some(agent) = load_agent(&state.db, agent_id).await else {
-        info!(agent_id, "delete_session: 跳过 agent 侧删除（agent 配置不存在）");
-        return AgentSide::Skipped;
-    };
-    // cwd 与 restore 同源（`workspace_path`）：agent 侧按 cwd 组织会话历史，
-    // 换一个目录拉起可能定位不到目标记录。
-    let cwd = PathBuf::from(agent_side.workspace_path.unwrap_or_default());
-    if !cwd.is_dir() {
-        info!(cwd = %cwd.display(), "delete_session: 跳过 agent 侧删除（工作目录不存在）");
-        return AgentSide::Skipped;
-    }
-
+    let agent_id = agent.id.clone();
     let client = match tokio::time::timeout(
         EPHEMERAL_AGENT_TIMEOUT,
         AcpClient::spawn_and_connect(agent, cwd, &state.api_keys),
@@ -650,7 +642,10 @@ async fn delete_agent_side_record_via_ephemeral_spawn(
     // 无限期挂住；超时后照常走 disconnect 收尸（killpg 进程组）。
     let outcome = match tokio::time::timeout(
         EPHEMERAL_AGENT_TIMEOUT,
-        delete_agent_side_record(&client, agent_side),
+        delete_agent_side_record(
+            &client,
+            AgentSideDelete { requested: true, acp_session_id: Some(acp_session_id) },
+        ),
     )
     .await
     {
@@ -668,20 +663,10 @@ async fn delete_agent_side_record_via_ephemeral_spawn(
     outcome
 }
 
-/// `DELETE /sessions/{id}` 删行前读取的现场数据：`runtime_kind` 决定清理分支，
-/// agent 侧删除的三元数据（`acp_session_id` / `agent_id` / `workspace_path`）
-/// 供活连接与临时拉起两条路径使用（见 `AgentSideDelete` 文档）。
-#[derive(sqlx::FromRow)]
-struct DeleteSessionRow {
-    tmux_session_name: Option<String>,
-    runtime_kind: String,
-    acp_session_id: Option<String>,
-    agent_id: Option<String>,
-    workspace_path: Option<String>,
-}
-
 /// `DELETE /sessions/{id}` 的查询参数。`delete_agent_side=true` 时顺带删除
-/// agent 侧会话记录（仅 acp 会话 + agent 声明了 `sessionCapabilities.delete` 时生效）。
+/// agent 侧会话记录（仅 acp 会话 + agent 声明了 `sessionCapabilities.delete` 时生效）；
+/// 进程不驻留时本请求返回 `agent_side:"pending"`，客户端随后调
+/// `DELETE /agents/{id}/acp-sessions/{acp_session_id}` 补做（两段式）。
 #[derive(Debug, serde::Deserialize)]
 struct DeleteSessionQuery {
     #[serde(default)]
@@ -694,10 +679,9 @@ async fn delete_session(
     Query(query): Query<DeleteSessionQuery>,
 ) -> impl IntoResponse {
     // agent 侧删除的现场数据必须在删行前读出（行没了就取不到 `acp_session_id`
-    // 这条「删哪条」的依据与临时拉起的 spawn 现场）。
-    let row: Option<DeleteSessionRow> = sqlx::query_as(
-        "SELECT tmux_session_name, runtime_kind, acp_session_id, agent_id, workspace_path \
-         FROM sessions WHERE id = ?",
+    // 这条「删哪条」的依据）。
+    let row: Option<(Option<String>, String, Option<String>)> = sqlx::query_as(
+        "SELECT tmux_session_name, runtime_kind, acp_session_id FROM sessions WHERE id = ?",
     )
     .bind(&id)
     .fetch_optional(&state.db)
@@ -716,20 +700,18 @@ async fn delete_session(
     }
 
     let mut agent_side = AgentSide::NotRequested;
-    if let Some(row) = row {
+    if let Some((engine_name, runtime_kind, acp_session_id)) = row {
         // agent 侧删除必须在进程还活着时发，故这一段在 cleanup 内完成（删除的
-        // dispose → session/delete → shutdown 顺序不可调换；进程不在则由
-        // cleanup 内的临时拉起兜底补发）。
+        // dispose → session/delete → shutdown 顺序不可调换）；进程不在时 cleanup
+        // 返回 `pending`，由客户端随后调 agent 侧删除端点补做（两段式）。
         agent_side = cleanup_session_runtime(
             &state,
             &id,
-            row.tmux_session_name.as_deref(),
-            &row.runtime_kind,
+            engine_name.as_deref(),
+            &runtime_kind,
             AgentSideDelete {
                 requested: query.delete_agent_side,
-                acp_session_id: row.acp_session_id.as_deref(),
-                agent_id: row.agent_id.as_deref(),
-                workspace_path: row.workspace_path.as_deref(),
+                acp_session_id: acp_session_id.as_deref(),
             },
         )
         .await;
@@ -1340,7 +1322,7 @@ mod agent_side_delete_tests {
     use super::{AgentSide, AgentSideDelete, AgentSidePlan, plan_agent_side_delete};
 
     fn req<'a>(requested: bool, acp_session_id: Option<&'a str>) -> AgentSideDelete<'a> {
-        AgentSideDelete { requested, acp_session_id, ..Default::default() }
+        AgentSideDelete { requested, acp_session_id }
     }
 
     #[test]
@@ -1395,12 +1377,42 @@ mod agent_side_delete_tests {
     }
 }
 
-/// 无活连接时的临时拉起兜底（fake agent 真实链路；Linux-only —— 脚本走
-/// `/bin/sh`，进程探针走 `/proc`）。
+/// 两段式的第一段：无活连接时 `cleanup_session_runtime` 返回 `Pending`——**不**在
+/// 「删会话」请求内临时拉起 agent（spawn 握手秒级起步会拖住响应），由客户端随后
+/// 调 `DELETE /agents/{id}/acp-sessions/{id}` 补做并补报。
+#[cfg(test)]
+mod pending_agent_side_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn no_live_client_returns_pending_without_spawning() {
+        // 空 supervisor（已释放 / 被回收 / 后端重启后未恢复的现场）：勾选了也不在
+        // 本请求内 spawn——这是「立即报已删」的实现基础（不依赖任何 agent 进程）。
+        let state = crate::test_utils::test_state().await;
+        let outcome = cleanup_session_runtime(
+            &state,
+            "s1",
+            None, // acp 分支不用引擎键
+            "acp",
+            AgentSideDelete { requested: true, acp_session_id: Some("sess-1") },
+        )
+        .await;
+        assert_eq!(outcome, AgentSide::Pending);
+    }
+
+    #[test]
+    fn pending_is_a_stable_protocol_string() {
+        // 前端按字面量分流「稍后补报」，改名等于改协议。
+        assert_eq!(AgentSide::Pending.as_str(), "pending");
+    }
+}
+
+/// 两段式的第二段：临时拉起 agent 完成 `session/delete`（fake agent 真链路；
+/// Linux-only —— 脚本走 `/bin/sh`）。
 ///
-/// 用户指令（2026-10-09）：勾选了 agent 侧删除就该由 omniterm 跑一趟，而不是
-/// 给「请先恢复会话」的提示让用户自己操作。本模块钉住三条：拉起→删除→收尾的
-/// 成功链路、能力缺失不盲发、上下文缺失不 spawn。
+/// 用户指令（2026-10-09 两条）：勾选了 agent 侧删除就该由 omniterm 跑一趟（不给
+/// 「请先恢复会话」的提示）；随后又要求不卡界面、结果右下角 toast 上报——秒级的
+/// 拉起因此从「删会话」请求挪到本函数的调用端点（`api::agents` 的 purge 路由）。
 #[cfg(all(test, target_os = "linux"))]
 mod ephemeral_agent_delete_tests {
     use super::*;
@@ -1408,74 +1420,32 @@ mod ephemeral_agent_delete_tests {
     use crate::acp::test_support::{
         agent_for, read_events, unique_dir, wait_for_event, write_fake_agent,
     };
+    use crate::models::agent::Agent;
 
-    /// 内存库 + fake agent 配置行（`agents` 表）+ 一条已释放的 ACP 会话行
-    /// （`agent_id` / `acp_session_id` / `workspace_path` 齐备，无 supervisor 注册
-    /// ——正是「进程已释放后删除」的现场）。
-    async fn fixture(mode: &str) -> (AppState, PathBuf, PathBuf) {
+    /// fake agent 配置 + 工作目录。临时拉起函数直接收 agent / cwd（agents 表与
+    /// 会话行的存在性 / cwd 合法性是调用端点 handler 的前置校验，见 agents.rs）。
+    async fn fixture(mode: &str) -> (AppState, PathBuf, PathBuf, Agent) {
         let state = crate::test_utils::test_state().await;
         let dir = unique_dir(&format!("ephemeral-delete-{mode}"));
         let workspace = dir.join("ws");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         let script = write_fake_agent(&dir);
         let agent = agent_for(&script, mode, &dir);
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO agents (id, display_name, command, args, env, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&agent.id)
-        .bind(&agent.display_name)
-        .bind(&agent.command)
-        .bind(serde_json::to_string(&agent.args).unwrap())
-        .bind(serde_json::to_string(&agent.env).unwrap())
-        .bind(&now)
-        .bind(&now)
-        .execute(&state.db)
-        .await
-        .expect("agent row");
-        sqlx::query("INSERT INTO projects (id, name, path, created_at) VALUES ('p1', 'p1', ?, ?)")
-            .bind(workspace.to_string_lossy().to_string())
-            .bind(&now)
-            .execute(&state.db)
-            .await
-            .expect("project row");
-        sqlx::query(
-            "INSERT INTO sessions \
-             (id, project_id, workspace_path, created_at, runtime_kind, acp_session_id, agent_id) \
-             VALUES ('s1', 'p1', ?, ?, 'acp', 'sess-ephemeral', ?)",
-        )
-        .bind(workspace.to_string_lossy().to_string())
-        .bind(&now)
-        .bind(&agent.id)
-        .execute(&state.db)
-        .await
-        .expect("session row");
-        (state, dir, workspace)
-    }
-
-    async fn delete_with(state: &AppState, agent_id: &str, workspace_path: &str) -> AgentSide {
-        cleanup_session_runtime(
-            state,
-            "s1",
-            None, // acp 分支不用引擎键
-            "acp",
-            AgentSideDelete {
-                requested: true,
-                acp_session_id: Some("sess-ephemeral"),
-                agent_id: Some(agent_id),
-                workspace_path: Some(workspace_path),
-            },
-        )
-        .await
+        (state, dir, workspace, agent)
     }
 
     #[tokio::test]
-    async fn ephemeral_spawn_deletes_when_no_live_client() {
+    async fn spawned_agent_deletes_agent_side_record() {
         let _guard = spawn_test_lock_async().await;
-        let (state, dir, workspace) = fixture("delete").await;
+        let (state, dir, workspace, agent) = fixture("delete").await;
 
-        let outcome = delete_with(&state, "fake-agent", &workspace.to_string_lossy()).await;
+        let outcome = delete_agent_side_record_via_ephemeral_spawn(
+            &state,
+            agent,
+            workspace,
+            "sess-ephemeral",
+        )
+        .await;
 
         assert_eq!(outcome, AgentSide::Deleted, "临时拉起的 agent 应完成 session/delete");
         assert!(
@@ -1483,20 +1453,26 @@ mod ephemeral_agent_delete_tests {
             "agent 应收到 session/delete 且 sessionId 原样，实际事件日志: {:?}",
             read_events(&dir)
         );
-        // 兜底路径不注册 supervisor：删除完成即收尾，不留活连接。
+        // 短命进程不注册 supervisor：删除完成即收尾，不留活连接。
         assert!(
-            state.acp_supervisor.dispose("s1").await.is_none(),
+            state.acp_supervisor.dispose("sess-ephemeral").await.is_none(),
             "临时拉起的 agent 不得注册 supervisor（与 E1 面板的短命进程同形态）"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
-    async fn ephemeral_spawn_skips_when_capability_absent() {
+    async fn skips_when_capability_absent() {
         let _guard = spawn_test_lock_async().await;
-        let (state, dir, workspace) = fixture("live").await;
+        let (state, dir, workspace, agent) = fixture("live").await;
 
-        let outcome = delete_with(&state, "fake-agent", &workspace.to_string_lossy()).await;
+        let outcome = delete_agent_side_record_via_ephemeral_spawn(
+            &state,
+            agent,
+            workspace,
+            "sess-ephemeral",
+        )
+        .await;
 
         assert_eq!(outcome, AgentSide::Skipped, "未声明能力的 agent 必须 skipped（不谎报已删）");
         assert!(
@@ -1508,21 +1484,16 @@ mod ephemeral_agent_delete_tests {
     }
 
     #[tokio::test]
-    async fn skips_without_spawn_when_context_missing() {
+    async fn spawn_failure_is_skipped_not_panicked() {
         let _guard = spawn_test_lock_async().await;
-        let (state, dir, workspace) = fixture("delete").await;
-        let missing_dir = dir.join("does-not-exist");
+        let (state, dir, workspace, mut agent) = fixture("delete").await;
+        agent.command = "/nonexistent-omniterm-test-agent".into();
+        agent.args = vec![];
 
-        let no_agent = delete_with(&state, "no-such-agent", &workspace.to_string_lossy()).await;
-        assert_eq!(no_agent, AgentSide::Skipped, "agent 配置不存在时应跳过");
-        let no_workspace = delete_with(&state, "fake-agent", &missing_dir.to_string_lossy()).await;
-        assert_eq!(no_workspace, AgentSide::Skipped, "工作目录不存在时应跳过");
+        let outcome =
+            delete_agent_side_record_via_ephemeral_spawn(&state, agent, workspace, "sess-x").await;
 
-        assert!(
-            !read_events(&dir).contains("delete "),
-            "上下文缺失时不得 spawn / 不得发 RPC，实际: {:?}",
-            read_events(&dir)
-        );
+        assert_eq!(outcome, AgentSide::Skipped, "拉起失败必须如实 skipped，不得 panic/谎报");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

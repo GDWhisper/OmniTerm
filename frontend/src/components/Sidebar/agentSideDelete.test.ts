@@ -1,11 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { TFunction } from 'i18next'
 import {
   buildAgentSideDeleteCheckbox,
   isAgentSideDeleteEligible,
+  resolvePendingAgentSide,
   shouldRequestAgentSideDelete,
   type AgentSideCandidate,
 } from './agentSideDelete'
+
+const deleteAgentAcpSession = vi.fn(async () => ({ ok: true, agent_side: 'deleted' as const }))
+vi.mock('../../api/client', () => ({
+  api: {
+    deleteAgentAcpSession: (...args: unknown[]) =>
+      (deleteAgentAcpSession as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
+  },
+}))
 
 /**
  * 「同时永久删除 agent 侧会话记录」勾选框的判据契约。
@@ -123,5 +132,35 @@ describe('shouldRequestAgentSideDelete', () => {
 
   it('never requests when the checkbox is unchecked', () => {
     expect(shouldRequestAgentSideDelete(eligible, 's1', false)).toBe(false)
+  })
+})
+
+describe('resolvePendingAgentSide', () => {
+  const target = { agentId: 'agent-1', acpSessionId: 'acp-sess-1', workspacePath: '/tmp/ws' }
+
+  beforeEach(() => {
+    deleteAgentAcpSession.mockClear()
+    deleteAgentAcpSession.mockResolvedValue({ ok: true, agent_side: 'deleted' })
+  })
+
+  it('sends the session-row context and reports the endpoint outcome', async () => {
+    await expect(resolvePendingAgentSide(target)).resolves.toBe('deleted')
+    expect(deleteAgentAcpSession).toHaveBeenCalledWith('agent-1', 'acp-sess-1', '/tmp/ws')
+  })
+
+  it('degrades to skipped when the request fails (never claims a deletion)', async () => {
+    deleteAgentAcpSession.mockRejectedValueOnce(new Error('boom'))
+    await expect(resolvePendingAgentSide(target)).resolves.toBe('skipped')
+  })
+
+  it('degrades to skipped when the session-row context is incomplete', async () => {
+    for (const missing of [
+      { ...target, agentId: undefined },
+      { ...target, acpSessionId: undefined },
+      { ...target, workspacePath: undefined },
+    ]) {
+      await expect(resolvePendingAgentSide(missing)).resolves.toBe('skipped')
+    }
+    expect(deleteAgentAcpSession).not.toHaveBeenCalled()
   })
 })

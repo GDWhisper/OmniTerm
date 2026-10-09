@@ -1,9 +1,9 @@
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde_json::json;
 use std::net::SocketAddr;
@@ -21,6 +21,52 @@ pub fn routes() -> Router<AppState> {
         .route("/agents/test-raw", post(test_agent_raw))
         .route("/agents/{id}", get(get_agent).put(update_agent).delete(delete_agent))
         .route("/agents/{id}/test", post(test_agent))
+        .route("/agents/{id}/acp-sessions/{acp_session_id}", delete(purge_agent_acp_session))
+}
+
+/// `DELETE /agents/{id}/acp-sessions/{acp_session_id}` 的查询参数：会话的
+/// `workspace_path`（agent 侧按 cwd 组织会话历史，必须与原会话一致）。
+#[derive(Debug, serde::Deserialize)]
+struct PurgeAcpSessionQuery {
+    cwd: String,
+}
+
+/// 请求 agent 删除**它自己那份**会话记录（ACP `session/delete`）：临时拉起一个
+/// 短命 agent 进程（不注册 supervisor，spawn / RPC 各 15s 预算），现场 gate
+/// 能力位后补发，随后立即收尾。
+///
+/// 「删除会话」两段式的第二段：`DELETE /sessions/{id}?delete_agent_side=true` 在
+/// 进程不驻留时立即返回 `agent_side:"pending"`，由客户端带着会话行的
+/// `agent_id` / `acp_session_id` / `workspace_path` 补发本请求——用户先拿到
+/// 「已删除」，agent 侧结果稍后如实补报；无服务端状态（不做 job 表 / 轮询）。
+///
+/// best-effort 语义与删会话路径一致：能力未声明 / 拉起失败 / RPC 失败都回
+/// `agent_side:"skipped"` + 200（不报错码），由前端如实告知「未能删除」；
+/// agent 配置不存在 / cwd 不是目录属请求错误，回 404 / 400。
+async fn purge_agent_acp_session(
+    State(state): State<AppState>,
+    Path((id, acp_session_id)): Path<(String, String)>,
+    Query(query): Query<PurgeAcpSessionQuery>,
+) -> impl IntoResponse {
+    let Some(agent) = load_agent(&state.db, &id).await else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
+    };
+    let cwd = std::path::PathBuf::from(&query.cwd);
+    if !cwd.is_dir() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("cwd is not an existing directory: {}", query.cwd) })),
+        );
+    }
+
+    let agent_side = crate::api::sessions::delete_agent_side_record_via_ephemeral_spawn(
+        &state,
+        agent,
+        cwd,
+        &acp_session_id,
+    )
+    .await;
+    (StatusCode::OK, Json(json!({ "ok": true, "agent_side": agent_side.as_str() })))
 }
 
 #[derive(sqlx::FromRow)]
@@ -353,5 +399,58 @@ async fn test_agent_raw(Json(req): Json<CreateAgent>) -> impl IntoResponse {
             );
             (StatusCode::GATEWAY_TIMEOUT, Json(json!({ "error": "connection timed out (15s)" })))
         }
+    }
+}
+
+/// `DELETE /agents/{id}/acp-sessions/{acp_session_id}` 的前置校验（成功路径由
+/// `api::sessions::ephemeral_agent_delete_tests` 的 fake agent 链路覆盖）。
+#[cfg(test)]
+mod purge_acp_session_tests {
+    use super::*;
+
+    fn cwd_query(path: &str) -> Query<PurgeAcpSessionQuery> {
+        Query(PurgeAcpSessionQuery { cwd: path.to_string() })
+    }
+
+    async fn insert_agent(state: &AppState, id: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO agents (id, display_name, command, args, env, created_at, updated_at) \
+             VALUES (?, 'Test', '/bin/true', '[]', '[]', ?, ?)",
+        )
+        .bind(id)
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .expect("agent row");
+    }
+
+    #[tokio::test]
+    async fn missing_agent_is_404() {
+        let state = crate::test_utils::test_state().await;
+        let resp = purge_agent_acp_session(
+            State(state),
+            Path(("no-such-agent".to_string(), "sess-1".to_string())),
+            cwd_query(&std::env::temp_dir().to_string_lossy()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn cwd_that_is_not_a_directory_is_400() {
+        let state = crate::test_utils::test_state().await;
+        insert_agent(&state, "a1").await;
+        let missing = std::env::temp_dir().join("omniterm-purge-nonexistent-cwd");
+        let resp = purge_agent_acp_session(
+            State(state),
+            Path(("a1".to_string(), "sess-1".to_string())),
+            cwd_query(&missing.to_string_lossy()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

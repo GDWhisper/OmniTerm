@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useChatStore } from '../../stores/chatStore'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
-import type { DeleteSessionResponse } from '../../api/client'
+import type { AgentSideDeleteResult, DeleteSessionResponse } from '../../api/client'
 
 /**
  * 删除确认弹窗的「同时永久删除 agent 侧会话记录」勾选框（ACP 协议 session/delete
@@ -14,11 +14,20 @@ import type { DeleteSessionResponse } from '../../api/client'
  * 2. 勾选 → `deleteSession(id, { deleteAgentSide: true })`，未勾选 → 不带该参数；
  * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用；
  * 4. **不阻塞界面**：确认后立即 `onClose`，不等请求返回；结果随后由右下角
- *    toast 如实上报（agent 侧删除可能临时拉起 agent，秒级起步）。
+ *    toast 如实上报（agent 侧删除可能临时拉起 agent，秒级起步）；
+ * 5. **两段式**：第一段返回 `pending`（进程不驻留）→ 带 `agentId` /
+ *    `acpSessionId` / `workspacePath` 补发 `deleteAgentAcpSession` 并补报结果，
+ *    失败/缺上下文一律降级为 `skipped`（不可谎报已删）。
  */
 
 const deleteSession = vi.fn(
   async (): Promise<DeleteSessionResponse> => ({ ok: true, agent_side: 'deleted' }),
+)
+const deleteAgentAcpSession = vi.fn(
+  async (): Promise<{ ok: true; agent_side: AgentSideDeleteResult }> => ({
+    ok: true,
+    agent_side: 'deleted',
+  }),
 )
 const addToast = vi.fn()
 const onClose = vi.fn()
@@ -32,6 +41,8 @@ vi.mock('../../api/client', () => ({
     deleteProject: vi.fn(async () => ({ ok: true })),
     deleteSession: (...args: unknown[]) =>
       (deleteSession as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
+    deleteAgentAcpSession: (...args: unknown[]) =>
+      (deleteAgentAcpSession as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
   },
 }))
 
@@ -61,6 +72,10 @@ const acpTarget: DeleteTarget = {
   id: 'sess-1',
   name: 'acp session',
   runtimeKind: 'acp',
+  // 两段式补报上下文（第一段返回 pending 时随补发请求带回后端）
+  acpSessionId: 'acp-sess-1',
+  agentId: 'agent-1',
+  workspacePath: '/tmp/ws',
 }
 
 let container: HTMLDivElement
@@ -101,6 +116,7 @@ function setCapability(supported: boolean | undefined) {
 beforeEach(() => {
   localStorage.clear()
   deleteSession.mockClear()
+  deleteAgentAcpSession.mockClear()
   addToast.mockClear()
   onClose.mockClear()
   useChatStore.setState({ states: {} })
@@ -174,6 +190,35 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     })
     expect(addToast).toHaveBeenCalledWith('success', 'sidebar.sessionDeleted')
     expect(addToast).toHaveBeenCalledWith('success', 'sidebar.agentSideDeleted')
+  })
+
+  it('resolves a pending agent-side deletion with a second request (two-phase)', async () => {
+    setCapability(undefined) // 能力未知 → 可勾选；后端第一段对不驻留进程返回 pending
+    deleteSession.mockResolvedValueOnce({ ok: true, agent_side: 'pending' })
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    await act(async () => {})
+    // 第一段立即报「会话已删除」，不等 agent 侧
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.sessionDeleted')
+    // 第二段：带会话行上下文补发 agent 侧删除端点，再补报结果
+    await vi.waitFor(() => {
+      expect(deleteAgentAcpSession).toHaveBeenCalledWith('agent-1', 'acp-sess-1', '/tmp/ws')
+      expect(addToast).toHaveBeenCalledWith('success', 'sidebar.agentSideDeleted')
+    })
+  })
+
+  it('degrades a skipped follow-up to a warning (never claims a deletion)', async () => {
+    setCapability(undefined)
+    deleteSession.mockResolvedValueOnce({ ok: true, agent_side: 'pending' })
+    deleteAgentAcpSession.mockResolvedValueOnce({ ok: true, agent_side: 'skipped' })
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    await act(async () => {})
+    await vi.waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith('warning', 'sidebar.agentSideSkipped')
+    })
   })
 
   it('reports the agent-side outcome truthfully (skipped is not "deleted")', async () => {
