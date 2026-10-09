@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createRoot } from 'react-dom/client'
+import { I18nextProvider } from 'react-i18next'
+import i18n from '../../i18n'
 import { FileEditor } from './FileEditor'
 
 const SUPPORTED_FILES = [
@@ -22,7 +24,11 @@ function renderEditor(fileName: string, content: string) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
-  root.render(<FileEditor content={content} editable={false} fileName={fileName} />)
+  root.render(
+    <I18nextProvider i18n={i18n}>
+      <FileEditor content={content} editable={false} fileName={fileName} />
+    </I18nextProvider>,
+  )
   return { container, root }
 }
 

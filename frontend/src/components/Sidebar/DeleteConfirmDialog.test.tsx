@@ -3,21 +3,34 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useChatStore } from '../../stores/chatStore'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
-import type { DeleteSessionResponse } from '../../api/client'
+import type { AgentSideDeleteResult, DeleteSessionResponse } from '../../api/client'
 
 /**
  * 删除确认弹窗的「同时永久删除 agent 侧会话记录」勾选框（ACP 协议 session/delete
  * 的前端入口）。钉住三件事：
  *
- * 1. 三态判据 → 勾选框可用性（未知/不支持/进程已释放 → 禁用 + 原因）；
+ * 1. 判据 → 勾选框可用性（仅「agent 已知不支持」禁用；能力未知可勾选，后端会
+ *    临时拉起短命 agent 补删）；
  * 2. 勾选 → `deleteSession(id, { deleteAgentSide: true })`，未勾选 → 不带该参数；
- * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用。
+ * 3. **记忆用户选择**：确认删除后写入 localStorage，下次打开默认沿用；
+ * 4. **不阻塞界面**：确认后立即 `onClose`，不等请求返回；结果随后由右下角
+ *    toast 如实上报（agent 侧删除可能临时拉起 agent，秒级起步）；
+ * 5. **两段式**：第一段返回 `pending`（进程不驻留）→ 带 `agentId` /
+ *    `acpSessionId` / `workspacePath` 补发 `deleteAgentAcpSession` 并补报结果，
+ *    失败/缺上下文一律降级为 `skipped`（不可谎报已删）。
  */
 
 const deleteSession = vi.fn(
   async (): Promise<DeleteSessionResponse> => ({ ok: true, agent_side: 'deleted' }),
 )
+const deleteAgentAcpSession = vi.fn(
+  async (): Promise<{ ok: true; agent_side: AgentSideDeleteResult }> => ({
+    ok: true,
+    agent_side: 'deleted',
+  }),
+)
 const addToast = vi.fn()
+const onClose = vi.fn()
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -28,6 +41,8 @@ vi.mock('../../api/client', () => ({
     deleteProject: vi.fn(async () => ({ ok: true })),
     deleteSession: (...args: unknown[]) =>
       (deleteSession as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
+    deleteAgentAcpSession: (...args: unknown[]) =>
+      (deleteAgentAcpSession as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
   },
 }))
 
@@ -57,7 +72,10 @@ const acpTarget: DeleteTarget = {
   id: 'sess-1',
   name: 'acp session',
   runtimeKind: 'acp',
-  acpProcessAlive: true,
+  // 两段式补报上下文（第一段返回 pending 时随补发请求带回后端）
+  acpSessionId: 'acp-sess-1',
+  agentId: 'agent-1',
+  workspacePath: '/tmp/ws',
 }
 
 let container: HTMLDivElement
@@ -68,7 +86,7 @@ function render(target: DeleteTarget | null) {
     root.render(
       <DeleteConfirmDialog
         target={target}
-        onClose={vi.fn()}
+        onClose={onClose}
         reloadProjects={vi.fn(async () => {})}
         reloadSessions={vi.fn(async () => {})}
       />,
@@ -98,7 +116,9 @@ function setCapability(supported: boolean | undefined) {
 beforeEach(() => {
   localStorage.clear()
   deleteSession.mockClear()
+  deleteAgentAcpSession.mockClear()
   addToast.mockClear()
+  onClose.mockClear()
   useChatStore.setState({ states: {} })
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -128,13 +148,17 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     expect(checkboxes()).toHaveLength(0)
   })
 
-  it('disables the checkbox (with reason) when the capability is unknown', () => {
+  it('keeps the checkbox enabled when the capability is unknown (backend probes on demand)', async () => {
     setCapability(undefined)
     render(acpTarget)
     const box = checkboxes()[0]
-    expect(box.disabled).toBe(true)
+    expect(box.disabled).toBe(false)
     expect(box.checked).toBe(false)
-    expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintUnknown')
+    // 勾选后照常请求 agent 侧删除：后端现场拉起短命 agent 探明能力再决定
+    act(() => box.click())
+    clickConfirm()
+    await act(async () => {})
+    expect(deleteSession).toHaveBeenCalledWith('sess-1', { deleteAgentSide: true })
   })
 
   it('disables the checkbox when the agent is known to lack the capability', () => {
@@ -144,11 +168,57 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
     expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintUnsupported')
   })
 
-  it('disables the checkbox when the agent process has been released', () => {
+  it('closes immediately without waiting for the request, then reports the result', async () => {
     setCapability(true)
-    render({ ...acpTarget, acpProcessAlive: false })
-    expect(checkboxes()[0].disabled).toBe(true)
-    expect(document.body.textContent).toContain('sidebar.deleteAgentSideHintReleased')
+    // 请求悬挂：模拟 agent 侧删除临时拉起 agent 进程（秒级）的窗口
+    let resolveDelete: ((v: DeleteSessionResponse) => void) | undefined
+    deleteSession.mockImplementationOnce(
+      () =>
+        new Promise<DeleteSessionResponse>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    // 弹窗立即关闭、请求仍在途：界面不被模态扣住，也还没有结果 toast
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(deleteSession).toHaveBeenCalledWith('sess-1', { deleteAgentSide: true })
+    expect(addToast).not.toHaveBeenCalled()
+    await act(async () => {
+      resolveDelete?.({ ok: true, agent_side: 'deleted' })
+    })
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.sessionDeleted')
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.agentSideDeleted')
+  })
+
+  it('resolves a pending agent-side deletion with a second request (two-phase)', async () => {
+    setCapability(undefined) // 能力未知 → 可勾选；后端第一段对不驻留进程返回 pending
+    deleteSession.mockResolvedValueOnce({ ok: true, agent_side: 'pending' })
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    await act(async () => {})
+    // 第一段立即报「会话已删除」，不等 agent 侧
+    expect(addToast).toHaveBeenCalledWith('success', 'sidebar.sessionDeleted')
+    // 第二段：带会话行上下文补发 agent 侧删除端点，再补报结果
+    await vi.waitFor(() => {
+      expect(deleteAgentAcpSession).toHaveBeenCalledWith('agent-1', 'acp-sess-1', '/tmp/ws')
+      expect(addToast).toHaveBeenCalledWith('success', 'sidebar.agentSideDeleted')
+    })
+  })
+
+  it('degrades a skipped follow-up to a warning (never claims a deletion)', async () => {
+    setCapability(undefined)
+    deleteSession.mockResolvedValueOnce({ ok: true, agent_side: 'pending' })
+    deleteAgentAcpSession.mockResolvedValueOnce({ ok: true, agent_side: 'skipped' })
+    render(acpTarget)
+    act(() => checkboxes()[0].click())
+    clickConfirm()
+    await act(async () => {})
+    await vi.waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith('warning', 'sidebar.agentSideSkipped')
+    })
   })
 
   it('reports the agent-side outcome truthfully (skipped is not "deleted")', async () => {
@@ -195,7 +265,7 @@ describe('DeleteConfirmDialog · agent 侧记录勾选框', () => {
 
   it('does not overwrite the remembered choice when the checkbox was disabled', async () => {
     localStorage.setItem('omniterm_delete_agent_side', 'true')
-    setCapability(undefined) // 未知 → 禁用
+    setCapability(false) // 已知不支持 → 禁用
     render(acpTarget)
     clickConfirm()
     await act(async () => {})

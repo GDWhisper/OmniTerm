@@ -17,7 +17,7 @@ import {
   shouldRenderHtml,
   shouldRenderMarkdown,
 } from './filePreviewShared'
-import { IconEye, IconEdit, IconX, IconWarning } from './icons'
+import { IconEye, IconEdit, IconX, IconWarning, IconSearch } from './icons'
 import { READER_FONT } from '../../utils/fonts'
 import { isPathOutsideWorkspace, resolveRenamedPath } from '../../utils/path'
 import { isOutsideSkipped, markOutsideSkipped } from '../../utils/fmOutsideSkip'
@@ -77,6 +77,8 @@ export function FileDrawer({
   const fileName = filePath.split('/').pop() || filePath
 
   const [mode, setMode] = useState<'view' | 'edit'>(initialMode)
+  // 编辑器内搜索面板开合（受控）：按钮在顶栏，查询串自持在 FileEditor 里
+  const [searchOpen, setSearchOpen] = useState(false)
   // 打开意图的最新值：换文件的 effect 里要读它，但不能把它放进依赖数组
   // （那样每次父组件重渲染都会重置模式，用户手切的预览/编辑会被打掉）。
   const initialModeRef = useRef(initialMode)
@@ -134,6 +136,10 @@ export function FileDrawer({
   )
   const htmlTooLarge = isHtml && mode === 'view' && !renderHtml
 
+  // 源码/编辑态（CodeMirror）是否在渲染中：只有它有页内搜索面板——
+  // markdown/html 预览是 DOM 文本，浏览器自带查找照常可用；图片无文本。
+  const editorVisible = isText === true && !loading && !error && !renderHtml && !renderMarkdown
+
   // Fetch file content — 非图片文件都尝试按文本读取，是否文本由后端探测
   const fetchContent = useCallback(async () => {
     if (isImage) return
@@ -167,7 +173,15 @@ export function FileDrawer({
     setModified(false)
     setExternalChange(false)
     loadedRef.current = false
+    // 换文件 = 编辑器整体重建，旧查询对新文档无意义
+    setSearchOpen(false)
   }, [filePath, sessionId, workspaceId, projectId])
+
+  // 编辑器卸载（切到 markdown/html 预览 / 图片 / 加载中 / 出错）时收起搜索面板：
+  // 顶栏按钮同步不渲染，不清状态再切回来会对着一个新挂载的编辑器弹空面板。
+  useEffect(() => {
+    if (!editorVisible) setSearchOpen(false)
+  }, [editorVisible])
 
   // 打开意图变化时同步模式（不重新拉内容、不清编辑状态）。
   // 需要它是因为 FileManager 复用同一组件实例：先点行预览（view）、
@@ -424,6 +438,39 @@ export function FileDrawer({
               </button>
             </>
           )}
+          {editorVisible && (
+            <button
+              onClick={() => setSearchOpen((v) => !v)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 24,
+                height: 24,
+                border: 'none',
+                borderRadius: 0,
+                background: searchOpen ? 'var(--accent-14)' : 'transparent',
+                color: searchOpen ? 'var(--accent)' : 'var(--text-faint)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              onMouseEnter={(e) => {
+                if (!searchOpen) {
+                  e.currentTarget.style.color = 'var(--accent)'
+                  e.currentTarget.style.background = 'var(--accent-10)'
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!searchOpen) {
+                  e.currentTarget.style.color = 'var(--text-faint)'
+                  e.currentTarget.style.background = 'transparent'
+                }
+              }}
+              title={t('drawer.search')}
+            >
+              <IconSearch width={14} height={14} />
+            </button>
+          )}
           <button
             onClick={handleClose}
             style={{
@@ -578,6 +625,8 @@ export function FileDrawer({
               fileName={fileName}
               onChange={handleContentChange}
               onSave={handleSave}
+              searchOpen={searchOpen}
+              onSearchOpenChange={setSearchOpen}
             />
           </Suspense>
         )}

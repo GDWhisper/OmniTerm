@@ -6,29 +6,46 @@ import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { readDeleteAgentSidePref, writeDeleteAgentSidePref } from '../../utils/deleteAgentSidePref'
 import { ConfirmDialog } from '../Modal/ConfirmDialog'
-import { buildAgentSideDeleteCheckbox, shouldRequestAgentSideDelete } from './agentSideDelete'
+import {
+  buildAgentSideDeleteCheckbox,
+  resolvePendingAgentSide,
+  shouldRequestAgentSideDelete,
+} from './agentSideDelete'
 
 export interface DeleteTarget {
   type: 'project' | 'session'
   id: string
   name: string
   /**
-   * 会话的运行时类型与进程驻留状态（`type === 'session'` 时才有意义）。
-   * 决定是否显示「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
+   * 会话的运行时类型（`type === 'session'` 时才有意义）。决定是否显示
+   * 「同时永久删除 agent 侧会话记录」勾选框——项目删除不带该框。
    */
   runtimeKind?: Session['runtime_kind']
-  acpProcessAlive?: boolean
+  /**
+   * ACP 会话的 agent 侧删除上下文：`DELETE /sessions/{id}` 返回 `pending`（进程
+   * 不驻留）时，行已删、后端取不到这些值，由前端带着它们补发 agent 侧删除端点
+   * （两段式的第二段）。非 ACP / 缺省时不影响勾选框可用性。
+   */
+  acpSessionId?: string
+  agentId?: string
+  workspacePath?: string
 }
 
 /**
- * Delete confirmation shared by projects and sessions. Holds its own
- * `submitting` state; store cleanup (clearing the active project/workspace/
- * session triple, workspace session memory) happens here via useAppStore.
- * The Sidebar only supplies the delete target and reload callbacks.
+ * Delete confirmation shared by projects and sessions. Store cleanup (clearing
+ * the active project/workspace/session triple, workspace session memory)
+ * happens here via useAppStore. The Sidebar only supplies the delete target and
+ * reload callbacks.
  *
- * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，见
- * `agentSideDelete.ts` 的三态判据）：只有 `agent_side=deleted` 才算真删了，
- * `skipped` 必须如实告知用户（不可谎报已删）。
+ * **会话删除不阻塞界面**：确认后立即关弹窗，请求在后台执行，结果（含 agent
+ * 侧 `deleted`/`skipped`）由右下角 toast 如实上报——agent 侧删除可能临时拉起
+ * agent 进程，不该把整个界面扣在模态上。项目删除仍走 `submitting` 加载态
+ * （纯本地级联清理，秒级）。
+ *
+ * ACP 会话额外带「同时永久删除 agent 侧会话记录」勾选框（红字，判据见
+ * `agentSideDelete.ts`——仅「agent 已知不支持」禁用；进程未驻留由后端临时
+ * 拉起补删）。只有 `agent_side=deleted` 才算真删了，`skipped` 必须如实告知
+ * 用户（不可谎报已删）。
  */
 export function DeleteConfirmDialog(props: {
   target: DeleteTarget | null          // null = 关闭
@@ -60,7 +77,7 @@ export function DeleteConfirmDialog(props: {
   const { checkbox, eligibleIds } =
     isSession && target?.runtimeKind === 'acp'
       ? buildAgentSideDeleteCheckbox({
-          candidates: [{ id: target.id, runtime_kind: target.runtimeKind, acp_process_alive: target.acpProcessAlive }],
+          candidates: [{ id: target.id, runtime_kind: target.runtimeKind }],
           capabilityOf: () => agentDeleteSupported,
           defaultChecked: readDeleteAgentSidePref(),
           t,
@@ -98,48 +115,59 @@ export function DeleteConfirmDialog(props: {
     }
   }
 
-  const handleDeleteSession = async (checked: boolean) => {
+  const handleDeleteSession = (checked: boolean) => {
     if (!target || target.type !== 'session') return
     const deleteAgentSide = shouldRequestAgentSideDelete(eligibleIds, target.id, checked)
     // 记住用户的选择（勾选与取消都记）：仅在勾选框**可用**时记录——禁用态
     // 是系统的限制而非用户的表达，写进去会把「不支持」固化成偏好。
     const rememberChoice = !!checkbox && !checkbox.disabled
-    setSubmitting(true)
+    // 立即关弹窗、**不等待请求**：agent 侧删除可能需要临时拉起 agent 进程
+    // （秒级起步，超时上限更长），不能把整个界面扣在模态上。执行在后台继续，
+    // 完成后由右下角 toast 如实上报（与 archiveSessionNow 的「先关弹窗、后报
+    // 结果」先例一致）。列表行由完成后的刷新 + 侧栏 3s 轮询收走。
+    props.onClose()
     // Clear active session immediately so FileManager stops requesting
     // files for a session whose tmux process is about to be killed.
     if (activeSessionId === target.id) {
       setActiveSession(null)
     }
-    try {
-      const res = await api.deleteSession(target.id, { deleteAgentSide })
-      // 确认成功后才记住偏好：删除失败时不该固化一个未生效的选择
-      if (rememberChoice) writeDeleteAgentSidePref(checked)
-      await props.reloadSessions()
-      // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
-      await props.onSessionDeleted?.()
-      // Clean workspace session memory for the deleted session
-      for (const wsId of Object.keys(workspaceSessionMemory)) {
-        if (workspaceSessionMemory[wsId] === target.id) {
-          clearWorkspaceSession(wsId)
+    void (async () => {
+      try {
+        const res = await api.deleteSession(target.id, { deleteAgentSide })
+        // 确认成功后才记住偏好：删除失败时不该固化一个未生效的选择
+        if (rememberChoice) writeDeleteAgentSidePref(checked)
+        // 立即报「已删除」：agent 侧若为 pending（进程不驻留，后端改由补发端点
+        // 临时拉起），这里不等它——补报与列表刷新并行推进（两段式）。
+        addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
+        const pendingAgentSide =
+          deleteAgentSide && res?.agent_side === 'pending'
+            ? resolvePendingAgentSide(target)
+            : null
+        await props.reloadSessions()
+        // 从「已归档」区块发起的删除也要把该行从归档列表里清掉
+        await props.onSessionDeleted?.()
+        // Clean workspace session memory for the deleted session
+        for (const wsId of Object.keys(workspaceSessionMemory)) {
+          if (workspaceSessionMemory[wsId] === target.id) {
+            clearWorkspaceSession(wsId)
+          }
         }
+        if (deleteAgentSide) {
+          reportAgentSide(true, pendingAgentSide ? await pendingAgentSide : res?.agent_side)
+        }
+      } catch {
+        // api client already shows error toast
       }
-      addToast('success', t('sidebar.sessionDeleted', { name: target.name }) ?? `Session deleted`)
-      reportAgentSide(deleteAgentSide, res?.agent_side)
-    } catch {
-      // api client already shows error toast
-    } finally {
-      setSubmitting(false)
-      props.onClose()
-    }
+    })()
   }
 
   return (
     <ConfirmDialog
       open={!!target}
       onClose={props.onClose}
-      onConfirm={target?.type === 'project' ? handleDeleteProject : () => void handleDeleteSession(false)}
+      onConfirm={target?.type === 'project' ? handleDeleteProject : () => handleDeleteSession(false)}
       onConfirmWithChecked={
-        checkbox ? (checked: boolean) => void handleDeleteSession(checked) : undefined
+        checkbox ? (checked: boolean) => handleDeleteSession(checked) : undefined
       }
       title={target?.type === 'project' ? (t('sidebar.deleteProject') ?? 'Remove Project from List') : t('sidebar.deleteSession')}
       message={

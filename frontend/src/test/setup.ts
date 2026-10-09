@@ -36,3 +36,11 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     disconnect() {}
   } as unknown as typeof ResizeObserver
 }
+
+// jsdom implements no layout: Range.prototype.getClientRects is missing, and
+// CodeMirror's measure / scrollIntoView path calls it (FileEditor search
+// dispatches scrollIntoView).  Empty rect list degrades to zero-size
+// measurements, which CodeMirror already tolerates.
+if (typeof Range !== 'undefined' && !Range.prototype.getClientRects) {
+  Range.prototype.getClientRects = (() => []) as unknown as typeof Range.prototype.getClientRects
+}

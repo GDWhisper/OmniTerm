@@ -212,9 +212,12 @@ export const SessionRow = memo(function SessionRow({
               id: session.id,
               name: session.name || session.tmux_session_name || t('sidebar.unnamed'),
               // 删除确认弹窗据此决定是否显示「同时删除 agent 侧记录」勾选框
-              // 及其可用性（能力未知/进程已释放 → 禁用）
+              // （可用性只看 agent 能力）；三个 ACP 字段供两段式补报（行删掉后
+              // 后端取不到，由前端带着补发 agent 侧删除端点）
               runtimeKind: session.runtime_kind,
-              acpProcessAlive: session.acp_process_alive,
+              acpSessionId: session.acp_session_id,
+              agentId: session.agent_id,
+              workspacePath: session.workspace_path,
             })
           }}
         />

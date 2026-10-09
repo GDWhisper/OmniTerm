@@ -754,10 +754,10 @@ export function Sidebar() {
               type: 'session',
               id: s.id,
               name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
-              // 归档会话必然已释放 agent 进程 → 勾选框会因 `acp_process_alive`
-              // 为 false 而禁用；显式传值让这一判断来自真实数据而非默认。
               runtimeKind: s.runtime_kind,
-              acpProcessAlive: s.acp_process_alive,
+              acpSessionId: s.acp_session_id,
+              agentId: s.agent_id,
+              workspacePath: s.workspace_path,
             })
           }
         />

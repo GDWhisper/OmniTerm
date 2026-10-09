@@ -3236,3 +3236,92 @@ select optgroup option {
   font-family: var(--reader-font);
   font-size: 11px;
 }
+
+/* ── 抽屉文件编辑器内搜索面板（FileEditor，Ctrl/Cmd+F 或顶栏搜索按钮打开）──
+   浮层本体走 .pixel-float（2px 边框 + 4px 硬阴影，§6.1）；本块只管布局与控件态 */
+.fm-editor-search {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 8px;
+  background: var(--bg-elevated);
+  font-family: var(--reader-font);
+  animation: fm-search-drop 0.15s ease-out;
+}
+
+.fm-editor-search-icon {
+  display: inline-flex;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.fm-editor-search-input {
+  width: 150px;
+  height: 22px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 0 6px;
+  outline: none;
+}
+
+.fm-editor-search-input:focus {
+  border-color: var(--accent);
+}
+
+.fm-editor-search-input::placeholder {
+  color: var(--text-faint);
+}
+
+.fm-editor-search-count {
+  min-width: 36px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.fm-editor-search-btn,
+.fm-editor-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  min-width: 22px;
+  padding: 0 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.fm-editor-search-btn:hover:not(:disabled),
+.fm-editor-search-toggle:hover {
+  background: var(--accent-10);
+  color: var(--accent);
+}
+
+.fm-editor-search-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.fm-editor-search-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-14);
+}
