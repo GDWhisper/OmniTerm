@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
- * pty 历史视口锚定回归（2026-09-12 有状态锚，取代 09-03 指纹锚定后的探针升级）。
+ * pty 历史视口锚定回归（2026-09-12 有状态锚，取代 09-03 指纹锚定后的探针升级；
+ * 2026-10-10 补第六形态「稀疏屏无滚移」——证据行判据回归）。
  *
  * 背景：09-03 指纹重定位的验收只用 `seq 1 3000`（全唯一行），周期性内容
  * （空行/框线/分隔线——agent 输出常态）上的棘轮/滑移逃逸了六轮修复
- * （`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md` 根因实证）。
- * 本脚本把五组差分形态固化为回归判据：锚点行选**周期性内容**，连续 8 轮
+ * （`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md` 根因实证；
+ * 检测判据的证据行勘误见同文 2026-10-10 节）。
+ * 本脚本把六组差分形态固化为回归判据（前五组 = 周期性内容 + 真滚移，第六
+ * 组 = 稀疏屏 + 无滚移对照）：锚点行选**周期性内容**，连续 8 轮
  * 「burst 输出 → 保锚刷新」，断言——
  *   1. 窗口首行内容保持（内容锚不丢）；
  *   2. 每轮 drift > 0 且各轮 drift 一致（±1）——视口随新增行数前移；
  *      旧行为签名（负 drift = 向 live 棘轮 / 内容滑移）直接 RED；
  *   3. y 轨迹单调不减。
+ * 第六组（sparse-no-scroll）反向：稀疏屏 + 底部原地更新（**无滚移**），断言
+ * drift 恒 == 0——旧判据把空行带自相关误判为滚移、锚每变化帧向旧端漂移
+ * （用户症状「上翻看到很久之前的旧数据」，见 09-12 计划 2026-10-10 勘误）。
  *
  * drift 基准采用「首轮校准 + 一致性」而非硬编码行数：burst 实际入历史的
  * 行数受 shell 回显/prompt 影响，无法从命令形态精确推算；而「各轮一致 +
@@ -108,8 +114,10 @@ async function waitHistorySettled(conn) {
  * 单形态回归：铺历史 → 定位周期性锚点行 → ROUNDS 轮 burst + 保锚刷新。
  * anchorText: 锚点行内容（trim 后精确匹配）；findFrom: 锚点扫描起点 y
  * （数字，或按 settled history_size 推导的函数——唯一内容行须按 hs 反推）。
+ * expectDrift: 'positive'（默认，真滚移——drift 必须 >0 且各轮一致）
+ * 或 'zero'（无滚移对照——drift 必须恒 == 0）。
  */
-async function runCase({ tag, prefill, burst, anchorText, findFrom = 500 }) {
+async function runCase({ tag, prefill, burst, anchorText, findFrom = 500, expectDrift = 'positive' }) {
   const failures = []
   const sid = await newSession(tag)
   try {
@@ -146,13 +154,20 @@ async function runCase({ tag, prefill, burst, anchorText, findFrom = 500 }) {
       if (top !== anchorText) {
         failures.push(`round ${round}: 窗口首行内容漂移 ${JSON.stringify(top.slice(0, 40))} ≠ 锚点内容`)
       }
-      if (drift <= 0) {
-        failures.push(`round ${round}: drift=${drift} ≤ 0（向 live 棘轮/滑移签名）`)
-      }
-      if (expected == null) {
-        expected = drift
-      } else if (Math.abs(drift - expected) > 1) {
-        failures.push(`round ${round}: drift=${drift} 偏离基准 ${expected}±1`)
+      if (expectDrift === 'zero') {
+        // 无滚移对照形态：锚必须完全不动（任何方向的漂移都 RED）
+        if (drift !== 0) {
+          failures.push(`round ${round}: drift=${drift} ≠ 0（无滚移帧不得移动锚）`)
+        }
+      } else {
+        if (drift <= 0) {
+          failures.push(`round ${round}: drift=${drift} ≤ 0（向 live 棘轮/滑移签名）`)
+        }
+        if (expected == null) {
+          expected = drift
+        } else if (Math.abs(drift - expected) > 1) {
+          failures.push(`round ${round}: drift=${drift} 偏离基准 ${expected}±1`)
+        }
       }
       ys.push(r.viewport)
       curY = r.viewport
@@ -167,7 +182,7 @@ async function runCase({ tag, prefill, burst, anchorText, findFrom = 500 }) {
   }
 }
 
-// ── 五组差分形态（2026-09-12 计划证据表的固化）──
+// ── 六组差分形态（2026-09-12 计划证据表的固化 + 2026-10-10 无滚移对照）──
 const CASES = [
   {
     tag: 'unique',
@@ -208,6 +223,21 @@ const CASES = [
     prefill: 'for i in $(seq 1 300); do echo "q$i"; echo; done',
     burst: (r) => `echo; echo "c${r}"`,
     anchorText: '',
+  },
+  {
+    tag: 'sparse-no-scroll',
+    // 稀疏屏 + 底部原地更新（无滚移）：证据行判据回归（2026-10-10 勘误）——
+    // 旧判据把空行带自相关误判为滚移，锚每变化帧 -1 向旧端漂移（用户症状
+    // 「上翻看到很久之前的旧数据」，需切换会话恢复）。修复后 drift 恒 0。
+    // 构造要点：stty -echo 静音命令回显（否则每轮 burst 回显都占行推进屏幕
+    // = 真滚移）；PS1 缩短 + printf 原地写底行（无换行）保证零滚屏；burst
+    // 逐轮改变底行内容（否则「屏幕无变化」会被静态屏闸跳过、测不到检测器）。
+    prefill:
+      'for i in $(seq 1 200); do echo "h$i"; done; printf "\\033[2J\\033[H"; echo sparse-top; PS1="$ "; stty -echo',
+    burst: (r) => `printf "\\033[${ROWS};1Hstatus-${r}-abc"`,
+    anchorText: 'h100',
+    findFrom: (hs) => hs - 110,
+    expectDrift: 'zero',
   },
 ]
 

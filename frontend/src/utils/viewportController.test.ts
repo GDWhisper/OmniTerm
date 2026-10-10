@@ -247,7 +247,7 @@ describe('ViewportController.acceptFrame', () => {
 })
 
 // ──────────────────────────────────────────────────────────
-// 新输出重拉（后端有状态锚，`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`）
+// 新输出重拉（后端有状态锚，`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md`）
 //
 // 回归背景一（2026-08-30）：窗口帧只在滚轮时请求一次，之后实时帧被
 // acceptFrame 丢弃且无人重拉，屏幕永久停在上翻瞬间的历史内容——用户在压测
@@ -345,6 +345,27 @@ describe('ViewportController 新输出重拉（后端有状态锚）', () => {
     ctl.handleWheel(wheel(-100), METRICS)
     raf.flush()
     expect(sent.at(-1)).toEqual({ y: 10, refresh: false })
+  })
+
+  it('refresh 到点不得吞掉尚未发出的滚动意图（refresh/scroll 竞态）', () => {
+    const { ctl, sent } = makeController()
+    ctl.handleWheel(wheel(-100), METRICS) // y=10
+    raf.flush()
+    expect(sent[0]).toEqual({ y: 10, refresh: false })
+
+    // 后端新输出 → 排 refresh 定时器
+    ctl.notifyLiveOutput(true)
+    // 用户继续滚动（rAF 尚未执行，滚动意图只挂在 pendingY）
+    ctl.handleWheel(wheel(-30), METRICS) // y=13
+    // refresh 定时器到点（同一 tick 内先于 rAF 执行）：不得把滚动升格为
+    // refresh=true——后端会忽略 y 按旧锚出窗（用户刚滚的一下被吞），且响应
+    // 的权威 y 会经 acceptFrame 把 currentY 拉回锚位置（「滚不动/被吸回」）。
+    timers.fireAll()
+    raf.flush()
+    expect(sent).toEqual([
+      { y: 10, refresh: false },
+      { y: 13, refresh: false },
+    ])
   })
 })
 

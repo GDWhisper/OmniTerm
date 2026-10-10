@@ -1,6 +1,6 @@
 # debug-patterns 领域文档拆分（terminal-pty 超限）
 
-> 状态：设计稿（2026-09-21）——**方向性方案，暂不推进**
+> 状态：设计稿（2026-09-21）——**方向性方案，暂不推进**；2026-10-10 触发条件 1 再次命中（terminal-pty.md 追加模式 10 同族案例后 **38.4KB**，距 40KB 硬红线不足 2KB）：该次仍按「家族合并纪律」做最小追加（不新开条目）、未推进拆分——**此后任何写入须先执行本拆分**
 > 触发条件：见「推进触发条件」；不设截止时间，触发再处理
 > 关联：`docs/dev/debug-guide.md`（体积纪律 + 领域索引）、`docs/dev/debug-patterns/terminal-pty.md`（拆分对象）
 > 前置检查点：`docs/dev/reference/PLAN-TEMPLATE.md`
@@ -13,7 +13,7 @@
 
 | 文件 | 体积 | 状态 |
 |------|------|------|
-| `terminal-pty.md` | **35.8KB** | ❌ 超限（本次追加「订阅前的事件不可见」前已 34.7KB） |
+| `terminal-pty.md` | **38.4KB** | ❌ 超限（2026-10-10 追加模式 10 同族案例后；距 40KB 硬红线不足 2KB） |
 | `platform-protocol.md` | **27.7KB** | ⚠️ 逼近上限（2026-10-06 追加模式 13「cancel 粘滞窗口」后；再写一条新规律前须先按触发条件 1 的同族规则先拆再加） |
 | `resource-lifecycle.md` | 15.4KB | 正常 |
 | `frontend-react.md` | 12.2KB | 正常 |
