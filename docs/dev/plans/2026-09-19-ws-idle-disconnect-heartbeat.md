@@ -1,6 +1,6 @@
 # WS 空闲断连归因与心跳方案
 
-> 状态：设计稿（2026-09-19）
+> 状态：设计稿（2026-09-19）；**Phase 1 已部分落地**（2026-10-10，ACP 侧；终端侧未接线，Phase 0 探针仍未跑——见文末勘误）
 > 触发条件：修改 `src/ws/terminal.rs`（`ClientControl::Ping` / `ServerControl::Pong`）、`src/ws/acp.rs`、`src/engine/*/terminal_ws.rs` 的 WS 读写循环、`frontend/src/hooks/useAcpChat.ts` / `useTerminal.ts` 的连接保活与重连、或调整 cloudflared / 反代超时前**必读**
 > 关联：`docs/architecture/frontend.md`「终端自动重连引擎」小节（既有自愈策略与退避语义，本计划只解决「为什么会断」，不重复设计重连）、`docs/dev/debug-patterns/terminal-pty.md`（轮询推送时延下界、拉模型逃生口）
 > 来源：2026-09-19 用户报告「公网 CF 访问正式版，聚焦使用终端会短时间内自动断连，频繁需要手动点重连」；同日会话 `codebuddy_0919-0946` 排查未闭环。证据取自 `~/.omniterm/omniterm.log`（正式版 v0.2.22，PID 792178）与 `/etc/cloudflared/config.yml`
@@ -83,3 +83,35 @@
 
 - 判定结果与最终策略写回本文件；若最终确认与心跳无关，本文件转为「归因结论 + 否决心跳的理由」。
 - 若接入心跳：`docs/architecture/backend.md`（WS 协议帧）、`docs/architecture/frontend.md`（连接保活）、`CHANGELOG.md`（功能落地时）。
+
+---
+
+## 勘误（2026-10-10）：Phase 1 部分落地，且**未跑 Phase 0 探针**
+
+**先认偏差**：本文件 §范围与优先级 写明「结论：前提未确证，先测后定，不先写心跳」，Phase 1 也写明「若 Phase 0 判定为 H2（硬上限）或 H3（客户端主动），则本 Phase 改为相应策略，心跳不落」。2026-10-10 的实现**没有先跑 Phase 0 四格探针**。这是对自身纪律的违背，记录在此而非默默改掉。
+
+**为什么仍然落了**（不是「来不及测」，是判据变了）：
+
+1. **用户报了一个真实缺陷**：长时间离开浏览器后 omniterm 假死。拆出两条独立根因，第二条正是本计划的 H1 家族——空闲 WS 被重置 + 前端不知道。
+2. **「onclose 不是可靠先知」已被独立证实**：`2026-10-01-acp-refocus-latest-merge.md` 的 2026-10-04 勘误实测，移动端切后台冻结期内断连信号**不补派**（WebKit 类）或**迟到**（Chromium 类）。这直接证伪了「等 onclose 就行」这条退路，也就是说不修保活，用户侧必然保留一个「打字无反应」窗口——与 H1/H2/H4 的最终归属无关。
+3. **心跳是纯增量、可逆**：服务端只加一个无状态 `pong` 回包，前端加一个探测定时器。即使 Phase 0 将来判定 H2/H3，拆除它就是删两处代码，不牵动别的东西（翻盘成本极低，与「先写代码把假设焊死」是两件事）。
+
+**落了什么**（对齐原 D1–D4，未做的新增决策只有「隐藏期停发」）：
+
+| 原决策 | 落地情况 |
+|---|---|
+| D1 间隔取实测窗口 ≤1/3 | `HEARTBEAT_INTERVAL_MS = 30s`（前端常量，服务端不持有时长） |
+| D2 客户端 ping / 服务端 pong，服务端不主动 ping | `AcpClientMessage::Ping` → `AcpServerMessage::Pong`，服务端无状态回包、不起定时器 |
+| D3 抽共享 helper 覆盖两条链路 | **只落了 ACP 侧**。终端侧 `ClientControl::Ping` 仍无发送方（`src/ws/terminal.rs` 的定义本就存在），未抽 helper——两条链路的 WS 层结构差异大（pty 走 `terminal_ws.rs` 转发、tmux 另一套），硬抽等于先重构再修 bug，违背「局部改善」纪律 |
+| D4 连续 N 周期无 pong 才判断开 | `HEARTBEAT_MAX_MISSED = 3`（90s，早于 ~125s 重置窗）；判半开后走**既有** `onclose` → 指数退避重连，不另起重连路径 |
+| 风险表「隐藏时暂停」 | 页面隐藏即停发并清零计数（否则定时器节流会被误判成半开，白拆连接） |
+| 未规划的新增 | `useAcpChat` 隐藏期**不再排退避重连定时器**，改为页面回来时补连并重置退避——对齐 `useTerminal` 已有的「聚焦才重连」口径（该缺口由 `2026-10-01-acp-refocus-latest-merge.md` 的 10-04 勘误点名遗留） |
+
+**仍未做**（按原优先级，都是诊断/扩展而非阻塞）：
+
+- **Phase 0 四格探针**：判定 H1–H4 归属。现在心跳已落地，探针的意义从「决定要不要写心跳」变成「解释为什么还会断」——若探出 H2/H3，需要的是另一套策略（连接池 / 客户端侧改造），心跳仍可保留作兜底。
+- **终端 WS 侧心跳**（D3 的另一半）：终端链路已有 blur/idle 主动拆除 + 聚焦才重连自愈，缺口是「可见态意外断开且无 onclose」，优先级低于 ACP（终端断连有遮罩按钮 + 状态行，用户可感知）。
+- **cloudflared / 反代超时配置**：仍不动（未证实前不碰运维配置，原结论不变）。
+- **handler 级「收到 ping 回 pong」测试**：现只有两条 serde 线格式单测（`ping_frame_deserializes` / `pong_frame_serializes_with_type_tag`），回包**行为**无自动化覆盖。原因：本仓没有任何 WS 集成测试脚手架（`tests/` 下三个文件都是内部函数级测试），要为 6 行回包代码建一套「起 Router + 临时库 + WS 客户端」的设施，成本与风险都超出本次范围（且端口/库目标须满足 §S6）。已记入 `2026-10-10-acp-resume-jank-followups.md`。
+
+**翻盘条件**：若 Phase 0 探针判定 H2（与流量无关的硬寿命上限），心跳只是把「125s 一断」变成「90s 一断但用户无感」，此时应转向连接池 / 复用策略，并评估是否下调 `HEARTBEAT_MAX_MISSED` 以更早发现。

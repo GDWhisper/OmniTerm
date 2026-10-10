@@ -161,3 +161,23 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 - 守卫逐条保留：`undelivered` 仍不被顶掉（它只活内存，DB 里没有对应行）；user 不同文本仍照常插入；assistant 空文本仍不作前缀。
 
 **新增回归单测**（`frontend/src/stores/chatStore.catchup.test.ts`，3 条，修前全红）：正式版形态（echo + 无 dbId 半截 assistant，双规则同时失配）/ 健康轮后补拉（echo + 带 dbId assistant）/ 多轮（旧轮 dbId 行之后的新 echo）。既有 15 条（含 10-01 五规则、10-04 幂等）不回归。
+
+---
+
+## 勘误（2026-10-10）：两条「不纳入范围」的判断被推翻，本计划无需改动代码
+
+用户报告「长时间离开浏览器后 omniterm 假死」，排查推翻了本文件两处「已自愈 / 不属本计划」的论断。**补拉链路本身零改动**（五条合并规则、E1/E2 兜底全部成立），被推翻的是对另外两条链路的判断：
+
+### ① 「rAF/liveBuffer 隐藏期行为 —— 已自愈，无需改动」不成立
+
+原文（§背景 取证结论 1）：「失焦期 `session_update` 动作照常进 `liveBuffer`……只是 rAF 暂停不渲染；聚焦后 pending rAF 自动补刷——这部分是已成立且自愈的性能优化」。
+
+**漏掉的是「无上限」**：`liveBuffer` 的唯一 flush 触发器是 rAF，而隐藏页 / 后台标签 / 最小化窗口**不派发 rAF**，WS 消息却照常投递。于是离开多久缓冲就累积多久，回来时第一个 rAF 一次性提交上万条 action——`applyActionsToMessages` 对每个 action 都做一次 `[...messages]` 全量浅拷贝（O(actions × messages)），主线程阻塞数秒。**「自愈」指的是内容不丢，不是成本有界**：内容确实没丢，但恢复动作本身成了卡顿源。
+
+修复在 `frontend/src/utils/liveBuffer.ts`（新）：相邻同类 prose 动作无损合并 + 条数（2000）/ UTF-8 字节（2 MiB）双上限，越界即提前 flush（不丢内容、不静默丢弃），另补 1s 兜底定时器覆盖 rAF 停摆窗口。契约与单测按 `performance-and-safety.md` §P1 落。**本文件的补拉合并不受影响**——它消费的是 DB 页，与 live 缓冲是两条独立入口。
+
+### ② 「保留未修：ACP WS 仍无心跳」已修
+
+原文（10-04 勘误末段）把无心跳、隐藏期照常排退避重连两条列为「根因在 WS 保活/重连预算，不属本计划」。2026-10-10 已在 `2026-09-19-ws-idle-disconnect-heartbeat.md` 的 Phase 1 落地 ACP 侧心跳（30s ping / 3 次无 pong 判半开主动重连 / 隐藏期停发）+ 隐藏期不排退避（页面回来补连）。对**本计划**的影响只有一条且是正面的：`needsCatchUp` 的触发条件（`onclose` 置位）从此多了一个可靠的生产者——半开检测会主动 `close()`，`onclose` 必然到达，标记不再依赖「冻结页恰好补派」。E1/E2 两条兜底按原样保留（它们覆盖的是「连半开检测都来不及跑」的更长冻结窗口）。
+
+**不翻盘本文 §范围与优先级 的否决项**：「focus/visible 时强制立即重连（跳过退避）」仍是否决态——新加的「页面回来补连」只在 `reconnectDeferred`（socket 已断）时动作，健康连接不扰动，用户在翻看历史时不会遇到全重连。

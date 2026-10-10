@@ -145,6 +145,20 @@ enum AcpClientMessage {
     PermissionResponse { id: String, option_id: String },
     #[serde(rename = "set_config_option")]
     SetConfigOption { config_id: String, value: String },
+    /// 心跳探针（客户端发起）：服务端原样回一帧 `pong`。
+    ///
+    /// 为什么需要：ACP WS 两端此前都没有任何保活字节，释放态连接寿命稳定落在
+    /// ~125s（隧道/承载网空闲重置，实测见 `docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`）。
+    /// 重置形态是 `ResetWithoutClosingHandshake`，且**冻结页不补派 onclose**
+    /// （移动端切后台 / bfcache），前端于是握着一条已死的 socket 而不自知：
+    /// `sendPrompt` 见 `readyState !== OPEN` 直接静默 return —— 用户打字毫无反应，
+    /// 即「假死」。有了 ping/pong，前端连续 N 个周期收不到 pong 即可主动断开重连。
+    ///
+    /// 间隔与判定阈值在前端（`useAcpChat` 的 `HEARTBEAT_*` 常量），服务端只做无状态
+    /// 回包：不记连接、不起定时器——多一个服务端状态就多一处要收尸的生命周期。
+    /// 页面隐藏时前端主动停发（移动端电量账），故服务端看不到持续 ping 也无需清理。
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +257,9 @@ enum AcpServerMessage<'a> {
     /// 后续 live 帧 seq 大于它才应用（见 useAcpChat 对账）。
     #[serde(rename = "turn_snapshot")]
     TurnSnapshot { row_id: String, text: String, blocks: String, seq: u64 },
+    /// 心跳应答（`ping` 的回复）。无载荷、无状态，前端只据此复位「未收到 pong」计数。
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 /// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
@@ -1385,6 +1402,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
                             }
+                            Ok(AcpClientMessage::Ping) => {
+                                // 心跳回包。写失败即对端已消失，与其它帧同一处置
+                                // （break 由外层 ws_rx 关闭自然收尾）。
+                                let msg = serde_json::to_string(&AcpServerMessage::Pong)
+                                    .unwrap_or_default();
+                                if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                                    break;
+                                }
+                            }
                             Err(e) => {
                                 let err_msg = format!("invalid message: {}", e);
                                 let msg = serde_json::to_string(&AcpServerMessage::Error {
@@ -1460,6 +1486,21 @@ mod tests {
     };
     // 判定口径钉在协议类型上（v1 schema），不构造 wire 字符串。
     use agent_client_protocol::schema::v1::StopReason;
+
+    // ── 心跳帧（ping / pong）线格式 ─────────────────────────────────
+
+    #[test]
+    fn ping_frame_deserializes() {
+        let msg: AcpClientMessage = serde_json::from_str(r#"{"type":"ping"}"#).unwrap();
+        assert!(matches!(msg, AcpClientMessage::Ping));
+    }
+
+    #[test]
+    fn pong_frame_serializes_with_type_tag() {
+        // 前端按 `frame.type === 'pong'` 派发，tag 名是唯一契约。
+        let json = serde_json::to_string(&AcpServerMessage::Pong).unwrap();
+        assert_eq!(json, r#"{"type":"pong"}"#);
+    }
 
     // ── AcpClientMessage::Prompt 反序列化（§8 向后兼容） ──────────────
 
