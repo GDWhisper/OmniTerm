@@ -265,7 +265,11 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
                         Json(json!({ "error": "npm install timed out" })),
                     );
                 }
-                Ok(r) => r.map(|_| ()),
+                // npm 退出码 0 只代表命令跑完；registry 镜像滞后时会「成功」装回
+                // 旧版。必须校验实际版本，否则报假成功（重启得到旧版、前端版本
+                // 监测永远等不到目标上线）。
+                Ok(Ok(_)) => update::verify_installed_version(&exe, &release.version).await,
+                Ok(Err(e)) => Err(e),
             }
         }
         update::Channel::GithubRelease => update::self_replace(&exe, &release).await,

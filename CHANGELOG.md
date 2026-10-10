@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-10-10 07:36) `[backend]` npm 渠道一键升级补「装后版本校验」：`npm install -g @latest` 退出码 0 只代表命令跑完——registry 镜像（如 npmmirror）未同步新版时装回的仍是旧版，此前会报「升级成功」并进入待重启，随后一键重启 exec 得到的还是旧版本、前端「等待目标版本上线」的重启监测永远不满足（表现为重启一直卡着、强刷后版本回退）。现在升级后执行新二进制 `--version` 比对目标版本，不一致即返回明确错误（含官方源重试命令）且不写待重启状态（`src/update.rs`、`src/api/system.rs`）
+
 ## [0.2.29] - 2026-10-09
 
 ### Added

@@ -338,7 +338,7 @@ WS   /api/v1/ws/terminal/external/{tmux_name}  # 外部（未收养）会话接�
 GET  /api/v1/files/watch (SSE)   # 实时目录变更推送；watch 树**手动递归注册**（跳过 node_modules/.git/target/隐藏目录，见「File watcher」小节）
 GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min；附 container/pending_restart 标记）
-POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑；cargo 返回 400；成功后标记待重启）
+POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑并校验装后版本——镜像滞后装回旧版即报错而非假成功；cargo 返回 400；成功后标记待重启）
 POST /api/v1/system/restart           # 手动重启（Unix 调度 ACP 回收并 exec 新二进制替换）
 GET  /api/v1/tmux/health              # tmux server 健康快照（受保护）：{state: healthy|no_server|deaf|other, consecutive_deaf, last_deaf_at, orphan_count, orphan_warn_threshold, probe_interval_secs}——聋 server 检测 + 孤儿监控，见「聋 server 健康/自愈/孤儿监控」
 POST /api/v1/tmux/rebuild             # 内建自愈「重建 tmux server」（受保护）：200 {ok, server_pid, socket_removed, detail}；409 {error: not_deaf|heal_in_progress}；500 {error: <原因>}——重探针 + 单飞保证幂等，非聋拒绝执行

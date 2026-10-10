@@ -404,6 +404,50 @@ pub(crate) async fn delegate_captured(cmd: &str, cmd_args: &[&str]) -> Result<St
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// npm 渠道升级后校验**实际装到的版本**。
+///
+/// `npm install -g @latest` 的退出码只代表命令执行完毕，不代表包内容已更新：
+/// registry 镜像（如 npmmirror）尚未同步新版时 npm 会成功退出但装的仍是旧版。
+/// 不校验则 Web 端报「升级成功」→ 一键重启 exec 得到的还是旧版 → 前端「等待
+/// 目标版本上线」的重启监测永远不满足（表现为「重启一直卡着」，强刷后版本回退）。
+///
+/// 校验方式与 relaunch 同一前提：升级前捕获的 exe 路径在 npm reify 后指向新包
+/// 内容，直接执行 `--version` 比对目标版本；不一致即如实报错（错误信息给出官方
+/// 源重试命令），绝不报假成功。
+pub(crate) async fn verify_installed_version(exe: &Path, expected: &Version) -> Result<()> {
+    let exe = revive_dead_exe(exe).unwrap_or_else(|| exe.to_path_buf());
+    if !exe.exists() {
+        bail!(
+            "npm finished but no binary at {}. The installation may be corrupted; reinstall: npm install -g {}",
+            exe.display(),
+            concat!(npm_package!(), "@latest")
+        );
+    }
+    let output = tokio::process::Command::new(&exe)
+        .arg("--version")
+        .output()
+        .await
+        .with_context(|| format!("npm finished but failed to run {}", exe.display()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match parse_version_output(&stdout) {
+        Some(v) if v == *expected => Ok(()),
+        Some(v) => bail!(
+            "npm finished but the installed version is still v{v} (expected v{expected}). \
+             Your npm registry probably has not synced the new release yet — retry later, or \
+             update from the official registry: npm install -g {} --registry=https://registry.npmjs.org",
+            concat!(npm_package!(), "@latest")
+        ),
+        None => {
+            bail!("npm finished but `--version` printed an unexpected value: {}", stdout.trim())
+        }
+    }
+}
+
+/// 从 `omniterm --version` 输出解析版本号（clap 输出格式为 `<bin> <semver>`）。
+fn parse_version_output(stdout: &str) -> Option<Version> {
+    stdout.split_whitespace().find_map(|tok| Version::parse(tok).ok())
+}
+
 pub(crate) async fn self_replace(exe: &Path, release: &LatestRelease) -> Result<()> {
     let asset_name = asset_name()?;
     let asset = release.assets.iter().find(|a| a.name == asset_name).with_context(|| {
@@ -660,6 +704,29 @@ mod tests {
     #[test]
     fn verify_digest_rejects_unknown_algorithm() {
         assert!(verify_digest(b"hello", "sha512:abc").is_err());
+    }
+
+    #[test]
+    fn parse_version_output_accepts_clap_format() {
+        assert_eq!(
+            parse_version_output("omniterm 0.2.29\n"),
+            Some(Version::parse("0.2.29").unwrap())
+        );
+        assert_eq!(
+            parse_version_output("omniterm 0.2.29"),
+            Some(Version::parse("0.2.29").unwrap())
+        );
+        // 容忍首尾杂散行——只要输出里出现一个合法 semver 即可
+        assert_eq!(
+            parse_version_output("warning: something\nomniterm 0.2.29\n"),
+            Some(Version::parse("0.2.29").unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_version_output_rejects_unparseable() {
+        assert_eq!(parse_version_output(""), None);
+        assert_eq!(parse_version_output("omniterm unknown"), None);
     }
 
     #[test]
