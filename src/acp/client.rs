@@ -507,6 +507,31 @@ struct Handshake {
     initial_config_options: Vec<SessionConfigOption>,
 }
 
+/// 下发给 agent 的 cwd 统一形态：去掉尾部路径分隔符（`/home/pax/` →
+/// `/home/pax`），根 / 盘符根保持原样（`/`、`C:\` 不被裁空或裁成 `C:`）。
+///
+/// 背景（2026-10-11 对 qodercli 1.1.66 实测复现）：qoder 按「路径中非字母
+/// 数字字符替换为 `-`」编码会话存储目录——`/home/pax/` → `-home-pax-`、
+/// `/home/pax` → `-home-pax`。其 session/new 与 session/load 对该编码的规范化
+/// 不一致：创建时去掉尾斜杠落盘 `-home-pax`，恢复时却按请求原样编码查
+/// `-home-pax-`，于是 session/load 报 INVALID_SESSION_IDENTIFIER、恢复必失败。
+/// omniterm 库里 workspace_path 常带尾斜杠（如 `/home/pax/`），正好踩中。
+/// 这里在 new / load 两端统一下发形态作兜底：两端一致即不再依赖 agent 侧
+/// 是否规范化。对不按「原样 cwd 编码目录」定位会话的 agent 无影响（如
+/// claude-agent-acp 按会话 ID 跨目录查找）；对按路径编码存取的 agent，
+/// 两端同形态也保证 new 落盘与 load 查找一致。
+fn normalize_agent_cwd(cwd: &Path) -> PathBuf {
+    let s = cwd.as_os_str().to_string_lossy();
+    let trimmed = s.trim_end_matches(std::path::MAIN_SEPARATOR);
+    // 全部裁光 = 根（POSIX `/` / 反斜杠单根）；`C:` 形态 = Windows 盘符根被裁掉
+    // 尾分隔符（`C:\` 的语义），两者都保持原样。
+    if trimmed.is_empty() || (trimmed.len() == 2 && trimmed.ends_with(':')) {
+        cwd.to_path_buf()
+    } else {
+        PathBuf::from(trimmed)
+    }
+}
+
 impl AcpClient {
     pub async fn spawn_and_connect(
         agent: Agent,
@@ -528,6 +553,10 @@ impl AcpClient {
         api_keys: &std::collections::HashMap<String, String>,
         mode: SessionMode,
     ) -> Result<Self, AcpError> {
+        // 包装 `cd` / 下发 session/new 前统一 cwd 形态（见 [normalize_agent_cwd]）：
+        // 与 load_session 两端同形态，兜底 qoder 等按路径编码存储会话的 agent
+        // 在恢复时因尾斜杠（`-home-pax-` vs 落盘的 `-home-pax`）找不到会话。
+        let cwd = normalize_agent_cwd(&cwd);
         let resolved_cmd = match agent.npm_package.as_deref() {
             Some(_) => {
                 crate::acp::resolve::resolve_command(&agent.command, agent.npm_package.as_deref())
@@ -1456,6 +1485,9 @@ impl AcpClient {
     }
 
     pub async fn load_session(&self, acp_session_id: &str, cwd: PathBuf) -> Result<(), AcpError> {
+        // 与创建侧（spawn_with_session）同形态：去尾部分隔符后再下发，见
+        // [normalize_agent_cwd]。恢复必失败场景的直接修复点。
+        let cwd = normalize_agent_cwd(&cwd);
         let resp = self
             .connection
             .send_request(LoadSessionRequest::new(SessionId::new(acp_session_id), cwd))
@@ -1831,5 +1863,30 @@ mod tests {
             THREADS,
             "不同世代各自赢得留痕权（顺序正确时无一被吞）"
         );
+    }
+
+    // ── normalize_agent_cwd：下发 cwd 去尾部分隔符（qoder 恢复兜底）────────
+
+    #[test]
+    fn normalize_agent_cwd_strips_trailing_separator() {
+        // 报告场景：库中 workspace_path="/home/pax/"，qoder 会编码成 -home-pax-
+        // 而找不到落盘在 -home-pax 的会话；下发前必须裁成 /home/pax。
+        assert_eq!(normalize_agent_cwd(Path::new("/home/pax/")), PathBuf::from("/home/pax"));
+    }
+
+    #[test]
+    fn normalize_agent_cwd_collapses_multiple_trailing_separators() {
+        assert_eq!(normalize_agent_cwd(Path::new("/home/pax///")), PathBuf::from("/home/pax"));
+    }
+
+    #[test]
+    fn normalize_agent_cwd_leaves_clean_path_unchanged() {
+        assert_eq!(normalize_agent_cwd(Path::new("/home/pax")), PathBuf::from("/home/pax"));
+    }
+
+    #[test]
+    fn normalize_agent_cwd_keeps_root() {
+        // 根目录不被裁空：裁光后必须回退原路径（"" 会破坏所有 agent 的 cwd）。
+        assert_eq!(normalize_agent_cwd(Path::new("/")), PathBuf::from("/"));
     }
 }

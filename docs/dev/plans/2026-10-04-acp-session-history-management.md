@@ -95,6 +95,7 @@ pi-acp），但**用户的主力 agent codebuddy 未声明** → 勾选框对其
 | `session/list` 的 `cwd` 过滤语义按实现（可能忽略 cwd 返回全部；title/updated_at 可能缺省） | 面板行**始终显示 `cwd` 与原始 `session_id`**，让用户自行分辨，不替 agent 猜 |
 | `session/delete` 是软删还是硬删由实现决定（doc:1579） | UI 文案用「从 agent 会话列表移除」，不承诺「文件已删除」；`agent_side:"deleted"` 仅表示 RPC 成功 |
 | 删除不存在的 session SHOULD 静默成功（doc:1578） | best-effort 语义天然兼容；重复删同一 id 不报错 |
+| `session/load` 的会话定位按实现：qoder 按「cwd 非字母数字字符 → `-`」编码目录并**原样**查找，而 `session/new` 会先规范尾斜杠落盘——带尾斜杠的 cwd（如库中 `workspace_path="/home/pax/"`）恢复必报 `INVALID_SESSION_IDENTIFIER`（qodercli 1.1.65/1.1.66 实测：同会话 `/home/pax/` 报错、`/home/pax` 完整重放历史） | omniterm 下发前统一裁 cwd 尾部分隔符（`normalize_agent_cwd`，`src/acp/client.rs`；new/load 两端同形态），不依赖 agent 侧规范化；存量库行无需迁移 |
 
 ## 5. 实施分期
 

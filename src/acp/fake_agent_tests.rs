@@ -71,6 +71,7 @@
 //!   `session/cancel`（通知）/ `session/request_permission` / `terminal/*`。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -311,6 +312,63 @@ async fn restore_path_captures_pid_and_shutdown_kills_agent() {
         "restore 路径 agent 死亡后未被回收（僵尸残留）"
     );
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 5b. session/load 下发的 cwd 去尾斜杠（qoder 恢复兜底回归）─────────────
+//
+// 背景：qoder 按「路径非字母数字 → -」编码会话存储目录——库中带的
+// workspace_path 形态 `/home/pax/` 会编码成 `-home-pax-`，而创建时落盘的是
+// `-home-pax`，恢复必报 INVALID_SESSION_IDENTIFIER（2026-10-11 实测复现）。
+// 兜底在下发前规范化 cwd；本测试钉住「agent 实际收到的 cwd 无尾斜杠」。
+
+#[tokio::test]
+async fn load_session_strips_trailing_slash_cwd_before_sending_to_agent() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("load-cwd");
+    // 还原 omniterm 库里的形态：workspace_path 带尾斜杠（如 /home/pax/）。
+    let plain = dir.join("ws");
+    let workspace = PathBuf::from(format!("{}/", plain.display()));
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = tokio::time::timeout(
+        SPAWN_TIMEOUT,
+        AcpClient::spawn_and_load(
+            agent_for(&script, "live", &dir),
+            workspace.clone(),
+            "fake-acp-session".to_string(),
+            &HashMap::new(),
+        ),
+    )
+    .await
+    .expect("spawn_and_load 超时：fake agent 未响应 initialize")
+    .expect("spawn_and_load 失败");
+
+    client
+        .load_session("fake-acp-session", workspace.clone())
+        .await
+        .expect("session/load 应成功（fake agent 恒回空结果）");
+
+    // load_session 返回即 agent 已处理请求：事件日志应已有 load-cwd 行。
+    assert!(
+        wait_for_event(&dir, "load-cwd ", SPAWN_TIMEOUT).await,
+        "fake agent 未收到 session/load：{}",
+        read_events(&dir)
+    );
+    let expected = format!("load-cwd {}", plain.display());
+    let events = read_events(&dir);
+    assert!(
+        events.lines().any(|l| l == expected),
+        "session/load 下发的 cwd 应为去尾斜杠形态 {expected:?}，实际事件：{events}"
+    );
+    // 反向钉住：尾斜杠形态不得出现（它正是 qoder 侧 -home-pax- 编码错位的来源）。
+    assert!(
+        !events.contains(&format!("load-cwd {}/", plain.display())),
+        "cwd 不应带尾斜杠，实际事件：{events}"
+    );
+
+    client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
 
