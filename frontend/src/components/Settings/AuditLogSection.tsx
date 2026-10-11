@@ -6,8 +6,9 @@ import { SectionTitle } from './toggleRow'
 /* ── 安全审计日志（只读） ───────────────────────────────────────────
  *
  * 展示后端 `GET /settings/audit-log` 返回的最近敏感操作留痕：文件写/删/上传、
- * git push、agent 配置变更、代理端口首次被访问。**只读**——入口没有写侧，
- * 清理由后端 `audit_log` 表的滚动删除负责（MAX_AUDIT_ROWS）。
+ * git push、agent 配置变更、代理端口首次被访问，以及 auth 事件（登录/设置
+ * 密码/登出/改密/改名/登录限流触发）。**只读**——入口没有写侧，清理由后端
+ * `audit_log` 表的滚动删除负责（MAX_AUDIT_ROWS）。
  */
 
 /** 一次拉取的条数。后端硬顶 200，这里取 60：桌面设置弹窗仅 33vh 高，
@@ -25,6 +26,12 @@ const ACTION_KEYS: Record<AuditActionName, string> = {
   agent_update: 'agentUpdate',
   agent_delete: 'agentDelete',
   proxy_access: 'proxyAccess',
+  auth_login: 'authLogin',
+  auth_setup: 'authSetup',
+  auth_logout: 'authLogout',
+  auth_password_change: 'authPasswordChange',
+  auth_username_change: 'authUsernameChange',
+  auth_rate_limited: 'authRateLimited',
 }
 
 export function AuditLogSection() {

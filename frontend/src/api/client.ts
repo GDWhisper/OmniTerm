@@ -19,6 +19,12 @@ export type AuditActionName =
   | 'agent_update'
   | 'agent_delete'
   | 'proxy_access'
+  | 'auth_login'
+  | 'auth_setup'
+  | 'auth_logout'
+  | 'auth_password_change'
+  | 'auth_username_change'
+  | 'auth_rate_limited'
 
 /** 一条审计记录（后端 `audit_log` 行，读口返回形态）。 */
 export interface AuditEntry {
@@ -26,7 +32,7 @@ export interface AuditEntry {
   /** 身份标识，形如 `admin@192.168.1.7`；取不到来源 IP 时为 `admin@-`。 */
   actor: string
   action: AuditActionName
-  /** 动作对象：文件路径 / agent id / 端口号。 */
+  /** 动作对象：文件路径 / agent id / 端口号；auth 类为账号名（限流触发为 `-`）。 */
   target: string
   /** 绑定范围：`session:<id>` / `workspace:<id>` / `project:<id>` /
    *  `repo:<root>` / `proxy_port:<port>` / `agents`；无绑定时为 null。 */
