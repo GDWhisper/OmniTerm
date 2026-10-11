@@ -1,11 +1,11 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
-import { IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
+import { IconDragHandle, IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
 import { DeleteButton, EditButton } from './RowActionButtons'
@@ -32,6 +32,10 @@ export function ProjectCard(props: {
   /** 聚焦闪烁中（cover-conflict「切换到现有项目」回执）：整卡 Y 轴弹跳 +
    *  accent ring，见 index.css .sidebar-project-focus-flash。 */
   flashing?: boolean
+  /** 拖拽源：整卡半透明并让出命中（elementFromPoint 需穿透它命中下方卡片）。 */
+  dragging?: boolean
+  /** 手柄 pointerdown：Sidebar 在此起拖（统一指针事件路径，鼠标/触摸通用）。 */
+  onDragHandlePointerDown?: (e: ReactPointerEvent) => void
   onOpenCreateWorktree: () => void
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
@@ -89,7 +93,7 @@ export function ProjectCard(props: {
 
   return (
     <div
-      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}`}
+      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}${props.dragging ? ' sidebar-project-dragging' : ''}`}
       data-proj-id={props.project.id}
     >
       {/* Project header — stacked name + path */}
@@ -97,6 +101,18 @@ export function ProjectCard(props: {
         className="sidebar-project-header"
         onClick={() => props.onToggle()}
       >
+        {/* 拖拽手柄：pointerdown 起拖（阈值 4px 内移动不算拖，见 Sidebar
+            PROJ_DRAG_THRESHOLD_PX）；click 必须停冒泡——否则落点会被
+            header 的展开切换消费，拖完/点完卡片莫名展开/折叠。 */}
+        <span
+          className="sidebar-proj-drag-handle"
+          data-proj-drag-handle
+          title={t('sidebar.dragProject') ?? 'Drag to reorder'}
+          onPointerDown={(e) => props.onDragHandlePointerDown?.(e)}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <IconDragHandle width={12} height={12} />
+        </span>
         <span
           className={projAgg === 'working' || projAgg === 'blocked' ? 'activity-pulse' : ''}
           style={{

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { Fragment, useEffect, useState, useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
@@ -15,6 +15,7 @@ import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
 import { ProjectCard } from './ProjectCard'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
+import { computeProjectReorder } from '../../utils/projectReorder'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -40,6 +41,12 @@ import { READER_FONT } from '../../utils/fonts'
 /** Cover-conflict「切换到现有项目」的项目卡片聚焦闪烁时长（与 index.css 的
  *  .sidebar-project-focus-flash ring 动画时长一致，到期摘 class）。 */
 const PROJECT_CARD_FLASH_MS = 1200
+
+/** 手柄起拖阈值：指针移动小于该距离视为点击，不触发排序。 */
+const PROJ_DRAG_THRESHOLD_PX = 4
+
+/** 手柄 pointerdown 后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
+const PROJ_DRAG_CLICK_SUPPRESS_MS = 700
 
 export function Sidebar() {
   const {
@@ -110,6 +117,29 @@ export function Sidebar() {
   const flashRafRef = useRef<number | null>(null)
   // 项目列表滚动容器——聚焦时把目标卡片滚进视口。
   const projectsScrollRef = useRef<HTMLDivElement | null>(null)
+  // 项目卡片拖拽排序（指针事件统一路径：鼠标/触摸通用，无 HTML5 DnD 的
+  // 触摸盲区）：
+  // - projDrag：渲染态（拖动源 + 插入点），驱动半透明与插入指示线
+  // - projDragRef：事件态（window 级 pointermove/up 直读，避开陈旧闭包）
+  // 手柄 touch-action:none + 起拖阈值，把「滚动列表」与「拖卡片」区分开。
+  const [projDrag, setProjDrag] = useState<{
+    draggingId: string
+    overId: string
+    before: boolean
+  } | null>(null)
+  const projDragRef = useRef<{
+    id: string
+    startX: number
+    startY: number
+    active: boolean
+    overId: string
+    before: boolean
+  } | null>(null)
+  // 手柄 pointerdown 时间戳：抑制其后续补发的 header click。浏览器把
+  // down/up 的最近公共祖先作为 click 目标——起点在手柄、终点漂到卡片名上
+  // 时 click 落在 header，手柄上的 stopPropagation 覆盖不到（SessionRow
+  // 长按补发 click 同款抑制手法）。
+  const projHandleDownAtRef = useRef(0)
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
@@ -488,6 +518,104 @@ export function Sidebar() {
     }
   }
 
+  // ── 项目卡片拖拽排序 ────────────────────────────────────────────
+  // 提交：本地乐观重排 → PUT /projects/order；失败回滚 + toast。
+  // 顺序真源是 store 的 projects（getState 直读，避开 window 处理器里的
+  // 陈旧闭包）；渲染顺序与落盘载荷由 computeProjectReorder 一次算出，两者
+  // 不可能漂移。
+  const commitProjectReorder = useCallback(
+    (draggedId: string, overId: string, before: boolean) => {
+      const current = useAppStore.getState().projects
+      const nextIds = computeProjectReorder(
+        current.map((p) => p.id),
+        draggedId,
+        overId,
+        before,
+      )
+      const unchanged =
+        nextIds.length === current.length && nextIds.every((id, i) => id === current[i].id)
+      if (unchanged) return // 拖回原位 / 目标已不在列表（DOM 与 store 竞态）
+      const byId: Record<string, Project> = {}
+      for (const p of current) byId[p.id] = p
+      const reordered = nextIds.flatMap((id) => {
+        const p = byId[id]
+        return p ? [p] : []
+      })
+      const previous = current
+      setProjects(reordered)
+      void api.reorderProjects(nextIds).catch(() => {
+        setProjects(previous)
+        addToast('error', t('sidebar.reorderFailed') ?? 'Failed to save project order')
+      })
+    },
+    [setProjects, addToast, t],
+  )
+
+  // window 级指针监听：projDragRef 为空时纯读引用即返回，零成本；订阅随
+  // 组件卸载摘除。目标卡片定位优先 elementFromPoint——触摸指针有隐式
+  // capture，e.target 会停在手柄上命中不了别的卡；jsdom 无布局
+  // （elementFromPoint 未实现）时回退 e.target，测试可直接朝卡片派发。
+  useEffect(() => {
+    const cardAtPoint = (x: number, y: number, target: EventTarget | null): HTMLElement | null => {
+      if (typeof document.elementFromPoint === 'function') {
+        const hit = document.elementFromPoint(x, y)?.closest?.('[data-proj-id]')
+        if (hit) return hit as HTMLElement
+      }
+      const el = target as Element | null
+      return (el?.closest?.('[data-proj-id]') as HTMLElement | null) ?? null
+    }
+    const onMove = (e: PointerEvent) => {
+      const st = projDragRef.current
+      if (!st) return
+      if (!st.active) {
+        const dx = e.clientX - st.startX
+        const dy = e.clientY - st.startY
+        if (dx * dx + dy * dy < PROJ_DRAG_THRESHOLD_PX * PROJ_DRAG_THRESHOLD_PX) return
+      }
+      const card = cardAtPoint(e.clientX, e.clientY, e.target)
+      if (!card) return
+      const overId = card.dataset.projId
+      if (!overId || overId === st.id) return // 悬停在自己头上：无插入点
+      const rect = card.getBoundingClientRect()
+      const before = e.clientY < rect.top + rect.height / 2
+      if (st.active && st.overId === overId && st.before === before) return
+      st.active = true
+      st.overId = overId
+      st.before = before
+      setProjDrag({ draggingId: st.id, overId, before })
+    }
+    const finish = () => {
+      const st = projDragRef.current
+      projDragRef.current = null
+      setProjDrag(null)
+      if (st?.active) commitProjectReorder(st.id, st.overId, st.before)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [commitProjectReorder])
+
+  const handleProjDragPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
+    if (e.button !== 0) return // 仅左键 / 触摸（触摸 pointerdown 的 button 为 0）
+    // 阻止文本选中与焦点抢占；停冒泡避免 header 的展开切换消费这次序列。
+    e.preventDefault()
+    e.stopPropagation()
+    projHandleDownAtRef.current = Date.now()
+    projDragRef.current = {
+      id: projectId,
+      startX: e.clientX,
+      startY: e.clientY,
+      active: false,
+      overId: '',
+      before: true,
+    }
+  }, [])
+
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
   //   setEnablingSessionId(sessionId)
@@ -771,18 +899,29 @@ export function Sidebar() {
           </div>
         ) : (
           projects.map((proj) => (
-            <ProjectCard
-              key={proj.id}
-              project={proj}
-              isExpanded={isProjectDisplayExpanded(proj.id)}
-              flashing={focusFlashProjectId === proj.id}
-              expandAllSessions={expandAllSessions}
-              worktrees={worktrees[proj.id]}
-              sessions={sessions[proj.id] || []}
-              activeWorkspaceId={activeWorkspaceId}
-              activeSessionId={activeSessionId}
-              acpActivityFor={acpActivityFor}
-              onToggle={() => toggleProject(proj.id)}
+            <Fragment key={proj.id}>
+              {/* 插入指示线：拖拽悬停时落在两卡之间的 2px accent 线（纯展示，
+                  pointer-events:none 不抢命中）。 */}
+              {projDrag?.overId === proj.id && projDrag.before && (
+                <div className="sidebar-project-drop-line" />
+              )}
+              <ProjectCard
+                project={proj}
+                isExpanded={isProjectDisplayExpanded(proj.id)}
+                flashing={focusFlashProjectId === proj.id}
+                dragging={projDrag?.draggingId === proj.id}
+                expandAllSessions={expandAllSessions}
+                worktrees={worktrees[proj.id]}
+                sessions={sessions[proj.id] || []}
+                activeWorkspaceId={activeWorkspaceId}
+                activeSessionId={activeSessionId}
+                acpActivityFor={acpActivityFor}
+                onToggle={() => {
+                  // 手柄起拖后补发的 click 抑制（见 projHandleDownAtRef 注释）
+                  if (Date.now() - projHandleDownAtRef.current < PROJ_DRAG_CLICK_SUPPRESS_MS) return
+                  toggleProject(proj.id)
+                }}
+                onDragHandlePointerDown={(e) => handleProjDragPointerDown(e, proj.id)}
               onOpenCreateWorktree={async () => {
                 if (!isProjectDisplayExpanded(proj.id)) {
                   setExpandedProjects(prev => { const next = new Set(prev); next.add(proj.id); return next })
@@ -813,6 +952,10 @@ export function Sidebar() {
               onToggleSessionSelection={handleToggleSessionSelection}
               onSessionContextMenu={handleSessionContextMenu}
             />
+              {projDrag?.overId === proj.id && !projDrag.before && (
+                <div className="sidebar-project-drop-line" />
+              )}
+            </Fragment>
           ))
         )}
 

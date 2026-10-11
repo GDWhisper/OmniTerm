@@ -3,10 +3,11 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, patch},
+    routing::{get, patch, put},
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -17,6 +18,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/projects", get(list_projects).post(create_project))
         .route("/projects/duplicates", get(list_duplicates))
+        .route("/projects/order", put(reorder_projects))
         .route("/projects/{id}", patch(update_project).delete(delete_project))
         .route(
             "/projects/{id}/worktrees",
@@ -29,7 +31,7 @@ pub fn routes() -> Router<AppState> {
 
 async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
     let mut projects: Vec<Project> =
-        sqlx::query_as("SELECT * FROM projects ORDER BY created_at DESC")
+        sqlx::query_as("SELECT * FROM projects ORDER BY position ASC, created_at DESC")
             .fetch_all(&state.db)
             .await
             .unwrap();
@@ -92,15 +94,26 @@ async fn create_project(
 
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
+    // Newest project shows on top (historical `created_at DESC` order):
+    // prepend one slot above the current minimum. Concurrent creates can
+    // collide on the same value; the list ORDER BY tiebreak keeps display
+    // deterministic, and the next reorder rewrites positions 0..n-1 anyway.
+    let position = next_project_position(
+        sqlx::query_scalar("SELECT MIN(position) FROM projects")
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(None),
+    );
 
     sqlx::query(
-        "INSERT INTO projects (id, target_id, name, path, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO projects (id, target_id, name, path, created_at, position) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&req.target_id)
     .bind(&req.name)
     .bind(&path)
     .bind(&now)
+    .bind(position)
     .execute(&state.db)
     .await
     .unwrap();
@@ -111,6 +124,7 @@ async fn create_project(
         name: req.name,
         path,
         created_at: now,
+        position,
         path_valid: true, // directory was just created (or already existed)
     };
 
@@ -207,6 +221,74 @@ async fn update_project(
     project.path_valid = crate::fs::dir_exists(&project.path);
 
     (StatusCode::OK, Json(json!(project)))
+}
+
+#[derive(Deserialize)]
+struct ReorderProjects {
+    /// Full ordered list of every project id — the sidebar's display order
+    /// top to bottom. Partial lists are rejected (see validate_reorder_ids).
+    ids: Vec<String>,
+}
+
+/// Position for a newly created project: one slot above the current minimum
+/// so the newest project stays on top (historical `created_at DESC` order).
+/// `None` (empty table) starts at 0.
+fn next_project_position(min_pos: Option<i64>) -> i64 {
+    min_pos.map_or(0, |m| m - 1)
+}
+
+/// Validate a reorder request: exactly the current id set, no duplicates,
+/// no unknown ids. Returns the rejection reason.
+fn validate_reorder_ids(existing: &[String], requested: &[String]) -> Result<(), String> {
+    let existing_set: HashSet<&str> = existing.iter().map(String::as_str).collect();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for id in requested {
+        if !existing_set.contains(id.as_str()) {
+            return Err(format!("unknown project id: {id}"));
+        }
+        if !seen.insert(id.as_str()) {
+            return Err(format!("duplicate project id: {id}"));
+        }
+    }
+    if requested.len() != existing.len() {
+        return Err("ids must cover every project exactly once".to_string());
+    }
+    Ok(())
+}
+
+/// Rewrite project positions to match `ids` order (position = index).
+/// Single transaction: a half-applied reorder must never be visible.
+pub(crate) async fn apply_project_order(
+    db: &sqlx::SqlitePool,
+    ids: &[String],
+) -> Result<(), sqlx::Error> {
+    let mut tx = db.begin().await?;
+    for (idx, id) in ids.iter().enumerate() {
+        sqlx::query("UPDATE projects SET position = ? WHERE id = ?")
+            .bind(idx as i64)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+async fn reorder_projects(
+    State(state): State<AppState>,
+    Json(req): Json<ReorderProjects>,
+) -> impl IntoResponse {
+    let existing: Vec<String> = sqlx::query_scalar("SELECT id FROM projects")
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default();
+    if let Err(msg) = validate_reorder_ids(&existing, &req.ids) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg })));
+    }
+    if let Err(e) = apply_project_order(&state.db, &req.ids).await {
+        tracing::error!("project reorder failed: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "reorder failed" })));
+    }
+    (StatusCode::OK, Json(json!({ "ok": true })))
 }
 
 async fn delete_project(
@@ -712,4 +794,101 @@ async fn merge_project_into(
     );
 
     (StatusCode::OK, Json(json!({ "ok": true, "merged_into": target.id })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::test_state;
+
+    /// 直接插项目行（绕开 create handler 的目录创建副作用），position 显式给定。
+    async fn seed_project(state: &AppState, id: &str, name: &str, position: i64) {
+        sqlx::query(
+            "INSERT INTO projects (id, target_id, name, path, created_at, position) \
+             VALUES (?, NULL, ?, ?, '2026-10-11', ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(format!("/tmp/{id}"))
+        .bind(position)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    /// 列表口径（与 list_projects 同 ORDER BY）的当前 id 顺序。
+    async fn ordered_ids(state: &AppState) -> Vec<String> {
+        sqlx::query_scalar("SELECT id FROM projects ORDER BY position ASC, created_at DESC")
+            .fetch_all(&state.db)
+            .await
+            .unwrap()
+    }
+
+    async fn reorder(state: AppState, ids: &[&str]) -> StatusCode {
+        reorder_projects(
+            State(state),
+            Json(ReorderProjects { ids: ids.iter().map(|s| s.to_string()).collect() }),
+        )
+        .await
+        .into_response()
+        .status()
+    }
+
+    #[test]
+    fn next_project_position_prepends_above_current_min() {
+        assert_eq!(next_project_position(None), 0, "empty table starts at 0");
+        assert_eq!(next_project_position(Some(0)), -1);
+        assert_eq!(next_project_position(Some(-5)), -6);
+    }
+
+    #[test]
+    fn validate_reorder_ids_requires_exact_full_set_without_duplicates() {
+        let existing: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+        let ok: Vec<String> = ["c", "a", "b"].iter().map(|s| s.to_string()).collect();
+        assert!(validate_reorder_ids(&existing, &ok).is_ok());
+
+        // 未知 id
+        let unknown: Vec<String> = ["a", "b", "x"].iter().map(|s| s.to_string()).collect();
+        assert!(validate_reorder_ids(&existing, &unknown).is_err());
+        // 重复 id（长度与全集对齐，但缺一个）
+        let dup: Vec<String> = ["a", "a", "b"].iter().map(|s| s.to_string()).collect();
+        assert!(validate_reorder_ids(&existing, &dup).is_err());
+        // 部分列表
+        let partial: Vec<String> = ["a", "b"].iter().map(|s| s.to_string()).collect();
+        assert!(validate_reorder_ids(&existing, &partial).is_err());
+    }
+
+    #[tokio::test]
+    async fn reorder_projects_rewrites_order_and_rejects_bad_requests() {
+        let state = test_state().await;
+        seed_project(&state, "p1", "one", 0).await;
+        seed_project(&state, "p2", "two", 1).await;
+        seed_project(&state, "p3", "three", 2).await;
+
+        // 合法重排：p3 置顶
+        assert_eq!(reorder(state.clone(), &["p3", "p1", "p2"]).await, StatusCode::OK);
+        assert_eq!(ordered_ids(&state).await, vec!["p3", "p1", "p2"]);
+
+        // 未知 id → 400，且顺序保持（校验在写之前，无半应用）
+        assert_eq!(reorder(state.clone(), &["p3", "p1", "nope"]).await, StatusCode::BAD_REQUEST);
+        assert_eq!(ordered_ids(&state).await, vec!["p3", "p1", "p2"]);
+
+        // 部分列表 → 400，顺序不变
+        assert_eq!(reorder(state.clone(), &["p1", "p2"]).await, StatusCode::BAD_REQUEST);
+        assert_eq!(ordered_ids(&state).await, vec!["p3", "p1", "p2"]);
+
+        // 重复 id（长度对齐全集）→ 400，顺序不变
+        assert_eq!(reorder(state.clone(), &["p1", "p1", "p2"]).await, StatusCode::BAD_REQUEST);
+        assert_eq!(ordered_ids(&state).await, vec!["p3", "p1", "p2"]);
+
+        // 再次合法重排可把位置改写回 0..n-1（负漂移归一）
+        assert_eq!(reorder(state.clone(), &["p1", "p2", "p3"]).await, StatusCode::OK);
+        assert_eq!(ordered_ids(&state).await, vec!["p1", "p2", "p3"]);
+        let positions: Vec<i64> =
+            sqlx::query_scalar("SELECT position FROM projects ORDER BY position ASC")
+                .fetch_all(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(positions, vec![0, 1, 2]);
+    }
 }

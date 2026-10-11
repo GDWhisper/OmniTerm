@@ -1239,6 +1239,56 @@ body.fm-dragging * {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   Project card drag-to-reorder — handle + drag state + insertion line.
+   Pointer-events path (Sidebar): mouse and touch share one code path, so
+   the handle carries `touch-action: none` — a drag started on it belongs
+   to the drag, not to the list's scroll. Visuals follow the pixel style:
+   hard 2px accent line, no blur; handle reveals on header hover like the
+   row-action buttons (always visible on touch, which has no hover).
+   ──────────────────────────────────────────────────────────────────── */
+.sidebar-proj-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  width: 12px;
+  margin: 0 2px 0 -2px;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.1s steps(2);
+}
+.sidebar-project-header:hover .sidebar-proj-drag-handle,
+.sidebar-project-header:focus-within .sidebar-proj-drag-handle {
+  opacity: 1;
+}
+.sidebar-proj-drag-handle:hover {
+  color: var(--accent);
+}
+@media (pointer: coarse) {
+  .sidebar-proj-drag-handle {
+    opacity: 1;
+  }
+}
+
+/* Drag source: dimmed and transparent to hit-testing so elementFromPoint
+   resolves the card underneath (the insertion point), not the dragged one. */
+.sidebar-project-card.sidebar-project-dragging {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Insertion line: sits in the 10px gap between cards (negative top margin
+   pulls it up so the list doesn't reflow while dragging). */
+.sidebar-project-drop-line {
+  height: 2px;
+  margin: -6px 10px 4px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Project card focus flash — cover-conflict「切换到现有项目」聚焦回执。
    Y 轴弹跳复用 mario-jump（像素 steps、Y-only 约定，无横向抖动）；
    accent ring 复用 chat-msg-flash 同款 spread 无 blur 描边（§6.1 focus

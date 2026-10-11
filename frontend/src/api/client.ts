@@ -96,6 +96,8 @@ export interface Project {
   name: string
   path: string
   created_at: string
+  /** Sidebar display order (drag-to-reorder); the list endpoint orders by this ASC. */
+  position: number
   /** Whether the project path currently exists on disk (computed server-side). */
   path_valid: boolean
 }
@@ -413,6 +415,9 @@ export const api = {
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),
+  /** Persist the full sidebar order (drag-to-reorder). */
+  reorderProjects: (ids: string[]) =>
+    request<{ ok: true }>('/projects/order', { method: 'PUT', body: JSON.stringify({ ids }) }),
   createProject: (data: { name: string; path: string; target_id?: string }) =>
     request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
   updateProject: (id: string, data: { name?: string; path?: string }) =>

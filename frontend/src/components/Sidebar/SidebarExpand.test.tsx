@@ -53,6 +53,7 @@ const fakeProject = {
   name: 'Test Project',
   path: '/home/user/test-project',
   created_at: '2026-01-01T00:00:00Z',
+  position: 0,
   path_valid: true,
 }
 

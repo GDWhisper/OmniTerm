@@ -308,8 +308,9 @@ PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，
 GET  /api/v1/settings/permission-timeout  # 读权限请求超时配置 {mode, seconds}（无记录/非法回退 abort + 1800s；兼容旧分钟 key）——受保护
 PUT  /api/v1/settings/permission-timeout  # 写权限请求超时配置（mode 白名单 abort/auto/wait；seconds 0=「总是」或 30 秒倍数 ≤3600，越界 400；upsert 两 key + 清旧 key + 热更新）——受保护
 GET  /api/v1/settings/audit-log           # 读安全审计日志最近 N 条（新→旧）——受保护；`?limit=` 收敛而非拒绝：缺省 50、硬顶 200、非正数收敛为 1；见「安全审计日志（S5）」
-GET  /api/v1/projects        # 响应每项含 path_valid：list_projects 实时计算项目路径是否仍存在（src/api/projects.rs），供前端标记失效项目
+GET  /api/v1/projects        # 响应每项含 path_valid：list_projects 实时计算项目路径是否仍存在（src/api/projects.rs），供前端标记失效项目；排序口径 position ASC, created_at DESC（见「Projects 表」）
 POST /api/v1/projects
+PUT  /api/v1/projects/order   # 侧栏拖拽排序落盘：body {ids:[全量项目 id，展示序]}，单事务按 index 重写 position；集合不一致（未知/重复/缺项）400 且不写库（src/api/projects.rs::reorder_projects）
 DELETE /api/v1/projects/{id}   # 删除前级联清理其下全部 session 的运行时资源：kill tmux/psmux 会话 + dispose acp agent 子进程（与 DELETE /sessions/{id} 共用 cleanup_session_runtime）
 GET  /api/v1/projects/{pid}/worktrees (git worktree discovery)
 POST /api/v1/projects/{pid}/worktrees    # 非 git 仓库返回 400 {error, code:"not_a_git_repo", has_gitignore:bool}；请求体 init:true 时自动 git init + 初始提交
@@ -835,6 +836,19 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 **ACP 空闲回收阈值 API**（`src/api/settings.rs`，挂载在 `require_auth_mw` 保护路由组）：`GET /api/v1/settings/acp-idle-recycle` 返回 `{minutes}`，无记录/非数字回退默认 5；`PUT` 校验分钟值 1..=60（越界 400），合法则 upsert settings 表并热更新内存秒级阈值（分钟×60）。`run_reaper(supervisor, idle_recycle_secs, perm_timeout)` 的 idle 判定每次读取该共享值，改配置无需重启即生效。`IDLE_RECYCLE_SECS` 保留为 DB 无配置时的兜底默认。
 
 **权限请求超时配置 API**（同文件同路由组）：`GET /api/v1/settings/permission-timeout` 返回 `{mode, seconds}`，无记录/模式非法/非档位值逐项回退 `abort` + 1800 秒；`PUT` 校验 `mode` 白名单（abort/auto/wait，越界 400）与秒值档位 `is_valid_perm_timeout_secs`（`0` = 「总是」档，或 ≤3600 的 30 秒倍数；越界 400），合法则 upsert `acp_perm_timeout_mode` / `acp_perm_timeout_secs` 两个 key、删除 2026-10-01 前的分钟制旧键 `acp_perm_timeout_min` 并 `PermissionTimeoutConfig::store` 热更新。档位规则与解析（含旧分钟键回退）是 `acp::reaper` 的纯函数，有单测。reaper 每 tick 读 `(模式, 秒级阈值)`：`abort` 走原 cancel+kill 路径（先写带详情的 system 消息）；`auto` 调 `auto_advance_permissions`（`pick_auto_option` 逐笔应答，上限 `MAX_PERM_NOTICE_REQUESTS`=5 条/ tick 的告知消息；一笔都解析不出时降级 abort）；`wait` 无动作。**阈值为 0（「总是」档）= 没有超时触发点**：auto 视为立刻到点（请求一出现即自动应答，不等待），abort/wait 则永不超时，且与 wait 同样跳过 prompt-stale 定稿（否则「等审批」的回合会被误判卡死）。
+
+## Projects 表
+
+定义在 `migrations/20260625_workspace_to_project.sql`（从 `workspaces` 重建）+ `migrations/20261011_add_project_position.sql`（排序列）。
+
+| 列 | 类型 | 说明 |
+|----|------|------|
+| `id` | TEXT PK | UUID |
+| `target_id` | TEXT? FK | 归属 target（旧概念残留） |
+| `name` | TEXT | 项目名 |
+| `path` | TEXT | 项目根路径 |
+| `created_at` | TEXT | RFC3339 |
+| `position` | INTEGER NOT NULL | 侧栏展示顺序（拖拽排序）。**排序口径 `position ASC, created_at DESC`**（created_at 兜底同秒创建）；迁移回填按旧口径 `created_at DESC`（rowid 破同秒平局，确定性）；新建项目取 `MIN(position)-1` 置顶（保持历史「最新在上」）；`PUT /projects/order` 一次拖拽把 position 重写为 0..n-1（负漂移归一） |
 
 ## Sessions Table
 

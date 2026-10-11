@@ -17,6 +17,7 @@
 | [TmuxCheatsheet](#tmuxcheatsheet) | 数据/视图分离 (data.ts + 两个 translation.json) |
 | [OmniTermLogo](#omnitermlogo) | 像素精灵单一真源 + 派生资产靠生成脚本，漏跑会与 favicon/PWA 图标脱节 |
 | [FileDrawer / FileEditor](#filedrawer--fileeditor) | 抽屉文件编辑器：模式意图语义 + CodeMirror 视图生命周期 + 内建搜索（改任一项前必读） |
+| [Sidebar 项目卡片](#sidebar-项目卡片) | 拖拽排序联改前端 5 处 + 后端 3 处（迁移/路由/store），指针状态机有隐性约束 |
 
 > 看到没有收录的组件？如果它符合下方「收录标准」，按其格式追加 entry。
 
@@ -97,3 +98,18 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 
 **加一个编辑器内搜索能力的标准路径**：`fileSearch.ts` 扩展匹配语义 → `FileEditor.tsx` 面板加控件 → 两个 translation.json 加 key。**不要引 `@codemirror/search`**（见 frontend-patterns 该条约定的取舍记录）。
 
+
+---
+
+## Sidebar 项目卡片
+
+侧栏项目列表：卡片展开/折叠、右键菜单、**拖拽换序**（顺序跨刷新持久化）。拖拽契约的完整 ADR 在 `docs/architecture/frontend-patterns.md`「列表拖拽排序」，视觉规格在 `docs/visual-design/ui-style-guide.md` §7.7——改任一项前必读。
+
+- `frontend/src/components/Sidebar/Sidebar.tsx` — **拖拽状态机在此**：手柄 `pointerdown` 起拖（4px 阈值）+ window 级 `pointermove`/`pointerup`/`pointercancel`；`projDrag`（渲染态）/ `projDragRef`（事件态）双轨；`elementFromPoint` 定位目标卡（触摸隐式 capture 下 `e.target` 不可用；jsdom 无布局，测试靠 `getBoundingClientRect` stub）；松手调 `commitProjectReorder`（乐观重排 + PUT + 失败回滚）
+- `frontend/src/components/Sidebar/ProjectCard.tsx` — 手柄渲染（`data-proj-drag-handle`，click 停冒泡）+ `dragging` prop（半透明 + 让出命中）；卡片根 `data-proj-id` 是滚动定位与拖拽命中的共同锚
+- `frontend/src/utils/projectReorder.ts` — **顺序计算纯函数**（`computeProjectReorder`）：本地重排、落盘载荷、失败回滚共用；改插入语义只动此文件 + 其 `.test.ts`
+- `frontend/src/index.css` — `.sidebar-proj-drag-handle`（含 `touch-action: none`，删了触摸拖动即失效）/ `.sidebar-project-dragging`（`pointer-events: none` 是命中判定前提）/ `.sidebar-project-drop-line`
+- `frontend/src/api/client.ts` — `reorderProjects(ids)` → `PUT /projects/order`；`Project.position` 字段
+- `migrations/20261011_add_project_position.sql` + `src/api/projects.rs` + `src/models/project.rs` — 后端排序列、`reorder_projects`（全量 id 集合校验 + 单事务）、`list_projects` 排序口径 `position ASC, created_at DESC`；新建项目 `MIN(position)-1` 置顶
+
+**改拖拽行为的标准路径**：插入判定/顺序 → `projectReorder.ts`；手势与视觉反馈 → `Sidebar.tsx` + `index.css`；持久化契约 → `src/api/projects.rs`（前后端必须同步：前端发全量 id，后端按集合一致性校验）。**不要改用 HTML5 DnD**（触摸设备不派发，见 frontend-patterns 该条约定的取舍记录）。

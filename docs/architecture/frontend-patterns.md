@@ -237,6 +237,56 @@
 
 ---
 
+## 列表拖拽排序 (drag-reorder convention)
+
+**适用场景**：侧栏/列表的卡片或行需要用户拖拽换序，且顺序要跨刷新持久化
+（当前案例：项目卡片；后端真相源是 `projects.position`，见 backend.md
+「Projects 表」）。**鼠标与触摸必须同一套代码路径**——HTML5 DnD
+（`draggable` + `dataTransfer`）在触摸设备上完全不派发，会出现「桌面能拖、
+移动端点不动」的分裂。
+
+**契约**（实现见 `frontend/src/components/Sidebar/Sidebar.tsx` 的拖拽段 +
+`ProjectCard.tsx` 手柄 + `utils/projectReorder.ts` + `index.css`
+`.sidebar-proj-drag-handle` / `.sidebar-project-drop-line`）：
+
+- **手柄起拖，不整卡起拖**：卡片头部左侧一个 `data-proj-drag-handle` 元素，
+  `touch-action: none`（起拖后的指针序列归拖拽，不被滚动容器吃掉）+ 4px
+  移动阈值（阈值内视为点击，不排序）。整卡可拖会把「点击展开」「拖选文本」
+  全部卷入。
+- **指针事件统一路径**：`pointerdown`（手柄）记录起点 → window 级
+  `pointermove`/`pointerup`/`pointercancel` 推进/收尾。**不用
+  `setPointerCapture`**：触摸指针的隐式 capture 会把 move 的 `e.target`
+  钉在手柄上，跨卡判定必须改用 `document.elementFromPoint`（能力探测 +
+  jsdom 无布局时回退 `e.target`，测试可直接朝卡片派发事件）。
+- **状态分两份**：渲染态 `useState`（拖动源 + 插入点，驱动半透明与指示线），
+  事件态 `useRef`（window 处理器直读，避开陈旧闭包）。同一个目标重复 move
+  不 `setState`（指针移动是高频率事件）。
+- **插入点 = 目标卡中点判定**：`clientY < rect.top + rect.height/2` 插前，
+  否则插后；指示线是两卡之间 2px accent 硬线（负 margin 落在卡片 gap 里，
+  拖拽中不引起布局跳动），`pointer-events: none` 不抢命中。
+- **拖动源让出命中**：`.sidebar-project-dragging` 半透明 +
+  `pointer-events: none`——否则 `elementFromPoint` 命中的是拖动源自己。
+- **顺序计算是纯函数**（`utils/projectReorder.ts` 的 `computeProjectReorder`）：
+  本地重排、落盘载荷（全量 id 列表）、失败回滚共用一次计算结果，渲染序与
+  持久序不可能漂移；目标消失/拖回原位返回原序，调用方按 no-op 处理。
+- **落盘 = 单个批量端点**（`PUT /projects/order`，单事务重写 position），
+  不是每卡一次 PATCH——半应用的重排比不重排更糟。乐观更新，失败回滚 +
+  error toast。请求体带**全量** id：服务端校验集合一致（未知/重复/缺项
+  400 且不写库），前端不需要推导差量。
+- **补发 click 必须抑制**：起点在手柄、终点漂回卡内时，浏览器补发的 click
+  目标是公共祖先（卡片头部）——会演变成展开切换。手柄自身 click 停冒泡，
+  头部 click 再加时间戳抑制（`Date.now() - downAt < 700`，同 SessionRow
+  长按抑制手法；勿用布尔标志，会吞掉下一次正常点击）。
+
+**已有案例**：Sidebar 项目卡片拖拽排序（2026-10-11）。
+
+**收益**：鼠标/触摸同一路径；顺序纯函数可单测到边界；半应用重排被端点
+契约排除。
+**代价**：window 级监听 + 能力探测比 HTML5 DnD 代码多；elementFromPoint
+依赖布局环境（jsdom 测试需 stub `getBoundingClientRect`）。
+
+---
+
 ## Sidebar 底部按钮弹出面板 (sidebar-popup convention)
 
 **适用场景**：Sidebar 底部状态栏新增按钮 → 点击弹出 fixed 面板。

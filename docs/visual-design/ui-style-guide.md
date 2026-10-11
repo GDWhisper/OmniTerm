@@ -545,6 +545,18 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 
 间距整体比 `.file-markdown` 紧一档（气泡窄、密度优先）。**流式期仍是 pre-wrap 纯文本降级**（未闭合语法下每帧全量解析的代价），排版规则只对定稿渲染生效；代码块圆角/配色走 MarkdownCore 的 props 与 Prism oneDark，不在此节。
 
+### 7.7 拖拽排序视觉（`.sidebar-proj-drag-handle` / `.sidebar-project-drop-line`）
+
+侧栏项目卡片拖拽换序（交互契约见 frontend-patterns「列表拖拽排序」）：
+
+| 元素 | 规格 |
+|---|---|
+| 手柄 `.sidebar-proj-drag-handle` | 头部最左，12px 宽；六点 grip 图标（`icons.tsx` `IconDragHandle`，filled dots、`currentColor`）；`--text-faint`，hover 变 `--accent`；`cursor: grab`；**`touch-action: none`**（起拖后指针序列归拖拽，不被列表滚动吃掉） |
+| 手柄显隐 | 与 `.row-action` 同口径：卡片 hover / focus-within 才显现（`opacity` + `steps(2)` 过渡）；`pointer: coarse` 触摸设备常显（无 hover 可用） |
+| 拖动源 `.sidebar-project-dragging` | 整卡 `opacity: 0.4` + `pointer-events: none`（让 `elementFromPoint` 穿透它命中下方卡片——这是命中判定成立的前提，不是纯装饰） |
+| 插入指示线 `.sidebar-project-drop-line` | 两卡之间 2px `--accent` 硬线（无 blur、无渐变，§6 硬色约定）；`margin: -6px 10px 4px` 负边距落在卡片 10px gap 内——拖拽中不引起布局跳动；`pointer-events: none` 不抢命中 |
+| 时长 | 无补间动画：显隐是既有 opacity steps，指示线即时出现/消失（拖拽反馈必须零延迟，补间会落后于指针） |
+
 ---
 
 ## 8. Settings Toggles

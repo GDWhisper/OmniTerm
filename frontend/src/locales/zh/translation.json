@@ -62,6 +62,8 @@
   "sidebar.lost": "已断开",
   "sidebar.githubRepo": "GitHub 仓库",
   "sidebar.noProjects": "暂无项目",
+  "sidebar.dragProject": "拖拽调整顺序",
+  "sidebar.reorderFailed": "保存项目顺序失败",
   "sidebar.noWorktrees": "暂无 worktree",
   "sidebar.createWorktree": "创建 Worktree",
   "sidebar.worktreeBranch": "分支名",
