@@ -619,6 +619,7 @@ Game UI elements adapt when `.dark` is present:
 |---|---|---|
 | `.dialogue-toast` entrance | Fade + 8px Y shift | 0.3s steps(3) |
 | `.chat-last-prompt-card.is-scrolling` / `.chat-jump-bottom.is-scrolling` | 用户滑动消息区时两个悬浮件（「上次输入」卡片 / 「回到底部」按钮）淡出至 `--chat-scroll-dim-opacity` 0.35（静止后恢复） | 0.15s ease-out（`--chat-scroll-dim-transition`） |
+| `.sidebar-project-focus-flash` | 项目卡片聚焦回执（cover-conflict「切换到现有项目」）：Y 轴弹跳（复用 `mario-jump`）+ accent ring 淡出（`sidebar-project-focus-ring`，spread 无 blur，§6.1 focus ring 例外） | 弹跳 0.4s steps(6) / ring 1.2s ease-out forwards（`PROJECT_CARD_FLASH_MS`） |
 
 All pixel animations use `steps()` for discrete 8-bit feel. Modals and standard UI still use `ease-out`.
 

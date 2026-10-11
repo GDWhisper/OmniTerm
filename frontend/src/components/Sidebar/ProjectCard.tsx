@@ -29,6 +29,9 @@ export function ProjectCard(props: {
   activeSessionId: string | null
   acpActivityFor: (sessionId: string) => AcpActivity | undefined
   onToggle: () => void
+  /** 聚焦闪烁中（cover-conflict「切换到现有项目」回执）：整卡 Y 轴弹跳 +
+   *  accent ring，见 index.css .sidebar-project-focus-flash。 */
+  flashing?: boolean
   onOpenCreateWorktree: () => void
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
@@ -85,7 +88,10 @@ export function ProjectCard(props: {
   )
 
   return (
-    <div className="sidebar-project-card">
+    <div
+      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}`}
+      data-proj-id={props.project.id}
+    >
       {/* Project header — stacked name + path */}
       <div
         className="sidebar-project-header"

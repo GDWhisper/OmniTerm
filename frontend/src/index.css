@@ -1238,6 +1238,27 @@ body.fm-dragging * {
   padding: 6px;
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   Project card focus flash — cover-conflict「切换到现有项目」聚焦回执。
+   Y 轴弹跳复用 mario-jump（像素 steps、Y-only 约定，无横向抖动）；
+   accent ring 复用 chat-msg-flash 同款 spread 无 blur 描边（§6.1 focus
+   ring 例外，不算阴影）。时长与 Sidebar 的 PROJECT_CARD_FLASH_MS 一致，
+   到期由 React 摘 class；重放时先摘 class、下一帧重挂。
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes sidebar-project-focus-ring {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent), 3px 3px 0 var(--pixel-shadow);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent, 3px 3px 0 var(--pixel-shadow);
+  }
+}
+.sidebar-project-focus-flash {
+  animation:
+    mario-jump 0.4s steps(6, end),
+    sidebar-project-focus-ring 1.2s ease-out forwards;
+}
+
 /* ── Worktree slot — game-style equipment slot inside project card ── */
 .sidebar-wt-slot {
   border: 1px solid var(--border-strong);

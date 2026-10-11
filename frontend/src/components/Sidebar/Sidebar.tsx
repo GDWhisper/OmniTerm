@@ -37,6 +37,9 @@ import { CountBadge } from '../Common/CountBadge'
 import { SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
+/** Cover-conflict「切换到现有项目」的项目卡片聚焦闪烁时长（与 index.css 的
+ *  .sidebar-project-focus-flash ring 动画时长一致，到期摘 class）。 */
+const PROJECT_CARD_FLASH_MS = 1200
 
 export function Sidebar() {
   const {
@@ -99,6 +102,14 @@ export function Sidebar() {
   // 用户手动折叠过的项目集合——「折叠优先」：即使 expandAllSessions 模式下
   // 项目本应自动展开，被手动折叠后也不再自动弹回。
   const [manuallyCollapsed, setManuallyCollapsed] = useState<Set<string>>(new Set())
+  // Cover-conflict「切换到现有项目」聚焦闪烁：目标项目 id + 定时器/rAF 句柄
+  // （同目标重放需先摘 class、下一帧重挂，CSS 动画才能重新播放，ChatView
+  // 「上次输入」聚焦同款）。侧栏无「活跃项目」视觉态，闪烁是切换的唯一反馈。
+  const [focusFlashProjectId, setFocusFlashProjectId] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const flashRafRef = useRef<number | null>(null)
+  // 项目列表滚动容器——聚焦时把目标卡片滚进视口。
+  const projectsScrollRef = useRef<HTMLDivElement | null>(null)
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
@@ -324,6 +335,13 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
+  // 聚焦闪烁的定时器/rAF 卸载即收：闪烁中卸载侧栏也要清句柄，
+  // 否则回调落到已卸载组件树上（setState on unmounted）。
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+  }, [])
+
   // Refresh projects when the page becomes visible again — catches
   // directories moved/deleted while the tab was hidden (path_valid changes).
   useEffect(() => {
@@ -415,6 +433,59 @@ export function Sidebar() {
       }
     }
     setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
+  }
+
+  // Cover-conflict「切换到现有项目」聚焦：展开（折叠态先展开）→ 滚动进视口 →
+  // 卡片 Y 轴弹跳 + accent ring 闪烁。
+  // 为什么需要：侧栏没有任何「活跃项目」视觉态（ProjectCard 不读
+  // activeProjectId），setActiveProject 后侧栏零反馈——用户看到的就是
+  // 「窗口关了，什么都没发生」。闪烁与展开即切换动作的可见回执。
+  const focusProjectCard = (projectId: string) => {
+    // 折叠态先展开：与 toggleProject 展开分支同口径（清手动折叠标记 +
+    // 火并忘加载数据）。不展开则卡片高度不变，「切换到了」的感知落空，
+    // 滚动定位也可能因 nearest 判定「已在视口」而不动。
+    if (!isProjectDisplayExpanded(projectId)) {
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+      setExpandedProjects((prev) => {
+        const next = new Set(prev)
+        next.add(projectId)
+        return next
+      })
+      // Fire-and-forget：展开立即生效，不等网络往返（toggleProject 同款）。
+      void Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
+    }
+    // 滚动进视口：等展开渲染落定（下一帧）再量，否则卡片还没长高。
+    // scrollIntoView 为可选调用——jsdom 等无布局环境未实现时不炸。
+    requestAnimationFrame(() => {
+      projectsScrollRef.current
+        ?.querySelector<HTMLElement>(`[data-proj-id="${projectId}"]`)
+        ?.scrollIntoView?.({ block: 'nearest' })
+    })
+    // 闪烁：同一目标已在闪烁中时先摘 class、下一帧重挂，CSS 动画得以重放
+    // （ChatView「上次输入」聚焦同款手法）。项目 id 为后端 uuid，不含
+    // 选择器元字符，属性选择器无需转义。
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    const armFlash = () => {
+      setFocusFlashProjectId(projectId)
+      flashTimerRef.current = window.setTimeout(() => {
+        setFocusFlashProjectId(null)
+        flashTimerRef.current = null
+      }, PROJECT_CARD_FLASH_MS)
+    }
+    if (focusFlashProjectId === projectId) {
+      setFocusFlashProjectId(null)
+      flashRafRef.current = window.requestAnimationFrame(() => {
+        flashRafRef.current = null
+        armFlash()
+      })
+    } else {
+      armFlash()
+    }
   }
 
   // Agent enable handler — commented out pending notification scheme decision.
@@ -617,7 +688,10 @@ export function Sidebar() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content">
+      <div
+        ref={projectsScrollRef}
+        className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content"
+      >
         {/* Duplicate projects banner — surfaces legacy data that should
             be consolidated. Click to open the merge dialog. */}
         {duplicates.length > 0 && !duplicatesDismissed && (
@@ -701,6 +775,7 @@ export function Sidebar() {
               key={proj.id}
               project={proj}
               isExpanded={isProjectDisplayExpanded(proj.id)}
+              flashing={focusFlashProjectId === proj.id}
               expandAllSessions={expandAllSessions}
               worktrees={worktrees[proj.id]}
               sessions={sessions[proj.id] || []}
@@ -851,6 +926,7 @@ export function Sidebar() {
         homeDir={homeDir}
         onClose={() => setCreateProjOpen(false)}
         reloadProjects={loadProjects}
+        onFocusProject={focusProjectCard}
       />
 
       {/* ── Create Session Modal ── */}

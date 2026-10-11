@@ -28,6 +28,9 @@ export function CreateProjectModal(props: {
   homeDir: string
   onClose: () => void
   reloadProjects: () => Promise<void>
+  /** 409 覆盖冲突「切换到现有项目」：激活目标项目后，由 Sidebar 在侧栏
+   *  聚焦并闪烁该项目卡片（展开 + 滚动进视口 + 弹跳 ring）。 */
+  onFocusProject: (projectId: string) => void
 }) {
   const { t } = useTranslation()
   const addToast = useToastStore((s) => s.addToast)
@@ -413,6 +416,9 @@ export function CreateProjectModal(props: {
                   props.onClose()
                   setProjName('')
                   setProjPath('')
+                  // 侧栏聚焦回执：展开 + 滚动进视口 + 闪烁，否则用户只看到
+                  // 窗口关闭、侧栏零变化（该反馈缺失即本 bug 的成因）。
+                  props.onFocusProject(coverId)
                   addToast(
                     'success',
                     t('sidebar.coverConflictSwitched', { name: coverConflict.coveringProject.name }) ??
