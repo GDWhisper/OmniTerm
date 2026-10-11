@@ -69,9 +69,10 @@ impl Entry {
 }
 
 /// Failed attempts allowed within [`WINDOW`] before the client is blocked.
-const MAX_FAILURES: usize = 5;
+/// `pub` 供审计 detail 引用（限流触发记录里的窗口参数）。
+pub const MAX_FAILURES: usize = 5;
 /// Length of the sliding window for failure counting.
-const WINDOW: Duration = Duration::from_secs(300);
+pub const WINDOW: Duration = Duration::from_secs(300);
 
 /// Distinct tracked-IP cap (§P1). This is a single-admin product: real
 /// deployments have one human, so 4096 comfortably covers NAT'd offices, VPNs
@@ -112,13 +113,22 @@ impl LoginGuard {
 
     /// Record one failed attempt. This is the only path that inserts, so it is
     /// the only path that can exceed the cap.
-    pub fn record_failure(&self, ip: &str) {
+    ///
+    /// Returns `true` when this failure is the one that **first** reaches
+    /// [`MAX_FAILURES`] (the transition into the blocked state) — the caller
+    /// uses it to emit exactly one "rate limited" audit signal per window.
+    /// Failures beyond the threshold (possible only under concurrency) report
+    /// `false`; the signal repeats only after the counter resets (success /
+    /// window expiry) and crosses the threshold again.
+    pub fn record_failure(&self, ip: &str) -> bool {
         let now = Instant::now();
         let mut map = self.inner.lock().unwrap();
         let entry = map.entry(ip.to_string()).or_insert_with(|| Entry::new(now));
         entry.prune(now);
         entry.failures.push(now);
+        let newly_blocked = entry.failure_count() == MAX_FAILURES;
         cap_tracked_ips(&mut map);
+        newly_blocked
     }
 
     /// Clear the failure history after a successful login. Removing an entry
@@ -178,6 +188,22 @@ mod tests {
         assert!(g.is_blocked("1.2.3.4"));
         g.record_success("1.2.3.4");
         assert!(!g.is_blocked("1.2.3.4"));
+    }
+
+    #[test]
+    fn only_the_threshold_crossing_failure_is_reported() {
+        let g = LoginGuard::new();
+        for _ in 0..MAX_FAILURES - 1 {
+            assert!(!g.record_failure("1.2.3.4"), "pre-threshold failures stay quiet");
+        }
+        assert!(g.record_failure("1.2.3.4"), "the crossing failure is reported");
+        assert!(!g.record_failure("1.2.3.4"), "already-blocked failures do not repeat");
+        // 成功清除后重新累计 → 再次跨阈值时再次上报（每次触发事件一条信号）
+        g.record_success("1.2.3.4");
+        for _ in 0..MAX_FAILURES - 1 {
+            assert!(!g.record_failure("1.2.3.4"));
+        }
+        assert!(g.record_failure("1.2.3.4"));
     }
 
     #[test]
