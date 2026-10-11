@@ -267,3 +267,14 @@ pub async fn verify_request(
 - 后端：`migrations/20260927_add_username.sql`（新增）、`src/auth/local_access.rs`（新增）、`src/auth/mod.rs`、`src/api/auth.rs`、`src/models/user.rs`、`src/main.rs`、`src/proxy/mod.rs`、`src/ws/origin_guard.rs`、`src/api/audit.rs`（注释订正）、`src/test_utils.rs`
 - 前端：`frontend/src/api/client.ts`、`frontend/src/components/Auth/AuthPage.tsx`、`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/locales/{en,zh}/translation.json`、两个组件测试
 - 文档：本计划、`docs/reference/auth-not-enforced.md`、`docs/architecture/{backend,frontend}.md`、`AGENTS.md`、`CHANGELOG.md`、`docs/reference/user-testing.md`（§20）、`tests/agent_hook_integration.rs`（库回退修复，等价 dev `533e4de`）
+
+## 后续审查修复（2026-10-11，第三轮独立审查）
+
+对登录链路做新一轮独立审查（后端 / 前端各一子代理 + 编排逐条核实），D1-D5 决策与已知边界全部维持，修复如下：
+
+- **`/auth/setup` 并发竞态**（major）：原「SELECT 后 INSERT」无事务、`users` 表无唯一约束，初始化窗口并发可落两行破坏单账号不变量。改为单条 `INSERT ... SELECT ... WHERE NOT EXISTS`（`rows_affected == 0` → 409）；回归 `setup_is_atomic_under_concurrent_calls`。
+- **失败延迟口径统一**：`change-password` / `change-username` 校验失败缺少 `login` 的 1s 延迟 → 抽 `reject_bad_credentials` 三处共用；补 `change_password_verifies_current_and_revokes_tokens`（该 handler 此前无测试）。
+- **前端 429 专属文案**：限流命中此前显示通用「登录失败」+ 裸 `HTTP 429` toast → 新增 `auth.rateLimited`（双 locale）并在四个密码校验路径映射；认证端点统一 `silent`（失败由表单内联展示，消除双重呈现）。
+- **前端约束单一真源**：下限 `4` 两处硬编码、AuthPage setup 缺校验 → 抽 `frontend/src/utils/authConstraints.ts`（`MIN_PASSWORD_LEN` / `isValidUsernameShape` 等）+ 两处复用；另补 AuthPage `useRef` 双提交守卫、AuthSection `aria-label`。
+- **`jwt_secret` 空文件自愈**：截断导致的 0 字节密钥文件不再拒绝启动，覆盖重写（强制 0600；旧 token 失效 = 强制重新登录）。
+- **明确不改**：bcrypt 72 字节截断（预处理会让既有 hash 失效，需单独立项）；cookie `Secure`（后端无 TLS，属部署文档边界）；`local_bypass` 前端字段（D5 契约保留）；`verify_token_for_state` 每请求 `token_version` 查询（本地微秒级，改缓存不抵一致性成本）。
