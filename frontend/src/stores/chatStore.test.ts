@@ -952,6 +952,72 @@ describe('流式 prose 块合并（thought 分段修复）', () => {
   })
 })
 
+// 迟到帧收敛（settled 模式）：终态帧（prompt_done/prompt_error）之后到达的
+// session_update 不得铸出 streaming 气泡。后端「内容帧」与「turn 终态帧」走两条
+// 无顺序保证的广播链路，乱序是结构性的——oh-my-pi /compact 只推一帧正文，终态帧
+// 先到即触发该缺陷：气泡永久停留在「工作中」实时计时，且再无任何后续帧能收尾。
+describe('迟到帧收敛（settled 模式）', () => {
+  const M = (text: string): SessionUpdateAction => ({ kind: 'appendText', text })
+  const TOOL = (id: string, status?: string): SessionUpdateAction => ({
+    kind: 'upsertTool',
+    toolCallId: id,
+    status,
+  })
+
+  beforeEach(() => {
+    useChatStore.setState({ states: {} })
+    clearTurnClock()
+  })
+
+  it('无活跃 turn + 尾部是 user 消息：迟到 chunk 落为新消息但 streaming=false', () => {
+    const s = useChatStore.getState()
+    s.addUserMessage('s1', '/compact')
+    // sending=false（终态已到，未再 beginPrompt）：迟到正文按已定稿落地
+    s.applyReplayBatch('s1', [M('Compaction complete.')])
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1].role).toBe('assistant')
+    expect(msgs[1].streaming).toBe(false)
+    expect(msgs[1].text).toBe('Compaction complete.')
+  })
+
+  it('无活跃 turn + 尾部是已定稿 assistant：迟到 chunk 合并进该消息而非新气泡', () => {
+    const s = useChatStore.getState()
+    s.beginPrompt('s1')
+    s.addUserMessage('s1', 'hi')
+    s.applyReplayBatch('s1', [M('正文一')])
+    s.markDone('s1')
+    expect(useChatStore.getState().states['s1'].messages.at(-1)?.streaming).toBe(false)
+    s.applyReplayBatch('s1', [M('正文二')])
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1].text).toBe('正文一正文二')
+    expect(msgs[1].streaming).toBe(false)
+  })
+
+  it('sending=true（活跃 turn）维持流式语义：新消息 streaming=true', () => {
+    const s = useChatStore.getState()
+    s.addUserMessage('s1', 'hi')
+    s.beginPrompt('s1')
+    s.applyReplayBatch('s1', [M('流式中')])
+    expect(useChatStore.getState().states['s1'].messages.at(-1)?.streaming).toBe(true)
+  })
+
+  it('迟到 tool 帧同样不铸 streaming 气泡；完成态更新合并回同一消息', () => {
+    const s = useChatStore.getState()
+    s.addUserMessage('s1', 'go')
+    s.applyReplayBatch('s1', [TOOL('t1', 'in_progress')])
+    const first = useChatStore.getState().states['s1'].messages.at(-1)
+    expect(first?.streaming).toBe(false)
+    expect(first?.blocks.map((b) => b.type)).toEqual(['tool_call'])
+    s.applyReplayBatch('s1', [TOOL('t1', 'completed')])
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(2)
+    expect(msgs[1].streaming).toBe(false)
+    expect((msgs[1].blocks[0] as { status?: string }).status).toBe('completed')
+  })
+})
+
 // 已结束会话的配置快照：hydrate 注入最后已知 configOptions 并置灰只读；
 // 任一 live/replay 配置帧（applyReplayBatch → applyTopLevelActions）解除只读。
 describe('config snapshot (ended-session readonly toolbar)', () => {

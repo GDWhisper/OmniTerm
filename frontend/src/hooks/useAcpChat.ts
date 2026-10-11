@@ -978,6 +978,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
               }
+            } else if (frame.stop_reason === 'Superseded') {
+              // 顶替定稿（后端合成，见 AcpClient::mark_prompt_active）：旧 turn 未回
+              // 结束信号就被新 prompt 顶掉，后端补发本帧让气泡与计时收敛（上面的
+              // markDone 已停表）。这不是用户可感知的「完成」——新 turn 的
+              // turn_state{active:true} 紧随其后、计时随即重开，此刻 fire 'done'
+              // 只会造成假提醒（用户正在输入，不需要被叫回来）。
             } else if (frame.stop_reason?.toLowerCase().includes('cancel')) {
               // 用户主动取消：abnormal 也可能为 true（D1 把 cancelled 归入非正常），
               // 但取消是**用户自己的动作**，不该按错误打扰。故 cancel 判定优先于

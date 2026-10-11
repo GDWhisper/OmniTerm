@@ -155,11 +155,16 @@ fn file_uri(name: &str) -> String {
     format!("file:///{}", encoded)
 }
 
-/// turn 结束事件（正常完成 / 出错）。经 broadcast 发给所有 WS 连接：
+/// turn 生命周期事件（开始 / 结束）。经 broadcast 发给所有 WS 连接：
 /// prompt task 完成时发起 prompt 的连接可能已断开重连，per-connection
 /// 通道会把结束帧发进死连接被静默丢弃，新连接则永远收不到结束信号。
+///
+/// `Started`（[`AcpClient::mark_prompt_active`] 发出）让**所有**连接——不只发
+/// prompt 的那个——把 turn 置为活跃：多标签页里非发起页据此恢复计时/思考指示，
+/// 迟到帧的收敛判定（前端 settled 模式以 sending 为输入）也有了可靠真值。
 #[derive(Debug, Clone)]
-pub enum TurnEndEvent {
+pub enum TurnEvent {
+    Started,
     Done {
         stop_reason: String,
         /// 刚结束的 turn 的 DB 行 id（`None` 表示本 turn 未折叠任何帧）。前端据此
@@ -209,8 +214,9 @@ pub struct SystemNotice {
 ///   三者共同决定 idle / requires_action 语义（详见 `reaper` 模块）。
 struct ActivityState {
     active_prompt: bool,
-    /// prompt 世代计数：每次 `mark_prompt_active` 递增。cancel 兜底定时器
-    /// 据此识别自己要收尾的那个 turn，避免误杀取消后新发起的 turn。
+    /// prompt 世代计数：每次 `mark_prompt_active` 递增。cancel 兜底定时器与
+    /// prompt 任务的收尾守卫（`mark_prompt_idle_for_generation`）据此识别自己
+    /// 要收尾的那个 turn，避免陈旧终结者误杀新发起的 turn。
     prompt_generation: u64,
     /// 最近一次 `session/cancel` **针对**的 prompt 世代（[`AcpClient::cancel`] 记录）。
     /// 与 `prompt_generation` 相等 ⇒ 当前这一轮是用户自己取消的；不等 ⇒ 这一轮的
@@ -271,9 +277,9 @@ pub struct AcpClient {
     system_notice_tx: broadcast::Sender<SystemNotice>,
     /// agent 终端命令生命周期事件（创建/退出），供 WS 层透传让前端感知后台命令。
     terminal_event_tx: broadcast::Sender<TerminalActivity>,
-    /// turn 结束事件（prompt_done / prompt_error），广播给所有 WS 连接
-    /// （断线重连后的新连接也必须收到，见 [`TurnEndEvent`]）。
-    turn_end_tx: broadcast::Sender<TurnEndEvent>,
+    /// turn 生命周期事件（开始 / 结束），广播给所有 WS 连接
+    /// （断线重连后的新连接也必须收到，见 [`TurnEvent`]）。
+    turn_event_tx: broadcast::Sender<TurnEvent>,
     terminal_manager: Arc<AcpTerminalManager>,
     permission_manager: Arc<PermissionManager>,
     supports_load_session: bool,
@@ -395,7 +401,9 @@ fn spawn_crash_watcher(
                 {
                     // 进程崩溃也算 turn 结束：定稿进行中的 assistant 行（幂等），
                     // 使已折叠的部分内容不丢，且不会永远停留在 streaming 状态。
-                    accumulator.finalize_turn();
+                    // 返回值不消费：崩溃原因经 crash_tx 走 prompt_error 帧，前端
+                    // 不读耗时（该 turn 无结算语义）。
+                    let _ = accumulator.finalize_turn();
                     let _ = crash_tx.send(format!("{}", e));
                 }
             }
@@ -604,7 +612,7 @@ impl AcpClient {
         let (crash_tx, _) = broadcast::channel::<String>(16);
         let (system_notice_tx, _) = broadcast::channel::<SystemNotice>(8);
         let (terminal_event_tx, _) = broadcast::channel::<TerminalActivity>(64);
-        let (turn_end_tx, _) = broadcast::channel::<TurnEndEvent>(16);
+        let (turn_event_tx, _) = broadcast::channel::<TurnEvent>(16);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         // D4：连接任务 abort 指令（shutdown/disconnect → crash watcher）。
         let (abort_tx, abort_rx) = oneshot::channel::<()>();
@@ -897,7 +905,7 @@ impl AcpClient {
             crash_tx,
             system_notice_tx,
             terminal_event_tx,
-            turn_end_tx,
+            turn_event_tx,
             terminal_manager,
             permission_manager,
             supports_load_session,
@@ -935,9 +943,9 @@ impl AcpClient {
         self.terminal_event_tx.subscribe()
     }
 
-    /// 订阅 turn 结束事件（所有 WS 连接都应订阅，见 [`TurnEndEvent`]）。
-    pub fn turn_end_subscribe(&self) -> broadcast::Receiver<TurnEndEvent> {
-        self.turn_end_tx.subscribe()
+    /// 订阅 turn 生命周期事件（所有 WS 连接都应订阅，见 [`TurnEvent`]）。
+    pub fn turn_event_subscribe(&self) -> broadcast::Receiver<TurnEvent> {
+        self.turn_event_tx.subscribe()
     }
 
     /// 当前（或刚结束的）turn 的 DB 行 id。专用轻量访问器：`turn_snapshot()`
@@ -1046,8 +1054,8 @@ impl AcpClient {
     }
 
     /// 广播 turn 结束事件（无订阅者时静默丢弃）。
-    pub fn notify_turn_end(&self, event: TurnEndEvent) {
-        let _ = self.turn_end_tx.send(event);
+    pub fn notify_turn_event(&self, event: TurnEvent) {
+        let _ = self.turn_event_tx.send(event);
     }
 
     /// 广播后端主动产生的系统通知（权限超时回收告知等；无订阅者时静默丢弃）。
@@ -1287,26 +1295,87 @@ impl AcpClient {
         }
     }
 
-    /// 标记有进行中的 prompt（由 WS handler 在收到用户 prompt 时调用）。
-    pub fn mark_prompt_active(&self) {
-        if let Ok(mut st) = self.activity.lock() {
-            st.active_prompt = true;
-            st.prompt_generation = st.prompt_generation.wrapping_add(1);
-            st.last_activity = Instant::now();
+    /// 标记有进行中的 prompt（由 WS handler 在收到用户 prompt 时调用），返回本次
+    /// prompt 的世代号（供 [`Self::mark_prompt_idle_for_generation`] 守卫陈旧终结者）。
+    ///
+    /// **supersede**：上一个 turn 未经终结就被新 prompt 顶替时（部分实现确实不回
+    /// 结束信号——实测 oh-my-pi 的 `/compact`，用户遂直接发下一条），先给它补发
+    /// 合成终态 `Done { stop_reason: "Superseded" }` 再开新 turn。不补的话那条
+    /// 气泡在**所有**前端永远停留在 streaming / 计时中：能收尾它的 send_prompt
+    /// 返回会被世代守卫拦下，再无任何后续帧能收敛它。`duration` 照常带出（累积器
+    /// 此刻定稿结算），前端当场显示耗时；`abnormal: false` 与不写留痕 system 消息，
+    /// 口径同 InactivityTimeout：这是宿主合成的原因，不是协议回了非正常 stopReason。
+    ///
+    /// 世代递增、supersede 定稿与 `begin_turn` 全在 `activity` 临界区内完成，事件
+    /// 广播也在临界区内按序发出：与 [`Self::mark_prompt_idle_for_generation`] 的
+    /// 「查世代 + 定稿」互斥（同 `claim_turn_end_notice_for_current_turn` 的 TOCTOU
+    /// 修复模式），否则陈旧终结者可插进「查」与「定」之间，把刚开的**新** turn
+    /// 定稿掉；broadcast 的发送顺序即前端观察顺序（Done{Superseded} → Started）。
+    pub fn mark_prompt_active(&self) -> u64 {
+        let mut st = match self.activity.lock() {
+            Ok(guard) => guard,
+            // 中毒语义与 claim 路径一致：取回数据继续。这里必须继续**递增**——
+            // 调用方拿返回值做世代守卫，不递增会让新旧世代同值，终结者被误判为
+            // 陈旧而永久跳过定稿。
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        st.active_prompt = true;
+        st.prompt_generation = st.prompt_generation.wrapping_add(1);
+        st.last_activity = Instant::now();
+        let generation = st.prompt_generation;
+        // 用户 prompt 是唯一的 turn 起点：先收掉上一 turn（若有），再开启累积器
+        // turn 门控。load_session 重放从不走此路径，故重放帧不会被折叠进
+        // streaming 行（结构性排除）。
+        if let Some(timing) = self.accumulator.finalize_turn() {
+            self.notify_turn_event(TurnEvent::Done {
+                stop_reason: "Superseded".into(),
+                row_id: timing.row_id.clone(),
+                duration: Some(timing),
+                abnormal: false,
+            });
         }
-        // 用户 prompt 是唯一的 turn 起点：开启累积器 turn 门控。load_session 重放
-        // 从不走此路径，故重放帧不会被折叠进 streaming 行（结构性排除）。
         self.accumulator.begin_turn();
+        self.notify_turn_event(TurnEvent::Started);
+        generation
     }
 
-    /// 标记 prompt 已结束（由 prompt 任务在 send_prompt 返回时调用，
-    /// cancel 路径经 [`Self::spawn_cancel_turn_fallback`] 超时兜底调用）。
-    pub fn mark_prompt_idle(&self) {
+    /// 强制收尾进行中的 prompt（看门狗 / 关闭语义：reaper prompt-stale、shutdown）。
+    /// 不校验世代——这些路径要的就是「终结当下活跃的那一轮」。
+    ///
+    /// prompt 任务自身的收尾必须走 [`Self::mark_prompt_idle_for_generation`]：
+    /// 只有那里的「世代匹配才定稿」能拦住陈旧终结者误杀新 turn。
+    ///
+    /// 返回是否真的定稿了一个 turn（供调用方决定要不要广播终态帧）。
+    pub fn mark_prompt_idle(&self) -> bool {
         if let Ok(mut st) = self.activity.lock() {
             st.active_prompt = false;
         }
         // turn 结束（正常完成 / 出错 / 取消）统一定稿进行中的 assistant 行（幂等）。
-        self.accumulator.finalize_turn();
+        self.accumulator.finalize_turn().is_some()
+    }
+
+    /// prompt 任务按世代收尾：世代不匹配（本 turn 已被新 prompt 顶替）或已有别的
+    /// 终结者定稿时，什么都不做并返回 false。
+    ///
+    /// 「查世代 + 定稿」必须在同一 `activity` 临界区内完成。拆成两步是 TOCTOU：
+    /// [`Self::mark_prompt_active`] 在递增世代后接管累积器（supersede 定稿旧 turn →
+    /// begin 新 turn），陈旧终结者若插进这中间，就会把刚开的**新** turn 定稿掉——
+    /// 新 turn 的帧从此 fold 不进（fold 以 active 门控），前端看得到流式内容、DB 里
+    /// 却没有行（定稿时 row_id 为空，cooked 回写被跳过）= 静默丢数据。与
+    /// `claim_turn_end_notice_for_current_turn` 用同一次持锁消除 TOCTOU。
+    ///
+    /// 返回 true = 本次调用赢得定稿（世代匹配且确有活跃 turn 被收尾），调用方据此
+    /// 广播终态帧；false = 轮不到本调用，不得广播（否则终态帧重复或张冠李戴）。
+    pub fn mark_prompt_idle_for_generation(&self, generation: u64) -> bool {
+        let mut st = match self.activity.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if st.prompt_generation != generation {
+            return false;
+        }
+        st.active_prompt = false;
+        self.accumulator.finalize_turn().is_some()
     }
 
     /// cancel 的 turn 收尾兜底。
@@ -1315,7 +1384,8 @@ impl AcpClient {
     /// `Cancelled` 返回，prompt 任务照常定稿 turn 并广播结束——取消后 agent
     /// 补发的尾部帧（收尾文本等）得以落库。但无视 cancel 的实现可能永不
     /// 返回（§8 多实现兼容），超时后若同一 turn 仍在进行则强制定稿 + 广播
-    /// 结束，防止会话永久卡在运行中。世代守卫避免误杀取消后新发起的 turn。
+    /// 结束，防止会话永久卡在运行中。世代守卫（原子版，见
+    /// [`Self::mark_prompt_idle_for_generation`]）避免误杀取消后新发起的 turn。
     pub fn spawn_cancel_turn_fallback(self: &Arc<Self>) {
         let generation = {
             let Ok(st) = self.activity.lock() else { return };
@@ -1327,28 +1397,26 @@ impl AcpClient {
         let client = Arc::clone(self);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(CANCEL_TURN_FALLBACK_SECS)).await;
-            let same_turn_still_active = {
-                let Ok(st) = client.activity.lock() else { return };
-                st.active_prompt && st.prompt_generation == generation
-            };
-            if same_turn_still_active {
-                tracing::warn!(
-                    "agent 未在 {}s 内响应 session/cancel，强制定稿进行中 turn（兜底）",
-                    CANCEL_TURN_FALLBACK_SECS
-                );
-                client.mark_prompt_idle();
-                // `abnormal: false`：本路径是**合成的非协议原因**（agent 无视 cancel
-                // 时的兜底定稿），并不是协议回了非正常 stopReason；且此处不写留痕
-                // system 消息（计划 D3 之外），若报 error 语义就会出现「有错误提示、
-                // 无任何解释文案」。保持既有行为：前端只按 `stop_reason == Cancelled`
-                // 走取消文案。
-                client.notify_turn_end(TurnEndEvent::Done {
-                    stop_reason: "Cancelled".into(),
-                    row_id: client.turn_row_id(),
-                    duration: client.turn_timing(),
-                    abnormal: false,
-                });
+            // 世代匹配与定稿在同一临界区内完成：期间用户已发新 prompt（supersede
+            // 已推进世代并给旧 turn 补发终态）时返回 false，本兜底什么都不做。
+            if !client.mark_prompt_idle_for_generation(generation) {
+                return;
             }
+            tracing::warn!(
+                "agent 未在 {}s 内响应 session/cancel，强制定稿进行中 turn（兜底）",
+                CANCEL_TURN_FALLBACK_SECS
+            );
+            // `abnormal: false`：本路径是**合成的非协议原因**（agent 无视 cancel
+            // 时的兜底定稿），并不是协议回了非正常 stopReason；且此处不写留痕
+            // system 消息（计划 D3 之外），若报 error 语义就会出现「有错误提示、
+            // 无任何解释文案」。保持既有行为：前端只按 `stop_reason == Cancelled`
+            // 走取消文案。
+            client.notify_turn_event(TurnEvent::Done {
+                stop_reason: "Cancelled".into(),
+                row_id: client.turn_row_id(),
+                duration: client.turn_timing(),
+                abnormal: false,
+            });
         });
     }
 

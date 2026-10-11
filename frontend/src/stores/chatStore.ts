@@ -716,19 +716,39 @@ const appendProseBlock = (blocks: ContentBlock[], kind: ProseKind, chunk: string
 }
 
 /**
+ * 迟到帧（settled）并入尾部 assistant 消息的判定；非 settled（活跃 turn）只认
+ * `streaming` 消息，与历史行为一致。
+ *
+ * settled 模式额外排除 **DB 权威行**：hydrate / turn_snapshot 生成的行
+ * `id === dbId`（见 ChatView.toChatMessages 与 applyTurnSnapshot），内容权威在库，
+ * 迟到帧的原文很可能已折进该行——并入会造成重复或错拼。本端 live 帧铸出的消息
+ * （id=genId，dbId 为空或定稿时晚到的 row_id）才允许收编：chunk1 → prompt_done
+ * → chunk2 的尾帧据此并回同一气泡，而 hydrate 行之后的迟到帧另起已定稿消息。
+ */
+const canAttachToTail = (tail: ChatMessage | undefined, settled: boolean): tail is ChatMessage =>
+  !!tail && tail.role === 'assistant' && (tail.streaming || (settled && tail.id !== tail.dbId))
+
+/**
  * 把一段流式正文/思考追加到消息列表末尾的在建 assistant 消息（`streaming`），
  * 没有则新建一条。合并语义见 appendProseBlock；结果与 `appendChunk` /
  * `appendThought` 单块 action 完全一致，三个入口共用，避免策略漂移。
+ *
+ * `settled=true`（会话无活跃 turn，帧在终态之后迟到）：可并入的消息按
+ * canAttachToTail 判定（尾部 DB 权威行除外），需新建时置 `streaming: false`。
+ * 迟到帧绝不能铸出 `streaming=true` 气泡：终态（prompt_done/prompt_error）不会
+ * 再来第二次，这种孤儿气泡永远停在「工作中」实时计时（后端的排空帧与前端处理
+ * 分属两条无顺序保证的广播链路，迟到是结构性的，不是异常）。
  */
 const appendProseToMessages = (
   messages: ChatMessage[],
   kind: ProseKind,
   chunk: string,
+  settled = false,
 ): ChatMessage[] => {
   if (chunk === '') return messages
   const next = [...messages]
   const last = next[next.length - 1]
-  if (last && last.role === 'assistant' && last.streaming) {
+  if (canAttachToTail(last, settled)) {
     const blocks = appendProseBlock(last.blocks, kind, chunk)
     if (blocks === last.blocks) return messages
     next[next.length - 1] = kind === 'text'
@@ -744,7 +764,7 @@ const appendProseToMessages = (
     text: kind === 'text' ? chunk : '',
     blocks,
     createdAt: Date.now(),
-    streaming: true,
+    streaming: !settled,
   })
   return next
 }
@@ -771,22 +791,28 @@ const scanTodoBoard = (
 }
 
 /**
- * 纯函数：把多条重放帧合并进现�? messages（追加文�? / 合并 tool / plan / thought
- * 等），返回新�? messages 数组。语义与 `appendChunk` 等单�? action 一致，但只�?
+ * 纯函数：把多条重放帧合并进现有 messages（追加文本 / 合并 tool / plan / thought
+ * 等），返回新的 messages 数组。语义与 `appendChunk` 等单块 action 一致，但只做
  * 一次全量浅拷贝。重放的历史回合视为已完成，新追加的 assistant 消息 `streaming`
  * 保持 true（重放提交时由 `commitReplay` 统一置 false）。
+ *
+ * `settled=true`：会话无活跃 turn 时的迟到帧通道（由 applyReplayBatch 按
+ * `sending` 判定）。所有「可能新建 assistant 消息」的分支（prose / tool_call）
+ * 一律不得置 `streaming=true`；可并入的尾部消息按 canAttachToTail 判定
+ * （DB 权威行除外，见该函数说明）。
  */
 const applyActionsToMessages = (
   messages: ChatMessage[],
   actions: SessionUpdateAction[],
+  settled = false,
 ): ChatMessage[] => {
   // 浅拷贝一次兜底：非 prose 分支就地改 `next`，prose 分支则整段替换为新数组。
   let next = [...messages]
   for (const action of actions) {
     if (action.kind === 'appendText') {
-      next = appendProseToMessages(next, 'text', action.text)
+      next = appendProseToMessages(next, 'text', action.text, settled)
     } else if (action.kind === 'appendThought') {
-      next = appendProseToMessages(next, 'thought', action.text)
+      next = appendProseToMessages(next, 'thought', action.text, settled)
     } else if (action.kind === 'upsertTool') {
       // ADR-4: 编辑类工具完成 → 提示 git 面板刷新
       if (action.status === 'completed') {
@@ -800,7 +826,7 @@ const applyActionsToMessages = (
         }
       }
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
+      if (canAttachToTail(last, settled)) {
         const toBlock = (prev?: ToolCallBlock): ToolCallBlock => ({
           type: 'tool_call',
           toolCallId: action.toolCallId,
@@ -837,12 +863,12 @@ const applyActionsToMessages = (
             },
           ],
           createdAt: Date.now(),
-          streaming: true,
+          streaming: !settled,
         })
       }
     } else if (action.kind === 'setPlan') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
+      if (canAttachToTail(last, settled)) {
         const blocks = [...last.blocks]
         const idx = blocks.findIndex((b) => b.type === 'plan')
         if (idx >= 0) {
@@ -854,7 +880,7 @@ const applyActionsToMessages = (
       }
     } else if (action.kind === 'setTodos') {
       const last = next[next.length - 1]
-      if (last && last.role === 'assistant' && last.streaming) {
+      if (canAttachToTail(last, settled)) {
         const blocks = [...last.blocks]
         const idx = blocks.findIndex((b) => b.type === 'todo')
         if (idx >= 0) {
@@ -1101,7 +1127,11 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       if (actions.length === 0) return state
       const current = get(state, sessionId)
-      const messages = applyActionsToMessages(current.messages, actions)
+      // 无活跃 turn（sending=false）按「已定稿」模式合并：终态帧之后迟到的
+      // session_update 不允许铸出 streaming 气泡（孤儿永不收尾，见
+      // appendProseToMessages 的 settled 说明）。发送方向（sending=true）维持
+      // 原有流式语义。
+      const messages = applyActionsToMessages(current.messages, actions, !current.sending)
       // 顶层字段（mode/usage/commands/configOptions/todos）一次性合并
       return applyTopLevelActions(patch(state, sessionId, { messages }), sessionId, actions)
     }),

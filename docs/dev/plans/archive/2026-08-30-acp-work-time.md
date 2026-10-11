@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；偏差见文末「勘误」E1–E20）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；偏差见文末「勘误」E1–E21）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -405,3 +405,15 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - 边界（有意接受）：① 整轮只吐一个 chunk 的 agent（不流式、整段一次性下发）读数 `null` 而非被摊薄的数——同 E17「宁 null 不虚报」；② 若某 agent 把输出攒成大批再 flush，白名单会读出虚高（分母只剩 flush 内的瞬间）；pi/claude/codex 均逐 delta 流式（pi 已实测），不触发。
 
 **测试**：`turnClock.test.ts` tps 用例按新契约重写（旧「首字锚点 / 工具扣除 / 封口」语义断言逐条改为 burst 语义），新增 describe `turnClock tps 白名单（E20）` 三条（工具执行与工具间空档冻结、1s 容差、孤立尾 chunk 不带字符）；`ChatMessage.metarow.test.tsx`、`chatStore.test.ts`（审批挂起冻表改为「冻结在最后测得值」）、`useAcpChat.midturn.test.tsx` 期望随新口径重设。全量 `pnpm test`、`tsc -b`、`lint` 通过。
+
+### E21 — 迟到帧收敛与顶替定稿：孤儿流式气泡的计时永不收尾（2026-10-11）
+
+来源：用户报告 oh-my-pi `/compact` 气泡永久停在「工作中 13秒·估算 89.5 t/s」（截图），同会话下方还有第二个流式 turn。排查排除后端定稿故障（`prompt_done` 已正常下发）：根因是**前端迟到帧竞态**——内容帧与终态帧分属两条无顺序保证的投递链路，turn 只有一帧正文时 `prompt_done` 可能先到；此后迟到的正文帧按流式语义新建 `streaming: true` 气泡，而不会再来的终态帧使它的实时计时**永远不会被 `endTurn` 收尾**。这是本计划「实时估算」在帧序竞态下的最坏失效面：读数没算错，是表永远停不下来；同时暴露 agent 侧确实存在无终态的回合（oh-my-pi `/compact`），宿主需要兜底。
+
+修复（三层，详见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` 文末同题勘误）：
+
+- **前端 settled 收敛**（`chatStore.applySessionUpdate`）：`sending === false` 时迟到帧按已定稿落地，绝不铸 streaming 气泡；尾部可并入消息排除 DB 权威行（`id === dbId`）。活跃 turn 计时语义不变（`turnElapsedMs` 非 null 的窗口仍与 `sending` 同生命周期，E12 口径不动）。
+- **`turn_state{active:true}` 实时广播**（后端 `TurnEvent::Started`）：此前只有连接快照能拿到 active:true，现在所有连接在 turn 开始时实时收到；前端 `beginPrompt + resumeTurnClock` 由此对第二标签页 / 迟到订阅者生效——计时起点与工作锚点不再依赖「本连接发起过 prompt」。
+- **顶替定稿（supersede）**：新 prompt 顶掉无终态旧 turn 时后端合成 `Done{Superseded}`，`duration` 取累积器 `TurnTiming` 照常下发——前端 `markDone` 停表并显示结算值；`Superseded` 不 fire attention（用户正在输入）。`finalize_turn` 返回值改为 `Option<TurnTiming>` 承接「谁赢得跃迁」，世代守卫 `mark_prompt_idle_for_generation` 保证旧 turn 的定稿者不能误杀新 turn（否则新 turn 计时与持久化双丢）。
+
+**测试**：`useAcpChat.lateframe.test.tsx` 四条（终态先到 → 迟到正文落已定稿；正文→终态→再迟到帧全并一条且 dbId 保留；活跃 turn 内仍 streaming；Superseded 停表不提醒 + 随后 `turn_state` 重开计时）；`chatStore.test.ts` settled 判定；`ws::acp` supersede / 世代守卫 / `turn_state` 线格式三组；`turn_accumulator` 重复定稿语义强化。全量 `pnpm test`、`tsc -b`、`lint`、`cargo test`、`clippy -D warnings` 通过。

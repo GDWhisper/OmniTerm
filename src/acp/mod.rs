@@ -17,5 +17,5 @@ pub(crate) mod test_support;
 pub mod turn_accumulator;
 pub mod usage;
 
-pub use client::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEndEvent};
+pub use client::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEvent};
 pub use supervisor::AcpSupervisor;

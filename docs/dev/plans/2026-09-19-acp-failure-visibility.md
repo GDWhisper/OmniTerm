@@ -195,6 +195,18 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 - 覆盖：`acp::turn_accumulator::tests::{visible_output_classification_follows_the_variant_table, bookkeeping_only_turn_reports_no_visible_output, visible_output_latches_once_seen_and_resets_on_begin_turn, visible_output_survives_frame_eviction}`；`ws::acp::tests::{classify_turn_end_narrows_only_the_normal_class, empty_turn_notice_has_its_own_copy_and_wire_reason, only_abnormal_class_maps_to_frame_abnormal}`；真实链路 `ws::acp::notice_tests::{dispatch_prompt_silent_end_turn_notices_empty_and_marks_abnormal, dispatch_prompt_end_turn_writes_no_notice_and_not_abnormal, whitelist_stop_reason_without_output_gets_one_empty_notice}` —— fake agent 的 `@PUSH@` 对照组分别复刻「有正文」与「只有记账帧」两种帧序。原 `normal_stop_reasons_write_no_system_row` 用例的前提（一个未折叠任何帧的 client）现在正是空 turn 的输入，已改名并改为断言 `Empty`；「正常结束不留痕」的防线移交真实链路的正文对照用例。
 - 上游缺陷（pi-acp，非本项目）：provider error 应映射为 ACP 非正常终态（`refusal` 或 `_` 前缀自定义值），或至少把 `errorMessage` 作为 `agent_message_chunk` 下发；否则宿主永远只能报「什么都没给」而给不出原因。
 
+**迟到帧孤儿气泡与「顶替定稿」：turn 结束信号缺失的多实现兜底（2026-10-11 补，非本计划原实施范围）。**
+
+- 现场：用户报告 oh-my-pi 的 `/compact` 之后一个气泡永久停在「工作中 N秒·估算 X t/s」，同一会话下方还有第二个流式 turn，怀疑 agent 没发结束信号。
+- 排查结论分两层。**表层是前端迟到帧竞态**（本次修复主对象）：每个 WS 连接的通知走同一条 `notify_tx`（cap 64），而投递方是多个独立 task（session_update / turn 事件 / crash / system notice）——**通道间无顺序保证**。turn 只推一帧正文（compact 的典型形态）时终态帧可能先到；此后迟到的正文帧按流式语义新建 `streaming: true` 气泡，而 `prompt_done` 不会来第二次——永久实时计时。**深层是真实缺口**：这类回合在协议层确实没有可观测终态，宿主不能把「agent 会回 PromptResponse」当约定的全部事实（工程准则 8），必须有兜底。
+- 修复三层（与 D1 判定口径正交，不改留痕语义）：
+  1. **前端 settled 收敛**（`chatStore.applySessionUpdate`）：`sending === false`（无活跃 turn）时迟到帧按「已定稿」落地——绝不铸 `streaming` 气泡；尾部可并入的 assistant 消息排除 **DB 权威行**（`id === dbId`，hydrate / `turn_snapshot` 生成，内容权威在库且原文很可能已折进该行），只收编本端 live 帧铸出的消息（`id=genId`），防重复/错拼。活跃 turn（`sending === true`）流式语义不变。
+  2. **`turn_state` 全生命周期广播**：原 `TurnEndEvent` 改名 `TurnEvent` 并新增 `Started` 变体——所有 WS 连接在 turn 开始时实时收到 `turn_state{active:true}`（此前该帧只在「先 subscribe 再 snapshot」的连接路径下发快照值；`active:false` 有兜底分支、`active:true` 没有实时来源）。第二标签页与迟到订阅者的计时/`sending` 指示由此以真实 turn 开始为准。
+  3. **顶替定稿（supersede）**：新 prompt 到达而无终态的旧 turn 被合成 `Done{stop_reason: "Superseded", duration: Some(timing)}`——不写 system 留痕（这不是失败；与 `InactivityTimeout` / cancel 兜底的 `Cancelled` 同属宿主合成终态，D2 载体沿用、D1 判定不变），前端 `Superseded` 分支只让 `markDone` 停表定稿、**不** fire attention（用户正在输入，假提醒只会打扰）。世代守卫原子化：`mark_prompt_idle_for_generation` 在 `activity` 锁内完成「世代比对 + 定稿」，杜绝旧 turn 的定稿者杀掉新 turn 的 TOCTOU（否则新 turn 的帧全部 fold 失败，计时与持久化双丢）；与 `claim_turn_end_notice_for_current_turn` 同一先例（取世代、比较、赋值在同一次持锁中完成）。`finalize_turn` 改为返回 `Option<TurnTiming>`（谁赢得跃迁），supersede 与各守卫靠它区分「我收的尾」与「轮不到我」。
+- 覆盖：后端 `ws::acp::notice_tests::{new_prompt_supersedes_unfinalized_turn_with_synthetic_done（事件序 Started → Done{Superseded} → Started）, stale_generation_cannot_finalize_the_new_turn}`、`ws::acp::tests::turn_state_frame_serializes_with_type_tag_and_active`、`acp::turn_accumulator::tests::repeated_finalize_turn_emits_exactly_one_end_turn`（首个定稿调用赢得跃迁、后续为无操作）；前端 `useAcpChat.lateframe.test.tsx` 四条（终态先到 → 迟到正文落为已定稿、正文→终态→再迟到帧全部并回同一条且 dbId 保留、活跃 turn 内流式语义不变、`Superseded` 停表定稿不提醒且随后 `turn_state{active:true}` 重开计时）、`chatStore.test.ts` settled 判定（含尾行 DB 权威不收编）。
+- 上游/多实现观察（§8）：oh-my-pi `/compact` 的某类回合观测不到结束信号。宿主兜底序列现为「cancel 后无终态 → `spawn_cancel_turn_fallback` watchdog；有新 prompt 顶掉 → supersede；长时间无任何活动 → reaper prompt-stale」三条；理论残余为「不发终态 + 无新 prompt + cancel 不触发 + 活动持续」——该形态下 turn 语义上仍活着，不算挂死，接受。
+- `docs/architecture/backend.md` 的 ACP 信道小节（「重连续接协议」的 `turn_state` 语义、「生命周期钩子」、`turn_end_tx`→`TurnEvent` cast）按本勘误需同步改写；该文件当时存在并行未提交改动，为避免混提交顺延到该改动落笔之后一并更新。
+
 ## 文档闭环
 
 - `docs/reference/acp-protocol-reference.md` §6.8：本计划落地后把「宿主现状（静默）」更新为「已留痕」。

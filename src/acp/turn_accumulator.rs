@@ -498,11 +498,15 @@ impl TurnAccumulator {
     ///
     /// 时长记账挂在同一个 `active → false` 跃迁上：赢得 CAS 的调用者才发 `EndTurn`，
     /// 于是每个 turn 恰好被累计一次（多调用方并发定稿不会重复计数）。
-    pub fn finalize_turn(&self) {
+    ///
+    /// 返回 `Some(timing)` = 本次调用赢得跃迁（确有进行中的 turn 被定稿，`timing.row_id`
+    /// 即被定稿行的 id）；`None` = 早已定稿（无事可做）。supersede（新 prompt 顶掉未
+    /// 终结 turn）与世代守卫靠这个返回值区分「我收的尾」与「轮不到我」。
+    pub fn finalize_turn(&self) -> Option<TurnTiming> {
         let timing = {
-            let Ok(mut st) = self.inner.lock() else { return };
+            let Ok(mut st) = self.inner.lock() else { return None };
             if !st.active {
-                return;
+                return None;
             }
             st.active = false;
             let wall_ms = st.started.map_or(0, elapsed_ms);
@@ -522,7 +526,8 @@ impl TurnAccumulator {
             st.last_timing = Some(timing.clone());
             timing
         };
-        self.send_end_turn(timing);
+        self.send_end_turn(timing.clone());
+        Some(timing)
     }
 
     /// `Flush` 信号：best-effort。writer 只需知道有活没干，满队列本身就是待办信号
@@ -913,7 +918,7 @@ mod tests {
         let row_id = acc.turn_row_id().expect("首帧折叠后应有行 id");
         assert_eq!(acc.turn_snapshot().row_id.as_deref(), Some(row_id.as_str()), "与快照同源");
 
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some(), "有活跃 turn 时定稿必须赢得跃迁");
         assert_eq!(acc.turn_row_id().as_deref(), Some(row_id.as_str()), "定稿后仍可读到");
 
         acc.begin_turn();
@@ -930,7 +935,7 @@ mod tests {
         acc.begin_turn();
         assert!(acc.turn_timing().is_none(), "turn 进行中不得读到上一 turn 的结算值");
         nap(20);
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some(), "有活跃 turn 时定稿必须赢得跃迁");
         let t = acc.turn_timing().expect("定稿后 WS 层仍要能读到");
         assert!(t.work_ms >= 12, "墙钟应记进 work_ms，实得 {}", t.work_ms);
         assert_eq!(t.wait_ms, 0, "本 turn 没有审批等待");
@@ -1194,9 +1199,11 @@ mod tests {
 
         acc.begin_turn();
         acc.fold(&text_chunk(&sid, "hello"));
-        acc.finalize_turn();
-        acc.finalize_turn();
-        acc.finalize_turn();
+        // 返回值语义：首个调用赢得跃迁，其余全部是无操作 —— 世代守卫/看门狗路径
+        // 靠这个区分「我收的尾」（才广播终态帧）与「轮不到我」。
+        assert!(acc.finalize_turn().is_some(), "首个定稿调用赢得跃迁");
+        assert!(acc.finalize_turn().is_none(), "重复定稿必须是无操作");
+        assert!(acc.finalize_turn().is_none(), "重复定稿必须是无操作");
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "重复定稿不得重复发记账命令，得到 {turns:?}");
@@ -1239,7 +1246,7 @@ mod tests {
         acc.begin_turn();
         acc.begin_wait();
         nap(50);
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "一个 turn 只应有一条记账：{turns:?}");
@@ -1259,7 +1266,7 @@ mod tests {
 
         acc.begin_turn();
         nap(20);
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "空 turn 也要记账，得到 {turns:?}");
@@ -1279,7 +1286,7 @@ mod tests {
 
         acc.begin_turn();
         nap(20);
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1);
@@ -1303,7 +1310,7 @@ mod tests {
 
         // 取消后 agent 继续干活的 30ms 必须归工作：若等待表没在取消时结掉，会被算进 wait。
         nap(30);
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "应恰好一条 EndTurn：{turns:?}");
         let (work, wait, _) = &turns[0];
@@ -1337,7 +1344,7 @@ mod tests {
             "前置条件：Flush 信号通道应已被折叠 ping 塞满"
         );
 
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "信号通道饱和时 EndTurn 仍须恰好送达一次：{turns:?}");
@@ -1403,7 +1410,7 @@ mod tests {
         assert!(acc.turn_row_id().is_some(), "前置条件：记账帧同样会开出一行（空气泡的来源）");
         assert!(!acc.turn_has_visible_output(), "只折叠记账帧 → 无可见产出");
 
-        acc.finalize_turn();
+        assert!(acc.finalize_turn().is_some());
         assert!(!acc.turn_has_visible_output(), "定稿后仍要读得到本 turn 的判定值");
     }
 

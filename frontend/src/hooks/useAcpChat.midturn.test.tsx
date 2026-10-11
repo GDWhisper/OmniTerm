@@ -212,6 +212,9 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     act(() => {
       ws.onopen?.()
       useChatStore.getState().setHydrated('s1', true)
+      // 生产路径：本端发 prompt 必先 beginPrompt（sending=true = 活跃 turn，
+      // 流式语义的前提；无活跃 turn 的帧走「已定稿」收敛，见 lateframe 测试）。
+      useChatStore.getState().beginPrompt('s1')
     })
 
     send(ws, {
@@ -248,7 +251,10 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-9' })
     expect(fetchMock).not.toHaveBeenCalled()
 
-    // 下一 turn 从头跑：标记已复位，回写恢复。
+    // 下一 turn 从头跑：标记已复位，回写恢复（beginPrompt = 用户又发了一条 prompt）。
+    act(() => {
+      useChatStore.getState().beginPrompt('s1')
+    })
     send(ws, {
       type: 'session_update',
       seq: 1,
