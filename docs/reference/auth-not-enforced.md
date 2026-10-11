@@ -32,6 +32,7 @@
 - **cookie 名与 JWT 密钥按实例隔离**（`src/main.rs` 的 `instance_id` / `instance_suffix` / `token_cookie_name` / `jwt_secret_file_name`）：实例身份取自生效 db 的文件名 stem，正式版得 `omniterm_token` + `~/.omniterm/jwt_secret`（历史名不变），dev/preview 得 `omniterm_token_dev` + `jwt_secret_dev` 等。**浏览器 cookie 不区分端口**，同 host 上并存多个实例（如本机 dev 9777 与正式版 9077）时必须各写各的键位——否则后登录者覆盖前者的 cookie，被覆盖方因 `token_version` 不匹配而 401，表现为「一边登录、另一边自动登出」；两者再共用签名密钥时，`ver` 巧合相等即串号登录。
 - **登录限流** `LoginGuard`（`src/auth/rate_limit.rs`）：滑动窗口，单 IP 5 次失败 / 5 分钟触发 429，成功登录重置。**按 IP 记录表有界**（§P1）：tracked IP 数上限 `MAX_TRACKED_IPS`（4096），超限淘汰 least-recently-seen——淘汰只丢弃已滑出窗口、本就无价值的时间戳，不构成绕过（按 IP 限流之下轮换源 IP 本来就不在防护范围内）；更严格的「满了就拒绝一切新 IP」会把单次境外流量 burst 升级成 admin 无法登录，故不取。`is_blocked` 是纯查询，未出现过的 IP 不占槽（旧实现用 `entry().or_default()`，一次探测即插入）。IP 取自 `ConnectInfo` 的真实对端地址而非 `X-Forwarded-For`：反代部署下所有客户端共享反代 IP（更防伪造，但限流粒度退化为「全体共用一个配额」）。凭据校验失败的 1s 延迟与计次收敛为 `reject_bad_credentials` 单出口：`login` / `change-password` / `change-username` 三处同一口径（2026-10-11 起）。
 - **启动安全**：监听非回环地址且 auth 关闭时**拒绝启动**（fail-closed，2026-09-26 起；`src/main.rs` `enforce_listen_auth` 四格真值表单测），显式逃生门 `--insecure-no-auth` / `OMNITERM_INSECURE_NO_AUTH`。此前仅打印高危警告（极易被忽略 = 默认裸奔），已升级为强制力；`OMNITERM_AUTH_ENABLED` 环境变量 / `--auth-enabled` 可强制开启。
+- **口令处理边界（事实声明，2026-10-11 审查补记）**：`bcrypt` 实现只取口令**前 72 字节**（且遇 NUL 截断）——超出部分不参与校验，超长口令不会更强。未做预处理改造（`sha256` 预处理会让既有 hash 全部失效，属独立策略项）；如需加长度上限拒绝，在 API 边界做即可（零迁移成本）。
 
 ### 前端
 
