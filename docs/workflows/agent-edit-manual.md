@@ -105,11 +105,11 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 
 侧栏项目列表：卡片展开/折叠、右键菜单、**拖拽换序**（顺序跨刷新持久化）。拖拽契约的完整 ADR 在 `docs/architecture/frontend-patterns.md`「列表拖拽排序」，视觉规格在 `docs/visual-design/ui-style-guide.md` §7.7——改任一项前必读。
 
-- `frontend/src/components/Sidebar/Sidebar.tsx` — **拖拽状态机在此**：手柄 `pointerdown` 起拖（4px 阈值）+ window 级 `pointermove`/`pointerup`/`pointercancel`；`projDrag`（渲染态）/ `projDragRef`（事件态）双轨；`elementFromPoint` 定位目标卡（触摸隐式 capture 下 `e.target` 不可用；jsdom 无布局，测试靠 `getBoundingClientRect` stub）；松手调 `commitProjectReorder`（乐观重排 + PUT + 失败回滚）
-- `frontend/src/components/Sidebar/ProjectCard.tsx` — 手柄渲染（`data-proj-drag-handle`，click 停冒泡）+ `dragging` prop（半透明 + 让出命中）；卡片根 `data-proj-id` 是滚动定位与拖拽命中的共同锚
+- `frontend/src/components/Sidebar/Sidebar.tsx` — **拖拽状态机在此**：长按卡片头部 500ms 起拖（`PROJ_LONG_PRESS_MS`，过滤 `button` 与头部动作 button）+ window 级 `pointermove`/`pointerup`/`pointercancel`；`projDrag`（渲染态）/ `projDragRef`（事件态，长按计时器句柄同驻）双轨；`elementFromPoint` 定位目标卡（触摸隐式 capture 下 `e.target` 不可用；jsdom 无布局，测试靠 `getBoundingClientRect` stub）；松手调 `commitProjectReorder`（乐观重排 + PUT + 失败回滚）；补发 click 仅在「真拽到过别的卡」时抑制（`projPressAtRef`），长按原样松手必须放行 click（慢速点击=展开）
+- `frontend/src/components/Sidebar/ProjectCard.tsx` — 头部 `onPointerDown` 接线 + `lifted` prop（上浮 + 让出命中）；卡片根 `data-proj-id` 是滚动定位与拖拽命中的共同锚；**无独立手柄**（刻意去掉，勿加回）
 - `frontend/src/utils/projectReorder.ts` — **顺序计算纯函数**（`computeProjectReorder`）：本地重排、落盘载荷、失败回滚共用；改插入语义只动此文件 + 其 `.test.ts`
-- `frontend/src/index.css` — `.sidebar-proj-drag-handle`（含 `touch-action: none`，删了触摸拖动即失效）/ `.sidebar-project-dragging`（`pointer-events: none` 是命中判定前提）/ `.sidebar-project-drop-line`
+- `frontend/src/index.css` — `.sidebar-project-lifted`（上浮/硬影/accent 描边/z-index；`pointer-events: none` 是命中判定前提，删了插入点即失效）/ `.sidebar-project-drop-line`
 - `frontend/src/api/client.ts` — `reorderProjects(ids)` → `PUT /projects/order`；`Project.position` 字段
 - `migrations/20261011_add_project_position.sql` + `src/api/projects.rs` + `src/models/project.rs` — 后端排序列、`reorder_projects`（全量 id 集合校验 + 单事务）、`list_projects` 排序口径 `position ASC, created_at DESC`；新建项目 `MIN(position)-1` 置顶
 
-**改拖拽行为的标准路径**：插入判定/顺序 → `projectReorder.ts`；手势与视觉反馈 → `Sidebar.tsx` + `index.css`；持久化契约 → `src/api/projects.rs`（前后端必须同步：前端发全量 id，后端按集合一致性校验）。**不要改用 HTML5 DnD**（触摸设备不派发，见 frontend-patterns 该条约定的取舍记录）。
+**改拖拽行为的标准路径**：插入判定/顺序 → `projectReorder.ts`；手势与视觉反馈 → `Sidebar.tsx` + `index.css`；持久化契约 → `src/api/projects.rs`（前后端必须同步：前端发全量 id，后端按集合一致性校验）。**不要改用 HTML5 DnD**（触摸设备不派发，见 frontend-patterns 该条约定的取舍记录）；**不要加回独立手柄**（常驻视觉噪音，长按起拖是维护者拍板的交互）。

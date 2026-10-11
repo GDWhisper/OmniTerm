@@ -16,6 +16,7 @@ import { UpdateBadge } from './UpdateBadge'
 import { ProjectCard } from './ProjectCard'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
 import { computeProjectReorder } from '../../utils/projectReorder'
+import { hapticTap } from '../../utils/haptics'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -42,11 +43,29 @@ import { READER_FONT } from '../../utils/fonts'
  *  .sidebar-project-focus-flash ring 动画时长一致，到期摘 class）。 */
 const PROJECT_CARD_FLASH_MS = 1200
 
-/** 手柄起拖阈值：指针移动小于该距离视为点击，不触发排序。 */
-const PROJ_DRAG_THRESHOLD_PX = 4
+/** 长按起拖时长（与终端 paste 菜单 / 会话行菜单同范式 500ms）。 */
+const PROJ_LONG_PRESS_MS = 500
 
-/** 手柄 pointerdown 后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
+/** 长按达成前指针漂移超过该值即取消起拖（滚动 / 普通点击拖动不算长按）。 */
+const PROJ_LONG_PRESS_CANCEL_PX = 10
+
+/** 拖拽达成后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
 const PROJ_DRAG_CLICK_SUPPRESS_MS = 700
+
+/** 项目卡片拖拽的事件态（window 处理器直读，避开陈旧闭包）。 */
+interface ProjDragState {
+  id: string
+  startX: number
+  startY: number
+  /** 长按达成（卡片已拽起）；false = 仍在长按等待窗内 */
+  active: boolean
+  /** 本次长按是否真的拽到过别的卡片（有过插入点）——区分「拖拽」与「慢速点击」 */
+  engaged: boolean
+  /** 当前插入点所在卡片；'' = 无（悬停在自己头上或列表外） */
+  overId: string
+  before: boolean
+  timer: number | null
+}
 
 export function Sidebar() {
   const {
@@ -117,29 +136,22 @@ export function Sidebar() {
   const flashRafRef = useRef<number | null>(null)
   // 项目列表滚动容器——聚焦时把目标卡片滚进视口。
   const projectsScrollRef = useRef<HTMLDivElement | null>(null)
-  // 项目卡片拖拽排序（指针事件统一路径：鼠标/触摸通用，无 HTML5 DnD 的
-  // 触摸盲区）：
-  // - projDrag：渲染态（拖动源 + 插入点），驱动半透明与插入指示线
+  // 项目卡片拖拽排序（长按起拖，指针事件统一路径：鼠标/触摸通用，无 HTML5
+  // DnD 的触摸盲区）：
+  // - projDrag：渲染态（拽起源 + 插入点），驱动上浮特效与插入指示线
   // - projDragRef：事件态（window 级 pointermove/up 直读，避开陈旧闭包）
-  // 手柄 touch-action:none + 起拖阈值，把「滚动列表」与「拖卡片」区分开。
+  // 起拖区即卡片头部（收起态=整卡、展开态=标题条）；不占独立手柄位。
   const [projDrag, setProjDrag] = useState<{
     draggingId: string
     overId: string
     before: boolean
   } | null>(null)
-  const projDragRef = useRef<{
-    id: string
-    startX: number
-    startY: number
-    active: boolean
-    overId: string
-    before: boolean
-  } | null>(null)
-  // 手柄 pointerdown 时间戳：抑制其后续补发的 header click。浏览器把
-  // down/up 的最近公共祖先作为 click 目标——起点在手柄、终点漂到卡片名上
-  // 时 click 落在 header，手柄上的 stopPropagation 覆盖不到（SessionRow
-  // 长按补发 click 同款抑制手法）。
-  const projHandleDownAtRef = useRef(0)
+  const projDragRef = useRef<ProjDragState | null>(null)
+  // 拖拽达成时间戳：抑制其后续补发的 header click。浏览器把 down/up 的最近
+  // 公共祖先作为 click 目标——起点在某张卡头部、终点漂到别的卡时 click 落在
+  // 原头部，不抑制会演变成展开切换（SessionRow 长按补发 click 同款手法）。
+  // 仅在「真拽到过别的卡片」时记：长按原样松手是慢速点击，click 必须放行。
+  const projPressAtRef = useRef(0)
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
@@ -553,7 +565,7 @@ export function Sidebar() {
 
   // window 级指针监听：projDragRef 为空时纯读引用即返回，零成本；订阅随
   // 组件卸载摘除。目标卡片定位优先 elementFromPoint——触摸指针有隐式
-  // capture，e.target 会停在手柄上命中不了别的卡；jsdom 无布局
+  // capture，e.target 会停在按下处的卡片上命中不了别的卡；jsdom 无布局
   // （elementFromPoint 未实现）时回退 e.target，测试可直接朝卡片派发。
   useEffect(() => {
     const cardAtPoint = (x: number, y: number, target: EventTarget | null): HTMLElement | null => {
@@ -564,22 +576,39 @@ export function Sidebar() {
       const el = target as Element | null
       return (el?.closest?.('[data-proj-id]') as HTMLElement | null) ?? null
     }
+    const clearPending = (st: ProjDragState | null) => {
+      if (st?.timer != null) {
+        window.clearTimeout(st.timer)
+        st.timer = null
+      }
+    }
     const onMove = (e: PointerEvent) => {
       const st = projDragRef.current
       if (!st) return
       if (!st.active) {
+        // 长按达成前的移动 = 滚动 / 普通点击拖动：取消本次起拖（不进入拽起态）
         const dx = e.clientX - st.startX
         const dy = e.clientY - st.startY
-        if (dx * dx + dy * dy < PROJ_DRAG_THRESHOLD_PX * PROJ_DRAG_THRESHOLD_PX) return
+        if (dx * dx + dy * dy > PROJ_LONG_PRESS_CANCEL_PX * PROJ_LONG_PRESS_CANCEL_PX) {
+          clearPending(st)
+          projDragRef.current = null
+        }
+        return
       }
       const card = cardAtPoint(e.clientX, e.clientY, e.target)
-      if (!card) return
-      const overId = card.dataset.projId
-      if (!overId || overId === st.id) return // 悬停在自己头上：无插入点
+      const overId = card?.dataset.projId
+      if (!overId || overId === st.id) {
+        // 悬停在自己头上 / 移出列表：摘插入点，卡片保持拽起态
+        if (st.overId !== '') {
+          st.overId = ''
+          setProjDrag({ draggingId: st.id, overId: '', before: true })
+        }
+        return
+      }
       const rect = card.getBoundingClientRect()
       const before = e.clientY < rect.top + rect.height / 2
-      if (st.active && st.overId === overId && st.before === before) return
-      st.active = true
+      if (st.overId === overId && st.before === before) return
+      st.engaged = true
       st.overId = overId
       st.before = before
       setProjDrag({ draggingId: st.id, overId, before })
@@ -587,8 +616,16 @@ export function Sidebar() {
     const finish = () => {
       const st = projDragRef.current
       projDragRef.current = null
+      clearPending(st)
       setProjDrag(null)
-      if (st?.active) commitProjectReorder(st.id, st.overId, st.before)
+      // 只有真的拽到过别的卡片才算一次拖拽：记时间戳抑制补发的 click（浏览器
+      // 把 down/up 的公共祖先作为 click 目标，落回原卡片头部时会误触展开切换）。
+      // 长按后原样松手不算拖——不记时间戳，随后的 click 照常展开卡片
+      // （pointerdown 已 preventDefault，慢速点击靠原生 click 兑现）。
+      if (st?.active && st.engaged) {
+        projPressAtRef.current = Date.now()
+        if (st.overId !== '') commitProjectReorder(st.id, st.overId, st.before)
+      }
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', finish)
@@ -600,20 +637,32 @@ export function Sidebar() {
     }
   }, [commitProjectReorder])
 
-  const handleProjDragPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
+  const handleProjHeaderPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
     if (e.button !== 0) return // 仅左键 / 触摸（触摸 pointerdown 的 button 为 0）
-    // 阻止文本选中与焦点抢占；停冒泡避免 header 的展开切换消费这次序列。
+    // 头部动作按钮（worktree / rename / delete / repair）的 pointerdown 会冒泡
+    // 到 header——就近过滤，按住它们不起拖（否则 500ms 后卡片被拽起，按钮点击
+    // 反而被拖拽语义吃掉）。
+    if ((e.target as HTMLElement).closest('button')) return
+    // 阻止文本选中与焦点抢占（长按拖动期间尤其明显）
     e.preventDefault()
-    e.stopPropagation()
-    projHandleDownAtRef.current = Date.now()
-    projDragRef.current = {
+    const st: ProjDragState = {
       id: projectId,
       startX: e.clientX,
       startY: e.clientY,
       active: false,
+      engaged: false,
       overId: '',
       before: true,
+      timer: null,
     }
+    projDragRef.current = st
+    st.timer = window.setTimeout(() => {
+      st.timer = null
+      if (projDragRef.current !== st) return // 已取消 / 已松手
+      st.active = true
+      hapticTap() // 拽起反馈（移动端触觉；桌面 / 关闭触觉时 no-op）
+      setProjDrag({ draggingId: st.id, overId: '', before: true })
+    }, PROJ_LONG_PRESS_MS)
   }, [])
 
   // Agent enable handler — commented out pending notification scheme decision.
@@ -909,7 +958,7 @@ export function Sidebar() {
                 project={proj}
                 isExpanded={isProjectDisplayExpanded(proj.id)}
                 flashing={focusFlashProjectId === proj.id}
-                dragging={projDrag?.draggingId === proj.id}
+                lifted={projDrag?.draggingId === proj.id}
                 expandAllSessions={expandAllSessions}
                 worktrees={worktrees[proj.id]}
                 sessions={sessions[proj.id] || []}
@@ -917,11 +966,12 @@ export function Sidebar() {
                 activeSessionId={activeSessionId}
                 acpActivityFor={acpActivityFor}
                 onToggle={() => {
-                  // 手柄起拖后补发的 click 抑制（见 projHandleDownAtRef 注释）
-                  if (Date.now() - projHandleDownAtRef.current < PROJ_DRAG_CLICK_SUPPRESS_MS) return
+                  // 拖拽达成后补发的 click 抑制（见 projPressAtRef 注释）；
+                  // 长按原样松手不记时间戳——慢速点击仍要能展开卡片
+                  if (Date.now() - projPressAtRef.current < PROJ_DRAG_CLICK_SUPPRESS_MS) return
                   toggleProject(proj.id)
                 }}
-                onDragHandlePointerDown={(e) => handleProjDragPointerDown(e, proj.id)}
+                onHeaderPointerDown={(e) => handleProjHeaderPointerDown(e, proj.id)}
               onOpenCreateWorktree={async () => {
                 if (!isProjectDisplayExpanded(proj.id)) {
                   setExpandedProjects(prev => { const next = new Set(prev); next.add(proj.id); return next })

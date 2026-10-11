@@ -62,7 +62,6 @@
   "sidebar.lost": "LOST",
   "sidebar.githubRepo": "GitHub Repository",
   "sidebar.noProjects": "No projects yet",
-  "sidebar.dragProject": "Drag to reorder",
   "sidebar.reorderFailed": "Failed to save project order",
   "sidebar.noWorktrees": "No worktrees found",
   "sidebar.createWorktree": "Create Worktree",

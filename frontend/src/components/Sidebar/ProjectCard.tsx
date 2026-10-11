@@ -5,7 +5,7 @@ import { useAttention } from '../../hooks/useAttention'
 import type { Session, Project, Workspace } from '../../api/client'
 import { aggregateStatus, sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
-import { IconDragHandle, IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
+import { IconGitBranch, IconPlus, IconTrash, IconWarning } from '../FileManager/icons'
 import { CountBadge } from '../Common/CountBadge'
 import { GitBranchSprite } from '../PixelUI'
 import { DeleteButton, EditButton } from './RowActionButtons'
@@ -32,10 +32,12 @@ export function ProjectCard(props: {
   /** 聚焦闪烁中（cover-conflict「切换到现有项目」回执）：整卡 Y 轴弹跳 +
    *  accent ring，见 index.css .sidebar-project-focus-flash。 */
   flashing?: boolean
-  /** 拖拽源：整卡半透明并让出命中（elementFromPoint 需穿透它命中下方卡片）。 */
-  dragging?: boolean
-  /** 手柄 pointerdown：Sidebar 在此起拖（统一指针事件路径，鼠标/触摸通用）。 */
-  onDragHandlePointerDown?: (e: ReactPointerEvent) => void
+  /** 拽起中（长按起拖达成）：整卡上浮 + 硬投影放大 + accent 描边，
+   *  见 index.css .sidebar-project-lifted。 */
+  lifted?: boolean
+  /** 卡片头部 pointerdown：Sidebar 在此起步「长按起拖」判定（头部按钮除外）。
+   *  拖拽区即卡片头部——收起态整卡、展开态的标题条，收起/展开都可拖。 */
+  onHeaderPointerDown?: (e: ReactPointerEvent) => void
   onOpenCreateWorktree: () => void
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
@@ -93,26 +95,15 @@ export function ProjectCard(props: {
 
   return (
     <div
-      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}${props.dragging ? ' sidebar-project-dragging' : ''}`}
+      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}${props.lifted ? ' sidebar-project-lifted' : ''}`}
       data-proj-id={props.project.id}
     >
       {/* Project header — stacked name + path */}
       <div
         className="sidebar-project-header"
         onClick={() => props.onToggle()}
+        onPointerDown={(e) => props.onHeaderPointerDown?.(e)}
       >
-        {/* 拖拽手柄：pointerdown 起拖（阈值 4px 内移动不算拖，见 Sidebar
-            PROJ_DRAG_THRESHOLD_PX）；click 必须停冒泡——否则落点会被
-            header 的展开切换消费，拖完/点完卡片莫名展开/折叠。 */}
-        <span
-          className="sidebar-proj-drag-handle"
-          data-proj-drag-handle
-          title={t('sidebar.dragProject') ?? 'Drag to reorder'}
-          onPointerDown={(e) => props.onDragHandlePointerDown?.(e)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <IconDragHandle width={12} height={12} />
-        </span>
         <span
           className={projAgg === 'working' || projAgg === 'blocked' ? 'activity-pulse' : ''}
           style={{

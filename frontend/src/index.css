@@ -1239,48 +1239,32 @@ body.fm-dragging * {
 }
 
 /* ────────────────────────────────────────────────────────────────────
-   Project card drag-to-reorder — handle + drag state + insertion line.
+   Project card drag-to-reorder — long-press lift + insertion line.
    Pointer-events path (Sidebar): mouse and touch share one code path, so
-   the handle carries `touch-action: none` — a drag started on it belongs
-   to the drag, not to the list's scroll. Visuals follow the pixel style:
-   hard 2px accent line, no blur; handle reveals on header hover like the
-   row-action buttons (always visible on touch, which has no hover).
+   no HTML5 DnD. The drag area is the card header (a collapsed card is all
+   header) — no dedicated handle chrome. `pointer-events: none` on the
+   lifted card is load-bearing: elementFromPoint must resolve the card
+   underneath to compute the insertion point.
    ──────────────────────────────────────────────────────────────────── */
-.sidebar-proj-drag-handle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  align-self: stretch;
-  width: 12px;
-  margin: 0 2px 0 -2px;
-  color: var(--text-faint);
-  cursor: grab;
-  touch-action: none;
-  opacity: 0;
-  transition: opacity 0.1s steps(2);
-}
-.sidebar-project-header:hover .sidebar-proj-drag-handle,
-.sidebar-project-header:focus-within .sidebar-proj-drag-handle {
-  opacity: 1;
-}
-.sidebar-proj-drag-handle:hover {
-  color: var(--accent);
-}
-@media (pointer: coarse) {
-  .sidebar-proj-drag-handle {
-    opacity: 1;
-  }
-}
 
-/* Drag source: dimmed and transparent to hit-testing so elementFromPoint
-   resolves the card underneath (the insertion point), not the dragged one. */
-.sidebar-project-card.sidebar-project-dragging {
-  opacity: 0.4;
+/* 拽起：整卡上浮 + 硬投影放大 + accent 描边，z-index 抬升浮出相邻卡片。
+   transform/box-shadow 走 steps(2) 快照（像素风），无长补间——拖拽反馈
+   不能落后于指针。cursor:grabbing 不生效（pointer-events:none 让光标
+   取自下方卡片），省略。 */
+.sidebar-project-card.sidebar-project-lifted {
+  position: relative;
+  z-index: 2;
+  transform: translateY(-3px);
+  box-shadow: 6px 6px 0 var(--pixel-shadow);
+  border-color: var(--accent);
   pointer-events: none;
+  transition:
+    transform 0.1s steps(2),
+    box-shadow 0.1s steps(2),
+    border-color 0.1s steps(2);
 }
 
-/* Insertion line: sits in the 10px gap between cards (negative top margin
-   pulls it up so the list doesn't reflow while dragging). */
+/* 插入指示线：落在两卡之间的 2px accent 线（像素风硬色，无模糊） */
 .sidebar-project-drop-line {
   height: 2px;
   margin: -6px 10px 4px;

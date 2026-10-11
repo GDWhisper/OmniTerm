@@ -705,7 +705,7 @@ describe('Sidebar cover-conflict「切换到现有项目」聚焦', () => {
   })
 })
 
-describe('Sidebar 项目卡片拖拽排序', () => {
+describe('Sidebar 项目卡片拖拽排序（长按起拖）', () => {
   let container: HTMLDivElement
   let root: ReturnType<typeof createRoot>
 
@@ -726,7 +726,7 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     vi.mocked(api.listWorktrees).mockResolvedValue([])
     vi.mocked(api.listSessions).mockResolvedValue([])
     // 无活跃项目（不写 omniterm_active_project）：三张卡片默认折叠，
-    // 展开态不会干扰「拖拽不触发展开切换」的断言。
+    // 展开态不会干扰「拖拽不误触展开切换」的断言。
     useAppStore.setState({
       projects,
       worktrees: {},
@@ -772,8 +772,8 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     return container.querySelector(`.sidebar-project-card[data-proj-id="${id}"]`) as HTMLElement
   }
 
-  function handleOf(id: string): HTMLElement {
-    return cardOf(id).querySelector('[data-proj-drag-handle]') as HTMLElement
+  function headerOf(id: string): HTMLElement {
+    return cardOf(id).querySelector('.sidebar-project-header') as HTMLElement
   }
 
   function pointer(type: string, target: EventTarget, init: { clientX: number; clientY: number; button?: number }) {
@@ -782,27 +782,36 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     )
   }
 
-  it('拖 proj-1 手柄到 proj-2 下半区：落盘 ids = [proj-2, proj-1, proj-3] 且本地顺序同步', async () => {
+  /** 等长按达成（500ms + 余量）；真实计时器，不用假时钟。 */
+  function longPress() {
+    return new Promise((resolve) => setTimeout(resolve, 560))
+  }
+
+  it('长按 proj-1 头部拽起 → 移到 proj-2 下半区松手：落盘 ids = [proj-2, proj-1, proj-3]', async () => {
     await renderSidebar()
     const target = cardOf('proj-2')
     stubRect(target, 100, 40) // 中点 120：clientY 130 → 插到 proj-2 之后
 
-    pointer('pointerdown', handleOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    await longPress()
+    // 拽起态：整卡上浮 class；此时还没有插入点（未移到别的卡上）
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(true)
+    expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(0)
+
     pointer('pointermove', target, { clientX: 20, clientY: 130 })
-    // 拖拽进行中：插入指示线 + 拖动源半透明 class（React 批处理，等渲染落定）
+    // 插入指示线出现（React 批处理，等渲染落定）
     await vi.waitFor(() => {
       expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(1)
     })
-    expect(cardOf('proj-1').classList.contains('sidebar-project-dragging')).toBe(true)
     pointer('pointerup', target, { clientX: 20, clientY: 130 })
 
     await vi.waitFor(() => {
       expect(api.reorderProjects).toHaveBeenCalledWith(['proj-2', 'proj-1', 'proj-3'])
     })
     expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-2', 'proj-1', 'proj-3'])
-    // 松手后拖拽态清空（指示线/半透明摘除）
+    // 松手后拽起态清空（上浮 class / 指示线摘除）
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
     expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(0)
-    expect(cardOf('proj-1').classList.contains('sidebar-project-dragging')).toBe(false)
   })
 
   it('上半区插入点在目标之前', async () => {
@@ -810,7 +819,8 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     const target = cardOf('proj-1')
     stubRect(target, 100, 40) // 中点 120：clientY 110 → 插到 proj-1 之前
 
-    pointer('pointerdown', handleOf('proj-3'), { clientX: 4, clientY: 4 })
+    pointer('pointerdown', headerOf('proj-3'), { clientX: 4, clientY: 4 })
+    await longPress()
     pointer('pointermove', target, { clientX: 20, clientY: 110 })
     pointer('pointerup', target, { clientX: 20, clientY: 110 })
 
@@ -820,37 +830,60 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-3', 'proj-1', 'proj-2'])
   })
 
-  it('起拖阈值内的抖动不算拖：不请求、不重排', async () => {
+  it('长按达成前移动（>10px）即取消：不拽起、不请求、不重排', async () => {
     await renderSidebar()
-    pointer('pointerdown', handleOf('proj-1'), { clientX: 4, clientY: 4 })
-    pointer('pointermove', cardOf('proj-2'), { clientX: 6, clientY: 7 }) // < 4px
-    pointer('pointerup', cardOf('proj-2'), { clientX: 6, clientY: 7 })
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointermove', headerOf('proj-1'), { clientX: 40, clientY: 4 }) // 滚动 / 点击拖动
+    await longPress()
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
 
+    pointer('pointerup', headerOf('proj-1'), { clientX: 40, clientY: 4 })
     expect(api.reorderProjects).not.toHaveBeenCalled()
     expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-1', 'proj-2', 'proj-3'])
   })
 
-  it('拖拽与手柄点击都不触发展开切换（补发 click 被抑制）', async () => {
+  it('长按原样松手 = 慢速点击：不重排，展开切换照常兑现', async () => {
     await renderSidebar()
-    // 纯点击手柄：pointerdown + 原位 click（浏览器对同元素 down/up 补发 click，
-    // 目标为手柄——handle 上的 stopPropagation 拦住)
-    pointer('pointerdown', handleOf('proj-1'), { clientX: 4, clientY: 4 })
-    handleOf('proj-1').click()
-    // 起点在手柄、终点漂到卡片名：浏览器补发的 click 目标是二者的公共祖先
-    // （header）——靠 projHandleDownAtRef 时间戳抑制，不能演变成展开切换
-    pointer('pointerdown', handleOf('proj-2'), { clientX: 4, clientY: 4 })
-    cardOf('proj-2').querySelector('.sidebar-project-header')!.dispatchEvent(
-      new MouseEvent('click', { bubbles: true }),
-    )
-    // 拖拽后松手落在别处：click 目标为公共祖先（列表容器），header 不消费
-    const target = cardOf('proj-3')
-    stubRect(target, 100, 40)
-    pointer('pointerdown', handleOf('proj-3'), { clientX: 4, clientY: 4 })
-    pointer('pointermove', target, { clientX: 20, clientY: 130 })
-    pointer('pointerup', target, { clientX: 20, clientY: 130 })
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    await longPress()
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(true)
+    // 未移到别的卡上：松手不记抑制时间戳，浏览器补发的 click 必须能展开卡片
+    pointer('pointerup', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    headerOf('proj-1').dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
-    expect(container.querySelector('.sidebar-project-body')).toBeNull()
-    expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-1', 'proj-2', 'proj-3'])
+    expect(api.reorderProjects).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(container.querySelector('.sidebar-project-body')).toBeTruthy()
+    })
+  })
+
+  it('真拖拽后补发的 click 被抑制：不误触展开切换', async () => {
+    await renderSidebar()
+    const other = cardOf('proj-2')
+    stubRect(other, 100, 40)
+
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    await longPress()
+    pointer('pointermove', other, { clientX: 20, clientY: 130 }) // 拽到过别的卡
+    pointer('pointermove', headerOf('proj-1'), { clientX: 20, clientY: 4 }) // 又移回自己
+    // 松手落回原卡片头部：浏览器补发的 click 目标 = 该头部，必须被抑制
+    pointer('pointerup', headerOf('proj-1'), { clientX: 20, clientY: 4 })
+    headerOf('proj-1').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+    expect(api.reorderProjects).not.toHaveBeenCalled() // 插入点已摘除，无重排
+    expect(container.querySelector('.sidebar-project-body')).toBeNull() // 但也不展开
+  })
+
+  it('按住头部动作按钮不起拖（按钮 pointerdown 被过滤）', async () => {
+    await renderSidebar()
+    const renameBtn = [...headerOf('proj-1').querySelectorAll('button')].find(
+      (b) => b.getAttribute('title') === 'Rename',
+    ) as HTMLElement
+    expect(renameBtn).toBeTruthy()
+    pointer('pointerdown', renameBtn, { clientX: 4, clientY: 4 })
+    await longPress()
+
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
   })
 
   it('落盘失败：回滚到原顺序', async () => {
@@ -859,7 +892,8 @@ describe('Sidebar 项目卡片拖拽排序', () => {
     const target = cardOf('proj-2')
     stubRect(target, 100, 40)
 
-    pointer('pointerdown', handleOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    await longPress()
     pointer('pointermove', target, { clientX: 20, clientY: 130 })
     pointer('pointerup', target, { clientX: 20, clientY: 130 })
 
