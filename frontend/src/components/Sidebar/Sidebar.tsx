@@ -43,10 +43,14 @@ import { READER_FONT } from '../../utils/fonts'
  *  .sidebar-project-focus-flash ring 动画时长一致，到期摘 class）。 */
 const PROJECT_CARD_FLASH_MS = 1200
 
-/** 长按起拖时长（与终端 paste 菜单 / 会话行菜单同范式 500ms）。 */
+/** 鼠标/笔起拖阈值：按下后移动超过该距离立即起拖（无需长按）。 */
+const PROJ_DRAG_THRESHOLD_PX = 4
+
+/** 触摸长按起拖时长（触摸要与列表滚动区分，长按是移动端排序的通行范式；
+ *  鼠标/笔不需要——立即起拖更直觉）。 */
 const PROJ_LONG_PRESS_MS = 500
 
-/** 长按达成前指针漂移超过该值即取消起拖（滚动 / 普通点击拖动不算长按）。 */
+/** 触摸长按达成前指针漂移超过该值即取消起拖（滚动 / 点击拖动不算长按）。 */
 const PROJ_LONG_PRESS_CANCEL_PX = 10
 
 /** 拖拽达成后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
@@ -57,9 +61,11 @@ interface ProjDragState {
   id: string
   startX: number
   startY: number
-  /** 长按达成（卡片已拽起）；false = 仍在长按等待窗内 */
+  /** 'touch' 走长按起拖；'mouse' / 'pen' 移动超阈值即起拖 */
+  pointerType: string
+  /** 起拖达成（卡片已拽起）；false = 仍在等待窗内 */
   active: boolean
-  /** 本次长按是否真的拽到过别的卡片（有过插入点）——区分「拖拽」与「慢速点击」 */
+  /** 本次拖拽是否真的拽到过别的卡片（有过插入点）——区分「拖拽」与普通点击 */
   engaged: boolean
   /** 当前插入点所在卡片；'' = 无（悬停在自己头上或列表外） */
   overId: string
@@ -147,6 +153,11 @@ export function Sidebar() {
     before: boolean
   } | null>(null)
   const projDragRef = useRef<ProjDragState | null>(null)
+  // 拽起卡的 DOM 引用：跟随指针的 transform 在此直写。pointermove 是高频事件，
+  // 每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖——与 turnClock
+  // 每秒读数直写 DOM、抽屉拖拽直改宽度同一手法。React 只管理 lifted class
+  // 与插入线（目标变化才动），不管理 transform，故松手时须手动清空。
+  const draggedElRef = useRef<HTMLElement | null>(null)
   // 拖拽达成时间戳：抑制其后续补发的 header click。浏览器把 down/up 的最近
   // 公共祖先作为 click 目标——起点在某张卡头部、终点漂到别的卡时 click 落在
   // 原头部，不抑制会演变成展开切换（SessionRow 长按补发 click 同款手法）。
@@ -563,6 +574,16 @@ export function Sidebar() {
     [setProjects, addToast, t],
   )
 
+  /** 起拖达成：记 DOM 引用（跟随指针用）+ 上浮 class + 触觉反馈。 */
+  const activateProjDrag = useCallback((st: ProjDragState) => {
+    st.active = true
+    // 项目 id 为后端 uuid，不含选择器元字符，属性选择器无需转义
+    // （focusProjectCard 的滚动定位同款假设）。
+    draggedElRef.current = document.querySelector<HTMLElement>(`[data-proj-id="${st.id}"]`)
+    hapticTap()
+    setProjDrag({ draggingId: st.id, overId: '', before: true })
+  }, [])
+
   // window 级指针监听：projDragRef 为空时纯读引用即返回，零成本；订阅随
   // 组件卸载摘除。目标卡片定位优先 elementFromPoint——触摸指针有隐式
   // capture，e.target 会停在按下处的卡片上命中不了别的卡；jsdom 无布局
@@ -585,20 +606,31 @@ export function Sidebar() {
     const onMove = (e: PointerEvent) => {
       const st = projDragRef.current
       if (!st) return
+      const dx = e.clientX - st.startX
+      const dy = e.clientY - st.startY
       if (!st.active) {
-        // 长按达成前的移动 = 滚动 / 普通点击拖动：取消本次起拖（不进入拽起态）
-        const dx = e.clientX - st.startX
-        const dy = e.clientY - st.startY
-        if (dx * dx + dy * dy > PROJ_LONG_PRESS_CANCEL_PX * PROJ_LONG_PRESS_CANCEL_PX) {
-          clearPending(st)
-          projDragRef.current = null
+        if (st.pointerType === 'touch') {
+          // 触摸：长按达成前的移动 = 滚动 / 点击拖动，取消本次起拖
+          if (dx * dx + dy * dy > PROJ_LONG_PRESS_CANCEL_PX * PROJ_LONG_PRESS_CANCEL_PX) {
+            clearPending(st)
+            projDragRef.current = null
+          }
+          return
         }
-        return
+        // 鼠标/笔：超过阈值立即起拖（不做长按等待）
+        if (dx * dx + dy * dy < PROJ_DRAG_THRESHOLD_PX * PROJ_DRAG_THRESHOLD_PX) return
+        activateProjDrag(st)
       }
+      // 跟随指针：transform 直写（见 draggedElRef 注释——不走 React）。
+      // scale(1.02) 是「捏在手里」的放大暗示，与投影/描边同向加强。
+      if (draggedElRef.current) {
+        draggedElRef.current.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`
+      }
+      // 插入点判定：命中卡是「被拽起卡下方」的那张（拽起卡 pointer-events:none）
       const card = cardAtPoint(e.clientX, e.clientY, e.target)
       const overId = card?.dataset.projId
       if (!overId || overId === st.id) {
-        // 悬停在自己头上 / 移出列表：摘插入点，卡片保持拽起态
+        // 悬停在自己头上 / 移出列表：摘插入点，卡片保持被拽起
         if (st.overId !== '') {
           st.overId = ''
           setProjDrag({ draggingId: st.id, overId: '', before: true })
@@ -617,11 +649,15 @@ export function Sidebar() {
       const st = projDragRef.current
       projDragRef.current = null
       clearPending(st)
+      // 跟随 transform 必须手动清：React 不管这个元素的 transform，不清会残留偏移
+      if (draggedElRef.current) {
+        draggedElRef.current.style.transform = ''
+        draggedElRef.current = null
+      }
       setProjDrag(null)
       // 只有真的拽到过别的卡片才算一次拖拽：记时间戳抑制补发的 click（浏览器
       // 把 down/up 的公共祖先作为 click 目标，落回原卡片头部时会误触展开切换）。
-      // 长按后原样松手不算拖——不记时间戳，随后的 click 照常展开卡片
-      // （pointerdown 已 preventDefault，慢速点击靠原生 click 兑现）。
+      // 原地按下松手 / 触摸长按原样松手不算拖——click 照常展开卡片。
       if (st?.active && st.engaged) {
         projPressAtRef.current = Date.now()
         if (st.overId !== '') commitProjectReorder(st.id, st.overId, st.before)
@@ -635,20 +671,21 @@ export function Sidebar() {
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
     }
-  }, [commitProjectReorder])
+  }, [commitProjectReorder, activateProjDrag])
 
   const handleProjHeaderPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
     if (e.button !== 0) return // 仅左键 / 触摸（触摸 pointerdown 的 button 为 0）
     // 头部动作按钮（worktree / rename / delete / repair）的 pointerdown 会冒泡
-    // 到 header——就近过滤，按住它们不起拖（否则 500ms 后卡片被拽起，按钮点击
-    // 反而被拖拽语义吃掉）。
+    // 到 header——就近过滤，按住它们不起拖（否则卡片被拽起，按钮点击反而被
+    // 拖拽语义吃掉）。
     if ((e.target as HTMLElement).closest('button')) return
-    // 阻止文本选中与焦点抢占（长按拖动期间尤其明显）
+    // 阻止文本选中与焦点抢占（拖动期间尤其明显）
     e.preventDefault()
     const st: ProjDragState = {
       id: projectId,
       startX: e.clientX,
       startY: e.clientY,
+      pointerType: e.pointerType,
       active: false,
       engaged: false,
       overId: '',
@@ -656,14 +693,16 @@ export function Sidebar() {
       timer: null,
     }
     projDragRef.current = st
-    st.timer = window.setTimeout(() => {
-      st.timer = null
-      if (projDragRef.current !== st) return // 已取消 / 已松手
-      st.active = true
-      hapticTap() // 拽起反馈（移动端触觉；桌面 / 关闭触觉时 no-op）
-      setProjDrag({ draggingId: st.id, overId: '', before: true })
-    }, PROJ_LONG_PRESS_MS)
-  }, [])
+    // 触摸才需要长按：手指一滑浏览器就滚列表，立即起拖会和滚动抢手势。
+    // 鼠标/笔没有这个歧义，移动超阈值即起拖（长按反而反直觉）。
+    if (st.pointerType === 'touch') {
+      st.timer = window.setTimeout(() => {
+        st.timer = null
+        if (projDragRef.current !== st) return // 已取消 / 已松手
+        activateProjDrag(st)
+      }, PROJ_LONG_PRESS_MS)
+    }
+  }, [activateProjDrag])
 
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {

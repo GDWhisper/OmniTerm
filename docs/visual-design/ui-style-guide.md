@@ -545,18 +545,19 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 
 间距整体比 `.file-markdown` 紧一档（气泡窄、密度优先）。**流式期仍是 pre-wrap 纯文本降级**（未闭合语法下每帧全量解析的代价），排版规则只对定稿渲染生效；代码块圆角/配色走 MarkdownCore 的 props 与 Prism oneDark，不在此节。
 
-### 7.7 拖拽排序视觉（长按拽起 `.sidebar-project-lifted` / 插入线 `.sidebar-project-drop-line`）
+### 7.7 拖拽排序视觉（鼠标立即起拖 / 触摸长按，卡片跟随指针）
 
-侧栏项目卡片拖拽换序（交互契约见 frontend-patterns「列表拖拽排序」）：**无独立手柄**——长按卡片头部 500ms 起拖（收起态整卡即头部、展开态是标题条），达成时 `hapticTap()` + 下列拽起特效：
+侧栏项目卡片拖拽换序（交互契约见 frontend-patterns「列表拖拽排序」）：**无独立手柄**——起拖区即卡片头部（收起态整卡即头部、展开态是标题条）；**鼠标/笔移动超 4px 立即起拖**，**触摸长按 500ms**（与列表滚动消歧）。起拖达成时 `hapticTap()` + 下列拽起特效：
 
 | 元素 | 规格 |
 |---|---|
-| 拽起 `.sidebar-project-lifted` | 整卡 `transform: translateY(-3px)` 上浮；硬投影由 `3px 3px 0` 放大到 `6px 6px 0 var(--pixel-shadow)`（§6 硬投影约定，不加 blur）；`border-color` 转 `--accent`；`position: relative; z-index: 2` 抬升浮出相邻卡片 |
-| 拽起的 `pointer-events: none` | **命中判定前提，不是装饰**：`elementFromPoint` 必须穿透拽起卡命中下方卡片才能算插入点。副作用：光标取自下方卡片，故不设 `grabbing` 光标 |
-| 拽起过渡 | `transform`/`box-shadow`/`border-color` 各 `0.1s steps(2)` 快照（像素风）；只在拽起/落下各播一次，拖拽中卡片不随指针移动，无长补间 |
+| 起拖 | **鼠标/笔**：移动超 4px 立即起拖（无长按）；**触摸**：长按 500ms（与列表滚动消歧，移动端通行范式）。起拖区 = 卡片头部，无独立手柄 |
+| 拽起 `.sidebar-project-lifted` | 硬投影由 `3px 3px 0` 放大到 `6px 6px 0 var(--pixel-shadow)`（§6 硬投影约定，不加 blur）；`border-color` 转 `--accent`；`position: relative; z-index: 2` 抬升浮出相邻卡片；`will-change: transform` |
+| 跟随指针 | 每拍 pointermove 直写行内 `transform: translate(dx, dy) scale(1.02)`——卡片跟着指针走（dx/dy 自按下点累计，抓住的点始终在指针下）；scale 1.02 是「捏在手里」的放大暗示。**class 的 transition 不含 transform**：跟随零延迟，补间会让卡片落后于指针；shadow/border 仍走 `0.1s steps(2)` 快照 |
+| 拽起的 `pointer-events: none` | **命中判定前提，不是装饰**：`elementFromPoint` 必须穿透跟随中的卡片命中下方卡片才能算插入点。副作用：光标取自下方卡片，故不设 `grabbing` 光标 |
 | 插入指示线 `.sidebar-project-drop-line` | 两卡之间 2px `--accent` 硬线（无 blur、无渐变）；`margin: -6px 10px 4px` 负边距落在卡片 10px gap 内——拖拽中不引起布局跳动；`pointer-events: none` 不抢命中；即时出现/消失（拖拽反馈零延迟，不跟补间） |
 
-**「in hand」语义**：拽起的卡保持完全不透明（不是半透明置灰）——用户要清楚地看见「是哪张卡被我捏在手里」；插入线回答「松手会落到哪」。
+**「in hand」语义**：被拽起的卡保持完全不透明（不是半透明置灰）+ 跟随指针——用户清楚地看见「哪张卡被我捏在手里、此刻在哪」；插入线回答「松手会落到哪」。松手时行内 transform 清空（React 不管该属性，须手动），卡片落定新序。
 
 ---
 

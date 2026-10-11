@@ -1247,19 +1247,21 @@ body.fm-dragging * {
    underneath to compute the insertion point.
    ──────────────────────────────────────────────────────────────────── */
 
-/* 拽起：整卡上浮 + 硬投影放大 + accent 描边，z-index 抬升浮出相邻卡片。
-   transform/box-shadow 走 steps(2) 快照（像素风），无长补间——拖拽反馈
-   不能落后于指针。cursor:grabbing 不生效（pointer-events:none 让光标
-   取自下方卡片），省略。 */
+/* 拽起：硬投影放大 + accent 描边 + z-index 抬升，浮出相邻卡片。
+   transform 不在这里设——跟随指针的 translate/scale 由 Sidebar 在
+   pointermove 里直写到行内 style（高频，不走 React；React 也不管理该属性，
+   松手时手动清空）。故 transition 不含 transform：跟随必须零延迟，补间会
+   让卡片落后于指针。pointer-events:none 是命中判定前提（elementFromPoint
+   必须穿透它命中下方卡片），不是装饰；副作用是光标取自下方卡片，故不设
+   grabbing 光标。 */
 .sidebar-project-card.sidebar-project-lifted {
   position: relative;
   z-index: 2;
-  transform: translateY(-3px);
   box-shadow: 6px 6px 0 var(--pixel-shadow);
   border-color: var(--accent);
   pointer-events: none;
+  will-change: transform;
   transition:
-    transform 0.1s steps(2),
     box-shadow 0.1s steps(2),
     border-color 0.1s steps(2);
 }
