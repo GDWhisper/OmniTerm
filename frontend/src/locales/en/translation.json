@@ -555,6 +555,7 @@
   "auth.password": "Password",
   "auth.wrongPassword": "Wrong password",
   "auth.loginFailed": "Login failed",
+  "auth.rateLimited": "Too many attempts. Try again later.",
   "auth.loggedIn": "LOGGED IN",
   "auth.logout": "LOGOUT",
   "auth.changePassword": "CHANGE PASSWORD",

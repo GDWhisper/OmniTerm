@@ -159,6 +159,80 @@ describe('AuthSection local access + username', () => {
     expect(useAppStore.getState().authState).toBe('authenticated')
   })
 
+  /** 改密码区块的三个输入框（id 定位：其 current-password 的 placeholder 与
+   *  改用户名区块重复，按 placeholder 做 querySelector 会取错节点）。 */
+  const pwField = (id: 'current' | 'new' | 'confirm') =>
+    container.querySelector<HTMLInputElement>(`#auth-change-password-${id}`)!
+
+  it('changes the password, shows success and clears the fields', async () => {
+    vi.mocked(api.getAuthSettings).mockResolvedValue(SETTINGS)
+    vi.mocked(api.changePassword).mockResolvedValue(undefined)
+    await mount()
+
+    setInputValue(pwField('current'), 'old')
+    setInputValue(pwField('new'), 'abcd')
+    setInputValue(pwField('confirm'), 'abcd')
+    await click(buttonByText(i18n.t('auth.changePassword'))!)
+
+    await vi.waitFor(() => {
+      expect(api.changePassword).toHaveBeenCalledWith('old', 'abcd')
+    })
+    expect(container.textContent).toContain(i18n.t('auth.passwordChanged'))
+    expect(pwField('new').value).toBe('')
+  })
+
+  it('rejects short or mismatched new passwords locally without calling the API', async () => {
+    vi.mocked(api.getAuthSettings).mockResolvedValue(SETTINGS)
+    await mount()
+
+    // 长度不足：共享下限（MIN_PASSWORD_LEN）与 AuthPage setup 一致
+    setInputValue(pwField('current'), 'old')
+    setInputValue(pwField('new'), 'abc')
+    setInputValue(pwField('confirm'), 'abc')
+    await click(buttonByText(i18n.t('auth.changePassword'))!)
+    expect(container.textContent).toContain(i18n.t('auth.passwordTooShort'))
+    expect(api.changePassword).not.toHaveBeenCalled()
+
+    // 两次输入不一致
+    setInputValue(pwField('new'), 'abcd')
+    setInputValue(pwField('confirm'), 'abce')
+    await click(buttonByText(i18n.t('auth.changePassword'))!)
+    expect(container.textContent).toContain(i18n.t('auth.passwordMismatch'))
+    expect(api.changePassword).not.toHaveBeenCalled()
+  })
+
+  it('maps a 429 from change-password to the retry-later message', async () => {
+    vi.mocked(api.getAuthSettings).mockResolvedValue(SETTINGS)
+    vi.mocked(api.changePassword).mockRejectedValue({ status: 429 })
+    await mount()
+
+    setInputValue(pwField('current'), 'old')
+    setInputValue(pwField('new'), 'abcd')
+    setInputValue(pwField('confirm'), 'abcd')
+    await click(buttonByText(i18n.t('auth.changePassword'))!)
+
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(i18n.t('auth.rateLimited'))
+    })
+    expect(container.textContent).not.toContain(i18n.t('auth.wrongPassword'))
+    expect(api.changePassword).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects an invalid new username locally without calling the API', async () => {
+    vi.mocked(api.getAuthSettings).mockResolvedValue(SETTINGS)
+    await mount()
+
+    setInputValue(container.querySelector<HTMLInputElement>('#auth-change-username-pw')!, 'pw')
+    setInputValue(
+      container.querySelector<HTMLInputElement>('#auth-change-username-new')!,
+      'a'.repeat(33),
+    )
+    await click(buttonByText(i18n.t('auth.changeUsername'))!)
+
+    expect(container.textContent).toContain(i18n.t('auth.invalidUsername'))
+    expect(api.changeUsername).not.toHaveBeenCalled()
+  })
+
   it('degrades to the master switch only when the settings read fails', async () => {
     vi.mocked(api.getAuthSettings).mockRejectedValue(new Error('boom'))
     await mount()
@@ -186,6 +260,7 @@ describe('AuthSection local access + username', () => {
       'auth.localAuthHintOn',
       'auth.localAuthHintOff',
       'auth.localAuthUpdateFailed',
+      'auth.rateLimited',
     ]
     for (const k of keys) {
       expect(enMap[k], k).toBeTruthy()

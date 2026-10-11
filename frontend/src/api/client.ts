@@ -368,35 +368,42 @@ export const api = {
       { silent: opts?.silent ?? true },
     ),
 
-  // Auth — public endpoints where a 401/409 is a business error (wrong
-  // password / user already exists), never an expired session, so the
-  // caller must handle it locally without triggering the logout redirect.
+  // Auth — 认证类端点的失败由调用方就地展示（表单内联文案 / 静默降级），
+  // 故统一 `silent`：避免同一次失败被全局 toast 再报一遍，或把裸 `HTTP 429`
+  // 抛给用户。`noAuthRedirect` 把 401 当业务错误（密码错误）而非会话过期——
+  // change-password / change-username 虽在受保护路由上，401 同样交表单展示。
   // Username is the single account's custom label (default `admin`, backend
   // authoritative for normalization); it is required on screen, and the
   // backend falls back to `admin` when omitted by scripts.
   setup: (username: string, password: string) =>
-    request('/auth/setup', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
+    request('/auth/setup', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true, silent: true }),
   login: (username: string, password: string) =>
-    request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true }),
-  logout: () => request('/auth/logout', { method: 'POST' }),
+    request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }), noAuthRedirect: true, silent: true }),
+  /** 失败由 handleLogout 忽略（本地登出照常进行）。 */
+  logout: () => request('/auth/logout', { method: 'POST', silent: true }),
   /** `local_bypass` = the request hit the loopback bypass (only when local
    *  verification is disabled); absent/false otherwise. */
   check: () =>
-    request<{ authenticated: boolean; needs_setup?: boolean; auth_enabled?: boolean; local_bypass?: boolean }>('/auth/check'),
+    request<{
+      authenticated: boolean
+      needs_setup?: boolean
+      auth_enabled?: boolean
+      local_bypass?: boolean
+    }>('/auth/check', { silent: true }),
   /** Auth settings mirror: master switch + local-access verification + the
    *  account's current username (`null` when no user row exists yet). */
   getAuthSettings: () =>
-    request<AuthSettings>('/auth/settings'),
+    request<AuthSettings>('/auth/settings', { silent: true }),
   /** Partial update — omitted fields keep their stored value (backend 400s
    *  when both are missing). */
   setAuthSettings: (update: { auth_enabled?: boolean; local_auth_required?: boolean }) =>
-    request('/auth/settings', { method: 'POST', body: JSON.stringify(update) }),
+    request('/auth/settings', { method: 'POST', body: JSON.stringify(update), silent: true }),
   changePassword: (currentPassword: string, newPassword: string) =>
-    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }), noAuthRedirect: true }),
+    request('/auth/change-password', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }), noAuthRedirect: true, silent: true }),
   /** Renames the account and bumps the token version server-side (all old
    *  sessions are revoked) — the caller must re-enter the login flow. */
   changeUsername: (currentPassword: string, newUsername: string) =>
-    request('/auth/change-username', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_username: newUsername }), noAuthRedirect: true }),
+    request('/auth/change-username', { method: 'POST', body: JSON.stringify({ current_password: currentPassword, new_username: newUsername }), noAuthRedirect: true, silent: true }),
 
   // Projects (formerly workspaces)
   listProjects: () => request<Project[]>('/projects'),
