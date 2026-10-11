@@ -51,6 +51,7 @@
 | 账号标识 | ✅ `users.username`（默认 `admin`）写入 JWT `sub`，可自定义（改名撤销旧 token） |
 | 本地免密 | ✅ 四条件纯函数判据（`src/auth/local_access.rs`），默认关闭（`local_auth_required=1`） |
 | 登录防爆破 | ✅ LoginGuard 限流 |
+| 登录审计留痕 | ✅ 成功类（登录/设置密码/登出/改密/改名）全记 + 限流触发记一条（2026-10-11，计划 `docs/dev/plans/2026-10-11-auth-audit-logging.md`） |
 | WS CSWSH 防护 | ✅ 三主 WS 入口 + 代理 WS relay（路径前缀与子域名两条路径）统一 `origin_matches_host`（host 一致性比对；无 Origin / 无 Host 放行，畸形 Origin 403） |
 | CORS 跨源读取 | ✅ 默认仅同源 + 显式白名单 `OMNITERM_CORS_ALLOWED_ORIGINS`（2026-09-26）；反代改写 `Host` 的部署需显式配置 |
 | 高危暴露预警 | ✅ 非回环 + auth 关闭时**拒绝启动**（fail-closed，2026-09-26；逃生门 `--insecure-no-auth`） |

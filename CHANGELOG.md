@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-11 15:10) `[backend]` `[frontend]` `[api]` 登录审计留痕（成功类全记 + 限流触发一条）：登录相关事件此前无任何持久记录（审计表无 auth 动作、auth 链路零 tracing，唯一痕迹是内存限流计数——成功即清空、重启即丢、不可检索）。现接入 `audit_log` 既有有界机制（1000 条滚动 + 字段级上限），新增 6 个动作：`auth_login` / `auth_setup` / `auth_logout` / `auth_password_change` / `auth_username_change`（成功类，target = 当时账号名；改名事件 target 为新名、detail 记旧名）与 `auth_rate_limited`（唯一失败类：凭据失败**首次**达到 5 次 / 5 分钟阈值时经 `LoginGuard::record_failure` 的新返回值去重上报，每 IP 每窗口 ≤1 条）。三条防滥用的关键决策：`/auth/logout` 是公开端点，仅当携带**有效 token**（校验在 `token_version + 1` 之前）才记；逐次登录失败刻意不记（公开端点写放大，且可被无认证请求刷穿滚动上限、冲掉整张台账）；`auth_rate_limited` 的去重使公开的 `/auth/login` 无法以无认证流量灌审计。前端 `AuditActionName` / `ACTION_KEYS` / 双 locale 同步（设置 → 安全审计日志新增 6 类动作标签；`Record<AuditActionName, string>` 穷举使漏改即 tsc 失败）（`src/api/audit.rs`、`src/api/auth.rs`、`src/auth/rate_limit.rs`、`frontend/src/api/client.ts`、`frontend/src/components/Settings/AuditLogSection.tsx`、双 locale；回归 `auth_success_paths_leave_audit_rows`、`rate_limited_threshold_records_one_audit_row_and_429_does_not_repeat`、`only_the_threshold_crossing_failure_is_reported` + AuditLogSection 两例）
+
 ### Fixed
 
 - (2026-10-11 07:55) `[frontend]` 修复新建项目撞已有路径（409 覆盖冲突）时点「切换到现有项目」侧栏零反馈的问题：原按钮只做 `setActiveProject` + 关窗 + toast，而侧栏没有任何「活跃项目」视觉态（`ProjectCard` 不读 `activeProjectId`），用户看到的就是「窗口关了、什么都没发生」。现在切换后目标项目卡片在侧栏**聚焦**：折叠态先展开（与手动展开同口径加载 worktree/会话）→ 滚动进视口 → 整卡 Y 轴弹跳 + accent ring 闪烁 1.2s（像素 steps 动画复用 `mario-jump`，ring 复用 `chat-msg-flash` 同款 spread 无 blur 描边；重复触发时先摘 class 下一帧重挂以重放动画，`ChatView`「上次输入」聚焦同款手法）。激活语义不变（`frontend/src/components/Sidebar/Sidebar.tsx`、`CreateProjectModal.tsx`、`ProjectCard.tsx`、`index.css`，回归见 `Sidebar.test.tsx` 409→切换→闪烁用例与 `ProjectCard.test.tsx` 契约用例）

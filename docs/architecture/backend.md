@@ -444,6 +444,14 @@ files 侧 scope 记 **id 而非路径**：worktree 会移动、session cwd 会�
 | git push | `api/git.rs::git_push` | `git_push` | `repo:<root>` |
 | agent 增/改/删 | `api/agents.rs` 三个 handler | `agent_create` / `agent_update` / `agent_delete` | `agents` |
 | 代理端口首访 | `proxy/mod.rs::dispatch_proxy` | `proxy_access` | `proxy_port:<port>` |
+| 登录成功 | `api/auth.rs::login` | `auth_login` | 无（target = 账号名） |
+| 设置密码 | `api/auth.rs::setup` | `auth_setup` | 同上 |
+| 登出（仅有效 token） | `api/auth.rs::logout` | `auth_logout` | 同上 |
+| 修改密码 | `api/auth.rs::change_password` | `auth_password_change` | 同上 |
+| 修改用户名 | `api/auth.rs::change_username` | `auth_username_change` | 同上（detail 记旧名） |
+| 登录限流触发 | `api/auth.rs::reject_bad_credentials` | `auth_rate_limited` | 每 IP 每窗口 ≤1 条 |
+
+**auth 类动作的三条决策**（2026-10-11，见 `docs/dev/plans/2026-10-11-auth-audit-logging.md`）：① 成功类 target 一律写当时账号名——`auth_username_change` 写新名、detail 记旧名（单账号下 target 回答「谁登录 / 哪个账号被改动」）；② `auth_logout` 仅当请求携带**有效 token** 才记——`/auth/logout` 是公开端点（无 `require_auth_mw`），无条件记录会让攻击者用 1000 次无认证请求刷穿滚动上限、冲掉整张台账；校验在 `token_version + 1` 之前执行（bump 后旧 token 立即失效）；③ `auth_rate_limited` 是**唯一失败类动作**——不是逐次失败，而是 `LoginGuard::record_failure` 返回「失败计数首次到达阈值」的聚合信号，写入频率被钉在每 IP 每窗口 ≤1 条；逐次登录失败刻意不记（公开端点写放大，且同样可被无认证灌量，见该计划「不纳入范围」）。
 
 **读操作刻意不审**：热路径（list/read/search）每次请求都写一条是纯写放大，且「谁看过什么」对事后追查的增量价值远低于「谁改了什么」。
 
