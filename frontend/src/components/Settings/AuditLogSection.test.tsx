@@ -121,6 +121,8 @@ describe('AuditLogSection（安全审计日志只读区块）', () => {
     for (const k of keys) {
       expect((en as Record<string, string>)[k], `en:${k}`).toBeTruthy()
       expect((zh as Record<string, string>)[k], `zh:${k}`).toBeTruthy()
+      // en 侧不得混入中文（防未来误填回退成「坏文案」）
+      expect((en as Record<string, string>)[k], `en:${k}`).not.toMatch(/[\u4e00-\u9fff]/)
     }
   })
 

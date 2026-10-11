@@ -167,10 +167,8 @@ async fn setup(
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let token = auth::create_token(&state.jwt_secret, ver, &username)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
-
+    // 计划 D4：审计落在「账号已建、session 未签发」的窗口——若 create_token
+    // 失败（理论分支），「已建号」事件不会零留痕。
     audit::record(
         &state.db,
         &AuditContext::from_ip(Some(addr.ip()), None),
@@ -179,6 +177,11 @@ async fn setup(
         None,
     )
     .await;
+
+    let token = auth::create_token(&state.jwt_secret, ver, &username)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
+
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
