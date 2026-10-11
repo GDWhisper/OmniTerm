@@ -408,13 +408,17 @@ fn resolve_jwt_secret(explicit: Option<String>, suffix: &str) -> anyhow::Result<
     let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4()).replace('-', "");
     match write_secret_file(&path, &secret) {
         Ok(()) => Ok(secret),
-        // Lost a race with a concurrent process that just created the file — reuse it.
+        // 文件已存在：正常竞态（另一进程刚落盘）→ 复用其密钥；空文件（被截断 /
+        // 磁盘故障遗留）→ 覆盖重写新密钥。密钥更换使旧 token 全部失效（重新登录
+        // 即可），优于因一个空文件拒绝启动。
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             let s = std::fs::read_to_string(&path)?.trim().to_string();
             if s.is_empty() {
-                anyhow::bail!("jwt secret file {} is empty", path);
+                overwrite_secret_file(&path, &secret)?;
+                Ok(secret)
+            } else {
+                Ok(s)
             }
-            Ok(s)
         }
         Err(e) => Err(e.into()),
     }
@@ -479,6 +483,26 @@ fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
 fn write_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
     use std::io::Write;
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
+}
+
+/// 覆盖重写一个已存在（但为空/损坏）的密钥文件——仅由 [`resolve_jwt_secret`]
+/// 的空文件恢复路径调用。unix 下强制权限回 0600。
+#[cfg(unix)]
+fn overwrite_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = std::fs::OpenOptions::new().write(true).truncate(true).open(path)?;
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    f.write_all(secret.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn overwrite_secret_file(path: &str, secret: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::File::create(path)?;
     f.write_all(secret.as_bytes())?;
     Ok(())
 }
@@ -1290,6 +1314,26 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue, header};
     use tower::ServiceExt;
     use tower_http::cors::CorsLayer;
+
+    #[cfg(unix)]
+    #[test]
+    fn overwrite_secret_file_rewrites_empty_file_with_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        // 空密钥文件（被截断 / 磁盘故障）恢复：内容重写 + 权限强制回 0600
+        let dir =
+            std::env::temp_dir().join(format!("omniterm-secret-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("jwt_secret");
+        std::fs::write(&path, "").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        super::overwrite_secret_file(path.to_str().unwrap(), "s3cret").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "s3cret");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn instance_suffix_separates_dev_from_release() {

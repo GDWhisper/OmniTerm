@@ -85,6 +85,15 @@ fn check_rate_limit(state: &AppState, addr: &SocketAddr) -> Result<(), StatusCod
     Ok(())
 }
 
+/// 凭据校验失败的统一出口：记录限流计数 + 1s 延迟（拉平响应时间、抑制在线爆破）。
+/// `login` / `change-password` / `change-username` 三处共用——它们面对同一暴力面
+/// （密码校验），延迟与计次口径必须一致。
+async fn reject_bad_credentials(state: &AppState, addr: &SocketAddr) -> StatusCode {
+    state.login_guard.record_failure(&addr.ip().to_string());
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    StatusCode::UNAUTHORIZED
+}
+
 /// settings 表 upsert：`auth_enabled` 与 `local_auth_required` 两个 key 共用，
 /// 避免同一段 SQL 复制两份。
 async fn upsert_setting(db: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), StatusCode> {
@@ -112,26 +121,29 @@ async fn setup(
     let username = auth::normalize_username_or_default(req.username.as_deref())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users LIMIT 1")
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if existing.is_some() {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::CONFLICT);
-    }
-
     let hash = bcrypt::hash(&req.password, 10).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
-        .bind(&username)
-        .bind(&hash)
-        .bind(&now)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // 单条原子插入替代「先查后插」：`WHERE NOT EXISTS` 在同一 SQLite 写事务内
+    // 判定，并发 setup（初始化窗口 / 双标签页）只有一个能落行，另一个 0 rows →
+    // 409。历史实现（SELECT 后 INSERT，无事务、users 表无唯一约束）可并发插入
+    // 两行，此后 login / token 校验的 `LIMIT 1` 取非确定行，破坏单账号不变量。
+    let inserted = sqlx::query(
+        "INSERT INTO users (username, password_hash, created_at) \
+         SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+    )
+    .bind(&username)
+    .bind(&hash)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if inserted.rows_affected() == 0 {
+        // 已存在用户：同「重复 setup」语义（409），计失败次数防滥用。
+        state.login_guard.record_failure(&addr.ip().to_string());
+        return Err(StatusCode::CONFLICT);
+    }
 
     let ver: i64 = sqlx::query_scalar("SELECT token_version FROM users LIMIT 1")
         .fetch_one(&state.db)
@@ -168,17 +180,13 @@ async fn login(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let Some((stored_username, hash, ver)) = user else {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     };
 
     let password_ok =
         bcrypt::verify(&req.password, &hash).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if provided != stored_username.as_str() || !password_ok {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     let token = auth::create_token(&state.jwt_secret, ver, &stored_username)
@@ -222,8 +230,7 @@ async fn change_password(
     if !bcrypt::verify(&req.current_password, &hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     let new_hash =
@@ -269,8 +276,7 @@ async fn change_username(
     if !bcrypt::verify(&req.current_password, &hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     sqlx::query(
@@ -524,6 +530,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_is_atomic_under_concurrent_calls() {
+        // 并发 setup（初始化窗口 / 双标签页）：只有一个能落行，另一个 409。
+        // 防回退到「先查后插」——无事务时两行可共存，破坏单账号不变量。
+        let state = crate::test_utils::test_state().await;
+        let call = || {
+            setup(
+                State(state.clone()),
+                conn(),
+                Json(SetupRequest { username: Some("alice".into()), password: "pw".into() }),
+            )
+        };
+        let (a, b) = tokio::join!(call(), call());
+
+        let (mut ok, mut conflict) = (0, 0);
+        for r in [a, b] {
+            match r {
+                Ok(_) => ok += 1,
+                Err(StatusCode::CONFLICT) => conflict += 1,
+                Err(other) => panic!("unexpected result: {other:?}"),
+            }
+        }
+        assert_eq!((ok, conflict), (1, 1), "exactly one concurrent setup must win");
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&state.db).await.unwrap();
+        assert_eq!(count, 1, "single-account invariant must hold");
+    }
+
+    #[tokio::test]
     async fn custom_username_is_required_for_login() {
         let state = crate::test_utils::test_state().await;
         setup_user(&state, Some("alice"), "pw").await;
@@ -616,6 +650,41 @@ mod tests {
             assert!(matches!(res, Err(StatusCode::BAD_REQUEST)), "bad={bad:?}");
         }
         assert_eq!(query_username(&state).await.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn change_password_verifies_current_and_revokes_tokens() {
+        let state = crate::test_utils::test_state().await;
+        setup_user(&state, Some("alice"), "pw").await;
+        let ver_before = query_token_version(&state).await;
+
+        // 当前密码错 → 401（与 login 同出口：计次 + 1s 延迟），密码与版本不变
+        let res = change_password(
+            State(state.clone()),
+            conn(),
+            Json(ChangePasswordRequest {
+                current_password: "wrong".into(),
+                new_password: "next".into(),
+            }),
+        )
+        .await;
+        assert!(matches!(res, Err(StatusCode::UNAUTHORIZED)));
+        assert_eq!(query_token_version(&state).await, ver_before);
+
+        // 当前密码对 → 改密成功 + token_version +1；旧密码失效、新密码可登录
+        let res = change_password(
+            State(state.clone()),
+            conn(),
+            Json(ChangePasswordRequest {
+                current_password: "pw".into(),
+                new_password: "next".into(),
+            }),
+        )
+        .await;
+        assert!(res.is_ok(), "change-password must succeed");
+        assert_eq!(query_token_version(&state).await, ver_before + 1);
+        assert_eq!(login_status(&state, Some("alice"), "next").await, None);
+        assert_eq!(login_status(&state, Some("alice"), "pw").await, Some(StatusCode::UNAUTHORIZED));
     }
 
     #[tokio::test]
