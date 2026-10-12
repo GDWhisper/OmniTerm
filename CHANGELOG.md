@@ -47,7 +47,7 @@ Prefix each entry with the area it affects:
 
 ---
 
-## [Unreleased]
+## [0.2.30] - 2026-10-12
 
 ### Added
 
@@ -67,6 +67,12 @@ Prefix each entry with the area it affects:
 - (2026-10-10 17:20) `[frontend]` 修复长时间离开浏览器后 ACP 聊天「假死」：实时帧缓冲 `liveBuffer` 此前只由 rAF flush，而隐藏页 / 后台标签 / 最小化窗口**不派发 rAF**、WS 消息却照常投递——离开多久就累积多久且无任何上限，回来时第一个动画帧一次性提交上万条 action（`applyActionsToMessages` 对每个 action 全量浅拷贝消息列表，成本 O(actions × messages)），主线程阻塞数秒。现改为有界缓冲：相邻同类 prose 动作无损合并 + 条数（2000）/ UTF-8 字节（2 MiB）双上限，越界即提前提交（内容零丢失，不静默丢弃），另补 1s 兜底定时器覆盖 rAF 停摆窗口（`frontend/src/utils/liveBuffer.ts`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-10 17:20) `[backend]` `[frontend]` `[api]` ACP WS 补心跳，修「打字毫无反应」型假死：空闲连接 ~125s 被隧道 / 承载网重置（形态 `ResetWithoutClosingHandshake`），移动端冻结页还不补派 `onclose`——前端会握着一条已死的 socket 而不自知，`sendPrompt` 见 `readyState !== OPEN` 直接静默 return。新增客户端 `{"type":"ping"}` / 服务端 `{"type":"pong"}` 帧（服务端无状态回包），前端每 30s 探一次、连续 3 次无 pong 即主动断开并走既有指数退避重连；页面隐藏时停发（定时器节流 ≠ 半开，也省移动后台电量）。同时隐藏期不再排退避重连定时器，改为页面回来时立即补连并重置退避（对齐终端链路「聚焦页面才重连」口径）（`src/ws/acp.rs`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-10 07:36) `[backend]` npm 渠道一键升级补「装后版本校验」：`npm install -g @latest` 退出码 0 只代表命令跑完——registry 镜像（如 npmmirror）未同步新版时装回的仍是旧版，此前会报「升级成功」并进入待重启，随后一键重启 exec 得到的还是旧版本、前端「等待目标版本上线」的重启监测永远不满足（表现为重启一直卡着、强刷后版本回退）。现在升级后执行新二进制 `--version` 比对目标版本，不一致即返回明确错误（含官方源重试命令）且不写待重启状态（`src/update.rs`、`src/api/system.rs`）
+
+### Changed
+
+- (2026-10-12) `[infra]` 升级 `chacha20` 0.10.1 → 0.10.2（0.10.1 已被上游 yank，修复潜在构建 / 审计告警）
+
+## [Unreleased]
 
 ## [0.2.29] - 2026-10-09
 
