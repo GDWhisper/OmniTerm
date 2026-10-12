@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-12 15:45) `[backend]` 修复 npm 渠道一键升级「假成功」——提示已更新、重启后仍旧版、徽标又变 NEW（正式版实测：机器上 nvm 与 hermes 两套 node 并存，`npm install -g` 把 0.2.30 装进了 hermes 的 prefix，跑着 nvm prefix 0.2.29 的正式版纹丝不动，而 npm 退出码仍是 0）。根因：npm 的全局安装目录由「**运行 npm 的 node** 的位置」（npm 是可执行 JS shim，shebang `#!/usr/bin/env node` 取 PATH 上第一个 node）叠加 npmrc 决定，**与 npm 脚本自身在哪无关**——连 nvm 自带的 npm 都会把包装进 hermes 的根。现改为按本进程二进制的路径反推安装前缀并显式传 `--prefix`（`npm_upgrade_args(exe)`），把安装目标钉在「承载本进程的那棵树」上，与 PATH / npmrc / 哪个 node 解释 npm 全部无关；前缀推不出（Windows 的 `<root>/node_modules` 无 `lib` 层 / pnpm store 等布局）才退化为默认目标，由既有的装后版本校验把「装错地方」从假成功变成明确报错；升级失败同时 `eprintln` 留痕（HTTP 响应只回到当前标签页，daemon 日志是远程实例唯一的事后取证来源）（`src/update.rs`、`src/api/system.rs`，回归 5 单测）
 - (2026-10-12 10:26) `[frontend]` 修复「自动推进+总是」档下权限横幅变幽灵（正式库会话 `codebuddy_1012-1802` 实测：10:15:21 后端已自动选择「Always Allow」并落库 system 告知，聊天横幅却一直挂着，agent 已在继续执行）。根因：`permission_request` 与 `permission_resolved` 经后端两条独立 broadcast 通道 + 两个转发任务（`src/ws/acp.rs` 的 `spawn_permission_task` / `spawn_permission_resolved_task`）写入同一条 `notify_tx`，两帧到达顺序**无任何保证**；前端只实现了「先请求、后解决」——resolved 先到会对未知 id 无操作，随后迟到的请求帧铸出永不清除的 banner（并残留 decision 提醒与 turn waiting 态），而「到达即应答」把该倒置窗口常态化。修复按「resolve 优先」在消费端收敛（同迟到帧收敛先例）：connection 级 tombstone（上限 `MAX_RESOLVED_PERMISSION_TOMBSTONES`=64，超出按到达序淘汰最旧项，随重连清空），迟到请求命中即丢弃（`frontend/src/hooks/useAcpChat.ts`，回归 `useAcpChat.permissionorder.test.tsx` 四例：倒置抑制 / 正常序 / 重连复位 / 上限淘汰）
 
 ## [0.2.30] - 2026-10-12

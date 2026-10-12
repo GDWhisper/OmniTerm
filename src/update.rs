@@ -13,11 +13,6 @@ macro_rules! npm_package {
         "@gdwhisper/omniterm"
     };
 }
-
-/// 全局 CLI 升级统一用 `npm install -g <pkg>@latest`，不用 `npm update -g`：
-/// `update` 受已安装的 semver range 约束（不跨 major），且对本包分发平台二进制所用的
-/// optionalDependencies 重解析不可靠；`install @latest` 语义明确、幂等、可跨 major。
-pub(crate) const NPM_UPGRADE_ARGS: &[&str] = &["install", "-g", concat!(npm_package!(), "@latest")];
 const CRATE_NAME: &str = "omniterm";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("omniterm-update/", env!("CARGO_PKG_VERSION"));
@@ -258,8 +253,12 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
 
     match channel {
         Channel::Npm => {
-            eprintln!("Detected npm installation. Running: npm {}", NPM_UPGRADE_ARGS.join(" "));
-            delegate("npm", NPM_UPGRADE_ARGS).await?;
+            let args = npm_upgrade_args(&exe);
+            let program = resolve_program("npm").with_context(|| {
+                "the binary appears to be npm-managed but npm is unavailable. Update manually or reinstall via install.sh."
+            })?;
+            eprintln!("Detected npm installation. Running: npm {}", args.join(" "));
+            delegate(&program, "npm", &args).await?;
             // Windows 上 npm 升级本包必伴 cleanup EPERM warn，但那是成功路径：npm 先把旧
             // 包目录 rename 为 `.omniterm-<hash>`（retire）再装新的，最后删 retire 目录时因
             // 里面的 omniterm.exe 正被本进程/服务器进程持有而 unlink 失败。退出码仍为 0，
@@ -284,7 +283,10 @@ pub async fn run(args: UpdateArgs) -> Result<()> {
                 "Detected cargo installation. Running: cargo install {CRATE_NAME}\n\
                  This will recompile from source (may take several minutes). For a prebuilt binary, reinstall via install.sh."
             );
-            delegate("cargo", &["install", CRATE_NAME]).await
+            let program = resolve_program("cargo").with_context(|| {
+                "the binary appears to be cargo-managed but cargo is unavailable. Update manually or reinstall via install.sh."
+            })?;
+            delegate(&program, "cargo", &["install", CRATE_NAME]).await
         }
         Channel::GithubRelease => {
             self_replace(&exe, &release).await?;
@@ -368,14 +370,54 @@ fn resolve_program(cmd: &str) -> Result<PathBuf> {
     which::which(cmd).with_context(|| format!("{cmd} not found in PATH"))
 }
 
+/// npm 全局安装布局里承载本进程的安装前缀（npm 的 `prefix`）：
+/// `<prefix>/lib/node_modules/@gdwhisper/omniterm[/node_modules/@gdwhisper/omniterm-<platform>]/bin/omniterm`。
+/// 取**最深**的 `lib/node_modules` 边界——平台 optionalDependency 嵌在主包下那层
+/// `node_modules` 的父级不是 `lib`，天然被排除。推不出（Windows 的 `<root>/node_modules`
+/// 没有 `lib` 层 / pnpm store / 非 npm 形态）返回 None，调用方退化为默认安装目标。
+fn owning_install_prefix(exe: &Path) -> Option<PathBuf> {
+    exe.ancestors()
+        .find(|a| {
+            a.file_name() == Some(std::ffi::OsStr::new("node_modules"))
+                && a.parent().and_then(|p| p.file_name()) == Some(std::ffi::OsStr::new("lib"))
+        })
+        .and_then(|node_modules| node_modules.parent()?.parent().map(Path::to_path_buf))
+}
+
+/// npm 渠道升级参数：`install -g [--prefix <prefix>] @gdwhisper/omniterm@latest`。
+///
+/// 语义统一 `install -g <pkg>@latest` 而非 `npm update -g`：`update` 受已安装的 semver
+/// range 约束（不跨 major），且对本包分发平台二进制所用的 optionalDependencies 重解析
+/// 不可靠；`install @latest` 语义明确、幂等、可跨 major。
+///
+/// `--prefix` 是**安装目标必保项**：npm 的全局安装目录由「**运行 npm 的 node** 的位置」
+/// （npm 是可执行 JS shim，shebang `#!/usr/bin/env node` → PATH 上第一个 node）叠加
+/// npmrc / `npm_config_*` 决定，**与 npm 脚本自身在哪无关**。多 node 安装并存
+/// （nvm / hermes / volta / asdf / n 任选两个）时，即使用拥有当前安装的那个 node 自带
+/// 的 npm，装完仍可能落进**别的 prefix**——实测 PATH 里 hermes 的 node 排在前面时，
+/// nvm 自带的 npm 把包装进 hermes 的根，跑着 nvm prefix 旧版的正式版纹丝不动，退出码
+/// 仍是 0（一键升级「假成功」）。显式传 `--prefix` 让安装目标回归「本进程二进制所在的
+/// 那棵树」，与 PATH / npmrc / 哪个 node 解释 npm 全部无关；推导不出前缀时才退化为
+/// 默认行为，由装后版本校验（`verify_installed_version`）把错装变成明确报错。
+fn npm_upgrade_args(exe: &Path) -> Vec<String> {
+    let mut args = vec!["install".to_string(), "-g".to_string()];
+    // npm 对不存在的 prefix 直接 ENOENT（实测）；推得出的前缀来自活路径必然存在，
+    // 仍留 is_dir 防御——半删除的 node 安装不该把升级变成一次莫名其妙的 lstat 失败。
+    if let Some(prefix) = owning_install_prefix(exe).filter(|p| p.is_dir()) {
+        args.push("--prefix".to_string());
+        args.push(prefix.to_string_lossy().into_owned());
+    }
+    args.push(concat!(npm_package!(), "@latest").to_string());
+    args
+}
+
 // CLI 专用：继承 stdio 直通用户终端，失败时透传子进程退出码（会终止本进程）。
-// 服务器进程内严禁使用，Web 端点请用 delegate_captured。
-async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
-    let program = resolve_program(cmd).with_context(|| {
-        format!(
-            "the binary appears to be {cmd}-managed but {cmd} is unavailable. Update manually or reinstall via install.sh."
-        )
-    })?;
+// 服务器进程内严禁使用，Web 端点请用 npm_upgrade。
+async fn delegate<S: AsRef<std::ffi::OsStr>>(
+    program: &Path,
+    cmd: &str,
+    cmd_args: &[S],
+) -> Result<()> {
     let status = tokio::process::Command::new(program)
         .args(cmd_args)
         .status()
@@ -387,9 +429,22 @@ async fn delegate(cmd: &str, cmd_args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// npm 渠道一键升级（Web 端点用）：执行 `install -g [--prefix <拥有当前安装的前缀>] <pkg>@latest`。
+/// 捕获输出、失败返回 Err（携带 stderr 尾部），绝不退出进程。装后版本校验由调用方接
+/// `verify_installed_version` 完成——退出码 0 不等于装对了地方（镜像滞后装回旧版、
+/// 装进别的 prefix，退出码都仍是 0）。
+pub(crate) async fn npm_upgrade(exe: &Path) -> Result<String> {
+    let program = resolve_program("npm")?;
+    let args = npm_upgrade_args(exe);
+    run_captured(&program, "npm", &args).await
+}
+
 // 服务器内安全版：捕获输出、失败返回 Err（携带 stderr 尾部），绝不退出进程
-pub(crate) async fn delegate_captured(cmd: &str, cmd_args: &[&str]) -> Result<String> {
-    let program = resolve_program(cmd)?;
+async fn run_captured<S: AsRef<std::ffi::OsStr>>(
+    program: &Path,
+    cmd: &str,
+    cmd_args: &[S],
+) -> Result<String> {
     let output = tokio::process::Command::new(program)
         .args(cmd_args)
         .output()
@@ -760,13 +815,76 @@ mod tests {
     }
 
     #[test]
-    fn npm_upgrade_uses_install_latest_not_update() {
-        assert_eq!(NPM_UPGRADE_ARGS, &["install", "-g", "@gdwhisper/omniterm@latest"]);
+    fn resolve_program_rejects_missing_command() {
+        assert!(resolve_program("omniterm-no-such-program-xyz").is_err());
     }
 
     #[test]
-    fn resolve_program_rejects_missing_command() {
-        assert!(resolve_program("omniterm-no-such-program-xyz").is_err());
+    fn owning_install_prefix_finds_deepest_lib_node_modules_boundary() {
+        // 真实 npm 渠道形态：平台 optionalDependency 嵌在主包下那层 node_modules
+        let exe = Path::new(
+            "/home/pax/.nvm/versions/node/v24.15.0/lib/node_modules/@gdwhisper/omniterm/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm",
+        );
+        assert_eq!(
+            owning_install_prefix(exe),
+            Some(PathBuf::from("/home/pax/.nvm/versions/node/v24.15.0"))
+        );
+    }
+
+    #[test]
+    fn owning_install_prefix_accepts_hoisted_platform_package() {
+        // 平台包被提升为兄弟目录（npm 常见布局）时同样推得出前缀
+        let exe = Path::new("/usr/lib/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm");
+        assert_eq!(owning_install_prefix(exe), Some(PathBuf::from("/usr")));
+    }
+
+    #[test]
+    fn owning_install_prefix_rejects_non_npm_layouts() {
+        // github_release / cargo / pnpm store / Windows 的 `<root>/node_modules`（无 lib 层）
+        // 都推不出前缀——调用方退化为默认安装目标，由装后版本校验兜底
+        for p in [
+            "/usr/local/bin/omniterm",
+            "/home/pax/.cargo/bin/omniterm",
+            "/home/pax/.local/share/pnpm/global/5/node_modules/@gdwhisper/omniterm/bin/omniterm",
+            "/opt/foo/node_modules/@gdwhisper/omniterm/bin/omniterm",
+        ] {
+            assert_eq!(owning_install_prefix(Path::new(p)), None, "{p} 不应推导出安装前缀");
+        }
+    }
+
+    #[test]
+    fn npm_upgrade_uses_install_latest_not_update() {
+        // 推不出前缀时参数必须仍是 `install -g <pkg>@latest`，不能退回 `npm update -g`
+        // （`update` 受已安装 semver range 约束、不跨 major，且对 optionalDependencies
+        // 重解析不可靠）
+        assert_eq!(
+            npm_upgrade_args(Path::new("/usr/local/bin/omniterm")),
+            vec!["install", "-g", "@gdwhisper/omniterm@latest"]
+        );
+    }
+
+    #[test]
+    fn npm_upgrade_args_pin_install_prefix_to_owning_tree() {
+        // 回归「假成功」：npm 的全局安装目标由**运行 npm 的 node**（shim shebang 取 PATH
+        // 第一个 node）叠加 npmrc 决定，与 npm 脚本自身位置无关——多 node 安装并存时
+        // 装进别的 prefix 还退 0。前缀必须显式钉到本进程二进制所在的那棵树。
+        let root = std::env::temp_dir().join(format!("omniterm-npm-prefix-{}", std::process::id()));
+        let exe = root.join(
+            "lib/node_modules/@gdwhisper/omniterm/node_modules/@gdwhisper/omniterm-linux-x64/bin/omniterm",
+        );
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(
+            npm_upgrade_args(&exe),
+            vec![
+                "install".to_string(),
+                "-g".to_string(),
+                "--prefix".to_string(),
+                root.to_string_lossy().into_owned(),
+                "@gdwhisper/omniterm@latest".to_string(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

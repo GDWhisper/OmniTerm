@@ -253,21 +253,17 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": "unsupported_channel" })));
         }
         update::Channel::Npm => {
-            match tokio::time::timeout(
-                UPDATE_TIMEOUT,
-                update::delegate_captured("npm", update::NPM_UPGRADE_ARGS),
-            )
-            .await
-            {
+            match tokio::time::timeout(UPDATE_TIMEOUT, update::npm_upgrade(&exe)).await {
                 Err(_) => {
                     return (
                         StatusCode::GATEWAY_TIMEOUT,
                         Json(json!({ "error": "npm install timed out" })),
                     );
                 }
-                // npm 退出码 0 只代表命令跑完；registry 镜像滞后时会「成功」装回
-                // 旧版。必须校验实际版本，否则报假成功（重启得到旧版、前端版本
-                // 监测永远等不到目标上线）。
+                // npm 退出码 0 只代表命令跑完；registry 镜像滞后装回旧版、或多 node
+                // 安装并存时 npm 把新包装进**别的 prefix**（真正承载本进程的安装树
+                // 纹丝不动），退出码都仍是 0。必须校验实际版本，否则报假成功
+                // （重启得到旧版、前端版本监测永远等不到目标上线）。
                 Ok(Ok(_)) => update::verify_installed_version(&exe, &release.version).await,
                 Ok(Err(e)) => Err(e),
             }
@@ -299,7 +295,13 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
                 })),
             )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{e:#}") }))),
+        Err(e) => {
+            // 升级失败必须留痕：HTTP 响应只回到当前标签页，daemon 日志是远程实例
+            // 唯一的事后取证来源（历史上 exec 失败的 error 曾被 EnvFilter 吞掉，
+            // 排查无从下手；eprintln 绕过 EnvFilter 直写 stderr → 日志文件）。
+            eprintln!("omniterm-update: update failed: {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{e:#}") })))
+        }
     }
 }
 
