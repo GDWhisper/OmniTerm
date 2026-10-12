@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot } from 'react-dom/client'
 import { I18nextProvider } from 'react-i18next'
+import { act } from 'react'
 import i18n from '../../i18n'
 import { Sidebar } from './Sidebar'
 import { useAppStore } from '../../stores/appStore'
@@ -752,11 +753,16 @@ describe('Sidebar 项目卡片拖拽排序', () => {
 
   async function renderSidebar() {
     i18n.changeLanguage('en')
-    root.render(
-      <I18nextProvider i18n={i18n}>
-        <Sidebar />
-      </I18nextProvider>,
-    )
+    // 用 act 包裹 render：React 18 的 passive effect（window 级 pointer 监听注册）
+    // 在 render commit 后异步 flush，act 能确保其在返回前完成，否则紧跟其后的
+    // 同步 pointer 事件派发会早于 listener 注册（见拖拽用例「鼠标移动超阈值立即起拖」）。
+    await act(async () => {
+      root.render(
+        <I18nextProvider i18n={i18n}>
+          <Sidebar />
+        </I18nextProvider>,
+      )
+    })
     await vi.waitFor(() => {
       expect(container.querySelectorAll('.sidebar-project-card')).toHaveLength(3)
     })
