@@ -114,3 +114,15 @@ Phase 3 测试与文档：Rust 21 项新单测（选项优先级/摘要/配置/�
 - 定时 tick 保留：idle / 非零档权限超时 / prompt-stale 仍是时间阈值制，30 秒粒度足够；D5「久无活动」口径不变（非零档仍按距最后活动计时，唤醒只让它更及时）。
 - 回归防线：`fake_agent_tests::always_auto_mode_answers_permission_on_arrival_not_next_tick`（放过首轮立即 tick 后发请求，断言数秒内自动应答 + 告知广播/落库 + 选中项送达 agent）；`reaper::perm_request_notify_wakes_waiter_and_is_not_lost`（唤醒不丢语义）。
 
+## 勘误：幽灵权限横幅——resolved 帧先到时的顺序倒置（2026-10-12）
+
+**用户实测缺陷**（正式库会话 `codebuddy_1012-1802`，auto + 「总是」档）：权限请求自动应答后横幅仍挂在聊天底部，而 agent 已继续执行。DB 取证排除了「没自动推进」：10:15:21 的 system 告知消息已落库（「已按设置自动选择『Always Allow』继续执行」），与横幅所挂请求内容逐字一致——即请求确实被应答、agent 确实继续，只有 banner 没被清掉。
+
+**根因**：`permission_request` 与 `permission_resolved` 走 `PermissionManager` 的两条独立 broadcast 通道（`request_tx` / `resolved_tx`），由两个独立转发任务（`spawn_permission_task` / `spawn_permission_resolved_task`）写入同一条 `notify_tx`——两帧到达前端的先后**无任何保证**。前端只实现了「先请求、后解决」的处理：resolved 先到会对未知 id 无操作，随后迟到的 request 帧铸出永久 banner（并残留 decision 提醒与 turn waiting 态）。10-09 勘误的「到达即应答」把倒置窗口从罕见变成常态（请求到达与应答间隔毫秒级），旧「30 秒 tick」时代反而几乎撞不上。同类先例：turn 终态帧与内容帧的迟到帧收敛（fa9b9d0，前端做顺序无关收敛）。
+
+**修复**（消费端收敛，`frontend/src/hooks/useAcpChat.ts`）：connection 级 tombstone 实现「resolve 优先」——`permission_resolved` 先记 id（有界 `MAX_RESOLVED_PERMISSION_TOMBSTONES`=64，超出按到达序淘汰最旧；随重连清空），迟到 `permission_request` 命中即丢弃。倒置窗口只有微秒级（同一 mpsc + 同一 WS 均为有序链路），64 远超实际需要；重连后 `permissions_synced` 对账仍是 pending 集合的权威。
+
+**否决项**：后端合并两条 broadcast 为单通道（`PermissionEvent` 枚举）+ 单转发任务。可消除 live 路径倒置，但连接重放路径（snapshot 直发与 live resolved 并发）仍须消费端顺序无关收敛；消费端收敛既然必做，后端重构本轮不做（奥卡姆，且该合并会牵动三处 spawn 点与 fake agent 测试）。
+
+**回归**：`useAcpChat.permissionorder.test.tsx` 四例（倒置抑制 / 正常序 / 重连复位 / 上限淘汰）。
+

@@ -16,6 +16,11 @@ export const HEARTBEAT_INTERVAL_MS = 30_000
 /** 连续多少个周期没收到 `pong` 判定为半开连接（3 × 30s = 90s，早于 125s 重置窗）。 */
 export const HEARTBEAT_MAX_MISSED = 3
 
+/** 已解决审批的 tombstone 上限（见 `resolvedPermIds`）：只需覆盖「resolved 帧领先
+ *  其请求帧」的在途窗口——两帧走同一 mpsc + 同一 WS 的有序链路，倒置窗口实测
+ *  微秒级，64 远超实际需要；超出按到达序淘汰最旧项。 */
+export const MAX_RESOLVED_PERMISSION_TOMBSTONES = 64
+
 interface UseAcpChatOptions {
   sessionId: string | null
 }
@@ -699,6 +704,13 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 本次连接见过的审批 id（permission_request 帧累计）：permissions_synced 到达时
   // 用它对账——队列里不在集合内的 banner 是错过 resolved 广播的陈旧项，清除。
   const permIdsThisConnect = useRef<Set<string>>(new Set())
+  // 本次连接已解决、但可能尚未见过对应请求帧的审批 id（tombstone，resolve 优先语义）：
+  // `permission_resolved` 可能先于 `permission_request` 到达——两帧经后端两条独立
+  // 广播通道 + 两个转发任务送达，无顺序保证（auto+「总是」档请求到达即自动应答，
+  // 倒置窗口成为常态）。迟到的请求帧命中此集合时直接丢弃，否则会铸出永不清除的
+  // 幽灵 banner（并残留 decision 提醒与 turn waiting 态）。随重连清空（新连接的
+  // 重放/对账是权威）；上限见 MAX_RESOLVED_PERMISSION_TOMBSTONES。
+  const resolvedPermIds = useRef<Set<string>>(new Set())
   const frameHandlerRef = useRef<((frame: ServerFrame) => void) | null>(null)
   const attention = useAttention()
 
@@ -1154,6 +1166,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'permission_request': {
           const req = frame.request ?? {}
           if (frame.id) {
+            // resolve 先到（顺序倒置）：后端该审批已应答/取消，迟到请求帧无 UI 归属。
+            if (resolvedPermIds.current.has(frame.id)) break
             permIdsThisConnect.current.add(frame.id)
             s.setPermission(sid, { id: frame.id, ...parsePermissionRequest(req) })
             // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
@@ -1162,9 +1176,16 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         }
         case 'permission_resolved':
-          // 审批已在别处解决（其他标签页/设备应答、session cancel 批量取消、或本端
-          // 应答了已失效的审批时后端的收敛回发）：按 id 出队，队列空了才清提醒。
+          // 审批已在别处解决（其他标签页/设备应答、session cancel 批量取消、auto 档
+          // 后端代为应答、或本端应答了已失效的审批时后端的收敛回发）：按 id 出队，
+          // 队列空了才清提醒。先记 tombstone 再出队——对应请求帧若此后才到（两帧
+          // 顺序无保证），须按「已解决」丢弃而不是重新挂起。
           if (frame.id) {
+            resolvedPermIds.current.add(frame.id)
+            if (resolvedPermIds.current.size > MAX_RESOLVED_PERMISSION_TOMBSTONES) {
+              const oldest = resolvedPermIds.current.values().next().value
+              if (oldest !== undefined) resolvedPermIds.current.delete(oldest)
+            }
             s.removePermission(sid, frame.id)
             if ((useChatStore.getState().states[sid]?.pendingPermissions ?? []).length === 0) {
               attention.clearAlert(sid)
@@ -1269,6 +1290,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       inProgressSeq.current = null
       preHydrateBuffer.current = []
       permIdsThisConnect.current.clear()
+      resolvedPermIds.current.clear()
 
       ws.onopen = () => {
         if (unmounted) { ws.close(); return }

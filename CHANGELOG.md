@@ -47,6 +47,12 @@ Prefix each entry with the area it affects:
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- (2026-10-12 10:26) `[frontend]` 修复「自动推进+总是」档下权限横幅变幽灵（正式库会话 `codebuddy_1012-1802` 实测：10:15:21 后端已自动选择「Always Allow」并落库 system 告知，聊天横幅却一直挂着，agent 已在继续执行）。根因：`permission_request` 与 `permission_resolved` 经后端两条独立 broadcast 通道 + 两个转发任务（`src/ws/acp.rs` 的 `spawn_permission_task` / `spawn_permission_resolved_task`）写入同一条 `notify_tx`，两帧到达顺序**无任何保证**；前端只实现了「先请求、后解决」——resolved 先到会对未知 id 无操作，随后迟到的请求帧铸出永不清除的 banner（并残留 decision 提醒与 turn waiting 态），而「到达即应答」把该倒置窗口常态化。修复按「resolve 优先」在消费端收敛（同迟到帧收敛先例）：connection 级 tombstone（上限 `MAX_RESOLVED_PERMISSION_TOMBSTONES`=64，超出按到达序淘汰最旧项，随重连清空），迟到请求命中即丢弃（`frontend/src/hooks/useAcpChat.ts`，回归 `useAcpChat.permissionorder.test.tsx` 四例：倒置抑制 / 正常序 / 重连复位 / 上限淘汰）
+
 ## [0.2.30] - 2026-10-12
 
 ### Added
