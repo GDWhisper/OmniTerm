@@ -46,6 +46,11 @@ const MAX_RESPONSE_ENTRIES: usize = 64;
 /// 应答缓冲字节上限：条目大小由会话内程序决定，只限条目数等于没限。
 const MAX_RESPONSE_BYTES: usize = 8 * 1024;
 
+/// 滚移检测的证据行下限（2026-10-10）：帧间同位变化且能被位移假设解释的
+/// 行至少这么多，位移签名才算有效证据。固定不随屏高缩放——大屏稀疏屏的
+/// 真滚移证据行同样少，放大下限会把真滚移漏成 miss（向新滑移复发）。
+const MIN_SCROLL_EVIDENCE: usize = 3;
+
 /// 闭包型应答（颜色/文本区尺寸查询）无预知产物大小，按估值记账。
 const RESPONSE_CLOSURE_EST_BYTES: usize = 32;
 
@@ -639,7 +644,7 @@ impl VtState {
     /// 滚轮接管后前端经 `viewport_request` 请求，取代 xterm 本地 scrollback。
     ///
     /// - `y` 钳制到 `history_size()`（外部输入兜底，负偏移在读循环侧已拦）；
-    /// - **有状态锚**（`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md`
+    /// - **有状态锚**（`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md`
     ///   D1，取代 09-03 的指纹重定位——指纹在周期性内容（空行/框线/分隔线）上
     ///   必然棘轮/滑移，见该计划根因实证）：`refresh = false`（用户滚动意图）
     ///   按 `top = hs - y` 定位并**存锚**；`refresh = true`（输出触发的保锚
@@ -725,21 +730,32 @@ impl VtState {
         self.viewport_anchor = None;
     }
 
-    /// 饱和期滚移检测（2026-09-12 计划 D3，唯一新增机制；关联字段语义见
-    /// `VtState` 字段注释）。
+    /// 饱和期滚移检测（2026-09-12 计划 D3；2026-10-10 证据行修正；关联字段
+    /// 语义见 `VtState` 字段注释）。
     ///
     /// 锚定内容在历史未饱和期绝对索引天然不动（输出滚动时行号减小、hs 增大，
     /// 恒等抵消），无需检测；**饱和后**（hs 恒 = `VT_SCROLLBACK_LINES`，本
     /// 仓库常态）内容绝对索引每滚一行减 1，锚必须随屏幕内容同步前移，否则
     /// 视口随淘汰滑动。检测复用本帧既有的行哈希与上一帧基线做相关：屏幕
-    /// 内容整体上移 s 行的签名是 `row[i - s] == prev[i]` 对绝大多数 i 成立；
-    /// 按 s 升序取首个达标者（重叠区按行判等 ≥ 3/4），命中则锚同步 `- = s`。
+    /// 内容整体上移 s 行的签名是 `row[i - s] == prev[i]`；按 s 升序取首个
+    /// 达标者，命中则锚同步 `- = s`。
+    ///
+    /// **证据行判据（2026-10-10 修正）**：匹配统计**只在帧间同位变化的行
+    /// （`row[i] != prev[i]`）上进行**——「同位未变」的行（空行带、静态文本）
+    /// 是零信息：空行==空行在任意 s 下都成立，计入即把「无滚移帧」误判为
+    /// 滚移（稀疏屏 + 底部状态行更新，实测每帧 -1 行向旧端漂移，用户症状
+    /// 「上翻看到很久之前的旧数据」）。位移假设的正确证据是「这行变了、
+    /// 且其新内容能由 `prev` 的 s 位移解释」——只有变化行能提供。判据：
+    /// `matched * 4 >= evidence * 3` 且 `evidence >= MIN_SCROLL_EVIDENCE`
+    /// （防一两行巧合）。同构带因此同时退出分子与分母，判定与空行比例无关。
     ///
     /// 误调防线（该方向的危害不对称：误调凭空制造漂移，miss 只是有界缓滑移）：
-    /// - 屏幕哈希与上帧完全一致（纯光标移动的空帧、静态屏）直接跳过——垂直
-    ///   同构内容（空行带）在无滚移时也会自相关，不设此闸会按帧误调；
-    /// - 重叠区下限 `rows / 4` 行：排除大 s 端「一两次巧合判等即达标」的弱
-    ///   证据区（突发超过 ~3/4 屏高时放弃检测，滑移有界）。
+    /// - 屏幕哈希与上帧完全一致（纯光标移动的空帧、静态屏）直接跳过；
+    /// - 重叠区下限 `rows / 4` 行：排除大 s 端弱证据区（突发超过 ~3/4 屏高
+    ///   时放弃检测，滑移有界）；
+    /// - 证据行下限 `MIN_SCROLL_EVIDENCE`：1-2 行的位移签名视为巧合证据
+    ///   不足（不随屏高放大——大屏稀疏屏的真滚移证据行同样少，放大下限会
+    ///   把真滚移漏成 miss，回头复发「向新滑移」方向）。
     ///
     /// 基线每帧无条件推进（含未锚定帧与跳过帧），保证下次检测总有新鲜基线。
     fn adjust_anchor_for_scroll(
@@ -757,15 +773,20 @@ impl VtState {
             let min_overlap = rows / 4;
             let mut hit = None;
             for s in 1..=rows.saturating_sub(min_overlap) {
-                let overlap = rows - s;
-                let threshold = (overlap * 3 / 4).max(1);
+                let mut evidence = 0usize;
                 let mut matched = 0usize;
                 for i in s..rows {
+                    if row_hashes[i] == prev_hashes[i] {
+                        // 同位未变：空行带/静态行的相等是零信息，不计证据、
+                        // 不计匹配（计入会把无滚移帧误判为滚移）
+                        continue;
+                    }
+                    evidence += 1;
                     if row_hashes[i - s] == prev_hashes[i] {
                         matched += 1;
                     }
                 }
-                if matched >= threshold {
+                if evidence >= MIN_SCROLL_EVIDENCE && matched * 4 >= evidence * 3 {
                     hit = Some(s);
                     break;
                 }
@@ -1630,7 +1651,7 @@ mod tests {
         assert_eq!(parsed["viewport"], 0, "empty history clamps y to 0");
     }
 
-    // ──── 有状态锚 + 饱和期滚移检测（docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md）────
+    // ──── 有状态锚 + 饱和期滚移检测（docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md）────
     // 取代 09-03 指纹锚定的用例组：指纹重定位在周期性内容（空行/框线/分隔线）
     // 上必然棘轮/滑移（该计划根因实证），位置记忆改驻后端 `VtState`。
 
@@ -1723,6 +1744,34 @@ mod tests {
     }
 
     #[test]
+    fn anchor_follows_scroll_on_sparse_screen_with_content_evidence() {
+        // 稀疏屏（大比例空行）下的**真滚移**仍须检出：证据行判据（2026-10-10）
+        // 让空行带退出统计，但内容行的位移证据足以命中 s=1——修复不能把真
+        // 滚移一并漏掉（那会复发「向新滑移」方向）。证据行取
+        // MIN_SCROLL_EVIDENCE 临界值附近形态。
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100); // 饱和（hs = 1000）
+        v.feed(b"\x1b[2J\x1b[H");
+        v.feed(b"content-a\r\ncontent-b\r\ncontent-c");
+        // 光标置于屏底：后续每行输出（写底行 + 换行越界）立即触发滚屏
+        v.feed(b"\x1b[24;1H");
+        let _ = v.encode_cell_frame("ts", false); // 建立滚移检测基线
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 50, false)).unwrap();
+        let anchored = top_row_full(&first);
+
+        // 逐行输出 + 逐帧 live 编码：真滚移 1 行/帧，锚须同步前移
+        for i in 1100..1120 {
+            v.feed(format!("L{i:05}\r\n").as_bytes());
+            let _ = v.encode_cell_frame("ts", false);
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(top_row_full(&held), anchored, "稀疏屏真滚移：锚定内容必须不变");
+        assert_eq!(held["viewport"], 70, "锚随 20 行淘汰前移（950 → 930）");
+    }
+
+    #[test]
     fn anchor_clamps_to_zero_when_anchor_line_evicted() {
         let mut v = vt(24, 80);
         feed_lines(&mut v, 0, 1100);
@@ -1782,6 +1831,53 @@ mod tests {
         let held: serde_json::Value =
             serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
         assert_eq!(held["viewport"], 50, "静态屏不得被滚移检测误调");
+    }
+
+    #[test]
+    fn scroll_detection_not_fooled_by_sparse_screen_with_small_change() {
+        // 漏测组合：**有变化** + **大面积垂直同构**（稀疏屏）但**无滚移**。
+        // 「屏幕与上帧完全一致」的闸挡不住本组合——s=1 比较的是新屏空行 vs
+        // 旧屏空行（错位同为空格，仍逐对相等），空行带长度足够时越过 3/4
+        // 阈值被误判为滚移，锚每帧被误调向旧端（-1/帧）。真实场景：agent
+        // 稀疏输出/清屏后 + 底部状态行更新，用户上翻期间视口向历史方向漂移。
+        let mut v = vt(24, 80);
+        feed_lines(&mut v, 0, 1100); // 饱和（hs = 1000）
+        // 稀疏屏：清屏 + 顶部 3 行内容，其余 21 行空
+        v.feed(b"\x1b[2J\x1b[H");
+        v.feed(b"content-a\r\ncontent-b\r\ncontent-c");
+        let _ = v.encode_cell_frame("ts", false); // 建立滚移检测基线
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 50, false)).unwrap();
+        assert_eq!(first["viewport"], 50);
+        // 无滚移：底部状态行连续 3 帧原地改写（模拟 spinner/状态更新）
+        for i in 0..3 {
+            v.feed(format!("\x1b[24;1Hstatus-{i}").as_bytes());
+            let _ = v.encode_cell_frame("ts", false);
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(held["viewport"], 50, "无滚移帧不得被垂直同构误调锚（向旧漂移）");
+    }
+
+    #[test]
+    fn scroll_detection_not_fooled_on_wide_sparse_screen() {
+        // 同上形态的大屏版本（48 行：10 行内容 + 38 行空，≈79% 同构），
+        // 对应桌面大窗口下的稀疏会话：空行带 37 对 ≥ 阈值 35 即命中误调。
+        let mut v = vt(48, 120);
+        feed_lines(&mut v, 0, 1100);
+        v.feed(b"\x1b[2J\x1b[H");
+        v.feed(b"head-01\r\nhead-02\r\nhead-03\r\nhead-04\r\nhead-05\r\nhead-06\r\nhead-07\r\nhead-08\r\nhead-09\r\nhead-10");
+        let _ = v.encode_cell_frame("ts", false);
+        let first: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 80, false)).unwrap();
+        assert_eq!(first["viewport"], 80);
+        for i in 0..3 {
+            v.feed(format!("\x1b[48;1Hstatus-{i}").as_bytes());
+            let _ = v.encode_cell_frame("ts", false);
+        }
+        let held: serde_json::Value =
+            serde_json::from_str(&v.encode_viewport_frame("ts", 0, true)).unwrap();
+        assert_eq!(held["viewport"], 80, "大屏稀疏形态同样不得误调锚");
     }
 
     #[test]

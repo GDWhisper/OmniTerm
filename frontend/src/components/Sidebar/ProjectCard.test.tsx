@@ -62,6 +62,7 @@ const project: Project = {
   name: 'repo',
   path: '/repo',
   created_at: '2026-01-01T00:00:00Z',
+  position: 0,
   path_valid: true,
 }
 
@@ -180,6 +181,23 @@ describe('ProjectCard worktree 展开模式', () => {
 
     createWtBtn.click()
     expect(onOpenCreateWorktree).toHaveBeenCalledTimes(1)
+  })
+
+  it('flashing 时整卡挂聚焦闪烁 class 且带 data-proj-id（供聚焦选择器定位）', () => {
+    renderCard(baseProps({ flashing: true }))
+
+    const card = container.querySelector('.sidebar-project-card') as HTMLElement
+    expect(card.classList.contains('sidebar-project-focus-flash')).toBe(true)
+    // Sidebar 聚焦时按 [data-proj-id="<uuid>"] 查询滚动目标
+    expect(card.getAttribute('data-proj-id')).toBe(project.id)
+  })
+
+  it('默认（flashing 缺省）不挂闪烁 class', () => {
+    renderCard(baseProps({}))
+
+    const card = container.querySelector('.sidebar-project-card') as HTMLElement
+    expect(card.classList.contains('sidebar-project-focus-flash')).toBe(false)
+    expect(card.getAttribute('data-proj-id')).toBe(project.id)
   })
 
   it('会话行右键经 SessionRow 上报锚点（透传 onSessionContextMenu）', () => {

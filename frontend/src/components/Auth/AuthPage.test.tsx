@@ -213,6 +213,49 @@ describe('AuthPage username field', () => {
     expect(submitButton().disabled).toBe(false)
   })
 
+  it('maps 429 (login rate limit) to the retry-later message', async () => {
+    vi.mocked(api.login).mockRejectedValue({ status: 429 })
+    await mount(false)
+
+    setInputValue(usernameInput(), 'alice')
+    setInputValue(passwordInput(), 'nope')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.rateLimited'))
+    expect(container.textContent).not.toContain(i18n.t('auth.wrongPassword'))
+    expect(useAppStore.getState().authState).toBe('unauthenticated')
+    expect(submitButton().disabled).toBe(false)
+  })
+
+  it('rejects a too-short setup password locally without calling the API', async () => {
+    await mount(true)
+
+    setInputValue(passwordInput(), 'abc')
+    await submit()
+
+    expect(container.textContent).toContain(i18n.t('auth.passwordTooShort'))
+    expect(api.setup).not.toHaveBeenCalled()
+    expect(useAppStore.getState().authState).toBe('unauthenticated')
+  })
+
+  it('does not double-submit a rapid double submit', async () => {
+    vi.mocked(api.login).mockResolvedValue(undefined)
+    await mount(false)
+
+    setInputValue(usernameInput(), 'alice')
+    setInputValue(passwordInput(), 'secret')
+    const form = container.querySelector('form')!
+    await act(async () => {
+      // 连续两次同步 submit：第二次必须被 inFlight ref 拦下——此时 state 尚未重渲染，
+      // 仅靠 `submitting` 守卫会漏（两次都读到旧值）。
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+
+    expect(api.login).toHaveBeenCalledTimes(1)
+  })
+
   it('defines the username copy in both en and zh', async () => {
     const { default: en } = await import('../../locales/en/translation.json')
     const { default: zh } = await import('../../locales/zh/translation.json')

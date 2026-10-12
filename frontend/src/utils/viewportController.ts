@@ -25,7 +25,7 @@
  * 故不做按单调性丢弃，改为「响应 y 权威同步 + 有序 WS 保证收敛」——
  * WS 有序 + rAF 合并（单请求在飞）+ 本地 RTT <1ms，乱序窗口实际不存在。
  *
- * 锚定（`docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md` D1，取代
+ * 锚定（`docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md` D1，取代
  * 09-03 的内容指纹锚定）：后端 `VtState` 持有视口锚（窗口顶行的**绝对行索引**）
  * 作为位置记忆——滚动请求写入锚，输出触发的重拉直接按锚出窗，饱和淘汰期由
  * 后端滚移检测同步锚。位置换算全部在持有 grid 真相源的一侧完成，前端不做
@@ -208,6 +208,12 @@ export class ViewportController {
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null
       if (this.disposed || this.mode !== 'viewport') return
+      // 尚未发出的用户滚动意图优先（refresh/scroll 竞态）：滚动请求按 y 定位、
+      // 后端按最新 grid 出窗（内容本就是新的），而 refresh=true 会让后端忽略
+      // y 按旧锚出窗——用户刚滚的一下被吞，响应权威 y 再把 currentY 拉回锚位置
+      // （症状：滚动不灵/被吸回）。让路时不更新 lastRefreshAt：本次重拉未发生，
+      // 下次输出按节流重新评估。
+      if (this.pendingY != null && !this.pendingRefresh) return
       this.lastRefreshAt = Date.now()
       this.pendingY = this.currentY
       this.pendingRefresh = true

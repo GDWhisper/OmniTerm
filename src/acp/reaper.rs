@@ -7,7 +7,7 @@ use tokio::sync::Notify;
 use tokio::time::interval;
 
 use crate::acp::chat_persistence;
-use crate::acp::client::{AcpClient, SystemNotice, TurnEndEvent};
+use crate::acp::client::{AcpClient, SystemNotice, TurnEvent};
 use crate::acp::permission::{
     MAX_PERM_NOTICE_REQUESTS, PermissionRequestSummary, pick_auto_option,
     summarize_permission_request,
@@ -460,23 +460,29 @@ pub async fn run_reaper(
                     continue;
                 }
             }
+            // 世代先于判定捕获：若判定与定稿之间用户恰好发了新 prompt（supersede
+            // 已推进世代并给旧 turn 补发终态），守卫拦下本次定稿，不会误杀新 turn。
+            let generation = client.prompt_generation();
             if client.is_prompt_stale(PROMPT_STALE_SECS) {
-                tracing::warn!(
-                    session_id = %sid,
-                    "prompt active but no agent activity for {}s; force-finalizing turn",
-                    PROMPT_STALE_SECS
-                );
-                client.mark_prompt_idle();
-                // `abnormal: false`：同样是**合成的非协议原因**（宿主侧观测到的
-                // prompt 卡死定稿，不是协议回了非正常 stopReason）；且本路径不写留痕
-                // system 消息（计划 D3 之外），error 语义会造成「错误提示但无解释」。
-                // 保持既有行为不变。
-                client.notify_turn_end(TurnEndEvent::Done {
-                    stop_reason: "InactivityTimeout".into(),
-                    row_id: client.turn_row_id(),
-                    duration: client.turn_timing(),
-                    abnormal: false,
-                });
+                // 返回值门控：并发的另一终结者（prompt 任务 / cancel 兜底）已收尾时
+                // 不再重复广播终态帧（同 cancel 兜底的 if-won 口径）。
+                if client.mark_prompt_idle_for_generation(generation) {
+                    tracing::warn!(
+                        session_id = %sid,
+                        "prompt active but no agent activity for {}s; force-finalizing turn",
+                        PROMPT_STALE_SECS
+                    );
+                    // `abnormal: false`：同样是**合成的非协议原因**（宿主侧观测到的
+                    // prompt 卡死定稿，不是协议回了非正常 stopReason）；且本路径不写留痕
+                    // system 消息（计划 D3 之外），error 语义会造成「错误提示但无解释」。
+                    // 保持既有行为不变。
+                    client.notify_turn_event(TurnEvent::Done {
+                        stop_reason: "InactivityTimeout".into(),
+                        row_id: client.turn_row_id(),
+                        duration: client.turn_timing(),
+                        abnormal: false,
+                    });
+                }
             }
         }
 

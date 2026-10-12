@@ -6,8 +6,15 @@ import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
 import { addOutputChars, resumeTurnClock, setTurnWaiting, updateTurnTool } from '../utils/turnClock'
 import { postSyncPayload } from '../utils/syncMessages'
+import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS } from '../utils/liveBuffer'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
+
+/** 心跳周期（ms）。实测空闲重置窗口 ~125s，取其 1/4 以下，给定时器节流留余量。 */
+export const HEARTBEAT_INTERVAL_MS = 30_000
+
+/** 连续多少个周期没收到 `pong` 判定为半开连接（3 × 30s = 90s，早于 125s 重置窗）。 */
+export const HEARTBEAT_MAX_MISSED = 3
 
 interface UseAcpChatOptions {
   sessionId: string | null
@@ -28,7 +35,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message' | 'pong'
   code?: string
   data?: SessionUpdateFrame
   /** prompt_done: 协议原始 stopReason 快照（诊断用；正常与否由 abnormal 表达）。 */
@@ -667,7 +674,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   // 实时流式缓冲：文本/thinking chunk 高频到达时，攒进同一动画帧一次性提交，
   // 把「每 chunk 一次重渲染」降为「每帧最多一次」——IDE 文本流应有的朴素节流，
   // 非特效：输出速度不变，只是合并提交。工具/plan/权限等结构性 action 仍即时生效。
-  const liveBuffer = useRef<SessionUpdateAction[]>([])
+  //
+  // 限界与合并规则在 `utils/liveBuffer.ts`（P1：条数 + 字节双上限，越界即 flush）。
+  // 为何必须有上限：隐藏页/后台标签**不派发 rAF**，而 WS 消息照常投递——离开浏览器
+  // 一小时，缓冲就累积一小时，回来时第一个 rAF 一次性提交上万条 action，
+  // `applyActionsToMessages` 每个 action 全量浅拷贝 messages，主线程阻塞数秒。
+  const liveBuffer = useRef(new LiveBuffer())
   const liveRaf = useRef<number | null>(null)
   // 重连续接：进行中 turn 的 seq 高水位。收到 turn_snapshot 或 live session_update
   // 时推高；prompt_done/turn_state(inactive) 清空。subscribe-before-snapshot 造成的
@@ -697,11 +709,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     liveRaf.current = null
     const sid = sessionIdRef.current
     if (!sid) return
-    const batch = liveBuffer.current
-    if (batch.length === 0) return
-    liveBuffer.current = []
+    // 空缓冲直接返回：兜底定时器每秒都会打到这里（隐藏页 rAF 停摆期间），
+    // 不该为此付出一次 store 读取与空数组分配。
+    if (liveBuffer.current.isEmpty()) return
+    const batch = liveBuffer.current.take()
     useChatStore.getState().applyReplayBatch(sid, batch)
   }, [])
+
+  /** 入队一条实时动作。越界（条数/字节）时立即提交，不等下一个 rAF——
+   *  隐藏页没有 rAF，兜底定时器也可能被浏览器节流到 1/min，只有「越界即 flush」
+   *  能保证缓冲不随离开时长无限增长。 */
+  const pushLiveAction = useCallback((action: SessionUpdateAction) => {
+    if (liveBuffer.current.push(action)) flushLiveBuffer()
+  }, [flushLiveBuffer])
 
   // 终止进行中的重放：丢弃 staging 已攒帧，复位全部重放状态，保留现有消息。
   // 两个调用点：① 后端以 error 帧代替 replay_end（load_failed）；② 重放期间 WS
@@ -777,6 +797,53 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     let unmounted = false
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     let retry = 0
+    // 隐藏期断连的延后重连标记：页面不可见时不排退避定时器（省资源口径同
+    // useTerminal「聚焦才重连」），挂起等用户回来由下方 resume 监听补连。
+    let reconnectDeferred = false
+
+    // ── 心跳（半开连接检测） ──
+    // 为何需要：ACP WS 两端原本没有任何保活字节，空闲连接 ~125s 被隧道/承载网重置，
+    // 形态是 ResetWithoutClosingHandshake；而冻结页（移动端切后台 / bfcache）**不补派
+    // onclose** —— 前端于是握着一条已死的 socket 而不自知，`sendPrompt` 见
+    // `readyState !== OPEN` 直接静默 return：用户打字毫无反应，即「假死」。
+    // 连续 N 个周期收不到 pong 即主动 close，让 onclose 走既有退避重连自愈。
+    //
+    // 页面隐藏即停发并清零计数：隐藏页定时器被节流（Chrome 5 分钟后 1/min、iOS 直接
+    // 挂起），把「节流」误判成「半开」会白拆连接；移动后台白跑握手也是纯电量浪费。
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+    let missedPongs = 0
+
+    const stopHeartbeat = () => {
+      if (heartbeatTimer !== null) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+    }
+
+    const startHeartbeat = (ws: WebSocket) => {
+      stopHeartbeat()
+      missedPongs = 0
+      heartbeatTimer = setInterval(() => {
+        if (document.hidden) {
+          // 隐藏期暂停：不计 missed（节流不等于半开），也不发字节。
+          missedPongs = 0
+          return
+        }
+        if (ws.readyState !== WebSocket.OPEN) return
+        try {
+          ws.send(JSON.stringify({ type: 'ping' }))
+        } catch {
+          // 发送即抛 = 底层连接已坏；onclose 会跟进，这里不重复处置。
+          return
+        }
+        missedPongs += 1
+        if (missedPongs >= HEARTBEAT_MAX_MISSED) {
+          // 半开：TCP 还可能被对端 ACK，但 WS 已死（空闲重置 / 网络切换）。
+          // close() 是幂等的，重连由 onclose 统一调度（避免两条路径同时重连）。
+          ws.close()
+        }
+      }, HEARTBEAT_INTERVAL_MS)
+    }
 
     // 帧派发核心：live 路径与 preHydrateBuffer 回放共用。挂到 ref 供 hydrated 落定
     // 后的 flush effect 调用（闭包捕获当前连接的 ws）。
@@ -838,7 +905,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             case 'setCommands':
             case 'setConfigOptions':
             case 'pushSystem':
-              liveBuffer.current.push(action)
+              pushLiveAction(action)
               if (liveRaf.current === null) {
                 liveRaf.current = requestAnimationFrame(flushLiveBuffer)
               }
@@ -911,6 +978,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
               } catch {
                 fresh.markError(sid, 'Failed to send queued message — connection unavailable')
               }
+            } else if (frame.stop_reason === 'Superseded') {
+              // 顶替定稿（后端合成，见 AcpClient::mark_prompt_active）：旧 turn 未回
+              // 结束信号就被新 prompt 顶掉，后端补发本帧让气泡与计时收敛（上面的
+              // markDone 已停表）。这不是用户可感知的「完成」——新 turn 的
+              // turn_state{active:true} 紧随其后、计时随即重开，此刻 fire 'done'
+              // 只会造成假提醒（用户正在输入，不需要被叫回来）。
             } else if (frame.stop_reason?.toLowerCase().includes('cancel')) {
               // 用户主动取消：abnormal 也可能为 true（D1 把 cancelled 归入非正常），
               // 但取消是**用户自己的动作**，不该按错误打扰。故 cancel 判定优先于
@@ -1162,6 +1235,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
           break
         }
+        case 'pong':
+          // 心跳应答：链路健康。清零「未收到 pong」计数——半开判定只看连续缺失。
+          missedPongs = 0
+          break
         case 'turn_state':
           if (frame.active === false) {
             // turn 在断连期间已结束的兜底：定稿任何残留 streaming 消息。
@@ -1199,6 +1276,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         setConnectionState('connected')
         const sid = sessionIdRef.current
         if (sid) useChatStore.getState().setError(sid, null)
+        startHeartbeat(ws)
       }
 
       ws.onmessage = (ev) => {
@@ -1250,6 +1328,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         isManualRestore.current = false
         setConnectionState('disconnected')
         wsRef.current = null
+        stopHeartbeat()
         const sid = sessionIdRef.current
         if (sid && !unmounted) {
           // 断连标记（聚焦补拉的触发条件）：broadcast 帧无补发，离线窗口内后端
@@ -1279,19 +1358,59 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         }
         // 非主动拆除 → 指数退避重连。进行中 turn 由后端权威持久化 + turn_snapshot
         // 续接，故重连无需重发 prompt / load_session。
+        //
+        // 页面隐藏期间**不排定时器**：隐藏页的退避重连是移动后台白跑握手（重连成功也
+        // 没人看），且定时器被节流到 1/min 后「指数退避」本就失真。改为挂起
+        // （reconnectDeferred），由下方 resume 监听在页面回来时立即补连并重置退避——
+        // 与 useTerminal「聚焦页面才重连」同一口径，那条链路已按此运行多版。
         if (!unmounted) {
-          const delay = Math.min(1000 * 2 ** retry, 30000)
-          retry += 1
-          if (import.meta.env.DEV) console.debug('[ACP reconnect] scheduling in', delay, 'ms (attempt', retry, ')')
-          reconnectTimer = setTimeout(() => { reconnectTimer = null; connect() }, delay)
+          if (document.hidden) {
+            reconnectDeferred = true
+            if (import.meta.env.DEV) console.debug('[ACP reconnect] hidden — deferred until resume')
+          } else {
+            const delay = Math.min(1000 * 2 ** retry, 30000)
+            retry += 1
+            if (import.meta.env.DEV) console.debug('[ACP reconnect] scheduling in', delay, 'ms (attempt', retry, ')')
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = null
+              // 退避窗内被隐藏：这一拍也不握手，转挂起等用户回来（useTerminal 的回调里
+              // 同样有这道检查——只在下单时判一次 hidden 挡不住「排定后又切走」）。
+              if (document.hidden) {
+                reconnectDeferred = true
+                return
+              }
+              connect()
+            }, delay)
+          }
         }
       }
     }
+
+    // 页面回来（可见 / 聚焦 / bfcache 恢复）：补上隐藏期被挂起的重连。
+    // 三个事件分别覆盖：切回标签页（visibilitychange）、双屏焦点回来（focus）、
+    // iOS 切 app 回来（pageshow，persisted 与普通都补——普通恢复同样可能是隐藏期断的）。
+    const resumeReconnect = () => {
+      if (document.hidden || unmounted || !reconnectDeferred) return
+      reconnectDeferred = false
+      // 用户回来 = 新一轮退避（隐藏期积累的计数不作数），与 useTerminal 一致。
+      retry = 0
+      // 已有连接在途（CONNECTING/OPEN）时不重复建：那会是另一条被弃养的 socket。
+      const cur = wsRef.current
+      if (cur && cur.readyState !== WebSocket.CLOSED && cur.readyState !== WebSocket.CLOSING) return
+      connect()
+    }
+    document.addEventListener('visibilitychange', resumeReconnect)
+    window.addEventListener('focus', resumeReconnect)
+    window.addEventListener('pageshow', resumeReconnect)
 
     connect()
 
     return () => {
       unmounted = true
+      document.removeEventListener('visibilitychange', resumeReconnect)
+      window.removeEventListener('focus', resumeReconnect)
+      window.removeEventListener('pageshow', resumeReconnect)
+      stopHeartbeat()
       if (reconnectTimer) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
@@ -1335,6 +1454,19 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     const handler = frameHandlerRef.current
     if (handler) for (const f of buffered) handler(f)
   }, [hydrated, postSync])
+
+  // rAF 停摆兜底：隐藏页 / 最小化窗口 / 后台标签都不派发 rAF（动画帧随渲染一起
+  // 停），而 WS 消息照常投递——只靠 rAF 的 flush 会让实时缓冲在用户离开期间只进不出。
+  // 这里补一条 1s 定时器：可见时 rAF 早在 16ms 内 flush，定时器命中空缓冲即 no-op；
+  // 不可见时它把积压分批提交，避免「回来时一帧吐完半小时」。
+  //
+  // 它只是第二道防线：隐藏页定时器会被 Chrome 节流到 1/min（5 分钟后 intensive
+  // throttling）、iOS 直接挂起，那时真正的硬上限是 LiveBuffer 的「越界即 flush」
+  // （utils/liveBuffer.ts）——缓冲不可能随离开时长无限增长。
+  useEffect(() => {
+    const id = window.setInterval(flushLiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS)
+    return () => window.clearInterval(id)
+  }, [flushLiveBuffer])
 
   const sendPrompt = useCallback((text: string, images?: ImageAttachment[], files?: FileAttachment[]) => {
     const ws = wsRef.current

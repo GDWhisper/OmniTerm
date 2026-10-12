@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { Fragment, useEffect, useState, useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
@@ -15,6 +15,8 @@ import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
 import { ProjectCard } from './ProjectCard'
 import { sessionsForWorktree } from '../../utils/worktreeSessions'
+import { computeProjectReorder } from '../../utils/projectReorder'
+import { hapticTap } from '../../utils/haptics'
 import { RenameDialog, type RenameTarget } from './RenameDialog'
 import { DeleteConfirmDialog, type DeleteTarget } from './DeleteConfirmDialog'
 import { DeleteWorktreeDialog, type DeleteWorktreeTarget } from './DeleteWorktreeDialog'
@@ -37,6 +39,39 @@ import { CountBadge } from '../Common/CountBadge'
 import { SignalBarsSprite } from '../PixelUI'
 import { READER_FONT } from '../../utils/fonts'
 
+/** Cover-conflict「切换到现有项目」的项目卡片聚焦闪烁时长（与 index.css 的
+ *  .sidebar-project-focus-flash ring 动画时长一致，到期摘 class）。 */
+const PROJECT_CARD_FLASH_MS = 1200
+
+/** 鼠标/笔起拖阈值：按下后移动超过该距离立即起拖（无需长按）。 */
+const PROJ_DRAG_THRESHOLD_PX = 4
+
+/** 触摸长按起拖时长（触摸要与列表滚动区分，长按是移动端排序的通行范式；
+ *  鼠标/笔不需要——立即起拖更直觉）。 */
+const PROJ_LONG_PRESS_MS = 500
+
+/** 触摸长按达成前指针漂移超过该值即取消起拖（滚动 / 点击拖动不算长按）。 */
+const PROJ_LONG_PRESS_CANCEL_PX = 10
+
+/** 拖拽达成后抑制 header 补发 click 的窗口（同 SessionRow 长按抑制）。 */
+const PROJ_DRAG_CLICK_SUPPRESS_MS = 700
+
+/** 项目卡片拖拽的事件态（window 处理器直读，避开陈旧闭包）。 */
+interface ProjDragState {
+  id: string
+  startX: number
+  startY: number
+  /** 'touch' 走长按起拖；'mouse' / 'pen' 移动超阈值即起拖 */
+  pointerType: string
+  /** 起拖达成（卡片已拽起）；false = 仍在等待窗内 */
+  active: boolean
+  /** 本次拖拽是否真的拽到过别的卡片（有过插入点）——区分「拖拽」与普通点击 */
+  engaged: boolean
+  /** 当前插入点所在卡片；'' = 无（悬停在自己头上或列表外） */
+  overId: string
+  before: boolean
+  timer: number | null
+}
 
 export function Sidebar() {
   const {
@@ -99,6 +134,35 @@ export function Sidebar() {
   // 用户手动折叠过的项目集合——「折叠优先」：即使 expandAllSessions 模式下
   // 项目本应自动展开，被手动折叠后也不再自动弹回。
   const [manuallyCollapsed, setManuallyCollapsed] = useState<Set<string>>(new Set())
+  // Cover-conflict「切换到现有项目」聚焦闪烁：目标项目 id + 定时器/rAF 句柄
+  // （同目标重放需先摘 class、下一帧重挂，CSS 动画才能重新播放，ChatView
+  // 「上次输入」聚焦同款）。侧栏无「活跃项目」视觉态，闪烁是切换的唯一反馈。
+  const [focusFlashProjectId, setFocusFlashProjectId] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const flashRafRef = useRef<number | null>(null)
+  // 项目列表滚动容器——聚焦时把目标卡片滚进视口。
+  const projectsScrollRef = useRef<HTMLDivElement | null>(null)
+  // 项目卡片拖拽排序（长按起拖，指针事件统一路径：鼠标/触摸通用，无 HTML5
+  // DnD 的触摸盲区）：
+  // - projDrag：渲染态（拽起源 + 插入点），驱动上浮特效与插入指示线
+  // - projDragRef：事件态（window 级 pointermove/up 直读，避开陈旧闭包）
+  // 起拖区即卡片头部（收起态=整卡、展开态=标题条）；不占独立手柄位。
+  const [projDrag, setProjDrag] = useState<{
+    draggingId: string
+    overId: string
+    before: boolean
+  } | null>(null)
+  const projDragRef = useRef<ProjDragState | null>(null)
+  // 拽起卡的 DOM 引用：跟随指针的 transform 在此直写。pointermove 是高频事件，
+  // 每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖——与 turnClock
+  // 每秒读数直写 DOM、抽屉拖拽直改宽度同一手法。React 只管理 lifted class
+  // 与插入线（目标变化才动），不管理 transform，故松手时须手动清空。
+  const draggedElRef = useRef<HTMLElement | null>(null)
+  // 拖拽达成时间戳：抑制其后续补发的 header click。浏览器把 down/up 的最近
+  // 公共祖先作为 click 目标——起点在某张卡头部、终点漂到别的卡时 click 落在
+  // 原头部，不抑制会演变成展开切换（SessionRow 长按补发 click 同款手法）。
+  // 仅在「真拽到过别的卡片」时记：长按原样松手是慢速点击，click 必须放行。
+  const projPressAtRef = useRef(0)
   const [createProjOpen, setCreateProjOpen] = useState(false)
   const [createSessWorkspaceId, setCreateSessWorkspaceId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null)
@@ -324,6 +388,13 @@ export function Sidebar() {
     return () => clearInterval(id)
   }, [setConnected])
 
+  // 聚焦闪烁的定时器/rAF 卸载即收：闪烁中卸载侧栏也要清句柄，
+  // 否则回调落到已卸载组件树上（setState on unmounted）。
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+  }, [])
+
   // Refresh projects when the page becomes visible again — catches
   // directories moved/deleted while the tab was hidden (path_valid changes).
   useEffect(() => {
@@ -416,6 +487,222 @@ export function Sidebar() {
     }
     setActiveWorkspace(wt.id === activeWorkspaceId ? null : wt.id)
   }
+
+  // Cover-conflict「切换到现有项目」聚焦：展开（折叠态先展开）→ 滚动进视口 →
+  // 卡片 Y 轴弹跳 + accent ring 闪烁。
+  // 为什么需要：侧栏没有任何「活跃项目」视觉态（ProjectCard 不读
+  // activeProjectId），setActiveProject 后侧栏零反馈——用户看到的就是
+  // 「窗口关了，什么都没发生」。闪烁与展开即切换动作的可见回执。
+  const focusProjectCard = (projectId: string) => {
+    // 折叠态先展开：与 toggleProject 展开分支同口径（清手动折叠标记 +
+    // 火并忘加载数据）。不展开则卡片高度不变，「切换到了」的感知落空，
+    // 滚动定位也可能因 nearest 判定「已在视口」而不动。
+    if (!isProjectDisplayExpanded(projectId)) {
+      setManuallyCollapsed((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+      setExpandedProjects((prev) => {
+        const next = new Set(prev)
+        next.add(projectId)
+        return next
+      })
+      // Fire-and-forget：展开立即生效，不等网络往返（toggleProject 同款）。
+      void Promise.all([loadWorktrees(projectId), loadSessions(projectId)])
+    }
+    // 滚动进视口：等展开渲染落定（下一帧）再量，否则卡片还没长高。
+    // scrollIntoView 为可选调用——jsdom 等无布局环境未实现时不炸。
+    requestAnimationFrame(() => {
+      projectsScrollRef.current
+        ?.querySelector<HTMLElement>(`[data-proj-id="${projectId}"]`)
+        ?.scrollIntoView?.({ block: 'nearest' })
+    })
+    // 闪烁：同一目标已在闪烁中时先摘 class、下一帧重挂，CSS 动画得以重放
+    // （ChatView「上次输入」聚焦同款手法）。项目 id 为后端 uuid，不含
+    // 选择器元字符，属性选择器无需转义。
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current)
+    if (flashRafRef.current !== null) window.cancelAnimationFrame(flashRafRef.current)
+    const armFlash = () => {
+      setFocusFlashProjectId(projectId)
+      flashTimerRef.current = window.setTimeout(() => {
+        setFocusFlashProjectId(null)
+        flashTimerRef.current = null
+      }, PROJECT_CARD_FLASH_MS)
+    }
+    if (focusFlashProjectId === projectId) {
+      setFocusFlashProjectId(null)
+      flashRafRef.current = window.requestAnimationFrame(() => {
+        flashRafRef.current = null
+        armFlash()
+      })
+    } else {
+      armFlash()
+    }
+  }
+
+  // ── 项目卡片拖拽排序 ────────────────────────────────────────────
+  // 提交：本地乐观重排 → PUT /projects/order；失败回滚 + toast。
+  // 顺序真源是 store 的 projects（getState 直读，避开 window 处理器里的
+  // 陈旧闭包）；渲染顺序与落盘载荷由 computeProjectReorder 一次算出，两者
+  // 不可能漂移。
+  const commitProjectReorder = useCallback(
+    (draggedId: string, overId: string, before: boolean) => {
+      const current = useAppStore.getState().projects
+      const nextIds = computeProjectReorder(
+        current.map((p) => p.id),
+        draggedId,
+        overId,
+        before,
+      )
+      const unchanged =
+        nextIds.length === current.length && nextIds.every((id, i) => id === current[i].id)
+      if (unchanged) return // 拖回原位 / 目标已不在列表（DOM 与 store 竞态）
+      const byId: Record<string, Project> = {}
+      for (const p of current) byId[p.id] = p
+      const reordered = nextIds.flatMap((id) => {
+        const p = byId[id]
+        return p ? [p] : []
+      })
+      const previous = current
+      setProjects(reordered)
+      void api.reorderProjects(nextIds).catch(() => {
+        setProjects(previous)
+        addToast('error', t('sidebar.reorderFailed') ?? 'Failed to save project order')
+      })
+    },
+    [setProjects, addToast, t],
+  )
+
+  /** 起拖达成：记 DOM 引用（跟随指针用）+ 上浮 class + 触觉反馈。 */
+  const activateProjDrag = useCallback((st: ProjDragState) => {
+    st.active = true
+    // 项目 id 为后端 uuid，不含选择器元字符，属性选择器无需转义
+    // （focusProjectCard 的滚动定位同款假设）。
+    draggedElRef.current = document.querySelector<HTMLElement>(`[data-proj-id="${st.id}"]`)
+    hapticTap()
+    setProjDrag({ draggingId: st.id, overId: '', before: true })
+  }, [])
+
+  // window 级指针监听：projDragRef 为空时纯读引用即返回，零成本；订阅随
+  // 组件卸载摘除。目标卡片定位优先 elementFromPoint——触摸指针有隐式
+  // capture，e.target 会停在按下处的卡片上命中不了别的卡；jsdom 无布局
+  // （elementFromPoint 未实现）时回退 e.target，测试可直接朝卡片派发。
+  useEffect(() => {
+    const cardAtPoint = (x: number, y: number, target: EventTarget | null): HTMLElement | null => {
+      if (typeof document.elementFromPoint === 'function') {
+        const hit = document.elementFromPoint(x, y)?.closest?.('[data-proj-id]')
+        if (hit) return hit as HTMLElement
+      }
+      const el = target as Element | null
+      return (el?.closest?.('[data-proj-id]') as HTMLElement | null) ?? null
+    }
+    const clearPending = (st: ProjDragState | null) => {
+      if (st?.timer != null) {
+        window.clearTimeout(st.timer)
+        st.timer = null
+      }
+    }
+    const onMove = (e: PointerEvent) => {
+      const st = projDragRef.current
+      if (!st) return
+      const dx = e.clientX - st.startX
+      const dy = e.clientY - st.startY
+      if (!st.active) {
+        if (st.pointerType === 'touch') {
+          // 触摸：长按达成前的移动 = 滚动 / 点击拖动，取消本次起拖
+          if (dx * dx + dy * dy > PROJ_LONG_PRESS_CANCEL_PX * PROJ_LONG_PRESS_CANCEL_PX) {
+            clearPending(st)
+            projDragRef.current = null
+          }
+          return
+        }
+        // 鼠标/笔：超过阈值立即起拖（不做长按等待）
+        if (dx * dx + dy * dy < PROJ_DRAG_THRESHOLD_PX * PROJ_DRAG_THRESHOLD_PX) return
+        activateProjDrag(st)
+      }
+      // 跟随指针：transform 直写（见 draggedElRef 注释——不走 React）。
+      // scale(1.02) 是「捏在手里」的放大暗示，与投影/描边同向加强。
+      if (draggedElRef.current) {
+        draggedElRef.current.style.transform = `translate(${dx}px, ${dy}px) scale(1.02)`
+      }
+      // 插入点判定：命中卡是「被拽起卡下方」的那张（拽起卡 pointer-events:none）
+      const card = cardAtPoint(e.clientX, e.clientY, e.target)
+      const overId = card?.dataset.projId
+      if (!overId || overId === st.id) {
+        // 悬停在自己头上 / 移出列表：摘插入点，卡片保持被拽起
+        if (st.overId !== '') {
+          st.overId = ''
+          setProjDrag({ draggingId: st.id, overId: '', before: true })
+        }
+        return
+      }
+      const rect = card.getBoundingClientRect()
+      const before = e.clientY < rect.top + rect.height / 2
+      if (st.overId === overId && st.before === before) return
+      st.engaged = true
+      st.overId = overId
+      st.before = before
+      setProjDrag({ draggingId: st.id, overId, before })
+    }
+    const finish = () => {
+      const st = projDragRef.current
+      projDragRef.current = null
+      clearPending(st)
+      // 跟随 transform 必须手动清：React 不管这个元素的 transform，不清会残留偏移
+      if (draggedElRef.current) {
+        draggedElRef.current.style.transform = ''
+        draggedElRef.current = null
+      }
+      setProjDrag(null)
+      // 只有真的拽到过别的卡片才算一次拖拽：记时间戳抑制补发的 click（浏览器
+      // 把 down/up 的公共祖先作为 click 目标，落回原卡片头部时会误触展开切换）。
+      // 原地按下松手 / 触摸长按原样松手不算拖——click 照常展开卡片。
+      if (st?.active && st.engaged) {
+        projPressAtRef.current = Date.now()
+        if (st.overId !== '') commitProjectReorder(st.id, st.overId, st.before)
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+    }
+  }, [commitProjectReorder, activateProjDrag])
+
+  const handleProjHeaderPointerDown = useCallback((e: ReactPointerEvent, projectId: string) => {
+    if (e.button !== 0) return // 仅左键 / 触摸（触摸 pointerdown 的 button 为 0）
+    // 头部动作按钮（worktree / rename / delete / repair）的 pointerdown 会冒泡
+    // 到 header——就近过滤，按住它们不起拖（否则卡片被拽起，按钮点击反而被
+    // 拖拽语义吃掉）。
+    if ((e.target as HTMLElement).closest('button')) return
+    // 阻止文本选中与焦点抢占（拖动期间尤其明显）
+    e.preventDefault()
+    const st: ProjDragState = {
+      id: projectId,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerType: e.pointerType,
+      active: false,
+      engaged: false,
+      overId: '',
+      before: true,
+      timer: null,
+    }
+    projDragRef.current = st
+    // 触摸才需要长按：手指一滑浏览器就滚列表，立即起拖会和滚动抢手势。
+    // 鼠标/笔没有这个歧义，移动超阈值即起拖（长按反而反直觉）。
+    if (st.pointerType === 'touch') {
+      st.timer = window.setTimeout(() => {
+        st.timer = null
+        if (projDragRef.current !== st) return // 已取消 / 已松手
+        activateProjDrag(st)
+      }, PROJ_LONG_PRESS_MS)
+    }
+  }, [activateProjDrag])
 
   // Agent enable handler — commented out pending notification scheme decision.
   // const handleHookEnable = useCallback(async (sessionId: string) => {
@@ -617,7 +904,10 @@ export function Sidebar() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content">
+      <div
+        ref={projectsScrollRef}
+        className="flex-1 overflow-y-auto px-2.5 pt-4 pb-16 overlay-scroll-content"
+      >
         {/* Duplicate projects banner — surfaces legacy data that should
             be consolidated. Click to open the merge dialog. */}
         {duplicates.length > 0 && !duplicatesDismissed && (
@@ -697,17 +987,30 @@ export function Sidebar() {
           </div>
         ) : (
           projects.map((proj) => (
-            <ProjectCard
-              key={proj.id}
-              project={proj}
-              isExpanded={isProjectDisplayExpanded(proj.id)}
-              expandAllSessions={expandAllSessions}
-              worktrees={worktrees[proj.id]}
-              sessions={sessions[proj.id] || []}
-              activeWorkspaceId={activeWorkspaceId}
-              activeSessionId={activeSessionId}
-              acpActivityFor={acpActivityFor}
-              onToggle={() => toggleProject(proj.id)}
+            <Fragment key={proj.id}>
+              {/* 插入指示线：拖拽悬停时落在两卡之间的 2px accent 线（纯展示，
+                  pointer-events:none 不抢命中）。 */}
+              {projDrag?.overId === proj.id && projDrag.before && (
+                <div className="sidebar-project-drop-line" />
+              )}
+              <ProjectCard
+                project={proj}
+                isExpanded={isProjectDisplayExpanded(proj.id)}
+                flashing={focusFlashProjectId === proj.id}
+                lifted={projDrag?.draggingId === proj.id}
+                expandAllSessions={expandAllSessions}
+                worktrees={worktrees[proj.id]}
+                sessions={sessions[proj.id] || []}
+                activeWorkspaceId={activeWorkspaceId}
+                activeSessionId={activeSessionId}
+                acpActivityFor={acpActivityFor}
+                onToggle={() => {
+                  // 拖拽达成后补发的 click 抑制（见 projPressAtRef 注释）；
+                  // 长按原样松手不记时间戳——慢速点击仍要能展开卡片
+                  if (Date.now() - projPressAtRef.current < PROJ_DRAG_CLICK_SUPPRESS_MS) return
+                  toggleProject(proj.id)
+                }}
+                onHeaderPointerDown={(e) => handleProjHeaderPointerDown(e, proj.id)}
               onOpenCreateWorktree={async () => {
                 if (!isProjectDisplayExpanded(proj.id)) {
                   setExpandedProjects(prev => { const next = new Set(prev); next.add(proj.id); return next })
@@ -738,6 +1041,10 @@ export function Sidebar() {
               onToggleSessionSelection={handleToggleSessionSelection}
               onSessionContextMenu={handleSessionContextMenu}
             />
+              {projDrag?.overId === proj.id && !projDrag.before && (
+                <div className="sidebar-project-drop-line" />
+              )}
+            </Fragment>
           ))
         )}
 
@@ -851,6 +1158,7 @@ export function Sidebar() {
         homeDir={homeDir}
         onClose={() => setCreateProjOpen(false)}
         reloadProjects={loadProjects}
+        onFocusProject={focusProjectCard}
       />
 
       {/* ── Create Session Modal ── */}

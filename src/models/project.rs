@@ -7,6 +7,10 @@ pub struct Project {
     pub name: String,
     pub path: String,
     pub created_at: String,
+    /// Sidebar display order (drag-to-reorder); list endpoints order by this
+    /// ASC. Migration `20261011_add_project_position.sql` backfills it from
+    /// the previous `created_at DESC` order.
+    pub position: i64,
     /// Whether the project path currently exists on disk. Computed at query
     /// time by `list_projects` (and refreshed on create/update responses).
     /// `#[sqlx(default)]` keeps `SELECT *` rows (no such column) valid.

@@ -31,7 +31,7 @@ pub enum ClientControl {
     /// 按存储锚出窗、忽略 y（锚缺失时回退按 y 定位，降级不断连）。
     /// `serde(default)` 缺省 false = 滚动语义：旧前端缓存发出的刷新请求降级
     /// 为按偏移定位（滑移），与 09-08 A2 的 Option 降级惯例一致。
-    /// 见 `docs/dev/plans/2026-09-12-pty-viewport-stateful-anchor.md` D1/D2。
+    /// 见 `docs/dev/plans/archive/2026-09-12-pty-viewport-stateful-anchor.md` D1/D2。
     #[serde(rename = "viewport_request")]
     ViewportRequest {
         y: i32,

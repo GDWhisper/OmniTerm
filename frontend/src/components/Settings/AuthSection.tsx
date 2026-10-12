@@ -4,6 +4,7 @@ import { api, DEFAULT_USERNAME, type AuthSettings } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useToastStore } from '../../stores/toastStore'
 import { READER_FONT } from '../../utils/fonts'
+import { isValidUsernameShape, MIN_PASSWORD_LEN } from '../../utils/authConstraints'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { ToggleRow, SectionTitle } from './toggleRow'
@@ -79,7 +80,7 @@ export function AuthSection() {
       setMsg({ type: 'err', text: t('auth.passwordMismatch') })
       return
     }
-    if (newPw.length < 4) {
+    if (newPw.length < MIN_PASSWORD_LEN) {
       setMsg({ type: 'err', text: t('auth.passwordTooShort') })
       return
     }
@@ -95,6 +96,8 @@ export function AuthSection() {
       const status = (err as { status?: number })?.status
       if (status === 401) {
         setMsg({ type: 'err', text: t('auth.wrongPassword') })
+      } else if (status === 429) {
+        setMsg({ type: 'err', text: t('auth.rateLimited') })
       } else {
         setMsg({ type: 'err', text: t('auth.changePasswordFailed') })
       }
@@ -126,6 +129,12 @@ export function AuthSection() {
       setMsg({ type: 'err', text: t('auth.fillAllFields') })
       return
     }
+    // 与 AuthPage / 后端 normalize_username 同一契约（1..=32 码点、禁控制字符），
+    // 本地先拦，免得明知 400 还打一次请求。
+    if (!isValidUsernameShape(next)) {
+      setMsg({ type: 'err', text: t('auth.invalidUsername') })
+      return
+    }
 
     setChangingUsername(true)
     try {
@@ -144,6 +153,8 @@ export function AuthSection() {
         setMsg({ type: 'err', text: t('auth.wrongPassword') })
       } else if (status === 400) {
         setMsg({ type: 'err', text: t('auth.invalidUsername') })
+      } else if (status === 429) {
+        setMsg({ type: 'err', text: t('auth.rateLimited') })
       } else {
         setMsg({ type: 'err', text: t('auth.changeUsernameFailed') })
       }
@@ -193,7 +204,7 @@ export function AuthSection() {
   /** Enable when no password exists yet: create the user (default username), flip the switch, then sign the user out so they log in with the new password. */
   const handleSetupEnable = async () => {
     setSetupMsg(null)
-    if (setupPw.length < 4) {
+    if (setupPw.length < MIN_PASSWORD_LEN) {
       setSetupMsg({ type: 'err', text: t('auth.passwordTooShort') })
       return
     }
@@ -213,8 +224,12 @@ export function AuthSection() {
       // the session open silently, and the user asked for a fresh sign-in.
       await api.logout().catch(() => {})
       setAuthState('unauthenticated')
-    } catch {
-      setSetupMsg({ type: 'err', text: t('auth.enableFailed') })
+    } catch (err) {
+      const status = (err as { status?: number })?.status
+      setSetupMsg({
+        type: 'err',
+        text: status === 429 ? t('auth.rateLimited') : t('auth.enableFailed'),
+      })
     } finally {
       setSwitchBusy(false)
     }
@@ -242,6 +257,8 @@ export function AuthSection() {
       const status = (err as { status?: number })?.status
       if (status === 401) {
         setSetupMsg({ type: 'err', text: t('auth.wrongPassword') })
+      } else if (status === 429) {
+        setSetupMsg({ type: 'err', text: t('auth.rateLimited') })
       } else {
         setSetupMsg({ type: 'err', text: t('auth.enableFailed') })
       }
@@ -315,6 +332,7 @@ export function AuthSection() {
             <input
               id="auth-change-username-pw"
               type="password"
+              aria-label={t('auth.currentPassword')}
               placeholder={t('auth.currentPassword')}
               value={usernamePw}
               onChange={(e) => setUsernamePw(e.target.value)}
@@ -324,6 +342,7 @@ export function AuthSection() {
             <input
               id="auth-change-username-new"
               type="text"
+              aria-label={t('auth.newUsername')}
               placeholder={t('auth.newUsername')}
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
@@ -347,7 +366,9 @@ export function AuthSection() {
           <SectionTitle style={{ marginTop: 16 }}>{t('auth.changePassword')}</SectionTitle>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <input
+              id="auth-change-password-current"
               type="password"
+              aria-label={t('auth.currentPassword')}
               placeholder={t('auth.currentPassword')}
               value={currentPw}
               onChange={(e) => setCurrentPw(e.target.value)}
@@ -355,7 +376,9 @@ export function AuthSection() {
               autoComplete="current-password"
             />
             <input
+              id="auth-change-password-new"
               type="password"
+              aria-label={t('auth.newPassword')}
               placeholder={t('auth.newPassword')}
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
@@ -363,7 +386,9 @@ export function AuthSection() {
               autoComplete="new-password"
             />
             <input
+              id="auth-change-password-confirm"
               type="password"
+              aria-label={t('auth.confirmNewPassword')}
               placeholder={t('auth.confirmNewPassword')}
               value={confirmPw}
               onChange={(e) => setConfirmPw(e.target.value)}

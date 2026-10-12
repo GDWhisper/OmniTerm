@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
 import { useAttention } from '../../hooks/useAttention'
@@ -29,6 +29,15 @@ export function ProjectCard(props: {
   activeSessionId: string | null
   acpActivityFor: (sessionId: string) => AcpActivity | undefined
   onToggle: () => void
+  /** 聚焦闪烁中（cover-conflict「切换到现有项目」回执）：整卡 Y 轴弹跳 +
+   *  accent ring，见 index.css .sidebar-project-focus-flash。 */
+  flashing?: boolean
+  /** 拽起中（长按起拖达成）：整卡上浮 + 硬投影放大 + accent 描边，
+   *  见 index.css .sidebar-project-lifted。 */
+  lifted?: boolean
+  /** 卡片头部 pointerdown：Sidebar 在此起步「长按起拖」判定（头部按钮除外）。
+   *  拖拽区即卡片头部——收起态整卡、展开态的标题条，收起/展开都可拖。 */
+  onHeaderPointerDown?: (e: ReactPointerEvent) => void
   onOpenCreateWorktree: () => void
   onRename: (target: RenameTarget) => void
   onDeleteProject: () => void
@@ -85,11 +94,15 @@ export function ProjectCard(props: {
   )
 
   return (
-    <div className="sidebar-project-card">
+    <div
+      className={`sidebar-project-card${props.flashing ? ' sidebar-project-focus-flash' : ''}${props.lifted ? ' sidebar-project-lifted' : ''}`}
+      data-proj-id={props.project.id}
+    >
       {/* Project header — stacked name + path */}
       <div
         className="sidebar-project-header"
         onClick={() => props.onToggle()}
+        onPointerDown={(e) => props.onHeaderPointerDown?.(e)}
       >
         <span
           className={projAgg === 'working' || projAgg === 'blocked' ? 'activity-pulse' : ''}

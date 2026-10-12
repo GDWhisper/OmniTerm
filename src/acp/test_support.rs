@@ -72,7 +72,8 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 ///   写入文件——钉「重复 env 键最后一条胜出」语义（计划 D4）。
 ///
 /// 通用事件日志：`FAKE_EVENTS_FILE` 存在时，关键协议事件逐行追加（`prompt` /
-/// `cancel` / `perm-response <原文>` / `term-* <原文>`），测试端轮询断言。
+/// `cancel` / `perm-response <原文>` / `term-* <原文>` / `load-cwd <cwd>`），
+/// 测试端轮询断言。
 pub(crate) const FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 # test-only fake ACP agent（计划 D5）。响应 initialize（声明 loadSession，restore
 # 路径也要能建连）与 session/new，之后按 FAKE_MODE 行动。
@@ -113,6 +114,14 @@ while IFS= read -r line; do
         while [ ! -f "$FAKE_EXIT_FILE" ]; do sleep 1; done
         exit 3
       fi
+      ;;
+    *'"method":"session/load"'*)
+      # 恢复会话：把请求里下发的 cwd 记入事件日志（测试端断言 omniterm 已规范化
+      # 尾斜杠——qoder 按路径编码会话目录，带尾斜杠会找不到会话），回空结果。
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      load_cwd=$(printf '%s' "$line" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
+      log_event "load-cwd $load_cwd"
+      printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
       ;;
     *'"method":"session/delete"'*)
       # agent 侧记录删除（sessionCapabilities.delete）：把收到的 sessionId 记入

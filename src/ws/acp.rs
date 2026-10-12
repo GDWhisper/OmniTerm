@@ -18,7 +18,7 @@ use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
 use crate::acp::turn_accumulator::TurnTiming;
-use crate::acp::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEndEvent, client};
+use crate::acp::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEvent, client};
 use crate::api::agents::load_agent;
 
 /// 单条客户端帧的体积上限。这是管道自身的口径，不是内容判断：tungstenite 默认
@@ -145,6 +145,20 @@ enum AcpClientMessage {
     PermissionResponse { id: String, option_id: String },
     #[serde(rename = "set_config_option")]
     SetConfigOption { config_id: String, value: String },
+    /// 心跳探针（客户端发起）：服务端原样回一帧 `pong`。
+    ///
+    /// 为什么需要：ACP WS 两端此前都没有任何保活字节，释放态连接寿命稳定落在
+    /// ~125s（隧道/承载网空闲重置，实测见 `docs/dev/plans/2026-09-19-ws-idle-disconnect-heartbeat.md`）。
+    /// 重置形态是 `ResetWithoutClosingHandshake`，且**冻结页不补派 onclose**
+    /// （移动端切后台 / bfcache），前端于是握着一条已死的 socket 而不自知：
+    /// `sendPrompt` 见 `readyState !== OPEN` 直接静默 return —— 用户打字毫无反应，
+    /// 即「假死」。有了 ping/pong，前端连续 N 个周期收不到 pong 即可主动断开重连。
+    ///
+    /// 间隔与判定阈值在前端（`useAcpChat` 的 `HEARTBEAT_*` 常量），服务端只做无状态
+    /// 回包：不记连接、不起定时器——多一个服务端状态就多一处要收尸的生命周期。
+    /// 页面隐藏时前端主动停发（移动端电量账），故服务端看不到持续 ping 也无需清理。
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 #[derive(Debug, Serialize)]
@@ -234,8 +248,10 @@ enum AcpServerMessage<'a> {
     /// （未知→不删的安全默认，见计划 D3）。
     #[serde(rename = "capabilities")]
     Capabilities { image: bool, embedded_context: bool, agent_delete: bool, agent_name: String },
-    /// 连接时下发当前是否有进行中的 assistant turn。`active:false` 时前端定稿
-    /// 任何残留的 streaming 消息（turn 在 WS 断开期间已结束的兜底）。
+    /// turn 活跃态。连接时下发快照（`active:false` 时前端定稿任何残留的 streaming
+    /// 消息，兜底「turn 在 WS 断开期间已结束」）；此后随 turn 生命周期实时广播
+    /// `active:true`（`TurnEvent::Started` → 本帧）：所有标签页——不只发 prompt
+    /// 的那个——据此显示思考指示/计时，迟到帧的定稿/流式归属判定也有可靠的真值。
     #[serde(rename = "turn_state")]
     TurnState { active: bool },
     /// 连接时下发进行中 turn 的快照，供重连客户端无缝续接（仅 active 且已折叠过帧时）。
@@ -243,6 +259,9 @@ enum AcpServerMessage<'a> {
     /// 后续 live 帧 seq 大于它才应用（见 useAcpChat 对账）。
     #[serde(rename = "turn_snapshot")]
     TurnSnapshot { row_id: String, text: String, blocks: String, seq: u64 },
+    /// 心跳应答（`ping` 的回复）。无载荷、无状态，前端只据此复位「未收到 pong」计数。
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 /// 把一条 session_update 通知序列化为 WS 帧并经 notify_tx 发出。
@@ -302,12 +321,14 @@ async fn spawn_notify_task(
     });
 }
 
-/// 转发 turn 结束事件为 `prompt_done` / `prompt_error` 帧。经 broadcast
-/// 使所有连接（含 prompt 进行中断线重连的新连接）都能收到结束信号；
-/// 旧实现只发给发起 prompt 的连接，重连后前端永远停留在 running 态。
-async fn spawn_turn_end_task(
+/// 转发 turn 生命周期事件：`Started` → `turn_state{active:true}`，
+/// `Done` → `prompt_done`，`Error` → `prompt_error`。经 broadcast 使所有连接
+/// （含 prompt 进行中断线重连的新连接）都能收到结束信号；旧实现只发给发起
+/// prompt 的连接，重连后前端永远停留在 running 态。`Started` 同样必须广播：
+/// 非发起标签页只有收到它才知道 turn 已开始（连接快照只在连接那一刻下发）。
+async fn spawn_turn_event_task(
     session_id: &str,
-    mut rx: tokio::sync::broadcast::Receiver<TurnEndEvent>,
+    mut rx: tokio::sync::broadcast::Receiver<TurnEvent>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
 ) {
     let session_id = session_id.to_string();
@@ -316,7 +337,10 @@ async fn spawn_turn_end_task(
             match rx.recv().await {
                 Ok(event) => {
                     let msg = match &event {
-                        TurnEndEvent::Done { stop_reason, row_id, duration, abnormal } => {
+                        TurnEvent::Started => {
+                            serde_json::to_string(&AcpServerMessage::TurnState { active: true })
+                        }
+                        TurnEvent::Done { stop_reason, row_id, duration, abnormal } => {
                             serde_json::to_string(&AcpServerMessage::PromptDone {
                                 stop_reason,
                                 row_id: row_id.as_deref(),
@@ -324,7 +348,7 @@ async fn spawn_turn_end_task(
                                 abnormal: *abnormal,
                             })
                         }
-                        TurnEndEvent::Error { message } => {
+                        TurnEvent::Error { message } => {
                             serde_json::to_string(&AcpServerMessage::PromptError { message })
                         }
                     }
@@ -337,7 +361,7 @@ async fn spawn_turn_end_task(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(
                         session_id = %session_id,
-                        "ACP turn-end subscriber lagged by {} messages; dropped stale events",
+                        "ACP turn-event subscriber lagged by {} messages; dropped stale events",
                         n
                     );
                 }
@@ -567,14 +591,14 @@ impl StopEndClass {
 /// - `Abnormal`: Refusal / 未来新增变体（`_` 兜底臂）→ 留痕 + error 语义
 ///
 /// 为什么按类型匹配而非按 wire 字符串：v1 schema 的 `StopReason` 是 `#[non_exhaustive]`
-/// 闭枚举（无 `Other` 变体），未知值在反序列化阶段就失败并走 `TurnEndEvent::Error`；
+/// 闭枚举（无 `Other` 变体），未知值在反序列化阶段就失败并走 `TurnEvent::Error`；
 /// 加 `_` 兜底臂是为 crate 升级到带 `Other(String)` 的 schema 预留（AGENTS.md §8：
 /// 不得把单一实现的行为当作约定的全部事实）。
 ///
 /// **覆盖面说明（诚实记录，勿伪造测试）**：截至 agent-client-protocol-schema 1.9.1
 /// （2026-10-01 SDK 升级后本仓锁定版本，SDK 2.2.0），`StopReason` 仍只有五个单位变体，**`_` 兜底臂
 /// 今天不可达**——unknown/`_` 前缀值在 JSON 反序列化阶段即失败，直接走
-/// `dispatch_prompt` 的 `Err` 分支（`TurnEndEvent::Error`），到不了本函数。
+/// `dispatch_prompt` 的 `Err` 分支（`TurnEvent::Error`），到不了本函数。
 /// 故本仓的单测只能覆盖五个已存在变体；兜底臂的价值在于未来 crate 升级时
 /// 「未知值仍然按非正常」这一不变式不丢失（升级后应为其补一条测试）。
 fn classify_stop_reason(r: &StopReason) -> StopEndClass {
@@ -644,7 +668,7 @@ const SYSTEM_LABEL_TURN_FAILED_CANCELLED: &str = "system.turnFailed.cancelled";
 ///
 /// **不可达直到 crate 升级**：当前锁定的 agent-client-protocol-schema 1.9.1 里 v1
 /// `StopReason` 是闭枚举（5 个单位变体、无 `Other`），未知值在反序列化阶段就失败并
-/// 走 `TurnEndEvent::Error`，到不了这里。升级到带 `Other(String)` 的 schema 后：
+/// 走 `TurnEvent::Error`，到不了这里。升级到带 `Other(String)` 的 schema 后：
 /// ① 先补一条 `(Abnormal, Other)` 的用例（现有
 /// `unknown_variant_is_unreachable_today_documented` 断言会随之转红，即是提醒）；
 /// ② 确认 `stop_reason_wire` 对 `Other` 产出 `_` 前缀的自定义 wire 形态。
@@ -796,22 +820,29 @@ async fn dispatch_prompt(
 ) {
     // 标记 prompt 进行中（活跃度守卫据此判断 agent 在工作中），并开启累积器
     // turn 门控；assistant 回复由累积器实时防抖落库（见 turn_accumulator）。
-    c.mark_prompt_active();
+    // 返回的世代号用于收尾守卫：send_prompt 返回时若世代已被更晚的 prompt 推进
+    // （本 turn 在飞行中被 supersede），本任务不得再定稿/广播——终态已由
+    // `mark_prompt_active` 的 supersede 路径补发，再定稿会误杀新 turn。
+    let generation = c.mark_prompt_active();
     match c.send_prompt(&text, images, resources, files).await {
         Ok(resp) => {
-            // mark_prompt_idle 内部定稿累积器进行中的 turn。
-            c.mark_prompt_idle();
+            // 定稿累积器进行中的 turn（世代匹配才动手，见其文档）。false = 本
+            // turn 已被顶替、或已被别的终结者（reaper / cancel 兜底）收尾——两种
+            // 情况下本任务都不再广播终态帧（重复帧或张冠李戴）。
+            if !c.mark_prompt_idle_for_generation(generation) {
+                return;
+            }
             // D1/D3：协议合法值 ≠ 成功语义。白名单外的终态（refusal / 取消 / 未知值）
             // 必须在聊天流留痕——否则表现为「turn 静默定稿、无任何失败痕迹」；
             // 白名单内但本轮零可见产出的（实测 pi-acp 把 provider 403 折成 end_turn）
             // 同样留痕，见 `classify_turn_end`。
-            // 必须先 mark_prompt_idle 再留痕（D3 注意点）：created_at 因此严格晚于
-            // 正文行，前端渲染顺序即「正文 → 失败提示」。
+            // 必须先收尾再留痕（D3 注意点）：created_at 因此严格晚于正文行，
+            // 前端渲染顺序即「正文 → 失败提示」。
             let class = notice_turn_end_if_abnormal(&c, &db, &session_id, &resp.stop_reason).await;
             // 经 broadcast 通知所有连接（发起连接可能已断开重连）。
-            c.notify_turn_end(TurnEndEvent::Done {
+            c.notify_turn_event(TurnEvent::Done {
                 stop_reason: format!("{:?}", resp.stop_reason),
-                // mark_prompt_idle 已定稿本 turn，但 row_id 要到下一次 begin_turn 才清 ——
+                // 收尾已定稿本 turn，但 row_id 要到下一次 begin_turn 才清 ——
                 // 此处仍能读到本 turn 的行 id，交给前端做 cooked 回写。
                 row_id: c.turn_row_id(),
                 // 同理，定稿结算出的时长也在此刻读取，随帧下发使耗时立即显示。
@@ -824,7 +855,10 @@ async fn dispatch_prompt(
             });
         }
         Err(e) => {
-            c.mark_prompt_idle();
+            // 同 Ok 分支：世代不匹配（supersede）或已被收尾时不重复报错。
+            if !c.mark_prompt_idle_for_generation(generation) {
+                return;
+            }
             // 连接已被主动释放（reaper 回收 / 手动 release）时，库错误
             // "connection is no longer running" 对用户无意义且误导（看似发送功能
             // 坏了，实为进程已回收）——改为可操作提示：重新发送即自动恢复。
@@ -834,7 +868,7 @@ async fn dispatch_prompt(
             } else {
                 "会话进程已释放，请重新发送以自动恢复连接".to_string()
             };
-            c.notify_turn_end(TurnEndEvent::Error { message });
+            c.notify_turn_event(TurnEvent::Error { message });
         }
     }
 }
@@ -911,8 +945,8 @@ async fn restore_acp_session(
     spawn_crash_task(sid, crash_rx, notify_tx.clone()).await;
     let system_notice_rx = new_client.system_notice_subscribe();
     spawn_system_notice_task(sid, system_notice_rx, notify_tx.clone()).await;
-    let turn_end_rx = new_client.turn_end_subscribe();
-    spawn_turn_end_task(sid, turn_end_rx, notify_tx.clone()).await;
+    let turn_event_rx = new_client.turn_event_subscribe();
+    spawn_turn_event_task(sid, turn_event_rx, notify_tx.clone()).await;
     let term_rx = new_client.terminal_event_subscribe();
     spawn_terminal_task(sid, term_rx, notify_tx.clone()).await;
     *client = Some(new_client.clone());
@@ -1035,11 +1069,14 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             // subscribe-before-snapshot：先订阅再取快照，消除两者之间的丢帧 gap，
             // 把重叠窗退化为 seq 可解的重复窗（前端按 seq 去重，见 turn_snapshot 帧）。
             let rx = c.session_update_subscribe();
-            // turn_end 也须在快照前订阅：若 turn 在快照与订阅之间结束，旧代码会发出
-            // 陈旧的 turn_state{active:true} 且 prompt_done 事件无订阅者而丢失，
+            // turn 生命周期事件也须在快照前订阅：若 turn 在快照与订阅之间结束，旧代码
+            // 会发出陈旧的 turn_state{active:true} 且 prompt_done 事件无订阅者而丢失，
             // 前端永久卡在 running 态。订阅先于快照后，重叠窗内至多收到一个幂等的
-            // prompt_done（markDone 可重入），不会造成状态错乱。
-            let turn_end_rx = c.turn_end_subscribe();
+            // prompt_done（markDone 可重入），不会造成状态错乱。反过来，turn 在快照与
+            // 订阅之间**开始**时，TurnEvent::Started 也会被本订阅接到（快照先发
+            // active:false、随后 Started 帧纠正，顺序由 notify_tx FIFO 保证：
+            // 快照入队在前，broadcast 转发在后）。
+            let turn_event_rx = c.turn_event_subscribe();
             // 快照与 turn 帧必须先经 notify_tx 入队，再 spawn_notify_task 转发 live 帧；
             // notify_tx 为 FIFO 单消费者，故快照帧保证先于任何 live 帧到达前端。
             let snap = c.turn_snapshot();
@@ -1087,7 +1124,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_crash_task(&session_id, crash_rx, notify_tx.clone()).await;
             let system_notice_rx = c.system_notice_subscribe();
             spawn_system_notice_task(&session_id, system_notice_rx, notify_tx.clone()).await;
-            spawn_turn_end_task(&session_id, turn_end_rx, notify_tx.clone()).await;
+            spawn_turn_event_task(&session_id, turn_event_rx, notify_tx.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(&session_id, term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
@@ -1385,6 +1422,15 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
                                         let _ = notify_tx.send(Message::Text(msg.into())).await;
                                     }
                             }
+                            Ok(AcpClientMessage::Ping) => {
+                                // 心跳回包。写失败即对端已消失，与其它帧同一处置
+                                // （break 由外层 ws_rx 关闭自然收尾）。
+                                let msg = serde_json::to_string(&AcpServerMessage::Pong)
+                                    .unwrap_or_default();
+                                if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                                    break;
+                                }
+                            }
                             Err(e) => {
                                 let err_msg = format!("invalid message: {}", e);
                                 let msg = serde_json::to_string(&AcpServerMessage::Error {
@@ -1460,6 +1506,33 @@ mod tests {
     };
     // 判定口径钉在协议类型上（v1 schema），不构造 wire 字符串。
     use agent_client_protocol::schema::v1::StopReason;
+
+    // ── 心跳帧（ping / pong）线格式 ─────────────────────────────────
+
+    #[test]
+    fn ping_frame_deserializes() {
+        let msg: AcpClientMessage = serde_json::from_str(r#"{"type":"ping"}"#).unwrap();
+        assert!(matches!(msg, AcpClientMessage::Ping));
+    }
+
+    #[test]
+    fn pong_frame_serializes_with_type_tag() {
+        // 前端按 `frame.type === 'pong'` 派发，tag 名是唯一契约。
+        let json = serde_json::to_string(&AcpServerMessage::Pong).unwrap();
+        assert_eq!(json, r#"{"type":"pong"}"#);
+    }
+
+    // ── turn 生命周期帧（turn_state / prompt_done）线格式 ─────────────
+
+    #[test]
+    fn turn_state_frame_serializes_with_type_tag_and_active() {
+        // 前端按 `frame.type === 'turn_state'` 派发、读 `frame.active` 判定
+        // sending/计时，两者都是唯一契约（TurnEvent::Started → active:true）。
+        let json = serde_json::to_string(&AcpServerMessage::TurnState { active: true }).unwrap();
+        assert_eq!(json, r#"{"type":"turn_state","active":true}"#);
+        let json = serde_json::to_string(&AcpServerMessage::TurnState { active: false }).unwrap();
+        assert_eq!(json, r#"{"type":"turn_state","active":false}"#);
+    }
 
     // ── AcpClientMessage::Prompt 反序列化（§8 向后兼容） ──────────────
 
@@ -1547,7 +1620,7 @@ mod tests {
     /// 五个**今天可达**的协议变体在 D1 下的期望分类。
     ///
     /// 注意其中没有「未知值」项：v1 schema 的 `StopReason` 是闭枚举，unknown/
-    /// `_` 前缀值在反序列化阶段就失败（走 `TurnEndEvent::Error`），到不了判定
+    /// `_` 前缀值在反序列化阶段就失败（走 `TurnEvent::Error`），到不了判定
     /// 函数。`_ =>` 兜底臂的覆盖面说明见 `classify_stop_reason` 的文档注释。
     #[test]
     fn stop_reason_whitelist_classification() {
@@ -1783,9 +1856,8 @@ mod notice_tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::{
-        SYSTEM_LABEL_TURN_FAILED_EMPTY, SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass,
-        TurnEndEvent, build_turn_end_notice, dispatch_prompt, notice_turn_end_if_abnormal,
-        stop_reason_wire,
+        SYSTEM_LABEL_TURN_FAILED_EMPTY, SYSTEM_LABEL_TURN_FAILED_REFUSAL, StopEndClass, TurnEvent,
+        build_turn_end_notice, dispatch_prompt, notice_turn_end_if_abnormal, stop_reason_wire,
     };
     use crate::acp::agent_proc::spawn_test_lock_async;
     use crate::acp::chat_persistence::{insert_message, list_messages_page};
@@ -1824,7 +1896,7 @@ exit 0
     ///
     /// 与上面的 [`FAKE_AGENT_SCRIPT`] 只差 `session/prompt` 这一段：先推帧，再回一个
     /// 真实的 `stopReason`。没有它，`dispatch_prompt` 的 `Ok(resp)` 分支
-    /// （`mark_prompt_idle` → 留痕 → `notify_turn_end`）在测试里**零覆盖** ——
+    /// （`mark_prompt_idle_for_generation` → 留痕 → `notify_turn_event`）在测试里**零覆盖** ——
     /// 既有 5 个留痕用例全都直接调 `notice_turn_end_if_abnormal`，把这条链路
     /// 整个绕开了（把留痕调用换成 `classify_stop_reason(...)`、或把 `abnormal`
     /// 写死 `false`，全量测试仍 537 全绿 —— 这正是本次评审的 Blocker）。
@@ -2065,8 +2137,8 @@ exit 0
         client: &Arc<AcpClient>,
         db: &sqlx::SqlitePool,
         text: &str,
-    ) -> Result<TurnEndEvent, String> {
-        let mut rx = client.turn_end_subscribe();
+    ) -> Result<TurnEvent, String> {
+        let mut rx = client.turn_event_subscribe();
         // 必须先订阅再驱动：broadcast 不补历史，晚一步订阅就是永久收不到。
         dispatch_prompt(
             Arc::clone(client),
@@ -2078,15 +2150,97 @@ exit 0
             vec![],
         )
         .await;
-        // 留一个短超时兜住「帧根本没发」这种回归，避免测试挂死而不是失败。
-        // 10s 远大于本地 fake agent 的一次往返（毫秒级），只用于防死等。
-        match tokio::time::timeout(DISPATCH_EVENT_TIMEOUT, rx.recv()).await {
-            Ok(Ok(event)) => Ok(event),
-            Ok(Err(e)) => Err(format!("turn_end 广播接收失败: {e}")),
-            Err(_) => {
-                Err(format!("dispatch_prompt 未在 {DISPATCH_EVENT_TIMEOUT:?} 内广播 turn 结束事件"))
+        // dispatch_prompt 开头的 mark_prompt_active 会先广播 TurnEvent::Started
+        // （turn 开始），结束事件排在其后——跳过开始事件取终态。
+        loop {
+            // 留一个短超时兜住「帧根本没发」这种回归，避免测试挂死而不是失败。
+            // 10s 远大于本地 fake agent 的一次往返（毫秒级），只用于防死等。
+            match tokio::time::timeout(DISPATCH_EVENT_TIMEOUT, rx.recv()).await {
+                Ok(Ok(TurnEvent::Started)) => continue,
+                Ok(Ok(event)) => return Ok(event),
+                Ok(Err(e)) => return Err(format!("turn_event 广播接收失败: {e}")),
+                Err(_) => {
+                    return Err(format!(
+                        "dispatch_prompt 未在 {DISPATCH_EVENT_TIMEOUT:?} 内广播 turn 结束事件"
+                    ));
+                }
             }
         }
+    }
+
+    // ── turn 生命周期： Started 广播 与 supersede 补发终态 ──────────────
+    //
+    // 现场（2026-10-11 用户报告）：oh-my-pi 的 `/compact` 不回结束信号，用户直接发
+    // 下一条 → 旧气泡在所有前端永远停留在 streaming / 计时中。两条防线：
+    // 1) 每个 prompt 开始即广播 `TurnEvent::Started`（→ `turn_state{active:true}`），
+    //    多标签页与非发起页据此显示计时/思考指示，也是迟到帧收敛判定的真值；
+    // 2) 新 prompt 顶掉未终结的旧 turn 时补发合成终态 `Done{Superseded}`，
+    //    否则再无任何帧能收尾那条气泡（send_prompt 返回已被世代守卫拦下）。
+
+    /// supersede 的事件序列：`Started(旧) → Done{Superseded}(旧) → Started(新)`，
+    /// 且 Superseded 帧带出被顶掉 turn 的结算时长（前端据此当场停表）。
+    #[tokio::test]
+    async fn new_prompt_supersedes_unfinalized_turn_with_synthetic_done() {
+        let _guard = spawn_test_lock_async().await;
+        let dir = unique_dir("supersede");
+        let client = live_client(&dir).await;
+        let mut rx = client.turn_event_subscribe();
+
+        // turn1 开始后 agent 不回结束信号（模拟 /compact 挂住），用户直接发下一条。
+        let generation1 = client.mark_prompt_active();
+        assert_eq!(client.prompt_generation(), generation1, "首个 prompt 后世代应为 1");
+        let generation2 = client.mark_prompt_active();
+        assert_ne!(generation1, generation2, "新 prompt 必须推进世代");
+
+        match rx.recv().await.expect("应收到 turn1 的 Started") {
+            TurnEvent::Started => {}
+            other => panic!("首个事件必须是 Started，得到 {other:?}"),
+        }
+        match rx.recv().await.expect("应收到 supersede 终态帧") {
+            TurnEvent::Done { stop_reason, row_id, duration, abnormal } => {
+                assert_eq!(stop_reason, "Superseded");
+                assert!(row_id.is_none(), "本 turn 未折叠任何帧 → 无行 id");
+                let t = duration.expect("supersede 定稿必须结算时长（气泡当场停表）");
+                assert_eq!(t.wait_ms, 0, "无审批等待");
+                assert!(t.row_id.is_none());
+                assert!(!abnormal, "supersede 是合成原因，不是错误语义");
+            }
+            other => panic!("第二个事件必须是 Done{{Superseded}}，得到 {other:?}"),
+        }
+        match rx.recv().await.expect("应收到 turn2 的 Started") {
+            TurnEvent::Started => {}
+            other => panic!("第三个事件必须是 Started，得到 {other:?}"),
+        }
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 世代守卫（原子版）：陈旧终结者——已被顶替的 prompt 任务返回、或 cancel
+    /// 兜底超时——不得定稿**新** turn。否则新 turn 的帧从此 fold 不进、DB 里没有
+    /// 行（定稿时 row_id 为空），前端看得到流式内容却静默丢持久化。用
+    /// `turn_snapshot().active` 观测累积器门控是否被误关。
+    #[tokio::test]
+    async fn stale_generation_cannot_finalize_the_new_turn() {
+        let _guard = spawn_test_lock_async().await;
+        let dir = unique_dir("stale-generation");
+        let client = live_client(&dir).await;
+
+        let generation1 = client.mark_prompt_active();
+        let generation2 = client.mark_prompt_active(); // supersede turn1
+
+        assert!(
+            !client.mark_prompt_idle_for_generation(generation1),
+            "陈旧世代必须被守卫拦下（返回 false）"
+        );
+        assert!(client.turn_snapshot().active, "新 turn 的累积器门控不得被陈旧终结者关掉");
+
+        assert!(client.mark_prompt_idle_for_generation(generation2), "当前世代应赢得定稿");
+        assert!(!client.turn_snapshot().active);
+        assert!(!client.mark_prompt_idle_for_generation(generation2), "已定稿后重复收尾应为无操作");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 白名单值 + 本轮零可见产出 = `Empty`（不再是 `Normal`），并留一条痕。
@@ -2273,9 +2427,10 @@ exit 0
     // `cargo test --workspace` 仍 537 全绿。
     //
     // 下面两例从真实入口驱动（`mark_prompt_active` → `send_prompt` →
-    // `mark_prompt_idle` → 留痕 → `notify_turn_end`），把两个变异都钉成红色：
+    // `mark_prompt_idle_for_generation` → 留痕 → `notify_turn_event`），把两个变异
+    // 都钉成红色：
     // - `dispatch_prompt_*` 的 system 行断言 → 击穿「留痕调用被删/被换成 classify」；
-    // - `TurnEndEvent::Done` 的 `abnormal: true` 断言 → 击穿「abnormal 写死 false」。
+    // - `TurnEvent::Done` 的 `abnormal: true` 断言 → 击穿「abnormal 写死 false」。
     //
     // 注意 `only_abnormal_class_maps_to_frame_abnormal` 自称护栏却只是
     // `assert_eq!(class == StopEndClass::Abnormal, expected)` 的重述 —— 它重述
@@ -2317,7 +2472,7 @@ exit 0
         // 断言 2：turn_end_tx 收到的 Done 帧带 abnormal: true（前端 error 语义的
         // 唯一输入）。写成 abnormal: false 时本断言即红。
         match event {
-            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+            TurnEvent::Done { stop_reason, abnormal, .. } => {
                 // stop_reason 仍是既有 Debug 形态（前端 cancel 判定读它，勿改格式）。
                 assert_eq!(stop_reason, "Refusal", "stop_reason 用 Debug 形态下发");
                 assert!(abnormal, "refusal 是 Abnormal，prompt_done.abnormal 必须为 true");
@@ -2367,7 +2522,7 @@ exit 0
             .expect("dispatch_prompt 必须广播 turn 结束事件");
 
         match event {
-            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+            TurnEvent::Done { stop_reason, abnormal, .. } => {
                 assert_eq!(stop_reason, "EndTurn");
                 assert!(!abnormal, "end_turn 是白名单正常值，不得标成错误");
             }
@@ -2405,7 +2560,7 @@ exit 0
             .expect("dispatch_prompt 必须广播 turn 结束事件");
 
         match event {
-            TurnEndEvent::Done { stop_reason, abnormal, .. } => {
+            TurnEvent::Done { stop_reason, abnormal, .. } => {
                 assert_eq!(stop_reason, "EndTurn", "协议值原样下发，判定不改写它");
                 assert!(abnormal, "空 turn 是失败，prompt_done.abnormal 必须为 true");
             }

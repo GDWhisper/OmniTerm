@@ -1238,6 +1238,63 @@ body.fm-dragging * {
   padding: 6px;
 }
 
+/* ────────────────────────────────────────────────────────────────────
+   Project card drag-to-reorder — long-press lift + insertion line.
+   Pointer-events path (Sidebar): mouse and touch share one code path, so
+   no HTML5 DnD. The drag area is the card header (a collapsed card is all
+   header) — no dedicated handle chrome. `pointer-events: none` on the
+   lifted card is load-bearing: elementFromPoint must resolve the card
+   underneath to compute the insertion point.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* 拽起：硬投影放大 + accent 描边 + z-index 抬升，浮出相邻卡片。
+   transform 不在这里设——跟随指针的 translate/scale 由 Sidebar 在
+   pointermove 里直写到行内 style（高频，不走 React；React 也不管理该属性，
+   松手时手动清空）。故 transition 不含 transform：跟随必须零延迟，补间会
+   让卡片落后于指针。pointer-events:none 是命中判定前提（elementFromPoint
+   必须穿透它命中下方卡片），不是装饰；副作用是光标取自下方卡片，故不设
+   grabbing 光标。 */
+.sidebar-project-card.sidebar-project-lifted {
+  position: relative;
+  z-index: 2;
+  box-shadow: 6px 6px 0 var(--pixel-shadow);
+  border-color: var(--accent);
+  pointer-events: none;
+  will-change: transform;
+  transition:
+    box-shadow 0.1s steps(2),
+    border-color 0.1s steps(2);
+}
+
+/* 插入指示线：落在两卡之间的 2px accent 线（像素风硬色，无模糊） */
+.sidebar-project-drop-line {
+  height: 2px;
+  margin: -6px 10px 4px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Project card focus flash — cover-conflict「切换到现有项目」聚焦回执。
+   Y 轴弹跳复用 mario-jump（像素 steps、Y-only 约定，无横向抖动）；
+   accent ring 复用 chat-msg-flash 同款 spread 无 blur 描边（§6.1 focus
+   ring 例外，不算阴影）。时长与 Sidebar 的 PROJECT_CARD_FLASH_MS 一致，
+   到期由 React 摘 class；重放时先摘 class、下一帧重挂。
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes sidebar-project-focus-ring {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent), 3px 3px 0 var(--pixel-shadow);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent, 3px 3px 0 var(--pixel-shadow);
+  }
+}
+.sidebar-project-focus-flash {
+  animation:
+    mario-jump 0.4s steps(6, end),
+    sidebar-project-focus-ring 1.2s ease-out forwards;
+}
+
 /* ── Worktree slot — game-style equipment slot inside project card ── */
 .sidebar-wt-slot {
   border: 1px solid var(--border-strong);

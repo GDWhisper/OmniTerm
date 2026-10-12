@@ -251,6 +251,7 @@ async fn resolve_effective_in_project(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        position: 0,
         path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;
@@ -319,6 +320,7 @@ async fn resolve_workspace_root(
         path: project_root,
         target_id: None,
         created_at: String::new(),
+        position: 0,
         path_valid: true, // internal helper; the root resolved from DB and is in use
     };
     let wts = workspaces::list_workspaces(&project).await;

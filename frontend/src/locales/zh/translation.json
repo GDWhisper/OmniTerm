@@ -62,6 +62,7 @@
   "sidebar.lost": "已断开",
   "sidebar.githubRepo": "GitHub 仓库",
   "sidebar.noProjects": "暂无项目",
+  "sidebar.reorderFailed": "保存项目顺序失败",
   "sidebar.noWorktrees": "暂无 worktree",
   "sidebar.createWorktree": "创建 Worktree",
   "sidebar.worktreeBranch": "分支名",
@@ -555,6 +556,7 @@
   "auth.password": "密码",
   "auth.wrongPassword": "密码错误",
   "auth.loginFailed": "登录失败",
+  "auth.rateLimited": "尝试次数过多，请稍后再试",
   "auth.loggedIn": "已登录",
   "auth.logout": "登出",
   "auth.changePassword": "修改密码",
@@ -627,7 +629,7 @@
   "tmuxHealth.orphanRisk": "已堆积 {{count}} 个孤儿 tmux 控制客户端（警戒线 {{threshold}}）——这是 tmux server「一 SIGTERM 就假死」高危状态的先兆。",
   "tmuxHealth.otherHint": "tmux 健康探测出现未知失败，暂不自动处理。",
   "settings.auditLog": "安全审计日志",
-  "settings.auditLogHint": "最近的高危操作留痕：文件写入/删除/上传、git push、agent 配置变更、代理端口首次被访问。只读；超出上限的旧记录由后端自动滚动清理。",
+  "settings.auditLogHint": "最近的高危操作留痕：文件写入/删除/上传、git push、agent 配置变更、代理端口首次被访问，以及登录/登出/改密/改名与登录限流触发。只读；超出上限的旧记录由后端自动滚动清理。",
   "settings.auditLogEmpty": "暂无审计记录",
   "settings.auditLog.action.fileWrite": "文件写入",
   "settings.auditLog.action.fileDelete": "文件删除",
@@ -636,5 +638,11 @@
   "settings.auditLog.action.agentCreate": "新增 agent",
   "settings.auditLog.action.agentUpdate": "修改 agent",
   "settings.auditLog.action.agentDelete": "删除 agent",
-  "settings.auditLog.action.proxyAccess": "代理端口首访"
+  "settings.auditLog.action.proxyAccess": "代理端口首访",
+  "settings.auditLog.action.authLogin": "登录",
+  "settings.auditLog.action.authSetup": "设置密码",
+  "settings.auditLog.action.authLogout": "登出",
+  "settings.auditLog.action.authPasswordChange": "修改密码",
+  "settings.auditLog.action.authUsernameChange": "修改用户名",
+  "settings.auditLog.action.authRateLimited": "登录限流触发"
 }

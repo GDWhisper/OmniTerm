@@ -9,6 +9,7 @@ import { useAppStore } from '../../stores/appStore'
 vi.mock('../../api/client', () => ({
   api: {
     listProjects: vi.fn().mockResolvedValue([]),
+    reorderProjects: vi.fn().mockResolvedValue({ ok: true }),
     listWorktrees: vi.fn().mockResolvedValue([]),
     listSessions: vi.fn().mockResolvedValue([]),
     listExternalSessions: vi.fn().mockResolvedValue({ sessions: [] }),
@@ -23,6 +24,7 @@ vi.mock('../../api/client', () => ({
     initGit: vi.fn(),
     listDirs: vi.fn().mockResolvedValue({ files: [] }),
     pathExists: vi.fn().mockResolvedValue({ exists: true }),
+    createProject: vi.fn(),
     archiveSession: vi.fn().mockResolvedValue({ ok: true }),
     releaseSession: vi.fn().mockResolvedValue({ ok: true }),
     deleteSession: vi.fn().mockResolvedValue(undefined),
@@ -40,7 +42,7 @@ vi.mock('../../api/client', () => ({
 }))
 
 // Import mocked api for assertions
-import { api } from '../../api/client'
+import { api, ApiError } from '../../api/client'
 
 // Mock useAttention
 vi.mock('../../hooks/useAttention', () => ({
@@ -58,6 +60,7 @@ const fakeProject = {
   name: 'Test Project',
   path: '/home/user/test-project',
   created_at: '2026-01-01T00:00:00Z',
+  position: 0,
   path_valid: true,
 }
 
@@ -584,5 +587,353 @@ describe('Sidebar 批量操作', () => {
     expect(batchButton('Archive').disabled).toBe(true)
     expect(batchButton('Release').disabled).toBe(true)
     expect(batchButton('Delete').disabled).toBe(false)
+  })
+})
+
+describe('Sidebar cover-conflict「切换到现有项目」聚焦', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+
+  beforeEach(() => {
+    localStorage.clear()
+    vi.clearAllMocks()
+
+    vi.mocked(api.listProjects).mockResolvedValue([fakeProject])
+    vi.mocked(api.listWorktrees).mockResolvedValue([fakeWorkspace])
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    // 409 already_covered：创建路径被既有项目覆盖（本用例的触发前提）。
+    // mock 的 ApiError 签名 (message, status, body) 与真实类 (status, body,
+    // message) 不同——按签名 cast，运行时构造的仍是 mock 类（CreateProjectModal
+    // 的 instanceof 判据同源）。
+    const MockApiError = ApiError as unknown as new (
+      message: string,
+      status: number,
+      body?: unknown,
+    ) => Error
+    vi.mocked(api.createProject).mockRejectedValue(
+      new MockApiError('path already covered', 409, {
+        error: 'already_covered',
+        reason: 'exact_path',
+        covering_project: {
+          id: fakeProject.id,
+          name: fakeProject.name,
+          path: fakeProject.path,
+        },
+      }),
+    )
+    // 无活跃项目：项目默认折叠——聚焦回执必须包含展开 + 闪烁
+    useAppStore.setState({
+      projects: [fakeProject],
+      worktrees: { [fakeProject.id]: [fakeWorkspace] },
+      sessions: {},
+      activeProjectId: null,
+      activeWorkspaceId: null,
+      activeSessionId: null,
+      activeExternalSession: null,
+      sidebarCollapsed: false,
+      connected: true,
+      workspaceSessionMemory: {},
+    })
+
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    root.unmount()
+    document.body.removeChild(container)
+    localStorage.clear()
+  })
+
+  it('409 冲突弹窗点「切换到现有项目」后侧栏聚焦：卡片闪烁 + 展开 + 激活', async () => {
+    i18n.changeLanguage('en')
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>
+    )
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeProject.name)
+    })
+
+    // 打开创建项目弹窗（面板标题栏 + 按钮）
+    const addBtn = container.querySelector('button[title="New Project"]') as HTMLElement
+    expect(addBtn).toBeTruthy()
+    addBtn.click()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('New Project')
+    })
+
+    // 填项目名（路径输入框已预填 homeDir/，值不影响 409 分支）
+    const nameInput = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    nativeInputValueSetter?.call(nameInput, 'dup-name')
+    nameInput.dispatchEvent(new Event('input', { bubbles: true }))
+
+    // 提交 → 409 → 覆盖冲突弹窗
+    const createBtn = [...document.body.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Create',
+    ) as HTMLElement
+    createBtn.click()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Project Already Exists')
+    })
+
+    // 点「切换到现有项目」
+    const switchBtn = [...document.body.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Switch to existing',
+    ) as HTMLElement
+    expect(switchBtn).toBeTruthy()
+    switchBtn.click()
+
+    // 聚焦回执 1：目标卡片挂闪烁 class（data-proj-id 可供选择器定位）
+    await vi.waitFor(() => {
+      const card = container.querySelector('.sidebar-project-card[data-proj-id="proj-1"]')
+      expect(card).toBeTruthy()
+      expect(card!.classList.contains('sidebar-project-focus-flash')).toBe(true)
+    })
+    // 聚焦回执 2：折叠态项目被展开（worktree 行出现）
+    await vi.waitFor(() => {
+      expect(container.textContent).toContain(fakeWorkspace.label)
+    })
+    // 激活语义不变：覆盖项目成为活跃项目
+    expect(useAppStore.getState().activeProjectId).toBe(fakeProject.id)
+  })
+})
+
+describe('Sidebar 项目卡片拖拽排序', () => {
+  let container: HTMLDivElement
+  let root: ReturnType<typeof createRoot>
+
+  const proj = (id: string, name: string, position: number) => ({
+    id,
+    name,
+    path: `/home/user/${id}`,
+    created_at: '2026-01-01T00:00:00Z',
+    position,
+    path_valid: true,
+  })
+  const projects = [proj('proj-1', 'One', 0), proj('proj-2', 'Two', 1), proj('proj-3', 'Three', 2)]
+
+  beforeEach(async () => {
+    localStorage.clear()
+    vi.clearAllMocks()
+    vi.mocked(api.listProjects).mockResolvedValue(projects)
+    vi.mocked(api.listWorktrees).mockResolvedValue([])
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    // 无活跃项目（不写 omniterm_active_project）：三张卡片默认折叠，
+    // 展开态不会干扰「拖拽不误触展开切换」的断言。
+    useAppStore.setState({
+      projects,
+      worktrees: {},
+      sessions: {},
+      activeProjectId: null,
+      activeWorkspaceId: null,
+      activeSessionId: null,
+      activeExternalSession: null,
+      sidebarCollapsed: false,
+      connected: true,
+      workspaceSessionMemory: {},
+    })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+  })
+
+  afterEach(() => {
+    root.unmount()
+    document.body.removeChild(container)
+    localStorage.clear()
+  })
+
+  async function renderSidebar() {
+    i18n.changeLanguage('en')
+    root.render(
+      <I18nextProvider i18n={i18n}>
+        <Sidebar />
+      </I18nextProvider>,
+    )
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.sidebar-project-card')).toHaveLength(3)
+    })
+  }
+
+  /** jsdom 无布局：给目标卡片一个确定的矩形，让「上半/下半」判定可断言。 */
+  function stubRect(card: HTMLElement, top: number, height: number) {
+    card.getBoundingClientRect = () =>
+      ({ top, bottom: top + height, left: 0, right: 200, width: 200, height, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+  }
+
+  function cardOf(id: string): HTMLElement {
+    return container.querySelector(`.sidebar-project-card[data-proj-id="${id}"]`) as HTMLElement
+  }
+
+  function headerOf(id: string): HTMLElement {
+    return cardOf(id).querySelector('.sidebar-project-header') as HTMLElement
+  }
+
+  function pointer(
+    type: string,
+    target: EventTarget,
+    init: { clientX: number; clientY: number; button?: number; pointerType?: string },
+  ) {
+    target.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: init.button ?? 0,
+        pointerType: init.pointerType ?? 'mouse',
+        clientX: init.clientX,
+        clientY: init.clientY,
+      }),
+    )
+  }
+
+  /** 等触摸长按达成（500ms + 余量）；真实计时器，不用假时钟。 */
+  function longPress() {
+    return new Promise((resolve) => setTimeout(resolve, 560))
+  }
+
+  it('鼠标移动超阈值立即起拖（无需长按），卡片跟随指针，松手落盘', async () => {
+    await renderSidebar()
+    const target = cardOf('proj-2')
+    stubRect(target, 100, 40) // 中点 120：clientY 130 → 插到 proj-2 之后
+
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointermove', headerOf('proj-1'), { clientX: 14, clientY: 10 }) // > 4px：立即起拖
+    // 跟随指针的 transform 同步直写行内（不走 React）
+    expect(cardOf('proj-1').style.transform).toBe('translate(10px, 6px) scale(1.02)')
+    // 拽起 class 走 React 状态，等渲染落定
+    await vi.waitFor(() => {
+      expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(true)
+    })
+
+    pointer('pointermove', target, { clientX: 40, clientY: 130 })
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(1)
+    })
+    pointer('pointerup', target, { clientX: 40, clientY: 130 })
+
+    await vi.waitFor(() => {
+      expect(api.reorderProjects).toHaveBeenCalledWith(['proj-2', 'proj-1', 'proj-3'])
+    })
+    expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-2', 'proj-1', 'proj-3'])
+    // 松手后：跟随 transform 清空（无残留偏移）、拽起 class 摘除
+    expect(cardOf('proj-1').style.transform).toBe('')
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
+    expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(0)
+  })
+
+  it('上半区插入点在目标之前', async () => {
+    await renderSidebar()
+    const target = cardOf('proj-1')
+    stubRect(target, 100, 40) // 中点 120：clientY 110 → 插到 proj-1 之前
+
+    pointer('pointerdown', headerOf('proj-3'), { clientX: 4, clientY: 4 })
+    pointer('pointermove', target, { clientX: 40, clientY: 110 })
+    pointer('pointerup', target, { clientX: 40, clientY: 110 })
+
+    await vi.waitFor(() => {
+      expect(api.reorderProjects).toHaveBeenCalledWith(['proj-3', 'proj-1', 'proj-2'])
+    })
+    expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-3', 'proj-1', 'proj-2'])
+  })
+
+  it('鼠标按下不动即松手 = 普通点击：不拽起，展开切换照常兑现', async () => {
+    await renderSidebar()
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointerup', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    headerOf('proj-1').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
+    expect(api.reorderProjects).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(container.querySelector('.sidebar-project-body')).toBeTruthy()
+    })
+  })
+
+  it('触摸需长按：未达成前移动即取消（滚动 / 点击拖动不误触）', async () => {
+    await renderSidebar()
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4, pointerType: 'touch' })
+    pointer('pointermove', headerOf('proj-1'), { clientX: 40, clientY: 4, pointerType: 'touch' }) // > 10px
+    await longPress()
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
+
+    pointer('pointerup', headerOf('proj-1'), { clientX: 40, clientY: 4, pointerType: 'touch' })
+    expect(api.reorderProjects).not.toHaveBeenCalled()
+    expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-1', 'proj-2', 'proj-3'])
+  })
+
+  it('触摸长按达成后起拖并跟随，松手落盘', async () => {
+    await renderSidebar()
+    const target = cardOf('proj-1')
+    stubRect(target, 100, 40) // 中点 120：clientY 130 → 插到 proj-1 之后
+
+    pointer('pointerdown', headerOf('proj-3'), { clientX: 4, clientY: 4, pointerType: 'touch' })
+    await longPress()
+    expect(cardOf('proj-3').classList.contains('sidebar-project-lifted')).toBe(true)
+
+    pointer('pointermove', target, { clientX: 40, clientY: 130, pointerType: 'touch' })
+    expect(cardOf('proj-3').style.transform).toBe('translate(36px, 126px) scale(1.02)')
+    await vi.waitFor(() => {
+      expect(container.querySelectorAll('.sidebar-project-drop-line')).toHaveLength(1)
+    })
+    pointer('pointerup', target, { clientX: 40, clientY: 130, pointerType: 'touch' })
+
+    await vi.waitFor(() => {
+      expect(api.reorderProjects).toHaveBeenCalledWith(['proj-1', 'proj-3', 'proj-2'])
+    })
+    expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-1', 'proj-3', 'proj-2'])
+  })
+
+  it('真拖拽后补发的 click 被抑制：不误触展开切换', async () => {
+    await renderSidebar()
+    const other = cardOf('proj-2')
+    stubRect(other, 100, 40)
+
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointermove', other, { clientX: 40, clientY: 130 }) // 拽到过别的卡
+    pointer('pointermove', headerOf('proj-1'), { clientX: 20, clientY: 4 }) // 又移回自己
+    // 松手落回原卡片头部：浏览器补发的 click 目标 = 该头部，必须被抑制
+    pointer('pointerup', headerOf('proj-1'), { clientX: 20, clientY: 4 })
+    headerOf('proj-1').dispatchEvent(new MouseEvent('click', { bubbles: true }))
+
+    expect(api.reorderProjects).not.toHaveBeenCalled() // 插入点已摘除，无重排
+    expect(container.querySelector('.sidebar-project-body')).toBeNull() // 但也不展开
+  })
+
+  it('按住头部动作按钮不起拖（按钮 pointerdown 被过滤）', async () => {
+    await renderSidebar()
+    const renameBtn = [...headerOf('proj-1').querySelectorAll('button')].find(
+      (b) => b.getAttribute('title') === 'Rename',
+    ) as HTMLElement
+    expect(renameBtn).toBeTruthy()
+    pointer('pointerdown', renameBtn, { clientX: 4, clientY: 4 })
+    pointer('pointermove', renameBtn, { clientX: 40, clientY: 130 })
+
+    expect(cardOf('proj-1').classList.contains('sidebar-project-lifted')).toBe(false)
+    expect(cardOf('proj-1').style.transform).toBe('')
+  })
+
+  it('落盘失败：回滚到原顺序', async () => {
+    vi.mocked(api.reorderProjects).mockRejectedValue(new Error('network'))
+    await renderSidebar()
+    const target = cardOf('proj-2')
+    stubRect(target, 100, 40)
+
+    pointer('pointerdown', headerOf('proj-1'), { clientX: 4, clientY: 4 })
+    pointer('pointermove', target, { clientX: 40, clientY: 130 })
+    pointer('pointerup', target, { clientX: 40, clientY: 130 })
+
+    await vi.waitFor(() => {
+      expect(api.reorderProjects).toHaveBeenCalled()
+    })
+    await vi.waitFor(() => {
+      expect(useAppStore.getState().projects.map((p) => p.id)).toEqual(['proj-1', 'proj-2', 'proj-3'])
+    })
   })
 })

@@ -6,6 +6,56 @@ declare global {
 }
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 
+// Node 23+ enables an experimental global `localStorage`/`sessionStorage`
+// accessor pair (Web Storage) that stays `undefined` without
+// `--localstorage-file`. vitest's jsdom env bridge then keeps those keys on
+// `globalThis` as Node's accessors (jsdom defines storage on the Window
+// prototype, which the bridge does not copy), so bare `localStorage` reads at
+// module scope (appStore / themeStore) crash with "Cannot read properties of
+// undefined". Install an in-memory Storage implementation only when the
+// runtime did not provide one; `Storage` is remapped alongside it so tests
+// that do `vi.spyOn(Storage.prototype, 'getItem')` keep intercepting. A future
+// Node/vitest fix makes the guard skip this shim entirely.
+class MemoryStorage {
+  #store = new Map<string, string>()
+  get length(): number {
+    return this.#store.size
+  }
+  clear(): void {
+    this.#store.clear()
+  }
+  getItem(key: string): string | null {
+    return this.#store.has(key) ? this.#store.get(key)! : null
+  }
+  key(index: number): string | null {
+    return Array.from(this.#store.keys())[index] ?? null
+  }
+  removeItem(key: string): void {
+    this.#store.delete(key)
+  }
+  setItem(key: string, value: string): void {
+    this.#store.set(key, String(value))
+  }
+}
+
+if (typeof (globalThis as Record<string, unknown>).localStorage === 'undefined') {
+  Object.defineProperty(globalThis, 'Storage', {
+    value: MemoryStorage,
+    configurable: true,
+    writable: true,
+  })
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: new MemoryStorage(),
+    configurable: true,
+    writable: true,
+  })
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    value: new MemoryStorage(),
+    configurable: true,
+    writable: true,
+  })
+}
+
 // jsdom does not implement matchMedia; polyfill for themeStore and useMediaQuery
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

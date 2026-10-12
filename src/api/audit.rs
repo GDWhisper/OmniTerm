@@ -21,13 +21,21 @@
 //! 只限条目数不管单条大小 = 没限（§P1 案例 2 的教训：上限维度必须匹配真实
 //! 增长维度）。反过来只限大小不管条数同样没限，故两个维度都要。
 //!
-//! # 只记成功操作（一致的取舍）
+//! # 只记成功操作（一致的取舍），唯一例外见下
 //!
 //! 全部写入点只在**业务操作成功之后**调用[`record`]。失败的操作没有改变
 //! 系统状态，「谁试过但没成功」对事后追查的增量价值低于它带来的复杂度
 //! （每个 handler 的错误分支都要再插一次调用，极易漏）。若将来要审失败尝
 //! 试，应作为独立动作（`*_failed`）统一加，**不要**在部分写入点加、部分
 //! 不加——那会让「没记录」变成歧义信号。
+//!
+//! **唯一例外：[`AuditAction::AuthRateLimited`]（2026-10-11）**。它不是
+//! 「逐次失败」而是「跨过阈值」的聚合信号：`LoginGuard` 只在某 IP 失败
+//! 计数**首次**到达 5 次 / 5 分钟时上报一次（随后请求被 429 拦截、不重复
+//! 计次），写入频率被钉在「每 IP 每窗口 ≤1 条」。这保住了公开端点
+//! （`/auth/login`）不可被无认证灌量刷穿台账（1000 条滚动上限）的性质；
+//! 逐次失败仍然刻意不记——见 `docs/dev/plans/2026-10-11-auth-audit-logging.md`
+//! 「不纳入范围」。
 //!
 //! ## 已知边界：多文件上传的部分成功不留痕
 //!
@@ -119,6 +127,19 @@ pub enum AuditAction {
     AgentDelete,
     /// 代理端口首次被访问（非「开通」：代理无原子开通事件，见计划 D4）。
     ProxyAccess,
+    /// 登录成功（`/auth/login` 凭据校验通过）。target = 当时账号名。
+    AuthLogin,
+    /// 首次设置密码成功（`/auth/setup` 创建账号；等价「设置密码 + 首登」）。
+    AuthSetup,
+    /// 登出且**携带有效 token**（`/auth/logout` 是公开端点，无 token / 无效
+    /// token 的调用不记——否则可被无认证刷量冲掉台账；见 2026-10-11 计划 D2）。
+    AuthLogout,
+    /// 修改密码成功（撤销全部旧 token）。target = 当时账号名。
+    AuthPasswordChange,
+    /// 修改用户名成功（撤销全部旧 token）。target = **新名**，detail 记旧名。
+    AuthUsernameChange,
+    /// 凭据校验失败**首次**触发限流（每 IP 每窗口 ≤1 条；模块头「唯一例外」）。
+    AuthRateLimited,
 }
 
 impl AuditAction {
@@ -133,6 +154,12 @@ impl AuditAction {
             Self::AgentUpdate => "agent_update",
             Self::AgentDelete => "agent_delete",
             Self::ProxyAccess => "proxy_access",
+            Self::AuthLogin => "auth_login",
+            Self::AuthSetup => "auth_setup",
+            Self::AuthLogout => "auth_logout",
+            Self::AuthPasswordChange => "auth_password_change",
+            Self::AuthUsernameChange => "auth_username_change",
+            Self::AuthRateLimited => "auth_rate_limited",
         }
     }
 }
@@ -558,6 +585,12 @@ mod tests {
             (AuditAction::AgentUpdate, "agent_update"),
             (AuditAction::AgentDelete, "agent_delete"),
             (AuditAction::ProxyAccess, "proxy_access"),
+            (AuditAction::AuthLogin, "auth_login"),
+            (AuditAction::AuthSetup, "auth_setup"),
+            (AuditAction::AuthLogout, "auth_logout"),
+            (AuditAction::AuthPasswordChange, "auth_password_change"),
+            (AuditAction::AuthUsernameChange, "auth_username_change"),
+            (AuditAction::AuthRateLimited, "auth_rate_limited"),
         ];
         for (action, s) in all {
             assert_eq!(action.as_str(), s);

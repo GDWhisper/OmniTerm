@@ -4,6 +4,8 @@ import { I18nextProvider } from 'react-i18next'
 import i18n from '../../i18n'
 import { AuditLogSection } from './AuditLogSection'
 import { api, type AuditEntry } from '../../api/client'
+import en from '../../locales/en/translation.json'
+import zh from '../../locales/zh/translation.json'
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -87,6 +89,41 @@ describe('AuditLogSection（安全审计日志只读区块）', () => {
     await mount()
     expect(container.querySelector('.audit-empty')).toBeTruthy()
     expect(container.textContent).toContain('No audit records')
+  })
+
+  it('renders the auth action labels with the account name as target', async () => {
+    vi.mocked(api.getAuditLog).mockResolvedValue({
+      entries: [
+        entry({ id: 3, action: 'auth_login', target: 'alice' }),
+        entry({ id: 2, action: 'auth_username_change', target: 'bob' }),
+        entry({ id: 1, action: 'auth_rate_limited', target: '-' }),
+      ],
+    })
+    await mount()
+
+    const rows = container.querySelectorAll('.audit-row')
+    expect(rows.length).toBe(3)
+    expect(rows[0].textContent).toContain('Sign-in')
+    expect(rows[0].textContent).toContain('alice')
+    expect(rows[1].textContent).toContain('Username changed')
+    expect(rows[2].textContent).toContain('Sign-in rate limited')
+  })
+
+  it('defines every auth action label in both locales', () => {
+    const keys = [
+      'settings.auditLog.action.authLogin',
+      'settings.auditLog.action.authSetup',
+      'settings.auditLog.action.authLogout',
+      'settings.auditLog.action.authPasswordChange',
+      'settings.auditLog.action.authUsernameChange',
+      'settings.auditLog.action.authRateLimited',
+    ]
+    for (const k of keys) {
+      expect((en as Record<string, string>)[k], `en:${k}`).toBeTruthy()
+      expect((zh as Record<string, string>)[k], `zh:${k}`).toBeTruthy()
+      // en 侧不得混入中文（防未来误填回退成「坏文案」）
+      expect((en as Record<string, string>)[k], `en:${k}`).not.toMatch(/[\u4e00-\u9fff]/)
+    }
   })
 
   it('falls back to the raw action string for an unknown action', async () => {

@@ -10,6 +10,8 @@ use serde_json::json;
 use std::net::SocketAddr;
 
 use crate::AppState;
+use crate::api::audit::{self, AuditAction, AuditContext};
+use crate::auth::rate_limit::{MAX_FAILURES, WINDOW};
 use crate::auth::{self, SETTING_AUTH_ENABLED, SETTING_LOCAL_AUTH_REQUIRED};
 use crate::models::user::{
     AuthSettingsRequest, ChangePasswordRequest, ChangeUsernameRequest, LoginRequest, SetupRequest,
@@ -85,6 +87,30 @@ fn check_rate_limit(state: &AppState, addr: &SocketAddr) -> Result<(), StatusCod
     Ok(())
 }
 
+/// 凭据校验失败的统一出口：记录限流计数 + 1s 延迟（拉平响应时间、抑制在线爆破）。
+/// `login` / `change-password` / `change-username` 三处共用——它们面对同一暴力面
+/// （密码校验），延迟与计次口径必须一致。
+///
+/// 限流**首次**触发（本次失败把该 IP 推过阈值）时补一条 `auth_rate_limited`
+/// 审计：这是失败类事件唯一的留痕点，写入频率被 `record_failure` 的
+/// 「首次到达阈值」信号钉在「每 IP 每窗口 ≤1 条」（见 2026-10-11 计划 D3）。
+async fn reject_bad_credentials(state: &AppState, addr: &SocketAddr) -> StatusCode {
+    if state.login_guard.record_failure(&addr.ip().to_string()) {
+        let detail =
+            json!({ "failures": MAX_FAILURES, "window_secs": WINDOW.as_secs() }).to_string();
+        audit::record(
+            &state.db,
+            &AuditContext::from_ip(Some(addr.ip()), None),
+            AuditAction::AuthRateLimited,
+            "-",
+            Some(&detail),
+        )
+        .await;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    StatusCode::UNAUTHORIZED
+}
+
 /// settings 表 upsert：`auth_enabled` 与 `local_auth_required` 两个 key 共用，
 /// 避免同一段 SQL 复制两份。
 async fn upsert_setting(db: &sqlx::SqlitePool, key: &str, value: &str) -> Result<(), StatusCode> {
@@ -112,31 +138,46 @@ async fn setup(
     let username = auth::normalize_username_or_default(req.username.as_deref())
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users LIMIT 1")
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if existing.is_some() {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::CONFLICT);
-    }
-
     let hash = bcrypt::hash(&req.password, 10).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    sqlx::query("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)")
-        .bind(&username)
-        .bind(&hash)
-        .bind(&now)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // 单条原子插入替代「先查后插」：`WHERE NOT EXISTS` 在同一 SQLite 写事务内
+    // 判定，并发 setup（初始化窗口 / 双标签页）只有一个能落行，另一个 0 rows →
+    // 409。历史实现（SELECT 后 INSERT，无事务、users 表无唯一约束）可并发插入
+    // 两行，此后 login / token 校验的 `LIMIT 1` 取非确定行，破坏单账号不变量。
+    let inserted = sqlx::query(
+        "INSERT INTO users (username, password_hash, created_at) \
+         SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+    )
+    .bind(&username)
+    .bind(&hash)
+    .bind(&now)
+    .execute(&state.db)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if inserted.rows_affected() == 0 {
+        // 已存在用户：同「重复 setup」语义（409），计失败次数防滥用
+        //（防滥用计数、非密码猜测面：不转发限流审计，见计划 D3）。
+        let _ = state.login_guard.record_failure(&addr.ip().to_string());
+        return Err(StatusCode::CONFLICT);
+    }
 
     let ver: i64 = sqlx::query_scalar("SELECT token_version FROM users LIMIT 1")
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // 计划 D4：审计落在「账号已建、session 未签发」的窗口——若 create_token
+    // 失败（理论分支），「已建号」事件不会零留痕。
+    audit::record(
+        &state.db,
+        &AuditContext::from_ip(Some(addr.ip()), None),
+        AuditAction::AuthSetup,
+        &username,
+        None,
+    )
+    .await;
+
     let token = auth::create_token(&state.jwt_secret, ver, &username)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
@@ -168,34 +209,65 @@ async fn login(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let Some((stored_username, hash, ver)) = user else {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     };
 
     let password_ok =
         bcrypt::verify(&req.password, &hash).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if provided != stored_username.as_str() || !password_ok {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     let token = auth::create_token(&state.jwt_secret, ver, &stored_username)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let cookie = token_cookie(&state.token_cookie, &token, state.proxy.base_host.as_deref());
 
+    audit::record(
+        &state.db,
+        &AuditContext::from_ip(Some(addr.ip()), None),
+        AuditAction::AuthLogin,
+        &stored_username,
+        None,
+    )
+    .await;
     state.login_guard.record_success(&addr.ip().to_string());
     Ok((StatusCode::OK, AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
 
 /// Logout revokes the current session token by bumping `token_version` —
 /// all previously issued tokens become invalid immediately.
-async fn logout(State(state): State<AppState>) -> Result<impl IntoResponse, StatusCode> {
+///
+/// 审计（2026-10-11 计划 D2）：`/auth/logout` 是**公开端点**（无
+/// `require_auth_mw`），任何能触达端口者都可无限调用——无条件记一条会让
+/// 攻击者刷穿 `MAX_AUDIT_ROWS` 滚动上限、冲掉整张台账。故仅当请求携带的
+/// token 通过校验（且必须在 `token_version + 1` **之前**校验，bump 后旧
+/// token 立即失效）才留一条 `auth_logout`；无 token / 无效 token 不记
+/// （语义也正确：没有会话被登出）。
+async fn logout(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    jar: CookieJar,
+) -> Result<impl IntoResponse, StatusCode> {
+    let claims = match jar.get(&state.token_cookie) {
+        Some(c) => auth::verify_token_for_state(&state.db, &state.jwt_secret, c.value()).await.ok(),
+        None => None,
+    };
+
     sqlx::query("UPDATE users SET token_version = token_version + 1")
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if let Some(claims) = claims {
+        audit::record(
+            &state.db,
+            &AuditContext::from_ip(Some(addr.ip()), None),
+            AuditAction::AuthLogout,
+            &claims.sub,
+            None,
+        )
+        .await;
+    }
     let cookie = clear_cookie(&state.token_cookie, state.proxy.base_host.as_deref());
     Ok((AppendHeaders([("set-cookie", cookie)]), Json(json!({ "ok": true }))))
 }
@@ -210,20 +282,21 @@ async fn change_password(
 ) -> Result<impl IntoResponse, StatusCode> {
     check_rate_limit(&state, &addr)?;
 
-    let user: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM users LIMIT 1")
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // username 复用本查询（审计 target 用），不追加一次往返。
+    let user: Option<(String, String)> =
+        sqlx::query_as("SELECT password_hash, username FROM users LIMIT 1")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let Some((hash,)) = user else {
+    let Some((hash, username)) = user else {
         return Err(StatusCode::NOT_FOUND);
     };
 
     if !bcrypt::verify(&req.current_password, &hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     let new_hash =
@@ -238,6 +311,14 @@ async fn change_password(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    audit::record(
+        &state.db,
+        &AuditContext::from_ip(Some(addr.ip()), None),
+        AuditAction::AuthPasswordChange,
+        &username,
+        None,
+    )
+    .await;
     state.login_guard.record_success(&addr.ip().to_string());
     Ok(Json(json!({ "ok": true })))
 }
@@ -257,20 +338,21 @@ async fn change_username(
     let new_username =
         auth::normalize_username(&req.new_username).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let user: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM users LIMIT 1")
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // username（旧名）复用本查询供审计 detail 记录，不追加一次往返。
+    let user: Option<(String, String)> =
+        sqlx::query_as("SELECT password_hash, username FROM users LIMIT 1")
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let Some((hash,)) = user else {
+    let Some((hash, old_username)) = user else {
         return Err(StatusCode::NOT_FOUND);
     };
 
     if !bcrypt::verify(&req.current_password, &hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     {
-        state.login_guard.record_failure(&addr.ip().to_string());
-        return Err(StatusCode::UNAUTHORIZED);
+        return Err(reject_bad_credentials(&state, &addr).await);
     }
 
     sqlx::query(
@@ -282,6 +364,16 @@ async fn change_username(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // target = 新名（UI 展示用），detail 记旧名供查库重建「旧 → 新」。
+    let detail = json!({ "old_username": old_username }).to_string();
+    audit::record(
+        &state.db,
+        &AuditContext::from_ip(Some(addr.ip()), None),
+        AuditAction::AuthUsernameChange,
+        &new_username,
+        Some(&detail),
+    )
+    .await;
     state.login_guard.record_success(&addr.ip().to_string());
     Ok(Json(json!({ "ok": true })))
 }
@@ -463,6 +555,17 @@ mod tests {
             .expect("query setting")
     }
 
+    /// 按动作读取审计行（actor, target, detail_json），按 id 升序。
+    async fn audit_rows(state: &AppState, action: &str) -> Vec<(String, String, Option<String>)> {
+        sqlx::query_as(
+            "SELECT actor, target, detail_json FROM audit_log WHERE action = ? ORDER BY id ASC",
+        )
+        .bind(action)
+        .fetch_all(&state.db)
+        .await
+        .expect("query audit_log")
+    }
+
     async fn setup_user(state: &AppState, username: Option<&str>, password: &str) {
         let res = setup(
             State(state.clone()),
@@ -521,6 +624,34 @@ mod tests {
             assert!(matches!(res, Err(StatusCode::BAD_REQUEST)), "bad={bad:?}");
             assert_eq!(query_username(&state).await, None, "bad={bad:?} must not create user");
         }
+    }
+
+    #[tokio::test]
+    async fn setup_is_atomic_under_concurrent_calls() {
+        // 并发 setup（初始化窗口 / 双标签页）：只有一个能落行，另一个 409。
+        // 防回退到「先查后插」——无事务时两行可共存，破坏单账号不变量。
+        let state = crate::test_utils::test_state().await;
+        let call = || {
+            setup(
+                State(state.clone()),
+                conn(),
+                Json(SetupRequest { username: Some("alice".into()), password: "pw".into() }),
+            )
+        };
+        let (a, b) = tokio::join!(call(), call());
+
+        let (mut ok, mut conflict) = (0, 0);
+        for r in [a, b] {
+            match r {
+                Ok(_) => ok += 1,
+                Err(StatusCode::CONFLICT) => conflict += 1,
+                Err(other) => panic!("unexpected result: {other:?}"),
+            }
+        }
+        assert_eq!((ok, conflict), (1, 1), "exactly one concurrent setup must win");
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&state.db).await.unwrap();
+        assert_eq!(count, 1, "single-account invariant must hold");
     }
 
     #[tokio::test]
@@ -616,6 +747,41 @@ mod tests {
             assert!(matches!(res, Err(StatusCode::BAD_REQUEST)), "bad={bad:?}");
         }
         assert_eq!(query_username(&state).await.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn change_password_verifies_current_and_revokes_tokens() {
+        let state = crate::test_utils::test_state().await;
+        setup_user(&state, Some("alice"), "pw").await;
+        let ver_before = query_token_version(&state).await;
+
+        // 当前密码错 → 401（与 login 同出口：计次 + 1s 延迟），密码与版本不变
+        let res = change_password(
+            State(state.clone()),
+            conn(),
+            Json(ChangePasswordRequest {
+                current_password: "wrong".into(),
+                new_password: "next".into(),
+            }),
+        )
+        .await;
+        assert!(matches!(res, Err(StatusCode::UNAUTHORIZED)));
+        assert_eq!(query_token_version(&state).await, ver_before);
+
+        // 当前密码对 → 改密成功 + token_version +1；旧密码失效、新密码可登录
+        let res = change_password(
+            State(state.clone()),
+            conn(),
+            Json(ChangePasswordRequest {
+                current_password: "pw".into(),
+                new_password: "next".into(),
+            }),
+        )
+        .await;
+        assert!(res.is_ok(), "change-password must succeed");
+        assert_eq!(query_token_version(&state).await, ver_before + 1);
+        assert_eq!(login_status(&state, Some("alice"), "next").await, None);
+        assert_eq!(login_status(&state, Some("alice"), "pw").await, Some(StatusCode::UNAUTHORIZED));
     }
 
     #[tokio::test]
@@ -715,5 +881,104 @@ mod tests {
         let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["authenticated"], json!(false));
         assert_eq!(v.get("local_bypass"), None);
+    }
+
+    // ── 审计留痕（2026-10-11 计划）─────────────────────────────
+
+    #[tokio::test]
+    async fn auth_success_paths_leave_audit_rows() {
+        let state = crate::test_utils::test_state().await;
+
+        // setup → auth_setup（target = 用户名；actor 带来源 IP）
+        setup_user(&state, Some("alice"), "pw").await;
+        let rows = audit_rows(&state, "auth_setup").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "admin@127.0.0.1");
+        assert_eq!(rows[0].1, "alice");
+
+        // login 成功 → auth_login
+        assert_eq!(login_status(&state, Some("alice"), "pw").await, None);
+        let rows = audit_rows(&state, "auth_login").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "alice");
+
+        // change-password → auth_password_change
+        change_password(
+            State(state.clone()),
+            conn(),
+            Json(ChangePasswordRequest {
+                current_password: "pw".into(),
+                new_password: "next".into(),
+            }),
+        )
+        .await
+        .expect("change password");
+        let rows = audit_rows(&state, "auth_password_change").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "alice");
+
+        // change-username → auth_username_change（target 新名、detail 记旧名）
+        change_username(
+            State(state.clone()),
+            conn(),
+            Json(ChangeUsernameRequest {
+                current_password: "next".into(),
+                new_username: "bob".into(),
+            }),
+        )
+        .await
+        .expect("change username");
+        let rows = audit_rows(&state, "auth_username_change").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "bob");
+        assert!(rows[0].2.as_deref().unwrap_or("").contains("alice"), "detail keeps old name");
+
+        // logout（携带当前有效 token）→ auth_logout；target 取 token 的 sub
+        let ver = query_token_version(&state).await;
+        let token = auth::create_token(&state.jwt_secret, ver, "bob").expect("token");
+        let jar = CookieJar::new().add(Cookie::new(state.token_cookie.clone(), token));
+        let res = logout(State(state.clone()), conn(), jar).await;
+        assert!(res.is_ok(), "logout with token");
+        let rows = audit_rows(&state, "auth_logout").await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, "bob");
+
+        // 无 token 的 logout（公开端点）不留痕——防无认证刷量冲掉台账
+        let res = logout(State(state.clone()), conn(), CookieJar::new()).await;
+        assert!(res.is_ok(), "tokenless logout still clears the cookie");
+        assert_eq!(
+            audit_rows(&state, "auth_logout").await.len(),
+            1,
+            "tokenless logout leaves no row"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limited_threshold_records_one_audit_row_and_429_does_not_repeat() {
+        let state = crate::test_utils::test_state().await;
+        setup_user(&state, Some("alice"), "pw").await;
+        let ip = conn().0.ip().to_string();
+
+        // 预置 4 次失败（直调 LoginGuard，绕过 1s 延迟），第 5 次经 handler 跨阈值
+        for _ in 0..MAX_FAILURES - 1 {
+            let _ = state.login_guard.record_failure(&ip);
+        }
+        assert_eq!(
+            login_status(&state, Some("alice"), "wrong").await,
+            Some(StatusCode::UNAUTHORIZED)
+        );
+
+        let rows = audit_rows(&state, "auth_rate_limited").await;
+        assert_eq!(rows.len(), 1, "threshold crossing records exactly one row");
+        assert_eq!(rows[0].1, "-");
+        let detail = rows[0].2.as_deref().unwrap_or("");
+        assert!(detail.contains(r#""failures":5"#), "detail={detail}");
+
+        // 已限流：后续请求被 check_rate_limit 直接 429（不经过失败路径）→ 不重复记
+        assert_eq!(
+            login_status(&state, Some("alice"), "wrong").await,
+            Some(StatusCode::TOO_MANY_REQUESTS)
+        );
+        assert_eq!(audit_rows(&state, "auth_rate_limited").await.len(), 1);
     }
 }
