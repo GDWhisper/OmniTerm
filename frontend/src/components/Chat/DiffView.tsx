@@ -11,7 +11,7 @@ export function DiffView({ text }: { text: string }) {
         margin: 0,
         padding: '6px 8px',
         background: 'var(--bg-elevated)',
-        borderRadius: 4,
+        borderRadius: 0,
         fontSize: '0.846em',
         overflow: 'auto',
         maxHeight: 300,

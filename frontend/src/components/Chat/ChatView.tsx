@@ -789,7 +789,7 @@ export function ChatView() {
               fontSize: 10,
               background: 'var(--accent-14)',
               color: 'var(--accent)',
-              borderRadius: 4,
+              borderRadius: 0,
               letterSpacing: '0.08em',
             }}
           >
@@ -909,7 +909,7 @@ export function ChatView() {
                 background: 'rgba(255, 255, 255, 0.03)',
                 border: '1px solid var(--border-subtle)',
                 borderLeft: '2px solid var(--accent)',
-                borderRadius: 4,
+                borderRadius: 0,
                 color: 'var(--text-muted)',
               }}
             >
@@ -1050,11 +1050,12 @@ export function ChatView() {
           <button
             onClick={restore}
             disabled={connectionState !== 'connected'}
+            className="pixel-press"
             style={{
               marginLeft: 'auto',
               padding: '2px 10px',
               fontSize: 11,
-              borderRadius: 4,
+              borderRadius: 0,
               border: '1px solid var(--border-subtle)',
               background: 'var(--accent-14)',
               color: 'var(--accent)',

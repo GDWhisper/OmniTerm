@@ -11,17 +11,13 @@ import { rewriteLocalUrl } from '../../utils/proxyUrl'
  * Markdown 渲染核心 —— 聊天面板与文件抽屉共用同一套 element renderer。
  *
  * 站点差异不在此处加开关，而是从 `components` 注入覆盖（文件预览注入自己的
- * `img` / `a` 做相对路径解析）；只有「代码块圆角」这类纯尺寸 token 走 props，
- * 默认值取 UI 规范 §6 的 radius 0，已上线的聊天面板显式传它的历史值。
+ * `img` / `a` 做相对路径解析）。圆角一律取 UI 规范 §6 的 radius 0（全局硬角），
+ * 不做成 props——聊天面板历史上的 6/3 圆角已随气泡像素化一并归零。
  */
 export interface MarkdownCoreProps {
   text: string
   className?: string
   style?: CSSProperties
-  /** 围栏代码块圆角。聊天 6（已上线，不动），新容器按规范用默认 0。 */
-  codeRadius?: number
-  /** 行内代码圆角。聊天 3（已上线，不动），新容器按规范用默认 0。 */
-  inlineCodeRadius?: number
   /** 覆盖/追加 react-markdown 的 element renderer */
   components?: Components
 }
@@ -67,11 +63,9 @@ export function MarkdownLink({ href, children }: { href?: string; children?: Rea
 export function FencedCodeBlock({
   className,
   children,
-  codeRadius,
 }: {
   className?: string
   children?: ReactNode
-  codeRadius: number
 }) {
   const match = /language-(\w+)/.exec(className || '')
   const codeStr = String(children).replace(/\n$/, '')
@@ -84,20 +78,14 @@ export function FencedCodeBlock({
       language={match?.[1] ?? 'text'}
       PreTag="div"
       data-x-scroll=""
-      customStyle={{ margin: '8px 0', borderRadius: codeRadius, fontSize: '0.923em' }}
+      customStyle={{ margin: '8px 0', fontSize: '0.923em' }}
     >
       {codeStr}
     </SyntaxHighlighter>
   )
 }
 
-function makeComponents({
-  codeRadius,
-  inlineCodeRadius,
-}: {
-  codeRadius: number
-  inlineCodeRadius: number
-}): Components {
+function makeComponents(): Components {
   return {
     // TECH-DEBT: [react-markdown code 组件 props 用 any] | MarkdownCore.tsx | 根因：pnpm 严格 node_modules 使同一 @types/react 经两条路径被 tsc 实例化为两份模块实例，导致显式类型化后 <code {...props}> 触发 Ref/VoidOrUndefinedOnly 双类型不兼容（tsc -b 报错）。去重需调整 pnpm 去重/hoist 策略，超出质量门禁范围。升级路径：对齐 @types/react 单实例（pnpm dedupe 或 overrides）后改为显式 React.HTMLAttributes 类型并移除本 disable。
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -105,13 +93,13 @@ function makeComponents({
       const match = /language-(\w+)/.exec(className || '')
       if (match) {
         return (
-          <FencedCodeBlock className={className} codeRadius={codeRadius}>
+          <FencedCodeBlock className={className}>
             {children}
           </FencedCodeBlock>
         )
       }
       return (
-        <code className={className} style={inlineCodeBaseStyle(inlineCodeRadius)} {...props}>
+        <code className={className} style={inlineCodeBaseStyle()} {...props}>
           {children}
         </code>
       )
@@ -154,13 +142,11 @@ export function MarkdownCore({
   text,
   className,
   style,
-  codeRadius = 0,
-  inlineCodeRadius = 0,
   components,
 }: MarkdownCoreProps) {
   const merged = useMemo(
-    () => ({ ...makeComponents({ codeRadius, inlineCodeRadius }), ...components }),
-    [codeRadius, inlineCodeRadius, components],
+    () => ({ ...makeComponents(), ...components }),
+    [components],
   )
   return (
     <div

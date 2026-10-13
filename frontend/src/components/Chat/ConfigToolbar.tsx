@@ -123,6 +123,7 @@ function ConfigDropdown({
       <button
         disabled={readOnly}
         onClick={() => setOpen(!open)}
+        className="pixel-press"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -136,7 +137,7 @@ function ConfigDropdown({
           fontFamily: READER_FONT,
           background: open ? 'var(--bg-surface)' : 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',
-          borderRadius: 4,
+          borderRadius: 0,
           color: 'var(--text-secondary)',
           cursor: readOnly ? 'not-allowed' : 'pointer',
           whiteSpace: compact ? undefined : 'nowrap',
@@ -206,8 +207,8 @@ function ConfigDropdown({
                   padding: '4px 6px',
                   fontSize: 11,
                   fontFamily: READER_FONT,
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 4,
+                  border: '1px solid var(--border-strong)',
+                  borderRadius: 0,
                   background: 'var(--bg-surface)',
                   color: 'var(--text-primary)',
                   outline: 'none',

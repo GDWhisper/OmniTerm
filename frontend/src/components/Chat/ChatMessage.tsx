@@ -283,7 +283,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
         borderLeft: `2px solid ${statusColor}`,
-        borderRadius: 6,
+        borderRadius: 0,
         fontSize: '0.923em',
         transition: 'border-color 0.3s ease',
       }}
@@ -347,7 +347,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
                 maxHeight: 200,
                 padding: '6px 8px',
                 background: 'var(--bg-base)',
-                borderRadius: 4,
+                borderRadius: 0,
                 fontSize: '0.846em',
                 whiteSpace: 'pre-wrap',
                 color: 'var(--text-muted)',
@@ -373,7 +373,7 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
         padding: '6px 10px',
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 6,
+        borderRadius: 0,
         fontSize: '0.923em',
       }}
     >
@@ -397,15 +397,13 @@ function TextBlockView({ text, caret, streaming }: { text: string; caret?: boole
   return (
     <div
       data-chat-body="true"
-      className="chat-block"
+      className="chat-block chat-bubble"
       style={{
         alignSelf: 'flex-start',
         maxWidth: BUBBLE_MAX_WIDTH,
         padding: '8px 12px',
-        borderRadius: 8,
         background: 'var(--bg-surface)',
         color: 'var(--text-primary)',
-        border: '1px solid var(--border-subtle)',
         fontFamily: READER_FONT,
         fontSize: '1em',
         lineHeight: 1.5,
@@ -466,7 +464,7 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
                 margin: 0,
                 padding: '4px 6px',
                 background: 'var(--bg-base)',
-                borderRadius: 4,
+                borderRadius: 0,
                 fontSize: '0.92em',
                 overflow: 'auto',
                 maxHeight: 120,
@@ -763,18 +761,20 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           // data-chat-body: 长按正文保留系统文本选择，不弹动作菜单（D3）
           data-chat-body="true"
           // 「上次输入」条跳转聚焦：accent 描边 + ring 闪烁动画（index.css）。
-          className={highlighted ? 'chat-msg-flash' : undefined}
+          // 与 chat-bubble 并列：聚焦 ring 的 keyframes 已把气泡硬投影写回，
+          // 闪烁结束不会抹掉它。
+          className={`chat-bubble${highlighted ? ' chat-msg-flash' : ''}`}
           style={{
             padding: '8px 12px',
-            borderRadius: 8,
             maxWidth: BUBBLE_MAX_WIDTH,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
+            // 默认边框由 .chat-bubble 给（--border-strong），两个特殊态就地覆盖。
             border: message.undelivered
               ? '1px dashed var(--danger, #FF7B72)'
               : highlighted
                 ? '1px solid var(--accent)'
-                : '1px solid var(--accent-14)',
+                : undefined,
             fontFamily: READER_FONT,
             fontSize: '1em',
             lineHeight: 1.5,
@@ -812,7 +812,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                         style={{
                           maxWidth: 240,
                           maxHeight: 200,
-                          borderRadius: 4,
+                          borderRadius: 0,
                           border: '1px solid var(--border-subtle)',
                           display: 'block',
                         }}
@@ -830,7 +830,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                           maxWidth: 240,
                           padding: '4px 8px',
                           border: '1px solid var(--border-subtle)',
-                          borderRadius: 4,
+                          borderRadius: 0,
                           background: 'var(--bg-base)',
                           fontFamily: READER_FONT,
                           fontSize: 12,

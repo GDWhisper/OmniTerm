@@ -53,15 +53,14 @@ function ChatLink({ href, children }: { href?: string; children?: React.ReactNod
 function ChatInlineCode({
   className,
   children,
-  inlineCodeRadius,
   ...props
-}: React.HTMLAttributes<HTMLElement> & { inlineCodeRadius: number }) {
+}: React.HTMLAttributes<HTMLElement>) {
   const { t } = useTranslation()
   const textContent = typeof children === 'string' ? children.trim() : null
   const isPath = textContent ? isLikelyPathString(textContent) : false
 
   const baseStyle: React.CSSProperties = {
-    ...inlineCodeBaseStyle(inlineCodeRadius),
+    ...inlineCodeBaseStyle(),
     ...(isPath
       ? {
           cursor: 'pointer',
@@ -99,8 +98,9 @@ function ChatInlineCode({
  * 外层 memo：同一消息的历史 text block 引用稳定，重渲染时跳过 react-markdown。
  *
  * 渲染实现见 `Common/MarkdownCore`（与文件抽屉预览共用）；这里只保留聊天特有的
- * streaming 降级与历史外观参数 —— codeRadius/inlineCodeRadius 是已上线的圆角值，
- * 与 UI 规范 §6 的 radius 0 不一致，属既有偏差，改动需单独评审聊天视觉回归。
+ * streaming 降级与路径点击态。圆角曾以 codeRadius/inlineCodeRadius 传 6/3 的
+ * 历史值（与 UI 规范 §6 的 radius 0 不一致的既有偏差），已随气泡像素化一并
+ * 归零——规格见 ui-style-guide §7.8，勿在此重新引入非零圆角。
  */
 export const Markdown = memo(function Markdown({ text, streaming }: { text: string; streaming?: boolean }) {
   const components = useMemo<Components>(
@@ -115,13 +115,13 @@ export const Markdown = memo(function Markdown({ text, streaming }: { text: stri
         // undefined 会让整块代码连同内容一起消失（曾表现为「带路径的 agent 气泡整条不显示」）。
         if (className?.includes('language-')) {
           return (
-            <FencedCodeBlock className={className} codeRadius={6}>
+            <FencedCodeBlock className={className}>
               {children}
             </FencedCodeBlock>
           )
         }
         return (
-          <ChatInlineCode className={className} inlineCodeRadius={3} {...props}>
+          <ChatInlineCode className={className} {...props}>
             {children}
           </ChatInlineCode>
         )
@@ -150,8 +150,6 @@ export const Markdown = memo(function Markdown({ text, streaming }: { text: stri
     <MarkdownCore
       text={text}
       className="chat-markdown"
-      codeRadius={6}
-      inlineCodeRadius={3}
       components={components}
     />
   )

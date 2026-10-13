@@ -1968,6 +1968,31 @@ body.parchment-texture {
 .chat-markdown img { max-width: 100%; }
 
 /* ────────────────────────────────────────────────────────────────────
+   Chat bubbles — pixel card chrome for the two "speech" bubbles
+   (user + assistant text). Single source of truth: ChatMessage.tsx's
+   ChatMessageView applies the class; per-bubble borders/backgrounds stay
+   inline because user's has dynamic states (undelivered / highlighted).
+
+   Spec (ui-style-guide §6 / §14, see §7.8): radius 0 (global hard
+   corner), 1px --border-strong panel edge (same tier as .settings-card),
+   2px 2px 0 hard shadow (one tier below .pixel-float's 4px).
+
+   The shadow lives in --chat-bubble-shadow so .chat-msg-flash's focus ring
+   can compose it into its keyframes — the ring animates box-shadow and its
+   `forwards` end state would otherwise wipe the bubble's shadow forever.
+
+   Nested content surfaces inside the stream (tool card / plan block /
+   diff / system detail) stay flat with no shadow: they are panels
+   embedded in the flow, and stacking shadows there is pure noise.
+   ──────────────────────────────────────────────────────────────────── */
+.chat-bubble {
+  --chat-bubble-shadow: 2px 2px 0 var(--pixel-shadow);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: var(--chat-bubble-shadow);
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Horizontal-scroll surfaces (`data-x-scroll`) — mobile pane-swipe opt-out.
    Pan gesture goes to the surface, not the MobileLayout strip swipe.
    ──────────────────────────────────────────────────────────────────── */
@@ -2255,13 +2280,16 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
-   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。 */
+   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。
+   两个关键帧都必须把气泡自身的硬投影（--chat-bubble-shadow，见 .chat-bubble）
+   一起写回：动画作用于 box-shadow 且带 forwards，终态若只留一圈透明 ring，
+   会把气泡的硬投影永久抹掉——闪烁结束后投影就没了。 */
 @keyframes chat-msg-flash {
   0% {
-    box-shadow: 0 0 0 2px var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), var(--chat-bubble-shadow);
   }
   100% {
-    box-shadow: 0 0 0 2px transparent;
+    box-shadow: 0 0 0 2px transparent, var(--chat-bubble-shadow);
   }
 }
 .chat-msg-flash {

@@ -559,6 +559,29 @@ assistant 气泡正文是 react-markdown 渲染，**必须自带一套排版规�
 
 **「in hand」语义**：被拽起的卡保持完全不透明（不是半透明置灰）+ 跟随指针——用户清楚地看见「哪张卡被我捏在手里、此刻在哪」；插入线回答「松手会落到哪」。松手时行内 transform 清空（React 不管该属性，须手动），卡片落定新序。
 
+### 7.8 聊天气泡像素卡片（`.chat-bubble`）
+
+ACP 聊天流的「说话气泡」（user + assistant 正文）统一为像素卡片，圆角一律 0（§14 全局硬角）。
+外壳收敛到 `index.css` 的 `.chat-bubble` 单一真源，组件侧只保留动态态：
+
+| 属性 | 值 | 说明 |
+|------|-----|------|
+| `border-radius` | `0` | 全局硬角；**组件不再 inline 圆角**（历史 8/6/4 圆弧已全部归零），圆角只来自 class |
+| `border` | `1px solid var(--border-strong)` | 面板外缘档，与 `.settings-card` 同级。user 气泡的特殊态（高亮 / 未送达）在组件里就地覆盖 |
+| `box-shadow` | `2px 2px 0 var(--pixel-shadow)` | 硬投影取 `.settings-card` 同档（内容卡），比 `.pixel-float` 的 4px 低一档——消息流密度高，投影再重就发闷 |
+
+**两层层级（勿给次级内容面加投影）**：说话气泡是「说的话」，用投影卡；气泡流里的
+工具卡 / 计划块 / diff / system 详情是嵌在流中的面板，**只掰直圆角、不加投影**
+（工具卡保留左侧 2px 状态色条作为状态语义）。全叠投影只会噪。
+
+**投影必须经 `--chat-bubble-shadow` 变量暴露**：`.chat-msg-flash`（「上次输入」跳转聚焦）
+的 ring 动画作用于 `box-shadow` 且带 `forwards`，关键帧里必须把气泡硬投影一起写回——
+否则动画终态（`0 0 0 2px transparent`）会把投影**永久抹掉**，闪烁结束后气泡就没投影了。
+
+**气泡内 markdown**：围栏代码块与行内代码的圆角同归 0。历史上聊天传 6/3、别处传 0 的
+`codeRadius` / `inlineCodeRadius` 旋钮已随本次像素化删除（`Common/MarkdownCore`），
+**勿重新引入非零圆角或半径 props**。
+
 ---
 
 ## 8. Settings Toggles
@@ -790,6 +813,7 @@ Before adding any new UI element, verify:
 - [ ] **不可按的状态指示器遵守 §4.1 Status Badge 规范** — 深棕黑底 + 亮色文字，**无 border / 无 box-shadow**（避免看起来像 button）
 - [ ] Hard shadow uses `3px 3px 0` (not `4px` blur, not glow)
 - [ ] `border-radius: 0` everywhere (modals: `2px` max)
+- [ ] 聊天气泡复用 `.chat-bubble`（§7.8）——圆角只来自 class，不在组件里 inline；气泡内 markdown 代码块/行内代码同样 radius 0，勿引入半径 props
 - [ ] Modal/弹窗标题一律 `.panel-title-bar` 木条（`Modal.tsx` 已内建），遮罩一律 `var(--modal-backdrop)`（§6.2），禁止 `backdrop-blur`
 - [ ] Pixel font (`.font-pixel`) only for display text, not body/code
 - [ ] 可切换像素文字必须走 `var(--pixel-font)`（inline style 亦然），保证受像素字体 BETA 开关控制；顶栏豁免才用 `var(--pixel-font-static)`（§2）

@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-13 16:43) `[frontend]` ACP 聊天气泡像素化，统一 OmniTerm 硬角风格：user / assistant 两条「说话气泡」此前是 8px 圆弧 + 发丝线（`--border-subtle`）边框，与同一块面板里早已像素化的浮层（`.pixel-float`）、按钮（`.pixel-press`）、侧栏卡片（硬投影）直接冲突——这就是「圆弧气泡与整体格格不入」的来源。现外壳收敛到 `index.css` 的 `.chat-bubble` 单一真源：`border-radius: 0`（§14 全局硬角）+ `1px solid var(--border-strong)` 面板外缘（与 `.settings-card` 同档）+ `2px 2px 0 var(--pixel-shadow)` 硬投影（比 `.pixel-float` 的 4px 低一档，消息流密度高、投影再重就发闷）；组件侧不再 inline 圆角，只保留 user 气泡的高亮 / 未送达两个特殊态边框。层级上只给「说的话」加投影：工具卡 / 计划块 / diff / system 详情只掰直圆角、不加投影（工具卡保留左侧 2px 状态色条）。配套修复一处会被静默吃掉的效果：`.chat-msg-flash`（「上次输入」跳转聚焦）的 ring 动画作用于 `box-shadow` 且带 `forwards`，关键帧必须把气泡硬投影经 `--chat-bubble-shadow` 变量一起写回，否则动画终态 `0 0 0 2px transparent` 会把投影**永久抹掉**（闪烁结束后气泡就没投影了）。同时清零聊天表面其余 18 处非零圆角（输入框 / 附件缩略图 / 移除角标 / 文件 chip / 队列 chip / 模式徽标 / terminal 事件行 / 配置栏按钮与搜索框 / 权限横幅 / diff / 工具卡 / 计划块 / system 详情），输入框与配置栏搜索框边框按 §6.2 升为 `--border-strong`，「恢复会话」与配置栏选项按钮挂 `.pixel-press`；气泡内 markdown 围栏代码块与行内代码圆角同归 0，并删掉只为服务该历史偏差存在的 `codeRadius` / `inlineCodeRadius` 半径 props（`Common/MarkdownCore` 与其两个消费方）（`frontend/src/index.css`、`frontend/src/components/Chat/{ChatMessage,ChatView,ChatInput,ConfigToolbar,DiffView,PermissionBanner,Markdown}.tsx`、`frontend/src/components/Common/MarkdownCore.tsx`、`frontend/src/utils/inlineCodeStyle.ts`，回归 `ChatMessage.bubble.test.tsx` 四例；视觉规格与「次级内容面不叠投影」的层级理由见 ui-style-guide §7.8）
+
 ### Fixed
 
 - (2026-10-12 15:45) `[backend]` 修复 npm 渠道一键升级「假成功」——提示已更新、重启后仍旧版、徽标又变 NEW（正式版实测：机器上 nvm 与 hermes 两套 node 并存，`npm install -g` 把 0.2.30 装进了 hermes 的 prefix，跑着 nvm prefix 0.2.29 的正式版纹丝不动，而 npm 退出码仍是 0）。根因：npm 的全局安装目录由「**运行 npm 的 node** 的位置」（npm 是可执行 JS shim，shebang `#!/usr/bin/env node` 取 PATH 上第一个 node）叠加 npmrc 决定，**与 npm 脚本自身在哪无关**——连 nvm 自带的 npm 都会把包装进 hermes 的根。现改为按本进程二进制的路径反推安装前缀并显式传 `--prefix`（`npm_upgrade_args(exe)`），把安装目标钉在「承载本进程的那棵树」上，与 PATH / npmrc / 哪个 node 解释 npm 全部无关；前缀推不出（Windows 的 `<root>/node_modules` 无 `lib` 层 / pnpm store 等布局）才退化为默认目标，由既有的装后版本校验把「装错地方」从假成功变成明确报错；升级失败同时 `eprintln` 留痕（HTTP 响应只回到当前标签页，daemon 日志是远程实例唯一的事后取证来源）（`src/update.rs`、`src/api/system.rs`，回归 5 单测）
