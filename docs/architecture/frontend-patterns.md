@@ -25,7 +25,8 @@
   - **填满型**（面板内容区）：flex 父容器里 `style={{ flex: 1, minHeight: 0 }}`
   - **shrink-to-fit 菜单**（下拉 / 补全框）：`contentStyle={{ flex: '0 0 auto', maxHeight: … }}`，
     内容少时自适应高度、超出 maxHeight 才滚动（详见组件 docstring）
-- **唯一例外**：需要**横向**滚动的容器（如 FileManager 表格 `.fm-table-wrap`）
+- **唯一例外**：需要**横向**滚动的容器（如 FileManager 表格的真实滚动元素
+  `.fm-table-scroll`，外层 `.fm-table-wrap` 是 `overflow: hidden` 不滚动）
   ——OverlayScroll 只支持纵向，这类保留主题化原生滚动条
 - **原生表单元素（textarea 等）**：无法被 `<OverlayScroll>` 的 div 包裹，直接在
   元素上挂 `.overlay-scroll-content` 类即可获得同一主题化滚动条

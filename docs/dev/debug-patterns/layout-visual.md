@@ -64,10 +64,13 @@
 
 **布局-table**：`table-layout: auto` 下 col width 几乎被忽略，列宽按内容/比例分配，拖动时 handle 跑在鼠标前后。`colgroup` 列数必须与 `thead` 列数一致——多出来的 col 按内容占视觉空间，ref 指向的 col 与视觉列错位。`getBoundingClientRect().width` 是拖动时唯一可信的「当前宽度」，state 永远滞后于实际布局。
 
+**fixed 生效还有一个前提**：`table-layout: fixed` 仅在 table 有**显式宽度**（width ≠ auto）时生效——`width: auto` 下 Chromium 退回自动算法，col 宽度被内容与 `th` 的 `min-width` 覆盖（实测 col 声明 90/145/60/132px，渲染实为 190/115/62/132）。要让 fixed 精确控制列宽（例如 JS 按容器宽分配），必须同时给 table 显式宽度。
+
 **适用**：任何表格列宽拖动/调整；colgroup 有条件渲染的列时对齐数量。
 
 **案例证据**：
 - 2026-06-30 FileManager 列宽拖 A 列改 B 列（colgroup 5 col vs thead 4 th，downloadMode 缺 checkbox th）+ 拖动错位 70px。修复：`table-layout: fixed` + col 条件渲染 + startW/finalW 读 bbox。
+- 2026-10-14 FileManager 表格窄面板遮挡（X17）：table 无显式宽度 ⇒ fixed 未生效，name 列自适应算式被 `th` 的 `min-width:180` 撑破、表格总宽超出容器，sticky 操作列盖住「修改时间/大小」两列。修复：自适应模式给 table 加 `width:100%`（手动态维持无宽度，保留「调列不互挤」），列宽由 JS 统一分配。
 
 ---
 
