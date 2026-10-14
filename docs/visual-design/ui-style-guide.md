@@ -584,28 +584,47 @@ ACP 聊天流的「说话气泡」（user + assistant 正文）统一为像素�
 
 ---
 
-### 7.9 思考块（`ThoughtBlockView`）排版与收起态
+### 7.9 思考块（`ThoughtBlockView`）排版与折叠态
 
-ACP 消息流里的 thought 块：一行可点标题（`◆ ▾ thinking`）+ 展开区。**思考内容一律不用斜体**——此前的 `fontStyle: 'italic'` 是「思考=斜体」的排版俗套，与 OmniTerm 的等宽阅读字体不搭（2026-10-13 用户要求修正）。虚化只由「小一档 + 低对比色」表达。
+ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内容一律不用斜体**——此前的 `fontStyle: 'italic'` 是「思考=斜体」的排版俗套，与 OmniTerm 的等宽阅读字体不搭（2026-10-13 用户要求修正）。虚化只由「小一档 + 低对比色」表达。
+
+折叠态外观对齐 ZCode 的 `Reasoning` 组件（2026-10-14 用户要求）：**标题行单行承载全部信息**，不在标题行下方另起预览行。
 
 | 元素 | 规格 |
 |------|------|
-| 标题行 | reader 字体 `0.846em` / `--text-faint` / `opacity: 0.9`；`◆` 与 `▾/▸`、`thinking` 同行，整行即展开开关 |
+| 标题行 | reader 字体 `0.846em` / `--text-faint` / `opacity: 0.9`；`inline-flex` + `gap: 5` + `maxWidth: 100%` + `minWidth: 0`（长思考行把视口挤在气泡宽度内，不撑破气泡）；整行即展开开关 |
+| 行内成员 | `◆` 图标（`shrink-0`）→ 状态标签（`shrink-0` + `nowrap`）→ `·` → 实时思考行（`flex: 1` + `minWidth: 0`）→ 箭头（`shrink-0`） |
+| 状态标签 | 流式且收起 = 「正在思考」+ 扫光（`.thinking-shimmer`）；其余（展开中 / 已完成）= 「思考」`fontWeight: 500` + `·` + 耗时（`持续了几秒` / `持续了 N 秒`） |
+| 实时思考行 | `0.923em` / `--text-muted`；`overflow: hidden` + `whiteSpace: nowrap`；单行收口靠**视口滚动到末尾**而非省略号 |
 | 展开区 | `0.923em` / `lineHeight 1.5` / `--text-muted`（比正文 text 气泡的 `1em` / `--text-primary` 小一档且虚化）；左缘 2px `--border-subtle` 状态条 + 左右 10px 缩进；`maxHeight: 300` shrink-to-fit 滚动（`OverlayScroll`） |
-| 简要预览行 | 与展开区同一套排版 + 同一条左缘状态条；`nowrap` + `overflow: hidden` + `text-overflow: ellipsis` 收口单行 |
 
-排版规格的单一真源是 `ChatMessage.tsx` 的 `THINKING_TEXT_STYLE`（展开区与预览行共用）；**勿在两处各写一份字号/颜色**。
+排版规格的单一真源是 `ChatMessage.tsx` 的 `THINKING_TEXT_STYLE`（展开区与实时思考行共用）；**勿在两处各写一份字号/颜色**。
+
+**实时思考行只显示在流式期间**（对齐 ZCode 的 `isStreaming && !isOpen`）——思考结束后折叠态只剩「思考 · 持续了 N 秒」，不再显示思考原文。内容是一行**未经任何总结**的思考原文：取思考文本最后一个非空行（流式期间正是正在生长的那一行），不做总结、不改写、不截断字符。
+
+**溢出语义（与旧实现的关键差异）**：不用 `text-overflow: ellipsis`——那会冻结旧前缀、把最新 token 裁在右侧，与「正常流式输出」矛盾。改为每次内容增长后把单行视口的 `scrollLeft` 推到 `scrollWidth`：旧内容向左移、最新 token 始终可见。溢出时左缘叠加 16px 渐隐遮罩（`THINKING_LINE_MASK_STYLE`），提示「左侧还有被滚走的内容」；不溢出时不加（右缘是完整的最新 token）。接线用 `data-thinking-streaming-line` / `data-thinking-streaming-mask`。
+
+**两处动画**（均在 `index.css`）：
+
+- `.thinking-shimmer`：300% 渐变 + `background-clip: text` + 4s 线性扫光（`@keyframes thinking-gradient-flow`），渐变中段夹 `--text-faint` 形成高光扫过；
+- `.thinking-line-roll`：换行时新行从下一行位置（`translateY(0.8em)`）300ms 淡入到位。由 React key（**行首偏移**，见 `thinkingCollapsed.ts`）变化触发重挂载——同一行继续生长时 key 不变，**不重挂载也就不重放动画**。
+
+两者都在 `@media (prefers-reduced-motion: reduce)` 下关停；扫光关停后必须把文字色还回来（`background-clip: text` 配 `transparent` 会让标签整个不可见）。
+
+**箭头**（`.thinking-chevron`）：收起态默认 `opacity: 0`，hover 标题行才显；展开态常显并 `rotate(90deg)` 指向下。单个字形 + CSS 旋转，不搞两套字形。
+
+**耗时**（`durationSec`）：客户端测量——流式开始计时、结束定档（`Math.max(1, ceil(elapsed/1000))`，亚秒也显示 1 秒而非 0 秒），只在展开态每秒刷新（收起态没必要为了隐藏的数字每秒重渲染整块）。历史块从未见过 `streaming=true`，保持 `undefined`，回落「持续了几秒」。
 
 **收起态两档位**（档位枚举 / 选项数组 / 存档白名单 / 取行规则的单一是 `frontend/src/utils/thinkingCollapsed.ts`；「展开思考」关闭时才有语义——开时块恒展开，设置面板此时**不渲染**该行，不给空转开关）：
 
 | 档位 | 收起态显示 | 默认 |
 |------|-----------|------|
 | 完全隐藏 | 只有标题行，无任何思考内容（即加此设置前的行为） | ✅ |
-| 显示简要 | 标题行下**一行**流式思考原文 | |
+| 显示简要 | 流式期间标题行内嵌一行思考原文；思考结束后只剩状态标签 | |
 
-显示简要**不做任何总结、不改写、不截断字符**：取思考文本最后一个非空行（流式期间正是正在生长的那一行，故预览随 chunk 自然增长），单行收口全权交给 CSS。档位是独立设置（localStorage `omniterm_thinking_collapsed`），**不随「展开思考」开关复位**。
+档位是独立设置（localStorage `omniterm_thinking_collapsed`），**不随「展开思考」开关复位**。
 
-预览行刻意不打 `data-chat-body`：元信息行的气泡右缘量的是行内最后一个 `[data-chat-body]`，预览行一旦打标就会顶替它。
+实时思考行刻意不打 `data-chat-body`：元信息行的气泡右缘量的是行内最后一个 `[data-chat-body]`，它一旦打标就会顶替它。
 
 ---
 

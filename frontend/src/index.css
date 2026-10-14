@@ -2383,6 +2383,96 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   思考块折叠态（外观对齐 ZCode 的 Reasoning 组件）
+
+   标题行单行承载「◆ 图标 + 状态标签 + · + 实时思考行 + 末尾箭头」。
+   实时思考行溢出时不走 text-overflow: ellipsis（那会冻结旧前缀、把最新
+   token 裁掉），改为把单行视口的 scrollLeft 推到末尾——旧内容向左移、
+   最新内容始终可见；左缘再叠一层渐隐遮罩，提示左侧还有被滚走的内容。
+   ──────────────────────────────────────────────────────────────────── */
+
+/* 流式态「正在思考」扫光：渐变中段夹一段更虚的颜色，靠 background-position
+   往复流动形成高光扫过。必须 background-clip:text + 透明文字色，渐变才只
+   落在字形上。 */
+.thinking-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 34%,
+    var(--text-faint) 50%,
+    var(--text-muted) 66%,
+    var(--text-muted) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-gradient-flow 4s linear infinite;
+}
+
+@keyframes thinking-gradient-flow {
+  0% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 100% 0;
+  }
+}
+
+/* 实时思考行换行时的纵向滚入：新行从下一行的位置（0.8em）淡入到位。
+   由 React key 变化触发重挂载，因此只需写入场动画；同一条行继续生长时
+   key 不变，不会重挂载，也就不会重放这段动画。 */
+.thinking-line-roll {
+  animation: thinking-line-roll 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes thinking-line-roll {
+  from {
+    transform: translateY(0.8em);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* 末尾箭头：收起态默认隐藏（整行本身就可点，箭头只是「可展开」的暗示），
+   hover 标题行时才显；展开态常显并旋转 90° 改为指向下方。 */
+.thinking-chevron {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.thinking-header-btn:hover .thinking-chevron,
+.thinking-chevron[data-open="true"] {
+  opacity: 1;
+}
+.thinking-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 减少动效：扫光与滚入都关掉。扫光关掉后必须把文字色还回来——
+   background-clip:text 配 transparent 会让标签整个不可见。 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer,
+  .thinking-line-roll {
+    animation: none;
+  }
+  .thinking-shimmer {
+    background-image: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+  }
+  .thinking-chevron {
+    transition: none;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.
    ──────────────────────────────────────────────────────────────────── */

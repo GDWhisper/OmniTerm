@@ -3,7 +3,7 @@
  *
  * 「展开思考」开关关闭时，思考块默认收起。此时有两种降级档位：
  * - `hide`：完全不显示思考内容（只有可点击展开的标题行）——历史行为；
- * - `brief`：在标题行下追加**一行**流式思考原文，随 chunk 自然增长。
+ * - `brief`：在标题行内嵌**一行**流式思考原文，随 chunk 自然增长。
  *
  * 收敛到本文件的有三样：档位枚举与选项数组（顺序即设置面板按钮顺序）、
  * localStorage 存档键与白名单读取，以及「显示简要」的单行取行规则。
@@ -52,18 +52,36 @@ const SPACE_CODE = 32
  *
  * 流式期间它正是正在生长的那一行，故预览随 chunk 自然增长——**不做任何总结、
  * 不改写、不截断字符**（用户明确要求「不总结、正常流式输出」）；单行收口由
- * 调用方的 CSS（`white-space: nowrap` + `text-overflow: ellipsis`）负责。
+ * 调用方负责：视口 `overflow: hidden` 并把 `scrollLeft` 推到末尾，让最新 token
+ * 始终可见（早前用 `text-overflow: ellipsis`，会冻结旧前缀、把新内容裁掉）。
  *
  * 从尾部反向定位而非整篇 `split('\n')`：思考文本随 turn 累积可达数万字符，
  * 而 chunk 是逐词到达的，整篇 split 会把每次追加都变成 O(整篇)。先剥掉末尾
  * 空白（含 agent 分段用的连续空行），剩下的最后一个字符必然属于有效行，
  * 因此一次 `lastIndexOf` 定位即可，无需再向前逐行试错。
+ *
+ * 返回 `null` 表示全文皆空白——调用方据此不渲染预览行。
  */
-export function thinkingPreviewLine(text: string): string {
+export interface ThinkingStreamingSummary {
+  /**
+   * 该行首字符在原文中的偏移量，字符串化后供 React 当 key。
+   *
+   * 取偏移而非行号：行号要从头数换行符，O(整篇)；偏移由 `lastIndexOf` 直接
+   * 给出，O(行长)。语义上也正好——同一行在流式生长期间偏移不变（不重挂载、
+   * 不重放动画），换行时偏移改变（触发一次纵向滚入动画）。
+   */
+  key: string
+  /** 该行去首尾空白后的文本。 */
+  text: string
+}
+
+export function resolveThinkingStreamingSummary(text: string): ThinkingStreamingSummary | null {
   let end = text.length
   while (end > 0 && text.charCodeAt(end - 1) <= SPACE_CODE) end--
-  if (end === 0) return ''
+  if (end === 0) return null
   const start = text.lastIndexOf('\n', end - 1) + 1
   // 行首只可能是缩进空白（换行符已被 lastIndexOf 吃掉），trim 掉即可。
-  return text.slice(start, end).trim()
+  // 这里不需要再判空：末尾空白已剥，text[end-1] 必为非空白，故 start < end
+  // 且切片里至少含一个非空白字符（写空值分支会成死代码）。
+  return { key: String(start), text: text.slice(start, end).trim() }
 }

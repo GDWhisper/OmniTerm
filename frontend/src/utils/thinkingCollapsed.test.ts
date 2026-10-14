@@ -5,7 +5,7 @@ import {
   DEFAULT_THINKING_COLLAPSED_MODE,
   parseThinkingCollapsedMode,
   readThinkingCollapsedMode,
-  thinkingPreviewLine,
+  resolveThinkingStreamingSummary,
 } from './thinkingCollapsed'
 
 // 思考块收起态档位的单一真源契约：选项数组顺序（= 面板按钮顺序）、白名单
@@ -68,49 +68,73 @@ describe('readThinkingCollapsedMode', () => {
   })
 })
 
-describe('thinkingPreviewLine', () => {
+describe('resolveThinkingStreamingSummary', () => {
   it('returns the last line of a single-line thought', () => {
-    expect(thinkingPreviewLine('先读一下配置文件')).toBe('先读一下配置文件')
+    expect(resolveThinkingStreamingSummary('先读一下配置文件')?.text).toBe('先读一下配置文件')
   })
 
   it('returns the LAST line, not the first', () => {
     // 流式期间最后一行正是正在生长的那一行——预览要跟着它长。
-    expect(thinkingPreviewLine('第一行\n第二行\n第三行')).toBe('第三行')
+    expect(resolveThinkingStreamingSummary('第一行\n第二行\n第三行')?.text).toBe('第三行')
   })
 
   it('tracks the growing tail line as chunks arrive', () => {
-    expect(thinkingPreviewLine('先看')).toBe('先看')
-    expect(thinkingPreviewLine('先看\n再看')).toBe('再看')
-    expect(thinkingPreviewLine('先看\n再看看')).toBe('再看看')
+    expect(resolveThinkingStreamingSummary('先看')?.text).toBe('先看')
+    expect(resolveThinkingStreamingSummary('先看\n再看')?.text).toBe('再看')
+    expect(resolveThinkingStreamingSummary('先看\n再看看')?.text).toBe('再看看')
   })
 
   it('skips trailing blank lines left by paragraph breaks', () => {
-    expect(thinkingPreviewLine('想了很久\n\n\n')).toBe('想了很久')
-    expect(thinkingPreviewLine('A\nB\n\n\nC\n\n')).toBe('C')
+    expect(resolveThinkingStreamingSummary('想了很久\n\n\n')?.text).toBe('想了很久')
+    expect(resolveThinkingStreamingSummary('A\nB\n\n\nC\n\n')?.text).toBe('C')
   })
 
   it('trims surrounding whitespace on the picked line', () => {
-    expect(thinkingPreviewLine('A\n   缩进的一行   ')).toBe('缩进的一行')
+    expect(resolveThinkingStreamingSummary('A\n   缩进的一行   ')?.text).toBe('缩进的一行')
   })
 
-  it('returns empty for blank / whitespace-only thoughts', () => {
-    expect(thinkingPreviewLine('')).toBe('')
-    expect(thinkingPreviewLine('\n\n')).toBe('')
-    expect(thinkingPreviewLine('   \n\t\n')).toBe('')
+  it('returns null for blank / whitespace-only thoughts', () => {
+    // null 而不是空串：调用方据此整个不渲染预览行。
+    expect(resolveThinkingStreamingSummary('')).toBeNull()
+    expect(resolveThinkingStreamingSummary('\n\n')).toBeNull()
+    expect(resolveThinkingStreamingSummary('   \n\t\n')).toBeNull()
   })
 
   it('handles CRLF line endings', () => {
-    expect(thinkingPreviewLine('第一行\r\n第二行\r\n')).toBe('第二行')
+    expect(resolveThinkingStreamingSummary('第一行\r\n第二行\r\n')?.text).toBe('第二行')
   })
 
   it('does not truncate long lines (single-line clipping is the caller\'s job)', () => {
     const long = 'x'.repeat(5000)
-    expect(thinkingPreviewLine(`短行\n${long}`)).toBe(long)
+    expect(resolveThinkingStreamingSummary(`短行\n${long}`)?.text).toBe(long)
   })
 
   it('skips a long run of trailing blank lines without scanning the whole text', () => {
     // 末尾连续空行由一次尾部剥离吃掉，不需要向前逐行试错。
     const many = Array.from({ length: 200 }, () => '').join('\n')
-    expect(thinkingPreviewLine(`内容\n${many}`)).toBe('内容')
+    expect(resolveThinkingStreamingSummary(`内容\n${many}`)?.text).toBe('内容')
+  })
+
+  // --- key 语义：驱动「换行时纵向滚入」动画 ---
+
+  it('keys the summary by the line start offset', () => {
+    // '第一行' 占 3 字符 + 换行符 → 第二行从偏移 4 起。
+    expect(resolveThinkingStreamingSummary('第一行\n第二行')).toEqual({ key: '4', text: '第二行' })
+    expect(resolveThinkingStreamingSummary('先看\n再看')).toEqual({ key: '3', text: '再看' })
+  })
+
+  it('keeps the key stable while the same line grows', () => {
+    // 同一行在流式生长期间 key 不变 → React 不重挂载、不重放滚入动画。
+    const a = resolveThinkingStreamingSummary('先看\n再看')
+    const b = resolveThinkingStreamingSummary('先看\n再看看')
+    expect(a?.key).toBe(b?.key)
+    expect(b?.text).toBe('再看看')
+  })
+
+  it('changes the key when the stream moves to a new line', () => {
+    const before = resolveThinkingStreamingSummary('先看\n再看')
+    const after = resolveThinkingStreamingSummary('先看\n再看\n新行')
+    expect(after?.key).not.toBe(before?.key)
+    expect(after?.text).toBe('新行')
   })
 })
