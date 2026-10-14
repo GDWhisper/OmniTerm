@@ -2489,6 +2489,70 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 
 /* ────────────────────────────────────────────────────────────────────
+   消息级「过程容器」收纳行（ProcessBlocks）
+   ──────────────────────────────────────────────────────────────────── */
+
+/* 收纳行：与思考块标题行同款规格（reader 字体 / 0.846em / --text-faint /
+   opacity 0.9），整行即展开开关。max-w + min-w-0 让长摘要被气泡宽度收口。 */
+.process-header-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  padding: 0;
+  font-family: var(--reader-font, inherit);
+  display: inline-flex;
+  align-items: center;
+  gap: 5;
+  max-width: 100%;
+  min-width: 0;
+  opacity: 0.9;
+}
+
+/* 收纳行内的摘要文本：比正文小一档且虚化（沿用思考块既有的层级语言），
+   不抢最终结论的风头。 */
+.process-summary-text {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 收纳行末尾箭头：与 .thinking-chevron 同一套语义（收起态 hover 才显、
+   展开态常显并转向下），但**不复用**那个类——它的 hover 联动写死了
+   `.thinking-header-btn:hover`，套过来会连带思考块的规则。 */
+.process-chevron {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.process-header-btn:hover .process-chevron,
+.process-chevron[data-open="true"] {
+  opacity: 1;
+}
+.process-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 减少动效：收纳行运行态扫光一并关掉，同 .thinking-shimmer 的处理
+   （background-clip:text 配 transparent 会让标签不可见，必须还回文字色）。 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer,
+  .thinking-line-roll,
+  .process-shimmer {
+    animation: none;
+  }
+  .process-shimmer {
+    background-image: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+  }
+  .process-chevron {
+    transition: none;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.
    ──────────────────────────────────────────────────────────────────── */

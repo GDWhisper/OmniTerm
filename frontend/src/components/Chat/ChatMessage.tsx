@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -192,6 +192,116 @@ const THINKING_LINE_MASK_STYLE: CSSProperties = {
 
 /** 耗时刷新间隔（毫秒）：展开态每秒给「持续了 N 秒」进位一次。 */
 const THINKING_DURATION_TICK_MS = 1000
+
+/** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
+const PROCESS_HEADER_ICON = '◈'
+
+/** 一段连续过程块里的单块 + 它在原 blocks[] 中的下标。 */
+interface ProcessEntry {
+  block: ContentBlock
+  idx: number
+}
+
+/**
+ * 消息级「过程容器」：把一轮 ACP 输出里的**过程块**（thought / tool_call / plan）
+ * 收进同一个折叠器，折叠态只留**一行计数聚合摘要**，最终 text 结论留在容器外
+ * 始终可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
+ * `ToolLayout.tsx`）的交互：
+ *
+ * - **流式中展开、完成后自动折叠**（用户 2026-10-14 选定）。运行中跟着看过程，
+ *   一结束就收纳成一行，长串明细不会永久摊开在聊天流里。
+ * - 摘要走**计数聚合**而非罗列（对齐 ZCode `formatExploreSummary` 的
+ *   search/list/file 计数）：「思考 2 · 工具调用 3 · 计划 1」比把每个块名列一遍
+ *   更短，也不会随块数增长而无限变长。
+ * - 用户手动展开/收起过后，自动规则不再覆盖他的选择（对齐 ZCode 的
+ *   `userInteractedRef`）。
+ *
+ * 与既有「展开思考」「展开工具调用」两个开关**不同层、不冲突**：容器决定
+ * 「看不看得到明细」，那两个开关决定「展开后明细的粒度」——容器展开时内部各块
+ * 照旧按开关渲染（ThoughtBlockView / ToolCallBlockView 各自读自己的设定）。
+ */
+function ProcessBlocks({
+  entries,
+  streaming,
+  renderEntry,
+}: {
+  entries: ProcessEntry[]
+  streaming: boolean
+  renderEntry: (entry: ProcessEntry) => ReactNode
+}) {
+  const { t } = useTranslation()
+  // 流式中默认展开（跟着看过程）；历史 / 已定稿的默认收起（收纳）。
+  const [open, setOpen] = useState(streaming)
+  // 用户是否手动干预过：置位后自动折叠不再插手（对齐 ZCode userInteractedRef）。
+  const userInteractedRef = useRef(false)
+  const wasStreamingRef = useRef(streaming)
+
+  // 流式结束边沿自动折叠。判边沿而非「streaming 为 false 就折」——后者会在用户
+  // 手动展开后、下一轮流式结束时再次折叠，把用户的选择覆盖掉。
+  useEffect(() => {
+    const wasStreaming = wasStreamingRef.current
+    wasStreamingRef.current = streaming
+    if (!wasStreaming || streaming) return
+    if (userInteractedRef.current) return
+    setOpen(false)
+  }, [streaming])
+
+  const toggle = () => {
+    userInteractedRef.current = true
+    setOpen((v) => !v)
+  }
+
+  // 计数聚合。代价 O(块数)，流式中每渲染一次全量重数也远不到需要 memo 的量级
+  // （一轮的过程块通常个位数到几十），故不包 useMemo——包了反而要管 entries 的
+  // 引用稳定性（每次渲染新建），得不偿失。
+  let thoughtCount = 0
+  let toolCount = 0
+  let planCount = 0
+  for (const { block } of entries) {
+    if (block.type === 'thought') thoughtCount++
+    else if (block.type === 'tool_call') toolCount++
+    else if (block.type === 'plan') planCount++
+  }
+
+  // 只收计数非零的段，段间 `·`。全零不该发生（容器仅在有过程块时才渲染），
+  // 故不写兜底文案——真出现了也只是一行「进行中 / 已完成」，不制造死分支。
+  const parts: string[] = []
+  if (thoughtCount > 0) parts.push(t('chat.process.thoughtCount', { count: thoughtCount }))
+  if (toolCount > 0) parts.push(t('chat.process.toolCount', { count: toolCount }))
+  if (planCount > 0) parts.push(t('chat.process.planCount', { count: planCount }))
+
+  // 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免摘要
+  // 喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。
+  const statusWord = streaming ? t('chat.process.working') : t('chat.process.done')
+
+  return (
+    <div className="chat-block" data-chat-body="true" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH }}>
+      <button onClick={toggle} className="process-header-btn" style={{ fontSize: '0.846em' }}>
+        <span style={{ flexShrink: 0 }}>{PROCESS_HEADER_ICON}</span>
+        {streaming ? (
+          <span className="process-shimmer" style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}>
+            {statusWord}
+          </span>
+        ) : (
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
+            {statusWord}
+          </span>
+        )}
+        {parts.length > 0 && (
+          <>
+            <span style={{ flexShrink: 0 }}>·</span>
+            <span className="process-summary-text">{parts.join(' · ')}</span>
+          </>
+        )}
+        {/* 收起态 hover 整行才显，展开态常显并转向下（同思考块箭头语义）。 */}
+        <span className="process-chevron" data-open={open ? 'true' : 'false'} style={{ flexShrink: 0 }}>
+          ▸
+        </span>
+      </button>
+      {open && entries.map((entry) => renderEntry(entry))}
+    </div>
+  )
+}
 
 function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
   const { t } = useTranslation()
@@ -1049,6 +1159,43 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // rather than collapsing everything into a single bubble.
   const lastIdx = message.blocks.length - 1
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
+  // 把 blocks 按「连续过程块」切段：thought / tool_call / plan 属过程块，收进
+  // ProcessBlocks 容器；text / system / image 是结论或需即时交互的内容（审批必须
+  // 可见可点），留在容器外原序渲染。按**连续段**归组而非全局——否则夹在过程块
+  // 之间的 text 会被整段挪到容器之后，改变阅读顺序。
+  // 单块段不套容器：一个思考块 / 一个工具卡本就有自己的折叠头，再套一层容器会
+  // 得到「容器摘要 + 块自己的头」两行重复信息。故只在同段 ≥2 块时才收纳。
+  const streaming = message.streaming ?? false
+  const bodyNodes: ReactNode[] = []
+  let run: ProcessEntry[] = []
+  const flushRun = () => {
+    if (run.length === 0) return
+    const entries = run
+    run = []
+    if (entries.length > 1) {
+      bodyNodes.push(
+        <ProcessBlocks
+          key={`process-${entries[0].idx}`}
+          entries={entries}
+          streaming={streaming}
+          renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming)}
+        />,
+      )
+      return
+    }
+    // 单块段：直接渲染，与加容器前的行为完全一致。
+    bodyNodes.push(renderBlock(entries[0].block, entries[0].idx, entries[0].idx === lastIdx, streaming))
+  }
+  for (let i = 0; i < message.blocks.length; i++) {
+    const b = message.blocks[i]
+    if (b.type === 'thought' || b.type === 'tool_call' || b.type === 'plan') {
+      run.push({ block: b, idx: i })
+      continue
+    }
+    flushRun()
+    bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming))
+  }
+  flushRun()
   return (
     <div
       ref={rowRef}
@@ -1069,7 +1216,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       }}
     >
       {label}
-      {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
+      {bodyNodes}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
       {/* 动作栏 + turn 耗时（含工具耗时与 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
           · 流式期：动作栏恒空（五个动作的 visible 硬排 streaming），实时读数**靠左**；

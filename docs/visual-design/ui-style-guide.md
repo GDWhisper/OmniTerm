@@ -640,6 +640,36 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 三项设置**彼此独立、互不复位**：`expandThinking`（流式期间是否展开观看）、`thinkingCollapsedMode`（收起时显示什么）、`thinkingAutoCollapse`（流式结束后是否折回摘要）。单一真源同见 `frontend/src/utils/thinkingCollapsed.ts`。
 
+### 7.10 消息级「过程容器」（`ProcessBlocks`）
+
+上一节管的是**单个思考块**自己的折叠；本节管的是**整轮过程的收纳**：把一条 assistant 消息里的过程块（`thought` / `tool_call` / `plan`）收进同一个折叠器，折叠态只留**一行计数聚合摘要**，最终 `text` 结论留在容器外始终可见。目标是「流式输出完成后把整个过程收纳起来，只显示最终结论」（2026-10-14 用户要求）。
+
+**交互**（对齐 ZCode 容器型工具 `ToolCallBlocks/renderers/agent.tsx` + `ToolLayout.tsx`）：
+
+| 阶段 | 行为 |
+|------|------|
+| 流式中 | 容器**展开**，跟着看过程逐块产出 |
+| 流式结束 | **边沿上自动折叠**成一行摘要（`running → completed` 边沿检测，同 §7.9 的 `wasStreamingRef` 手法） |
+| 用户手动干预后 | 自动规则不再覆盖（`userInteractedRef`，展开与收起都算干预） |
+| 历史消息 | 挂载即收起（收纳） |
+
+**摘要走计数聚合，不罗列**（对齐 ZCode `formatExploreSummary` 把子调用按 search/list/file 计数）：「思考 1 · 工具调用 2 · 计划 1」。比把每个块名列一遍短，也不会随块数增长而无限变长；只收非零段，段间 `·`。状态词流式中「进行中」（借 §7.9 的扫光 class 家族，独立成 `.process-shimmer`），完成后「已完成」回落 `--text-muted`（同 `ToolLayout` 对 `kindLabel` 的处理理由：非运行态保持最浅文本色，避免摘要喧宾夺主）。
+
+**与两个既有开关不同层、不冲突**——这是最容易搞混的地方：
+
+- **容器**决定「看不看得到明细」；
+- `expandThinking` / `expandToolCalls` 决定「展开后明细的粒度」。
+
+容器展开时，内部各块照旧各自读自己的设定渲染（`ThoughtBlockView` 仍按 `expandThinking` 决定自身展不展）。故「开了展开思考」的用户在流式中看到的过程明细粒度不变，只是流式结束后多了一层收纳。
+
+**归组规则**：
+
+- 按**连续段**归组，非全局。`text` / `system` / `image` 留在容器外原序渲染。全局归组会把夹在过程块之间的 `text` 整段挪到容器之后，**改变阅读顺序**。
+- **单块段不套容器**（`entries.length === 1` 时直接 `renderBlock`）。一个思考块 / 工具卡本就有自己的折叠头，再套一层会得到「容器摘要 + 块自己的头」两行重复信息。
+- `system` 块**必须**留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
+
+**排版**：收纳行与思考块标题行同款规格（reader 字体 / `0.846em` / `--text-faint` / `opacity 0.9`，`max-w` + `min-w-0` 让长摘要被气泡宽度收口），字形 `◈`——与思考块的 `◆` **同族不同形**，避免两块视觉混淆。样式在 `index.css` 的 `.process-header-btn` / `.process-summary-text` / `.process-chevron` / `.process-shimmer`；箭头**刻意不复用** `.thinking-chevron`——后者的 hover 联动写死了 `.thinking-header-btn:hover`，套过来会连带思考块的规则。收纳行带 `data-chat-body`，参与 §7.9 那条气泡右缘测量。
+
 ---
 
 ## 8. Settings Toggles
