@@ -627,6 +627,19 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 实时思考行刻意不打 `data-chat-body`：元信息行的气泡右缘量的是行内最后一个 `[data-chat-body]`，它一旦打标就会顶替它。
 
+**完成后自动折叠**（对齐 ZCode 的 Reasoning，2026-10-14）：ZCode 的统一模式是「**运行中展开观看 → 完成后回到摘要 → 用户手动干预后不再自动操作**」——`reasoning.tsx` 以 `autoCollapseKey={streaming ? null : row.state}` 做状态边界检测，`ToolLayout.tsx` 以 `previousIsRunningRef` 做 `running → completed` 边沿检测，两者都以 `userInteractedRef` 为前提。OmniTerm 照此实现：
+
+| 环节 | 规则 |
+|------|------|
+| 触发时机 | `streaming` 由 `true → false` 的**边沿**上折一次。判边沿而非「`streaming` 为 false 就折」——后者会在用户手动展开后、下一次流式结束时再次折叠，把用户的选择覆盖掉 |
+| 用户干预 | `toggle()` 里置 `userInteractedRef`，展开与收起都算干预；置位后自动规则永不再覆盖 |
+| 完成后展示 | 结论标签「思考 · 持续了 N 秒」（见上文状态标签），不再显示思考原文 |
+| 挂载初值 | `expandThinking && (streaming \|\| !autoCollapse)`。已定稿的块（历史 / 刚结束）在开关开启时默认收起——否则刷新页面会把刚自动折起来的块又摊开，与流式结束那一刻的观感不一致（ZCode 的 Reasoning 同样 `defaultOpen=false`，只有运行中才展开） |
+
+新增独立开关 `settings.thinkingAutoCollapse`（默认**开**）：**只在「展开思考」开启时渲染**——关时思考块本就收起，折不折看不到差别，不给用户空转的开关（与上面的收起态档位行互为补集，两者永不同屏）。存档读取判 `!== 'false'` 而非 `=== 'true'`：默认值为 true，只有显式存过 `'false'` 才关，缺省与脏值一律回落默认——宁可多折一次让用户点开，也不要因为一个脏值把功能静默关掉。
+
+三项设置**彼此独立、互不复位**：`expandThinking`（流式期间是否展开观看）、`thinkingCollapsedMode`（收起时显示什么）、`thinkingAutoCollapse`（流式结束后是否折回摘要）。单一真源同见 `frontend/src/utils/thinkingCollapsed.ts`。
+
 ---
 
 ## 8. Settings Toggles

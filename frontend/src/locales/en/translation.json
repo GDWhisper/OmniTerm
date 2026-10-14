@@ -172,6 +172,8 @@
   "settings.expandToolCallsHint": "Auto-expand tool call blocks in chat messages when they arrive",
   "settings.thinkingCollapsed": "When Collapsed",
   "settings.thinkingCollapsedHint": "What a collapsed thinking block shows while \"Expand Thinking\" is off. Show brief = one live line of the raw thought inlined in the header while streaming (no summary); once the thought finishes the header keeps only \"Thought · Ns\"; click the header to expand the full text.",
+  "settings.thinkingAutoCollapse": "Collapse thought when it finishes",
+  "settings.thinkingAutoCollapseHint": "While streaming, the thinking block stays expanded so you can watch it. The moment it finishes, it folds back to the \"Thought · Ns\" summary instead of staying open forever in the chat. Once you expand or collapse it yourself, auto-collapse stops interfering — click the header any time to read the full text.",
   "settings.thinkingCollapsedHide": "Hide Completely",
   "settings.thinkingCollapsedBrief": "Show Brief",
   "settings.acpIdleRecycle": "ACP Idle Recycle",

@@ -711,9 +711,11 @@ function SessionDisplaySection() {
   const expandThinking = useAppStore(s => s.expandThinking)
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
+  const thinkingAutoCollapse = useAppStore(s => s.thinkingAutoCollapse)
   const setExpandThinking = useAppStore(s => s.setExpandThinking)
   const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
   const setCollapsedMode = useAppStore(s => s.setThinkingCollapsedMode)
+  const setThinkingAutoCollapse = useAppStore(s => s.setThinkingAutoCollapse)
 
   return (
     <>
@@ -748,6 +750,19 @@ function SessionDisplaySection() {
           </div>
           <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.thinkingCollapsedHint')}</p>
         </section>
+      )}
+      {/* 「完成后自动折叠」：只在「展开思考」**开启**时渲染——关时思考块本就
+          收起，流式结束折不折看不到差别，不给用户一个空转的开关（与上面的收起态
+          档位行互为补集，两者永不同屏）。对齐 ZCode：运行中展开观看，完成后回到
+          「思考 · 持续了 N 秒」结论标签；用户手动展开/收起过后，自动规则不再
+          覆盖他的选择。 */}
+      {expandThinking && (
+        <ToggleRow
+          labelKey="settings.thinkingAutoCollapse"
+          hintKey="settings.thinkingAutoCollapseHint"
+          value={thinkingAutoCollapse}
+          onToggle={() => setThinkingAutoCollapse(!thinkingAutoCollapse)}
+        />
       )}
       <ToggleRow
         labelKey="settings.expandToolCalls"

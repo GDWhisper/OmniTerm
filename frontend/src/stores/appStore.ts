@@ -15,7 +15,9 @@ import {
 } from '../utils/thinkingEffects'
 import {
   THINKING_COLLAPSED_STORAGE_KEY,
+  THINKING_AUTO_COLLAPSE_STORAGE_KEY,
   readThinkingCollapsedMode,
+  readThinkingAutoCollapse,
   type ThinkingCollapsedMode,
 } from '../utils/thinkingCollapsed'
 
@@ -235,6 +237,10 @@ export interface AppState {
    *  is OFF): 'hide' = no thinking content at all (the pre-setting behaviour),
    *  'brief' = one live line of the raw streamed thought under the header. */
   thinkingCollapsedMode: ThinkingCollapsedMode
+  /** Auto-collapse a thinking block once its stream finishes (ON = fold back to
+   *  the "Thought · Ns" summary when streaming ends). Default ON, matching
+   *  ZCode. Independent of both `expandThinking` and `thinkingCollapsedMode`. */
+  thinkingAutoCollapse: boolean
   /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
   expandToolCalls: boolean
   /** Expand all session-hosting worktrees in the sidebar (ON = all expanded, OFF = focused worktree only). */
@@ -309,6 +315,7 @@ export interface AppState {
   setParchmentTextureEnabled: (v: boolean) => void
   setExpandThinking: (v: boolean) => void
   setThinkingCollapsedMode: (v: ThinkingCollapsedMode) => void
+  setThinkingAutoCollapse: (v: boolean) => void
   setExpandToolCalls: (v: boolean) => void
   setExpandAllSessions: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
@@ -426,6 +433,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
   thinkingCollapsedMode: readThinkingCollapsedMode(),
+  thinkingAutoCollapse: readThinkingAutoCollapse(),
   expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
   expandAllSessions: localStorage.getItem('omniterm_expand_all_sessions') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
@@ -528,6 +536,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setThinkingCollapsedMode: (mode) => {
     localStorage.setItem(THINKING_COLLAPSED_STORAGE_KEY, mode)
     set({ thinkingCollapsedMode: mode })
+  },
+
+  // 与 expandThinking / thinkingCollapsedMode 三者各自独立：开「展开思考」时
+  // 本项决定流式结束后要不要折回摘要；关时块本就收起，本项无效果可看。
+  setThinkingAutoCollapse: (v) => {
+    localStorage.setItem(THINKING_AUTO_COLLAPSE_STORAGE_KEY, String(v))
+    set({ thinkingAutoCollapse: v })
   },
 
   setExpandToolCalls: (v) => {

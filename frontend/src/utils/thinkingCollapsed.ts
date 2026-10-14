@@ -1,12 +1,16 @@
 /**
- * ACP 思考块**收起态**展示的单一真源。
+ * ACP 思考块展示行为的单一真源：**收起态档位**与**完成后自动折叠**两项设置。
  *
- * 「展开思考」开关关闭时，思考块默认收起。此时有两种降级档位：
+ * 一、收起态档位（「展开思考」开关关闭时才有语义）。思考块默认收起，此时
+ * 有两种降级档位：
  * - `hide`：完全不显示思考内容（只有可点击展开的标题行）——历史行为；
  * - `brief`：在标题行内嵌**一行**流式思考原文，随 chunk 自然增长。
  *
- * 收敛到本文件的有三样：档位枚举与选项数组（顺序即设置面板按钮顺序）、
- * localStorage 存档键与白名单读取，以及「显示简要」的单行取行规则。
+ * 二、完成后自动折叠（对齐 ZCode：运行中展开观看 → 完成后回到摘要）。布尔
+ * 设置，默认开：流式结束后把展开中的思考块折成「思考 · 持续了 N 秒」。
+ *
+ * 收敛到本文件的有：档位枚举与选项数组（顺序即设置面板按钮顺序）、两项
+ * 设置的 localStorage 存档键与读取，以及「显示简要」的单行取行规则。
  * 消费方是 `components/Chat/ChatMessage.tsx` 的 `ThoughtBlockView` 与
  * `components/Settings/Settings.tsx` 的会话区，两边不得各写一份。
  *
@@ -42,6 +46,34 @@ export function parseThinkingCollapsedMode(raw: string | null): ThinkingCollapse
 /** 读取档位：白名单校验后回落默认（完全隐藏）。 */
 export function readThinkingCollapsedMode(storage: Storage = localStorage): ThinkingCollapsedMode {
   return parseThinkingCollapsedMode(storage.getItem(THINKING_COLLAPSED_STORAGE_KEY)) ?? DEFAULT_THINKING_COLLAPSED_MODE
+}
+
+/**
+ * 「思考完成后自动折叠」存档键。
+ *
+ * 与档位键分开存：两者语义独立——档位管「收起时显示什么」，本项管「流式结束
+ * 后要不要从展开态折回来」，互不复位（和「展开思考」开关三者都独立）。
+ */
+export const THINKING_AUTO_COLLAPSE_STORAGE_KEY = 'omniterm_thinking_autocollapse'
+
+/**
+ * 默认**开启**（用户 2026-10-14 选定）。
+ *
+ * 流式结束后自动把展开中的思考块折成「思考 · 持续了 N 秒」是 ZCode 的既有
+ * 行为；不自动折会让长串思考过程永久摊开在聊天流里。关掉它的用户仍可用
+ * 「展开思考」开关得到旧的「始终展开」行为。
+ */
+export const DEFAULT_THINKING_AUTO_COLLAPSE = true
+
+/**
+ * 读取「完成后自动折叠」开关。
+ *
+ * 判 `!== 'false'` 而非 `=== 'true'`：默认值为 true，故只有**显式存过
+ * 'false'** 才关。存档损坏 / 被写进任意脏值时一律回落默认（开）——宁可
+ * 多折一次让用户点开，也不要因为一个脏值把功能静默关掉。
+ */
+export function readThinkingAutoCollapse(storage: Storage = localStorage): boolean {
+  return storage.getItem(THINKING_AUTO_COLLAPSE_STORAGE_KEY) !== 'false'
 }
 
 /** 空白的最大码位：空格 / 制表 / 换行 / 回车及其他 C0 控制符（`'!'` = 33 起为可见字符）。 */

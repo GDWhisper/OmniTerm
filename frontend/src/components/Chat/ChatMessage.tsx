@@ -200,7 +200,16 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   // 'brief' 在标题行内嵌一行流式思考原文。订阅 store 而不是只读初值——
   // 用户在设置面板改档位时，已挂载的思考块要立即跟着变。
   const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
-  const [open, setOpen] = useState(expandThinking)
+  // 「完成后自动折叠」开关（对齐 ZCode：运行中展开观看 → 完成后回到摘要）。
+  // 订阅 store 而非只读初值——设置面板改它时，已挂载的思考块要立即跟着变。
+  const autoCollapse = useAppStore(s => s.thinkingAutoCollapse)
+  // 用户是否手动干预过展开态。ZCode 的 autoCollapseKey / autoCollapseOnComplete
+  // 都以它为前提：一旦用户手动点过，自动规则永不再覆盖用户的选择。
+  const userInteractedRef = useRef(false)
+  // 初值：流式期间跟随「展开思考」；已定稿的块（历史 / 刚结束）在自动折叠开启
+  // 时默认收起——否则刷新页面会把刚自动折起来的块又摊开，与流式结束那一刻的
+  // 观感不一致（ZCode 的 Reasoning 同样 defaultOpen=false，只有运行中才展开）。
+  const [open, setOpen] = useState(() => expandThinking && (streaming || !autoCollapse))
   // 耗时（对齐 ZCode）：流式开始计时、结束时定档。历史块从未见过 streaming=true，
   // 保持 undefined，折叠态回落到「持续了几秒」。
   const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
@@ -271,7 +280,24 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
     return () => observer.disconnect()
   }, [summaryText])
 
+  // 流式结束边沿自动折叠（对齐 ZCode：ToolLayout 的 autoCollapseOnComplete 与
+  // reasoning 的 autoCollapseKey 都只在「运行中 → 已完成」的边沿折一次）。
+  // 三个前提缺一不可：开关开着、用户没手动干预过、且这确实是流式刚结束的那一帧。
+  // 判边沿而非「streaming 为 false 就折」：后者会在用户手动展开后、下一次流式
+  // 结束时再次折叠，把用户的选择覆盖掉。
+  const wasStreamingRef = useRef(streaming)
+  useEffect(() => {
+    const wasStreaming = wasStreamingRef.current
+    wasStreamingRef.current = streaming
+    if (!wasStreaming || streaming) return
+    if (!autoCollapse || userInteractedRef.current) return
+    setOpen(false)
+  }, [streaming, autoCollapse])
+
   const toggle = () => {
+    // 用户手动干预过：此后自动折叠规则不再覆盖他的选择（对齐 ZCode 的
+    // userInteractedRef）。展开与收起都算干预——手动折起来的块不该被再次摊开。
+    userInteractedRef.current = true
     const next = !open
     setOpen(next)
     // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态，让用户直接

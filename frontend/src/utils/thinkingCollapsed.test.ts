@@ -5,12 +5,15 @@ import {
   DEFAULT_THINKING_COLLAPSED_MODE,
   parseThinkingCollapsedMode,
   readThinkingCollapsedMode,
+  THINKING_AUTO_COLLAPSE_STORAGE_KEY,
+  DEFAULT_THINKING_AUTO_COLLAPSE,
+  readThinkingAutoCollapse,
   resolveThinkingStreamingSummary,
 } from './thinkingCollapsed'
 
-// 思考块收起态档位的单一真源契约：选项数组顺序（= 面板按钮顺序）、白名单
-// 存档解析（脏值回落默认，绝不把脏值当档位提交）、以及「显示简要」的单行
-// 取行规则（最后一个非空行 / 空行回退 / 空文本）。
+// 思考块展示行为的单一真源契约：收起态档位（选项数组顺序 = 面板按钮顺序、
+// 白名单存档解析——脏值回落默认，绝不把脏值当档位提交、「显示简要」的单行
+// 取行规则），以及「完成后自动折叠」开关（默认开，只有显式 'false' 才关）。
 
 describe('thinkingCollapsed 档位注册表', () => {
   it('exposes exactly two modes with 完全隐藏 first', () => {
@@ -65,6 +68,46 @@ describe('readThinkingCollapsedMode', () => {
   it('falls back to 完全隐藏 when missing or corrupt', () => {
     expect(readThinkingCollapsedMode(storageWith(null))).toBe('hide')
     expect(readThinkingCollapsedMode(storageWith('nonsense'))).toBe('hide')
+  })
+})
+
+describe('readThinkingAutoCollapse', () => {
+  // 本项的存档读取与档位不同：默认值为 true，故判 `!== 'false'`——只有显式存过
+  // 'false' 才关，其余（缺省 / 脏值）一律回落默认。测试要同时锁住这两侧，
+  // 否则有人把它「顺手改成 === 'true'」会让缺省用户静默丢掉该功能。
+  function storageWith(value: string | null): Storage {
+    const map = new Map<string, string>()
+    if (value !== null) map.set(THINKING_AUTO_COLLAPSE_STORAGE_KEY, value)
+    return {
+      get length() { return map.size },
+      clear: () => map.clear(),
+      getItem: (k: string) => map.get(k) ?? null,
+      key: (i: number) => Array.from(map.keys())[i] ?? null,
+      removeItem: (k: string) => { map.delete(k) },
+      setItem: (k: string, v: string) => { map.set(k, String(v)) },
+    } as Storage
+  }
+
+  it('storage key is namespaced under omniterm_', () => {
+    expect(THINKING_AUTO_COLLAPSE_STORAGE_KEY).toBe('omniterm_thinking_autocollapse')
+  })
+
+  it('defaults to ON', () => {
+    expect(DEFAULT_THINKING_AUTO_COLLAPSE).toBe(true)
+  })
+
+  it('honours an explicitly stored value', () => {
+    expect(readThinkingAutoCollapse(storageWith('true'))).toBe(true)
+    expect(readThinkingAutoCollapse(storageWith('false'))).toBe(false)
+  })
+
+  it('falls back to ON when missing or corrupt', () => {
+    // 缺省与脏值都回落默认（开）：宁可多折一次让用户点开，也不要因为一个
+    // 脏值把功能静默关掉。
+    expect(readThinkingAutoCollapse(storageWith(null))).toBe(true)
+    expect(readThinkingAutoCollapse(storageWith('nonsense'))).toBe(true)
+    expect(readThinkingAutoCollapse(storageWith(''))).toBe(true)
+    expect(readThinkingAutoCollapse(storageWith('TRUE'))).toBe(true)
   })
 })
 

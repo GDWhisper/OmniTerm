@@ -628,3 +628,94 @@ describe('Settings session display (expand thinking + collapsed mode)', () => {
     }
   })
 })
+
+describe('Settings session display (auto-collapse thought on finish)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  /** 「思考完成后自动折叠」开关行（ToggleRow 的第一个 button）。 */
+  const autoCollapseButton = () => {
+    const row = Array.from(container.querySelectorAll('section')).find((s) =>
+      (s.querySelector('h3')?.textContent || '').includes(i18n.t('settings.thinkingAutoCollapse')),
+    )
+    return row?.querySelector<HTMLButtonElement>('button') ?? null
+  }
+
+  /** 「展开思考」开关行（ToggleRow 的第一个 button）。 */
+  const expandThinkingButton = () => {
+    const row = Array.from(container.querySelectorAll('section')).find((s) =>
+      (s.querySelector('h3')?.textContent || '').includes(i18n.t('settings.expandThinking')),
+    )
+    return row?.querySelector<HTMLButtonElement>('button') ?? null
+  }
+
+  const click = (el: Element | null | undefined) =>
+    act(() => {
+      el!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+  beforeEach(() => {
+    localStorage.clear()
+    // 显式给默认值：开关默认**开**（用户 2026-10-14 选定），不依赖 store 模块级初值。
+    useAppStore.setState({
+      expandThinking: true,
+      thinkingCollapsedMode: 'hide',
+      thinkingAutoCollapse: true,
+    })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    mountSettings(root)
+    clickSessionsTab(container)
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    document.body.removeChild(container)
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('renders the row (default ON) when 展开思考 is on', () => {
+    expect(autoCollapseButton()).toBeTruthy()
+    // 默认选中（开）：ToggleRow 的选中态由 aria / data 属性表达，这里直接验 store
+    expect(useAppStore.getState().thinkingAutoCollapse).toBe(true)
+  })
+
+  it('hides the row when 展开思考 is off — 块本就收起，开关无效果可看', () => {
+    // 与收起态档位行互为补集：两者永不同屏。
+    expect(autoCollapseButton()).toBeTruthy()
+    click(expandThinkingButton())
+    expect(useAppStore.getState().expandThinking).toBe(false)
+    // find 未命中返回 undefined（不是 null）——行确实不再渲染
+    expect(autoCollapseButton()).toBeFalsy()
+  })
+
+  it('persists a toggle-off to the store and localStorage', () => {
+    click(autoCollapseButton())
+    expect(useAppStore.getState().thinkingAutoCollapse).toBe(false)
+    expect(localStorage.getItem('omniterm_thinking_autocollapse')).toBe('false')
+    // 再点一次开回来，双向都能落档
+    click(autoCollapseButton())
+    expect(useAppStore.getState().thinkingAutoCollapse).toBe(true)
+    expect(localStorage.getItem('omniterm_thinking_autocollapse')).toBe('true')
+  })
+
+  it('keeps its own value across 展开思考 flips (independent setting)', () => {
+    // 与 expandThinking / thinkingCollapsedMode 三者各自独立，互不复位。
+    click(autoCollapseButton()) // off
+    click(expandThinkingButton()) // expandThinking off
+    click(expandThinkingButton()) // back on
+    expect(autoCollapseButton()).toBeTruthy()
+    expect(useAppStore.getState().thinkingAutoCollapse).toBe(false)
+  })
+
+  it('defines both i18n keys in en and zh', () => {
+    const enMap = en as Record<string, string>
+    const zhMap = zh as Record<string, string>
+    for (const k of ['settings.thinkingAutoCollapse', 'settings.thinkingAutoCollapseHint']) {
+      expect(enMap[k], k).toBeTruthy()
+      expect(zhMap[k], k).toBeTruthy()
+    }
+  })
+})
