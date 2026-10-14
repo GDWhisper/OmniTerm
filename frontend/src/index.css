@@ -735,29 +735,32 @@ body.fm-dragging * {
   flex-direction: column;
 }
 
-.fm-table-wrap::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-.fm-table-wrap::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-}
-.fm-table-wrap::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 0;
-}
-.fm-table-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
-}
-.fm-table-wrap {
+/* 内层滚动容器（真正滚动的元素；.fm-table-wrap 自身 overflow: hidden）。
+   主题化滚动条 8px 常显——自适应列宽算式按同值扣预算
+   （fileTableLayout.ts 的 FM_SCROLLBAR_W），改宽度须两处同步。 */
+.fm-table-scroll {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-width: thin;
 }
+.fm-table-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.fm-table-scroll::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.fm-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+}
+.fm-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
 
 /* ── File table ──
-   No explicit width (default: auto) — table is exactly as wide as its columns.
-   No proportional distribution of extra space, so resizing one column doesn't
-   shift other columns. Horizontal scroll on parent div if table overflows. */
+   自适应模式（.fm-table-fit）下 table 带内联 width:100%，table-layout: fixed
+   真正生效、列宽由 JS 精确分配（见 fileTableLayout.ts）；手动态无显式宽度，
+   table 恰为列宽之和，溢出时由父容器横向滚动（D5「调列不互挤」）。 */
 .fm-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -820,6 +823,19 @@ body.fm-dragging * {
   min-width: 60px;
   text-align: right !important;
   position: relative;
+}
+/* 自适应模式（.fm-table-fit，见 fileTableLayout.ts）：列宽由 JS 精确分配，
+   th 的 min-width 下限须禁用，否则窄面板下会把列撑破、压缩失效（X17）。
+   列被压窄后内容可能超界（如 80px 列里的 "Last Modified"），裁剪兜底，
+   防止压到相邻列（size 单元格同理——它没有 td 级 overflow 规则）。 */
+.fm-table-fit .fm-th-name,
+.fm-table-fit .fm-th-mtime,
+.fm-table-fit .fm-th-size {
+  min-width: 0;
+}
+.fm-table-fit th,
+.fm-table-fit .fm-td-size {
+  overflow: hidden;
 }
 /* Column resize handle — right edge of each th (except actions) */
 .fm-th-resize {
