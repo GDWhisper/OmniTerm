@@ -12,6 +12,7 @@ import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } fr
 import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
 import { PERM_TIMEOUT_NEVER_SECS, permTimeoutDuration, permTimeoutNoticeLabel, permTimeoutSeconds } from '../../utils/permTimeout'
 import { looksLikeDiff } from '../../utils/diff'
+import { thinkingPreviewLine } from '../../utils/thinkingCollapsed'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
 import { messageActions, type MessageActionHandlers, type MessageActionContext } from './messageActions'
@@ -163,8 +164,22 @@ function CollapsibleUserText({ text }: { text: string }) {
   )
 }
 
+// 思考内容的排版规格（单一真源：展开区与收起态「显示简要」预览行共用）。
+// 比正文（text 气泡 1em）小一档 + `--text-muted` 虚化，**刻意不加斜体**——
+// 思考块此前的斜体是「思考=斜体」的排版俗套，与 OmniTerm 的等宽阅读字体
+// 不搭（2026-10-13 用户要求修正）。行高与内容区一致。
+const THINKING_TEXT_STYLE: CSSProperties = {
+  fontSize: '0.923em',
+  lineHeight: 1.5,
+  color: 'var(--text-muted)',
+}
+
 function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
   const expandThinking = useAppStore(s => s.expandThinking)
+  // 收起态档位（仅在 expandThinking 关闭时有语义）：'hide' 只留标题行，
+  // 'brief' 在标题行下补一行流式思考原文。订阅 store 而不是只读初值——
+  // 用户在设置面板改档位时，已挂载的思考块要立即跟着变。
+  const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
   const [open, setOpen] = useState(expandThinking)
   // 内部滚动容器锚定语义与 ChatView 外层一致：默认跟随底部；用户上翻阅读时
   // 解除跟随，滚回底部自动恢复。仅 streaming 块生效——历史块文本不再增长，
@@ -178,6 +193,10 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
     if (!streaming) return
     stickToBottom()
   }, [text, open, streaming, stickToBottom])
+
+  // 收起态「显示简要」：一行**未经任何总结**的流式思考原文（最后一个非空行，
+  // 即正在生长的那一行），单行收口由 CSS 省略号负责。完全隐藏档位下恒为空。
+  const briefLine = !open && collapsedMode === 'brief' ? thinkingPreviewLine(text) : ''
 
   const toggle = () => {
     const next = !open
@@ -202,12 +221,10 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
           display: 'inline-flex',
           alignItems: 'center',
           gap: 5,
-          fontStyle: 'italic',
           opacity: 0.9,
         }}
       >
-        <span style={{ fontStyle: 'normal' }}>◆</span>
-        {open ? '▾' : '▸'} thinking
+        ◆{open ? '▾' : '▸'} thinking
       </button>
       {!streaming && <BlockCopyButton text={text} />}
       {open && (
@@ -220,15 +237,30 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
             maxHeight: 300,
             padding: '2px 10px',
             borderLeft: '2px solid var(--border-subtle)',
-            fontSize: '0.923em',
-            lineHeight: 1.5,
-            color: 'var(--text-muted)',
-            fontStyle: 'italic',
             whiteSpace: 'pre-wrap',
+            ...THINKING_TEXT_STYLE,
           }}
         >
           {text}
         </OverlayScroll>
+      )}
+      {/* 收起态简要预览：与展开区同一套左缘状态条 + 缩进，视觉上就是「内容被压成
+          一行」。nowrap + ellipsis 收口，不在此截断字符。 */}
+      {briefLine && (
+        <div
+          data-thinking-brief="true"
+          style={{
+            ...THINKING_TEXT_STYLE,
+            marginTop: 4,
+            padding: '2px 10px',
+            borderLeft: '2px solid var(--border-subtle)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {briefLine}
+        </div>
       )}
     </div>
   )

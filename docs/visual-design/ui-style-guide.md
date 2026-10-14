@@ -584,6 +584,31 @@ ACP 聊天流的「说话气泡」（user + assistant 正文）统一为像素�
 
 ---
 
+### 7.9 思考块（`ThoughtBlockView`）排版与收起态
+
+ACP 消息流里的 thought 块：一行可点标题（`◆ ▾ thinking`）+ 展开区。**思考内容一律不用斜体**——此前的 `fontStyle: 'italic'` 是「思考=斜体」的排版俗套，与 OmniTerm 的等宽阅读字体不搭（2026-10-13 用户要求修正）。虚化只由「小一档 + 低对比色」表达。
+
+| 元素 | 规格 |
+|------|------|
+| 标题行 | reader 字体 `0.846em` / `--text-faint` / `opacity: 0.9`；`◆` 与 `▾/▸`、`thinking` 同行，整行即展开开关 |
+| 展开区 | `0.923em` / `lineHeight 1.5` / `--text-muted`（比正文 text 气泡的 `1em` / `--text-primary` 小一档且虚化）；左缘 2px `--border-subtle` 状态条 + 左右 10px 缩进；`maxHeight: 300` shrink-to-fit 滚动（`OverlayScroll`） |
+| 简要预览行 | 与展开区同一套排版 + 同一条左缘状态条；`nowrap` + `overflow: hidden` + `text-overflow: ellipsis` 收口单行 |
+
+排版规格的单一真源是 `ChatMessage.tsx` 的 `THINKING_TEXT_STYLE`（展开区与预览行共用）；**勿在两处各写一份字号/颜色**。
+
+**收起态两档位**（档位枚举 / 选项数组 / 存档白名单 / 取行规则的单一是 `frontend/src/utils/thinkingCollapsed.ts`；「展开思考」关闭时才有语义——开时块恒展开，设置面板此时**不渲染**该行，不给空转开关）：
+
+| 档位 | 收起态显示 | 默认 |
+|------|-----------|------|
+| 完全隐藏 | 只有标题行，无任何思考内容（即加此设置前的行为） | ✅ |
+| 显示简要 | 标题行下**一行**流式思考原文 | |
+
+显示简要**不做任何总结、不改写、不截断字符**：取思考文本最后一个非空行（流式期间正是正在生长的那一行，故预览随 chunk 自然增长），单行收口全权交给 CSS。档位是独立设置（localStorage `omniterm_thinking_collapsed`），**不随「展开思考」开关复位**。
+
+预览行刻意不打 `data-chat-body`：元信息行的气泡右缘量的是行内最后一个 `[data-chat-body]`，预览行一旦打标就会顶替它。
+
+---
+
 ## 8. Settings Toggles
 
 Effect toggles in the Settings panel, each persisted to localStorage（下表只列效果类开关，非全量）：
