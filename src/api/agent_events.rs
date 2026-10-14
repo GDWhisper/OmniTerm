@@ -92,4 +92,76 @@ mod tests {
         let token = store.register("s1");
         assert_eq!(store.key_for_token(&token).as_deref(), Some("s1"));
     }
+
+    /// 构造回环 / 非回环的 ConnectInfo（handler 的 IP 唯一来源）。
+    fn loopback() -> SocketAddr {
+        SocketAddr::from(([127, 0, 0, 1], 34567))
+    }
+    fn non_loopback() -> SocketAddr {
+        SocketAddr::from(([203, 0, 113, 7], 40000))
+    }
+
+    const VALID_PAYLOAD: &[u8] = b"claude:waiting:decision:PermissionRequest:1719000000.12345";
+
+    /// handler 级守卫：三条拒绝分支（403 / 413 / 401）。
+    ///
+    /// 403 的 IP **只**取自 `ConnectInfo`——handler 签名里不存在任何 header
+    /// 提取器，`X-Forwarded-For` 之类伪造头在代码路径上不可达，此用例同时
+    /// 把「非回环一律拒绝」钉死（防未来退回读可伪造 header）。
+    #[tokio::test]
+    async fn hook_endpoint_guards() {
+        let state = crate::test_utils::test_state().await;
+        let token = state.engines.pty_agent_events().register("s1");
+
+        // ① 非回环来源 → 403（即便 token 有效）
+        let resp = post_agent_event(
+            State(state.clone()),
+            ConnectInfo(non_loopback()),
+            Query(HookQuery { token: token.clone() }),
+            Bytes::from_static(VALID_PAYLOAD),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        // ② body 超 MAX_HOOK_BODY_BYTES → 413
+        let oversized = Bytes::from(vec![b'x'; MAX_HOOK_BODY_BYTES + 1]);
+        let resp = post_agent_event(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            Query(HookQuery { token: token.clone() }),
+            oversized,
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // ③ 未知 token（会话从未注册 / kill 后迟到上报）→ 401
+        let resp = post_agent_event(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            Query(HookQuery { token: "bogus".into() }),
+            Bytes::from_static(VALID_PAYLOAD),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// 正向基线：防「守卫全拒绝」式实现骗过上面三条负向用例。
+    #[tokio::test]
+    async fn hook_endpoint_accepts_registered_token_from_loopback() {
+        let state = crate::test_utils::test_state().await;
+        let token = state.engines.pty_agent_events().register("s1");
+
+        let resp = post_agent_event(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            Query(HookQuery { token }),
+            Bytes::from_static(VALID_PAYLOAD),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
