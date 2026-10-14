@@ -8,8 +8,10 @@ import { addOutputChars, beginTurn, clearTurnClock, endTurn, updateTurnTool } fr
 
 // 元信息行（turn 耗时 / 工具耗时 / tps）的**换行约束**回归：中文没有空格，单文本节点
 // 会被浏览器在数字与单位之间断行（2026-09-21 用户报告「5分钟」/「33秒」被拆开）。
-// jsdom 不做布局，故不断言真实换行结果，而是断言「每个读数各自一个 nowrap 段」这一
-// 结构不变量——它是换行只发生在段间的充分条件。
+// jsdom 不做布局，故不断言真实换行结果，而是断言两条结构不变量：
+// ①「每个读数各自一个 nowrap 段」——换行只发生在段间的充分条件；
+// ② 流式期行宽托底 `min-width:max-content`（2026-10-14 用户报告窄正文块下三个读数
+//    堆成三行）且结算行不得带它（E11「放不下才换行」只属于结算场合）。
 // 独立的轻量测试文件，避免给 ChatMessage 的其余渲染路径建重 harness。
 
 let container: HTMLDivElement
@@ -40,9 +42,13 @@ function assistant(overrides: Partial<ChatMessage>): ChatMessage {
   }
 }
 
+function metaRow(): HTMLDivElement | null {
+  return container.querySelector<HTMLDivElement>('.chat-meta-row')
+}
+
 /** 元信息行里的读数段：nowrap 是唯一不变量，label+value 必须在同一段内。 */
 function readingSegments(): HTMLSpanElement[] {
-  const row = container.querySelector('.chat-meta-row')
+  const row = metaRow()
   if (!row) return []
   return Array.from(row.querySelectorAll<HTMLSpanElement>('span')).filter(
     (el) => el.style.whiteSpace === 'nowrap',
@@ -79,6 +85,8 @@ describe('ChatMessageView meta row line breaking', () => {
     // tps 白名单（E20）：两个 burst 各 800 字符 ÷ 0.5s；工具执行与 4.5s 空档不进分母。
     expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
+    // 结算行不托宽：窄气泡下动作栏 + 结算值仍按 E11「放不下才换行」。
+    expect(metaRow()?.style.minWidth).toBe('')
   })
 
   it('drops absent readings instead of leaving an empty breakable segment', () => {
@@ -123,6 +131,9 @@ describe('ChatMessageView meta row line breaking', () => {
     // tps 白名单（E20）：burst [1s,2s] 已闭合，1_600 字符 ÷ 1s；工具执行期读数冻结不动。
     expect(segments[2].textContent).toBe(' · 估算 400.0 t/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
+    // 流式期整行托到单行内容宽度：窄正文块（工具卡 / 刚起的文本泡）下三个读数
+    // 也不允许被 flex-wrap 拆成三行（2026-10-14 用户报告）。
+    expect(metaRow()?.style.minWidth).toBe('max-content')
     vi.useRealTimers()
   })
 })

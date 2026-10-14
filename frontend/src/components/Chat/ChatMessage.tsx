@@ -39,10 +39,12 @@ const BUBBLE_MAX_WIDTH = '85%'
 //
 // **不含 `marginLeft:auto`**——左右对齐是状态相关的：流式期动作栏恒空、读数**靠左**；
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
-// **换行只能发生在「工作 / 工具 / 速度」三个读数之间，绝不能发生在读数内部**——
-// 中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器在数字与单位之间
-// 断行（实测「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」三处都被拆开，
-// 2026-09-21 用户报告）。故三个读数各自一个 nowrap 段，容器 flex-wrap 承接段间换行。
+// **段内绝不换行**——中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器
+// 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」
+// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个 nowrap 段。
+// 段间换行是状态相关的：**流式期整行固定单行**（行宽由渲染处 `min-width:max-content` 托底，
+// 2026-10-14 用户报告窄正文块下三段堆成三行）；**定稿后**容器 flex-wrap 承接段间换行——
+// 结算场合行里还有动作栏，沿用 E11 的「放不下才换行」。
 const CHAT_META_TEXT_STYLE: CSSProperties = {
   fontSize: '0.769em',
   fontFamily: READER_FONT,
@@ -678,6 +680,7 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
  * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每 tick
  * 只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
+ * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
  */
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
@@ -808,6 +811,9 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数每秒变，
   // 但门控只随 streaming 起落一次，秒级跳动留在定时器直写 DOM 的路径上。
   const isLive = !!message.streaming && !!sessionId
+  // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
+  // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
+  const liveSessionId = isLive && !workText ? sessionId : undefined
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
@@ -1045,11 +1051,22 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
           某个块的右缘」，只能量），故无论耗时是同行还是被 flex-wrap 挤到下一行，
           右缘都与气泡右缘重合。动作栏常驻占位（CSS 只切 opacity）且不被压缩，
-          所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。 */}
+          所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。
+          **流式期例外（2026-10-14 用户报告「计时和 tps 堆叠成三行」）**：实时读数
+          三段全 nowrap，量到的正文块是窄工具卡 / 刚起的文本泡时三段放不下，被
+          flex-wrap 拆成一行一段；且正文变宽过程中还会 3→2→1 行重排，观感抖动。
+          故流式期整行以 `min-width:max-content` 托到单行内容宽度之上（正文变宽后
+          行宽自然跟随，读数不位移）；结算值不加这条，仍按上段规则换行。 */}
       {(workText || isLive || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
-          style={{ alignSelf: 'flex-start', width: metaWidth, maxWidth: BUBBLE_MAX_WIDTH }}
+          style={{
+            alignSelf: 'flex-start',
+            width: metaWidth,
+            maxWidth: BUBBLE_MAX_WIDTH,
+            // 流式实时读数固定单行：托到单行内容宽度（窄气泡下允许横向超出）。
+            ...(liveSessionId ? { minWidth: 'max-content' } : null),
+          }}
         >
           <MessageActionBar
             actions={visibleActions}
@@ -1060,7 +1077,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
               到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
-          {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
+          {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}
           {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
               「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
               `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}

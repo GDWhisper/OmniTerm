@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；偏差见文末「勘误」E1–E21）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；偏差见文末「勘误」E1–E22）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -417,3 +417,25 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - **顶替定稿（supersede）**：新 prompt 顶掉无终态旧 turn 时后端合成 `Done{Superseded}`，`duration` 取累积器 `TurnTiming` 照常下发——前端 `markDone` 停表并显示结算值；`Superseded` 不 fire attention（用户正在输入）。`finalize_turn` 返回值改为 `Option<TurnTiming>` 承接「谁赢得跃迁」，世代守卫 `mark_prompt_idle_for_generation` 保证旧 turn 的定稿者不能误杀新 turn（否则新 turn 计时与持久化双丢）。
 
 **测试**：`useAcpChat.lateframe.test.tsx` 四条（终态先到 → 迟到正文落已定稿；正文→终态→再迟到帧全并一条且 dbId 保留；活跃 turn 内仍 streaming；Superseded 停表不提醒 + 随后 `turn_state` 重开计时）；`chatStore.test.ts` settled 判定；`ws::acp` supersede / 世代守卫 / `turn_state` 线格式三组；`turn_accumulator` 重复定稿语义强化。全量 `pnpm test`、`tsc -b`、`lint`、`cargo test`、`clippy -D warnings` 通过。
+
+### E22 — 流式期元信息行固定单行：`min-width:max-content` 托底（2026-10-14）
+
+来源：用户报告（截图）「acp 会话流式输出时，计时和 tps 会堆叠成三行，预期应该固定一行，避免画面抖动」。截图中工具卡（Read）下方三个读数「工作中 46秒」/「· 工具约 8秒」/「· 估算 97.0 t/s」各占一行。三项读数本身无缺陷，是纯布局问题。
+
+**根因**：元信息行的行宽被钉在最后一个 `[data-chat-body]` 正文块的实测宽度（E10 机制，用于右缘对齐气泡）。流式期正文块常是窄元素——刚起的短文本泡、或最后落定的是窄工具卡（实测 130px）。E15 起三个读数各自是 `white-space:nowrap` 段，容器靠 `flex-wrap` 承接段间换行：「放不下才换行」在窄行上退化为**每段各占一行 = 三行**。更糟的是行宽随流式正文增长而增长，三段在 3→2→1 行之间反复重排——即使用户看到的静止瞬间是三行，实际是持续抖动的重排过程，直接命中用户「避免画面抖动」的诉求。
+
+**修复**（`frontend/src/components/Chat/ChatMessage.tsx`）：流式期给行加 `min-width: max-content`——CSS 规范下 `min-width` 优先于 `max-width`，行宽被托到「三段单行排布」的内在宽度；正文后续变宽时行宽自然跟随（`max-width` 上限不变），读数左对齐不位移（流式态无动作栏，E13 口径不动）。渲染处与 `LiveWorkElapsed` 的显示门控收敛为同一条件 `liveSessionId = isLive && !workText ? sessionId : undefined`——若两者各写一份，会出现「托了宽却没读数」或反之的错位。定稿行不加托底，仍按 E11「放不下才换行」（结算场合行里还有动作栏，不能一味撑宽）。
+
+**验证**（真机 Chromium 加载真实组件 + `turnClock` 驱动，修复前后对照）：
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| 行宽（窄工具卡正文） | 130px（= 正文块宽） | 325px（单行内容宽） |
+| 三段 top | 122 / 140 / 159（三行） | 122 / 122 / 122（一行） |
+| 横向溢出 | — | `messageRowScrollX: 0`（无） |
+
+结算态回归：宽正文 → 1 行且右缘贴气泡（`rightEdgeDelta 0`）、无内联 `minWidth`；窄正文（45px）→ 仍按 E11 换行（右对齐、贴边），行为不变。
+
+**边界（有意接受）**：极端窄视口 / 窄气泡下，流式行允许横向超出气泡宽度（以用户要求的「固定一行」优先）；结算态窄气泡仍换行（E11 口径，静态呈现不抖动）。
+
+**测试**：`ChatMessage.metarow.test.tsx` 断言流式行 `style.minWidth === 'max-content'`、结算行 `style.minWidth === ''`（jsdom 不做布局，只钉结构不变量与门控一致性）；全量 `pnpm test`（1157 例）、`tsc -b`、`lint` 通过。
