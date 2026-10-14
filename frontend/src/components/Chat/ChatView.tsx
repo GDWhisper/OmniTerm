@@ -849,7 +849,19 @@ export function ChatView() {
           ref={scrollRef}
           onScroll={handleScroll}
           style={{ flex: 1, minHeight: 0 }}
-          contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
+          contentStyle={{
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '8px 0',
+            fontSize: chatFontSize,
+            // 消息列只做纵向滚动，横向一律 clip。OverlayScroll 只设 overflowY，
+            // 缺省的 overflow-x 会被连带算成 auto——任何探出右缘的 absolute 浮层
+            // （动作按钮的 label tooltip，历史上恒定溢出 15px）都会把 scrollWidth
+            // 撑宽，白长一条横向滚动条，hover 时还会显出 6px 滚动条槽位。宽代码块 /
+            // 宽表格各自带 inner 横向滚动面（MarkdownCore 的 data-x-scroll），
+            // 不依赖外层横滚，故 clip 不会吃掉任何可读内容。
+            overflowX: 'clip',
+          }}
         >
           {chatState.loadingHistory && (
             <div className="chat-replay-indicator">
