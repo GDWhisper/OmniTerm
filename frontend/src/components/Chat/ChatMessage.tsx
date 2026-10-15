@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -47,7 +48,7 @@ const MSG_ROW_GAP = 6
 // **不含 `marginLeft:auto`**——左右对齐是状态相关的：流式期动作栏恒空、读数**靠左**；
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
 // **段内绝不换行**——中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器
-// 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」
+// 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具」/「<1秒」、「63.5」/「tok/s」
 // 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个 nowrap 段。
 // 段间换行是状态相关的：**流式期整行固定单行**（行宽由渲染处 `min-width:max-content` 托底，
 // 2026-10-14 用户报告窄正文块下三段堆成三行）；**定稿后**容器 flex-wrap 承接段间换行——
@@ -65,7 +66,7 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
   flexWrap: 'wrap',
 }
 
-// 单个读数（一段完整语义，如「工具约 12秒」）：段内禁止断行，数字与单位永不分离。
+// 单个读数（一段完整语义，如「工具 12秒」）：段内禁止断行，数字与单位永不分离。
 const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
@@ -894,9 +895,50 @@ function renderBlock(
  * 推送只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
  * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
+ *
+ * **tooltip 只解释画出来的读数**（`visibleReadings` + `liveTip`）：工具耗时与 tps 各有
+ * 「暫无」态（无输出 burst / 工具跟踪失效），整段撤掉后还挂一段「这个读数怎么算的」只会
+ * 让人去找屏幕上不存在的数字。两条估算说明（`toolTimeTip` / `tpsTip`）本身都是
+ * 「omniterm 自己算的、ACP 不上报」的诚实口径——界面文案刻意不带「约/估算」前缀，
+ * 性质说明全部收在 hover 里；`workingTip` 说的是后端实测工作时长，不进诚实口径。
+ *
+ * **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，
+ * deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按
+ * `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，
+ * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串，
+ * 而三段读数还留着最后一次 draw 的文本。
  */
+
+/** 当前这帧读数里**会显示**的三段（缺省段整段撤掉）。tooltip 与三个数字共用这一次判断。 */
+interface VisibleReadings {
+  dur: string | null
+  toolDur: string | null
+  rate: string | null
+}
+
+function visibleReadings(stats: LiveTurnStats | null, locale?: string): VisibleReadings {
+  const dur = stats ? formatWorkDuration(stats.workMs, locale) : null
+  // 工作段本身就没读数（尚无推送 / 已作废）→ 三段全撤，tooltip 也全撤。
+  if (!stats || !dur) return { dur: null, toolDur: null, rate: null }
+  return {
+    dur,
+    toolDur: formatToolDuration(stats.toolMs, locale),
+    rate: formatTps(stats.tps),
+  }
+}
+
+/** 当前读数对应的 tooltip：只收**会显示**的那几段（工作段有读数才有 tooltip）。 */
+function liveTip(readings: VisibleReadings, t: TFunction): string {
+  if (!readings.dur) return ''
+  const tips = [t('chat.msg.workingTip')]
+  if (readings.toolDur) tips.push(t('chat.msg.toolTimeTip'))
+  if (readings.rate) tips.push(t('chat.msg.tpsTip'))
+  return tips.join(' · ')
+}
+
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
+  const rootRef = useRef<HTMLSpanElement>(null)
   const workRef = useRef<HTMLSpanElement>(null)
   const toolRef = useRef<HTMLSpanElement>(null)
   const tpsRef = useRef<HTMLSpanElement>(null)
@@ -912,28 +954,30 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
       el.style.display = shown
     }
     const draw = (stats: LiveTurnStats | null) => {
-      const dur = stats ? formatWorkDuration(stats.workMs, i18n.language) : null
-      if (!stats || !dur) {
+      const r = visibleReadings(stats, i18n.language)
+      if (!r.dur) {
         // 尚无推送 / 已作废：整格撤掉，flex 不留空位。
         write(workRef.current, '')
         write(toolRef.current, '')
         write(tpsRef.current, '')
-        return
+      } else {
+        write(workRef.current, t('chat.msg.working', { dur: r.dur }))
+        write(toolRef.current, r.toolDur ? ` · ${t('chat.msg.toolTime', { dur: r.toolDur })}` : '')
+        write(tpsRef.current, r.rate ? ` · ${t('chat.msg.tps', { tps: r.rate })}` : '')
       }
-      const toolDur = formatToolDuration(stats.toolMs, i18n.language)
-      const rate = formatTps(stats.tps)
-      write(workRef.current, t('chat.msg.working', { dur }))
-      write(toolRef.current, toolDur ? ` · ${t('chat.msg.toolTime', { dur: toolDur })}` : '')
-      write(tpsRef.current, rate ? ` · ${t('chat.msg.tps', { tps: rate })}` : '')
+      // tooltip 跟着可见段走（推送期直写 DOM，不进 React state）。
+      const tip = liveTip(r, t)
+      if (rootRef.current && rootRef.current.title !== tip) rootRef.current.title = tip
     }
     draw(getLiveTurnStats(sessionId))
     return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
+  // title 不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
   return (
     <span
+      ref={rootRef}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
-      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.toolTimeTip')} · ${t('chat.msg.tpsTip')}`}
     >
       <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />

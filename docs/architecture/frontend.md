@@ -293,7 +293,7 @@ and render rich cards instead of the current text-only fallback.
   **为什么按 `row_id` 而不是文本匹配**：后端一个 turn 一行，前端本 turn 可能不止一条消息；且文本相等这个不变式易漂移（丢帧、cancel 补发帧、拆分粒度），对不上就会 INSERT 重复行。`ChatMessage.dbId` 承载「已知的真 DB 行 id」（hydrate 行 / `turn_snapshot` 的 `row_id`），本地 `genId()` 的消息不填——谎报会静默命中零行。
   **纯工具调用 turn 的 `text` 为空**（后端只累积 `AgentMessageChunk`），却恰好是 blocks 最肥的一类，所以后端的空 text 跳过守卫只作用于文本匹配路径。
 
-### ACP 实时读数（工作时长 / 工具耗时 / 估算 t/s）：后端结算、前端只显示
+### ACP 实时读数（工作时长 / 工具耗时 / tok/s）：后端结算、前端只显示
 
 三项读数的估算**整体在后端**（`src/acp/turn_accumulator.rs`，口径与回归向量见工作时长计划 E23）：流式期经 WS `turn_stats{work_ms, tool_ms?, tps?}` 帧约 1Hz 推送（`TurnEvent::Started` 后立刻一帧、连接时首个 tick 立即就绪），定稿时随 `prompt_done.duration` 下发并落 `chat_messages`（`duration_ms` / `tool_ms` / `tps`），刷新后由 hydrate 逐消息带回。前端退化为纯显示：
 

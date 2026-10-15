@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；**计算整体迁后端、前端只显示（翻盘 E13/E14「仍不入库」）见 E23**；偏差见文末「勘误」E1–E23）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；**计算整体迁后端、前端只显示（翻盘 E13/E14「仍不入库」）见 E23**；**读数文案去掉「约/估算」前缀、诚实口径收进 hover 见 E24**；偏差见文末「勘误」E1–E24）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / 速率与工具估算 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()` / `live_turn_stats()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`chat_messages` 读数列（migration `20261015_add_turn_estimates.sql`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration` / `turn_stats` 推送）、`ChatMessage` 耗时显示、`frontend/src/utils/turnStats.ts`（推送读数缓存）与 `ChatMessage.tsx` 的读数渲染 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9；本地估算模块 `turnClock.ts` 已随 E23 删除）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -464,3 +464,19 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 **测试**：后端 `cargo test`（累积器新向量 + 持久化读写回、NULL 保持 NULL、迁移后列读取）+ `ws::acp` 帧线格式（`turn_stats` 缺省字段省略 / `prompt_done.duration` 扩字段）全绿；前端 `pnpm test`（111 文件 / 1144 例：metarow 重写为「消息字段 + 推送注入」两组、lateframe 的实时读数断言改 `turn_stats` 驱动、chatStore 接线块重写为 `markDone` 落定四读数）、`tsc -b`、`lint` 通过。
 
 **验证缺口（未做）**：真机联合验证（真实 agent 跑 turn 对照流式推送与刷新后的常驻读数、双标签页一致性）留给用户手动回归——测试覆盖的是注入帧与落库链路，真实 agent 的 chunk 节奏（burst 间隙）与前端口径的等价性有 Rust 向量把关，但端到端观感未实测。
+
+### E24 — 读数文案去掉「约 / 估算」前缀，诚实口径收进 hover tooltip（2026-10-15）
+
+来源：用户要求把气泡底部元信息行从「工具约 1分钟24秒 · 估算 63.5 t/s」改成「工具 1分钟24秒 · 63.5 tok/s」，并「hover 时诚实简单地告诉用户 ACP 侧不返回真实 TPS、数据由 omniterm 计算」。
+
+**决策与实现**（只改呈现与解释，**计算口径 / 落库 / 推送一律不动**——E13–E20 磨出的数值语义与 E23 的后端移植原样保留）：
+
+- **界面只出事实**：`chat.msg.toolTime` 去掉「约」（en 去掉 `est.`），`chat.msg.tps` 单位由 `t/s` 改 `tok/s` 并去掉「估算」/`est.` 前缀。工作时长（`已工作` / `工作中`）本来就不是估算（墙钟 − 审批等待），措辞不动。
+- **性质说明全部收进 hover**（两条 tooltip 重写，「ACP 不上报 → omniterm 自己算」写在最前）：
+  - `chat.msg.tpsTip`：ACP 不返回真实 token 速率，读数由 omniterm 估算（观测到的正文与思考字符 ÷ 4 ÷ 模型真正在流式输出的时段）；
+  - `chat.msg.toolTimeTip`：同样标明「ACP 不上报该数据」，工具并集封口等口径沿用 E14–E19；
+  - `chat.msg.workingTip`：不变（真实测量，非估算）。
+- **tooltip 只解释画出来的读数**（`ChatMessage.tsx` 的 `visibleReadings` + `liveTip`）：工具耗时与 tps 各有「暫无」态（尚无输出 burst / 工具跟踪失效），整段撤掉后仍挂一段「这个读数怎么算的」只会让人去找屏幕上不存在的数字。原实现把三条 tip 无条件 join 进静态 `title`，现改为随推送帧重算并直写 DOM（仍不进 React state）；「这一帧有哪些读数可见」由 `visibleReadings` **算一次**同时喂给三个数字段与 tooltip（单一真源，避免两边判据漂移出「段显隐与 tooltip 不同步」的中间态）。结算行的 `durationTip` 本就是条件拼接，无需改。
+- **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按 `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串而三段读数还在（评审实测复现，≥17 个会话在推 `turn_stats` 时可达）。
+
+**测试**：`ChatMessage.metarow.test.tsx` 期望值改新文案（` · 工具 3秒` / ` · 400.0 tok/s`），新增 7 条 tooltip/文案回归（结算行含「ACP 不返回真实 token 速率」、缺省读数不进 tooltip、流式 tooltip 随推送帧同步、语言切换后 tooltip 与三段读数一起换文案、turn 作废后 tooltip 清空、双 locale 的诚实措辞与去前缀 label 各一条）；全量前端 1155 例通过、`tsc -b`、`lint` 0 error。文档同步：ui-style-guide §7.5、user-testing §15.7、backend.md 结算呈现位、frontend.md 小节标题、CLAUDE.md 文档索引（E12–E24）。
