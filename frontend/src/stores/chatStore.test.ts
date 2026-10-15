@@ -12,7 +12,6 @@ import {
   type ContentBlock,
   type SessionUpdateAction,
 } from './chatStore'
-import { addOutputChars, clearTurnClock, turnElapsedMs, turnTps } from '../utils/turnClock'
 
 const QUEUE_PREFIX = 'omniterm_chat_queue:'
 
@@ -709,116 +708,58 @@ describe('pushSystemEvent (后端系统通知：权限超时回收告知)', () =
   })
 })
 
-// 流式实时计时的生命周期守卫：计时器必须和 sending / 审批队列严格同生死，
-// 停表路径漏一条就会在气泡上留下一个永不落定的数字（或让条目卡在表里泄漏）。
-describe('turnClock 接线（计时器与 sending / 审批队列同生命周期）', () => {
-  const T0 = 1_700_000_000_000
-  const perm = (id: string) => ({ id, options: [] })
+// 定稿读数的落定：`prompt_done` 载荷（后端结算的工作 / 等审批 / 工具 / 速率）经
+// markDone 写进被定稿消息；缺省值不得覆盖消息已有字段、更不得造 0。
+// 计时与估算算法本身已在后端（2026-10-15 迁后端，见 work-time 计划 E23——本地
+// turnClock 已删除），这里守住的是「读数字段随消息走」这条前端职责；
+// 口径回归见 `src/acp/turn_accumulator.rs` 的「速率与工具记账」测试区。
+describe('markDone 落定读数（后端结算载荷）', () => {
+  const streamingMsg = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
+    id: 'a',
+    role: 'assistant',
+    text: '',
+    blocks: [],
+    createdAt: 0,
+    streaming: true,
+    ...overrides,
+  })
 
   beforeEach(() => {
     useChatStore.setState({ states: {} })
-    clearTurnClock()
-    vi.useFakeTimers({ now: T0 })
   })
 
-  afterEach(() => {
-    vi.useRealTimers()
-    clearTurnClock()
+  it('timing 四项读数写入定稿消息并落下 dbId', () => {
+    useChatStore.getState().hydrate('s1', [streamingMsg()], null)
+    useChatStore
+      .getState()
+      .markDone('s1', { workMs: 5_000, waitMs: 800, toolMs: 1_500, tps: 42.5 }, 'row-1')
+    const m = useChatStore.getState().states['s1'].messages[0]
+    expect(m.streaming).toBe(false)
+    expect(m.durationMs).toBe(5_000)
+    expect(m.waitMs).toBe(800)
+    expect(m.toolMs).toBe(1_500)
+    expect(m.tps).toBe(42.5)
+    expect(m.dbId).toBe('row-1')
   })
 
-  it('beginPrompt 起表，markDone 停表', () => {
-    useChatStore.getState().beginPrompt('s1')
-    vi.advanceTimersByTime(5_000)
-    expect(turnElapsedMs('s1')).toBe(5_000)
-    useChatStore.getState().markDone('s1', { workMs: 5_000, waitMs: 0 })
-    expect(turnElapsedMs('s1')).toBeNull()
+  it('timing 缺省（turn_state(false) 兜底路径）不覆盖消息已有读数', () => {
+    useChatStore
+      .getState()
+      .hydrate('s1', [streamingMsg({ durationMs: 3_000, toolMs: 900, tps: 55.5 })], null)
+    useChatStore.getState().markDone('s1')
+    const m = useChatStore.getState().states['s1'].messages[0]
+    expect(m.durationMs).toBe(3_000)
+    expect(m.toolMs).toBe(900)
+    expect(m.tps).toBe(55.5)
   })
 
-  it('markError / markEnded 同样停表', () => {
-    useChatStore.getState().beginPrompt('s1')
-    useChatStore.getState().markError('s1', 'boom')
-    expect(turnElapsedMs('s1')).toBeNull()
-
-    useChatStore.getState().beginPrompt('s2')
-    useChatStore.getState().markEnded('s2')
-    expect(turnElapsedMs('s2')).toBeNull()
-  })
-
-  it('reset 停表（守住表内条目泄漏）', () => {
-    useChatStore.getState().beginPrompt('s1')
-    useChatStore.getState().reset('s1')
-    expect(turnElapsedMs('s1')).toBeNull()
-  })
-
-  it('审批挂起期间冻住，队列见底后从冻结值续跳', () => {
-    useChatStore.getState().beginPrompt('s1')
-    vi.advanceTimersByTime(10_000)
-    useChatStore.getState().setPermission('s1', perm('p1'))
-    vi.advanceTimersByTime(30_000)
-    expect(turnElapsedMs('s1')).toBe(10_000)
-    useChatStore.getState().removePermission('s1', 'p1')
-    vi.advanceTimersByTime(5_000)
-    expect(turnElapsedMs('s1')).toBe(15_000)
-  })
-
-  it('审批挂起期间 t/s 读数冻在最后测得值（等真人回应不算生成时间）', () => {
-    useChatStore.getState().beginPrompt('s1')
-    vi.advanceTimersByTime(1_000)
-    addOutputChars('s1', 600)
-    expect(turnTps('s1')).toBeNull() // 单 chunk 瞬间窗口长度 0
-    vi.advanceTimersByTime(1_000)
-    addOutputChars('s1', 600) // burst [1s,2s]：1_200 字符 ÷ 1s
-    expect(turnTps('s1')).toBe(300)
-    useChatStore.getState().setPermission('s1', perm('p1'))
-    vi.advanceTimersByTime(120_000)
-    // 等用户审批的 2 分钟零输出：burst 早已闭合，读数一动不动，不随思考时间缓慢跌落。
-    expect(turnTps('s1')).toBe(300)
-    useChatStore.getState().removePermission('s1', 'p1')
-    vi.advanceTimersByTime(3_000)
-    // 解除后仍无新输出：依旧冻结（白名单不把空窗时间计入分母；旧口径此处跌到 150）。
-    expect(turnTps('s1')).toBe(300)
-  })
-
-  it('并发审批只 resolve 一个时仍冻住（镜像后端 wait_depth）', () => {
-    useChatStore.getState().beginPrompt('s1')
-    vi.advanceTimersByTime(3_000)
-    useChatStore.getState().setPermission('s1', perm('p1'))
-    useChatStore.getState().setPermission('s1', perm('p2'))
-    useChatStore.getState().removePermission('s1', 'p1')
-    vi.advanceTimersByTime(20_000)
-    expect(turnElapsedMs('s1')).toBe(3_000)
-    useChatStore.getState().removePermission('s1', 'p2')
-    vi.advanceTimersByTime(2_000)
-    expect(turnElapsedMs('s1')).toBe(5_000)
-  })
-
-  it('对账后仍有未决审批时保持冻住', () => {
-    useChatStore.getState().beginPrompt('s1')
-    vi.advanceTimersByTime(4_000)
-    useChatStore.getState().setPermission('s1', perm('p1'))
-    useChatStore.getState().setPermission('s1', perm('p2'))
-    useChatStore.getState().reconcilePermissions('s1', new Set(['p1']))
-    vi.advanceTimersByTime(20_000)
-    expect(turnElapsedMs('s1')).toBe(4_000)
-  })
-
-  it('重连接回半程 turn：锚点取在建行的 createdAt，不从 0 起跳', () => {
-    const streaming: ChatMessage = {
-      id: 'a',
-      role: 'assistant',
-      text: '',
-      blocks: [],
-      createdAt: T0 - 40_000,
-      streaming: true,
-    }
-    useChatStore.getState().hydrate('s1', [streaming], null)
-    useChatStore.getState().beginPrompt('s1')
-    expect(turnElapsedMs('s1')).toBe(40_000)
-  })
-
-  it('无在建 turn 时审批帧 no-op', () => {
-    useChatStore.getState().setPermission('s1', perm('p1'))
-    expect(turnElapsedMs('s1')).toBeNull()
+  it('toolMs/tps 缺失（跟踪失效 / 无可测窗口）不覆盖、也不造 0', () => {
+    useChatStore.getState().hydrate('s1', [streamingMsg()], null)
+    useChatStore.getState().markDone('s1', { workMs: 1_000, waitMs: 0 })
+    const m = useChatStore.getState().states['s1'].messages[0]
+    expect(m.durationMs).toBe(1_000)
+    expect(m.toolMs).toBeUndefined()
+    expect(m.tps).toBeUndefined()
   })
 })
 
@@ -966,7 +907,6 @@ describe('迟到帧收敛（settled 模式）', () => {
 
   beforeEach(() => {
     useChatStore.setState({ states: {} })
-    clearTurnClock()
   })
 
   it('无活跃 turn + 尾部是 user 消息：迟到 chunk 落为新消息但 streaming=false', () => {

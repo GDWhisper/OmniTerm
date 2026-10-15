@@ -5,7 +5,6 @@ import { useAcpChat, decodeStoredBlocks } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore } from '../stores/chatStore'
-import { clearTurnClock, finalTps, turnTps } from '../utils/turnClock'
 
 // 流式中刷新丢早期正文的修复测试：
 // B —— 后端帧窗口从头部驱逐（turn_accumulator.rs MAX_BLOCKS_BYTES），RAW 帧包裹解码时
@@ -101,7 +100,6 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     useChatStore.setState({ states: {} })
-    clearTurnClock()
     fetchMock = vi.fn().mockResolvedValue({ ok: true })
     vi.stubGlobal('fetch', fetchMock)
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -114,7 +112,6 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     root = null
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
-    clearTurnClock()
   })
 
   const mount = () => {
@@ -137,44 +134,10 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     })
   }
 
-  it('excludes live tool time and restarts observation after a snapshot without counting replayed output', () => {
-    let now = 1_700_000_000_000
-    vi.spyOn(Date, 'now').mockImplementation(() => now)
-    const ws = mount()
-    act(() => {
-      ws.onopen?.()
-      useChatStore.getState().setHydrated('s1', true)
-      useChatStore.getState().beginPrompt('s1')
-    })
-    now += 1_000
-    send(ws, { type: 'session_update', seq: 1, data: { update: chunkFrame('x'.repeat(400)) } })
-    send(ws, { type: 'session_update', seq: 2, data: { update: {
-      ToolCall: { toolCallId: 'tool-a', status: 'in_progress' },
-    } } })
-    now += 10_000
-    // 首字锚点在 1s；[1s,11s] 全在工具并集内且无后续输出 → 无可测解码窗口
-    expect(turnTps('s1')).toBeNull()
-    send(ws, { type: 'turn_snapshot', row_id: 'row-live', text: 'old output', seq: 10,
-      blocks: JSON.stringify({ v: 1, frames: [
-        chunkFrame('old output'), { ToolCall: { toolCallId: 'tool-a', status: 'in_progress' } },
-      ] }),
-    })
-    expect(turnTps('s1')).toBeNull()
-    now += 5_000
-    send(ws, { type: 'session_update', seq: 11, data: { update: {
-      ToolCallUpdate: { toolCallId: 'tool-a', status: 'completed' },
-    } } })
-    now += 1_000
-    send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('x'.repeat(400)) } })
-    send(ws, { type: 'session_update', seq: 12, data: { update: chunkFrame('duplicate') } })
-    now += 1_000
-    send(ws, { type: 'session_update', seq: 13, data: { update: chunkFrame('x'.repeat(400)) } })
-    // 快照重放文本不进分子（只计入 live 帧的 800 字符），观测窗在快照处重开：
-    // 锚点落在 seq 12（17s 工作坐标），解码窗口 1s → 200 token ÷ 1s。
-    expect(turnTps('s1')).toBe(200)
-    send(ws, { type: 'prompt_done', row_id: 'row-live' })
-    expect(finalTps('s1')).toBe(200)
-  })
+  // 注：「快照后重开观测窗、重放文本不进 tps 分子」曾在此用本地 turnClock 断言；
+  // 该语义 2026-10-15 随计算迁后端整体改写——后端累积器对重放帧结构性不记账
+  // （无 begin_turn 门控，见 turn_accumulator::fold），口径回归在
+  // `src/acp/turn_accumulator.rs` 的测试模块。
 
   it('turn_snapshot restores evicted prose and suppresses the cooked write-back', () => {
     const ws = mount()

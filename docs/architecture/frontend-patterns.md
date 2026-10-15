@@ -259,7 +259,7 @@
   通行解法。达成即 `hapticTap()` + 卡片拽起特效作为反馈。
 - **卡片跟随指针**：起拖后每拍 pointermove 把 `translate(dx, dy) scale(1.02)`
   **直写到行内 style**（`draggedElRef`）——pointermove 是高频事件，每拍走
-  React 重渲染会让整棵侧栏（含全部会话行）跟着抖（同 turnClock 读数直写
+  React 重渲染会让整棵侧栏（含全部会话行）跟着抖（同聊天元信息读数直写
   DOM、抽屉拖拽直改宽度的手法）。React 只管理 lifted class 与插入线
   （目标变化才动）；**React 不管 transform，松手必须手动清空**，否则残留
   偏移。因此 `.sidebar-project-lifted` 的 transition **不含 transform**——

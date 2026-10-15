@@ -1,7 +1,7 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；偏差见文末「勘误」E1–E22）
-> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration`）、`ChatMessage` 耗时显示、`frontend/src/utils/turnClock.ts` 与 `chatStore.ts` 的计时器接线（起表/停表/冻表） 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；**计算整体迁后端、前端只显示（翻盘 E13/E14「仍不入库」）见 E23**；偏差见文末「勘误」E1–E23）
+> 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / 速率与工具估算 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()` / `live_turn_stats()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`chat_messages` 读数列（migration `20261015_add_turn_estimates.sql`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration` / `turn_stats` 推送）、`ChatMessage` 耗时显示、`frontend/src/utils/turnStats.ts`（推送读数缓存）与 `ChatMessage.tsx` 的读数渲染 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9；本地估算模块 `turnClock.ts` 已随 E23 删除）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
 
@@ -286,7 +286,7 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - **最终值保留**：`endTurn` 删条目前先把 tps 快照进有界表 `finalTpsBySession`（同 `MAX_TRACKED_TURNS` 淘汰），`finalTps(sessionId)` 读取。0 输出定稿把快照**清空**（不是保留旧值——快照按会话存，保留会错配到新消息行）。
 - **呈现**：界面只出数字（`12.3 t/s`），「估算」只写进 tooltip（`chat.msg.tpsTip`）。定稿值只挂在最后一条 assistant 消息（`isLastAssistant`），避免旧消息重渲染时读到新 turn 的快照。
 - **对齐切换**：`CHAT_META_TEXT_STYLE` 移除恒定的 `marginLeft:auto`，拆出 `CHAT_META_RIGHT` 只加在结算值上。流式期动作栏恒空（五动作硬排 streaming）→ 实时读数靠左；定稿后动作栏回归左侧、结算值顶右。左右只在定稿瞬间变一次，流式全程停同侧。
-- **仍不入库**：tps 只渲染，刷新即失（历史行无字符数可算），与 E12 的本地估算同性质。
+- **仍不入库**：tps 只渲染，刷新即失（历史行无字符数可算），与 E12 的本地估算同性质。**（2026-10-15 翻盘，见 E23：读数改为后端结算并落库，刷新后常驻。）**
 
 ### E14 — 输出速度独立观测与工具耗时（2026-09-18）
 
@@ -439,3 +439,28 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 **边界（有意接受）**：极端窄视口 / 窄气泡下，流式行允许横向超出气泡宽度（以用户要求的「固定一行」优先）；结算态窄气泡仍换行（E11 口径，静态呈现不抖动）。
 
 **测试**：`ChatMessage.metarow.test.tsx` 断言流式行 `style.minWidth === 'max-content'`、结算行 `style.minWidth === ''`（jsdom 不做布局，只钉结构不变量与门控一致性）；全量 `pnpm test`（1157 例）、`tsc -b`、`lint` 通过。
+
+### E23 — 计算整体迁后端、前端只显示：tps / 工具耗时落库常驻（**翻盘 E13/E14 的「仍不入库」与 E14/E15 的「重连重开观测窗」**）（2026-10-15）
+
+来源：用户报告「前几次提交把 tps 统计弄丢了」。诊断结论：并非那几次提交改坏（未触碰计时/估算链路，回归全绿），而是 E13 起「仍不入库：tps 只渲染、刷新即失」的既有设计在**刷新页面后**表现为「功能消失」——内存快照（`finalBySession`）随 JS 上下文清空，历史行从来就没有读数。用户拍板方向：**把前端计算逻辑迁到后端作为唯一真相源，前端只显示、不再计算**；「工具约 N秒」与 tps 同属本地快照、一并落库。
+
+**决策与实现**
+
+- **算法整体移植到 `src/acp/turn_accumulator.rs`**（不新造口径，E13–E20 的数值语义逐条保留）：
+  - 分子 = 正文/思考文本块的 **UTF-16 单元**数（与旧前端 `action.text.length` 同口径，读数校准逐字延续），`÷ CHARS_PER_TOKEN(4)`；
+  - 分母 = 白名单 burst：相邻输出 chunk 间隔 ≤ `OUTPUT_GAP_MS(1s)` 的连续段（E20），零长度 burst 不带字符/时长（孤立尾 chunk 不稀释，E17/E20 取舍不变）；
+  - 工具耗时 = 执行并集（仅显式 `in_progress` 起表；`completed`/`failed`/`pending`/未知状态一律释放——与旧前端对任意非 start 状态的 delete 语义逐条对齐）按「首段封存 + 末次输出后尾段归工具」测量（E18/E19），工作坐标上度量、审批重叠只扣一次（E15）；
+  - 边界不变：活跃工具 ≤ 256、单 ID ≤ 1024 UTF-16 单元、越界令**工具**估算整体失效（tps 不受影响，E20 解耦）；审批挂起经既有 `begin_wait`/`end_wait`/`end_all_waits`（wait_depth 深度语义，E1）冻表。
+  - 实现手法与测试：全部统计方法显式接收 `now: Instant`（生产传 `Instant::now()`、测试注入合成时间线），`finalize_turn_at` 供定稿向量逐毫秒对齐；回归向量自 `turnClock.test.ts` 逐条搬迁到累积器测试模块（≈18 条：burst 白名单/间隙容差/孤立尾 chunk/审批冻结/工具封口与恢复/并行并集/显式状态与 pending 释放/越界失效/ID 超长/顺序工具/空 turn 三态），另加 `fold` 端到端接线与 UTF-16 计数两条。
+- **实时读数改 WS 推送**：新增服务端帧 `turn_stats{work_ms, tool_ms?, tps?}`，由 `spawn_turn_event_task` 在 turn 激活期按秒推送（`TurnEvent::Started` 后立刻补一帧，连接时首个 tick 立即就绪——重连/新标签页不必等满一秒）；无活跃 turn 时空查不发帧。数值来自 `TurnAccumulator::live_stats()`，与定稿结算同一套计算、同一把锁。
+- **定稿读数落库**：migration `20261015_add_turn_estimates.sql` 给 `chat_messages` 加 `tool_ms INTEGER` / `tps REAL`（NULL = 不可追溯/失效，与 `duration_ms` 同一三态语义）；`finalize_message` 与 `duration_ms`/`wait_ms` 同一条 UPDATE 落库；`TurnTiming` 扩展 `tool_ms/tps` 随 `prompt_done.duration` 下发（前端当场显示、不必等刷新）；`GET /messages` 下发 `toolMs`/`tps`。
+- **前端退化为纯显示**：删除 `frontend/src/utils/turnClock.ts` 及其全部接线（`chatStore` 的起表/停表/冻表、`useAcpChat` 的字符计数与工具状态喂表、快照恢复观测窗）；新增 `frontend/src/utils/turnStats.ts`（推送读数缓存 + 订阅回调，消费方直写 DOM、不进 React state——旧「定时器直写 DOM」手法保留，驱动源换成 WS 帧后隐藏标签页不再受定时器节流影响）；`ChatMessage` 的流式读数（元信息行/收纳行）与定稿读数（`message.toolMs`/`message.tps`）分别为订阅渲染与逐消息字段渲染。
+- **旧「只挂最后一条 assistant」门控取消**：那是内存快照按会话存的规避手段（防旧消息重渲染读到新 turn 快照）；落库后读数**按消息**存在，历史行各自显示自己那一轮的值、刷新后常驻（E13 的呈现口径就此作废）。
+- **重连/多标签页语义变化（有意翻盘 E14/E15）**：后端从 turn 起点连续观测，不再有「重连重开观测窗、离线段不补」；中途刷新接回显示该轮真实累计（不再取建行时刻做锚点、偏小属预期的旧行为作废）；同一会话多个标签页读数完全一致。**无客户端在线的 turn 同样有读数**（后端一直在记账，与「fold 与 WS 存活无关」同构）。
+- **多实现行为差异备注（AGENTS §8）**：SDK 把无法识别的工具状态串归一为 `pending`（`DefaultOnError`），且状态缺省在序列化时省略——旧前端对 `'running'` 的接受在实际数据流上从未生效（帧经 SDK 归一后下发），迁移后行为不变；对从不发显式执行状态的实现，工具耗时仍记 0（E15 已知限制①，口径有协议依据，未动）。
+
+**已知取舍**：迁移前的历史行无读数（NULL 不渲染，同 `duration_ms` 的「不可追溯」）；`tool_ms` 的 0（有效观测没记到工具）与 NULL（失效）在库中语义不同、渲染端同样不显示。
+
+**测试**：后端 `cargo test`（累积器新向量 + 持久化读写回、NULL 保持 NULL、迁移后列读取）+ `ws::acp` 帧线格式（`turn_stats` 缺省字段省略 / `prompt_done.duration` 扩字段）全绿；前端 `pnpm test`（111 文件 / 1144 例：metarow 重写为「消息字段 + 推送注入」两组、lateframe 的实时读数断言改 `turn_stats` 驱动、chatStore 接线块重写为 `markDone` 落定四读数）、`tsc -b`、`lint` 通过。
+
+**验证缺口（未做）**：真机联合验证（真实 agent 跑 turn 对照流式推送与刷新后的常驻读数、双标签页一致性）留给用户手动回归——测试覆盖的是注入帧与落库链路，真实 agent 的 chunk 节奏（burst 间隙）与前端口径的等价性有 Rust 向量把关，但端到端观感未实测。

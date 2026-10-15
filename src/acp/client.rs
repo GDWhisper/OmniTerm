@@ -25,7 +25,7 @@ use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::reaper::PermissionTimeoutConfig;
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
-use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnTiming};
+use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnStats, TurnTiming};
 use crate::acp::usage;
 use crate::models::agent::Agent;
 
@@ -971,6 +971,12 @@ impl AcpClient {
     /// 立刻读仍能拿到本 turn 的值（累积器把它留到下一次 `begin_turn`）。
     pub fn turn_timing(&self) -> Option<TurnTiming> {
         self.accumulator.turn_timing()
+    }
+
+    /// 进行中 turn 的实时读数（工作 / 工具 / 估算速度）。WS 层按秒推送给浏览器，
+    /// 前端只显示、不计算——估算的唯一真相源在累积器。`None` = 无活跃 turn。
+    pub fn live_turn_stats(&self) -> Option<TurnStats> {
+        self.accumulator.live_stats()
     }
 
     /// 当前进行中的 prompt 世代。每次 `mark_prompt_active` 递增，故「一次 prompt =

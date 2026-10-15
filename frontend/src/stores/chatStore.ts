@@ -1,6 +1,5 @@
 import { create } from 'zustand'
 import { useGitStore } from './gitStore'
-import { beginTurn, endTurn, setTurnWaiting } from '../utils/turnClock'
 import type { ImageThumb } from '../utils/imageAttachment'
 
 // --- Content block types (Phase 7 structured rendering) ---
@@ -206,12 +205,16 @@ export interface SlashCommand {
 // --- Message model ---
 
 /**
- * 一个 turn 定稿结算出的时长，随 WS `prompt_done` 帧下发（`duration` 字段）：
- * `workMs` = agent 工作时间，`waitMs` = 其中等真人审批的时间。
+ * 一个 turn 定稿结算出的读数，随 WS `prompt_done` 帧下发（`duration` 字段）：
+ * `workMs` = agent 工作时间，`waitMs` = 其中等真人审批的时间；
+ * `toolMs`/`tps` = 工具耗时与输出速率估算（null = 该读数为空：工具跟踪失效 /
+ * 无可测流式窗口）。全部由后端累积器结算（前端不计算，见 work-time 计划 E23）。
  */
 export interface TurnDuration {
   workMs: number
   waitMs: number
+  toolMs?: number | null
+  tps?: number | null
 }
 
 export interface ChatMessage {
@@ -259,8 +262,8 @@ export interface ChatMessage {
    * 该 turn 的**结算**工作时长（ms，已扣除 `waitMs`）。来源只有两个：hydrate 路径
    * （`GET /messages`）与 `markDone` 收到的 `prompt_done` 帧载荷。定稿值恒由后端算。
    *
-   * 流式期间气泡底部跳动的数字是另一回事：`utils/turnClock` 的本地估算，只渲染、
-   * 不入库、不参与定稿，`prompt_done` 一到即被本字段原位取代。
+   * 流式期间气泡底部跳动的数字是另一回事：`utils/turnStats` 缓存的后端
+   * `turn_stats` 推送读数（前端只显示不计算），`prompt_done` 一到即被本字段取代。
    *
    * `undefined` = 未知（迁移前的历史行、或尚未定稿的在建消息），
    * 语义上区别于 `0`（确实零时长）。
@@ -268,6 +271,17 @@ export interface ChatMessage {
   durationMs?: number | null
   /** 该 turn 内等真人审批的挂起时长（ms）。同上，`undefined` = 未知。 */
   waitMs?: number | null
+  /**
+   * 该 turn 可归因于工具执行的时长（ms，后端估算并落库）。来源同 `durationMs`；
+   * hydrate 自 `chat_messages.tool_ms`（刷新后常驻），`prompt_done` 时由后端结算
+   * 下发。`undefined`/`null` = 无读数（历史行 / 跟踪越界失效），0 同样不渲染。
+   */
+  toolMs?: number | null
+  /**
+   * 该 turn 的输出速率估算（tokens/s，后端结算并落库）。来源同 `durationMs`；
+   * `undefined`/`null` = 无可测流式窗口（历史行 / 未测得）。仅用于显示。
+   */
+  tps?: number | null
 }
 
 interface ChatSessionState {
@@ -661,19 +675,6 @@ const genId = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `msg-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-
-/**
- * 本次 prompt 的计时锚点（本地 epoch）。本地发起时在建 assistant 行还不存在 → 就是此刻；
- * 刷新/重连接回一个仍在跑的 turn 时，末尾已有 hydrate 还原的 streaming 行，其 `createdAt`
- * 是后端**首次防抖 flush 建行**的时刻（略晚于 turn 真实起点，见 chat_persistence.rs），
- * 取它与此刻较早的一个，免得计时器从 0 起跳再一次性追上真实值——宁可少算一段思考期，
- * 也不虚报。`Math.min` 同时兜住服务端时钟超前的情形。
- */
-const turnAnchorMs = (state: ChatStoreState, sessionId: string): number => {
-  const now = Date.now()
-  const last = get(state, sessionId).messages.at(-1)
-  return last && last.role === 'assistant' && last.streaming ? Math.min(now, last.createdAt) : now
-}
 
 /** 流式 prose（正文/思考）块类型；它们之间可跨类型累积，见 appendProseBlock。 */
 type ProseKind = 'text' | 'thought'
@@ -1182,9 +1183,12 @@ export const useChatStore = create<ChatStore>((set) => ({
               // 靠文本猜测（同 text assistant 行可合法多条，见 2026-08-10 Phase 0）。
               // 不传 rowId（turn_state(false) 等路径）时保留原值，绝不清零。
               ...(rowId ? { dbId: rowId } : {}),
-              // 后端定稿即随 prompt_done 下发耗时，让数字当场出现（不等刷新 hydrate）。
+              // 后端定稿即随 prompt_done 下发读数（工作 / 工具 / 速率），让数字当场
+              // 出现（不等刷新 hydrate）。定稿读数恒以后端结算为准。
               durationMs: timing?.workMs ?? m.durationMs,
               waitMs: timing?.waitMs ?? m.waitMs,
+              toolMs: timing?.toolMs ?? m.toolMs,
+              tps: timing?.tps ?? m.tps,
             }
           : m,
       )
@@ -1193,8 +1197,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       // 后端 PermissionManager，合法清除路径只有 permission_resolved 广播
       // （resolve / cancel_all）、permissions_synced 对账与 markError（turn 出错 /
       // 连接死亡）。曾在 markDone 清除导致重放 banner 被抹掉、会话卡死无法应答。
-      // turn 已定稿：本地实时计时到此为止，此后只呈现后端结算值。
-      endTurn(sessionId)
       return patch(state, sessionId, { messages, sending: false })
     }),
 
@@ -1204,16 +1206,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       const messages = current.messages.map((m) =>
         m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
       )
-      endTurn(sessionId)
       return patch(state, sessionId, { messages, sending: false, error: message, pendingPermissions: [] })
     }),
 
   beginPrompt: (sessionId) =>
-    set((state) => {
-      // 计时器与 sending 同生命周期，故在同一次状态变换里起表（见 utils/turnClock）。
-      beginTurn(sessionId, turnAnchorMs(state, sessionId))
-      return patch(state, sessionId, { sending: true, error: null })
-    }),
+    set((state) => patch(state, sessionId, { sending: true, error: null })),
 
   setMode: (sessionId, mode) =>
     set((state) => patch(state, sessionId, { mode })),
@@ -1356,10 +1353,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     }),
 
   markEnded: (sessionId) =>
-    set((state) => {
-      endTurn(sessionId)
-      return patch(state, sessionId, { sessionEnded: true, sending: false })
-    }),
+    set((state) => patch(state, sessionId, { sessionEnded: true, sending: false })),
 
   clearEnded: (sessionId) =>
     set((state) => patch(state, sessionId, { sessionEnded: false })),
@@ -1369,9 +1363,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       const current = get(state, sessionId)
       const queue = current.pendingPermissions
       const idx = queue.findIndex((p) => p.id === permission.id)
-      // 入队后队列必然非空（含满队列丢弃：既有项仍挂着）→ 本 turn 进入审批等待，
-      // 计时暂停。无在建 turn 时 setTurnWaiting 自身 no-op，与后端 turn 门控同构。
-      setTurnWaiting(sessionId, true)
       if (idx >= 0) {
         // 原位替换：重连重放/后端重发同一审批不产生重复项
         const next = [...queue]
@@ -1391,8 +1382,6 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const current = get(state, sessionId)
       const next = current.pendingPermissions.filter((p) => p.id !== id)
-      // 队列见底才恢复计时（多个并发审批时只 resolve 一个仍算挂着，镜像 wait_depth）
-      setTurnWaiting(sessionId, next.length > 0)
       if (next.length === current.pendingPermissions.length) return state
       return patch(state, sessionId, { pendingPermissions: next })
     }),
@@ -1401,7 +1390,6 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const current = get(state, sessionId)
       const kept = current.pendingPermissions.filter((p) => ids.has(p.id))
-      setTurnWaiting(sessionId, kept.length > 0)
       if (kept.length === current.pendingPermissions.length) return state
       return patch(state, sessionId, { pendingPermissions: kept })
     }),
@@ -1456,8 +1444,6 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (!(sessionId in state.states)) return state
       const next = { ...state.states }
       delete next[sessionId]
-      // 会话状态整条抹掉：计时器必须跟着停表，否则条目永久留在 turnClock 里。
-      endTurn(sessionId)
       // 同步清掉 sessionStorage 里残留的 queue 缓存（防止 F5 后 stale 数据复活）
       removeQueuedFromStorage(sessionId)
       return { ...state, states: next }

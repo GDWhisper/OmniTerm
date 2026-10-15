@@ -4,7 +4,7 @@ import { useAttention } from '../hooks/useAttention'
 import { useAppStore } from '../stores/appStore'
 import type { ImageAttachment } from '../utils/imageAttachment'
 import type { FileAttachment } from '../utils/fileAttachment'
-import { addOutputChars, resumeTurnClock, setTurnWaiting, updateTurnTool } from '../utils/turnClock'
+import { clearLiveTurnStats, setLiveTurnStats } from '../utils/turnStats'
 import { postSyncPayload } from '../utils/syncMessages'
 import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS } from '../utils/liveBuffer'
 
@@ -40,7 +40,7 @@ interface SessionUpdateFrame {
 }
 
 interface ServerFrame {
-  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'system_message' | 'pong'
+  type: 'session_update' | 'prompt_done' | 'prompt_error' | 'error' | 'replay_start' | 'replay_end' | 'permission_request' | 'permission_resolved' | 'permissions_synced' | 'process_alive' | 'terminal_activity' | 'capabilities' | 'turn_snapshot' | 'turn_state' | 'turn_stats' | 'system_message' | 'pong'
   code?: string
   data?: SessionUpdateFrame
   /** prompt_done: 协议原始 stopReason 快照（诊断用；正常与否由 abnormal 表达）。 */
@@ -86,8 +86,15 @@ interface ServerFrame {
   /** turn_snapshot: 已累积的纯文本；blocks 为 `{"v":1,"frames":[...]}` 原始帧包裹 JSON。 */
   text?: string
   blocks?: string
-  /** prompt_done: 后端在本 turn 定稿时刻结算的时长（ms）。缺省 = 该 turn 未经累积器定稿。 */
-  duration?: { work_ms: number; wait_ms: number }
+  /** prompt_done: 后端在本 turn 定稿时刻结算的读数（ms / tps 估算，口径见后端
+   *  `turn_accumulator`）。缺省 = 该 turn 未经累积器定稿；`tool_ms`/`tps` 缺省
+   *  = 该读数为空（工具跟踪失效 / 无可测流式窗口）。 */
+  duration?: { work_ms: number; wait_ms: number; tool_ms?: number; tps?: number }
+  /** turn_stats: 进行中 turn 的实时读数（后端按秒推送）。前端只显示不计算。
+   *  `tool_ms`/`tps` 缺省 = 无该读数（同 `duration` 的语义）。 */
+  work_ms?: number
+  tool_ms?: number
+  tps?: number
 }
 
 // hydrate 落定前需缓冲的帧：这些会改动消息列表，若抢在 GET /messages 之前建消息，
@@ -896,14 +903,6 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             break
           }
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
-          // 输出字符计数（tps 估算）：只统计本端真正消费的流式正文/思考帧。
-          // 历史重放（上面两个 `isReplaying` 分支 break 掉）与 seq 去重丢弃的帧都不计，
-          // 与 turnClock 的 turn 门控一致——重放不产生 prompt 起点，也不该有 tps。
-          if (action.kind === 'appendText' || action.kind === 'appendThought') {
-            addOutputChars(sid, action.text.length)
-          } else if (action.kind === 'upsertTool') {
-            updateTurnTool(sid, action.toolCallId, action.status)
-          }
           // ALL actions → live buffer, flushed once per rAF frame via
           // applyReplayBatch (single set() call = one re-render per frame).
           switch (action.kind) {
@@ -943,16 +942,26 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             syncTurnToDb(sid, frame.row_id)
           }
           joinedMidTurn.current = false
-          // duration：后端定稿时刻结算的时长，随帧下发 → 耗时当场出现。
+          // duration：后端定稿时刻结算的读数（工作 / 等审批 / 工具耗时 / 速率），随帧
+          // 下发 → 读数当场出现（不等刷新 hydrate）。tool_ms/tps 缺省 = 该读数为空。
           // row_id：把本 turn 的 DB 行 id 落到定稿消息的 dbId 上，聚焦补拉合并
           // （mergeLatestMessages）才能按 dbId 精确命中此行而非文本猜测。
           s.markDone(
             sid,
             frame.duration
-              ? { workMs: frame.duration.work_ms, waitMs: frame.duration.wait_ms }
+              ? {
+                  workMs: frame.duration.work_ms,
+                  waitMs: frame.duration.wait_ms,
+                  toolMs: frame.duration.tool_ms ?? null,
+                  tps: frame.duration.tps ?? null,
+                }
               : undefined,
             frame.row_id,
           )
+          // 实时读数随 turn 定稿作废：清掉缓存，避免下一轮 starting 的消息在首个
+          // turn_stats 帧到达前短暂显示上一轮的旧读数（prompt_done 与新 turn 之间
+          // 仍是同一会话键）。
+          clearLiveTurnStats(sid)
           // assistant turn 由后端累积器实时落库**原始帧**，前端在此把 cooked blocks
           // 回写到同一行以收敛体积（见 syncTurnToDb）。清空 seq 水位，下一 turn 从零
           // 开始（不做 seq 门控）。
@@ -1033,6 +1042,8 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 暴露，属通道级时序问题，不在本次范围内。
           flushLiveBuffer()
           s.markError(sid, frame.message ?? 'prompt failed')
+          // 实时读数随 turn 报错作废（同 prompt_done 的理由，见该分支注释）。
+          clearLiveTurnStats(sid)
           // 与 tmux 链路的 attention_reason=error 表现一致
           attention.fire(sid, sid, 'error')
           break
@@ -1242,20 +1253,20 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             text: frame.text ?? '',
             blocks,
           })
-          // 快照只有状态没有事件时间：重开观测窗，不把旧文本除以后续时长。
-          // 只从此刻跟踪明确仍在执行的工具，不推算离线期间耗时。
-          const at = Date.now()
-          resumeTurnClock(sid)
-          setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0, at)
-          for (const block of blocks) {
-            // 卡片缺省状态会被补成 running，不能拿该显示兜底当作执行证据。
-            if (block.type === 'tool_call' && String(block.status) === 'in_progress') {
-              updateTurnTool(sid, block.toolCallId, 'in_progress', at)
-            }
-          }
+          // 计时与工具跟踪全在后端累积器（估算的唯一真相源）：连接时若 turn 活跃，
+          // WS 任务的首个 tick 会立刻推一帧 `turn_stats`，前端不重开任何观测窗、
+          // 也不从快照 blocks 反推执行状态（卡片状态有显示兜底，不能当执行证据）。
           if (typeof frame.seq === 'number') inProgressSeq.current = frame.seq
           break
         }
+        case 'turn_stats':
+          // 进行中 turn 的实时读数（后端约 1Hz 推送，前端只显示不计算，见 turnStats）。
+          setLiveTurnStats(sid, {
+            workMs: frame.work_ms ?? 0,
+            toolMs: frame.tool_ms ?? null,
+            tps: frame.tps ?? null,
+          })
+          break
         case 'pong':
           // 心跳应答：链路健康。清零「未收到 pong」计数——半开判定只看连续缺失。
           missedPongs = 0
@@ -1265,11 +1276,11 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             // turn 在断连期间已结束的兜底：定稿任何残留 streaming 消息。
             s.markDone(sid)
             inProgressSeq.current = null
+            clearLiveTurnStats(sid)
           } else if (frame.active === true) {
-            // 重连到进行中 turn：置 sending 以显示思考指示器。
+            // 重连到进行中 turn：置 sending 以显示思考指示器；实时读数由后端
+            // 的 `turn_stats` 推送补齐（Started 后立刻一帧，不必等本端做任何事）。
             s.beginPrompt(sid)
-            resumeTurnClock(sid)
-            setTurnWaiting(sid, (s.states[sid]?.pendingPermissions.length ?? 0) > 0)
           }
           break
         default:

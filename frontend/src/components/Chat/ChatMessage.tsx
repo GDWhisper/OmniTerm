@@ -9,7 +9,11 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from '../../utils/formatTime'
-import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
+import {
+  getLiveTurnStats,
+  subscribeLiveTurnStats,
+  type LiveTurnStats,
+} from '../../utils/turnStats'
 import { PERM_TIMEOUT_NEVER_SECS, permTimeoutDuration, permTimeoutNoticeLabel, permTimeoutSeconds } from '../../utils/permTimeout'
 import { looksLikeDiff } from '../../utils/diff'
 import { resolveThinkingStreamingSummary } from '../../utils/thinkingCollapsed'
@@ -67,9 +71,6 @@ const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
 // 拆段后 textAlign 对 flex 子项无效，右缘改由 justify-content 表达。
 const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', justifyContent: 'flex-end' }
-
-// 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
-const LIVE_TICK_MS = 1_000
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -227,27 +228,27 @@ interface ProcessEntry {
 /**
  * 收纳行的流式工作时长读数：「已工作 X 分 X 秒」，秒级跳动。
  *
- * 与元信息行的 `LiveWorkElapsed` 同源（同一个 `turnElapsedMs` 时钟、同一个
- * `chat.msg.workTime` 措词），但只显示工作时长一段——收纳行不需要工具耗时与
- * tps，那两段属于气泡底部元信息行的职责。同样走「定时器直写 DOM」而非 React
- * state：秒级跳动每秒重渲染整个消息列表是没有意义的浪费。
+ * 读数来自后端 `turn_stats` 推送（`utils/turnStats`，前端只显示不计算），与
+ * 元信息行的 `LiveWorkElapsed` 同源、同措词；收纳行只显示工作时长一段——工具
+ * 耗时与 tps 属于气泡底部元信息行的职责。推送驱动、直写 DOM 而非 React state：
+ * 秒级跳动重渲染整个消息列表是没有意义的浪费（旧本地时钟同款手法，驱动源换成
+ * WS 帧后隐藏标签页不再受定时器节流影响）。
  */
 function ProcessWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
   const workRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
-    const draw = () => {
+    const draw = (stats: LiveTurnStats | null) => {
       const el = workRef.current
       if (!el) return
-      const dur = formatWorkDuration(turnElapsedMs(sessionId, Date.now()), i18n.language)
-      // 时钟里没有这一路 turn（尚未起表）：整格撤掉，只留字形与计数段。
+      const dur = stats ? formatWorkDuration(stats.workMs, i18n.language) : null
+      // 尚无推送（或 turn 已作废）：整格撤掉，只留字形与计数段。
       const text = dur ? t('chat.msg.workTime', { dur }) : ''
       if (el.textContent !== text) el.textContent = text
     }
-    draw()
-    const id = window.setInterval(draw, LIVE_TICK_MS)
-    return () => window.clearInterval(id)
+    draw(getLiveTurnStats(sessionId))
+    return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
   return (
@@ -880,16 +881,17 @@ function renderBlock(
 /**
  * 流式期间的实时工作计时、工具耗时与 tps（气泡底部元信息槽位，定稿后被结算值取代）。
  *
- * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
- * 一个数字。与 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
- * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
+ * 读数来自后端 `turn_stats` 推送（约 1Hz，`utils/turnStats` 缓存；前端只显示不计算
+ * ——估算的唯一真相源在后端累积器，见 work-time 计划 E23）。推送到达即重画，**不进
+ * React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是三个数字——直写
+ * DOM 与 `ProcessWorkElapsed` 同手法；驱动源是 WS 帧而非本地定时器，隐藏标签页的
+ * 定时器节流不再影响读数。
  *
- * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  *
- * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每 tick
- * 只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
+ * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每次
+ * 推送只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
  * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
  */
@@ -909,25 +911,23 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
       el.textContent = text
       el.style.display = shown
     }
-    const draw = () => {
-      const now = Date.now()
-      const dur = formatWorkDuration(turnElapsedMs(sessionId, now), i18n.language)
-      if (!dur) {
-        // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
+    const draw = (stats: LiveTurnStats | null) => {
+      const dur = stats ? formatWorkDuration(stats.workMs, i18n.language) : null
+      if (!stats || !dur) {
+        // 尚无推送 / 已作废：整格撤掉，flex 不留空位。
         write(workRef.current, '')
         write(toolRef.current, '')
         write(tpsRef.current, '')
         return
       }
-      const toolDur = formatToolDuration(turnToolElapsedMs(sessionId, now), i18n.language)
-      const rate = formatTps(turnTps(sessionId, now))
+      const toolDur = formatToolDuration(stats.toolMs, i18n.language)
+      const rate = formatTps(stats.tps)
       write(workRef.current, t('chat.msg.working', { dur }))
       write(toolRef.current, toolDur ? ` · ${t('chat.msg.toolTime', { dur: toolDur })}` : '')
       write(tpsRef.current, rate ? ` · ${t('chat.msg.tps', { tps: rate })}` : '')
     }
-    draw()
-    const id = window.setInterval(draw, LIVE_TICK_MS)
-    return () => window.clearInterval(id)
+    draw(getLiveTurnStats(sessionId))
+    return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
   return (
@@ -1015,12 +1015,12 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
 
   // turn 工作时长（结算值）：恒由后端在定稿时算出，经 hydrate 或 prompt_done 带回。
-  // 流式期间气泡底部另有一个本地实时读数（utils/turnClock），只渲染、不入库，
-  // 定稿瞬间被这里的结算值原位取代。
+  // 流式期间气泡底部另有一路实时读数（后端 `turn_stats` 推送，utils/turnStats 只
+  // 缓存显示），定稿瞬间被这里的结算值原位取代。
   // null/undefined（在建消息、迁移前的历史行）→ 结算值不渲染，区别于「确实 0 时长」。
   const workText = formatWorkDuration(message.durationMs, i18n.language)
-  // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数每秒变，
-  // 但门控只随 streaming 起落一次，秒级跳动留在定时器直写 DOM 的路径上。
+  // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数随推送变，
+  // 但门控只随 streaming 起落一次，三个数字的重画留在订阅回调直写 DOM 的路径上。
   const isLive = !!message.streaming && !!sessionId
   // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
   // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
@@ -1028,13 +1028,13 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
-  // 定稿后的本地估算：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
-  // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
-  const settledSessionId = !isLive && workText && isLastAssistant && sessionId ? sessionId : null
-  const settledTps = settledSessionId ? formatTps(finalTps(settledSessionId)) : null
-  const settledToolText = settledSessionId
-    ? formatToolDuration(finalToolElapsedMs(settledSessionId), i18n.language)
-    : null
+  // 定稿读数（工具耗时 / 估算速率）是**每条消息自己的**后端结算字段：来源与
+  // `durationMs` 一致（hydrate 的 `GET /messages` 或 `prompt_done` 帧载荷），
+  // 不再是会话级内存快照——历史行各自显示自己那一轮的值，刷新后常驻（E23）。
+  // null/undefined（历史行、工具跟踪失效、无可测窗口）→ 不渲染，与工作耗时同一
+  // 三态语义（`format*` 收口）。
+  const settledTps = formatTps(message.tps)
+  const settledToolText = formatToolDuration(message.toolMs, i18n.language)
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
     settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),

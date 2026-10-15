@@ -5,7 +5,6 @@ import { useAcpChat, MAX_RESOLVED_PERMISSION_TOMBSTONES } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore } from '../stores/chatStore'
-import { clearTurnClock } from '../utils/turnClock'
 
 // 幽灵权限横幅回归（auto+「总是」档 + resolve 帧先到）：
 // permission_request 与 permission_resolved 经后端两条独立广播通道 + 两个转发
@@ -66,7 +65,6 @@ describe('useAcpChat 权限帧顺序倒置（resolve 先到）', () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     useChatStore.setState({ states: {} })
-    clearTurnClock()
     fakeAttention.fire = vi.fn()
     fakeAttention.clearAlert = vi.fn()
     vi.stubGlobal('WebSocket', MockWebSocket)
@@ -79,7 +77,6 @@ describe('useAcpChat 权限帧顺序倒置（resolve 先到）', () => {
     root = null
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
-    clearTurnClock()
   })
 
   const mount = () => {

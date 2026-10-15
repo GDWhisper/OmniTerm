@@ -5,7 +5,7 @@ import { useAcpChat } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore } from '../stores/chatStore'
-import { clearTurnClock, turnElapsedMs } from '../utils/turnClock'
+import { clearAllLiveTurnStats, getLiveTurnStats } from '../utils/turnStats'
 
 // 迟到帧收敛回归（oh-my-pi /compact 粘死气泡）：
 // 后端「内容帧」与「turn 终态帧」走两条无顺序保证的广播链路。turn 只推一帧正文
@@ -64,7 +64,7 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
     MockWebSocket.instances = []
     rafQueue = []
     useChatStore.setState({ states: {} })
-    clearTurnClock()
+    clearAllLiveTurnStats()
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }))
     vi.stubGlobal('WebSocket', MockWebSocket)
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -81,7 +81,7 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
     root = null
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
-    clearTurnClock()
+    clearAllLiveTurnStats()
   })
 
   const mount = () => {
@@ -123,7 +123,10 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
       st.beginPrompt('s1')
     })
 
-    // 终态帧先于本 turn 唯一的内容帧抵达（两条广播链路无顺序保证）
+    // 实时读数先到（后端 turn 激活期推送），随后终态帧先于本 turn 唯一的内容帧抵达
+    // （两条广播链路无顺序保证）。
+    send(ws, { type: 'turn_stats', work_ms: 1_200, tool_ms: 300, tps: 88.5 })
+    expect(getLiveTurnStats('s1')).toEqual({ workMs: 1_200, toolMs: 300, tps: 88.5 })
     send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-9' })
     send(ws, { type: 'session_update', seq: 1, data: { update: chunkFrame('Compaction complete.') } })
     flushRaf()
@@ -134,8 +137,8 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
     expect(last.role).toBe('assistant')
     expect(last.streaming).toBe(false)
     expect(last.text).toBe('Compaction complete.')
-    // 无活跃计时尾随（markDone 已 endTurn）：不会出现「工作中」实时元信息
-    expect(turnElapsedMs('s1')).toBeNull()
+    // 无活跃读数尾随（prompt_done 已清缓存）：不会出现「工作中」实时元信息
+    expect(getLiveTurnStats('s1')).toBeNull()
     expect(st.sending).toBe(false)
   })
 
@@ -171,7 +174,10 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
 
     const st = useChatStore.getState().states['s1']
     expect(st.messages[0].streaming).toBe(true)
-    expect(turnElapsedMs('s1')).not.toBeNull()
+    // 实时读数由后端 `turn_stats` 推送驱动（前端不再有本地计时表）：
+    // 帧到达即入缓存，streaming 消息据此渲染「工作中」。
+    send(ws, { type: 'turn_stats', work_ms: 2_500 })
+    expect(getLiveTurnStats('s1')).toEqual({ workMs: 2_500, toolMs: null, tps: null })
   })
 
   it('Superseded 终态：停表定稿且不 fire attention；随后 turn_state(active:true) 重开计时', () => {
@@ -182,11 +188,12 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
     })
 
     // 旧 turn 正在流式：若 agent（如 oh-my-pi /compact 后的某类实现）就此沉默，
-    // 没有后端顶替定稿时这个气泡会永远停在「工作中」实时计时。
+    // 没有后端顶替定稿时这个气泡会永远停在「工作中」实时读数上。
     send(ws, { type: 'session_update', seq: 1, data: { update: chunkFrame('old turn text') } })
     flushRaf()
+    send(ws, { type: 'turn_stats', work_ms: 4_000 })
     expect(useChatStore.getState().states['s1'].messages[0].streaming).toBe(true)
-    expect(turnElapsedMs('s1')).not.toBeNull()
+    expect(getLiveTurnStats('s1')).not.toBeNull()
 
     // 用户直接发了下一条 prompt：后端合成 Superseded 终态帧（旧 turn 未回结束信号）
     send(ws, {
@@ -201,16 +208,17 @@ describe('useAcpChat 迟到帧收敛（终态帧先到）', () => {
     expect(st.messages[0].streaming).toBe(false)
     expect(st.messages[0].durationMs).toBe(5000)
     expect(st.messages[0].dbId).toBe('row-1')
-    expect(turnElapsedMs('s1')).toBeNull()
+    expect(getLiveTurnStats('s1')).toBeNull()
     expect(st.sending).toBe(false)
     // 顶替不是「完成」：用户正在输入，不该被 done 提醒叫回。
     expect(fakeAttention.fire).not.toHaveBeenCalled()
 
-    // 新 turn 紧随其后：turn_state(active:true) 重开计时与发送指示器。
+    // 新 turn 紧随其后：turn_state(active:true) 重开发送指示器与（后端推送的）实时读数。
     send(ws, { type: 'turn_state', active: true })
     const st2 = useChatStore.getState().states['s1']
     expect(st2.sending).toBe(true)
-    expect(turnElapsedMs('s1')).not.toBeNull()
+    send(ws, { type: 'turn_stats', work_ms: 100 })
+    expect(getLiveTurnStats('s1')).toEqual({ workMs: 100, toolMs: null, tps: null })
     expect(fakeAttention.fire).not.toHaveBeenCalled()
   })
 })

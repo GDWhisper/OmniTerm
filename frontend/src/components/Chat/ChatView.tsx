@@ -71,6 +71,10 @@ interface StoredMessage {
   /** turn 工作时长 / 等审批时长（ms）；null = 无记录（迁移前的历史行）。 */
   durationMs?: number | null
   waitMs?: number | null
+  /** 工具耗时（ms）与输出速率（tokens/s）估算；null = 无读数（历史行 / 跟踪失效 /
+   *  无可测流式窗口）。后端在 turn 定稿时结算并落库，刷新后常驻。 */
+  toolMs?: number | null
+  tps?: number | null
 }
 
 /**
@@ -104,9 +108,12 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       createdAt: new Date(m.createdAt).getTime(),
       // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
       streaming: m.status === 'streaming',
-      // 耗时读自 DB：turn 定稿时后端已结算，刷新后仍在（前端不自算）。
+      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率），
+      // 刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
       durationMs: m.durationMs,
       waitMs: m.waitMs,
+      toolMs: m.toolMs,
+      tps: m.tps,
     }
   })
 }
