@@ -663,6 +663,12 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 **排版**：收纳行与思考块标题行同款规格（reader 字体 / `0.846em` / `--text-faint` / `opacity 0.9`，`max-w` + `min-w-0` 让长摘要被气泡宽度收口），字形 `◈`——与思考块的 `◆` **同族不同形**，避免两块视觉混淆。样式在 `index.css` 的 `.process-header-btn` / `.process-summary-text` / `.process-chevron` / `.process-shimmer`；箭头**刻意不复用** `.thinking-chevron`——后者的 hover 联动写死了 `.thinking-header-btn:hover`，套过来会连带思考块的规则。收纳行带 `data-chat-body`，参与 §7.9 那条气泡右缘测量。
 
+**容器必须是 flex column，与消息行 `.chat-msg-row` 同一格式化上下文**（2026-10-15 用户报告「工具调用信息位置错乱，复制按钮也是乱的」，实测修复）：容器刚加上时是普通块级 `div`，而它装的明细块分两种显示类型——`ToolCallBlockView` 根节点是 `display: inline-flex`、`ThoughtBlockView` / `PlanBlockView` 是普通块级 `div`。在块容器里前者**退化成行内级**：与收纳行标题挤进同一行、按基线对齐产生纵向错位，长卡再折到下一行（结构复现实测：收纳行 `y=89` 而工具卡 `y=82`、`x=356`，紧贴标题右侧）；后者铺满容器宽，把块级复制角标甩到容器远右缘。故容器立成 `display:flex; flex-direction:column; align-items:flex-start; gap`（`gap` 与消息行同用 `MSG_ROW_GAP`），三类明细块都被块化成 flex item——各自 shrink-to-fit、按行堆叠，与加容器前直接挂在消息行下完全一致。`align-items` 不能省：缺了它明细块会被拉成整宽，复制角标重新甩到远右缘。
+
+**容器自身不带 `.chat-block`**：它没有复制角标，不需要 `position:relative`；挂上还会让 `.chat-block:hover .chat-block-copy-btn`（后代选择器）变成「hover 收纳行即亮出内部所有块的角标」，而每个明细块本该只由自己的 hover 点亮。`data-chat-body` 保留。
+
+**宽度上限由容器统一收口，明细块不再自带**（同一轮排查的第二处）：明细块原本各自带 `maxWidth: 85%`，收进容器后与容器自己的 85% **相乘**——结构复现实测同一张工具卡 1006px → 855px，长标题比平铺在消息行下时更早出省略号。故 `renderBlock` 的宽度上限改为**调用方传入**：平铺在消息行下的块传 `BUBBLE_MAX_WIDTH`，容器内的块传 `undefined`（容器自身 ≤85% 行宽，块自然 ≤85% 行宽，且块的 fit-content 宽度不再被二次压缩）。单块段不套容器，仍照旧自带上限——它是没有上层收口的那个场景。
+
 ---
 
 ## 8. Settings Toggles

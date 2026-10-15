@@ -32,6 +32,9 @@ const USER_TEXT_PREVIEW_LINES = 8
 // 正文气泡的宽度上限（思考块/工具卡/文本泡/用户泡共用）。贴气泡右缘的元信息行
 // （turn 耗时）必须用同一个值，否则两处百分比各改各的，右缘就错开了。
 const BUBBLE_MAX_WIDTH = '85%'
+// 消息行内块间距。过程容器是消息行内部的「小消息行」，复用同一个值——
+// 容器内的明细块与它们平铺在消息行下时间距一致。
+const MSG_ROW_GAP = 6
 
 // 气泡底部元信息文字（turn 结算耗时 / 流式实时计时与 tps）共用的规格：两者占据同一槽位，
 // 定稿瞬间从「跳动值」换成「结算值」时只有文案变、字号/字距/数字宽度都不变，才不会
@@ -319,7 +322,29 @@ function ProcessBlocks({
   const durLabel = workText ? t('chat.msg.workTime', { dur: workText }) : null
 
   return (
-    <div className="chat-block" data-chat-body="true" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH }}>
+    // 容器必须是**flex column**（与消息行 `.chat-msg-row` 同一格式化上下文），
+    // 不能是普通块容器：entries 里的 `ToolCallBlockView` 根节点是
+    // `display:inline-flex`、`ThoughtBlockView`/`PlanBlockView` 是普通块级 div，
+    // 它们在块容器里一个退化成行内级、一个铺满容器宽——
+    // 工具卡会与收纳行标题挤进同一行并按基线对齐产生纵向错位，长卡再折行到
+    // 下一行；思考/计划块铺满容器宽则把块级复制角标甩到容器远右缘
+    // （2026-10-15 用户报告「工具调用信息位置错乱，复制按钮也是乱的」）。
+    // 立成 flex column 后三者都被块化成 flex item：各自 shrink-to-fit、
+    // 按行堆叠，与加容器前直接挂在消息行下完全一致。
+    // 不带 `.chat-block`：容器自己没有复制角标，挂上只会让
+    // `.chat-block:hover .chat-block-copy-btn` 变成「hover 容器即亮出全部
+    // 内部角标」，而每个明细块本该只由自己的 hover 点亮。
+    <div
+      data-chat-body="true"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: MSG_ROW_GAP,
+        alignSelf: 'flex-start',
+        maxWidth: BUBBLE_MAX_WIDTH,
+      }}
+    >
       <button onClick={toggle} className="process-header-btn" style={{ fontSize: '0.846em' }}>
         <span style={{ flexShrink: 0 }}>{PROCESS_HEADER_ICON}</span>
         {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
@@ -349,7 +374,7 @@ function ProcessBlocks({
   )
 }
 
-function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
+function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streaming: boolean; maxWidth?: string }) {
   const { t } = useTranslation()
   const expandThinking = useAppStore(s => s.expandThinking)
   // 收起态档位（仅在 expandThinking 关闭时有语义）：'hide' 只留标题行，
@@ -443,7 +468,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   const streamingLabel = streaming && !open
 
   return (
-    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH, fontSize: '0.923em' }}>
+    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth, fontSize: '0.923em' }}>
       <button
         onClick={toggle}
         className="thinking-header-btn"
@@ -537,7 +562,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   )
 }
 
-function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streaming: boolean }) {
+function ToolCallBlockView({ block, streaming, maxWidth }: { block: ToolCallBlock; streaming: boolean; maxWidth?: string }) {
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const [open, setOpen] = useState(expandToolCalls)
   // 内容预览滚动锚定：与 thinking 块同语义。仅消息 streaming 期间工具内容
@@ -582,7 +607,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
       style={{
         display: 'inline-flex',
         flexDirection: 'column',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
         borderLeft: `2px solid ${statusColor}`,
@@ -666,13 +691,13 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
   )
 }
 
-function PlanBlockView({ block }: { block: PlanBlock }) {
+function PlanBlockView({ block, maxWidth }: { block: PlanBlock; maxWidth?: string }) {
   return (
     <div
       data-chat-body="true"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         padding: '6px 10px',
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
@@ -796,7 +821,23 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
   )
 }
 
-function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
+/**
+ * 渲染单个块。`maxWidth` 是调用方给的宽度上限，**不是块自己的属性**：
+ *
+ * - 平铺在消息行下的块传 `BUBBLE_MAX_WIDTH`（85% 行宽）；
+ * - 收进过程容器的块传 `undefined`——容器自己已经用 `BUBBLE_MAX_WIDTH` 收口，
+ *   块再设一次 85% 就成了「85% × 容器宽」的双重收口，比平铺时窄一档
+ *   （实测 1006px → 855px，长标题更早出省略号）。容器收口是单一真源。
+ *
+ * `text` / `system` / `image` 不进容器（结论与审批必须留在容器外），故不受影响。
+ */
+function renderBlock(
+  block: ContentBlock,
+  idx: number,
+  isLast: boolean,
+  streaming: boolean,
+  maxWidth: string | undefined,
+) {
   switch (block.type) {
     case 'text':
       return (
@@ -810,11 +851,11 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
         />
       )
     case 'thought':
-      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
+      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} maxWidth={maxWidth} />
     case 'tool_call':
-      return <ToolCallBlockView key={idx} block={block} streaming={streaming} />
+      return <ToolCallBlockView key={idx} block={block} streaming={streaming} maxWidth={maxWidth} />
     case 'plan':
-      return <PlanBlockView key={idx} block={block} />
+      return <PlanBlockView key={idx} block={block} maxWidth={maxWidth} />
     case 'todo':
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
@@ -1204,13 +1245,15 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           streaming={streaming}
           workText={workText}
           liveSessionId={liveSessionId}
-          renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming)}
+          renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming, undefined)}
         />,
       )
       return
     }
-    // 单块段：直接渲染，与加容器前的行为完全一致。
-    bodyNodes.push(renderBlock(entries[0].block, entries[0].idx, entries[0].idx === lastIdx, streaming))
+    // 单块段：直接渲染，与加容器前的行为完全一致——故照旧带自己的宽度上限。
+    bodyNodes.push(
+      renderBlock(entries[0].block, entries[0].idx, entries[0].idx === lastIdx, streaming, BUBBLE_MAX_WIDTH),
+    )
   }
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
@@ -1219,7 +1262,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
       continue
     }
     flushRun()
-    bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming))
+    bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
   }
   flushRun()
   return (
@@ -1238,7 +1281,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
         flexDirection: 'column',
         alignItems: 'flex-start',
         padding: '4px 12px',
-        gap: 6,
+        gap: MSG_ROW_GAP,
       }}
     >
       {label}

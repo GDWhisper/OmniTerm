@@ -107,6 +107,65 @@ describe('ProcessBlocks 收纳行存在性与摘要', () => {
   })
 })
 
+describe('ProcessBlocks 容器格式化上下文', () => {
+  // 回归（2026-10-15 用户报告「工具调用信息位置错乱，复制按钮也是乱的」）：
+  // 容器原本是普通块级 div，而 entries 里的 ToolCallBlockView 根节点是
+  // `display:inline-flex`、ThoughtBlockView/PlanBlockView 是普通块级 div。在块
+  // 容器里前者退化成**行内级**——与收纳行标题挤进同一行、按基线对齐产生纵向
+  // 错位，长卡再折到下一行；后者铺满容器宽，把块级复制角标甩到容器远右缘。
+  // 修法：容器立成与消息行 `.chat-msg-row` 同款的 flex column，三类明细块都被
+  // 块化成 flex item——各自 shrink-to-fit、按行堆叠，与加容器前直接挂在消息行
+  // 下完全一致。
+  // jsdom 不加载 index.css、不做布局，故不断言几何，只断言这条结构不变量：
+  // display / flexDirection / alignItems 三个值缺一不可（少 alignItems 则明细块
+  // 会被拉成整宽，复制角标重新甩到远右缘）。
+  it('容器是 flex column + align-items:flex-start，与消息行同一格式化上下文', () => {
+    render(processMsg({ streaming: true }))
+    const header = container.querySelector<HTMLElement>('.process-header-btn')!
+    const box = header.parentElement as HTMLElement
+    expect(box.style.display).toBe('flex')
+    expect(box.style.flexDirection).toBe('column')
+    expect(box.style.alignItems).toBe('flex-start')
+  })
+
+  it('容器不带 .chat-block：hover 容器不该亮出内部所有块的复制角标', () => {
+    // `.chat-block:hover .chat-block-copy-btn` 是后代选择器——容器若挂上这个类，
+    // 光是 hover 收纳行就会把内部每个明细块的角标一起点亮，而每个块本该只由
+    // 自己的 hover 点亮（容器自己没有角标，也不需要 position:relative）。
+    render(processMsg({ streaming: true }))
+    const header = container.querySelector<HTMLElement>('.process-header-btn')!
+    const box = header.parentElement as HTMLElement
+    expect(box.classList.contains('chat-block')).toBe(false)
+    // 内部明细块仍各自带 .chat-block（块级复制角标的定位父元素）
+    expect(box.querySelector('.chat-block')).toBeTruthy()
+  })
+
+  it('容器收口是宽度上限的单一真源：内部明细块不再自带 maxWidth', () => {
+    // 明细块自己再设 85% 会与容器的 85% **相乘**（实测同一张卡 1006px → 855px），
+    // 长标题比平铺在消息行下时更早出省略号。故容器内的块不设 maxWidth，
+    // 由容器统一收口（容器自身 ≤85% 行宽，块自然 ≤85% 行宽）。
+    render(processMsg({ streaming: true }))
+    const header = container.querySelector<HTMLElement>('.process-header-btn')!
+    const nested = header.parentElement!.querySelectorAll<HTMLElement>('.chat-block')
+    expect(nested.length).toBeGreaterThan(0)
+    for (const el of nested) expect(el.style.maxWidth).toBe('')
+  })
+
+  it('单块段（不套容器）的块仍自带 85% 宽度上限', () => {
+    // 对照组：不走容器时没有上层收口，块必须自己带 BUBBLE_MAX_WIDTH，
+    // 否则长标题会撑到整行宽。
+    render({
+      id: 'm5',
+      role: 'assistant',
+      text: '结论',
+      blocks: [{ type: 'tool_call', toolCallId: 't1', title: '读文件', status: 'completed' }],
+      createdAt: 0,
+    })
+    const card = container.querySelector<HTMLElement>('.chat-block')!
+    expect(card.style.maxWidth).toBe('85%')
+  })
+})
+
 describe('ProcessBlocks 折叠态', () => {
   it('流式结束后默认收起：只显示一行摘要，过程明细不渲染', () => {
     render(processMsg({ streaming: false }))
