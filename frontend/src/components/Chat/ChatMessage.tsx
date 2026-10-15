@@ -349,23 +349,21 @@ function ProcessBlocks({
     >
       <button onClick={toggle} className="process-header-btn" style={{ fontSize: '0.846em' }}>
         <span style={{ flexShrink: 0 }}>{PROCESS_HEADER_ICON}</span>
-        {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
-            摘要喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。 */}
-        {liveSessionId ? (
-          <ProcessWorkElapsed sessionId={liveSessionId} />
-        ) : (
-          durLabel && (
-            <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
-              {durLabel}
-            </span>
-          )
-        )}
-        {parts.length > 0 && (
-          <>
-            <span style={{ flexShrink: 0 }}>·</span>
-            <span className="process-summary-text">{parts.join(' · ')}</span>
-          </>
-        )}
+        {/* 标题整段（时长 + 各计数）是**一个文本流**，段间分隔符统一为流内的字面
+            `' · '`，宽度由等宽字体的空格定，于是三段看起来等距。
+            早前时长段是独立 flex item、`·` 是又一个独立 flex item，两侧都没有
+            空隙（「已工作 22分钟7秒·思考」粘连），而计数之间的 `·` 却来自
+            join 的字面空格 —— 同一行两套分隔机制，视觉上忽宽忽窄。 */}
+        <span className="process-summary-text">
+          {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
+              摘要喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。 */}
+          {liveSessionId ? (
+            <ProcessWorkElapsed sessionId={liveSessionId} />
+          ) : (
+            durLabel && <span style={{ fontWeight: 500 }}>{durLabel}</span>
+          )}
+          {parts.length > 0 && ` · ${parts.join(' · ')}`}
+        </span>
         {/* 收起态 hover 整行才显，展开态常显并转向下（同思考块箭头语义）。 */}
         <span className="process-chevron" data-open={open ? 'true' : 'false'} style={{ flexShrink: 0 }}>
           ▸

@@ -2503,7 +2503,13 @@ input[type="range"]:active::-webkit-slider-thumb {
   font-family: var(--reader-font, inherit);
   display: inline-flex;
   align-items: center;
-  gap: 5;
+  /* 只管图标↔摘要、摘要↔箭头两处。**段间分隔符不在这里调节**——它们是摘要
+     文本流内的字面 `' · '`（见 .process-summary-text），由等宽字体自身的空格
+     定宽；早前把 `·` 做成独立 flex item 靠这里的 gap 撑空隙，等于同一行里
+     混用两套分隔机制，段间忽宽忽窄（「已工作 22分钟7秒·思考」粘连，而
+     「思考 101 次 · 工具调用」又偏宽）。故 gap 只留 5px 给图标/箭头，
+     与 .thinking-header-btn 的图标间距同值。 */
+  gap: 5px;
   max-width: 100%;
   min-width: 0;
   opacity: 0.9;
