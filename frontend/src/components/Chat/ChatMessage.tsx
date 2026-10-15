@@ -199,16 +199,17 @@ const THINKING_DURATION_TICK_MS = 1000
 /** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
 const PROCESS_HEADER_ICON = '◈'
 
-/** 一段连续过程块里的单块 + 它在原 blocks[] 中的下标。 */
+/** 被收进过程容器的单块 + 它在原 blocks[] 中的下标。含中间的 text 输出。 */
 interface ProcessEntry {
   block: ContentBlock
   idx: number
 }
 
 /**
- * 消息级「过程容器」：把一轮 ACP 输出里的**过程块**（thought / tool_call / plan）
- * 收进同一个折叠器，折叠态只留**一行计数聚合摘要**，最终 text 结论留在容器外
- * 始终可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
+ * 消息级「过程容器」：把**一轮** ACP 输出里除最终结论外的一切收进同一个折叠器
+ * ——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出。
+ * 折叠态只留**一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终
+ * 可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
  * `ToolLayout.tsx`）的交互：
  *
  * - **流式中展开、完成后自动折叠**（用户 2026-10-14 选定）。运行中跟着看过程，
@@ -308,8 +309,9 @@ function ProcessBlocks({
     else if (block.type === 'plan') planCount++
   }
 
-  // 只收计数非零的段，段间 `·`。全零不该发生（容器仅在有过程块时才渲染），
-  // 故不写兜底文案——真出现了也只是没有计数段，不制造死分支。
+  // 只收计数非零的段，段间 `·`。可能全零——一轮只有中间 text 输出、没有任何
+  // thought/tool/plan 时容器仍要收纳那些文字，此时摘要只剩时长段与箭头，
+  // 正是 ZCode 参照的形态（`已工作 19 分 35 秒 ›`），故不写兜底文案。
   const parts: string[] = []
   if (thoughtCount > 0) parts.push(t('chat.process.thoughtCount', { count: thoughtCount }))
   if (toolCount > 0) parts.push(t('chat.process.toolCount', { count: toolCount }))
@@ -721,14 +723,24 @@ function PlanBlockView({ block, maxWidth }: { block: PlanBlock; maxWidth?: strin
   )
 }
 
-function TextBlockView({ text, caret, streaming }: { text: string; caret?: boolean; streaming?: boolean }) {
+function TextBlockView({
+  text,
+  caret,
+  streaming,
+  maxWidth,
+}: {
+  text: string
+  caret?: boolean
+  streaming?: boolean
+  maxWidth?: string
+}) {
   return (
     <div
       data-chat-body="true"
       className="chat-block chat-bubble"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         padding: '8px 12px',
         background: 'var(--bg-surface)',
         color: 'var(--text-primary)',
@@ -824,12 +836,11 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
 /**
  * 渲染单个块。`maxWidth` 是调用方给的宽度上限，**不是块自己的属性**：
  *
- * - 平铺在消息行下的块传 `BUBBLE_MAX_WIDTH`（85% 行宽）；
+ * - 平铺在消息行下的块（最终 text 结论、system 块）传 `BUBBLE_MAX_WIDTH`（85% 行宽）；
  * - 收进过程容器的块传 `undefined`——容器自己已经用 `BUBBLE_MAX_WIDTH` 收口，
  *   块再设一次 85% 就成了「85% × 容器宽」的双重收口，比平铺时窄一档
  *   （实测 1006px → 855px，长标题更早出省略号）。容器收口是单一真源。
- *
- * `text` / `system` / `image` 不进容器（结论与审批必须留在容器外），故不受影响。
+ *   中间的 text 输出也走这条路（它同样被收进容器）。
  */
 function renderBlock(
   block: ContentBlock,
@@ -848,6 +859,7 @@ function renderBlock(
           // 仅正在增长的最后一个 text block 降级纯文本；历史 block 文本引用
           // 稳定，靠 Markdown 的 memo 跳过重渲染。
           streaming={isLast && streaming}
+          maxWidth={maxWidth}
         />
       )
     case 'thought':
@@ -1224,47 +1236,54 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // rather than collapsing everything into a single bubble.
   const lastIdx = message.blocks.length - 1
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
-  // 把 blocks 按「连续过程块」切段：thought / tool_call / plan 属过程块，收进
-  // ProcessBlocks 容器；text / system / image 是结论或需即时交互的内容（审批必须
-  // 可见可点），留在容器外原序渲染。按**连续段**归组而非全局——否则夹在过程块
-  // 之间的 text 会被整段挪到容器之后，改变阅读顺序。
-  // 单块段不套容器：一个思考块 / 一个工具卡本就有自己的折叠头，再套一层容器会
-  // 得到「容器摘要 + 块自己的头」两行重复信息。故只在同段 ≥2 块时才收纳。
+  // 最终 text 结论的下标 = **最后一个** text 块。不能取 lastIdx：消息可能以工具
+  // 调用收尾；也不能取第一个 text 块：ACP 的 prose chunk 被工具调用切成多个 text
+  // 块（`appendProseBlock` 只在**连续同类**时合并），靠前的那些是中间输出。
+  let finalTextIdx = -1
+  for (let i = 0; i < message.blocks.length; i++) {
+    if (message.blocks[i].type === 'text') finalTextIdx = i
+  }
+  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**）：
+  // 一轮里除**最终 text 结论**与 **system 块**外全部收进同一个容器——过程块
+  // （thought / tool_call / plan）+ 夹在过程块之间的中间 text 输出。
+  // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
+  // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
+  // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
+  // system 块必须留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
   const streaming = message.streaming ?? false
   const bodyNodes: ReactNode[] = []
-  let run: ProcessEntry[] = []
-  const flushRun = () => {
-    if (run.length === 0) return
-    const entries = run
-    run = []
-    if (entries.length > 1) {
-      bodyNodes.push(
-        <ProcessBlocks
-          key={`process-${entries[0].idx}`}
-          entries={entries}
-          streaming={streaming}
-          workText={workText}
-          liveSessionId={liveSessionId}
-          renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming, undefined)}
-        />,
-      )
-      return
-    }
-    // 单块段：直接渲染，与加容器前的行为完全一致——故照旧带自己的宽度上限。
-    bodyNodes.push(
-      renderBlock(entries[0].block, entries[0].idx, entries[0].idx === lastIdx, streaming, BUBBLE_MAX_WIDTH),
-    )
-  }
+  const collected: ProcessEntry[] = []
+  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。留在容器外的块按原相对
+  // 顺序排在其后，故可见内容（system / 最终结论）的阅读顺序不变；被收进容器的
+  // 内容折叠后不可见，展开时也保持原序——唯一的例外是「结论之后还有过程块」的
+  // 罕见消息（agent 结尾又调了工具），那时的过程块会提前到结论之前。
+  let containerSlot = -1
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
-    if (b.type === 'thought' || b.type === 'tool_call' || b.type === 'plan') {
-      run.push({ block: b, idx: i })
+    if (i === finalTextIdx || b.type === 'system') {
+      bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
       continue
     }
-    flushRun()
-    bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
+    if (collected.length === 0) {
+      bodyNodes.push(null)
+      containerSlot = bodyNodes.length - 1
+    }
+    collected.push({ block: b, idx: i })
   }
-  flushRun()
+  // 有东西可收纳才立容器：纯文字回复（无过程块、无中间输出）不出现收纳行，
+  // 行为与加容器前完全一致。
+  if (collected.length > 0) {
+    bodyNodes[containerSlot] = (
+      <ProcessBlocks
+        key={`process-${collected[0].idx}`}
+        entries={collected}
+        streaming={streaming}
+        workText={workText}
+        liveSessionId={liveSessionId}
+        renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming, undefined)}
+      />
+    )
+  }
   return (
     <div
       ref={rowRef}

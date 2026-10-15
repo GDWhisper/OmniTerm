@@ -48,6 +48,18 @@ function render(message: ChatMessage) {
   act(() => {
     root.render(<ChatMessageView message={message} />)
   })
+  // 思考块现在被收在**消息级过程容器**里（整轮归组，见 ChatMessage.process.test.tsx
+  // 「整轮归组」那组）：容器收起时思考块整个不在 DOM 中。本文件的主题是思考块
+  // 自己的排版与折叠态，故渲染后先把容器展开——流式态容器本就展开，不点
+  // （点了反而折上）。容器自身的展折叠归 process 测试管。
+  openProcess()
+}
+
+/** 展开消息级过程容器（若处于收起态）。 */
+function openProcess() {
+  const chevron = container.querySelector<HTMLElement>('.process-chevron')
+  if (chevron?.getAttribute('data-open') !== 'false') return
+  click(container.querySelector<HTMLButtonElement>('.process-header-btn'))
 }
 
 /** 标题行按钮（◆ … ▸）。 */
@@ -162,6 +174,12 @@ describe('ThoughtBlockView 折叠态状态标签', () => {
     try {
       useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'brief' })
       render(thoughtMessage('正在想', true))
+      // 思考块收在消息级过程容器里，而容器在流式结束边沿上会自动折叠、**连块一起
+      // 卸载**（定档值随之丢失，回落「持续了几秒」）。要让块活着观察到定档，必须先
+      // 让用户干预过——干预后自动折叠不再插手。折一下再展开 = 干预。
+      const procHeader = container.querySelector<HTMLButtonElement>('.process-header-btn')!
+      click(procHeader)
+      click(procHeader)
       act(() => {
         vi.advanceTimersByTime(3000)
       })
@@ -346,8 +364,11 @@ describe('ThoughtBlockView 折叠态：显示简要（仅流式期间）', () =>
   it('思考行不是 data-chat-body——不参与气泡右缘测量', () => {
     useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'brief' })
     render(thoughtMessage('一行思考', true))
-    // 元信息行量的是最后一个 [data-chat-body]；思考行若也打标就会顶替它
-    expect(container.querySelectorAll('[data-chat-body="true"]')).toHaveLength(1)
+    // 元信息行量的是最后一个 [data-chat-body]；思考行若也打标就会顶替它。
+    // 带标的是**思考块自己**与它外面的过程容器（后者也要参与测量），
+    // 思考块内部不允许再出现第三个。
+    expect(container.querySelectorAll('[data-chat-body="true"]')).toHaveLength(2)
+    expect(thinkingBlock()!.querySelectorAll('[data-chat-body="true"]')).toHaveLength(0)
     expect(streamingLine()!.getAttribute('data-chat-body')).toBeNull()
   })
 })

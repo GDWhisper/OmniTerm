@@ -10,8 +10,9 @@ import zh from '../../locales/zh/translation.json'
 import en from '../../locales/en/translation.json'
 
 // 消息级「过程容器」契约（对齐 ZCode 容器型工具 agent.tsx / ToolLayout.tsx）：
-// 一轮 ACP 输出里的过程块（thought / tool_call / plan）被收进同一个折叠器，
-// 折叠态只留**一行计数聚合摘要**，最终 text 结论留在容器外始终可见。
+// **一轮** ACP 输出里除最终结论外的一切收进同一个折叠器——过程块
+// （thought / tool_call / plan）与夹在过程块之间的中间 text 输出。折叠态只留
+// **一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终可见。
 // 交互 = 流式中展开（跟着看过程）、完成后自动折叠（收纳）、用户手动干预后
 // 自动规则不再插手。
 // jsdom 不加载 index.css，故不断言计算样式，只断言 DOM 结构与文案这两个不变量；
@@ -44,6 +45,25 @@ function processHeader(): HTMLButtonElement | null {
     container.querySelector<HTMLButtonElement>('.process-header-btn') ??
     container.querySelector<HTMLButtonElement>('.thinking-header-btn')
   )
+}
+
+/** 一轮被工具调用切成多段的输出：中间文字与过程块交替，最后是结论。 */
+function interleavedMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: 'm9',
+    role: 'assistant',
+    text: '最终结论',
+    blocks: [
+      { type: 'text', text: '第一段中间输出' },
+      { type: 'thought', text: '先想一下' },
+      { type: 'tool_call', toolCallId: 't1', title: '读文件', status: 'completed' },
+      { type: 'text', text: '第二段中间输出' },
+      { type: 'tool_call', toolCallId: 't2', title: '跑命令', status: 'completed' },
+      { type: 'text', text: '最终结论' },
+    ],
+    createdAt: 0,
+    ...overrides,
+  }
 }
 
 /** 收纳态箭头：data-open 表达容器展开/收起。 */
@@ -151,18 +171,83 @@ describe('ProcessBlocks 容器格式化上下文', () => {
     for (const el of nested) expect(el.style.maxWidth).toBe('')
   })
 
-  it('单块段（不套容器）的块仍自带 85% 宽度上限', () => {
-    // 对照组：不走容器时没有上层收口，块必须自己带 BUBBLE_MAX_WIDTH，
-    // 否则长标题会撑到整行宽。
+  it('留在容器外的块（最终 text 结论）仍自带 85% 宽度上限', () => {
+    // 对照组：容器外的块没有上层收口，必须自己带 BUBBLE_MAX_WIDTH，
+    // 否则长结论会撑到整行宽。
+    render(interleavedMsg({ streaming: false }))
+    const bubble = container.querySelector<HTMLElement>('.chat-bubble')!
+    expect(bubble.textContent).toContain('最终结论')
+    expect(bubble.style.maxWidth).toBe('85%')
+  })
+})
+
+describe('ProcessBlocks 整轮归组（回归：每个小输出各折一行）', () => {
+  // 2026-10-15 用户报告「实现偏离，预期是流式输出的最后一句话展示，然后单轮所有
+  // 流式输出的思考、工具、输出都收纳起来……而非当前的每个小输出都折叠起来」。
+  // 截图里同一条消息出现 5 行 `◈ 已工作 22分钟7秒 …`——根因是当时按**连续过程块
+  // 切段**归组：每段中间文字之间各攒出一个容器，一轮被切成「文字 + 收纳行」交替
+  // 的许多行。现改为**按轮归组**：除最终 text 结论与 system 块外全部收进同一个
+  // 容器，一轮有且仅有一个收纳行。
+  it('一轮只有一个收纳行：中间文字与过程块收进同一个容器', () => {
+    render(interleavedMsg({ streaming: false }))
+    expect(container.querySelectorAll('.process-header-btn').length).toBe(1)
+    const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m9"]')!
+    // 折叠态：中间输出与过程明细都不在 DOM 里
+    expect(row.textContent).not.toContain('第一段中间输出')
+    expect(row.textContent).not.toContain('第二段中间输出')
+    expect(row.textContent).not.toContain('读文件')
+    expect(row.textContent).not.toContain('跑命令')
+    // 最终结论留在容器外，始终可见
+    expect(row.textContent).toContain('最终结论')
+    // 计数聚合的是**整轮**：思考 1 次 · 工具调用 2 次
+    expect(processHeader()!.textContent).toContain('思考 1 次')
+    expect(processHeader()!.textContent).toContain('工具调用 2 次')
+  })
+
+  it('容器内的中间文字展开后按原序回来', () => {
+    render(interleavedMsg({ streaming: false }))
+    click(processHeader())
+    const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m9"]')!
+    const body = row.textContent ?? ''
+    // 原序：第一段 → 思考 → 读文件 → 第二段 → 跑命令（结论在容器外）
+    expect(body.indexOf('第一段中间输出')).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf('第一段中间输出')).toBeLessThan(body.indexOf('读文件'))
+    expect(body.indexOf('读文件')).toBeLessThan(body.indexOf('第二段中间输出'))
+    expect(body.indexOf('第二段中间输出')).toBeLessThan(body.indexOf('跑命令'))
+  })
+
+  it('容器内的中间文字同样不带 maxWidth（宽度由容器单一收口）', () => {
+    render(interleavedMsg({ streaming: false }))
+    click(processHeader())
+    const box = processHeader()!.parentElement as HTMLElement
+    const bubbles = box.querySelectorAll<HTMLElement>('.chat-bubble')
+    expect(bubbles.length).toBe(2)
+    for (const el of bubbles) expect(el.style.maxWidth).toBe('')
+  })
+
+  it('只有中间文字、无过程块时也收纳，摘要不写兜底文案', () => {
+    // 一轮的输出被不渲染的块（todo 只看板）切开、又没有任何 thought/tool/plan：
+    // 容器仍要收纳那些中间文字，此时摘要只剩字形 + 时长段，正是 ZCode 参照的
+    // 「已工作 19 分 35 秒 ›」形态——故不写「无过程」类兜底文案。
     render({
-      id: 'm5',
+      id: 'm10',
       role: 'assistant',
       text: '结论',
-      blocks: [{ type: 'tool_call', toolCallId: 't1', title: '读文件', status: 'completed' }],
+      blocks: [
+        { type: 'text', text: '第一段' },
+        { type: 'todo', title: '看板', entries: [{ content: '一步', status: 'pending', priority: 'medium' }] },
+        { type: 'text', text: '结论' },
+      ],
       createdAt: 0,
     })
-    const card = container.querySelector<HTMLElement>('.chat-block')!
-    expect(card.style.maxWidth).toBe('85%')
+    const header = processHeader()!
+    expect(header).toBeTruthy()
+    expect(header.textContent).not.toContain('思考')
+    expect(header.textContent).not.toContain('工具调用')
+    expect(header.textContent).not.toContain('计划')
+    const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m10"]')!
+    expect(row.textContent).not.toContain('第一段')
+    expect(row.textContent).toContain('结论')
   })
 })
 
@@ -286,8 +371,11 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
     expect(textBubble()!.textContent).toContain('只是结论')
   })
 
-  it('单个过程块不套容器：思考块仍渲染自己的标题行', () => {
-    // 单块段套容器会得到「容器摘要 + 块自己的头」两行重复信息，故不套。
+  it('单个过程块也收进整轮容器（不再有「单块段例外」）', () => {
+    // 曾经的例外：一个思考块 / 工具卡本就有自己的折叠头，套容器会得到「容器摘要
+    // + 块自己的头」两行重复信息。按轮归组后该例外取消——容器是**轮级**的，
+    // 一轮只出一次摘要；块自己的头仍在容器展开后出现，与多块时同构。
+    // （jsdom 下两个开关默认关，故容器收起时块头不在 DOM 里。）
     render({
       id: 'm3',
       role: 'assistant',
@@ -298,7 +386,10 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
       ],
       createdAt: 0,
     })
-    expect(container.querySelector('.process-header-btn')).toBeNull()
+    expect(container.querySelector('.process-header-btn')).toBeTruthy()
+    expect(container.querySelector('.thinking-header-btn')).toBeNull()
+    // 展开后块自己的标题行回来
+    click(processHeader())
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
