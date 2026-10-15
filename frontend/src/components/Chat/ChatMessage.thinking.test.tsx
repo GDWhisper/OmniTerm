@@ -84,15 +84,7 @@ function mockLineGeometry(el: HTMLElement, scrollWidth: number, clientWidth: num
 
 beforeEach(() => {
   localStorage.clear()
-  // 基线显式关掉「完成后自动折叠」：本文件的多数用例关心排版与收起态档位，
-  // 需要 expandThinking: true 时块**保持展开**才能断言展开区样式。自动折叠
-  // 开启后那只有在流式期间才成立（完成后会折成结论标签）——该行为由下面
-  // 「完成后自动折叠」专属 describe 显式覆盖，不混在排版用例里。
-  useAppStore.setState({
-    expandThinking: false,
-    thinkingCollapsedMode: 'hide',
-    thinkingAutoCollapse: false,
-  })
+  useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'hide' })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -373,80 +365,5 @@ describe('ThoughtBlockView 收起态档位热切换', () => {
       useAppStore.setState({ thinkingCollapsedMode: 'hide' })
     })
     expect(streamingLine()).toBeNull()
-  })
-})
-
-describe('ThoughtBlockView 流式结束后自动折叠（对齐 ZCode）', () => {
-  /** 展开态由箭头的 data-open 表达：true = 展开，false = 收起。 */
-  function isOpen(): boolean {
-    return thinkingBlock()?.querySelector('.thinking-chevron')?.getAttribute('data-open') === 'true'
-  }
-
-  // ZCode 的模式是「运行中展开观看 → 完成后回到摘要 → 用户手动干预后不再自动
-  // 操作」。下面逐条锁住这三个阶段，尤其要锁住「只在 running → completed 的
-  // 边沿折一次」——写成「streaming 为 false 就折」会在用户手动展开后、下一次
-  // 流式结束时再次折叠，把用户的选择覆盖掉。
-
-  it('开关开着：流式结束后自动折成结论标签', () => {
-    useAppStore.setState({ expandThinking: true, thinkingAutoCollapse: true })
-    render(thoughtMessage('先想一会儿', true))
-    // 流式期间展开观看
-    expect(isOpen()).toBe(true)
-    // 流式结束 → 边沿上自动折叠
-    render(thoughtMessage('先想一会儿\n想完了', false))
-    expect(isOpen()).toBe(false)
-    // 折叠态展示结论标签「Thought · Ns」，不再是流式的「Thinking」
-    const label = thinkingBlock()!.textContent ?? ''
-    expect(label).toContain(i18n.t('chat.thought'))
-    expect(label).toContain(i18n.t('chat.thoughtDurationSeconds', { seconds: 1 }))
-    expect(label).not.toContain(i18n.t('chat.thinking'))
-    // 实时思考行只在流式期间显示——完成后不再出现
-    expect(streamingLine()).toBeNull()
-  })
-
-  it('开关关掉：流式结束后保持展开（旧行为）', () => {
-    useAppStore.setState({ expandThinking: true, thinkingAutoCollapse: false })
-    render(thoughtMessage('先想一会儿', true))
-    expect(isOpen()).toBe(true)
-    render(thoughtMessage('先想一会儿\n想完了', false))
-    expect(isOpen()).toBe(true)
-  })
-
-  it('用户手动展开过：不再自动折叠', () => {
-    useAppStore.setState({ expandThinking: true, thinkingAutoCollapse: true })
-    render(thoughtMessage('先想一会儿', true))
-    // 手动折一下再展开 = 干预过
-    click(headerButton())
-    expect(isOpen()).toBe(false)
-    click(headerButton())
-    expect(isOpen()).toBe(true)
-    // 流式结束：用户干预过，自动规则不再覆盖他的选择
-    render(thoughtMessage('先想一会儿\n想完了', false))
-    expect(isOpen()).toBe(true)
-  })
-
-  it('用户手动折叠后流式结束：保持折叠，不被再次摊开', () => {
-    useAppStore.setState({ expandThinking: true, thinkingAutoCollapse: true })
-    render(thoughtMessage('先想一会儿', true))
-    click(headerButton())
-    expect(isOpen()).toBe(false)
-    render(thoughtMessage('先想一会儿\n想完了', false))
-    expect(isOpen()).toBe(false)
-  })
-
-  it('历史块（从未流式）在开关开启时默认收起', () => {
-    // 刷新后从库里读回的块 streaming 恒 false。若初值仍直接取 expandThinking，
-    // 刚自动折起来的块会被刷新又摊开，与流式结束那一刻的观感不一致。
-    useAppStore.setState({ expandThinking: true, thinkingAutoCollapse: true })
-    render(thoughtMessage('早已想完的一段思考', false))
-    expect(isOpen()).toBe(false)
-  })
-
-  it('expandThinking 关闭时本功能无副作用：块本就收起', () => {
-    useAppStore.setState({ expandThinking: false, thinkingAutoCollapse: true })
-    render(thoughtMessage('先想一会儿', true))
-    expect(isOpen()).toBe(false)
-    render(thoughtMessage('先想一会儿\n想完了', false))
-    expect(isOpen()).toBe(false)
   })
 })

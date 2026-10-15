@@ -627,22 +627,15 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 实时思考行刻意不打 `data-chat-body`：元信息行的气泡右缘量的是行内最后一个 `[data-chat-body]`，它一旦打标就会顶替它。
 
-**完成后自动折叠**（对齐 ZCode 的 Reasoning，2026-10-14）：ZCode 的统一模式是「**运行中展开观看 → 完成后回到摘要 → 用户手动干预后不再自动操作**」——`reasoning.tsx` 以 `autoCollapseKey={streaming ? null : row.state}` 做状态边界检测，`ToolLayout.tsx` 以 `previousIsRunningRef` 做 `running → completed` 边沿检测，两者都以 `userInteractedRef` 为前提。OmniTerm 照此实现：
+**`ThoughtBlockView` 不做任何自动折叠**（2026-10-14 撤销过一次，教训记在这里）：曾有版本把 `open` 初值改成 `expandThinking && (streaming || !autoCollapse)`，想「流式中展开、完成后自动收起」。但多块消息里思考块**永远不是最后一块**（它后面还有工具卡与结论），`streaming` 恒为 `false`，叠加默认开的开关后思考块**直接收起、正文整个消失**——只剩工具调用内容。故 `open` 只由 `expandThinking` 决定，不再叠任何条件。过程块的收纳已由消息级容器负责（见 §7.10），单个思考块不需要自己再折一次。
 
-| 环节 | 规则 |
-|------|------|
-| 触发时机 | `streaming` 由 `true → false` 的**边沿**上折一次。判边沿而非「`streaming` 为 false 就折」——后者会在用户手动展开后、下一次流式结束时再次折叠，把用户的选择覆盖掉 |
-| 用户干预 | `toggle()` 里置 `userInteractedRef`，展开与收起都算干预；置位后自动规则永不再覆盖 |
-| 完成后展示 | 结论标签「思考 · 持续了 N 秒」（见上文状态标签），不再显示思考原文 |
-| 挂载初值 | `expandThinking && (streaming \|\| !autoCollapse)`。已定稿的块（历史 / 刚结束）在开关开启时默认收起——否则刷新页面会把刚自动折起来的块又摊开，与流式结束那一刻的观感不一致（ZCode 的 Reasoning 同样 `defaultOpen=false`，只有运行中才展开） |
-
-新增独立开关 `settings.thinkingAutoCollapse`（默认**开**）：**只在「展开思考」开启时渲染**——关时思考块本就收起，折不折看不到差别，不给用户空转的开关（与上面的收起态档位行互为补集，两者永不同屏）。存档读取判 `!== 'false'` 而非 `=== 'true'`：默认值为 true，只有显式存过 `'false'` 才关，缺省与脏值一律回落默认——宁可多折一次让用户点开，也不要因为一个脏值把功能静默关掉。
-
-三项设置**彼此独立、互不复位**：`expandThinking`（流式期间是否展开观看）、`thinkingCollapsedMode`（收起时显示什么）、`thinkingAutoCollapse`（流式结束后是否折回摘要）。单一真源同见 `frontend/src/utils/thinkingCollapsed.ts`。
+两项设置**彼此独立、互不复位**：`expandThinking`（是否展开观看）、`thinkingCollapsedMode`（收起时显示什么）。单一真源同见 `frontend/src/utils/thinkingCollapsed.ts`。
 
 ### 7.10 消息级「过程容器」（`ProcessBlocks`）
 
-上一节管的是**单个思考块**自己的折叠；本节管的是**整轮过程的收纳**：把一条 assistant 消息里的过程块（`thought` / `tool_call` / `plan`）收进同一个折叠器，折叠态只留**一行计数聚合摘要**，最终 `text` 结论留在容器外始终可见。目标是「流式输出完成后把整个过程收纳起来，只显示最终结论」（2026-10-14 用户要求）。
+上一节管的是**单个思考块**自己的折叠；本节管的是**整轮过程的收纳**：把一条 assistant 消息里的过程块（`thought` / `tool_call` / `plan`）收进同一个折叠器，折叠态只留**一行摘要**，最终 `text` 结论留在容器外始终可见。目标是「流式输出完成后把整个过程收纳起来，只显示最终结论」（2026-10-14 用户要求）。
+
+**收纳行标题主体是工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」），而非状态词——秒数在跳即表达「进行中」、定格即表达「已完成」，不需要另设一套状态文案。复用 `chat.msg.workTime`（与气泡底部元信息行同一读数、同一措词），不新造键；流式中走实时读数（`ProcessWorkElapsed`，同 `LiveWorkElapsed` 的「定时器直写 DOM」手法，只显示工作时长一段），定稿后用 `message.durationMs` 算出的结算值。无 `durationMs` 的历史行不硬造 0 秒标题，整段撤掉只留计数。
 
 **交互**（对齐 ZCode 容器型工具 `ToolCallBlocks/renderers/agent.tsx` + `ToolLayout.tsx`）：
 
@@ -653,7 +646,7 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 | 用户手动干预后 | 自动规则不再覆盖（`userInteractedRef`，展开与收起都算干预） |
 | 历史消息 | 挂载即收起（收纳） |
 
-**摘要走计数聚合，不罗列**（对齐 ZCode `formatExploreSummary` 把子调用按 search/list/file 计数）：「思考 1 · 工具调用 2 · 计划 1」。比把每个块名列一遍短，也不会随块数增长而无限变长；只收非零段，段间 `·`。状态词流式中「进行中」（借 §7.9 的扫光 class 家族，独立成 `.process-shimmer`），完成后「已完成」回落 `--text-muted`（同 `ToolLayout` 对 `kindLabel` 的处理理由：非运行态保持最浅文本色，避免摘要喧宾夺主）。
+**计数聚合是次要信息，不罗列**（对齐 ZCode `formatExploreSummary` 把子调用按 search/list/file 计数），接在时长后用 `·` 分隔：「已工作 1分钟35秒 · 思考 1 · 工具调用 2 · 计划 1」。比把每个块名列一遍短，也不会随块数增长而无限变长；只收非零段。流式中时长段借 §7.9 的扫光 class 家族（独立成 `.process-shimmer`），定稿后回落 `--text-muted`（同 `ToolLayout` 对 `kindLabel` 的处理理由：非运行态保持最浅文本色，避免摘要喧宾夺主）。
 
 **与两个既有开关不同层、不冲突**——这是最容易搞混的地方：
 

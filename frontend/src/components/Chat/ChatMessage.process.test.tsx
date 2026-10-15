@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { ChatMessageView } from './ChatMessage'
 import type { ChatMessage } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
+import { beginTurn, clearTurnClock } from '../../utils/turnClock'
 import i18n from '../../i18n'
 import zh from '../../locales/zh/translation.json'
 import en from '../../locales/en/translation.json'
@@ -60,9 +61,9 @@ const click = (el: Element | null | undefined) =>
     el!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-function render(message: ChatMessage) {
+function render(message: ChatMessage, sessionId?: string) {
   act(() => {
-    root.render(<ChatMessageView message={message} />)
+    root.render(<ChatMessageView message={message} sessionId={sessionId} />)
   })
 }
 
@@ -120,9 +121,18 @@ describe('ProcessBlocks 折叠态', () => {
     expect(processHeader()!.textContent).toContain('工具调用 2 次')
   })
 
-  it('折叠态状态词为「已完成」', () => {
-    render(processMsg({ streaming: false }))
-    expect(processHeader()!.textContent).toContain('已完成')
+  it('折叠态标题为工作时长「已工作 X 分 X 秒」', () => {
+    // 有 durationMs 时走结算值；秒数定格即表达「已完成」，不需要另设状态词。
+    render(processMsg({ streaming: false, durationMs: 95_000 }))
+    expect(processHeader()!.textContent).toContain('已工作 1分钟35秒')
+  })
+
+  it('无 durationMs 的历史消息不渲染时长段，只留计数', () => {
+    // 迁移前的历史行可能没有结算耗时：此时不硬造一个 0 秒标题，只留计数段。
+    render(processMsg({ streaming: false, durationMs: undefined }))
+    const header = processHeader()!
+    expect(header.textContent).not.toContain('已工作')
+    expect(header.textContent).toContain('工具调用 2 次')
   })
 
   it('最终 text 结论留在容器外、始终可见', () => {
@@ -146,9 +156,18 @@ describe('ProcessBlocks 流式态', () => {
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
-  it('流式中状态词为「进行中」', () => {
-    render(processMsg({ streaming: true }))
-    expect(processHeader()!.textContent).toContain('进行中')
+  it('流式中标题走实时读数（秒数在跳即表达进行中）', () => {
+    // 标题主体是工作时长而非状态词：流式中秒数逐秒增长，本身就是「进行中」。
+    // 实时读数由 ProcessWorkElapsed 定时器直写 DOM，首帧即写入，故可同步断言。
+    // 必须先给时钟起表：turnElapsedMs 查不到这一路 turn 时返回 null，
+    // formatWorkDuration(null) 也返回 null，整段读数会被撤掉。
+    beginTurn('sess-live')
+    try {
+      render(processMsg({ streaming: true }), 'sess-live')
+      expect(processHeader()!.textContent).toContain('已工作')
+    } finally {
+      clearTurnClock()
+    }
   })
 
   it('流式结束边沿自动折叠', () => {
@@ -265,8 +284,6 @@ describe('ProcessBlocks i18n key 齐备', () => {
       'chat.process.thoughtCount',
       'chat.process.toolCount',
       'chat.process.planCount',
-      'chat.process.working',
-      'chat.process.done',
     ]) {
       expect(zhMap[k], `zh ${k}`).toBeTruthy()
       expect(enMap[k], `en ${k}`).toBeTruthy()

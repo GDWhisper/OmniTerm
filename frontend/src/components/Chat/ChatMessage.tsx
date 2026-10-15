@@ -220,13 +220,55 @@ interface ProcessEntry {
  * 「看不看得到明细」，那两个开关决定「展开后明细的粒度」——容器展开时内部各块
  * 照旧按开关渲染（ThoughtBlockView / ToolCallBlockView 各自读自己的设定）。
  */
+/**
+ * 收纳行的流式工作时长读数：「已工作 X 分 X 秒」，秒级跳动。
+ *
+ * 与元信息行的 `LiveWorkElapsed` 同源（同一个 `turnElapsedMs` 时钟、同一个
+ * `chat.msg.workTime` 措词），但只显示工作时长一段——收纳行不需要工具耗时与
+ * tps，那两段属于气泡底部元信息行的职责。同样走「定时器直写 DOM」而非 React
+ * state：秒级跳动每秒重渲染整个消息列表是没有意义的浪费。
+ */
+function ProcessWorkElapsed({ sessionId }: { sessionId: string }) {
+  const { t, i18n } = useTranslation()
+  const workRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const draw = () => {
+      const el = workRef.current
+      if (!el) return
+      const dur = formatWorkDuration(turnElapsedMs(sessionId, Date.now()), i18n.language)
+      // 时钟里没有这一路 turn（尚未起表）：整格撤掉，只留字形与计数段。
+      const text = dur ? t('chat.msg.workTime', { dur }) : ''
+      if (el.textContent !== text) el.textContent = text
+    }
+    draw()
+    const id = window.setInterval(draw, LIVE_TICK_MS)
+    return () => window.clearInterval(id)
+  }, [sessionId, t, i18n])
+
+  return (
+    <span
+      className="process-shimmer"
+      style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}
+    >
+      <span ref={workRef} />
+    </span>
+  )
+}
+
 function ProcessBlocks({
   entries,
   streaming,
+  workText,
+  liveSessionId,
   renderEntry,
 }: {
   entries: ProcessEntry[]
   streaming: boolean
+  /** turn 工作时长结算值（后端定稿时算出的 `message.durationMs` 格式化）。 */
+  workText: string | null
+  /** 流式实时计时的会话 id（`isLive && !workText` 时才有值，见调用处）。 */
+  liveSessionId?: string
   renderEntry: (entry: ProcessEntry) => ReactNode
 }) {
   const { t } = useTranslation()
@@ -264,28 +306,32 @@ function ProcessBlocks({
   }
 
   // 只收计数非零的段，段间 `·`。全零不该发生（容器仅在有过程块时才渲染），
-  // 故不写兜底文案——真出现了也只是一行「进行中 / 已完成」，不制造死分支。
+  // 故不写兜底文案——真出现了也只是没有计数段，不制造死分支。
   const parts: string[] = []
   if (thoughtCount > 0) parts.push(t('chat.process.thoughtCount', { count: thoughtCount }))
   if (toolCount > 0) parts.push(t('chat.process.toolCount', { count: toolCount }))
   if (planCount > 0) parts.push(t('chat.process.planCount', { count: planCount }))
 
-  // 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免摘要
-  // 喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。
-  const statusWord = streaming ? t('chat.process.working') : t('chat.process.done')
+  // 标题主体是**工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」），
+  // 而非状态词：秒数在跳即表达「进行中」，定格即表达「已完成」，不需要另设一套
+  // 状态文案。复用 `chat.msg.workTime`（与气泡底部元信息行同一读数、同一措词），
+  // 不新造键。流式中走实时读数，定稿后用结算值。
+  const durLabel = workText ? t('chat.msg.workTime', { dur: workText }) : null
 
   return (
     <div className="chat-block" data-chat-body="true" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH }}>
       <button onClick={toggle} className="process-header-btn" style={{ fontSize: '0.846em' }}>
         <span style={{ flexShrink: 0 }}>{PROCESS_HEADER_ICON}</span>
-        {streaming ? (
-          <span className="process-shimmer" style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}>
-            {statusWord}
-          </span>
+        {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
+            摘要喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。 */}
+        {liveSessionId ? (
+          <ProcessWorkElapsed sessionId={liveSessionId} />
         ) : (
-          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
-            {statusWord}
-          </span>
+          durLabel && (
+            <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
+              {durLabel}
+            </span>
+          )
         )}
         {parts.length > 0 && (
           <>
@@ -310,16 +356,11 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   // 'brief' 在标题行内嵌一行流式思考原文。订阅 store 而不是只读初值——
   // 用户在设置面板改档位时，已挂载的思考块要立即跟着变。
   const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
-  // 「完成后自动折叠」开关（对齐 ZCode：运行中展开观看 → 完成后回到摘要）。
-  // 订阅 store 而非只读初值——设置面板改它时，已挂载的思考块要立即跟着变。
-  const autoCollapse = useAppStore(s => s.thinkingAutoCollapse)
-  // 用户是否手动干预过展开态。ZCode 的 autoCollapseKey / autoCollapseOnComplete
-  // 都以它为前提：一旦用户手动点过，自动规则永不再覆盖用户的选择。
-  const userInteractedRef = useRef(false)
-  // 初值：流式期间跟随「展开思考」；已定稿的块（历史 / 刚结束）在自动折叠开启
-  // 时默认收起——否则刷新页面会把刚自动折起来的块又摊开，与流式结束那一刻的
-  // 观感不一致（ZCode 的 Reasoning 同样 defaultOpen=false，只有运行中才展开）。
-  const [open, setOpen] = useState(() => expandThinking && (streaming || !autoCollapse))
+  // 初值跟随「展开思考」开关。**不要再叠任何自动折叠条件**：多块消息里思考块
+  // 永远不是最后一块，`streaming` 恒为 false，任何「非流式即收起」的判据都会把
+  // 思考正文整个吃掉（2026-10-14 实测踩过，见 CHANGELOG 对该条的撤销说明）。
+  // 过程块的收纳已由消息级 ProcessBlocks 负责，这里不需要自己再折一次。
+  const [open, setOpen] = useState(expandThinking)
   // 耗时（对齐 ZCode）：流式开始计时、结束时定档。历史块从未见过 streaming=true，
   // 保持 undefined，折叠态回落到「持续了几秒」。
   const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
@@ -390,24 +431,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
     return () => observer.disconnect()
   }, [summaryText])
 
-  // 流式结束边沿自动折叠（对齐 ZCode：ToolLayout 的 autoCollapseOnComplete 与
-  // reasoning 的 autoCollapseKey 都只在「运行中 → 已完成」的边沿折一次）。
-  // 三个前提缺一不可：开关开着、用户没手动干预过、且这确实是流式刚结束的那一帧。
-  // 判边沿而非「streaming 为 false 就折」：后者会在用户手动展开后、下一次流式
-  // 结束时再次折叠，把用户的选择覆盖掉。
-  const wasStreamingRef = useRef(streaming)
-  useEffect(() => {
-    const wasStreaming = wasStreamingRef.current
-    wasStreamingRef.current = streaming
-    if (!wasStreaming || streaming) return
-    if (!autoCollapse || userInteractedRef.current) return
-    setOpen(false)
-  }, [streaming, autoCollapse])
-
   const toggle = () => {
-    // 用户手动干预过：此后自动折叠规则不再覆盖他的选择（对齐 ZCode 的
-    // userInteractedRef）。展开与收起都算干预——手动折起来的块不该被再次摊开。
-    userInteractedRef.current = true
     const next = !open
     setOpen(next)
     // 折叠会卸载容器、丢失滚动位置；重新展开流式块时恢复跟随态，让用户直接
@@ -1178,6 +1202,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           key={`process-${entries[0].idx}`}
           entries={entries}
           streaming={streaming}
+          workText={workText}
+          liveSessionId={liveSessionId}
           renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming)}
         />,
       )
