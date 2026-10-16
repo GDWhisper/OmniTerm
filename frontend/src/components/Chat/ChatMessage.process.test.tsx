@@ -10,8 +10,9 @@ import zh from '../../locales/zh/translation.json'
 import en from '../../locales/en/translation.json'
 
 // 消息级「过程容器」契约（对齐 ZCode 容器型工具 agent.tsx / ToolLayout.tsx）：
-// **一轮** ACP 输出里除最终结论外的一切收进同一个折叠器——过程块
-// （thought / tool_call / plan）与夹在过程块之间的中间 text 输出。折叠态只留
+// **一轮** ACP 输出里**最终结论之前**的一切收进同一个折叠器——过程块
+// （thought / tool_call / plan）与夹在过程块之间的中间 text 输出；结论及其后的
+// 块留在容器外原位（流式顺序不变量，2026-10-16 修复）。折叠态只留
 // **一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终可见。
 // 交互 = 流式中展开（跟着看过程）、完成后自动折叠（收纳）、用户手动干预后
 // 自动规则不再插手。
@@ -186,8 +187,9 @@ describe('ProcessBlocks 整轮归组（回归：每个小输出各折一行）',
   // 流式输出的思考、工具、输出都收纳起来……而非当前的每个小输出都折叠起来」。
   // 截图里同一条消息出现 5 行 `◈ 已工作 22分钟7秒 …`——根因是当时按**连续过程块
   // 切段**归组：每段中间文字之间各攒出一个容器，一轮被切成「文字 + 收纳行」交替
-  // 的许多行。现改为**按轮归组**：除最终 text 结论与 system 块外全部收进同一个
-  // 容器，一轮有且仅有一个收纳行。
+  // 的许多行。现改为**按轮归组**：结论**及其后**的一切之外的块收进同一个
+  // 容器，一轮有且仅有一个收纳行（2026-10-16 起拆分点收敛为「结论之前」，
+  // 见下一节「流式顺序」）。
   it('一轮只有一个收纳行：中间文字与过程块收进同一个容器', () => {
     render(interleavedMsg({ streaming: false }))
     expect(container.querySelectorAll('.process-header-btn').length).toBe(1)
@@ -248,6 +250,79 @@ describe('ProcessBlocks 整轮归组（回归：每个小输出各折一行）',
     const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m10"]')!
     expect(row.textContent).not.toContain('第一段')
     expect(row.textContent).toContain('结论')
+  })
+})
+
+describe('ProcessBlocks 流式顺序（回归：思考块出现在最近一次输出的上面）', () => {
+  // 2026-10-16 用户报告：流式中，正在流式输出的思考块会出现在最近一次输出的
+  // **上面**，不符合流式顺序（截图场景：agent 输出「页面渲染成功…」之后又起了
+  // 一轮思考）。根因是归组把「最后一个 text 块」之后的过程块也收进容器，而容器
+  // 固定渲染在第一个被收纳块的位置（结论之前）——后到的过程块被整体提前到结论
+  // 上方。修复：容器只收纳结论**之前**的前缀，结论及其后的块原位渲染，流式顺序
+  // 在任意时刻成立（规格见 ui-style-guide §7.10）。
+  /** 结论之后又起了一轮思考 + 工具（「最近一次输出之后」的典型形态）。 */
+  function tailProcessMsg(overrides: Partial<ChatMessage> = {}): ChatMessage {
+    return {
+      id: 'm11',
+      role: 'assistant',
+      text: '页面渲染成功，抽屉里 user.go 已打开。',
+      blocks: [
+        { type: 'thought', text: '先做一轮推理' },
+        { type: 'text', text: '页面渲染成功，抽屉里 user.go 已打开。' },
+        { type: 'tool_call', toolCallId: 't1', title: '读文件', status: 'completed' },
+        { type: 'thought', text: '继续推理中' },
+      ],
+      createdAt: 0,
+      ...overrides,
+    }
+  }
+
+  const rowText = () =>
+    container.querySelector<HTMLElement>('[data-chat-msg-id="m11"]')!.textContent ?? ''
+
+  it('流式中：结论之后新起的思考停在结论下方（不在上面）', () => {
+    // 思考正文可见才能断言顺序：开「展开思考」；容器流式中默认展开。
+    useAppStore.setState({ expandThinking: true })
+    render(tailProcessMsg({ streaming: true }))
+    const body = rowText()
+    // 原序：先做一轮推理（容器内）→ 页面渲染成功 → 读文件 → 继续推理中（正在流式）
+    expect(body.indexOf('先做一轮推理')).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf('先做一轮推理')).toBeLessThan(body.indexOf('页面渲染成功'))
+    expect(body.indexOf('页面渲染成功')).toBeLessThan(body.indexOf('读文件'))
+    expect(body.indexOf('读文件')).toBeLessThan(body.indexOf('继续推理中'))
+    // 容器只收纳结论之前的前缀：摘要计数不含结论后的那次思考与工具
+    expect(processHeader()!.textContent).toContain('思考 1 次')
+    expect(processHeader()!.textContent).not.toContain('工具调用')
+  })
+
+  it('结束后：结论之后的过程块仍在结论之后（原位），不再被提前', () => {
+    useAppStore.setState({ expandThinking: true })
+    render(tailProcessMsg({ streaming: false }))
+    const body = rowText()
+    expect(body.indexOf('页面渲染成功')).toBeLessThan(body.indexOf('读文件'))
+    expect(body.indexOf('读文件')).toBeLessThan(body.indexOf('继续推理中'))
+    // 整轮仍只有一行收纳摘要；结论前的思考收在容器里（默认收起不可见）
+    expect(container.querySelectorAll('.process-header-btn').length).toBe(1)
+    expect(body).not.toContain('先做一轮推理')
+    expect(processHeader()!.textContent).toContain('思考 1 次')
+  })
+
+  it('结论是消息首块（前缀为空）：不出现容器，尾块原位渲染', () => {
+    useAppStore.setState({ expandThinking: true })
+    render({
+      id: 'm12',
+      role: 'assistant',
+      text: '第一段输出',
+      blocks: [
+        { type: 'text', text: '第一段输出' },
+        { type: 'thought', text: '随后思考' },
+      ],
+      createdAt: 0,
+      streaming: true,
+    })
+    expect(container.querySelector('.process-header-btn')).toBeNull()
+    const body = container.querySelector<HTMLElement>('[data-chat-msg-id="m12"]')!.textContent ?? ''
+    expect(body.indexOf('第一段输出')).toBeLessThan(body.indexOf('随后思考'))
   })
 })
 

@@ -218,8 +218,9 @@ interface ProcessEntry {
 }
 
 /**
- * 消息级「过程容器」：把**一轮** ACP 输出里除最终结论外的一切收进同一个折叠器
- * ——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出。
+ * 消息级「过程容器」：把**一轮** ACP 输出里**最终结论之前**的一切收进同一个
+ * 折叠器——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出；
+ * 结论及其后的块留在容器外原位（流式顺序在任意时刻成立，2026-10-16 修复）。
  * 折叠态只留**一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终
  * 可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
  * `ToolLayout.tsx`）的交互：
@@ -1342,9 +1343,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   for (let i = 0; i < message.blocks.length; i++) {
     if (message.blocks[i].type === 'text') finalTextIdx = i
   }
-  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**）：
-  // 一轮里除**最终 text 结论**与 **system 块**外全部收进同一个容器——过程块
-  // （thought / tool_call / plan）+ 夹在过程块之间的中间 text 输出。
+  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**，
+  // 2026-10-16 修流式顺序后拆分点收敛为「结论之前」）：
+  // 容器收纳**最终 text 结论之前**的一切——过程块（thought / tool_call / plan）+
+  // 夹在过程块之间的中间 text 输出；结论**及其后**的块（含「结论之后又调了工具」
+  // 的收尾过程块）留在容器外**原位**渲染。
   // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
   // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
   // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
@@ -1352,14 +1355,17 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const streaming = message.streaming ?? false
   const bodyNodes: ReactNode[] = []
   const collected: ProcessEntry[] = []
-  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。留在容器外的块按原相对
-  // 顺序排在其后，故可见内容（system / 最终结论）的阅读顺序不变；被收进容器的
-  // 内容折叠后不可见，展开时也保持原序——唯一的例外是「结论之后还有过程块」的
-  // 罕见消息（agent 结尾又调了工具），那时的过程块会提前到结论之前。
+  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。被收纳集合恒为结论之前
+  // 的前缀（system 除外），故容器先于结论渲染；结论及其后的块按原相对顺序留在
+  // 外面。旧规则把结论之后的块也收进容器、而容器固定渲染在结论之前，那些块被整体
+  // **提前到结论上面**——流式中「最近一次输出之后新起的思考」因此长在输出上方
+  // （2026-10-16 用户报告「正在流式输出的思考块出现在最近一次输出的上面」）。
+  // 现值下留在外面的段随流式生长始终停在消息末尾，流式顺序在任意时刻成立
+  // （规格见 ui-style-guide §7.10）。
   let containerSlot = -1
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
-    if (i === finalTextIdx || b.type === 'system') {
+    if (b.type === 'system' || (finalTextIdx >= 0 && i >= finalTextIdx)) {
       bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
       continue
     }
