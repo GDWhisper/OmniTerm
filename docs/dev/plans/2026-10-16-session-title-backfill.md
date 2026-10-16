@@ -122,6 +122,20 @@
 
 **未做（留口）**：打开 / 切换到某个 ACP 会话时的回填。`refresh_agent_title` 已是 client 方法，补这个触发点只需在 WS 连上并拿到 client 后调一次；未做的原因是它触碰 WS 连接/重放链路，而用户只点名了 turn 结束这一条。
 
+### 勘误三（2026-10-16，真机实测才发现的两个坑）
+
+前两轮都是拿 fake agent 验证的，`fe8e5d4` 之后用**真 opencode** 跑端到端，发现两个 fake agent 是桩所以覆盖不到的问题：
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| **E-21** | turn 结束反查抓到的是**占位串** `New session - <ISO>`，且从此锁死 | opencode 的真标题是**异步**生成的：实测 `prompt_done` 后立即读库是 `None`，2s 后是占位串，真标题约 1.5s 后才落到 agent 侧。而当时的门控有「已有 `agent_title` 就别问」→ 占位串被永久锁死，侧栏永远显示 `New session - 2026-10-16T…`，比默认名好不了多少 | **删掉那道门控**（`workspace_needing_title` → `workspace_to_refresh_title`，只保留「用户未命名」）。代价是每轮一次 `session/list`（已量：本地连接 25 条会话远小于 1s、几 KB，且有 `ACP_LIST_MAX_SESSIONS` 封顶），写放大由 `persist_title` 的同值跳过把守。实测两轮 prompt 后占位串被换成真标题。若日后成为问题，正确解法是加「距上次反查的冷却列」，**不是**把「已有标题」加回门控 |
+| **E-22** | 已回填好的标题被**擦成 NULL**（实测把 `opencode 添加自定义供应商` 擦没，而 agent 侧标题还在） | `MaybeUndefined` 三态里 `Undefined`（字段缺席）与 `Null`（显式清除）被混为一谈：`MaybeUndefined::value()` 把两者都折成 `None`，而 `persist_title(None)` 正是清除语义。协议原文只授权 "Set to null to clear"。于是 agent 发任何一条**不带 title** 的 `session_info_update`（实测 opencode / pi-acp 用这个变体推 `_meta` 运行时状态）都会擦掉标题 | `if !u.title.is_undefined()` 守住所发三态。这与 D7（`session/list` 的 `title` 缺省 ≠ 清除）是**同一条规则在另一条通道上的重犯**——D7 只在 `backfill_from_list` 里做对了，live 通知通道漏了 |
+
+**两条方法论教训**（比上面两个缺陷本身更值得记住）：
+
+1. **fake agent 是桩，测不到「真 agent 的时序」**。E-21 完全是时序问题（异步生成标题），桩不可能复现；E-22 也是（桩只在特定模式下发 `session_info_update`，不会发「带了 `_meta` 但不带 title」的那种）。凡是「等 agent 侧状态落地」的链路，必须有一次真机端到端。
+2. **同一规则跨通道必须逐条复查**。D7 想清楚了「缺省 ≠ 清除」，但只在一条通道上实现；另一条通道用的是同一个 `persist_title`，却用了一个把两态折一的便捷方法。规则写在计划文档里不等于实现在代码里——按通道逐个 grep 落点才对。
+
 ## 6. 验收标准
 
 - [x] 用户手写名的会话，agent 侧有自动标题也不覆盖（`persist_never_touches_the_user_supplied_name` / `backfill_never_touches_a_user_supplied_name` / `sessionDisplayName` 优先级单测三重钉住）

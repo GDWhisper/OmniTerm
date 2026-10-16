@@ -510,14 +510,23 @@ async fn on_agent_notification(
     if let SessionUpdate::SessionInfoUpdate(u) = &notification.update
         && let Some(handle) = config_prefs_slot.lock().ok().and_then(|g| g.clone())
     {
-        // `MaybeUndefined`：Undefined = 本帧没提 title（不动），Null = agent 主动
-        // 清除（落 NULL），Value = 新标题。空串/纯空白按无可用标题处理。
-        title::persist_title(
-            &handle.db,
-            &handle.db_session_id,
-            u.title.value().map(String::as_str),
-        )
-        .await;
+        // `MaybeUndefined` 三态必须分开对待（协议原文："Set to null to clear"）：
+        //   Undefined = 本帧没提 title → **不动**，一条也不写
+        //   Null      = agent 主动清除 → 落 NULL
+        //   Value     = 新标题
+        // **不能**图省事传 `u.title.value()`：它把 Undefined 与 Null 都折成 `None`，
+        // 而 `persist_title(None)` 是清除语义——于是 agent 发任何一条不带 title 的
+        // `session_info_update`（实测 opencode / pi-acp 用这个变体推 `_meta` 运行时
+        // 状态）都会把已回填好的标题擦掉。2026-10-16 实测复现：库里的
+        // `opencode 添加自定义供应商` 被擦成 NULL，而 agent 侧标题仍在。
+        if !u.title.is_undefined() {
+            title::persist_title(
+                &handle.db,
+                &handle.db_session_id,
+                u.title.value().map(String::as_str),
+            )
+            .await;
+        }
     }
     handler::handle_session_update(tx, SeqNotification { seq, notification })
 }
@@ -1428,10 +1437,15 @@ impl AcpClient {
     /// `session/list` 反查。没有这个触发点，那些 agent 的会话名就永远停在
     /// `${agent}_${时间}`，除非用户手动打开「Agent 历史」面板。
     ///
-    /// 三道门控，任一不满足就**一个 RPC 都不发**：
+    /// 两道门控，任一不满足就**一个 RPC 都不发**：
     /// 1. 用户已命名（`name` 非空白）——那一行的名字由用户说了算；
-    /// 2. 已有 `agent_title`——再查只会拿到同值（写放大防线）；
-    /// 3. agent 未声明 `sessionCapabilities.list`——问了也是 `-32601`。
+    /// 2. agent 未声明 `sessionCapabilities.list`——问了也是 `-32601`。
+    ///
+    /// **刻意没有「已有 `agent_title` 就别问」这一道**：opencode 的真标题是异步
+    /// 生成的，turn 结束那一刻查到的可能是建会话时的占位串
+    /// `New session - <ISO>`（真机实测，见 `title::workspace_to_refresh_title`）。
+    /// 加那道门控会把占位串永久锁死。写放大由 `persist_title` 的同值跳过把守：
+    /// 标题没变就是 0 次写入。
     ///
     /// **门控 1 的权威判据在 SQL 里，不在这里**：用户可以在 turn 进行中的任意
     /// 一刻改名，与本方法真并发。这里的事前查询只是省 RPC 的优化；竞态下最坏
@@ -1443,8 +1457,9 @@ impl AcpClient {
         if !self.supports_list_session() {
             return;
         }
-        let Some(workspace_path) = title::workspace_needing_title(db, db_session_id).await else {
-            return; // 已命名 / 已有标题 / 行不存在
+        let Some(workspace_path) = title::workspace_to_refresh_title(db, db_session_id).await
+        else {
+            return; // 已命名 / 行不存在
         };
         let listed =
             tokio::time::timeout(TITLE_REFRESH_TIMEOUT, self.list_sessions(Some(&workspace_path)))

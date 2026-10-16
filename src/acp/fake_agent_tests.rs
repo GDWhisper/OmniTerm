@@ -1115,6 +1115,49 @@ async fn title_null_notification_clears_the_snapshot() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 回归（2026-10-16 实测复现）：`session_info_update` **不带** title 字段时，
+/// 已回填的标题必须**原样保留**。
+///
+/// `MaybeUndefined` 三态里 `Undefined`（字段缺席）与 `Null`（显式清除）是两回事，
+/// 协议原文 "Set to null to clear" 只授权后者。但 `MaybeUndefined::value()` 把
+/// 两者都折成 `None`，而 `persist_title(None)` 正是清除语义——于是 agent 发任何
+/// 一条不带 title 的 `session_info_update`（实测 opencode / pi-acp 用这个变体推
+/// `_meta` 运行时状态）都会把标题擦掉。实测后果：库里的
+/// `opencode 添加自定义供应商` 被擦成 NULL，而 agent 侧标题仍在，侧栏名字凭空消失。
+#[tokio::test]
+async fn title_absent_notification_keeps_the_snapshot() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("title-absent");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let db = crate::acp::test_db::test_pool().await;
+    sqlx::query("UPDATE sessions SET agent_title = 'previous title' WHERE id = 's1'")
+        .execute(&db)
+        .await
+        .expect("seed agent_title");
+
+    let client = spawn_connect(agent_for(&script, "title_absent", &dir), workspace).await;
+    client.attach_config_prefs(db.clone(), "s1".to_string(), "agent1".to_string()).await;
+
+    client.mark_prompt_active();
+    tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt 正常链路应返回 Ok");
+    client.mark_prompt_idle();
+
+    assert_eq!(
+        load_agent_title(&db, "s1").await.as_deref(),
+        Some("previous title"),
+        "title 字段缺席 = 本帧没提，必须原样保留（只有 title:null 才是清除）"
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 async fn load_agent_title(db: &sqlx::SqlitePool, session_id: &str) -> Option<String> {
     sqlx::query_scalar("SELECT agent_title FROM sessions WHERE id = ?")
         .bind(session_id)

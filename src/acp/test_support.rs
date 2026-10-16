@@ -209,14 +209,25 @@ while IFS= read -r line; do
           printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"usage_update","used":1234,"size":200000}}}\n'
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
           ;;
-        title|title_null)
-          # agent 侧会话标题（§17.2）。title_null 用 JSON null 表达「清除」，
-          # 与省略字段（不变）是两种语义，消费方必须区分。
-          if [ "$FAKE_MODE" = "title_null" ]; then
-            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":null,"updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
-          else
-            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":"  fake agent title  ","updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
-          fi
+        title|title_null|title_absent)
+          # agent 侧会话标题（§17.2）。三种形态对应 MaybeUndefined 三态：
+          #   title        → Value（新标题）
+          #   title_null   → Null（协议规定的显式清除）
+          #   title_absent → 字段整个缺席（「本帧没提」）
+          # 后两者消费方必须区分：把缺席当清除，agent 发任何一条不带 title 的
+          # session_info_update 就会擦掉已回填好的标题。
+          case "$FAKE_MODE" in
+            title_null)
+              printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":null,"updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
+              ;;
+            title_absent)
+              # 只带 _meta：照抄实测形态（opencode / pi-acp 用这个变体推运行时状态）。
+              printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","_meta":{"running":true}}}}\n'
+              ;;
+            *)
+              printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":"  fake agent title  ","updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
+              ;;
+          esac
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
           ;;
         perm)

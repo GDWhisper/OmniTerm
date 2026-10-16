@@ -725,7 +725,11 @@ agent 不支持）不依赖活连接即可单测；第二段端点的前置错�
 
 **「用户已命名」是 UPDATE 里的原子判据，不是调用方先查后写**（`persist_title` 的 WHERE 带 `name IS NULL OR TRIM(name, <ASCII 空白六种>) = ''`）：用户可以在 turn 进行中的任意一刻改名，与跑在别的任务上的 live 通知 / turn 结束反查**真并发**。先读 `name` 再决定写不写，「读」与「写」之间会被改名插进来。判据下沉到 SQL 后靠单语句原子性关死该竞态，无需锁或事务协调；调用方的事前查询只是省 RPC 的优化。`TRIM` 必须显式列字符集——SQLite 的 `TRIM(x)` 只去空格，而前端 `sessionDisplayName` 用的是 JS `trim()`（去全部空白），两侧口径分叉会出现「界面显示 agent 标题、库里却再也不回填」。空白名可达：`PATCH /sessions/{id}` 用 `COALESCE(?, name)`，送 `{"name":""}` 会真落下空串。
 
-**`refresh_agent_title` 的三道门控**（任一不满足**一个 RPC 都不发`）：① 用户已命名；② 已有 `agent_title`（写放大防线）；③ agent 未声明 `sessionCapabilities.list`（`AcpClient::supports_list_session()`，initialize 现场捕获、不落库）。第三道与 `list_sessions` 自身「不做能力 gate」是**有意分歧**：面板路径必须把「不支持」如实呈现给用户，后台自动路径跳过即最优解（实测 codebuddy 连 `sessionCapabilities` 都不声明且方法 `-32601`，盲问 = 每轮 turn 一次无效往返 + 一条 WARN）。RPC 限时 5s（`TITLE_REFRESH_TIMEOUT`，比临时拉起的 15s 短——连接早已建好，只是一次往返），best-effort：失败只 WARN，不影响 turn 收尾。
+**`refresh_agent_title` 的两道门控**（任一不满足**一个 RPC 都不发**）：① 用户已命名；② agent 未声明 `sessionCapabilities.list`（`AcpClient::supports_list_session()`，initialize 现场捕获、不落库）——实测 codebuddy 连 `sessionCapabilities` 都不声明且方法 `-32601`，盲问 = 每轮 turn 一次无效往返 + 一条 WARN。第二道与 `list_sessions` 自身「不做能力 gate」是**有意分歧**：面板路径必须把「不支持」如实呈现给用户，后台自动路径跳过即最优解。RPC 限时 5s（`TITLE_REFRESH_TIMEOUT`，比临时拉起的 15s 短——连接早已建好，只是一次往返），best-effort：失败只 WARN，不影响 turn 收尾。
+
+**刻意没有「已有 `agent_title` 就别问」这道门控**（真机实测教训，见计划 E-21）：opencode 的真标题**异步**生成，turn 结束那一刻查到的是建会话时分配的占位串 `New session - <ISO>`（实测 `prompt_done` 后 2s 库里的值还是它），约 1.5s 后才落到 agent 侧。加那道门控会把占位串**永久锁死**。写放大由 `persist_title` 的同值跳过把守（标题没变 = 0 次写入）。
+
+**live 通知通道的 `MaybeUndefined` 三态必须分开**（真机实测教训，见计划 E-22）：`Undefined`（字段缺席）= 本帧没提 title → **一条也不写**；`Null` = agent 主动清除 → 落 NULL；`Value` = 新标题。**不能**传 `MaybeUndefined::value()`——它把前两者都折成 `None`，而 `persist_title(None)` 正是清除语义，于是 agent 发任何一条不带 title 的 `session_info_update`（实测 opencode / pi-acp 用这个变体推 `_meta` 运行时状态）都会擦掉已回填好的标题。协议原文只授权 "Set to null to clear"。
 
 **cwd 在 `AcpClient::list_sessions` 内部归一**（`normalize_agent_cwd`，与 session/new、session/load 共用同一个 helper）：opencode 对该参数做**字符串级过滤**，而它建会话时会把 `/home/pax/` 规范化成 `/home/pax` 再存——带斜杠查回来是**空列表**（实测 25 条 vs 0 条），而空列表被读成「这个目录没有历史」，面板不报错、用户与代码都无法察觉。归一必须落在方法内部这个收口上：落在调用点就等于要求每个未来的调用方都记得，而 2026-10-16 正是这么漏的。
 
