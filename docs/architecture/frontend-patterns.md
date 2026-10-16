@@ -89,12 +89,17 @@
   `MAX_SEARCH_MATCHES`（10000）截断（§P1 装饰集合无界增长）。
 - **装饰经 StateField + StateEffect 灌入**：匹配区间在 React 侧算好，
   `Decoration.mark({ class: 'cm-searchMatch' })` 整体替换；文档变更（打字）
-  经 updateListener 自增 `docVersion` 触发重算。滚动定位只在「翻匹配 /
-  查询变化」时做（`scrolledIndexRef` 区分），打字不抢用户光标。
+  经 updateListener 自增 `docVersion` 触发重算。滚动定位在「匹配导航与查询
+  参数变化」时做：查询参数变化（查询逐键收窄）会清掉 `scrolledIndexRef`
+  强制重定位，视口跟随收窄后的首个匹配——与浏览器内置查找同行为
+  （2026-10-16 前守卫会误拦，搜到结果视口不跳）；仅文档编辑触发的重算不重置，
+  不抢用户在编辑器里的光标。定位同时把编辑器选区同步到匹配区间
+  （Esc 退出搜索后光标即站在目标上）。
 - **面板是浮层**：`.pixel-float`（§6.1）+ `.fm-editor-search-*`（index.css），
   覆盖在编辑器右上角；工具栏按钮 `onMouseDown` preventDefault 不抢输入框焦点
-  （Tab 仍可达）。Enter / Shift+Enter 翻匹配，Esc 收起并聚焦回编辑器
-  （编辑器侧 keymap 同步一份，焦点在编辑器里时也能关）。
+  （Tab 仍可达）。Enter / Shift+Enter / ↓ / ↑ 翻匹配，Esc 收起并聚焦回编辑器
+  （编辑器侧 keymap 同步一份，焦点在编辑器里时也能关）；输入法组合态
+  （`isComposing`）的按键不拦截，归 IME 消费（候选词确认/选择不被导航打断）。
 - **只覆盖源码/编辑态**：markdown / html 预览是 DOM 文本，浏览器自带查找
   照常可用，不重复造轮子。
 

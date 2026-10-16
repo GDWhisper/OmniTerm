@@ -217,7 +217,8 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
   const [current, setCurrent] = useState(0)
   // 文档版本号：编辑会让所有匹配区间失效，靠它触发重算（updateListener 里自增）
   const [docVersion, setDocVersion] = useState(0)
-  // 已滚动定位到的匹配下标：区分「用户翻匹配」与「打字引起的重算」，避免打字被滚动打断
+  // 最近一次滚动定位到的匹配下标（-1 = 未定位）：索引未变则不重复滚动。
+  // 查询参数变化时由搜索 effect 重置，保证匹配集重算后必然重新定位
   const scrolledIndexRef = useRef(-1)
   // 上一次参与计算的查询参数：查询串本身变化时回到第一个匹配
   const lastParamsRef = useRef({ query: '', caseSensitive: false, useRegex: false })
@@ -408,6 +409,11 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
       lastParamsRef.current.useRegex !== useRegex
     lastParamsRef.current = params
 
+    // 参数变化 = 匹配集重算：清掉「已定位」记忆，让本次重算必然重新定位到当前
+    // 匹配（逐键输入时视口跟随收窄后的首个匹配——与浏览器内置查找同行为）。
+    // 仅文档编辑触发的重算不重置：不抢用户在编辑器里的光标位置
+    if (paramsChanged) scrolledIndexRef.current = -1
+
     const result = computeMatches(view.state.doc.toString(), {
       query,
       caseSensitive,
@@ -427,10 +433,15 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
       ),
     })
 
-    // 只在「翻匹配 / 查询变化」时滚动定位：打字引起的重算不抢用户光标位置
+    // 定位时同步编辑器选区到匹配处（跳转后光标站在目标上：Esc 退出搜索即从
+    // 匹配处继续编辑）；索引未变则不动，避免编辑重算打断用户
     if (result.matches.length > 0 && scrolledIndexRef.current !== index) {
       scrolledIndexRef.current = index
-      view.dispatch({ effects: EditorView.scrollIntoView(result.matches[index].from) })
+      const match = result.matches[index]
+      view.dispatch({
+        selection: { anchor: match.from, head: match.to },
+        effects: EditorView.scrollIntoView(match.from),
+      })
     }
 
     setMatches(result.matches)
@@ -439,7 +450,7 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
     if (index !== current) setCurrent(index)
   }, [query, caseSensitive, useRegex, searchOpen, docVersion, current])
 
-  // 上一个 / 下一个匹配（回车在输入框里同一通道，面板按钮共用）
+  // 上一个 / 下一个匹配（输入框的 Enter / Shift+Enter / ↓ / ↑ 与面板按钮共用）
   const goToMatch = (delta: number) => {
     if (matches.length === 0) return
     const base = Math.min(Math.max(current, 0), matches.length - 1)
@@ -483,9 +494,18 @@ export function FileEditor({ content, editable, fileName, onChange, onSave, sear
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
+              // 输入法组合中（如中文候选词）：Enter / ↑↓ / Esc 归 IME 消费，
+              // 不能 preventDefault 也不能当导航键（否则候选词确认/选择被打断）
+              if (e.nativeEvent.isComposing) return
               if (e.key === 'Enter') {
                 e.preventDefault()
                 goToMatch(e.shiftKey ? -1 : 1)
+              } else if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                goToMatch(1)
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                goToMatch(-1)
               } else if (e.key === 'Escape') {
                 e.preventDefault()
                 closeSearch()

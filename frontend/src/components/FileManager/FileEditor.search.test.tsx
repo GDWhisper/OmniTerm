@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot, type Root } from 'react-dom/client'
 import { act, useState } from 'react'
 import { I18nextProvider } from 'react-i18next'
+import { EditorView } from '@codemirror/view'
 import i18n from '../../i18n'
 import { FileEditor } from './FileEditor'
 
@@ -10,12 +11,16 @@ import { FileEditor } from './FileEditor'
  * - Ctrl/Cmd+F 在编辑器容器捕获阶段被拦截（defaultPrevented）并打开面板，
  *   而不是放行浏览器内置查找——这条是用户报告的缺口本体
  * - 查询 → 全量高亮 + 计数；Aa 区分大小写切换实时收窄匹配
+ * - Enter / Shift+Enter / ↓ / ↑ 逐个跳转匹配并同步编辑器选区；查询逐键收窄时
+ *   视口跟随首个匹配（参数变化必然重新定位）；文档编辑重算不抢用户光标
  * - Esc 收起面板并通知受控方
  *
  * 匹配计算的边界（正则非法 / 零长匹配 / 截断）在 fileSearch.test.ts 纯函数层。
  */
 
 const SAMPLE = 'foo bar foo baz FOO'
+/** 'a' 首匹配在 0，'ap' 首匹配只在末行（from=10）：验证逐键输入时定位跟随收窄 */
+const NAV_SAMPLE = 'alpha\nzzz\napricot'
 
 function renderEditor(content: string, onOpenChange?: (open: boolean) => void) {
   const container = document.createElement('div')
@@ -89,6 +94,28 @@ async function typeQuery(input: HTMLInputElement, value: string) {
   })
 }
 
+/** 在搜索输入框上派发按键（返回事件，供 defaultPrevented 断言） */
+async function pressKey(input: HTMLElement, key: string, init: KeyboardEventInit = {}) {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
+  await act(async () => {
+    input.dispatchEvent(event)
+  })
+  return event
+}
+
+/** 当前选中档（.cm-searchMatch-selected）在全部渲染匹配中的序号，-1 = 不在 DOM */
+function selectedOrdinal(container: HTMLElement): number {
+  const all = [...container.querySelectorAll('.cm-searchMatch')]
+  return all.findIndex((el) => el.classList.contains('cm-searchMatch-selected'))
+}
+
+/** 从 DOM 找 CodeMirror 实例（选区断言用） */
+function getView(container: HTMLElement): EditorView {
+  const view = EditorView.findFromDOM(container.querySelector('.cm-editor') as HTMLElement)
+  expect(view).toBeTruthy()
+  return view!
+}
+
 describe('FileEditor in-editor search', () => {
   let container: HTMLElement
   let root: Root
@@ -100,6 +127,7 @@ describe('FileEditor in-editor search', () => {
   afterEach(() => {
     root?.unmount()
     container?.remove()
+    vi.restoreAllMocks()
   })
 
   it('intercepts Ctrl+F and opens the drawer search panel instead of the browser find', async () => {
@@ -181,5 +209,130 @@ describe('FileEditor in-editor search', () => {
       expect(container.querySelector('.fm-editor-search')).toBeFalsy()
     })
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('navigates matches with Enter / Shift+Enter / ArrowDown / ArrowUp', async () => {
+    const rendered = renderEditor(SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+    await typeQuery(input, 'foo')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+    expect(selectedOrdinal(container)).toBe(0)
+
+    await pressKey(input, 'Enter')
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(1))
+
+    await pressKey(input, 'ArrowDown')
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(2))
+
+    await pressKey(input, 'ArrowUp')
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(1))
+
+    await pressKey(input, 'Enter', { shiftKey: true })
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(0))
+
+    // 回绕：第一个再往上回到最后一个
+    await pressKey(input, 'ArrowUp')
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(2))
+  })
+
+  it('leaves navigation keys to the IME while composing', async () => {
+    const rendered = renderEditor(SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+    await typeQuery(input, 'foo')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+
+    // 组合态（中文候选词确认/选择）：Enter 与 ↓ 不导航、不 preventDefault
+    const enter = await pressKey(input, 'Enter', { isComposing: true })
+    expect(enter.defaultPrevented).toBe(false)
+    expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+
+    const down = await pressKey(input, 'ArrowDown', { isComposing: true })
+    expect(down.defaultPrevented).toBe(false)
+    expect(selectedOrdinal(container)).toBe(0)
+  })
+
+  it('moves the editor selection onto the focused match', async () => {
+    const rendered = renderEditor(SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+    await typeQuery(input, 'foo')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+
+    let sel = getView(container).state.selection.main
+    expect([sel.from, sel.to]).toEqual([0, 3])
+
+    await pressKey(input, 'Enter')
+    await vi.waitFor(() => expect(selectedOrdinal(container)).toBe(1))
+    sel = getView(container).state.selection.main
+    expect([sel.from, sel.to]).toEqual([8, 11])
+  })
+
+  it('jumps to the first match while typing narrows the query', async () => {
+    const spy = vi.spyOn(EditorView, 'scrollIntoView')
+    const rendered = renderEditor(NAV_SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+
+    await typeQuery(input, 'a')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+    expect(spy.mock.calls.at(-1)?.[0]).toBe(0)
+
+    await typeQuery(input, 'ap')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/1')
+    })
+    // 修复点：查询收窄后首匹配换到末行，参数变化必须重新定位而不是被「已在 0」拦截
+    expect(spy.mock.calls.at(-1)?.[0]).toBe(10)
+  })
+
+  it('does not re-scroll on document edits while the match index is unchanged', async () => {
+    const spy = vi.spyOn(EditorView, 'scrollIntoView')
+    const rendered = renderEditor(SAMPLE)
+    container = rendered.container
+    root = rendered.root
+    await waitForEditor(container)
+
+    await pressCtrlF(container)
+    const input = await waitForSearchPanel(container)
+    await typeQuery(input, 'foo')
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+    const callsBefore = spy.mock.calls.length
+
+    // 模拟用户在编辑器里打字：docVersion 触发的重算不应抢走光标/视口
+    await act(async () => {
+      getView(container).dispatch({ changes: { from: 0, insert: 'x' } })
+    })
+    await vi.waitFor(() => {
+      expect(container.querySelector('.fm-editor-search-count')?.textContent).toBe('1/3')
+    })
+    expect(spy.mock.calls.length).toBe(callsBefore)
   })
 })
