@@ -27,8 +27,12 @@ import { clearAllLiveTurnStats, clearLiveTurnStats, setLiveTurnStats } from '../
 // `src/acp/turn_accumulator.rs`）。
 // 结算主段（2026-10-16，计划 E25）：「已工作 x分x秒」替换为「结束于 HH:mm」
 // （`finishedAt` + formatHoverTime 智能缩写）；无 finishedAt 的历史行整段不渲染
-// （不回退「已工作」——用户拍板历史数据不兜底）。「已工作」仍保留在 hover
-// tooltip 第一段与收纳行标题里。
+// （不回退「已工作」——用户拍板历史数据不兜底）。「已工作」保留在收纳行标题里。
+//
+// hover 说明浮层（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」+
+// 「复用 OmniTerm 风格，不要浏览器原生白底」）：文案收敛为一句 `chat.msg.omniComputed`，
+// 只在屏幕上真有估算读数（工具耗时 / tps）时挂；样式走 `.chat-meta-tip-float`
+// （`.pixel-float` 本体 + absolute/opacity），不再用原生 `title`。
 // 独立的轻量测试文件，避免给 ChatMessage 的其余渲染路径建重 harness。
 
 let container: HTMLDivElement
@@ -80,9 +84,13 @@ function readingSegments(): HTMLSpanElement[] {
   )
 }
 
-/** 元信息行读数容器（三个读数段的父节点）的 hover tooltip。 */
-function metaTitle(): string {
-  return readingSegments()[0]?.parentElement?.title ?? ''
+/** 元信息行读数容器（三个读数段的父节点）上的 hover 说明浮层文本。空串 = 没挂浮层
+ *  （没有需要解释的估算读数）——流式路径用 display:none 表达「没挂」。 */
+function metaTip(): string {
+  const row = metaRow()
+  const float = row?.querySelector<HTMLSpanElement>('.chat-meta-tip-float')
+  if (!float) return ''
+  return float.style.display === 'none' ? '' : float.textContent ?? ''
 }
 
 /** 元信息行**可见**的读数段：流式路径把缺省段 display:none 掉（仍占 DOM），故再滤一层
@@ -153,8 +161,8 @@ describe('ChatMessageView meta row line breaking', () => {
 
   it('drops the whole settled segment when the turn has no finishedAt (legacy row)', () => {
     // 用户 2026-10-16 拍板：历史数据不兜底——无结束时刻的老行不回退「已工作」，
-    // 结算段（含工具/tps 段）整段撤掉；时长仍可在 hover tooltip 之外的收纳行
-    // 标题看到（见 ChatMessage.process 测试）。
+    // 结算段（含工具/tps 段与 hover 说明）整段撤掉；时长仍可在收纳行标题看到
+    // （见 ChatMessage.process 测试）。
     act(() => {
       root.render(
         <ChatMessageView
@@ -165,7 +173,7 @@ describe('ChatMessageView meta row line breaking', () => {
       )
     })
     expect(readingSegments()).toHaveLength(0)
-    expect(metaTitle()).toBe('')
+    expect(metaTip()).toBe('')
   })
 
   it('splits the live reading the same way while streaming and follows pushed updates', () => {
@@ -200,11 +208,12 @@ describe('ChatMessageView meta row line breaking', () => {
   })
 })
 
-// 读数文案的**诚实口径**（2026-10-15 用户要求「hover 时诚实简单地说清楚」）：界面只出
-// 「工具 N秒 · R tok/s」不带「约/估算」前缀，性质说明全部收在 hover——ACP 不返回真实
-// token 速率、也不上报工具耗时，两个读数都是 omniterm 自己算的。
-describe('ChatMessageView meta row honest tooltips', () => {
-  it('says on the settled row that ACP reports no token rate and OmniTerm estimates it', () => {
+// hover 说明浮层（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」）：
+// 文案收敛为一句，且只在屏幕上真有估算读数（工具耗时 / tps）时挂——没有需要解释的
+// 数字就不挂。样式走 `.chat-meta-tip-float`（`.pixel-float` 本体），不是浏览器原生
+// `title`（白底系统 tooltip 与 OmniTerm 视觉语言冲突）。
+describe('ChatMessageView meta row hover note', () => {
+  it('shows one short OmniTerm-style note on the settled row and drops the native title', () => {
     act(() => {
       root.render(
         <ChatMessageView
@@ -214,15 +223,16 @@ describe('ChatMessageView meta row honest tooltips', () => {
         />,
       )
     })
-    const title = metaTitle()
-    expect(title).toContain('ACP 不返回真实 token 速率')
-    expect(title).toContain('由 omniterm 估算')
-    // 工具耗时同样标明「ACP 不上报」。
-    expect(title).toContain('ACP 不上报该数据')
+    expect(metaTip()).toBe('ACP 不提供该数据，由 OmniTerm 计算')
+    // 原生 title 已弃用：留着就会在自定义浮层之外再弹一个系统白底 tooltip。
+    expect(readingSegments()[0]?.parentElement?.title ?? '').toBe('')
+    // 浮层本体复用 .pixel-float（§6 统一浮层档）。
+    expect(metaRow()?.querySelector('.chat-meta-tip-float')?.className).toContain('pixel-float')
   })
 
-  it('explains only the readings that are actually on screen', () => {
-    // tps=null（无可测窗口）→ 那段说明不进 tooltip，否则等于让人去找不存在的数字。
+  it('drops the note when neither estimated reading is on screen', () => {
+    // toolMs=0（有效观测没记到工具）且 tps=null（无可测窗口）→ 屏幕上没有估算读数，
+    // 挂一句「这个数据怎么算的」只会让人去找不存在的数字。
     act(() => {
       root.render(
         <ChatMessageView
@@ -232,38 +242,29 @@ describe('ChatMessageView meta row honest tooltips', () => {
         />,
       )
     })
-    const title = metaTitle()
-    // 时长仍以「已工作 x分x秒」留在 tooltip 第一段（正文主段已换成「结束于」）。
-    expect(title).toContain('已工作 2秒')
-    expect(title).not.toContain('token 速率')
-    expect(title).not.toContain('工具执行时长')
+    expect(metaTip()).toBe('')
+    expect(visibleReadingSegments().map((el) => el.textContent)).toEqual(['结束于 14:32'])
   })
 
-  it('keeps the live tooltip in sync with the pushed frame', () => {
+  it('keeps the live note in sync with the pushed frame', () => {
     setLiveTurnStats('s4', { workMs: 6_000, toolMs: null, tps: null })
     act(() => {
       root.render(
         <ChatMessageView message={assistant({ streaming: true })} sessionId="s4" isLastAssistant />,
       )
     })
-    // 只有工作段：tooltip 不该出现工具/速率的说明。
+    // 只有工作段（后端实测，非估算）→ 不挂说明。
     expect(visibleReadingSegments()).toHaveLength(1)
-    const workOnly = metaTitle()
-    expect(workOnly).toContain('工作时长')
-    expect(workOnly).not.toContain('token 速率')
-    expect(workOnly).not.toContain('工具执行时长')
+    expect(metaTip()).toBe('')
 
-    // 推送带上工具与速率 → tooltip 补上两段说明，其中速率那段是诚实口径。
+    // 推送带上工具与速率 → 挂上那句说明。
     act(() => setLiveTurnStats('s4', { workMs: 9_000, toolMs: 3_000, tps: 400 }))
     expect(visibleReadingSegments()).toHaveLength(3)
-    const title = metaTitle()
-    expect(title).toContain('ACP 不返回真实 token 速率')
-    expect(title).toContain('由 omniterm 估算')
-    expect(title.startsWith('由后端实时结算的工作时长')).toBe(true)
+    expect(metaTip()).toBe('ACP 不提供该数据，由 OmniTerm 计算')
   })
 
-  it('re-translates the live tooltip when the language changes', async () => {
-    // tooltip 唯一写入方是 effect 里的 draw()（直写 DOM），推送帧覆盖不到语言切换，
+  it('re-translates the live note when the language changes', async () => {
+    // 浮层唯一写入方是 effect 里的 draw()（直写 DOM），推送帧覆盖不到语言切换，
     // 只能靠 effect 因 `t`/`i18n` 变化重跑——这条路径没有任何推送触发，必须显式钉住。
     setLiveTurnStats('s5', { workMs: 9_000, toolMs: 3_000, tps: 400 })
     act(() => {
@@ -271,7 +272,7 @@ describe('ChatMessageView meta row honest tooltips', () => {
         <ChatMessageView message={assistant({ streaming: true })} sessionId="s5" isLastAssistant />,
       )
     })
-    expect(metaTitle()).toContain('由 omniterm 估算')
+    expect(metaTip()).toBe('ACP 不提供该数据，由 OmniTerm 计算')
     expect(visibleReadingSegments().map((el) => el.textContent)).toEqual([
       '工作中 9秒',
       ' · 工具 3秒',
@@ -281,7 +282,7 @@ describe('ChatMessageView meta row honest tooltips', () => {
     await act(async () => {
       await i18n.changeLanguage('en')
     })
-    expect(metaTitle()).toContain('OmniTerm estimates it')
+    expect(metaTip()).toBe('ACP does not provide this data; OmniTerm computes it')
     expect(visibleReadingSegments().map((el) => el.textContent)).toEqual([
       'working 9s',
       ' · tools 3s',
@@ -289,38 +290,37 @@ describe('ChatMessageView meta row honest tooltips', () => {
     ])
   })
 
-  it('clears the live tooltip when the turn is voided', () => {
+  it('clears the live note when the turn is voided', () => {
     // turn 作废（prompt_done / prompt_error / turn_state inactive）→ clearLiveTurnStats(null)
-    // → 三段读数与 tooltip 一起撤掉；留着旧 tooltip 会解释已经不在屏幕上的数字。
+    // → 三段读数与说明一起撤掉；留着旧说明会解释已经不在屏幕上的数字。
     setLiveTurnStats('s6', { workMs: 9_000, toolMs: 3_000, tps: 400 })
     act(() => {
       root.render(
         <ChatMessageView message={assistant({ streaming: true })} sessionId="s6" isLastAssistant />,
       )
     })
-    expect(metaTitle()).toContain('由 omniterm 估算')
+    expect(metaTip()).toBe('ACP 不提供该数据，由 OmniTerm 计算')
 
     act(() => clearLiveTurnStats('s6'))
-    expect(metaTitle()).toBe('')
+    expect(metaTip()).toBe('')
     expect(visibleReadingSegments()).toHaveLength(0)
   })
 })
 
 // 诚实口径必须**两个 locale 同时成立**：上面的渲染断言只跑当前语言（beforeEach 固定 zh），
-// 而 en 是 fallbackLng——文案若被润色回「est./约 + 后端估算」的旧措辞，「hover 诚实说清楚」
-// 会在 en 侧被静默推翻。故直接钉两份 JSON 的文案语义（与 Settings.test.tsx 的 en/zh 对齐
-// 断言同一模式），不依赖渲染路径。
+// 而 en 是 fallbackLng——文案若被润色回「est./约 + 后端估算」的旧措辞，或在某一侧被
+// 写成长篇，「hover 只说一句」会在 en 侧被静默推翻。故直接钉两份 JSON 的文案语义
+// （与 Settings.test.tsx 的 en/zh 对齐断言同一模式），不依赖渲染路径。
 describe('meta row honest copy in both locales', () => {
   const enMap = en as Record<string, string>
   const zhMap = zh as Record<string, string>
 
-  it('states in both locales that ACP reports no rate and OmniTerm estimates it', () => {
+  it('states in both locales that ACP does not provide the data and OmniTerm computes it', () => {
     for (const [name, map] of [['en', enMap], ['zh', zhMap]] as const) {
-      expect(map['chat.msg.tpsTip'], name).toMatch(/token 速率|token rate/i)
-      expect(map['chat.msg.tpsTip'], name).toMatch(/ACP/)
-      expect(map['chat.msg.tpsTip'], name).toMatch(/OmniTerm|omniterm/)
-      // 工具耗时同样标明「ACP 不上报」。
-      expect(map['chat.msg.toolTimeTip'], name).toMatch(/ACP/)
+      expect(map['chat.msg.omniComputed'], name).toMatch(/ACP/)
+      expect(map['chat.msg.omniComputed'], name).toMatch(/OmniTerm/)
+      // 「只要这个意思」：一句话，不写计算口径、不写落库/刷新说明。
+      expect(map['chat.msg.omniComputed'], name).not.toMatch(/÷|burst|落库|刷新/)
     }
   })
 

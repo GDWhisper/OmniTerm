@@ -901,21 +901,22 @@ function renderBlock(
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  *
- * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每次
+ * **三个读数各自一个禁断行 span**：拆段是 DOM 结构而非文本，一次建好、之后每次
  * 推送只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
  * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
  *
- * **tooltip 只解释画出来的读数**（`visibleReadings` + `liveTip`）：工具耗时与 tps 各有
- * 「暫无」态（无输出 burst / 工具跟踪失效），整段撤掉后还挂一段「这个读数怎么算的」只会
- * 让人去找屏幕上不存在的数字。两条估算说明（`toolTimeTip` / `tpsTip`）本身都是
- * 「omniterm 自己算的、ACP 不上报」的诚实口径——界面文案刻意不带「约/估算」前缀，
- * 性质说明全部收在 hover 里；`workingTip` 说的是后端实测工作时长，不进诚实口径。
+ * **hover 说明浮层只解释画出来的估算读数**（`visibleReadings` + `liveTip`）：工具耗时与
+ * tps 各有「暫无」态（无输出 burst / 工具跟踪失效），两者都缺省时整段不挂——没有需要
+ * 解释的数字。文案只有一句「ACP 不提供该数据，由 OmniTerm 计算」（`chat.msg.omniComputed`）：
+ * 界面读数刻意不带「约/估算」前缀，性质说明全部收在这一句里（2026-10-16 用户要求
+ * 「只要这个意思」，此前两条上百字的 tooltip 太长）。浮层走 `.chat-meta-tip-float`
+ * （OmniTerm 风格），不是浏览器原生 `title`。
  *
- * **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，
+ * **浮层文本的唯一写入方是 draw()**（不写 JSX prop）：浮层与三个读数段同属直写 DOM 域，
  * deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按
  * `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，
- * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串，
+ * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把浮层抹成空串，
  * 而三段读数还留着最后一次 draw 的文本。
  */
 
@@ -937,13 +938,11 @@ function visibleReadings(stats: LiveTurnStats | null, locale?: string): VisibleR
   }
 }
 
-/** 当前读数对应的 tooltip：只收**会显示**的那几段（工作段有读数才有 tooltip）。 */
+/** 当前读数对应的 hover 说明：只有一句「ACP 不提供该数据，由 OmniTerm 计算」，
+ *  且只在屏幕上真有估算读数（工具耗时 / tps）时挂——两者都缺省时没有需要解释的数字。 */
 function liveTip(readings: VisibleReadings, t: TFunction): string {
-  if (!readings.dur) return ''
-  const tips = [t('chat.msg.workingTip')]
-  if (readings.toolDur) tips.push(t('chat.msg.toolTimeTip'))
-  if (readings.rate) tips.push(t('chat.msg.tpsTip'))
-  return tips.join(' · ')
+  if (!readings.toolDur && !readings.rate) return ''
+  return t('chat.msg.omniComputed')
 }
 
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
@@ -952,6 +951,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const workRef = useRef<HTMLSpanElement>(null)
   const toolRef = useRef<HTMLSpanElement>(null)
   const tpsRef = useRef<HTMLSpanElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     // 写一段：空值整段撤掉（display:none），flex 不留空位、分隔符也跟着消失。
@@ -975,23 +975,25 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
         write(toolRef.current, r.toolDur ? ` · ${t('chat.msg.toolTime', { dur: r.toolDur })}` : '')
         write(tpsRef.current, r.rate ? ` · ${t('chat.msg.tps', { tps: r.rate })}` : '')
       }
-      // tooltip 跟着可见段走（推送期直写 DOM，不进 React state）。
-      const tip = liveTip(r, t)
-      if (rootRef.current && rootRef.current.title !== tip) rootRef.current.title = tip
+      // hover 说明跟着可见段走（推送期直写 DOM，不进 React state）；绝对定位不占布局，
+      // display:none 时连 hover 都不触发（`.chat-meta-tip:hover` 只切 opacity）。
+      write(tipRef.current, liveTip(r, t))
     }
     draw(getLiveTurnStats(sessionId))
     return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
-  // title 不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
+  // 浮层文本不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
   return (
     <span
       ref={rootRef}
+      className="chat-meta-tip"
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
     >
       <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={tpsRef} style={CHAT_META_SEGMENT_STYLE} />
+      <span ref={tipRef} className="chat-meta-tip-float pixel-float" style={{ display: 'none' }} />
     </span>
   )
 }
@@ -1078,8 +1080,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // HH:mm，跨天带日期）；原主段「已工作 x分x秒」不再直接显示（替换，用户要求）。
   // 流式期没有该值（定稿才产生），主段换回 LiveWorkElapsed 实时读数（「工作中」）。
   // 缺失（迁移前的历史行）→ 主段不渲染，结算段整段随主段撤（用户拍板：历史数据
-  // 不兜底，不回退「已工作」，见 plan E25）。「已工作 x分x秒」仍保留在 hover
-  // tooltip（durationTip）与收纳行标题里。
+  // 不兜底，不回退「已工作」，见 plan E25）。「已工作 x分x秒」保留在收纳行标题里。
   const endText = message.finishedAt
     ? t('chat.msg.endedAt', { time: formatHoverTime(new Date(message.finishedAt).getTime()) })
     : null
@@ -1089,9 +1090,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
   // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
   const liveSessionId = isLive && !workText ? sessionId : undefined
-  // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
-  // 拿不到，按设计确认放弃该信息于移动端呈现。
-  const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
   // 定稿读数（工具耗时 / 估算速率）是**每条消息自己的**后端结算字段：来源与
   // `durationMs` 一致（hydrate 的 `GET /messages` 或 `prompt_done` 帧载荷），
   // 不再是会话级内存快照——历史行各自显示自己那一轮的值，刷新后常驻（E23）。
@@ -1099,14 +1097,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 三态语义（`format*` 收口）。
   const settledTps = formatTps(message.tps)
   const settledToolText = formatToolDuration(message.toolMs, i18n.language)
-  const durationTip = [
-    workText && t('chat.msg.workTime', { dur: workText }),
-    settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),
-    settledTps && t('chat.msg.tps', { tps: settledTps }),
-    waitText && t('chat.msg.waitTime', { dur: waitText }),
-    settledToolText && t('chat.msg.toolTimeTip'),
-    settledTps && t('chat.msg.tpsTip'),
-  ].filter(Boolean).join(' · ')
+  // hover 说明：只有一句「ACP 不提供该数据，由 OmniTerm 计算」，且只在屏幕上真有
+  // 估算读数（工具耗时 / tps）时挂——没有需要解释的数字就不挂（2026-10-16 用户要求
+  // 「只要这个意思」，此前是两条上百字的长 tooltip + 读数复述）。样式走
+  // `.chat-meta-tip-float`（OmniTerm 风格浮层），不是浏览器原生 title。
+  const settledTip = settledToolText || settledTps ? t('chat.msg.omniComputed') : null
   // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
   // 而这一行是正文块的兄弟节点，CSS 表达不了「和上面某个块右缘对齐」，只能量。
   const rowRef = useRef<HTMLDivElement>(null)
@@ -1403,21 +1398,21 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}
           {/* 结算段主段 = 「结束于 14:32」（`endText`）；无结束时刻（迁移前的历史行）
               → 整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）。正文处不再
-              显示时长——时长仍在 hover tooltip 第一段与收纳行标题里。
-              「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
+              显示时长——时长保留在收纳行标题里。
               `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}
           {endText && (
             <span
+              className="chat-meta-tip"
               style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
-              title={durationTip}
             >
-              {/* 三个读数各一个 nowrap 段：换行只发生在段间，数字不与单位分离
-                  （同 LiveWorkElapsed，见 CHAT_META_TEXT_STYLE）。 */}
+              {/* 三个读数各一个禁断行段：换行只发生在段间，数字不与单位分离
+                  （同 LiveWorkElapsed，见 CHAT_META_SEGMENT_STYLE）。 */}
               <span style={CHAT_META_SEGMENT_STYLE}>{endText}</span>
               {settledToolText && (
                 <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}</span>
               )}
               {settledTps && <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.tps', { tps: settledTps })}`}</span>}
+              {settledTip && <span className="chat-meta-tip-float pixel-float">{settledTip}</span>}
             </span>
           )}
         </div>

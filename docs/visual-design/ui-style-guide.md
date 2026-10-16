@@ -522,14 +522,18 @@ assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps �
 
 | 态 | 文案 | 色板 | 性质 |
 |---|---|---|---|
-| 结算（定稿后） | `结束于 14:32 · 工具 30秒 · 12.3 tok/s` | `--text-faint` | 后端定稿时刻（RFC3339 落库，`formatHoverTime` 智能缩写：今天 HH:mm、跨天带日期）+ omniterm 估算的工具耗时/tps；「已工作 x分x秒」只在 hover tooltip 与收纳行标题（E25） |
+| 结算（定稿后） | `结束于 14:32 · 工具 30秒 · 12.3 tok/s` | `--text-faint` | 后端定稿时刻（RFC3339 落库，`formatHoverTime` 智能缩写：今天 HH:mm、跨天带日期）+ omniterm 估算的工具耗时/tps；工作时长只在收纳行标题（E25） |
 | 流式实时 | `工作中 42秒 · 工具 30秒 · 12.3 tok/s` | `--text-muted`（提亮一档） | 后端 `turn_stats` 推送，前端只显示不计算 |
 
 - 两者共用 `CHAT_META_TEXT_STYLE`（`0.769em` + reader 字体 + `tabular-nums`）。右侧对齐的 `marginLeft:auto` / `textAlign:right` 只加在结算值上。
 - **流式实时读数固定单行**（2026-10-14 用户报告窄正文块下三段堆成三行）：三个读数段全 nowrap，而行宽实测自最后一个正文块——它是窄工具卡 / 刚起的文本泡时三段放不下，`flex-wrap` 会拆成一行一段，且正文变宽过程中 3→2→1 行重排（观感抖动）。故流式期整行以 `min-width:max-content` 托到单行内容宽度（窄气泡下允许横向超出气泡）。**结算值不托**：仍按「动作栏 + 结算值放不下才换行」，右缘贴气泡；元信息文字窄屏折行规则只对结算值生效。
 - 实时态只在 `message.streaming` 且该会话有在建 turn 时出现；动作栏此时恒空（五个动作的 `visible` 全部硬排 streaming），定稿瞬间同一槽位被结算值替换——**不给两个数字并排的机会**。
-- **结算段的显示门控是 `finished_at`（E25）**：为 NULL（迁移前的历史行）→ 结算段整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）；同一批存量行的工具/速率段随之消失，时长仍保留在 hover tooltip 与收纳行标题。
-- **读数文案不带「约 / 估算」前缀，性质说明全部收在 hover**（2026-10-15 用户要求「hover 时诚实简单地说清楚」）：工具耗时与 tps 都是 omniterm 自己算的——ACP 不返回真实 token 速率、也不上报工具耗时（`usage_update` 只有上下文配额，见 `docs/reference/acp-protocol-reference.md` §6.7），tps = 观测到的正文与思考字符 ÷ 4 ÷ 模型真正在流式输出的时段（burst 白名单，E20），工具耗时 = 执行并集按封口测量（E18/E19）。两条 tooltip（`chat.msg.toolTimeTip` / `chat.msg.tpsTip`）把「ACP 不上报 → omniterm 估算」写在最前，并随读数的有无增删——**tooltip 只解释屏幕上画出来的读数**，缺省段（尚无输出 burst / 工具跟踪失效）整段撤掉时其说明也不进 tooltip。`chat.msg.workingTip` 说明的是后端实测工作时长（墙钟 − 审批等待，非估算），不进诚实口径。详细口径见工作时长计划 E13–E20/E23，文案翻盘见 E24。
+- **结算段的显示门控是 `finished_at`（E25）**：为 NULL（迁移前的历史行）→ 结算段整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）；同一批存量行的工具/速率段与 hover 说明随之消失，工作时长仍保留在收纳行标题。
+- **读数文案不带「约 / 估算」前缀，性质说明收在 hover 浮层**（2026-10-15 用户要求「hover 时诚实简单地说清楚」）：工具耗时与 tps 都是 omniterm 自己算的——ACP 不返回真实 token 速率、也不上报工具耗时（`usage_update` 只有上下文配额，见 `docs/reference/acp-protocol-reference.md` §6.7），tps = 观测到的正文与思考字符 ÷ 4 ÷ 模型真正在流式输出的时段（burst 白名单，E20），工具耗时 = 执行并集按封口测量（E18/E19）。详细口径见工作时长计划 E13–E20/E23，文案翻盘见 E24。
+- **hover 浮层：一句文案 + OmniTerm 风格**（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」+「复用 OmniTerm 风格，不要浏览器原生白底」）。此前是两条上百字的长 tooltip（计算口径、并行工具去重、审批扣除、落库/刷新说明）外加一遍读数复述，**全部收敛为一句** `chat.msg.omniComputed`：zh「ACP 不提供该数据，由 OmniTerm 计算」/ en「ACP does not provide this data; OmniTerm computes it」。
+  - **门控**：只在屏幕上真有估算读数（工具耗时 / tps）时挂。两者都缺省（尚无输出 burst / 工具跟踪失效）时没有需要解释的数字，整段不挂；结算行的门控是 `finished_at`，历史行连读数带说明一起撤。
+  - **视觉**：本体复用 `.pixel-float`（§6 统一浮层档：`--bg-elevated` 底 + `2px --border-strong` 边 + `4px 4px 0 --pixel-shadow` 硬投影），文字 `--text-primary` + reader 字体，`padding: 3px 8px`、`white-space: nowrap`（一句恒单行）、`opacity` 过渡 + `pointer-events: none`，`z-index: 30`。**禁用原生 `title`**——浏览器原生 tooltip 是白底黑字的系统样式，与 OmniTerm 视觉语言冲突。
+  - **定位**：元素挂在读数 span 内，但定位基准是 `.chat-meta-row`（span 不设 `relative`），`left: 0` + `bottom: calc(100% + 4px)`——以整行左缘为锚向上展开，落在气泡正文区。读数 span 自身宽度随气泡伸缩（窄气泡下可被 flex-wrap 压到几十 px），以它为锚会把浮层推出消息列被 `overflow-x: clip` 裁掉。absolute + opacity 手法同 UsageIndicator 徽章明细与动作条 label。
 - 动作栏 `flex-shrink: 0`：按钮被压缩时会自己堆成多行（比耗时换行更糟），「放不下」必须永远落在耗时这一侧。
 
 ### 7.6 气泡内 markdown 排版（`.chat-markdown`）
