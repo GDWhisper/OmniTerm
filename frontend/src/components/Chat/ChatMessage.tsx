@@ -49,7 +49,8 @@ const MSG_ROW_GAP = 6
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
 // **段内绝不换行**——中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器
 // 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具」/「<1秒」、「63.5」/「tok/s」
-// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个 nowrap 段。
+// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个禁断行的段（见
+// CHAT_META_SEGMENT_STYLE：`pre` 而非 `nowrap`，否则分隔符行首空格被折叠）。
 // 段间换行是状态相关的：**流式期整行固定单行**（行宽由渲染处 `min-width:max-content` 托底，
 // 2026-10-14 用户报告窄正文块下三段堆成三行）；**定稿后**容器 flex-wrap 承接段间换行——
 // 结算场合行里还有动作栏，沿用 E11 的「放不下才换行」。
@@ -67,7 +68,16 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
 }
 
 // 单个读数（一段完整语义，如「工具 12秒」）：段内禁止断行，数字与单位永不分离。
-const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
+//
+// **必须 `whiteSpace:'pre'` 而不是 `'nowrap'`**：读数段是 inline-flex 子项，每个子项
+// 自成一个块级行首，CSS 会把行首的可折叠空格整段删掉。2026-10-16 用户报告
+// 「结束于 14:32 · 工具 3秒 · 55.5 tok/s」的分隔符两侧间隙不均衡——实测 `nowrap` 下
+// 「14:32」与「·」之间的空格宽 0px、「·」与「工具」之间 7.75px（等宽字体一空格宽），
+// 视觉上是「14:32· 工具」左粘右疏。`pre` 保留字面空格且同样禁止段内换行（含窄容器
+// 被迫收缩时不从段中断开，实测与 nowrap 一致），分隔符两侧各一空格故等距。
+// `overflowWrap:'normal'` 显式切断容器 `anywhere` 的继承：`pre` 与继承来的 `anywhere`
+// 是否允许段内任意断行在规范上含混，这里按「段内绝不换行」的契约钉死。
+const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'pre', overflowWrap: 'normal' }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
 // 拆段后 textAlign 对 flex 子项无效，右缘改由 justify-content 表达。

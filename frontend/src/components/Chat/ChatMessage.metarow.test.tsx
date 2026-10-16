@@ -11,9 +11,14 @@ import { clearAllLiveTurnStats, clearLiveTurnStats, setLiveTurnStats } from '../
 // 元信息行（turn 耗时 / 工具耗时 / tps）的**换行约束 + 读数来源**回归：中文没有空格，
 // 单文本节点会被浏览器在数字与单位之间断行（2026-09-21 用户报告「5分钟」/「33秒」被拆开）。
 // jsdom 不做布局，故不断言真实换行结果，而是断言两条结构不变量：
-// ①「每个读数各自一个 nowrap 段」——换行只发生在段间的充分条件；
+// ①「每个读数各自一个禁断行段」——换行只发生在段间的充分条件；
 // ② 流式期行宽托底 `min-width:max-content`（2026-10-14 用户报告窄正文块下三个读数
 //    堆成三行）且结算行不得带它（E11「放不下才换行」只属于结算场合）。
+//
+// 分隔符等距（2026-10-16 用户报告「14:32· 工具」左粘右疏）：读数段是 inline-flex 子项，
+// 浏览器删掉子项行首的可折叠空格，`nowrap` 下「·」左侧间隙 0、右侧一空格宽。段样式改用
+// `white-space:pre` 保住字面前导空格（`overflow-wrap:normal` 切断容器 `anywhere` 继承），
+// 这是该视觉缺陷唯一可在 jsdom 里守住的因——见 `CHAT_META_SEGMENT_STYLE` 注释。
 //
 // 读数来源（2026-10-15 翻盘，work-time 计划 E23）：定稿值是**消息自己的**后端结算
 // 字段（`message.toolMs`/`message.tps`/`message.finishedAt`，来源 hydrate 或
@@ -66,16 +71,16 @@ function metaRow(): HTMLDivElement | null {
   return container.querySelector<HTMLDivElement>('.chat-meta-row')
 }
 
-/** 元信息行里的读数段：nowrap 是唯一不变量，label+value 必须在同一段内。 */
+/** 元信息行里的读数段：禁断行（`pre`）是唯一不变量，label+value 必须在同一段内。 */
 function readingSegments(): HTMLSpanElement[] {
   const row = metaRow()
   if (!row) return []
   return Array.from(row.querySelectorAll<HTMLSpanElement>('span')).filter(
-    (el) => el.style.whiteSpace === 'nowrap',
+    (el) => el.style.whiteSpace === 'pre',
   )
 }
 
-/** 元信息行读数容器（三个 nowrap 段的父节点）的 hover tooltip。 */
+/** 元信息行读数容器（三个读数段的父节点）的 hover tooltip。 */
 function metaTitle(): string {
   return readingSegments()[0]?.parentElement?.title ?? ''
 }
@@ -87,7 +92,7 @@ function visibleReadingSegments(): HTMLSpanElement[] {
 }
 
 describe('ChatMessageView meta row line breaking', () => {
-  it('splits the settled reading into nowrap segments so a unit never leaves its number', () => {
+  it('splits the settled reading into unbreakable segments so a unit never leaves its number', () => {
     // 定稿读数来自消息自己的后端结算字段：主段「结束于 14:32」/ 工具 2.5s（≈3秒）/
     // 400 tok/s。
     act(() => {
@@ -104,7 +109,10 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments[0].textContent).toBe('结束于 14:32')
     expect(segments[1].textContent).toBe(' · 工具 3秒')
     expect(segments[2].textContent).toBe(' · 400.0 tok/s')
-    for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
+    for (const el of segments) {
+      expect(el.style.whiteSpace).toBe('pre')
+      expect(el.style.overflowWrap).toBe('normal')
+    }
     // 结算行不托宽：窄气泡下动作栏 + 结算值仍按 E11「放不下才换行」。
     expect(metaRow()?.style.minWidth).toBe('')
   })
@@ -177,7 +185,10 @@ describe('ChatMessageView meta row line breaking', () => {
     expect(segments[0].textContent).toBe('工作中 6秒')
     expect(segments[1].textContent).toBe(' · 工具 3秒')
     expect(segments[2].textContent).toBe(' · 400.0 tok/s')
-    for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
+    for (const el of segments) {
+      expect(el.style.whiteSpace).toBe('pre')
+      expect(el.style.overflowWrap).toBe('normal')
+    }
     // 流式期整行托到单行内容宽度：窄正文块（工具卡 / 刚起的文本泡）下三个读数
     // 也不允许被 flex-wrap 拆成三行（2026-10-14 用户报告）。
     expect(metaRow()?.style.minWidth).toBe('max-content')
