@@ -934,7 +934,7 @@ resolve-or-create。Phase 4 将把前端创建入口默认翻转为 `'pty'`。
 | PDEATHSIG 触发语义 | kernel 7.0 实测 = 进程退出触发；man prctl / kernel.org #43300 / dotnet/runtime#96470 = 创建线程触发，跨内核不可依赖 | fork/exec 固定长寿命 spawn 线程 `omniterm-tmux-spawn`，两种语义下均安全 |
 | 进程身份来源 | Linux `/proc`（stat + cmdline，实测口径）/ 其余 Unix `ps -o pid=,ppid=,lstart=,args=`（`args=` 丢失 argv 边界，弱匹配；macOS 未实测）/ Windows `sysinfo`（start_time 秒级；未实测） | 身份读不到一律 fail-closed（不发信号 / 跳过击杀 / 视为未运行） |
 | socket 健康探针 | Windows（psmux）无 unix domain socket 路径语义 | 探针降级 `Inconclusive` + 一次性 WARN，不作自愈依据 |
-| heal inode 反查 | `/proc/net/unix` + `/proc/<pid>/fd` 仅 Linux；macOS/Windows 不可用 | WARN + 500 **拒绝击杀**（不猜 PID）——已知限制见 `docs/reference/user-testing.md` §19 |
+| heal inode 反查 | `/proc/net/unix` + `/proc/<pid>/fd` 仅 Linux；macOS/Windows 不可用 | WARN + 500 **拒绝击杀**（不猜 PID）——已知限制见 `docs/reference/archive/user-testing.md` §19 |
 | `list-sessions` 空 stdout | psmux/Windows 可能以非零退出 + 空 stdout 表示无会话（Windows 行为未验证，标注「不确定」） | 判定真源保留 `EmptyStdout` 空态；聋签名仍压过它 |
 | `TMUX_TMPDIR` 与 socket 解析 | **未确证**：tmux(1) 文档口径说 `<TMUX_TMPDIR\|/tmp>/tmux-<uid>/default`；本机 tmux 3.4 实测疑似忽略该变量 | 按文档口径实现 env 覆盖；路径推错最坏退化为 socket 探针证据缺失（`Inconclusive`/`NoServer`），分类主判据是 stderr 签名，不会把非聋判成聋 |
 

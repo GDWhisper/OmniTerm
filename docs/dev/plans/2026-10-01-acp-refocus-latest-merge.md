@@ -94,7 +94,7 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 - [ ] hook 集成测试：onclose（非 unmount）→ `needsCatchUp=true`；unmount 拆除不置位
 - [ ] ChatView 集成测试：标记 + visible → 发一次 `/messages` 并合并、清标记；无标记 → 不发；fetch 失败 → 标记保留；`replaying` 中 → 不发
 - [ ] `pnpm exec tsc -b` / `pnpm lint` / `pnpm test` 零新增问题
-- [ ] 手动回归：`docs/reference/user-testing.md` 新增用例（§21）
+- [ ] 手动回归：`docs/reference/archive/user-testing.md` 新增用例（§21）
 
 ## 风险与降级
 
@@ -113,7 +113,7 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 | `docs/architecture/frontend.md` | 补拉机制、五条合并规则摘要、断连标记 |
 | `AGENTS.md` 文档索引 | 本文件登记行 |
 | `CHANGELOG.md` | feat 条目 |
-| `docs/reference/user-testing.md` | §21 手动回归用例 |
+| `docs/reference/archive/user-testing.md` | §21 手动回归用例 |
 | 本文件 | 实施偏差就地加「勘误」块 |
 
 ---

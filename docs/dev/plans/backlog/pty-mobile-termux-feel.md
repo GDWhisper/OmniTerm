@@ -5,7 +5,7 @@
 > **关联**：
 > - `docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`（方案 C，滚动架构现状与 Phase 3 遗留）
 > - `docs/dev/plans/backlog/pty-scroll-handover.md`（滚轮问题根因链，方案 B 已撤销）
-> - `docs/reference/user-testing.md`（改造后的手动回归入口）
+> - `docs/reference/archive/user-testing.md`（改造后的手动回归入口）
 >
 > **不进 AGENTS.md 索引**：本文是方向稿 + 长期跟踪项，索引会污染主索引表。接手路径见文末「继续讨论入口」。
 
@@ -311,7 +311,7 @@ P0 单独做即能拿到大部分"跟手 + 惯性"收益，且不动后端与数
 - 方案 C（滚动架构现状 + Phase 3 遗留）：`docs/dev/plans/backlog/pty-herdr-style-full-buffer-render.md`
 - 滚轮问题根因链：`docs/dev/plans/backlog/pty-scroll-handover.md`
 - pty/tmux 分离提交：`af3f2c1`
-- 手动回归清单：`docs/reference/user-testing.md`
+- 手动回归清单：`docs/reference/archive/user-testing.md`
 - 性能与有界红线：`docs/dev/performance-and-safety.md`
 
 ---

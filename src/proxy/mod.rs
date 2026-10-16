@@ -1563,5 +1563,5 @@ mod tests {
     // 内存长期紧张（omniterm 生产实例 ~7GB），进程内起 mock 服务的测试
     // codegen 会让 `cargo test` 编译逼近 OOM（实测编译卡死）。需跑时：
     // 1) 在内存充足环境（或 `./dev.sh stop` 后）把下述测试块恢复；
-    // 2) 或按 `docs/reference/user-testing.md` 用手动回归脚本验证。
+    // 2) 或按 `docs/reference/archive/user-testing.md` 用手动回归脚本验证。
 }

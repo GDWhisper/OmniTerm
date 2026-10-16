@@ -75,7 +75,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 - Rust 单测随源码（`#[cfg(test)]`），集成测试在 `tests/`（spawn 抽象/运行时矩阵相关新增变体前必读 `docs/workflows/integration-checklist.md`）；tmux control-mode 测试依赖 tmux 二进制。
 - **测试的库/端口目标必须显式或同源**：会执行 `sqlx::migrate!` 或写库的测试，目标只能来自 `DATABASE_URL` 或 `./.env.local` 的 `BRANCH_BINARY_NAME`/`BACKEND_PORT`（与 `dev.sh` 同源），**禁止回退任何固定真实库**（`omniterm.db` / `omniterm-dev.db` 等）；环境不满足前提时**带原因显式 SKIP**，不得静默通过。常规用法：`./dev.sh test [参数]`（自动完成上述注入，库与端口同源配对）。违反后果：`cargo test` 把分支迁移集写进正式版/他人实例库（2026-09-27 事故）、或库端口错配致断言恒真假绿——见 `docs/dev/debug-patterns/platform-protocol.md` 模式 11。
 - 前端测试与源码同目录（`*.test.ts`，vitest + jsdom，入口 `frontend/src/test/setup.ts`）；性能基准在 `vitest.bench.config.ts`，已移出 `pnpm test`（避免 pre-commit 随机失败）。
-- 手动回归用例见 `docs/reference/user-testing.md`；pty 帧渲染有自动化回归脚本 `scripts/pty-frame-regression.mjs`；pty 视口锚定有 `scripts/pty-viewport-anchor-regression.mjs`（五形态周期内容 × 8 轮，需 dev 后端运行新二进制）。
+- 手动回归用例见 `docs/reference/archive/user-testing.md`（2026-10-16 归档，不再更新）；pty 帧渲染有自动化回归脚本 `scripts/pty-frame-regression.mjs`；pty 视口锚定有 `scripts/pty-viewport-anchor-regression.mjs`（五形态周期内容 × 8 轮，需 dev 后端运行新二进制）。
 
 ## 术语
 
@@ -97,7 +97,6 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 | `docs/workflows/worktree-setup.md` | 初始化开发环境、添加新 worktree、配置 remote | worktree 目录/用途变更、remote 地址变更、排除文件列表调整 |
 | `docs/workflows/release-guide.md` | 执行正式发布（同步 main、打 tag、推送公共仓、npm 发布） | 发布流程变更、CI 配置调整、sync-main.sh 黑名单调整 |
 | `docs/visual-design/ui-style-guide.md` | 任何涉及 UI 的**修改或规范撰写**（组件样式、布局、色板、字体、尺寸 token、面板/弹窗视觉态、动效）— **必读** | 新增通用组件规范、调整设计语言（色板/圆角/间距）、补充面板/弹窗尺寸规格 |
-| `docs/reference/user-testing.md` | 功能开发完成后的手动回归测试 | 新增测试用例、发现并记录已知限制 |
 | `docs/dev/debug-guide.md` | 遇到 bug 先读它（路由索引）定位领域，再按需读 `docs/dev/debug-patterns/` 下对应领域文件 | 新踩坑后提炼为模式（规律 → 弯路 → 案例证据），按领域归档到 `debug-patterns/` 并**登记一行到 debug-guide.md 索引**；详见其写作规范 |
 | `docs/dev/performance-and-safety.md` | 涉及数据累积/缓冲、持久化写入策略、外部输入（agent 通知/用户输入/文件内容）、命令执行、跨层数据传输或吞吐量相关的代码前**必读** | 新增性能/安全红线、检查项调整、补充新案例 |
 | `docs/reference/requirements.md` | 规划新功能、确认待办优先级 | 新增/变更功能需求、标记需求完成 |

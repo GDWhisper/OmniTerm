@@ -192,7 +192,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
   临时拉起路径）→ `DELETE /sessions/{id}?delete_agent_side=true` → 响应
   `{"ok":true,"agent_side":"deleted"}`；opencode 侧 `session_v2` 行消失（agent 侧真实
   删除）、omniterm 行照删、无孤儿 opencode 进程 ✅。UI 侧手动回归用例见
-  `docs/reference/user-testing.md` §23。
+  `docs/reference/archive/user-testing.md` §23。
 
 ## 6. 验收标准
 
@@ -230,7 +230,7 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
 - [x] `docs/architecture/backend.md`：`delete_agent_side` 路由语义、capabilities 帧 `agent_delete`、`AcpClient` 两方法 + 能力判据
 - [x] `docs/reference/acp-protocol-reference.md`：§17.3 多实现差异表 + §18.1 方法矩阵「omniterm 已接 / 未接」标注
 - [x] `AGENTS.md`：本计划已在文档索引（2026-10-04 登记）
-- [x] `docs/reference/user-testing.md`：E3-1 手动用例
+- [x] `docs/reference/archive/user-testing.md`：E3-1 手动用例
 - [x] `CHANGELOG.md`：条目（Phase 3 + Phase 4-E3-1 为实质性功能改动）
 - [x] 2026-10-09 勘误闭环（§5.2）：`backend.md` 临时拉起语义 + 判据更新、协议参考 §17.3、`user-testing.md` §23、CHANGELOG Unreleased
 - [ ] Phase 1/2/4-E1/E3-2 落地后补：list/purge 路由文档、AgentHistorySection 渲染用例

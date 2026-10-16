@@ -51,4 +51,4 @@
 6. **X07（亮色终端）**：半天可完最小改动，但动终端视觉必跑 pty-frame-regression，且是推翻既有刻意设计（文档闭环 2 处）。
 7. **X09/X10/X12**：依赖前置调研（§8 差异沉淀），不与上面抢排期。
 
-**跨项注意**：① X01/X09 都要动 `src/api/settings.rs` → 先做 X11；② X03 的快捷键「输入框内也响应」与 FileManager 现有排除 INPUT/TEXTAREA 的意图相反，是全仓第四种范式，须写进 frontend.md 约定；③ 六项原方向落地都牵动 `docs/reference/user-testing.md` §10 已知限制（:880 D4 / :883 D5 / :887 D1）+ CHANGELOG。
+**跨项注意**：① X01/X09 都要动 `src/api/settings.rs` → 先做 X11；② X03 的快捷键「输入框内也响应」与 FileManager 现有排除 INPUT/TEXTAREA 的意图相反，是全仓第四种范式，须写进 frontend.md 约定；③ 六项原方向落地都牵动 `docs/reference/archive/user-testing.md` §10 已知限制（:880 D4 / :883 D5 / :887 D1）+ CHANGELOG。

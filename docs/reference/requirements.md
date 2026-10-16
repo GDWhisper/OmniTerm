@@ -65,7 +65,7 @@
   - **落地形态与下方计划不同（有意偏离）**：未做「异步存在性校验」，改为**同步启发式 + 从严判定**（`utils/path.ts` 的 `isLikelyPathString` / `looksLikeDirectory`）。理由：① 存在性校验要为每个候选路径在流式/渲染期发请求，而判定发生在渲染函数内，异步化会牵动 react-markdown 的同步渲染契约；② 误判代价已通过判据收紧压到可接受——末段须有扩展名 / 首段须是已知项目目录 / 绝对路径 / 显式 `./` `../` / 尾斜杠目录，双词斜杠组合（`and/or`、`true/false`、`client/server`）与代码片段（`const x = a/b`）一律不判；③ 误点最坏结果是抽屉里显示后端读取错误（可恢复），而误判成目录会强制关掉用户已打开的抽屉并丢浏览位置，故歧义时按文件处理。
   - **目录路径也能导航**： agent 输出 `` `/home/pax/coding/OmniTerm-dev` `` 这类反引号包裹的目录时，点击在 FM 列表切到该目录（原需求只设想文件，此为用户实测反馈后补的分支）。
   - 打开动作经单一入口 `utils/reportedPath.ts` 的 `revealReportedPath` → `revealPathInFileManager`（`appStore.ts`），与 A1 的 `locations` 入口共用同一份「判目录/文件 + getState」逻辑，不另写一套。
-  - 手动回归用例见 `docs/reference/user-testing.md` §22。
+  - 手动回归用例见 `docs/reference/archive/user-testing.md` §22。
 
 - [x] **C · 裸文本路径（无反引号）识别** — ❌ 评估后不做（2026-08-10）
   - 需自定义 remark plugin 改 AST，误判面大（散文里的 `and/or`、版本号、URL 片段），而 A+B 已覆盖约 95% 真实场景。属过度设计。

@@ -175,7 +175,7 @@
 - [ ] 后端：`cargo fmt --all`、`cargo clippy --workspace --all-targets -- -D warnings` 零新增；`./dev.sh test` 全绿 + 新增单测/集成测试（测试库/端口同源约定见 AGENTS.md 测试约定）
 - [ ] 前端：`pnpm exec tsc -b`、`pnpm lint`、`pnpm test` 全绿；新增交互有单测（含空态/错误态）
 - [ ] 错误路径：每个新端点的失败分支（非 repo/未绑定/参数非法/git 报错）都有明确错误码与 i18n 文案（en/zh 双份）
-- [ ] 手动回归：新用例登记 `docs/reference/user-testing.md`；hunk/stash/merge 类操作用真实仓库走查（含 stale、冲突、空态）
+- [ ] 手动回归：新用例登记 `docs/reference/archive/user-testing.md`；hunk/stash/merge 类操作用真实仓库走查（含 stale、冲突、空态）
 - [ ] 危险操作（删除分支/reset/rebase/amend）全部有二次确认且文案说明后果
 - [ ] 写操作并发：与终端 git 同时操作时行为符合 D1（重试/如实报错，不静默）
 
@@ -189,4 +189,4 @@
 | 面板 UI 复杂化（分支菜单/stash 面板/hunk 按钮/中断横幅叠加） | 遵守 ui-style-guide；每项完成后走一遍视觉走查（窄栏 240px 起） |
 | i18n 双份遗漏 | 验收清单强制项 |
 
-**实施后需更新的文档**：`docs/architecture/backend.md`（git 端点清单、错误码、in_progress 字段）、`docs/architecture/frontend.md`（GitPanel 组件结构）、`docs/reference/user-testing.md`（手动回归）、`docs/dev/plans/archive/2026-07-26-git-panel.md`（在排除清单处加勘误指针指向本计划）、`CHANGELOG.md`（每批次一条实质功能条目）、AGENTS.md 文档索引（本文件已登记）。
+**实施后需更新的文档**：`docs/architecture/backend.md`（git 端点清单、错误码、in_progress 字段）、`docs/architecture/frontend.md`（GitPanel 组件结构）、`docs/reference/archive/user-testing.md`（手动回归）、`docs/dev/plans/archive/2026-07-26-git-panel.md`（在排除清单处加勘误指针指向本计划）、`CHANGELOG.md`（每批次一条实质功能条目）、AGENTS.md 文档索引（本文件已登记）。

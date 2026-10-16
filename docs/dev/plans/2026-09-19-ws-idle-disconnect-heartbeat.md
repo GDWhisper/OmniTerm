@@ -68,7 +68,7 @@
 
 - [ ] Phase 0 四格探针结果（含原始日志时间戳）写回本文件，判定 H1–H4 之一并给出反证排除过程。
 - [ ] 若接入心跳：后端单测（收到 `ping` 回 `pong`、`pong` 超时判定）、前端单测（心跳定时器在 blur/隐藏时暂停、恢复后重启）。
-- [ ] 手动回归：`docs/reference/user-testing.md` 增补「公网空闲 10 分钟不掉线」用例；移动端前后台切换后无需手点重连。
+- [ ] 手动回归：`docs/reference/archive/user-testing.md` 增补「公网空闲 10 分钟不掉线」用例；移动端前后台切换后无需手点重连。
 - [ ] 质量门禁：`cargo clippy -D warnings` / `tsc -b` / `pnpm lint` 零新增告警。
 
 ## 风险与降级

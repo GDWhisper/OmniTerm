@@ -52,7 +52,7 @@
 
 - 会话引擎、流式链路、持久化策略
 - 任何新增的累积结构与写入策略
-- 手动回归用例可参考 `docs/reference/user-testing.md`
+- 手动回归用例可参考 `docs/reference/archive/user-testing.md`
 
 ---
 

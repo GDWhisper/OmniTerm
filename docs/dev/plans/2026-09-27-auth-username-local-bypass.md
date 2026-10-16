@@ -201,7 +201,7 @@ pub async fn verify_request(
 | 老库升级后用户不知道用户名是 `admin` | 登录页 placeholder + 文档 + CHANGELOG 说明；setup 页预填 |
 | 忘记密码 + 本地免密 → 改密需 current_password | 记录为已知限制（出路：`--reset-auth`）；不新增免密改密路径（避免范围蔓延） |
 
-实施后须更新：`docs/reference/auth-not-enforced.md`（现状表 + 本地免密小节 + 相关文件）、`docs/architecture/backend.md`（API 端点表、settings key、判据收敛点、CLI/env 无新增）、`docs/architecture/frontend.md`（Auth 组件登记）、`AGENTS.md`（文档索引登记本计划）、`CHANGELOG.md`（Added：用户名 + 本地免密开关）、`docs/reference/user-testing.md`（手动用例 + 边界）。
+实施后须更新：`docs/reference/auth-not-enforced.md`（现状表 + 本地免密小节 + 相关文件）、`docs/architecture/backend.md`（API 端点表、settings key、判据收敛点、CLI/env 无新增）、`docs/architecture/frontend.md`（Auth 组件登记）、`AGENTS.md`（文档索引登记本计划）、`CHANGELOG.md`（Added：用户名 + 本地免密开关）、`docs/reference/archive/user-testing.md`（手动用例 + 边界）。
 
 ---
 
@@ -266,7 +266,7 @@ pub async fn verify_request(
 
 - 后端：`migrations/20260927_add_username.sql`（新增）、`src/auth/local_access.rs`（新增）、`src/auth/mod.rs`、`src/api/auth.rs`、`src/models/user.rs`、`src/main.rs`、`src/proxy/mod.rs`、`src/ws/origin_guard.rs`、`src/api/audit.rs`（注释订正）、`src/test_utils.rs`
 - 前端：`frontend/src/api/client.ts`、`frontend/src/components/Auth/AuthPage.tsx`、`frontend/src/components/Settings/AuthSection.tsx`、`frontend/src/locales/{en,zh}/translation.json`、两个组件测试
-- 文档：本计划、`docs/reference/auth-not-enforced.md`、`docs/architecture/{backend,frontend}.md`、`AGENTS.md`、`CHANGELOG.md`、`docs/reference/user-testing.md`（§20）、`tests/agent_hook_integration.rs`（库回退修复，等价 dev `533e4de`）
+- 文档：本计划、`docs/reference/auth-not-enforced.md`、`docs/architecture/{backend,frontend}.md`、`AGENTS.md`、`CHANGELOG.md`、`docs/reference/archive/user-testing.md`（§20）、`tests/agent_hook_integration.rs`（库回退修复，等价 dev `533e4de`）
 
 ## 后续审查修复（2026-10-11，第三轮独立审查）
 

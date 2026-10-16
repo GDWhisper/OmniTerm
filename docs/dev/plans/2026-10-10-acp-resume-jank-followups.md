@@ -123,7 +123,7 @@
 | `docs/architecture/frontend.md` | ① 失败分档、② 补拉错峰、③ 共享扫描预算、⑤ 轮询矩阵、⑥ 终端心跳 |
 | `docs/architecture/backend.md` | ⑥ 终端 WS ping/pong（若落地） |
 | `docs/dev/performance-and-safety.md` | ③ 若定性为新的容量面则补案例索引 |
-| `docs/reference/user-testing.md` | §24 补「错误可见」「错峰」两条验证点 |
+| `docs/reference/archive/user-testing.md` | §24 补「错误可见」「错峰」两条验证点 |
 | `CHANGELOG.md` | ①②③ 各一条 Fixed；⑤⑥ 各一条 Changed |
 | `2026-09-19-ws-idle-disconnect-heartbeat.md` | ⑦ 的 Phase 0 结论回写 |
 | 本文件 | 实施偏差就地加「勘误」块 |
