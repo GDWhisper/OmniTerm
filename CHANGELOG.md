@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-10-16 10:09) `[frontend]` 修复「回到正在查看的 ACP 会话后，侧栏提醒不消失」（用户报告：在 ACP 会话中切走浏览器窗口/系统窗口、不切换会话，agent 完成后回来，甚至已看完最终输出，侧栏的提醒仍永久挂着）。根因是提醒的清除路径只有「点击侧栏会话行 / 发送消息 / 响应审批」三条——用户离开期间 fire 的提醒（这正是提醒的设计场景：页面隐藏时完成/出错/等决策）在用户回来后没有任何清除路径，tab 标题闪烁倒是随 visible 立即停了，侧栏 alert 无人清。修复：`AttentionProvider` 增加「回到当前会话即清」——`visibilitychange`→visible 与 `window focus`（覆盖双屏「标签可见但焦点在别窗」，与 ChatView 补拉/useTerminal 的回来判定同口径）时清除 `appStore.activeSessionId` 一个会话的提醒；语义与 tab 闪烁在 visible 时立即停止一致（提醒 = 把用户叫回来，呼叫送达即清；历史 2026-08-06「发送新 prompt 即清」同属「用户已知晓最新状况」）。**移动端加页签守卫**（`isMobile && activeTab !== 'terminal'` 不清）：只有 terminal 页签渲染会话视图，sessions/files 页签下用户在浏览列表/文件面板，并未查看该会话内容，回来时不得替他「已读」——侧栏列表本就是提醒的观察面。顺带把 `clearAlert` 加 no-op guard（无该会话提醒时原样返回，否则每次 focus/visible 都会造新 Map 触发整个 App 的无谓重渲染）（`frontend/src/components/Attention/AttentionProvider.tsx`，回归 `AttentionProvider.test.tsx` 真实 Provider 集成 5 例：可见回来清 / focus 清 / 其他会话保留 / hidden 不清 / 移动端非 terminal 页签不清）
+
 ## [0.3.0] - 2026-10-16
 
 ### Changed

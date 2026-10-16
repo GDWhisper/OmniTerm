@@ -1,6 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React, { createContext, useContext, useState, useCallback } from 'react'
+import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { AttentionProvider } from './AttentionProvider'
+import { useAttention as useRealAttention } from '../../hooks/useAttention'
+import { useAppStore } from '../../stores/appStore'
 
 // ═══════════════════════════════════════════════════════════
 // Replicate the attention logic inline for pure testing
@@ -284,5 +288,143 @@ describe('playPing (sound)', () => {
     const playPing = createPingFunction(() => ctxRef)
 
     expect(() => playPing()).not.toThrow()
+  })
+})
+
+// ═══════════════════════════════════════════════════════════
+// 真实 Provider 集成：回到正在查看的会话时清除提醒
+// （用户报告：ACP 会话中切走窗口，agent 完成后回来，甚至看完输出，
+//  侧栏提醒仍永久挂着——只有点击侧栏会话行 / 发消息 / 响应审批才清除）
+// ═══════════════════════════════════════════════════════════
+
+/** jsdom 的 document.hidden 是 Document.prototype getter，实例上 defineProperty
+ *  遮蔽之（与 ChatView.catchup.test.tsx / Terminal.testUtils 同手法）。 */
+type DocumentVisibilityStub = { hidden?: unknown; visibilityState?: unknown }
+
+function setDocumentHidden(hidden: boolean) {
+  Object.defineProperty(document, 'hidden', { value: hidden, configurable: true })
+  Object.defineProperty(document, 'visibilityState', {
+    value: hidden ? 'hidden' : 'visible',
+    configurable: true,
+  })
+}
+
+describe('AttentionProvider — return to the active session clears its alert', () => {
+  let root: Root | null = null
+  let container: HTMLDivElement | null = null
+  let captured: ReturnType<typeof useRealAttention> | null = null
+
+  // 经回调捕获（与文件上方 capture 同模式）：组件内直接对外部变量赋值会触发
+  // react-compiler 的「Cannot reassign variables declared outside」。
+  function captureValue(v: ReturnType<typeof useRealAttention>) {
+    captured = v
+  }
+
+  function Capture({ onValue }: { onValue: (v: ReturnType<typeof useRealAttention>) => void }) {
+    onValue(useRealAttention())
+    return null
+  }
+
+  /** 「离开 → 回来」：真机由 visibilitychange 两段完成。 */
+  const leaveAndReturn = () => {
+    setDocumentHidden(true)
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    setDocumentHidden(false)
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+  }
+
+  beforeEach(() => {
+    captured = null
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    act(() => {
+      root!.render(
+        <AttentionProvider>
+          <Capture onValue={captureValue} />
+        </AttentionProvider>,
+      )
+    })
+    act(() => {
+      useAppStore.setState({
+        activeSessionId: 's-current',
+        isMobile: false,
+        activeTab: 'terminal',
+      })
+    })
+  })
+
+  afterEach(() => {
+    act(() => root?.unmount())
+    container?.remove()
+    root = null
+    container = null
+    useAppStore.setState({ activeSessionId: null, isMobile: false, activeTab: 'terminal' })
+    delete (document as DocumentVisibilityStub).hidden
+    delete (document as DocumentVisibilityStub).visibilityState
+  })
+
+  it('clears the alert of the current session when the page becomes visible again', () => {
+    act(() => {
+      captured!.fire('s-current', 's-current', 'done')
+    })
+    expect(captured!.reasonFor('s-current')).toBe('done')
+
+    leaveAndReturn()
+
+    expect(captured!.reasonFor('s-current')).toBeUndefined()
+  })
+
+  it('clears on window focus too (page stayed visible, e.g. dual screen)', () => {
+    act(() => {
+      captured!.fire('s-current', 's-current', 'done')
+    })
+
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    expect(captured!.reasonFor('s-current')).toBeUndefined()
+  })
+
+  it('keeps alerts of other sessions (user has not seen them)', () => {
+    act(() => {
+      captured!.fire('s-other', 's-other', 'error')
+    })
+    expect(captured!.reasonFor('s-other')).toBe('error')
+
+    leaveAndReturn()
+
+    expect(captured!.reasonFor('s-other')).toBe('error')
+  })
+
+  it('does not clear while the page is still hidden', () => {
+    act(() => {
+      captured!.fire('s-current', 's-current', 'done')
+    })
+
+    setDocumentHidden(true)
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(captured!.reasonFor('s-current')).toBe('done')
+  })
+
+  it('does not clear on mobile when another tab is shown (session view not visible)', () => {
+    act(() => {
+      useAppStore.setState({ isMobile: true, activeTab: 'sessions' })
+    })
+    act(() => {
+      captured!.fire('s-current', 's-current', 'done')
+    })
+
+    leaveAndReturn()
+
+    expect(captured!.reasonFor('s-current')).toBe('done')
   })
 })
