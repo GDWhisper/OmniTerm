@@ -72,7 +72,7 @@ export function PermissionBanner({ permission, remaining, onRespond }: Props) {
                 margin: 0,
                 padding: '6px 8px',
                 background: 'var(--bg-base)',
-                borderRadius: 4,
+                borderRadius: 0,
                 fontSize: 11,
                 overflow: 'auto',
                 maxHeight: 200,

@@ -29,8 +29,9 @@ const FLOAT_GAP = 4
  * 两套形态共用 `actions` 数组（动作唯一真源在 `messageActions.ts`）。
  *
  * 桌面浮层定位（label 文字）运行时测量：优先显示在图标**下方**；下方空间
- * 不足（如消息贴近滚动容器底部）则翻转到上方。水平方向 clamp 到视口内，
- * 避免 user 消息（右对齐）靠右按钮的浮层溢出右缘。
+ * 不足（如消息贴近滚动容器底部）则翻转到上方。水平方向 clamp 到最近的滚动
+ * 容器可见区内（不是视口），避免 user 消息（右对齐）靠右按钮的浮层溢出右缘、
+ * 把消息列的 scrollWidth 顶宽。
  */
 export function MessageActionBar({ actions, ctx, menu, onCloseMenu }: MessageActionBarProps) {
   const { t } = useTranslation()
@@ -55,14 +56,25 @@ export function MessageActionBar({ actions, ctx, menu, onCloseMenu }: MessageAct
         if (/(auto|scroll)/.test(cs.overflowY)) break
         container = container.parentElement
       }
-      const cRect = container ? container.getBoundingClientRect() : { top: 0, bottom: window.innerHeight }
+      // 找不到滚动容器（理论上的兜底）时按视口边界夹取。
+      const viewport = { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth }
+      const cRect = container ? container.getBoundingClientRect() : viewport
       const spaceBelow = cRect.bottom - rect.bottom
       // 优先下方；下方容不下浮层（贴滚动容器底）则翻转上方
       setFloatDir(spaceBelow >= floatH + FLOAT_GAP ? 'below' : 'above')
-      // 水平 clamp：浮层左缘对齐按钮左缘，超出视口右缘时右缩
-      const maxLeft = window.innerWidth - floatW - FLOAT_GAP
+      // 水平 clamp：浮层左缘对齐按钮左缘，超出**滚动容器**可见区右缘时左缩。
+      // 夹取基准必须是容器而非视口：浮层是滚动容器里的 absolute 子元素，探出容器
+      // 右缘的那一段会进容器的 scrollable overflow、把 scrollWidth 顶宽——右对齐
+      // user 消息的「引用」浮层因此恒定探出一截（实测 15px，随 label 长度而变），
+      // 消息列白白多出横向内容。夹回容器内浮层才完整可读，不被容器右缘裁掉
+      // （消息列本身 overflow-x: clip，见 ChatView）。
+      // 可见区右缘 = 容器左缘 + clientWidth：clientWidth 已排除边框与纵向滚动条
+      // 槽位，不减掉它浮层会压在滚动条上。
+      const visibleRight = container ? cRect.left + container.clientWidth : cRect.right
+      const maxLeft = visibleRight - floatW - FLOAT_GAP
+      const minLeft = cRect.left + FLOAT_GAP
       const left = Math.min(rect.left, maxLeft)
-      setFloatLeft(Math.max(FLOAT_GAP, left) - rect.left)
+      setFloatLeft(Math.max(minLeft, left) - rect.left)
     },
     [],
   )

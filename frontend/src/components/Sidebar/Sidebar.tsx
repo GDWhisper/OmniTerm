@@ -154,8 +154,8 @@ export function Sidebar() {
   } | null>(null)
   const projDragRef = useRef<ProjDragState | null>(null)
   // 拽起卡的 DOM 引用：跟随指针的 transform 在此直写。pointermove 是高频事件，
-  // 每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖——与 turnClock
-  // 每秒读数直写 DOM、抽屉拖拽直改宽度同一手法。React 只管理 lifted class
+  // 每拍走 React 重渲染会让整棵侧栏（含全部会话行）跟着抖——与聊天元信息读数
+  // 直写 DOM、抽屉拖拽直改宽度同一手法。React 只管理 lifted class
   // 与插入线（目标变化才动），不管理 transform，故松手时须手动清空。
   const draggedElRef = useRef<HTMLElement | null>(null)
   // 拖拽达成时间戳：抑制其后续补发的 header click。浏览器把 down/up 的最近

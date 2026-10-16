@@ -103,7 +103,8 @@ pub async fn list_messages_page(
     // Newest-first so the page can be cut from the newest end; reversed to oldest-first
     // before returning. One extra row is fetched to detect "there is an older page".
     let mut rows: Vec<ChatMessageRow> = sqlx::query_as(
-        "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms \
+        "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
+                tool_ms, tps \
          FROM chat_messages \
          WHERE session_id = ? \
            AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) \
@@ -167,6 +168,11 @@ pub struct ChatMessageRow {
     pub duration_ms: Option<i64>,
     /// 该 turn 内等真人审批的时长（ms）。NULL 同上。
     pub wait_ms: Option<i64>,
+    /// 该 turn 可归因于工具执行的时长（ms，估算，口径见 `turn_accumulator`）。
+    /// NULL = 迁移前的历史行或跟踪越界失效；0 = 有效观测下没记到工具。
+    pub tool_ms: Option<i64>,
+    /// 该 turn 的输出速率估算（tokens/s，估算）。NULL = 无可测窗口（含迁移前历史行）。
+    pub tps: Option<f64>,
 }
 
 /// Insert-or-update the single in-progress assistant row for a turn. The backend turn
@@ -208,12 +214,17 @@ pub async fn finalize_message(
     row_id: &str,
     duration_ms: i64,
     wait_ms: i64,
+    tool_ms: Option<i64>,
+    tps: Option<f64>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE chat_messages SET status = 'complete', duration_ms = ?, wait_ms = ? WHERE id = ?",
+        "UPDATE chat_messages SET status = 'complete', duration_ms = ?, wait_ms = ?, \
+         tool_ms = ?, tps = ? WHERE id = ?",
     )
     .bind(duration_ms)
     .bind(wait_ms)
+    .bind(tool_ms)
+    .bind(tps)
     .bind(row_id)
     .execute(db)
     .await?;
@@ -713,23 +724,42 @@ mod tests {
         assert_eq!(row_count(&db).await, 0, "空 text 无 id 无法定位，不得 INSERT 空行");
     }
 
-    /// 定稿即写时长：消息行与累计必须同一次跃迁落地（拆开写会留下「行已 complete 但
-    /// 时长未知」的半成品，前端会把它当 0 而不是缺失）。
+    /// 定稿即写时长与速率/工具读数：消息行与累计必须同一次跃迁落地（拆开写会留下
+    /// 「行已 complete 但时长未知」的半成品，前端会把它当 0 而不是缺失）。
     #[tokio::test]
     async fn finalize_message_records_turn_durations_and_reads_back() {
         let db = fresh_db().await;
         seed_row(&db, "row-a", "assistant", "OK", "2026-08-10T00:00:01Z").await;
 
-        finalize_message(&db, "row-a", 4200, 800).await.expect("finalize");
+        finalize_message(&db, "row-a", 4200, 800, Some(1500), Some(42.5)).await.expect("finalize");
 
         let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
         let row = page.rows.first().expect("一行");
         assert_eq!(row.status, "complete");
         assert_eq!(row.duration_ms, Some(4200));
         assert_eq!(row.wait_ms, Some(800));
+        assert_eq!(row.tool_ms, Some(1500));
+        assert_eq!(row.tps, Some(42.5));
+    }
+
+    /// 工具跟踪越界失效（tool_ms = None）与「无速率」（tps = None）必须原样落为
+    /// NULL 而不是 0——前端对 NULL 不渲染，对 0 的 tps 同样不渲染，但语义上
+    /// 「失效」与「测得零」是两回事。
+    #[tokio::test]
+    async fn finalize_message_keeps_null_estimates_null() {
+        let db = fresh_db().await;
+        seed_row(&db, "row-b", "assistant", "OK", "2026-08-10T00:00:01Z").await;
+
+        finalize_message(&db, "row-b", 1000, 0, None, None).await.expect("finalize");
+
+        let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
+        let row = page.rows.first().expect("一行");
+        assert_eq!(row.tool_ms, None);
+        assert_eq!(row.tps, None);
     }
 
     /// 迁移前的历史行没有结束时刻记录 → 时长必须是 NULL（未知），不得被读成 0。
+    /// 工具耗时与速率同理（NULL = 不可追溯）。
     #[tokio::test]
     async fn legacy_rows_read_back_with_unknown_duration() {
         let db = fresh_db().await;
@@ -739,6 +769,8 @@ mod tests {
         let row = page.rows.first().expect("一行");
         assert_eq!(row.duration_ms, None, "无记录 ≠ 零耗时");
         assert_eq!(row.wait_ms, None);
+        assert_eq!(row.tool_ms, None);
+        assert_eq!(row.tps, None);
     }
 
     /// 会话累计走**增量**：agent 子进程被 idle 回收后 restore 出新 client，第二个 turn

@@ -518,3 +518,113 @@ describe('Settings thinking effect (ACP waiting indicator)', () => {
     }
   })
 })
+
+describe('Settings session display (expand thinking + collapsed mode)', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  const HIDE_LABELS = ['完全隐藏', 'Hide Completely']
+  const BRIEF_LABELS = ['显示简要', 'Show Brief']
+
+  /** 按小节标题（中英随测试环境）定位「收起时显示」档位行。 */
+  const collapsedSection = () =>
+    Array.from(container.querySelectorAll('section')).find((s) =>
+      (s.querySelector('h3')?.textContent || '').includes(i18n.t('settings.thinkingCollapsed')),
+    )
+
+  const modeButton = (labels: string[]) =>
+    Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      labels.includes((b.textContent || '').trim()),
+    )
+
+  const click = (el: Element | null | undefined) =>
+    act(() => {
+      el!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+  /** 「展开思考」开关行（ToggleRow 的第一个 button）。 */
+  const expandThinkingButton = () => {
+    const row = Array.from(container.querySelectorAll('section')).find((s) =>
+      (s.querySelector('h3')?.textContent || '').includes(i18n.t('settings.expandThinking')),
+    )
+    return row?.querySelector<HTMLButtonElement>('button') ?? null
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    useAppStore.setState({ expandThinking: false, thinkingCollapsedMode: 'hide' })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    mountSettings(root)
+    clickSessionsTab(container)
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    document.body.removeChild(container)
+    vi.restoreAllMocks()
+    localStorage.clear()
+  })
+
+  it('shows the collapsed-mode row with 完全隐藏 active by default when 展开思考 is off', () => {
+    expect(collapsedSection()).toBeTruthy()
+    expect(modeButton(HIDE_LABELS)).toBeTruthy()
+    expect(modeButton(BRIEF_LABELS)).toBeTruthy()
+    // 默认档位 = 完全隐藏（与加此设置前的行为一致）
+    expect(modeButton(HIDE_LABELS)!.style.borderColor).toBe('var(--accent)')
+    expect(modeButton(BRIEF_LABELS)!.style.borderColor).not.toBe('var(--accent)')
+  })
+
+  it('persists the picked mode to the store and localStorage', () => {
+    click(modeButton(BRIEF_LABELS))
+    expect(useAppStore.getState().thinkingCollapsedMode).toBe('brief')
+    expect(localStorage.getItem('omniterm_thinking_collapsed')).toBe('brief')
+    expect(modeButton(BRIEF_LABELS)!.style.borderColor).toBe('var(--accent)')
+    // 档位互斥：另一个按钮回到非选中态
+    expect(modeButton(HIDE_LABELS)!.style.borderColor).not.toBe('var(--accent)')
+  })
+
+  it('round-trips 完全隐藏 back from 显示简要', () => {
+    click(modeButton(BRIEF_LABELS))
+    click(modeButton(HIDE_LABELS))
+    expect(useAppStore.getState().thinkingCollapsedMode).toBe('hide')
+    expect(localStorage.getItem('omniterm_thinking_collapsed')).toBe('hide')
+    expect(modeButton(HIDE_LABELS)!.style.borderColor).toBe('var(--accent)')
+  })
+
+  it('hides the collapsed-mode row entirely when 展开思考 is on', () => {
+    // 开时思考块恒展开，档位改了看不到效果——不渲染，避免空转开关。
+    expect(collapsedSection()).toBeTruthy()
+    click(expandThinkingButton())
+    expect(useAppStore.getState().expandThinking).toBe(true)
+    // find 未命中返回 undefined（不是 null）——行确实不再渲染
+    expect(collapsedSection()).toBeFalsy()
+    expect(modeButton(HIDE_LABELS)).toBeFalsy()
+    expect(modeButton(BRIEF_LABELS)).toBeFalsy()
+  })
+
+  it('brings the row back (with the stored mode still active) after turning 展开思考 off again', () => {
+    click(modeButton(BRIEF_LABELS))
+    click(expandThinkingButton()) // on
+    click(expandThinkingButton()) // off again
+    expect(collapsedSection()).toBeTruthy()
+    // 档位是独立设置，不随展开开关复位
+    expect(useAppStore.getState().thinkingCollapsedMode).toBe('brief')
+    expect(modeButton(BRIEF_LABELS)!.style.borderColor).toBe('var(--accent)')
+  })
+
+  it('defines every collapsed-mode i18n key in both en and zh', () => {
+    const enMap = en as Record<string, string>
+    const zhMap = zh as Record<string, string>
+    for (const k of [
+      'settings.thinkingCollapsed',
+      'settings.thinkingCollapsedHint',
+      'settings.thinkingCollapsedHide',
+      'settings.thinkingCollapsedBrief',
+    ]) {
+      expect(enMap[k], k).toBeTruthy()
+      expect(zhMap[k], k).toBeTruthy()
+    }
+  })
+})

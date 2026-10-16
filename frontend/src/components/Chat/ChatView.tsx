@@ -71,6 +71,10 @@ interface StoredMessage {
   /** turn 工作时长 / 等审批时长（ms）；null = 无记录（迁移前的历史行）。 */
   durationMs?: number | null
   waitMs?: number | null
+  /** 工具耗时（ms）与输出速率（tokens/s）估算；null = 无读数（历史行 / 跟踪失效 /
+   *  无可测流式窗口）。后端在 turn 定稿时结算并落库，刷新后常驻。 */
+  toolMs?: number | null
+  tps?: number | null
 }
 
 /**
@@ -104,9 +108,12 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       createdAt: new Date(m.createdAt).getTime(),
       // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
       streaming: m.status === 'streaming',
-      // 耗时读自 DB：turn 定稿时后端已结算，刷新后仍在（前端不自算）。
+      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率），
+      // 刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
       durationMs: m.durationMs,
       waitMs: m.waitMs,
+      toolMs: m.toolMs,
+      tps: m.tps,
     }
   })
 }
@@ -789,7 +796,7 @@ export function ChatView() {
               fontSize: 10,
               background: 'var(--accent-14)',
               color: 'var(--accent)',
-              borderRadius: 4,
+              borderRadius: 0,
               letterSpacing: '0.08em',
             }}
           >
@@ -849,7 +856,19 @@ export function ChatView() {
           ref={scrollRef}
           onScroll={handleScroll}
           style={{ flex: 1, minHeight: 0 }}
-          contentStyle={{ display: 'flex', flexDirection: 'column', padding: '8px 0', fontSize: chatFontSize }}
+          contentStyle={{
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '8px 0',
+            fontSize: chatFontSize,
+            // 消息列只做纵向滚动，横向一律 clip。OverlayScroll 只设 overflowY，
+            // 缺省的 overflow-x 会被连带算成 auto——任何探出右缘的 absolute 浮层
+            // （动作按钮的 label tooltip，历史上恒定溢出 15px）都会把 scrollWidth
+            // 撑宽，白长一条横向滚动条，hover 时还会显出 6px 滚动条槽位。宽代码块 /
+            // 宽表格各自带 inner 横向滚动面（MarkdownCore 的 data-x-scroll），
+            // 不依赖外层横滚，故 clip 不会吃掉任何可读内容。
+            overflowX: 'clip',
+          }}
         >
           {chatState.loadingHistory && (
             <div className="chat-replay-indicator">
@@ -909,7 +928,7 @@ export function ChatView() {
                 background: 'rgba(255, 255, 255, 0.03)',
                 border: '1px solid var(--border-subtle)',
                 borderLeft: '2px solid var(--accent)',
-                borderRadius: 4,
+                borderRadius: 0,
                 color: 'var(--text-muted)',
               }}
             >
@@ -1050,11 +1069,12 @@ export function ChatView() {
           <button
             onClick={restore}
             disabled={connectionState !== 'connected'}
+            className="pixel-press"
             style={{
               marginLeft: 'auto',
               padding: '2px 10px',
               fontSize: 11,
-              borderRadius: 4,
+              borderRadius: 0,
               border: '1px solid var(--border-subtle)',
               background: 'var(--accent-14)',
               color: 'var(--accent)',

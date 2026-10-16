@@ -40,11 +40,13 @@
 //! decision to keep it here rather than in a separate timer live in
 //! `docs/dev/plans/archive/2026-08-30-acp-work-time.md` (D1/D2).
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use agent_client_protocol::schema::v1::{ContentBlock, SessionNotification, SessionUpdate};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, SessionNotification, SessionUpdate, ToolCallStatus,
+};
 use serde::Serialize;
 use serde_json::value::RawValue;
 use sqlx::SqlitePool;
@@ -153,6 +155,28 @@ const _: () = assert!(TEXT_TAIL_TRIM_SLACK > 0 && TEXT_TAIL_TRIM_SLACK < TEXT_TA
 const _: () =
     assert!(TEXT_OMISSION_PREFIX.len() + TEXT_OMISSION_SUFFIX.len() + 20 <= TEXT_MARKER_MAX_BYTES);
 
+// ── 输出速率（tps）与工具耗时记账 ─────────────────────────────────────────
+// 口径整体移植自前端 `utils/turnClock.ts`（E13–E20 的算法与测试向量），2026-10-15
+// 翻盘后计算迁到后端作为唯一真相源、前端只显示（详见 work-time 计划 E23）。数值
+// 语义必须与原前端实现逐条对齐：回归向量见本文件 `mod tests` 的「速率与工具记账」区。
+
+/// 字符→token 的换算比：ACP 无输出 token 字段（`usage_update` 只是上下文配额），
+/// 按「输出字符数 ÷ 4」估算（E13）。
+const CHARS_PER_TOKEN: u64 = 4;
+
+/// 相邻输出 chunk 间隔超过该值即视为一次「停顿」：模型停止吐字（工具执行 /
+/// 审批等待 / 思考间隙 / agent 循环空档），停顿段不计入速度分母（E20 白名单）。
+/// 实测 pi-acp 正常流式的 chunk 间隔在数百毫秒内（真实流量最大 ~400ms），
+/// 1s 留有余量。
+const OUTPUT_GAP_MS: u64 = 1_000;
+
+/// 工具并集的活跃跟踪上限：只保留活跃 ID、完成即释放；同时限制单条 ID 的
+/// UTF-16 单元数（与旧前端 `.length` 同口径），避免只限条数不限体积。任一条
+/// 越界都令**工具**估算整体失效（丢弃一条后并集不再完整，宁缺毋滥）；tps 走
+/// 白名单、不读工具状态，不受影响（E20）。
+const MAX_ACTIVE_TURN_TOOLS: usize = 256;
+const MAX_TURN_TOOL_ID_UTF16: usize = 1024;
+
 #[derive(Default)]
 struct TurnState {
     /// True between `begin_turn` and `finalize_turn`. Gates folding so replay /
@@ -188,6 +212,26 @@ struct TurnState {
     /// 下一次 `begin_turn` 才清 —— WS 层在 `mark_prompt_idle` 之后要拿它拼 `prompt_done`。
     /// `None` = 本 client 还没定稿过任何 turn。
     last_timing: Option<TurnTiming>,
+    /// 当前输出 burst（连续流式段，tps 白名单分母）；`None` = 尚无或已归入合计。
+    burst: Option<OutputBurst>,
+    /// 已闭合 burst 的字符合计（tps 分子存量）。
+    stream_chars: u64,
+    /// 已闭合 burst 的时长合计（ms；tps 分母存量）。
+    stream_ms: u64,
+    /// 显式 `in_progress` 且尚未结束的工具 id 集合（执行并集的成员）。
+    active_tools: HashSet<String>,
+    /// 开放并集起点（**工作坐标** ms；`None` = 无开放并集）。在工作坐标上度量，
+    /// 审批等待与工具执行重叠时不会重复扣除（E15）。
+    tool_union_since_ms: Option<u64>,
+    /// 开放并集的首段：并集起点 → 并集内首次输出（`tool_has_head` 时有效）。
+    tool_head_ms: u64,
+    tool_has_head: bool,
+    /// 已闭合工具并集的「非生成段」累计（首段 + 尾段）：工具耗时的存量部分。
+    pure_tool_ms: u64,
+    /// 本 turn 最近一次输出的工作坐标：开放并集尾段的起点（E19）。
+    last_output_work_ms: Option<u64>,
+    /// 工具跟踪越界后整体失效（读数消失，不虚报）；`begin_turn` 重置。
+    tool_estimates_valid: bool,
     /// Raw `SessionUpdate` payloads for the active turn, in arrival order. Kept as
     /// pre-serialized [`RawValue`] so the window's byte size is known without
     /// re-formatting and flush only has to copy bytes. Bounded on both axes — frame
@@ -205,6 +249,200 @@ struct TurnState {
     seq: u64,
     /// Set on fold, cleared by the writer after a flush.
     dirty: bool,
+}
+
+/// 当前输出 burst：首 / 末 chunk 时刻与字符数（tps 白名单分母的开放段）。
+struct OutputBurst {
+    first: Instant,
+    last: Instant,
+    chars: u64,
+}
+
+/// tps 与工具耗时的计算全部落在这些方法上（口径见模块头与常量注释）。所有方法
+/// 显式接收 `now`：生产路径传 `Instant::now()`，测试注入合成时间线——与旧前端
+/// `at` 注入同构，回归向量才能逐毫秒对齐。
+impl TurnState {
+    /// 工作时长（ms）= 墙钟 − 已闭合等待 − 当前开放等待；各段夹到零。
+    fn work_elapsed_ms(&self, now: Instant) -> u64 {
+        let Some(started) = self.started else {
+            return 0;
+        };
+        let wall = ms_between(started, now);
+        let waiting = self.wait_since.map_or(0, |since| ms_between(since, now));
+        wall.saturating_sub(self.wait_ms).saturating_sub(waiting)
+    }
+
+    /// 开放工具并集的完整跨度（首段 / 快照的计算源）。
+    fn open_tool_ms(&self, now: Instant) -> u64 {
+        self.tool_union_since_ms.map_or(0, |since| self.work_elapsed_ms(now).saturating_sub(since))
+    }
+
+    /// 开放并集的尾段 = 末次输出（或并集起点）→ now。末次输出之后没有新的输出
+    /// 证据，该段是模型在等工具：实时即按工具计，读数不随工具执行下跌；新输出
+    /// 到达后末次输出前移，该段被认领为生成（中途修正，E19）。
+    fn open_tail_ms(&self, now: Instant) -> u64 {
+        let Some(since) = self.tool_union_since_ms else {
+            return 0;
+        };
+        let anchor = match self.last_output_work_ms {
+            Some(o) if o > since => o,
+            _ => since,
+        };
+        self.work_elapsed_ms(now).saturating_sub(anchor)
+    }
+
+    /// 开放并集当前应归工具的段 = 首段 + 尾段。无输出时首段为 0、尾段即全跨度。
+    fn open_tool_deduct_ms(&self, now: Instant) -> u64 {
+        self.tool_head_ms + self.open_tail_ms(now)
+    }
+
+    /// 输出活跃时长与字符（tps 分子/分母）= 已闭合 burst 合计 + 当前 burst 至今；
+    /// 停顿超过 [`OUTPUT_GAP_MS`] 则当前 burst 闭合在末 chunk（其测得时长已入
+    /// 合计，读数冻结不随等待下跌）。零长度 burst（整段只有一个 chunk）既不带
+    /// 时长也不带字符——没有可测窗口就不虚构（E17 同款取舍）。
+    fn stream_totals(&self, now: Instant) -> (u64, u64) {
+        let mut chars = self.stream_chars;
+        let mut ms = self.stream_ms;
+        if let Some(b) = &self.burst {
+            let end = if ms_between(b.last, now) > OUTPUT_GAP_MS { b.last } else { now };
+            if end > b.first {
+                chars += b.chars;
+                ms += ms_between(b.first, end);
+            }
+        }
+        (chars, ms)
+    }
+
+    /// 实时速率估算（tokens/s）；无可测窗口 / 无输出 → `None`。
+    fn tps(&self, now: Instant) -> Option<f64> {
+        let (chars, ms) = self.stream_totals(now);
+        compute_tps(chars, ms)
+    }
+
+    /// 可归因于工具的时长（ms，已扣审批与生成窗口）。`None` = 跟踪越界失效；
+    /// `Some(0)` = 有效观测下没记到工具（无工具事件，或状态从未显式 in_progress）
+    /// —— 与旧前端 `turnToolElapsedMs` 的三态完全对齐（失效 → null，观测零 → 0，
+    /// 渲染端 `formatToolDuration` 对 0 与 null 同样不渲染）。
+    fn tool_elapsed_ms(&self, now: Instant) -> Option<u64> {
+        if !self.tool_estimates_valid {
+            return None;
+        }
+        Some(self.pure_tool_ms + self.open_tool_deduct_ms(now))
+    }
+
+    /// 某一时刻的完整读数快照（实时推送与定稿结算共用）。
+    fn stats_at(&self, now: Instant) -> TurnStats {
+        TurnStats {
+            work_ms: self.work_elapsed_ms(now),
+            tool_ms: self.tool_elapsed_ms(now),
+            tps: self.tps(now),
+        }
+    }
+
+    /// 输出字符到达：tps 白名单记账 + 推进工具展示的「末次输出」锚点（E18/E19）。
+    /// 间隔 ≤ [`OUTPUT_GAP_MS`] 归入当前 burst；超阈值先闭合旧 burst（零长度不带
+    /// 字符）再新起一段——中间的静默（工具执行 / 审批 / agent 循环）不进任何
+    /// 一边的分母。tps 不依赖工具状态，故工具跟踪失效不影响本记账。
+    fn stats_on_output(&mut self, chars: u64, now: Instant) {
+        let gap_closed =
+            self.burst.as_ref().is_none_or(|b| ms_between(b.last, now) > OUTPUT_GAP_MS);
+        if gap_closed {
+            if let Some(b) = self.burst.take()
+                && b.last > b.first
+            {
+                self.stream_chars += b.chars;
+                self.stream_ms += ms_between(b.first, b.last);
+            }
+            self.burst = Some(OutputBurst { first: now, last: now, chars: 0 });
+        }
+        if let Some(b) = self.burst.as_mut() {
+            b.chars += chars;
+            b.last = now;
+        }
+        self.last_output_work_ms = Some(self.work_elapsed_ms(now));
+        if !self.active_tools.is_empty() && !self.tool_has_head {
+            // 并集内首次输出：封存首段；此后首段不再增长（工具展示口径）。
+            self.tool_head_ms = self.open_tool_ms(now);
+            self.tool_has_head = true;
+        }
+    }
+
+    /// 工具执行状态变化：只有显式 `in_progress` 才**起表**；任何其他状态
+    /// （`completed` / `failed` / `pending` / 未知变体）都**释放**该 id——「不证明
+    /// 正在执行」即从并集移除，与旧前端对任意非 start 状态的 delete 语义逐条对齐；
+    /// 状态缺省（partial update）在 [`tool_status_update`] 处就已滤掉，保持既有状态。
+    /// 越界（空 id / 超长 id / 活跃数超限）令**工具**估算整体失效并释放全部 ID，
+    /// 不能丢一条活跃工具后继续假装并集完整。失效后本 turn 不再跟踪。
+    fn stats_on_tool(&mut self, id: &str, status: &ToolCallStatus, now: Instant) {
+        if !self.tool_estimates_valid {
+            return;
+        }
+        match status {
+            ToolCallStatus::InProgress => {
+                if self.active_tools.contains(id) {
+                    return;
+                }
+                if id.is_empty()
+                    || id.encode_utf16().count() > MAX_TURN_TOOL_ID_UTF16
+                    || self.active_tools.len() >= MAX_ACTIVE_TURN_TOOLS
+                {
+                    // 丢弃一条活跃工具后并集不再完整，工具估算整体作废（E14）；
+                    // 读数会静默消失，留一条 WARN 便于定位是哪条边界被踩到。
+                    tracing::warn!(
+                        active_tools = self.active_tools.len(),
+                        id_utf16 = id.encode_utf16().count(),
+                        "tool tracking overflow; invalidating tool estimate for this turn"
+                    );
+                    self.tool_estimates_valid = false;
+                    self.active_tools.clear();
+                    self.tool_union_since_ms = None;
+                    self.tool_head_ms = 0;
+                    self.tool_has_head = false;
+                    return;
+                }
+                if self.active_tools.is_empty() {
+                    self.tool_union_since_ms = Some(self.work_elapsed_ms(now));
+                    self.tool_head_ms = 0;
+                    self.tool_has_head = false;
+                }
+                self.active_tools.insert(id.to_string());
+            }
+            _ => {
+                if self.active_tools.remove(id) && self.active_tools.is_empty() {
+                    // 固化本并集的非生成段（首段 + 尾段）：此后任何读数都不再
+                    // 依赖它是否仍开放。
+                    let tail = self.open_tail_ms(now);
+                    self.pure_tool_ms += self.tool_head_ms + tail;
+                    self.tool_union_since_ms = None;
+                    self.tool_head_ms = 0;
+                    self.tool_has_head = false;
+                }
+            }
+        }
+    }
+
+    /// `begin_turn` 的速率与工具记账重置。
+    fn reset_stats(&mut self) {
+        self.burst = None;
+        self.stream_chars = 0;
+        self.stream_ms = 0;
+        self.active_tools.clear();
+        self.tool_union_since_ms = None;
+        self.tool_head_ms = 0;
+        self.tool_has_head = false;
+        self.pure_tool_ms = 0;
+        self.last_output_work_ms = None;
+        self.tool_estimates_valid = true;
+    }
+}
+
+/// 无输出 / 无有效时长不渲染，非有限输入或溢出绝不返回 Infinity/NaN。
+fn compute_tps(output_chars: u64, elapsed_ms: u64) -> Option<f64> {
+    if output_chars == 0 || elapsed_ms == 0 {
+        return None;
+    }
+    let tps = output_chars as f64 / CHARS_PER_TOKEN as f64 / (elapsed_ms as f64 / 1000.0);
+    if tps.is_finite() { Some(tps) } else { None }
 }
 
 /// Byte-bounded accumulator for the turn's plain text.
@@ -332,10 +570,33 @@ pub struct TurnTiming {
     pub work_ms: u64,
     /// 其中等真人审批的时长。
     pub wait_ms: u64,
+    /// 可归因于工具执行的时长（ms，已扣审批与生成窗口）。`None` = 跟踪越界
+    /// 失效（宁缺毋滥）；`Some(0)` = 有效观测下没记到工具。随 `prompt_done`
+    /// 下发给前端当场显示，并落 `chat_messages.tool_ms` 供刷新后常驻。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_ms: Option<u64>,
+    /// 输出速率估算（tokens/s，白名单口径见常量注释）。`None` = 无可测流式
+    /// 窗口（宁缺毋滥）。随 `prompt_done` 下发并落 `chat_messages.tps`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tps: Option<f64>,
     /// 本 turn 的 `chat_messages` 行 id，`None` = 未折叠任何帧的空 turn。
     /// 不下发：`prompt_done` 帧另有顶层 `row_id` 承载同一个值。
     #[serde(skip)]
     pub row_id: Option<String>,
+}
+
+/// 进行中 turn 的实时读数快照（WS `turn_stats` 帧的载荷）。与定稿结算同一套
+/// 计算、同一把锁，只是采样时刻不同——前端只显示、不计算。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct TurnStats {
+    /// 工作时长（ms）= 墙钟 − 审批等待（与定稿 `work_ms` 同口径）。
+    pub work_ms: u64,
+    /// 工具耗时估算（ms），语义同 [`TurnTiming::tool_ms`]。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_ms: Option<u64>,
+    /// 输出速率估算（tokens/s），语义同 [`TurnTiming::tps`]。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tps: Option<f64>,
 }
 
 pub struct TurnAccumulator {
@@ -384,6 +645,7 @@ impl TurnAccumulator {
             st.frames_bytes = 0;
             st.text.clear();
             st.dirty = false;
+            st.reset_stats();
         }
     }
 
@@ -409,6 +671,13 @@ impl TurnAccumulator {
             }
             if let Some(text) = agent_message_text(&notification.update) {
                 st.text.push_str(text);
+            }
+            // 输出速率与工具耗时记账（口径见常量注释）：只认正文/思考的文本增量
+            // 与显式执行状态。一帧至多属一类，采样时刻取实际到达时刻。
+            if let Some(chars) = output_chars(&notification.update) {
+                st.stats_on_output(chars, Instant::now());
+            } else if let Some((id, status)) = tool_status_update(&notification.update) {
+                st.stats_on_tool(id, status, Instant::now());
             }
             match serde_json::value::to_raw_value(&notification.update) {
                 Ok(frame) => {
@@ -503,26 +772,41 @@ impl TurnAccumulator {
     /// 即被定稿行的 id）；`None` = 早已定稿（无事可做）。supersede（新 prompt 顶掉未
     /// 终结 turn）与世代守卫靠这个返回值区分「我收的尾」与「轮不到我」。
     pub fn finalize_turn(&self) -> Option<TurnTiming> {
+        self.finalize_turn_at(Instant::now())
+    }
+
+    /// [`Self::finalize_turn`] 的显式采样时刻版本；测试注入合成时间线，生产恒传
+    /// `Instant::now()`。同一 `now` 采样读数与墙钟，保证 `work_ms + wait_ms` 与
+    /// 统计口径落在同一时刻上。
+    fn finalize_turn_at(&self, now: Instant) -> Option<TurnTiming> {
         let timing = {
             let Ok(mut st) = self.inner.lock() else { return None };
             if !st.active {
                 return None;
             }
             st.active = false;
-            let wall_ms = st.started.map_or(0, elapsed_ms);
+            // 读数快照必须先于等待段闭合采样：开放等待仍在 `wait_since` 上，
+            // 工具尾段的冻结语义依赖它（与旧前端 `endTurn` 的顺序一致）。
+            let stats = st.stats_at(now);
+            let wall_ms = st.started.map_or(0, |s| ms_between(s, now));
             // 定稿时审批可能仍挂着（用户点取消 / reaper 卡死兜底），那一段若不结算就会被
             // 算成工作 —— 正是扣除等待想消除的失真。截到定稿时刻（计划 D5）。
             let mut wait_ms = st.wait_ms;
             if let Some(since) = st.wait_since.take() {
-                wait_ms += elapsed_ms(since);
+                wait_ms += ms_between(since, now);
             }
             // 各段等待都落在 turn 内，理论上不会超过墙钟；clamp 兜住舍入误差，让唯一
             // 一处减法（下一行）恒不下溢。
             let wait_ms = wait_ms.min(wall_ms);
             st.wait_depth = 0;
             st.wait_ms = 0;
-            let timing =
-                TurnTiming { work_ms: wall_ms - wait_ms, wait_ms, row_id: st.row_id.clone() };
+            let timing = TurnTiming {
+                work_ms: wall_ms - wait_ms,
+                wait_ms,
+                tool_ms: stats.tool_ms,
+                tps: stats.tps,
+                row_id: st.row_id.clone(),
+            };
             st.last_timing = Some(timing.clone());
             timing
         };
@@ -599,6 +883,16 @@ impl TurnAccumulator {
         self.inner.lock().ok()?.last_timing.clone()
     }
 
+    /// 进行中 turn 的实时读数（WS 层按秒推送，前端只显示）。`None` = 无活跃 turn。
+    /// 与定稿结算同一套计算、同一把锁，只是采样时刻不同——不存在两套口径。
+    pub fn live_stats(&self) -> Option<TurnStats> {
+        let st = self.inner.lock().ok()?;
+        if !st.active {
+            return None;
+        }
+        Some(st.stats_at(Instant::now()))
+    }
+
     /// Snapshot the live turn state for a freshly-connected WS client (reconnect
     /// reconciliation). Always reports `active` and the current `seq` high-water mark;
     /// `row_id` is `None` until the first frame is folded. See the WS `turn_snapshot`
@@ -660,6 +954,12 @@ fn elapsed_ms(since: Instant) -> u64 {
     since.elapsed().as_millis() as u64
 }
 
+/// `from → to` 的毫秒差值。饱和（`to < from` 取 0）而非 panic：合成时间线不该
+/// 出现倒序，真出现时也宁可记 0 不炸连接任务。
+fn ms_between(from: Instant, to: Instant) -> u64 {
+    to.saturating_duration_since(from).as_millis() as u64
+}
+
 /// 这条 `SessionUpdate` 是否会在聊天流里呈现成**用户看得见的内容**
 /// （正文 / 思考 / 工具卡 / 计划）。
 ///
@@ -701,6 +1001,38 @@ fn agent_message_text(update: &SessionUpdate) -> Option<&str> {
         return Some(&t.text);
     }
     None
+}
+
+/// [`agent_message_text`] 的思考版：`AgentThoughtChunk` 的文本内容块。
+fn agent_thought_text(update: &SessionUpdate) -> Option<&str> {
+    if let SessionUpdate::AgentThoughtChunk(chunk) = update
+        && let ContentBlock::Text(t) = &chunk.content
+    {
+        return Some(&t.text);
+    }
+    None
+}
+
+/// 本帧的输出字符数（tps 分子）：正文与思考的文本块按 **UTF-16 单元**计——与
+/// 旧前端 `action.text.length` 同口径，保证既有读数（及 E20 的校准）逐字延续；
+/// 非文本内容（图片等）不计（前端分类器同样不产出 text action）。
+fn output_chars(update: &SessionUpdate) -> Option<u64> {
+    let text = agent_message_text(update).or_else(|| agent_thought_text(update))?;
+    Some(text.encode_utf16().count() as u64)
+}
+
+/// 本帧携带的工具执行状态：`(toolCallId, status)`。
+/// - `ToolCall`（初始卡片）：status 必有（SDK 对缺省/无法识别的状态串解析为
+///   `Pending`——`DefaultOnError` 语义，与旧前端「缺省不证明执行」一致）。
+/// - `ToolCallUpdate`（partial update）：status 可选，缺省 = 保持既有状态。
+fn tool_status_update(update: &SessionUpdate) -> Option<(&str, &ToolCallStatus)> {
+    match update {
+        SessionUpdate::ToolCall(t) => Some((t.tool_call_id.0.as_ref(), &t.status)),
+        SessionUpdate::ToolCallUpdate(u) => {
+            u.fields.status.as_ref().map(|s| (u.tool_call_id.0.as_ref(), s))
+        }
+        _ => None,
+    }
 }
 
 /// 取下一条 writer 命令。`biased` 且 `end_rx` 优先：两条通道的 sender 同生命周期
@@ -773,8 +1105,15 @@ async fn writer_loop(
                 pending_since = None;
                 let (work, wait) = (t.work_ms as i64, t.wait_ms as i64);
                 if let Some(row_id) = &t.row_id
-                    && let Err(e) =
-                        chat_persistence::finalize_message(&db, row_id, work, wait).await
+                    && let Err(e) = chat_persistence::finalize_message(
+                        &db,
+                        row_id,
+                        work,
+                        wait,
+                        t.tool_ms.map(|v| v as i64),
+                        t.tps,
+                    )
+                    .await
                 {
                     tracing::warn!("failed to finalize streaming chat message: {}", e);
                 }
@@ -844,11 +1183,15 @@ mod tests {
     }
 
     /// 取走 EndTurn 通道里已排队的命令，只留下载荷（每 turn 至多一条）。
-    fn end_turns(rx: &mut mpsc::UnboundedReceiver<WriterCmd>) -> Vec<(u64, u64, Option<String>)> {
+    /// 前三位是历史字段（既有断言的索引依赖），速率与工具读数追加在后。
+    #[allow(clippy::type_complexity)]
+    fn end_turns(
+        rx: &mut mpsc::UnboundedReceiver<WriterCmd>,
+    ) -> Vec<(u64, u64, Option<String>, Option<u64>, Option<f64>)> {
         let mut out = Vec::new();
         while let Ok(cmd) = rx.try_recv() {
             if let WriterCmd::EndTurn(t) = cmd {
-                out.push((t.work_ms, t.wait_ms, t.row_id));
+                out.push((t.work_ms, t.wait_ms, t.row_id, t.tool_ms, t.tps));
             }
         }
         out
@@ -1250,7 +1593,7 @@ mod tests {
 
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "一个 turn 只应有一条记账：{turns:?}");
-        let (work, wait, _) = &turns[0];
+        let (work, wait, _, _, _) = &turns[0];
         assert!(*wait >= 30, "未决审批那段应截到定稿时刻计入 wait，得到 {wait}ms");
         // 唯一一处减法在 finalize 锁内且已 clamp，故 work 恒非负、两者相加即墙钟。
         assert!(*work <= 50, "等待不得反噬工作时长，work={work} wait={wait}");
@@ -1313,7 +1656,7 @@ mod tests {
         assert!(acc.finalize_turn().is_some());
         let turns = end_turns(&mut end_rx);
         assert_eq!(turns.len(), 1, "应恰好一条 EndTurn：{turns:?}");
-        let (work, wait, _) = &turns[0];
+        let (work, wait, _, _, _) = &turns[0];
         assert!(*work >= 18, "取消后的收尾应算工作，得到 {work}ms");
         assert!(*wait < 48, "等待不得把取消后的收尾也算进去，得到 {wait}ms");
     }
@@ -1464,5 +1807,455 @@ mod tests {
         assert!(len < 8, "前置条件：可见帧应已被字节预算驱逐，窗口仍留 {len} 帧");
         assert!(bytes <= MAX_BLOCKS_BYTES, "窗口须守字节预算：{bytes} B");
         assert!(acc.turn_has_visible_output(), "驱逐掉的可见帧不得把判定翻成假");
+    }
+
+    // ── 速率（tps）与工具耗时记账 ─────────────────────────────────────────
+    // 口径 2026-10-15 自前端 `utils/turnClock.ts` 整体迁移至后端（work-time 计划
+    // E23）。以下向量按旧前端测试逐条移植（同名场景、同期望值），保证读数连续。
+    // 时间一律合成注入（旧前端 `at` 参数的 Rust 版）：不引入真实等待，逐毫秒对齐。
+
+    /// 合成时间线：`base + ms`。
+    fn at(base: Instant, ms: u64) -> Instant {
+        base + Duration::from_millis(ms)
+    }
+
+    /// 起一个合成时钟的 turn（`begin_turn` 后把起点覆写为 `base`）。
+    fn begin_turn_at(acc: &TurnAccumulator, base: Instant) {
+        acc.begin_turn();
+        acc.inner.lock().expect("lock").started = Some(base);
+    }
+
+    /// 合成时钟的等待段开关（生产同款语义见 `begin_wait` / `end_wait`）。
+    fn open_wait(st: &mut TurnState, at_: Instant) {
+        st.wait_depth += 1;
+        if st.wait_since.is_none() {
+            st.wait_since = Some(at_);
+        }
+    }
+
+    fn close_wait(st: &mut TurnState, at_: Instant) {
+        st.wait_depth = st.wait_depth.saturating_sub(1);
+        if st.wait_depth == 0
+            && let Some(since) = st.wait_since.take()
+        {
+            st.wait_ms += ms_between(since, at_);
+        }
+    }
+
+    fn assert_tps(actual: Option<f64>, expected: f64) {
+        let value = actual.expect("应测得速率");
+        assert!((value - expected).abs() < 1e-6, "tps 期望 {expected}，实得 {value}");
+    }
+
+    fn in_progress() -> ToolCallStatus {
+        ToolCallStatus::InProgress
+    }
+
+    /// `char/4/(ms/1000)` 的换算与三态：0 输出 / 0 时长 → `None`，不产生 NaN/Inf。
+    #[test]
+    fn compute_tps_converts_and_rejects_zero() {
+        assert_eq!(compute_tps(0, 1_000), None);
+        assert_eq!(compute_tps(40, 0), None);
+        assert_eq!(compute_tps(40, 1_000), Some(10.0));
+        assert_eq!(compute_tps(80, 2_000), Some(10.0));
+        assert_eq!(compute_tps(20, 1_000), Some(5.0));
+    }
+
+    /// 首字前的等待不进分母：解码窗口从首个输出起算（E17）。单 chunk 无可测窗口。
+    #[test]
+    fn decode_window_starts_at_first_output() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(1_200, at(base, 8_000));
+        assert_eq!(st.tps(at(base, 8_000)), None, "单 chunk 无可测窗口，不把等待算成生成");
+        st.stats_on_output(1_200, at(base, 9_000));
+        assert_tps(st.tps(at(base, 9_000)), 600.0); // 2_400 字符 ÷ 4 ÷ 1s
+    }
+
+    /// 输出间隔 ≤ 阈值归入同一 burst（窗口延长到 now）；超阈值闭合在末 chunk。
+    #[test]
+    fn gap_within_threshold_extends_the_open_window() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 0));
+        st.stats_on_output(400, at(base, 800));
+        assert_tps(st.tps(at(base, 1_700)), 800.0 / 4.0 / 1.7);
+        assert_tps(st.tps(at(base, 2_000)), 800.0 / 4.0 / 0.8);
+    }
+
+    /// 审批挂起期间读数冻结在最后测得值（burst 已闭合），解除后新输出另起一段。
+    #[test]
+    fn approval_wait_freezes_the_reading_and_output_resumes() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_output(400, at(base, 2_000)); // burst [1s,2s]
+        open_wait(&mut st, at(base, 2_000));
+        // 挂 5 分钟：burst 早已闭合，读数一动不动，不随真人思考时间跌落。
+        assert_tps(st.tps(at(base, 300_000)), 200.0);
+        close_wait(&mut st, at(base, 302_000));
+        assert_tps(st.tps(at(base, 302_000)), 200.0);
+        // 恢复吐字：间隔远超阈值 → 新开一段，两段字符合计 ÷ 合计时长。
+        st.stats_on_output(800, at(base, 303_000));
+        assert_tps(st.tps(at(base, 303_000)), 200.0);
+        st.stats_on_output(800, at(base, 304_000));
+        assert_tps(st.tps(at(base, 304_000)), 300.0); // 2_400 字符 ÷ 2s
+    }
+
+    /// 审批挂起与工具并集同时冻住；挂起段不计入工具，tps 只看输出流（白名单）。
+    #[test]
+    fn wait_freezes_tool_union_and_whitelist_ignores_tools() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 0));
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        open_wait(&mut st, at(base, 2_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 120_000)), Some(1_000), "并集跨度冻在挂起那刻");
+        assert_eq!(st.tps(at(base, 120_000)), None, "单 chunk 无可测窗口");
+        st.stats_on_output(400, at(base, 60_000));
+        assert_eq!(st.tps(at(base, 60_000)), None);
+        close_wait(&mut st, at(base, 122_000));
+        assert_eq!(st.work_elapsed_ms(at(base, 122_000)), 2_000, "挂起的 120s 不算工作");
+        assert_eq!(st.tool_elapsed_ms(at(base, 122_000)), Some(1_000));
+        assert_eq!(st.tps(at(base, 122_000)), None);
+    }
+
+    /// 首个输出落在工具并集内：首段（并集起点 → 首输出）封存，静默尾段归工具。
+    #[test]
+    fn first_output_inside_union_seals_head_and_tail() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        st.stats_on_output(1_200, at(base, 4_000));
+        assert_eq!(st.tps(at(base, 4_000)), None, "零长度窗口，不把工具时间算成生成");
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 6_000));
+        assert_eq!(st.tps(at(base, 6_000)), None);
+        assert_eq!(
+            st.tool_elapsed_ms(at(base, 6_000)),
+            Some(5_000),
+            "首段 [1s,4s] + 静默尾段 [4s,6s]"
+        );
+    }
+
+    /// 模型持续吐字期间工具表冻结（E18）：每次输出把「末次输出」前移，尾段从头起算。
+    #[test]
+    fn prose_streaming_freezes_tool_timing_and_resumes_after_last_delta() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 2_000)), Some(1_000));
+        st.stats_on_output(400, at(base, 2_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 2_000)), Some(1_000));
+        st.stats_on_output(400, at(base, 2_500));
+        assert_eq!(st.tool_elapsed_ms(at(base, 2_500)), Some(1_000));
+        st.stats_on_output(400, at(base, 11_500));
+        assert_eq!(st.tool_elapsed_ms(at(base, 11_500)), Some(1_000));
+        st.stats_on_output(400, at(base, 12_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 12_000)), Some(1_000));
+        // 末次输出之后到并集关闭的 1.5s 无新输出证据：静默执行段归工具（E19）。
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 13_500));
+        assert_eq!(st.tool_elapsed_ms(at(base, 13_500)), Some(2_500));
+        // 白名单：两个 burst 各 800 字符 ÷ 0.5s，中间的 9s 静默不进分母。
+        assert_tps(st.tps(at(base, 13_500)), 400.0);
+    }
+
+    /// 首字之后整段落在工具内且无后续输出：无可测速率（宁 null 不虚报），工具照记。
+    #[test]
+    fn tool_only_silence_yields_no_rate() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        assert_eq!(st.work_elapsed_ms(at(base, 11_000)), 11_000);
+        assert_eq!(st.tool_elapsed_ms(at(base, 11_000)), Some(10_000));
+        assert_eq!(st.tps(at(base, 11_000)), None);
+
+        let timing = {
+            drop(st);
+            acc.finalize_turn_at(at(base, 11_000)).expect("定稿")
+        };
+        assert_eq!(timing.tool_ms, Some(10_000));
+        assert_eq!(timing.tps, None);
+    }
+
+    /// 并行工具的重叠只计一次；并集在**最后一个**工具结束时才关闭。
+    #[test]
+    fn parallel_tools_count_once_and_close_after_the_last() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        st.stats_on_tool("b", &in_progress(), at(base, 2_000));
+        st.stats_on_tool("a", &in_progress(), at(base, 3_000)); // 重复 start：幂等
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 4_000));
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 5_000)); // 重复结束：无操作
+        assert_eq!(st.tool_elapsed_ms(at(base, 6_000)), Some(5_000));
+        st.stats_on_tool("b", &ToolCallStatus::Failed, at(base, 7_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 8_000)), Some(6_000));
+        assert_eq!(st.tps(at(base, 8_000)), None);
+    }
+
+    /// 审批与工具并集重叠只扣一次（工作坐标度量）；定稿时仍挂着的审批截到定稿时刻。
+    #[test]
+    fn approval_overlap_deducts_once_from_work_and_tools() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        open_wait(&mut st, at(base, 2_000));
+        st.stats_on_tool("b", &in_progress(), at(base, 3_000));
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 4_000));
+        close_wait(&mut st, at(base, 5_000));
+        open_wait(&mut st, at(base, 7_000));
+        assert_eq!(st.work_elapsed_ms(at(base, 10_000)), 4_000);
+        assert_eq!(st.tool_elapsed_ms(at(base, 10_000)), Some(3_000));
+        assert_eq!(st.tps(at(base, 10_000)), None, "解码窗口全落在工具并集内");
+
+        let timing = {
+            drop(st);
+            acc.finalize_turn_at(at(base, 10_000)).expect("定稿")
+        };
+        assert_eq!(timing.tool_ms, Some(3_000));
+        assert_eq!(timing.tps, None);
+        assert_eq!(timing.work_ms, 4_000, "未决审批那段截到定稿时刻计入 wait");
+    }
+
+    /// 只有显式 in_progress 才起表；pending / 缺省状态不证明执行（缺省在帧分类处
+    /// 已滤掉），其中 pending 会**释放**并集成员（与旧前端 delete 语义一致）。
+    #[test]
+    fn explicit_status_only_and_pending_releases() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_tool("b", &ToolCallStatus::Pending, at(base, 1_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 3_000)), Some(0), "pending 不起表");
+        st.stats_on_tool("a", &in_progress(), at(base, 3_000));
+        assert_eq!(st.tool_elapsed_ms(at(base, 5_000)), Some(2_000));
+        st.stats_on_tool("a", &ToolCallStatus::Pending, at(base, 5_000));
+        assert_eq!(
+            st.tool_elapsed_ms(at(base, 7_000)),
+            Some(2_000),
+            "pending 释放并集，此后不再走表"
+        );
+        assert_eq!(st.tps(at(base, 7_000)), None);
+    }
+
+    /// 静默尾段归工具、并集关闭后新并集另记（E19 的组合形态）。
+    #[test]
+    fn silent_tail_stays_tool_time_across_unions() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_tool("a", &in_progress(), at(base, 1_000));
+        open_wait(&mut st, at(base, 2_000));
+        close_wait(&mut st, at(base, 4_000));
+        assert_eq!(st.tps(at(base, 5_000)), None);
+        assert_eq!(st.tps(at(base, 6_000)), None);
+        st.stats_on_output(400, at(base, 5_000)); // 并集内输出：封存首段
+        assert_eq!(st.tps(at(base, 5_000)), None);
+        assert_tps(st.tps(at(base, 6_000)), 100.0); // 400 字符 ÷ 1s（开放窗口含 ≤1s 容差）
+        st.stats_on_tool("b", &in_progress(), at(base, 6_000));
+        st.stats_on_tool("a", &ToolCallStatus::Completed, at(base, 7_000));
+        st.stats_on_tool("b", &ToolCallStatus::Completed, at(base, 8_000));
+        st.stats_on_tool("c", &in_progress(), at(base, 9_000));
+
+        let timing = {
+            drop(st);
+            acc.finalize_turn_at(at(base, 11_000)).expect("定稿")
+        };
+        // a/b 并集的非生成段 [1s,6s] + c 开放并集的 [7s,9s]，共 7s。
+        assert_eq!(timing.tool_ms, Some(7_000));
+        assert_eq!(timing.tps, None, "两个孤立 chunk 各自单段：无可测流式窗口");
+    }
+
+    /// 活跃跟踪越界（条数）→ 工具估算整体失效；work 与 tps 不受影响（E20 解耦）。
+    #[test]
+    fn tool_overflow_invalidates_tools_not_work_or_rate() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        for i in 0..MAX_ACTIVE_TURN_TOOLS {
+            st.stats_on_tool(&format!("tool-{i}"), &in_progress(), at(base, 1_000));
+        }
+        assert_eq!(st.tool_elapsed_ms(at(base, 2_000)), Some(1_000));
+        st.stats_on_tool("overflow", &in_progress(), at(base, 2_000));
+        assert_eq!(st.work_elapsed_ms(at(base, 3_000)), 3_000, "越界不得动工作计时");
+        assert_eq!(st.tool_elapsed_ms(at(base, 3_000)), None, "越界 → 工具读数整体作废");
+        assert_eq!(st.tps(at(base, 3_000)), None);
+    }
+
+    /// 单条 ID 超长（UTF-16 口径）同样令工具估算失效；tps 照常可测（白名单解耦）。
+    #[test]
+    fn oversized_tool_id_drops_tools_but_keeps_rate() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        st.stats_on_output(400, at(base, 1_500)); // burst [1s,1.5s]
+        st.stats_on_tool(&"x".repeat(MAX_TURN_TOOL_ID_UTF16 + 1), &in_progress(), at(base, 1_000));
+
+        let timing = {
+            drop(st);
+            acc.finalize_turn_at(at(base, 2_600)).expect("定稿")
+        };
+        assert_tps(timing.tps, 400.0); // 800 字符 ÷ 0.5s
+        assert_eq!(timing.tool_ms, None, "超长 ID 被丢出并集 → 工具估算作废");
+    }
+
+    /// 顺序工具不会耗尽活跃跟踪（完成即释放）。
+    #[test]
+    fn sequential_tools_release_ids_and_do_not_overflow() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let mut st = acc.inner.lock().expect("lock");
+
+        st.stats_on_output(400, at(base, 1_000));
+        for i in 0..=MAX_ACTIVE_TURN_TOOLS {
+            let id = format!("tool-{i}");
+            st.stats_on_tool(&id, &in_progress(), at(base, 1_000 + i as u64));
+            st.stats_on_tool(&id, &ToolCallStatus::Completed, at(base, 1_001 + i as u64));
+        }
+        st.stats_on_output(1_200, at(base, 2_000));
+        // 唯一 burst [1s,2s]，1_600 字符 ÷ 1s。
+        assert_tps(st.tps(at(base, 3_257)), 400.0);
+    }
+
+    /// 定稿前的孤立尾 chunk 不带字符（零长度 burst 不虚构时长）。
+    #[test]
+    fn isolated_tail_chunk_contributes_nothing_at_finalize() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        {
+            let mut st = acc.inner.lock().expect("lock");
+            st.stats_on_output(400, at(base, 0));
+            st.stats_on_output(400, at(base, 500)); // burst [0,500ms]
+            st.stats_on_output(4, at(base, 5_000)); // 定稿前一句 "done"
+        }
+        let timing = acc.finalize_turn_at(at(base, 6_100)).expect("定稿");
+        assert_tps(timing.tps, 400.0); // 800 字符 ÷ 0.5s
+    }
+
+    /// 一帧未发的空 turn：定稿读数「有效但零工具 / 无速率」，与「失效」是两回事。
+    #[test]
+    fn empty_turn_reports_zero_tools_and_no_rate() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let timing = acc.finalize_turn_at(at(base, 20)).expect("空 turn 也要定稿");
+        assert_eq!(timing.tool_ms, Some(0), "有效观测下没记到工具 = 0，非 None");
+        assert_eq!(timing.tps, None);
+    }
+
+    /// `live_stats`：无活跃 turn → None；活跃期读数可取；定稿后回到 None。
+    #[test]
+    fn live_stats_tracks_turn_lifecycle() {
+        let acc = TurnAccumulator::new();
+        assert!(acc.live_stats().is_none(), "无 turn 时无读数");
+
+        acc.begin_turn();
+        let stats = acc.live_stats().expect("活跃 turn 应有读数");
+        assert!(stats.tool_ms.is_some(), "有效观测的活跃 turn 恒有工具读数（可为 0）");
+        assert_eq!(stats.tps, None, "尚无输出 → 无速率");
+
+        acc.finalize_turn().expect("定稿");
+        assert!(acc.live_stats().is_none(), "定稿后不再有实时读数");
+    }
+
+    /// 端到端：fold 真帧驱动记账 —— 正文 chunk 计数、思考 chunk 计数、工具状态起表；
+    /// 用真实时钟的小步长 + 容差断言（合成时间线覆盖精确口径，这里覆盖接线）。
+    #[test]
+    fn fold_drives_rate_and_tool_accounting() {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-stats");
+        acc.begin_turn();
+
+        // 两个间隔极小的正文 chunk → 可测窗口存在（时长 > 0）。
+        acc.fold(&text_chunk(&sid, "你好，世界。"));
+        nap(30);
+        acc.fold(&text_chunk(&sid, "继续输出。"));
+        // 思考 chunk 同样计入分子。
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::AgentThoughtChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("思考中。"),
+            ))),
+        ));
+        // 工具执行状态帧：显式 in_progress → 起表。
+        let fields = {
+            let mut f = ToolCallUpdateFields::default();
+            f.status = Some(in_progress());
+            f
+        };
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new("t1", fields)),
+        ));
+
+        // 与工具起表拉开一小段，保证尾段时长可测（> 0ms）。
+        nap(20);
+        let stats = acc.live_stats().expect("活跃 turn 应有读数");
+        assert!(stats.work_ms >= 20, "工作时长应走表，实得 {}", stats.work_ms);
+        assert!(stats.tool_ms.unwrap_or(0) > 0, "工具应已起表，实得 {:?}", stats.tool_ms);
+        assert!(stats.tps.unwrap_or(0.0) > 0.0, "有输出应有速率，实得 {:?}", stats.tps);
+    }
+
+    /// UTF-16 计数口径：emoji（代理对）按 2 计——与旧前端 `String.length` 同口径，
+    /// 保证读数校准逐字延续。
+    #[test]
+    fn output_chars_counts_utf16_units() {
+        assert_eq!(output_chars(&text_chunk(&SessionId::new("s"), "ab").update), Some(2));
+        assert_eq!(output_chars(&text_chunk(&SessionId::new("s"), "\u{1F642}").update), Some(2));
+        assert_eq!(
+            output_chars(
+                &SessionNotification::new(
+                    SessionId::new("s"),
+                    SessionUpdate::UsageUpdate(UsageUpdate::new(1, 2)),
+                )
+                .update
+            ),
+            None,
+            "记账帧不计入输出字符"
+        );
     }
 }

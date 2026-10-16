@@ -955,6 +955,11 @@ async fn list_messages(
                         // 区别于 0。
                         "durationMs": row.duration_ms,
                         "waitMs": row.wait_ms,
+                        // 工具耗时（ms，估算）与输出速率（tokens/s，估算）。null =
+                        // 不可追溯 / 估算失效（迁移前的历史行、工具跟踪越界、无可测
+                        // 流式窗口）；0 的 tool_ms 与 null 在前端同样不渲染。
+                        "toolMs": row.tool_ms,
+                        "tps": row.tps,
                     })
                 })
                 .collect();

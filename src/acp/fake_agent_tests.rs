@@ -4,9 +4,8 @@
 //!
 //! 覆盖：
 //! 1. **agent 死于 turn 进行中**（现场真实时序）：在途 prompt 快速失败（死连接
-//!    的实时失败语义——`is_alive()` 对已崩溃 agent 误报存活是 crate 既有行为，
-//!    生产实际靠请求失败兜底，见下方「边界」），agent 被回收无残留，shutdown
-//!    干净收尾；
+//!    的实时失败语义——生产实际靠请求失败兜底，**不**依赖 `is_alive()`：崩溃后
+//!    其取值不确定，见下方「边界」），agent 被回收无残留，shutdown 干净收尾；
 //! 2. **agent 死于 handshake**（initialize 后、session/new 前）：spawn 限时
 //!    失败而不是挂死（`conn_rx` 错误路径有界）；
 //! 3. **agent 无流量静默退出**：进程被回收无残留；此后 shutdown 的 killpg 命中
@@ -55,12 +54,17 @@
 //!   `foreground.await`，pidfd 检出的 child_wait 分支不再被轮询——任务要等
 //!   shutdown 的 signal 才结束（返回 Ok）。因此 crash 广播（`crash_subscribe`）
 //!   实际只在 **setup 阶段**（initialize/session/new 在途）崩溃时触发，而那
-//!   时 client 尚未构造、无人订阅。`is_alive()` 对「已崩溃 agent」**误报存活**
-//!   同此根因（既有 crate 行为，非 omniterm 引入；生产实际靠 `send_request`
-//!   报 "connection is no longer running" 兜底）。本文件因此不断言广播，改为
-//!   断言请求失败/进程回收/teardown 鲁棒这些真实契约；`is_alive` 的误报在
-//!   mid-prompt 用例里被显式钉住（pin 既有行为，升级 crate 时若变化应主动复查）。
-//!   2026-10-01 升级 SDK 1.3→2.2.0 后这两条 pin 仍成立（`./dev.sh test` 全绿）。
+//!   时 client 尚未构造、无人订阅。**`is_alive()` 对已崩溃 agent 的取值不
+//!   确定**（2026-10-16 更正）：它组合 `alive` 显式标志 + 库的
+//!   `is_incoming_closed()`（agent 崩溃走 EOF 的兜底路径，见
+//!   `docs/architecture/backend.md`）；连接任务是否及时观测到崩溃 agent 的
+//!   EOF 随调度而异——同机连跑 30 次稳定误报 true，CI 上则可能已被 EOF 兜底
+//!   置 false。故**不可 pin 崩溃后的 `is_alive()` 取值**（本文件曾在此 pin
+//!   true，CI 偶发翻 false 致 flaky，2026-10-16 移除）；生产实际靠
+//!   `send_request` 报 "connection is no longer running" 兜底。本文件因此
+//!   不断言广播、也不断言崩溃后的 `is_alive()`，只断言请求失败/进程回收/
+//!   teardown 鲁棒这些真实契约（shutdown 后的 `is_alive()==false` 是确定的，
+//!   由用例 10 覆盖）。2026-10-01 升级 SDK 1.3→2.2.0 后上述契约仍成立。
 //!
 //! wire 契约（crate 2.2.0 / schema 1.9.1 复核，改测试前先核对）：
 //! - 换行分隔 JSON-RPC 2.0，client 请求 `{"jsonrpc":"2.0","id":"<uuid>","method":"initialize","params":{...}}`；
@@ -103,8 +107,8 @@ async fn agent_dying_mid_prompt_fails_prompt_and_shuts_down_clean() {
     let pid = client.agent_pid().expect("D1：crash 模式也必须捕获 pid");
 
     // agent 收到 prompt 后不回响应直接退出。在途 prompt 必须快速失败——死连接
-    // 的实时失败语义，生产靠它兜底（is_alive 对已崩溃 agent 误报存活，见模块
-    // 文档「边界」）。
+    // 的实时失败语义，生产靠它兜底（不依赖 is_alive 判存活：崩溃后其取值不
+    // 确定，见模块文档「边界」）。
     let prompt_result =
         tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
             .await
@@ -114,16 +118,11 @@ async fn agent_dying_mid_prompt_fails_prompt_and_shuts_down_clean() {
         "agent 死于 prompt 在途时 send_prompt 应失败，实际: {prompt_result:?}"
     );
 
-    // pin crate 既有行为（升级 crate 时若翻转应主动复查 is_alive 判定）：
-    // agent 已死但连接任务 parks 在 shutdown_rx 上、incoming 也未关闭，
-    // is_alive() 此时误报存活。
+    // 进程必须被回收。此处**不**断言 is_alive()：崩溃后它可能已被 EOF 兜底置
+    // false，也可能因连接任务尚未观测到 EOF 而短暂误报 true——取值随调度而异
+    // （2026-10-16 更正；原按「误报存活」pin true，在同机连跑 30 次虽稳过，
+    // 但 CI 上偶发翻 false 致 flaky）。
     assert!(wait_until(|| proc_reaped(pid), UNWIND_TIMEOUT).await, "agent 死亡后未被 crate 回收");
-    assert!(
-        client.is_alive(),
-        "is_alive() 对已崩溃 agent 的误报存活是 crate 既有行为（见模块文档），\
-         此处 pin 住；若本断言失败说明 crate 行为已变，须复查 is_alive 判定与 \
-         backend.md 的描述"
-    );
 
     client.shutdown().await;
     assert!(wait_until(|| proc_reaped(pid), REAP_TIMEOUT).await, "shutdown 后 agent 仍残留");

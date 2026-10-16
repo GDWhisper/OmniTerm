@@ -4,6 +4,7 @@ import { useThemeStore, type Theme } from '../../stores/themeStore'
 import { useAppStore, DEFAULT_UI_ZOOM, MIN_DISCONNECT_MIN, MAX_DISCONNECT_MIN, PERM_TIMEOUT_NEVER_SECS, PERM_TIMEOUT_STEP_SECS, MAX_PERM_TIMEOUT_SECS, clampPermTimeoutSecs } from '../../stores/appStore'
 import { TERMINAL_ENGINES, terminalEngineLabel } from '../../utils/terminalEngine'
 import { THINKING_EFFECTS } from '../../utils/thinkingEffects'
+import { THINKING_COLLAPSED_MODES } from '../../utils/thinkingCollapsed'
 import { permTimeoutDuration } from '../../utils/permTimeout'
 import { BetaBadge } from '../Common/BetaBadge'
 import { api } from '../../api/client'
@@ -706,10 +707,13 @@ function SoundItem({ labelKey, hintKey, value, onToggle, onPreview }: SoundItemP
 
 /** 会话内容展示：聊天面板里默认展开什么。 */
 function SessionDisplaySection() {
+  const { t } = useTranslation()
   const expandThinking = useAppStore(s => s.expandThinking)
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
+  const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
   const setExpandThinking = useAppStore(s => s.setExpandThinking)
   const setExpandToolCalls = useAppStore(s => s.setExpandToolCalls)
+  const setCollapsedMode = useAppStore(s => s.setThinkingCollapsedMode)
 
   return (
     <>
@@ -719,6 +723,32 @@ function SessionDisplaySection() {
         value={expandThinking}
         onToggle={() => setExpandThinking(!expandThinking)}
       />
+      {/* 收起态档位：只在「展开思考」关闭时渲染。开时思考块恒展开，这两个选项
+          改了看不到效果——不给用户一个空转的开关。档位定义/存档白名单在
+          `utils/thinkingCollapsed.ts`（与 ChatMessage 的 ThoughtBlockView 共用）。 */}
+      {!expandThinking && (
+        <section className="space-y-2">
+          <SectionTitle>{t('settings.thinkingCollapsed')}</SectionTitle>
+          <div className="flex gap-1.5">
+            {THINKING_COLLAPSED_MODES.map((opt) => {
+              const isActive = collapsedMode === opt.id
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setCollapsedMode(opt.id)}
+                  className="flex-1 flex items-center justify-center"
+                  style={{ ...(isActive ? btnActive : btnBase), fontSize: 12, padding: '5px 8px' }}
+                  onMouseEnter={btnHover}
+                  onMouseLeave={(e) => btnLeave(e, isActive)}
+                >
+                  {t(opt.labelKey)}
+                </button>
+              )
+            })}
+          </div>
+          <p style={{ fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>{t('settings.thinkingCollapsedHint')}</p>
+        </section>
+      )}
       <ToggleRow
         labelKey="settings.expandToolCalls"
         hintKey="settings.expandToolCallsHint"

@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
 import { useAppStore } from '../../stores/appStore'
@@ -9,9 +10,14 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { Markdown } from './Markdown'
 import { READER_FONT } from '../../utils/fonts'
 import { formatHoverTime, formatToolDuration, formatTps, formatWorkDuration } from '../../utils/formatTime'
-import { finalToolElapsedMs, finalTps, turnElapsedMs, turnToolElapsedMs, turnTps } from '../../utils/turnClock'
+import {
+  getLiveTurnStats,
+  subscribeLiveTurnStats,
+  type LiveTurnStats,
+} from '../../utils/turnStats'
 import { PERM_TIMEOUT_NEVER_SECS, permTimeoutDuration, permTimeoutNoticeLabel, permTimeoutSeconds } from '../../utils/permTimeout'
 import { looksLikeDiff } from '../../utils/diff'
+import { resolveThinkingStreamingSummary } from '../../utils/thinkingCollapsed'
 import { DiffView } from './DiffView'
 import { FileLocationLink } from './FileLocationLink'
 import { messageActions, type MessageActionHandlers, type MessageActionContext } from './messageActions'
@@ -31,6 +37,9 @@ const USER_TEXT_PREVIEW_LINES = 8
 // 正文气泡的宽度上限（思考块/工具卡/文本泡/用户泡共用）。贴气泡右缘的元信息行
 // （turn 耗时）必须用同一个值，否则两处百分比各改各的，右缘就错开了。
 const BUBBLE_MAX_WIDTH = '85%'
+// 消息行内块间距。过程容器是消息行内部的「小消息行」，复用同一个值——
+// 容器内的明细块与它们平铺在消息行下时间距一致。
+const MSG_ROW_GAP = 6
 
 // 气泡底部元信息文字（turn 结算耗时 / 流式实时计时与 tps）共用的规格：两者占据同一槽位，
 // 定稿瞬间从「跳动值」换成「结算值」时只有文案变、字号/字距/数字宽度都不变，才不会
@@ -38,10 +47,12 @@ const BUBBLE_MAX_WIDTH = '85%'
 //
 // **不含 `marginLeft:auto`**——左右对齐是状态相关的：流式期动作栏恒空、读数**靠左**；
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
-// **换行只能发生在「工作 / 工具 / 速度」三个读数之间，绝不能发生在读数内部**——
-// 中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器在数字与单位之间
-// 断行（实测「5分钟」/「33秒」、「工具约」/「<1秒」、「估算」/「62.1 t/s」三处都被拆开，
-// 2026-09-21 用户报告）。故三个读数各自一个 nowrap 段，容器 flex-wrap 承接段间换行。
+// **段内绝不换行**——中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器
+// 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具」/「<1秒」、「63.5」/「tok/s」
+// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个 nowrap 段。
+// 段间换行是状态相关的：**流式期整行固定单行**（行宽由渲染处 `min-width:max-content` 托底，
+// 2026-10-14 用户报告窄正文块下三段堆成三行）；**定稿后**容器 flex-wrap 承接段间换行——
+// 结算场合行里还有动作栏，沿用 E11 的「放不下才换行」。
 const CHAT_META_TEXT_STYLE: CSSProperties = {
   fontSize: '0.769em',
   fontFamily: READER_FONT,
@@ -55,15 +66,12 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
   flexWrap: 'wrap',
 }
 
-// 单个读数（一段完整语义，如「工具约 12秒」）：段内禁止断行，数字与单位永不分离。
+// 单个读数（一段完整语义，如「工具 12秒」）：段内禁止断行，数字与单位永不分离。
 const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
 // 拆段后 textAlign 对 flex 子项无效，右缘改由 justify-content 表达。
 const CHAT_META_RIGHT: CSSProperties = { marginLeft: 'auto', justifyContent: 'flex-end' }
-
-// 实时计时的刷新粒度：读数按秒呈现，跳一秒画一次即可（再快只是白重排这一行）。
-const LIVE_TICK_MS = 1_000
 
 const TOOL_KIND_ICONS: Record<string, string> = {
   read: '▤',
@@ -163,14 +171,258 @@ function CollapsibleUserText({ text }: { text: string }) {
   )
 }
 
-function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolean }) {
+// 思考内容的排版规格（单一真源：展开区与收起态实时思考行共用）。
+// 比正文（text 气泡 1em）小一档 + `--text-muted` 虚化，**刻意不加斜体**——
+// 思考块此前的斜体是「思考=斜体」的排版俗套，与 OmniTerm 的等宽阅读字体
+// 不搭（2026-10-13 用户要求修正）。行高与内容区一致。
+const THINKING_TEXT_STYLE: CSSProperties = {
+  fontSize: '0.923em',
+  lineHeight: 1.5,
+  color: 'var(--text-muted)',
+}
+
+// 收起态实时思考行的溢出遮罩：左缘 16px 渐隐，提示「左侧还有被滚走的内容」。
+// 仅在单行视口确实溢出时叠加（见组件里的 lineOverflow）——不溢出时右缘是完整
+// 的最新 token，加遮罩反而会把内容啃掉一块。
+const THINKING_LINE_MASK_STYLE: CSSProperties = {
+  WebkitMaskImage:
+    'linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)',
+  maskImage:
+    'linear-gradient(to right, transparent 0, black 16px, black calc(100% - 16px), transparent 100%)',
+  WebkitMaskRepeat: 'no-repeat',
+  maskRepeat: 'no-repeat',
+  WebkitMaskSize: '100% 100%',
+  maskSize: '100% 100%',
+}
+
+/** 耗时刷新间隔（毫秒）：展开态每秒给「持续了 N 秒」进位一次。 */
+const THINKING_DURATION_TICK_MS = 1000
+
+/** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
+const PROCESS_HEADER_ICON = '◈'
+
+/** 被收进过程容器的单块 + 它在原 blocks[] 中的下标。含中间的 text 输出。 */
+interface ProcessEntry {
+  block: ContentBlock
+  idx: number
+}
+
+/**
+ * 消息级「过程容器」：把**一轮** ACP 输出里除最终结论外的一切收进同一个折叠器
+ * ——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出。
+ * 折叠态只留**一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终
+ * 可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
+ * `ToolLayout.tsx`）的交互：
+ *
+ * - **流式中展开、完成后自动折叠**（用户 2026-10-14 选定）。运行中跟着看过程，
+ *   一结束就收纳成一行，长串明细不会永久摊开在聊天流里。
+ * - 摘要走**计数聚合**而非罗列（对齐 ZCode `formatExploreSummary` 的
+ *   search/list/file 计数）：「思考 2 · 工具调用 3 · 计划 1」比把每个块名列一遍
+ *   更短，也不会随块数增长而无限变长。
+ * - 用户手动展开/收起过后，自动规则不再覆盖他的选择（对齐 ZCode 的
+ *   `userInteractedRef`）。
+ *
+ * 与既有「展开思考」「展开工具调用」两个开关**不同层、不冲突**：容器决定
+ * 「看不看得到明细」，那两个开关决定「展开后明细的粒度」——容器展开时内部各块
+ * 照旧按开关渲染（ThoughtBlockView / ToolCallBlockView 各自读自己的设定）。
+ */
+/**
+ * 收纳行的流式工作时长读数：「已工作 X 分 X 秒」，秒级跳动。
+ *
+ * 读数来自后端 `turn_stats` 推送（`utils/turnStats`，前端只显示不计算），与
+ * 元信息行的 `LiveWorkElapsed` 同源、同措词；收纳行只显示工作时长一段——工具
+ * 耗时与 tps 属于气泡底部元信息行的职责。推送驱动、直写 DOM 而非 React state：
+ * 秒级跳动重渲染整个消息列表是没有意义的浪费（旧本地时钟同款手法，驱动源换成
+ * WS 帧后隐藏标签页不再受定时器节流影响）。
+ */
+function ProcessWorkElapsed({ sessionId }: { sessionId: string }) {
+  const { t, i18n } = useTranslation()
+  const workRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    const draw = (stats: LiveTurnStats | null) => {
+      const el = workRef.current
+      if (!el) return
+      const dur = stats ? formatWorkDuration(stats.workMs, i18n.language) : null
+      // 尚无推送（或 turn 已作废）：整格撤掉，只留字形与计数段。
+      const text = dur ? t('chat.msg.workTime', { dur }) : ''
+      if (el.textContent !== text) el.textContent = text
+    }
+    draw(getLiveTurnStats(sessionId))
+    return subscribeLiveTurnStats(sessionId, draw)
+  }, [sessionId, t, i18n])
+
+  return (
+    <span
+      className="process-shimmer"
+      style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}
+    >
+      <span ref={workRef} />
+    </span>
+  )
+}
+
+function ProcessBlocks({
+  entries,
+  streaming,
+  workText,
+  liveSessionId,
+  renderEntry,
+}: {
+  entries: ProcessEntry[]
+  streaming: boolean
+  /** turn 工作时长结算值（后端定稿时算出的 `message.durationMs` 格式化）。 */
+  workText: string | null
+  /** 流式实时计时的会话 id（`isLive && !workText` 时才有值，见调用处）。 */
+  liveSessionId?: string
+  renderEntry: (entry: ProcessEntry) => ReactNode
+}) {
+  const { t } = useTranslation()
+  // 流式中默认展开（跟着看过程）；历史 / 已定稿的默认收起（收纳）。
+  const [open, setOpen] = useState(streaming)
+  // 用户是否手动干预过：置位后自动折叠不再插手（对齐 ZCode userInteractedRef）。
+  const userInteractedRef = useRef(false)
+  const wasStreamingRef = useRef(streaming)
+
+  // 流式结束边沿自动折叠。判边沿而非「streaming 为 false 就折」——后者会在用户
+  // 手动展开后、下一轮流式结束时再次折叠，把用户的选择覆盖掉。
+  useEffect(() => {
+    const wasStreaming = wasStreamingRef.current
+    wasStreamingRef.current = streaming
+    if (!wasStreaming || streaming) return
+    if (userInteractedRef.current) return
+    setOpen(false)
+  }, [streaming])
+
+  const toggle = () => {
+    userInteractedRef.current = true
+    setOpen((v) => !v)
+  }
+
+  // 计数聚合。代价 O(块数)，流式中每渲染一次全量重数也远不到需要 memo 的量级
+  // （一轮的过程块通常个位数到几十），故不包 useMemo——包了反而要管 entries 的
+  // 引用稳定性（每次渲染新建），得不偿失。
+  let thoughtCount = 0
+  let toolCount = 0
+  let planCount = 0
+  for (const { block } of entries) {
+    if (block.type === 'thought') thoughtCount++
+    else if (block.type === 'tool_call') toolCount++
+    else if (block.type === 'plan') planCount++
+  }
+
+  // 只收计数非零的段，段间 `·`。可能全零——一轮只有中间 text 输出、没有任何
+  // thought/tool/plan 时容器仍要收纳那些文字，此时摘要只剩时长段与箭头，
+  // 正是 ZCode 参照的形态（`已工作 19 分 35 秒 ›`），故不写兜底文案。
+  const parts: string[] = []
+  if (thoughtCount > 0) parts.push(t('chat.process.thoughtCount', { count: thoughtCount }))
+  if (toolCount > 0) parts.push(t('chat.process.toolCount', { count: toolCount }))
+  if (planCount > 0) parts.push(t('chat.process.planCount', { count: planCount }))
+
+  // 标题主体是**工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」），
+  // 而非状态词：秒数在跳即表达「进行中」，定格即表达「已完成」，不需要另设一套
+  // 状态文案。复用 `chat.msg.workTime`（与气泡底部元信息行同一读数、同一措词），
+  // 不新造键。流式中走实时读数，定稿后用结算值。
+  const durLabel = workText ? t('chat.msg.workTime', { dur: workText }) : null
+
+  return (
+    // 容器必须是**flex column**（与消息行 `.chat-msg-row` 同一格式化上下文），
+    // 不能是普通块容器：entries 里的 `ToolCallBlockView` 根节点是
+    // `display:inline-flex`、`ThoughtBlockView`/`PlanBlockView` 是普通块级 div，
+    // 它们在块容器里一个退化成行内级、一个铺满容器宽——
+    // 工具卡会与收纳行标题挤进同一行并按基线对齐产生纵向错位，长卡再折行到
+    // 下一行；思考/计划块铺满容器宽则把块级复制角标甩到容器远右缘
+    // （2026-10-15 用户报告「工具调用信息位置错乱，复制按钮也是乱的」）。
+    // 立成 flex column 后三者都被块化成 flex item：各自 shrink-to-fit、
+    // 按行堆叠，与加容器前直接挂在消息行下完全一致。
+    // 不带 `.chat-block`：容器自己没有复制角标，挂上只会让
+    // `.chat-block:hover .chat-block-copy-btn` 变成「hover 容器即亮出全部
+    // 内部角标」，而每个明细块本该只由自己的 hover 点亮。
+    <div
+      data-chat-body="true"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: MSG_ROW_GAP,
+        alignSelf: 'flex-start',
+        maxWidth: BUBBLE_MAX_WIDTH,
+      }}
+    >
+      <button onClick={toggle} className="process-header-btn" style={{ fontSize: '0.846em' }}>
+        <span style={{ flexShrink: 0 }}>{PROCESS_HEADER_ICON}</span>
+        {/* 标题整段（时长 + 各计数）是**一个文本流**，段间分隔符统一为流内的字面
+            `' · '`，宽度由等宽字体的空格定，于是三段看起来等距。
+            早前时长段是独立 flex item、`·` 是又一个独立 flex item，两侧都没有
+            空隙（「已工作 22分钟7秒·思考」粘连），而计数之间的 `·` 却来自
+            join 的字面空格 —— 同一行两套分隔机制，视觉上忽宽忽窄。 */}
+        <span className="process-summary-text">
+          {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
+              摘要喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。 */}
+          {liveSessionId ? (
+            <ProcessWorkElapsed sessionId={liveSessionId} />
+          ) : (
+            durLabel && <span style={{ fontWeight: 500 }}>{durLabel}</span>
+          )}
+          {parts.length > 0 && ` · ${parts.join(' · ')}`}
+        </span>
+        {/* 收起态 hover 整行才显，展开态常显并转向下（同思考块箭头语义）。 */}
+        <span className="process-chevron" data-open={open ? 'true' : 'false'} style={{ flexShrink: 0 }}>
+          ▸
+        </span>
+      </button>
+      {open && entries.map((entry) => renderEntry(entry))}
+    </div>
+  )
+}
+
+function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streaming: boolean; maxWidth?: string }) {
+  const { t } = useTranslation()
   const expandThinking = useAppStore(s => s.expandThinking)
+  // 收起态档位（仅在 expandThinking 关闭时有语义）：'hide' 只留标题行，
+  // 'brief' 在标题行内嵌一行流式思考原文。订阅 store 而不是只读初值——
+  // 用户在设置面板改档位时，已挂载的思考块要立即跟着变。
+  const collapsedMode = useAppStore(s => s.thinkingCollapsedMode)
+  // 初值跟随「展开思考」开关。**不要再叠任何自动折叠条件**：多块消息里思考块
+  // 永远不是最后一块，`streaming` 恒为 false，任何「非流式即收起」的判据都会把
+  // 思考正文整个吃掉（2026-10-14 实测踩过，见 CHANGELOG 对该条的撤销说明）。
+  // 过程块的收纳已由消息级 ProcessBlocks 负责，这里不需要自己再折一次。
   const [open, setOpen] = useState(expandThinking)
+  // 耗时（对齐 ZCode）：流式开始计时、结束时定档。历史块从未见过 streaming=true，
+  // 保持 undefined，折叠态回落到「持续了几秒」。
+  const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
+  const startTimeRef = useRef<number | null>(null)
+  // 收起态实时思考行的视口 / 文本节点与溢出标记。
+  const lineViewportRef = useRef<HTMLSpanElement | null>(null)
+  const lineTextRef = useRef<HTMLSpanElement | null>(null)
+  const [lineOverflow, setLineOverflow] = useState(false)
   // 内部滚动容器锚定语义与 ChatView 外层一致：默认跟随底部；用户上翻阅读时
   // 解除跟随，滚回底部自动恢复。仅 streaming 块生效——历史块文本不再增长，
   // 展开时应从顶部开始读，不跳底。
   const { containerRef: scrollRef, handleScroll: handleInnerScroll, stickToBottom, resetStick } =
     useStickScroll<HTMLDivElement>()
+
+  // 耗时只在展开态每秒刷新：收起态没必要为了一个暂时不显示的数字每秒重渲染
+  // 整块；流式结束那一刻无论展开与否都补算定档。
+  useEffect(() => {
+    if (!streaming) {
+      if (startTimeRef.current !== null) {
+        // max(1, ...)：亚秒流式也要显示「1 秒」而不是「0 秒」。
+        setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
+      }
+      startTimeRef.current = null
+      return
+    }
+    if (startTimeRef.current === null) startTimeRef.current = Date.now()
+    if (!open) return
+    const tick = () => {
+      if (startTimeRef.current === null) return
+      setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
+    }
+    tick()
+    const timer = window.setInterval(tick, THINKING_DURATION_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [open, streaming])
 
   // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
   // 钉住，避免溢出瞬间先闪一帧顶部内容。
@@ -178,6 +430,33 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
     if (!streaming) return
     stickToBottom()
   }, [text, open, streaming, stickToBottom])
+
+  // 收起态实时思考行：**仅流式期间**显示（对齐 ZCode——完成后折叠态只剩
+  // 「思考 · 持续了 N 秒」，不再显示思考原文），且仅 brief 档。内容是一行
+  // 未经任何总结的思考原文（最后一个非空行，即正在生长的那一行）。
+  const summary =
+    streaming && !open && collapsedMode === 'brief' ? resolveThinkingStreamingSummary(text) : null
+  // 抽成原始值供 effect 依赖：summary 是每次渲染新建的对象，直接进 deps 会让
+  // 每次渲染都重跑；其真值与 text 一一对应，用 text 即可完整表达。
+  const summaryText = summary?.text ?? null
+
+  // 单行视口推到末尾：内容增长后旧内容向左移，最新 token 始终可见。早前用
+  // text-overflow: ellipsis，会冻结旧前缀、把最新内容裁在右侧，与「正常流式
+  // 输出」矛盾。同时按实际溢出决定左缘渐隐遮罩。
+  useEffect(() => {
+    const viewport = lineViewportRef.current
+    if (!viewport || !summaryText) return
+    const sync = () => {
+      setLineOverflow(viewport.scrollWidth > viewport.clientWidth + 1)
+      viewport.scrollLeft = viewport.scrollWidth
+    }
+    sync()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(sync)
+    observer.observe(viewport)
+    if (lineTextRef.current) observer.observe(lineTextRef.current)
+    return () => observer.disconnect()
+  }, [summaryText])
 
   const toggle = () => {
     const next = !open
@@ -187,10 +466,14 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
     if (next) resetStick()
   }
 
+  // 流式且收起 = 「正在思考」+ 扫光；其余（展开中 / 已完成）=「思考 · 耗时」。
+  const streamingLabel = streaming && !open
+
   return (
-    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth: BUBBLE_MAX_WIDTH, fontSize: '0.923em' }}>
+    <div data-chat-body="true" className="chat-block" style={{ alignSelf: 'flex-start', maxWidth, fontSize: '0.923em' }}>
       <button
         onClick={toggle}
+        className="thinking-header-btn"
         style={{
           background: 'none',
           border: 'none',
@@ -202,12 +485,62 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
           display: 'inline-flex',
           alignItems: 'center',
           gap: 5,
-          fontStyle: 'italic',
+          // 单行标题行要能被气泡宽度收口：长实时思考行把视口挤在一行内，
+          // 而不是把整行撑破气泡。max-w + min-w-0 让 flex 子项可收缩。
+          maxWidth: '100%',
+          minWidth: 0,
           opacity: 0.9,
         }}
       >
-        <span style={{ fontStyle: 'normal' }}>◆</span>
-        {open ? '▾' : '▸'} thinking
+        <span style={{ flexShrink: 0 }}>◆</span>
+        {streamingLabel ? (
+          <span className="thinking-shimmer" style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}>
+            {t('chat.thinking')}
+          </span>
+        ) : (
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>{t('chat.thought')}</span>
+            <span>·</span>
+            <span>
+              {durationSec === undefined
+                ? t('chat.thoughtDurationFewSeconds')
+                : t('chat.thoughtDurationSeconds', { seconds: durationSec })}
+            </span>
+          </span>
+        )}
+        {summary && (
+          <>
+            <span style={{ flexShrink: 0 }}>·</span>
+            <span
+              ref={lineViewportRef}
+              data-thinking-streaming-line="true"
+              data-thinking-streaming-mask={lineOverflow ? 'both' : 'none'}
+              style={{
+                minWidth: 0,
+                flex: 1,
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                color: 'var(--text-muted)',
+                ...(lineOverflow ? THINKING_LINE_MASK_STYLE : null),
+              }}
+            >
+              {/* key = 行首偏移：同一行生长期间不变（不重挂载、不重放动画），
+                  换行时改变 → 触发一次纵向滚入。 */}
+              <span
+                key={summary.key}
+                ref={lineTextRef}
+                className="thinking-line-roll"
+                style={{ display: 'inline-block', minWidth: 'max-content' }}
+              >
+                {summary.text}
+              </span>
+            </span>
+          </>
+        )}
+        {/* 单个字形 + CSS 旋转：收起态 hover 才显，展开态常显并转向下。 */}
+        <span className="thinking-chevron" data-open={open ? 'true' : 'false'} style={{ flexShrink: 0 }}>
+          ▸
+        </span>
       </button>
       {!streaming && <BlockCopyButton text={text} />}
       {open && (
@@ -220,11 +553,8 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
             maxHeight: 300,
             padding: '2px 10px',
             borderLeft: '2px solid var(--border-subtle)',
-            fontSize: '0.923em',
-            lineHeight: 1.5,
-            color: 'var(--text-muted)',
-            fontStyle: 'italic',
             whiteSpace: 'pre-wrap',
+            ...THINKING_TEXT_STYLE,
           }}
         >
           {text}
@@ -234,7 +564,7 @@ function ThoughtBlockView({ text, streaming }: { text: string; streaming: boolea
   )
 }
 
-function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streaming: boolean }) {
+function ToolCallBlockView({ block, streaming, maxWidth }: { block: ToolCallBlock; streaming: boolean; maxWidth?: string }) {
   const expandToolCalls = useAppStore(s => s.expandToolCalls)
   const [open, setOpen] = useState(expandToolCalls)
   // 内容预览滚动锚定：与 thinking 块同语义。仅消息 streaming 期间工具内容
@@ -279,11 +609,11 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
       style={{
         display: 'inline-flex',
         flexDirection: 'column',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
         borderLeft: `2px solid ${statusColor}`,
-        borderRadius: 6,
+        borderRadius: 0,
         fontSize: '0.923em',
         transition: 'border-color 0.3s ease',
       }}
@@ -347,7 +677,7 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
                 maxHeight: 200,
                 padding: '6px 8px',
                 background: 'var(--bg-base)',
-                borderRadius: 4,
+                borderRadius: 0,
                 fontSize: '0.846em',
                 whiteSpace: 'pre-wrap',
                 color: 'var(--text-muted)',
@@ -363,17 +693,17 @@ function ToolCallBlockView({ block, streaming }: { block: ToolCallBlock; streami
   )
 }
 
-function PlanBlockView({ block }: { block: PlanBlock }) {
+function PlanBlockView({ block, maxWidth }: { block: PlanBlock; maxWidth?: string }) {
   return (
     <div
       data-chat-body="true"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         padding: '6px 10px',
         background: 'var(--bg-elevated)',
         border: '1px solid var(--border-subtle)',
-        borderRadius: 6,
+        borderRadius: 0,
         fontSize: '0.923em',
       }}
     >
@@ -393,19 +723,27 @@ function PlanBlockView({ block }: { block: PlanBlock }) {
   )
 }
 
-function TextBlockView({ text, caret, streaming }: { text: string; caret?: boolean; streaming?: boolean }) {
+function TextBlockView({
+  text,
+  caret,
+  streaming,
+  maxWidth,
+}: {
+  text: string
+  caret?: boolean
+  streaming?: boolean
+  maxWidth?: string
+}) {
   return (
     <div
       data-chat-body="true"
-      className="chat-block"
+      className="chat-block chat-bubble"
       style={{
         alignSelf: 'flex-start',
-        maxWidth: BUBBLE_MAX_WIDTH,
+        maxWidth,
         padding: '8px 12px',
-        borderRadius: 8,
         background: 'var(--bg-surface)',
         color: 'var(--text-primary)',
-        border: '1px solid var(--border-subtle)',
         fontFamily: READER_FONT,
         fontSize: '1em',
         lineHeight: 1.5,
@@ -466,7 +804,7 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
                 margin: 0,
                 padding: '4px 6px',
                 background: 'var(--bg-base)',
-                borderRadius: 4,
+                borderRadius: 0,
                 fontSize: '0.92em',
                 overflow: 'auto',
                 maxHeight: 120,
@@ -495,7 +833,22 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
   )
 }
 
-function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streaming: boolean) {
+/**
+ * 渲染单个块。`maxWidth` 是调用方给的宽度上限，**不是块自己的属性**：
+ *
+ * - 平铺在消息行下的块（最终 text 结论、system 块）传 `BUBBLE_MAX_WIDTH`（85% 行宽）；
+ * - 收进过程容器的块传 `undefined`——容器自己已经用 `BUBBLE_MAX_WIDTH` 收口，
+ *   块再设一次 85% 就成了「85% × 容器宽」的双重收口，比平铺时窄一档
+ *   （实测 1006px → 855px，长标题更早出省略号）。容器收口是单一真源。
+ *   中间的 text 输出也走这条路（它同样被收进容器）。
+ */
+function renderBlock(
+  block: ContentBlock,
+  idx: number,
+  isLast: boolean,
+  streaming: boolean,
+  maxWidth: string | undefined,
+) {
   switch (block.type) {
     case 'text':
       return (
@@ -506,14 +859,15 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
           // 仅正在增长的最后一个 text block 降级纯文本；历史 block 文本引用
           // 稳定，靠 Markdown 的 memo 跳过重渲染。
           streaming={isLast && streaming}
+          maxWidth={maxWidth}
         />
       )
     case 'thought':
-      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} />
+      return <ThoughtBlockView key={idx} text={block.text} streaming={isLast && streaming} maxWidth={maxWidth} />
     case 'tool_call':
-      return <ToolCallBlockView key={idx} block={block} streaming={streaming} />
+      return <ToolCallBlockView key={idx} block={block} streaming={streaming} maxWidth={maxWidth} />
     case 'plan':
-      return <PlanBlockView key={idx} block={block} />
+      return <PlanBlockView key={idx} block={block} maxWidth={maxWidth} />
     case 'todo':
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
@@ -528,20 +882,63 @@ function renderBlock(block: ContentBlock, idx: number, isLast: boolean, streamin
 /**
  * 流式期间的实时工作计时、工具耗时与 tps（气泡底部元信息槽位，定稿后被结算值取代）。
  *
- * 每秒一跳但**不进 React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是
- * 一个数字。与 `ThinkingIndicator` 同手法——定时器直写 DOM。不必用
- * rAF：那是给逐帧变化的乱码流准备的，秒级读数用 interval 更省。
+ * 读数来自后端 `turn_stats` 推送（约 1Hz，`utils/turnStats` 缓存；前端只显示不计算
+ * ——估算的唯一真相源在后端累积器，见 work-time 计划 E23）。推送到达即重画，**不进
+ * React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是三个数字——直写
+ * DOM 与 `ProcessWorkElapsed` 同手法；驱动源是 WS 帧而非本地定时器，隐藏标签页的
+ * 定时器节流不再影响读数。
  *
- * 三项读数同源（`utils/turnClock` 同一张表），共享同一次 tick 和采样时间。
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  *
- * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每 tick
- * 只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
+ * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每次
+ * 推送只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
+ * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
+ *
+ * **tooltip 只解释画出来的读数**（`visibleReadings` + `liveTip`）：工具耗时与 tps 各有
+ * 「暫无」态（无输出 burst / 工具跟踪失效），整段撤掉后还挂一段「这个读数怎么算的」只会
+ * 让人去找屏幕上不存在的数字。两条估算说明（`toolTimeTip` / `tpsTip`）本身都是
+ * 「omniterm 自己算的、ACP 不上报」的诚实口径——界面文案刻意不带「约/估算」前缀，
+ * 性质说明全部收在 hover 里；`workingTip` 说的是后端实测工作时长，不进诚实口径。
+ *
+ * **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，
+ * deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按
+ * `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，
+ * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串，
+ * 而三段读数还留着最后一次 draw 的文本。
  */
+
+/** 当前这帧读数里**会显示**的三段（缺省段整段撤掉）。tooltip 与三个数字共用这一次判断。 */
+interface VisibleReadings {
+  dur: string | null
+  toolDur: string | null
+  rate: string | null
+}
+
+function visibleReadings(stats: LiveTurnStats | null, locale?: string): VisibleReadings {
+  const dur = stats ? formatWorkDuration(stats.workMs, locale) : null
+  // 工作段本身就没读数（尚无推送 / 已作废）→ 三段全撤，tooltip 也全撤。
+  if (!stats || !dur) return { dur: null, toolDur: null, rate: null }
+  return {
+    dur,
+    toolDur: formatToolDuration(stats.toolMs, locale),
+    rate: formatTps(stats.tps),
+  }
+}
+
+/** 当前读数对应的 tooltip：只收**会显示**的那几段（工作段有读数才有 tooltip）。 */
+function liveTip(readings: VisibleReadings, t: TFunction): string {
+  if (!readings.dur) return ''
+  const tips = [t('chat.msg.workingTip')]
+  if (readings.toolDur) tips.push(t('chat.msg.toolTimeTip'))
+  if (readings.rate) tips.push(t('chat.msg.tpsTip'))
+  return tips.join(' · ')
+}
+
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
+  const rootRef = useRef<HTMLSpanElement>(null)
   const workRef = useRef<HTMLSpanElement>(null)
   const toolRef = useRef<HTMLSpanElement>(null)
   const tpsRef = useRef<HTMLSpanElement>(null)
@@ -556,31 +953,31 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
       el.textContent = text
       el.style.display = shown
     }
-    const draw = () => {
-      const now = Date.now()
-      const dur = formatWorkDuration(turnElapsedMs(sessionId, now), i18n.language)
-      if (!dur) {
-        // 时钟里没有这一路 turn（尚未起表 / 已定稿）：整格撤掉，flex 不留空位。
+    const draw = (stats: LiveTurnStats | null) => {
+      const r = visibleReadings(stats, i18n.language)
+      if (!r.dur) {
+        // 尚无推送 / 已作废：整格撤掉，flex 不留空位。
         write(workRef.current, '')
         write(toolRef.current, '')
         write(tpsRef.current, '')
-        return
+      } else {
+        write(workRef.current, t('chat.msg.working', { dur: r.dur }))
+        write(toolRef.current, r.toolDur ? ` · ${t('chat.msg.toolTime', { dur: r.toolDur })}` : '')
+        write(tpsRef.current, r.rate ? ` · ${t('chat.msg.tps', { tps: r.rate })}` : '')
       }
-      const toolDur = formatToolDuration(turnToolElapsedMs(sessionId, now), i18n.language)
-      const rate = formatTps(turnTps(sessionId, now))
-      write(workRef.current, t('chat.msg.working', { dur }))
-      write(toolRef.current, toolDur ? ` · ${t('chat.msg.toolTime', { dur: toolDur })}` : '')
-      write(tpsRef.current, rate ? ` · ${t('chat.msg.tps', { tps: rate })}` : '')
+      // tooltip 跟着可见段走（推送期直写 DOM，不进 React state）。
+      const tip = liveTip(r, t)
+      if (rootRef.current && rootRef.current.title !== tip) rootRef.current.title = tip
     }
-    draw()
-    const id = window.setInterval(draw, LIVE_TICK_MS)
-    return () => window.clearInterval(id)
+    draw(getLiveTurnStats(sessionId))
+    return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
+  // title 不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
   return (
     <span
+      ref={rootRef}
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
-      title={`${t('chat.msg.workingTip')} · ${t('chat.msg.toolTimeTip')} · ${t('chat.msg.tpsTip')}`}
     >
       <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />
@@ -662,23 +1059,26 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const timeSide = (isUser ? 'right' : 'left') as 'right' | 'left'
 
   // turn 工作时长（结算值）：恒由后端在定稿时算出，经 hydrate 或 prompt_done 带回。
-  // 流式期间气泡底部另有一个本地实时读数（utils/turnClock），只渲染、不入库，
-  // 定稿瞬间被这里的结算值原位取代。
+  // 流式期间气泡底部另有一路实时读数（后端 `turn_stats` 推送，utils/turnStats 只
+  // 缓存显示），定稿瞬间被这里的结算值原位取代。
   // null/undefined（在建消息、迁移前的历史行）→ 结算值不渲染，区别于「确实 0 时长」。
   const workText = formatWorkDuration(message.durationMs, i18n.language)
-  // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数每秒变，
-  // 但门控只随 streaming 起落一次，秒级跳动留在定时器直写 DOM 的路径上。
+  // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数随推送变，
+  // 但门控只随 streaming 起落一次，三个数字的重画留在订阅回调直写 DOM 的路径上。
   const isLive = !!message.streaming && !!sessionId
+  // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
+  // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
+  const liveSessionId = isLive && !workText ? sessionId : undefined
   // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
   // 拿不到，按设计确认放弃该信息于移动端呈现。
   const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
-  // 定稿后的本地估算：turnClock 按**会话**存快照（不按消息），故只挂在最后一条
-  // assistant 消息上——否则更早的消息在重渲染时会错配到新 turn 的读数。
-  const settledSessionId = !isLive && workText && isLastAssistant && sessionId ? sessionId : null
-  const settledTps = settledSessionId ? formatTps(finalTps(settledSessionId)) : null
-  const settledToolText = settledSessionId
-    ? formatToolDuration(finalToolElapsedMs(settledSessionId), i18n.language)
-    : null
+  // 定稿读数（工具耗时 / 估算速率）是**每条消息自己的**后端结算字段：来源与
+  // `durationMs` 一致（hydrate 的 `GET /messages` 或 `prompt_done` 帧载荷），
+  // 不再是会话级内存快照——历史行各自显示自己那一轮的值，刷新后常驻（E23）。
+  // null/undefined（历史行、工具跟踪失效、无可测窗口）→ 不渲染，与工作耗时同一
+  // 三态语义（`format*` 收口）。
+  const settledTps = formatTps(message.tps)
+  const settledToolText = formatToolDuration(message.toolMs, i18n.language)
   const durationTip = [
     workText && t('chat.msg.workTime', { dur: workText }),
     settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),
@@ -763,18 +1163,20 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           // data-chat-body: 长按正文保留系统文本选择，不弹动作菜单（D3）
           data-chat-body="true"
           // 「上次输入」条跳转聚焦：accent 描边 + ring 闪烁动画（index.css）。
-          className={highlighted ? 'chat-msg-flash' : undefined}
+          // 与 chat-bubble 并列：聚焦 ring 的 keyframes 已把气泡硬投影写回，
+          // 闪烁结束不会抹掉它。
+          className={`chat-bubble${highlighted ? ' chat-msg-flash' : ''}`}
           style={{
             padding: '8px 12px',
-            borderRadius: 8,
             maxWidth: BUBBLE_MAX_WIDTH,
             background: message.undelivered ? 'var(--bg-elevated)' : 'var(--accent-14)',
             color: message.undelivered ? 'var(--text-muted)' : 'var(--text-primary)',
+            // 默认边框由 .chat-bubble 给（--border-strong），两个特殊态就地覆盖。
             border: message.undelivered
               ? '1px dashed var(--danger, #FF7B72)'
               : highlighted
                 ? '1px solid var(--accent)'
-                : '1px solid var(--accent-14)',
+                : undefined,
             fontFamily: READER_FONT,
             fontSize: '1em',
             lineHeight: 1.5,
@@ -812,7 +1214,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                         style={{
                           maxWidth: 240,
                           maxHeight: 200,
-                          borderRadius: 4,
+                          borderRadius: 0,
                           border: '1px solid var(--border-subtle)',
                           display: 'block',
                         }}
@@ -830,7 +1232,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
                           maxWidth: 240,
                           padding: '4px 8px',
                           border: '1px solid var(--border-subtle)',
-                          borderRadius: 4,
+                          borderRadius: 0,
                           background: 'var(--bg-base)',
                           fontFamily: READER_FONT,
                           fontSize: 12,
@@ -876,6 +1278,54 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // rather than collapsing everything into a single bubble.
   const lastIdx = message.blocks.length - 1
   const showLooseCaret = message.streaming && (lastIdx < 0 || message.blocks[lastIdx].type !== 'text')
+  // 最终 text 结论的下标 = **最后一个** text 块。不能取 lastIdx：消息可能以工具
+  // 调用收尾；也不能取第一个 text 块：ACP 的 prose chunk 被工具调用切成多个 text
+  // 块（`appendProseBlock` 只在**连续同类**时合并），靠前的那些是中间输出。
+  let finalTextIdx = -1
+  for (let i = 0; i < message.blocks.length; i++) {
+    if (message.blocks[i].type === 'text') finalTextIdx = i
+  }
+  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**）：
+  // 一轮里除**最终 text 结论**与 **system 块**外全部收进同一个容器——过程块
+  // （thought / tool_call / plan）+ 夹在过程块之间的中间 text 输出。
+  // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
+  // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
+  // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
+  // system 块必须留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
+  const streaming = message.streaming ?? false
+  const bodyNodes: ReactNode[] = []
+  const collected: ProcessEntry[] = []
+  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。留在容器外的块按原相对
+  // 顺序排在其后，故可见内容（system / 最终结论）的阅读顺序不变；被收进容器的
+  // 内容折叠后不可见，展开时也保持原序——唯一的例外是「结论之后还有过程块」的
+  // 罕见消息（agent 结尾又调了工具），那时的过程块会提前到结论之前。
+  let containerSlot = -1
+  for (let i = 0; i < message.blocks.length; i++) {
+    const b = message.blocks[i]
+    if (i === finalTextIdx || b.type === 'system') {
+      bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
+      continue
+    }
+    if (collected.length === 0) {
+      bodyNodes.push(null)
+      containerSlot = bodyNodes.length - 1
+    }
+    collected.push({ block: b, idx: i })
+  }
+  // 有东西可收纳才立容器：纯文字回复（无过程块、无中间输出）不出现收纳行，
+  // 行为与加容器前完全一致。
+  if (collected.length > 0) {
+    bodyNodes[containerSlot] = (
+      <ProcessBlocks
+        key={`process-${collected[0].idx}`}
+        entries={collected}
+        streaming={streaming}
+        workText={workText}
+        liveSessionId={liveSessionId}
+        renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming, undefined)}
+      />
+    )
+  }
   return (
     <div
       ref={rowRef}
@@ -892,11 +1342,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
         flexDirection: 'column',
         alignItems: 'flex-start',
         padding: '4px 12px',
-        gap: 6,
+        gap: MSG_ROW_GAP,
       }}
     >
       {label}
-      {message.blocks.map((b, i) => renderBlock(b, i, i === lastIdx, message.streaming ?? false))}
+      {bodyNodes}
       {showLooseCaret && <span className="chat-streaming-caret" style={{ alignSelf: 'flex-start' }} />}
       {/* 动作栏 + turn 耗时（含工具耗时与 tps）同一行。对齐是**状态相关**的，避免流式期左右横跳：
           · 流式期：动作栏恒空（五个动作的 visible 硬排 streaming），实时读数**靠左**；
@@ -904,11 +1354,22 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           行宽 = 实测的最后一个正文块宽度（气泡按内容收缩，CSS 表达不了「贴上面
           某个块的右缘」，只能量），故无论耗时是同行还是被 flex-wrap 挤到下一行，
           右缘都与气泡右缘重合。动作栏常驻占位（CSS 只切 opacity）且不被压缩，
-          所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。 */}
+          所以放不下的是耗时而不是它 —— 位置不随 hover 跳动。
+          **流式期例外（2026-10-14 用户报告「计时和 tps 堆叠成三行」）**：实时读数
+          三段全 nowrap，量到的正文块是窄工具卡 / 刚起的文本泡时三段放不下，被
+          flex-wrap 拆成一行一段；且正文变宽过程中还会 3→2→1 行重排，观感抖动。
+          故流式期整行以 `min-width:max-content` 托到单行内容宽度之上（正文变宽后
+          行宽自然跟随，读数不位移）；结算值不加这条，仍按上段规则换行。 */}
       {(workText || isLive || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
-          style={{ alignSelf: 'flex-start', width: metaWidth, maxWidth: BUBBLE_MAX_WIDTH }}
+          style={{
+            alignSelf: 'flex-start',
+            width: metaWidth,
+            maxWidth: BUBBLE_MAX_WIDTH,
+            // 流式实时读数固定单行：托到单行内容宽度（窄气泡下允许横向超出）。
+            ...(liveSessionId ? { minWidth: 'max-content' } : null),
+          }}
         >
           <MessageActionBar
             actions={visibleActions}
@@ -919,7 +1380,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
               到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
-          {isLive && !workText && sessionId && <LiveWorkElapsed sessionId={sessionId} />}
+          {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}
           {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
               「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
               `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}

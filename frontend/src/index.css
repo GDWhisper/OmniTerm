@@ -735,29 +735,32 @@ body.fm-dragging * {
   flex-direction: column;
 }
 
-.fm-table-wrap::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-.fm-table-wrap::-webkit-scrollbar-track {
-  background: var(--scrollbar-track);
-}
-.fm-table-wrap::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 0;
-}
-.fm-table-wrap::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
-}
-.fm-table-wrap {
+/* 内层滚动容器（真正滚动的元素；.fm-table-wrap 自身 overflow: hidden）。
+   主题化滚动条 8px 常显——自适应列宽算式按同值扣预算
+   （fileTableLayout.ts 的 FM_SCROLLBAR_W），改宽度须两处同步。 */
+.fm-table-scroll {
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   scrollbar-width: thin;
 }
+.fm-table-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.fm-table-scroll::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+.fm-table-scroll::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 0;
+}
+.fm-table-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
 
 /* ── File table ──
-   No explicit width (default: auto) — table is exactly as wide as its columns.
-   No proportional distribution of extra space, so resizing one column doesn't
-   shift other columns. Horizontal scroll on parent div if table overflows. */
+   自适应模式（.fm-table-fit）下 table 带内联 width:100%，table-layout: fixed
+   真正生效、列宽由 JS 精确分配（见 fileTableLayout.ts）；手动态无显式宽度，
+   table 恰为列宽之和，溢出时由父容器横向滚动（D5「调列不互挤」）。 */
 .fm-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -820,6 +823,19 @@ body.fm-dragging * {
   min-width: 60px;
   text-align: right !important;
   position: relative;
+}
+/* 自适应模式（.fm-table-fit，见 fileTableLayout.ts）：列宽由 JS 精确分配，
+   th 的 min-width 下限须禁用，否则窄面板下会把列撑破、压缩失效（X17）。
+   列被压窄后内容可能超界（如 80px 列里的 "Last Modified"），裁剪兜底，
+   防止压到相邻列（size 单元格同理——它没有 td 级 overflow 规则）。 */
+.fm-table-fit .fm-th-name,
+.fm-table-fit .fm-th-mtime,
+.fm-table-fit .fm-th-size {
+  min-width: 0;
+}
+.fm-table-fit th,
+.fm-table-fit .fm-td-size {
+  overflow: hidden;
 }
 /* Column resize handle — right edge of each th (except actions) */
 .fm-th-resize {
@@ -1968,6 +1984,31 @@ body.parchment-texture {
 .chat-markdown img { max-width: 100%; }
 
 /* ────────────────────────────────────────────────────────────────────
+   Chat bubbles — pixel card chrome for the two "speech" bubbles
+   (user + assistant text). Single source of truth: ChatMessage.tsx's
+   ChatMessageView applies the class; per-bubble borders/backgrounds stay
+   inline because user's has dynamic states (undelivered / highlighted).
+
+   Spec (ui-style-guide §6 / §14, see §7.8): radius 0 (global hard
+   corner), 1px --border-strong panel edge (same tier as .settings-card),
+   2px 2px 0 hard shadow (one tier below .pixel-float's 4px).
+
+   The shadow lives in --chat-bubble-shadow so .chat-msg-flash's focus ring
+   can compose it into its keyframes — the ring animates box-shadow and its
+   `forwards` end state would otherwise wipe the bubble's shadow forever.
+
+   Nested content surfaces inside the stream (tool card / plan block /
+   diff / system detail) stay flat with no shadow: they are panels
+   embedded in the flow, and stacking shadows there is pure noise.
+   ──────────────────────────────────────────────────────────────────── */
+.chat-bubble {
+  --chat-bubble-shadow: 2px 2px 0 var(--pixel-shadow);
+  border: 1px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: var(--chat-bubble-shadow);
+}
+
+/* ────────────────────────────────────────────────────────────────────
    Horizontal-scroll surfaces (`data-x-scroll`) — mobile pane-swipe opt-out.
    Pan gesture goes to the surface, not the MobileLayout strip swipe.
    ──────────────────────────────────────────────────────────────────── */
@@ -2255,13 +2296,16 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 
 /* 跳转聚焦的 ring 闪烁：spread 无 blur（§6.1 focus ring 例外，不算阴影）。
-   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。 */
+   时长与 ChatView 的 CHAT_MSG_FLASH_MS 一致，到期摘 class。
+   两个关键帧都必须把气泡自身的硬投影（--chat-bubble-shadow，见 .chat-bubble）
+   一起写回：动画作用于 box-shadow 且带 forwards，终态若只留一圈透明 ring，
+   会把气泡的硬投影永久抹掉——闪烁结束后投影就没了。 */
 @keyframes chat-msg-flash {
   0% {
-    box-shadow: 0 0 0 2px var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), var(--chat-bubble-shadow);
   }
   100% {
-    box-shadow: 0 0 0 2px transparent;
+    box-shadow: 0 0 0 2px transparent, var(--chat-bubble-shadow);
   }
 }
 .chat-msg-flash {
@@ -2352,6 +2396,166 @@ input[type="range"]:active::-webkit-slider-thumb {
 }
 .chat-block-copy-btn:hover {
   color: var(--text-secondary);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   思考块折叠态（外观对齐 ZCode 的 Reasoning 组件）
+
+   标题行单行承载「◆ 图标 + 状态标签 + · + 实时思考行 + 末尾箭头」。
+   实时思考行溢出时不走 text-overflow: ellipsis（那会冻结旧前缀、把最新
+   token 裁掉），改为把单行视口的 scrollLeft 推到末尾——旧内容向左移、
+   最新内容始终可见；左缘再叠一层渐隐遮罩，提示左侧还有被滚走的内容。
+   ──────────────────────────────────────────────────────────────────── */
+
+/* 流式态「正在思考」扫光：渐变中段夹一段更虚的颜色，靠 background-position
+   往复流动形成高光扫过。必须 background-clip:text + 透明文字色，渐变才只
+   落在字形上。 */
+.thinking-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 34%,
+    var(--text-faint) 50%,
+    var(--text-muted) 66%,
+    var(--text-muted) 100%
+  );
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-gradient-flow 4s linear infinite;
+}
+
+@keyframes thinking-gradient-flow {
+  0% {
+    background-position: 100% 0;
+  }
+  50% {
+    background-position: 0% 0;
+  }
+  100% {
+    background-position: 100% 0;
+  }
+}
+
+/* 实时思考行换行时的纵向滚入：新行从下一行的位置（0.8em）淡入到位。
+   由 React key 变化触发重挂载，因此只需写入场动画；同一条行继续生长时
+   key 不变，不会重挂载，也就不会重放这段动画。 */
+.thinking-line-roll {
+  animation: thinking-line-roll 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes thinking-line-roll {
+  from {
+    transform: translateY(0.8em);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* 末尾箭头：收起态默认隐藏（整行本身就可点，箭头只是「可展开」的暗示），
+   hover 标题行时才显；展开态常显并旋转 90° 改为指向下方。 */
+.thinking-chevron {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.thinking-header-btn:hover .thinking-chevron,
+.thinking-chevron[data-open="true"] {
+  opacity: 1;
+}
+.thinking-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 减少动效：扫光与滚入都关掉。扫光关掉后必须把文字色还回来——
+   background-clip:text 配 transparent 会让标签整个不可见。 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer,
+  .thinking-line-roll {
+    animation: none;
+  }
+  .thinking-shimmer {
+    background-image: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+  }
+  .thinking-chevron {
+    transition: none;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   消息级「过程容器」收纳行（ProcessBlocks）
+   ──────────────────────────────────────────────────────────────────── */
+
+/* 收纳行：与思考块标题行同款规格（reader 字体 / 0.846em / --text-faint /
+   opacity 0.9），整行即展开开关。max-w + min-w-0 让长摘要被气泡宽度收口。 */
+.process-header-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-faint);
+  padding: 0;
+  font-family: var(--reader-font, inherit);
+  display: inline-flex;
+  align-items: center;
+  /* 只管图标↔摘要、摘要↔箭头两处。**段间分隔符不在这里调节**——它们是摘要
+     文本流内的字面 `' · '`（见 .process-summary-text），由等宽字体自身的空格
+     定宽；早前把 `·` 做成独立 flex item 靠这里的 gap 撑空隙，等于同一行里
+     混用两套分隔机制，段间忽宽忽窄（「已工作 22分钟7秒·思考」粘连，而
+     「思考 101 次 · 工具调用」又偏宽）。故 gap 只留 5px 给图标/箭头，
+     与 .thinking-header-btn 的图标间距同值。 */
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  opacity: 0.9;
+}
+
+/* 收纳行内的摘要文本：比正文小一档且虚化（沿用思考块既有的层级语言），
+   不抢最终结论的风头。 */
+.process-summary-text {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 收纳行末尾箭头：与 .thinking-chevron 同一套语义（收起态 hover 才显、
+   展开态常显并转向下），但**不复用**那个类——它的 hover 联动写死了
+   `.thinking-header-btn:hover`，套过来会连带思考块的规则。 */
+.process-chevron {
+  opacity: 0;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.process-header-btn:hover .process-chevron,
+.process-chevron[data-open="true"] {
+  opacity: 1;
+}
+.process-chevron[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 减少动效：收纳行运行态扫光一并关掉，同 .thinking-shimmer 的处理
+   （background-clip:text 配 transparent 会让标签不可见，必须还回文字色）。 */
+@media (prefers-reduced-motion: reduce) {
+  .thinking-shimmer,
+  .thinking-line-roll,
+  .process-shimmer {
+    animation: none;
+  }
+  .process-shimmer {
+    background-image: none;
+    color: var(--text-muted);
+    -webkit-text-fill-color: var(--text-muted);
+  }
+  .process-chevron {
+    transition: none;
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────

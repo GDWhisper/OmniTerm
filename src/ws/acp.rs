@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol::schema::v1::StopReason;
 use axum::{
@@ -17,7 +18,7 @@ use crate::AppState;
 use crate::acp::chat_persistence;
 use crate::acp::permission::PermissionRequestEvent;
 use crate::acp::terminal::TerminalActivity;
-use crate::acp::turn_accumulator::TurnTiming;
+use crate::acp::turn_accumulator::{TurnStats, TurnTiming};
 use crate::acp::{AcpClient, FileInput, ImageInput, ResourceInput, TurnEvent, client};
 use crate::api::agents::load_agent;
 
@@ -259,6 +260,17 @@ enum AcpServerMessage<'a> {
     /// 后续 live 帧 seq 大于它才应用（见 useAcpChat 对账）。
     #[serde(rename = "turn_snapshot")]
     TurnSnapshot { row_id: String, text: String, blocks: String, seq: u64 },
+    /// 进行中 turn 的实时读数（工作 / 工具耗时 / 估算速度），后端结算、前端只显示。
+    /// turn 激活期间按秒推送（`TurnEvent::Started` 后立刻推一帧，连接时若 turn
+    /// 活跃也由首个 tick 立即推）；`tool_ms` = 0 或字段缺省在前端同样不渲染。
+    #[serde(rename = "turn_stats")]
+    TurnStats {
+        work_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tps: Option<f64>,
+    },
     /// 心跳应答（`ping` 的回复）。无载荷、无状态，前端只据此复位「未收到 pong」计数。
     #[serde(rename = "pong")]
     Pong,
@@ -321,50 +333,93 @@ async fn spawn_notify_task(
     });
 }
 
+/// 实时读数（`turn_stats`）推送间隔。与旧前端本地计时的 1s 跳动同频——秒级读数
+/// 不需要更密，且读数在后端结算，前端只做显示（见 work-time 计划 E23）。
+const TURN_STATS_PUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// 序列化一帧实时读数；无活跃 turn（`None`）时不发帧——空闲连接零流量。
+fn turn_stats_frame(stats: Option<TurnStats>) -> Option<String> {
+    let stats = stats?;
+    Some(
+        serde_json::to_string(&AcpServerMessage::TurnStats {
+            work_ms: stats.work_ms,
+            tool_ms: stats.tool_ms,
+            tps: stats.tps,
+        })
+        .unwrap_or_default(),
+    )
+}
+
 /// 转发 turn 生命周期事件：`Started` → `turn_state{active:true}`，
 /// `Done` → `prompt_done`，`Error` → `prompt_error`。经 broadcast 使所有连接
 /// （含 prompt 进行中断线重连的新连接）都能收到结束信号；旧实现只发给发起
 /// prompt 的连接，重连后前端永远停留在 running 态。`Started` 同样必须广播：
 /// 非发起标签页只有收到它才知道 turn 已开始（连接快照只在连接那一刻下发）。
+///
+/// 本任务同时承担活跃 turn 的 `turn_stats` 按秒推送：首个 tick 立即就绪，故连接
+/// 时 turn 已活跃也能马上收到一帧；`Started` 之后再补一帧（读数从 0 起跳，前端
+/// 不必等满一秒）。无活跃 turn 时 tick 只是空查（`live_turn_stats` 返回 `None`），
+/// 不产生流量。`MissedTickBehavior::Delay` 防任务被调度延迟后补偿式连发。
 async fn spawn_turn_event_task(
     session_id: &str,
     mut rx: tokio::sync::broadcast::Receiver<TurnEvent>,
     notify_tx: tokio::sync::mpsc::Sender<Message>,
+    client: Arc<AcpClient>,
 ) {
     let session_id = session_id.to_string();
     tokio::spawn(async move {
+        let mut tick = tokio::time::interval(TURN_STATS_PUSH_INTERVAL);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    let msg = match &event {
-                        TurnEvent::Started => {
-                            serde_json::to_string(&AcpServerMessage::TurnState { active: true })
+            let msg = tokio::select! {
+                biased;
+                event = rx.recv() => match event {
+                    Ok(TurnEvent::Started) => {
+                        // turn 开始：广播 active 帧后立刻补一帧实时读数。begin_turn
+                        // 发生在广播之前（mark_prompt_active），读到的即以本刻为起点的
+                        // 活跃读数。
+                        let active = serde_json::to_string(&AcpServerMessage::TurnState {
+                            active: true,
+                        })
+                        .unwrap_or_default();
+                        if notify_tx.send(Message::Text(active.into())).await.is_err() {
+                            break;
                         }
-                        TurnEvent::Done { stop_reason, row_id, duration, abnormal } => {
-                            serde_json::to_string(&AcpServerMessage::PromptDone {
-                                stop_reason,
-                                row_id: row_id.as_deref(),
-                                duration: duration.as_ref(),
-                                abnormal: *abnormal,
-                            })
-                        }
-                        TurnEvent::Error { message } => {
-                            serde_json::to_string(&AcpServerMessage::PromptError { message })
+                        match turn_stats_frame(client.live_turn_stats()) {
+                            Some(msg) => msg,
+                            None => continue,
                         }
                     }
-                    .unwrap_or_default();
-                    if notify_tx.send(Message::Text(msg.into())).await.is_err() {
-                        break;
+                    Ok(TurnEvent::Done { stop_reason, row_id, duration, abnormal }) => {
+                        serde_json::to_string(&AcpServerMessage::PromptDone {
+                            stop_reason: &stop_reason,
+                            row_id: row_id.as_deref(),
+                            duration: duration.as_ref(),
+                            abnormal,
+                        })
+                        .unwrap_or_default()
                     }
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        "ACP turn-event subscriber lagged by {} messages; dropped stale events",
-                        n
-                    );
-                }
+                    Ok(TurnEvent::Error { message }) => {
+                        serde_json::to_string(&AcpServerMessage::PromptError { message: &message })
+                            .unwrap_or_default()
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            "ACP turn-event subscriber lagged by {} messages; dropped stale events",
+                            n
+                        );
+                        continue;
+                    }
+                },
+                _ = tick.tick() => match turn_stats_frame(client.live_turn_stats()) {
+                    Some(msg) => msg,
+                    None => continue,
+                },
+            };
+            if notify_tx.send(Message::Text(msg.into())).await.is_err() {
+                break;
             }
         }
     });
@@ -946,7 +1001,7 @@ async fn restore_acp_session(
     let system_notice_rx = new_client.system_notice_subscribe();
     spawn_system_notice_task(sid, system_notice_rx, notify_tx.clone()).await;
     let turn_event_rx = new_client.turn_event_subscribe();
-    spawn_turn_event_task(sid, turn_event_rx, notify_tx.clone()).await;
+    spawn_turn_event_task(sid, turn_event_rx, notify_tx.clone(), new_client.clone()).await;
     let term_rx = new_client.terminal_event_subscribe();
     spawn_terminal_task(sid, term_rx, notify_tx.clone()).await;
     *client = Some(new_client.clone());
@@ -1124,7 +1179,7 @@ async fn handle_acp_ws(socket: WebSocket, session_id: String, state: AppState) {
             spawn_crash_task(&session_id, crash_rx, notify_tx.clone()).await;
             let system_notice_rx = c.system_notice_subscribe();
             spawn_system_notice_task(&session_id, system_notice_rx, notify_tx.clone()).await;
-            spawn_turn_event_task(&session_id, turn_event_rx, notify_tx.clone()).await;
+            spawn_turn_event_task(&session_id, turn_event_rx, notify_tx.clone(), c.clone()).await;
             let term_rx = c.terminal_event_subscribe();
             spawn_terminal_task(&session_id, term_rx, notify_tx.clone()).await;
             if let Some(notif) = c.initial_config_notification() {
@@ -1505,6 +1560,7 @@ mod tests {
         classify_stop_reason, classify_turn_end, extract_at_paths, stop_reason_wire,
     };
     // 判定口径钉在协议类型上（v1 schema），不构造 wire 字符串。
+    use crate::acp::turn_accumulator::{TurnStats, TurnTiming};
     use agent_client_protocol::schema::v1::StopReason;
 
     // ── 心跳帧（ping / pong）线格式 ─────────────────────────────────
@@ -1532,6 +1588,72 @@ mod tests {
         assert_eq!(json, r#"{"type":"turn_state","active":true}"#);
         let json = serde_json::to_string(&AcpServerMessage::TurnState { active: false }).unwrap();
         assert_eq!(json, r#"{"type":"turn_state","active":false}"#);
+    }
+
+    #[test]
+    fn turn_stats_frame_serializes_and_omits_absent_readings() {
+        // 前端按 `frame.type === 'turn_stats'` 派发、读 work_ms/tool_ms/tps 直接显示。
+        // 无值段必须整字段省略（与 duration 的 skip_serializing_if 同约定），前端按
+        // 「字段缺省 = 无读数」处理，而不是读 0/null 三态。
+        let json = serde_json::to_string(&AcpServerMessage::TurnStats {
+            work_ms: 12_000,
+            tool_ms: Some(3_000),
+            tps: Some(42.5),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"type":"turn_stats","work_ms":12000,"tool_ms":3000,"tps":42.5}"#);
+
+        let json = serde_json::to_string(&AcpServerMessage::TurnStats {
+            work_ms: 500,
+            tool_ms: None,
+            tps: None,
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"type":"turn_stats","work_ms":500}"#);
+
+        // 无活跃 turn（None）→ 不发帧：空闲连接按秒 tick 只是空查，零流量。
+        assert!(super::turn_stats_frame(None).is_none());
+        assert!(
+            super::turn_stats_frame(Some(TurnStats { work_ms: 1_000, tool_ms: None, tps: None }))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn prompt_done_duration_carries_tool_and_rate_estimates() {
+        // prompt_done 的 `duration` 就是 TurnTiming 的 serde 输出：工具耗时与速率
+        // 随定稿帧当场下发（前端不必等刷新 hydrate），字段缺省 = 该 turn 无该读数。
+        let timing = TurnTiming {
+            work_ms: 5_000,
+            wait_ms: 200,
+            tool_ms: Some(1_100),
+            tps: Some(38.2),
+            row_id: Some("row-a".into()),
+        };
+        let json = serde_json::to_string(&AcpServerMessage::PromptDone {
+            stop_reason: "end_turn",
+            row_id: Some("row-a"),
+            duration: Some(&timing),
+            abnormal: false,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"prompt_done","stop_reason":"end_turn","row_id":"row-a","duration":{"work_ms":5000,"wait_ms":200,"tool_ms":1100,"tps":38.2}}"#
+        );
+
+        let bare = TurnTiming { work_ms: 10, wait_ms: 0, tool_ms: None, tps: None, row_id: None };
+        let json = serde_json::to_string(&AcpServerMessage::PromptDone {
+            stop_reason: "end_turn",
+            row_id: None,
+            duration: Some(&bare),
+            abnormal: false,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"prompt_done","stop_reason":"end_turn","duration":{"work_ms":10,"wait_ms":0}}"#
+        );
     }
 
     // ── AcpClientMessage::Prompt 反序列化（§8 向后兼容） ──────────────

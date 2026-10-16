@@ -13,6 +13,11 @@ import {
   readThinkingEffectId,
   type ThinkingEffectId,
 } from '../utils/thinkingEffects'
+import {
+  THINKING_COLLAPSED_STORAGE_KEY,
+  readThinkingCollapsedMode,
+  type ThinkingCollapsedMode,
+} from '../utils/thinkingCollapsed'
 
 // Re-export for convenience
 export type { Project, Workspace, Session }
@@ -226,6 +231,10 @@ export interface AppState {
   pixelFontEnabled: boolean
   /** Expand thinking blocks in chat by default (ON = visible, OFF = collapsed). */
   expandThinking: boolean
+  /** What a collapsed thinking block shows (only meaningful when `expandThinking`
+   *  is OFF): 'hide' = no thinking content at all (the pre-setting behaviour),
+   *  'brief' = one live line of the raw streamed thought under the header. */
+  thinkingCollapsedMode: ThinkingCollapsedMode
   /** Expand tool-call blocks in chat by default (ON = visible, OFF = collapsed). */
   expandToolCalls: boolean
   /** Expand all session-hosting worktrees in the sidebar (ON = all expanded, OFF = focused worktree only). */
@@ -299,6 +308,7 @@ export interface AppState {
   setCrtScanlines: (v: boolean) => void
   setParchmentTextureEnabled: (v: boolean) => void
   setExpandThinking: (v: boolean) => void
+  setThinkingCollapsedMode: (v: ThinkingCollapsedMode) => void
   setExpandToolCalls: (v: boolean) => void
   setExpandAllSessions: (v: boolean) => void
   setPixelFontEnabled: (v: boolean) => void
@@ -415,6 +425,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   soundPingEnabled: localStorage.getItem('omniterm_sound_ping_enabled') !== 'false',
   crtScanlines: localStorage.getItem('omniterm_crt_scanlines') === 'true',
   expandThinking: localStorage.getItem('omniterm_expand_thinking') === 'true',
+  thinkingCollapsedMode: readThinkingCollapsedMode(),
   expandToolCalls: localStorage.getItem('omniterm_expand_tool_calls') === 'true',
   expandAllSessions: localStorage.getItem('omniterm_expand_all_sessions') === 'true',
   parchmentTextureEnabled: localStorage.getItem('omniterm_parchment_texture') !== 'false',
@@ -510,6 +521,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setExpandThinking: (v) => {
     localStorage.setItem('omniterm_expand_thinking', String(v))
     set({ expandThinking: v })
+  },
+
+  // 思考块收起态档位：与 expandThinking 各自独立——开时块恒展开，档位无语义
+  // （设置面板此时不渲染该行）；关时由它决定收起态显示什么。
+  setThinkingCollapsedMode: (mode) => {
+    localStorage.setItem(THINKING_COLLAPSED_STORAGE_KEY, mode)
+    set({ thinkingCollapsedMode: mode })
   },
 
   setExpandToolCalls: (v) => {

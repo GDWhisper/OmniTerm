@@ -16,6 +16,7 @@ import { createProjectForDir, projectNameFromPath } from './openTerminal'
 import { IconLink, IconArrowUp, IconRefresh, IconUpload, IconDownload, IconFolderPlus, IconFilePlus, IconCopy, IconFileEdit, IconPencil, IconTrash, IconFolderOpen, IconWarning, IconSearch, IconHome, IconWorkbench } from './icons'
 import { FileDrawer } from './FileDrawer'
 import { canInlineEdit, isDirEntry } from './filePreviewShared'
+import { FM_COL, FM_COL_CHECKBOX, fitFileTableColumns, type FileTableColWidths } from './fileTableLayout'
 import { triggerBump } from '../../utils/pixelAnimations'
 import { FolderSprite, FileSprite, FileCodeSprite } from '../PixelUI/PixelSprites'
 import { useFileDrag } from './useFileDrag'
@@ -38,8 +39,7 @@ const SortIndicator = ({ col, sortKey, sortDesc }: { col: SortKey; sortKey: Sort
     </span>
   ) : null
 
-// 文件表格固定列宽（px）——name 列在容器内自适应剩余宽度（D5）
-const FM_COL = { mtime: 140, size: 100, actions: 132, minName: 140 } as const
+// 文件表格列宽分配见 ./fileTableLayout.ts（常量 + 自适应算式单一真源）
 
 function formatSize(bytes: number | null): string {
   if (bytes === null) return '-'
@@ -166,7 +166,7 @@ export function FileManager() {
   const bcRef = useRef<HTMLDivElement>(null)
   const [bcOverflow, setBcOverflow] = useState(false)
   const [dragOver, setDragOver] = useState(false)
-  const [colWidths, setColWidths] = useState({ name: 300, mtime: FM_COL.mtime, size: FM_COL.size })
+  const [colWidths, setColWidths] = useState<FileTableColWidths>({ name: 300, mtime: FM_COL.mtime, size: FM_COL.size })
   const [nameColAuto, setNameColAuto] = useState(true)
   const colRefs = useRef<Record<'name' | 'mtime' | 'size', HTMLTableColElement | null>>({
     name: null,
@@ -367,21 +367,25 @@ export function FileManager() {
     onMoveComplete: () => fetchFiles(),
   })
 
-  // name 列随容器自适应；用户一旦手动拖拽任何列，永久退出自适应（D5）
+  // 列宽随容器自适应（name/mtime/size 三列统一分配，算式见 fileTableLayout.ts）；
+  // 用户一旦手动拖拽任何列，永久退出自适应（D5）——此后列宽与横向滚动行为
+  // 与历史一致。downloadMode 影响列预算（多一列复选框），须重 fit。
   useEffect(() => {
     if (!nameColAuto) return
     const el = fileDragTableRef.current
     if (!el) return
     const fit = () =>
       setColWidths((cw) => {
-        const name = Math.max(FM_COL.minName, el.clientWidth - FM_COL.mtime - FM_COL.size - FM_COL.actions - 2)
-        return cw.name === name ? cw : { ...cw, name }
+        const next = fitFileTableColumns(el.clientWidth, downloadMode ? FM_COL_CHECKBOX : 0)
+        return cw.name === next.name && cw.mtime === next.mtime && cw.size === next.size
+          ? cw
+          : next
       })
     fit()
     const ro = new ResizeObserver(fit)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [nameColAuto, fileDragTableRef])
+  }, [nameColAuto, fileDragTableRef, downloadMode])
 
   // SSE-driven refresh: debounce 防抖，把窗口内多次事件收敛为一次全量刷新
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1130,8 +1134,15 @@ export function FileManager() {
             <span className="fm-empty-hint">{t('fm.dragHint')}</span>
           </div>
         ) : (
-          <div style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
-            <table className="fm-table">
+          <div className="fm-table-scroll" style={{ flex: '1 1 0', minHeight: 0, overflow: 'auto' }}>
+            {/* 自适应模式给 table 显式宽度，让 table-layout: fixed 真正生效
+                （列宽由 JS 精确分配、总宽=容器宽，窄面板下按优先级压缩而非
+                溢出被 sticky 遮挡，X17）；手动态保持无宽度的 auto 布局，
+                D5 的「调列不互挤」行为不变。 */}
+            <table
+              className={nameColAuto ? 'fm-table fm-table-fit' : 'fm-table'}
+              style={nameColAuto ? { width: '100%' } : undefined}
+            >
               <colgroup>
                 {downloadMode && <col style={{ width: 32 }} />}
                 <col ref={(el) => { colRefs.current.name = el }} style={{ width: colWidths.name }} />
