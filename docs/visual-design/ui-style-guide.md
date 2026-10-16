@@ -533,7 +533,7 @@ assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps �
 - **hover 浮层：一句文案 + OmniTerm 风格**（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」+「复用 OmniTerm 风格，不要浏览器原生白底」）。此前是两条上百字的长 tooltip（计算口径、并行工具去重、审批扣除、落库/刷新说明）外加一遍读数复述，**全部收敛为一句** `chat.msg.omniComputed`：zh「ACP 不提供该数据，由 OmniTerm 计算」/ en「ACP does not provide this data; OmniTerm computes it」。
   - **门控**：只在屏幕上真有估算读数（工具耗时 / tps）时挂。两者都缺省（尚无输出 burst / 工具跟踪失效）时没有需要解释的数字，整段不挂；结算行的门控是 `finished_at`，历史行连读数带说明一起撤。
   - **视觉**：本体复用 `.pixel-float`（§6 统一浮层档：`--bg-elevated` 底 + `2px --border-strong` 边 + `4px 4px 0 --pixel-shadow` 硬投影），文字 `--text-primary` + reader 字体，`padding: 3px 8px`、`white-space: nowrap`（一句恒单行）、`opacity` 过渡 + `pointer-events: none`，`z-index: 30`。**禁用原生 `title`**——浏览器原生 tooltip 是白底黑字的系统样式，与 OmniTerm 视觉语言冲突。
-  - **定位**：元素挂在读数 span 内，但定位基准是 `.chat-meta-row`（span 不设 `relative`），`left: 0` + `bottom: calc(100% + 4px)`——以整行左缘为锚向上展开，落在气泡正文区。读数 span 自身宽度随气泡伸缩（窄气泡下可被 flex-wrap 压到几十 px），以它为锚会把浮层推出消息列被 `overflow-x: clip` 裁掉。absolute + opacity 手法同 UsageIndicator 徽章明细与动作条 label。
+  - **定位**：基准是**读数 span 自己**（`.chat-meta-tip` 设 `relative`），CSS 默认 `right: 0` + `bottom: calc(100% + 4px)`——浮层右缘与读数右缘对齐、向上展开，光标在读数上浮层就在读数上。2026-10-16 用户报告「tooltip 漂移了，我鼠标指向的是统计那一边」：那一版锚在 `.chat-meta-row` 整行左缘，而读数是右对齐的，浮层整个跑到消息列左缘。**溢出由 `clampMetaTip` 在 `mouseenter` 时夹取**（同 MessageActionBar label 的先例）：读数 span 宽度随气泡伸缩，窄气泡下可被 `flex-wrap` 压到几十 px（实测 64px），`right:0` 会把 255px 的浮层推出消息列被 `overflow-x: clip` 裁掉（实测 x=-167）；夹取基准是**最近的滚动容器**（可见区右缘 = 容器左缘 + `clientWidth`，已排除边框与纵向滚动条槽位），不是视口。absolute + opacity 手法同 UsageIndicator 徽章明细与动作条 label。
 - 动作栏 `flex-shrink: 0`：按钮被压缩时会自己堆成多行（比耗时换行更糟），「放不下」必须永远落在耗时这一侧。
 
 ### 7.6 气泡内 markdown 排版（`.chat-markdown`）

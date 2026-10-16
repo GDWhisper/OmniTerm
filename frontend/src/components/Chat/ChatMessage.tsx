@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
@@ -945,6 +945,47 @@ function liveTip(readings: VisibleReadings, t: TFunction): string {
   return t('chat.msg.omniComputed')
 }
 
+/** 浮层与锚点的间隙（px），与动作条 label 浮层同一档。 */
+const META_TIP_GAP = 4
+
+/**
+ * 把 hover 说明浮层夹进最近滚动容器的可见区（水平方向），mouseenter 时调一次。
+ *
+ * **为什么需要**：浮层 CSS 默认 `right: 0`（与读数右缘对齐，光标在读数上浮层就在
+ * 读数上）。但读数 span 的宽度随气泡伸缩——窄气泡下 `flex-wrap` 可把三段读数拆成
+ * 三行、span 只剩几十 px，此时右缘对齐会把 255px 的浮层整个推出消息列左缘，被
+ * `overflow-x: clip` 裁掉（实测 x=-167）。故 hover 时实测并夹回容器内。
+ *
+ * 夹取基准必须是**滚动容器**而非视口：浮层是容器里的 absolute 后代，探出容器可见区
+ * 的那一段既被裁掉、又会进容器的 scrollable overflow。可见区右缘取 `容器左缘 +
+ * clientWidth`（已排除边框与纵向滚动条槽位）。同 MessageActionBar label 的先例。
+ */
+function clampMetaTip(holder: HTMLElement) {
+  const float = holder.querySelector<HTMLElement>('.chat-meta-tip-float')
+  // 没有说明（无估算读数 → display:none）或还没量到宽度时不必夹。
+  if (!float || float.style.display === 'none' || float.offsetWidth === 0) return
+  const holderRect = holder.getBoundingClientRect()
+  const floatW = float.offsetWidth
+  // 期望位置：右缘与读数右缘对齐。
+  const desired = holderRect.width - floatW
+  let container: HTMLElement | null = holder.parentElement
+  while (container && container !== document.body) {
+    if (/(auto|scroll)/.test(window.getComputedStyle(container).overflowY)) break
+    container = container.parentElement
+  }
+  const cRect = container ? container.getBoundingClientRect() : { left: 0, right: window.innerWidth }
+  const visibleRight = container ? cRect.left + container.clientWidth : cRect.right
+  const minLeft = cRect.left + META_TIP_GAP - holderRect.left
+  const maxLeft = visibleRight - META_TIP_GAP - floatW - holderRect.left
+  float.style.left = `${Math.max(minLeft, Math.min(desired, maxLeft))}px`
+  float.style.right = 'auto'
+}
+
+/** mouseenter 处理器：夹取浮层。定稿行与流式行共用同一份逻辑。 */
+function handleMetaTipEnter(e: ReactMouseEvent<HTMLElement>) {
+  clampMetaTip(e.currentTarget)
+}
+
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const { t, i18n } = useTranslation()
   const rootRef = useRef<HTMLSpanElement>(null)
@@ -989,6 +1030,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
       ref={rootRef}
       className="chat-meta-tip"
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
+      onMouseEnter={handleMetaTipEnter}
     >
       <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />
@@ -1404,6 +1446,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             <span
               className="chat-meta-tip"
               style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
+              onMouseEnter={handleMetaTipEnter}
             >
               {/* 三个读数各一个禁断行段：换行只发生在段间，数字不与单位分离
                   （同 LiveWorkElapsed，见 CHAT_META_SEGMENT_STYLE）。 */}

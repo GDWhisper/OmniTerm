@@ -230,6 +230,26 @@ describe('ChatMessageView meta row hover note', () => {
     expect(metaRow()?.querySelector('.chat-meta-tip-float')?.className).toContain('pixel-float')
   })
 
+  it('anchors the float to the readings themselves, not to the whole row', () => {
+    // 防「tooltip 漂移」回归（2026-10-16 用户报告：鼠标指向读数那一边，浮层却出现在
+    // 消息列左缘）。读数是右对齐的，浮层只有挂在读数 span 上（CSS `right:0` 与读数
+    // 右缘对齐）才跟着光标走；挂到 `.chat-meta-row` 上就整体跑到列左缘。
+    act(() => {
+      root.render(
+        <ChatMessageView
+          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8, finishedAt: todayAt(14, 32) })}
+          sessionId="s1"
+          isLastAssistant
+        />,
+      )
+    })
+    const float = metaRow()?.querySelector('.chat-meta-tip-float')
+    // 父节点必须是读数容器本身（三个读数段的父节点），不是 .chat-meta-row。
+    expect(float?.parentElement).toBe(readingSegments()[0]?.parentElement)
+    expect(float?.parentElement?.className).toContain('chat-meta-tip')
+    expect(float?.parentElement).not.toBe(metaRow())
+  })
+
   it('drops the note when neither estimated reading is on screen', () => {
     // toolMs=0（有效观测没记到工具）且 tps=null（无可测窗口）→ 屏幕上没有估算读数，
     // 挂一句「这个数据怎么算的」只会让人去找不存在的数字。
