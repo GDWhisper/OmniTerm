@@ -908,6 +908,12 @@ async fn dispatch_prompt(
                 // 空 turn 是错误（agent 什么都没交）。
                 abnormal: class.is_error_semantics(),
             });
+            // agent 侧标题的第二条通道（session/list 反查）在 turn 结束时自动补
+            // 一次：opencode / qodercli / pi-acp 从不推 live 通知，只能靠反查。
+            // 内部三道门控（已命名 / 已有标题 / 未声明 list 能力）命中即跳过，
+            // 不产生 RPC；「用户已命名」的权威判据在 SQL 侧，与这里的竞态无关。
+            // best-effort：Done 帧已发出，此后失败只 WARN。
+            c.refresh_agent_title(&db, &session_id).await;
         }
         Err(e) => {
             // 同 Ok 分支：世代不匹配（supersede）或已被收尾时不重复报错。
@@ -2047,18 +2053,32 @@ exit 0
     /// `FAKE_MODE` 分支、**没有任何 `session/prompt` 的成功响应路径**，且被 P2-3
     /// 回归（spawn 超时不得泄漏进程）与 D2 进程组测试依赖；往共享脚本加行为有
     /// 破坏其他用例的风险，收益却只是少一份 test-only 常量。
+    ///
+    /// 脚本另有两处为 **turn 结束后的 agent 标题反查**
+    /// （`AcpClient::refresh_agent_title`）服务：initialize 声明
+    /// `sessionCapabilities.list`，并应答 `session/list`。后者把「问过一次」记入
+    /// `$FAKE_EVENTS_FILE`——门控（已命名 / 已有标题）必须**连 RPC 都不发**，
+    /// 没有这个日志就只能断言「没写库」，测不到「没去问」。
     const DISPATCH_FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 # test-only fake ACP agent：对 session/prompt 按 PUSH 模式推帧后，
-# 回注 env 指定的 stopReason。
+# 回注 env 指定的 stopReason；并应答 session/list（标题反查通道）。
+log_event() { [ -n "$FAKE_EVENTS_FILE" ] && printf '%s\n' "$1" >> "$FAKE_EVENTS_FILE"; }
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
-      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{}}}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{},"sessionCapabilities":{"list":{}}}}}\n' "$id"
       ;;
     *'"method":"session/new"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
       printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"dispatch-session"}}\n' "$id"
+      ;;
+    *'"method":"session/list"'*)
+      # turn 结束后的标题反查（opencode / qodercli / pi-acp 的唯一标题来源）。
+      # 只回一页、无 nextCursor：反查只关心「本会话那条」，不需要翻页。
+      log_event "list"
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      printf '{"jsonrpc":"2.0","id":"%s","result":{"sessions":[{"sessionId":"dispatch-session","cwd":"/tmp","title":"反查得到的标题"}]}}\n' "$id"
       ;;
     *'"method":"session/prompt"'*)
       # notification 没有 id 字段（JSON-RPC 通知），不回抄。
@@ -2230,9 +2250,16 @@ exit 0
         let workspace = dir.join("ws");
         std::fs::create_dir_all(&workspace).expect("create workspace");
         // 脚本用 sed 解析请求 id，PATH 必须覆盖它（找不到 sed 即静默不回响应）。
+        // FAKE_EVENTS_FILE 让脚本把「收到过 session/list」落盘，测试据此断言
+        // 标题反查的门控是「没去问」而不只是「没写库」。
+        let events = dir.join("dispatch-events.log");
         let env = vec![
             AgentEnvVar { key: "STOP_REASON".into(), value: stop_reason.to_string() },
             AgentEnvVar { key: "PATH".into(), value: "/usr/bin:/bin".into() },
+            AgentEnvVar {
+                key: "FAKE_EVENTS_FILE".into(),
+                value: events.to_string_lossy().to_string(),
+            },
         ];
         let agent = Agent {
             id: AGENT_ID.into(),
@@ -2712,6 +2739,151 @@ exit 0
             "i18n key 必须在 blocks 里（前端命中才翻译）"
         );
         assert_eq!(parsed[0]["detail"]["stop_reason"], "end_turn", "detail 带协议原文");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ─── turn 结束时的 agent 标题反查（session/list 自动通道）────────────
+
+    /// 把会话行绑到 agent 侧那个 sessionId 上——不绑的话 `backfill_from_list`
+    /// 一条都匹配不到，反查等于没发生。
+    async fn bind_agent_session(db: &sqlx::SqlitePool, acp_session_id: &str) {
+        sqlx::query("UPDATE sessions SET acp_session_id = ?1 WHERE id = ?2")
+            .bind(acp_session_id)
+            .bind(SESSION)
+            .execute(db)
+            .await
+            .expect("bind acp_session_id");
+    }
+
+    async fn agent_title_of(db: &sqlx::SqlitePool) -> Option<String> {
+        sqlx::query_scalar("SELECT agent_title FROM sessions WHERE id = ?1")
+            .bind(SESSION)
+            .fetch_one(db)
+            .await
+            .expect("session row")
+    }
+
+    /// fake agent 收到过几次 `session/list`。**门控的断言必须是「没去问」**，
+    /// 而不只是「没写库」——后者在 SQL 判据挡住写入时也会通过，于是把
+    /// 「省掉一次 RPC」的优化删掉测试照样绿。
+    fn list_rpc_count(dir: &Path) -> usize {
+        let path = dir.join("dispatch-events.log");
+        std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.trim() == "list")
+            .count()
+    }
+
+    /// 主路径：turn 正常结束 → 反查 `session/list` → 标题落 `agent_title`。
+    ///
+    /// 这条通道是 opencode / qodercli / pi-acp 的**唯一**标题来源（实测它们从不推
+    /// live `session_info_update.title`）。没有它，那些 agent 的会话名永远停在
+    /// `${agent}_${时间}`。
+    #[tokio::test]
+    async fn dispatch_prompt_backfills_the_agent_title_on_turn_end() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-title-backfill");
+        bind_agent_session(&db, "dispatch-session").await;
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
+
+        drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        assert_eq!(
+            agent_title_of(&db).await.as_deref(),
+            Some("反查得到的标题"),
+            "turn 结束后必须反查 session/list 并把标题写进 agent_title"
+        );
+        assert_eq!(list_rpc_count(&dir), 1, "一次 turn 结束只该反查一次");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 用户在 turn 结束前就自己命名了 → **不反查、不回填**。
+    ///
+    /// 这是用户点名的要求。注意本测试把改名放在驱动 prompt **之前**，是因为
+    /// 「turn 进行中并发改名」无法用测试时序确定性地制造；那一半的保证来自
+    /// `title::persist_title` 的 UPDATE WHERE 里的同名判据（SQLite 单语句原子性），
+    /// 由 `persist_stops_updating_once_the_user_renames` 等库侧用例钉住。本测试
+    /// 钉的是**门控**：连 RPC 都不该发。
+    #[tokio::test]
+    async fn dispatch_prompt_does_not_relist_after_the_user_renames() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-title-renamed");
+        bind_agent_session(&db, "dispatch-session").await;
+        sqlx::query("UPDATE sessions SET name = '我自己起的名字' WHERE id = ?1")
+            .bind(SESSION)
+            .execute(&db)
+            .await
+            .expect("rename");
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
+
+        drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        assert_eq!(agent_title_of(&db).await, None, "已命名的行不得被回填");
+        assert_eq!(
+            list_rpc_count(&dir),
+            0,
+            "用户已命名时连 session/list 都不该发（省掉一次无效 RPC）"
+        );
+        let name: Option<String> = sqlx::query_scalar("SELECT name FROM sessions WHERE id = ?1")
+            .bind(SESSION)
+            .fetch_one(&db)
+            .await
+            .expect("session row");
+        assert_eq!(name.as_deref(), Some("我自己起的名字"), "name 永不被标题链路触碰");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 已有标题 → 不再反查（写放大防线：再查也只会拿到同值）。
+    #[tokio::test]
+    async fn dispatch_prompt_does_not_relist_when_title_already_present() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-title-present");
+        bind_agent_session(&db, "dispatch-session").await;
+        sqlx::query("UPDATE sessions SET agent_title = '已经有标题了' WHERE id = ?1")
+            .bind(SESSION)
+            .execute(&db)
+            .await
+            .expect("seed title");
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
+
+        drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        assert_eq!(agent_title_of(&db).await.as_deref(), Some("已经有标题了"));
+        assert_eq!(list_rpc_count(&dir), 0, "已有标题时不该再发 session/list");
 
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);

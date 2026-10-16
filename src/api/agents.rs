@@ -48,23 +48,6 @@ struct AgentAcpSessionView {
     managed: bool,
 }
 
-/// 把下发给 agent 的 cwd 归一成**无尾分隔符**的形态。
-///
-/// `workspace_path` 可能是 `/home/pax/`（dev 库实证：14 行会话里 2 行如此），
-/// 而 agent 侧对 cwd 是**字符串级过滤**：opencode 建会话时把 `/home/pax/` 规范化
-/// 成 `/home/pax` 再存，`session/list` 也就只认后者——带斜杠查回来是空列表
-/// （实测 25 条 vs 0 条）。空列表会被读成「这个目录没有历史」，面板不报错、
-/// 用户与代码都无法察觉，故必须在发出去之前归一。
-///
-/// 只去尾分隔符，其余原样：**不 canonicalize**（不解 symlink；Windows 上会产出
-/// verbatim `\\?\...` 形态，git 与 agent 都打不开）、不强制绝对化（调用方已
-/// `is_dir()` 校验）。同 `api/projects.rs` 路径前缀比较的归一口径。
-fn canonical_cwd(raw: &str) -> std::path::PathBuf {
-    let trimmed = raw.trim_end_matches(['/', '\\']);
-    // 全是分隔符（"/" 或 "C:\"）时 trim 完为空，退回根本身。
-    std::path::PathBuf::from(if trimmed.is_empty() { raw } else { trimmed })
-}
-
 /// 枚举 agent 侧的会话历史（ACP `session/list`）——「Agent 历史」面板的数据源。
 ///
 /// 与 agent 侧删除同构：**临时拉起一个短命进程**（spawn / RPC 各 15s 预算），
@@ -93,7 +76,7 @@ async fn list_agent_acp_sessions(
     let Some(agent) = load_agent(&state.db, &id).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
     };
-    let cwd = canonical_cwd(&query.cwd);
+    let cwd = std::path::PathBuf::from(&query.cwd);
     if !cwd.is_dir() {
         return (
             StatusCode::BAD_REQUEST,
@@ -104,7 +87,7 @@ async fn list_agent_acp_sessions(
 
     let client = match tokio::time::timeout(
         crate::api::sessions::EPHEMERAL_AGENT_TIMEOUT,
-        AcpClient::spawn_probe(agent, cwd.clone(), &state.api_keys),
+        AcpClient::spawn_probe(agent, cwd, &state.api_keys),
     )
     .await
     {
@@ -130,9 +113,7 @@ async fn list_agent_acp_sessions(
 
     let listed = match tokio::time::timeout(
         crate::api::sessions::EPHEMERAL_AGENT_TIMEOUT,
-        // 必须用归一后的 cwd：opencode 对 `session/list` 的 cwd 参数做字符串级
-        // 过滤，尾斜杠会让它回空列表（实测 25 条 vs 0 条）。
-        client.list_sessions(Some(&cwd.to_string_lossy())),
+        client.list_sessions(Some(&query.cwd)),
     )
     .await
     {
@@ -216,8 +197,6 @@ async fn purge_agent_acp_session(
     let Some(agent) = load_agent(&state.db, &id).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
     };
-    // 不套 canonical_cwd：session/delete 按 sessionId 定位，cwd 只是被拉起的
-    // agent 进程的工作目录，尾斜杠对两者都无影响。
     let cwd = std::path::PathBuf::from(&query.cwd);
     if !cwd.is_dir() {
         return (
@@ -765,7 +744,12 @@ mod list_agent_acp_sessions_tests {
     /// 回归（2026-10-16 实测）：`workspace_path` 带尾斜杠（dev 库 `/home/pax/`，
     /// 14 行里 2 行）时 opencode 的 `session/list` 回**空列表**（实测 25 条 vs 0
     /// 条）。空列表被读成「这个目录没有历史」——面板不报错、用户与代码都无法
-    /// 察觉。归一后的 cwd 必须原样到达 agent。
+    /// 察觉。
+    ///
+    /// 归一已下沉到 `AcpClient::list_sessions` 这个收口（与 session/new、
+    /// session/load 共用 `normalize_agent_cwd`），故本测试从** handler 全链路**
+    /// 钉住「agent 收到的 cwd 无尾斜杠」——它同时证明 handler 没有自己裁剪、
+    /// 也没有把别的不变形态传下去。
     #[tokio::test]
     async fn forwards_the_cwd_without_a_trailing_slash() {
         use crate::acp::agent_proc::spawn_test_lock_async;
@@ -812,35 +796,6 @@ mod list_agent_acp_sessions_tests {
             "尾斜杠必须被归一掉再下发，期望精确行 {expected:?}，实际事件: {events:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-/// `canonical_cwd` 的归一口径：只去尾分隔符，不动其余部分。
-#[cfg(test)]
-mod canonical_cwd_tests {
-    use super::canonical_cwd;
-
-    #[test]
-    fn strips_a_single_trailing_slash() {
-        assert_eq!(canonical_cwd("/home/pax/"), std::path::PathBuf::from("/home/pax"));
-    }
-
-    #[test]
-    fn strips_repeated_and_mixed_trailing_separators() {
-        assert_eq!(canonical_cwd("/home/pax///"), std::path::PathBuf::from("/home/pax"));
-        assert_eq!(canonical_cwd("/home/pax/\\"), std::path::PathBuf::from("/home/pax"));
-    }
-
-    #[test]
-    fn leaves_a_clean_path_untouched() {
-        assert_eq!(canonical_cwd("/home/pax"), std::path::PathBuf::from("/home/pax"));
-        assert_eq!(canonical_cwd("relative/dir"), std::path::PathBuf::from("relative/dir"));
-    }
-
-    #[test]
-    fn keeps_the_root_when_everything_is_a_separator() {
-        assert_eq!(canonical_cwd("/"), std::path::PathBuf::from("/"));
-        assert_eq!(canonical_cwd("///"), std::path::PathBuf::from("///"));
     }
 }
 
@@ -970,14 +925,20 @@ mod agent_title_backfill_tests {
         );
     }
 
-    /// 用户手写名的会话照样回填 `agent_title`（数据保持新鲜），但 `name` 分毫
-    /// 不动——展示层 `name ?? agent_title ?? 默认名` 才是「不覆盖」的执行点。
+    /// 用户手写名的会话：`name` 分毫不动，**且 `agent_title` 整个不被写入**。
+    ///
+    /// 后半句是 2026-10-16 收紧的（用户点名要求）：此前这里断言的是「照样回填、
+    /// 靠展示优先级兜着」。那一版把「不覆盖」全押在展示层，而 `agent_title` 会在
+    /// 用户已命名的行上留下一份永远看不到、却会被将来任何读取方当真相的快照。
+    /// 现在判据下沉到 `persist_title` 的 UPDATE WHERE（原子生效），整条写入被挡下。
     #[tokio::test]
     async fn backfill_never_touches_a_user_supplied_name() {
         let state = crate::test_utils::test_state().await;
         seed(&state, "s1", "sess-1", Some("用户手写的名字")).await;
-        crate::acp::title::backfill_from_list(&state.db, &[info("sess-1", Some("agent 标题"))])
-            .await;
+        let sync =
+            crate::acp::title::backfill_from_list(&state.db, &[info("sess-1", Some("agent 标题"))])
+                .await;
+        assert_eq!(sync.written, 0, "已命名的行不得产生任何写入");
         assert_eq!(
             sqlx::query_scalar::<_, Option<String>>("SELECT name FROM sessions WHERE id = 's1'")
                 .fetch_one(&state.db)
@@ -994,7 +955,8 @@ mod agent_title_backfill_tests {
             .await
             .unwrap()
             .as_deref(),
-            Some("agent 标题")
+            None,
+            "已命名时 agent_title 也不该被写进去"
         );
     }
 }

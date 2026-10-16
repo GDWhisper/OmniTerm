@@ -715,19 +715,26 @@ agent 不支持）不依赖活连接即可单测；第二段端点的前置错�
 
 **为什么 `name` 非空即「用户手写过」**：create 路径不再生成默认名落库（默认名改由前端 `utils/sessionDisplayName.ts` 用 `agent_id` + `created_at` 现算），`PATCH /sessions/{id}` 写非空值即命名。故「用户命名不被 agent 自动标题覆盖」是 **schema 级不变式**，不依赖任何可能与现实漂移的 provenance 标记列。**不要**改成「后端重算默认名再比对」——前端用本地时间生成默认名、后端 `created_at` 是 UTC，重算永不相等，回填会永不触发且不报错。
 
-**两条写入通道**（都不随 `session/load` 重放、broadcast 无补发，故必须落库）：
+**三条写入通道**（都不随 `session/load` 重放、broadcast 无补发，故必须落库）：
 
 | 通道 | 调用点 | 覆盖的 agent |
 |---|---|---|
 | live `session_info_update.title` | `on_agent_notification` 的 `SessionInfoUpdate` 分支 → `acp::title::persist_title`（照 `usage::persist_usage_snapshot` 范式，复用已绑定的 `config_prefs` 句柄；create 与 restore 两条注册点都已 attach） | 实测只有 omp 自动推送（首条消息后 LLM 生成）；pi-acp 仅在用户 `/name` 后 |
-| `session/list` 的 `SessionInfo.title` | `GET /agents/{id}/acp-sessions` → `acp::title::backfill_from_list`（按 `acp_session_id` 匹配，一次全量读 + 内存对账） | opencode / qodercli / pi-acp 有值，omp 部分缺省，codebuddy 整个方法 `-32601` |
+| **turn 结束时自动反查** | `ws/acp.rs::dispatch_prompt` 的 `Ok` 分支（`Done` 帧之后）→ `AcpClient::refresh_agent_title` → `session/list` + `backfill_from_list` | opencode / qodercli / pi-acp——它们**从不推** live 通知，这是唯一自动通道 |
+| `session/list` 手动反查 | `GET /agents/{id}/acp-sessions` → `acp::title::backfill_from_list`（按 `acp_session_id` 匹配，一次全量读 + 内存对账） | 同上；用户显式打开「Agent 历史」面板时触发 |
+
+**「用户已命名」是 UPDATE 里的原子判据，不是调用方先查后写**（`persist_title` 的 WHERE 带 `name IS NULL OR TRIM(name, <ASCII 空白六种>) = ''`）：用户可以在 turn 进行中的任意一刻改名，与跑在别的任务上的 live 通知 / turn 结束反查**真并发**。先读 `name` 再决定写不写，「读」与「写」之间会被改名插进来。判据下沉到 SQL 后靠单语句原子性关死该竞态，无需锁或事务协调；调用方的事前查询只是省 RPC 的优化。`TRIM` 必须显式列字符集——SQLite 的 `TRIM(x)` 只去空格，而前端 `sessionDisplayName` 用的是 JS `trim()`（去全部空白），两侧口径分叉会出现「界面显示 agent 标题、库里却再也不回填」。空白名可达：`PATCH /sessions/{id}` 用 `COALESCE(?, name)`，送 `{"name":""}` 会真落下空串。
+
+**`refresh_agent_title` 的三道门控**（任一不满足**一个 RPC 都不发`）：① 用户已命名；② 已有 `agent_title`（写放大防线）；③ agent 未声明 `sessionCapabilities.list`（`AcpClient::supports_list_session()`，initialize 现场捕获、不落库）。第三道与 `list_sessions` 自身「不做能力 gate」是**有意分歧**：面板路径必须把「不支持」如实呈现给用户，后台自动路径跳过即最优解（实测 codebuddy 连 `sessionCapabilities` 都不声明且方法 `-32601`，盲问 = 每轮 turn 一次无效往返 + 一条 WARN）。RPC 限时 5s（`TITLE_REFRESH_TIMEOUT`，比临时拉起的 15s 短——连接早已建好，只是一次往返），best-effort：失败只 WARN，不影响 turn 收尾。
+
+**cwd 在 `AcpClient::list_sessions` 内部归一**（`normalize_agent_cwd`，与 session/new、session/load 共用同一个 helper）：opencode 对该参数做**字符串级过滤**，而它建会话时会把 `/home/pax/` 规范化成 `/home/pax` 再存——带斜杠查回来是**空列表**（实测 25 条 vs 0 条），而空列表被读成「这个目录没有历史」，面板不报错、用户与代码都无法察觉。归一必须落在方法内部这个收口上：落在调用点就等于要求每个未来的调用方都记得，而 2026-10-16 正是这么漏的。
 
 **写入约束**：`MAX_TITLE_BYTES=512` 超限**跳过而非截断**（截断要么静默违反 P1，要么把省略标注渲染进侧栏；超限标题本身即异常 agent 行为，保留上次可用值更诚实）；同值跳过（SQL 层 NULL 安全的 `agent_title IS NOT ?1`，omp 的 replan 会在一个 turn 内重推同一标题）。**`SessionInfo.title` 缺省 ≠ 清除**——前者是普通 `Option`（字段缺席 = 该实现没给），后者只有 `SessionInfoUpdate.title: null` 才是协议规定的显式清除；混为一谈会让 omp 一拉列表就擦掉 live 通知刚写好的标题。
 
 **`session/list` 的三个设计约束**：
 1. **探针连接**（`AcpClient::spawn_probe` / `SessionMode::Probe`）：不发 `session/new`。每次展开面板都起一个短命进程，走 `New` 会在 agent 自己历史里留一条空会话——面板往它正在展示的列表里掺数据。探针 client 的 `session_id` 是空哨兵，**不得**调用任何按 session 定位的方法。
 2. **有界翻页**：`ACP_LIST_MAX_SESSIONS=200`（条目数）+ `ACP_LIST_MAX_PAGES=10`（页数）双维度——单页条目数由 agent 决定（opencode 实测固定 limit=100），只限总条数时一个每页回 1 条的实现就能把请求轮次放大到 200 次。触顶即停，`truncated=true` 由 UI 明示。
-3. **不做能力 gate**（与 `session/delete` 的有意分歧）：能力位在实测实现里覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了但 RPC 失败」混成一谈；`Method not found: session/list` 原文已足以对用户如实交代（502 透出）。
+3. **不做能力 gate**（与 `session/delete` 的有意分歧）：能力位在实测实现里覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了但 RPC 失败」混为一谈；`Method not found: session/list` 原文已足以对用户如实交代（502 透出）。**例外**：`refresh_agent_title` 这条后台自动通道**要** gate（见上）。
 
 **终端 OSC 标题刻意不用作会话名**：数据链路本来就在（`vt.rs::title()` → `WatchTarget.title` → tmux `#{pane_title}`），但实测内容是**状态串**——Claude Code = `⠹ agent is thinking`（`claude.toml:7` 的 spinner 正则）、Codex = `Codex — Action Required`、普通 shell = hostname；且 `agent/watch.rs` 只给「识别出 agent 的 pane」建 entry，普通 shell 标题进不来。拿它当名字会让侧栏每秒跳一次。
 

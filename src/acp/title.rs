@@ -20,6 +20,23 @@ use sqlx::SqlitePool;
 /// 诚实。与 `usage::MAX_USAGE_SNAPSHOT_BYTES` 同一策略。
 pub const MAX_TITLE_BYTES: usize = 512;
 
+/// 「用户已命名」判据里用来识别空白名的字符集（ASCII 空白六种）。
+///
+/// 不能直接用 SQLite 的 `TRIM(name)`：它**只去空格**，tab/换行/CR 原样留着，
+/// 于是 `name = "\t"` 会被判成「已命名」——而前端 `sessionDisplayName` 用的是
+/// JS `String.prototype.trim()`（去全部空白），同一行在界面上是「未命名」、在库里
+/// 却永远等不到回填。两侧口径必须逐字符对齐，故显式列出字符集。
+///
+/// 不追 Unicode 空白（NBSP / U+3000 等）：UI 的输入框提交前不可产生它们，只有
+/// 手搓 API 能送进来，而那种行的后果仅是「不回填」（展示仍正常），不值得为此
+/// 把判据变成一张 Unicode 表。
+const SQL_BLANK_CHARS: &str = "' ' || CHAR(9) || CHAR(10) || CHAR(13) || CHAR(11) || CHAR(12)";
+
+/// 「用户是否已命名」的 SQL 判据。NULL 与「裁光空白后为空」都算未命名。
+fn user_named_guard() -> String {
+    format!("(name IS NULL OR TRIM(name, {SQL_BLANK_CHARS}) = '')")
+}
+
 /// 把 agent 下发的标题规范成「可展示的非空字符串」。
 ///
 /// `None` = 无可用标题（agent 清除 / 空串 / 纯空白）。空串按「清除」处理而非
@@ -30,11 +47,26 @@ pub fn normalize_title(raw: &str) -> Option<&str> {
 }
 
 /// 持久化 agent 侧标题（整体覆盖语义，只写 `agent_title` 列）。返回
-/// `rows_affected`：0 = 被同值判据跳过（未产生写），调用方可据此留痕。
+/// `rows_affected`：0 = 被同值判据或被「用户已命名」判据跳过（未产生写），
+/// 调用方可据此留痕。
 ///
 /// **绝不碰 `name`**：`name` 是用户手写名的唯一居所，本列只是展示兜底
 /// （`name ?? agent_title ?? 宿主默认名`）。「用户命名不被覆盖」由该优先级 +
 /// `name` 非空即手写这一 schema 级不变式共同保证，不依赖任何可能漂移的标记列。
+///
+/// # 「用户已命名」是 UPDATE 里的原子判据，不是调用方先查后写
+///
+/// `AND (name IS NULL OR TRIM(name) = '')` 与同值判据同在 WHERE 里，由 SQLite
+/// 单语句原子性保证：**用户可以在 turn 进行中的任意一刻重命名**（live 通知与
+/// turn 结束反查都跑在别的任务上，与改名请求真并发）。若改成 Rust 侧先读
+/// `name` 再决定写不写，「读」与「写」之间会被改名插进来——那一条标题就落到
+/// 已命名的行上。判据下沉到 SQL 后，改名只要在 UPDATE 提交前完成，本次写入
+/// 自然成为 0 行，无需任何锁或事务协调。
+///
+/// `TRIM(name) = ''` 是与前端 `sessionDisplayName` 的 `name?.trim()` 对齐：
+/// `PATCH /sessions/{id}` 用 `COALESCE(?, name)`，客户端送 `{"name":""}` 会真
+/// 落下空串——那种行在展示上就是「未命名」，此处也必须同样对待，否则会出现
+/// 「界面显示 agent 标题、库里却再也不回填」的分叉。字符集见 [`SQL_BLANK_CHARS`]。
 ///
 /// `title = None` 表示 agent 主动清除（协议 §17.2：`null` 清除字段），同样落库。
 /// 同值跳过用 SQL 层 NULL 安全的 `IS NOT` 比较，避免读回：agent 可能在一个
@@ -58,9 +90,10 @@ pub async fn persist_title(db: &SqlitePool, session_id: &str, title: Option<&str
         );
         return 0;
     }
-    match sqlx::query(
-        "UPDATE sessions SET agent_title = ?1 WHERE id = ?2 AND agent_title IS NOT ?1",
-    )
+    match sqlx::query(&format!(
+        "UPDATE sessions SET agent_title = ?1 WHERE id = ?2 AND {} AND agent_title IS NOT ?1",
+        user_named_guard()
+    ))
     .bind(value)
     .bind(session_id)
     .execute(db)
@@ -83,13 +116,37 @@ pub struct TitleSync {
     pub managed: std::collections::HashSet<String>,
 }
 
+/// turn 结束反查的前置门控：返回**还需要**反查的会话的工作目录。
+///
+/// 「还需要」= 用户未命名 **且** 尚无 `agent_title`。两者任一不满足就连 RPC 都
+/// 不该发：前者那一行的名字由用户说了算；后者再查也只会拿到同一个值（写放大
+/// 防线，见 [`persist_title`] 的同值跳过）。
+///
+/// 与 [`persist_title`] 的 WHERE 共用同一套「未命名」判据（[`user_named_guard`]）：
+/// 两处口径一旦分叉，就会出现「界面显示 agent 标题、库里却再也不反查」这种
+/// 看不出原因的静默失效。
+pub async fn workspace_needing_title(db: &SqlitePool, session_id: &str) -> Option<String> {
+    let sql = format!(
+        "SELECT workspace_path FROM sessions WHERE id = ?1 AND {} AND agent_title IS NULL",
+        user_named_guard()
+    );
+    match sqlx::query_scalar(&sql).bind(session_id).fetch_optional(db).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(session_id, "title gate 查询失败：{e}");
+            None
+        }
+    }
+}
+
 /// 把 `session/list` 的结果按 `acp_session_id` 匹配回 omniterm 自己的会话行：
 /// 回填 `agent_title`，同时报告哪些 id 已纳管。一次全量读同时喂两个输出。
 ///
 /// 两条约束：
 /// 1. **只回填、绝不按列表创建或删除会话行**——「发现 agent 侧历史」与「纳管」
 ///    是两个动作，混在一起会让一次列表拉取产生不可预期的库变更；
-/// 2. **只写 `agent_title`**，`name`（用户手写名）不在本路径的写入集里。
+/// 2. **只写 `agent_title`**，`name`（用户手写名）不在本路径的写入集里；且用户
+///    已命名的行整体跳过（判据在 [`persist_title`] 的 UPDATE 里，原子生效）。
 ///
 /// 读一次全量 `(id, acp_session_id, agent_title)` 再在内存里对账，而不是逐条
 /// `SELECT`：列表上限 200 条，逐条查是 200 次往返；而 omniterm 自己的会话数有限，
@@ -271,7 +328,10 @@ mod tests {
     }
 
     /// `name` 永不被本路径触碰——这是「用户手写名不被 agent 自动标题覆盖」的
-    /// 根保障（展示优先级只是第二道）。
+    /// 根保障（展示优先级只是第二道）。**且用户一旦命名，整条写入都被判据挡下**：
+    /// 不只是「不覆盖 name」，而是 `agent_title` 也不该再被改写——那一列是给
+    /// 「用户懒得命名」的兜底，行已命名时它写什么都不会被展示，写它只会留下
+    /// 一份将来可能误导人的陈旧快照。
     #[tokio::test]
     async fn persist_never_touches_the_user_supplied_name() {
         let db = crate::acp::test_db::test_pool().await;
@@ -279,11 +339,61 @@ mod tests {
             .execute(&db)
             .await
             .expect("seed name");
-        persist_title(&db, "s1", Some("agent 自动标题")).await;
+        assert_eq!(
+            persist_title(&db, "s1", Some("agent 自动标题")).await,
+            0,
+            "用户已命名时本次写入必须被判据挡下（0 行），否则就是白写一份陈旧快照"
+        );
         let name: Option<String> = sqlx::query_scalar("SELECT name FROM sessions WHERE id = 's1'")
             .fetch_one(&db)
             .await
             .expect("session row");
         assert_eq!(name.as_deref(), Some("用户手写的名字"));
+        assert_eq!(title_of(&db, "s1").await, None, "agent_title 也不该被写进去");
+    }
+
+    /// 判据必须认「空白名 = 未命名」：`PATCH /sessions/{id}` 用 `COALESCE(?, name)`，
+    /// 客户端送 `{"name":""}` 会真落下空串，而前端展示按 `name?.trim()` 判空。
+    /// 两侧口径不一致时会出现「界面显示 agent 标题、库里却再也不回填」的分叉。
+    #[tokio::test]
+    async fn persist_still_writes_when_the_user_name_is_blank() {
+        let db = crate::acp::test_db::test_pool().await;
+        for blank in ["", "   ", "\n\t "] {
+            sqlx::query("UPDATE sessions SET name = ?1 WHERE id = 's1'")
+                .bind(blank)
+                .execute(&db)
+                .await
+                .expect("seed blank name");
+            assert_eq!(
+                persist_title(&db, "s1", Some("agent 标题")).await,
+                1,
+                "空白 name 必须按未命名处理（{blank:?}）"
+            );
+            assert_eq!(title_of(&db, "s1").await.as_deref(), Some("agent 标题"));
+            // 复位，供下一轮空白形态使用
+            persist_title(&db, "s1", None).await;
+        }
+    }
+
+    /// 用户先被回填、后改名：标题停在旧值且不再变。这条钉住「命名是单向门」——
+    /// 改名之后 agent 再推什么都不会改这一行的展示（展示层本来也优先 name），
+    /// 但库里的 `agent_title` 同样不该继续跟着动。
+    #[tokio::test]
+    async fn persist_stops_updating_once_the_user_renames() {
+        let db = crate::acp::test_db::test_pool().await;
+        assert_eq!(persist_title(&db, "s1", Some("第一版标题")).await, 1);
+        sqlx::query("UPDATE sessions SET name = '我自己的名字' WHERE id = 's1'")
+            .execute(&db)
+            .await
+            .expect("rename");
+        assert_eq!(persist_title(&db, "s1", Some("第二版标题")).await, 0);
+        assert_eq!(
+            title_of(&db, "s1").await.as_deref(),
+            Some("第一版标题"),
+            "命名后 agent 再推标题也不得改动这一列"
+        );
+        // 连 agent 的显式清除一并挡下：判据在整条语句上，不分写入方向。
+        assert_eq!(persist_title(&db, "s1", None).await, 0);
+        assert_eq!(title_of(&db, "s1").await.as_deref(), Some("第一版标题"));
     }
 }

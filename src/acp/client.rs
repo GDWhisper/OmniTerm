@@ -305,6 +305,13 @@ pub struct AcpClient {
     /// 未声明的 agent（实测 codebuddy）不发——盲发会把 method-not-found
     /// 与真失败混为一谈（计划 D3）。
     supports_delete_session: bool,
+    /// `sessionCapabilities.list`（marker 空结构，存在即支持）：agent 是否声明
+    /// 能枚举自己的会话历史。**只用于 turn 结束时的自动标题反查门控**——未声明
+    /// 就连问都不问（实测 codebuddy 未声明且方法 `-32601`，盲问等于每轮 turn
+    /// 一次无效往返 + 一条 WARN）。与 `list_sessions` 内部「不做能力 gate」是
+    /// 有意的分歧：那条路径是用户显式打开面板，必须把「不支持」如实呈现；
+    /// 这条是后台自动的，跳过即最优解，用户仍可用面板拿到真相。
+    supports_list_session: bool,
     initial_config_options: Arc<Mutex<Vec<SessionConfigOption>>>,
     available_commands_notif: Arc<Mutex<Option<SessionNotification>>>,
     /// 配置偏好持久化句柄（`attach_config_prefs` 绑定）。仅在实际会话注册点
@@ -547,6 +554,9 @@ struct Handshake {
     /// 存在即支持）。缺失 = 不支持 `session/delete`（§8 多实现兼容：codebuddy
     /// 未声明，opencode / pi-acp 声明）。
     supports_delete_session: bool,
+    /// `sessionCapabilities.list` 的存在性。语义见 struct 字段文档：**仅**门控
+    /// turn 结束时的自动标题反查，不影响 `list_sessions` 本身（面板路径）。
+    supports_list_session: bool,
     initial_config_options: Vec<SessionConfigOption>,
 }
 
@@ -559,10 +569,19 @@ struct Handshake {
 /// 不一致：创建时去掉尾斜杠落盘 `-home-pax`，恢复时却按请求原样编码查
 /// `-home-pax-`，于是 session/load 报 INVALID_SESSION_IDENTIFIER、恢复必失败。
 /// omniterm 库里 workspace_path 常带尾斜杠（如 `/home/pax/`），正好踩中。
-/// 这里在 new / load 两端统一下发形态作兜底：两端一致即不再依赖 agent 侧
-/// 是否规范化。对不按「原样 cwd 编码目录」定位会话的 agent 无影响（如
-/// claude-agent-acp 按会话 ID 跨目录查找）；对按路径编码存取的 agent，
-/// 两端同形态也保证 new 落盘与 load 查找一致。
+///
+/// 三个下发点统一本形态：**session/new**（`spawn_with_session`）、
+/// **session/load**（[`Self::load_session`]）、**session/list**
+/// （[`Self::list_sessions`]）。第三点是 2026-10-16 补的：opencode 对
+/// `session/list` 的 cwd 参数做**字符串级过滤**，而它建会话时会把 `/home/pax/`
+/// 规范化成 `/home/pax` 再存——带斜杠查回来是**空列表**（实测 25 条 vs 0 条）。
+/// 空列表会被读成「这个目录没有历史」而**不是**报错，用户与代码都无法察觉，
+/// 所以归一必须落在 `list_sessions` 内部这个收口上，而不是某个调用点：落在
+/// 调用点就等于要求每个未来的调用方都记得，而那正是这次漏掉的原因。
+///
+/// 对不按「原样 cwd 编码目录」定位会话的 agent 无影响（如 claude-agent-acp
+/// 按会话 ID 跨目录查找）；对按路径编码存取的 agent，各端点同形态也保证
+/// new 落盘 / load 查找 / list 过滤三者一致。
 fn normalize_agent_cwd(cwd: &Path) -> PathBuf {
     let s = cwd.as_os_str().to_string_lossy();
     let trimmed = s.trim_end_matches(std::path::MAIN_SEPARATOR);
@@ -574,6 +593,11 @@ fn normalize_agent_cwd(cwd: &Path) -> PathBuf {
         PathBuf::from(trimmed)
     }
 }
+
+/// turn 结束时反查 `session/list` 的预算。比 `api::sessions::EPHEMERAL_AGENT_TIMEOUT`
+/// （15s，含拉起进程）短：连接早已建好，这里只是一次往返；且这是后台动作，不该
+/// 让 turn 收尾任务为一个可能永不自愈的 agent 干等。
+const TITLE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl AcpClient {
     pub async fn spawn_and_connect(
@@ -876,6 +900,11 @@ impl AcpClient {
                     // 不落库（agent 配置可改、版本可升，缓存会撒谎，见计划 D3）。
                     let supports_delete_session =
                         init_resp.agent_capabilities.session_capabilities.delete.is_some();
+                    // `sessionCapabilities.list` 同理是 marker 空结构。只在 initialize
+                    // 现场判一次、不落库（与 delete 同理由：agent 配置可改、版本可升，
+                    // 缓存会撒谎）。**仅**用于 turn 结束自动反查的门控，见字段文档。
+                    let supports_list_session =
+                        init_resp.agent_capabilities.session_capabilities.list.is_some();
 
                     // 三个构造器的唯一差异：create 走 session/new（响应带
                     // config_options），restore 复用既有 acp_session_id，probe 两者
@@ -903,6 +932,7 @@ impl AcpClient {
                         supports_image,
                         supports_embedded_context: supports_embedded,
                         supports_delete_session,
+                        supports_list_session,
                         initial_config_options: config_options,
                     });
 
@@ -927,6 +957,7 @@ impl AcpClient {
             supports_image,
             supports_embedded_context,
             supports_delete_session,
+            supports_list_session,
             initial_config_options,
         } = match conn_rx.await {
             Ok(parts) => parts,
@@ -967,6 +998,7 @@ impl AcpClient {
             supports_image,
             supports_embedded_context,
             supports_delete_session,
+            supports_list_session,
             initial_config_options: Arc::new(Mutex::new(initial_config_options)),
             available_commands_notif: commands_notif,
             activity,
@@ -1322,6 +1354,12 @@ impl AcpClient {
         self.supports_delete_session
     }
 
+    /// `sessionCapabilities.list` 是否声明。**只被 turn 结束时的自动标题反查用来
+    /// 决定要不要问**，`list_sessions` 本身不看它（面板路径要如实呈现失败）。
+    pub fn supports_list_session(&self) -> bool {
+        self.supports_list_session
+    }
+
     /// 请 agent 删除本连接所绑会话在 **agent 侧**的记录（`session/delete`）。
     ///
     /// 能力未声明时调用方不得调用（本方法不自行 gate，便于调用方把
@@ -1346,17 +1384,21 @@ impl AcpClient {
     /// 不声明，omp 声明了 `list` 却对部分会话不给 title），gate 会把「不支持」
     /// 与「声明了但 RPC 失败」混成一谈；而 method-not-found 的错误文案本身就
     /// 足以对用户如实交代（§8 多实现兼容，勿把单一实现当约定）。
+    /// **cwd 在本方法内归一**（[`normalize_agent_cwd`]）：调用方传库里原样的
+    /// `workspace_path` 即可，勿在调用点自行裁剪——收口在此，漏一处就是一次
+    /// 「空列表被读成没有历史」的静默失败（2026-10-16 实测，见该函数文档）。
     pub async fn list_sessions(
         &self,
         cwd: Option<&str>,
     ) -> Result<(Vec<SessionInfo>, bool), AcpError> {
+        let cwd = cwd.map(|c| normalize_agent_cwd(Path::new(c)));
         let mut out: Vec<SessionInfo> = Vec::new();
         let mut cursor: Option<String> = None;
         let mut pages = 0usize;
         loop {
             let mut req = ListSessionsRequest::new();
-            if let Some(cwd) = cwd {
-                req = req.cwd(cwd);
+            if let Some(cwd) = cwd.as_deref() {
+                req = req.cwd(cwd.to_path_buf());
             }
             if let Some(c) = cursor.as_deref() {
                 req = req.cursor(c);
@@ -1376,6 +1418,50 @@ impl AcpClient {
                 // 无游标 = 已到头（协议：有 next_cursor 才表示还有更多）。
                 _ => return Ok((out, false)),
             }
+        }
+    }
+
+    /// turn 结束时补一次 agent 侧标题（`session/list` 反查通道的**自动**触发点）。
+    ///
+    /// 为什么需要它：opencode / qodercli / pi-acp **从不推** live
+    /// `session_info_update.title`（2026-10-16 实测），它们的标题只能靠
+    /// `session/list` 反查。没有这个触发点，那些 agent 的会话名就永远停在
+    /// `${agent}_${时间}`，除非用户手动打开「Agent 历史」面板。
+    ///
+    /// 三道门控，任一不满足就**一个 RPC 都不发**：
+    /// 1. 用户已命名（`name` 非空白）——那一行的名字由用户说了算；
+    /// 2. 已有 `agent_title`——再查只会拿到同值（写放大防线）；
+    /// 3. agent 未声明 `sessionCapabilities.list`——问了也是 `-32601`。
+    ///
+    /// **门控 1 的权威判据在 SQL 里，不在这里**：用户可以在 turn 进行中的任意
+    /// 一刻改名，与本方法真并发。这里的事前查询只是省 RPC 的优化；竞态下最坏
+    /// 是多问一次，写入被 [`title::persist_title`] WHERE 里的同名判据挡下
+    /// （0 行）。所以「改名后不再回填」不依赖任何时序假设。
+    ///
+    /// best-effort：失败只 WARN，绝不影响 turn 收尾（`Done` 帧早已发出）。
+    pub async fn refresh_agent_title(&self, db: &sqlx::SqlitePool, db_session_id: &str) {
+        if !self.supports_list_session() {
+            return;
+        }
+        let Some(workspace_path) = title::workspace_needing_title(db, db_session_id).await else {
+            return; // 已命名 / 已有标题 / 行不存在
+        };
+        let listed =
+            tokio::time::timeout(TITLE_REFRESH_TIMEOUT, self.list_sessions(Some(&workspace_path)))
+                .await;
+        match listed {
+            Ok(Ok((sessions, _truncated))) => {
+                // 截断与否与标题回填无关：目标是「本会话那条」，命不中只是这次没补上。
+                title::backfill_from_list(db, &sessions).await;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(session = db_session_id, "turn 结束时反查 agent 侧标题失败：{e}")
+            }
+            Err(_) => tracing::warn!(
+                session = db_session_id,
+                "turn 结束时反查 agent 侧标题超时（{}s）",
+                TITLE_REFRESH_TIMEOUT.as_secs()
+            ),
         }
     }
 

@@ -1123,6 +1123,43 @@ async fn load_agent_title(db: &sqlx::SqlitePool, session_id: &str) -> Option<Str
         .expect("session row")
 }
 
+/// turn 结束反查的第三道门控：agent **未声明** `sessionCapabilities.list` 时
+/// 连 RPC 都不发。
+///
+/// 实测 codebuddy（默认 agent）连 `sessionCapabilities` 都不声明、方法 `-32601`。
+/// 盲问的代价不是那一次往返，而是**每一轮 turn 都问一次**、每次还跟一条 WARN。
+/// 与 `list_sessions` 自身「不做能力 gate」是有意分歧：那条路是用户显式打开
+/// 面板，必须把「不支持」如实呈现；这条是后台自动的，跳过即最优解。
+#[tokio::test]
+async fn refresh_agent_title_skips_when_agent_lacks_list_capability() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("title-no-list-cap");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+    let db = crate::acp::test_db::test_pool().await;
+    // 绑上 acp_session_id：否则即便门控坏了、RPC 真发出去，回填也匹配不到行，
+    // 断言就只剩「没写库」一个信号，抓不住「省掉这次 RPC」的优化被删。
+    sqlx::query("UPDATE sessions SET acp_session_id = 'sess-1' WHERE id = 's1'")
+        .execute(&db)
+        .await
+        .expect("bind acp_session_id");
+
+    // 共享 fake agent 的 list 模式**应答** session/list 但不声明能力——
+    // 「能答」与 「声明了」是两件事，这里钉住只认声明。
+    let client = spawn_connect(agent_for(&script, "list", &dir), workspace).await;
+    assert!(!client.supports_list_session(), "共享 fake agent 默认不声明 list 能力");
+
+    client.refresh_agent_title(&db, "s1").await;
+
+    let events = read_events(&dir);
+    assert!(!events.contains("list-cwd"), "未声明 list 能力时不得发 session/list: {events:?}");
+    assert_eq!(load_agent_title(&db, "s1").await, None);
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ── 17. session/list：分页、上限截断、能力缺失 ────────────────────────────
 
 /// 正常翻页 + **title 缺省必须被容忍**（§8：opencode 全给、omp 部分缺省、
@@ -1184,6 +1221,44 @@ async fn list_sessions_forwards_the_cwd_filter() {
         read_events(&dir).contains(&format!("list-cwd {}", ws_str(&workspace))),
         "cwd 应原样下发，实际事件: {:?}",
         read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归（2026-10-16 实测）：`session/list` 的 cwd 必须在**方法内部**去掉尾斜杠。
+///
+/// opencode 对该参数做**字符串级过滤**，而它建会话时会把 `/home/pax/` 规范化成
+/// `/home/pax` 再存——带斜杠查回来是**空列表**（实测 25 条 vs 0 条）。空列表被
+/// 读成「这个目录没有历史」，面板不报错、用户与代码都无法察觉。
+///
+/// 归一放在 `list_sessions` 里而不是调用点：调用点漏一处就是一次静默失败，而这
+/// 正是当初漏掉的原因（当时只在 handler 侧裁了 spawn 用的 cwd，RPC 参数照旧）。
+/// 与 session/new、session/load 共用 `normalize_agent_cwd`。
+#[tokio::test]
+async fn list_sessions_strips_trailing_slash_before_sending() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list-cwd-slash");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_probe(agent_for(&script, "list", &dir), workspace.clone()).await;
+    // 复刻库里的形态：workspace_path 带尾斜杠（dev 库 14 行里 2 行如此）。
+    let with_slash = format!("{}/", ws_str(&workspace));
+    let _ = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(Some(&with_slash)))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）")
+        .expect("list 模式应成功");
+
+    // 逐行精确比对：`contains` 是子串匹配，"list-cwd /a/b/" 会把 "list-cwd /a/b"
+    // 也判为命中——尾斜杠没裁掉时测试会假绿。
+    let expected = format!("list-cwd {}", ws_str(&workspace));
+    let events = read_events(&dir);
+    assert!(
+        events.lines().any(|l| l == expected),
+        "尾斜杠必须在 list_sessions 内裁掉再下发，期望精确行 {expected:?}，实际: {events:?}"
     );
 
     client.shutdown().await;

@@ -100,6 +100,28 @@
 
 > **`session/delete` 为何不套 `canonical_cwd`**：purge 路由最初也加了归一，但 `delete_agent_side_record_via_ephemeral_spawn` 只把 cwd 用作被拉起进程的工作目录，`session/delete` 按 sessionId 定位——尾斜杠对它无影响，加了就是死改动，且注释会做出未验证的断言。已撤回。
 
+### 勘误二（2026-10-16，用户追加要求：turn 结束时回填 + 改名即阻止）
+
+用户在实测通过后进一步要求两件事：**turn 结束时自动回填**（opencode 等没有 live 通道的 agent 只能靠反查，否则会话名永远停在默认拼接），以及**「turn 结束前用户就自己重命名了，要阻止回填」**。
+
+| # | 改动 | 要点 |
+|---|---|---|
+| **E-18** | 新增第三条触发点：`AcpClient::refresh_agent_title`，在 `dispatch_prompt` 的 `Ok` 分支（`Done` 帧之后）调用 | live 通知（只有 omp 等少数推）+ `session/list` 反查（面板手动）+ **turn 结束自动反查**三条通道。三道门控，任一不满足**一个 RPC 都不发**：① 用户已命名；② 已有 `agent_title`（写放大防线）；③ agent 未声明 `sessionCapabilities.list`（实测 codebuddy 默认 agent 未声明且方法 `-32601`，盲问=每轮 turn 一次无效往返 + 一条 WARN） |
+| **E-19** | 「用户已命名」从**调用方先查后写**改为 **UPDATE WHERE 里的原子判据** | 这是用户点名的核心。用户可以在 turn 进行中的任意一刻改名，与跑在别的任务上的 live 通知 / turn 结束反查**真并发**；先读 `name` 再决定写不写，「读」与「写」之间会被改名插进来。判据下沉到 `persist_title` 的 SQL 后，改名只要在 UPDATE 提交前完成，本次写入自然成为 0 行，无需锁或事务协调。事前查询只是省 RPC 的优化，竞态下最坏多问一次 |
+| **E-20** | 删掉 E-17 里新造的 `api::agents::canonical_cwd`，归一下沉到 `AcpClient::list_sessions` 内部 | 复查时发现 `client.rs` **早有** `normalize_agent_cwd`（2026-10-11 为 qoder 的 `session/load` 加的），覆盖 session/new 与 session/load 两端——我 E-17 又造了一个功能重复的 helper，正是工程准则 7① 禁止的。且「在调用点归一」本身就是 E-17 的根因：归一了一处（spawn 的 cwd）、漏了另一处（RPC 参数）。下沉到方法内部后，任何调用方都不可能再漏 |
+
+**「空白名 = 未命名」的两侧对齐**：`PATCH /sessions/{id}` 用 `COALESCE(?, name)`，客户端送 `{"name":""}` 会真落下空串。前端 `sessionDisplayName` 按 `name?.trim()` 判空，故 SQL 判据也必须裁空白后比对——否则会出现「界面显示 agent 标题、库里却再也不回填」的分叉。第一版直接用了 SQLite 的 `TRIM(name)`，被单测抓出**它只去空格、不去 tab/换行**（JS `trim()` 去全部空白），改为显式列出 ASCII 空白字符集（`SQL_BLANK_CHARS`）。不追 Unicode 空白：UI 输入框产生不了，手搓 API 那种行的后果仅是「不回填」，展示仍正常。
+
+**回归测试的变异检验**（这次全部做过，确认不是假绿）：
+- 删掉 `dispatch_prompt` 里的 `refresh_agent_title` 调用 → `dispatch_prompt_backfills_the_agent_title_on_turn_end` 红
+- 把「未命名」判据改成恒真 → `dispatch_prompt_does_not_relist_after_the_user_renames` 红
+- 门控去掉 `agent_title IS NULL` → `dispatch_prompt_does_not_relist_when_title_already_present` 红
+- 把 `persist_title` 的 SQL 判据降为恒真（门控仍生效）→ `persist_never_touches_the_user_supplied_name` + `persist_stops_updating_once_the_user_renames` 红
+- `list_sessions` 内不做归一 → `list_sessions_strips_trailing_slash_before_sending` 红
+- 删掉能力门控 → `refresh_agent_title_skips_when_agent_lacks_list_capability` 红
+
+**未做（留口）**：打开 / 切换到某个 ACP 会话时的回填。`refresh_agent_title` 已是 client 方法，补这个触发点只需在 WS 连上并拿到 client 后调一次；未做的原因是它触碰 WS 连接/重放链路，而用户只点名了 turn 结束这一条。
+
 ## 6. 验收标准
 
 - [x] 用户手写名的会话，agent 侧有自动标题也不覆盖（`persist_never_touches_the_user_supplied_name` / `backfill_never_touches_a_user_supplied_name` / `sessionDisplayName` 优先级单测三重钉住）
