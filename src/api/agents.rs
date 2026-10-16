@@ -48,6 +48,23 @@ struct AgentAcpSessionView {
     managed: bool,
 }
 
+/// 把下发给 agent 的 cwd 归一成**无尾分隔符**的形态。
+///
+/// `workspace_path` 可能是 `/home/pax/`（dev 库实证：14 行会话里 2 行如此），
+/// 而 agent 侧对 cwd 是**字符串级过滤**：opencode 建会话时把 `/home/pax/` 规范化
+/// 成 `/home/pax` 再存，`session/list` 也就只认后者——带斜杠查回来是空列表
+/// （实测 25 条 vs 0 条）。空列表会被读成「这个目录没有历史」，面板不报错、
+/// 用户与代码都无法察觉，故必须在发出去之前归一。
+///
+/// 只去尾分隔符，其余原样：**不 canonicalize**（不解 symlink；Windows 上会产出
+/// verbatim `\\?\...` 形态，git 与 agent 都打不开）、不强制绝对化（调用方已
+/// `is_dir()` 校验）。同 `api/projects.rs` 路径前缀比较的归一口径。
+fn canonical_cwd(raw: &str) -> std::path::PathBuf {
+    let trimmed = raw.trim_end_matches(['/', '\\']);
+    // 全是分隔符（"/" 或 "C:\"）时 trim 完为空，退回根本身。
+    std::path::PathBuf::from(if trimmed.is_empty() { raw } else { trimmed })
+}
+
 /// 枚举 agent 侧的会话历史（ACP `session/list`）——「Agent 历史」面板的数据源。
 ///
 /// 与 agent 侧删除同构：**临时拉起一个短命进程**（spawn / RPC 各 15s 预算），
@@ -67,7 +84,7 @@ struct AgentAcpSessionView {
 /// RPC 失败（含 agent 根本不支持 `session/list`，如实测 codebuddy 回
 /// `-32601`）→ 502 + agent 原文错误。**不做能力 gate**：能力位在实测实现里
 /// 覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与
-/// 「声明了但失败」混成一谈；前端据此显示明确错误而不是空白列表。
+/// 「声明了但失败」混为一谈；前端据此显示明确错误而不是空白列表。
 async fn list_agent_acp_sessions(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -76,7 +93,7 @@ async fn list_agent_acp_sessions(
     let Some(agent) = load_agent(&state.db, &id).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
     };
-    let cwd = std::path::PathBuf::from(&query.cwd);
+    let cwd = canonical_cwd(&query.cwd);
     if !cwd.is_dir() {
         return (
             StatusCode::BAD_REQUEST,
@@ -87,7 +104,7 @@ async fn list_agent_acp_sessions(
 
     let client = match tokio::time::timeout(
         crate::api::sessions::EPHEMERAL_AGENT_TIMEOUT,
-        AcpClient::spawn_probe(agent, cwd, &state.api_keys),
+        AcpClient::spawn_probe(agent, cwd.clone(), &state.api_keys),
     )
     .await
     {
@@ -113,7 +130,9 @@ async fn list_agent_acp_sessions(
 
     let listed = match tokio::time::timeout(
         crate::api::sessions::EPHEMERAL_AGENT_TIMEOUT,
-        client.list_sessions(Some(&query.cwd)),
+        // 必须用归一后的 cwd：opencode 对 `session/list` 的 cwd 参数做字符串级
+        // 过滤，尾斜杠会让它回空列表（实测 25 条 vs 0 条）。
+        client.list_sessions(Some(&cwd.to_string_lossy())),
     )
     .await
     {
@@ -197,6 +216,8 @@ async fn purge_agent_acp_session(
     let Some(agent) = load_agent(&state.db, &id).await else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "agent not found" })));
     };
+    // 不套 canonical_cwd：session/delete 按 sessionId 定位，cwd 只是被拉起的
+    // agent 进程的工作目录，尾斜杠对两者都无影响。
     let cwd = std::path::PathBuf::from(&query.cwd);
     if !cwd.is_dir() {
         return (
@@ -739,6 +760,87 @@ mod list_agent_acp_sessions_tests {
             "临时拉起的 agent 不得留在 supervisor"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（2026-10-16 实测）：`workspace_path` 带尾斜杠（dev 库 `/home/pax/`，
+    /// 14 行里 2 行）时 opencode 的 `session/list` 回**空列表**（实测 25 条 vs 0
+    /// 条）。空列表被读成「这个目录没有历史」——面板不报错、用户与代码都无法
+    /// 察觉。归一后的 cwd 必须原样到达 agent。
+    #[tokio::test]
+    async fn forwards_the_cwd_without_a_trailing_slash() {
+        use crate::acp::agent_proc::spawn_test_lock_async;
+        use crate::acp::test_support::{agent_for, read_events, unique_dir, write_fake_agent};
+        use crate::models::agent::Agent;
+
+        let _guard = spawn_test_lock_async().await;
+        let state = crate::test_utils::test_state().await;
+        let dir = unique_dir("list-trailing-slash");
+        let workspace = dir.join("ws");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+        let script = write_fake_agent(&dir);
+        let agent: Agent = agent_for(&script, "list", &dir);
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO agents (id, display_name, command, args, env, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&agent.id)
+        .bind(&agent.display_name)
+        .bind(&agent.command)
+        .bind(serde_json::to_string(&agent.args).unwrap())
+        .bind(serde_json::to_string(&agent.env).unwrap())
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .expect("agent row");
+
+        // 带尾斜杠的 cwd（复刻 dev 库 /home/pax/ 的形态）
+        let with_slash = format!("{}/", workspace.to_string_lossy());
+        let resp =
+            list_agent_acp_sessions(State(state), Path(agent.id.clone()), list_query(&with_slash))
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let events = read_events(&dir);
+        // 必须**逐行精确**比对：`contains` 是子串匹配，"list-cwd /a/b/" 会把
+        // "list-cwd /a/b" 也判为命中——尾斜杠没被归一掉时测试会假绿。
+        let expected = format!("list-cwd {}", workspace.to_string_lossy());
+        assert!(
+            events.lines().any(|l| l == expected),
+            "尾斜杠必须被归一掉再下发，期望精确行 {expected:?}，实际事件: {events:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// `canonical_cwd` 的归一口径：只去尾分隔符，不动其余部分。
+#[cfg(test)]
+mod canonical_cwd_tests {
+    use super::canonical_cwd;
+
+    #[test]
+    fn strips_a_single_trailing_slash() {
+        assert_eq!(canonical_cwd("/home/pax/"), std::path::PathBuf::from("/home/pax"));
+    }
+
+    #[test]
+    fn strips_repeated_and_mixed_trailing_separators() {
+        assert_eq!(canonical_cwd("/home/pax///"), std::path::PathBuf::from("/home/pax"));
+        assert_eq!(canonical_cwd("/home/pax/\\"), std::path::PathBuf::from("/home/pax"));
+    }
+
+    #[test]
+    fn leaves_a_clean_path_untouched() {
+        assert_eq!(canonical_cwd("/home/pax"), std::path::PathBuf::from("/home/pax"));
+        assert_eq!(canonical_cwd("relative/dir"), std::path::PathBuf::from("relative/dir"));
+    }
+
+    #[test]
+    fn keeps_the_root_when_everything_is_a_separator() {
+        assert_eq!(canonical_cwd("/"), std::path::PathBuf::from("/"));
+        assert_eq!(canonical_cwd("///"), std::path::PathBuf::from("///"));
     }
 }
 

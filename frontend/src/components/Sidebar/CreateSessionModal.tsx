@@ -125,14 +125,12 @@ export function CreateSessionModal(props: {
 
     setSubmitting(true)
     try {
-      const name = sessName.trim() || (() => {
-        if (category !== 'acp' || !acpAgentId) return undefined
-        const agent = agents.find((a) => a.id === acpAgentId!)
-        if (!agent) return undefined
-        const now = new Date()
-        const ts = `${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`
-        return `${agent.display_name}_${ts}`
-      })()
+      // 用户没手写时**不要**生成 `${agent}_${MMdd-HHmm}` 落库：默认名由
+      // `sessionDisplayName()` 在展示期按 agent_id + created_at 现算（口径见
+      // session-title-backfill 计划 D1/D2）。`name` 非空即「用户命名过」是
+      // schema 级判据——这里多写一个自动名，agent 侧标题就永远排不上号。
+      // 落库与展示期现算产生的字符串完全相同，故改名之外无任何可见差异。
+      const name = sessName.trim() || undefined
       const runtimeKind = category === 'acp' ? 'acp' : terminalEngine
       const agentId = category === 'acp' ? acpAgentId : undefined
       const sessionAgentId = agentId ?? undefined

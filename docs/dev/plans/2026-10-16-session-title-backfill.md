@@ -82,10 +82,28 @@
 | `listAgentAcpSessions` + `AgentAcpSession` 类型 + `Session.agent_title` | `frontend/src/api/client.ts` |
 | 面板单测（自动拉一次不轮询 / title 缺省回落 / 已纳管点击 / 未纳管不可点 / 截断提示 / 错误原文 / 空态 / 无工作区） | `Sidebar/AgentHistory.test.tsx`（8 条） |
 
+### 勘误（2026-10-16，用户实测回填）
+
+上线后用户实测 `OpenCode_1016-1944` **没有**回填成 agent 标题。两条缺陷，都是**读侧改了、写侧漏改**或**参数没传到 RPC**这一类「看起来做了」的坑：
+
+| # | 缺陷 | 根因 | 证据 | 修复 |
+|---|---|---|---|---|
+| **E-16** | 新建 ACP 会话不手写命名时，`name` 仍被落成 `${agent}_${MMdd-HHmm}` | **D2 只实施了读侧**：`sessionDisplayName.ts` 展示期现算做了，`CreateSessionModal.tsx` 的**写侧**（第 128-135 行的 IIFE 默认名生成）漏删。而 D1 的判据是「`name` 非空即用户手写」→ 自动名把 agent 标题**永久挡死** | dev 库该行 `name='OpenCode_1016-1944'`；UTC+8 下按 `created_at` 重算与生成器输出**逐字节相同**（另两条历史行也精确吻合），证明是机器生成而非手写 | 写侧改 `sessName.trim() \|\| undefined`；`CreateSessionModal.test.tsx` 补 2 条回归（原断言写的是 `expect.any(String)`，**正是它把错误行为钉住的**） |
+| **E-17** | 「Agent 历史」面板对带尾斜杠的工作区返回**空列表** | `canonical_cwd` 归一只作用于 `spawn_probe` 的**进程 cwd**，`list_sessions(Some(&query.cwd))` 传的还是**原始查询串**。opencode 对 `session/list` 的 cwd 参数做字符串级过滤，而它建会话时会把 `/home/pax/` 规范化成 `/home/pax` 再存 | 直连实测：`?cwd=/home/pax` → 25 条，`?cwd=/home/pax/` → **0 条**；库里 `workspace_path='/home/pax/'`（14 行里 2 行带尾斜杠） | RPC 改传 `&cwd.to_string_lossy()`；`spawn_probe` 处 `cwd.clone()` 解所有权冲突 |
+
+**两条共同教训**（均已写进代码注释，勿再犯）：
+
+1. **「读侧派生 + 写侧落库」必须成对删**。D2 的否决项原文就写着「继续在 create 时落库默认名 → D1 的判据退化成猜」——我沿着自己写下的失效模式走了一遍。派生值与落库值产生的**字符串完全相同**，所以删漏了在界面上看不出任何异常，只有「agent 标题永远不出现」这一个间接症状。
+2. **空列表是静默失败，不是「没有数据」**。E-17 的 0 条被读成「这个目录没有历史」——面板不报错、用户无法区分、代码也无法区分。凡是「下游按字符串精确匹配」的边界，宿主侧传入的路径表示差异（尾斜杠/重复分隔符）都必须先归一。
+
+**假绿测试的教训**：E-17 的第一版回归断言写的是 `events.contains("list-cwd /a/b")`，而 `"list-cwd /a/b/"` 会把该子串**判为命中**——带 bug 时测试照样绿。已改为 `events.lines().any(\|l\| l == expected)` 逐行精确比对，并用**变异检验**（把修复改回 bug 态）确认测试确实会失败。凡是对事件日志/多行文本做 `contains` 断言的，都要先想清楚「目标串是否是另一合法输出的前缀」。
+
+> **`session/delete` 为何不套 `canonical_cwd`**：purge 路由最初也加了归一，但 `delete_agent_side_record_via_ephemeral_spawn` 只把 cwd 用作被拉起进程的工作目录，`session/delete` 按 sessionId 定位——尾斜杠对它无影响，加了就是死改动，且注释会做出未验证的断言。已撤回。
+
 ## 6. 验收标准
 
 - [x] 用户手写名的会话，agent 侧有自动标题也不覆盖（`persist_never_touches_the_user_supplied_name` / `backfill_never_touches_a_user_supplied_name` / `sessionDisplayName` 优先级单测三重钉住）
-- [x] 用户没命名 + agent 支持 → 侧栏显示 agent 标题（omp live 通知 / opencode 等 `session/list` 两条通道）
+- [x] 用户没命名 + agent 支持 → 侧栏显示 agent 标题（omp live 通知 / opencode 等 `session/list` 两条通道）——**上线时此条为假**：写侧仍落库默认名（E-16），面板又因尾斜杠拿不到列表（E-17）；两处修复后实测 `OpenCode_1016-1944` → `opencode 添加自定义供应商`
 - [x] 用户没命名 + agent 不支持 → 继续显示 `${agent}_${MMdd-HHmm}`（codebuddy 实测）
 - [x] 默认名展示值与历史逐字相同（本地时间 + `created_at` 现算，无需迁移存量行）
 - [x] `session/list` 双上限（200 条 / 10 页）有单测，超限 `truncated=true` 且 UI 明示
@@ -100,6 +118,7 @@
 
 - **终端 OSC 标题不作会话名**：数据链路本来就在（`vt.rs::title()` → `WatchTarget.title` → `tmux #{pane_title}`），但实测内容是**状态串**——Claude Code = `⠹ agent is thinking`（`claude.toml:7` 的 spinner 正则）、Codex = `Codex — Action Required`、普通 shell = hostname。且 `agent/watch.rs:109` 只给「识别出 agent 的 pane」建 entry，普通 shell 标题根本进不来。拿它当名字会让侧栏每秒跳一次。结论沉淀在 `acp-protocol-reference.md` §17.4，避免重复调研。
 - **存量数据不迁移**：存量 ACP 行的 `name` 里存着自动生成的默认名，按 D1 会被当作「用户手写」→ 永不回填。不做正则清洗（误判 = 静默改用户名字，工程准则 5）。存量会话维持原名，新会话走新口径。
+  - **唯一例外（2026-10-16，单行、非清洗）**：E-16 缺陷窗口内由旧写侧建的那一行。判据**不是正则**，而是把生成器按该行 `created_at` 在浏览器时区（UTC+8）下重算、与 `name` **逐字节比对相同**才清（另取两条历史行交叉验证推导正确）。这是「证明该名字是机器产的」而非「猜它像自动名」，与正则清洗有本质区别；已留档原值，用户不认可可还原。
 - **`session/fork` / 面板内「载入」/ 面板内删除**：属 `2026-10-04` 计划的 E2/E3-2，独立范围。本面板的「已纳管」徽标与点击切换已为它们留好接缝。
 - **标题本地生成兜底**（从首条用户消息截断）：对 codebuddy 是唯一生效路径，但属「宿主猜」而非 agent 侧标题，与本文档目标不同，未做。
 

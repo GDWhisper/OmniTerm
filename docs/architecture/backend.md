@@ -332,7 +332,11 @@ GET  /api/v1/agents/{id}/acp-sessions?cwd=<绝对路径>
                                       # **探针**短命进程（不发 session/new，spawn/RPC 各 15s 预算），
                                       # 有界翻页（ACP_LIST_MAX_SESSIONS=200 / ACP_LIST_MAX_PAGES=10）
                                       # 后收尸。顺带按 acp_session_id 把 agent 侧标题回填进
-                                      # sessions.agent_title（只写该列，不碰 name）。响应
+                                      # sessions.agent_title（只写该列，不碰 name）。**cwd 先过
+                                      # canonical_cwd 去尾分隔符**：agent 侧对 session/list 的 cwd
+                                      # 参数做字符串级过滤，opencode 建会话时会把 /a/b/ 规范化成
+                                      # /a/b 再存，带斜杠查回空列表（实测 25 vs 0）——空列表被读成
+                                      # 「没有历史」，面板不报错故静默失败。响应
                                       # {sessions:[{session_id,cwd,title?,updated_at?,managed}], truncated}；
                                       # 不支持 session/list 的 agent → 502 + agent 原文错误
 DELETE /api/v1/agents/{id}/acp-sessions/{acp_session_id}?cwd=<绝对路径>
