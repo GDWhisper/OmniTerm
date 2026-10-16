@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useAgentStore } from '../../stores/agentStore'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { IconTrash, IconRefresh } from '../FileManager/icons'
 
 /**
@@ -66,7 +67,7 @@ export function ArchivedSessionsSection(props: {
                 <div className="flex-shrink-0" style={{ width: 6, height: 6, background: 'var(--text-faint)' }} />
                 <div className="flex-1 min-w-0">
                   <span className="block truncate" style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                    {s.name || s.tmux_session_name}
+                    {sessionDisplayName(s, agents, t('sidebar.unnamed'))}
                   </span>
                   <span className="block truncate" style={{ fontSize: 10, color: 'var(--text-faint)', marginTop: 1 }}>
                     {[agentName, projectName].filter(Boolean).join(' · ')}

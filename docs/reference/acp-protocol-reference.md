@@ -1626,6 +1626,29 @@ Client MUST 在文件不存在时创建它。
 
 ---
 
+### 17.4 会话标题：多实现实测（2026-10-16，勿把单一实现当约定）
+
+两条通道都能拿到 agent 侧标题，但**没有一条对所有实现可用**。最小 JSON-RPC 探针实测（直连 `initialize` + `session/list`，只读）：
+
+| 实现 | `sessionCapabilities` | `session/list` 的 `title` | live `session_info_update.title` |
+|------|----------------------|--------------------------|----------------------------------|
+| opencode 2.0.24 | `list`+`delete`+`fork`+`resume`+`close`+`additionalDirectories` | ✅ 全有、质量高（`检查待提交改动`）；旧会话退化成 `New session - <ISO时间>` | ❌ 从不发（只发 `_meta` 厂商键） |
+| qodercli 1.1.68 | `list`+`delete`+`fork`+… | ✅ 短句（`查看未发布改动`） | ❌ 只有 schema 定义，无发送点 |
+| pi-acp 0.0.34 | `list`+`delete` | ✅ 有，但 = **用户首条消息原文**（可能极长、含 shell 提示符） | ⚠️ 仅在用户敲 `/name <title>` 后发 |
+| omp 18.7.0 | `list`+`fork`+`resume`+`close`（无 delete） | ⚠️ **部分缺省**（实测 50 条仅 1 条有） | ✅ **自动 LLM 生成**（首条消息后一次模型调用产 3-7 词标题；`refreshOnReplan` 会重生成） |
+| codebuddy | **无 `sessionCapabilities`** | ❌ 整个方法 `-32601 Method not found` | ❌ 只发 `_meta` |
+
+写进 omniterm 实现的四条约束：
+
+1. **`title` 是可选字段**，必须容忍缺省（展示回落 session_id 截断；回填时缺省跳过）；
+2. **`SessionInfo.title` 缺省 ≠ `SessionInfoUpdate.title: null`**：前者是普通 `Option`（字段缺席 = 该实现没给），后者是 `MaybeUndefined` 的 `Null`（协议「清除」语义）。混为一谈会让 omp 一拉 `session/list` 就擦掉 live 通知刚写好的标题；
+3. **`session/list` 不做能力 gate**：能力位覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了但 RPC 失败」混成一谈——`Method not found` 原文已足以对用户如实交代；
+4. **只读枚举不发 `session/new`**：否则每次拉列表都在 agent 自己历史里留一条空会话（opencode 实测即多一行 `New session - <时间>`）——枚举动作会污染它正在展示的数据。
+
+**终端 OSC 标题刻意不用作会话名**（结论沉淀，避免重复调研）：链路本来就在（pty `VtState::title()` 截获 OSC 0/2 → `WatchTarget.title` → tmux `#{pane_title}`），但内容是**状态串**——Claude Code = `⠹ agent is thinking`（`claude.toml` 的 braille spinner 正则）、Codex = `Codex — Action Required`、普通 shell = hostname；且 `agent/watch.rs` 只给「识别出 agent 的 pane」建 entry，普通 shell 标题进不来。拿它当名字会让侧栏每秒跳一次。
+
+宿主侧落地见 `docs/architecture/backend.md`「agent 侧会话标题回填」与 `docs/dev/plans/2026-10-16-session-title-backfill.md`。
+
 ## 18. Client 实现清单
 
 ### 18.1 Client → Agent 方法（Client 调用）
@@ -1639,7 +1662,7 @@ Client MUST 在文件不存在时创建它。
 | `session/resume` | request | ✅ 必须 | 恢复会话 |
 | `session/close` | request | ✅ 必须 | 关闭会话 |
 | `session/prompt` | request | ✅ 必须 | 发送 prompt |
-| `session/list` | request | ✅ 必须 | 列出会话（omniterm：**未接入**） |
+| `session/list` | request | ✅ 必须 | 列出会话（omniterm：**已接入**——`GET /agents/{id}/acp-sessions?cwd=`，探针短命进程 + 有界翻页，见 §17.4） |
 | `session/delete` | request | 条件 | Agent 声明 session.delete 时（omniterm：**已接入**——删会话勾选「同时永久删除 agent 侧会话记录」，见 §17.3） |
 | `session/set_config_option` | request | 可选 | 设置配置选项 |
 | `session/cancel` | notification | ✅ 必须 | 取消活动工作 |

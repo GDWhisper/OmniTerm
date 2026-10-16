@@ -7,11 +7,11 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     BlobResourceContents, CancelNotification, ConfigOptionUpdate, ContentBlock,
     CreateTerminalRequest, DeleteSessionRequest, EmbeddedResource, EmbeddedResourceResource,
-    ImageContent, InitializeRequest, KillTerminalRequest, LoadSessionRequest, NewSessionRequest,
-    PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
+    ImageContent, InitializeRequest, KillTerminalRequest, ListSessionsRequest, LoadSessionRequest,
+    NewSessionRequest, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, RequestPermissionRequest, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionValue, SessionId, SessionNotification, SessionUpdate,
-    SetSessionConfigOptionRequest, StopReason, TextContent, TextResourceContents,
+    SessionConfigOption, SessionConfigOptionValue, SessionId, SessionInfo, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent, TextResourceContents,
     WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
@@ -25,6 +25,7 @@ use crate::acp::handler::{self, SeqNotification};
 use crate::acp::permission::{PermissionManager, PermissionRequestEvent};
 use crate::acp::reaper::PermissionTimeoutConfig;
 use crate::acp::terminal::{AcpTerminalManager, TerminalActivity};
+use crate::acp::title;
 use crate::acp::turn_accumulator::{TurnAccumulator, TurnSnapshot, TurnStats, TurnTiming};
 use crate::acp::usage;
 use crate::models::agent::Agent;
@@ -50,6 +51,16 @@ const STALE_CANCEL_RETRY_DELAY_MS: u64 = 600;
 /// 粘滞取消的最大重发次数（见 [`STALE_CANCEL_RETRY_DELAY_MS`]）。有界是硬要求：
 /// agent 若持续对这一轮回 `cancelled`，第 N+1 次就按真实终态留痕，不能无限重发。
 const STALE_CANCEL_MAX_RETRIES: u32 = 2;
+
+/// `session/list` 翻页的**条目数**上限（§P1：一切 collect 必须有显式上限 +
+/// 超限策略 + 单测）。200 条覆盖任何真实项目的 agent 历史；超限即停并把
+/// `truncated` 上报给调用方，由 UI 明示「看到的是截断后的列表」。
+pub const ACP_LIST_MAX_SESSIONS: usize = 200;
+
+/// `session/list` 翻页的**页数**上限。与条目数上限同属必需而非保险：单页条目数
+/// 由 agent 决定（opencode 实测固定 limit=100），只限总条数时一个每页只回 1 条
+/// 的实现就能把请求轮次放大到 200 次。
+pub const ACP_LIST_MAX_PAGES: usize = 10;
 
 /// 前端随 prompt 附带的图片附件（base64 内联，映射为 `ContentBlock::Image`）。
 #[derive(Debug, Clone, Deserialize)]
@@ -486,6 +497,21 @@ async fn on_agent_notification(
     {
         usage::persist_usage_snapshot(&handle.db, &handle.db_session_id, u).await;
     }
+    // agent 侧会话标题同理落快照（§17.2）：刷新 / 换设备后侧栏要有东西可显示。
+    // 只写 `agent_title` 列，`name`（用户手写名）永不被本路径触碰——展示口径
+    // `name ?? agent_title ?? 宿主默认名` 由 schema 保证优先级，见 acp/title.rs。
+    if let SessionUpdate::SessionInfoUpdate(u) = &notification.update
+        && let Some(handle) = config_prefs_slot.lock().ok().and_then(|g| g.clone())
+    {
+        // `MaybeUndefined`：Undefined = 本帧没提 title（不动），Null = agent 主动
+        // 清除（落 NULL），Value = 新标题。空串/纯空白按无可用标题处理。
+        title::persist_title(
+            &handle.db,
+            &handle.db_session_id,
+            u.title.value().map(String::as_str),
+        )
+        .await;
+    }
     handler::handle_session_update(tx, SeqNotification { seq, notification })
 }
 
@@ -495,6 +521,15 @@ async fn on_agent_notification(
 enum SessionMode {
     New,
     Load(String),
+    /// 只建连、**不发 `session/new`**：给 `session/list` 这类「按 cwd 查询、不
+    /// 绑定会话」的只读 RPC 用。
+    ///
+    /// 为什么值得单开一个变体而不是复用 `New`：`session/list` 的调用点是「发现
+    /// agent 侧历史」面板，每次展开都拉起一个短命进程。若走 `New`，每次展开都会
+    /// 在 agent 自己的历史里留一条空会话（opencode 实测即多一行
+    /// `New session - <时间>`）——**面板会往它正在展示的列表里掺数据**，用户看到
+    /// 的自己刚造出来的那一行。只读查询不应有可见副作用。
+    Probe,
 }
 
 /// `spawn_with_session` 内层连接闭包 → 外层的握手结果。
@@ -547,6 +582,22 @@ impl AcpClient {
         api_keys: &std::collections::HashMap<String, String>,
     ) -> Result<Self, AcpError> {
         Self::spawn_with_session(agent, cwd, api_keys, SessionMode::New).await
+    }
+
+    /// 只读探针构造器：建连 + initialize，但**不发 `session/new`**（见
+    /// [`SessionMode::Probe`]）。当前唯一消费者是 `session/list`（发现 agent 侧
+    /// 历史的面板）——每次展开面板都拉起一个短命进程，走 `New` 会往 agent 自己的
+    /// 历史里掺一条空会话。
+    ///
+    /// 探针 client 上**不得**调用任何按 session 定位的方法（`send_prompt` /
+    /// `delete_session` / `set_config_option` …）：它的 `session_id` 是空哨兵，
+    /// agent 侧没有对应会话。
+    pub async fn spawn_probe(
+        agent: Agent,
+        cwd: PathBuf,
+        api_keys: &std::collections::HashMap<String, String>,
+    ) -> Result<Self, AcpError> {
+        Self::spawn_with_session(agent, cwd, api_keys, SessionMode::Probe).await
     }
 
     /// 两个构造器（session/new 与 restore）共用的 agent 连接建立骨架：命令解析、
@@ -826,8 +877,9 @@ impl AcpClient {
                     let supports_delete_session =
                         init_resp.agent_capabilities.session_capabilities.delete.is_some();
 
-                    // 两个构造器的唯一差异：create 走 session/new（响应带
-                    // config_options），restore 复用既有 acp_session_id。
+                    // 三个构造器的唯一差异：create 走 session/new（响应带
+                    // config_options），restore 复用既有 acp_session_id，probe 两者
+                    // 都不发（只读查询不应在 agent 历史里留痕，见 SessionMode::Probe）。
                     let (session_id, config_options) = match mode {
                         SessionMode::New => {
                             let session_resp =
@@ -840,6 +892,9 @@ impl AcpClient {
                         SessionMode::Load(acp_session_id) => {
                             (SessionId::new(acp_session_id.as_str()), Vec::new())
                         }
+                        // 哨兵 id：probe client 上没有任何按 session 定位的方法会被
+                        // 调用（只有 session/list，其参数是 cwd 不是本 id）。
+                        SessionMode::Probe => (SessionId::new(String::new()), Vec::new()),
                     };
                     let _ = conn_tx.send(Handshake {
                         connection: cx.clone(),
@@ -1278,6 +1333,50 @@ impl AcpClient {
             .block_task()
             .await
             .map(|_resp| ())
+    }
+
+    /// 枚举 agent 侧的会话历史（`session/list`，ACP §17.1），带显式上限翻页。
+    ///
+    /// 返回 `(sessions, truncated)`：`truncated = true` 表示还有更多页没拉
+    /// （命中 [`ACP_LIST_MAX_SESSIONS`] 或 [`ACP_LIST_MAX_PAGES`]），调用方必须
+    /// 如实告知用户「看到的是截断后的列表」而不是假装看全了。
+    ///
+    /// **不做能力 gate**（与 `delete_session` 的有意分歧）：`session/list` 的
+    /// 能力位在实测的四个实现里覆盖不一（codebuddy 连 `sessionCapabilities` 都
+    /// 不声明，omp 声明了 `list` 却对部分会话不给 title），gate 会把「不支持」
+    /// 与「声明了但 RPC 失败」混成一谈；而 method-not-found 的错误文案本身就
+    /// 足以对用户如实交代（§8 多实现兼容，勿把单一实现当约定）。
+    pub async fn list_sessions(
+        &self,
+        cwd: Option<&str>,
+    ) -> Result<(Vec<SessionInfo>, bool), AcpError> {
+        let mut out: Vec<SessionInfo> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0usize;
+        loop {
+            let mut req = ListSessionsRequest::new();
+            if let Some(cwd) = cwd {
+                req = req.cwd(cwd);
+            }
+            if let Some(c) = cursor.as_deref() {
+                req = req.cursor(c);
+            }
+            let resp = self.connection.send_request(req).block_task().await?;
+            out.extend(resp.sessions);
+            pages += 1;
+            // 上限判定放在取 next_cursor 之前：任一维度触顶即停，不再发起下一轮
+            // RPC（否则「已经决定不用了还要再问一次」是纯浪费）。
+            if out.len() >= ACP_LIST_MAX_SESSIONS || pages >= ACP_LIST_MAX_PAGES {
+                let truncated = resp.next_cursor.is_some() || out.len() > ACP_LIST_MAX_SESSIONS;
+                out.truncate(ACP_LIST_MAX_SESSIONS);
+                return Ok((out, truncated));
+            }
+            match resp.next_cursor {
+                Some(c) if !c.is_empty() => cursor = Some(c),
+                // 无游标 = 已到头（协议：有 next_cursor 才表示还有更多）。
+                _ => return Ok((out, false)),
+            }
+        }
     }
 
     /// ACP 连接是否仍可发送请求（agent 子进程存活且未被释放）。

@@ -7,6 +7,7 @@ import { useAgentStore } from '../../stores/agentStore'
 import { Modal } from '../Modal/Modal'
 import { PixelButton } from '../PixelUI/PixelButton'
 import { AgentPicker } from '../AgentPicker/AgentPicker'
+import { defaultAcpAgentId } from '../../utils/defaultAcpAgentId'
 import { BetaBadge } from '../Common/BetaBadge'
 import { TerminalIcon } from '../Icons/TerminalIcon'
 import { KeyboardIcon } from '../Icons/KeyboardIcon'
@@ -55,14 +56,6 @@ function SelectionCard({
 }
 
 /* ACP agent 默认选中：上次成功创建的 agent > 第一个（记忆 id 已被删除时回落） */
-function defaultAcpAgentId(
-  agents: { id: string }[],
-  lastAcpAgentId: string | null,
-): string | null {
-  if (lastAcpAgentId && agents.some((a) => a.id === lastAcpAgentId)) return lastAcpAgentId
-  return agents[0]?.id ?? null
-}
-
 /* ─── Main component ─── */
 
 export function CreateSessionModal(props: {

@@ -340,6 +340,7 @@
 
 - `frontend/src/components/Settings/SettingsPopup.tsx` + `Settings.tsx` — 设置面板（游戏风格 tab 菜单，详细见下节）
 - `frontend/src/components/TmuxCheatsheet/TmuxCheatsheetPopup.tsx` + `TmuxCheatsheet.tsx` — tmux 快捷键速查（简单单 section 版本）
+- `frontend/src/components/Sidebar/AgentHistoryPopup.tsx` + `AgentHistory.tsx` — 「Agent 历史」面板（`session/list` 枚举 agent 侧会话）。与 TmuxCheatsheet 同为简单单 section 版本，两点差异值得借鉴：① 内容是**异步加载**（后端每次临时拉起一个 agent 进程），故 loading / 错误 / 空态 / 截断提示四态齐备，且「自动拉一次」用 `autoLoadedKeyRef` 按 `agent × cwd` 钉住，不靠 `rows === null` 判空（那会让手动刷新失败后自动重试又放行一次、覆盖已有错误展示）；② 弹窗内 agent 选择器切换即重新拉取（换 agent = 换数据源），store toggle 与另两个面板三向互斥。
 - `frontend/src/components/Sidebar/UpdateBadge.tsx` — 版本升级面板；`useAnchorPopup` **free 模式**首个使用者（不传 `topAnchorSelector`，触发按钮在顶栏、上方空间不足自动向下弹）；open 状态为组件本地 `useState`，不进 appStore；一键升级后的自重启确认按 `/api/v1/health` 的 `version` 字段比对目标版本（非捕捉断连，行为详述见 `docs/architecture/backend.md` /system/update）
 
 **复制清单**（新增一个简单 sidebar 弹出面板时）：

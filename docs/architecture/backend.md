@@ -17,7 +17,8 @@ src/
 │   ├── supervisor.rs     # AcpSupervisor: HashMap<omniterm_session_id, Arc<AcpClient>> registry
 │   ├── turn_accumulator.rs # TurnAccumulator: folds in-progress turn's raw session_update frames → one streaming chat_messages row (debounced writer)
 │   ├── chat_persistence.rs # chat_messages CRUD: upsert_streaming_message / finalize_message / list_messages_page (cursor + byte-budget pagination) / sync_messages (row-id-first matching, non-destructive)
-│   └── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
+│   ├── terminal.rs       # AcpTerminalManager: serve agent terminal/* requests via tokio::process
+│   ├── title.rs          # agent 侧会话标题快照：normalize + persist_title（512B 上限/同值跳过）+ backfill_from_list（session/list 批量回填）
 ├── api/
 │   ├── mod.rs            # Route registration, state wiring
 │   ├── health.rs         # GET /api/v1/health
@@ -326,6 +327,14 @@ GET  /api/v1/sessions/{id}/hook-status
 POST /api/v1/sessions/{id}/hook-enable|hook-disable
 GET  /api/v1/agents                   # CRUD agent process configs
 POST/PUT/DELETE /api/v1/agents[/{id}]
+GET  /api/v1/agents/{id}/acp-sessions?cwd=<绝对路径>
+                                      # 枚举 agent 侧会话历史（session/list）：临时拉起一个
+                                      # **探针**短命进程（不发 session/new，spawn/RPC 各 15s 预算），
+                                      # 有界翻页（ACP_LIST_MAX_SESSIONS=200 / ACP_LIST_MAX_PAGES=10）
+                                      # 后收尸。顺带按 acp_session_id 把 agent 侧标题回填进
+                                      # sessions.agent_title（只写该列，不碰 name）。响应
+                                      # {sessions:[{session_id,cwd,title?,updated_at?,managed}], truncated}；
+                                      # 不支持 session/list 的 agent → 502 + agent 原文错误
 DELETE /api/v1/agents/{id}/acp-sessions/{acp_session_id}?cwd=<绝对路径>
                                       # 请求 agent 删除它自己的某条会话记录（session/delete）：
                                       # 临时拉起短命 agent 现场 gate 能力位后补发（不注册 supervisor）。
@@ -544,6 +553,8 @@ Lifecycle:
 3. Handlers registered on the builder:
    - `session/update` notification → broadcast via `session_update_tx` to all WS subscribers.
    - `request_permission` → `PermissionManager` 登记 pending 并经 WS 推 `permission_request` 帧给前端 banner，由用户点击 `permission_response` 应答。**默认无超时自动应答**（ACP 规范 `Cancelled` outcome 仅限响应 `session/cancel`）；`session/cancel` 时 `AcpClient::cancel` 调 `cancel_all()` 以 `Cancelled` 应答全部 pending（规范 MUST）；WS 重连时重放 pending 事件恢复 banner；审批解决（用户应答 / cancel_all）时经 `resolved_tx` broadcast 推 `permission_resolved{id}` 帧给所有连接——审批可能由其他标签页/设备应答，各连接据此即时清除对应 banner。**无人应答的超时行为由 settings 表 `acp_perm_timeout_mode` 配置（2026-09-21 起，见 `docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md`）**：`abort`（默认，原安全策略）= 超时 cancel + disconnect，回收前写入并广播一条 `role='system'` 的消息告知用户回收原因与请求详情；`auto` = 超时由 `permission.rs::pick_auto_option`（优先级 allow_always → allow_once → reject_once → reject_always → 首个）代替用户应答全部 pending（不 cancel、不杀会话），每笔一条带详情（工具/内容预览/可选项/选中项）的 system 消息；`wait` = 永不超时（权限未决期间连 prompt-stale 定稿也跳过，回合保持等审批语义）。权限弹窗只推给对应会话的 WS 客户端，用户切走即看不到——三种模式到点行动都会落库 + 广播 system 消息兜底（断线期间由 hydrate 补上）。时长档位自 2026-10-01 起为秒制（0=「总是」、30 秒步进至 1 小时），`0` 的语义随模式而变，见下段 API 说明。三种模式的判定统一由 reaper 看护任务执行，唤醒源有两个：定时 30 秒 tick（时间阈值类判定）与**权限请求到达唤醒**（`PermissionTimeoutConfig` 的 Notify，`AcpClient` 在请求登记后触发，绑定见 `attach_perm_timeout`）——`auto + 0`「总是」档据此**到达即应答**，不等 tick（2026-10-09 修复）；settings PUT 写入后同样唤醒以立即重评已有未决请求。
+   - `session_info_update` 的 `title` → `acp::title::persist_title` 落 `sessions.agent_title`（与 usage 快照同范式，见「agent 侧会话标题回填」）。
+   - `session/list` → `AcpClient::list_sessions`（有界翻页），经 `GET /agents/{id}/acp-sessions` 暴露；该路径用 `spawn_probe`（不发 `session/new`，否则面板往它展示的列表里掺空会话），见「agent 侧会话标题回填」。
    - `terminal/{create,output,wait_for_exit,kill,release}` → `AcpTerminalManager` spawns `tokio::process::Command` children and monitors them with `tokio::select!` racing child exit vs an mpsc kill channel.
    - `fs/read` / `fs/write` → stubs (Phase 3); Phase 4 will plumb them through the existing `fs/` module.
 4. `WS /ws/acp/{session_id}` subscribes to the broadcast; client messages `{"type":"prompt","text":…,"images":[{data,mime_type}…]?,"files":[{name,mime_type,size,data}…]?}` and `{"type":"cancel"}` are forwarded to the `AcpClient`。**心跳**：客户端发 `{"type":"ping"}`，服务端无状态回一帧 `{"type":"pong"}`（`AcpClientMessage::Ping` / `AcpServerMessage::Pong`）。间隔与「连续几次无 pong 判半开」的阈值全在前端（`useAcpChat` 的 `HEARTBEAT_*`），服务端不记连接、不起定时器——多一个服务端状态就多一处要收尸的生命周期。存在的理由：空闲连接 ~125s 被隧道/承载网重置（`ResetWithoutClosingHandshake`），且移动端冻结页**不补派 onclose**，前端会握着死 socket 而不自知（`sendPrompt` 静默 return = 用户侧「假死」）。`src/ws/terminal.rs` 的 `ClientControl::Ping`/`ServerControl::Pong` 是同一机制的终端侧定义，但前端终端链路从未发送，目前只有 ACP 侧接线（见 frontend.md）。 Prompt `images` / `files` 是可选 base64 内联附件，遵循管道原则：不限张数/体积/MIME，唯一门禁是整条帧体积 `MAX_PROMPT_FRAME_BYTES`（12MiB，超限回 `message_too_large`）。内容块顺序 Text → Image → Resource(Text, @path) → Resource(Blob, files)：`images` 映射 `ContentBlock::Image`，`files` 映射 `ContentBlock::Resource(BlobResourceContents)`（名义 `file:///{name}` URI，内容由 base64 blob 自包含，agent 不应按 URI 读盘）。用户消息落库的 blocks JSON 只存渲染等价物——图片存缩略图、文件存元数据（name/mimeType/size）、不存原图与文件内容（刷新后 hydrate 还原缩略图与文件名 chip）。服务端推送 `{"type":"capabilities","image":bool,"embedded_context":bool,"agent_delete":bool,"agent_name":string}` 帧（client 就绪/restore 时），后三者来自 initialize 捕获的 `promptCapabilities.image` / `.embeddedContext` / `agentCapabilities.sessionCapabilities.delete`（§8：agent 未声明则前端置灰对应附件卡片、后端二次校验拒绝带该附件的 prompt；两者都未声明时前端不渲染附件入口。`agent_delete` 是「删除会话时顺带抹掉 agent 侧记录」勾选框的门控，见下方「agent 侧记录删除」）。Prompt 文本中的 `@path` 引用（`@` 前须行首/空白，去重上限 8）由 `ws/acp.rs::resolve_at_references` 解析：相对 session `workspace_path` 经 `fs::sanitize_path` 校验后读取（≤64KB 截断，越界/不存在/目录/非 UTF-8 静默跳过），注入 `ContentBlock::Resource`（TextResourceContents，`file://` URI）；agent 未声明 `promptCapabilities.embeddedContext` 时降级为内容内联进 text block（§8）。文件附件**不**走内联降级——二进制无文本形态可降级，未声明该能力时在 WS 层直接拒绝（错误文案 "agent does not support file attachments (embedded context)"）。
@@ -692,6 +703,28 @@ agent 不支持）不依赖活连接即可单测；第二段端点的前置错�
 - **§8 多实现差异**：restore 只匹配 agent **当前**仍提供的 `config_id`（缓存过滤，agent 已移除项自动跳过）；`validate_config_value` 校验值合法性——Boolean 限定 `"true"/"false"`，Select 扁平化 Ungrouped/Grouped 匹配，**options 为空放行**（不因信息缺失阻断恢复）。agent 不在 NewSession/LoadSession 响应返回 `config_options` 时（如 opencode 的 load 响应），restore 自动跳过（缓存空无法过滤、也不盲发）——该边界下配置栏本就可能为空，属已知能力边界。
 - **配置快照（已结束会话只读展示）**：`sessions.config_options_json`（migration `20260913_add_config_options_snapshot.sql`）存**最后一次已知的完整 `configOptions`**（ACP §12.5 全量状态语义，整体覆盖写）。写入收口在 `config_prefs::persist_config_snapshot`（空集合跳过——防中间态抹掉上次状态；64KB 上限防无界写入），调用点：`attach_config_prefs` 绑定后（覆盖 create 路径的 session/new 选项）、`load_session` 回填、`set_config_option` 响应、agent 主动推送的 `ConfigOptionUpdate`（两个构造器共用通知闭包 `on_agent_notification`，闭包体提取自原先两份逐行重复的副本）。读路径：`GET /messages` 响应附 `configOptions`（逐元素宽松解析、无效项跳过，镜像 crate `VecSkipError` 语义）+ `agentLive`（supervisor 中有无活 client）；前端据此在已结束会话置灰只读展示配置栏（`configReadOnly`，见 frontend.md），任一 live/replay 配置帧到达即解除。`set_config_option` 对无活 client 是静默 no-op（`ws/acp.rs` 的 `if let Some(ref c)`），故前端禁用交互是必选项而非可选优化。
 - **上下文用量快照（刷新 / 换设备恢复）**：`sessions.usage_json`（migration `20261007_add_usage_snapshot.sql`）存**最后一次已知的 `usage_update`**（`used` / `size` / `cost`，ACP 序列化形态）。写入收口在 `acp::usage::persist_usage_snapshot`（4KB 上限防无界写入；**同值跳过**——agent 可能在一个 turn 内高频重推相同用量，SQL 层 `WHERE usage_json <> ?` 拦下重复 UPDATE），调用点：`on_agent_notification` 的 `UsageUpdate` 分支（与配置快照共用 `config_prefs` 句柄；探针会话未绑定 → no-op）。读路径：`GET /messages` 响应附 `usage`；前端 hydrate 注入 chatStore（`ChatView` hydrate effect），live/replay usage 帧随后经 preHydrateBuffer 按序覆盖。动机：该通知不随 session/load 重放、广播无补发，纯前端内存状态在页面生命周期结束后即丢失（用量徽章刷新即消失，直到下一个 turn 才回来）。
+
+### agent 侧会话标题回填（`agent_title`）
+
+会话显示名的三级优先级：**`name`（用户手写）→ `agent_title`（agent 侧标题快照）→ `${agent}_${MMdd-HHmm}`（宿主默认名，前端展示期派生）**。设计与多实现实测见 `docs/dev/plans/2026-10-16-session-title-backfill.md`。
+
+**为什么 `name` 非空即「用户手写过」**：create 路径不再生成默认名落库（默认名改由前端 `utils/sessionDisplayName.ts` 用 `agent_id` + `created_at` 现算），`PATCH /sessions/{id}` 写非空值即命名。故「用户命名不被 agent 自动标题覆盖」是 **schema 级不变式**，不依赖任何可能与现实漂移的 provenance 标记列。**不要**改成「后端重算默认名再比对」——前端用本地时间生成默认名、后端 `created_at` 是 UTC，重算永不相等，回填会永不触发且不报错。
+
+**两条写入通道**（都不随 `session/load` 重放、broadcast 无补发，故必须落库）：
+
+| 通道 | 调用点 | 覆盖的 agent |
+|---|---|---|
+| live `session_info_update.title` | `on_agent_notification` 的 `SessionInfoUpdate` 分支 → `acp::title::persist_title`（照 `usage::persist_usage_snapshot` 范式，复用已绑定的 `config_prefs` 句柄；create 与 restore 两条注册点都已 attach） | 实测只有 omp 自动推送（首条消息后 LLM 生成）；pi-acp 仅在用户 `/name` 后 |
+| `session/list` 的 `SessionInfo.title` | `GET /agents/{id}/acp-sessions` → `acp::title::backfill_from_list`（按 `acp_session_id` 匹配，一次全量读 + 内存对账） | opencode / qodercli / pi-acp 有值，omp 部分缺省，codebuddy 整个方法 `-32601` |
+
+**写入约束**：`MAX_TITLE_BYTES=512` 超限**跳过而非截断**（截断要么静默违反 P1，要么把省略标注渲染进侧栏；超限标题本身即异常 agent 行为，保留上次可用值更诚实）；同值跳过（SQL 层 NULL 安全的 `agent_title IS NOT ?1`，omp 的 replan 会在一个 turn 内重推同一标题）。**`SessionInfo.title` 缺省 ≠ 清除**——前者是普通 `Option`（字段缺席 = 该实现没给），后者只有 `SessionInfoUpdate.title: null` 才是协议规定的显式清除；混为一谈会让 omp 一拉列表就擦掉 live 通知刚写好的标题。
+
+**`session/list` 的三个设计约束**：
+1. **探针连接**（`AcpClient::spawn_probe` / `SessionMode::Probe`）：不发 `session/new`。每次展开面板都起一个短命进程，走 `New` 会在 agent 自己历史里留一条空会话——面板往它正在展示的列表里掺数据。探针 client 的 `session_id` 是空哨兵，**不得**调用任何按 session 定位的方法。
+2. **有界翻页**：`ACP_LIST_MAX_SESSIONS=200`（条目数）+ `ACP_LIST_MAX_PAGES=10`（页数）双维度——单页条目数由 agent 决定（opencode 实测固定 limit=100），只限总条数时一个每页回 1 条的实现就能把请求轮次放大到 200 次。触顶即停，`truncated=true` 由 UI 明示。
+3. **不做能力 gate**（与 `session/delete` 的有意分歧）：能力位在实测实现里覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了但 RPC 失败」混成一谈；`Method not found: session/list` 原文已足以对用户如实交代（502 透出）。
+
+**终端 OSC 标题刻意不用作会话名**：数据链路本来就在（`vt.rs::title()` → `WatchTarget.title` → tmux `#{pane_title}`），但实测内容是**状态串**——Claude Code = `⠹ agent is thinking`（`claude.toml:7` 的 spinner 正则）、Codex = `Codex — Action Required`、普通 shell = hostname；且 `agent/watch.rs` 只给「识别出 agent 的 pane」建 entry，普通 shell 标题进不来。拿它当名字会让侧栏每秒跳一次。
 
 ### 重连续接协议（seq + turn_snapshot / turn_state / turn_stats）
 
@@ -853,7 +886,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 
 ## Sessions Table
 
-定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql` + `20260823_add_sessions_archived_at.sql` + `20260830_add_work_time.sql` + `20260913_add_config_options_snapshot.sql`。
+定义在 `migrations/20260620_init.sql` + `20260625_workspace_to_project.sql` + `20260715_add_runtime_kind.sql` + `20260812_add_last_cwd.sql` + `20260823_add_sessions_archived_at.sql` + `20260830_add_work_time.sql` + `20260913_add_config_options_snapshot.sql` + `20261007_add_usage_snapshot.sql` + `20261016_add_session_agent_title.sql`。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -875,6 +908,7 @@ Asset 命名与 `install.sh` 平台映射表一致（`omniterm-{os}-{arch}`，Wi
 | `last_turn_at` | TEXT? | 最近一次 turn 定稿时刻；随 `list_sessions` 下发，当前无 UI 消费者（记账留档，供排序/展示接入） |
 | `config_options_json` | TEXT? | 最后一次已知的完整 `configOptions` 快照（ACP 序列化形态），已结束会话经 `GET /messages` 下发供配置栏置灰只读展示；NULL = 从未收到过配置。随 sessions 行删除自然清理 |
 | `usage_json` | TEXT? | 最后一次已知的 `usage_update` 快照（used/size/cost），刷新 / 换设备后经 `GET /messages` 的 `usage` 字段恢复用量徽章；NULL = 从未收到过 usage 或超限跳过。随 sessions 行删除自然清理 |
+| `agent_title` | TEXT? | agent 侧会话标题快照（live `session_info_update.title` / `session/list` 的 `SessionInfo.title`）。**仅作展示兜底**：显示口径恒为 `name ?? agent_title ?? ${agent}_${MMdd-HHmm}`，故 `name` 非空（用户手写过）时本列被完全忽略——「用户命名不被 agent 自动标题覆盖」由此保证，**不需要 provenance 标记列**。NULL = agent 从未提供过标题。写入收口在 `acp::title::persist_title`（512 字节上限防无界、同值跳过防写放大）；`session/list` 的批量回填在 `acp::title::backfill_from_list`。设计与多实现实测见 `docs/dev/plans/2026-10-16-session-title-backfill.md` |
 
 创建 session 时 `runtime_kind` 枚举默认 `Acp`（ACP 阶段推进所致）；
 创建路径显式传 `'tmux'` / `'pty'` 分流到对应引擎。pty 会话惰性 spawn：

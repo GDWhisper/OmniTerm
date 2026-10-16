@@ -14,6 +14,7 @@ pub mod terminal;
 mod test_db;
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod test_support;
+pub mod title;
 pub mod turn_accumulator;
 pub mod usage;
 

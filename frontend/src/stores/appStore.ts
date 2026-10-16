@@ -214,6 +214,7 @@ export interface AppState {
   // Settings panel
   settingsOpen: boolean
   tmuxCheatsheetOpen: boolean
+  agentHistoryOpen: boolean
   immersiveMode: boolean
   pixelAnimationsEnabled: boolean
   /** ACP 等待特效（消息流底部等待指示器）总开关，默认开。 */
@@ -247,6 +248,7 @@ export interface AppState {
   toggleFileManagerCollapsed: () => void
   toggleSettings: () => void
   toggleTmuxCheatsheet: () => void
+  toggleAgentHistory: () => void
   setSidebarWidth: (w: number) => void
   setFileManagerWidth: (w: number) => void
   setFontSize: (s: number) => void
@@ -414,6 +416,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   mobileLastTab: localStorage.getItem('omniterm_mobile_last_tab') || 'terminal',
   settingsOpen: false,
   tmuxCheatsheetOpen: false,
+  agentHistoryOpen: false,
   immersiveMode: false,  // Disabled by default - feature not yet verified
   pixelAnimationsEnabled: localStorage.getItem('omniterm_pixel_animations') === 'true',
   // 默认开：只有显式存过 'false' 才关闭（与 autoCopySelect / parchmentTexture 同口径）。
@@ -442,6 +445,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, tmuxCheatsheetOpen: false })),
   toggleTmuxCheatsheet: () => set((s) => ({ tmuxCheatsheetOpen: !s.tmuxCheatsheetOpen, settingsOpen: false })),
+  // 三个底部弹面板互斥（开 A 关 B/C），照 toggleSettings / toggleTmuxCheatsheet。
+  toggleAgentHistory: () =>
+    set((s) => ({ agentHistoryOpen: !s.agentHistoryOpen, settingsOpen: false, tmuxCheatsheetOpen: false })),
 
   setSidebarWidth: (w) => set({ sidebarWidth: w }),
 

@@ -75,7 +75,7 @@
 //!   `session/cancel`（通知）/ `session/request_permission` / `terminal/*`。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -88,8 +88,8 @@ use crate::acp::reaper::{PERM_TIMEOUT_NEVER_SECS, PermissionTimeoutConfig, Permi
 use crate::acp::terminal::TerminalActivity;
 use crate::acp::test_support::{
     KILL_TIMEOUT, REAP_TIMEOUT, SPAWN_TIMEOUT, UNWIND_TIMEOUT, agent_for, agent_for_with_env,
-    proc_alive, proc_dead, proc_reaped, read_events, spawn_connect, unique_dir, wait_for_event,
-    wait_until, wait_until_some, write_fake_agent,
+    proc_alive, proc_dead, proc_reaped, read_events, spawn_connect, spawn_probe, unique_dir,
+    wait_for_event, wait_until, wait_until_some, write_fake_agent,
 };
 use crate::models::agent::AgentEnvVar;
 
@@ -1043,4 +1043,258 @@ async fn delete_session_rpc_error_surfaces_as_err() {
 
     client.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 16. agent 侧会话标题：session_info_update.title → sessions.agent_title ──
+
+/// live 通知落库：`session_info_update` 带 `title` 时写 `sessions.agent_title`。
+///
+/// 刷新 / 换设备后侧栏的展示兜底（`name ?? agent_title ?? 宿主默认名`）由此恢复
+/// ——该通知不随 `session/load` 重放、broadcast 无补发，纯前端内存态在页面生命
+/// 周期结束后即丢。标题两侧空白被规范化（agent 可能原样转发用户输入）。
+#[tokio::test]
+async fn title_update_notification_is_persisted_trimmed() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("title");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "title", &dir), workspace).await;
+    let db = crate::acp::test_db::test_pool().await;
+    client.attach_config_prefs(db.clone(), "s1".to_string(), "agent1".to_string()).await;
+
+    client.mark_prompt_active();
+    tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt 正常链路应返回 Ok");
+    client.mark_prompt_idle();
+
+    let saved = load_agent_title(&db, "s1").await;
+    assert_eq!(saved.as_deref(), Some("fake agent title"), "标题应已落库且去除两侧空白");
+    assert_eq!(load_agent_title(&db, "s2").await, None, "未收到标题的会话必须保持 NULL");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `title: null` 是协议规定的「清除」语义（§17.2），与「省略字段 = 不变」是两回事：
+/// 消费方必须区分，否则 agent 清不清标题对一个把通知当增量的宿主毫无区别。
+#[tokio::test]
+async fn title_null_notification_clears_the_snapshot() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("title-null");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let db = crate::acp::test_db::test_pool().await;
+    sqlx::query("UPDATE sessions SET agent_title = 'previous title' WHERE id = 's1'")
+        .execute(&db)
+        .await
+        .expect("seed agent_title");
+
+    let client = spawn_connect(agent_for(&script, "title_null", &dir), workspace).await;
+    client.attach_config_prefs(db.clone(), "s1".to_string(), "agent1".to_string()).await;
+
+    client.mark_prompt_active();
+    tokio::time::timeout(UNWIND_TIMEOUT, client.send_prompt("hi", vec![], vec![], vec![]))
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt 正常链路应返回 Ok");
+    client.mark_prompt_idle();
+
+    assert_eq!(
+        load_agent_title(&db, "s1").await,
+        None,
+        "title:null 必须把快照清掉（协议「清除」语义），不能当成没收到"
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+async fn load_agent_title(db: &sqlx::SqlitePool, session_id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT agent_title FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_one(db)
+        .await
+        .expect("session row")
+}
+
+// ── 17. session/list：分页、上限截断、能力缺失 ────────────────────────────
+
+/// 正常翻页 + **title 缺省必须被容忍**（§8：opencode 全给、omp 部分缺省、
+/// pi-acp 给用户消息原文）。fake agent 只有第 1 条带 title，其余两条必须是
+/// `None` 而不是空串或占位符——消费方不能假设「列出来的都有标题」。
+#[tokio::test]
+async fn list_sessions_paginates_and_tolerates_missing_titles() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    // 探针连接：只读查询不得在 agent 历史里留痕（否则面板往它展示的列表里掺数据）。
+    let client = spawn_probe(agent_for(&script, "list", &dir), workspace.clone()).await;
+
+    let (sessions, truncated) = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(None))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）")
+        .expect("list 模式应成功");
+
+    assert!(!truncated, "3 条未触顶不得报截断");
+    assert_eq!(sessions.len(), 3, "两页应被拼齐: {:?}", sessions);
+    assert_eq!(sessions[0].title.as_deref(), Some("fake session title"));
+    assert_eq!(sessions[1].title, None, "缺省 title 必须是 None（可选字段，§8）");
+    assert_eq!(sessions[2].title, None, "缺省 title 必须是 None（可选字段，§8）");
+    assert_eq!(&*sessions[0].session_id.0, "sess-1");
+
+    let events = read_events(&dir);
+    assert!(
+        events.contains("list-cursor") && !events.contains("new-session"),
+        "探针模式不得发 session/new（会在 agent 历史里留一条空会话），实际事件: {events:?}"
+    );
+    // 翻页确实发生了：第二页请求带着第一页给的 cursor。
+    assert_eq!(events.matches("list-cursor ").count(), 2, "应有两页请求: {events:?}");
+    assert!(events.contains("list-cursor 2"), "第二页应带上游 cursor: {events:?}");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `cwd` 过滤参数原样下发（agent 侧按 cwd 组织历史，qoder 等按路径编码目录）。
+/// 传 `None` 时请求里不应有 cwd 字段。
+#[tokio::test]
+async fn list_sessions_forwards_the_cwd_filter() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list-cwd");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_probe(agent_for(&script, "list", &dir), workspace.clone()).await;
+    let _ = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(Some(&ws_str(&workspace))))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）")
+        .expect("list 模式应成功");
+
+    assert!(
+        read_events(&dir).contains(&format!("list-cwd {}", ws_str(&workspace))),
+        "cwd 应原样下发，实际事件: {:?}",
+        read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 条目数上限（§P1）：250 条可用但只取 200，且 `truncated=true`——上限维度必须
+/// 匹配真实增长维度，超限策略必须是「明示截断」而不是悄悄看一部分。
+#[tokio::test]
+async fn list_sessions_stops_at_the_session_cap_and_reports_truncated() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list-cap");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let agent = agent_for_with_env(
+        &script,
+        "list",
+        &dir,
+        vec![
+            AgentEnvVar { key: "FAKE_LIST_TOTAL".into(), value: "250".into() },
+            AgentEnvVar { key: "FAKE_LIST_PAGE".into(), value: "100".into() },
+        ],
+    );
+    let client = spawn_probe(agent, workspace.clone()).await;
+
+    let (sessions, truncated) = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(None))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）")
+        .expect("list 模式应成功");
+
+    assert_eq!(sessions.len(), crate::acp::client::ACP_LIST_MAX_SESSIONS);
+    assert!(truncated, "触顶必须上报截断，否则 UI 会假装看全了");
+    // 触顶即停：拿到 200 条后不再发起第三页（已经决定不用了还再问一次是纯浪费）。
+    assert_eq!(
+        read_events(&dir).matches("list-cursor ").count(),
+        2,
+        "应只翻两页: {:?}",
+        read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 页数上限：单页只回 1 条时，只限总条数会把请求轮次放大到 200 次——故页数
+/// 是独立的上限维度（P1「上限维度必须匹配真实增长维度」）。
+#[tokio::test]
+async fn list_sessions_stops_at_the_page_cap() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list-pages");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let agent = agent_for_with_env(
+        &script,
+        "list",
+        &dir,
+        vec![
+            AgentEnvVar { key: "FAKE_LIST_TOTAL".into(), value: "50".into() },
+            AgentEnvVar { key: "FAKE_LIST_PAGE".into(), value: "1".into() },
+        ],
+    );
+    let client = spawn_probe(agent, workspace.clone()).await;
+
+    let (sessions, truncated) = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(None))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）")
+        .expect("list 模式应成功");
+
+    assert_eq!(sessions.len(), crate::acp::client::ACP_LIST_MAX_PAGES);
+    assert!(truncated, "还有 40 条没拉，必须上报截断");
+    assert_eq!(
+        read_events(&dir).matches("list-cursor ").count(),
+        crate::acp::client::ACP_LIST_MAX_PAGES,
+        "请求轮次必须被页数上限钉住: {:?}",
+        read_events(&dir)
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 不支持的 agent（复刻 codebuddy：连 `sessionCapabilities` 都不声明，
+/// `session/list` 回 `-32601`）：错误必须透出，由 UI 明示「该 agent 不支持」
+/// 而不是显示一个空白列表——空白列表会被读成「你没有历史」。
+///
+/// 注意这里**没有**能力 gate：`session/list` 的能力位在实测实现里覆盖不一
+/// （omp 声明了 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了
+/// 但 RPC 失败」混成一谈，而 method-not-found 的原文已足以对用户如实交代。
+#[tokio::test]
+async fn list_sessions_unsupported_agent_surfaces_error() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("list-nope");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_probe(agent_for(&script, "list_nope", &dir), workspace.clone()).await;
+    let result = tokio::time::timeout(UNWIND_TIMEOUT, client.list_sessions(None))
+        .await
+        .expect("list_sessions 未在限时内返回（挂死）");
+    assert!(result.is_err(), "method not found 必须透出为 Err，实际: {result:?}");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// workspace 路径的字符串形态（fake agent 原样回抄，测试端按同形态断言）。
+fn ws_str(ws: &Path) -> String {
+    ws.to_string_lossy().into_owned()
 }

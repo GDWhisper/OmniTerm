@@ -2,6 +2,8 @@ import { memo, useRef, type MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Session } from '../../api/client'
 import { sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
+import { useAgentStore } from '../../stores/agentStore'
 import type { AttentionReason } from '../../hooks/useAttention'
 import { useLongPress } from '../../hooks/useLongPress'
 import { hapticTap } from '../../utils/haptics'
@@ -57,6 +59,11 @@ export const SessionRow = memo(function SessionRow({
   onDeleteRequest,
 }: SessionRowProps) {
   const { t } = useTranslation()
+  // 展示名单一真源见 utils/sessionDisplayName.ts。直接订阅 agentStore（而非由
+  // 父级逐行传 props）：agents 引用只在加载/增删时变，memo 契约不受影响，
+  // 却省掉 Sidebar 给每一行都算一遍的 N 次重复计算。
+  const agents = useAgentStore((s) => s.agents)
+  const displayName = sessionDisplayName(session, agents, t('sidebar.unnamed'))
   // 长按触发时间戳：抑制 touchend 后浏览器补发的 click（见上方常量注释）。
   const longPressAtRef = useRef(0)
 
@@ -164,7 +171,7 @@ export const SessionRow = memo(function SessionRow({
         }
       />
       <span className={`session-name${isLive ? ' session-name-live' : ''}`}>
-        {session.name || session.tmux_session_name}
+        {displayName}
       </span>
       {/* Attention badge */}
       {attnReason && (

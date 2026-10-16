@@ -68,12 +68,21 @@ const FAKE_AGENT_LIFETIME: &str = "25";
 ///   覆盖能力 gate 的反面）；前者对 `session/delete` 回空结果，后者回 JSON-RPC
 ///   错误，两条路径都把收到的 sessionId 记入事件日志（`delete <id>`）——
 ///   覆盖「agent 侧记录删除」的成功与失败分支；
+/// - `FAKE_MODE=list`：应答 `session/list`，按 `FAKE_LIST_PAGE`（默认 2）分页、
+///   共 `FAKE_LIST_TOTAL`（默认 3）条；**只有第 1 条带 `title`**（覆盖 §8
+///   「title 是可选字段、可能缺省」），把请求里的 cwd 与 cursor 记入事件日志
+///   （`list-cwd <cwd>` / `list-cursor <cursor>`，空 cursor 也记一行）；
+/// - `FAKE_MODE=list_nope`：`session/list` 回 `-32601 Method not found`——复刻
+///   codebuddy（连 `sessionCapabilities` 都不声明），覆盖「agent 不支持」分支；
+/// - `FAKE_MODE=title` / `title_null`：收到 prompt 后推一条 `session_info_update`
+///   （前者带 `title`，后者 `title: null` 即协议规定的「清除」语义）再以
+///   `end_turn` 收尾——覆盖 agent 侧标题快照的写入与清除；
 /// - 任意模式启动时若 `FAKE_DUP` / `FAKE_DUP_FILE` 同时存在，把 `$FAKE_DUP`
 ///   写入文件——钉「重复 env 键最后一条胜出」语义（计划 D4）。
 ///
 /// 通用事件日志：`FAKE_EVENTS_FILE` 存在时，关键协议事件逐行追加（`prompt` /
-/// `cancel` / `perm-response <原文>` / `term-* <原文>` / `load-cwd <cwd>`），
-/// 测试端轮询断言。
+/// `cancel` / `perm-response <原文>` / `term-* <原文>` / `load-cwd <cwd>` /
+/// `new-session` / `list-cwd <cwd>` / `list-cursor <cursor>`），测试端轮询断言。
 pub(crate) const FAKE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 # test-only fake ACP agent（计划 D5）。响应 initialize（声明 loadSession，restore
 # 路径也要能建连）与 session/new，之后按 FAKE_MODE 行动。
@@ -105,6 +114,7 @@ while IFS= read -r line; do
       ;;
     *'"method":"session/new"'*)
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      log_event "new-session"
       printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"fake-session"}}\n' "$id"
       if [ "$FAKE_MODE" = "group" ]; then
         sleep @LIFETIME@ &
@@ -137,6 +147,39 @@ while IFS= read -r line; do
         printf '{"jsonrpc":"2.0","id":"%s","result":{}}\n' "$id"
       fi
       ;;
+    *'"method":"session/list"'*)
+      # agent 侧历史枚举（只读）。list_nope 模式回 method-not-found（复刻
+      # codebuddy：连 sessionCapabilities 都不声明）；其余模式按
+      # FAKE_LIST_PAGE/FAKE_LIST_TOTAL 分页作答，且**只有第 1 条带 title**——
+      # title 是可选字段（§8：opencode 全给、omp 部分缺省、pi-acp 给用户原话），
+      # 消费方必须能接受缺省。
+      id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
+      list_cwd=$(printf '%s' "$line" | sed -n 's/.*"cwd":"\([^"]*\)".*/\1/p')
+      list_cursor=$(printf '%s' "$line" | sed -n 's/.*"cursor":"\([^"]*\)".*/\1/p')
+      log_event "list-cwd $list_cwd"
+      log_event "list-cursor $list_cursor"
+      if [ "$FAKE_MODE" = "list_nope" ]; then
+        # message 里不能出现反斜杠转义引号：printf 的格式串会把 \" 折成 "，
+        # 产出非法 JSON——客户端解析失败即永远等不到响应（表现为挂死而非报错）。
+        printf '{"jsonrpc":"2.0","id":"%s","error":{"code":-32601,"message":"Method not found: session/list"}}\n' "$id"
+      else
+        page=${list_cursor:-1}
+        start=$(( (page - 1) * FAKE_LIST_PAGE ))
+        end=$(( start + FAKE_LIST_PAGE ))
+        if [ "$end" -gt "$FAKE_LIST_TOTAL" ]; then end=$FAKE_LIST_TOTAL; fi
+        items=''
+        i=$start
+        while [ "$i" -lt "$end" ]; do
+          n=$(( i + 1 ))
+          if [ "$n" -eq 1 ]; then t=',"title":"fake session title"'; else t=''; fi
+          items="$items{\"sessionId\":\"sess-$n\",\"cwd\":\"$list_cwd\"$t,\"updatedAt\":\"2026-10-16T00:00:0$n.000Z\"},"
+          i=$(( i + 1 ))
+        done
+        items=${items%,}
+        if [ "$end" -lt "$FAKE_LIST_TOTAL" ]; then next=",\"nextCursor\":\"$(( page + 1 ))\""; else next=''; fi
+        printf '{"jsonrpc":"2.0","id":"%s","result":{"sessions":[%s]%s}}\n' "$id" "$items" "$next"
+      fi
+      ;;
     *'"method":"session/prompt"'*)
       prompt_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
       log_event "prompt"
@@ -164,6 +207,16 @@ while IFS= read -r line; do
           ;;
         usage)
           printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"usage_update","used":1234,"size":200000}}}\n'
+          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+          ;;
+        title|title_null)
+          # agent 侧会话标题（§17.2）。title_null 用 JSON null 表达「清除」，
+          # 与省略字段（不变）是两种语义，消费方必须区分。
+          if [ "$FAKE_MODE" = "title_null" ]; then
+            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":null,"updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
+          else
+            printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"session_info_update","title":"  fake agent title  ","updatedAt":"2026-10-16T00:00:00.000Z"}}}\n'
+          fi
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
           ;;
         perm)
@@ -272,6 +325,10 @@ pub(crate) fn agent_for_with_env(
             key: "FAKE_DUP_FILE".into(),
             value: dir.join("dup.txt").to_string_lossy().to_string(),
         },
+        // session/list 分页形态（条数/每页）。默认 3 条 × 2 页 = 两页（第二页 1 条），
+        // 覆盖正常翻页；上限用例经 extra 覆盖成超限值。
+        AgentEnvVar { key: "FAKE_LIST_TOTAL".into(), value: "3".into() },
+        AgentEnvVar { key: "FAKE_LIST_PAGE".into(), value: "2".into() },
     ];
     env.extend(extra);
     Agent {
@@ -301,6 +358,14 @@ pub(crate) async fn spawn_connect(agent: Agent, cwd: PathBuf) -> AcpClient {
         .await
         .expect("spawn 超时：fake agent 未在限时内完成 initialize/session/new")
         .expect("spawn_and_connect 失败")
+}
+
+/// 只读探针连接（不发 `session/new`，见 [`AcpClient::spawn_probe`]）。
+pub(crate) async fn spawn_probe(agent: Agent, cwd: PathBuf) -> AcpClient {
+    tokio::time::timeout(SPAWN_TIMEOUT, AcpClient::spawn_probe(agent, cwd, &HashMap::new()))
+        .await
+        .expect("spawn 超时：fake agent 未在限时内完成 initialize")
+        .expect("spawn_probe 失败")
 }
 
 /// `/proc/<pid>/stat` 的进程状态字符（None = 进程已不存在）。

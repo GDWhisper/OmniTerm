@@ -194,6 +194,37 @@ purge 未纳管历史）、以及 codebuddy 的 Q2（agent 侧未声明能力，
   删除）、omniterm 行照删、无孤儿 opencode 进程 ✅。UI 侧手动回归用例见
   `docs/reference/archive/user-testing.md` §23。
 
+## 5.3 实施记录（2026-10-16）：Phase 1（后端 list）+ E1 面板
+
+由「agent 侧会话标题回填」任务顺带落地（标题回填的第二条通道就是 `session/list`，
+见 `docs/dev/plans/2026-10-16-session-title-backfill.md`）。**只做 Phase 1 + E1**，
+Phase 2（adopt）/ E3-2（面板内 purge）仍未实施。
+
+**与 §5.1/§5.2 偏差同表的就地勘误**：
+
+| # | 原设计 | 实施 | 原因 |
+|---|--------|------|------|
+| E-12 | list 复用 `test_agent` 的 `spawn_and_connect`（§2 E1 数据获取时机） | 新增 `SessionMode::Probe` + `AcpClient::spawn_probe()`，**不发 `session/new`** | `spawn_and_connect` 每次会在 agent 自己历史里留一条空会话（opencode 实测即多一行 `New session - <时间>`）——面板会往它正在展示的列表里掺数据，用户看到自己刚造出来的那一行。只读查询不应有可见副作用 |
+| E-13 | 能力 gate 未明确（§4 只说「RPC 失败 → 502」） | **明确不做 gate**，`-32601` 原文透出为 502 | 能力位在实测实现里覆盖不一（omp 声明 `list` 却对部分会话不给 title），gate 会把「不支持」与「声明了但 RPC 失败」混成一谈；错误原文已足以对用户如实交代 |
+| E-14 | `ACP_LIST_MAX_SESSIONS=200` / `ACP_LIST_MAX_PAGES=10`（D2） | 同设计，但两维度都落在 `AcpClient::list_sessions` 内并各有一条单测 | 单页条目数由 agent 决定（opencode 实测固定 limit=100），只限总条数时一个每页回 1 条的实现就能把请求轮次放大到 200 次——页数是独立的上限维度（§P1） |
+| E-15 | 面板行「已纳管」徽标对照 appStore sessions 的 `acp_session_id` | 同设计，但**由后端**在 list 响应里给 `managed` 位（`backfill_from_list` 的同一次全量读顺带产出） | 前端已有 sessions 快照，但后端反正要为标题回填读一次全量；两处各算一遍必然漂移（准则 6） |
+
+**顺带落在本任务上的标题回填**（原设计未涉及）：`GET /agents/{id}/acp-sessions`
+在返回前把命中 `acp_session_id` 的 `agent_title` 写进 omniterm 自己的会话行
+（`acp::title::backfill_from_list`），故打开一次面板即可让侧栏里「懒得命名」的
+会话从 `${agent}_${时间}` 变成 agent 起的标题。只写 `agent_title`，`name`
+（用户手写名）不在写入集里。
+
+**验收（fake agent 真链路 + 单测）**：`api::agents::list_agent_acp_sessions_tests`
+的端到端用例覆盖两页拼齐 / title 缺省 / 已纳管徽标 / `truncated=false` /
+live 通知写的标题不被「列表无 title」擦掉 / 无 `new-session` 事件（探针模式）/
+不注册 supervisor；`fake_agent_tests` 另覆盖 cwd 下发、两个上限维度、
+method-not-found 透错。前端 `AgentHistory.test.tsx` 8 条覆盖自动拉一次不轮询、
+title 缺省回落、已纳管点击切换、未纳管不可点、截断提示、错误原文、空态、无工作区。
+
+**仍未闭环**：Phase 2（adopt / E2）、E3-2（面板内 purge）、以及 Q1 的「从面板
+直接载入外部会话」——本面板的「已纳管」徽标与点击切换已为它们留好接缝。
+
 ## 6. 验收标准
 
 - [ ] E1：展开面板拉到真实 agent 会话列表；cwd/title 缺省时降级显示不崩溃；超限显示截断提示

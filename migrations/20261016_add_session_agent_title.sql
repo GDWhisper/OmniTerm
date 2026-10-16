@@ -1,0 +1,11 @@
+-- agent 侧会话标题快照（`session_info_update.title` 通知 / `session/list` 的
+-- `SessionInfo.title`，最后一次已知值）。
+--
+-- 语义（关键）：本列**只是展示兜底**，永远不覆盖 `name`。展示优先级为
+-- `name ?? agent_title ?? ${agent}_${MMdd-HHmm}`——`name` 非空即「用户手写过」，
+-- 由 schema 本身保证，不需要额外的 provenance 标记列（设计见
+-- docs/dev/plans/2026-10-16-session-title-backfill.md D1）。
+--
+-- 可空：NULL = agent 从未提供过标题（未声明能力 / 不支持 session/list /
+-- 快照超限被跳过 / agent 主动清除）。列随 sessions 行删除自然清理。
+ALTER TABLE sessions ADD COLUMN agent_title TEXT;

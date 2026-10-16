@@ -29,7 +29,7 @@ src/
 ├── locales/
 │   ├── en/translation.json
 │   └── zh/translation.json
-├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, projectReorder.ts 侧栏项目卡片拖拽排序纯计算（draggedId 插到 targetId 前/后的新 id 序列；Sidebar 提交、乐观重排与 PUT /projects/order 载荷共用，渲染序与落盘序不可能漂移）, viewportController.ts pty 历史视口状态机（方案 C：live/viewport 模式、wheel 接管、rAF 合并、alt-screen 互斥；2026-09-12 有状态锚——请求意图经 `refresh` 位显式区分（滚动 false / 输出重拉 true），锚的位置记忆驻后端 `VtState`，前端不做任何锚定换算，仅做响应 y 权威同步）, swipe.ts 移动端滑动切 tab 手势判定（横向滚动面用 `data-x-scroll` 标记抬手：agent 代码块/宽表格/内联 diff 自己吃横向手势，index.css 配套 `touch-action: pan-x pan-y`，判定选择器见 `components/Layout/Layout.tsx` 的 `PANE_SWIPE_LIFT_SELECTOR`）, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, turnStats.ts 后端 `turn_stats` 推送读数的模块级有界缓存 + 订阅（`MAX_TRACKED_SESSIONS` 淘汰；刻意不进 zustand——读数到达直写 DOM，估算计算整体在后端，见 `plans/archive/2026-08-30-acp-work-time.md` E23；旧本地估算模块 `turnClock.ts` 已删除）, terminalEngine.ts 终端引擎偏好单一真源（默认 tmux、存档白名单解析、旧「上次使用」键一次性继承、`resolveTerminalEngine` 把缺复用器的回落收敛到一处）, reportedPath.ts 聊天气泡/ACP locations 路径点击的单一入口（revealReportedPath：getState 取 activeSessionId → looksLikeDirectory 分流 → revealPathInFileManager；三处调用点共用，不订阅 store 以保 memo 契约）, inlineCodeStyle.ts 行内代码基础样式单一真源（background/padding/radius/size/font；MarkdownCore 默认渲染与 Chat 的路径点击态共用，刻意不放组件文件——ESLint react-refresh/only-export-components）, thinkingCollapsed.ts 思考块收起态档位单一真源（`hide` 完全隐藏 / `brief` 显示简要；选项数组顺序即设置面板按钮顺序、localStorage `omniterm_thinking_collapsed` 白名单存档、`thinkingPreviewLine` 取最后一个非空行——尾部反向定位而非整篇 split，思考文本随 turn 累积可达数万字符而 chunk 逐词到达；`ThoughtBlockView` 与 Settings 会话区共用）, …）
+├── utils/               # 共享纯函数（path.ts, fonts.ts, agentAggregate.ts 会话组状态聚合 blocked>done>working——tmux agent_state 与 ACP chatStore 派生状态在此归一, imageAttachment.ts 聊天图片附件处理——mime 白名单/canvas 降采样/5MB 硬限, atReference.ts 聊天 @ 文件引用 token 检测/替换——与后端 extract_at_paths 语义对齐, touchScroll.ts 移动端终端触摸滚动桥（纵向 drag→合成 wheel）, projectReorder.ts 侧栏项目卡片拖拽排序纯计算（draggedId 插到 targetId 前/后的新 id 序列；Sidebar 提交、乐观重排与 PUT /projects/order 载荷共用，渲染序与落盘序不可能漂移）, viewportController.ts pty 历史视口状态机（方案 C：live/viewport 模式、wheel 接管、rAF 合并、alt-screen 互斥；2026-09-12 有状态锚——请求意图经 `refresh` 位显式区分（滚动 false / 输出重拉 true），锚的位置记忆驻后端 `VtState`，前端不做任何锚定换算，仅做响应 y 权威同步）, swipe.ts 移动端滑动切 tab 手势判定（横向滚动面用 `data-x-scroll` 标记抬手：agent 代码块/宽表格/内联 diff 自己吃横向手势，index.css 配套 `touch-action: pan-x pan-y`，判定选择器见 `components/Layout/Layout.tsx` 的 `PANE_SWIPE_LIFT_SELECTOR`）, haptics.ts 触觉反馈, sessionNav.ts 会话循环切换, clipboard.ts 统一剪贴板复制（async API + textarea 兜底，D1）, chatDraft.ts 会话草稿存取（sessionStorage，从 ChatInput 提取，D7）, messageText.ts extractMessageText 消息正文提取（复制/引用共用）, messageMarkdown.ts 单条消息导出 Markdown（D5）, proxyUrl.ts rewriteLocalUrl 本机 localhost 链接→/proxy/{port}/ 重写（端口转发代理 P3）, turnStats.ts 后端 `turn_stats` 推送读数的模块级有界缓存 + 订阅（`MAX_TRACKED_SESSIONS` 淘汰；刻意不进 zustand——读数到达直写 DOM，估算计算整体在后端，见 `plans/archive/2026-08-30-acp-work-time.md` E23；旧本地估算模块 `turnClock.ts` 已删除）, terminalEngine.ts 终端引擎偏好单一真源（默认 tmux、存档白名单解析、旧「上次使用」键一次性继承、`resolveTerminalEngine` 把缺复用器的回落收敛到一处）, reportedPath.ts 聊天气泡/ACP locations 路径点击的单一入口（revealReportedPath：getState 取 activeSessionId → looksLikeDirectory 分流 → revealPathInFileManager；三处调用点共用，不订阅 store 以保 memo 契约）, inlineCodeStyle.ts 行内代码基础样式单一真源（background/padding/radius/size/font；MarkdownCore 默认渲染与 Chat 的路径点击态共用，刻意不放组件文件——ESLint react-refresh/only-export-components）, thinkingCollapsed.ts 思考块收起态档位单一真源（`hide` 完全隐藏 / `brief` 显示简要；选项数组顺序即设置面板按钮顺序、localStorage `omniterm_thinking_collapsed` 白名单存档、`thinkingPreviewLine` 取最后一个非空行——尾部反向定位而非整篇 split，思考文本随 turn 累积可达数万字符而 chunk 逐词到达；`ThoughtBlockView` 与 Settings 会话区共用）, sessionDisplayName.ts **会话显示名单一真源**（优先级 `name ?? agent_title ?? ${agent}_${MMdd-HHmm}`；用户手写名永不被 agent 侧标题覆盖由 schema 保证——`name` 非空即手写，create 路径不再落库默认名。7 个调用点全部经它取值，勿再写 `session.name || session.tmux_session_name`（那套写法有两个站点缺 `?? 未命名` 兜底，历史依赖 ACP 默认名非空才没暴露）。默认名用 agent_id + created_at 在**展示期**现算而非落库：前端默认名口径是本地时间、后端 created_at 是 UTC，落库会让「按 created_at 重算比对」类判据因时区静默失效）, defaultAcpAgentId.ts ACP agent 选择默认值（lastAcpAgentId → 第一个；CreateSessionModal 与 AgentHistory 面板共用，勿各自复制）, …）
 └── components/
     ├── Layout/  — Layout.tsx, MobileNav.tsx
     ├── Auth/ — AuthPage.tsx（登录 / 首次设密码页：用户名 + 密码；setup 预填默认用户名、登录态 placeholder 提示）
@@ -134,6 +134,30 @@ src/
 - **Terminal.tsx 挂载 effect 的 `terminalDisconnected` 刻意不进依赖数组**（body 条件仍读它）：flag 翻转 true 时若触发 cleanup 会把刚断开的 xterm/WS 连带拆毁，自动重试随之被取消——「不自动重建」由 body 条件保证。
 - **遮罩语义**：`autoReconnecting`（引擎在管）时遮罩显示「正在自动重连…」状态行（`role="status"`，固定浅色——遮罩底色不随主题翻转），「重连」按钮保留为立即手动兜底。
 - **API client**（`client.ts`）：`getAcpIdleRecycle()` / `setAcpIdleRecycle(minutes)` 对应后端 `GET/PUT /api/v1/settings/acp-idle-recycle`；`getPermissionTimeout()` / `setPermissionTimeout(mode, seconds)` 对应 `GET/PUT /api/v1/settings/permission-timeout`（时长单位为秒，`0` = 「总是」档）。
+
+## 会话显示名（`utils/sessionDisplayName.ts`）
+
+侧栏/对话框里所有会话名的**单一真源**（工程准则 7①）。三级优先级：
+
+| 级 | 来源 | 语义 |
+|---|---|---|
+| ① | `sessions.name` | 用户手写名。非空即「命名过」，**永不被 agent 侧标题覆盖** |
+| ② | `sessions.agent_title` | agent 侧标题快照（live `session_info_update` / `session/list` 回填，见 backend.md「agent 侧会话标题回填」） |
+| ③ | `${agent}_${MMdd-HHmm}` | 宿主默认名，**展示期现算**（`agent_id` + `created_at`，本地时间） |
+| ④ | `tmux_session_name` / 「未命名」 | tmux/pty 等无 agent 的会话 |
+
+**默认名为什么不落库**：`CreateSessionModal` 历史上在 create 时用 `new Date()`（本地时间）生成并落库，而后端 `created_at` 是 UTC——任何「按 created_at 重算再比对」的判据都会因时区永不相等而**静默失效**。改为展示期用 `new Date(created_at)` + 本地 getter 现算，与历史输出逐字相同，且让「未命名」成为 schema 可判定的事实（`name IS NULL` ⇔ 从未命名），不需要 provenance 标记列。
+
+**调用方**（7 处，全部经本函数取值）：`SessionRow.tsx`（主行 + 上下文菜单）、`ArchivedSessionsSection.tsx`、`Layout.tsx`（`activeSessionName`）、`Sidebar.tsx`（归档/释放/删除确认 + 改名预填）。改名预填用**展示名**而非仅 `name`——agent 标题/默认名也要能作为编辑起点（`RenameDialog` 对未改动会自行 bail，不会把派生名固化成用户命名）。
+
+## Agent 历史面板（`session/list` 发现入口）
+
+Sidebar 底部按钮 → 弹出面板（sidebar-popup 约定，见 frontend-patterns.md）：枚举 agent 侧的 ACP 会话，让用户看到裸 CLI 跑的、别处拷来的 `acp_session_id`。
+
+- **数据获取**：`GET /agents/{id}/acp-sessions?cwd=<活动 worktree 路径>`，展开时按 `agent × cwd` 自动拉一次 + 手动刷新。**不轮询**——后端每次调用都临时拉起一个短命 agent 进程（spawn + RPC 各 15s 预算），轮询等于定时起进程。自动拉的一次性用 `autoLoadedKeyRef` 钉住（不用 `rows === null` 判断：手动刷新失败后那会把自动重试又放行一次，覆盖掉已有的错误展示）。
+- **行内容**：`title ?? session_id 截断`、`cwd`（等于当前 worktree 时显示「当前工作区」）、`updated_at`、「已纳管」徽标。已纳管行点击 = `activateSession`；未纳管行**无动作**（「载入」是另一个用户动作，未实施）。
+- **§8 降级**：`title` 缺省 → 回落 session_id 截断（不显示空行）；agent 不支持 `session/list`（如实测 codebuddy 回 `-32601`）→ 显示 agent 原文错误 + 提示，**不是空白列表**（空白会被读成「你没有历史」）；`truncated=true` → 顶部明示「看到的是截断后的列表」。
+- **顺带收益**：后端把命中行的 `agent_title` 回填进 omniterm 自己的会话行，故打开一次面板会让侧栏里「懒得命名」的会话从默认名变成 agent 起的标题（用户手写过的名字不受影响）。
 
 ## ACP Chat View (Phase 4a)
 
