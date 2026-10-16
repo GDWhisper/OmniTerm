@@ -75,6 +75,8 @@ interface StoredMessage {
    *  无可测流式窗口）。后端在 turn 定稿时结算并落库，刷新后常驻。 */
   toolMs?: number | null
   tps?: number | null
+  /** turn 定稿时刻（RFC3339）；null = 无记录（迁移前的历史行），该段不渲染。 */
+  finishedAt?: string | null
 }
 
 /**
@@ -108,12 +110,13 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       createdAt: new Date(m.createdAt).getTime(),
       // 进行中 turn 的行以 streaming 还原，供 turn_snapshot / live 帧无缝续接。
       streaming: m.status === 'streaming',
-      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率），
-      // 刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
+      // 定稿读数读自 DB：turn 定稿时后端已结算（工作时长 / 工具耗时 / 速率 /
+      // 定稿时刻），刷新后仍在（前端不自算），历史行各自显示自己那一轮的值。
       durationMs: m.durationMs,
       waitMs: m.waitMs,
       toolMs: m.toolMs,
       tps: m.tps,
+      finishedAt: m.finishedAt,
     }
   })
 }

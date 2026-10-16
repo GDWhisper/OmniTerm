@@ -728,29 +728,39 @@ describe('markDone 落定读数（后端结算载荷）', () => {
     useChatStore.setState({ states: {} })
   })
 
-  it('timing 四项读数写入定稿消息并落下 dbId', () => {
+  it('timing 五项读数写入定稿消息并落下 dbId', () => {
     useChatStore.getState().hydrate('s1', [streamingMsg()], null)
     useChatStore
       .getState()
-      .markDone('s1', { workMs: 5_000, waitMs: 800, toolMs: 1_500, tps: 42.5 }, 'row-1')
+      .markDone(
+        's1',
+        { workMs: 5_000, waitMs: 800, toolMs: 1_500, tps: 42.5, finishedAt: '2026-10-16T08:00:00+00:00' },
+        'row-1',
+      )
     const m = useChatStore.getState().states['s1'].messages[0]
     expect(m.streaming).toBe(false)
     expect(m.durationMs).toBe(5_000)
     expect(m.waitMs).toBe(800)
     expect(m.toolMs).toBe(1_500)
     expect(m.tps).toBe(42.5)
+    expect(m.finishedAt).toBe('2026-10-16T08:00:00+00:00')
     expect(m.dbId).toBe('row-1')
   })
 
   it('timing 缺省（turn_state(false) 兜底路径）不覆盖消息已有读数', () => {
     useChatStore
       .getState()
-      .hydrate('s1', [streamingMsg({ durationMs: 3_000, toolMs: 900, tps: 55.5 })], null)
+      .hydrate(
+        's1',
+        [streamingMsg({ durationMs: 3_000, toolMs: 900, tps: 55.5, finishedAt: '2026-10-16T08:00:00+00:00' })],
+        null,
+      )
     useChatStore.getState().markDone('s1')
     const m = useChatStore.getState().states['s1'].messages[0]
     expect(m.durationMs).toBe(3_000)
     expect(m.toolMs).toBe(900)
     expect(m.tps).toBe(55.5)
+    expect(m.finishedAt).toBe('2026-10-16T08:00:00+00:00')
   })
 
   it('toolMs/tps 缺失（跟踪失效 / 无可测窗口）不覆盖、也不造 0', () => {
@@ -760,6 +770,16 @@ describe('markDone 落定读数（后端结算载荷）', () => {
     expect(m.durationMs).toBe(1_000)
     expect(m.toolMs).toBeUndefined()
     expect(m.tps).toBeUndefined()
+    expect(m.finishedAt).toBeUndefined()
+  })
+
+  it('finishedAt 为 null（旧后端不下发 / 帧字段缺省）不覆盖、也不造空串', () => {
+    useChatStore.getState().hydrate('s1', [streamingMsg()], null)
+    useChatStore
+      .getState()
+      .markDone('s1', { workMs: 1_000, waitMs: 0, finishedAt: null })
+    const m = useChatStore.getState().states['s1'].messages[0]
+    expect(m.finishedAt).toBeUndefined()
   })
 })
 

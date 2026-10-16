@@ -301,6 +301,7 @@
   "chat.msg.collapse": "collapse",
   "chat.msg.openFile": "open in file manager",
   "chat.msg.workTime": "Worked {{dur}}",
+  "chat.msg.endedAt": "Ended at {{time}}",
   "chat.process.collapsed": "Process",
   "chat.process.thoughtCount": "{{count}} thoughts",
   "chat.process.toolCount": "{{count}} tool calls",

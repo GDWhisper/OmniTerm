@@ -1063,6 +1063,16 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 缓存显示），定稿瞬间被这里的结算值原位取代。
   // null/undefined（在建消息、迁移前的历史行）→ 结算值不渲染，区别于「确实 0 时长」。
   const workText = formatWorkDuration(message.durationMs, i18n.language)
+  // turn 结束时刻（定稿结算，与 `finished_at` 落库同一值，随 prompt_done / hydrate
+  // 下发）→ 底部读数**主段**「结束于 14:32」（`formatHoverTime` 智能缩写：今天 →
+  // HH:mm，跨天带日期）；原主段「已工作 x分x秒」不再直接显示（替换，用户要求）。
+  // 流式期没有该值（定稿才产生），主段换回 LiveWorkElapsed 实时读数（「工作中」）。
+  // 缺失（迁移前的历史行）→ 主段不渲染，结算段整段随主段撤（用户拍板：历史数据
+  // 不兜底，不回退「已工作」，见 plan E25）。「已工作 x分x秒」仍保留在 hover
+  // tooltip（durationTip）与收纳行标题里。
+  const endText = message.finishedAt
+    ? t('chat.msg.endedAt', { time: formatHoverTime(new Date(message.finishedAt).getTime()) })
+    : null
   // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数随推送变，
   // 但门控只随 streaming 起落一次，三个数字的重画留在订阅回调直写 DOM 的路径上。
   const isLive = !!message.streaming && !!sessionId
@@ -1095,7 +1105,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const row = rowRef.current
     // 实时计时同样要量宽：不量则 metaWidth 为空 → 该行按内容收缩，读数贴在气泡**左**缘，
     // 定稿换成结算值时才跳回右缘（肉眼可见的一次位移）。
-    if (!row || !(workText || isLive)) return
+    if (!row || !(endText || isLive)) return
     const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
     const last = bodies[bodies.length - 1]
     if (!last) return
@@ -1105,7 +1115,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const ro = new ResizeObserver(measure)
     ro.observe(last)
     return () => ro.disconnect()
-  }, [workText, isLive, message.blocks])
+  }, [endText, isLive, message.blocks])
 
   const label = (
     <div
@@ -1360,7 +1370,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           flex-wrap 拆成一行一段；且正文变宽过程中还会 3→2→1 行重排，观感抖动。
           故流式期整行以 `min-width:max-content` 托到单行内容宽度之上（正文变宽后
           行宽自然跟随，读数不位移）；结算值不加这条，仍按上段规则换行。 */}
-      {(workText || isLive || visibleActions.length > 0) && (
+      {(endText || isLive || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
           style={{
@@ -1377,21 +1387,23 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
-              到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
+          {/* 流式期间：后端推送的实时读数（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。
+              结算段一旦到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
           {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}
-          {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
+          {/* 结算段主段 = 「结束于 14:32」（`endText`）；无结束时刻（迁移前的历史行）
+              → 整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）。正文处不再
+              显示时长——时长仍在 hover tooltip 第一段与收纳行标题里。
               「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
               `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}
-          {workText && (
+          {endText && (
             <span
               style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
               title={durationTip}
             >
               {/* 三个读数各一个 nowrap 段：换行只发生在段间，数字不与单位分离
                   （同 LiveWorkElapsed，见 CHAT_META_TEXT_STYLE）。 */}
-              <span style={CHAT_META_SEGMENT_STYLE}>{t('chat.msg.workTime', { dur: workText })}</span>
+              <span style={CHAT_META_SEGMENT_STYLE}>{endText}</span>
               {settledToolText && (
                 <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}</span>
               )}

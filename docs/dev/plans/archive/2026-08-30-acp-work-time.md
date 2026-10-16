@@ -480,3 +480,21 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 - **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按 `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串而三段读数还在（评审实测复现，≥17 个会话在推 `turn_stats` 时可达）。
 
 **测试**：`ChatMessage.metarow.test.tsx` 期望值改新文案（` · 工具 3秒` / ` · 400.0 tok/s`），新增 7 条 tooltip/文案回归（结算行含「ACP 不返回真实 token 速率」、缺省读数不进 tooltip、流式 tooltip 随推送帧同步、语言切换后 tooltip 与三段读数一起换文案、turn 作废后 tooltip 清空、双 locale 的诚实措辞与去前缀 label 各一条）；全量前端 1155 例通过、`tsc -b`、`lint` 0 error。文档同步：ui-style-guide §7.5、user-testing §15.7、backend.md 结算呈现位、frontend.md 小节标题、CLAUDE.md 文档索引（E12–E24）。
+
+### E25 — 气泡底部定稿主段改「结束于 HH:mm」：turn 定稿时刻落库（2026-10-16）
+
+来源：用户要求——「ACP 会话时间统计现在有两个地方显示已工作 x分x秒，把底部的那个结束后改成『结束于 [时间]』，流式输出时不变」。两处指收纳行标题（E12 起）与气泡底部元信息行（E23 结算段），定稿后文案重复；底部改为**结束时刻**（信息不重复，且多出时间轴视角）。三个拍板点（用户确认）：**替换**（非并存；纯文字回复没有收纳行时，时长只剩 hover tooltip 一处）；**区分今天与跨天**（复用 `formatHoverTime` 智能缩写）；**历史数据不处理**（不回填、不回退）。
+
+**决策与实现**：
+
+- **替换**：定稿后底部主段为「结束于 14:32 · 工具 3秒 · 55.5 tok/s」，工具/速率段与 hover tooltip 不动；「已工作 x分x秒」仍保留在 tooltip 第一段（`durationTip`）与收纳行标题（`ProcessBlocks` 的 `durLabel`）——时长的呈现位从「两处正文 + 一处 tooltip」收为「一处正文 + 一处 tooltip」。
+- **定稿时刻落库常驻**：新列 `chat_messages.finished_at`（TEXT/RFC3339，migration `20261017_add_turn_finished_at.sql`）。E23 的教训直接适用（读数只在内存里 = 刷新即失），故时刻在 `finalize_turn` **生成一次**（`TurnTiming.finished_at`），writer 落库与 `prompt_done.duration.finished_at` 下发**共用同一值**（刷新前后显示一致）；`GET /messages` 下发 `finishedAt`。不采用「前端收到 prompt_done 时记本地时刻」——那会让刷新前后显示不同的时间。
+- **格式**：复用 `formatHoverTime`（今天 → `HH:mm`，当年跨天 → `MM-DD HH:mm`，跨年 → `YYYY-MM-DD HH:mm`），与气泡 hover 时间小字同一格式。`chat.msg.endedAt` = `结束于 {{time}}` / `Ended at {{time}}`（占位符是 `{{time}}` 不是 `{{dur}}`——它接的是格式化后的时刻串）。
+- **历史行不兜底**（用户拍板）：「无 `finished_at`（迁移前的行）→ 结算段整段不渲染，不回退『已工作』」。注意这是**存量行工具/速率段随之消失**的有意取舍（旧行照旧条件里由 `workText` 门控整段；改由 `endText` 门控后同一条规则自然延续）。
+- **流式期不变**：底部仍是 `LiveWorkElapsed` 的「工作中 x分x秒 · …」实时跳动（`turn_stats` 推送）；收纳行流式/定稿两种形态均不动。三段渲染逻辑（nowrap 段、`CHAT_META_RIGHT`、`min-width:max-content` 托底门控、量宽 effect 门控）原样沿用——只把门控与主段文本从 `workText` 换到 `endText`。
+
+**测试**：后端 `finalize_message` 参数扩展（`finished_at`）+ 回读断言 + legacy NULL 断言、`prompt_done.duration` 线格式（finished_at 参与精确 json 断言，TurnTiming 字面量构造点 3 处同步）；前端 metarow 结算段断言重写（「结束于」主段两例 + 无 finishedAt 整段撤 + 双 locale `endedAt` 占位符）+ chatStore markDone 五读数与 null 不覆盖。真机 Chromium（dev 前端 + store 注入）6 项全过：新行「结束于 14:32 · 工具 3秒 · 55.5 tok/s」/ 跨天「结束于 10-15 09:05」/ 老行无结算段 / tooltip 保留「已工作 2分钟5秒」/ 流式读数与收纳行未变。后端 807 例 / 前端 1183 例通过。
+
+**实现偏差**：无。
+
+**边界（有意接受）**：结算段主段不再显示「工作了多久」——时长信息的正文出口只剩收纳行（纯文字回复消息时长仅 hover 可见）；`finished_at` 为 NULL 的存量行底部结算段整段消失（用户拍板的「不处理」）。

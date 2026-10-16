@@ -966,6 +966,9 @@ async fn list_messages(
                         // 流式窗口）；0 的 tool_ms 与 null 在前端同样不渲染。
                         "toolMs": row.tool_ms,
                         "tps": row.tps,
+                        // turn 定稿时刻（RFC3339，UTC）。null = 迁移前的历史行；前端
+                        // 底部读数主段「结束于 14:32」据此渲染，null 不渲染。
+                        "finishedAt": row.finished_at,
                     })
                 })
                 .collect();

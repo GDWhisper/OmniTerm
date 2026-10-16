@@ -16,9 +16,14 @@ import { clearAllLiveTurnStats, clearLiveTurnStats, setLiveTurnStats } from '../
 //    堆成三行）且结算行不得带它（E11「放不下才换行」只属于结算场合）。
 //
 // 读数来源（2026-10-15 翻盘，work-time 计划 E23）：定稿值是**消息自己的**后端结算
-// 字段（`message.toolMs`/`message.tps`，来源 hydrate 或 prompt_done），流式值是后端
-// `turn_stats` 推送经 `utils/turnStats` 缓存的只读显示——测试直接注入两者，不再驱动
-// 任何本地计时算法（算法与口径回归整体迁至 `src/acp/turn_accumulator.rs`）。
+// 字段（`message.toolMs`/`message.tps`/`message.finishedAt`，来源 hydrate 或
+// prompt_done），流式值是后端 `turn_stats` 推送经 `utils/turnStats` 缓存的只读
+// 显示——测试直接注入两者，不再驱动任何本地计时算法（算法与口径回归整体迁至
+// `src/acp/turn_accumulator.rs`）。
+// 结算主段（2026-10-16，计划 E25）：「已工作 x分x秒」替换为「结束于 HH:mm」
+// （`finishedAt` + formatHoverTime 智能缩写）；无 finishedAt 的历史行整段不渲染
+// （不回退「已工作」——用户拍板历史数据不兜底）。「已工作」仍保留在 hover
+// tooltip 第一段与收纳行标题里。
 // 独立的轻量测试文件，避免给 ChatMessage 的其余渲染路径建重 harness。
 
 let container: HTMLDivElement
@@ -37,6 +42,14 @@ afterEach(() => {
   container.remove()
   clearAllLiveTurnStats()
 })
+
+/** 构造**今天**的某个本地时刻（RFC3339）——formatHoverTime 的「今天」分支返回
+ *  HH:mm，期望值可硬编码且不依赖测试运行的时区。 */
+function todayAt(hours: number, minutes: number): string {
+  const d = new Date()
+  d.setHours(hours, minutes, 0, 0)
+  return d.toISOString()
+}
 
 function assistant(overrides: Partial<ChatMessage>): ChatMessage {
   return {
@@ -75,11 +88,12 @@ function visibleReadingSegments(): HTMLSpanElement[] {
 
 describe('ChatMessageView meta row line breaking', () => {
   it('splits the settled reading into nowrap segments so a unit never leaves its number', () => {
-    // 定稿读数来自消息自己的后端结算字段：工作 5分33秒 / 工具 2.5s（≈3秒）/ 400 tok/s。
+    // 定稿读数来自消息自己的后端结算字段：主段「结束于 14:32」/ 工具 2.5s（≈3秒）/
+    // 400 tok/s。
     act(() => {
       root.render(
         <ChatMessageView
-          message={assistant({ durationMs: 333_000, toolMs: 2_500, tps: 400 })}
+          message={assistant({ durationMs: 333_000, toolMs: 2_500, tps: 400, finishedAt: todayAt(14, 32) })}
           sessionId="s1"
           isLastAssistant
         />,
@@ -87,8 +101,7 @@ describe('ChatMessageView meta row line breaking', () => {
     })
     const segments = readingSegments()
     expect(segments.length).toBe(3)
-    // 「工作中 5分钟33秒」整段不断行：5分钟 与 33秒 之间没有断点。
-    expect(segments[0].textContent).toBe('已工作 5分钟33秒')
+    expect(segments[0].textContent).toBe('结束于 14:32')
     expect(segments[1].textContent).toBe(' · 工具 3秒')
     expect(segments[2].textContent).toBe(' · 400.0 tok/s')
     for (const el of segments) expect(el.style.whiteSpace).toBe('nowrap')
@@ -102,14 +115,14 @@ describe('ChatMessageView meta row line breaking', () => {
     act(() => {
       root.render(
         <ChatMessageView
-          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8, streaming: false })}
+          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8, finishedAt: todayAt(9, 5), streaming: false })}
           sessionId="s1"
         />,
       )
     })
     const segments = readingSegments()
     expect(segments.length).toBe(3)
-    expect(segments[0].textContent).toBe('已工作 10秒')
+    expect(segments[0].textContent).toBe('结束于 09:05')
     expect(segments[1].textContent).toBe(' · 工具 4秒')
     expect(segments[2].textContent).toBe(' · 88.8 tok/s')
   })
@@ -118,16 +131,33 @@ describe('ChatMessageView meta row line breaking', () => {
     act(() => {
       root.render(
         <ChatMessageView
-          message={assistant({ durationMs: 2_000, toolMs: 0, tps: null })}
+          message={assistant({ durationMs: 2_000, toolMs: 0, tps: null, finishedAt: todayAt(14, 32) })}
           sessionId="s2"
           isLastAssistant
         />,
       )
     })
     const segments = readingSegments()
-    // toolMs=0（有效观测没记到工具）与 tps=null（无可测窗口）都不渲染，只留工作段。
+    // toolMs=0（有效观测没记到工具）与 tps=null（无可测窗口）都不渲染，只留主段。
     expect(segments.length).toBe(1)
-    expect(segments[0].textContent).toBe('已工作 2秒')
+    expect(segments[0].textContent).toBe('结束于 14:32')
+  })
+
+  it('drops the whole settled segment when the turn has no finishedAt (legacy row)', () => {
+    // 用户 2026-10-16 拍板：历史数据不兜底——无结束时刻的老行不回退「已工作」，
+    // 结算段（含工具/tps 段）整段撤掉；时长仍可在 hover tooltip 之外的收纳行
+    // 标题看到（见 ChatMessage.process 测试）。
+    act(() => {
+      root.render(
+        <ChatMessageView
+          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8 })}
+          sessionId="s1"
+          isLastAssistant
+        />,
+      )
+    })
+    expect(readingSegments()).toHaveLength(0)
+    expect(metaTitle()).toBe('')
   })
 
   it('splits the live reading the same way while streaming and follows pushed updates', () => {
@@ -167,7 +197,7 @@ describe('ChatMessageView meta row honest tooltips', () => {
     act(() => {
       root.render(
         <ChatMessageView
-          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8 })}
+          message={assistant({ durationMs: 10_000, toolMs: 4_000, tps: 88.8, finishedAt: todayAt(14, 32) })}
           sessionId="s1"
           isLastAssistant
         />,
@@ -185,13 +215,14 @@ describe('ChatMessageView meta row honest tooltips', () => {
     act(() => {
       root.render(
         <ChatMessageView
-          message={assistant({ durationMs: 2_000, toolMs: 0, tps: null })}
+          message={assistant({ durationMs: 2_000, toolMs: 0, tps: null, finishedAt: todayAt(14, 32) })}
           sessionId="s2"
           isLastAssistant
         />,
       )
     })
     const title = metaTitle()
+    // 时长仍以「已工作 x分x秒」留在 tooltip 第一段（正文主段已换成「结束于」）。
     expect(title).toContain('已工作 2秒')
     expect(title).not.toContain('token 速率')
     expect(title).not.toContain('工具执行时长')
@@ -292,5 +323,12 @@ describe('meta row honest copy in both locales', () => {
       expect(map['chat.msg.toolTime'], name).not.toMatch(/约|est\./i)
       expect(map['chat.msg.tps'], name).not.toMatch(/est\.|t\/s(?!o)/i)
     }
+  })
+
+  it('labels the settled main reading as a wall-clock end time in both locales', () => {
+    // 主段「结束于 {{time}}」：时间是 `formatHoverTime` 的本地智能缩写（今天 HH:mm，
+    // 跨天带日期），占位符必须叫 {{time}}（不是 {{dur}}，那不是时长）。
+    expect(zhMap['chat.msg.endedAt']).toBe('结束于 {{time}}')
+    expect(enMap['chat.msg.endedAt']).toBe('Ended at {{time}}')
   })
 })

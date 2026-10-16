@@ -1621,13 +1621,15 @@ mod tests {
 
     #[test]
     fn prompt_done_duration_carries_tool_and_rate_estimates() {
-        // prompt_done 的 `duration` 就是 TurnTiming 的 serde 输出：工具耗时与速率
-        // 随定稿帧当场下发（前端不必等刷新 hydrate），字段缺省 = 该 turn 无该读数。
+        // prompt_done 的 `duration` 就是 TurnTiming 的 serde 输出：工具耗时、速率与
+        // 定稿时刻（`finished_at`）随定稿帧当场下发（前端不必等刷新 hydrate），
+        // 字段缺省 = 该 turn 无该读数。
         let timing = TurnTiming {
             work_ms: 5_000,
             wait_ms: 200,
             tool_ms: Some(1_100),
             tps: Some(38.2),
+            finished_at: "2026-10-16T08:00:00+00:00".into(),
             row_id: Some("row-a".into()),
         };
         let json = serde_json::to_string(&AcpServerMessage::PromptDone {
@@ -1639,10 +1641,17 @@ mod tests {
         .unwrap();
         assert_eq!(
             json,
-            r#"{"type":"prompt_done","stop_reason":"end_turn","row_id":"row-a","duration":{"work_ms":5000,"wait_ms":200,"tool_ms":1100,"tps":38.2}}"#
+            r#"{"type":"prompt_done","stop_reason":"end_turn","row_id":"row-a","duration":{"work_ms":5000,"wait_ms":200,"tool_ms":1100,"tps":38.2,"finished_at":"2026-10-16T08:00:00+00:00"}}"#
         );
 
-        let bare = TurnTiming { work_ms: 10, wait_ms: 0, tool_ms: None, tps: None, row_id: None };
+        let bare = TurnTiming {
+            work_ms: 10,
+            wait_ms: 0,
+            tool_ms: None,
+            tps: None,
+            finished_at: "2026-10-16T08:00:00+00:00".into(),
+            row_id: None,
+        };
         let json = serde_json::to_string(&AcpServerMessage::PromptDone {
             stop_reason: "end_turn",
             row_id: None,
@@ -1652,7 +1661,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             json,
-            r#"{"type":"prompt_done","stop_reason":"end_turn","duration":{"work_ms":10,"wait_ms":0}}"#
+            r#"{"type":"prompt_done","stop_reason":"end_turn","duration":{"work_ms":10,"wait_ms":0,"finished_at":"2026-10-16T08:00:00+00:00"}}"#
         );
     }
 

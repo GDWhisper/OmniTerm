@@ -301,6 +301,7 @@
   "chat.msg.collapse": "收起",
   "chat.msg.openFile": "在文件管理器中打开",
   "chat.msg.workTime": "已工作 {{dur}}",
+  "chat.msg.endedAt": "结束于 {{time}}",
   "chat.process.collapsed": "过程",
   "chat.process.thoughtCount": "思考 {{count}} 次",
   "chat.process.toolCount": "工具调用 {{count}} 次",
