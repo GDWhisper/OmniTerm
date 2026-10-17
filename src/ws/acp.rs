@@ -2858,14 +2858,23 @@ exit 0
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 已有标题 → 不再反查（写放大防线：再查也只会拿到同值）。
+    /// 已有标题也**要**再查，且标题变了要能跟上。
+    ///
+    /// 这条钉住一个真机实测出来的坑：opencode 的真标题是**异步**生成的，turn
+    /// 结束那一刻查到的是建会话时分配的占位串 `New session - <ISO>`（实测
+    /// `prompt_done` 后 2s 库里的值还是它），真标题约 1.5s 后才到 agent 侧。
+    /// 若把「已有标题」当门控，占位串会被永久锁死——此后再不反查，侧栏永远显示
+    /// `New session - 2026-10-16T…`，比默认名好不了多少。
+    ///
+    /// 写放大由 `persist_title` 的同值跳过把守（标题没变 = 0 次写入），所以放开
+    /// 门控的代价只是每轮一次 `session/list`，不是每轮一次 UPDATE。
     #[tokio::test]
-    async fn dispatch_prompt_does_not_relist_when_title_already_present() {
+    async fn dispatch_prompt_relists_and_picks_up_a_changed_title() {
         let _guard = spawn_test_lock_async().await;
         let db = fresh_db().await;
-        let dir = unique_dir("dispatch-title-present");
+        let dir = unique_dir("dispatch-title-changed");
         bind_agent_session(&db, "dispatch-session").await;
-        sqlx::query("UPDATE sessions SET agent_title = '已经有标题了' WHERE id = ?1")
+        sqlx::query("UPDATE sessions SET agent_title = '第一版标题' WHERE id = ?1")
             .bind(SESSION)
             .execute(&db)
             .await
@@ -2882,8 +2891,47 @@ exit 0
             .await
             .expect("dispatch_prompt 必须广播 turn 结束事件");
 
-        assert_eq!(agent_title_of(&db).await.as_deref(), Some("已经有标题了"));
-        assert_eq!(list_rpc_count(&dir), 0, "已有标题时不该再发 session/list");
+        assert_eq!(
+            agent_title_of(&db).await.as_deref(),
+            Some("反查得到的标题"),
+            "agent 侧标题变了就必须跟上（占位串不得被锁死）"
+        );
+        assert_eq!(list_rpc_count(&dir), 1, "一次 turn 结束只该反查一次");
+
+        client.shutdown().await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 标题没变时值保持原样（写放大防线在集成层的可观测面）。同值跳过本身由
+    /// `acp::title::persist_writes_and_skips_identical_values` 直接钉住
+    /// （`rows_affected == 0`），这里只确认放开门控后「每轮一次 RPC」不会把
+    /// 值搞坏。
+    #[tokio::test]
+    async fn dispatch_prompt_relist_with_unchanged_title_keeps_the_value() {
+        let _guard = spawn_test_lock_async().await;
+        let db = fresh_db().await;
+        let dir = unique_dir("dispatch-title-same");
+        bind_agent_session(&db, "dispatch-session").await;
+        // fake agent 恒回「反查得到的标题」，预置成同值。
+        sqlx::query("UPDATE sessions SET agent_title = '反查得到的标题' WHERE id = ?1")
+            .bind(SESSION)
+            .execute(&db)
+            .await
+            .expect("seed same title");
+        let client = dispatch_client(
+            &dir,
+            &stop_reason_wire(&StopReason::EndTurn),
+            Pushed::Prose,
+            db.clone(),
+        )
+        .await;
+
+        drive_dispatch_prompt(&client, &db, "帮我做件事")
+            .await
+            .expect("dispatch_prompt 必须广播 turn 结束事件");
+
+        assert_eq!(agent_title_of(&db).await.as_deref(), Some("反查得到的标题"));
+        assert_eq!(list_rpc_count(&dir), 1, "RPC 照发（门控已放开）");
 
         client.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);

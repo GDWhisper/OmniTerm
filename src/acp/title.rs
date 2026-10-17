@@ -116,20 +116,25 @@ pub struct TitleSync {
     pub managed: std::collections::HashSet<String>,
 }
 
-/// turn 结束反查的前置门控：返回**还需要**反查的会话的工作目录。
+/// 标题反查的前置门控：返回**还要不要**为这个会话反查，以及它的工作目录。
 ///
-/// 「还需要」= 用户未命名 **且** 尚无 `agent_title`。两者任一不满足就连 RPC 都
-/// 不该发：前者那一行的名字由用户说了算；后者再查也只会拿到同一个值（写放大
-/// 防线，见 [`persist_title`] 的同值跳过）。
+/// 唯一的硬条件是「用户未命名」（与 [`persist_title`] 的 WHERE 共用同一套判据，
+/// 见 [`user_named_guard`]）：那一行的名字由用户说了算，问都别问。
 ///
-/// 与 [`persist_title`] 的 WHERE 共用同一套「未命名」判据（[`user_named_guard`]）：
-/// 两处口径一旦分叉，就会出现「界面显示 agent 标题、库里却再也不反查」这种
-/// 看不出原因的静默失效。
-pub async fn workspace_needing_title(db: &SqlitePool, session_id: &str) -> Option<String> {
-    let sql = format!(
-        "SELECT workspace_path FROM sessions WHERE id = ?1 AND {} AND agent_title IS NULL",
-        user_named_guard()
-    );
+/// **刻意不判「已有 `agent_title`」**（2026-10-16 真机实测的教训）：opencode 的
+/// 真标题是**异步**生成的——turn 结束那一刻去查，拿到的是建会话时分配的占位串
+/// `New session - <ISO>`（实测：`prompt_done` 后 2s 库里的值），真标题约 1.5s 后
+/// 才落到 agent 侧。若把「已有标题」当门控，占位串会被**永久锁死**：此后再不
+/// 反查，侧栏永远显示 `New session - 2026-10-16T…`，比默认名好不了多少。
+/// 放开后第二次 turn 即可刷新到真标题（实测把占位串换成 `Request to reply ok`）。
+///
+/// 代价是每轮 turn 一次 `session/list`。已量过：本地连接上 25 条会话的响应远小于
+/// 1s、载荷几 KB；且有 [`crate::acp::client::ACP_LIST_MAX_SESSIONS`] 封顶。写库侧
+/// 由同值跳过把守，标题没变就是 0 次写入。若实测成为问题，正确解法是加「距上次
+/// 反查的冷却列」，而不是把「已有标题」加回门控。
+pub async fn workspace_to_refresh_title(db: &SqlitePool, session_id: &str) -> Option<String> {
+    let sql =
+        format!("SELECT workspace_path FROM sessions WHERE id = ?1 AND {}", user_named_guard());
     match sqlx::query_scalar(&sql).bind(session_id).fetch_optional(db).await {
         Ok(v) => v,
         Err(e) => {
