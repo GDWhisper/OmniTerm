@@ -156,6 +156,11 @@ export interface Session {
   runtime_kind: 'tmux' | 'pty' | 'acp'
   // ACP adapter session id; present only when runtime_kind='acp'
   acp_session_id?: string
+  // agent 侧会话标题快照（live session_info_update / session/list 回填）。
+  // **仅作展示兜底**：显示口径恒为 `name ?? agent_title ?? 宿主默认名`，故
+  // `name` 非空（用户手写过）时本字段被完全忽略——「用户命名不被 agent 自动
+  // 标题覆盖」由该优先级 + schema 保证，不需要额外的 provenance 标记列。
+  agent_title?: string
   // Agent config id (from `agents` table); present when runtime_kind='acp'
   agent_id?: string
   // 归档时间戳（RFC3339）；undefined/null = 未归档。仅 acp 会话可归档：
@@ -197,6 +202,19 @@ export interface DeleteSessionResponse {
   ok: true
   /** 后端缺省（旧版本）时不返回：按 `not_requested` 处理。 */
   agent_side?: AgentSideDeleteResult
+}
+
+/** agent 侧一条会话历史（`GET /agents/{id}/acp-sessions` 的条目）。 */
+export interface AgentAcpSession {
+  session_id: string
+  cwd: string
+  /** agent 给的标题。**可能缺省**（§8 多实现：opencode 全给、omp 部分缺省、
+   *  pi-acp 给用户首条消息原文、codebuddy 整个方法 -32601）——缺省时面板回落
+   *  显示 session_id 截断，不得显示空行或占位符。 */
+  title?: string
+  updated_at?: string
+  /** omniterm 侧是否已有会话行绑定了这个 id（「已纳管」徽标）。只读标识。 */
+  managed: boolean
 }
 
 export interface AgentEnvVar {
@@ -504,6 +522,19 @@ export const api = {
     request<{ ok: true; agent_side: AgentSideDeleteResult }>(
       `/agents/${agentId}/acp-sessions/${encodeURIComponent(acpSessionId)}?cwd=${encodeURIComponent(cwd)}`,
       { method: 'DELETE' },
+    ),
+  /**
+   * 枚举 agent 侧的会话历史（`session/list`）——「Agent 历史」面板的数据源。
+   *
+   * 后端临时拉起一个短命 agent 进程问完即收尸，故**不要轮询**：只在展开面板与
+   * 手动刷新时调。顺带把命中行的 agent 侧标题回填进 omniterm 自己的会话
+   * （侧栏显示名的兜底来源，见 utils/sessionDisplayName.ts）。
+   *
+   * `truncated` = 看到的是截断后的列表（后端有条数/页数双上限），必须明示。
+   */
+  listAgentAcpSessions: (agentId: string, cwd: string) =>
+    request<{ sessions: AgentAcpSession[]; truncated: boolean }>(
+      `/agents/${agentId}/acp-sessions?cwd=${encodeURIComponent(cwd)}`,
     ),
   /** Release a running ACP agent subprocess without deleting the session record. */
   releaseSession: (id: string) =>

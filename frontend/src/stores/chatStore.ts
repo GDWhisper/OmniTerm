@@ -208,13 +208,16 @@ export interface SlashCommand {
  * 一个 turn 定稿结算出的读数，随 WS `prompt_done` 帧下发（`duration` 字段）：
  * `workMs` = agent 工作时间，`waitMs` = 其中等真人审批的时间；
  * `toolMs`/`tps` = 工具耗时与输出速率估算（null = 该读数为空：工具跟踪失效 /
- * 无可测流式窗口）。全部由后端累积器结算（前端不计算，见 work-time 计划 E23）。
+ * 无可测流式窗口）；`finishedAt` = turn 定稿时刻（RFC3339，底部读数主段
+ * 「结束于 14:32」据此显示）。全部由后端累积器结算（前端不计算，见 work-time
+ * 计划 E23）。
  */
 export interface TurnDuration {
   workMs: number
   waitMs: number
   toolMs?: number | null
   tps?: number | null
+  finishedAt?: string | null
 }
 
 export interface ChatMessage {
@@ -282,6 +285,14 @@ export interface ChatMessage {
    * `undefined`/`null` = 无可测流式窗口（历史行 / 未测得）。仅用于显示。
    */
   tps?: number | null
+  /**
+   * 该 turn 的定稿时刻（RFC3339，UTC 墙钟）。来源同 `durationMs`；hydrate 自
+   * `chat_messages.finished_at`，`prompt_done` 时由后端结算下发（与落库同一值，
+   * 刷新前后显示一致）。底部读数主段「结束于 14:32」由它格式化（`formatHoverTime`：
+   * 今天 → HH:mm，跨天带日期）。`undefined`/`null` = 迁移前的历史行 —— 该段不渲染
+   * （用户拍板不为老数据回退「已工作」，见 work-time 计划 E25）。
+   */
+  finishedAt?: string | null
 }
 
 interface ChatSessionState {
@@ -1183,12 +1194,13 @@ export const useChatStore = create<ChatStore>((set) => ({
               // 靠文本猜测（同 text assistant 行可合法多条，见 2026-08-10 Phase 0）。
               // 不传 rowId（turn_state(false) 等路径）时保留原值，绝不清零。
               ...(rowId ? { dbId: rowId } : {}),
-              // 后端定稿即随 prompt_done 下发读数（工作 / 工具 / 速率），让数字当场
-              // 出现（不等刷新 hydrate）。定稿读数恒以后端结算为准。
+              // 后端定稿即随 prompt_done 下发读数（工作 / 工具 / 速率 / 定稿时刻），
+              // 让数字当场出现（不等刷新 hydrate）。定稿读数恒以后端结算为准。
               durationMs: timing?.workMs ?? m.durationMs,
               waitMs: timing?.waitMs ?? m.waitMs,
               toolMs: timing?.toolMs ?? m.toolMs,
               tps: timing?.tps ?? m.tps,
+              finishedAt: timing?.finishedAt ?? m.finishedAt,
             }
           : m,
       )

@@ -212,12 +212,52 @@ describe('CreateSessionModal', () => {
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     })
     await vi.waitFor(() => {
-      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', expect.any(String), undefined, 'acp', 'agent-1')
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'acp', 'agent-1')
     })
     expect(useAppStore.getState().lastAcpAgentId).toBe('agent-1')
     expect(localStorage.getItem('omniterm_last_acp_agent')).toBe('agent-1')
     // ACP 创建不刷新默认引擎
     expect(useAppStore.getState().defaultTerminalEngine).toBe('tmux')
+  })
+
+  /**
+   * 回归：未手写命名时不得把 `${agent}_${MMdd-HHmm}` 落进 `sessions.name`。
+   * `name` 非空 = 「用户命名过」是 agent 标题回填的 schema 级判据
+   * （计划 D1），一旦 create 时落个自动名，agent 标题就永远排不上号。
+   * 默认名由 sessionDisplayName() 展示期现算，改名之外无可见差异。
+   */
+  it('leaves name empty when the user did not type one (so the agent title can win)', async () => {
+    renderModal('wt-1', { lastAcpAgentId: 'agent-2' })
+    act(() => useAgentStore.setState({ agents: twoAgents }))
+    openAcp()
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', undefined, undefined, 'acp', 'agent-2')
+    })
+  })
+
+  it('persists the name the user actually typed', async () => {
+    renderModal()
+    openAcp()
+    const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
+    // React 受控输入：必须走原型上的 native setter，直接赋 value 不会被 onChange 收到
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    await act(async () => {
+      nativeInputValueSetter?.call(input, '排查回填缺陷')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    await vi.waitFor(() => {
+      expect(api.createSession).toHaveBeenCalledWith('proj-1', '/tmp/proj', '排查回填缺陷', undefined, 'acp', 'agent-1')
+    })
   })
 
   it('prefers the remembered agent over the first one on reopen', () => {

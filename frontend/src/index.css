@@ -2373,6 +2373,40 @@ input[type="range"]:active::-webkit-slider-thumb {
   opacity: 1;
 }
 
+/* 元信息读数行的 hover 说明浮层。**不用原生 `title`**：浏览器原生 tooltip 是
+   白底黑字的系统样式，与 OmniTerm 视觉语言冲突（2026-10-16 用户要求「复用
+   OmniTerm 风格」）。本体走 `.pixel-float`（§6 统一浮层档：2px 边框 + 4px
+   硬投影），absolute + opacity 手法同 UsageIndicator 徽章明细与动作条 label。
+   定位基准是**读数 span 自己**（`.chat-meta-tip` 设 relative）：读数右对齐到气泡
+   右缘，浮层默认 `right:0` 即与读数右缘对齐、向上展开——光标在读数上，浮层就该
+   在读数上（2026-10-16 用户报告「tooltip 漂移了，我鼠标指向的是统计那一边」：
+   那一版锚在 `.chat-meta-row` 整行左缘，浮层整个跑到列左缘）。
+   溢出由 `clampMetaTip` 在 mouseenter 时夹取（同 MessageActionBar label 的
+   clamp 先例）：窄气泡下读数 span 可被 flex-wrap 压到几十 px，`right:0` 会把浮层
+   推出消息列被 `overflow-x:clip` 裁掉。 */
+.chat-meta-tip {
+  position: relative;
+}
+.chat-meta-tip-float {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  padding: 3px 8px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  /* 说明只有一句，恒单行：不设 nowrap 时 shrink-to-fit 会被 containing block 宽度
+     压成竖排短列（实测 64px 宽、5 行）。 */
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.chat-meta-tip:hover .chat-meta-tip-float {
+  opacity: 1;
+}
+
 /* 块级复制角标（P1）：悬浮块内容右上角显示，点击复制该块原文 */
 .chat-block {
   position: relative;

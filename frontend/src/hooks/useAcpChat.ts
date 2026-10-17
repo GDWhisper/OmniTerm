@@ -88,8 +88,16 @@ interface ServerFrame {
   blocks?: string
   /** prompt_done: 后端在本 turn 定稿时刻结算的读数（ms / tps 估算，口径见后端
    *  `turn_accumulator`）。缺省 = 该 turn 未经累积器定稿；`tool_ms`/`tps` 缺省
-   *  = 该读数为空（工具跟踪失效 / 无可测流式窗口）。 */
-  duration?: { work_ms: number; wait_ms: number; tool_ms?: number; tps?: number }
+   *  = 该读数为空（工具跟踪失效 / 无可测流式窗口）。`finished_at` = turn 定稿
+   *  时刻（RFC3339），底部读数主段「结束于 14:32」据此显示。 */
+  duration?: {
+    work_ms: number
+    wait_ms: number
+    tool_ms?: number
+    tps?: number
+    /** 旧后端（本字段上线前）不下发 —— 缺省时按「无结束时刻」处理。 */
+    finished_at?: string
+  }
   /** turn_stats: 进行中 turn 的实时读数（后端按秒推送）。前端只显示不计算。
    *  `tool_ms`/`tps` 缺省 = 无该读数（同 `duration` 的语义）。 */
   work_ms?: number
@@ -942,8 +950,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             syncTurnToDb(sid, frame.row_id)
           }
           joinedMidTurn.current = false
-          // duration：后端定稿时刻结算的读数（工作 / 等审批 / 工具耗时 / 速率），随帧
-          // 下发 → 读数当场出现（不等刷新 hydrate）。tool_ms/tps 缺省 = 该读数为空。
+          // duration：后端定稿时刻结算的读数（工作 / 等审批 / 工具耗时 / 速率 /
+          // 定稿时刻），随帧下发 → 读数当场出现（不等刷新 hydrate）。tool_ms/tps/
+          // finished_at 缺省 = 该读数为空。
           // row_id：把本 turn 的 DB 行 id 落到定稿消息的 dbId 上，聚焦补拉合并
           // （mergeLatestMessages）才能按 dbId 精确命中此行而非文本猜测。
           s.markDone(
@@ -954,6 +963,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
                   waitMs: frame.duration.wait_ms,
                   toolMs: frame.duration.tool_ms ?? null,
                   tps: frame.duration.tps ?? null,
+                  finishedAt: frame.duration.finished_at ?? null,
                 }
               : undefined,
             frame.row_id,

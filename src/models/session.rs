@@ -72,6 +72,14 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[sqlx(default)]
     pub acp_session_id: Option<String>,
+    /// agent 侧会话标题的最后已知值（`session_info_update.title` 通知 /
+    /// `session/list` 的 `SessionInfo.title`）。**仅作展示兜底**：显示口径恒为
+    /// `name ?? agent_title ?? 宿主默认名`，故 `name` 非空（用户手写过）时本列
+    /// 被完全忽略——「用户命名不被 agent 自动标题覆盖」由此保证，无需 provenance
+    /// 标记列。NULL = agent 从未提供过标题。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[sqlx(default)]
+    pub agent_title: Option<String>,
     /// Which agent registry row this session was spawned from. Required for
     /// `runtime_kind = 'acp'`, NULL for non-ACP sessions.
     #[serde(skip_serializing_if = "Option::is_none")]

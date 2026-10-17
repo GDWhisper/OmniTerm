@@ -104,7 +104,7 @@ pub async fn list_messages_page(
     // before returning. One extra row is fetched to detect "there is an older page".
     let mut rows: Vec<ChatMessageRow> = sqlx::query_as(
         "SELECT role, text, created_at, id, blocks, status, last_seq, duration_ms, wait_ms, \
-                tool_ms, tps \
+                tool_ms, tps, finished_at \
          FROM chat_messages \
          WHERE session_id = ? \
            AND (? IS NULL OR created_at < ? OR (created_at = ? AND id < ?)) \
@@ -173,6 +173,9 @@ pub struct ChatMessageRow {
     pub tool_ms: Option<i64>,
     /// 该 turn 的输出速率估算（tokens/s，估算）。NULL = 无可测窗口（含迁移前历史行）。
     pub tps: Option<f64>,
+    /// 该 turn 的定稿时刻（RFC3339，UTC）。NULL = 迁移前的历史行（无结束时刻记录，
+    /// 不可追溯）——前端底部读数主段「结束于 14:32」据此渲染，NULL 不渲染。
+    pub finished_at: Option<String>,
 }
 
 /// Insert-or-update the single in-progress assistant row for a turn. The backend turn
@@ -208,6 +211,8 @@ pub async fn upsert_streaming_message(
 ///
 /// 时长与定稿同一条 UPDATE：`duration_ms`/`wait_ms` 只在 turn 结束那一刻才知道，拆开写
 /// 就存在「行已 complete 但时长缺失」的半成品状态（前端会把它当 0 而非未知）。
+/// `finished_at`（RFC3339）= turn 定稿时刻，由累积器生成并与 `prompt_done` 下发共用
+/// 同一值——底部读数主段「结束于 14:32」据此渲染，刷新前后一致。
 /// Idempotent — a missing/already-complete row is a no-op.
 pub async fn finalize_message(
     db: &SqlitePool,
@@ -216,15 +221,17 @@ pub async fn finalize_message(
     wait_ms: i64,
     tool_ms: Option<i64>,
     tps: Option<f64>,
+    finished_at: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE chat_messages SET status = 'complete', duration_ms = ?, wait_ms = ?, \
-         tool_ms = ?, tps = ? WHERE id = ?",
+         tool_ms = ?, tps = ?, finished_at = ? WHERE id = ?",
     )
     .bind(duration_ms)
     .bind(wait_ms)
     .bind(tool_ms)
     .bind(tps)
+    .bind(finished_at)
     .bind(row_id)
     .execute(db)
     .await?;
@@ -726,12 +733,23 @@ mod tests {
 
     /// 定稿即写时长与速率/工具读数：消息行与累计必须同一次跃迁落地（拆开写会留下
     /// 「行已 complete 但时长未知」的半成品，前端会把它当 0 而不是缺失）。
+    /// 定稿时刻（`finished_at`）与读数同一条 UPDATE 落库，回读原样。
     #[tokio::test]
     async fn finalize_message_records_turn_durations_and_reads_back() {
         let db = fresh_db().await;
         seed_row(&db, "row-a", "assistant", "OK", "2026-08-10T00:00:01Z").await;
 
-        finalize_message(&db, "row-a", 4200, 800, Some(1500), Some(42.5)).await.expect("finalize");
+        finalize_message(
+            &db,
+            "row-a",
+            4200,
+            800,
+            Some(1500),
+            Some(42.5),
+            "2026-10-16T08:00:00+00:00",
+        )
+        .await
+        .expect("finalize");
 
         let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
         let row = page.rows.first().expect("一行");
@@ -740,6 +758,7 @@ mod tests {
         assert_eq!(row.wait_ms, Some(800));
         assert_eq!(row.tool_ms, Some(1500));
         assert_eq!(row.tps, Some(42.5));
+        assert_eq!(row.finished_at.as_deref(), Some("2026-10-16T08:00:00+00:00"));
     }
 
     /// 工具跟踪越界失效（tool_ms = None）与「无速率」（tps = None）必须原样落为
@@ -750,7 +769,9 @@ mod tests {
         let db = fresh_db().await;
         seed_row(&db, "row-b", "assistant", "OK", "2026-08-10T00:00:01Z").await;
 
-        finalize_message(&db, "row-b", 1000, 0, None, None).await.expect("finalize");
+        finalize_message(&db, "row-b", 1000, 0, None, None, "2026-10-16T08:00:00+00:00")
+            .await
+            .expect("finalize");
 
         let page = list_messages_page(&db, SESSION, None, 10, usize::MAX).await.expect("page");
         let row = page.rows.first().expect("一行");
@@ -759,7 +780,7 @@ mod tests {
     }
 
     /// 迁移前的历史行没有结束时刻记录 → 时长必须是 NULL（未知），不得被读成 0。
-    /// 工具耗时与速率同理（NULL = 不可追溯）。
+    /// 工具耗时、速率与定稿时刻同理（NULL = 不可追溯）。
     #[tokio::test]
     async fn legacy_rows_read_back_with_unknown_duration() {
         let db = fresh_db().await;
@@ -771,6 +792,7 @@ mod tests {
         assert_eq!(row.wait_ms, None);
         assert_eq!(row.tool_ms, None);
         assert_eq!(row.tps, None);
+        assert_eq!(row.finished_at, None, "定稿时刻无记录 → NULL，前端该段不渲染");
     }
 
     /// 会话累计走**增量**：agent 子进程被 idle 回收后 restore 出新 client，第二个 turn

@@ -39,6 +39,14 @@ ignore = [
     { id = "RUSTSEC-2025-0056", reason = "wezterm-term 锁版传递依赖，unmaintained 非漏洞" },
     # paste ← termwiz ← wezterm-term；构建期 proc-macro，仓库归档但功能完备稳定
     { id = "RUSTSEC-2024-0436", reason = "wezterm-term 锁版传递依赖，构建期宏，无运行时风险" },
+    # zip 2.4.2 三条 extract() 落盘类公告（SUID/SGID 位保留、symlink 目标逃逸、
+    # 权限经 symlink 应用）。本项目只用 by_index + read_to_end 在内存里取 .exe
+    # 字节（src/update.rs extract_exe_from_zip），从不调用 extract()、不落盘、
+    # 不读 external_attributes，三条均不可达。升级到 >=9.0.0 属 API 大改，
+    # 待单独排期；若代码开始解压到文件系统，必须先删掉这三条 ignore。
+    { id = "RUSTSEC-2026-0367", reason = "仅 extract() 落盘受影响，本项目内存读取 zip entry，不可达" },
+    { id = "RUSTSEC-2026-0368", reason = "仅 extract() 解 symlink 受影响，本项目不解压到文件系统，不可达" },
+    { id = "RUSTSEC-2026-0369", reason = "仅 extract() 经 symlink 落权限受影响，本项目不解压，不可达" },
 ]
 
 [bans]

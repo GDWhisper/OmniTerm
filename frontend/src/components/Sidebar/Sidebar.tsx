@@ -2,14 +2,17 @@ import { Fragment, useEffect, useState, useCallback, useRef, type PointerEvent a
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { useAppStore } from '../../stores/appStore'
+import { useAgentStore } from '../../stores/agentStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useToastStore } from '../../stores/toastStore'
 import { api } from '../../api/client'
 import { BookIcon } from '../Icons/BookIcon'
 import { IconEye, IconPlus, IconSettings } from '../FileManager/icons'
+import { KeyboardIcon } from '../Icons/KeyboardIcon'
 import { GitHubIcon } from '../Icons/GitHubIcon'
 import type { DuplicateGroup, Project, Workspace } from '../../api/client'
 import { type AcpActivity } from '../../utils/agentAggregate'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { APP_VERSION, GITHUB_REPO_URL } from '../../version'
 import { DuplicateProjectsDialog } from './DuplicateProjectsDialog'
 import { UpdateBadge } from './UpdateBadge'
@@ -103,11 +106,15 @@ export function Sidebar() {
   const setMultiplexerAvailable = useAppStore((s) => s.setMultiplexerAvailable)
   const toggleSettings = useAppStore((s) => s.toggleSettings)
   const toggleTmuxCheatsheet = useAppStore((s) => s.toggleTmuxCheatsheet)
+  const toggleAgentHistory = useAppStore((s) => s.toggleAgentHistory)
   const expandAllSessions = useAppStore((s) => s.expandAllSessions)
   const setExpandAllSessions = useAppStore((s) => s.setExpandAllSessions)
 
   const addToast = useToastStore((s) => s.addToast)
   const { t } = useTranslation()
+  // agent 注册表：会话显示名的兜底来源（未命名 ACP 会话的 `${agent}_${MMdd-HHmm}`
+  // 默认名由它 + created_at 现算，见 utils/sessionDisplayName.ts）。
+  const agents = useAgentStore((s) => s.agents)
 
   // ACP 会话活动状态（chatStore 派生）：与 tmux 屏幕检测的 agent_state 归一，
   // 使两类会话的 Sidebar 状态点/聚合徽标表现一致。useShallow 保证仅在
@@ -763,7 +770,7 @@ export function Sidebar() {
   // 归档入口：进程驻留时先确认（会终止运行中的 agent），空闲直接归档。
   const requestArchive = (s: Session) => {
     if (s.acp_process_alive) {
-      setConfirmArchive({ id: s.id, name: s.name || s.tmux_session_name || t('sidebar.unnamed') })
+      setConfirmArchive({ id: s.id, name: sessionDisplayName(s, agents, t('sidebar.unnamed')) })
     } else {
       void archiveSessionNow(s.id)
     }
@@ -792,9 +799,20 @@ export function Sidebar() {
   }, [])
 
   // 菜单「重命名」：复用 RenameDialog（入口从行内铅笔按钮迁移至此）
-  const handleRenameSession = useCallback((session: Session) => {
-    setRenameTarget({ type: 'session', id: session.id, name: session.name || '' })
-  }, [])
+  // 依赖含 `agents` / `t`：展示名的兜底段（`${agent}_${MMdd-HHmm}`）要查注册表，
+  // 而 `t` 提供「未命名」文案。两者都只在加载/切语言时变，回调重建成本可忽略。
+  const handleRenameSession = useCallback(
+    (session: Session) => {
+      // 预填**展示名**而非仅 `name`：agent 标题 / 宿主默认名也要能作为编辑起点
+      // （RenameDialog 对「未改动」会自行 bail，不会把派生名固化成用户命名）。
+      setRenameTarget({
+        type: 'session',
+        id: session.id,
+        name: sessionDisplayName(session, agents, t('sidebar.unnamed')),
+      })
+    },
+    [agents, t],
+  )
 
   const closeContextMenu = useCallback(() => setContextMenu(null), [])
   const closeBatchDialog = useCallback(() => setBatchTarget(null), [])
@@ -854,6 +872,14 @@ export function Sidebar() {
           </button>
         </div>
 
+        <SidebarBottomButton
+          toggle="agent-history"
+          icon={<KeyboardIcon size={16} />}
+          title={t('agentHistory.title')}
+          onClick={toggleAgentHistory}
+          size={28}
+          className="mb-2"
+        />
         <SidebarBottomButton
           toggle="tmux-cheatsheet"
           icon={<BookIcon width={16} height={16} />}
@@ -1032,7 +1058,8 @@ export function Sidebar() {
               onDeleteSession={setConfirmDelete}
               onReleaseRequest={(s) => {
                 const chatState = useChatStore.getState().states[s.id]
-                if (chatState?.sending) setConfirmRelease({ id: s.id, name: s.name ?? null })
+                if (chatState?.sending)
+                  setConfirmRelease({ id: s.id, name: sessionDisplayName(s, agents, t('sidebar.unnamed')) })
                 else releaseSessionNow(s.id)
               }}
               onArchiveRequest={requestArchive}
@@ -1060,7 +1087,7 @@ export function Sidebar() {
             setConfirmDelete({
               type: 'session',
               id: s.id,
-              name: s.name || s.tmux_session_name || t('sidebar.unnamed'),
+              name: sessionDisplayName(s, agents, t('sidebar.unnamed')),
               runtimeKind: s.runtime_kind,
               acpSessionId: s.acp_session_id,
               agentId: s.agent_id,

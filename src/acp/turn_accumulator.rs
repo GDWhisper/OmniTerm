@@ -579,6 +579,10 @@ pub struct TurnTiming {
     /// 窗口（宁缺毋滥）。随 `prompt_done` 下发并落 `chat_messages.tps`。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tps: Option<f64>,
+    /// turn 定稿时刻（RFC3339，UTC，墙钟）。在 `finalize_turn` 生成一次，writer 落
+    /// `chat_messages.finished_at` 与 WS 下发共用同一值——前端底部读数主段
+    /// 「结束于 14:32」据此渲染，刷新前后不变。
+    pub finished_at: String,
     /// 本 turn 的 `chat_messages` 行 id，`None` = 未折叠任何帧的空 turn。
     /// 不下发：`prompt_done` 帧另有顶层 `row_id` 承载同一个值。
     #[serde(skip)]
@@ -805,6 +809,9 @@ impl TurnAccumulator {
                 wait_ms,
                 tool_ms: stats.tool_ms,
                 tps: stats.tps,
+                // 墙钟时刻取真实时钟（`now: Instant` 是单调时钟，仅供时长测量；
+                // 测试注入合成时间线只影响时长数值，不影响本字段语义）。
+                finished_at: chrono::Utc::now().to_rfc3339(),
                 row_id: st.row_id.clone(),
             };
             st.last_timing = Some(timing.clone());
@@ -1112,6 +1119,7 @@ async fn writer_loop(
                         wait,
                         t.tool_ms.map(|v| v as i64),
                         t.tps,
+                        &t.finished_at,
                     )
                     .await
                 {

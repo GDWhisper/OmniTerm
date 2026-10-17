@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import type { ChatMessage, ContentBlock, ToolCallBlock, PlanBlock, SystemBlockDetail } from '../../stores/chatStore'
@@ -49,7 +49,8 @@ const MSG_ROW_GAP = 6
 // 定稿后动作栏回归左侧、读数用 `marginLeft:auto` 顶到**右侧**（见 CHAT_META_RIGHT）。
 // **段内绝不换行**——中文没有空格，`whiteSpace:normal` + `overflowWrap:anywhere` 会让浏览器
 // 在数字与单位之间断行（实测「5分钟」/「33秒」、「工具」/「<1秒」、「63.5」/「tok/s」
-// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个 nowrap 段。
+// 三处都被拆开，2026-09-21 用户报告），故三个读数各自一个禁断行的段（见
+// CHAT_META_SEGMENT_STYLE：`pre` 而非 `nowrap`，否则分隔符行首空格被折叠）。
 // 段间换行是状态相关的：**流式期整行固定单行**（行宽由渲染处 `min-width:max-content` 托底，
 // 2026-10-14 用户报告窄正文块下三段堆成三行）；**定稿后**容器 flex-wrap 承接段间换行——
 // 结算场合行里还有动作栏，沿用 E11 的「放不下才换行」。
@@ -67,7 +68,16 @@ const CHAT_META_TEXT_STYLE: CSSProperties = {
 }
 
 // 单个读数（一段完整语义，如「工具 12秒」）：段内禁止断行，数字与单位永不分离。
-const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'nowrap' }
+//
+// **必须 `whiteSpace:'pre'` 而不是 `'nowrap'`**：读数段是 inline-flex 子项，每个子项
+// 自成一个块级行首，CSS 会把行首的可折叠空格整段删掉。2026-10-16 用户报告
+// 「结束于 14:32 · 工具 3秒 · 55.5 tok/s」的分隔符两侧间隙不均衡——实测 `nowrap` 下
+// 「14:32」与「·」之间的空格宽 0px、「·」与「工具」之间 7.75px（等宽字体一空格宽），
+// 视觉上是「14:32· 工具」左粘右疏。`pre` 保留字面空格且同样禁止段内换行（含窄容器
+// 被迫收缩时不从段中断开，实测与 nowrap 一致），分隔符两侧各一空格故等距。
+// `overflowWrap:'normal'` 显式切断容器 `anywhere` 的继承：`pre` 与继承来的 `anywhere`
+// 是否允许段内任意断行在规范上含混，这里按「段内绝不换行」的契约钉死。
+const CHAT_META_SEGMENT_STYLE: CSSProperties = { whiteSpace: 'pre', overflowWrap: 'normal' }
 
 // 结算值（定稿后）在元信息行里顶到右缘。流式实时读数**不加**这一条，故停在左侧。
 // 拆段后 textAlign 对 flex 子项无效，右缘改由 justify-content 表达。
@@ -208,8 +218,9 @@ interface ProcessEntry {
 }
 
 /**
- * 消息级「过程容器」：把**一轮** ACP 输出里除最终结论外的一切收进同一个折叠器
- * ——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出。
+ * 消息级「过程容器」：把**一轮** ACP 输出里**最终结论之前**的一切收进同一个
+ * 折叠器——过程块（thought / tool_call / plan）与夹在过程块之间的中间 text 输出；
+ * 结论及其后的块留在容器外原位（流式顺序在任意时刻成立，2026-10-16 修复）。
  * 折叠态只留**一行摘要**，最终 text 结论（流式中正在生长的那段）留在容器外始终
  * 可见。对齐 ZCode 容器型工具（`ToolCallBlocks/renderers/agent.tsx` +
  * `ToolLayout.tsx`）的交互：
@@ -891,21 +902,22 @@ function renderBlock(
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
  *
- * **三个读数各自一个 nowrap span**：拆段是 DOM 结构而非文本，一次建好、之后每次
+ * **三个读数各自一个禁断行 span**：拆段是 DOM 结构而非文本，一次建好、之后每次
  * 推送只改 textContent，不新增分配。段内禁止断行，数字与单位不分离（换行约束见
  * CHAT_META_TEXT_STYLE：中文无空格，单文本节点会被拆成「5分钟」/「33秒」）。
  * 整行固定单行由所在行的 `min-width:max-content` 托底（见渲染处）。
  *
- * **tooltip 只解释画出来的读数**（`visibleReadings` + `liveTip`）：工具耗时与 tps 各有
- * 「暫无」态（无输出 burst / 工具跟踪失效），整段撤掉后还挂一段「这个读数怎么算的」只会
- * 让人去找屏幕上不存在的数字。两条估算说明（`toolTimeTip` / `tpsTip`）本身都是
- * 「omniterm 自己算的、ACP 不上报」的诚实口径——界面文案刻意不带「约/估算」前缀，
- * 性质说明全部收在 hover 里；`workingTip` 说的是后端实测工作时长，不进诚实口径。
+ * **hover 说明浮层只解释画出来的估算读数**（`visibleReadings` + `liveTip`）：工具耗时与
+ * tps 各有「暫无」态（无输出 burst / 工具跟踪失效），两者都缺省时整段不挂——没有需要
+ * 解释的数字。文案只有一句「ACP 不提供该数据，由 OmniTerm 计算」（`chat.msg.omniComputed`）：
+ * 界面读数刻意不带「约/估算」前缀，性质说明全部收在这一句里（2026-10-16 用户要求
+ * 「只要这个意思」，此前两条上百字的 tooltip 太长）。浮层走 `.chat-meta-tip-float`
+ * （OmniTerm 风格），不是浏览器原生 `title`。
  *
- * **title 的唯一写入方是 draw()**（不写 JSX prop）：tooltip 与三个读数段同属直写 DOM 域，
+ * **浮层文本的唯一写入方是 draw()**（不写 JSX prop）：浮层与三个读数段同属直写 DOM 域，
  * deps `[sessionId, t, i18n]` 已覆盖挂载 / 切会话 / 切语言。JSX 里再按
  * `getLiveTurnStats` 求一份就是第二个写入方——那张缓存是有界表（`utils/turnStats`，
- * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把 tooltip 抹成空串，
+ * 淘汰不通知订阅者），本会话项被淘汰后一次父组件重渲染就会把浮层抹成空串，
  * 而三段读数还留着最后一次 draw 的文本。
  */
 
@@ -927,13 +939,52 @@ function visibleReadings(stats: LiveTurnStats | null, locale?: string): VisibleR
   }
 }
 
-/** 当前读数对应的 tooltip：只收**会显示**的那几段（工作段有读数才有 tooltip）。 */
+/** 当前读数对应的 hover 说明：只有一句「ACP 不提供该数据，由 OmniTerm 计算」，
+ *  且只在屏幕上真有估算读数（工具耗时 / tps）时挂——两者都缺省时没有需要解释的数字。 */
 function liveTip(readings: VisibleReadings, t: TFunction): string {
-  if (!readings.dur) return ''
-  const tips = [t('chat.msg.workingTip')]
-  if (readings.toolDur) tips.push(t('chat.msg.toolTimeTip'))
-  if (readings.rate) tips.push(t('chat.msg.tpsTip'))
-  return tips.join(' · ')
+  if (!readings.toolDur && !readings.rate) return ''
+  return t('chat.msg.omniComputed')
+}
+
+/** 浮层与锚点的间隙（px），与动作条 label 浮层同一档。 */
+const META_TIP_GAP = 4
+
+/**
+ * 把 hover 说明浮层夹进最近滚动容器的可见区（水平方向），mouseenter 时调一次。
+ *
+ * **为什么需要**：浮层 CSS 默认 `right: 0`（与读数右缘对齐，光标在读数上浮层就在
+ * 读数上）。但读数 span 的宽度随气泡伸缩——窄气泡下 `flex-wrap` 可把三段读数拆成
+ * 三行、span 只剩几十 px，此时右缘对齐会把 255px 的浮层整个推出消息列左缘，被
+ * `overflow-x: clip` 裁掉（实测 x=-167）。故 hover 时实测并夹回容器内。
+ *
+ * 夹取基准必须是**滚动容器**而非视口：浮层是容器里的 absolute 后代，探出容器可见区
+ * 的那一段既被裁掉、又会进容器的 scrollable overflow。可见区右缘取 `容器左缘 +
+ * clientWidth`（已排除边框与纵向滚动条槽位）。同 MessageActionBar label 的先例。
+ */
+function clampMetaTip(holder: HTMLElement) {
+  const float = holder.querySelector<HTMLElement>('.chat-meta-tip-float')
+  // 没有说明（无估算读数 → display:none）或还没量到宽度时不必夹。
+  if (!float || float.style.display === 'none' || float.offsetWidth === 0) return
+  const holderRect = holder.getBoundingClientRect()
+  const floatW = float.offsetWidth
+  // 期望位置：右缘与读数右缘对齐。
+  const desired = holderRect.width - floatW
+  let container: HTMLElement | null = holder.parentElement
+  while (container && container !== document.body) {
+    if (/(auto|scroll)/.test(window.getComputedStyle(container).overflowY)) break
+    container = container.parentElement
+  }
+  const cRect = container ? container.getBoundingClientRect() : { left: 0, right: window.innerWidth }
+  const visibleRight = container ? cRect.left + container.clientWidth : cRect.right
+  const minLeft = cRect.left + META_TIP_GAP - holderRect.left
+  const maxLeft = visibleRight - META_TIP_GAP - floatW - holderRect.left
+  float.style.left = `${Math.max(minLeft, Math.min(desired, maxLeft))}px`
+  float.style.right = 'auto'
+}
+
+/** mouseenter 处理器：夹取浮层。定稿行与流式行共用同一份逻辑。 */
+function handleMetaTipEnter(e: ReactMouseEvent<HTMLElement>) {
+  clampMetaTip(e.currentTarget)
 }
 
 function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
@@ -942,6 +993,7 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
   const workRef = useRef<HTMLSpanElement>(null)
   const toolRef = useRef<HTMLSpanElement>(null)
   const tpsRef = useRef<HTMLSpanElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {
     // 写一段：空值整段撤掉（display:none），flex 不留空位、分隔符也跟着消失。
@@ -965,23 +1017,26 @@ function LiveWorkElapsed({ sessionId }: { sessionId: string }) {
         write(toolRef.current, r.toolDur ? ` · ${t('chat.msg.toolTime', { dur: r.toolDur })}` : '')
         write(tpsRef.current, r.rate ? ` · ${t('chat.msg.tps', { tps: r.rate })}` : '')
       }
-      // tooltip 跟着可见段走（推送期直写 DOM，不进 React state）。
-      const tip = liveTip(r, t)
-      if (rootRef.current && rootRef.current.title !== tip) rootRef.current.title = tip
+      // hover 说明跟着可见段走（推送期直写 DOM，不进 React state）；绝对定位不占布局，
+      // display:none 时连 hover 都不触发（`.chat-meta-tip:hover` 只切 opacity）。
+      write(tipRef.current, liveTip(r, t))
     }
     draw(getLiveTurnStats(sessionId))
     return subscribeLiveTurnStats(sessionId, draw)
   }, [sessionId, t, i18n])
 
-  // title 不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
+  // 浮层文本不写 JSX prop——唯一写入方是 effect 里的 draw()（理由见上方 LiveWorkElapsed 注释）。
   return (
     <span
       ref={rootRef}
+      className="chat-meta-tip"
       style={{ ...CHAT_META_TEXT_STYLE, color: 'var(--text-muted)' }}
+      onMouseEnter={handleMetaTipEnter}
     >
       <span ref={workRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={toolRef} style={CHAT_META_SEGMENT_STYLE} />
       <span ref={tpsRef} style={CHAT_META_SEGMENT_STYLE} />
+      <span ref={tipRef} className="chat-meta-tip-float pixel-float" style={{ display: 'none' }} />
     </span>
   )
 }
@@ -1063,15 +1118,21 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 缓存显示），定稿瞬间被这里的结算值原位取代。
   // null/undefined（在建消息、迁移前的历史行）→ 结算值不渲染，区别于「确实 0 时长」。
   const workText = formatWorkDuration(message.durationMs, i18n.language)
+  // turn 结束时刻（定稿结算，与 `finished_at` 落库同一值，随 prompt_done / hydrate
+  // 下发）→ 底部读数**主段**「结束于 14:32」（`formatHoverTime` 智能缩写：今天 →
+  // HH:mm，跨天带日期）；原主段「已工作 x分x秒」不再直接显示（替换，用户要求）。
+  // 流式期没有该值（定稿才产生），主段换回 LiveWorkElapsed 实时读数（「工作中」）。
+  // 缺失（迁移前的历史行）→ 主段不渲染，结算段整段随主段撤（用户拍板：历史数据
+  // 不兜底，不回退「已工作」，见 plan E25）。「已工作 x分x秒」保留在收纳行标题里。
+  const endText = message.finishedAt
+    ? t('chat.msg.endedAt', { time: formatHoverTime(new Date(message.finishedAt).getTime()) })
+    : null
   // 「工作中」的显示门控用这个 per-turn 布尔，而非渲染期读时钟：读数随推送变，
   // 但门控只随 streaming 起落一次，三个数字的重画留在订阅回调直写 DOM 的路径上。
   const isLive = !!message.streaming && !!sessionId
   // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
   // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
   const liveSessionId = isLive && !workText ? sessionId : undefined
-  // 「等待人工」不进正文（会让元信息占两行），只挂在 tooltip 上；移动端无 hover
-  // 拿不到，按设计确认放弃该信息于移动端呈现。
-  const waitText = message.waitMs ? formatWorkDuration(message.waitMs, i18n.language) : null
   // 定稿读数（工具耗时 / 估算速率）是**每条消息自己的**后端结算字段：来源与
   // `durationMs` 一致（hydrate 的 `GET /messages` 或 `prompt_done` 帧载荷），
   // 不再是会话级内存快照——历史行各自显示自己那一轮的值，刷新后常驻（E23）。
@@ -1079,14 +1140,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 三态语义（`format*` 收口）。
   const settledTps = formatTps(message.tps)
   const settledToolText = formatToolDuration(message.toolMs, i18n.language)
-  const durationTip = [
-    workText && t('chat.msg.workTime', { dur: workText }),
-    settledToolText && t('chat.msg.toolTime', { dur: settledToolText }),
-    settledTps && t('chat.msg.tps', { tps: settledTps }),
-    waitText && t('chat.msg.waitTime', { dur: waitText }),
-    settledToolText && t('chat.msg.toolTimeTip'),
-    settledTps && t('chat.msg.tpsTip'),
-  ].filter(Boolean).join(' · ')
+  // hover 说明：只有一句「ACP 不提供该数据，由 OmniTerm 计算」，且只在屏幕上真有
+  // 估算读数（工具耗时 / tps）时挂——没有需要解释的数字就不挂（2026-10-16 用户要求
+  // 「只要这个意思」，此前是两条上百字的长 tooltip + 读数复述）。样式走
+  // `.chat-meta-tip-float`（OmniTerm 风格浮层），不是浏览器原生 title。
+  const settledTip = settledToolText || settledTps ? t('chat.msg.omniComputed') : null
   // 动作栏 + 耗时所在行要贴**气泡右缘**：气泡按内容宽度收缩（上限 BUBBLE_MAX_WIDTH），
   // 而这一行是正文块的兄弟节点，CSS 表达不了「和上面某个块右缘对齐」，只能量。
   const rowRef = useRef<HTMLDivElement>(null)
@@ -1095,7 +1153,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const row = rowRef.current
     // 实时计时同样要量宽：不量则 metaWidth 为空 → 该行按内容收缩，读数贴在气泡**左**缘，
     // 定稿换成结算值时才跳回右缘（肉眼可见的一次位移）。
-    if (!row || !(workText || isLive)) return
+    if (!row || !(endText || isLive)) return
     const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
     const last = bodies[bodies.length - 1]
     if (!last) return
@@ -1105,7 +1163,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const ro = new ResizeObserver(measure)
     ro.observe(last)
     return () => ro.disconnect()
-  }, [workText, isLive, message.blocks])
+  }, [endText, isLive, message.blocks])
 
   const label = (
     <div
@@ -1285,9 +1343,11 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   for (let i = 0; i < message.blocks.length; i++) {
     if (message.blocks[i].type === 'text') finalTextIdx = i
   }
-  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**）：
-  // 一轮里除**最终 text 结论**与 **system 块**外全部收进同一个容器——过程块
-  // （thought / tool_call / plan）+ 夹在过程块之间的中间 text 输出。
+  // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**，
+  // 2026-10-16 修流式顺序后拆分点收敛为「结论之前」）：
+  // 容器收纳**最终 text 结论之前**的一切——过程块（thought / tool_call / plan）+
+  // 夹在过程块之间的中间 text 输出；结论**及其后**的块（含「结论之后又调了工具」
+  // 的收尾过程块）留在容器外**原位**渲染。
   // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
   // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
   // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
@@ -1295,14 +1355,17 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const streaming = message.streaming ?? false
   const bodyNodes: ReactNode[] = []
   const collected: ProcessEntry[] = []
-  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。留在容器外的块按原相对
-  // 顺序排在其后，故可见内容（system / 最终结论）的阅读顺序不变；被收进容器的
-  // 内容折叠后不可见，展开时也保持原序——唯一的例外是「结论之后还有过程块」的
-  // 罕见消息（agent 结尾又调了工具），那时的过程块会提前到结论之前。
+  // 容器在 bodyNodes 里占的位 = **第一个被收纳块**的位置。被收纳集合恒为结论之前
+  // 的前缀（system 除外），故容器先于结论渲染；结论及其后的块按原相对顺序留在
+  // 外面。旧规则把结论之后的块也收进容器、而容器固定渲染在结论之前，那些块被整体
+  // **提前到结论上面**——流式中「最近一次输出之后新起的思考」因此长在输出上方
+  // （2026-10-16 用户报告「正在流式输出的思考块出现在最近一次输出的上面」）。
+  // 现值下留在外面的段随流式生长始终停在消息末尾，流式顺序在任意时刻成立
+  // （规格见 ui-style-guide §7.10）。
   let containerSlot = -1
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
-    if (i === finalTextIdx || b.type === 'system') {
+    if (b.type === 'system' || (finalTextIdx >= 0 && i >= finalTextIdx)) {
       bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
       continue
     }
@@ -1360,7 +1423,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           flex-wrap 拆成一行一段；且正文变宽过程中还会 3→2→1 行重排，观感抖动。
           故流式期整行以 `min-width:max-content` 托到单行内容宽度之上（正文变宽后
           行宽自然跟随，读数不位移）；结算值不加这条，仍按上段规则换行。 */}
-      {(workText || isLive || visibleActions.length > 0) && (
+      {(endText || isLive || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
           style={{
@@ -1377,25 +1440,28 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             menu={actionMenu}
             onCloseMenu={closeActionMenu}
           />
-          {/* 流式期间：本地实时估算（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。结算值一旦
-              到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
+          {/* 流式期间：后端推送的实时读数（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。
+              结算段一旦到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
           {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}
-          {/* null/undefined（迁移前的历史行）→ 不渲染结算值，区别于「确实 0 时长」。
-              「等待人工」不进正文，只挂 tooltip；视觉档位沿用元信息规格。
+          {/* 结算段主段 = 「结束于 14:32」（`endText`）；无结束时刻（迁移前的历史行）
+              → 整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）。正文处不再
+              显示时长——时长保留在收纳行标题里。
               `CHAT_META_RIGHT` 把结算值顶到行右缘——流式实时读数不加它，停在左侧。 */}
-          {workText && (
+          {endText && (
             <span
+              className="chat-meta-tip"
               style={{ ...CHAT_META_TEXT_STYLE, ...CHAT_META_RIGHT, color: 'var(--text-faint)' }}
-              title={durationTip}
+              onMouseEnter={handleMetaTipEnter}
             >
-              {/* 三个读数各一个 nowrap 段：换行只发生在段间，数字不与单位分离
-                  （同 LiveWorkElapsed，见 CHAT_META_TEXT_STYLE）。 */}
-              <span style={CHAT_META_SEGMENT_STYLE}>{t('chat.msg.workTime', { dur: workText })}</span>
+              {/* 三个读数各一个禁断行段：换行只发生在段间，数字不与单位分离
+                  （同 LiveWorkElapsed，见 CHAT_META_SEGMENT_STYLE）。 */}
+              <span style={CHAT_META_SEGMENT_STYLE}>{endText}</span>
               {settledToolText && (
                 <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.toolTime', { dur: settledToolText })}`}</span>
               )}
               {settledTps && <span style={CHAT_META_SEGMENT_STYLE}>{` · ${t('chat.msg.tps', { tps: settledTps })}`}</span>}
+              {settledTip && <span className="chat-meta-tip-float pixel-float">{settledTip}</span>}
             </span>
           )}
         </div>

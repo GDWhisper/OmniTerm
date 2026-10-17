@@ -1,6 +1,8 @@
 import { useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore, MIN_SIDEBAR_WIDTH, type AppState } from '../../stores/appStore'
+import { useAgentStore } from '../../stores/agentStore'
+import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { Sidebar } from '../Sidebar/Sidebar'
 import { Terminal } from '../Terminal/Terminal'
 import { ChatView } from '../Chat/ChatView'
@@ -8,6 +10,7 @@ import { AcpConnectionManager } from '../Chat/AcpConnectionManager'
 import { RightPanel } from '../RightPanel/RightPanel'
 import { SettingsPopup } from '../Settings/SettingsPopup'
 import { TmuxCheatsheetPopup } from '../TmuxCheatsheet/TmuxCheatsheetPopup'
+import { AgentHistoryPopup } from '../Sidebar/AgentHistoryPopup'
 import { MobileNav } from './MobileNav'
 import { MobileStatusBar } from './MobileStatusBar'
 import { useKeyboardHeight } from '../../hooks/useMediaQuery'
@@ -69,6 +72,7 @@ export function Layout() {
     sidebarCollapsed,
     settingsOpen,
     tmuxCheatsheetOpen,
+    agentHistoryOpen,
     fileManagerOpen,
     fileManagerCollapsed,
     sidebarWidth,
@@ -186,6 +190,7 @@ export function Layout() {
         uiZoom={uiZoom}
         settingsOpen={settingsOpen}
         tmuxCheatsheetOpen={tmuxCheatsheetOpen}
+        agentHistoryOpen={agentHistoryOpen}
         onSidebarDrag={handleSidebarDrag}
         onFileManagerDrag={handleFileManagerDrag}
       />}
@@ -208,6 +213,7 @@ interface DesktopLayoutProps {
   uiZoom: number
   settingsOpen: boolean
   tmuxCheatsheetOpen: boolean
+  agentHistoryOpen: boolean
   onSidebarDrag: (e: React.MouseEvent | React.TouchEvent) => void
   onFileManagerDrag: (e: React.MouseEvent | React.TouchEvent) => void
 }
@@ -227,6 +233,7 @@ function DesktopLayout({
   uiZoom,
   settingsOpen,
   tmuxCheatsheetOpen,
+  agentHistoryOpen,
   onSidebarDrag,
   onFileManagerDrag,
 }: DesktopLayoutProps) {
@@ -300,6 +307,7 @@ function DesktopLayout({
 
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
+      {agentHistoryOpen && <AgentHistoryPopup />}
       {crtScanlines && <div className="crt-overlay" />}
     </>
   )
@@ -355,6 +363,7 @@ function MobileLayout() {
     mobileGestureEnabled,
     settingsOpen,
     tmuxCheatsheetOpen,
+    agentHistoryOpen,
     setActiveTab,
     crtScanlines,
     uiZoom,
@@ -455,7 +464,13 @@ function MobileLayout() {
   }, [projects, sessions, activeSessionId, activeExternalSession, activateSession])
 
   const activeSession = Object.values(sessions).flat().find((s) => s.id === activeSessionId)
-  const activeSessionName = activeSession?.name || activeSessionId || t('sidebar.noSessions')
+  const agents = useAgentStore((s) => s.agents)
+  const activeSessionName =
+    (activeSession
+      ? sessionDisplayName(activeSession, agents, t('sidebar.unnamed'))
+      : '') ||
+    activeSessionId ||
+    t('sidebar.noSessions')
 
   return (
     <>
@@ -504,6 +519,7 @@ function MobileLayout() {
       {/* Overlays — outside zoom container so popups stay stable during zoom changes */}
       {settingsOpen && <SettingsPopup />}
       {tmuxCheatsheetOpen && <TmuxCheatsheetPopup />}
+      {agentHistoryOpen && <AgentHistoryPopup />}
       {crtScanlines && <div className="crt-overlay" />}
     </>
   )

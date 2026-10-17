@@ -225,6 +225,7 @@ async fn create_session(
             created_at: now,
             runtime_kind: RuntimeKind::Acp,
             acp_session_id: Some(acp_session_id),
+            agent_title: None,
             agent_id: Some(agent_id),
             last_cwd: None,
             archived_at: None,
@@ -299,6 +300,7 @@ async fn create_session(
             created_at: now,
             runtime_kind: RuntimeKind::Pty,
             acp_session_id: None,
+            agent_title: None,
             agent_id: None,
             last_cwd: None,
             archived_at: None,
@@ -371,6 +373,7 @@ async fn create_session(
         created_at: now,
         runtime_kind: RuntimeKind::Tmux,
         acp_session_id: None,
+        agent_title: None,
         agent_id: None,
         last_cwd: None,
         archived_at: None,
@@ -592,7 +595,10 @@ async fn delete_agent_side_record(
 /// 临时拉起兜底的单阶段预算（spawn 握手 / `session/delete` RPC 各一份）：
 /// 与 `agents.rs` 的连接测试同量级（15s）——npx 冷启动类 agent 可能秒级，
 /// 超时按 best-effort 失败处理（`skipped`），绝不无限等。
-const EPHEMERAL_AGENT_TIMEOUT: Duration = Duration::from_secs(15);
+/// 临时拉起短命 agent 的预算（spawn 与 RPC 各一份）。agent 侧删除与 agent 侧
+/// 历史枚举（`session/list`）共用——两者都是「用户点一下、起一个进程、问一句、
+/// 收尸」，都没有常驻连接可依托。
+pub(crate) const EPHEMERAL_AGENT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// 临时拉起一个 agent 子进程（**不注册 supervisor**，与 `agents.rs` 的连接测试
 /// 同形态），现场 gate 能力位后补发 `session/delete`，随后立刻收尾。
@@ -960,6 +966,9 @@ async fn list_messages(
                         // 流式窗口）；0 的 tool_ms 与 null 在前端同样不渲染。
                         "toolMs": row.tool_ms,
                         "tps": row.tps,
+                        // turn 定稿时刻（RFC3339，UTC）。null = 迁移前的历史行；前端
+                        // 底部读数主段「结束于 14:32」据此渲染，null 不渲染。
+                        "finishedAt": row.finished_at,
                     })
                 })
                 .collect();
@@ -1188,6 +1197,7 @@ async fn adopt_session(
         created_at: now,
         runtime_kind: RuntimeKind::Tmux,
         acp_session_id: None,
+        agent_title: None,
         agent_id: None,
         last_cwd: None,
         archived_at: None,
