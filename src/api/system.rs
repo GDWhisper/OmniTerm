@@ -7,7 +7,7 @@ use axum::{
 use semver::Version;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -253,18 +253,19 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
             return (StatusCode::BAD_REQUEST, Json(json!({ "error": "unsupported_channel" })));
         }
         update::Channel::Npm => {
-            match tokio::time::timeout(UPDATE_TIMEOUT, update::npm_upgrade(&exe)).await {
+            match tokio::time::timeout(
+                UPDATE_TIMEOUT,
+                npm_upgrade_and_verify(&exe, &release.version),
+            )
+            .await
+            {
                 Err(_) => {
                     return (
                         StatusCode::GATEWAY_TIMEOUT,
                         Json(json!({ "error": "npm install timed out" })),
                     );
                 }
-                // npm 退出码 0 只代表命令跑完；registry 镜像滞后装回旧版、或多 node
-                // 安装并存时 npm 把新包装进**别的 prefix**（真正承载本进程的安装树
-                // 纹丝不动），退出码都仍是 0。必须校验实际版本，否则报假成功
-                // （重启得到旧版、前端版本监测永远等不到目标上线）。
-                Ok(Ok(_)) => update::verify_installed_version(&exe, &release.version).await,
+                Ok(Ok(())) => Ok(()),
                 Ok(Err(e)) => Err(e),
             }
         }
@@ -303,6 +304,35 @@ async fn run_update(State(_state): State<AppState>) -> (StatusCode, Json<Value>)
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("{e:#}") })))
         }
     }
+}
+
+/// npm 升级 + 装后校验；用户配置的 registry 失败时自动用官方源重试一次。
+///
+/// 镜像同步是逐包异步的：主包已更新、某个平台包（optionalDependencies 分发二进制）
+/// 仍停留在旧版本时，npm 会静默跳过这个 optional dep 并以 0 退出——结果是旧二进制
+/// 被删、新二进制缺失，比升级失败更糟（命令行直接不可用）。校验失败（缺二进制或
+/// 版本未变）后必须自动换官方源重装，不能只把「手动重装」写进错误信息。
+///
+/// 退出码 0 只代表命令跑完；多 node 安装并存时 npm 还可能把包装进别的 prefix，
+/// 也只有版本校验能发现（见 `update::npm_upgrade_args` 的 `--prefix` 说明）。
+async fn npm_upgrade_and_verify(exe: &Path, expected: &Version) -> anyhow::Result<()> {
+    let primary = match update::npm_upgrade(exe).await {
+        Ok(_) => update::verify_installed_version(exe, expected).await,
+        Err(e) => Err(e),
+    };
+    let Err(primary_err) = primary else {
+        return Ok(());
+    };
+    eprintln!(
+        "omniterm-update: npm upgrade via the configured registry failed, retrying the official registry: {primary_err:#}"
+    );
+    update::npm_upgrade_from_official(exe).await?;
+    update::verify_installed_version(exe, expected).await.map_err(|retry_err| {
+        anyhow::anyhow!(
+            "npm upgrade failed via the configured registry ({primary_err:#}) and the \
+             official-registry retry ({retry_err:#})"
+        )
+    })
 }
 
 async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>) {

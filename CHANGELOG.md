@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Fixed
+
+- (2026-10-17 08:35) `[backend]` npm 渠道一键升级：镜像逐包同步滞后（主包有新版、平台包没有）时 npm 会静默跳过 optional 平台包并退出 0，旧二进制已被删除、命令行直接不可用；现在装后校验失败会自动改用官方源重试一次，仍失败才报错并给出官方源重装命令
+
 ## [0.3.1] - 2026-10-17
 
 ### Added
