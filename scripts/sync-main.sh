@@ -22,6 +22,7 @@ BLACKLIST=(
   ".pi"
   ".qoder"
   ".zcode"
+  ".stepcode"
   "AGENTS.md"
   "CLAUDE.md"
   "PROGRESS.md"
