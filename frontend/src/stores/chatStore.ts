@@ -177,6 +177,9 @@ export type SessionUpdateAction =
   | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
   | { kind: 'addUserMessage'; text: string; messageId?: string }
+  /** mid-turn SYSTEM 告知：内联进尾部 assistant 消息（随过程容器折叠）。 */
+  | { kind: 'appendSystemBlock'; label: string; detail?: SystemBlockDetail; noticeId?: string }
+  /** 独立 SYSTEM 消息（turn 失败 / 无活跃 turn 的兜底告知）。 */
   | { kind: 'pushSystem'; label: string; detail?: SystemBlockDetail; noticeId?: string }
   | { kind: 'drop' }
 
@@ -920,6 +923,34 @@ const applyActionsToMessages = (
         blocks: [{ type: 'text', text: action.text }],
         createdAt: Date.now(),
       })
+    } else if (action.kind === 'appendSystemBlock') {
+      const last = next[next.length - 1]
+      const block = {
+        type: 'system' as const,
+        label: action.label,
+        detail: action.detail,
+        ...(action.noticeId ? { noticeId: action.noticeId } : null),
+      }
+      // 同一 noticeId 的帧重复到达（seq 去重之外的第二道守卫）：不重复插块。
+      if (
+        action.noticeId &&
+        last?.role === 'assistant' &&
+        last.blocks.some((b) => b.type === 'system' && b.noticeId === action.noticeId)
+      ) {
+        continue
+      }
+      if (canAttachToTail(last, settled)) {
+        next[next.length - 1] = { ...last, blocks: [...last.blocks, block] }
+      } else {
+        next.push({
+          id: genId(),
+          role: 'assistant',
+          text: '',
+          blocks: [block],
+          createdAt: Date.now(),
+          streaming: !settled,
+        })
+      }
     } else if (action.kind === 'pushSystem') {
       next.push({
         id: genId(),

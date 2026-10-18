@@ -488,7 +488,7 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
       const o = omniSystem as Record<string, unknown>
       if (typeof o['label'] === 'string') {
         return {
-          kind: 'pushSystem',
+          kind: 'appendSystemBlock',
           label: o['label'],
           detail:
             o['detail'] && typeof o['detail'] === 'object'
@@ -950,6 +950,7 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             case 'setUsage':
             case 'setCommands':
             case 'setConfigOptions':
+            case 'appendSystemBlock':
             case 'pushSystem':
               pushLiveAction(action)
               if (liveRaf.current === null) {

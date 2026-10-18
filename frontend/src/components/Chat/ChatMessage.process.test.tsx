@@ -468,7 +468,7 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
-  it('system 块留在容器外（审批必须可见可点）', () => {
+  it('结论前的 system 块随过程容器折叠（只读告知）', () => {
     render(
       processMsg({
         blocks: [
@@ -479,9 +479,11 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
         ],
       }),
     )
-    // system 在容器外原序渲染，不随容器折叠而消失
+    // 定稿态默认收起：容器内的 system 告知随工作块一起隐藏。
     expect(container.querySelector('.process-header-btn')).toBeTruthy()
     const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m1"]')!
+    expect(row.textContent).not.toContain('权限请求')
+    click(processHeader())
     expect(row.textContent).toContain('权限请求')
   })
 
@@ -513,5 +515,23 @@ describe('ProcessBlocks i18n key 齐备', () => {
       expect(zhMap[k], `zh ${k}`).toBeTruthy()
       expect(enMap[k], `en ${k}`).toBeTruthy()
     }
+  })
+})
+
+describe('ProcessBlocks mid-turn SYSTEM 告知归组', () => {
+  it('结论之后的 SYSTEM 告知留在容器外原位（流式顺序不提前）', () => {
+    render({
+      id: 'm-sys-tail',
+      role: 'assistant',
+      text: '最终结论',
+      blocks: [
+        { type: 'thought', text: '先想一下' },
+        { type: 'text', text: '最终结论' },
+        { type: 'system', label: 'test.notice.tail', noticeId: 'n2' },
+      ],
+      createdAt: 0,
+    })
+    // 收纳行收起，但结论后的告知不属于「结论之前」前缀 → 仍原位可见。
+    expect(container.textContent).toContain('test.notice.tail')
   })
 })

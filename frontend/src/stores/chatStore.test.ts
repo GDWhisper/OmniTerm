@@ -1025,6 +1025,38 @@ describe('流式 prose 块合并（thought 分段修复）', () => {
     expect((msg.blocks[0] as { text: string }).text).toBe('t1t2')
     expect((msg.blocks[1] as { text: string }).text).toBe('ab')
   })
+
+  it('mid-turn SYSTEM 告知内联到尾部 assistant，顺序插在 prose 之间', () => {
+    const blocks = replayBlocks([
+      M('before'),
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+      M('after'),
+    ])
+    expect(asTypes(blocks)).toEqual(['text', 'system', 'text'])
+    expect(textAt(blocks, 0)).toBe('before')
+    expect((blocks[1] as { noticeId?: string }).noticeId).toBe('n1')
+    expect(textAt(blocks, 2)).toBe('after')
+  })
+
+  it('mid-turn SYSTEM 告知无 assistant 尾部时新建 assistant（不落独立 system 消息）', () => {
+    const msgs = buildReplayMessages([
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+    ])
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('assistant')
+    expect(msgs[0].blocks).toEqual([
+      { type: 'system', label: 'test.notice', noticeId: 'n1' },
+    ])
+  })
+
+  it('同一 noticeId 的重复告知帧不重复插块', () => {
+    const blocks = replayBlocks([
+      M('a'),
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+    ])
+    expect(asTypes(blocks)).toEqual(['text', 'system'])
+  })
 })
 
 // 迟到帧收敛（settled 模式）：终态帧（prompt_done/prompt_error）之后到达的

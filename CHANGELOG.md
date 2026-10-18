@@ -53,6 +53,10 @@ Prefix each entry with the area it affects:
 
 - (2026-10-18 10:07) `[backend]` `[api]` `[frontend]` 新建项目弹窗的项目路径输入框右侧新增文件夹图标，点击调起**系统原生目录选择器**并用鼠标点选目录（浏览器拿不到绝对路径，故由后端在运行 OmniTerm 的机器上调起：Windows PowerShell `FolderBrowserDialog` / macOS `osascript choose folder` / Linux `zenity` 或 `kdialog`），选中后自动回填并刷新下方目录列表。仅本机（localhost）访问可用，远程请求 403（稳定 code `native_picker_local_only`，前端按 en/zh 本地化提示）并引导改用弹窗内目录浏览器；Linux 需要图形会话与 zenity/kdialog。选择器单飞、10 分钟超时、stdout/stderr 有界、关闭弹窗即取消并关闭对话框
 
+### Changed
+
+- (2026-10-18 11:51) `[frontend]` ACP mid-turn SYSTEM 告知收进过程容器、随工作块一起折叠：live 合成帧由独立 SYSTEM 消息改为直接内联进尾部 assistant 消息（classifier → `appendSystemBlock`）；结论之前的只读 system 块纳入 `ProcessBlocks`，结论之后的仍原位保留。真正的权限审批 banner 在容器外渲染，不受影响（`frontend/src/stores/chatStore.ts`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/components/Chat/ChatMessage.tsx`）
+
 ### Fixed
 
 - (2026-10-18 11:40) `[backend]` `[frontend]` 修复 ACP 会话 mid-turn SYSTEM 消息在刷新 / 重新打开后整批置底：assistant 一行聚合整个 turn，`created_at` 固定在 turn 起点，权限超时告知另起 system 行必然排到整行之后；自动审批又先 resolve 再广播，live 也会晚于后续输出。现将 mid-turn 告知帧内联进当前 assistant turn 的有序帧窗口（独立 system 行保留为窗口驱逐兜底并带 `noticeId`），live 改走与 agent 更新相同的 `session_update` 通道、在 `respond` 之前入队；hydrate / 快照 / 聚焦补拉按 `noticeId` 去重，cooked 回写缺少内联告知时保留原始帧。历史旧 system 行无 turn 内位置锚点，不回填（`src/acp/turn_accumulator.rs`、`src/acp/client.rs`、`src/acp/permission.rs`、`src/acp/reaper.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）

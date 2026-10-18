@@ -1310,12 +1310,18 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**，
   // 2026-10-16 修流式顺序后拆分点收敛为「结论之前」）：
   // 容器收纳**最终 text 结论之前**的一切——过程块（thought / tool_call / plan）+
-  // 夹在过程块之间的中间 text 输出；结论**及其后**的块（含「结论之后又调了工具」
-  // 的收尾过程块）留在容器外**原位**渲染。
+  // 夹在过程块之间的中间 text 输出 + **mid-turn SYSTEM 告知**；结论**及其后**的
+  // 块（含「结论之后又调了工具」的收尾过程块 / 末尾告知）留在容器外**原位**渲染。
   // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
   // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
   // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
-  // system 块必须留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
+  //
+  // assistant 消息里的 system 块也收进容器（2026-10-18 用户要求「SYSTEM 跟随
+  // 工作块折叠」）：这些是权限超时等只读告知，不承载操作按钮；真正的权限审批
+  // banner 在 ChatView 外部渲染（PermissionBanner），不受容器折叠影响。结论之后
+  // 的 system 块仍留外面，维持流式顺序不提前（2026-10-16 规则）。**独立的
+  // `role='system'` 消息**（turn 失败 / 无活跃 turn 兜底）不受影响——整条直接
+  // 渲染，不进过程容器，否则会被默认折叠成只剩一个箭头。
   const streaming = message.streaming ?? false
   const bodyNodes: ReactNode[] = []
   const collected: ProcessEntry[] = []
@@ -1329,7 +1335,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   let containerSlot = -1
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
-    if (b.type === 'system' || (finalTextIdx >= 0 && i >= finalTextIdx)) {
+    if (isSystem || (finalTextIdx >= 0 && i >= finalTextIdx)) {
       bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
       continue
     }

@@ -225,5 +225,6 @@ D2 的载体决策对 **turn 结束类**告知仍然成立：失败提示发生�
 - 活跃 turn 内的告知由 `TurnAccumulator::append_host_update` 追加一帧合成 `session_info_update`（`_meta.omnitermSystem{id,label,detail}`）到当前 turn 的**有序帧窗口**；不参与 `text`/`output_seen`/tps/工具记账。独立 system 行仍落，作为帧窗口驱逐兜底，blocks 带同一 `noticeId`。
 - live 帧改走 `session_update` 同一有序通道；自动审批通过 `PermissionManager::resolve_with` 的 `before_respond` 钩子在 agent 收到应答前入队。
 - 前端 `dropInlinedSystemMessages` 在 hydrate / 上拉前插 / turn_snapshot / 聚焦补拉时按 `noticeId` 去掉重复的独立行；assistant 行解不出该 id（帧被逐出 / 旧数据）时保留独立行。
+- live 合成帧由 classifier 映射为 `appendSystemBlock`，**直接内联进尾部 assistant 消息**（不再铸独立 SYSTEM 消息）；过程容器把「结论之前」的 system 块收进折叠器，随工作块一起折叠（只读告知，不承载按钮；真正的权限审批 banner 在容器外，不受影响）。结论之后的 system 块仍留容器外原位。
 - `sync_messages` 的 cooked 回写增加守卫：载荷缺少已有内联 `noticeId` 时保留原始帧（慢消费者丢帧不静默丢数据）。
 - **历史数据不回填**：旧 system 行没有 turn 内位置锚点，无法无损重排；它们仍在原列表位置，新告知按上述路径有序。
