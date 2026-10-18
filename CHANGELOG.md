@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-18 17:25) `[frontend]` ACP 思考块完成态标题从「思考 · 持续了 N 秒」改为「深度思考」，不再显示思考块自身耗时（turn 级工作时长仍由气泡底部元信息行与收纳行承担）；流式中的「正在思考」扫光标签不变（`frontend/src/components/Chat/ChatMessage.tsx`）
+
 ### Fixed
 
 - (2026-10-18 21:30) `[backend]` `[api]` 修复 GitHub API 匿名配额（60 次/时/IP，共享出口 IP 常被陌生流量耗尽）导致正式版静默收不到更新提醒：版本探测主源失败时按安装渠道降级到无配额限制的版本源（npm → registry.npmjs.org 主包 `dist-tags.latest`、cargo → crates.io `versions[0].num`、github_release → releases 页 302 tag），`/system/version` 不再整小时 502；npm 渠道一键升级在主源失败时同样可降级拿到目标版本继续安装

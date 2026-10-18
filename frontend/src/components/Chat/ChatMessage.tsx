@@ -205,9 +205,6 @@ const THINKING_LINE_MASK_STYLE: CSSProperties = {
   maskSize: '100% 100%',
 }
 
-/** 耗时刷新间隔（毫秒）：展开态每秒给「持续了 N 秒」进位一次。 */
-const THINKING_DURATION_TICK_MS = 1000
-
 /** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
 const PROCESS_HEADER_ICON = '◈'
 
@@ -358,10 +355,6 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   // 思考正文整个吃掉（2026-10-14 实测踩过，见 CHANGELOG 对该条的撤销说明）。
   // 过程块的收纳已由消息级 ProcessBlocks 负责，这里不需要自己再折一次。
   const [open, setOpen] = useState(expandThinking)
-  // 耗时（对齐 ZCode）：流式开始计时、结束时定档。历史块从未见过 streaming=true，
-  // 保持 undefined，折叠态回落到「持续了几秒」。
-  const [durationSec, setDurationSec] = useState<number | undefined>(undefined)
-  const startTimeRef = useRef<number | null>(null)
   // 收起态实时思考行的视口 / 文本节点与溢出标记。
   const lineViewportRef = useRef<HTMLSpanElement | null>(null)
   const lineTextRef = useRef<HTMLSpanElement | null>(null)
@@ -372,28 +365,6 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   const { containerRef: scrollRef, handleScroll: handleInnerScroll, stickToBottom, resetStick } =
     useStickScroll<HTMLDivElement>()
 
-  // 耗时只在展开态每秒刷新：收起态没必要为了一个暂时不显示的数字每秒重渲染
-  // 整块；流式结束那一刻无论展开与否都补算定档。
-  useEffect(() => {
-    if (!streaming) {
-      if (startTimeRef.current !== null) {
-        // max(1, ...)：亚秒流式也要显示「1 秒」而不是「0 秒」。
-        setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
-      }
-      startTimeRef.current = null
-      return
-    }
-    if (startTimeRef.current === null) startTimeRef.current = Date.now()
-    if (!open) return
-    const tick = () => {
-      if (startTimeRef.current === null) return
-      setDurationSec(Math.max(1, Math.ceil((Date.now() - startTimeRef.current) / 1000)))
-    }
-    tick()
-    const timer = window.setInterval(tick, THINKING_DURATION_TICK_MS)
-    return () => window.clearInterval(timer)
-  }, [open, streaming])
-
   // 流式 thinking 文本增长时把内层容器钉在底部。用 useLayoutEffect：绘制前
   // 钉住，避免溢出瞬间先闪一帧顶部内容。
   useLayoutEffect(() => {
@@ -402,7 +373,7 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
   }, [text, open, streaming, stickToBottom])
 
   // 收起态实时思考行：**仅流式期间**显示（对齐 ZCode——完成后折叠态只剩
-  // 「思考 · 持续了 N 秒」，不再显示思考原文），且仅 brief 档。内容是一行
+  // 「深度思考」，不再显示思考原文），且仅 brief 档。内容是一行
   // 未经任何总结的思考原文（最后一个非空行，即正在生长的那一行）。
   const summary =
     streaming && !open && collapsedMode === 'brief' ? resolveThinkingStreamingSummary(text) : null
@@ -436,7 +407,7 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
     if (next) resetStick()
   }
 
-  // 流式且收起 = 「正在思考」+ 扫光；其余（展开中 / 已完成）=「思考 · 耗时」。
+  // 流式且收起 = 「正在思考」+ 扫光；其余（展开中 / 已完成）=「深度思考」。
   const streamingLabel = streaming && !open
 
   return (
@@ -468,14 +439,8 @@ function ThoughtBlockView({ text, streaming, maxWidth }: { text: string; streami
             {t('chat.thinking')}
           </span>
         ) : (
-          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>{t('chat.thought')}</span>
-            <span>·</span>
-            <span>
-              {durationSec === undefined
-                ? t('chat.thoughtDurationFewSeconds')
-                : t('chat.thoughtDurationSeconds', { seconds: durationSec })}
-            </span>
+          <span style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500, color: 'var(--text-muted)' }}>
+            {t('chat.thought')}
           </span>
         )}
         {summary && (
