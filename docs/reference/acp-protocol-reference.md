@@ -586,6 +586,17 @@ Agent 通过多种 `session/update` 通知报告输出：
 | `size` | ✅ | 当前 session 上下文总大小 |
 | `cost` | ❌ | 累计费用，含 `amount`（数字）和 `currency`（ISO 4217） |
 
+#### 多实现差异（实测，勿把单一实现当约定）
+
+`usage_update` 是正式变体但**非强制**：宿主的一切依赖（上下文用量徽章、`sessions.usage_json` 快照）必须能在它永不到达时正常工作。
+
+| 实现 | 是否发送 `usage_update` | 取证 |
+|------|------------------------|------|
+| qodercli 1.1.73 | ❌ 从不发送 | ① 二进制内 `usage_update` 仅 2 处、均为 zod 入站 schema；全部发送点字面量（`sessionUpdate:"agent_message_chunk"` 等 9 种）无它；② 2026-10-18 直连探针（initialize→session/new→session/prompt 完整一轮）只收到 `agent_thought_chunk` / `agent_message_chunk` / `available_commands_update` |
+| pi-acp 0.0.34 | ✅ 发送 | 2026-10-09 空气泡现场：turn 的 `blocks` 含 `usage_update`（见 §6.8 与失败可见性计划） |
+
+另一条**不承载上下文长度**的通道：qodercli 在 `session/prompt` 应答里带非稳定字段 `usage`（`totalTokens`/`inputTokens`/`outputTokens` 等，无上下文窗口大小）。它属于 schema 的 `unstable_end_turn_token_usage` feature，omniterm 用默认 feature 编译，该字段在反序列化即被丢弃；且其 `Usage` 结构本身没有 `size`/窗口字段，拿不到上下文长度。
+
 ### 6.8 停止原因（stopReason）
 
 idle 状态转换结束前台工作时 MUST 包含 stopReason：
