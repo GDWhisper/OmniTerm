@@ -597,6 +597,8 @@ Agent 通过多种 `session/update` 通知报告输出：
 
 另一条**不承载上下文长度**的通道：qodercli 在 `session/prompt` 应答里带非稳定字段 `usage`（`totalTokens`/`inputTokens`/`outputTokens` 等，无上下文窗口大小）。它属于 schema 的 `unstable_end_turn_token_usage` feature，omniterm 用默认 feature 编译，该字段在反序列化即被丢弃；且其 `Usage` 结构本身没有 `size`/窗口字段，拿不到上下文长度。
 
+**实测该字段的值恒为 0**（2026-10-18，qodercli 1.1.73，本机唯一模型 Qwen3.8-Flash / 自定义 `qfmodel`）：短 turn 与 30 行输出的 turn 两次探针，`usage` 均为 `{inputTokens:0, outputTokens:0, totalTokens:0}`，`_meta.quota.model_usage[].token_count` 同样全 0；非 ACP 的 `-p` 模式也不显示 token 计数。即 qodercli 有 schema 形状、无记账数据，不能用作 tps 或计费真值来源。
+
 ### 6.8 停止原因（stopReason）
 
 idle 状态转换结束前台工作时 MUST 包含 stopReason：
