@@ -599,6 +599,8 @@ Agent 通过多种 `session/update` 通知报告输出：
 
 **实测该字段的值恒为 0**（2026-10-18，qodercli 1.1.73，本机唯一模型 Qwen3.8-Flash / 自定义 `qfmodel`）：短 turn 与 30 行输出的 turn 两次探针，`usage` 均为 `{inputTokens:0, outputTokens:0, totalTokens:0}`，`_meta.quota.model_usage[].token_count` 同样全 0；非 ACP 的 `-p` 模式也不显示 token 计数。即 qodercli 有 schema 形状、无记账数据，不能用作 tps 或计费真值来源。
 
+**上下文上限（token 上限）同理不可知悉**。ACP 1.4.0 schema 里唯一承载上下文窗口的字段就是 `UsageUpdate.size`（`client.rs:305`「Total context window size in tokens」），qodercli 从不发送该通知。其余通道逐条实测均无此信息：`session/new` 的 `models`（qoder 厂商扩展）只有 `modelId`/`name`/`description`；`configOptions` 只有 mode / model / reasoning_effort 三项，无上下文窗口选项。唯一存有上限的地方是 qoder 自己的私有配置 `~/.qoder/settings.json` 的 `preferences.<model>.contextWindow`（本机 qfmodel = 400000），属 agent 内部文件、随机器与账号变化，不构成协议通道，宿主不应读取。
+
 ### 6.8 停止原因（stopReason）
 
 idle 状态转换结束前台工作时 MUST 包含 stopReason：
