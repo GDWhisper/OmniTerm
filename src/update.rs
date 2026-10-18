@@ -157,6 +157,14 @@ pub(crate) struct LatestRelease {
     assets: Vec<ReleaseAsset>,
 }
 
+impl LatestRelease {
+    /// 只有版本号、没有 assets 的探测结果（渠道降级源专用）。自更新路径需要
+    /// assets 时必须拿到明确错误，不能拿空列表装出误导性的 "No release asset"。
+    pub(crate) fn version_only(version: Version) -> Self {
+        Self { version, assets: Vec::new() }
+    }
+}
+
 fn repo_slug() -> &'static str {
     env!("CARGO_PKG_REPOSITORY").trim_start_matches("https://github.com/")
 }
@@ -363,6 +371,109 @@ pub(crate) async fn fetch_latest() -> Result<LatestRelease> {
     let version = Version::parse(info.tag_name.trim_start_matches('v'))
         .with_context(|| format!("unexpected release tag: {}", info.tag_name))?;
     Ok(LatestRelease { version, assets: info.assets })
+}
+
+/// GitHub API 主源失败（匿名配额 403 / 不可达）时的**版本探测降级源**：按安装渠道
+/// 查该渠道自己的版本源。三者都不受 GitHub 匿名配额（60 次/时/IP，共享出口 IP
+/// 常被陌生流量耗尽）限制：
+/// - npm → registry.npmjs.org 主包 `dist-tags.latest`（官方源，先于国内镜像）
+/// - cargo → crates.io packument `versions[0].num`（最新 stable）
+/// - github_release → GitHub releases 页 302 `Location` 的 tag（HTML 端点不占 API 配额）
+///
+/// 只回答「最新版本号」，**不带 assets**：探测路径（`/system/version` 的
+/// `update_available`）只需要版本号；自更新路径需要 assets 时会走 fresh 主源查询，
+/// 拿不到就明确报错，而不是拿空 assets 装出误导性的 "No release asset"。
+pub(crate) async fn fetch_latest_version(channel: Channel) -> Result<Version> {
+    let client = reqwest::Client::builder().timeout(HTTP_TIMEOUT).build()?;
+    match channel {
+        Channel::Npm => {
+            // scope 分隔符必须转义：`@gdwhisper/omniterm` 裸斜杠会被 URL 解析成两级路径
+            let spec = npm_package!().replace('/', "%2F");
+            let url = format!("{OFFICIAL_NPM_REGISTRY}/{spec}");
+            let body = client
+                .get(&url)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+                .with_context(|| format!("failed to reach npm registry ({url})"))?
+                .error_for_status()
+                .context("npm registry returned an error")?
+                .text()
+                .await
+                .context("failed to read npm registry response")?;
+            parse_npm_dist_tag(&body)
+        }
+        Channel::Cargo => {
+            let url = format!("https://crates.io/api/v1/crates/{CRATE_NAME}");
+            let body = client
+                .get(&url)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+                .with_context(|| format!("failed to reach crates.io ({url})"))?
+                .error_for_status()
+                .context("crates.io returned an error")?
+                .text()
+                .await
+                .context("failed to read crates.io response")?;
+            parse_crates_newest(&body)
+        }
+        Channel::GithubRelease => {
+            let url = format!("https://github.com/{}/releases/latest", repo_slug());
+            // 要读 Location 拿 tag，不能跟随重定向——重定向策略在 client 上设
+            let client = reqwest::Client::builder()
+                .timeout(HTTP_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()?;
+            let resp = client
+                .get(&url)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+                .with_context(|| format!("failed to reach GitHub releases page ({url})"))?;
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .with_context(|| "GitHub releases page did not redirect to a tag")?
+                .to_str()
+                .context("non-ascii Location header")?;
+            parse_github_tag_location(location)
+        }
+    }
+}
+
+/// npm packument → `dist-tags.latest`。
+fn parse_npm_dist_tag(body: &str) -> Result<Version> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).context("failed to parse npm registry response")?;
+    let tag = value
+        .pointer("/dist-tags/latest")
+        .and_then(|t| t.as_str())
+        .with_context(|| "npm registry response has no dist-tags.latest")?;
+    Version::parse(tag).with_context(|| format!("unexpected npm dist-tag: {tag}"))
+}
+
+/// crates.io packument → `versions[0].num`（接口按最新stable 优先排序）。
+fn parse_crates_newest(body: &str) -> Result<Version> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).context("failed to parse crates.io response")?;
+    let num = value
+        .pointer("/versions/0/num")
+        .and_then(|t| t.as_str())
+        .with_context(|| "crates.io response has no versions[0].num")?;
+    Version::parse(num).with_context(|| format!("unexpected crates.io version: {num}"))
+}
+
+/// `/releases/latest` 的 302 Location → tag 版本号。
+/// 形如 `https://github.com/<owner>/<repo>/releases/tag/v0.3.2`；不含
+/// `/releases/tag/` 的 Location 交给 `Version::parse` 失败，绝不猜版本。
+fn parse_github_tag_location(location: &str) -> Result<Version> {
+    let tag = location
+        .rsplit("/releases/tag/")
+        .next()
+        .with_context(|| format!("unexpected releases redirect: {location}"))?;
+    Version::parse(tag.trim_start_matches('v'))
+        .with_context(|| format!("unexpected release tag: {tag}"))
 }
 
 /// 解析外部命令到**绝对路径**再交给 `Command`，而不是传裸名。
@@ -948,6 +1059,54 @@ mod tests {
         assert_eq!(serde_json::to_value(Channel::GithubRelease).unwrap(), "github_release");
         assert_eq!(serde_json::to_value(Channel::Npm).unwrap(), "npm");
         assert_eq!(serde_json::to_value(Channel::Cargo).unwrap(), "cargo");
+    }
+
+    #[test]
+    fn parse_npm_dist_tag_reads_latest() {
+        // 官方 registry packument 的真实形状（截断）：latest 是权威最新稳定版
+        let body = r#"{"name":"@gdwhisper/omniterm","dist-tags":{"latest":"0.3.2","next":"0.4.0-beta.1"}}"#;
+        assert_eq!(parse_npm_dist_tag(body).unwrap(), Version::parse("0.3.2").unwrap());
+    }
+
+    #[test]
+    fn parse_npm_dist_tag_rejects_missing_or_malformed() {
+        assert!(parse_npm_dist_tag("{}").is_err());
+        assert!(parse_npm_dist_tag(r#"{"dist-tags":{"latest":"not-a-version"}}"#).is_err());
+        assert!(parse_npm_dist_tag("not json").is_err());
+    }
+
+    #[test]
+    fn parse_crates_newest_reads_first_version() {
+        // crates.io packument：versions 按最新 stable 优先排序
+        let body = r#"{"crate":{"name":"omniterm"},"versions":[{"num":"0.3.2"},{"num":"0.3.1"}]}"#;
+        assert_eq!(parse_crates_newest(body).unwrap(), Version::parse("0.3.2").unwrap());
+    }
+
+    #[test]
+    fn parse_crates_newest_rejects_missing_or_malformed() {
+        assert!(parse_crates_newest(r#"{"versions":[]}"#).is_err());
+        assert!(parse_crates_newest(r#"{"versions":[{"num":"v0.3.2"}]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_github_tag_location_parses_tag() {
+        assert_eq!(
+            parse_github_tag_location("https://github.com/GDWhisper/OmniTerm/releases/tag/v0.3.2")
+                .unwrap(),
+            Version::parse("0.3.2").unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_github_tag_location_rejects_non_tag_redirect() {
+        // 登录墙 / 重定向到别处时绝不猜版本——直接失败，由调用方回填主源错误
+        for loc in [
+            "https://github.com/login",
+            "https://github.com/GDWhisper/OmniTerm",
+            "https://github.com/GDWhisper/OmniTerm/releases/tag/not-a-version",
+        ] {
+            assert!(parse_github_tag_location(loc).is_err(), "should reject {loc}");
+        }
     }
 
     #[test]

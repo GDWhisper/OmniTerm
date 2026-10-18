@@ -173,6 +173,18 @@
 
 ---
 
+## 模式 15：探测类请求依赖单一匿名配额 API —— 共享出口 IP 下「没有提醒」本身就是症状
+
+**部署-外部配额**：版本探测（「有没有新版」）这类**非关键路径的旁路请求**，不能只挂在一个有匿名配额限制的 API 上。GitHub REST API 匿名配额 60 次/时/IP，且按 **出口 IP** 计——家用 NAT、公司出口、VPN/代理节点都是大量陌生流量共享的 IP，配额被他人耗尽是常态而非边缘情况。配额耗尽时主源返回 403，链路若无降级源，用户侧症状是「静默无提醒」：徽标不出现、无错误、无日志入口（前端 `silent` + `.catch(() => {})`）。**规律：探测链路必须为「本次安装的渠道」准备一个无配额限制的降级版本源**——npm 渠道问 registry.npmjs.org `dist-tags.latest`、cargo 渠道问 crates.io packument、github_release 渠道问 releases 页 302 `Location` 的 tag（HTML 端点不占 API 配额）。降级只回答「最新版本号」；需要富数据（assets）的自更新路径继续走主源，拿不到就明确报错，不拿空数据造出误导性错误。
+
+**适用**：「检查更新 / 检查新版本」类功能在部分用户处静默失效，而同一时刻服务端与网络都「正常」。**弯路**：① 先怀疑发布侧（tag 没打 / Release 是 draft / npm 没同步），逐个排除后才发现是客户端出口 IP 的匿名配额——发布侧一切正常，`curl` 复现立刻现形（`x-ratelimit-remaining: 0`）；② 把负缓存 TTL（5min）当成根因——配额窗口是 1 小时，5 分钟重试一次只是让失败更密集；③ 只测「接口通不通」——主源 403 时接口返回的是业务错误（502），不是网络错误，ping / 端口探测全部正常。取证：对 `https://api.github.com/rate_limit` 看 `x-ratelimit-remaining`，与实际运行实例的 `/system/version` 响应对照（502 = 主源失败且无降级）。
+
+**案例证据**：
+- 2026-10-18 v0.3.2 发布约 1 小时后，正式版（npm 渠道 v0.3.1）未出现更新提醒。`/api/v1/system/version` 返回 502「GitHub API rate limit reached」，`rate_limit` 显示出口 IP 54.241.214.252 的 `remaining: 0`（共享 VPN 出口，陌生流量耗尽配额）；同刻 npm 官方源 `dist-tags.latest` 已是 0.3.2。修复：`update::fetch_latest_version(channel)` 按渠道降级（npm/crates.io/releases 页），探测链路不再依赖 GitHub 匿名配额。
+- 同族前兆：2026-10-18 同机 `cargo publish` 连续 408——慢速出口链路上传 1.6MB crate 超边缘超时。都是「出口链路质量假设为无限」的同源错误，只是表现不同（配额 vs 带宽）。
+
+---
+
 ## 未入库记录（无理论，仅存案例）
 
 以下记录提取不出可复用规律，按「无理论不入库」纪律不设模式，仅留案例供追溯（git 可查详情）：
