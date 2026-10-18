@@ -541,6 +541,24 @@ crates.io 与 npm 的关键差别：**上传失败不烧版本号**，同一版�
 
 **⚠️ node_modules 误打包陷阱（0.1.9 实测）：** `include` 里裸写 `README.md` / `LICENSE.md`（无 `/` 前缀）会按 gitignore 语法在**任意层级**匹配，把 `frontend/node_modules` 下约 1080 个同名文件打进 crate（2.6M/1168 文件）。根级文件**必须加 `/` 前缀**锚定。发布前用 `tar tzf target/package/omniterm-<ver>.crate | grep -c node_modules` 验证为 0。
 
+### crates.io 上传超时（408 / "less than 10 bytes/sec"）
+
+本机国际出口上行只有 ~30–40 KB/s（实测 httpbin PUT 1.6MB：直连 35 KB/s、HTTP 代理 28 KB/s、SOCKS5 39 KB/s），而 crate 压缩后 ~1.6MB，完整上传要约 45–60s。cargo 默认 `CARGO_HTTP_TIMEOUT=30` 会先报 `Timeout was reached (Operation too slow...)`；放大该值后 crates.io 边缘（Heroku/Fastly）等待整个请求体会返回 `HTTP 408`。两种表现都是同一根因：链路慢，不是仓库或凭据问题。
+
+**v0.3.2 实测**：连续 4 次失败（2 次客户端 30s 超时 + 2 次服务端 408），第 6 次（SOCKS5 代理 + `CARGO_HTTP_TIMEOUT=900`）成功——吞吐在 28–40 KB/s 间波动，重试有机会撞上更快的窗口。
+
+**做法：**
+1. 失败后先确认 crate 没上去再重试（crates.io 发布是原子的，重复发同一版本只会报 already exists，安全）：
+   ```bash
+   curl -s -H "User-Agent: <任意>" https://crates.io/api/v1/crates/omniterm/<ver> | grep -q "does not have a version" && echo "未发布，可重试"
+   ```
+2. 重试时同时放大客户端超时并走 SOCKS5（实测三者中最快）：
+   ```bash
+   https_proxy=socks5h://127.0.0.1:7897 http_proxy=socks5h://127.0.0.1:7897 \
+     CARGO_HTTP_TIMEOUT=900 cargo publish --allow-dirty
+   ```
+3. 连续多次 408 仍上不去 → 换网络（如让 CI 或用户在网络更好的机器上发），不要改 tag 或版本号。
+
 ### GitHub Release notes 缺少用户友好总结
 
 `release.yml` 用 `body_path: .github/release-notes.md` 读取发布说明。若打 tag 前没生成该文件（见 Step 6），CI 会失败；若只是内容敷衍，Release 页就只剩骨架无亮点。
