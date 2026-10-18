@@ -432,6 +432,23 @@ Rules:
 | 禁用 | `opacity: 0.45` + `cursor: not-allowed`（`.pixel-press:disabled` 无阴影） |
 | 取消 | 24×24 图标按钮（`IconX`），样式与行内 action 按钮一致 |
 
+### 6.4 全局浮层级（z-index 阶梯）
+
+跨组件叠放的浮层必须落在同一张阶梯上。**新增全局浮层前先对照本表选层**，
+不要随手写魔法数；同层两个浮层同时可见时 DOM 顺序决定胜负（portal 挂
+`document.body` 末尾者居上），跨层必须留出明确差：
+
+| 层 | z-index | 归属 | 备注 |
+|----|---------|------|------|
+| 1 | 50 | Modal 蒙版 + 弹窗（`Modal.tsx`，portal） | 唯一弹窗层；报错提示不得低于它 |
+| 2 | 60 | 右下角 toast（`Toast.tsx`） | **必须 > 50**：弹窗内触发的报错要被看见（用户实测报错被蒙版盖住） |
+| 3 | 199 / 200 | 会话行上下文菜单遮罩 / 菜单（`SessionContextMenu.tsx`，portal） | 遮罩透明，仅拦指针 |
+| 4 | 9999 | CRT 扫描线（`.crt-overlay`，`pointer-events: none`） | 纯装饰，恒最上 |
+| 4 | 10000 | tmux 健康告警横幅（`TmuxHealthAlert.tsx`）/ DialogueToast（`.dialogue-toast`） | 持久告警与 RPG 对话 |
+
+（层内数值散落在组件与 `index.css`，尚未收敛成 token；改动任一层前先
+grep 全量 `z-index` / `z-` 对照本表，避免新浮层与既有层撞车。）
+
 ---
 
 ## 7. Game UI Elements
@@ -528,6 +545,7 @@ assistant 气泡底部一条 `flex-wrap` 行：动作栏靠左、耗时与 tps �
 - 两者共用 `CHAT_META_TEXT_STYLE`（`0.769em` + reader 字体 + `tabular-nums`）。右侧对齐的 `marginLeft:auto` / `textAlign:right` 只加在结算值上。
 - **流式实时读数固定单行**（2026-10-14 用户报告窄正文块下三段堆成三行）：三个读数段全 nowrap，而行宽实测自最后一个正文块——它是窄工具卡 / 刚起的文本泡时三段放不下，`flex-wrap` 会拆成一行一段，且正文变宽过程中 3→2→1 行重排（观感抖动）。故流式期整行以 `min-width:max-content` 托到单行内容宽度（窄气泡下允许横向超出气泡）。**结算值不托**：仍按「动作栏 + 结算值放不下才换行」，右缘贴气泡；元信息文字窄屏折行规则只对结算值生效。
 - 实时态只在 `message.streaming` 且该会话有在建 turn 时出现；动作栏此时恒空（五个动作的 `visible` 全部硬排 streaming），定稿瞬间同一槽位被结算值替换——**不给两个数字并排的机会**。
+- **实时读数全会话只渲染一次：挂在最后一条 assistant 消息底部**（2026-10-18 用户报告同一 turn 出现多行相同读数）。`turn_stats` 是会话级读数，同一 turn 会被 system 通知 / 工具卡切成多条 streaming 消息；逐条渲染会在消息流里重复同一组「工作中 … · 工具 … · … tok/s」。非最后一条 streaming 消息不渲染元信息行（连空的量宽行也不留）。
 - **结算段的显示门控是 `finished_at`（E25）**：为 NULL（迁移前的历史行）→ 结算段整段不渲染，不回退「已工作」（用户拍板历史数据不兜底）；同一批存量行的工具/速率段与 hover 说明随之消失，工作时长仍保留在收纳行标题。
 - **读数文案不带「约 / 估算」前缀，性质说明收在 hover 浮层**（2026-10-15 用户要求「hover 时诚实简单地说清楚」）：工具耗时与 tps 都是 omniterm 自己算的——ACP 不返回真实 token 速率、也不上报工具耗时（`usage_update` 只有上下文配额，见 `docs/reference/acp-protocol-reference.md` §6.7），tps = 观测到的正文与思考字符 ÷ 4 ÷ 模型真正在流式输出的时段（burst 白名单，E20），工具耗时 = 执行并集按封口测量（E18/E19）。详细口径见工作时长计划 E13–E20/E23，文案翻盘见 E24。
 - **hover 浮层：一句文案 + OmniTerm 风格**（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」+「复用 OmniTerm 风格，不要浏览器原生白底」）。此前是两条上百字的长 tooltip（计算口径、并行工具去重、审批扣除、落库/刷新说明）外加一遍读数复述，**全部收敛为一句** `chat.msg.omniComputed`：zh「ACP 不提供该数据，由 OmniTerm 计算」/ en「ACP does not provide this data; OmniTerm computes it」。
@@ -640,7 +658,7 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 上一节管的是**单个思考块**自己的折叠；本节管的是**整轮过程的收纳**：把一条 assistant 消息里除最终结论外的一切收进同一个折叠器——过程块（`thought` / `tool_call` / `plan`）与夹在过程块之间的中间 `text` 输出。折叠态只留**一行摘要**，最终 `text` 结论（流式中正在生长的那段）留在容器外始终可见。目标是「流式输出完成后把整个过程收纳起来，只显示最终结论」（2026-10-14 用户要求）。
 
-**收纳行标题主体是工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」），而非状态词——秒数在跳即表达「进行中」、定格即表达「已完成」，不需要另设一套状态文案。复用 `chat.msg.workTime`（与气泡底部元信息行同一读数、同一措词），不新造键；流式中走实时读数（`ProcessWorkElapsed`，同 `LiveWorkElapsed` 的「定时器直写 DOM」手法，只显示工作时长一段），定稿后用 `message.durationMs` 算出的结算值。无 `durationMs` 的历史行不硬造 0 秒标题，整段撤掉只留计数。
+**收纳行标题主体是结算后的工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」）。复用 `chat.msg.workTime`，不新造键；**流式期不显示时长**——实时时长由气泡底部元信息行唯一承担（会话级 `turn_stats` 若在收纳行也订阅，同一 turn 的多条 streaming 消息会重复显示同一个「已工作」，2026-10-18 用户报告）；流式期收纳行只留计数段。定稿后用 `message.durationMs` 算出的结算值（同一 turn 的多条 streaming 消息中只有最后一条拿到该值，见 work-time 计划 E26）。无 `durationMs` 的历史行不硬造 0 秒标题，整段撤掉只留计数。
 
 **交互**（对齐 ZCode 容器型工具 `ToolCallBlocks/renderers/agent.tsx` + `ToolLayout.tsx`）：
 
@@ -651,7 +669,7 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 | 用户手动干预后 | 自动规则不再覆盖（`userInteractedRef`，展开与收起都算干预） |
 | 历史消息 | 挂载即收起（收纳） |
 
-**计数聚合是次要信息，不罗列**（对齐 ZCode `formatExploreSummary` 把子调用按 search/list/file 计数），接在时长后用 `·` 分隔：「已工作 1分钟35秒 · 思考 1 · 工具调用 2 · 计划 1」。比把每个块名列一遍短，也不会随块数增长而无限变长；只收非零段。流式中时长段借 §7.9 的扫光 class 家族（独立成 `.process-shimmer`），定稿后回落 `--text-muted`（同 `ToolLayout` 对 `kindLabel` 的处理理由：非运行态保持最浅文本色，避免摘要喧宾夺主）。
+**计数聚合是次要信息，不罗列**（对齐 ZCode `formatExploreSummary` 把子调用按 search/list/file 计数），接在时长后用 `·` 分隔：「已工作 1分钟35秒 · 思考 1 · 工具调用 2 · 计划 1」。比把每个块名列一遍短，也不会随块数增长而无限变长；只收非零段。流式期没有时长段（唯一实时显示在气泡底部），定稿后时长段回落 `--text-muted`（同 `ToolLayout` 对 `kindLabel` 的处理理由：非运行态保持最浅文本色，避免摘要喧宾夺主）。
 
 **与两个既有开关不同层、不冲突**——这是最容易搞混的地方：
 
@@ -669,7 +687,7 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 - `system` 块**必须**留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
 - **纯文字回复**（无过程块、无中间输出）不出现收纳行，行为与加容器前完全一致。此时计数段可能全零（一轮只有中间文字），摘要只剩时长段与箭头——正是 ZCode 参照的「已工作 19 分 35 秒 ›」形态，故不写兜底文案。
 
-**排版**：收纳行与思考块标题行同款规格（reader 字体 / `0.846em` / `--text-faint` / `opacity 0.9`，`max-w` + `min-w-0` 让长摘要被气泡宽度收口），字形 `◈`——与思考块的 `◆` **同族不同形**，避免两块视觉混淆。样式在 `index.css` 的 `.process-header-btn` / `.process-summary-text` / `.process-chevron` / `.process-shimmer`；箭头**刻意不复用** `.thinking-chevron`——后者的 hover 联动写死了 `.thinking-header-btn:hover`，套过来会连带思考块的规则。收纳行带 `data-chat-body`，参与 §7.9 那条气泡右缘测量。
+**排版**：收纳行与思考块标题行同款规格（reader 字体 / `0.846em` / `--text-faint` / `opacity 0.9`，`max-w` + `min-w-0` 让长摘要被气泡宽度收口），字形 `◈`——与思考块的 `◆` **同族不同形**，避免两块视觉混淆。样式在 `index.css` 的 `.process-header-btn` / `.process-summary-text` / `.process-chevron`；箭头**刻意不复用** `.thinking-chevron`——后者的 hover 联动写死了 `.thinking-header-btn:hover`，套过来会连带思考块的规则。收纳行带 `data-chat-body`，参与 §7.9 那条气泡右缘测量。
 
 **容器必须是 flex column，与消息行 `.chat-msg-row` 同一格式化上下文**（2026-10-15 用户报告「工具调用信息位置错乱，复制按钮也是乱的」，实测修复）：容器刚加上时是普通块级 `div`，而它装的明细块分两种显示类型——`ToolCallBlockView` 根节点是 `display: inline-flex`、`ThoughtBlockView` / `PlanBlockView` 是普通块级 `div`。在块容器里前者**退化成行内级**：与收纳行标题挤进同一行、按基线对齐产生纵向错位，长卡再折到下一行（结构复现实测：收纳行 `y=89` 而工具卡 `y=82`、`x=356`，紧贴标题右侧）；后者铺满容器宽，把块级复制角标甩到容器远右缘。故容器立成 `display:flex; flex-direction:column; align-items:flex-start; gap`（`gap` 与消息行同用 `MSG_ROW_GAP`），三类明细块都被块化成 flex item——各自 shrink-to-fit、按行堆叠，与加容器前直接挂在消息行下完全一致。`align-items` 不能省：缺了它明细块会被拉成整宽，复制角标重新甩到远右缘。
 

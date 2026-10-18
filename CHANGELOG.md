@@ -49,8 +49,14 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-18 10:07) `[backend]` `[api]` `[frontend]` 新建项目弹窗的项目路径输入框右侧新增文件夹图标，点击调起**系统原生目录选择器**并用鼠标点选目录（浏览器拿不到绝对路径，故由后端在运行 OmniTerm 的机器上调起：Windows PowerShell `FolderBrowserDialog` / macOS `osascript choose folder` / Linux `zenity` 或 `kdialog`），选中后自动回填并刷新下方目录列表。仅本机（localhost）访问可用，远程请求 403（稳定 code `native_picker_local_only`，前端按 en/zh 本地化提示）并引导改用弹窗内目录浏览器；Linux 需要图形会话与 zenity/kdialog。选择器单飞、10 分钟超时、stdout/stderr 有界、关闭弹窗即取消并关闭对话框
+
 ### Fixed
 
+- (2026-10-18 11:36) `[frontend]` 修复右下角 toast 提示被弹窗半透蒙版遮住（用户报告：新建项目弹窗触发报错时，蒙版后的 toast 看不清）。根因是 `ToastContainer` 与 `Modal` 蒙版同为 `z-50`，而 Modal 经 `createPortal` 挂到 `document.body` 末尾——同层时 DOM 顺序后者居上，蒙版连同样本的报错一起盖住。toast 层升到 `z-[60]`（严格高于 Modal 层，仍低于 CRT 扫描线 9999 与 tmux 健康告警 10000），全局浮层级阶梯补记到 ui-style-guide §6.4（`frontend/src/components/Toast/Toast.tsx`）
+- (2026-10-18 10:14) `[frontend]` 修复 ACP 进行中 turn 的时间 / tok/s 读数重复显示：`turn_stats` 是会话级读数，同一 turn 被 system 通知或工具卡切成多条 streaming 消息时，每条气泡底部都渲染同一组「工作中 … · 工具 … · … tok/s」。现实时读数只挂最后一条 assistant 消息底部；收纳行流式期不再重复显示时长；`markDone` 的结算读数也只落到该 turn 的最后一条消息（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/stores/chatStore.ts`）
 - (2026-10-17 08:35) `[backend]` npm 渠道一键升级：镜像逐包同步滞后（主包有新版、平台包没有）时 npm 会静默跳过 optional 平台包并退出 0，旧二进制已被删除、命令行直接不可用；现在装后校验失败会自动改用官方源重试一次，仍失败才报错并给出官方源重装命令
 
 ## [0.3.1] - 2026-10-17

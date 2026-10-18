@@ -14,8 +14,12 @@ export function ToastContainer() {
 
   if (toasts.length === 0) return null
 
+  // z-index 必须严格高于 Modal 蒙版层（z-50）：Modal 经 createPortal 挂到
+  // document.body 末尾，与 toast 同为 z-50 时 DOM 顺序后者居上，蒙版会把 toast
+  // 整块盖住（用户实测：新建项目弹窗触发报错时右下角提示被半透蒙版遮住看不清）。
+  // 仍远低于 CRT 扫描线（9999）与 tmux 健康告警横幅（10000），不抢它们的层级。
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm" aria-live="polite">
+    <div className="fixed bottom-4 right-4 z-[60] flex flex-col gap-2 max-w-sm" aria-live="polite">
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} onDismiss={removeToast} />
       ))}
