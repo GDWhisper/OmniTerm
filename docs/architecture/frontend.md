@@ -159,6 +159,15 @@ Sidebar 底部按钮 → 弹出面板（sidebar-popup 约定，见 frontend-patt
 - **§8 降级**：`title` 缺省 → 回落 session_id 截断（不显示空行）；agent 不支持 `session/list`（如实测 codebuddy 回 `-32601`）→ 显示 agent 原文错误 + 提示，**不是空白列表**（空白会被读成「你没有历史」）；`truncated=true` → 顶部明示「看到的是截断后的列表」。
 - **顺带收益**：后端把命中行的 `agent_title` 回填进 omniterm 自己的会话行，故打开一次面板会让侧栏里「懒得命名」的会话从默认名变成 agent 起的标题（用户手写过的名字不受影响）。
 
+## 新建项目：原生目录选择器（2026-10-18）
+
+`CreateProjectModal` 路径输入右侧新增 `IconFolder` 按钮（i18n `sidebar.pickDirectory`）→ `api.pickDirectory(initialDir, signal)` → `POST /system/pick-directory`。对话框由后端在**运行 OmniTerm 的机器**上打开（浏览器拿不到所选目录的绝对路径），因此**仅 localhost 访问可用**：远程请求返回 403（稳定 code `native_picker_local_only`），该请求走 `silent` 并由弹窗映射到 `sidebar.pickDirectoryLocalOnly` 的 en/zh 文案，用户回退到弹窗内已有的目录浏览器。
+
+- 起始目录 = 输入框当前值（不存在时后端回溯到最近存在的祖先目录）。
+- 成功回填时反斜杠统一为 `/`、去尾斜杠后补一个 `/`——Windows 路径兼容现有 `getParentPath`/自动补全，并让下方目录列表立即展示所选目录的子目录。
+- `AbortController` 挂在关闭弹窗/卸载：请求取消 → 后端 handler future 丢弃 → `kill_on_drop` 终止子进程并关闭原生对话框。
+- 图标在 `picking` 期间禁用；用户取消静默，其余错误由 api wrapper 统一 toast。
+
 ## ACP Chat View (Phase 4a)
 
 Session pane splits on `Session.runtime_kind`:

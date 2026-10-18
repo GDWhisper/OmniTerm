@@ -8,6 +8,7 @@ mod fs;
 mod git;
 mod health;
 mod models;
+mod native_picker;
 mod presets;
 mod process_identity;
 mod proxy;

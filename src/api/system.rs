@@ -1,19 +1,22 @@
 use axum::{
     Json, Router,
-    extract::{Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
 use semver::Version;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::AppState;
+use crate::auth::local_access::is_local_request;
 use crate::fs::{self, SortKey};
+use crate::native_picker::{self, PickError, PickOutcome};
 use crate::update;
 
 pub fn routes() -> Router<AppState> {
@@ -21,11 +24,75 @@ pub fn routes() -> Router<AppState> {
         .route("/system/info", get(system_info))
         .route("/system/dirs", get(list_dirs))
         .route("/system/exists", get(check_exists))
+        .route("/system/pick-directory", post(pick_directory))
         .route("/system/multiplexer", get(multiplexer_status))
         .route("/system/tmux/mouse", get(get_mouse_mode).post(set_mouse_mode))
         .route("/system/version", get(version_check))
         .route("/system/update", post(run_update))
         .route("/system/restart", post(run_restart))
+}
+
+#[derive(Deserialize)]
+struct PickDirectoryRequest {
+    /// 仅作为对话框起始目录；不存在时后端回溯到最近存在的祖先目录。
+    #[serde(default)]
+    initial_dir: Option<String>,
+}
+
+/// 调起运行 OmniTerm 的机器上的系统目录选择器。
+///
+/// 只在浏览器与后端同机时有意义：远程访问时对话框会开在服务器上，用户既看不到
+/// 也无法操作。故复用本地免密判据（`is_local_request`）显式拒绝远程请求。
+async fn pick_directory(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(req): Json<PickDirectoryRequest>,
+) -> (StatusCode, Json<Value>) {
+    if !is_local_request(&headers, Some(addr)) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                // 稳定协议值：前端据此把提示本地化（勿只按 403 判断——
+                // auth 中间件也可能返回 403）。
+                "code": "native_picker_local_only",
+                "error": "The native folder picker is only available when OmniTerm is opened locally (localhost). Use the directory browser in the dialog instead."
+            })),
+        );
+    }
+
+    // 单飞：系统对话框是模态的，并发请求只会叠加窗口。
+    let Ok(_guard) = native_picker::PICK_LOCK.try_lock() else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "A folder picker is already open." })),
+        );
+    };
+
+    let initial = req
+        .initial_dir
+        .as_deref()
+        .filter(|path| path.len() <= native_picker::MAX_INITIAL_DIR_BYTES)
+        .map(Path::new);
+
+    match native_picker::pick_directory(initial).await {
+        Ok(PickOutcome::Selected(path)) => {
+            (StatusCode::OK, Json(json!({ "path": path.to_string_lossy() })))
+        }
+        Ok(PickOutcome::Cancelled) => (StatusCode::OK, Json(json!({ "cancelled": true }))),
+        Err(error) => {
+            // HTTP 响应只回到当前标签页；daemon 日志是远程实例唯一的事后证据。
+            eprintln!("omniterm-picker: {error:?}");
+            let (status, message) = match error {
+                PickError::Unsupported(message) => (StatusCode::NOT_IMPLEMENTED, message),
+                PickError::TimedOut => (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "The folder picker timed out without a selection.".to_string(),
+                ),
+                PickError::Failed(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+            };
+            (status, Json(json!({ "error": message })))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -387,5 +454,56 @@ async fn run_restart(State(state): State<AppState>) -> (StatusCode, Json<Value>)
                 "message": "automatic restart is not supported on this platform"
             })),
         )
+    }
+}
+
+#[cfg(test)]
+mod picker_tests {
+    use super::*;
+    use axum::http::{HeaderValue, header};
+
+    fn loopback_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:9777"));
+        headers
+    }
+
+    fn loopback_peer() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50_000)))
+    }
+
+    fn request() -> Json<PickDirectoryRequest> {
+        Json(PickDirectoryRequest { initial_dir: None })
+    }
+
+    #[tokio::test]
+    async fn rejects_non_loopback_peer() {
+        let peer = ConnectInfo(SocketAddr::from(([192, 168, 5, 216], 50_000)));
+        let (status, body) = pick_directory(peer, loopback_headers(), request()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body.0["code"].as_str(), Some("native_picker_local_only"));
+    }
+
+    #[tokio::test]
+    async fn rejects_non_loopback_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("omniterm.example.com"));
+        let (status, _) = pick_directory(loopback_peer(), headers, request()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn rejects_proxy_forwarded_requests() {
+        let mut headers = loopback_headers();
+        headers.insert("x-forwarded-for", HeaderValue::from_static("1.2.3.4"));
+        let (status, _) = pick_directory(loopback_peer(), headers, request()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_second_concurrent_picker() {
+        let _held = native_picker::PICK_LOCK.lock().await;
+        let (status, _) = pick_directory(loopback_peer(), loopback_headers(), request()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
     }
 }

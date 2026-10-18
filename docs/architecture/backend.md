@@ -38,6 +38,7 @@ src/
 ├── auth/mod.rs           # JWT token creation/verification（sub = 用户名，含 token_version 吊销校验）、verify_request（auth 总开关 → 本地免密 → token 三序判定）、require_auth_mw 中间件、normalize_username、登录限流 LoginGuard
 ├── auth/local_access.rs  # 本地免密判据（D3）：is_local_request 四条件纯函数 + is_loopback_host（与 main.rs::enforce_listen_auth 收敛共用）
 ├── models/               # SQLx-derived structs: User, Project, Session, Agent
+├── native_picker/        # 系统原生目录选择器（新建项目路径）：Windows PowerShell / macOS osascript / Linux zenity|kdialog；单飞锁 + 10 分钟超时 + 有界输出，见「原生目录选择器」
 ├── proxy/                # 端口转发反向代理：路径前缀 /proxy/{port}/{*path} + 子域名 {port}.{base}（P1 HTTP 转发 + P2 WS relay）
 │   ├── mod.rs            # ProxyState（reqwest client + self_port + base_host）、routes、proxy_handler（WS/HTTP 分流）、proxy_host_mw（子域名 Host 路由）、parse_proxy_host、端口白名单、header 重写纯函数 + 单测
 │   └── ws.rs             # WS 双向 relay：connect_async 上游 + 四任务双向 + mpsc(64) 有界队列
@@ -353,6 +354,11 @@ WS   /api/v1/ws/acp/{session_id}       # ACP session update stream + prompt/canc
 WS   /api/v1/ws/terminal/external/{tmux_name}  # 外部（未收养）会话接管；无需 DB 记录
 GET  /api/v1/files/watch (SSE)   # 实时目录变更推送；watch 树**手动递归注册**（跳过 node_modules/.git/target/隐藏目录，见「File watcher」小节）
 GET  /api/v1/system/info              # home_dir + multiplexer（unix="tmux" / windows="psmux"，编译期 cfg 确定，前端展示用）
+POST /api/v1/system/pick-directory    # 调起运行 OmniTerm 的机器上的系统目录选择器（受保护 + is_local_request 本机限定）
+                                      # body {initial_dir?}（不存在时回溯到最近存在的祖先目录）；
+                                      # 200 {path} | {cancelled:true}；403 非本机（body.code = "native_picker_local_only"） / 409 已有选择器打开 /
+                                      # 501 平台或图形会话不支持 / 504 超时（10 分钟）
+                                      # 实现与平台差异见「原生目录选择器」
 GET  /api/v1/system/version           # 版本检查（进程内缓存 GitHub latest，成功 1h/失败 5min；附 container/pending_restart 标记）
 POST /api/v1/system/update            # 一键升级（github_release 自替换 / npm 代跑并校验装后版本——镜像滞后装回旧版即报错而非假成功；cargo 返回 400；成功后标记待重启）
 POST /api/v1/system/restart           # 手动重启（Unix 调度 ACP 回收并 exec 新二进制替换）
@@ -367,6 +373,22 @@ ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
 
 **上传（POST /api/v1/files）**：multipart 字段流式写盘（`fs::write_file_stream`），不整文件进内存；先写同目录隐藏临时文件 `.{文件名}.omniterm-upload-{uuid}.tmp`（点前缀使 files_watch 忽略），全部完成才 rename 到目标——失败（超限/读错/写错）删临时文件、**已有目标文件保持原样**，与旧「整体读入成功才写盘」语义对齐。单请求内容总量受 `--max-upload-body`/`OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，`AppState.max_upload_body`）约束，超限返回 413 + 文案 `upload exceeds max size … (aborted at …)`；axum 层限额 = 该值 +1MiB 封装余量，保证超限先由应用层计数触发（否则 multipart 解析层只吐含混的 parse error）。
+
+## 原生目录选择器（`src/native_picker/`）
+
+浏览器无法把用户所选目录的绝对路径暴露给 JS（File System Access API 只返回句柄），因此「新建项目」的图形化目录选择由后端在 **运行 OmniTerm 的机器** 上调起系统对话框，再把路径返回前端。
+
+**本机限定**：对话框只会出现在服务器所在机器上，远程访问时用户看不到也无法操作。handler 复用本地免密判据 `auth::local_access::is_local_request`（四条件），非本机请求直接 403 并返回稳定协议值 `code: "native_picker_local_only"`；前端据此（而非仅按 403——auth 中间件也可能返回 403）toast en/zh 本地化文案，提示改用弹窗内的目录浏览器。该接口在受保护路由组内，auth 启用时仍需登录。
+
+**平台差异**（AGENTS §8）：
+
+| 平台 | 实现 | 关键约束 |
+|---|---|---|
+| Windows | PowerShell `-STA -EncodedCommand`（固定脚本 UTF-16LE base64）+ `System.Windows.Forms.FolderBrowserDialog` | 起始目录经环境变量传入，不拼脚本；输出路径按 UTF-8 字节直写 stdout（绕开 OEM 代码页）；取消 exit 10，与 PowerShell 未捕获异常的 exit 1 区分；`CREATE_NO_WINDOW` 隐藏控制台 |
+| macOS | `osascript` + `choose folder` | 起始目录经 `system attribute` 读取；用户取消（error -128）返回 `OMNITERM_CANCELLED` 标记；`POSIX path of` 带尾斜杠 |
+| Linux | `zenity` 优先，回退 `kdialog` | 需要 `DISPLAY` 或 `WAYLAND_DISPLAY`；zenity 起始目录用 `--filename=<dir>/`（尾斜杠=进入目录），kdialog 用位置参数；`exit 1 + stdout 为空` = 取消（stderr 仍记日志）；两者都缺失 → 501 并给出安装提示 |
+
+**资源边界**：同一时刻只允许一个对话框（`PICK_LOCK` 单飞，409）；整体 10 分钟超时（504）；stdout/stderr 分别 128 KiB / 4 KiB 封顶，超限杀进程（P1，不用 `Command::output()` 无界收集）；子进程 `kill_on_drop`，浏览器断开/关闭弹窗时随 handler future 丢弃而终止。返回路径必须绝对、存在、为目录且严格 UTF-8；只剥离行尾 `\r\n`，不 blanket-trim（Unix 目录名允许首尾空格）。`initial_dir` 超 8 KiB 直接忽略。
 
 ## WS Origin 校验（CSWSH 防御，收敛点）
 

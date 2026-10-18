@@ -55,6 +55,10 @@ export function CreateProjectModal(props: {
     reason: 'exact_path' | 'worktree_child'
   } | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [picking, setPicking] = useState(false)
+  // 原生选择器请求的取消句柄：关闭弹窗/卸载时 abort，后端随 future 丢弃
+  // kill_on_drop 子进程，系统对话框随之关闭。
+  const pickAbortRef = useRef<AbortController | null>(null)
 
   // Real-time path autocomplete — debounced fetch on every keystroke.
   // Parses the input: "/home/pax/Om" → list "/home/pax/" and filter by "Om".
@@ -90,8 +94,17 @@ export function CreateProjectModal(props: {
     }
   }, [open, homeDir, reset])
 
+  useEffect(() => {
+    return () => {
+      pickAbortRef.current?.abort()
+    }
+  }, [])
+
   // Unified close: clear form + browse state
   const closeCreateProj = () => {
+    pickAbortRef.current?.abort()
+    pickAbortRef.current = null
+    setPicking(false)
     props.onClose()
     setProjName('')
     // 置空而非 homeDir + '/'：让下次打开时 projPath 从 '' 变化到
@@ -101,6 +114,44 @@ export function CreateProjectModal(props: {
     setBrowsePath('')
     reset()
     setAutocompleteActiveIndex(-1)
+  }
+
+  // 调起运行 OmniTerm 的本机上的系统目录选择器；远程访问由后端 403。
+  const handlePickDirectory = async () => {
+    // ref 是同步守卫：连点两下不会在后端叠加两个模态对话框。
+    if (pickAbortRef.current) return
+    const controller = new AbortController()
+    pickAbortRef.current = controller
+    setPicking(true)
+    try {
+      const result = await api.pickDirectory(
+        projPath.trim() || homeDir,
+        controller.signal,
+      )
+      if (!result.cancelled && result.path) {
+        // 统一为 `/` 分隔并补尾斜杠：下方目录列表会立即展示所选目录的子目录
+        // （Windows 返回 `C:\...`，现有 getParentPath/自动补全只认 `/`）。
+        const normalized = result.path.replace(/\\/g, '/').replace(/\/+$/, '')
+        setProjPath(normalized ? `${normalized}/` : '/')
+        setAutocompleteActiveIndex(-1)
+      }
+    } catch (e) {
+      // 关闭弹窗触发的 abort 是预期路径（非 ApiError，不提示）。该请求走
+      // silent，错误在这里本地化：localhost 限制按稳定 code 映射，其余错误
+      // 沿用后端的可操作文案。
+      if (e instanceof ApiError) {
+        const code = (e.body as { code?: string } | undefined)?.code
+        addToast(
+          'error',
+          code === 'native_picker_local_only'
+            ? (t('sidebar.pickDirectoryLocalOnly') ?? e.message)
+            : e.message,
+        )
+      }
+    } finally {
+      if (pickAbortRef.current === controller) pickAbortRef.current = null
+      setPicking(false)
+    }
   }
 
   const handleCreateProject = async () => {
@@ -235,23 +286,58 @@ export function CreateProjectModal(props: {
             <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-muted)' }}>
               {t('sidebar.repoPath') ?? 'Git Repository Path'}
             </label>
-            <input
-              type="text"
-              value={projPath}
-              onChange={(e) => {
-                setProjPath(e.target.value)
-                setAutocompleteActiveIndex(-1)
-              }}
-              onKeyDown={handlePathKeyDown}
-              onBlur={(e) => {
-                e.currentTarget.style.borderColor = 'var(--border-strong)'
-                e.currentTarget.style.boxShadow = 'none'
-              }}
-              placeholder={homeDir}
-              className={inputClass}
-              style={inputStyle}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
-            />
+            <div className="relative">
+              <input
+                type="text"
+                value={projPath}
+                onChange={(e) => {
+                  setProjPath(e.target.value)
+                  setAutocompleteActiveIndex(-1)
+                }}
+                onKeyDown={handlePathKeyDown}
+                onBlur={(e) => {
+                  e.currentTarget.style.borderColor = 'var(--border-strong)'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
+                placeholder={homeDir}
+                className={inputClass}
+                style={{ ...inputStyle, paddingRight: 34 }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.boxShadow = '0 0 0 2px var(--accent-14)' }}
+              />
+              <button
+                type="button"
+                onClick={handlePickDirectory}
+                disabled={picking}
+                data-testid="pick-directory"
+                aria-label={t('sidebar.pickDirectory') ?? 'Select folder'}
+                title={t('sidebar.pickDirectory') ?? 'Select folder'}
+                className="absolute top-1/2 -translate-y-1/2 flex items-center justify-center"
+                style={{
+                  right: 5,
+                  width: 24,
+                  height: 24,
+                  padding: 0,
+                  border: 'none',
+                  borderRadius: 0,
+                  background: 'transparent',
+                  color: picking ? 'var(--text-faint)' : 'var(--text-muted)',
+                  opacity: picking ? 0.5 : 1,
+                  cursor: picking ? 'not-allowed' : 'pointer',
+                  transition: 'color 0.1s steps(2), background 0.1s steps(2)',
+                }}
+                onMouseEnter={(e) => {
+                  if (picking) return
+                  e.currentTarget.style.color = 'var(--accent)'
+                  e.currentTarget.style.background = 'var(--accent-10)'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = picking ? 'var(--text-faint)' : 'var(--text-muted)'
+                  e.currentTarget.style.background = 'transparent'
+                }}
+              >
+                <IconFolder width={16} height={16} />
+              </button>
+            </div>
           </div>
           <div>
             <div
