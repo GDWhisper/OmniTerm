@@ -91,6 +91,36 @@ describe('evicted prose prefix recovery (decodeStoredBlocks)', () => {
     const cooked = [{ type: 'text', text: 'cooked' }]
     expect(decodeStoredBlocks(JSON.stringify(cooked), 'ignored prefix source')).toEqual(cooked)
   })
+
+  it('decodes a host inline SYSTEM frame in place and preserves noticeId', () => {
+    const wrapper = JSON.stringify({
+      v: 1,
+      frames: [
+        chunkFrame('before'),
+        {
+          sessionUpdate: 'session_info_update',
+          _meta: {
+            omnitermSystem: {
+              id: 'n1',
+              label: 'system.permTimeout.auto',
+              detail: { seconds: 0 },
+            },
+          },
+        },
+        chunkFrame('after'),
+      ],
+    })
+    expect(decodeStoredBlocks(wrapper, 'beforeafter')).toEqual([
+      { type: 'text', text: 'before' },
+      {
+        type: 'system',
+        label: 'system.permTimeout.auto',
+        detail: { seconds: 0 },
+        noticeId: 'n1',
+      },
+      { type: 'text', text: 'after' },
+    ])
+  })
 })
 
 describe('mid-turn join — prompt_done skips cooked write-back', () => {

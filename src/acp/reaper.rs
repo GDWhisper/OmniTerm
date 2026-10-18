@@ -5,6 +5,7 @@ use std::time::Duration;
 use sqlx::sqlite::SqlitePool;
 use tokio::sync::Notify;
 use tokio::time::interval;
+use uuid::Uuid;
 
 use crate::acp::chat_persistence;
 use crate::acp::client::{AcpClient, SystemNotice, TurnEvent};
@@ -292,15 +293,23 @@ fn detail_json(
     })
 }
 
-/// 落库（刷新后 hydrate 仍可见）+ 广播给在线 WS 连接（shutdown/cancel 前连接仍存活）。
-async fn persist_and_broadcast(
+/// 落一条独立的 system 行（durable fallback：帧窗口有界驱逐时仍能刷新后回读）。
+///
+/// `noticeId` 与内联帧同值：hydrate/补拉时若 assistant 行里已能解出同 id 的
+/// system 块，前端会过滤掉这条独立行，避免同一告知出现两次。
+async fn persist_system_row(
     db: &SqlitePool,
     session_id: &str,
-    client: &AcpClient,
     notice: &PermissionTimeoutNotice,
+    notice_id: &str,
 ) {
     let blocks = serde_json::json!([
-        { "type": "system", "label": notice.label, "detail": notice.detail }
+        {
+            "type": "system",
+            "label": notice.label,
+            "detail": notice.detail,
+            "noticeId": notice_id,
+        }
     ])
     .to_string();
     if let Err(e) =
@@ -313,10 +322,30 @@ async fn persist_and_broadcast(
             "reaper: failed to persist permission-timeout system message"
         );
     }
-    client.notify_system_message(SystemNotice {
+}
+
+/// 落库（刷新后 hydrate 仍可见）+ 广播给在线 WS 连接（shutdown/cancel 前连接仍存活）。
+///
+/// **有活跃 turn 时**：独立 system 行照落（帧窗口逐出后的兜底），同时把告知帧写进
+/// 当前 assistant turn 的有序帧窗口并广播——agent 的后续输出会排在它之后，hydrate
+/// 时也不会因 assistant 行的 `created_at` 早于 system 行而整批置底。无活跃 turn
+/// 时只落独立行并广播（行为与旧版一致）。
+async fn persist_and_broadcast(
+    db: &SqlitePool,
+    session_id: &str,
+    client: &AcpClient,
+    notice: &PermissionTimeoutNotice,
+) {
+    let notice_id = Uuid::new_v4().to_string();
+    persist_system_row(db, session_id, notice, &notice_id).await;
+    let system_notice = SystemNotice {
         label: notice.label.to_string(),
         detail: Some(notice.detail.clone()),
-    });
+        notice_id: Some(notice_id),
+    };
+    if !client.notify_inline_system_notice(&system_notice) {
+        client.notify_system_message(system_notice);
+    }
 }
 
 /// 自动推进：代替用户应答全部未决审批（不 cancel、不杀会话，agent 继续执行），
@@ -333,6 +362,7 @@ async fn auto_advance_permissions(
 ) -> bool {
     let events = client.pending_permission_events().await;
     let mut resolved = 0usize;
+    let mut unnotified = 0usize;
     for event in &events {
         let Some((option_id, selected)) = pick_auto_option(&event.request) else {
             tracing::warn!(
@@ -341,22 +371,45 @@ async fn auto_advance_permissions(
             );
             continue;
         };
-        if !client.resolve_permission(&event.id, &option_id).await {
-            // 已被其他路径（用户点击 / cancel_all）解决，无需再告知。
-            continue;
-        }
-        resolved += 1;
-        if resolved > MAX_PERM_NOTICE_REQUESTS {
+        // 超出告知上限的请求只应答、不再逐条告知（§P1 消息数有界）。
+        if resolved >= MAX_PERM_NOTICE_REQUESTS {
+            if client.resolve_permission(&event.id, &option_id).await {
+                resolved += 1;
+                unnotified += 1;
+            }
             continue;
         }
         let summary = summarize_permission_request(&event.request);
         let notice = build_perm_notice_auto(&summary, &selected, secs);
-        persist_and_broadcast(db, session_id, client, &notice).await;
+        let notice_id = Uuid::new_v4().to_string();
+        let system_notice = SystemNotice {
+            label: notice.label.to_string(),
+            detail: Some(notice.detail.clone()),
+            notice_id: Some(notice_id.clone()),
+        };
+        // 告知在 `responder.respond()` 之前写入当前 turn 的有序帧窗口并广播：
+        // agent 的后续输出必然排在它之后；请求已被用户抢先解决时钩子不执行，
+        // 不会留下幽灵告知。
+        let (ok, notice_emitted) =
+            client.resolve_permission_with_notice(&event.id, &option_id, &system_notice).await;
+        if !ok {
+            // 已被其他路径（用户点击 / cancel_all）解决，无需再告知。
+            continue;
+        }
+        resolved += 1;
+        // 独立行始终落：帧窗口是有界的，early 告知可能被逐出；hydrate 时若
+        // assistant 行里还能解出同 noticeId 的内联块，前端会过滤这条兜底行。
+        persist_system_row(db, session_id, &notice, &notice_id).await;
+        if !notice_emitted {
+            // 无活跃 turn（理论上 pending 审批通常伴随 active turn）：没有内联帧，
+            // 只广播独立 system 消息。
+            client.notify_system_message(system_notice);
+        }
     }
-    if resolved > MAX_PERM_NOTICE_REQUESTS {
+    if unnotified > 0 {
         tracing::warn!(
             session_id = %session_id,
-            resolved,
+            unnotified,
             cap = MAX_PERM_NOTICE_REQUESTS,
             "reaper: auto-advance resolved more permissions than the notice cap; extra ones answered without a chat notice"
         );

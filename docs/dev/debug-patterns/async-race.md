@@ -65,3 +65,17 @@
 **异步-一致性**：审查消息表时按「通道类型」列一遍，孤例优先怀疑。同一状态机 `session_update`/`crash` 全走 broadcast，唯独 `prompt_done` 走 per-connection mpsc——不一致本身就是信号。
 
 **适用**：后端事件流设计审查；「举一反三」审计时按模式复查全链路同构点（如 `replay_end` 也同构，replay 期间断线后前端 `isReplaying` 永不复位）。
+
+**案例证据**：
+- 2026-10-18 ACP 权限超时告知：agent 更新走 `session_update`，告知走 `system_notice` + 另一个转发 task；自动审批又先 `respond` 再广播 → 告知常排到 agent 后续输出之后。修复：告知生成合成 `session_info_update`，并入 `session_update` 同一有序通道，且在 `respond()` 之前入队（`PermissionManager::resolve_with` 的 `before_respond` 钩子）。
+
+---
+
+## 模式 7：聚合行的时间戳是起点，不是子事件锚点
+
+**异步-数据模型**：一行聚合一个长生命周期（一 turn / 一任务一行）时，`created_at` 通常只代表**首次写入**，不代表行内每个子事件的发生时刻。把子事件另起一行按 `created_at` 排序，它一定会落到整个聚合行之后——无论子事件实际发生在聚合过程的中段；读时排序救不了，因为聚合行没有可比较的内部时间坐标。子事件要出现在聚合行内部，必须写进聚合行的有序载荷（或实时切分聚合行）；独立行只能作为持久化兜底，并用稳定 id 在读取侧去重。跨通路的子事件还应先并入聚合行的同一有序通道再下发，否则 live 位置也会漂移。
+
+**适用**：turn / 会话 / 任务聚合行 + 中途事件（审批告知、状态变更、外部通知）；任何「长生命周期一行 + 旁路明细行」的模型。审计问法：这个聚合行的 `created_at` 是事件时刻还是起点？读取侧按什么坐标把它与旁路行合并？聚合行内部的载荷有没有足够锚点？
+
+**案例证据**：
+- 2026-10-18 ACP 权限超时告知：一个 15m22s 的 turn 只有一行 assistant，`created_at` 在 turn 起点；54 条 mid-turn system 行按事件时刻插入，hydrate 后全部排到 assistant 行之后（置底）。修复：告知帧内联进 turn 的有序帧窗口 + 独立行带 `noticeId` 兜底、读取侧去重；live 改走同一 session_update 通道并在 respond 前入队。历史旧行无内部锚点，不回填。

@@ -132,3 +132,12 @@
 
 **案例证据**：
 - 2026-10-07 聚焦补拉（正式版 codebuddy_1007-1314）：`mergeLatestMessages` 的无 dbId 对账只取 store 尾部一条，而补拉总发生在 turn 结束后——echo 后面是 assistant，尾部角色永远对不上 ⇒ DB user 行按 createdAt 插入成第二条用户气泡、顺序乱。修复：候选匹配改从尾部向前的位置无关扫描，命中原位替换。DB 侧始终只有 1 user + 1 assistant 两行，重复纯属前端 store（诊断弯路：先查了半天的落库重复）。
+
+## 模式 13：会话级 / 轮级状态不能挂在逐条消息的 streaming 门控上
+
+**React-状态作用域**：按 session 缓存的读数（`turn_stats`、`sending` 等）或按 turn 结算的读数，渲染门控不能是**每条消息自己的** `message.streaming`——一个 turn 可以被 system 通知 / 工具卡切成多条 streaming 消息（消息尾部被非 assistant 行打断后，流式正文只能另起一条），于是每条都满足 `message.streaming`，同一份会话级值被渲染 N 次。症状的判别特征：**多行读数数值逐字相同**（同一份缓存），而不是各自略有差异。正确姿势二选一：① 只在权威代表（最后一条 assistant 消息）渲染；② 给消息加 turn 标识后按组去重。落库/结算侧同理：同一 turn 的多条前端消息共同对应后端同一行，结算读数只能落到其中一条。
+
+**适用**：任何 `message.streaming && <会话级数据>` 或「每个气泡都挂同一个 session store 值」的渲染。审计时先问：这个 turn 在真实帧序里是否可能产出多条 streaming 消息？（本项目：会——`appendProseToMessages` 只在尾部仍是 streaming assistant 时续写，system 权限告知、工具卡都可能截断尾部。）
+
+**案例证据**：
+- 2026-10-18 ACP 读数重复（用户截图）：同一进行中 turn 出现三行完全相同的「工作中 12分钟10秒 · 工具 2分钟6秒 · 224.5 tok/s」。根因：`turn_stats` 按 sessionId 缓存，`LiveWorkElapsed` 却按 `message.streaming` 逐条渲染；收纳行也订阅同一份值，`markDone` 还把结算读数写到所有 streaming 消息。修复：实时读数加 `isLastAssistant` 门控、收纳行流式期不显示时长、`markDone` 结算读数只落该 turn 最后一条。

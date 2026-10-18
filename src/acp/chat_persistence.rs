@@ -297,6 +297,14 @@ pub async fn sync_messages(
     for m in messages {
         if let Some(row_id) = &m.id {
             let Some(blocks) = &m.blocks else { continue };
+            if would_drop_inline_notices(db, session_id, row_id, blocks).await? {
+                tracing::warn!(
+                    row_id = %row_id,
+                    "sync_messages: incoming cooked blocks lack an inline system notice; keeping the raw frames"
+                );
+                consumed.insert(row_id.clone());
+                continue;
+            }
             let affected =
                 sqlx::query("UPDATE chat_messages SET blocks = ? WHERE id = ? AND session_id = ?")
                     .bind(blocks)
@@ -351,6 +359,13 @@ pub async fn sync_messages(
             // 已有行的 blocks 可能为 NULL（实时 insert_message 落库时未带 blocks）。
             // UPDATE 而非 skip，否则刷新后丢失工具调用 / 思考 / 计划。
             if let Some(blocks) = &m.blocks {
+                if would_drop_inline_notices(db, session_id, &id, blocks).await? {
+                    tracing::warn!(
+                        row_id = %id,
+                        "sync_messages: replay blocks lack an inline system notice; keeping the raw frames"
+                    );
+                    continue;
+                }
                 sqlx::query("UPDATE chat_messages SET blocks = ? WHERE id = ?")
                     .bind(blocks)
                     .bind(&id)
@@ -374,6 +389,66 @@ pub async fn sync_messages(
         consumed.insert(id);
     }
     Ok(())
+}
+
+/// 提取 assistant 行里内联 SYSTEM 告知的 `notice_id`。
+///
+/// 支持两种落盘形态：后端原始帧包裹（`_meta.omnitermSystem.id`）与前端回写的
+/// cooked blocks（`{type:'system', noticeId}`）。用于 [`would_drop_inline_notices`]
+/// 判断一次 blocks 覆盖会不会把已落库的 mid-turn 告知弄丢。
+fn inline_notice_ids(blocks: &str) -> HashSet<String> {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(blocks) else {
+        return HashSet::new();
+    };
+    let mut ids = HashSet::new();
+    if let Some(frames) = parsed.get("frames").and_then(|v| v.as_array()) {
+        for frame in frames {
+            if let Some(id) = frame.pointer("/_meta/omnitermSystem/id").and_then(|v| v.as_str()) {
+                ids.insert(id.to_string());
+            }
+        }
+    } else if let Some(blocks) = parsed.as_array() {
+        for block in blocks {
+            if block.get("type").and_then(|v| v.as_str()) == Some("system")
+                && let Some(id) = block.get("noticeId").and_then(|v| v.as_str())
+            {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// 本次 `blocks` 覆盖是否会丢掉 assistant 行已有的内联 SYSTEM 告知。
+///
+/// 为什么要这层守卫：内联告知是「后端帧 + live 独立 system 消息」双轨的——前端
+/// 在网络正常时会把 live 消息的 blocks 一并回写，但如果帧因慢消费者被 broadcast
+/// 丢弃（`spawn_notify_task` 只 log 后继续），cooked 载荷就会少掉这条告知；直接
+/// UPDATE 会让原本已持久化的告知永久消失。宁可不收敛该行的 cooked blocks
+/// （保留后端原始帧，hydrate 仍能解码出正确顺序），也不静默丢数据。
+async fn would_drop_inline_notices(
+    db: &SqlitePool,
+    session_id: &str,
+    row_id: &str,
+    incoming_blocks: &str,
+) -> Result<bool, sqlx::Error> {
+    // LIKE 先过滤：只有带内联标记的行才需要取回 blocks 解析（低频、每 turn 一次），
+    // 普通行不额外搬运最多 MB 级的正文。
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT blocks FROM chat_messages WHERE id = ? AND session_id = ? \
+         AND (blocks LIKE '%omnitermSystem%' OR blocks LIKE '%noticeId%')",
+    )
+    .bind(row_id)
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    let Some(existing) = existing else { return Ok(false) };
+    let required = inline_notice_ids(&existing);
+    if required.is_empty() {
+        return Ok(false);
+    }
+    let incoming = inline_notice_ids(incoming_blocks);
+    Ok(required.iter().any(|id| !incoming.contains(id)))
 }
 
 #[cfg(test)]
@@ -452,6 +527,89 @@ mod tests {
                 r.role == "system" && r.text.starts_with("权限请求 30 分钟未获响应")
             }),
             "hydrate 应能回读 system 消息"
+        );
+    }
+
+    /// 内联 SYSTEM 告知是「后端帧 + live 独立消息」双轨：cooked 回写若因慢消费者
+    /// 少了告知，不能把已持久化的帧覆盖掉——宁可不收敛该行，也不静默丢数据。
+    #[tokio::test]
+    async fn sync_keeps_blocks_when_inline_system_notice_would_be_lost() {
+        let db = fresh_db().await;
+        let notice_id = "notice-1";
+        let raw = serde_json::json!({
+            "v": 1,
+            "frames": [{
+                "sessionUpdate": "session_info_update",
+                "_meta": { "omnitermSystem": { "id": notice_id, "label": "system.permTimeout.auto" } }
+            }]
+        })
+        .to_string();
+        seed_row(&db, "a1", "assistant", "hi", "2026-08-10T00:00:00Z").await;
+        sqlx::query("UPDATE chat_messages SET blocks = ? WHERE id = 'a1'")
+            .bind(&raw)
+            .execute(&db)
+            .await
+            .expect("seed raw frames");
+
+        let text_only = r#"[{"type":"text","text":"hi"}]"#;
+        sync_messages(
+            &db,
+            SESSION,
+            &[SyncMessageInput {
+                id: Some("a1".into()),
+                role: "assistant".into(),
+                text: String::new(),
+                blocks: Some(text_only.into()),
+            }],
+        )
+        .await
+        .expect("sync");
+        assert_eq!(
+            blocks_of(&db, "a1").await.as_deref(),
+            Some(raw.as_str()),
+            "缺少内联告知的 cooked 载荷不得覆盖原始帧"
+        );
+
+        let cooked = serde_json::json!([
+            { "type": "text", "text": "hi" },
+            { "type": "system", "label": "system.permTimeout.auto", "noticeId": notice_id }
+        ])
+        .to_string();
+        sync_messages(
+            &db,
+            SESSION,
+            &[SyncMessageInput {
+                id: Some("a1".into()),
+                role: "assistant".into(),
+                text: String::new(),
+                blocks: Some(cooked.clone()),
+            }],
+        )
+        .await
+        .expect("sync");
+        assert_eq!(
+            blocks_of(&db, "a1").await.as_deref(),
+            Some(cooked.as_str()),
+            "载荷已带同 noticeId 时应正常收敛"
+        );
+
+        // 已 cooked 的行同样受保护（守卫识别 block.noticeId）。
+        sync_messages(
+            &db,
+            SESSION,
+            &[SyncMessageInput {
+                id: Some("a1".into()),
+                role: "assistant".into(),
+                text: String::new(),
+                blocks: Some(text_only.into()),
+            }],
+        )
+        .await
+        .expect("sync");
+        assert_eq!(
+            blocks_of(&db, "a1").await.as_deref(),
+            Some(cooked.as_str()),
+            "cooked 行里的内联告知也不得被缺少它的载荷覆盖"
         );
     }
 

@@ -53,3 +53,7 @@
 ## 勘误（2026-09-21）
 
 「安全策略不变（30 分钟 cancel + kill）」与「为什么不做自动 Allow」两条决策被后续计划**部分翻盘**：`docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md` 把权限超时行为提为设置项三模式（abort 默认不变 / auto 超时自动应答 / wait 一直等待），其中 auto 模式即显式选择下的自动 Allow（选项挑选优先级 allow_always → allow_once，见该计划 D2）。翻盘依据：用户反馈"回来后不知道自己错过了什么选项"——需要 ① 超时行为可配置 ② 告知消息带请求详情。本计划的产出（system 消息落库 + 广播通道、blocks system 行）全部保留并被复用：告知链路不变，载荷从纯文案升级为 `label`（i18n key）+ `detail`（结构化详情）；`PERMISSION_TIMEOUT_NOTICE` 常量被 reaper 的 notice builder 取代（abort 文案默认分钟数=30 时逐字一致）。「不做 sidebar 横幅 / 浏览器 Notification」仍然有效。
+
+## 勘误（2026-10-18）
+
+mid-turn 权限超时告知不再只靠独立 system 行：活跃 turn 时额外由 `TurnAccumulator::append_host_update` 内联进 assistant 行的有序帧窗口（`_meta.omnitermSystem`），独立行保留为帧窗口驱逐兜底并带同一 `noticeId`；live 改走 `session_update` 同一有序通道（自动审批在 `respond` 前入队）。前端在 hydrate / 快照 / 聚焦补拉时按 `noticeId` 去重。`system_notice_tx` / `system_message` 帧仍服务无活跃 turn、turn 失败等**非内联**告知。完整决策与取舍见 `docs/dev/plans/2026-09-19-acp-failure-visibility.md` 文末同题勘误与 `docs/architecture/backend.md`「mid-turn SYSTEM 告知内联」。

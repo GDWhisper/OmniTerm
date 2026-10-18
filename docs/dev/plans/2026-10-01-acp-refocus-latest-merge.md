@@ -181,3 +181,7 @@ POST 封装从 `useAcpChat.postSync` 提取为共享 helper（`frontend/src/util
 原文（10-04 勘误末段）把无心跳、隐藏期照常排退避重连两条列为「根因在 WS 保活/重连预算，不属本计划」。2026-10-10 已在 `2026-09-19-ws-idle-disconnect-heartbeat.md` 的 Phase 1 落地 ACP 侧心跳（30s ping / 3 次无 pong 判半开主动重连 / 隐藏期停发）+ 隐藏期不排退避（页面回来补连）。对**本计划**的影响只有一条且是正面的：`needsCatchUp` 的触发条件（`onclose` 置位）从此多了一个可靠的生产者——半开检测会主动 `close()`，`onclose` 必然到达，标记不再依赖「冻结页恰好补派」。E1/E2 两条兜底按原样保留（它们覆盖的是「连半开检测都来不及跑」的更长冻结窗口）。
 
 **不翻盘本文 §范围与优先级 的否决项**：「focus/visible 时强制立即重连（跳过退避）」仍是否决态——新加的「页面回来补连」只在 `reconnectDeferred`（socket 已断）时动作，健康连接不扰动，用户在翻看历史时不会遇到全重连。
+
+## 勘误（2026-10-18）：合并后按 `noticeId` 收敛 mid-turn SYSTEM 告知
+
+mid-turn 权限超时告知现在双轨：assistant 行内联一份有序帧 + 独立 `role='system'` 行一份兜底（详见失败可见化计划同题勘误）。聚焦补拉把 DB 的 assistant 行合并进 store 后，live 的独立 SYSTEM 消息与 DB 的独立 system 行都可能与内联块重复；`mergeLatestMessages` 在合并末尾统一调用 `dropInlinedSystemMessages` 按 `noticeId` 收敛（同一函数也用于 hydrate、上拉前插、`turn_snapshot`）。规则 1-5 与 D1-D5 均不变。

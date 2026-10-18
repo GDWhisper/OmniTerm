@@ -212,3 +212,18 @@ UPDATE 到**错误的行**上——静默且不可恢复；而今天的无 id �
 - `docs/reference/acp-protocol-reference.md` §6.8：本计划落地后把「宿主现状（静默）」更新为「已留痕」。
 - `CHANGELOG.md`：按核心规则 2 在**功能落地**时补条目（本次仅设计稿，不写）。
 - `docs/dev/plans/backlog/`：P2 可重试入口若本次不做，落入 backlog 而非留在本文件。
+
+### 勘误（2026-10-18）— mid-turn SYSTEM 告知改为「assistant 行内联 + 独立行兜底」
+
+D2 的载体决策对 **turn 结束类**告知仍然成立：失败提示发生在 assistant 行定稿之后，独立行本身就是正确位置。但 **mid-turn** 告知（权限超时 auto/abort）沿用独立行会结构性置底：
+
+- assistant 行是「一 turn 一行」，`created_at` 固定在 turn 起点；任何中途插入的 system 行在 hydrate 时都排到整行之后（实测 15m22s 的 turn 后跟 54 条 system 行）。
+- live 侧 `system_notice` 与 `session_update` 分属两条广播 + 两个 task；自动审批又先 `resolve` 再广播，告知常晚于 agent 的后续输出。
+
+现行为：
+
+- 活跃 turn 内的告知由 `TurnAccumulator::append_host_update` 追加一帧合成 `session_info_update`（`_meta.omnitermSystem{id,label,detail}`）到当前 turn 的**有序帧窗口**；不参与 `text`/`output_seen`/tps/工具记账。独立 system 行仍落，作为帧窗口驱逐兜底，blocks 带同一 `noticeId`。
+- live 帧改走 `session_update` 同一有序通道；自动审批通过 `PermissionManager::resolve_with` 的 `before_respond` 钩子在 agent 收到应答前入队。
+- 前端 `dropInlinedSystemMessages` 在 hydrate / 上拉前插 / turn_snapshot / 聚焦补拉时按 `noticeId` 去掉重复的独立行；assistant 行解不出该 id（帧被逐出 / 旧数据）时保留独立行。
+- `sync_messages` 的 cooked 回写增加守卫：载荷缺少已有内联 `noticeId` 时保留原始帧（慢消费者丢帧不静默丢数据）。
+- **历史数据不回填**：旧 system 行没有 turn 内位置锚点，无法无损重排；它们仍在原列表位置，新告知按上述路径有序。

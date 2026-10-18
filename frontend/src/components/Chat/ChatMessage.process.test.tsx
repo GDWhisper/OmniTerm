@@ -375,14 +375,15 @@ describe('ProcessBlocks 流式态', () => {
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
-  it('流式中标题走实时读数（秒数在跳即表达进行中）', () => {
-    // 标题主体是工作时长而非状态词：流式中秒数逐帧增长，本身就是「进行中」。
-    // 实时读数来自后端 `turn_stats` 推送（utils/turnStats 缓存），挂载读缓存、
-    // 推送到达直写 DOM，故同步断言即可。
+  it('流式中收纳行不再重复显示实时时长（唯一显示处在气泡底部）', () => {
+    // 同一 turn 的多条 streaming 消息共享一份会话级 `turn_stats`；收纳行若也订阅，
+    // 每条消息都会重复同一个「已工作」，与气泡底部元信息行打架（2026-10-18 用户报告）。
     setLiveTurnStats('sess-live', { workMs: 5_000, toolMs: null, tps: null })
     try {
       render(processMsg({ streaming: true }), 'sess-live')
-      expect(processHeader()!.textContent).toContain('已工作')
+      expect(processHeader()!.textContent).not.toContain('已工作')
+      expect(processHeader()!.textContent).not.toContain('工作中')
+      expect(processHeader()!.textContent).toContain('工具调用 2 次')
     } finally {
       clearAllLiveTurnStats()
     }

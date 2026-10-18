@@ -650,8 +650,8 @@ async fn cancel_answers_pending_permission_with_cancelled_outcome() {
 /// 权限请求到达时唤醒 reaper（`PermissionTimeoutConfig::notify_perm_request`）。
 ///
 /// 本用例放过 reaper 首轮立即 tick 后才发 prompt：此后下一次 tick 要等 30 秒，
-/// 若自动应答仍在数秒内完成，只可能来自唤醒链路。同时钉住告知消息（广播 +
-/// 落库）与 agent 侧收到的选中项。
+/// 若自动应答仍在数秒内完成，只可能来自唤醒链路。同时钉住告知帧（session_update
+/// 内联进 assistant 行 + 独立 system 行兜底）与 agent 侧收到的选中项。
 #[tokio::test]
 async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     let _guard = spawn_test_lock_async().await;
@@ -676,6 +676,9 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     .expect("insert session");
 
     let client = Arc::new(spawn_connect(agent_for(&script, "perm", &dir), workspace).await);
+    // 真实会话注册点会 attach_persistence（见 ws/acp.rs / api/sessions.rs）；
+    // 本用例要验证告知帧内联进 assistant 行，必须挂上同一个 sink。
+    client.attach_persistence(state.db.clone(), "s-always".to_string());
     // 真实注册点的绑定（见 AcpClient::attach_perm_timeout）：「自动推进 + 总是」。
     let cfg = Arc::new(PermissionTimeoutConfig::new(
         PermissionTimeoutMode::Auto,
@@ -694,7 +697,7 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     // 只能来自唤醒链路而不是 tick。
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let mut system_rx = client.system_notice_subscribe();
+    let mut update_rx = client.session_update_subscribe();
     let mut perm_rx = client.permission_subscribe();
     client.mark_prompt_active();
     // prompt 必须被并发推进（未 poll 的 future 不会真正发出请求）。
@@ -710,13 +713,23 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
         .expect("权限事件通道关闭");
 
     // 数秒内必须被自动应答（远小于 30 秒 tick）：超时即说明退回 tick 粒度。
-    let notice = tokio::time::timeout(Duration::from_secs(5), system_rx.recv())
-        .await
-        .expect("「总是」档应在到达后立即自动应答，而不是等下一个 reaper tick")
-        .expect("system 通知通道关闭");
-    assert_eq!(notice.label, crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO);
+    // 告知现在与 agent 更新走同一有序 session_update 通道（内联进 turn 帧窗口），
+    // 不再是独立的 system_message 广播。
+    let notice = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let notif = update_rx.recv().await.expect("session_update 通道关闭");
+            let value = serde_json::to_value(&notif.notification).expect("serialize update");
+            if value.to_string().contains(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO) {
+                break value;
+            }
+        }
+    })
+    .await
+    .expect("「总是」档应在到达后立即自动应答，而不是等下一个 reaper tick");
+    let omni = &notice["update"]["_meta"]["omnitermSystem"];
+    assert_eq!(omni["label"].as_str(), Some(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO));
     assert_eq!(
-        notice.detail.as_ref().and_then(|d| d["selected"].as_str()),
+        omni["detail"]["selected"].as_str(),
         Some("Allow"),
         "自动应答选中项应为 allow_once（优先于 reject_once）"
     );
@@ -736,16 +749,45 @@ async fn always_auto_mode_answers_permission_on_arrival_not_next_tick() {
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
     client.mark_prompt_idle();
 
-    // 告知消息已落库（刷新后 hydrate 可见）。
-    let (role, blocks): (String, Option<String>) =
-        sqlx::query_as("SELECT role, blocks FROM chat_messages WHERE session_id = 's-always'")
-            .fetch_one(&state.db)
+    // 告知双轨落盘：独立 system 行（帧窗口驱逐后的兜底）+ assistant 行的内联帧
+    // （hydrate 时按同一 noticeId 过滤独立行，保证正确的 turn 内顺序）。
+    let notice_id = omni["id"].as_str().expect("inline SYSTEM notice 必须带去重 id").to_string();
+    let rows: Vec<(String, Option<String>)> = tokio::time::timeout(UNWIND_TIMEOUT, async {
+        loop {
+            let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+                "SELECT role, blocks FROM chat_messages WHERE session_id = 's-always' \
+                 ORDER BY created_at, id",
+            )
+            .fetch_all(&state.db)
             .await
-            .expect("权限超时 system 消息应已落库");
-    assert_eq!(role, "system");
+            .expect("读 chat_messages");
+            if rows.iter().any(|(r, _)| r == "assistant") && rows.iter().any(|(r, _)| r == "system")
+            {
+                break rows;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("assistant 内联帧 + 独立 system 兜底行都应在定稿后落库");
+    let system_blocks = rows
+        .iter()
+        .find(|(r, _)| r == "system")
+        .and_then(|(_, b)| b.clone())
+        .expect("独立 system 行");
     assert!(
-        blocks.unwrap_or_default().contains(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO),
+        system_blocks.contains(crate::acp::reaper::SYSTEM_LABEL_PERM_TIMEOUT_AUTO),
         "落库的 system 行应带 i18n label"
+    );
+    assert!(system_blocks.contains(&notice_id), "system 行应带同一 noticeId");
+    let assistant_blocks = rows
+        .iter()
+        .find(|(r, _)| r == "assistant")
+        .and_then(|(_, b)| b.clone())
+        .expect("assistant 行");
+    assert!(
+        assistant_blocks.contains("omnitermSystem") && assistant_blocks.contains(&notice_id),
+        "告知帧应内联进 assistant 行的有序帧窗口：{assistant_blocks}"
     );
 
     reaper.abort();

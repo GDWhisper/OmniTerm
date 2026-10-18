@@ -74,6 +74,9 @@ interface ServerFrame {
   agent_name?: string
   /** system_message: 后端主动产生的系统通知文案（权限超时回收告知等）。 */
   label?: string
+  /** system_message: mid-turn 内联告知的去重 id（与 assistant 帧
+   *  `_meta.omnitermSystem.id` 同值）；独立 system 行缺省。 */
+  notice_id?: string
   /** system_message: 可选结构化详情（权限超时行动说明"错过了什么"）。 */
   detail?: SystemBlockDetail
   /** session_update: turn 内单调 seq（config/commands/重放帧无此字段），用于重连去重。 */
@@ -468,9 +471,33 @@ function classifySessionUpdate(update: unknown): SessionUpdateAction {
     if (text !== null) return { kind: 'appendThought', text }
   }
 
-  // Vendor meta → mode
-  const meta = obj['_meta']
+  // Vendor meta → mode。`_meta` 可能在顶层（variant 未包装）或单键 variant 的
+  // inner 里（`sessionUpdate` 线格式经 `normalizeSessionUpdate` 包装后）。
+  const innerMeta =
+    keys.length === 1 && obj[keys[0]] && typeof obj[keys[0]] === 'object'
+      ? (obj[keys[0]] as Record<string, unknown>)['_meta']
+      : undefined
+  const meta = obj['_meta'] ?? innerMeta
   if (meta && typeof meta === 'object') {
+    // 宿主内联的 mid-turn SYSTEM 告知（后端 `TurnAccumulator::append_host_update`）。
+    // 它藏在 `session_info_update` 的 `_meta.omnitermSystem` 里，必须在 vendor
+    // 解析与最终 `pushSystem(variant)` 兜底之前识别，否则会被当成
+    // `session_info_update` 丢掉。
+    const omniSystem = (meta as Record<string, unknown>)['omnitermSystem']
+    if (omniSystem && typeof omniSystem === 'object') {
+      const o = omniSystem as Record<string, unknown>
+      if (typeof o['label'] === 'string') {
+        return {
+          kind: 'pushSystem',
+          label: o['label'],
+          detail:
+            o['detail'] && typeof o['detail'] === 'object'
+              ? (o['detail'] as SystemBlockDetail)
+              : undefined,
+          noticeId: typeof o['id'] === 'string' ? o['id'] : undefined,
+        }
+      }
+    }
     for (const [metaKey, phaseField] of VENDOR_AGENT_PHASE_KEYS) {
       const block = (meta as Record<string, unknown>)[metaKey]
       if (block && typeof block === 'object') {
@@ -1063,16 +1090,16 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           //
           // 先 flush 再 push：后端 system_notice 与 session_update 是两条独立
           // broadcast + 两个独立 tokio task，各自 mpsc 进同一个 notify_tx，跨通道
-          // 顺序无保证（中间还夹一次 insert_message 往返）——system 帧完全可能先于
-          // 本 turn 的 prompt_done 抵达。而流式 prose 要等 flushLiveBuffer 的 rAF
-          // 才进 store，若此处直接 append，失败提示就会插在它所描述的那段正文之前
-          // （随后 prompt_done 的 flush 才把 prose 补到它后面）。DB 侧顺序一直是对的
-          // （assistant 行早在流式期落库），错的只是前端这条直播渲染路径。故先把
-          // 已到的 prose 同步提交进 store，再 append 本提示，渲染顺序即「正文 →
-          // 失败提示」，与两路广播的到达先后无关。
+          // 顺序无保证——system 帧可能先于本 turn 的 prompt_done 抵达。而流式 prose
+          // 要等 flushLiveBuffer 的 rAF 才进 store，若此处直接 append，提示会插在
+          // 它应该跟随的正文之前。故先把已到的 prose 同步提交进 store，再 append。
+          //
+          // mid-turn 告知（带 notice_id）已由后端内联进 assistant 行的有序帧窗口：
+          // live 这里仍以独立 SYSTEM 消息显示；turn_snapshot / 聚焦补拉把同一告知
+          // 从 assistant 行解出后，会按 noticeId 去掉这份独立消息。
           if (frame.label) {
             flushLiveBuffer()
-            useChatStore.getState().pushSystemEvent(sid, frame.label, frame.detail)
+            useChatStore.getState().pushSystemEvent(sid, frame.label, frame.detail, frame.notice_id)
           }
           break
         case 'error':

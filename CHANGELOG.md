@@ -55,6 +55,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-18 11:40) `[backend]` `[frontend]` 修复 ACP 会话 mid-turn SYSTEM 消息在刷新 / 重新打开后整批置底：assistant 一行聚合整个 turn，`created_at` 固定在 turn 起点，权限超时告知另起 system 行必然排到整行之后；自动审批又先 resolve 再广播，live 也会晚于后续输出。现将 mid-turn 告知帧内联进当前 assistant turn 的有序帧窗口（独立 system 行保留为窗口驱逐兜底并带 `noticeId`），live 改走与 agent 更新相同的 `session_update` 通道、在 `respond` 之前入队；hydrate / 快照 / 聚焦补拉按 `noticeId` 去重，cooked 回写缺少内联告知时保留原始帧。历史旧 system 行无 turn 内位置锚点，不回填（`src/acp/turn_accumulator.rs`、`src/acp/client.rs`、`src/acp/permission.rs`、`src/acp/reaper.rs`、`src/acp/chat_persistence.rs`、`frontend/src/hooks/useAcpChat.ts`、`frontend/src/stores/chatStore.ts`、`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-10-18 11:36) `[frontend]` 修复右下角 toast 提示被弹窗半透蒙版遮住（用户报告：新建项目弹窗触发报错时，蒙版后的 toast 看不清）。根因是 `ToastContainer` 与 `Modal` 蒙版同为 `z-50`，而 Modal 经 `createPortal` 挂到 `document.body` 末尾——同层时 DOM 顺序后者居上，蒙版连同样本的报错一起盖住。toast 层升到 `z-[60]`（严格高于 Modal 层，仍低于 CRT 扫描线 9999 与 tmux 健康告警 10000），全局浮层级阶梯补记到 ui-style-guide §6.4（`frontend/src/components/Toast/Toast.tsx`）
 - (2026-10-18 10:14) `[frontend]` 修复 ACP 进行中 turn 的时间 / tok/s 读数重复显示：`turn_stats` 是会话级读数，同一 turn 被 system 通知或工具卡切成多条 streaming 消息时，每条气泡底部都渲染同一组「工作中 … · 工具 … · … tok/s」。现实时读数只挂最后一条 assistant 消息底部；收纳行流式期不再重复显示时长；`markDone` 的结算读数也只落到该 turn 的最后一条消息（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/stores/chatStore.ts`）
 - (2026-10-17 08:35) `[backend]` npm 渠道一键升级：镜像逐包同步滞后（主包有新版、平台包没有）时 npm 会静默跳过 optional 平台包并退出 0，旧二进制已被删除、命令行直接不可用；现在装后校验失败会自动改用官方源重试一次，仍失败才报错并给出官方源重装命令

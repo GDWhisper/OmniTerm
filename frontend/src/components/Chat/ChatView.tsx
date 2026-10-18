@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../../stores/appStore'
-import { useChatStore, selectChatState, storedRawRowToSyncPayload, type ChatMessage } from '../../stores/chatStore'
+import { useChatStore, selectChatState, storedRawRowToSyncPayload, dropInlinedSystemMessages, type ChatMessage } from '../../stores/chatStore'
 import { useAcpConnectionStore } from '../../stores/acpConnectionStore'
 import { useAgentStore } from '../../stores/agentStore'
 import { useChatShortcuts } from '../../hooks/useChatShortcuts'
@@ -85,7 +85,7 @@ interface StoredMessage {
  * 超长会被后端折叠成头尾 + 「已省略 N 字符」标记，故兜底文本可能不完整，但一定可读）。
  */
 function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
-  return rows.map((m) => {
+  const messages = rows.map((m) => {
     // rawStored：blocks 来源为后端原始帧包裹（{"v":1,"frames":[...]}）且解码出
     // 非空结构。useAcpChat 在 hydrate 落定后据此做带 dbId 的 cooked 回写收敛残留
     // 体积（见 2026-08-18 计划方案 B）。解码失败/为空的 RAW 行不标记——回写纯文本
@@ -119,6 +119,12 @@ function toChatMessages(rows: StoredMessage[]): ChatMessage[] {
       finishedAt: m.finishedAt,
     }
   })
+
+  // mid-turn SYSTEM 告知双轨落盘：assistant 行内联一份有序帧（供正确排序），
+  // 独立 system 行一份兜底（帧窗口驱逐后仍可回读）。assistant 行能解出同
+  // noticeId 时过滤独立行；解不出（帧被逐出 / 旧数据）则保留独立行——数据不丢，
+  // 只是回落到列表位置。收口逻辑与分页/合并共用同一函数。
+  return dropInlinedSystemMessages(messages)
 }
 
 /**

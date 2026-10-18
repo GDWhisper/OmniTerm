@@ -2578,14 +2578,8 @@ input[type="range"]:active::-webkit-slider-thumb {
    （background-clip:text 配 transparent 会让标签不可见，必须还回文字色）。 */
 @media (prefers-reduced-motion: reduce) {
   .thinking-shimmer,
-  .thinking-line-roll,
-  .process-shimmer {
+  .thinking-line-roll {
     animation: none;
-  }
-  .process-shimmer {
-    background-image: none;
-    color: var(--text-muted);
-    -webkit-text-fill-color: var(--text-muted);
   }
   .process-chevron {
     transition: none;

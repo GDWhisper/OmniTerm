@@ -1,6 +1,6 @@
 # ACP 会话工作时长计时
 
-> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；**计算整体迁后端、前端只显示（翻盘 E13/E14「仍不入库」）见 E23**；**读数文案去掉「约/估算」前缀、诚实口径收进 hover 见 E24**；偏差见文末「勘误」E1–E24）
+> 状态：已实施（2026-08-30，Phase 1-4 全部落地；侧栏呈现部分事后按设计决策回退，见 E9；流式实时计时为后续翻盘，见 E12；tps 估算与元信息行对齐切换见 E13；输出速度独立观测与工具耗时见 E14；三项读数缺陷修复见 E15；解码窗口翻盘见 E17；工具归因口径两轮修订见 E18–E19；tps 分母翻盘白名单见 E20；迟到帧收敛与顶替定稿见 E21；流式元信息行固定单行见 E22；**计算整体迁后端、前端只显示（翻盘 E13/E14「仍不入库」）见 E23**；**读数文案去掉「约/估算」前缀、诚实口径收进 hover 见 E24**；**定稿主段改「结束于」见 E25**；**实时读数收敛到最后一条 assistant 气泡底部见 E26**；偏差见文末「勘误」E1–E26）
 > 触发条件：修改 `src/acp/turn_accumulator.rs`（turn 记账 / 速率与工具估算 / `WriterCmd`）、`src/acp/client.rs`（权限 pause 三点 + `turn_timing()` / `live_turn_stats()`）、`src/acp/chat_persistence.rs`（`finalize_message` / `list_messages_page`）、`chat_messages` 读数列（migration `20261015_add_turn_estimates.sql`）、`sessions` 时长列（migration `20260830_add_work_time.sql`）、`src/ws/acp.rs`（`prompt_done.duration` / `turn_stats` 推送）、`ChatMessage` 耗时显示、`frontend/src/utils/turnStats.ts`（推送读数缓存）与 `ChatMessage.tsx` 的读数渲染 任一项前**必读**（侧栏时长显示曾实施后回退，见 E9；本地估算模块 `turnClock.ts` 已随 E23 删除）
 > 关联：`docs/dev/plans/2026-08-10-acp-session-reliability.md`（turn 门控与防抖 writer 的既有骨架，本计划就地扩展）、`docs/dev/plans/2026-08-18-permission-recycle-notice.md`（审批超时回收行为）、`docs/architecture/backend.md`（ACP 生命周期）、`docs/dev/performance-and-safety.md`（§P1 有界累积 / 写盘策略）
 > 背景来源：产品需求——想知道「一个会话实际干了多少活」。现状核查确认主库**无任何时长字段**（`rg duration|elapsed|started_at|finished_at migrations/` 仅命中 auth token 注释），`chat_messages` 只有 `created_at`（实为首次 flush 建行时刻，晚于 turn 起点，见 E12），定稿走 `ON CONFLICT DO UPDATE` 不写结束时刻 → **历史时长不可追溯**，只能上线后起算。
@@ -498,3 +498,36 @@ Phase 4 只写了 `formatElapsed`。落地拆成三个，因两个展示位的�
 **实现偏差**：无。
 
 **边界（有意接受）**：结算段主段不再显示「工作了多久」——时长信息的正文出口只剩收纳行（纯文字回复消息时长仅 hover 可见）；`finished_at` 为 NULL 的存量行底部结算段整段消失（用户拍板的「不处理」）。
+
+### E26 — 实时读数收敛到最后一条 assistant 气泡底部（2026-10-18）
+
+来源：用户报告（截图）——同一个进行中 turn 的消息流里出现三行完全相同的
+「工作中 12分钟10秒 · 工具 2分钟6秒 · 224.5 tok/s」，要求时间 / tok/s 统计只在
+**最新一条消息底部**显示一处。
+
+**根因**：`turn_stats` 是**会话级**读数（`utils/turnStats` 按 sessionId 缓存），而
+`LiveWorkElapsed` 的渲染门控是 `message.streaming`。ACP 的 system 通知（如权限
+超时告知）会插在 assistant 消息尾部，`appendProseToMessages` 只在尾部仍是
+streaming assistant 时续写，于是**同一 turn 被切成多条 streaming 消息**；每条都
+满足 `message.streaming`，各自渲染同一份读数。收纳行 `ProcessWorkElapsed` 也订阅
+同一份会话级读数，进一步放大重复。另有一条同源路径：`markDone` 把同一组结算
+读数写到**所有** streaming 消息上，定稿后同样会在多条气泡底部重复。
+
+**修复**：
+
+- `ChatMessage.tsx`：`liveSessionId` 增加 `isLastAssistant` 门控；元信息行的渲染
+  条件与量宽 effect 由 `isLive` 改为 `liveSessionId`，非最后一条 streaming 消息
+  不再留下空的量宽行。删除 `ProcessWorkElapsed` 与 `.process-shimmer`——收纳行
+  流式期只显示计数，结算后才显示 `message.durationMs`（时长正文出口仍按 E25）。
+- `chatStore.markDone`：同一 turn 的多条 streaming 消息全部停表，但结算读数
+  （`durationMs` / `waitMs` / `toolMs` / `tps` / `finishedAt`）只落到最后一条
+  （它们共同对应后端同一行，`turnToSyncPayload` 已按 turn 合并回写）。
+- 定稿读数仍按消息显示：历史行各自属于不同 turn，不受影响（E23 不变）。
+
+**覆盖关系**：本条覆盖 E25 中「流式期收纳行不动」的表述——收纳行流式期不再显示
+实时时长；E25 的定稿主段「结束于」与 hover tooltip 时长保留不变。
+
+**测试**：`ChatMessage.metarow.test.tsx` 新增「两条 streaming 消息只渲染一行实时
+读数」；`ChatMessage.process.test.tsx` 的流式用例改为断言收纳行不再出现实时时长；
+`chatStore.test.ts` 新增「同一 turn 多条 streaming 消息读数只落最后一条」。前端全量
+115 文件 / 1198 例、`tsc -b`、`lint`（0 error，18 条既有 warning）通过。

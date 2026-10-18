@@ -102,8 +102,22 @@ impl PermissionManager {
     }
 
     pub async fn resolve(&self, id: &str, option_id: &str) -> bool {
+        self.resolve_with(id, option_id, || {}).await
+    }
+
+    /// 与 [`Self::resolve`] 相同，但在向 agent 发送应答**之前**执行 `before_respond`。
+    ///
+    /// 自动审批用它先把 mid-turn SYSTEM 告知写入 turn 的有序帧窗口并广播，使 agent
+    /// 的后续输出必然排在告知之后（否则 live 端会把告知追加到新输出后面）。
+    /// 钩子是同步的：持 `pending` 锁期间不能 await；请求已被其他路径解决时钩子
+    /// 不执行，因此不会留下「用户已手动应答却仍记一条自动告知」的幽灵消息。
+    pub async fn resolve_with<F>(&self, id: &str, option_id: &str, before_respond: F) -> bool
+    where
+        F: FnOnce(),
+    {
         let mut map = self.pending.lock().await;
         if let Some(entry) = map.remove(id) {
+            before_respond();
             let _ = entry.responder.respond(RequestPermissionResponse::new(
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                     PermissionOptionId::new(option_id),

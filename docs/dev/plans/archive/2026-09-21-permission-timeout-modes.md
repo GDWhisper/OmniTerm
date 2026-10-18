@@ -126,3 +126,10 @@ Phase 3 测试与文档：Rust 21 项新单测（选项优先级/摘要/配置/�
 
 **回归**：`useAcpChat.permissionorder.test.tsx` 四例（倒置抑制 / 正常序 / 重连复位 / 上限淘汰）。
 
+## 勘误（2026-10-18）：mid-turn 告知合流进 session_update + 内联进 turn 帧窗口
+
+D4 的 `detail` 载荷不变。mid-turn 告知有两处调整：
+
+- **通道合流**：`system_notice_tx` 与 `session_update` 是两条 broadcast + 两个转发 task，auto 模式又先 `resolve` 再广播 → 告知常晚于 agent 的后续输出。现由 `AcpClient::notify_inline_system_notice` 生成合成 `session_info_update`（`_meta.omnitermSystem`），经 `session_update_tx` 同一有序通道下发；自动审批在 `PermissionManager::resolve_with` 的 `before_respond` 钩子里入队，`respond()` 之后 agent 才可能产出下一帧。
+- **持久化内联**：同一帧由 `TurnAccumulator::append_host_update` 进入当前 turn 的有序帧窗口；独立 `role='system'` 行仍落（blocks 带 `noticeId`）作为帧窗口驱逐兜底。前端 hydrate / 快照 / 聚焦补拉按 `noticeId` 去重。无活跃 turn / turn 失败等非内联告知仍走 `system_message` 帧。
+

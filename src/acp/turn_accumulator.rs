@@ -616,6 +616,26 @@ struct FlushSnapshot {
     last_seq: i64,
 }
 
+/// 把一帧加入 turn 的帧窗口（帧数 / 字节双轴有界，从头部驱逐）。
+///
+/// `fold` 的 agent 帧与 [`TurnAccumulator::append_host_update`] 的宿主告知帧共用；
+/// 单帧超预算时不入窗口（`text` 已另行累积，被驱逐的只是结构化恢复窗口）。
+fn push_frame(st: &mut TurnState, frame: Box<serde_json::value::RawValue>) {
+    let bytes = frame.get().len();
+    if bytes > MAX_FRAME_BYTES {
+        tracing::debug!(bytes, "dropping oversized session update frame from turn window");
+        return;
+    }
+    st.frames.push_back(frame);
+    st.frames_bytes += bytes;
+    while st.frames.len() > MAX_FRAMES || st.frames_bytes > MAX_BLOCKS_BYTES {
+        match st.frames.pop_front() {
+            Some(old) => st.frames_bytes -= old.get().len(),
+            None => break,
+        }
+    }
+}
+
 impl TurnAccumulator {
     pub fn new() -> Self {
         Self { inner: Mutex::new(TurnState::default()), sink: Mutex::new(None) }
@@ -684,30 +704,7 @@ impl TurnAccumulator {
                 st.stats_on_tool(id, status, Instant::now());
             }
             match serde_json::value::to_raw_value(&notification.update) {
-                Ok(frame) => {
-                    let bytes = frame.get().len();
-                    if bytes > MAX_FRAME_BYTES {
-                        // Oversized single frame: never enters the window (see
-                        // MAX_FRAME_BYTES). Its text is already in `st.text`.
-                        tracing::debug!(
-                            bytes,
-                            "dropping oversized session update frame from turn window"
-                        );
-                    } else {
-                        st.frames.push_back(frame);
-                        st.frames_bytes += bytes;
-                        // Bounded window on both axes: drop oldest frames until the
-                        // frame-count and byte budgets both hold. `text` accumulates
-                        // full agent text separately, so evicting a thought/tool frame
-                        // only narrows the mid-turn recovery window.
-                        while st.frames.len() > MAX_FRAMES || st.frames_bytes > MAX_BLOCKS_BYTES {
-                            match st.frames.pop_front() {
-                                Some(old) => st.frames_bytes -= old.get().len(),
-                                None => break,
-                            }
-                        }
-                    }
-                }
+                Ok(frame) => push_frame(&mut st, frame),
                 Err(e) => {
                     tracing::warn!("failed to serialize session update for persistence: {}", e)
                 }
@@ -717,6 +714,40 @@ impl TurnAccumulator {
         };
         self.send_cmd(WriterCmd::Flush);
         Some(seq)
+    }
+
+    /// 把宿主生成的更新帧（mid-turn SYSTEM 告知）追加到**当前 turn 的帧窗口**。
+    ///
+    /// 与 `fold` 的区别：不累计 `text`、不判定 `output_seen`、不喂 tps/工具记账——
+    /// 系统告知不是 agent 产出。帧进入同一个有序窗口，hydrate / turn_snapshot
+    /// 解码时与前后 agent 帧保持同一位置（修「system 行整行置底」）。无活跃 turn
+    /// 时返回 `None`，调用方降级为独立的 system 行。
+    ///
+    /// 返回 `(seq, row_id)`：`seq` 供广播帧去重；`row_id` 供调用方定位本 turn 的
+    /// assistant 行（当前实现用于日志/测试，线上 WS 帧不依赖它）。
+    pub fn append_host_update(&self, update: &serde_json::Value) -> Option<(u64, String)> {
+        let (seq, row_id) = {
+            let Ok(mut st) = self.inner.lock() else { return None };
+            if !st.active {
+                return None;
+            }
+            st.seq += 1;
+            if st.row_id.is_none() {
+                st.row_id = Some(Uuid::new_v4().to_string());
+            }
+            let row_id = st.row_id.clone()?;
+            match serde_json::value::to_raw_value(update) {
+                Ok(frame) => push_frame(&mut st, frame),
+                Err(e) => {
+                    tracing::warn!("failed to serialize host update for persistence: {}", e);
+                    return None;
+                }
+            }
+            st.dirty = true;
+            (st.seq, row_id)
+        };
+        self.send_cmd(WriterCmd::Flush);
+        Some((seq, row_id))
     }
 
     /// 一段「等真人审批」开始：权限请求进入未决态。计数 +1，由 0 变正时起算计时。
@@ -2246,6 +2277,44 @@ mod tests {
         assert!(stats.work_ms >= 20, "工作时长应走表，实得 {}", stats.work_ms);
         assert!(stats.tool_ms.unwrap_or(0) > 0, "工具应已起表，实得 {:?}", stats.tool_ms);
         assert!(stats.tps.unwrap_or(0.0) > 0.0, "有输出应有速率，实得 {:?}", stats.tps);
+    }
+
+    /// mid-turn SYSTEM 告知帧进入同一帧窗口，且不改变 agent 产出判定/文本/统计。
+    #[test]
+    fn host_update_is_inlined_without_counting_as_agent_output() {
+        let acc = TurnAccumulator::new();
+        let base = Instant::now();
+        begin_turn_at(&acc, base);
+        let update = serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "_meta": { "omnitermSystem": { "id": "notice-1", "label": "system.permTimeout.auto" } }
+        });
+        let (seq, row_id) = acc.append_host_update(&update).expect("活跃 turn 应接受宿主帧");
+        assert_eq!(row_id, acc.turn_row_id().expect("row id"));
+        let snap = acc.turn_snapshot();
+        assert_eq!(snap.seq, seq);
+        assert!(snap.text.is_empty(), "宿主告知不写 agent text");
+        assert!(!acc.turn_has_visible_output(), "宿主告知不是 agent 可见产出");
+        let parsed: serde_json::Value = serde_json::from_str(&snap.blocks).expect("blocks json");
+        assert!(
+            parsed["frames"]
+                .as_array()
+                .expect("frames array")
+                .iter()
+                .any(|f| f["_meta"]["omnitermSystem"]["id"] == "notice-1"),
+            "宿主帧应进入 turn 的有序帧窗口：{}",
+            snap.blocks
+        );
+    }
+
+    /// 无活跃 turn（turn 已定稿/从未开始）时返回 None，调用方降级为独立 system 行。
+    #[test]
+    fn host_update_is_rejected_outside_an_active_turn() {
+        let acc = TurnAccumulator::new();
+        assert!(acc.append_host_update(&serde_json::json!({"x": 1})).is_none());
+        acc.begin_turn();
+        acc.finalize_turn();
+        assert!(acc.append_host_update(&serde_json::json!({"x": 1})).is_none());
     }
 
     /// UTF-16 计数口径：emoji（代理对）按 2 计——与旧前端 `String.length` 同口径，
