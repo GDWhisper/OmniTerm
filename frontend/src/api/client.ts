@@ -325,6 +325,19 @@ export const api = {
     request<{ files: FileEntry[] }>(`/system/dirs?path=${encodeURIComponent(path)}`, { silent: true }),
   pathExists: (path: string) =>
     request<{ exists: boolean }>(`/system/exists?path=${encodeURIComponent(path)}`),
+  /** 在运行 OmniTerm 的本机调起系统目录选择器；远程访问会被后端 403
+   *  （body.code = "native_picker_local_only"）。用户取消返回
+   *  `{ cancelled: true }`。AbortSignal 用于关闭弹窗时取消请求（后端 handler
+   *  被丢弃 → 子进程 kill_on_drop → 原生对话框关闭）。
+   *
+   *  silent：错误由调用方本地化（localhost 限制文案），勿走统一 toast。 */
+  pickDirectory: (initialDir: string | null, signal?: AbortSignal) =>
+    request<{ path?: string; cancelled?: boolean }>('/system/pick-directory', {
+      method: 'POST',
+      body: JSON.stringify({ initial_dir: initialDir }),
+      signal,
+      silent: true,
+    }),
   versionCheck: () =>
     request<{
       current: string

@@ -222,6 +222,30 @@ describe('mergeLatestMessages — 聚焦补拉的 DB 最新页合并', () => {
     ])
     expect(state().messages.map((m) => m.id)).toEqual(['u1', 'a1', 'row-u2', 'row-a2'])
   })
+
+  it('assistant 行已内联 SYSTEM 告知时，去掉 live 独立消息与同 noticeId 的 DB system 行', () => {
+    const noticeBlocks = (id: string): ContentBlock[] => [
+      { type: 'system', label: 'system.permTimeout.auto', noticeId: id },
+    ]
+    seed([
+      mk({ id: 'u1', dbId: 'u1', role: 'user', text: 'q', createdAt: 10 }),
+      mk({ id: 'sys-live', role: 'system', text: '[notice]', blocks: noticeBlocks('n1'), createdAt: 15 }),
+      mk({ id: 'a1', dbId: 'a1', role: 'assistant', text: 'done', createdAt: 20 }),
+    ])
+    useChatStore.getState().mergeLatestMessages('s1', [
+      row('a1', 'assistant', 'done', {
+        createdAt: 20,
+        blocks: [
+          { type: 'text', text: 'done' },
+          { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+        ],
+      }),
+      row('sys-db', 'system', '[notice]', { createdAt: 21, blocks: noticeBlocks('n1') }),
+    ])
+    const msgs = state().messages
+    expect(msgs.map((m) => m.id)).toEqual(['u1', 'a1'])
+    expect(msgs[1].blocks).toHaveLength(2)
+  })
 })
 
 describe('断连标记与 markDone 的 rowId 落值', () => {

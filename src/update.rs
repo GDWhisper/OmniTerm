@@ -14,6 +14,11 @@ macro_rules! npm_package {
     };
 }
 const CRATE_NAME: &str = "omniterm";
+/// npm 官方源。用户配置的 registry 常是国内镜像（npmmirror 等），其同步是**逐包异步**
+/// 的——主包已同步、某个平台包（optionalDependencies 分发二进制）仍停留在旧版本时，
+/// npm 会把缺失版本的 optional dep 静默跳过（`placeDep ... @pkg@` 空版本 → `REMOVE`）
+/// 并以 0 退出，装完只剩一个没有二进制的壳。官方源永远先于镜像完整，用于自愈重试。
+const OFFICIAL_NPM_REGISTRY: &str = "https://registry.npmjs.org";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = concat!("omniterm-update/", env!("CARGO_PKG_VERSION"));
 
@@ -400,12 +405,24 @@ fn owning_install_prefix(exe: &Path) -> Option<PathBuf> {
 /// 那棵树」，与 PATH / npmrc / 哪个 node 解释 npm 全部无关；推导不出前缀时才退化为
 /// 默认行为，由装后版本校验（`verify_installed_version`）把错装变成明确报错。
 fn npm_upgrade_args(exe: &Path) -> Vec<String> {
+    npm_upgrade_args_with_registry(exe, None)
+}
+
+/// 同上，可显式指定 registry（`None` 表示沿用用户 npm 配置）。
+///
+/// `--registry` 显式传入时无视 npmrc / 环境变量——镜像源只同步了主包、没同步平台包
+/// 时，第一次安装会静默产出一个没有二进制的安装，需要官方源重试才能恢复。
+fn npm_upgrade_args_with_registry(exe: &Path, registry: Option<&str>) -> Vec<String> {
     let mut args = vec!["install".to_string(), "-g".to_string()];
     // npm 对不存在的 prefix 直接 ENOENT（实测）；推得出的前缀来自活路径必然存在，
     // 仍留 is_dir 防御——半删除的 node 安装不该把升级变成一次莫名其妙的 lstat 失败。
     if let Some(prefix) = owning_install_prefix(exe).filter(|p| p.is_dir()) {
         args.push("--prefix".to_string());
         args.push(prefix.to_string_lossy().into_owned());
+    }
+    if let Some(registry) = registry {
+        args.push("--registry".to_string());
+        args.push(registry.to_string());
     }
     args.push(concat!(npm_package!(), "@latest").to_string());
     args
@@ -436,6 +453,14 @@ async fn delegate<S: AsRef<std::ffi::OsStr>>(
 pub(crate) async fn npm_upgrade(exe: &Path) -> Result<String> {
     let program = resolve_program("npm")?;
     let args = npm_upgrade_args(exe);
+    run_captured(&program, "npm", &args).await
+}
+
+/// 官方源重试：镜像缺平台包 / 版本滞后时的自愈路径（参数与 `npm_upgrade` 一致，
+/// 仅追加 `--registry`）。调用方负责再跑一次 `verify_installed_version`。
+pub(crate) async fn npm_upgrade_from_official(exe: &Path) -> Result<String> {
+    let program = resolve_program("npm")?;
+    let args = npm_upgrade_args_with_registry(exe, Some(OFFICIAL_NPM_REGISTRY));
     run_captured(&program, "npm", &args).await
 }
 
@@ -473,9 +498,12 @@ pub(crate) async fn verify_installed_version(exe: &Path, expected: &Version) -> 
     let exe = revive_dead_exe(exe).unwrap_or_else(|| exe.to_path_buf());
     if !exe.exists() {
         bail!(
-            "npm finished but no binary at {}. The installation may be corrupted; reinstall: npm install -g {}",
+            "npm finished but the platform binary is missing at {}. The registry mirror \
+             probably skipped the optional platform package; reinstall from the official \
+             registry: npm install -g {} --registry={}",
             exe.display(),
-            concat!(npm_package!(), "@latest")
+            concat!(npm_package!(), "@latest"),
+            OFFICIAL_NPM_REGISTRY
         );
     }
     let output = tokio::process::Command::new(&exe)
@@ -885,6 +913,25 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn npm_upgrade_args_can_override_registry_for_official_retry() {
+        // 镜像缺平台包时（主包已同步、optional dep 没同步）必须能换官方源重装；
+        // --registry 要显式覆盖 npmrc，否则重试仍走同一个残缺镜像。
+        assert_eq!(
+            npm_upgrade_args_with_registry(
+                Path::new("/usr/local/bin/omniterm"),
+                Some(OFFICIAL_NPM_REGISTRY)
+            ),
+            vec![
+                "install",
+                "-g",
+                "--registry",
+                OFFICIAL_NPM_REGISTRY,
+                "@gdwhisper/omniterm@latest"
+            ]
+        );
     }
 
     #[test]

@@ -10,9 +10,9 @@ use agent_client_protocol::schema::v1::{
     ImageContent, InitializeRequest, KillTerminalRequest, ListSessionsRequest, LoadSessionRequest,
     NewSessionRequest, PromptRequest, PromptResponse, ReadTextFileRequest, ReadTextFileResponse,
     ReleaseTerminalRequest, RequestPermissionRequest, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionValue, SessionId, SessionInfo, SessionNotification,
-    SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent, TextResourceContents,
-    WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
+    SessionConfigOption, SessionConfigOptionValue, SessionId, SessionInfo, SessionInfoUpdate,
+    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, StopReason, TextContent,
+    TextResourceContents, WaitForTerminalExitRequest, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{AcpAgent, Agent as AcpAgentRole, ConnectionTo, Error as AcpError};
 use serde::Deserialize;
@@ -212,6 +212,10 @@ pub enum TurnEvent {
 pub struct SystemNotice {
     pub label: String,
     pub detail: Option<serde_json::Value>,
+    /// 内联告知的去重 id：mid-turn 告知同时写入 assistant 行的有序帧窗口，WS 帧
+    /// 携带同一 id；前端在 turn_snapshot / 聚焦补拉时据此去掉重复的独立 system
+    /// 消息。`None` = 非内联告知（turn 失败等，只落独立 system 行）。
+    pub notice_id: Option<String>,
 }
 
 /// 后端可观测的 agent 活跃度状态（对所有 ACP agent 通用，与具体 agent 实现无关）。
@@ -1163,6 +1167,65 @@ impl AcpClient {
     /// 广播后端主动产生的系统通知（权限超时回收告知等；无订阅者时静默丢弃）。
     pub fn notify_system_message(&self, notice: SystemNotice) {
         let _ = self.system_notice_tx.send(notice);
+    }
+
+    /// mid-turn SYSTEM 告知：写入当前 turn 的**有序帧窗口**（hydrate / snapshot 时
+    /// 与前后 agent 帧保持同一位置），并广播实时 `system_message` 帧。
+    ///
+    /// 返回 `false` = 无活跃 turn（调用方降级为独立 system 行）。`notice_id` 必须
+    /// 存在：它同时进入帧内 `_meta.omnitermSystem.id` 与 WS 帧，供前端在快照/补拉
+    /// 时去掉重复的独立 system 消息。
+    pub fn notify_inline_system_notice(&self, notice: &SystemNotice) -> bool {
+        let Some(notice_id) = notice.notice_id.as_deref() else { return false };
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "omnitermSystem".to_string(),
+            serde_json::json!({
+                "id": notice_id,
+                "label": notice.label,
+                "detail": notice.detail,
+            }),
+        );
+        let update = SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(Some(meta)));
+        let Ok(update_json) = serde_json::to_value(&update) else {
+            tracing::warn!("failed to serialize inline system notice");
+            return false;
+        };
+        let Some((seq, _row_id)) = self.accumulator.append_host_update(&update_json) else {
+            return false;
+        };
+        // 与 agent session_update 走同一有序广播通道：本帧在自动审批的
+        // `responder.respond()` 之前入队，agent 的后续输出必然排在它之后；
+        // 前端 classifier 识别 `_meta.omnitermSystem` 后按独立 SYSTEM 消息落地。
+        let notification = SessionNotification::new(self.session_id.clone(), update);
+        let _ = self.session_update_tx.send(SeqNotification { seq: Some(seq), notification });
+        true
+    }
+
+    /// 自动审批专用：在 agent 收到 `Selected` 应答**之前**写入并广播 SYSTEM 告知，
+    /// 保证 live 端先看到告知、再看到 agent 的后续输出；若请求已被用户抢先解决，
+    /// `resolve_with` 的钩子不会执行（不会留下幽灵告知）。
+    ///
+    /// 返回 `(resolved, notice_emitted)`；`resolved && !notice_emitted` 表示无活跃
+    /// turn，调用方应回退到独立 system 行。
+    pub async fn resolve_permission_with_notice(
+        &self,
+        id: &str,
+        option_id: &str,
+        notice: &SystemNotice,
+    ) -> (bool, bool) {
+        let mut notice_emitted = false;
+        let resolved = self
+            .permission_manager
+            .resolve_with(id, option_id, || {
+                notice_emitted = self.notify_inline_system_notice(notice);
+            })
+            .await;
+        if resolved {
+            // 与 resolve_permission 同一口径：只在本次真正消费掉未决审批时结束等待段。
+            self.accumulator.end_wait();
+        }
+        (resolved, notice_emitted)
     }
 
     pub fn permission_subscribe(&self) -> broadcast::Receiver<PermissionRequestEvent> {

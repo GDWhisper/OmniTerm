@@ -91,6 +91,36 @@ describe('evicted prose prefix recovery (decodeStoredBlocks)', () => {
     const cooked = [{ type: 'text', text: 'cooked' }]
     expect(decodeStoredBlocks(JSON.stringify(cooked), 'ignored prefix source')).toEqual(cooked)
   })
+
+  it('decodes a host inline SYSTEM frame in place and preserves noticeId', () => {
+    const wrapper = JSON.stringify({
+      v: 1,
+      frames: [
+        chunkFrame('before'),
+        {
+          sessionUpdate: 'session_info_update',
+          _meta: {
+            omnitermSystem: {
+              id: 'n1',
+              label: 'system.permTimeout.auto',
+              detail: { seconds: 0 },
+            },
+          },
+        },
+        chunkFrame('after'),
+      ],
+    })
+    expect(decodeStoredBlocks(wrapper, 'beforeafter')).toEqual([
+      { type: 'text', text: 'before' },
+      {
+        type: 'system',
+        label: 'system.permTimeout.auto',
+        detail: { seconds: 0 },
+        noticeId: 'n1',
+      },
+      { type: 'text', text: 'after' },
+    ])
+  })
 })
 
 describe('mid-turn join — prompt_done skips cooked write-back', () => {
@@ -195,6 +225,50 @@ describe('mid-turn join — prompt_done skips cooked write-back', () => {
     expect(body.messages).toHaveLength(1)
     expect(body.messages[0].id).toBe('row-7')
     expect(body.messages[0].text).toBe('full answer')
+  })
+
+  it('mid-turn SYSTEM session_update 内联进 assistant 消息（不是独立 SYSTEM 消息）', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+      useChatStore.getState().setHydrated('s1', true)
+      useChatStore.getState().beginPrompt('s1')
+    })
+
+    send(ws, {
+      type: 'session_update',
+      seq: 1,
+      data: { update: chunkFrame('before') },
+    })
+    send(ws, {
+      type: 'session_update',
+      seq: 2,
+      data: {
+        update: {
+          sessionUpdate: 'session_info_update',
+          _meta: {
+            omnitermSystem: {
+              id: 'n1',
+              label: 'test.notice',
+              detail: { seconds: 0 },
+            },
+          },
+        },
+      },
+    })
+    // prompt_done 会先 flush liveBuffer；告知应与正文同处一条 assistant 消息。
+    send(ws, { type: 'prompt_done', stop_reason: 'end_turn', row_id: 'row-8' })
+
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('assistant')
+    expect(msgs[0].blocks).toEqual([
+      { type: 'text', text: 'before' },
+      { type: 'system', label: 'test.notice', detail: { seconds: 0 }, noticeId: 'n1' },
+    ])
+    // cooked 回写同样带内联告知，不允许被覆盖丢失。
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(JSON.parse(body.messages[0].blocks)).toEqual(msgs[0].blocks)
   })
 
   it('the skip is per-turn: the next turn after a mid-turn join writes back again', () => {

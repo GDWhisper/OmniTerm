@@ -375,14 +375,15 @@ describe('ProcessBlocks 流式态', () => {
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
-  it('流式中标题走实时读数（秒数在跳即表达进行中）', () => {
-    // 标题主体是工作时长而非状态词：流式中秒数逐帧增长，本身就是「进行中」。
-    // 实时读数来自后端 `turn_stats` 推送（utils/turnStats 缓存），挂载读缓存、
-    // 推送到达直写 DOM，故同步断言即可。
+  it('流式中收纳行不再重复显示实时时长（唯一显示处在气泡底部）', () => {
+    // 同一 turn 的多条 streaming 消息共享一份会话级 `turn_stats`；收纳行若也订阅，
+    // 每条消息都会重复同一个「已工作」，与气泡底部元信息行打架（2026-10-18 用户报告）。
     setLiveTurnStats('sess-live', { workMs: 5_000, toolMs: null, tps: null })
     try {
       render(processMsg({ streaming: true }), 'sess-live')
-      expect(processHeader()!.textContent).toContain('已工作')
+      expect(processHeader()!.textContent).not.toContain('已工作')
+      expect(processHeader()!.textContent).not.toContain('工作中')
+      expect(processHeader()!.textContent).toContain('工具调用 2 次')
     } finally {
       clearAllLiveTurnStats()
     }
@@ -467,7 +468,7 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
     expect(container.querySelector('.thinking-header-btn')).toBeTruthy()
   })
 
-  it('system 块留在容器外（审批必须可见可点）', () => {
+  it('结论前的 system 块随过程容器折叠（只读告知）', () => {
     render(
       processMsg({
         blocks: [
@@ -478,9 +479,11 @@ describe('ProcessBlocks 边界：不改变无容器场景的行为', () => {
         ],
       }),
     )
-    // system 在容器外原序渲染，不随容器折叠而消失
+    // 定稿态默认收起：容器内的 system 告知随工作块一起隐藏。
     expect(container.querySelector('.process-header-btn')).toBeTruthy()
     const row = container.querySelector<HTMLElement>('[data-chat-msg-id="m1"]')!
+    expect(row.textContent).not.toContain('权限请求')
+    click(processHeader())
     expect(row.textContent).toContain('权限请求')
   })
 
@@ -512,5 +515,23 @@ describe('ProcessBlocks i18n key 齐备', () => {
       expect(zhMap[k], `zh ${k}`).toBeTruthy()
       expect(enMap[k], `en ${k}`).toBeTruthy()
     }
+  })
+})
+
+describe('ProcessBlocks mid-turn SYSTEM 告知归组', () => {
+  it('结论之后的 SYSTEM 告知留在容器外原位（流式顺序不提前）', () => {
+    render({
+      id: 'm-sys-tail',
+      role: 'assistant',
+      text: '最终结论',
+      blocks: [
+        { type: 'thought', text: '先想一下' },
+        { type: 'text', text: '最终结论' },
+        { type: 'system', label: 'test.notice.tail', noticeId: 'n2' },
+      ],
+      createdAt: 0,
+    })
+    // 收纳行收起，但结论后的告知不属于「结论之前」前缀 → 仍原位可见。
+    expect(container.textContent).toContain('test.notice.tail')
   })
 })

@@ -602,6 +602,90 @@ describe('turnToSyncPayload', () => {
     expect(turnToSyncPayload([mk({ role: 'assistant', text: 'done' })], 'row-1')).toEqual([])
     expect(turnToSyncPayload([], 'row-1')).toEqual([])
   })
+
+  it('keeps mid-turn inline SYSTEM notices in store order', () => {
+    // live 时告知是独立 system 消息，但后端把它内联进 assistant 行的有序帧窗口；
+    // cooked 回写必须按同一顺序带上它，否则 prompt_done 会把刚写入的告知覆盖掉。
+    const msgs = [
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'part1', streaming: true }),
+      mk({
+        role: 'system',
+        text: '[system.permTimeout.auto]',
+        blocks: [{ type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' }],
+      }),
+      mk({ role: 'assistant', text: 'part2', streaming: true }),
+    ]
+    expect(turnToSyncPayload(msgs, 'row-1')).toEqual([
+      {
+        id: 'row-1',
+        role: 'assistant',
+        text: 'part1part2',
+        blocks: JSON.stringify([
+          { type: 'text', text: 'part1' },
+          { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+          { type: 'text', text: 'part2' },
+        ]),
+      },
+    ])
+  })
+
+  it('does not absorb standalone SYSTEM rows without a noticeId', () => {
+    // turn 失败等独立 system 行不属于 assistant 行的 blocks；它们有自己的 DB 行。
+    const msgs = [
+      mk({ role: 'user', text: 'q' }),
+      mk({ role: 'assistant', text: 'a', streaming: true }),
+      mk({
+        role: 'system',
+        text: '[system.turnFailed.refusal]',
+        blocks: [{ type: 'system', label: 'system.turnFailed.refusal' }],
+      }),
+    ]
+    expect(turnToSyncPayload(msgs, 'row-1')[0].blocks).toBe(
+      JSON.stringify([{ type: 'text', text: 'a' }]),
+    )
+  })
+})
+
+describe('applyTurnSnapshot 内联 SYSTEM 去重', () => {
+  it('drops the live standalone SYSTEM message whose noticeId is in the snapshot blocks', () => {
+    useChatStore.setState({ states: {} })
+    const s = useChatStore.getState()
+    s.hydrate('s1', [
+      { id: 'u1', role: 'user', text: 'q', blocks: [{ type: 'text', text: 'q' }], createdAt: 1 },
+      {
+        id: 'sys-live',
+        role: 'system',
+        text: '[notice]',
+        blocks: [{ type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' }],
+        createdAt: 2,
+      },
+      {
+        id: 'a-live',
+        role: 'assistant',
+        text: 'part',
+        blocks: [{ type: 'text', text: 'part' }],
+        createdAt: 3,
+        streaming: true,
+      },
+    ], null)
+
+    s.applyTurnSnapshot('s1', {
+      rowId: 'row-1',
+      text: 'part',
+      blocks: [
+        { type: 'text', text: 'part' },
+        { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+      ],
+    })
+
+    const msgs = useChatStore.getState().states['s1'].messages
+    expect(msgs.map((m) => m.id)).toEqual(['u1', 'row-1'])
+    expect(msgs[1].blocks).toEqual([
+      { type: 'text', text: 'part' },
+      { type: 'system', label: 'system.permTimeout.auto', noticeId: 'n1' },
+    ])
+  })
 })
 
 describe('storedRawRowToSyncPayload (方案 B：hydrate 后收敛 RAW 残留行)', () => {
@@ -745,6 +829,36 @@ describe('markDone 落定读数（后端结算载荷）', () => {
     expect(m.tps).toBe(42.5)
     expect(m.finishedAt).toBe('2026-10-16T08:00:00+00:00')
     expect(m.dbId).toBe('row-1')
+  })
+
+  it('同一 turn 的多条 streaming 消息：读数只落到最后一条', () => {
+    // 一个 turn 会被 system 通知 / 工具卡切成多条 streaming 消息，它们共同对应
+    // 后端同一行（turnToSyncPayload 也按 turn 合并回写）。结算读数逐条写入会让
+    // 「结束于 … · 工具 … · … tok/s」在多条气泡底部重复（2026-10-18 用户报告）。
+    useChatStore.getState().hydrate('s1', [
+      streamingMsg({ id: 'a1', text: 'first' }),
+      streamingMsg({ id: 'a2', text: 'second' }),
+    ], null)
+    useChatStore
+      .getState()
+      .markDone(
+        's1',
+        { workMs: 5_000, waitMs: 800, toolMs: 1_500, tps: 42.5, finishedAt: '2026-10-16T08:00:00+00:00' },
+        'row-1',
+      )
+    const [first, last] = useChatStore.getState().states['s1'].messages
+    expect(first.streaming).toBe(false)
+    expect(last.streaming).toBe(false)
+    expect(first.durationMs).toBeUndefined()
+    expect(first.waitMs).toBeUndefined()
+    expect(first.toolMs).toBeUndefined()
+    expect(first.tps).toBeUndefined()
+    expect(first.finishedAt).toBeUndefined()
+    expect(last.durationMs).toBe(5_000)
+    expect(last.waitMs).toBe(800)
+    expect(last.toolMs).toBe(1_500)
+    expect(last.tps).toBe(42.5)
+    expect(last.finishedAt).toBe('2026-10-16T08:00:00+00:00')
   })
 
   it('timing 缺省（turn_state(false) 兜底路径）不覆盖消息已有读数', () => {
@@ -910,6 +1024,38 @@ describe('流式 prose 块合并（thought 分段修复）', () => {
     expect(msg.blocks.map((b) => b.type)).toEqual(['thought', 'text'])
     expect((msg.blocks[0] as { text: string }).text).toBe('t1t2')
     expect((msg.blocks[1] as { text: string }).text).toBe('ab')
+  })
+
+  it('mid-turn SYSTEM 告知内联到尾部 assistant，顺序插在 prose 之间', () => {
+    const blocks = replayBlocks([
+      M('before'),
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+      M('after'),
+    ])
+    expect(asTypes(blocks)).toEqual(['text', 'system', 'text'])
+    expect(textAt(blocks, 0)).toBe('before')
+    expect((blocks[1] as { noticeId?: string }).noticeId).toBe('n1')
+    expect(textAt(blocks, 2)).toBe('after')
+  })
+
+  it('mid-turn SYSTEM 告知无 assistant 尾部时新建 assistant（不落独立 system 消息）', () => {
+    const msgs = buildReplayMessages([
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+    ])
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('assistant')
+    expect(msgs[0].blocks).toEqual([
+      { type: 'system', label: 'test.notice', noticeId: 'n1' },
+    ])
+  })
+
+  it('同一 noticeId 的重复告知帧不重复插块', () => {
+    const blocks = replayBlocks([
+      M('a'),
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+      { kind: 'appendSystemBlock', label: 'test.notice', noticeId: 'n1' },
+    ])
+    expect(asTypes(blocks)).toEqual(['text', 'system'])
   })
 })
 

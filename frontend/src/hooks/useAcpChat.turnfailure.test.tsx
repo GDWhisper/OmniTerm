@@ -330,6 +330,27 @@ describe('turn failure — the visible notice comes from the system_message fram
     expect(messages.filter((m) => m.role === 'system')).toHaveLength(1)
   })
 
+  it('system_message notice_id tags the live SYSTEM block for snapshot/merge dedup', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+    })
+    settleHydrate()
+
+    send(ws, {
+      type: 'system_message',
+      label: 'system.permTimeout.auto',
+      detail: { seconds: 0 },
+      notice_id: 'n1',
+    })
+
+    const messages = useChatStore.getState().states['s1'].messages
+    expect(messages).toHaveLength(1)
+    expect(messages[0].blocks).toEqual([
+      { type: 'system', label: 'system.permTimeout.auto', detail: { seconds: 0 }, noticeId: 'n1' },
+    ])
+  })
+
   it('offline abnormal end: the DB row alone carries the notice after a later hydrate (P0-2)', () => {
     // 真实时序：turn 在 WS 离线期间异常结束 → 后端同时写 system 行并广播
     // system_message 帧，离线客户端**两者都没收到**（broadcast 无历史）。

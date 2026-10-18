@@ -206,6 +206,33 @@ describe('ChatMessageView meta row line breaking', () => {
     segments = readingSegments()
     expect(segments[0].textContent).toBe('工作中 9秒')
   })
+
+  it('renders the live reading only at the bottom of the latest assistant message', () => {
+    // 同一 turn 会被 system 通知 / 工具卡切成多条 streaming 消息；`turn_stats` 是
+    // 会话级读数，逐条渲染会让同一组「工作中 … · 工具 … · … tok/s」在消息流里
+    // 重复出现（2026-10-18 用户报告截图）。唯一显示处 = 最后一条 assistant 底部。
+    setLiveTurnStats('s7', { workMs: 6_000, toolMs: 3_000, tps: 400 })
+    act(() => {
+      root.render(
+        <>
+          <ChatMessageView
+            message={assistant({ id: 'm-earlier', streaming: true })}
+            sessionId="s7"
+          />
+          <ChatMessageView
+            message={assistant({ id: 'm-latest', streaming: true })}
+            sessionId="s7"
+            isLastAssistant
+          />
+        </>,
+      )
+    })
+    const rows = container.querySelectorAll<HTMLDivElement>('.chat-meta-row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain('工作中 6秒')
+    expect(rows[0].textContent).toContain(' · 工具 3秒')
+    expect(rows[0].textContent).toContain(' · 400.0 tok/s')
+  })
 })
 
 // hover 说明浮层（2026-10-16 用户要求「只要 ACP 不提供、OmniTerm 计算这个意思」）：

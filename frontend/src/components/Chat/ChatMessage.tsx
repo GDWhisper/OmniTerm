@@ -237,55 +237,18 @@ interface ProcessEntry {
  * 「看不看得到明细」，那两个开关决定「展开后明细的粒度」——容器展开时内部各块
  * 照旧按开关渲染（ThoughtBlockView / ToolCallBlockView 各自读自己的设定）。
  */
-/**
- * 收纳行的流式工作时长读数：「已工作 X 分 X 秒」，秒级跳动。
- *
- * 读数来自后端 `turn_stats` 推送（`utils/turnStats`，前端只显示不计算），与
- * 元信息行的 `LiveWorkElapsed` 同源、同措词；收纳行只显示工作时长一段——工具
- * 耗时与 tps 属于气泡底部元信息行的职责。推送驱动、直写 DOM 而非 React state：
- * 秒级跳动重渲染整个消息列表是没有意义的浪费（旧本地时钟同款手法，驱动源换成
- * WS 帧后隐藏标签页不再受定时器节流影响）。
- */
-function ProcessWorkElapsed({ sessionId }: { sessionId: string }) {
-  const { t, i18n } = useTranslation()
-  const workRef = useRef<HTMLSpanElement>(null)
-
-  useEffect(() => {
-    const draw = (stats: LiveTurnStats | null) => {
-      const el = workRef.current
-      if (!el) return
-      const dur = stats ? formatWorkDuration(stats.workMs, i18n.language) : null
-      // 尚无推送（或 turn 已作废）：整格撤掉，只留字形与计数段。
-      const text = dur ? t('chat.msg.workTime', { dur }) : ''
-      if (el.textContent !== text) el.textContent = text
-    }
-    draw(getLiveTurnStats(sessionId))
-    return subscribeLiveTurnStats(sessionId, draw)
-  }, [sessionId, t, i18n])
-
-  return (
-    <span
-      className="process-shimmer"
-      style={{ flexShrink: 0, whiteSpace: 'nowrap', fontWeight: 500 }}
-    >
-      <span ref={workRef} />
-    </span>
-  )
-}
-
 function ProcessBlocks({
   entries,
   streaming,
   workText,
-  liveSessionId,
   renderEntry,
 }: {
   entries: ProcessEntry[]
   streaming: boolean
-  /** turn 工作时长结算值（后端定稿时算出的 `message.durationMs` 格式化）。 */
+  /** turn 工作时长结算值（后端定稿时算出的 `message.durationMs` 格式化）。
+   *  流式期恒为 null：实时时长只在气泡底部元信息行显示一次（后端 `turn_stats`
+   *  是会话级读数，同一 turn 的多条 streaming 消息拿到的是同一份值）。 */
   workText: string | null
-  /** 流式实时计时的会话 id（`isLive && !workText` 时才有值，见调用处）。 */
-  liveSessionId?: string
   renderEntry: (entry: ProcessEntry) => ReactNode
 }) {
   const { t } = useTranslation()
@@ -330,10 +293,10 @@ function ProcessBlocks({
   if (toolCount > 0) parts.push(t('chat.process.toolCount', { count: toolCount }))
   if (planCount > 0) parts.push(t('chat.process.planCount', { count: planCount }))
 
-  // 标题主体是**工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」），
-  // 而非状态词：秒数在跳即表达「进行中」，定格即表达「已完成」，不需要另设一套
-  // 状态文案。复用 `chat.msg.workTime`（与气泡底部元信息行同一读数、同一措词），
-  // 不新造键。流式中走实时读数，定稿后用结算值。
+  // 标题主体是**结算后的工作时长**（用户 2026-10-14 明确要求「标题是已工作 x 分 x 秒」）。
+  // 流式期不再在这里显示实时时长：`turn_stats` 是会话级读数，同一 turn 被
+  // system 通知/工具卡切成多条 streaming 消息时，收纳行会在每条消息上重复同一
+  // 个「已工作」值；实时读数统一由气泡底部元信息行唯一承担（2026-10-18 用户报告）。
   const durLabel = workText ? t('chat.msg.workTime', { dur: workText }) : null
 
   return (
@@ -368,13 +331,9 @@ function ProcessBlocks({
             空隙（「已工作 22分钟7秒·思考」粘连），而计数之间的 `·` 却来自
             join 的字面空格 —— 同一行两套分隔机制，视觉上忽宽忽窄。 */}
         <span className="process-summary-text">
-          {/* 流式中借思考块那套扫光表达「仍在进行中」；定稿后回落最浅文本色，避免
-              摘要喧宾夺主（同 ToolLayout 对 kindLabel 的处理理由）。 */}
-          {liveSessionId ? (
-            <ProcessWorkElapsed sessionId={liveSessionId} />
-          ) : (
-            durLabel && <span style={{ fontWeight: 500 }}>{durLabel}</span>
-          )}
+          {/* 结算态摘要用最浅文本色，避免喧宾夺主（同 ToolLayout 对 kindLabel 的
+              处理理由）。流式期时长段不在这里，见上方 durLabel 注释。 */}
+          {durLabel && <span style={{ fontWeight: 500 }}>{durLabel}</span>}
           {parts.length > 0 && ` · ${parts.join(' · ')}`}
         </span>
         {/* 收起态 hover 整行才显，展开态常显并转向下（同思考块箭头语义）。 */}
@@ -896,8 +855,7 @@ function renderBlock(
  * 读数来自后端 `turn_stats` 推送（约 1Hz，`utils/turnStats` 缓存；前端只显示不计算
  * ——估算的唯一真相源在后端累积器，见 work-time 计划 E23）。推送到达即重画，**不进
  * React state**：那会让整个消息列表每秒重渲染一次，而这里要的只是三个数字——直写
- * DOM 与 `ProcessWorkElapsed` 同手法；驱动源是 WS 帧而非本地定时器，隐藏标签页的
- * 定时器节流不再影响读数。
+ * DOM；驱动源是 WS 帧而非本地定时器，隐藏标签页的定时器节流不再影响读数。
  *
  * 靠左对齐（不加 `marginLeft:auto`）——流式期动作栏恒空，左右横跳的观感最差；
  * 定稿后整行才交给右侧的结算值（见渲染处）。
@@ -1132,7 +1090,13 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   const isLive = !!message.streaming && !!sessionId
   // 流式实时读数（工作/工具/tps）的显示门控。它同时决定元信息行宽托底（`min-width`，
   // 见渲染处）——两者必须同一条件，否则会出现「托了宽却没读数」或反之的错位。
-  const liveSessionId = isLive && !workText ? sessionId : undefined
+  //
+  // **只挂最后一条 assistant**：`turn_stats` 是会话级读数，同一 turn 会被 system
+  // 通知 / 工具卡切成多条 streaming 消息（`appendProseToMessages` 只在尾部仍是
+  // assistant 时续写），每条都拿到同一份值。若逐条渲染，同一条 turn 会在消息流里
+  // 重复出现多行相同的「工作中 12分钟10秒 · 工具 … · … tok/s」（2026-10-18 用户
+  // 报告截图）。定稿读数仍按消息各自显示（历史行各属不同 turn，见 E23）。
+  const liveSessionId = isLive && !workText && isLastAssistant ? sessionId : undefined
   // 定稿读数（工具耗时 / 估算速率）是**每条消息自己的**后端结算字段：来源与
   // `durationMs` 一致（hydrate 的 `GET /messages` 或 `prompt_done` 帧载荷），
   // 不再是会话级内存快照——历史行各自显示自己那一轮的值，刷新后常驻（E23）。
@@ -1153,7 +1117,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const row = rowRef.current
     // 实时计时同样要量宽：不量则 metaWidth 为空 → 该行按内容收缩，读数贴在气泡**左**缘，
     // 定稿换成结算值时才跳回右缘（肉眼可见的一次位移）。
-    if (!row || !(endText || isLive)) return
+    if (!row || !(endText || liveSessionId)) return
     const bodies = row.querySelectorAll<HTMLElement>('[data-chat-body]')
     const last = bodies[bodies.length - 1]
     if (!last) return
@@ -1163,7 +1127,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
     const ro = new ResizeObserver(measure)
     ro.observe(last)
     return () => ro.disconnect()
-  }, [endText, isLive, message.blocks])
+  }, [endText, liveSessionId, message.blocks])
 
   const label = (
     <div
@@ -1346,12 +1310,18 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   // 归组规则（2026-10-15 用户报告「每个小输出都折叠起来」后改为**整轮一个容器**，
   // 2026-10-16 修流式顺序后拆分点收敛为「结论之前」）：
   // 容器收纳**最终 text 结论之前**的一切——过程块（thought / tool_call / plan）+
-  // 夹在过程块之间的中间 text 输出；结论**及其后**的块（含「结论之后又调了工具」
-  // 的收尾过程块）留在容器外**原位**渲染。
+  // 夹在过程块之间的中间 text 输出 + **mid-turn SYSTEM 告知**；结论**及其后**的
+  // 块（含「结论之后又调了工具」的收尾过程块 / 末尾告知）留在容器外**原位**渲染。
   // 早先按「连续过程块」切段归组，每段文字之间各攒出一个容器：一轮输出被切成
   // 「文字 + ◈已工作…」交替的许多行（用户截图里同一条消息出现 5 行收纳摘要），
   // 与 ZCode「一轮只一行」的参照正相反。现在是**按轮归组**，容器有且仅有一个。
-  // system 块必须留容器外：权限审批要可见可点，不能跟着容器一起被折掉。
+  //
+  // assistant 消息里的 system 块也收进容器（2026-10-18 用户要求「SYSTEM 跟随
+  // 工作块折叠」）：这些是权限超时等只读告知，不承载操作按钮；真正的权限审批
+  // banner 在 ChatView 外部渲染（PermissionBanner），不受容器折叠影响。结论之后
+  // 的 system 块仍留外面，维持流式顺序不提前（2026-10-16 规则）。**独立的
+  // `role='system'` 消息**（turn 失败 / 无活跃 turn 兜底）不受影响——整条直接
+  // 渲染，不进过程容器，否则会被默认折叠成只剩一个箭头。
   const streaming = message.streaming ?? false
   const bodyNodes: ReactNode[] = []
   const collected: ProcessEntry[] = []
@@ -1365,7 +1335,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
   let containerSlot = -1
   for (let i = 0; i < message.blocks.length; i++) {
     const b = message.blocks[i]
-    if (b.type === 'system' || (finalTextIdx >= 0 && i >= finalTextIdx)) {
+    if (isSystem || (finalTextIdx >= 0 && i >= finalTextIdx)) {
       bodyNodes.push(renderBlock(b, i, i === lastIdx, streaming, BUBBLE_MAX_WIDTH))
       continue
     }
@@ -1384,7 +1354,6 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
         entries={collected}
         streaming={streaming}
         workText={workText}
-        liveSessionId={liveSessionId}
         renderEntry={(entry) => renderBlock(entry.block, entry.idx, entry.idx === lastIdx, streaming, undefined)}
       />
     )
@@ -1423,7 +1392,7 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
           flex-wrap 拆成一行一段；且正文变宽过程中还会 3→2→1 行重排，观感抖动。
           故流式期整行以 `min-width:max-content` 托到单行内容宽度之上（正文变宽后
           行宽自然跟随，读数不位移）；结算值不加这条，仍按上段规则换行。 */}
-      {(endText || isLive || visibleActions.length > 0) && (
+      {(endText || liveSessionId || visibleActions.length > 0) && (
         <div
           className="chat-meta-row"
           style={{
@@ -1441,6 +1410,8 @@ export const ChatMessageView = memo(function ChatMessageView({ message, sessionI
             onCloseMenu={closeActionMenu}
           />
           {/* 流式期间：后端推送的实时读数（工作/工具计时 + tps，每秒跳动，审批挂起时冻住）。
+              整个会话只有最后一条 assistant 拿到 `liveSessionId`——同一 turn 的多条
+              streaming 气泡共用一份会话级读数，逐条渲染会重复显示（2026-10-18 用户报告）。
               结算段一旦到位就让位给它——同一槽位、同一规格；定稿瞬间由左挪到右（用户明确要求），
               流式全程停在同一侧，不会来回横跳。 */}
           {liveSessionId && <LiveWorkElapsed sessionId={liveSessionId} />}

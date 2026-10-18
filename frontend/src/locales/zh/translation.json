@@ -7,6 +7,8 @@
   "sidebar.createProject": "新建项目",
   "sidebar.projectName": "项目名称",
   "sidebar.repoPath": "项目路径",
+  "sidebar.pickDirectory": "选择文件夹",
+  "sidebar.pickDirectoryLocalOnly": "系统文件夹选择器仅在通过 localhost 访问 OmniTerm 时可用，请改用下方目录浏览器选择。",
   "sidebar.cancel": "取消",
   "sidebar.create": "创建",
   "sidebar.creating": "创建中...",

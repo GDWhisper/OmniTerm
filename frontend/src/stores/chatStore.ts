@@ -69,6 +69,11 @@ export interface SystemBlock {
   /** 可选结构化详情（权限超时行动说明"错过了什么"）：缺失时按纯文案渲染
    *  （2026-08-18 起的历史 system 行只有 label）。 */
   detail?: SystemBlockDetail
+  /** mid-turn 内联告知的去重 id（与后端帧 `_meta.omnitermSystem.id` 同值）。
+   *  live 时它是独立的 system 消息；turn_snapshot / 聚焦补拉把同一告知从
+   *  assistant 行解出后，按此 id 去掉重复的独立消息。独立 system 行（turn
+   *  失败等）没有该字段。 */
+  noticeId?: string
 }
 
 /** system 消息的结构化详情（后端 reaper 权限超时行动 / turn 非正常结束判定下发，前端本地化渲染）。
@@ -172,7 +177,10 @@ export type SessionUpdateAction =
   | { kind: 'setCommands'; commands: SlashCommand[] }
   | { kind: 'setConfigOptions'; options: ConfigOption[] }
   | { kind: 'addUserMessage'; text: string; messageId?: string }
-  | { kind: 'pushSystem'; label: string; detail?: SystemBlockDetail }
+  /** mid-turn SYSTEM 告知：内联进尾部 assistant 消息（随过程容器折叠）。 */
+  | { kind: 'appendSystemBlock'; label: string; detail?: SystemBlockDetail; noticeId?: string }
+  /** 独立 SYSTEM 消息（turn 失败 / 无活跃 turn 的兜底告知）。 */
+  | { kind: 'pushSystem'; label: string; detail?: SystemBlockDetail; noticeId?: string }
   | { kind: 'drop' }
 
 // --- Config options (mode / model / thinking level selectors) ---
@@ -387,7 +395,7 @@ interface ChatActions {
   upsertToolCall: (sessionId: string, entry: ToolCallUpdate) => void
   setPlan: (sessionId: string, entries: PlanEntry[]) => void
   setTodos: (sessionId: string, title: string | undefined, entries: TodoEntry[]) => void
-  pushSystemEvent: (sessionId: string, label: string, detail?: SystemBlockDetail) => void
+  pushSystemEvent: (sessionId: string, label: string, detail?: SystemBlockDetail, noticeId?: string) => void
   addUserMessage: (sessionId: string, text: string, images?: ImageBlock[], files?: FileBlock[]) => void
   /** Add a queued message that was lost on disconnect (e.g. WS closed before `prompt_done`).
    *  Renders as a normal user message with `undelivered: true` so the user can see what
@@ -915,12 +923,45 @@ const applyActionsToMessages = (
         blocks: [{ type: 'text', text: action.text }],
         createdAt: Date.now(),
       })
+    } else if (action.kind === 'appendSystemBlock') {
+      const last = next[next.length - 1]
+      const block = {
+        type: 'system' as const,
+        label: action.label,
+        detail: action.detail,
+        ...(action.noticeId ? { noticeId: action.noticeId } : null),
+      }
+      // 同一 noticeId 的帧重复到达（seq 去重之外的第二道守卫）：不重复插块。
+      if (
+        action.noticeId &&
+        last?.role === 'assistant' &&
+        last.blocks.some((b) => b.type === 'system' && b.noticeId === action.noticeId)
+      ) {
+        continue
+      }
+      if (canAttachToTail(last, settled)) {
+        next[next.length - 1] = { ...last, blocks: [...last.blocks, block] }
+      } else {
+        next.push({
+          id: genId(),
+          role: 'assistant',
+          text: '',
+          blocks: [block],
+          createdAt: Date.now(),
+          streaming: !settled,
+        })
+      }
     } else if (action.kind === 'pushSystem') {
       next.push({
         id: genId(),
         role: 'system',
         text: `[${action.label}]`,
-        blocks: [{ type: 'system', label: action.label, detail: action.detail }],
+        blocks: [{
+          type: 'system',
+          label: action.label,
+          detail: action.detail,
+          ...(action.noticeId ? { noticeId: action.noticeId } : null),
+        }],
         createdAt: Date.now(),
       })
     }
@@ -933,6 +974,35 @@ const applyActionsToMessages = (
 /** 纯函数：从空白消息列表重建重放结果。双缓冲提交前用于判断 staged 是否为空。 */
 export const buildReplayMessages = (actions: SessionUpdateAction[]): ChatMessage[] =>
   applyActionsToMessages([], actions)
+
+/**
+ * 去掉已被 assistant 行内联（同 `noticeId`）的独立 SYSTEM 消息。
+ *
+ * mid-turn SYSTEM 告知是双轨的：assistant 行内联一份有序帧（保证 turn 内顺序），
+ * 独立 system 行一份兜底（帧窗口驱逐 / 旧数据）。两边可能同时出现在消息列表里
+ * （hydrate 分页、turn_snapshot、聚焦补拉、上拉前插），统一按 noticeId 收敛为
+ * 一份；assistant 行解不出该 id（帧被逐出）时保留独立行，宁可在列表位置上回落，
+ * 也不丢内容。
+ */
+export function dropInlinedSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const inlineNoticeIds = new Set<string>()
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue
+    for (const b of m.blocks) {
+      if (b.type === 'system' && b.noticeId) inlineNoticeIds.add(b.noticeId)
+    }
+  }
+  if (inlineNoticeIds.size === 0) return messages
+  return messages.filter(
+    (m) =>
+      !(
+        m.role === 'system' &&
+        m.blocks.some(
+          (b) => b.type === 'system' && b.noticeId && inlineNoticeIds.has(b.noticeId),
+        )
+      ),
+  )
+}
 
 /** 把 mode/usage/commands/configOptions/todos 等顶层字段 action 合并进 state。 */
 const applyTopLevelActions = (
@@ -1052,7 +1122,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return patch(state, sessionId, { messages, todos: entries, todosTitle: title })
     }),
 
-  pushSystemEvent: (sessionId, label, detail) =>
+  pushSystemEvent: (sessionId, label, detail, noticeId) =>
     set((state) => {
       const current = get(state, sessionId)
       const messages = [
@@ -1061,7 +1131,12 @@ export const useChatStore = create<ChatStore>((set) => ({
           id: genId(),
           role: 'system' as const,
           text: `[${label}]`,
-          blocks: [{ type: 'system' as const, label, detail }],
+          blocks: [{
+            type: 'system' as const,
+            label,
+            detail,
+            ...(noticeId ? { noticeId } : null),
+          }],
           createdAt: Date.now(),
         },
       ]
@@ -1184,7 +1259,19 @@ export const useChatStore = create<ChatStore>((set) => ({
   markDone: (sessionId, timing, rowId) =>
     set((state) => {
       const current = get(state, sessionId)
-      const messages = current.messages.map((m) =>
+      // 同一 turn 可能被 system 通知 / 工具卡切成多条 streaming 消息（它们共同
+      // 对应后端同一行，`turnToSyncPayload` 也是按 turn 合并回写的）。结算读数
+      // 属于整个 turn，只落到最后一条：逐条写入会让同一组「结束于 … · 工具 … ·
+      // … tok/s」在多条气泡底部重复显示（2026-10-18 用户报告截图）。
+      let lastStreamingIdx = -1
+      for (let i = current.messages.length - 1; i >= 0; i--) {
+        const m = current.messages[i]
+        if (m.role === 'assistant' && m.streaming) {
+          lastStreamingIdx = i
+          break
+        }
+      }
+      const messages = current.messages.map((m, i) =>
         m.role === 'assistant' && m.streaming
           ? {
               ...m,
@@ -1196,11 +1283,15 @@ export const useChatStore = create<ChatStore>((set) => ({
               ...(rowId ? { dbId: rowId } : {}),
               // 后端定稿即随 prompt_done 下发读数（工作 / 工具 / 速率 / 定稿时刻），
               // 让数字当场出现（不等刷新 hydrate）。定稿读数恒以后端结算为准。
-              durationMs: timing?.workMs ?? m.durationMs,
-              waitMs: timing?.waitMs ?? m.waitMs,
-              toolMs: timing?.toolMs ?? m.toolMs,
-              tps: timing?.tps ?? m.tps,
-              finishedAt: timing?.finishedAt ?? m.finishedAt,
+              ...(i === lastStreamingIdx
+                ? {
+                    durationMs: timing?.workMs ?? m.durationMs,
+                    waitMs: timing?.waitMs ?? m.waitMs,
+                    toolMs: timing?.toolMs ?? m.toolMs,
+                    tps: timing?.tps ?? m.tps,
+                    finishedAt: timing?.finishedAt ?? m.finishedAt,
+                  }
+                : null),
             }
           : m,
       )
@@ -1234,8 +1325,9 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const current = get(state, sessionId)
       if (current.messages.length > 0 || current.replaying) return state
-      const { todos, todosTitle } = scanTodoBoard(messages)
-      return patch(state, sessionId, { messages, todos, todosTitle, historyCursor })
+      const deduped = dropInlinedSystemMessages(messages)
+      const { todos, todosTitle } = scanTodoBoard(deduped)
+      return patch(state, sessionId, { messages: deduped, todos, todosTitle, historyCursor })
     }),
 
   beginLoadHistory: (sessionId) => set((state) => patch(state, sessionId, { loadingHistory: true })),
@@ -1246,8 +1338,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       // 按 id 去重：live 帧或上一页可能已带来同一条（重放/并发场景）。
       const known = new Set(current.messages.map((m) => m.id))
       const older = messages.filter((m) => !known.has(m.id))
+      const combined = older.length > 0 ? [...older, ...current.messages] : current.messages
       return patch(state, sessionId, {
-        messages: older.length > 0 ? [...older, ...current.messages] : current.messages,
+        messages: dropInlinedSystemMessages(combined),
         historyCursor,
         loadingHistory: false,
       })
@@ -1312,9 +1405,13 @@ export const useChatStore = create<ChatStore>((set) => ({
         merged.splice(pos, 0, m)
         changed = true
       }
+      // DB 的 assistant 行可能已内联 mid-turn SYSTEM 告知；与 live/DB 的独立
+      // system 行按 noticeId 收敛成一份（跨分页/跨来源统一入口）。
+      const deduped = dropInlinedSystemMessages(merged)
+      if (deduped.length !== merged.length) changed = true
       if (!changed) return state
-      const { todos, todosTitle } = scanTodoBoard(merged)
-      return patch(state, sessionId, { messages: merged, todos, todosTitle })
+      const { todos, todosTitle } = scanTodoBoard(deduped)
+      return patch(state, sessionId, { messages: deduped, todos, todosTitle })
     }),
 
   applyTurnSnapshot: (sessionId, { rowId, text, blocks }) =>
@@ -1361,7 +1458,13 @@ export const useChatStore = create<ChatStore>((set) => ({
           break
         }
       }
-      return patch(state, sessionId, { messages, todos, todosTitle })
+      // 快照的 blocks 已包含 mid-turn SYSTEM 告知；live 的独立 system 消息按
+      // noticeId 收口，避免同一告知在快照收编后出现两次。
+      return patch(state, sessionId, {
+        messages: dropInlinedSystemMessages(messages),
+        todos,
+        todosTitle,
+      })
     }),
 
   markEnded: (sessionId) =>
@@ -1712,14 +1815,29 @@ export function turnToSyncPayload(
   messages: readonly ChatMessage[],
   rowId: string,
 ): SyncMessagePayload[] {
-  const live = messages.filter((m) => m.role === 'assistant' && m.streaming)
-  const blocks = live.flatMap((m) => m.blocks)
+  // 本 turn 的起点 = 最后一条 user 消息。turn 内可能被 mid-turn SYSTEM 告知切成
+  // 多条 streaming assistant 消息；告知 live 时是独立 system 消息（reaper 的
+  // system_message 帧创建），必须按 store 里的实际顺序一起并回同一条 DB 行——
+  // 否则 prompt_done 的 cooked 回写会把后端刚内联进帧窗口的告知覆盖掉。
+  let turnStart = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      turnStart = i + 1
+      break
+    }
+  }
+  const relevant = messages.slice(turnStart).filter(
+    (m) =>
+      (m.role === 'assistant' && m.streaming) ||
+      (m.role === 'system' && m.blocks.some((b) => b.type === 'system' && b.noticeId)),
+  )
+  const blocks = relevant.flatMap((m) => m.blocks)
   if (blocks.length === 0) return []
   return [
     {
       id: rowId,
       role: 'assistant',
-      text: live.map((m) => m.text).join(''),
+      text: relevant.filter((m) => m.role === 'assistant').map((m) => m.text).join(''),
       blocks: JSON.stringify(blocks),
     },
   ]

@@ -7,6 +7,8 @@
   "sidebar.createProject": "New Project",
   "sidebar.projectName": "Project Name",
   "sidebar.repoPath": "Project Path",
+  "sidebar.pickDirectory": "Select folder",
+  "sidebar.pickDirectoryLocalOnly": "The system folder picker is only available when OmniTerm is opened locally (localhost). Use the directory browser below instead.",
   "sidebar.cancel": "Cancel",
   "sidebar.create": "Create",
   "sidebar.creating": "Creating...",

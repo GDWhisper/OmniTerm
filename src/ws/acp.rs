@@ -213,6 +213,11 @@ enum AcpServerMessage<'a> {
         label: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<&'a serde_json::Value>,
+        /// mid-turn 内联告知的去重 id（与 assistant 帧 `_meta.omnitermSystem.id`
+        /// 同值）；前端在 turn_snapshot / 聚焦补拉后据此去掉重复的独立 system
+        /// 消息。独立 system 行（turn 失败等）缺省该字段。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        notice_id: Option<&'a str>,
     },
     #[serde(rename = "terminal_activity")]
     TerminalActivity {
@@ -472,6 +477,7 @@ async fn spawn_system_notice_task(
                     let msg = serde_json::to_string(&AcpServerMessage::SystemMessage {
                         label: &notice.label,
                         detail: notice.detail.as_ref(),
+                        notice_id: notice.notice_id.as_deref(),
                     })
                     .unwrap_or_default();
                     if notify_tx.send(Message::Text(msg.into())).await.is_err() {
@@ -819,6 +825,7 @@ async fn persist_and_broadcast_turn_end_notice(
     client.notify_system_message(client::SystemNotice {
         label: notice.label.to_string(),
         detail: Some(notice.detail.clone()),
+        notice_id: None,
     });
 }
 
