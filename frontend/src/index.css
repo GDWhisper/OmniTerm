@@ -3282,6 +3282,29 @@ select optgroup option {
   font-size: 11px;
   line-height: 1.35;
 }
+.git-commit-tools {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.git-commit-tools .git-commit-amend {
+  flex: 1;
+  min-width: 0;
+}
+.git-generate-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.git-generated-preview {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .git-commit-actions {
   display: flex;
   gap: 6px;

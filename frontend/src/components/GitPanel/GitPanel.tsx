@@ -14,6 +14,7 @@ import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 import { BranchDeleteDialog, BranchRenameDialog } from './BranchDialogs'
+import { GeneratedMessageDialog } from './GeneratedMessageDialog'
 import { StashPanel } from './StashPanel'
 import {
   IconArrowDown, IconCopy, IconGitBranch, IconPencil, IconRefresh, IconTrash,
@@ -24,7 +25,9 @@ const LOG_PAGE_SIZE = 50
 /** Backend error codes (ADR-6 refined stderr) with localized toast copy. */
 const KNOWN_ERROR_CODES = [
   'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
-  'nothing_to_stash', 'stash_conflict',
+  'nothing_to_stash', 'stash_conflict', 'nothing_staged',
+  'ai_not_configured', 'ai_auth', 'ai_rate_limited', 'ai_timeout', 'ai_network', 'ai_upstream',
+  'ai_invalid_response',
 ] as const
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {
@@ -55,6 +58,7 @@ export function GitPanel({ visible }: GitPanelProps) {
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const isMobile = useAppStore((s) => s.isMobile)
+  const settingsOpen = useAppStore((s) => s.settingsOpen)
 
   const status = useGitStore((s) => s.status)
   const branches = useGitStore((s) => s.branches)
@@ -83,6 +87,9 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [deleteUnmerged, setDeleteUnmerged] = useState(false)
   const [branchBusy, setBranchBusy] = useState(false)
   const [stashOpen, setStashOpen] = useState(false)
+  const [aiCommitReady, setAiCommitReady] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [generatedMessage, setGeneratedMessage] = useState<string | null>(null)
   const [commitMenu, setCommitMenu] = useState<{ sha: string; x: number; y: number } | null>(null)
   const [resetTarget, setResetTarget] = useState<
     { sha: string; shortSha: string; mode: 'soft' | 'mixed' } | null
@@ -122,6 +129,8 @@ export function GitPanel({ visible }: GitPanelProps) {
     setStashOpen(false)
     setCommitMenu(null)
     setResetTarget(null)
+    setGeneratedMessage(null)
+    setGenerating(false)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -154,6 +163,26 @@ export function GitPanel({ visible }: GitPanelProps) {
     fetchBranches(bind)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, bindKey, refreshHint])
+
+  // AI commit availability: refetch when the panel becomes visible and when
+  // Settings closes (the user may have just changed the provider there).
+  useEffect(() => {
+    if (!visible || settingsOpen) return
+    let cancelled = false
+    api.getAiCommitConfig()
+      .then((cfg) => {
+        if (cancelled) return
+        setAiCommitReady(
+          cfg.provider !== 'off' && cfg.base_url.trim() !== '' && cfg.model.trim() !== '',
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setAiCommitReady(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [visible, settingsOpen])
 
   // Close branch menu on outside click
   useEffect(() => {
@@ -236,6 +265,41 @@ export function GitPanel({ visible }: GitPanelProps) {
   // Amend may rewrite only the message (no staged files required); a plain
   // commit still needs both a message and something staged.
   const canCommit = !mutating && (amend || (message.trim().length > 0 && stagedEntries.length > 0))
+
+  const canGenerate = !mutating && !generating && aiCommitReady && stagedEntries.length > 0
+
+  const handleGenerate = async () => {
+    if (!bind || !canGenerate) return
+    setGenerating(true)
+    try {
+      const result = await api.gitGenerateCommitMessage(bind)
+      if (message.trim()) {
+        // Never discard typed text without an explicit replace/append choice.
+        setGeneratedMessage(result.message)
+      } else {
+        setMessage(result.message)
+      }
+      addToast('success', t('git.generated'))
+      if (result.omitted_files > 0 || result.omitted_chars > 0) {
+        addToast('warning', t('git.generatedTruncated', {
+          files: result.omitted_files,
+          chars: result.omitted_chars,
+        }))
+      }
+    } catch (err) {
+      toastError(err)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const applyGeneratedMessage = (mode: 'replace' | 'append') => {
+    const generated = generatedMessage
+    if (!generated) return
+    setMessage((prev) =>
+      mode === 'append' && prev.trim() ? `${prev.trimEnd()}\n\n${generated}` : generated)
+    setGeneratedMessage(null)
+  }
 
   const handleCommit = async (push: boolean) => {
     if (!bind || !canCommit) return
@@ -548,20 +612,36 @@ export function GitPanel({ visible }: GitPanelProps) {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void handleCommit(false)
               }}
             />
-            <label className="git-commit-amend">
-              <input
-                type="checkbox"
-                className="fm-checkbox"
-                style={{ accentColor: 'var(--warning)', flexShrink: 0 }}
-                checked={amend}
-                disabled={mutating}
-                onChange={(e) => setAmend(e.target.checked)}
-              />
-              <span className="font-pixel" style={{ fontSize: 11, letterSpacing: 'var(--pixel-tracking-sm)' }}>
-                {t('git.amendBtn')}
-              </span>
-              {amend && <span className="git-commit-amend-hint">{t('git.amendHint')}</span>}
-            </label>
+            <div className="git-commit-tools">
+              <label className="git-commit-amend">
+                <input
+                  type="checkbox"
+                  className="fm-checkbox"
+                  style={{ accentColor: 'var(--warning)', flexShrink: 0 }}
+                  checked={amend}
+                  disabled={mutating}
+                  onChange={(e) => setAmend(e.target.checked)}
+                />
+                <span className="font-pixel" style={{ fontSize: 11, letterSpacing: 'var(--pixel-tracking-sm)' }}>
+                  {t('git.amendBtn')}
+                </span>
+                {amend && <span className="git-commit-amend-hint">{t('git.amendHint')}</span>}
+              </label>
+              <button
+                className="git-btn git-generate-btn"
+                disabled={!canGenerate}
+                onClick={() => void handleGenerate()}
+                title={
+                  !aiCommitReady
+                    ? t('git.generateNeedsConfig')
+                    : stagedEntries.length === 0
+                      ? t('git.generateNeedsStaged')
+                      : t('git.generateTitle')
+                }
+              >
+                {generating ? t('git.generating') : t('git.generate')}
+              </button>
+            </div>
             <div className="git-commit-actions">
               <button
                 className="git-commit-btn"
@@ -653,6 +733,12 @@ export function GitPanel({ visible }: GitPanelProps) {
           fileChangeEvent={null}
         />
       )}
+
+      <GeneratedMessageDialog
+        message={generatedMessage}
+        onClose={() => setGeneratedMessage(null)}
+        onApply={applyGeneratedMessage}
+      />
 
       <StashPanel
         open={stashOpen}

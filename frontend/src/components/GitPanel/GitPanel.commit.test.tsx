@@ -4,7 +4,9 @@ import { createRoot } from 'react-dom/client'
 import { GitPanel } from './GitPanel'
 import { useGitStore } from '../../stores/gitStore'
 
-const { addToast, calls, gitCommit, gitPush } = vi.hoisted(() => {
+const {
+  addToast, calls, gitCommit, gitPush, getAiCommitConfig, gitGenerateCommitMessage,
+} = vi.hoisted(() => {
   const calls: string[] = []
   return {
     calls,
@@ -19,6 +21,8 @@ const { addToast, calls, gitCommit, gitPush } = vi.hoisted(() => {
       calls.push('push')
       return { ok: true }
     }),
+    getAiCommitConfig: vi.fn(),
+    gitGenerateCommitMessage: vi.fn(),
   }
 })
 
@@ -32,12 +36,16 @@ vi.mock('../../stores/appStore', () => ({
     activeWorkspaceId: string | null
     activeProjectId: string | null
     isMobile: boolean
+    settingsOpen: boolean
+    uiZoom: number
   }) => unknown) =>
     selector({
       activeSessionId: 's1',
       activeWorkspaceId: null,
       activeProjectId: null,
       isMobile: false,
+      settingsOpen: false,
+      uiZoom: 100,
     }),
 }))
 
@@ -64,6 +72,8 @@ vi.mock('../../api/client', async (importOriginal) => {
       gitCommit: (...args: unknown[]) => gitCommit(...args),
       gitPush: (...args: unknown[]) => gitPush(...args),
       gitLog: vi.fn(async () => ({ entries: [], has_more: false })),
+      getAiCommitConfig: (...args: unknown[]) => getAiCommitConfig(...args),
+      gitGenerateCommitMessage: (...args: unknown[]) => gitGenerateCommitMessage(...args),
     },
   }
 })
@@ -92,8 +102,13 @@ async function renderPanel() {
   await act(async () => {
     root.render(<GitPanel visible />)
   })
-  // Wait for the initial status fetch to settle.
+  // Wait for the initial status + AI config fetches to settle.
   await act(async () => {})
+  await act(async () => {})
+}
+
+function commitTextarea(): HTMLTextAreaElement {
+  return document.body.querySelector('textarea.git-commit-input') as HTMLTextAreaElement
 }
 
 beforeEach(() => {
@@ -101,6 +116,20 @@ beforeEach(() => {
   addToast.mockClear()
   gitCommit.mockClear()
   gitPush.mockClear()
+  getAiCommitConfig.mockReset().mockResolvedValue({
+    provider: 'openai',
+    base_url: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    has_api_key: true,
+  })
+  gitGenerateCommitMessage.mockReset().mockResolvedValue({
+    message: 'generated message',
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    file_count: 1,
+    omitted_files: 0,
+    omitted_chars: 0,
+  })
   useGitStore.getState().reset()
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -135,6 +164,60 @@ describe('GitPanel commit actions', () => {
     })
 
     expect(gitCommit).toHaveBeenCalledWith({ session: 's1' }, '', true)
+  })
+
+  it('fills an empty commit box directly from GENERATE', async () => {
+    await renderPanel()
+    await act(async () => {
+      button('git.generate').click()
+    })
+
+    expect(gitGenerateCommitMessage).toHaveBeenCalledWith({ session: 's1' })
+    expect(commitTextarea().value).toBe('generated message')
+    expect(() => button('git.replace')).toThrow()
+  })
+
+  it('asks before overwriting existing text and appends when chosen', async () => {
+    await renderPanel()
+    setMessage('existing')
+    await act(async () => {
+      button('git.generate').click()
+    })
+
+    expect(() => button('git.replace')).not.toThrow()
+    expect(commitTextarea().value).toBe('existing')
+    await act(async () => {
+      button('git.append').click()
+    })
+    expect(commitTextarea().value).toBe('existing\n\ngenerated message')
+  })
+
+  it('replaces existing text when chosen', async () => {
+    await renderPanel()
+    setMessage('existing')
+    await act(async () => {
+      button('git.generate').click()
+    })
+    await act(async () => {
+      button('git.replace').click()
+    })
+    expect(commitTextarea().value).toBe('generated message')
+  })
+
+  it('warns when the provider only saw a truncated diff', async () => {
+    gitGenerateCommitMessage.mockResolvedValue({
+      message: 'generated message',
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      file_count: 40,
+      omitted_files: 10,
+      omitted_chars: 500,
+    })
+    await renderPanel()
+    await act(async () => {
+      button('git.generate').click()
+    })
+    expect(addToast).toHaveBeenCalledWith('warning', 'git.generatedTruncated')
   })
 
   it('keeps the commit success when push fails', async () => {
