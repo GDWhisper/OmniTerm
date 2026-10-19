@@ -266,3 +266,85 @@ describe('SystemBlockView async task notice', () => {
     expect(text).toContain("didn't finish before the previous session ended")
   })
 })
+describe('SystemBlockView 嵌流面板', () => {
+  const panel = () => container.querySelector<HTMLElement>('.chat-system-panel')
+
+  it('独立 system 消息：告知成盒，SYSTEM label 行留在盒外', () => {
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.permTimeout.abort',
+            detail: { minutes: 30, tool: 'Bash', options: ['允许一次'] },
+          },
+        ],
+      }),
+    )
+    const box = panel()
+    expect(box).toBeTruthy()
+    // 主文案与详情都在面板内。
+    expect(box!.textContent).toContain('权限请求 30 分钟未获响应')
+    expect(box!.textContent).toContain('请求：Bash')
+    expect(box!.textContent).toContain('可选项：允许一次')
+    // 面板内部不设 SYSTEM 头（label 行是面板的兄弟节点，不双重嵌套）。
+    expect(box!.textContent).not.toContain('SYSTEM')
+    expect(container.textContent).toContain('SYSTEM')
+    // 方括号是纯文字期的补丁，成盒后不再保留。
+    expect(box!.textContent).not.toContain('[')
+  })
+
+  it('样式真源在 class，组件不写 inline 颜色/背景', () => {
+    render(systemMessage({ blocks: [{ type: 'system', label: 'system.turnFailed.cancelled' }] }))
+    const box = panel()!
+    expect(box.style.background).toBe('')
+    expect(box.style.color).toBe('')
+    expect(box.classList.contains('chat-system-panel')).toBe(true)
+  })
+
+  it('内容预览走 OverlayScroll，不再有裸 <pre>', () => {
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.permTimeout.abort',
+            detail: { minutes: 30, tool: 'Bash', content: 'git push origin main', content_omitted: 12 },
+          },
+        ],
+      }),
+    )
+    expect(container.querySelectorAll('pre')).toHaveLength(0)
+    const preview = container.querySelector<HTMLElement>('.overlay-scroll-content.chat-system-pre')
+    expect(preview).toBeTruthy()
+    expect(preview!.textContent).toContain('git push origin main')
+    // 省略量仍与预览同盒。
+    expect(preview!.textContent).toContain('已省略 12 字符')
+  })
+
+  it('纯 {stop_reason} 载荷不渲染详情区（防空 wrapper）', () => {
+    render(
+      systemMessage({
+        blocks: [{ type: 'system', label: 'system.turnFailed.cancelled', detail: { stop_reason: 'cancelled' } }],
+      }),
+    )
+    expect(panel()).toBeTruthy()
+    expect(container.querySelector('.chat-system-detail')).toBeNull()
+  })
+
+  it('后台任务详情同样走详情区', () => {
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.asyncTask.started',
+            detail: { async_task_name: 'wf', async_task_type: 'workflow', async_task_state: 'running' },
+          },
+        ],
+      }),
+    )
+    expect(container.querySelector('.chat-system-panel .chat-system-detail')).toBeTruthy()
+  })
+})
+

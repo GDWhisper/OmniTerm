@@ -208,6 +208,10 @@ const THINKING_LINE_MASK_STYLE: CSSProperties = {
 /** 收纳行字形：与思考块的 `◆` 同族不同形，避免两块视觉混淆。 */
 const PROCESS_HEADER_ICON = '◈'
 
+/** 系统告知标记：`※` 与思考块 `◆`、收纳行 `◈` 同族不同形——system 是「信息/告知」
+ *  语义，刻意不借用工具卡的左缘状态色条（那是状态语义位，system 没有状态）。 */
+const SYSTEM_MARK_ICON = '※'
+
 /** 被收进过程容器的单块 + 它在原 blocks[] 中的下标。含中间的 text 输出。 */
 interface ProcessEntry {
   block: ContentBlock
@@ -692,7 +696,7 @@ function TextBlockView({
   )
 }
 
-/** 系统事件标签：label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
+/** 系统事件标签：渲染为嵌流信息面板（规格见 ui-style-guide §7.11）。label 若命中 i18n key 则翻译（前端自产事件），否则原样展示（后端下发的原始文案）。
  *  detail 存在时（后端权限超时行动）在文案下附结构化详情：请求工具、内容预览、
  *  当时的可选项、自动模式实际选中项——用户回来不错过自己错过了什么。
  *
@@ -700,7 +704,15 @@ function TextBlockView({
  *  `{{reason}}` 插值原样透出，AGENTS.md §8：未知协议值必须可见，不得吞掉）；这类 detail
  *  只有 `{stop_reason}`，与权限超时载荷共用 SystemBlockDetail 类型但不渲染详情区——
  *  详情区按「有权限类信息可展示」门控，否则 turn 失败提示会挂一个空壳子。 */
-function SystemBlockView({ label, detail }: { label: string; detail?: SystemBlockDetail }) {
+function SystemBlockView({
+  label,
+  detail,
+  maxWidth,
+}: {
+  label: string
+  detail?: SystemBlockDetail
+  maxWidth?: string
+}) {
   const { t } = useTranslation()
   // 时长口径统一在 utils/permTimeout.ts（秒制 + 历史 minutes 回退 +「总是」档
   // 换用不带时长的 autoAlways 文案），组件只负责插值。
@@ -727,33 +739,24 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
   // 与权限详情共用 detail 结构但字段不相交，两个详情区互斥渲染。
   const hasAsyncTaskDetail = !!(detail?.async_task_name || detail?.async_task_summary)
   return (
-    <div style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em', maxWidth: '100%' }}>
-      <span>[{text}]</span>
+    <div className="chat-system-panel" style={{ alignSelf: 'flex-start', maxWidth }}>
+      <span style={{ display: 'inline-flex', gap: 5, alignItems: 'baseline' }}>
+        <span style={{ flexShrink: 0 }}>{SYSTEM_MARK_ICON}</span>
+        <span>{text}</span>
+      </span>
       {detail && hasPermissionDetail && (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="chat-system-detail">
           {toolDisplay && (
             <span>
               ▸ {t('system.permTimeout.requestTool', { tool: toolDisplay, defaultValue: '▸ 请求：{{tool}}' })}
             </span>
           )}
           {detail.content && (
-            <pre
-              style={{
-                margin: 0,
-                padding: '4px 6px',
-                background: 'var(--bg-base)',
-                borderRadius: 0,
-                fontSize: '0.92em',
-                overflow: 'auto',
-                maxHeight: 120,
-                whiteSpace: 'pre-wrap',
-                color: 'var(--text-muted)',
-              }}
-            >
+            <OverlayScroll contentClassName="chat-system-pre" contentStyle={{ flex: '0 0 auto', maxHeight: 120 }}>
               {detail.content}
               {!!detail.content_omitted &&
                 ` ${t('system.permTimeout.contentOmitted', { count: detail.content_omitted, defaultValue: '…（已省略 {{count}} 字符）' })}`}
-            </pre>
+            </OverlayScroll>
           )}
           {!!detail.options?.length && (
             <span>
@@ -768,7 +771,7 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
         </div>
       )}
       {detail && hasAsyncTaskDetail && (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2, overflowWrap: 'anywhere' }}>
+        <div className="chat-system-detail">
           {detail.async_task_name && (
             <span>
               ▸ {detail.async_task_type ? `${detail.async_task_type} · ` : ''}
@@ -822,7 +825,9 @@ function renderBlock(
       // 看板模式：todo 在输入框上方固定展示，不再内联渲染
       return null
     case 'system':
-      return <SystemBlockView key={idx} label={block.label} detail={block.detail} />
+      return (
+        <SystemBlockView key={idx} label={block.label} detail={block.detail} maxWidth={maxWidth} />
+      )
     case 'image':
       // 图片块只出现在用户消息（附件），用户气泡有独立渲染路径；assistant 侧忽略。
       return null

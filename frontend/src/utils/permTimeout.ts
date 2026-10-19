@@ -1,13 +1,17 @@
+import type { PermissionTimeoutMode } from '../api/client'
+
 /**
- * 权限请求超时时长的展示口径（单一真源）。
+ * 权限请求超时的前端口径（单一真源）：展示口径 + 「总是」档语义判定。
  *
  * 后端 detail 走秒制（`acp_perm_timeout_secs`，2026-10-01 起），而滑块档位是
  * 30 秒粒度——所以 30/90 秒这类档位若折算成分钟会得到「0 分钟 / 1.5 分钟」这种
  * 反直觉的文案。规则与后端 `acp::reaper::format_perm_duration` 一致：**整分钟报
- * 分钟，其余报秒**。
+ * 分钟，其余报秒**。展示函数只产出 i18n key + 插值数字，文案交由 `t()` 渲染
+ * （保持单一翻译来源）；组件因此不必知道单位怎么切。
  *
- * 这里只产出 i18n key + 插值数字，文案交由 `t()` 渲染（保持单一翻译来源）；
- * 组件因此不必知道单位怎么切。
+ * 「总是」档（`PERM_TIMEOUT_NEVER_SECS`）的语义随后端模式而变，本文件同时是
+ * 前端侧该档位判定的共同出处：面板/告知文案（`permTimeoutNoticeLabel`）与
+ * decision 通知豁免（`permDecisionNoticeExempt`，对应后端 reaper 的超时行动）。
  */
 
 /** detail 的最小结构（避免 util 反向依赖 stores 的具体类型）。 */
@@ -56,4 +60,20 @@ export function permTimeoutNoticeLabel(label: string, secs: number | null): stri
     return 'system.permTimeout.autoAlways'
   }
   return label
+}
+
+/**
+ * 权限请求「decision」通知豁免判定（单一真源，语义与后端 reaper 对应）。
+ *
+ * 「自动推进 + 总是」档（`auto` + `PERM_TIMEOUT_NEVER_SECS`）下，后端 reaper 在
+ * 权限请求到达时即 `auto_advance_permissions` 代为应答（`Notify` 唤醒、不等 30s
+ * tick，见 `docs/dev/plans/archive/2026-09-21-permission-timeout-modes.md`
+ * 2026-10-09 勘误）——用户永远无需决策，此时 attention 通知（playPing / 标题
+ * 闪 / 侧栏徽标）没有接收人，调用方应跳过 `attention.fire(..., 'decision')`。
+ *
+ * 注意 `abort` + 「总是」的语义是**永不超时、请求挂起等用户**（同 plan 2026-10-01
+ * 勘误）——通知仍是唯一提醒途径，不豁免；`wait` 同理（任何档位都不豁免）。
+ */
+export function permDecisionNoticeExempt(mode: PermissionTimeoutMode, secs: number): boolean {
+  return mode === 'auto' && secs === PERM_TIMEOUT_NEVER_SECS
 }

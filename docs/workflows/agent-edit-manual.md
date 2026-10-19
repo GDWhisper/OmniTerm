@@ -18,6 +18,7 @@
 | [OmniTermLogo](#omnitermlogo) | 像素精灵单一真源 + 派生资产靠生成脚本，漏跑会与 favicon/PWA 图标脱节 |
 | [FileDrawer / FileEditor](#filedrawer--fileeditor) | 抽屉文件编辑器：模式意图语义 + CodeMirror 视图生命周期 + 内建搜索（改任一项前必读） |
 | [Sidebar 项目卡片](#sidebar-项目卡片) | 拖拽排序联改前端 5 处 + 后端 3 处（迁移/路由/store），指针状态机有隐性约束 |
+| [ChatView 滚动与浏览位置记忆](#chatview-滚动与浏览位置记忆) | 滚动状态机 + 跨会话不重挂载的位置记忆，改动联改 4 个文件 |
 
 > 看到没有收录的组件？如果它符合下方「收录标准」，按其格式追加 entry。
 
@@ -113,3 +114,13 @@ Sidebar 底部书本图标按钮 → 弹出 tmux 速查面板。**已完成数�
 - `migrations/20261011_add_project_position.sql` + `src/api/projects.rs` + `src/models/project.rs` — 后端排序列、`reorder_projects`（全量 id 集合校验 + 单事务）、`list_projects` 排序口径 `position ASC, created_at DESC`；新建项目 `MIN(position)-1` 置顶
 
 **改拖拽行为的标准路径**：插入判定/顺序 → `projectReorder.ts`；手势与视觉反馈 → `Sidebar.tsx` + `index.css`；持久化契约 → `src/api/projects.rs`（前后端必须同步：前端发全量 id，后端按集合一致性校验）。**不要改用 HTML5 DnD**（触摸设备不派发，见 frontend-patterns 该条约定的取舍记录）；**不要加回独立手柄**（常驻视觉噪音，长按起拖是维护者拍板的交互）。
+
+## ChatView 滚动与浏览位置记忆
+
+改 ACP 聊天的滚动 / 贴底 / 浏览位置行为前必读。完整约定在 `docs/architecture/frontend.md`「ACP Chat View」节的「贴底跟随」与「浏览位置临时记忆」两条，这里只列文件与最易踩的点：
+
+- `frontend/src/components/Chat/ChatView.tsx` — 滚动状态机本体。两个 `useLayoutEffect` **有声明序依赖**：装恢复令牌的 effect 必须声明在贴底 effect 之前（同一提交按声明序执行，passive effect 赶不上贴底 effect 对本会话的第一次执行）；往里新增「让滚动内容变高/变矮」的条件渲染必须同步进贴底 effect 的 deps（否则无 scroll 事件静默失跟）
+- `frontend/src/utils/chatScrollMemory.ts` — 浏览位置临时记忆（模块作用域有界 Map，刷新即清）。保存走 `handleScroll` 写穿、清除走四个用户置底入口 + `useAcpChat` 的 replay 重建；**勿**改成切会话 cleanup 补存（DOM 已提交为新会话内容，读到的是夹紧后的错值），**勿**改用 sessionStorage（跨刷新存活与需求相反）
+- `frontend/src/hooks/useAcpChat.ts` — `replay_start` 的 `!suppressReplay` 分支里清记忆（内容从空白重建；suppress 的连接即重放不清）
+- `frontend/src/components/Chat/ChatView.testUtils.ts` — `resetChatViewStores()` 负责清记忆表（模块级状态跨用例残留，新测试文件依赖它隔离）
+

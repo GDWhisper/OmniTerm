@@ -2591,6 +2591,49 @@ input[type="range"]:active::-webkit-slider-thumb {
   }
 }
 
+
+/* ────────────────────────────────────────────────────────────────────
+   ACP system 告知面板（权限超时行动 / turn 非正常结束 / 后台任务）
+   规格见 docs/visual-design/ui-style-guide.md §7.11：嵌流信息面板档。
+   文字色用 --text-muted 而非 --text-faint——后者在 --bg-elevated 上亮/暗
+   各约 2.0:1，几乎不可见（同 §12 设置卡暗色提亮的教训）；--text-muted 为
+   4.9:1 / 5.7:1，两主题均过 AA。无投影：投影只属于说话气泡（§7.8）。
+   ──────────────────────────────────────────────────────────────────── */
+.chat-system-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: 6px 10px;
+  font-family: var(--reader-font, inherit);
+  font-size: 0.846em;
+  line-height: 1.5;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* 详情区（结论 + 证据是一组，同盒、细分隔线隔开）。 */
+.chat-system-detail {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+/* 内容预览：走 OverlayScroll 的内层滚动元素（--bg-surface 是 §1.1 的
+   recessed 凹槽档，与面板 --bg-elevated 形成稳定进退关系）。 */
+.chat-system-pre {
+  background: var(--bg-surface);
+  border-radius: 0;
+  padding: 4px 6px;
+  font-size: 0.92em;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ────────────────────────────────────────────────────────────────────
    Pixel-style toast — replaces the existing toast styling when
    is active. Adds a ★ prefix and pixel border.

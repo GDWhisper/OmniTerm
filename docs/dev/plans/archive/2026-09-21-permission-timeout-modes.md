@@ -133,3 +133,13 @@ D4 的 `detail` 载荷不变。mid-turn 告知有两处调整：
 - **通道合流**：`system_notice_tx` 与 `session_update` 是两条 broadcast + 两个转发 task，auto 模式又先 `resolve` 再广播 → 告知常晚于 agent 的后续输出。现由 `AcpClient::notify_inline_system_notice` 生成合成 `session_info_update`（`_meta.omnitermSystem`），经 `session_update_tx` 同一有序通道下发；自动审批在 `PermissionManager::resolve_with` 的 `before_respond` 钩子里入队，`respond()` 之后 agent 才可能产出下一帧。
 - **持久化内联**：同一帧由 `TurnAccumulator::append_host_update` 进入当前 turn 的有序帧窗口；独立 `role='system'` 行仍落（blocks 带 `noticeId`）作为帧窗口驱逐兜底。前端 hydrate / 快照 / 聚焦补拉按 `noticeId` 去重。无活跃 turn / turn 失败等非内联告知仍走 `system_message` 帧。
 
+## 勘误（2026-10-19）：auto + 「总是」档豁免 decision 通知
+
+D1 的 auto 语义（代替用户应答全部 pending）叠加 10-09 勘误（到达即应答、不等 tick）后，用户在「自动推进 + 总是」档下**永远无需决策**——而前端 `permission_request` 帧仍无条件 `attention.fire(sid, sid, 'decision')`（声音 / 标题闪 / 侧栏徽标），出现「后端已代为放行、用户却收到待决策提醒」的自相矛盾。
+
+**修复**（纯前端，`frontend/src/utils/permTimeout.ts` 新增谓词 `permDecisionNoticeExempt(mode, secs)`，`frontend/src/hooks/useAcpChat.ts` 的 `permission_request` 分支按谓词跳过 fire）：豁免条件 = `auto && secs === PERM_TIMEOUT_NEVER_SECS`，与后端「到达即代为应答」同语义；读取经 `useAppStore.getState()`（设置可热更新，帧处理器是长寿命闭包）。**`abort` + 「总是」不豁免**——其语义是永不超时、请求挂起等用户（D1 勘误），通知仍是唯一提醒途径。banner、done/error 通知、tombstone 顺序收敛（10-12 勘误）均不受影响。
+
+**关于重放帧**：后端在 WS 连接建立时会把连接前已挂起的审批作为普通 `permission_request` 帧补发（`src/ws/acp.rs`），与 live 帧走同一 `dispatchFrame` 分支，谓词对两者一致生效；auto+0 下 pending 集合实际为空，故重放路径通常不触发。
+
+**回归**：`permTimeout.test.ts` 四态矩阵（auto+0 豁免 / auto+30s / abort+0 / wait 不豁免）；`useAcpChat.permissionorder.test.tsx` 五例（auto+0 不 fire 但 banner 照挂 / auto+30s 照常 fire / 默认档照常 fire / 连接内热更新按新值判定 / 重连补发帧同样豁免）。
+

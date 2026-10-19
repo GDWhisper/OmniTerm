@@ -7,6 +7,8 @@ import type { FileAttachment } from '../utils/fileAttachment'
 import { clearLiveTurnStats, setLiveTurnStats } from '../utils/turnStats'
 import { postSyncPayload } from '../utils/syncMessages'
 import { LiveBuffer, LIVE_BUFFER_FLUSH_FALLBACK_MS } from '../utils/liveBuffer'
+import { permDecisionNoticeExempt } from '../utils/permTimeout'
+import { clearChatScrollMemory } from '../utils/chatScrollMemory'
 
 export type AcpConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error'
 
@@ -1151,6 +1153,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           if (!suppressReplay.current) {
             // 不清空现有消息：重放帧进 staging，replay_end 非空才原子替换（双缓冲）。
             // 重放失败/为空（agent 可能不推历史）时保留原内容，不会出现空白空窗。
+            // 该分支等价于「内容将从空白重建」（手动恢复，或 store 为空的首次连接），
+            // 旧浏览位置失去参照，清掉会话位置记忆。suppress 的「连接即重放」不碰
+            // store，故不清——否则空闲约 125s 一次的 WS 重连会抹掉用户正在用的位置。
+            clearChatScrollMemory(sid)
             useChatStore.getState().setReplaying(sid, true)
           }
           break
@@ -1236,8 +1242,15 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
             if (resolvedPermIds.current.has(frame.id)) break
             permIdsThisConnect.current.add(frame.id)
             s.setPermission(sid, { id: frame.id, ...parsePermissionRequest(req) })
-            // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
-            attention.fire(sid, sid, 'decision')
+            // 「自动推进 + 总是」档下后端 reaper 在请求到达时即代为应答（Notify 唤醒，
+            // 2026-10-09 勘误）——用户永远无需决策，decision 通知没有接收人，跳过
+            // （声音/标题闪/侧栏徽标三件套全免）。设置可热更新，必须经 getState() 读
+            // 当前值而非闭包旧值（本闭包随连接长存，连接期间设置可能已改）。
+            const { permTimeoutMode, permTimeoutSecs } = useAppStore.getState()
+            if (!permDecisionNoticeExempt(permTimeoutMode, permTimeoutSecs)) {
+              // 触发持续闪烁提醒：agent 在等用户决策（对应后端 requires_action 语义）
+              attention.fire(sid, sid, 'decision')
+            }
           }
           break
         }

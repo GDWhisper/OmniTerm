@@ -697,7 +697,34 @@ ACP 消息流里的 thought 块：一行可点标题 + 展开区。**思考内�
 
 **折叠即卸载，块内本地态随之丢失**（已知限制，非 bug）：容器收起时 `{open && entries.map(...)}` 不再渲染明细块，`ThoughtBlockView` 的「持续了 N 秒」定档值、内层滚动位置都随卸载丢失，再展开时思考块回落「持续了几秒」。这是「不渲染重内容」的有意取舍（一轮可有几十张工具卡，每张都可能带大段 `rawInput`）；用户手动干预过的消息容器不自动折叠，块保持挂载，定档值仍在。turn 级读数不受影响——它在收纳行与元信息行上，由后端结算的 `durationMs` / `turn_stats` 推送（前端只显示，见 work-time 计划 E23）提供。
 
+### 7.11 ACP system 告知面板（`.chat-system-panel`）
+
+聊天流里的 **system 告知**（权限超时行动 / turn 非正常结束 / 后台任务生命周期等 OmniTerm 侧说明）统一包装成一块**嵌流信息面板**。此前是一行 `[{text}]` 淡色小字，与普通正文、思考块混在流里无法一眼分辨（2026-10-19 用户报告）。
+
+| 属性 | 值 | 说明 |
+|---|---|---|
+| 背景 | `var(--bg-elevated)` | 与工具卡 / 计划块同一嵌流面板档 |
+| 边框 | `1px solid var(--border-subtle)` | 比 `.chat-bubble` 的 `--border-strong` 低一档 |
+| 圆角 | `0` | 全局硬角 |
+| 投影 | **无** | §7.8 两层层级：投影只属于说话气泡；工具卡 / 计划块 / diff / system 详情只掰直圆角 |
+| 内边距 | `6px 10px` | 与 `PlanBlockView` 同值 |
+| 字号 | `0.846em` / `line-height 1.5` | 与收纳行、思考块标题行同档（比正文小一档） |
+| 文字色 | `var(--text-muted)` | **禁用 `--text-faint`**：它在 `--bg-elevated` 上亮/暗各约 2.0:1，几乎不可见——同 §12 设置卡暗色说明文字的教训；`--text-muted` 为 4.9:1 / 5.7:1，两主题均过 WCAG AA |
+| 字体 | `var(--reader-font)` | 阅读文本，不受像素字体 BETA 开关影响 |
+| 标记字形 | `※`（`SYSTEM_MARK_ICON`） | 与思考块 `◆`、收纳行 `◈` **同族不同形**；system 是「信息/告知」语义，不用菱形族以免视觉混淆 |
+| 宽度 | 调用方传入：容器内 `undefined`（容器已按 85% 收口）/ 容器外 `BUBBLE_MAX_WIDTH`(85%) | 与 §7.10 宽度规则一致，避免与容器 85% 相乘 |
+
+**文字不再包 `[...]`**：盒 + 标记字形已是边界，方括号是「纯文字期」的补丁，留着等于双重标记。
+
+**详情区**（权限超时载荷：请求工具 / 内容预览 / 可选项 / 省略量；后台任务：名称 / 类型 / 状态 / 摘要）与主文案同盒，以 1px `--border-subtle` 细分隔线隔开——同一个告知的「结论 + 证据」是一组，不该被读成两条消息。内容预览走 `<OverlayScroll>`（`maxHeight: 120`，不用原生滚动条），底色 `var(--bg-surface)`（§1.1 约定的 recessed 凹槽档，与面板 `--bg-elevated` 形成稳定的进退关系）。
+
+**两条渲染路径形态一致**：独立 `role='system'` 消息与 assistant 消息内的 mid-turn system 块共用 `SystemBlockView`（`renderBlock` 的 `case 'system'` 是唯一入口）。前者的 `SYSTEM` label 行留在面板**之外**作兄弟节点（与 user / assistant 的「名字行 + 气泡」同构），面板内部不设 SYSTEM 头，不双重嵌套。
+
+**刻意不做 severity 分色**：将来若要「错误类告知更醒目」，需要 label→severity 映射（新实体 + 新的判断散布点）；需求确证后应在 `utils/` 落单一真源，而非在组件里 if-else。
+
 ---
+
+
 
 ## 8. Settings Toggles
 

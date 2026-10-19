@@ -5,6 +5,11 @@ import { useAcpChat } from './useAcpChat'
 import { AttentionContext } from '../hooks/useAttention'
 import type { AttentionContextValue } from '../components/Attention/AttentionProvider'
 import { useChatStore, type ChatMessage } from '../stores/chatStore'
+import {
+  clearAllChatScrollMemory,
+  getChatScrollMemory,
+  setChatScrollMemory,
+} from '../utils/chatScrollMemory'
 
 // 手动恢复重放按 id 收敛（docs/dev/plans/2026-09-19-acp-failure-visibility.md D4 / P1）：
 // 手动 restore 时 suppressReplay 恒为 false → replay_end 必走 commitReplay（store 从
@@ -622,3 +627,87 @@ describe('manual restore — aborted replay does not align against a stale basel
     ])
   })
 })
+
+describe('manual restore — 浏览位置记忆的清除边界', () => {
+  let root: Root | null = null
+
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    hookBox.current = null
+    useChatStore.setState({ states: {} })
+    clearAllChatScrollMemory()
+    vi.stubGlobal('WebSocket', MockWebSocket)
+  })
+
+  afterEach(() => {
+    act(() => {
+      root?.unmount()
+    })
+    root = null
+    vi.unstubAllGlobals()
+    clearAllChatScrollMemory()
+  })
+
+  const mount = () => {
+    const el = document.createElement('div')
+    document.body.appendChild(el)
+    root = createRoot(el)
+    act(() => {
+      root!.render(
+        <AttentionContext.Provider value={fakeAttention}>
+          <Harness sessionId="s1" />
+        </AttentionContext.Provider>,
+      )
+    })
+    return MockWebSocket.instances[0]
+  }
+
+  const send = (ws: MockWebSocket, frame: Record<string, unknown>) => {
+    act(() => {
+      ws.onmessage?.({ data: JSON.stringify(frame) })
+    })
+  }
+
+  it('手动恢复（内容从空白重建）清掉浏览位置记忆', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+    })
+    act(() => {
+      useChatStore.getState().hydrate(
+        's1',
+        [mkMsg({ role: 'assistant', text: 'old', dbId: 'row-1', id: 'row-1' })],
+        null,
+      )
+      useChatStore.getState().setHydrated('s1', true)
+    })
+    setChatScrollMemory('s1', 800)
+
+    act(() => {
+      hookBox.current!.restore()
+    })
+    send(ws, { type: 'replay_start' })
+    expect(getChatScrollMemory('s1')).toBeNull()
+  })
+
+  it('连接即重放（suppress，store 非空）不清记忆——WS 重连不得抹掉阅读位置', () => {
+    const ws = mount()
+    act(() => {
+      ws.onopen?.()
+    })
+    act(() => {
+      useChatStore.getState().hydrate(
+        's1',
+        [mkMsg({ role: 'assistant', text: 'old', dbId: 'row-1', id: 'row-1' })],
+        null,
+      )
+      useChatStore.getState().setHydrated('s1', true)
+    })
+    setChatScrollMemory('s1', 800)
+
+    // 不调 restore()：连接建立后服务端主动重放 → suppressReplay = true。
+    send(ws, { type: 'replay_start' })
+    expect(getChatScrollMemory('s1')).toBe(800)
+  })
+})
+

@@ -51,6 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
+- (2026-10-19 10:20) `[frontend]` ACP 会话浏览位置临时记忆：切走会话再回来，视口回到离开前正在读的位置（用户上翻浏览中）；滚动回底、点「回到底部」、发送或重新生成后不再恢复，刷新页面同样从底部开始。记忆为页面级内存（有界 32 条、写入即刷新新鲜度），手动恢复会话重建内容时一并清除（`frontend/src/utils/chatScrollMemory.ts`、`frontend/src/components/Chat/ChatView.tsx`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-19 07:20) `[frontend]` `[backend]` `[api]` AI 生成 commit message：设置页选择 OpenAI 兼容或 Anthropic 接口，支持 `/v1/models` 拉取模型与本地受限文件存储 API key（也可用 `$ENV_VAR` 从服务端环境变量读取）；提交框 GENERATE 只用 staged diff（≤30 文件/12 万字符 + 最近 10 条 subject），一次请求、无重试/回退，已有文字时弹窗选择替换或追加（`src/ai_commit/`、`POST /git/commit-message`、`frontend/src/components/Settings/AiCommitSection.tsx`）
 - (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板分支管理补齐：分支菜单支持重命名、删除（默认 `-d`，未合并时需显式勾选强制删除）与同时删除 upstream 远程分支（`frontend/src/components/GitPanel/BranchDialogs.tsx`、`src/git/repo.rs`）
 - (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板新增 STASH 面板：列表、带备注/含未跟踪文件暂存、Apply/Pop/Drop（Drop 二次确认），冲突时保留 stash 并返回 `stash_conflict`（`frontend/src/components/GitPanel/StashPanel.tsx`）
@@ -60,10 +61,13 @@ Prefix each entry with the area it affects:
 
 ### Changed
 
+- (2026-10-19 10:15) `[frontend]` ACP system 告知（权限超时行动 / turn 非正常结束 / 后台任务）从一行 `[{text}]` 淡色小字改为嵌流信息面板：`--bg-elevated` 底 + 1px 细分隔线 + `※` 标记（与思考块 `◆`、收纳行 `◈` 同族不同形），文字色由几乎不可见的 `--text-faint` 改为两主题均过 AA 的 `--text-muted`；详情区内容预览改走 `OverlayScroll`（不再用裸 `<pre>` + 原生滚动条），`maxWidth` 改为按调用方透传（与 §7.10 宽度规则一致）；独立 SYSTEM 消息与 assistant 内联 system 块形态统一（`frontend/src/components/Chat/ChatMessage.tsx`、`frontend/src/index.css`）
+- (2026-10-19 10:05) `[frontend]` 权限请求超时设置为「自动推进 + 总是」档时不再发送 decision 通知（提示音 / 标签页标题闪 🔔 / 侧栏会话提醒徽标）：该档位下后端在权限请求到达时即自动代为应答，用户无需决策、通知无接收人；其余模式与档位（含「自动推进 + 30 秒」与「超时中止 + 总是」）行为不变（`frontend/src/utils/permTimeout.ts`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-18 17:25) `[frontend]` ACP 思考块完成态标题从「思考 · 持续了 N 秒」改为「深度思考」，不再显示思考块自身耗时（turn 级工作时长仍由气泡底部元信息行与收纳行承担）；流式中的「正在思考」扫光标签不变（`frontend/src/components/Chat/ChatMessage.tsx`）
 
 ### Fixed
 
+- (2026-10-19 10:20) `[frontend]` 修复 ACP 会话切换后的滚动位置错乱：ChatView 跨 acp→acp 切换不重挂载，此前 (a) 贴底态不复位——在 A 上翻后切到 B，B 会停在 A 的滚动偏移上且不跟随新内容；(b)「加载更早历史」请求在途时切走会话，陈旧的 scrollHeight 锚点会被下一个会话的消息变化消费，给当前视口加上无意义的偏移（`frontend/src/components/Chat/ChatView.tsx`）
 - (2026-10-19 09:10) `[backend]` `[frontend]` 修复 ACP 后台任务（Workflow / 后台 Bash）运行期间被空闲回收：initialize 声明 AIR `asyncTasks` 能力并跟踪 `async_task_*` 生命周期，任务未结束时 reaper 不再按 idle 阈值杀 agent；任务开始/结束落 system 消息（名称/类型/状态/摘要）；同时修复手动恢复重放被 WS 断开打断后不自动续传、恢复期仍可发送 prompt 导致空 assistant 行（`src/acp/async_tasks.rs`、`src/acp/client.rs`、`src/acp/turn_accumulator.rs`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-18 21:30) `[backend]` `[api]` 修复 GitHub API 匿名配额（60 次/时/IP，共享出口 IP 常被陌生流量耗尽）导致正式版静默收不到更新提醒：版本探测主源失败时按安装渠道降级到无配额限制的版本源（npm → registry.npmjs.org 主包 `dist-tags.latest`、cargo → crates.io `versions[0].num`、github_release → releases 页 302 tag），`/system/version` 不再整小时 502；npm 渠道一键升级在主源失败时同样可降级拿到目标版本继续安装
 

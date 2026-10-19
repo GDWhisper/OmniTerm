@@ -21,6 +21,11 @@ import { copyText } from '../../utils/clipboard'
 import { useToastStore } from '../../stores/toastStore'
 import { decodeStoredBlocks, isRawFrameWrapper, parseConfigOptions } from '../../hooks/useAcpChat'
 import { postSyncPayload } from '../../utils/syncMessages'
+import {
+  clearChatScrollMemory,
+  getChatScrollMemory,
+  setChatScrollMemory,
+} from '../../utils/chatScrollMemory'
 
 /** 距顶部多少像素内触发加载更早历史（留余量，不等滚到绝对顶部）。 */
 const TOP_LOAD_THRESHOLD_PX = 200
@@ -228,7 +233,13 @@ export function ChatView() {
   const dimTimerRef = useRef<number | null>(null)
   const lastGestureAtRef = useRef(0)
   // 前插更早历史前的 scrollHeight，用于在布局落定后补偿 scrollTop（保住阅读位置）。
-  const prependAnchorRef = useRef<number | null>(null)
+  // 带上 sid：请求在途时切走会话，陈旧的 scrollHeight 会被下一个会话的消息变化
+  // 消费、给当前视口加无意义偏移（会直接摧毁刚恢复的浏览位置）。
+  const prependAnchorRef = useRef<{ sid: string; scrollHeight: number } | null>(null)
+  // 待消费的浏览位置恢复令牌（带 sid，防 hydrate 在途时被空内容提前消费）。
+  // 由下方「装配恢复令牌」layout effect 写入，贴底 layout effect 在 hydrated
+  // 后消费一次。
+  const pendingScrollRestoreRef = useRef<{ sid: string; top: number } | null>(null)
 
   useEffect(() => {
     // agent 配置列表是聊天气泡兜底名称的来源（agents.display_name）。已释放会话
@@ -437,7 +448,8 @@ export function ChatView() {
       )
       const data = r.ok ? await r.json() : null
       // 前插前记录当前 scrollHeight，供 layout effect 补偿滚动位置。
-      prependAnchorRef.current = scrollRef.current?.scrollHeight ?? null
+      const el = scrollRef.current
+      prependAnchorRef.current = el ? { sid, scrollHeight: el.scrollHeight } : null
       useChatStore
         .getState()
         .prependMessages(sid, toChatMessages(data?.messages ?? []), data?.nextCursor ?? null)
@@ -455,9 +467,29 @@ export function ChatView() {
     const anchor = prependAnchorRef.current
     if (!el || anchor === null) return
     prependAnchorRef.current = null
-    const delta = el.scrollHeight - anchor
+    // 请求在途时切走了会话：锚点属于上一个会话，丢弃。
+    if (anchor.sid !== activeSessionId) return
+    const delta = el.scrollHeight - anchor.scrollHeight
     if (delta !== 0) el.scrollTop += delta
-  }, [chatState.messages])
+  }, [chatState.messages, activeSessionId])
+
+  // 「浏览位置记忆」装配：进入会话时把上次离开的位置装进一次性令牌，交给下方
+  // 贴底 layout effect 在 hydrated 后消费。**必须声明在贴底 effect 之前**——同一
+  // 提交内 layout effect 按声明序执行，passive effect 赶不上贴底 effect 对本会话
+  // 的第一次执行。
+  useLayoutEffect(() => {
+    if (!activeSessionId) return
+    const top = getChatScrollMemory(activeSessionId)
+    if (top === null) {
+      // 无记忆（首次进入 / 用户已主动置底 / 刚刷新）：贴底态归一。ChatView 跨
+      // acp→acp 切换不重挂载（Layout 只按 runtime_kind 做 key），不复位的话
+      // 「在 A 上翻后切到 B」会让 B 停在 A 的滚动偏移上且不跟随新内容。
+      pendingScrollRestoreRef.current = null
+      setAutoStick(true)
+      return
+    }
+    pendingScrollRestoreRef.current = { sid: activeSessionId, top }
+  }, [activeSessionId, setAutoStick])
 
   // 跟随中，内容一变就把底缘钉回来。用 layout effect（绘制前）而非 passive effect：
   // 后者要等浏览器把「提交后跑 effect」的任务排进下一轮，在 DOM 已长高、scrollTop 还
@@ -468,6 +500,25 @@ export function ChatView() {
   // 事件的情况下静默失效（autoStick 仍是 true，视口却停在半空，连「回到底部」按钮都
   // 不显示）。新增滚动内容内的条件渲染时必须同步登记到这里。
   useLayoutEffect(() => {
+    // 先消费恢复令牌（门控：同会话 + hydrate 完成），成功恢复则本次不钉底。
+    const pending = pendingScrollRestoreRef.current
+    if (pending && pending.sid === activeSessionId && chatState.hydrated) {
+      pendingScrollRestoreRef.current = null
+      const el = scrollRef.current
+      if (el) {
+        const maxTop = el.scrollHeight - el.clientHeight
+        if (maxTop > 0) {
+          const top = Math.max(0, Math.min(pending.top, maxTop))
+          el.scrollTop = top
+          // 回写夹紧后的实际值（同时刷新新鲜度）：内容变矮时下次以实际位置为准。
+          setChatScrollMemory(activeSessionId, top)
+          setAutoStick(false)
+          return
+        }
+      }
+      // 内容不足一屏：没有可恢复的位置，维持贴底。
+      setAutoStick(true)
+    }
     if (!autoStick) return
     pinToBottom()
   }, [
@@ -475,9 +526,12 @@ export function ChatView() {
     chatState.sending,
     chatState.loadingHistory,
     chatState.terminalEvents,
+    chatState.hydrated,
     isReplaying,
+    activeSessionId,
     autoStick,
     pinToBottom,
+    setAutoStick,
   ])
 
   // 最近一次用户输入（已送达）：「上次输入」悬浮卡片的展示与跳转目标。undelivered
@@ -520,6 +574,8 @@ export function ChatView() {
       // scrollTop，旧锚点会停在更大的值上，令下面的「是否上翻」比较失真。
       pinnedTopRef.current = el.scrollTop
       setAutoStick(true)
+      // 用户回到底部 = 主动置底：不再记忆离开前的浏览位置。
+      if (activeSessionId) clearChatScrollMemory(activeSessionId)
     } else if (
       autoStickRef.current &&
       pinnedTopRef.current !== null &&
@@ -532,6 +588,8 @@ export function ChatView() {
     } else {
       // 视口移到了锚点之上（或本就不在跟随）：用户上翻，解除跟随并保留阅读位置。
       setAutoStick(false)
+      // 写穿保存：每次真实滚动都记下当前位置，离开会话时无需任何补存动作。
+      if (activeSessionId) setChatScrollMemory(activeSessionId, el.scrollTop)
     }
     setLastPromptAbove(isLastPromptAboveViewport())
     // 用户滑动中把消息区两个悬浮件淡出（index.css 的 .is-scrolling）：它们悬浮在
@@ -574,6 +632,7 @@ export function ChatView() {
   const handleJumpToBottom = () => {
     pinToBottom()
     setAutoStick(true)
+    if (activeSessionId) clearChatScrollMemory(activeSessionId)
   }
 
   // 离开底部即显示（内容不足一屏不会滚出底部，恒隐）：既是流式期间的「有新输出」
@@ -670,6 +729,7 @@ export function ChatView() {
       sendPrompt(text, images, files)
       // Re-stick so the user's own message is visible + next chunk scrolls in.
       setAutoStick(true)
+      clearChatScrollMemory(activeSessionId)
     },
     [activeSessionId, sendPrompt, setAutoStick],
   )
@@ -689,6 +749,7 @@ export function ChatView() {
     }
     sendPrompt(lastUser.text)
     setAutoStick(true)
+    clearChatScrollMemory(activeSessionId)
   }, [activeSessionId, sendPrompt, cancel, setAutoStick])
 
   // D4 复制正文：统一走 utils/clipboard.ts，成功/失败各一条 toast。
