@@ -166,6 +166,81 @@ pub fn read_api_key(path: &Path) -> Option<String> {
     std::fs::read_to_string(path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// `$NAME` / `${NAME}` → `NAME`. Invalid or literal-looking values stay literal.
+fn env_ref_name(raw: &str) -> Option<&str> {
+    let name = raw
+        .strip_prefix("${")
+        .and_then(|s| s.strip_suffix('}'))
+        .or_else(|| raw.strip_prefix('$'))?;
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(name)
+}
+
+/// How the currently stored key value will be interpreted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiKeyInfo {
+    pub configured: bool,
+    /// `"file"` = stored literal, `"env"` = environment-variable reference.
+    pub source: Option<&'static str>,
+    pub env_name: Option<String>,
+    /// `Some(false)` when the referenced environment variable is not currently set.
+    pub env_set: Option<bool>,
+}
+
+impl ApiKeyInfo {
+    fn none() -> Self {
+        Self { configured: false, source: None, env_name: None, env_set: None }
+    }
+}
+
+pub fn api_key_info(path: &Path) -> ApiKeyInfo {
+    let Some(raw) = read_api_key(path) else {
+        return ApiKeyInfo::none();
+    };
+    let Some(name) = env_ref_name(&raw) else {
+        return ApiKeyInfo {
+            configured: true,
+            source: Some("file"),
+            env_name: None,
+            env_set: None,
+        };
+    };
+    let env_set = std::env::var(name).map(|v| !v.trim().is_empty()).unwrap_or(false);
+    ApiKeyInfo {
+        configured: true,
+        source: Some("env"),
+        env_name: Some(name.to_string()),
+        env_set: Some(env_set),
+    }
+}
+
+/// Resolve the stored value to an actual key. `$VAR` / `${VAR}` references are
+/// read from the server process environment at request time, so the secret
+/// never has to be stored on disk. A missing/empty variable is an explicit
+/// error rather than silently falling back to an unauthenticated request.
+pub fn resolve_api_key(path: &Path) -> Result<Option<String>, AiError> {
+    let Some(raw) = read_api_key(path) else {
+        return Ok(None);
+    };
+    let Some(name) = env_ref_name(&raw) else {
+        return Ok(Some(raw));
+    };
+    match std::env::var(name) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value.trim().to_string())),
+        _ => Err(AiError::new(
+            "ai_key_env_missing",
+            format!("environment variable {name} is not set"),
+        )),
+    }
+}
+
 pub fn write_api_key(path: &Path, key: &str) -> std::io::Result<()> {
     let key = key.trim();
     if key.is_empty() {
@@ -440,6 +515,49 @@ mod tests {
         clear_api_key(&path).unwrap();
         assert_eq!(read_api_key(&path), None);
         clear_api_key(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_reference_syntax_is_strict() {
+        assert_eq!(env_ref_name("$PATH"), Some("PATH"));
+        assert_eq!(env_ref_name("${PATH}"), Some("PATH"));
+        assert_eq!(env_ref_name("$_PRIVATE_KEY_2"), Some("_PRIVATE_KEY_2"));
+        assert_eq!(env_ref_name("sk-literal"), None);
+        assert_eq!(env_ref_name("$1BAD"), None);
+        assert_eq!(env_ref_name("$BAD-NAME"), None);
+        assert_eq!(env_ref_name("$"), None);
+        assert_eq!(env_ref_name("${}"), None);
+    }
+
+    #[test]
+    fn resolves_env_references_and_reports_missing_vars() {
+        let dir = std::env::temp_dir().join(format!("omniterm-ai-key-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("key");
+
+        // Use an always-present variable so the test needs no env mutation
+        // (Rust 2024 makes set_var unsafe and tests run in parallel).
+        write_api_key(&path, "$PATH").unwrap();
+        let resolved = resolve_api_key(&path).unwrap().unwrap();
+        assert_eq!(resolved, std::env::var("PATH").unwrap().trim());
+        let info = api_key_info(&path);
+        assert!(info.configured);
+        assert_eq!(info.source, Some("env"));
+        assert_eq!(info.env_name.as_deref(), Some("PATH"));
+        assert_eq!(info.env_set, Some(true));
+
+        write_api_key(&path, "$OMNITERM_TEST_MISSING_KEY_VAR_9F3A").unwrap();
+        let err = resolve_api_key(&path).unwrap_err();
+        assert_eq!(err.code, "ai_key_env_missing");
+        assert_eq!(api_key_info(&path).env_set, Some(false));
+
+        write_api_key(&path, "sk-literal").unwrap();
+        assert_eq!(resolve_api_key(&path).unwrap().as_deref(), Some("sk-literal"));
+        let info = api_key_info(&path);
+        assert_eq!(info.source, Some("file"));
+        assert_eq!(info.env_name, None);
+        assert_eq!(info.env_set, None);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

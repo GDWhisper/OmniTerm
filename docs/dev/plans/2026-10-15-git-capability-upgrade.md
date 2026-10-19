@@ -97,10 +97,10 @@
 - **决策**：只支持 **OpenAI 兼容 Chat Completions** 与 **Anthropic 原生 Messages** 两种 provider；用户在设置页固定选择 provider / Base URL / Model，并在提交框显式点击 GENERATE。一次点击 = 一次请求；不自动重试、不自动回退到另一 provider。
 - **否决 ACP**：一次性拉起完整 agent 过重，还会在 agent 侧留下会话历史；模型与凭据控制面也分散在 agent 配置里，不符合「成本可控」。
 - **模型选择**：经 provider 的 `/v1/models` 拉取列表（OpenAI `{base}/models`、Anthropic `/v1/models`），也允许手输 model id；模型选择只在设置页修改。
-- **密钥**：API key 存 `~/.omniterm/ai_commit_key[_<实例后缀>]`（0600，按 db 实例隔离），**不落 settings 表、不通过任何 GET 回显**；GET 只返回 `has_api_key`。无需密钥的本地端点可留空。
+- **密钥**：API key 存 `~/.omniterm/ai_commit_key[_<实例后缀>]`（Unix `0600`，Windows 依赖用户目录 ACL；按 db 实例隔离），**不落 settings 表、不通过任何 GET 回显**；GET 只返回 `has_api_key` / `api_key_source` / `api_key_env` / `api_key_env_set`。文件内可存字面量或 `$VAR` / `${VAR}` 环境变量引用，请求时解析；环境变量未设置返回 `ai_key_env_missing`。无需密钥的本地端点可留空。
 - **输入**：只发 staged diff；≤30 文件、≤120K 字符（超限显式上报省略文件数/字符数）+ 最近 10 条 commit subject 跟随仓库语言与风格；未暂存内容绝不发送。
 - **输出**：要求严格 JSON `{"message":"..."}`；容错依次尝试 JSON → 围栏 JSON → 首个 JSON 对象 → 首行；消息上限 4000 字符。结果只填 commit box，已有文字时弹窗二选一「替换 / 追加」，绝不静默覆盖，也不自动提交。
-- **请求约束**：输出 `max_tokens=400`、超时 60s、响应上限 512KB；错误码 `ai_not_configured|ai_auth|ai_rate_limited|ai_timeout|ai_network|ai_upstream|ai_invalid_response`。
+- **请求约束**：输出 `max_tokens=400`、超时 60s、响应上限 512KB；错误码 `ai_not_configured|ai_auth|ai_key_env_missing|ai_rate_limited|ai_timeout|ai_network|ai_upstream|ai_invalid_response`。
 - **翻盘条件**：用户明确要求更多 provider（如 Azure/Gemini 的特殊鉴权）或自动重试/fallback 时再扩展；**不回到 ACP 方案**。
 
 ### D7 分支对比数据流
@@ -150,7 +150,7 @@
 
 **实施记录（AI commit message，2026-10-19）**
 
-- 后端：`src/ai_commit/`（配置、0600 密钥文件、模型列表、prompt/解析、双 provider 适配）；`GET|PUT /settings/ai-commit`、`POST /settings/ai-commit/models`、`POST /git/commit-message`。
+- 后端：`src/ai_commit/`（配置、受限密钥文件、`$VAR` 环境变量引用、模型列表、prompt/解析、双 provider 适配）；`GET|PUT /settings/ai-commit`、`POST /settings/ai-commit/models`、`POST /git/commit-message`。
 - 前端：Settings 新增 GIT 分类（`AiCommitSection.tsx`，2026-10-19 从 AI 分类调整）；提交框 GENERATE + `GeneratedMessageDialog.tsx`（替换/追加）。
 - 测试：本地 mock provider 覆盖 OpenAI/Anthropic 鉴权头、请求体、模型列表、生成与错误映射；staged diff 文件/字符上限与 UTF-8 边界；前端设置表单与提交框替换/追加交互。
 - 手动回归：

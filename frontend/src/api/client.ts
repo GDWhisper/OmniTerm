@@ -960,12 +960,19 @@ export interface GitStashEntry {
 // ── AI commit message settings ──
 export type AiCommitProvider = 'off' | 'openai' | 'anthropic'
 
+export type AiCommitKeySource = 'file' | 'env' | null
+
 export interface AiCommitConfig {
   provider: AiCommitProvider
   base_url: string
   model: string
   /** Server only reports presence; the key itself is never returned. */
   has_api_key: boolean
+  /** `file` = stored literal, `env` = `$VAR` reference resolved at request time. */
+  api_key_source: AiCommitKeySource
+  api_key_env: string | null
+  /** `false` when the referenced environment variable is not currently set. */
+  api_key_env_set: boolean | null
 }
 
 export interface AiCommitModel {

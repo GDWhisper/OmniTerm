@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::AppState;
-use crate::ai_commit::{self, AiCommitConfig, AiError, Provider};
+use crate::ai_commit::{self, AiCommitConfig, AiError, ApiKeyInfo, Provider};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -17,12 +17,15 @@ pub fn routes() -> Router<AppState> {
         .route("/settings/ai-commit/models", post(list_models))
 }
 
-fn config_json(cfg: &AiCommitConfig, has_api_key: bool) -> serde_json::Value {
+fn config_json(cfg: &AiCommitConfig, key: &ApiKeyInfo) -> serde_json::Value {
     json!({
         "provider": cfg.provider.as_str(),
         "base_url": cfg.base_url,
         "model": cfg.model,
-        "has_api_key": has_api_key,
+        "has_api_key": key.configured,
+        "api_key_source": key.source,
+        "api_key_env": key.env_name,
+        "api_key_env_set": key.env_set,
     })
 }
 
@@ -40,8 +43,8 @@ pub(crate) fn ai_error_response(e: AiError) -> Response {
 
 async fn get_config(State(state): State<AppState>) -> Json<serde_json::Value> {
     let cfg = ai_commit::load_config(&state.db).await;
-    let has_api_key = ai_commit::read_api_key(&state.ai_commit_key_path).is_some();
-    Json(config_json(&cfg, has_api_key))
+    let key = ai_commit::api_key_info(&state.ai_commit_key_path);
+    Json(config_json(&cfg, &key))
 }
 
 #[derive(Deserialize)]
@@ -96,8 +99,8 @@ async fn set_config(State(state): State<AppState>, Json(req): Json<SetConfigRequ
             .into_response();
     }
 
-    let has_api_key = ai_commit::read_api_key(&state.ai_commit_key_path).is_some();
-    (StatusCode::OK, Json(config_json(&cfg, has_api_key))).into_response()
+    let key = ai_commit::api_key_info(&state.ai_commit_key_path);
+    (StatusCode::OK, Json(config_json(&cfg, &key))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -120,9 +123,15 @@ async fn list_models(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "provider is off" })))
             .into_response();
     }
-    // Unsaved key input wins; otherwise fall back to the stored 0600 file.
-    let stored = ai_commit::read_api_key(&state.ai_commit_key_path);
-    let key = req.api_key.filter(|k| !k.trim().is_empty()).or(stored);
+    // Unsaved key input wins; otherwise resolve the stored value (which may
+    // point at an environment variable).
+    let key = match req.api_key.filter(|k| !k.trim().is_empty()) {
+        Some(key) => Some(key),
+        None => match ai_commit::resolve_api_key(&state.ai_commit_key_path) {
+            Ok(key) => key,
+            Err(e) => return ai_error_response(e),
+        },
+    };
     match ai_commit::list_models(provider, &req.base_url, key.as_deref()).await {
         Ok(list) => (
             StatusCode::OK,
@@ -151,8 +160,33 @@ mod tests {
         let value = get_config(State(state)).await.0;
         assert_eq!(
             value,
-            json!({ "provider": "off", "base_url": "", "model": "", "has_api_key": false })
+            json!({
+                "provider": "off",
+                "base_url": "",
+                "model": "",
+                "has_api_key": false,
+                "api_key_source": null,
+                "api_key_env": null,
+                "api_key_env_set": null,
+            })
         );
+    }
+
+    #[tokio::test]
+    async fn get_reports_environment_key_source_and_missing_state() {
+        let state = crate::test_utils::test_state().await;
+        ai_commit::write_api_key(&state.ai_commit_key_path, "$PATH").unwrap();
+        let value = get_config(State(state.clone())).await.0;
+        assert_eq!(value["has_api_key"], true);
+        assert_eq!(value["api_key_source"], "env");
+        assert_eq!(value["api_key_env"], "PATH");
+        assert_eq!(value["api_key_env_set"], true);
+
+        ai_commit::write_api_key(&state.ai_commit_key_path, "$OMNITERM_TEST_MISSING_KEY_9F3A")
+            .unwrap();
+        let value = get_config(State(state)).await.0;
+        assert_eq!(value["api_key_source"], "env");
+        assert_eq!(value["api_key_env_set"], false, "missing env var must be reported");
     }
 
     #[tokio::test]
@@ -172,6 +206,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let value = response_json(response).await;
         assert_eq!(value["has_api_key"], true);
+        assert_eq!(value["api_key_source"], "file");
+        assert_eq!(value["api_key_env"], serde_json::Value::Null);
         assert!(value.get("api_key").is_none(), "API key must never be echoed");
 
         let cfg = ai_commit::load_config(&state.db).await;

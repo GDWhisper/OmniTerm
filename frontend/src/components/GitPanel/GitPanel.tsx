@@ -26,8 +26,8 @@ const LOG_PAGE_SIZE = 50
 const KNOWN_ERROR_CODES = [
   'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
   'nothing_to_stash', 'stash_conflict', 'nothing_staged',
-  'ai_not_configured', 'ai_auth', 'ai_rate_limited', 'ai_timeout', 'ai_network', 'ai_upstream',
-  'ai_invalid_response',
+  'ai_not_configured', 'ai_auth', 'ai_key_env_missing', 'ai_rate_limited', 'ai_timeout',
+  'ai_network', 'ai_upstream', 'ai_invalid_response',
 ] as const
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {

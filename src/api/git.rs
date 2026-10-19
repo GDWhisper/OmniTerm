@@ -312,7 +312,10 @@ async fn git_commit_message(State(state): State<AppState>, Json(b): Json<RepoBod
         Ok(context) => context,
         Err(e) => return git_error_response(e),
     };
-    let api_key = ai_commit::read_api_key(&state.ai_commit_key_path);
+    let api_key = match ai_commit::resolve_api_key(&state.ai_commit_key_path) {
+        Ok(key) => key,
+        Err(e) => return crate::api::ai_commit::ai_error_response(e),
+    };
     let (system, user) = ai_commit::generate::build_prompts(
         &context.diff,
         &context.subjects,

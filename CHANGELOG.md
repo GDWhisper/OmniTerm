@@ -51,7 +51,7 @@ Prefix each entry with the area it affects:
 
 ### Added
 
-- (2026-10-19 07:20) `[frontend]` `[backend]` `[api]` AI 生成 commit message：设置页选择 OpenAI 兼容或 Anthropic 接口，支持 `/v1/models` 拉取模型与 0600 文件存储 API key；提交框 GENERATE 只用 staged diff（≤30 文件/12 万字符 + 最近 10 条 subject），一次请求、无重试/回退，已有文字时弹窗选择替换或追加（`src/ai_commit/`、`POST /git/commit-message`、`frontend/src/components/Settings/AiCommitSection.tsx`）
+- (2026-10-19 07:20) `[frontend]` `[backend]` `[api]` AI 生成 commit message：设置页选择 OpenAI 兼容或 Anthropic 接口，支持 `/v1/models` 拉取模型与本地受限文件存储 API key（也可用 `$ENV_VAR` 从服务端环境变量读取）；提交框 GENERATE 只用 staged diff（≤30 文件/12 万字符 + 最近 10 条 subject），一次请求、无重试/回退，已有文字时弹窗选择替换或追加（`src/ai_commit/`、`POST /git/commit-message`、`frontend/src/components/Settings/AiCommitSection.tsx`）
 - (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板分支管理补齐：分支菜单支持重命名、删除（默认 `-d`，未合并时需显式勾选强制删除）与同时删除 upstream 远程分支（`frontend/src/components/GitPanel/BranchDialogs.tsx`、`src/git/repo.rs`）
 - (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板新增 STASH 面板：列表、带备注/含未跟踪文件暂存、Apply/Pop/Drop（Drop 二次确认），冲突时保留 stash 并返回 `stash_conflict`（`frontend/src/components/GitPanel/StashPanel.tsx`）
 - (2026-10-19 02:45) `[frontend]` `[api]` GIT HISTORY 提交行支持右键/长按菜单：复制 SHA、cherry-pick、revert、soft/mixed reset（reset 二次确认并说明改动保留）；抽共享 `Common/ContextMenu.tsx`（`frontend/src/components/GitPanel/GitPanel.tsx`）

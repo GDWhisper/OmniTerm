@@ -166,6 +166,20 @@ describe('AiCommitSection', () => {
     })
   })
 
+  it('shows when the configured environment variable is missing', async () => {
+    getAiCommitConfig.mockResolvedValue({
+      provider: 'openai',
+      base_url: 'https://api.openai.com/v1',
+      model: 'gpt',
+      has_api_key: true,
+      api_key_source: 'env',
+      api_key_env: 'OPENAI_API_KEY',
+      api_key_env_set: false,
+    })
+    await render()
+    expect(document.body.textContent).toContain('settings.aiCommit.envVarMissing')
+  })
+
   it('maps provider auth errors to localized copy', async () => {
     getAiCommitConfig.mockResolvedValue({
       provider: 'openai',

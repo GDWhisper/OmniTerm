@@ -17,6 +17,7 @@ const PROVIDERS: { value: AiCommitProvider; labelKey: string }[] = [
 /** Error codes from the AI commit API → localized setting-page copy. */
 const AI_ERROR_KEYS: Record<string, string> = {
   ai_auth: 'settings.aiCommit.error.ai_auth',
+  ai_key_env_missing: 'settings.aiCommit.error.ai_key_env_missing',
   ai_rate_limited: 'settings.aiCommit.error.ai_rate_limited',
   ai_timeout: 'settings.aiCommit.error.ai_timeout',
   ai_network: 'settings.aiCommit.error.ai_network',
@@ -61,6 +62,9 @@ export function AiCommitSection() {
   const [model, setModel] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [hasKey, setHasKey] = useState(false)
+  const [keySource, setKeySource] = useState<'file' | 'env' | null>(null)
+  const [keyEnv, setKeyEnv] = useState<string | null>(null)
+  const [keyEnvSet, setKeyEnvSet] = useState<boolean | null>(null)
   const [clearKey, setClearKey] = useState(false)
   const [models, setModels] = useState<AiCommitModel[]>([])
   const [modelsTruncated, setModelsTruncated] = useState(false)
@@ -84,6 +88,9 @@ export function AiCommitSection() {
         setBaseUrl(cfg.base_url)
         setModel(cfg.model)
         setHasKey(cfg.has_api_key)
+        setKeySource(cfg.api_key_source ?? null)
+        setKeyEnv(cfg.api_key_env ?? null)
+        setKeyEnvSet(cfg.api_key_env_set ?? null)
       })
       .catch(toastError)
       .finally(() => {
@@ -135,6 +142,9 @@ export function AiCommitSection() {
       setBaseUrl(cfg.base_url)
       setModel(cfg.model)
       setHasKey(cfg.has_api_key)
+      setKeySource(cfg.api_key_source ?? null)
+      setKeyEnv(cfg.api_key_env ?? null)
+      setKeyEnvSet(cfg.api_key_env_set ?? null)
       setApiKey('')
       setClearKey(false)
       addToast('success', t('settings.aiCommit.saved'))
@@ -247,6 +257,18 @@ export function AiCommitSection() {
                 : t('settings.aiCommit.keyPlaceholder')}
               onChange={(e) => setApiKey(e.target.value)}
             />
+            {keySource === 'env' && keyEnv && (
+              <p
+                style={{
+                  ...hintStyle,
+                  color: keyEnvSet ? 'var(--text-faint)' : 'var(--warning)',
+                }}
+              >
+                {keyEnvSet
+                  ? t('settings.aiCommit.envVarInUse', { name: keyEnv })
+                  : t('settings.aiCommit.envVarMissing', { name: keyEnv })}
+              </p>
+            )}
             {hasKey && (
               <label className="flex items-center gap-2 select-none" style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 <input
