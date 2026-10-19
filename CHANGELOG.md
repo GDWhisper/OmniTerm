@@ -49,6 +49,14 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Added
+
+- (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板分支管理补齐：分支菜单支持重命名、删除（默认 `-d`，未合并时需显式勾选强制删除）与同时删除 upstream 远程分支（`frontend/src/components/GitPanel/BranchDialogs.tsx`、`src/git/repo.rs`）
+- (2026-10-19 02:45) `[frontend]` `[api]` GIT 面板新增 STASH 面板：列表、带备注/含未跟踪文件暂存、Apply/Pop/Drop（Drop 二次确认），冲突时保留 stash 并返回 `stash_conflict`（`frontend/src/components/GitPanel/StashPanel.tsx`）
+- (2026-10-19 02:45) `[frontend]` `[api]` GIT HISTORY 提交行支持右键/长按菜单：复制 SHA、cherry-pick、revert、soft/mixed reset（reset 二次确认并说明改动保留）；抽共享 `Common/ContextMenu.tsx`（`frontend/src/components/GitPanel/GitPanel.tsx`）
+- (2026-10-19 02:45) `[frontend]` `[api]` 提交框新增 AMEND 勾选（留空沿用原提交信息）与「提交并推送」按钮，push 失败单独报错不掩盖 commit 成功（`/git/commit` 新增 `amend` 字段）
+- (2026-10-19 02:45) `[backend]` GIT 写操作遇 `index.lock` 竞争时按 250ms/750ms 限次重试（共 3 次），仍失败原样上抛且绝不删锁（`src/git/repo.rs`）
+
 ### Changed
 
 - (2026-10-18 17:25) `[frontend]` ACP 思考块完成态标题从「思考 · 持续了 N 秒」改为「深度思考」，不再显示思考块自身耗时（turn 级工作时长仍由气泡底部元信息行与收纳行承担）；流式中的「正在思考」扫光标签不变（`frontend/src/components/Chat/ChatMessage.tsx`）

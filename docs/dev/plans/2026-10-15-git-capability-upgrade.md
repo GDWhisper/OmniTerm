@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**设计稿**（2026-10-15）——待排期，用户按批次推进
+> 状态：**Phase 1 已实施**（2026-10-19）——5 项 P0 全部落地并独立提交；Phase 2/3 待排期
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
@@ -115,7 +115,7 @@
 
 ## 4. 实施分期
 
-### Phase 1：快赢批（5 项，独立提交）
+### Phase 1：快赢批（5 项，独立提交）✅ 2026-10-19
 
 **1）分支管理补齐**
 - 后端 `src/git/repo.rs`：`delete_branch(root, name, force)`（`-d` / `-D` 由前端确认框勾选「强制删除」决定；注意与 `src/git/mod.rs::delete_branch` 的既有实现——worktree 流程用 `-D`，实施时提取共享或明确两处语义差异避免复制）、`rename_branch(root, old, new)`（`git branch -m`；重命名当前分支时用单参形式）、`delete_remote_branch(root, name)`（`git push origin --delete`，走 `run_remote` 60s 超时通道）。
@@ -144,6 +144,21 @@
 **5）index.lock 限次重试（建议先行）**
 - 后端 `src/git/repo.rs`：写命令统一封装（如 `run_write`），识别锁冲突错误后 250ms/750ms 重试；覆盖 stage/unstage/commit/discard/checkout/create_branch 及本批新增全部写操作。
 - 测试：测试内先创建 `.git/index.lock` 再从另一 task 定时删除，断言重试后成功；持锁不放则返回原错误。
+
+**实施记录（2026-10-19）**
+
+- 5 项均已落地，按 D8 建议顺序独立提交：P0-5（重试封装）→ P0-1（分支管理）→ P0-2（stash）→ P0-3（历史操作）→ P0-4（commit 增强）。
+- 实施偏差：
+  1. 删远程分支的 remote 从 `upstream` 前缀解析（缺省 `origin`），而非硬编码 `origin`；`branches` 响应新增 `upstream?`（additive）。
+  2. HISTORY 的 reset 以两个平铺菜单项（soft / mixed）代替子菜单，二次确认文案不变。
+  3. stash 列表设 100 条上限并返回 `truncated`（性能红线 P1：禁止无界 collect），UI 显示截断提示——计划原文未覆盖此上限。
+  4. `commit` 的 amend 允许空 message（`--amend --no-edit`），非 amend 仍拒绝空 message。
+- 手动回归（`docs/reference/archive/user-testing.md` 已于 2026-10-16 归档停止更新，用例改记于此）：
+  1. 删除未合并分支 → 首次失败后对话框出现强制勾选，勾选后删除成功；有 upstream 的分支可同时删远程。
+  2. stash push（含/不含 untracked、带备注）→ 列表计数正确；pop 制造冲突 → toast 提示冲突且 stash 仍在。
+  3. 提交行右键/长按 → cherry-pick/revert/reset；reset soft 后改动在暂存区、mixed 后为未暂存，HEAD 均移动且提交保留在 reflog。
+  4. AMEND 留空提交 → 提交信息不变、sha 变化；「提交并推送」中 push 失败时 commit 成功 toast 仍保留。
+  5. 终端持锁期间在面板 stage → 自动重试后成功；持续持锁 → 原样报错且不删除 `index.lock`。
 
 ### Phase 2：hunk 批（差距最大项）
 

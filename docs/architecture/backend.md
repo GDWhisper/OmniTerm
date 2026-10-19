@@ -365,12 +365,18 @@ POST /api/v1/system/restart           # 手动重启（Unix 调度 ACP 回收并
 GET  /api/v1/tmux/health              # tmux server 健康快照（受保护）：{state: healthy|no_server|deaf|other, consecutive_deaf, last_deaf_at, orphan_count, orphan_warn_threshold, probe_interval_secs}——聋 server 检测 + 孤儿监控，见「聋 server 健康/自愈/孤儿监控」
 POST /api/v1/tmux/rebuild             # 内建自愈「重建 tmux server」（受保护）：200 {ok, server_pid, socket_removed, detail}；409 {error: not_deaf|heal_in_progress}；500 {error: <原因>}——重探针 + 单飞保证幂等，非聋拒绝执行
 GET  /api/v1/git/status|diff|log|show|branches   # git panel reads; bind via ?session=|workspace_id=&workspace=
+GET  /api/v1/git/stash/list                      # {stashes:[{index,date,message}], truncated}；上限 100 条
 POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
+POST /api/v1/git/branch/delete|branch/rename|branch/delete-remote
+POST /api/v1/git/stash/push|apply|pop|drop
+POST /api/v1/git/cherry-pick|revert-commit|reset
 ANY  /proxy/{port}/{*path}           # 端口转发反向代理（与 /api/v1 平级挂载，D1 禁止套进 /api/v1）；见「Port-forward proxy」小节
 ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy-domain/OMNITERM_PROXY_DOMAIN 时挂最外层 middleware，先于 fallback）；见「Port-forward proxy」小节
 ```
 
-git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
+git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|not_merged|conflict|stash_conflict|nothing_to_stash|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
+
+Phase 1 能力（2026-10-19，计划 `docs/dev/plans/2026-10-15-git-capability-upgrade.md`）：`branches` 额外返回 `upstream?`（如 `origin/dev`）；所有写命令经 `repo::run_write` 在 `index.lock` 竞争时 250ms/750ms 重试两次，仍失败原样上抛（**不删锁**）。`commit` body 增加 `amend:bool`（空 message 仅 amend 允许，走 `--amend --no-edit`）。分支删除默认 `git branch -d`，未完全合并返回 `not_merged`、前端显式强制删除后再走 `-D`；worktree 删除流程固定 `-D` 并复用同一实现。`branch/delete-remote` 的 `remote` 缺省 `origin`（前端从 upstream 前缀取实际远端）。stash 冲突映射 `stash_conflict` 并保留 stash；无改动返回 `nothing_to_stash`。`reset` 仅接受 `mode ∈ {soft,mixed}`（`--hard` 明确排除）。cherry-pick/revert 使用 `--no-edit`，冲突返回 `conflict`，解决留给终端。
 
 **上传（POST /api/v1/files）**：multipart 字段流式写盘（`fs::write_file_stream`），不整文件进内存；先写同目录隐藏临时文件 `.{文件名}.omniterm-upload-{uuid}.tmp`（点前缀使 files_watch 忽略），全部完成才 rename 到目标——失败（超限/读错/写错）删临时文件、**已有目标文件保持原样**，与旧「整体读入成功才写盘」语义对齐。单请求内容总量受 `--max-upload-body`/`OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，`AppState.max_upload_body`）约束，超限返回 413 + 文案 `upload exceeds max size … (aborted at …)`；axum 层限额 = 该值 +1MiB 封装余量，保证超限先由应用层计数触发（否则 multipart 解析层只吐含混的 parse error）。
 
