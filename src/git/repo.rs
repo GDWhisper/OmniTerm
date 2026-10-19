@@ -12,6 +12,10 @@ use tokio::process::Command;
 const MAX_DIFF_BYTES: usize = 256 * 1024;
 /// Timeout for remote operations (push/pull/fetch).
 const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Upper bound on stash entries returned to the panel. Stash stacks can grow
+/// without limit (`git stash` never prunes); the panel only needs the recent
+/// window and the response must stay bounded (performance red line P1).
+const MAX_STASH_ENTRIES: usize = 100;
 /// Delays before retrying a write that lost the race for `index.lock`.
 /// Two retries (3 attempts total) tolerate a user's terminal git command
 /// without masking a genuinely stuck lock (ADR-D1: never delete the lock).
@@ -622,12 +626,18 @@ pub async fn reset_to(root: &str, sha: &str, mode: ResetMode) -> GitResult<()> {
     ensure_success(&output)
 }
 
-pub async fn stash_list(root: &str) -> GitResult<Vec<StashEntry>> {
+fn cap_stashes(mut entries: Vec<StashEntry>) -> (Vec<StashEntry>, bool) {
+    let truncated = entries.len() > MAX_STASH_ENTRIES;
+    entries.truncate(MAX_STASH_ENTRIES);
+    (entries, truncated)
+}
+
+pub async fn stash_list(root: &str) -> GitResult<(Vec<StashEntry>, bool)> {
     let output =
         run(git_command(root).args(["stash", "list", "--format=%gd%x00%cr%x00%gs"])).await?;
     ensure_success(&output)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().filter_map(parse_stash_line).collect())
+    Ok(cap_stashes(stdout.lines().filter_map(parse_stash_line).collect()))
 }
 
 pub async fn stash_push(
@@ -969,7 +979,8 @@ mod tests {
         std::fs::write(dir.join("tracked.txt"), "changed\n").unwrap();
 
         stash_push(&root, Some("wip"), false).await.unwrap();
-        let stashes = stash_list(&root).await.unwrap();
+        let (stashes, truncated) = stash_list(&root).await.unwrap();
+        assert!(!truncated);
         assert_eq!(stashes.len(), 1);
         assert_eq!(stashes[0].index, 0);
         assert!(stashes[0].message.contains("wip"), "got {}", stashes[0].message);
@@ -977,7 +988,7 @@ mod tests {
 
         stash_pop(&root, 0).await.unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "changed\n");
-        assert!(stash_list(&root).await.unwrap().is_empty());
+        assert!(stash_list(&root).await.unwrap().0.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -1027,7 +1038,7 @@ mod tests {
         let err = stash_pop(&root, 0).await.unwrap_err();
         assert_eq!(err.code, "stash_conflict");
         assert_eq!(
-            stash_list(&root).await.unwrap().len(),
+            stash_list(&root).await.unwrap().0.len(),
             1,
             "pop must keep the stash on conflict"
         );
@@ -1212,6 +1223,26 @@ mod tests {
         assert!(validate_commit_sha("HEAD~1").is_err());
         assert!(validate_commit_sha("").is_err());
         assert!(validate_commit_sha("abc1234def").is_ok());
+    }
+
+    #[test]
+    fn stash_list_is_capped_with_explicit_truncation_flag() {
+        let entries: Vec<StashEntry> = (0..MAX_STASH_ENTRIES + 3)
+            .map(|n| StashEntry {
+                index: n as u32,
+                date: "now".into(),
+                message: format!("stash {n}"),
+            })
+            .collect();
+        let (capped, truncated) = cap_stashes(entries);
+        assert!(truncated);
+        assert_eq!(capped.len(), MAX_STASH_ENTRIES);
+        assert_eq!(capped[0].index, 0);
+        assert_eq!(capped[MAX_STASH_ENTRIES - 1].index, MAX_STASH_ENTRIES as u32 - 1);
+
+        let (exact, truncated) = cap_stashes(capped);
+        assert!(!truncated);
+        assert_eq!(exact.len(), MAX_STASH_ENTRIES);
     }
 
     #[test]

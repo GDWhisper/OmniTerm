@@ -491,6 +491,7 @@
   "git.stashPushBtn": "STASH CHANGES",
   "git.stashNothingToSave": "No local changes to stash",
   "git.stashEmpty": "No stashes",
+  "git.stashTruncated": "Only the most recent stashes are shown",
   "git.stashApply": "Apply",
   "git.stashPop": "Pop",
   "git.stashDrop": "Drop",

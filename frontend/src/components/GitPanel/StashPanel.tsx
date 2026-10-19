@@ -23,6 +23,7 @@ export function StashPanel({
 }: StashPanelProps) {
   const { t } = useTranslation()
   const [stashes, setStashes] = useState<GitStashEntry[]>([])
+  const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [includeUntracked, setIncludeUntracked] = useState(false)
@@ -33,8 +34,10 @@ export function StashPanel({
     try {
       const data = await api.gitStashList(bind)
       setStashes('stashes' in data ? data.stashes : [])
+      setTruncated('truncated' in data && data.truncated === true)
     } catch {
       setStashes([])
+      setTruncated(false)
     } finally {
       setLoading(false)
     }
@@ -120,6 +123,7 @@ export function StashPanel({
           <div className="git-empty">{t('git.stashEmpty')}</div>
         ) : (
           <OverlayScroll style={{ maxHeight: 260 }} contentStyle={{ flex: '0 0 auto' }}>
+            {truncated && <div className="git-stash-truncated">{t('git.stashTruncated')}</div>}
             {stashes.map((entry) => (
               <div key={entry.index} className="git-stash-row">
                 <div className="git-stash-meta">

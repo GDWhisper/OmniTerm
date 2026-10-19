@@ -813,7 +813,9 @@ export const api = {
   gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
     request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
   gitStashList: (bind: GitBind) =>
-    request<{ stashes: GitStashEntry[] } | { is_repo: false }>(`/git/stash/list?${gitBindQuery(bind)}`),
+    request<{ stashes: GitStashEntry[]; truncated?: boolean } | { is_repo: false }>(
+      `/git/stash/list?${gitBindQuery(bind)}`,
+    ),
   gitStashPush: (bind: GitBind, message: string | undefined, includeUntracked: boolean) =>
     request('/git/stash/push', {
       method: 'POST',

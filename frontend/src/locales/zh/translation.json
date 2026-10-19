@@ -491,6 +491,7 @@
   "git.stashPushBtn": "暂存当前变更",
   "git.stashNothingToSave": "没有可暂存的本地改动",
   "git.stashEmpty": "暂无 stash",
+  "git.stashTruncated": "仅显示最近的 stash",
   "git.stashApply": "应用",
   "git.stashPop": "弹出",
   "git.stashDrop": "删除",

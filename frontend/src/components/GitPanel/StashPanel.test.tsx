@@ -92,6 +92,16 @@ describe('StashPanel', () => {
     expect(gitStashList).toHaveBeenCalledTimes(2)
   })
 
+  it('flags a truncated stash list', async () => {
+    gitStashList.mockResolvedValue({
+      stashes: [{ index: 0, date: 'now', message: 'WIP' }],
+      truncated: true,
+    })
+    renderPanel()
+    await act(async () => {})
+    expect(document.body.textContent).toContain('git.stashTruncated')
+  })
+
   it('shows the empty state and disables saving when the worktree is clean', async () => {
     gitStashList.mockResolvedValue({ stashes: [] })
     renderPanel({ hasChanges: false })

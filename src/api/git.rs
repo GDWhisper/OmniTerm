@@ -234,7 +234,10 @@ async fn git_discard(State(state): State<AppState>, Json(b): Json<RepoBody>) -> 
 async fn git_stash_list(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
     let root = bind_repo!(state, q);
     match repo::stash_list(&root).await {
-        Ok(stashes) => (StatusCode::OK, Json(json!({ "stashes": stashes }))).into_response(),
+        Ok((stashes, truncated)) => {
+            (StatusCode::OK, Json(json!({ "stashes": stashes, "truncated": truncated })))
+                .into_response()
+        }
         Err(e) => git_error_response(e),
     }
 }
