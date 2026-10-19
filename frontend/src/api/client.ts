@@ -778,6 +778,31 @@ export const api = {
     if (params.allowEscape) url += '?allow_escape=true'
     return request(url, { method: 'POST', body: JSON.stringify(body) })
   },
+  // ── AI commit message settings ──
+  getAiCommitConfig: () =>
+    request<AiCommitConfig>('/settings/ai-commit', { silent: true }),
+  setAiCommitConfig: (body: {
+    provider: AiCommitProvider
+    base_url: string
+    model: string
+    api_key?: string
+    clear_api_key?: boolean
+  }) =>
+    request<AiCommitConfig>('/settings/ai-commit', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+      silent: true,
+    }),
+  listAiCommitModels: (body: {
+    provider: Exclude<AiCommitProvider, 'off'>
+    base_url: string
+    api_key?: string
+  }) =>
+    request<{ models: AiCommitModel[]; truncated: boolean }>('/settings/ai-commit/models', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      silent: true,
+    }),
   searchFiles2: (params: { session?: string; workspaceId?: string; projectId?: string; query: string; path?: string }) => {
     let url = `/files/search?q=${encodeURIComponent(params.query)}&path=${params.path || ''}`
     if (params.session) url += `&session=${params.session}`
@@ -834,6 +859,12 @@ export const api = {
     request('/git/revert-commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
   gitReset: (bind: GitBind, sha: string, mode: 'soft' | 'mixed') =>
     request('/git/reset', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha, mode }), silent: true }),
+  gitGenerateCommitMessage: (bind: GitBind) =>
+    request<AiCommitGeneratedMessage>('/git/commit-message', {
+      method: 'POST',
+      body: JSON.stringify(gitBindBody(bind)),
+      silent: true,
+    }),
   gitCheckout: (bind: GitBind, branch: string) =>
     request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>
@@ -924,4 +955,29 @@ export interface GitStashEntry {
   index: number
   date: string
   message: string
+}
+
+// ── AI commit message settings ──
+export type AiCommitProvider = 'off' | 'openai' | 'anthropic'
+
+export interface AiCommitConfig {
+  provider: AiCommitProvider
+  base_url: string
+  model: string
+  /** Server only reports presence; the key itself is never returned. */
+  has_api_key: boolean
+}
+
+export interface AiCommitModel {
+  id: string
+  label: string
+}
+
+export interface AiCommitGeneratedMessage {
+  message: string
+  provider: AiCommitProvider
+  model: string
+  file_count: number
+  omitted_files: number
+  omitted_chars: number
 }
