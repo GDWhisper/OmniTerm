@@ -26,6 +26,9 @@ pub fn routes() -> Router<AppState> {
         .route("/git/discard", post(git_discard))
         .route("/git/checkout", post(git_checkout))
         .route("/git/branch", post(git_create_branch))
+        .route("/git/branch/delete", post(git_delete_branch))
+        .route("/git/branch/rename", post(git_rename_branch))
+        .route("/git/branch/delete-remote", post(git_delete_remote_branch))
         .route("/git/push", post(git_push))
         .route("/git/pull", post(git_pull))
         .route("/git/fetch", post(git_fetch))
@@ -61,6 +64,10 @@ struct RepoBody {
     files: Vec<DiscardFile>,
     branch: Option<String>,
     name: Option<String>,
+    new_name: Option<String>,
+    #[serde(default)]
+    force: bool,
+    remote: Option<String>,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -227,6 +234,46 @@ async fn git_create_branch(State(state): State<AppState>, Json(b): Json<RepoBody
     };
     let root = bind_repo!(state, b);
     match repo::create_branch(&root, &name).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_delete_branch(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(name) = b.name.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::delete_branch(&root, &name, b.force).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_rename_branch(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let (Some(old), Some(new)) = (b.name.clone(), b.new_name.clone()) else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name and new_name required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::rename_branch(&root, &old, &new).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_delete_remote_branch(
+    State(state): State<AppState>,
+    Json(b): Json<RepoBody>,
+) -> Response {
+    let Some(name) = b.name.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "name required" })))
+            .into_response();
+    };
+    let remote = b.remote.as_deref().unwrap_or("origin");
+    let root = bind_repo!(state, b);
+    match repo::delete_remote_branch(&root, remote, &name).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }

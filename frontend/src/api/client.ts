@@ -816,6 +816,12 @@ export const api = {
     request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>
     request('/git/branch', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name }), silent: true }),
+  gitDeleteBranch: (bind: GitBind, name: string, force: boolean) =>
+    request('/git/branch/delete', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, force }), silent: true }),
+  gitRenameBranch: (bind: GitBind, name: string, newName: string) =>
+    request('/git/branch/rename', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, new_name: newName }), silent: true }),
+  gitDeleteRemoteBranch: (bind: GitBind, name: string, remote: string) =>
+    request('/git/branch/delete-remote', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), name, remote }), silent: true }),
   gitPush: (bind: GitBind) =>
     request('/git/push', { method: 'POST', body: JSON.stringify(gitBindBody(bind)), silent: true }),
   gitPull: (bind: GitBind) =>
@@ -888,4 +894,6 @@ export interface GitCommitDetail {
 export interface GitBranch {
   name: string
   current: boolean
+  /** Short upstream ref (e.g. `origin/dev`) when the branch tracks one. */
+  upstream?: string
 }

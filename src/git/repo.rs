@@ -66,6 +66,9 @@ pub struct CommitDetail {
 pub struct BranchInfo {
     pub name: String,
     pub current: bool,
+    /// Short upstream ref (for example `origin/dev`) when the branch tracks one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -177,6 +180,12 @@ fn refine_error(stderr: &str) -> GitError {
         || lower.contains("commit your changes or stash them")
     {
         "dirty_worktree"
+    } else if lower.contains("not fully merged") {
+        // `git branch -d` refusal: the UI offers an explicit force delete.
+        "not_merged"
+    } else if lower.contains("conflict") {
+        // stash apply/pop, cherry-pick, revert and rebase all report CONFLICT.
+        "conflict"
     } else {
         "generic"
     };
@@ -438,7 +447,7 @@ pub async fn branches(root: &str) -> GitResult<Vec<BranchInfo>> {
     let output = run(git_command(root).args([
         "for-each-ref",
         "refs/heads",
-        "--format=%(HEAD)%00%(refname:short)",
+        "--format=%(HEAD)%00%(refname:short)%00%(upstream:short)",
     ]))
     .await?;
     ensure_success(&output)?;
@@ -446,13 +455,43 @@ pub async fn branches(root: &str) -> GitResult<Vec<BranchInfo>> {
     Ok(stdout
         .lines()
         .filter_map(|line| {
-            let (head, name) = line.split_once('\0')?;
+            let mut fields = line.split('\0');
+            let head = fields.next()?;
+            let name = fields.next()?;
             if name.is_empty() {
                 return None;
             }
-            Some(BranchInfo { name: name.to_string(), current: head == "*" })
+            let upstream = fields.next().unwrap_or("").trim();
+            Some(BranchInfo {
+                name: name.to_string(),
+                current: head == "*",
+                upstream: (!upstream.is_empty()).then(|| upstream.to_string()),
+            })
         })
         .collect())
+}
+
+pub async fn delete_branch(root: &str, name: &str, force: bool) -> GitResult<()> {
+    reject_option_like(name)?;
+    let flag = if force { "-D" } else { "-d" };
+    let output = run_write(git_command(root).args(["branch", flag, "--", name])).await?;
+    ensure_success(&output)
+}
+
+pub async fn rename_branch(root: &str, old: &str, new: &str) -> GitResult<()> {
+    reject_option_like(old)?;
+    reject_option_like(new)?;
+    let output = run_write(git_command(root).args(["branch", "-m", "--", old, new])).await?;
+    ensure_success(&output)
+}
+
+pub async fn delete_remote_branch(root: &str, remote: &str, name: &str) -> GitResult<()> {
+    reject_option_like(remote)?;
+    reject_option_like(name)?;
+    let mut cmd = git_command(root);
+    cmd.args(["push", remote, "--delete", "--", name]);
+    let output = run_remote(&mut cmd).await?;
+    ensure_success(&output)
 }
 
 pub async fn stage(root: &str, paths: &[String]) -> GitResult<()> {
@@ -681,6 +720,97 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    async fn current_branch_name(root: &str) -> String {
+        branches(root)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|b| b.current)
+            .expect("repo must have a current branch")
+            .name
+    }
+
+    #[tokio::test]
+    async fn delete_branch_rejects_unmerged_then_force_succeeds() {
+        if !git_available() {
+            eprintln!("SKIP delete_branch_rejects_unmerged_then_force_succeeds: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("feature.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "feature work"]).await;
+        run_git(&root, &["checkout", "-q", &base]).await;
+
+        let err = delete_branch(&root, "feature", false)
+            .await
+            .expect_err("unmerged branch deletion must be refused by -d");
+        assert_eq!(err.code, "not_merged");
+        assert!(branches(&root).await.unwrap().iter().any(|b| b.name == "feature"));
+
+        delete_branch(&root, "feature", true).await.unwrap();
+        assert!(!branches(&root).await.unwrap().iter().any(|b| b.name == "feature"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rename_branch_updates_list() {
+        if !git_available() {
+            eprintln!("SKIP rename_branch_updates_list: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        run_git(&root, &["branch", "old-name"]).await;
+        rename_branch(&root, "old-name", "new-name").await.unwrap();
+        let names: Vec<String> =
+            branches(&root).await.unwrap().into_iter().map(|b| b.name).collect();
+        assert!(names.contains(&"new-name".to_string()));
+        assert!(!names.contains(&"old-name".to_string()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn branch_list_exposes_upstream_and_remote_delete_works() {
+        if !git_available() {
+            eprintln!("SKIP branch_list_exposes_upstream_and_remote_delete_works: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let remote_dir = temp_dir();
+        let remote_path = remote_dir.join("remote.git").to_str().unwrap().to_string();
+        let out = Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote_path)
+            .output()
+            .await
+            .unwrap();
+        assert!(out.status.success());
+        run_git(&root, &["remote", "add", "origin", &remote_path]).await;
+        run_git(&root, &["checkout", "-q", "-b", "remote-feature"]).await;
+        run_git(&root, &["push", "-q", "-u", "origin", "remote-feature"]).await;
+
+        let branch = branches(&root)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|b| b.name == "remote-feature")
+            .expect("branch present");
+        assert_eq!(branch.upstream.as_deref(), Some("origin/remote-feature"));
+
+        delete_remote_branch(&root, "origin", "remote-feature").await.unwrap();
+        let remote_branches = Command::new("git")
+            .args(["-C", &remote_path, "branch", "--list"])
+            .output()
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&remote_branches.stdout).trim().is_empty());
+
+        std::fs::remove_dir_all(&remote_dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn parse_status_v2_branch_headers() {
         let raw = "# branch.oid abc123\0# branch.head dev\0# branch.upstream origin/dev\0# branch.ab +2 -1\0";
@@ -761,6 +891,14 @@ mod tests {
         assert_eq!(
             refine_error("error: Your local changes to the following files would be overwritten by checkout:\n\tsrc/main.rs\nPlease commit your changes or stash them before you switch branches.").code,
             "dirty_worktree"
+        );
+        assert_eq!(
+            refine_error("error: The branch 'x' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D x'.").code,
+            "not_merged"
+        );
+        assert_eq!(
+            refine_error("CONFLICT (content): Merge conflict in src/main.rs").code,
+            "conflict"
         );
         assert_eq!(refine_error("fatal: something else").code, "generic");
     }

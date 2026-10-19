@@ -2945,6 +2945,31 @@ select optgroup option {
   color: var(--gold-light, #FFCB6B);
   cursor: default;
 }
+.git-branch-row {
+  display: flex;
+  align-items: center;
+}
+.git-branch-row .git-branch-item {
+  flex: 1;
+  min-width: 0;
+}
+.git-branch-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.git-branch-row:hover .git-branch-actions,
+.git-branch-actions:focus-within {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .git-branch-actions {
+    opacity: 1;
+  }
+}
 .git-branch-create {
   display: flex;
   gap: 4px;

@@ -163,15 +163,14 @@ pub async fn remove_worktree(repo_path: &str, target_path: &str) -> anyhow::Resu
 /// the current HEAD; the user has already acknowledged the irreversible action
 /// in the frontend. The `--` terminator keeps a branch name that starts with
 /// `-` from being parsed as an option.
+/// Force-delete a branch as part of removing its worktree.
+///
+/// The worktree flow always uses `-D` because the branch may hold commits that
+/// are not reachable from anywhere else once the worktree is gone; the GIT
+/// panel's delete dialog defaults to `-d` and keeps force as an explicit user
+/// choice (`repo::delete_branch`).
 pub async fn delete_branch(repo_path: &str, branch: &str) -> anyhow::Result<()> {
-    let output =
-        Command::new("git").args(["-C", repo_path, "branch", "-D", "--", branch]).output().await?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git branch -D failed: {}", stderr.trim());
-    }
-
+    repo::delete_branch(repo_path, branch, true).await?;
     Ok(())
 }
 

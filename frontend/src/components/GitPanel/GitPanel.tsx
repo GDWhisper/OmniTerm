@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { api, ApiError, type GitBind, type GitLogEntry, type GitStatusEntry } from '../../api/client'
+import { api, ApiError, type GitBind, type GitBranch, type GitLogEntry, type GitStatusEntry } from '../../api/client'
 import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
 import { useToastStore } from '../../stores/toastStore'
@@ -8,12 +8,15 @@ import { getInitialDrawerHeight } from '../../utils/drawer'
 import { OverlayScroll } from '../Common/OverlayScroll'
 import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
-import { IconRefresh } from '../FileManager/icons'
+import { BranchDeleteDialog, BranchRenameDialog } from './BranchDialogs'
+import { IconPencil, IconRefresh, IconTrash } from '../FileManager/icons'
 
 const LOG_PAGE_SIZE = 50
 
 /** Backend error codes (ADR-6 refined stderr) with localized toast copy. */
-const KNOWN_ERROR_CODES = ['auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout'] as const
+const KNOWN_ERROR_CODES = [
+  'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
+] as const
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {
   if (entry.conflicted) return 'U'
@@ -63,6 +66,11 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [message, setMessage] = useState('')
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [newBranchName, setNewBranchName] = useState('')
+  const [renameTarget, setRenameTarget] = useState<GitBranch | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<GitBranch | null>(null)
+  /** True after `-d` refused; the delete dialog then requires the force checkbox. */
+  const [deleteUnmerged, setDeleteUnmerged] = useState(false)
+  const [branchBusy, setBranchBusy] = useState(false)
   const branchMenuRef = useRef<HTMLDivElement>(null)
   const [drawerTarget, setDrawerTarget] = useState<GitDrawerTarget | null>(null)
   /** Absolute path of a file opened in the shared FileDrawer from the diff view. */
@@ -90,6 +98,9 @@ export function GitPanel({ visible }: GitPanelProps) {
     setLogHasMore(false)
     setMessage('')
     setBranchMenuOpen(false)
+    setRenameTarget(null)
+    setDeleteTarget(null)
+    setDeleteUnmerged(false)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -159,6 +170,13 @@ export function GitPanel({ visible }: GitPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, bindKey, visible])
 
+  const toastError = useCallback((err: unknown) => {
+    // Mutation calls are silent — map the refined backend code to localized copy here
+    const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
+    const code = KNOWN_ERROR_CODES.find((c) => c === body?.code)
+    addToast('error', code ? t(`git.error.${code}`) : (err instanceof Error ? err.message : String(err)))
+  }, [addToast, t])
+
   const runMutation = useCallback(async (op: () => Promise<unknown>, successMsg?: string) => {
     if (!bind) return
     try {
@@ -166,12 +184,9 @@ export function GitPanel({ visible }: GitPanelProps) {
       setStatusTick((n) => n + 1)
       if (successMsg) addToast('success', successMsg)
     } catch (err: unknown) {
-      // Mutation calls are silent — map the refined backend code to localized copy here
-      const body = err instanceof ApiError ? (err.body as { code?: string }) : undefined
-      const code = KNOWN_ERROR_CODES.find((c) => c === body?.code)
-      addToast('error', code ? t(`git.error.${code}`) : (err instanceof Error ? err.message : String(err)))
+      toastError(err)
     }
-  }, [bind, mutate, addToast, t])
+  }, [bind, mutate, addToast, toastError])
 
   const entries = status?.entries ?? []
   const stagedEntries = entries.filter(isStaged)
@@ -213,6 +228,60 @@ export function GitPanel({ visible }: GitPanelProps) {
     }, t('git.createdBranch', { name }))
   }
 
+  const handleRenameBranch = async (newName: string) => {
+    const target = renameTarget
+    if (!bind || !target) return
+    setBranchBusy(true)
+    try {
+      await mutate(bind, async () => {
+        await api.gitRenameBranch(bind, target.name, newName)
+        await fetchBranches(bind)
+      })
+      addToast('success', t('git.renamedBranch', { name: newName }))
+      setRenameTarget(null)
+    } catch (err) {
+      toastError(err)
+    } finally {
+      setBranchBusy(false)
+    }
+  }
+
+  const handleDeleteBranch = async (force: boolean, alsoRemote: boolean) => {
+    const target = deleteTarget
+    if (!bind || !target) return
+    setBranchBusy(true)
+    try {
+      await mutate(bind, async () => {
+        await api.gitDeleteBranch(bind, target.name, force)
+        await fetchBranches(bind)
+      })
+    } catch (err) {
+      const code = err instanceof ApiError ? (err.body as { code?: string }).code : undefined
+      if (code === 'not_merged' && !force) {
+        // Keep the dialog open and surface the force checkbox instead of
+        // losing the user's intent in a toast.
+        setDeleteUnmerged(true)
+      }
+      toastError(err)
+      setBranchBusy(false)
+      return
+    }
+    setDeleteTarget(null)
+    setDeleteUnmerged(false)
+    addToast('success', t('git.deletedBranch', { name: target.name }))
+
+    if (alsoRemote && target.upstream) {
+      const remote = target.upstream.split('/')[0] || 'origin'
+      try {
+        await mutate(bind, () => api.gitDeleteRemoteBranch(bind, target.name, remote))
+        addToast('success', t('git.deletedRemoteBranch', { name: target.upstream }))
+      } catch (err) {
+        toastError(err)
+      }
+    }
+    setBranchBusy(false)
+  }
+
   if (!bind) {
     return <div className="git-empty">{t('git.selectSessionFirst')}</div>
   }
@@ -244,13 +313,42 @@ export function GitPanel({ visible }: GitPanelProps) {
             <div className="git-branch-menu">
               <OverlayScroll style={{ maxHeight: 180 }} contentStyle={{ flex: '0 0 auto', maxHeight: 180 }}>
                 {branches.map((b) => (
-                  <button
-                    key={b.name}
-                    className={`git-branch-item ${b.current ? 'active' : ''}`}
-                    onClick={() => { if (!b.current) handleCheckout(b.name) }}
-                  >
-                    {b.current ? '● ' : ''}{b.name}
-                  </button>
+                  <div key={b.name} className="git-branch-row">
+                    <button
+                      className={`git-branch-item ${b.current ? 'active' : ''}`}
+                      title={b.upstream ? `${b.name} → ${b.upstream}` : b.name}
+                      onClick={() => { if (!b.current) handleCheckout(b.name) }}
+                    >
+                      {b.current ? '● ' : ''}{b.name}
+                    </button>
+                    <span className="git-branch-actions">
+                      <button
+                        className="git-row-btn"
+                        disabled={mutating || branchBusy}
+                        title={t('git.renameBranch')}
+                        onClick={() => {
+                          setBranchMenuOpen(false)
+                          setRenameTarget(b)
+                        }}
+                      >
+                        <IconPencil width={12} height={12} />
+                      </button>
+                      {!b.current && (
+                        <button
+                          className="git-row-btn git-row-btn-danger"
+                          disabled={mutating || branchBusy}
+                          title={t('git.deleteBranch')}
+                          onClick={() => {
+                            setBranchMenuOpen(false)
+                            setDeleteUnmerged(false)
+                            setDeleteTarget(b)
+                          }}
+                        >
+                          <IconTrash width={12} height={12} />
+                        </button>
+                      )}
+                    </span>
+                  </div>
                 ))}
               </OverlayScroll>
               <div className="git-branch-create">
@@ -425,6 +523,23 @@ export function GitPanel({ visible }: GitPanelProps) {
           fileChangeEvent={null}
         />
       )}
+
+      <BranchRenameDialog
+        target={renameTarget}
+        busy={branchBusy}
+        onClose={() => setRenameTarget(null)}
+        onConfirm={handleRenameBranch}
+      />
+      <BranchDeleteDialog
+        target={deleteTarget}
+        unmerged={deleteUnmerged}
+        busy={branchBusy}
+        onClose={() => {
+          setDeleteTarget(null)
+          setDeleteUnmerged(false)
+        }}
+        onConfirm={handleDeleteBranch}
+      />
     </div>
   )
 }
