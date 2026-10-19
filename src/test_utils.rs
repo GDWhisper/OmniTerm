@@ -45,6 +45,8 @@ pub async fn test_state() -> AppState {
             )),
         },
         max_upload_body: crate::api::files::MAX_UPLOAD_BODY_DEFAULT,
+        ai_commit_key_path: std::env::temp_dir()
+            .join(format!("omniterm-test-ai-key-{}", uuid::Uuid::new_v4())),
         db,
     }
 }

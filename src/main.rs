@@ -1,5 +1,6 @@
 mod acp;
 mod agent;
+mod ai_commit;
 mod api;
 mod auth;
 mod embedded;
@@ -197,6 +198,9 @@ pub struct AppState {
     /// 文件上传请求体总量上限（字节），files 路由的 DefaultBodyLimit 与
     /// 流式写入的落盘中止阈值共用此值（见 api::files::MAX_UPLOAD_BODY_DEFAULT）。
     pub max_upload_body: usize,
+    /// AI commit message 的 API key 文件路径（0600，按实例后缀隔离）。
+    /// 密钥不落 settings 表，也不经任何 GET 接口回显。
+    pub ai_commit_key_path: PathBuf,
 }
 
 /// Fallback handler that serves static files from embedded assets.
@@ -1011,6 +1015,8 @@ fn main() -> anyhow::Result<()> {
                     )),
                 },
                 max_upload_body: args.max_upload_body.unwrap_or(api::files::MAX_UPLOAD_BODY_DEFAULT),
+                ai_commit_key_path: omniterm_data_dir()
+                    .join(ai_commit::key_file_name(&suffix)),
             };
 
             // 启动 agent 屏幕检测轮询：经引擎注册表枚举活动会话前台进程 + 可见屏，

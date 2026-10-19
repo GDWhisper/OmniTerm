@@ -1,5 +1,6 @@
 pub mod agent_events;
 pub mod agents;
+pub mod ai_commit;
 pub mod audit;
 pub mod auth;
 pub mod files;
@@ -31,6 +32,7 @@ pub fn routes(state: AppState) -> Router {
         .merge(projects::routes())
         .merge(sessions::routes())
         .merge(settings::routes())
+        .merge(ai_commit::routes())
         .merge(hooks::routes())
         .merge(files::routes(state.max_upload_body))
         .merge(files_watch::routes())
