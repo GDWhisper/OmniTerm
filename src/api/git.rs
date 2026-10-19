@@ -81,6 +81,8 @@ struct RepoBody {
     index: Option<u32>,
     sha: Option<String>,
     mode: Option<String>,
+    #[serde(default)]
+    amend: bool,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -209,8 +211,9 @@ async fn git_commit(State(state): State<AppState>, Json(b): Json<RepoBody>) -> R
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": "message required" })))
             .into_response();
     };
+    let amend = b.amend;
     let root = bind_repo!(state, b);
-    match repo::commit(&root, &message).await {
+    match repo::commit(&root, &message, amend).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }

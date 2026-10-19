@@ -548,11 +548,25 @@ pub async fn unstage(root: &str, paths: &[String]) -> GitResult<()> {
     Ok(())
 }
 
-pub async fn commit(root: &str, message: &str) -> GitResult<()> {
-    if message.trim().is_empty() {
+pub async fn commit(root: &str, message: &str, amend: bool) -> GitResult<()> {
+    let empty = message.trim().is_empty();
+    if !amend && empty {
         return Err(GitError::generic("commit message is empty"));
     }
-    let output = run_write(git_command(root).args(["commit", "-m", message])).await?;
+    let mut cmd = git_command(root);
+    cmd.arg("commit");
+    if amend {
+        cmd.arg("--amend");
+        // Empty message + amend = keep the previous message (git --no-edit).
+        if empty {
+            cmd.arg("--no-edit");
+        } else {
+            cmd.args(["-m", message]);
+        }
+    } else {
+        cmd.args(["-m", message]);
+    }
+    let output = run_write(&mut cmd).await?;
     if !output.status.success() {
         return Err(refine_error(&error_message(&output)));
     }
@@ -1133,6 +1147,63 @@ mod tests {
         assert_eq!(entry.index_status, "M");
         assert_eq!(entry.worktree_status, ".");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    async fn head_subject(root: &str) -> String {
+        let out = Command::new("git")
+            .args(["-C", root, "log", "-1", "--pretty=%s"])
+            .output()
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    async fn parent_sha(root: &str) -> String {
+        let out =
+            Command::new("git").args(["-C", root, "rev-parse", "HEAD^"]).output().await.unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn commit_amend_rewrites_head_and_keeps_parent() {
+        if !git_available() {
+            eprintln!("SKIP commit_amend_rewrites_head_and_keeps_parent: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let initial = head_sha(&root).await;
+        std::fs::write(dir.join("tracked.txt"), "second\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        commit(&root, "second", false).await.unwrap();
+        let before = head_sha(&root).await;
+
+        commit(&root, "second amended", true).await.unwrap();
+        assert_ne!(head_sha(&root).await, before, "amend must create a new sha");
+        assert_eq!(parent_sha(&root).await, initial, "amend must keep the parent");
+        assert_eq!(head_subject(&root).await, "second amended");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn commit_amend_with_empty_message_keeps_previous_message() {
+        if !git_available() {
+            eprintln!("SKIP commit_amend_with_empty_message_keeps_previous_message: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("tracked.txt"), "second\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        commit(&root, "original message", false).await.unwrap();
+
+        commit(&root, "   ", true).await.unwrap();
+        assert_eq!(head_subject(&root).await, "original message");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn commit_requires_message_unless_amending() {
+        let err = commit("/nonexistent", "  ", false).await.unwrap_err();
+        assert!(err.message.contains("commit message is empty"));
     }
 
     #[test]

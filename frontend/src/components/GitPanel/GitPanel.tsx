@@ -74,6 +74,7 @@ export function GitPanel({ visible }: GitPanelProps) {
 
   const [view, setView] = useState<'changes' | 'history'>('changes')
   const [message, setMessage] = useState('')
+  const [amend, setAmend] = useState(false)
   const [branchMenuOpen, setBranchMenuOpen] = useState(false)
   const [newBranchName, setNewBranchName] = useState('')
   const [renameTarget, setRenameTarget] = useState<GitBranch | null>(null)
@@ -113,6 +114,7 @@ export function GitPanel({ visible }: GitPanelProps) {
     setLog([])
     setLogHasMore(false)
     setMessage('')
+    setAmend(false)
     setBranchMenuOpen(false)
     setRenameTarget(null)
     setDeleteTarget(null)
@@ -231,12 +233,25 @@ export function GitPanel({ visible }: GitPanelProps) {
   const unstagedEntries = entries.filter(isUnstaged)
   const isRepo = status?.is_repo ?? false
 
-  const handleCommit = () => {
-    if (!message.trim() || stagedEntries.length === 0) return
-    runMutation(() => api.gitCommit(bind!, message), t('git.committed')).then(() => {
-      // Only clear when the commit actually landed (status no longer has those staged rows)
-      if (useGitStore.getState().status?.entries?.some(isStaged) === false) setMessage('')
-    })
+  // Amend may rewrite only the message (no staged files required); a plain
+  // commit still needs both a message and something staged.
+  const canCommit = !mutating && (amend || (message.trim().length > 0 && stagedEntries.length > 0))
+
+  const handleCommit = async (push: boolean) => {
+    if (!bind || !canCommit) return
+    const hadMessage = message.trim().length > 0
+    const committed = await runMutation(
+      () => api.gitCommit(bind, message, amend),
+      t('git.committed'),
+    )
+    if (!committed) return
+    // Only clear when the commit actually landed (status no longer has those staged rows)
+    if (hadMessage && useGitStore.getState().status?.entries?.some(isStaged) === false) setMessage('')
+    setAmend(false)
+    if (!push) return
+    // Commit succeeded; a failed push is reported separately and must not
+    // retract the commit success above.
+    await runMutation(() => api.gitPush(bind), t('git.pushed'))
   }
 
   const handleDiscard = (entry: GitStatusEntry) => {
@@ -530,17 +545,41 @@ export function GitPanel({ visible }: GitPanelProps) {
               onChange={(e) => setMessage(e.target.value)}
               rows={3}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleCommit()
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void handleCommit(false)
               }}
             />
-            <button
-              className="git-commit-btn"
-              disabled={mutating || !message.trim() || stagedEntries.length === 0}
-              onClick={handleCommit}
-              title={stagedEntries.length === 0 ? t('git.nothingStaged') : undefined}
-            >
-              {t('git.commitBtn', { count: stagedEntries.length })}
-            </button>
+            <label className="git-commit-amend">
+              <input
+                type="checkbox"
+                className="fm-checkbox"
+                style={{ accentColor: 'var(--warning)', flexShrink: 0 }}
+                checked={amend}
+                disabled={mutating}
+                onChange={(e) => setAmend(e.target.checked)}
+              />
+              <span className="font-pixel" style={{ fontSize: 11, letterSpacing: 'var(--pixel-tracking-sm)' }}>
+                {t('git.amendBtn')}
+              </span>
+              {amend && <span className="git-commit-amend-hint">{t('git.amendHint')}</span>}
+            </label>
+            <div className="git-commit-actions">
+              <button
+                className="git-commit-btn"
+                disabled={!canCommit}
+                onClick={() => void handleCommit(false)}
+                title={!amend && stagedEntries.length === 0 ? t('git.nothingStaged') : undefined}
+              >
+                {t('git.commitBtn', { count: stagedEntries.length })}
+              </button>
+              <button
+                className="git-commit-btn"
+                disabled={!canCommit}
+                onClick={() => void handleCommit(true)}
+                title={!amend && stagedEntries.length === 0 ? t('git.nothingStaged') : undefined}
+              >
+                {t('git.commitPushBtn')}
+              </button>
+            </div>
           </div>
         </>
       ) : (

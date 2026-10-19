@@ -808,8 +808,8 @@ export const api = {
     request('/git/stage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
   gitUnstage: (bind: GitBind, paths: string[]) =>
     request('/git/unstage', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), paths }), silent: true }),
-  gitCommit: (bind: GitBind, message: string) =>
-    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }), silent: true }),
+  gitCommit: (bind: GitBind, message: string, amend = false) =>
+    request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message, amend }), silent: true }),
   gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
     request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
   gitStashList: (bind: GitBind) =>

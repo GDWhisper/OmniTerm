@@ -3261,6 +3261,28 @@ select optgroup option {
 .git-commit-input:focus {
   border-color: var(--accent);
 }
+.git-commit-amend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.git-commit-amend-hint {
+  flex-basis: 100%;
+  color: var(--warning);
+  font-family: var(--reader-font);
+  font-size: 11px;
+  line-height: 1.35;
+}
+.git-commit-actions {
+  display: flex;
+  gap: 6px;
+}
+.git-commit-actions .git-commit-btn {
+  flex: 1;
+}
 .git-commit-btn {
   padding: 5px 0;
   background: transparent;
