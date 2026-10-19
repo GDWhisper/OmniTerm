@@ -5,16 +5,11 @@ import { sessionStatus, type AcpActivity } from '../../utils/agentAggregate'
 import { sessionDisplayName } from '../../utils/sessionDisplayName'
 import { useAgentStore } from '../../stores/agentStore'
 import type { AttentionReason } from '../../hooks/useAttention'
-import { useLongPress } from '../../hooks/useLongPress'
+import { useLongPress, LONG_PRESS_CLICK_SUPPRESS_MS } from '../../hooks/useLongPress'
 import { hapticTap } from '../../utils/haptics'
 import { ArchiveButton, DeleteButton, ReleaseButton } from './RowActionButtons'
 import type { DeleteTarget } from './DeleteConfirmDialog'
-import type { ContextMenuPoint } from './SessionContextMenu'
-
-/** 长按触发后抑制紧随补发 click 的时间窗（ms）。浏览器在 touchend 后向
- *  touchstart 目标补发一次 click——不抑制的话，长按弹菜单会同时激活会话
- *  （ChatMessage 的长按先例没有 onClick，未覆盖此坑）。 */
-const LONG_PRESS_CLICK_SUPPRESS_MS = 700
+import type { ContextMenuPoint } from '../Common/ContextMenu'
 
 export interface SessionRowProps {
   session: Session

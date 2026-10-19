@@ -21,6 +21,9 @@ interface UseLongPressOptions {
  * 继续操作）极易被误判为长按；滚动中的触摸另由 scrollTop 检测即时取消。 */
 export const SCROLL_COOLDOWN_MS = 400
 
+/** 长按触发后抑制浏览器补发 click 的时间窗（touchend 后补发一次 click）。 */
+export const LONG_PRESS_CLICK_SUPPRESS_MS = 700
+
 // 滚动不冒泡但捕获阶段可达（window → 滚动容器），模块级一次注册即可覆盖所有
 // 滚动容器（聊天气泡列表、文件列表等），无需给每个消费方传滚动信号。
 let lastScrollAt = 0

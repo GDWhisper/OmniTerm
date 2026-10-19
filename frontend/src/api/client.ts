@@ -826,6 +826,12 @@ export const api = {
     request('/git/stash/pop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
   gitStashDrop: (bind: GitBind, index: number) =>
     request('/git/stash/drop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitCherryPick: (bind: GitBind, sha: string) =>
+    request('/git/cherry-pick', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
+  gitRevertCommit: (bind: GitBind, sha: string) =>
+    request('/git/revert-commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha }), silent: true }),
+  gitReset: (bind: GitBind, sha: string, mode: 'soft' | 'mixed') =>
+    request('/git/reset', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), sha, mode }), silent: true }),
   gitCheckout: (bind: GitBind, branch: string) =>
     request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>

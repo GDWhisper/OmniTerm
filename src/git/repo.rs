@@ -231,6 +231,14 @@ fn reject_option_like(value: &str) -> GitResult<()> {
     Ok(())
 }
 
+fn validate_commit_sha(sha: &str) -> GitResult<()> {
+    reject_option_like(sha)?;
+    if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(GitError::generic("invalid commit sha"));
+    }
+    Ok(())
+}
+
 /// Resolve the repository toplevel for a directory, or `None` if not a git repo.
 pub async fn resolve_repo_root(dir: &str) -> Option<String> {
     let output = Command::new("git")
@@ -430,10 +438,7 @@ pub async fn log(root: &str, skip: u32, limit: u32) -> GitResult<(Vec<LogEntry>,
 }
 
 pub async fn show_commit(root: &str, sha: &str) -> GitResult<CommitDetail> {
-    reject_option_like(sha)?;
-    if !sha.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(GitError::generic("invalid commit sha"));
-    }
+    validate_commit_sha(sha)?;
 
     let meta = run(git_command(root).args([
         "show",
@@ -565,6 +570,42 @@ fn parse_stash_line(line: &str) -> Option<StashEntry> {
     let message = fields.next().unwrap_or("").to_string();
     let index = reference.strip_prefix("stash@{")?.strip_suffix('}')?.parse().ok()?;
     Some(StashEntry { index, date, message })
+}
+
+/// Reset modes exposed by the panel. `--hard` is deliberately absent: it
+/// discards working-tree changes in addition to moving HEAD (plan D4).
+#[derive(Debug, Clone, Copy)]
+pub enum ResetMode {
+    Soft,
+    Mixed,
+}
+
+pub async fn cherry_pick(root: &str, sha: &str) -> GitResult<()> {
+    validate_commit_sha(sha)?;
+    let output = run_write(git_command(root).args(["cherry-pick", "--no-edit", sha])).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(refine_error(&error_message(&output)))
+}
+
+pub async fn revert_commit(root: &str, sha: &str) -> GitResult<()> {
+    validate_commit_sha(sha)?;
+    let output = run_write(git_command(root).args(["revert", "--no-edit", sha])).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(refine_error(&error_message(&output)))
+}
+
+pub async fn reset_to(root: &str, sha: &str, mode: ResetMode) -> GitResult<()> {
+    validate_commit_sha(sha)?;
+    let flag = match mode {
+        ResetMode::Soft => "--soft",
+        ResetMode::Mixed => "--mixed",
+    };
+    let output = run_write(git_command(root).args(["reset", flag, sha])).await?;
+    ensure_success(&output)
 }
 
 pub async fn stash_list(root: &str) -> GitResult<Vec<StashEntry>> {
@@ -977,6 +1018,129 @@ mod tests {
             "pop must keep the stash on conflict"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    async fn head_sha(root: &str) -> String {
+        let out =
+            Command::new("git").args(["-C", root, "rev-parse", "HEAD"]).output().await.unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn cherry_pick_applies_commit_from_other_branch() {
+        if !git_available() {
+            eprintln!("SKIP cherry_pick_applies_commit_from_other_branch: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("feature.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "feature commit"]).await;
+        let feature_sha = head_sha(&root).await;
+        run_git(&root, &["checkout", "-q", &base]).await;
+
+        cherry_pick(&root, &feature_sha).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("feature.txt")).unwrap(), "feature\n");
+        let subject = Command::new("git")
+            .args(["-C", &root, "log", "-1", "--pretty=%s"])
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "feature commit");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cherry_pick_conflict_returns_conflict_code() {
+        if !git_available() {
+            eprintln!("SKIP cherry_pick_conflict_returns_conflict_code: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = current_branch_name(&root).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("tracked.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "feature line"]).await;
+        let feature_sha = head_sha(&root).await;
+        run_git(&root, &["checkout", "-q", &base]).await;
+        std::fs::write(dir.join("tracked.txt"), "base\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "base line"]).await;
+
+        let err = cherry_pick(&root, &feature_sha).await.unwrap_err();
+        assert_eq!(err.code, "conflict");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn revert_commit_undoes_change() {
+        if !git_available() {
+            eprintln!("SKIP revert_commit_undoes_change: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("tracked.txt"), "changed\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "change"]).await;
+        let change_sha = head_sha(&root).await;
+
+        revert_commit(&root, &change_sha).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "initial\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reset_mixed_moves_head_and_keeps_worktree_changes() {
+        if !git_available() {
+            eprintln!("SKIP reset_mixed_moves_head_and_keeps_worktree_changes: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = head_sha(&root).await;
+        std::fs::write(dir.join("tracked.txt"), "second\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "second"]).await;
+
+        reset_to(&root, &base, ResetMode::Mixed).await.unwrap();
+        assert_eq!(head_sha(&root).await, base);
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "second\n");
+        let st = status(&root).await.unwrap();
+        let entry = st.entries.iter().find(|e| e.path == "tracked.txt").expect("changed file");
+        assert_eq!(entry.index_status, ".", "mixed reset must leave the index at HEAD");
+        assert_eq!(entry.worktree_status, "M");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn reset_soft_keeps_changes_staged() {
+        if !git_available() {
+            eprintln!("SKIP reset_soft_keeps_changes_staged: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = head_sha(&root).await;
+        std::fs::write(dir.join("tracked.txt"), "second\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "second"]).await;
+
+        reset_to(&root, &base, ResetMode::Soft).await.unwrap();
+        assert_eq!(head_sha(&root).await, base);
+        let st = status(&root).await.unwrap();
+        let entry = st.entries.iter().find(|e| e.path == "tracked.txt").expect("changed file");
+        assert_eq!(entry.index_status, "M");
+        assert_eq!(entry.worktree_status, ".");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn validate_commit_sha_rejects_options_and_non_hex() {
+        assert!(validate_commit_sha("-x").is_err());
+        assert!(validate_commit_sha("HEAD~1").is_err());
+        assert!(validate_commit_sha("").is_err());
+        assert!(validate_commit_sha("abc1234def").is_ok());
     }
 
     #[test]

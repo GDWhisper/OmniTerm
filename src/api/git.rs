@@ -29,6 +29,9 @@ pub fn routes() -> Router<AppState> {
         .route("/git/stash/apply", post(git_stash_apply))
         .route("/git/stash/pop", post(git_stash_pop))
         .route("/git/stash/drop", post(git_stash_drop))
+        .route("/git/cherry-pick", post(git_cherry_pick))
+        .route("/git/revert-commit", post(git_revert_commit))
+        .route("/git/reset", post(git_reset))
         .route("/git/checkout", post(git_checkout))
         .route("/git/branch", post(git_create_branch))
         .route("/git/branch/delete", post(git_delete_branch))
@@ -76,6 +79,8 @@ struct RepoBody {
     #[serde(default)]
     include_untracked: bool,
     index: Option<u32>,
+    sha: Option<String>,
+    mode: Option<String>,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -270,6 +275,50 @@ async fn git_stash_drop(State(state): State<AppState>, Json(b): Json<RepoBody>) 
     };
     let root = bind_repo!(state, b);
     match repo::stash_drop(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_cherry_pick(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::cherry_pick(&root, &sha).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_revert_commit(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::revert_commit(&root, &sha).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_reset(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(sha) = b.sha.clone() else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sha required" }))).into_response();
+    };
+    let mode = match b.mode.as_deref() {
+        Some("soft") => repo::ResetMode::Soft,
+        Some("mixed") => repo::ResetMode::Mixed,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "mode must be soft or mixed" })),
+            )
+                .into_response();
+        }
+    };
+    let root = bind_repo!(state, b);
+    match repo::reset_to(&root, &sha, mode).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }

@@ -5,12 +5,19 @@ import { useAppStore } from '../../stores/appStore'
 import { useGitStore, GIT_POLL_INTERVAL_MS } from '../../stores/gitStore'
 import { useToastStore } from '../../stores/toastStore'
 import { getInitialDrawerHeight } from '../../utils/drawer'
+import { copyText } from '../../utils/clipboard'
+import { hapticTap } from '../../utils/haptics'
+import { LONG_PRESS_CLICK_SUPPRESS_MS, useLongPress } from '../../hooks/useLongPress'
 import { OverlayScroll } from '../Common/OverlayScroll'
+import { ContextMenu } from '../Common/ContextMenu'
+import { ConfirmDialog } from '../Modal/ConfirmDialog'
 import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 import { BranchDeleteDialog, BranchRenameDialog } from './BranchDialogs'
 import { StashPanel } from './StashPanel'
-import { IconPencil, IconRefresh, IconTrash } from '../FileManager/icons'
+import {
+  IconArrowDown, IconCopy, IconGitBranch, IconPencil, IconRefresh, IconTrash,
+} from '../FileManager/icons'
 
 const LOG_PAGE_SIZE = 50
 
@@ -47,6 +54,7 @@ export function GitPanel({ visible }: GitPanelProps) {
   const activeSessionId = useAppStore((s) => s.activeSessionId)
   const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const isMobile = useAppStore((s) => s.isMobile)
 
   const status = useGitStore((s) => s.status)
   const branches = useGitStore((s) => s.branches)
@@ -74,6 +82,11 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [deleteUnmerged, setDeleteUnmerged] = useState(false)
   const [branchBusy, setBranchBusy] = useState(false)
   const [stashOpen, setStashOpen] = useState(false)
+  const [commitMenu, setCommitMenu] = useState<{ sha: string; x: number; y: number } | null>(null)
+  const [resetTarget, setResetTarget] = useState<
+    { sha: string; shortSha: string; mode: 'soft' | 'mixed' } | null
+  >(null)
+  const longPressAtRef = useRef(0)
   const branchMenuRef = useRef<HTMLDivElement>(null)
   const [drawerTarget, setDrawerTarget] = useState<GitDrawerTarget | null>(null)
   /** Absolute path of a file opened in the shared FileDrawer from the diff view. */
@@ -105,6 +118,8 @@ export function GitPanel({ visible }: GitPanelProps) {
     setDeleteTarget(null)
     setDeleteUnmerged(false)
     setStashOpen(false)
+    setCommitMenu(null)
+    setResetTarget(null)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -173,6 +188,20 @@ export function GitPanel({ visible }: GitPanelProps) {
     fetchLog(0, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, bindKey, visible])
+
+  // History rows: desktop right-click and touch long-press open the same menu.
+  const longPressHandlers = useLongPress({
+    disabled: !isMobile,
+    onLongPress: (point, e) => {
+      const sha = (e.target as HTMLElement | null)
+        ?.closest('[data-git-sha]')
+        ?.getAttribute('data-git-sha')
+      if (!sha) return
+      longPressAtRef.current = Date.now()
+      hapticTap()
+      setCommitMenu({ sha, x: point.x, y: point.y })
+    },
+  })
 
   const toastError = useCallback((err: unknown) => {
     // Mutation calls are silent — map the refined backend code to localized copy here
@@ -291,6 +320,34 @@ export function GitPanel({ visible }: GitPanelProps) {
     setBranchBusy(false)
   }
 
+  const handleCopySha = async (sha: string) => {
+    if (await copyText(sha)) addToast('success', t('git.shaCopied'))
+  }
+
+  const handleHistoryAction = (sha: string, action: 'cherry-pick' | 'revert') => {
+    if (!bind) return
+    runMutation(async () => {
+      if (action === 'cherry-pick') await api.gitCherryPick(bind, sha)
+      else await api.gitRevertCommit(bind, sha)
+      await fetchLog(0, false)
+    }, t(action === 'cherry-pick' ? 'git.cherryPicked' : 'git.reverted'))
+  }
+
+  const openReset = (sha: string, mode: 'soft' | 'mixed') => {
+    const entry = log.find((e) => e.sha === sha)
+    setResetTarget({ sha, shortSha: entry?.short_sha ?? sha.slice(0, 7), mode })
+  }
+
+  const handleReset = () => {
+    const target = resetTarget
+    if (!bind || !target) return
+    setResetTarget(null)
+    runMutation(async () => {
+      await api.gitReset(bind, target.sha, target.mode)
+      await fetchLog(0, false)
+    }, t('git.resetDone', { sha: target.shortSha }))
+  }
+
   if (!bind) {
     return <div className="git-empty">{t('git.selectSessionFirst')}</div>
   }
@@ -392,11 +449,23 @@ export function GitPanel({ visible }: GitPanelProps) {
 
       {/* ── Secondary view switch: CHANGES | HISTORY ── */}
       <div className="git-viewbar">
-        <button className={`git-view-tab ${view === 'changes' ? 'active' : ''}`} onClick={() => setView('changes')}>
+        <button
+          className={`git-view-tab ${view === 'changes' ? 'active' : ''}`}
+          onClick={() => {
+            setView('changes')
+            setCommitMenu(null)
+          }}
+        >
           {t('git.changesTab')}
           {entries.length > 0 && <span className="git-count-badge">{entries.length}</span>}
         </button>
-        <button className={`git-view-tab ${view === 'history' ? 'active' : ''}`} onClick={() => setView('history')}>
+        <button
+          className={`git-view-tab ${view === 'history' ? 'active' : ''}`}
+          onClick={() => {
+            setView('history')
+            setCommitMenu(null)
+          }}
+        >
           {t('git.historyTab')}
         </button>
         <span className="title-bar-spacer" />
@@ -484,7 +553,17 @@ export function GitPanel({ visible }: GitPanelProps) {
                 <button
                   key={entry.sha}
                   className="git-log-row"
-                  onClick={() => setDrawerTarget({ kind: 'commit', sha: entry.sha })}
+                  data-git-sha={entry.sha}
+                  {...longPressHandlers}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setCommitMenu({ sha: entry.sha, x: e.clientX, y: e.clientY })
+                  }}
+                  onClick={() => {
+                    // Suppress the click browsers emit after a long-press.
+                    if (Date.now() - longPressAtRef.current < LONG_PRESS_CLICK_SUPPRESS_MS) return
+                    setDrawerTarget({ kind: 'commit', sha: entry.sha })
+                  }}
                 >
                   <span className="git-log-subject">{entry.subject}</span>
                   <span className="git-log-meta">
@@ -544,6 +623,59 @@ export function GitPanel({ visible }: GitPanelProps) {
         onClose={() => setStashOpen(false)}
         onChanged={() => setStatusTick((n) => n + 1)}
         runOp={runMutation}
+      />
+
+      <ContextMenu
+        point={commitMenu ? { x: commitMenu.x, y: commitMenu.y } : null}
+        onClose={() => setCommitMenu(null)}
+        minWidth={220}
+        items={commitMenu ? [
+          {
+            id: 'copy',
+            icon: <IconCopy width={14} height={14} />,
+            label: t('git.copySha'),
+            run: () => handleCopySha(commitMenu.sha),
+          },
+          {
+            id: 'cherry-pick',
+            icon: <IconGitBranch width={14} height={14} />,
+            label: t('git.cherryPick'),
+            run: () => handleHistoryAction(commitMenu.sha, 'cherry-pick'),
+          },
+          {
+            id: 'revert',
+            icon: <IconRefresh width={14} height={14} />,
+            label: t('git.revertCommit'),
+            run: () => handleHistoryAction(commitMenu.sha, 'revert'),
+          },
+          {
+            id: 'reset-soft',
+            icon: <IconArrowDown width={14} height={14} />,
+            label: t('git.resetSoft'),
+            danger: true,
+            run: () => openReset(commitMenu.sha, 'soft'),
+          },
+          {
+            id: 'reset-mixed',
+            icon: <IconArrowDown width={14} height={14} />,
+            label: t('git.resetMixed'),
+            danger: true,
+            run: () => openReset(commitMenu.sha, 'mixed'),
+          },
+        ] : []}
+      />
+
+      <ConfirmDialog
+        open={resetTarget !== null}
+        onClose={() => setResetTarget(null)}
+        onConfirm={handleReset}
+        title={t('git.resetTitle')}
+        message={t('git.resetConfirm', {
+          sha: resetTarget?.shortSha ?? '',
+          mode: resetTarget?.mode ?? '',
+        })}
+        confirmText={t('git.resetAction')}
+        destructive
       />
 
       <BranchRenameDialog

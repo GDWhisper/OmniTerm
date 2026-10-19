@@ -2131,6 +2131,11 @@ body.parchment-texture {
   background: var(--accent-10);
   color: var(--accent);
 }
+.context-menu-item-danger:hover,
+.context-menu-item-danger:focus-visible {
+  background: var(--danger-12);
+  color: var(--danger);
+}
 
 /* Interactive elements that keep their own border/colors but need the
    unified hard shadow + press displacement (see ui-style-guide §6). */
