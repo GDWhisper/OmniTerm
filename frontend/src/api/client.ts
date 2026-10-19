@@ -812,6 +812,20 @@ export const api = {
     request('/git/commit', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), message }), silent: true }),
   gitDiscard: (bind: GitBind, files: { path: string; untracked: boolean }[]) =>
     request('/git/discard', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), files }), silent: true }),
+  gitStashList: (bind: GitBind) =>
+    request<{ stashes: GitStashEntry[] } | { is_repo: false }>(`/git/stash/list?${gitBindQuery(bind)}`),
+  gitStashPush: (bind: GitBind, message: string | undefined, includeUntracked: boolean) =>
+    request('/git/stash/push', {
+      method: 'POST',
+      body: JSON.stringify({ ...gitBindBody(bind), message, include_untracked: includeUntracked }),
+      silent: true,
+    }),
+  gitStashApply: (bind: GitBind, index: number) =>
+    request('/git/stash/apply', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitStashPop: (bind: GitBind, index: number) =>
+    request('/git/stash/pop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
+  gitStashDrop: (bind: GitBind, index: number) =>
+    request('/git/stash/drop', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), index }), silent: true }),
   gitCheckout: (bind: GitBind, branch: string) =>
     request('/git/checkout', { method: 'POST', body: JSON.stringify({ ...gitBindBody(bind), branch }), silent: true }),
   gitCreateBranch: (bind: GitBind, name: string) =>
@@ -896,4 +910,10 @@ export interface GitBranch {
   current: boolean
   /** Short upstream ref (e.g. `origin/dev`) when the branch tracks one. */
   upstream?: string
+}
+
+export interface GitStashEntry {
+  index: number
+  date: string
+  message: string
 }

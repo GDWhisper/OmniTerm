@@ -71,6 +71,16 @@ pub struct BranchInfo {
     pub upstream: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StashEntry {
+    /// Position in the stash stack (`stash@{index}`).
+    pub index: u32,
+    /// Human-readable age, e.g. `2 hours ago`.
+    pub date: String,
+    /// Stash description (`git stash list` `%gs`).
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscardFile {
     pub path: String,
@@ -115,6 +125,17 @@ fn git_command(root: &str) -> Command {
 
 async fn run(cmd: &mut Command) -> GitResult<Output> {
     cmd.output().await.map_err(|e| GitError::generic(format!("failed to spawn git: {e}")))
+}
+
+/// git reports some failures (conflicts, "nothing to commit") on stdout while
+/// stderr is empty — pick whichever stream carries the message.
+fn error_message(output: &Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.trim().is_empty() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        stderr.trim().to_string()
+    }
 }
 
 fn ensure_success(output: &Output) -> GitResult<()> {
@@ -528,13 +549,85 @@ pub async fn commit(root: &str, message: &str) -> GitResult<()> {
     }
     let output = run_write(git_command(root).args(["commit", "-m", message])).await?;
     if !output.status.success() {
-        // git commit reports "nothing to commit" etc. on stdout, not stderr.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let msg = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
-        return Err(refine_error(msg));
+        return Err(refine_error(&error_message(&output)));
     }
     Ok(())
+}
+
+fn stash_ref(index: u32) -> String {
+    format!("stash@{{{index}}}")
+}
+
+fn parse_stash_line(line: &str) -> Option<StashEntry> {
+    let mut fields = line.split('\0');
+    let reference = fields.next()?;
+    let date = fields.next()?.to_string();
+    let message = fields.next().unwrap_or("").to_string();
+    let index = reference.strip_prefix("stash@{")?.strip_suffix('}')?.parse().ok()?;
+    Some(StashEntry { index, date, message })
+}
+
+pub async fn stash_list(root: &str) -> GitResult<Vec<StashEntry>> {
+    let output =
+        run(git_command(root).args(["stash", "list", "--format=%gd%x00%cr%x00%gs"])).await?;
+    ensure_success(&output)?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().filter_map(parse_stash_line).collect())
+}
+
+pub async fn stash_push(
+    root: &str,
+    message: Option<&str>,
+    include_untracked: bool,
+) -> GitResult<()> {
+    let mut cmd = git_command(root);
+    cmd.args(["stash", "push"]);
+    if include_untracked {
+        cmd.arg("--include-untracked");
+    }
+    if let Some(message) = message.filter(|m| !m.trim().is_empty()) {
+        cmd.args(["-m", message]);
+    }
+    let output = run_write(&mut cmd).await?;
+    if output.status.success() {
+        // `git stash push` exits 0 when there is nothing to save; report it
+        // honestly instead of claiming a stash was created.
+        if String::from_utf8_lossy(&output.stdout).contains("No local changes to save") {
+            return Err(GitError {
+                code: "nothing_to_stash".into(),
+                message: "no local changes to stash".into(),
+            });
+        }
+        return Ok(());
+    }
+    ensure_success(&output)
+}
+
+async fn run_stash_action(root: &str, action: &str, index: u32) -> GitResult<()> {
+    let reference = stash_ref(index);
+    let output = run_write(git_command(root).args(["stash", action, &reference])).await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let mut err = refine_error(&error_message(&output));
+    if err.code == "conflict" {
+        // pop keeps the stash on conflict, apply never drops it; the UI must
+        // say so rather than implying the user's changes were restored.
+        err.code = "stash_conflict".into();
+    }
+    Err(err)
+}
+
+pub async fn stash_apply(root: &str, index: u32) -> GitResult<()> {
+    run_stash_action(root, "apply", index).await
+}
+
+pub async fn stash_pop(root: &str, index: u32) -> GitResult<()> {
+    run_stash_action(root, "pop", index).await
+}
+
+pub async fn stash_drop(root: &str, index: u32) -> GitResult<()> {
+    run_stash_action(root, "drop", index).await
 }
 
 pub async fn discard(root: &str, files: &[DiscardFile]) -> GitResult<()> {
@@ -809,6 +902,90 @@ mod tests {
 
         std::fs::remove_dir_all(&remote_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stash_push_list_pop_round_trip() {
+        if !git_available() {
+            eprintln!("SKIP stash_push_list_pop_round_trip: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("tracked.txt"), "changed\n").unwrap();
+
+        stash_push(&root, Some("wip"), false).await.unwrap();
+        let stashes = stash_list(&root).await.unwrap();
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].index, 0);
+        assert!(stashes[0].message.contains("wip"), "got {}", stashes[0].message);
+        assert!(status(&root).await.unwrap().entries.is_empty(), "worktree should be clean");
+
+        stash_pop(&root, 0).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("tracked.txt")).unwrap(), "changed\n");
+        assert!(stash_list(&root).await.unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stash_push_can_include_untracked_files() {
+        if !git_available() {
+            eprintln!("SKIP stash_push_can_include_untracked_files: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+
+        stash_push(&root, None, true).await.unwrap();
+        assert!(!dir.join("untracked.txt").exists(), "untracked file should be stashed");
+        assert!(status(&root).await.unwrap().entries.is_empty());
+
+        stash_pop(&root, 0).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("untracked.txt")).unwrap(), "new\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stash_push_reports_nothing_to_save() {
+        if !git_available() {
+            eprintln!("SKIP stash_push_reports_nothing_to_save: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let err = stash_push(&root, None, false).await.unwrap_err();
+        assert_eq!(err.code, "nothing_to_stash");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stash_pop_conflict_keeps_stash_and_returns_coded_error() {
+        if !git_available() {
+            eprintln!("SKIP stash_pop_conflict_keeps_stash_and_returns_coded_error: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("tracked.txt"), "stashed\n").unwrap();
+        stash_push(&root, None, false).await.unwrap();
+        std::fs::write(dir.join("tracked.txt"), "committed\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "conflicting change"]).await;
+
+        let err = stash_pop(&root, 0).await.unwrap_err();
+        assert_eq!(err.code, "stash_conflict");
+        assert_eq!(
+            stash_list(&root).await.unwrap().len(),
+            1,
+            "pop must keep the stash on conflict"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_stash_line_extracts_index() {
+        let entry = parse_stash_line("stash@{3}\0 2 hours ago\0On dev: wip").unwrap();
+        assert_eq!(entry.index, 3);
+        assert_eq!(entry.date, " 2 hours ago");
+        assert_eq!(entry.message, "On dev: wip");
+        assert!(parse_stash_line("garbage").is_none());
     }
 
     #[test]

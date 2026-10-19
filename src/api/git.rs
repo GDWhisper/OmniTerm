@@ -24,6 +24,11 @@ pub fn routes() -> Router<AppState> {
         .route("/git/unstage", post(git_unstage))
         .route("/git/commit", post(git_commit))
         .route("/git/discard", post(git_discard))
+        .route("/git/stash/list", get(git_stash_list))
+        .route("/git/stash/push", post(git_stash_push))
+        .route("/git/stash/apply", post(git_stash_apply))
+        .route("/git/stash/pop", post(git_stash_pop))
+        .route("/git/stash/drop", post(git_stash_drop))
         .route("/git/checkout", post(git_checkout))
         .route("/git/branch", post(git_create_branch))
         .route("/git/branch/delete", post(git_delete_branch))
@@ -68,6 +73,9 @@ struct RepoBody {
     #[serde(default)]
     force: bool,
     remote: Option<String>,
+    #[serde(default)]
+    include_untracked: bool,
+    index: Option<u32>,
 }
 
 fn git_error_response(e: GitError) -> Response {
@@ -210,6 +218,58 @@ async fn git_discard(State(state): State<AppState>, Json(b): Json<RepoBody>) -> 
     }
     let root = bind_repo!(state, b);
     match repo::discard(&root, &b.files).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_list(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
+    let root = bind_repo!(state, q);
+    match repo::stash_list(&root).await {
+        Ok(stashes) => (StatusCode::OK, Json(json!({ "stashes": stashes }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_push(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let root = bind_repo!(state, b);
+    match repo::stash_push(&root, b.message.as_deref(), b.include_untracked).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_apply(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_apply(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_pop(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_pop(&root, index).await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
+        Err(e) => git_error_response(e),
+    }
+}
+
+async fn git_stash_drop(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Response {
+    let Some(index) = b.index else {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "index required" })))
+            .into_response();
+    };
+    let root = bind_repo!(state, b);
+    match repo::stash_drop(&root, index).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
         Err(e) => git_error_response(e),
     }

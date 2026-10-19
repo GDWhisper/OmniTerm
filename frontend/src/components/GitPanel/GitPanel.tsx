@@ -9,6 +9,7 @@ import { OverlayScroll } from '../Common/OverlayScroll'
 import { FileDrawer } from '../FileManager/FileDrawer'
 import { GitDrawer, type GitDrawerTarget } from './GitDrawer'
 import { BranchDeleteDialog, BranchRenameDialog } from './BranchDialogs'
+import { StashPanel } from './StashPanel'
 import { IconPencil, IconRefresh, IconTrash } from '../FileManager/icons'
 
 const LOG_PAGE_SIZE = 50
@@ -16,6 +17,7 @@ const LOG_PAGE_SIZE = 50
 /** Backend error codes (ADR-6 refined stderr) with localized toast copy. */
 const KNOWN_ERROR_CODES = [
   'auth', 'non_fast_forward', 'no_upstream', 'dirty_worktree', 'timeout', 'not_merged', 'conflict',
+  'nothing_to_stash', 'stash_conflict',
 ] as const
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {
@@ -71,6 +73,7 @@ export function GitPanel({ visible }: GitPanelProps) {
   /** True after `-d` refused; the delete dialog then requires the force checkbox. */
   const [deleteUnmerged, setDeleteUnmerged] = useState(false)
   const [branchBusy, setBranchBusy] = useState(false)
+  const [stashOpen, setStashOpen] = useState(false)
   const branchMenuRef = useRef<HTMLDivElement>(null)
   const [drawerTarget, setDrawerTarget] = useState<GitDrawerTarget | null>(null)
   /** Absolute path of a file opened in the shared FileDrawer from the diff view. */
@@ -101,6 +104,7 @@ export function GitPanel({ visible }: GitPanelProps) {
     setRenameTarget(null)
     setDeleteTarget(null)
     setDeleteUnmerged(false)
+    setStashOpen(false)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -177,14 +181,19 @@ export function GitPanel({ visible }: GitPanelProps) {
     addToast('error', code ? t(`git.error.${code}`) : (err instanceof Error ? err.message : String(err)))
   }, [addToast, t])
 
-  const runMutation = useCallback(async (op: () => Promise<unknown>, successMsg?: string) => {
-    if (!bind) return
+  const runMutation = useCallback(async (
+    op: () => Promise<unknown>,
+    successMsg?: string,
+  ): Promise<boolean> => {
+    if (!bind) return false
     try {
       await mutate(bind, op)
       setStatusTick((n) => n + 1)
       if (successMsg) addToast('success', successMsg)
+      return true
     } catch (err: unknown) {
       toastError(err)
+      return false
     }
   }, [bind, mutate, addToast, toastError])
 
@@ -391,6 +400,9 @@ export function GitPanel({ visible }: GitPanelProps) {
           {t('git.historyTab')}
         </button>
         <span className="title-bar-spacer" />
+        <button className="git-btn" onClick={() => setStashOpen(true)} title={t('git.stashTitle')}>
+          {t('git.stashBtn')}
+        </button>
         <button
           className="fm-btn"
           onClick={() => {
@@ -523,6 +535,16 @@ export function GitPanel({ visible }: GitPanelProps) {
           fileChangeEvent={null}
         />
       )}
+
+      <StashPanel
+        open={stashOpen}
+        bind={bind}
+        hasChanges={entries.length > 0}
+        busy={mutating}
+        onClose={() => setStashOpen(false)}
+        onChanged={() => setStatusTick((n) => n + 1)}
+        runOp={runMutation}
+      />
 
       <BranchRenameDialog
         target={renameTarget}

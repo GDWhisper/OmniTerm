@@ -3162,6 +3162,75 @@ select optgroup option {
   cursor: default;
 }
 
+/* ── Stash panel ── */
+.git-stash-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.git-stash-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.git-stash-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  cursor: pointer;
+}
+.git-stash-form-row .git-btn {
+  margin-left: auto;
+}
+.git-stash-list {
+  border-top: 1px solid var(--border-subtle);
+}
+.git-stash-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.git-stash-meta {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.git-stash-message {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--reader-font);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-stash-date {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.git-stash-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+.git-btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.git-btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-12);
+}
+
 /* ── Bottom-fixed commit box ── */
 .git-commit-box {
   display: flex;
