@@ -12,6 +12,10 @@ use tokio::process::Command;
 const MAX_DIFF_BYTES: usize = 256 * 1024;
 /// Timeout for remote operations (push/pull/fetch).
 const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Delays before retrying a write that lost the race for `index.lock`.
+/// Two retries (3 attempts total) tolerate a user's terminal git command
+/// without masking a genuinely stuck lock (ADR-D1: never delete the lock).
+const LOCK_RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(250), Duration::from_millis(750)];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusEntry {
@@ -116,6 +120,36 @@ fn ensure_success(output: &Output) -> GitResult<()> {
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
     Err(refine_error(stderr.trim()))
+}
+
+/// Whether a failed git invocation is an `index.lock` contention. The panel
+/// shares the repo with the user's terminal, so a lock collision is expected
+/// and worth a short retry; we never delete the lock (D1).
+fn is_lock_conflict(output: &Output) -> bool {
+    if output.status.success() {
+        return false;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+    stderr.contains("index.lock")
+        || stderr.contains("unable to create")
+        || stderr.contains("another git process")
+}
+
+/// Run a mutating git command, retrying on transient `index.lock` contention.
+///
+/// Re-running the same `Command` is safe: each `output()` spawns a fresh
+/// process, and every caller's command is idempotent enough to retry only
+/// when git refused to start its work (lock creation happens first).
+async fn run_write(cmd: &mut Command) -> GitResult<Output> {
+    let mut attempt = 0;
+    loop {
+        let output = run(cmd).await?;
+        if !is_lock_conflict(&output) || attempt >= LOCK_RETRY_DELAYS.len() {
+            return Ok(output);
+        }
+        tokio::time::sleep(LOCK_RETRY_DELAYS[attempt]).await;
+        attempt += 1;
+    }
 }
 
 /// Map raw git stderr to a coded, readable error (openchamber `parseGitErrorText` 思路).
@@ -427,7 +461,7 @@ pub async fn stage(root: &str, paths: &[String]) -> GitResult<()> {
     }
     let mut cmd = git_command(root);
     cmd.args(["add", "--"]).args(paths);
-    let output = run(&mut cmd).await?;
+    let output = run_write(&mut cmd).await?;
     ensure_success(&output)
 }
 
@@ -437,13 +471,13 @@ pub async fn unstage(root: &str, paths: &[String]) -> GitResult<()> {
     }
     let mut cmd = git_command(root);
     cmd.args(["reset", "-q", "HEAD", "--"]).args(paths);
-    let output = run(&mut cmd).await?;
+    let output = run_write(&mut cmd).await?;
     // `git reset` in a repo without commits fails on HEAD; fall back to
     // removing the paths from the index directly.
     if !output.status.success() {
         let mut cmd = git_command(root);
         cmd.args(["rm", "--cached", "-q", "--"]).args(paths);
-        let fallback = run(&mut cmd).await?;
+        let fallback = run_write(&mut cmd).await?;
         return ensure_success(&fallback);
     }
     Ok(())
@@ -453,7 +487,7 @@ pub async fn commit(root: &str, message: &str) -> GitResult<()> {
     if message.trim().is_empty() {
         return Err(GitError::generic("commit message is empty"));
     }
-    let output = run(git_command(root).args(["commit", "-m", message])).await?;
+    let output = run_write(git_command(root).args(["commit", "-m", message])).await?;
     if !output.status.success() {
         // git commit reports "nothing to commit" etc. on stdout, not stderr.
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -473,13 +507,13 @@ pub async fn discard(root: &str, files: &[DiscardFile]) -> GitResult<()> {
     if !tracked.is_empty() {
         let mut cmd = git_command(root);
         cmd.args(["checkout", "-q", "--"]).args(&tracked);
-        let output = run(&mut cmd).await?;
+        let output = run_write(&mut cmd).await?;
         ensure_success(&output)?;
     }
     if !untracked.is_empty() {
         let mut cmd = git_command(root);
         cmd.args(["clean", "-fdq", "--"]).args(&untracked);
-        let output = run(&mut cmd).await?;
+        let output = run_write(&mut cmd).await?;
         ensure_success(&output)?;
     }
     Ok(())
@@ -487,13 +521,13 @@ pub async fn discard(root: &str, files: &[DiscardFile]) -> GitResult<()> {
 
 pub async fn checkout_branch(root: &str, name: &str) -> GitResult<()> {
     reject_option_like(name)?;
-    let output = run(git_command(root).args(["checkout", name])).await?;
+    let output = run_write(git_command(root).args(["checkout", name])).await?;
     ensure_success(&output)
 }
 
 pub async fn create_branch(root: &str, name: &str) -> GitResult<()> {
     reject_option_like(name)?;
-    let output = run(git_command(root).args(["checkout", "-b", name])).await?;
+    let output = run_write(git_command(root).args(["checkout", "-b", name])).await?;
     ensure_success(&output)
 }
 
@@ -544,7 +578,108 @@ pub async fn fetch(root: &str) -> GitResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let n = TMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "omniterm-git-repo-test-{}-{}",
+            std::process::id(),
+            n
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn git_available() -> bool {
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    async fn run_git(root: &str, args: &[&str]) {
+        let output =
+            Command::new("git").args(["-C", root]).args(args).output().await.expect("spawn git");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Fresh repo with one commit and a configured identity (no reliance on
+    /// the developer's global git config).
+    async fn init_test_repo() -> (PathBuf, String) {
+        let dir = temp_dir();
+        let root = dir.to_str().unwrap().to_string();
+        run_git(&root, &["init", "-q"]).await;
+        run_git(&root, &["config", "user.name", "OmniTerm Test"]).await;
+        run_git(&root, &["config", "user.email", "test@omniterm.local"]).await;
+        std::fs::write(dir.join("tracked.txt"), "initial\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "initial"]).await;
+        (dir, root)
+    }
+
+    #[tokio::test]
+    async fn write_retries_when_index_lock_is_released() {
+        if !git_available() {
+            eprintln!("SKIP write_retries_when_index_lock_is_released: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        let lock = dir.join(".git/index.lock");
+        std::fs::write(&lock, b"").unwrap();
+
+        let lock_clone = lock.clone();
+        // A real OS thread, not a spawned future: `#[tokio::test]` runs on a
+        // current-thread runtime, and the release must not depend on the
+        // runtime scheduling the remover while `stage` awaits git.
+        let remover = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            std::fs::remove_file(lock_clone).unwrap();
+        });
+        let result = stage(&root, &["new.txt".to_string()]).await;
+        remover.join().unwrap();
+
+        assert!(result.is_ok(), "stage must retry after the lock disappears: {result:?}");
+        let st = status(&root).await.unwrap();
+        assert!(
+            st.entries.iter().any(|e| e.path == "new.txt" && e.index_status != "."),
+            "new.txt should be staged after the retry"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_reports_original_error_when_lock_never_released() {
+        if !git_available() {
+            eprintln!("SKIP write_reports_original_error_when_lock_never_released: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("new.txt"), "x\n").unwrap();
+        let lock = dir.join(".git/index.lock");
+        std::fs::write(&lock, b"").unwrap();
+
+        let result = stage(&root, &["new.txt".to_string()]).await;
+        let err = result.expect_err("a held lock must surface an error after retries");
+        assert!(
+            err.message.to_lowercase().contains("index.lock"),
+            "error should preserve git's lock message, got: {}",
+            err.message
+        );
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parse_status_v2_branch_headers() {
