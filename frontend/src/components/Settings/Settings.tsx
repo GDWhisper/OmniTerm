@@ -935,7 +935,7 @@ function AboutSection() {
 /* ── Category config: which sections appear in which tab ── */
 
 type SectionComponent = React.FC
-type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'language' | 'mobile' | 'agents' | 'ai'
+type CategoryId = 'appearance' | 'audio' | 'auth' | 'terminal' | 'sessions' | 'git' | 'language' | 'mobile' | 'agents'
 
 interface Category {
   id: CategoryId
@@ -981,6 +981,11 @@ const CATEGORIES: Category[] = [
     groups: [[PermissionTimeoutSection], [SessionDisplaySection], [SessionTimeoutSection]],
   },
   {
+    id: 'git',
+    labelKey: 'settings.category.git',
+    groups: [[AiCommitSection]],
+  },
+  {
     id: 'language',
     labelKey: 'settings.category.language',
     groups: [[LanguageSection]],
@@ -989,11 +994,6 @@ const CATEGORIES: Category[] = [
     id: 'agents',
     labelKey: 'settings.category.agents',
     groups: [[AgentSettings]],
-  },
-  {
-    id: 'ai',
-    labelKey: 'settings.category.ai',
-    groups: [[AiCommitSection]],
   },
   {
     id: 'mobile',

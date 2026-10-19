@@ -151,7 +151,7 @@
 **实施记录（AI commit message，2026-10-19）**
 
 - 后端：`src/ai_commit/`（配置、0600 密钥文件、模型列表、prompt/解析、双 provider 适配）；`GET|PUT /settings/ai-commit`、`POST /settings/ai-commit/models`、`POST /git/commit-message`。
-- 前端：Settings 新增 AI 分类（`AiCommitSection.tsx`）；提交框 GENERATE + `GeneratedMessageDialog.tsx`（替换/追加）。
+- 前端：Settings 新增 GIT 分类（`AiCommitSection.tsx`，2026-10-19 从 AI 分类调整）；提交框 GENERATE + `GeneratedMessageDialog.tsx`（替换/追加）。
 - 测试：本地 mock provider 覆盖 OpenAI/Anthropic 鉴权头、请求体、模型列表、生成与错误映射；staged diff 文件/字符上限与 UTF-8 边界；前端设置表单与提交框替换/追加交互。
 - 手动回归：
   1. 设置 OpenAI 兼容端点 → 拉取 `/v1/models` → 选模型 → 保存；刷新页面后配置仍在、key 仅显示为已配置。
