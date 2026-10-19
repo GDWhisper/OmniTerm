@@ -12,6 +12,12 @@ use tokio::process::Command;
 const MAX_DIFF_BYTES: usize = 256 * 1024;
 /// Timeout for remote operations (push/pull/fetch).
 const REMOTE_OP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Max staged files sent to the AI commit-message provider.
+pub const AI_COMMIT_MAX_FILES: usize = 30;
+/// Max staged diff characters sent to the provider (UTF-8 char boundary).
+pub const AI_COMMIT_MAX_DIFF_CHARS: usize = 120_000;
+/// Number of recent commit subjects used as style samples.
+pub const AI_COMMIT_STYLE_SUBJECTS: usize = 10;
 /// Upper bound on stash entries returned to the panel. Stash stacks can grow
 /// without limit (`git stash` never prunes); the panel only needs the recent
 /// window and the response must stay bounded (performance red line P1).
@@ -85,6 +91,15 @@ pub struct StashEntry {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct AiCommitContext {
+    pub diff: String,
+    pub subjects: Vec<String>,
+    pub file_count: usize,
+    pub omitted_files: usize,
+    pub omitted_chars: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DiscardFile {
     pub path: String,
@@ -96,7 +111,8 @@ pub struct DiscardFile {
 #[derive(Debug, Serialize)]
 pub struct GitError {
     /// One of: `auth`, `non_fast_forward`, `no_upstream`, `dirty_worktree`,
-    /// `timeout`, `generic`.
+    /// `timeout`, `not_merged`, `conflict`, `nothing_to_stash`, `nothing_staged`,
+    /// `generic`.
     pub code: String,
     pub message: String,
 }
@@ -370,6 +386,69 @@ fn entry_from_xy(path: &str, orig_path: Option<String>, xy: &str, conflicted: bo
         worktree_status: worktree.to_string(),
         conflicted,
     }
+}
+
+fn truncate_chars_cap(text: &str, max_chars: usize) -> (String, usize) {
+    let mut out = String::new();
+    for (kept, ch) in text.chars().enumerate() {
+        if kept == max_chars {
+            return (out, text.chars().count() - max_chars);
+        }
+        out.push(ch);
+    }
+    (out, 0)
+}
+
+/// Collect the staged diff and recent commit subjects for AI commit-message
+/// generation. Only the index is sampled (never unstaged/untracked content).
+///
+/// Bounds (adversarial repos can stage arbitrarily many files / bytes): at most
+/// [`AI_COMMIT_MAX_FILES`] files and [`AI_COMMIT_MAX_DIFF_CHARS`] characters;
+/// both overflow amounts are reported so the caller can warn explicitly.
+pub async fn ai_commit_context(root: &str) -> GitResult<AiCommitContext> {
+    let names = run(git_command(root).args(["diff", "--cached", "--name-only", "-z"])).await?;
+    ensure_success(&names)?;
+    let stdout = String::from_utf8_lossy(&names.stdout);
+    let all: Vec<&str> = stdout.split('\0').filter(|p| !p.is_empty()).collect();
+    if all.is_empty() {
+        return Err(GitError {
+            code: "nothing_staged".into(),
+            message: "no staged changes".into(),
+        });
+    }
+
+    let paths: Vec<&str> = all.iter().take(AI_COMMIT_MAX_FILES).copied().collect();
+    let mut cmd = git_command(root);
+    cmd.args(["diff", "--cached", "--no-color", "--"]).args(&paths);
+    let output = run(&mut cmd).await?;
+    ensure_success(&output)?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let (diff, omitted_chars) = truncate_chars_cap(&raw, AI_COMMIT_MAX_DIFF_CHARS);
+
+    let subjects = match run(git_command(root).args([
+        "log",
+        &format!("-n{AI_COMMIT_STYLE_SUBJECTS}"),
+        "--pretty=format:%s",
+    ]))
+    .await
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .take(AI_COMMIT_STYLE_SUBJECTS)
+            .map(str::to_string)
+            .collect(),
+        // Empty repos have no HEAD; style sampling is optional.
+        _ => Vec::new(),
+    };
+
+    Ok(AiCommitContext {
+        diff,
+        subjects,
+        file_count: all.len(),
+        omitted_files: all.len().saturating_sub(AI_COMMIT_MAX_FILES),
+        omitted_chars,
+    })
 }
 
 pub async fn diff_file(
@@ -1215,6 +1294,90 @@ mod tests {
     async fn commit_requires_message_unless_amending() {
         let err = commit("/nonexistent", "  ", false).await.unwrap_err();
         assert!(err.message.contains("commit message is empty"));
+    }
+
+    #[tokio::test]
+    async fn ai_commit_context_only_samples_staged_content() {
+        if !git_available() {
+            eprintln!("SKIP ai_commit_context_only_samples_staged_content: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("staged.txt"), "staged\n").unwrap();
+        run_git(&root, &["add", "staged.txt"]).await;
+        std::fs::write(dir.join("tracked.txt"), "unstaged\n").unwrap();
+
+        let ctx = ai_commit_context(&root).await.unwrap();
+        assert_eq!(ctx.file_count, 1);
+        assert_eq!(ctx.omitted_files, 0);
+        assert_eq!(ctx.omitted_chars, 0);
+        assert!(ctx.diff.contains("staged.txt"));
+        assert!(!ctx.diff.contains("tracked.txt"), "unstaged changes must not be sent");
+        assert_eq!(ctx.subjects, ["initial"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ai_commit_context_caps_file_count_and_reports_omissions() {
+        if !git_available() {
+            eprintln!(
+                "SKIP ai_commit_context_caps_file_count_and_reports_omissions: git not found"
+            );
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        for i in 0..AI_COMMIT_MAX_FILES + 2 {
+            std::fs::write(dir.join(format!("f{i:03}.txt")), format!("file {i}\n")).unwrap();
+        }
+        run_git(&root, &["add", "."]).await;
+
+        let ctx = ai_commit_context(&root).await.unwrap();
+        assert_eq!(ctx.file_count, AI_COMMIT_MAX_FILES + 2);
+        assert_eq!(ctx.omitted_files, 2);
+        assert_eq!(ctx.diff.matches("diff --git ").count(), AI_COMMIT_MAX_FILES);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ai_commit_context_truncates_large_diff_on_char_boundary() {
+        if !git_available() {
+            eprintln!(
+                "SKIP ai_commit_context_truncates_large_diff_on_char_boundary: git not found"
+            );
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        // CJK chars are 3 UTF-8 bytes; truncation must not split one.
+        let big = "改".repeat(AI_COMMIT_MAX_DIFF_CHARS + 1000);
+        std::fs::write(dir.join("big.txt"), big).unwrap();
+        run_git(&root, &["add", "."]).await;
+
+        let ctx = ai_commit_context(&root).await.unwrap();
+        assert!(ctx.omitted_chars > 0);
+        assert_eq!(ctx.diff.chars().count(), AI_COMMIT_MAX_DIFF_CHARS);
+        assert!(ctx.diff.ends_with('改'), "must cut between characters, not inside one");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ai_commit_context_rejects_clean_index() {
+        if !git_available() {
+            eprintln!("SKIP ai_commit_context_rejects_clean_index: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let err = ai_commit_context(&root).await.unwrap_err();
+        assert_eq!(err.code, "nothing_staged");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn truncate_chars_cap_is_char_safe_and_reports_omissions() {
+        assert_eq!(truncate_chars_cap("abc", 3), ("abc".to_string(), 0));
+        assert_eq!(truncate_chars_cap("abcd", 3), ("abc".to_string(), 1));
+        let (out, omitted) = truncate_chars_cap("改变世界", 2);
+        assert_eq!(out, "改变");
+        assert_eq!(omitted, 2);
     }
 
     #[test]

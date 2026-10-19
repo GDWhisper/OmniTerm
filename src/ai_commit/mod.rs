@@ -16,6 +16,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+pub mod generate;
+
 /// settings 表 key：非敏感配置（provider / base_url / model）整体 JSON。
 const KEY_AI_COMMIT_CONFIG: &str = "ai_commit_config";
 
@@ -223,6 +225,14 @@ pub fn models_url(provider: Provider, base_url: &str) -> Option<String> {
     }
 }
 
+pub fn chat_url(provider: Provider, base_url: &str) -> Option<String> {
+    match provider {
+        Provider::Off => None,
+        Provider::Openai => Some(join_base(base_url, "chat/completions")),
+        Provider::Anthropic => Some(with_v1(base_url, "messages")),
+    }
+}
+
 fn http_client(timeout: Duration) -> Result<reqwest::Client, AiError> {
     reqwest::Client::builder()
         .timeout(timeout)
@@ -331,6 +341,21 @@ pub async fn list_models(
 }
 
 #[cfg(test)]
+pub(crate) mod test_http {
+    use axum::Router;
+
+    /// Serve a router on an ephemeral port and return its base URL.
+    pub async fn serve(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        format!("http://{addr}")
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use axum::{Router, http::HeaderMap, routing::get};
@@ -428,15 +453,6 @@ mod tests {
         assert_eq!(load_config(&db).await, cfg);
     }
 
-    async fn serve(router: Router) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        format!("http://{addr}")
-    }
-
     #[tokio::test]
     async fn list_models_sends_provider_auth_headers() {
         async fn openai(headers: HeaderMap) -> &'static str {
@@ -451,7 +467,7 @@ mod tests {
         let router = Router::new()
             .route("/openai/v1/models", get(openai))
             .route("/anthropic/v1/models", get(anthropic));
-        let base = serve(router).await;
+        let base = super::test_http::serve(router).await;
 
         let list = list_models(Provider::Openai, &format!("{base}/openai/v1"), Some("sk-openai"))
             .await
@@ -476,7 +492,7 @@ mod tests {
         let router = Router::new()
             .route("/v1/models", get(unauthorized))
             .route("/limited/v1/models", get(limited));
-        let base = serve(router).await;
+        let base = super::test_http::serve(router).await;
 
         let err =
             list_models(Provider::Openai, &format!("{base}/v1"), Some("k")).await.unwrap_err();
