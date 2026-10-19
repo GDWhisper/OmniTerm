@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**Phase 1 已实施**（2026-10-19）——5 项 P0 全部落地并独立提交；Phase 2/3 待排期
+> 状态：**Phase 1 + AI commit message 已实施**（2026-10-19）；Phase 2/3 待排期
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
@@ -44,7 +44,7 @@
 | Phase 2 | P1 | 6. hunk 级 stage/unstage/revert（+ context 展开） | L |
 | Phase 3 | P1 | 7. 分支对比（range diff） | M |
 | Phase 3 | P1 | 8. merge/rebase 基础流 + 统一中断态横幅 | L |
-| 独立 | 待拍板 | 9. AI commit message | M |
+| 独立 | 已完成 | 9. AI commit message（OpenAI 兼容 + Anthropic，无 ACP） | M |
 | P2 候补 | 信号触发 | graph、commit 文件列表、log 过滤、split view | — |
 
 ### 不纳入范围（含理由）
@@ -92,13 +92,16 @@
 - **理由**：三方合并编辑器成本与定位不符（终端-first）；但「中断中看不到状态、无法 abort」是完整性缺陷，必须覆盖。
 - **注意**：merge 只有 `--abort`；continue 的语义按操作类型分派（rebase `--continue`、cherry-pick/revert `--continue`）。
 
-### D6 AI commit message —— **待拍板**（三候选）
+### D6 AI commit message —— **已拍板（2026-10-19）：双 API provider，不用 ACP**
 
-- a) **一次性 ACP session**：复用现有 agent 配置与凭据生成 message（不引入新配置面）；代价 = 会话生命周期管理（不落库/不显示/用完即释或落库但不进侧栏）。
-- b) **独立小模型配置**：新增设置项（OpenAI 兼容端点 + key + 模型名，key 走 settings 表存储）；对方做法（模型链：请求指定 → 用户小模型设置 → title agent → 默认 `gpt-5-nano`）。代价 = 新配置面 + key 存储安全评审。
-- c) 不做。
-- **实施共同点**（若做）：staged diff 采样（≤30 文件、≤120K 字符，超限截断并明示）+ 最近 10 条 commit subject 做风格采样（语言/大小写/前缀跟随仓库习惯）+ 严格 JSON 输出（容错解析）+ 填入 commit box 待用户编辑后提交。
-- **待用户裁决后**本项才进入排期。
+- **决策**：只支持 **OpenAI 兼容 Chat Completions** 与 **Anthropic 原生 Messages** 两种 provider；用户在设置页固定选择 provider / Base URL / Model，并在提交框显式点击 GENERATE。一次点击 = 一次请求；不自动重试、不自动回退到另一 provider。
+- **否决 ACP**：一次性拉起完整 agent 过重，还会在 agent 侧留下会话历史；模型与凭据控制面也分散在 agent 配置里，不符合「成本可控」。
+- **模型选择**：经 provider 的 `/v1/models` 拉取列表（OpenAI `{base}/models`、Anthropic `/v1/models`），也允许手输 model id；模型选择只在设置页修改。
+- **密钥**：API key 存 `~/.omniterm/ai_commit_key[_<实例后缀>]`（0600，按 db 实例隔离），**不落 settings 表、不通过任何 GET 回显**；GET 只返回 `has_api_key`。无需密钥的本地端点可留空。
+- **输入**：只发 staged diff；≤30 文件、≤120K 字符（超限显式上报省略文件数/字符数）+ 最近 10 条 commit subject 跟随仓库语言与风格；未暂存内容绝不发送。
+- **输出**：要求严格 JSON `{"message":"..."}`；容错依次尝试 JSON → 围栏 JSON → 首个 JSON 对象 → 首行；消息上限 4000 字符。结果只填 commit box，已有文字时弹窗二选一「替换 / 追加」，绝不静默覆盖，也不自动提交。
+- **请求约束**：输出 `max_tokens=400`、超时 60s、响应上限 512KB；错误码 `ai_not_configured|ai_auth|ai_rate_limited|ai_timeout|ai_network|ai_upstream|ai_invalid_response`。
+- **翻盘条件**：用户明确要求更多 provider（如 Azure/Gemini 的特殊鉴权）或自动重试/fallback 时再扩展；**不回到 ACP 方案**。
 
 ### D7 分支对比数据流
 
@@ -145,7 +148,19 @@
 - 后端 `src/git/repo.rs`：写命令统一封装（如 `run_write`），识别锁冲突错误后 250ms/750ms 重试；覆盖 stage/unstage/commit/discard/checkout/create_branch 及本批新增全部写操作。
 - 测试：测试内先创建 `.git/index.lock` 再从另一 task 定时删除，断言重试后成功；持锁不放则返回原错误。
 
-**实施记录（2026-10-19）**
+**实施记录（AI commit message，2026-10-19）**
+
+- 后端：`src/ai_commit/`（配置、0600 密钥文件、模型列表、prompt/解析、双 provider 适配）；`GET|PUT /settings/ai-commit`、`POST /settings/ai-commit/models`、`POST /git/commit-message`。
+- 前端：Settings 新增 AI 分类（`AiCommitSection.tsx`）；提交框 GENERATE + `GeneratedMessageDialog.tsx`（替换/追加）。
+- 测试：本地 mock provider 覆盖 OpenAI/Anthropic 鉴权头、请求体、模型列表、生成与错误映射；staged diff 文件/字符上限与 UTF-8 边界；前端设置表单与提交框替换/追加交互。
+- 手动回归：
+  1. 设置 OpenAI 兼容端点 → 拉取 `/v1/models` → 选模型 → 保存；刷新页面后配置仍在、key 仅显示为已配置。
+  2. 有 staged 改动 → GENERATE 填入空提交框；已有文字 → 弹窗选择替换/追加，取消不改动。
+  3. 勾选删除已存 key → 保存后文件删除；再生成返回 `ai_auth`。
+  4. Anthropic 端点验证 `x-api-key`、`anthropic-version` 与 Messages 响应解析。
+  5. 未配置 / 无 staged 时 GENERATE 禁用；直接调接口返回 `ai_not_configured` / `nothing_staged`。
+
+**实施记录（Phase 1，2026-10-19）**
 
 - 5 项均已落地，按 D8 建议顺序独立提交：P0-5（重试封装）→ P0-1（分支管理）→ P0-2（stash）→ P0-3（历史操作）→ P0-4（commit 增强）。
 - 实施偏差：
@@ -177,7 +192,7 @@
 - 前端：中断态横幅（ABORT/CONTINUE + 冲突文件数）、分支菜单加「合并到当前分支」「变基到…」。
 - 测试：三态渲染（无中断/merge 中/rebase 中）；abort 后 `.git` 状态清理、横幅消失；冲突未解决时 CONTINUE 禁用；rebase 完成后的线性历史断言。
 
-### 独立项：AI commit message（D6 拍板后进排期）
+### 独立项：AI commit message（✅ 2026-10-19）
 
 ### P2 候补（不承诺，按信号触发）
 

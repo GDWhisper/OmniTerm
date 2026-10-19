@@ -30,6 +30,7 @@ src/
 │   ├── sessions.rs       # CRUD /api/v1/sessions — dispatches on runtime_kind: 'tmux' (TmuxEngine) | 'pty' (PtyEngine, lazy spawn) | 'acp' (spawns AcpClient via supervisor)
 │   ├── hooks.rs          # GET /sessions/{id}/hook-status, POST hook-enable|hook-disable
 │   ├── settings.rs       # GET/PUT /api/v1/settings/acp-idle-recycle — ACP 空闲回收阈值（分钟，settings 表持久化 + 内存热更新）；GET/PUT /api/v1/settings/permission-timeout — 权限请求超时模式 + 秒（0=「总是」档）；GET /api/v1/settings/audit-log — 安全审计日志只读入口（受保护；?limit= 收敛，见「安全审计日志（S5）」）
+│   ├── ai_commit.rs      # GET/PUT /api/v1/settings/ai-commit + POST /settings/ai-commit/models — AI 提交配置、0600 key 文件、模型列表（OpenAI/Anthropic）
 │   ├── audit.rs          # 安全审计日志（S5）：敏感操作的写入收敛点 audit::record + 滚动有界（MAX_AUDIT_ROWS/MAX_AUDIT_DETAIL_BYTES）+ 只读入口 list_recent；表结构见「安全审计日志（S5）」
 │   ├── files.rs          # /api/v1/files — list/upload/download/read/write/mkdir/delete/rename/move/copy/search
 │   ├── files_watch.rs    # File watcher: SSE endpoint for live directory updates
@@ -66,6 +67,9 @@ src/
 │   ├── cli.rs            # agent CLI 识别（命令行模式匹配）
 │   ├── process.rs        # [platform] Process enumeration: read_process_cmdline, foreground_pid(tpgid), walk_process_tree
 │   └── manifests/        # 内置检测规则：claude.toml / codex.toml / qoder.toml（include_str! 编译期内嵌）
+├── ai_commit/
+│   ├── mod.rs            # AI commit 配置（settings JSON）/ 0600 key 文件 / OpenAI+Anthropic 模型列表
+│   └── generate.rs       # staged-diff prompt/容错解析 + 双 provider 一次性生成（无重试/回退）
 ├── fs/mod.rs             # File ops: sanitize_path, list_dir, read_file, write_file, delete, rename, move, copy, search
 ├── git/
 │   ├── mod.rs            # Git worktree discovery
@@ -310,6 +314,9 @@ PUT  /api/v1/settings/acp-idle-recycle  # 写 ACP 空闲回收阈值（分钟，
 GET  /api/v1/settings/permission-timeout  # 读权限请求超时配置 {mode, seconds}（无记录/非法回退 abort + 1800s；兼容旧分钟 key）——受保护
 PUT  /api/v1/settings/permission-timeout  # 写权限请求超时配置（mode 白名单 abort/auto/wait；seconds 0=「总是」或 30 秒倍数 ≤3600，越界 400；upsert 两 key + 清旧 key + 热更新）——受保护
 GET  /api/v1/settings/audit-log           # 读安全审计日志最近 N 条（新→旧）——受保护；`?limit=` 收敛而非拒绝：缺省 50、硬顶 200、非正数收敛为 1；见「安全审计日志（S5）」
+GET  /api/v1/settings/ai-commit          # 读 AI commit 配置 {provider, base_url, model, has_api_key}（永不返回 key）——受保护
+PUT  /api/v1/settings/ai-commit          # 写配置；api_key 只写入 0600 文件，clear_api_key 删除；提前校验 provider/base_url/model——受保护
+POST /api/v1/settings/ai-commit/models   # 用当前表单值（key 缺省回退已存文件）拉取 provider 模型列表——受保护
 GET  /api/v1/projects        # 响应每项含 path_valid：list_projects 实时计算项目路径是否仍存在（src/api/projects.rs），供前端标记失效项目；排序口径 position ASC, created_at DESC（见「Projects 表」）
 POST /api/v1/projects
 PUT  /api/v1/projects/order   # 侧栏拖拽排序落盘：body {ids:[全量项目 id，展示序]}，单事务按 index 重写 position；集合不一致（未知/重复/缺项）400 且不写库（src/api/projects.rs::reorder_projects）
@@ -370,6 +377,7 @@ POST /api/v1/git/stage|unstage|commit|discard|checkout|branch|push|pull|fetch
 POST /api/v1/git/branch/delete|branch/rename|branch/delete-remote
 POST /api/v1/git/stash/push|apply|pop|drop
 POST /api/v1/git/cherry-pick|revert-commit|reset
+POST /api/v1/git/commit-message          # 用 staged diff 生成 commit message（一次请求，无重试/回退）；见「AI commit message」
 ANY  /proxy/{port}/{*path}           # 端口转发反向代理（与 /api/v1 平级挂载，D1 禁止套进 /api/v1）；见「Port-forward proxy」小节
 ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy-domain/OMNITERM_PROXY_DOMAIN 时挂最外层 middleware，先于 fallback）；见「Port-forward proxy」小节
 ```
@@ -377,6 +385,8 @@ ANY  {port}.{proxy_domain}/*         # 子域名 Host 路由（仅配置 --proxy
 git 端点绑定规则（设计文档 ADR-2，`docs/dev/plans/archive/2026-07-26-git-panel.md`）：复用 `files.rs::resolve_base_from_query` 解析 session/workspace 基准目录，再 `rev-parse --show-toplevel` 定位仓库根；**不接受任意路径参数**。非 git 目录返回 200 `{is_repo:false}`；失败返回 422（超时 504），body `{error, code}`，`code ∈ auth|non_fast_forward|no_upstream|dirty_worktree|timeout|not_merged|conflict|stash_conflict|nothing_to_stash|generic`。所有 git 子进程带 `--no-optional-locks`、`GIT_TERMINAL_PROMPT=0`、`GIT_SSH_COMMAND="ssh -oBatchMode=yes"`，远端操作 60s 超时。diff 超过 256KB 截断（`truncated: true`）。
 
 Phase 1 能力（2026-10-19，计划 `docs/dev/plans/2026-10-15-git-capability-upgrade.md`）：`branches` 额外返回 `upstream?`（如 `origin/dev`）；所有写命令经 `repo::run_write` 在 `index.lock` 竞争时 250ms/750ms 重试两次，仍失败原样上抛（**不删锁**）。`commit` body 增加 `amend:bool`（空 message 仅 amend 允许，走 `--amend --no-edit`）。分支删除默认 `git branch -d`，未完全合并返回 `not_merged`、前端显式强制删除后再走 `-D`；worktree 删除流程固定 `-D` 并复用同一实现。`branch/delete-remote` 的 `remote` 缺省 `origin`（前端从 upstream 前缀取实际远端）。stash 冲突映射 `stash_conflict` 并保留 stash；无改动返回 `nothing_to_stash`。`reset` 仅接受 `mode ∈ {soft,mixed}`（`--hard` 明确排除）。cherry-pick/revert 使用 `--no-edit`，冲突返回 `conflict`，解决留给终端。
+
+**AI commit message**（2026-10-19，计划 D6）：仅 **OpenAI 兼容 Chat Completions** 与 **Anthropic 原生 Messages** 两种 provider，不使用 ACP。非敏感配置（provider / base_url / model）以 JSON 存 settings 表 `ai_commit_config`；API key 存 `~/.omniterm/ai_commit_key[_<实例后缀>]`（0600，后缀与 `jwt_secret` 同一 `instance_suffix`），**不落库、不回显**。模型列表：OpenAI `{base}/models`、Anthropic `/v1/models`（`x-api-key` + `anthropic-version: 2023-06-01`；base 已以 `/v1` 结尾时不重复拼接）；无需 key 的本地端点可留空。生成端点只采样 **staged** diff：≤30 文件、≤120K 字符（超限在响应中显式上报 `omitted_files` / `omitted_chars`）+ 最近 10 条 commit subject；一次点击一次请求，无自动重试、无 provider 回退；60s 超时、512KB 响应上限、`max_tokens=400`。错误码 `ai_not_configured|ai_auth|ai_rate_limited|ai_timeout|ai_network|ai_upstream|ai_invalid_response` 与 `nothing_staged`（后者沿用 git 错误响应）。生成结果只返回给前端填入提交框，后端不写库、不自动提交。
 
 **上传（POST /api/v1/files）**：multipart 字段流式写盘（`fs::write_file_stream`），不整文件进内存；先写同目录隐藏临时文件 `.{文件名}.omniterm-upload-{uuid}.tmp`（点前缀使 files_watch 忽略），全部完成才 rename 到目标——失败（超限/读错/写错）删临时文件、**已有目标文件保持原样**，与旧「整体读入成功才写盘」语义对齐。单请求内容总量受 `--max-upload-body`/`OMNITERM_MAX_UPLOAD_BODY`（默认 200 MiB，`AppState.max_upload_body`）约束，超限返回 413 + 文案 `upload exceeds max size … (aborted at …)`；axum 层限额 = 该值 +1MiB 封装余量，保证超限先由应用层计数触发（否则 multipart 解析层只吐含混的 parse error）。
 
