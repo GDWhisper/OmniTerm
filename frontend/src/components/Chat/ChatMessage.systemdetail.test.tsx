@@ -241,3 +241,28 @@ describe('SystemBlockView permission-timeout notice', () => {
     expect(text).toContain('可选项：允许一次')
   })
 })
+
+describe('SystemBlockView async task notice', () => {
+  it('renders task name, type, terminal state and summary', () => {
+    render(
+      systemMessage({
+        blocks: [
+          {
+            type: 'system',
+            label: 'system.asyncTask.finished',
+            detail: {
+              async_task_name: 'acp-chat-ux-batch',
+              async_task_type: 'workflow',
+              async_task_state: 'stopped',
+              async_task_summary: "didn't finish before the previous session ended",
+            },
+          },
+        ],
+      }),
+    )
+    const text = container.textContent ?? ''
+    expect(text).toContain('后台任务已结束')
+    expect(text).toContain('workflow · acp-chat-ux-batch — stopped')
+    expect(text).toContain("didn't finish before the previous session ended")
+  })
+})

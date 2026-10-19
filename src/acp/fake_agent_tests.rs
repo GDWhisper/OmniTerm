@@ -1454,6 +1454,92 @@ async fn list_sessions_unsupported_agent_surfaces_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// initialize 必须声明 AIR `asyncTasks` 能力：适配器只有看到它才发送
+/// `async_task_*` 生命周期帧（进度可见 + reaper 豁免的依据）。
+#[tokio::test]
+async fn initialize_advertises_async_tasks_capability() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("async-cap");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = spawn_connect(agent_for(&script, "live", &dir), workspace).await;
+    let events = read_events(&dir);
+    let line = events
+        .lines()
+        .find_map(|line| line.strip_prefix("initialize "))
+        .expect("fake agent 未记录 initialize 请求");
+    let request: serde_json::Value =
+        serde_json::from_str(line).expect("initialize 行应为合法 JSON");
+    let air = &request["params"]["clientCapabilities"]["_meta"]["jetbrains"]["air"];
+    assert_eq!(air["version"], 1, "AIR 扩展版本: {air}");
+    assert_eq!(
+        air["capabilities"],
+        serde_json::json!(["asyncTasks"]),
+        "必须且只需声明 asyncTasks: {air}"
+    );
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 16. 后台任务生命周期：reaper 不得在任务运行中回收 ────────────────
+
+/// 复刻 2026-10-19 正式库事故的最小形态：turn 已 `end_turn`，但 adapter 的
+/// `async_task_spawned` 仍标记后台 Workflow 在跑。此时 reaper 的 idle 判定必须
+/// 返回 false；任务 terminal 后恢复为 true。
+///
+/// 断言用 `idle_secs = 0`：没有任务时该阈值下必判 stale（elapsed >= 0），
+/// 有任务时 false 只可能来自本轮新增的豁免。
+#[tokio::test]
+async fn async_tasks_block_idle_recycle_until_terminal() {
+    let _guard = spawn_test_lock_async().await;
+    let dir = unique_dir("async-task");
+    let workspace = dir.join("ws");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let script = write_fake_agent(&dir);
+
+    let client = Arc::new(spawn_connect(agent_for(&script, "async_task", &dir), workspace).await);
+    let mut notices = client.system_notice_subscribe();
+
+    let prompt_client = client.clone();
+    let prompt = tokio::spawn(async move {
+        prompt_client.send_prompt("start background workflow", vec![], vec![], vec![]).await
+    });
+
+    let started = tokio::time::timeout(Duration::from_secs(5), notices.recv())
+        .await
+        .expect("未在限时内收到 async task 开始通知")
+        .expect("system notice channel closed");
+    assert_eq!(started.label, "system.asyncTask.started");
+    assert_eq!(client.active_async_task_count(), 1);
+    assert!(!client.is_idle_stale(0).await, "后台任务运行中不得被 reaper 判为空闲");
+
+    std::fs::write(dir.join("async.done"), b"1").expect("release fake async task");
+    let finished = tokio::time::timeout(Duration::from_secs(5), notices.recv())
+        .await
+        .expect("未在限时内收到 async task 结束通知")
+        .expect("system notice channel closed");
+    assert_eq!(finished.label, "system.asyncTask.finished");
+    assert_eq!(
+        finished.detail.as_ref().and_then(|d| d.get("async_task_state")).and_then(|v| v.as_str()),
+        Some("completed")
+    );
+
+    let response = tokio::time::timeout(UNWIND_TIMEOUT, prompt)
+        .await
+        .expect("send_prompt 未在限时内返回（挂死）")
+        .expect("prompt task panicked")
+        .expect("prompt failed");
+    assert_eq!(response.stop_reason, StopReason::EndTurn);
+    assert_eq!(client.active_async_task_count(), 0);
+    assert!(client.is_idle_stale(0).await, "任务结束后应恢复可回收状态");
+
+    client.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// workspace 路径的字符串形态（fake agent 原样回抄，测试端按同形态断言）。
 fn ws_str(ws: &Path) -> String {
     ws.to_string_lossy().into_owned()

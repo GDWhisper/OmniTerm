@@ -101,6 +101,14 @@ export interface SystemBlockDetail {
   selected?: string
   /** 同期处理但未展开详情的其他未决审批数。 */
   extra?: number
+  /** 后台任务（Workflow / 后台 Bash）名称；由 ACP `async_task_*` 扩展产生。 */
+  async_task_name?: string
+  /** 后台任务类型（workflow / shell / monitor …）。 */
+  async_task_type?: string
+  /** 后台任务状态（running / paused / completed / failed / stopped）。 */
+  async_task_state?: string
+  /** 任务结束摘要（agent 提供，已截断）。 */
+  async_task_summary?: string
 }
 
 // F03 图片附件：用户消息内联 base64 图片（对应 ACP `ContentBlock::Image`）。

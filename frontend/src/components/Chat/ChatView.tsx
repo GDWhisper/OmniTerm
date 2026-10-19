@@ -781,7 +781,10 @@ export function ChatView() {
     }
   })()
 
-  const inputDisabled = chatState.sessionEnded || connectionState !== 'connected'
+  // 恢复重放期间禁止输入：`load_session` 未完成时发送 prompt 会与重放竞态，
+  // agent 可能落出空 assistant 行（2026-10-19 正式库会话实测）。
+  const inputDisabled =
+    chatState.sessionEnded || connectionState !== 'connected' || isReplaying
 
   return (
     <div

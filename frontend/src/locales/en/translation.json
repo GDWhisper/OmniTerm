@@ -211,6 +211,8 @@
   "system.permTimeout.contentOmitted": "…({{count}} chars omitted)",
   "system.permTimeout.options": "Options: {{options}}",
   "system.permTimeout.extra": "{{count}} more request(s) handled the same way",
+  "system.asyncTask.started": "Background task started",
+  "system.asyncTask.finished": "Background task finished",
   "system.turnFailed.refusal": "This turn did not complete: the agent refused to continue (stopReason=refusal).",
   "system.turnFailed.cancelled": "This turn was cancelled (stopReason=cancelled).",
   "system.turnFailed.other": "This turn ended abnormally (stopReason={{reason}}).",

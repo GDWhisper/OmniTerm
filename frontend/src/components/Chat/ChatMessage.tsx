@@ -723,6 +723,9 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
   // 权限超时告知的详情区（工具/内容/选项/省略量）：只有这类载荷才需要展开。
   // `{stop_reason}` 之类的纯终态载荷不渲染，避免空 wrapper。
   const hasPermissionDetail = !!(toolDisplay || detail?.content || detail?.options?.length || detail?.extra)
+  // 后台任务告知（ACP `async_task_*` 扩展）：名称/类型/终态 + 结束摘要。
+  // 与权限详情共用 detail 结构但字段不相交，两个详情区互斥渲染。
+  const hasAsyncTaskDetail = !!(detail?.async_task_name || detail?.async_task_summary)
   return (
     <div style={{ alignSelf: 'flex-start', color: 'var(--text-faint)', fontSize: '0.846em', maxWidth: '100%' }}>
       <span>[{text}]</span>
@@ -762,6 +765,18 @@ function SystemBlockView({ label, detail }: { label: string; detail?: SystemBloc
               {t('system.permTimeout.extra', { count: detail.extra, defaultValue: '另有 {{count}} 项审批一并处理' })}
             </span>
           )}
+        </div>
+      )}
+      {detail && hasAsyncTaskDetail && (
+        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2, overflowWrap: 'anywhere' }}>
+          {detail.async_task_name && (
+            <span>
+              ▸ {detail.async_task_type ? `${detail.async_task_type} · ` : ''}
+              {detail.async_task_name}
+              {detail.async_task_state ? ` — ${detail.async_task_state}` : ''}
+            </span>
+          )}
+          {detail.async_task_summary && <span>{detail.async_task_summary}</span>}
         </div>
       )}
     </div>

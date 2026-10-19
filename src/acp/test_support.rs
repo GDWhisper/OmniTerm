@@ -97,6 +97,7 @@ prompt_count=0
 while IFS= read -r line; do
   case "$line" in
     *'"method":"initialize"'*)
+      log_event "initialize $line"
       id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([0-9a-f-][0-9a-f-]*\)".*/\1/p')
       # sessionCapabilities.delete 是 marker 空结构（存在即支持 session/delete）。
       # 默认**不声明**（与 codebuddy 一致），只有 delete/delete_fail 模式声明——
@@ -203,6 +204,17 @@ while IFS= read -r line; do
           ;;
         prompt_ok)
           printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello-from-agent"}}}}\n'
+          printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
+          ;;
+        async_task)
+          # 后台任务生命周期扩展（JetBrains AIR asyncTasks）：先 spawned，随后
+          # 阻塞到测试写哨兵文件，再发 terminal state + end_turn——让测试能在
+          # “任务仍在跑、prompt 已结束”的窗口里断言 reaper 不回收。
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"async_task_spawned","asyncTaskId":"task-1","name":"fake workflow","taskType":"workflow","description":"background workflow","showInTranscript":true,"canStop":true}}}\n'
+          log_event "async-task-spawned"
+          while [ ! -f "$FAKE_ASYNC_DONE_FILE" ]; do sleep 1; done
+          printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-session","update":{"sessionUpdate":"async_task_state_update","asyncTaskId":"task-1","state":"completed","summary":"finished"}}}\n'
+          log_event "async-task-done"
           printf '{"jsonrpc":"2.0","id":"%s","result":{"stopReason":"end_turn"}}\n' "$prompt_id"
           ;;
         usage)
@@ -327,6 +339,10 @@ pub(crate) fn agent_for_with_env(
         AgentEnvVar {
             key: "FAKE_EXIT_FILE".into(),
             value: dir.join("exit.gate").to_string_lossy().to_string(),
+        },
+        AgentEnvVar {
+            key: "FAKE_ASYNC_DONE_FILE".into(),
+            value: dir.join("async.done").to_string_lossy().to_string(),
         },
         AgentEnvVar {
             key: "FAKE_EVENTS_FILE".into(),

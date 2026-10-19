@@ -16,6 +16,11 @@ export const HEARTBEAT_INTERVAL_MS = 30_000
 /** 连续多少个周期没收到 `pong` 判定为半开连接（3 × 30s = 90s，早于 125s 重置窗）。 */
 export const HEARTBEAT_MAX_MISSED = 3
 
+/** 手动恢复（`load_session`）重放被 WS 断开打断时的自动重试上限。
+ *  重放本身幂等：前端只在 `replay_end` 原子提交，失败时 store 保持原样；
+ *  每次重连成功重发一次 `load_session` 即可续上，不必让用户反复点恢复。 */
+export const MAX_MANUAL_RESTORE_RETRIES = 3
+
 /** 已解决审批的 tombstone 上限（见 `resolvedPermIds`）：只需覆盖「resolved 帧领先
  *  其请求帧」的在途窗口——两帧走同一 mpsc + 同一 WS 的有序链路，倒置窗口实测
  *  微秒级，64 远超实际需要；超出按到达序淘汰最旧项。 */
@@ -702,6 +707,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const isReplaying = useRef(false)
   const suppressReplay = useRef(false)
   const isManualRestore = useRef(false)
+  // 手动恢复被断线打断后的自动续传（见 MAX_MANUAL_RESTORE_RETRIES）：
+  // pending = 下一次 onopen 要补发 load_session；retry = 已重试次数。
+  const pendingRestoreRetry = useRef(false)
+  const restoreRetry = useRef(0)
   // 重放 staging 缓冲：重放帧全部攒在这里（不进渲染态），replay_end 时非空才
   // 原子提交（双缓冲）。重放失败/为空时丢弃，现有消息不受影响。
   const replayBuffer = useRef<SessionUpdateAction[]>([])
@@ -1106,7 +1115,12 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         case 'error':
           // 重放中途失败（如 load_failed 时后端以 error 代替 replay_end）：
           // 终止 staging 丢弃已攒帧，保留现有消息，解除「恢复中」状态。
+          // 同时清掉手动恢复状态：load_failed 不自动重试（重试也不会变好），
+          // 用户显式点恢复时 restore() 会重新开始。
           abortReplay(sid)
+          isManualRestore.current = false
+          pendingRestoreRetry.current = false
+          restoreRetry.current = 0
           if (frame.code === 'session_not_found') {
             s.markEnded(sid)
           } else {
@@ -1142,6 +1156,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           break
         }
         case 'replay_end': {
+          // 恢复成功：本次手动恢复的重试计数清零（含断线续传路径）。
+          restoreRetry.current = 0
+          pendingRestoreRetry.current = false
           const wasSuppressed = suppressReplay.current
           const wasManual = isManualRestore.current
           isReplaying.current = false
@@ -1348,6 +1365,18 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
         const sid = sessionIdRef.current
         if (sid) useChatStore.getState().setError(sid, null)
         startHeartbeat(ws)
+        // 上一次手动恢复的重放被断线打断：连接恢复后自动补发 load_session。
+        // 重放是幂等的（前端只在 replay_end 原子提交），不需要用户再点恢复。
+        if (pendingRestoreRetry.current && sid) {
+          pendingRestoreRetry.current = false
+          isManualRestore.current = true
+          try {
+            ws.send(JSON.stringify({ type: 'load_session' }))
+          } catch {
+            // 发送即抛 = 底层连接已坏；交给 onclose 重新排队。
+            pendingRestoreRetry.current = true
+          }
+        }
       }
 
       ws.onmessage = (ev) => {
@@ -1396,6 +1425,10 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
       ws.onclose = () => {
         // 陈旧 socket（已被后继连接替换）的迟到 onclose：忽略，避免重复调度重连。
         if (wsRef.current !== ws) return
+        // 手动恢复（含 load_session 已发出、replay_start 尚未到达的窗口）被断线
+        // 打断：记下来，重连成功后自动补发 load_session。必须在 abortReplay /
+        // 复位 manual 标记之前取。
+        const interruptedManualReplay = isManualRestore.current
         isManualRestore.current = false
         setConnectionState('disconnected')
         wsRef.current = null
@@ -1411,6 +1444,16 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
           // 重放中断线：replay_end 已不可能到达（发进死连接），终止 staging
           // 防止重连后 live 帧被无限期缓冲（聊天冻结）。
           abortReplay(sid)
+          if (interruptedManualReplay && restoreRetry.current < MAX_MANUAL_RESTORE_RETRIES) {
+            restoreRetry.current += 1
+            pendingRestoreRetry.current = true
+            if (import.meta.env.DEV) {
+              console.debug(
+                '[ACP restore] interrupted by disconnect; will retry on reconnect',
+                restoreRetry.current,
+              )
+            }
+          }
           const st = useChatStore.getState().states[sid]
           // 等待回复期间连接断开 → 复位 sending 并报错，避免「思考中」占位假死
           if (st?.sending && !st.sessionEnded) {
@@ -1548,6 +1591,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
     // 纯附件消息（无文字）合法：粘贴截图 / 只发一个文件直接发送。
     if (!ws || ws.readyState !== WebSocket.OPEN || !sid || (!trimmed && !hasImages && !hasFiles))
       return
+    // 恢复/重放尚未结束：此时发送的 prompt 会与 load_session 竞态，后端可能把它
+    // 交给未就绪的 agent 并落出空 assistant 行。输入框已禁用，这里兜底直连/竞态。
+    if (isReplaying.current) return
     const s = useChatStore.getState()
     const imageBlocks = images?.map((img) => ({
       type: 'image' as const,
@@ -1602,6 +1648,9 @@ export function useAcpChat({ sessionId }: UseAcpChatOptions): UseAcpChatResult {
   const restore = useCallback(() => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
+    // 用户显式点恢复 = 新一轮恢复，重置断线续传计数。
+    restoreRetry.current = 0
+    pendingRestoreRetry.current = false
     isManualRestore.current = true
     ws.send(JSON.stringify({ type: 'load_session' }))
   }, [])

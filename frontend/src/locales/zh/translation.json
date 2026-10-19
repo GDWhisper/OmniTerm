@@ -211,6 +211,8 @@
   "system.permTimeout.contentOmitted": "…（已省略 {{count}} 字符）",
   "system.permTimeout.options": "可选项：{{options}}",
   "system.permTimeout.extra": "另有 {{count}} 项审批一并处理",
+  "system.asyncTask.started": "后台任务已启动",
+  "system.asyncTask.finished": "后台任务已结束",
   "system.turnFailed.refusal": "这一轮未正常完成：agent 拒绝继续（stopReason=refusal）。",
   "system.turnFailed.cancelled": "这一轮已被取消（stopReason=cancelled）。",
   "system.turnFailed.other": "这一轮以非正常原因结束（stopReason={{reason}}）。",

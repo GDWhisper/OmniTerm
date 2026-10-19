@@ -686,12 +686,16 @@ impl TurnAccumulator {
                 return None;
             }
             st.seq += 1;
-            if st.row_id.is_none() {
-                st.row_id = Some(Uuid::new_v4().to_string());
-            }
+            // 行按「可见产出」惰创建：usage / session_info / config / 用户回声等
+            // 记账与控制帧不产生聊天气泡，先开行只会留下一条空 assistant 行
+            // （2026-10-19 正式库会话 `rowid=939` 的实测形态）。首个可见帧到达时
+            // 才开行；此前已折叠的帧仍在窗口里，随首次快照一起落库。
             // 记账只在第一次命中时做一次匹配；一旦置真就永久为真（本 turn 内不再判定）。
             if !st.output_seen {
                 st.output_seen = update_is_visible_output(&notification.update);
+            }
+            if st.output_seen && st.row_id.is_none() {
+                st.row_id = Some(Uuid::new_v4().to_string());
             }
             if let Some(text) = agent_message_text(&notification.update) {
                 st.text.push_str(text);
@@ -1307,6 +1311,36 @@ mod tests {
         assert_eq!(acc.turn_row_id(), None, "下一 turn 开始才清除");
     }
 
+    /// 记账帧不能开行，但也不能丢：首个可见帧到达时，之前折叠的帧必须仍在
+    /// 窗口里并随该行一起落库（hydrate 还原 config/usage 等帧的路径）。
+    #[test]
+    fn bookkeeping_frames_wait_for_first_visible_frame() {
+        let acc = TurnAccumulator::new();
+        let (_flush_rx, _end_rx) = capture_cmds(&acc);
+        let sid = SessionId::new("s-deferred-row");
+        acc.begin_turn();
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::UsageUpdate(UsageUpdate::new(21692, 512000)),
+        ));
+        acc.fold(&SessionNotification::new(
+            sid.clone(),
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()),
+        ));
+        assert!(acc.turn_row_id().is_none(), "只有记账帧时不得开行");
+
+        acc.fold(&SessionNotification::new(
+            sid,
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
+                TextContent::new("正文"),
+            ))),
+        ));
+        let row_id = acc.turn_row_id().expect("首个可见帧应开行");
+        let snap = acc.turn_snapshot();
+        assert_eq!(snap.row_id.as_deref(), Some(row_id.as_str()));
+        assert_eq!(parse_frames(&snap.blocks).len(), 3, "行窗口应包含开行前的记账帧");
+    }
+
     /// 时长载荷的存活契约与 `turn_row_id` 同源：WS 层在 `mark_prompt_idle` **之后**读它
     /// 拼 `prompt_done` 的 `duration`，前端据此当场显示耗时。
     #[test]
@@ -1789,7 +1823,10 @@ mod tests {
             SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()),
         ));
 
-        assert!(acc.turn_row_id().is_some(), "前置条件：记账帧同样会开出一行（空气泡的来源）");
+        assert!(
+            acc.turn_row_id().is_none(),
+            "记账帧不应开行（空 assistant 行的来源，2026-10-19 修复）"
+        );
         assert!(!acc.turn_has_visible_output(), "只折叠记账帧 → 无可见产出");
 
         assert!(acc.finalize_turn().is_some());

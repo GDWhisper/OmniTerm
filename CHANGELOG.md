@@ -64,6 +64,7 @@ Prefix each entry with the area it affects:
 
 ### Fixed
 
+- (2026-10-19 09:10) `[backend]` `[frontend]` 修复 ACP 后台任务（Workflow / 后台 Bash）运行期间被空闲回收：initialize 声明 AIR `asyncTasks` 能力并跟踪 `async_task_*` 生命周期，任务未结束时 reaper 不再按 idle 阈值杀 agent；任务开始/结束落 system 消息（名称/类型/状态/摘要）；同时修复手动恢复重放被 WS 断开打断后不自动续传、恢复期仍可发送 prompt 导致空 assistant 行（`src/acp/async_tasks.rs`、`src/acp/client.rs`、`src/acp/turn_accumulator.rs`、`frontend/src/hooks/useAcpChat.ts`）
 - (2026-10-18 21:30) `[backend]` `[api]` 修复 GitHub API 匿名配额（60 次/时/IP，共享出口 IP 常被陌生流量耗尽）导致正式版静默收不到更新提醒：版本探测主源失败时按安装渠道降级到无配额限制的版本源（npm → registry.npmjs.org 主包 `dist-tags.latest`、cargo → crates.io `versions[0].num`、github_release → releases 页 302 tag），`/system/version` 不再整小时 502；npm 渠道一键升级在主源失败时同样可降级拿到目标版本继续安装
 
 ---
