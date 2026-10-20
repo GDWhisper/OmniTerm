@@ -32,10 +32,20 @@ pub const SSH_LEAK_ENV_VARS: [&str; 3] = ["SSH_CLIENT", "SSH_CONNECTION", "SSH_T
 pub const SESSION_LEAK_ENV_VARS: [&str; 4] =
     ["SERVER__PORT", "SERVER__HOST", "CODEBUDDY_SERVICE_PROXY_URL", "CODEBUDDY_GATEWAY_AUTH"];
 
-/// 全部启动链路泄漏变量（SSH 会话残留 + 父会话运行态指针）的单一真源。
+/// 外部服务凭据泄漏变量：版本探测从 daemon 环境读取的 GitHub token 只需存在于
+/// OmniTerm 本进程；派生终端/agent 默认继承整套环境，不剥离会让任意终端或远程
+/// 访问者直接读到凭据（与 `CODEBUDDY_GATEWAY_AUTH` 同属凭据扩散面）。变量名与
+/// 优先级单一真源在 `crate::GITHUB_TOKEN_ENV_VARS`。
+///
+/// 覆盖边界：只剥离「通过 daemon 环境注入」的值；用户写在 shell 配置
+/// （`.bashrc`/`.profile`）里的同名变量会被交互 shell 重新注入，宿主无法也不应
+/// 覆盖。Windows psmux pane 不注入 wrapper，与既有 SSH/会话指针剥离一致。
+pub const CREDENTIAL_LEAK_ENV_VARS: [&str; 2] = crate::GITHUB_TOKEN_ENV_VARS;
+
+/// 全部启动链路泄漏变量（SSH 会话残留 + 父会话运行态指针 + 外部凭据）的单一真源。
 /// 新增派生点清理、构造 `env -u` 命令串时一律以它为准（勿各自维护清单）。
 pub fn startup_leak_env_vars() -> impl Iterator<Item = &'static str> {
-    SSH_LEAK_ENV_VARS.into_iter().chain(SESSION_LEAK_ENV_VARS)
+    SSH_LEAK_ENV_VARS.into_iter().chain(SESSION_LEAK_ENV_VARS).chain(CREDENTIAL_LEAK_ENV_VARS)
 }
 
 /// 从 tokio `Command` 移除全部启动链路泄漏变量。
@@ -165,6 +175,7 @@ mod tests {
                 "CODEBUDDY_GATEWAY_AUTH"
             ]
         );
+        assert_eq!(CREDENTIAL_LEAK_ENV_VARS, ["GH_TOKEN", "GITHUB_TOKEN"]);
     }
 
     /// 两个 strip 函数（tokio Command / portable_pty builder）都要移除全部启动

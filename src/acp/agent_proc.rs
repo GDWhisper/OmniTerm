@@ -38,7 +38,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
-use crate::engine::pty_io::SESSION_LEAK_ENV_VARS;
+use crate::engine::pty_io::startup_leak_env_vars;
 #[cfg(unix)]
 use uuid::Uuid;
 
@@ -144,7 +144,7 @@ pub fn read_and_clear_pid_file(path: &Path) -> Option<u32> {
 
 /// 生成 shell wrapper 命令，使 agent 子进程以正确的 workspace 作为 OS cwd、
 /// （`pid_file` 为 `Some` 时）自报 pid、并清除父会话泄漏变量（见
-/// [`crate::engine::pty_io::SESSION_LEAK_ENV_VARS`]，根因、取舍与实测证据见其
+/// [`crate::engine::pty_io::startup_leak_env_vars`]，根因、取舍与实测证据见其
 /// 文档注释）。
 ///
 /// ACP agent 进程由 agent-client-protocol crate spawn（`AcpAgent::from_args` +
@@ -187,7 +187,8 @@ pub fn wrap_agent_with_cwd(
     if let Some(f) = pid_file {
         script.push_str(&format!("echo $$ > {} && ", sh_quote(&f.to_string_lossy())));
     }
-    script.push_str(&format!("unset {} && ", SESSION_LEAK_ENV_VARS.join(" ")));
+    script
+        .push_str(&format!("unset {} && ", startup_leak_env_vars().collect::<Vec<_>>().join(" ")));
     script.push_str(&format!("exec {}", sh_quote(agent_cmd)));
     // 用 fold 避免预分配：每个 arg 单独 sh_quote，空格分隔拼入 shell 脚本
     let shell_script = agent_args.iter().fold(script, |acc, arg| acc + " " + &sh_quote(arg));
@@ -479,6 +480,10 @@ mod tests {
 
     // ── wrap_agent_with_cwd：shell wrapper 构造 ─────────────────────────
 
+    fn unset_leak_vars() -> String {
+        format!("unset {}", startup_leak_env_vars().collect::<Vec<_>>().join(" "))
+    }
+
     #[test]
     fn wrap_returns_cd_then_exec_form() {
         let args = wrap_agent_with_cwd(
@@ -490,8 +495,8 @@ mod tests {
         assert_eq!(args.len(), 2);
         assert_eq!(args[0], "-c");
         // cd && unset <全部泄漏变量> && exec 'codebuddy' '--acp'（清单内容由
-        // pty_io::SESSION_LEAK_ENV_VARS 单一真源 pin）
-        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        // pty_io::startup_leak_env_vars 单一真源 pin）
+        let unset = unset_leak_vars();
         assert_eq!(
             args[1],
             format!("cd '/home/user/project' && {unset} && exec 'codebuddy' '--acp'")
@@ -509,7 +514,7 @@ mod tests {
     #[test]
     fn wrap_with_no_args_emits_cd_unset_exec_only() {
         let args = wrap_agent_with_cwd("/usr/bin/myagent", &[], Path::new("/tmp"), None);
-        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        let unset = unset_leak_vars();
         assert_eq!(args[1], format!("cd '/tmp' && {unset} && exec '/usr/bin/myagent'"));
     }
 
@@ -523,7 +528,7 @@ mod tests {
         );
         // pid 自报必须夹在 cd 与 exec 之间：cd 失败（workspace 不可用）时不写；
         // unset 必须在 exec 前（agent 启动前环境已洁净）
-        let unset = format!("unset {}", SESSION_LEAK_ENV_VARS.join(" "));
+        let unset = unset_leak_vars();
         assert_eq!(
             args[1],
             format!(
@@ -624,7 +629,7 @@ mod tests {
         let wrapped = wrap_agent_with_cwd("env", &[], &workspace, None);
         let mut cmd = Command::new("/bin/sh");
         cmd.args(&wrapped);
-        for var in SESSION_LEAK_ENV_VARS {
+        for var in startup_leak_env_vars() {
             cmd.env(var, "leak");
         }
         cmd.env("OMNITERM_ACP_ENV_KEEP", "1");
@@ -636,7 +641,7 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        for leaked in SESSION_LEAK_ENV_VARS {
+        for leaked in startup_leak_env_vars() {
             assert!(
                 !stdout.lines().any(|l| l.starts_with(&format!("{leaked}="))),
                 "{leaked} 必须被 wrapper 清除，实际仍在子进程环境中：\n{stdout}"

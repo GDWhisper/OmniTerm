@@ -59,6 +59,7 @@ cargo fmt --all && cargo clippy --quiet --workspace --all-targets -- -D warnings
 
 - **版本号**：`Cargo.toml` 的 `version` 是唯一真相源（前端经 `vite.config.ts` 构建时注入，Rust 用 `env!("CARGO_PKG_VERSION")`）。改版本只用 `./scripts/bump-version.sh <X.Y.Z>`，禁止手改 `frontend/package.json`。
 - **后端配置只走命令行参数或 `OMNITERM_*` 前缀 env**：禁止 export 通用名环境变量（`BIND_ADDR`/`BACKEND_PORT`/`DATABASE_URL`/`JWT_SECRET` 等）。后端派生的用户终端会继承其环境，通用名会让正式版 omniterm 在用户终端里被开发配置劫持（实测报 `Address already in use`）。
+- **GitHub token 例外（仅更新探测）**：`GH_TOKEN`/`GITHUB_TOKEN` 是唯一允许读取的通用名凭据，每次请求现读、不落盘（优先级同 `gh`：`GH_TOKEN` 优先），且必须包含在 `pty_io::startup_leak_env_vars` 中，从所有派生终端/agent 剥离。用户写在 shell 配置里的同名变量会被交互 shell 重新注入，不属剥离保证范围。
 - **二进制名**：`Cargo.toml` 的 `[package] name` 全分支统一为 `omniterm`，不按分支区分（保证 merge 不覆盖、发布渠道一致）。
 - **数据库隔离**：db 路径由 dev.sh 基于 `BRANCH_BINARY_NAME` 拼出并以 `--db` 传给后端（`~/.omniterm/<BRANCH_BINARY_NAME>.db`）。无 `--db` 时的默认库（`src/main.rs` `default_db_stem`）：开发构建固定 `omniterm-dev.db`，release 正式版按 `omniterm.db`。历史上开发二进制曾因按 argv0 推导撞正式版库并应用新 migration（20260812 / 20260823 两次事故），勿回退该逻辑。
 

@@ -49,6 +49,10 @@ Prefix each entry with the area it affects:
 
 ## [Unreleased]
 
+### Changed
+
+- (2026-10-20 02:10) `[backend]` 版本探测支持可选 GitHub token：每次请求现读 `GH_TOKEN`/`GITHUB_TOKEN`（优先级同 `gh`，不落盘），有效时以 Bearer 认证把 API 额度提升到 5000 次/时；token 缺失/失效/额度耗尽继续按渠道降级。两个变量加入 `startup_leak_env_vars`，不再继承进 tmux/pty/ACP agent 及 update 子进程（`src/update.rs`、`src/engine/pty_io.rs`、`src/acp/agent_proc.rs`）
+
 ### Fixed
 
 - (2026-10-20 01:15) `[frontend]` `[backend]` 修复长期打开的标签页收不到新版本提醒：UpdateBadge 从「挂载时一次性探测、失败静默吞掉」改为每 10 分钟轮询并在页面恢复可见/网络恢复时补查（失败保留 console 诊断），服务端版本成功缓存 1h→15min 且主源/降级源失败写入 daemon 日志（`frontend/src/components/Sidebar/UpdateBadge.tsx`、`src/api/system.rs`）

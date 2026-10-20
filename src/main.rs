@@ -239,6 +239,11 @@ fn pid_path(db_url: &str) -> String {
 /// 重启提示组装命令时需据此补回 `-d`（见 `update::restart_command`）。
 pub static DAEMONIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// GitHub API 认证环境变量（按数组顺序取第一个非空值，与 `gh` 的优先级一致：
+/// `GH_TOKEN` 优先于 `GITHUB_TOKEN`）。仅供版本探测在单次请求内使用、不落盘；
+/// 派生终端/agent 必须剥离（见 `engine::pty_io::CREDENTIAL_LEAK_ENV_VARS`）。
+pub(crate) const GITHUB_TOKEN_ENV_VARS: [&str; 2] = ["GH_TOKEN", "GITHUB_TOKEN"];
+
 #[cfg(unix)]
 fn pid_exists(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
