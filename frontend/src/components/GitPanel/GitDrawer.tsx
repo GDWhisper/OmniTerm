@@ -262,6 +262,31 @@ export function GitDrawer({
                   <pre className="git-commit-message">{commit.message}</pre>
                 </div>
               )}
+              {commit && commit.files.length > 0 && (
+                <div className="git-commit-files">
+                  <div className="git-commit-files-header">
+                    {t('git.commitFiles', { count: commit.files.length })}
+                  </div>
+                  {commit.files.map((file) => (
+                    <div key={`${file.status}:${file.path}`} className="git-commit-file-row">
+                      <span className={`git-status-char git-status-${file.status}`}>
+                        {file.status}
+                      </span>
+                      <span
+                        className="git-file-path"
+                        title={file.orig_path ? `${file.orig_path} → ${file.path}` : file.path}
+                      >
+                        <bdi dir="ltr">{file.path}</bdi>
+                      </span>
+                    </div>
+                  ))}
+                  {commit.files_truncated && (
+                    <div className="git-range-note">
+                      {t('git.filesTruncated', { count: commit.files.length })}
+                    </div>
+                  )}
+                </div>
+              )}
               <DiffView
                 raw={diff}
                 truncated={truncated}

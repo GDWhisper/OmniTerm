@@ -107,6 +107,9 @@ export function GitPanel({ visible }: GitPanelProps) {
   const [log, setLog] = useState<GitLogEntry[]>([])
   const [logHasMore, setLogHasMore] = useState(false)
   const [logLoading, setLogLoading] = useState(false)
+  /** File whose commit history is being shown (null = whole tree). */
+  const [logPath, setLogPath] = useState<string | null>(null)
+  const [logAllBranches, setLogAllBranches] = useState(false)
   /** Bumped on every completed status fetch; keeps the open file diff live. */
   const [statusTick, setStatusTick] = useState(0)
   /** Branch used for the read-only BASE...HEAD comparison ('' = normal view). */
@@ -143,6 +146,8 @@ export function GitPanel({ visible }: GitPanelProps) {
     setRange(null)
     setRangeLoading(false)
     setRebaseTarget(null)
+    setLogPath(null)
+    setLogAllBranches(false)
   }, [bindKey, resetGit])
 
   // ── Visible-time serial polling (ADR-4): schedule the next poll
@@ -213,7 +218,12 @@ export function GitPanel({ visible }: GitPanelProps) {
     if (!bind) return
     setLogLoading(true)
     try {
-      const data = await api.gitLog(bind, { skip, limit: LOG_PAGE_SIZE })
+      const data = await api.gitLog(bind, {
+        skip,
+        limit: LOG_PAGE_SIZE,
+        path: logPath ?? undefined,
+        all: logAllBranches,
+      })
       if ('entries' in data) {
         setLog((prev) => append ? [...prev, ...data.entries] : data.entries)
         setLogHasMore(data.has_more)
@@ -223,14 +233,20 @@ export function GitPanel({ visible }: GitPanelProps) {
     } finally {
       setLogLoading(false)
     }
-  }, [bind])
+  }, [bind, logPath, logAllBranches])
 
-  // Load history when switching to the HISTORY view
+  // Load history when switching to the HISTORY view or changing its filters
   useEffect(() => {
     if (view !== 'history' || !visible) return
     fetchLog(0, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, bindKey, visible])
+  }, [view, bindKey, visible, logPath, logAllBranches])
+
+  const openFileHistory = useCallback((path: string) => {
+    setCommitMenu(null)
+    setLogPath(path)
+    setView('history')
+  }, [])
 
   // History rows: desktop right-click and touch long-press open the same menu.
   const longPressHandlers = useLongPress({
@@ -728,6 +744,34 @@ export function GitPanel({ visible }: GitPanelProps) {
         </div>
       )}
 
+      {view === 'history' && (
+        <div className="git-log-filterbar">
+          <button
+            className={`git-btn ${logAllBranches ? 'active' : ''}`}
+            onClick={() => setLogAllBranches((value) => !value)}
+            title={t('git.logAllBranches')}
+            aria-pressed={logAllBranches}
+          >
+            {t('git.logAll')}
+          </button>
+          {logPath && (
+            <span
+              className="git-log-filter-chip"
+              title={t('git.logFilteredBy', { path: logPath })}
+            >
+              <span className="git-log-filter-path"><bdi dir="ltr">{logPath}</bdi></span>
+              <button
+                className="git-row-btn"
+                onClick={() => setLogPath(null)}
+                title={t('git.logClearFilter')}
+              >
+                ×
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
       {view === 'changes' ? (
         rangeBase ? (
           <OverlayScroll style={{ flex: 1, minHeight: 0 }}>
@@ -762,6 +806,7 @@ export function GitPanel({ visible }: GitPanelProps) {
                   actionGlyph="−"
                   actionTitle={t('git.unstage')}
                   actionAllTitle={t('git.unstageAll')}
+                  onHistory={(e) => openFileHistory(e.path)}
                 />
                 <FileSection
                   label={t('git.changesSection')}
@@ -776,6 +821,7 @@ export function GitPanel({ visible }: GitPanelProps) {
                   actionAllTitle={t('git.stageAll')}
                   onDiscard={handleDiscard}
                   discardTitle={t('git.discard')}
+                  onHistory={(e) => openFileHistory(e.path)}
                 />
               </>
             )}
@@ -847,7 +893,9 @@ export function GitPanel({ visible }: GitPanelProps) {
       ) : (
         <OverlayScroll style={{ flex: 1, minHeight: 0 }}>
           {log.length === 0 && !logLoading ? (
-            <div className="git-empty">{t('git.noCommits')}</div>
+            <div className="git-empty">
+              {logPath ? t('git.logNoMatches') : t('git.noCommits')}
+            </div>
           ) : (
             <div>
               {log.map((entry) => (

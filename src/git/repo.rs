@@ -24,9 +24,10 @@ pub const AI_COMMIT_STYLE_SUBJECTS: usize = 10;
 /// without limit (`git stash` never prunes); the panel only needs the recent
 /// window and the response must stay bounded (performance red line P1).
 const MAX_STASH_ENTRIES: usize = 100;
-/// Upper bound on files returned by a branch comparison. Range diffs can cover
-/// an entire history; the response must stay bounded (performance red line P1).
-const MAX_RANGE_FILES: usize = 1000;
+/// Upper bound on files returned by a branch comparison or a commit detail.
+/// Either can touch an arbitrarily large tree; responses must stay bounded
+/// (performance red line P1).
+const MAX_CHANGED_FILES: usize = 1000;
 /// Delays before retrying a write that lost the race for `index.lock`.
 /// Two retries (3 attempts total) tolerate a user's terminal git command
 /// without masking a genuinely stuck lock (ADR-D1: never delete the lock).
@@ -139,6 +140,10 @@ pub struct CommitDetail {
     pub message: String,
     pub diff: String,
     pub truncated: bool,
+    /// Files touched by the commit (`git show --name-status`).
+    pub files: Vec<ChangedFile>,
+    /// True when the file list hit the server-side cap.
+    pub files_truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -150,9 +155,9 @@ pub struct BranchInfo {
     pub upstream: Option<String>,
 }
 
-/// One changed file in a branch comparison (`git diff --name-status`).
+/// One changed file from `--name-status` output (branch comparison or commit).
 #[derive(Debug, Clone, Serialize)]
-pub struct RangeFile {
+pub struct ChangedFile {
     pub path: String,
     /// Rename/copy source when `status` is `R`/`C`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +169,7 @@ pub struct RangeFile {
 #[derive(Debug, Clone)]
 pub struct RangeOverview {
     pub merge_base: String,
-    pub files: Vec<RangeFile>,
+    pub files: Vec<ChangedFile>,
     pub files_truncated: bool,
     pub diff: String,
     pub truncated: bool,
@@ -1011,16 +1016,33 @@ pub async fn apply_hunk(
     Ok(())
 }
 
-pub async fn log(root: &str, skip: u32, limit: u32) -> GitResult<(Vec<LogEntry>, bool)> {
+/// Commit history, optionally scoped to one file and/or all branches.
+///
+/// `path` comes from the panel's file rows, so it is validated like other
+/// repo-relative paths and passed after `--` with literal pathspec semantics.
+pub async fn log(
+    root: &str,
+    skip: u32,
+    limit: u32,
+    path: Option<&str>,
+    all: bool,
+) -> GitResult<(Vec<LogEntry>, bool)> {
+    if let Some(path) = path {
+        validate_range_path(path)?;
+    }
+    let mut cmd = git_command(root);
     // Fetch one extra entry to detect whether more pages exist.
-    let output = run(git_command(root).args([
-        "log",
-        "--pretty=format:%H%x00%h%x00%an%x00%aI%x00%s",
-        &format!("--skip={skip}"),
-        "-n",
-        &format!("{}", limit + 1),
-    ]))
-    .await?;
+    cmd.args(["log", "--pretty=format:%H%x00%h%x00%an%x00%aI%x00%s"]);
+    if all {
+        cmd.arg("--all");
+    }
+    cmd.arg(format!("--skip={skip}"));
+    cmd.args(["-n", &format!("{}", limit + 1)]);
+    if let Some(path) = path {
+        cmd.env("GIT_LITERAL_PATHSPECS", "1");
+        cmd.args(["--", path]);
+    }
+    let output = run(&mut cmd).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let trimmed = stderr.trim();
@@ -1078,7 +1100,31 @@ pub async fn show_commit(root: &str, sha: &str) -> GitResult<CommitDetail> {
     let raw = String::from_utf8_lossy(&patch.stdout);
     let (diff, truncated) = truncate_diff(&raw);
 
-    Ok(CommitDetail { sha: full, short_sha: short, author, email, date, message, diff, truncated })
+    let names = run(git_command(root).args([
+        "show",
+        "--name-status",
+        "-z",
+        "-M",
+        "--pretty=format:",
+        &full,
+    ]))
+    .await?;
+    ensure_success(&names)?;
+    let raw_names = String::from_utf8_lossy(&names.stdout);
+    let (files, files_truncated) = parse_name_status_z(&raw_names, MAX_CHANGED_FILES);
+
+    Ok(CommitDetail {
+        sha: full,
+        short_sha: short,
+        author,
+        email,
+        date,
+        message,
+        diff,
+        truncated,
+        files,
+        files_truncated,
+    })
 }
 
 pub async fn branches(root: &str) -> GitResult<Vec<BranchInfo>> {
@@ -1133,7 +1179,7 @@ async fn resolve_range_base(root: &str, base: &str) -> GitResult<String> {
 
 /// Parse `git diff --name-status -z` output. Rename/copy records carry the
 /// source path as an extra NUL-separated field before the destination.
-fn parse_name_status_z(raw: &str, cap: usize) -> (Vec<RangeFile>, bool) {
+fn parse_name_status_z(raw: &str, cap: usize) -> (Vec<ChangedFile>, bool) {
     let mut fields = raw.split('\0');
     let mut files = Vec::new();
     let mut truncated = false;
@@ -1160,7 +1206,7 @@ fn parse_name_status_z(raw: &str, cap: usize) -> (Vec<RangeFile>, bool) {
             truncated = true;
             break;
         }
-        files.push(RangeFile { path, orig_path, status: letter });
+        files.push(ChangedFile { path, orig_path, status: letter });
     }
     (files, truncated)
 }
@@ -1174,7 +1220,7 @@ pub async fn range_overview(root: &str, base: &str) -> GitResult<RangeOverview> 
     let names = run(git_command(root).args(["diff", "--name-status", "-z", "-M", &range])).await?;
     ensure_success(&names)?;
     let raw_names = String::from_utf8_lossy(&names.stdout);
-    let (files, files_truncated) = parse_name_status_z(&raw_names, MAX_RANGE_FILES);
+    let (files, files_truncated) = parse_name_status_z(&raw_names, MAX_CHANGED_FILES);
 
     let diff_output = run(diff_command(root).args(["-M", &range])).await?;
     ensure_success(&diff_output)?;
@@ -2960,6 +3006,78 @@ mod tests {
             range_file_diff(&root, "feature", "/etc/passwd").await.unwrap_err().code,
             "invalid_path"
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn log_filters_by_path_and_all_branches() {
+        if !git_available() {
+            eprintln!("SKIP log_filters_by_path_and_all_branches: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        let base = current_branch_name(&root).await;
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "add a"]).await;
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "add b"]).await;
+        run_git(&root, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("feature.txt"), "feature\n").unwrap();
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "feature only"]).await;
+        run_git(&root, &["checkout", "-q", &base]).await;
+
+        let (a_entries, has_more) = log(&root, 0, 50, Some("a.txt"), false).await.unwrap();
+        assert!(!has_more);
+        assert_eq!(a_entries.len(), 1);
+        assert_eq!(a_entries[0].subject, "add a");
+
+        let (base_entries, _) = log(&root, 0, 50, None, false).await.unwrap();
+        assert!(
+            !base_entries.iter().any(|e| e.subject == "feature only"),
+            "a branch-less log must only walk HEAD"
+        );
+
+        let (all_entries, _) = log(&root, 0, 50, None, true).await.unwrap();
+        assert!(all_entries.iter().any(|e| e.subject == "feature only"));
+
+        // Path + --all: the file only exists on the feature branch.
+        let (feature_entries, _) = log(&root, 0, 50, Some("feature.txt"), true).await.unwrap();
+        assert_eq!(feature_entries.len(), 1);
+        assert_eq!(feature_entries[0].subject, "feature only");
+
+        assert_eq!(
+            log(&root, 0, 50, Some("../outside.txt"), false).await.unwrap_err().code,
+            "invalid_path"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn show_commit_lists_changed_files() {
+        if !git_available() {
+            eprintln!("SKIP show_commit_lists_changed_files: git not found");
+            return;
+        }
+        let (dir, root) = init_test_repo().await;
+        std::fs::write(dir.join("added.txt"), "new\n").unwrap();
+        run_git(&root, &["mv", "tracked.txt", "renamed.txt"]).await;
+        run_git(&root, &["add", "."]).await;
+        run_git(&root, &["commit", "-q", "-m", "rename and add"]).await;
+        let sha = head_sha(&root).await;
+
+        let detail = show_commit(&root, &sha).await.unwrap();
+        assert_eq!(detail.sha, sha);
+        assert!(!detail.files_truncated);
+        assert_eq!(detail.files.len(), 2);
+        let added = detail.files.iter().find(|f| f.path == "added.txt").unwrap();
+        assert_eq!(added.status, "A");
+        let renamed = detail.files.iter().find(|f| f.path == "renamed.txt").unwrap();
+        assert_eq!(renamed.status, "R");
+        assert_eq!(renamed.orig_path.as_deref(), Some("tracked.txt"));
+        assert!(detail.diff.contains("renamed.txt"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

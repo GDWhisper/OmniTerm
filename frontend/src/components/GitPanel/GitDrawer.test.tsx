@@ -92,6 +92,11 @@ beforeEach(() => {
   gitShow.mockReset().mockResolvedValue({
     sha: 'abc', short_sha: 'abc', author: 'A', email: 'a@b', date: new Date().toISOString(),
     message: 'msg', diff: RAW, truncated: false,
+    files: [
+      { path: 'a.txt', status: 'M' },
+      { path: 'renamed.txt', status: 'R', orig_path: 'old.txt' },
+    ],
+    files_truncated: false,
   })
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -173,13 +178,28 @@ describe('GitDrawer hunk flow', () => {
     expect(container.querySelectorAll('.git-row-btn')).toHaveLength(0)
   })
 
-  it('shows commit diffs read-only', async () => {
+  it('shows commit diffs read-only with the changed-file list', async () => {
     renderDrawer({ kind: 'commit', sha: 'abc' })
     await act(async () => {})
 
     expect(gitShow).toHaveBeenCalled()
     expect(gitHunks).not.toHaveBeenCalled()
     expect(container.querySelectorAll('.git-row-btn')).toHaveLength(0)
+    expect(container.textContent).toContain('git.commitFiles')
+    expect(container.querySelectorAll('.git-commit-file-row')).toHaveLength(2)
+    expect(container.textContent).toContain('renamed.txt')
+  })
+
+  it('notes a truncated commit file list', async () => {
+    gitShow.mockResolvedValue({
+      sha: 'abc', short_sha: 'abc', author: 'A', email: 'a@b', date: new Date().toISOString(),
+      message: 'msg', diff: RAW, truncated: false,
+      files: [{ path: 'a.txt', status: 'M' }],
+      files_truncated: true,
+    })
+    renderDrawer({ kind: 'commit', sha: 'abc' })
+    await act(async () => {})
+    expect(container.textContent).toContain('git.filesTruncated')
   })
 
   it('loads range diffs read-only from the range endpoint', async () => {

@@ -66,6 +66,8 @@ struct RepoQuery {
     // log params
     skip: Option<u32>,
     limit: Option<u32>,
+    /// Include commits from every ref (`git log --all`).
+    all: Option<bool>,
     // show params
     sha: Option<String>,
     // range params
@@ -234,10 +236,13 @@ async fn git_hunk(State(state): State<AppState>, Json(b): Json<RepoBody>) -> Res
 }
 
 async fn git_log(State(state): State<AppState>, Query(q): Query<RepoQuery>) -> Response {
-    let root = bind_repo!(state, q);
     let skip = q.skip.unwrap_or(0);
     let limit = q.limit.unwrap_or(50).min(200);
-    match repo::log(&root, skip, limit).await {
+    // `path` is shared with /git/diff; an empty value means "no file filter".
+    let path = q.path.clone().filter(|p| !p.is_empty());
+    let all = q.all.unwrap_or(false);
+    let root = bind_repo!(state, q);
+    match repo::log(&root, skip, limit, path.as_deref(), all).await {
         Ok((entries, has_more)) => {
             (StatusCode::OK, Json(json!({ "entries": entries, "has_more": has_more })))
                 .into_response()

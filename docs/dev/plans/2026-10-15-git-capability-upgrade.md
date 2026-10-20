@@ -1,6 +1,6 @@
 # Git 面板能力提升计划（对标 openchamber-v2）
 
-> 状态：**Phase 1 + Phase 2 + Phase 3 + AI commit message 已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20、Phase 3 2026-10-20）；P2 候补按信号触发
+> 状态：**Phase 1 + Phase 2 + Phase 3 + AI commit message + P2 低成本项已实施**（Phase 1 2026-10-19、Phase 2 2026-10-20、Phase 3 2026-10-20、P2 低成本项 2026-10-20）；P2 候补仅剩 graph / split view 按信号触发
 > 触发条件：修改 `src/git/repo.rs`、`src/git/mod.rs`、`src/api/git.rs`、`frontend/src/components/GitPanel/`（GitPanel/GitDrawer/DiffView/diffParser）、`frontend/src/stores/gitStore.ts` 任一项前**必读**
 > 关联：`docs/dev/plans/archive/2026-07-26-git-panel.md`（v1 设计与排除清单——本计划重开其中多项，实施后需在该归档文档加勘误指针）、`docs/architecture/backend.md`（git 端点章）、`docs/architecture/frontend.md`（GitPanel 结构）
 > 来源：2026-10-15 对 `/home/pax/coding/research/openchamber-v2`（VSCode SCM 级 git 实现：服务端 59 文件 + UI ~12000 行 + GitHub 全集成）的逐文件对比研究，证据行号随附各节
@@ -238,10 +238,16 @@
 
 ### 独立项：AI commit message（✅ 2026-10-19）
 
+### P2 低成本项 ✅ 2026-10-20
+
+- **commit 详情文件列表**：`CommitDetail` 增加 `files/files_truncated`，`git show --name-status -z -M` 解析（复用 range 的 `ChangedFile`/`parse_name_status_z`，上限 1000）；commit 抽屉在元信息下展示状态字母 + 路径（rename 带原路径）。
+- **HISTORY 过滤**：`/git/log` 增加 `path`（仓库相对路径、literal pathspec、`invalid_path`）与 `all=true`；文件行新增时钟按钮进入该文件历史，HISTORY 顶栏 ALL 切换全分支、路径过滤 chip 可清除；无匹配时显示专用空态。
+- 实施记录：后端 `src/git/repo.rs`（`log` 参数化、`CommitDetail.files`、`ChangedFile` 重命名）+ `src/api/git.rs`（`all` 参数、log path）；前端 `GitPanel`（`logPath/logAllBranches` 状态与 `openFileHistory`）、`FileSections`（history 图标）、`GitDrawer`（文件列表）、client/i18n/CSS。
+- 测试：后端新增 `log_filters_by_path_and_all_branches`、`show_commit_lists_changed_files`（60 例 git 单测）；前端新增 client log URL、GitDrawer commit 文件列表/截断、GitPanel 文件历史入口/ALL/清除过滤/空态共 8 例。
+
 ### P2 候补（不承诺，按信号触发）
 
 - git graph：HISTORY 视图 graph 开关（自研 lane 布局，参考 `openchamber-v2:packages/ui/src/components/views/git/gitGraph.ts:56` 贪心算法 + SVG）；触发信号 = 多分支工作流的真实诉求。
-- commit 详情文件列表（`git show --name-status` 补进 CommitDetail）；log 单文件/全分支过滤。二者低成本，可随手带。
 - diff split view。
 
 ## 5. 验收标准（每批次通用质量门禁）

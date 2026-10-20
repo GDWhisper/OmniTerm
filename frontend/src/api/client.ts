@@ -845,10 +845,19 @@ export const api = {
       }),
       silent: true,
     }),
-  gitLog: (bind: GitBind, params: { skip?: number; limit?: number }) =>
-    request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(
-      `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`,
-    ),
+  gitLog: (bind: GitBind, params: {
+    skip?: number
+    limit?: number
+    /** Only commits touching this repo-relative path. */
+    path?: string
+    /** Include commits from every ref (`git log --all`). */
+    all?: boolean
+  }) => {
+    let url = `/git/log?${gitBindQuery(bind)}&skip=${params.skip ?? 0}&limit=${params.limit ?? 50}`
+    if (params.path) url += `&path=${encodeURIComponent(params.path)}`
+    if (params.all) url += '&all=true'
+    return request<{ entries: GitLogEntry[]; has_more: boolean } | { is_repo: false }>(url)
+  },
   gitShow: (bind: GitBind, sha: string) =>
     request<GitCommitDetail>(`/git/show?${gitBindQuery(bind)}&sha=${encodeURIComponent(sha)}`),
   gitRangeFiles: (bind: GitBind, base: string) =>
@@ -1000,6 +1009,10 @@ export interface GitCommitDetail {
   message: string
   diff: string
   truncated: boolean
+  /** Files touched by the commit (`git show --name-status`). */
+  files: GitChangedFile[]
+  /** True when the file list hit the server-side cap. */
+  files_truncated: boolean
 }
 
 export interface GitBranch {
@@ -1033,8 +1046,8 @@ export interface GitHunksResponse {
   root: string
 }
 
-/** One changed file in a branch comparison (`git diff --name-status`). */
-export interface GitRangeFile {
+/** One changed file from `--name-status` (branch comparison or commit). */
+export interface GitChangedFile {
   path: string
   /** Rename/copy source when `status` is `R`/`C`. */
   orig_path?: string
@@ -1044,7 +1057,7 @@ export interface GitRangeFile {
 
 export interface GitRangeOverview {
   merge_base: string
-  files: GitRangeFile[]
+  files: GitChangedFile[]
   /** True when the file list hit the server-side cap. */
   files_truncated: boolean
   diff: string

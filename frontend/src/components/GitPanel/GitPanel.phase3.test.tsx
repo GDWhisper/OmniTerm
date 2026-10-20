@@ -247,7 +247,7 @@ describe('GitPanel branch comparison', () => {
       setRangeBase('main')
     })
     await flush()
-    expect(document.body.textContent).toContain('git.rangeFilesTruncated')
+    expect(document.body.textContent).toContain('git.filesTruncated')
   })
 
   it('falls back to the normal view when the base no longer exists', async () => {
@@ -261,6 +261,52 @@ describe('GitPanel branch comparison', () => {
     expect(mocks.addToast).toHaveBeenCalledWith('error', 'base gone')
     expect(rangeSelect().value).toBe('')
     expect(document.body.querySelector('textarea.git-commit-input')).not.toBeNull()
+  })
+})
+
+describe('GitPanel history filters', () => {
+  it('opens HISTORY scoped to a file and toggles all branches', async () => {
+    await renderPanel()
+    await act(async () => {
+      ;(document.body.querySelector('button[title="git.fileHistory"]') as HTMLElement).click()
+    })
+    await flush()
+
+    expect(mocks.gitLog).toHaveBeenLastCalledWith(
+      { session: 's1' },
+      { skip: 0, limit: 50, path: 'tracked.txt', all: false },
+    )
+    const chip = document.body.querySelector('.git-log-filter-chip')
+    expect(chip?.getAttribute('title')).toBe('git.logFilteredBy')
+
+    await act(async () => {
+      button('git.logAll').click()
+    })
+    await flush()
+    expect(mocks.gitLog).toHaveBeenLastCalledWith(
+      { session: 's1' },
+      { skip: 0, limit: 50, path: 'tracked.txt', all: true },
+    )
+
+    await act(async () => {
+      ;(document.body.querySelector('button[title="git.logClearFilter"]') as HTMLElement).click()
+    })
+    await flush()
+    const lastArgs = (mocks.gitLog.mock.calls.at(-1) as unknown[] | undefined)?.[1] as {
+      path?: string
+      all?: boolean
+    }
+    expect(lastArgs.path).toBeUndefined()
+    expect(lastArgs.all).toBe(true)
+  })
+
+  it('shows a filter-specific empty state', async () => {
+    await renderPanel()
+    await act(async () => {
+      ;(document.body.querySelector('button[title="git.fileHistory"]') as HTMLElement).click()
+    })
+    await flush()
+    expect(document.body.textContent).toContain('git.logNoMatches')
   })
 })
 

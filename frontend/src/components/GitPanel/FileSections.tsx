@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { GitRangeFile, GitStatusEntry } from '../../api/client'
+import type { GitChangedFile, GitStatusEntry } from '../../api/client'
+import { IconHistory } from '../FileManager/icons'
 
 function statusChar(entry: GitStatusEntry, staged: boolean): string {
   if (entry.conflicted) return 'U'
@@ -50,13 +51,16 @@ interface FileSectionProps {
   actionAllTitle: string
   onDiscard?: (e: GitStatusEntry) => void
   discardTitle?: string
+  /** Open HISTORY scoped to this file. */
+  onHistory?: (e: GitStatusEntry) => void
 }
 
 export function FileSection({
   label, entries, staged, mutating,
   onOpen, onAction, onActionAll, actionGlyph, actionTitle, actionAllTitle,
-  onDiscard, discardTitle,
+  onDiscard, discardTitle, onHistory,
 }: FileSectionProps) {
+  const { t } = useTranslation()
   if (entries.length === 0) return null
   return (
     <div className="git-section">
@@ -78,6 +82,16 @@ export function FileSection({
           onOpen={() => onOpen(e)}
           actions={
             <>
+              {onHistory && (
+                <button
+                  className="git-row-btn"
+                  disabled={mutating}
+                  onClick={() => onHistory(e)}
+                  title={t('git.fileHistory')}
+                >
+                  <IconHistory width={12} height={12} />
+                </button>
+              )}
               {onDiscard && !e.conflicted && (
                 <button className="git-row-btn git-row-btn-danger" disabled={mutating} onClick={() => onDiscard(e)} title={discardTitle}>
                   ↺
@@ -98,9 +112,9 @@ export function FileSection({
 
 interface RangeFileSectionProps {
   base: string
-  files: GitRangeFile[]
+  files: GitChangedFile[]
   filesTruncated: boolean
-  onOpen: (file: GitRangeFile) => void
+  onOpen: (file: GitChangedFile) => void
 }
 
 /** Read-only file list for BASE...HEAD comparisons: no stage/discard actions. */
@@ -127,7 +141,7 @@ export function RangeFileSection({ base, files, filesTruncated, onOpen }: RangeF
       ))}
       {filesTruncated && (
         <div className="git-range-note">
-          {t('git.rangeFilesTruncated', { count: files.length })}
+          {t('git.filesTruncated', { count: files.length })}
         </div>
       )}
     </div>

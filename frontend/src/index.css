@@ -3070,6 +3070,11 @@ select optgroup option {
   opacity: 0.5;
   cursor: default;
 }
+.git-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-10);
+}
 
 .git-ab-badge {
   font-family: var(--reader-font);
@@ -3163,6 +3168,61 @@ select optgroup option {
   color: var(--text-faint);
   font-family: var(--reader-font);
   font-size: 11px;
+}
+
+/* ── HISTORY filters: all branches + single-file scope ── */
+.git-log-filterbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.git-log-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 2px 4px 2px 6px;
+  background: var(--accent-10);
+  border: 1px solid var(--accent-14);
+  color: var(--accent);
+  font-family: var(--reader-font);
+  font-size: 11px;
+}
+.git-log-filter-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-log-filter-chip .git-row-btn {
+  flex-shrink: 0;
+}
+
+/* ── Commit detail file list ── */
+.git-commit-files {
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 4px;
+}
+.git-commit-files-header {
+  padding: 6px 12px 4px;
+  color: var(--text-faint);
+  font-family: var(--pixel-font);
+  font-size: 11px;
+  letter-spacing: var(--pixel-tracking-sm);
+  text-transform: uppercase;
+}
+.git-commit-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 12px;
+  font-family: var(--reader-font);
+  font-size: 12px;
 }
 
 .git-viewbar {

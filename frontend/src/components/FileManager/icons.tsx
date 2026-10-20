@@ -254,6 +254,17 @@ export function IconX(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+/** History: clock with a rewind arrow (file-scoped commit history). */
+export function IconHistory(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <path d="M2.5 8a5.5 5.5 0 1 0 1.61-3.89" />
+      <path d="M2.5 2.5v3.5H6" />
+      <path d="M8 5.25V8l2 1.25" />
+    </svg>
+  )
+}
+
 export function IconPlus(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>

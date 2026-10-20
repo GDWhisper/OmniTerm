@@ -253,6 +253,17 @@ describe('git range and operation endpoints', () => {
     expect(calls.every(([, init]) => init?.method === 'POST')).toBe(true)
   })
 
+  it('gitLog forwards file and all-branch filters', async () => {
+    const calls = mockFetch()
+    await api.gitLog(
+      { session: 's1' },
+      { skip: 10, limit: 25, path: 'src/a b.ts', all: true },
+    )
+    expect(lastUrl(calls)).toBe(
+      '/api/v1/git/log?session=s1&skip=10&limit=25&path=src%2Fa%20b.ts&all=true',
+    )
+  })
+
   it('operation continue and abort post only the bind fields', async () => {
     const calls = mockFetch()
     await api.gitOperationContinue({ workspaceId: 'w1' })
